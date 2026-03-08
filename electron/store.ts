@@ -122,11 +122,18 @@ export interface StoreSchema {
     apiKey: string;
     language: string;
     customDictionary: string[];
+    transcriptionModel: string;
+    correctionEnabled: boolean;
+    correctionModel: string;
+    correctionCustomInstructions: string;
   };
   mcpServer: {
     enabled: boolean;
     port: number | null;
     apiKey: string;
+  };
+  crashRecovery: {
+    autoRestoreOnCrash: boolean;
   };
 }
 
@@ -198,11 +205,18 @@ const storeOptions = {
       apiKey: "",
       language: "en",
       customDictionary: [],
+      transcriptionModel: "nova-3",
+      correctionEnabled: false,
+      correctionModel: "gpt-5-nano",
+      correctionCustomInstructions: "",
     },
     mcpServer: {
       enabled: false,
       port: 45454,
       apiKey: "",
+    },
+    crashRecovery: {
+      autoRestoreOnCrash: false,
     },
   },
   cwd: process.env.CANOPY_USER_DATA,

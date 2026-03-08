@@ -160,6 +160,7 @@ export interface ElectronAPI {
     getAllIssueAssociations(): Promise<Record<string, IssueAssociation>>;
     onUpdate(callback: (state: WorktreeState) => void): () => void;
     onRemove(callback: (data: { worktreeId: string }) => void): () => void;
+    onActivated(callback: (data: { worktreeId: string }) => void): () => void;
   };
   terminal: {
     spawn(options: TerminalSpawnOptions): Promise<string>;
@@ -639,6 +640,8 @@ export interface ElectronAPI {
     getAwakeTimeSince(startTimestamp: number): Promise<number>;
     /** Reset accumulated sleep tracking */
     reset(): Promise<void>;
+    /** Subscribe to suspend events */
+    onSuspend(callback: () => void): () => void;
     /** Subscribe to wake events with sleep duration */
     onWake(callback: (sleepDurationMs: number) => void): () => void;
   };
@@ -691,6 +694,8 @@ export interface ElectronAPI {
     setSettings(settings: Partial<NotificationSettings>): Promise<void>;
     /** Play a sound file by name for preview */
     playSound(soundFile: string): Promise<void>;
+    /** Show a simple native OS notification with no navigation context */
+    showNative(payload: { title: string; body: string }): void;
     /** Show a high-priority watch notification unconditionally (no focus suppression) */
     showWatchNotification(payload: {
       title: string;
@@ -809,16 +814,24 @@ export interface ElectronAPI {
     getSettings(): Promise<VoiceInputSettings>;
     setSettings(settings: Partial<VoiceInputSettings>): Promise<void>;
     start(): Promise<{ ok: true } | { ok: false; error: string }>;
-    stop(): Promise<void>;
+    stop(): Promise<{ rawText: string | null }>;
+    flushParagraph(): Promise<{ rawText: string | null }>;
     sendAudioChunk(chunk: ArrayBuffer): void;
     onTranscriptionDelta(callback: (delta: string) => void): () => void;
-    onTranscriptionComplete(callback: (text: string) => void): () => void;
+    onTranscriptionComplete(
+      callback: (payload: { text: string; willCorrect: boolean }) => void
+    ): () => void;
+    onCorrectionReplace(
+      callback: (payload: { rawText: string; correctedText: string }) => void
+    ): () => void;
+    onParagraphBoundary(callback: (payload: { rawText: string | null }) => void): () => void;
     onError(callback: (error: string) => void): () => void;
     onStatus(callback: (status: VoiceInputStatus) => void): () => void;
     checkMicPermission(): Promise<MicPermissionStatus>;
     requestMicPermission(): Promise<boolean>;
     openMicSettings(): Promise<void>;
     validateApiKey(apiKey: string): Promise<{ valid: boolean; error?: string }>;
+    validateCorrectionApiKey(apiKey: string): Promise<{ valid: boolean; error?: string }>;
   };
   mcpServer: {
     /** Get current MCP server status and configuration */
@@ -877,6 +890,14 @@ export interface ElectronAPI {
       result: import("../actions.js").ActionDispatchResult;
     }): void;
   };
+  crashRecovery: {
+    getPending(): Promise<import("./crashRecovery.js").PendingCrash | null>;
+    resolve(action: import("./crashRecovery.js").CrashRecoveryAction): Promise<void>;
+    getConfig(): Promise<import("./crashRecovery.js").CrashRecoveryConfig>;
+    setConfig(
+      config: Partial<import("./crashRecovery.js").CrashRecoveryConfig>
+    ): Promise<import("./crashRecovery.js").CrashRecoveryConfig>;
+  };
 }
 
 export type MicPermissionStatus =
@@ -886,11 +907,20 @@ export type MicPermissionStatus =
   | "restricted"
   | "unknown";
 
+export type VoiceTranscriptionModel = "nova-3" | "nova-2";
+
+export type VoiceCorrectionModel = "gpt-5-nano";
+
 export interface VoiceInputSettings {
   enabled: boolean;
-  apiKey: string;
+  deepgramApiKey: string;
+  correctionApiKey: string;
   language: string;
   customDictionary: string[];
+  transcriptionModel: VoiceTranscriptionModel;
+  correctionEnabled: boolean;
+  correctionModel: VoiceCorrectionModel;
+  correctionCustomInstructions: string;
 }
 
-export type VoiceInputStatus = "idle" | "connecting" | "recording" | "error";
+export type VoiceInputStatus = "idle" | "connecting" | "recording" | "finishing" | "error";

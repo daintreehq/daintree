@@ -8,6 +8,8 @@ import {
   AlertCircle,
   Activity,
   Wrench,
+  Keyboard,
+  Info,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { SettingsSection } from "@/components/Settings/SettingsSection";
@@ -228,49 +230,43 @@ export function GeneralTab({ appVersion, onNavigateToAgents }: GeneralTabProps) 
 
   return (
     <div className="space-y-6">
-      <div className="space-y-2">
-        <h4 className="text-sm font-medium text-canopy-text">About</h4>
-        <div className="bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] p-4">
-          <div className="flex items-center gap-3 mb-4">
-            <div className="h-12 w-12 bg-canopy-accent/20 rounded-[var(--radius-lg)] flex items-center justify-center">
-              <TreePine className="w-6 h-6 text-canopy-accent" />
-            </div>
-            <div>
-              <div className="font-semibold text-canopy-text text-lg flex items-center gap-2">
-                Canopy
-                <span className="text-xs font-medium px-1.5 py-0.5 rounded-full bg-canopy-accent/20 text-canopy-accent">
-                  Beta
-                </span>
-              </div>
-              <div className="text-sm text-canopy-text/60">Command Center</div>
-            </div>
+      <SettingsSection
+        icon={TreePine}
+        title="About"
+        description="An orchestration board for AI coding agents. Start agents on worktrees, monitor their progress, and inject context to help them understand your codebase."
+        id="general-about"
+      >
+        <div className="flex items-center gap-3">
+          <div className="h-10 w-10 bg-canopy-accent/10 rounded-[var(--radius-md)] flex items-center justify-center">
+            <TreePine className="w-5 h-5 text-canopy-accent" />
           </div>
-          <div className="space-y-2 text-sm">
-            <div className="flex justify-between text-canopy-text/60">
-              <span>Version</span>
-              <span className="font-mono text-canopy-text">{appVersion}</span>
+          <div>
+            <div className="font-medium text-canopy-text flex items-center gap-2">
+              Canopy
+              <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-canopy-accent/15 text-canopy-accent">
+                Beta
+              </span>
+            </div>
+            <div className="text-xs text-canopy-text/50">
+              Version <span className="font-mono">{appVersion}</span>
             </div>
           </div>
         </div>
-      </div>
+      </SettingsSection>
 
-      <div className="space-y-2">
-        <h4 className="text-sm font-medium text-canopy-text">Description</h4>
-        <p className="text-sm text-canopy-text/60">
-          An orchestration board for AI coding agents. Start agents on worktrees, monitor their
-          progress, and inject context to help them understand your codebase.
-        </p>
-      </div>
-
-      <div className="space-y-2">
-        <h4 className="text-sm font-medium text-canopy-text">System Status</h4>
-        <div className="bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] p-4 space-y-3">
-          {cliCheckFailed ? (
-            <div className="text-sm text-status-error/80">Failed to check agent status</div>
-          ) : !cliAvailability || !agentSettings ? (
-            <div className="text-sm text-canopy-text/40">Loading agent status...</div>
-          ) : (
-            getAgentIds().map((id) => {
+      <SettingsSection
+        icon={Info}
+        title="System Status"
+        description="Agent CLI availability. Agents must be installed and accessible in your PATH."
+        id="general-system-status"
+      >
+        {cliCheckFailed ? (
+          <div className="text-sm text-status-error/80">Failed to check agent status</div>
+        ) : !cliAvailability || !agentSettings ? (
+          <div className="text-sm text-canopy-text/40">Loading agent status...</div>
+        ) : (
+          <div className="space-y-2">
+            {getAgentIds().map((id) => {
               const config = getAgentConfig(id);
               const agentEntry = getAgentSettingsEntry(agentSettings, id);
               const isSelected = agentEntry.selected !== false;
@@ -278,38 +274,41 @@ export function GeneralTab({ appVersion, onNavigateToAgents }: GeneralTabProps) 
               const name = config?.name ?? id;
 
               return (
-                <div key={id} className="flex items-center justify-between text-sm">
+                <div
+                  key={id}
+                  className="flex items-center justify-between text-sm px-3 py-2 rounded-[var(--radius-md)] border border-canopy-border bg-canopy-bg/30"
+                >
                   <span className="text-canopy-text/70">{name}</span>
                   <div className="flex items-center gap-2">
                     {!isSelected ? (
                       <span className="text-canopy-text/40 text-xs">Disabled</span>
                     ) : isAvailable ? (
                       <>
-                        <CheckCircle className="w-4 h-4 text-status-success" />
+                        <CheckCircle className="w-3.5 h-3.5 text-status-success" />
                         <span className="text-status-success text-xs">Ready</span>
                       </>
                     ) : (
                       <>
-                        <AlertCircle className="w-4 h-4 text-status-warning" />
+                        <AlertCircle className="w-3.5 h-3.5 text-status-warning" />
                         <span className="text-status-warning text-xs">CLI not found</span>
                       </>
                     )}
                   </div>
                 </div>
               );
-            })
-          )}
+            })}
 
-          {onNavigateToAgents && (
-            <button
-              onClick={onNavigateToAgents}
-              className="text-xs text-canopy-accent hover:underline mt-2"
-            >
-              Configure agents →
-            </button>
-          )}
-        </div>
-      </div>
+            {onNavigateToAgents && (
+              <button
+                onClick={onNavigateToAgents}
+                className="text-xs text-canopy-accent hover:underline"
+              >
+                Configure agents →
+              </button>
+            )}
+          </div>
+        )}
+      </SettingsSection>
 
       {configError ? (
         <div className="p-4 rounded-[var(--radius-lg)] border border-[color-mix(in_oklab,var(--color-status-error)_50%,transparent)] bg-[color-mix(in_oklab,var(--color-status-error)_10%,transparent)]">
@@ -323,6 +322,7 @@ export function GeneralTab({ appVersion, onNavigateToAgents }: GeneralTabProps) 
           title="Auto-Hibernation"
           description="Automatically stop terminals and servers for projects that have been inactive for a period of time. Reduces system resource usage."
           iconColor="text-canopy-accent"
+          id="general-hibernation"
         >
           <SettingsSwitchCard
             icon={Moon}
@@ -368,11 +368,13 @@ export function GeneralTab({ appVersion, onNavigateToAgents }: GeneralTabProps) 
         </SettingsSection>
       ) : null}
 
-      <div className="space-y-3">
-        <h4 className="text-sm font-medium text-canopy-text flex items-center gap-2">
-          <Activity className="w-4 h-4 text-canopy-accent" />
-          Display
-        </h4>
+      <SettingsSection
+        icon={Activity}
+        title="Display"
+        description="Control which interface elements are visible."
+        iconColor="text-canopy-accent"
+        id="general-project-pulse"
+      >
         <SettingsSwitchCard
           icon={Activity}
           title="Project Pulse"
@@ -402,32 +404,33 @@ export function GeneralTab({ appVersion, onNavigateToAgents }: GeneralTabProps) 
           }
           ariaLabel="Developer Tools Toggle"
         />
-      </div>
+      </SettingsSection>
 
-      <div className="border border-canopy-border rounded-[var(--radius-md)]">
+      <SettingsSection
+        icon={Keyboard}
+        title="Quick Reference"
+        description="Common keyboard shortcuts. Edit all shortcuts in the Keyboard settings tab."
+      >
         <button
           type="button"
           onClick={() => setIsShortcutsOpen(!isShortcutsOpen)}
           aria-expanded={isShortcutsOpen}
           aria-controls="keyboard-shortcuts-content"
-          className="w-full flex items-center gap-2 px-3 py-2 text-sm text-canopy-text/60 hover:text-canopy-text transition-colors"
+          className="flex items-center gap-2 text-sm text-canopy-text/60 hover:text-canopy-text transition-colors"
         >
           {isShortcutsOpen ? (
             <ChevronDown className="w-4 h-4" />
           ) : (
             <ChevronRight className="w-4 h-4" />
           )}
-          <span>Keyboard Shortcuts</span>
+          <span>{isShortcutsOpen ? "Hide shortcuts" : "Show shortcuts"}</span>
         </button>
 
         {isShortcutsOpen && (
-          <div
-            id="keyboard-shortcuts-content"
-            className="px-3 pb-3 space-y-4 border-t border-canopy-border pt-3"
-          >
+          <div id="keyboard-shortcuts-content" className="space-y-4">
             {shortcuts.map((category) => (
               <div key={category.category} className="space-y-2">
-                <h5 className="text-xs font-medium text-canopy-text/60 uppercase tracking-wide">
+                <h5 className="text-xs font-medium text-canopy-text/50 uppercase tracking-wide">
                   {category.category}
                 </h5>
                 <dl className="space-y-1">
@@ -449,7 +452,7 @@ export function GeneralTab({ appVersion, onNavigateToAgents }: GeneralTabProps) 
             ))}
           </div>
         )}
-      </div>
+      </SettingsSection>
     </div>
   );
 }

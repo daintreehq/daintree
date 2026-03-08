@@ -1,4 +1,4 @@
-import { useNotificationStore } from "@/store/notificationStore";
+import { notify } from "@/lib/notify";
 import { useTerminalStore } from "@/store/terminalStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 
@@ -13,11 +13,13 @@ export function fireWatchNotification(
   const title = isWaiting ? "Agent waiting for input" : "Agent task completed";
   const message = isWaiting ? `${label} is waiting for your input` : `${label} finished its task`;
 
-  useNotificationStore.getState().addNotification({
+  notify({
     type: isWaiting ? "warning" : "success",
+    priority: "high",
     title,
     message,
     duration: 12000,
+    correlationId: panelId,
     action: {
       label: "Go to terminal",
       onClick: () => {

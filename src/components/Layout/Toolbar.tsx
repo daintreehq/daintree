@@ -3,7 +3,7 @@ import type React from "react";
 import { Button } from "@/components/ui/button";
 import { FixedDropdown } from "@/components/ui/fixed-dropdown";
 import {
-  Settings,
+  SlidersHorizontal,
   Terminal,
   AlertCircle,
   GitCommit,
@@ -39,6 +39,7 @@ import {
   usePreferencesStore,
   useToolbarPreferencesStore,
   useCliAvailabilityStore,
+  useVoiceRecordingStore,
 } from "@/store";
 import type { ToolbarButtonId } from "@/../../shared/types/domain";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
@@ -52,6 +53,7 @@ import { actionService } from "@/services/ActionService";
 import { ProjectSwitcherPalette } from "@/components/Project/ProjectSwitcherPalette";
 import { NotificationCenter } from "@/components/Notifications/NotificationCenter";
 import { useNotificationHistoryStore } from "@/store/slices/notificationHistorySlice";
+import { VoiceRecordingToolbarButton } from "./VoiceRecordingToolbarButton";
 
 interface ToolbarProps {
   onLaunchAgent: (
@@ -132,6 +134,13 @@ export function Toolbar({
   const [notificationCenterOpen, setNotificationCenterOpen] = useState(false);
   const notificationCenterButtonRef = useRef<HTMLButtonElement>(null);
   const notificationUnreadCount = useNotificationHistoryStore((s) => s.unreadCount);
+  const hasActiveVoiceRecording = useVoiceRecordingStore(
+    (state) =>
+      state.activeTarget !== null &&
+      (state.status === "connecting" ||
+        state.status === "recording" ||
+        state.status === "finishing")
+  );
   const [statsJustUpdated, setStatsJustUpdated] = useState(false);
   const prevLastUpdatedRef = useRef<number | null>(null);
 
@@ -375,7 +384,7 @@ export function Toolbar({
                   variant="ghost"
                   size="icon"
                   onClick={() => onLaunchAgent("browser")}
-                  className="text-canopy-text hover:bg-white/[0.06] transition-colors hover:text-status-info focus-visible:text-status-info"
+                  className="text-canopy-text hover:bg-white/[0.06] transition-colors hover:text-canopy-accent focus-visible:text-canopy-accent"
                   aria-label="Open Browser"
                 >
                   <Globe />
@@ -427,6 +436,10 @@ export function Toolbar({
         ),
         isAvailable: true,
       },
+      "voice-recording": {
+        render: () => <VoiceRecordingToolbarButton key="voice-recording" />,
+        isAvailable: hasActiveVoiceRecording,
+      },
       "github-stats": {
         render: () =>
           currentProject ? (
@@ -450,11 +463,10 @@ export function Toolbar({
                         }
                       }}
                       className={cn(
-                        "text-canopy-text hover:bg-overlay-medium hover:text-canopy-accent h-full px-3 gap-2 rounded-none rounded-l-[var(--radius-md)]",
+                        "text-canopy-text hover:bg-overlay-medium hover:text-white h-full px-3 gap-2 rounded-none rounded-l-[var(--radius-md)]",
                         stats?.issueCount === 0 && "opacity-50",
                         isStale && "opacity-60",
-                        issuesOpen &&
-                          "bg-white/[0.04] ring-1 ring-canopy-accent/20 text-canopy-accent"
+                        issuesOpen && "bg-white/[0.04] ring-1 ring-github-open/20 text-white"
                       )}
                       aria-label={`${stats?.issueCount ?? "\u2014"} open issues${isStale ? " (cached)" : ""}`}
                     >
@@ -500,10 +512,10 @@ export function Toolbar({
                         }
                       }}
                       className={cn(
-                        "text-canopy-text hover:bg-overlay-medium hover:text-canopy-accent h-full px-3 gap-2 rounded-none",
+                        "text-canopy-text hover:bg-overlay-medium hover:text-white h-full px-3 gap-2 rounded-none",
                         stats?.prCount === 0 && "opacity-50",
                         isStale && "opacity-60",
-                        prsOpen && "bg-white/[0.04] ring-1 ring-canopy-accent/20 text-canopy-accent"
+                        prsOpen && "bg-white/[0.04] ring-1 ring-github-merged/20 text-white"
                       )}
                       aria-label={`${stats?.prCount ?? "\u2014"} open pull requests${isStale ? " (cached)" : ""}`}
                     >
@@ -545,10 +557,9 @@ export function Toolbar({
                         setCommitsOpen(!commitsOpen);
                       }}
                       className={cn(
-                        "text-canopy-text hover:bg-overlay-medium hover:text-canopy-accent h-full px-3 gap-2 rounded-none rounded-r-[var(--radius-md)]",
+                        "text-canopy-text hover:bg-overlay-medium hover:text-white h-full px-3 gap-2 rounded-none rounded-r-[var(--radius-md)]",
                         stats?.commitCount === 0 && "opacity-50",
-                        commitsOpen &&
-                          "bg-white/[0.04] ring-1 ring-canopy-accent/20 text-canopy-accent"
+                        commitsOpen && "bg-white/[0.04] ring-1 ring-white/20 text-white"
                       )}
                       aria-label={`${stats?.commitCount ?? "\u2014"} commits`}
                     >
@@ -604,7 +615,7 @@ export function Toolbar({
                   >
                     <Bell />
                     {notificationUnreadCount > 0 && (
-                      <span className="absolute top-1 right-1 min-w-[14px] h-[14px] flex items-center justify-center rounded-full bg-status-warning text-[9px] font-bold text-canopy-bg px-0.5 leading-none">
+                      <span className="absolute top-1 right-1 min-w-[14px] h-[14px] flex items-center justify-center rounded-full bg-canopy-accent text-[9px] font-bold text-canopy-bg px-0.5 leading-none">
                         {notificationUnreadCount > 99 ? "99+" : notificationUnreadCount}
                       </span>
                     )}
@@ -709,7 +720,7 @@ export function Toolbar({
                   className="text-canopy-text hover:bg-white/[0.06] hover:text-canopy-accent transition-colors"
                   aria-label="Open settings"
                 >
-                  <Settings />
+                  <SlidersHorizontal />
                 </Button>
               </TooltipTrigger>
               <TooltipContent side="bottom">Open Settings</TooltipContent>
@@ -789,6 +800,7 @@ export function Toolbar({
       terminalShortcut,
       browserShortcut,
       devServerCommand,
+      hasActiveVoiceRecording,
       stats,
       currentProject,
       issuesOpen,
@@ -832,11 +844,11 @@ export function Toolbar({
 
   return (
     <>
-      <header className="relative flex h-12 items-center justify-between px-4 pt-1 shrink-0 app-drag-region surface-chrome border-b border-divider">
+      <header className="relative grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] h-12 items-center px-4 pt-1 shrink-0 app-drag-region surface-chrome border-b border-divider">
         <div className="window-resize-strip" />
 
         {/* LEFT GROUP */}
-        <div className="flex items-center gap-1.5 app-no-drag z-20">
+        <div className="flex items-center gap-1.5 app-no-drag z-20 justify-self-start">
           {isMac() && (
             <div
               className={cn(
@@ -854,8 +866,8 @@ export function Toolbar({
           </div>
         </div>
 
-        {/* CENTER GROUP - Absolutely positioned dead center */}
-        <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 flex items-center justify-center z-10 pointer-events-none">
+        {/* CENTER GROUP - Grid-centered, shrinks gracefully on narrow windows */}
+        <div className="flex items-center justify-center min-w-0 max-w-full pointer-events-none justify-self-center">
           <ProjectSwitcherPalette
             mode="dropdown"
             isOpen={isDropdownOpen}
@@ -879,7 +891,7 @@ export function Toolbar({
           >
             <button
               className={cn(
-                "flex items-center justify-center gap-2 px-3 h-9 rounded-[var(--radius-md)] select-none border border-white/10 shadow-[inset_0_1px_0_rgba(255,255,255,0.06)] app-no-drag pointer-events-auto outline-none",
+                "flex items-center justify-center gap-2 px-3 h-9 rounded-[var(--radius-md)] select-none border border-white/10 shadow-[inset_0_1px_0_rgba(255,255,255,0.06)] app-no-drag pointer-events-auto outline-none min-w-0 max-w-full overflow-hidden",
                 "opacity-80 hover:opacity-100 transition-opacity cursor-pointer"
               )}
               data-testid="project-switcher-trigger"
@@ -892,31 +904,31 @@ export function Toolbar({
             >
               {currentProject ? (
                 <>
-                  <span className="text-base leading-none" aria-label="Project emoji">
+                  <span className="text-base leading-none shrink-0" aria-label="Project emoji">
                     {currentProject.emoji}
                   </span>
-                  <span className="text-xs font-medium text-white/90 tracking-wide">
+                  <span className="text-xs font-medium text-white/90 tracking-wide truncate min-w-0">
                     {currentProject.name}
                   </span>
                   {branchName && (
                     <span
-                      className="font-mono text-[10px] tabular-nums text-white/70 px-1.5 py-0.5 rounded-full bg-white/10"
+                      className="font-mono text-[10px] tabular-nums text-white/70 px-1.5 py-0.5 rounded-full bg-white/10 shrink-0"
                       aria-label={`Current branch ${branchName}`}
                     >
                       {branchName}
                     </span>
                   )}
-                  <ChevronsUpDown className="h-3 w-3 text-white/50 ml-0.5" />
+                  <ChevronsUpDown className="h-3 w-3 text-white/50 ml-0.5 shrink-0" />
                 </>
               ) : (
                 <>
-                  <span className="text-xs font-medium text-canopy-text tracking-wide">
+                  <span className="text-xs font-medium text-canopy-text tracking-wide truncate min-w-0">
                     Canopy Command Center
                   </span>
-                  <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-canopy-accent/20 text-canopy-accent">
+                  <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-canopy-accent/20 text-canopy-accent shrink-0">
                     Beta
                   </span>
-                  <ChevronsUpDown className="h-3 w-3 text-canopy-text/50 ml-0.5" />
+                  <ChevronsUpDown className="h-3 w-3 text-canopy-text/50 ml-0.5 shrink-0" />
                 </>
               )}
             </button>
@@ -924,7 +936,7 @@ export function Toolbar({
         </div>
 
         {/* RIGHT GROUP */}
-        <div className="flex items-center gap-1.5 app-no-drag z-20">
+        <div className="flex items-center gap-1.5 app-no-drag z-20 justify-self-end">
           <div className="flex items-center gap-0.5">
             {renderButtons(toolbarLayout.rightButtons)}
           </div>

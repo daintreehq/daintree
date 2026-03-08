@@ -20,6 +20,8 @@ export interface UseWorktreeStatusResult {
   effectiveSummary?: string | null;
   computedSubtitle: ComputedSubtitle;
   spineState: SpineState;
+  isLifecycleRunning: boolean;
+  lifecycleLabel?: string;
 }
 
 export function useWorktreeStatus({
@@ -120,6 +122,26 @@ export function useWorktreeStatus({
     !hasChanges &&
     worktree.worktreeChanges !== null;
 
+  const lifecycle = worktree.lifecycleStatus;
+  const isLifecycleRunning = lifecycle?.state === "running";
+  const lifecycleLabel = useMemo(() => {
+    if (!lifecycle) return undefined;
+    if (lifecycle.state === "running") {
+      const phase = lifecycle.phase === "setup" ? "Running setup" : "Running teardown";
+      if (lifecycle.currentCommand) {
+        return `${phase}: ${lifecycle.currentCommand}`;
+      }
+      return `${phase}...`;
+    }
+    if (lifecycle.state === "failed") {
+      return lifecycle.phase === "setup" ? "Setup failed" : "Teardown failed";
+    }
+    if (lifecycle.state === "timed-out") {
+      return lifecycle.phase === "setup" ? "Setup timed out" : "Teardown timed out";
+    }
+    return undefined;
+  }, [lifecycle]);
+
   return {
     branchLabel,
     hasChanges,
@@ -128,5 +150,7 @@ export function useWorktreeStatus({
     effectiveSummary,
     computedSubtitle,
     spineState,
+    isLifecycleRunning,
+    lifecycleLabel,
   };
 }

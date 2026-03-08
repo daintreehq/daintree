@@ -19,13 +19,13 @@ export function SettingsSection({
   id,
 }: SettingsSectionProps) {
   return (
-    <div className="space-y-4" id={id}>
+    <div className="space-y-6" id={id}>
       <div>
-        <h4 className="text-sm font-medium text-canopy-text mb-2 flex items-center gap-2">
+        <h4 className="text-sm font-medium text-canopy-text mb-1.5 flex items-center gap-2">
           <Icon className={cn("w-4 h-4", iconColor)} aria-hidden="true" />
           {title}
         </h4>
-        <p className="text-xs text-canopy-text/50 mb-4">{description}</p>
+        <p className="text-xs text-canopy-text/50">{description}</p>
       </div>
       {children}
     </div>

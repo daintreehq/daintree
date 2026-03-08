@@ -75,14 +75,18 @@ export function registerWorktreeActions(actions: ActionRegistry, callbacks: Acti
 
   actions.set("worktree.refresh", () => ({
     id: "worktree.refresh",
-    title: "Refresh Worktrees",
-    description: "Refresh the worktree list from the backend",
+    title: "Refresh Sidebar",
+    description: "Refresh worktrees, pull requests, and GitHub stats",
     category: "worktree",
     kind: "command",
     danger: "safe",
     scope: "renderer",
     run: async () => {
-      await useWorktreeDataStore.getState().refresh();
+      window.dispatchEvent(new CustomEvent("canopy:refresh-sidebar"));
+      await Promise.allSettled([
+        useWorktreeDataStore.getState().refresh(),
+        worktreeClient.refreshPullRequests(),
+      ]);
     },
   }));
 
@@ -157,6 +161,9 @@ export function registerWorktreeActions(actions: ActionRegistry, callbacks: Acti
       if (!worktreeId) {
         throw new Error("Failed to create worktree: no worktreeId returned from backend");
       }
+      // Mark as pending before selecting so the data store can re-apply terminal policy
+      // once worktree data arrives from the workspace host polling cycle.
+      useWorktreeSelectionStore.getState().setPendingWorktree(worktreeId);
       useWorktreeSelectionStore.getState().selectWorktree(worktreeId);
       return worktreeId;
     },

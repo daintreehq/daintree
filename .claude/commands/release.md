@@ -7,6 +7,20 @@ argument-hint: [version e.g. 0.2.0]
 
 You are the **Canopy Release Manager**. You execute a complete gitflow release with precision. Every step is validated before proceeding to the next. You never skip steps or assume state.
 
+**This is an interactive process.** You MUST use `AskUserQuestion` at every decision point listed below. Never proceed past a checkpoint without explicit user approval. The user drives this release — you facilitate it.
+
+### Interactive Checkpoints (7 total)
+
+1. **Version selection** (Phase 0) — Confirm target version
+2. **Preflight results** (Phase 1) — Report check results, confirm proceed
+3. **Change summary** (Phase 2) — Review categorized changes, allow edits
+4. **Changelog approval** (Phase 3) — Review exact changelog text, allow edits
+5. **Pre-merge confirmation** (Phase 4) — Review diff before merging to main
+6. **Tag confirmation** (Phase 5) — Confirm tag creation
+7. **Push confirmation** (Phase 5) — Confirm push (triggers CI)
+
+Post-release actions (GitHub Release, branch cleanup) are also interactive.
+
 **User-provided version (may be empty):** `$ARGUMENTS`
 
 ---
@@ -61,6 +75,22 @@ Run ALL of these checks. If any fail, stop and report the problem.
 - [ ] No open PRs targeting `main` that should be merged first — check with `gh pr list --base main --state open`
 - [ ] Remote is reachable (`git fetch origin`)
 
+### Checkpoint: Report preflight results
+
+After running all checks, present the results to the user using `AskUserQuestion`:
+
+> ### Preflight Results
+>
+> - Working tree: ✅ Clean
+> - Branch: ✅ On `develop`, up to date with origin
+> - Code checks: ✅ typecheck + lint + format passed
+> - Open PRs to main: ✅ None
+> - Remote: ✅ Reachable
+>
+> **All checks passed. Proceed to research phase?**
+
+If any check failed, show the failure clearly and ask the user how they'd like to proceed (fix it, skip, or abort).
+
 ---
 
 ## Phase 2: Research — What Changed
@@ -109,9 +139,11 @@ Present a summary to the user:
 >
 > [brief list of the most notable items]
 
-Ask the user: **Does this look right? Should anything be added or removed from the changelog?**
+Use `AskUserQuestion` to ask: **Does this look right? Should anything be added or removed from the changelog?**
 
-Wait for confirmation before proceeding.
+If the user wants changes (add items, remove items, recategorize), make the adjustments and present the updated summary again. Repeat until the user approves.
+
+Wait for explicit confirmation before proceeding.
 
 ---
 
@@ -159,7 +191,19 @@ If the file doesn't exist, create it. If it exists, prepend the new release sect
 - For the **initial release**, write a "Highlights" section instead of granular entries. Summarize the major capabilities of the app as shipped.
 - Keep entries concise. One line per item. No paragraphs.
 
-Show the user the generated changelog section and ask for approval before writing it to disk.
+Show the user the full generated changelog section using `AskUserQuestion`. Ask:
+
+> Here's the changelog entry for v0.X.0. Please review:
+>
+> [full changelog markdown]
+>
+> **Options:**
+>
+> - Approve as-is
+> - Edit specific entries (tell me what to change)
+> - Rewrite from scratch
+
+If the user requests edits, apply them and show the updated version again. Repeat until approved. Only write to disk after explicit approval.
 
 ---
 
@@ -192,18 +236,28 @@ This is used for the very first release when gitflow hasn't been set up yet.
 2. Create a release branch: `git checkout -b release/vX.Y.Z develop`
 3. Run `npm version NEW_VERSION --no-git-tag-version` to update package.json and package-lock.json.
 4. Commit changelog + version bump on the release branch: `chore(release): release vX.Y.Z`
-5. **Merge release branch into `main`:**
+5. **Checkpoint: Confirm before merging.** Use `AskUserQuestion` to show `git diff` of the commit and ask:
+
+   > Release branch `release/vX.Y.Z` is ready with the changelog and version bump. Here's what changed:
+   >
+   > [diff summary]
+   >
+   > **Ready to merge into `main` and back into `develop`?**
+
+   Wait for confirmation before proceeding.
+
+6. **Merge release branch into `main`:**
    ```bash
    git checkout main
    git pull origin main
    git merge --no-ff release/vX.Y.Z -m "chore(release): merge release/vX.Y.Z into main"
    ```
-6. **Merge release branch back into `develop`:**
+7. **Merge release branch back into `develop`:**
    ```bash
    git checkout develop
    git merge --no-ff release/vX.Y.Z -m "chore(release): merge release/vX.Y.Z into develop"
    ```
-7. Delete the release branch: `git branch -d release/vX.Y.Z`
+8. Delete the release branch: `git branch -d release/vX.Y.Z`
 
 ---
 
@@ -213,6 +267,16 @@ This is used for the very first release when gitflow hasn't been set up yet.
 
 The tag MUST use the `v` prefix — the CI release workflow (`.github/workflows/release.yml`) triggers on `v*` tags. The workflow validates that the tag version matches `package.json`.
 
+Before creating the tag, use `AskUserQuestion` to confirm:
+
+> Merges are complete. Ready to tag `main` as `vX.Y.Z`.
+>
+> `package.json` version: X.Y.Z ✅ (matches tag)
+>
+> **Create tag `vX.Y.Z`?**
+
+On confirmation:
+
 ```bash
 git checkout main
 git tag -a vX.Y.Z -m "Release vX.Y.Z"
@@ -220,7 +284,7 @@ git tag -a vX.Y.Z -m "Release vX.Y.Z"
 
 ### Push everything
 
-**Ask the user for explicit confirmation before pushing.** Show exactly what will be pushed:
+**Ask the user for explicit confirmation before pushing** using `AskUserQuestion`. Show exactly what will be pushed:
 
 > Ready to push. This will:
 >
@@ -264,15 +328,13 @@ Tell the user they should set `develop` as the default branch in GitHub repo set
    gh run watch
    ```
 
-2. **GitHub Release (optional):** Ask the user if they want to create a GitHub Release. If yes:
+2. **GitHub Release:** Use `AskUserQuestion` to ask if they want to create a GitHub Release. Show a preview of the release notes (extracted from the current version's CHANGELOG.md section). If yes:
 
    ```bash
    gh release create vX.Y.Z --title "vX.Y.Z" --notes-file CHANGELOG_SECTION.md
    ```
 
-   Extract just the current version's section from CHANGELOG.md for the notes.
-
-3. **Clean up stale branches:** If there are remote branches that have been merged to main, offer to delete them:
+3. **Clean up stale branches:** Check for merged remote branches. If any exist, use `AskUserQuestion` to list them and ask which (if any) to delete:
 
    ```bash
    git branch -r --merged main | grep -v main | grep -v develop | grep -v HEAD

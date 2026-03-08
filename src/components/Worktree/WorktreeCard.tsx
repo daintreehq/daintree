@@ -137,6 +137,8 @@ export function WorktreeCard({
     effectiveSummary,
     computedSubtitle,
     spineState,
+    isLifecycleRunning,
+    lifecycleLabel,
   } = useWorktreeStatus({ worktree, worktreeErrorCount: worktreeErrors.length });
 
   const {
@@ -438,7 +440,7 @@ export function WorktreeCard({
       {isComplete && (
         <div
           className={cn(
-            "absolute w-3 h-3 bg-status-success/20 pointer-events-none z-10",
+            "absolute w-3 h-3 bg-github-open pointer-events-none z-10",
             variant === "sidebar" ? "top-0 left-[1px]" : "top-0 left-0 rounded-tl-lg"
           )}
           style={{ clipPath: "polygon(0 0, 100% 0, 0 100%)" }}
@@ -522,6 +524,8 @@ export function WorktreeCard({
           onDismissError={dismissError}
           onRetryError={handleErrorRetry}
           onOpenReviewHub={() => setShowReviewHub(true)}
+          isLifecycleRunning={isLifecycleRunning}
+          lifecycleLabel={lifecycleLabel}
         />
 
         <WorktreeTerminalSection

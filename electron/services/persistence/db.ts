@@ -1,0 +1,76 @@
+import Database from "better-sqlite3";
+import { drizzle } from "drizzle-orm/better-sqlite3";
+import { app } from "electron";
+import path from "path";
+import * as schema from "./schema.js";
+
+export type AppDb = ReturnType<typeof drizzle<typeof schema>>;
+
+const CREATE_TABLES_SQL = `
+  CREATE TABLE IF NOT EXISTS tasks (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL,
+    title TEXT NOT NULL,
+    description TEXT,
+    status TEXT NOT NULL,
+    priority INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    queued_at INTEGER,
+    started_at INTEGER,
+    completed_at INTEGER,
+    dependencies TEXT NOT NULL DEFAULT '[]',
+    worktree_id TEXT,
+    assigned_agent_id TEXT,
+    run_id TEXT,
+    metadata TEXT,
+    result TEXT,
+    routing_hints TEXT
+  );
+
+  CREATE INDEX IF NOT EXISTS tasks_project_idx ON tasks(project_id);
+  CREATE INDEX IF NOT EXISTS tasks_project_status_idx ON tasks(project_id, status);
+
+  CREATE TABLE IF NOT EXISTS workflow_runs (
+    run_id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL,
+    workflow_id TEXT NOT NULL,
+    workflow_version TEXT NOT NULL,
+    status TEXT NOT NULL,
+    started_at INTEGER NOT NULL,
+    completed_at INTEGER,
+    definition TEXT NOT NULL,
+    node_states TEXT NOT NULL DEFAULT '{}',
+    task_mapping TEXT NOT NULL DEFAULT '{}',
+    scheduled_nodes TEXT NOT NULL DEFAULT '[]',
+    evaluated_conditions TEXT NOT NULL DEFAULT '[]'
+  );
+
+  CREATE INDEX IF NOT EXISTS workflow_runs_project_idx ON workflow_runs(project_id);
+  CREATE INDEX IF NOT EXISTS workflow_runs_project_status_idx ON workflow_runs(project_id, status);
+`;
+
+let sharedInstance: { sqlite: Database.Database; db: AppDb } | null = null;
+
+export function getSharedDb(): AppDb {
+  if (!sharedInstance) {
+    const dbPath = path.join(app.getPath("userData"), "canopy.db");
+    sharedInstance = openDb(dbPath);
+  }
+  return sharedInstance.db;
+}
+
+export function openDb(dbPath: string): { sqlite: Database.Database; db: AppDb } {
+  const sqlite = new Database(dbPath);
+  sqlite.pragma("journal_mode = WAL");
+  sqlite.exec(CREATE_TABLES_SQL);
+  const db = drizzle(sqlite, { schema });
+  return { sqlite, db };
+}
+
+export function closeSharedDb(): void {
+  if (sharedInstance) {
+    sharedInstance.sqlite.close();
+    sharedInstance = null;
+  }
+}

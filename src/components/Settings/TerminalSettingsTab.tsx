@@ -196,6 +196,7 @@ export function TerminalSettingsTab() {
       <SettingsSection
         icon={Zap}
         title="Performance Mode"
+        id="terminal-performance-mode"
         description={`Manual safe mode for low-end hardware or high-density workflows. Reduces scrollback to ${PERFORMANCE_MODE_SCROLLBACK} lines and disables animations for maximum performance.`}
         iconColor="text-status-warning"
       >
@@ -222,132 +223,125 @@ export function TerminalSettingsTab() {
         )}
       </SettingsSection>
 
-      <div className="pt-4 border-t border-canopy-border">
-        <SettingsSection
+      <SettingsSection
+        icon={MessageSquare}
+        title="Hybrid Input Bar"
+        id="terminal-hybrid-input"
+        description="Configure the bottom input bar used for agent terminals."
+        iconColor="text-canopy-accent"
+      >
+        <SettingsSwitchCard
           icon={MessageSquare}
-          title="Hybrid Input Bar"
-          description="Configure the bottom input bar used for agent terminals."
-          iconColor="text-canopy-accent"
-        >
+          title={hybridInputEnabled ? "Hybrid Input Enabled" : "Enable Hybrid Input"}
+          subtitle={
+            hybridInputEnabled
+              ? "Show the multi-line input bar on agent terminals"
+              : "Hide the input bar and use the terminal directly"
+          }
+          isEnabled={hybridInputEnabled}
+          onChange={handleHybridInputEnabledToggle}
+          ariaLabel="Hybrid Input Bar Toggle"
+        />
+
+        {hybridInputEnabled && (
           <SettingsSwitchCard
-            icon={MessageSquare}
-            title={hybridInputEnabled ? "Hybrid Input Enabled" : "Enable Hybrid Input"}
+            icon={MousePointerClick}
+            title={hybridInputAutoFocus ? "Auto-Focus Input" : "Auto-Focus Terminal"}
             subtitle={
-              hybridInputEnabled
-                ? "Show the multi-line input bar on agent terminals"
-                : "Hide the input bar and use the terminal directly"
+              hybridInputAutoFocus
+                ? "Selecting a pane focuses the input bar"
+                : "Selecting a pane focuses the terminal (xterm)"
             }
-            isEnabled={hybridInputEnabled}
-            onChange={handleHybridInputEnabledToggle}
-            ariaLabel="Hybrid Input Bar Toggle"
+            isEnabled={hybridInputAutoFocus}
+            onChange={handleHybridInputAutoFocusToggle}
+            ariaLabel="Hybrid Input Auto Focus Toggle"
           />
+        )}
+      </SettingsSection>
 
-          {hybridInputEnabled && (
-            <SettingsSwitchCard
-              icon={MousePointerClick}
-              title={hybridInputAutoFocus ? "Auto-Focus Input" : "Auto-Focus Terminal"}
-              subtitle={
-                hybridInputAutoFocus
-                  ? "Selecting a pane focuses the input bar"
-                  : "Selecting a pane focuses the terminal (xterm)"
-              }
-              isEnabled={hybridInputAutoFocus}
-              onChange={handleHybridInputAutoFocusToggle}
-              ariaLabel="Hybrid Input Auto Focus Toggle"
-            />
-          )}
-        </SettingsSection>
-      </div>
-
-      <div className="pt-4 border-t border-canopy-border">
-        <SettingsSection
+      <SettingsSection
+        icon={SplitSquareHorizontal}
+        title="Two-Pane Split Layout"
+        id="terminal-two-pane-split"
+        description="When exactly two panels are open, display them with a resizable divider instead of equal columns. The split ratio is remembered per worktree."
+        iconColor="text-canopy-accent"
+      >
+        <SettingsSwitchCard
           icon={SplitSquareHorizontal}
-          title="Two-Pane Split Layout"
-          description="When exactly two panels are open, display them with a resizable divider instead of equal columns. The split ratio is remembered per worktree."
-          iconColor="text-canopy-accent"
-        >
-          <SettingsSwitchCard
-            icon={SplitSquareHorizontal}
-            title={twoPaneSplitConfig.enabled ? "Two-Pane Split Enabled" : "Enable Two-Pane Split"}
-            subtitle={
-              twoPaneSplitConfig.enabled
-                ? "Drag divider to resize, double-click to reset"
-                : "Use equal-width grid for two panels"
-            }
-            isEnabled={twoPaneSplitConfig.enabled}
-            onChange={() => setTwoPaneSplitEnabled(!twoPaneSplitConfig.enabled)}
-            ariaLabel="Two-Pane Split Toggle"
-          />
+          title={twoPaneSplitConfig.enabled ? "Two-Pane Split Enabled" : "Enable Two-Pane Split"}
+          subtitle={
+            twoPaneSplitConfig.enabled
+              ? "Drag divider to resize, double-click to reset"
+              : "Use equal-width grid for two panels"
+          }
+          isEnabled={twoPaneSplitConfig.enabled}
+          onChange={() => setTwoPaneSplitEnabled(!twoPaneSplitConfig.enabled)}
+          ariaLabel="Two-Pane Split Toggle"
+        />
 
-          {twoPaneSplitConfig.enabled && (
-            <>
-              <SettingsSwitchCard
-                icon={Monitor}
-                title={
-                  twoPaneSplitConfig.preferPreview ? "Preview-Focused Layout" : "Balanced Layout"
-                }
-                subtitle={
-                  twoPaneSplitConfig.preferPreview
-                    ? "Give more space to browser/dev-preview panels (65/35)"
-                    : "Start with equal space for both panels (50/50)"
-                }
-                isEnabled={twoPaneSplitConfig.preferPreview}
-                onChange={() => setPreferPreview(!twoPaneSplitConfig.preferPreview)}
-                ariaLabel="Prefer Preview Toggle"
-              />
+        {twoPaneSplitConfig.enabled && (
+          <>
+            <SettingsSwitchCard
+              icon={Monitor}
+              title={
+                twoPaneSplitConfig.preferPreview ? "Preview-Focused Layout" : "Balanced Layout"
+              }
+              subtitle={
+                twoPaneSplitConfig.preferPreview
+                  ? "Give more space to browser/dev-preview panels (65/35)"
+                  : "Start with equal space for both panels (50/50)"
+              }
+              isEnabled={twoPaneSplitConfig.preferPreview}
+              onChange={() => setPreferPreview(!twoPaneSplitConfig.preferPreview)}
+              ariaLabel="Prefer Preview Toggle"
+            />
 
-              <div className="space-y-2">
-                <label htmlFor="default-ratio-slider" className="text-sm text-canopy-text/70">
-                  Default Ratio
-                </label>
-                <div className="flex items-center gap-4">
-                  <input
-                    id="default-ratio-slider"
-                    type="range"
-                    min="20"
-                    max="80"
-                    value={Math.round(twoPaneSplitConfig.defaultRatio * 100)}
-                    onChange={(e) => setDefaultRatio(Number(e.target.value) / 100)}
-                    aria-valuetext={`${Math.round(twoPaneSplitConfig.defaultRatio * 100)} percent left, ${Math.round((1 - twoPaneSplitConfig.defaultRatio) * 100)} percent right`}
-                    className="flex-1 accent-canopy-accent"
-                  />
-                  <span
-                    className="text-xs text-canopy-text/70 font-mono w-16 text-right"
-                    aria-hidden="true"
-                  >
-                    {Math.round(twoPaneSplitConfig.defaultRatio * 100)}/
-                    {Math.round((1 - twoPaneSplitConfig.defaultRatio) * 100)}
-                  </span>
-                </div>
-                <p className="text-xs text-canopy-text/40">
-                  Default split ratio when no worktree-specific ratio is saved.
-                </p>
+            <div className="space-y-2">
+              <label htmlFor="default-ratio-slider" className="text-sm text-canopy-text/70">
+                Default Ratio
+              </label>
+              <div className="flex items-center gap-4">
+                <input
+                  id="default-ratio-slider"
+                  type="range"
+                  min="20"
+                  max="80"
+                  value={Math.round(twoPaneSplitConfig.defaultRatio * 100)}
+                  onChange={(e) => setDefaultRatio(Number(e.target.value) / 100)}
+                  aria-valuetext={`${Math.round(twoPaneSplitConfig.defaultRatio * 100)} percent left, ${Math.round((1 - twoPaneSplitConfig.defaultRatio) * 100)} percent right`}
+                  className="flex-1 accent-canopy-accent"
+                />
+                <span
+                  className="text-xs text-canopy-text/70 font-mono w-16 text-right"
+                  aria-hidden="true"
+                >
+                  {Math.round(twoPaneSplitConfig.defaultRatio * 100)}/
+                  {Math.round((1 - twoPaneSplitConfig.defaultRatio) * 100)}
+                </span>
               </div>
+              <p className="text-xs text-canopy-text/40">
+                Default split ratio when no worktree-specific ratio is saved.
+              </p>
+            </div>
 
-              <button
-                onClick={resetAllWorktreeRatios}
-                className="flex items-center gap-2 text-xs text-canopy-text/50 hover:text-canopy-text/70 transition-colors"
-              >
-                <RotateCcw className="w-3 h-3" />
-                <span>Reset all worktree split ratios</span>
-              </button>
-            </>
-          )}
-        </SettingsSection>
-      </div>
+            <button
+              onClick={resetAllWorktreeRatios}
+              className="flex items-center gap-2 text-xs text-canopy-text/50 hover:text-canopy-text/70 transition-colors"
+            >
+              <RotateCcw className="w-3 h-3" />
+              <span>Reset all worktree split ratios</span>
+            </button>
+          </>
+        )}
+      </SettingsSection>
 
-      <div className="pt-4 border-t border-canopy-border space-y-4">
-        <div>
-          <h4 className="text-sm font-medium text-canopy-text mb-2 flex items-center gap-2">
-            <HardDrive className="w-4 h-4 text-canopy-accent" />
-            Scrollback History
-          </h4>
-          <p className="text-xs text-canopy-text/50 mb-4">
-            Base scrollback applies to agent terminals. Shells and dev servers use reduced limits
-            automatically.
-          </p>
-        </div>
-
+      <SettingsSection
+        icon={HardDrive}
+        title="Scrollback History"
+        id="terminal-scrollback"
+        description="Base scrollback applies to agent terminals. Shells and dev servers use reduced limits automatically."
+        iconColor="text-canopy-accent"
+      >
         <div className="grid grid-cols-3 gap-2" role="radiogroup" aria-label="Scrollback presets">
           {SCROLLBACK_OPTIONS.map(({ value, label, description }) => (
             <button
@@ -427,58 +421,55 @@ export function TerminalSettingsTab() {
             </div>
           </div>
         )}
-      </div>
+      </SettingsSection>
 
-      <div className="pt-4 border-t border-canopy-border">
-        <h4 className="text-sm font-medium text-canopy-text mb-2">Grid Layout Strategy</h4>
-        <p className="text-xs text-canopy-text/50 mb-4">
-          Control how panels arrange in the grid as you add more.
-        </p>
-      </div>
-
-      <div className="grid grid-cols-3 gap-3">
-        {STRATEGIES.map(({ id, label, description, icon: Icon }) => (
-          <button
-            key={id}
-            onClick={() => handleStrategyChange(id)}
-            className={cn(
-              "flex flex-col items-center justify-center p-4 rounded-[var(--radius-md)] border transition-all",
-              layoutConfig.strategy === id
-                ? "bg-canopy-accent/10 border-canopy-accent text-canopy-accent"
-                : "border-canopy-border hover:bg-white/5 text-canopy-text/70"
-            )}
-          >
-            <Icon className="w-6 h-6 mb-2" />
-            <span className="text-xs font-medium">{label}</span>
-            <span className="text-[11px] text-center mt-1 opacity-60">{description}</span>
-          </button>
-        ))}
-      </div>
-
-      {layoutConfig.strategy !== "automatic" && (
-        <div className="space-y-2">
-          <label className="text-sm text-canopy-text/70">
-            {layoutConfig.strategy === "fixed-columns" ? "Number of Columns" : "Number of Rows"}
-          </label>
-          <input
-            type="number"
-            min="1"
-            max="10"
-            value={layoutConfig.value}
-            onChange={(e) => handleValueChange(e.target.value)}
-            className="bg-canopy-bg border border-canopy-border rounded px-3 py-2 text-canopy-text w-full focus:border-canopy-accent focus:outline-none transition-colors"
-          />
-          <p className="text-xs text-canopy-text/40">
-            {layoutConfig.strategy === "fixed-columns"
-              ? "Terminals will stack vertically when this many columns are filled."
-              : "Terminals will expand horizontally when this many rows are filled."}
-          </p>
+      <SettingsSection
+        icon={LayoutGrid}
+        title="Grid Layout Strategy"
+        id="terminal-grid-layout"
+        description="Control how panels arrange in the grid as you add more."
+      >
+        <div className="grid grid-cols-3 gap-3">
+          {STRATEGIES.map(({ id, label, description, icon: Icon }) => (
+            <button
+              key={id}
+              onClick={() => handleStrategyChange(id)}
+              className={cn(
+                "flex flex-col items-center justify-center p-4 rounded-[var(--radius-md)] border transition-all",
+                layoutConfig.strategy === id
+                  ? "bg-canopy-accent/10 border-canopy-accent text-canopy-accent"
+                  : "border-canopy-border hover:bg-white/5 text-canopy-text/70"
+              )}
+            >
+              <Icon className="w-6 h-6 mb-2" />
+              <span className="text-xs font-medium">{label}</span>
+              <span className="text-[11px] text-center mt-1 opacity-60">{description}</span>
+            </button>
+          ))}
         </div>
-      )}
 
-      <div className="pt-4 border-t border-canopy-border">
-        <h5 className="text-xs font-medium text-canopy-text mb-2">Current Strategy</h5>
-        <p className="text-xs text-canopy-text/50 leading-relaxed">
+        {layoutConfig.strategy !== "automatic" && (
+          <div className="space-y-2">
+            <label className="text-sm text-canopy-text/70">
+              {layoutConfig.strategy === "fixed-columns" ? "Number of Columns" : "Number of Rows"}
+            </label>
+            <input
+              type="number"
+              min="1"
+              max="10"
+              value={layoutConfig.value}
+              onChange={(e) => handleValueChange(e.target.value)}
+              className="bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-canopy-text w-full focus:border-canopy-accent focus:outline-none transition-colors"
+            />
+            <p className="text-xs text-canopy-text/40">
+              {layoutConfig.strategy === "fixed-columns"
+                ? "Terminals will stack vertically when this many columns are filled."
+                : "Terminals will expand horizontally when this many rows are filled."}
+            </p>
+          </div>
+        )}
+
+        <p className="text-xs text-canopy-text/40 leading-relaxed">
           {layoutConfig.strategy === "automatic" &&
             "Uses a balanced square grid that adapts to the number of terminals (1-4 terminals use 2 columns, 5+ use up to 4 columns)."}
           {layoutConfig.strategy === "fixed-columns" &&
@@ -486,7 +477,7 @@ export function TerminalSettingsTab() {
           {layoutConfig.strategy === "fixed-rows" &&
             `Maintains exactly ${layoutConfig.value} row${layoutConfig.value > 1 ? "s" : ""}, adding new columns as you open more terminals.`}
         </p>
-      </div>
+      </SettingsSection>
     </div>
   );
 }

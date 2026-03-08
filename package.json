@@ -1,6 +1,6 @@
 {
   "name": "canopy-app",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Canopy IDE - An Electron-based development environment",
   "author": {
     "name": "Greg Priday",
@@ -25,9 +25,10 @@
     "package:mac": "npm run build && electron-builder --mac",
     "package:win": "npm run build && electron-builder --win",
     "package:linux": "npm run build && electron-builder --linux",
-    "rebuild": "electron-rebuild -f -w node-pty",
-    "postinstall": "electron-rebuild -f -w node-pty",
+    "rebuild": "electron-rebuild -f -w node-pty,better-sqlite3",
+    "postinstall": "electron-rebuild -f -w node-pty,better-sqlite3",
     "preview": "vite preview",
+    "pretest": "npm rebuild better-sqlite3 --silent",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:ui": "vitest --ui",
@@ -57,6 +58,7 @@
   "dependencies": {
     "@codemirror/lang-markdown": "^6.5.0",
     "@codemirror/language-data": "^6.5.2",
+    "@deepgram/sdk": "^4.11.3",
     "@dnd-kit/core": "^6.3.1",
     "@dnd-kit/modifiers": "^9.0.0",
     "@dnd-kit/sortable": "^10.0.0",
@@ -64,6 +66,7 @@
     "@fontsource/jetbrains-mono": "^5.2.8",
     "@modelcontextprotocol/sdk": "^1.27.1",
     "@octokit/graphql": "^9.0.3",
+    "@radix-ui/react-context-menu": "^2.2.16",
     "@radix-ui/react-dropdown-menu": "^2.1.16",
     "@radix-ui/react-popover": "^1.1.15",
     "@radix-ui/react-slot": "^1.2.4",
@@ -79,9 +82,11 @@
     "@xterm/headless": "^6.0.0",
     "@xterm/xterm": "^6.0.0",
     "anser": "^2.3.5",
+    "better-sqlite3": "^12.6.2",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "copytree": "^0.14.2",
+    "drizzle-orm": "^0.45.1",
     "electron-store": "^11.0.2",
     "electron-updater": "^6.3.0",
     "execa": "^9.6.0",
@@ -91,7 +96,7 @@
     "fuse.js": "^7.1.0",
     "gray-matter": "^4.0.3",
     "lucide-react": "^0.555.0",
-    "node-pty": "^1.0.0",
+    "node-pty": "1.2.0-beta.11",
     "p-queue": "^9.0.1",
     "path-browserify": "^1.0.1",
     "react-diff-view": "^3.3.2",
@@ -119,6 +124,7 @@
     "@tailwindcss/vite": "^4.1.17",
     "@testing-library/dom": "^10.4.1",
     "@testing-library/react": "^16.3.2",
+    "@types/better-sqlite3": "^7.6.13",
     "@types/eslint__js": "^8.42.3",
     "@types/node": "^22.19.3",
     "@types/path-browserify": "^1.0.3",
@@ -131,6 +137,7 @@
     "autoprefixer": "^10.4.20",
     "concurrently": "^9.1.0",
     "cross-env": "^7.0.3",
+    "drizzle-kit": "^0.31.9",
     "electron": "^40.6.1",
     "electron-builder": "^26.8.1",
     "esbuild": "^0.27.0",
@@ -213,7 +220,8 @@
       "category": "public.app-category.developer-tools",
       "icon": "build/icon.icns",
       "extendInfo": {
-        "NSPrefersDisplaySafeAreaCompatibilityMode": false
+        "NSPrefersDisplaySafeAreaCompatibilityMode": false,
+        "NSMicrophoneUsageDescription": "Canopy uses the microphone for voice dictation into terminal inputs."
       },
       "target": [
         {

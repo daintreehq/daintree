@@ -6,9 +6,10 @@ import {
   useMemo,
   useRef,
   useState,
+  useTransition,
 } from "react";
 import "@xterm/xterm/css/xterm.css";
-import { FolderOpen, FilterX, Maximize2 } from "lucide-react";
+import { FolderOpen, FilterX, Maximize2, RefreshCw } from "lucide-react";
 import { ScrollIndicator } from "./components/Worktree/ScrollIndicator";
 import {
   isElectronAvailable,
@@ -37,6 +38,8 @@ import { useWorktreePalette } from "./hooks/useWorktreePalette";
 import { useDoubleShift } from "./hooks/useDoubleShift";
 import { useMcpBridge } from "./hooks/useMcpBridge";
 import { createTooltipWithShortcut } from "./lib/platform";
+import { useCrashRecoveryGate } from "./hooks/app/useCrashRecoveryGate";
+import { CrashRecoveryDialog } from "./components/Recovery/CrashRecoveryDialog";
 import {
   useAppHydration,
   useProjectSwitchRehydration,
@@ -64,6 +67,7 @@ import { TerminalPalette, NewTerminalPalette } from "./components/TerminalPalett
 import { PanelPalette } from "./components/PanelPalette/PanelPalette";
 import { MORE_AGENTS_PANEL_ID } from "./hooks/usePanelPalette";
 import { GitInitDialog, ProjectOnboardingWizard, WelcomeScreen } from "./components/Project";
+import { VoiceRecordingAnnouncer } from "./components/Terminal/VoiceRecordingAnnouncer";
 import {
   AgentSetupWizard,
   AgentSelectionStep,
@@ -116,6 +120,7 @@ import type { WorktreeState, PanelKind } from "./types";
 import { startRendererMemoryMonitor } from "./utils/performance";
 import { startLongTaskMonitor } from "./utils/longTaskMonitor";
 import { actionService } from "./services/ActionService";
+import { voiceRecordingService } from "./services/VoiceRecordingService";
 import { useRenderProfiler } from "./utils/renderProfiler";
 
 interface SidebarContentProps {
@@ -124,6 +129,7 @@ interface SidebarContentProps {
 
 function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   const { worktrees, isLoading, error, refresh } = useWorktrees();
+  const [isRefreshing, startRefreshTransition] = useTransition();
   useProjectSettings();
   const { launchAgent, availability, agentSettings } = useAgentLauncher();
   const {
@@ -198,6 +204,13 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   useEffect(() => {
     systemClient.getHomeDir().then(setHomeDir).catch(console.error);
   }, []);
+
+  const handleRefreshAll = useCallback(() => {
+    if (isRefreshing) return;
+    startRefreshTransition(async () => {
+      await actionService.dispatch("worktree.refresh", undefined, { source: "user" });
+    });
+  }, [isRefreshing, startRefreshTransition]);
 
   // Clean up stale pinned worktrees
   useEffect(() => {
@@ -503,6 +516,15 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
           </button>
         </div>
         <div className="flex items-center gap-1">
+          <button
+            onClick={handleRefreshAll}
+            disabled={isRefreshing}
+            className="p-1 text-canopy-text/40 hover:text-canopy-text hover:bg-white/[0.06] rounded transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+            title="Refresh sidebar"
+            aria-label="Refresh sidebar"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${isRefreshing ? "animate-spin" : ""}`} />
+          </button>
           <WorktreeFilterPopover />
           <button
             onClick={() => openCreateDialog()}
@@ -563,6 +585,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
           rootPath={rootPath}
           onWorktreeCreated={refresh}
           initialIssue={createDialog.initialIssue}
+          initialPR={createDialog.initialPR}
         />
       )}
     </div>
@@ -809,8 +832,17 @@ function App() {
     ]
   );
 
+  // Crash recovery gate — must resolve before hydration runs
+  const {
+    state: crashState,
+    resolve: resolveCrash,
+    updateConfig: updateCrashConfig,
+  } = useCrashRecoveryGate();
+
+  const crashResolved = crashState.status !== "loading" && crashState.status !== "pending";
+
   // App lifecycle hooks
-  const { isStateLoaded } = useAppHydration(hydrationCallbacks);
+  const { isStateLoaded } = useAppHydration(hydrationCallbacks, crashResolved);
   useProjectSwitchRehydration(hydrationCallbacks);
   useFirstRunToasts(isStateLoaded);
 
@@ -977,6 +1009,10 @@ function App() {
   useSystemWakeHandler();
   useDevServerDiscovery();
 
+  useEffect(() => {
+    voiceRecordingService.initialize();
+  }, []);
+
   if (!isElectronAvailable()) {
     return (
       <div className="h-screen w-screen flex items-center justify-center bg-canopy-bg">
@@ -987,13 +1023,27 @@ function App() {
     );
   }
 
-  if (!isStateLoaded) {
+  if (crashState.status === "pending") {
+    return (
+      <div className="h-screen w-screen bg-canopy-bg">
+        <CrashRecoveryDialog
+          crash={crashState.crash}
+          config={crashState.config}
+          onResolve={resolveCrash}
+          onUpdateConfig={updateCrashConfig}
+        />
+      </div>
+    );
+  }
+
+  if (!crashResolved || !isStateLoaded) {
     return <div className="h-screen w-screen bg-canopy-bg" />;
   }
 
   return (
     <ErrorBoundary variant="fullscreen" componentName="App">
       <DndProvider>
+        <VoiceRecordingAnnouncer />
         <Profiler id="app-layout" onRender={onLayoutRender}>
           <AppLayout
             sidebarContent={

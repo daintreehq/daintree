@@ -1,17 +1,40 @@
-import WebSocket from "ws";
+import { createClient, LiveTranscriptionEvents } from "@deepgram/sdk";
+import type { ListenLiveClient, LiveTranscriptionEvent } from "@deepgram/sdk";
 import type { VoiceInputSettings } from "../../shared/types/ipc/api.js";
+import { logDebug, logInfo, logWarn, logError } from "../utils/logger.js";
+
+const P = "[VoiceTranscription]";
 
 export type VoiceTranscriptionEvent =
   | { type: "delta"; text: string }
   | { type: "complete"; text: string }
+  | { type: "paragraph_boundary" }
   | { type: "error"; message: string }
-  | { type: "status"; status: "idle" | "connecting" | "recording" | "error" };
+  | { type: "status"; status: "idle" | "connecting" | "recording" | "finishing" | "error" };
+
+type VoiceStartResult = { ok: true } | { ok: false; error: string };
 
 export class VoiceTranscriptionService {
-  private ws: WebSocket | null = null;
+  private connection: ListenLiveClient | null = null;
   private sessionId = 0;
   private connectTimeout: ReturnType<typeof setTimeout> | null = null;
+  private keepAliveInterval: ReturnType<typeof setInterval> | null = null;
   private listeners: Set<(event: VoiceTranscriptionEvent) => void> = new Set();
+  private pendingStart: { sessionId: number; resolve: (result: VoiceStartResult) => void } | null =
+    null;
+
+  private preConnectBuffer: ArrayBuffer[] = [];
+  private isReady = false;
+
+  private drainResolve: (() => void) | null = null;
+  private drainTimeout: ReturnType<typeof setTimeout> | null = null;
+  private drainPromise: Promise<void> | null = null;
+  private isDraining = false;
+
+  /** Tracks accumulated is_final segments for the current utterance. */
+  private utteranceSegments: string[] = [];
+  /** Total text emitted as delta events for the current utterance (for incremental diffs). */
+  private liveText = "";
 
   onEvent(listener: (event: VoiceTranscriptionEvent) => void): () => void {
     this.listeners.add(listener);
@@ -31,144 +54,372 @@ export class VoiceTranscriptionService {
     }
   }
 
-  async start(settings: VoiceInputSettings): Promise<{ ok: true } | { ok: false; error: string }> {
-    if (!settings.apiKey) {
-      return { ok: false, error: "OpenAI API key not configured" };
+  private clearKeepAliveInterval(): void {
+    if (this.keepAliveInterval !== null) {
+      clearInterval(this.keepAliveInterval);
+      this.keepAliveInterval = null;
+    }
+  }
+
+  private settlePendingStart(sessionId: number, result: VoiceStartResult): void {
+    if (this.pendingStart?.sessionId !== sessionId) return;
+    const { resolve } = this.pendingStart;
+    this.pendingStart = null;
+    resolve(result);
+  }
+
+  async start(settings: VoiceInputSettings): Promise<VoiceStartResult> {
+    if (!settings.deepgramApiKey) {
+      logWarn(`${P} No Deepgram API key configured`);
+      return { ok: false, error: "Deepgram API key not configured" };
     }
 
-    // Increment session ID before stopping the old connection so stale handlers
-    // from the previous session ignore their events.
-    const mySessionId = ++this.sessionId;
-    this.stop();
+    const mySessionId = this.sessionId + 1;
+    logInfo(`${P} Starting session ${mySessionId}`, {
+      language: settings.language,
+      hasDictionary: settings.customDictionary.length > 0,
+    });
+    this.cleanupPreviousSession();
+    this.sessionId = mySessionId;
+    this.isReady = false;
+    this.preConnectBuffer = [];
+    this.resetUtteranceState();
 
     this.emit({ type: "status", status: "connecting" });
 
     return new Promise((resolve) => {
-      const ws = new WebSocket("wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview", {
-        headers: {
-          Authorization: `Bearer ${settings.apiKey}`,
-          "Content-Type": "application/json",
-        },
+      this.pendingStart = { sessionId: mySessionId, resolve };
+
+      const keyterms = settings.customDictionary.slice(0, 100);
+      const deepgram = createClient(settings.deepgramApiKey);
+
+      logDebug(`${P} Opening Deepgram live connection`, {
+        model: settings.transcriptionModel || "nova-3",
+        language: settings.language || "en",
+        keyterms: keyterms.length,
       });
+
+      const connection = deepgram.listen.live({
+        model: settings.transcriptionModel || "nova-3",
+        language: settings.language || "en",
+        smart_format: true,
+        paragraphs: true,
+        interim_results: true,
+        endpointing: 500,
+        utterance_end_ms: 1000,
+        encoding: "linear16",
+        sample_rate: 24000,
+        ...(keyterms.length > 0 ? { keyterm: keyterms } : {}),
+      });
+
+      this.connection = connection;
 
       this.connectTimeout = setTimeout(() => {
         this.connectTimeout = null;
-        ws.terminate();
+        logError(`${P} Connection timed out (10s)`);
         if (this.sessionId === mySessionId) {
+          this.cleanupConnection();
           this.emit({ type: "error", message: "Connection timed out" });
           this.emit({ type: "status", status: "error" });
-          resolve({ ok: false, error: "Connection timed out" });
+          this.settlePendingStart(mySessionId, { ok: false, error: "Connection timed out" });
         }
       }, 10000);
 
-      ws.on("open", () => {
+      connection.on(LiveTranscriptionEvents.Open, () => {
         this.clearConnectTimeout();
+        logInfo(`${P} Connection opened`);
+
         if (this.sessionId !== mySessionId) {
-          ws.terminate();
+          logWarn(`${P} Session expired during connect, closing`);
+          connection.requestClose();
           return;
         }
 
-        this.ws = ws;
+        if (this.preConnectBuffer.length > 0) {
+          logInfo(`${P} Flushing ${this.preConnectBuffer.length} buffered audio chunks`);
+          for (const chunk of this.preConnectBuffer) {
+            connection.send(chunk as ArrayBuffer);
+          }
+          this.preConnectBuffer = [];
+        }
 
-        const prompt =
-          settings.customDictionary.length > 0
-            ? `Technical terms: ${settings.customDictionary.join(", ")}.`
-            : undefined;
+        this.keepAliveInterval = setInterval(() => {
+          if (this.connection === connection) {
+            connection.keepAlive();
+          }
+        }, 8000);
 
-        ws.send(
-          JSON.stringify({
-            type: "session.update",
-            session: {
-              modalities: [],
-              input_audio_format: "pcm16",
-              input_audio_transcription: {
-                model: "whisper-1",
-                language: settings.language || "en",
-                ...(prompt ? { prompt } : {}),
-              },
-              turn_detection: {
-                type: "server_vad",
-                silence_duration_ms: 800,
-              },
-            },
-          })
-        );
-
+        this.isReady = true;
         this.emit({ type: "status", status: "recording" });
-        resolve({ ok: true });
+        this.settlePendingStart(mySessionId, { ok: true });
       });
 
-      ws.on("message", (data: WebSocket.RawData) => {
+      connection.on(LiveTranscriptionEvents.Transcript, (data: LiveTranscriptionEvent) => {
         if (this.sessionId !== mySessionId) return;
         try {
-          const event = JSON.parse(data.toString()) as Record<string, unknown>;
-          this.handleServerEvent(event);
+          const transcript: string = data.channel?.alternatives?.[0]?.transcript ?? "";
+          const isFinal: boolean = data.is_final ?? false;
+          const speechFinal: boolean = data.speech_final ?? false;
+
+          logDebug(`${P} Transcript event`, { isFinal, speechFinal, len: transcript.length });
+
+          this.handleTranscript(transcript, isFinal, speechFinal);
         } catch {
-          // Ignore malformed messages
+          logWarn(`${P} Failed to process transcript event`);
         }
       });
 
-      ws.on("error", (err) => {
-        this.clearConnectTimeout();
+      connection.on(LiveTranscriptionEvents.UtteranceEnd, () => {
         if (this.sessionId !== mySessionId) return;
-        const message = err instanceof Error ? err.message : "WebSocket error";
-        this.ws = null;
-        this.emit({ type: "error", message });
-        this.emit({ type: "status", status: "error" });
-        resolve({ ok: false, error: message });
+        logDebug(`${P} UtteranceEnd — flushing accumulated segments`);
+        this.flushUtterance();
       });
 
-      ws.on("close", () => {
+      connection.on(LiveTranscriptionEvents.Error, (err: Error) => {
         this.clearConnectTimeout();
         if (this.sessionId !== mySessionId) return;
-        this.ws = null;
-        this.emit({ type: "status", status: "idle" });
+        const errObj = err as { message?: string; error?: string };
+        const message =
+          err instanceof Error
+            ? err.message
+            : (errObj?.message ?? errObj?.error ?? "Deepgram error");
+        logError(`${P} Connection error`, { message });
+        this.cleanupConnection();
+        this.emit({ type: "error", message });
+        this.emit({ type: "status", status: "error" });
+        this.settlePendingStart(mySessionId, { ok: false, error: message });
+        this.settleDrain();
+      });
+
+      connection.on(LiveTranscriptionEvents.Close, () => {
+        this.clearConnectTimeout();
+        logInfo(`${P} Connection closed`);
+        if (this.sessionId !== mySessionId) return;
+        this.cleanupConnection();
+        this.settlePendingStart(mySessionId, { ok: false, error: "Connection closed" });
+        if (this.isDraining) {
+          this.settleDrain();
+        } else {
+          this.emit({ type: "status", status: "idle" });
+        }
       });
     });
   }
 
-  private handleServerEvent(event: Record<string, unknown>): void {
-    const type = event.type as string;
-
-    if (type === "conversation.item.input_audio_transcription.delta") {
-      const delta = (event as { delta?: string }).delta ?? "";
-      if (delta) {
-        this.emit({ type: "delta", text: delta });
+  private emitCompleteWithParagraphDetection(text: string): void {
+    // Deepgram inserts \n\n at paragraph boundaries when paragraphs=true.
+    // Split on these boundaries so each paragraph is emitted separately,
+    // with a paragraph_boundary event between them.
+    // Only emit boundaries between non-empty parts to avoid spurious events
+    // from leading/trailing \n\n (e.g. "para\n\n" or "\n\npara").
+    const parts = text
+      .split(/\n\n+/)
+      .map((p) => p.trim())
+      .filter(Boolean);
+    for (let i = 0; i < parts.length; i++) {
+      this.emit({ type: "complete", text: parts[i] });
+      if (i < parts.length - 1) {
+        this.emit({ type: "paragraph_boundary" });
       }
-    } else if (type === "conversation.item.input_audio_transcription.completed") {
-      const transcript = (event as { transcript?: string }).transcript ?? "";
-      if (transcript) {
-        this.emit({ type: "complete", text: transcript });
-      }
-    } else if (type === "error") {
-      const error = event.error as { message?: string } | undefined;
-      this.emit({ type: "error", message: error?.message ?? "Unknown error from OpenAI" });
     }
   }
 
-  sendAudioChunk(chunk: ArrayBuffer): void {
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
-    const base64 = Buffer.from(chunk).toString("base64");
-    this.ws.send(
-      JSON.stringify({
-        type: "input_audio_buffer.append",
-        audio: base64,
-      })
-    );
+  private handleTranscript(transcript: string, isFinal: boolean, speechFinal: boolean): void {
+    if (speechFinal) {
+      const segments = [...this.utteranceSegments, transcript].filter((s) => s.trim());
+      const fullText = segments.join(" ").trim();
+      this.resetUtteranceState();
+
+      if (fullText) {
+        this.emitCompleteWithParagraphDetection(fullText);
+      }
+      if (this.isDraining) {
+        this.settleDrain();
+      }
+    } else if (isFinal) {
+      const segmentText = transcript.trim();
+      if (segmentText) {
+        const accumulated = [...this.utteranceSegments, segmentText].filter(Boolean).join(" ");
+        this.emitIncrementalDelta(accumulated);
+        this.utteranceSegments.push(segmentText);
+      }
+    } else {
+      if (!transcript) return;
+      const accumulated = [...this.utteranceSegments, transcript].filter(Boolean).join(" ");
+      this.emitIncrementalDelta(accumulated);
+    }
   }
 
-  stop(): void {
-    // Invalidate the current session so stale event handlers become no-ops.
+  private emitIncrementalDelta(accumulated: string): void {
+    if (accumulated.startsWith(this.liveText)) {
+      const newChars = accumulated.slice(this.liveText.length);
+      if (newChars) {
+        this.emit({ type: "delta", text: newChars });
+        this.liveText = accumulated;
+      }
+    } else if (!this.liveText) {
+      this.emit({ type: "delta", text: accumulated });
+      this.liveText = accumulated;
+    } else {
+      // Deepgram revised earlier text (non-prefix change). Update the baseline
+      // so future appends can still emit incremental deltas correctly.
+      this.liveText = accumulated;
+    }
+  }
+
+  private flushUtterance(): void {
+    // Use liveText if set — it includes any pending interim transcript that has
+    // not yet received is_final=true (e.g. when UtteranceEnd fires without speech_final).
+    const fullText = (this.liveText || this.utteranceSegments.join(" ")).trim();
+    this.resetUtteranceState();
+    if (fullText) {
+      this.emitCompleteWithParagraphDetection(fullText);
+    }
+    if (this.isDraining) {
+      this.settleDrain();
+    }
+  }
+
+  private resetUtteranceState(): void {
+    this.utteranceSegments = [];
+    this.liveText = "";
+  }
+
+  private audioChunkCount = 0;
+  private staleChunkWarned = false;
+
+  sendAudioChunk(chunk: ArrayBuffer): void {
+    if (this.isDraining) return;
+
+    if (!this.isReady || !this.connection) {
+      if (this.connection || this.pendingStart) {
+        if (this.preConnectBuffer.length < 100) {
+          this.preConnectBuffer.push(chunk);
+        }
+      } else if (!this.staleChunkWarned) {
+        this.staleChunkWarned = true;
+        logWarn(`${P} sendAudioChunk called but no active session`);
+      }
+      return;
+    }
+    this.audioChunkCount++;
+    if (this.audioChunkCount <= 3 || this.audioChunkCount % 200 === 0) {
+      logDebug(`${P} Sending audio chunk #${this.audioChunkCount}`, { bytes: chunk.byteLength });
+    }
+    this.connection.send(chunk as ArrayBuffer);
+  }
+
+  private cleanupConnection(): void {
+    this.clearKeepAliveInterval();
+    this.connection = null;
+    this.isReady = false;
+  }
+
+  private cleanupPreviousSession(): void {
+    logDebug(`${P} Cleaning up previous session`, {
+      sessionId: this.sessionId,
+      hasConnection: !!this.connection,
+    });
+    const pendingSessionId = this.pendingStart?.sessionId;
     this.sessionId++;
+    this.audioChunkCount = 0;
+    this.staleChunkWarned = false;
+    this.isReady = false;
+    this.preConnectBuffer = [];
     this.clearConnectTimeout();
-    if (this.ws) {
+    this.clearKeepAliveInterval();
+    this.clearDrainTimeout();
+    this.isDraining = false;
+    this.resetUtteranceState();
+    if (this.drainResolve) {
+      this.drainResolve();
+      this.drainResolve = null;
+    }
+    if (pendingSessionId !== undefined) {
+      this.settlePendingStart(pendingSessionId, { ok: false, error: "Voice session stopped" });
+    }
+    if (this.connection) {
       try {
-        this.ws.close();
+        this.connection.requestClose();
       } catch {
         // Ignore close errors
       }
-      this.ws = null;
+      this.connection = null;
     }
+  }
+
+  private clearDrainTimeout(): void {
+    if (this.drainTimeout !== null) {
+      clearTimeout(this.drainTimeout);
+      this.drainTimeout = null;
+    }
+  }
+
+  private settleDrain(): void {
+    this.clearDrainTimeout();
+    this.isDraining = false;
+    this.drainPromise = null;
+    if (this.drainResolve) {
+      logInfo(`${P} Drain completed`);
+      const resolve = this.drainResolve;
+      this.drainResolve = null;
+      resolve();
+    }
+  }
+
+  async stopGracefully(): Promise<void> {
+    logInfo(`${P} stopGracefully() called`, {
+      sessionId: this.sessionId,
+      hasConnection: !!this.connection,
+    });
+
+    if (this.drainPromise) {
+      logDebug(`${P} Already draining, joining existing promise`);
+      return this.drainPromise;
+    }
+
+    if (!this.connection || !this.isReady) {
+      this.cleanupPreviousSession();
+      this.emit({ type: "status", status: "idle" });
+      return;
+    }
+
+    this.isDraining = true;
+    this.emit({ type: "status", status: "finishing" });
+
+    try {
+      this.connection.finish();
+      logDebug(`${P} Sent finalize to Deepgram`);
+    } catch {
+      logWarn(`${P} Failed to send finalize, closing immediately`);
+      this.cleanupPreviousSession();
+      this.emit({ type: "status", status: "idle" });
+      return;
+    }
+
+    this.drainPromise = new Promise<void>((resolve) => {
+      this.drainResolve = resolve;
+      this.drainTimeout = setTimeout(() => {
+        logWarn(`${P} Drain timed out after 3s, force closing`);
+        this.flushUtterance();
+        this.settleDrain();
+      }, 3000);
+    });
+
+    const sessionIdBeforeDrain = this.sessionId;
+    await this.drainPromise;
+
+    // If start() was called during drain it already ran cleanupPreviousSession()
+    // and incremented sessionId — don't tear down the new session.
+    if (this.sessionId === sessionIdBeforeDrain) {
+      this.cleanupPreviousSession();
+      this.emit({ type: "status", status: "idle" });
+    }
+  }
+
+  stop(): void {
+    logInfo(`${P} stop() called`, { sessionId: this.sessionId, hasConnection: !!this.connection });
+    this.cleanupPreviousSession();
     this.emit({ type: "status", status: "idle" });
   }
 

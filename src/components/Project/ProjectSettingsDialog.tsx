@@ -28,6 +28,8 @@ import {
   Lock,
   ShieldAlert,
   GitBranch,
+  Copy,
+  FolderOpen,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -88,9 +90,12 @@ function parsePositiveInt(value: string): number | undefined {
   if (!Number.isFinite(num) || num <= 0) return undefined;
   return Math.floor(num);
 }
+export const GITIGNORE_SNIPPET = `# Canopy in-repo settings — safe to commit\n.canopy/project.json\n.canopy/settings.json\n\n# Canopy machine-local settings — do not commit\n.canopy/*.local.json`;
+
 export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSettingsDialogProps) {
   const { settings, saveSettings, isLoading, error } = useProjectSettings(projectId);
-  const { projects, updateProject } = useProjectStore();
+  const { projects, updateProject, enableInRepoSettings, disableInRepoSettings } =
+    useProjectStore();
   const currentProject = projects.find((p) => p.id === projectId);
 
   const [activeTab, setActiveTab] = useState<ProjectSettingsTab>("general");
@@ -121,6 +126,12 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
   const fileInputRef = useRef<HTMLInputElement>(null);
   const initialSnapshotRef = useRef<ProjectSettingsSnapshot | null>(null);
   const [showUnsavedChangesDialog, setShowUnsavedChangesDialog] = useState(false);
+
+  const [inRepoExpanded, setInRepoExpanded] = useState(false);
+  const [inRepoEnabling, setInRepoEnabling] = useState(false);
+  const [inRepoError, setInRepoError] = useState<string | null>(null);
+  const [gitignoreCopied, setGitignoreCopied] = useState(false);
+  const gitignoreCopyTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   const {
     recipes,
@@ -339,6 +350,14 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
         clearTimeout(exportTimeoutRef.current);
         exportTimeoutRef.current = null;
       }
+      setInRepoExpanded(false);
+      setInRepoEnabling(false);
+      setInRepoError(null);
+      setGitignoreCopied(false);
+      if (gitignoreCopyTimeoutRef.current) {
+        clearTimeout(gitignoreCopyTimeoutRef.current);
+        gitignoreCopyTimeoutRef.current = null;
+      }
     }
   }, [isOpen]);
 
@@ -356,8 +375,65 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
       if (exportTimeoutRef.current) {
         clearTimeout(exportTimeoutRef.current);
       }
+      if (gitignoreCopyTimeoutRef.current) {
+        clearTimeout(gitignoreCopyTimeoutRef.current);
+      }
     };
   }, []);
+
+  const handleCopyGitignore = async () => {
+    try {
+      await navigator.clipboard.writeText(GITIGNORE_SNIPPET);
+      setGitignoreCopied(true);
+      if (gitignoreCopyTimeoutRef.current) clearTimeout(gitignoreCopyTimeoutRef.current);
+      gitignoreCopyTimeoutRef.current = setTimeout(() => {
+        setGitignoreCopied(false);
+        gitignoreCopyTimeoutRef.current = null;
+      }, 2000);
+    } catch {
+      // clipboard access denied — fail silently
+    }
+  };
+
+  const handleEnableInRepoSettings = async () => {
+    if (!currentProject || inRepoEnabling) return;
+    setInRepoEnabling(true);
+    setInRepoError(null);
+    try {
+      const updated = await enableInRepoSettings(projectId);
+      if (!updated.inRepoSettings) {
+        setInRepoError("In-repo settings could not be enabled. Please try again.");
+      } else {
+        setInRepoExpanded(false);
+      }
+    } catch (err) {
+      setInRepoError(err instanceof Error ? err.message : "Failed to enable in-repo settings");
+    } finally {
+      setInRepoEnabling(false);
+    }
+  };
+
+  const handleDisableInRepoSettings = async () => {
+    if (!currentProject || inRepoEnabling) return;
+    setInRepoEnabling(true);
+    setInRepoError(null);
+    try {
+      await disableInRepoSettings(projectId);
+    } catch (err) {
+      setInRepoError(err instanceof Error ? err.message : "Failed to disable in-repo settings");
+    } finally {
+      setInRepoEnabling(false);
+    }
+  };
+
+  const handleInRepoToggle = () => {
+    if (currentProject?.inRepoSettings) {
+      void handleDisableInRepoSettings();
+    } else {
+      setInRepoExpanded((prev) => !prev);
+      setInRepoError(null);
+    }
+  };
 
   const requestClose = (options?: { bypassDirty?: boolean }) => {
     if (options?.bypassDirty || !isDirty) {
@@ -903,6 +979,161 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
                       {iconError && (
                         <div className="mt-2 text-xs text-status-error bg-status-error/10 border border-status-error/20 rounded p-2">
                           {iconError}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* In-Repository Settings */}
+                    <div className="mt-6">
+                      <h3 className="text-sm font-semibold text-canopy-text/80 mb-2 flex items-center gap-2">
+                        <GitBranch className="h-4 w-4" />
+                        In-Repository Settings
+                      </h3>
+                      <p className="text-xs text-canopy-text/60 mb-4">
+                        Store project name, emoji, and run commands in{" "}
+                        <code className="font-mono text-canopy-text/80">.canopy/</code> so your team
+                        shares the same configuration.
+                      </p>
+
+                      {currentProject?.canopyConfigPresent && (
+                        <div className="flex items-center gap-2 mb-3 text-xs text-canopy-text/60">
+                          <FolderOpen className="h-3.5 w-3.5 text-status-success shrink-0" />
+                          <span>
+                            Settings loaded from{" "}
+                            <code className="font-mono text-canopy-text/80">.canopy/</code>
+                          </span>
+                        </div>
+                      )}
+
+                      <button
+                        type="button"
+                        onClick={handleInRepoToggle}
+                        disabled={inRepoEnabling}
+                        role="switch"
+                        aria-checked={currentProject?.inRepoSettings ?? false}
+                        aria-label="Store settings in repository"
+                        className={cn(
+                          "w-full flex items-center justify-between p-4 rounded-[var(--radius-lg)] border transition-all focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-canopy-accent",
+                          currentProject?.inRepoSettings
+                            ? "bg-canopy-accent/10 border-canopy-accent text-canopy-accent"
+                            : "border-canopy-border hover:bg-white/5 text-canopy-text/70",
+                          inRepoEnabling && "opacity-50 cursor-not-allowed"
+                        )}
+                      >
+                        <div className="flex items-center gap-3">
+                          <GitBranch
+                            className={cn(
+                              "w-5 h-5",
+                              currentProject?.inRepoSettings
+                                ? "text-canopy-accent"
+                                : "text-canopy-text/50"
+                            )}
+                            aria-hidden="true"
+                          />
+                          <div className="text-left">
+                            <div className="text-sm font-medium">Store settings in repository</div>
+                            <div className="text-xs opacity-70">
+                              Writes to <code className="font-mono">.canopy/project.json</code> and{" "}
+                              <code className="font-mono">.canopy/settings.json</code>
+                            </div>
+                          </div>
+                        </div>
+                        <div
+                          className={cn(
+                            "w-11 h-6 rounded-full relative transition-colors",
+                            currentProject?.inRepoSettings ? "bg-canopy-accent" : "bg-canopy-border"
+                          )}
+                          aria-hidden="true"
+                        >
+                          <div
+                            className={cn(
+                              "absolute top-1 w-4 h-4 rounded-full bg-white transition-transform",
+                              currentProject?.inRepoSettings ? "translate-x-6" : "translate-x-1"
+                            )}
+                          />
+                        </div>
+                      </button>
+
+                      {inRepoError && (
+                        <div
+                          className="mt-2 text-xs text-status-error bg-status-error/10 border border-status-error/20 rounded p-2"
+                          role="alert"
+                        >
+                          {inRepoError}
+                        </div>
+                      )}
+
+                      {!currentProject?.inRepoSettings && inRepoExpanded && (
+                        <div className="mt-3 rounded-[var(--radius-lg)] border border-canopy-border bg-canopy-bg p-4 space-y-4">
+                          <div>
+                            <p className="text-xs font-medium text-canopy-text/80 mb-2">
+                              The following files will be created:
+                            </p>
+                            <ul className="space-y-1 text-xs text-canopy-text/60">
+                              <li className="flex items-center gap-2">
+                                <span className="font-mono text-canopy-text/80">
+                                  .canopy/project.json
+                                </span>
+                                — project name, emoji, color
+                              </li>
+                              <li className="flex items-center gap-2">
+                                <span className="font-mono text-canopy-text/80">
+                                  .canopy/settings.json
+                                </span>
+                                — run commands, dev server, context settings
+                              </li>
+                            </ul>
+                            <p className="mt-2 text-xs text-canopy-text/50">
+                              Machine-local settings (environment variables, secrets) are never
+                              written to these files.
+                            </p>
+                          </div>
+
+                          <div>
+                            <div className="flex items-center justify-between mb-1.5">
+                              <p className="text-xs font-medium text-canopy-text/80">
+                                Recommended <code className="font-mono">.gitignore</code> guidance
+                              </p>
+                              <button
+                                type="button"
+                                onClick={() => void handleCopyGitignore()}
+                                className="flex items-center gap-1 px-2 py-1 rounded text-xs text-canopy-text/60 hover:text-canopy-text hover:bg-white/5 transition-colors"
+                                aria-label="Copy .gitignore snippet"
+                              >
+                                {gitignoreCopied ? (
+                                  <Check className="h-3.5 w-3.5 text-status-success" />
+                                ) : (
+                                  <Copy className="h-3.5 w-3.5" />
+                                )}
+                                {gitignoreCopied ? "Copied!" : "Copy"}
+                              </button>
+                            </div>
+                            <pre className="rounded-[var(--radius-md)] border border-canopy-border bg-canopy-sidebar p-3 text-xs font-mono text-canopy-text/70 overflow-x-auto whitespace-pre">
+                              {GITIGNORE_SNIPPET}
+                            </pre>
+                          </div>
+
+                          <div className="flex gap-2 pt-1">
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => {
+                                setInRepoExpanded(false);
+                                setInRepoError(null);
+                              }}
+                              className="flex-1"
+                            >
+                              Cancel
+                            </Button>
+                            <Button
+                              size="sm"
+                              onClick={() => void handleEnableInRepoSettings()}
+                              disabled={inRepoEnabling}
+                              className="flex-1"
+                            >
+                              {inRepoEnabling ? "Enabling..." : "Confirm and enable"}
+                            </Button>
+                          </div>
                         </div>
                       )}
                     </div>

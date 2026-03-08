@@ -1,4 +1,5 @@
 import type { WorktreeSnapshot } from "../../shared/types/workspace-host.js";
+import type { WorktreeLifecycleStatus } from "../../shared/types/domain.js";
 import type { AdaptivePollingStrategy, NoteFileReader } from "../services/worktree/index.js";
 
 export const NOTE_PATH = "canopy/note";
@@ -19,4 +20,5 @@ export interface MonitorState extends WorktreeSnapshot {
   gitWatchRefreshPending: boolean;
   gitWatchEnabled: boolean;
   lastGitStatusCompletedAt: number;
+  lifecycleStatus?: WorktreeLifecycleStatus;
 }

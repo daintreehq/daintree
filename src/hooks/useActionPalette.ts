@@ -2,7 +2,7 @@ import { useState, useCallback, useMemo } from "react";
 import type { IFuseOptions } from "fuse.js";
 import { actionService } from "@/services/ActionService";
 import { keybindingService } from "@/services/KeybindingService";
-import { useNotificationStore } from "@/store/notificationStore";
+import { notify } from "@/lib/notify";
 import type { ActionManifestEntry } from "@shared/types/actions";
 import { useSearchablePalette } from "./useSearchablePalette";
 
@@ -129,7 +129,7 @@ export function useActionPalette(): UseActionPaletteReturn {
         )
         .then((result) => {
           if (!result.ok) {
-            useNotificationStore.getState().addNotification({
+            notify({
               type: "error",
               title: "Action Failed",
               message: result.error.message,
@@ -137,7 +137,7 @@ export function useActionPalette(): UseActionPaletteReturn {
           }
         })
         .catch(() => {
-          useNotificationStore.getState().addNotification({
+          notify({
             type: "error",
             title: "Action Failed",
             message: "An unexpected error occurred.",

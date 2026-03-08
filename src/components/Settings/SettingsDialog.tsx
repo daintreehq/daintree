@@ -1,5 +1,13 @@
-import { useState, useEffect, useDeferredValue, useMemo, useRef } from "react";
-import { useSidecarStore } from "@/store";
+import { useState, useEffect, useDeferredValue, useMemo, useRef, useCallback } from "react";
+import {
+  useSidecarStore,
+  usePerformanceModeStore,
+  useScrollbackStore,
+  useLayoutConfigStore,
+  useTerminalInputStore,
+  useTwoPaneSplitStore,
+  usePreferencesStore,
+} from "@/store";
 import {
   X,
   Waypoints,
@@ -11,10 +19,13 @@ import {
   GitBranch,
   Terminal,
   Settings as SettingsIcon,
+  Settings2,
+  LifeBuoy,
   Bell,
   Mic,
   Plug,
   Search,
+  ChevronRight,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { appClient } from "@/clients";
@@ -139,11 +150,18 @@ export function SettingsDialog({
   // deferredQuery drives the expensive filtering computation only.
   const isSearching = searchQuery.trim().length > 0;
 
-  const handleResultClick = (tab: SettingsTab) => {
+  const handleResultClick = (tab: SettingsTab, sectionId?: string) => {
     setActiveTab(tab);
     setSearchQuery("");
+    setScrollToSection(sectionId ?? null);
     searchInputRef.current?.blur();
   };
+
+  const [activeResultIndex, setActiveResultIndex] = useState(-1);
+
+  useEffect(() => {
+    setActiveResultIndex(-1);
+  }, [deferredQuery]);
 
   const handleSearchKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === "Escape") {
@@ -152,8 +170,91 @@ export function SettingsDialog({
         setSearchQuery("");
         searchInputRef.current?.blur();
       }
+    } else if (isSearching && searchResults.length > 0) {
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        setActiveResultIndex((prev) => (prev < searchResults.length - 1 ? prev + 1 : 0));
+      } else if (e.key === "ArrowUp") {
+        e.preventDefault();
+        setActiveResultIndex((prev) => (prev > 0 ? prev - 1 : searchResults.length - 1));
+      } else if (e.key === "Enter" && activeResultIndex >= 0) {
+        e.preventDefault();
+        const result = searchResults[activeResultIndex];
+        handleResultClick(result.tab, result.id);
+      }
     }
   };
+
+  // Deep-link: scroll to a specific section after navigating
+  const [scrollToSection, setScrollToSection] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!scrollToSection || isSearching) return;
+    let highlightTimer: ReturnType<typeof setTimeout>;
+    const timer = setTimeout(() => {
+      const el = document.getElementById(scrollToSection);
+      if (el) {
+        el.scrollIntoView({ behavior: "smooth", block: "start" });
+        el.classList.add("settings-highlight");
+        highlightTimer = setTimeout(() => el.classList.remove("settings-highlight"), 1500);
+      }
+    }, 100);
+    return () => {
+      clearTimeout(timer);
+      clearTimeout(highlightTimer);
+    };
+  }, [scrollToSection, activeTab, isSearching]);
+
+  // Modified-from-default tracking
+  const performanceMode = usePerformanceModeStore((s) => s.performanceMode);
+  const scrollbackLines = useScrollbackStore((s) => s.scrollbackLines);
+  const layoutConfig = useLayoutConfigStore((s) => s.layoutConfig);
+  const hybridInputEnabled = useTerminalInputStore((s) => s.hybridInputEnabled);
+  const hybridInputAutoFocus = useTerminalInputStore((s) => s.hybridInputAutoFocus);
+  const twoPaneSplitConfig = useTwoPaneSplitStore((s) => s.config);
+  const showProjectPulse = usePreferencesStore((s) => s.showProjectPulse);
+  const showDeveloperTools = usePreferencesStore((s) => s.showDeveloperTools);
+
+  const modifiedTabs = useMemo(() => {
+    const tabs = new Set<SettingsTab>();
+
+    // General defaults: showProjectPulse=true, showDeveloperTools=false
+    if (!showProjectPulse || showDeveloperTools) tabs.add("general");
+
+    // Terminal defaults: performanceMode=false, scrollback=5000, strategy=automatic,
+    // hybridInput=true, hybridAutoFocus=true, twoPaneSplit.enabled=true, preferPreview=false, ratio=0.5
+    if (
+      performanceMode ||
+      scrollbackLines !== 5000 ||
+      layoutConfig.strategy !== "automatic" ||
+      !hybridInputEnabled ||
+      !hybridInputAutoFocus ||
+      !twoPaneSplitConfig.enabled ||
+      twoPaneSplitConfig.preferPreview ||
+      Math.round(twoPaneSplitConfig.defaultRatio * 100) !== 50
+    ) {
+      tabs.add("terminal");
+    }
+
+    return tabs;
+  }, [
+    showProjectPulse,
+    showDeveloperTools,
+    performanceMode,
+    scrollbackLines,
+    layoutConfig.strategy,
+    hybridInputEnabled,
+    hybridInputAutoFocus,
+    twoPaneSplitConfig.enabled,
+    twoPaneSplitConfig.preferPreview,
+    twoPaneSplitConfig.defaultRatio,
+  ]);
+
+  const handleNavSelect = useCallback((tab: SettingsTab) => {
+    setActiveTab(tab);
+    setSearchQuery("");
+    setScrollToSection(null);
+  }, []);
 
   const tabTitles: Record<SettingsTab, string> = {
     general: "General",
@@ -172,6 +273,23 @@ export function SettingsDialog({
     troubleshooting: "Troubleshooting",
   };
 
+  const tabIcons: Record<SettingsTab, React.ReactNode> = {
+    general: <Settings2 className="w-5 h-5 text-canopy-text/60" />,
+    keyboard: <Keyboard className="w-5 h-5 text-canopy-text/60" />,
+    terminal: <LayoutGrid className="w-5 h-5 text-canopy-text/60" />,
+    terminalAppearance: <Terminal className="w-5 h-5 text-canopy-text/60" />,
+    worktree: <GitBranch className="w-5 h-5 text-canopy-text/60" />,
+    agents: <Waypoints className="w-5 h-5 text-canopy-text/60" />,
+    github: <Github className="w-5 h-5 text-canopy-text/60" />,
+    sidecar: <PanelRight className="w-5 h-5 text-canopy-text/60" />,
+    toolbar: <SettingsIcon className="w-5 h-5 text-canopy-text/60" />,
+    notifications: <Bell className="w-5 h-5 text-canopy-text/60" />,
+    editor: <Code className="w-5 h-5 text-canopy-text/60" />,
+    voice: <Mic className="w-5 h-5 text-canopy-text/60" />,
+    mcp: <Plug className="w-5 h-5 text-canopy-text/60" />,
+    troubleshooting: <LifeBuoy className="w-5 h-5 text-canopy-text/60" />,
+  };
+
   return (
     <AppDialog
       isOpen={isOpen}
@@ -181,7 +299,7 @@ export function SettingsDialog({
       className="min-h-[500px] max-h-[800px]"
     >
       <div className="flex h-full overflow-hidden">
-        <div className="w-48 border-r border-canopy-border bg-canopy-bg/50 p-3 flex flex-col gap-1 shrink-0">
+        <div className="w-48 border-r border-canopy-border bg-canopy-bg/50 p-3 flex flex-col shrink-0">
           <h2 className="text-sm font-semibold text-canopy-text mb-2 px-2">Settings</h2>
 
           <div className="relative mb-2">
@@ -222,168 +340,170 @@ export function SettingsDialog({
             </p>
           )}
 
-          <NavButton
-            active={activeTab === "general" && !isSearching}
-            onClick={() => {
-              setActiveTab("general");
-              setSearchQuery("");
-            }}
-          >
-            <span className="flex-1">General</span>
-            {matchCounts.general ? <MatchBadge count={matchCounts.general} /> : null}
-          </NavButton>
-          <NavButton
-            active={activeTab === "keyboard" && !isSearching}
-            onClick={() => {
-              setActiveTab("keyboard");
-              setSearchQuery("");
-            }}
-            icon={<Keyboard className="w-4 h-4" />}
-          >
-            <span className="flex-1">Keyboard</span>
-            {matchCounts.keyboard ? <MatchBadge count={matchCounts.keyboard} /> : null}
-          </NavButton>
-          <NavButton
-            active={activeTab === "terminal" && !isSearching}
-            onClick={() => {
-              setActiveTab("terminal");
-              setSearchQuery("");
-            }}
-            icon={<LayoutGrid className="w-4 h-4" />}
-          >
-            <span className="flex-1">Terminal</span>
-            {matchCounts.terminal ? <MatchBadge count={matchCounts.terminal} /> : null}
-          </NavButton>
-          <NavButton
-            active={activeTab === "terminalAppearance" && !isSearching}
-            onClick={() => {
-              setActiveTab("terminalAppearance");
-              setSearchQuery("");
-            }}
-            icon={<Terminal className="w-4 h-4" />}
-          >
-            <span className="flex-1">Appearance</span>
-            {matchCounts.terminalAppearance ? (
-              <MatchBadge count={matchCounts.terminalAppearance} />
-            ) : null}
-          </NavButton>
-          <NavButton
-            active={activeTab === "worktree" && !isSearching}
-            onClick={() => {
-              setActiveTab("worktree");
-              setSearchQuery("");
-            }}
-            icon={<GitBranch className="w-4 h-4" />}
-          >
-            <span className="flex-1">Worktree</span>
-            {matchCounts.worktree ? <MatchBadge count={matchCounts.worktree} /> : null}
-          </NavButton>
-          <NavButton
-            active={activeTab === "agents" && !isSearching}
-            onClick={() => {
-              setActiveTab("agents");
-              setSearchQuery("");
-            }}
-            icon={<Waypoints className="w-4 h-4" />}
-          >
-            <span className="flex-1">CLI Agents</span>
-            {matchCounts.agents ? <MatchBadge count={matchCounts.agents} /> : null}
-          </NavButton>
-          <NavButton
-            active={activeTab === "github" && !isSearching}
-            onClick={() => {
-              setActiveTab("github");
-              setSearchQuery("");
-            }}
-            icon={<Github className="w-4 h-4" />}
-          >
-            <span className="flex-1">GitHub</span>
-            {matchCounts.github ? <MatchBadge count={matchCounts.github} /> : null}
-          </NavButton>
-          <NavButton
-            active={activeTab === "sidecar" && !isSearching}
-            onClick={() => {
-              setActiveTab("sidecar");
-              setSearchQuery("");
-            }}
-            icon={<PanelRight className="w-4 h-4" />}
-          >
-            <span className="flex-1">Sidecar</span>
-            {matchCounts.sidecar ? <MatchBadge count={matchCounts.sidecar} /> : null}
-          </NavButton>
-          <NavButton
-            active={activeTab === "toolbar" && !isSearching}
-            onClick={() => {
-              setActiveTab("toolbar");
-              setSearchQuery("");
-            }}
-            icon={<SettingsIcon className="w-4 h-4" />}
-          >
-            <span className="flex-1">Toolbar</span>
-            {matchCounts.toolbar ? <MatchBadge count={matchCounts.toolbar} /> : null}
-          </NavButton>
-          <NavButton
-            active={activeTab === "notifications" && !isSearching}
-            onClick={() => {
-              setActiveTab("notifications");
-              setSearchQuery("");
-            }}
-            icon={<Bell className="w-4 h-4" />}
-          >
-            <span className="flex-1">Notifications</span>
-            {matchCounts.notifications ? <MatchBadge count={matchCounts.notifications} /> : null}
-          </NavButton>
-          <NavButton
-            active={activeTab === "editor" && !isSearching}
-            onClick={() => {
-              setActiveTab("editor");
-              setSearchQuery("");
-            }}
-            icon={<Code className="w-4 h-4" />}
-          >
-            <span className="flex-1">Editor</span>
-            {matchCounts.editor ? <MatchBadge count={matchCounts.editor} /> : null}
-          </NavButton>
-          <NavButton
-            active={activeTab === "voice" && !isSearching}
-            onClick={() => {
-              setActiveTab("voice");
-              setSearchQuery("");
-            }}
-            icon={<Mic className="w-4 h-4" />}
-          >
-            <span className="flex-1">Voice Input</span>
-            {matchCounts.voice ? <MatchBadge count={matchCounts.voice} /> : null}
-          </NavButton>
-          <NavButton
-            active={activeTab === "mcp" && !isSearching}
-            onClick={() => {
-              setActiveTab("mcp");
-              setSearchQuery("");
-            }}
-            icon={<Plug className="w-4 h-4" />}
-          >
-            <span className="flex-1">MCP Server</span>
-            {matchCounts.mcp ? <MatchBadge count={matchCounts.mcp} /> : null}
-          </NavButton>
-          <NavButton
-            active={activeTab === "troubleshooting" && !isSearching}
-            onClick={() => {
-              setActiveTab("troubleshooting");
-              setSearchQuery("");
-            }}
-          >
-            <span className="flex-1">Troubleshooting</span>
-            {matchCounts.troubleshooting ? (
-              <MatchBadge count={matchCounts.troubleshooting} />
-            ) : null}
-          </NavButton>
+          <nav className="flex-1 overflow-y-auto space-y-3" aria-label="Settings sections">
+            <NavGroup label="General">
+              <NavItem
+                tab="general"
+                icon={<Settings2 className="w-4 h-4" />}
+                label="General"
+                activeTab={activeTab}
+                isSearching={isSearching}
+                matchCount={matchCounts.general}
+                modified={modifiedTabs.has("general")}
+                onSelect={handleNavSelect}
+              />
+              <NavItem
+                tab="terminalAppearance"
+                icon={<Terminal className="w-4 h-4" />}
+                label="Appearance"
+                activeTab={activeTab}
+                isSearching={isSearching}
+                matchCount={matchCounts.terminalAppearance}
+                onSelect={handleNavSelect}
+              />
+              <NavItem
+                tab="keyboard"
+                icon={<Keyboard className="w-4 h-4" />}
+                label="Keyboard"
+                activeTab={activeTab}
+                isSearching={isSearching}
+                matchCount={matchCounts.keyboard}
+                onSelect={handleNavSelect}
+              />
+              <NavItem
+                tab="notifications"
+                icon={<Bell className="w-4 h-4" />}
+                label="Notifications"
+                activeTab={activeTab}
+                isSearching={isSearching}
+                matchCount={matchCounts.notifications}
+                onSelect={handleNavSelect}
+              />
+            </NavGroup>
+
+            <NavGroup label="Terminal">
+              <NavItem
+                tab="terminal"
+                icon={<LayoutGrid className="w-4 h-4" />}
+                label="Panel Grid"
+                activeTab={activeTab}
+                isSearching={isSearching}
+                matchCount={matchCounts.terminal}
+                modified={modifiedTabs.has("terminal")}
+                onSelect={handleNavSelect}
+              />
+              <NavItem
+                tab="worktree"
+                icon={<GitBranch className="w-4 h-4" />}
+                label="Worktree"
+                activeTab={activeTab}
+                isSearching={isSearching}
+                matchCount={matchCounts.worktree}
+                onSelect={handleNavSelect}
+              />
+              <NavItem
+                tab="toolbar"
+                icon={<SettingsIcon className="w-4 h-4" />}
+                label="Toolbar"
+                activeTab={activeTab}
+                isSearching={isSearching}
+                matchCount={matchCounts.toolbar}
+                onSelect={handleNavSelect}
+              />
+            </NavGroup>
+
+            <NavGroup label="Integrations">
+              <NavItem
+                tab="agents"
+                icon={<Waypoints className="w-4 h-4" />}
+                label="CLI Agents"
+                activeTab={activeTab}
+                isSearching={isSearching}
+                matchCount={matchCounts.agents}
+                onSelect={handleNavSelect}
+              />
+              <NavItem
+                tab="github"
+                icon={<Github className="w-4 h-4" />}
+                label="GitHub"
+                activeTab={activeTab}
+                isSearching={isSearching}
+                matchCount={matchCounts.github}
+                onSelect={handleNavSelect}
+              />
+              <NavItem
+                tab="editor"
+                icon={<Code className="w-4 h-4" />}
+                label="Editor"
+                activeTab={activeTab}
+                isSearching={isSearching}
+                matchCount={matchCounts.editor}
+                onSelect={handleNavSelect}
+              />
+              <NavItem
+                tab="sidecar"
+                icon={<PanelRight className="w-4 h-4" />}
+                label="Sidecar"
+                activeTab={activeTab}
+                isSearching={isSearching}
+                matchCount={matchCounts.sidecar}
+                onSelect={handleNavSelect}
+              />
+              <NavItem
+                tab="mcp"
+                icon={<Plug className="w-4 h-4" />}
+                label="MCP Server"
+                activeTab={activeTab}
+                isSearching={isSearching}
+                matchCount={matchCounts.mcp}
+                onSelect={handleNavSelect}
+              />
+            </NavGroup>
+
+            <NavGroup label="Input">
+              <NavItem
+                tab="voice"
+                icon={<Mic className="w-4 h-4" />}
+                label="Voice Input"
+                activeTab={activeTab}
+                isSearching={isSearching}
+                matchCount={matchCounts.voice}
+                onSelect={handleNavSelect}
+              />
+            </NavGroup>
+
+            <NavGroup label="Support">
+              <NavItem
+                tab="troubleshooting"
+                icon={<LifeBuoy className="w-4 h-4" />}
+                label="Troubleshooting"
+                activeTab={activeTab}
+                isSearching={isSearching}
+                matchCount={matchCounts.troubleshooting}
+                onSelect={handleNavSelect}
+              />
+            </NavGroup>
+          </nav>
+
+          <div className="pt-2 mt-2 border-t border-canopy-border px-2">
+            <span className="text-[10px] text-canopy-text/30 font-mono">{appVersion}</span>
+          </div>
         </div>
 
         <div className="flex-1 flex flex-col min-w-0">
           <div className="flex items-center justify-between px-6 py-4 border-b border-canopy-border bg-canopy-sidebar/50 shrink-0">
-            <h3 className="text-lg font-medium text-canopy-text">
-              {isSearching ? "Search Results" : tabTitles[activeTab]}
+            <h3 className="text-lg font-medium text-canopy-text flex items-center gap-2">
+              {isSearching ? (
+                <>
+                  <Search className="w-5 h-5 text-canopy-text/60" />
+                  Search Results
+                </>
+              ) : (
+                <>
+                  {tabIcons[activeTab]}
+                  {tabTitles[activeTab]}
+                </>
+              )}
             </h3>
             <button
               onClick={onClose}
@@ -400,6 +520,7 @@ export function SettingsDialog({
                 results={searchResults}
                 query={deferredQuery}
                 onResultClick={handleResultClick}
+                activeIndex={activeResultIndex}
               />
             ) : (
               <>
@@ -470,27 +591,61 @@ export function SettingsDialog({
   );
 }
 
-interface NavButtonProps {
-  active: boolean;
-  onClick: () => void;
-  icon?: React.ReactNode;
-  children: React.ReactNode;
+function NavGroup({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div>
+      <span className="text-[10px] font-medium uppercase tracking-wider text-canopy-text/30 px-3 mb-1 block select-none">
+        {label}
+      </span>
+      <div className="space-y-0.5">{children}</div>
+    </div>
+  );
 }
 
-function NavButton({ active, onClick, icon, children }: NavButtonProps) {
+interface NavItemProps {
+  tab: SettingsTab;
+  icon: React.ReactNode;
+  label: string;
+  activeTab: SettingsTab;
+  isSearching: boolean;
+  matchCount?: number;
+  modified?: boolean;
+  onSelect: (tab: SettingsTab) => void;
+}
+
+function NavItem({
+  tab,
+  icon,
+  label,
+  activeTab,
+  isSearching,
+  matchCount,
+  modified,
+  onSelect,
+}: NavItemProps) {
+  const active = activeTab === tab && !isSearching;
   return (
     <button
-      onClick={onClick}
+      onClick={() => onSelect(tab)}
       className={cn(
-        "relative text-left px-3 py-2 rounded-[var(--radius-md)] text-sm transition-colors flex items-center gap-2 w-full",
+        "relative text-left px-3 py-1.5 rounded-[var(--radius-md)] text-sm transition-colors flex items-center gap-2 w-full",
         "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2",
         active
-          ? "bg-overlay-soft text-canopy-text before:absolute before:left-0 before:top-2 before:bottom-2 before:w-[2px] before:rounded-r before:bg-canopy-accent before:content-['']"
+          ? "bg-overlay-soft text-canopy-text before:absolute before:left-0 before:top-1.5 before:bottom-1.5 before:w-[2px] before:rounded-r before:bg-canopy-accent before:content-['']"
           : "text-canopy-text/60 hover:bg-overlay-soft hover:text-canopy-text"
       )}
     >
-      {icon}
-      {children}
+      <span className="relative">
+        {icon}
+        {modified && (
+          <span
+            className="absolute -top-0.5 -right-0.5 w-1.5 h-1.5 rounded-full bg-canopy-accent"
+            title="Modified from default"
+          />
+        )}
+      </span>
+      <span className="flex-1 truncate">{label}</span>
+      {matchCount ? <MatchBadge count={matchCount} /> : null}
     </button>
   );
 }
@@ -509,10 +664,17 @@ function MatchBadge({ count }: { count: number }) {
 interface SearchResultsProps {
   results: ReturnType<typeof filterSettings>;
   query: string;
-  onResultClick: (tab: SettingsTab) => void;
+  onResultClick: (tab: SettingsTab, sectionId?: string) => void;
+  activeIndex?: number;
 }
 
-function SearchResults({ results, query, onResultClick }: SearchResultsProps) {
+function SearchResults({ results, query, onResultClick, activeIndex = -1 }: SearchResultsProps) {
+  const activeRef = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    activeRef.current?.scrollIntoView({ block: "nearest" });
+  }, [activeIndex]);
+
   if (results.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center py-16 text-center">
@@ -520,27 +682,42 @@ function SearchResults({ results, query, onResultClick }: SearchResultsProps) {
         <p className="text-sm text-canopy-text/50">
           No results for <span className="font-medium text-canopy-text/70">"{query}"</span>
         </p>
-        <p className="text-xs text-canopy-text/40 mt-1">Try a different keyword</p>
+        <p className="text-xs text-canopy-text/40 mt-1">Try different keywords or check spelling</p>
       </div>
     );
   }
 
   return (
     <div className="space-y-1">
-      <p className="text-xs text-canopy-text/40 mb-3">
-        {results.length} result{results.length === 1 ? "" : "s"}
-      </p>
-      {results.map((result) => (
+      <div className="flex items-center justify-between mb-3">
+        <p className="text-xs text-canopy-text/40">
+          {results.length} result{results.length === 1 ? "" : "s"}
+        </p>
+        <p className="text-[10px] text-canopy-text/30">
+          <kbd className="px-1 py-0.5 rounded bg-canopy-bg border border-canopy-border font-mono">
+            ↑↓
+          </kbd>{" "}
+          navigate{" "}
+          <kbd className="px-1 py-0.5 rounded bg-canopy-bg border border-canopy-border font-mono">
+            ↵
+          </kbd>{" "}
+          go
+        </p>
+      </div>
+      {results.map((result, index) => (
         <button
           key={result.id}
-          onClick={() => onResultClick(result.tab)}
+          ref={index === activeIndex ? activeRef : undefined}
+          onClick={() => onResultClick(result.tab, result.id)}
           className={cn(
-            "w-full text-left p-3 rounded-[var(--radius-md)] border border-transparent transition-all",
-            "hover:bg-overlay-soft hover:border-canopy-border",
+            "group w-full text-left p-3 rounded-[var(--radius-md)] border transition-all",
+            index === activeIndex
+              ? "bg-overlay-soft border-canopy-accent/30"
+              : "border-transparent hover:bg-overlay-soft hover:border-canopy-border",
             "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2"
           )}
         >
-          <div className="flex items-start gap-3">
+          <div className="flex items-center gap-3">
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-2 mb-0.5">
                 <span className="text-[10px] font-medium text-canopy-accent/80 uppercase tracking-wide">
@@ -556,6 +733,14 @@ function SearchResults({ results, query, onResultClick }: SearchResultsProps) {
                 <HighlightText text={result.description} query={query} />
               </div>
             </div>
+            <ChevronRight
+              className={cn(
+                "w-4 h-4 text-canopy-text/20 shrink-0 transition-all",
+                index === activeIndex
+                  ? "text-canopy-accent/60 translate-x-0.5"
+                  : "group-hover:text-canopy-text/40"
+              )}
+            />
           </div>
         </button>
       ))}

@@ -12,7 +12,7 @@ function resetWorktreeFilterStore() {
     sessionFilters: new Set(),
     activityFilters: new Set(),
     alwaysShowActive: true,
-    hideMainWorktree: true,
+    hideMainWorktree: false,
     pinnedWorktrees: [],
   });
 }
@@ -45,5 +45,26 @@ describe("worktreeFilterStore", () => {
 
     expect(useWorktreeFilterStore.getState().hasActiveFilters()).toBe(false);
     expect(useWorktreeFilterStore.getState().getActiveFilterCount()).toBe(0);
+  });
+
+  it("shows root worktree by default (hideMainWorktree is false)", () => {
+    expect(useWorktreeFilterStore.getState().hideMainWorktree).toBe(false);
+  });
+
+  it("toggles hideMainWorktree on and off", () => {
+    const store = useWorktreeFilterStore.getState();
+
+    store.setHideMainWorktree(true);
+    expect(useWorktreeFilterStore.getState().hideMainWorktree).toBe(true);
+
+    store.setHideMainWorktree(false);
+    expect(useWorktreeFilterStore.getState().hideMainWorktree).toBe(false);
+  });
+
+  it("resets hideMainWorktree to false on clearAll", () => {
+    useWorktreeFilterStore.getState().setHideMainWorktree(true);
+    useWorktreeFilterStore.getState().clearAll();
+
+    expect(useWorktreeFilterStore.getState().hideMainWorktree).toBe(false);
   });
 });

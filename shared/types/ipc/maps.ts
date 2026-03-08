@@ -13,7 +13,7 @@ import type { GitInitOptions, GitInitProgressEvent, GitInitResult } from "./gitI
 import type { AgentSettings } from "../agentSettings.js";
 import type { UserAgentRegistry, UserAgentConfig } from "../userAgentRegistry.js";
 import type { KeyAction } from "../keymap.js";
-import type { KeybindingImportResult, MicPermissionStatus } from "./api.js";
+import type { KeybindingImportResult, MicPermissionStatus, VoiceInputSettings } from "./api.js";
 
 import type {
   WorktreeSetActivePayload,
@@ -1224,17 +1224,10 @@ export interface IpcInvokeMap {
   // Voice input
   "voice-input:get-settings": {
     args: [];
-    result: { enabled: boolean; apiKey: string; language: string; customDictionary: string[] };
+    result: VoiceInputSettings;
   };
   "voice-input:set-settings": {
-    args: [
-      patch: Partial<{
-        enabled: boolean;
-        apiKey: string;
-        language: string;
-        customDictionary: string[];
-      }>,
-    ];
+    args: [patch: Partial<VoiceInputSettings>];
     result: void;
   };
   "voice-input:start": {
@@ -1243,7 +1236,11 @@ export interface IpcInvokeMap {
   };
   "voice-input:stop": {
     args: [];
-    result: void;
+    result: { rawText: string | null };
+  };
+  "voice-input:flush-paragraph": {
+    args: [];
+    result: { rawText: string | null };
   };
   "voice-input:check-mic-permission": {
     args: [];
@@ -1260,6 +1257,28 @@ export interface IpcInvokeMap {
   "voice-input:validate-api-key": {
     args: [apiKey: string];
     result: { valid: boolean; error?: string };
+  };
+  "voice-input:validate-correction-api-key": {
+    args: [apiKey: string];
+    result: { valid: boolean; error?: string };
+  };
+
+  // Crash Recovery channels
+  "crash-recovery:get-pending": {
+    args: [];
+    result: import("./crashRecovery.js").PendingCrash | null;
+  };
+  "crash-recovery:resolve": {
+    args: [action: import("./crashRecovery.js").CrashRecoveryAction];
+    result: void;
+  };
+  "crash-recovery:get-config": {
+    args: [];
+    result: import("./crashRecovery.js").CrashRecoveryConfig;
+  };
+  "crash-recovery:set-config": {
+    args: [config: Partial<import("./crashRecovery.js").CrashRecoveryConfig>];
+    result: import("./crashRecovery.js").CrashRecoveryConfig;
   };
 
   // MCP Server channels
@@ -1316,6 +1335,7 @@ export interface IpcEventMap {
   // Worktree events
   "worktree:update": WorktreeState;
   "worktree:remove": { worktreeId: string };
+  "worktree:activated": { worktreeId: string };
 
   // Terminal events
   "terminal:data": [id: string, data: string | Uint8Array];
@@ -1382,6 +1402,7 @@ export interface IpcEventMap {
   "sidecar:new-tab-menu-action": import("../sidecar.js").SidecarNewTabMenuAction;
 
   // System Sleep events
+  "system-sleep:on-suspend": void;
   "system-sleep:on-wake": number;
 
   // Menu events
@@ -1412,7 +1433,9 @@ export interface IpcEventMap {
 
   // Voice input events
   "voice-input:transcription-delta": string;
-  "voice-input:transcription-complete": string;
+  "voice-input:transcription-complete": { text: string; willCorrect: boolean };
+  "voice-input:correction-replace": { rawText: string; correctedText: string };
+  "voice-input:paragraph-boundary": { rawText: string | null };
   "voice-input:error": string;
   "voice-input:status": "idle" | "connecting" | "recording" | "error";
 }

@@ -16,6 +16,7 @@ import { registerProjectActions } from "./definitions/projectActions";
 import { registerRecipeActions } from "./definitions/recipeActions";
 import { registerSystemActions } from "./definitions/systemActions";
 import { registerTerminalActions } from "./definitions/terminalActions";
+import { registerVoiceActions } from "./definitions/voiceActions";
 import { registerWorktreeActions } from "./definitions/worktreeActions";
 import { registerWorktreeSessionActions } from "./definitions/worktreeSessionActions";
 import { registerWorkflowActions } from "./definitions/workflowActions";
@@ -45,6 +46,7 @@ export function createActionDefinitions(callbacks: ActionCallbacks): ActionRegis
   registerDevServerActions(actions, callbacks);
   registerWorkflowActions(actions);
   registerFileActions(actions, callbacks);
+  registerVoiceActions(actions);
 
   return actions;
 }

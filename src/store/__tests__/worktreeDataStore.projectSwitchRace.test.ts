@@ -12,6 +12,7 @@ vi.mock("@/clients", () => ({
     getAllIssueAssociations: vi.fn().mockResolvedValue({}),
     onUpdate: vi.fn(() => () => {}),
     onRemove: vi.fn(() => () => {}),
+    onActivated: vi.fn(() => () => {}),
   },
   githubClient: {
     onPRDetected: vi.fn(() => () => {}),

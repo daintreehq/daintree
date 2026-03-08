@@ -35,6 +35,7 @@ export default defineConfig(({ mode }) => {
         // Pass through API keys from environment (only if defined)
         ...(env.FIREWORKS_API_KEY && { FIREWORKS_API_KEY: env.FIREWORKS_API_KEY }),
         ...(env.FIREWORKS_AI_KEY && { FIREWORKS_AI_KEY: env.FIREWORKS_AI_KEY }),
+        ...(env.OPENAI_API_KEY && { OPENAI_API_KEY: env.OPENAI_API_KEY }),
       },
     },
   };

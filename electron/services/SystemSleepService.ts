@@ -14,6 +14,7 @@ export interface SystemSleepMetrics {
 }
 
 type WakeCallback = (sleepDurationMs: number) => void;
+type SuspendCallback = () => void;
 
 /**
  * SystemSleepService - Tracks system sleep/wake cycles for accurate timing.
@@ -37,6 +38,7 @@ class SystemSleepService {
   private sleepPeriods: SleepPeriod[] = [];
   private totalSleepMs = 0;
   private listeners = new Set<WakeCallback>();
+  private suspendListeners = new Set<SuspendCallback>();
   private initialized = false;
   private serviceStartTime: number = 0;
 
@@ -72,6 +74,14 @@ class SystemSleepService {
     }
     this.sleepStart = Date.now();
     console.log("[SystemSleepService] System suspending");
+
+    for (const callback of this.suspendListeners) {
+      try {
+        callback();
+      } catch (error) {
+        console.error("[SystemSleepService] Suspend callback error:", error);
+      }
+    }
   };
 
   private handleResume = (): void => {
@@ -172,6 +182,13 @@ class SystemSleepService {
     };
   }
 
+  onSuspend(callback: SuspendCallback): () => void {
+    this.suspendListeners.add(callback);
+    return () => {
+      this.suspendListeners.delete(callback);
+    };
+  }
+
   /**
    * Reset accumulated sleep tracking (e.g., when starting a new session).
    */
@@ -205,6 +222,7 @@ class SystemSleepService {
     // Drop any in-flight suspend state so re-initialization starts clean.
     this.sleepStart = null;
     this.listeners.clear();
+    this.suspendListeners.clear();
     this.initialized = false;
     console.log("[SystemSleepService] Disposed");
   }

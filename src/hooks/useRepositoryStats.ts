@@ -258,6 +258,16 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
   }, []);
 
   useEffect(() => {
+    const handleSidebarRefresh = () => {
+      void refresh({ force: true });
+    };
+    window.addEventListener("canopy:refresh-sidebar", handleSidebarRefresh);
+    return () => {
+      window.removeEventListener("canopy:refresh-sidebar", handleSidebarRefresh);
+    };
+  }, [refresh]);
+
+  useEffect(() => {
     const cleanup = projectClient.onSwitch(() => {
       if (pollTimerRef.current) {
         clearTimeout(pollTimerRef.current);

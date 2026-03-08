@@ -10,7 +10,7 @@ import { notesClient, type NoteMetadata } from "@/clients/notesClient";
 import { canopyTheme } from "./editorTheme";
 import { useTerminalStore } from "@/store/terminalStore";
 import { useNativeContextMenu } from "@/hooks/useNativeContextMenu";
-import { useNotificationStore } from "@/store/notificationStore";
+import { notify } from "@/lib/notify";
 import { getAgentIds, getAgentConfig } from "@/config/agents";
 import type { MenuItemOption } from "@shared/types";
 import { findTargetAgentTerminal, sendToAgent, getEditorSelection } from "@/lib/agentSend";
@@ -61,7 +61,6 @@ export function NotesPane({
   const terminals = useTerminalStore((state) => state.terminals);
   const focusedId = useTerminalStore((state) => state.focusedId);
   const queueCommand = useTerminalStore((state) => state.queueCommand);
-  const addNotification = useNotificationStore((state) => state.addNotification);
   const { showMenu } = useNativeContextMenu();
 
   // Extract worktree ID from the notes panel props (panels inherit worktree from their location)
@@ -235,7 +234,7 @@ export function NotesPane({
         : contentRef.current;
 
       if (!contentToSend.trim()) {
-        addNotification({
+        notify({
           type: "warning",
           message: "No content to send",
           duration: 3000,
@@ -247,7 +246,7 @@ export function NotesPane({
       const targetTerminal = findTargetAgentTerminal(terminals, focusedId, worktreeId, agentId);
 
       if (!targetTerminal) {
-        addNotification({
+        notify({
           type: "warning",
           message: `No ${agentConfig.name} session found`,
           duration: 3000,
@@ -267,20 +266,20 @@ export function NotesPane({
           if (isMountedRef.current) setSent(false);
         }, 2000);
 
-        addNotification({
+        notify({
           type: "success",
           message: `Sent to ${agentConfig.name}`,
           duration: 2000,
         });
       } else {
-        addNotification({
+        notify({
           type: "error",
           message: result.error || "Failed to send",
           duration: 3000,
         });
       }
     },
-    [terminals, focusedId, worktreeId, queueCommand, addNotification]
+    [terminals, focusedId, worktreeId, queueCommand]
   );
 
   const buildSendMenu = useCallback((useSelection: boolean): MenuItemOption[] => {

@@ -1,5 +1,8 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { useNotificationHistoryStore } from "../slices/notificationHistorySlice";
+import {
+  useNotificationHistoryStore,
+  getEntriesByCorrelationId,
+} from "../slices/notificationHistorySlice";
 
 const { getState } = useNotificationHistoryStore;
 
@@ -8,12 +11,14 @@ function addEntry(
     type: "success" | "error" | "info" | "warning";
     title: string;
     message: string;
+    correlationId: string;
   }> = {}
 ) {
   getState().addEntry({
     type: overrides.type ?? "info",
     message: overrides.message ?? "Test notification",
     title: overrides.title,
+    correlationId: overrides.correlationId,
   });
 }
 
@@ -79,5 +84,80 @@ describe("notificationHistorySlice", () => {
     getState().clearAll();
     expect(getState().entries).toHaveLength(0);
     expect(getState().unreadCount).toBe(0);
+  });
+
+  it("stores correlationId on entries", () => {
+    addEntry({ message: "first", correlationId: "panel-1" });
+    addEntry({ message: "second", correlationId: "panel-1" });
+    addEntry({ message: "third" });
+    const { entries } = getState();
+    expect(entries[0].correlationId).toBeUndefined();
+    expect(entries[1].correlationId).toBe("panel-1");
+    expect(entries[2].correlationId).toBe("panel-1");
+  });
+
+  it("getEntriesByCorrelationId returns matching entries", () => {
+    addEntry({ message: "first", correlationId: "panel-1" });
+    addEntry({ message: "second", correlationId: "panel-2" });
+    addEntry({ message: "third", correlationId: "panel-1" });
+    const results = getEntriesByCorrelationId("panel-1");
+    expect(results).toHaveLength(2);
+    expect(results.every((e: { correlationId?: string }) => e.correlationId === "panel-1")).toBe(
+      true
+    );
+  });
+
+  describe("seenAsToast and badge count", () => {
+    it("defaults seenAsToast to false when not provided", () => {
+      addEntry({ message: "test" });
+      expect(getState().entries[0].seenAsToast).toBe(false);
+    });
+
+    it("stores seenAsToast=true when provided", () => {
+      getState().addEntry({ type: "info", message: "seen", seenAsToast: true });
+      expect(getState().entries[0].seenAsToast).toBe(true);
+    });
+
+    it("does not increment unreadCount when seenAsToast is true", () => {
+      getState().addEntry({ type: "info", message: "seen", seenAsToast: true });
+      getState().addEntry({ type: "info", message: "seen again", seenAsToast: true });
+      expect(getState().unreadCount).toBe(0);
+    });
+
+    it("increments unreadCount only for entries with seenAsToast=false", () => {
+      getState().addEntry({ type: "success", message: "seen", seenAsToast: true });
+      getState().addEntry({ type: "error", message: "missed", seenAsToast: false });
+      getState().addEntry({ type: "info", message: "seen too", seenAsToast: true });
+      getState().addEntry({ type: "warning", message: "missed too", seenAsToast: false });
+      expect(getState().unreadCount).toBe(2);
+    });
+
+    it("markAllRead sets seenAsToast to true on all entries", () => {
+      addEntry({ message: "missed 1" });
+      addEntry({ message: "missed 2" });
+      getState().addEntry({ type: "info", message: "seen", seenAsToast: true });
+      expect(getState().entries.filter((e) => !e.seenAsToast)).toHaveLength(2);
+      getState().markAllRead();
+      expect(getState().entries.every((e) => e.seenAsToast)).toBe(true);
+      expect(getState().unreadCount).toBe(0);
+    });
+
+    it("markAllRead does not mutate already-seen entries unnecessarily", () => {
+      getState().addEntry({ type: "info", message: "already seen", seenAsToast: true });
+      const before = getState().entries[0];
+      getState().markAllRead();
+      const after = getState().entries[0];
+      expect(after).toBe(before);
+    });
+
+    it("unreadCount stays accurate when overflow evicts an unseen entry", () => {
+      for (let i = 0; i < 50; i++) {
+        addEntry({ message: `missed-${i}` });
+      }
+      expect(getState().unreadCount).toBe(50);
+      getState().addEntry({ type: "success", message: "seen", seenAsToast: true });
+      expect(getState().entries).toHaveLength(50);
+      expect(getState().unreadCount).toBe(49);
+    });
   });
 });

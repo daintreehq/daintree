@@ -28,6 +28,7 @@ import { GitHubAuth } from "../services/github/GitHubAuth.js";
 import { pullRequestService } from "../services/PullRequestService.js";
 import { events } from "../services/events.js";
 import { MonitorState, NOTE_PATH } from "./types.js";
+import { WorktreeLifecycleService } from "./WorktreeLifecycleService.js";
 import { ensureSerializable } from "../../shared/utils/serialization.js";
 import { waitForPathExists } from "../utils/fs.js";
 import { GitFileWatcher } from "../utils/gitFileWatcher.js";
@@ -97,6 +98,7 @@ export class WorkspaceService {
   private prServiceInitializedForPath: string | null = null;
   private worktreeListCache = new Map<string, WorktreeListCacheEntry>();
   private inFlightWorktreeList = new Map<string, Promise<RawWorktreeRecord[]>>();
+  private lifecycleService = new WorktreeLifecycleService();
 
   constructor(private readonly sendEvent: (event: WorkspaceHostEvent) => void) {}
 
@@ -971,6 +973,7 @@ export class WorkspaceService {
       worktreeChanges: monitor.worktreeChanges,
       worktreeId: monitor.worktreeId,
       timestamp: Date.now(),
+      lifecycleStatus: monitor.lifecycleStatus,
     };
 
     return ensureSerializable(snapshot) as WorktreeSnapshot;
@@ -1195,6 +1198,10 @@ export class WorkspaceService {
 
       await ensureNoteFile(path);
 
+      // Copy .canopy/ from main repo to the new worktree so gitignored config files
+      // (including lifecycle scripts) are available without manual setup.
+      await this.lifecycleService.copyCanopyDir(rootPath, absolutePath);
+
       // Refresh worktree list
       this.invalidateCachedWorktrees(pathResolve(rootPath));
       const updatedWorktrees = await this.listWorktreesFromGit({ forceRefresh: true });
@@ -1212,6 +1219,10 @@ export class WorkspaceService {
         success: true,
         worktreeId: canonicalWorktreeId,
       });
+
+      // Run setup scripts asynchronously after signaling success so the renderer
+      // gets the worktree immediately. Progress is emitted via worktree-update events.
+      void this.runLifecycleSetup(canonicalWorktreeId, absolutePath, rootPath);
     } catch (error) {
       this.sendEvent({
         type: "create-worktree-result",
@@ -1219,6 +1230,165 @@ export class WorkspaceService {
         success: false,
         error: (error as Error).message,
       });
+    }
+  }
+
+  private async runLifecycleSetup(
+    worktreeId: string,
+    worktreePath: string,
+    projectRootPath: string
+  ): Promise<void> {
+    const config = await this.lifecycleService.loadConfig(worktreePath, projectRootPath);
+    if (!config?.setup?.length) {
+      return;
+    }
+
+    const monitor = this.monitors.get(worktreeId);
+    if (!monitor) {
+      return;
+    }
+
+    const commands = config.setup;
+    const worktreeName = monitor.name;
+    const env = this.lifecycleService.buildEnv(worktreePath, projectRootPath, worktreeName);
+
+    monitor.lifecycleStatus = {
+      phase: "setup",
+      state: "running",
+      commandIndex: 0,
+      totalCommands: commands.length,
+      currentCommand: commands[0],
+      startedAt: Date.now(),
+    };
+    this.emitUpdate(monitor);
+
+    const result = await this.lifecycleService.runCommands(commands, {
+      cwd: worktreePath,
+      env,
+      onProgress: (commandIndex, totalCommands, command) => {
+        const m = this.monitors.get(worktreeId);
+        if (m) {
+          m.lifecycleStatus = {
+            phase: "setup",
+            state: "running",
+            commandIndex,
+            totalCommands,
+            currentCommand: command,
+            startedAt: m.lifecycleStatus?.startedAt ?? Date.now(),
+          };
+          this.emitUpdate(m);
+        }
+      },
+    });
+
+    const finalMonitor = this.monitors.get(worktreeId);
+    if (finalMonitor) {
+      finalMonitor.lifecycleStatus = {
+        phase: "setup",
+        state: result.timedOut ? "timed-out" : result.success ? "success" : "failed",
+        totalCommands: commands.length,
+        output: result.output,
+        error: result.error,
+        startedAt: finalMonitor.lifecycleStatus?.startedAt ?? Date.now(),
+        completedAt: Date.now(),
+      };
+      this.emitUpdate(finalMonitor);
+    }
+
+    if (!result.success) {
+      console.warn(`[WorktreeLifecycle] Setup failed for worktree ${worktreeId}:`, result.error);
+    }
+  }
+
+  private async runLifecycleTeardown(
+    worktreeId: string,
+    monitor: MonitorState,
+    force: boolean
+  ): Promise<void> {
+    if (!this.projectRootPath) {
+      return;
+    }
+
+    const config = await this.lifecycleService.loadConfig(monitor.path, this.projectRootPath);
+    if (!config?.teardown?.length) {
+      return;
+    }
+
+    const commands = config.teardown;
+    const env = this.lifecycleService.buildEnv(monitor.path, this.projectRootPath, monitor.name);
+    // Give teardown less time on force-delete so it doesn't block deletion for long.
+    const timeoutMs = force ? 15_000 : 120_000;
+
+    monitor.lifecycleStatus = {
+      phase: "teardown",
+      state: "running",
+      commandIndex: 0,
+      totalCommands: commands.length,
+      currentCommand: commands[0],
+      startedAt: Date.now(),
+    };
+    this.emitUpdate(monitor);
+
+    const teardownStartedAt = monitor.lifecycleStatus?.startedAt ?? Date.now();
+
+    try {
+      const result = await this.lifecycleService.runCommands(commands, {
+        cwd: monitor.path,
+        env,
+        timeoutMs,
+        onProgress: (commandIndex, totalCommands, command) => {
+          const m = this.monitors.get(worktreeId);
+          if (m) {
+            m.lifecycleStatus = {
+              phase: "teardown",
+              state: "running",
+              commandIndex,
+              totalCommands,
+              currentCommand: command,
+              startedAt: m.lifecycleStatus?.startedAt ?? teardownStartedAt,
+            };
+            this.emitUpdate(m);
+          }
+        },
+      });
+
+      const finalMonitor = this.monitors.get(worktreeId);
+      if (finalMonitor) {
+        finalMonitor.lifecycleStatus = {
+          phase: "teardown",
+          state: result.timedOut ? "timed-out" : result.success ? "success" : "failed",
+          totalCommands: commands.length,
+          output: result.output,
+          error: result.error,
+          startedAt: teardownStartedAt,
+          completedAt: Date.now(),
+        };
+        this.emitUpdate(finalMonitor);
+      }
+
+      if (!result.success) {
+        console.warn(
+          `[WorktreeLifecycle] Teardown failed for worktree ${worktreeId} (continuing deletion):`,
+          result.error
+        );
+      }
+    } catch (err) {
+      const finalMonitor = this.monitors.get(worktreeId);
+      if (finalMonitor) {
+        finalMonitor.lifecycleStatus = {
+          phase: "teardown",
+          state: "failed",
+          totalCommands: commands.length,
+          error: (err as Error).message,
+          startedAt: teardownStartedAt,
+          completedAt: Date.now(),
+        };
+        this.emitUpdate(finalMonitor);
+      }
+      console.warn(
+        `[WorktreeLifecycle] Teardown threw for worktree ${worktreeId} (continuing deletion):`,
+        err
+      );
     }
   }
 
@@ -1261,6 +1431,10 @@ export class WorkspaceService {
         }
         this.setActiveWorktree(`${requestId}-auto-switch`, mainWorktreeId);
       }
+
+      // Run teardown scripts before removing the worktree. Failures are logged but
+      // never block deletion — the user's intent to delete must be honoured.
+      await this.runLifecycleTeardown(worktreeId, monitor, force);
 
       if (this.git) {
         const args = ["worktree", "remove"];

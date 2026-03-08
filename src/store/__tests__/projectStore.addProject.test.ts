@@ -29,7 +29,7 @@ const terminalClientMock = {
   getSharedBuffers: vi.fn().mockResolvedValue({ visualBuffers: [], signalBuffer: null }),
 };
 
-const addNotificationMock = vi.fn();
+const notifyMock = vi.fn().mockReturnValue("");
 
 vi.mock("@/clients", () => ({
   projectClient: projectClientMock,
@@ -37,12 +37,8 @@ vi.mock("@/clients", () => ({
   terminalClient: terminalClientMock,
 }));
 
-vi.mock("../notificationStore", () => ({
-  useNotificationStore: {
-    getState: vi.fn(() => ({
-      addNotification: addNotificationMock,
-    })),
-  },
+vi.mock("@/lib/notify", () => ({
+  notify: notifyMock,
 }));
 
 vi.mock("../resetStores", () => ({
@@ -92,7 +88,7 @@ describe("projectStore addProject", () => {
 
     await useProjectStore.getState().addProject();
 
-    expect(addNotificationMock).not.toHaveBeenCalled();
+    expect(notifyMock).not.toHaveBeenCalled();
     expect(useProjectStore.getState().gitInitDialogOpen).toBe(true);
     expect(useProjectStore.getState().gitInitDirectoryPath).toBe("/tmp/not-a-repo");
     expect(useProjectStore.getState().isLoading).toBe(false);
@@ -107,7 +103,7 @@ describe("projectStore addProject", () => {
 
     await useProjectStore.getState().addProject();
 
-    expect(addNotificationMock).not.toHaveBeenCalled();
+    expect(notifyMock).not.toHaveBeenCalled();
     expect(useProjectStore.getState().gitInitDialogOpen).toBe(true);
     expect(useProjectStore.getState().gitInitDirectoryPath).toBe("/Users/test/empty-folder");
     expect(useProjectStore.getState().isLoading).toBe(false);
@@ -120,7 +116,7 @@ describe("projectStore addProject", () => {
     await useProjectStore.getState().addProjectByPath("relative/path");
 
     expect(useProjectStore.getState().gitInitDialogOpen).toBe(false);
-    expect(addNotificationMock).toHaveBeenCalledWith(expect.objectContaining({ type: "error" }));
+    expect(notifyMock).toHaveBeenCalledWith(expect.objectContaining({ type: "error" }));
   });
 
   it("does not notify when the dialog is cancelled", async () => {
@@ -128,7 +124,7 @@ describe("projectStore addProject", () => {
 
     await useProjectStore.getState().addProject();
 
-    expect(addNotificationMock).not.toHaveBeenCalled();
+    expect(notifyMock).not.toHaveBeenCalled();
     expect(useProjectStore.getState().gitInitDialogOpen).toBe(false);
     expect(useProjectStore.getState().gitInitDirectoryPath).toBeNull();
     expect(useProjectStore.getState().isLoading).toBe(false);

@@ -39,6 +39,8 @@ const createMockProjectClient = () => ({
   readClaudeMd: vi.fn().mockResolvedValue(null),
   writeClaudeMd: vi.fn().mockResolvedValue(undefined),
   createFolder: vi.fn().mockResolvedValue(""),
+  enableInRepoSettings: vi.fn().mockResolvedValue({}),
+  disableInRepoSettings: vi.fn().mockResolvedValue({}),
 });
 
 describe("TerminalPersistence.saveTabGroups", () => {

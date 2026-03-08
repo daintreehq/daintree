@@ -77,7 +77,7 @@ export function createApplicationMenu(
           click: async () => {
             if (mainWindow.isDestroyed()) return;
             const result = await dialog.showOpenDialog(mainWindow, {
-              properties: ["openDirectory"],
+              properties: ["openDirectory", "createDirectory"],
               title: "Open Git Repository",
             });
 

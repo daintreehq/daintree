@@ -1,268 +1,316 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import { Mic, MicOff, Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import type { VoiceInputStatus } from "@shared/types";
+import { actionService } from "@/services/ActionService";
+import { useVoiceRecordingStore } from "@/store/voiceRecordingStore";
+import { voiceRecordingService } from "@/services/VoiceRecordingService";
 
-const AUTO_STOP_MS = 60_000;
+// Flywheel — double-smoothed for S-curve easing
+const IDLE_SPEED = 72; // deg/sec — 1 revolution per 5s
+const ACTIVE_SPEED = 288; // deg/sec — 1 revolution per 1.25s
+const TAU_ATTACK = 0.22;
+const TAU_RELEASE = 0.5;
+const AUDIO_SMOOTH = 0.15;
+
+// Ring thickness via scale (avoids layout thrashing)
+const BASE_THICKNESS = 2; // px — fixed padding, animated via scale
+const SCALE_MIN = 0.88;
+const SCALE_MAX = 1.0;
 
 interface VoiceInputButtonProps {
-  onTranscriptionDelta: (delta: string) => void;
-  onTranscriptionComplete: (text: string) => void;
+  panelId: string;
+  panelTitle?: string;
+  projectId?: string;
+  projectName?: string;
+  worktreeId?: string;
+  worktreeLabel?: string;
   disabled?: boolean;
 }
 
 export function VoiceInputButton({
-  onTranscriptionDelta,
-  onTranscriptionComplete,
+  panelId,
+  panelTitle,
+  projectId,
+  projectName,
+  worktreeId,
+  worktreeLabel,
   disabled = false,
 }: VoiceInputButtonProps) {
-  const [status, setStatus] = useState<VoiceInputStatus>("idle");
-  const [elapsedSeconds, setElapsedSeconds] = useState(0);
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const status = useVoiceRecordingStore((state) => state.status);
+  const isConfigured = useVoiceRecordingStore((state) => state.isConfigured);
+  const errorMessage = useVoiceRecordingStore((state) => state.errorMessage);
+  const activePanelId = useVoiceRecordingStore((state) => state.activeTarget?.panelId ?? null);
+  const audioLevel = useVoiceRecordingStore((state) => state.audioLevel);
 
-  const audioContextRef = useRef<AudioContext | null>(null);
-  const workletNodeRef = useRef<AudioWorkletNode | null>(null);
-  const streamRef = useRef<MediaStream | null>(null);
-  const autoStopTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const elapsedTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const startTimeRef = useRef<number>(0);
-  // Generation token: each start() call increments this; stop/stale callbacks check it.
-  const generationRef = useRef(0);
+  const isRecording = activePanelId === panelId && status === "recording";
+  const isConnecting = activePanelId === panelId && status === "connecting";
+  const isFinishing = activePanelId === panelId && status === "finishing";
+  const isListening = isRecording || isConnecting;
+  // Keep orbit visible through finishing for graceful exit
+  const showOrbit = isListening || isFinishing;
+  const isActive = isListening || isFinishing;
 
-  const isRecording = status === "recording";
+  // Animation refs
+  const wrapperRef = useRef<HTMLDivElement>(null);
+  const ringRef = useRef<HTMLSpanElement>(null);
+  const dotCoreRef = useRef<HTMLSpanElement>(null);
+  const dotHaloRef = useRef<HTMLSpanElement>(null);
+  const trackRef = useRef<HTMLSpanElement>(null);
+  const iconRef = useRef<HTMLSpanElement>(null);
+  const rafRef = useRef<number>(0);
+  const audioLevelRef = useRef(0);
 
-  const stopRecording = useCallback(async () => {
-    // Increment generation so any in-flight startRecording async steps become no-ops.
-    generationRef.current++;
+  useEffect(() => {
+    audioLevelRef.current = audioLevel;
+  }, [audioLevel]);
 
-    if (autoStopTimerRef.current) {
-      clearTimeout(autoStopTimerRef.current);
-      autoStopTimerRef.current = null;
-    }
-    if (elapsedTimerRef.current) {
-      clearInterval(elapsedTimerRef.current);
-      elapsedTimerRef.current = null;
-    }
+  useEffect(() => {
+    if (!showOrbit) return;
 
-    if (workletNodeRef.current) {
-      workletNodeRef.current.port.onmessage = null;
-      workletNodeRef.current.disconnect();
-      workletNodeRef.current = null;
-    }
+    let lastTime = performance.now();
+    let angle = 0;
+    let v1 = IDLE_SPEED;
+    let velocity = IDLE_SPEED;
+    let smoothLevel = 0;
 
-    if (audioContextRef.current) {
-      await audioContextRef.current.close().catch(() => {});
-      audioContextRef.current = null;
-    }
+    const tick = (now: number) => {
+      const dt = Math.min((now - lastTime) / 1000, 0.1);
+      lastTime = now;
 
-    if (streamRef.current) {
-      for (const track of streamRef.current.getTracks()) {
-        track.stop();
+      // During finishing, force level to 0 so it winds down gracefully
+      const rawLevel = isFinishing ? 0 : audioLevelRef.current;
+
+      // Low-pass + perceptual curve
+      smoothLevel += (rawLevel - smoothLevel) * AUDIO_SMOOTH;
+      const level = Math.pow(smoothLevel, 1.5);
+
+      // Double-smoothed flywheel
+      const targetVelocity = IDLE_SPEED + level * (ACTIVE_SPEED - IDLE_SPEED);
+      const tau = targetVelocity > velocity ? TAU_ATTACK : TAU_RELEASE;
+      const alpha = 1 - Math.exp(-dt / tau);
+      v1 += (targetVelocity - v1) * alpha;
+      velocity += (v1 - velocity) * alpha;
+
+      angle = (angle + velocity * dt) % 360;
+
+      // Energy ratio for visual mapping
+      const opacity = (0.45 + level * 0.55).toFixed(3);
+      const opacityNum = Number(opacity);
+      const scale = SCALE_MIN + level * (SCALE_MAX - SCALE_MIN);
+
+      // Rotate wrapper with scale for thickness modulation
+      const wrapper = wrapperRef.current;
+      if (wrapper) {
+        wrapper.style.transform = `rotate(${angle}deg) scale(${scale}) translateZ(0)`;
       }
-      streamRef.current = null;
-    }
 
-    await window.electron?.voiceInput?.stop();
-    setElapsedSeconds(0);
-  }, []);
+      // Refined gradient — exponential clustering near the head
+      const ring = ringRef.current;
+      if (ring) {
+        ring.style.background = [
+          `conic-gradient(from 0deg,`,
+          `transparent 200deg,`,
+          `rgba(var(--theme-accent-rgb), ${(opacityNum * 0.05).toFixed(3)}) 248deg,`,
+          `rgba(var(--theme-accent-rgb), ${(opacityNum * 0.18).toFixed(3)}) 292deg,`,
+          `rgba(var(--theme-accent-rgb), ${(opacityNum * 0.42).toFixed(3)}) 326deg,`,
+          `rgba(var(--theme-accent-rgb), ${(opacityNum * 0.82).toFixed(3)}) 348deg,`,
+          `rgba(var(--theme-accent-rgb), ${opacity}) 355deg,`,
+          `transparent 360deg)`,
+        ].join(" ");
+      }
 
-  const startRecording = useCallback(async () => {
-    setErrorMessage(null);
+      // Dot core — crisp, no blur
+      const core = dotCoreRef.current;
+      if (core) {
+        core.style.opacity = String(0.82 + level * 0.18);
+      }
 
-    const generation = ++generationRef.current;
+      // Dot halo — soft glow
+      const halo = dotHaloRef.current;
+      if (halo) {
+        const haloAlpha = (0.18 + level * 0.22).toFixed(3);
+        const haloBlur = 6 + level * 6;
+        halo.style.boxShadow = `0 0 ${haloBlur}px rgba(var(--theme-accent-rgb), ${haloAlpha})`;
+        halo.style.opacity = String(0.5 + level * 0.5);
+      }
 
-    // First start the WebSocket session
-    const result = await window.electron?.voiceInput?.start();
-    if (generationRef.current !== generation) return; // Cancelled by a concurrent stop/start
-    if (!result?.ok) {
-      setErrorMessage(result?.error ?? "Failed to start voice session");
-      setStatus("error");
-      return;
-    }
+      // Track ring — subtle response: dimmer when arc is bright (contrast)
+      const track = trackRef.current;
+      if (track) {
+        track.style.opacity = String(0.08 + level * 0.04);
+      }
 
-    // Request microphone access
-    let stream: MediaStream;
-    try {
-      stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
-    } catch (err) {
-      if (generationRef.current !== generation) return;
-      const message =
-        err instanceof DOMException && err.name === "NotAllowedError"
-          ? "Microphone permission denied. Enable it in System Preferences → Privacy → Microphone."
-          : "Could not access microphone";
-      setErrorMessage(message);
-      setStatus("error");
-      await window.electron?.voiceInput?.stop();
-      return;
-    }
+      // Icon — slight inverse scale on peaks
+      const icon = iconRef.current;
+      if (icon) {
+        const iconScale = 1 - level * 0.08;
+        icon.style.transform = `scale(${iconScale})`;
+      }
 
-    if (generationRef.current !== generation) {
-      stream.getTracks().forEach((t) => t.stop());
-      return;
-    }
-
-    streamRef.current = stream;
-
-    const audioContext = new AudioContext({ sampleRate: 48000 });
-    audioContextRef.current = audioContext;
-
-    // Resume AudioContext (required by autoplay policy in Chromium)
-    if (audioContext.state === "suspended") {
-      await audioContext.resume();
-    }
-
-    if (generationRef.current !== generation) {
-      await audioContext.close().catch(() => {});
-      stream.getTracks().forEach((t) => t.stop());
-      return;
-    }
-
-    try {
-      await audioContext.audioWorklet.addModule("/pcm-processor.js");
-    } catch {
-      if (generationRef.current !== generation) return;
-      setErrorMessage("Failed to load audio processor");
-      setStatus("error");
-      stream.getTracks().forEach((t) => t.stop());
-      await audioContext.close().catch(() => {});
-      await window.electron?.voiceInput?.stop();
-      return;
-    }
-
-    if (generationRef.current !== generation) {
-      await audioContext.close().catch(() => {});
-      stream.getTracks().forEach((t) => t.stop());
-      return;
-    }
-
-    const source = audioContext.createMediaStreamSource(stream);
-    const workletNode = new AudioWorkletNode(audioContext, "pcm-processor");
-    workletNodeRef.current = workletNode;
-
-    workletNode.port.onmessage = (event: MessageEvent<ArrayBuffer>) => {
-      if (generationRef.current !== generation) return;
-      window.electron?.voiceInput?.sendAudioChunk(event.data);
+      rafRef.current = requestAnimationFrame(tick);
     };
 
-    source.connect(workletNode);
-    // Don't connect workletNode to destination — capture only, no playback
-
-    startTimeRef.current = Date.now();
-    setElapsedSeconds(0);
-    elapsedTimerRef.current = setInterval(() => {
-      setElapsedSeconds(Math.floor((Date.now() - startTimeRef.current) / 1000));
-    }, 1000);
-
-    autoStopTimerRef.current = setTimeout(() => {
-      stopRecording();
-    }, AUTO_STOP_MS);
-  }, [stopRecording]);
+    rafRef.current = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(rafRef.current);
+  }, [showOrbit, isFinishing]);
 
   const handleClick = useCallback(async () => {
-    if (disabled) return;
-    if (isRecording) {
-      await stopRecording();
-    } else {
-      await startRecording();
+    if (disabled && !isActive) return;
+
+    if (!isConfigured && !isActive) {
+      const fresh = await window.electron?.voiceInput?.getSettings();
+      if (fresh?.enabled && fresh.deepgramApiKey) {
+        void voiceRecordingService.toggle({
+          panelId,
+          panelTitle,
+          projectId,
+          projectName,
+          worktreeId,
+          worktreeLabel,
+        });
+        return;
+      }
+
+      void actionService.dispatch("app.settings.openTab", { tab: "voice" }, { source: "user" });
+      return;
     }
-  }, [disabled, isRecording, startRecording, stopRecording]);
 
-  useEffect(() => {
-    const unsubs: (() => void)[] = [];
-
-    const unsubStatus = window.electron?.voiceInput?.onStatus((s) => {
-      // Gate status updates by checking if they apply to the current session
-      setStatus(s);
+    void voiceRecordingService.toggle({
+      panelId,
+      panelTitle,
+      projectId,
+      projectName,
+      worktreeId,
+      worktreeLabel,
     });
-    if (unsubStatus) unsubs.push(unsubStatus);
-
-    const unsubDelta = window.electron?.voiceInput?.onTranscriptionDelta((delta) => {
-      onTranscriptionDelta(delta);
-    });
-    if (unsubDelta) unsubs.push(unsubDelta);
-
-    const unsubComplete = window.electron?.voiceInput?.onTranscriptionComplete((text) => {
-      onTranscriptionComplete(text);
-    });
-    if (unsubComplete) unsubs.push(unsubComplete);
-
-    const unsubError = window.electron?.voiceInput?.onError((err) => {
-      setErrorMessage(err);
-      stopRecording();
-    });
-    if (unsubError) unsubs.push(unsubError);
-
-    return () => {
-      for (const unsub of unsubs) unsub();
-    };
-  }, [onTranscriptionDelta, onTranscriptionComplete, stopRecording]);
-
-  // Stop recording when disabled (e.g., terminal switch)
-  useEffect(() => {
-    if (disabled && isRecording) {
-      stopRecording();
-    }
-  }, [disabled, isRecording, stopRecording]);
-
-  // Cleanup on unmount
-  useEffect(() => {
-    return () => {
-      stopRecording();
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  const formatDuration = (seconds: number) => {
-    const m = Math.floor(seconds / 60);
-    const s = seconds % 60;
-    return `${m}:${s.toString().padStart(2, "0")}`;
-  };
+  }, [
+    disabled,
+    isActive,
+    isConfigured,
+    panelId,
+    panelTitle,
+    projectId,
+    projectName,
+    worktreeId,
+    worktreeLabel,
+  ]);
 
   return (
-    <div className="relative flex items-center">
+    <div
+      className="relative flex items-center"
+      style={{ contain: "strict", width: 24, height: 24 }}
+    >
+      {showOrbit && (
+        <>
+          {/* Static track — same mask technique as arc for consistent antialiasing */}
+          <span
+            ref={trackRef}
+            className="absolute inset-0 rounded-full pointer-events-none"
+            style={{
+              opacity: 0.08,
+              background: `rgba(var(--theme-accent-rgb), 1)`,
+              mask: `linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0)`,
+              WebkitMask: `linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0)`,
+              maskComposite: "exclude",
+              WebkitMaskComposite: "xor",
+              padding: `${BASE_THICKNESS}px`,
+              transition: "opacity 80ms ease-out",
+            }}
+          />
+          {/* Rotating wrapper */}
+          <div
+            ref={wrapperRef}
+            className="absolute inset-0 pointer-events-none"
+            style={{ willChange: "transform" }}
+          >
+            {/* Arc ring */}
+            <span
+              ref={ringRef}
+              className="absolute inset-0 rounded-full"
+              style={{
+                padding: `${BASE_THICKNESS}px`,
+                mask: `linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0)`,
+                WebkitMask: `linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0)`,
+                maskComposite: "exclude",
+                WebkitMaskComposite: "xor",
+              }}
+            />
+            {/* Dot: core (crisp) + halo (soft glow) */}
+            <span
+              ref={dotHaloRef}
+              className="absolute rounded-full bg-canopy-accent/30"
+              style={{
+                width: "6px",
+                height: "6px",
+                top: 0,
+                left: "50%",
+                transform: "translate(-50%, -35%)",
+              }}
+            />
+            <span
+              ref={dotCoreRef}
+              className="absolute rounded-full bg-canopy-accent"
+              style={{
+                width: "3.5px",
+                height: "3.5px",
+                top: 0,
+                left: "50%",
+                transform: "translate(-50%, -15%)",
+              }}
+            />
+          </div>
+        </>
+      )}
       <button
         type="button"
         onClick={handleClick}
-        disabled={disabled || status === "connecting"}
+        disabled={(disabled && !isActive) || isFinishing}
         title={
-          status === "error"
-            ? (errorMessage ?? "Voice input error")
-            : isRecording
-              ? "Stop recording"
-              : "Start voice input"
+          !isConfigured
+            ? "Configure voice input"
+            : status === "error"
+              ? (errorMessage ?? "Voice input error")
+              : isFinishing
+                ? "Finishing transcription..."
+                : isListening
+                  ? "Stop recording"
+                  : "Start voice input"
         }
         className={cn(
-          "flex items-center justify-center rounded p-1 transition-colors",
-          "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-1",
-          isRecording
-            ? "text-red-400 hover:text-red-300"
-            : status === "connecting"
-              ? "text-canopy-text/40"
-              : status === "error"
-                ? "text-yellow-400 hover:text-yellow-300"
-                : "text-canopy-text/40 hover:text-canopy-text/70",
-          disabled && "pointer-events-none opacity-40"
+          "relative flex items-center justify-center rounded-full transition-all duration-200",
+          "h-6 w-6",
+          "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-canopy-accent",
+          showOrbit
+            ? "bg-canopy-accent/10 text-canopy-accent hover:bg-canopy-accent/15"
+            : cn(
+                status === "error"
+                  ? "text-yellow-400 hover:text-yellow-300"
+                  : "text-canopy-text/50 hover:text-canopy-text/80 hover:bg-white/[0.06]"
+              ),
+          disabled && !isActive && "pointer-events-none opacity-40"
         )}
-        aria-label={isRecording ? "Stop voice recording" : "Start voice recording"}
-        aria-pressed={isRecording}
+        aria-label={
+          !isConfigured
+            ? "Set up voice input"
+            : isListening
+              ? "Stop voice recording"
+              : "Start voice recording"
+        }
+        aria-pressed={isConfigured ? isListening : undefined}
       >
-        {status === "connecting" ? (
+        {isFinishing && !showOrbit ? (
           <Loader2 className="h-3.5 w-3.5 animate-spin" />
-        ) : isRecording ? (
-          <div className="relative">
-            <Mic className="h-3.5 w-3.5" />
-            <span className="absolute -right-1 -top-1 h-1.5 w-1.5 animate-pulse rounded-full bg-red-400" />
-          </div>
+        ) : showOrbit ? (
+          <span
+            ref={iconRef}
+            className="block h-2 w-2 rounded-[1.5px] bg-current transition-transform duration-100"
+          />
+        ) : isConfigured ? (
+          <Mic className="h-3.5 w-3.5 relative" />
         ) : (
           <MicOff className="h-3.5 w-3.5" />
         )}
       </button>
-
-      {isRecording && (
-        <span className="ml-1 font-mono text-[10px] tabular-nums text-red-400/80">
-          {formatDuration(elapsedSeconds)}
-        </span>
-      )}
     </div>
   );
 }

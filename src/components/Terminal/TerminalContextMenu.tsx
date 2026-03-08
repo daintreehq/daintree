@@ -1,9 +1,8 @@
 import { useCallback, useMemo } from "react";
 import type React from "react";
-import { type MenuItemOption, type TerminalLocation, type TerminalType } from "@/types";
+import { type TerminalLocation, type TerminalType } from "@/types";
 import { useTerminalStore } from "@/store";
 import { useWorktrees } from "@/hooks/useWorktrees";
-import { useNativeContextMenu } from "@/hooks";
 import { AGENT_IDS, getAgentConfig } from "@/config/agents";
 import { isValidBrowserUrl } from "@/components/Browser/browserUtils";
 import { actionService } from "@/services/ActionService";
@@ -12,6 +11,17 @@ import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { terminalClient } from "@/clients";
 import { formatWithBracketedPaste } from "@shared/utils/terminalInputProtocol";
 import { fireWatchNotification } from "@/lib/watchNotification";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuShortcut,
+  ContextMenuSub,
+  ContextMenuSubContent,
+  ContextMenuSubTrigger,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
 
 interface TerminalContextMenuProps {
   terminalId: string;
@@ -20,26 +30,23 @@ interface TerminalContextMenuProps {
 }
 
 /**
- * Right-click context menu for terminal components.
- * Used by both DockedTerminalItem and TerminalHeader.
+ * Right-click context menu for panel headers (terminal, agent, browser, notes, dev-preview).
+ * Used by both DockedTerminalItem and PanelHeader.
  */
 export function TerminalContextMenu({
   terminalId,
   children,
   forceLocation,
 }: TerminalContextMenuProps) {
-  const { showMenu } = useNativeContextMenu();
   const terminal = useTerminalStore((state) => state.terminals.find((t) => t.id === terminalId));
   const maximizeTarget = useTerminalStore((s) => s.maximizeTarget);
   const getPanelGroup = useTerminalStore((s) => s.getPanelGroup);
 
-  // Check if this terminal is maximized (either directly or as part of a maximized group)
   const isMaximized = useMemo(() => {
     if (!maximizeTarget) return false;
     if (maximizeTarget.type === "panel") {
       return maximizeTarget.id === terminalId;
     } else {
-      // Check if terminal is in the maximized group
       const group = getPanelGroup(terminalId);
       return group?.id === maximizeTarget.id;
     }
@@ -55,255 +62,12 @@ export function TerminalContextMenu({
 
   const currentLocation: TerminalLocation = forceLocation ?? terminal?.location ?? "grid";
 
-  const worktreeSubmenu = useMemo((): MenuItemOption[] => {
-    if (!terminal) return [];
-    return worktrees.map((wt) => {
-      const isCurrent = wt.id === terminal.worktreeId;
-      const label = (wt.branch || wt.name).trim() || "Untitled worktree";
-      return {
-        id: `move-to-worktree:${wt.id}`,
-        label,
-        enabled: !isCurrent,
-      };
-    });
-  }, [terminal, worktrees]);
+  const isMac = navigator.platform.toLowerCase().includes("mac");
+  const modifierKey = isMac ? "⌘" : "Ctrl";
 
-  const convertToSubmenu = useMemo((): MenuItemOption[] => {
-    if (!terminal) return [];
-    const currentAgentId =
-      terminal.agentId ?? (terminal.type !== "terminal" ? terminal.type : null);
-    const isPlainTerminal = terminal.type === "terminal" || terminal.kind === "terminal";
-
-    const items: MenuItemOption[] = [];
-
-    if (!isPlainTerminal || currentAgentId) {
-      items.push({
-        id: "convert-to:terminal",
-        label: "Terminal",
-        enabled: !isPlainTerminal || !!currentAgentId,
-      });
-    }
-
-    for (const agentId of AGENT_IDS) {
-      const config = getAgentConfig(agentId);
-      if (!config) continue;
-      const isCurrent = currentAgentId === agentId;
-      items.push({
-        id: `convert-to:${agentId}`,
-        label: config.name,
-        enabled: !isCurrent,
-      });
-    }
-
-    return items;
-  }, [terminal]);
-
-  const template = useMemo((): MenuItemOption[] => {
-    if (!terminal) return [];
-
-    const isBrowser = terminal.kind === "browser";
-    const isNotes = terminal.kind === "notes";
-    const isDevPreview = terminal.kind === "dev-preview";
-
-    // Layout section: worktree navigation first (most common workflow), then positioning
-    const layoutItems: MenuItemOption[] = [];
-
-    // Move to Worktree as top-level submenu (when multiple worktrees exist)
-    if (worktrees.length > 1 && worktreeSubmenu.length > 0) {
-      layoutItems.push({
-        id: "move-to-worktree",
-        label: "Move to Worktree",
-        submenu: worktreeSubmenu,
-      });
-    }
-
-    layoutItems.push(
-      currentLocation === "grid"
-        ? { id: "move-to-dock", label: "Move to Dock" }
-        : { id: "move-to-grid", label: "Move to Grid" }
-    );
-
-    if (currentLocation === "grid") {
-      layoutItems.push({
-        id: "toggle-maximize",
-        label: isMaximized ? "Restore Size" : "Maximize",
-        sublabel: "^⇧F",
-      });
-    }
-
-    // Browser-specific actions
-    if (isBrowser) {
-      const browserActions: MenuItemOption[] = [
-        { id: "reload-browser", label: "Reload Page" },
-        { id: "open-external", label: "Open in Browser" },
-        { id: "copy-url", label: "Copy URL" },
-      ];
-
-      const browserManagementItems: MenuItemOption[] = [
-        { id: "duplicate", label: "Duplicate Browser" },
-        { id: "rename", label: "Rename Browser" },
-      ];
-
-      const destructiveItems: MenuItemOption[] = [
-        { id: "trash", label: "Close Browser" },
-        { id: "kill", label: "Remove Browser" },
-      ];
-
-      return [
-        ...layoutItems,
-        { type: "separator" },
-        ...browserActions,
-        { type: "separator" },
-        ...browserManagementItems,
-        { type: "separator" },
-        ...destructiveItems,
-      ];
-    }
-
-    // Notes-specific actions
-    if (isNotes) {
-      const hasNotePath = Boolean(terminal.notePath);
-
-      const notesManagementItems: MenuItemOption[] = [
-        { id: "rename", label: "Rename Note", enabled: hasNotePath },
-        { id: "reveal-in-palette", label: "Reveal in Notes Palette", enabled: hasNotePath },
-      ];
-
-      const destructiveItems: MenuItemOption[] = [
-        { id: "delete-note", label: "Delete Note", enabled: hasNotePath },
-        { id: "trash", label: "Close Note" },
-      ];
-
-      return [
-        ...layoutItems,
-        { type: "separator" },
-        ...notesManagementItems,
-        { type: "separator" },
-        ...destructiveItems,
-      ];
-    }
-
-    // Dev Preview-specific actions (hybrid: browser view + dev server PTY)
-    if (isDevPreview) {
-      const hasUrl = Boolean(terminal.browserUrl && isValidBrowserUrl(terminal.browserUrl));
-
-      const browserActions: MenuItemOption[] = [
-        { id: "reload-browser", label: "Reload Preview" },
-        { id: "open-external", label: "Open in Browser", enabled: hasUrl },
-        { id: "copy-url", label: "Copy URL", enabled: hasUrl },
-      ];
-
-      const managementItems: MenuItemOption[] = [
-        { id: "duplicate", label: "Duplicate Dev Preview" },
-        { id: "rename", label: "Rename Dev Preview" },
-      ];
-
-      const destructiveItems: MenuItemOption[] = [
-        { id: "trash", label: "Close Dev Preview" },
-        { id: "kill", label: "Stop Dev Server" },
-      ];
-
-      return [
-        ...layoutItems,
-        { type: "separator" },
-        ...browserActions,
-        { type: "separator" },
-        ...managementItems,
-        { type: "separator" },
-        ...destructiveItems,
-      ];
-    }
-
-    const isMac = navigator.platform.toLowerCase().includes("mac");
-    const modifierKey = isMac ? "⌘" : "Ctrl";
-    const hasPty = terminal.kind ? panelKindHasPty(terminal.kind) : true;
-
-    // Clipboard actions (Copy/Paste) — only for PTY-backed panels
-    const clipboardItems: MenuItemOption[] = hasPty
-      ? [
-          { id: "copy", label: "Copy", sublabel: `${modifierKey}C` },
-          {
-            id: "paste",
-            label: "Paste",
-            sublabel: isMac ? `${modifierKey}V` : "Ctrl+⇧V",
-          },
-        ]
-      : [];
-
-    // Terminal actions section
-    const terminalActions: MenuItemOption[] = [
-      ...(hasPty ? [{ id: "restart", label: "Restart Terminal" }] : []),
-      ...(hasPty ? [{ id: "redraw", label: "Redraw Terminal" }] : []),
-      ...(isPaused ? [{ id: "force-resume", label: "Force Resume (Paused)" }] : []),
-      {
-        id: "toggle-input-lock",
-        label: terminal.isInputLocked ? "Unlock Input" : "Lock Input",
-      },
-      ...(terminal.agentId
-        ? [
-            {
-              id: "toggle-watch",
-              label: isWatched ? "Cancel Watch" : "Watch Terminal",
-              sublabel: isMac ? "⌘⇧W" : "Ctrl+⇧W",
-            },
-          ]
-        : []),
-      ...(convertToSubmenu.length > 0
-        ? [
-            {
-              id: "convert-to",
-              label: "Convert to",
-              submenu: convertToSubmenu,
-            },
-          ]
-        : []),
-      {
-        id: "link-hint",
-        label: `${modifierKey}+Click links to open in Browser`,
-        enabled: false,
-      },
-    ];
-
-    // Management actions section
-    const managementItems: MenuItemOption[] = [
-      { id: "duplicate", label: "Duplicate Terminal" },
-      { id: "rename", label: "Rename Terminal" },
-      { id: "view-info", label: "View Terminal Info" },
-    ];
-
-    // Destructive actions section
-    const destructiveItems: MenuItemOption[] = [
-      { id: "trash", label: "Trash Terminal" },
-      { id: "kill", label: "Kill Terminal" },
-    ];
-
-    return [
-      ...clipboardItems,
-      { type: "separator" },
-      ...layoutItems,
-      { type: "separator" },
-      ...terminalActions,
-      { type: "separator" },
-      ...managementItems,
-      { type: "separator" },
-      ...destructiveItems,
-    ];
-  }, [
-    currentLocation,
-    isMaximized,
-    isPaused,
-    isWatched,
-    terminal,
-    worktrees.length,
-    worktreeSubmenu,
-    convertToSubmenu,
-  ]);
-
-  const handleContextMenu = useCallback(
-    async (event: React.MouseEvent) => {
+  const handleAction = useCallback(
+    async (actionId: string) => {
       if (!terminal) return;
-      const actionId = await showMenu(event, template);
-      if (!actionId) return;
 
       if (actionId.startsWith("move-to-worktree:")) {
         const worktreeId = actionId.slice("move-to-worktree:".length);
@@ -330,10 +94,6 @@ export function TerminalContextMenu({
             console.error("Failed to convert terminal type:", result.error);
           }
         }
-        return;
-      }
-
-      if (actionId === "move-to-worktree" || actionId === "convert-to") {
         return;
       }
 
@@ -458,7 +218,6 @@ export function TerminalContextMenu({
         case "kill":
           void actionService.dispatch("terminal.kill", { terminalId }, { source: "context-menu" });
           break;
-        // Browser-specific actions
         case "reload-browser":
           void actionService.dispatch("browser.reload", { terminalId }, { source: "context-menu" });
           break;
@@ -480,7 +239,6 @@ export function TerminalContextMenu({
             );
           }
           break;
-        // Notes-specific actions
         case "delete-note":
           if (terminal.notePath) {
             void actionService.dispatch(
@@ -505,12 +263,242 @@ export function TerminalContextMenu({
           break;
       }
     },
-    [showMenu, terminal, template, terminalId, isWatched, watchPanel, unwatchPanel]
+    [terminal, terminalId, isWatched, watchPanel, unwatchPanel]
+  );
+
+  if (!terminal) {
+    return <div className="contents">{children}</div>;
+  }
+
+  const isBrowser = terminal.kind === "browser";
+  const isNotes = terminal.kind === "notes";
+  const isDevPreview = terminal.kind === "dev-preview";
+  const hasPty = terminal.kind ? panelKindHasPty(terminal.kind) : true;
+
+  const currentAgentId = terminal.agentId ?? (terminal.type !== "terminal" ? terminal.type : null);
+  const isPlainTerminal = terminal.type === "terminal" || terminal.kind === "terminal";
+
+  const layoutSection = (
+    <>
+      {worktrees.length > 1 && (
+        <ContextMenuSub>
+          <ContextMenuSubTrigger>Move to Worktree</ContextMenuSubTrigger>
+          <ContextMenuSubContent>
+            {worktrees.map((wt) => {
+              const isCurrent = wt.id === terminal.worktreeId;
+              const label = (wt.branch || wt.name).trim() || "Untitled worktree";
+              return (
+                <ContextMenuItem
+                  key={wt.id}
+                  disabled={isCurrent}
+                  onSelect={() => handleAction(`move-to-worktree:${wt.id}`)}
+                >
+                  {label}
+                </ContextMenuItem>
+              );
+            })}
+          </ContextMenuSubContent>
+        </ContextMenuSub>
+      )}
+      <ContextMenuItem
+        onSelect={() => handleAction(currentLocation === "grid" ? "move-to-dock" : "move-to-grid")}
+      >
+        {currentLocation === "grid" ? "Move to Dock" : "Move to Grid"}
+      </ContextMenuItem>
+      {currentLocation === "grid" && (
+        <ContextMenuItem onSelect={() => handleAction("toggle-maximize")}>
+          {isMaximized ? "Restore Size" : "Maximize"}
+          <ContextMenuShortcut>^⇧F</ContextMenuShortcut>
+        </ContextMenuItem>
+      )}
+    </>
+  );
+
+  if (isBrowser) {
+    const hasUrl = Boolean(terminal.browserUrl && isValidBrowserUrl(terminal.browserUrl));
+    return (
+      <ContextMenu>
+        <ContextMenuTrigger asChild>
+          <div className="contents">{children}</div>
+        </ContextMenuTrigger>
+        <ContextMenuContent>
+          {layoutSection}
+          <ContextMenuSeparator />
+          <ContextMenuItem onSelect={() => handleAction("reload-browser")}>
+            Reload Page
+          </ContextMenuItem>
+          <ContextMenuItem disabled={!hasUrl} onSelect={() => handleAction("open-external")}>
+            Open in Browser
+          </ContextMenuItem>
+          <ContextMenuItem disabled={!hasUrl} onSelect={() => handleAction("copy-url")}>
+            Copy URL
+          </ContextMenuItem>
+          <ContextMenuSeparator />
+          <ContextMenuItem onSelect={() => handleAction("duplicate")}>
+            Duplicate Browser
+          </ContextMenuItem>
+          <ContextMenuItem onSelect={() => handleAction("rename")}>Rename Browser</ContextMenuItem>
+          <ContextMenuSeparator />
+          <ContextMenuItem onSelect={() => handleAction("trash")}>Close Browser</ContextMenuItem>
+          <ContextMenuItem onSelect={() => handleAction("kill")}>Remove Browser</ContextMenuItem>
+        </ContextMenuContent>
+      </ContextMenu>
+    );
+  }
+
+  if (isNotes) {
+    const hasNotePath = Boolean(terminal.notePath);
+    return (
+      <ContextMenu>
+        <ContextMenuTrigger asChild>
+          <div className="contents">{children}</div>
+        </ContextMenuTrigger>
+        <ContextMenuContent>
+          {layoutSection}
+          <ContextMenuSeparator />
+          <ContextMenuItem disabled={!hasNotePath} onSelect={() => handleAction("rename")}>
+            Rename Note
+          </ContextMenuItem>
+          <ContextMenuItem
+            disabled={!hasNotePath}
+            onSelect={() => handleAction("reveal-in-palette")}
+          >
+            Reveal in Notes Palette
+          </ContextMenuItem>
+          <ContextMenuSeparator />
+          <ContextMenuItem disabled={!hasNotePath} onSelect={() => handleAction("delete-note")}>
+            Delete Note
+          </ContextMenuItem>
+          <ContextMenuItem onSelect={() => handleAction("trash")}>Close Note</ContextMenuItem>
+        </ContextMenuContent>
+      </ContextMenu>
+    );
+  }
+
+  if (isDevPreview) {
+    const hasUrl = Boolean(terminal.browserUrl && isValidBrowserUrl(terminal.browserUrl));
+    return (
+      <ContextMenu>
+        <ContextMenuTrigger asChild>
+          <div className="contents">{children}</div>
+        </ContextMenuTrigger>
+        <ContextMenuContent>
+          {layoutSection}
+          <ContextMenuSeparator />
+          <ContextMenuItem onSelect={() => handleAction("reload-browser")}>
+            Reload Preview
+          </ContextMenuItem>
+          <ContextMenuItem disabled={!hasUrl} onSelect={() => handleAction("open-external")}>
+            Open in Browser
+          </ContextMenuItem>
+          <ContextMenuItem disabled={!hasUrl} onSelect={() => handleAction("copy-url")}>
+            Copy URL
+          </ContextMenuItem>
+          <ContextMenuSeparator />
+          <ContextMenuItem onSelect={() => handleAction("duplicate")}>
+            Duplicate Dev Preview
+          </ContextMenuItem>
+          <ContextMenuItem onSelect={() => handleAction("rename")}>
+            Rename Dev Preview
+          </ContextMenuItem>
+          <ContextMenuSeparator />
+          <ContextMenuItem onSelect={() => handleAction("trash")}>
+            Close Dev Preview
+          </ContextMenuItem>
+          <ContextMenuItem onSelect={() => handleAction("kill")}>Stop Dev Server</ContextMenuItem>
+        </ContextMenuContent>
+      </ContextMenu>
+    );
+  }
+
+  const showConvertTo = !isPlainTerminal || !!currentAgentId || AGENT_IDS.length > 0;
+
+  const convertToItems = (
+    <>
+      {(!isPlainTerminal || !!currentAgentId) && (
+        <ContextMenuItem onSelect={() => handleAction("convert-to:terminal")}>
+          Terminal
+        </ContextMenuItem>
+      )}
+      {AGENT_IDS.map((agentId) => {
+        const config = getAgentConfig(agentId);
+        if (!config) return null;
+        const isCurrent = currentAgentId === agentId;
+        return (
+          <ContextMenuItem
+            key={agentId}
+            disabled={isCurrent}
+            onSelect={() => handleAction(`convert-to:${agentId}`)}
+          >
+            {config.name}
+          </ContextMenuItem>
+        );
+      })}
+    </>
   );
 
   return (
-    <div onContextMenu={handleContextMenu} className="contents">
-      {children}
-    </div>
+    <ContextMenu>
+      <ContextMenuTrigger asChild>
+        <div className="contents">{children}</div>
+      </ContextMenuTrigger>
+      <ContextMenuContent>
+        {hasPty && (
+          <>
+            <ContextMenuItem onSelect={() => handleAction("copy")}>
+              Copy
+              <ContextMenuShortcut>{modifierKey}C</ContextMenuShortcut>
+            </ContextMenuItem>
+            <ContextMenuItem onSelect={() => handleAction("paste")}>
+              Paste
+              <ContextMenuShortcut>{isMac ? `${modifierKey}V` : "Ctrl+⇧V"}</ContextMenuShortcut>
+            </ContextMenuItem>
+            <ContextMenuSeparator />
+          </>
+        )}
+        {layoutSection}
+        <ContextMenuSeparator />
+        {hasPty && (
+          <ContextMenuItem onSelect={() => handleAction("restart")}>
+            Restart Terminal
+          </ContextMenuItem>
+        )}
+        {hasPty && (
+          <ContextMenuItem onSelect={() => handleAction("redraw")}>Redraw Terminal</ContextMenuItem>
+        )}
+        {isPaused && (
+          <ContextMenuItem onSelect={() => handleAction("force-resume")}>
+            Force Resume (Paused)
+          </ContextMenuItem>
+        )}
+        <ContextMenuItem onSelect={() => handleAction("toggle-input-lock")}>
+          {terminal.isInputLocked ? "Unlock Input" : "Lock Input"}
+        </ContextMenuItem>
+        {terminal.agentId && (
+          <ContextMenuItem onSelect={() => handleAction("toggle-watch")}>
+            {isWatched ? "Cancel Watch" : "Watch Terminal"}
+            <ContextMenuShortcut>{isMac ? "⌘⇧W" : "Ctrl+⇧W"}</ContextMenuShortcut>
+          </ContextMenuItem>
+        )}
+        {showConvertTo && (
+          <ContextMenuSub>
+            <ContextMenuSubTrigger>Convert to</ContextMenuSubTrigger>
+            <ContextMenuSubContent>{convertToItems}</ContextMenuSubContent>
+          </ContextMenuSub>
+        )}
+        <ContextMenuItem disabled>{modifierKey}+Click links to open in Browser</ContextMenuItem>
+        <ContextMenuSeparator />
+        <ContextMenuItem onSelect={() => handleAction("duplicate")}>
+          Duplicate Terminal
+        </ContextMenuItem>
+        <ContextMenuItem onSelect={() => handleAction("rename")}>Rename Terminal</ContextMenuItem>
+        <ContextMenuItem onSelect={() => handleAction("view-info")}>
+          View Terminal Info
+        </ContextMenuItem>
+        <ContextMenuSeparator />
+        <ContextMenuItem onSelect={() => handleAction("trash")}>Trash Terminal</ContextMenuItem>
+        <ContextMenuItem onSelect={() => handleAction("kill")}>Kill Terminal</ContextMenuItem>
+      </ContextMenuContent>
+    </ContextMenu>
   );
 }

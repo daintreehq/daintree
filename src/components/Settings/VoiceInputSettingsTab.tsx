@@ -12,13 +12,22 @@ import {
   Check,
   AlertCircle,
   Loader2,
-  FlaskConical,
   ExternalLink,
+  Sparkles,
+  ChevronDown,
+  ChevronUp,
 } from "lucide-react";
+import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { SettingsSection } from "./SettingsSection";
 import { SettingsSwitchCard } from "./SettingsSwitchCard";
-import type { VoiceInputSettings, MicPermissionStatus } from "@shared/types";
+import { dispatchVoiceInputSettingsChanged } from "@/lib/voiceInputSettingsEvents";
+import { CORE_CORRECTION_PROMPT } from "@shared/config/voiceCorrection";
+import type {
+  VoiceInputSettings,
+  MicPermissionStatus,
+  VoiceTranscriptionModel,
+} from "@shared/types";
 
 const LANGUAGES = [
   { code: "en", label: "English" },
@@ -33,11 +42,33 @@ const LANGUAGES = [
   { code: "ru", label: "Russian" },
 ];
 
+const TRANSCRIPTION_MODELS: {
+  value: VoiceTranscriptionModel;
+  label: string;
+  description: string;
+}[] = [
+  {
+    value: "nova-3",
+    label: "Nova-3",
+    description: "Latest · best accuracy · $0.0077/min",
+  },
+  {
+    value: "nova-2",
+    label: "Nova-2",
+    description: "Stable fallback · $0.0043/min",
+  },
+];
+
 const DEFAULT_SETTINGS: VoiceInputSettings = {
   enabled: false,
-  apiKey: "",
+  deepgramApiKey: "",
+  correctionApiKey: "",
   language: "en",
   customDictionary: [],
+  transcriptionModel: "nova-3",
+  correctionEnabled: false,
+  correctionModel: "gpt-5-nano",
+  correctionCustomInstructions: "",
 };
 
 type LoadState = "loading" | "ready" | "error";
@@ -46,10 +77,6 @@ type ApiKeyValidation = "idle" | "testing" | "valid" | "invalid";
 export function VoiceInputSettingsTab() {
   const [settings, setSettings] = useState<VoiceInputSettings>(DEFAULT_SETTINGS);
   const [loadState, setLoadState] = useState<LoadState>("loading");
-  const [showApiKey, setShowApiKey] = useState(false);
-  const [apiKeyInput, setApiKeyInput] = useState("");
-  const [apiKeyValidation, setApiKeyValidation] = useState<ApiKeyValidation>("idle");
-  const [apiKeyError, setApiKeyError] = useState<string | null>(null);
   const [micPermission, setMicPermission] = useState<MicPermissionStatus>("unknown");
   const [isRequestingMic, setIsRequestingMic] = useState(false);
   const [newDictionaryWord, setNewDictionaryWord] = useState("");
@@ -72,73 +99,16 @@ export function VoiceInputSettingsTab() {
       .catch(() => {});
   }, []);
 
-  useEffect(() => {
-    if (apiKeyValidation !== "valid" && apiKeyValidation !== "invalid") return;
-    const timer = setTimeout(() => {
-      setApiKeyValidation("idle");
-      setApiKeyError(null);
-    }, 5000);
-    return () => clearTimeout(timer);
-  }, [apiKeyValidation]);
-
   const update = (patch: Partial<VoiceInputSettings>) => {
     setSettings((prev) => {
       const next = { ...prev, ...patch };
-      window.electron?.voiceInput?.setSettings(patch).catch(() => setSettings(prev));
+      window.electron?.voiceInput
+        ?.setSettings(patch)
+        .then(() => dispatchVoiceInputSettingsChanged(next))
+        .catch(() => setSettings(prev));
       return next;
     });
   };
-
-  const handleTestApiKey = useCallback(async () => {
-    const key = apiKeyInput.trim() || settings.apiKey;
-    if (!key) return;
-
-    setApiKeyValidation("testing");
-    setApiKeyError(null);
-
-    try {
-      const result = await window.electron?.voiceInput?.validateApiKey(key);
-      if (result?.valid) {
-        setApiKeyValidation("valid");
-      } else {
-        setApiKeyValidation("invalid");
-        setApiKeyError(result?.error || "Invalid API key");
-      }
-    } catch {
-      setApiKeyValidation("invalid");
-      setApiKeyError("Failed to validate API key");
-    }
-  }, [apiKeyInput, settings.apiKey]);
-
-  const handleSaveApiKey = useCallback(async () => {
-    const key = apiKeyInput.trim();
-    if (!key) return;
-
-    setApiKeyValidation("testing");
-    setApiKeyError(null);
-
-    try {
-      const result = await window.electron?.voiceInput?.validateApiKey(key);
-      if (result?.valid) {
-        update({ apiKey: key });
-        setApiKeyInput("");
-        setApiKeyValidation("valid");
-      } else {
-        setApiKeyValidation("invalid");
-        setApiKeyError(result?.error || "Invalid API key");
-      }
-    } catch {
-      setApiKeyValidation("invalid");
-      setApiKeyError("Failed to validate API key");
-    }
-  }, [apiKeyInput]);
-
-  const handleClearApiKey = useCallback(() => {
-    update({ apiKey: "" });
-    setApiKeyInput("");
-    setApiKeyValidation("idle");
-    setApiKeyError(null);
-  }, []);
 
   const handleRequestMicPermission = useCallback(async () => {
     setIsRequestingMic(true);
@@ -194,244 +164,313 @@ export function VoiceInputSettingsTab() {
 
   return (
     <div className="space-y-6">
-      <SettingsSwitchCard
+      {/* ── Speech-to-Text ── */}
+      <SettingsSection
         icon={Mic}
-        title="Voice Input"
-        subtitle="Dictate commands using your microphone via OpenAI Realtime API"
-        isEnabled={settings.enabled}
-        onChange={() => update({ enabled: !settings.enabled })}
-        ariaLabel="Toggle voice input"
-      />
+        title="Speech-to-Text"
+        description="Real-time transcription via Deepgram Nova. Requires a Deepgram API key and microphone access."
+        id="voice-speech-to-text"
+      >
+        <SettingsSwitchCard
+          icon={Mic}
+          title="Voice Input"
+          subtitle="Dictate commands using your microphone"
+          isEnabled={settings.enabled}
+          onChange={() => update({ enabled: !settings.enabled })}
+          ariaLabel="Toggle voice input"
+        />
 
-      {settings.enabled && (
-        <>
-          {/* API Key Section */}
-          <SettingsSection
-            icon={Key}
-            title="OpenAI API Key"
-            description="Required for transcription via the OpenAI Realtime API. Your key is stored locally and never shared."
-          >
-            <div className="space-y-3">
-              <div className="flex items-center justify-between">
-                <span className="text-sm text-canopy-text">
-                  {settings.apiKey ? (
-                    <span className="flex items-center gap-1.5 text-status-success">
-                      <Check className="w-3 h-3" />
-                      API key configured
-                    </span>
-                  ) : (
-                    <span className="text-canopy-text/50">No API key set</span>
-                  )}
-                </span>
-              </div>
-
-              <div className="flex gap-2">
-                <div className="relative flex-1">
-                  <input
-                    type={showApiKey ? "text" : "password"}
-                    value={apiKeyInput}
-                    onChange={(e) => setApiKeyInput(e.target.value)}
-                    placeholder={settings.apiKey ? "Enter new key to replace" : "sk-..."}
-                    className="w-full bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] px-3 py-2 pr-10 font-mono text-sm text-canopy-text placeholder:text-canopy-text/40 focus:outline-none focus:ring-1 focus:ring-canopy-accent"
-                    autoComplete="new-password"
-                    spellCheck={false}
-                    disabled={apiKeyValidation === "testing"}
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setShowApiKey((v) => !v)}
-                    className="absolute right-2 top-1/2 -translate-y-1/2 text-canopy-text/40 hover:text-canopy-text/70"
-                    aria-label={showApiKey ? "Hide API key" : "Show API key"}
-                  >
-                    {showApiKey ? (
-                      <EyeOff className="h-3.5 w-3.5" />
-                    ) : (
-                      <Eye className="h-3.5 w-3.5" />
-                    )}
-                  </button>
-                </div>
-                <Button
-                  onClick={handleTestApiKey}
-                  disabled={
-                    apiKeyValidation === "testing" || (!apiKeyInput.trim() && !settings.apiKey)
-                  }
-                  variant="outline"
-                  size="sm"
-                  className="min-w-[70px] text-canopy-text border-canopy-border hover:bg-canopy-border"
-                >
-                  {apiKeyValidation === "testing" ? (
-                    <Loader2 className="animate-spin" />
-                  ) : (
-                    <>
-                      <FlaskConical />
-                      Test
-                    </>
-                  )}
-                </Button>
-                <Button
-                  onClick={handleSaveApiKey}
-                  disabled={apiKeyValidation === "testing" || !apiKeyInput.trim()}
-                  size="sm"
-                  className="min-w-[70px]"
-                >
-                  {apiKeyValidation === "testing" ? <Loader2 className="animate-spin" /> : "Save"}
-                </Button>
-                {settings.apiKey && (
-                  <Button
-                    onClick={handleClearApiKey}
-                    variant="outline"
-                    size="sm"
-                    className="text-status-error border-canopy-border hover:bg-status-error/10 hover:text-status-error/70 hover:border-status-error/20"
-                  >
-                    Clear
-                  </Button>
-                )}
-              </div>
-
-              {apiKeyValidation === "valid" && (
-                <p className="text-xs text-status-success flex items-center gap-1">
-                  <Check className="w-3 h-3" />
-                  API key is valid
-                </p>
-              )}
-              {apiKeyValidation === "invalid" && (
-                <p className="text-xs text-status-error flex items-center gap-1">
-                  <AlertCircle className="w-3 h-3" />
-                  {apiKeyError || "Invalid API key"}
-                </p>
-              )}
-            </div>
-
-            <div className="mt-4 space-y-3 rounded-[var(--radius-lg)] border border-canopy-border bg-surface p-4">
-              <h4 className="text-sm font-medium text-canopy-text">Get an API Key</h4>
-              <p className="text-xs text-canopy-text/60">
-                Create an OpenAI API key with access to the Realtime API. Voice input uses the{" "}
-                <code className="text-canopy-text bg-canopy-bg px-1 rounded">gpt-4o-realtime</code>{" "}
-                model for low-latency transcription.
-              </p>
-              <Button
-                onClick={() =>
-                  window.electron?.system?.openExternal("https://platform.openai.com/api-keys")
-                }
-                variant="outline"
-                size="sm"
-                className="text-canopy-text border-canopy-border hover:bg-canopy-border"
-              >
-                <ExternalLink />
-                Open OpenAI Dashboard
-              </Button>
-            </div>
-          </SettingsSection>
-
-          {/* Microphone Permission */}
-          <SettingsSection
-            icon={Shield}
-            title="Microphone Permission"
-            description="Canopy needs microphone access to capture audio for transcription."
-          >
-            <MicPermissionCard
+        {settings.enabled && (
+          <div className="space-y-4">
+            <MicPermissionRow
               status={micPermission}
               isRequesting={isRequestingMic}
               onRequest={handleRequestMicPermission}
               onOpenSettings={handleOpenMicSettings}
               onRefresh={handleRefreshMicPermission}
             />
-          </SettingsSection>
 
-          {/* Language */}
-          <SettingsSection
-            icon={Globe}
-            title="Language"
-            description="Select the primary language for transcription. Setting a language reduces latency and improves accuracy."
-          >
-            <select
-              value={settings.language}
-              onChange={(e) => update({ language: e.target.value })}
-              className="w-full max-w-xs bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] px-3 py-2 text-sm text-canopy-text focus:outline-none focus:ring-1 focus:ring-canopy-accent"
-            >
-              {LANGUAGES.map(({ code, label }) => (
-                <option key={code} value={code}>
-                  {label}
-                </option>
-              ))}
-            </select>
-          </SettingsSection>
+            <ApiKeyRow
+              label="Deepgram API Key"
+              value={settings.deepgramApiKey}
+              placeholder="dg_..."
+              onSave={(key) => update({ deepgramApiKey: key })}
+              onValidate={(key) => window.electron?.voiceInput?.validateApiKey(key)}
+              helpUrl="https://console.deepgram.com/project/api-keys"
+              helpLabel="Get API key"
+            />
 
-          {/* Custom Dictionary */}
-          <div className="space-y-4">
-            <div>
-              <h4 className="text-sm font-medium text-canopy-text mb-2 flex items-center gap-2">
-                <BookText className="w-4 h-4 text-canopy-text/70" aria-hidden="true" />
-                Custom Dictionary
-              </h4>
-              <p className="text-xs text-canopy-text/50 mb-4">
-                Add domain-specific terms, project names, and technical abbreviations to improve
-                transcription accuracy.
-              </p>
-            </div>
+            <SettingsRow label="Language" icon={Globe}>
+              <select
+                value={settings.language}
+                onChange={(e) => update({ language: e.target.value })}
+                className="bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-canopy-text focus:outline-none focus:border-canopy-accent transition-colors"
+              >
+                {LANGUAGES.map(({ code, label }) => (
+                  <option key={code} value={code}>
+                    {label}
+                  </option>
+                ))}
+              </select>
+            </SettingsRow>
 
-            <div className="rounded-[var(--radius-lg)] border border-canopy-border bg-surface p-4 space-y-4">
-              <div className="flex gap-2">
-                <input
-                  ref={dictionaryInputRef}
-                  type="text"
-                  value={newDictionaryWord}
-                  onChange={(e) => setNewDictionaryWord(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") {
-                      e.preventDefault();
-                      addDictionaryWord();
-                    }
-                  }}
-                  placeholder="Add term…"
-                  className="flex-1 bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] px-3 py-2 text-sm text-canopy-text placeholder:text-canopy-text/40 focus:outline-none focus:ring-1 focus:ring-canopy-accent"
-                />
-                <Button
-                  onClick={addDictionaryWord}
-                  disabled={!newDictionaryWord.trim()}
-                  size="sm"
-                  variant="outline"
-                  className="text-canopy-text border-canopy-border hover:bg-canopy-border"
-                >
-                  <Plus className="h-3.5 w-3.5" />
-                  Add
-                </Button>
-              </div>
+            <SettingsRow label="Transcription Model" icon={Mic}>
+              <select
+                value={settings.transcriptionModel}
+                onChange={(e) =>
+                  update({ transcriptionModel: e.target.value as VoiceTranscriptionModel })
+                }
+                className="bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-canopy-text focus:outline-none focus:border-canopy-accent transition-colors"
+              >
+                {TRANSCRIPTION_MODELS.map(({ value, label, description }) => (
+                  <option key={value} value={value}>
+                    {label} — {description}
+                  </option>
+                ))}
+              </select>
+            </SettingsRow>
 
-              {settings.customDictionary.length > 0 ? (
-                <div className="flex flex-wrap gap-1.5">
-                  {settings.customDictionary.map((word) => (
-                    <span
-                      key={word}
-                      className="inline-flex items-center gap-1.5 rounded-[var(--radius-md)] border border-canopy-border bg-canopy-bg px-2.5 py-1 text-xs text-canopy-text"
-                    >
-                      {word}
-                      <button
-                        type="button"
-                        onClick={() => removeDictionaryWord(word)}
-                        className="text-canopy-text/40 hover:text-canopy-text/80 transition-colors"
-                        aria-label={`Remove ${word}`}
-                      >
-                        <X className="h-3 w-3" />
-                      </button>
-                    </span>
-                  ))}
-                </div>
-              ) : (
-                <p className="text-xs text-canopy-text/40">
-                  No custom terms added. Terms like project names, framework abbreviations, or
-                  domain-specific vocabulary help the transcription model understand your speech.
-                </p>
+            <DictionarySection
+              words={settings.customDictionary}
+              newWord={newDictionaryWord}
+              onNewWordChange={setNewDictionaryWord}
+              onAdd={addDictionaryWord}
+              onRemove={removeDictionaryWord}
+              inputRef={dictionaryInputRef}
+            />
+          </div>
+        )}
+      </SettingsSection>
+
+      {/* ── AI Text Correction ── */}
+      {settings.enabled && (
+        <SettingsSection
+          icon={Sparkles}
+          title="AI Text Correction"
+          description="Post-process transcriptions with GPT-5 Nano to fix technical terms, punctuation, and filler words. Optional."
+          id="voice-ai-correction"
+        >
+          <SettingsSwitchCard
+            icon={Sparkles}
+            title="AI Text Correction"
+            subtitle="Clean up transcriptions automatically after dictation"
+            isEnabled={settings.correctionEnabled}
+            onChange={() => update({ correctionEnabled: !settings.correctionEnabled })}
+            ariaLabel="Toggle AI text correction"
+          />
+
+          {settings.correctionEnabled && (
+            <div className="space-y-4">
+              <ApiKeyRow
+                label="OpenAI API Key"
+                value={settings.correctionApiKey}
+                placeholder="sk-..."
+                onSave={(key) => update({ correctionApiKey: key })}
+                onValidate={(key) => window.electron?.voiceInput?.validateCorrectionApiKey(key)}
+                helpUrl="https://platform.openai.com/api-keys"
+                helpLabel="Get API key"
+              />
+
+              {settings.correctionApiKey && (
+                <>
+                  <CustomInstructionsRow
+                    value={settings.correctionCustomInstructions}
+                    onChange={(v) => update({ correctionCustomInstructions: v })}
+                  />
+
+                  <CorePromptViewer />
+
+                  <p className="text-xs text-canopy-text/40">
+                    Your project name and custom dictionary are included automatically. Prompt
+                    caching keeps costs minimal.
+                  </p>
+                </>
               )}
             </div>
-          </div>
-        </>
+          )}
+        </SettingsSection>
       )}
     </div>
   );
 }
 
-interface MicPermissionCardProps {
+// ── Shared row component ──
+
+function SettingsRow({
+  label,
+  icon: Icon,
+  children,
+}: {
+  label: string;
+  icon: typeof Globe;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="flex items-center justify-between gap-4">
+      <label className="text-sm text-canopy-text/70 flex items-center gap-2 shrink-0">
+        <Icon className="w-3.5 h-3.5 text-canopy-text/50" aria-hidden="true" />
+        {label}
+      </label>
+      {children}
+    </div>
+  );
+}
+
+// ── API key row ──
+
+interface ApiKeyRowProps {
+  label: string;
+  value: string;
+  placeholder: string;
+  onSave: (key: string) => void;
+  onValidate: (key: string) => Promise<{ valid: boolean; error?: string } | undefined> | undefined;
+  helpUrl: string;
+  helpLabel: string;
+}
+
+function ApiKeyRow({
+  label,
+  value,
+  placeholder,
+  onSave,
+  onValidate,
+  helpUrl,
+  helpLabel,
+}: ApiKeyRowProps) {
+  const [showKey, setShowKey] = useState(false);
+  const [keyInput, setKeyInput] = useState("");
+  const [validation, setValidation] = useState<ApiKeyValidation>("idle");
+  const [validationError, setValidationError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (validation !== "valid" && validation !== "invalid") return;
+    const timer = setTimeout(() => {
+      setValidation("idle");
+      setValidationError(null);
+    }, 5000);
+    return () => clearTimeout(timer);
+  }, [validation]);
+
+  const handleSave = useCallback(async () => {
+    const key = keyInput.trim();
+    if (!key) return;
+    setValidation("testing");
+    setValidationError(null);
+    try {
+      const result = await onValidate(key);
+      if (result?.valid) {
+        onSave(key);
+        setKeyInput("");
+        setValidation("valid");
+      } else {
+        setValidation("invalid");
+        setValidationError(result?.error || "Invalid API key");
+      }
+    } catch {
+      setValidation("invalid");
+      setValidationError("Failed to validate API key");
+    }
+  }, [keyInput, onSave, onValidate]);
+
+  const handleClear = useCallback(() => {
+    onSave("");
+    setKeyInput("");
+    setValidation("idle");
+    setValidationError(null);
+  }, [onSave]);
+
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center justify-between">
+        <label className="text-sm text-canopy-text/70 flex items-center gap-2">
+          <Key className="w-3.5 h-3.5 text-canopy-text/50" aria-hidden="true" />
+          {label}
+        </label>
+        <div className="flex items-center gap-2">
+          {value ? (
+            <span className="flex items-center gap-1 text-xs text-status-success">
+              <Check className="w-3 h-3" />
+              Configured
+            </span>
+          ) : (
+            <button
+              onClick={() => window.electron?.system?.openExternal(helpUrl)}
+              className="text-xs text-canopy-accent hover:underline flex items-center gap-1"
+            >
+              {helpLabel}
+              <ExternalLink className="w-3 h-3" />
+            </button>
+          )}
+        </div>
+      </div>
+
+      <div className="flex gap-2">
+        <div className="relative flex-1">
+          <input
+            type={showKey ? "text" : "password"}
+            value={keyInput}
+            onChange={(e) => setKeyInput(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                void handleSave();
+              }
+            }}
+            placeholder={value ? "Enter new key to replace" : placeholder}
+            className="w-full bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] px-3 py-1.5 pr-8 font-mono text-sm text-canopy-text placeholder:text-canopy-text/40 focus:outline-none focus:border-canopy-accent transition-colors"
+            autoComplete="new-password"
+            spellCheck={false}
+            disabled={validation === "testing"}
+          />
+          <button
+            type="button"
+            onClick={() => setShowKey((v) => !v)}
+            className="absolute right-2 top-1/2 -translate-y-1/2 text-canopy-text/40 hover:text-canopy-text/70"
+            aria-label={showKey ? "Hide API key" : "Show API key"}
+          >
+            {showKey ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+          </button>
+        </div>
+        <Button
+          onClick={() => void handleSave()}
+          disabled={validation === "testing" || !keyInput.trim()}
+          size="sm"
+          variant="outline"
+          className="text-canopy-text border-canopy-border hover:bg-canopy-border"
+        >
+          {validation === "testing" ? <Loader2 className="animate-spin w-3.5 h-3.5" /> : "Save"}
+        </Button>
+        {value && (
+          <Button
+            onClick={handleClear}
+            variant="outline"
+            size="sm"
+            className="text-canopy-text/50 border-canopy-border hover:text-status-error hover:border-status-error/30"
+          >
+            Clear
+          </Button>
+        )}
+      </div>
+
+      {validation === "valid" && (
+        <p className="text-xs text-status-success flex items-center gap-1">
+          <Check className="w-3 h-3" />
+          API key is valid
+        </p>
+      )}
+      {validation === "invalid" && (
+        <p className="text-xs text-status-error flex items-center gap-1">
+          <AlertCircle className="w-3 h-3" />
+          {validationError || "Invalid API key"}
+        </p>
+      )}
+    </div>
+  );
+}
+
+// ── Microphone permission row ──
+
+interface MicPermissionRowProps {
   status: MicPermissionStatus;
   isRequesting: boolean;
   onRequest: () => void;
@@ -439,146 +478,259 @@ interface MicPermissionCardProps {
   onRefresh: () => void;
 }
 
-function MicPermissionCard({
+function MicPermissionRow({
   status,
   isRequesting,
   onRequest,
   onOpenSettings,
   onRefresh,
-}: MicPermissionCardProps) {
+}: MicPermissionRowProps) {
   const ua = navigator.userAgent;
   const isMac = ua.includes("Mac OS X");
   const isWindows = ua.includes("Windows");
   const appName = process.env.NODE_ENV === "development" ? "Electron" : "Canopy";
 
-  if (status === "granted") {
-    return (
-      <div className="flex items-center justify-between p-3 rounded-[var(--radius-md)] bg-status-success/10 border border-status-success/20">
-        <div className="flex items-center gap-2">
-          <div className="w-2 h-2 rounded-full bg-status-success" />
-          <span className="text-sm text-canopy-text">Microphone access granted</span>
-        </div>
-        <Button
-          size="sm"
-          variant="ghost"
-          onClick={onRefresh}
-          className="text-canopy-text/50 hover:text-canopy-text"
-        >
-          Re-check
-        </Button>
-      </div>
-    );
-  }
-
-  if (status === "denied" || status === "restricted") {
-    const settingsPath = isMac
-      ? `System Settings → Privacy & Security → Microphone → enable ${appName}`
-      : isWindows
-        ? "Windows Settings → Privacy & security → Microphone → allow desktop app access"
-        : "your system audio settings";
-
-    return (
-      <div className="space-y-3">
-        <div className="flex items-start gap-3 p-3 rounded-[var(--radius-md)] bg-status-error/10 border border-status-error/20">
-          <AlertCircle className="w-4 h-4 text-status-error shrink-0 mt-0.5" />
-          <div>
-            <span className="text-sm text-canopy-text">
-              Microphone access {status === "restricted" ? "restricted" : "denied"}
-            </span>
-            <p className="text-xs text-canopy-text/60 mt-0.5">
-              Open {settingsPath} to grant access.
-            </p>
-          </div>
-        </div>
-        <div className="flex gap-2">
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={onOpenSettings}
-            className="text-canopy-text border-canopy-border hover:bg-canopy-border"
-          >
-            <ExternalLink className="w-3.5 h-3.5" />
-            Open {isMac ? "System Settings" : isWindows ? "Windows Settings" : "System Settings"}
-          </Button>
-          <Button
-            size="sm"
-            variant="ghost"
-            onClick={onRefresh}
-            className="text-canopy-text/50 hover:text-canopy-text"
-          >
-            Re-check
-          </Button>
-        </div>
-      </div>
-    );
-  }
-
-  if (status === "not-determined") {
-    return (
-      <div className="space-y-3">
-        <div className="flex items-center gap-2 p-3 rounded-[var(--radius-md)] bg-canopy-bg border border-canopy-border">
-          <div className="w-2 h-2 rounded-full bg-status-warning" />
-          <span className="text-sm text-canopy-text">Microphone permission not yet requested</span>
-        </div>
-        <div className="flex gap-2">
-          {(isMac || isWindows) && (
-            <Button size="sm" onClick={onRequest} disabled={isRequesting} className="min-w-[140px]">
-              {isRequesting ? (
-                <Loader2 className="animate-spin" />
-              ) : (
-                <>
-                  <Mic className="w-3.5 h-3.5" />
-                  Request Permission
-                </>
+  const statusDisplay = (() => {
+    switch (status) {
+      case "granted":
+        return {
+          dot: "bg-status-success",
+          text: "Microphone access granted",
+          actions: (
+            <button
+              onClick={onRefresh}
+              className="text-xs text-canopy-text/40 hover:text-canopy-text/70 transition-colors"
+            >
+              Re-check
+            </button>
+          ),
+        };
+      case "denied":
+      case "restricted": {
+        const settingsLabel = isMac
+          ? "System Settings"
+          : isWindows
+            ? "Windows Settings"
+            : "System Settings";
+        const settingsPath = isMac
+          ? `System Settings → Privacy & Security → Microphone → enable ${appName}`
+          : isWindows
+            ? "Windows Settings → Privacy & security → Microphone → allow desktop app access"
+            : "your system audio settings";
+        return {
+          dot: "bg-status-error",
+          text: `Microphone ${status === "restricted" ? "restricted" : "denied"}`,
+          description: `Open ${settingsPath}`,
+          actions: (
+            <div className="flex gap-2">
+              <button
+                onClick={onOpenSettings}
+                className="text-xs text-canopy-accent hover:underline flex items-center gap-1"
+              >
+                Open {settingsLabel}
+                <ExternalLink className="w-3 h-3" />
+              </button>
+              <button
+                onClick={onRefresh}
+                className="text-xs text-canopy-text/40 hover:text-canopy-text/70 transition-colors"
+              >
+                Re-check
+              </button>
+            </div>
+          ),
+        };
+      }
+      case "not-determined":
+        return {
+          dot: "bg-status-warning",
+          text: "Microphone permission not yet requested",
+          actions: (
+            <div className="flex gap-2">
+              {(isMac || isWindows) && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={onRequest}
+                  disabled={isRequesting}
+                  className="text-canopy-text border-canopy-border hover:bg-canopy-border"
+                >
+                  {isRequesting ? (
+                    <Loader2 className="animate-spin w-3.5 h-3.5" />
+                  ) : (
+                    <>
+                      <Mic className="w-3.5 h-3.5" />
+                      Request
+                    </>
+                  )}
+                </Button>
               )}
-            </Button>
-          )}
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={onOpenSettings}
-            className="text-canopy-text border-canopy-border hover:bg-canopy-border"
-          >
-            <ExternalLink className="w-3.5 h-3.5" />
-            Open {isMac ? "System Settings" : isWindows ? "Windows Settings" : "System Settings"}
-          </Button>
-        </div>
-      </div>
-    );
-  }
+            </div>
+          ),
+        };
+      default:
+        return {
+          dot: "bg-canopy-text/30",
+          text: "Microphone status unknown",
+          description: "Permission will be requested when you start recording.",
+          actions: (
+            <button
+              onClick={onRefresh}
+              className="text-xs text-canopy-text/40 hover:text-canopy-text/70 transition-colors"
+            >
+              Re-check
+            </button>
+          ),
+        };
+    }
+  })();
 
-  // unknown status (e.g. Linux, or failed to check)
   return (
-    <div className="space-y-3">
-      <div className="flex items-center gap-2 p-3 rounded-[var(--radius-md)] bg-canopy-bg border border-canopy-border">
-        <div className="w-2 h-2 rounded-full bg-canopy-text/30" />
-        <span className="text-sm text-canopy-text/70">
-          Could not determine microphone permission status
-        </span>
+    <div className="space-y-1">
+      <div className="flex items-center justify-between gap-4">
+        <div className="flex items-center gap-2">
+          <Shield className="w-3.5 h-3.5 text-canopy-text/50" aria-hidden="true" />
+          <span className="text-sm text-canopy-text/70">Microphone</span>
+          <span className={cn("w-2 h-2 rounded-full shrink-0", statusDisplay.dot)} />
+          <span className="text-xs text-canopy-text/50">{statusDisplay.text}</span>
+        </div>
+        {statusDisplay.actions}
       </div>
-      <p className="text-xs text-canopy-text/50">
-        Microphone access will be requested when you start recording. If recording fails, check your
-        system&apos;s audio settings to ensure microphone access is enabled.
-      </p>
+      {statusDisplay.description && (
+        <p className="text-xs text-canopy-text/40 ml-[22px]">{statusDisplay.description}</p>
+      )}
+    </div>
+  );
+}
+
+// ── Dictionary section ──
+
+function DictionarySection({
+  words,
+  newWord,
+  onNewWordChange,
+  onAdd,
+  onRemove,
+  inputRef,
+}: {
+  words: string[];
+  newWord: string;
+  onNewWordChange: (v: string) => void;
+  onAdd: () => void;
+  onRemove: (word: string) => void;
+  inputRef: React.RefObject<HTMLInputElement | null>;
+}) {
+  return (
+    <div className="space-y-2">
+      <label className="text-sm text-canopy-text/70 flex items-center gap-2">
+        <BookText className="w-3.5 h-3.5 text-canopy-text/50" aria-hidden="true" />
+        Custom Dictionary
+        <span className="text-xs text-canopy-text/30">
+          {words.length > 0 && `${words.length}/100`}
+        </span>
+      </label>
+
       <div className="flex gap-2">
+        <input
+          ref={inputRef}
+          type="text"
+          value={newWord}
+          onChange={(e) => onNewWordChange(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              onAdd();
+            }
+          }}
+          placeholder="Add term…"
+          className="flex-1 bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-canopy-text placeholder:text-canopy-text/40 focus:outline-none focus:border-canopy-accent transition-colors"
+        />
         <Button
+          onClick={onAdd}
+          disabled={!newWord.trim()}
           size="sm"
           variant="outline"
-          onClick={onOpenSettings}
           className="text-canopy-text border-canopy-border hover:bg-canopy-border"
         >
-          <ExternalLink className="w-3.5 h-3.5" />
-          Open System Settings
-        </Button>
-        <Button
-          size="sm"
-          variant="ghost"
-          onClick={onRefresh}
-          className="text-canopy-text/50 hover:text-canopy-text"
-        >
-          Re-check
+          <Plus className="h-3.5 w-3.5" />
+          Add
         </Button>
       </div>
+
+      {words.length > 0 ? (
+        <div className="flex flex-wrap gap-1.5">
+          {words.map((word) => (
+            <span
+              key={word}
+              className="inline-flex items-center gap-1 rounded-full border border-canopy-border bg-canopy-bg px-2.5 py-0.5 text-xs text-canopy-text"
+            >
+              {word}
+              <button
+                type="button"
+                onClick={() => onRemove(word)}
+                className="text-canopy-text/30 hover:text-canopy-text/70 transition-colors"
+                aria-label={`Remove ${word}`}
+              >
+                <X className="h-2.5 w-2.5" />
+              </button>
+            </span>
+          ))}
+        </div>
+      ) : (
+        <p className="text-xs text-canopy-text/40">
+          Domain-specific terms sent to Deepgram to boost recognition accuracy.
+        </p>
+      )}
+    </div>
+  );
+}
+
+// ── Custom instructions row ──
+
+function CustomInstructionsRow({
+  value,
+  onChange,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+}) {
+  return (
+    <div className="space-y-2">
+      <label className="text-sm text-canopy-text/70">Custom Instructions</label>
+      <textarea
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        rows={3}
+        placeholder='e.g., "Always capitalize ProductName as one word"'
+        className="w-full bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] px-3 py-2 text-xs font-mono text-canopy-text placeholder:text-canopy-text/30 focus:outline-none focus:border-canopy-accent transition-colors resize-y"
+        spellCheck={false}
+      />
+      <p className="text-xs text-canopy-text/40">
+        Project-specific rules appended to the core correction prompt.
+      </p>
+    </div>
+  );
+}
+
+// ── Core prompt viewer ──
+
+function CorePromptViewer() {
+  const [expanded, setExpanded] = useState(false);
+
+  return (
+    <div className="space-y-1">
+      <button
+        type="button"
+        onClick={() => setExpanded((v) => !v)}
+        className="flex items-center gap-1.5 text-xs text-canopy-text/40 hover:text-canopy-text/60 transition-colors"
+      >
+        {expanded ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+        Inspect core prompt
+      </button>
+      {expanded && (
+        <pre className="bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] px-3 py-2 text-xs font-mono text-canopy-text/50 whitespace-pre-wrap overflow-y-auto max-h-48">
+          {CORE_CORRECTION_PROMPT}
+        </pre>
+      )}
     </div>
   );
 }

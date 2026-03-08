@@ -158,7 +158,7 @@ export function EditorIntegrationTab() {
               <select
                 value={selectedId}
                 onChange={(e) => setSelectedId(e.target.value as KnownEditorId)}
-                className="flex-1 bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] px-3 py-2 text-sm text-canopy-text focus:outline-none focus:ring-1 focus:ring-canopy-accent"
+                className="flex-1 bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-canopy-text focus:outline-none focus:border-canopy-accent transition-colors"
               >
                 {ORDERED_KNOWN_IDS.map((id) => {
                   const disc = availabilityMap.get(id);
@@ -216,7 +216,7 @@ export function EditorIntegrationTab() {
                   value={customCommand}
                   onChange={(e) => setCustomCommand(e.target.value)}
                   placeholder="e.g. code, nvim, subl"
-                  className="w-full bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] px-3 py-2 text-sm text-canopy-text focus:outline-none focus:ring-1 focus:ring-canopy-accent font-mono"
+                  className="w-full bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-canopy-text focus:outline-none focus:border-canopy-accent transition-colors font-mono"
                 />
               </div>
               <div className="space-y-1">
@@ -226,7 +226,7 @@ export function EditorIntegrationTab() {
                   value={customTemplate}
                   onChange={(e) => setCustomTemplate(e.target.value)}
                   placeholder="{file}:{line}:{col}"
-                  className="w-full bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] px-3 py-2 text-sm text-canopy-text focus:outline-none focus:ring-1 focus:ring-canopy-accent font-mono"
+                  className="w-full bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-canopy-text focus:outline-none focus:border-canopy-accent transition-colors font-mono"
                 />
                 <p className="text-xs text-canopy-text/40">
                   Use <code className="font-mono">{"{file}"}</code>,{" "}

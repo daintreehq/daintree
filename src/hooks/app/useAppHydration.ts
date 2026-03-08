@@ -28,12 +28,12 @@ export interface HydrationCallbacks {
   hydrateMru?: (list: string[]) => void;
 }
 
-export function useAppHydration(callbacks: HydrationCallbacks) {
+export function useAppHydration(callbacks: HydrationCallbacks, enabled = true) {
   const [isStateLoaded, setIsStateLoaded] = useState(false);
   const hasRestoredState = useRef(false);
 
   useEffect(() => {
-    if (!isElectronAvailable() || hasRestoredState.current) {
+    if (!isElectronAvailable() || hasRestoredState.current || !enabled) {
       return;
     }
 
@@ -51,6 +51,7 @@ export function useAppHydration(callbacks: HydrationCallbacks) {
 
     restoreState();
   }, [
+    enabled,
     callbacks.addTerminal,
     callbacks.setActiveWorktree,
     callbacks.loadRecipes,

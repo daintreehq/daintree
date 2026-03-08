@@ -27,10 +27,17 @@ import {
   AlertCircle,
   PackagePlus,
   Bell,
+  Mic,
+  LayoutGrid,
+  Rocket,
+  RotateCcw,
 } from "lucide-react";
 import { ClaudeIcon, GeminiIcon, CodexIcon, OpenCodeIcon } from "@/components/icons";
 import { useToolbarPreferencesStore } from "@/store";
 import type { ToolbarButtonId } from "@/../../shared/types/domain";
+import { cn } from "@/lib/utils";
+import { SettingsSection } from "./SettingsSection";
+import { SettingsCheckbox } from "./SettingsCheckbox";
 
 type ButtonMetadata = { label: string; icon: React.ReactNode; description: string };
 
@@ -74,6 +81,11 @@ const BUTTON_METADATA: Partial<Record<ToolbarButtonId, ButtonMetadata>> = {
     label: "Dev Server",
     icon: <Monitor className="h-4 w-4" />,
     description: "Start development server",
+  },
+  "voice-recording": {
+    label: "Voice Recording",
+    icon: <Mic className="h-4 w-4" />,
+    description: "Persistent dictation indicator shown while recording is active",
   },
   "github-stats": {
     label: "GitHub Stats",
@@ -131,16 +143,16 @@ function SortableButtonItem({ buttonId, isVisible, onToggle }: SortableButtonIte
     <div
       ref={setNodeRef}
       style={style}
-      className="flex items-center gap-3 p-3 rounded-lg border border-divider bg-canopy-sidebar/30"
+      className="flex items-center gap-3 p-3 rounded-[var(--radius-md)] border border-canopy-border bg-canopy-bg/30"
     >
       <div {...attributes} {...listeners} className="cursor-grab active:cursor-grabbing">
-        <GripVertical className="h-4 w-4 text-muted-foreground" />
+        <GripVertical className="h-4 w-4 text-canopy-text/50" />
       </div>
       <div className="flex items-center gap-2 flex-1">
         <div className="text-canopy-text">{metadata.icon}</div>
         <div className="flex-1">
           <div className="text-sm font-medium text-canopy-text">{metadata.label}</div>
-          <div className="text-xs text-muted-foreground">{metadata.description}</div>
+          <div className="text-xs text-canopy-text/50">{metadata.description}</div>
         </div>
       </div>
       <input
@@ -148,7 +160,7 @@ function SortableButtonItem({ buttonId, isVisible, onToggle }: SortableButtonIte
         checked={isVisible}
         onChange={() => onToggle(buttonId)}
         aria-label={`Toggle ${metadata.label} visibility`}
-        className="w-4 h-4 rounded border-divider bg-canopy-sidebar text-canopy-accent focus:ring-canopy-accent focus:ring-2"
+        className="w-4 h-4 rounded border-canopy-border bg-canopy-bg text-canopy-accent focus:ring-canopy-accent focus:ring-2"
       />
     </div>
   );
@@ -227,157 +239,131 @@ export function ToolbarSettingsTab() {
   );
 
   return (
-    <div className="space-y-6 overflow-y-auto pr-2">
-      <div>
-        <h2 className="text-lg font-semibold text-canopy-text mb-1">Toolbar Customization</h2>
-        <p className="text-sm text-muted-foreground">
-          Configure which buttons appear in the toolbar and their order. Drag to reorder, uncheck to
-          hide.
-        </p>
-      </div>
+    <div className="space-y-6">
+      <SettingsSection
+        icon={LayoutGrid}
+        title="Left Side Buttons"
+        description={`Drag to reorder, uncheck to hide. ${layout.leftButtons.length} buttons configured.`}
+      >
+        <DndContext
+          sensors={sensors}
+          collisionDetection={closestCenter}
+          onDragEnd={handleLeftDragEnd}
+        >
+          <SortableContext items={layout.leftButtons} strategy={verticalListSortingStrategy}>
+            <div className="space-y-2">
+              {layout.leftButtons.map((buttonId) => (
+                <SortableButtonItem
+                  key={buttonId}
+                  buttonId={buttonId}
+                  isVisible={layout.leftButtons.includes(buttonId)}
+                  onToggle={handleToggleLeft}
+                />
+              ))}
+            </div>
+          </SortableContext>
+        </DndContext>
+      </SettingsSection>
 
-      <div className="space-y-6">
-        <div>
-          <div className="flex items-center justify-between mb-3">
-            <label className="text-sm font-medium text-canopy-text">Left Side Buttons</label>
-            <span className="text-xs text-muted-foreground">
-              {layout.leftButtons.length} buttons
-            </span>
+      <SettingsSection
+        icon={LayoutGrid}
+        title="Right Side Buttons"
+        description={`Drag to reorder, uncheck to hide. ${layout.rightButtons.length} buttons configured.`}
+      >
+        <DndContext
+          sensors={sensors}
+          collisionDetection={closestCenter}
+          onDragEnd={handleRightDragEnd}
+        >
+          <SortableContext items={layout.rightButtons} strategy={verticalListSortingStrategy}>
+            <div className="space-y-2">
+              {layout.rightButtons.map((buttonId) => (
+                <SortableButtonItem
+                  key={buttonId}
+                  buttonId={buttonId}
+                  isVisible={layout.rightButtons.includes(buttonId)}
+                  onToggle={handleToggleRight}
+                />
+              ))}
+            </div>
+          </SortableContext>
+        </DndContext>
+      </SettingsSection>
+
+      <SettingsSection
+        icon={Rocket}
+        title="Launcher Palette"
+        description="Configure defaults for the panel launcher palette."
+      >
+        <div className="space-y-4">
+          <SettingsCheckbox
+            id="always-show-dev-server"
+            label="Always show dev server in launcher"
+            description="Show dev server option even if no command is configured in project settings"
+            checked={launcher.alwaysShowDevServer}
+            onChange={(v) => setAlwaysShowDevServer(v)}
+          />
+
+          <div className="space-y-2">
+            <label className="text-sm font-medium text-canopy-text block">Default selection</label>
+            <select
+              value={launcher.defaultSelection ?? ""}
+              onChange={(e) =>
+                setDefaultSelection(
+                  e.target.value ? (e.target.value as typeof launcher.defaultSelection) : undefined
+                )
+              }
+              className="w-full px-3 py-1.5 text-sm rounded-[var(--radius-md)] border border-canopy-border bg-canopy-bg text-canopy-text focus:border-canopy-accent focus:outline-none transition-colors"
+            >
+              <option value="">None (first available)</option>
+              <option value="terminal">Terminal</option>
+              <option value="claude">Claude</option>
+              <option value="gemini">Gemini</option>
+              <option value="codex">Codex</option>
+              <option value="opencode">OpenCode</option>
+              <option value="browser">Browser</option>
+              <option value="dev-server">Dev Server</option>
+            </select>
+            <p className="text-xs text-canopy-text/40">
+              Default option to highlight when opening the launcher palette
+            </p>
           </div>
-          <DndContext
-            sensors={sensors}
-            collisionDetection={closestCenter}
-            onDragEnd={handleLeftDragEnd}
-          >
-            <SortableContext items={layout.leftButtons} strategy={verticalListSortingStrategy}>
-              <div className="space-y-2">
-                {layout.leftButtons.map((buttonId) => (
-                  <SortableButtonItem
-                    key={buttonId}
-                    buttonId={buttonId}
-                    isVisible={layout.leftButtons.includes(buttonId)}
-                    onToggle={handleToggleLeft}
-                  />
-                ))}
-              </div>
-            </SortableContext>
-          </DndContext>
-        </div>
 
-        <div>
-          <div className="flex items-center justify-between mb-3">
-            <label className="text-sm font-medium text-canopy-text">Right Side Buttons</label>
-            <span className="text-xs text-muted-foreground">
-              {layout.rightButtons.length} buttons
-            </span>
-          </div>
-          <DndContext
-            sensors={sensors}
-            collisionDetection={closestCenter}
-            onDragEnd={handleRightDragEnd}
-          >
-            <SortableContext items={layout.rightButtons} strategy={verticalListSortingStrategy}>
-              <div className="space-y-2">
-                {layout.rightButtons.map((buttonId) => (
-                  <SortableButtonItem
-                    key={buttonId}
-                    buttonId={buttonId}
-                    isVisible={layout.rightButtons.includes(buttonId)}
-                    onToggle={handleToggleRight}
-                  />
-                ))}
-              </div>
-            </SortableContext>
-          </DndContext>
-        </div>
-
-        <div className="border-t border-divider pt-6">
-          <h3 className="text-sm font-medium text-canopy-text mb-3">Launcher Palette</h3>
-          <div className="space-y-4">
-            <div className="flex items-start gap-3">
-              <input
-                type="checkbox"
-                id="always-show-dev-server"
-                checked={launcher.alwaysShowDevServer}
-                onChange={(e) => setAlwaysShowDevServer(e.target.checked)}
-                className="w-4 h-4 mt-0.5 rounded border-divider bg-canopy-sidebar text-canopy-accent focus:ring-canopy-accent focus:ring-2"
-              />
-              <div className="flex-1">
-                <label
-                  htmlFor="always-show-dev-server"
-                  className="text-sm font-medium text-canopy-text cursor-pointer"
-                >
-                  Always show dev server in launcher
-                </label>
-                <p className="text-xs text-muted-foreground mt-0.5">
-                  Show dev server option even if no command is configured in project settings
-                </p>
-              </div>
-            </div>
-
-            <div>
-              <label className="text-sm font-medium text-canopy-text mb-2 block">
-                Default selection
-              </label>
-              <select
-                value={launcher.defaultSelection ?? ""}
-                onChange={(e) =>
-                  setDefaultSelection(
-                    e.target.value
-                      ? (e.target.value as typeof launcher.defaultSelection)
-                      : undefined
-                  )
-                }
-                className="w-full px-3 py-2 text-sm rounded-lg border border-divider bg-canopy-sidebar/30 text-canopy-text"
-              >
-                <option value="">None (first available)</option>
-                <option value="terminal">Terminal</option>
-                <option value="claude">Claude</option>
-                <option value="gemini">Gemini</option>
-                <option value="codex">Codex</option>
-                <option value="opencode">OpenCode</option>
-                <option value="browser">Browser</option>
-                <option value="dev-server">Dev Server</option>
-              </select>
-              <p className="text-xs text-muted-foreground mt-1.5">
-                Default option to highlight when opening the launcher palette
-              </p>
-            </div>
-
-            <div>
-              <label className="text-sm font-medium text-canopy-text mb-2 block">
-                Default agent
-              </label>
-              <select
-                value={launcher.defaultAgent ?? ""}
-                onChange={(e) =>
-                  setDefaultAgent(
-                    e.target.value ? (e.target.value as typeof launcher.defaultAgent) : undefined
-                  )
-                }
-                className="w-full px-3 py-2 text-sm rounded-lg border border-divider bg-canopy-sidebar/30 text-canopy-text"
-              >
-                <option value="">None (first available)</option>
-                <option value="claude">Claude</option>
-                <option value="gemini">Gemini</option>
-                <option value="codex">Codex</option>
-                <option value="opencode">OpenCode</option>
-              </select>
-              <p className="text-xs text-muted-foreground mt-1.5">
-                Agent to use for automated workflows like "What's Next?"
-              </p>
-            </div>
+          <div className="space-y-2">
+            <label className="text-sm font-medium text-canopy-text block">Default agent</label>
+            <select
+              value={launcher.defaultAgent ?? ""}
+              onChange={(e) =>
+                setDefaultAgent(
+                  e.target.value ? (e.target.value as typeof launcher.defaultAgent) : undefined
+                )
+              }
+              className="w-full px-3 py-1.5 text-sm rounded-[var(--radius-md)] border border-canopy-border bg-canopy-bg text-canopy-text focus:border-canopy-accent focus:outline-none transition-colors"
+            >
+              <option value="">None (first available)</option>
+              <option value="claude">Claude</option>
+              <option value="gemini">Gemini</option>
+              <option value="codex">Codex</option>
+              <option value="opencode">OpenCode</option>
+            </select>
+            <p className="text-xs text-canopy-text/40">
+              Agent to use for automated workflows like "What's Next?"
+            </p>
           </div>
         </div>
+      </SettingsSection>
 
-        <div className="flex justify-end pt-4 border-t border-divider">
-          <button
-            onClick={reset}
-            className="px-3 py-1.5 text-sm rounded-lg border border-divider bg-canopy-sidebar/30 text-canopy-text hover:bg-white/[0.06] transition-colors"
-          >
-            Reset to Defaults
-          </button>
-        </div>
+      <div className="flex justify-end">
+        <button
+          onClick={reset}
+          className={cn(
+            "flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-[var(--radius-md)] border border-canopy-border",
+            "text-canopy-text/60 hover:text-canopy-text hover:bg-white/5 transition-colors"
+          )}
+        >
+          <RotateCcw className="w-3.5 h-3.5" />
+          Reset to Defaults
+        </button>
       </div>
     </div>
   );

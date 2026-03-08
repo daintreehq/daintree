@@ -3,13 +3,13 @@ import { cn } from "@/lib/utils";
 
 const COLOR_SCHEMES = {
   accent: {
-    enabled: "bg-canopy-accent/10 border-canopy-accent text-canopy-accent",
+    enabled: "border-canopy-border text-canopy-text",
     icon: "text-canopy-accent",
     toggle: "bg-canopy-accent",
     focus: "focus-visible:outline-canopy-accent",
   },
   amber: {
-    enabled: "bg-status-warning/10 border-status-warning text-status-warning",
+    enabled: "border-canopy-border text-canopy-text",
     icon: "text-status-warning",
     toggle: "bg-status-warning",
     focus: "focus-visible:outline-status-warning",
@@ -48,8 +48,8 @@ export function SettingsSwitchCard({
       aria-checked={isEnabled}
       aria-label={ariaLabel}
       className={cn(
-        "w-full flex items-center justify-between p-4 rounded-[var(--radius-lg)] border transition-all focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2",
-        isEnabled ? scheme.enabled : "border-canopy-border hover:bg-white/5 text-canopy-text/70",
+        "w-full flex items-center justify-between p-4 rounded-[var(--radius-lg)] border transition-all hover:bg-white/5 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2",
+        isEnabled ? scheme.enabled : "border-canopy-border text-canopy-text/70",
         scheme.focus,
         disabled && "opacity-50 cursor-not-allowed"
       )}
@@ -66,7 +66,7 @@ export function SettingsSwitchCard({
       </div>
       <div
         className={cn(
-          "w-11 h-6 rounded-full relative transition-colors",
+          "w-11 h-6 shrink-0 rounded-full relative transition-colors",
           isEnabled ? scheme.toggle : "bg-canopy-border"
         )}
         aria-hidden="true"

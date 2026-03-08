@@ -17,8 +17,8 @@ const HEAT_COLORS = [
   "bg-[color-mix(in_oklab,var(--color-state-working)_80%,transparent)]",
 ] as const;
 
-const BEFORE_PROJECT_COLOR = "bg-canopy-bg";
-const MISSED_DAY_COLOR = "bg-[color-mix(in_oklab,var(--color-status-error)_20%,transparent)]";
+const BEFORE_PROJECT_COLOR = "bg-[color-mix(in_oklab,var(--color-canopy-text)_8%,transparent)]";
+const MISSED_DAY_COLOR = "bg-[color-mix(in_oklab,var(--color-status-error)_32%,transparent)]";
 
 const COLUMNS_PER_ROW = 60;
 const CELL_SIZE_PX = 10;

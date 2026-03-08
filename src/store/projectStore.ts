@@ -15,7 +15,7 @@ import {
 } from "./worktreeDataStore";
 import { flushTerminalPersistence } from "./slices";
 import { terminalPersistence, terminalToSnapshot } from "./persistence/terminalPersistence";
-import { useNotificationStore } from "./notificationStore";
+import { notify } from "@/lib/notify";
 import { useTerminalStore } from "./terminalStore";
 import { useWorktreeSelectionStore } from "./worktreeStore";
 import {
@@ -50,6 +50,8 @@ interface ProjectState {
   createProjectFolder: (parentPath: string, folderName: string) => Promise<void>;
   switchProject: (projectId: string) => Promise<void>;
   updateProject: (id: string, updates: Partial<Project>) => Promise<void>;
+  enableInRepoSettings: (id: string) => Promise<Project>;
+  disableInRepoSettings: (id: string) => Promise<Project>;
   removeProject: (id: string) => Promise<void>;
   closeProject: (
     projectId: string,
@@ -211,7 +213,7 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
       }
 
       const message = getProjectOpenErrorMessage(error);
-      useNotificationStore.getState().addNotification({
+      notify({
         type: "error",
         title: "Failed to add project",
         message,
@@ -397,7 +399,7 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
             details: { projectId, targetProjectName: targetProject?.name },
           });
           const message = getProjectOpenErrorMessage(error);
-          useNotificationStore.getState().addNotification({
+          notify({
             type: "error",
             title: "Failed to switch project",
             message,
@@ -431,7 +433,7 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
         details: { projectId, targetProjectName: targetProject?.name },
       });
       const message = getProjectOpenErrorMessage(error);
-      useNotificationStore.getState().addNotification({
+      notify({
         type: "error",
         title: "Failed to switch project",
         message,
@@ -464,6 +466,24 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
       set({ error: "Failed to update project", isLoading: false });
       throw error;
     }
+  },
+
+  enableInRepoSettings: async (id) => {
+    const updatedProject = await projectClient.enableInRepoSettings(id);
+    set((state) => ({
+      projects: state.projects.map((p) => (p.id === id ? updatedProject : p)),
+      currentProject: state.currentProject?.id === id ? updatedProject : state.currentProject,
+    }));
+    return updatedProject;
+  },
+
+  disableInRepoSettings: async (id) => {
+    const updatedProject = await projectClient.disableInRepoSettings(id);
+    set((state) => ({
+      projects: state.projects.map((p) => (p.id === id ? updatedProject : p)),
+      currentProject: state.currentProject?.id === id ? updatedProject : state.currentProject,
+    }));
+    return updatedProject;
   },
 
   removeProject: async (id) => {
@@ -694,7 +714,7 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
             details: { projectId, targetProjectName: targetProject?.name },
           });
           const message = getProjectOpenErrorMessage(error);
-          useNotificationStore.getState().addNotification({
+          notify({
             type: "error",
             title: "Failed to reopen project",
             message,
@@ -723,7 +743,7 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
         details: { projectId, targetProjectName: targetProject?.name },
       });
       const message = getProjectOpenErrorMessage(error);
-      useNotificationStore.getState().addNotification({
+      notify({
         type: "error",
         title: "Failed to reopen project",
         message,

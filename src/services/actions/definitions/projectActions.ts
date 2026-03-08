@@ -1,7 +1,7 @@
 import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 import { z } from "zod";
 import { projectClient } from "@/clients";
-import { useNotificationStore } from "@/store/notificationStore";
+import { notify } from "@/lib/notify";
 import { useProjectStore } from "@/store/projectStore";
 
 export function registerProjectActions(actions: ActionRegistry, callbacks: ActionCallbacks): void {
@@ -67,8 +67,9 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
     argsSchema: z.object({ projectId: z.string() }),
     run: async (args: unknown) => {
       const { projectId } = args as { projectId: string };
-      useNotificationStore.getState().addNotification({
+      notify({
         type: "info",
+        priority: "low",
         title: "Switching projects",
         message: "Resetting state for clean project isolation",
         duration: 1500,

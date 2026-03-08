@@ -65,6 +65,13 @@ export function registerNotificationHandlers(_deps: HandlerDependencies): () => 
     agentNotificationService.syncWatchedPanels(ids);
   };
 
+  const handleShowNative = (_event: Electron.IpcMainEvent, payload: unknown): void => {
+    if (!payload || typeof payload !== "object") return;
+    const p = payload as Record<string, unknown>;
+    if (typeof p.title !== "string" || typeof p.body !== "string") return;
+    notificationService.showNativeNotification(p.title, p.body);
+  };
+
   const handleShowWatch = (_event: Electron.IpcMainEvent, payload: unknown): void => {
     if (!payload || typeof payload !== "object") return;
     const p = payload as Record<string, unknown>;
@@ -89,6 +96,7 @@ export function registerNotificationHandlers(_deps: HandlerDependencies): () => 
   ipcMain.handle(CHANNELS.NOTIFICATION_SETTINGS_GET, handleSettingsGet);
   ipcMain.handle(CHANNELS.NOTIFICATION_SETTINGS_SET, handleSettingsSet);
   ipcMain.handle(CHANNELS.NOTIFICATION_PLAY_SOUND, handlePlaySound);
+  ipcMain.on(CHANNELS.NOTIFICATION_SHOW_NATIVE, handleShowNative);
   ipcMain.on(CHANNELS.NOTIFICATION_SHOW_WATCH, handleShowWatch);
   ipcMain.on(CHANNELS.NOTIFICATION_SYNC_WATCHED, handleSyncWatched);
 
@@ -97,6 +105,7 @@ export function registerNotificationHandlers(_deps: HandlerDependencies): () => 
     ipcMain.removeHandler(CHANNELS.NOTIFICATION_SETTINGS_GET);
     ipcMain.removeHandler(CHANNELS.NOTIFICATION_SETTINGS_SET);
     ipcMain.removeHandler(CHANNELS.NOTIFICATION_PLAY_SOUND);
+    ipcMain.removeListener(CHANNELS.NOTIFICATION_SHOW_NATIVE, handleShowNative);
     ipcMain.removeListener(CHANNELS.NOTIFICATION_SHOW_WATCH, handleShowWatch);
     ipcMain.removeListener(CHANNELS.NOTIFICATION_SYNC_WATCHED, handleSyncWatched);
   };

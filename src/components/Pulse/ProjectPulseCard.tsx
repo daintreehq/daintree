@@ -89,12 +89,12 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
     return (
       <div
         className={cn(
-          "p-4 bg-surface rounded-[var(--radius-lg)] border border-canopy-border",
+          "p-4 bg-canopy-sidebar rounded-[var(--radius-lg)] border border-canopy-border",
           className
         )}
       >
         <div
-          className="flex items-center gap-2 text-canopy-text/50"
+          className="flex items-center gap-2 text-canopy-text/75"
           role="status"
           aria-live="polite"
         >
@@ -109,12 +109,12 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
     return (
       <div
         className={cn(
-          "p-4 bg-surface rounded-[var(--radius-lg)] border border-canopy-border",
+          "p-4 bg-canopy-sidebar rounded-[var(--radius-lg)] border border-canopy-border",
           className
         )}
       >
-        <div className="flex items-center gap-2 text-canopy-text/50">
-          <GitBranch className="w-4 h-4 text-status-info/70" aria-hidden="true" />
+        <div className="flex items-center gap-2 text-canopy-text/75">
+          <GitBranch className="w-4 h-4 text-status-info" aria-hidden="true" />
           <span className="text-xs">
             New repository — make your first commit to start tracking activity
           </span>
@@ -129,17 +129,17 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
     return (
       <div
         className={cn(
-          "p-4 bg-surface rounded-[var(--radius-lg)] border border-canopy-border",
+          "p-4 bg-canopy-sidebar rounded-[var(--radius-lg)] border border-canopy-border",
           className
         )}
       >
         <div className="flex flex-col gap-2">
-          <div className="flex items-center gap-2 text-canopy-text/50" role="alert">
-            <AlertCircle className="w-4 h-4 text-status-error/70" aria-hidden="true" />
+          <div className="flex items-center gap-2 text-canopy-text/75" role="alert">
+            <AlertCircle className="w-4 h-4 text-status-error" aria-hidden="true" />
             <span className="text-xs">{error}</span>
             <button
               onClick={handleRefresh}
-              className="ml-auto p-1 hover:bg-surface-highlight rounded transition-colors"
+              className="ml-auto p-1 hover:bg-white/5 rounded transition-colors"
               aria-label="Retry now"
             >
               <RefreshCw className="w-3 h-3" aria-hidden="true" />
@@ -147,7 +147,7 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
           </div>
           {isRetrying && (
             <div
-              className="flex items-center gap-2 text-canopy-text/40"
+              className="flex items-center gap-2 text-canopy-text/55"
               role="status"
               aria-live="polite"
             >
@@ -169,22 +169,22 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
   return (
     <div
       className={cn(
-        "w-fit bg-surface rounded-[var(--radius-lg)] border border-canopy-border",
+        "w-fit bg-canopy-sidebar rounded-[var(--radius-lg)] border border-canopy-border",
         className
       )}
     >
       <div className="px-4 py-3 border-b border-canopy-border flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <Activity className="w-4 h-4 text-status-success/70" />
-          <span className="text-sm font-medium text-canopy-text/80">{title}</span>
-          {isLoading && <Loader2 className="w-3 h-3 animate-spin text-canopy-text/40" />}
+          <Activity className="w-4 h-4 text-status-success" />
+          <span className="text-sm font-medium text-canopy-text/90">{title}</span>
+          {isLoading && <Loader2 className="w-3 h-3 animate-spin text-canopy-text/55" />}
         </div>
 
         <div className="flex items-center gap-2">
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <button
-                className="text-xs text-canopy-text/50 hover:text-canopy-text/70 transition-colors px-2 py-1 rounded hover:bg-surface-highlight"
+                className="text-xs text-canopy-text/70 hover:text-canopy-text/90 transition-colors px-2 py-1 rounded hover:bg-white/5"
                 aria-label="Change time range"
               >
                 {currentRangeLabel}
@@ -195,7 +195,9 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
                 <DropdownMenuItem
                   key={option.value}
                   onClick={() => handleRangeChange(option.value)}
-                  className={cn(option.value === rangeDays && "bg-surface-highlight")}
+                  className={cn(
+                    option.value === rangeDays && "bg-canopy-accent/15 text-canopy-accent"
+                  )}
                 >
                   {option.label}
                 </DropdownMenuItem>
@@ -206,7 +208,7 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
           <button
             onClick={handleRefresh}
             disabled={isLoading}
-            className="p-1 text-canopy-text/40 hover:text-canopy-text/70 hover:bg-surface-highlight rounded transition-colors disabled:opacity-50"
+            className="p-1 text-canopy-text/55 hover:text-canopy-text/90 hover:bg-white/5 rounded transition-colors disabled:opacity-50"
             aria-label="Refresh"
           >
             <RefreshCw className={cn("w-3 h-3", isLoading && "animate-spin")} />
@@ -217,7 +219,7 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
       <div className="p-4 space-y-4">
         <PulseHeatmap cells={pulse.heatmap} rangeDays={pulse.rangeDays} />
 
-        <p className="text-xs text-canopy-text/60 italic">{getCoachLine(pulse)}</p>
+        <p className="text-xs text-canopy-text/80 italic">{getCoachLine(pulse)}</p>
 
         <div className="border-t border-canopy-border pt-3">
           <PulseSummary pulse={pulse} />

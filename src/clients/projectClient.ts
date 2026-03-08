@@ -159,4 +159,12 @@ export const projectClient = {
   writeClaudeMd: (projectId: string, content: string): Promise<void> => {
     return window.electron.project.writeClaudeMd(projectId, content);
   },
+
+  enableInRepoSettings: (projectId: string): Promise<Project> => {
+    return window.electron.project.enableInRepoSettings(projectId);
+  },
+
+  disableInRepoSettings: (projectId: string): Promise<Project> => {
+    return window.electron.project.disableInRepoSettings(projectId);
+  },
 } as const;

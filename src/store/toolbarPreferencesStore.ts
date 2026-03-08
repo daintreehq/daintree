@@ -34,6 +34,7 @@ const DEFAULT_LEFT_BUTTONS: ToolbarButtonId[] = [
 ];
 
 const DEFAULT_RIGHT_BUTTONS: ToolbarButtonId[] = [
+  "voice-recording",
   "github-stats",
   "notification-center",
   "notes",

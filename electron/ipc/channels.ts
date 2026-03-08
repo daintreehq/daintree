@@ -4,6 +4,7 @@ export const CHANNELS = {
   WORKTREE_SET_ACTIVE: "worktree:set-active",
   WORKTREE_UPDATE: "worktree:update",
   WORKTREE_REMOVE: "worktree:remove",
+  WORKTREE_ACTIVATED: "worktree:activated",
   WORKTREE_CREATE: "worktree:create",
   WORKTREE_LIST_BRANCHES: "worktree:list-branches",
   WORKTREE_PR_REFRESH: "worktree:pr-refresh",
@@ -243,6 +244,7 @@ export const CHANNELS = {
   SYSTEM_SLEEP_GET_METRICS: "system-sleep:get-metrics",
   SYSTEM_SLEEP_GET_AWAKE_TIME: "system-sleep:get-awake-time",
   SYSTEM_SLEEP_RESET: "system-sleep:reset",
+  SYSTEM_SLEEP_ON_SUSPEND: "system-sleep:on-suspend",
   SYSTEM_SLEEP_ON_WAKE: "system-sleep:on-wake",
 
   KEYBINDING_GET_OVERRIDES: "keybinding:get-overrides",
@@ -270,6 +272,7 @@ export const CHANNELS = {
   NOTIFICATION_SETTINGS_SET: "notification:settings-set",
   NOTIFICATION_PLAY_SOUND: "notification:play-sound",
   NOTIFICATION_SHOW_WATCH: "notification:show-watch",
+  NOTIFICATION_SHOW_NATIVE: "notification:show-native",
   NOTIFICATION_WATCH_NAVIGATE: "notification:watch-navigate",
   NOTIFICATION_SYNC_WATCHED: "notification:sync-watched",
 
@@ -352,12 +355,22 @@ export const CHANNELS = {
   VOICE_INPUT_AUDIO_CHUNK: "voice-input:audio-chunk",
   VOICE_INPUT_TRANSCRIPTION_DELTA: "voice-input:transcription-delta",
   VOICE_INPUT_TRANSCRIPTION_COMPLETE: "voice-input:transcription-complete",
+  VOICE_INPUT_CORRECTION_REPLACE: "voice-input:correction-replace",
   VOICE_INPUT_ERROR: "voice-input:error",
   VOICE_INPUT_STATUS: "voice-input:status",
   VOICE_INPUT_CHECK_MIC_PERMISSION: "voice-input:check-mic-permission",
   VOICE_INPUT_REQUEST_MIC_PERMISSION: "voice-input:request-mic-permission",
   VOICE_INPUT_OPEN_MIC_SETTINGS: "voice-input:open-mic-settings",
   VOICE_INPUT_VALIDATE_API_KEY: "voice-input:validate-api-key",
+  VOICE_INPUT_VALIDATE_CORRECTION_API_KEY: "voice-input:validate-correction-api-key",
+  VOICE_INPUT_FLUSH_PARAGRAPH: "voice-input:flush-paragraph",
+  VOICE_INPUT_PARAGRAPH_BOUNDARY: "voice-input:paragraph-boundary",
+
+  // Crash Recovery channels
+  CRASH_RECOVERY_GET_PENDING: "crash-recovery:get-pending",
+  CRASH_RECOVERY_RESOLVE: "crash-recovery:resolve",
+  CRASH_RECOVERY_GET_CONFIG: "crash-recovery:get-config",
+  CRASH_RECOVERY_SET_CONFIG: "crash-recovery:set-config",
 } as const;
 
 export type ChannelName = (typeof CHANNELS)[keyof typeof CHANNELS];

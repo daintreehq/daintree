@@ -12,9 +12,9 @@
     <key>com.apple.security.cs.disable-library-validation</key>
     <true/>
 
-    <!-- Disable device permissions (not needed for terminal app) -->
+    <!-- Microphone access required for voice dictation feature -->
     <key>com.apple.security.device.audio-input</key>
-    <false/>
+    <true/>
     <key>com.apple.security.device.camera</key>
     <false/>
 </dict>

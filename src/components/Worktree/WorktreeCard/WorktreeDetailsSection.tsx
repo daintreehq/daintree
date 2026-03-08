@@ -6,7 +6,7 @@ import { cn } from "@/lib/utils";
 import { ActivityLight } from "../ActivityLight";
 import { LiveTimeAgo } from "../LiveTimeAgo";
 import { WorktreeDetails } from "../WorktreeDetails";
-import { ChevronRight, GitCommitHorizontal } from "lucide-react";
+import { ChevronRight, GitCommitHorizontal, Loader2 } from "lucide-react";
 import type { ComputedSubtitle } from "./hooks/useWorktreeStatus";
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
 
@@ -25,6 +25,8 @@ export interface WorktreeDetailsSectionProps {
   onDismissError: (id: string) => void;
   onRetryError: (id: string, action: RetryAction, args?: Record<string, unknown>) => Promise<void>;
   onOpenReviewHub?: () => void;
+  isLifecycleRunning?: boolean;
+  lifecycleLabel?: string;
 }
 
 export function WorktreeDetailsSection({
@@ -42,6 +44,8 @@ export function WorktreeDetailsSection({
   onDismissError,
   onRetryError,
   onOpenReviewHub,
+  isLifecycleRunning,
+  lifecycleLabel,
 }: WorktreeDetailsSectionProps) {
   const detailsId = `worktree-${worktree.id}-details`;
   const detailsPanelId = `worktree-${worktree.id}-details-panel`;
@@ -102,7 +106,16 @@ export function WorktreeDetailsSection({
             id={`${detailsId}-button`}
           >
             <span className="text-xs truncate min-w-0 flex-1">
-              {hasChanges && worktree.worktreeChanges ? (
+              {isLifecycleRunning && lifecycleLabel ? (
+                <span className="flex items-center gap-1.5 text-canopy-text/60">
+                  <Loader2 className="w-3 h-3 animate-spin shrink-0" aria-hidden="true" />
+                  <span className="truncate">{lifecycleLabel}</span>
+                </span>
+              ) : lifecycleLabel &&
+                !isLifecycleRunning &&
+                worktree.lifecycleStatus?.state !== "success" ? (
+                <span className="text-status-error">{lifecycleLabel}</span>
+              ) : hasChanges && worktree.worktreeChanges ? (
                 <span className="flex items-center gap-1.5 text-canopy-text/60">
                   <span>
                     {worktree.worktreeChanges.changedFileCount} file

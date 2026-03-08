@@ -2,53 +2,46 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const {
-  getStatsMock,
-  getForProjectMock,
-  useProjectStoreMock,
-  useNotificationStoreMock,
-  projectState,
-} = vi.hoisted(() => {
-  const getStatsMock = vi.fn();
-  const getForProjectMock = vi.fn();
+const { getStatsMock, getForProjectMock, useProjectStoreMock, notifyMock, projectState } =
+  vi.hoisted(() => {
+    const getStatsMock = vi.fn();
+    const getForProjectMock = vi.fn();
 
-  const projectState = {
-    projects: [
-      {
-        id: "project-1",
-        name: "Project One",
-        path: "/repo/one",
-        emoji: "🌲",
-        color: "#00aa00",
-        lastOpened: 123,
-        status: "active" as const,
-      },
-    ],
-    currentProject: null as { id: string } | null,
-    switchProject: vi.fn().mockResolvedValue(undefined),
-    reopenProject: vi.fn().mockResolvedValue(undefined),
-    loadProjects: vi.fn().mockResolvedValue(undefined),
-    addProject: vi.fn().mockResolvedValue(undefined),
-    closeProject: vi.fn().mockResolvedValue({ processesKilled: 0 }),
-    closeActiveProject: vi.fn().mockResolvedValue({ processesKilled: 0 }),
-    removeProject: vi.fn().mockResolvedValue(undefined),
-  };
+    const projectState = {
+      projects: [
+        {
+          id: "project-1",
+          name: "Project One",
+          path: "/repo/one",
+          emoji: "🌲",
+          color: "#00aa00",
+          lastOpened: 123,
+          status: "active" as const,
+        },
+      ],
+      currentProject: null as { id: string } | null,
+      switchProject: vi.fn().mockResolvedValue(undefined),
+      reopenProject: vi.fn().mockResolvedValue(undefined),
+      loadProjects: vi.fn().mockResolvedValue(undefined),
+      addProject: vi.fn().mockResolvedValue(undefined),
+      closeProject: vi.fn().mockResolvedValue({ processesKilled: 0 }),
+      closeActiveProject: vi.fn().mockResolvedValue({ processesKilled: 0 }),
+      removeProject: vi.fn().mockResolvedValue(undefined),
+    };
 
-  const useProjectStoreMock = vi.fn((selector: (state: typeof projectState) => unknown) =>
-    selector(projectState)
-  );
-  const useNotificationStoreMock = vi.fn(() => ({
-    addNotification: vi.fn(),
-  }));
+    const useProjectStoreMock = vi.fn((selector: (state: typeof projectState) => unknown) =>
+      selector(projectState)
+    );
+    const notifyMock = vi.fn().mockReturnValue("");
 
-  return {
-    getStatsMock,
-    getForProjectMock,
-    useProjectStoreMock,
-    useNotificationStoreMock,
-    projectState,
-  };
-});
+    return {
+      getStatsMock,
+      getForProjectMock,
+      useProjectStoreMock,
+      notifyMock,
+      projectState,
+    };
+  });
 
 vi.mock("@/clients", () => ({
   projectClient: {
@@ -63,8 +56,8 @@ vi.mock("@/store/projectStore", () => ({
   useProjectStore: useProjectStoreMock,
 }));
 
-vi.mock("@/store/notificationStore", () => ({
-  useNotificationStore: useNotificationStoreMock,
+vi.mock("@/lib/notify", () => ({
+  notify: notifyMock,
 }));
 
 vi.mock("@shared/config/panelKindRegistry", () => ({
@@ -369,8 +362,7 @@ describe("useProjectSwitcherPalette", () => {
     });
 
     it("shows error notification when closeActiveProject fails", async () => {
-      const addNotification = vi.fn();
-      (useNotificationStoreMock as ReturnType<typeof vi.fn>).mockReturnValue({ addNotification });
+      notifyMock.mockClear();
       projectState.closeActiveProject.mockRejectedValueOnce(new Error("close failed"));
 
       const { result } = renderHook(() => useProjectSwitcherPalette());
@@ -391,7 +383,7 @@ describe("useProjectSwitcherPalette", () => {
         await result.current.confirmRemoveProject();
       });
 
-      expect(addNotification).toHaveBeenCalledWith(
+      expect(notifyMock).toHaveBeenCalledWith(
         expect.objectContaining({
           type: "error",
           title: "Failed to close project",

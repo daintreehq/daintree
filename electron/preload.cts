@@ -132,6 +132,7 @@ const CHANNELS = {
   WORKTREE_SET_ACTIVE: "worktree:set-active",
   WORKTREE_UPDATE: "worktree:update",
   WORKTREE_REMOVE: "worktree:remove",
+  WORKTREE_ACTIVATED: "worktree:activated",
   WORKTREE_CREATE: "worktree:create",
   WORKTREE_LIST_BRANCHES: "worktree:list-branches",
   WORKTREE_PR_REFRESH: "worktree:pr-refresh",
@@ -409,6 +410,7 @@ const CHANNELS = {
   SYSTEM_SLEEP_GET_METRICS: "system-sleep:get-metrics",
   SYSTEM_SLEEP_GET_AWAKE_TIME: "system-sleep:get-awake-time",
   SYSTEM_SLEEP_RESET: "system-sleep:reset",
+  SYSTEM_SLEEP_ON_SUSPEND: "system-sleep:on-suspend",
   SYSTEM_SLEEP_ON_WAKE: "system-sleep:on-wake",
 
   // Keybinding channels
@@ -439,6 +441,7 @@ const CHANNELS = {
   NOTIFICATION_SETTINGS_GET: "notification:settings-get",
   NOTIFICATION_SETTINGS_SET: "notification:settings-set",
   NOTIFICATION_PLAY_SOUND: "notification:play-sound",
+  NOTIFICATION_SHOW_NATIVE: "notification:show-native",
   NOTIFICATION_SHOW_WATCH: "notification:show-watch",
   NOTIFICATION_WATCH_NAVIGATE: "notification:watch-navigate",
   NOTIFICATION_SYNC_WATCHED: "notification:sync-watched",
@@ -498,12 +501,16 @@ const CHANNELS = {
   VOICE_INPUT_AUDIO_CHUNK: "voice-input:audio-chunk",
   VOICE_INPUT_TRANSCRIPTION_DELTA: "voice-input:transcription-delta",
   VOICE_INPUT_TRANSCRIPTION_COMPLETE: "voice-input:transcription-complete",
+  VOICE_INPUT_CORRECTION_REPLACE: "voice-input:correction-replace",
   VOICE_INPUT_ERROR: "voice-input:error",
   VOICE_INPUT_STATUS: "voice-input:status",
   VOICE_INPUT_CHECK_MIC_PERMISSION: "voice-input:check-mic-permission",
   VOICE_INPUT_REQUEST_MIC_PERMISSION: "voice-input:request-mic-permission",
   VOICE_INPUT_OPEN_MIC_SETTINGS: "voice-input:open-mic-settings",
   VOICE_INPUT_VALIDATE_API_KEY: "voice-input:validate-api-key",
+  VOICE_INPUT_VALIDATE_CORRECTION_API_KEY: "voice-input:validate-correction-api-key",
+  VOICE_INPUT_FLUSH_PARAGRAPH: "voice-input:flush-paragraph",
+  VOICE_INPUT_PARAGRAPH_BOUNDARY: "voice-input:paragraph-boundary",
 
   // MCP Server channels
   MCP_SERVER_GET_STATUS: "mcp-server:get-status",
@@ -512,6 +519,12 @@ const CHANNELS = {
   MCP_SERVER_SET_API_KEY: "mcp-server:set-api-key",
   MCP_SERVER_GENERATE_API_KEY: "mcp-server:generate-api-key",
   MCP_SERVER_GET_CONFIG_SNIPPET: "mcp-server:get-config-snippet",
+
+  // Crash Recovery channels
+  CRASH_RECOVERY_GET_PENDING: "crash-recovery:get-pending",
+  CRASH_RECOVERY_RESOLVE: "crash-recovery:resolve",
+  CRASH_RECOVERY_GET_CONFIG: "crash-recovery:get-config",
+  CRASH_RECOVERY_SET_CONFIG: "crash-recovery:set-config",
 } as const;
 
 const api: ElectronAPI = {
@@ -566,6 +579,9 @@ const api: ElectronAPI = {
 
     onRemove: (callback: (data: { worktreeId: string }) => void) =>
       _typedOn(CHANNELS.WORKTREE_REMOVE, callback),
+
+    onActivated: (callback: (data: { worktreeId: string }) => void) =>
+      _typedOn(CHANNELS.WORKTREE_ACTIVATED, callback),
   },
 
   // Terminal API
@@ -1333,6 +1349,8 @@ const api: ElectronAPI = {
 
     reset: () => _typedInvoke(CHANNELS.SYSTEM_SLEEP_RESET),
 
+    onSuspend: (callback: () => void) => _typedOn(CHANNELS.SYSTEM_SLEEP_ON_SUSPEND, callback),
+
     onWake: (callback: (sleepDurationMs: number) => void) =>
       _typedOn(CHANNELS.SYSTEM_SLEEP_ON_WAKE, callback),
   },
@@ -1401,6 +1419,8 @@ const api: ElectronAPI = {
       }>
     ) => _typedInvoke(CHANNELS.NOTIFICATION_SETTINGS_SET, settings),
     playSound: (soundFile: string) => _typedInvoke(CHANNELS.NOTIFICATION_PLAY_SOUND, soundFile),
+    showNative: (payload: { title: string; body: string }) =>
+      ipcRenderer.send(CHANNELS.NOTIFICATION_SHOW_NATIVE, payload),
     showWatchNotification: (payload: {
       title: string;
       body: string;
@@ -1599,19 +1619,31 @@ const api: ElectronAPI = {
     setSettings: (
       patch: Partial<{
         enabled: boolean;
-        apiKey: string;
+        deepgramApiKey: string;
+        correctionApiKey: string;
         language: string;
         customDictionary: string[];
+        transcriptionModel: "nova-3" | "nova-2";
+        correctionEnabled: boolean;
+        correctionModel: "gpt-5-nano";
+        correctionCustomInstructions: string;
       }>
     ) => _typedInvoke(CHANNELS.VOICE_INPUT_SET_SETTINGS, patch),
     start: () => _typedInvoke(CHANNELS.VOICE_INPUT_START),
     stop: () => _typedInvoke(CHANNELS.VOICE_INPUT_STOP),
+    flushParagraph: () => _typedInvoke(CHANNELS.VOICE_INPUT_FLUSH_PARAGRAPH),
     sendAudioChunk: (chunk: ArrayBuffer) =>
       ipcRenderer.send(CHANNELS.VOICE_INPUT_AUDIO_CHUNK, chunk),
     onTranscriptionDelta: (callback: (delta: string) => void) =>
       _typedOn(CHANNELS.VOICE_INPUT_TRANSCRIPTION_DELTA, callback),
-    onTranscriptionComplete: (callback: (text: string) => void) =>
-      _typedOn(CHANNELS.VOICE_INPUT_TRANSCRIPTION_COMPLETE, callback),
+    onTranscriptionComplete: (
+      callback: (payload: { text: string; willCorrect: boolean }) => void
+    ) => _typedOn(CHANNELS.VOICE_INPUT_TRANSCRIPTION_COMPLETE, callback),
+    onCorrectionReplace: (
+      callback: (payload: { rawText: string; correctedText: string }) => void
+    ) => _typedOn(CHANNELS.VOICE_INPUT_CORRECTION_REPLACE, callback),
+    onParagraphBoundary: (callback: (payload: { rawText: string | null }) => void) =>
+      _typedOn(CHANNELS.VOICE_INPUT_PARAGRAPH_BOUNDARY, callback),
     onError: (callback: (error: string) => void) => _typedOn(CHANNELS.VOICE_INPUT_ERROR, callback),
     onStatus: (callback: (status: "idle" | "connecting" | "recording" | "error") => void) =>
       _typedOn(CHANNELS.VOICE_INPUT_STATUS, callback),
@@ -1619,6 +1651,8 @@ const api: ElectronAPI = {
     requestMicPermission: () => _typedInvoke(CHANNELS.VOICE_INPUT_REQUEST_MIC_PERMISSION),
     openMicSettings: () => _typedInvoke(CHANNELS.VOICE_INPUT_OPEN_MIC_SETTINGS),
     validateApiKey: (apiKey: string) => _typedInvoke(CHANNELS.VOICE_INPUT_VALIDATE_API_KEY, apiKey),
+    validateCorrectionApiKey: (apiKey: string) =>
+      _typedInvoke(CHANNELS.VOICE_INPUT_VALIDATE_CORRECTION_API_KEY, apiKey),
   },
 
   mcpServer: {
@@ -1661,6 +1695,14 @@ const api: ElectronAPI = {
     sendDispatchActionResponse: (payload: { requestId: string; result: unknown }) => {
       ipcRenderer.send("mcp:dispatch-action-response", payload);
     },
+  },
+
+  crashRecovery: {
+    getPending: () => _typedInvoke(CHANNELS.CRASH_RECOVERY_GET_PENDING),
+    resolve: (action: "restore" | "fresh") => _typedInvoke(CHANNELS.CRASH_RECOVERY_RESOLVE, action),
+    getConfig: () => _typedInvoke(CHANNELS.CRASH_RECOVERY_GET_CONFIG),
+    setConfig: (config: { autoRestoreOnCrash?: boolean }) =>
+      _typedInvoke(CHANNELS.CRASH_RECOVERY_SET_CONFIG, config),
   },
 };
 

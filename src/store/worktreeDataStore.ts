@@ -3,7 +3,7 @@ import type { WorktreeState, IssueAssociation } from "@shared/types";
 import { worktreeClient, githubClient } from "@/clients";
 import { useWorktreeSelectionStore } from "./worktreeStore";
 import { useTerminalStore } from "./terminalStore";
-import { useNotificationStore } from "./notificationStore";
+import { notify } from "@/lib/notify";
 import { usePulseStore } from "./pulseStore";
 
 interface WorktreeDataState {
@@ -125,6 +125,25 @@ export const useWorktreeDataStore = create<WorktreeDataStore>()((set, get) => ({
           }
           return { worktrees: next };
         });
+
+        // If a worktree selection was queued while data hadn't arrived yet, apply
+        // the terminal streaming policy now that the data is available.
+        const selectionStore = useWorktreeSelectionStore.getState();
+        if (selectionStore.pendingWorktreeId === state.id) {
+          selectionStore.applyPendingWorktreeSelection(state.id);
+        }
+      });
+
+      const unsubActivated = worktreeClient.onActivated(({ worktreeId }) => {
+        const selectionStore = useWorktreeSelectionStore.getState();
+        // Mark as pending so terminal policy re-applies once worktree data arrives.
+        selectionStore.setPendingWorktree(worktreeId);
+        selectionStore.selectWorktree(worktreeId);
+        // If the worktree data is already in the store, onUpdate won't fire again.
+        // Apply the pending selection immediately so the pending ID doesn't stick.
+        if (useWorktreeDataStore.getState().worktrees.has(worktreeId)) {
+          selectionStore.applyPendingWorktreeSelection(worktreeId);
+        }
       });
 
       const unsubRemove = worktreeClient.onRemove(({ worktreeId }) => {
@@ -150,7 +169,6 @@ export const useWorktreeDataStore = create<WorktreeDataStore>()((set, get) => ({
           }
 
           const terminalStore = useTerminalStore.getState();
-          const notificationStore = useNotificationStore.getState();
           const terminalsToKill = terminalStore.terminals.filter(
             (t) => (t.worktreeId ?? undefined) === worktreeId
           );
@@ -160,7 +178,7 @@ export const useWorktreeDataStore = create<WorktreeDataStore>()((set, get) => ({
               terminalStore.removeTerminal(terminal.id);
             });
 
-            notificationStore.addNotification({
+            notify({
               type: "info",
               title: "Worktree Deleted",
               message: `${terminalsToKill.length} terminal(s) removed with worktree.`,
@@ -241,6 +259,7 @@ export const useWorktreeDataStore = create<WorktreeDataStore>()((set, get) => ({
       cleanupListeners = () => {
         unsubUpdate();
         unsubRemove();
+        unsubActivated();
         unsubPRDetected();
         unsubPRCleared();
         unsubIssueDetected();

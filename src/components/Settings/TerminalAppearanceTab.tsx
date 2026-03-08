@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
+import { Palette, Type, CaseSensitive } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useTerminalFontStore } from "@/store";
 import { DEFAULT_TERMINAL_FONT_FAMILY } from "@/config/terminalFont";
 import { actionService } from "@/services/ActionService";
+import { SettingsSection } from "./SettingsSection";
 import { ColorSchemePicker } from "./ColorSchemePicker";
 import { AppThemePicker } from "./AppThemePicker";
 
@@ -102,72 +104,71 @@ export function TerminalAppearanceTab() {
 
   return (
     <div className="space-y-6">
-      <div className="space-y-2">
-        <h4 className="text-sm font-medium text-canopy-text">App theme</h4>
-        <div className="bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] p-4">
-          <AppThemePicker />
-        </div>
-      </div>
+      <SettingsSection
+        icon={Palette}
+        title="App Theme"
+        description="Choose the overall visual theme for the application."
+      >
+        <AppThemePicker />
+      </SettingsSection>
 
-      <div className="space-y-2">
-        <h4 className="text-sm font-medium text-canopy-text">Terminal color scheme</h4>
-        <div className="bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] p-4">
-          <ColorSchemePicker />
-        </div>
-      </div>
+      <SettingsSection
+        icon={Palette}
+        title="Terminal Color Scheme"
+        description="Colors used for terminal output and ANSI escape sequences."
+      >
+        <ColorSchemePicker />
+      </SettingsSection>
 
-      <div className="space-y-2">
-        <h4 className="text-sm font-medium text-canopy-text">Font size</h4>
-        <div className="bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] p-4 space-y-2">
-          <div className="flex items-center gap-2">
-            <input
-              type="number"
-              min={MIN_FONT_SIZE}
-              max={MAX_FONT_SIZE}
-              value={fontSizeInput}
-              onChange={(e) => {
-                setFontSizeInput(e.target.value);
-                if (fontSizeError) {
-                  setFontSizeError(null);
-                }
-              }}
-              onBlur={handleFontSizeBlur}
-              className="bg-canopy-bg border border-canopy-border rounded px-3 py-2 text-canopy-text w-24 focus:border-canopy-accent focus:outline-none transition-colors"
-              aria-label="Terminal font size"
-            />
-            <span className="text-sm text-canopy-text/70">px</span>
-          </div>
-          <p className="text-xs text-canopy-text/50">
-            Current: <span className="font-mono">{fontSize}px</span>. Smaller fonts reduce the
-            number of cells on screen and can improve performance.
-          </p>
-          {fontSizeError && <p className="text-xs text-status-error">{fontSizeError}</p>}
+      <SettingsSection
+        icon={Type}
+        title="Font Size"
+        description="Terminal font size in pixels. Smaller fonts reduce the number of cells on screen and can improve performance."
+      >
+        <div className="flex items-center gap-3">
+          <input
+            type="number"
+            min={MIN_FONT_SIZE}
+            max={MAX_FONT_SIZE}
+            value={fontSizeInput}
+            onChange={(e) => {
+              setFontSizeInput(e.target.value);
+              if (fontSizeError) {
+                setFontSizeError(null);
+              }
+            }}
+            onBlur={handleFontSizeBlur}
+            className="bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-canopy-text w-24 focus:border-canopy-accent focus:outline-none transition-colors"
+            aria-label="Terminal font size"
+          />
+          <span className="text-sm text-canopy-text/50">px</span>
+          <span className="text-xs text-canopy-text/40 ml-auto">
+            Current: <span className="font-mono">{fontSize}px</span>
+          </span>
         </div>
-      </div>
+        {fontSizeError && <p className="text-xs text-status-error">{fontSizeError}</p>}
+      </SettingsSection>
 
-      <div className="space-y-2">
-        <h4 className="text-sm font-medium text-canopy-text">Font family</h4>
-        <div className="bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] p-4 space-y-2">
-          <select
-            value={selectedFontFamilyId}
-            onChange={(e) => handleFontFamilyChange(e.target.value)}
-            className={cn(
-              "bg-canopy-bg border border-canopy-border rounded px-3 py-2 text-sm text-canopy-text w-full focus:border-canopy-accent focus:outline-none transition-colors"
-            )}
-            aria-label="Terminal font family"
-          >
-            {FONT_FAMILY_OPTIONS.map((option) => (
-              <option key={option.id} value={option.id}>
-                {option.label}
-              </option>
-            ))}
-          </select>
-          <p className="text-xs text-canopy-text/50">
-            JetBrains Mono is bundled with Canopy. If it is not available on your system, the
-            terminal will fall back to your platform&rsquo;s monospace font.
-          </p>
-        </div>
-      </div>
+      <SettingsSection
+        icon={CaseSensitive}
+        title="Font Family"
+        description="JetBrains Mono is bundled with Canopy. If it is not available on your system, the terminal will fall back to your platform's monospace font."
+      >
+        <select
+          value={selectedFontFamilyId}
+          onChange={(e) => handleFontFamilyChange(e.target.value)}
+          className={cn(
+            "bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-canopy-text w-full focus:border-canopy-accent focus:outline-none transition-colors"
+          )}
+          aria-label="Terminal font family"
+        >
+          {FONT_FAMILY_OPTIONS.map((option) => (
+            <option key={option.id} value={option.id}>
+              {option.label}
+            </option>
+          ))}
+        </select>
+      </SettingsSection>
     </div>
   );
 }

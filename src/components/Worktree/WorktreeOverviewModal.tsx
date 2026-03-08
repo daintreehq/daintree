@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useMemo } from "react";
-import { X, Maximize2, FilterX, Shield } from "lucide-react";
+import { X, Maximize2, FilterX, House } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useShallow } from "zustand/react/shallow";
 import { WorktreeCard } from "./WorktreeCard";
@@ -125,14 +125,10 @@ export function WorktreeOverviewModal({
     for (const worktree of worktrees) {
       const derived = derivedMetaMap.get(worktree.id);
       if (!derived) continue;
-      const isActive = worktree.id === activeWorktreeId;
 
-      // Apply same filtering logic as the main list
+      // hideMainWorktree always takes precedence for the root worktree (user's explicit intent)
       if (hideMainWorktree && worktree.isMainWorktree) {
-        // Still count if it's active and alwaysShowActive is enabled
-        if (!(alwaysShowActive && isActive)) {
-          continue;
-        }
+        continue;
       }
 
       if (derived.hasWorkingAgent || derived.hasRunningAgent) workingCount++;
@@ -141,7 +137,7 @@ export function WorktreeOverviewModal({
     }
 
     return { workingCount, waitingCount, failedCount };
-  }, [worktrees, derivedMetaMap, hideMainWorktree, activeWorktreeId, alwaysShowActive]);
+  }, [worktrees, derivedMetaMap, hideMainWorktree]);
 
   // Check if only main worktree exists (to hide the filter toggle)
   const hasOnlyMainWorktree = useMemo(() => {
@@ -177,12 +173,9 @@ export function WorktreeOverviewModal({
       };
       const isActive = worktree.id === activeWorktreeId;
 
-      // Hide main worktree if filter is enabled (unless it's the active worktree and alwaysShowActive is on)
+      // hideMainWorktree always takes precedence for the root worktree (user's explicit intent)
       if (hideMainWorktree && worktree.isMainWorktree) {
-        // Still show if it's active and alwaysShowActive is enabled
-        if (!(alwaysShowActive && isActive)) {
-          return false;
-        }
+        return false;
       }
 
       // Always show active worktree if setting is enabled
@@ -347,7 +340,7 @@ export function WorktreeOverviewModal({
                       type="button"
                       role="switch"
                       aria-checked={!hideMainWorktree}
-                      aria-label={hideMainWorktree ? "Show main worktree" : "Hide main worktree"}
+                      aria-label={hideMainWorktree ? "Show root worktree" : "Hide root worktree"}
                       onClick={() => setHideMainWorktree(!hideMainWorktree)}
                       className={cn(
                         "flex items-center gap-1.5 px-2 py-1 rounded-full text-xs transition-colors",
@@ -357,7 +350,7 @@ export function WorktreeOverviewModal({
                           : "bg-white/[0.10] text-canopy-text/70 hover:text-canopy-text/90"
                       )}
                     >
-                      <Shield
+                      <House
                         className={cn(
                           "w-3 h-3 transition-colors",
                           hideMainWorktree ? "text-canopy-text/30" : "text-canopy-text/50"
@@ -369,12 +362,12 @@ export function WorktreeOverviewModal({
                           hideMainWorktree && "line-through decoration-canopy-text/30"
                         )}
                       >
-                        main
+                        root
                       </span>
                     </button>
                   </TooltipTrigger>
                   <TooltipContent side="bottom">
-                    {hideMainWorktree ? "Show main worktree" : "Hide main worktree"}
+                    {hideMainWorktree ? "Show root worktree" : "Hide root worktree"}
                   </TooltipContent>
                 </Tooltip>
               </TooltipProvider>

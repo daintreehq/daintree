@@ -587,6 +587,14 @@ const DEFAULT_KEYBINDINGS: KeybindingConfig[] = [
     category: "System",
   },
   {
+    actionId: "voiceInput.toggle",
+    combo: "Cmd+Shift+V",
+    scope: "global",
+    priority: 0,
+    description: "Toggle voice dictation",
+    category: "Voice",
+  },
+  {
     actionId: "find.inFocusedPanel",
     combo: "Cmd+F",
     scope: "global",

@@ -34,6 +34,13 @@ export function registerSystemSleepHandlers(deps: HandlerDependencies): () => vo
   ipcMain.handle(CHANNELS.SYSTEM_SLEEP_RESET, handleReset);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.SYSTEM_SLEEP_RESET));
 
+  const unsubscribeSuspend = systemSleepService.onSuspend(() => {
+    const { mainWindow } = deps;
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send(CHANNELS.SYSTEM_SLEEP_ON_SUSPEND);
+    }
+  });
+
   // Subscribe to wake events and forward to renderer
   const unsubscribeWake = systemSleepService.onWake((sleepDurationMs) => {
     const { mainWindow } = deps;
@@ -44,6 +51,7 @@ export function registerSystemSleepHandlers(deps: HandlerDependencies): () => vo
 
   return () => {
     handlers.forEach((cleanup) => cleanup());
+    unsubscribeSuspend();
     unsubscribeWake();
   };
 }

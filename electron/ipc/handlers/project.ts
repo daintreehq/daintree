@@ -456,7 +456,7 @@ export function registerProjectHandlers(deps: HandlerDependencies): () => void {
 
   const handleProjectOpenDialog = async () => {
     const result = await dialog.showOpenDialog(mainWindow, {
-      properties: ["openDirectory"],
+      properties: ["openDirectory", "createDirectory"],
       title: "Open Git Repository",
     });
 

@@ -76,6 +76,7 @@ export { usePulseStore } from "./pulseStore";
 export { usePreferencesStore } from "./preferencesStore";
 
 export { useToolbarPreferencesStore } from "./toolbarPreferencesStore";
+export { useVoiceRecordingStore } from "./voiceRecordingStore";
 
 export { useDockStore } from "./dockStore";
 

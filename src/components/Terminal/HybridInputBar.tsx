@@ -26,9 +26,10 @@ import {
   type AtFileContext,
   type SlashCommandContext,
 } from "./hybridInputParsing";
-import { CommandPickerButton, CommandPickerHost } from "@/components/Commands";
+import { CommandPickerHost } from "@/components/Commands";
 import { useCommandStore } from "@/store/commandStore";
 import { useProjectStore } from "@/store/projectStore";
+import { useTerminalStore, useVoiceRecordingStore, useWorktreeDataStore } from "@/store";
 import { VoiceInputButton } from "./VoiceInputButton";
 import type { CommandContext, CommandResult } from "@shared/types/commands";
 import { isEnterLikeLineBreakInputEvent } from "./hybridInputEvents";
@@ -50,6 +51,8 @@ import {
   addFileDropChip,
   createFileDropChipTooltip,
   createFilePasteHandler,
+  pendingCorrectionField,
+  setPendingCorrectionRanges,
 } from "./inputEditorExtensions";
 
 export interface HybridInputBarHandle {
@@ -93,6 +96,7 @@ interface LatestState {
     direction: "up" | "down",
     currentInput: string
   ) => string | null;
+  isVoiceActiveForPanel: boolean;
 }
 
 export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarProps>(
@@ -154,8 +158,20 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     const latestRef = useRef<LatestState | null>(null);
 
     const openPicker = useCommandStore((s) => s.openPicker);
-    const [voiceEnabled, setVoiceEnabled] = useState(false);
-    const pendingTranscriptRef = useRef<string>("");
+    const currentProject = useProjectStore((s) => s.currentProject);
+    const voiceStatus = useVoiceRecordingStore((s) => s.status);
+    const activeVoicePanelId = useVoiceRecordingStore((s) => s.activeTarget?.panelId ?? null);
+    const voiceDraftRevision = useTerminalInputStore((s) => s.voiceDraftRevision);
+    const panelWorktreeId = useTerminalStore(
+      (s) => s.terminals.find((terminal) => terminal.id === terminalId)?.worktreeId
+    );
+    const panelWorktree = useWorktreeDataStore((s) =>
+      panelWorktreeId ? s.worktrees.get(panelWorktreeId) : undefined
+    );
+    const isVoiceRecording = activeVoicePanelId === terminalId && voiceStatus === "recording";
+    const isVoiceConnecting = activeVoicePanelId === terminalId && voiceStatus === "connecting";
+    const isVoiceFinishing = activeVoicePanelId === terminalId && voiceStatus === "finishing";
+    const isVoiceActiveForPanel = isVoiceRecording || isVoiceConnecting || isVoiceFinishing;
 
     const commandContext = useMemo(
       (): CommandContext => ({
@@ -239,21 +255,6 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
           cancelAnimationFrame(sendRafRef.current);
         }
       };
-    }, []);
-
-    useEffect(() => {
-      const load = () => {
-        window.electron?.voiceInput
-          ?.getSettings()
-          .then((s) => {
-            setVoiceEnabled(s.enabled);
-          })
-          .catch(() => {});
-      };
-      load();
-      // Re-check when the window regains focus so Settings changes are reflected immediately.
-      window.addEventListener("focus", load);
-      return () => window.removeEventListener("focus", load);
     }, []);
 
     const isInitializing = isAgentTerminal && initializationState === "initializing";
@@ -346,6 +347,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       resetHistoryIndex,
       clearDraftInput,
       navigateHistory,
+      isVoiceActiveForPanel,
     };
 
     useLayoutEffect(() => {
@@ -494,28 +496,79 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       [applyEditorValue]
     );
 
-    const handleVoiceTranscriptionDelta = useCallback((delta: string) => {
-      pendingTranscriptRef.current += delta;
-    }, []);
+    // Voice segments are flushed to the draft store by VoiceRecordingService
+    // and increment voiceDraftRevision.  Sync the editor to the draft when
+    // that revision bumps (works even if this component was unmounted during
+    // a worktree switch — on remount, the draft already contains the text).
+    useEffect(() => {
+      if (voiceDraftRevision === 0) return;
+      const draft = useTerminalInputStore.getState().getDraftInput(terminalId, currentProject?.id);
+      const view = editorViewRef.current;
+      if (!view) return;
+      const current = view.state.doc.toString();
+      if (draft !== current) {
+        // Update React state first so the draft-writeback effect (which
+        // syncs `value` → setDraftInput) won't overwrite with stale data.
+        setValue(draft);
+        lastEmittedValueRef.current = draft;
+        isApplyingExternalValueRef.current = true;
+        view.dispatch({
+          changes: { from: 0, to: current.length, insert: draft },
+          selection: { anchor: draft.length },
+          scrollIntoView: true,
+        });
+      }
+    }, [voiceDraftRevision, terminalId, currentProject?.id]);
 
-    const handleVoiceTranscriptionComplete = useCallback((text: string) => {
-      pendingTranscriptRef.current = "";
+    // Sync pending-correction decorations to the editor whenever they change.
+    // This covers both:
+    // 1. Explicit pending corrections (text awaiting AI correction after transcription completes)
+    // 2. Live segment text (text currently streaming in via deltas, not yet finalized)
+    const pendingCorrections = useVoiceRecordingStore(
+      (s) => s.panelBuffers[terminalId]?.pendingCorrections
+    );
+    const liveSegmentStart = useVoiceRecordingStore(
+      (s) => s.panelBuffers[terminalId]?.draftLengthAtSegmentStart ?? -1
+    );
+    const voiceCorrectionEnabled = useVoiceRecordingStore((s) => s.correctionEnabled);
+    const voiceIsActive = useVoiceRecordingStore(
+      (s) => s.status === "recording" || s.status === "connecting"
+    );
+
+    useEffect(() => {
       const view = editorViewRef.current;
       if (!view) return;
 
-      const current = view.state.doc.toString();
-      const separator = current && !current.endsWith(" ") ? " " : "";
-      const insert = separator + text;
-      const from = view.state.doc.length;
+      const ranges: { from: number; to: number }[] = [];
 
-      isApplyingExternalValueRef.current = true;
-      view.dispatch({
-        changes: { from, insert },
-        selection: { anchor: from + insert.length },
-        scrollIntoView: true,
-      });
-      view.focus();
-    }, []);
+      // Add ranges for pending corrections (finalized segments awaiting AI response)
+      if (pendingCorrections && pendingCorrections.length > 0) {
+        const doc = view.state.doc.toString();
+        for (const p of pendingCorrections) {
+          const idx = doc.indexOf(p.rawText, Math.max(0, p.segmentStart - 20));
+          if (idx >= 0) {
+            ranges.push({ from: idx, to: idx + p.rawText.length });
+          }
+        }
+      }
+
+      // Add range for live segment (text streaming in via deltas, not yet finalized)
+      // This makes delta text appear gray immediately when correction is enabled.
+      if (voiceCorrectionEnabled && voiceIsActive && liveSegmentStart >= 0) {
+        const docLen = view.state.doc.length;
+        if (liveSegmentStart < docLen) {
+          ranges.push({ from: liveSegmentStart, to: docLen });
+        }
+      }
+
+      view.dispatch({ effects: setPendingCorrectionRanges.of(ranges) });
+    }, [
+      pendingCorrections,
+      voiceDraftRevision,
+      liveSegmentStart,
+      voiceCorrectionEnabled,
+      voiceIsActive,
+    ]);
 
     const sendFromEditor = useCallback(() => {
       const view = editorViewRef.current;
@@ -882,6 +935,44 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
 
             if (latest.disabled) return true;
 
+            // During voice recording, plain Enter commits the current paragraph
+            // instead of submitting to the terminal.
+            if (latest.isVoiceActiveForPanel) {
+              handledEnterRef.current = true;
+              setTimeout(() => {
+                handledEnterRef.current = false;
+              }, 0);
+
+              const { terminalId: tid, projectId: pid } = latest;
+              const voiceStore = useVoiceRecordingStore.getState();
+              const buffer = voiceStore.panelBuffers[tid];
+              const paragraphStart = buffer?.activeParagraphStart ?? -1;
+              const rawText =
+                buffer?.completedSegments && buffer.completedSegments.length > 0
+                  ? buffer.completedSegments.join(" ")
+                  : null;
+
+              // Flush paragraph buffer in the main process (fires correction async).
+              void window.electron.voiceInput.flushParagraph();
+
+              // Mark the paragraph as pending correction in the renderer so the
+              // accumulated text shows as gray until the correction arrives.
+              // Only add when correction is enabled — otherwise no CORRECTION_REPLACE
+              // will arrive and the text would stay dimmed permanently.
+              if (rawText && paragraphStart >= 0 && voiceStore.correctionEnabled) {
+                voiceStore.addPendingCorrection(tid, paragraphStart, rawText);
+              }
+
+              // Insert a newline at the end of the draft and reset paragraph state.
+              const inputStore = useTerminalInputStore.getState();
+              const draft = inputStore.getDraftInput(tid, pid);
+              inputStore.setDraftInput(tid, draft + "\n", pid);
+              inputStore.bumpVoiceDraftRevision();
+
+              voiceStore.resetParagraphState(tid);
+              return true;
+            }
+
             const text = editorViewRef.current?.state.doc.toString() ?? latest.value;
             if (text.trim().length === 0) {
               handledEnterRef.current = true;
@@ -1060,6 +1151,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
           fileDropChipTooltipCompartmentRef.current.of(
             !disabled ? createFileDropChipTooltip() : []
           ),
+          pendingCorrectionField,
           keymapCompartmentRef.current.of(keymapExtension),
           editorUpdateListener,
           domEventHandlers,
@@ -1172,14 +1264,16 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
           <div
             ref={inputShellRef}
             className={cn(
-              "relative",
+              "group/shell relative",
               "flex w-full items-center gap-1.5 rounded-sm border border-white/[0.06] bg-overlay-soft py-1 shadow-[0_6px_12px_rgba(0,0,0,0.18)] transition-colors",
               "group-hover:border-white/[0.08] group-hover:bg-overlay-medium",
               "focus-within:border-white/[0.12] focus-within:ring-1 focus-within:ring-white/[0.06] focus-within:bg-white/[0.05]",
+              isVoiceActiveForPanel &&
+                "border-canopy-accent/60 bg-canopy-accent/[0.12] shadow-[0_0_0_1px_rgba(var(--theme-accent-rgb),0.35),0_0_16px_rgba(var(--theme-accent-rgb),0.15)]",
               disabled && "opacity-60"
             )}
             aria-disabled={disabled}
-            aria-busy={isInitializing}
+            aria-busy={isInitializing || isVoiceConnecting}
           >
             <AutocompleteMenu
               ref={menuRef}
@@ -1192,9 +1286,15 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
               ariaLabel={activeMode === "command" ? "Command autocomplete" : "File autocomplete"}
             />
 
-            <div className="select-none pl-2 pr-1 font-mono text-xs font-semibold leading-5 text-canopy-accent/85">
+            <button
+              type="button"
+              onClick={openPicker}
+              disabled={disabled}
+              className="select-none pl-2 pr-1 font-mono text-xs font-semibold leading-5 text-canopy-accent/85 hover:text-canopy-accent transition-colors cursor-pointer focus-visible:outline-none"
+              aria-label="Open command picker"
+            >
               ❯
-            </div>
+            </button>
 
             <div className="relative flex-1">
               <div
@@ -1203,15 +1303,16 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
               />
             </div>
 
-            <div className="flex items-center gap-0.5 pr-1.5">
-              {voiceEnabled && (
-                <VoiceInputButton
-                  onTranscriptionDelta={handleVoiceTranscriptionDelta}
-                  onTranscriptionComplete={handleVoiceTranscriptionComplete}
-                  disabled={disabled}
-                />
-              )}
-              <CommandPickerButton onClick={openPicker} disabled={disabled} />
+            <div className="flex items-center pr-1.5">
+              <VoiceInputButton
+                panelId={terminalId}
+                panelTitle={agentId ? getAgentConfig(agentId)?.name : undefined}
+                projectId={currentProject?.id}
+                projectName={currentProject?.name}
+                worktreeId={panelWorktreeId}
+                worktreeLabel={panelWorktree?.branch || panelWorktree?.name}
+                disabled={disabled}
+              />
             </div>
           </div>
         </div>

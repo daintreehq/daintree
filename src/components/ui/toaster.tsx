@@ -1,38 +1,24 @@
 import { useEffect, useState, useCallback } from "react";
 import { createPortal } from "react-dom";
-import { X, CheckCircle2, XCircle, Info, AlertTriangle } from "lucide-react";
+import { X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useNotificationStore, type Notification } from "@/store/notificationStore";
+import { useShallow } from "zustand/react/shallow";
 
-const STATUS_CONFIG = {
-  success: {
-    icon: CheckCircle2,
-    containerClass:
-      "bg-[color-mix(in_oklab,var(--color-status-success)_18%,transparent)] border-[color:color-mix(in_oklab,var(--color-status-success)_30%,transparent)] backdrop-blur-sm",
-    accentClass: "text-status-success",
-  },
-  error: {
-    icon: XCircle,
-    containerClass:
-      "bg-[color-mix(in_oklab,var(--color-status-error)_18%,transparent)] border-[color:color-mix(in_oklab,var(--color-status-error)_30%,transparent)] backdrop-blur-sm",
-    accentClass: "text-status-error",
-  },
-  info: {
-    icon: Info,
-    containerClass:
-      "bg-[color-mix(in_oklab,var(--color-status-info)_18%,transparent)] border-[color:color-mix(in_oklab,var(--color-status-info)_30%,transparent)] backdrop-blur-sm",
-    accentClass: "text-status-info",
-  },
-  warning: {
-    icon: AlertTriangle,
-    containerClass:
-      "bg-[color-mix(in_oklab,var(--color-status-warning)_18%,transparent)] border-[color:color-mix(in_oklab,var(--color-status-warning)_30%,transparent)] backdrop-blur-sm",
-    accentClass: "text-status-warning",
-  },
+const ACCENT_CLASS: Record<string, string> = {
+  success: "border-l-status-success",
+  error: "border-l-status-error",
+  info: "border-l-status-info",
+  warning: "border-l-status-warning",
 };
 
 function Toast({ notification }: { notification: Notification }) {
-  const removeNotification = useNotificationStore((state) => state.removeNotification);
+  const { dismissNotification, removeNotification } = useNotificationStore(
+    useShallow((state) => ({
+      dismissNotification: state.dismissNotification,
+      removeNotification: state.removeNotification,
+    }))
+  );
   const [isVisible, setIsVisible] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
 
@@ -41,52 +27,51 @@ function Toast({ notification }: { notification: Notification }) {
   }, []);
 
   const handleDismiss = useCallback(() => {
+    dismissNotification(notification.id);
     setIsVisible(false);
     setTimeout(() => removeNotification(notification.id), 300);
-  }, [notification.id, removeNotification]);
+  }, [notification.id, dismissNotification, removeNotification]);
+
+  useEffect(() => {
+    if (notification.dismissed && isVisible) {
+      setIsVisible(false);
+      setTimeout(() => removeNotification(notification.id), 300);
+    }
+  }, [notification.dismissed, notification.id, isVisible, removeNotification]);
 
   useEffect(() => {
     if (notification.duration === 0 || isPaused) return;
-
-    const timer = setTimeout(handleDismiss, notification.duration || 5000);
+    const timer = setTimeout(handleDismiss, notification.duration || 3000);
     return () => clearTimeout(timer);
   }, [notification.duration, handleDismiss, isPaused]);
 
-  const config = STATUS_CONFIG[notification.type];
-  const Icon = config.icon;
+  const accentClass = ACCENT_CLASS[notification.type] ?? "border-l-status-info";
 
   return (
     <div
       className={cn(
-        "pointer-events-auto relative flex w-full max-w-[400px] items-start gap-2.5",
-        "rounded-[var(--radius-sm)] border",
-        "px-3 py-2.5 pr-10",
+        "group pointer-events-auto relative flex w-full max-w-[360px] items-start gap-3",
+        "rounded-[var(--radius-sm)] border-l-[3px] border border-white/[0.08]",
+        "bg-zinc-900/60 backdrop-blur-xl",
+        "px-3 py-2.5 pr-2",
         "text-sm text-canopy-text",
-        "shadow-[0_4px_12px_rgba(0,0,0,0.2)]",
+        "shadow-[0_8px_24px_rgba(0,0,0,0.4)]",
+        "ring-1 ring-inset ring-white/[0.05]",
         "transition-[transform,opacity] duration-300 ease-out",
         isVisible ? "translate-x-0 opacity-100" : "translate-x-8 opacity-0",
-        config.containerClass
+        accentClass
       )}
       onMouseEnter={() => setIsPaused(true)}
       onMouseLeave={() => setIsPaused(false)}
       role="alert"
     >
-      <div className={cn("mt-0.5 shrink-0", config.accentClass)}>
-        <Icon className="h-4 w-4" />
-      </div>
-
-      <div className="flex-1 space-y-1 min-w-0">
+      <div className="flex-1 space-y-1 min-w-0 py-0.5">
         {notification.title && (
-          <h4
-            className={cn(
-              "font-medium leading-tight tracking-tight text-xs font-mono",
-              config.accentClass
-            )}
-          >
+          <h4 className="font-medium leading-tight tracking-tight text-xs text-canopy-text">
             {notification.title}
           </h4>
         )}
-        <div className="text-xs text-canopy-text/90 leading-snug break-words">
+        <div className="text-xs text-canopy-text/70 leading-snug break-words">
           {notification.message}
         </div>
         {notification.action && (
@@ -114,10 +99,10 @@ function Toast({ notification }: { notification: Notification }) {
         onClick={handleDismiss}
         aria-label="Dismiss notification"
         className={cn(
-          "absolute right-1.5 top-1.5 rounded-[var(--radius-xs)]",
+          "shrink-0 rounded-[var(--radius-xs)]",
           "h-6 w-6 flex items-center justify-center",
-          "text-canopy-text/60 transition-colors",
-          "hover:text-canopy-text/90 hover:bg-white/10",
+          "text-canopy-text/40 transition-colors duration-150",
+          "hover:text-canopy-text/80 hover:bg-white/10",
           "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2"
         )}
       >
@@ -143,10 +128,10 @@ export function Toaster() {
 
   return createPortal(
     <div
-      className="fixed bottom-6 z-[var(--z-toast)] flex flex-col gap-3 w-full max-w-[420px] pointer-events-none p-4"
+      className="fixed top-14 z-[var(--z-toast)] flex flex-col gap-3 w-full max-w-[380px] pointer-events-none p-4"
       style={{ right: "calc(var(--sidecar-right-offset, 0px))" }}
     >
-      {toastNotifications.map((notification) => (
+      {[...toastNotifications].reverse().map((notification) => (
         <Toast key={notification.id} notification={notification} />
       ))}
     </div>,
