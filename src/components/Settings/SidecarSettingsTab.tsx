@@ -1,16 +1,16 @@
 import { useEffect, useRef, useState } from "react";
-import { Plus, Trash2, Globe, Check, X, Search } from "lucide-react";
+import { Plus, Trash2, Globe, Check, X, Search, PanelRight, Link, Maximize2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
 import { useSidecarStore } from "@/store/sidecarStore";
 import { SIDECAR_MIN_WIDTH, SIDECAR_MAX_WIDTH, SIDECAR_DEFAULT_WIDTH } from "@shared/types";
 import { getAgentConfig, isRegisteredAgent } from "@/config/agents";
 import { actionService } from "@/services/ActionService";
+import { SettingsSection } from "./SettingsSection";
 
 function ServiceIcon({ name, size = 16 }: { name: string; size?: number }) {
   const className = size === 16 ? "w-4 h-4" : size === 32 ? "w-8 h-8" : "w-4 h-4";
 
-  // Handle special cases first
   if (name === "globe") {
     return <Globe className={className} />;
   }
@@ -18,7 +18,6 @@ function ServiceIcon({ name, size = 16 }: { name: string; size?: number }) {
     return <Search className={className} />;
   }
 
-  // Try to get agent config from registry
   if (isRegisteredAgent(name)) {
     const config = getAgentConfig(name);
     if (config) {
@@ -201,19 +200,129 @@ export function SidecarSettingsTab() {
     setCustomUrlError("");
   };
 
+  const renderLinkRow = (link: (typeof links)[0], allowDelete: boolean) => {
+    if (editingLinkId === link.id) {
+      return (
+        <div
+          key={link.id}
+          className="flex items-center gap-2 p-3 rounded-[var(--radius-md)] border border-canopy-border bg-canopy-bg/30"
+        >
+          <input
+            type="text"
+            value={editName}
+            onChange={(e) => setEditName(e.target.value)}
+            className="bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] px-2 py-1 text-sm text-canopy-text w-32 focus:border-canopy-accent focus:outline-none"
+            placeholder="Name"
+          />
+          <input
+            type="text"
+            value={editUrl}
+            onChange={(e) => setEditUrl(e.target.value)}
+            className="bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] px-2 py-1 text-sm text-canopy-text flex-1 focus:border-canopy-accent focus:outline-none"
+            placeholder="URL"
+          />
+          <button
+            onClick={handleSaveEdit}
+            className="p-1.5 rounded hover:bg-canopy-border/50 text-status-success"
+          >
+            <Check className="w-4 h-4" />
+          </button>
+          <button
+            onClick={handleCancelEdit}
+            className="p-1.5 rounded hover:bg-canopy-border/50 text-canopy-text/50"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      );
+    }
+
+    return (
+      <div
+        key={link.id}
+        className="flex items-center justify-between p-3 rounded-[var(--radius-md)] border border-canopy-border bg-canopy-bg/30"
+      >
+        <div className="flex items-center gap-3">
+          {allowDelete ? <FaviconIcon url={link.url} /> : <ServiceIcon name={link.icon} />}
+          <div className="flex flex-col">
+            <span className="text-sm text-canopy-text">{link.title}</span>
+            {!allowDelete && (
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <span className="text-[11px] font-mono text-canopy-text/50 truncate min-w-0">
+                      {link.url}
+                    </span>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom">{link.url}</TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+            )}
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => handleStartEdit(link.id, link.title, link.url)}
+            className="text-xs text-canopy-text/50 hover:text-canopy-text px-2 py-1 rounded hover:bg-canopy-border/50"
+          >
+            Edit
+          </button>
+          <button
+            onClick={() =>
+              void actionService.dispatch(
+                "sidecar.links.toggle",
+                { id: link.id },
+                { source: "user" }
+              )
+            }
+            disabled={link.alwaysEnabled}
+            className={cn(
+              "w-10 h-5 rounded-full relative transition-colors shrink-0",
+              link.alwaysEnabled && "opacity-50 cursor-not-allowed",
+              link.enabled ? "bg-canopy-accent" : "bg-canopy-border"
+            )}
+          >
+            <div
+              className={cn(
+                "absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform",
+                link.enabled ? "translate-x-5" : "translate-x-0.5"
+              )}
+            />
+          </button>
+          {allowDelete && (
+            <button
+              onClick={() =>
+                void actionService.dispatch(
+                  "sidecar.links.remove",
+                  { id: link.id },
+                  { source: "user" }
+                )
+              }
+              disabled={link.alwaysEnabled}
+              className={cn(
+                "p-1.5 rounded hover:bg-canopy-border/50 text-canopy-text/50 hover:text-status-error",
+                link.alwaysEnabled && "opacity-50 cursor-not-allowed"
+              )}
+            >
+              <Trash2 className="w-4 h-4" />
+            </button>
+          )}
+        </div>
+      </div>
+    );
+  };
+
   return (
     <div className="space-y-6">
-      <section>
-        <h4 id="default-agent-label" className="text-sm font-medium text-canopy-text mb-2">
-          Default New Tab Agent
-        </h4>
-        <p className="text-xs text-canopy-text/50 mb-3">
-          Choose which agent opens when you click the + button. Select "None" to show the Launchpad.
-        </p>
-
+      <SettingsSection
+        icon={PanelRight}
+        title="Default New Tab Agent"
+        description='Choose which agent opens when you click the + button. Select "None" to show the Launchpad.'
+      >
         <div className="space-y-3">
           <select
-            aria-labelledby="default-agent-label"
+            aria-label="Default new tab agent"
             value={
               showCustomUrlInput
                 ? "custom"
@@ -224,7 +333,7 @@ export function SidecarSettingsTab() {
                     : defaultNewTabUrl
             }
             onChange={(e) => handleDefaultAgentChange(e.target.value)}
-            className="w-full bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] px-3 py-2 text-sm text-canopy-text focus:border-canopy-accent focus:outline-none"
+            className="w-full bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-canopy-text focus:border-canopy-accent focus:outline-none transition-colors"
           >
             <option value="none">None (show Launchpad)</option>
             {enabledLinks.map((link) => (
@@ -238,7 +347,6 @@ export function SidecarSettingsTab() {
           {showCustomUrlInput && (
             <div className="flex gap-2">
               <input
-                id="custom-url-input"
                 type="text"
                 placeholder="https://..."
                 value={customDefaultUrl}
@@ -246,20 +354,19 @@ export function SidecarSettingsTab() {
                   setCustomDefaultUrl(e.target.value);
                   setCustomUrlError("");
                 }}
-                className="flex-1 bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] px-3 py-2 text-sm text-canopy-text focus:border-canopy-accent focus:outline-none"
+                className="flex-1 bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-canopy-text focus:border-canopy-accent focus:outline-none transition-colors"
                 onKeyDown={(e) => {
                   if (e.key === "Enter") handleCustomUrlSave();
                   if (e.key === "Escape") handleCustomUrlCancel();
                 }}
                 aria-invalid={!!customUrlError}
-                aria-describedby={customUrlError ? "custom-url-error" : undefined}
                 autoFocus
               />
               <button
                 type="button"
                 onClick={handleCustomUrlSave}
                 aria-label="Save custom URL"
-                className="px-3 py-2 rounded-[var(--radius-md)] bg-canopy-accent text-canopy-bg text-sm hover:bg-canopy-accent/90 transition-colors"
+                className="px-3 py-1.5 rounded-[var(--radius-md)] bg-canopy-accent text-canopy-bg text-sm hover:bg-canopy-accent/90 transition-colors"
               >
                 <Check className="w-4 h-4" />
               </button>
@@ -267,7 +374,7 @@ export function SidecarSettingsTab() {
                 type="button"
                 onClick={handleCustomUrlCancel}
                 aria-label="Cancel custom URL"
-                className="px-3 py-2 rounded-[var(--radius-md)] border border-canopy-border text-canopy-text/70 text-sm hover:bg-canopy-border/50 transition-colors"
+                className="px-3 py-1.5 rounded-[var(--radius-md)] border border-canopy-border text-canopy-text/70 text-sm hover:bg-canopy-border/50 transition-colors"
               >
                 <X className="w-4 h-4" />
               </button>
@@ -275,7 +382,7 @@ export function SidecarSettingsTab() {
           )}
 
           {customUrlError && (
-            <p id="custom-url-error" role="alert" className="text-xs text-status-error">
+            <p role="alert" className="text-xs text-status-error">
               {customUrlError}
             </p>
           )}
@@ -287,195 +394,24 @@ export function SidecarSettingsTab() {
             </div>
           )}
         </div>
-      </section>
+      </SettingsSection>
 
-      <section className="pt-4 border-t border-canopy-border">
-        <h4 className="text-sm font-medium text-canopy-text mb-3">Default Links</h4>
+      <SettingsSection
+        icon={Link}
+        title="Default Links"
+        description="Built-in agent and service links. Toggle visibility in the sidecar tab bar."
+      >
+        <div className="space-y-2">{systemLinks.map((link) => renderLinkRow(link, false))}</div>
+      </SettingsSection>
+
+      <SettingsSection
+        icon={Globe}
+        title="Custom Links"
+        description="Add your own links to AI services or documentation."
+      >
+        <div className="space-y-2">{userLinks.map((link) => renderLinkRow(link, true))}</div>
+
         <div className="space-y-2">
-          {systemLinks.map((link) => (
-            <div
-              key={link.id}
-              className="flex items-center justify-between p-3 rounded-[var(--radius-lg)] bg-canopy-bg border border-canopy-border"
-            >
-              {editingLinkId === link.id ? (
-                <div className="flex items-center gap-2 flex-1">
-                  <input
-                    type="text"
-                    value={editName}
-                    onChange={(e) => setEditName(e.target.value)}
-                    className="bg-canopy-bg border border-canopy-border rounded px-2 py-1 text-sm text-canopy-text w-32 focus:border-canopy-accent focus:outline-none"
-                    placeholder="Name"
-                  />
-                  <input
-                    type="text"
-                    value={editUrl}
-                    onChange={(e) => setEditUrl(e.target.value)}
-                    className="bg-canopy-bg border border-canopy-border rounded px-2 py-1 text-sm text-canopy-text flex-1 focus:border-canopy-accent focus:outline-none"
-                    placeholder="URL"
-                  />
-                  <button
-                    onClick={handleSaveEdit}
-                    className="p-1.5 rounded hover:bg-canopy-border text-status-success"
-                  >
-                    <Check className="w-4 h-4" />
-                  </button>
-                  <button
-                    onClick={handleCancelEdit}
-                    className="p-1.5 rounded hover:bg-canopy-border text-muted-foreground"
-                  >
-                    <X className="w-4 h-4" />
-                  </button>
-                </div>
-              ) : (
-                <>
-                  <div className="flex items-center gap-3">
-                    <ServiceIcon name={link.icon} />
-                    <div className="flex flex-col">
-                      <span className="text-sm text-canopy-text">{link.title}</span>
-                      <TooltipProvider>
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <span className="text-[11px] font-mono text-muted-foreground truncate min-w-0">
-                              {link.url}
-                            </span>
-                          </TooltipTrigger>
-                          <TooltipContent side="bottom">{link.url}</TooltipContent>
-                        </Tooltip>
-                      </TooltipProvider>
-                    </div>
-                  </div>
-
-                  <div className="flex items-center gap-2">
-                    <button
-                      onClick={() => handleStartEdit(link.id, link.title, link.url)}
-                      className="text-xs text-muted-foreground hover:text-canopy-text px-2 py-1 rounded hover:bg-canopy-border"
-                    >
-                      Edit
-                    </button>
-                    <button
-                      onClick={() =>
-                        void actionService.dispatch(
-                          "sidecar.links.toggle",
-                          { id: link.id },
-                          { source: "user" }
-                        )
-                      }
-                      className={cn(
-                        "w-10 h-5 rounded-full relative transition-colors",
-                        link.enabled ? "bg-canopy-accent" : "bg-canopy-border"
-                      )}
-                    >
-                      <div
-                        className={cn(
-                          "absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform",
-                          link.enabled ? "translate-x-5" : "translate-x-0.5"
-                        )}
-                      />
-                    </button>
-                  </div>
-                </>
-              )}
-            </div>
-          ))}
-        </div>
-      </section>
-
-      <section className="pt-4 border-t border-canopy-border">
-        <h4 className="text-sm font-medium text-canopy-text mb-3">Custom Links</h4>
-        <div className="space-y-2">
-          {userLinks.map((link) => (
-            <div
-              key={link.id}
-              className="flex items-center justify-between p-3 rounded-[var(--radius-lg)] bg-canopy-bg border border-canopy-border"
-            >
-              {editingLinkId === link.id ? (
-                <div className="flex items-center gap-2 flex-1">
-                  <input
-                    type="text"
-                    value={editName}
-                    onChange={(e) => setEditName(e.target.value)}
-                    className="bg-canopy-bg border border-canopy-border rounded px-2 py-1 text-sm text-canopy-text w-32 focus:border-canopy-accent focus:outline-none"
-                    placeholder="Name"
-                  />
-                  <input
-                    type="text"
-                    value={editUrl}
-                    onChange={(e) => setEditUrl(e.target.value)}
-                    className="bg-canopy-bg border border-canopy-border rounded px-2 py-1 text-sm text-canopy-text flex-1 focus:border-canopy-accent focus:outline-none"
-                    placeholder="URL"
-                  />
-                  <button
-                    onClick={handleSaveEdit}
-                    className="p-1.5 rounded hover:bg-canopy-border text-status-success"
-                  >
-                    <Check className="w-4 h-4" />
-                  </button>
-                  <button
-                    onClick={handleCancelEdit}
-                    className="p-1.5 rounded hover:bg-canopy-border text-muted-foreground"
-                  >
-                    <X className="w-4 h-4" />
-                  </button>
-                </div>
-              ) : (
-                <>
-                  <div className="flex items-center gap-3">
-                    <FaviconIcon url={link.url} />
-                    <span className="text-sm text-canopy-text">{link.title}</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <button
-                      onClick={() => handleStartEdit(link.id, link.title, link.url)}
-                      className="text-xs text-muted-foreground hover:text-canopy-text px-2 py-1 rounded hover:bg-canopy-border"
-                    >
-                      Edit
-                    </button>
-                    <button
-                      onClick={() =>
-                        void actionService.dispatch(
-                          "sidecar.links.toggle",
-                          { id: link.id },
-                          { source: "user" }
-                        )
-                      }
-                      disabled={link.alwaysEnabled}
-                      className={cn(
-                        "w-10 h-5 rounded-full relative transition-colors",
-                        link.alwaysEnabled && "opacity-50 cursor-not-allowed",
-                        link.enabled ? "bg-canopy-accent" : "bg-canopy-border"
-                      )}
-                    >
-                      <div
-                        className={cn(
-                          "absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform",
-                          link.enabled ? "translate-x-5" : "translate-x-0.5"
-                        )}
-                      />
-                    </button>
-                    <button
-                      onClick={() =>
-                        void actionService.dispatch(
-                          "sidecar.links.remove",
-                          { id: link.id },
-                          { source: "user" }
-                        )
-                      }
-                      disabled={link.alwaysEnabled}
-                      className={cn(
-                        "p-1.5 rounded hover:bg-canopy-border text-muted-foreground hover:text-status-error",
-                        link.alwaysEnabled && "opacity-50 cursor-not-allowed"
-                      )}
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
-                  </div>
-                </>
-              )}
-            </div>
-          ))}
-        </div>
-
-        <div className="mt-3">
           <div className="flex gap-2">
             <input
               type="text"
@@ -485,7 +421,7 @@ export function SidecarSettingsTab() {
                 setNewLinkName(e.target.value);
                 setUrlError("");
               }}
-              className="bg-canopy-bg border border-canopy-border rounded px-3 py-2 text-sm text-canopy-text w-32 focus:border-canopy-accent focus:outline-none"
+              className="bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-canopy-text w-32 focus:border-canopy-accent focus:outline-none transition-colors"
             />
             <input
               type="text"
@@ -495,7 +431,7 @@ export function SidecarSettingsTab() {
                 setNewLinkUrl(e.target.value);
                 setUrlError("");
               }}
-              className="bg-canopy-bg border border-canopy-border rounded px-3 py-2 text-sm text-canopy-text flex-1 focus:border-canopy-accent focus:outline-none"
+              className="bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-canopy-text flex-1 focus:border-canopy-accent focus:outline-none transition-colors"
               onKeyDown={(e) => {
                 if (e.key === "Enter") handleAddLink();
               }}
@@ -503,22 +439,21 @@ export function SidecarSettingsTab() {
             <button
               onClick={handleAddLink}
               disabled={!newLinkName.trim() || !newLinkUrl.trim()}
-              className="flex items-center gap-1.5 px-3 py-2 rounded-[var(--radius-md)] bg-canopy-accent text-canopy-bg text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed hover:bg-canopy-accent/90 transition-colors"
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-[var(--radius-md)] bg-canopy-accent text-canopy-bg text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed hover:bg-canopy-accent/90 transition-colors"
             >
               <Plus className="w-4 h-4" />
               Add
             </button>
           </div>
-          {urlError && <p className="text-xs text-status-error mt-1">{urlError}</p>}
+          {urlError && <p className="text-xs text-status-error">{urlError}</p>}
         </div>
-      </section>
+      </SettingsSection>
 
-      <section className="pt-4 border-t border-canopy-border">
-        <h4 className="text-sm font-medium text-canopy-text mb-2">Default Width</h4>
-        <p className="text-xs text-canopy-text/50 mb-4">
-          Set the default width of the sidecar panel. You can still resize it manually.
-        </p>
-
+      <SettingsSection
+        icon={Maximize2}
+        title="Default Width"
+        description="Set the default width of the sidecar panel. You can still resize it manually."
+      >
         <div className="space-y-3">
           <div className="flex items-center gap-4">
             <input
@@ -577,14 +512,7 @@ export function SidecarSettingsTab() {
             <span>{SIDECAR_MAX_WIDTH}px (max)</span>
           </div>
         </div>
-      </section>
-
-      <section className="pt-4 border-t border-canopy-border">
-        <p className="text-xs text-canopy-text/50">
-          Enabled links appear as tabs in the Sidecar browser panel. Toggle default links on or off,
-          or add custom links to your preferred AI services.
-        </p>
-      </section>
+      </SettingsSection>
     </div>
   );
 }

@@ -1,8 +1,9 @@
 import { useState, useEffect, useCallback } from "react";
 import { Button } from "@/components/ui/button";
-import { Key, Check, AlertCircle, Loader2, FlaskConical, ExternalLink } from "lucide-react";
+import { Key, Check, AlertCircle, Loader2, FlaskConical, ExternalLink, Github } from "lucide-react";
 import { useGitHubConfigStore } from "@/store";
 import { actionService } from "@/services/ActionService";
+import { SettingsSection } from "./SettingsSection";
 
 type ValidationResult = "success" | "error" | "test-success" | "test-error" | null;
 
@@ -167,104 +168,98 @@ export function GitHubSettingsTab() {
 
   return (
     <div className="space-y-6">
-      <div className="space-y-3">
-        <div className="flex items-center justify-between">
-          <h4 className="text-sm font-medium text-canopy-text flex items-center gap-2">
-            <Key className="w-4 h-4" />
-            Personal Access Token
-          </h4>
+      <SettingsSection
+        icon={Key}
+        title="Personal Access Token"
+        description="Used for repository statistics, issue/PR detection, and linking worktrees to GitHub. Eliminates the need for the gh CLI."
+      >
+        <div className="space-y-3">
           {githubConfig?.hasToken && (
-            <span className="text-xs text-status-success flex items-center gap-1">
+            <div className="flex items-center gap-1 text-xs text-status-success">
               <Check className="w-3 h-3" />
               GitHub connected
-            </span>
+            </div>
           )}
-        </div>
 
-        <div className="flex gap-2">
-          <input
-            type="password"
-            value={githubToken}
-            onChange={(e) => setGithubToken(e.target.value)}
-            placeholder={
-              githubConfig?.hasToken ? "Enter new token to replace" : "ghp_... or github_pat_..."
-            }
-            className="flex-1 bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] px-3 py-2 text-sm text-canopy-text placeholder:text-canopy-text/40 focus:outline-none focus:ring-1 focus:ring-canopy-accent"
-            disabled={isValidating || isTesting}
-          />
-          <Button
-            onClick={handleTestToken}
-            disabled={isTesting || isValidating || !githubToken.trim()}
-            variant="outline"
-            size="sm"
-            className="min-w-[70px] text-canopy-text border-canopy-border hover:bg-canopy-border"
-          >
-            {isTesting ? (
-              <Loader2 className="animate-spin" />
-            ) : (
-              <>
-                <FlaskConical />
-                Test
-              </>
-            )}
-          </Button>
-          <Button
-            onClick={handleSaveToken}
-            disabled={isValidating || isTesting || !githubToken.trim()}
-            size="sm"
-            className="min-w-[70px]"
-          >
-            {isValidating ? <Loader2 className="animate-spin" /> : "Save"}
-          </Button>
-          {githubConfig?.hasToken && (
+          <div className="flex gap-2">
+            <input
+              type="password"
+              value={githubToken}
+              onChange={(e) => setGithubToken(e.target.value)}
+              placeholder={
+                githubConfig?.hasToken ? "Enter new token to replace" : "ghp_... or github_pat_..."
+              }
+              className="flex-1 bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-canopy-text placeholder:text-canopy-text/40 focus:outline-none focus:border-canopy-accent transition-colors"
+              disabled={isValidating || isTesting}
+            />
             <Button
-              onClick={handleClearToken}
+              onClick={handleTestToken}
+              disabled={isTesting || isValidating || !githubToken.trim()}
               variant="outline"
               size="sm"
-              className="text-status-error border-canopy-border hover:bg-status-error/10 hover:text-status-error/70 hover:border-status-error/20"
+              className="min-w-[70px] text-canopy-text border-canopy-border hover:bg-canopy-border"
             >
-              Clear
+              {isTesting ? (
+                <Loader2 className="animate-spin" />
+              ) : (
+                <>
+                  <FlaskConical />
+                  Test
+                </>
+              )}
             </Button>
+            <Button
+              onClick={handleSaveToken}
+              disabled={isValidating || isTesting || !githubToken.trim()}
+              size="sm"
+              className="min-w-[70px]"
+            >
+              {isValidating ? <Loader2 className="animate-spin" /> : "Save"}
+            </Button>
+            {githubConfig?.hasToken && (
+              <Button
+                onClick={handleClearToken}
+                variant="outline"
+                size="sm"
+                className="text-status-error border-canopy-border hover:bg-status-error/10 hover:text-status-error/70 hover:border-status-error/20"
+              >
+                Clear
+              </Button>
+            )}
+          </div>
+
+          {validationResult === "success" && (
+            <p className="text-xs text-status-success flex items-center gap-1">
+              <Check className="w-3 h-3" />
+              Token validated and saved successfully
+            </p>
+          )}
+          {validationResult === "test-success" && (
+            <p className="text-xs text-status-success flex items-center gap-1">
+              <Check className="w-3 h-3" />
+              Token is valid! Click Save to store it.
+            </p>
+          )}
+          {validationResult === "error" && (
+            <p className="text-xs text-status-error flex items-center gap-1">
+              <AlertCircle className="w-3 h-3" />
+              {errorMessage || "Invalid token. Please check and try again."}
+            </p>
+          )}
+          {validationResult === "test-error" && (
+            <p className="text-xs text-status-error flex items-center gap-1">
+              <AlertCircle className="w-3 h-3" />
+              {errorMessage || "Token test failed. Please check your token."}
+            </p>
           )}
         </div>
+      </SettingsSection>
 
-        {validationResult === "success" && (
-          <p className="text-xs text-status-success flex items-center gap-1">
-            <Check className="w-3 h-3" />
-            Token validated and saved successfully
-          </p>
-        )}
-        {validationResult === "test-success" && (
-          <p className="text-xs text-status-success flex items-center gap-1">
-            <Check className="w-3 h-3" />
-            Token is valid! Click Save to store it.
-          </p>
-        )}
-        {validationResult === "error" && (
-          <p className="text-xs text-status-error flex items-center gap-1">
-            <AlertCircle className="w-3 h-3" />
-            {errorMessage || "Invalid token. Please check and try again."}
-          </p>
-        )}
-        {validationResult === "test-error" && (
-          <p className="text-xs text-status-error flex items-center gap-1">
-            <AlertCircle className="w-3 h-3" />
-            {errorMessage || "Token test failed. Please check your token."}
-          </p>
-        )}
-
-        <p className="text-xs text-canopy-text/60">
-          Used for repository statistics, issue/PR detection, and linking worktrees to GitHub.
-          Eliminates the need for the gh CLI.
-        </p>
-      </div>
-
-      <div className="space-y-3 border border-canopy-border rounded-[var(--radius-md)] p-4">
-        <h4 className="text-sm font-medium text-canopy-text">Create a New Token</h4>
-        <p className="text-xs text-canopy-text/60">
-          To create a personal access token with the required scopes (repo, read:org), click the
-          button below. This will open GitHub in your browser.
-        </p>
+      <SettingsSection
+        icon={Github}
+        title="Create a New Token"
+        description="To create a personal access token with the required scopes, click the button below. This will open GitHub in your browser."
+      >
         <Button
           onClick={openGitHubTokenPage}
           variant="outline"
@@ -274,20 +269,20 @@ export function GitHubSettingsTab() {
           <ExternalLink />
           Create Token on GitHub
         </Button>
-        <div className="mt-2 space-y-1">
-          <p className="text-xs text-canopy-text/60">Required scopes:</p>
-          <ul className="text-xs text-canopy-text/60 list-disc list-inside">
+        <div className="space-y-1">
+          <p className="text-xs text-canopy-text/50">Required scopes:</p>
+          <ul className="text-xs text-canopy-text/50 list-disc list-inside space-y-0.5">
             <li>
-              <code className="text-canopy-text bg-canopy-bg px-1 rounded">repo</code> - Access
+              <code className="text-canopy-text/70 bg-canopy-bg px-1 rounded">repo</code> — Access
               repository data
             </li>
             <li>
-              <code className="text-canopy-text bg-canopy-bg px-1 rounded">read:org</code> - Read
+              <code className="text-canopy-text/70 bg-canopy-bg px-1 rounded">read:org</code> — Read
               organization membership (for private repos)
             </li>
           </ul>
         </div>
-      </div>
+      </SettingsSection>
     </div>
   );
 }
