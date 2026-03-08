@@ -508,6 +508,7 @@ const CHANNELS = {
   VOICE_INPUT_REQUEST_MIC_PERMISSION: "voice-input:request-mic-permission",
   VOICE_INPUT_OPEN_MIC_SETTINGS: "voice-input:open-mic-settings",
   VOICE_INPUT_VALIDATE_API_KEY: "voice-input:validate-api-key",
+  VOICE_INPUT_VALIDATE_CORRECTION_API_KEY: "voice-input:validate-correction-api-key",
   VOICE_INPUT_FLUSH_PARAGRAPH: "voice-input:flush-paragraph",
 
   // MCP Server channels
@@ -1617,10 +1618,11 @@ const api: ElectronAPI = {
     setSettings: (
       patch: Partial<{
         enabled: boolean;
-        apiKey: string;
+        deepgramApiKey: string;
+        correctionApiKey: string;
         language: string;
         customDictionary: string[];
-        transcriptionModel: "gpt-4o-mini-transcribe" | "gpt-4o-transcribe";
+        transcriptionModel: "nova-3" | "nova-2";
         correctionEnabled: boolean;
         correctionModel: "gpt-5-nano";
         correctionCustomInstructions: string;
@@ -1639,6 +1641,8 @@ const api: ElectronAPI = {
     onCorrectionReplace: (
       callback: (payload: { rawText: string; correctedText: string }) => void
     ) => _typedOn(CHANNELS.VOICE_INPUT_CORRECTION_REPLACE, callback),
+    onParagraphBoundary: (callback: (payload: { rawText: string | null }) => void) =>
+      _typedOn(CHANNELS.VOICE_INPUT_PARAGRAPH_BOUNDARY, callback),
     onError: (callback: (error: string) => void) => _typedOn(CHANNELS.VOICE_INPUT_ERROR, callback),
     onStatus: (callback: (status: "idle" | "connecting" | "recording" | "error") => void) =>
       _typedOn(CHANNELS.VOICE_INPUT_STATUS, callback),
@@ -1646,6 +1650,8 @@ const api: ElectronAPI = {
     requestMicPermission: () => _typedInvoke(CHANNELS.VOICE_INPUT_REQUEST_MIC_PERMISSION),
     openMicSettings: () => _typedInvoke(CHANNELS.VOICE_INPUT_OPEN_MIC_SETTINGS),
     validateApiKey: (apiKey: string) => _typedInvoke(CHANNELS.VOICE_INPUT_VALIDATE_API_KEY, apiKey),
+    validateCorrectionApiKey: (apiKey: string) =>
+      _typedInvoke(CHANNELS.VOICE_INPUT_VALIDATE_CORRECTION_API_KEY, apiKey),
   },
 
   mcpServer: {

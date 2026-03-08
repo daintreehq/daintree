@@ -85,11 +85,15 @@ function buildElectronStub() {
       onTranscriptionDelta: vi.fn(() => () => {}),
       onTranscriptionComplete: vi.fn(() => () => {}),
       onCorrectionReplace: vi.fn(() => () => {}),
+      onParagraphBoundary: vi.fn(() => () => {}),
       onError: vi.fn(() => () => {}),
       onStatus: vi.fn(() => () => {}),
-      getSettings: vi
-        .fn()
-        .mockResolvedValue({ enabled: true, apiKey: "key", correctionEnabled: false }),
+      getSettings: vi.fn().mockResolvedValue({
+        enabled: true,
+        deepgramApiKey: "dg-key",
+        correctionApiKey: "",
+        correctionEnabled: false,
+      }),
       checkMicPermission: vi.fn().mockResolvedValue("granted"),
       requestMicPermission: vi.fn().mockResolvedValue(true),
       openMicSettings: vi.fn(),

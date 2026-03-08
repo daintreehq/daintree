@@ -89,7 +89,7 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
     return (
       <div
         className={cn(
-          "p-4 bg-surface-highlight rounded-[var(--radius-lg)] border border-canopy-border shadow-[inset_0_1px_0_0_rgba(255,255,255,0.07)]",
+          "p-4 bg-canopy-sidebar rounded-[var(--radius-lg)] border border-canopy-border",
           className
         )}
       >
@@ -109,7 +109,7 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
     return (
       <div
         className={cn(
-          "p-4 bg-surface-highlight rounded-[var(--radius-lg)] border border-canopy-border shadow-[inset_0_1px_0_0_rgba(255,255,255,0.07)]",
+          "p-4 bg-canopy-sidebar rounded-[var(--radius-lg)] border border-canopy-border",
           className
         )}
       >
@@ -129,7 +129,7 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
     return (
       <div
         className={cn(
-          "p-4 bg-surface-highlight rounded-[var(--radius-lg)] border border-canopy-border shadow-[inset_0_1px_0_0_rgba(255,255,255,0.07)]",
+          "p-4 bg-canopy-sidebar rounded-[var(--radius-lg)] border border-canopy-border",
           className
         )}
       >
@@ -169,7 +169,7 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
   return (
     <div
       className={cn(
-        "w-fit bg-surface-highlight rounded-[var(--radius-lg)] border border-canopy-border shadow-[inset_0_1px_0_0_rgba(255,255,255,0.07)]",
+        "w-fit bg-canopy-sidebar rounded-[var(--radius-lg)] border border-canopy-border",
         className
       )}
     >

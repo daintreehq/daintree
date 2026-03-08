@@ -9,6 +9,7 @@ import type { VoiceInputSettings } from "../../../shared/types/ipc/api.js";
 
 let service: VoiceTranscriptionService | null = null;
 let activeEventUnsubscribe: (() => void) | null = null;
+let activeDestroyListener: { sender: Electron.WebContents; fn: () => void } | null = null;
 let correctionService: VoiceCorrectionService | null = null;
 
 /** Utterances accumulated since the last paragraph boundary. */
@@ -18,10 +19,11 @@ let sessionProjectInfo: { name?: string; path?: string } = {};
 
 const VOICE_INPUT_DEFAULTS: VoiceInputSettings = {
   enabled: false,
-  apiKey: "",
+  deepgramApiKey: "",
+  correctionApiKey: "",
   language: "en",
   customDictionary: [],
-  transcriptionModel: "gpt-4o-mini-transcribe",
+  transcriptionModel: "nova-3",
   correctionEnabled: false,
   correctionModel: "gpt-5-nano",
   correctionCustomInstructions: "",
@@ -29,8 +31,20 @@ const VOICE_INPUT_DEFAULTS: VoiceInputSettings = {
 
 /** Read voiceInput settings with defaults for fields added after initial store creation. */
 function getVoiceSettings(): VoiceInputSettings {
-  const stored = store.get("voiceInput") as Partial<VoiceInputSettings> | undefined;
-  return { ...VOICE_INPUT_DEFAULTS, ...stored };
+  const stored = store.get("voiceInput") as
+    | (Partial<VoiceInputSettings> & { apiKey?: string })
+    | undefined;
+  const merged = { ...VOICE_INPUT_DEFAULTS, ...stored };
+
+  // Migrate legacy apiKey (OpenAI sk-* key) to correctionApiKey.
+  // The deepgramApiKey field is new and must be set explicitly by the user.
+  if (stored?.apiKey && !stored.deepgramApiKey && !stored.correctionApiKey) {
+    if (stored.apiKey.startsWith("sk-")) {
+      merged.correctionApiKey = stored.apiKey;
+    }
+  }
+
+  return merged;
 }
 
 function getService(): VoiceTranscriptionService {
@@ -44,6 +58,10 @@ function cleanupActiveSubscription(): void {
   if (activeEventUnsubscribe) {
     activeEventUnsubscribe();
     activeEventUnsubscribe = null;
+  }
+  if (activeDestroyListener) {
+    activeDestroyListener.sender.removeListener("destroyed", activeDestroyListener.fn);
+    activeDestroyListener = null;
   }
 }
 
@@ -87,6 +105,37 @@ function openMicSettings(): void {
   }
 }
 
+async function validateDeepgramKey(apiKey: string): Promise<{ valid: boolean; error?: string }> {
+  if (!apiKey.trim()) {
+    return { valid: false, error: "API key is required" };
+  }
+
+  try {
+    const response = await fetch("https://api.deepgram.com/v1/auth/token", {
+      method: "GET",
+      headers: {
+        Authorization: `Token ${apiKey.trim()}`,
+      },
+      signal: AbortSignal.timeout(10_000),
+    });
+
+    if (response.ok) {
+      return { valid: true };
+    }
+
+    if (response.status === 401 || response.status === 403) {
+      return { valid: false, error: "Invalid API key" };
+    }
+
+    return { valid: false, error: `API returned status ${response.status}` };
+  } catch (error) {
+    if (error instanceof Error && error.name === "TimeoutError") {
+      return { valid: false, error: "Connection timed out" };
+    }
+    return { valid: false, error: "Failed to connect to Deepgram" };
+  }
+}
+
 async function validateOpenAIKey(apiKey: string): Promise<{ valid: boolean; error?: string }> {
   if (!apiKey.trim()) {
     return { valid: false, error: "API key is required" };
@@ -110,7 +159,6 @@ async function validateOpenAIKey(apiKey: string): Promise<{ valid: boolean; erro
     }
 
     if (response.status === 429) {
-      // Rate limited but key is valid
       return { valid: true };
     }
 
@@ -144,13 +192,13 @@ function flushParagraphBuffer(win: Electron.BrowserWindow | null): { rawText: st
   paragraphBuffer = [];
 
   const liveSettings = getVoiceSettings();
-  const willCorrect = !!(liveSettings.correctionEnabled && liveSettings.apiKey);
+  const willCorrect = !!(liveSettings.correctionEnabled && liveSettings.correctionApiKey);
 
   if (willCorrect && correctionService && win && !win.isDestroyed()) {
     void correctionService
       .correct(rawText, {
         model: liveSettings.correctionModel,
-        apiKey: liveSettings.apiKey,
+        apiKey: liveSettings.correctionApiKey,
         customDictionary: liveSettings.customDictionary,
         customInstructions: liveSettings.correctionCustomInstructions,
         projectName: sessionProjectInfo.name,
@@ -223,6 +271,11 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
           text: rawText,
           willCorrect: false,
         });
+      } else if (voiceEvent.type === "paragraph_boundary") {
+        // Deepgram detected a paragraph break — auto-flush the previous paragraph
+        // for correction (if enabled) and notify the renderer with the flushed text.
+        const { rawText: flushedText } = flushParagraphBuffer(win);
+        win.webContents.send(CHANNELS.VOICE_INPUT_PARAGRAPH_BOUNDARY, { rawText: flushedText });
       } else if (voiceEvent.type === "error") {
         win.webContents.send(CHANNELS.VOICE_INPUT_ERROR, voiceEvent.message);
       } else if (voiceEvent.type === "status") {
@@ -237,10 +290,12 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
       if (activeEventUnsubscribe === unsubscribe) {
         activeEventUnsubscribe = null;
       }
+      activeDestroyListener = null;
       unsubscribe();
       service?.stop();
     };
     event.sender.once("destroyed", onDestroyed);
+    activeDestroyListener = { sender: event.sender, fn: onDestroyed };
 
     const result = await svc.start(settings);
     if (!result.ok) {
@@ -250,6 +305,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
       }
       unsubscribe();
       event.sender.removeListener("destroyed", onDestroyed);
+      activeDestroyListener = null;
     }
     return result;
   };
@@ -286,6 +342,13 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
   };
 
   const handleValidateApiKey = async (_event: Electron.IpcMainInvokeEvent, apiKey: string) => {
+    return validateDeepgramKey(apiKey);
+  };
+
+  const handleValidateCorrectionApiKey = async (
+    _event: Electron.IpcMainInvokeEvent,
+    apiKey: string
+  ) => {
     return validateOpenAIKey(apiKey);
   };
 
@@ -298,6 +361,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
   ipcMain.handle(CHANNELS.VOICE_INPUT_REQUEST_MIC_PERMISSION, handleRequestMicPermission);
   ipcMain.handle(CHANNELS.VOICE_INPUT_OPEN_MIC_SETTINGS, handleOpenMicSettings);
   ipcMain.handle(CHANNELS.VOICE_INPUT_VALIDATE_API_KEY, handleValidateApiKey);
+  ipcMain.handle(CHANNELS.VOICE_INPUT_VALIDATE_CORRECTION_API_KEY, handleValidateCorrectionApiKey);
   ipcMain.handle(CHANNELS.VOICE_INPUT_FLUSH_PARAGRAPH, handleFlushParagraph);
 
   return () => {
@@ -310,6 +374,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     ipcMain.removeHandler(CHANNELS.VOICE_INPUT_REQUEST_MIC_PERMISSION);
     ipcMain.removeHandler(CHANNELS.VOICE_INPUT_OPEN_MIC_SETTINGS);
     ipcMain.removeHandler(CHANNELS.VOICE_INPUT_VALIDATE_API_KEY);
+    ipcMain.removeHandler(CHANNELS.VOICE_INPUT_VALIDATE_CORRECTION_API_KEY);
     ipcMain.removeHandler(CHANNELS.VOICE_INPUT_FLUSH_PARAGRAPH);
     cleanupActiveSubscription();
     service?.destroy();

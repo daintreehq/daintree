@@ -205,7 +205,7 @@ const storeOptions = {
       apiKey: "",
       language: "en",
       customDictionary: [],
-      transcriptionModel: "gpt-4o-mini-transcribe",
+      transcriptionModel: "nova-3",
       correctionEnabled: false,
       correctionModel: "gpt-5-nano",
       correctionCustomInstructions: "",

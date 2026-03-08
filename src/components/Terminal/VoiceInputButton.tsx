@@ -159,7 +159,7 @@ export function VoiceInputButton({
 
     if (!isConfigured && !isActive) {
       const fresh = await window.electron?.voiceInput?.getSettings();
-      if (fresh?.enabled && fresh.apiKey) {
+      if (fresh?.enabled && fresh.deepgramApiKey) {
         void voiceRecordingService.toggle({
           panelId,
           panelTitle,

@@ -55,13 +55,14 @@ vi.mock("../../../store.js", () => ({
       if (key === "voiceInput") {
         return {
           enabled: true,
-          apiKey: "sk-test",
+          deepgramApiKey: "dg-test-key",
+          correctionApiKey: "sk-test",
           correctionEnabled: true,
           correctionModel: "gpt-5-nano",
           customDictionary: [],
           correctionCustomInstructions: "",
           language: "en",
-          transcriptionModel: "gpt-4o-mini-transcribe",
+          transcriptionModel: "nova-3",
         };
       }
       return undefined;
@@ -86,6 +87,7 @@ vi.mock("../../channels.js", () => ({
     VOICE_INPUT_REQUEST_MIC_PERMISSION: "voice-input:request-mic-permission",
     VOICE_INPUT_OPEN_MIC_SETTINGS: "voice-input:open-mic-settings",
     VOICE_INPUT_VALIDATE_API_KEY: "voice-input:validate-api-key",
+    VOICE_INPUT_VALIDATE_CORRECTION_API_KEY: "voice-input:validate-correction-api-key",
     VOICE_INPUT_FLUSH_PARAGRAPH: "voice-input:flush-paragraph",
   },
 }));

@@ -95,7 +95,7 @@ class VoiceRecordingService {
             const draft = inputStore.getDraftInput(panelId, projectId);
             // Slice back to where this segment started and replace with final transcript.
             const base = segmentStart >= 0 ? draft.slice(0, segmentStart) : draft;
-            const separator = base && !base.endsWith(" ") ? " " : "";
+            const separator = base && !base.endsWith(" ") && !base.endsWith("\n") ? " " : "";
             const finalText = text.trim();
             inputStore.setDraftInput(panelId, base + separator + finalText, projectId);
             inputStore.bumpVoiceDraftRevision();
@@ -158,6 +158,34 @@ class VoiceRecordingService {
         }
 
         useVoiceRecordingStore.getState().resolvePendingCorrection(panelId, rawText);
+      })
+    );
+
+    this.unsubscribers.push(
+      voiceInput.onParagraphBoundary(({ rawText }) => {
+        logDebug(`${LOG_PREFIX} Received paragraph boundary from Deepgram`, { rawText });
+        const voiceState = useVoiceRecordingStore.getState();
+        const currentTarget = voiceState.activeTarget;
+        if (!currentTarget) return;
+
+        const { panelId, projectId } = currentTarget;
+        const buffer = voiceState.panelBuffers[panelId];
+        if (!buffer) return;
+
+        // Use the rawText from the main process (what it actually flushed),
+        // which is authoritative — avoids reconstructing from renderer-local state.
+        const paragraphStart = buffer.activeParagraphStart ?? -1;
+        if (rawText && paragraphStart >= 0 && voiceState.correctionEnabled) {
+          voiceState.addPendingCorrection(panelId, paragraphStart, rawText);
+        }
+
+        // Insert a newline to visually separate paragraphs and reset paragraph state.
+        const inputStore = useTerminalInputStore.getState();
+        const draft = inputStore.getDraftInput(panelId, projectId);
+        inputStore.setDraftInput(panelId, draft + "\n", projectId);
+        inputStore.bumpVoiceDraftRevision();
+
+        voiceState.resetParagraphState(panelId);
       })
     );
 
@@ -250,22 +278,35 @@ class VoiceRecordingService {
       })
     );
 
+    const handleEscapeKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      const state = useVoiceRecordingStore.getState();
+      if (state.status !== "connecting" && state.status !== "recording") return;
+      e.preventDefault();
+      e.stopPropagation();
+      void this.stop("Dictation cancelled.", { preserveLiveText: true });
+    };
+    window.addEventListener("keydown", handleEscapeKey, { capture: true });
+    this.unsubscribers.push(() =>
+      window.removeEventListener("keydown", handleEscapeKey, { capture: true })
+    );
+
     void this.refreshConfiguration();
   }
 
   async refreshConfiguration(): Promise<boolean> {
     const settings = await window.electron.voiceInput.getSettings();
-    const isConfigured = settings.enabled && !!settings.apiKey;
+    const isConfigured = settings.enabled && !!settings.deepgramApiKey;
     logDebug(`${LOG_PREFIX} refreshConfiguration`, {
       enabled: settings.enabled,
-      hasApiKey: !!settings.apiKey,
+      hasApiKey: !!settings.deepgramApiKey,
       isConfigured,
       correctionEnabled: settings.correctionEnabled,
     });
     // Keep correction state in sync for live-segment dimming
     useVoiceRecordingStore
       .getState()
-      .setCorrectionEnabled(!!(settings.correctionEnabled && settings.apiKey));
+      .setCorrectionEnabled(!!(settings.correctionEnabled && settings.correctionApiKey));
     useVoiceRecordingStore.getState().setConfigured(isConfigured);
     return isConfigured;
   }
@@ -460,7 +501,7 @@ class VoiceRecordingService {
       .getState()
       .announce(`Dictation started in ${formatTargetLabel(target)}.`);
 
-    // Connect to OpenAI in parallel — audio is already flowing.
+    // Connect to Deepgram in parallel — audio is already flowing.
     logDebug(`${LOG_PREFIX} Calling voiceInput.start() IPC`);
     const result = await window.electron.voiceInput.start();
     logDebug(`${LOG_PREFIX} voiceInput.start() returned`, {
