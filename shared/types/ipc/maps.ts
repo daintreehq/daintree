@@ -1436,7 +1436,7 @@ export interface IpcEventMap {
   "voice-input:transcription-complete": { text: string; willCorrect: boolean };
   "voice-input:correction-replace": { rawText: string; correctedText: string };
   "voice-input:error": string;
-  "voice-input:status": "idle" | "connecting" | "recording" | "error";
+  "voice-input:status": "idle" | "connecting" | "recording" | "finishing" | "error";
 }
 
 export type IpcInvokeArgs<K extends keyof IpcInvokeMap> = IpcInvokeMap[K]["args"];

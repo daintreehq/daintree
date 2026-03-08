@@ -36,6 +36,7 @@ export class VoiceTranscriptionService {
 
   private stopResolve: (() => void) | null = null;
   private stopPromise: Promise<void> | null = null;
+  private stopTimeout: ReturnType<typeof setTimeout> | null = null;
   private isStopping = false;
 
   private audioChunkCount = 0;
@@ -186,8 +187,13 @@ export class VoiceTranscriptionService {
         this.emit({ type: "status", status: "error" });
         this.settlePendingStart(mySessionId, { ok: false, error: message });
         this.activeStream = null;
+      } else {
+        // Clear dead pending stream so it won't be promoted
+        if (this.pendingStream?.stream === stream) {
+          this.pendingStream = null;
+        }
       }
-      this.settleDrain();
+      if (isPrimary) this.settleDrain();
     });
 
     stream.on("end", () => {
@@ -200,6 +206,11 @@ export class VoiceTranscriptionService {
           this.settleDrain();
         } else {
           this.emit({ type: "status", status: "idle" });
+        }
+      } else {
+        // Clear dead pending stream so it won't be promoted
+        if (this.pendingStream?.stream === stream) {
+          this.pendingStream = null;
         }
       }
     });
@@ -272,6 +283,14 @@ export class VoiceTranscriptionService {
       }
 
       if (next) {
+        // Clear the pending stream's original timer (it has isPrimary=false, so it's inert)
+        clearTimeout(next.sessionTimer);
+        // Arm a new session timer for the promoted stream
+        next.sessionTimer = setTimeout(() => {
+          if (this.sessionId !== mySessionId) return;
+          logInfo(`${P} Pre-emptive reconnect at 4m30s`);
+          this.rotateStream(mySessionId);
+        }, SESSION_RECONNECT_MS);
         this.activeStream = next;
         logInfo(`${P} New stream promoted to active`);
       }
@@ -315,6 +334,10 @@ export class VoiceTranscriptionService {
   private settleDrain(): void {
     this.isStopping = false;
     this.stopPromise = null;
+    if (this.stopTimeout) {
+      clearTimeout(this.stopTimeout);
+      this.stopTimeout = null;
+    }
     if (this.stopResolve) {
       const resolve = this.stopResolve;
       this.stopResolve = null;
@@ -340,7 +363,7 @@ export class VoiceTranscriptionService {
 
     this.stopPromise = new Promise<void>((resolve) => {
       this.stopResolve = resolve;
-      const timeout = setTimeout(() => {
+      this.stopTimeout = setTimeout(() => {
         logWarn(`${P} Stop timed out after 3s`);
         this.settleDrain();
       }, 3000);
@@ -351,11 +374,9 @@ export class VoiceTranscriptionService {
           stream.end();
           logDebug(`${P} Called stream.end() for graceful stop`);
         } catch {
-          clearTimeout(timeout);
           this.settleDrain();
         }
       } else {
-        clearTimeout(timeout);
         this.settleDrain();
       }
     });
@@ -381,6 +402,10 @@ export class VoiceTranscriptionService {
     this.settings = null;
     this.stopResolve = null;
     this.stopPromise = null;
+    if (this.stopTimeout) {
+      clearTimeout(this.stopTimeout);
+      this.stopTimeout = null;
+    }
 
     if (this.pendingStart) {
       const { resolve } = this.pendingStart;

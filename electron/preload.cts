@@ -1640,8 +1640,9 @@ const api: ElectronAPI = {
       callback: (payload: { rawText: string; correctedText: string }) => void
     ) => _typedOn(CHANNELS.VOICE_INPUT_CORRECTION_REPLACE, callback),
     onError: (callback: (error: string) => void) => _typedOn(CHANNELS.VOICE_INPUT_ERROR, callback),
-    onStatus: (callback: (status: "idle" | "connecting" | "recording" | "error") => void) =>
-      _typedOn(CHANNELS.VOICE_INPUT_STATUS, callback),
+    onStatus: (
+      callback: (status: "idle" | "connecting" | "recording" | "finishing" | "error") => void
+    ) => _typedOn(CHANNELS.VOICE_INPUT_STATUS, callback),
     checkMicPermission: () => _typedInvoke(CHANNELS.VOICE_INPUT_CHECK_MIC_PERMISSION),
     requestMicPermission: () => _typedInvoke(CHANNELS.VOICE_INPUT_REQUEST_MIC_PERMISSION),
     openMicSettings: () => _typedInvoke(CHANNELS.VOICE_INPUT_OPEN_MIC_SETTINGS),
