@@ -1,41 +1,27 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { VoiceInputSettings } from "../../../shared/types/ipc/api.js";
 
-const wsMock = vi.hoisted(() => {
-  class MockWebSocket {
-    static readonly CONNECTING = 0;
-    static readonly OPEN = 1;
-    static readonly CLOSED = 3;
+const deepgramMock = vi.hoisted(() => {
+  const LiveTranscriptionEvents = {
+    Open: "open",
+    Close: "close",
+    Error: "error",
+    Transcript: "Results",
+    UtteranceEnd: "UtteranceEnd",
+  };
 
-    readyState = MockWebSocket.CONNECTING;
-    sent: string[] = [];
+  class MockConnection {
     private handlers = new Map<string, Set<(...args: unknown[]) => void>>();
-
-    constructor(
-      public readonly _url: string,
-      public readonly _options?: Record<string, unknown>
-    ) {
-      instances.push(this);
-    }
+    sent: Buffer[] = [];
+    finalized = false;
+    closed = false;
+    keepAliveCalled = 0;
 
     on(event: string, handler: (...args: unknown[]) => void) {
-      const listeners = this.handlers.get(event) ?? new Set<(...args: unknown[]) => void>();
+      const listeners = this.handlers.get(event) ?? new Set();
       listeners.add(handler);
       this.handlers.set(event, listeners);
       return this;
-    }
-
-    send(payload: string) {
-      this.sent.push(payload);
-    }
-
-    close() {
-      this.readyState = MockWebSocket.CLOSED;
-      this.emit("close");
-    }
-
-    terminate() {
-      this.readyState = MockWebSocket.CLOSED;
-      this.emit("close");
     }
 
     emit(event: string, ...args: unknown[]) {
@@ -46,26 +32,69 @@ const wsMock = vi.hoisted(() => {
       }
     }
 
-    open() {
-      this.readyState = MockWebSocket.OPEN;
-      this.emit("open");
+    send(buf: Buffer) {
+      this.sent.push(buf);
+    }
+
+    finish() {
+      this.finalized = true;
+    }
+
+    requestClose() {
+      this.closed = true;
+      this.emit(LiveTranscriptionEvents.Close);
+    }
+
+    keepAlive() {
+      this.keepAliveCalled++;
     }
   }
 
-  const instances: MockWebSocket[] = [];
+  const instances: MockConnection[] = [];
 
-  return { MockWebSocket, instances };
+  const mockClient = {
+    listen: {
+      live: (_opts: unknown) => {
+        const conn = new MockConnection();
+        instances.push(conn);
+        return conn;
+      },
+    },
+  };
+
+  return { LiveTranscriptionEvents, MockConnection, instances, mockClient };
 });
 
-vi.mock("ws", () => ({
-  default: wsMock.MockWebSocket,
+vi.mock("@deepgram/sdk", () => ({
+  createClient: () => deepgramMock.mockClient,
+  LiveTranscriptionEvents: deepgramMock.LiveTranscriptionEvents,
 }));
 
 import { VoiceTranscriptionService } from "../VoiceTranscriptionService.js";
 
+const BASE_SETTINGS: VoiceInputSettings = {
+  enabled: true,
+  deepgramApiKey: "dg-test-key",
+  correctionApiKey: "",
+  language: "en",
+  customDictionary: [],
+  transcriptionModel: "nova-3",
+  correctionEnabled: false,
+  correctionModel: "gpt-5-nano",
+  correctionCustomInstructions: "",
+};
+
+function makeTranscriptEvent(transcript: string, isFinal: boolean, speechFinal: boolean): unknown {
+  return {
+    channel: { alternatives: [{ transcript }] },
+    is_final: isFinal,
+    speech_final: speechFinal,
+  };
+}
+
 describe("VoiceTranscriptionService", () => {
   beforeEach(() => {
-    wsMock.instances.length = 0;
+    deepgramMock.instances.length = 0;
     vi.useFakeTimers();
   });
 
@@ -74,36 +103,40 @@ describe("VoiceTranscriptionService", () => {
     vi.restoreAllMocks();
   });
 
-  it("transitions from connecting to recording when the websocket opens", async () => {
+  it("transitions from connecting to recording when the connection opens", async () => {
     const service = new VoiceTranscriptionService();
     const statuses: string[] = [];
 
     service.onEvent((event) => {
-      if (event.type === "status") {
-        statuses.push(event.status);
-      }
+      if (event.type === "status") statuses.push(event.status);
     });
 
-    const startPromise = service.start({
-      enabled: true,
-      apiKey: "sk-test",
-      language: "en",
-      customDictionary: [],
-      transcriptionModel: "gpt-4o-mini-transcribe" as const,
-      correctionEnabled: false,
-      correctionModel: "gpt-5-nano" as const,
-      correctionCustomInstructions: "",
-    });
-
+    const startPromise = service.start(BASE_SETTINGS);
     expect(statuses).toContain("connecting");
 
-    const socket = wsMock.instances.at(-1);
-    expect(socket).toBeDefined();
-
-    socket?.open();
+    const conn = deepgramMock.instances.at(-1)!;
+    conn.emit(deepgramMock.LiveTranscriptionEvents.Open);
 
     await expect(startPromise).resolves.toEqual({ ok: true });
     expect(statuses.at(-1)).toBe("recording");
+  });
+
+  it("fails to start when no Deepgram API key is configured", async () => {
+    const service = new VoiceTranscriptionService();
+    const result = await service.start({ ...BASE_SETTINGS, deepgramApiKey: "" });
+    expect(result).toEqual({ ok: false, error: "Deepgram API key not configured" });
+  });
+
+  it("settles a pending start when the session is stopped before connect completes", async () => {
+    const service = new VoiceTranscriptionService();
+
+    const startPromise = service.start(BASE_SETTINGS);
+    service.stop();
+
+    await expect(startPromise).resolves.toEqual({
+      ok: false,
+      error: "Voice session stopped",
+    });
   });
 
   it("does not emit idle when start() replaces a previous session", async () => {
@@ -112,57 +145,268 @@ describe("VoiceTranscriptionService", () => {
 
     service.onEvent((event) => events.push(event));
 
-    const settings = {
-      enabled: true,
-      apiKey: "sk-test",
-      language: "en",
-      customDictionary: [],
-      transcriptionModel: "gpt-4o-mini-transcribe" as const,
-      correctionEnabled: false,
-      correctionModel: "gpt-5-nano" as const,
-      correctionCustomInstructions: "",
-    };
-
-    // Start first session
-    const firstPromise = service.start(settings);
-    const firstSocket = wsMock.instances.at(-1)!;
-    firstSocket.open();
+    const firstPromise = service.start(BASE_SETTINGS);
+    deepgramMock.instances.at(-1)!.emit(deepgramMock.LiveTranscriptionEvents.Open);
     await firstPromise;
 
-    // Clear events from first session
     events.length = 0;
 
-    // Start second session (replaces first)
-    const secondPromise = service.start(settings);
-    const secondSocket = wsMock.instances.at(-1)!;
-
-    // The cleanup of the first session must NOT have emitted idle
+    const secondPromise = service.start(BASE_SETTINGS);
     const idleBeforeConnect = events.filter((e) => e.type === "status" && e.status === "idle");
     expect(idleBeforeConnect).toHaveLength(0);
 
-    secondSocket.open();
+    deepgramMock.instances.at(-1)!.emit(deepgramMock.LiveTranscriptionEvents.Open);
     await secondPromise;
   });
 
-  it("settles a pending start when the session is stopped before connect completes", async () => {
+  it("emits delta for interim transcripts", async () => {
     const service = new VoiceTranscriptionService();
-
-    const startPromise = service.start({
-      enabled: true,
-      apiKey: "sk-test",
-      language: "en",
-      customDictionary: [],
-      transcriptionModel: "gpt-4o-mini-transcribe" as const,
-      correctionEnabled: false,
-      correctionModel: "gpt-5-nano" as const,
-      correctionCustomInstructions: "",
+    const deltas: string[] = [];
+    service.onEvent((e) => {
+      if (e.type === "delta") deltas.push(e.text);
     });
 
-    service.stop();
+    const p = service.start(BASE_SETTINGS);
+    deepgramMock.instances.at(-1)!.emit(deepgramMock.LiveTranscriptionEvents.Open);
+    await p;
 
-    await expect(startPromise).resolves.toEqual({
-      ok: false,
-      error: "Voice session stopped",
+    const conn = deepgramMock.instances.at(-1)!;
+    conn.emit(
+      deepgramMock.LiveTranscriptionEvents.Transcript,
+      makeTranscriptEvent("Hello", false, false)
+    );
+    conn.emit(
+      deepgramMock.LiveTranscriptionEvents.Transcript,
+      makeTranscriptEvent("Hello world", false, false)
+    );
+
+    expect(deltas).toEqual(["Hello", " world"]);
+  });
+
+  it("emits complete on speech_final", async () => {
+    const service = new VoiceTranscriptionService();
+    const completes: string[] = [];
+    service.onEvent((e) => {
+      if (e.type === "complete") completes.push(e.text);
     });
+
+    const p = service.start(BASE_SETTINGS);
+    deepgramMock.instances.at(-1)!.emit(deepgramMock.LiveTranscriptionEvents.Open);
+    await p;
+
+    const conn = deepgramMock.instances.at(-1)!;
+    conn.emit(
+      deepgramMock.LiveTranscriptionEvents.Transcript,
+      makeTranscriptEvent("Hello world", true, true)
+    );
+
+    expect(completes).toEqual(["Hello world"]);
+  });
+
+  it("accumulates is_final segments and emits them as complete on speech_final", async () => {
+    const service = new VoiceTranscriptionService();
+    const completes: string[] = [];
+    service.onEvent((e) => {
+      if (e.type === "complete") completes.push(e.text);
+    });
+
+    const p = service.start(BASE_SETTINGS);
+    deepgramMock.instances.at(-1)!.emit(deepgramMock.LiveTranscriptionEvents.Open);
+    await p;
+
+    const conn = deepgramMock.instances.at(-1)!;
+    conn.emit(
+      deepgramMock.LiveTranscriptionEvents.Transcript,
+      makeTranscriptEvent("Hello world", true, false)
+    );
+    conn.emit(
+      deepgramMock.LiveTranscriptionEvents.Transcript,
+      makeTranscriptEvent("how are you", true, true)
+    );
+
+    expect(completes).toEqual(["Hello world how are you"]);
+  });
+
+  it("resets utterance state after each speech_final", async () => {
+    const service = new VoiceTranscriptionService();
+    const completes: string[] = [];
+    service.onEvent((e) => {
+      if (e.type === "complete") completes.push(e.text);
+    });
+
+    const p = service.start(BASE_SETTINGS);
+    deepgramMock.instances.at(-1)!.emit(deepgramMock.LiveTranscriptionEvents.Open);
+    await p;
+
+    const conn = deepgramMock.instances.at(-1)!;
+    conn.emit(
+      deepgramMock.LiveTranscriptionEvents.Transcript,
+      makeTranscriptEvent("First utterance.", true, true)
+    );
+    conn.emit(
+      deepgramMock.LiveTranscriptionEvents.Transcript,
+      makeTranscriptEvent("Second utterance.", true, true)
+    );
+
+    expect(completes).toEqual(["First utterance.", "Second utterance."]);
+  });
+
+  it("sends audio chunks as Buffer after connection opens", async () => {
+    const service = new VoiceTranscriptionService();
+    const p = service.start(BASE_SETTINGS);
+    const conn = deepgramMock.instances.at(-1)!;
+    conn.emit(deepgramMock.LiveTranscriptionEvents.Open);
+    await p;
+
+    const chunk = new ArrayBuffer(8);
+    service.sendAudioChunk(chunk);
+
+    expect(conn.sent).toHaveLength(1);
+    expect(conn.sent[0]).toBeInstanceOf(Buffer);
+    expect(conn.sent[0].byteLength).toBe(8);
+  });
+
+  it("buffers pre-connect audio chunks and flushes on open", async () => {
+    const service = new VoiceTranscriptionService();
+    const startPromise = service.start(BASE_SETTINGS);
+    const conn = deepgramMock.instances.at(-1)!;
+
+    const chunk1 = new ArrayBuffer(4);
+    const chunk2 = new ArrayBuffer(8);
+    service.sendAudioChunk(chunk1);
+    service.sendAudioChunk(chunk2);
+
+    expect(conn.sent).toHaveLength(0);
+
+    conn.emit(deepgramMock.LiveTranscriptionEvents.Open);
+    await startPromise;
+
+    expect(conn.sent).toHaveLength(2);
+  });
+
+  it("rejects audio chunks during drain", async () => {
+    const service = new VoiceTranscriptionService();
+    const p = service.start(BASE_SETTINGS);
+    const conn = deepgramMock.instances.at(-1)!;
+    conn.emit(deepgramMock.LiveTranscriptionEvents.Open);
+    await p;
+
+    const stopPromise = service.stopGracefully();
+    service.sendAudioChunk(new ArrayBuffer(4));
+
+    const chunksAfterDrain = conn.sent.length;
+    conn.emit(
+      deepgramMock.LiveTranscriptionEvents.Transcript,
+      makeTranscriptEvent("done", true, true)
+    );
+    await stopPromise;
+
+    expect(conn.sent.length).toBe(chunksAfterDrain);
+  });
+
+  it("calls connection.finish() on graceful stop", async () => {
+    const service = new VoiceTranscriptionService();
+    const p = service.start(BASE_SETTINGS);
+    const conn = deepgramMock.instances.at(-1)!;
+    conn.emit(deepgramMock.LiveTranscriptionEvents.Open);
+    await p;
+
+    const stopPromise = service.stopGracefully();
+    expect(conn.finalized).toBe(true);
+
+    conn.emit(
+      deepgramMock.LiveTranscriptionEvents.Transcript,
+      makeTranscriptEvent("bye", true, true)
+    );
+    await stopPromise;
+  });
+
+  it("drain resolves after speech_final during graceful stop", async () => {
+    const service = new VoiceTranscriptionService();
+    const p = service.start(BASE_SETTINGS);
+    const conn = deepgramMock.instances.at(-1)!;
+    conn.emit(deepgramMock.LiveTranscriptionEvents.Open);
+    await p;
+
+    let drained = false;
+    const stopPromise = service.stopGracefully().then(() => {
+      drained = true;
+    });
+
+    expect(drained).toBe(false);
+    conn.emit(
+      deepgramMock.LiveTranscriptionEvents.Transcript,
+      makeTranscriptEvent("final text", true, true)
+    );
+    await stopPromise;
+    expect(drained).toBe(true);
+  });
+
+  it("drain resolves after timeout if no speech_final arrives", async () => {
+    const service = new VoiceTranscriptionService();
+    const p = service.start(BASE_SETTINGS);
+    const conn = deepgramMock.instances.at(-1)!;
+    conn.emit(deepgramMock.LiveTranscriptionEvents.Open);
+    await p;
+
+    let drained = false;
+    const stopPromise = service.stopGracefully().then(() => {
+      drained = true;
+    });
+
+    expect(drained).toBe(false);
+    vi.advanceTimersByTime(3001);
+    await stopPromise;
+    expect(drained).toBe(true);
+  });
+
+  it("emits error and error status on connection error", async () => {
+    const service = new VoiceTranscriptionService();
+    const events: Array<{ type: string; message?: string; status?: string }> = [];
+    service.onEvent((e) => events.push(e));
+
+    const p = service.start(BASE_SETTINGS);
+    const conn = deepgramMock.instances.at(-1)!;
+    conn.emit(deepgramMock.LiveTranscriptionEvents.Open);
+    await p;
+
+    conn.emit(deepgramMock.LiveTranscriptionEvents.Error, new Error("websocket died"));
+
+    const errorEvent = events.find((e) => e.type === "error");
+    const statusEvent = events.find((e) => e.type === "status" && e.status === "error");
+    expect(errorEvent).toBeDefined();
+    expect(statusEvent).toBeDefined();
+  });
+
+  it("times out with an error if connection does not open within 10s", async () => {
+    const service = new VoiceTranscriptionService();
+    const statuses: string[] = [];
+    service.onEvent((e) => {
+      if (e.type === "status") statuses.push(e.status);
+    });
+
+    const startPromise = service.start(BASE_SETTINGS);
+    vi.advanceTimersByTime(10001);
+    const result = await startPromise;
+
+    expect(result).toEqual({ ok: false, error: "Connection timed out" });
+    expect(statuses).toContain("error");
+  });
+
+  it("does not emit complete for empty speech_final transcripts", async () => {
+    const service = new VoiceTranscriptionService();
+    const completes: string[] = [];
+    service.onEvent((e) => {
+      if (e.type === "complete") completes.push(e.text);
+    });
+
+    const p = service.start(BASE_SETTINGS);
+    deepgramMock.instances.at(-1)!.emit(deepgramMock.LiveTranscriptionEvents.Open);
+    await p;
+
+    const conn = deepgramMock.instances.at(-1)!;
+    conn.emit(deepgramMock.LiveTranscriptionEvents.Transcript, makeTranscriptEvent("", true, true));
+
+    expect(completes).toHaveLength(0);
   });
 });

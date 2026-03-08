@@ -830,6 +830,7 @@ export interface ElectronAPI {
     requestMicPermission(): Promise<boolean>;
     openMicSettings(): Promise<void>;
     validateApiKey(apiKey: string): Promise<{ valid: boolean; error?: string }>;
+    validateCorrectionApiKey(apiKey: string): Promise<{ valid: boolean; error?: string }>;
   };
   mcpServer: {
     /** Get current MCP server status and configuration */
@@ -905,13 +906,14 @@ export type MicPermissionStatus =
   | "restricted"
   | "unknown";
 
-export type VoiceTranscriptionModel = "gpt-4o-mini-transcribe" | "gpt-4o-transcribe";
+export type VoiceTranscriptionModel = "nova-3" | "nova-2";
 
 export type VoiceCorrectionModel = "gpt-5-nano";
 
 export interface VoiceInputSettings {
   enabled: boolean;
-  apiKey: string;
+  deepgramApiKey: string;
+  correctionApiKey: string;
   language: string;
   customDictionary: string[];
   transcriptionModel: VoiceTranscriptionModel;
