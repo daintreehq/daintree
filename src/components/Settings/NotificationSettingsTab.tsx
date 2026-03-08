@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { Play, Bell, Volume2 } from "lucide-react";
 import { SettingsSection } from "./SettingsSection";
+import { SettingsCheckbox } from "./SettingsCheckbox";
 import type { NotificationSettings } from "@shared/types";
 
 const AVAILABLE_SOUNDS: { file: string; label: string }[] = [
@@ -48,7 +49,7 @@ export function NotificationSettingsTab() {
   };
 
   if (loadState === "loading") {
-    return <div className="text-sm text-muted-foreground">Loading…</div>;
+    return <div className="text-sm text-canopy-text/50">Loading…</div>;
   }
 
   if (loadState === "error") {
@@ -67,21 +68,21 @@ export function NotificationSettingsTab() {
         description="OS notifications are off by default. Enable individual event types below to receive native alerts for agent activity. Notifications are suppressed when you are already viewing the relevant worktree."
       >
         <div className="space-y-3">
-          <ToggleRow
+          <SettingsCheckbox
             id="notif-completed"
             label="Agent completed"
             description="Show a notification when an agent finishes its task"
             checked={settings.completedEnabled}
             onChange={(v) => update({ completedEnabled: v })}
           />
-          <ToggleRow
+          <SettingsCheckbox
             id="notif-waiting"
             label="Agent waiting for input"
             description="Show a notification immediately when an agent needs input — always fires regardless of focus"
             checked={settings.waitingEnabled}
             onChange={(v) => update({ waitingEnabled: v })}
           />
-          <ToggleRow
+          <SettingsCheckbox
             id="notif-failed"
             label="Agent failed"
             description="Show a notification when an agent encounters an error"
@@ -97,7 +98,7 @@ export function NotificationSettingsTab() {
         description="Play a sound when a notification fires."
       >
         <div className="space-y-4">
-          <ToggleRow
+          <SettingsCheckbox
             id="notif-sound"
             label="Play sound"
             description="Enable audio alerts for agent notifications"
@@ -112,7 +113,7 @@ export function NotificationSettingsTab() {
                 <select
                   value={settings.soundFile}
                   onChange={(e) => update({ soundFile: e.target.value })}
-                  className="flex-1 px-3 py-2 text-sm rounded-lg border border-divider bg-canopy-sidebar/30 text-canopy-text"
+                  className="flex-1 px-3 py-2 text-sm rounded-[var(--radius-md)] border border-canopy-border bg-canopy-bg text-canopy-text focus:border-canopy-accent focus:outline-none transition-colors"
                 >
                   {AVAILABLE_SOUNDS.map(({ file, label }) => (
                     <option key={file} value={file}>
@@ -123,7 +124,7 @@ export function NotificationSettingsTab() {
                 <button
                   onClick={handlePreview}
                   title="Preview sound"
-                  className="flex items-center gap-1.5 px-3 py-2 text-sm rounded-lg border border-divider bg-canopy-sidebar/30 text-canopy-text hover:bg-white/[0.06] transition-colors"
+                  className="flex items-center gap-1.5 px-3 py-2 text-sm rounded-[var(--radius-md)] border border-canopy-border bg-canopy-bg text-canopy-text hover:bg-white/[0.06] transition-colors"
                 >
                   <Play className="h-3.5 w-3.5" />
                   Preview
@@ -133,34 +134,6 @@ export function NotificationSettingsTab() {
           )}
         </div>
       </SettingsSection>
-    </div>
-  );
-}
-
-interface ToggleRowProps {
-  id: string;
-  label: string;
-  description: string;
-  checked: boolean;
-  onChange: (value: boolean) => void;
-}
-
-function ToggleRow({ id, label, description, checked, onChange }: ToggleRowProps) {
-  return (
-    <div className="flex items-start gap-3">
-      <input
-        type="checkbox"
-        id={id}
-        checked={checked}
-        onChange={(e) => onChange(e.target.checked)}
-        className="w-4 h-4 mt-0.5 rounded border-divider bg-canopy-sidebar text-canopy-accent focus:ring-canopy-accent focus:ring-2"
-      />
-      <div className="flex-1">
-        <label htmlFor={id} className="text-sm font-medium text-canopy-text cursor-pointer">
-          {label}
-        </label>
-        <p className="text-xs text-muted-foreground mt-0.5">{description}</p>
-      </div>
     </div>
   );
 }

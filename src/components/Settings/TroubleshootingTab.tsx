@@ -15,6 +15,9 @@ import { cn } from "@/lib/utils";
 import { appClient, systemClient } from "@/clients";
 import type { AppState, SystemHealthCheckResult } from "@shared/types";
 import { actionService } from "@/services/ActionService";
+import { SettingsSection } from "./SettingsSection";
+import { SettingsSwitchCard } from "./SettingsSwitchCard";
+import { SettingsCheckbox } from "./SettingsCheckbox";
 
 function SystemHealthSection() {
   const [result, setResult] = useState<SystemHealthCheckResult | null>(null);
@@ -35,14 +38,11 @@ function SystemHealthSection() {
   }, []);
 
   return (
-    <div>
-      <h4 className="text-sm font-medium text-canopy-text mb-1 flex items-center gap-2">
-        <ShieldCheck className="w-4 h-4" />
-        System Health Check
-      </h4>
-      <p className="text-xs text-canopy-text/60 mb-3">
-        Verify that required tools (Git, Node.js, npm) are installed and available.
-      </p>
+    <SettingsSection
+      icon={ShieldCheck}
+      title="System Health Check"
+      description="Verify that required tools (Git, Node.js, npm) are installed and available."
+    >
       <Button
         variant="outline"
         size="sm"
@@ -81,7 +81,7 @@ function SystemHealthSection() {
           })}
         </div>
       )}
-    </div>
+    </SettingsSection>
   );
 }
 
@@ -186,37 +186,41 @@ export function TroubleshootingTab() {
     }
   }, [developerMode, autoOpenDiagnostics, focusEventsTab, saveDeveloperModeSettings]);
 
-  const handleToggleAutoOpenDiagnostics = useCallback(() => {
-    const newState = !autoOpenDiagnostics;
-    setAutoOpenDiagnostics(newState);
-    if (!newState) {
-      setFocusEventsTab(false);
-      saveDeveloperModeSettings({
-        enabled: developerMode,
-        showStateDebug: false,
-        autoOpenDiagnostics: false,
-        focusEventsTab: false,
-      });
-    } else {
-      saveDeveloperModeSettings({
-        enabled: developerMode,
-        showStateDebug: false,
-        autoOpenDiagnostics: true,
-        focusEventsTab,
-      });
-    }
-  }, [autoOpenDiagnostics, developerMode, focusEventsTab, saveDeveloperModeSettings]);
+  const handleToggleAutoOpenDiagnostics = useCallback(
+    (checked: boolean) => {
+      setAutoOpenDiagnostics(checked);
+      if (!checked) {
+        setFocusEventsTab(false);
+        saveDeveloperModeSettings({
+          enabled: developerMode,
+          showStateDebug: false,
+          autoOpenDiagnostics: false,
+          focusEventsTab: false,
+        });
+      } else {
+        saveDeveloperModeSettings({
+          enabled: developerMode,
+          showStateDebug: false,
+          autoOpenDiagnostics: true,
+          focusEventsTab,
+        });
+      }
+    },
+    [developerMode, focusEventsTab, saveDeveloperModeSettings]
+  );
 
-  const handleToggleFocusEventsTab = useCallback(() => {
-    const newState = !focusEventsTab;
-    setFocusEventsTab(newState);
-    saveDeveloperModeSettings({
-      enabled: developerMode,
-      showStateDebug: false,
-      autoOpenDiagnostics,
-      focusEventsTab: newState,
-    });
-  }, [focusEventsTab, developerMode, autoOpenDiagnostics, saveDeveloperModeSettings]);
+  const handleToggleFocusEventsTab = useCallback(
+    (checked: boolean) => {
+      setFocusEventsTab(checked);
+      saveDeveloperModeSettings({
+        enabled: developerMode,
+        showStateDebug: false,
+        autoOpenDiagnostics,
+        focusEventsTab: checked,
+      });
+    },
+    [developerMode, autoOpenDiagnostics, saveDeveloperModeSettings]
+  );
 
   const handleToggleVerboseLogging = useCallback(async () => {
     if (verboseLoggingPending) return;
@@ -259,230 +263,131 @@ export function TroubleshootingTab() {
 
   return (
     <div className="space-y-6">
-      <div className="space-y-4">
-        <SystemHealthSection />
-      </div>
+      <SystemHealthSection />
 
-      <div className="space-y-4">
-        <div>
-          <h4 className="text-sm font-medium text-canopy-text mb-1">Application Logs</h4>
-          <p className="text-xs text-canopy-text/60 mb-3">
-            View internal application logs for debugging purposes.
-          </p>
-          <div className="flex gap-3">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() =>
-                void actionService.dispatch("logs.openFile", undefined, { source: "user" })
-              }
-              className="text-canopy-text border-canopy-border hover:bg-canopy-border hover:text-canopy-text"
-            >
-              <FileText />
-              Open Log File
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={handleClearLogs}
-              className="text-status-error border-canopy-border hover:bg-status-error/10 hover:text-status-error/70 hover:border-status-error/20"
-            >
-              <Trash2 />
-              Clear Logs
-            </Button>
-          </div>
-        </div>
-      </div>
-
-      <div className="space-y-4">
-        <div>
-          <h4 className="text-sm font-medium text-canopy-text mb-1 flex items-center gap-2">
-            <Shield className="w-4 h-4" />
-            Crash Reporting
-          </h4>
-          <p className="text-xs text-canopy-text/60 mb-3">
-            Automatically send crash reports and error details to help improve Canopy. No personal
-            data, file contents, or credentials are collected.
-          </p>
-          <div className="p-3 border border-canopy-border rounded-[var(--radius-md)]">
-            <label
-              className="flex items-center gap-3 cursor-pointer"
-              onClick={handleToggleTelemetry}
-            >
-              <button
-                type="button"
-                role="switch"
-                aria-checked={telemetryEnabled}
-                aria-label="Enable crash reporting"
-                disabled={telemetryPending}
-                className={cn(
-                  "relative w-11 h-6 rounded-full transition-colors shrink-0 focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2",
-                  telemetryEnabled ? "bg-canopy-accent" : "bg-canopy-border",
-                  telemetryPending && "opacity-50 cursor-wait"
-                )}
-              >
-                <span
-                  className={cn(
-                    "absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full transition-transform",
-                    telemetryEnabled && "translate-x-5"
-                  )}
-                />
-              </button>
-              <div className="flex-1">
-                <span className="text-sm text-canopy-text font-medium">Enable Crash Reporting</span>
-                <p className="text-xs text-canopy-text/60">
-                  Collects: error messages, stack traces, app version, OS. Changes apply on next app
-                  restart.
-                </p>
-              </div>
-            </label>
-          </div>
-        </div>
-      </div>
-
-      <div className="space-y-4">
-        <div>
-          <h4 className="text-sm font-medium text-canopy-text mb-1 flex items-center gap-2">
-            <Bug className="w-4 h-4" />
-            Developer Mode
-          </h4>
-          <p className="text-xs text-canopy-text/60 mb-3">
-            Enable enhanced debugging features for development and troubleshooting.
-          </p>
-
-          <label className="flex items-center gap-3 cursor-pointer mb-4 p-3 border border-canopy-border rounded-[var(--radius-md)]">
-            <button
-              onClick={handleToggleDeveloperMode}
-              className={cn(
-                "relative w-11 h-6 rounded-full transition-colors shrink-0",
-                developerMode ? "bg-canopy-accent" : "bg-canopy-border"
-              )}
-            >
-              <span
-                className={cn(
-                  "absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full transition-transform",
-                  developerMode && "translate-x-5"
-                )}
-              />
-            </button>
-            <div>
-              <span className="text-sm text-canopy-text font-medium">Enable Developer Mode</span>
-              <p className="text-xs text-canopy-text/60">Activates all debugging features below</p>
-            </div>
-          </label>
-
-          <div
-            className={cn(
-              "ml-4 space-y-3 border-l-2 border-canopy-border pl-4 transition-opacity",
-              !developerMode && "opacity-50"
-            )}
+      <SettingsSection
+        icon={FileText}
+        title="Application Logs"
+        description="View internal application logs for debugging purposes."
+      >
+        <div className="flex gap-3">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() =>
+              void actionService.dispatch("logs.openFile", undefined, { source: "user" })
+            }
+            className="text-canopy-text border-canopy-border hover:bg-canopy-border hover:text-canopy-text"
           >
-            <label className="flex items-center gap-3 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={autoOpenDiagnostics}
-                onChange={handleToggleAutoOpenDiagnostics}
-                disabled={!developerMode}
-                className="w-4 h-4 rounded border-canopy-border bg-canopy-bg text-canopy-accent focus:ring-canopy-accent focus:ring-offset-0 disabled:opacity-50"
-              />
-              <div>
-                <span className="text-sm text-canopy-text">Auto-Open Diagnostics Dock</span>
-                <p className="text-xs text-canopy-text/60">
-                  Automatically open diagnostics panel on app startup
-                </p>
-              </div>
-            </label>
+            <FileText />
+            Open Log File
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleClearLogs}
+            className="text-status-error border-canopy-border hover:bg-status-error/10 hover:text-status-error/70 hover:border-status-error/20"
+          >
+            <Trash2 />
+            Clear Logs
+          </Button>
+        </div>
+      </SettingsSection>
 
-            <label
-              className={cn(
-                "flex items-center gap-3 cursor-pointer ml-4",
-                !autoOpenDiagnostics && "opacity-50"
-              )}
-            >
-              <input
-                type="checkbox"
-                checked={focusEventsTab}
-                onChange={handleToggleFocusEventsTab}
-                disabled={!developerMode || !autoOpenDiagnostics}
-                className="w-4 h-4 rounded border-canopy-border bg-canopy-bg text-canopy-accent focus:ring-canopy-accent focus:ring-offset-0 disabled:opacity-50"
-              />
-              <div>
-                <span className="text-sm text-canopy-text">Focus Events Tab</span>
-                <p className="text-xs text-canopy-text/60">
-                  Default to Events tab when diagnostics opens
-                </p>
-              </div>
-            </label>
-          </div>
+      <SettingsSection
+        icon={Shield}
+        title="Crash Reporting"
+        description="Automatically send crash reports and error details to help improve Canopy. No personal data, file contents, or credentials are collected."
+      >
+        <SettingsSwitchCard
+          icon={Shield}
+          title="Enable Crash Reporting"
+          subtitle="Collects: error messages, stack traces, app version, OS. Changes apply on next app restart."
+          isEnabled={telemetryEnabled}
+          onChange={handleToggleTelemetry}
+          ariaLabel="Enable crash reporting"
+          disabled={telemetryPending}
+        />
+      </SettingsSection>
 
-          <div className="mt-4 p-3 border border-canopy-border rounded-[var(--radius-md)]">
-            <label
-              className="flex items-center gap-3 cursor-pointer"
-              onClick={handleToggleVerboseLogging}
-            >
-              <button
-                type="button"
-                role="switch"
-                aria-checked={verboseLogging}
-                aria-label="Enable verbose logging"
-                disabled={verboseLoggingPending}
-                className={cn(
-                  "relative w-11 h-6 rounded-full transition-colors shrink-0 focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2",
-                  verboseLogging ? "bg-status-warning" : "bg-canopy-border",
-                  verboseLoggingPending && "opacity-50 cursor-wait"
-                )}
-              >
-                <span
-                  className={cn(
-                    "absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full transition-transform",
-                    verboseLogging && "translate-x-5"
-                  )}
-                />
-              </button>
-              <div className="flex-1">
-                <div className="flex items-center gap-2">
-                  <span className="text-sm text-canopy-text font-medium">
-                    Enable Verbose Logging
-                  </span>
-                  <span className="text-xs px-1.5 py-0.5 bg-canopy-border rounded text-canopy-text/70">
-                    This session only
-                  </span>
-                </div>
-                <p className="text-xs text-canopy-text/60">
-                  Captures detailed debug output for troubleshooting. Resets on app restart.
-                </p>
-              </div>
-            </label>
-            {verboseLogging && (
-              <div className="mt-2 flex items-start gap-2 text-xs text-status-warning/90">
-                <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
-                <span>Verbose logging may impact performance and increase log file size.</span>
-              </div>
-            )}
-          </div>
+      <SettingsSection
+        icon={Bug}
+        title="Developer Mode"
+        description="Enable enhanced debugging features for development and troubleshooting."
+      >
+        <SettingsSwitchCard
+          icon={Bug}
+          title={developerMode ? "Developer Mode Enabled" : "Enable Developer Mode"}
+          subtitle="Activates all debugging features below"
+          isEnabled={developerMode}
+          onChange={handleToggleDeveloperMode}
+          ariaLabel="Developer Mode Toggle"
+        />
 
-          <div className="mt-4 p-3 bg-canopy-border/30 rounded-[var(--radius-md)]">
-            <h5 className="text-xs font-medium text-canopy-text mb-2">
-              Advanced: Persistent Verbose Logging
-            </h5>
-            <p className="text-xs text-canopy-text/60 mb-2">
-              Use the toggle above for quick debugging. For persistent verbose logs across restarts,
-              launch the app with environment variables:
-            </p>
-            <code className="block text-xs bg-canopy-bg p-2 rounded border border-canopy-border font-mono text-canopy-text">
-              CANOPY_DEBUG=1 npm run dev
-            </code>
+        <div
+          className={cn(
+            "ml-4 space-y-3 border-l-2 border-canopy-border pl-4 transition-opacity",
+            !developerMode && "opacity-50"
+          )}
+        >
+          <SettingsCheckbox
+            id="auto-open-diagnostics"
+            label="Auto-Open Diagnostics Dock"
+            description="Automatically open diagnostics panel on app startup"
+            checked={autoOpenDiagnostics}
+            onChange={handleToggleAutoOpenDiagnostics}
+            disabled={!developerMode}
+          />
+
+          <div className={cn("ml-4", !autoOpenDiagnostics && "opacity-50")}>
+            <SettingsCheckbox
+              id="focus-events-tab"
+              label="Focus Events Tab"
+              description="Default to Events tab when diagnostics opens"
+              checked={focusEventsTab}
+              onChange={handleToggleFocusEventsTab}
+              disabled={!developerMode || !autoOpenDiagnostics}
+            />
           </div>
         </div>
-      </div>
 
-      <div className="space-y-4">
-        <div>
-          <h4 className="text-sm font-medium text-canopy-text mb-1">Keyboard Shortcuts</h4>
-          <p className="text-xs text-canopy-text/60 mb-3">
-            Use Cmd+Option+I (Mac) or Ctrl+Shift+I (Windows/Linux) to open DevTools.
+        <SettingsSwitchCard
+          icon={AlertTriangle}
+          title={verboseLogging ? "Verbose Logging Enabled" : "Enable Verbose Logging"}
+          subtitle="Captures detailed debug output for troubleshooting. Resets on app restart."
+          isEnabled={verboseLogging}
+          onChange={handleToggleVerboseLogging}
+          ariaLabel="Enable verbose logging"
+          disabled={verboseLoggingPending}
+          colorScheme="amber"
+        />
+
+        {verboseLogging && (
+          <div className="flex items-start gap-2 text-xs text-status-warning/90">
+            <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+            <span>Verbose logging may impact performance and increase log file size.</span>
+          </div>
+        )}
+
+        <div className="p-3 bg-canopy-border/30 rounded-[var(--radius-md)]">
+          <h5 className="text-xs font-medium text-canopy-text mb-2">
+            Advanced: Persistent Verbose Logging
+          </h5>
+          <p className="text-xs text-canopy-text/60 mb-2">
+            Use the toggle above for quick debugging. For persistent verbose logs across restarts,
+            launch the app with environment variables:
           </p>
+          <code className="block text-xs bg-canopy-bg p-2 rounded border border-canopy-border font-mono text-canopy-text">
+            CANOPY_DEBUG=1 npm run dev
+          </code>
         </div>
+      </SettingsSection>
+
+      <div className="space-y-2">
+        <h4 className="text-sm font-medium text-canopy-text">Keyboard Shortcuts</h4>
+        <p className="text-xs text-canopy-text/50">
+          Use Cmd+Option+I (Mac) or Ctrl+Shift+I (Windows/Linux) to open DevTools.
+        </p>
       </div>
     </div>
   );
