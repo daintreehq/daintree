@@ -1,5 +1,5 @@
 import { createClient, LiveTranscriptionEvents } from "@deepgram/sdk";
-import type { ListenLiveClient } from "@deepgram/sdk";
+import type { ListenLiveClient, LiveTranscriptionEvent } from "@deepgram/sdk";
 import type { VoiceInputSettings } from "../../shared/types/ipc/api.js";
 import { logDebug, logInfo, logWarn, logError } from "../utils/logger.js";
 
@@ -154,7 +154,7 @@ export class VoiceTranscriptionService {
         this.settlePendingStart(mySessionId, { ok: true });
       });
 
-      connection.on(LiveTranscriptionEvents.Transcript, (data) => {
+      connection.on(LiveTranscriptionEvents.Transcript, (data: LiveTranscriptionEvent) => {
         if (this.sessionId !== mySessionId) return;
         try {
           const transcript: string = data.channel?.alternatives?.[0]?.transcript ?? "";
@@ -175,7 +175,7 @@ export class VoiceTranscriptionService {
         this.flushUtterance();
       });
 
-      connection.on(LiveTranscriptionEvents.Error, (err) => {
+      connection.on(LiveTranscriptionEvents.Error, (err: Error) => {
         this.clearConnectTimeout();
         if (this.sessionId !== mySessionId) return;
         const errObj = err as { message?: string; error?: string };

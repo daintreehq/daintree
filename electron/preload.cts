@@ -510,6 +510,7 @@ const CHANNELS = {
   VOICE_INPUT_VALIDATE_API_KEY: "voice-input:validate-api-key",
   VOICE_INPUT_VALIDATE_CORRECTION_API_KEY: "voice-input:validate-correction-api-key",
   VOICE_INPUT_FLUSH_PARAGRAPH: "voice-input:flush-paragraph",
+  VOICE_INPUT_PARAGRAPH_BOUNDARY: "voice-input:paragraph-boundary",
 
   // MCP Server channels
   MCP_SERVER_GET_STATUS: "mcp-server:get-status",
