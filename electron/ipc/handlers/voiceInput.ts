@@ -163,7 +163,8 @@ function flushParagraphBuffer(win: Electron.BrowserWindow | null): { rawText: st
             correctedText,
           });
         }
-      });
+      })
+      .catch(() => {});
   }
 
   return { rawText };

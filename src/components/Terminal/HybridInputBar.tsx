@@ -957,7 +957,9 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
 
               // Mark the paragraph as pending correction in the renderer so the
               // accumulated text shows as gray until the correction arrives.
-              if (rawText && paragraphStart >= 0) {
+              // Only add when correction is enabled — otherwise no CORRECTION_REPLACE
+              // will arrive and the text would stay dimmed permanently.
+              if (rawText && paragraphStart >= 0 && voiceStore.correctionEnabled) {
                 voiceStore.addPendingCorrection(tid, paragraphStart, rawText);
               }
 

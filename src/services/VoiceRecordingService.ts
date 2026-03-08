@@ -542,7 +542,9 @@ class VoiceRecordingService {
       // handles that case).
       if (stopResult?.rawText) {
         const currentTarget = useVoiceRecordingStore.getState().activeTarget;
-        if (currentTarget) {
+        // Only add pending correction when correction is enabled — otherwise
+        // no CORRECTION_REPLACE will arrive and the text stays dimmed permanently.
+        if (currentTarget && useVoiceRecordingStore.getState().correctionEnabled) {
           const buffer = useVoiceRecordingStore.getState().panelBuffers[currentTarget.panelId];
           const paragraphStart = buffer?.activeParagraphStart ?? -1;
           if (paragraphStart >= 0) {

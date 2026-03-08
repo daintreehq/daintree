@@ -115,6 +115,7 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()((set, get) =
         [target.panelId]: {
           ...getBuffer(state.panelBuffers, target.panelId),
           liveText: "",
+          completedSegments: [],
           projectId: target.projectId,
           draftLengthAtSegmentStart: -1,
           activeParagraphStart: -1,
