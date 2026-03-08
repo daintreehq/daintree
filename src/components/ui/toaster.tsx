@@ -41,7 +41,7 @@ function Toast({ notification }: { notification: Notification }) {
 
   useEffect(() => {
     if (notification.duration === 0 || isPaused) return;
-    const timer = setTimeout(handleDismiss, notification.duration || 5000);
+    const timer = setTimeout(handleDismiss, notification.duration || 3000);
     return () => clearTimeout(timer);
   }, [notification.duration, handleDismiss, isPaused]);
 
@@ -52,7 +52,7 @@ function Toast({ notification }: { notification: Notification }) {
       className={cn(
         "group pointer-events-auto relative flex w-full max-w-[360px] items-start gap-3",
         "rounded-[var(--radius-sm)] border-l-[3px] border border-white/[0.08]",
-        "bg-zinc-950/80 backdrop-blur-md",
+        "bg-zinc-900/60 backdrop-blur-xl",
         "px-3 py-2.5 pr-2",
         "text-sm text-canopy-text",
         "shadow-[0_8px_24px_rgba(0,0,0,0.4)]",
@@ -101,10 +101,9 @@ function Toast({ notification }: { notification: Notification }) {
         className={cn(
           "shrink-0 rounded-[var(--radius-xs)]",
           "h-6 w-6 flex items-center justify-center",
-          "text-canopy-text/40 transition-[opacity,color] duration-150",
-          "opacity-0 group-hover:opacity-100",
+          "text-canopy-text/40 transition-colors duration-150",
           "hover:text-canopy-text/80 hover:bg-white/10",
-          "focus-visible:opacity-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2"
+          "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2"
         )}
       >
         <X className="h-3.5 w-3.5" />
@@ -129,10 +128,10 @@ export function Toaster() {
 
   return createPortal(
     <div
-      className="fixed bottom-6 z-[var(--z-toast)] flex flex-col gap-3 w-full max-w-[380px] pointer-events-none p-4"
+      className="fixed top-14 z-[var(--z-toast)] flex flex-col gap-3 w-full max-w-[380px] pointer-events-none p-4"
       style={{ right: "calc(var(--sidecar-right-offset, 0px))" }}
     >
-      {toastNotifications.map((notification) => (
+      {[...toastNotifications].reverse().map((notification) => (
         <Toast key={notification.id} notification={notification} />
       ))}
     </div>,
