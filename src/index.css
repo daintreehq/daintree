@@ -17,6 +17,7 @@
   --color-border-divider: var(--theme-border-divider);
   --color-accent-primary: var(--theme-accent-primary);
   --color-accent-foreground: var(--theme-accent-foreground);
+  --color-accent-primary-foreground: var(--theme-accent-foreground);
   --color-accent-soft: var(--theme-accent-soft);
   --color-accent-muted: var(--theme-accent-muted);
   --color-focus-ring: var(--theme-focus-ring);
@@ -257,7 +258,7 @@
   --popover: var(--color-surface-panel-elevated);
   --popover-foreground: var(--color-text-primary);
   --primary: var(--color-accent-primary);
-  --primary-foreground: var(--color-accent-foreground);
+  --primary-foreground: var(--color-accent-primary-foreground);
   --secondary: var(--color-surface-panel-elevated);
   --secondary-foreground: var(--color-text-primary);
   --muted: var(--color-surface-panel);
@@ -277,7 +278,7 @@
   --sidebar: var(--color-surface-sidebar);
   --sidebar-foreground: var(--color-text-primary);
   --sidebar-primary: var(--color-accent-primary);
-  --sidebar-primary-foreground: var(--color-accent-foreground);
+  --sidebar-primary-foreground: var(--color-accent-primary-foreground);
   --sidebar-accent: var(--color-overlay-soft);
   --sidebar-accent-foreground: var(--color-text-primary);
   --sidebar-border: var(--color-border-default);
