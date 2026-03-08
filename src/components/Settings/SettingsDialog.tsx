@@ -1,5 +1,13 @@
 import { useState, useEffect, useDeferredValue, useMemo, useRef, useCallback } from "react";
-import { useSidecarStore } from "@/store";
+import {
+  useSidecarStore,
+  usePerformanceModeStore,
+  useScrollbackStore,
+  useLayoutConfigStore,
+  useTerminalInputStore,
+  useTwoPaneSplitStore,
+  usePreferencesStore,
+} from "@/store";
 import {
   X,
   Waypoints,
@@ -142,9 +150,10 @@ export function SettingsDialog({
   // deferredQuery drives the expensive filtering computation only.
   const isSearching = searchQuery.trim().length > 0;
 
-  const handleResultClick = (tab: SettingsTab) => {
+  const handleResultClick = (tab: SettingsTab, sectionId?: string) => {
     setActiveTab(tab);
     setSearchQuery("");
+    setScrollToSection(sectionId ?? null);
     searchInputRef.current?.blur();
   };
 
@@ -170,14 +179,81 @@ export function SettingsDialog({
         setActiveResultIndex((prev) => (prev > 0 ? prev - 1 : searchResults.length - 1));
       } else if (e.key === "Enter" && activeResultIndex >= 0) {
         e.preventDefault();
-        handleResultClick(searchResults[activeResultIndex].tab);
+        const result = searchResults[activeResultIndex];
+        handleResultClick(result.tab, result.id);
       }
     }
   };
 
+  // Deep-link: scroll to a specific section after navigating
+  const [scrollToSection, setScrollToSection] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!scrollToSection || isSearching) return;
+    let highlightTimer: ReturnType<typeof setTimeout>;
+    const timer = setTimeout(() => {
+      const el = document.getElementById(scrollToSection);
+      if (el) {
+        el.scrollIntoView({ behavior: "smooth", block: "start" });
+        el.classList.add("settings-highlight");
+        highlightTimer = setTimeout(() => el.classList.remove("settings-highlight"), 1500);
+      }
+    }, 100);
+    return () => {
+      clearTimeout(timer);
+      clearTimeout(highlightTimer);
+    };
+  }, [scrollToSection, activeTab, isSearching]);
+
+  // Modified-from-default tracking
+  const performanceMode = usePerformanceModeStore((s) => s.performanceMode);
+  const scrollbackLines = useScrollbackStore((s) => s.scrollbackLines);
+  const layoutConfig = useLayoutConfigStore((s) => s.layoutConfig);
+  const hybridInputEnabled = useTerminalInputStore((s) => s.hybridInputEnabled);
+  const hybridInputAutoFocus = useTerminalInputStore((s) => s.hybridInputAutoFocus);
+  const twoPaneSplitConfig = useTwoPaneSplitStore((s) => s.config);
+  const showProjectPulse = usePreferencesStore((s) => s.showProjectPulse);
+  const showDeveloperTools = usePreferencesStore((s) => s.showDeveloperTools);
+
+  const modifiedTabs = useMemo(() => {
+    const tabs = new Set<SettingsTab>();
+
+    // General defaults: showProjectPulse=true, showDeveloperTools=false
+    if (!showProjectPulse || showDeveloperTools) tabs.add("general");
+
+    // Terminal defaults: performanceMode=false, scrollback=5000, strategy=automatic,
+    // hybridInput=true, hybridAutoFocus=true, twoPaneSplit.enabled=true, preferPreview=false, ratio=0.5
+    if (
+      performanceMode ||
+      scrollbackLines !== 5000 ||
+      layoutConfig.strategy !== "automatic" ||
+      !hybridInputEnabled ||
+      !hybridInputAutoFocus ||
+      !twoPaneSplitConfig.enabled ||
+      twoPaneSplitConfig.preferPreview ||
+      Math.round(twoPaneSplitConfig.defaultRatio * 100) !== 50
+    ) {
+      tabs.add("terminal");
+    }
+
+    return tabs;
+  }, [
+    showProjectPulse,
+    showDeveloperTools,
+    performanceMode,
+    scrollbackLines,
+    layoutConfig.strategy,
+    hybridInputEnabled,
+    hybridInputAutoFocus,
+    twoPaneSplitConfig.enabled,
+    twoPaneSplitConfig.preferPreview,
+    twoPaneSplitConfig.defaultRatio,
+  ]);
+
   const handleNavSelect = useCallback((tab: SettingsTab) => {
     setActiveTab(tab);
     setSearchQuery("");
+    setScrollToSection(null);
   }, []);
 
   const tabTitles: Record<SettingsTab, string> = {
@@ -273,6 +349,7 @@ export function SettingsDialog({
                 activeTab={activeTab}
                 isSearching={isSearching}
                 matchCount={matchCounts.general}
+                modified={modifiedTabs.has("general")}
                 onSelect={handleNavSelect}
               />
               <NavItem
@@ -312,6 +389,7 @@ export function SettingsDialog({
                 activeTab={activeTab}
                 isSearching={isSearching}
                 matchCount={matchCounts.terminal}
+                modified={modifiedTabs.has("terminal")}
                 onSelect={handleNavSelect}
               />
               <NavItem
@@ -531,10 +609,20 @@ interface NavItemProps {
   activeTab: SettingsTab;
   isSearching: boolean;
   matchCount?: number;
+  modified?: boolean;
   onSelect: (tab: SettingsTab) => void;
 }
 
-function NavItem({ tab, icon, label, activeTab, isSearching, matchCount, onSelect }: NavItemProps) {
+function NavItem({
+  tab,
+  icon,
+  label,
+  activeTab,
+  isSearching,
+  matchCount,
+  modified,
+  onSelect,
+}: NavItemProps) {
   const active = activeTab === tab && !isSearching;
   return (
     <button
@@ -547,7 +635,15 @@ function NavItem({ tab, icon, label, activeTab, isSearching, matchCount, onSelec
           : "text-canopy-text/60 hover:bg-overlay-soft hover:text-canopy-text"
       )}
     >
-      {icon}
+      <span className="relative">
+        {icon}
+        {modified && (
+          <span
+            className="absolute -top-0.5 -right-0.5 w-1.5 h-1.5 rounded-full bg-canopy-accent"
+            title="Modified from default"
+          />
+        )}
+      </span>
       <span className="flex-1 truncate">{label}</span>
       {matchCount ? <MatchBadge count={matchCount} /> : null}
     </button>
@@ -568,7 +664,7 @@ function MatchBadge({ count }: { count: number }) {
 interface SearchResultsProps {
   results: ReturnType<typeof filterSettings>;
   query: string;
-  onResultClick: (tab: SettingsTab) => void;
+  onResultClick: (tab: SettingsTab, sectionId?: string) => void;
   activeIndex?: number;
 }
 
@@ -612,7 +708,7 @@ function SearchResults({ results, query, onResultClick, activeIndex = -1 }: Sear
         <button
           key={result.id}
           ref={index === activeIndex ? activeRef : undefined}
-          onClick={() => onResultClick(result.tab)}
+          onClick={() => onResultClick(result.tab, result.id)}
           className={cn(
             "group w-full text-left p-3 rounded-[var(--radius-md)] border transition-all",
             index === activeIndex

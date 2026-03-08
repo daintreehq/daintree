@@ -196,6 +196,7 @@ export function TerminalSettingsTab() {
       <SettingsSection
         icon={Zap}
         title="Performance Mode"
+        id="terminal-performance-mode"
         description={`Manual safe mode for low-end hardware or high-density workflows. Reduces scrollback to ${PERFORMANCE_MODE_SCROLLBACK} lines and disables animations for maximum performance.`}
         iconColor="text-status-warning"
       >
@@ -226,6 +227,7 @@ export function TerminalSettingsTab() {
         <SettingsSection
           icon={MessageSquare}
           title="Hybrid Input Bar"
+          id="terminal-hybrid-input"
           description="Configure the bottom input bar used for agent terminals."
           iconColor="text-canopy-accent"
         >
@@ -263,6 +265,7 @@ export function TerminalSettingsTab() {
         <SettingsSection
           icon={SplitSquareHorizontal}
           title="Two-Pane Split Layout"
+          id="terminal-two-pane-split"
           description="When exactly two panels are open, display them with a resizable divider instead of equal columns. The split ratio is remembered per worktree."
           iconColor="text-canopy-accent"
         >
@@ -336,7 +339,7 @@ export function TerminalSettingsTab() {
         </SettingsSection>
       </div>
 
-      <div className="pt-4 border-t border-canopy-border space-y-4">
+      <div className="pt-4 border-t border-canopy-border space-y-4" id="terminal-scrollback">
         <div>
           <h4 className="text-sm font-medium text-canopy-text mb-2 flex items-center gap-2">
             <HardDrive className="w-4 h-4 text-canopy-accent" />
@@ -429,7 +432,7 @@ export function TerminalSettingsTab() {
         )}
       </div>
 
-      <div className="pt-4 border-t border-canopy-border">
+      <div className="pt-4 border-t border-canopy-border" id="terminal-grid-layout">
         <h4 className="text-sm font-medium text-canopy-text mb-2">Grid Layout Strategy</h4>
         <p className="text-xs text-canopy-text/50 mb-4">
           Control how panels arrange in the grid as you add more.

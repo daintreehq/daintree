@@ -228,7 +228,7 @@ export function GeneralTab({ appVersion, onNavigateToAgents }: GeneralTabProps) 
 
   return (
     <div className="space-y-6">
-      <div className="space-y-2">
+      <div className="space-y-2" id="general-about">
         <h4 className="text-sm font-medium text-canopy-text">About</h4>
         <div className="bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] p-4">
           <div className="flex items-center gap-3 mb-4">
@@ -262,7 +262,7 @@ export function GeneralTab({ appVersion, onNavigateToAgents }: GeneralTabProps) 
         </p>
       </div>
 
-      <div className="space-y-2">
+      <div className="space-y-2" id="general-system-status">
         <h4 className="text-sm font-medium text-canopy-text">System Status</h4>
         <div className="bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] p-4 space-y-3">
           {cliCheckFailed ? (
@@ -323,6 +323,7 @@ export function GeneralTab({ appVersion, onNavigateToAgents }: GeneralTabProps) 
           title="Auto-Hibernation"
           description="Automatically stop terminals and servers for projects that have been inactive for a period of time. Reduces system resource usage."
           iconColor="text-canopy-accent"
+          id="general-hibernation"
         >
           <SettingsSwitchCard
             icon={Moon}
@@ -368,7 +369,7 @@ export function GeneralTab({ appVersion, onNavigateToAgents }: GeneralTabProps) 
         </SettingsSection>
       ) : null}
 
-      <div className="space-y-3">
+      <div className="space-y-3" id="general-project-pulse">
         <h4 className="text-sm font-medium text-canopy-text flex items-center gap-2">
           <Activity className="w-4 h-4 text-canopy-accent" />
           Display
