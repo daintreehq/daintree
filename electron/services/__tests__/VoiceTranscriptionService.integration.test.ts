@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { VoiceTranscriptionService } from "../VoiceTranscriptionService.js";
 import type { VoiceTranscriptionEvent } from "../VoiceTranscriptionService.js";
 
-const OPENAI_API_KEY = process.env.OPENAI_API_KEY ?? "";
+const DEEPGRAM_API_KEY = process.env.DEEPGRAM_API_KEY ?? "";
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -15,8 +15,8 @@ describe("VoiceTranscriptionService integration", () => {
     service?.destroy();
   });
 
-  it.skipIf(!OPENAI_API_KEY)(
-    "connects to OpenAI Realtime API and session config is accepted",
+  it.skipIf(!DEEPGRAM_API_KEY)(
+    "connects to Deepgram and session config is accepted",
     async () => {
       service = new VoiceTranscriptionService();
 
@@ -25,10 +25,11 @@ describe("VoiceTranscriptionService integration", () => {
 
       const result = await service.start({
         enabled: true,
-        apiKey: OPENAI_API_KEY,
+        deepgramApiKey: DEEPGRAM_API_KEY,
+        correctionApiKey: "",
         language: "en",
         customDictionary: [],
-        transcriptionModel: "gpt-4o-mini-transcribe",
+        transcriptionModel: "nova-3",
         correctionEnabled: false,
         correctionModel: "gpt-5-nano",
         correctionCustomInstructions: "",

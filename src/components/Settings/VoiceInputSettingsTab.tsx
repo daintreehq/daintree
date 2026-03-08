@@ -48,23 +48,24 @@ const TRANSCRIPTION_MODELS: {
   description: string;
 }[] = [
   {
-    value: "gpt-4o-mini-transcribe",
-    label: "GPT-4o Mini Transcribe",
-    description: "Faster · ~$0.18/hr",
+    value: "nova-3",
+    label: "Nova-3",
+    description: "Latest · best accuracy · $0.0077/min",
   },
   {
-    value: "gpt-4o-transcribe",
-    label: "GPT-4o Transcribe",
-    description: "Higher accuracy · ~$0.36/hr",
+    value: "nova-2",
+    label: "Nova-2",
+    description: "Stable fallback · $0.0043/min",
   },
 ];
 
 const DEFAULT_SETTINGS: VoiceInputSettings = {
   enabled: false,
-  apiKey: "",
+  deepgramApiKey: "",
+  correctionApiKey: "",
   language: "en",
   customDictionary: [],
-  transcriptionModel: "gpt-4o-mini-transcribe",
+  transcriptionModel: "nova-3",
   correctionEnabled: false,
   correctionModel: "gpt-5-nano",
   correctionCustomInstructions: "",
@@ -76,10 +77,6 @@ type ApiKeyValidation = "idle" | "testing" | "valid" | "invalid";
 export function VoiceInputSettingsTab() {
   const [settings, setSettings] = useState<VoiceInputSettings>(DEFAULT_SETTINGS);
   const [loadState, setLoadState] = useState<LoadState>("loading");
-  const [showApiKey, setShowApiKey] = useState(false);
-  const [apiKeyInput, setApiKeyInput] = useState("");
-  const [apiKeyValidation, setApiKeyValidation] = useState<ApiKeyValidation>("idle");
-  const [apiKeyError, setApiKeyError] = useState<string | null>(null);
   const [micPermission, setMicPermission] = useState<MicPermissionStatus>("unknown");
   const [isRequestingMic, setIsRequestingMic] = useState(false);
   const [newDictionaryWord, setNewDictionaryWord] = useState("");
@@ -102,15 +99,6 @@ export function VoiceInputSettingsTab() {
       .catch(() => {});
   }, []);
 
-  useEffect(() => {
-    if (apiKeyValidation !== "valid" && apiKeyValidation !== "invalid") return;
-    const timer = setTimeout(() => {
-      setApiKeyValidation("idle");
-      setApiKeyError(null);
-    }, 5000);
-    return () => clearTimeout(timer);
-  }, [apiKeyValidation]);
-
   const update = (patch: Partial<VoiceInputSettings>) => {
     setSettings((prev) => {
       const next = { ...prev, ...patch };
@@ -121,57 +109,6 @@ export function VoiceInputSettingsTab() {
       return next;
     });
   };
-
-  const handleTestApiKey = useCallback(async () => {
-    const key = apiKeyInput.trim() || settings.apiKey;
-    if (!key) return;
-
-    setApiKeyValidation("testing");
-    setApiKeyError(null);
-
-    try {
-      const result = await window.electron?.voiceInput?.validateApiKey(key);
-      if (result?.valid) {
-        setApiKeyValidation("valid");
-      } else {
-        setApiKeyValidation("invalid");
-        setApiKeyError(result?.error || "Invalid API key");
-      }
-    } catch {
-      setApiKeyValidation("invalid");
-      setApiKeyError("Failed to validate API key");
-    }
-  }, [apiKeyInput, settings.apiKey]);
-
-  const handleSaveApiKey = useCallback(async () => {
-    const key = apiKeyInput.trim();
-    if (!key) return;
-
-    setApiKeyValidation("testing");
-    setApiKeyError(null);
-
-    try {
-      const result = await window.electron?.voiceInput?.validateApiKey(key);
-      if (result?.valid) {
-        update({ apiKey: key });
-        setApiKeyInput("");
-        setApiKeyValidation("valid");
-      } else {
-        setApiKeyValidation("invalid");
-        setApiKeyError(result?.error || "Invalid API key");
-      }
-    } catch {
-      setApiKeyValidation("invalid");
-      setApiKeyError("Failed to validate API key");
-    }
-  }, [apiKeyInput]);
-
-  const handleClearApiKey = useCallback(() => {
-    update({ apiKey: "" });
-    setApiKeyInput("");
-    setApiKeyValidation("idle");
-    setApiKeyError(null);
-  }, []);
 
   const handleRequestMicPermission = useCallback(async () => {
     setIsRequestingMic(true);
@@ -230,7 +167,7 @@ export function VoiceInputSettingsTab() {
       <SettingsSwitchCard
         icon={Mic}
         title="Voice Input"
-        subtitle="Dictate commands using your microphone via OpenAI Realtime API"
+        subtitle="Dictate commands using your microphone via Deepgram Nova-3"
         isEnabled={settings.enabled}
         onChange={() => update({ enabled: !settings.enabled })}
         ariaLabel="Toggle voice input"
@@ -238,121 +175,21 @@ export function VoiceInputSettingsTab() {
 
       {settings.enabled && (
         <>
-          {/* API Key Section */}
+          {/* Deepgram API Key */}
           <SettingsSection
             icon={Key}
-            title="OpenAI API Key"
-            description="Required for transcription via the OpenAI Realtime API. Your key is stored locally and never shared."
+            title="Deepgram API Key"
+            description="Required for transcription via Deepgram Nova-3. Your key is stored locally and never shared."
           >
-            <div className="space-y-3">
-              <div className="flex items-center justify-between">
-                <span className="text-sm text-canopy-text">
-                  {settings.apiKey ? (
-                    <span className="flex items-center gap-1.5 text-status-success">
-                      <Check className="w-3 h-3" />
-                      API key configured
-                    </span>
-                  ) : (
-                    <span className="text-canopy-text/50">No API key set</span>
-                  )}
-                </span>
-              </div>
-
-              <div className="flex gap-2">
-                <div className="relative flex-1">
-                  <input
-                    type={showApiKey ? "text" : "password"}
-                    value={apiKeyInput}
-                    onChange={(e) => setApiKeyInput(e.target.value)}
-                    placeholder={settings.apiKey ? "Enter new key to replace" : "sk-..."}
-                    className="w-full bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] px-3 py-2 pr-10 font-mono text-sm text-canopy-text placeholder:text-canopy-text/40 focus:outline-none focus:ring-1 focus:ring-canopy-accent"
-                    autoComplete="new-password"
-                    spellCheck={false}
-                    disabled={apiKeyValidation === "testing"}
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setShowApiKey((v) => !v)}
-                    className="absolute right-2 top-1/2 -translate-y-1/2 text-canopy-text/40 hover:text-canopy-text/70"
-                    aria-label={showApiKey ? "Hide API key" : "Show API key"}
-                  >
-                    {showApiKey ? (
-                      <EyeOff className="h-3.5 w-3.5" />
-                    ) : (
-                      <Eye className="h-3.5 w-3.5" />
-                    )}
-                  </button>
-                </div>
-                <Button
-                  onClick={handleTestApiKey}
-                  disabled={
-                    apiKeyValidation === "testing" || (!apiKeyInput.trim() && !settings.apiKey)
-                  }
-                  variant="outline"
-                  size="sm"
-                  className="min-w-[70px] text-canopy-text border-canopy-border hover:bg-canopy-border"
-                >
-                  {apiKeyValidation === "testing" ? (
-                    <Loader2 className="animate-spin" />
-                  ) : (
-                    <>
-                      <FlaskConical />
-                      Test
-                    </>
-                  )}
-                </Button>
-                <Button
-                  onClick={handleSaveApiKey}
-                  disabled={apiKeyValidation === "testing" || !apiKeyInput.trim()}
-                  size="sm"
-                  className="min-w-[70px]"
-                >
-                  {apiKeyValidation === "testing" ? <Loader2 className="animate-spin" /> : "Save"}
-                </Button>
-                {settings.apiKey && (
-                  <Button
-                    onClick={handleClearApiKey}
-                    variant="outline"
-                    size="sm"
-                    className="text-status-error border-canopy-border hover:bg-status-error/10 hover:text-status-error/70 hover:border-status-error/20"
-                  >
-                    Clear
-                  </Button>
-                )}
-              </div>
-
-              {apiKeyValidation === "valid" && (
-                <p className="text-xs text-status-success flex items-center gap-1">
-                  <Check className="w-3 h-3" />
-                  API key is valid
-                </p>
-              )}
-              {apiKeyValidation === "invalid" && (
-                <p className="text-xs text-status-error flex items-center gap-1">
-                  <AlertCircle className="w-3 h-3" />
-                  {apiKeyError || "Invalid API key"}
-                </p>
-              )}
-            </div>
-
-            <div className="mt-4 space-y-3 rounded-[var(--radius-lg)] border border-canopy-border bg-surface p-4">
-              <h4 className="text-sm font-medium text-canopy-text">Get an API Key</h4>
-              <p className="text-xs text-canopy-text/60">
-                Create an OpenAI API key with access to the Realtime API. Voice input uses the{" "}
-                Realtime API for low-latency transcription.
-              </p>
-              <Button
-                onClick={() =>
-                  window.electron?.system?.openExternal("https://platform.openai.com/api-keys")
-                }
-                variant="outline"
-                size="sm"
-                className="text-canopy-text border-canopy-border hover:bg-canopy-border"
-              >
-                <ExternalLink />
-                Open OpenAI Dashboard
-              </Button>
-            </div>
+            <ApiKeyField
+              value={settings.deepgramApiKey}
+              placeholder="deepgram_..."
+              onSave={(key) => update({ deepgramApiKey: key })}
+              onValidate={(key) => window.electron?.voiceInput?.validateApiKey(key)}
+              dashboardUrl="https://console.deepgram.com/project/api-keys"
+              dashboardLabel="Open Deepgram Console"
+              getInfoText="Create a Deepgram API key with Speech:read scope. Voice input uses Nova-3 for real-time streaming transcription."
+            />
           </SettingsSection>
 
           {/* Microphone Permission */}
@@ -393,7 +230,7 @@ export function VoiceInputSettingsTab() {
           <SettingsSection
             icon={Mic}
             title="Transcription Model"
-            description="Choose the model used for speech-to-text. Mini is faster and cheaper; the full model offers higher accuracy."
+            description="Choose the Deepgram model for speech-to-text. Nova-3 offers the best accuracy; Nova-2 is a stable fallback."
           >
             <select
               value={settings.transcriptionModel}
@@ -421,8 +258,8 @@ export function VoiceInputSettingsTab() {
                 Custom Dictionary
               </h4>
               <p className="text-xs text-canopy-text/50 mb-4">
-                Add domain-specific terms, project names, and technical abbreviations to improve
-                transcription accuracy.
+                Add domain-specific terms, project names, and technical abbreviations. These are
+                sent to Deepgram as keyterms to improve transcription accuracy (up to 100 terms).
               </p>
             </div>
 
@@ -487,6 +324,188 @@ export function VoiceInputSettingsTab() {
   );
 }
 
+interface ApiKeyFieldProps {
+  value: string;
+  placeholder: string;
+  onSave: (key: string) => void;
+  onValidate: (key: string) => Promise<{ valid: boolean; error?: string } | undefined> | undefined;
+  dashboardUrl: string;
+  dashboardLabel: string;
+  getInfoText: string;
+}
+
+function ApiKeyField({
+  value,
+  placeholder,
+  onSave,
+  onValidate,
+  dashboardUrl,
+  dashboardLabel,
+  getInfoText,
+}: ApiKeyFieldProps) {
+  const [showKey, setShowKey] = useState(false);
+  const [keyInput, setKeyInput] = useState("");
+  const [validation, setValidation] = useState<ApiKeyValidation>("idle");
+  const [validationError, setValidationError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (validation !== "valid" && validation !== "invalid") return;
+    const timer = setTimeout(() => {
+      setValidation("idle");
+      setValidationError(null);
+    }, 5000);
+    return () => clearTimeout(timer);
+  }, [validation]);
+
+  const handleTest = useCallback(async () => {
+    const key = keyInput.trim() || value;
+    if (!key) return;
+    setValidation("testing");
+    setValidationError(null);
+    try {
+      const result = await onValidate(key);
+      if (result?.valid) {
+        setValidation("valid");
+      } else {
+        setValidation("invalid");
+        setValidationError(result?.error || "Invalid API key");
+      }
+    } catch {
+      setValidation("invalid");
+      setValidationError("Failed to validate API key");
+    }
+  }, [keyInput, value, onValidate]);
+
+  const handleSave = useCallback(async () => {
+    const key = keyInput.trim();
+    if (!key) return;
+    setValidation("testing");
+    setValidationError(null);
+    try {
+      const result = await onValidate(key);
+      if (result?.valid) {
+        onSave(key);
+        setKeyInput("");
+        setValidation("valid");
+      } else {
+        setValidation("invalid");
+        setValidationError(result?.error || "Invalid API key");
+      }
+    } catch {
+      setValidation("invalid");
+      setValidationError("Failed to validate API key");
+    }
+  }, [keyInput, onSave, onValidate]);
+
+  const handleClear = useCallback(() => {
+    onSave("");
+    setKeyInput("");
+    setValidation("idle");
+    setValidationError(null);
+  }, [onSave]);
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center justify-between">
+        <span className="text-sm text-canopy-text">
+          {value ? (
+            <span className="flex items-center gap-1.5 text-status-success">
+              <Check className="w-3 h-3" />
+              API key configured
+            </span>
+          ) : (
+            <span className="text-canopy-text/50">No API key set</span>
+          )}
+        </span>
+      </div>
+
+      <div className="flex gap-2">
+        <div className="relative flex-1">
+          <input
+            type={showKey ? "text" : "password"}
+            value={keyInput}
+            onChange={(e) => setKeyInput(e.target.value)}
+            placeholder={value ? "Enter new key to replace" : placeholder}
+            className="w-full bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] px-3 py-2 pr-10 font-mono text-sm text-canopy-text placeholder:text-canopy-text/40 focus:outline-none focus:ring-1 focus:ring-canopy-accent"
+            autoComplete="new-password"
+            spellCheck={false}
+            disabled={validation === "testing"}
+          />
+          <button
+            type="button"
+            onClick={() => setShowKey((v) => !v)}
+            className="absolute right-2 top-1/2 -translate-y-1/2 text-canopy-text/40 hover:text-canopy-text/70"
+            aria-label={showKey ? "Hide API key" : "Show API key"}
+          >
+            {showKey ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+          </button>
+        </div>
+        <Button
+          onClick={handleTest}
+          disabled={validation === "testing" || (!keyInput.trim() && !value)}
+          variant="outline"
+          size="sm"
+          className="min-w-[70px] text-canopy-text border-canopy-border hover:bg-canopy-border"
+        >
+          {validation === "testing" ? (
+            <Loader2 className="animate-spin" />
+          ) : (
+            <>
+              <FlaskConical />
+              Test
+            </>
+          )}
+        </Button>
+        <Button
+          onClick={handleSave}
+          disabled={validation === "testing" || !keyInput.trim()}
+          size="sm"
+          className="min-w-[70px]"
+        >
+          {validation === "testing" ? <Loader2 className="animate-spin" /> : "Save"}
+        </Button>
+        {value && (
+          <Button
+            onClick={handleClear}
+            variant="outline"
+            size="sm"
+            className="text-status-error border-canopy-border hover:bg-status-error/10 hover:text-status-error/70 hover:border-status-error/20"
+          >
+            Clear
+          </Button>
+        )}
+      </div>
+
+      {validation === "valid" && (
+        <p className="text-xs text-status-success flex items-center gap-1">
+          <Check className="w-3 h-3" />
+          API key is valid
+        </p>
+      )}
+      {validation === "invalid" && (
+        <p className="text-xs text-status-error flex items-center gap-1">
+          <AlertCircle className="w-3 h-3" />
+          {validationError || "Invalid API key"}
+        </p>
+      )}
+
+      <div className="mt-4 space-y-3 rounded-[var(--radius-lg)] border border-canopy-border bg-surface p-4">
+        <h4 className="text-sm font-medium text-canopy-text">Get an API Key</h4>
+        <p className="text-xs text-canopy-text/60">{getInfoText}</p>
+        <Button
+          onClick={() => window.electron?.system?.openExternal(dashboardUrl)}
+          variant="outline"
+          size="sm"
+          className="text-canopy-text border-canopy-border hover:bg-canopy-border"
+        >
+          <ExternalLink />
+          {dashboardLabel}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 interface AiCorrectionSectionProps {
   settings: VoiceInputSettings;
   update: (patch: Partial<VoiceInputSettings>) => void;
@@ -509,58 +528,73 @@ function AiCorrectionSection({ settings, update }: AiCorrectionSectionProps) {
       {settings.correctionEnabled && (
         <SettingsSection
           icon={Sparkles}
-          title="Correction Settings"
-          description="Transcriptions are corrected using GPT-5 Nano with an optimized prompt. Project name, custom dictionary, and your instructions are included automatically."
+          title="AI Text Correction — OpenAI API Key"
+          description="Correction uses GPT-5 Nano via OpenAI. This requires a separate OpenAI key and is independent of the Deepgram transcription key."
         >
           <div className="space-y-4">
-            {/* Core prompt (read-only) */}
-            <div className="rounded-[var(--radius-lg)] border border-canopy-border bg-surface p-4 space-y-3">
-              <button
-                type="button"
-                onClick={() => setCorePromptExpanded((v) => !v)}
-                className="flex items-center justify-between w-full text-left"
-              >
-                <h4 className="text-sm font-medium text-canopy-text">Core Prompt</h4>
-                {corePromptExpanded ? (
-                  <ChevronUp className="w-4 h-4 text-canopy-text/40" />
-                ) : (
-                  <ChevronDown className="w-4 h-4 text-canopy-text/40" />
-                )}
-              </button>
+            <ApiKeyField
+              value={settings.correctionApiKey}
+              placeholder="sk-..."
+              onSave={(key) => update({ correctionApiKey: key })}
+              onValidate={(key) => window.electron?.voiceInput?.validateCorrectionApiKey(key)}
+              dashboardUrl="https://platform.openai.com/api-keys"
+              dashboardLabel="Open OpenAI Dashboard"
+              getInfoText="Create an OpenAI API key for GPT-5 Nano correction. This is optional — if no key is set, correction is skipped entirely."
+            />
 
-              {corePromptExpanded ? (
-                <pre className="w-full bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] px-3 py-2 text-xs font-mono text-canopy-text/60 whitespace-pre-wrap overflow-y-auto max-h-64">
-                  {CORE_CORRECTION_PROMPT}
-                </pre>
-              ) : (
+            {settings.correctionApiKey && (
+              <>
+                {/* Core prompt (read-only) */}
+                <div className="rounded-[var(--radius-lg)] border border-canopy-border bg-surface p-4 space-y-3">
+                  <button
+                    type="button"
+                    onClick={() => setCorePromptExpanded((v) => !v)}
+                    className="flex items-center justify-between w-full text-left"
+                  >
+                    <h4 className="text-sm font-medium text-canopy-text">Core Prompt</h4>
+                    {corePromptExpanded ? (
+                      <ChevronUp className="w-4 h-4 text-canopy-text/40" />
+                    ) : (
+                      <ChevronDown className="w-4 h-4 text-canopy-text/40" />
+                    )}
+                  </button>
+
+                  {corePromptExpanded ? (
+                    <pre className="w-full bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] px-3 py-2 text-xs font-mono text-canopy-text/60 whitespace-pre-wrap overflow-y-auto max-h-64">
+                      {CORE_CORRECTION_PROMPT}
+                    </pre>
+                  ) : (
+                    <p className="text-xs text-canopy-text/40">
+                      High-Fidelity Orthographic Auditor — corrects phonetic mistranscriptions,
+                      punctuation, homophones, and filler words while preserving the speaker&apos;s
+                      original language.
+                    </p>
+                  )}
+                </div>
+
+                {/* Custom instructions */}
+                <div className="rounded-[var(--radius-lg)] border border-canopy-border bg-surface p-4 space-y-3">
+                  <h4 className="text-sm font-medium text-canopy-text">Custom Instructions</h4>
+                  <p className="text-xs text-canopy-text/40">
+                    Add project-specific rules or corrections. These are appended to the core
+                    prompt.
+                  </p>
+                  <textarea
+                    value={settings.correctionCustomInstructions}
+                    onChange={(e) => update({ correctionCustomInstructions: e.target.value })}
+                    rows={3}
+                    placeholder='e.g., "Always capitalize ProductName as one word" or "The acronym CMS refers to our Content Management System"'
+                    className="w-full bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] px-3 py-2 text-xs font-mono text-canopy-text placeholder:text-canopy-text/30 focus:outline-none focus:ring-1 focus:ring-canopy-accent resize-y"
+                    spellCheck={false}
+                  />
+                </div>
+
                 <p className="text-xs text-canopy-text/40">
-                  High-Fidelity Orthographic Auditor — corrects phonetic mistranscriptions,
-                  punctuation, homophones, and filler words while preserving the speaker&apos;s
-                  original language.
+                  The system prompt also includes your project name and custom dictionary
+                  automatically. Prompt caching keeps costs minimal (~$0.005/1M cached tokens).
                 </p>
-              )}
-            </div>
-
-            {/* Custom instructions (user-editable, appended to core prompt) */}
-            <div className="rounded-[var(--radius-lg)] border border-canopy-border bg-surface p-4 space-y-3">
-              <h4 className="text-sm font-medium text-canopy-text">Custom Instructions</h4>
-              <p className="text-xs text-canopy-text/40">
-                Add project-specific rules or corrections. These are appended to the core prompt.
-              </p>
-              <textarea
-                value={settings.correctionCustomInstructions}
-                onChange={(e) => update({ correctionCustomInstructions: e.target.value })}
-                rows={3}
-                placeholder='e.g., "Always capitalize ProductName as one word" or "The acronym CMS refers to our Content Management System"'
-                className="w-full bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] px-3 py-2 text-xs font-mono text-canopy-text placeholder:text-canopy-text/30 focus:outline-none focus:ring-1 focus:ring-canopy-accent resize-y"
-                spellCheck={false}
-              />
-            </div>
-
-            <p className="text-xs text-canopy-text/40">
-              The system prompt also includes your project name and custom dictionary automatically.
-              Prompt caching keeps costs minimal (~$0.005/1M cached tokens).
-            </p>
+              </>
+            )}
           </div>
         </SettingsSection>
       )}
@@ -684,7 +718,6 @@ function MicPermissionCard({
     );
   }
 
-  // unknown status (e.g. Linux, or failed to check)
   return (
     <div className="space-y-3">
       <div className="flex items-center gap-2 p-3 rounded-[var(--radius-md)] bg-canopy-bg border border-canopy-border">
