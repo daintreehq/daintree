@@ -69,7 +69,7 @@ test.describe.serial("Core: Shell & Settings", () => {
 
       const tabs = [
         { nav: "Keyboard", title: "Keyboard Shortcuts" },
-        { nav: "Terminal", title: "Panel Grid" },
+        { nav: "Panel Grid", title: "Panel Grid" },
         { nav: "Appearance", title: "Appearance" },
         { nav: "CLI Agents", title: "CLI Agents" },
         { nav: "GitHub", title: "GitHub Integration" },
@@ -192,7 +192,9 @@ test.describe.serial("Core: Shell & Settings", () => {
     test("Terminal tab: toggle Performance Mode on", async () => {
       const { window } = ctx;
 
-      const terminalTab = window.locator(`${SEL.settings.navSidebar} button:has-text("Terminal")`);
+      const terminalTab = window.locator(
+        `${SEL.settings.navSidebar} button:has-text("Panel Grid")`
+      );
       await terminalTab.click();
 
       const toggle = window.locator(SEL.settings.performanceModeToggle);
@@ -235,7 +237,9 @@ test.describe.serial("Core: Shell & Settings", () => {
       const pulseToggle = window.locator(SEL.settings.projectPulseToggle);
       await expect(pulseToggle).toHaveAttribute("aria-checked", "false", { timeout: T_MEDIUM });
 
-      const terminalTab = window.locator(`${SEL.settings.navSidebar} button:has-text("Terminal")`);
+      const terminalTab = window.locator(
+        `${SEL.settings.navSidebar} button:has-text("Panel Grid")`
+      );
       await terminalTab.click();
       const perfToggle = window.locator(SEL.settings.performanceModeToggle);
       await perfToggle.scrollIntoViewIfNeeded();

@@ -252,10 +252,10 @@ This is used for the very first release when gitflow hasn't been set up yet.
    git pull origin main
    git merge --no-ff release/vX.Y.Z -m "chore(release): merge release/vX.Y.Z into main"
    ```
-7. **Merge release branch back into `develop`:**
+7. **Merge `main` back into `develop`** (not the release branch — this keeps histories aligned and avoids diverged merge commits):
    ```bash
    git checkout develop
-   git merge --no-ff release/vX.Y.Z -m "chore(release): merge release/vX.Y.Z into develop"
+   git merge --no-ff main -m "chore(release): merge main into develop after vX.Y.Z release"
    ```
 8. Delete the release branch: `git branch -d release/vX.Y.Z`
 
@@ -334,9 +334,10 @@ Tell the user they should set `develop` as the default branch in GitHub repo set
    gh release create vX.Y.Z --title "vX.Y.Z" --notes-file CHANGELOG_SECTION.md
    ```
 
-3. **Clean up stale branches:** Check for merged remote branches. If any exist, use `AskUserQuestion` to list them and ask which (if any) to delete:
+3. **Clean up stale branches:** First prune stale remote-tracking refs, then check for merged remote branches. If any exist, use `AskUserQuestion` to list them and ask which (if any) to delete:
 
    ```bash
+   git remote prune origin
    git branch -r --merged main | grep -v main | grep -v develop | grep -v HEAD
    ```
 
@@ -364,9 +365,27 @@ During **Phase 4** (version bump), if the target version is **>= 0.5.0** and `ma
 3. Inform the user that notarization is being re-enabled and recommend testing with a manual `workflow_dispatch` (using the `skip_notarization` fallback input) before pushing the tag
 4. If the user declines re-enabling, leave it as-is and proceed
 
+## CI Workflow Permissions
+
+The release workflow (`.github/workflows/release.yml`) calls reusable workflows (`e2e-core.yml`, `e2e-online.yml`). GitHub Actions enforces that **reusable workflows cannot escalate permissions beyond the caller**. If any called workflow declares a permission not present in `release.yml`, the run will fail with `startup_failure` (0-second completion, no jobs created).
+
+**Rule:** The `permissions` block in `release.yml` must be a superset of all permissions declared in any reusable workflow it calls. If a reusable workflow adds a new permission, update `release.yml` to match.
+
+## Re-tagging Procedure
+
+If CI fails due to a workflow issue (not a code issue) after the tag has been pushed:
+
+1. Fix the issue on `develop`, commit
+2. Merge `develop` into `main`: `git checkout main && git merge --no-ff develop -m "chore: merge ci fix into main"`
+3. Delete and re-create the tag: `git tag -d vX.Y.Z && git tag -a vX.Y.Z -m "Release vX.Y.Z"`
+4. Force-push the tag (this is the ONE exception to the no-force-push rule): `git push origin main --tags --force`
+5. Push develop: `git push origin develop`
+
+Always get user confirmation before force-pushing the tag.
+
 ## Safety Rules
 
-- **NEVER force push.** If a push is rejected, stop and ask the user.
+- **NEVER force push** branches. Tags may be force-pushed only during the re-tagging procedure above.
 - **NEVER skip the version-tag match validation.** The CI will reject mismatches anyway.
 - **NEVER modify commits that have already been pushed.**
 - **ALWAYS ask for user confirmation** before: pushing, merging to main, creating tags.
