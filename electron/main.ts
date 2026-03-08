@@ -29,6 +29,12 @@ import {
 
 fixPath();
 
+// In development, use a separate userData directory so the dev instance
+// doesn't conflict with the production app's single-instance lock or storage.
+if (!app.isPackaged) {
+  app.setPath("userData", path.join(app.getPath("appData"), `${app.name}-dev`));
+}
+
 // Enable native Wayland support on Linux (Electron < 38)
 // Electron 38+ auto-detects via XDG_SESSION_TYPE; this flag is ignored.
 if (process.platform === "linux") {
