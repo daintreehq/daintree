@@ -228,7 +228,6 @@ export function TerminalSettingsTab() {
         title="Hybrid Input Bar"
         id="terminal-hybrid-input"
         description="Configure the bottom input bar used for agent terminals."
-        iconColor="text-canopy-accent"
       >
         <SettingsSwitchCard
           icon={MessageSquare}
@@ -264,7 +263,6 @@ export function TerminalSettingsTab() {
         title="Two-Pane Split Layout"
         id="terminal-two-pane-split"
         description="When exactly two panels are open, display them with a resizable divider instead of equal columns. The split ratio is remembered per worktree."
-        iconColor="text-canopy-accent"
       >
         <SettingsSwitchCard
           icon={SplitSquareHorizontal}
@@ -340,7 +338,6 @@ export function TerminalSettingsTab() {
         title="Scrollback History"
         id="terminal-scrollback"
         description="Base scrollback applies to agent terminals. Shells and dev servers use reduced limits automatically."
-        iconColor="text-canopy-accent"
       >
         <div className="grid grid-cols-3 gap-2" role="radiogroup" aria-label="Scrollback presets">
           {SCROLLBACK_OPTIONS.map(({ value, label, description }) => (
