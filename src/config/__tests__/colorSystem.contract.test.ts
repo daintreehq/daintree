@@ -109,4 +109,9 @@ describe("color system contract", () => {
       /--sidebar-primary-foreground:\s*var\(--color-accent-primary-foreground\)/
     );
   });
+
+  it("--color-accent-foreground in @theme inline resolves through shadcn --accent-foreground (preserves hover behavior)", () => {
+    const themeBlock = indexCss.match(/@theme\s+inline\s*\{[\s\S]*?\}/)?.[0] ?? "";
+    expect(themeBlock).toMatch(/--color-accent-foreground:\s*var\(--accent-foreground\)/);
+  });
 });
