@@ -3,6 +3,9 @@ import path from "path";
 import Module from "module";
 
 const mockExistsSync = vi.fn();
+const mockReaddirSync = vi.fn();
+const mockMkdirSync = vi.fn();
+const mockCopyFileSync = vi.fn();
 const consoleSpy = vi.spyOn(console, "log").mockImplementation(() => {});
 
 afterAll(() => {
@@ -28,7 +31,12 @@ describe("afterPack", () => {
 
     Module.prototype.require = function (id: string) {
       if (id === "fs") {
-        return { existsSync: mockExistsSync };
+        return {
+          existsSync: mockExistsSync,
+          readdirSync: mockReaddirSync,
+          mkdirSync: mockMkdirSync,
+          copyFileSync: mockCopyFileSync,
+        };
       }
       return originalRequire.apply(this, [id]);
     };
@@ -146,16 +154,43 @@ describe("afterPack", () => {
       );
     });
 
-    it("should throw with post-install error when conpty.dll is missing", async () => {
-      // node-pty dir exists, conpty.node exists, conpty_console_list.node exists, then conpty/conpty.dll missing
+    it("should copy conpty binaries from third_party when missing after rebuild", async () => {
+      const nodePtyBase = path.join(unpackedBase, "node_modules/node-pty");
+      // node-pty exists, conpty.node exists, conpty_console_list.node exists,
+      // conpty/conpty.dll missing (triggers fallback), conpty/OpenConsole.exe missing,
+      // third_party exists, source dir exists,
+      // then final validation passes
       mockExistsSync
-        .mockReturnValueOnce(true)
-        .mockReturnValueOnce(true)
-        .mockReturnValueOnce(true)
-        .mockReturnValueOnce(false);
+        .mockReturnValueOnce(true) // node-pty dir
+        .mockReturnValueOnce(true) // conpty.node
+        .mockReturnValueOnce(true) // conpty_console_list.node
+        .mockReturnValueOnce(false) // conpty/conpty.dll (missing → triggers fallback)
+        .mockReturnValueOnce(true) // third_party/conpty exists
+        .mockReturnValueOnce(true) // win10-x64 source dir exists
+        .mockReturnValueOnce(true) // final validation: conpty/conpty.dll
+        .mockReturnValueOnce(true); // final validation: conpty/OpenConsole.exe
+      mockReaddirSync.mockReturnValue(["1.23.251008001"]);
+
+      await afterPack(createContext("win32", "/build/win"));
+
+      expect(mockMkdirSync).toHaveBeenCalledWith(path.join(nodePtyBase, "build/Release/conpty"), {
+        recursive: true,
+      });
+      expect(mockCopyFileSync).toHaveBeenCalledTimes(2);
+    });
+
+    it("should throw when conpty.dll missing and third_party unavailable", async () => {
+      // node-pty exists, conpty.node exists, conpty_console_list.node exists,
+      // conpty/conpty.dll missing, third_party/conpty missing
+      mockExistsSync
+        .mockReturnValueOnce(true) // node-pty dir
+        .mockReturnValueOnce(true) // conpty.node
+        .mockReturnValueOnce(true) // conpty_console_list.node
+        .mockReturnValueOnce(false) // conpty/conpty.dll missing
+        .mockReturnValueOnce(false); // third_party/conpty missing
 
       await expect(afterPack(createContext("win32", "/build/win"))).rejects.toThrow(
-        /Windows node-pty post-install binary not found/
+        /third_party\/conpty not found/
       );
     });
   });

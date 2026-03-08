@@ -49,13 +49,46 @@ exports.default = async function afterPack(context) {
         );
       }
     }
+
+    // electron-rebuild runs node-gyp rebuild which wipes build/Release/,
+    // deleting the conpty/ subdirectory created by node-pty's post-install.
+    // If missing, copy from third_party as a fallback.
+    const conptyDestDir = path.join(nodePtyPath, "build/Release/conpty");
+    const conptyMissing = postInstallBinaries.some(
+      (bin) => !fs.existsSync(path.join(nodePtyPath, "build/Release", bin))
+    );
+    if (conptyMissing) {
+      console.log(
+        "[afterPack] conpty binaries missing from build/Release — copying from third_party"
+      );
+      const thirdPartyDir = path.join(nodePtyPath, "third_party/conpty");
+      if (!fs.existsSync(thirdPartyDir)) {
+        throw new Error(
+          `[afterPack] CRITICAL: third_party/conpty not found at ${thirdPartyDir}. ` +
+            "Cannot recover missing conpty binaries."
+        );
+      }
+      const versionFolder = fs.readdirSync(thirdPartyDir)[0];
+      const sourceDir = path.join(thirdPartyDir, versionFolder, "win10-x64");
+      if (!fs.existsSync(sourceDir)) {
+        throw new Error(`[afterPack] CRITICAL: conpty source directory not found: ${sourceDir}`);
+      }
+      fs.mkdirSync(conptyDestDir, { recursive: true });
+      for (const file of ["conpty.dll", "OpenConsole.exe"]) {
+        const src = path.join(sourceDir, file);
+        const dest = path.join(conptyDestDir, file);
+        console.log(`[afterPack] Copying ${src} -> ${dest}`);
+        fs.copyFileSync(src, dest);
+      }
+    }
+
+    // Final validation
     for (const bin of postInstallBinaries) {
       const binPath = path.join(nodePtyPath, "build/Release", bin);
       if (!fs.existsSync(binPath)) {
         throw new Error(
           `[afterPack] CRITICAL: Windows node-pty post-install binary not found: ${binPath}. ` +
-            "Ensure node-pty's postinstall script ran (no --ignore-scripts) and was not " +
-            "cleaned by a cross-platform node_modules cache."
+            "Both postinstall and afterPack fallback copy failed."
         );
       }
     }
