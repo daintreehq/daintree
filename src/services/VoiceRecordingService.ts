@@ -108,63 +108,68 @@ class VoiceRecordingService {
     );
 
     this.unsubscribers.push(
-      voiceInput.onCorrectionReplace(({ rawText, correctedText }) => {
-        logDebug(`${LOG_PREFIX} Received correction replace`, {
-          rawText,
-          correctedText,
-          changed: rawText !== correctedText,
-        });
+      voiceInput.onCorrectionReplace(({ correctionId, correctedText }) => {
+        logDebug(`${LOG_PREFIX} Received correction replace`, { correctionId });
         const voiceState = useVoiceRecordingStore.getState();
-        // Find the panel that has this pending correction.
-        // Check active target first, then fall back to scanning all buffers.
-        let panelId = voiceState.activeTarget?.panelId;
-        let projectId = voiceState.activeTarget?.projectId;
 
-        if (panelId) {
-          const buffer = voiceState.panelBuffers[panelId];
-          if (!buffer?.pendingCorrections.some((p) => p.rawText === rawText)) {
-            panelId = undefined;
+        // Find the panel that owns this correction ID.
+        let panelId: string | undefined;
+        let projectId: string | undefined;
+        let pending: import("@/store/voiceRecordingStore").PendingCorrection | undefined;
+
+        for (const [id, buffer] of Object.entries(voiceState.panelBuffers)) {
+          const found = buffer.pendingCorrections.find((p) => p.id === correctionId);
+          if (found) {
+            panelId = id;
+            projectId = buffer.projectId;
+            pending = found;
+            break;
           }
         }
 
-        if (!panelId) {
-          for (const [id, buffer] of Object.entries(voiceState.panelBuffers)) {
-            if (buffer.pendingCorrections.some((p) => p.rawText === rawText)) {
-              panelId = id;
-              projectId = buffer.projectId;
-              break;
-            }
-          }
-        }
+        if (!panelId || !pending) return;
 
-        if (!panelId) return;
-
-        if (rawText !== correctedText) {
+        if (correctedText !== pending.rawText) {
           const inputStore = useTerminalInputStore.getState();
           const draft = inputStore.getDraftInput(panelId, projectId);
-          // Find the raw text in the draft by scanning from the expected offset.
-          const pending = voiceState.panelBuffers[panelId]?.pendingCorrections.find(
-            (p) => p.rawText === rawText
-          );
-          if (pending) {
-            // Locate the raw text — it may have shifted due to earlier corrections.
-            const idx = draft.indexOf(rawText, Math.max(0, pending.segmentStart - 20));
-            if (idx >= 0) {
-              const before = draft.slice(0, idx);
-              const after = draft.slice(idx + rawText.length);
-              inputStore.setDraftInput(panelId, before + correctedText + after, projectId);
-              inputStore.bumpVoiceDraftRevision();
+          const { segmentStart, rawText } = pending;
+
+          // Apply the correction only if the raw text still occupies the tracked position.
+          // If the user has edited that region, skip the correction rather than guessing.
+          if (
+            segmentStart >= 0 &&
+            segmentStart + rawText.length <= draft.length &&
+            draft.slice(segmentStart, segmentStart + rawText.length) === rawText
+          ) {
+            const before = draft.slice(0, segmentStart);
+            const after = draft.slice(segmentStart + rawText.length);
+            inputStore.setDraftInput(panelId, before + correctedText + after, projectId);
+            inputStore.bumpVoiceDraftRevision();
+
+            const lengthDelta = correctedText.length - rawText.length;
+            if (lengthDelta !== 0) {
+              useVoiceRecordingStore
+                .getState()
+                .rebasePendingCorrections(panelId, segmentStart, lengthDelta);
             }
+          } else {
+            logDebug(`${LOG_PREFIX} Skipping correction — text at tracked position has changed`, {
+              correctionId,
+              segmentStart,
+            });
           }
         }
 
-        useVoiceRecordingStore.getState().resolvePendingCorrection(panelId, rawText);
+        useVoiceRecordingStore.getState().resolvePendingCorrection(panelId, correctionId);
       })
     );
 
     this.unsubscribers.push(
-      voiceInput.onParagraphBoundary(({ rawText }) => {
-        logDebug(`${LOG_PREFIX} Received paragraph boundary from Deepgram`, { rawText });
+      voiceInput.onParagraphBoundary(({ rawText, correctionId }) => {
+        logDebug(`${LOG_PREFIX} Received paragraph boundary from Deepgram`, {
+          rawText,
+          correctionId,
+        });
         const voiceState = useVoiceRecordingStore.getState();
         const currentTarget = voiceState.activeTarget;
         if (!currentTarget) return;
@@ -173,11 +178,11 @@ class VoiceRecordingService {
         const buffer = voiceState.panelBuffers[panelId];
         if (!buffer) return;
 
-        // Use the rawText from the main process (what it actually flushed),
-        // which is authoritative — avoids reconstructing from renderer-local state.
+        // Register the pending correction using the stable ID from the main process.
+        // correctionId is only non-null when correction is actually queued.
         const paragraphStart = buffer.activeParagraphStart ?? -1;
-        if (rawText && paragraphStart >= 0 && voiceState.correctionEnabled) {
-          voiceState.addPendingCorrection(panelId, paragraphStart, rawText);
+        if (correctionId && rawText && paragraphStart >= 0) {
+          voiceState.addPendingCorrection(panelId, correctionId, paragraphStart, rawText);
         }
 
         // Insert a newline to visually separate paragraphs and reset paragraph state.
@@ -573,21 +578,23 @@ class VoiceRecordingService {
       useVoiceRecordingStore.getState().setStatus("finishing");
       const stopResult = await window.electron.voiceInput.stop().catch(() => null);
 
-      // If the backend flushed a paragraph, register a pending correction so the
-      // UI shows it as gray until CORRECTION_REPLACE arrives (which may be after
-      // finishSession clears activeTarget — the fallback scan in onCorrectionReplace
-      // handles that case).
-      if (stopResult?.rawText) {
+      // If the backend flushed a paragraph and queued a correction, register a pending
+      // correction so the UI shows it as gray until CORRECTION_REPLACE arrives.
+      // correctionId is the authoritative signal — it is only set when correction was queued.
+      if (stopResult?.correctionId && stopResult.rawText) {
         const currentTarget = useVoiceRecordingStore.getState().activeTarget;
-        // Only add pending correction when correction is enabled — otherwise
-        // no CORRECTION_REPLACE will arrive and the text stays dimmed permanently.
-        if (currentTarget && useVoiceRecordingStore.getState().correctionEnabled) {
+        if (currentTarget) {
           const buffer = useVoiceRecordingStore.getState().panelBuffers[currentTarget.panelId];
           const paragraphStart = buffer?.activeParagraphStart ?? -1;
           if (paragraphStart >= 0) {
             useVoiceRecordingStore
               .getState()
-              .addPendingCorrection(currentTarget.panelId, paragraphStart, stopResult.rawText);
+              .addPendingCorrection(
+                currentTarget.panelId,
+                stopResult.correctionId,
+                paragraphStart,
+                stopResult.rawText
+              );
           }
         }
       }
