@@ -2,6 +2,27 @@ import { describe, it, expect } from "vitest";
 import { BUILT_IN_APP_SCHEMES } from "../appColorSchemes";
 import { APP_THEME_TOKEN_KEYS } from "@shared/theme";
 
+function hexToLinear(channel: number): number {
+  const c = channel / 255;
+  return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+}
+
+function relativeLuminance(hex: string): number {
+  const clean = hex.replace("#", "");
+  const r = hexToLinear(parseInt(clean.slice(0, 2), 16));
+  const g = hexToLinear(parseInt(clean.slice(2, 4), 16));
+  const b = hexToLinear(parseInt(clean.slice(4, 6), 16));
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+}
+
+function contrastRatio(hex1: string, hex2: string): number {
+  const l1 = relativeLuminance(hex1);
+  const l2 = relativeLuminance(hex2);
+  const lighter = Math.max(l1, l2);
+  const darker = Math.min(l1, l2);
+  return (lighter + 0.05) / (darker + 0.05);
+}
+
 function getScheme(id: string) {
   const scheme = BUILT_IN_APP_SCHEMES.find((s) => s.id === id);
   if (!scheme) throw new Error(`Built-in app scheme "${id}" not found`);
@@ -86,5 +107,37 @@ describe("appColorSchemes rebrand — semantic color separation", () => {
       const tokens = getScheme("canopy-slate").tokens;
       expect(tokens["activity-working"]).not.toBe(tokens["status-success"]);
     });
+  });
+
+  describe("WCAG AA contrast — primary button", () => {
+    it.each(BUILT_IN_APP_SCHEMES.map((s) => [s.id, s]))(
+      'scheme "%s": accent-foreground on accent-primary passes WCAG AA (≥4.5:1)',
+      (_id, scheme) => {
+        const bg = scheme.tokens["accent-primary"];
+        const fg = scheme.tokens["accent-foreground"];
+        if (!bg.startsWith("#") || !fg.startsWith("#")) return;
+        const ratio = contrastRatio(bg, fg);
+        expect(
+          ratio,
+          `${_id}: accent-foreground "${fg}" on accent-primary "${bg}" = ${ratio.toFixed(2)}:1, needs ≥4.5:1`
+        ).toBeGreaterThanOrEqual(4.5);
+      }
+    );
+  });
+
+  describe("WCAG AA contrast — info button", () => {
+    it.each(BUILT_IN_APP_SCHEMES.map((s) => [s.id, s]))(
+      'scheme "%s": surface-canvas (info button text) on status-info passes WCAG AA (≥4.5:1)',
+      (_id, scheme) => {
+        const bg = scheme.tokens["status-info"];
+        const fg = scheme.tokens["surface-canvas"];
+        if (!bg.startsWith("#") || !fg.startsWith("#")) return;
+        const ratio = contrastRatio(bg, fg);
+        expect(
+          ratio,
+          `${_id}: surface-canvas "${fg}" on status-info "${bg}" = ${ratio.toFixed(2)}:1, needs ≥4.5:1`
+        ).toBeGreaterThanOrEqual(4.5);
+      }
+    );
   });
 });
