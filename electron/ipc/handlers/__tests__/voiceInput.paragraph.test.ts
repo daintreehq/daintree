@@ -364,4 +364,39 @@ describe("voiceInput — paragraph buffering", () => {
     expect(statuses).toContain("finishing");
     expect(statuses).toEqual(["connecting", "recording", "finishing", "idle", "error"]);
   });
+
+  it("flushParagraph returns null correctionId and does not fire correction when disabled", async () => {
+    // Override the store mock to return correction-disabled settings for this test.
+    const { store } = await import("../../../store.js");
+    vi.mocked(store.get).mockReturnValueOnce({
+      enabled: true,
+      deepgramApiKey: "dg-test-key",
+      correctionApiKey: "",
+      correctionEnabled: false,
+      correctionModel: "gpt-5-nano",
+      customDictionary: [],
+      correctionCustomInstructions: "",
+      language: "en",
+      transcriptionModel: "nova-3",
+      paragraphingStrategy: "spoken-command",
+    });
+
+    emitTranscriptionEvent({ type: "complete", text: "no correction please" });
+
+    const handleFlush = getHandler("voice-input:flush-paragraph");
+    const result = handleFlush(fakeEvent) as {
+      rawText: string | null;
+      correctionId: string | null;
+    };
+
+    // rawText is still returned so the renderer knows what was flushed
+    expect(result.rawText).toBe("no correction please");
+    // correctionId is null — no correction was queued
+    expect(result.correctionId).toBeNull();
+    // No correction call was fired
+    expect(shared.correctionCalls).toHaveLength(0);
+    // No CORRECTION_REPLACE message was sent to renderer
+    const correctionMsg = win.__sent.find((m) => m.channel === "voice-input:correction-replace");
+    expect(correctionMsg).toBeUndefined();
+  });
 });

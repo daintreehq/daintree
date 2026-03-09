@@ -347,7 +347,12 @@ describe("VoiceRecordingService — correction matching (stable ID)", () => {
     // "hello" (5 chars) → "Hello there" (11 chars) → delta = +6
     electron.emit.correctionReplace({ correctionId: "uuid-first", correctedText: "Hello there" });
 
+    const inputStore = (
+      await import("@/store/terminalInputStore")
+    ).useTerminalInputStore.getState();
+    expect(inputStore.setDraftInput).toHaveBeenCalledWith(PANEL, "Hello there\nworld", undefined);
     expect(mockVoiceFns.rebasePendingCorrections).toHaveBeenCalledWith(PANEL, 0, 6);
+    expect(mockVoiceFns.resolvePendingCorrection).toHaveBeenCalledWith(PANEL, "uuid-first");
   });
 
   it("does not call rebasePendingCorrections when length delta is zero", async () => {
@@ -409,5 +414,52 @@ describe("VoiceRecordingService — correction matching (stable ID)", () => {
     electron.emit.paragraphBoundary({ rawText: "some text", correctionId: null });
 
     expect(mockVoiceFns.addPendingCorrection).not.toHaveBeenCalled();
+  });
+
+  it("correction resolves correctly on a non-active panel (post-session scan)", async () => {
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+
+    const PANEL = "panel-1";
+    // activeTarget is null — session has ended, but the panel buffer still exists
+    // with a pending correction that was registered before the session finished.
+    mockVoiceState.activeTarget = null;
+    mockVoiceState.panelBuffers[PANEL] = {
+      projectId: "proj-1",
+      pendingCorrections: [{ id: "uuid-late", segmentStart: 0, rawText: "late text" }],
+      activeParagraphStart: -1,
+    };
+    mockDraftStore.drafts[PANEL] = "late text";
+
+    voiceRecordingService.initialize();
+
+    electron.emit.correctionReplace({ correctionId: "uuid-late", correctedText: "Late Text" });
+
+    const inputStore = (
+      await import("@/store/terminalInputStore")
+    ).useTerminalInputStore.getState();
+    expect(inputStore.setDraftInput).toHaveBeenCalledWith(PANEL, "Late Text", "proj-1");
+    expect(mockVoiceFns.resolvePendingCorrection).toHaveBeenCalledWith(PANEL, "uuid-late");
+  });
+
+  it("applies correction when rawText ends exactly at the end of the draft", async () => {
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+
+    const PANEL = "panel-1";
+    // segmentStart=6, rawText="world" — ends at draft.length (11)
+    mockVoiceState.panelBuffers[PANEL] = {
+      pendingCorrections: [{ id: "uuid-abc", segmentStart: 6, rawText: "world" }],
+      activeParagraphStart: 0,
+    };
+    mockDraftStore.drafts[PANEL] = "hello world";
+
+    voiceRecordingService.initialize();
+
+    electron.emit.correctionReplace({ correctionId: "uuid-abc", correctedText: "World" });
+
+    const inputStore = (
+      await import("@/store/terminalInputStore")
+    ).useTerminalInputStore.getState();
+    expect(inputStore.setDraftInput).toHaveBeenCalledWith(PANEL, "hello World", undefined);
+    expect(mockVoiceFns.resolvePendingCorrection).toHaveBeenCalledWith(PANEL, "uuid-abc");
   });
 });
