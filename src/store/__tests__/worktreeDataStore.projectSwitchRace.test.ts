@@ -53,6 +53,7 @@ const {
   cleanupWorktreeDataStore,
   forceReinitializeWorktreeDataStore,
   prePopulateWorktreeSnapshot,
+  resetSnapshotCacheForTests,
 } = await import("../worktreeDataStore");
 
 function createMockWorktree(id: string, overrides: Partial<WorktreeState> = {}): WorktreeState {
@@ -78,6 +79,9 @@ describe("worktreeDataStore project switch race conditions", () => {
     refreshMock.mockReset();
     vi.clearAllMocks();
     cleanupWorktreeDataStore();
+    // Clear the snapshot cache so earlier test runs cannot supply pre-cached
+    // data to prePopulateWorktreeSnapshot() calls in later tests.
+    resetSnapshotCacheForTests();
     useWorktreeDataStore.setState({
       worktrees: new Map(),
       projectId: null,
@@ -282,12 +286,21 @@ describe("worktreeDataStore project switch race conditions", () => {
     });
 
     // Now refresh() must work normally (isSwitching = false after forceReinit).
+    // refreshMock returns undefined (already configured) and getAll returns updated list.
+    refreshMock.mockResolvedValue(undefined);
     getAllMock.mockResolvedValueOnce(projectBWorktreesAfterRefresh);
+
+    const refreshCallsBefore = refreshMock.mock.calls.length;
     await useWorktreeDataStore.getState().refresh();
+
+    // Verify that the IPC refresh was actually invoked (lock was cleared).
+    expect(refreshMock.mock.calls.length).toBe(refreshCallsBefore + 1);
 
     const state = useWorktreeDataStore.getState();
     expect(state.worktrees.has("project-b-main")).toBe(true);
     expect(state.worktrees.has("project-b-feature")).toBe(true);
     expect(state.worktrees.has("project-a-main")).toBe(false);
+    expect(state.worktrees.size).toBe(2);
+    expect(state.projectId).toBe("project-b");
   });
 });

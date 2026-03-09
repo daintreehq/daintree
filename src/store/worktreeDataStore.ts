@@ -532,6 +532,11 @@ export function forceReinitializeWorktreeDataStore(projectId?: string) {
  * This should be called after terminal hydration completes to ensure
  * terminals are loaded before checking for orphans.
  */
+export function resetSnapshotCacheForTests(): void {
+  projectSnapshotCache.clear();
+  isSwitching = false;
+}
+
 export function cleanupOrphanedTerminals() {
   const getWorktreeIds = (wtMap: Map<string, WorktreeState>) => {
     const ids = new Set<string>();
