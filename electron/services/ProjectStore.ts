@@ -368,6 +368,87 @@ export class ProjectStore {
     return missingIds;
   }
 
+  /**
+   * Relocate a project to a new path, migrating all associated state.
+   *
+   * Resolves the canonical git root of newPath, computes the new project ID,
+   * copies the state directory to the new location, migrates env var keys,
+   * updates the project record (including ID if it changed), then cleans up
+   * the old state directory.
+   *
+   * If the resolved path hashes to the same project ID, only the path and
+   * status are updated (no directory migration needed).
+   */
+  async relocateProject(projectId: string, newPath: string): Promise<Project> {
+    const project = this.getProjectById(projectId);
+    if (!project) {
+      throw new Error(`Project not found: ${projectId}`);
+    }
+
+    const canonicalNewPath = await this.getGitRoot(newPath);
+    const newProjectId = this.generateProjectId(canonicalNewPath);
+
+    if (newProjectId === projectId) {
+      return this.updateProject(projectId, { path: canonicalNewPath, status: "closed" });
+    }
+
+    const existingAtNewPath = this.getProjectById(newProjectId);
+    if (existingAtNewPath) {
+      throw new Error(`A project already exists at that location: ${existingAtNewPath.name}`);
+    }
+
+    const oldStateDir = this.getProjectStateDir(projectId);
+    const newStateDir = this.getProjectStateDir(newProjectId);
+
+    if (oldStateDir && newStateDir && existsSync(oldStateDir)) {
+      await fs.cp(oldStateDir, newStateDir, { recursive: true });
+    }
+
+    const projects = this.getAllProjects();
+    const index = projects.findIndex((p) => p.id === projectId);
+    if (index === -1) {
+      if (newStateDir && existsSync(newStateDir)) {
+        await fs.rm(newStateDir, { recursive: true, force: true }).catch(() => {});
+      }
+      throw new Error(`Project not found: ${projectId}`);
+    }
+
+    const updatedProject: Project = {
+      ...projects[index],
+      id: newProjectId,
+      path: canonicalNewPath,
+      status: "closed",
+    };
+
+    try {
+      projects[index] = updatedProject;
+      store.set("projects.list", projects);
+
+      const currentId = this.getCurrentProjectId();
+      if (currentId === projectId) {
+        store.set("projects.currentProjectId", newProjectId);
+      }
+
+      projectEnvSecureStorage.migrateAllForProject(projectId, newProjectId);
+
+      this.invalidateProjectStateCache(projectId);
+      this.invalidateProjectStateCache(newProjectId);
+    } catch (error) {
+      if (newStateDir && existsSync(newStateDir)) {
+        await fs.rm(newStateDir, { recursive: true, force: true }).catch(() => {});
+      }
+      throw error;
+    }
+
+    if (oldStateDir && existsSync(oldStateDir)) {
+      await fs.rm(oldStateDir, { recursive: true, force: true }).catch((err) => {
+        logError(`Failed to clean up old state dir for project ${projectId}`, err);
+      });
+    }
+
+    return updatedProject;
+  }
+
   getCurrentProjectId(): string | null {
     return store.get("projects.currentProjectId") || null;
   }

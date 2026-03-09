@@ -67,4 +67,51 @@ describe("ProjectEnvSecureStorage", () => {
     expect(service.get("project-1", "A")).toBeUndefined();
     expect(service.get("project-2", "B")).toBe("2");
   });
+
+  describe("migrateAllForProject", () => {
+    it("moves all keys from old project ID to new project ID", async () => {
+      const service = await getService();
+      service.set("old-id", "API_KEY", "secret");
+      service.set("old-id", "DB_PASS", "password");
+
+      service.migrateAllForProject("old-id", "new-id");
+
+      expect(service.get("new-id", "API_KEY")).toBe("secret");
+      expect(service.get("new-id", "DB_PASS")).toBe("password");
+      expect(service.get("old-id", "API_KEY")).toBeUndefined();
+      expect(service.get("old-id", "DB_PASS")).toBeUndefined();
+    });
+
+    it("does not affect keys for other projects", async () => {
+      const service = await getService();
+      service.set("old-id", "A", "1");
+      service.set("other-project", "B", "2");
+
+      service.migrateAllForProject("old-id", "new-id");
+
+      expect(service.get("other-project", "B")).toBe("2");
+    });
+
+    it("is a no-op when old project has no env vars", async () => {
+      const service = await getService();
+      service.set("other-project", "B", "2");
+
+      service.migrateAllForProject("old-id", "new-id");
+
+      expect(service.listKeys("new-id")).toHaveLength(0);
+      expect(service.get("other-project", "B")).toBe("2");
+    });
+
+    it("handles key with prefix collision gracefully", async () => {
+      const service = await getService();
+      service.set("proj", "KEY", "v1");
+      service.set("proj-extra", "KEY", "v2");
+
+      service.migrateAllForProject("proj", "new-proj");
+
+      expect(service.get("new-proj", "KEY")).toBe("v1");
+      expect(service.get("proj-extra", "KEY")).toBe("v2");
+      expect(service.get("proj", "KEY")).toBeUndefined();
+    });
+  });
 });

@@ -1497,7 +1497,7 @@ Thumbs.db
     }
 
     const newPath = result.filePaths[0];
-    return projectStore.updateProject(projectId, { path: newPath, status: "closed" });
+    return projectStore.relocateProject(projectId, newPath);
   };
   ipcMain.handle(CHANNELS.PROJECT_LOCATE, handleProjectLocate);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.PROJECT_LOCATE));

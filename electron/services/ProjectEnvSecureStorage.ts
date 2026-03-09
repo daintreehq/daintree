@@ -73,6 +73,23 @@ class ProjectEnvSecureStorage {
     store.set("projectEnv", newProjectEnv);
   }
 
+  public migrateAllForProject(oldProjectId: string, newProjectId: string): void {
+    const projectEnv = this.getProjectEnvMap();
+    const oldPrefix = `${oldProjectId}:`;
+    const newPrefix = `${newProjectId}:`;
+    const updated: Record<string, string> = {};
+
+    for (const [key, value] of Object.entries(projectEnv)) {
+      if (key.startsWith(oldPrefix)) {
+        updated[`${newPrefix}${key.slice(oldPrefix.length)}`] = value;
+      } else {
+        updated[key] = value;
+      }
+    }
+
+    store.set("projectEnv", updated);
+  }
+
   public checkAvailability(): boolean {
     return true;
   }

@@ -596,3 +596,39 @@ describe("ProjectSettings validation", () => {
     });
   });
 });
+
+describe("relocateProject ID computation", () => {
+  it("produces same ID for same new path after relocation", () => {
+    const newPath = "/Users/foo/moved-repo";
+    const newId = generateProjectId(newPath);
+    expect(isValidProjectId(newId)).toBe(true);
+  });
+
+  it("old and new project IDs differ when path changes", () => {
+    const oldPath = "/Users/foo/old-location";
+    const newPath = "/Users/foo/new-location";
+    const oldId = generateProjectId(oldPath);
+    const newId = generateProjectId(newPath);
+    expect(oldId).not.toBe(newId);
+  });
+
+  it("no migration needed when relocated to path that produces same ID", () => {
+    const path1 = "/Users/foo/my-project";
+    const id1 = generateProjectId(path1);
+    const id2 = generateProjectId(path1);
+    expect(id1).toBe(id2);
+  });
+
+  it("state dir path is computed correctly for relocated project", () => {
+    const projectsConfigDir = path.resolve("/home/user/.config/canopy/projects");
+    const getProjectStateDir = createGetProjectStateDir(projectsConfigDir);
+
+    const newPath = "/Users/foo/new-location";
+    const newId = generateProjectId(newPath);
+    const newStateDir = getProjectStateDir(newId);
+
+    expect(newStateDir).not.toBeNull();
+    expect(newStateDir!.startsWith(projectsConfigDir)).toBe(true);
+    expect(newStateDir).toBe(path.join(projectsConfigDir, newId));
+  });
+});
