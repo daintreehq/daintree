@@ -103,11 +103,12 @@ export const useWorktreeDataStore = create<WorktreeDataStore>()((set, get) => ({
     if (!cleanupListeners) {
       const unsubUpdate = worktreeClient.onUpdate((state) => {
         set((prev) => {
-          const next = new Map(prev.worktrees);
           const existing = prev.worktrees.get(state.id);
+
+          let merged: WorktreeState;
           if (existing) {
             const branchChanged = existing.branch !== state.branch;
-            next.set(state.id, {
+            merged = {
               ...state,
               prNumber: branchChanged ? state.prNumber : (state.prNumber ?? existing.prNumber),
               prUrl: branchChanged ? state.prUrl : (state.prUrl ?? existing.prUrl),
@@ -119,10 +120,35 @@ export const useWorktreeDataStore = create<WorktreeDataStore>()((set, get) => ({
               issueTitle: branchChanged
                 ? state.issueTitle
                 : (state.issueTitle ?? existing.issueTitle),
-            });
+            };
+
+            if (
+              existing.branch === merged.branch &&
+              existing.path === merged.path &&
+              existing.name === merged.name &&
+              existing.isCurrent === merged.isCurrent &&
+              existing.isMainWorktree === merged.isMainWorktree &&
+              existing.modifiedCount === merged.modifiedCount &&
+              existing.summary === merged.summary &&
+              existing.mood === merged.mood &&
+              existing.aiNote === merged.aiNote &&
+              existing.aiNoteTimestamp === merged.aiNoteTimestamp &&
+              existing.lastActivityTimestamp === merged.lastActivityTimestamp &&
+              existing.prNumber === merged.prNumber &&
+              existing.prUrl === merged.prUrl &&
+              existing.prState === merged.prState &&
+              existing.prTitle === merged.prTitle &&
+              existing.issueNumber === merged.issueNumber &&
+              existing.issueTitle === merged.issueTitle
+            ) {
+              return prev;
+            }
           } else {
-            next.set(state.id, state);
+            merged = state;
           }
+
+          const next = new Map(prev.worktrees);
+          next.set(state.id, merged);
           return { worktrees: next };
         });
 
