@@ -285,6 +285,9 @@ export function registerWorktreeHandlers(deps: HandlerDependencies): () => void 
     if (filePath !== undefined && (typeof filePath !== "string" || !filePath)) {
       throw new Error("Invalid filePath");
     }
+    if (useMergeBase !== undefined && typeof useMergeBase !== "boolean") {
+      throw new Error("Invalid useMergeBase");
+    }
 
     const gitService = new GitService(cwd);
     return gitService.compareWorktrees(branch1, branch2, filePath, useMergeBase);

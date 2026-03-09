@@ -51,7 +51,7 @@ export function BaseBranchDiffModal({
   useEffect(() => {
     if (!isOpen) {
       setDiff(undefined);
-      requestRef.current = 0;
+      requestRef.current++;
       return;
     }
     fetchDiff();
