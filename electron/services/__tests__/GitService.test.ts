@@ -96,4 +96,75 @@ describe("GitService", () => {
 
     expect(branches.map((branch) => branch.name)).toEqual(["main", "origin/main"]);
   });
+
+  describe("compareWorktrees", () => {
+    it("uses two-dot range by default", async () => {
+      gitClientMock.raw.mockResolvedValue("");
+
+      const service = new GitService(tempDir);
+      await service.compareWorktrees("main", "feature/test");
+
+      expect(gitClientMock.raw).toHaveBeenCalledWith(
+        expect.arrayContaining(["main..feature/test"])
+      );
+    });
+
+    it("uses three-dot range when useMergeBase is true", async () => {
+      gitClientMock.raw.mockResolvedValue("");
+
+      const service = new GitService(tempDir);
+      await service.compareWorktrees("main", "feature/test", undefined, true);
+
+      expect(gitClientMock.raw).toHaveBeenCalledWith(
+        expect.arrayContaining(["main...feature/test"])
+      );
+    });
+
+    it("returns file list for two-dot range", async () => {
+      gitClientMock.raw.mockResolvedValue("M\tsrc/app.ts\nA\tsrc/new.ts\n");
+
+      const service = new GitService(tempDir);
+      const result = await service.compareWorktrees("main", "feature/test");
+
+      expect(typeof result).toBe("object");
+      if (typeof result === "object") {
+        expect(result.files).toHaveLength(2);
+        expect(result.files[0]).toEqual({ status: "M", path: "src/app.ts" });
+        expect(result.files[1]).toEqual({ status: "A", path: "src/new.ts" });
+      }
+    });
+
+    it("returns file list for three-dot range (useMergeBase)", async () => {
+      gitClientMock.raw.mockResolvedValue("M\tsrc/app.ts\n");
+
+      const service = new GitService(tempDir);
+      const result = await service.compareWorktrees("main", "feature/test", undefined, true);
+
+      expect(typeof result).toBe("object");
+      if (typeof result === "object") {
+        expect(result.files).toHaveLength(1);
+        expect(result.files[0]).toEqual({ status: "M", path: "src/app.ts" });
+      }
+    });
+
+    it("returns NO_CHANGES string for empty file diff", async () => {
+      gitClientMock.raw.mockResolvedValue("   ");
+
+      const service = new GitService(tempDir);
+      const result = await service.compareWorktrees("main", "feature/test", "src/app.ts");
+
+      expect(result).toBe("NO_CHANGES");
+    });
+
+    it("uses three-dot range for per-file diff when useMergeBase is true", async () => {
+      gitClientMock.raw.mockResolvedValue("diff --git a/src/app.ts b/src/app.ts\n+new line");
+
+      const service = new GitService(tempDir);
+      await service.compareWorktrees("main", "feature/test", "src/app.ts", true);
+
+      expect(gitClientMock.raw).toHaveBeenCalledWith(
+        expect.arrayContaining(["main...feature/test", "--", "src/app.ts"])
+      );
+    });
+  });
 });

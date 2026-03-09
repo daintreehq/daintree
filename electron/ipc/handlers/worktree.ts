@@ -258,14 +258,20 @@ export function registerWorktreeHandlers(deps: HandlerDependencies): () => void 
 
   const handleGitCompareWorktrees = async (
     _event: Electron.IpcMainInvokeEvent,
-    payload: { cwd: string; branch1: string; branch2: string; filePath?: string }
+    payload: {
+      cwd: string;
+      branch1: string;
+      branch2: string;
+      filePath?: string;
+      useMergeBase?: boolean;
+    }
   ) => {
     checkRateLimit(CHANNELS.GIT_COMPARE_WORKTREES, 20, 10_000);
     if (!payload || typeof payload !== "object") {
       throw new Error("Invalid payload");
     }
 
-    const { cwd, branch1, branch2, filePath } = payload;
+    const { cwd, branch1, branch2, filePath, useMergeBase } = payload;
 
     if (typeof cwd !== "string" || !cwd) {
       throw new Error("Invalid working directory");
@@ -279,9 +285,12 @@ export function registerWorktreeHandlers(deps: HandlerDependencies): () => void 
     if (filePath !== undefined && (typeof filePath !== "string" || !filePath)) {
       throw new Error("Invalid filePath");
     }
+    if (useMergeBase !== undefined && typeof useMergeBase !== "boolean") {
+      throw new Error("Invalid useMergeBase");
+    }
 
     const gitService = new GitService(cwd);
-    return gitService.compareWorktrees(branch1, branch2, filePath);
+    return gitService.compareWorktrees(branch1, branch2, filePath, useMergeBase);
   };
   ipcMain.handle(CHANNELS.GIT_COMPARE_WORKTREES, handleGitCompareWorktrees);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.GIT_COMPARE_WORKTREES));
