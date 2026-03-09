@@ -680,8 +680,9 @@ export interface TerminalDimensions {
  * - `active`: Currently open and in use (only one project can be active at a time)
  * - `background`: Has running processes but not currently displayed
  * - `closed`: No running processes, fully dormant
+ * - `missing`: Project directory no longer exists at the stored path
  */
-export type ProjectStatus = "active" | "background" | "closed";
+export type ProjectStatus = "active" | "background" | "closed" | "missing";
 
 /** Project (Git repository) managed by Canopy */
 export interface Project {

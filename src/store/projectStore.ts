@@ -59,6 +59,8 @@ interface ProjectState {
   ) => Promise<ProjectCloseResult>;
   closeActiveProject: (projectId: string) => Promise<ProjectCloseResult>;
   reopenProject: (projectId: string) => Promise<void>;
+  checkMissingProjects: () => Promise<void>;
+  locateProject: (projectId: string) => Promise<void>;
   finishProjectSwitch: () => void;
   openGitInitDialog: (directoryPath: string) => void;
   closeGitInitDialog: () => void;
@@ -228,6 +230,8 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
     try {
       const projects = await projectClient.getAll();
       set({ projects, isLoading: false });
+      // Check for missing directories in the background after updating the list
+      void get().checkMissingProjects();
     } catch (error) {
       logErrorWithContext(error, {
         operation: "load_projects",
@@ -756,6 +760,35 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
       }
       forceReinitializeWorktreeDataStore(oldProjectId ?? undefined);
       throw error;
+    }
+  },
+
+  checkMissingProjects: async () => {
+    try {
+      await projectClient.checkMissing();
+      const projects = await projectClient.getAll();
+      set({ projects });
+    } catch (error) {
+      logErrorWithContext(error, {
+        operation: "check_missing_projects",
+        component: "projectStore",
+      });
+    }
+  },
+
+  locateProject: async (projectId) => {
+    try {
+      const updated = await projectClient.locate(projectId);
+      if (updated) {
+        const projects = await projectClient.getAll();
+        set({ projects });
+      }
+    } catch (error) {
+      logErrorWithContext(error, {
+        operation: "locate_project",
+        component: "projectStore",
+        details: { projectId },
+      });
     }
   },
 

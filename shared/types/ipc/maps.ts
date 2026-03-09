@@ -676,6 +676,14 @@ export interface IpcInvokeMap {
     args: [projectId: string];
     result: Project;
   };
+  "project:check-missing": {
+    args: [];
+    result: string[];
+  };
+  "project:locate": {
+    args: [projectId: string];
+    result: Project | null;
+  };
 
   // GitHub channels
   "github:get-repo-stats": {

@@ -47,6 +47,8 @@ const createMockProjectClient = () => ({
   createFolder: vi.fn().mockResolvedValue(""),
   enableInRepoSettings: vi.fn().mockResolvedValue({}),
   disableInRepoSettings: vi.fn().mockResolvedValue({}),
+  checkMissing: vi.fn().mockResolvedValue([]),
+  locate: vi.fn().mockResolvedValue(null),
 });
 
 describe("TerminalPersistence", () => {

@@ -27,6 +27,7 @@ const { getStatsMock, getForProjectMock, useProjectStoreMock, notifyMock, projec
       closeProject: vi.fn().mockResolvedValue({ processesKilled: 0 }),
       closeActiveProject: vi.fn().mockResolvedValue({ processesKilled: 0 }),
       removeProject: vi.fn().mockResolvedValue(undefined),
+      locateProject: vi.fn().mockResolvedValue(undefined),
     };
 
     const useProjectStoreMock = vi.fn((selector: (state: typeof projectState) => unknown) =>

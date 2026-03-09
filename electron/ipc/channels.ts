@@ -187,6 +187,8 @@ export const CHANNELS = {
   PROJECT_WRITE_CLAUDE_MD: "project:write-claude-md",
   PROJECT_ENABLE_IN_REPO_SETTINGS: "project:enable-in-repo-settings",
   PROJECT_DISABLE_IN_REPO_SETTINGS: "project:disable-in-repo-settings",
+  PROJECT_CHECK_MISSING: "project:check-missing",
+  PROJECT_LOCATE: "project:locate",
 
   AGENT_SETTINGS_GET: "agent-settings:get",
   AGENT_SETTINGS_SET: "agent-settings:set",
