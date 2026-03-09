@@ -5,33 +5,37 @@ import { cva, type VariantProps } from "class-variance-authority";
 import { cn } from "@/lib/utils";
 
 const buttonVariants = cva(
-  "inline-flex items-center justify-center whitespace-nowrap rounded-[5px] font-medium transition-[color,background-color,border-color,box-shadow,transform,filter] duration-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-50 disabled:saturate-50 [&_svg]:pointer-events-none [&_svg]:shrink-0",
+  "inline-flex items-center justify-center whitespace-nowrap rounded-[var(--radius-md)] text-sm font-medium select-none transition-all duration-150 ease-out focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0 active:scale-[0.98]",
   {
     variants: {
       variant: {
         default:
-          "bg-primary text-primary-foreground bg-gradient-to-b from-white/12 to-transparent border border-black/20 shadow-[inset_0_1px_0_rgba(255,255,255,0.2),0_1px_2px_rgba(0,0,0,0.5)] hover:brightness-110 active:shadow-[inset_0_2px_3px_rgba(0,0,0,0.2)] active:brightness-95",
+          "bg-primary text-[#051a0b] [text-shadow:0_1px_0_rgba(255,255,255,0.15)] ring-1 ring-white/20 shadow-sm shadow-black/40 inset-shadow-[0_1px_0_rgba(255,255,255,0.15)] hover:brightness-110 hover:shadow-primary/20 active:brightness-95 active:inset-shadow-none",
         destructive:
-          "bg-destructive text-destructive-foreground bg-gradient-to-b from-white/10 to-transparent border border-black/20 shadow-[inset_0_1px_0_rgba(255,255,255,0.15),0_1px_2px_rgba(0,0,0,0.5)] hover:brightness-110 active:shadow-[inset_0_2px_3px_rgba(0,0,0,0.2)] active:brightness-95 focus-visible:ring-destructive",
+          "bg-destructive text-[#2c0e0b] [text-shadow:0_1px_0_rgba(255,255,255,0.15)] ring-1 ring-white/20 shadow-sm shadow-black/40 inset-shadow-[0_1px_0_rgba(255,255,255,0.15)] hover:brightness-110 hover:shadow-destructive/20 active:brightness-95 active:inset-shadow-none focus-visible:ring-destructive",
         outline:
-          "border border-white/10 bg-white/5 text-canopy-text shadow-[0_1px_2px_rgba(0,0,0,0.3)] hover:bg-white/10 hover:text-accent-foreground active:bg-white/5 active:shadow-none",
+          "ring-1 ring-white/10 bg-white/[0.03] backdrop-blur-md text-canopy-text shadow-sm shadow-black/20 hover:bg-white/[0.08] hover:ring-white/20 hover:text-accent-foreground active:bg-white/[0.02] active:shadow-none",
         secondary:
-          "bg-secondary text-secondary-foreground border border-white/[0.06] shadow-[0_1px_2px_rgba(0,0,0,0.3)] hover:bg-secondary/80 active:shadow-none",
-        ghost: "hover:bg-overlay-strong hover:text-accent-foreground",
+          "bg-secondary text-secondary-foreground ring-1 ring-white/[0.08] shadow-sm shadow-black/20 hover:bg-secondary/90 active:shadow-none",
+        ghost: "text-canopy-text/70 hover:bg-overlay-strong hover:text-canopy-text",
         link: "text-primary underline-offset-4 hover:underline",
-        subtle: "bg-canopy-bg text-canopy-text/60 hover:bg-overlay-strong hover:text-canopy-text",
-        pill: "rounded-full bg-canopy-bg/50 border border-canopy-border text-canopy-text/60 hover:bg-overlay-strong hover:text-canopy-text/80",
+        subtle:
+          "bg-white/[0.03] text-canopy-text/60 ring-1 ring-white/[0.06] hover:bg-overlay-strong hover:text-canopy-text",
+        pill: "rounded-full bg-white/[0.03] backdrop-blur-md ring-1 ring-canopy-border/50 text-canopy-text/70 hover:bg-overlay-strong hover:ring-canopy-border hover:text-canopy-text",
         "ghost-danger":
           "text-status-error hover:bg-status-error/10 focus-visible:ring-status-error",
         "ghost-success": "text-status-success hover:bg-status-success/10",
         "ghost-info": "text-status-info hover:bg-status-info/10",
-        info: "bg-status-info text-canopy-bg bg-gradient-to-b from-white/12 to-transparent border border-black/20 shadow-[inset_0_1px_0_rgba(255,255,255,0.2),0_1px_2px_rgba(0,0,0,0.5)] hover:brightness-110 active:shadow-[inset_0_2px_3px_rgba(0,0,0,0.2)] active:brightness-95",
+        info: "bg-status-info text-[#101418] [text-shadow:0_1px_0_rgba(255,255,255,0.15)] ring-1 ring-white/20 shadow-sm shadow-black/40 inset-shadow-[0_1px_0_rgba(255,255,255,0.15)] hover:brightness-110 active:brightness-95 active:inset-shadow-none",
+        glow: "bg-primary text-[#051a0b] [text-shadow:0_1px_0_rgba(255,255,255,0.15)] shadow-[0_0_15px_rgba(var(--theme-accent-rgb),0.3)] ring-1 ring-white/25 hover:shadow-[0_0_25px_rgba(var(--theme-accent-rgb),0.45)] hover:brightness-110 active:shadow-inner active:brightness-95",
+        vibrant:
+          "bg-gradient-to-b from-primary to-primary/80 text-[#051a0b] [text-shadow:0_1px_0_rgba(255,255,255,0.15)] shadow-md shadow-primary/20 ring-1 ring-white/25 hover:brightness-110 active:brightness-90 active:shadow-inner",
       },
       size: {
-        default: "h-8 px-3 gap-2 text-sm [&_svg]:size-4",
-        sm: "h-7 px-2.5 gap-1.5 text-xs [&_svg]:size-3.5",
-        xs: "h-6 px-2 gap-1 text-xs [&_svg]:size-3",
-        lg: "h-9 px-4 gap-2 text-sm [&_svg]:size-4",
+        default: "h-8 px-4 py-1.5 gap-2 [&_svg]:size-4",
+        sm: "h-7 px-3 py-1 gap-1.5 text-xs [&_svg]:size-3.5",
+        xs: "h-6 px-2.5 py-0.5 gap-1 text-[10px] leading-none [&_svg]:size-3",
+        lg: "h-9 px-6 py-2 gap-2.5 text-sm [&_svg]:size-4",
         icon: "h-8 w-8 [&_svg]:size-4",
         "icon-sm": "h-7 w-7 [&_svg]:size-3.5",
         "icon-xs": "h-6 w-6 [&_svg]:size-3",

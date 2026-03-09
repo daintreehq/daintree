@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { createPortal } from "react-dom";
 import { cn } from "@/lib/utils";
+import { Button } from "@/components/ui/button";
 import { createTooltipWithShortcut } from "@/lib/platform";
 import { keybindingService } from "@/services/KeybindingService";
 import { useOverlayState } from "@/hooks";
@@ -701,15 +702,15 @@ export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
                 <TooltipProvider>
                   <Tooltip>
                     <TooltipTrigger asChild>
-                      <button
-                        type="button"
+                      <Button
                         onClick={() => handleCreateNote()}
-                        className="px-2.5 py-1 rounded-[var(--radius-md)] bg-canopy-accent hover:bg-canopy-accent/90 text-canopy-bg font-medium text-xs transition-colors flex items-center gap-1 active:scale-[0.98]"
+                        size="sm"
                         aria-label="Create new note"
+                        className="h-7 px-2.5 text-xs"
                       >
-                        <Plus size={14} />
+                        <Plus size={14} className="mr-1" />
                         New
-                      </button>
+                      </Button>
                     </TooltipTrigger>
                     <TooltipContent side="bottom">
                       {createTooltipWithShortcut("Create new note", "Cmd+N")}
@@ -762,14 +763,15 @@ export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
                       {query.trim() ? (
                         <div className="flex flex-col items-center gap-3">
                           <span>No notes match "{query}"</span>
-                          <button
-                            type="button"
+                          <Button
                             onClick={() => handleCreateNote(query.trim())}
-                            className="px-3 py-1.5 rounded-[var(--radius-md)] bg-canopy-accent/10 hover:bg-canopy-accent/20 text-canopy-accent text-xs font-medium transition-colors"
+                            variant="secondary"
+                            size="sm"
+                            className="bg-canopy-accent/10 hover:bg-canopy-accent/20 text-canopy-accent"
                           >
                             Create "{query.trim().slice(0, 30)}
                             {query.trim().length > 30 ? "..." : ""}"
-                          </button>
+                          </Button>
                         </div>
                       ) : (
                         "No notes yet"
@@ -935,13 +937,14 @@ export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
                           <AlertTriangle size={14} />
                           <span>Note modified externally</span>
                         </div>
-                        <button
-                          type="button"
+                        <Button
                           onClick={handleReloadNote}
-                          className="px-2 py-1 rounded-[var(--radius-sm)] text-xs bg-status-warning/20 hover:bg-status-warning/30 text-status-warning transition-colors"
+                          variant="ghost"
+                          size="xs"
+                          className="bg-status-warning/20 hover:bg-status-warning/30 text-status-warning"
                         >
                           Reload
-                        </button>
+                        </Button>
                       </div>
                     )}
 

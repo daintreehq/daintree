@@ -1,6 +1,7 @@
 import { useState, useCallback, useEffect } from "react";
 import { ChevronUp, RotateCw } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
 import { XtermAdapter } from "../Terminal/XtermAdapter";
 import { terminalInstanceService } from "../../services/TerminalInstanceService";
@@ -119,7 +120,7 @@ export function ConsoleDrawer({
             <Tooltip>
               <TooltipTrigger asChild>
                 <span className="inline-flex">
-                  <button
+                  <Button
                     type="button"
                     onClick={onHardRestart}
                     disabled={hardRestartDisabled}
@@ -133,7 +134,7 @@ export function ConsoleDrawer({
                   >
                     <RotateCw className={cn("h-3.5 w-3.5", isRestarting && "animate-spin")} />
                     <span>Restart</span>
-                  </button>
+                  </Button>
                 </span>
               </TooltipTrigger>
               <TooltipContent side="bottom">{restartTooltip}</TooltipContent>

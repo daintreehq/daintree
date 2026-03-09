@@ -4,6 +4,8 @@ import { Download, RefreshCw, X, AlertCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useUpdateStore } from "@/store/updateStore";
 
+import { Button } from "@/components/ui/button";
+
 export function UpdateNotification() {
   const { status, version, progress, dismissed, dismiss } = useUpdateStore();
   const [isVisible, setIsVisible] = useState(false);
@@ -122,7 +124,7 @@ export function UpdateNotification() {
               <div className="text-xs text-canopy-text/90 leading-snug">
                 Version {version} is ready to install.
               </div>
-              <button
+              <Button
                 type="button"
                 onClick={handleRestart}
                 className={cn(
@@ -134,7 +136,7 @@ export function UpdateNotification() {
                 )}
               >
                 Restart to Update
-              </button>
+              </Button>
             </>
           )}
 

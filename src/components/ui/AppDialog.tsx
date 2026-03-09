@@ -313,7 +313,7 @@ AppDialog.Footer = function AppDialogFooter({
   return (
     <div
       className={cn(
-        "px-6 py-3 border-t border-canopy-border flex justify-end gap-2 shrink-0",
+        "px-6 py-4 border-t border-canopy-border flex justify-end gap-3 shrink-0",
         className
       )}
     >

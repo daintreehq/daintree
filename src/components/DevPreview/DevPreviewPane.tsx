@@ -1,5 +1,6 @@
 import { useState, useCallback, useRef, useEffect, useMemo } from "react";
 import { AlertTriangle, RotateCw, ExternalLink, Settings, Wand2 } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { useTerminalStore } from "@/store";
 import { useProjectStore } from "@/store/projectStore";
 import { useProjectSettingsStore } from "@/store/projectSettingsStore";
@@ -494,27 +495,25 @@ export function DevPreviewPane({
                 {error.message}
               </p>
               <div className="flex items-center gap-1">
-                <button
-                  type="button"
+                <Button
                   onClick={handleRetry}
-                  className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md hover:bg-white/5 transition-colors group focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-canopy-accent/50"
+                  variant="ghost"
+                  size="sm"
+                  className="gap-1.5 px-2.5 py-1.5 group text-canopy-accent/70 hover:text-canopy-accent"
                 >
-                  <RotateCw className="h-3.5 w-3.5 text-canopy-accent/70 group-hover:text-canopy-accent transition-colors" />
-                  <span className="text-xs text-canopy-accent/70 group-hover:text-canopy-accent transition-colors">
-                    Retry
-                  </span>
-                </button>
+                  <RotateCw className="h-3.5 w-3.5" />
+                  <span className="text-xs">Retry</span>
+                </Button>
                 {currentUrl && (
-                  <button
-                    type="button"
+                  <Button
                     onClick={handleOpenExternal}
-                    className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md hover:bg-white/5 transition-colors group focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-canopy-accent/50"
+                    variant="ghost"
+                    size="sm"
+                    className="gap-1.5 px-2.5 py-1.5 group text-canopy-text/50 hover:text-canopy-text/70"
                   >
-                    <ExternalLink className="h-3.5 w-3.5 text-canopy-text/50 group-hover:text-canopy-text/70 transition-colors" />
-                    <span className="text-xs text-canopy-text/50 group-hover:text-canopy-text/70 transition-colors">
-                      Open External
-                    </span>
-                  </button>
+                    <ExternalLink className="h-3.5 w-3.5" />
+                    <span className="text-xs">Open External</span>
+                  </Button>
                 )}
               </div>
             </div>
@@ -533,30 +532,30 @@ export function DevPreviewPane({
                   </p>
                   <div className="flex flex-col items-center gap-2">
                     {allDetectedRunners && findDevServerCandidate(allDetectedRunners) && (
-                      <button
-                        type="button"
+                      <Button
                         onClick={handleAutoDetect}
                         disabled={isAutoDetecting || isSettingsLoading}
-                        className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md hover:bg-white/5 transition-colors group disabled:opacity-50 disabled:cursor-not-allowed focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-canopy-accent/50"
+                        variant="ghost"
+                        size="sm"
+                        className="gap-1.5 px-2.5 py-1.5 group text-canopy-accent/70 hover:text-canopy-accent"
                       >
-                        <Wand2 className="h-3.5 w-3.5 text-canopy-accent/70 group-hover:text-canopy-accent transition-colors" />
-                        <span className="text-xs text-canopy-accent/70 group-hover:text-canopy-accent transition-colors">
+                        <Wand2 className="h-3.5 w-3.5" />
+                        <span className="text-xs">
                           {isAutoDetecting
                             ? "Detecting..."
                             : `Use \`${findDevServerCandidate(allDetectedRunners)?.command}\``}
                         </span>
-                      </button>
+                      </Button>
                     )}
-                    <button
-                      type="button"
+                    <Button
                       onClick={handleOpenSettings}
-                      className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md hover:bg-white/5 transition-colors group focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-canopy-accent/50"
+                      variant="ghost"
+                      size="sm"
+                      className="gap-1.5 px-2.5 py-1.5 group text-canopy-text/50 hover:text-canopy-text/70"
                     >
-                      <Settings className="h-3.5 w-3.5 text-canopy-text/50 group-hover:text-canopy-text/70 transition-colors" />
-                      <span className="text-xs text-canopy-text/50 group-hover:text-canopy-text/70 transition-colors">
-                        Open Project Settings
-                      </span>
-                    </button>
+                      <Settings className="h-3.5 w-3.5" />
+                      <span className="text-xs">Open Project Settings</span>
+                    </Button>
                   </div>
                 </div>
               ) : (
