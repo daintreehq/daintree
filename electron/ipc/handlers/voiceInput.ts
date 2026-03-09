@@ -27,6 +27,7 @@ const VOICE_INPUT_DEFAULTS: VoiceInputSettings = {
   correctionEnabled: false,
   correctionModel: "gpt-5-nano",
   correctionCustomInstructions: "",
+  paragraphingStrategy: "spoken-command",
 };
 
 /** Read voiceInput settings with defaults for fields added after initial store creation. */

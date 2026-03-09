@@ -82,6 +82,7 @@ const BASE_SETTINGS: VoiceInputSettings = {
   correctionEnabled: false,
   correctionModel: "gpt-5-nano",
   correctionCustomInstructions: "",
+  paragraphingStrategy: "spoken-command",
 };
 
 function makeTranscriptEvent(transcript: string, isFinal: boolean, speechFinal: boolean): unknown {
@@ -391,6 +392,107 @@ describe("VoiceTranscriptionService", () => {
 
     expect(result).toEqual({ ok: false, error: "Connection timed out" });
     expect(statuses).toContain("error");
+  });
+
+  describe("paragraphing strategy — Deepgram connection options", () => {
+    it("spoken-command strategy sends dictation:true and punctuate:true to Deepgram", async () => {
+      const capturedOpts: Record<string, unknown>[] = [];
+      deepgramMock.mockClient.listen.live = (opts: unknown) => {
+        capturedOpts.push(opts as Record<string, unknown>);
+        const conn = new deepgramMock.MockConnection();
+        deepgramMock.instances.push(conn);
+        return conn;
+      };
+
+      const service = new VoiceTranscriptionService();
+      void service.start({ ...BASE_SETTINGS, paragraphingStrategy: "spoken-command" });
+
+      expect(capturedOpts[0]).toMatchObject({ dictation: true, punctuate: true });
+      expect(capturedOpts[0]).not.toHaveProperty("paragraphs");
+      expect(capturedOpts[0].endpointing).toBe(800);
+    });
+
+    it("manual strategy does not send dictation or punctuate to Deepgram", async () => {
+      const capturedOpts: Record<string, unknown>[] = [];
+      deepgramMock.mockClient.listen.live = (opts: unknown) => {
+        capturedOpts.push(opts as Record<string, unknown>);
+        const conn = new deepgramMock.MockConnection();
+        deepgramMock.instances.push(conn);
+        return conn;
+      };
+
+      const service = new VoiceTranscriptionService();
+      void service.start({ ...BASE_SETTINGS, paragraphingStrategy: "manual" });
+
+      expect(capturedOpts[0]).not.toHaveProperty("dictation");
+      expect(capturedOpts[0]).not.toHaveProperty("paragraphs");
+      expect(capturedOpts[0].endpointing).toBe(800);
+    });
+
+    it("defaults to spoken-command when paragraphingStrategy is undefined", async () => {
+      const capturedOpts: Record<string, unknown>[] = [];
+      deepgramMock.mockClient.listen.live = (opts: unknown) => {
+        capturedOpts.push(opts as Record<string, unknown>);
+        const conn = new deepgramMock.MockConnection();
+        deepgramMock.instances.push(conn);
+        return conn;
+      };
+
+      const service = new VoiceTranscriptionService();
+      // Simulate a stored settings object without the new field (pre-migration)
+      void service.start({
+        ...BASE_SETTINGS,
+        paragraphingStrategy: undefined as unknown as "spoken-command",
+      });
+
+      expect(capturedOpts[0]).toMatchObject({ dictation: true, punctuate: true });
+    });
+  });
+
+  describe("paragraph boundary detection via \\n\\n in transcript", () => {
+    it("emits complete + paragraph_boundary + complete when speech_final contains \\n\\n", async () => {
+      const service = new VoiceTranscriptionService();
+      const events: Array<{ type: string; text?: string }> = [];
+      service.onEvent((e) => {
+        if (e.type === "complete" || e.type === "paragraph_boundary") events.push(e);
+      });
+
+      const p = service.start(BASE_SETTINGS);
+      deepgramMock.instances.at(-1)!.emit(deepgramMock.LiveTranscriptionEvents.Open);
+      await p;
+
+      const conn = deepgramMock.instances.at(-1)!;
+      conn.emit(
+        deepgramMock.LiveTranscriptionEvents.Transcript,
+        makeTranscriptEvent("First paragraph.\n\nSecond paragraph.", true, true)
+      );
+
+      expect(events).toEqual([
+        { type: "complete", text: "First paragraph." },
+        { type: "paragraph_boundary" },
+        { type: "complete", text: "Second paragraph." },
+      ]);
+    });
+
+    it("does not emit paragraph_boundary for transcripts without \\n\\n", async () => {
+      const service = new VoiceTranscriptionService();
+      const boundaries: unknown[] = [];
+      service.onEvent((e) => {
+        if (e.type === "paragraph_boundary") boundaries.push(e);
+      });
+
+      const p = service.start(BASE_SETTINGS);
+      deepgramMock.instances.at(-1)!.emit(deepgramMock.LiveTranscriptionEvents.Open);
+      await p;
+
+      const conn = deepgramMock.instances.at(-1)!;
+      conn.emit(
+        deepgramMock.LiveTranscriptionEvents.Transcript,
+        makeTranscriptEvent("No paragraph break here.", true, true)
+      );
+
+      expect(boundaries).toHaveLength(0);
+    });
   });
 
   it("does not emit complete for empty speech_final transcripts", async () => {

@@ -1627,6 +1627,7 @@ const api: ElectronAPI = {
         correctionEnabled: boolean;
         correctionModel: "gpt-5-nano";
         correctionCustomInstructions: string;
+        paragraphingStrategy: "spoken-command" | "manual";
       }>
     ) => _typedInvoke(CHANNELS.VOICE_INPUT_SET_SETTINGS, patch),
     start: () => _typedInvoke(CHANNELS.VOICE_INPUT_START),

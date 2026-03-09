@@ -126,6 +126,7 @@ export interface StoreSchema {
     correctionEnabled: boolean;
     correctionModel: string;
     correctionCustomInstructions: string;
+    paragraphingStrategy: string;
   };
   mcpServer: {
     enabled: boolean;
@@ -209,6 +210,7 @@ const storeOptions = {
       correctionEnabled: false,
       correctionModel: "gpt-5-nano",
       correctionCustomInstructions: "",
+      paragraphingStrategy: "spoken-command",
     },
     mcpServer: {
       enabled: false,
