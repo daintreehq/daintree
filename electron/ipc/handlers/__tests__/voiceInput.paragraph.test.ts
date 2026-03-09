@@ -16,15 +16,17 @@ vi.mock("electron", () => ({
 
 // ── Shared state container for mocks ───────────────────────────────────────
 // Using a mutable shared ref so module resets don't break the reference.
+type MockTranscriptionEvent = { type: string; text?: string; status?: string; message?: string };
+
 const shared = vi.hoisted(() => ({
-  transcriptionEventCallback: null as ((e: { type: string; text?: string }) => void) | null,
+  transcriptionEventCallback: null as ((e: MockTranscriptionEvent) => void) | null,
   correctionResult: "Corrected paragraph.",
   correctionCalls: [] as Array<{ text: string; settings: Record<string, unknown> }>,
 }));
 
 vi.mock("../../../services/VoiceTranscriptionService.js", () => ({
   VoiceTranscriptionService: function VoiceTranscriptionService(this: Record<string, unknown>) {
-    this.onEvent = function (cb: (e: { type: string; text?: string }) => void) {
+    this.onEvent = function (cb: (e: MockTranscriptionEvent) => void) {
       shared.transcriptionEventCallback = cb;
       return () => {};
     };
@@ -130,7 +132,7 @@ const fakeEvent = {
   sender: { once: vi.fn(), removeListener: vi.fn(), isDestroyed: () => false },
 } as unknown as Electron.IpcMainInvokeEvent;
 
-function emitTranscriptionEvent(event: { type: string; text?: string }) {
+function emitTranscriptionEvent(event: MockTranscriptionEvent) {
   if (!shared.transcriptionEventCallback) {
     throw new Error("No transcription event callback registered — was handleStart called?");
   }
@@ -322,5 +324,17 @@ describe("voiceInput — paragraph buffering", () => {
     // with null rawText, which is safe — renderer guards on rawText presence
     expect(boundaryMsg).toBeDefined();
     expect((boundaryMsg?.payload as { rawText: string | null }).rawText).toBeNull();
+  });
+
+  it("status events including finishing are forwarded to the renderer unchanged", () => {
+    for (const status of ["connecting", "recording", "finishing", "idle", "error"] as const) {
+      emitTranscriptionEvent({ type: "status", status });
+    }
+
+    const statusMsgs = win.__sent.filter((m) => m.channel === "voice-input:status");
+    const statuses = statusMsgs.map((m) => m.payload as string);
+
+    expect(statuses).toContain("finishing");
+    expect(statuses).toEqual(["connecting", "recording", "finishing", "idle", "error"]);
   });
 });

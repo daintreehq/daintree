@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { isActiveVoiceSession } from "@shared/types";
 
 // Capture suspend/wake callbacks registered by the service.
 const suspendCallbacks = vi.hoisted(() => [] as Array<() => void>);
@@ -341,5 +342,18 @@ describe("VoiceRecordingService — background recording", () => {
     );
 
     voiceState.activeTarget = null;
+  });
+});
+
+describe("isActiveVoiceSession helper", () => {
+  it("returns true for active phases", () => {
+    expect(isActiveVoiceSession("connecting")).toBe(true);
+    expect(isActiveVoiceSession("recording")).toBe(true);
+    expect(isActiveVoiceSession("finishing")).toBe(true);
+  });
+
+  it("returns false for terminal phases", () => {
+    expect(isActiveVoiceSession("idle")).toBe(false);
+    expect(isActiveVoiceSession("error")).toBe(false);
   });
 });

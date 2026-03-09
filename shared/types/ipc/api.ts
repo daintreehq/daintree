@@ -11,6 +11,8 @@ import type {
   StagingStatus,
 } from "../domain.js";
 import type { AgentSettings, AgentSettingsEntry } from "../agentSettings.js";
+import type { VoiceInputStatus } from "../voice.js";
+export type { VoiceInputStatus };
 
 import type {
   CreateWorktreeOptions,
@@ -944,5 +946,3 @@ export interface VoiceInputSettings {
   /** Controls how paragraph breaks are inserted during dictation. Defaults to "spoken-command". */
   paragraphingStrategy: VoiceParagraphingStrategy;
 }
-
-export type VoiceInputStatus = "idle" | "connecting" | "recording" | "finishing" | "error";
