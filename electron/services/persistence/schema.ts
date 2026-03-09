@@ -50,5 +50,24 @@ export const workflowRuns = sqliteTable(
   ]
 );
 
+export const projects = sqliteTable("projects", {
+  id: text("id").primaryKey(),
+  path: text("path").notNull(),
+  name: text("name").notNull(),
+  emoji: text("emoji").notNull(),
+  lastOpened: integer("last_opened").notNull(),
+  color: text("color"),
+  status: text("status"),
+  canopyConfigPresent: integer("canopy_config_present", { mode: "boolean" }),
+  inRepoSettings: integer("in_repo_settings", { mode: "boolean" }),
+});
+
+export const appState = sqliteTable("app_state", {
+  key: text("key").primaryKey(),
+  value: text("value").notNull(),
+});
+
 export type TaskRow = typeof tasks.$inferInsert;
 export type WorkflowRunRow = typeof workflowRuns.$inferInsert;
+export type ProjectRow = typeof projects.$inferSelect;
+export type ProjectInsertRow = typeof projects.$inferInsert;

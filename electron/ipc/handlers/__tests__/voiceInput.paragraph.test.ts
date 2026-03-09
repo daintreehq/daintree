@@ -51,6 +51,13 @@ vi.mock("../../../services/VoiceCorrectionService.js", () => ({
   },
 }));
 
+vi.mock("../../../services/ProjectStore.js", () => ({
+  projectStore: {
+    getCurrentProject: vi.fn(() => null),
+    getCurrentProjectId: vi.fn(() => null),
+  },
+}));
+
 vi.mock("../../../store.js", () => ({
   store: {
     get: vi.fn((key: string) => {
