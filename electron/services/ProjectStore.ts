@@ -344,8 +344,7 @@ export class ProjectStore {
   async getProjectByPath(projectPath: string): Promise<Project | null> {
     const normalizedPath = path.normalize(projectPath);
     const db = getSharedDb();
-    const rows = db.select().from(projectsTable).all();
-    const row = rows.find((r) => r.path === normalizedPath);
+    const row = db.select().from(projectsTable).where(eq(projectsTable.path, normalizedPath)).get();
     return row ? rowToProject(row) : null;
   }
 
@@ -413,32 +412,34 @@ export class ProjectStore {
       throw new Error(`Project not found: ${projectId}`);
     }
 
-    // Mark the previous active project as background (if any)
     const previousProjectId = this.getCurrentProjectId();
-    if (previousProjectId && previousProjectId !== projectId) {
-      console.log(`[ProjectStore] Marking previous project ${previousProjectId} as background`);
-      this.updateProjectStatus(previousProjectId, "background");
-
-      if (process.env.CANOPY_VERBOSE) {
-        const updatedPrevious = this.getProjectById(previousProjectId);
-        console.log(
-          `[ProjectStore] Previous project status after update: ${updatedPrevious?.status}`
-        );
-      }
-    }
-
     const db = getSharedDb();
-    db.insert(appStateTable)
-      .values({ key: "currentProjectId", value: projectId })
-      .onConflictDoUpdate({ target: appStateTable.key, set: { value: projectId } })
-      .run();
 
-    this.updateProject(projectId, { lastOpened: Date.now(), status: "active" });
+    // Atomic: demote previous project, update currentProjectId, activate new project
+    db.transaction((tx) => {
+      if (previousProjectId && previousProjectId !== projectId) {
+        console.log(`[ProjectStore] Marking previous project ${previousProjectId} as background`);
+        tx.update(projectsTable)
+          .set({ status: "background" })
+          .where(eq(projectsTable.id, previousProjectId))
+          .run();
+      }
+      tx.insert(appStateTable)
+        .values({ key: "currentProjectId", value: projectId })
+        .onConflictDoUpdate({ target: appStateTable.key, set: { value: projectId } })
+        .run();
+      tx.update(projectsTable)
+        .set({ lastOpened: Date.now(), status: "active" })
+        .where(eq(projectsTable.id, projectId))
+        .run();
+    });
 
     if (process.env.CANOPY_VERBOSE) {
+      const updatedPrevious = previousProjectId ? this.getProjectById(previousProjectId) : null;
       console.log(`[ProjectStore] setCurrentProject complete:`, {
         newCurrentId: projectId,
         previousId: previousProjectId,
+        previousStatus: updatedPrevious?.status,
         allStatuses: this.getAllProjects().map((p) => ({ name: p.name, status: p.status })),
       });
     }

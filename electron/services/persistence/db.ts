@@ -80,6 +80,7 @@ export function getSharedDb(): AppDb {
 export function openDb(dbPath: string): { sqlite: Database.Database; db: AppDb } {
   const sqlite = new Database(dbPath);
   sqlite.pragma("journal_mode = WAL");
+  sqlite.pragma("busy_timeout = 3000");
   sqlite.exec(CREATE_TABLES_SQL);
   const db = drizzle(sqlite, { schema });
   return { sqlite, db };
