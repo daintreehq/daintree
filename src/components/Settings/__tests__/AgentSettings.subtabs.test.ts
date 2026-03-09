@@ -1,39 +1,71 @@
 import { describe, it, expect } from "vitest";
 
+const GENERAL_SUBTAB_ID = "general";
+
 /**
  * Structural tests verifying the controlled subtab API contract for AgentSettings.
  *
- * The component requires `activeSubtab` and `onSubtabChange` from its parent (SettingsDialog).
- * These tests verify the derivation logic that maps the external subtab state to an active agent id.
+ * AgentSettings now has a "general" subtab (first) followed by per-agent subtabs.
+ * These tests verify the derivation logic used inside the component.
  */
 describe("AgentSettings subtab derivation logic", () => {
   const agentIds = ["claude", "gemini", "codex", "opencode"];
 
-  function deriveActiveAgentId(activeSubtab: string | null, agentIds: string[]): string | null {
-    return (activeSubtab && agentIds.includes(activeSubtab) ? activeSubtab : agentIds[0]) ?? null;
+  function deriveActiveState(
+    activeSubtab: string | null,
+    agentIds: string[]
+  ): { isGeneralActive: boolean; activeAgentId: string | null } {
+    const isGeneralActive = activeSubtab === GENERAL_SUBTAB_ID || activeSubtab === null;
+    const activeAgentId = isGeneralActive
+      ? null
+      : agentIds.includes(activeSubtab ?? "")
+        ? activeSubtab
+        : null;
+    return { isGeneralActive, activeAgentId };
   }
 
-  it("returns the first agent when activeSubtab is null", () => {
-    expect(deriveActiveAgentId(null, agentIds)).toBe("claude");
+  it("shows General when activeSubtab is null (default on first open)", () => {
+    const result = deriveActiveState(null, agentIds);
+    expect(result.isGeneralActive).toBe(true);
+    expect(result.activeAgentId).toBeNull();
   });
 
-  it("returns the matching agent when activeSubtab is a valid agent id", () => {
-    expect(deriveActiveAgentId("gemini", agentIds)).toBe("gemini");
-    expect(deriveActiveAgentId("codex", agentIds)).toBe("codex");
+  it('shows General when activeSubtab is "general"', () => {
+    const result = deriveActiveState("general", agentIds);
+    expect(result.isGeneralActive).toBe(true);
+    expect(result.activeAgentId).toBeNull();
   });
 
-  it("falls back to first agent when activeSubtab is an unknown id", () => {
-    expect(deriveActiveAgentId("unknown-agent", agentIds)).toBe("claude");
+  it("shows the matching agent when activeSubtab is a valid agent id", () => {
+    const gemini = deriveActiveState("gemini", agentIds);
+    expect(gemini.isGeneralActive).toBe(false);
+    expect(gemini.activeAgentId).toBe("gemini");
+
+    const codex = deriveActiveState("codex", agentIds);
+    expect(codex.isGeneralActive).toBe(false);
+    expect(codex.activeAgentId).toBe("codex");
   });
 
-  it("returns null when agent list is empty", () => {
-    expect(deriveActiveAgentId(null, [])).toBeNull();
-    expect(deriveActiveAgentId("claude", [])).toBeNull();
+  it("shows null agent when activeSubtab is an unknown id (non-general, non-agent)", () => {
+    const result = deriveActiveState("unknown-agent", agentIds);
+    expect(result.isGeneralActive).toBe(false);
+    expect(result.activeAgentId).toBeNull();
   });
 
   it("is case-sensitive for agent id matching", () => {
     // Agent IDs are lowercase; 'Claude' (capitalized) should not match 'claude'
-    expect(deriveActiveAgentId("Claude", agentIds)).toBe("claude");
+    const result = deriveActiveState("Claude", agentIds);
+    expect(result.isGeneralActive).toBe(false);
+    expect(result.activeAgentId).toBeNull();
+  });
+
+  it("handles empty agent list gracefully", () => {
+    const generalResult = deriveActiveState(null, []);
+    expect(generalResult.isGeneralActive).toBe(true);
+
+    const claudeResult = deriveActiveState("claude", []);
+    expect(claudeResult.isGeneralActive).toBe(false);
+    expect(claudeResult.activeAgentId).toBeNull();
   });
 });
 
@@ -74,5 +106,20 @@ describe("SettingsDialog subtab state", () => {
       activeSubtabs = { ...activeSubtabs, [target.tab]: target.subtab };
     }
     expect(activeSubtabs.agents).toBe("gemini");
+  });
+
+  it('navigating to agents-default-agent search result sets subtab to "general"', () => {
+    type SettingsTab = "general" | "agents" | "github";
+    let activeSubtabs: Partial<Record<SettingsTab, string>> = {};
+
+    const target = {
+      tab: "agents" as SettingsTab,
+      sectionId: "agents-default-agent",
+      subtab: "general",
+    };
+    if (target.subtab !== undefined) {
+      activeSubtabs = { ...activeSubtabs, [target.tab]: target.subtab };
+    }
+    expect(activeSubtabs.agents).toBe("general");
   });
 });

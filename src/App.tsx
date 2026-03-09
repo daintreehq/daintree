@@ -97,7 +97,7 @@ import {
   useFocusStore,
   useAgentSettingsStore,
   cleanupWorktreeDataStore,
-  useToolbarPreferencesStore,
+  useAgentPreferencesStore,
   type RetryAction,
 } from "./store";
 import { useShallow } from "zustand/react/shallow";
@@ -859,7 +859,7 @@ function App() {
   }, []);
 
   const handleWizardFinish = useCallback(() => {
-    const defaultAgent = useToolbarPreferencesStore.getState().launcher.defaultAgent;
+    const defaultAgent = useAgentPreferencesStore.getState().defaultAgent;
     const selected = agentSettings?.agents
       ? Object.entries(agentSettings.agents)
           .filter(([, entry]) => entry.selected === true)

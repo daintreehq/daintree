@@ -1,19 +1,33 @@
 import { useEffect, useMemo, useState, useCallback, useRef } from "react";
 import { cn } from "@/lib/utils";
 import { getAgentIds, getAgentConfig } from "@/config/agents";
-import { useAgentSettingsStore, useCliAvailabilityStore, migrateAgentSelection } from "@/store";
+import {
+  useAgentSettingsStore,
+  useCliAvailabilityStore,
+  migrateAgentSelection,
+  useAgentPreferencesStore,
+} from "@/store";
 import { Button } from "@/components/ui/button";
 import {
   DEFAULT_AGENT_SETTINGS,
   getAgentSettingsEntry,
   DEFAULT_DANGEROUS_ARGS,
 } from "@shared/types";
-import { RotateCcw, ExternalLink, RefreshCw, Copy, Check, PackagePlus } from "lucide-react";
+import {
+  RotateCcw,
+  ExternalLink,
+  RefreshCw,
+  Copy,
+  Check,
+  PackagePlus,
+  Settings2,
+} from "lucide-react";
 import { SettingsSubtabBar } from "./SettingsSubtabBar";
 import { actionService } from "@/services/ActionService";
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
 import { AgentHelpOutput } from "./AgentHelpOutput";
 import { getInstallBlocksForCurrentOS } from "@/lib/agentInstall";
+import type { DefaultAgentId } from "@/store/agentPreferencesStore";
 
 interface AgentSettingsProps {
   activeSubtab: string | null;
@@ -104,12 +118,22 @@ export function AgentSettings({
     }
   }, []);
 
+  const defaultAgent = useAgentPreferencesStore((state) => state.defaultAgent);
+  const setDefaultAgent = useAgentPreferencesStore((state) => state.setDefaultAgent);
+
   const agentIds = useMemo(() => getAgentIds(), []);
   const effectiveSettings = settings ?? DEFAULT_AGENT_SETTINGS;
 
-  // Derive active agent from controlled subtab prop; fall back to first agent.
-  const activeAgentId =
-    (activeSubtab && agentIds.includes(activeSubtab) ? activeSubtab : agentIds[0]) ?? null;
+  // The General subtab is a reserved id that cannot conflict with agent ids.
+  const GENERAL_SUBTAB_ID = "general";
+
+  // Derive active subtab: "general" or one of the agent ids.
+  const isGeneralActive = activeSubtab === GENERAL_SUBTAB_ID || activeSubtab === null;
+  const activeAgentId = isGeneralActive
+    ? null
+    : agentIds.includes(activeSubtab ?? "")
+      ? activeSubtab
+      : null;
 
   const agentOptions = useMemo(
     () =>
@@ -133,9 +157,7 @@ export function AgentSettings({
     [agentIds, effectiveSettings]
   );
 
-  const activeAgent = activeAgentId
-    ? agentOptions.find((a) => a.id === activeAgentId)
-    : agentOptions[0];
+  const activeAgent = activeAgentId ? agentOptions.find((a) => a.id === activeAgentId) : null;
   const activeEntry = activeAgent
     ? getAgentSettingsEntry(effectiveSettings, activeAgent.id)
     : { customFlags: "", dangerousArgs: "", dangerousEnabled: false };
@@ -177,9 +199,9 @@ export function AgentSettings({
       <div className="space-y-4">
         <div className="flex items-center justify-between">
           <div>
-            <h3 className="text-sm font-medium mb-1">Agent Runtime Settings</h3>
+            <h3 className="text-sm font-medium mb-1">CLI Agents</h3>
             <p className="text-xs text-canopy-text/50">
-              Configure CLI flags and options for each agent
+              Configure global agent preferences and per-agent settings
             </p>
           </div>
           <Button
@@ -195,42 +217,92 @@ export function AgentSettings({
           </Button>
         </div>
 
-        {/* Agent Selector - Shared subtab bar */}
+        {/* Subtab bar: General + per-agent tabs */}
         <SettingsSubtabBar
-          subtabs={agentOptions.map((agent) => {
-            const hasIndicators = !agent.selected || agent.dangerousEnabled;
-            return {
-              id: agent.id,
-              label: agent.name,
-              renderIcon: (isActive: boolean) =>
-                agent.Icon ? (
-                  <agent.Icon
-                    size={18}
-                    brandColor={isActive ? agent.color : undefined}
-                    className={cn(!isActive && "opacity-60")}
-                  />
-                ) : null,
-              trailing: hasIndicators ? (
-                <>
-                  {!agent.selected && (
-                    <span
-                      className="w-1.5 h-1.5 rounded-full bg-canopy-text/30"
-                      title="Not in workflow"
+          subtabs={[
+            {
+              id: GENERAL_SUBTAB_ID,
+              label: "General",
+              renderIcon: (isActive: boolean) => (
+                <Settings2
+                  size={16}
+                  className={cn(isActive ? "text-canopy-text" : "text-canopy-text/60")}
+                />
+              ),
+            },
+            ...agentOptions.map((agent) => {
+              const hasIndicators = !agent.selected || agent.dangerousEnabled;
+              return {
+                id: agent.id,
+                label: agent.name,
+                renderIcon: (isActive: boolean) =>
+                  agent.Icon ? (
+                    <agent.Icon
+                      size={18}
+                      brandColor={isActive ? agent.color : undefined}
+                      className={cn(!isActive && "opacity-60")}
                     />
-                  )}
-                  {agent.dangerousEnabled && (
-                    <span className="w-1.5 h-1.5 rounded-full bg-status-error" />
-                  )}
-                </>
-              ) : undefined,
-            };
-          })}
-          activeId={activeAgentId ?? ""}
+                  ) : null,
+                trailing: hasIndicators ? (
+                  <>
+                    {!agent.selected && (
+                      <span
+                        className="w-1.5 h-1.5 rounded-full bg-canopy-text/30"
+                        title="Not in workflow"
+                      />
+                    )}
+                    {agent.dangerousEnabled && (
+                      <span className="w-1.5 h-1.5 rounded-full bg-status-error" />
+                    )}
+                  </>
+                ) : undefined,
+              };
+            }),
+          ]}
+          activeId={isGeneralActive ? GENERAL_SUBTAB_ID : (activeAgentId ?? GENERAL_SUBTAB_ID)}
           onChange={onSubtabChange}
         />
 
+        {/* General subtab content */}
+        {isGeneralActive && (
+          <div
+            id="agents-general"
+            className="rounded-[var(--radius-lg)] border border-canopy-border bg-surface p-4 space-y-4"
+          >
+            <div className="pb-3 border-b border-canopy-border">
+              <h4 className="text-sm font-medium text-canopy-text">Global Agent Settings</h4>
+              <p className="text-xs text-canopy-text/50 mt-0.5">
+                Settings that apply across all agents
+              </p>
+            </div>
+
+            <div id="agents-default-agent" className="space-y-2">
+              <label className="text-sm font-medium text-canopy-text block">Default agent</label>
+              <select
+                value={defaultAgent ?? ""}
+                onChange={(e) =>
+                  setDefaultAgent(e.target.value ? (e.target.value as DefaultAgentId) : undefined)
+                }
+                className="w-full px-3 py-1.5 text-sm rounded-[var(--radius-md)] border border-canopy-border bg-canopy-bg text-canopy-text focus:border-canopy-accent focus:outline-none transition-colors"
+              >
+                <option value="">None (first available)</option>
+                {agentOptions.map((agent) => (
+                  <option key={agent.id} value={agent.id}>
+                    {agent.name}
+                  </option>
+                ))}
+              </select>
+              <p className="text-xs text-canopy-text/40">
+                Agent used for automated workflows ("What's Next?", onboarding, project
+                explanations). Distinct from the Sidecar "Default New Tab Agent" which controls the
+                browser panel opened by the + button.
+              </p>
+            </div>
+          </div>
+        )}
+
         {/* Agent Configuration Card */}
-        {activeAgent && (
+        {!isGeneralActive && activeAgent && (
           <div className="rounded-[var(--radius-lg)] border border-canopy-border bg-surface p-4 space-y-4">
             {/* Header with agent info */}
             <div className="flex items-center justify-between pb-3 border-b border-canopy-border">

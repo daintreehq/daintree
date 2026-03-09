@@ -209,7 +209,32 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
     keywords: ["worktree", "path", "pattern", "branch", "folder", "directory", "location", "git"],
   },
 
-  // CLI Agents
+  // CLI Agents — General subtab
+  {
+    id: "agents-default-agent",
+    tab: "agents",
+    tabLabel: "CLI Agents",
+    subtab: "general",
+    subtabLabel: "General",
+    section: "Global Agent Settings",
+    title: "Default Agent",
+    description:
+      'Agent used for automated workflows ("What\'s Next?", onboarding, project explanations). Distinct from the Sidecar "Default New Tab Agent".',
+    keywords: [
+      "default",
+      "agent",
+      "workflow",
+      "automated",
+      "whats next",
+      "onboarding",
+      "claude",
+      "gemini",
+      "codex",
+      "opencode",
+    ],
+  },
+
+  // CLI Agents — per-agent subtabs
   {
     id: "agents-enable",
     tab: "agents",
@@ -339,8 +364,9 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
     tabLabel: "Toolbar",
     section: "Launcher Palette",
     title: "Launcher Palette Settings",
-    description: "Configure the default panel type in the launcher. Always show dev server option.",
-    keywords: ["launcher", "palette", "default", "panel", "dev server", "open"],
+    description:
+      "Configure the default panel type highlighted when opening the launcher. Always show dev server option.",
+    keywords: ["launcher", "palette", "default", "panel", "dev server", "open", "selection"],
   },
   {
     id: "toolbar-reset",

@@ -45,6 +45,7 @@ import { PROJECT_EXPLANATION_PROMPT, getDefaultAgentId } from "@/lib/projectExpl
 import { buildWhatsNextPrompt } from "@/lib/whatsNextPrompt";
 import { cliAvailabilityClient } from "@/clients";
 import { useToolbarPreferencesStore } from "@/store/toolbarPreferencesStore";
+import { useAgentPreferencesStore } from "@/store/agentPreferencesStore";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { buildPanelDuplicateOptions } from "@/services/terminal/panelDuplicationService";
 import { getEffectiveAgentIds, getEffectiveAgentConfig } from "@shared/config/agentRegistry";
@@ -133,7 +134,7 @@ function EmptyState({
   };
 
   const defaultSelection = useToolbarPreferencesStore((state) => state.launcher.defaultSelection);
-  const defaultAgent = useToolbarPreferencesStore((state) => state.launcher.defaultAgent);
+  const defaultAgent = useAgentPreferencesStore((state) => state.defaultAgent);
   const emptyStateAgentSettings = useAgentSettingsStore((state) => state.settings);
 
   // undefined = no filter (settings not loaded or pre-migration); Set = loaded, filter to non-hidden
