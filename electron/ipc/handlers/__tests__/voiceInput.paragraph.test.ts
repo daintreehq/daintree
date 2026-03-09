@@ -24,6 +24,10 @@ const shared = vi.hoisted(() => ({
   correctionCalls: [] as Array<{ text: string; settings: Record<string, unknown> }>,
   /** Simulated in-flight utterance text returned by commitParagraphBoundary(). */
   inFlightText: "" as string,
+  /** Deferred drain promise — resolve externally to control stopGracefully() timing. */
+  drainResolve: null as (() => void) | null,
+  /** When true, stopGracefully uses a deferred promise instead of resolving immediately. */
+  useDeferredDrain: false,
 }));
 
 vi.mock("../../../services/VoiceTranscriptionService.js", () => ({
@@ -36,6 +40,11 @@ vi.mock("../../../services/VoiceTranscriptionService.js", () => ({
       return Promise.resolve({ ok: true });
     };
     this.stopGracefully = function () {
+      if (shared.useDeferredDrain) {
+        return new Promise<void>((resolve) => {
+          shared.drainResolve = resolve;
+        });
+      }
       return Promise.resolve();
     };
     this.sendAudioChunk = function () {};
@@ -163,6 +172,8 @@ describe("voiceInput — paragraph buffering", () => {
     shared.correctionCalls = [];
     shared.correctionResult = "Corrected paragraph.";
     shared.inFlightText = "";
+    shared.drainResolve = null;
+    shared.useDeferredDrain = false;
 
     win = buildMainWindow();
     cleanup = registerVoiceInputHandlers({
@@ -499,6 +510,54 @@ describe("voiceInput — paragraph buffering", () => {
     await vi.waitFor(() => {
       expect(shared.correctionCalls).toHaveLength(1);
       expect(shared.correctionCalls[0].text).toBe("first part second part");
+    });
+  });
+
+  it("complete event arriving during stopGracefully drain is captured in stop flush rawText", async () => {
+    shared.useDeferredDrain = true;
+
+    emitTranscriptionEvent({ type: "complete", text: "before drain" });
+
+    const handleStop = getHandler("voice-input:stop");
+    const stopPromise = (handleStop as (e: unknown) => Promise<unknown>)(fakeEvent);
+
+    // While stopGracefully is pending (draining), a late complete event fires
+    emitTranscriptionEvent({ type: "complete", text: "late utterance" });
+
+    // Now resolve the drain
+    shared.drainResolve!();
+
+    const result = (await stopPromise) as { rawText: string | null; correctionId: string | null };
+
+    // Both the pre-drain and late utterance should be in the flushed text
+    expect(result.rawText).toBe("before drain late utterance");
+    expect(result.correctionId).toBeTypeOf("string");
+    expect(result.correctionId).not.toBeNull();
+  });
+
+  it("stop correctionId matches the subsequent correction-replace IPC message", async () => {
+    shared.correctionResult = "Corrected final sentence.";
+    emitTranscriptionEvent({ type: "complete", text: "final sentence" });
+
+    const handleStop = getHandler("voice-input:stop");
+    const result = (await (handleStop as (e: unknown) => Promise<unknown>)(fakeEvent)) as {
+      rawText: string | null;
+      correctionId: string | null;
+    };
+
+    expect(result.correctionId).toBeTypeOf("string");
+    expect(result.correctionId).not.toBeNull();
+
+    // Wait for the async correction to send CORRECTION_REPLACE to the renderer
+    await vi.waitFor(() => {
+      const correctionMsg = win.__sent.find((m) => m.channel === "voice-input:correction-replace");
+      expect(correctionMsg).toBeDefined();
+      expect((correctionMsg?.payload as { correctionId: string }).correctionId).toBe(
+        result.correctionId
+      );
+      expect((correctionMsg?.payload as { correctedText: string }).correctedText).toBe(
+        "Corrected final sentence."
+      );
     });
   });
 });

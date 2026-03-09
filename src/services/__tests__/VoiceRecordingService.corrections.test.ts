@@ -441,6 +441,66 @@ describe("VoiceRecordingService — correction matching (stable ID)", () => {
     expect(mockVoiceFns.resolvePendingCorrection).toHaveBeenCalledWith(PANEL, "uuid-late");
   });
 
+  it("duplicate rawText: both corrections resolve in sequence with correct offset rebasing", async () => {
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+
+    const PANEL = "panel-1";
+    // Two paragraphs with identical raw text at different offsets
+    // Draft: "hello world\nhello world"
+    // First correction at offset 0, second at offset 12 (after "\n")
+    mockVoiceState.panelBuffers[PANEL] = {
+      pendingCorrections: [
+        { id: "uuid-first", segmentStart: 0, rawText: "hello world" },
+        { id: "uuid-second", segmentStart: 12, rawText: "hello world" },
+      ],
+      activeParagraphStart: 0,
+    };
+    mockDraftStore.drafts[PANEL] = "hello world\nhello world";
+
+    voiceRecordingService.initialize();
+
+    // First correction: "hello world" (11 chars) → "Hello, world!" (13 chars) → delta = +2
+    electron.emit.correctionReplace({
+      correctionId: "uuid-first",
+      correctedText: "Hello, world!",
+    });
+
+    const inputStore = (
+      await import("@/store/terminalInputStore")
+    ).useTerminalInputStore.getState();
+
+    // Draft updated with first correction applied at offset 0
+    expect(inputStore.setDraftInput).toHaveBeenCalledWith(
+      PANEL,
+      "Hello, world!\nhello world",
+      undefined
+    );
+    expect(mockVoiceFns.resolvePendingCorrection).toHaveBeenCalledWith(PANEL, "uuid-first");
+    // Rebasing called with delta +2 (13 - 11)
+    expect(mockVoiceFns.rebasePendingCorrections).toHaveBeenCalledWith(PANEL, 0, 2);
+
+    // Simulate the rebased state: uuid-second's segmentStart moved from 12 to 14
+    vi.clearAllMocks();
+    mockVoiceState.panelBuffers[PANEL] = {
+      pendingCorrections: [{ id: "uuid-second", segmentStart: 14, rawText: "hello world" }],
+      activeParagraphStart: 0,
+    };
+    mockDraftStore.drafts[PANEL] = "Hello, world!\nhello world";
+
+    // Second correction at rebased offset 14
+    electron.emit.correctionReplace({
+      correctionId: "uuid-second",
+      correctedText: "Hello, world!",
+    });
+
+    expect(inputStore.setDraftInput).toHaveBeenCalledWith(
+      PANEL,
+      "Hello, world!\nHello, world!",
+      undefined
+    );
+    expect(mockVoiceFns.resolvePendingCorrection).toHaveBeenCalledWith(PANEL, "uuid-second");
+  });
+
   it("applies correction when rawText ends exactly at the end of the draft", async () => {
     const { voiceRecordingService } = await import("../VoiceRecordingService");
 

@@ -1096,6 +1096,95 @@ describe("VoiceTranscriptionService", () => {
     });
   });
 
+  describe("realistic Deepgram payload scenarios", () => {
+    it("ignores alternatives[0].paragraphs field and emits complete from transcript text only", async () => {
+      const service = new VoiceTranscriptionService();
+      const events: Array<{ type: string; text?: string }> = [];
+      service.onEvent((e) => {
+        if (e.type === "complete" || e.type === "paragraph_boundary") events.push(e);
+      });
+
+      const p = service.start(BASE_SETTINGS);
+      deepgramMock.instances.at(-1)!.emit(deepgramMock.LiveTranscriptionEvents.Open);
+      await p;
+
+      const conn = deepgramMock.instances.at(-1)!;
+      // Full-shape Deepgram response object with a paragraphs field (REST-only)
+      conn.emit(deepgramMock.LiveTranscriptionEvents.Transcript, {
+        channel: {
+          alternatives: [
+            {
+              transcript: "Hello world",
+              paragraphs: {
+                paragraphs: [
+                  {
+                    sentences: [{ text: "Hello world", start: 0, end: 1.5 }],
+                    start: 0,
+                    end: 1.5,
+                  },
+                ],
+              },
+            },
+          ],
+        },
+        is_final: true,
+        speech_final: true,
+      });
+
+      // Only transcript text is used — paragraphs field is ignored
+      expect(events).toEqual([{ type: "complete", text: "Hello world" }]);
+    });
+
+    it("non-prefix interim revision produces correct final text without spurious events", async () => {
+      const service = new VoiceTranscriptionService();
+      const deltas: string[] = [];
+      const completes: string[] = [];
+      service.onEvent((e) => {
+        if (e.type === "delta") deltas.push(e.text);
+        if (e.type === "complete") completes.push(e.text);
+      });
+
+      const p = service.start(BASE_SETTINGS);
+      deepgramMock.instances.at(-1)!.emit(deepgramMock.LiveTranscriptionEvents.Open);
+      await p;
+
+      const conn = deepgramMock.instances.at(-1)!;
+
+      // Interim 1: "hell" — first delta emitted
+      conn.emit(
+        deepgramMock.LiveTranscriptionEvents.Transcript,
+        makeTranscriptEvent("hell", false, false)
+      );
+      expect(deltas).toEqual(["hell"]);
+
+      // Interim 2: "help" — non-prefix revision (not an extension of "hell"),
+      // triggers the silent liveText update path (no delta emitted)
+      conn.emit(
+        deepgramMock.LiveTranscriptionEvents.Transcript,
+        makeTranscriptEvent("help", false, false)
+      );
+      expect(deltas).toEqual(["hell"]); // No new delta
+
+      // Interim 3: "help me" — prefix extension of revised "help" baseline,
+      // proves the liveText baseline was correctly updated so delta emission recovers
+      conn.emit(
+        deepgramMock.LiveTranscriptionEvents.Transcript,
+        makeTranscriptEvent("help me", false, false)
+      );
+      expect(deltas).toEqual(["hell", " me"]); // " me" delta from "help" → "help me"
+
+      // speech_final: "Hello world" — produces exactly one complete event
+      conn.emit(
+        deepgramMock.LiveTranscriptionEvents.Transcript,
+        makeTranscriptEvent("Hello world", true, true)
+      );
+
+      expect(completes).toEqual(["Hello world"]);
+      // No spurious complete for the intermediate "help" or "help me"
+      expect(completes).toHaveLength(1);
+    });
+  });
+
   describe("status sequence regression — finishing phase", () => {
     async function startService() {
       const service = new VoiceTranscriptionService();
