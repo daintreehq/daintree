@@ -19,6 +19,7 @@ export interface SearchableProject {
   status: Project["status"];
   isActive: boolean;
   isBackground: boolean;
+  isMissing: boolean;
   activeAgentCount: number;
   waitingAgentCount: number;
   processCount: number;
@@ -41,6 +42,7 @@ export interface UseProjectSwitcherPaletteReturn {
   addProject: () => Promise<void>;
   stopProject: (projectId: string) => Promise<void>;
   removeProject: (projectId: string) => Promise<void>;
+  locateProject: (projectId: string) => Promise<void>;
   stopConfirmProjectId: string | null;
   setStopConfirmProjectId: (projectId: string | null) => void;
   confirmStopProject: () => Promise<void>;
@@ -90,6 +92,7 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
   const closeProject = useProjectStore((state) => state.closeProject);
   const closeActiveProject = useProjectStore((state) => state.closeActiveProject);
   const removeProject = useProjectStore((state) => state.removeProject);
+  const locateProjectFn = useProjectStore((state) => state.locateProject);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
@@ -214,8 +217,9 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
       const stats = projectStats.get(p.id);
       const counts = terminalCounts.get(p.id);
       const isActive = p.id === currentProject?.id;
+      const isMissing = p.status === "missing";
       const hasProcesses = (stats?.processCount ?? 0) > 0;
-      const isBackground = p.status === "background" || (!isActive && hasProcesses);
+      const isBackground = p.status === "background" || (!isActive && !isMissing && hasProcesses);
 
       return {
         id: p.id,
@@ -227,6 +231,7 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
         status: p.status,
         isActive,
         isBackground,
+        isMissing,
         activeAgentCount: counts?.activeAgentCount ?? 0,
         waitingAgentCount: counts?.waitingAgentCount ?? 0,
         processCount: stats?.processCount ?? 0,
@@ -345,11 +350,11 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
 
   const selectProject = useCallback(
     async (project: SearchableProject) => {
-      close();
-
-      if (project.isActive) {
+      if (project.isActive || project.isMissing) {
         return;
       }
+
+      close();
 
       if (project.isBackground) {
         notify({
@@ -400,6 +405,13 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
     close();
     await addProjectFn();
   }, [close, addProjectFn]);
+
+  const locateProject = useCallback(
+    async (projectId: string) => {
+      await locateProjectFn(projectId);
+    },
+    [locateProjectFn]
+  );
 
   const stopProject = useCallback(
     async (projectId: string) => {
@@ -508,6 +520,7 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
     addProject,
     stopProject,
     removeProject: removeProjectFromList,
+    locateProject,
     stopConfirmProjectId,
     setStopConfirmProjectId,
     confirmStopProject,

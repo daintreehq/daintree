@@ -217,7 +217,7 @@ export class ProjectStore {
     this.invalidateProjectStateCache(projectId);
 
     if (this.getCurrentProjectId() === projectId) {
-      store.set("projects.currentProjectId", undefined);
+      store.delete("projects.currentProjectId");
     }
   }
 
@@ -231,6 +231,7 @@ export class ProjectStore {
 
     const safeUpdates: Partial<Project> = {};
     if (updates.name !== undefined) safeUpdates.name = updates.name;
+    if (updates.path !== undefined) safeUpdates.path = updates.path;
     if (updates.emoji !== undefined) safeUpdates.emoji = updates.emoji;
     if (updates.color !== undefined) safeUpdates.color = updates.color;
     if (updates.lastOpened !== undefined) safeUpdates.lastOpened = updates.lastOpened;
@@ -272,7 +273,7 @@ export class ProjectStore {
     const normalizedProjects = rawProjects
       .filter((p) => p && typeof p === "object" && p.id) // Filter out corrupted entries
       .map((project) => {
-        const validStatuses: ProjectStatus[] = ["active", "background", "closed"];
+        const validStatuses: ProjectStatus[] = ["active", "background", "closed", "missing"];
         const isValidStatus = validStatuses.includes(project.status as ProjectStatus);
 
         // Enforce single active project: only the current project can be active
@@ -331,6 +332,42 @@ export class ProjectStore {
     return projects.find((p) => p.id === projectId) || null;
   }
 
+  /**
+   * Checks which projects have directories that no longer exist at their stored path.
+   * Updates each missing project's status to "missing" in the store and returns their IDs.
+   * Projects whose directories exist are reset from "missing" back to "closed".
+   */
+  async checkMissingProjects(): Promise<string[]> {
+    const projects = this.getAllProjects();
+    const currentProjectId = this.getCurrentProjectId();
+    const missingIds: string[] = [];
+
+    await Promise.allSettled(
+      projects.map(async (project) => {
+        // Never mark the active project as missing — it's currently in use
+        if (project.id === currentProjectId) return;
+
+        let exists = false;
+        try {
+          await fs.access(project.path);
+          exists = true;
+        } catch {
+          exists = false;
+        }
+
+        if (!exists && project.status !== "missing") {
+          this.updateProjectStatus(project.id, "missing");
+          missingIds.push(project.id);
+        } else if (exists && project.status === "missing") {
+          // Directory was restored — reset to closed
+          this.updateProjectStatus(project.id, "closed");
+        }
+      })
+    );
+
+    return missingIds;
+  }
+
   getCurrentProjectId(): string | null {
     return store.get("projects.currentProjectId") || null;
   }
@@ -382,7 +419,7 @@ export class ProjectStore {
    * Clear the current project reference (used when closing the active project).
    */
   clearCurrentProject(): void {
-    store.set("projects.currentProjectId", undefined);
+    store.delete("projects.currentProjectId");
   }
 
   private getStateFilePath(projectId: string): string | null {

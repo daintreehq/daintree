@@ -167,4 +167,12 @@ export const projectClient = {
   disableInRepoSettings: (projectId: string): Promise<Project> => {
     return window.electron.project.disableInRepoSettings(projectId);
   },
+
+  checkMissing: (): Promise<string[]> => {
+    return window.electron.project.checkMissing();
+  },
+
+  locate: (projectId: string): Promise<Project | null> => {
+    return window.electron.project.locate(projectId);
+  },
 } as const;

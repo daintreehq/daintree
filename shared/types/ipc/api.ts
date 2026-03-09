@@ -408,6 +408,19 @@ export interface ElectronAPI {
      * Does NOT delete .canopy/ files.
      */
     disableInRepoSettings(projectId: string): Promise<Project>;
+    /**
+     * Checks all non-active projects for missing directories.
+     * Updates status to "missing" for projects whose paths no longer exist,
+     * and resets "missing" back to "closed" for paths that are accessible again.
+     * Returns the IDs of projects newly marked as missing.
+     */
+    checkMissing(): Promise<string[]>;
+    /**
+     * Opens a directory picker to let the user relocate a missing project.
+     * Updates the stored path and resets status to "closed".
+     * Returns the updated Project, or null if the user cancelled.
+     */
+    locate(projectId: string): Promise<Project | null>;
   };
   agentSettings: {
     get(): Promise<AgentSettings>;

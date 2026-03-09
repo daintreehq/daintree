@@ -347,6 +347,8 @@ const CHANNELS = {
   PROJECT_WRITE_CLAUDE_MD: "project:write-claude-md",
   PROJECT_ENABLE_IN_REPO_SETTINGS: "project:enable-in-repo-settings",
   PROJECT_DISABLE_IN_REPO_SETTINGS: "project:disable-in-repo-settings",
+  PROJECT_CHECK_MISSING: "project:check-missing",
+  PROJECT_LOCATE: "project:locate",
 
   // Agent settings channels
   AGENT_SETTINGS_GET: "agent-settings:get",
@@ -1063,6 +1065,11 @@ const api: ElectronAPI = {
 
     disableInRepoSettings: (projectId: string): Promise<Project> =>
       _typedInvoke(CHANNELS.PROJECT_DISABLE_IN_REPO_SETTINGS, projectId),
+
+    checkMissing: (): Promise<string[]> => _typedInvoke(CHANNELS.PROJECT_CHECK_MISSING),
+
+    locate: (projectId: string): Promise<Project | null> =>
+      _typedInvoke(CHANNELS.PROJECT_LOCATE, projectId),
   },
 
   // Agent Settings API

@@ -65,6 +65,13 @@ export function ProjectSwitcher() {
     [projectSwitcher]
   );
 
+  const handleLocateProject = useCallback(
+    (projectId: string) => {
+      void projectSwitcher.locateProject(projectId);
+    },
+    [projectSwitcher]
+  );
+
   const stopDialog = (
     <ConfirmDialog
       isOpen={projectSwitcher.stopConfirmProjectId != null}
@@ -102,6 +109,7 @@ export function ProjectSwitcher() {
             onCreateFolder={handleCreateFolder}
             onStopProject={handleStopProject}
             onCloseProject={handleCloseProject}
+            onLocateProject={handleLocateProject}
             removeConfirmProject={projectSwitcher.removeConfirmProject}
             onRemoveConfirmClose={() => projectSwitcher.setRemoveConfirmProject(null)}
             onConfirmRemove={projectSwitcher.confirmRemoveProject}
@@ -155,6 +163,7 @@ export function ProjectSwitcher() {
         onCreateFolder={handleCreateFolder}
         onStopProject={handleStopProject}
         onCloseProject={handleCloseProject}
+        onLocateProject={handleLocateProject}
         onOpenProjectSettings={handleOpenSettings}
         removeConfirmProject={projectSwitcher.removeConfirmProject}
         onRemoveConfirmClose={() => projectSwitcher.setRemoveConfirmProject(null)}
