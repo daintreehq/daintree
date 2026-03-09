@@ -129,7 +129,7 @@ export function BrowserPane({
 
   // Set up webview event listeners - reattach whenever webview element changes
   useEffect(() => {
-    const webview = webviewRef.current;
+    const webview = webviewElement;
     if (!webview) {
       setIsWebviewReady(false);
       return;
@@ -234,7 +234,7 @@ export function BrowserPane({
       webview.removeEventListener("did-navigate-in-page", handleDidNavigateInPage);
       webview.removeEventListener("console-message", handleConsoleMessage);
     };
-  }, [hasValidUrl, loadError, zoomFactor, id, addConsoleMessage]);
+  }, [webviewElement, hasValidUrl, loadError, zoomFactor, id, addConsoleMessage]);
 
   const handleNavigate = useCallback(
     (url: string) => {

@@ -8,7 +8,9 @@ const ipcMainMock = vi.hoisted(() => ({
 const debuggerMock = vi.hoisted(() => ({
   isAttached: vi.fn(() => false),
   attach: vi.fn(),
-  sendCommand: vi.fn(() => Promise.resolve()),
+  // Typed broadly so tests can override with mockImplementation using command args
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  sendCommand: vi.fn<(...args: any[]) => Promise<void>>(() => Promise.resolve()),
 }));
 
 const mockWebContents = vi.hoisted(() => ({
@@ -54,13 +56,19 @@ describe("registerWebviewHandlers", () => {
     expect(ipcMainMock.removeHandler).toHaveBeenCalledWith("webview:set-lifecycle-state");
   });
 
-  it("attaches debugger if not already attached and sends frozen state", async () => {
+  it("attaches debugger and sends CDP commands in correct order for freeze", async () => {
+    const calls: string[] = [];
+    debuggerMock.attach.mockImplementation(() => calls.push("attach"));
+    debuggerMock.sendCommand.mockImplementation((cmd: string) => {
+      calls.push(cmd);
+      return Promise.resolve();
+    });
+
     registerWebviewHandlers();
     const handler = getHandler();
     await handler(null, 42, true);
 
-    expect(debuggerMock.attach).toHaveBeenCalledWith("1.3");
-    expect(debuggerMock.sendCommand).toHaveBeenCalledWith("Page.enable");
+    expect(calls).toEqual(["attach", "Page.enable", "Page.setWebLifecycleState"]);
     expect(debuggerMock.sendCommand).toHaveBeenCalledWith("Page.setWebLifecycleState", {
       state: "frozen",
     });
@@ -89,7 +97,8 @@ describe("registerWebviewHandlers", () => {
   });
 
   it("returns early if webContents not found", async () => {
-    webContentsMock.fromId.mockReturnValue(null);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    webContentsMock.fromId.mockReturnValue(null as any);
     registerWebviewHandlers();
     const handler = getHandler();
     await expect(handler(null, 99, true)).resolves.toBeUndefined();
@@ -111,10 +120,26 @@ describe("registerWebviewHandlers", () => {
     await expect(handler(null, 42, "not-a-boolean")).rejects.toThrow("Invalid arguments");
   });
 
-  it("swallows debugger errors silently", async () => {
-    debuggerMock.sendCommand.mockRejectedValue(new Error("debugger detached"));
+  it("handles expected transient debugger errors non-fatally without logging", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    debuggerMock.sendCommand.mockRejectedValue(new Error("Target closed"));
     registerWebviewHandlers();
     const handler = getHandler();
     await expect(handler(null, 42, true)).resolves.toBeUndefined();
+    expect(warnSpy).not.toHaveBeenCalled();
+    warnSpy.mockRestore();
+  });
+
+  it("logs a warning for unexpected debugger errors", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    debuggerMock.sendCommand.mockRejectedValue(new Error("Unexpected internal error"));
+    registerWebviewHandlers();
+    const handler = getHandler();
+    await expect(handler(null, 42, true)).resolves.toBeUndefined();
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining("[webview]"),
+      expect.stringContaining("Unexpected internal error")
+    );
+    warnSpy.mockRestore();
   });
 });

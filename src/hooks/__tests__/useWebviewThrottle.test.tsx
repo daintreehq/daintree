@@ -33,9 +33,9 @@ describe("useWebviewThrottle", () => {
   });
 
   function mockStore(activeDockTerminalId: string | null) {
-    (useTerminalStore as ReturnType<typeof vi.fn>).mockImplementation(
-      (selector: (s: { activeDockTerminalId: string | null }) => unknown) =>
-        selector({ activeDockTerminalId })
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    vi.mocked(useTerminalStore).mockImplementation((selector: (s: any) => unknown) =>
+      selector({ activeDockTerminalId })
     );
   }
 
@@ -129,5 +129,32 @@ describe("useWebviewThrottle", () => {
 
     expect(setLifecycleStateMock).toHaveBeenCalledTimes(1);
     expect(setLifecycleStateMock).toHaveBeenCalledWith(1, false);
+  });
+
+  it("uses the latest webviewElement when element is swapped mid-freeze-delay", () => {
+    mockStore("other-panel");
+    const el1 = makeWebviewEl(10);
+    const el2 = makeWebviewEl(20);
+
+    const { rerender } = renderHook(
+      ({ el }: { el: Electron.WebviewTag }) => useWebviewThrottle("panel-1", "dock", el, true),
+      { initialProps: { el: el1 } }
+    );
+
+    // Partway through the freeze delay, the element is replaced
+    act(() => {
+      vi.advanceTimersByTime(200);
+    });
+
+    rerender({ el: el2 });
+
+    // Advance past the new timer — should use el2's webContentsId
+    act(() => {
+      vi.advanceTimersByTime(500);
+    });
+
+    // Should freeze with the new element's ID, not the old one
+    expect(setLifecycleStateMock).not.toHaveBeenCalledWith(10, true);
+    expect(setLifecycleStateMock).toHaveBeenCalledWith(20, true);
   });
 });

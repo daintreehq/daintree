@@ -22,9 +22,18 @@ export function registerWebviewHandlers(): () => void {
       await wc.debugger.sendCommand("Page.setWebLifecycleState", {
         state: frozen ? "frozen" : "active",
       });
-    } catch {
-      // Debugger may detach during navigation or when DevTools are opened.
-      // This is non-fatal — the webview will continue operating without throttling.
+    } catch (err) {
+      // Transient failures (target detached during navigation, DevTools opened) are expected.
+      // Log unexpected errors so they surface in dev without breaking the webview.
+      const message = err instanceof Error ? err.message : String(err);
+      const isExpected =
+        message.includes("Target closed") ||
+        message.includes("Inspected target navigated") ||
+        message.includes("Cannot attach") ||
+        message.includes("debugger is already attached");
+      if (!isExpected) {
+        console.warn(`[webview] CDP lifecycle state failed for id=${webContentsId}:`, message);
+      }
     }
   };
 
