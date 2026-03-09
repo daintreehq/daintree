@@ -400,9 +400,12 @@ if (!gotTheLock) {
   // on every hot reload. Register explicit handlers to clean up and exit cleanly.
   if (!app.isPackaged) {
     const devSignalHandler = () => {
+      // Clean up synchronously before the async quit path — the before-quit handler
+      // guards on mainWindow existence and may skip cleanupOnExit() during startup.
       getCrashRecoveryService().cleanupOnExit();
-      if (!isSmokeTest) app.releaseSingleInstanceLock();
-      process.exit(0);
+      // Safety net: force exit if graceful shutdown hangs (nodemon will SIGKILL anyway).
+      setTimeout(() => process.exit(0), 3000).unref();
+      app.quit();
     };
     process.on("SIGTERM", devSignalHandler);
     process.on("SIGINT", devSignalHandler);
