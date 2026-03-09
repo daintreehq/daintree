@@ -235,6 +235,7 @@ export function VoiceInputSettingsTab() {
 
             <ParagraphingStrategyRow
               value={settings.paragraphingStrategy ?? "spoken-command"}
+              language={settings.language}
               onChange={(v) => update({ paragraphingStrategy: v })}
             />
 
@@ -614,11 +615,15 @@ function MicPermissionRow({
 
 function ParagraphingStrategyRow({
   value,
+  language,
   onChange,
 }: {
   value: VoiceParagraphingStrategy;
+  language: string;
   onChange: (v: VoiceParagraphingStrategy) => void;
 }) {
+  const isNonEnglish = value === "spoken-command" && language !== "en";
+
   return (
     <div className="space-y-1">
       <SettingsRow label="Paragraph Breaks" icon={AlignLeft}>
@@ -632,9 +637,11 @@ function ParagraphingStrategyRow({
         </select>
       </SettingsRow>
       <p className="text-xs text-canopy-text/40 ml-[22px]">
-        {value === "spoken-command"
-          ? 'Say "new paragraph" to insert a break. Enter also commits the current paragraph.'
-          : "Press Enter to commit the current paragraph. No spoken commands."}
+        {isNonEnglish
+          ? "Spoken commands require English. Manual Enter will be used for the selected language."
+          : value === "spoken-command"
+            ? 'Say "new paragraph" to insert a break. You can also press Enter to commit the current paragraph.'
+            : "Press Enter to commit paragraph breaks. Spoken formatting commands are disabled."}
       </p>
     </div>
   );
