@@ -29,13 +29,13 @@ export function SettingsSubtabBar({ subtabs, activeId, onChange }: SettingsSubta
     }
   }, [activeId]);
 
+  if (subtabs.length === 0) return null;
+
   return (
-    <div
+    <nav
       ref={scrollContainerRef}
-      role="tablist"
       aria-label="Subtab navigation"
-      tabIndex={0}
-      className="flex gap-1.5 p-1.5 bg-canopy-bg rounded-[var(--radius-lg)] border border-canopy-border overflow-x-auto scrollbar-thin focus:outline-none focus:ring-2 focus:ring-canopy-accent/50 mb-6"
+      className="flex gap-1.5 p-1.5 bg-canopy-bg rounded-[var(--radius-lg)] border border-canopy-border overflow-x-auto scrollbar-thin mb-6"
     >
       {subtabs.map((subtab) => {
         const isActive = subtab.id === activeId;
@@ -43,8 +43,7 @@ export function SettingsSubtabBar({ subtabs, activeId, onChange }: SettingsSubta
           <button
             key={subtab.id}
             ref={isActive ? activePillRef : null}
-            role="tab"
-            aria-selected={isActive}
+            aria-current={isActive ? "true" : undefined}
             onClick={() => onChange(subtab.id)}
             className={cn(
               "flex items-center justify-center gap-2 px-3 py-2 rounded-[var(--radius-md)] text-sm font-medium transition-all flex-shrink-0",
@@ -62,6 +61,6 @@ export function SettingsSubtabBar({ subtabs, activeId, onChange }: SettingsSubta
           </button>
         );
       })}
-    </div>
+    </nav>
   );
 }

@@ -197,31 +197,34 @@ export function AgentSettings({
 
         {/* Agent Selector - Shared subtab bar */}
         <SettingsSubtabBar
-          subtabs={agentOptions.map((agent) => ({
-            id: agent.id,
-            label: agent.name,
-            renderIcon: (isActive) =>
-              agent.Icon ? (
-                <agent.Icon
-                  size={18}
-                  brandColor={isActive ? agent.color : undefined}
-                  className={cn(!isActive && "opacity-60")}
-                />
-              ) : null,
-            trailing: (
-              <>
-                {!agent.selected && (
-                  <span
-                    className="w-1.5 h-1.5 rounded-full bg-canopy-text/30"
-                    title="Not in workflow"
+          subtabs={agentOptions.map((agent) => {
+            const hasIndicators = !agent.selected || agent.dangerousEnabled;
+            return {
+              id: agent.id,
+              label: agent.name,
+              renderIcon: (isActive: boolean) =>
+                agent.Icon ? (
+                  <agent.Icon
+                    size={18}
+                    brandColor={isActive ? agent.color : undefined}
+                    className={cn(!isActive && "opacity-60")}
                   />
-                )}
-                {agent.dangerousEnabled && (
-                  <span className="w-1.5 h-1.5 rounded-full bg-status-error" />
-                )}
-              </>
-            ),
-          }))}
+                ) : null,
+              trailing: hasIndicators ? (
+                <>
+                  {!agent.selected && (
+                    <span
+                      className="w-1.5 h-1.5 rounded-full bg-canopy-text/30"
+                      title="Not in workflow"
+                    />
+                  )}
+                  {agent.dangerousEnabled && (
+                    <span className="w-1.5 h-1.5 rounded-full bg-status-error" />
+                  )}
+                </>
+              ) : undefined,
+            };
+          })}
           activeId={activeAgentId ?? ""}
           onChange={onSubtabChange}
         />
@@ -358,7 +361,7 @@ export function AgentSettings({
               if (!inlineModeFlag) return null;
               const inlineMode = activeEntry.inlineMode ?? true;
               return (
-                <div className="flex items-center justify-between">
+                <div id="agents-inline-mode" className="flex items-center justify-between">
                   <div>
                     <div className="text-sm font-medium text-canopy-text">Inline Mode</div>
                     <div className="text-xs text-canopy-text/50">
@@ -388,7 +391,7 @@ export function AgentSettings({
 
             {/* Share Clipboard Directory Toggle - Gemini only */}
             {activeAgent.id === "gemini" && (
-              <div className="flex items-center justify-between">
+              <div id="agents-clipboard" className="flex items-center justify-between">
                 <div>
                   <div className="text-sm font-medium text-canopy-text">
                     Share Clipboard Directory
