@@ -54,26 +54,70 @@ describe("voiceRecordingStore — transcript phase transitions", () => {
     useVoiceRecordingStore.getState().beginSession(TARGET);
     useVoiceRecordingStore.getState().appendDelta("text");
     useVoiceRecordingStore.getState().completeSegment("text");
-    useVoiceRecordingStore.getState().addPendingCorrection(PANEL_ID, 0, "text");
+    useVoiceRecordingStore.getState().addPendingCorrection(PANEL_ID, "id-1", 0, "text");
     const buffer = useVoiceRecordingStore.getState().panelBuffers[PANEL_ID];
     expect(buffer?.transcriptPhase).toBe("paragraph_pending_ai");
   });
 
   it("resolvePendingCorrection transitions to stable when all corrections resolved", () => {
     useVoiceRecordingStore.getState().beginSession(TARGET);
-    useVoiceRecordingStore.getState().addPendingCorrection(PANEL_ID, 0, "raw text");
-    useVoiceRecordingStore.getState().resolvePendingCorrection(PANEL_ID, "raw text");
+    useVoiceRecordingStore.getState().addPendingCorrection(PANEL_ID, "id-1", 0, "raw text");
+    useVoiceRecordingStore.getState().resolvePendingCorrection(PANEL_ID, "id-1");
     const buffer = useVoiceRecordingStore.getState().panelBuffers[PANEL_ID];
     expect(buffer?.transcriptPhase).toBe("stable");
   });
 
   it("resolvePendingCorrection stays paragraph_pending_ai when corrections remain", () => {
     useVoiceRecordingStore.getState().beginSession(TARGET);
-    useVoiceRecordingStore.getState().addPendingCorrection(PANEL_ID, 0, "first");
-    useVoiceRecordingStore.getState().addPendingCorrection(PANEL_ID, 10, "second");
-    useVoiceRecordingStore.getState().resolvePendingCorrection(PANEL_ID, "first");
+    useVoiceRecordingStore.getState().addPendingCorrection(PANEL_ID, "id-1", 0, "first");
+    useVoiceRecordingStore.getState().addPendingCorrection(PANEL_ID, "id-2", 10, "second");
+    useVoiceRecordingStore.getState().resolvePendingCorrection(PANEL_ID, "id-1");
     const buffer = useVoiceRecordingStore.getState().panelBuffers[PANEL_ID];
     expect(buffer?.transcriptPhase).toBe("paragraph_pending_ai");
+  });
+
+  it("duplicate rawText with different IDs resolves independently", () => {
+    useVoiceRecordingStore.getState().beginSession(TARGET);
+    useVoiceRecordingStore.getState().addPendingCorrection(PANEL_ID, "id-a", 0, "start the server");
+    useVoiceRecordingStore
+      .getState()
+      .addPendingCorrection(PANEL_ID, "id-b", 20, "start the server");
+
+    // Resolve the first entry by ID — second should remain
+    useVoiceRecordingStore.getState().resolvePendingCorrection(PANEL_ID, "id-a");
+
+    const buffer = useVoiceRecordingStore.getState().panelBuffers[PANEL_ID];
+    expect(buffer?.pendingCorrections).toHaveLength(1);
+    expect(buffer?.pendingCorrections[0].id).toBe("id-b");
+    expect(buffer?.transcriptPhase).toBe("paragraph_pending_ai");
+  });
+
+  it("rebasePendingCorrections shifts segmentStart for entries after the applied position", () => {
+    useVoiceRecordingStore.getState().beginSession(TARGET);
+    useVoiceRecordingStore.getState().addPendingCorrection(PANEL_ID, "id-1", 0, "hello world");
+    useVoiceRecordingStore.getState().addPendingCorrection(PANEL_ID, "id-2", 20, "second para");
+
+    // "hello world" (11 chars) is replaced by "Hello, world!" (13 chars) → delta = +2
+    useVoiceRecordingStore.getState().rebasePendingCorrections(PANEL_ID, 0, 2);
+
+    const buffer = useVoiceRecordingStore.getState().panelBuffers[PANEL_ID];
+    // Entry at position 0 is not shifted (only entries AFTER the applied position are)
+    expect(buffer?.pendingCorrections[0].segmentStart).toBe(0);
+    // Entry at position 20 shifts to 22
+    expect(buffer?.pendingCorrections[1].segmentStart).toBe(22);
+  });
+
+  it("rebasePendingCorrections with negative delta contracts later offsets", () => {
+    useVoiceRecordingStore.getState().beginSession(TARGET);
+    useVoiceRecordingStore.getState().addPendingCorrection(PANEL_ID, "id-1", 0, "hello world");
+    useVoiceRecordingStore.getState().addPendingCorrection(PANEL_ID, "id-2", 20, "second para");
+
+    // "hello world" replaced by "hi" → delta = -9
+    useVoiceRecordingStore.getState().rebasePendingCorrections(PANEL_ID, 0, -9);
+
+    const buffer = useVoiceRecordingStore.getState().panelBuffers[PANEL_ID];
+    expect(buffer?.pendingCorrections[0].segmentStart).toBe(0);
+    expect(buffer?.pendingCorrections[1].segmentStart).toBe(11);
   });
 
   it("resetParagraphState transitions to idle when no pending corrections", () => {
@@ -87,7 +131,7 @@ describe("voiceRecordingStore — transcript phase transitions", () => {
 
   it("resetParagraphState preserves paragraph_pending_ai when corrections still in flight", () => {
     useVoiceRecordingStore.getState().beginSession(TARGET);
-    useVoiceRecordingStore.getState().addPendingCorrection(PANEL_ID, 0, "pending text");
+    useVoiceRecordingStore.getState().addPendingCorrection(PANEL_ID, "id-1", 0, "pending text");
     useVoiceRecordingStore.getState().resetParagraphState(PANEL_ID);
     const buffer = useVoiceRecordingStore.getState().panelBuffers[PANEL_ID];
     expect(buffer?.transcriptPhase).toBe("paragraph_pending_ai");
@@ -120,12 +164,12 @@ describe("voiceRecordingStore — transcript phase transitions", () => {
       "utterance_final"
     );
 
-    useVoiceRecordingStore.getState().addPendingCorrection(PANEL_ID, 0, "hello world");
+    useVoiceRecordingStore.getState().addPendingCorrection(PANEL_ID, "id-1", 0, "hello world");
     expect(useVoiceRecordingStore.getState().panelBuffers[PANEL_ID]?.transcriptPhase).toBe(
       "paragraph_pending_ai"
     );
 
-    useVoiceRecordingStore.getState().resolvePendingCorrection(PANEL_ID, "hello world");
+    useVoiceRecordingStore.getState().resolvePendingCorrection(PANEL_ID, "id-1");
     expect(useVoiceRecordingStore.getState().panelBuffers[PANEL_ID]?.transcriptPhase).toBe(
       "stable"
     );

@@ -953,15 +953,16 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
                   : null;
 
               // Flush paragraph buffer in the main process (fires correction async).
-              void window.electron.voiceInput.flushParagraph();
-
-              // Mark the paragraph as pending correction in the renderer so the
-              // accumulated text shows as gray until the correction arrives.
-              // Only add when correction is enabled — otherwise no CORRECTION_REPLACE
-              // will arrive and the text would stay dimmed permanently.
-              if (rawText && paragraphStart >= 0 && voiceStore.correctionEnabled) {
-                voiceStore.addPendingCorrection(tid, paragraphStart, rawText);
-              }
+              // The returned correctionId is the authoritative signal that a correction
+              // was queued — use it to register the pending entry rather than checking
+              // correctionEnabled locally (avoids races with API key/setting changes).
+              void window.electron.voiceInput.flushParagraph().then((flushResult) => {
+                if (flushResult.correctionId && rawText && paragraphStart >= 0) {
+                  useVoiceRecordingStore
+                    .getState()
+                    .addPendingCorrection(tid, flushResult.correctionId, paragraphStart, rawText);
+                }
+              });
 
               // Insert a newline at the end of the draft and reset paragraph state.
               const inputStore = useTerminalInputStore.getState();
