@@ -4,6 +4,10 @@ export interface SettingsSearchEntry {
   id: string;
   tab: SettingsTab;
   tabLabel: string;
+  /** Optional subtab id to activate when navigating to this result. */
+  subtab?: string;
+  /** Human-readable subtab label used in search breadcrumbs and haystack. */
+  subtabLabel?: string;
   section: string;
   title: string;
   description: string;

@@ -24,6 +24,7 @@ export function filterSettings(
         entry.description,
         entry.section,
         entry.tabLabel,
+        ...(entry.subtabLabel ? [entry.subtabLabel] : []),
         ...(entry.keywords ?? []),
       ]
         .join(" ")

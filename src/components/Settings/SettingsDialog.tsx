@@ -47,6 +47,12 @@ import { McpServerSettingsTab } from "./McpServerSettingsTab";
 import { SETTINGS_SEARCH_INDEX } from "./settingsSearchIndex";
 import { filterSettings, countMatchesPerTab, HighlightText } from "./settingsSearchUtils";
 
+export interface SettingsNavTarget {
+  tab: SettingsTab;
+  subtab?: string;
+  sectionId?: string;
+}
+
 interface SettingsDialogProps {
   isOpen: boolean;
   onClose: () => void;
@@ -77,6 +83,7 @@ export function SettingsDialog({
   onSettingsChange,
 }: SettingsDialogProps) {
   const [activeTab, setActiveTab] = useState<SettingsTab>(defaultTab ?? "general");
+  const [activeSubtabs, setActiveSubtabs] = useState<Partial<Record<SettingsTab, string>>>({});
   const [searchQuery, setSearchQuery] = useState("");
   const deferredQuery = useDeferredValue(searchQuery);
   const searchInputRef = useRef<HTMLInputElement>(null);
@@ -150,10 +157,13 @@ export function SettingsDialog({
   // deferredQuery drives the expensive filtering computation only.
   const isSearching = searchQuery.trim().length > 0;
 
-  const handleResultClick = (tab: SettingsTab, sectionId?: string) => {
+  const handleResultClick = ({ tab, subtab, sectionId }: SettingsNavTarget) => {
     setActiveTab(tab);
     setSearchQuery("");
     setScrollToSection(sectionId ?? null);
+    if (subtab !== undefined) {
+      setActiveSubtabs((prev) => ({ ...prev, [tab]: subtab }));
+    }
     searchInputRef.current?.blur();
   };
 
@@ -180,7 +190,7 @@ export function SettingsDialog({
       } else if (e.key === "Enter" && activeResultIndex >= 0) {
         e.preventDefault();
         const result = searchResults[activeResultIndex];
-        handleResultClick(result.tab, result.id);
+        handleResultClick({ tab: result.tab, subtab: result.subtab, sectionId: result.id });
       }
     }
   };
@@ -254,6 +264,7 @@ export function SettingsDialog({
     setActiveTab(tab);
     setSearchQuery("");
     setScrollToSection(null);
+    // Subtab memory is preserved per-tab — activeSubtabs retains the last selected subtab
   }, []);
 
   const tabTitles: Record<SettingsTab, string> = {
@@ -548,7 +559,11 @@ export function SettingsDialog({
                 </div>
 
                 <div className={activeTab === "agents" ? "" : "hidden"}>
-                  <AgentSettings onSettingsChange={onSettingsChange} />
+                  <AgentSettings
+                    activeSubtab={activeSubtabs["agents"] ?? null}
+                    onSubtabChange={(id) => setActiveSubtabs((prev) => ({ ...prev, agents: id }))}
+                    onSettingsChange={onSettingsChange}
+                  />
                 </div>
 
                 <div className={activeTab === "github" ? "" : "hidden"}>
@@ -664,7 +679,7 @@ function MatchBadge({ count }: { count: number }) {
 interface SearchResultsProps {
   results: ReturnType<typeof filterSettings>;
   query: string;
-  onResultClick: (tab: SettingsTab, sectionId?: string) => void;
+  onResultClick: (target: SettingsNavTarget) => void;
   activeIndex?: number;
 }
 
@@ -708,7 +723,9 @@ function SearchResults({ results, query, onResultClick, activeIndex = -1 }: Sear
         <button
           key={result.id}
           ref={index === activeIndex ? activeRef : undefined}
-          onClick={() => onResultClick(result.tab, result.id)}
+          onClick={() =>
+            onResultClick({ tab: result.tab, subtab: result.subtab, sectionId: result.id })
+          }
           className={cn(
             "group w-full text-left p-3 rounded-[var(--radius-md)] border transition-all",
             index === activeIndex
@@ -723,6 +740,12 @@ function SearchResults({ results, query, onResultClick, activeIndex = -1 }: Sear
                 <span className="text-[10px] font-medium text-canopy-accent/80 uppercase tracking-wide">
                   {result.tabLabel}
                 </span>
+                {result.subtabLabel && (
+                  <>
+                    <span className="text-[10px] text-canopy-text/30">›</span>
+                    <span className="text-[10px] text-canopy-text/50">{result.subtabLabel}</span>
+                  </>
+                )}
                 <span className="text-[10px] text-canopy-text/30">›</span>
                 <span className="text-[10px] text-canopy-text/50">{result.section}</span>
               </div>
