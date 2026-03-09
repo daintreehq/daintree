@@ -394,6 +394,23 @@ if (!gotTheLock) {
   // must not consume/delete the current session's marker before it quits.
   initializeCrashRecoveryService();
 
+  // In dev mode, nodemon/concurrently restart the Electron process by sending SIGTERM.
+  // Electron's `before-quit` event does NOT fire on SIGTERM, so cleanupOnExit() would
+  // never run and running.lock would be orphaned — triggering the crash recovery dialog
+  // on every hot reload. Register explicit handlers to clean up and exit cleanly.
+  if (!app.isPackaged) {
+    const devSignalHandler = () => {
+      // Clean up synchronously before the async quit path — the before-quit handler
+      // guards on mainWindow existence and may skip cleanupOnExit() during startup.
+      getCrashRecoveryService().cleanupOnExit();
+      // Safety net: force exit if graceful shutdown hangs (nodemon will SIGKILL anyway).
+      setTimeout(() => process.exit(0), 3000).unref();
+      app.quit();
+    };
+    process.on("SIGTERM", devSignalHandler);
+    process.on("SIGINT", devSignalHandler);
+  }
+
   app.on("second-instance", (_event, commandLine, _workingDirectory) => {
     console.log("[MAIN] Second instance detected, focusing main window");
     if (mainWindow) {
