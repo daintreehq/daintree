@@ -262,10 +262,11 @@ describe("CrashRecoveryService", () => {
   });
 
   describe("resetToFresh", () => {
-    it("resets appState to defaults", () => {
+    it("resets appState to clean workspace defaults", () => {
       storeMock.get.mockReturnValue({ autoRestoreOnCrash: false });
       const svc = makeService();
       svc.initialize();
+      storeMock.set.mockClear();
       svc.resetToFresh();
 
       expect(storeMock.set).toHaveBeenCalledWith(
@@ -278,17 +279,15 @@ describe("CrashRecoveryService", () => {
       );
     });
 
-    it("does not modify projects", () => {
+    it("only writes appState — does not touch projects or other store keys", () => {
       storeMock.get.mockReturnValue({ autoRestoreOnCrash: false });
       const svc = makeService();
       svc.initialize();
       storeMock.set.mockClear();
       svc.resetToFresh();
 
-      const projectsCalls = storeMock.set.mock.calls.filter(
-        ([key]: [string]) => key === "projects"
-      );
-      expect(projectsCalls).toHaveLength(0);
+      expect(storeMock.set).toHaveBeenCalledTimes(1);
+      expect(storeMock.set.mock.calls[0][0]).toBe("appState");
     });
   });
 
