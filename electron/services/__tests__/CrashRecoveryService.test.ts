@@ -32,6 +32,7 @@ describe("CrashRecoveryService", () => {
   let userData: string;
 
   beforeEach(() => {
+    vi.clearAllMocks();
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "crash-recovery-test-"));
     userData = tmpDir;
     appMock.getPath.mockReturnValue(userData);
@@ -275,6 +276,42 @@ describe("CrashRecoveryService", () => {
       const backupPath = path.join(userData, "backups", "session-state.json");
       const snapshot = JSON.parse(fs.readFileSync(backupPath, "utf8"));
       expect(snapshot.projects).toBeUndefined();
+    });
+
+    it("captureSessionSnapshot never reads projects key from store", () => {
+      storeMock.get.mockImplementation((key: string) => {
+        if (key === "appState") return { sidebarWidth: 400, terminals: [] };
+        if (key === "windowState") return { width: 1200, height: 800, isMaximized: false };
+        return { autoRestoreOnCrash: false };
+      });
+
+      const svc = makeService();
+      svc.initialize();
+      storeMock.get.mockClear();
+      svc.takeBackup();
+
+      const readKeys = storeMock.get.mock.calls.map((c: unknown[]) => c[0]);
+      expect(readKeys).not.toContain("projects");
+    });
+
+    it("restoreBackup returns true but applies no state for legacy-only snapshot", () => {
+      const backupDir = path.join(userData, "backups");
+      fs.mkdirSync(backupDir, { recursive: true });
+      const snapshot = {
+        capturedAt: Date.now(),
+        projects: { list: [{ id: "p1", name: "Old" }], currentProjectId: "p1" },
+      };
+      fs.writeFileSync(path.join(backupDir, "session-state.json"), JSON.stringify(snapshot));
+
+      storeMock.get.mockReturnValue({ autoRestoreOnCrash: false });
+
+      const svc = makeService();
+      svc.initialize();
+      storeMock.set.mockClear();
+      const result = svc.restoreBackup();
+
+      expect(result).toBe(true);
+      expect(storeMock.set).not.toHaveBeenCalled();
     });
   });
 
