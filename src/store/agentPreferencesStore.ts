@@ -23,6 +23,12 @@ function getSafeStorage(): StateStorage {
 
 export type DefaultAgentId = "claude" | "gemini" | "codex" | "opencode";
 
+const VALID_AGENT_IDS: readonly DefaultAgentId[] = ["claude", "gemini", "codex", "opencode"];
+
+function isValidAgentId(value: unknown): value is DefaultAgentId {
+  return typeof value === "string" && (VALID_AGENT_IDS as string[]).includes(value);
+}
+
 interface AgentPreferences {
   defaultAgent: DefaultAgentId | undefined;
 }
@@ -45,11 +51,17 @@ export const useAgentPreferencesStore = create<AgentPreferencesState>()(
       name: "canopy-agent-preferences",
       storage: createJSONStorage(() => getSafeStorage()),
       merge: (persistedState, currentState) => {
-        const persisted = persistedState as Partial<AgentPreferencesState>;
+        const persisted = persistedState as Partial<AgentPreferencesState> | null;
 
-        // If this store already has data, use it directly.
-        if (persisted?.defaultAgent !== undefined) {
-          return { ...currentState, ...persisted };
+        // persistedState is null only when the store has never been written to localStorage.
+        // If it's non-null (including an empty object from a cleared preference), trust it
+        // and skip migration so that an explicit setDefaultAgent(undefined) is not undone.
+        if (persisted !== null) {
+          const raw = persisted?.defaultAgent;
+          return {
+            ...currentState,
+            defaultAgent: isValidAgentId(raw) ? raw : undefined,
+          };
         }
 
         // One-time migration: read defaultAgent from the old toolbar preferences key.
@@ -60,11 +72,11 @@ export const useAgentPreferencesStore = create<AgentPreferencesState>()(
             const oldRaw = localStorage.getItem("canopy-toolbar-preferences");
             if (oldRaw) {
               const oldData = JSON.parse(oldRaw) as {
-                state?: { launcher?: { defaultAgent?: DefaultAgentId } };
+                state?: { launcher?: { defaultAgent?: unknown } };
               };
               const migrated = oldData?.state?.launcher?.defaultAgent;
-              if (migrated) {
-                return { ...currentState, ...persisted, defaultAgent: migrated };
+              if (isValidAgentId(migrated)) {
+                return { ...currentState, defaultAgent: migrated };
               }
             }
           }
@@ -72,7 +84,7 @@ export const useAgentPreferencesStore = create<AgentPreferencesState>()(
           // Migration failure is non-fatal — fall through to default.
         }
 
-        return { ...currentState, ...persisted };
+        return { ...currentState };
       },
     }
   )

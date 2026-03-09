@@ -15,12 +15,12 @@ describe("AgentSettings subtab derivation logic", () => {
     activeSubtab: string | null,
     agentIds: string[]
   ): { isGeneralActive: boolean; activeAgentId: string | null } {
-    const isGeneralActive = activeSubtab === GENERAL_SUBTAB_ID || activeSubtab === null;
-    const activeAgentId = isGeneralActive
-      ? null
-      : agentIds.includes(activeSubtab ?? "")
-        ? activeSubtab
-        : null;
+    // Matches the component logic: unknown subtab ids coerce to General.
+    const isGeneralActive =
+      activeSubtab === GENERAL_SUBTAB_ID ||
+      activeSubtab === null ||
+      !agentIds.includes(activeSubtab ?? "");
+    const activeAgentId = isGeneralActive ? null : activeSubtab;
     return { isGeneralActive, activeAgentId };
   }
 
@@ -46,16 +46,15 @@ describe("AgentSettings subtab derivation logic", () => {
     expect(codex.activeAgentId).toBe("codex");
   });
 
-  it("shows null agent when activeSubtab is an unknown id (non-general, non-agent)", () => {
+  it("falls back to General when activeSubtab is an unknown id (prevents blank screen)", () => {
     const result = deriveActiveState("unknown-agent", agentIds);
-    expect(result.isGeneralActive).toBe(false);
+    expect(result.isGeneralActive).toBe(true);
     expect(result.activeAgentId).toBeNull();
   });
 
-  it("is case-sensitive for agent id matching", () => {
-    // Agent IDs are lowercase; 'Claude' (capitalized) should not match 'claude'
+  it("falls back to General for unknown capitalized id (case-sensitive: 'Claude' ≠ 'claude')", () => {
     const result = deriveActiveState("Claude", agentIds);
-    expect(result.isGeneralActive).toBe(false);
+    expect(result.isGeneralActive).toBe(true);
     expect(result.activeAgentId).toBeNull();
   });
 
@@ -63,8 +62,9 @@ describe("AgentSettings subtab derivation logic", () => {
     const generalResult = deriveActiveState(null, []);
     expect(generalResult.isGeneralActive).toBe(true);
 
+    // With empty registry, "claude" is unknown → falls back to General (no blank screen)
     const claudeResult = deriveActiveState("claude", []);
-    expect(claudeResult.isGeneralActive).toBe(false);
+    expect(claudeResult.isGeneralActive).toBe(true);
     expect(claudeResult.activeAgentId).toBeNull();
   });
 });

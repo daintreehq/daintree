@@ -128,12 +128,10 @@ export function AgentSettings({
   const GENERAL_SUBTAB_ID = "general";
 
   // Derive active subtab: "general" or one of the agent ids.
-  const isGeneralActive = activeSubtab === GENERAL_SUBTAB_ID || activeSubtab === null;
-  const activeAgentId = isGeneralActive
-    ? null
-    : agentIds.includes(activeSubtab ?? "")
-      ? activeSubtab
-      : null;
+  // Unknown subtab ids (not "general", not an agent) fall back to General to avoid blank screens.
+  const isGeneralActive =
+    activeSubtab === GENERAL_SUBTAB_ID || activeSubtab === null || !agentIds.includes(activeSubtab);
+  const activeAgentId = isGeneralActive ? null : activeSubtab;
 
   const agentOptions = useMemo(
     () =>
