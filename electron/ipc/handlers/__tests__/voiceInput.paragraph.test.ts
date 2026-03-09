@@ -51,6 +51,13 @@ vi.mock("../../../services/VoiceCorrectionService.js", () => ({
   },
 }));
 
+vi.mock("../../../services/ProjectStore.js", () => ({
+  projectStore: {
+    getCurrentProject: vi.fn(() => null),
+    getCurrentProjectId: vi.fn(() => null),
+  },
+}));
+
 vi.mock("../../../store.js", () => ({
   store: {
     get: vi.fn((key: string) => {
@@ -324,6 +331,32 @@ describe("voiceInput — paragraph buffering", () => {
     // with null rawText, which is safe — renderer guards on rawText presence
     expect(boundaryMsg).toBeDefined();
     expect((boundaryMsg?.payload as { rawText: string | null }).rawText).toBeNull();
+  });
+
+  it("session start with active project captures project info into correction settings", async () => {
+    const { projectStore } = await import("../../../services/ProjectStore.js");
+    vi.mocked(projectStore.getCurrentProject).mockReturnValueOnce({
+      id: "abc123",
+      name: "My Project",
+      path: "/Users/foo/my-project",
+      emoji: "🌲",
+      lastOpened: Date.now(),
+    });
+
+    // Re-start the session so sessionProjectInfo is re-captured with the mocked project
+    const handleStart = getHandler("voice-input:start");
+    await (handleStart as (e: unknown) => Promise<unknown>)(fakeEvent);
+
+    emitTranscriptionEvent({ type: "complete", text: "test utterance" });
+
+    const handleFlush = getHandler("voice-input:flush-paragraph");
+    handleFlush(fakeEvent);
+
+    await vi.waitFor(() => {
+      expect(shared.correctionCalls).toHaveLength(1);
+      expect(shared.correctionCalls[0].settings.projectName).toBe("My Project");
+      expect(shared.correctionCalls[0].settings.projectPath).toBe("/Users/foo/my-project");
+    });
   });
 
   it("status events including finishing are forwarded to the renderer unchanged", () => {

@@ -1,5 +1,4 @@
 import Store from "electron-store";
-import type { Project } from "./types/index.js";
 import type {
   AgentSettings,
   PanelGridConfig,
@@ -86,10 +85,6 @@ export interface StoreSchema {
     panelGridConfig?: PanelGridConfig;
     mruList?: string[];
   };
-  projects: {
-    list: Project[];
-    currentProjectId?: string;
-  };
   userConfig: {
     githubToken?: string;
   };
@@ -165,10 +160,6 @@ const storeOptions = {
       recipes: [],
       hasSeenWelcome: false,
       panelGridConfig: { strategy: "automatic" as const, value: 3 },
-    },
-    projects: {
-      list: [],
-      currentProjectId: undefined,
     },
     userConfig: {},
     worktreeConfig: {

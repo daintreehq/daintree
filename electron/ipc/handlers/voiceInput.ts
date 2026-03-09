@@ -2,6 +2,7 @@ import { ipcMain, systemPreferences, shell } from "electron";
 import { spawn } from "child_process";
 import { CHANNELS } from "../channels.js";
 import { store } from "../../store.js";
+import { projectStore } from "../../services/ProjectStore.js";
 import { VoiceTranscriptionService } from "../../services/VoiceTranscriptionService.js";
 import { VoiceCorrectionService } from "../../services/VoiceCorrectionService.js";
 import type { HandlerDependencies } from "../types.js";
@@ -173,11 +174,9 @@ async function validateOpenAIKey(apiKey: string): Promise<{ valid: boolean; erro
 }
 
 function getProjectInfo(): { name?: string; path?: string } {
-  const projects = store.get("projects");
-  const currentId = projects?.currentProjectId;
-  if (!currentId) return {};
-  const project = projects?.list?.find((p) => p.id === currentId);
-  return { name: project?.name, path: project?.path };
+  const currentProject = projectStore.getCurrentProject();
+  if (!currentProject) return {};
+  return { name: currentProject.name, path: currentProject.path };
 }
 
 /**

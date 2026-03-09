@@ -31,7 +31,10 @@ fixPath();
 
 // In development, use a separate userData directory so the dev instance
 // doesn't conflict with the production app's single-instance lock or storage.
-if (!app.isPackaged) {
+// Skip when --user-data-dir is explicitly set (e.g. E2E tests) so that
+// each test run gets its own isolated data directory.
+const hasExplicitUserDataDir = process.argv.some((a) => a.startsWith("--user-data-dir"));
+if (!app.isPackaged && !hasExplicitUserDataDir) {
   app.setPath("userData", path.join(app.getPath("appData"), `${app.name}-dev`));
 }
 
