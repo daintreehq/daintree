@@ -76,11 +76,30 @@ describe("voiceRecordingStore — transcript phase transitions", () => {
     expect(buffer?.transcriptPhase).toBe("paragraph_pending_ai");
   });
 
-  it("resetParagraphState transitions to idle", () => {
+  it("resetParagraphState transitions to idle when no pending corrections", () => {
     useVoiceRecordingStore.getState().beginSession(TARGET);
     useVoiceRecordingStore.getState().appendDelta("text");
     useVoiceRecordingStore.getState().completeSegment("text");
     useVoiceRecordingStore.getState().resetParagraphState(PANEL_ID);
+    const buffer = useVoiceRecordingStore.getState().panelBuffers[PANEL_ID];
+    expect(buffer?.transcriptPhase).toBe("idle");
+  });
+
+  it("resetParagraphState preserves paragraph_pending_ai when corrections still in flight", () => {
+    useVoiceRecordingStore.getState().beginSession(TARGET);
+    useVoiceRecordingStore.getState().addPendingCorrection(PANEL_ID, 0, "pending text");
+    useVoiceRecordingStore.getState().resetParagraphState(PANEL_ID);
+    const buffer = useVoiceRecordingStore.getState().panelBuffers[PANEL_ID];
+    expect(buffer?.transcriptPhase).toBe("paragraph_pending_ai");
+  });
+
+  it("finishSession resets transcriptPhase to idle regardless of prior phase", () => {
+    useVoiceRecordingStore.getState().beginSession(TARGET);
+    useVoiceRecordingStore.getState().appendDelta("unfinished");
+    expect(useVoiceRecordingStore.getState().panelBuffers[PANEL_ID]?.transcriptPhase).toBe(
+      "interim"
+    );
+    useVoiceRecordingStore.getState().finishSession();
     const buffer = useVoiceRecordingStore.getState().panelBuffers[PANEL_ID];
     expect(buffer?.transcriptPhase).toBe("idle");
   });

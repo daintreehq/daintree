@@ -259,7 +259,12 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()((set, get) =
             ...buffer,
             completedSegments: [],
             activeParagraphStart: -1,
-            transcriptPhase: "idle" as VoiceTranscriptPhase,
+            // Preserve paragraph_pending_ai if corrections are still in flight;
+            // otherwise the paragraph boundary fully resets to idle.
+            transcriptPhase:
+              buffer.pendingCorrections.length > 0
+                ? ("paragraph_pending_ai" as VoiceTranscriptPhase)
+                : ("idle" as VoiceTranscriptPhase),
           },
         },
       };
@@ -295,6 +300,7 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()((set, get) =
             ...buffer,
             liveText: "",
             completedSegments,
+            transcriptPhase: "idle" as VoiceTranscriptPhase,
           },
         },
       };
