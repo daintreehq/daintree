@@ -197,7 +197,7 @@ export function AgentSettings({
       <div className="space-y-4">
         <div className="flex items-center justify-between">
           <div>
-            <h3 className="text-sm font-medium mb-1">CLI Agents</h3>
+            <h4 className="text-sm font-medium mb-1">CLI Agents</h4>
             <p className="text-xs text-canopy-text/50">
               Configure global agent preferences and per-agent settings
             </p>
