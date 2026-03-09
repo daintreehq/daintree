@@ -446,14 +446,20 @@ describe("voiceInput — paragraph buffering", () => {
     shared.inFlightText = "in flight words";
 
     const handleFlush = getHandler("voice-input:flush-paragraph");
-    const result = handleFlush(fakeEvent) as { rawText: string | null; correctionId: string | null };
+    const result = handleFlush(fakeEvent) as {
+      rawText: string | null;
+      correctionId: string | null;
+    };
 
     // Both the completed utterance and the in-flight text should be in the flush
     expect(result.rawText).toBe("First sentence in flight words");
 
     // Buffer is now empty
     shared.inFlightText = "";
-    const result2 = handleFlush(fakeEvent) as { rawText: string | null; correctionId: string | null };
+    const result2 = handleFlush(fakeEvent) as {
+      rawText: string | null;
+      correctionId: string | null;
+    };
     expect(result2.rawText).toBeNull();
   });
 
@@ -461,7 +467,10 @@ describe("voiceInput — paragraph buffering", () => {
     shared.inFlightText = "only delta text";
 
     const handleFlush = getHandler("voice-input:flush-paragraph");
-    const result = handleFlush(fakeEvent) as { rawText: string | null; correctionId: string | null };
+    const result = handleFlush(fakeEvent) as {
+      rawText: string | null;
+      correctionId: string | null;
+    };
 
     expect(result.rawText).toBe("only delta text");
     shared.inFlightText = "";
@@ -471,7 +480,10 @@ describe("voiceInput — paragraph buffering", () => {
     shared.inFlightText = "";
 
     const handleFlush = getHandler("voice-input:flush-paragraph");
-    const result = handleFlush(fakeEvent) as { rawText: string | null; correctionId: string | null };
+    const result = handleFlush(fakeEvent) as {
+      rawText: string | null;
+      correctionId: string | null;
+    };
 
     expect(result.rawText).toBeNull();
   });
