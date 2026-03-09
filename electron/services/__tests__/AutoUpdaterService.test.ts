@@ -167,6 +167,7 @@ describe("AutoUpdaterService", () => {
       await Promise.resolve();
 
       expect(dialogMock.showMessageBox).toHaveBeenCalledWith(
+        expect.anything(),
         expect.objectContaining({
           type: "info",
           title: "No Updates Available",
@@ -192,6 +193,7 @@ describe("AutoUpdaterService", () => {
       await Promise.resolve();
 
       expect(dialogMock.showMessageBox).toHaveBeenCalledWith(
+        expect.anything(),
         expect.objectContaining({
           type: "error",
           title: "Update Failed",
