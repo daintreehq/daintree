@@ -880,17 +880,19 @@ async function createWindow(): Promise<void> {
     webPreferences.disableBlinkFeatures = "Auxclick";
   });
 
-  // Intercept Cmd+W (macOS) / Ctrl+W (Windows/Linux) to prevent window close.
-  mainWindow.webContents.on("before-input-event", (event, input) => {
+  // Prevent Cmd+W (macOS) / Ctrl+W (Windows/Linux) from closing the window.
+  // Using setIgnoreMenuShortcuts instead of event.preventDefault() so the keypress
+  // still reaches the renderer's keybinding system (which dispatches terminal.close).
+  const wc = mainWindow.webContents;
+  wc.on("before-input-event", (_event, input) => {
     const isMac = process.platform === "darwin";
     const isCloseShortcut =
+      input.type === "keyDown" &&
       input.key.toLowerCase() === "w" &&
       ((isMac && input.meta && !input.control) || (!isMac && input.control && !input.meta)) &&
       !input.alt;
 
-    if (isCloseShortcut) {
-      event.preventDefault();
-    }
+    wc.setIgnoreMenuShortcuts(isCloseShortcut);
   });
 
   setLoggerWindow(mainWindow);
