@@ -262,14 +262,12 @@ export class CrashRecoveryService {
     return {
       capturedAt: Date.now(),
       appState: store.get("appState"),
-      projects: store.get("projects"),
       windowState: store.get("windowState"),
     };
   }
 
   private applySessionSnapshot(snapshot: SessionSnapshot): void {
     if (snapshot.appState) store.set("appState", snapshot.appState);
-    if (snapshot.projects) store.set("projects", snapshot.projects);
     if (snapshot.windowState) store.set("windowState", snapshot.windowState);
   }
 
@@ -331,7 +329,6 @@ interface MarkerFile {
 interface SessionSnapshot {
   capturedAt: number;
   appState?: unknown;
-  projects?: unknown;
   windowState?: unknown;
 }
 

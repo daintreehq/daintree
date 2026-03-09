@@ -194,7 +194,6 @@ describe("CrashRecoveryService", () => {
     it("creates backup on takeBackup", () => {
       storeMock.get.mockImplementation((key: string) => {
         if (key === "appState") return { sidebarWidth: 400, terminals: [] };
-        if (key === "projects") return { list: [], currentProjectId: undefined };
         if (key === "windowState") return { width: 1200, height: 800, isMaximized: false };
         return { autoRestoreOnCrash: false };
       });
@@ -207,6 +206,9 @@ describe("CrashRecoveryService", () => {
       expect(fs.existsSync(backupPath)).toBe(true);
       const snapshot = JSON.parse(fs.readFileSync(backupPath, "utf8"));
       expect(typeof snapshot.capturedAt).toBe("number");
+      expect(snapshot.appState).toBeDefined();
+      expect(snapshot.windowState).toBeDefined();
+      expect(snapshot.projects).toBeUndefined();
     });
 
     it("restoreBackup applies snapshot to store", () => {
@@ -215,7 +217,6 @@ describe("CrashRecoveryService", () => {
       const snapshot = {
         capturedAt: Date.now(),
         appState: { sidebarWidth: 999, terminals: [] },
-        projects: { list: [], currentProjectId: "p1" },
         windowState: { width: 1400, height: 900, isMaximized: false },
       };
       fs.writeFileSync(path.join(backupDir, "session-state.json"), JSON.stringify(snapshot));
@@ -228,13 +229,52 @@ describe("CrashRecoveryService", () => {
 
       expect(result).toBe(true);
       expect(storeMock.set).toHaveBeenCalledWith("appState", snapshot.appState);
-      expect(storeMock.set).toHaveBeenCalledWith("projects", snapshot.projects);
+      expect(storeMock.set).toHaveBeenCalledWith("windowState", snapshot.windowState);
+    });
+
+    it("restoreBackup never writes to projects store", () => {
+      const backupDir = path.join(userData, "backups");
+      fs.mkdirSync(backupDir, { recursive: true });
+      const snapshot = {
+        capturedAt: Date.now(),
+        appState: { sidebarWidth: 999, terminals: [] },
+        projects: { list: [{ id: "p1", name: "Old" }], currentProjectId: "p1" },
+        windowState: { width: 1400, height: 900, isMaximized: false },
+      };
+      fs.writeFileSync(path.join(backupDir, "session-state.json"), JSON.stringify(snapshot));
+
+      storeMock.get.mockReturnValue({ autoRestoreOnCrash: false });
+
+      const svc = makeService();
+      svc.initialize();
+      storeMock.set.mockClear();
+      svc.restoreBackup();
+
+      const setKeys = storeMock.set.mock.calls.map((c: unknown[]) => c[0]);
+      expect(setKeys).not.toContain("projects");
     });
 
     it("returns false when no backup exists", () => {
       const svc = makeService();
       svc.initialize();
       expect(svc.restoreBackup()).toBe(false);
+    });
+
+    it("snapshot does not capture projects from store", () => {
+      storeMock.get.mockImplementation((key: string) => {
+        if (key === "appState") return { sidebarWidth: 400, terminals: [] };
+        if (key === "projects") return { list: [{ id: "p1" }], currentProjectId: "p1" };
+        if (key === "windowState") return { width: 1200, height: 800, isMaximized: false };
+        return { autoRestoreOnCrash: false };
+      });
+
+      const svc = makeService();
+      svc.initialize();
+      svc.takeBackup();
+
+      const backupPath = path.join(userData, "backups", "session-state.json");
+      const snapshot = JSON.parse(fs.readFileSync(backupPath, "utf8"));
+      expect(snapshot.projects).toBeUndefined();
     });
   });
 
