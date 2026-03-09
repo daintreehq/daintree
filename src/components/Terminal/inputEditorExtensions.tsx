@@ -119,38 +119,114 @@ export const inputTheme = EditorView.theme(
       width: "14px",
       flexShrink: "0",
     },
-    ".cm-voice-pending-correction": {
-      opacity: "0.4",
+    ".cm-voice-interim": {
+      opacity: "0.55",
+      fontStyle: "italic",
       transition: "opacity 150ms ease-out",
+    },
+    ".cm-voice-pending-ai-wrapper": {
+      display: "inline",
+      width: "0",
+      position: "relative" as const,
+    },
+    ".cm-voice-pending-ai-badge": {
+      position: "absolute" as const,
+      left: "4px",
+      top: "50%",
+      transform: "translateY(-50%)",
+      fontSize: "9px",
+      lineHeight: "14px",
+      padding: "0 4px",
+      borderRadius: "3px",
+      background: "color-mix(in oklab, var(--theme-accent-primary) 20%, transparent)",
+      color: "var(--theme-accent-primary)",
+      fontWeight: "600",
+      whiteSpace: "nowrap" as const,
+      pointerEvents: "none" as const,
+      userSelect: "none" as const,
     },
   },
   { dark: true }
 );
 
-const pendingCorrectionMark = Decoration.mark({ class: "cm-voice-pending-correction" });
+// --- Interim mark field (character-level, for live delta text in interim phase) ---
 
-export const setPendingCorrectionRanges = StateEffect.define<{ from: number; to: number }[]>();
+const interimMark = Decoration.mark({ class: "cm-voice-interim" });
 
-export const pendingCorrectionField = StateField.define({
+export const setInterimRange = StateEffect.define<{ from: number; to: number } | null>();
+
+export const interimMarkField = StateField.define({
   create() {
     return Decoration.none;
   },
-  update(deco, tr) {
+  update(value, tr) {
+    // Always map through document changes first to keep offsets valid
+    if (tr.docChanged) {
+      value = value.map(tr.changes);
+    }
     for (const effect of tr.effects) {
-      if (effect.is(setPendingCorrectionRanges)) {
-        const ranges = effect.value;
-        if (ranges.length === 0) return Decoration.none;
+      if (effect.is(setInterimRange)) {
+        const range = effect.value;
+        if (!range) return Decoration.none;
         const docLen = tr.state.doc.length;
-        const marks = ranges
-          .filter((r) => r.from >= 0 && r.to <= docLen && r.from < r.to)
-          .map((r) => pendingCorrectionMark.range(r.from, r.to));
-        return marks.length > 0 ? Decoration.set(marks) : Decoration.none;
+        if (range.from >= 0 && range.to <= docLen && range.from < range.to) {
+          return Decoration.set([interimMark.range(range.from, range.to)]);
+        }
+        return Decoration.none;
       }
     }
+    return value;
+  },
+  provide: (f) => EditorView.decorations.from(f),
+});
+
+// --- Pending AI widget field (paragraph-level badge at paragraph end) ---
+
+class PendingAIWidget extends WidgetType {
+  toDOM() {
+    const wrapper = document.createElement("span");
+    wrapper.className = "cm-voice-pending-ai-wrapper";
+    const badge = document.createElement("span");
+    badge.className = "cm-voice-pending-ai-badge";
+    badge.textContent = "AI";
+    wrapper.appendChild(badge);
+    return wrapper;
+  }
+
+  eq() {
+    return true;
+  }
+
+  ignoreEvent() {
+    return true;
+  }
+}
+
+const pendingAIWidget = Decoration.widget({ widget: new PendingAIWidget(), side: 1 });
+
+export const setPendingAIPositions = StateEffect.define<number[]>();
+
+export const pendingAIField = StateField.define({
+  create() {
+    return Decoration.none;
+  },
+  update(value, tr) {
+    // Always map through document changes first to keep offsets valid
     if (tr.docChanged) {
-      return deco.map(tr.changes);
+      value = value.map(tr.changes);
     }
-    return deco;
+    for (const effect of tr.effects) {
+      if (effect.is(setPendingAIPositions)) {
+        const positions = effect.value;
+        if (positions.length === 0) return Decoration.none;
+        const docLen = tr.state.doc.length;
+        const widgets = positions
+          .filter((pos) => pos >= 0 && pos <= docLen)
+          .map((pos) => pendingAIWidget.range(pos));
+        return widgets.length > 0 ? Decoration.set(widgets, true) : Decoration.none;
+      }
+    }
+    return value;
   },
   provide: (f) => EditorView.decorations.from(f),
 });
