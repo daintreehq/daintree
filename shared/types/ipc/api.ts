@@ -737,6 +737,7 @@ export interface ElectronAPI {
     onUpdateDownloaded(callback: (info: { version: string }) => void): () => void;
     onUpdateError(callback: (info: { message: string }) => void): () => void;
     quitAndInstall(): Promise<void>;
+    checkForUpdates(): Promise<void>;
   };
   gemini: {
     /** Get Gemini config status (exists, alternate buffer enabled) */

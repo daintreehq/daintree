@@ -1126,6 +1126,10 @@ export interface IpcInvokeMap {
     args: [];
     result: void;
   };
+  "update:check-for-updates": {
+    args: [];
+    result: void;
+  };
 
   // Agent Capabilities channels
   "agent-capabilities:get-registry": {
