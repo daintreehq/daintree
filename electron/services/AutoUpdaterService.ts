@@ -41,6 +41,10 @@ class AutoUpdaterService {
   }
 
   checkForUpdatesManually(): void {
+    if (!this.initialized) {
+      console.log("[MAIN] Auto-updater not active, skipping manual check");
+      return;
+    }
     this.isManualCheck = true;
     try {
       const result = autoUpdater.checkForUpdates();
@@ -97,15 +101,15 @@ class AutoUpdaterService {
         console.log("[MAIN] Update not available");
         if (this.isManualCheck) {
           this.isManualCheck = false;
-          dialog
-            .showMessageBox({
-              type: "info",
-              title: "No Updates Available",
-              message: "You're up to date!",
-              detail: `Canopy ${app.getVersion()} is the latest version.`,
-              buttons: ["OK"],
-            })
-            .catch(() => {});
+          const win = this.window && !this.window.isDestroyed() ? this.window : null;
+          const opts = {
+            type: "info" as const,
+            title: "No Updates Available",
+            message: "You're up to date!",
+            detail: `Canopy ${app.getVersion()} is the latest version.`,
+            buttons: ["OK"],
+          };
+          (win ? dialog.showMessageBox(win, opts) : dialog.showMessageBox(opts)).catch(() => {});
         }
       };
       autoUpdater.on("update-not-available", this.notAvailableHandler);
@@ -116,18 +120,19 @@ class AutoUpdaterService {
         this.isManualCheck = false;
         this.sendToWindow(CHANNELS.UPDATE_ERROR, { message: err.message });
         if (wasManual) {
-          dialog
-            .showMessageBox({
-              type: "error",
-              title: "Update Failed",
-              message: "Unable to check for updates.",
-              detail: err.message,
-              buttons: ["Retry", "Cancel"],
-              defaultId: 0,
-              cancelId: 1,
-            })
+          const win = this.window && !this.window.isDestroyed() ? this.window : null;
+          const opts = {
+            type: "error" as const,
+            title: "Update Failed",
+            message: "Unable to check for updates.",
+            detail: err.message,
+            buttons: ["Retry", "Cancel"],
+            defaultId: 0,
+            cancelId: 1,
+          };
+          (win ? dialog.showMessageBox(win, opts) : dialog.showMessageBox(opts))
             .then(({ response }) => {
-              if (response === 0) {
+              if (response === 0 && this.initialized) {
                 this.checkForUpdatesManually();
               }
             })
