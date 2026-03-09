@@ -584,7 +584,8 @@ export interface ElectronAPI {
       cwd: string,
       branch1: string,
       branch2: string,
-      filePath?: string
+      filePath?: string,
+      useMergeBase?: boolean
     ): Promise<import("./git.js").CrossWorktreeDiffResult | string>;
     getUsername(cwd: string): Promise<string | null>;
   };
