@@ -175,7 +175,6 @@ export function ToolbarSettingsTab() {
     toggleButtonVisibility,
     setAlwaysShowDevServer,
     setDefaultSelection,
-    setDefaultAgent,
     reset,
   } = useToolbarPreferencesStore();
 
@@ -326,28 +325,6 @@ export function ToolbarSettingsTab() {
             </select>
             <p className="text-xs text-canopy-text/40">
               Default option to highlight when opening the launcher palette
-            </p>
-          </div>
-
-          <div className="space-y-2">
-            <label className="text-sm font-medium text-canopy-text block">Default agent</label>
-            <select
-              value={launcher.defaultAgent ?? ""}
-              onChange={(e) =>
-                setDefaultAgent(
-                  e.target.value ? (e.target.value as typeof launcher.defaultAgent) : undefined
-                )
-              }
-              className="w-full px-3 py-1.5 text-sm rounded-[var(--radius-md)] border border-canopy-border bg-canopy-bg text-canopy-text focus:border-canopy-accent focus:outline-none transition-colors"
-            >
-              <option value="">None (first available)</option>
-              <option value="claude">Claude</option>
-              <option value="gemini">Gemini</option>
-              <option value="codex">Codex</option>
-              <option value="opencode">OpenCode</option>
-            </select>
-            <p className="text-xs text-canopy-text/40">
-              Agent to use for automated workflows like "What's Next?"
             </p>
           </div>
         </div>
