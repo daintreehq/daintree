@@ -35,10 +35,34 @@ export class VoiceTranscriptionService {
   private utteranceSegments: string[] = [];
   /** Total text emitted as delta events for the current utterance (for incremental diffs). */
   private liveText = "";
+  /**
+   * When true, all transcript events for the current Deepgram utterance are suppressed
+   * until the next speech_final or UtteranceEnd clears this flag. Set by
+   * commitParagraphBoundary() after the in-flight utterance text has been consumed.
+   */
+  private _suppressingUtterance = false;
 
   onEvent(listener: (event: VoiceTranscriptionEvent) => void): () => void {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
+  }
+
+  /**
+   * Captures any in-flight utterance text accumulated so far (from deltas / is_final segments),
+   * resets utterance state, and suppresses subsequent Deepgram finalization events for that
+   * utterance. Call this before flushing the paragraph buffer on a manual Enter keypress so
+   * that text spoken before the paragraph break is captured into the correct paragraph and
+   * late speech_final / UtteranceEnd events cannot overwrite the committed newline.
+   *
+   * Returns the captured text (may be empty if no utterance was in flight).
+   */
+  commitParagraphBoundary(): string {
+    const text = (this.liveText || this.utteranceSegments.join(" ")).trim();
+    this.resetUtteranceState();
+    if (text) {
+      this._suppressingUtterance = true;
+    }
+    return text;
   }
 
   private emit(event: VoiceTranscriptionEvent): void {
@@ -239,6 +263,17 @@ export class VoiceTranscriptionService {
   }
 
   private handleTranscript(transcript: string, isFinal: boolean, speechFinal: boolean): void {
+    if (this._suppressingUtterance) {
+      if (speechFinal) {
+        this._suppressingUtterance = false;
+        this.resetUtteranceState();
+        if (this.isDraining) {
+          this.settleDrain();
+        }
+      }
+      return;
+    }
+
     if (speechFinal) {
       const segments = [...this.utteranceSegments, transcript].filter((s) => s.trim());
       const fullText = segments.join(" ").trim();
@@ -321,6 +356,15 @@ export class VoiceTranscriptionService {
   }
 
   private flushUtterance(): void {
+    if (this._suppressingUtterance) {
+      this._suppressingUtterance = false;
+      this.resetUtteranceState();
+      if (this.isDraining) {
+        this.settleDrain();
+      }
+      return;
+    }
+
     // Use liveText if set — it includes any pending interim transcript that has
     // not yet received is_final=true (e.g. when UtteranceEnd fires without speech_final).
     const fullText = (this.liveText || this.utteranceSegments.join(" ")).trim();
@@ -383,6 +427,7 @@ export class VoiceTranscriptionService {
     this.clearKeepAliveInterval();
     this.clearDrainTimeout();
     this.isDraining = false;
+    this._suppressingUtterance = false;
     this.resetUtteranceState();
     if (this.drainResolve) {
       this.drainResolve();
