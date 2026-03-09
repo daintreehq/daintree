@@ -1251,8 +1251,20 @@ const api: ElectronAPI = {
 
     getStagingStatus: (cwd: string) => _typedInvoke(CHANNELS.GIT_GET_STAGING_STATUS, cwd),
 
-    compareWorktrees: (cwd: string, branch1: string, branch2: string, filePath?: string) =>
-      _typedInvoke(CHANNELS.GIT_COMPARE_WORKTREES, { cwd, branch1, branch2, filePath }),
+    compareWorktrees: (
+      cwd: string,
+      branch1: string,
+      branch2: string,
+      filePath?: string,
+      useMergeBase?: boolean
+    ) =>
+      _typedInvoke(CHANNELS.GIT_COMPARE_WORKTREES, {
+        cwd,
+        branch1,
+        branch2,
+        filePath,
+        useMergeBase,
+      }),
 
     getUsername: (cwd: string) => _typedInvoke(CHANNELS.GIT_GET_USERNAME, cwd),
   },

@@ -1,19 +1,50 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { StagingStatus, GitStatus } from "@shared/types";
+import type { CrossWorktreeFile } from "@shared/types/ipc/git";
 import { cn } from "@/lib/utils";
 import { useOverlayState } from "@/hooks";
-import { X, RefreshCw, CheckSquare, Square, Loader2, AlertTriangle, GitBranch } from "lucide-react";
+import {
+  X,
+  RefreshCw,
+  CheckSquare,
+  Square,
+  Loader2,
+  AlertTriangle,
+  GitBranch,
+  FileIcon,
+} from "lucide-react";
 import { FileStageRow } from "./FileStageRow";
 import { CommitPanel } from "./CommitPanel";
 import { FileDiffModal } from "../FileDiffModal";
+import { BaseBranchDiffModal } from "./BaseBranchDiffModal";
 import { Button } from "@/components/ui/button";
 import { debounce } from "@/utils/debounce";
+import { useWorktreeDataStore } from "@/store/worktreeDataStore";
 
 interface ReviewHubProps {
   isOpen: boolean;
   worktreePath: string;
   onClose: () => void;
+}
+
+type DiffMode = "working-tree" | "base-branch";
+
+function statusLabel(status: string): { label: string; className: string } {
+  switch (status) {
+    case "A":
+      return { label: "A", className: "text-status-success" };
+    case "D":
+      return { label: "D", className: "text-status-error" };
+    case "M":
+      return { label: "M", className: "text-status-warning" };
+    case "R":
+      return { label: "R", className: "text-status-info" };
+    case "C":
+      return { label: "C", className: "text-github-merged" };
+    default:
+      return { label: status, className: "text-neutral-400" };
+  }
 }
 
 export function ReviewHub({ isOpen, worktreePath, onClose }: ReviewHubProps) {
@@ -28,12 +59,25 @@ export function ReviewHub({ isOpen, worktreePath, onClose }: ReviewHubProps) {
     path: string;
     status: GitStatus;
   } | null>(null);
+  const [diffMode, setDiffMode] = useState<DiffMode>("working-tree");
+  const [baseBranchFiles, setBaseBranchFiles] = useState<CrossWorktreeFile[] | null>(null);
+  const [baseBranchLoading, setBaseBranchLoading] = useState(false);
+  const [baseBranchError, setBaseBranchError] = useState<string | null>(null);
+  const [selectedBaseBranchFile, setSelectedBaseBranchFile] = useState<CrossWorktreeFile | null>(
+    null
+  );
   const closeButtonRef = useRef<HTMLButtonElement>(null);
   const refreshIdRef = useRef(0);
   const bgRefreshIdRef = useRef(0);
+  const baseBranchRequestRef = useRef(0);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const savedScrollTop = useRef(0);
   const debouncedBgRefreshRef = useRef<ReturnType<typeof debounce> | null>(null);
+
+  const mainBranch = useWorktreeDataStore(
+    (state) =>
+      Array.from(state.worktrees.values()).find((wt) => wt.isMainWorktree)?.branch ?? "main"
+  );
 
   useOverlayState(isOpen);
 
@@ -77,6 +121,38 @@ export function ReviewHub({ isOpen, worktreePath, onClose }: ReviewHubProps) {
     }
   }, [worktreePath]);
 
+  const fetchBaseBranch = useCallback(async () => {
+    const currentBranch = status?.currentBranch;
+    if (!currentBranch || !worktreePath) return;
+
+    const requestId = ++baseBranchRequestRef.current;
+    setBaseBranchLoading(true);
+    setBaseBranchError(null);
+    setBaseBranchFiles(null);
+    setSelectedBaseBranchFile(null);
+
+    try {
+      const res = await window.electron.git.compareWorktrees(
+        worktreePath,
+        mainBranch,
+        currentBranch,
+        undefined,
+        true
+      );
+      if (baseBranchRequestRef.current !== requestId) return;
+      if (typeof res === "string") {
+        setBaseBranchError("Unexpected result from comparison");
+        return;
+      }
+      setBaseBranchFiles(res.files);
+    } catch (err) {
+      if (baseBranchRequestRef.current !== requestId) return;
+      setBaseBranchError(err instanceof Error ? err.message : "Failed to load base branch diff");
+    } finally {
+      if (baseBranchRequestRef.current === requestId) setBaseBranchLoading(false);
+    }
+  }, [worktreePath, mainBranch, status?.currentBranch]);
+
   useEffect(() => {
     if (isOpen) {
       setActionError(null);
@@ -85,6 +161,7 @@ export function ReviewHub({ isOpen, worktreePath, onClose }: ReviewHubProps) {
     } else {
       refreshIdRef.current++;
       bgRefreshIdRef.current++;
+      baseBranchRequestRef.current++;
       setStatus(null);
       setLoadError(null);
       setActionError(null);
@@ -92,6 +169,10 @@ export function ReviewHub({ isOpen, worktreePath, onClose }: ReviewHubProps) {
       setSelectedFile(null);
       setCommitMessage("");
       setIsBackgroundRefreshing(false);
+      setDiffMode("working-tree");
+      setBaseBranchFiles(null);
+      setBaseBranchError(null);
+      setSelectedBaseBranchFile(null);
     }
   }, [isOpen, refresh]);
 
@@ -217,6 +298,16 @@ export function ReviewHub({ isOpen, worktreePath, onClose }: ReviewHubProps) {
     setSelectedFile({ path: filePath, status: fileStatus });
   }, []);
 
+  const handleDiffModeChange = useCallback(
+    (mode: DiffMode) => {
+      setDiffMode(mode);
+      if (mode === "base-branch" && baseBranchFiles === null && !baseBranchLoading) {
+        void fetchBaseBranch();
+      }
+    },
+    [baseBranchFiles, baseBranchLoading, fetchBaseBranch]
+  );
+
   const handleKeyDown = useCallback(
     (e: KeyboardEvent) => {
       if (e.key === "Escape") {
@@ -224,12 +315,14 @@ export function ReviewHub({ isOpen, worktreePath, onClose }: ReviewHubProps) {
         e.stopPropagation();
         if (selectedFile) {
           setSelectedFile(null);
+        } else if (selectedBaseBranchFile) {
+          setSelectedBaseBranchFile(null);
         } else {
           onClose();
         }
       }
     },
-    [onClose, selectedFile]
+    [onClose, selectedFile, selectedBaseBranchFile]
   );
 
   useEffect(() => {
@@ -300,24 +393,62 @@ export function ReviewHub({ isOpen, worktreePath, onClose }: ReviewHubProps) {
                 </span>
               )}
             </div>
-            <div className="flex items-center gap-1 shrink-0">
-              <button
-                onClick={() => void refresh()}
-                disabled={loading}
-                className={cn(
-                  "p-1.5 rounded transition-colors",
-                  "text-canopy-text/60 hover:text-canopy-text hover:bg-white/[0.06]",
-                  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-canopy-accent"
-                )}
-                aria-label="Refresh"
+            <div className="flex items-center gap-2 shrink-0">
+              {/* Diff mode toggle */}
+              <div
+                className="flex items-center rounded border border-white/[0.08] overflow-hidden text-[11px]"
+                role="group"
+                aria-label="Diff mode"
               >
-                <RefreshCw
+                <button
+                  onClick={() => handleDiffModeChange("working-tree")}
                   className={cn(
-                    "w-3.5 h-3.5",
-                    (loading || isBackgroundRefreshing) && "animate-spin"
+                    "px-2 py-1 transition-colors",
+                    "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-canopy-accent",
+                    diffMode === "working-tree"
+                      ? "bg-white/[0.12] text-canopy-text"
+                      : "text-canopy-text/50 hover:text-canopy-text hover:bg-white/[0.06]"
                   )}
-                />
-              </button>
+                  aria-pressed={diffMode === "working-tree"}
+                >
+                  Working tree
+                </button>
+                <button
+                  onClick={() => handleDiffModeChange("base-branch")}
+                  disabled={!status?.currentBranch}
+                  className={cn(
+                    "px-2 py-1 transition-colors border-l border-white/[0.08]",
+                    "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-canopy-accent",
+                    "disabled:opacity-40 disabled:cursor-not-allowed",
+                    diffMode === "base-branch"
+                      ? "bg-white/[0.12] text-canopy-text"
+                      : "text-canopy-text/50 hover:text-canopy-text hover:bg-white/[0.06]"
+                  )}
+                  aria-pressed={diffMode === "base-branch"}
+                >
+                  vs {mainBranch}
+                </button>
+              </div>
+
+              {diffMode === "working-tree" && (
+                <button
+                  onClick={() => void refresh()}
+                  disabled={loading}
+                  className={cn(
+                    "p-1.5 rounded transition-colors",
+                    "text-canopy-text/60 hover:text-canopy-text hover:bg-white/[0.06]",
+                    "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-canopy-accent"
+                  )}
+                  aria-label="Refresh"
+                >
+                  <RefreshCw
+                    className={cn(
+                      "w-3.5 h-3.5",
+                      (loading || isBackgroundRefreshing) && "animate-spin"
+                    )}
+                  />
+                </button>
+              )}
               <button
                 ref={closeButtonRef}
                 onClick={onClose}
@@ -353,126 +484,196 @@ export function ReviewHub({ isOpen, worktreePath, onClose }: ReviewHubProps) {
             className="flex-1 overflow-y-auto min-h-0"
             onScroll={handleScrollContainer}
           >
-            {loading && !status ? (
-              <div className="flex items-center justify-center py-12">
-                <Loader2 className="w-5 h-5 text-canopy-text/40 animate-spin" />
-              </div>
-            ) : loadError ? (
-              <div className="p-4 text-xs text-status-error">
-                <p className="mb-2">{loadError}</p>
-                <Button variant="subtle" size="sm" onClick={() => void refresh()}>
-                  Retry
-                </Button>
-              </div>
-            ) : status && totalChanges === 0 ? (
-              <div className="flex flex-col items-center justify-center py-12 text-canopy-text/50">
-                <CheckSquare className="w-8 h-8 mb-2 text-canopy-text/30" />
-                <p className="text-sm">Working tree clean</p>
-                <p className="text-xs mt-1">No changes to commit</p>
-              </div>
-            ) : status ? (
-              <div>
-                {/* Conflict warning */}
-                {hasConflicts && (
-                  <div className="px-4 py-2.5 bg-status-error/10 border-b border-divider flex items-start gap-2">
-                    <AlertTriangle className="w-3.5 h-3.5 text-status-error mt-0.5 shrink-0" />
-                    <div className="text-xs text-status-error">
-                      <span className="font-medium">
-                        {status.conflicted.length} conflicted file
-                        {status.conflicted.length !== 1 ? "s" : ""}
-                      </span>
-                      <span className="text-canopy-text/60 ml-1">
-                        — resolve conflicts before committing
-                      </span>
-                    </div>
-                  </div>
-                )}
-
-                {/* Staged section */}
-                <div className="border-b border-divider">
-                  <div className="flex items-center justify-between px-4 py-2 bg-overlay-subtle">
-                    <span className="text-[11px] font-semibold uppercase tracking-wider text-canopy-text/60">
-                      Staged
-                      <span className="ml-1.5 tabular-nums bg-white/10 rounded px-1 py-0.5 text-[10px] font-medium normal-case tracking-normal">
-                        {status.staged.length}
-                      </span>
-                    </span>
-                    {status.staged.length > 0 && (
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => void handleUnstageAll()}
-                        className="h-5 px-1.5 text-[10px]"
-                      >
-                        <Square className="w-3 h-3 mr-1" />
-                        Unstage all
-                      </Button>
-                    )}
-                  </div>
-                  {status.staged.length > 0 ? (
-                    <div className="px-2 py-1 flex flex-col gap-0.5">
-                      {status.staged.map((file) => (
-                        <FileStageRow
-                          key={`staged-${file.path}`}
-                          file={file}
-                          isStaged={true}
-                          onToggle={(path) => void handleUnstageFile(path)}
-                          onFileClick={handleFileClick}
-                        />
-                      ))}
-                    </div>
-                  ) : (
-                    <div className="px-4 py-3 text-xs text-canopy-text/40 italic">
-                      No staged files
-                    </div>
-                  )}
+            {diffMode === "base-branch" ? (
+              /* Base-branch diff panel */
+              baseBranchLoading ? (
+                <div className="flex items-center justify-center py-12">
+                  <Loader2 className="w-5 h-5 text-canopy-text/40 animate-spin" />
                 </div>
-
-                {/* Unstaged section */}
+              ) : baseBranchError ? (
+                <div className="p-4 text-xs text-status-error">
+                  <p className="mb-2">{baseBranchError}</p>
+                  <Button variant="subtle" size="sm" onClick={() => void fetchBaseBranch()}>
+                    Retry
+                  </Button>
+                </div>
+              ) : baseBranchFiles !== null && baseBranchFiles.length === 0 ? (
+                <div className="flex flex-col items-center justify-center py-12 text-canopy-text/50">
+                  <CheckSquare className="w-8 h-8 mb-2 text-canopy-text/30" />
+                  <p className="text-sm">No changes vs {mainBranch}</p>
+                  <p className="text-xs mt-1">This branch has no commits ahead of {mainBranch}</p>
+                </div>
+              ) : baseBranchFiles !== null ? (
                 <div>
-                  <div className="flex items-center justify-between px-4 py-2 bg-overlay-subtle">
+                  <div className="flex items-center justify-between px-4 py-2 bg-overlay-subtle border-b border-divider">
                     <span className="text-[11px] font-semibold uppercase tracking-wider text-canopy-text/60">
-                      Changes
+                      Changed vs {mainBranch}
                       <span className="ml-1.5 tabular-nums bg-white/10 rounded px-1 py-0.5 text-[10px] font-medium normal-case tracking-normal">
-                        {status.unstaged.length}
+                        {baseBranchFiles.length}
                       </span>
                     </span>
-                    {status.unstaged.length > 0 && (
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => void handleStageAll()}
-                        className="h-5 px-1.5 text-[10px]"
-                      >
-                        <CheckSquare className="w-3 h-3 mr-1" />
-                        Stage all
-                      </Button>
-                    )}
                   </div>
-                  {status.unstaged.length > 0 ? (
-                    <div className="px-2 py-1 flex flex-col gap-0.5">
-                      {status.unstaged.map((file) => (
-                        <FileStageRow
-                          key={`unstaged-${file.path}`}
-                          file={file}
-                          isStaged={false}
-                          onToggle={(path) => void handleStageFile(path)}
-                          onFileClick={handleFileClick}
-                        />
-                      ))}
-                    </div>
-                  ) : (
-                    <div className="px-4 py-3 text-xs text-canopy-text/40 italic">
-                      No unstaged changes
-                    </div>
-                  )}
+                  <div className="px-2 py-1 flex flex-col gap-0.5">
+                    {baseBranchFiles.map((file) => {
+                      const { label, className: statusClass } = statusLabel(file.status);
+                      return (
+                        <button
+                          key={`${file.status}:${file.path}`}
+                          onClick={() => setSelectedBaseBranchFile(file)}
+                          className={cn(
+                            "w-full flex items-center gap-2 px-2 py-1.5 rounded text-left text-xs",
+                            "hover:bg-white/[0.05] transition-colors",
+                            "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-canopy-accent"
+                          )}
+                        >
+                          <span
+                            className={cn(
+                              "font-mono font-bold shrink-0 w-3 text-center",
+                              statusClass
+                            )}
+                          >
+                            {label}
+                          </span>
+                          <FileIcon className="w-3 h-3 shrink-0 text-canopy-text/40" />
+                          <span className="text-canopy-text/80 truncate min-w-0" title={file.path}>
+                            {file.path.split("/").pop()}
+                          </span>
+                          <span className="text-canopy-text/30 truncate min-w-0 text-[10px] ml-auto pl-2">
+                            {file.path.includes("/")
+                              ? file.path.substring(0, file.path.lastIndexOf("/"))
+                              : ""}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
                 </div>
-              </div>
-            ) : null}
+              ) : null
+            ) : (
+              /* Working-tree panel */
+              <>
+                {loading && !status ? (
+                  <div className="flex items-center justify-center py-12">
+                    <Loader2 className="w-5 h-5 text-canopy-text/40 animate-spin" />
+                  </div>
+                ) : loadError ? (
+                  <div className="p-4 text-xs text-status-error">
+                    <p className="mb-2">{loadError}</p>
+                    <Button variant="subtle" size="sm" onClick={() => void refresh()}>
+                      Retry
+                    </Button>
+                  </div>
+                ) : status && totalChanges === 0 ? (
+                  <div className="flex flex-col items-center justify-center py-12 text-canopy-text/50">
+                    <CheckSquare className="w-8 h-8 mb-2 text-canopy-text/30" />
+                    <p className="text-sm">Working tree clean</p>
+                    <p className="text-xs mt-1">No changes to commit</p>
+                  </div>
+                ) : status ? (
+                  <div>
+                    {/* Conflict warning */}
+                    {hasConflicts && (
+                      <div className="px-4 py-2.5 bg-status-error/10 border-b border-divider flex items-start gap-2">
+                        <AlertTriangle className="w-3.5 h-3.5 text-status-error mt-0.5 shrink-0" />
+                        <div className="text-xs text-status-error">
+                          <span className="font-medium">
+                            {status.conflicted.length} conflicted file
+                            {status.conflicted.length !== 1 ? "s" : ""}
+                          </span>
+                          <span className="text-canopy-text/60 ml-1">
+                            — resolve conflicts before committing
+                          </span>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Staged section */}
+                    <div className="border-b border-divider">
+                      <div className="flex items-center justify-between px-4 py-2 bg-overlay-subtle">
+                        <span className="text-[11px] font-semibold uppercase tracking-wider text-canopy-text/60">
+                          Staged
+                          <span className="ml-1.5 tabular-nums bg-white/10 rounded px-1 py-0.5 text-[10px] font-medium normal-case tracking-normal">
+                            {status.staged.length}
+                          </span>
+                        </span>
+                        {status.staged.length > 0 && (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => void handleUnstageAll()}
+                            className="h-5 px-1.5 text-[10px]"
+                          >
+                            <Square className="w-3 h-3 mr-1" />
+                            Unstage all
+                          </Button>
+                        )}
+                      </div>
+                      {status.staged.length > 0 ? (
+                        <div className="px-2 py-1 flex flex-col gap-0.5">
+                          {status.staged.map((file) => (
+                            <FileStageRow
+                              key={`staged-${file.path}`}
+                              file={file}
+                              isStaged={true}
+                              onToggle={(path) => void handleUnstageFile(path)}
+                              onFileClick={handleFileClick}
+                            />
+                          ))}
+                        </div>
+                      ) : (
+                        <div className="px-4 py-3 text-xs text-canopy-text/40 italic">
+                          No staged files
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Unstaged section */}
+                    <div>
+                      <div className="flex items-center justify-between px-4 py-2 bg-overlay-subtle">
+                        <span className="text-[11px] font-semibold uppercase tracking-wider text-canopy-text/60">
+                          Changes
+                          <span className="ml-1.5 tabular-nums bg-white/10 rounded px-1 py-0.5 text-[10px] font-medium normal-case tracking-normal">
+                            {status.unstaged.length}
+                          </span>
+                        </span>
+                        {status.unstaged.length > 0 && (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => void handleStageAll()}
+                            className="h-5 px-1.5 text-[10px]"
+                          >
+                            <CheckSquare className="w-3 h-3 mr-1" />
+                            Stage all
+                          </Button>
+                        )}
+                      </div>
+                      {status.unstaged.length > 0 ? (
+                        <div className="px-2 py-1 flex flex-col gap-0.5">
+                          {status.unstaged.map((file) => (
+                            <FileStageRow
+                              key={`unstaged-${file.path}`}
+                              file={file}
+                              isStaged={false}
+                              onToggle={(path) => void handleStageFile(path)}
+                              onFileClick={handleFileClick}
+                            />
+                          ))}
+                        </div>
+                      ) : (
+                        <div className="px-4 py-3 text-xs text-canopy-text/40 italic">
+                          No unstaged changes
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                ) : null}
+              </>
+            )}
           </div>
 
-          {/* Commit panel */}
-          {status && totalChanges > 0 && !loadError && (
+          {/* Commit panel — only in working-tree mode */}
+          {diffMode === "working-tree" && status && totalChanges > 0 && !loadError && (
             <CommitPanel
               stagedCount={status.staged.length}
               isDetachedHead={status.isDetachedHead}
@@ -487,13 +688,23 @@ export function ReviewHub({ isOpen, worktreePath, onClose }: ReviewHubProps) {
         </div>
       </div>
 
-      {/* File diff modal */}
+      {/* File diff modal — working-tree mode */}
       <FileDiffModal
         isOpen={selectedFile !== null}
         filePath={selectedFile?.path ?? ""}
         status={selectedFile?.status ?? "modified"}
         worktreePath={worktreePath}
         onClose={() => setSelectedFile(null)}
+      />
+
+      {/* File diff modal — base-branch mode */}
+      <BaseBranchDiffModal
+        isOpen={selectedBaseBranchFile !== null}
+        filePath={selectedBaseBranchFile?.path ?? ""}
+        worktreePath={worktreePath}
+        mainBranch={mainBranch}
+        currentBranch={status?.currentBranch ?? "HEAD"}
+        onClose={() => setSelectedBaseBranchFile(null)}
       />
     </>,
     document.body
