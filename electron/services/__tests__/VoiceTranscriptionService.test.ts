@@ -1165,6 +1165,14 @@ describe("VoiceTranscriptionService", () => {
       );
       expect(deltas).toEqual(["hell"]); // No new delta
 
+      // Interim 3: "help me" — prefix extension of revised "help" baseline,
+      // proves the liveText baseline was correctly updated so delta emission recovers
+      conn.emit(
+        deepgramMock.LiveTranscriptionEvents.Transcript,
+        makeTranscriptEvent("help me", false, false)
+      );
+      expect(deltas).toEqual(["hell", " me"]); // " me" delta from "help" → "help me"
+
       // speech_final: "Hello world" — produces exactly one complete event
       conn.emit(
         deepgramMock.LiveTranscriptionEvents.Transcript,
@@ -1172,7 +1180,7 @@ describe("VoiceTranscriptionService", () => {
       );
 
       expect(completes).toEqual(["Hello world"]);
-      // No spurious complete for the intermediate "help"
+      // No spurious complete for the intermediate "help" or "help me"
       expect(completes).toHaveLength(1);
     });
   });
