@@ -911,6 +911,25 @@ export type VoiceTranscriptionModel = "nova-3" | "nova-2";
 
 export type VoiceCorrectionModel = "gpt-5-nano";
 
+/**
+ * Paragraphing strategy for voice dictation.
+ *
+ * "spoken-command" (default): The user says "new paragraph" to insert a paragraph break.
+ *   Deepgram Dictation mode intercepts spoken commands ("new paragraph" → \n\n, "period" → ".",
+ *   "new line" → \n, etc.) rather than transcribing them literally. Manual Enter is always
+ *   available as a secondary mechanism.
+ *
+ * "manual": Paragraph breaks are inserted only via the Enter key. No spoken commands.
+ *   Best for users who prefer keyboard control or find spoken formatting commands awkward.
+ *
+ * Note: Deepgram's `paragraphs: true` parameter was evaluated and rejected as the primary
+ * mechanism — in live streaming it populates a structured JSON object rather than injecting
+ * \n\n into the transcript text, making it unreliable as an auto-paragraphing trigger.
+ * Custom keyword detection was also evaluated and rejected in favor of Deepgram Dictation,
+ * which natively handles the "new paragraph" command in Nova-3.
+ */
+export type VoiceParagraphingStrategy = "spoken-command" | "manual";
+
 export interface VoiceInputSettings {
   enabled: boolean;
   deepgramApiKey: string;
@@ -921,6 +940,8 @@ export interface VoiceInputSettings {
   correctionEnabled: boolean;
   correctionModel: VoiceCorrectionModel;
   correctionCustomInstructions: string;
+  /** Controls how paragraph breaks are inserted during dictation. Defaults to "spoken-command". */
+  paragraphingStrategy: VoiceParagraphingStrategy;
 }
 
 export type VoiceInputStatus = "idle" | "connecting" | "recording" | "finishing" | "error";

@@ -166,7 +166,6 @@ export function TwoPaneSplitLayout({
         commitRatioIfChangedRef.current(worktreeId, pendingRatio);
       }
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- empty deps intentional: all values read via refs
   }, []);
 
   const minRatio = useMemo(() => {

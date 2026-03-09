@@ -33,6 +33,7 @@ describe("VoiceTranscriptionService integration", () => {
         correctionEnabled: false,
         correctionModel: "gpt-5-nano",
         correctionCustomInstructions: "",
+        paragraphingStrategy: "spoken-command",
       });
 
       expect(result).toEqual({ ok: true });

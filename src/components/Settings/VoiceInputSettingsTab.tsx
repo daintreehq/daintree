@@ -16,6 +16,7 @@ import {
   Sparkles,
   ChevronDown,
   ChevronUp,
+  AlignLeft,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -27,6 +28,7 @@ import type {
   VoiceInputSettings,
   MicPermissionStatus,
   VoiceTranscriptionModel,
+  VoiceParagraphingStrategy,
 } from "@shared/types";
 
 const LANGUAGES = [
@@ -69,6 +71,7 @@ const DEFAULT_SETTINGS: VoiceInputSettings = {
   correctionEnabled: false,
   correctionModel: "gpt-5-nano",
   correctionCustomInstructions: "",
+  paragraphingStrategy: "spoken-command",
 };
 
 type LoadState = "loading" | "ready" | "error";
@@ -229,6 +232,12 @@ export function VoiceInputSettingsTab() {
                 ))}
               </select>
             </SettingsRow>
+
+            <ParagraphingStrategyRow
+              value={settings.paragraphingStrategy ?? "spoken-command"}
+              language={settings.language}
+              onChange={(v) => update({ paragraphingStrategy: v })}
+            />
 
             <DictionarySection
               words={settings.customDictionary}
@@ -598,6 +607,42 @@ function MicPermissionRow({
       {statusDisplay.description && (
         <p className="text-xs text-canopy-text/40 ml-[22px]">{statusDisplay.description}</p>
       )}
+    </div>
+  );
+}
+
+// ── Paragraphing strategy row ──
+
+function ParagraphingStrategyRow({
+  value,
+  language,
+  onChange,
+}: {
+  value: VoiceParagraphingStrategy;
+  language: string;
+  onChange: (v: VoiceParagraphingStrategy) => void;
+}) {
+  const isNonEnglish = value === "spoken-command" && language !== "en";
+
+  return (
+    <div className="space-y-1">
+      <SettingsRow label="Paragraph Breaks" icon={AlignLeft}>
+        <select
+          value={value}
+          onChange={(e) => onChange(e.target.value as VoiceParagraphingStrategy)}
+          className="bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-canopy-text focus:outline-none focus:border-canopy-accent transition-colors"
+        >
+          <option value="spoken-command">Spoken commands</option>
+          <option value="manual">Manual Enter only</option>
+        </select>
+      </SettingsRow>
+      <p className="text-xs text-canopy-text/40 ml-[22px]">
+        {isNonEnglish
+          ? "Spoken commands require English. Manual Enter will be used for the selected language."
+          : value === "spoken-command"
+            ? 'Say "new paragraph" to insert a break. You can also press Enter to commit the current paragraph.'
+            : "Press Enter to commit paragraph breaks. Spoken formatting commands are disabled."}
+      </p>
     </div>
   );
 }

@@ -63,6 +63,7 @@ vi.mock("../../../store.js", () => ({
           correctionCustomInstructions: "",
           language: "en",
           transcriptionModel: "nova-3",
+          paragraphingStrategy: "spoken-command",
         };
       }
       return undefined;

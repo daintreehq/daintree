@@ -99,16 +99,30 @@ export class VoiceTranscriptionService {
         keyterms: keyterms.length,
       });
 
+      // Paragraphing strategy controls which Deepgram features are enabled:
+      //   "spoken-command" (default): Deepgram Dictation mode — the user says "new paragraph"
+      //     and Deepgram intercepts it, inserting \n\n into the transcript text. This is the
+      //     reliable live-streaming mechanism. `paragraphs: true` was evaluated and rejected
+      //     because it populates a JSON object rather than injecting \n\n into transcript text.
+      //   "manual": No dictation mode; paragraph breaks come from the Enter key only.
+      // Both modes use endpointing: 800ms (the sweet spot for dictation — 500ms fragments
+      // speech mid-thought; 1500ms feels sluggish) with utterance_end_ms: 1000ms as fallback.
+      // Note: Deepgram Dictation is documented as English-only. We only enable it when the
+      // session language is English; non-English sessions fall back to manual-Enter paragraphing.
+      const isEnglish = (settings.language || "en") === "en";
+      const isSpokenCommand =
+        (settings.paragraphingStrategy ?? "spoken-command") === "spoken-command" && isEnglish;
+
       const connection = deepgram.listen.live({
         model: settings.transcriptionModel || "nova-3",
         language: settings.language || "en",
         smart_format: true,
-        paragraphs: true,
         interim_results: true,
-        endpointing: 500,
+        endpointing: 800,
         utterance_end_ms: 1000,
         encoding: "linear16",
         sample_rate: 24000,
+        ...(isSpokenCommand ? { dictation: true, punctuate: true } : {}),
         ...(keyterms.length > 0 ? { keyterm: keyterms } : {}),
       });
 
@@ -207,9 +221,9 @@ export class VoiceTranscriptionService {
   }
 
   private emitCompleteWithParagraphDetection(text: string): void {
-    // Deepgram inserts \n\n at paragraph boundaries when paragraphs=true.
-    // Split on these boundaries so each paragraph is emitted separately,
-    // with a paragraph_boundary event between them.
+    // In spoken-command mode, Deepgram Dictation intercepts "new paragraph" and
+    // injects \n\n into the transcript text. Split on these markers so each paragraph
+    // is emitted separately with a paragraph_boundary event between them.
     // Only emit boundaries between non-empty parts to avoid spurious events
     // from leading/trailing \n\n (e.g. "para\n\n" or "\n\npara").
     const parts = text
