@@ -137,6 +137,44 @@ describe("voiceRecordingStore — transcript phase transitions", () => {
     expect(buffer?.transcriptPhase).toBe("paragraph_pending_ai");
   });
 
+  it("resetParagraphState also resets draftLengthAtSegmentStart to -1", () => {
+    useVoiceRecordingStore.getState().beginSession(TARGET);
+    useVoiceRecordingStore.getState().setDraftLengthAtSegmentStart(PANEL_ID, 42);
+    expect(
+      useVoiceRecordingStore.getState().panelBuffers[PANEL_ID]?.draftLengthAtSegmentStart
+    ).toBe(42);
+
+    useVoiceRecordingStore.getState().resetParagraphState(PANEL_ID);
+
+    expect(
+      useVoiceRecordingStore.getState().panelBuffers[PANEL_ID]?.draftLengthAtSegmentStart
+    ).toBe(-1);
+  });
+
+  it("resetParagraphState also resets liveText to empty string", () => {
+    useVoiceRecordingStore.getState().beginSession(TARGET);
+    useVoiceRecordingStore.getState().appendDelta("interim text");
+    expect(useVoiceRecordingStore.getState().panelBuffers[PANEL_ID]?.liveText).toBe("interim text");
+
+    useVoiceRecordingStore.getState().resetParagraphState(PANEL_ID);
+
+    expect(useVoiceRecordingStore.getState().panelBuffers[PANEL_ID]?.liveText).toBe("");
+  });
+
+  it("after resetParagraphState, setDraftLengthAtSegmentStart can set a new anchor", () => {
+    useVoiceRecordingStore.getState().beginSession(TARGET);
+    // Set an initial anchor (simulating delta receipt before Enter)
+    useVoiceRecordingStore.getState().setDraftLengthAtSegmentStart(PANEL_ID, 20);
+    // Enter pressed — resets segment state
+    useVoiceRecordingStore.getState().resetParagraphState(PANEL_ID);
+    // First delta after Enter should establish a new anchor
+    useVoiceRecordingStore.getState().setDraftLengthAtSegmentStart(PANEL_ID, 21); // after newline
+
+    expect(
+      useVoiceRecordingStore.getState().panelBuffers[PANEL_ID]?.draftLengthAtSegmentStart
+    ).toBe(21);
+  });
+
   it("finishSession resets transcriptPhase to idle regardless of prior phase", () => {
     useVoiceRecordingStore.getState().beginSession(TARGET);
     useVoiceRecordingStore.getState().appendDelta("unfinished");

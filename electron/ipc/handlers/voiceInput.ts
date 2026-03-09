@@ -330,6 +330,16 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
   };
 
   const handleFlushParagraph = (): { rawText: string | null } => {
+    // Capture any in-flight utterance text from the transcription service before flushing.
+    // This ensures speech spoken before the Enter keypress is included in the committed
+    // paragraph, and suppresses subsequent Deepgram finalization for that utterance so it
+    // cannot overwrite the newline the renderer inserts after this flush.
+    if (service) {
+      const inFlightText = service.commitParagraphBoundary();
+      if (inFlightText) {
+        paragraphBuffer.push(inFlightText);
+      }
+    }
     return flushParagraphBuffer(deps.mainWindow);
   };
 
