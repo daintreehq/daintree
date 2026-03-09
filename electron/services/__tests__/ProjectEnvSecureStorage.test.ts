@@ -102,6 +102,17 @@ describe("ProjectEnvSecureStorage", () => {
       expect(service.get("other-project", "B")).toBe("2");
     });
 
+    it("pre-existing destination key takes precedence over migrated value", async () => {
+      const service = await getService();
+      service.set("old-id", "API_KEY", "from-old");
+      service.set("new-id", "API_KEY", "pre-existing");
+
+      service.migrateAllForProject("old-id", "new-id");
+
+      expect(service.get("new-id", "API_KEY")).toBe("pre-existing");
+      expect(service.get("old-id", "API_KEY")).toBeUndefined();
+    });
+
     it("handles key with prefix collision gracefully", async () => {
       const service = await getService();
       service.set("proj", "KEY", "v1");

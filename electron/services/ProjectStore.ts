@@ -385,6 +385,10 @@ export class ProjectStore {
       throw new Error(`Project not found: ${projectId}`);
     }
 
+    if (projectId === this.getCurrentProjectId()) {
+      throw new Error("Cannot relocate the currently active project");
+    }
+
     const canonicalNewPath = await this.getGitRoot(newPath);
     const newProjectId = this.generateProjectId(canonicalNewPath);
 
@@ -413,6 +417,7 @@ export class ProjectStore {
       throw new Error(`Project not found: ${projectId}`);
     }
 
+    const oldProjectsSnapshot = [...projects];
     const updatedProject: Project = {
       ...projects[index],
       id: newProjectId,
@@ -423,17 +428,11 @@ export class ProjectStore {
     try {
       projects[index] = updatedProject;
       store.set("projects.list", projects);
-
-      const currentId = this.getCurrentProjectId();
-      if (currentId === projectId) {
-        store.set("projects.currentProjectId", newProjectId);
-      }
-
       projectEnvSecureStorage.migrateAllForProject(projectId, newProjectId);
-
       this.invalidateProjectStateCache(projectId);
       this.invalidateProjectStateCache(newProjectId);
     } catch (error) {
+      store.set("projects.list", oldProjectsSnapshot);
       if (newStateDir && existsSync(newStateDir)) {
         await fs.rm(newStateDir, { recursive: true, force: true }).catch(() => {});
       }
