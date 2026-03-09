@@ -1,4 +1,5 @@
 import { useState, useCallback, useRef, useEffect, useMemo } from "react";
+import { useWebviewThrottle } from "@/hooks/useWebviewThrottle";
 import { AlertTriangle, ExternalLink } from "lucide-react";
 import { useTerminalStore } from "@/store";
 import type { BrowserHistory } from "@shared/types/domain";
@@ -49,6 +50,11 @@ export function BrowserPane({
   onAddTab,
 }: BrowserPaneProps) {
   const webviewRef = useRef<Electron.WebviewTag>(null);
+  const [webviewElement, setWebviewElement] = useState<Electron.WebviewTag | null>(null);
+  const setWebviewNode = useCallback((node: Electron.WebviewTag | null) => {
+    webviewRef.current = node;
+    setWebviewElement(node);
+  }, []);
   const setBrowserUrl = useTerminalStore((state) => state.setBrowserUrl);
   const setBrowserHistory = useTerminalStore((state) => state.setBrowserHistory);
   const setBrowserZoom = useTerminalStore((state) => state.setBrowserZoom);
@@ -123,7 +129,7 @@ export function BrowserPane({
 
   // Set up webview event listeners - reattach whenever webview element changes
   useEffect(() => {
-    const webview = webviewRef.current;
+    const webview = webviewElement;
     if (!webview) {
       setIsWebviewReady(false);
       return;
@@ -228,7 +234,7 @@ export function BrowserPane({
       webview.removeEventListener("did-navigate-in-page", handleDidNavigateInPage);
       webview.removeEventListener("console-message", handleConsoleMessage);
     };
-  }, [hasValidUrl, loadError, zoomFactor, id, addConsoleMessage]);
+  }, [webviewElement, hasValidUrl, loadError, zoomFactor, id, addConsoleMessage]);
 
   const handleNavigate = useCallback(
     (url: string) => {
@@ -466,6 +472,8 @@ export function BrowserPane({
     handleToggleDevTools,
   ]);
 
+  useWebviewThrottle(id, location, webviewElement, isWebviewReady);
+
   const handleOpenExternal = useCallback(() => {
     if (!hasValidUrl) return;
     void actionService.dispatch("browser.openExternal", { terminalId: id }, { source: "user" });
@@ -601,7 +609,7 @@ export function BrowserPane({
                 </div>
               )}
               <webview
-                ref={webviewRef}
+                ref={setWebviewNode}
                 src={currentUrl}
                 partition="persist:browser"
                 className={cn(

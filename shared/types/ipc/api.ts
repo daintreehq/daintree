@@ -632,6 +632,10 @@ export interface ElectronAPI {
       callback: (action: import("../sidecar.js").SidecarNewTabMenuAction) => void
     ): () => void;
   };
+  webview: {
+    /** Freeze or unfreeze a webview's JS execution via CDP Page.setWebLifecycleState */
+    setLifecycleState(webContentsId: number, frozen: boolean): Promise<void>;
+  };
   hibernation: {
     getConfig(): Promise<HibernationConfig>;
     updateConfig(config: Partial<HibernationConfig>): Promise<HibernationConfig>;

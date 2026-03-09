@@ -22,6 +22,7 @@ import { findDevServerCandidate } from "@/utils/devServerDetection";
 import { useProjectSettings } from "@/hooks/useProjectSettings";
 import { projectClient } from "@/clients";
 import { actionService } from "@/services/ActionService";
+import { useWebviewThrottle } from "@/hooks/useWebviewThrottle";
 
 export interface DevPreviewPaneProps extends BasePanelProps {
   cwd: string;
@@ -440,6 +441,8 @@ export function DevPreviewPane({
       }
     };
   }, []);
+
+  useWebviewThrottle(id, location, webviewElement, isWebviewReady);
 
   return (
     <ContentPanel

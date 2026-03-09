@@ -403,6 +403,9 @@ const CHANNELS = {
   SIDECAR_BLUR: "sidecar:blur",
   SIDECAR_NEW_TAB_MENU_ACTION: "sidecar:new-tab-menu-action",
 
+  // Webview throttling channels
+  WEBVIEW_SET_LIFECYCLE_STATE: "webview:set-lifecycle-state",
+
   // Hibernation channels
   HIBERNATION_GET_CONFIG: "hibernation:get-config",
   HIBERNATION_UPDATE_CONFIG: "hibernation:update-config",
@@ -1340,6 +1343,12 @@ const api: ElectronAPI = {
 
     onNewTabMenuAction: (callback: (action: SidecarNewTabMenuAction) => void) =>
       _typedOn(CHANNELS.SIDECAR_NEW_TAB_MENU_ACTION, callback),
+  },
+
+  // Webview Throttling API
+  webview: {
+    setLifecycleState: (webContentsId: number, frozen: boolean): Promise<void> =>
+      ipcRenderer.invoke(CHANNELS.WEBVIEW_SET_LIFECYCLE_STATE, webContentsId, frozen),
   },
 
   // Hibernation API
