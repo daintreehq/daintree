@@ -897,6 +897,205 @@ describe("VoiceTranscriptionService", () => {
     });
   });
 
+  describe("commitParagraphBoundary — manual paragraph flush coordination", () => {
+    async function startService() {
+      const service = new VoiceTranscriptionService();
+      const events: Array<{ type: string; text?: string }> = [];
+      service.onEvent((e) => {
+        if (e.type === "complete" || e.type === "delta" || e.type === "paragraph_boundary") {
+          events.push(e);
+        }
+      });
+      const p = service.start(BASE_SETTINGS);
+      const conn = deepgramMock.instances.at(-1)!;
+      conn.emit(deepgramMock.LiveTranscriptionEvents.Open);
+      await p;
+      return { service, events, conn };
+    }
+
+    it("returns empty string when no utterance is in flight", async () => {
+      const { service } = await startService();
+      expect(service.commitParagraphBoundary()).toBe("");
+    });
+
+    it("returns accumulated delta text (liveText) and clears utterance state", async () => {
+      const { service, conn } = await startService();
+
+      // Interim delta builds liveText
+      conn.emit(
+        deepgramMock.LiveTranscriptionEvents.Transcript,
+        makeTranscriptEvent("how are", false, false)
+      );
+
+      expect(service.commitParagraphBoundary()).toBe("how are");
+
+      // Subsequent call returns empty — utterance state was cleared
+      expect(service.commitParagraphBoundary()).toBe("");
+    });
+
+    it("returns is_final accumulated text (which is_final also stores in liveText)", async () => {
+      const { service, conn } = await startService();
+
+      // is_final events accumulate in utteranceSegments AND update liveText via
+      // emitIncrementalDelta, so commitParagraphBoundary returns the liveText value.
+      conn.emit(
+        deepgramMock.LiveTranscriptionEvents.Transcript,
+        makeTranscriptEvent("hello world", true, false)
+      );
+      expect(service.commitParagraphBoundary()).toBe("hello world");
+    });
+
+    it("late speech_final after commitParagraphBoundary does not emit complete", async () => {
+      const { service, conn, events } = await startService();
+
+      // Build up some interim state
+      conn.emit(
+        deepgramMock.LiveTranscriptionEvents.Transcript,
+        makeTranscriptEvent("how are you", false, false)
+      );
+
+      service.commitParagraphBoundary();
+      events.length = 0; // Reset after capture
+
+      // Deepgram sends speech_final for the consumed utterance
+      conn.emit(
+        deepgramMock.LiveTranscriptionEvents.Transcript,
+        makeTranscriptEvent("how are you doing", true, true)
+      );
+
+      expect(events.filter((e) => e.type === "complete")).toHaveLength(0);
+    });
+
+    it("late UtteranceEnd after commitParagraphBoundary does not emit complete", async () => {
+      const { service, conn, events } = await startService();
+
+      conn.emit(
+        deepgramMock.LiveTranscriptionEvents.Transcript,
+        makeTranscriptEvent("in flight", false, false)
+      );
+
+      service.commitParagraphBoundary();
+      events.length = 0;
+
+      conn.emit(deepgramMock.LiveTranscriptionEvents.UtteranceEnd);
+
+      expect(events.filter((e) => e.type === "complete")).toHaveLength(0);
+    });
+
+    it("is_final events after commitParagraphBoundary (before speech_final) are suppressed", async () => {
+      const { service, conn, events } = await startService();
+
+      conn.emit(
+        deepgramMock.LiveTranscriptionEvents.Transcript,
+        makeTranscriptEvent("first words", false, false)
+      );
+
+      service.commitParagraphBoundary();
+      events.length = 0;
+
+      // is_final event for the suppressed utterance
+      conn.emit(
+        deepgramMock.LiveTranscriptionEvents.Transcript,
+        makeTranscriptEvent("first words extended", true, false)
+      );
+
+      expect(events.filter((e) => e.type === "delta")).toHaveLength(0);
+    });
+
+    it("suppression clears after speech_final — new utterance events flow normally", async () => {
+      const { service, conn, events } = await startService();
+
+      conn.emit(
+        deepgramMock.LiveTranscriptionEvents.Transcript,
+        makeTranscriptEvent("first paragraph", false, false)
+      );
+
+      service.commitParagraphBoundary();
+
+      // speech_final clears suppression
+      conn.emit(
+        deepgramMock.LiveTranscriptionEvents.Transcript,
+        makeTranscriptEvent("first paragraph final", true, true)
+      );
+
+      events.length = 0;
+
+      // New utterance after the boundary should flow normally
+      conn.emit(
+        deepgramMock.LiveTranscriptionEvents.Transcript,
+        makeTranscriptEvent("second paragraph", false, false)
+      );
+      conn.emit(
+        deepgramMock.LiveTranscriptionEvents.Transcript,
+        makeTranscriptEvent("second paragraph done", true, true)
+      );
+
+      expect(events.filter((e) => e.type === "delta").length).toBeGreaterThan(0);
+      expect(events.filter((e) => e.type === "complete")).toHaveLength(1);
+      expect(events.find((e) => e.type === "complete")?.text).toBe("second paragraph done");
+    });
+
+    it("suppression clears after UtteranceEnd — new utterance events flow normally", async () => {
+      const { service, conn, events } = await startService();
+
+      conn.emit(
+        deepgramMock.LiveTranscriptionEvents.Transcript,
+        makeTranscriptEvent("first", false, false)
+      );
+
+      service.commitParagraphBoundary();
+
+      conn.emit(deepgramMock.LiveTranscriptionEvents.UtteranceEnd);
+
+      events.length = 0;
+
+      // New utterance after boundary
+      conn.emit(
+        deepgramMock.LiveTranscriptionEvents.Transcript,
+        makeTranscriptEvent("after boundary", true, true)
+      );
+
+      expect(events.filter((e) => e.type === "complete")).toHaveLength(1);
+      expect(events.find((e) => e.type === "complete")?.text).toBe("after boundary");
+    });
+
+    it("rapid back-to-back commitParagraphBoundary calls are safe", async () => {
+      const { service, conn, events } = await startService();
+
+      conn.emit(
+        deepgramMock.LiveTranscriptionEvents.Transcript,
+        makeTranscriptEvent("first", false, false)
+      );
+
+      const text1 = service.commitParagraphBoundary();
+      // Second call finds no in-flight text — returns "" and does NOT clear the
+      // first call's suppression flag (only armed when non-empty text was captured).
+      const text2 = service.commitParagraphBoundary();
+
+      expect(text1).toBe("first");
+      expect(text2).toBe("");
+
+      events.length = 0;
+
+      // Late speech_final for the original utterance should still be suppressed.
+      conn.emit(
+        deepgramMock.LiveTranscriptionEvents.Transcript,
+        makeTranscriptEvent("first extended", true, true)
+      );
+
+      expect(events.filter((e) => e.type === "complete")).toHaveLength(0);
+
+      // New utterance after suppression clears flows normally.
+      conn.emit(
+        deepgramMock.LiveTranscriptionEvents.Transcript,
+        makeTranscriptEvent("new paragraph text", true, true)
+      );
+
+      expect(events.filter((e) => e.type === "complete")).toHaveLength(1);
+      expect(events.find((e) => e.type === "complete")?.text).toBe("new paragraph text");
+    });
+  });
+
   describe("status sequence regression — finishing phase", () => {
     async function startService() {
       const service = new VoiceTranscriptionService();

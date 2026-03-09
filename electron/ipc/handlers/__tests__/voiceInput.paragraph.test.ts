@@ -22,6 +22,8 @@ const shared = vi.hoisted(() => ({
   transcriptionEventCallback: null as ((e: MockTranscriptionEvent) => void) | null,
   correctionResult: "Corrected paragraph.",
   correctionCalls: [] as Array<{ text: string; settings: Record<string, unknown> }>,
+  /** Simulated in-flight utterance text returned by commitParagraphBoundary(). */
+  inFlightText: "" as string,
 }));
 
 vi.mock("../../../services/VoiceTranscriptionService.js", () => ({
@@ -38,6 +40,9 @@ vi.mock("../../../services/VoiceTranscriptionService.js", () => ({
     };
     this.sendAudioChunk = function () {};
     this.destroy = function () {};
+    this.commitParagraphBoundary = function () {
+      return shared.inFlightText ?? "";
+    };
   },
 }));
 
@@ -157,6 +162,7 @@ describe("voiceInput — paragraph buffering", () => {
     shared.transcriptionEventCallback = null;
     shared.correctionCalls = [];
     shared.correctionResult = "Corrected paragraph.";
+    shared.inFlightText = "";
 
     win = buildMainWindow();
     cleanup = registerVoiceInputHandlers({
@@ -431,5 +437,56 @@ describe("voiceInput — paragraph buffering", () => {
     // No CORRECTION_REPLACE message was sent to renderer
     const correctionMsg = win.__sent.find((m) => m.channel === "voice-input:correction-replace");
     expect(correctionMsg).toBeUndefined();
+  });
+
+  it("flushParagraph captures in-flight utterance text from service before flushing", () => {
+    // Simulate a completed utterance and a partially-spoken one still in flight
+    emitTranscriptionEvent({ type: "complete", text: "First sentence" });
+    // Simulate service having in-flight (delta) text not yet finalized
+    shared.inFlightText = "in flight words";
+
+    const handleFlush = getHandler("voice-input:flush-paragraph");
+    const result = handleFlush(fakeEvent) as { rawText: string | null; correctionId: string | null };
+
+    // Both the completed utterance and the in-flight text should be in the flush
+    expect(result.rawText).toBe("First sentence in flight words");
+
+    // Buffer is now empty
+    shared.inFlightText = "";
+    const result2 = handleFlush(fakeEvent) as { rawText: string | null; correctionId: string | null };
+    expect(result2.rawText).toBeNull();
+  });
+
+  it("flushParagraph with only in-flight text (no completed utterances) returns that text", () => {
+    shared.inFlightText = "only delta text";
+
+    const handleFlush = getHandler("voice-input:flush-paragraph");
+    const result = handleFlush(fakeEvent) as { rawText: string | null; correctionId: string | null };
+
+    expect(result.rawText).toBe("only delta text");
+    shared.inFlightText = "";
+  });
+
+  it("flushParagraph with empty in-flight text still returns null when no completed utterances", () => {
+    shared.inFlightText = "";
+
+    const handleFlush = getHandler("voice-input:flush-paragraph");
+    const result = handleFlush(fakeEvent) as { rawText: string | null; correctionId: string | null };
+
+    expect(result.rawText).toBeNull();
+  });
+
+  it("in-flight text is included in correction when flushed via Enter", async () => {
+    emitTranscriptionEvent({ type: "complete", text: "first part" });
+    shared.inFlightText = "second part";
+
+    const handleFlush = getHandler("voice-input:flush-paragraph");
+    handleFlush(fakeEvent);
+    shared.inFlightText = "";
+
+    await vi.waitFor(() => {
+      expect(shared.correctionCalls).toHaveLength(1);
+      expect(shared.correctionCalls[0].text).toBe("first part second part");
+    });
   });
 });

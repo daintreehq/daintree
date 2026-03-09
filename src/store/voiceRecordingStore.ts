@@ -280,7 +280,9 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()((set, get) =
           ...state.panelBuffers,
           [panelId]: {
             ...buffer,
+            liveText: "",
             completedSegments: [],
+            draftLengthAtSegmentStart: -1,
             activeParagraphStart: -1,
             // Preserve paragraph_pending_ai if corrections are still in flight;
             // otherwise the paragraph boundary fully resets to idle.
