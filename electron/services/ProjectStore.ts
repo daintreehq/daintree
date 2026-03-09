@@ -439,22 +439,48 @@ export class ProjectStore {
       throw new Error(`Project not found: ${projectId}`);
     }
 
-    const oldProjectsSnapshot = [...projects];
+    const oldProject = projects[index];
     const updatedProject: Project = {
-      ...projects[index],
+      ...oldProject,
       id: newProjectId,
       path: canonicalNewPath,
       status: "closed",
     };
 
+    const db = getSharedDb();
     try {
-      projects[index] = updatedProject;
-      store.set("projects.list", projects);
+      db.delete(projectsTable).where(eq(projectsTable.id, projectId)).run();
+      db.insert(projectsTable)
+        .values({
+          id: updatedProject.id,
+          path: updatedProject.path,
+          name: updatedProject.name,
+          emoji: updatedProject.emoji,
+          lastOpened: updatedProject.lastOpened,
+          color: updatedProject.color ?? null,
+          status: updatedProject.status ?? null,
+          canopyConfigPresent: updatedProject.canopyConfigPresent ?? null,
+          inRepoSettings: updatedProject.inRepoSettings ?? null,
+        })
+        .run();
       projectEnvSecureStorage.migrateAllForProject(projectId, newProjectId);
       this.invalidateProjectStateCache(projectId);
       this.invalidateProjectStateCache(newProjectId);
     } catch (error) {
-      store.set("projects.list", oldProjectsSnapshot);
+      db.delete(projectsTable).where(eq(projectsTable.id, newProjectId)).run();
+      db.insert(projectsTable)
+        .values({
+          id: oldProject.id,
+          path: oldProject.path,
+          name: oldProject.name,
+          emoji: oldProject.emoji,
+          lastOpened: oldProject.lastOpened,
+          color: oldProject.color ?? null,
+          status: oldProject.status ?? null,
+          canopyConfigPresent: oldProject.canopyConfigPresent ?? null,
+          inRepoSettings: oldProject.inRepoSettings ?? null,
+        })
+        .run();
       if (newStateDir && existsSync(newStateDir)) {
         await fs.rm(newStateDir, { recursive: true, force: true }).catch(() => {});
       }
