@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { Check, ChevronsUpDown, Search, CircleDot, X } from "lucide-react";
+import { Check, ChevronsUpDown, Search, CircleDot, X, MessageCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { githubClient } from "@/clients/githubClient";
 import type { GitHubIssue } from "@shared/types/github";
@@ -160,8 +160,17 @@ export function IssueSelector({
                 )}
               >
                 <CircleDot className="w-3 h-3 text-github-open shrink-0" />
-                <span className="truncate flex-1">
+                <span className="truncate flex-1 min-w-0">
                   #{issue.number} {issue.title}
+                </span>
+                <span className="text-xs text-muted-foreground shrink-0">
+                  {issue.author.login.length > 20
+                    ? `${issue.author.login.slice(0, 20)}…`
+                    : issue.author.login}
+                </span>
+                <span className="flex items-center gap-0.5 text-xs text-muted-foreground shrink-0">
+                  <MessageCircle className="w-3 h-3" />
+                  {issue.commentCount}
                 </span>
                 {issue.assignees.length > 0 && (
                   <div className="flex -space-x-1.5 shrink-0">
