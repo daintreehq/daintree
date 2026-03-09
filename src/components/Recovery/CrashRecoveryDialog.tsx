@@ -124,7 +124,7 @@ export function CrashRecoveryDialog({
             <div>
               <div className="text-sm font-medium text-canopy-text">Start Fresh</div>
               <div className="text-xs text-canopy-text/60 mt-0.5">
-                Reset to a clean state — panels and projects will be cleared
+                Reset to a clean layout — open panels will be cleared
               </div>
             </div>
           </button>

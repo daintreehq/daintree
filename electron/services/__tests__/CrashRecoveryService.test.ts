@@ -261,6 +261,37 @@ describe("CrashRecoveryService", () => {
     });
   });
 
+  describe("resetToFresh", () => {
+    it("resets appState to defaults", () => {
+      storeMock.get.mockReturnValue({ autoRestoreOnCrash: false });
+      const svc = makeService();
+      svc.initialize();
+      svc.resetToFresh();
+
+      expect(storeMock.set).toHaveBeenCalledWith(
+        "appState",
+        expect.objectContaining({
+          focusMode: false,
+          terminals: [],
+          hasSeenWelcome: true,
+        })
+      );
+    });
+
+    it("does not modify projects", () => {
+      storeMock.get.mockReturnValue({ autoRestoreOnCrash: false });
+      const svc = makeService();
+      svc.initialize();
+      storeMock.set.mockClear();
+      svc.resetToFresh();
+
+      const projectsCalls = storeMock.set.mock.calls.filter(
+        ([key]: [string]) => key === "projects"
+      );
+      expect(projectsCalls).toHaveLength(0);
+    });
+  });
+
   describe("cleanupOnExit", () => {
     it("deletes marker on clean exit", () => {
       const svc = makeService();

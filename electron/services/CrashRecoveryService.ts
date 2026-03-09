@@ -127,7 +127,6 @@ export class CrashRecoveryService {
         hasSeenWelcome: true,
         panelGridConfig: { strategy: "automatic" as const, value: 3 },
       });
-      store.set("projects", { list: [], currentProjectId: undefined });
       console.log("[CrashRecovery] Reset to fresh state");
     } catch (err) {
       console.error("[CrashRecovery] Failed to reset to fresh:", err);
