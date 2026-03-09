@@ -870,7 +870,6 @@ function App() {
     if (primaryAgent && availability[primaryAgent]) {
       launchAgent(primaryAgent, {
         worktreeId: activeWorktreeId ?? undefined,
-        prompt: "Hi! I'm ready to help with this project. What would you like to know?",
       }).catch(() => {});
     }
   }, [launchAgent, activeWorktreeId, availability, agentSettings]);
