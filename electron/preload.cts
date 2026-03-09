@@ -34,6 +34,7 @@ import type {
   TerminalRecipe,
   AttachIssuePayload,
   IssueAssociation,
+  VoiceInputStatus,
 } from "../shared/types/index.js";
 import type {
   AgentStateChangePayload,
@@ -1658,7 +1659,7 @@ const api: ElectronAPI = {
     onParagraphBoundary: (callback: (payload: { rawText: string | null }) => void) =>
       _typedOn(CHANNELS.VOICE_INPUT_PARAGRAPH_BOUNDARY, callback),
     onError: (callback: (error: string) => void) => _typedOn(CHANNELS.VOICE_INPUT_ERROR, callback),
-    onStatus: (callback: (status: "idle" | "connecting" | "recording" | "error") => void) =>
+    onStatus: (callback: (status: VoiceInputStatus) => void) =>
       _typedOn(CHANNELS.VOICE_INPUT_STATUS, callback),
     checkMicPermission: () => _typedInvoke(CHANNELS.VOICE_INPUT_CHECK_MIC_PERMISSION),
     requestMicPermission: () => _typedInvoke(CHANNELS.VOICE_INPUT_REQUEST_MIC_PERMISSION),

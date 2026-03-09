@@ -896,4 +896,61 @@ describe("VoiceTranscriptionService", () => {
       expect(boundaries).toHaveLength(1);
     });
   });
+
+  describe("status sequence regression — finishing phase", () => {
+    async function startService() {
+      const service = new VoiceTranscriptionService();
+      const statuses: string[] = [];
+      service.onEvent((e) => {
+        if (e.type === "status") statuses.push(e.status);
+      });
+      const p = service.start(BASE_SETTINGS);
+      const conn = deepgramMock.instances.at(-1)!;
+      conn.emit(deepgramMock.LiveTranscriptionEvents.Open);
+      await p;
+      return { service, statuses, conn };
+    }
+
+    it("emits finishing status during graceful stop before idle", async () => {
+      const { service, statuses, conn } = await startService();
+
+      const stopPromise = service.stopGracefully();
+      expect(statuses).toContain("finishing");
+
+      conn.emit(
+        deepgramMock.LiveTranscriptionEvents.Transcript,
+        makeTranscriptEvent("", true, true)
+      );
+      await stopPromise;
+
+      expect(statuses.at(-1)).toBe("idle");
+    });
+
+    it("full status sequence: connecting → recording → finishing → idle", async () => {
+      const service = new VoiceTranscriptionService();
+      const statuses: string[] = [];
+      service.onEvent((e) => {
+        if (e.type === "status") statuses.push(e.status);
+      });
+
+      const startPromise = service.start(BASE_SETTINGS);
+      expect(statuses).toContain("connecting");
+
+      const conn = deepgramMock.instances.at(-1)!;
+      conn.emit(deepgramMock.LiveTranscriptionEvents.Open);
+      await startPromise;
+      expect(statuses).toContain("recording");
+
+      const stopPromise = service.stopGracefully();
+      expect(statuses).toContain("finishing");
+
+      conn.emit(
+        deepgramMock.LiveTranscriptionEvents.Transcript,
+        makeTranscriptEvent("last words", true, true)
+      );
+      await stopPromise;
+
+      expect(statuses).toEqual(["connecting", "recording", "finishing", "idle"]);
+    });
+  });
 });

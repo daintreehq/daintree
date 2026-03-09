@@ -2,6 +2,7 @@ import { useProjectStore } from "@/store/projectStore";
 import { useTerminalStore } from "@/store/terminalStore";
 import { useTerminalInputStore } from "@/store/terminalInputStore";
 import { useVoiceRecordingStore, type VoiceRecordingTarget } from "@/store/voiceRecordingStore";
+import { isActiveVoiceSession } from "@shared/types";
 import { useWorktreeDataStore } from "@/store/worktreeDataStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { VOICE_INPUT_SETTINGS_CHANGED_EVENT } from "@/lib/voiceInputSettingsEvents";
@@ -315,8 +316,7 @@ class VoiceRecordingService {
     this.initialize();
     const state = useVoiceRecordingStore.getState();
     const isActiveTarget = state.activeTarget?.panelId === target.panelId;
-    const isActive =
-      state.status === "connecting" || state.status === "recording" || state.status === "finishing";
+    const isActive = isActiveVoiceSession(state.status);
 
     logDebug(`${LOG_PREFIX} toggle`, {
       panelId: target.panelId,
@@ -546,11 +546,7 @@ class VoiceRecordingService {
     const shouldAnnounce = options.announce ?? true;
 
     const storeState = useVoiceRecordingStore.getState();
-    const hasSession =
-      storeState.activeTarget !== null ||
-      storeState.status === "connecting" ||
-      storeState.status === "recording" ||
-      storeState.status === "finishing";
+    const hasSession = storeState.activeTarget !== null || isActiveVoiceSession(storeState.status);
 
     logDebug(`${LOG_PREFIX} stop() called`, {
       announcement,

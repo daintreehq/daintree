@@ -1,6 +1,6 @@
 import { createClient, LiveTranscriptionEvents } from "@deepgram/sdk";
 import type { ListenLiveClient, LiveTranscriptionEvent } from "@deepgram/sdk";
-import type { VoiceInputSettings } from "../../shared/types/ipc/api.js";
+import type { VoiceInputSettings, VoiceInputStatus } from "../../shared/types/ipc/api.js";
 import { logDebug, logInfo, logWarn, logError } from "../utils/logger.js";
 
 const P = "[VoiceTranscription]";
@@ -10,7 +10,7 @@ export type VoiceTranscriptionEvent =
   | { type: "complete"; text: string }
   | { type: "paragraph_boundary" }
   | { type: "error"; message: string }
-  | { type: "status"; status: "idle" | "connecting" | "recording" | "finishing" | "error" };
+  | { type: "status"; status: VoiceInputStatus };
 
 type VoiceStartResult = { ok: true } | { ok: false; error: string };
 

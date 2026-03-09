@@ -323,4 +323,16 @@ describe("voiceInput — paragraph buffering", () => {
     expect(boundaryMsg).toBeDefined();
     expect((boundaryMsg?.payload as { rawText: string | null }).rawText).toBeNull();
   });
+
+  it("status events including finishing are forwarded to the renderer unchanged", () => {
+    for (const status of ["connecting", "recording", "finishing", "idle", "error"] as const) {
+      emitTranscriptionEvent({ type: "status", status });
+    }
+
+    const statusMsgs = win.__sent.filter((m) => m.channel === "voice-input:status");
+    const statuses = statusMsgs.map((m) => m.payload as string);
+
+    expect(statuses).toContain("finishing");
+    expect(statuses).toEqual(["connecting", "recording", "finishing", "idle", "error"]);
+  });
 });
