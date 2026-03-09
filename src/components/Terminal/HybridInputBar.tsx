@@ -51,8 +51,10 @@ import {
   addFileDropChip,
   createFileDropChipTooltip,
   createFilePasteHandler,
-  pendingCorrectionField,
-  setPendingCorrectionRanges,
+  interimMarkField,
+  setInterimRange,
+  pendingAIField,
+  setPendingAIPositions,
 } from "./inputEditorExtensions";
 
 export interface HybridInputBarHandle {
@@ -520,54 +522,81 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       }
     }, [voiceDraftRevision, terminalId, currentProject?.id]);
 
-    // Sync pending-correction decorations to the editor whenever they change.
-    // This covers both:
-    // 1. Explicit pending corrections (text awaiting AI correction after transcription completes)
-    // 2. Live segment text (text currently streaming in via deltas, not yet finalized)
-    const pendingCorrections = useVoiceRecordingStore(
-      (s) => s.panelBuffers[terminalId]?.pendingCorrections
+    // Drive voice decorations from transcriptPhase — each phase gets distinct visual treatment:
+    //   interim → character-level italic mark on live delta text
+    //   paragraph_pending_ai → non-layout-shifting "AI" badge widget at paragraph end
+    //   idle / utterance_final / stable → no decorations
+    const transcriptPhase = useVoiceRecordingStore(
+      (s) => s.panelBuffers[terminalId]?.transcriptPhase ?? "idle"
     );
     const liveSegmentStart = useVoiceRecordingStore(
       (s) => s.panelBuffers[terminalId]?.draftLengthAtSegmentStart ?? -1
     );
-    const voiceCorrectionEnabled = useVoiceRecordingStore((s) => s.correctionEnabled);
-    const voiceIsActive = useVoiceRecordingStore(
-      (s) => s.status === "recording" || s.status === "connecting"
+    const pendingCorrections = useVoiceRecordingStore(
+      (s) => s.panelBuffers[terminalId]?.pendingCorrections
     );
+    const voiceCorrectionEnabled = useVoiceRecordingStore((s) => s.correctionEnabled);
 
     useEffect(() => {
       const view = editorViewRef.current;
       if (!view) return;
 
-      const ranges: { from: number; to: number }[] = [];
+      // When correction is disabled, suppress all voice decorations
+      if (!voiceCorrectionEnabled) {
+        view.dispatch({
+          effects: [setInterimRange.of(null), setPendingAIPositions.of([])],
+        });
+        return;
+      }
 
-      // Add ranges for pending corrections (finalized segments awaiting AI response)
-      if (pendingCorrections && pendingCorrections.length > 0) {
-        const doc = view.state.doc.toString();
-        for (const p of pendingCorrections) {
-          const idx = doc.indexOf(p.rawText, Math.max(0, p.segmentStart - 20));
-          if (idx >= 0) {
-            ranges.push({ from: idx, to: idx + p.rawText.length });
+      const docLen = view.state.doc.length;
+
+      switch (transcriptPhase) {
+        case "interim": {
+          // Show italic mark on live delta text
+          const interimRange =
+            liveSegmentStart >= 0 && liveSegmentStart < docLen
+              ? { from: liveSegmentStart, to: docLen }
+              : null;
+          view.dispatch({
+            effects: [setInterimRange.of(interimRange), setPendingAIPositions.of([])],
+          });
+          break;
+        }
+        case "paragraph_pending_ai": {
+          // Show "AI" badge at end of each pending correction paragraph
+          const positions: number[] = [];
+          if (pendingCorrections && pendingCorrections.length > 0) {
+            const doc = view.state.doc.toString();
+            for (const p of pendingCorrections) {
+              const idx = doc.indexOf(p.rawText, Math.max(0, p.segmentStart - 20));
+              if (idx >= 0) {
+                positions.push(idx + p.rawText.length);
+              }
+            }
           }
+          // Fallback: if no specific positions found, place at doc end
+          if (positions.length === 0 && docLen > 0) {
+            positions.push(docLen);
+          }
+          view.dispatch({
+            effects: [setInterimRange.of(null), setPendingAIPositions.of(positions)],
+          });
+          break;
         }
+        default:
+          // idle, utterance_final, stable — clear all decorations
+          view.dispatch({
+            effects: [setInterimRange.of(null), setPendingAIPositions.of([])],
+          });
+          break;
       }
-
-      // Add range for live segment (text streaming in via deltas, not yet finalized)
-      // This makes delta text appear gray immediately when correction is enabled.
-      if (voiceCorrectionEnabled && voiceIsActive && liveSegmentStart >= 0) {
-        const docLen = view.state.doc.length;
-        if (liveSegmentStart < docLen) {
-          ranges.push({ from: liveSegmentStart, to: docLen });
-        }
-      }
-
-      view.dispatch({ effects: setPendingCorrectionRanges.of(ranges) });
     }, [
-      pendingCorrections,
+      transcriptPhase,
       voiceDraftRevision,
       liveSegmentStart,
       voiceCorrectionEnabled,
-      voiceIsActive,
+      pendingCorrections,
     ]);
 
     const sendFromEditor = useCallback(() => {
@@ -1164,7 +1193,8 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
           fileDropChipTooltipCompartmentRef.current.of(
             !disabled ? createFileDropChipTooltip() : []
           ),
-          pendingCorrectionField,
+          interimMarkField,
+          pendingAIField,
           keymapCompartmentRef.current.of(keymapExtension),
           editorUpdateListener,
           domEventHandlers,

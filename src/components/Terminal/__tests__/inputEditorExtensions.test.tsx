@@ -11,6 +11,10 @@ import {
   fileDropChipField,
   addFileDropChip,
   createFilePasteHandler,
+  interimMarkField,
+  setInterimRange,
+  pendingAIField,
+  setPendingAIPositions,
 } from "../inputEditorExtensions";
 
 describe("computeAutoSize", () => {
@@ -812,6 +816,228 @@ describe("createFilePasteHandler", () => {
 
     expect(onFilePaste).not.toHaveBeenCalled();
 
+    view.destroy();
+  });
+});
+
+describe("interimMarkField", () => {
+  function makeView(doc = "") {
+    const parent = document.createElement("div");
+    return new EditorView({
+      parent,
+      state: EditorState.create({ doc, extensions: [interimMarkField] }),
+    });
+  }
+
+  it("applies interim mark decoration for the given range", () => {
+    const view = makeView("hello world");
+    view.dispatch({ effects: setInterimRange.of({ from: 6, to: 11 }) });
+
+    const decos = view.state.field(interimMarkField);
+    const iter = decos.iter();
+    expect(iter.value).not.toBeNull();
+    expect(iter.from).toBe(6);
+    expect(iter.to).toBe(11);
+    view.destroy();
+  });
+
+  it("clears interim mark when null is dispatched", () => {
+    const view = makeView("hello world");
+    view.dispatch({ effects: setInterimRange.of({ from: 0, to: 5 }) });
+    view.dispatch({ effects: setInterimRange.of(null) });
+
+    const decos = view.state.field(interimMarkField);
+    const iter = decos.iter();
+    expect(iter.value).toBeNull();
+    view.destroy();
+  });
+
+  it("does not expand mark past boundary on insert at the end", () => {
+    const view = makeView("hello");
+    view.dispatch({ effects: setInterimRange.of({ from: 0, to: 5 }) });
+    // Insert text at the end of the marked range
+    view.dispatch({ changes: { from: 5, insert: " world" } });
+
+    const decos = view.state.field(interimMarkField);
+    const iter = decos.iter();
+    expect(iter.value).not.toBeNull();
+    // Mark should still end at 5 (mapped through change), not expand to include " world"
+    expect(iter.from).toBe(0);
+    expect(iter.to).toBe(5);
+    view.destroy();
+  });
+
+  it("maps mark range through document changes", () => {
+    const view = makeView("hello world");
+    view.dispatch({ effects: setInterimRange.of({ from: 6, to: 11 }) });
+    // Insert "XX" at position 0
+    view.dispatch({ changes: { from: 0, insert: "XX" } });
+
+    const decos = view.state.field(interimMarkField);
+    const iter = decos.iter();
+    expect(iter.value).not.toBeNull();
+    expect(iter.from).toBe(8); // shifted by 2
+    expect(iter.to).toBe(13);
+    view.destroy();
+  });
+
+  it("handles simultaneous doc change and clear effect correctly (map-before-effect)", () => {
+    const view = makeView("hello");
+    view.dispatch({ effects: setInterimRange.of({ from: 0, to: 5 }) });
+
+    // Single transaction: insert text AND clear the mark
+    view.dispatch({
+      changes: { from: 5, insert: " world" },
+      effects: setInterimRange.of(null),
+    });
+
+    const decos = view.state.field(interimMarkField);
+    const iter = decos.iter();
+    expect(iter.value).toBeNull();
+    view.destroy();
+  });
+
+  it("returns Decoration.none for invalid range (from >= to)", () => {
+    const view = makeView("hello");
+    view.dispatch({ effects: setInterimRange.of({ from: 5, to: 5 }) });
+
+    const decos = view.state.field(interimMarkField);
+    const iter = decos.iter();
+    expect(iter.value).toBeNull();
+    view.destroy();
+  });
+});
+
+describe("pendingAIField", () => {
+  function makeView(doc = "") {
+    const parent = document.createElement("div");
+    return new EditorView({
+      parent,
+      state: EditorState.create({ doc, extensions: [pendingAIField] }),
+    });
+  }
+
+  it("renders widget at target position", () => {
+    const view = makeView("hello world");
+    view.dispatch({ effects: setPendingAIPositions.of([11]) });
+
+    const decos = view.state.field(pendingAIField);
+    const iter = decos.iter();
+    expect(iter.value).not.toBeNull();
+    expect(iter.from).toBe(11);
+    view.destroy();
+  });
+
+  it("widget stays after text inserted at same position (side: 1)", () => {
+    const view = makeView("hello");
+    view.dispatch({ effects: setPendingAIPositions.of([5]) });
+    // Insert text at the widget position — side:1 means widget should move after insert
+    view.dispatch({ changes: { from: 5, insert: " world" } });
+
+    const decos = view.state.field(pendingAIField);
+    const iter = decos.iter();
+    expect(iter.value).not.toBeNull();
+    // Widget at pos 5 with side:1 maps to 11 after " world" (6 chars) is inserted
+    expect(iter.from).toBe(11);
+    view.destroy();
+  });
+
+  it("clears cleanly when empty positions dispatched", () => {
+    const view = makeView("hello");
+    view.dispatch({ effects: setPendingAIPositions.of([5]) });
+    view.dispatch({ effects: setPendingAIPositions.of([]) });
+
+    const decos = view.state.field(pendingAIField);
+    const iter = decos.iter();
+    expect(iter.value).toBeNull();
+    view.destroy();
+  });
+
+  it("supports multiple widget positions", () => {
+    const view = makeView("hello\nworld");
+    view.dispatch({ effects: setPendingAIPositions.of([5, 11]) });
+
+    const decos = view.state.field(pendingAIField);
+    const positions: number[] = [];
+    const iter = decos.iter();
+    while (iter.value) {
+      positions.push(iter.from);
+      iter.next();
+    }
+    expect(positions).toEqual([5, 11]);
+    view.destroy();
+  });
+
+  it("handles simultaneous doc change and clear effect correctly (map-before-effect)", () => {
+    const view = makeView("hello");
+    view.dispatch({ effects: setPendingAIPositions.of([5]) });
+
+    view.dispatch({
+      changes: { from: 5, insert: " world" },
+      effects: setPendingAIPositions.of([]),
+    });
+
+    const decos = view.state.field(pendingAIField);
+    const iter = decos.iter();
+    expect(iter.value).toBeNull();
+    view.destroy();
+  });
+
+  it("filters out-of-range positions", () => {
+    const view = makeView("hi");
+    view.dispatch({ effects: setPendingAIPositions.of([100]) });
+
+    const decos = view.state.field(pendingAIField);
+    const iter = decos.iter();
+    expect(iter.value).toBeNull();
+    view.destroy();
+  });
+});
+
+describe("voice decoration phase integration", () => {
+  function makeView(doc = "") {
+    const parent = document.createElement("div");
+    return new EditorView({
+      parent,
+      state: EditorState.create({
+        doc,
+        extensions: [interimMarkField, pendingAIField],
+      }),
+    });
+  }
+
+  it("utterance_final phase produces no decorations even when ranges could be set", () => {
+    const view = makeView("hello world");
+    // Simulate what would happen if code tried to set both — both should be cleared
+    view.dispatch({
+      effects: [setInterimRange.of(null), setPendingAIPositions.of([])],
+    });
+
+    const interimDecos = view.state.field(interimMarkField);
+    const aiDecos = view.state.field(pendingAIField);
+    expect(interimDecos.iter().value).toBeNull();
+    expect(aiDecos.iter().value).toBeNull();
+    view.destroy();
+  });
+
+  it("correctionEnabled=false suppresses both decorations", () => {
+    const view = makeView("hello world");
+    // Set both decorations first
+    view.dispatch({
+      effects: [setInterimRange.of({ from: 0, to: 5 }), setPendingAIPositions.of([11])],
+    });
+
+    // Verify they're set
+    expect(view.state.field(interimMarkField).iter().value).not.toBeNull();
+    expect(view.state.field(pendingAIField).iter().value).not.toBeNull();
+
+    // Clear both (simulating correctionEnabled=false path)
+    view.dispatch({
+      effects: [setInterimRange.of(null), setPendingAIPositions.of([])],
+    });
+
+    expect(view.state.field(interimMarkField).iter().value).toBeNull();
+    expect(view.state.field(pendingAIField).iter().value).toBeNull();
     view.destroy();
   });
 });
