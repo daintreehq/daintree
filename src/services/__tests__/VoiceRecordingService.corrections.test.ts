@@ -482,9 +482,7 @@ describe("VoiceRecordingService — correction matching (stable ID)", () => {
     // Simulate the rebased state: uuid-second's segmentStart moved from 12 to 14
     vi.clearAllMocks();
     mockVoiceState.panelBuffers[PANEL] = {
-      pendingCorrections: [
-        { id: "uuid-second", segmentStart: 14, rawText: "hello world" },
-      ],
+      pendingCorrections: [{ id: "uuid-second", segmentStart: 14, rawText: "hello world" }],
       activeParagraphStart: 0,
     };
     mockDraftStore.drafts[PANEL] = "Hello, world!\nhello world";
