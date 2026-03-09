@@ -415,9 +415,11 @@ export function ReviewHub({ isOpen, worktreePath, onClose }: ReviewHubProps) {
                 </button>
                 <button
                   onClick={() => handleDiffModeChange("base-branch")}
+                  disabled={!status?.currentBranch}
                   className={cn(
                     "px-2 py-1 transition-colors border-l border-white/[0.08]",
                     "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-canopy-accent",
+                    "disabled:opacity-40 disabled:cursor-not-allowed",
                     diffMode === "base-branch"
                       ? "bg-white/[0.12] text-canopy-text"
                       : "text-canopy-text/50 hover:text-canopy-text hover:bg-white/[0.06]"
