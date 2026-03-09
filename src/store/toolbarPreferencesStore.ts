@@ -172,6 +172,15 @@ export const useToolbarPreferencesStore = create<ToolbarPreferencesState>()(
     {
       name: "canopy-toolbar-preferences",
       storage: createJSONStorage(() => getSafeStorage()),
+      // defaultAgent has been moved to agentPreferencesStore. Exclude it from
+      // persistence so it is no longer written back to this key.
+      partialize: (state) => ({
+        layout: state.layout,
+        launcher: {
+          alwaysShowDevServer: state.launcher.alwaysShowDevServer,
+          defaultSelection: state.launcher.defaultSelection,
+        },
+      }),
       merge: (persistedState, currentState) => {
         const persisted = persistedState as Partial<ToolbarPreferencesState>;
         return {
