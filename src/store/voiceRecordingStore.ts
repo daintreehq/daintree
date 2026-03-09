@@ -325,7 +325,10 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()((set, get) =
             ...buffer,
             liveText: "",
             completedSegments,
-            transcriptPhase: "idle" as VoiceTranscriptPhase,
+            transcriptPhase:
+              buffer.pendingCorrections.length > 0
+                ? ("paragraph_pending_ai" as VoiceTranscriptPhase)
+                : ("idle" as VoiceTranscriptPhase),
           },
         },
       };
