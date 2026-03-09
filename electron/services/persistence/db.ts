@@ -48,6 +48,23 @@ const CREATE_TABLES_SQL = `
 
   CREATE INDEX IF NOT EXISTS workflow_runs_project_idx ON workflow_runs(project_id);
   CREATE INDEX IF NOT EXISTS workflow_runs_project_status_idx ON workflow_runs(project_id, status);
+
+  CREATE TABLE IF NOT EXISTS projects (
+    id TEXT PRIMARY KEY,
+    path TEXT NOT NULL,
+    name TEXT NOT NULL,
+    emoji TEXT NOT NULL,
+    last_opened INTEGER NOT NULL,
+    color TEXT,
+    status TEXT,
+    canopy_config_present INTEGER,
+    in_repo_settings INTEGER
+  );
+
+  CREATE TABLE IF NOT EXISTS app_state (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+  );
 `;
 
 let sharedInstance: { sqlite: Database.Database; db: AppDb } | null = null;
@@ -63,6 +80,7 @@ export function getSharedDb(): AppDb {
 export function openDb(dbPath: string): { sqlite: Database.Database; db: AppDb } {
   const sqlite = new Database(dbPath);
   sqlite.pragma("journal_mode = WAL");
+  sqlite.pragma("busy_timeout = 3000");
   sqlite.exec(CREATE_TABLES_SQL);
   const db = drizzle(sqlite, { schema });
   return { sqlite, db };

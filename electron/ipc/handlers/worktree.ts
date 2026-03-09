@@ -18,6 +18,7 @@ import {
   validatePathPattern,
 } from "../../../shared/utils/pathPattern.js";
 import { GitService } from "../../services/GitService.js";
+import { projectStore } from "../../services/ProjectStore.js";
 import { logDebug, logError } from "../../utils/logger.js";
 import { fileSearchService } from "../../services/FileSearchService.js";
 import { checkRateLimit } from "../utils.js";
@@ -440,10 +441,7 @@ export function registerWorktreeHandlers(deps: HandlerDependencies): () => void 
     }
 
     // Get the current project to determine root path
-    const projectsData = store.get("projects");
-    const currentProjectId = projectsData?.currentProjectId;
-    const projectsList = projectsData?.list;
-    const project = projectsList?.find((p) => p.id === currentProjectId);
+    const project = projectStore.getCurrentProject();
 
     if (!project || !project.path) {
       throw new Error("No active project found");
@@ -618,8 +616,7 @@ export function registerWorktreeHandlers(deps: HandlerDependencies): () => void 
     }
 
     // Get current project to scope the lookup
-    const projectsData = store.get("projects");
-    const currentProjectId = projectsData?.currentProjectId;
+    const currentProjectId = projectStore.getCurrentProjectId();
     if (!currentProjectId) {
       throw new Error("No active project found");
     }
@@ -679,8 +676,7 @@ export function registerWorktreeHandlers(deps: HandlerDependencies): () => void 
     }
 
     // Get current project to scope the cleanup
-    const projectsData = store.get("projects");
-    const currentProjectId = projectsData?.currentProjectId;
+    const currentProjectId = projectStore.getCurrentProjectId();
     if (!currentProjectId) {
       throw new Error("No active project found");
     }
