@@ -40,4 +40,6 @@ export interface GitCompareWorktreesPayload {
   branch2: string;
   /** Optional specific file path to get the diff for (omit to get file list only) */
   filePath?: string;
+  /** When true, uses merge-base (three-dot) diff range for PR-accurate comparison */
+  useMergeBase?: boolean;
 }

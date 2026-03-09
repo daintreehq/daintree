@@ -277,9 +277,10 @@ ${lines.map((l) => "+" + l).join("\n")}`;
   async compareWorktrees(
     branch1: string,
     branch2: string,
-    filePath?: string
+    filePath?: string,
+    useMergeBase?: boolean
   ): Promise<CrossWorktreeDiffResult | string> {
-    const range = `${branch1}..${branch2}`;
+    const range = useMergeBase ? `${branch1}...${branch2}` : `${branch1}..${branch2}`;
 
     if (filePath) {
       // Return the unified diff for a specific file
