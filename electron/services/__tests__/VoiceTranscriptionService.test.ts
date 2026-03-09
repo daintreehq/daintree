@@ -933,17 +933,15 @@ describe("VoiceTranscriptionService", () => {
       expect(service.commitParagraphBoundary()).toBe("");
     });
 
-    it("returns accumulated is_final segments when liveText is empty", async () => {
+    it("returns is_final accumulated text (which is_final also stores in liveText)", async () => {
       const { service, conn } = await startService();
 
+      // is_final events accumulate in utteranceSegments AND update liveText via
+      // emitIncrementalDelta, so commitParagraphBoundary returns the liveText value.
       conn.emit(
         deepgramMock.LiveTranscriptionEvents.Transcript,
         makeTranscriptEvent("hello world", true, false)
       );
-      // Clear liveText by triggering a liveText-less scenario (test internal via behavior):
-      // The service accumulates utteranceSegments on is_final events.
-      // commitParagraphBoundary falls back to utteranceSegments when liveText is set.
-      // Since is_final also sets liveText via emitIncrementalDelta, liveText will be "hello world".
       expect(service.commitParagraphBoundary()).toBe("hello world");
     });
 
@@ -1062,7 +1060,7 @@ describe("VoiceTranscriptionService", () => {
     });
 
     it("rapid back-to-back commitParagraphBoundary calls are safe", async () => {
-      const { service, conn } = await startService();
+      const { service, conn, events } = await startService();
 
       conn.emit(
         deepgramMock.LiveTranscriptionEvents.Transcript,
@@ -1070,17 +1068,31 @@ describe("VoiceTranscriptionService", () => {
       );
 
       const text1 = service.commitParagraphBoundary();
-      const text2 = service.commitParagraphBoundary(); // No utterance in flight
+      // Second call finds no in-flight text — returns "" and does NOT clear the
+      // first call's suppression flag (only armed when non-empty text was captured).
+      const text2 = service.commitParagraphBoundary();
 
       expect(text1).toBe("first");
       expect(text2).toBe("");
 
-      // speech_final for the original utterance: suppression from first commit still active
-      // (second commit found no text so _suppressingUtterance stays true from first)
-      // Actually: second commit finds utteranceSegments=[], liveText="" so returns ""
-      // and does NOT set _suppressingUtterance. So first's suppression is NOT reset by second.
-      // The speech_final should still be suppressed.
-      // We verify by checking no complete is emitted.
+      events.length = 0;
+
+      // Late speech_final for the original utterance should still be suppressed.
+      conn.emit(
+        deepgramMock.LiveTranscriptionEvents.Transcript,
+        makeTranscriptEvent("first extended", true, true)
+      );
+
+      expect(events.filter((e) => e.type === "complete")).toHaveLength(0);
+
+      // New utterance after suppression clears flows normally.
+      conn.emit(
+        deepgramMock.LiveTranscriptionEvents.Transcript,
+        makeTranscriptEvent("new paragraph text", true, true)
+      );
+
+      expect(events.filter((e) => e.type === "complete")).toHaveLength(1);
+      expect(events.find((e) => e.type === "complete")?.text).toBe("new paragraph text");
     });
   });
 

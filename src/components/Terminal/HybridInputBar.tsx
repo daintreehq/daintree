@@ -947,32 +947,42 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
               const voiceStore = useVoiceRecordingStore.getState();
               const buffer = voiceStore.panelBuffers[tid];
               const paragraphStart = buffer?.activeParagraphStart ?? -1;
+              const correctionEnabled = voiceStore.correctionEnabled;
 
-              // Flush paragraph buffer in the main process (fires correction async).
-              // Use flushResult.rawText (authoritative — the exact text the main process
-              // flushed) rather than locally reconstructed completedSegments. This avoids
-              // a race where a just-completed utterance is in paragraphBuffer but not yet
-              // reflected in the renderer's completedSegments at the moment Enter is pressed.
-              void window.electron.voiceInput.flushParagraph().then((flushResult) => {
-                if (flushResult.correctionId && flushResult.rawText && paragraphStart >= 0) {
-                  useVoiceRecordingStore
-                    .getState()
-                    .addPendingCorrection(
-                      tid,
-                      flushResult.correctionId,
-                      paragraphStart,
-                      flushResult.rawText
-                    );
-                }
-              });
+              // Flush paragraph buffer in the main process. This captures any in-flight
+              // utterance text via commitParagraphBoundary() and returns the authoritative
+              // rawText that the correction service will use.
+              const flushPromise = window.electron.voiceInput.flushParagraph();
 
-              // Insert a newline at the end of the draft and reset paragraph state.
+              // Insert a newline at the end of the draft and reset paragraph state
+              // synchronously — the UI must feel immediate regardless of IPC timing.
               const inputStore = useTerminalInputStore.getState();
               const draft = inputStore.getDraftInput(tid, pid);
               inputStore.setDraftInput(tid, draft + "\n", pid);
               inputStore.bumpVoiceDraftRevision();
 
               voiceStore.resetParagraphState(tid);
+
+              // Register pending correction once we know the authoritative rawText.
+              // Only add when correction is enabled — otherwise no CORRECTION_REPLACE
+              // will arrive and the text would stay dimmed permanently.
+              if (paragraphStart >= 0 && correctionEnabled) {
+                flushPromise
+                  .then((result) => {
+                    if (result?.correctionId && result.rawText) {
+                      useVoiceRecordingStore
+                        .getState()
+                        .addPendingCorrection(
+                          tid,
+                          result.correctionId,
+                          paragraphStart,
+                          result.rawText
+                        );
+                    }
+                  })
+                  .catch(() => {});
+              }
+
               return true;
             }
 
