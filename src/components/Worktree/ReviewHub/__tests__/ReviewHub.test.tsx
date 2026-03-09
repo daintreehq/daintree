@@ -7,14 +7,38 @@ import type { ReactNode } from "react";
 import type { StagingStatus } from "@shared/types";
 import type { WorktreeState } from "@shared/types";
 
-const { getStagingStatusMock, onUpdateMock, debounceCancelSpy, compareWorktreesMock } = vi.hoisted(
-  () => ({
-    getStagingStatusMock: vi.fn(),
-    onUpdateMock: vi.fn(),
-    debounceCancelSpy: vi.fn(),
-    compareWorktreesMock: vi.fn(),
-  })
-);
+const {
+  getStagingStatusMock,
+  onUpdateMock,
+  debounceCancelSpy,
+  compareWorktreesMock,
+  openPRMock,
+  worktreeStoreData,
+} = vi.hoisted(() => ({
+  getStagingStatusMock: vi.fn(),
+  onUpdateMock: vi.fn(),
+  debounceCancelSpy: vi.fn(),
+  compareWorktreesMock: vi.fn(),
+  openPRMock: vi.fn().mockResolvedValue(undefined),
+  worktreeStoreData: {
+    current: new Map<string, Partial<WorktreeState>>([
+      [
+        "main-wt",
+        {
+          id: "main-wt",
+          path: "/home/user/project",
+          name: "main",
+          branch: "main",
+          isMainWorktree: true,
+          isCurrent: false,
+          worktreeId: "main-wt",
+          worktreeChanges: null,
+          lastActivityTimestamp: null,
+        },
+      ],
+    ]),
+  },
+}));
 
 vi.mock("@/utils/debounce", () => ({
   debounce: (fn: (...args: unknown[]) => void) => {
@@ -37,24 +61,11 @@ vi.mock("../BaseBranchDiffModal", () => ({ BaseBranchDiffModal: () => null }));
 
 vi.mock("@/store/worktreeDataStore", () => ({
   useWorktreeDataStore: (selector: (state: { worktrees: Map<string, WorktreeState> }) => unknown) =>
-    selector({
-      worktrees: new Map([
-        [
-          "main-wt",
-          {
-            id: "main-wt",
-            path: "/home/user/project",
-            name: "main",
-            branch: "main",
-            isMainWorktree: true,
-            isCurrent: false,
-            worktreeId: "main-wt",
-            worktreeChanges: null,
-            lastActivityTimestamp: null,
-          } as WorktreeState,
-        ],
-      ]),
-    }),
+    selector({ worktrees: worktreeStoreData.current as Map<string, WorktreeState> }),
+}));
+
+vi.mock("@/clients/githubClient", () => ({
+  githubClient: { openPR: openPRMock },
 }));
 
 vi.mock("@/components/ui/button", () => ({
@@ -115,6 +126,23 @@ describe("ReviewHub", () => {
   beforeEach(() => {
     capturedUpdateCallback = null;
     debounceCancelSpy.mockReset();
+
+    worktreeStoreData.current = new Map([
+      [
+        "main-wt",
+        {
+          id: "main-wt",
+          path: "/home/user/project",
+          name: "main",
+          branch: "main",
+          isMainWorktree: true,
+          isCurrent: false,
+          worktreeId: "main-wt",
+          worktreeChanges: null,
+          lastActivityTimestamp: null,
+        },
+      ],
+    ]);
 
     getStagingStatusMock.mockResolvedValue(makeStatus());
     onUpdateMock.mockImplementation((callback: (state: WorktreeState) => void) => {
@@ -514,6 +542,107 @@ describe("ReviewHub", () => {
 
       // Still only 1 call
       expect(compareWorktreesMock).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("PR state indicator", () => {
+    function setWorktreePR(prData: {
+      prNumber: number;
+      prUrl: string;
+      prState: "open" | "merged" | "closed";
+    }) {
+      const existing = worktreeStoreData.current.get("main-wt")!;
+      worktreeStoreData.current.set("main-wt", { ...existing, ...prData });
+    }
+
+    it("shows PR badge with number and state when worktree has a PR", async () => {
+      setWorktreePR({
+        prNumber: 42,
+        prUrl: "https://github.com/test/repo/pull/42",
+        prState: "open",
+      });
+      getStagingStatusMock.mockResolvedValue(makeStatus({ hasRemote: true }));
+
+      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+
+      await waitFor(() => {
+        screen.getByRole("button", { name: /open pull request #42/i });
+        screen.getByText("#42");
+        screen.getByText("open");
+      });
+    });
+
+    it("opens PR in browser when PR badge is clicked", async () => {
+      setWorktreePR({
+        prNumber: 42,
+        prUrl: "https://github.com/test/repo/pull/42",
+        prState: "open",
+      });
+      getStagingStatusMock.mockResolvedValue(makeStatus({ hasRemote: true }));
+
+      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+
+      await waitFor(() => screen.getByRole("button", { name: /open pull request #42/i }));
+      fireEvent.click(screen.getByRole("button", { name: /open pull request #42/i }));
+
+      expect(openPRMock).toHaveBeenCalledWith("https://github.com/test/repo/pull/42");
+    });
+
+    it("shows 'No PR' when branch has remote but no PR", async () => {
+      getStagingStatusMock.mockResolvedValue(makeStatus({ hasRemote: true }));
+
+      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+
+      await waitFor(() => {
+        screen.getByText("No PR");
+      });
+    });
+
+    it("does not show PR indicator when branch has no remote, even with PR data", async () => {
+      setWorktreePR({
+        prNumber: 42,
+        prUrl: "https://github.com/test/repo/pull/42",
+        prState: "open",
+      });
+      getStagingStatusMock.mockResolvedValue(makeStatus({ hasRemote: false }));
+
+      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+
+      await waitFor(() => screen.getByText("index.ts"));
+      expect(screen.queryByText("No PR")).toBeNull();
+      expect(screen.queryByText("#42")).toBeNull();
+    });
+
+    it("shows closed state for closed PRs", async () => {
+      setWorktreePR({
+        prNumber: 77,
+        prUrl: "https://github.com/test/repo/pull/77",
+        prState: "closed",
+      });
+      getStagingStatusMock.mockResolvedValue(makeStatus({ hasRemote: true }));
+
+      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+
+      await waitFor(() => {
+        screen.getByText("#77");
+        screen.getByText("closed");
+      });
+    });
+
+    it("shows merged state for merged PRs", async () => {
+      setWorktreePR({
+        prNumber: 99,
+        prUrl: "https://github.com/test/repo/pull/99",
+        prState: "merged",
+      });
+      getStagingStatusMock.mockResolvedValue(makeStatus({ hasRemote: true }));
+
+      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+
+      await waitFor(() => {
+        screen.getByText("#99");
+        screen.getByText("merged");
+      });
     });
   });
 });

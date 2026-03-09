@@ -12,6 +12,7 @@ import {
   Loader2,
   AlertTriangle,
   GitBranch,
+  GitPullRequest,
   FileIcon,
 } from "lucide-react";
 import { FileStageRow } from "./FileStageRow";
@@ -21,6 +22,8 @@ import { BaseBranchDiffModal } from "./BaseBranchDiffModal";
 import { Button } from "@/components/ui/button";
 import { debounce } from "@/utils/debounce";
 import { useWorktreeDataStore } from "@/store/worktreeDataStore";
+import { useShallow } from "zustand/react/shallow";
+import { githubClient } from "@/clients/githubClient";
 
 interface ReviewHubProps {
   isOpen: boolean;
@@ -77,6 +80,19 @@ export function ReviewHub({ isOpen, worktreePath, onClose }: ReviewHubProps) {
   const mainBranch = useWorktreeDataStore(
     (state) =>
       Array.from(state.worktrees.values()).find((wt) => wt.isMainWorktree)?.branch ?? "main"
+  );
+
+  const worktreePR = useWorktreeDataStore(
+    useShallow((state) => {
+      for (const wt of state.worktrees.values()) {
+        if (wt.path === worktreePath) {
+          return wt.prNumber
+            ? { prNumber: wt.prNumber, prUrl: wt.prUrl, prState: wt.prState }
+            : null;
+        }
+      }
+      return null;
+    })
   );
 
   useOverlayState(isOpen);
@@ -390,6 +406,55 @@ export function ReviewHub({ isOpen, worktreePath, onClose }: ReviewHubProps) {
                 >
                   <GitBranch className="w-3 h-3 shrink-0" />
                   <span className="truncate">{status.currentBranch}</span>
+                </span>
+              )}
+              {status?.hasRemote && worktreePR && worktreePR.prUrl && (
+                <button
+                  type="button"
+                  onClick={() => void githubClient.openPR(worktreePR.prUrl as string)}
+                  className={cn(
+                    "inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[11px] font-mono",
+                    "bg-white/[0.07] border border-white/[0.08]",
+                    "hover:bg-white/[0.12] transition-colors cursor-pointer",
+                    "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-canopy-accent"
+                  )}
+                  aria-label={`Open pull request #${worktreePR.prNumber} on GitHub`}
+                >
+                  <GitPullRequest
+                    className={cn(
+                      "w-3 h-3 shrink-0",
+                      worktreePR.prState === "merged"
+                        ? "text-github-merged"
+                        : worktreePR.prState === "closed"
+                          ? "text-github-closed"
+                          : "text-github-open"
+                    )}
+                  />
+                  <span
+                    className={
+                      worktreePR.prState === "merged"
+                        ? "text-github-merged"
+                        : worktreePR.prState === "closed"
+                          ? "text-github-closed"
+                          : "text-github-open"
+                    }
+                  >
+                    #{worktreePR.prNumber}
+                  </span>
+                  <span className="text-canopy-text/40">·</span>
+                  <span className="text-canopy-text/60">
+                    {worktreePR.prState === "merged"
+                      ? "merged"
+                      : worktreePR.prState === "closed"
+                        ? "closed"
+                        : "open"}
+                  </span>
+                </button>
+              )}
+              {status?.hasRemote && !worktreePR && (
+                <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-white/[0.07] border border-white/[0.08] text-[11px] text-canopy-text/40">
+                  <GitPullRequest className="w-3 h-3 shrink-0" />
+                  <span>No PR</span>
                 </span>
               )}
             </div>
