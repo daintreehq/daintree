@@ -241,6 +241,8 @@ export const CHANNELS = {
   HIBERNATION_GET_CONFIG: "hibernation:get-config",
   HIBERNATION_UPDATE_CONFIG: "hibernation:update-config",
 
+  WEBVIEW_SET_LIFECYCLE_STATE: "webview:set-lifecycle-state",
+
   SYSTEM_SLEEP_GET_METRICS: "system-sleep:get-metrics",
   SYSTEM_SLEEP_GET_AWAKE_TIME: "system-sleep:get-awake-time",
   SYSTEM_SLEEP_RESET: "system-sleep:reset",
