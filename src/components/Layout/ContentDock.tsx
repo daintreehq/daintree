@@ -42,7 +42,7 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
   const activeWorktreeId = useWorktreeSelectionStore((state) => state.activeWorktreeId);
 
   const trashedTerminals = useTerminalStore(useShallow((state) => state.trashedTerminals));
-  const terminals = useTerminalStore((state) => state.terminals);
+  const terminals = useTerminalStore(useShallow((state) => state.terminals));
   const getTabGroups = useTerminalStore((state) => state.getTabGroups);
   const getTabGroupPanels = useTerminalStore((state) => state.getTabGroupPanels);
   const openDockTerminal = useTerminalStore((state) => state.openDockTerminal);
