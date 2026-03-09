@@ -13,23 +13,15 @@ describe("SettingsSubtabBar", () => {
   it("renders all subtab buttons", () => {
     const onChange = vi.fn();
     render(<SettingsSubtabBar subtabs={SUBTABS} activeId="claude" onChange={onChange} />);
-    expect(screen.getByRole("tab", { name: "Claude" })).toBeTruthy();
-    expect(screen.getByRole("tab", { name: "Gemini" })).toBeTruthy();
-    expect(screen.getByRole("tab", { name: "Codex" })).toBeTruthy();
-  });
-
-  it("marks the active tab as selected", () => {
-    render(<SettingsSubtabBar subtabs={SUBTABS} activeId="gemini" onChange={vi.fn()} />);
-    const geminiBtn = screen.getByRole("tab", { name: "Gemini" });
-    expect(geminiBtn.getAttribute("aria-selected")).toBe("true");
-    const claudeBtn = screen.getByRole("tab", { name: "Claude" });
-    expect(claudeBtn.getAttribute("aria-selected")).toBe("false");
+    expect(screen.getByText("Claude")).toBeTruthy();
+    expect(screen.getByText("Gemini")).toBeTruthy();
+    expect(screen.getByText("Codex")).toBeTruthy();
   });
 
   it("calls onChange with the clicked subtab id", () => {
     const onChange = vi.fn();
     render(<SettingsSubtabBar subtabs={SUBTABS} activeId="claude" onChange={onChange} />);
-    fireEvent.click(screen.getByRole("tab", { name: "Gemini" }));
+    fireEvent.click(screen.getByText("Gemini").closest("button")!);
     expect(onChange).toHaveBeenCalledWith("gemini");
     expect(onChange).toHaveBeenCalledTimes(1);
   });
@@ -43,8 +35,19 @@ describe("SettingsSubtabBar", () => {
       { id: "b", label: "B", renderIcon },
     ];
     render(<SettingsSubtabBar subtabs={subtabs} activeId="a" onChange={vi.fn()} />);
+    // renderIcon called once per subtab; only one active at a time
     expect(screen.getAllByTestId("active-icon")).toHaveLength(1);
     expect(screen.getAllByTestId("inactive-icon")).toHaveLength(1);
+  });
+
+  it("does not render trailing wrapper when trailing is undefined", () => {
+    const subtabs = [{ id: "a", label: "A" }];
+    const { container } = render(
+      <SettingsSubtabBar subtabs={subtabs} activeId="a" onChange={vi.fn()} />
+    );
+    // No span wrapper for trailing content when trailing is undefined
+    const button = container.querySelector("button")!;
+    expect(button.querySelector(".flex.items-center.gap-1")).toBeNull();
   });
 
   it("renders trailing content", () => {
@@ -59,8 +62,21 @@ describe("SettingsSubtabBar", () => {
     expect(screen.getByTestId("trailing-dot")).toBeTruthy();
   });
 
-  it("renders with tablist role", () => {
+  it("renders a nav element", () => {
     render(<SettingsSubtabBar subtabs={SUBTABS} activeId="claude" onChange={vi.fn()} />);
-    expect(screen.getByRole("tablist")).toBeTruthy();
+    expect(screen.getByRole("navigation")).toBeTruthy();
+  });
+
+  it("returns null when subtabs list is empty", () => {
+    const { container } = render(<SettingsSubtabBar subtabs={[]} activeId="" onChange={vi.fn()} />);
+    expect(container.firstChild).toBeNull();
+  });
+
+  it("marks active button with aria-current", () => {
+    render(<SettingsSubtabBar subtabs={SUBTABS} activeId="gemini" onChange={vi.fn()} />);
+    const geminiBtn = screen.getByText("Gemini").closest("button")!;
+    expect(geminiBtn.getAttribute("aria-current")).toBe("true");
+    const claudeBtn = screen.getByText("Claude").closest("button")!;
+    expect(claudeBtn.getAttribute("aria-current")).toBeNull();
   });
 });
