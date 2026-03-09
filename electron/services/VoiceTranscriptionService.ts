@@ -237,16 +237,55 @@ export class VoiceTranscriptionService {
         this.settleDrain();
       }
     } else if (isFinal) {
-      const segmentText = transcript.trim();
-      if (segmentText) {
-        const accumulated = [...this.utteranceSegments, segmentText].filter(Boolean).join(" ");
-        this.emitIncrementalDelta(accumulated);
-        this.utteranceSegments.push(segmentText);
+      // Deepgram live streaming signals a paragraph boundary by inserting \n\n
+      // into is_final transcript segments (typically at the start of the first
+      // segment of a new paragraph). Detect this before trimming so the boundary
+      // is not silently discarded.
+      if (transcript.includes("\n\n")) {
+        this.handleIsFinalWithParagraphBoundary(transcript);
+      } else {
+        const segmentText = transcript.trim();
+        if (segmentText) {
+          const accumulated = [...this.utteranceSegments, segmentText].filter(Boolean).join(" ");
+          this.emitIncrementalDelta(accumulated);
+          this.utteranceSegments.push(segmentText);
+        }
       }
     } else {
       if (!transcript) return;
       const accumulated = [...this.utteranceSegments, transcript].filter(Boolean).join(" ");
       this.emitIncrementalDelta(accumulated);
+    }
+  }
+
+  private handleIsFinalWithParagraphBoundary(transcript: string): void {
+    const boundaryIdx = transcript.indexOf("\n\n");
+    const before = transcript.slice(0, boundaryIdx).trim();
+    const after = transcript
+      .slice(boundaryIdx)
+      .replace(/^\n\n+/, "")
+      .trim();
+
+    // Flush the paragraph that just ended: existing segments + any text before \n\n.
+    const completedSegments = [...this.utteranceSegments, ...(before ? [before] : [])].filter(
+      Boolean
+    );
+    const completedText = completedSegments.join(" ").trim();
+    this.resetUtteranceState();
+
+    // Only emit a boundary when there is actually a completed paragraph to close.
+    // Suppress spurious boundaries (e.g. first-ever segment starts with \n\n) to
+    // avoid inserting a blank line into the renderer before any speech has arrived.
+    if (completedText) {
+      this.emit({ type: "complete", text: completedText });
+      this.emit({ type: "paragraph_boundary" });
+    }
+
+    // Begin accumulating the next paragraph with any text that follows the boundary.
+    // Do NOT emit it as complete yet — let speech_final/UtteranceEnd finalize it.
+    if (after) {
+      this.emitIncrementalDelta(after);
+      this.utteranceSegments.push(after);
     }
   }
 
