@@ -543,10 +543,19 @@ export const createTerminalRegistrySlice =
       },
 
       updateActivity: (id, headline, status, type, timestamp, lastCommand) => {
-        console.log(`[TerminalRegistrySlice] updateActivity for ${id}: lastCommand=${lastCommand}`);
         set((state) => {
           const terminal = state.terminals.find((t) => t.id === id);
           if (!terminal) {
+            return state;
+          }
+
+          if (
+            terminal.activityHeadline === headline &&
+            terminal.activityStatus === status &&
+            terminal.activityType === type &&
+            terminal.activityTimestamp === timestamp &&
+            terminal.lastCommand === lastCommand
+          ) {
             return state;
           }
 
