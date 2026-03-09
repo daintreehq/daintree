@@ -107,8 +107,11 @@ export class VoiceTranscriptionService {
       //   "manual": No dictation mode; paragraph breaks come from the Enter key only.
       // Both modes use endpointing: 800ms (the sweet spot for dictation — 500ms fragments
       // speech mid-thought; 1500ms feels sluggish) with utterance_end_ms: 1000ms as fallback.
+      // Note: Deepgram Dictation is documented as English-only. We only enable it when the
+      // session language is English; non-English sessions fall back to manual-Enter paragraphing.
+      const isEnglish = (settings.language || "en") === "en";
       const isSpokenCommand =
-        (settings.paragraphingStrategy ?? "spoken-command") === "spoken-command";
+        (settings.paragraphingStrategy ?? "spoken-command") === "spoken-command" && isEnglish;
 
       const connection = deepgram.listen.live({
         model: settings.transcriptionModel || "nova-3",

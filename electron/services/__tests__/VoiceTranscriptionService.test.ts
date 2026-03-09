@@ -94,12 +94,18 @@ function makeTranscriptEvent(transcript: string, isFinal: boolean, speechFinal: 
 }
 
 describe("VoiceTranscriptionService", () => {
+  let originalLiveFn: (opts: unknown) => InstanceType<typeof deepgramMock.MockConnection>;
+
   beforeEach(() => {
     deepgramMock.instances.length = 0;
+    // Save original listen.live so option-mapping tests can restore it
+    originalLiveFn = deepgramMock.mockClient.listen.live;
     vi.useFakeTimers();
   });
 
   afterEach(() => {
+    // Restore listen.live in case an option-mapping test replaced it
+    deepgramMock.mockClient.listen.live = originalLiveFn;
     vi.useRealTimers();
     vi.restoreAllMocks();
   });
@@ -447,6 +453,25 @@ describe("VoiceTranscriptionService", () => {
 
       expect(capturedOpts[0]).toMatchObject({ dictation: true, punctuate: true });
     });
+
+    it("spoken-command strategy does not enable dictation for non-English languages", async () => {
+      const capturedOpts: Record<string, unknown>[] = [];
+      deepgramMock.mockClient.listen.live = (opts: unknown) => {
+        capturedOpts.push(opts as Record<string, unknown>);
+        const conn = new deepgramMock.MockConnection();
+        deepgramMock.instances.push(conn);
+        return conn;
+      };
+
+      const service = new VoiceTranscriptionService();
+      void service.start({
+        ...BASE_SETTINGS,
+        paragraphingStrategy: "spoken-command",
+        language: "es",
+      });
+
+      expect(capturedOpts[0]).not.toHaveProperty("dictation");
+    });
   });
 
   describe("paragraph boundary detection via \\n\\n in transcript", () => {
@@ -492,6 +517,99 @@ describe("VoiceTranscriptionService", () => {
       );
 
       expect(boundaries).toHaveLength(0);
+    });
+
+    it("ignores leading and trailing \\n\\n — no spurious boundary events", async () => {
+      const service = new VoiceTranscriptionService();
+      const events: Array<{ type: string; text?: string }> = [];
+      service.onEvent((e) => {
+        if (e.type === "complete" || e.type === "paragraph_boundary") events.push(e);
+      });
+
+      const p = service.start(BASE_SETTINGS);
+      deepgramMock.instances.at(-1)!.emit(deepgramMock.LiveTranscriptionEvents.Open);
+      await p;
+
+      const conn = deepgramMock.instances.at(-1)!;
+      conn.emit(
+        deepgramMock.LiveTranscriptionEvents.Transcript,
+        makeTranscriptEvent("\n\nOnly one paragraph.\n\n", true, true)
+      );
+
+      expect(events).toEqual([{ type: "complete", text: "Only one paragraph." }]);
+    });
+
+    it("collapses repeated \\n\\n delimiters to a single boundary", async () => {
+      const service = new VoiceTranscriptionService();
+      const events: Array<{ type: string; text?: string }> = [];
+      service.onEvent((e) => {
+        if (e.type === "complete" || e.type === "paragraph_boundary") events.push(e);
+      });
+
+      const p = service.start(BASE_SETTINGS);
+      deepgramMock.instances.at(-1)!.emit(deepgramMock.LiveTranscriptionEvents.Open);
+      await p;
+
+      const conn = deepgramMock.instances.at(-1)!;
+      conn.emit(
+        deepgramMock.LiveTranscriptionEvents.Transcript,
+        makeTranscriptEvent("First.\n\n\n\nSecond.", true, true)
+      );
+
+      expect(events).toEqual([
+        { type: "complete", text: "First." },
+        { type: "paragraph_boundary" },
+        { type: "complete", text: "Second." },
+      ]);
+    });
+
+    it("does not split on single \\n — only \\n\\n triggers a boundary", async () => {
+      const service = new VoiceTranscriptionService();
+      const events: Array<{ type: string; text?: string }> = [];
+      service.onEvent((e) => {
+        if (e.type === "complete" || e.type === "paragraph_boundary") events.push(e);
+      });
+
+      const p = service.start(BASE_SETTINGS);
+      deepgramMock.instances.at(-1)!.emit(deepgramMock.LiveTranscriptionEvents.Open);
+      await p;
+
+      const conn = deepgramMock.instances.at(-1)!;
+      conn.emit(
+        deepgramMock.LiveTranscriptionEvents.Transcript,
+        makeTranscriptEvent("Line one.\nLine two.", true, true)
+      );
+
+      // A single \n is not a paragraph boundary — the text contains it but is not split
+      expect(events.filter((e) => e.type === "paragraph_boundary")).toHaveLength(0);
+      expect(events.filter((e) => e.type === "complete")).toHaveLength(1);
+    });
+
+    it("emits paragraph boundary via UtteranceEnd flush when accumulated text contains \\n\\n", async () => {
+      const service = new VoiceTranscriptionService();
+      const events: Array<{ type: string; text?: string }> = [];
+      service.onEvent((e) => {
+        if (e.type === "complete" || e.type === "paragraph_boundary") events.push(e);
+      });
+
+      const p = service.start(BASE_SETTINGS);
+      deepgramMock.instances.at(-1)!.emit(deepgramMock.LiveTranscriptionEvents.Open);
+      await p;
+
+      const conn = deepgramMock.instances.at(-1)!;
+      // Accumulate an is_final segment with \n\n
+      conn.emit(
+        deepgramMock.LiveTranscriptionEvents.Transcript,
+        makeTranscriptEvent("Part one.\n\nPart two.", true, false)
+      );
+      // UtteranceEnd flushes the accumulated segments
+      conn.emit(deepgramMock.LiveTranscriptionEvents.UtteranceEnd);
+
+      expect(events).toEqual([
+        { type: "complete", text: "Part one." },
+        { type: "paragraph_boundary" },
+        { type: "complete", text: "Part two." },
+      ]);
     });
   });
 
