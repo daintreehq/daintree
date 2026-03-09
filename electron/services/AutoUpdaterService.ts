@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain } from "electron";
+import { app, BrowserWindow, dialog, ipcMain } from "electron";
 import electronUpdater from "electron-updater";
 import type { UpdateInfo, ProgressInfo } from "electron-updater";
 import { CHANNELS } from "../ipc/channels.js";
@@ -11,6 +11,7 @@ class AutoUpdaterService {
   private initialized = false;
   private window: BrowserWindow | null = null;
   private updateDownloaded = false;
+  private isManualCheck = false;
   private checkingHandler: (() => void) | null = null;
   private availableHandler: ((info: UpdateInfo) => void) | null = null;
   private notAvailableHandler: ((info: UpdateInfo) => void) | null = null;
@@ -36,6 +37,20 @@ class AutoUpdaterService {
       });
     } catch (err) {
       console.error(`[MAIN] ${context} update check failed:`, err);
+    }
+  }
+
+  checkForUpdatesManually(): void {
+    this.isManualCheck = true;
+    try {
+      const result = autoUpdater.checkForUpdates();
+      Promise.resolve(result).catch((err) => {
+        console.error("[MAIN] Manual update check failed:", err);
+        this.isManualCheck = false;
+      });
+    } catch (err) {
+      console.error("[MAIN] Manual update check failed:", err);
+      this.isManualCheck = false;
     }
   }
 
@@ -73,18 +88,51 @@ class AutoUpdaterService {
 
       this.availableHandler = (info: UpdateInfo) => {
         console.log("[MAIN] Update available:", info.version);
+        this.isManualCheck = false;
         this.sendToWindow(CHANNELS.UPDATE_AVAILABLE, { version: info.version });
       };
       autoUpdater.on("update-available", this.availableHandler);
 
       this.notAvailableHandler = (_info: UpdateInfo) => {
         console.log("[MAIN] Update not available");
+        if (this.isManualCheck) {
+          this.isManualCheck = false;
+          dialog
+            .showMessageBox({
+              type: "info",
+              title: "No Updates Available",
+              message: "You're up to date!",
+              detail: `Canopy ${app.getVersion()} is the latest version.`,
+              buttons: ["OK"],
+            })
+            .catch(() => {});
+        }
       };
       autoUpdater.on("update-not-available", this.notAvailableHandler);
 
       this.errorHandler = (err: Error) => {
         console.error("[MAIN] Auto-updater error:", err);
+        const wasManual = this.isManualCheck;
+        this.isManualCheck = false;
         this.sendToWindow(CHANNELS.UPDATE_ERROR, { message: err.message });
+        if (wasManual) {
+          dialog
+            .showMessageBox({
+              type: "error",
+              title: "Update Failed",
+              message: "Unable to check for updates.",
+              detail: err.message,
+              buttons: ["Retry", "Cancel"],
+              defaultId: 0,
+              cancelId: 1,
+            })
+            .then(({ response }) => {
+              if (response === 0) {
+                this.checkForUpdatesManually();
+              }
+            })
+            .catch(() => {});
+        }
       };
       autoUpdater.on("error", this.errorHandler);
 
@@ -108,6 +156,11 @@ class AutoUpdaterService {
           return;
         }
         autoUpdater.quitAndInstall();
+      });
+
+      // Handle manual check-for-updates request from renderer
+      ipcMain.handle(CHANNELS.UPDATE_CHECK_FOR_UPDATES, () => {
+        this.checkForUpdatesManually();
       });
 
       this.runUpdateCheck("Initial");
@@ -161,8 +214,15 @@ class AutoUpdaterService {
       // Handler may not have been registered
     }
 
+    try {
+      ipcMain.removeHandler(CHANNELS.UPDATE_CHECK_FOR_UPDATES);
+    } catch {
+      // Handler may not have been registered
+    }
+
     this.window = null;
     this.updateDownloaded = false;
+    this.isManualCheck = false;
     this.initialized = false;
   }
 }
