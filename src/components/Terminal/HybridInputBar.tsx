@@ -947,21 +947,24 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
               const voiceStore = useVoiceRecordingStore.getState();
               const buffer = voiceStore.panelBuffers[tid];
               const paragraphStart = buffer?.activeParagraphStart ?? -1;
-              const rawText =
-                buffer?.completedSegments && buffer.completedSegments.length > 0
-                  ? buffer.completedSegments.join(" ")
-                  : null;
 
               // Flush paragraph buffer in the main process (fires correction async).
-              void window.electron.voiceInput.flushParagraph();
-
-              // Mark the paragraph as pending correction in the renderer so the
-              // accumulated text shows as gray until the correction arrives.
-              // Only add when correction is enabled — otherwise no CORRECTION_REPLACE
-              // will arrive and the text would stay dimmed permanently.
-              if (rawText && paragraphStart >= 0 && voiceStore.correctionEnabled) {
-                voiceStore.addPendingCorrection(tid, paragraphStart, rawText);
-              }
+              // Use flushResult.rawText (authoritative — the exact text the main process
+              // flushed) rather than locally reconstructed completedSegments. This avoids
+              // a race where a just-completed utterance is in paragraphBuffer but not yet
+              // reflected in the renderer's completedSegments at the moment Enter is pressed.
+              void window.electron.voiceInput.flushParagraph().then((flushResult) => {
+                if (flushResult.correctionId && flushResult.rawText && paragraphStart >= 0) {
+                  useVoiceRecordingStore
+                    .getState()
+                    .addPendingCorrection(
+                      tid,
+                      flushResult.correctionId,
+                      paragraphStart,
+                      flushResult.rawText
+                    );
+                }
+              });
 
               // Insert a newline at the end of the draft and reset paragraph state.
               const inputStore = useTerminalInputStore.getState();

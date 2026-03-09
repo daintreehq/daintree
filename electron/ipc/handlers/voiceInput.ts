@@ -181,12 +181,15 @@ function getProjectInfo(): { name?: string; path?: string } {
 
 /**
  * Join the paragraph buffer into a single raw text string and clear it.
- * If correction is enabled, fires an async correction call and sends
- * VOICE_INPUT_CORRECTION_REPLACE when it resolves.
- * Returns the raw paragraph text (or null if the buffer was empty).
+ * If correction is enabled, generates a stable correctionId, fires an async
+ * correction call, and sends VOICE_INPUT_CORRECTION_REPLACE when it resolves.
+ * Returns the raw paragraph text and correctionId (null if correction is not queued).
  */
-function flushParagraphBuffer(win: Electron.BrowserWindow | null): { rawText: string | null } {
-  if (paragraphBuffer.length === 0) return { rawText: null };
+function flushParagraphBuffer(win: Electron.BrowserWindow | null): {
+  rawText: string | null;
+  correctionId: string | null;
+} {
+  if (paragraphBuffer.length === 0) return { rawText: null, correctionId: null };
 
   const rawText = paragraphBuffer.join(" ");
   paragraphBuffer = [];
@@ -195,6 +198,7 @@ function flushParagraphBuffer(win: Electron.BrowserWindow | null): { rawText: st
   const willCorrect = !!(liveSettings.correctionEnabled && liveSettings.correctionApiKey);
 
   if (willCorrect && correctionService && win && !win.isDestroyed()) {
+    const correctionId = crypto.randomUUID();
     void correctionService
       .correct(rawText, {
         model: liveSettings.correctionModel,
@@ -207,15 +211,16 @@ function flushParagraphBuffer(win: Electron.BrowserWindow | null): { rawText: st
       .then((correctedText) => {
         if (!win.isDestroyed()) {
           win.webContents.send(CHANNELS.VOICE_INPUT_CORRECTION_REPLACE, {
-            rawText,
+            correctionId,
             correctedText,
           });
         }
       })
       .catch(() => {});
+    return { rawText, correctionId };
   }
 
-  return { rawText };
+  return { rawText, correctionId: null };
 }
 
 export function registerVoiceInputHandlers(deps: HandlerDependencies): () => void {
@@ -273,9 +278,12 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
         });
       } else if (voiceEvent.type === "paragraph_boundary") {
         // Deepgram detected a paragraph break — auto-flush the previous paragraph
-        // for correction (if enabled) and notify the renderer with the flushed text.
-        const { rawText: flushedText } = flushParagraphBuffer(win);
-        win.webContents.send(CHANNELS.VOICE_INPUT_PARAGRAPH_BOUNDARY, { rawText: flushedText });
+        // for correction (if enabled) and notify the renderer with the flushed text and ID.
+        const { rawText: flushedText, correctionId } = flushParagraphBuffer(win);
+        win.webContents.send(CHANNELS.VOICE_INPUT_PARAGRAPH_BOUNDARY, {
+          rawText: flushedText,
+          correctionId,
+        });
       } else if (voiceEvent.type === "error") {
         win.webContents.send(CHANNELS.VOICE_INPUT_ERROR, voiceEvent.message);
       } else if (voiceEvent.type === "status") {

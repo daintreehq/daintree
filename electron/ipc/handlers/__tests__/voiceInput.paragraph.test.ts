@@ -222,41 +222,62 @@ describe("voiceInput — paragraph buffering", () => {
     });
   });
 
-  it("flushParagraph sends CORRECTION_REPLACE with corrected text", async () => {
+  it("flushParagraph returns a non-null correctionId when correction is queued", () => {
+    emitTranscriptionEvent({ type: "complete", text: "react is great" });
+
+    const handleFlush = getHandler("voice-input:flush-paragraph");
+    const result = handleFlush(fakeEvent) as {
+      rawText: string | null;
+      correctionId: string | null;
+    };
+    expect(result.rawText).toBe("react is great");
+    expect(result.correctionId).toBeTypeOf("string");
+    expect(result.correctionId).not.toBeNull();
+  });
+
+  it("flushParagraph sends CORRECTION_REPLACE with correctionId and corrected text", async () => {
     shared.correctionResult = "React is great. Use it everywhere.";
     emitTranscriptionEvent({ type: "complete", text: "react is great" });
 
     const handleFlush = getHandler("voice-input:flush-paragraph");
-    handleFlush(fakeEvent);
+    const result = handleFlush(fakeEvent) as {
+      rawText: string | null;
+      correctionId: string | null;
+    };
 
     await vi.waitFor(() => {
       const msg = win.__sent.find((m) => m.channel === "voice-input:correction-replace");
       expect(msg).toBeDefined();
-      expect(msg?.payload).toEqual({
-        rawText: "react is great",
-        correctedText: "React is great. Use it everywhere.",
-      });
+      expect((msg?.payload as { correctionId: string }).correctionId).toBe(result.correctionId);
+      expect((msg?.payload as { correctedText: string }).correctedText).toBe(
+        "React is great. Use it everywhere."
+      );
     });
   });
 
-  it("stop flushes the remaining paragraph buffer and returns rawText", async () => {
+  it("stop flushes the remaining paragraph buffer and returns rawText and correctionId", async () => {
     emitTranscriptionEvent({ type: "complete", text: "final sentence" });
 
     const handleStop = getHandler("voice-input:stop");
     const result = (await (handleStop as (e: unknown) => Promise<unknown>)(fakeEvent)) as {
       rawText: string | null;
+      correctionId: string | null;
     };
 
     expect(result.rawText).toBe("final sentence");
+    expect(result.correctionId).toBeTypeOf("string");
+    expect(result.correctionId).not.toBeNull();
   });
 
-  it("stop returns null rawText when buffer is already empty", async () => {
+  it("stop returns null rawText and null correctionId when buffer is already empty", async () => {
     const handleStop = getHandler("voice-input:stop");
     const result = (await (handleStop as (e: unknown) => Promise<unknown>)(fakeEvent)) as {
       rawText: string | null;
+      correctionId: string | null;
     };
 
     expect(result.rawText).toBeNull();
+    expect(result.correctionId).toBeNull();
   });
 
   it("stop fires correction for the flushed paragraph", async () => {
@@ -302,13 +323,18 @@ describe("voiceInput — paragraph buffering", () => {
     // Renderer should have received the paragraph boundary channel message
     const boundaryMsg = win.__sent.find((m) => m.channel === "voice-input:paragraph-boundary");
     expect(boundaryMsg).toBeDefined();
-    expect((boundaryMsg?.payload as { rawText: string | null }).rawText).toBe(
-      "first utterance second utterance"
-    );
+    const payload = boundaryMsg?.payload as { rawText: string | null; correctionId: string | null };
+    expect(payload.rawText).toBe("first utterance second utterance");
+    // correctionId is a UUID string when correction is queued
+    expect(payload.correctionId).toBeTypeOf("string");
+    expect(payload.correctionId).not.toBeNull();
 
     // Buffer should be empty after the flush — next stop/flush returns null
     const handleFlush = getHandler("voice-input:flush-paragraph");
-    const result = handleFlush(fakeEvent) as { rawText: string | null };
+    const result = handleFlush(fakeEvent) as {
+      rawText: string | null;
+      correctionId: string | null;
+    };
     expect(result.rawText).toBeNull();
   });
 
@@ -322,15 +348,16 @@ describe("voiceInput — paragraph buffering", () => {
     });
   });
 
-  it("paragraph_boundary event with empty buffer does not send message to renderer", () => {
+  it("paragraph_boundary event with empty buffer sends null rawText and null correctionId", () => {
     // No complete events before boundary — buffer is empty
     emitTranscriptionEvent({ type: "paragraph_boundary" });
 
     const boundaryMsg = win.__sent.find((m) => m.channel === "voice-input:paragraph-boundary");
-    // flushParagraphBuffer returns { rawText: null } and still sends the channel message
-    // with null rawText, which is safe — renderer guards on rawText presence
+    // flushParagraphBuffer returns { rawText: null, correctionId: null } for an empty buffer
     expect(boundaryMsg).toBeDefined();
-    expect((boundaryMsg?.payload as { rawText: string | null }).rawText).toBeNull();
+    const payload = boundaryMsg?.payload as { rawText: string | null; correctionId: string | null };
+    expect(payload.rawText).toBeNull();
+    expect(payload.correctionId).toBeNull();
   });
 
   it("session start with active project captures project info into correction settings", async () => {
@@ -369,5 +396,40 @@ describe("voiceInput — paragraph buffering", () => {
 
     expect(statuses).toContain("finishing");
     expect(statuses).toEqual(["connecting", "recording", "finishing", "idle", "error"]);
+  });
+
+  it("flushParagraph returns null correctionId and does not fire correction when disabled", async () => {
+    // Override the store mock to return correction-disabled settings for this test.
+    const { store } = await import("../../../store.js");
+    vi.mocked(store.get).mockReturnValueOnce({
+      enabled: true,
+      deepgramApiKey: "dg-test-key",
+      correctionApiKey: "",
+      correctionEnabled: false,
+      correctionModel: "gpt-5-nano",
+      customDictionary: [],
+      correctionCustomInstructions: "",
+      language: "en",
+      transcriptionModel: "nova-3",
+      paragraphingStrategy: "spoken-command",
+    });
+
+    emitTranscriptionEvent({ type: "complete", text: "no correction please" });
+
+    const handleFlush = getHandler("voice-input:flush-paragraph");
+    const result = handleFlush(fakeEvent) as {
+      rawText: string | null;
+      correctionId: string | null;
+    };
+
+    // rawText is still returned so the renderer knows what was flushed
+    expect(result.rawText).toBe("no correction please");
+    // correctionId is null — no correction was queued
+    expect(result.correctionId).toBeNull();
+    // No correction call was fired
+    expect(shared.correctionCalls).toHaveLength(0);
+    // No CORRECTION_REPLACE message was sent to renderer
+    const correctionMsg = win.__sent.find((m) => m.channel === "voice-input:correction-replace");
+    expect(correctionMsg).toBeUndefined();
   });
 });

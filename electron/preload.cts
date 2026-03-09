@@ -1673,10 +1673,11 @@ const api: ElectronAPI = {
       callback: (payload: { text: string; willCorrect: boolean }) => void
     ) => _typedOn(CHANNELS.VOICE_INPUT_TRANSCRIPTION_COMPLETE, callback),
     onCorrectionReplace: (
-      callback: (payload: { rawText: string; correctedText: string }) => void
+      callback: (payload: { correctionId: string; correctedText: string }) => void
     ) => _typedOn(CHANNELS.VOICE_INPUT_CORRECTION_REPLACE, callback),
-    onParagraphBoundary: (callback: (payload: { rawText: string | null }) => void) =>
-      _typedOn(CHANNELS.VOICE_INPUT_PARAGRAPH_BOUNDARY, callback),
+    onParagraphBoundary: (
+      callback: (payload: { rawText: string | null; correctionId: string | null }) => void
+    ) => _typedOn(CHANNELS.VOICE_INPUT_PARAGRAPH_BOUNDARY, callback),
     onError: (callback: (error: string) => void) => _typedOn(CHANNELS.VOICE_INPUT_ERROR, callback),
     onStatus: (callback: (status: VoiceInputStatus) => void) =>
       _typedOn(CHANNELS.VOICE_INPUT_STATUS, callback),

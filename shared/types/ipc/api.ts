@@ -835,17 +835,19 @@ export interface ElectronAPI {
     getSettings(): Promise<VoiceInputSettings>;
     setSettings(settings: Partial<VoiceInputSettings>): Promise<void>;
     start(): Promise<{ ok: true } | { ok: false; error: string }>;
-    stop(): Promise<{ rawText: string | null }>;
-    flushParagraph(): Promise<{ rawText: string | null }>;
+    stop(): Promise<{ rawText: string | null; correctionId: string | null }>;
+    flushParagraph(): Promise<{ rawText: string | null; correctionId: string | null }>;
     sendAudioChunk(chunk: ArrayBuffer): void;
     onTranscriptionDelta(callback: (delta: string) => void): () => void;
     onTranscriptionComplete(
       callback: (payload: { text: string; willCorrect: boolean }) => void
     ): () => void;
     onCorrectionReplace(
-      callback: (payload: { rawText: string; correctedText: string }) => void
+      callback: (payload: { correctionId: string; correctedText: string }) => void
     ): () => void;
-    onParagraphBoundary(callback: (payload: { rawText: string | null }) => void): () => void;
+    onParagraphBoundary(
+      callback: (payload: { rawText: string | null; correctionId: string | null }) => void
+    ): () => void;
     onError(callback: (error: string) => void): () => void;
     onStatus(callback: (status: VoiceInputStatus) => void): () => void;
     checkMicPermission(): Promise<MicPermissionStatus>;
