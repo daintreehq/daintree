@@ -163,7 +163,7 @@ export function IssueSelector({
                 <span className="truncate flex-1 min-w-0">
                   #{issue.number} {issue.title}
                 </span>
-                <span className="text-xs text-muted-foreground shrink-0 truncate max-w-[120px]">
+                <span className="text-xs text-muted-foreground shrink-0">
                   {issue.author.login.length > 20
                     ? `${issue.author.login.slice(0, 20)}…`
                     : issue.author.login}
