@@ -550,9 +550,7 @@ describe("voiceInput — paragraph buffering", () => {
 
     // Wait for the async correction to send CORRECTION_REPLACE to the renderer
     await vi.waitFor(() => {
-      const correctionMsg = win.__sent.find(
-        (m) => m.channel === "voice-input:correction-replace"
-      );
+      const correctionMsg = win.__sent.find((m) => m.channel === "voice-input:correction-replace");
       expect(correctionMsg).toBeDefined();
       expect((correctionMsg?.payload as { correctionId: string }).correctionId).toBe(
         result.correctionId
