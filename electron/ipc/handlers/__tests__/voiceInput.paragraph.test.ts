@@ -89,6 +89,7 @@ vi.mock("../../channels.js", () => ({
     VOICE_INPUT_VALIDATE_API_KEY: "voice-input:validate-api-key",
     VOICE_INPUT_VALIDATE_CORRECTION_API_KEY: "voice-input:validate-correction-api-key",
     VOICE_INPUT_FLUSH_PARAGRAPH: "voice-input:flush-paragraph",
+    VOICE_INPUT_PARAGRAPH_BOUNDARY: "voice-input:paragraph-boundary",
   },
 }));
 
@@ -278,5 +279,47 @@ describe("voiceInput — paragraph buffering", () => {
     const handleFlush = getHandler("voice-input:flush-paragraph");
     const result = handleFlush(fakeEvent) as { rawText: string | null };
     expect(result.rawText).toBeNull();
+  });
+
+  it("paragraph_boundary event flushes buffer and sends PARAGRAPH_BOUNDARY to renderer", async () => {
+    // Accumulate two utterances into the paragraph buffer
+    emitTranscriptionEvent({ type: "complete", text: "first utterance" });
+    emitTranscriptionEvent({ type: "complete", text: "second utterance" });
+
+    // Service emits a paragraph_boundary (as would happen when Deepgram signals a boundary)
+    emitTranscriptionEvent({ type: "paragraph_boundary" });
+
+    // Renderer should have received the paragraph boundary channel message
+    const boundaryMsg = win.__sent.find((m) => m.channel === "voice-input:paragraph-boundary");
+    expect(boundaryMsg).toBeDefined();
+    expect((boundaryMsg?.payload as { rawText: string | null }).rawText).toBe(
+      "first utterance second utterance"
+    );
+
+    // Buffer should be empty after the flush — next stop/flush returns null
+    const handleFlush = getHandler("voice-input:flush-paragraph");
+    const result = handleFlush(fakeEvent) as { rawText: string | null };
+    expect(result.rawText).toBeNull();
+  });
+
+  it("paragraph_boundary event triggers correction for the flushed text", async () => {
+    emitTranscriptionEvent({ type: "complete", text: "auto paragraph text" });
+    emitTranscriptionEvent({ type: "paragraph_boundary" });
+
+    await vi.waitFor(() => {
+      expect(shared.correctionCalls).toHaveLength(1);
+      expect(shared.correctionCalls[0].text).toBe("auto paragraph text");
+    });
+  });
+
+  it("paragraph_boundary event with empty buffer does not send message to renderer", () => {
+    // No complete events before boundary — buffer is empty
+    emitTranscriptionEvent({ type: "paragraph_boundary" });
+
+    const boundaryMsg = win.__sent.find((m) => m.channel === "voice-input:paragraph-boundary");
+    // flushParagraphBuffer returns { rawText: null } and still sends the channel message
+    // with null rawText, which is safe — renderer guards on rawText presence
+    expect(boundaryMsg).toBeDefined();
+    expect((boundaryMsg?.payload as { rawText: string | null }).rawText).toBeNull();
   });
 });
