@@ -272,10 +272,14 @@ export class VoiceTranscriptionService {
     );
     const completedText = completedSegments.join(" ").trim();
     this.resetUtteranceState();
+
+    // Only emit a boundary when there is actually a completed paragraph to close.
+    // Suppress spurious boundaries (e.g. first-ever segment starts with \n\n) to
+    // avoid inserting a blank line into the renderer before any speech has arrived.
     if (completedText) {
       this.emit({ type: "complete", text: completedText });
+      this.emit({ type: "paragraph_boundary" });
     }
-    this.emit({ type: "paragraph_boundary" });
 
     // Begin accumulating the next paragraph with any text that follows the boundary.
     // Do NOT emit it as complete yet — let speech_final/UtteranceEnd finalize it.

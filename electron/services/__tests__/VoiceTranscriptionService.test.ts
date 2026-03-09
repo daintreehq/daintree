@@ -558,5 +558,122 @@ describe("VoiceTranscriptionService", () => {
       expect(completes).toEqual(["Hello world how are you"]);
       expect(boundaries).toHaveLength(0);
     });
+
+    it("leading \\n\\n on first-ever is_final (empty utteranceSegments) emits no boundary", async () => {
+      const { conn, events } = await startService();
+
+      // First segment ever received starts with \n\n — there is no previous paragraph to close
+      conn.emit(
+        deepgramMock.LiveTranscriptionEvents.Transcript,
+        makeTranscriptEvent("\n\nFirst text.", true, false)
+      );
+
+      // No complete and no boundary — nothing to close yet
+      const completesBefore = events.filter((e) => e.type === "complete");
+      const boundaries = events.filter((e) => e.type === "paragraph_boundary");
+      expect(completesBefore).toHaveLength(0);
+      expect(boundaries).toHaveLength(0);
+
+      // The text after \n\n should have been accumulated, so speech_final finalizes it
+      conn.emit(
+        deepgramMock.LiveTranscriptionEvents.Transcript,
+        makeTranscriptEvent("First text continued.", true, true)
+      );
+      const completesAfter = events.filter((e) => e.type === "complete").map((e) => e.text);
+      expect(completesAfter).toHaveLength(1);
+      expect(completesAfter[0]).toContain("First text");
+    });
+
+    it("emits events in correct order: complete → paragraph_boundary", async () => {
+      const { conn, events } = await startService();
+
+      conn.emit(
+        deepgramMock.LiveTranscriptionEvents.Transcript,
+        makeTranscriptEvent("Para one text.", true, false)
+      );
+      conn.emit(
+        deepgramMock.LiveTranscriptionEvents.Transcript,
+        makeTranscriptEvent("\n\nPara two start.", true, false)
+      );
+
+      const relevant = events.filter(
+        (e) => e.type === "complete" || e.type === "paragraph_boundary"
+      );
+      expect(relevant).toHaveLength(2);
+      expect(relevant[0]).toEqual({ type: "complete", text: "Para one text." });
+      expect(relevant[1]).toEqual({ type: "paragraph_boundary" });
+    });
+
+    it("UtteranceEnd after paragraph boundary flushes the new paragraph correctly", async () => {
+      const { conn, events } = await startService();
+
+      // Para one ends, \n\n detected, Para two starts
+      conn.emit(
+        deepgramMock.LiveTranscriptionEvents.Transcript,
+        makeTranscriptEvent("Para one.", true, false)
+      );
+      conn.emit(
+        deepgramMock.LiveTranscriptionEvents.Transcript,
+        makeTranscriptEvent("\n\nPara two text.", true, false)
+      );
+
+      // UtteranceEnd fires (instead of speech_final) to finalize para two
+      conn.emit(deepgramMock.LiveTranscriptionEvents.UtteranceEnd);
+
+      const completes = events.filter((e) => e.type === "complete").map((e) => e.text);
+      const boundaries = events.filter((e) => e.type === "paragraph_boundary");
+
+      expect(completes).toEqual(["Para one.", "Para two text."]);
+      expect(boundaries).toHaveLength(1);
+    });
+
+    it("three paragraphs in one session produce two boundaries", async () => {
+      const { conn, events } = await startService();
+
+      // Para one accumulates as is_final
+      conn.emit(
+        deepgramMock.LiveTranscriptionEvents.Transcript,
+        makeTranscriptEvent("Para one.", true, false)
+      );
+      // \n\n → flush Para one, boundary 1, start Para two
+      conn.emit(
+        deepgramMock.LiveTranscriptionEvents.Transcript,
+        makeTranscriptEvent("\n\nPara two.", true, false)
+      );
+      // \n\n → flush Para two, boundary 2, start Para three
+      conn.emit(
+        deepgramMock.LiveTranscriptionEvents.Transcript,
+        makeTranscriptEvent("\n\nPara three.", true, false)
+      );
+      // speech_final finalizes Para three
+      conn.emit(
+        deepgramMock.LiveTranscriptionEvents.Transcript,
+        makeTranscriptEvent("Para three end.", true, true)
+      );
+
+      const completes = events.filter((e) => e.type === "complete").map((e) => e.text);
+      const boundaries = events.filter((e) => e.type === "paragraph_boundary");
+
+      expect(completes[0]).toBe("Para one.");
+      expect(completes[1]).toBe("Para two.");
+      expect(boundaries).toHaveLength(2);
+      expect(completes.at(-1)).toContain("Para three");
+    });
+
+    it("speech_final with embedded \\n\\n splits via emitCompleteWithParagraphDetection", async () => {
+      const { conn, events } = await startService();
+
+      // speech_final itself contains \n\n — the existing speechFinal path handles this
+      conn.emit(
+        deepgramMock.LiveTranscriptionEvents.Transcript,
+        makeTranscriptEvent("Para one text.\n\nPara two text.", true, true)
+      );
+
+      const completes = events.filter((e) => e.type === "complete").map((e) => e.text);
+      const boundaries = events.filter((e) => e.type === "paragraph_boundary");
+
+      expect(completes).toEqual(["Para one text.", "Para two text."]);
+      expect(boundaries).toHaveLength(1);
+    });
   });
 });
