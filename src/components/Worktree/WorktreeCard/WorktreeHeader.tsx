@@ -30,8 +30,8 @@ import {
   GitPullRequest,
   Loader2,
   MoreHorizontal,
+  House,
   Pin,
-  Shield,
 } from "lucide-react";
 import { useIssueTooltip, usePRTooltip } from "@/hooks/useGitHubTooltip";
 import { IssueTooltipContent, PRTooltipContent, TooltipLoading } from "./GitHubTooltipContent";
@@ -281,7 +281,7 @@ export function WorktreeHeader({
       <div className="flex items-center gap-2 min-h-[22px]">
         <div className="flex items-center gap-2 min-w-0 flex-1">
           {isMainWorktree && (
-            <Shield
+            <House
               className="w-3.5 h-3.5 text-canopy-text/30 shrink-0"
               aria-label="Main worktree"
             />
