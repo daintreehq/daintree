@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
-import { Search, ExternalLink, RefreshCw, WifiOff, Plus } from "lucide-react";
+import { Search, ExternalLink, RefreshCw, WifiOff, Plus, Settings } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { githubClient } from "@/clients/githubClient";
@@ -312,6 +312,13 @@ export function GitHubResourceList({
     );
   };
 
+  const isTokenError = error?.includes("GitHub token not configured") ?? false;
+
+  const handleOpenGitHubSettings = () => {
+    void actionService.dispatch("app.settings.openTab", { tab: "github" }, { source: "user" });
+    onClose?.();
+  };
+
   const renderEmpty = () => {
     if (exactNumberNotFound !== null) {
       return (
@@ -390,15 +397,27 @@ export function GitHubResourceList({
               <div className="px-3 py-2 border-b border-[var(--border-divider)] flex items-center gap-2 text-muted-foreground bg-overlay-soft">
                 <WifiOff className="h-3.5 w-3.5 shrink-0" />
                 <span className="text-xs truncate">{sanitizeIpcError(error)}</span>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={handleRetry}
-                  className="ml-auto h-6 text-xs text-muted-foreground hover:text-canopy-text shrink-0"
-                >
-                  <RefreshCw className="h-3 w-3" />
-                  Retry
-                </Button>
+                {isTokenError ? (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={handleOpenGitHubSettings}
+                    className="ml-auto h-6 text-xs text-muted-foreground hover:text-canopy-text shrink-0"
+                  >
+                    <Settings className="h-3 w-3" />
+                    Settings
+                  </Button>
+                ) : (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={handleRetry}
+                    className="ml-auto h-6 text-xs text-muted-foreground hover:text-canopy-text shrink-0"
+                  >
+                    <RefreshCw className="h-3 w-3" />
+                    Retry
+                  </Button>
+                )}
               </div>
             )}
             <div className="divide-y divide-[var(--border-divider)]">
@@ -419,14 +438,26 @@ export function GitHubResourceList({
                     <p className="text-xs text-muted-foreground">
                       {sanitizeIpcError(loadMoreError)}
                     </p>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={handleLoadMore}
-                      className="mt-1 text-muted-foreground hover:text-canopy-text h-6 text-xs"
-                    >
-                      Retry
-                    </Button>
+                    {loadMoreError.includes("GitHub token not configured") ? (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={handleOpenGitHubSettings}
+                        className="mt-1 text-muted-foreground hover:text-canopy-text h-6 text-xs"
+                      >
+                        <Settings className="h-3 w-3" />
+                        Open GitHub Settings
+                      </Button>
+                    ) : (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={handleLoadMore}
+                        className="mt-1 text-muted-foreground hover:text-canopy-text h-6 text-xs"
+                      >
+                        Retry
+                      </Button>
+                    )}
                   </div>
                 )}
                 <Button
@@ -451,15 +482,27 @@ export function GitHubResourceList({
           <div className="p-8 text-center text-muted-foreground">
             <WifiOff className="h-5 w-5 mx-auto mb-2 opacity-50" />
             <p className="text-sm">{sanitizeIpcError(error)}</p>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={handleRetry}
-              className="mt-2 text-muted-foreground hover:text-canopy-text"
-            >
-              <RefreshCw className="h-3.5 w-3.5" />
-              Retry
-            </Button>
+            {isTokenError ? (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={handleOpenGitHubSettings}
+                className="mt-2 text-muted-foreground hover:text-canopy-text"
+              >
+                <Settings className="h-3.5 w-3.5" />
+                Open GitHub Settings
+              </Button>
+            ) : (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={handleRetry}
+                className="mt-2 text-muted-foreground hover:text-canopy-text"
+              >
+                <RefreshCw className="h-3.5 w-3.5" />
+                Retry
+              </Button>
+            )}
           </div>
         ) : (
           renderEmpty()
