@@ -5,10 +5,11 @@ import { DiffViewer } from "@/components/Worktree/DiffViewer";
 import { CodeViewer } from "./CodeViewer";
 import { filesClient } from "@/clients/filesClient";
 import { actionService } from "@/services/ActionService";
-import { ExternalLink, Copy, Check } from "lucide-react";
+import { ExternalLink, Copy, Check, Image as ImageIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
 import type { FileReadErrorCode } from "@shared/types/ipc/files";
+import { sanitizeSvg } from "@shared/utils/svgSanitizer";
 
 export interface FileViewerModalProps {
   isOpen: boolean;
@@ -23,7 +24,23 @@ export interface FileViewerModalProps {
 }
 
 type ViewMode = "view" | "diff";
-type LoadState = "loading" | "loaded" | "error";
+type LoadState = "loading" | "loaded" | "error" | "image" | "svg";
+
+const IMAGE_EXTENSIONS = new Set(["png", "jpg", "jpeg", "gif", "webp", "bmp", "ico"]);
+const SVG_EXTENSION = "svg";
+
+function isImageFile(filePath: string): boolean {
+  const ext = filePath.split(".").pop()?.toLowerCase() ?? "";
+  return IMAGE_EXTENSIONS.has(ext) || ext === SVG_EXTENSION;
+}
+
+function isSvgFile(filePath: string): boolean {
+  return filePath.split(".").pop()?.toLowerCase() === SVG_EXTENSION;
+}
+
+function buildCanopyFileUrl(filePath: string, rootPath: string): string {
+  return `canopy-file://load?path=${encodeURIComponent(filePath)}&root=${encodeURIComponent(rootPath)}`;
+}
 
 const ERROR_MESSAGES: Record<FileReadErrorCode, string> = {
   BINARY_FILE: "Binary file — cannot display",
@@ -54,9 +71,13 @@ export function FileViewerModal({
   const [errorCode, setErrorCode] = useState<FileReadErrorCode | null>(null);
   const [viewType, setViewType] = useState<ViewType>("split");
   const [diffCopied, setDiffCopied] = useState(false);
+  const [sanitizedSvg, setSanitizedSvg] = useState<string | null>(null);
   const requestRef = useRef(0);
   const copyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isMountedRef = useRef(true);
+
+  const imageFile = isImageFile(filePath);
+  const svgFile = isSvgFile(filePath);
 
   useEffect(() => {
     isMountedRef.current = true;
@@ -72,6 +93,7 @@ export function FileViewerModal({
       setLoadState("loading");
       setErrorCode(null);
       setDiffCopied(false);
+      setSanitizedSvg(null);
       requestRef.current = 0;
       const nextMode = defaultMode ?? (hasDiff && !initialLine ? "diff" : "view");
       setMode(nextMode);
@@ -82,13 +104,29 @@ export function FileViewerModal({
     setLoadState("loading");
     setErrorCode(null);
 
+    if (imageFile && !svgFile) {
+      setLoadState("image");
+      return;
+    }
+
     filesClient
       .read({ path: filePath, rootPath })
       .then((result) => {
         if (!isMountedRef.current || requestRef.current !== requestId) return;
         if (result.ok) {
-          setContent(result.content);
-          setLoadState("loaded");
+          if (svgFile) {
+            const sanitized = sanitizeSvg(result.content);
+            if (sanitized.ok) {
+              setSanitizedSvg(sanitized.svg);
+              setLoadState("svg");
+            } else {
+              setErrorCode("INVALID_PATH");
+              setLoadState("error");
+            }
+          } else {
+            setContent(result.content);
+            setLoadState("loaded");
+          }
         } else {
           setErrorCode(result.code);
           setLoadState("error");
@@ -119,6 +157,12 @@ export function FileViewerModal({
       .catch((err) => console.error("[FileViewerModal] openInEditor failed:", err));
   }, [filePath, initialLine, initialCol]);
 
+  const handleOpenInImageViewer = useCallback(() => {
+    actionService
+      .dispatch("file.openImageViewer", { path: filePath }, { source: "user" })
+      .catch((err) => console.error("[FileViewerModal] openImageViewer failed:", err));
+  }, [filePath]);
+
   const handleCopyDiff = useCallback(async () => {
     if (!hasDiff || !diff) return;
     try {
@@ -147,6 +191,7 @@ export function FileViewerModal({
     : "";
 
   const canShowView = loadState === "loaded" && content !== null;
+  const isImageMode = loadState === "image" || loadState === "svg";
 
   return (
     <AppDialog isOpen={isOpen} onClose={onClose} size="6xl" maxHeight="max-h-[90vh]">
@@ -170,7 +215,7 @@ export function FileViewerModal({
           </TooltipProvider>
 
           {/* Show view/diff toggle only when both are potentially available */}
-          {hasDiff && (canShowView || loadState !== "loading") && (
+          {hasDiff && !imageFile && (canShowView || loadState !== "loading") && (
             <div className="flex bg-canopy-sidebar rounded p-0.5 shrink-0">
               <button
                 type="button"
@@ -253,21 +298,52 @@ export function FileViewerModal({
             </TooltipProvider>
           )}
 
-          <button
-            type="button"
-            onClick={handleOpenInEditor}
-            className="flex items-center gap-1.5 px-2.5 py-1 text-xs text-muted-foreground hover:text-canopy-text hover:bg-canopy-border rounded transition-colors"
-            title="Open in editor"
-          >
-            <ExternalLink className="w-3.5 h-3.5" />
-            Open in Editor
-          </button>
+          {imageFile ? (
+            <button
+              type="button"
+              onClick={handleOpenInImageViewer}
+              className="flex items-center gap-1.5 px-2.5 py-1 text-xs text-muted-foreground hover:text-canopy-text hover:bg-canopy-border rounded transition-colors"
+              title="Open in image viewer"
+            >
+              <ImageIcon className="w-3.5 h-3.5" />
+              Open in Image Viewer
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={handleOpenInEditor}
+              className="flex items-center gap-1.5 px-2.5 py-1 text-xs text-muted-foreground hover:text-canopy-text hover:bg-canopy-border rounded transition-colors"
+              title="Open in editor"
+            >
+              <ExternalLink className="w-3.5 h-3.5" />
+              Open in Editor
+            </button>
+          )}
           <AppDialog.CloseButton />
         </div>
       </AppDialog.Header>
 
       <AppDialog.BodyScroll className="p-0">
-        {mode === "view" && (
+        {isImageMode && (
+          <div className="flex items-center justify-center p-6 min-h-[300px]">
+            {loadState === "image" && (
+              <img
+                src={buildCanopyFileUrl(filePath, rootPath)}
+                alt={fileName}
+                className="max-w-full max-h-[70vh] object-contain rounded"
+                draggable={false}
+              />
+            )}
+            {loadState === "svg" && sanitizedSvg && (
+              <div
+                className="max-w-full max-h-[70vh] overflow-auto [&>svg]:max-w-full [&>svg]:h-auto"
+                dangerouslySetInnerHTML={{ __html: sanitizedSvg }}
+              />
+            )}
+          </div>
+        )}
+
+        {!isImageMode && mode === "view" && (
           <>
             {loadState === "loading" && (
               <div className="flex items-center justify-center h-64">
@@ -318,11 +394,11 @@ export function FileViewerModal({
           </>
         )}
 
-        {mode === "diff" && diff && (
+        {!isImageMode && mode === "diff" && diff && (
           <DiffViewer diff={diff} filePath={filePath} viewType={viewType} rootPath={rootPath} />
         )}
 
-        {mode === "diff" && !diff && (
+        {!isImageMode && mode === "diff" && !diff && (
           <div className="flex items-center justify-center h-64">
             <div className="flex items-center gap-3 text-muted-foreground">
               <svg className="w-5 h-5 animate-spin" viewBox="0 0 24 24">

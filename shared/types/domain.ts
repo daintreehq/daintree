@@ -923,6 +923,11 @@ export interface ProjectSettings {
   };
   /** Preferred external editor for this project */
   preferredEditor?: import("./editor.js").EditorConfig;
+  /** Preferred image viewer for this project */
+  preferredImageViewer?: {
+    mode: "os" | "custom";
+    customCommand?: string;
+  };
   /** Branch prefix mode for new worktrees */
   branchPrefixMode?: "none" | "username" | "custom";
   /** Custom branch prefix string when branchPrefixMode is "custom" (e.g., "feature/") */

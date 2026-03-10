@@ -453,6 +453,31 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
     ],
   },
 
+  // Image Viewer
+  {
+    id: "image-viewer",
+    tab: "imageViewer",
+    tabLabel: "Image Viewer",
+    section: "Image Viewer",
+    title: "Image Viewer",
+    description:
+      "Configure image viewer: use OS default (Preview, Photos) or a custom command (Photoshop, GIMP)",
+    keywords: [
+      "image",
+      "viewer",
+      "photo",
+      "picture",
+      "preview",
+      "png",
+      "jpg",
+      "svg",
+      "gif",
+      "open",
+      "photoshop",
+      "gimp",
+    ],
+  },
+
   // Troubleshooting
   {
     id: "troubleshooting-health",
