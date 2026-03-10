@@ -47,6 +47,7 @@ export type ActionId =
   | "files.search"
   | "file.view"
   | "file.openInEditor"
+  | "file.openImageViewer"
   | "slashCommands.list"
   | "artifact.saveToFile"
   | "artifact.applyPatch"

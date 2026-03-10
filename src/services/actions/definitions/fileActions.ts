@@ -16,6 +16,10 @@ const openInEditorArgsSchema = z.object({
   col: z.number().int().positive().optional(),
 });
 
+const openImageViewerArgsSchema = z.object({
+  path: z.string(),
+});
+
 export function registerFileActions(actions: ActionRegistry, _callbacks: ActionCallbacks): void {
   actions.set("file.view", () => ({
     id: "file.view",
@@ -49,6 +53,21 @@ export function registerFileActions(actions: ActionRegistry, _callbacks: ActionC
       const { path, line, col } = args as z.infer<typeof openInEditorArgsSchema>;
       const projectId = useProjectStore.getState().currentProject?.id;
       await systemClient.openInEditor({ path, line, col, projectId });
+    },
+  }));
+
+  actions.set("file.openImageViewer", () => ({
+    id: "file.openImageViewer",
+    title: "Open in Image Viewer",
+    description: "Open an image file in the system image viewer or a configured custom viewer",
+    category: "files",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    argsSchema: openImageViewerArgsSchema,
+    run: async (args: unknown) => {
+      const { path } = args as z.infer<typeof openImageViewerArgsSchema>;
+      await systemClient.openPath(path);
     },
   }));
 }
