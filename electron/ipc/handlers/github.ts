@@ -139,7 +139,7 @@ export function registerGithubHandlers(_deps: HandlerDependencies): () => void {
     if (hasGitHubToken()) {
       return { available: true };
     }
-    return { available: false, error: "GitHub token not configured. Set up in Settings." };
+    return { available: false, error: "GitHub token not configured. Set it in Settings." };
   };
   ipcMain.handle(CHANNELS.GITHUB_CHECK_CLI, handleGitHubCheckCli);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.GITHUB_CHECK_CLI));
