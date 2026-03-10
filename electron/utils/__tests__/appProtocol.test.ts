@@ -13,6 +13,8 @@ describe("appProtocol utilities", () => {
       expect(getMimeType("photo.jpg")).toBe("image/jpeg");
       expect(getMimeType("icon.svg")).toBe("image/svg+xml");
       expect(getMimeType("module.wasm")).toBe("application/wasm");
+      expect(getMimeType("photo.webp")).toBe("image/webp");
+      expect(getMimeType("image.bmp")).toBe("image/bmp");
     });
 
     it("should return default MIME type for unknown extensions", () => {

@@ -248,6 +248,14 @@ protocol.registerSchemesAsPrivileged([
       corsEnabled: true,
     },
   },
+  {
+    scheme: "canopy-file",
+    privileges: {
+      secure: true,
+      bypassCSP: true,
+      supportFetchAPI: true,
+    },
+  },
 ]);
 
 // Increase V8 heap size for renderer processes to handle large clipboard data
@@ -438,6 +446,7 @@ if (!gotTheLock) {
   app.whenReady().then(async () => {
     try {
       registerAppProtocol();
+      registerCanopyFileProtocol();
       setupWebviewCSP();
       await createWindow();
     } catch (error) {
@@ -617,6 +626,59 @@ function registerAppProtocol(): void {
         status: 500,
         headers: { "Content-Type": "text/plain" },
       });
+    }
+  });
+}
+
+function registerCanopyFileProtocol(): void {
+  protocol.handle("canopy-file", async (request) => {
+    if (request.method !== "GET" && request.method !== "HEAD") {
+      return new Response("Method Not Allowed", { status: 405 });
+    }
+
+    try {
+      const url = new URL(request.url);
+      const filePath = url.searchParams.get("path");
+      const rootPath = url.searchParams.get("root");
+
+      if (!filePath || !rootPath) {
+        return new Response("Missing path or root parameter", { status: 400 });
+      }
+
+      if (filePath.includes("\0") || rootPath.includes("\0")) {
+        return new Response("Invalid path", { status: 400 });
+      }
+
+      if (!path.isAbsolute(filePath) || !path.isAbsolute(rootPath)) {
+        return new Response("Paths must be absolute", { status: 400 });
+      }
+
+      const normalizedFile = path.normalize(filePath);
+      const normalizedRoot = path.normalize(rootPath);
+
+      if (
+        !normalizedFile.startsWith(normalizedRoot + path.sep) &&
+        normalizedFile !== normalizedRoot
+      ) {
+        return new Response("Forbidden — path outside root", { status: 403 });
+      }
+
+      const mimeType = getMimeType(normalizedFile);
+      const fileUrl = pathToFileURL(normalizedFile).toString();
+      const response = await net.fetch(fileUrl);
+
+      if (!response.ok) {
+        return new Response("Not Found", { status: 404 });
+      }
+
+      const buffer = await response.arrayBuffer();
+      return new Response(buffer, {
+        status: 200,
+        headers: { "Content-Type": mimeType },
+      });
+    } catch (err) {
+      console.error("[MAIN] canopy-file protocol error:", err);
+      return new Response("Internal Server Error", { status: 500 });
     }
   });
 }

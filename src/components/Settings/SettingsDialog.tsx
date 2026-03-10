@@ -24,6 +24,7 @@ import {
   Bell,
   Mic,
   Plug,
+  Image,
   Search,
   ChevronRight,
 } from "lucide-react";
@@ -42,6 +43,7 @@ import { KeyboardShortcutsTab } from "./KeyboardShortcutsTab";
 import { WorktreeSettingsTab } from "./WorktreeSettingsTab";
 import { ToolbarSettingsTab } from "./ToolbarSettingsTab";
 import { EditorIntegrationTab } from "./EditorIntegrationTab";
+import { ImageViewerTab } from "./ImageViewerTab";
 import { VoiceInputSettingsTab } from "./VoiceInputSettingsTab";
 import { McpServerSettingsTab } from "./McpServerSettingsTab";
 import { SETTINGS_SEARCH_INDEX } from "./settingsSearchIndex";
@@ -72,6 +74,7 @@ export type SettingsTab =
   | "toolbar"
   | "notifications"
   | "editor"
+  | "imageViewer"
   | "voice"
   | "mcp"
   | "troubleshooting";
@@ -279,6 +282,7 @@ export function SettingsDialog({
     toolbar: "Toolbar Customization",
     notifications: "Notifications",
     editor: "Editor Integration",
+    imageViewer: "Image Viewer",
     voice: "Voice Input",
     mcp: "MCP Server",
     troubleshooting: "Troubleshooting",
@@ -296,6 +300,7 @@ export function SettingsDialog({
     toolbar: <SettingsIcon className="w-5 h-5 text-canopy-text/60" />,
     notifications: <Bell className="w-5 h-5 text-canopy-text/60" />,
     editor: <Code className="w-5 h-5 text-canopy-text/60" />,
+    imageViewer: <Image className="w-5 h-5 text-canopy-text/60" />,
     voice: <Mic className="w-5 h-5 text-canopy-text/60" />,
     mcp: <Plug className="w-5 h-5 text-canopy-text/60" />,
     troubleshooting: <LifeBuoy className="w-5 h-5 text-canopy-text/60" />,
@@ -452,6 +457,15 @@ export function SettingsDialog({
                 onSelect={handleNavSelect}
               />
               <NavItem
+                tab="imageViewer"
+                icon={<Image className="w-4 h-4" />}
+                label="Image Viewer"
+                activeTab={activeTab}
+                isSearching={isSearching}
+                matchCount={matchCounts.imageViewer}
+                onSelect={handleNavSelect}
+              />
+              <NavItem
                 tab="sidecar"
                 icon={<PanelRight className="w-4 h-4" />}
                 label="Sidecar"
@@ -584,6 +598,10 @@ export function SettingsDialog({
 
                 <div className={activeTab === "editor" ? "" : "hidden"}>
                   <EditorIntegrationTab />
+                </div>
+
+                <div className={activeTab === "imageViewer" ? "" : "hidden"}>
+                  <ImageViewerTab />
                 </div>
 
                 <div className={activeTab === "voice" ? "" : "hidden"}>
