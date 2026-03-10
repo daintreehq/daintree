@@ -51,10 +51,7 @@ function evictOldestSnapshot(): void {
   }
 }
 
-function isSnapshotValidForProject(
-  snapshot: ProjectSnapshot,
-  projectPath: string
-): boolean {
+function isSnapshotValidForProject(snapshot: ProjectSnapshot, projectPath: string): boolean {
   let foundMain = false;
   for (const wt of snapshot.worktrees.values()) {
     if (wt.isMainWorktree) {
