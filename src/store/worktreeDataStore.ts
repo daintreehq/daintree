@@ -55,8 +55,10 @@ function isSnapshotValidForProject(
   snapshot: ProjectSnapshot,
   projectPath: string
 ): boolean {
+  let foundMain = false;
   for (const wt of snapshot.worktrees.values()) {
     if (wt.isMainWorktree) {
+      foundMain = true;
       if (path.normalize(wt.path) !== path.normalize(projectPath)) {
         console.warn("[WorktreeDataStore] Contaminated snapshot detected", {
           mainWorktreePath: wt.path,
@@ -64,8 +66,14 @@ function isSnapshotValidForProject(
         });
         return false;
       }
-      return true;
+      break;
     }
+  }
+  if (!foundMain && snapshot.worktrees.size > 0) {
+    console.warn("[WorktreeDataStore] Snapshot has no main worktree, treating as invalid", {
+      expectedProjectPath: projectPath,
+    });
+    return false;
   }
   return true;
 }
