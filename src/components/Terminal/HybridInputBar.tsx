@@ -880,7 +880,11 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
             isComposingRef.current = false;
             if (!submitAfterCompositionRef.current) return false;
             submitAfterCompositionRef.current = false;
-            sendFromEditor();
+            // Defer one tick so CM6 can commit the final composition text to
+            // view.state.doc before we read it.  Unlike the old RAF approach,
+            // setTimeout is NOT canceled by the blur handler, so a focus shift
+            // during composition cannot silently drop the submission.
+            setTimeout(sendFromEditor, 0);
             return false;
           },
           keydown: (event) => {
