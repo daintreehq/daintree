@@ -1,5 +1,6 @@
 import type { Worktree, WorktreeState } from "@shared/types/domain";
 import { BRANCH_PREFIX_MAP } from "@shared/config/branchPrefixes";
+import { parseExactNumber } from "@/lib/parseExactNumber";
 import type {
   OrderBy,
   StatusFilter,
@@ -107,9 +108,16 @@ export function matchesFilters(
 ): boolean {
   // Text search
   if (filters.query.length > 0) {
-    const searchable = buildSearchableText(worktree);
-    if (!searchable.includes(filters.query.toLowerCase())) {
-      return false;
+    const exactNum = parseExactNumber(filters.query);
+    if (exactNum !== null && filters.query.trim().startsWith("#")) {
+      if (worktree.issueNumber !== exactNum && worktree.prNumber !== exactNum) {
+        return false;
+      }
+    } else {
+      const searchable = buildSearchableText(worktree);
+      if (!searchable.includes(filters.query.toLowerCase())) {
+        return false;
+      }
     }
   }
 

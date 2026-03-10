@@ -56,7 +56,7 @@ import { PanelTransitionOverlay } from "./components/Panel";
 import {
   WorktreeCard,
   WorktreePalette,
-  WorktreeFilterPopover,
+  WorktreeSidebarSearchBar,
   WorktreeOverviewModal,
 } from "./components/Worktree";
 import { CrossWorktreeDiff } from "./components/Worktree/CrossWorktreeDiff";
@@ -189,6 +189,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
 
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const scrollContentRef = useRef<HTMLDivElement>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
   const [hiddenAbove, setHiddenAbove] = useState(0);
   const [hiddenBelow, setHiddenBelow] = useState(0);
 
@@ -242,6 +243,11 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   }, [worktrees, terminals, getWorktreeErrors]);
 
   // Apply filters and sorting
+  const mainWorktree = useMemo(
+    () => worktrees.find((w) => w.isMainWorktree) ?? worktrees[0] ?? null,
+    [worktrees]
+  );
+
   const { filteredWorktrees, groupedSections } = useMemo(() => {
     const filters: FilterState = {
       query,
@@ -252,8 +258,9 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
       activityFilters,
     };
 
-    // Filter worktrees
-    const filtered = worktrees.filter((worktree) => {
+    // Filter non-main worktrees only (exclude by ID to handle fallback case)
+    const nonMain = worktrees.filter((w) => w.id !== mainWorktree?.id);
+    const filtered = nonMain.filter((worktree) => {
       const derived = derivedMetaMap.get(worktree.id) ?? {
         hasErrors: false,
         terminalCount: 0,
@@ -265,7 +272,6 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
       };
       const isActive = worktree.id === activeWorktreeId;
 
-      // Always show active worktree if setting is enabled
       if (alwaysShowActive && isActive) {
         return true;
       }
@@ -273,14 +279,11 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
       return matchesFilters(worktree, filters, derived, isActive);
     });
 
-    // Filter out pinned worktrees that no longer exist
     const existingWorktreeIds = new Set(worktrees.map((w) => w.id));
     const validPinnedWorktrees = pinnedWorktrees.filter((id) => existingWorktreeIds.has(id));
 
-    // Sort worktrees
     const sorted = sortWorktrees(filtered, orderBy, validPinnedWorktrees);
 
-    // Group if enabled
     if (isGroupedByType) {
       return {
         filteredWorktrees: sorted,
@@ -301,6 +304,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     activityFilters,
     alwaysShowActive,
     pinnedWorktrees,
+    mainWorktree,
     derivedMetaMap,
     activeWorktreeId,
   ]);
@@ -481,6 +485,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   }
 
   const rootPath = currentProject?.path ?? "";
+  const hasNonMainWorktrees = worktrees.length > 1;
 
   const renderWorktreeCard = (worktree: WorktreeState) => (
     <WorktreeCard
@@ -525,7 +530,6 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
           >
             <RefreshCw className={`w-3.5 h-3.5 ${isRefreshing ? "animate-spin" : ""}`} />
           </button>
-          <WorktreeFilterPopover />
           <button
             onClick={() => openCreateDialog()}
             className="flex items-center gap-1.5 text-xs font-medium px-2.5 py-1 text-canopy-text/60 hover:text-canopy-text hover:bg-white/[0.06] rounded transition-colors"
@@ -536,7 +540,13 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
         </div>
       </div>
 
-      {/* List Section */}
+      {/* Main worktree — always visible */}
+      {mainWorktree && <div className="shrink-0">{renderWorktreeCard(mainWorktree)}</div>}
+
+      {/* Inline search bar — only when there are non-main worktrees */}
+      {hasNonMainWorktrees && <WorktreeSidebarSearchBar inputRef={searchInputRef} />}
+
+      {/* Non-main worktree list */}
       <div className="relative flex-1 min-h-0">
         <div ref={scrollContainerRef} className="h-full overflow-y-auto">
           <div ref={scrollContentRef}>
