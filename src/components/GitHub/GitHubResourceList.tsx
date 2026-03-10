@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
-import { Search, ExternalLink, RefreshCw, AlertCircle, Plus } from "lucide-react";
+import { Search, ExternalLink, RefreshCw, WifiOff, Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { githubClient } from "@/clients/githubClient";
@@ -7,6 +7,11 @@ import { actionService } from "@/services/ActionService";
 import { GitHubListItem } from "./GitHubListItem";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import type { GitHubIssue, GitHubPR } from "@shared/types/github";
+
+function sanitizeIpcError(message: string): string {
+  const cleaned = message.replace(/^Error invoking remote method '[^']+': (?:Error: )?/, "").trim();
+  return cleaned.length > 120 ? cleaned.slice(0, 117) + "…" : cleaned;
+}
 
 function parseExactNumber(query: string): number | null {
   const trimmed = query.trim();
@@ -307,25 +312,6 @@ export function GitHubResourceList({
     );
   };
 
-  const renderError = () => (
-    <div className="p-4 m-3 rounded-[var(--radius-md)] bg-[color-mix(in_oklab,var(--color-status-error)_10%,transparent)] border border-[color-mix(in_oklab,var(--color-status-error)_20%,transparent)]">
-      <div className="flex items-center gap-2 text-status-error">
-        <AlertCircle className="h-4 w-4" />
-        <span className="text-sm font-medium">Error</span>
-      </div>
-      <p className="text-sm text-status-error mt-1">{error}</p>
-      <Button
-        variant="ghost"
-        size="sm"
-        onClick={handleRetry}
-        className="mt-2 text-status-error hover:brightness-110"
-      >
-        <RefreshCw />
-        Retry
-      </Button>
-    </div>
-  );
-
   const renderEmpty = () => {
     if (exactNumberNotFound !== null) {
       return (
@@ -397,15 +383,24 @@ export function GitHubResourceList({
 
       <div className="overflow-y-auto flex-1 min-h-0">
         {loading && !data.length ? (
-          // Always show skeleton during initial load - never show empty state based on initialCount
-          // Empty state should only appear after API confirms there are no results
           renderSkeleton(initialCount && initialCount > 0 ? initialCount : MAX_SKELETON_ITEMS)
-        ) : error ? (
-          renderError()
-        ) : data.length === 0 ? (
-          renderEmpty()
-        ) : (
+        ) : data.length > 0 ? (
           <>
+            {error && (
+              <div className="px-3 py-2 border-b border-[var(--border-divider)] flex items-center gap-2 text-muted-foreground bg-overlay-soft">
+                <WifiOff className="h-3.5 w-3.5 shrink-0" />
+                <span className="text-xs truncate">{sanitizeIpcError(error)}</span>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={handleRetry}
+                  className="ml-auto h-6 text-xs text-muted-foreground hover:text-canopy-text shrink-0"
+                >
+                  <RefreshCw className="h-3 w-3" />
+                  Retry
+                </Button>
+              </div>
+            )}
             <div className="divide-y divide-[var(--border-divider)]">
               {data.map((item) => (
                 <GitHubListItem
@@ -420,13 +415,15 @@ export function GitHubResourceList({
             {hasMore && (
               <div className="p-3 space-y-2">
                 {loadMoreError && (
-                  <div className="p-2 rounded-[var(--radius-md)] bg-status-error/10 border border-status-error/20">
-                    <p className="text-xs text-status-error">{loadMoreError}</p>
+                  <div className="p-2 rounded-[var(--radius-md)] bg-overlay-soft border border-[var(--border-divider)]">
+                    <p className="text-xs text-muted-foreground">
+                      {sanitizeIpcError(loadMoreError)}
+                    </p>
                     <Button
                       variant="ghost"
                       size="sm"
                       onClick={handleLoadMore}
-                      className="mt-1 text-status-error hover:text-status-error/70 h-6 text-xs"
+                      className="mt-1 text-muted-foreground hover:text-canopy-text h-6 text-xs"
                     >
                       Retry
                     </Button>
@@ -450,6 +447,22 @@ export function GitHubResourceList({
               </div>
             )}
           </>
+        ) : error ? (
+          <div className="p-8 text-center text-muted-foreground">
+            <WifiOff className="h-5 w-5 mx-auto mb-2 opacity-50" />
+            <p className="text-sm">{sanitizeIpcError(error)}</p>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={handleRetry}
+              className="mt-2 text-muted-foreground hover:text-canopy-text"
+            >
+              <RefreshCw className="h-3.5 w-3.5" />
+              Retry
+            </Button>
+          </div>
+        ) : (
+          renderEmpty()
         )}
       </div>
 
