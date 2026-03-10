@@ -645,6 +645,10 @@ function registerCanopyFileProtocol(): void {
         return new Response("Missing path or root parameter", { status: 400 });
       }
 
+      if (filePath.includes("\0") || rootPath.includes("\0")) {
+        return new Response("Invalid path", { status: 400 });
+      }
+
       if (!path.isAbsolute(filePath) || !path.isAbsolute(rootPath)) {
         return new Response("Paths must be absolute", { status: 400 });
       }

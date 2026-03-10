@@ -63,6 +63,7 @@ export function FileViewerModal({
 }: FileViewerModalProps) {
   const hasDiff = Boolean(diff && diff.trim() && diff !== "NO_CHANGES");
   const [mode, setMode] = useState<ViewMode>(() => {
+    if (isImageFile(filePath)) return "view";
     if (defaultMode) return defaultMode;
     return hasDiff && !initialLine ? "diff" : "view";
   });
@@ -333,6 +334,7 @@ export function FileViewerModal({
           <div className="flex items-center justify-center p-6 min-h-[300px]">
             {loadState === "image" && (
               <img
+                key={filePath}
                 src={buildCanopyFileUrl(filePath, rootPath)}
                 alt={fileName}
                 className="max-w-full max-h-[70vh] object-contain rounded"
