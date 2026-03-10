@@ -126,7 +126,11 @@ const ORDER_OPTIONS: { value: OrderBy; label: string }[] = [
   { value: "alpha", label: "Alphabetical" },
 ];
 
-export function WorktreeFilterPopover() {
+interface WorktreeFilterPopoverProps {
+  hideSearchInput?: boolean;
+}
+
+export function WorktreeFilterPopover({ hideSearchInput = false }: WorktreeFilterPopoverProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [localQuery, setLocalQuery] = useState("");
   const debounceRef = useRef<NodeJS.Timeout | null>(null);
@@ -153,7 +157,10 @@ export function WorktreeFilterPopover() {
     hasActiveFilters,
   } = useWorktreeFilterStore();
 
-  const filterCount = getActiveFilterCount();
+  const fullFilterCount = getActiveFilterCount();
+  const filterCount = hideSearchInput
+    ? fullFilterCount - (query.trim().length > 0 ? 1 : 0)
+    : fullFilterCount;
   const showBadge = filterCount > 0;
 
   useEffect(() => {
@@ -216,39 +223,41 @@ export function WorktreeFilterPopover() {
       >
         <div className="flex flex-col">
           {/* Search */}
-          <div className="p-3 border-b border-canopy-border">
-            <div className="relative">
-              <input
-                type="text"
-                value={localQuery}
-                onChange={(e) => handleQueryChange(e.target.value)}
-                placeholder="Search worktrees..."
-                aria-label="Search worktrees"
-                className={cn(
-                  "w-full px-2.5 py-1.5 text-xs rounded",
-                  "bg-canopy-bg border border-canopy-border",
-                  "text-canopy-text placeholder-canopy-text/40",
-                  "focus:outline-none focus:border-canopy-accent/50"
+          {!hideSearchInput && (
+            <div className="p-3 border-b border-canopy-border">
+              <div className="relative">
+                <input
+                  type="text"
+                  value={localQuery}
+                  onChange={(e) => handleQueryChange(e.target.value)}
+                  placeholder="Search worktrees..."
+                  aria-label="Search worktrees"
+                  className={cn(
+                    "w-full px-2.5 py-1.5 text-xs rounded",
+                    "bg-canopy-bg border border-canopy-border",
+                    "text-canopy-text placeholder-canopy-text/40",
+                    "focus:outline-none focus:border-canopy-accent/50"
+                  )}
+                />
+                {localQuery && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (debounceRef.current) {
+                        clearTimeout(debounceRef.current);
+                      }
+                      setLocalQuery("");
+                      setQuery("");
+                    }}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 text-canopy-text/40 hover:text-canopy-text"
+                    aria-label="Clear search"
+                  >
+                    <X className="w-3 h-3" />
+                  </button>
                 )}
-              />
-              {localQuery && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (debounceRef.current) {
-                      clearTimeout(debounceRef.current);
-                    }
-                    setLocalQuery("");
-                    setQuery("");
-                  }}
-                  className="absolute right-2 top-1/2 -translate-y-1/2 text-canopy-text/40 hover:text-canopy-text"
-                  aria-label="Clear search"
-                >
-                  <X className="w-3 h-3" />
-                </button>
-              )}
+              </div>
             </div>
-          </div>
+          )}
 
           {/* Sort Order */}
           <div className="p-3 border-b border-canopy-border">

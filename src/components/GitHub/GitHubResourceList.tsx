@@ -7,19 +7,11 @@ import { actionService } from "@/services/ActionService";
 import { GitHubListItem } from "./GitHubListItem";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import type { GitHubIssue, GitHubPR } from "@shared/types/github";
+import { parseExactNumber } from "@/lib/parseExactNumber";
 
 function sanitizeIpcError(message: string): string {
   const cleaned = message.replace(/^Error invoking remote method '[^']+': (?:Error: )?/, "").trim();
   return cleaned.length > 120 ? cleaned.slice(0, 117) + "…" : cleaned;
-}
-
-function parseExactNumber(query: string): number | null {
-  const trimmed = query.trim();
-  const match = trimmed.match(/^#?(\d+)$/);
-  if (!match) return null;
-  const num = parseInt(match[1], 10);
-  if (num <= 0 || !Number.isFinite(num)) return null;
-  return num;
 }
 
 interface GitHubResourceListProps {
