@@ -1,3 +1,4 @@
+import path from "path-browserify";
 import { create } from "zustand";
 import type { WorktreeState, IssueAssociation } from "@shared/types";
 import { worktreeClient, githubClient } from "@/clients";
@@ -48,6 +49,25 @@ function evictOldestSnapshot(): void {
   if (firstKey !== undefined) {
     projectSnapshotCache.delete(firstKey);
   }
+}
+
+function isSnapshotValidForProject(
+  snapshot: ProjectSnapshot,
+  projectPath: string
+): boolean {
+  for (const wt of snapshot.worktrees.values()) {
+    if (wt.isMainWorktree) {
+      if (path.normalize(wt.path) !== path.normalize(projectPath)) {
+        console.warn("[WorktreeDataStore] Contaminated snapshot detected", {
+          mainWorktreePath: wt.path,
+          expectedProjectPath: projectPath,
+        });
+        return false;
+      }
+      return true;
+    }
+  }
+  return true;
 }
 
 function mergeFetchedWorktrees(
@@ -452,17 +472,25 @@ export const useWorktreeDataStore = create<WorktreeDataStore>()((set, get) => ({
   },
 }));
 
-export function snapshotProjectWorktrees(projectId: string): void {
+export function snapshotProjectWorktrees(projectId: string, projectPath?: string): void {
   const { worktrees, projectId: storeProjectId } = useWorktreeDataStore.getState();
   if (worktrees.size === 0) return;
   // Don't cache if the store has already moved to a different project.
   if (storeProjectId && storeProjectId !== projectId) return;
-  const activeWorktreeId = useWorktreeSelectionStore.getState().activeWorktreeId;
-  projectSnapshotCache.delete(projectId);
-  projectSnapshotCache.set(projectId, {
+
+  const snapshot: ProjectSnapshot = {
     worktrees: new Map(worktrees),
-    activeWorktreeId,
-  });
+    activeWorktreeId: useWorktreeSelectionStore.getState().activeWorktreeId,
+  };
+
+  if (projectPath && !isSnapshotValidForProject(snapshot, projectPath)) {
+    console.warn("[WorktreeDataStore] Refusing to cache contaminated snapshot", { projectId });
+    projectSnapshotCache.delete(projectId);
+    return;
+  }
+
+  projectSnapshotCache.delete(projectId);
+  projectSnapshotCache.set(projectId, snapshot);
   evictOldestSnapshot();
 }
 
@@ -488,7 +516,7 @@ export function cleanupWorktreeDataStore() {
   });
 }
 
-export function prePopulateWorktreeSnapshot(projectId: string) {
+export function prePopulateWorktreeSnapshot(projectId: string, projectPath?: string) {
   // Pre-populate the store with cached snapshot data for instant sidebar rendering.
   // Does NOT trigger IPC fetch — the main process may not have switched yet.
   // Call forceReinitializeWorktreeDataStore() once the backend is ready to fetch fresh data.
@@ -506,10 +534,16 @@ export function prePopulateWorktreeSnapshot(projectId: string) {
   usePulseStore.getState().invalidateAll();
 
   const snapshot = projectSnapshotCache.get(projectId);
-  const hasSnapshot = snapshot && snapshot.worktrees.size > 0;
+  let hasSnapshot = snapshot != null && snapshot.worktrees.size > 0;
+
+  if (hasSnapshot && projectPath && !isSnapshotValidForProject(snapshot!, projectPath)) {
+    console.warn("[WorktreeDataStore] Discarding contaminated snapshot on restore", { projectId });
+    projectSnapshotCache.delete(projectId);
+    hasSnapshot = false;
+  }
 
   useWorktreeDataStore.setState({
-    worktrees: hasSnapshot ? new Map(snapshot.worktrees) : new Map(),
+    worktrees: hasSnapshot ? new Map(snapshot!.worktrees) : new Map(),
     projectId,
     isLoading: !hasSnapshot,
     error: null,
@@ -521,8 +555,8 @@ export function prePopulateWorktreeSnapshot(projectId: string) {
 
   // Restore the active worktree selection from the snapshot so the sidebar
   // shows the correct worktree highlighted immediately.
-  if (hasSnapshot && snapshot.activeWorktreeId) {
-    useWorktreeSelectionStore.setState({ activeWorktreeId: snapshot.activeWorktreeId });
+  if (hasSnapshot && snapshot!.activeWorktreeId) {
+    useWorktreeSelectionStore.setState({ activeWorktreeId: snapshot!.activeWorktreeId });
   }
 }
 

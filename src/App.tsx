@@ -130,6 +130,7 @@ interface SidebarContentProps {
 function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   const { worktrees, isLoading, error, refresh } = useWorktrees();
   const [isRefreshing, startRefreshTransition] = useTransition();
+  const currentProject = useProjectStore((state) => state.currentProject);
   useProjectSettings();
   const { launchAgent, availability, agentSettings } = useAgentLauncher();
   const {
@@ -479,8 +480,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     );
   }
 
-  const rootPath =
-    worktrees.length > 0 && worktrees[0].path ? worktrees[0].path.split("/.git/")[0] : "";
+  const rootPath = currentProject?.path ?? "";
 
   const renderWorktreeCard = (worktree: WorktreeState) => (
     <WorktreeCard

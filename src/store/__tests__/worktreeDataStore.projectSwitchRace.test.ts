@@ -53,6 +53,7 @@ const {
   cleanupWorktreeDataStore,
   forceReinitializeWorktreeDataStore,
   prePopulateWorktreeSnapshot,
+  snapshotProjectWorktrees,
   resetSnapshotCacheForTests,
 } = await import("../worktreeDataStore");
 
@@ -302,5 +303,114 @@ describe("worktreeDataStore project switch race conditions", () => {
     expect(state.worktrees.has("project-a-main")).toBe(false);
     expect(state.worktrees.size).toBe(2);
     expect(state.projectId).toBe("project-b");
+  });
+});
+
+describe("worktreeDataStore snapshot contamination detection", () => {
+  beforeEach(() => {
+    getAllMock.mockReset();
+    refreshMock.mockReset();
+    vi.clearAllMocks();
+    cleanupWorktreeDataStore();
+    resetSnapshotCacheForTests();
+    useWorktreeDataStore.setState({
+      worktrees: new Map(),
+      projectId: null,
+      isLoading: true,
+      error: null,
+      isInitialized: false,
+    });
+  });
+
+  it("snapshotProjectWorktrees refuses to cache when main worktree path does not match project path", async () => {
+    const worktrees = new Map([
+      [
+        "wt-main",
+        createMockWorktree("wt-main", {
+          isMainWorktree: true,
+          path: "/repos/project-b",
+        }),
+      ],
+      [
+        "wt-feature",
+        createMockWorktree("wt-feature", {
+          path: "/repos/project-b-worktrees/feature-1",
+        }),
+      ],
+    ]);
+
+    useWorktreeDataStore.setState({
+      worktrees,
+      projectId: "project-a",
+      isLoading: false,
+      isInitialized: true,
+    });
+
+    // Snapshot with project path that doesn't match the main worktree
+    snapshotProjectWorktrees("project-a", "/repos/project-a");
+
+    // Prepopulate should have nothing cached
+    prePopulateWorktreeSnapshot("project-a", "/repos/project-a");
+    const state = useWorktreeDataStore.getState();
+    expect(state.worktrees.size).toBe(0);
+    expect(state.isLoading).toBe(true);
+  });
+
+  it("prePopulateWorktreeSnapshot discards a poisoned cached snapshot and leaves store in loading state", async () => {
+    // Simulate a poisoned cache: project-a's key has project-b's worktrees
+    const projectBWorktrees = [
+      createMockWorktree("project-b-main", {
+        isMainWorktree: true,
+        path: "/repos/project-b",
+      }),
+    ];
+
+    // First, put poisoned data in the cache by setting store state and snapshotting
+    // WITHOUT the projectPath guard (simulating pre-fix behavior).
+    useWorktreeDataStore.setState({
+      worktrees: new Map(projectBWorktrees.map((wt) => [wt.id, wt])),
+      projectId: "project-a",
+      isLoading: false,
+      isInitialized: true,
+    });
+    // Snapshot without path validation (simulates legacy cache entry)
+    snapshotProjectWorktrees("project-a");
+
+    // Now try to restore with path validation
+    cleanupWorktreeDataStore();
+    prePopulateWorktreeSnapshot("project-a", "/repos/project-a");
+
+    const state = useWorktreeDataStore.getState();
+    expect(state.worktrees.size).toBe(0);
+    expect(state.isLoading).toBe(true);
+    expect(state.projectId).toBe("project-a");
+  });
+
+  it("prePopulateWorktreeSnapshot restores a valid snapshot when paths match", async () => {
+    const projectAWorktrees = [
+      createMockWorktree("project-a-main", {
+        isMainWorktree: true,
+        path: "/repos/project-a",
+      }),
+      createMockWorktree("project-a-feature", {
+        path: "/repos/project-a-worktrees/feature-1",
+      }),
+    ];
+
+    useWorktreeDataStore.setState({
+      worktrees: new Map(projectAWorktrees.map((wt) => [wt.id, wt])),
+      projectId: "project-a",
+      isLoading: false,
+      isInitialized: true,
+    });
+    snapshotProjectWorktrees("project-a", "/repos/project-a");
+
+    cleanupWorktreeDataStore();
+    prePopulateWorktreeSnapshot("project-a", "/repos/project-a");
+
+    const state = useWorktreeDataStore.getState();
+    expect(state.worktrees.size).toBe(2);
+    expect(state.worktrees.has("project-a-main")).toBe(true);
+    expect(state.isLoading).toBe(false);
   });
 });
