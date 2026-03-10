@@ -189,6 +189,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
 
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const scrollContentRef = useRef<HTMLDivElement>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
   const [hiddenAbove, setHiddenAbove] = useState(0);
   const [hiddenBelow, setHiddenBelow] = useState(0);
 
@@ -483,8 +484,6 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   }
 
   const rootPath = currentProject?.path ?? "";
-
-  const searchInputRef = useRef<HTMLInputElement>(null);
   const hasNonMainWorktrees = worktrees.length > 1;
 
   const renderWorktreeCard = (worktree: WorktreeState) => (
