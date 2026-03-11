@@ -1,6 +1,7 @@
 import { useState, useCallback, useMemo, useEffect, useRef } from "react";
 import Fuse, { type IFuseOptions } from "fuse.js";
 import { useProjectStore } from "@/store/projectStore";
+import { usePaletteStore } from "@/store/paletteStore";
 import { notify } from "@/lib/notify";
 import type { Project, ProjectStats } from "@shared/types";
 import { projectClient, terminalClient } from "@/clients";
@@ -66,8 +67,10 @@ const MAX_RESULTS = 15;
 const DEBOUNCE_MS = 150;
 
 export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
-  const [isOpen, setIsOpen] = useState(false);
+  const modalIsOpen = usePaletteStore((state) => state.activePaletteId === "project-switcher");
+  const [dropdownIsOpen, setDropdownIsOpen] = useState(false);
   const [mode, setMode] = useState<ProjectSwitcherMode>("modal");
+  const isOpen = mode === "modal" ? modalIsOpen : dropdownIsOpen;
   const [query, setQuery] = useState("");
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [debouncedQuery, setDebouncedQuery] = useState("");
@@ -304,7 +307,11 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
   const open = useCallback(
     (nextMode: ProjectSwitcherMode = "modal") => {
       setMode(nextMode);
-      setIsOpen(true);
+      if (nextMode === "modal") {
+        usePaletteStore.getState().openPalette("project-switcher");
+      } else {
+        setDropdownIsOpen(true);
+      }
       setQuery("");
       setSelectedIndex(sortedProjects.length >= 2 ? 1 : 0);
       setDebouncedQuery("");
@@ -313,15 +320,20 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
   );
 
   const close = useCallback(() => {
-    setIsOpen(false);
+    if (mode === "modal") {
+      usePaletteStore.getState().closePalette("project-switcher");
+    } else {
+      setDropdownIsOpen(false);
+    }
     setQuery("");
     setSelectedIndex(0);
     setDebouncedQuery("");
-  }, []);
+  }, [mode]);
 
   const toggle = useCallback(
     (nextMode: ProjectSwitcherMode = "modal") => {
-      if (isOpen) {
+      const currentlyOpen = nextMode === "modal" ? modalIsOpen : dropdownIsOpen;
+      if (currentlyOpen) {
         setSelectedIndex((prev) => {
           if (results.length <= 1) return prev;
           const next = prev + 1;
@@ -335,7 +347,7 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
         open(nextMode);
       }
     },
-    [isOpen, open, results]
+    [modalIsOpen, dropdownIsOpen, open, results]
   );
 
   const selectPrevious = useCallback(() => {

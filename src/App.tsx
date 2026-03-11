@@ -91,6 +91,7 @@ import {
   useFocusStore,
   cleanupWorktreeDataStore,
   useAgentPreferencesStore,
+  usePaletteStore,
   type RetryAction,
 } from "./store";
 import { useShallow } from "zustand/react/shallow";
@@ -752,7 +753,7 @@ function App() {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [settingsTab, setSettingsTab] = useState<SettingsTab>("general");
   const [isShortcutsOpen, setIsShortcutsOpen] = useState(false);
-  const [isNotesPaletteOpen, setIsNotesPaletteOpen] = useState(false);
+  const isNotesPaletteOpen = usePaletteStore((state) => state.activePaletteId === "notes");
   const [isWorktreeOverviewOpen, setIsWorktreeOverviewOpen] = useState(false);
   const onLayoutRender = useRenderProfiler("app-layout", { sampleRate: 0.15 });
   const onContentGridRender = useRenderProfiler("content-grid", { sampleRate: 0.15 });
@@ -871,11 +872,11 @@ function App() {
   }, [handleOpenSettingsTab]);
 
   const openNotesPalette = useCallback(() => {
-    setIsNotesPaletteOpen(true);
+    usePaletteStore.getState().openPalette("notes");
   }, []);
 
   const closeNotesPalette = useCallback(() => {
-    setIsNotesPaletteOpen(false);
+    usePaletteStore.getState().closePalette("notes");
   }, []);
 
   const toggleWorktreeOverview = useCallback(() => {

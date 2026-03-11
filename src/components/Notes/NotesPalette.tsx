@@ -1,10 +1,11 @@
-import { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo } from "react";
 import { createPortal } from "react-dom";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { createTooltipWithShortcut } from "@/lib/platform";
 import { keybindingService } from "@/services/KeybindingService";
 import { useOverlayState } from "@/hooks";
+import { usePaletteStore } from "@/store/paletteStore";
 import { useNotesStore } from "@/store/notesStore";
 import { useTerminalStore } from "@/store/terminalStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
@@ -92,12 +93,14 @@ export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
     "block w-full m-0 px-1 py-0.5 text-sm font-medium leading-tight border rounded box-border";
 
   // Focus management
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (isOpen) {
       previousFocusRef.current = document.activeElement as HTMLElement;
       requestAnimationFrame(() => inputRef.current?.focus());
     } else if (previousFocusRef.current) {
-      previousFocusRef.current.focus();
+      if (!usePaletteStore.getState().activePaletteId) {
+        previousFocusRef.current.focus();
+      }
       previousFocusRef.current = null;
     }
   }, [isOpen]);
