@@ -91,6 +91,126 @@ describe("notify()", () => {
     });
   });
 
+  describe("history actions — forwards serializable descriptors", () => {
+    it("stores actions in history when action has actionId", () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      notify({
+        type: "success",
+        message: "Agent done",
+        priority: "high",
+        action: {
+          label: "Go to terminal",
+          onClick: () => {},
+          actionId: "panel.focus",
+          actionArgs: { panelId: "p1" },
+        },
+      });
+      const entry = useNotificationHistoryStore.getState().entries[0];
+      expect(entry.actions).toHaveLength(1);
+      expect(entry.actions![0]).toEqual({
+        label: "Go to terminal",
+        actionId: "panel.focus",
+        actionArgs: { panelId: "p1" },
+        variant: undefined,
+      });
+    });
+
+    it("does not store actions when action has only onClick (no actionId)", () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      notify({
+        type: "info",
+        message: "No descriptor",
+        priority: "high",
+        action: { label: "Click me", onClick: () => {} },
+      });
+      const entry = useNotificationHistoryStore.getState().entries[0];
+      expect(entry.actions).toBeUndefined();
+    });
+
+    it("filters mixed actions array to only descriptor-backed ones", () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      notify({
+        type: "info",
+        message: "Mixed",
+        priority: "high",
+        actions: [
+          { label: "No ID", onClick: () => {} },
+          {
+            label: "Has ID",
+            onClick: () => {},
+            actionId: "panel.focus",
+            actionArgs: { panelId: "p2" },
+          },
+        ],
+      });
+      const entry = useNotificationHistoryStore.getState().entries[0];
+      expect(entry.actions).toHaveLength(1);
+      expect(entry.actions![0].label).toBe("Has ID");
+    });
+
+    it("forwards actions to history in grid-bar path", () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      notify({
+        type: "info",
+        message: "Grid bar",
+        placement: "grid-bar",
+        action: {
+          label: "Retry",
+          onClick: () => {},
+          actionId: "panel.focus",
+          actionArgs: { panelId: "p3" },
+        },
+      });
+      const entry = useNotificationHistoryStore.getState().entries[0];
+      expect(entry.actions).toHaveLength(1);
+      expect(entry.actions![0].actionId).toBe("panel.focus");
+    });
+
+    it("preserves variant in history action", () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      notify({
+        type: "info",
+        message: "With variant",
+        priority: "high",
+        action: {
+          label: "Secondary",
+          onClick: () => {},
+          actionId: "panel.focus",
+          variant: "secondary",
+        },
+      });
+      const entry = useNotificationHistoryStore.getState().entries[0];
+      expect(entry.actions![0].variant).toBe("secondary");
+    });
+
+    it("combines actions from both action and actions fields", () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      notify({
+        type: "info",
+        message: "Combined",
+        priority: "high",
+        action: {
+          label: "Single",
+          onClick: () => {},
+          actionId: "panel.focus",
+          actionArgs: { panelId: "p1" },
+        },
+        actions: [
+          {
+            label: "Array",
+            onClick: () => {},
+            actionId: "panel.focus",
+            actionArgs: { panelId: "p2" },
+          },
+        ],
+      });
+      const entry = useNotificationHistoryStore.getState().entries[0];
+      expect(entry.actions).toHaveLength(2);
+      expect(entry.actions![0].actionArgs).toEqual({ panelId: "p2" });
+      expect(entry.actions![1].actionArgs).toEqual({ panelId: "p1" });
+    });
+  });
+
   describe("routing — focused + high → toast only", () => {
     it("adds toast notification when focused + high", () => {
       vi.spyOn(document, "hasFocus").mockReturnValue(true);
