@@ -80,20 +80,17 @@ export function registerPanelActions(actions: ActionRegistry, callbacks: ActionC
       panelId: z.string(),
       worktreeId: z.string().optional(),
     }),
-    isEnabled: (_ctx) => {
-      return true;
-    },
     run: async (args: unknown) => {
       const { panelId, worktreeId } = args as { panelId: string; worktreeId?: string };
       const terminalState = useTerminalStore.getState();
-      const panel = terminalState.terminals.find((t) => t.id === panelId);
+      const panel = terminalState.terminals.find((t) => t.id === panelId && t.location !== "trash");
       if (!panel) {
         throw new Error("Terminal panel no longer exists");
       }
       if (worktreeId) {
         useWorktreeSelectionStore.getState().setActiveWorktree(worktreeId);
       }
-      terminalState.setFocused(panelId, true);
+      terminalState.activateTerminal(panelId);
     },
   }));
 

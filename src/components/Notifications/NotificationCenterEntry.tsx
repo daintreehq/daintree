@@ -56,12 +56,12 @@ export function NotificationCenterEntry({
         )}
         {entry.actions && entry.actions.length > 0 && (
           <div className="flex flex-wrap gap-1.5 mt-1.5">
-            {entry.actions.map((action) => {
+            {entry.actions.map((action, index) => {
               const manifest = actionService.get(action.actionId as ActionId);
               const isAvailable = manifest !== null && manifest.enabled;
               return (
                 <button
-                  key={action.actionId}
+                  key={`${action.actionId}-${index}`}
                   type="button"
                   aria-disabled={!isAvailable || undefined}
                   title={

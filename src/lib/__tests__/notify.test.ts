@@ -182,6 +182,33 @@ describe("notify()", () => {
       const entry = useNotificationHistoryStore.getState().entries[0];
       expect(entry.actions![0].variant).toBe("secondary");
     });
+
+    it("combines actions from both action and actions fields", () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      notify({
+        type: "info",
+        message: "Combined",
+        priority: "high",
+        action: {
+          label: "Single",
+          onClick: () => {},
+          actionId: "panel.focus",
+          actionArgs: { panelId: "p1" },
+        },
+        actions: [
+          {
+            label: "Array",
+            onClick: () => {},
+            actionId: "panel.focus",
+            actionArgs: { panelId: "p2" },
+          },
+        ],
+      });
+      const entry = useNotificationHistoryStore.getState().entries[0];
+      expect(entry.actions).toHaveLength(2);
+      expect(entry.actions![0].actionArgs).toEqual({ panelId: "p2" });
+      expect(entry.actions![1].actionArgs).toEqual({ panelId: "p1" });
+    });
   });
 
   describe("routing — focused + high → toast only", () => {
