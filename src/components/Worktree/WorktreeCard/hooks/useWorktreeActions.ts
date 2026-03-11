@@ -1,5 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import type React from "react";
+import { useCallback, useState } from "react";
 import type { WorktreeState } from "@/types";
 import { actionService } from "@/services/ActionService";
 import { useRecipeStore } from "@/store/recipeStore";
@@ -16,10 +15,6 @@ export interface UseWorktreeActionsResult {
   runningRecipeId: string | null;
   isRestartValidating: boolean;
 
-  treeCopied: boolean;
-  isCopyingTree: boolean;
-  copyFeedback: string;
-
   confirmDialog: ConfirmDialogState;
   showDeleteDialog: boolean;
 
@@ -28,7 +23,6 @@ export interface UseWorktreeActionsResult {
 
   handlePathClick: () => void;
   handleCopyTree: () => Promise<void>;
-  handleCopyTreeClick: (e: React.MouseEvent<HTMLButtonElement>) => Promise<void>;
 
   handleRunRecipe: (recipeId: string) => Promise<void>;
 
@@ -59,12 +53,6 @@ export function useWorktreeActions({
 
   const [runningRecipeId, setRunningRecipeId] = useState<string | null>(null);
 
-  const [treeCopied, setTreeCopied] = useState(false);
-  const [isCopyingTree, setIsCopyingTree] = useState(false);
-  const [copyFeedback, setCopyFeedback] = useState<string>("");
-  const treeCopyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const copyTreeRequestIdRef = useRef(0);
-
   const [confirmDialog, setConfirmDialog] = useState<ConfirmDialogState>({
     isOpen: false,
     title: "",
@@ -74,16 +62,6 @@ export function useWorktreeActions({
 
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   const [isRestartValidating, setIsRestartValidating] = useState(false);
-
-  useEffect(() => {
-    return () => {
-      copyTreeRequestIdRef.current = -1;
-      if (treeCopyTimeoutRef.current) {
-        clearTimeout(treeCopyTimeoutRef.current);
-        treeCopyTimeoutRef.current = null;
-      }
-    };
-  }, []);
 
   const closeConfirmDialog = useCallback(() => {
     setConfirmDialog((prev) => ({ ...prev, isOpen: false }));
@@ -213,60 +191,18 @@ export function useWorktreeActions({
   }, [isRestartValidating, bulkRestartPreflightCheckByWorktree, worktree.id, closeConfirmDialog]);
 
   const handleCopyTree = useCallback(async () => {
-    if (isCopyingTree) return;
-
-    const requestId = ++copyTreeRequestIdRef.current;
-    setIsCopyingTree(true);
-
-    try {
-      const resultMessage = await onCopyTree();
-
-      if (copyTreeRequestIdRef.current !== requestId) return;
-
-      if (resultMessage) {
-        setTreeCopied(true);
-        setCopyFeedback(resultMessage);
-
-        if (treeCopyTimeoutRef.current) {
-          clearTimeout(treeCopyTimeoutRef.current);
-        }
-
-        treeCopyTimeoutRef.current = setTimeout(() => {
-          if (copyTreeRequestIdRef.current !== requestId) return;
-          setTreeCopied(false);
-          setCopyFeedback("");
-          treeCopyTimeoutRef.current = null;
-        }, 2000);
-      }
-    } finally {
-      if (copyTreeRequestIdRef.current === requestId) {
-        setIsCopyingTree(false);
-      }
-    }
-  }, [onCopyTree, isCopyingTree]);
-
-  const handleCopyTreeClick = useCallback(
-    async (e: React.MouseEvent<HTMLButtonElement>) => {
-      e.stopPropagation();
-      e.currentTarget.blur();
-      await handleCopyTree();
-    },
-    [handleCopyTree]
-  );
+    await onCopyTree();
+  }, [onCopyTree]);
 
   return {
     runningRecipeId,
     isRestartValidating,
-    treeCopied,
-    isCopyingTree,
-    copyFeedback,
     confirmDialog,
     showDeleteDialog,
     setShowDeleteDialog,
     closeConfirmDialog,
     handlePathClick,
     handleCopyTree,
-    handleCopyTreeClick,
     handleRunRecipe,
     handleCloseCompleted,
     handleCloseFailed,
