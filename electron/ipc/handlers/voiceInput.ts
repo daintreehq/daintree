@@ -7,7 +7,8 @@ import { VoiceTranscriptionService } from "../../services/VoiceTranscriptionServ
 import { VoiceCorrectionService } from "../../services/VoiceCorrectionService.js";
 import type { HandlerDependencies } from "../types.js";
 import type { VoiceInputSettings } from "../../../shared/types/ipc/api.js";
-import { logDebug } from "../../utils/logger.js";
+import { logDebug, logWarn } from "../../utils/logger.js";
+import { assembleKeyterms } from "../../services/voiceContextKeyterms.js";
 
 let service: VoiceTranscriptionService | null = null;
 let activeEventUnsubscribe: (() => void) | null = null;
@@ -370,6 +371,22 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     sessionTranscript = "";
     pendingParagraphBreak = false;
 
+    // Assemble dynamic keyterms from project context (branch, terminal output, etc.)
+    let sessionSettings = settings;
+    try {
+      const assembledKeyterms = await assembleKeyterms({
+        customDictionary: settings.customDictionary,
+        projectName: sessionProjectInfo.name,
+        projectPath: sessionProjectInfo.path,
+        ptyClient: deps.ptyClient,
+      });
+      sessionSettings = { ...settings, customDictionary: assembledKeyterms };
+    } catch (err) {
+      logWarn("[VoiceInput] Failed to assemble dynamic keyterms, using static dictionary", {
+        error: (err as Error).message,
+      });
+    }
+
     const unsubscribe = svc.onEvent((voiceEvent) => {
       const win = deps.mainWindow;
       if (!win || win.isDestroyed()) return;
@@ -418,7 +435,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     event.sender.once("destroyed", onDestroyed);
     activeDestroyListener = { sender: event.sender, fn: onDestroyed };
 
-    const result = await svc.start(settings);
+    const result = await svc.start(sessionSettings);
     if (!result.ok) {
       // Failed to start — clean up subscription immediately
       if (activeEventUnsubscribe === unsubscribe) {
