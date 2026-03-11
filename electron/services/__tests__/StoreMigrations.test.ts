@@ -144,13 +144,15 @@ describe("MigrationRunner", () => {
   });
 
   describe("migration 004 — upgrade correction model", () => {
-    it("upgrades gpt-5-nano to gpt-5-mini", () => {
+    it("upgrades gpt-5-nano to gpt-5-mini and preserves sibling fields", () => {
       const store = createMockStore(storePath, {
-        voiceInput: { correctionModel: "gpt-5-nano", enabled: true },
+        voiceInput: { correctionModel: "gpt-5-nano", enabled: true, language: "en" },
       });
       migration004.up(store as never);
-      const voiceInput = store.data.voiceInput as { correctionModel: string };
+      const voiceInput = store.data.voiceInput as Record<string, unknown>;
       expect(voiceInput.correctionModel).toBe("gpt-5-mini");
+      expect(voiceInput.enabled).toBe(true);
+      expect(voiceInput.language).toBe("en");
     });
 
     it("upgrades missing correctionModel to gpt-5-mini", () => {

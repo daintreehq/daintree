@@ -1657,7 +1657,7 @@ const api: ElectronAPI = {
         customDictionary: string[];
         transcriptionModel: "nova-3" | "nova-2";
         correctionEnabled: boolean;
-        correctionModel: "gpt-5-nano";
+        correctionModel: "gpt-5-nano" | "gpt-5-mini";
         correctionCustomInstructions: string;
         paragraphingStrategy: "spoken-command" | "manual";
       }>
