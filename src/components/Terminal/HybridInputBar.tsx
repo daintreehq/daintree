@@ -54,7 +54,7 @@ import {
   interimMarkField,
   setInterimRange,
   pendingAIField,
-  setPendingAIPositions,
+  setPendingAIRanges,
 } from "./inputEditorExtensions";
 
 export interface HybridInputBarHandle {
@@ -515,7 +515,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
 
     // Drive voice decorations from transcriptPhase — each phase gets distinct visual treatment:
     //   interim → character-level italic mark on live delta text
-    //   paragraph_pending_ai → non-layout-shifting "AI" badge widget at paragraph end
+    //   paragraph_pending_ai → green dotted underline mark on pending correction text
     //   idle / utterance_final / stable → no decorations
     const transcriptPhase = useVoiceRecordingStore(
       (s) => s.panelBuffers[terminalId]?.transcriptPhase ?? "idle"
@@ -535,7 +535,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       // When correction is disabled, suppress all voice decorations
       if (!voiceCorrectionEnabled) {
         view.dispatch({
-          effects: [setInterimRange.of(null), setPendingAIPositions.of([])],
+          effects: [setInterimRange.of(null), setPendingAIRanges.of([])],
         });
         return;
       }
@@ -550,35 +550,30 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
               ? { from: liveSegmentStart, to: docLen }
               : null;
           view.dispatch({
-            effects: [setInterimRange.of(interimRange), setPendingAIPositions.of([])],
+            effects: [setInterimRange.of(interimRange), setPendingAIRanges.of([])],
           });
           break;
         }
         case "paragraph_pending_ai": {
-          // Show "AI" badge at end of each pending correction paragraph
-          const positions: number[] = [];
+          const ranges: { from: number; to: number }[] = [];
           if (pendingCorrections && pendingCorrections.length > 0) {
             const doc = view.state.doc.toString();
             for (const p of pendingCorrections) {
               const idx = doc.indexOf(p.rawText, Math.max(0, p.segmentStart - 20));
               if (idx >= 0) {
-                positions.push(idx + p.rawText.length);
+                ranges.push({ from: idx, to: idx + p.rawText.length });
               }
             }
           }
-          // Fallback: if no specific positions found, place at doc end
-          if (positions.length === 0 && docLen > 0) {
-            positions.push(docLen);
-          }
           view.dispatch({
-            effects: [setInterimRange.of(null), setPendingAIPositions.of(positions)],
+            effects: [setInterimRange.of(null), setPendingAIRanges.of(ranges)],
           });
           break;
         }
         default:
           // idle, utterance_final, stable — clear all decorations
           view.dispatch({
-            effects: [setInterimRange.of(null), setPendingAIPositions.of([])],
+            effects: [setInterimRange.of(null), setPendingAIRanges.of([])],
           });
           break;
       }

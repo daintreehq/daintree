@@ -14,7 +14,7 @@ import {
   interimMarkField,
   setInterimRange,
   pendingAIField,
-  setPendingAIPositions,
+  setPendingAIRanges,
 } from "../inputEditorExtensions";
 
 describe("computeAutoSize", () => {
@@ -917,35 +917,35 @@ describe("pendingAIField", () => {
     });
   }
 
-  it("renders widget at target position", () => {
+  it("applies mark decoration spanning the given range", () => {
     const view = makeView("hello world");
-    view.dispatch({ effects: setPendingAIPositions.of([11]) });
+    view.dispatch({ effects: setPendingAIRanges.of([{ from: 0, to: 5 }]) });
 
     const decos = view.state.field(pendingAIField);
     const iter = decos.iter();
     expect(iter.value).not.toBeNull();
-    expect(iter.from).toBe(11);
+    expect(iter.from).toBe(0);
+    expect(iter.to).toBe(5);
     view.destroy();
   });
 
-  it("widget stays after text inserted at same position (side: 1)", () => {
+  it("mark range shifts when text is inserted before it", () => {
     const view = makeView("hello");
-    view.dispatch({ effects: setPendingAIPositions.of([5]) });
-    // Insert text at the widget position — side:1 means widget should move after insert
-    view.dispatch({ changes: { from: 5, insert: " world" } });
+    view.dispatch({ effects: setPendingAIRanges.of([{ from: 0, to: 5 }]) });
+    view.dispatch({ changes: { from: 0, insert: "say " } });
 
     const decos = view.state.field(pendingAIField);
     const iter = decos.iter();
     expect(iter.value).not.toBeNull();
-    // Widget at pos 5 with side:1 maps to 11 after " world" (6 chars) is inserted
-    expect(iter.from).toBe(11);
+    expect(iter.from).toBe(4);
+    expect(iter.to).toBe(9);
     view.destroy();
   });
 
-  it("clears cleanly when empty positions dispatched", () => {
+  it("clears cleanly when empty ranges dispatched", () => {
     const view = makeView("hello");
-    view.dispatch({ effects: setPendingAIPositions.of([5]) });
-    view.dispatch({ effects: setPendingAIPositions.of([]) });
+    view.dispatch({ effects: setPendingAIRanges.of([{ from: 0, to: 5 }]) });
+    view.dispatch({ effects: setPendingAIRanges.of([]) });
 
     const decos = view.state.field(pendingAIField);
     const iter = decos.iter();
@@ -953,28 +953,36 @@ describe("pendingAIField", () => {
     view.destroy();
   });
 
-  it("supports multiple widget positions", () => {
-    const view = makeView("hello\nworld");
-    view.dispatch({ effects: setPendingAIPositions.of([5, 11]) });
+  it("supports multiple concurrent ranges", () => {
+    const view = makeView("hello world");
+    view.dispatch({
+      effects: setPendingAIRanges.of([
+        { from: 0, to: 5 },
+        { from: 6, to: 11 },
+      ]),
+    });
 
     const decos = view.state.field(pendingAIField);
-    const positions: number[] = [];
+    const ranges: { from: number; to: number }[] = [];
     const iter = decos.iter();
     while (iter.value) {
-      positions.push(iter.from);
+      ranges.push({ from: iter.from, to: iter.to });
       iter.next();
     }
-    expect(positions).toEqual([5, 11]);
+    expect(ranges).toEqual([
+      { from: 0, to: 5 },
+      { from: 6, to: 11 },
+    ]);
     view.destroy();
   });
 
-  it("handles simultaneous doc change and clear effect correctly (map-before-effect)", () => {
+  it("handles simultaneous doc change and clear effect correctly (no flash)", () => {
     const view = makeView("hello");
-    view.dispatch({ effects: setPendingAIPositions.of([5]) });
+    view.dispatch({ effects: setPendingAIRanges.of([{ from: 0, to: 5 }]) });
 
     view.dispatch({
-      changes: { from: 5, insert: " world" },
-      effects: setPendingAIPositions.of([]),
+      changes: { from: 0, to: 5, insert: "world" },
+      effects: setPendingAIRanges.of([]),
     });
 
     const decos = view.state.field(pendingAIField);
@@ -983,9 +991,33 @@ describe("pendingAIField", () => {
     view.destroy();
   });
 
-  it("filters out-of-range positions", () => {
+  it("clamps out-of-bounds ranges to document length", () => {
     const view = makeView("hi");
-    view.dispatch({ effects: setPendingAIPositions.of([100]) });
+    view.dispatch({ effects: setPendingAIRanges.of([{ from: 0, to: 100 }]) });
+
+    const decos = view.state.field(pendingAIField);
+    const iter = decos.iter();
+    expect(iter.value).not.toBeNull();
+    expect(iter.from).toBe(0);
+    expect(iter.to).toBe(2);
+    view.destroy();
+  });
+
+  it("clamps negative from to zero", () => {
+    const view = makeView("hello");
+    view.dispatch({ effects: setPendingAIRanges.of([{ from: -5, to: 3 }]) });
+
+    const decos = view.state.field(pendingAIField);
+    const iter = decos.iter();
+    expect(iter.value).not.toBeNull();
+    expect(iter.from).toBe(0);
+    expect(iter.to).toBe(3);
+    view.destroy();
+  });
+
+  it("filters ranges where clamped from >= clamped to", () => {
+    const view = makeView("hi");
+    view.dispatch({ effects: setPendingAIRanges.of([{ from: 50, to: 100 }]) });
 
     const decos = view.state.field(pendingAIField);
     const iter = decos.iter();
@@ -1008,9 +1040,8 @@ describe("voice decoration phase integration", () => {
 
   it("utterance_final phase produces no decorations even when ranges could be set", () => {
     const view = makeView("hello world");
-    // Simulate what would happen if code tried to set both — both should be cleared
     view.dispatch({
-      effects: [setInterimRange.of(null), setPendingAIPositions.of([])],
+      effects: [setInterimRange.of(null), setPendingAIRanges.of([])],
     });
 
     const interimDecos = view.state.field(interimMarkField);
@@ -1022,18 +1053,18 @@ describe("voice decoration phase integration", () => {
 
   it("correctionEnabled=false suppresses both decorations", () => {
     const view = makeView("hello world");
-    // Set both decorations first
     view.dispatch({
-      effects: [setInterimRange.of({ from: 0, to: 5 }), setPendingAIPositions.of([11])],
+      effects: [
+        setInterimRange.of({ from: 0, to: 5 }),
+        setPendingAIRanges.of([{ from: 6, to: 11 }]),
+      ],
     });
 
-    // Verify they're set
     expect(view.state.field(interimMarkField).iter().value).not.toBeNull();
     expect(view.state.field(pendingAIField).iter().value).not.toBeNull();
 
-    // Clear both (simulating correctionEnabled=false path)
     view.dispatch({
-      effects: [setInterimRange.of(null), setPendingAIPositions.of([])],
+      effects: [setInterimRange.of(null), setPendingAIRanges.of([])],
     });
 
     expect(view.state.field(interimMarkField).iter().value).toBeNull();
