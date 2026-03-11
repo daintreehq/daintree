@@ -357,12 +357,6 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
       close();
 
       if (project.isBackground) {
-        notify({
-          type: "info",
-          title: "Reopening project",
-          message: "Reconnecting to background terminals...",
-          duration: 1500,
-        });
         try {
           await reopenProject(project.id);
         } catch (error) {
@@ -374,12 +368,6 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
           });
         }
       } else {
-        notify({
-          type: "info",
-          title: "Switching projects",
-          message: "Resetting state for clean project isolation",
-          duration: 1500,
-        });
         try {
           await switchProject(project.id);
         } catch (error) {
@@ -443,13 +431,6 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
         const next = new Map(prev);
         next.set(stopConfirmProjectId, { activeAgentCount: 0, waitingAgentCount: 0 });
         return next;
-      });
-
-      notify({
-        type: "success",
-        title: "Project stopped",
-        message: `Terminated ${result.processesKilled} process(es)`,
-        duration: 3000,
       });
 
       setStopConfirmProjectId(null);
