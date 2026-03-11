@@ -236,7 +236,7 @@ describe("VoiceCorrectionService", () => {
     expect(systemMessage).toContain("speech-to-text correction engine");
   });
 
-  it("uses reasoning model parameters for gpt-5 models", async () => {
+  it("uses reasoning model parameters for gpt-5-nano with low effort", async () => {
     const fetchMock = vi.fn().mockResolvedValue(makeFetchResponse("Corrected."));
     vi.stubGlobal("fetch", fetchMock);
 
@@ -244,10 +244,24 @@ describe("VoiceCorrectionService", () => {
     await svc.correct("test", BASE_SETTINGS);
 
     const body = JSON.parse((fetchMock.mock.calls[0] as [string, RequestInit])[1].body as string);
-    // gpt-5-nano is a reasoning model: developer role, no temperature, reasoning_effort
     expect(body.messages[0].role).toBe("developer");
     expect(body.temperature).toBeUndefined();
     expect(body.reasoning_effort).toBe("low");
+    expect(body.max_completion_tokens).toBe(2048);
+    expect(body.max_tokens).toBeUndefined();
+  });
+
+  it("uses reasoning model parameters for gpt-5-mini with medium effort", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(makeFetchResponse("Corrected."));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const svc = new VoiceCorrectionService();
+    await svc.correct("test", { ...BASE_SETTINGS, model: "gpt-5-mini" });
+
+    const body = JSON.parse((fetchMock.mock.calls[0] as [string, RequestInit])[1].body as string);
+    expect(body.messages[0].role).toBe("developer");
+    expect(body.temperature).toBeUndefined();
+    expect(body.reasoning_effort).toBe("medium");
     expect(body.max_completion_tokens).toBe(2048);
     expect(body.max_tokens).toBeUndefined();
   });

@@ -932,7 +932,7 @@ export type MicPermissionStatus =
 
 export type VoiceTranscriptionModel = "nova-3" | "nova-2";
 
-export type VoiceCorrectionModel = "gpt-5-nano";
+export type VoiceCorrectionModel = "gpt-5-nano" | "gpt-5-mini";
 
 /**
  * Paragraphing strategy for voice dictation.

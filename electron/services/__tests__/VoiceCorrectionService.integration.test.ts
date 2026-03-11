@@ -86,6 +86,77 @@ describe("VoiceCorrectionService integration", () => {
   );
 
   it.skipIf(!OPENAI_API_KEY)(
+    "gpt-5-mini: corrects technical terms and removes fillers",
+    async () => {
+      svc = new VoiceCorrectionService();
+
+      const input = "um so we need to like update the racked component";
+      const result = await svc.correct(input, {
+        model: "gpt-5-mini",
+        apiKey: OPENAI_API_KEY,
+        customDictionary: ["React", "Canopy"],
+      });
+
+      console.log("Model:    ", "gpt-5-mini");
+      console.log("Raw:      ", input);
+      console.log("Corrected:", result);
+
+      expect(result).toBeTruthy();
+      expect(result).toContain("React");
+      expect(result.toLowerCase()).not.toMatch(/\bum\b/);
+    },
+    15_000
+  );
+
+  it.skipIf(!OPENAI_API_KEY)(
+    "gpt-5-mini: output contains no preamble, quotes, or explanatory text",
+    async () => {
+      svc = new VoiceCorrectionService();
+
+      const input = "the type script compiler is throwing errors on the racked component";
+      const result = await svc.correct(input, {
+        model: "gpt-5-mini",
+        apiKey: OPENAI_API_KEY,
+        customDictionary: [],
+      });
+
+      console.log("Model:    ", "gpt-5-mini");
+      console.log("Raw:      ", input);
+      console.log("Corrected:", result);
+
+      expect(result).not.toMatch(/^(here is|here's|the corrected|corrected:|sure[,!])/i);
+      expect(result).not.toMatch(/^["'`]/);
+      expect(result).not.toContain("```");
+      expect(result.toLowerCase()).toContain("typescript");
+    },
+    15_000
+  );
+
+  it.skipIf(!OPENAI_API_KEY)(
+    "gpt-5-mini: returns already-correct input verbatim (idempotency)",
+    async () => {
+      svc = new VoiceCorrectionService();
+
+      const input = "The TypeScript compiler is throwing errors on the React component.";
+      const result = await svc.correct(input, {
+        model: "gpt-5-mini",
+        apiKey: OPENAI_API_KEY,
+        customDictionary: [],
+      });
+
+      console.log("Model:    ", "gpt-5-mini");
+      console.log("Raw:      ", input);
+      console.log("Corrected:", result);
+
+      expect(result.toLowerCase()).toContain("typescript");
+      expect(result.toLowerCase()).toContain("react");
+      expect(result.toLowerCase()).toContain("compiler");
+      expect(result).not.toMatch(/^(here is|the corrected)/i);
+    },
+    15_000
+  );
+
+  it.skipIf(!OPENAI_API_KEY)(
     "gpt-5-nano: corrects technical terms and removes fillers",
     async () => {
       svc = new VoiceCorrectionService();
@@ -197,6 +268,7 @@ describe("VoiceCorrectionService integration", () => {
       const input = "um the type script compiler is throwing errors on the racked component";
 
       for (const config of [
+        { model: "gpt-5-mini", effort: "medium" },
         { model: "gpt-5-nano", effort: "low" },
         { model: "gpt-5-nano", effort: "minimal" },
       ]) {

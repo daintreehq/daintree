@@ -1,5 +1,6 @@
 /**
- * Voice correction prompt for gpt-5-nano (reasoning model, reasoning_effort: "low").
+ * Voice correction prompt for GPT-5 family reasoning models.
+ * Effort level is model-dependent: "medium" for gpt-5-mini, "low" for gpt-5-nano.
  *
  * Design choices informed by OpenAI reasoning model prompting guidance (2025):
  *

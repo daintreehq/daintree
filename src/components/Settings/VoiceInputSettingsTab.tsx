@@ -28,6 +28,7 @@ import type {
   VoiceInputSettings,
   MicPermissionStatus,
   VoiceTranscriptionModel,
+  VoiceCorrectionModel,
   VoiceParagraphingStrategy,
 } from "@shared/types";
 
@@ -42,6 +43,23 @@ const LANGUAGES = [
   { code: "pt", label: "Portuguese" },
   { code: "it", label: "Italian" },
   { code: "ru", label: "Russian" },
+];
+
+const CORRECTION_MODELS: {
+  value: VoiceCorrectionModel;
+  label: string;
+  description: string;
+}[] = [
+  {
+    value: "gpt-5-mini",
+    label: "GPT-5 Mini",
+    description: "Higher quality · recommended",
+  },
+  {
+    value: "gpt-5-nano",
+    label: "GPT-5 Nano",
+    description: "Faster · lower cost",
+  },
 ];
 
 const TRANSCRIPTION_MODELS: {
@@ -69,7 +87,7 @@ const DEFAULT_SETTINGS: VoiceInputSettings = {
   customDictionary: [],
   transcriptionModel: "nova-3",
   correctionEnabled: false,
-  correctionModel: "gpt-5-nano",
+  correctionModel: "gpt-5-mini",
   correctionCustomInstructions: "",
   paragraphingStrategy: "spoken-command",
 };
@@ -256,7 +274,7 @@ export function VoiceInputSettingsTab() {
         <SettingsSection
           icon={Sparkles}
           title="AI Text Correction"
-          description="Post-process transcriptions with GPT-5 Nano to fix technical terms, punctuation, and filler words. Optional."
+          description="Post-process transcriptions with a GPT-5 reasoning model to fix technical terms, punctuation, and filler words. Optional."
           id="voice-ai-correction"
         >
           <SettingsSwitchCard
@@ -279,6 +297,22 @@ export function VoiceInputSettingsTab() {
                 helpUrl="https://platform.openai.com/api-keys"
                 helpLabel="Get API key"
               />
+
+              <SettingsRow label="Correction Model" icon={Sparkles}>
+                <select
+                  value={settings.correctionModel}
+                  onChange={(e) =>
+                    update({ correctionModel: e.target.value as VoiceCorrectionModel })
+                  }
+                  className="bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-canopy-text focus:outline-none focus:border-canopy-accent transition-colors"
+                >
+                  {CORRECTION_MODELS.map(({ value, label, description }) => (
+                    <option key={value} value={value}>
+                      {label} — {description}
+                    </option>
+                  ))}
+                </select>
+              </SettingsRow>
 
               {settings.correctionApiKey && (
                 <>
