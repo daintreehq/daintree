@@ -189,7 +189,10 @@ function flushParagraphBuffer(win: Electron.BrowserWindow | null): {
   rawText: string | null;
   correctionId: string | null;
 } {
-  if (paragraphBuffer.length === 0) return { rawText: null, correctionId: null };
+  if (paragraphBuffer.length === 0) {
+    console.log("[VoiceDebug:main] flushParagraphBuffer — buffer empty");
+    return { rawText: null, correctionId: null };
+  }
 
   const rawText = paragraphBuffer.join(" ");
   paragraphBuffer = [];
@@ -197,8 +200,19 @@ function flushParagraphBuffer(win: Electron.BrowserWindow | null): {
   const liveSettings = getVoiceSettings();
   const willCorrect = !!(liveSettings.correctionEnabled && liveSettings.correctionApiKey);
 
+  console.log("[VoiceDebug:main] flushParagraphBuffer", {
+    rawText,
+    willCorrect,
+    correctionEnabled: liveSettings.correctionEnabled,
+    hasApiKey: !!liveSettings.correctionApiKey,
+    model: liveSettings.correctionModel,
+    hasCorrectionService: !!correctionService,
+    hasWin: !!win,
+  });
+
   if (willCorrect && correctionService && win && !win.isDestroyed()) {
     const correctionId = crypto.randomUUID();
+    console.log("[VoiceDebug:main] starting correction", { correctionId, rawText });
     void correctionService
       .correct(rawText, {
         model: liveSettings.correctionModel,
@@ -209,6 +223,7 @@ function flushParagraphBuffer(win: Electron.BrowserWindow | null): {
         projectPath: sessionProjectInfo.path,
       })
       .then((correctedText) => {
+        console.log("[VoiceDebug:main] correction resolved", { correctionId, correctedText });
         if (!win.isDestroyed()) {
           win.webContents.send(CHANNELS.VOICE_INPUT_CORRECTION_REPLACE, {
             correctionId,
@@ -216,10 +231,13 @@ function flushParagraphBuffer(win: Electron.BrowserWindow | null): {
           });
         }
       })
-      .catch(() => {});
+      .catch((err) => {
+        console.error("[VoiceDebug:main] correction failed", err);
+      });
     return { rawText, correctionId };
   }
 
+  console.log("[VoiceDebug:main] correction skipped — willCorrect:", willCorrect);
   return { rawText, correctionId: null };
 }
 
@@ -318,7 +336,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     return result;
   };
 
-  const handleStop = async (): Promise<{ rawText: string | null }> => {
+  const handleStop = async (): Promise<{ rawText: string | null; correctionId: string | null }> => {
     if (service) {
       // Drain first (waits for pending transcriptions), then clean up subscription.
       await service.stopGracefully();
@@ -329,7 +347,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     return flushParagraphBuffer(deps.mainWindow);
   };
 
-  const handleFlushParagraph = (): { rawText: string | null } => {
+  const handleFlushParagraph = (): { rawText: string | null; correctionId: string | null } => {
     // Capture any in-flight utterance text from the transcription service before flushing.
     // This ensures speech spoken before the Enter keypress is included in the committed
     // paragraph, and suppresses subsequent Deepgram finalization for that utterance so it

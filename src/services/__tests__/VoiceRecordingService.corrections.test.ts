@@ -308,6 +308,35 @@ describe("VoiceRecordingService — correction matching (stable ID)", () => {
     expect(mockVoiceFns.resolvePendingCorrection).toHaveBeenCalledWith(PANEL, "uuid-abc");
   });
 
+  it("applies correction when rawText shifted slightly but remains uniquely identifiable", async () => {
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+
+    const PANEL = "panel-1";
+    mockVoiceState.panelBuffers[PANEL] = {
+      pendingCorrections: [{ id: "uuid-abc", segmentStart: 0, rawText: "voice dictated text" }],
+      activeParagraphStart: 0,
+    };
+    // The raw text has shifted right after a small prefix edit, but the content is unchanged.
+    mockDraftStore.drafts[PANEL] = "> voice dictated text";
+
+    voiceRecordingService.initialize();
+
+    electron.emit.correctionReplace({
+      correctionId: "uuid-abc",
+      correctedText: "Voice dictated text.",
+    });
+
+    const inputStore = (
+      await import("@/store/terminalInputStore")
+    ).useTerminalInputStore.getState();
+    expect(inputStore.setDraftInput).toHaveBeenCalledWith(
+      PANEL,
+      "> Voice dictated text.",
+      undefined
+    );
+    expect(mockVoiceFns.resolvePendingCorrection).toHaveBeenCalledWith(PANEL, "uuid-abc");
+  });
+
   it("skips draft update when correctedText equals rawText (no change)", async () => {
     const { voiceRecordingService } = await import("../VoiceRecordingService");
 
@@ -414,6 +443,33 @@ describe("VoiceRecordingService — correction matching (stable ID)", () => {
     electron.emit.paragraphBoundary({ rawText: "some text", correctionId: null });
 
     expect(mockVoiceFns.addPendingCorrection).not.toHaveBeenCalled();
+  });
+
+  it("stop() registers a pending correction by deriving paragraph start from the flushed draft", async () => {
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+
+    const PANEL = "panel-1";
+    mockVoiceState.activeTarget = { panelId: PANEL };
+    mockVoiceState.panelBuffers[PANEL] = {
+      pendingCorrections: [],
+      activeParagraphStart: -1,
+    };
+    mockDraftStore.drafts[PANEL] = "short phrase";
+    electron.voiceInput.stop.mockResolvedValue({
+      rawText: "short phrase",
+      correctionId: "uuid-stop",
+    });
+
+    voiceRecordingService.initialize();
+
+    await voiceRecordingService.stop("Dictation stopped.");
+
+    expect(mockVoiceFns.addPendingCorrection).toHaveBeenCalledWith(
+      PANEL,
+      "uuid-stop",
+      0,
+      "short phrase"
+    );
   });
 
   it("correction resolves correctly on a non-active panel (post-session scan)", async () => {

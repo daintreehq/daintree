@@ -270,6 +270,8 @@ export function WorktreeHeader({
             <House
               className="w-3.5 h-3.5 text-canopy-text/60 shrink-0"
               fill="currentColor"
+              stroke="var(--color-canopy-sidebar)"
+              strokeWidth={2}
               aria-hidden="true"
             />
           )}

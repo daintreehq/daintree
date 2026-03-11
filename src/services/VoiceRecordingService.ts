@@ -7,8 +7,10 @@ import { useWorktreeDataStore } from "@/store/worktreeDataStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { VOICE_INPUT_SETTINGS_CHANGED_EVENT } from "@/lib/voiceInputSettingsEvents";
 import { logDebug, logWarn, logError } from "@/utils/logger";
+import type { PendingCorrection } from "@/store/voiceRecordingStore";
 
 const LOG_PREFIX = "[VoiceRecording]";
+const CORRECTION_MATCH_RADIUS = 32;
 
 function formatTargetLabel(target: VoiceRecordingTarget): string {
   const project = target.projectName?.trim();
@@ -20,6 +22,84 @@ function formatTargetLabel(target: VoiceRecordingTarget): string {
   if (project) return project;
   if (worktree) return worktree;
   return target.panelTitle?.trim() || "current panel";
+}
+
+function getVoiceInsertMetadata(draft: string): { separator: string; insertStart: number } {
+  const separator = draft && !draft.endsWith(" ") && !draft.endsWith("\n") ? " " : "";
+  return {
+    separator,
+    insertStart: draft.length + separator.length,
+  };
+}
+
+function collectOccurrences(haystack: string, needle: string): number[] {
+  if (!needle) return [];
+
+  const occurrences: number[] = [];
+  let searchFrom = 0;
+  while (searchFrom <= haystack.length) {
+    const idx = haystack.indexOf(needle, searchFrom);
+    if (idx === -1) break;
+    occurrences.push(idx);
+    searchFrom = idx + 1;
+  }
+  return occurrences;
+}
+
+function findCorrectionRange(
+  draft: string,
+  pending: Pick<PendingCorrection, "segmentStart" | "rawText">
+): { start: number; end: number } | null {
+  const { segmentStart, rawText } = pending;
+  if (!rawText) return null;
+
+  const exactEnd = segmentStart + rawText.length;
+  if (
+    segmentStart >= 0 &&
+    exactEnd <= draft.length &&
+    draft.slice(segmentStart, exactEnd) === rawText
+  ) {
+    return { start: segmentStart, end: exactEnd };
+  }
+
+  const occurrences = collectOccurrences(draft, rawText);
+  if (occurrences.length === 0) return null;
+
+  const nearby =
+    segmentStart >= 0
+      ? occurrences.filter((idx) => Math.abs(idx - segmentStart) <= CORRECTION_MATCH_RADIUS)
+      : [];
+  if (nearby.length === 1) {
+    const start = nearby[0];
+    return { start, end: start + rawText.length };
+  }
+
+  if (occurrences.length === 1) {
+    const start = occurrences[0];
+    return { start, end: start + rawText.length };
+  }
+
+  return null;
+}
+
+function resolveParagraphStart(draft: string, rawText: string, preferredStart: number): number {
+  if (!rawText) return -1;
+
+  const matchedRange = findCorrectionRange(draft, { segmentStart: preferredStart, rawText });
+  if (matchedRange) {
+    return matchedRange.start;
+  }
+
+  if (draft.endsWith(rawText)) {
+    return draft.length - rawText.length;
+  }
+
+  const occurrences = collectOccurrences(draft, rawText);
+  if (occurrences.length === 1) {
+    return occurrences[0];
+  }
+
+  return preferredStart >= 0 ? preferredStart : -1;
 }
 
 class VoiceRecordingService {
@@ -57,15 +137,17 @@ class VoiceRecordingService {
           const buffer = voiceState.panelBuffers[target.panelId];
           const isFirstDelta = !buffer || buffer.liveText === "";
           if (isFirstDelta) {
-            // Snapshot draft length before we start appending deltas for this segment.
-            const draftLen = useTerminalInputStore
+            const draft = useTerminalInputStore
               .getState()
-              .getDraftInput(target.panelId, target.projectId).length;
+              .getDraftInput(target.panelId, target.projectId);
+            const { insertStart } = getVoiceInsertMetadata(draft);
+            // Snapshot where dictated text actually begins, including any separator
+            // inserted between existing draft text and the first dictated token.
             useVoiceRecordingStore
               .getState()
-              .setDraftLengthAtSegmentStart(target.panelId, draftLen);
+              .setDraftLengthAtSegmentStart(target.panelId, insertStart);
             // Track paragraph start for the first utterance in a new paragraph.
-            useVoiceRecordingStore.getState().setActiveParagraphStart(target.panelId, draftLen);
+            useVoiceRecordingStore.getState().setActiveParagraphStart(target.panelId, insertStart);
             // First delta of a new utterance — use appendVoiceText for separator logic.
             useTerminalInputStore
               .getState()
@@ -96,7 +178,10 @@ class VoiceRecordingService {
             const draft = inputStore.getDraftInput(panelId, projectId);
             // Slice back to where this segment started and replace with final transcript.
             const base = segmentStart >= 0 ? draft.slice(0, segmentStart) : draft;
-            const separator = base && !base.endsWith(" ") && !base.endsWith("\n") ? " " : "";
+            const { separator, insertStart } = getVoiceInsertMetadata(base);
+            if ((buffer?.activeParagraphStart ?? -1) < 0 && text.trim()) {
+              useVoiceRecordingStore.getState().setActiveParagraphStart(panelId, insertStart);
+            }
             const finalText = text.trim();
             inputStore.setDraftInput(panelId, base + separator + finalText, projectId);
             inputStore.bumpVoiceDraftRevision();
@@ -110,12 +195,13 @@ class VoiceRecordingService {
     this.unsubscribers.push(
       voiceInput.onCorrectionReplace(({ correctionId, correctedText }) => {
         logDebug(`${LOG_PREFIX} Received correction replace`, { correctionId });
+        console.log("[VoiceDebug] onCorrectionReplace received", { correctionId, correctedText });
         const voiceState = useVoiceRecordingStore.getState();
 
         // Find the panel that owns this correction ID.
         let panelId: string | undefined;
         let projectId: string | undefined;
-        let pending: import("@/store/voiceRecordingStore").PendingCorrection | undefined;
+        let pending: PendingCorrection | undefined;
 
         for (const [id, buffer] of Object.entries(voiceState.panelBuffers)) {
           const found = buffer.pendingCorrections.find((p) => p.id === correctionId);
@@ -127,35 +213,43 @@ class VoiceRecordingService {
           }
         }
 
-        if (!panelId || !pending) return;
+        if (!panelId || !pending) {
+          console.log(
+            "[VoiceDebug] onCorrectionReplace — no matching pending correction found for",
+            correctionId
+          );
+          return;
+        }
+        console.log(
+          "[VoiceDebug] onCorrectionReplace — matched panel",
+          panelId,
+          "pending:",
+          pending
+        );
 
         if (correctedText !== pending.rawText) {
           const inputStore = useTerminalInputStore.getState();
           const draft = inputStore.getDraftInput(panelId, projectId);
-          const { segmentStart, rawText } = pending;
+          const matchedRange = findCorrectionRange(draft, pending);
 
-          // Apply the correction only if the raw text still occupies the tracked position.
-          // If the user has edited that region, skip the correction rather than guessing.
-          if (
-            segmentStart >= 0 &&
-            segmentStart + rawText.length <= draft.length &&
-            draft.slice(segmentStart, segmentStart + rawText.length) === rawText
-          ) {
-            const before = draft.slice(0, segmentStart);
-            const after = draft.slice(segmentStart + rawText.length);
+          // Apply the correction only if the raw text still exists in an unambiguous
+          // location. If the user edited that region, skip rather than guessing.
+          if (matchedRange) {
+            const before = draft.slice(0, matchedRange.start);
+            const after = draft.slice(matchedRange.end);
             inputStore.setDraftInput(panelId, before + correctedText + after, projectId);
             inputStore.bumpVoiceDraftRevision();
 
-            const lengthDelta = correctedText.length - rawText.length;
+            const lengthDelta = correctedText.length - pending.rawText.length;
             if (lengthDelta !== 0) {
               useVoiceRecordingStore
                 .getState()
-                .rebasePendingCorrections(panelId, segmentStart, lengthDelta);
+                .rebasePendingCorrections(panelId, pending.segmentStart, lengthDelta);
             }
           } else {
             logDebug(`${LOG_PREFIX} Skipping correction — text at tracked position has changed`, {
               correctionId,
-              segmentStart,
+              segmentStart: pending.segmentStart,
             });
           }
         }
@@ -180,14 +274,18 @@ class VoiceRecordingService {
 
         // Register the pending correction using the stable ID from the main process.
         // correctionId is only non-null when correction is actually queued.
-        const paragraphStart = buffer.activeParagraphStart ?? -1;
+        const inputStore = useTerminalInputStore.getState();
+        const draft = inputStore.getDraftInput(panelId, projectId);
+        const paragraphStart = resolveParagraphStart(
+          draft,
+          rawText ?? "",
+          buffer.activeParagraphStart ?? -1
+        );
         if (correctionId && rawText && paragraphStart >= 0) {
           voiceState.addPendingCorrection(panelId, correctionId, paragraphStart, rawText);
         }
 
         // Insert a newline to visually separate paragraphs and reset paragraph state.
-        const inputStore = useTerminalInputStore.getState();
-        const draft = inputStore.getDraftInput(panelId, projectId);
         inputStore.setDraftInput(panelId, draft + "\n", projectId);
         inputStore.bumpVoiceDraftRevision();
 
@@ -585,7 +683,14 @@ class VoiceRecordingService {
         const currentTarget = useVoiceRecordingStore.getState().activeTarget;
         if (currentTarget) {
           const buffer = useVoiceRecordingStore.getState().panelBuffers[currentTarget.panelId];
-          const paragraphStart = buffer?.activeParagraphStart ?? -1;
+          const draft = useTerminalInputStore
+            .getState()
+            .getDraftInput(currentTarget.panelId, currentTarget.projectId);
+          const paragraphStart = resolveParagraphStart(
+            draft,
+            stopResult.rawText,
+            buffer?.activeParagraphStart ?? -1
+          );
           if (paragraphStart >= 0) {
             useVoiceRecordingStore
               .getState()
@@ -609,7 +714,7 @@ class VoiceRecordingService {
         if (currentTarget) {
           const { panelId } = currentTarget;
           const buffer = useVoiceRecordingStore.getState().panelBuffers[panelId];
-          const remaining = buffer?.liveText.trim();
+          const remaining = buffer?.liveText?.trim();
           if (remaining) {
             useTerminalInputStore.getState().bumpVoiceDraftRevision();
           }

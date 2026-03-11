@@ -125,10 +125,11 @@ export const inputTheme = EditorView.theme(
       transition: "opacity 150ms ease-out",
     },
     ".cm-voice-pending-ai": {
-      color: "var(--theme-terminal-green)",
-      textDecoration: "underline dotted 1px",
+      textDecorationLine: "underline",
+      textDecorationColor: "var(--theme-terminal-green)",
+      textDecorationThickness: "2px",
       textUnderlineOffset: "2px",
-      transition: "opacity 150ms ease-out",
+      transition: "text-decoration-color 150ms ease-out",
     },
   },
   { dark: true }
@@ -165,7 +166,7 @@ export const interimMarkField = StateField.define({
   provide: (f) => EditorView.decorations.from(f),
 });
 
-// --- Pending AI mark field (character-level, green dotted underline on pending correction text) ---
+// --- Pending AI mark field (character-level, green underline on pending correction text) ---
 
 const pendingAIMark = Decoration.mark({ class: "cm-voice-pending-ai" });
 
