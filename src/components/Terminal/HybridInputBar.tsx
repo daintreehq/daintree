@@ -53,8 +53,8 @@ import {
   createFilePasteHandler,
   interimMarkField,
   setInterimRange,
-  pendingAIField,
-  setPendingAIRanges,
+  aiCorrectedField,
+  setAICorrectedRanges,
 } from "./inputEditorExtensions";
 
 export interface HybridInputBarHandle {
@@ -73,6 +73,37 @@ export interface HybridInputBarProps {
   restartKey?: number;
   disabled?: boolean;
   className?: string;
+}
+
+const AI_CORRECTION_MATCH_RADIUS = 32;
+
+function resolveAICorrectionRange(
+  doc: string,
+  segmentStart: number,
+  text: string
+): { from: number; to: number } | null {
+  if (!text) return null;
+
+  const exactEnd = segmentStart + text.length;
+  if (segmentStart >= 0 && exactEnd <= doc.length && doc.slice(segmentStart, exactEnd) === text) {
+    return { from: segmentStart, to: exactEnd };
+  }
+
+  const nearbyStart = Math.max(0, segmentStart - AI_CORRECTION_MATCH_RADIUS);
+  const nearbyEnd = Math.min(doc.length, segmentStart + AI_CORRECTION_MATCH_RADIUS + text.length);
+  const nearbySlice = doc.slice(nearbyStart, nearbyEnd);
+  const nearbyIndex = nearbySlice.indexOf(text);
+  if (nearbyIndex >= 0) {
+    const from = nearbyStart + nearbyIndex;
+    return { from, to: from + text.length };
+  }
+
+  const firstIndex = doc.indexOf(text);
+  if (firstIndex >= 0 && doc.indexOf(text, firstIndex + 1) === -1) {
+    return { from: firstIndex, to: firstIndex + text.length };
+  }
+
+  return null;
 }
 
 interface LatestState {
@@ -483,6 +514,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
 
         applyEditorValue("", { selection: EditorSelection.create([EditorSelection.cursor(0)]) });
         latest.clearDraftInput(latest.terminalId, latest.projectId);
+        useVoiceRecordingStore.getState().clearAICorrectionSpans(latest.terminalId);
         setAtContext(null);
         setSlashContext(null);
       },
@@ -513,18 +545,17 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       }
     }, [voiceDraftRevision, terminalId, currentProject?.id]);
 
-    // Drive voice decorations from transcriptPhase — each phase gets distinct visual treatment:
+    // Drive voice decorations from transcript state:
     //   interim → character-level italic mark on live delta text
-    //   paragraph_pending_ai → green underline mark on pending correction text
-    //   idle / utterance_final / stable → no decorations
+    //   aiCorrectionSpans → persistent dotted underline on AI-touched text
     const transcriptPhase = useVoiceRecordingStore(
       (s) => s.panelBuffers[terminalId]?.transcriptPhase ?? "idle"
     );
     const liveSegmentStart = useVoiceRecordingStore(
       (s) => s.panelBuffers[terminalId]?.draftLengthAtSegmentStart ?? -1
     );
-    const pendingCorrections = useVoiceRecordingStore(
-      (s) => s.panelBuffers[terminalId]?.pendingCorrections
+    const aiCorrectionSpans = useVoiceRecordingStore(
+      (s) => s.panelBuffers[terminalId]?.aiCorrectionSpans
     );
     const voiceCorrectionEnabled = useVoiceRecordingStore((s) => s.correctionEnabled);
 
@@ -535,12 +566,18 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       // When correction is disabled, suppress all voice decorations
       if (!voiceCorrectionEnabled) {
         view.dispatch({
-          effects: [setInterimRange.of(null), setPendingAIRanges.of([])],
+          effects: [setInterimRange.of(null), setAICorrectedRanges.of([])],
         });
         return;
       }
 
       const docLen = view.state.doc.length;
+      const doc = view.state.doc.toString();
+      const aiRanges =
+        aiCorrectionSpans?.flatMap((span) => {
+          const range = resolveAICorrectionRange(doc, span.segmentStart, span.text);
+          return range ? [range] : [];
+        }) ?? [];
 
       switch (transcriptPhase) {
         case "interim": {
@@ -550,30 +587,22 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
               ? { from: liveSegmentStart, to: docLen }
               : null;
           view.dispatch({
-            effects: [setInterimRange.of(interimRange), setPendingAIRanges.of([])],
+            effects: [setInterimRange.of(interimRange), setAICorrectedRanges.of(aiRanges)],
           });
           break;
         }
-        case "paragraph_pending_ai": {
-          const ranges: { from: number; to: number }[] = [];
-          if (pendingCorrections && pendingCorrections.length > 0) {
-            const doc = view.state.doc.toString();
-            for (const p of pendingCorrections) {
-              const idx = doc.indexOf(p.rawText, Math.max(0, p.segmentStart - 20));
-              if (idx >= 0) {
-                ranges.push({ from: idx, to: idx + p.rawText.length });
-              }
-            }
-          }
+        case "paragraph_pending_ai":
+        case "utterance_final":
+        case "stable":
+        case "idle": {
           view.dispatch({
-            effects: [setInterimRange.of(null), setPendingAIRanges.of(ranges)],
+            effects: [setInterimRange.of(null), setAICorrectedRanges.of(aiRanges)],
           });
           break;
         }
         default:
-          // idle, utterance_final, stable — clear all decorations
           view.dispatch({
-            effects: [setInterimRange.of(null), setPendingAIRanges.of([])],
+            effects: [setInterimRange.of(null), setAICorrectedRanges.of(aiRanges)],
           });
           break;
       }
@@ -582,7 +611,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       voiceDraftRevision,
       liveSegmentStart,
       voiceCorrectionEnabled,
-      pendingCorrections,
+      aiCorrectionSpans,
     ]);
 
     const sendFromEditor = useCallback(() => {
@@ -1171,7 +1200,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
             !disabled ? createFileDropChipTooltip() : []
           ),
           interimMarkField,
-          pendingAIField,
+          aiCorrectedField,
           keymapCompartmentRef.current.of(keymapExtension),
           editorUpdateListener,
           domEventHandlers,

@@ -59,12 +59,23 @@ describe("voiceRecordingStore — transcript phase transitions", () => {
     expect(buffer?.transcriptPhase).toBe("paragraph_pending_ai");
   });
 
+  it("addPendingCorrection also records a persistent AI correction span", () => {
+    useVoiceRecordingStore.getState().beginSession(TARGET);
+    useVoiceRecordingStore.getState().addPendingCorrection(PANEL_ID, "id-1", 4, "react native");
+
+    const buffer = useVoiceRecordingStore.getState().panelBuffers[PANEL_ID];
+    expect(buffer?.aiCorrectionSpans).toEqual([
+      { id: "id-1", segmentStart: 4, text: "react native" },
+    ]);
+  });
+
   it("resolvePendingCorrection transitions to stable when all corrections resolved", () => {
     useVoiceRecordingStore.getState().beginSession(TARGET);
     useVoiceRecordingStore.getState().addPendingCorrection(PANEL_ID, "id-1", 0, "raw text");
     useVoiceRecordingStore.getState().resolvePendingCorrection(PANEL_ID, "id-1");
     const buffer = useVoiceRecordingStore.getState().panelBuffers[PANEL_ID];
     expect(buffer?.transcriptPhase).toBe("stable");
+    expect(buffer?.aiCorrectionSpans).toEqual([{ id: "id-1", segmentStart: 0, text: "raw text" }]);
   });
 
   it("resolvePendingCorrection stays paragraph_pending_ai when corrections remain", () => {
@@ -118,6 +129,39 @@ describe("voiceRecordingStore — transcript phase transitions", () => {
     const buffer = useVoiceRecordingStore.getState().panelBuffers[PANEL_ID];
     expect(buffer?.pendingCorrections[0].segmentStart).toBe(0);
     expect(buffer?.pendingCorrections[1].segmentStart).toBe(11);
+  });
+
+  it("updateAICorrectionSpan replaces the tracked text after correction is applied", () => {
+    useVoiceRecordingStore.getState().beginSession(TARGET);
+    useVoiceRecordingStore.getState().addPendingCorrection(PANEL_ID, "id-1", 0, "react native");
+    useVoiceRecordingStore.getState().updateAICorrectionSpan(PANEL_ID, "id-1", 0, "React Native.");
+
+    const buffer = useVoiceRecordingStore.getState().panelBuffers[PANEL_ID];
+    expect(buffer?.aiCorrectionSpans).toEqual([
+      { id: "id-1", segmentStart: 0, text: "React Native." },
+    ]);
+  });
+
+  it("rebaseAICorrectionSpans shifts later tracked spans after a length delta", () => {
+    useVoiceRecordingStore.getState().beginSession(TARGET);
+    useVoiceRecordingStore.getState().addPendingCorrection(PANEL_ID, "id-1", 0, "hello world");
+    useVoiceRecordingStore.getState().addPendingCorrection(PANEL_ID, "id-2", 20, "second para");
+
+    useVoiceRecordingStore.getState().rebaseAICorrectionSpans(PANEL_ID, 0, 2);
+
+    const buffer = useVoiceRecordingStore.getState().panelBuffers[PANEL_ID];
+    expect(buffer?.aiCorrectionSpans[0].segmentStart).toBe(0);
+    expect(buffer?.aiCorrectionSpans[1].segmentStart).toBe(22);
+  });
+
+  it("clearAICorrectionSpans removes persistent AI underline history", () => {
+    useVoiceRecordingStore.getState().beginSession(TARGET);
+    useVoiceRecordingStore.getState().addPendingCorrection(PANEL_ID, "id-1", 0, "pending text");
+
+    useVoiceRecordingStore.getState().clearAICorrectionSpans(PANEL_ID);
+
+    const buffer = useVoiceRecordingStore.getState().panelBuffers[PANEL_ID];
+    expect(buffer?.aiCorrectionSpans).toEqual([]);
   });
 
   it("resetParagraphState transitions to idle when no pending corrections", () => {

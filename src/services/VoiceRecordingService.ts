@@ -102,6 +102,21 @@ function resolveParagraphStart(draft: string, rawText: string, preferredStart: n
   return preferredStart >= 0 ? preferredStart : -1;
 }
 
+function resolveQueuedCorrectionStart(draft: string, rawText: string): number {
+  if (!rawText) return -1;
+  if (draft.endsWith(rawText)) {
+    return draft.length - rawText.length;
+  }
+
+  const lastMatch = draft.lastIndexOf(rawText);
+  if (lastMatch >= 0) {
+    return lastMatch;
+  }
+
+  const occurrences = collectOccurrences(draft, rawText);
+  return occurrences.length === 1 ? occurrences[0] : -1;
+}
+
 class VoiceRecordingService {
   private initialized = false;
   private generation = 0;
@@ -185,10 +200,36 @@ class VoiceRecordingService {
             const finalText = text.trim();
             inputStore.setDraftInput(panelId, base + separator + finalText, projectId);
             inputStore.bumpVoiceDraftRevision();
-            // Correction is batched at paragraph level — no per-utterance pending entry.
           }
         }
         useVoiceRecordingStore.getState().completeSegment(text);
+      })
+    );
+
+    this.unsubscribers.push(
+      voiceInput.onCorrectionQueued(({ correctionId, rawText }) => {
+        logDebug(`${LOG_PREFIX} Received correction queued`, {
+          correctionId,
+          length: rawText.length,
+        });
+
+        const voiceState = useVoiceRecordingStore.getState();
+        const currentTarget = voiceState.activeTarget;
+        if (!currentTarget || !rawText) return;
+
+        const { panelId, projectId } = currentTarget;
+        const draft = useTerminalInputStore.getState().getDraftInput(panelId, projectId);
+        const correctionStart = resolveQueuedCorrectionStart(draft, rawText);
+        if (correctionStart < 0) {
+          logDebug(`${LOG_PREFIX} Skipping pending correction registration — text not found`, {
+            correctionId,
+          });
+          return;
+        }
+
+        useVoiceRecordingStore
+          .getState()
+          .addPendingCorrection(panelId, correctionId, correctionStart, rawText);
       })
     );
 
@@ -227,11 +268,18 @@ class VoiceRecordingService {
             inputStore.setDraftInput(panelId, before + correctedText + after, projectId);
             inputStore.bumpVoiceDraftRevision();
 
+            useVoiceRecordingStore
+              .getState()
+              .updateAICorrectionSpan(panelId, correctionId, matchedRange.start, correctedText);
+
             const lengthDelta = correctedText.length - pending.rawText.length;
             if (lengthDelta !== 0) {
               useVoiceRecordingStore
                 .getState()
                 .rebasePendingCorrections(panelId, pending.segmentStart, lengthDelta);
+              useVoiceRecordingStore
+                .getState()
+                .rebaseAICorrectionSpans(panelId, pending.segmentStart, lengthDelta);
             }
           } else {
             logDebug(`${LOG_PREFIX} Skipping correction — text at tracked position has changed`, {

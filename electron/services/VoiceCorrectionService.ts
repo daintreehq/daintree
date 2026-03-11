@@ -8,11 +8,29 @@ import {
 export { CORE_CORRECTION_PROMPT, buildCorrectionSystemPrompt };
 
 const P = "[VoiceCorrection]";
-// Paragraphs take longer than single sentences for GPT-5 reasoning models.
-const CORRECTION_TIMEOUT_MS = 15000;
+const CORRECTION_TIMEOUT_MS = 7000;
 const MAX_HISTORY = 3;
-// Paragraph-level correction requires more tokens: reasoning + multi-sentence output.
-const MAX_COMPLETION_TOKENS = 2048;
+const MAX_OUTPUT_TOKENS = 256;
+const PROMPT_CACHE_PREFIX = "voice-correction-v2";
+
+const CORRECTION_RESULT_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    action: {
+      type: "string",
+      enum: ["no_change", "replace"],
+    },
+    corrected_text: {
+      type: "string",
+    },
+    confidence: {
+      type: "string",
+      enum: ["low", "medium", "high"],
+    },
+  },
+  required: ["action", "corrected_text", "confidence"],
+} as const;
 
 export interface VoiceCorrectionSettings {
   model: string;
@@ -21,6 +39,12 @@ export interface VoiceCorrectionSettings {
   customInstructions?: string;
   projectName?: string;
   projectPath?: string;
+}
+
+interface CorrectionApiResult {
+  action: "no_change" | "replace";
+  corrected_text: string;
+  confidence: "low" | "medium" | "high";
 }
 
 export class VoiceCorrectionService {
@@ -70,6 +94,28 @@ export class VoiceCorrectionService {
     }
   }
 
+  private buildPromptCacheKey(settings: VoiceCorrectionSettings): string {
+    const projectKey = settings.projectName ?? settings.projectPath ?? "global";
+    const dictionaryKey =
+      settings.customDictionary.length > 0 ? settings.customDictionary.join("|") : "no-dict";
+    return `${PROMPT_CACHE_PREFIX}:${settings.model}:${projectKey}:${dictionaryKey}`;
+  }
+
+  private extractResponseText(data: {
+    output_text?: string;
+    output?: Array<{ content?: Array<{ text?: string }> }>;
+  }): string {
+    if (typeof data.output_text === "string" && data.output_text.trim()) {
+      return data.output_text;
+    }
+
+    const text = data.output?.flatMap((item) => item.content ?? []).find((item) => item.text)?.text;
+    if (!text) {
+      throw new Error("No content in API response");
+    }
+    return text;
+  }
+
   private async callApi(rawText: string, settings: VoiceCorrectionSettings): Promise<string> {
     const { model, apiKey, customDictionary, customInstructions, projectName, projectPath } =
       settings;
@@ -96,12 +142,11 @@ export class VoiceCorrectionService {
 
     const userMessage = userParts.join("\n\n");
 
-    // GPT-5 family models are reasoning models that require different API parameters
     const isReasoningModel = model.startsWith("gpt-5");
 
-    logDebug(`${P} Calling Chat Completions`, { model, historyLen: this.history.length });
+    logDebug(`${P} Calling Responses API`, { model, historyLen: this.history.length });
 
-    const response = await fetch("https://api.openai.com/v1/chat/completions", {
+    const response = await fetch("https://api.openai.com/v1/responses", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -109,15 +154,22 @@ export class VoiceCorrectionService {
       },
       body: JSON.stringify({
         model,
-        messages: [
-          // GPT-5 reasoning models use "developer" role for instructions
-          { role: isReasoningModel ? "developer" : "system", content: systemPrompt },
-          { role: "user", content: userMessage },
-        ],
+        instructions: systemPrompt,
+        input: userMessage,
+        prompt_cache_key: this.buildPromptCacheKey(settings),
+        service_tier: "auto",
         ...(isReasoningModel
-          ? { reasoning_effort: model === "gpt-5-mini" ? "medium" : "low" }
-          : { temperature: 0 }),
-        max_completion_tokens: MAX_COMPLETION_TOKENS,
+          ? { reasoning: { effort: model === "gpt-5-mini" ? "medium" : "low" } }
+          : {}),
+        text: {
+          format: {
+            type: "json_schema",
+            name: "voice_correction_result",
+            strict: true,
+            schema: CORRECTION_RESULT_SCHEMA,
+          },
+        },
+        max_output_tokens: MAX_OUTPUT_TOKENS,
       }),
     });
 
@@ -126,14 +178,15 @@ export class VoiceCorrectionService {
     }
 
     const data = (await response.json()) as {
-      choices: Array<{ message: { content: string | null } }>;
+      output_text?: string;
+      output?: Array<{ content?: Array<{ text?: string }> }>;
     };
+    const parsed = JSON.parse(this.extractResponseText(data)) as CorrectionApiResult;
 
-    const content = data.choices[0]?.message?.content;
-    if (!content) {
-      throw new Error("No content in API response");
+    if (parsed.action === "no_change") {
+      return rawText;
     }
 
-    return content;
+    return parsed.corrected_text;
   }
 }

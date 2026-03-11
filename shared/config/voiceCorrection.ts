@@ -59,8 +59,10 @@ E S lint: ESLint
 docker compose: Docker Compose
 </terms>`;
 
-const GUARDRAIL_SUFFIX =
-  "\n\nOutput the corrected text as plain text only. Begin immediately with the first corrected word — no preamble, no quotes, no markdown, no explanations.";
+const GUARDRAIL_SUFFIX = `Return a JSON object that matches the response schema.
+- Use "no_change" when the input should remain exactly as-is.
+- Use "replace" when you are correcting the segment, and put the corrected segment in corrected_text.
+- Do not add explanation outside the JSON object.`;
 
 export interface CorrectionPromptContext {
   projectName?: string;

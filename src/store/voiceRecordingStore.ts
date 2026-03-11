@@ -19,14 +19,25 @@ export interface PendingCorrection {
   rawText: string;
 }
 
+export interface AICorrectionSpan {
+  /** Stable opaque ID generated in the main process at flush time. */
+  id: string;
+  /** Best-known character offset in the draft for this corrected span. */
+  segmentStart: number;
+  /** Current text for the span after any applied correction. */
+  text: string;
+}
+
 interface VoiceTranscriptBuffer {
   liveText: string;
   completedSegments: string[];
   projectId?: string;
   /** Draft length snapshot taken before the first delta of a segment. */
   draftLengthAtSegmentStart: number;
-  /** Segments awaiting AI correction — shown dimmed in the editor. */
+  /** Segments awaiting AI correction. */
   pendingCorrections: PendingCorrection[];
+  /** All text ranges that have gone through AI correction during the current draft. */
+  aiCorrectionSpans: AICorrectionSpan[];
   /** Draft length at the start of the current paragraph (-1 = not set). */
   activeParagraphStart: number;
   /** Explicit transcript lifecycle phase — derived from and updated alongside buffer state. */
@@ -70,9 +81,12 @@ interface VoiceRecordingState {
     segmentStart: number,
     rawText: string
   ) => void;
+  updateAICorrectionSpan: (panelId: string, id: string, segmentStart: number, text: string) => void;
   resolvePendingCorrection: (panelId: string, id: string) => void;
   rebasePendingCorrections: (panelId: string, afterPosition: number, delta: number) => void;
+  rebaseAICorrectionSpans: (panelId: string, afterPosition: number, delta: number) => void;
   getPendingCorrections: (panelId: string) => PendingCorrection[];
+  clearAICorrectionSpans: (panelId: string) => void;
   setActiveParagraphStart: (panelId: string, length: number) => void;
   resetParagraphState: (panelId: string) => void;
   finishSession: (options?: FinishSessionOptions) => void;
@@ -92,6 +106,7 @@ function getBuffer(
       completedSegments: [],
       draftLengthAtSegmentStart: -1,
       pendingCorrections: [],
+      aiCorrectionSpans: [],
       activeParagraphStart: -1,
       transcriptPhase: "idle" as VoiceTranscriptPhase,
     }
@@ -208,14 +223,36 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()((set, get) =
   addPendingCorrection: (panelId, id, segmentStart, rawText) =>
     set((state) => {
       const buffer = getBuffer(state.panelBuffers, panelId);
+      const nextSpans = buffer.aiCorrectionSpans.some((span) => span.id === id)
+        ? buffer.aiCorrectionSpans
+        : [...buffer.aiCorrectionSpans, { id, segmentStart, text: rawText }];
       return {
         panelBuffers: {
           ...state.panelBuffers,
           [panelId]: {
             ...buffer,
             pendingCorrections: [...buffer.pendingCorrections, { id, segmentStart, rawText }],
+            aiCorrectionSpans: nextSpans,
             transcriptPhase: "paragraph_pending_ai" as VoiceTranscriptPhase,
           },
+        },
+      };
+    }),
+
+  updateAICorrectionSpan: (panelId, id, segmentStart, text) =>
+    set((state) => {
+      const buffer = getBuffer(state.panelBuffers, panelId);
+      const idx = buffer.aiCorrectionSpans.findIndex((span) => span.id === id);
+      const nextSpans = [...buffer.aiCorrectionSpans];
+      if (idx === -1) {
+        nextSpans.push({ id, segmentStart, text });
+      } else {
+        nextSpans[idx] = { id, segmentStart, text };
+      }
+      return {
+        panelBuffers: {
+          ...state.panelBuffers,
+          [panelId]: { ...buffer, aiCorrectionSpans: nextSpans },
         },
       };
     }),
@@ -256,9 +293,38 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()((set, get) =
       };
     }),
 
+  rebaseAICorrectionSpans: (panelId, afterPosition, delta) =>
+    set((state) => {
+      const buffer = getBuffer(state.panelBuffers, panelId);
+      if (buffer.aiCorrectionSpans.length === 0) return state;
+      const rebased = buffer.aiCorrectionSpans.map((span) =>
+        span.segmentStart > afterPosition
+          ? { ...span, segmentStart: span.segmentStart + delta }
+          : span
+      );
+      return {
+        panelBuffers: {
+          ...state.panelBuffers,
+          [panelId]: { ...buffer, aiCorrectionSpans: rebased },
+        },
+      };
+    }),
+
   getPendingCorrections: (panelId) => {
     return getBuffer(get().panelBuffers, panelId).pendingCorrections;
   },
+
+  clearAICorrectionSpans: (panelId) =>
+    set((state) => {
+      const buffer = getBuffer(state.panelBuffers, panelId);
+      if (buffer.aiCorrectionSpans.length === 0) return state;
+      return {
+        panelBuffers: {
+          ...state.panelBuffers,
+          [panelId]: { ...buffer, aiCorrectionSpans: [] },
+        },
+      };
+    }),
 
   setActiveParagraphStart: (panelId, length) =>
     set((state) => {

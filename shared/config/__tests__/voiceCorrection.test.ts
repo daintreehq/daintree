@@ -43,30 +43,31 @@ describe("CORE_CORRECTION_PROMPT", () => {
 describe("buildCorrectionSystemPrompt", () => {
   it("guardrail uses positive then negative output framing", () => {
     const prompt = buildCorrectionSystemPrompt({});
-    expect(prompt).toContain("plain text only");
-    expect(prompt).toMatch(/no preamble|no quotes|no markdown|no explanations/);
+    expect(prompt).toContain("JSON object");
+    expect(prompt).toMatch(/no_change|replace|Do not add explanation/i);
   });
 
-  it("guardrail requires immediate output (no preamble instruction)", () => {
+  it("guardrail explicitly defines the no_change and replace contract", () => {
     const prompt = buildCorrectionSystemPrompt({});
-    expect(prompt).toMatch(/begin immediately with/i);
+    expect(prompt).toContain('"no_change"');
+    expect(prompt).toContain('"replace"');
   });
 
   it("guardrail is always the last section of the prompt", () => {
     const prompt = buildCorrectionSystemPrompt({
       customInstructions: "Always use British spelling.",
     });
-    const guardrailIdx = prompt.lastIndexOf("Begin immediately");
+    const guardrailIdx = prompt.lastIndexOf("Return a JSON object");
     const lastCharIdx = prompt.length - 1;
-    // The guardrail must appear in the final ~200 characters of the prompt
-    expect(guardrailIdx).toBeGreaterThan(lastCharIdx - 200);
+    // The guardrail must appear near the end of the prompt, after the dynamic sections.
+    expect(guardrailIdx).toBeGreaterThan(lastCharIdx - 320);
   });
 
   it("places custom instructions before the guardrail", () => {
     const instructions = "Always use British spelling.";
     const prompt = buildCorrectionSystemPrompt({ customInstructions: instructions });
     const instructionsIdx = prompt.indexOf(instructions);
-    const guardrailIdx = prompt.indexOf("Begin immediately");
+    const guardrailIdx = prompt.indexOf("Return a JSON object");
     expect(instructionsIdx).toBeGreaterThan(-1);
     expect(guardrailIdx).toBeGreaterThan(instructionsIdx);
   });

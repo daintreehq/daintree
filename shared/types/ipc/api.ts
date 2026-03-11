@@ -842,6 +842,9 @@ export interface ElectronAPI {
     onTranscriptionComplete(
       callback: (payload: { text: string; willCorrect: boolean }) => void
     ): () => void;
+    onCorrectionQueued(
+      callback: (payload: { correctionId: string; rawText: string }) => void
+    ): () => void;
     onCorrectionReplace(
       callback: (payload: { correctionId: string; correctedText: string }) => void
     ): () => void;

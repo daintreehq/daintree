@@ -12,11 +12,17 @@ let service: VoiceTranscriptionService | null = null;
 let activeEventUnsubscribe: (() => void) | null = null;
 let activeDestroyListener: { sender: Electron.WebContents; fn: () => void } | null = null;
 let correctionService: VoiceCorrectionService | null = null;
+let correctionRequestTail: Promise<void> = Promise.resolve();
 
-/** Utterances accumulated since the last paragraph boundary. */
+/**
+ * Stabilized utterances accumulated into the next correction chunk.
+ * We now flush this buffer opportunistically instead of waiting for an entire paragraph.
+ */
 let paragraphBuffer: string[] = [];
 /** Project info captured at session start for correction prompts. */
 let sessionProjectInfo: { name?: string; path?: string } = {};
+const ONLINE_CORRECTION_MAX_SEGMENTS = 2;
+const ONLINE_CORRECTION_MAX_CHARS = 140;
 
 const VOICE_INPUT_DEFAULTS: VoiceInputSettings = {
   enabled: false,
@@ -179,13 +185,57 @@ function getProjectInfo(): { name?: string; path?: string } {
   return { name: currentProject.name, path: currentProject.path };
 }
 
+function shouldFlushOnlineCorrectionBuffer(latestText: string): boolean {
+  const trimmed = latestText.trim();
+  if (!trimmed) return false;
+  if (/[.!?]["')\]]?$/.test(trimmed)) return true;
+
+  const buffered = paragraphBuffer.join(" ").trim();
+  if (paragraphBuffer.length >= ONLINE_CORRECTION_MAX_SEGMENTS) return true;
+  return buffered.length >= ONLINE_CORRECTION_MAX_CHARS;
+}
+
+function queueCorrectionRequest(
+  rawText: string,
+  correctionId: string,
+  win: Electron.BrowserWindow
+): void {
+  if (!correctionService || win.isDestroyed()) {
+    return;
+  }
+
+  correctionRequestTail = correctionRequestTail
+    .catch(() => {})
+    .then(async () => {
+      const liveSettings = getVoiceSettings();
+      const correctedText = await correctionService.correct(rawText, {
+        model: liveSettings.correctionModel,
+        apiKey: liveSettings.correctionApiKey,
+        customDictionary: liveSettings.customDictionary,
+        customInstructions: liveSettings.correctionCustomInstructions,
+        projectName: sessionProjectInfo.name,
+        projectPath: sessionProjectInfo.path,
+      });
+
+      if (!win.isDestroyed()) {
+        win.webContents.send(CHANNELS.VOICE_INPUT_CORRECTION_REPLACE, {
+          correctionId,
+          correctedText,
+        });
+      }
+    });
+}
+
 /**
- * Join the paragraph buffer into a single raw text string and clear it.
+ * Join the stabilized correction buffer into a single raw text string and clear it.
  * If correction is enabled, generates a stable correctionId, fires an async
- * correction call, and sends VOICE_INPUT_CORRECTION_REPLACE when it resolves.
- * Returns the raw paragraph text and correctionId (null if correction is not queued).
+ * correction call, and optionally notifies the renderer that the correction is pending.
+ * Returns the raw text chunk and correctionId (null if correction is not queued).
  */
-function flushParagraphBuffer(win: Electron.BrowserWindow | null): {
+function flushParagraphBuffer(
+  win: Electron.BrowserWindow | null,
+  options: { notifyQueued?: boolean } = {}
+): {
   rawText: string | null;
   correctionId: string | null;
 } {
@@ -199,24 +249,13 @@ function flushParagraphBuffer(win: Electron.BrowserWindow | null): {
 
   if (willCorrect && correctionService && win && !win.isDestroyed()) {
     const correctionId = crypto.randomUUID();
-    void correctionService
-      .correct(rawText, {
-        model: liveSettings.correctionModel,
-        apiKey: liveSettings.correctionApiKey,
-        customDictionary: liveSettings.customDictionary,
-        customInstructions: liveSettings.correctionCustomInstructions,
-        projectName: sessionProjectInfo.name,
-        projectPath: sessionProjectInfo.path,
-      })
-      .then((correctedText) => {
-        if (!win.isDestroyed()) {
-          win.webContents.send(CHANNELS.VOICE_INPUT_CORRECTION_REPLACE, {
-            correctionId,
-            correctedText,
-          });
-        }
-      })
-      .catch(() => {});
+    if (options.notifyQueued) {
+      win.webContents.send(CHANNELS.VOICE_INPUT_CORRECTION_QUEUED, {
+        correctionId,
+        rawText,
+      });
+    }
+    queueCorrectionRequest(rawText, correctionId, win);
     return { rawText, correctionId };
   }
 
@@ -250,8 +289,9 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
       correctionService = new VoiceCorrectionService();
     }
     correctionService.resetHistory();
+    correctionRequestTail = Promise.resolve();
 
-    // Capture project info and reset paragraph buffer at session start
+    // Capture project info and reset the correction chunk buffer at session start.
     sessionProjectInfo = getProjectInfo();
     paragraphBuffer = [];
 
@@ -264,8 +304,8 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
       } else if (voiceEvent.type === "complete") {
         const rawText = voiceEvent.text.trim();
 
-        // Accumulate utterance into paragraph buffer — correction fires at paragraph
-        // boundaries (Enter or stop), not per utterance.
+        // Accumulate stabilized utterances into a smaller correction chunk so the
+        // model can start earlier than paragraph boundaries.
         if (rawText) {
           paragraphBuffer.push(rawText);
         }
@@ -276,9 +316,13 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
           text: rawText,
           willCorrect: false,
         });
+
+        if (rawText && shouldFlushOnlineCorrectionBuffer(rawText)) {
+          flushParagraphBuffer(win, { notifyQueued: true });
+        }
       } else if (voiceEvent.type === "paragraph_boundary") {
-        // Deepgram detected a paragraph break — auto-flush the previous paragraph
-        // for correction (if enabled) and notify the renderer with the flushed text and ID.
+        // Deepgram detected a paragraph break. Flush any remaining uncorrected chunk
+        // before inserting the newline so the renderer can track the pending range.
         const { rawText: flushedText, correctionId } = flushParagraphBuffer(win);
         win.webContents.send(CHANNELS.VOICE_INPUT_PARAGRAPH_BOUNDARY, {
           rawText: flushedText,
@@ -325,7 +369,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     }
     cleanupActiveSubscription();
 
-    // Flush any remaining paragraph utterances gathered since the last boundary.
+    // Flush any remaining stabilized text chunk gathered since the last online correction.
     return flushParagraphBuffer(deps.mainWindow);
   };
 

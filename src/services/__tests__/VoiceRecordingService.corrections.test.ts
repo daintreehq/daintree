@@ -14,6 +14,7 @@ const mockVoiceState = vi.hoisted(() => ({
     {
       projectId?: string;
       pendingCorrections: Array<{ id: string; segmentStart: number; rawText: string }>;
+      aiCorrectionSpans?: Array<{ id: string; segmentStart: number; text: string }>;
       activeParagraphStart: number;
     }
   >,
@@ -22,8 +23,11 @@ const mockVoiceState = vi.hoisted(() => ({
 
 const mockVoiceFns = vi.hoisted(() => ({
   addPendingCorrection: vi.fn(),
+  updateAICorrectionSpan: vi.fn(),
   resolvePendingCorrection: vi.fn(),
   rebasePendingCorrections: vi.fn(),
+  rebaseAICorrectionSpans: vi.fn(),
+  clearAICorrectionSpans: vi.fn(),
   setError: vi.fn(),
   announce: vi.fn(),
   setStatus: vi.fn(),
@@ -102,6 +106,7 @@ vi.mock("@/lib/voiceInputSettingsEvents", () => ({
 // ── Helpers ────────────────────────────────────────────────────────────────
 
 type CorrectionReplaceCallback = (payload: { correctionId: string; correctedText: string }) => void;
+type CorrectionQueuedCallback = (payload: { correctionId: string; rawText: string }) => void;
 
 type ParagraphBoundaryCallback = (payload: {
   rawText: string | null;
@@ -110,11 +115,16 @@ type ParagraphBoundaryCallback = (payload: {
 
 function buildElectronStub() {
   let correctionReplaceCallback: CorrectionReplaceCallback | null = null;
+  let correctionQueuedCallback: CorrectionQueuedCallback | null = null;
   let paragraphBoundaryCallback: ParagraphBoundaryCallback | null = null;
 
   const voiceInput = {
     onTranscriptionDelta: vi.fn(() => () => {}),
     onTranscriptionComplete: vi.fn(() => () => {}),
+    onCorrectionQueued: vi.fn((cb: CorrectionQueuedCallback) => {
+      correctionQueuedCallback = cb;
+      return () => {};
+    }),
     onCorrectionReplace: vi.fn((cb: CorrectionReplaceCallback) => {
       correctionReplaceCallback = cb;
       return () => {};
@@ -142,6 +152,9 @@ function buildElectronStub() {
   return {
     voiceInput,
     emit: {
+      correctionQueued: (payload: { correctionId: string; rawText: string }) => {
+        correctionQueuedCallback!(payload);
+      },
       correctionReplace: (payload: { correctionId: string; correctedText: string }) => {
         correctionReplaceCallback!(payload);
       },
@@ -228,6 +241,7 @@ describe("VoiceRecordingService — correction matching (stable ID)", () => {
     mockVoiceState.activeTarget = { panelId: PANEL };
     mockVoiceState.panelBuffers[PANEL] = {
       pendingCorrections: [{ id: "uuid-abc", segmentStart: 0, rawText: "hello world" }],
+      aiCorrectionSpans: [{ id: "uuid-abc", segmentStart: 0, text: "hello world" }],
       activeParagraphStart: 0,
     };
     mockDraftStore.drafts[PANEL] = "hello world";
@@ -240,6 +254,12 @@ describe("VoiceRecordingService — correction matching (stable ID)", () => {
       await import("@/store/terminalInputStore")
     ).useTerminalInputStore.getState();
     expect(inputStore.setDraftInput).toHaveBeenCalledWith(PANEL, "Hello, world!", undefined);
+    expect(mockVoiceFns.updateAICorrectionSpan).toHaveBeenCalledWith(
+      PANEL,
+      "uuid-abc",
+      0,
+      "Hello, world!"
+    );
     expect(mockVoiceFns.resolvePendingCorrection).toHaveBeenCalledWith(PANEL, "uuid-abc");
   });
 
@@ -248,6 +268,7 @@ describe("VoiceRecordingService — correction matching (stable ID)", () => {
 
     mockVoiceState.panelBuffers["panel-1"] = {
       pendingCorrections: [{ id: "uuid-known", segmentStart: 0, rawText: "some text" }],
+      aiCorrectionSpans: [{ id: "uuid-known", segmentStart: 0, text: "some text" }],
       activeParagraphStart: 0,
     };
 
@@ -367,6 +388,10 @@ describe("VoiceRecordingService — correction matching (stable ID)", () => {
         { id: "uuid-first", segmentStart: 0, rawText: "hello" },
         { id: "uuid-second", segmentStart: 10, rawText: "world" },
       ],
+      aiCorrectionSpans: [
+        { id: "uuid-first", segmentStart: 0, text: "hello" },
+        { id: "uuid-second", segmentStart: 10, text: "world" },
+      ],
       activeParagraphStart: 0,
     };
     mockDraftStore.drafts[PANEL] = "hello\nworld";
@@ -381,6 +406,7 @@ describe("VoiceRecordingService — correction matching (stable ID)", () => {
     ).useTerminalInputStore.getState();
     expect(inputStore.setDraftInput).toHaveBeenCalledWith(PANEL, "Hello there\nworld", undefined);
     expect(mockVoiceFns.rebasePendingCorrections).toHaveBeenCalledWith(PANEL, 0, 6);
+    expect(mockVoiceFns.rebaseAICorrectionSpans).toHaveBeenCalledWith(PANEL, 0, 6);
     expect(mockVoiceFns.resolvePendingCorrection).toHaveBeenCalledWith(PANEL, "uuid-first");
   });
 
@@ -390,6 +416,7 @@ describe("VoiceRecordingService — correction matching (stable ID)", () => {
     const PANEL = "panel-1";
     mockVoiceState.panelBuffers[PANEL] = {
       pendingCorrections: [{ id: "uuid-abc", segmentStart: 0, rawText: "hello" }],
+      aiCorrectionSpans: [{ id: "uuid-abc", segmentStart: 0, text: "hello" }],
       activeParagraphStart: 0,
     };
     mockDraftStore.drafts[PANEL] = "hello";
@@ -400,6 +427,33 @@ describe("VoiceRecordingService — correction matching (stable ID)", () => {
     electron.emit.correctionReplace({ correctionId: "uuid-abc", correctedText: "Hello" });
 
     expect(mockVoiceFns.rebasePendingCorrections).not.toHaveBeenCalled();
+    expect(mockVoiceFns.rebaseAICorrectionSpans).not.toHaveBeenCalled();
+  });
+
+  it("onCorrectionQueued registers the latest stabilized chunk using its trailing draft position", async () => {
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+
+    const PANEL = "panel-1";
+    mockVoiceState.activeTarget = { panelId: PANEL };
+    mockVoiceState.panelBuffers[PANEL] = {
+      pendingCorrections: [],
+      activeParagraphStart: 0,
+    };
+    mockDraftStore.drafts[PANEL] = "first sentence second sentence";
+
+    voiceRecordingService.initialize();
+
+    electron.emit.correctionQueued({
+      correctionId: "uuid-queued",
+      rawText: "second sentence",
+    });
+
+    expect(mockVoiceFns.addPendingCorrection).toHaveBeenCalledWith(
+      PANEL,
+      "uuid-queued",
+      15,
+      "second sentence"
+    );
   });
 
   it("onParagraphBoundary registers pending correction using correctionId from main process", async () => {

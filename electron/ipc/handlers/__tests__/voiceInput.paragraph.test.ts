@@ -104,6 +104,7 @@ vi.mock("../../channels.js", () => ({
     VOICE_INPUT_AUDIO_CHUNK: "voice-input:audio-chunk",
     VOICE_INPUT_TRANSCRIPTION_DELTA: "voice-input:transcription-delta",
     VOICE_INPUT_TRANSCRIPTION_COMPLETE: "voice-input:transcription-complete",
+    VOICE_INPUT_CORRECTION_QUEUED: "voice-input:correction-queued",
     VOICE_INPUT_CORRECTION_REPLACE: "voice-input:correction-replace",
     VOICE_INPUT_ERROR: "voice-input:error",
     VOICE_INPUT_STATUS: "voice-input:status",
@@ -212,17 +213,19 @@ describe("voiceInput — paragraph buffering", () => {
     }
   });
 
-  it("flushParagraph joins accumulated utterances and clears the buffer", () => {
+  it("flushes a small stabilized chunk online after two utterances and leaves manual flush empty", () => {
     emitTranscriptionEvent({ type: "complete", text: "First sentence" });
     emitTranscriptionEvent({ type: "complete", text: "Second sentence" });
 
+    const queuedMsg = win.__sent.find((m) => m.channel === "voice-input:correction-queued");
+    expect(queuedMsg).toBeDefined();
+    expect((queuedMsg?.payload as { rawText: string }).rawText).toBe(
+      "First sentence Second sentence"
+    );
+
     const handleFlush = getHandler("voice-input:flush-paragraph");
     const result = handleFlush(fakeEvent) as { rawText: string | null };
-    expect(result.rawText).toBe("First sentence Second sentence");
-
-    // Buffer is now empty — second flush returns null
-    const result2 = handleFlush(fakeEvent) as { rawText: string | null };
-    expect(result2.rawText).toBeNull();
+    expect(result.rawText).toBeNull();
   });
 
   it("flushParagraph triggers correction with the joined paragraph text", async () => {
@@ -341,10 +344,14 @@ describe("voiceInput — paragraph buffering", () => {
     const boundaryMsg = win.__sent.find((m) => m.channel === "voice-input:paragraph-boundary");
     expect(boundaryMsg).toBeDefined();
     const payload = boundaryMsg?.payload as { rawText: string | null; correctionId: string | null };
-    expect(payload.rawText).toBe("first utterance second utterance");
-    // correctionId is a UUID string when correction is queued
-    expect(payload.correctionId).toBeTypeOf("string");
-    expect(payload.correctionId).not.toBeNull();
+    expect(payload.rawText).toBeNull();
+    expect(payload.correctionId).toBeNull();
+
+    const queuedMsg = win.__sent.find((m) => m.channel === "voice-input:correction-queued");
+    expect(queuedMsg).toBeDefined();
+    expect((queuedMsg?.payload as { rawText: string }).rawText).toBe(
+      "first utterance second utterance"
+    );
 
     // Buffer should be empty after the flush — next stop/flush returns null
     const handleFlush = getHandler("voice-input:flush-paragraph");
@@ -513,7 +520,7 @@ describe("voiceInput — paragraph buffering", () => {
     });
   });
 
-  it("complete event arriving during stopGracefully drain is captured in stop flush rawText", async () => {
+  it("complete event arriving during stopGracefully drain can flush online before stop resolves", async () => {
     shared.useDeferredDrain = true;
 
     emitTranscriptionEvent({ type: "complete", text: "before drain" });
@@ -529,10 +536,13 @@ describe("voiceInput — paragraph buffering", () => {
 
     const result = (await stopPromise) as { rawText: string | null; correctionId: string | null };
 
-    // Both the pre-drain and late utterance should be in the flushed text
-    expect(result.rawText).toBe("before drain late utterance");
-    expect(result.correctionId).toBeTypeOf("string");
-    expect(result.correctionId).not.toBeNull();
+    // The late pair is corrected online, so stop no longer has buffered text to flush.
+    expect(result.rawText).toBeNull();
+    expect(result.correctionId).toBeNull();
+
+    const queuedMsg = win.__sent.find((m) => m.channel === "voice-input:correction-queued");
+    expect(queuedMsg).toBeDefined();
+    expect((queuedMsg?.payload as { rawText: string }).rawText).toBe("before drain late utterance");
   });
 
   it("stop correctionId matches the subsequent correction-replace IPC message", async () => {

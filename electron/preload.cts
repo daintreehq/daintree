@@ -508,6 +508,7 @@ const CHANNELS = {
   VOICE_INPUT_AUDIO_CHUNK: "voice-input:audio-chunk",
   VOICE_INPUT_TRANSCRIPTION_DELTA: "voice-input:transcription-delta",
   VOICE_INPUT_TRANSCRIPTION_COMPLETE: "voice-input:transcription-complete",
+  VOICE_INPUT_CORRECTION_QUEUED: "voice-input:correction-queued",
   VOICE_INPUT_CORRECTION_REPLACE: "voice-input:correction-replace",
   VOICE_INPUT_ERROR: "voice-input:error",
   VOICE_INPUT_STATUS: "voice-input:status",
@@ -1672,6 +1673,8 @@ const api: ElectronAPI = {
     onTranscriptionComplete: (
       callback: (payload: { text: string; willCorrect: boolean }) => void
     ) => _typedOn(CHANNELS.VOICE_INPUT_TRANSCRIPTION_COMPLETE, callback),
+    onCorrectionQueued: (callback: (payload: { correctionId: string; rawText: string }) => void) =>
+      _typedOn(CHANNELS.VOICE_INPUT_CORRECTION_QUEUED, callback),
     onCorrectionReplace: (
       callback: (payload: { correctionId: string; correctedText: string }) => void
     ) => _typedOn(CHANNELS.VOICE_INPUT_CORRECTION_REPLACE, callback),
