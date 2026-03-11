@@ -319,12 +319,7 @@ export function TroubleshootingTab() {
           ariaLabel="Developer Mode Toggle"
         />
 
-        <div
-          className={cn(
-            "ml-4 space-y-3 border-l-2 border-canopy-border pl-4 transition-opacity",
-            !developerMode && "opacity-50"
-          )}
-        >
+        <div className="ml-4 space-y-3 border-l-2 border-canopy-border pl-4">
           <SettingsSwitchCard
             variant="compact"
             title="Auto-Open Diagnostics Dock"
@@ -335,7 +330,7 @@ export function TroubleshootingTab() {
             disabled={!developerMode}
           />
 
-          <div className={cn("ml-4", !autoOpenDiagnostics && "opacity-50")}>
+          <div className="ml-4">
             <SettingsSwitchCard
               variant="compact"
               title="Focus Events Tab"
