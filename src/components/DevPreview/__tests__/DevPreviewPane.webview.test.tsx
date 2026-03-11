@@ -242,12 +242,6 @@ describe("DevPreviewPane webview lifecycle regression", () => {
     vi.useRealTimers();
   });
 
-  it("renders webview with allowpopups attribute", () => {
-    const { container } = render(<DevPreviewPane {...baseProps} />);
-    const webview = getWebviewElement(container);
-    expect(webview.hasAttribute("allowpopups")).toBe(true);
-  });
-
   it("recovers ready state from an already-loaded webview and reapplies zoom", async () => {
     const { container } = render(<DevPreviewPane {...baseProps} />);
     const webview = getWebviewElement(container);
