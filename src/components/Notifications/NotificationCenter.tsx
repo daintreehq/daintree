@@ -77,13 +77,15 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
         {entries.length > 0 && (
           <Button
             type="button"
+            variant="ghost"
+            size="xs"
             onClick={() => {
               clearAll();
               onClose();
             }}
-            className="flex items-center gap-1 text-[10px] text-canopy-text/50 hover:text-canopy-text/80 transition-colors"
+            className="text-canopy-text/50"
           >
-            <Trash2 className="h-3 w-3" />
+            <Trash2 />
             Clear all
           </Button>
         )}
