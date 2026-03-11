@@ -282,8 +282,9 @@ export function WorktreeHeader({
         <div className="flex items-center gap-2 min-w-0 flex-1">
           {isMainWorktree && (
             <House
-              className="w-3.5 h-3.5 text-canopy-text/30 shrink-0"
-              aria-label="Main worktree"
+              className="w-3.5 h-3.5 text-canopy-text/60 shrink-0"
+              fill="currentColor"
+              aria-hidden="true"
             />
           )}
           {isPinned && !isMainWorktree && (
