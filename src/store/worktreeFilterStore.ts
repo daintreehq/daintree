@@ -72,6 +72,7 @@ interface WorktreeFilterState {
   sessionFilters: Set<SessionFilter>;
   activityFilters: Set<ActivityFilter>;
   alwaysShowActive: boolean;
+  alwaysShowWaiting: boolean;
   hideMainWorktree: boolean;
   pinnedWorktrees: string[];
 }
@@ -86,6 +87,7 @@ interface WorktreeFilterActions {
   toggleSessionFilter: (filter: SessionFilter) => void;
   toggleActivityFilter: (filter: ActivityFilter) => void;
   setAlwaysShowActive: (enabled: boolean) => void;
+  setAlwaysShowWaiting: (enabled: boolean) => void;
   setHideMainWorktree: (enabled: boolean) => void;
   pinWorktree: (id: string) => void;
   unpinWorktree: (id: string) => void;
@@ -107,6 +109,7 @@ interface PersistedState {
   sessionFilters: SessionFilter[];
   activityFilters: ActivityFilter[];
   alwaysShowActive: boolean;
+  alwaysShowWaiting: boolean;
   hideMainWorktree: boolean;
   pinnedWorktrees: string[];
 }
@@ -123,6 +126,7 @@ export const useWorktreeFilterStore = create<WorktreeFilterStore>()(
       sessionFilters: new Set<SessionFilter>(),
       activityFilters: new Set<ActivityFilter>(),
       alwaysShowActive: true,
+      alwaysShowWaiting: true,
       hideMainWorktree: false,
       pinnedWorktrees: [],
 
@@ -186,6 +190,7 @@ export const useWorktreeFilterStore = create<WorktreeFilterStore>()(
         }),
 
       setAlwaysShowActive: (enabled) => set({ alwaysShowActive: enabled }),
+      setAlwaysShowWaiting: (enabled) => set({ alwaysShowWaiting: enabled }),
       setHideMainWorktree: (enabled) => set({ hideMainWorktree: enabled }),
 
       pinWorktree: (id) =>
@@ -253,6 +258,7 @@ export const useWorktreeFilterStore = create<WorktreeFilterStore>()(
         sessionFilters: Array.from(state.sessionFilters),
         activityFilters: Array.from(state.activityFilters),
         alwaysShowActive: state.alwaysShowActive,
+        alwaysShowWaiting: state.alwaysShowWaiting,
         hideMainWorktree: state.hideMainWorktree,
         pinnedWorktrees: state.pinnedWorktrees,
       }),
@@ -269,6 +275,7 @@ export const useWorktreeFilterStore = create<WorktreeFilterStore>()(
           sessionFilters: new Set(p?.sessionFilters ?? []),
           activityFilters: new Set(p?.activityFilters ?? []),
           alwaysShowActive: p?.alwaysShowActive ?? true,
+          alwaysShowWaiting: p?.alwaysShowWaiting ?? true,
           hideMainWorktree: p?.hideMainWorktree ?? false,
           pinnedWorktrees: p?.pinnedWorktrees ?? [],
         };

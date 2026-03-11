@@ -157,6 +157,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     sessionFilters,
     activityFilters,
     alwaysShowActive,
+    alwaysShowWaiting,
     pinnedWorktrees,
   } = useWorktreeFilterStore(
     useShallow((state) => ({
@@ -169,6 +170,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
       sessionFilters: state.sessionFilters,
       activityFilters: state.activityFilters,
       alwaysShowActive: state.alwaysShowActive,
+      alwaysShowWaiting: state.alwaysShowWaiting,
       pinnedWorktrees: state.pinnedWorktrees,
     }))
   );
@@ -278,6 +280,10 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
         return true;
       }
 
+      if (alwaysShowWaiting && derived.hasWaitingAgent) {
+        return true;
+      }
+
       return matchesFilters(worktree, filters, derived, isActive);
     });
 
@@ -305,6 +311,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     sessionFilters,
     activityFilters,
     alwaysShowActive,
+    alwaysShowWaiting,
     pinnedWorktrees,
     mainWorktree,
     integrationWorktree,
