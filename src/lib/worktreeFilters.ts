@@ -316,3 +316,20 @@ export function hasAnyFilters(filters: FilterState): boolean {
     filters.activityFilters.size > 0
   );
 }
+
+export const INTEGRATION_BRANCH_NAMES = ["develop", "trunk", "next"] as const;
+
+export function findIntegrationWorktree<T extends Worktree | WorktreeState>(
+  worktrees: T[],
+  mainWorktreeId: string | undefined
+): T | null {
+  return (
+    worktrees.find(
+      (w) =>
+        w.id !== mainWorktreeId &&
+        !w.isMainWorktree &&
+        w.branch != null &&
+        (INTEGRATION_BRANCH_NAMES as readonly string[]).includes(w.branch)
+    ) ?? null
+  );
+}

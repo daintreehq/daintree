@@ -201,18 +201,17 @@ export function WorktreeFilterPopover({ hideSearchInput = false }: WorktreeFilte
       <PopoverTrigger asChild>
         <button
           className={cn(
-            "relative flex items-center justify-center w-7 h-7 rounded",
+            "relative flex items-center justify-center w-5 h-5 rounded",
             "text-canopy-text/60 hover:text-canopy-text hover:bg-white/[0.06]",
             "transition-colors",
             hasActiveFilters() && "text-canopy-accent"
           )}
           aria-label="Filter and sort worktrees"
+          aria-haspopup="dialog"
         >
           <Filter className="w-3.5 h-3.5" />
           {showBadge && (
-            <span className="absolute -top-0.5 -right-0.5 flex items-center justify-center min-w-[14px] h-[14px] px-1 text-[9px] font-medium bg-canopy-accent text-canopy-bg rounded-full">
-              {filterCount}
-            </span>
+            <span className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-canopy-accent" />
           )}
         </button>
       </PopoverTrigger>

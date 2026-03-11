@@ -11,6 +11,8 @@ interface WorktreeSidebarSearchBarProps {
 export function WorktreeSidebarSearchBar({ inputRef }: WorktreeSidebarSearchBarProps) {
   const query = useWorktreeFilterStore((state) => state.query);
   const setQuery = useWorktreeFilterStore((state) => state.setQuery);
+  const clearAll = useWorktreeFilterStore((state) => state.clearAll);
+  const hasActiveFilters = useWorktreeFilterStore((state) => state.hasActiveFilters);
 
   const [localQuery, setLocalQuery] = useState("");
   const debounceRef = useRef<NodeJS.Timeout | null>(null);
@@ -48,23 +50,24 @@ export function WorktreeSidebarSearchBar({ inputRef }: WorktreeSidebarSearchBarP
   const handleClear = useCallback(() => {
     if (debounceRef.current) {
       clearTimeout(debounceRef.current);
+      debounceRef.current = null;
     }
     setLocalQuery("");
-    setQuery("");
-  }, [setQuery]);
+    clearAll();
+  }, [clearAll]);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
       if (e.key === "Escape") {
         e.stopPropagation();
-        if (localQuery) {
+        if (localQuery || hasActiveFilters()) {
           handleClear();
         } else {
           internalRef.current?.blur();
         }
       }
     },
-    [localQuery, handleClear]
+    [localQuery, hasActiveFilters, handleClear]
   );
 
   const setRefs = useCallback(
@@ -79,38 +82,45 @@ export function WorktreeSidebarSearchBar({ inputRef }: WorktreeSidebarSearchBarP
     [inputRef]
   );
 
+  const showClear = localQuery || hasActiveFilters();
+
   return (
     <div className="px-3 py-2 border-b border-divider shrink-0">
-      <div className="flex items-center gap-1.5">
-        <div className="relative flex-1">
-          <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-canopy-text/30 pointer-events-none" />
-          <input
-            ref={setRefs}
-            type="text"
-            value={localQuery}
-            onChange={(e) => handleQueryChange(e.target.value)}
-            onKeyDown={handleKeyDown}
-            placeholder="Search worktrees..."
-            aria-label="Search worktrees"
-            className={cn(
-              "w-full pl-7 pr-7 py-1.5 text-xs rounded",
-              "bg-canopy-bg border border-canopy-border",
-              "text-canopy-text placeholder-canopy-text/40",
-              "focus:outline-none focus:border-canopy-accent/50"
-            )}
-          />
-          {localQuery && (
+      <div
+        role="search"
+        className={cn(
+          "flex items-center gap-1.5 px-2 py-1.5 rounded",
+          "bg-canopy-bg border border-canopy-border",
+          "focus-within:border-canopy-accent/50"
+        )}
+      >
+        <Search
+          className="w-3.5 h-3.5 shrink-0 text-canopy-text/30 pointer-events-none"
+          aria-hidden="true"
+        />
+        <input
+          ref={setRefs}
+          type="text"
+          value={localQuery}
+          onChange={(e) => handleQueryChange(e.target.value)}
+          onKeyDown={handleKeyDown}
+          placeholder="Search worktrees..."
+          aria-label="Search worktrees"
+          className="flex-1 min-w-0 text-xs bg-transparent text-canopy-text placeholder-canopy-text/40 focus:outline-none"
+        />
+        <div className="flex shrink-0 items-center gap-0.5">
+          {showClear && (
             <button
               type="button"
               onClick={handleClear}
-              className="absolute right-2 top-1/2 -translate-y-1/2 text-canopy-text/40 hover:text-canopy-text"
-              aria-label="Clear search"
+              className="flex items-center justify-center w-5 h-5 rounded text-canopy-text/40 hover:text-canopy-text"
+              aria-label="Clear search and filters"
             >
               <X className="w-3 h-3" />
             </button>
           )}
+          <WorktreeFilterPopover hideSearchInput />
         </div>
-        <WorktreeFilterPopover hideSearchInput />
       </div>
     </div>
   );
