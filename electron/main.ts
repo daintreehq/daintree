@@ -485,8 +485,14 @@ if (!gotTheLock) {
     const activeCount = getActiveAgentCount(getAgentAvailabilityStore());
     if (activeCount > 0) {
       isConfirmingQuit = true;
-      const confirmed = await showQuitWarning(activeCount, dialog.showMessageBox);
-      isConfirmingQuit = false;
+      let confirmed = false;
+      try {
+        confirmed = await showQuitWarning(activeCount, dialog.showMessageBox);
+      } catch (error) {
+        console.error("[MAIN] Error showing quit warning:", error);
+      } finally {
+        isConfirmingQuit = false;
+      }
 
       if (!confirmed) {
         return;
