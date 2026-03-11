@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import type { ReactNode, ButtonHTMLAttributes } from "react";
 import { CrashRecoveryDialog } from "../CrashRecoveryDialog";

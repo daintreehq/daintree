@@ -50,7 +50,7 @@ export function CrashRecoveryDialog({
   onResolve,
   onUpdateConfig,
 }: CrashRecoveryDialogProps) {
-  const panels = crash.panels ?? [];
+  const panels = useMemo(() => crash.panels ?? [], [crash.panels]);
   const hasPanels = panels.length > 0;
 
   const [selectedIds, setSelectedIds] = useState<Set<string>>(
