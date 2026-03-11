@@ -152,6 +152,12 @@ describe("BrowserPane webview lifecycle regression", () => {
     vi.useRealTimers();
   });
 
+  it("renders webview with allowpopups attribute for target=_blank support", () => {
+    const { container } = render(<BrowserPane {...baseProps} />);
+    const webview = getWebviewElement(container);
+    expect(webview.hasAttribute("allowpopups")).toBe(true);
+  });
+
   it("recovers ready/loading state from an already-loaded webview", async () => {
     const { container } = render(<BrowserPane {...baseProps} />);
     const webview = getWebviewElement(container);

@@ -78,7 +78,7 @@ declare global {
         src?: string;
         partition?: string;
         webpreferences?: string;
-        allowpopups?: boolean;
+        allowpopups?: boolean | "";
       };
     }
   }

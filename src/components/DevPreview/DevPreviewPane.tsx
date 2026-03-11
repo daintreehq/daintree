@@ -576,7 +576,7 @@ export function DevPreviewPane({
                 ref={setWebviewNode}
                 src={currentUrl}
                 partition={webviewPartition}
-                allowpopups
+                allowpopups=""
                 className={cn(
                   "w-full h-full border-0",
                   isDragging && "invisible pointer-events-none"

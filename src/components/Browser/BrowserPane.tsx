@@ -612,7 +612,7 @@ export function BrowserPane({
                 ref={setWebviewNode}
                 src={currentUrl}
                 partition="persist:browser"
-                allowpopups
+                allowpopups=""
                 className={cn(
                   "w-full h-full border-0",
                   isDragging && "invisible pointer-events-none"
