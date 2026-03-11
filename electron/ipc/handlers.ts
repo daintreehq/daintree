@@ -26,6 +26,7 @@ import { registerCliHandlers } from "./handlers/cli.js";
 import { registerClipboardHandlers } from "./handlers/clipboard.js";
 import { registerGitWriteHandlers } from "./handlers/git-write.js";
 import { registerTelemetryHandlers } from "./handlers/telemetry.js";
+import { registerOnboardingHandlers } from "./handlers/onboarding.js";
 import { registerVoiceInputHandlers } from "./handlers/voiceInput.js";
 import { registerMcpServerHandlers } from "./handlers/mcpServer.js";
 import { registerWebviewHandlers } from "./handlers/webview.js";
@@ -85,6 +86,7 @@ export function registerIpcHandlers(deps: HandlerDependencies): () => void {
     register(() => registerClipboardHandlers());
     register(() => registerGitWriteHandlers(deps));
     register(() => registerTelemetryHandlers());
+    register(() => registerOnboardingHandlers());
     register(() => registerVoiceInputHandlers(deps));
     register(() => registerMcpServerHandlers());
     register(() => registerWebviewHandlers());

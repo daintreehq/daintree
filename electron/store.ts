@@ -133,6 +133,13 @@ export interface StoreSchema {
   crashRecovery: {
     autoRestoreOnCrash: boolean;
   };
+  onboarding: {
+    schemaVersion: number;
+    completed: boolean;
+    currentStep: string | null;
+    firstRunToastSeen: boolean;
+    migratedFromLocalStorage: boolean;
+  };
 }
 
 const storeOptions = {
@@ -213,6 +220,13 @@ const storeOptions = {
     pendingErrors: [],
     crashRecovery: {
       autoRestoreOnCrash: false,
+    },
+    onboarding: {
+      schemaVersion: 1,
+      completed: false,
+      currentStep: null,
+      firstRunToastSeen: false,
+      migratedFromLocalStorage: false,
     },
   },
   cwd: process.env.CANOPY_USER_DATA,

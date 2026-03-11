@@ -534,6 +534,13 @@ const CHANNELS = {
   CRASH_RECOVERY_RESOLVE: "crash-recovery:resolve",
   CRASH_RECOVERY_GET_CONFIG: "crash-recovery:get-config",
   CRASH_RECOVERY_SET_CONFIG: "crash-recovery:set-config",
+
+  // Onboarding channels
+  ONBOARDING_GET: "onboarding:get",
+  ONBOARDING_MIGRATE: "onboarding:migrate",
+  ONBOARDING_SET_STEP: "onboarding:set-step",
+  ONBOARDING_COMPLETE: "onboarding:complete",
+  ONBOARDING_MARK_TOAST_SEEN: "onboarding:mark-toast-seen",
 } as const;
 
 const api: ElectronAPI = {
@@ -1647,6 +1654,18 @@ const api: ElectronAPI = {
     get: () => _typedInvoke(CHANNELS.TELEMETRY_GET),
     setEnabled: (enabled: boolean) => _typedInvoke(CHANNELS.TELEMETRY_SET_ENABLED, enabled),
     markPromptShown: () => _typedInvoke(CHANNELS.TELEMETRY_MARK_PROMPT_SHOWN),
+  },
+
+  onboarding: {
+    get: () => _typedInvoke(CHANNELS.ONBOARDING_GET),
+    migrate: (payload: {
+      agentSelectionDismissed: boolean;
+      agentSetupComplete: boolean;
+      firstRunToastSeen: boolean;
+    }) => _typedInvoke(CHANNELS.ONBOARDING_MIGRATE, payload),
+    setStep: (step: string | null) => _typedInvoke(CHANNELS.ONBOARDING_SET_STEP, step),
+    complete: () => _typedInvoke(CHANNELS.ONBOARDING_COMPLETE),
+    markToastSeen: () => _typedInvoke(CHANNELS.ONBOARDING_MARK_TOAST_SEEN),
   },
 
   // Voice Input API

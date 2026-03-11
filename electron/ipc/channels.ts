@@ -373,6 +373,13 @@ export const CHANNELS = {
   VOICE_INPUT_FLUSH_PARAGRAPH: "voice-input:flush-paragraph",
   VOICE_INPUT_PARAGRAPH_BOUNDARY: "voice-input:paragraph-boundary",
 
+  // Onboarding channels
+  ONBOARDING_GET: "onboarding:get",
+  ONBOARDING_MIGRATE: "onboarding:migrate",
+  ONBOARDING_SET_STEP: "onboarding:set-step",
+  ONBOARDING_COMPLETE: "onboarding:complete",
+  ONBOARDING_MARK_TOAST_SEEN: "onboarding:mark-toast-seen",
+
   // Crash Recovery channels
   CRASH_RECOVERY_GET_PENDING: "crash-recovery:get-pending",
   CRASH_RECOVERY_RESOLVE: "crash-recovery:resolve",
