@@ -576,6 +576,7 @@ export function DevPreviewPane({
                 ref={setWebviewNode}
                 src={currentUrl}
                 partition={webviewPartition}
+                // @ts-expect-error React 19 requires "" to emit the attribute; boolean true is silently dropped
                 allowpopups=""
                 className={cn(
                   "w-full h-full border-0",
