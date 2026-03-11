@@ -17,6 +17,8 @@ import { actionService } from "@/services/ActionService";
 import { useIsDragging } from "@/components/DragDrop";
 import { cn } from "@/lib/utils";
 import { useConsoleCaptureStore } from "@/store/consoleCaptureStore";
+import { useProjectStore } from "@/store";
+import { useUrlHistoryStore } from "@/store/urlHistoryStore";
 
 export interface BrowserPaneProps extends BasePanelProps {
   initialUrl: string;
@@ -62,6 +64,9 @@ export function BrowserPane({
   const addConsoleMessage = useConsoleCaptureStore((state) => state.addMessage);
   const clearConsoleMessages = useConsoleCaptureStore((state) => state.clearMessages);
   const removePane = useConsoleCaptureStore((state) => state.removePane);
+  const projectId = useProjectStore((state) => state.currentProject?.id);
+  const recordVisit = useUrlHistoryStore((state) => state.recordVisit);
+  const updateTitle = useUrlHistoryStore((state) => state.updateTitle);
 
   const [isConsoleOpen, setIsConsoleOpen] = useState(false);
 
@@ -188,6 +193,13 @@ export function BrowserPane({
         setHistory((prev) => pushBrowserHistory(prev, newUrl));
         lastSetUrlRef.current = newUrl;
       }
+      if (projectId) {
+        try {
+          recordVisit(projectId, newUrl, webview.getTitle());
+        } catch {
+          // webview may not be ready for getTitle
+        }
+      }
     };
 
     const handleDidNavigateInPage = (event: Electron.DidNavigateInPageEvent) => {
@@ -196,6 +208,25 @@ export function BrowserPane({
       if (newUrl !== lastSetUrlRef.current) {
         setHistory((prev) => pushBrowserHistory(prev, newUrl));
         lastSetUrlRef.current = newUrl;
+      }
+      if (projectId) {
+        try {
+          recordVisit(projectId, newUrl, webview.getTitle());
+        } catch {
+          // webview may not be ready for getTitle
+        }
+      }
+    };
+
+    const handlePageTitleUpdated = (event: Event) => {
+      const detail = event as Event & { title?: string; explicitSet?: boolean };
+      if (detail.explicitSet === false) return;
+      if (projectId && detail.title) {
+        try {
+          updateTitle(projectId, webview.getURL(), detail.title);
+        } catch {
+          // webview may be detached
+        }
       }
     };
 
@@ -224,6 +255,7 @@ export function BrowserPane({
     webview.addEventListener("did-navigate", handleDidNavigate);
     webview.addEventListener("did-navigate-in-page", handleDidNavigateInPage);
     webview.addEventListener("console-message", handleConsoleMessage);
+    webview.addEventListener("page-title-updated", handlePageTitleUpdated);
 
     return () => {
       webview.removeEventListener("dom-ready", handleDomReady);
@@ -233,8 +265,19 @@ export function BrowserPane({
       webview.removeEventListener("did-navigate", handleDidNavigate);
       webview.removeEventListener("did-navigate-in-page", handleDidNavigateInPage);
       webview.removeEventListener("console-message", handleConsoleMessage);
+      webview.removeEventListener("page-title-updated", handlePageTitleUpdated);
     };
-  }, [webviewElement, hasValidUrl, loadError, zoomFactor, id, addConsoleMessage]);
+  }, [
+    webviewElement,
+    hasValidUrl,
+    loadError,
+    zoomFactor,
+    id,
+    addConsoleMessage,
+    projectId,
+    recordVisit,
+    updateTitle,
+  ]);
 
   const handleNavigate = useCallback(
     (url: string) => {
@@ -487,6 +530,7 @@ export function BrowserPane({
   const browserToolbar = (
     <BrowserToolbar
       terminalId={id}
+      projectId={projectId}
       url={currentUrl}
       canGoBack={canGoBack}
       canGoForward={canGoForward}

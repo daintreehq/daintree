@@ -11,7 +11,7 @@ export function getDisplayUrl(url: string): string {
     // Return a cleaner display format without trailing slash for root paths
     const path = parsed.pathname === "/" ? "" : parsed.pathname;
     const search = parsed.search;
-    return `${parsed.host}${path}${search}`;
+    return `${parsed.host}${path}${search}${parsed.hash}`;
   } catch {
     return url;
   }

@@ -24,6 +24,7 @@ import {
   prePopulateProjectSettings,
 } from "./projectSettingsStore";
 import { logErrorWithContext } from "@/utils/errorContext";
+import { useUrlHistoryStore } from "./urlHistoryStore";
 import {
   prepareProjectSwitchRendererCache,
   cancelPreparedProjectSwitchRendererCache,
@@ -501,6 +502,7 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
       if (get().onboardingProjectId === id) {
         set({ onboardingWizardOpen: false, onboardingProjectId: null });
       }
+      useUrlHistoryStore.getState().removeProjectHistory(id);
       set({ isLoading: false });
     } catch (error) {
       logErrorWithContext(error, {
