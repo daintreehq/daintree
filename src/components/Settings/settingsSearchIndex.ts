@@ -15,6 +15,146 @@ export interface SettingsSearchEntry {
 }
 
 export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
+  // ── Tab-level navigation entries (one per tab) ──
+  // tabLabel values must match tabTitles in SettingsDialog.tsx
+  {
+    id: "tab-nav-general",
+    tab: "general",
+    tabLabel: "General",
+    section: "Settings Navigation",
+    title: "General",
+    description: "About, system status, hibernation, and display settings",
+    keywords: ["general", "settings", "about", "status"],
+  },
+  {
+    id: "tab-nav-keyboard",
+    tab: "keyboard",
+    tabLabel: "Keyboard Shortcuts",
+    section: "Settings Navigation",
+    title: "Keyboard Shortcuts",
+    description: "View and customize keyboard shortcut bindings",
+    keywords: ["general", "keyboard", "keybindings", "hotkeys", "shortcuts"],
+  },
+  {
+    id: "tab-nav-terminalAppearance",
+    tab: "terminalAppearance",
+    tabLabel: "Appearance",
+    section: "Settings Navigation",
+    title: "Appearance",
+    description: "Theme, terminal colors, font size, and font family",
+    keywords: ["general", "appearance", "theme", "colors", "font"],
+  },
+  {
+    id: "tab-nav-notifications",
+    tab: "notifications",
+    tabLabel: "Notifications",
+    section: "Settings Navigation",
+    title: "Notifications",
+    description: "Agent notification alerts and sound settings",
+    keywords: ["general", "notifications", "alerts", "sounds"],
+  },
+  {
+    id: "tab-nav-terminal",
+    tab: "terminal",
+    tabLabel: "Panel Grid",
+    section: "Settings Navigation",
+    title: "Panel Grid",
+    description: "Terminal grid layout, scrollback, split pane, and performance settings",
+    keywords: ["terminal", "panel", "grid", "layout", "panes"],
+  },
+  {
+    id: "tab-nav-worktree",
+    tab: "worktree",
+    tabLabel: "Worktree Paths",
+    section: "Settings Navigation",
+    title: "Worktree Paths",
+    description: "Configure where git worktrees are created",
+    keywords: ["terminal", "worktree", "paths", "git", "directory"],
+  },
+  {
+    id: "tab-nav-toolbar",
+    tab: "toolbar",
+    tabLabel: "Toolbar Customization",
+    section: "Settings Navigation",
+    title: "Toolbar Customization",
+    description: "Reorder, show, and hide toolbar buttons and launcher settings",
+    keywords: ["terminal", "toolbar", "buttons", "customize"],
+  },
+  {
+    id: "tab-nav-agents",
+    tab: "agents",
+    tabLabel: "CLI Agents",
+    section: "Settings Navigation",
+    title: "CLI Agents",
+    description: "Configure Claude, Gemini, Codex, and OpenCode agent settings",
+    keywords: ["integrations", "agents", "claude", "gemini", "codex", "opencode"],
+  },
+  {
+    id: "tab-nav-github",
+    tab: "github",
+    tabLabel: "GitHub Integration",
+    section: "Settings Navigation",
+    title: "GitHub Integration",
+    description: "GitHub personal access token and authentication",
+    keywords: ["integrations", "github", "token", "authentication"],
+  },
+  {
+    id: "tab-nav-editor",
+    tab: "editor",
+    tabLabel: "Editor Integration",
+    section: "Settings Navigation",
+    title: "Editor Integration",
+    description: "Configure external code editor for file opening",
+    keywords: ["integrations", "editor", "vscode", "cursor", "ide"],
+  },
+  {
+    id: "tab-nav-imageViewer",
+    tab: "imageViewer",
+    tabLabel: "Image Viewer",
+    section: "Settings Navigation",
+    title: "Image Viewer",
+    description: "Configure image viewer application",
+    keywords: ["integrations", "image", "viewer", "photo", "picture"],
+  },
+  {
+    id: "tab-nav-sidecar",
+    tab: "sidecar",
+    tabLabel: "Sidecar Links",
+    section: "Settings Navigation",
+    title: "Sidecar Links",
+    description: "Default and custom links for the sidecar browser panel",
+    keywords: ["integrations", "sidecar", "links", "browser", "bookmarks"],
+  },
+  {
+    id: "tab-nav-mcp",
+    tab: "mcp",
+    tabLabel: "MCP Server",
+    section: "Settings Navigation",
+    title: "MCP Server",
+    description: "Local MCP server for AI agent automation",
+    keywords: ["integrations", "mcp", "server", "automation", "api"],
+  },
+  {
+    id: "tab-nav-voice",
+    tab: "voice",
+    tabLabel: "Voice Input",
+    section: "Settings Navigation",
+    title: "Voice Input",
+    description: "Speech-to-text transcription and AI text correction",
+    keywords: ["input", "voice", "microphone", "speech", "dictation", "mic"],
+  },
+  {
+    id: "tab-nav-troubleshooting",
+    tab: "troubleshooting",
+    tabLabel: "Troubleshooting",
+    section: "Settings Navigation",
+    title: "Troubleshooting",
+    description: "System health, logs, crash reporting, and developer mode",
+    keywords: ["support", "troubleshooting", "debug", "logs", "health"],
+  },
+
+  // ── Field-level entries ──
+
   // General
   {
     id: "general-about",
@@ -76,7 +216,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
   {
     id: "keyboard-shortcuts",
     tab: "keyboard",
-    tabLabel: "Keyboard",
+    tabLabel: "Keyboard Shortcuts",
     section: "Keyboard Shortcuts",
     title: "Keyboard Shortcuts",
     description:
@@ -86,7 +226,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
   {
     id: "keyboard-profiles",
     tab: "keyboard",
-    tabLabel: "Keyboard",
+    tabLabel: "Keyboard Shortcuts",
     section: "Keyboard Shortcuts",
     title: "Shortcut Profiles",
     description: "Import and export shortcut profile configurations",
@@ -95,7 +235,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
   {
     id: "keyboard-reset",
     tab: "keyboard",
-    tabLabel: "Keyboard",
+    tabLabel: "Keyboard Shortcuts",
     section: "Keyboard Shortcuts",
     title: "Reset All Shortcuts",
     description: "Reset all keyboard shortcuts to their default bindings",
@@ -106,7 +246,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
   {
     id: "terminal-performance-mode",
     tab: "terminal",
-    tabLabel: "Terminal",
+    tabLabel: "Panel Grid",
     section: "Performance Mode",
     title: "Performance Mode",
     description:
@@ -116,7 +256,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
   {
     id: "terminal-hybrid-input",
     tab: "terminal",
-    tabLabel: "Terminal",
+    tabLabel: "Panel Grid",
     section: "Hybrid Input Bar",
     title: "Hybrid Input Bar",
     description: "Show the multi-line input bar on agent terminals",
@@ -125,7 +265,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
   {
     id: "terminal-hybrid-autofocus",
     tab: "terminal",
-    tabLabel: "Terminal",
+    tabLabel: "Panel Grid",
     section: "Hybrid Input Bar",
     title: "Auto-Focus Input",
     description: "Selecting a pane focuses the input bar or the terminal (xterm)",
@@ -134,7 +274,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
   {
     id: "terminal-two-pane-split",
     tab: "terminal",
-    tabLabel: "Terminal",
+    tabLabel: "Panel Grid",
     section: "Two-Pane Split Layout",
     title: "Two-Pane Split Layout",
     description: "When exactly two panels are open, display them with a resizable divider",
@@ -143,7 +283,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
   {
     id: "terminal-scrollback",
     tab: "terminal",
-    tabLabel: "Terminal",
+    tabLabel: "Panel Grid",
     section: "Scrollback History",
     title: "Scrollback History",
     description: "Set base scrollback lines for terminal history: 1,000, 5,000, or 10,000 lines",
@@ -152,7 +292,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
   {
     id: "terminal-grid-layout",
     tab: "terminal",
-    tabLabel: "Terminal",
+    tabLabel: "Panel Grid",
     section: "Grid Layout Strategy",
     title: "Grid Layout Strategy",
     description: "Control how panels arrange in the grid: automatic, fixed columns, or fixed rows",
@@ -201,7 +341,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
   {
     id: "worktree-path-pattern",
     tab: "worktree",
-    tabLabel: "Worktree",
+    tabLabel: "Worktree Paths",
     section: "Worktree Path Pattern",
     title: "Worktree Path Pattern",
     description:
@@ -306,7 +446,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
   {
     id: "github-token",
     tab: "github",
-    tabLabel: "GitHub",
+    tabLabel: "GitHub Integration",
     section: "Personal Access Token",
     title: "GitHub Personal Access Token",
     description: "Configure GitHub authentication token. Required scopes: repo, read:org",
@@ -317,7 +457,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
   {
     id: "sidecar-default-agent",
     tab: "sidecar",
-    tabLabel: "Sidecar",
+    tabLabel: "Sidecar Links",
     section: "Default New Tab Agent",
     title: "Default New Tab Agent",
     description: "Choose which agent opens when you click the + button in the sidecar",
@@ -326,7 +466,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
   {
     id: "sidecar-default-links",
     tab: "sidecar",
-    tabLabel: "Sidecar",
+    tabLabel: "Sidecar Links",
     section: "Default Links",
     title: "Default Links",
     description: "System-provided links shown in the sidecar panel",
@@ -335,7 +475,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
   {
     id: "sidecar-custom-links",
     tab: "sidecar",
-    tabLabel: "Sidecar",
+    tabLabel: "Sidecar Links",
     section: "Custom Links",
     title: "Custom Links",
     description: "Add custom URLs and links to the sidecar panel",
@@ -344,7 +484,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
   {
     id: "sidecar-width",
     tab: "sidecar",
-    tabLabel: "Sidecar",
+    tabLabel: "Sidecar Links",
     section: "Default Width",
     title: "Sidecar Default Width",
     description: "Set the default width of the sidecar panel",
@@ -355,7 +495,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
   {
     id: "toolbar-left-buttons",
     tab: "toolbar",
-    tabLabel: "Toolbar",
+    tabLabel: "Toolbar Customization",
     section: "Left Side Buttons",
     title: "Left Toolbar Buttons",
     description: "Drag to reorder, uncheck to hide left toolbar buttons",
@@ -364,7 +504,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
   {
     id: "toolbar-right-buttons",
     tab: "toolbar",
-    tabLabel: "Toolbar",
+    tabLabel: "Toolbar Customization",
     section: "Right Side Buttons",
     title: "Right Toolbar Buttons",
     description: "Drag to reorder, uncheck to hide right toolbar buttons",
@@ -373,7 +513,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
   {
     id: "toolbar-launcher",
     tab: "toolbar",
-    tabLabel: "Toolbar",
+    tabLabel: "Toolbar Customization",
     section: "Launcher Palette",
     title: "Launcher Palette Settings",
     description:
@@ -383,7 +523,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
   {
     id: "toolbar-reset",
     tab: "toolbar",
-    tabLabel: "Toolbar",
+    tabLabel: "Toolbar Customization",
     section: "Toolbar Customization",
     title: "Reset Toolbar to Defaults",
     description: "Reset all toolbar button positions and visibility to defaults",
@@ -433,7 +573,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
   {
     id: "editor-external",
     tab: "editor",
-    tabLabel: "Editor",
+    tabLabel: "Editor Integration",
     section: "External Editor",
     title: "External Editor",
     description:
@@ -476,6 +616,98 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
       "photoshop",
       "gimp",
     ],
+  },
+
+  // Voice Input
+  {
+    id: "voice-enable",
+    tab: "voice",
+    tabLabel: "Voice Input",
+    section: "Speech-to-Text",
+    title: "Voice Input Enable",
+    description: "Enable or disable voice input for speech-to-text transcription",
+    keywords: ["voice", "microphone", "dictate", "speech", "recording", "enable", "mic"],
+  },
+  {
+    id: "voice-deepgram-key",
+    tab: "voice",
+    tabLabel: "Voice Input",
+    section: "Speech-to-Text",
+    title: "Deepgram API Key",
+    description: "Configure your Deepgram API key for speech recognition",
+    keywords: ["deepgram", "api", "key", "speech-to-text", "stt", "nova"],
+  },
+  {
+    id: "voice-language",
+    tab: "voice",
+    tabLabel: "Voice Input",
+    section: "Speech-to-Text",
+    title: "Transcription Language",
+    description: "Select the language for speech transcription",
+    keywords: ["language", "locale", "english", "multilingual", "transcription"],
+  },
+  {
+    id: "voice-transcription-model",
+    tab: "voice",
+    tabLabel: "Voice Input",
+    section: "Speech-to-Text",
+    title: "Transcription Model",
+    description: "Choose the Deepgram model for transcription accuracy",
+    keywords: ["nova-3", "nova-2", "model", "deepgram", "accuracy", "transcription"],
+  },
+  {
+    id: "voice-paragraph-breaks",
+    tab: "voice",
+    tabLabel: "Voice Input",
+    section: "Speech-to-Text",
+    title: "Paragraph Breaks",
+    description: "Insert paragraph breaks via spoken commands",
+    keywords: ["paragraph", "break", "enter", "formatting", "spoken"],
+  },
+  {
+    id: "voice-custom-dictionary",
+    tab: "voice",
+    tabLabel: "Voice Input",
+    section: "Speech-to-Text",
+    title: "Custom Dictionary",
+    description: "Add domain-specific terms to improve recognition accuracy",
+    keywords: ["dictionary", "terms", "domain", "vocabulary", "recognition", "custom"],
+  },
+  {
+    id: "voice-ai-correction-enable",
+    tab: "voice",
+    tabLabel: "Voice Input",
+    section: "AI Text Correction",
+    title: "AI Text Correction",
+    description: "Enable AI-powered post-processing to clean up transcribed text",
+    keywords: ["correction", "ai", "cleanup", "post-process", "filler"],
+  },
+  {
+    id: "voice-openai-key",
+    tab: "voice",
+    tabLabel: "Voice Input",
+    section: "AI Text Correction",
+    title: "OpenAI API Key",
+    description: "Configure your OpenAI API key for AI text correction",
+    keywords: ["openai", "api", "key", "correction", "gpt"],
+  },
+  {
+    id: "voice-correction-model",
+    tab: "voice",
+    tabLabel: "Voice Input",
+    section: "AI Text Correction",
+    title: "Correction Model",
+    description: "Choose the OpenAI model used for text correction",
+    keywords: ["gpt", "model", "correction", "openai"],
+  },
+  {
+    id: "voice-custom-instructions",
+    tab: "voice",
+    tabLabel: "Voice Input",
+    section: "AI Text Correction",
+    title: "Custom Instructions",
+    description: "Add project-specific rules for AI text correction",
+    keywords: ["instructions", "prompt", "rules", "custom", "project-specific"],
   },
 
   // Troubleshooting
@@ -556,7 +788,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
   {
     id: "terminal-preview-layout",
     tab: "terminal",
-    tabLabel: "Terminal",
+    tabLabel: "Panel Grid",
     section: "Two-Pane Split Layout",
     title: "Preview-Focused Layout",
     description:
@@ -566,7 +798,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
   {
     id: "terminal-default-ratio",
     tab: "terminal",
-    tabLabel: "Terminal",
+    tabLabel: "Panel Grid",
     section: "Two-Pane Split Layout",
     title: "Default Split Ratio",
     description: "Set the default left/right split ratio for two-pane layout",
@@ -575,7 +807,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
   {
     id: "terminal-reset-ratios",
     tab: "terminal",
-    tabLabel: "Terminal",
+    tabLabel: "Panel Grid",
     section: "Two-Pane Split Layout",
     title: "Reset All Worktree Split Ratios",
     description: "Clear all per-worktree split ratio overrides and return to the default ratio",

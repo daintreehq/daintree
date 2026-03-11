@@ -35,10 +35,18 @@ export function filterSettings(
 
       let score = 0;
       const titleLower = entry.title.toLowerCase();
+      const tabLabelLower = entry.tabLabel.toLowerCase();
       const keywordsLower = (entry.keywords ?? []).join(" ").toLowerCase();
       for (const token of tokens) {
         if (titleLower.includes(token)) score += 3;
         if (keywordsLower.includes(token)) score += 1;
+      }
+
+      if (tabLabelLower === normalized || tokens.some((t) => tabLabelLower === t)) {
+        score += 5;
+      }
+      if (entry.id.startsWith("tab-nav-")) {
+        score += 2;
       }
 
       return { entry, score };
