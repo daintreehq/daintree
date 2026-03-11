@@ -388,6 +388,7 @@ export class WorkspaceService {
         existingMonitor.name = wt.name;
         existingMonitor.isCurrent = isActive;
         existingMonitor.isMainWorktree = wt.isMainWorktree;
+        existingMonitor.projectScopeId = this.projectScopeId;
         const interval = isActive ? this.pollIntervalActive : this.pollIntervalBackground;
         existingMonitor.pollingInterval = interval;
         existingMonitor.pollingStrategy.setBaseInterval(interval);
