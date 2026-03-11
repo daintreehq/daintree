@@ -10,15 +10,26 @@ export interface CrashLogEntry {
   sessionDurationMs?: number;
 }
 
+export interface PanelSummary {
+  id: string;
+  kind: string;
+  title: string;
+  cwd?: string;
+  worktreeId?: string;
+  location: "grid" | "dock";
+  isSuspect: boolean;
+}
+
 export interface PendingCrash {
   logPath: string;
   entry: CrashLogEntry;
   hasBackup: boolean;
   backupTimestamp?: number;
+  panels?: PanelSummary[];
 }
 
 export interface CrashRecoveryConfig {
   autoRestoreOnCrash: boolean;
 }
 
-export type CrashRecoveryAction = "restore" | "fresh";
+export type CrashRecoveryAction = { kind: "restore"; panelIds: string[] } | { kind: "fresh" };
