@@ -387,7 +387,7 @@ export function WorktreeCard({
         variant === "grid" && "rounded-lg border border-divider bg-canopy-sidebar/50",
         isActive
           ? "bg-overlay-soft shadow-[inset_0_1px_0_0_rgba(255,255,255,0.05)]"
-          : "hover:bg-overlay-subtle",
+          : !isWaitingCard && "hover:bg-overlay-subtle",
         variant === "sidebar" && !isActive && "bg-transparent",
         isActive &&
           !isSingleWorktree &&
