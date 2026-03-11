@@ -124,26 +124,11 @@ export const inputTheme = EditorView.theme(
       fontStyle: "italic",
       transition: "opacity 150ms ease-out",
     },
-    ".cm-voice-pending-ai-wrapper": {
-      display: "inline",
-      width: "0",
-      position: "relative" as const,
-    },
-    ".cm-voice-pending-ai-badge": {
-      position: "absolute" as const,
-      left: "4px",
-      top: "50%",
-      transform: "translateY(-50%)",
-      fontSize: "9px",
-      lineHeight: "14px",
-      padding: "0 4px",
-      borderRadius: "3px",
-      background: "color-mix(in oklab, var(--theme-accent-primary) 20%, transparent)",
-      color: "var(--theme-accent-primary)",
-      fontWeight: "600",
-      whiteSpace: "nowrap" as const,
-      pointerEvents: "none" as const,
-      userSelect: "none" as const,
+    ".cm-voice-pending-ai": {
+      color: "var(--theme-terminal-green)",
+      textDecoration: "underline dotted 1px",
+      textUnderlineOffset: "2px",
+      transition: "opacity 150ms ease-out",
     },
   },
   { dark: true }
@@ -180,50 +165,33 @@ export const interimMarkField = StateField.define({
   provide: (f) => EditorView.decorations.from(f),
 });
 
-// --- Pending AI widget field (paragraph-level badge at paragraph end) ---
+// --- Pending AI mark field (character-level, green dotted underline on pending correction text) ---
 
-class PendingAIWidget extends WidgetType {
-  toDOM() {
-    const wrapper = document.createElement("span");
-    wrapper.className = "cm-voice-pending-ai-wrapper";
-    const badge = document.createElement("span");
-    badge.className = "cm-voice-pending-ai-badge";
-    badge.textContent = "AI";
-    wrapper.appendChild(badge);
-    return wrapper;
-  }
+const pendingAIMark = Decoration.mark({ class: "cm-voice-pending-ai" });
 
-  eq() {
-    return true;
-  }
-
-  ignoreEvent() {
-    return true;
-  }
-}
-
-const pendingAIWidget = Decoration.widget({ widget: new PendingAIWidget(), side: 1 });
-
-export const setPendingAIPositions = StateEffect.define<number[]>();
+export const setPendingAIRanges = StateEffect.define<{ from: number; to: number }[]>();
 
 export const pendingAIField = StateField.define({
   create() {
     return Decoration.none;
   },
   update(value, tr) {
-    // Always map through document changes first to keep offsets valid
     if (tr.docChanged) {
       value = value.map(tr.changes);
     }
     for (const effect of tr.effects) {
-      if (effect.is(setPendingAIPositions)) {
-        const positions = effect.value;
-        if (positions.length === 0) return Decoration.none;
+      if (effect.is(setPendingAIRanges)) {
+        const ranges = effect.value;
+        if (ranges.length === 0) return Decoration.none;
         const docLen = tr.state.doc.length;
-        const widgets = positions
-          .filter((pos) => pos >= 0 && pos <= docLen)
-          .map((pos) => pendingAIWidget.range(pos));
-        return widgets.length > 0 ? Decoration.set(widgets, true) : Decoration.none;
+        const marks = ranges
+          .map((r) => ({
+            from: Math.max(0, r.from),
+            to: Math.min(docLen, r.to),
+          }))
+          .filter((r) => r.from < r.to)
+          .map((r) => pendingAIMark.range(r.from, r.to));
+        return marks.length > 0 ? Decoration.set(marks, true) : Decoration.none;
       }
     }
     return value;
