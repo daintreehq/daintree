@@ -137,7 +137,7 @@ test.describe.serial("Core: Advanced", () => {
     test("create new worktree via UI", async () => {
       const { window } = ctx;
 
-      const newBtn = window.locator('button[title="Create new worktree"]');
+      const newBtn = window.locator('button[aria-label="Create new worktree"]');
       await newBtn.click();
 
       const branchInput = window.locator(SEL.worktree.branchNameInput);

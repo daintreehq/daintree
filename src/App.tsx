@@ -9,7 +9,7 @@ import {
   useTransition,
 } from "react";
 import "@xterm/xterm/css/xterm.css";
-import { FolderOpen, FilterX, Maximize2, RefreshCw } from "lucide-react";
+import { FolderOpen, FilterX, LayoutGrid, Plus, RefreshCw } from "lucide-react";
 import { ScrollIndicator } from "./components/Worktree/ScrollIndicator";
 import {
   isElectronAvailable,
@@ -517,37 +517,41 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   return (
     <div className="flex flex-col h-full">
       {/* Header Section */}
-      <div className="flex items-center justify-between px-4 py-4 border-b border-divider bg-transparent shrink-0">
-        <div className="flex items-center gap-2">
-          <h2 className="text-canopy-text font-semibold text-sm tracking-wide">Worktrees</h2>
-          <button
-            onClick={onOpenOverview}
-            className="p-1 text-canopy-text/40 hover:text-canopy-text hover:bg-white/[0.06] rounded transition-colors"
-            title={createTooltipWithShortcut("Toggle worktrees overview", "Cmd+Shift+O")}
-            aria-label="Open worktrees overview"
-          >
-            <Maximize2 className="w-3.5 h-3.5" />
-          </button>
-        </div>
+      <div className="group/header flex items-center justify-between px-4 py-2 border-b border-divider bg-transparent shrink-0">
+        <h2 className="text-canopy-text font-semibold text-sm tracking-wide">Worktrees</h2>
         <div className="flex items-center gap-1">
           <button
-            onClick={handleRefreshAll}
-            disabled={isRefreshing}
-            className="p-1 text-canopy-text/40 hover:text-canopy-text hover:bg-white/[0.06] rounded transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-            title="Refresh sidebar"
-            aria-label="Refresh sidebar"
-          >
-            <RefreshCw className={`w-3.5 h-3.5 ${isRefreshing ? "animate-spin" : ""}`} />
-          </button>
-          <button
             onClick={() => openCreateDialog()}
-            className="flex items-center gap-1.5 text-xs font-medium px-2.5 py-1 text-canopy-text/60 hover:text-canopy-text hover:bg-white/[0.06] rounded transition-colors"
-            title="Create new worktree"
+            className="p-1 text-canopy-text/40 hover:text-canopy-text hover:bg-white/[0.06] rounded transition-colors"
+            title={createTooltipWithShortcut("Create new worktree", "Cmd+Shift+N")}
+            aria-label="Create new worktree"
           >
-            <span className="text-[11px]">+</span> New
+            <Plus className="w-3.5 h-3.5" />
           </button>
+          <div className="invisible group-hover/header:visible group-focus-within/header:visible flex items-center gap-1">
+            <button
+              onClick={onOpenOverview}
+              className="p-1 text-canopy-text/40 hover:text-canopy-text hover:bg-white/[0.06] rounded transition-colors"
+              title={createTooltipWithShortcut("Toggle worktrees overview", "Cmd+Shift+O")}
+              aria-label="Open worktrees overview"
+            >
+              <LayoutGrid className="w-3.5 h-3.5" />
+            </button>
+            <button
+              onClick={handleRefreshAll}
+              disabled={isRefreshing}
+              className="p-1 text-canopy-text/40 hover:text-canopy-text hover:bg-white/[0.06] rounded transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+              title="Refresh sidebar"
+              aria-label="Refresh sidebar"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${isRefreshing ? "animate-spin" : ""}`} />
+            </button>
+          </div>
         </div>
       </div>
+
+      {/* Inline search bar — only when there are non-main worktrees */}
+      {hasNonMainWorktrees && <WorktreeSidebarSearchBar inputRef={searchInputRef} />}
 
       {/* Main worktree — always visible */}
       {mainWorktree && <div className="shrink-0">{renderWorktreeCard(mainWorktree)}</div>}
@@ -557,8 +561,8 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
         <div className="shrink-0">{renderWorktreeCard(integrationWorktree)}</div>
       )}
 
-      {/* Inline search bar — only when there are non-main worktrees */}
-      {hasNonMainWorktrees && <WorktreeSidebarSearchBar inputRef={searchInputRef} />}
+      {/* Strong divider between pinned worktrees and scrollable list */}
+      {hasNonMainWorktrees && <div className="shrink-0 border-b-2 border-divider" />}
 
       {/* Non-main worktree list */}
       <div className="relative flex-1 min-h-0">

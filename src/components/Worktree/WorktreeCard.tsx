@@ -396,7 +396,8 @@ export function WorktreeCard({
         isActive
           ? "bg-overlay-soft shadow-[inset_0_1px_0_0_rgba(255,255,255,0.05)]"
           : "hover:bg-overlay-subtle",
-        variant === "sidebar" && !isActive && "bg-transparent",
+        variant === "sidebar" && !isActive && !isMainWorktree && "bg-transparent",
+        variant === "sidebar" && !isActive && isMainWorktree && "bg-white/[0.03]",
         isActive &&
           !isSingleWorktree &&
           variant === "sidebar" &&
