@@ -23,7 +23,10 @@ import {
   AlertTriangle,
   StickyNote,
   ChevronDown,
+  PenLine,
+  Eye,
 } from "lucide-react";
+import { MarkdownPreview } from "./MarkdownPreview";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
 import {
@@ -68,6 +71,7 @@ export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
   const [headerTitleEdit, setHeaderTitleEdit] = useState("");
   const [deleteConfirmNote, setDeleteConfirmNote] = useState<NoteListItem | null>(null);
   const [isOpeningPanel, setIsOpeningPanel] = useState(false);
+  const [paletteViewMode, setPaletteViewMode] = useState<"edit" | "preview">("edit");
 
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
@@ -232,6 +236,7 @@ export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
 
   // Load note content when selected
   useEffect(() => {
+    setPaletteViewMode("edit");
     if (!selectedNote) {
       setNoteContent("");
       setNoteMetadata(null);
@@ -894,6 +899,28 @@ export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
                           <TooltipContent side="bottom">Double-click to rename</TooltipContent>
                         </Tooltip>
                       </TooltipProvider>
+                      <div className="flex items-center rounded-[var(--radius-sm)] border border-canopy-border/50 overflow-hidden mr-1 shrink-0">
+                        {(
+                          [
+                            { mode: "edit" as const, icon: PenLine, label: "Edit" },
+                            { mode: "preview" as const, icon: Eye, label: "Preview" },
+                          ] as const
+                        ).map(({ mode, icon: Icon, label }) => (
+                          <button
+                            key={mode}
+                            onClick={() => setPaletteViewMode(mode)}
+                            className={`px-1.5 py-1 text-xs transition-colors ${
+                              paletteViewMode === mode
+                                ? "bg-canopy-text/10 text-canopy-text"
+                                : "text-canopy-text/40 hover:text-canopy-text/70 hover:bg-canopy-text/5"
+                            }`}
+                            aria-label={label}
+                            aria-pressed={paletteViewMode === mode}
+                          >
+                            <Icon className="w-3 h-3" />
+                          </button>
+                        ))}
+                      </div>
                       <DropdownMenu>
                         <div className="flex items-center shrink-0">
                           <button
@@ -951,12 +978,14 @@ export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
                       </div>
                     )}
 
-                    {/* Editor */}
+                    {/* Editor / Preview */}
                     <div className="flex-1 overflow-hidden">
                       {isLoadingContent ? (
                         <div className="flex items-center justify-center h-full text-canopy-text/50 text-sm">
                           Loading...
                         </div>
+                      ) : paletteViewMode === "preview" ? (
+                        <MarkdownPreview content={noteContent} />
                       ) : (
                         <div className="h-full text-[13px] font-mono [&_.cm-editor]:h-full [&_.cm-scroller]:p-4 [&_.cm-placeholder]:text-canopy-text/30 [&_.cm-placeholder]:italic">
                           <CodeMirror
