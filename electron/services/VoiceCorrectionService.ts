@@ -1,6 +1,7 @@
 import { logDebug, logWarn } from "../utils/logger.js";
 import {
   CORE_CORRECTION_PROMPT,
+  CONFIDENCE_SKIP_THRESHOLD,
   buildCorrectionSystemPrompt,
   type CorrectionPromptContext,
 } from "../../shared/config/voiceCorrection.js";
@@ -10,7 +11,7 @@ export { CORE_CORRECTION_PROMPT, buildCorrectionSystemPrompt };
 const P = "[VoiceCorrection]";
 const CORRECTION_TIMEOUT_MS = 7000;
 const MAX_OUTPUT_TOKENS = 1024;
-const PROMPT_CACHE_PREFIX = "voice-correction-v3";
+const PROMPT_CACHE_PREFIX = "voice-correction-v4";
 
 const CORRECTION_RESULT_SCHEMA = {
   type: "object",
@@ -46,6 +47,9 @@ export interface VoiceCorrectionRequest {
   rightContext?: string;
   reason?: string;
   segmentCount?: number;
+  uncertainWords?: string[];
+  minConfidence?: number;
+  wordCount?: number;
 }
 
 export interface VoiceCorrectionResult {
@@ -68,6 +72,24 @@ export class VoiceCorrectionService {
   ): Promise<VoiceCorrectionResult> {
     const trimmedRaw = request.rawText.trim();
     if (!trimmedRaw) {
+      return {
+        action: "no_change",
+        correctedText: request.rawText,
+        confidence: "high",
+        confirmedText: request.rawText,
+      };
+    }
+
+    if (
+      request.uncertainWords !== undefined &&
+      request.uncertainWords.length === 0 &&
+      (request.minConfidence ?? 0) > CONFIDENCE_SKIP_THRESHOLD &&
+      (request.wordCount ?? 0) > 0
+    ) {
+      logDebug(`${P} Skipping correction — all words high confidence`, {
+        minConfidence: request.minConfidence,
+        rawLen: trimmedRaw.length,
+      });
       return {
         action: "no_change",
         correctedText: request.rawText,
@@ -164,13 +186,31 @@ export class VoiceCorrectionService {
       parts.push(`<job>\n${metadata.join("\n")}\n</job>`);
     }
 
-    parts.push(`<target>\n${request.rawText}\n</target>`);
+    const targetText =
+      request.uncertainWords && request.uncertainWords.length > 0
+        ? VoiceCorrectionService.annotateUncertainWords(request.rawText, request.uncertainWords)
+        : request.rawText;
+    parts.push(`<target>\n${targetText}\n</target>`);
 
     if (request.rightContext?.trim()) {
       parts.push(`<right_context>\n${request.rightContext.trim()}\n</right_context>`);
     }
 
     return parts.join("\n\n");
+  }
+
+  static annotateUncertainWords(text: string, uncertainWords: string[]): string {
+    if (uncertainWords.length === 0) return text;
+    const queue = [...uncertainWords];
+    return text.replace(/\S+/g, (token) => {
+      if (queue.length === 0) return token;
+      const stripped = token.replace(/^[^\w]+|[^\w]+$/g, "");
+      if (stripped.toLowerCase() === queue[0].toLowerCase()) {
+        queue.shift();
+        return token.replace(stripped, `<uncertain>${stripped}</uncertain>`);
+      }
+      return token;
+    });
   }
 
   private async callApi(

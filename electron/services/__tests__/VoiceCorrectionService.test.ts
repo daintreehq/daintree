@@ -162,6 +162,123 @@ describe("VoiceCorrectionService", () => {
     expect(body.reasoning).toBeUndefined();
     expect(body.max_output_tokens).toBe(1024);
     expect(body.text.format.type).toBe("json_schema");
-    expect(body.prompt_cache_key).toContain("voice-correction-v3");
+    expect(body.prompt_cache_key).toContain("voice-correction-v4");
+  });
+
+  it("skips LLM call when all words are high confidence", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    const svc = new VoiceCorrectionService();
+    const result = await svc.correct(
+      { rawText: "Hello world", uncertainWords: [], minConfidence: 0.95, wordCount: 2 },
+      BASE_SETTINGS
+    );
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(result.action).toBe("no_change");
+    expect(result.confirmedText).toBe("Hello world");
+    expect(result.confidence).toBe("high");
+  });
+
+  it("does not skip when uncertainWords is absent (legacy behavior)", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(makeFetchResponse({ action: "no_change", corrected_text: "" }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const svc = new VoiceCorrectionService();
+    await svc.correct({ rawText: "Hello world" }, BASE_SETTINGS);
+
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  it("does not skip when wordCount is 0 (no confidence data available)", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(makeFetchResponse({ action: "no_change", corrected_text: "" }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const svc = new VoiceCorrectionService();
+    await svc.correct(
+      { rawText: "Hello world", uncertainWords: [], minConfidence: 1.0, wordCount: 0 },
+      BASE_SETTINGS
+    );
+
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  it("does not skip when minConfidence equals threshold exactly", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(makeFetchResponse({ action: "no_change", corrected_text: "" }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const svc = new VoiceCorrectionService();
+    await svc.correct(
+      { rawText: "Hello world", uncertainWords: [], minConfidence: 0.85, wordCount: 2 },
+      BASE_SETTINGS
+    );
+
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  it("annotates uncertain words in the target block", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(makeFetchResponse({ corrected_text: "React native" }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const svc = new VoiceCorrectionService();
+    await svc.correct(
+      { rawText: "racked native", uncertainWords: ["racked"], minConfidence: 0.6 },
+      BASE_SETTINGS
+    );
+
+    const body = JSON.parse((fetchMock.mock.calls[0] as [string, RequestInit])[1].body as string);
+    const userMessage = body.input as string;
+    expect(userMessage).toContain("<uncertain>racked</uncertain>");
+    expect(userMessage).not.toContain("<uncertain>native</uncertain>");
+  });
+
+  it("annotates duplicate uncertain words positionally", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(makeFetchResponse({ corrected_text: "test corrected" }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const svc = new VoiceCorrectionService();
+    await svc.correct(
+      { rawText: "test foo test bar", uncertainWords: ["test", "test"], minConfidence: 0.5 },
+      BASE_SETTINGS
+    );
+
+    const body = JSON.parse((fetchMock.mock.calls[0] as [string, RequestInit])[1].body as string);
+    const userMessage = body.input as string;
+    expect(userMessage).toContain(
+      "<uncertain>test</uncertain> foo <uncertain>test</uncertain> bar"
+    );
+  });
+
+  describe("annotateUncertainWords", () => {
+    it("wraps matching words with uncertain tags", () => {
+      const result = VoiceCorrectionService.annotateUncertainWords("hello world foo", ["world"]);
+      expect(result).toBe("hello <uncertain>world</uncertain> foo");
+    });
+
+    it("handles punctuation attached to words", () => {
+      const result = VoiceCorrectionService.annotateUncertainWords("hello, world!", ["hello"]);
+      expect(result).toBe("<uncertain>hello</uncertain>, world!");
+    });
+
+    it("returns text unchanged when no uncertain words", () => {
+      const result = VoiceCorrectionService.annotateUncertainWords("hello world", []);
+      expect(result).toBe("hello world");
+    });
+
+    it("matches case-insensitively", () => {
+      const result = VoiceCorrectionService.annotateUncertainWords("Hello World", ["hello"]);
+      expect(result).toBe("<uncertain>Hello</uncertain> World");
+    });
   });
 });

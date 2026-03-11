@@ -1,13 +1,20 @@
 import { createClient, LiveTranscriptionEvents } from "@deepgram/sdk";
 import type { ListenLiveClient, LiveTranscriptionEvent } from "@deepgram/sdk";
 import type { VoiceInputSettings, VoiceInputStatus } from "../../shared/types/ipc/api.js";
+import { CONFIDENCE_TAG_THRESHOLD } from "../../shared/config/voiceCorrection.js";
 import { logDebug, logInfo, logWarn, logError } from "../utils/logger.js";
 
 const P = "[VoiceTranscription]";
 
+export interface SegmentConfidence {
+  minConfidence: number;
+  wordCount: number;
+  uncertainWords: string[];
+}
+
 export type VoiceTranscriptionEvent =
   | { type: "delta"; text: string }
-  | { type: "complete"; text: string }
+  | { type: "complete"; text: string; confidence?: SegmentConfidence }
   | { type: "paragraph_boundary" }
   | { type: "error"; message: string }
   | { type: "status"; status: VoiceInputStatus };
@@ -33,6 +40,8 @@ export class VoiceTranscriptionService {
 
   /** Tracks accumulated is_final segments for the current utterance. */
   private utteranceSegments: string[] = [];
+  /** Tracks per-segment confidence for the current utterance. */
+  private utteranceConfidenceSegments: SegmentConfidence[] = [];
   /** Total text emitted as delta events for the current utterance (for incremental diffs). */
   private liveText = "";
   /**
@@ -56,13 +65,17 @@ export class VoiceTranscriptionService {
    *
    * Returns the captured text (may be empty if no utterance was in flight).
    */
-  commitParagraphBoundary(): string {
+  commitParagraphBoundary(): { text: string; confidence: SegmentConfidence } {
     const text = (this.liveText || this.utteranceSegments.join(" ")).trim();
+    // Conservative: mid-utterance cut cannot reliably split words, so force LLM correction.
+    const confidence: SegmentConfidence = text
+      ? { minConfidence: 0, wordCount: 0, uncertainWords: [] }
+      : { minConfidence: 1.0, wordCount: 0, uncertainWords: [] };
     this.resetUtteranceState();
     if (text) {
       this._suppressingUtterance = true;
     }
-    return text;
+    return { text, confidence };
   }
 
   private emit(event: VoiceTranscriptionEvent): void {
@@ -195,13 +208,20 @@ export class VoiceTranscriptionService {
       connection.on(LiveTranscriptionEvents.Transcript, (data: LiveTranscriptionEvent) => {
         if (this.sessionId !== mySessionId) return;
         try {
-          const transcript: string = data.channel?.alternatives?.[0]?.transcript ?? "";
+          const alt = data.channel?.alternatives?.[0];
+          const transcript: string = alt?.transcript ?? "";
           const isFinal: boolean = data.is_final ?? false;
           const speechFinal: boolean = data.speech_final ?? false;
+          const words: Array<{ word: string; confidence: number }> = isFinal
+            ? (((alt as Record<string, unknown>)?.words as Array<{
+                word: string;
+                confidence: number;
+              }>) ?? [])
+            : [];
 
           logDebug(`${P} Transcript event`, { isFinal, speechFinal, len: transcript.length });
 
-          this.handleTranscript(transcript, isFinal, speechFinal);
+          this.handleTranscript(transcript, isFinal, speechFinal, words);
         } catch {
           logWarn(`${P} Failed to process transcript event`);
         }
@@ -244,7 +264,7 @@ export class VoiceTranscriptionService {
     });
   }
 
-  private emitCompleteWithParagraphDetection(text: string): void {
+  private emitCompleteWithParagraphDetection(text: string, confidence?: SegmentConfidence): void {
     // In spoken-command mode, Deepgram Dictation intercepts "new paragraph" and
     // injects \n\n into the transcript text. Split on these markers so each paragraph
     // is emitted separately with a paragraph_boundary event between them.
@@ -255,14 +275,25 @@ export class VoiceTranscriptionService {
       .map((p) => p.trim())
       .filter(Boolean);
     for (let i = 0; i < parts.length; i++) {
-      this.emit({ type: "complete", text: parts[i] });
+      // Confidence applies to the first part; subsequent parts after paragraph
+      // splits don't have word-level alignment so omit confidence.
+      this.emit({
+        type: "complete",
+        text: parts[i],
+        ...(i === 0 && confidence ? { confidence } : {}),
+      });
       if (i < parts.length - 1) {
         this.emit({ type: "paragraph_boundary" });
       }
     }
   }
 
-  private handleTranscript(transcript: string, isFinal: boolean, speechFinal: boolean): void {
+  private handleTranscript(
+    transcript: string,
+    isFinal: boolean,
+    speechFinal: boolean,
+    words: Array<{ word: string; confidence: number }> = []
+  ): void {
     if (this._suppressingUtterance) {
       if (speechFinal) {
         this._suppressingUtterance = false;
@@ -275,22 +306,27 @@ export class VoiceTranscriptionService {
     }
 
     if (speechFinal) {
+      if (words.length > 0) {
+        this.utteranceConfidenceSegments.push(this.computeSegmentConfidence(words));
+      }
       const segments = [...this.utteranceSegments, transcript].filter((s) => s.trim());
       const fullText = segments.join(" ").trim();
+      const confidence = this.mergeConfidence(this.utteranceConfidenceSegments);
       this.resetUtteranceState();
 
       if (fullText) {
-        this.emitCompleteWithParagraphDetection(fullText);
+        this.emitCompleteWithParagraphDetection(fullText, confidence);
       }
       if (this.isDraining) {
         this.settleDrain();
       }
     } else if (isFinal) {
-      // Deepgram live streaming signals a paragraph boundary by inserting \n\n
-      // into is_final transcript segments (typically at the start of the first
-      // segment of a new paragraph). Detect this before trimming so the boundary
-      // is not silently discarded.
+      const segConfidence = words.length > 0 ? this.computeSegmentConfidence(words) : undefined;
+
       if (transcript.includes("\n\n")) {
+        if (segConfidence) {
+          this.utteranceConfidenceSegments.push(segConfidence);
+        }
         this.handleIsFinalWithParagraphBoundary(transcript);
       } else {
         const segmentText = transcript.trim();
@@ -298,6 +334,9 @@ export class VoiceTranscriptionService {
           const accumulated = [...this.utteranceSegments, segmentText].filter(Boolean).join(" ");
           this.emitIncrementalDelta(accumulated);
           this.utteranceSegments.push(segmentText);
+          if (segConfidence) {
+            this.utteranceConfidenceSegments.push(segConfidence);
+          }
         }
       }
     } else {
@@ -320,13 +359,14 @@ export class VoiceTranscriptionService {
       Boolean
     );
     const completedText = completedSegments.join(" ").trim();
+    const confidence = this.mergeConfidence(this.utteranceConfidenceSegments);
     this.resetUtteranceState();
 
     // Only emit a boundary when there is actually a completed paragraph to close.
     // Suppress spurious boundaries (e.g. first-ever segment starts with \n\n) to
     // avoid inserting a blank line into the renderer before any speech has arrived.
     if (completedText) {
-      this.emit({ type: "complete", text: completedText });
+      this.emit({ type: "complete", text: completedText, confidence });
       this.emit({ type: "paragraph_boundary" });
     }
 
@@ -355,6 +395,32 @@ export class VoiceTranscriptionService {
     }
   }
 
+  private computeSegmentConfidence(
+    words: Array<{ word: string; confidence: number }>
+  ): SegmentConfidence {
+    if (words.length === 0) {
+      return { minConfidence: 1.0, wordCount: 0, uncertainWords: [] };
+    }
+    return {
+      minConfidence: Math.min(...words.map((w) => w.confidence)),
+      wordCount: words.length,
+      uncertainWords: words
+        .filter((w) => w.confidence < CONFIDENCE_TAG_THRESHOLD)
+        .map((w) => w.word),
+    };
+  }
+
+  private mergeConfidence(segments: SegmentConfidence[]): SegmentConfidence {
+    if (segments.length === 0) {
+      return { minConfidence: 1.0, wordCount: 0, uncertainWords: [] };
+    }
+    return {
+      minConfidence: Math.min(...segments.map((s) => s.minConfidence)),
+      wordCount: segments.reduce((sum, s) => sum + s.wordCount, 0),
+      uncertainWords: segments.flatMap((s) => s.uncertainWords),
+    };
+  }
+
   private flushUtterance(): void {
     if (this._suppressingUtterance) {
       this._suppressingUtterance = false;
@@ -368,9 +434,10 @@ export class VoiceTranscriptionService {
     // Use liveText if set — it includes any pending interim transcript that has
     // not yet received is_final=true (e.g. when UtteranceEnd fires without speech_final).
     const fullText = (this.liveText || this.utteranceSegments.join(" ")).trim();
+    const confidence = this.mergeConfidence(this.utteranceConfidenceSegments);
     this.resetUtteranceState();
     if (fullText) {
-      this.emitCompleteWithParagraphDetection(fullText);
+      this.emitCompleteWithParagraphDetection(fullText, confidence);
     }
     if (this.isDraining) {
       this.settleDrain();
@@ -379,6 +446,7 @@ export class VoiceTranscriptionService {
 
   private resetUtteranceState(): void {
     this.utteranceSegments = [];
+    this.utteranceConfidenceSegments = [];
     this.liveText = "";
   }
 

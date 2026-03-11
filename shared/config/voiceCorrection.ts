@@ -1,3 +1,9 @@
+/** Skip LLM correction entirely when every word exceeds this confidence. */
+export const CONFIDENCE_SKIP_THRESHOLD = 0.85;
+
+/** Tag words below this confidence with <uncertain> in the LLM prompt. */
+export const CONFIDENCE_TAG_THRESHOLD = 0.8;
+
 export const CORE_CORRECTION_PROMPT = `You are a speech-to-text correction engine for a developer dictating to AI coding agents.
 
 TASK: Clean up the CURRENT TARGET only. Treat it as the full dictated passage for this recording stop. Do not repeat or modify anything outside the target.
@@ -8,6 +14,8 @@ CONTEXT: The user message may contain:
 - <target> with the only text you are allowed to correct
 - <right_context> with optional extra text for disambiguation
 Use history and metadata only as bounded context. Correct only the content of <target>.
+
+CONFIDENCE TAGS: Words wrapped in <uncertain>word</uncertain> inside <target> were transcribed with low confidence and are likely misheard. Focus your corrections on these regions. Text outside <uncertain> tags was transcribed with high confidence — preserve it verbatim unless a correction is clearly necessary for grammar or term matching.
 
 CORRECTION PRIORITY:
 1. REQUIRED TERMS / CUSTOM DICTIONARY — Always map phonetically similar words to their exact canonical form.
