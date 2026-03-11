@@ -1486,7 +1486,11 @@ export interface IpcEventMap {
   // Voice input events
   "voice-input:transcription-delta": string;
   "voice-input:transcription-complete": { text: string; willCorrect: boolean };
-  "voice-input:correction-queued": { correctionId: string; rawText: string };
+  "voice-input:correction-queued": {
+    correctionId: string;
+    rawText: string;
+    reason: string;
+  };
   "voice-input:correction-replace": { correctionId: string; correctedText: string };
   "voice-input:paragraph-boundary": { rawText: string | null; correctionId: string | null };
   "voice-input:error": string;

@@ -114,7 +114,7 @@ export class VoiceTranscriptionService {
     return new Promise((resolve) => {
       this.pendingStart = { sessionId: mySessionId, resolve };
 
-      const keyterms = settings.customDictionary.slice(0, 100);
+      const keyterms = settings.customDictionary;
       const deepgram = createClient(settings.deepgramApiKey);
 
       logDebug(`${P} Opening Deepgram live connection`, {
