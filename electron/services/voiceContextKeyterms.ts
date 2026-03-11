@@ -1,6 +1,6 @@
 import { GitService } from "./GitService.js";
 import type { PtyClient } from "./PtyClient.js";
-import { logDebug, logWarn } from "../utils/logger.js";
+import { logDebug } from "../utils/logger.js";
 
 const P = "[VoiceKeyterms]";
 
@@ -172,6 +172,7 @@ const BLOCKLIST = new Set([
 ]);
 
 // Matches ANSI escape sequences
+// eslint-disable-next-line no-control-regex
 const ANSI_RE = /[\u001b\u009b][[()#;?]*(?:[0-9]{1,4}(?:;[0-9]{0,4})*)?[0-9A-ORZcf-nqry=><~]/g;
 
 // Matches identifiers: camelCase, PascalCase, snake_case, kebab-case (with internal separators)
@@ -206,10 +207,13 @@ export function tokenizeBranchName(branchName: string): string[] {
 export function tokenizeProjectName(name: string): string[] {
   // Split on whitespace, hyphens, underscores
   const parts = name.split(/[\s\-_]+/);
-  // Also split camelCase
+  // Also split camelCase and PascalCase
   const expanded: string[] = [];
   for (const part of parts) {
-    const camelParts = part.replace(/([a-z])([A-Z])/g, "$1 $2").split(/\s+/);
+    const camelParts = part
+      .replace(/([a-z])([A-Z])/g, "$1 $2")
+      .replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2")
+      .split(/\s+/);
     expanded.push(...camelParts);
   }
   return expanded.filter(isValidTerm);

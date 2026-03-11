@@ -1,4 +1,4 @@
-import { describe, expect, it, vi, beforeEach } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   assembleKeyterms,
   tokenizeBranchName,
@@ -6,14 +6,17 @@ import {
   extractTerminalIdentifiers,
 } from "../voiceContextKeyterms.js";
 
-vi.mock("../GitService.js", () => ({
-  GitService: vi.fn().mockImplementation(() => ({
-    listBranches: vi.fn().mockResolvedValue([
-      { name: "feature/auth-login-service", current: true, commit: "abc123" },
-      { name: "main", current: false, commit: "def456" },
-    ]),
-  })),
-}));
+vi.mock("../GitService.js", () => {
+  const mockListBranches = vi.fn().mockResolvedValue([
+    { name: "feature/auth-login-service", current: true, commit: "abc123" },
+    { name: "main", current: false, commit: "def456" },
+  ]);
+  return {
+    GitService: class MockGitService {
+      listBranches = mockListBranches;
+    },
+  };
+});
 
 vi.mock("../../utils/logger.js", () => ({
   logDebug: vi.fn(),
@@ -66,9 +69,11 @@ describe("tokenizeProjectName", () => {
   });
 
   it("splits camelCase", () => {
-    const tokens = tokenizeProjectName("myProjectName");
+    const tokens = tokenizeProjectName("myProjectEditor");
     expect(tokens).toContain("Project");
-    expect(tokens).toContain("Name");
+    expect(tokens).toContain("Editor");
+    // "my" is too short (< 4 chars) and gets filtered
+    expect(tokens).not.toContain("my");
   });
 });
 
@@ -163,17 +168,19 @@ describe("assembleKeyterms", () => {
 
   it("falls back gracefully when git fails", async () => {
     const { GitService } = await import("../GitService.js");
-    vi.mocked(GitService).mockImplementationOnce(
-      () =>
-        ({
-          listBranches: vi.fn().mockRejectedValue(new Error("git not found")),
-        }) as any
-    );
-    const result = await assembleKeyterms({
-      customDictionary: ["MyTerm"],
-      projectPath: "/some/path",
-    });
-    expect(result).toContain("MyTerm");
+    const origProto = GitService.prototype.listBranches;
+    GitService.prototype.listBranches = vi
+      .fn()
+      .mockRejectedValue(new Error("git not found")) as any;
+    try {
+      const result = await assembleKeyterms({
+        customDictionary: ["MyTerm"],
+        projectPath: "/some/path",
+      });
+      expect(result).toContain("MyTerm");
+    } finally {
+      GitService.prototype.listBranches = origProto;
+    }
   });
 
   it("falls back gracefully when ptyClient fails", async () => {
