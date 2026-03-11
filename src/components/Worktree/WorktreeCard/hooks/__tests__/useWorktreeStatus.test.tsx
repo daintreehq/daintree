@@ -1,8 +1,19 @@
 /** @vitest-environment jsdom */
 import { describe, it, expect } from "vitest";
 import { renderHook } from "@testing-library/react";
-import type { WorktreeState } from "@/types";
+import type { WorktreeState, WorktreeChanges } from "@/types";
 import { useWorktreeStatus, type WorktreeLifecycleStage } from "../useWorktreeStatus";
+
+function makeChanges(overrides: Partial<WorktreeChanges> = {}): WorktreeChanges {
+  return {
+    worktreeId: "/test/worktree",
+    rootPath: "/test/worktree",
+    changes: [],
+    changedFileCount: 0,
+    lastCommitMessage: "init",
+    ...overrides,
+  };
+}
 
 function makeWorktree(overrides: Partial<WorktreeState> = {}): WorktreeState {
   return {
@@ -14,7 +25,7 @@ function makeWorktree(overrides: Partial<WorktreeState> = {}): WorktreeState {
     isCurrent: false,
     isMainWorktree: false,
     lastActivityTimestamp: Date.now(),
-    worktreeChanges: { changedFileCount: 0, lastCommitMessage: "init" },
+    worktreeChanges: makeChanges(),
     ...overrides,
   };
 }
@@ -40,7 +51,7 @@ describe("useWorktreeStatus — lifecycleStage", () => {
   it('returns "working" when there are local changes', () => {
     expect(
       getLifecycleStage({
-        worktreeChanges: { changedFileCount: 3, lastCommitMessage: "wip" },
+        worktreeChanges: makeChanges({ changedFileCount: 3 }),
       })
     ).toBe("working");
   });
@@ -48,7 +59,7 @@ describe("useWorktreeStatus — lifecycleStage", () => {
   it('returns "working" even with an open PR when there are changes', () => {
     expect(
       getLifecycleStage({
-        worktreeChanges: { changedFileCount: 1, lastCommitMessage: "wip" },
+        worktreeChanges: makeChanges({ changedFileCount: 1 }),
         prState: "open",
         prNumber: 10,
       })
@@ -58,7 +69,7 @@ describe("useWorktreeStatus — lifecycleStage", () => {
   it('returns "working" even with a merged PR when there are changes', () => {
     expect(
       getLifecycleStage({
-        worktreeChanges: { changedFileCount: 1, lastCommitMessage: "wip" },
+        worktreeChanges: makeChanges({ changedFileCount: 1 }),
         prState: "merged",
         prNumber: 10,
       })
@@ -108,7 +119,7 @@ describe("useWorktreeStatus — lifecycleStage", () => {
 
   it("updates when worktree state changes", () => {
     const initialWorktree = makeWorktree({
-      worktreeChanges: { changedFileCount: 2, lastCommitMessage: "wip" },
+      worktreeChanges: makeChanges({ changedFileCount: 2 }),
     });
     const { result, rerender } = renderHook(
       ({ wt }) => useWorktreeStatus({ worktree: wt, worktreeErrorCount: 0 }),
@@ -118,7 +129,7 @@ describe("useWorktreeStatus — lifecycleStage", () => {
     expect(result.current.lifecycleStage).toBe("working");
 
     const updatedWorktree = makeWorktree({
-      worktreeChanges: { changedFileCount: 0, lastCommitMessage: "done" },
+      worktreeChanges: makeChanges({ changedFileCount: 0 }),
       prState: "open",
       prNumber: 5,
     });
