@@ -144,6 +144,7 @@ export type ActionId =
   | "recipe.list"
   | "recipe.editor.open"
   | "recipe.editor.openFromLayout"
+  | "panel.focus"
   | "panel.focusIndex"
   | "worktree.switchIndex"
   | "agent.launch"

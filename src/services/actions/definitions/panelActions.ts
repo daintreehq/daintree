@@ -5,6 +5,7 @@ import { getAIAgentInfo } from "@/lib/aiAgentDetection";
 import { useDiagnosticsStore } from "@/store/diagnosticsStore";
 import { useSidecarStore } from "@/store/sidecarStore";
 import { useTerminalStore } from "@/store/terminalStore";
+import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 
 export function registerPanelActions(actions: ActionRegistry, callbacks: ActionCallbacks): void {
   // Query action: list all panels with metadata
@@ -64,6 +65,35 @@ export function registerPanelActions(actions: ActionRegistry, callbacks: ActionC
         focusedPanelId: state.focusedId ?? null,
         maximizedPanelId: state.maximizedId ?? null,
       };
+    },
+  }));
+
+  actions.set("panel.focus", () => ({
+    id: "panel.focus",
+    title: "Focus Panel",
+    description: "Focus a specific panel by ID, optionally switching to its worktree first",
+    category: "panel",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    argsSchema: z.object({
+      panelId: z.string(),
+      worktreeId: z.string().optional(),
+    }),
+    isEnabled: (_ctx) => {
+      return true;
+    },
+    run: async (args: unknown) => {
+      const { panelId, worktreeId } = args as { panelId: string; worktreeId?: string };
+      const terminalState = useTerminalStore.getState();
+      const panel = terminalState.terminals.find((t) => t.id === panelId);
+      if (!panel) {
+        throw new Error("Terminal panel no longer exists");
+      }
+      if (worktreeId) {
+        useWorktreeSelectionStore.getState().setActiveWorktree(worktreeId);
+      }
+      terminalState.setFocused(panelId, true);
     },
   }));
 

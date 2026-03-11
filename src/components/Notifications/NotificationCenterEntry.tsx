@@ -1,6 +1,8 @@
 import { CheckCircle2, XCircle, Info, AlertTriangle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { NotificationHistoryEntry } from "@/store/slices/notificationHistorySlice";
+import { actionService } from "@/services/ActionService";
+import type { ActionId } from "@shared/types/actions";
 
 const TYPE_CONFIG = {
   success: { icon: CheckCircle2, className: "text-status-success" },
@@ -51,6 +53,43 @@ export function NotificationCenterEntry({
         <p className="text-xs text-canopy-text/70 leading-snug break-words">{entry.message}</p>
         {threadCount && threadCount > 1 && (
           <p className="text-[10px] text-canopy-text/40 mt-0.5">{threadCount} events</p>
+        )}
+        {entry.actions && entry.actions.length > 0 && (
+          <div className="flex flex-wrap gap-1.5 mt-1.5">
+            {entry.actions.map((action) => {
+              const manifest = actionService.get(action.actionId as ActionId);
+              const isAvailable = manifest !== null && manifest.enabled;
+              return (
+                <button
+                  key={action.actionId}
+                  type="button"
+                  aria-disabled={!isAvailable || undefined}
+                  title={
+                    !isAvailable ? (manifest?.disabledReason ?? "Action unavailable") : undefined
+                  }
+                  onClick={
+                    isAvailable
+                      ? () =>
+                          void actionService.dispatch(
+                            action.actionId as ActionId,
+                            action.actionArgs
+                          )
+                      : undefined
+                  }
+                  className={cn(
+                    "h-6 rounded-[var(--radius-sm)] px-2 text-[11px] font-medium transition-colors",
+                    isAvailable
+                      ? action.variant === "secondary"
+                        ? "border border-canopy-text/20 text-canopy-text/70 hover:bg-overlay-medium"
+                        : "border border-canopy-accent/40 bg-canopy-accent/15 text-canopy-accent hover:bg-canopy-accent/25"
+                      : "border border-canopy-text/10 text-canopy-text/30 cursor-not-allowed"
+                  )}
+                >
+                  {action.label}
+                </button>
+              );
+            })}
+          </div>
         )}
       </div>
       <div className="shrink-0 flex items-center gap-1.5 mt-0.5">
