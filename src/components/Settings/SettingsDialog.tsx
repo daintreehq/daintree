@@ -13,7 +13,6 @@ import {
   Waypoints,
   LayoutGrid,
   Keyboard,
-  Terminal,
   Settings2,
   LifeBuoy,
   Bell,
