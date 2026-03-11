@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { Play, Bell, Volume2 } from "lucide-react";
 import { SettingsSection } from "./SettingsSection";
 import { SettingsCheckbox } from "./SettingsCheckbox";
+import { SettingsSwitchCard } from "./SettingsSwitchCard";
 import type { NotificationSettings } from "@shared/types";
 
 const AVAILABLE_SOUNDS: { file: string; label: string }[] = [
@@ -98,12 +99,13 @@ export function NotificationSettingsTab() {
         description="Play a sound when a notification fires."
       >
         <div className="space-y-4">
-          <SettingsCheckbox
-            id="notif-sound"
-            label="Play sound"
-            description="Enable audio alerts for agent notifications"
-            checked={settings.soundEnabled}
-            onChange={(v) => update({ soundEnabled: v })}
+          <SettingsSwitchCard
+            variant="compact"
+            title="Play sound"
+            subtitle="Enable audio alerts for agent notifications"
+            isEnabled={settings.soundEnabled}
+            onChange={() => update({ soundEnabled: !settings.soundEnabled })}
+            ariaLabel="Play sound for notifications"
           />
 
           {settings.soundEnabled && (

@@ -17,7 +17,6 @@ import type { AppState, SystemHealthCheckResult } from "@shared/types";
 import { actionService } from "@/services/ActionService";
 import { SettingsSection } from "./SettingsSection";
 import { SettingsSwitchCard } from "./SettingsSwitchCard";
-import { SettingsCheckbox } from "./SettingsCheckbox";
 
 function SystemHealthSection() {
   const [result, setResult] = useState<SystemHealthCheckResult | null>(null);
@@ -186,41 +185,37 @@ export function TroubleshootingTab() {
     }
   }, [developerMode, autoOpenDiagnostics, focusEventsTab, saveDeveloperModeSettings]);
 
-  const handleToggleAutoOpenDiagnostics = useCallback(
-    (checked: boolean) => {
-      setAutoOpenDiagnostics(checked);
-      if (!checked) {
-        setFocusEventsTab(false);
-        saveDeveloperModeSettings({
-          enabled: developerMode,
-          showStateDebug: false,
-          autoOpenDiagnostics: false,
-          focusEventsTab: false,
-        });
-      } else {
-        saveDeveloperModeSettings({
-          enabled: developerMode,
-          showStateDebug: false,
-          autoOpenDiagnostics: true,
-          focusEventsTab,
-        });
-      }
-    },
-    [developerMode, focusEventsTab, saveDeveloperModeSettings]
-  );
-
-  const handleToggleFocusEventsTab = useCallback(
-    (checked: boolean) => {
-      setFocusEventsTab(checked);
+  const handleToggleAutoOpenDiagnostics = useCallback(() => {
+    const newValue = !autoOpenDiagnostics;
+    setAutoOpenDiagnostics(newValue);
+    if (!newValue) {
+      setFocusEventsTab(false);
       saveDeveloperModeSettings({
         enabled: developerMode,
         showStateDebug: false,
-        autoOpenDiagnostics,
-        focusEventsTab: checked,
+        autoOpenDiagnostics: false,
+        focusEventsTab: false,
       });
-    },
-    [developerMode, autoOpenDiagnostics, saveDeveloperModeSettings]
-  );
+    } else {
+      saveDeveloperModeSettings({
+        enabled: developerMode,
+        showStateDebug: false,
+        autoOpenDiagnostics: true,
+        focusEventsTab,
+      });
+    }
+  }, [developerMode, autoOpenDiagnostics, focusEventsTab, saveDeveloperModeSettings]);
+
+  const handleToggleFocusEventsTab = useCallback(() => {
+    const newValue = !focusEventsTab;
+    setFocusEventsTab(newValue);
+    saveDeveloperModeSettings({
+      enabled: developerMode,
+      showStateDebug: false,
+      autoOpenDiagnostics,
+      focusEventsTab: newValue,
+    });
+  }, [developerMode, autoOpenDiagnostics, focusEventsTab, saveDeveloperModeSettings]);
 
   const handleToggleVerboseLogging = useCallback(async () => {
     if (verboseLoggingPending) return;
@@ -330,22 +325,24 @@ export function TroubleshootingTab() {
             !developerMode && "opacity-50"
           )}
         >
-          <SettingsCheckbox
-            id="auto-open-diagnostics"
-            label="Auto-Open Diagnostics Dock"
-            description="Automatically open diagnostics panel on app startup"
-            checked={autoOpenDiagnostics}
+          <SettingsSwitchCard
+            variant="compact"
+            title="Auto-Open Diagnostics Dock"
+            subtitle="Automatically open diagnostics panel on app startup"
+            isEnabled={autoOpenDiagnostics}
             onChange={handleToggleAutoOpenDiagnostics}
+            ariaLabel="Auto-open diagnostics dock"
             disabled={!developerMode}
           />
 
           <div className={cn("ml-4", !autoOpenDiagnostics && "opacity-50")}>
-            <SettingsCheckbox
-              id="focus-events-tab"
-              label="Focus Events Tab"
-              description="Default to Events tab when diagnostics opens"
-              checked={focusEventsTab}
+            <SettingsSwitchCard
+              variant="compact"
+              title="Focus Events Tab"
+              subtitle="Default to Events tab when diagnostics opens"
+              isEnabled={focusEventsTab}
               onChange={handleToggleFocusEventsTab}
+              ariaLabel="Focus events tab"
               disabled={!developerMode || !autoOpenDiagnostics}
             />
           </div>
