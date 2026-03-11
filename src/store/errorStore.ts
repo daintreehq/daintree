@@ -21,6 +21,7 @@ export interface AppError {
   dismissed: boolean;
   retryAction?: RetryAction;
   retryArgs?: Record<string, unknown>;
+  fromPreviousSession?: boolean;
 }
 
 interface ErrorStore {

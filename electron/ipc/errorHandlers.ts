@@ -10,6 +10,7 @@ import {
   getErrorDetails,
   isTransientError,
 } from "../utils/errorTypes.js";
+import { store } from "../store.js";
 import type { PtyClient } from "../services/PtyClient.js";
 import type { WorkspaceClient } from "../services/WorkspaceClient.js";
 
@@ -34,6 +35,7 @@ interface AppError {
   dismissed: boolean;
   retryAction?: RetryAction;
   retryArgs?: Record<string, unknown>;
+  fromPreviousSession?: boolean;
 }
 
 interface RetryPayload {
@@ -41,6 +43,8 @@ interface RetryPayload {
   action: RetryAction;
   args?: Record<string, unknown>;
 }
+
+const MAX_PENDING_ERRORS = 50;
 
 function isRetryAction(value: unknown): value is RetryAction {
   return value === "terminal" || value === "git" || value === "worktree";
@@ -125,10 +129,16 @@ function createAppError(
   };
 }
 
+function isCriticalErrorType(type: ErrorType): boolean {
+  return type === "config" || type === "filesystem";
+}
+
 class ErrorService {
   private mainWindow: BrowserWindow | null = null;
   private worktreeService: WorkspaceClient | null = null;
   private ptyClient: PtyClient | null = null;
+  private pendingQueue: AppError[] = [];
+  private isFlushing = false;
 
   initialize(
     mainWindow: BrowserWindow,
@@ -140,26 +150,83 @@ class ErrorService {
     this.ptyClient = ptyClient;
   }
 
-  sendError(error: AppError) {
-    if (!this.mainWindow || this.mainWindow.isDestroyed()) {
-      return;
-    }
-
+  private canSendToRenderer(): boolean {
+    if (!this.mainWindow || this.mainWindow.isDestroyed()) return false;
     const webContents = this.mainWindow.webContents;
-    if (!webContents || typeof webContents.send !== "function") {
-      return;
+    if (!webContents || typeof webContents.send !== "function") return false;
+    if (typeof webContents.isDestroyed === "function" && webContents.isDestroyed()) return false;
+    return true;
+  }
+
+  private bufferError(error: AppError): void {
+    this.pendingQueue.push(error);
+    if (this.pendingQueue.length > MAX_PENDING_ERRORS) {
+      this.pendingQueue.shift();
     }
-    if (typeof webContents.isDestroyed === "function" && webContents.isDestroyed()) {
+
+    if (isCriticalErrorType(error.type) && !error.isTransient) {
+      this.persistError(error);
+    }
+  }
+
+  private persistError(error: AppError): void {
+    try {
+      const existing = (store.get("pendingErrors") as AppError[] | undefined) ?? [];
+      const updated = [...existing, error].slice(-MAX_PENDING_ERRORS);
+      store.set("pendingErrors", updated);
+    } catch {
+      // Don't let persistence failure block error handling
+    }
+  }
+
+  private clearPersistedErrors(): void {
+    try {
+      store.set("pendingErrors", []);
+    } catch {
+      // Ignore persistence errors
+    }
+  }
+
+  sendError(error: AppError) {
+    if (!this.canSendToRenderer()) {
+      this.bufferError(error);
       return;
     }
 
-    webContents.send(CHANNELS.ERROR_NOTIFY, error);
+    this.mainWindow!.webContents.send(CHANNELS.ERROR_NOTIFY, error);
   }
 
   notifyError(error: unknown, options: Parameters<typeof createAppError>[1] = {}) {
     const appError = createAppError(error, options);
     this.sendError(appError);
     return appError;
+  }
+
+  flushPendingErrors(): void {
+    if (this.isFlushing || this.pendingQueue.length === 0) return;
+    if (!this.canSendToRenderer()) return;
+
+    this.isFlushing = true;
+    try {
+      const errors = this.pendingQueue.splice(0);
+      const webContents = this.mainWindow!.webContents;
+      for (const error of errors) {
+        webContents.send(CHANNELS.ERROR_NOTIFY, error);
+      }
+      this.clearPersistedErrors();
+    } finally {
+      this.isFlushing = false;
+    }
+  }
+
+  getPendingPersistedErrors(): AppError[] {
+    try {
+      const persisted = (store.get("pendingErrors") as AppError[] | undefined) ?? [];
+      this.clearPersistedErrors();
+      return persisted.map((e) => ({ ...e, fromPreviousSession: true }));
+    } catch {
+      return [];
+    }
   }
 
   async handleRetry(payload: RetryPayload): Promise<void> {
@@ -211,6 +278,10 @@ class ErrorService {
 
 const errorService = new ErrorService();
 
+export function flushPendingErrors(): void {
+  errorService.flushPendingErrors();
+}
+
 export function registerErrorHandlers(
   mainWindow: BrowserWindow,
   worktreeService: WorkspaceClient | null,
@@ -246,6 +317,12 @@ export function registerErrorHandlers(
   };
   ipcMain.handle(CHANNELS.ERROR_OPEN_LOGS, handleOpenLogs);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.ERROR_OPEN_LOGS));
+
+  const handleGetPending = () => {
+    return errorService.getPendingPersistedErrors();
+  };
+  ipcMain.handle(CHANNELS.ERROR_GET_PENDING, handleGetPending);
+  handlers.push(() => ipcMain.removeHandler(CHANNELS.ERROR_GET_PENDING));
 
   return () => {
     handlers.forEach((cleanup) => cleanup());
