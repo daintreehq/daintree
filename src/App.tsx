@@ -9,7 +9,7 @@ import {
   useTransition,
 } from "react";
 import "@xterm/xterm/css/xterm.css";
-import { FolderOpen, FilterX, Maximize2, Plus, RefreshCw } from "lucide-react";
+import { FolderOpen, FilterX, LayoutGrid, Plus, RefreshCw } from "lucide-react";
 import { ScrollIndicator } from "./components/Worktree/ScrollIndicator";
 import {
   isElectronAvailable,
@@ -520,6 +520,14 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
       <div className="group/header flex items-center justify-between px-4 py-2 border-b border-divider bg-transparent shrink-0">
         <h2 className="text-canopy-text font-semibold text-sm tracking-wide">Worktrees</h2>
         <div className="flex items-center gap-1">
+          <button
+            onClick={() => openCreateDialog()}
+            className="p-1 text-canopy-text/40 hover:text-canopy-text hover:bg-white/[0.06] rounded transition-colors"
+            title={createTooltipWithShortcut("Create new worktree", "Cmd+Shift+N")}
+            aria-label="Create new worktree"
+          >
+            <Plus className="w-3.5 h-3.5" />
+          </button>
           <div className="invisible group-hover/header:visible group-focus-within/header:visible flex items-center gap-1">
             <button
               onClick={onOpenOverview}
@@ -527,7 +535,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
               title={createTooltipWithShortcut("Toggle worktrees overview", "Cmd+Shift+O")}
               aria-label="Open worktrees overview"
             >
-              <Maximize2 className="w-3.5 h-3.5" />
+              <LayoutGrid className="w-3.5 h-3.5" />
             </button>
             <button
               onClick={handleRefreshAll}
@@ -539,14 +547,6 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
               <RefreshCw className={`w-3.5 h-3.5 ${isRefreshing ? "animate-spin" : ""}`} />
             </button>
           </div>
-          <button
-            onClick={() => openCreateDialog()}
-            className="p-1 text-canopy-text/40 hover:text-canopy-text hover:bg-white/[0.06] rounded transition-colors"
-            title={createTooltipWithShortcut("Create new worktree", "Cmd+Shift+N")}
-            aria-label="Create new worktree"
-          >
-            <Plus className="w-3.5 h-3.5" />
-          </button>
         </div>
       </div>
 
