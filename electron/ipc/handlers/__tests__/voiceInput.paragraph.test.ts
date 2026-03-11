@@ -53,7 +53,13 @@ vi.mock("../../../services/VoiceTranscriptionService.js", () => ({
     this.sendAudioChunk = function () {};
     this.destroy = function () {};
     this.commitParagraphBoundary = function () {
-      return shared.inFlightText ?? "";
+      const text = shared.inFlightText ?? "";
+      return {
+        text,
+        confidence: text
+          ? { minConfidence: 0, wordCount: 0, uncertainWords: [] }
+          : { minConfidence: 1.0, wordCount: 0, uncertainWords: [] },
+      };
     };
   },
 }));
