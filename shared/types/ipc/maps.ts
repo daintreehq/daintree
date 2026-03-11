@@ -506,6 +506,10 @@ export interface IpcInvokeMap {
     args: [];
     result: void;
   };
+  "error:get-pending": {
+    args: [];
+    result: AppError[];
+  };
 
   // Event inspector channels
   "event-inspector:get-events": {

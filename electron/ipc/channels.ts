@@ -142,6 +142,7 @@ export const CHANNELS = {
   ERROR_NOTIFY: "error:notify",
   ERROR_RETRY: "error:retry",
   ERROR_OPEN_LOGS: "error:open-logs",
+  ERROR_GET_PENDING: "error:get-pending",
 
   EVENT_INSPECTOR_GET_EVENTS: "event-inspector:get-events",
   EVENT_INSPECTOR_GET_FILTERED: "event-inspector:get-filtered",

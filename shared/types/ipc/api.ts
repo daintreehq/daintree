@@ -295,6 +295,7 @@ export interface ElectronAPI {
     onError(callback: (error: AppError) => void): () => void;
     retry(errorId: string, action: RetryAction, args?: Record<string, unknown>): Promise<void>;
     openLogs(): Promise<void>;
+    getPending(): Promise<AppError[]>;
   };
   eventInspector: {
     getEvents(): Promise<EventRecord[]>;

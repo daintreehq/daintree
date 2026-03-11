@@ -301,6 +301,7 @@ const CHANNELS = {
   ERROR_NOTIFY: "error:notify",
   ERROR_RETRY: "error:retry",
   ERROR_OPEN_LOGS: "error:open-logs",
+  ERROR_GET_PENDING: "error:get-pending",
 
   // Event Inspector channels
   EVENT_INSPECTOR_GET_EVENTS: "event-inspector:get-events",
@@ -916,6 +917,8 @@ const api: ElectronAPI = {
       _typedInvoke(CHANNELS.ERROR_RETRY, { errorId, action, args }),
 
     openLogs: () => _typedInvoke(CHANNELS.ERROR_OPEN_LOGS),
+
+    getPending: () => _typedInvoke(CHANNELS.ERROR_GET_PENDING),
   },
 
   // Event Inspector API

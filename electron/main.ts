@@ -273,7 +273,7 @@ if (process.platform === "darwin") {
 
 import { registerIpcHandlers, sendToRenderer } from "./ipc/handlers.js";
 import type { HandlerDependencies } from "./ipc/types.js";
-import { registerErrorHandlers } from "./ipc/errorHandlers.js";
+import { registerErrorHandlers, flushPendingErrors } from "./ipc/errorHandlers.js";
 import { PtyClient, disposePtyClient } from "./services/PtyClient.js";
 import {
   getWorkspaceClient,
@@ -1199,6 +1199,7 @@ async function createWindow(): Promise<void> {
     if (isSmokeTest) console.log("[SMOKE] CHECK: Renderer did-finish-load — OK");
     markPerformance(PERF_MARKS.RENDERER_READY);
     createAndDistributePorts();
+    flushPendingErrors();
   });
 
   workspaceClient.on("host-crash", (code: number) => {
