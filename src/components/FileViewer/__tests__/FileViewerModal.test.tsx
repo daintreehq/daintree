@@ -168,6 +168,39 @@ describe("FileViewerModal", () => {
     );
   });
 
+  it("renders image for files outside the project root using parent dir as effective root", async () => {
+    render(
+      <FileViewerModal
+        {...defaultProps}
+        filePath="/Users/someone/Desktop/photo.png"
+        rootPath="/project"
+      />
+    );
+
+    await waitFor(() => {
+      const img = screen.getByRole("img");
+      expect(img).toBeTruthy();
+      const src = img.getAttribute("src")!;
+      expect(src).toContain("canopy-file://load");
+      expect(src).toContain(encodeURIComponent("/Users/someone/Desktop/photo.png"));
+      expect(src).toContain(encodeURIComponent("/Users/someone/Desktop"));
+      expect(src).not.toContain(encodeURIComponent("/project"));
+    });
+
+    expect(mockRead).not.toHaveBeenCalled();
+  });
+
+  it("reads text files outside the project root using parent dir as effective root", async () => {
+    render(<FileViewerModal {...defaultProps} filePath="/tmp/notes.txt" rootPath="/project" />);
+
+    await waitFor(() => {
+      expect(mockRead).toHaveBeenCalledWith({
+        path: "/tmp/notes.txt",
+        rootPath: "/tmp",
+      });
+    });
+  });
+
   it("does not render when isOpen is false", () => {
     render(<FileViewerModal {...defaultProps} isOpen={false} />);
 

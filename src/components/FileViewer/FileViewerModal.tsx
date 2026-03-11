@@ -61,6 +61,14 @@ export function FileViewerModal({
   defaultMode,
   onClose,
 }: FileViewerModalProps) {
+  // If the file is outside the project root, use its parent directory as the
+  // effective root so that the canopy-file:// protocol and files.read IPC
+  // containment checks pass.
+  const normalizedRoot = rootPath.endsWith("/") ? rootPath : rootPath + "/";
+  const effectiveRootPath = filePath.startsWith(normalizedRoot)
+    ? rootPath
+    : filePath.substring(0, filePath.lastIndexOf("/")) || "/";
+
   const hasDiff = Boolean(diff && diff.trim() && diff !== "NO_CHANGES");
   const [mode, setMode] = useState<ViewMode>(() => {
     if (isImageFile(filePath)) return "view";
@@ -111,7 +119,7 @@ export function FileViewerModal({
     }
 
     filesClient
-      .read({ path: filePath, rootPath })
+      .read({ path: filePath, rootPath: effectiveRootPath })
       .then((result) => {
         if (!isMountedRef.current || requestRef.current !== requestId) return;
         if (result.ok) {
@@ -139,7 +147,7 @@ export function FileViewerModal({
         setLoadState("error");
       });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isOpen, filePath, rootPath]);
+  }, [isOpen, filePath, effectiveRootPath]);
 
   // When diff arrives after mount (FileDiffModal async pattern), switch to diff mode if default is diff
   useEffect(() => {
@@ -187,11 +195,9 @@ export function FileViewerModal({
   const fileName = filePath.split("/").pop() || filePath;
 
   // Compute relative path by stripping rootPath prefix; guard against empty root
-  const normalizedRoot = rootPath ? (rootPath.endsWith("/") ? rootPath : rootPath + "/") : null;
+  const displayRoot = rootPath ? (rootPath.endsWith("/") ? rootPath : rootPath + "/") : null;
   const relativePath =
-    normalizedRoot && filePath.startsWith(normalizedRoot)
-      ? filePath.slice(normalizedRoot.length)
-      : fileName;
+    displayRoot && filePath.startsWith(displayRoot) ? filePath.slice(displayRoot.length) : fileName;
   const relativeDir = relativePath.includes("/")
     ? relativePath.slice(0, relativePath.lastIndexOf("/") + 1)
     : "";
@@ -335,7 +341,7 @@ export function FileViewerModal({
             {loadState === "image" && (
               <img
                 key={filePath}
-                src={buildCanopyFileUrl(filePath, rootPath)}
+                src={buildCanopyFileUrl(filePath, effectiveRootPath)}
                 alt={fileName}
                 className="max-w-full max-h-[70vh] object-contain rounded"
                 draggable={false}
