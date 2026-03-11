@@ -414,7 +414,7 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
     setIsStoppingProject(true);
 
     try {
-      const result = await closeProject(stopConfirmProjectId, { killTerminals: true });
+      await closeProject(stopConfirmProjectId, { killTerminals: true });
 
       setProjectStats((prev) => {
         const next = new Map(prev);
