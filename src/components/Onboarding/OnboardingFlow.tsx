@@ -76,7 +76,7 @@ export function OnboardingFlow({ availability, onRefreshSettings }: OnboardingFl
           setCurrentStep(STEP_ORDER[0]);
         }
       }
-    })();
+    })().catch(console.error);
   }, []);
 
   // Listen for manual wizard open events (from Settings / toolbar button)
@@ -93,9 +93,17 @@ export function OnboardingFlow({ availability, onRefreshSettings }: OnboardingFl
     }
   }, [currentStep]);
 
+  const skipAgentSetupRef = useRef(false);
+
   const advanceStep = useCallback(async (fromStep: OnboardingStep) => {
     const idx = STEP_ORDER.indexOf(fromStep);
-    const nextStep = STEP_ORDER[idx + 1] ?? null;
+    let nextStep = STEP_ORDER[idx + 1] ?? null;
+
+    // Skip agent setup if user skipped selection or had no uninstalled agents
+    if (nextStep === "agentSetup" && skipAgentSetupRef.current) {
+      nextStep = STEP_ORDER[idx + 2] ?? null;
+    }
+
     if (nextStep) {
       setCurrentStep(nextStep);
       await window.electron.onboarding.setStep(nextStep);
@@ -120,9 +128,12 @@ export function OnboardingFlow({ availability, onRefreshSettings }: OnboardingFl
   // Agent selection handlers
   const handleAgentSelectionContinue = useCallback(
     async (uninstalledIds: string[]) => {
-      onRefreshSettings();
+      void onRefreshSettings();
       if (uninstalledIds.length > 0) {
         setAgentSetupIds(uninstalledIds);
+        skipAgentSetupRef.current = false;
+      } else {
+        skipAgentSetupRef.current = true;
       }
       await advanceStep("agentSelection");
     },
@@ -130,6 +141,7 @@ export function OnboardingFlow({ availability, onRefreshSettings }: OnboardingFl
   );
 
   const handleAgentSelectionSkip = useCallback(async () => {
+    skipAgentSetupRef.current = true;
     await advanceStep("agentSelection");
   }, [advanceStep]);
 
