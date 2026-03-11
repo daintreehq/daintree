@@ -6,6 +6,7 @@ import { DiagnosticsDock } from "../Diagnostics";
 import { ErrorBoundary } from "../ErrorBoundary";
 import { SidecarDock, SidecarVisibilityController } from "../Sidecar";
 import { ProjectSettingsDialog, ProjectSwitchOverlay } from "@/components/Project";
+import { ChordIndicator } from "./ChordIndicator";
 import { useDiagnosticsStore, useDockStore, type PanelState } from "@/store";
 import { useProjectStore } from "@/store/projectStore";
 import type { RetryAction } from "@/store";
@@ -369,6 +370,7 @@ export function AppLayout({
         isSwitching={isProjectSwitching}
         projectName={switchingToProjectName ?? undefined}
       />
+      <ChordIndicator />
     </div>
   );
 }
