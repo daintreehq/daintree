@@ -42,11 +42,11 @@ export function filterSettings(
         if (keywordsLower.includes(token)) score += 1;
       }
 
-      if (tabLabelLower === normalized || tokens.some((t) => tabLabelLower === t)) {
+      if (tabLabelLower === normalized) {
         score += 5;
-      }
-      if (entry.id.startsWith("tab-nav-")) {
-        score += 2;
+        if (entry.id.startsWith("tab-nav-")) {
+          score += 2;
+        }
       }
 
       return { entry, score };
