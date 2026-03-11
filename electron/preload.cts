@@ -1736,7 +1736,8 @@ const api: ElectronAPI = {
 
   crashRecovery: {
     getPending: () => _typedInvoke(CHANNELS.CRASH_RECOVERY_GET_PENDING),
-    resolve: (action: "restore" | "fresh") => _typedInvoke(CHANNELS.CRASH_RECOVERY_RESOLVE, action),
+    resolve: (action: { kind: "restore"; panelIds: string[] } | { kind: "fresh" }) =>
+      _typedInvoke(CHANNELS.CRASH_RECOVERY_RESOLVE, action),
     getConfig: () => _typedInvoke(CHANNELS.CRASH_RECOVERY_GET_CONFIG),
     setConfig: (config: { autoRestoreOnCrash?: boolean }) =>
       _typedInvoke(CHANNELS.CRASH_RECOVERY_SET_CONFIG, config),

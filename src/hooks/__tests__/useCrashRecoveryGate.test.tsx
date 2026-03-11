@@ -2,7 +2,12 @@
 import { renderHook, act } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { useCrashRecoveryGate } from "../app/useCrashRecoveryGate";
-import type { PendingCrash, CrashRecoveryConfig } from "@shared/types/ipc";
+import type { PendingCrash, CrashRecoveryConfig, CrashRecoveryAction } from "@shared/types/ipc";
+
+const mockPanels = [
+  { id: "t1", kind: "terminal", title: "Shell", location: "grid" as const, isSuspect: false },
+  { id: "t2", kind: "agent", title: "Claude", location: "dock" as const, isSuspect: false },
+];
 
 const mockCrash: PendingCrash = {
   logPath: "/fake/crashes/crash-1.json",
@@ -14,7 +19,8 @@ const mockCrash: PendingCrash = {
     osVersion: "22.0",
     arch: "arm64",
   },
-  hasBackup: false,
+  hasBackup: true,
+  panels: mockPanels,
 };
 
 const mockConfig: CrashRecoveryConfig = { autoRestoreOnCrash: false };
@@ -22,7 +28,7 @@ const mockConfig: CrashRecoveryConfig = { autoRestoreOnCrash: false };
 function makeElectron(overrides?: {
   pending?: PendingCrash | null;
   config?: CrashRecoveryConfig;
-  resolve?: () => Promise<void>;
+  resolve?: (action: CrashRecoveryAction) => Promise<void>;
   setConfig?: (patch: Partial<CrashRecoveryConfig>) => Promise<CrashRecoveryConfig>;
 }) {
   return {
@@ -92,7 +98,7 @@ describe("useCrashRecoveryGate", () => {
     }
   });
 
-  it("auto-restores without showing dialog when autoRestoreOnCrash is true", async () => {
+  it("auto-restores with all panel IDs when autoRestoreOnCrash is true", async () => {
     const resolve = vi.fn(async () => {});
     Object.defineProperty(window, "electron", {
       configurable: true,
@@ -112,7 +118,41 @@ describe("useCrashRecoveryGate", () => {
       await Promise.resolve();
     });
 
-    expect(resolve).toHaveBeenCalledWith("restore");
+    expect(resolve).toHaveBeenCalledWith({
+      kind: "restore",
+      panelIds: ["t1", "t2"],
+    });
+    expect(result.current.state.status).toBe("none");
+  });
+
+  it("auto-restores with empty panelIds when no panels available", async () => {
+    const resolve = vi.fn(async () => {});
+    const crashNoPanels: PendingCrash = {
+      ...mockCrash,
+      panels: undefined,
+    };
+    Object.defineProperty(window, "electron", {
+      configurable: true,
+      writable: true,
+      value: makeElectron({
+        pending: crashNoPanels,
+        config: { autoRestoreOnCrash: true },
+        resolve,
+      }),
+    });
+
+    const { result } = renderHook(() => useCrashRecoveryGate());
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(resolve).toHaveBeenCalledWith({
+      kind: "restore",
+      panelIds: [],
+    });
     expect(result.current.state.status).toBe("none");
   });
 
@@ -133,7 +173,7 @@ describe("useCrashRecoveryGate", () => {
     expect(result.current.state.status).toBe("pending");
 
     await act(async () => {
-      await result.current.resolve("restore");
+      await result.current.resolve({ kind: "restore", panelIds: ["t1"] });
     });
 
     expect(result.current.state.status).toBe("none");
