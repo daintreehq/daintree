@@ -44,8 +44,30 @@ describe("useWorktreeStatus — lifecycleStage", () => {
     expect(getLifecycleStage({ isMainWorktree: true })).toBeNull();
   });
 
+  it("returns null for main worktree even with changes and open PR", () => {
+    expect(
+      getLifecycleStage({
+        isMainWorktree: true,
+        worktreeChanges: makeChanges({ changedFileCount: 5 }),
+        prState: "open",
+        prNumber: 10,
+      })
+    ).toBeNull();
+  });
+
   it("returns null when worktreeChanges is null (loading)", () => {
     expect(getLifecycleStage({ worktreeChanges: null })).toBeNull();
+  });
+
+  it("returns null when loading even with merged PR", () => {
+    expect(
+      getLifecycleStage({
+        worktreeChanges: null,
+        prState: "merged",
+        prNumber: 10,
+        issueNumber: 42,
+      })
+    ).toBeNull();
   });
 
   it('returns "working" when there are local changes', () => {
@@ -117,24 +139,22 @@ describe("useWorktreeStatus — lifecycleStage", () => {
     expect(getLifecycleStage({})).toBeNull();
   });
 
-  it("updates when worktree state changes", () => {
+  it("updates from merged to ready-for-cleanup when issueNumber is added", () => {
     const initialWorktree = makeWorktree({
-      worktreeChanges: makeChanges({ changedFileCount: 2 }),
+      prState: "merged",
+      prNumber: 10,
     });
     const { result, rerender } = renderHook(
       ({ wt }) => useWorktreeStatus({ worktree: wt, worktreeErrorCount: 0 }),
       { initialProps: { wt: initialWorktree } }
     );
 
-    expect(result.current.lifecycleStage).toBe("working");
+    expect(result.current.lifecycleStage).toBe("merged");
 
-    const updatedWorktree = makeWorktree({
-      worktreeChanges: makeChanges({ changedFileCount: 0 }),
-      prState: "open",
-      prNumber: 5,
+    rerender({
+      wt: makeWorktree({ prState: "merged", prNumber: 10, issueNumber: 42 }),
     });
-    rerender({ wt: updatedWorktree });
 
-    expect(result.current.lifecycleStage).toBe("in-review");
+    expect(result.current.lifecycleStage).toBe("ready-for-cleanup");
   });
 });
