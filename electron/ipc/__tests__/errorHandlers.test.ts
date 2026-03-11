@@ -15,7 +15,7 @@ const loggerMock = vi.hoisted(() => ({
 
 const storeMock = vi.hoisted(() => ({
   store: {
-    get: vi.fn(() => []),
+    get: vi.fn((): unknown[] => []),
     set: vi.fn(),
   },
 }));
@@ -59,14 +59,14 @@ describe("errorHandlers", () => {
     vi.restoreAllMocks();
   });
 
-  function getInvokeHandler(channel: string): (...args: unknown[]) => unknown {
+  function getInvokeHandler(channel: string): (...args: unknown[]) => Promise<unknown> {
     const call = (ipcMainMock.handle as Mock).mock.calls.find(
-      ([registered]) => registered === channel
+      ([registered]: string[]) => registered === channel
     );
     if (!call) {
       throw new Error(`No handler registered for channel: ${channel}`);
     }
-    return call[1] as (...args: unknown[]) => unknown;
+    return call[1] as (...args: unknown[]) => Promise<unknown>;
   }
 
   // Re-import CHANNELS each time since we reset modules
@@ -205,7 +205,7 @@ describe("errorHandlers", () => {
 
       // Trigger a retry that uses a ptyClient spawn which throws a ConfigError
       const spawn = vi.fn(() => {
-        throw new ConfigError("Bad config", "config-key");
+        throw new ConfigError("Bad config", { key: "config-key" });
       });
       // Re-register with spawn
       registerErrorHandlers(destroyedWindow as never, null, { spawn } as never);
@@ -363,7 +363,7 @@ describe("errorHandlers", () => {
 
     it("handles undefined store value gracefully", async () => {
       const CHANNELS = await getChannels();
-      storeMock.store.get.mockReturnValue(undefined);
+      storeMock.store.get.mockReturnValue(undefined as unknown as unknown[]);
 
       registerErrorHandlers(createMockWindow() as never, null, null);
       const handler = getInvokeHandler(CHANNELS.ERROR_GET_PENDING);
