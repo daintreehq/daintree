@@ -297,6 +297,7 @@ function queueCorrectionRequest(job: QueuedCorrectionJob, win: Electron.BrowserW
   correctionRequestTail = correctionRequestTail
     .catch(() => {})
     .then(async () => {
+      if (!correctionService) return;
       const liveSettings = getVoiceSettings();
       const result = await correctionService!.correct(
         {
