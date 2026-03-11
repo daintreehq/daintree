@@ -489,6 +489,8 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
 
   const rootPath = currentProject?.path ?? "";
   const hasNonMainWorktrees = worktrees.length > 1;
+  const nonMainTotal = worktrees.length - (mainWorktree ? 1 : 0) - (integrationWorktree ? 1 : 0);
+  const hasFilters = hasActiveFilters();
 
   const renderWorktreeCard = (worktree: WorktreeState) => (
     <WorktreeCard
@@ -512,7 +514,12 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     <div className="flex flex-col h-full">
       {/* Header Section */}
       <div className="group/header flex items-center justify-between px-4 py-2 border-b border-divider bg-transparent shrink-0">
-        <h2 className="text-canopy-text font-semibold text-sm tracking-wide">Worktrees</h2>
+        <div className="flex items-baseline gap-1.5">
+          <h2 className="text-canopy-text font-semibold text-sm tracking-wide">Worktrees</h2>
+          <span className="text-canopy-text/50 text-xs">
+            ({hasFilters ? `${filteredWorktrees.length} of ${nonMainTotal}` : nonMainTotal})
+          </span>
+        </div>
         <div className="flex items-center gap-1">
           <div className="invisible group-hover/header:visible group-focus-within/header:visible flex items-center gap-1">
             <button
