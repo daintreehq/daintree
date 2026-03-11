@@ -157,10 +157,7 @@ export function AppDialog({
         const first = focusable[0];
         const last = focusable[focusable.length - 1];
 
-        if (!dialogRef.current.contains(document.activeElement)) {
-          e.preventDefault();
-          first.focus();
-        } else if (e.shiftKey && document.activeElement === first) {
+        if (e.shiftKey && document.activeElement === first) {
           e.preventDefault();
           last.focus();
         } else if (!e.shiftKey && document.activeElement === last) {

@@ -159,22 +159,22 @@ describe("AppDialog focus trapping", () => {
     document.body.removeChild(outerButton);
   });
 
-  it("pulls focus back when it drifts outside the dialog", async () => {
-    const outerButton = document.createElement("button");
-    outerButton.textContent = "Outside";
-    document.body.appendChild(outerButton);
-
+  it("does not interfere with focus in portaled popovers outside dialogRef", async () => {
     renderDialog();
     await act(() => vi.runAllTimersAsync());
 
-    // Manually move focus outside the dialog
-    outerButton.focus();
-    expect(document.activeElement).toBe(outerButton);
+    // Simulate a portaled popover outside dialogRef (e.g., Radix popover)
+    const popoverInput = document.createElement("input");
+    popoverInput.placeholder = "Popover";
+    document.body.appendChild(popoverInput);
+    popoverInput.focus();
+    expect(document.activeElement).toBe(popoverInput);
 
+    // Tab should NOT yank focus back into the dialog
     pressTab();
+    // Focus should remain on the popover input (no preventDefault in JSDOM = no move)
+    expect(document.activeElement).toBe(popoverInput);
 
-    // Focus should be pulled back to the first element inside the dialog
-    expect((document.activeElement as HTMLElement).textContent).toBe("First");
-    document.body.removeChild(outerButton);
+    document.body.removeChild(popoverInput);
   });
 });
