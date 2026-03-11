@@ -1,41 +1,22 @@
-/**
- * Voice correction prompt for GPT-5 family reasoning models.
- * Effort level is model-dependent: "medium" for gpt-5-mini, "low" for gpt-5-nano.
- *
- * Design choices informed by OpenAI reasoning model prompting guidance (2025):
- *
- * - XML-style delimiters (<terms>) bound the technical dictionary so the reasoning
- *   model parses it as structured data rather than prose.
- * - Colon-separated entries ("racked/react: React") are preferred over arrow syntax
- *   ("->") which reasoning models can misinterpret as logical operators.
- * - "Text segment" replaces "sentence" so the prompt is compatible with both
- *   single-sentence and paragraph-level inputs (see #2672).
- * - Explicit idempotency ("return it character-for-character") prevents over-correction
- *   on already-correct input — a common failure mode in reasoning models.
- * - The guardrail uses positive-then-negative framing and requires the response to begin
- *   immediately with the corrected text. A single trailing "Output ONLY" instruction is
- *   vulnerable to instruction drift during internal reasoning; this structure is more robust.
- * - Custom instructions are labelled as lower-priority context so they cannot accidentally
- *   override the core correction rules or the output format contract.
- * - Uses the "developer" message role (required for GPT-5 reasoning models).
- *
- * This prompt is NOT user-editable. Users can append context via Custom Instructions
- * in Settings, which is appended in a clearly-labelled lower-priority section.
- */
 export const CORE_CORRECTION_PROMPT = `You are a speech-to-text correction engine for a developer dictating to AI coding agents.
 
-TASK: Fix transcription errors in the CURRENT TEXT SEGMENT only. Do not repeat, summarize, or modify previous segments.
+TASK: Clean up the CURRENT TARGET only. Treat it as the full dictated passage for this recording stop. Do not repeat or modify anything outside the target.
 
-CONTEXT: The user message contains two XML sections: <history> (previous corrected segments — reference only) and <input> (the current segment to correct). Use <history> only to maintain consistent terminology — if earlier segments mention "React", a later "racked" likely means "React". Correct only the content of <input>. Do NOT repeat or modify previous segments.
+CONTEXT: The user message may contain:
+- <confirmed_history> with older corrected text for terminology consistency only
+- <job> with metadata about why this correction was queued
+- <target> with the only text you are allowed to correct
+- <right_context> with optional extra text for disambiguation
+Use history and metadata only as bounded context. Correct only the content of <target>.
 
 CORRECTION PRIORITY:
 1. REQUIRED TERMS / CUSTOM DICTIONARY — Always map phonetically similar words to their exact canonical form.
 2. TECHNICAL TERMS — Correct misheard programming terms using the <terms> dictionary below.
-3. PUNCTUATION & CASING — Add terminal punctuation, fix sentence casing.
+3. PARAGRAPHS & PUNCTUATION — Add natural paragraph breaks, sentence punctuation, and casing.
 4. FILLER REMOVAL — Remove um, uh, like, you know only when clearly filler, not meaningful.
 5. HOMOPHONES — Fix their/there, its/it's, your/you're when context makes the correct form unambiguous.
 
-PRESERVE: Do not rephrase, formalize, or reword. Keep contractions, fragments, and the speaker's phrasing intact. If the text segment contains no errors, return it character-for-character without any modification.
+PRESERVE: Keep the speaker's meaning, ordering, and phrasing intact. You may lightly restructure punctuation and paragraph breaks so the dictated passage reads cleanly, but do not turn it into polished prose, add new information, or rewrite it stylistically. If the target is already clean enough, return it character-for-character without any modification.
 
 <terms>
 racked/react: React
@@ -61,7 +42,7 @@ docker compose: Docker Compose
 
 const GUARDRAIL_SUFFIX = `Return a JSON object that matches the response schema.
 - Use "no_change" when the input should remain exactly as-is.
-- Use "replace" when you are correcting the segment, and put the corrected segment in corrected_text.
+- Use "replace" when you are correcting the dictated passage, and put the full corrected passage in corrected_text.
 - Do not add explanation outside the JSON object.`;
 
 export interface CorrectionPromptContext {
@@ -81,7 +62,6 @@ export interface CorrectionPromptContext {
  *   4. Custom instructions (lower-priority user context)
  *   5. Guardrail suffix (fixed — always last, cannot be overridden)
  *
- * Uses "developer" role for GPT-5 reasoning models.
  * Only the user message (history + raw text) changes per request.
  */
 export function buildCorrectionSystemPrompt(context: CorrectionPromptContext): string {

@@ -82,26 +82,6 @@ function findCorrectionRange(
   return null;
 }
 
-function resolveParagraphStart(draft: string, rawText: string, preferredStart: number): number {
-  if (!rawText) return -1;
-
-  const matchedRange = findCorrectionRange(draft, { segmentStart: preferredStart, rawText });
-  if (matchedRange) {
-    return matchedRange.start;
-  }
-
-  if (draft.endsWith(rawText)) {
-    return draft.length - rawText.length;
-  }
-
-  const occurrences = collectOccurrences(draft, rawText);
-  if (occurrences.length === 1) {
-    return occurrences[0];
-  }
-
-  return preferredStart >= 0 ? preferredStart : -1;
-}
-
 function resolveQueuedCorrectionStart(draft: string, rawText: string): number {
   if (!rawText) return -1;
   if (draft.endsWith(rawText)) {
@@ -156,6 +136,7 @@ class VoiceRecordingService {
               .getState()
               .getDraftInput(target.panelId, target.projectId);
             const { insertStart } = getVoiceInsertMetadata(draft);
+            useVoiceRecordingStore.getState().setSessionDraftStart(target.panelId, insertStart);
             // Snapshot where dictated text actually begins, including any separator
             // inserted between existing draft text and the first dictated token.
             useVoiceRecordingStore
@@ -218,8 +199,17 @@ class VoiceRecordingService {
         if (!currentTarget || !rawText) return;
 
         const { panelId, projectId } = currentTarget;
+        const buffer = voiceState.panelBuffers[panelId];
+        if (buffer?.pendingCorrections.some((pending) => pending.id === correctionId)) {
+          return;
+        }
         const draft = useTerminalInputStore.getState().getDraftInput(panelId, projectId);
-        const correctionStart = resolveQueuedCorrectionStart(draft, rawText);
+        const preferredStart = buffer?.sessionDraftStart ?? -1;
+        const correctionStart =
+          preferredStart >= 0 &&
+          draft.slice(preferredStart, preferredStart + rawText.length) === rawText
+            ? preferredStart
+            : resolveQueuedCorrectionStart(draft, rawText);
         if (correctionStart < 0) {
           logDebug(`${LOG_PREFIX} Skipping pending correction registration — text not found`, {
             correctionId,
@@ -268,18 +258,11 @@ class VoiceRecordingService {
             inputStore.setDraftInput(panelId, before + correctedText + after, projectId);
             inputStore.bumpVoiceDraftRevision();
 
-            useVoiceRecordingStore
-              .getState()
-              .updateAICorrectionSpan(panelId, correctionId, matchedRange.start, correctedText);
-
             const lengthDelta = correctedText.length - pending.rawText.length;
             if (lengthDelta !== 0) {
               useVoiceRecordingStore
                 .getState()
                 .rebasePendingCorrections(panelId, pending.segmentStart, lengthDelta);
-              useVoiceRecordingStore
-                .getState()
-                .rebaseAICorrectionSpans(panelId, pending.segmentStart, lengthDelta);
             }
           } else {
             logDebug(`${LOG_PREFIX} Skipping correction — text at tracked position has changed`, {
@@ -307,18 +290,8 @@ class VoiceRecordingService {
         const buffer = voiceState.panelBuffers[panelId];
         if (!buffer) return;
 
-        // Register the pending correction using the stable ID from the main process.
-        // correctionId is only non-null when correction is actually queued.
         const inputStore = useTerminalInputStore.getState();
         const draft = inputStore.getDraftInput(panelId, projectId);
-        const paragraphStart = resolveParagraphStart(
-          draft,
-          rawText ?? "",
-          buffer.activeParagraphStart ?? -1
-        );
-        if (correctionId && rawText && paragraphStart >= 0) {
-          voiceState.addPendingCorrection(panelId, correctionId, paragraphStart, rawText);
-        }
 
         // Insert a newline to visually separate paragraphs and reset paragraph state.
         inputStore.setDraftInput(panelId, draft + "\n", projectId);
@@ -711,30 +684,32 @@ class VoiceRecordingService {
       useVoiceRecordingStore.getState().setStatus("finishing");
       const stopResult = await window.electron.voiceInput.stop().catch(() => null);
 
-      // If the backend flushed a paragraph and queued a correction, register a pending
-      // correction so the UI shows it as gray until CORRECTION_REPLACE arrives.
-      // correctionId is the authoritative signal — it is only set when correction was queued.
       if (stopResult?.correctionId && stopResult.rawText) {
         const currentTarget = useVoiceRecordingStore.getState().activeTarget;
         if (currentTarget) {
-          const buffer = useVoiceRecordingStore.getState().panelBuffers[currentTarget.panelId];
-          const draft = useTerminalInputStore
-            .getState()
-            .getDraftInput(currentTarget.panelId, currentTarget.projectId);
-          const paragraphStart = resolveParagraphStart(
-            draft,
-            stopResult.rawText,
-            buffer?.activeParagraphStart ?? -1
-          );
-          if (paragraphStart >= 0) {
-            useVoiceRecordingStore
-              .getState()
-              .addPendingCorrection(
-                currentTarget.panelId,
+          const { panelId, projectId } = currentTarget;
+          const voiceState = useVoiceRecordingStore.getState();
+          const buffer = voiceState.panelBuffers[panelId];
+          if (
+            !buffer?.pendingCorrections.some((pending) => pending.id === stopResult.correctionId)
+          ) {
+            const draft = useTerminalInputStore.getState().getDraftInput(panelId, projectId);
+            const preferredStart = buffer?.sessionDraftStart ?? -1;
+            const correctionStart =
+              preferredStart >= 0 &&
+              draft.slice(preferredStart, preferredStart + stopResult.rawText.length) ===
+                stopResult.rawText
+                ? preferredStart
+                : resolveQueuedCorrectionStart(draft, stopResult.rawText);
+
+            if (correctionStart >= 0) {
+              voiceState.addPendingCorrection(
+                panelId,
                 stopResult.correctionId,
-                paragraphStart,
+                correctionStart,
                 stopResult.rawText
               );
+            }
           }
         }
       }

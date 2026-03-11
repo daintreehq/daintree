@@ -124,11 +124,11 @@ export const inputTheme = EditorView.theme(
       fontStyle: "italic",
       transition: "opacity 150ms ease-out",
     },
-    ".cm-voice-ai-corrected": {
+    ".cm-voice-pending-ai": {
       textDecorationLine: "underline",
       textDecorationStyle: "dotted",
-      textDecorationColor: "color-mix(in oklab, var(--theme-terminal-green) 58%, transparent)",
-      textDecorationThickness: "1px",
+      textDecorationColor: "color-mix(in oklab, var(--theme-terminal-green) 82%, transparent)",
+      textDecorationThickness: "2px",
       textUnderlineOffset: "3px",
       transition: "text-decoration-color 150ms ease-out",
     },
@@ -167,13 +167,11 @@ export const interimMarkField = StateField.define({
   provide: (f) => EditorView.decorations.from(f),
 });
 
-// --- AI corrected mark field (character-level, faint underline on AI-touched text) ---
+const pendingAIMark = Decoration.mark({ class: "cm-voice-pending-ai" });
 
-const aiCorrectedMark = Decoration.mark({ class: "cm-voice-ai-corrected" });
+export const setPendingAIRanges = StateEffect.define<{ from: number; to: number }[]>();
 
-export const setAICorrectedRanges = StateEffect.define<{ from: number; to: number }[]>();
-
-export const aiCorrectedField = StateField.define({
+export const pendingAIField = StateField.define({
   create() {
     return Decoration.none;
   },
@@ -182,7 +180,7 @@ export const aiCorrectedField = StateField.define({
       value = value.map(tr.changes);
     }
     for (const effect of tr.effects) {
-      if (effect.is(setAICorrectedRanges)) {
+      if (effect.is(setPendingAIRanges)) {
         const ranges = effect.value;
         if (ranges.length === 0) return Decoration.none;
         const docLen = tr.state.doc.length;
@@ -192,7 +190,7 @@ export const aiCorrectedField = StateField.define({
             to: Math.min(docLen, r.to),
           }))
           .filter((r) => r.from < r.to)
-          .map((r) => aiCorrectedMark.range(r.from, r.to));
+          .map((r) => pendingAIMark.range(r.from, r.to));
         return marks.length > 0 ? Decoration.set(marks, true) : Decoration.none;
       }
     }

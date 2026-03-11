@@ -53,8 +53,8 @@ import {
   createFilePasteHandler,
   interimMarkField,
   setInterimRange,
-  aiCorrectedField,
-  setAICorrectedRanges,
+  pendingAIField,
+  setPendingAIRanges,
 } from "./inputEditorExtensions";
 
 export interface HybridInputBarHandle {
@@ -547,15 +547,15 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
 
     // Drive voice decorations from transcript state:
     //   interim → character-level italic mark on live delta text
-    //   aiCorrectionSpans → persistent dotted underline on AI-touched text
+    //   pendingCorrections → dotted underline while whole-session cleanup is in flight
     const transcriptPhase = useVoiceRecordingStore(
       (s) => s.panelBuffers[terminalId]?.transcriptPhase ?? "idle"
     );
     const liveSegmentStart = useVoiceRecordingStore(
       (s) => s.panelBuffers[terminalId]?.draftLengthAtSegmentStart ?? -1
     );
-    const aiCorrectionSpans = useVoiceRecordingStore(
-      (s) => s.panelBuffers[terminalId]?.aiCorrectionSpans
+    const pendingCorrections = useVoiceRecordingStore(
+      (s) => s.panelBuffers[terminalId]?.pendingCorrections
     );
     const voiceCorrectionEnabled = useVoiceRecordingStore((s) => s.correctionEnabled);
 
@@ -566,16 +566,16 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       // When correction is disabled, suppress all voice decorations
       if (!voiceCorrectionEnabled) {
         view.dispatch({
-          effects: [setInterimRange.of(null), setAICorrectedRanges.of([])],
+          effects: [setInterimRange.of(null), setPendingAIRanges.of([])],
         });
         return;
       }
 
       const docLen = view.state.doc.length;
       const doc = view.state.doc.toString();
-      const aiRanges =
-        aiCorrectionSpans?.flatMap((span) => {
-          const range = resolveAICorrectionRange(doc, span.segmentStart, span.text);
+      const pendingRanges =
+        pendingCorrections?.flatMap((correction) => {
+          const range = resolveAICorrectionRange(doc, correction.segmentStart, correction.rawText);
           return range ? [range] : [];
         }) ?? [];
 
@@ -587,7 +587,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
               ? { from: liveSegmentStart, to: docLen }
               : null;
           view.dispatch({
-            effects: [setInterimRange.of(interimRange), setAICorrectedRanges.of(aiRanges)],
+            effects: [setInterimRange.of(interimRange), setPendingAIRanges.of(pendingRanges)],
           });
           break;
         }
@@ -596,13 +596,13 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         case "stable":
         case "idle": {
           view.dispatch({
-            effects: [setInterimRange.of(null), setAICorrectedRanges.of(aiRanges)],
+            effects: [setInterimRange.of(null), setPendingAIRanges.of(pendingRanges)],
           });
           break;
         }
         default:
           view.dispatch({
-            effects: [setInterimRange.of(null), setAICorrectedRanges.of(aiRanges)],
+            effects: [setInterimRange.of(null), setPendingAIRanges.of(pendingRanges)],
           });
           break;
       }
@@ -611,7 +611,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       voiceDraftRevision,
       liveSegmentStart,
       voiceCorrectionEnabled,
-      aiCorrectionSpans,
+      pendingCorrections,
     ]);
 
     const sendFromEditor = useCallback(() => {
@@ -980,14 +980,11 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
 
               const { terminalId: tid, projectId: pid } = latest;
               const voiceStore = useVoiceRecordingStore.getState();
-              const buffer = voiceStore.panelBuffers[tid];
-              const paragraphStart = buffer?.activeParagraphStart ?? -1;
-              const correctionEnabled = voiceStore.correctionEnabled;
 
               // Flush paragraph buffer in the main process. This captures any in-flight
               // utterance text via commitParagraphBoundary() and returns the authoritative
               // rawText that the correction service will use.
-              const flushPromise = window.electron.voiceInput.flushParagraph();
+              void window.electron.voiceInput.flushParagraph();
 
               // Insert a newline at the end of the draft and reset paragraph state
               // synchronously — the UI must feel immediate regardless of IPC timing.
@@ -997,26 +994,6 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
               inputStore.bumpVoiceDraftRevision();
 
               voiceStore.resetParagraphState(tid);
-
-              // Register pending correction once we know the authoritative rawText.
-              // Only add when correction is enabled — otherwise no CORRECTION_REPLACE
-              // will arrive and the text would stay dimmed permanently.
-              if (paragraphStart >= 0 && correctionEnabled) {
-                flushPromise
-                  .then((result) => {
-                    if (result?.correctionId && result.rawText) {
-                      useVoiceRecordingStore
-                        .getState()
-                        .addPendingCorrection(
-                          tid,
-                          result.correctionId,
-                          paragraphStart,
-                          result.rawText
-                        );
-                    }
-                  })
-                  .catch(() => {});
-              }
 
               return true;
             }
@@ -1200,7 +1177,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
             !disabled ? createFileDropChipTooltip() : []
           ),
           interimMarkField,
-          aiCorrectedField,
+          pendingAIField,
           keymapCompartmentRef.current.of(keymapExtension),
           editorUpdateListener,
           domEventHandlers,

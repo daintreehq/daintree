@@ -843,10 +843,26 @@ export interface ElectronAPI {
       callback: (payload: { text: string; willCorrect: boolean }) => void
     ): () => void;
     onCorrectionQueued(
-      callback: (payload: { correctionId: string; rawText: string }) => void
+      callback: (payload: {
+        correctionId: string;
+        rawText: string;
+        reason?: string;
+        segmentCount?: number;
+        recentContext?: string[];
+      }) => void
     ): () => void;
     onCorrectionReplace(
-      callback: (payload: { correctionId: string; correctedText: string }) => void
+      callback: (payload: {
+        correctionId: string;
+        correctedText: string;
+        rawText?: string;
+        action?: "no_change" | "replace";
+        confidence?: "low" | "medium" | "high";
+        reason?: string;
+        segmentCount?: number;
+        recentContext?: string[];
+        edits?: Array<{ start: number; end: number; fromText: string; toText: string }>;
+      }) => void
     ): () => void;
     onParagraphBoundary(
       callback: (payload: { rawText: string | null; correctionId: string | null }) => void

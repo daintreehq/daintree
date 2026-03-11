@@ -9,9 +9,8 @@ export { CORE_CORRECTION_PROMPT, buildCorrectionSystemPrompt };
 
 const P = "[VoiceCorrection]";
 const CORRECTION_TIMEOUT_MS = 7000;
-const MAX_HISTORY = 3;
-const MAX_OUTPUT_TOKENS = 256;
-const PROMPT_CACHE_PREFIX = "voice-correction-v2";
+const MAX_OUTPUT_TOKENS = 1024;
+const PROMPT_CACHE_PREFIX = "voice-correction-v3";
 
 const CORRECTION_RESULT_SCHEMA = {
   type: "object",
@@ -41,6 +40,21 @@ export interface VoiceCorrectionSettings {
   projectPath?: string;
 }
 
+export interface VoiceCorrectionRequest {
+  rawText: string;
+  recentContext?: string[];
+  rightContext?: string;
+  reason?: string;
+  segmentCount?: number;
+}
+
+export interface VoiceCorrectionResult {
+  action: "no_change" | "replace";
+  correctedText: string;
+  confidence: "low" | "medium" | "high";
+  confirmedText: string;
+}
+
 interface CorrectionApiResult {
   action: "no_change" | "replace";
   corrected_text: string;
@@ -48,49 +62,61 @@ interface CorrectionApiResult {
 }
 
 export class VoiceCorrectionService {
-  private history: string[] = [];
-
-  resetHistory(): void {
-    this.history = [];
-  }
-
-  async correct(rawText: string, settings: VoiceCorrectionSettings): Promise<string> {
-    const trimmedRaw = rawText.trim();
-    if (!trimmedRaw) return rawText;
+  async correct(
+    request: VoiceCorrectionRequest,
+    settings: VoiceCorrectionSettings
+  ): Promise<VoiceCorrectionResult> {
+    const trimmedRaw = request.rawText.trim();
+    if (!trimmedRaw) {
+      return {
+        action: "no_change",
+        correctedText: request.rawText,
+        confidence: "high",
+        confirmedText: request.rawText,
+      };
+    }
 
     try {
       const result = await Promise.race([
-        this.callApi(trimmedRaw, settings),
+        this.callApi(
+          {
+            ...request,
+            rawText: trimmedRaw,
+          },
+          settings
+        ),
         new Promise<never>((_, reject) =>
           setTimeout(() => reject(new Error("Correction timeout")), CORRECTION_TIMEOUT_MS)
         ),
       ]);
 
-      const corrected = result.trim();
-      if (!corrected) {
-        logWarn(`${P} API returned empty result, using raw text`);
-        this.pushHistory(trimmedRaw);
-        return rawText;
-      }
+      const confirmedText =
+        result.action === "no_change"
+          ? request.rawText
+          : result.correctedText.trim() || request.rawText;
 
       logDebug(`${P} Correction success`, {
-        rawLen: rawText.length,
-        correctedLen: corrected.length,
+        rawLen: request.rawText.length,
+        correctedLen: confirmedText.length,
+        action: result.action,
+        confidence: result.confidence,
+        contextLen: request.recentContext?.length ?? 0,
+        reason: request.reason ?? "unspecified",
       });
-      this.pushHistory(corrected);
-      return corrected;
+
+      return {
+        ...result,
+        confirmedText,
+      };
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
       logWarn(`${P} Correction failed, using raw text`, { error: msg });
-      this.pushHistory(trimmedRaw);
-      return rawText;
-    }
-  }
-
-  private pushHistory(sentence: string): void {
-    this.history.push(sentence);
-    if (this.history.length > MAX_HISTORY) {
-      this.history.shift();
+      return {
+        action: "no_change",
+        correctedText: request.rawText,
+        confidence: "low",
+        confirmedText: request.rawText,
+      };
     }
   }
 
@@ -116,11 +142,44 @@ export class VoiceCorrectionService {
     return text;
   }
 
-  private async callApi(rawText: string, settings: VoiceCorrectionSettings): Promise<string> {
+  private buildUserMessage(request: VoiceCorrectionRequest): string {
+    const parts: string[] = [];
+
+    if (request.recentContext && request.recentContext.length > 0) {
+      parts.push(
+        `<confirmed_history>\n${request.recentContext
+          .map((sentence, index) => `${index + 1}. ${sentence}`)
+          .join("\n")}\n</confirmed_history>`
+      );
+    }
+
+    if (request.reason || request.segmentCount) {
+      const metadata: string[] = [];
+      if (request.reason) {
+        metadata.push(`reason=${request.reason}`);
+      }
+      if (request.segmentCount) {
+        metadata.push(`segments=${request.segmentCount}`);
+      }
+      parts.push(`<job>\n${metadata.join("\n")}\n</job>`);
+    }
+
+    parts.push(`<target>\n${request.rawText}\n</target>`);
+
+    if (request.rightContext?.trim()) {
+      parts.push(`<right_context>\n${request.rightContext.trim()}\n</right_context>`);
+    }
+
+    return parts.join("\n\n");
+  }
+
+  private async callApi(
+    request: VoiceCorrectionRequest,
+    settings: VoiceCorrectionSettings
+  ): Promise<Omit<VoiceCorrectionResult, "confirmedText">> {
     const { model, apiKey, customDictionary, customInstructions, projectName, projectPath } =
       settings;
 
-    // System message: core prompt + context (cached across requests)
     const context: CorrectionPromptContext = {
       projectName,
       projectPath,
@@ -128,23 +187,13 @@ export class VoiceCorrectionService {
       customInstructions,
     };
     const systemPrompt = buildCorrectionSystemPrompt(context);
-
-    // User message: history (for context) + current sentence to correct
-    const userParts: string[] = [];
-
-    if (this.history.length > 0) {
-      userParts.push(
-        `<history>\n${this.history.map((s, i) => `${i + 1}. ${s}`).join("\n")}\n</history>`
-      );
-    }
-
-    userParts.push(`<input>\n${rawText}\n</input>`);
-
-    const userMessage = userParts.join("\n\n");
-
-    const isReasoningModel = model.startsWith("gpt-5");
-
-    logDebug(`${P} Calling Responses API`, { model, historyLen: this.history.length });
+    const userMessage = this.buildUserMessage(request);
+    logDebug(`${P} Calling Responses API`, {
+      model,
+      contextLen: request.recentContext?.length ?? 0,
+      reason: request.reason ?? "unspecified",
+      segmentCount: request.segmentCount ?? 0,
+    });
 
     const response = await fetch("https://api.openai.com/v1/responses", {
       method: "POST",
@@ -158,9 +207,6 @@ export class VoiceCorrectionService {
         input: userMessage,
         prompt_cache_key: this.buildPromptCacheKey(settings),
         service_tier: "auto",
-        ...(isReasoningModel
-          ? { reasoning: { effort: model === "gpt-5-mini" ? "medium" : "low" } }
-          : {}),
         text: {
           format: {
             type: "json_schema",
@@ -183,10 +229,10 @@ export class VoiceCorrectionService {
     };
     const parsed = JSON.parse(this.extractResponseText(data)) as CorrectionApiResult;
 
-    if (parsed.action === "no_change") {
-      return rawText;
-    }
-
-    return parsed.corrected_text;
+    return {
+      action: parsed.action,
+      correctedText: parsed.action === "no_change" ? request.rawText : parsed.corrected_text,
+      confidence: parsed.confidence,
+    };
   }
 }

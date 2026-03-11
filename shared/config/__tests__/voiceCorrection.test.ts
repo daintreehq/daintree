@@ -14,13 +14,19 @@ describe("CORE_CORRECTION_PROMPT", () => {
     expect(CORE_CORRECTION_PROMPT).toContain(": Next.js");
   });
 
-  it("uses neutral segment wording for paragraph-level input compatibility", () => {
-    expect(CORE_CORRECTION_PROMPT).toContain("TEXT SEGMENT");
-    expect(CORE_CORRECTION_PROMPT).toContain("text segment");
+  it("uses target wording for whole-passage cleanup", () => {
+    expect(CORE_CORRECTION_PROMPT).toContain("CURRENT TARGET");
+    expect(CORE_CORRECTION_PROMPT).toContain("<target>");
+    expect(CORE_CORRECTION_PROMPT).toContain("full dictated passage");
   });
 
   it("includes an explicit idempotency instruction", () => {
     expect(CORE_CORRECTION_PROMPT).toMatch(/return it character-for-character/i);
+  });
+
+  it("allows paragraph cleanup without rewriting the passage", () => {
+    expect(CORE_CORRECTION_PROMPT).toContain("Add natural paragraph breaks");
+    expect(CORE_CORRECTION_PROMPT).toContain("do not turn it into polished prose");
   });
 
   it("includes all expected technical term mappings", () => {

@@ -14,7 +14,7 @@ const mockVoiceState = vi.hoisted(() => ({
     {
       projectId?: string;
       pendingCorrections: Array<{ id: string; segmentStart: number; rawText: string }>;
-      aiCorrectionSpans?: Array<{ id: string; segmentStart: number; text: string }>;
+      sessionDraftStart?: number;
       activeParagraphStart: number;
     }
   >,
@@ -23,10 +23,8 @@ const mockVoiceState = vi.hoisted(() => ({
 
 const mockVoiceFns = vi.hoisted(() => ({
   addPendingCorrection: vi.fn(),
-  updateAICorrectionSpan: vi.fn(),
   resolvePendingCorrection: vi.fn(),
   rebasePendingCorrections: vi.fn(),
-  rebaseAICorrectionSpans: vi.fn(),
   clearAICorrectionSpans: vi.fn(),
   setError: vi.fn(),
   announce: vi.fn(),
@@ -241,7 +239,6 @@ describe("VoiceRecordingService — correction matching (stable ID)", () => {
     mockVoiceState.activeTarget = { panelId: PANEL };
     mockVoiceState.panelBuffers[PANEL] = {
       pendingCorrections: [{ id: "uuid-abc", segmentStart: 0, rawText: "hello world" }],
-      aiCorrectionSpans: [{ id: "uuid-abc", segmentStart: 0, text: "hello world" }],
       activeParagraphStart: 0,
     };
     mockDraftStore.drafts[PANEL] = "hello world";
@@ -254,12 +251,6 @@ describe("VoiceRecordingService — correction matching (stable ID)", () => {
       await import("@/store/terminalInputStore")
     ).useTerminalInputStore.getState();
     expect(inputStore.setDraftInput).toHaveBeenCalledWith(PANEL, "Hello, world!", undefined);
-    expect(mockVoiceFns.updateAICorrectionSpan).toHaveBeenCalledWith(
-      PANEL,
-      "uuid-abc",
-      0,
-      "Hello, world!"
-    );
     expect(mockVoiceFns.resolvePendingCorrection).toHaveBeenCalledWith(PANEL, "uuid-abc");
   });
 
@@ -268,7 +259,6 @@ describe("VoiceRecordingService — correction matching (stable ID)", () => {
 
     mockVoiceState.panelBuffers["panel-1"] = {
       pendingCorrections: [{ id: "uuid-known", segmentStart: 0, rawText: "some text" }],
-      aiCorrectionSpans: [{ id: "uuid-known", segmentStart: 0, text: "some text" }],
       activeParagraphStart: 0,
     };
 
@@ -388,10 +378,6 @@ describe("VoiceRecordingService — correction matching (stable ID)", () => {
         { id: "uuid-first", segmentStart: 0, rawText: "hello" },
         { id: "uuid-second", segmentStart: 10, rawText: "world" },
       ],
-      aiCorrectionSpans: [
-        { id: "uuid-first", segmentStart: 0, text: "hello" },
-        { id: "uuid-second", segmentStart: 10, text: "world" },
-      ],
       activeParagraphStart: 0,
     };
     mockDraftStore.drafts[PANEL] = "hello\nworld";
@@ -406,7 +392,6 @@ describe("VoiceRecordingService — correction matching (stable ID)", () => {
     ).useTerminalInputStore.getState();
     expect(inputStore.setDraftInput).toHaveBeenCalledWith(PANEL, "Hello there\nworld", undefined);
     expect(mockVoiceFns.rebasePendingCorrections).toHaveBeenCalledWith(PANEL, 0, 6);
-    expect(mockVoiceFns.rebaseAICorrectionSpans).toHaveBeenCalledWith(PANEL, 0, 6);
     expect(mockVoiceFns.resolvePendingCorrection).toHaveBeenCalledWith(PANEL, "uuid-first");
   });
 
@@ -416,7 +401,6 @@ describe("VoiceRecordingService — correction matching (stable ID)", () => {
     const PANEL = "panel-1";
     mockVoiceState.panelBuffers[PANEL] = {
       pendingCorrections: [{ id: "uuid-abc", segmentStart: 0, rawText: "hello" }],
-      aiCorrectionSpans: [{ id: "uuid-abc", segmentStart: 0, text: "hello" }],
       activeParagraphStart: 0,
     };
     mockDraftStore.drafts[PANEL] = "hello";
@@ -427,7 +411,6 @@ describe("VoiceRecordingService — correction matching (stable ID)", () => {
     electron.emit.correctionReplace({ correctionId: "uuid-abc", correctedText: "Hello" });
 
     expect(mockVoiceFns.rebasePendingCorrections).not.toHaveBeenCalled();
-    expect(mockVoiceFns.rebaseAICorrectionSpans).not.toHaveBeenCalled();
   });
 
   it("onCorrectionQueued registers the latest stabilized chunk using its trailing draft position", async () => {
@@ -456,7 +439,7 @@ describe("VoiceRecordingService — correction matching (stable ID)", () => {
     );
   });
 
-  it("onParagraphBoundary registers pending correction using correctionId from main process", async () => {
+  it("onParagraphBoundary no longer registers pending correction directly", async () => {
     const { voiceRecordingService } = await import("../VoiceRecordingService");
 
     const PANEL = "panel-1";
@@ -473,15 +456,10 @@ describe("VoiceRecordingService — correction matching (stable ID)", () => {
       correctionId: "uuid-para-1",
     });
 
-    expect(mockVoiceFns.addPendingCorrection).toHaveBeenCalledWith(
-      PANEL,
-      "uuid-para-1",
-      5,
-      "dictated text"
-    );
+    expect(mockVoiceFns.addPendingCorrection).not.toHaveBeenCalled();
   });
 
-  it("onParagraphBoundary does not register pending correction when correctionId is null", async () => {
+  it("onParagraphBoundary with null correctionId still does not register pending correction", async () => {
     const { voiceRecordingService } = await import("../VoiceRecordingService");
 
     const PANEL = "panel-1";
@@ -499,13 +477,14 @@ describe("VoiceRecordingService — correction matching (stable ID)", () => {
     expect(mockVoiceFns.addPendingCorrection).not.toHaveBeenCalled();
   });
 
-  it("stop() registers a pending correction by deriving paragraph start from the flushed draft", async () => {
+  it("stop() registers the whole-session pending correction before finishSession clears the target", async () => {
     const { voiceRecordingService } = await import("../VoiceRecordingService");
 
     const PANEL = "panel-1";
     mockVoiceState.activeTarget = { panelId: PANEL };
     mockVoiceState.panelBuffers[PANEL] = {
       pendingCorrections: [],
+      sessionDraftStart: 0,
       activeParagraphStart: -1,
     };
     mockDraftStore.drafts[PANEL] = "short phrase";

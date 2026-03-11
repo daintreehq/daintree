@@ -21,7 +21,10 @@ type MockTranscriptionEvent = { type: string; text?: string; status?: string; me
 const shared = vi.hoisted(() => ({
   transcriptionEventCallback: null as ((e: MockTranscriptionEvent) => void) | null,
   correctionResult: "Corrected paragraph.",
-  correctionCalls: [] as Array<{ text: string; settings: Record<string, unknown> }>,
+  correctionCalls: [] as Array<{
+    request: Record<string, unknown>;
+    settings: Record<string, unknown>;
+  }>,
   /** Simulated in-flight utterance text returned by commitParagraphBoundary(). */
   inFlightText: "" as string,
   /** Deferred drain promise — resolve externally to control stopGracefully() timing. */
@@ -57,11 +60,15 @@ vi.mock("../../../services/VoiceTranscriptionService.js", () => ({
 
 vi.mock("../../../services/VoiceCorrectionService.js", () => ({
   VoiceCorrectionService: function VoiceCorrectionService(this: Record<string, unknown>) {
-    this.correct = function (text: string, settings: Record<string, unknown>) {
-      shared.correctionCalls.push({ text, settings });
-      return Promise.resolve(shared.correctionResult);
+    this.correct = function (request: Record<string, unknown>, settings: Record<string, unknown>) {
+      shared.correctionCalls.push({ request, settings });
+      return Promise.resolve({
+        action: "replace",
+        correctedText: shared.correctionResult,
+        confidence: "high",
+        confirmedText: shared.correctionResult,
+      });
     };
-    this.resetHistory = function () {};
   },
 }));
 
@@ -213,36 +220,30 @@ describe("voiceInput — paragraph buffering", () => {
     }
   });
 
-  it("flushes a small stabilized chunk online after two utterances and leaves manual flush empty", () => {
+  it("does not queue correction during ongoing dictation", () => {
     emitTranscriptionEvent({ type: "complete", text: "First sentence" });
     emitTranscriptionEvent({ type: "complete", text: "Second sentence" });
+    emitTranscriptionEvent({ type: "complete", text: "Third sentence" });
 
     const queuedMsg = win.__sent.find((m) => m.channel === "voice-input:correction-queued");
-    expect(queuedMsg).toBeDefined();
-    expect((queuedMsg?.payload as { rawText: string }).rawText).toBe(
-      "First sentence Second sentence"
-    );
-
-    const handleFlush = getHandler("voice-input:flush-paragraph");
-    const result = handleFlush(fakeEvent) as { rawText: string | null };
-    expect(result.rawText).toBeNull();
+    expect(queuedMsg).toBeUndefined();
   });
 
-  it("flushParagraph triggers correction with the joined paragraph text", async () => {
+  it("flushParagraph records a paragraph break but does not trigger correction", async () => {
     emitTranscriptionEvent({ type: "complete", text: "react is great" });
     emitTranscriptionEvent({ type: "complete", text: "use it everywhere" });
 
     const handleFlush = getHandler("voice-input:flush-paragraph");
-    handleFlush(fakeEvent);
-
-    await vi.waitFor(() => {
-      expect(shared.correctionCalls).toHaveLength(1);
-      expect(shared.correctionCalls[0].text).toBe("react is great use it everywhere");
-      expect((shared.correctionCalls[0].settings as { model: string }).model).toBe("gpt-5-mini");
-    });
+    const result = handleFlush(fakeEvent) as {
+      rawText: string | null;
+      correctionId: string | null;
+    };
+    expect(result.rawText).toBeNull();
+    expect(result.correctionId).toBeNull();
+    expect(shared.correctionCalls).toHaveLength(0);
   });
 
-  it("flushParagraph returns a non-null correctionId when correction is queued", () => {
+  it("flushParagraph does not return a correctionId", () => {
     emitTranscriptionEvent({ type: "complete", text: "react is great" });
 
     const handleFlush = getHandler("voice-input:flush-paragraph");
@@ -250,17 +251,16 @@ describe("voiceInput — paragraph buffering", () => {
       rawText: string | null;
       correctionId: string | null;
     };
-    expect(result.rawText).toBe("react is great");
-    expect(result.correctionId).toBeTypeOf("string");
-    expect(result.correctionId).not.toBeNull();
+    expect(result.rawText).toBeNull();
+    expect(result.correctionId).toBeNull();
   });
 
-  it("flushParagraph sends CORRECTION_REPLACE with correctionId and corrected text", async () => {
-    shared.correctionResult = "React is great. Use it everywhere.";
+  it("stop sends CORRECTION_REPLACE with correctionId and corrected text", async () => {
+    shared.correctionResult = "React is great.";
     emitTranscriptionEvent({ type: "complete", text: "react is great" });
 
-    const handleFlush = getHandler("voice-input:flush-paragraph");
-    const result = handleFlush(fakeEvent) as {
+    const handleStop = getHandler("voice-input:stop");
+    const result = (await (handleStop as (e: unknown) => Promise<unknown>)(fakeEvent)) as {
       rawText: string | null;
       correctionId: string | null;
     };
@@ -269,9 +269,7 @@ describe("voiceInput — paragraph buffering", () => {
       const msg = win.__sent.find((m) => m.channel === "voice-input:correction-replace");
       expect(msg).toBeDefined();
       expect((msg?.payload as { correctionId: string }).correctionId).toBe(result.correctionId);
-      expect((msg?.payload as { correctedText: string }).correctedText).toBe(
-        "React is great. Use it everywhere."
-      );
+      expect((msg?.payload as { correctedText: string }).correctedText).toBe("React is great.");
     });
   });
 
@@ -308,16 +306,17 @@ describe("voiceInput — paragraph buffering", () => {
 
     await vi.waitFor(() => {
       expect(shared.correctionCalls).toHaveLength(1);
-      expect(shared.correctionCalls[0].text).toBe("dictated at stop");
+      expect(shared.correctionCalls[0].request.rawText).toBe("dictated at stop");
+      expect(shared.correctionCalls[0].request.reason).toBe("stop");
     });
   });
 
-  it("whitespace-only utterances are not added to the paragraph buffer", () => {
+  it("whitespace-only utterances are not added to the session transcript", () => {
     emitTranscriptionEvent({ type: "complete", text: "   " });
 
-    const handleFlush = getHandler("voice-input:flush-paragraph");
-    const result = handleFlush(fakeEvent) as { rawText: string | null };
-    expect(result.rawText).toBeNull();
+    const handleStop = getHandler("voice-input:stop");
+    const result = handleStop(fakeEvent) as Promise<{ rawText: string | null }>;
+    return expect(result).resolves.toEqual({ rawText: null, correctionId: null });
   });
 
   it("paragraph buffer resets when a new session starts", async () => {
@@ -332,15 +331,12 @@ describe("voiceInput — paragraph buffering", () => {
     expect(result.rawText).toBeNull();
   });
 
-  it("paragraph_boundary event flushes buffer and sends PARAGRAPH_BOUNDARY to renderer", async () => {
-    // Accumulate two utterances into the paragraph buffer
+  it("paragraph_boundary event inserts structure but does not queue correction", async () => {
     emitTranscriptionEvent({ type: "complete", text: "first utterance" });
     emitTranscriptionEvent({ type: "complete", text: "second utterance" });
 
-    // Service emits a paragraph_boundary (as would happen when Deepgram signals a boundary)
     emitTranscriptionEvent({ type: "paragraph_boundary" });
 
-    // Renderer should have received the paragraph boundary channel message
     const boundaryMsg = win.__sent.find((m) => m.channel === "voice-input:paragraph-boundary");
     expect(boundaryMsg).toBeDefined();
     const payload = boundaryMsg?.payload as { rawText: string | null; correctionId: string | null };
@@ -348,27 +344,24 @@ describe("voiceInput — paragraph buffering", () => {
     expect(payload.correctionId).toBeNull();
 
     const queuedMsg = win.__sent.find((m) => m.channel === "voice-input:correction-queued");
-    expect(queuedMsg).toBeDefined();
-    expect((queuedMsg?.payload as { rawText: string }).rawText).toBe(
-      "first utterance second utterance"
-    );
-
-    // Buffer should be empty after the flush — next stop/flush returns null
-    const handleFlush = getHandler("voice-input:flush-paragraph");
-    const result = handleFlush(fakeEvent) as {
-      rawText: string | null;
-      correctionId: string | null;
-    };
-    expect(result.rawText).toBeNull();
+    expect(queuedMsg).toBeUndefined();
   });
 
-  it("paragraph_boundary event triggers correction for the flushed text", async () => {
+  it("paragraph_boundary contributes a newline to the final stop correction", async () => {
     emitTranscriptionEvent({ type: "complete", text: "auto paragraph text" });
+    emitTranscriptionEvent({ type: "complete", text: "second paragraph" });
     emitTranscriptionEvent({ type: "paragraph_boundary" });
+    emitTranscriptionEvent({ type: "complete", text: "third paragraph" });
+
+    const handleStop = getHandler("voice-input:stop");
+    await (handleStop as (e: unknown) => Promise<unknown>)(fakeEvent);
 
     await vi.waitFor(() => {
       expect(shared.correctionCalls).toHaveLength(1);
-      expect(shared.correctionCalls[0].text).toBe("auto paragraph text");
+      expect(shared.correctionCalls[0].request.rawText).toBe(
+        "auto paragraph text second paragraph\nthird paragraph"
+      );
+      expect(shared.correctionCalls[0].request.reason).toBe("stop");
     });
   });
 
@@ -400,8 +393,8 @@ describe("voiceInput — paragraph buffering", () => {
 
     emitTranscriptionEvent({ type: "complete", text: "test utterance" });
 
-    const handleFlush = getHandler("voice-input:flush-paragraph");
-    handleFlush(fakeEvent);
+    const handleStop = getHandler("voice-input:stop");
+    await (handleStop as (e: unknown) => Promise<unknown>)(fakeEvent);
 
     await vi.waitFor(() => {
       expect(shared.correctionCalls).toHaveLength(1);
@@ -422,7 +415,7 @@ describe("voiceInput — paragraph buffering", () => {
     expect(statuses).toEqual(["connecting", "recording", "finishing", "idle", "error"]);
   });
 
-  it("flushParagraph returns null correctionId and does not fire correction when disabled", async () => {
+  it("stop returns null correctionId and does not fire correction when disabled", async () => {
     // Override the store mock to return correction-disabled settings for this test.
     const { store } = await import("../../../store.js");
     vi.mocked(store.get).mockReturnValueOnce({
@@ -440,27 +433,21 @@ describe("voiceInput — paragraph buffering", () => {
 
     emitTranscriptionEvent({ type: "complete", text: "no correction please" });
 
-    const handleFlush = getHandler("voice-input:flush-paragraph");
-    const result = handleFlush(fakeEvent) as {
+    const handleStop = getHandler("voice-input:stop");
+    const result = (await (handleStop as (e: unknown) => Promise<unknown>)(fakeEvent)) as {
       rawText: string | null;
       correctionId: string | null;
     };
 
-    // rawText is still returned so the renderer knows what was flushed
     expect(result.rawText).toBe("no correction please");
-    // correctionId is null — no correction was queued
     expect(result.correctionId).toBeNull();
-    // No correction call was fired
     expect(shared.correctionCalls).toHaveLength(0);
-    // No CORRECTION_REPLACE message was sent to renderer
     const correctionMsg = win.__sent.find((m) => m.channel === "voice-input:correction-replace");
     expect(correctionMsg).toBeUndefined();
   });
 
-  it("flushParagraph captures in-flight utterance text from service before flushing", () => {
-    // Simulate a completed utterance and a partially-spoken one still in flight
+  it("flushParagraph captures in-flight utterance text for the final stop correction", async () => {
     emitTranscriptionEvent({ type: "complete", text: "First sentence" });
-    // Simulate service having in-flight (delta) text not yet finalized
     shared.inFlightText = "in flight words";
 
     const handleFlush = getHandler("voice-input:flush-paragraph");
@@ -468,20 +455,19 @@ describe("voiceInput — paragraph buffering", () => {
       rawText: string | null;
       correctionId: string | null;
     };
+    expect(result.rawText).toBeNull();
+    expect(result.correctionId).toBeNull();
 
-    // Both the completed utterance and the in-flight text should be in the flush
-    expect(result.rawText).toBe("First sentence in flight words");
-
-    // Buffer is now empty
     shared.inFlightText = "";
-    const result2 = handleFlush(fakeEvent) as {
-      rawText: string | null;
-      correctionId: string | null;
-    };
-    expect(result2.rawText).toBeNull();
+    const handleStop = getHandler("voice-input:stop");
+    await (handleStop as (e: unknown) => Promise<unknown>)(fakeEvent);
+
+    await vi.waitFor(() => {
+      expect(shared.correctionCalls[0].request.rawText).toBe("First sentence in flight words");
+    });
   });
 
-  it("flushParagraph with only in-flight text (no completed utterances) returns that text", () => {
+  it("flushParagraph with only in-flight text defers it until stop", async () => {
     shared.inFlightText = "only delta text";
 
     const handleFlush = getHandler("voice-input:flush-paragraph");
@@ -490,8 +476,16 @@ describe("voiceInput — paragraph buffering", () => {
       correctionId: string | null;
     };
 
-    expect(result.rawText).toBe("only delta text");
+    expect(result.rawText).toBeNull();
+    expect(result.correctionId).toBeNull();
     shared.inFlightText = "";
+
+    const handleStop = getHandler("voice-input:stop");
+    await (handleStop as (e: unknown) => Promise<unknown>)(fakeEvent);
+
+    await vi.waitFor(() => {
+      expect(shared.correctionCalls[0].request.rawText).toBe("only delta text");
+    });
   });
 
   it("flushParagraph with empty in-flight text still returns null when no completed utterances", () => {
@@ -506,21 +500,23 @@ describe("voiceInput — paragraph buffering", () => {
     expect(result.rawText).toBeNull();
   });
 
-  it("in-flight text is included in correction when flushed via Enter", async () => {
+  it("in-flight text is included in correction when stop follows Enter", async () => {
     emitTranscriptionEvent({ type: "complete", text: "first part" });
     shared.inFlightText = "second part";
 
     const handleFlush = getHandler("voice-input:flush-paragraph");
     handleFlush(fakeEvent);
     shared.inFlightText = "";
+    const handleStop = getHandler("voice-input:stop");
+    await (handleStop as (e: unknown) => Promise<unknown>)(fakeEvent);
 
     await vi.waitFor(() => {
       expect(shared.correctionCalls).toHaveLength(1);
-      expect(shared.correctionCalls[0].text).toBe("first part second part");
+      expect(shared.correctionCalls[0].request.rawText).toBe("first part second part");
     });
   });
 
-  it("complete event arriving during stopGracefully drain can flush online before stop resolves", async () => {
+  it("complete event arriving during stopGracefully drain is included in the final stop correction", async () => {
     shared.useDeferredDrain = true;
 
     emitTranscriptionEvent({ type: "complete", text: "before drain" });
@@ -536,13 +532,8 @@ describe("voiceInput — paragraph buffering", () => {
 
     const result = (await stopPromise) as { rawText: string | null; correctionId: string | null };
 
-    // The late pair is corrected online, so stop no longer has buffered text to flush.
-    expect(result.rawText).toBeNull();
-    expect(result.correctionId).toBeNull();
-
-    const queuedMsg = win.__sent.find((m) => m.channel === "voice-input:correction-queued");
-    expect(queuedMsg).toBeDefined();
-    expect((queuedMsg?.payload as { rawText: string }).rawText).toBe("before drain late utterance");
+    expect(result.rawText).toBe("before drain late utterance");
+    expect(result.correctionId).toBeTypeOf("string");
   });
 
   it("stop correctionId matches the subsequent correction-replace IPC message", async () => {

@@ -32,6 +32,8 @@ interface VoiceTranscriptBuffer {
   liveText: string;
   completedSegments: string[];
   projectId?: string;
+  /** Draft length snapshot taken before the first delta of the session. */
+  sessionDraftStart: number;
   /** Draft length snapshot taken before the first delta of a segment. */
   draftLengthAtSegmentStart: number;
   /** Segments awaiting AI correction. */
@@ -73,6 +75,7 @@ interface VoiceRecordingState {
   setError: (message: string | null) => void;
   setElapsedSeconds: (seconds: number) => void;
   appendDelta: (delta: string) => void;
+  setSessionDraftStart: (panelId: string, length: number) => void;
   setDraftLengthAtSegmentStart: (panelId: string, length: number) => void;
   completeSegment: (text: string) => void;
   addPendingCorrection: (
@@ -104,6 +107,7 @@ function getBuffer(
     panelBuffers[panelId] ?? {
       liveText: "",
       completedSegments: [],
+      sessionDraftStart: -1,
       draftLengthAtSegmentStart: -1,
       pendingCorrections: [],
       aiCorrectionSpans: [],
@@ -143,6 +147,7 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()((set, get) =
           liveText: "",
           completedSegments: [],
           projectId: target.projectId,
+          sessionDraftStart: -1,
           draftLengthAtSegmentStart: -1,
           activeParagraphStart: -1,
           transcriptPhase: "idle" as VoiceTranscriptPhase,
@@ -169,6 +174,18 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()((set, get) =
             liveText: buffer.liveText + delta,
             transcriptPhase: "interim" as VoiceTranscriptPhase,
           },
+        },
+      };
+    }),
+
+  setSessionDraftStart: (panelId, length) =>
+    set((state) => {
+      const buffer = getBuffer(state.panelBuffers, panelId);
+      if (buffer.sessionDraftStart >= 0) return state;
+      return {
+        panelBuffers: {
+          ...state.panelBuffers,
+          [panelId]: { ...buffer, sessionDraftStart: length },
         },
       };
     }),

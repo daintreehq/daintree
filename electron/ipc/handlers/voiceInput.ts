@@ -7,6 +7,7 @@ import { VoiceTranscriptionService } from "../../services/VoiceTranscriptionServ
 import { VoiceCorrectionService } from "../../services/VoiceCorrectionService.js";
 import type { HandlerDependencies } from "../types.js";
 import type { VoiceInputSettings } from "../../../shared/types/ipc/api.js";
+import { logDebug } from "../../utils/logger.js";
 
 let service: VoiceTranscriptionService | null = null;
 let activeEventUnsubscribe: (() => void) | null = null;
@@ -14,15 +15,22 @@ let activeDestroyListener: { sender: Electron.WebContents; fn: () => void } | nu
 let correctionService: VoiceCorrectionService | null = null;
 let correctionRequestTail: Promise<void> = Promise.resolve();
 
-/**
- * Stabilized utterances accumulated into the next correction chunk.
- * We now flush this buffer opportunistically instead of waiting for an entire paragraph.
- */
-let paragraphBuffer: string[] = [];
-/** Project info captured at session start for correction prompts. */
+interface CorrectionEdit {
+  start: number;
+  end: number;
+  fromText: string;
+  toText: string;
+}
+
+interface QueuedCorrectionJob {
+  correctionId: string;
+  rawText: string;
+  reason: "stop";
+}
+
+let sessionTranscript = "";
+let pendingParagraphBreak = false;
 let sessionProjectInfo: { name?: string; path?: string } = {};
-const ONLINE_CORRECTION_MAX_SEGMENTS = 2;
-const ONLINE_CORRECTION_MAX_CHARS = 140;
 
 const VOICE_INPUT_DEFAULTS: VoiceInputSettings = {
   enabled: false,
@@ -185,42 +193,116 @@ function getProjectInfo(): { name?: string; path?: string } {
   return { name: currentProject.name, path: currentProject.path };
 }
 
-function shouldFlushOnlineCorrectionBuffer(latestText: string): boolean {
-  const trimmed = latestText.trim();
-  if (!trimmed) return false;
-  if (/[.!?]["')\]]?$/.test(trimmed)) return true;
+function appendSessionText(text: string): void {
+  const normalized = text.trim();
+  if (!normalized) return;
 
-  const buffered = paragraphBuffer.join(" ").trim();
-  if (paragraphBuffer.length >= ONLINE_CORRECTION_MAX_SEGMENTS) return true;
-  return buffered.length >= ONLINE_CORRECTION_MAX_CHARS;
+  if (sessionTranscript) {
+    if (pendingParagraphBreak) {
+      sessionTranscript += "\n";
+    } else if (!sessionTranscript.endsWith(" ") && !sessionTranscript.endsWith("\n")) {
+      sessionTranscript += " ";
+    }
+  }
+
+  sessionTranscript += normalized;
+  pendingParagraphBreak = false;
 }
 
-function queueCorrectionRequest(
-  rawText: string,
-  correctionId: string,
-  win: Electron.BrowserWindow
-): void {
+function markParagraphBreak(): void {
+  if (!sessionTranscript) return;
+  pendingParagraphBreak = true;
+}
+
+function computeCompactCorrectionEdits(rawText: string, correctedText: string): CorrectionEdit[] {
+  if (rawText === correctedText) return [];
+
+  let prefix = 0;
+  const maxPrefix = Math.min(rawText.length, correctedText.length);
+  while (prefix < maxPrefix && rawText[prefix] === correctedText[prefix]) {
+    prefix++;
+  }
+
+  let rawSuffix = rawText.length;
+  let correctedSuffix = correctedText.length;
+  while (
+    rawSuffix > prefix &&
+    correctedSuffix > prefix &&
+    rawText[rawSuffix - 1] === correctedText[correctedSuffix - 1]
+  ) {
+    rawSuffix--;
+    correctedSuffix--;
+  }
+
+  return [
+    {
+      start: prefix,
+      end: rawSuffix,
+      fromText: rawText.slice(prefix, rawSuffix),
+      toText: correctedText.slice(prefix, correctedSuffix),
+    },
+  ];
+}
+
+function getSessionCorrectionText(): string {
+  return sessionTranscript.replace(/[ \t]+$/g, "");
+}
+
+function buildCorrectionJob(): QueuedCorrectionJob | null {
+  const rawText = getSessionCorrectionText();
+  if (!rawText) return null;
+
+  const job: QueuedCorrectionJob = {
+    correctionId: crypto.randomUUID(),
+    rawText,
+    reason: "stop",
+  };
+
+  sessionTranscript = "";
+  pendingParagraphBreak = false;
+  return job;
+}
+
+function queueCorrectionRequest(job: QueuedCorrectionJob, win: Electron.BrowserWindow): void {
   if (!correctionService || win.isDestroyed()) {
     return;
   }
+
+  logDebug("[VoiceCorrectionQueue] queued job", {
+    correctionId: job.correctionId,
+    reason: job.reason,
+    rawLen: job.rawText.length,
+  });
 
   correctionRequestTail = correctionRequestTail
     .catch(() => {})
     .then(async () => {
       const liveSettings = getVoiceSettings();
-      const correctedText = await correctionService.correct(rawText, {
-        model: liveSettings.correctionModel,
-        apiKey: liveSettings.correctionApiKey,
-        customDictionary: liveSettings.customDictionary,
-        customInstructions: liveSettings.correctionCustomInstructions,
-        projectName: sessionProjectInfo.name,
-        projectPath: sessionProjectInfo.path,
-      });
+      const result = await correctionService.correct(
+        {
+          rawText: job.rawText,
+          reason: job.reason,
+        },
+        {
+          model: liveSettings.correctionModel,
+          apiKey: liveSettings.correctionApiKey,
+          customDictionary: liveSettings.customDictionary,
+          customInstructions: liveSettings.correctionCustomInstructions,
+          projectName: sessionProjectInfo.name,
+          projectPath: sessionProjectInfo.path,
+        }
+      );
+      const edits = computeCompactCorrectionEdits(job.rawText, result.confirmedText);
 
       if (!win.isDestroyed()) {
         win.webContents.send(CHANNELS.VOICE_INPUT_CORRECTION_REPLACE, {
-          correctionId,
-          correctedText,
+          correctionId: job.correctionId,
+          correctedText: result.confirmedText,
+          action: result.action,
+          confidence: result.confidence,
+          rawText: job.rawText,
+          reason: job.reason,
+          edits,
         });
       }
     });
@@ -232,34 +314,27 @@ function queueCorrectionRequest(
  * correction call, and optionally notifies the renderer that the correction is pending.
  * Returns the raw text chunk and correctionId (null if correction is not queued).
  */
-function flushParagraphBuffer(
-  win: Electron.BrowserWindow | null,
-  options: { notifyQueued?: boolean } = {}
-): {
+function flushParagraphBuffer(win: Electron.BrowserWindow | null): {
   rawText: string | null;
   correctionId: string | null;
 } {
-  if (paragraphBuffer.length === 0) return { rawText: null, correctionId: null };
-
-  const rawText = paragraphBuffer.join(" ");
-  paragraphBuffer = [];
+  const job = buildCorrectionJob();
+  if (!job) return { rawText: null, correctionId: null };
 
   const liveSettings = getVoiceSettings();
   const willCorrect = !!(liveSettings.correctionEnabled && liveSettings.correctionApiKey);
 
   if (willCorrect && correctionService && win && !win.isDestroyed()) {
-    const correctionId = crypto.randomUUID();
-    if (options.notifyQueued) {
-      win.webContents.send(CHANNELS.VOICE_INPUT_CORRECTION_QUEUED, {
-        correctionId,
-        rawText,
-      });
-    }
-    queueCorrectionRequest(rawText, correctionId, win);
-    return { rawText, correctionId };
+    win.webContents.send(CHANNELS.VOICE_INPUT_CORRECTION_QUEUED, {
+      correctionId: job.correctionId,
+      rawText: job.rawText,
+      reason: job.reason,
+    });
+    queueCorrectionRequest(job, win);
+    return { rawText: job.rawText, correctionId: job.correctionId };
   }
 
-  return { rawText, correctionId: null };
+  return { rawText: job.rawText, correctionId: null };
 }
 
 export function registerVoiceInputHandlers(deps: HandlerDependencies): () => void {
@@ -284,16 +359,16 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     // Clean up any existing subscription before starting a new session
     cleanupActiveSubscription();
 
-    // Initialize (or reset) the correction service for this session
+    // Initialize the correction service for this session
     if (!correctionService) {
       correctionService = new VoiceCorrectionService();
     }
-    correctionService.resetHistory();
     correctionRequestTail = Promise.resolve();
 
-    // Capture project info and reset the correction chunk buffer at session start.
+    // Capture project info and reset the session transcript at session start.
     sessionProjectInfo = getProjectInfo();
-    paragraphBuffer = [];
+    sessionTranscript = "";
+    pendingParagraphBreak = false;
 
     const unsubscribe = svc.onEvent((voiceEvent) => {
       const win = deps.mainWindow;
@@ -304,10 +379,8 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
       } else if (voiceEvent.type === "complete") {
         const rawText = voiceEvent.text.trim();
 
-        // Accumulate stabilized utterances into a smaller correction chunk so the
-        // model can start earlier than paragraph boundaries.
         if (rawText) {
-          paragraphBuffer.push(rawText);
+          appendSessionText(rawText);
         }
 
         // Notify the renderer so it can finalize the utterance in the draft.
@@ -316,17 +389,13 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
           text: rawText,
           willCorrect: false,
         });
-
-        if (rawText && shouldFlushOnlineCorrectionBuffer(rawText)) {
-          flushParagraphBuffer(win, { notifyQueued: true });
-        }
       } else if (voiceEvent.type === "paragraph_boundary") {
-        // Deepgram detected a paragraph break. Flush any remaining uncorrected chunk
-        // before inserting the newline so the renderer can track the pending range.
-        const { rawText: flushedText, correctionId } = flushParagraphBuffer(win);
+        // Deepgram detected a paragraph break. Keep the structure in the session
+        // transcript, but defer the single correction request until stop.
+        markParagraphBreak();
         win.webContents.send(CHANNELS.VOICE_INPUT_PARAGRAPH_BOUNDARY, {
-          rawText: flushedText,
-          correctionId,
+          rawText: null,
+          correctionId: null,
         });
       } else if (voiceEvent.type === "error") {
         win.webContents.send(CHANNELS.VOICE_INPUT_ERROR, voiceEvent.message);
@@ -369,22 +438,20 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     }
     cleanupActiveSubscription();
 
-    // Flush any remaining stabilized text chunk gathered since the last online correction.
     return flushParagraphBuffer(deps.mainWindow);
   };
 
   const handleFlushParagraph = (): { rawText: string | null; correctionId: string | null } => {
-    // Capture any in-flight utterance text from the transcription service before flushing.
-    // This ensures speech spoken before the Enter keypress is included in the committed
-    // paragraph, and suppresses subsequent Deepgram finalization for that utterance so it
-    // cannot overwrite the newline the renderer inserts after this flush.
+    // Capture in-flight utterance text before inserting a paragraph break in the draft,
+    // but defer AI correction until the session stops.
     if (service) {
       const inFlightText = service.commitParagraphBoundary();
       if (inFlightText) {
-        paragraphBuffer.push(inFlightText);
+        appendSessionText(inFlightText);
       }
     }
-    return flushParagraphBuffer(deps.mainWindow);
+    markParagraphBreak();
+    return { rawText: null, correctionId: null };
   };
 
   const handleAudioChunk = (_event: Electron.IpcMainInvokeEvent, chunk: ArrayBuffer) => {
@@ -442,6 +509,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     service?.destroy();
     service = null;
     correctionService = null;
-    paragraphBuffer = [];
+    sessionTranscript = "";
+    pendingParagraphBreak = false;
   };
 }
