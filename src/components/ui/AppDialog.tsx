@@ -137,9 +137,12 @@ export function AppDialog({
       }
 
       if (e.key === "Tab" && dialogRef.current) {
-        // Don't interfere if a nested modal has focus
-        const activeModal = document.activeElement?.closest('[aria-modal="true"]');
-        if (activeModal && !dialogRef.current.contains(activeModal)) return;
+        // Don't interfere if another modal (e.g., a nested dialog portal) has focus
+        const activeEl = document.activeElement;
+        if (activeEl) {
+          const closestModal = activeEl.closest('[aria-modal="true"]');
+          if (closestModal && !closestModal.contains(dialogRef.current)) return;
+        }
 
         const focusable = Array.from(
           dialogRef.current.querySelectorAll<HTMLElement>(TABBABLE_SELECTOR)
