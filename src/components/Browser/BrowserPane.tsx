@@ -65,8 +65,6 @@ export function BrowserPane({
   const clearConsoleMessages = useConsoleCaptureStore((state) => state.clearMessages);
   const removePane = useConsoleCaptureStore((state) => state.removePane);
   const projectId = useProjectStore((state) => state.currentProject?.id);
-  const recordVisit = useUrlHistoryStore((state) => state.recordVisit);
-  const updateTitle = useUrlHistoryStore((state) => state.updateTitle);
 
   const [isConsoleOpen, setIsConsoleOpen] = useState(false);
 
@@ -200,7 +198,7 @@ export function BrowserPane({
         } catch {
           // webview may not be ready for getTitle
         }
-        recordVisit(projectId, newUrl, title);
+        useUrlHistoryStore.getState().recordVisit(projectId, newUrl, title);
       }
     };
 
@@ -218,7 +216,7 @@ export function BrowserPane({
         } catch {
           // webview may not be ready for getTitle
         }
-        recordVisit(projectId, newUrl, title);
+        useUrlHistoryStore.getState().recordVisit(projectId, newUrl, title);
       }
     };
 
@@ -227,7 +225,7 @@ export function BrowserPane({
       if (detail.explicitSet === false) return;
       if (projectId && detail.title) {
         try {
-          updateTitle(projectId, webview.getURL(), detail.title);
+          useUrlHistoryStore.getState().updateTitle(projectId, webview.getURL(), detail.title);
         } catch {
           // webview may be detached
         }
@@ -271,17 +269,7 @@ export function BrowserPane({
       webview.removeEventListener("console-message", handleConsoleMessage);
       webview.removeEventListener("page-title-updated", handlePageTitleUpdated);
     };
-  }, [
-    webviewElement,
-    hasValidUrl,
-    loadError,
-    zoomFactor,
-    id,
-    addConsoleMessage,
-    projectId,
-    recordVisit,
-    updateTitle,
-  ]);
+  }, [webviewElement, hasValidUrl, loadError, zoomFactor, id, addConsoleMessage, projectId]);
 
   const handleNavigate = useCallback(
     (url: string) => {
