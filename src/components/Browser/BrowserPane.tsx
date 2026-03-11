@@ -194,11 +194,13 @@ export function BrowserPane({
         lastSetUrlRef.current = newUrl;
       }
       if (projectId) {
+        let title: string | undefined;
         try {
-          recordVisit(projectId, newUrl, webview.getTitle());
+          title = webview.getTitle();
         } catch {
           // webview may not be ready for getTitle
         }
+        recordVisit(projectId, newUrl, title);
       }
     };
 
@@ -210,11 +212,13 @@ export function BrowserPane({
         lastSetUrlRef.current = newUrl;
       }
       if (projectId) {
+        let title: string | undefined;
         try {
-          recordVisit(projectId, newUrl, webview.getTitle());
+          title = webview.getTitle();
         } catch {
           // webview may not be ready for getTitle
         }
+        recordVisit(projectId, newUrl, title);
       }
     };
 

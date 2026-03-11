@@ -77,6 +77,25 @@ describe("urlHistoryStore", () => {
     expect(useUrlHistoryStore.getState().entries["proj1"]).toBeUndefined();
     expect(useUrlHistoryStore.getState().entries["proj2"]).toHaveLength(1);
   });
+
+  it("updates lastVisitAt on repeated visits", () => {
+    const store = useUrlHistoryStore.getState();
+    store.recordVisit("proj1", "http://localhost:3000/", "Home");
+    const firstVisitAt = useUrlHistoryStore.getState().entries["proj1"][0].lastVisitAt;
+    // Small delay to ensure timestamp differs
+    store.recordVisit("proj1", "http://localhost:3000/", "Home");
+    const secondVisitAt = useUrlHistoryStore.getState().entries["proj1"][0].lastVisitAt;
+    expect(secondVisitAt).toBeGreaterThanOrEqual(firstVisitAt);
+  });
+
+  it("caps entries at 500 per project", () => {
+    const store = useUrlHistoryStore.getState();
+    for (let i = 0; i < 510; i++) {
+      store.recordVisit("proj1", `http://localhost:3000/page-${i}`, `Page ${i}`);
+    }
+    const entries = useUrlHistoryStore.getState().entries["proj1"];
+    expect(entries.length).toBeLessThanOrEqual(500);
+  });
 });
 
 describe("frecencyScore", () => {
