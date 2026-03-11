@@ -265,12 +265,6 @@ export function NotesPane({
         sentTimeoutRef.current = setTimeout(() => {
           if (isMountedRef.current) setSent(false);
         }, 2000);
-
-        notify({
-          type: "success",
-          message: `Sent to ${agentConfig.name}`,
-          duration: 2000,
-        });
       } else {
         notify({
           type: "error",

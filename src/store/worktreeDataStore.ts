@@ -4,7 +4,6 @@ import type { WorktreeState, IssueAssociation } from "@shared/types";
 import { worktreeClient, githubClient } from "@/clients";
 import { useWorktreeSelectionStore } from "./worktreeStore";
 import { useTerminalStore } from "./terminalStore";
-import { notify } from "@/lib/notify";
 import { usePulseStore } from "./pulseStore";
 
 interface WorktreeDataState {
@@ -242,13 +241,6 @@ export const useWorktreeDataStore = create<WorktreeDataStore>()((set, get) => ({
           if (terminalsToKill.length > 0) {
             terminalsToKill.forEach((terminal) => {
               terminalStore.removeTerminal(terminal.id);
-            });
-
-            notify({
-              type: "info",
-              title: "Worktree Deleted",
-              message: `${terminalsToKill.length} terminal(s) removed with worktree.`,
-              duration: 5000,
             });
           }
 
