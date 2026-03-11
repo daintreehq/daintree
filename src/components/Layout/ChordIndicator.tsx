@@ -46,9 +46,6 @@ export function ChordIndicator() {
         "motion-reduce:transition-none motion-reduce:duration-0",
         isVisible ? "opacity-100" : "opacity-0"
       )}
-      role="status"
-      aria-live="polite"
-      aria-atomic="true"
     >
       <div
         className={cn(
@@ -58,7 +55,12 @@ export function ChordIndicator() {
           isVisible ? "opacity-100 translate-y-0 scale-100" : "opacity-0 translate-y-2 scale-[0.96]"
         )}
       >
-        <div className="flex items-center gap-3 px-4 py-2.5">
+        <div
+          className="flex items-center gap-3 px-4 py-2.5"
+          role="status"
+          aria-live="polite"
+          aria-atomic="true"
+        >
           <kbd className="text-sm font-semibold text-canopy-text tracking-wide">{displayChord}</kbd>
           <span className="text-canopy-text/40">&mdash;</span>
           <span className="text-xs text-canopy-text/50">Esc to cancel</span>

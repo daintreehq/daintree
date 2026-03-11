@@ -1234,6 +1234,8 @@ class KeybindingService {
     }> = [];
 
     for (const binding of this.getAllBindingsWithEffectiveCombos()) {
+      if (!this.canExecute(binding.actionId)) continue;
+
       const combo = binding.effectiveCombo.trim();
       const normalizedCombo = combo.toLowerCase();
       const spaceIdx = normalizedCombo.indexOf(" ");
