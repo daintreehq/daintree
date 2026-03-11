@@ -29,6 +29,7 @@ const ZOOM_PRESETS = [
   { value: 2.0, label: "200%" },
 ];
 const ZOOM_VALUES = ZOOM_PRESETS.map((preset) => preset.value);
+const EMPTY_ENTRIES: import("@shared/types/domain").UrlHistoryEntry[] = [];
 
 interface BrowserToolbarProps {
   terminalId?: string;
@@ -83,8 +84,8 @@ export function BrowserToolbar({
   const dropdownRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
-  const projectEntries = useUrlHistoryStore((state) =>
-    projectId ? (state.entries[projectId] ?? []) : []
+  const projectEntries = useUrlHistoryStore(
+    (state) => (projectId ? state.entries[projectId] : undefined) ?? EMPTY_ENTRIES
   );
 
   const suggestions = useMemo(
