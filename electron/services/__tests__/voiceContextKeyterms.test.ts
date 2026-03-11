@@ -7,7 +7,7 @@ import {
   extractTerminalIdentifiers,
 } from "../voiceContextKeyterms.js";
 
-let gitListBranchesMock = vi.fn().mockResolvedValue([
+const gitListBranchesMock = vi.fn().mockResolvedValue([
   { name: "feature/auth-login-service", current: true, commit: "abc123" },
   { name: "main", current: false, commit: "def456" },
 ]);
