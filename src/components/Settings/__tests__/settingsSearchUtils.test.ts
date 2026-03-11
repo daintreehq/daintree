@@ -370,6 +370,15 @@ describe("tab-name ranking", () => {
     }
   });
 
+  it("compound queries rank field entries above tab-nav entries", () => {
+    const results = filterSettings(SETTINGS_SEARCH_INDEX, "notifications sound");
+    expect(results.length).toBeGreaterThan(0);
+    expect(
+      results[0]?.id,
+      `"notifications sound" should rank field entry first, got "${results[0]?.id}"`
+    ).toBe("notifications-sound");
+  });
+
   it("nav group label queries return tab-nav results", () => {
     const groups = ["general", "terminal", "integrations", "input", "support"];
     for (const group of groups) {
