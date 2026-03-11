@@ -81,7 +81,7 @@ vi.mock("../../../store.js", () => ({
           deepgramApiKey: "dg-test-key",
           correctionApiKey: "sk-test",
           correctionEnabled: true,
-          correctionModel: "gpt-5-nano",
+          correctionModel: "gpt-5-mini",
           customDictionary: [],
           correctionCustomInstructions: "",
           language: "en",
@@ -235,7 +235,7 @@ describe("voiceInput — paragraph buffering", () => {
     await vi.waitFor(() => {
       expect(shared.correctionCalls).toHaveLength(1);
       expect(shared.correctionCalls[0].text).toBe("react is great use it everywhere");
-      expect((shared.correctionCalls[0].settings as { model: string }).model).toBe("gpt-5-nano");
+      expect((shared.correctionCalls[0].settings as { model: string }).model).toBe("gpt-5-mini");
     });
   });
 
@@ -423,7 +423,7 @@ describe("voiceInput — paragraph buffering", () => {
       deepgramApiKey: "dg-test-key",
       correctionApiKey: "",
       correctionEnabled: false,
-      correctionModel: "gpt-5-nano",
+      correctionModel: "gpt-5-mini",
       customDictionary: [],
       correctionCustomInstructions: "",
       language: "en",

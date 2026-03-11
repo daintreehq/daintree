@@ -199,7 +199,7 @@ const storeOptions = {
       customDictionary: [],
       transcriptionModel: "nova-3",
       correctionEnabled: false,
-      correctionModel: "gpt-5-nano",
+      correctionModel: "gpt-5-mini",
       correctionCustomInstructions: "",
       paragraphingStrategy: "spoken-command",
     },
