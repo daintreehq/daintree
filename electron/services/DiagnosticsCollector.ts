@@ -271,12 +271,11 @@ async function collectTerminals() {
     const terminals = ptyManager.getAll();
     return terminals.map((t) => ({
       id: t.id,
-      panelId: t.panelId,
       worktreeId: t.worktreeId,
       kind: t.kind,
       agentState: t.agentState,
       cwd: t.cwd ? sanitizePath(t.cwd) : null,
-      exitCode: t.exitCode,
+      isExited: t.isExited,
     }));
   } catch {
     return { error: "Failed to get terminal info" };
