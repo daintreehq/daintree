@@ -42,6 +42,7 @@ test.describe.serial("Core: v0.3.0 Features", () => {
       withFeatureBranch: true,
       withMultipleFiles: true,
       withImageFile: true,
+      withUncommittedChanges: true,
     });
     ctx = await launchApp();
     await openAndOnboardProject(ctx.app, ctx.window, fixtureDir, "v0.3.0 Test");
@@ -100,14 +101,14 @@ test.describe.serial("Core: v0.3.0 Features", () => {
 
       await window.waitForTimeout(T_SETTLE);
 
-      // No worktree cards should be visible
-      const cards = window.locator("[data-worktree-branch]");
-      await expect.poll(() => cards.count(), { timeout: T_MEDIUM }).toBe(0);
+      // The empty state message should appear (main worktree stays pinned)
+      const emptyMsg = window.locator("text=No worktrees match your filters");
+      await expect(emptyMsg).toBeVisible({ timeout: T_MEDIUM });
 
       // Clean up: clear the search so later tests see worktree cards
       const clearBtn = window.locator(SEL.worktree.searchClear);
       await clearBtn.click();
-      await expect(cards.first()).toBeVisible({ timeout: T_MEDIUM });
+      await expect(emptyMsg).toBeHidden({ timeout: T_MEDIUM });
     });
   });
 
@@ -252,9 +253,9 @@ test.describe.serial("Core: v0.3.0 Features", () => {
       const cards = window.locator("[data-worktree-branch]");
       await expect(cards.first()).toBeVisible({ timeout: T_LONG });
 
-      // The git-commit icon button should be visible in the card details
+      // The git-commit icon button appears once workspace polling detects uncommitted changes
       const reviewBtn = window.locator(SEL.worktree.reviewHubButton);
-      await expect(reviewBtn.first()).toBeVisible({ timeout: T_MEDIUM });
+      await expect(reviewBtn.first()).toBeVisible({ timeout: T_LONG });
     });
 
     test("clicking Review & Commit opens Review Hub overlay", async () => {

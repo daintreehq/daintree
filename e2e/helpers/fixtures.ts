@@ -8,6 +8,7 @@ interface FixtureRepoOptions {
   withFeatureBranch?: boolean;
   withMultipleFiles?: boolean;
   withImageFile?: boolean;
+  withUncommittedChanges?: boolean;
 }
 
 function git(cmd: string, cwd: string) {
@@ -20,6 +21,7 @@ export function createFixtureRepo(options: FixtureRepoOptions = {}): string {
     withFeatureBranch = false,
     withMultipleFiles = false,
     withImageFile = false,
+    withUncommittedChanges = false,
   } = options;
 
   const dir = mkdtempSync(path.join(tmpdir(), `canopy-e2e-${name}-`));
@@ -72,6 +74,10 @@ export function createFixtureRepo(options: FixtureRepoOptions = {}): string {
     writeFileSync(path.join(worktreeDir, "CHANGELOG.md"), "# Changelog\n\n- Feature branch\n");
     git("add -A", worktreeDir);
     git('commit -m "add changelog"', worktreeDir);
+  }
+
+  if (withUncommittedChanges) {
+    writeFileSync(path.join(dir, "uncommitted.txt"), "This file is not committed.\n");
   }
 
   return dir;
