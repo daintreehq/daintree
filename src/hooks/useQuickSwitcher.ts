@@ -153,6 +153,7 @@ export function useQuickSwitcher(): UseQuickSwitcherReturn {
     filterFn,
     maxResults: MAX_RESULTS,
     debounceMs: DEBOUNCE_MS,
+    paletteId: "quick-switcher",
   });
 
   const selectItem = useCallback(

@@ -122,6 +122,7 @@ export function usePanelPalette(): UsePanelPaletteReturn {
     items: availableKinds,
     filterFn: filterPanelKinds,
     maxResults: 20,
+    paletteId: "panel",
   });
 
   const handleSelect = useCallback(

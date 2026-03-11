@@ -88,6 +88,7 @@ export function useTerminalPalette(): UseTerminalPaletteReturn {
     fuseOptions: FUSE_OPTIONS,
     maxResults: MAX_RESULTS,
     debounceMs: DEBOUNCE_MS,
+    paletteId: "terminal",
   });
 
   const selectTerminal = useCallback(

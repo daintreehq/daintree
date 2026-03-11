@@ -1,9 +1,10 @@
-import { useState, useCallback, useMemo } from "react";
+import { useCallback, useMemo } from "react";
 import type { IFuseOptions } from "fuse.js";
 import { actionService } from "@/services/ActionService";
 import { keybindingService } from "@/services/KeybindingService";
 import { notify } from "@/lib/notify";
 import type { ActionManifestEntry } from "@shared/types/actions";
+import { usePaletteStore } from "@/store/paletteStore";
 import { useSearchablePalette } from "./useSearchablePalette";
 
 export interface ActionPaletteItem {
@@ -66,10 +67,10 @@ function toActionPaletteItem(entry: ActionManifestEntry): ActionPaletteItem {
 }
 
 export function useActionPalette(): UseActionPaletteReturn {
-  const [isOpen, setIsOpen] = useState(false);
+  const isActionOpen = usePaletteStore((state) => state.activePaletteId === "action");
 
   const allActions = useMemo<ActionPaletteItem[]>(() => {
-    if (!isOpen) return [];
+    if (!isActionOpen) return [];
     const entries = actionService.list();
     return entries
       .filter((e) => e.kind === "command" && !e.requiresArgs)
@@ -78,15 +79,16 @@ export function useActionPalette(): UseActionPaletteReturn {
         if (a.enabled !== b.enabled) return a.enabled ? -1 : 1;
         return a.title.localeCompare(b.title);
       });
-  }, [isOpen]);
+  }, [isActionOpen]);
 
   const {
-    isOpen: paletteIsOpen,
+    isOpen,
     query,
     results,
     selectedIndex,
-    open: paletteOpen,
-    close: paletteClose,
+    open,
+    close,
+    toggle,
     setQuery,
     selectPrevious,
     selectNext,
@@ -95,25 +97,8 @@ export function useActionPalette(): UseActionPaletteReturn {
     fuseOptions: FUSE_OPTIONS,
     maxResults: MAX_RESULTS,
     debounceMs: DEBOUNCE_MS,
+    paletteId: "action",
   });
-
-  const open = useCallback(() => {
-    setIsOpen(true);
-    paletteOpen();
-  }, [paletteOpen]);
-
-  const close = useCallback(() => {
-    setIsOpen(false);
-    paletteClose();
-  }, [paletteClose]);
-
-  const toggle = useCallback(() => {
-    if (paletteIsOpen) {
-      close();
-    } else {
-      open();
-    }
-  }, [paletteIsOpen, open, close]);
 
   const executeAction = useCallback(
     (item: ActionPaletteItem) => {
@@ -154,7 +139,7 @@ export function useActionPalette(): UseActionPaletteReturn {
   }, [results, selectedIndex, executeAction]);
 
   return {
-    isOpen: paletteIsOpen,
+    isOpen,
     query,
     results,
     selectedIndex,

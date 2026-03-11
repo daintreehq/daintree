@@ -72,6 +72,7 @@ export function useNewTerminalPalette({
     items: options,
     filterFn: filterLaunchOptions,
     maxResults: 20,
+    paletteId: "new-terminal",
   });
 
   const handleSelect = useCallback(

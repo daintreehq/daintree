@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 import { cn } from "@/lib/utils";
 import { useOverlayState } from "@/hooks";
+import { usePaletteStore } from "@/store/paletteStore";
 
 export interface AppPaletteDialogProps {
   isOpen: boolean;
@@ -22,7 +23,7 @@ export function AppPaletteDialog({
   const dialogRef = useRef<HTMLDivElement>(null);
   const previousFocusRef = useRef<HTMLElement | null>(null);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (isOpen) {
       previousFocusRef.current = document.activeElement as HTMLElement;
       const firstFocusable = dialogRef.current?.querySelector<HTMLElement>(
@@ -30,7 +31,9 @@ export function AppPaletteDialog({
       );
       firstFocusable?.focus();
     } else if (previousFocusRef.current) {
-      previousFocusRef.current.focus();
+      if (!usePaletteStore.getState().activePaletteId) {
+        previousFocusRef.current.focus();
+      }
       previousFocusRef.current = null;
     }
   }, [isOpen]);
