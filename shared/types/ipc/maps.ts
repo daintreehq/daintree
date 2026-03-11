@@ -404,6 +404,10 @@ export interface IpcInvokeMap {
     args: [];
     result: SystemHealthCheckResult;
   };
+  "system:download-diagnostics": {
+    args: [];
+    result: boolean;
+  };
 
   // App state channels
   "app:get-state": {
