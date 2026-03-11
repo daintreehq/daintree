@@ -47,6 +47,8 @@ export function filterSettings(
         if (entry.id.startsWith("tab-nav-")) {
           score += 2;
         }
+      } else if (tokens.length > 1 && entry.id.startsWith("tab-nav-")) {
+        score -= 3;
       }
 
       return { entry, score };
