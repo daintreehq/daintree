@@ -36,8 +36,30 @@ export function useErrors() {
         isTransient: error.isTransient,
         retryAction: error.retryAction,
         retryArgs: error.retryArgs,
+        fromPreviousSession: error.fromPreviousSession,
       });
     });
+
+    errorsClient
+      .getPending()
+      .then((pending) => {
+        for (const error of pending) {
+          addError({
+            type: error.type,
+            message: error.message,
+            details: error.details,
+            source: error.source,
+            context: error.context,
+            isTransient: error.isTransient,
+            retryAction: error.retryAction,
+            retryArgs: error.retryArgs,
+            fromPreviousSession: error.fromPreviousSession,
+          });
+        }
+      })
+      .catch(() => {
+        // Ignore failures fetching pending errors
+      });
 
     return () => {
       if (didAttachListener.current) {

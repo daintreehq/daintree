@@ -33,4 +33,6 @@ export interface AppError {
   retryAction?: RetryAction;
   /** Arguments for retry action */
   retryArgs?: Record<string, unknown>;
+  /** Whether this error originated from a previous session (crash recovery) */
+  fromPreviousSession?: boolean;
 }

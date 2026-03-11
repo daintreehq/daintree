@@ -142,6 +142,7 @@ export const CHANNELS = {
   ERROR_NOTIFY: "error:notify",
   ERROR_RETRY: "error:retry",
   ERROR_OPEN_LOGS: "error:open-logs",
+  ERROR_GET_PENDING: "error:get-pending",
 
   EVENT_INSPECTOR_GET_EVENTS: "event-inspector:get-events",
   EVENT_INSPECTOR_GET_FILTERED: "event-inspector:get-filtered",
@@ -371,6 +372,13 @@ export const CHANNELS = {
   VOICE_INPUT_VALIDATE_CORRECTION_API_KEY: "voice-input:validate-correction-api-key",
   VOICE_INPUT_FLUSH_PARAGRAPH: "voice-input:flush-paragraph",
   VOICE_INPUT_PARAGRAPH_BOUNDARY: "voice-input:paragraph-boundary",
+
+  // Onboarding channels
+  ONBOARDING_GET: "onboarding:get",
+  ONBOARDING_MIGRATE: "onboarding:migrate",
+  ONBOARDING_SET_STEP: "onboarding:set-step",
+  ONBOARDING_COMPLETE: "onboarding:complete",
+  ONBOARDING_MARK_TOAST_SEEN: "onboarding:mark-toast-seen",
 
   // Crash Recovery channels
   CRASH_RECOVERY_GET_PENDING: "crash-recovery:get-pending",

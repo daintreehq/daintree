@@ -37,6 +37,7 @@ export function terminalToSnapshot(t: TerminalInstance): TerminalSnapshot {
       ...(t.devPreviewConsoleOpen !== undefined && {
         devPreviewConsoleOpen: t.devPreviewConsoleOpen,
       }),
+      ...(t.createdAt !== undefined && { createdAt: t.createdAt }),
       ...(t.exitBehavior !== undefined && { exitBehavior: t.exitBehavior }),
     };
   }
@@ -48,6 +49,7 @@ export function terminalToSnapshot(t: TerminalInstance): TerminalSnapshot {
       agentId: t.agentId,
       cwd: t.cwd,
       command: t.command?.trim() || undefined,
+      ...(t.createdAt !== undefined && { createdAt: t.createdAt }),
       ...(t.exitBehavior !== undefined && { exitBehavior: t.exitBehavior }),
     };
   } else if (t.kind === "notes") {

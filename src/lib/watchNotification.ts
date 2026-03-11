@@ -28,6 +28,8 @@ export function fireWatchNotification(
         }
         useTerminalStore.getState().setFocused(panelId, true);
       },
+      actionId: "panel.focus",
+      actionArgs: { panelId, ...(worktreeId ? { worktreeId } : {}) },
     },
   });
 }

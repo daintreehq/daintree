@@ -133,6 +133,7 @@ export function WorktreeCard({
     branchLabel,
     hasChanges,
     isComplete,
+    lifecycleStage,
     effectiveNote,
     effectiveSummary,
     computedSubtitle,
@@ -445,6 +446,7 @@ export function WorktreeCard({
           isMainWorktree={isMainWorktree}
           isPinned={isPinned}
           branchLabel={branchLabel}
+          lifecycleStage={lifecycleStage}
           worktreeErrorCount={worktreeErrors.length}
           badges={{
             onOpenIssue: worktree.issueNumber ? handleOpenIssueExternal : undefined,

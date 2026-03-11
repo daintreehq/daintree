@@ -22,13 +22,17 @@ import {
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "../../ui/tooltip";
 import {
   AlertCircle,
+  CircleDashed,
   CircleDot,
   CornerDownRight,
+  GitMerge,
   GitPullRequest,
   MoreHorizontal,
   House,
   Pin,
+  Trash2,
 } from "lucide-react";
+import type { WorktreeLifecycleStage } from "./hooks/useWorktreeStatus";
 import { useIssueTooltip, usePRTooltip } from "@/hooks/useGitHubTooltip";
 import { IssueTooltipContent, PRTooltipContent, TooltipLoading } from "./GitHubTooltipContent";
 
@@ -193,6 +197,7 @@ export interface WorktreeHeaderProps {
   isMainWorktree: boolean;
   isPinned: boolean;
   branchLabel: string;
+  lifecycleStage: WorktreeLifecycleStage | null;
   worktreeErrorCount: number;
 
   badges: {
@@ -240,12 +245,65 @@ export interface WorktreeHeaderProps {
   };
 }
 
+const LIFECYCLE_CONFIG: Record<
+  WorktreeLifecycleStage,
+  { icon: typeof CircleDashed; className: string; label: string }
+> = {
+  working: {
+    icon: CircleDashed,
+    className: "w-3.5 h-3.5 text-canopy-text/50",
+    label: "Working",
+  },
+  "in-review": {
+    icon: GitPullRequest,
+    className: "w-3.5 h-3.5 text-github-open",
+    label: "In review",
+  },
+  merged: {
+    icon: GitMerge,
+    className: "w-3.5 h-3.5 text-github-merged",
+    label: "Merged",
+  },
+  "ready-for-cleanup": {
+    icon: Trash2,
+    className: "w-3.5 h-3.5 text-github-merged",
+    label: "Ready for cleanup",
+  },
+};
+
+const LifecycleStageIndicator = memo(function LifecycleStageIndicator({
+  stage,
+}: {
+  stage: WorktreeLifecycleStage | null;
+}) {
+  if (!stage) return null;
+
+  const config = LIFECYCLE_CONFIG[stage];
+  const Icon = config.icon;
+
+  return (
+    <TooltipProvider>
+      <Tooltip delayDuration={300}>
+        <TooltipTrigger asChild>
+          <span className="shrink-0 flex items-center justify-center" aria-label={config.label}>
+            <Icon className={config.className} aria-hidden="true" />
+          </span>
+        </TooltipTrigger>
+        <TooltipContent side="top" className="text-xs">
+          {config.label}
+        </TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
+  );
+});
+
 export function WorktreeHeader({
   worktree,
   isActive,
   isMainWorktree,
   isPinned,
   branchLabel,
+  lifecycleStage,
   worktreeErrorCount,
   badges,
   menu,
@@ -279,6 +337,7 @@ export function WorktreeHeader({
             <Pin className="w-3 h-3 text-canopy-text/40 shrink-0" aria-label="Pinned" />
           )}
           <BranchLabel label={branchLabel} isActive={isActive} isMainWorktree={isMainWorktree} />
+          <LifecycleStageIndicator stage={lifecycleStage} />
           {worktree.isDetached && (
             <span className="text-status-warning text-xs font-medium shrink-0">(detached)</span>
           )}

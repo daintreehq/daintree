@@ -107,6 +107,41 @@ describe("notificationHistorySlice", () => {
     );
   });
 
+  describe("history actions", () => {
+    it("stores actions on the entry when provided", () => {
+      getState().addEntry({
+        type: "success",
+        message: "Agent done",
+        actions: [
+          { label: "Go to terminal", actionId: "panel.focus", actionArgs: { panelId: "p1" } },
+        ],
+      });
+      const entry = getState().entries[0];
+      expect(entry.actions).toHaveLength(1);
+      expect(entry.actions![0].label).toBe("Go to terminal");
+      expect(entry.actions![0].actionId).toBe("panel.focus");
+      expect(entry.actions![0].actionArgs).toEqual({ panelId: "p1" });
+    });
+
+    it("works with no actions (backward compat)", () => {
+      addEntry({ message: "No actions" });
+      const entry = getState().entries[0];
+      expect(entry.actions).toBeUndefined();
+    });
+
+    it("stores multiple actions", () => {
+      getState().addEntry({
+        type: "info",
+        message: "Multi-action",
+        actions: [
+          { label: "Action 1", actionId: "panel.focus", actionArgs: { panelId: "p1" } },
+          { label: "Action 2", actionId: "panel.focus", variant: "secondary" },
+        ],
+      });
+      expect(getState().entries[0].actions).toHaveLength(2);
+    });
+  });
+
   describe("seenAsToast and badge count", () => {
     it("defaults seenAsToast to false when not provided", () => {
       addEntry({ message: "test" });

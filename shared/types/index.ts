@@ -408,6 +408,9 @@ export {
 // Agent Capabilities types - query agent registry and metadata
 export type { AgentRegistry, AgentMetadata } from "./ipc/agentCapabilities.js";
 
+// Onboarding types
+export type { OnboardingState } from "./ipc/maps.js";
+
 // Task Queue types - DAG-based task management
 export type {
   TaskResult,

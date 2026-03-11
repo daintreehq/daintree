@@ -68,12 +68,6 @@ import { PanelPalette } from "./components/PanelPalette/PanelPalette";
 import { MORE_AGENTS_PANEL_ID } from "./hooks/usePanelPalette";
 import { GitInitDialog, ProjectOnboardingWizard, WelcomeScreen } from "./components/Project";
 import { VoiceRecordingAnnouncer } from "./components/Terminal/VoiceRecordingAnnouncer";
-import {
-  AgentSetupWizard,
-  AgentSelectionStep,
-  shouldShowAgentSetupWizard,
-  shouldShowAgentSelection,
-} from "./components/Setup";
 import { CreateProjectFolderDialog } from "./components/Project/CreateProjectFolderDialog";
 import { ProjectSwitcherPalette } from "./components/Project/ProjectSwitcherPalette";
 import { ActionPalette } from "./components/ActionPalette";
@@ -85,7 +79,7 @@ import { SettingsDialog, type SettingsTab } from "./components/Settings";
 import { ShortcutReferenceDialog } from "./components/KeyboardShortcuts";
 import { Toaster } from "./components/ui/toaster";
 import { UpdateNotification } from "./components/UpdateNotification";
-import { TelemetryConsent } from "./components/Onboarding/TelemetryConsent";
+import { OnboardingFlow } from "./components/Onboarding/OnboardingFlow";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { DndProvider } from "./components/DragDrop";
 import {
@@ -95,9 +89,9 @@ import {
   useErrorStore,
   useDiagnosticsStore,
   useFocusStore,
-  useAgentSettingsStore,
   cleanupWorktreeDataStore,
   useAgentPreferencesStore,
+  usePaletteStore,
   type RetryAction,
 } from "./store";
 import { useShallow } from "zustand/react/shallow";
@@ -651,29 +645,7 @@ function App() {
       cleanupWorktreeDataStore();
     };
   }, []);
-  const { launchAgent, availability, agentSettings, refreshSettings, isCheckingAvailability } =
-    useAgentLauncher();
-  const [isAgentSetupOpen, setIsAgentSetupOpen] = useState(false);
-  const agentSetupCheckedRef = useRef(false);
-
-  // Agent selection step state for first-run onboarding
-  const [agentSelectionOpen, setAgentSelectionOpen] = useState(false);
-  const [onboardingSetupOpen, setOnboardingSetupOpen] = useState(false);
-  const [onboardingSetupAgentIds, setOnboardingSetupAgentIds] = useState<string[]>([]);
-
-  useEffect(() => {
-    if (agentSetupCheckedRef.current || isCheckingAvailability) return;
-    agentSetupCheckedRef.current = true;
-    if (shouldShowAgentSetupWizard(availability)) {
-      setIsAgentSetupOpen(true);
-    }
-  }, [isCheckingAvailability, availability]);
-
-  useEffect(() => {
-    const handleOpenWizard = () => setIsAgentSetupOpen(true);
-    window.addEventListener("canopy:open-agent-setup-wizard", handleOpenWizard);
-    return () => window.removeEventListener("canopy:open-agent-setup-wizard", handleOpenWizard);
-  }, []);
+  const { launchAgent, availability, agentSettings, refreshSettings } = useAgentLauncher();
 
   const loadRecipes = useRecipeStore((state) => state.loadRecipes);
   useTerminalConfig();
@@ -706,47 +678,6 @@ function App() {
   const onboardingWizardOpen = useProjectStore((state) => state.onboardingWizardOpen);
   const onboardingProjectId = useProjectStore((state) => state.onboardingProjectId);
   const closeOnboardingWizard = useProjectStore((state) => state.closeOnboardingWizard);
-
-  const agentSettingsInitialized = useAgentSettingsStore((state) => state.isInitialized);
-
-  // Intercept onboarding to show agent selection on first run.
-  // Depends on agentSettingsInitialized so it re-evaluates once settings load.
-  useEffect(() => {
-    if (!onboardingWizardOpen || !onboardingProjectId) return;
-    if (shouldShowAgentSelection()) {
-      setAgentSelectionOpen(true);
-    }
-  }, [onboardingWizardOpen, onboardingProjectId, agentSettingsInitialized]);
-
-  // Reset local flow state whenever onboarding closes to avoid stale state on next project.
-  useEffect(() => {
-    if (!onboardingWizardOpen && !onboardingProjectId) {
-      setAgentSelectionOpen(false);
-      setOnboardingSetupOpen(false);
-      setOnboardingSetupAgentIds([]);
-    }
-  }, [onboardingWizardOpen, onboardingProjectId]);
-
-  const handleAgentSelectionContinue = useCallback(
-    (uninstalledIds: string[]) => {
-      setAgentSelectionOpen(false);
-      void refreshSettings();
-      if (uninstalledIds.length > 0) {
-        setOnboardingSetupAgentIds(uninstalledIds);
-        setOnboardingSetupOpen(true);
-      }
-    },
-    [refreshSettings]
-  );
-
-  const handleAgentSelectionSkip = useCallback(() => {
-    setAgentSelectionOpen(false);
-  }, []);
-
-  const handleOnboardingSetupClose = useCallback(() => {
-    setOnboardingSetupOpen(false);
-    setOnboardingSetupAgentIds([]);
-  }, []);
 
   const createFolderDialogOpen = useProjectStore((state) => state.createFolderDialogOpen);
   const closeCreateFolderDialog = useProjectStore((state) => state.closeCreateFolderDialog);
@@ -822,7 +753,7 @@ function App() {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [settingsTab, setSettingsTab] = useState<SettingsTab>("general");
   const [isShortcutsOpen, setIsShortcutsOpen] = useState(false);
-  const [isNotesPaletteOpen, setIsNotesPaletteOpen] = useState(false);
+  const isNotesPaletteOpen = usePaletteStore((state) => state.activePaletteId === "notes");
   const [isWorktreeOverviewOpen, setIsWorktreeOverviewOpen] = useState(false);
   const onLayoutRender = useRenderProfiler("app-layout", { sampleRate: 0.15 });
   const onContentGridRender = useRenderProfiler("content-grid", { sampleRate: 0.15 });
@@ -941,11 +872,11 @@ function App() {
   }, [handleOpenSettingsTab]);
 
   const openNotesPalette = useCallback(() => {
-    setIsNotesPaletteOpen(true);
+    usePaletteStore.getState().openPalette("notes");
   }, []);
 
   const closeNotesPalette = useCallback(() => {
-    setIsNotesPaletteOpen(false);
+    usePaletteStore.getState().closePalette("notes");
   }, []);
 
   const toggleWorktreeOverview = useCallback(() => {
@@ -1297,36 +1228,13 @@ function App() {
       )}
 
       {onboardingProjectId && (
-        <AgentSelectionStep
-          isOpen={agentSelectionOpen}
-          onContinue={handleAgentSelectionContinue}
-          onSkip={handleAgentSelectionSkip}
-        />
-      )}
-
-      {onboardingProjectId && (
         <ProjectOnboardingWizard
-          isOpen={onboardingWizardOpen && !agentSelectionOpen && !onboardingSetupOpen}
+          isOpen={onboardingWizardOpen}
           projectId={onboardingProjectId}
           onClose={closeOnboardingWizard}
           onFinish={handleWizardFinish}
         />
       )}
-
-      {onboardingSetupOpen && (
-        <AgentSetupWizard
-          isOpen={onboardingSetupOpen}
-          onClose={handleOnboardingSetupClose}
-          initialAvailability={availability}
-          agentIds={onboardingSetupAgentIds}
-        />
-      )}
-
-      <AgentSetupWizard
-        isOpen={isAgentSetupOpen && !onboardingWizardOpen}
-        onClose={() => setIsAgentSetupOpen(false)}
-        initialAvailability={availability}
-      />
 
       <CreateProjectFolderDialog
         isOpen={createFolderDialogOpen}
@@ -1337,7 +1245,7 @@ function App() {
 
       <Toaster />
       <UpdateNotification />
-      <TelemetryConsent />
+      <OnboardingFlow availability={availability} onRefreshSettings={refreshSettings} />
     </ErrorBoundary>
   );
 }

@@ -16,9 +16,11 @@ export function registerCrashRecoveryHandlers(): () => void {
 
   ipcMain.handle(CHANNELS.CRASH_RECOVERY_RESOLVE, (_event, action: CrashRecoveryAction) => {
     const service = getCrashRecoveryService();
-    if (action === "restore") {
-      const ok = service.restoreBackup();
-      if (!ok) {
+    if (action.kind === "restore") {
+      const ok = service.restoreBackup(action.panelIds);
+      if (ok) {
+        service.setPanelFilter(action.panelIds);
+      } else {
         console.warn("[CrashRecovery] restoreBackup returned false — no backup or read error");
       }
     } else {

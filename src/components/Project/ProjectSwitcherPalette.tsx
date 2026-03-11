@@ -1,4 +1,4 @@
-import { useMemo, useEffect, useRef, useCallback } from "react";
+import { useMemo, useEffect, useLayoutEffect, useRef, useCallback } from "react";
 import { createPortal } from "react-dom";
 import {
   AlertTriangle,
@@ -19,6 +19,7 @@ import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { ProjectActionRow } from "./ProjectActionRow";
 import { useKeybindingDisplay } from "@/hooks/useKeybinding";
 import { useOverlayState } from "@/hooks";
+import { usePaletteStore } from "@/store/paletteStore";
 import type { ProjectSwitcherMode, SearchableProject } from "@/hooks/useProjectSwitcherPalette";
 import { useUIStore } from "@/store/uiStore";
 
@@ -615,12 +616,14 @@ function ModalContent({
   const dialogRef = useRef<HTMLDivElement>(null);
   const previousFocusRef = useRef<HTMLElement | null>(null);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (isOpen) {
       previousFocusRef.current = document.activeElement as HTMLElement;
       requestAnimationFrame(() => inputRef.current?.focus());
     } else if (previousFocusRef.current) {
-      previousFocusRef.current.focus();
+      if (!usePaletteStore.getState().activePaletteId) {
+        previousFocusRef.current.focus();
+      }
       previousFocusRef.current = null;
     }
   }, [isOpen]);

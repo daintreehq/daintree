@@ -222,7 +222,8 @@ test.describe.serial("Core: Advanced", () => {
       await expect(palette).toBeVisible({ timeout: T_MEDIUM });
 
       const addBtn = window.locator(SEL.projectSwitcher.addButton);
-      await addBtn.click();
+      await expect(addBtn).toBeVisible({ timeout: T_SHORT });
+      await addBtn.click({ force: true });
 
       const heading = window.locator("h2", { hasText: "Set up your project" });
       await expect(heading).toBeVisible({ timeout: T_LONG });
