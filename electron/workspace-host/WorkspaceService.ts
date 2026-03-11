@@ -388,6 +388,7 @@ export class WorkspaceService {
         existingMonitor.name = wt.name;
         existingMonitor.isCurrent = isActive;
         existingMonitor.isMainWorktree = wt.isMainWorktree;
+        existingMonitor.projectScopeId = this.projectScopeId;
         const interval = isActive ? this.pollIntervalActive : this.pollIntervalBackground;
         existingMonitor.pollingInterval = interval;
         existingMonitor.pollingStrategy.setBaseInterval(interval);
@@ -485,6 +486,7 @@ export class WorkspaceService {
           gitWatchRefreshPending: false,
           gitWatchEnabled: this.gitWatchEnabled,
           lastGitStatusCompletedAt: 0,
+          projectScopeId: this.projectScopeId,
         };
 
         monitor.pollingStrategy.updateConfig(
@@ -983,6 +985,9 @@ export class WorkspaceService {
     if (!this.projectScopeId) {
       return;
     }
+    if (monitor.projectScopeId !== this.projectScopeId) {
+      return;
+    }
     const snapshot = this.createSnapshot(monitor);
     this.sendEvent({
       type: "worktree-update",
@@ -1027,10 +1032,10 @@ export class WorkspaceService {
     }
 
     // Emit removal events for frontend cleanup
-    if (this.projectScopeId) {
+    if (this.projectScopeId && monitor.projectScopeId === this.projectScopeId) {
       this.sendEvent({ type: "worktree-removed", worktreeId, projectScopeId: this.projectScopeId });
+      events.emit("sys:worktree:remove", { worktreeId, timestamp: Date.now() });
     }
-    events.emit("sys:worktree:remove", { worktreeId, timestamp: Date.now() });
 
     console.log(
       `[WorkspaceHost] Worktree deleted externally, removed monitor: ${monitor.name} (${worktreeId})`
@@ -1040,6 +1045,9 @@ export class WorkspaceService {
   getAllStates(requestId: string): void {
     const states: WorktreeSnapshot[] = [];
     for (const monitor of this.monitors.values()) {
+      if (this.projectScopeId && monitor.projectScopeId !== this.projectScopeId) {
+        continue;
+      }
       states.push(this.createSnapshot(monitor));
     }
     this.sendEvent({ type: "all-states", requestId, states });
@@ -1476,7 +1484,7 @@ export class WorkspaceService {
       this.stopMonitor(monitor);
       this.monitors.delete(worktreeId);
 
-      if (this.projectScopeId) {
+      if (this.projectScopeId && monitor.projectScopeId === this.projectScopeId) {
         this.sendEvent({
           type: "worktree-removed",
           worktreeId,
@@ -1694,16 +1702,17 @@ ${lines.map((l) => "+" + l).join("\n")}`;
     this.prEventUnsubscribers.push(
       events.on("sys:pr:detected", (data: any) => {
         const monitor = this.monitors.get(data.worktreeId);
-        if (monitor) {
-          monitor.prNumber = data.prNumber;
-          monitor.prUrl = data.prUrl;
-          monitor.prState = data.prState;
-          monitor.prTitle = data.prTitle;
-          monitor.issueTitle = data.issueTitle;
-          // Only emit if initial git status has completed to avoid partial snapshots
-          if (monitor.hasInitialStatus) {
-            this.emitUpdate(monitor);
-          }
+        if (!monitor || monitor.projectScopeId !== this.projectScopeId) {
+          return;
+        }
+
+        monitor.prNumber = data.prNumber;
+        monitor.prUrl = data.prUrl;
+        monitor.prState = data.prState;
+        monitor.prTitle = data.prTitle;
+        monitor.issueTitle = data.issueTitle;
+        if (monitor.hasInitialStatus) {
+          this.emitUpdate(monitor);
         }
 
         if (this.projectScopeId) {
@@ -1725,12 +1734,13 @@ ${lines.map((l) => "+" + l).join("\n")}`;
     this.prEventUnsubscribers.push(
       events.on("sys:issue:detected", (data: any) => {
         const monitor = this.monitors.get(data.worktreeId);
-        if (monitor) {
-          monitor.issueTitle = data.issueTitle;
-          // Only emit if initial git status has completed to avoid partial snapshots
-          if (monitor.hasInitialStatus) {
-            this.emitUpdate(monitor);
-          }
+        if (!monitor || monitor.projectScopeId !== this.projectScopeId) {
+          return;
+        }
+
+        monitor.issueTitle = data.issueTitle;
+        if (monitor.hasInitialStatus) {
+          this.emitUpdate(monitor);
         }
 
         if (this.projectScopeId) {
@@ -1748,12 +1758,17 @@ ${lines.map((l) => "+" + l).join("\n")}`;
     this.prEventUnsubscribers.push(
       events.on("sys:issue:not-found", (data) => {
         const monitor = this.monitors.get(data.worktreeId);
-        if (monitor && monitor.issueNumber === data.issueNumber) {
-          monitor.issueNumber = undefined;
-          monitor.issueTitle = undefined;
-          if (monitor.hasInitialStatus) {
-            this.emitUpdate(monitor);
-          }
+        if (!monitor || monitor.projectScopeId !== this.projectScopeId) {
+          return;
+        }
+        if (monitor.issueNumber !== data.issueNumber) {
+          return;
+        }
+
+        monitor.issueNumber = undefined;
+        monitor.issueTitle = undefined;
+        if (monitor.hasInitialStatus) {
+          this.emitUpdate(monitor);
         }
 
         if (this.projectScopeId) {
@@ -1770,15 +1785,16 @@ ${lines.map((l) => "+" + l).join("\n")}`;
     this.prEventUnsubscribers.push(
       events.on("sys:pr:cleared", (data: any) => {
         const monitor = this.monitors.get(data.worktreeId);
-        if (monitor) {
-          monitor.prNumber = undefined;
-          monitor.prUrl = undefined;
-          monitor.prState = undefined;
-          monitor.prTitle = undefined;
-          // Only emit if initial git status has completed to avoid partial snapshots
-          if (monitor.hasInitialStatus) {
-            this.emitUpdate(monitor);
-          }
+        if (!monitor || monitor.projectScopeId !== this.projectScopeId) {
+          return;
+        }
+
+        monitor.prNumber = undefined;
+        monitor.prUrl = undefined;
+        monitor.prState = undefined;
+        monitor.prTitle = undefined;
+        if (monitor.hasInitialStatus) {
+          this.emitUpdate(monitor);
         }
 
         if (this.projectScopeId) {
