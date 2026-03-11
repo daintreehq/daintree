@@ -233,7 +233,7 @@ export function createApplicationMenu(
             await shell.openExternal("https://github.com/gregpriday/canopy-electron");
           },
         },
-        ...(process.platform !== "darwin"
+        ...(process.platform !== "darwin" && app.isPackaged
           ? [
               { type: "separator" as const },
               {
@@ -251,10 +251,14 @@ export function createApplicationMenu(
       label: "Canopy",
       submenu: [
         { role: "about" },
-        {
-          label: "Check for Updates...",
-          click: () => autoUpdaterService.checkForUpdatesManually(),
-        },
+        ...(app.isPackaged
+          ? [
+              {
+                label: "Check for Updates...",
+                click: () => autoUpdaterService.checkForUpdatesManually(),
+              },
+            ]
+          : []),
         { type: "separator" },
         {
           label: "Settings...",
