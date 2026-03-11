@@ -21,4 +21,5 @@ export interface MonitorState extends WorktreeSnapshot {
   gitWatchEnabled: boolean;
   lastGitStatusCompletedAt: number;
   lifecycleStatus?: WorktreeLifecycleStatus;
+  projectScopeId: string | null;
 }

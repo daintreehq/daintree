@@ -485,6 +485,7 @@ export class WorkspaceService {
           gitWatchRefreshPending: false,
           gitWatchEnabled: this.gitWatchEnabled,
           lastGitStatusCompletedAt: 0,
+          projectScopeId: this.projectScopeId,
         };
 
         monitor.pollingStrategy.updateConfig(
@@ -983,6 +984,9 @@ export class WorkspaceService {
     if (!this.projectScopeId) {
       return;
     }
+    if (monitor.projectScopeId !== this.projectScopeId) {
+      return;
+    }
     const snapshot = this.createSnapshot(monitor);
     this.sendEvent({
       type: "worktree-update",
@@ -1027,10 +1031,10 @@ export class WorkspaceService {
     }
 
     // Emit removal events for frontend cleanup
-    if (this.projectScopeId) {
+    if (this.projectScopeId && monitor.projectScopeId === this.projectScopeId) {
       this.sendEvent({ type: "worktree-removed", worktreeId, projectScopeId: this.projectScopeId });
+      events.emit("sys:worktree:remove", { worktreeId, timestamp: Date.now() });
     }
-    events.emit("sys:worktree:remove", { worktreeId, timestamp: Date.now() });
 
     console.log(
       `[WorkspaceHost] Worktree deleted externally, removed monitor: ${monitor.name} (${worktreeId})`
@@ -1040,6 +1044,9 @@ export class WorkspaceService {
   getAllStates(requestId: string): void {
     const states: WorktreeSnapshot[] = [];
     for (const monitor of this.monitors.values()) {
+      if (this.projectScopeId && monitor.projectScopeId !== this.projectScopeId) {
+        continue;
+      }
       states.push(this.createSnapshot(monitor));
     }
     this.sendEvent({ type: "all-states", requestId, states });
