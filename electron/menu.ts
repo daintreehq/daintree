@@ -6,6 +6,7 @@ import { CHANNELS } from "./ipc/channels.js";
 import { getEffectiveRegistry } from "../shared/config/agentRegistry.js";
 import type { CliAvailabilityService } from "./services/CliAvailabilityService.js";
 import * as CliInstallService from "./services/CliInstallService.js";
+import { autoUpdaterService } from "./services/AutoUpdaterService.js";
 
 app.setAboutPanelOptions({
   applicationName: "Canopy",
@@ -232,6 +233,15 @@ export function createApplicationMenu(
             await shell.openExternal("https://github.com/gregpriday/canopy-electron");
           },
         },
+        ...(process.platform !== "darwin" && app.isPackaged
+          ? [
+              { type: "separator" as const },
+              {
+                label: "Check for Updates...",
+                click: () => autoUpdaterService.checkForUpdatesManually(),
+              },
+            ]
+          : []),
       ],
     },
   ];
@@ -241,6 +251,14 @@ export function createApplicationMenu(
       label: "Canopy",
       submenu: [
         { role: "about" },
+        ...(app.isPackaged
+          ? [
+              {
+                label: "Check for Updates...",
+                click: () => autoUpdaterService.checkForUpdatesManually(),
+              },
+            ]
+          : []),
         { type: "separator" },
         {
           label: "Settings...",

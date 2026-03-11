@@ -2,6 +2,7 @@ import { ipcMain, systemPreferences, shell } from "electron";
 import { spawn } from "child_process";
 import { CHANNELS } from "../channels.js";
 import { store } from "../../store.js";
+import { projectStore } from "../../services/ProjectStore.js";
 import { VoiceTranscriptionService } from "../../services/VoiceTranscriptionService.js";
 import { VoiceCorrectionService } from "../../services/VoiceCorrectionService.js";
 import type { HandlerDependencies } from "../types.js";
@@ -25,8 +26,9 @@ const VOICE_INPUT_DEFAULTS: VoiceInputSettings = {
   customDictionary: [],
   transcriptionModel: "nova-3",
   correctionEnabled: false,
-  correctionModel: "gpt-5-nano",
+  correctionModel: "gpt-5-mini",
   correctionCustomInstructions: "",
+  paragraphingStrategy: "spoken-command",
 };
 
 /** Read voiceInput settings with defaults for fields added after initial store creation. */
@@ -172,21 +174,22 @@ async function validateOpenAIKey(apiKey: string): Promise<{ valid: boolean; erro
 }
 
 function getProjectInfo(): { name?: string; path?: string } {
-  const projects = store.get("projects");
-  const currentId = projects?.currentProjectId;
-  if (!currentId) return {};
-  const project = projects?.list?.find((p) => p.id === currentId);
-  return { name: project?.name, path: project?.path };
+  const currentProject = projectStore.getCurrentProject();
+  if (!currentProject) return {};
+  return { name: currentProject.name, path: currentProject.path };
 }
 
 /**
  * Join the paragraph buffer into a single raw text string and clear it.
- * If correction is enabled, fires an async correction call and sends
- * VOICE_INPUT_CORRECTION_REPLACE when it resolves.
- * Returns the raw paragraph text (or null if the buffer was empty).
+ * If correction is enabled, generates a stable correctionId, fires an async
+ * correction call, and sends VOICE_INPUT_CORRECTION_REPLACE when it resolves.
+ * Returns the raw paragraph text and correctionId (null if correction is not queued).
  */
-function flushParagraphBuffer(win: Electron.BrowserWindow | null): { rawText: string | null } {
-  if (paragraphBuffer.length === 0) return { rawText: null };
+function flushParagraphBuffer(win: Electron.BrowserWindow | null): {
+  rawText: string | null;
+  correctionId: string | null;
+} {
+  if (paragraphBuffer.length === 0) return { rawText: null, correctionId: null };
 
   const rawText = paragraphBuffer.join(" ");
   paragraphBuffer = [];
@@ -195,6 +198,7 @@ function flushParagraphBuffer(win: Electron.BrowserWindow | null): { rawText: st
   const willCorrect = !!(liveSettings.correctionEnabled && liveSettings.correctionApiKey);
 
   if (willCorrect && correctionService && win && !win.isDestroyed()) {
+    const correctionId = crypto.randomUUID();
     void correctionService
       .correct(rawText, {
         model: liveSettings.correctionModel,
@@ -207,15 +211,16 @@ function flushParagraphBuffer(win: Electron.BrowserWindow | null): { rawText: st
       .then((correctedText) => {
         if (!win.isDestroyed()) {
           win.webContents.send(CHANNELS.VOICE_INPUT_CORRECTION_REPLACE, {
-            rawText,
+            correctionId,
             correctedText,
           });
         }
       })
       .catch(() => {});
+    return { rawText, correctionId };
   }
 
-  return { rawText };
+  return { rawText, correctionId: null };
 }
 
 export function registerVoiceInputHandlers(deps: HandlerDependencies): () => void {
@@ -273,9 +278,12 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
         });
       } else if (voiceEvent.type === "paragraph_boundary") {
         // Deepgram detected a paragraph break — auto-flush the previous paragraph
-        // for correction (if enabled) and notify the renderer with the flushed text.
-        const { rawText: flushedText } = flushParagraphBuffer(win);
-        win.webContents.send(CHANNELS.VOICE_INPUT_PARAGRAPH_BOUNDARY, { rawText: flushedText });
+        // for correction (if enabled) and notify the renderer with the flushed text and ID.
+        const { rawText: flushedText, correctionId } = flushParagraphBuffer(win);
+        win.webContents.send(CHANNELS.VOICE_INPUT_PARAGRAPH_BOUNDARY, {
+          rawText: flushedText,
+          correctionId,
+        });
       } else if (voiceEvent.type === "error") {
         win.webContents.send(CHANNELS.VOICE_INPUT_ERROR, voiceEvent.message);
       } else if (voiceEvent.type === "status") {
@@ -322,6 +330,16 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
   };
 
   const handleFlushParagraph = (): { rawText: string | null } => {
+    // Capture any in-flight utterance text from the transcription service before flushing.
+    // This ensures speech spoken before the Enter keypress is included in the committed
+    // paragraph, and suppresses subsequent Deepgram finalization for that utterance so it
+    // cannot overwrite the newline the renderer inserts after this flush.
+    if (service) {
+      const inFlightText = service.commitParagraphBoundary();
+      if (inFlightText) {
+        paragraphBuffer.push(inFlightText);
+      }
+    }
     return flushParagraphBuffer(deps.mainWindow);
   };
 

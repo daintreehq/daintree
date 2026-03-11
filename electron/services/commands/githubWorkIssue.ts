@@ -96,7 +96,7 @@ function generateBranchName(issueNumber: number, issueTitle: string): string {
 async function fetchIssueDetails(cwd: string, issueNumber: number): Promise<IssueDetails> {
   const client = GitHubAuth.createClient();
   if (!client) {
-    throw new Error("GitHub token not configured");
+    throw new Error("GitHub token not configured. Set it in Settings.");
   }
 
   const context = await getRepoContext(cwd);

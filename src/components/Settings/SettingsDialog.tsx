@@ -24,6 +24,7 @@ import {
   Bell,
   Mic,
   Plug,
+  Image,
   Search,
   ChevronRight,
 } from "lucide-react";
@@ -42,10 +43,17 @@ import { KeyboardShortcutsTab } from "./KeyboardShortcutsTab";
 import { WorktreeSettingsTab } from "./WorktreeSettingsTab";
 import { ToolbarSettingsTab } from "./ToolbarSettingsTab";
 import { EditorIntegrationTab } from "./EditorIntegrationTab";
+import { ImageViewerTab } from "./ImageViewerTab";
 import { VoiceInputSettingsTab } from "./VoiceInputSettingsTab";
 import { McpServerSettingsTab } from "./McpServerSettingsTab";
 import { SETTINGS_SEARCH_INDEX } from "./settingsSearchIndex";
 import { filterSettings, countMatchesPerTab, HighlightText } from "./settingsSearchUtils";
+
+export interface SettingsNavTarget {
+  tab: SettingsTab;
+  subtab?: string;
+  sectionId?: string;
+}
 
 interface SettingsDialogProps {
   isOpen: boolean;
@@ -66,6 +74,7 @@ export type SettingsTab =
   | "toolbar"
   | "notifications"
   | "editor"
+  | "imageViewer"
   | "voice"
   | "mcp"
   | "troubleshooting";
@@ -77,6 +86,7 @@ export function SettingsDialog({
   onSettingsChange,
 }: SettingsDialogProps) {
   const [activeTab, setActiveTab] = useState<SettingsTab>(defaultTab ?? "general");
+  const [activeSubtabs, setActiveSubtabs] = useState<Partial<Record<SettingsTab, string>>>({});
   const [searchQuery, setSearchQuery] = useState("");
   const deferredQuery = useDeferredValue(searchQuery);
   const searchInputRef = useRef<HTMLInputElement>(null);
@@ -150,10 +160,13 @@ export function SettingsDialog({
   // deferredQuery drives the expensive filtering computation only.
   const isSearching = searchQuery.trim().length > 0;
 
-  const handleResultClick = (tab: SettingsTab, sectionId?: string) => {
+  const handleResultClick = ({ tab, subtab, sectionId }: SettingsNavTarget) => {
     setActiveTab(tab);
     setSearchQuery("");
     setScrollToSection(sectionId ?? null);
+    if (subtab !== undefined) {
+      setActiveSubtabs((prev) => ({ ...prev, [tab]: subtab }));
+    }
     searchInputRef.current?.blur();
   };
 
@@ -180,7 +193,7 @@ export function SettingsDialog({
       } else if (e.key === "Enter" && activeResultIndex >= 0) {
         e.preventDefault();
         const result = searchResults[activeResultIndex];
-        handleResultClick(result.tab, result.id);
+        handleResultClick({ tab: result.tab, subtab: result.subtab, sectionId: result.id });
       }
     }
   };
@@ -254,6 +267,7 @@ export function SettingsDialog({
     setActiveTab(tab);
     setSearchQuery("");
     setScrollToSection(null);
+    // Subtab memory is preserved per-tab — activeSubtabs retains the last selected subtab
   }, []);
 
   const tabTitles: Record<SettingsTab, string> = {
@@ -268,6 +282,7 @@ export function SettingsDialog({
     toolbar: "Toolbar Customization",
     notifications: "Notifications",
     editor: "Editor Integration",
+    imageViewer: "Image Viewer",
     voice: "Voice Input",
     mcp: "MCP Server",
     troubleshooting: "Troubleshooting",
@@ -285,6 +300,7 @@ export function SettingsDialog({
     toolbar: <SettingsIcon className="w-5 h-5 text-canopy-text/60" />,
     notifications: <Bell className="w-5 h-5 text-canopy-text/60" />,
     editor: <Code className="w-5 h-5 text-canopy-text/60" />,
+    imageViewer: <Image className="w-5 h-5 text-canopy-text/60" />,
     voice: <Mic className="w-5 h-5 text-canopy-text/60" />,
     mcp: <Plug className="w-5 h-5 text-canopy-text/60" />,
     troubleshooting: <LifeBuoy className="w-5 h-5 text-canopy-text/60" />,
@@ -441,6 +457,15 @@ export function SettingsDialog({
                 onSelect={handleNavSelect}
               />
               <NavItem
+                tab="imageViewer"
+                icon={<Image className="w-4 h-4" />}
+                label="Image Viewer"
+                activeTab={activeTab}
+                isSearching={isSearching}
+                matchCount={matchCounts.imageViewer}
+                onSelect={handleNavSelect}
+              />
+              <NavItem
                 tab="sidecar"
                 icon={<PanelRight className="w-4 h-4" />}
                 label="Sidecar"
@@ -548,7 +573,11 @@ export function SettingsDialog({
                 </div>
 
                 <div className={activeTab === "agents" ? "" : "hidden"}>
-                  <AgentSettings onSettingsChange={onSettingsChange} />
+                  <AgentSettings
+                    activeSubtab={activeSubtabs["agents"] ?? null}
+                    onSubtabChange={(id) => setActiveSubtabs((prev) => ({ ...prev, agents: id }))}
+                    onSettingsChange={onSettingsChange}
+                  />
                 </div>
 
                 <div className={activeTab === "github" ? "" : "hidden"}>
@@ -569,6 +598,10 @@ export function SettingsDialog({
 
                 <div className={activeTab === "editor" ? "" : "hidden"}>
                   <EditorIntegrationTab />
+                </div>
+
+                <div className={activeTab === "imageViewer" ? "" : "hidden"}>
+                  <ImageViewerTab />
                 </div>
 
                 <div className={activeTab === "voice" ? "" : "hidden"}>
@@ -664,7 +697,7 @@ function MatchBadge({ count }: { count: number }) {
 interface SearchResultsProps {
   results: ReturnType<typeof filterSettings>;
   query: string;
-  onResultClick: (tab: SettingsTab, sectionId?: string) => void;
+  onResultClick: (target: SettingsNavTarget) => void;
   activeIndex?: number;
 }
 
@@ -708,7 +741,9 @@ function SearchResults({ results, query, onResultClick, activeIndex = -1 }: Sear
         <button
           key={result.id}
           ref={index === activeIndex ? activeRef : undefined}
-          onClick={() => onResultClick(result.tab, result.id)}
+          onClick={() =>
+            onResultClick({ tab: result.tab, subtab: result.subtab, sectionId: result.id })
+          }
           className={cn(
             "group w-full text-left p-3 rounded-[var(--radius-md)] border transition-all",
             index === activeIndex
@@ -723,6 +758,12 @@ function SearchResults({ results, query, onResultClick, activeIndex = -1 }: Sear
                 <span className="text-[10px] font-medium text-canopy-accent/80 uppercase tracking-wide">
                   {result.tabLabel}
                 </span>
+                {result.subtabLabel && (
+                  <>
+                    <span className="text-[10px] text-canopy-text/30">›</span>
+                    <span className="text-[10px] text-canopy-text/50">{result.subtabLabel}</span>
+                  </>
+                )}
                 <span className="text-[10px] text-canopy-text/30">›</span>
                 <span className="text-[10px] text-canopy-text/50">{result.section}</span>
               </div>

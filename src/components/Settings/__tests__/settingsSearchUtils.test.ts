@@ -153,6 +153,87 @@ describe("HighlightText", () => {
   });
 });
 
+describe("subtab-aware search", () => {
+  it("includes subtabLabel in searchable haystack", () => {
+    const index = [
+      {
+        id: "test-entry",
+        tab: "agents" as const,
+        tabLabel: "CLI Agents",
+        section: "Settings",
+        title: "Some Setting",
+        description: "Some description",
+        subtab: "gemini",
+        subtabLabel: "Gemini",
+      },
+    ];
+    const results = filterSettings(index, "gemini");
+    expect(results).toHaveLength(1);
+    expect(results[0].id).toBe("test-entry");
+  });
+
+  it("returns subtab metadata in matched results", () => {
+    const index = [
+      {
+        id: "sub-entry",
+        tab: "agents" as const,
+        tabLabel: "CLI Agents",
+        section: "Runtime",
+        title: "Enable Agent",
+        description: "Toggle agent on/off",
+        subtab: "claude",
+        subtabLabel: "Claude",
+        keywords: ["enable"],
+      },
+    ];
+    const results = filterSettings(index, "enable");
+    expect(results[0].subtab).toBe("claude");
+    expect(results[0].subtabLabel).toBe("Claude");
+  });
+
+  it("does not require subtab or subtabLabel fields", () => {
+    const index = [
+      {
+        id: "no-subtab",
+        tab: "general" as const,
+        tabLabel: "General",
+        section: "About",
+        title: "App Version",
+        description: "Current version",
+      },
+    ];
+    const results = filterSettings(index, "version");
+    expect(results).toHaveLength(1);
+    expect(results[0].subtab).toBeUndefined();
+  });
+
+  it("countMatchesPerTab is unaffected by subtab presence", () => {
+    const index = [
+      {
+        id: "a",
+        tab: "agents" as const,
+        tabLabel: "CLI Agents",
+        section: "S",
+        title: "Enable",
+        description: "d",
+        subtab: "claude",
+      },
+      {
+        id: "b",
+        tab: "agents" as const,
+        tabLabel: "CLI Agents",
+        section: "S",
+        title: "Enable Gemini",
+        description: "d",
+        subtab: "gemini",
+      },
+    ];
+    const results = filterSettings(index, "enable");
+    const counts = countMatchesPerTab(results);
+    expect(counts.agents).toBe(2);
+  });
+});
+
 describe("SETTINGS_SEARCH_INDEX", () => {
   it("has entries covering all 12 settings tabs", () => {
     const tabs = new Set(SETTINGS_SEARCH_INDEX.map((e) => e.tab));

@@ -4,6 +4,7 @@ import os from "os";
 import path from "path";
 import type { Migration } from "../StoreMigrations.js";
 import { MigrationRunner } from "../StoreMigrations.js";
+import { migration004 } from "../migrations/004-upgrade-correction-model.js";
 
 type MockStoreData = Record<string, unknown>;
 
@@ -140,6 +141,43 @@ describe("MigrationRunner", () => {
     const files = fs.readdirSync(tempDir);
     const backupFiles = files.filter((file) => file.startsWith("config.json.backup-"));
     expect(backupFiles).toHaveLength(1);
+  });
+
+  describe("migration 004 — upgrade correction model", () => {
+    it("upgrades gpt-5-nano to gpt-5-mini and preserves sibling fields", () => {
+      const store = createMockStore(storePath, {
+        voiceInput: { correctionModel: "gpt-5-nano", enabled: true, language: "en" },
+      });
+      migration004.up(store as never);
+      const voiceInput = store.data.voiceInput as Record<string, unknown>;
+      expect(voiceInput.correctionModel).toBe("gpt-5-mini");
+      expect(voiceInput.enabled).toBe(true);
+      expect(voiceInput.language).toBe("en");
+    });
+
+    it("upgrades missing correctionModel to gpt-5-mini", () => {
+      const store = createMockStore(storePath, {
+        voiceInput: { enabled: true },
+      });
+      migration004.up(store as never);
+      const voiceInput = store.data.voiceInput as { correctionModel: string };
+      expect(voiceInput.correctionModel).toBe("gpt-5-mini");
+    });
+
+    it("leaves gpt-5-mini unchanged", () => {
+      const store = createMockStore(storePath, {
+        voiceInput: { correctionModel: "gpt-5-mini", enabled: true },
+      });
+      migration004.up(store as never);
+      const voiceInput = store.data.voiceInput as { correctionModel: string };
+      expect(voiceInput.correctionModel).toBe("gpt-5-mini");
+    });
+
+    it("skips when no voiceInput settings exist", () => {
+      const store = createMockStore(storePath, {});
+      migration004.up(store as never);
+      expect(store.data.voiceInput).toBeUndefined();
+    });
   });
 
   it("does nothing when there are no pending migrations", async () => {

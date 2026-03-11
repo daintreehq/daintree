@@ -1,5 +1,6 @@
 import type { Worktree, WorktreeState } from "@shared/types/domain";
 import { BRANCH_PREFIX_MAP } from "@shared/config/branchPrefixes";
+import { parseExactNumber } from "@/lib/parseExactNumber";
 import type {
   OrderBy,
   StatusFilter,
@@ -107,9 +108,16 @@ export function matchesFilters(
 ): boolean {
   // Text search
   if (filters.query.length > 0) {
-    const searchable = buildSearchableText(worktree);
-    if (!searchable.includes(filters.query.toLowerCase())) {
-      return false;
+    const exactNum = parseExactNumber(filters.query);
+    if (exactNum !== null && filters.query.trim().startsWith("#")) {
+      if (worktree.issueNumber !== exactNum && worktree.prNumber !== exactNum) {
+        return false;
+      }
+    } else {
+      const searchable = buildSearchableText(worktree);
+      if (!searchable.includes(filters.query.toLowerCase())) {
+        return false;
+      }
     }
   }
 
@@ -306,5 +314,22 @@ export function hasAnyFilters(filters: FilterState): boolean {
     filters.githubFilters.size > 0 ||
     filters.sessionFilters.size > 0 ||
     filters.activityFilters.size > 0
+  );
+}
+
+export const INTEGRATION_BRANCH_NAMES = ["develop", "trunk", "next"] as const;
+
+export function findIntegrationWorktree<T extends Worktree | WorktreeState>(
+  worktrees: T[],
+  mainWorktreeId: string | undefined
+): T | null {
+  return (
+    worktrees.find(
+      (w) =>
+        w.id !== mainWorktreeId &&
+        !w.isMainWorktree &&
+        w.branch != null &&
+        (INTEGRATION_BRANCH_NAMES as readonly string[]).includes(w.branch.toLowerCase())
+    ) ?? null
   );
 }

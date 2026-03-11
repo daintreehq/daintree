@@ -29,6 +29,15 @@ import {
 
 fixPath();
 
+// In development, use a separate userData directory so the dev instance
+// doesn't conflict with the production app's single-instance lock or storage.
+// Skip when --user-data-dir is explicitly set (e.g. E2E tests) so that
+// each test run gets its own isolated data directory.
+const hasExplicitUserDataDir = process.argv.some((a) => a.startsWith("--user-data-dir"));
+if (!app.isPackaged && !hasExplicitUserDataDir) {
+  app.setPath("userData", path.join(app.getPath("appData"), `${app.name}-dev`));
+}
+
 // Enable native Wayland support on Linux (Electron < 38)
 // Electron 38+ auto-detects via XDG_SESSION_TYPE; this flag is ignored.
 if (process.platform === "linux") {
@@ -239,6 +248,14 @@ protocol.registerSchemesAsPrivileged([
       corsEnabled: true,
     },
   },
+  {
+    scheme: "canopy-file",
+    privileges: {
+      secure: true,
+      bypassCSP: true,
+      supportFetchAPI: true,
+    },
+  },
 ]);
 
 // Increase V8 heap size for renderer processes to handle large clipboard data
@@ -388,6 +405,23 @@ if (!gotTheLock) {
   // must not consume/delete the current session's marker before it quits.
   initializeCrashRecoveryService();
 
+  // In dev mode, nodemon/concurrently restart the Electron process by sending SIGTERM.
+  // Electron's `before-quit` event does NOT fire on SIGTERM, so cleanupOnExit() would
+  // never run and running.lock would be orphaned — triggering the crash recovery dialog
+  // on every hot reload. Register explicit handlers to clean up and exit cleanly.
+  if (!app.isPackaged) {
+    const devSignalHandler = () => {
+      // Clean up synchronously before the async quit path — the before-quit handler
+      // guards on mainWindow existence and may skip cleanupOnExit() during startup.
+      getCrashRecoveryService().cleanupOnExit();
+      // Safety net: force exit if graceful shutdown hangs (nodemon will SIGKILL anyway).
+      setTimeout(() => process.exit(0), 3000).unref();
+      app.quit();
+    };
+    process.on("SIGTERM", devSignalHandler);
+    process.on("SIGINT", devSignalHandler);
+  }
+
   app.on("second-instance", (_event, commandLine, _workingDirectory) => {
     console.log("[MAIN] Second instance detected, focusing main window");
     if (mainWindow) {
@@ -412,6 +446,7 @@ if (!gotTheLock) {
   app.whenReady().then(async () => {
     try {
       registerAppProtocol();
+      registerCanopyFileProtocol();
       setupWebviewCSP();
       await createWindow();
     } catch (error) {
@@ -591,6 +626,59 @@ function registerAppProtocol(): void {
         status: 500,
         headers: { "Content-Type": "text/plain" },
       });
+    }
+  });
+}
+
+function registerCanopyFileProtocol(): void {
+  protocol.handle("canopy-file", async (request) => {
+    if (request.method !== "GET" && request.method !== "HEAD") {
+      return new Response("Method Not Allowed", { status: 405 });
+    }
+
+    try {
+      const url = new URL(request.url);
+      const filePath = url.searchParams.get("path");
+      const rootPath = url.searchParams.get("root");
+
+      if (!filePath || !rootPath) {
+        return new Response("Missing path or root parameter", { status: 400 });
+      }
+
+      if (filePath.includes("\0") || rootPath.includes("\0")) {
+        return new Response("Invalid path", { status: 400 });
+      }
+
+      if (!path.isAbsolute(filePath) || !path.isAbsolute(rootPath)) {
+        return new Response("Paths must be absolute", { status: 400 });
+      }
+
+      const normalizedFile = path.normalize(filePath);
+      const normalizedRoot = path.normalize(rootPath);
+
+      if (
+        !normalizedFile.startsWith(normalizedRoot + path.sep) &&
+        normalizedFile !== normalizedRoot
+      ) {
+        return new Response("Forbidden — path outside root", { status: 403 });
+      }
+
+      const mimeType = getMimeType(normalizedFile);
+      const fileUrl = pathToFileURL(normalizedFile).toString();
+      const response = await net.fetch(fileUrl);
+
+      if (!response.ok) {
+        return new Response("Not Found", { status: 404 });
+      }
+
+      const buffer = await response.arrayBuffer();
+      return new Response(buffer, {
+        status: 200,
+        headers: { "Content-Type": mimeType },
+      });
+    } catch (err) {
+      console.error("[MAIN] canopy-file protocol error:", err);
+      return new Response("Internal Server Error", { status: 500 });
     }
   });
 }
@@ -874,17 +962,19 @@ async function createWindow(): Promise<void> {
     webPreferences.disableBlinkFeatures = "Auxclick";
   });
 
-  // Intercept Cmd+W (macOS) / Ctrl+W (Windows/Linux) to prevent window close.
-  mainWindow.webContents.on("before-input-event", (event, input) => {
+  // Prevent Cmd+W (macOS) / Ctrl+W (Windows/Linux) from closing the window.
+  // Using setIgnoreMenuShortcuts instead of event.preventDefault() so the keypress
+  // still reaches the renderer's keybinding system (which dispatches terminal.close).
+  const wc = mainWindow.webContents;
+  wc.on("before-input-event", (_event, input) => {
     const isMac = process.platform === "darwin";
     const isCloseShortcut =
+      input.type === "keyDown" &&
       input.key.toLowerCase() === "w" &&
       ((isMac && input.meta && !input.control) || (!isMac && input.control && !input.meta)) &&
       !input.alt;
 
-    if (isCloseShortcut) {
-      event.preventDefault();
-    }
+    wc.setIgnoreMenuShortcuts(isCloseShortcut);
   });
 
   setLoggerWindow(mainWindow);

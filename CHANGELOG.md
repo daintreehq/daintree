@@ -1,5 +1,47 @@
 # Changelog
 
+## [0.3.0] - 2026-03-11
+
+### Features
+
+- **Worktree Sidebar Redesign** — Visual hierarchy polish, unified search+filter input, persistent inline search bar, and header cleanup (#2756, #2758, #2747)
+- **Voice Input Improvements** — Upgrade to GPT-5 Mini correction model, stable ID-based correction matching, canonical phase model, paragraphing strategy with spoken-command default, and distinct interim vs pending-AI visual treatment (#2754, #2694, #2692, #2697, #2695)
+- **SQLite Project Registry** — Migrate project registry from electron-store JSON to SQLite for durability (#2707)
+- **Project Relocation** — Relocate projects with automatic state and environment variable migration (#2688)
+- **Check for Updates** — Add menu item to manually check for application updates (#2685)
+- **File Viewer Images** — Display image files inline in the file viewer instead of showing binary error (#2739)
+- **Settings Subtabs** — Formal subtab support for settings pages, CLI Agents tab restructured with subtabs and canonical default agent (#2698, #2699)
+- **Review Hub Enhancements** — Surface PR state with clickable link, add base-branch diff toggle for PR-accurate review (#2684, #2683)
+- **GitHub Issue Selector** — Show author and comment count in issue selector rows (#2690)
+
+### Bug Fixes
+
+- Fix cross-project contamination in worktree snapshot cache and refresh (#2741, #2703)
+- Fix crash recovery destroying project list on Start Fresh (#2704)
+- Exclude projects from crash recovery session snapshot (#2706)
+- Fix dev mode triggering crash recovery dialog on every restart (#2705)
+- Fix Cmd+W not closing the focused panel (#2689)
+- Fix input field intermittently dropping text on submit (#2737)
+- Fix Enter during voice dictation corrupting paragraph boundaries (#2693)
+- Replace aggressive GitHub error box with stale data banner (#2740)
+- Add actionable link to GitHub settings on token configuration error (#2738)
+- Replace AI correction badge with green dotted underline decoration (#2755)
+- Anchor plus button to right edge of worktrees header (#2765)
+- Remove root worktree background tint collision with active selection (#2766)
+- Remove inline Copy Context button and Inject Context menu item (#2763)
+- Reduce noisy success toasts for user-initiated actions (#2752)
+- Remove hardcoded onboarding wizard prompt sent to agent (#2700)
+- Restore primary button text contrast (#2682)
+- Hide Check for Updates menu item in development mode (#2753)
+- Handle renamed or deleted project directories gracefully (#2686)
+
+### Performance
+
+- Throttle inactive dock webviews via CDP lifecycle freeze (#2702)
+- Reduce renderer render churn from high-frequency store updates (#2701)
+
+---
+
 ## [0.2.0] - 2026-03-09
 
 ### Features

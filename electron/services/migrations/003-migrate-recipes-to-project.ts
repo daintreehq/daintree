@@ -12,8 +12,7 @@ export const migration003: Migration = {
       return;
     }
 
-    const projects = store.get("projects");
-    const currentProjectId = projects?.currentProjectId;
+    const currentProjectId = projectStore.getCurrentProjectId();
 
     if (!currentProjectId) {
       console.log(
@@ -24,7 +23,7 @@ export const migration003: Migration = {
     }
 
     // Verify the project exists in the project list
-    const projectExists = projects?.list?.some((p: { id: string }) => p.id === currentProjectId);
+    const projectExists = projectStore.getProjectById(currentProjectId) !== null;
     if (!projectExists) {
       console.warn(
         `[Migration 003] Current project ID ${currentProjectId} not found in project list, skipping migration`

@@ -1,6 +1,6 @@
 import { createClient, LiveTranscriptionEvents } from "@deepgram/sdk";
 import type { ListenLiveClient, LiveTranscriptionEvent } from "@deepgram/sdk";
-import type { VoiceInputSettings } from "../../shared/types/ipc/api.js";
+import type { VoiceInputSettings, VoiceInputStatus } from "../../shared/types/ipc/api.js";
 import { logDebug, logInfo, logWarn, logError } from "../utils/logger.js";
 
 const P = "[VoiceTranscription]";
@@ -10,7 +10,7 @@ export type VoiceTranscriptionEvent =
   | { type: "complete"; text: string }
   | { type: "paragraph_boundary" }
   | { type: "error"; message: string }
-  | { type: "status"; status: "idle" | "connecting" | "recording" | "finishing" | "error" };
+  | { type: "status"; status: VoiceInputStatus };
 
 type VoiceStartResult = { ok: true } | { ok: false; error: string };
 
@@ -35,10 +35,34 @@ export class VoiceTranscriptionService {
   private utteranceSegments: string[] = [];
   /** Total text emitted as delta events for the current utterance (for incremental diffs). */
   private liveText = "";
+  /**
+   * When true, all transcript events for the current Deepgram utterance are suppressed
+   * until the next speech_final or UtteranceEnd clears this flag. Set by
+   * commitParagraphBoundary() after the in-flight utterance text has been consumed.
+   */
+  private _suppressingUtterance = false;
 
   onEvent(listener: (event: VoiceTranscriptionEvent) => void): () => void {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
+  }
+
+  /**
+   * Captures any in-flight utterance text accumulated so far (from deltas / is_final segments),
+   * resets utterance state, and suppresses subsequent Deepgram finalization events for that
+   * utterance. Call this before flushing the paragraph buffer on a manual Enter keypress so
+   * that text spoken before the paragraph break is captured into the correct paragraph and
+   * late speech_final / UtteranceEnd events cannot overwrite the committed newline.
+   *
+   * Returns the captured text (may be empty if no utterance was in flight).
+   */
+  commitParagraphBoundary(): string {
+    const text = (this.liveText || this.utteranceSegments.join(" ")).trim();
+    this.resetUtteranceState();
+    if (text) {
+      this._suppressingUtterance = true;
+    }
+    return text;
   }
 
   private emit(event: VoiceTranscriptionEvent): void {
@@ -99,16 +123,30 @@ export class VoiceTranscriptionService {
         keyterms: keyterms.length,
       });
 
+      // Paragraphing strategy controls which Deepgram features are enabled:
+      //   "spoken-command" (default): Deepgram Dictation mode — the user says "new paragraph"
+      //     and Deepgram intercepts it, inserting \n\n into the transcript text. This is the
+      //     reliable live-streaming mechanism. `paragraphs: true` was evaluated and rejected
+      //     because it populates a JSON object rather than injecting \n\n into transcript text.
+      //   "manual": No dictation mode; paragraph breaks come from the Enter key only.
+      // Both modes use endpointing: 800ms (the sweet spot for dictation — 500ms fragments
+      // speech mid-thought; 1500ms feels sluggish) with utterance_end_ms: 1000ms as fallback.
+      // Note: Deepgram Dictation is documented as English-only. We only enable it when the
+      // session language is English; non-English sessions fall back to manual-Enter paragraphing.
+      const isEnglish = (settings.language || "en") === "en";
+      const isSpokenCommand =
+        (settings.paragraphingStrategy ?? "spoken-command") === "spoken-command" && isEnglish;
+
       const connection = deepgram.listen.live({
         model: settings.transcriptionModel || "nova-3",
         language: settings.language || "en",
         smart_format: true,
-        paragraphs: true,
         interim_results: true,
-        endpointing: 500,
+        endpointing: 800,
         utterance_end_ms: 1000,
         encoding: "linear16",
         sample_rate: 24000,
+        ...(isSpokenCommand ? { dictation: true, punctuate: true } : {}),
         ...(keyterms.length > 0 ? { keyterm: keyterms } : {}),
       });
 
@@ -207,9 +245,9 @@ export class VoiceTranscriptionService {
   }
 
   private emitCompleteWithParagraphDetection(text: string): void {
-    // Deepgram inserts \n\n at paragraph boundaries when paragraphs=true.
-    // Split on these boundaries so each paragraph is emitted separately,
-    // with a paragraph_boundary event between them.
+    // In spoken-command mode, Deepgram Dictation intercepts "new paragraph" and
+    // injects \n\n into the transcript text. Split on these markers so each paragraph
+    // is emitted separately with a paragraph_boundary event between them.
     // Only emit boundaries between non-empty parts to avoid spurious events
     // from leading/trailing \n\n (e.g. "para\n\n" or "\n\npara").
     const parts = text
@@ -225,6 +263,17 @@ export class VoiceTranscriptionService {
   }
 
   private handleTranscript(transcript: string, isFinal: boolean, speechFinal: boolean): void {
+    if (this._suppressingUtterance) {
+      if (speechFinal) {
+        this._suppressingUtterance = false;
+        this.resetUtteranceState();
+        if (this.isDraining) {
+          this.settleDrain();
+        }
+      }
+      return;
+    }
+
     if (speechFinal) {
       const segments = [...this.utteranceSegments, transcript].filter((s) => s.trim());
       const fullText = segments.join(" ").trim();
@@ -237,16 +286,55 @@ export class VoiceTranscriptionService {
         this.settleDrain();
       }
     } else if (isFinal) {
-      const segmentText = transcript.trim();
-      if (segmentText) {
-        const accumulated = [...this.utteranceSegments, segmentText].filter(Boolean).join(" ");
-        this.emitIncrementalDelta(accumulated);
-        this.utteranceSegments.push(segmentText);
+      // Deepgram live streaming signals a paragraph boundary by inserting \n\n
+      // into is_final transcript segments (typically at the start of the first
+      // segment of a new paragraph). Detect this before trimming so the boundary
+      // is not silently discarded.
+      if (transcript.includes("\n\n")) {
+        this.handleIsFinalWithParagraphBoundary(transcript);
+      } else {
+        const segmentText = transcript.trim();
+        if (segmentText) {
+          const accumulated = [...this.utteranceSegments, segmentText].filter(Boolean).join(" ");
+          this.emitIncrementalDelta(accumulated);
+          this.utteranceSegments.push(segmentText);
+        }
       }
     } else {
       if (!transcript) return;
       const accumulated = [...this.utteranceSegments, transcript].filter(Boolean).join(" ");
       this.emitIncrementalDelta(accumulated);
+    }
+  }
+
+  private handleIsFinalWithParagraphBoundary(transcript: string): void {
+    const boundaryIdx = transcript.indexOf("\n\n");
+    const before = transcript.slice(0, boundaryIdx).trim();
+    const after = transcript
+      .slice(boundaryIdx)
+      .replace(/^\n\n+/, "")
+      .trim();
+
+    // Flush the paragraph that just ended: existing segments + any text before \n\n.
+    const completedSegments = [...this.utteranceSegments, ...(before ? [before] : [])].filter(
+      Boolean
+    );
+    const completedText = completedSegments.join(" ").trim();
+    this.resetUtteranceState();
+
+    // Only emit a boundary when there is actually a completed paragraph to close.
+    // Suppress spurious boundaries (e.g. first-ever segment starts with \n\n) to
+    // avoid inserting a blank line into the renderer before any speech has arrived.
+    if (completedText) {
+      this.emit({ type: "complete", text: completedText });
+      this.emit({ type: "paragraph_boundary" });
+    }
+
+    // Begin accumulating the next paragraph with any text that follows the boundary.
+    // Do NOT emit it as complete yet — let speech_final/UtteranceEnd finalize it.
+    if (after) {
+      this.emitIncrementalDelta(after);
+      this.utteranceSegments.push(after);
     }
   }
 
@@ -268,6 +356,15 @@ export class VoiceTranscriptionService {
   }
 
   private flushUtterance(): void {
+    if (this._suppressingUtterance) {
+      this._suppressingUtterance = false;
+      this.resetUtteranceState();
+      if (this.isDraining) {
+        this.settleDrain();
+      }
+      return;
+    }
+
     // Use liveText if set — it includes any pending interim transcript that has
     // not yet received is_final=true (e.g. when UtteranceEnd fires without speech_final).
     const fullText = (this.liveText || this.utteranceSegments.join(" ")).trim();
@@ -330,6 +427,7 @@ export class VoiceTranscriptionService {
     this.clearKeepAliveInterval();
     this.clearDrainTimeout();
     this.isDraining = false;
+    this._suppressingUtterance = false;
     this.resetUtteranceState();
     if (this.drainResolve) {
       this.drainResolve();

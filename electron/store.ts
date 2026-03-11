@@ -1,5 +1,4 @@
 import Store from "electron-store";
-import type { Project } from "./types/index.js";
 import type {
   AgentSettings,
   PanelGridConfig,
@@ -86,10 +85,6 @@ export interface StoreSchema {
     panelGridConfig?: PanelGridConfig;
     mruList?: string[];
   };
-  projects: {
-    list: Project[];
-    currentProjectId?: string;
-  };
   userConfig: {
     githubToken?: string;
   };
@@ -126,6 +121,7 @@ export interface StoreSchema {
     correctionEnabled: boolean;
     correctionModel: string;
     correctionCustomInstructions: string;
+    paragraphingStrategy: string;
   };
   mcpServer: {
     enabled: boolean;
@@ -165,10 +161,6 @@ const storeOptions = {
       hasSeenWelcome: false,
       panelGridConfig: { strategy: "automatic" as const, value: 3 },
     },
-    projects: {
-      list: [],
-      currentProjectId: undefined,
-    },
     userConfig: {},
     worktreeConfig: {
       pathPattern: "{parent-dir}/{base-folder}-worktrees/{branch-slug}",
@@ -207,8 +199,9 @@ const storeOptions = {
       customDictionary: [],
       transcriptionModel: "nova-3",
       correctionEnabled: false,
-      correctionModel: "gpt-5-nano",
+      correctionModel: "gpt-5-mini",
       correctionCustomInstructions: "",
+      paragraphingStrategy: "spoken-command",
     },
     mcpServer: {
       enabled: false,

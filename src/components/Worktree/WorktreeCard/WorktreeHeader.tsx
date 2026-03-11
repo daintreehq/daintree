@@ -1,5 +1,4 @@
 import { useCallback, useMemo, useState, memo } from "react";
-import type React from "react";
 import type { TerminalRecipe, WorktreeState } from "@/types";
 import { cn } from "@/lib/utils";
 import { BranchLabel } from "../BranchLabel";
@@ -23,15 +22,12 @@ import {
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "../../ui/tooltip";
 import {
   AlertCircle,
-  Check,
   CircleDot,
-  Copy,
   CornerDownRight,
   GitPullRequest,
-  Loader2,
   MoreHorizontal,
+  House,
   Pin,
-  Shield,
 } from "lucide-react";
 import { useIssueTooltip, usePRTooltip } from "@/hooks/useGitHubTooltip";
 import { IssueTooltipContent, PRTooltipContent, TooltipLoading } from "./GitHubTooltipContent";
@@ -199,13 +195,6 @@ export interface WorktreeHeaderProps {
   branchLabel: string;
   worktreeErrorCount: number;
 
-  copy: {
-    treeCopied: boolean;
-    isCopyingTree: boolean;
-    copyFeedback: string;
-    onCopyTreeClick: (e: React.MouseEvent<HTMLButtonElement>) => void | Promise<void>;
-  };
-
   badges: {
     onOpenIssue?: () => void;
     onOpenPR?: () => void;
@@ -216,7 +205,6 @@ export interface WorktreeHeaderProps {
     recipes: TerminalRecipe[];
     runningRecipeId: string | null;
     isRestartValidating: boolean;
-    hasFocusedTerminal: boolean;
     counts: {
       grid: number;
       dock: number;
@@ -227,7 +215,6 @@ export interface WorktreeHeaderProps {
     };
     onCopyContextFull: () => void;
     onCopyContextModified: () => void;
-    onInjectContext: () => void;
     onOpenEditor: () => void;
     onRevealInFinder: () => void;
     onOpenIssueSidecar?: () => void;
@@ -260,7 +247,6 @@ export function WorktreeHeader({
   isPinned,
   branchLabel,
   worktreeErrorCount,
-  copy,
   badges,
   menu,
 }: WorktreeHeaderProps) {
@@ -281,9 +267,10 @@ export function WorktreeHeader({
       <div className="flex items-center gap-2 min-h-[22px]">
         <div className="flex items-center gap-2 min-w-0 flex-1">
           {isMainWorktree && (
-            <Shield
-              className="w-3.5 h-3.5 text-canopy-text/30 shrink-0"
-              aria-label="Main worktree"
+            <House
+              className="w-3.5 h-3.5 text-canopy-text/60 shrink-0"
+              fill="currentColor"
+              aria-hidden="true"
             />
           )}
           {isPinned && !isMainWorktree && (
@@ -313,57 +300,12 @@ export function WorktreeHeader({
 
         <div
           className={cn(
-            "flex items-center gap-1 shrink-0 transition-opacity duration-150",
-            isActive || copy.treeCopied || copy.isCopyingTree
+            "shrink-0 transition-opacity duration-150",
+            isActive
               ? "opacity-100"
               : "opacity-0 group-hover:opacity-100 group-focus-within:opacity-100"
           )}
         >
-          <TooltipProvider>
-            <Tooltip open={copy.treeCopied || undefined} delayDuration={copy.treeCopied ? 0 : 300}>
-              <TooltipTrigger asChild>
-                <button
-                  onClick={copy.onCopyTreeClick}
-                  disabled={copy.isCopyingTree}
-                  className={cn(
-                    "p-1 rounded transition-colors",
-                    copy.treeCopied
-                      ? "text-status-success bg-status-success/10"
-                      : "text-canopy-text/40 hover:text-canopy-text hover:bg-white/5",
-                    "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent",
-                    copy.isCopyingTree && "cursor-wait opacity-70"
-                  )}
-                  aria-label={
-                    copy.isCopyingTree
-                      ? "Copying…"
-                      : copy.treeCopied
-                        ? "Context Copied"
-                        : "Copy Context"
-                  }
-                >
-                  {copy.isCopyingTree ? (
-                    <Loader2 className="w-3.5 h-3.5 animate-spin motion-reduce:animate-none text-canopy-text" />
-                  ) : copy.treeCopied ? (
-                    <Check className="w-3.5 h-3.5" />
-                  ) : (
-                    <Copy className="w-3.5 h-3.5" />
-                  )}
-                </button>
-              </TooltipTrigger>
-              <TooltipContent side="top" className="font-medium">
-                {copy.isCopyingTree ? (
-                  "Copying…"
-                ) : copy.treeCopied ? (
-                  <span role="status" aria-live="polite">
-                    {copy.copyFeedback}
-                  </span>
-                ) : (
-                  "Copy Context"
-                )}
-              </TooltipContent>
-            </Tooltip>
-          </TooltipProvider>
-
           <DropdownMenu>
             <TooltipProvider>
               <Tooltip>
@@ -398,12 +340,10 @@ export function WorktreeHeader({
                 runningRecipeId={menu.runningRecipeId}
                 isRestartValidating={menu.isRestartValidating}
                 isPinned={isPinned}
-                hasFocusedTerminal={menu.hasFocusedTerminal}
                 counts={menu.counts}
                 onLaunchAgent={menu.onLaunchAgent ? handleLaunchAgent : undefined}
                 onCopyContextFull={menu.onCopyContextFull}
                 onCopyContextModified={menu.onCopyContextModified}
-                onInjectContext={menu.onInjectContext}
                 onOpenEditor={menu.onOpenEditor}
                 onRevealInFinder={menu.onRevealInFinder}
                 onOpenIssueSidecar={menu.onOpenIssueSidecar}

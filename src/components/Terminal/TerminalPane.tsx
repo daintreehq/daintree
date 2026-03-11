@@ -15,7 +15,6 @@ import { TerminalRestartBanner } from "./TerminalRestartBanner";
 import { TerminalErrorBanner } from "./TerminalErrorBanner";
 import { SpawnErrorBanner } from "./SpawnErrorBanner";
 import { ReconnectErrorBanner } from "./ReconnectErrorBanner";
-import { GeminiAlternateBufferBanner } from "./GeminiAlternateBufferBanner";
 import { UpdateCwdDialog } from "./UpdateCwdDialog";
 import { ErrorBanner } from "../Errors/ErrorBanner";
 import { ContentPanel } from "@/components/Panel";
@@ -121,7 +120,6 @@ function TerminalPaneComponent({
   const [dismissedRestartPrompt, setDismissedRestartPrompt] = useState(false);
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [isUpdateCwdOpen, setIsUpdateCwdOpen] = useState(false);
-  const [showGeminiBanner, setShowGeminiBanner] = useState(false);
   const [isAutoRestarting, setIsAutoRestarting] = useState(false);
   const autoRestartTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const autoRestartAttemptRef = useRef(0);
@@ -151,40 +149,6 @@ function TerminalPaneComponent({
     // Track process start time on each restart for backoff stability window
     processStartTimeRef.current = Date.now();
   }, [restartKey]);
-
-  useEffect(() => {
-    let isActive = true;
-
-    if (type !== "gemini") {
-      setShowGeminiBanner(false);
-      return;
-    }
-
-    const dismissed = localStorage.getItem("gemini-alt-buffer-dismissed");
-    if (dismissed === "true") {
-      setShowGeminiBanner(false);
-      return;
-    }
-
-    window.electron.gemini
-      .getStatus()
-      .then((status) => {
-        if (!isActive) return;
-        if (status.exists && !status.alternateBufferEnabled && !status.error) {
-          setShowGeminiBanner(true);
-        } else {
-          setShowGeminiBanner(false);
-        }
-      })
-      .catch(() => {
-        if (!isActive) return;
-        setShowGeminiBanner(false);
-      });
-
-    return () => {
-      isActive = false;
-    };
-  }, [type, restartKey]);
 
   const updateVisibility = useTerminalStore((state) => state.updateVisibility);
   const getTerminal = useTerminalStore((state) => state.getTerminal);
@@ -706,10 +670,6 @@ function TerminalPaneComponent({
           <Loader2 className="h-3 w-3 animate-spin text-canopy-accent" />
           <span>Auto-restarting…</span>
         </div>
-      )}
-
-      {showGeminiBanner && (
-        <GeminiAlternateBufferBanner terminalId={id} onDismiss={() => setShowGeminiBanner(false)} />
       )}
 
       <div className="flex-1 min-h-0 bg-canopy-bg flex flex-col">

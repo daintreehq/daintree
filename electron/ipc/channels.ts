@@ -187,6 +187,8 @@ export const CHANNELS = {
   PROJECT_WRITE_CLAUDE_MD: "project:write-claude-md",
   PROJECT_ENABLE_IN_REPO_SETTINGS: "project:enable-in-repo-settings",
   PROJECT_DISABLE_IN_REPO_SETTINGS: "project:disable-in-repo-settings",
+  PROJECT_CHECK_MISSING: "project:check-missing",
+  PROJECT_LOCATE: "project:locate",
 
   AGENT_SETTINGS_GET: "agent-settings:get",
   AGENT_SETTINGS_SET: "agent-settings:set",
@@ -241,6 +243,8 @@ export const CHANNELS = {
   HIBERNATION_GET_CONFIG: "hibernation:get-config",
   HIBERNATION_UPDATE_CONFIG: "hibernation:update-config",
 
+  WEBVIEW_SET_LIFECYCLE_STATE: "webview:set-lifecycle-state",
+
   SYSTEM_SLEEP_GET_METRICS: "system-sleep:get-metrics",
   SYSTEM_SLEEP_GET_AWAKE_TIME: "system-sleep:get-awake-time",
   SYSTEM_SLEEP_RESET: "system-sleep:reset",
@@ -282,6 +286,7 @@ export const CHANNELS = {
   UPDATE_DOWNLOADED: "update:downloaded",
   UPDATE_ERROR: "update:error",
   UPDATE_QUIT_AND_INSTALL: "update:quit-and-install",
+  UPDATE_CHECK_FOR_UPDATES: "update:check-for-updates",
 
   SLASH_COMMANDS_LIST: "slash-commands:list",
 

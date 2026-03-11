@@ -1,9 +1,9 @@
+import path from "path-browserify";
 import { create } from "zustand";
 import type { WorktreeState, IssueAssociation } from "@shared/types";
 import { worktreeClient, githubClient } from "@/clients";
 import { useWorktreeSelectionStore } from "./worktreeStore";
 import { useTerminalStore } from "./terminalStore";
-import { notify } from "@/lib/notify";
 import { usePulseStore } from "./pulseStore";
 
 interface WorktreeDataState {
@@ -27,6 +27,11 @@ let cleanupListeners: (() => void) | null = null;
 let initPromise: Promise<void> | null = null;
 let storeGeneration = 0;
 let targetProjectId: string | null = null;
+// True during the window between cleanupWorktreeDataStore() and forceReinitializeWorktreeDataStore().
+// During this window the main process has not yet completed its project switch, so any IPC
+// fetch (refresh) would return data from the outgoing project.  Block refresh() until the
+// switch is finalised.
+let isSwitching = false;
 
 const MAX_SNAPSHOT_CACHE_SIZE = 3;
 
@@ -43,6 +48,30 @@ function evictOldestSnapshot(): void {
   if (firstKey !== undefined) {
     projectSnapshotCache.delete(firstKey);
   }
+}
+
+function isSnapshotValidForProject(snapshot: ProjectSnapshot, projectPath: string): boolean {
+  let foundMain = false;
+  for (const wt of snapshot.worktrees.values()) {
+    if (wt.isMainWorktree) {
+      foundMain = true;
+      if (path.normalize(wt.path) !== path.normalize(projectPath)) {
+        console.warn("[WorktreeDataStore] Contaminated snapshot detected", {
+          mainWorktreePath: wt.path,
+          expectedProjectPath: projectPath,
+        });
+        return false;
+      }
+      break;
+    }
+  }
+  if (!foundMain && snapshot.worktrees.size > 0) {
+    console.warn("[WorktreeDataStore] Snapshot has no main worktree, treating as invalid", {
+      expectedProjectPath: projectPath,
+    });
+    return false;
+  }
+  return true;
 }
 
 function mergeFetchedWorktrees(
@@ -101,13 +130,22 @@ export const useWorktreeDataStore = create<WorktreeDataStore>()((set, get) => ({
     // This must run before the isInitialized guard so that push events
     // are never silently dropped after a cleanup+remount.
     if (!cleanupListeners) {
+      const listenerGeneration = storeGeneration;
       const unsubUpdate = worktreeClient.onUpdate((state) => {
+        if (storeGeneration !== listenerGeneration) {
+          console.warn(
+            "[WorktreeDataStore] Discarding stale onUpdate event - project switched since listener was registered",
+            { stateId: state.id }
+          );
+          return;
+        }
         set((prev) => {
-          const next = new Map(prev.worktrees);
           const existing = prev.worktrees.get(state.id);
+
+          let merged: WorktreeState;
           if (existing) {
             const branchChanged = existing.branch !== state.branch;
-            next.set(state.id, {
+            merged = {
               ...state,
               prNumber: branchChanged ? state.prNumber : (state.prNumber ?? existing.prNumber),
               prUrl: branchChanged ? state.prUrl : (state.prUrl ?? existing.prUrl),
@@ -119,10 +157,37 @@ export const useWorktreeDataStore = create<WorktreeDataStore>()((set, get) => ({
               issueTitle: branchChanged
                 ? state.issueTitle
                 : (state.issueTitle ?? existing.issueTitle),
-            });
+            };
+
+            if (
+              existing.branch === merged.branch &&
+              existing.path === merged.path &&
+              existing.name === merged.name &&
+              existing.isCurrent === merged.isCurrent &&
+              existing.isMainWorktree === merged.isMainWorktree &&
+              existing.modifiedCount === merged.modifiedCount &&
+              existing.summary === merged.summary &&
+              existing.mood === merged.mood &&
+              existing.aiNote === merged.aiNote &&
+              existing.aiNoteTimestamp === merged.aiNoteTimestamp &&
+              existing.lastActivityTimestamp === merged.lastActivityTimestamp &&
+              existing.prNumber === merged.prNumber &&
+              existing.prUrl === merged.prUrl &&
+              existing.prState === merged.prState &&
+              existing.prTitle === merged.prTitle &&
+              existing.issueNumber === merged.issueNumber &&
+              existing.issueTitle === merged.issueTitle &&
+              existing.worktreeChanges === merged.worktreeChanges &&
+              existing.lifecycleStatus === merged.lifecycleStatus
+            ) {
+              return prev;
+            }
           } else {
-            next.set(state.id, state);
+            merged = state;
           }
+
+          const next = new Map(prev.worktrees);
+          next.set(state.id, merged);
           return { worktrees: next };
         });
 
@@ -176,13 +241,6 @@ export const useWorktreeDataStore = create<WorktreeDataStore>()((set, get) => ({
           if (terminalsToKill.length > 0) {
             terminalsToKill.forEach((terminal) => {
               terminalStore.removeTerminal(terminal.id);
-            });
-
-            notify({
-              type: "info",
-              title: "Worktree Deleted",
-              message: `${terminalsToKill.length} terminal(s) removed with worktree.`,
-              duration: 5000,
             });
           }
 
@@ -353,6 +411,12 @@ export const useWorktreeDataStore = create<WorktreeDataStore>()((set, get) => ({
   },
 
   refresh: async () => {
+    if (isSwitching) {
+      console.warn(
+        "[WorktreeDataStore] refresh() skipped - project switch in progress (main process not ready)"
+      );
+      return;
+    }
     const capturedGeneration = storeGeneration;
     const capturedProjectId = targetProjectId;
     try {
@@ -405,17 +469,25 @@ export const useWorktreeDataStore = create<WorktreeDataStore>()((set, get) => ({
   },
 }));
 
-export function snapshotProjectWorktrees(projectId: string): void {
+export function snapshotProjectWorktrees(projectId: string, projectPath?: string): void {
   const { worktrees, projectId: storeProjectId } = useWorktreeDataStore.getState();
   if (worktrees.size === 0) return;
   // Don't cache if the store has already moved to a different project.
   if (storeProjectId && storeProjectId !== projectId) return;
-  const activeWorktreeId = useWorktreeSelectionStore.getState().activeWorktreeId;
-  projectSnapshotCache.delete(projectId);
-  projectSnapshotCache.set(projectId, {
+
+  const snapshot: ProjectSnapshot = {
     worktrees: new Map(worktrees),
-    activeWorktreeId,
-  });
+    activeWorktreeId: useWorktreeSelectionStore.getState().activeWorktreeId,
+  };
+
+  if (projectPath && !isSnapshotValidForProject(snapshot, projectPath)) {
+    console.warn("[WorktreeDataStore] Refusing to cache contaminated snapshot", { projectId });
+    projectSnapshotCache.delete(projectId);
+    return;
+  }
+
+  projectSnapshotCache.delete(projectId);
+  projectSnapshotCache.set(projectId, snapshot);
   evictOldestSnapshot();
 }
 
@@ -441,22 +513,34 @@ export function cleanupWorktreeDataStore() {
   });
 }
 
-export function prePopulateWorktreeSnapshot(projectId: string) {
+export function prePopulateWorktreeSnapshot(projectId: string, projectPath?: string) {
   // Pre-populate the store with cached snapshot data for instant sidebar rendering.
   // Does NOT trigger IPC fetch — the main process may not have switched yet.
   // Call forceReinitializeWorktreeDataStore() once the backend is ready to fetch fresh data.
   storeGeneration++;
   targetProjectId = projectId;
+  // Lock out refresh() until the main process completes its switch.
+  // Between here and forceReinitializeWorktreeDataStore(), targetProjectId is set to the
+  // incoming project but the IPC layer is still serving the outgoing project's data.
+  // Any refresh() in this window would write the wrong project's worktrees into the store
+  // under the new projectId, bypassing all generation and projectMismatch guards.
+  isSwitching = true;
   cleanupListeners?.();
   cleanupListeners = null;
   initPromise = null;
   usePulseStore.getState().invalidateAll();
 
   const snapshot = projectSnapshotCache.get(projectId);
-  const hasSnapshot = snapshot && snapshot.worktrees.size > 0;
+  let hasSnapshot = snapshot != null && snapshot.worktrees.size > 0;
+
+  if (hasSnapshot && projectPath && !isSnapshotValidForProject(snapshot!, projectPath)) {
+    console.warn("[WorktreeDataStore] Discarding contaminated snapshot on restore", { projectId });
+    projectSnapshotCache.delete(projectId);
+    hasSnapshot = false;
+  }
 
   useWorktreeDataStore.setState({
-    worktrees: hasSnapshot ? new Map(snapshot.worktrees) : new Map(),
+    worktrees: hasSnapshot ? new Map(snapshot!.worktrees) : new Map(),
     projectId,
     isLoading: !hasSnapshot,
     error: null,
@@ -468,8 +552,8 @@ export function prePopulateWorktreeSnapshot(projectId: string) {
 
   // Restore the active worktree selection from the snapshot so the sidebar
   // shows the correct worktree highlighted immediately.
-  if (hasSnapshot && snapshot.activeWorktreeId) {
-    useWorktreeSelectionStore.setState({ activeWorktreeId: snapshot.activeWorktreeId });
+  if (hasSnapshot && snapshot!.activeWorktreeId) {
+    useWorktreeSelectionStore.setState({ activeWorktreeId: snapshot!.activeWorktreeId });
   }
 }
 
@@ -480,6 +564,8 @@ export function forceReinitializeWorktreeDataStore(projectId?: string) {
   const currentWorktrees = useWorktreeDataStore.getState().worktrees;
   storeGeneration++;
   targetProjectId = projectId ?? null;
+  // Main process switch is confirmed complete — allow refresh() to proceed.
+  isSwitching = false;
   cleanupListeners?.();
   cleanupListeners = null;
   initPromise = null;
@@ -505,6 +591,11 @@ export function forceReinitializeWorktreeDataStore(projectId?: string) {
  * This should be called after terminal hydration completes to ensure
  * terminals are loaded before checking for orphans.
  */
+export function resetSnapshotCacheForTests(): void {
+  projectSnapshotCache.clear();
+  isSwitching = false;
+}
+
 export function cleanupOrphanedTerminals() {
   const getWorktreeIds = (wtMap: Map<string, WorktreeState>) => {
     const ids = new Set<string>();

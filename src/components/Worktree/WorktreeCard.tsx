@@ -144,16 +144,12 @@ export function WorktreeCard({
   const {
     runningRecipeId,
     isRestartValidating,
-    treeCopied,
-    isCopyingTree,
-    copyFeedback,
     confirmDialog,
     showDeleteDialog,
     setShowDeleteDialog,
     closeConfirmDialog,
     handlePathClick,
     handleCopyTree,
-    handleCopyTreeClick,
     handleRunRecipe,
     handleCloseCompleted,
     handleCloseFailed,
@@ -197,10 +193,6 @@ export function WorktreeCard({
     void actionService.dispatch("worktree.openPR", { worktreeId: worktree.id }, { source: "user" });
   }, [worktree.id]);
 
-  const handleInjectContext = useCallback(() => {
-    void actionService.dispatch("worktree.inject", { worktreeId: worktree.id }, { source: "user" });
-  }, [worktree.id]);
-
   const handleResetRenderers = useCallback(() => {
     void actionService.dispatch(
       "worktree.sessions.resetRenderers",
@@ -220,8 +212,6 @@ export function WorktreeCard({
       { source: "user" }
     );
   }, [worktree.id]);
-
-  const hasFocusedTerminal = useTerminalStore((state) => state.focusedId !== null);
 
   const [showIssuePicker, setShowIssuePicker] = useState(false);
   const [showReviewHub, setShowReviewHub] = useState(false);
@@ -456,12 +446,6 @@ export function WorktreeCard({
           isPinned={isPinned}
           branchLabel={branchLabel}
           worktreeErrorCount={worktreeErrors.length}
-          copy={{
-            treeCopied,
-            isCopyingTree,
-            copyFeedback,
-            onCopyTreeClick: handleCopyTreeClick,
-          }}
           badges={{
             onOpenIssue: worktree.issueNumber ? handleOpenIssueExternal : undefined,
             onOpenPR: worktree.prNumber ? handleOpenPRExternal : undefined,
@@ -471,7 +455,6 @@ export function WorktreeCard({
             recipes,
             runningRecipeId,
             isRestartValidating,
-            hasFocusedTerminal,
             counts: {
               grid: gridCount,
               dock: dockCount,
@@ -482,7 +465,6 @@ export function WorktreeCard({
             },
             onCopyContextFull: handleCopyContextFull,
             onCopyContextModified: handleCopyContextModified,
-            onInjectContext: handleInjectContext,
             onOpenEditor,
             onRevealInFinder: handlePathClick,
             onOpenIssueSidecar: worktree.issueNumber ? handleOpenIssueSidecar : undefined,

@@ -34,6 +34,7 @@ import type {
   TerminalRecipe,
   AttachIssuePayload,
   IssueAssociation,
+  VoiceInputStatus,
 } from "../shared/types/index.js";
 import type {
   AgentStateChangePayload,
@@ -346,6 +347,8 @@ const CHANNELS = {
   PROJECT_WRITE_CLAUDE_MD: "project:write-claude-md",
   PROJECT_ENABLE_IN_REPO_SETTINGS: "project:enable-in-repo-settings",
   PROJECT_DISABLE_IN_REPO_SETTINGS: "project:disable-in-repo-settings",
+  PROJECT_CHECK_MISSING: "project:check-missing",
+  PROJECT_LOCATE: "project:locate",
 
   // Agent settings channels
   AGENT_SETTINGS_GET: "agent-settings:get",
@@ -402,6 +405,9 @@ const CHANNELS = {
   SIDECAR_BLUR: "sidecar:blur",
   SIDECAR_NEW_TAB_MENU_ACTION: "sidecar:new-tab-menu-action",
 
+  // Webview throttling channels
+  WEBVIEW_SET_LIFECYCLE_STATE: "webview:set-lifecycle-state",
+
   // Hibernation channels
   HIBERNATION_GET_CONFIG: "hibernation:get-config",
   HIBERNATION_UPDATE_CONFIG: "hibernation:update-config",
@@ -452,6 +458,7 @@ const CHANNELS = {
   UPDATE_DOWNLOADED: "update:downloaded",
   UPDATE_ERROR: "update:error",
   UPDATE_QUIT_AND_INSTALL: "update:quit-and-install",
+  UPDATE_CHECK_FOR_UPDATES: "update:check-for-updates",
 
   // Slash command channels
   SLASH_COMMANDS_LIST: "slash-commands:list",
@@ -1059,6 +1066,11 @@ const api: ElectronAPI = {
 
     disableInRepoSettings: (projectId: string): Promise<Project> =>
       _typedInvoke(CHANNELS.PROJECT_DISABLE_IN_REPO_SETTINGS, projectId),
+
+    checkMissing: (): Promise<string[]> => _typedInvoke(CHANNELS.PROJECT_CHECK_MISSING),
+
+    locate: (projectId: string): Promise<Project | null> =>
+      _typedInvoke(CHANNELS.PROJECT_LOCATE, projectId),
   },
 
   // Agent Settings API
@@ -1251,8 +1263,20 @@ const api: ElectronAPI = {
 
     getStagingStatus: (cwd: string) => _typedInvoke(CHANNELS.GIT_GET_STAGING_STATUS, cwd),
 
-    compareWorktrees: (cwd: string, branch1: string, branch2: string, filePath?: string) =>
-      _typedInvoke(CHANNELS.GIT_COMPARE_WORKTREES, { cwd, branch1, branch2, filePath }),
+    compareWorktrees: (
+      cwd: string,
+      branch1: string,
+      branch2: string,
+      filePath?: string,
+      useMergeBase?: boolean
+    ) =>
+      _typedInvoke(CHANNELS.GIT_COMPARE_WORKTREES, {
+        cwd,
+        branch1,
+        branch2,
+        filePath,
+        useMergeBase,
+      }),
 
     getUsername: (cwd: string) => _typedInvoke(CHANNELS.GIT_GET_USERNAME, cwd),
   },
@@ -1327,6 +1351,12 @@ const api: ElectronAPI = {
 
     onNewTabMenuAction: (callback: (action: SidecarNewTabMenuAction) => void) =>
       _typedOn(CHANNELS.SIDECAR_NEW_TAB_MENU_ACTION, callback),
+  },
+
+  // Webview Throttling API
+  webview: {
+    setLifecycleState: (webContentsId: number, frozen: boolean): Promise<void> =>
+      ipcRenderer.invoke(CHANNELS.WEBVIEW_SET_LIFECYCLE_STATE, webContentsId, frozen),
   },
 
   // Hibernation API
@@ -1450,6 +1480,8 @@ const api: ElectronAPI = {
       _typedOn(CHANNELS.UPDATE_ERROR, callback),
 
     quitAndInstall: () => _typedInvoke(CHANNELS.UPDATE_QUIT_AND_INSTALL),
+
+    checkForUpdates: () => _typedInvoke(CHANNELS.UPDATE_CHECK_FOR_UPDATES),
   },
 
   // Gemini API
@@ -1625,8 +1657,9 @@ const api: ElectronAPI = {
         customDictionary: string[];
         transcriptionModel: "nova-3" | "nova-2";
         correctionEnabled: boolean;
-        correctionModel: "gpt-5-nano";
+        correctionModel: "gpt-5-nano" | "gpt-5-mini";
         correctionCustomInstructions: string;
+        paragraphingStrategy: "spoken-command" | "manual";
       }>
     ) => _typedInvoke(CHANNELS.VOICE_INPUT_SET_SETTINGS, patch),
     start: () => _typedInvoke(CHANNELS.VOICE_INPUT_START),
@@ -1640,12 +1673,13 @@ const api: ElectronAPI = {
       callback: (payload: { text: string; willCorrect: boolean }) => void
     ) => _typedOn(CHANNELS.VOICE_INPUT_TRANSCRIPTION_COMPLETE, callback),
     onCorrectionReplace: (
-      callback: (payload: { rawText: string; correctedText: string }) => void
+      callback: (payload: { correctionId: string; correctedText: string }) => void
     ) => _typedOn(CHANNELS.VOICE_INPUT_CORRECTION_REPLACE, callback),
-    onParagraphBoundary: (callback: (payload: { rawText: string | null }) => void) =>
-      _typedOn(CHANNELS.VOICE_INPUT_PARAGRAPH_BOUNDARY, callback),
+    onParagraphBoundary: (
+      callback: (payload: { rawText: string | null; correctionId: string | null }) => void
+    ) => _typedOn(CHANNELS.VOICE_INPUT_PARAGRAPH_BOUNDARY, callback),
     onError: (callback: (error: string) => void) => _typedOn(CHANNELS.VOICE_INPUT_ERROR, callback),
-    onStatus: (callback: (status: "idle" | "connecting" | "recording" | "error") => void) =>
+    onStatus: (callback: (status: VoiceInputStatus) => void) =>
       _typedOn(CHANNELS.VOICE_INPUT_STATUS, callback),
     checkMicPermission: () => _typedInvoke(CHANNELS.VOICE_INPUT_CHECK_MIC_PERMISSION),
     requestMicPermission: () => _typedInvoke(CHANNELS.VOICE_INPUT_REQUEST_MIC_PERMISSION),

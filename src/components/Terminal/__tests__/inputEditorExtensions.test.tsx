@@ -11,6 +11,10 @@ import {
   fileDropChipField,
   addFileDropChip,
   createFilePasteHandler,
+  interimMarkField,
+  setInterimRange,
+  pendingAIField,
+  setPendingAIRanges,
 } from "../inputEditorExtensions";
 
 describe("computeAutoSize", () => {
@@ -812,6 +816,259 @@ describe("createFilePasteHandler", () => {
 
     expect(onFilePaste).not.toHaveBeenCalled();
 
+    view.destroy();
+  });
+});
+
+describe("interimMarkField", () => {
+  function makeView(doc = "") {
+    const parent = document.createElement("div");
+    return new EditorView({
+      parent,
+      state: EditorState.create({ doc, extensions: [interimMarkField] }),
+    });
+  }
+
+  it("applies interim mark decoration for the given range", () => {
+    const view = makeView("hello world");
+    view.dispatch({ effects: setInterimRange.of({ from: 6, to: 11 }) });
+
+    const decos = view.state.field(interimMarkField);
+    const iter = decos.iter();
+    expect(iter.value).not.toBeNull();
+    expect(iter.from).toBe(6);
+    expect(iter.to).toBe(11);
+    view.destroy();
+  });
+
+  it("clears interim mark when null is dispatched", () => {
+    const view = makeView("hello world");
+    view.dispatch({ effects: setInterimRange.of({ from: 0, to: 5 }) });
+    view.dispatch({ effects: setInterimRange.of(null) });
+
+    const decos = view.state.field(interimMarkField);
+    const iter = decos.iter();
+    expect(iter.value).toBeNull();
+    view.destroy();
+  });
+
+  it("does not expand mark past boundary on insert at the end", () => {
+    const view = makeView("hello");
+    view.dispatch({ effects: setInterimRange.of({ from: 0, to: 5 }) });
+    // Insert text at the end of the marked range
+    view.dispatch({ changes: { from: 5, insert: " world" } });
+
+    const decos = view.state.field(interimMarkField);
+    const iter = decos.iter();
+    expect(iter.value).not.toBeNull();
+    // Mark should still end at 5 (mapped through change), not expand to include " world"
+    expect(iter.from).toBe(0);
+    expect(iter.to).toBe(5);
+    view.destroy();
+  });
+
+  it("maps mark range through document changes", () => {
+    const view = makeView("hello world");
+    view.dispatch({ effects: setInterimRange.of({ from: 6, to: 11 }) });
+    // Insert "XX" at position 0
+    view.dispatch({ changes: { from: 0, insert: "XX" } });
+
+    const decos = view.state.field(interimMarkField);
+    const iter = decos.iter();
+    expect(iter.value).not.toBeNull();
+    expect(iter.from).toBe(8); // shifted by 2
+    expect(iter.to).toBe(13);
+    view.destroy();
+  });
+
+  it("handles simultaneous doc change and clear effect correctly (map-before-effect)", () => {
+    const view = makeView("hello");
+    view.dispatch({ effects: setInterimRange.of({ from: 0, to: 5 }) });
+
+    // Single transaction: insert text AND clear the mark
+    view.dispatch({
+      changes: { from: 5, insert: " world" },
+      effects: setInterimRange.of(null),
+    });
+
+    const decos = view.state.field(interimMarkField);
+    const iter = decos.iter();
+    expect(iter.value).toBeNull();
+    view.destroy();
+  });
+
+  it("returns Decoration.none for invalid range (from >= to)", () => {
+    const view = makeView("hello");
+    view.dispatch({ effects: setInterimRange.of({ from: 5, to: 5 }) });
+
+    const decos = view.state.field(interimMarkField);
+    const iter = decos.iter();
+    expect(iter.value).toBeNull();
+    view.destroy();
+  });
+});
+
+describe("pendingAIField", () => {
+  function makeView(doc = "") {
+    const parent = document.createElement("div");
+    return new EditorView({
+      parent,
+      state: EditorState.create({ doc, extensions: [pendingAIField] }),
+    });
+  }
+
+  it("applies mark decoration spanning the given range", () => {
+    const view = makeView("hello world");
+    view.dispatch({ effects: setPendingAIRanges.of([{ from: 0, to: 5 }]) });
+
+    const decos = view.state.field(pendingAIField);
+    const iter = decos.iter();
+    expect(iter.value).not.toBeNull();
+    expect(iter.from).toBe(0);
+    expect(iter.to).toBe(5);
+    view.destroy();
+  });
+
+  it("mark range shifts when text is inserted before it", () => {
+    const view = makeView("hello");
+    view.dispatch({ effects: setPendingAIRanges.of([{ from: 0, to: 5 }]) });
+    view.dispatch({ changes: { from: 0, insert: "say " } });
+
+    const decos = view.state.field(pendingAIField);
+    const iter = decos.iter();
+    expect(iter.value).not.toBeNull();
+    expect(iter.from).toBe(4);
+    expect(iter.to).toBe(9);
+    view.destroy();
+  });
+
+  it("clears cleanly when empty ranges dispatched", () => {
+    const view = makeView("hello");
+    view.dispatch({ effects: setPendingAIRanges.of([{ from: 0, to: 5 }]) });
+    view.dispatch({ effects: setPendingAIRanges.of([]) });
+
+    const decos = view.state.field(pendingAIField);
+    const iter = decos.iter();
+    expect(iter.value).toBeNull();
+    view.destroy();
+  });
+
+  it("supports multiple concurrent ranges", () => {
+    const view = makeView("hello world");
+    view.dispatch({
+      effects: setPendingAIRanges.of([
+        { from: 0, to: 5 },
+        { from: 6, to: 11 },
+      ]),
+    });
+
+    const decos = view.state.field(pendingAIField);
+    const ranges: { from: number; to: number }[] = [];
+    const iter = decos.iter();
+    while (iter.value) {
+      ranges.push({ from: iter.from, to: iter.to });
+      iter.next();
+    }
+    expect(ranges).toEqual([
+      { from: 0, to: 5 },
+      { from: 6, to: 11 },
+    ]);
+    view.destroy();
+  });
+
+  it("handles simultaneous doc change and clear effect correctly (no flash)", () => {
+    const view = makeView("hello");
+    view.dispatch({ effects: setPendingAIRanges.of([{ from: 0, to: 5 }]) });
+
+    view.dispatch({
+      changes: { from: 0, to: 5, insert: "world" },
+      effects: setPendingAIRanges.of([]),
+    });
+
+    const decos = view.state.field(pendingAIField);
+    const iter = decos.iter();
+    expect(iter.value).toBeNull();
+    view.destroy();
+  });
+
+  it("clamps out-of-bounds ranges to document length", () => {
+    const view = makeView("hi");
+    view.dispatch({ effects: setPendingAIRanges.of([{ from: 0, to: 100 }]) });
+
+    const decos = view.state.field(pendingAIField);
+    const iter = decos.iter();
+    expect(iter.value).not.toBeNull();
+    expect(iter.from).toBe(0);
+    expect(iter.to).toBe(2);
+    view.destroy();
+  });
+
+  it("clamps negative from to zero", () => {
+    const view = makeView("hello");
+    view.dispatch({ effects: setPendingAIRanges.of([{ from: -5, to: 3 }]) });
+
+    const decos = view.state.field(pendingAIField);
+    const iter = decos.iter();
+    expect(iter.value).not.toBeNull();
+    expect(iter.from).toBe(0);
+    expect(iter.to).toBe(3);
+    view.destroy();
+  });
+
+  it("filters ranges where clamped from >= clamped to", () => {
+    const view = makeView("hi");
+    view.dispatch({ effects: setPendingAIRanges.of([{ from: 50, to: 100 }]) });
+
+    const decos = view.state.field(pendingAIField);
+    const iter = decos.iter();
+    expect(iter.value).toBeNull();
+    view.destroy();
+  });
+});
+
+describe("voice decoration phase integration", () => {
+  function makeView(doc = "") {
+    const parent = document.createElement("div");
+    return new EditorView({
+      parent,
+      state: EditorState.create({
+        doc,
+        extensions: [interimMarkField, pendingAIField],
+      }),
+    });
+  }
+
+  it("utterance_final phase produces no decorations even when ranges could be set", () => {
+    const view = makeView("hello world");
+    view.dispatch({
+      effects: [setInterimRange.of(null), setPendingAIRanges.of([])],
+    });
+
+    const interimDecos = view.state.field(interimMarkField);
+    const aiDecos = view.state.field(pendingAIField);
+    expect(interimDecos.iter().value).toBeNull();
+    expect(aiDecos.iter().value).toBeNull();
+    view.destroy();
+  });
+
+  it("correctionEnabled=false suppresses both decorations", () => {
+    const view = makeView("hello world");
+    view.dispatch({
+      effects: [
+        setInterimRange.of({ from: 0, to: 5 }),
+        setPendingAIRanges.of([{ from: 6, to: 11 }]),
+      ],
+    });
+
+    expect(view.state.field(interimMarkField).iter().value).not.toBeNull();
+    expect(view.state.field(pendingAIField).iter().value).not.toBeNull();
+
+    view.dispatch({
+      effects: [setInterimRange.of(null), setPendingAIRanges.of([])],
+    });
+
+    expect(view.state.field(interimMarkField).iter().value).toBeNull();
+    expect(view.state.field(pendingAIField).iter().value).toBeNull();
     view.destroy();
   });
 });

@@ -28,6 +28,7 @@ import { registerGitWriteHandlers } from "./handlers/git-write.js";
 import { registerTelemetryHandlers } from "./handlers/telemetry.js";
 import { registerVoiceInputHandlers } from "./handlers/voiceInput.js";
 import { registerMcpServerHandlers } from "./handlers/mcpServer.js";
+import { registerWebviewHandlers } from "./handlers/webview.js";
 import { events } from "../services/events.js";
 import { typedHandle, typedSend, sendToRenderer } from "./utils.js";
 
@@ -86,6 +87,7 @@ export function registerIpcHandlers(deps: HandlerDependencies): () => void {
     register(() => registerTelemetryHandlers());
     register(() => registerVoiceInputHandlers(deps));
     register(() => registerMcpServerHandlers());
+    register(() => registerWebviewHandlers());
   } catch (error) {
     runCleanups(cleanupFunctions);
     throw error;

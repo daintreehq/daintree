@@ -7,6 +7,7 @@ import {
   sortWorktrees,
   groupByType,
   hasAnyFilters,
+  findIntegrationWorktree,
   type DerivedWorktreeMeta,
   type FilterState,
 } from "../worktreeFilters";
@@ -641,5 +642,97 @@ describe("hasAnyFilters", () => {
     const filters = createEmptyFilters();
     filters.activityFilters.add("last24h");
     expect(hasAnyFilters(filters)).toBe(true);
+  });
+});
+
+describe("findIntegrationWorktree", () => {
+  it("returns worktree with branch 'develop'", () => {
+    const worktrees = [
+      createMockWorktree({ id: "main", branch: "main", isMainWorktree: true }),
+      createMockWorktree({ id: "dev", branch: "develop" }),
+      createMockWorktree({ id: "feat", branch: "feature/test" }),
+    ];
+    const result = findIntegrationWorktree(worktrees, "main");
+    expect(result?.id).toBe("dev");
+  });
+
+  it("returns worktree with branch 'trunk'", () => {
+    const worktrees = [
+      createMockWorktree({ id: "main", branch: "main", isMainWorktree: true }),
+      createMockWorktree({ id: "trunk", branch: "trunk" }),
+    ];
+    const result = findIntegrationWorktree(worktrees, "main");
+    expect(result?.id).toBe("trunk");
+  });
+
+  it("returns worktree with branch 'next'", () => {
+    const worktrees = [
+      createMockWorktree({ id: "main", branch: "main", isMainWorktree: true }),
+      createMockWorktree({ id: "next", branch: "next" }),
+    ];
+    const result = findIntegrationWorktree(worktrees, "main");
+    expect(result?.id).toBe("next");
+  });
+
+  it("returns null when no integration branch exists", () => {
+    const worktrees = [
+      createMockWorktree({ id: "main", branch: "main", isMainWorktree: true }),
+      createMockWorktree({ id: "feat", branch: "feature/test" }),
+    ];
+    const result = findIntegrationWorktree(worktrees, "main");
+    expect(result).toBeNull();
+  });
+
+  it("does not match substrings like 'development' or 'feature/develop'", () => {
+    const worktrees = [
+      createMockWorktree({ id: "main", branch: "main", isMainWorktree: true }),
+      createMockWorktree({ id: "1", branch: "development" }),
+      createMockWorktree({ id: "2", branch: "feature/develop" }),
+    ];
+    const result = findIntegrationWorktree(worktrees, "main");
+    expect(result).toBeNull();
+  });
+
+  it("does not return the main worktree even if its branch is 'develop'", () => {
+    const worktrees = [createMockWorktree({ id: "main", branch: "develop", isMainWorktree: true })];
+    const result = findIntegrationWorktree(worktrees, "main");
+    expect(result).toBeNull();
+  });
+
+  it("returns the first match when multiple integration branches exist", () => {
+    const worktrees = [
+      createMockWorktree({ id: "main", branch: "main", isMainWorktree: true }),
+      createMockWorktree({ id: "dev", branch: "develop" }),
+      createMockWorktree({ id: "trunk", branch: "trunk" }),
+    ];
+    const result = findIntegrationWorktree(worktrees, "main");
+    expect(result?.id).toBe("dev");
+  });
+
+  it("excludes worktree by mainWorktreeId even when isMainWorktree is false", () => {
+    const worktrees = [
+      createMockWorktree({ id: "fallback-main", branch: "develop", isMainWorktree: false }),
+      createMockWorktree({ id: "feat", branch: "feature/test" }),
+    ];
+    const result = findIntegrationWorktree(worktrees, "fallback-main");
+    expect(result).toBeNull();
+  });
+
+  it("matches case-insensitively", () => {
+    const worktrees = [
+      createMockWorktree({ id: "main", branch: "main", isMainWorktree: true }),
+      createMockWorktree({ id: "dev", branch: "Develop" }),
+    ];
+    const result = findIntegrationWorktree(worktrees, "main");
+    expect(result?.id).toBe("dev");
+  });
+
+  it("returns null for worktrees with undefined branch", () => {
+    const worktrees = [
+      createMockWorktree({ id: "main", branch: "main", isMainWorktree: true }),
+      createMockWorktree({ id: "detached", branch: undefined }),
+    ];
+    const result = findIntegrationWorktree(worktrees, "main");
+    expect(result).toBeNull();
   });
 });

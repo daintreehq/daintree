@@ -102,6 +102,62 @@ describe("KeybindingService", () => {
     expect(match?.actionId).toBe("test.chord");
   });
 
+  it("resolves Cmd+W to terminal.close in global scope", () => {
+    setPlatform("MacIntel");
+
+    const service = new KeybindingService();
+    const event = createKeyboardEvent({
+      key: "w",
+      code: "KeyW",
+      metaKey: true,
+    });
+
+    const match = service.findMatchingAction(event);
+    expect(match?.actionId).toBe("terminal.close");
+  });
+
+  it("resolves Cmd+W to sidecar.closeTab (priority 20) over terminal.close (priority 10) in sidecar scope", () => {
+    setPlatform("MacIntel");
+
+    const service = new KeybindingService();
+    service.setScope("sidecar");
+
+    const event = createKeyboardEvent({
+      key: "w",
+      code: "KeyW",
+      metaKey: true,
+    });
+
+    const match = service.findMatchingAction(event);
+    expect(match?.actionId).toBe("sidecar.closeTab");
+    expect(match?.priority).toBe(20);
+  });
+
+  it("resolves Cmd+K Cmd+W chord to terminal.closeAll, not terminal.close", () => {
+    setPlatform("MacIntel");
+
+    const service = new KeybindingService();
+    const cmdK = createKeyboardEvent({
+      key: "k",
+      code: "KeyK",
+      metaKey: true,
+    });
+    const cmdW = createKeyboardEvent({
+      key: "w",
+      code: "KeyW",
+      metaKey: true,
+    });
+
+    // Cmd+K sets the chord prefix — no action yet
+    const prefixResult = service.resolveKeybinding(cmdK);
+    expect(prefixResult.match).toBeUndefined();
+    expect(prefixResult.chordPrefix).toBe(true);
+
+    // Cmd+W after Cmd+K completes the chord
+    const match = service.findMatchingAction(cmdW);
+    expect(match?.actionId).toBe("terminal.closeAll");
+  });
+
   it("does not report conflicts for bindings disabled by empty override list", () => {
     const service = new KeybindingService();
 

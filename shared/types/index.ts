@@ -192,6 +192,7 @@ export type {
   VoiceInputStatus,
   VoiceTranscriptionModel,
   VoiceCorrectionModel,
+  VoiceParagraphingStrategy,
   MicPermissionStatus,
   BranchInfo,
   CreateWorktreeOptions,
@@ -321,6 +322,10 @@ export {
   SIDECAR_DEFAULT_WIDTH,
   MIN_GRID_WIDTH,
 } from "./sidecar.js";
+
+// Voice types - canonical phase model for voice session and transcript lifecycle
+export type { VoiceTranscriptPhase } from "./voice.js";
+export { isActiveVoiceSession } from "./voice.js";
 
 // Workspace Host types - IPC protocol for workspace management
 export type {

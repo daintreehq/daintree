@@ -1,4 +1,3 @@
-import { store } from "../store.js";
 import type {
   Project,
   ProjectState,
@@ -21,6 +20,13 @@ import { TerminalSnapshotSchema, filterValidTerminalEntries } from "../schemas/i
 import { logError } from "../utils/logger.js";
 import { projectEnvSecureStorage } from "./ProjectEnvSecureStorage.js";
 import { isSensitiveEnvKey } from "../../shared/utils/envVars.js";
+import { getSharedDb } from "./persistence/db.js";
+import {
+  projects as projectsTable,
+  appState as appStateTable,
+  type ProjectRow,
+} from "./persistence/schema.js";
+import { eq, desc } from "drizzle-orm";
 
 const SETTINGS_FILENAME = "settings.json";
 const RECIPES_FILENAME = "recipes.json";
@@ -36,6 +42,23 @@ const UTF8_BOM = "\uFEFF";
 interface ProjectStateCacheEntry {
   expiresAt: number;
   value: ProjectState | null;
+}
+
+function rowToProject(row: ProjectRow): Project {
+  const project: Project = {
+    id: row.id,
+    path: row.path,
+    name: row.name,
+    emoji: row.emoji,
+    lastOpened: row.lastOpened,
+  };
+  if (row.color !== null && row.color !== undefined) project.color = row.color;
+  if (row.status !== null && row.status !== undefined) project.status = row.status as ProjectStatus;
+  if (row.canopyConfigPresent !== null && row.canopyConfigPresent !== undefined)
+    project.canopyConfigPresent = row.canopyConfigPresent;
+  if (row.inRepoSettings !== null && row.inRepoSettings !== undefined)
+    project.inRepoSettings = row.inRepoSettings;
+  return project;
 }
 
 export class ProjectStore {
@@ -183,9 +206,20 @@ export class ProjectStore {
       ...(inRepo.found ? { canopyConfigPresent: true } : {}),
     };
 
-    const projects = this.getAllProjects();
-    projects.push(project);
-    store.set("projects.list", projects);
+    const db = getSharedDb();
+    db.insert(projectsTable)
+      .values({
+        id: project.id,
+        path: project.path,
+        name: project.name,
+        emoji: project.emoji,
+        lastOpened: project.lastOpened,
+        color: project.color ?? null,
+        status: project.status ?? null,
+        canopyConfigPresent: project.canopyConfigPresent ?? null,
+        inRepoSettings: project.inRepoSettings ?? null,
+      })
+      .run();
 
     return project;
   }
@@ -196,9 +230,8 @@ export class ProjectStore {
       throw new Error(`Invalid project ID: ${projectId}`);
     }
 
-    const projects = this.getAllProjects();
-    const filtered = projects.filter((p) => p.id !== projectId);
-    store.set("projects.list", filtered);
+    const db = getSharedDb();
+    db.delete(projectsTable).where(eq(projectsTable.id, projectId)).run();
 
     // Clean up secure environment variables for this project
     try {
@@ -217,33 +250,40 @@ export class ProjectStore {
     this.invalidateProjectStateCache(projectId);
 
     if (this.getCurrentProjectId() === projectId) {
-      store.set("projects.currentProjectId", undefined);
+      this.clearCurrentProject();
     }
   }
 
   updateProject(projectId: string, updates: Partial<Project>): Project {
-    const projects = this.getAllProjects();
-    const index = projects.findIndex((p) => p.id === projectId);
+    const db = getSharedDb();
 
-    if (index === -1) {
-      throw new Error(`Project not found: ${projectId}`);
+    const set: Partial<{
+      name: string;
+      path: string;
+      emoji: string;
+      color: string | null;
+      lastOpened: number;
+      status: string | null;
+      canopyConfigPresent: boolean | null;
+      inRepoSettings: boolean | null;
+    }> = {};
+    if (updates.name !== undefined) set.name = updates.name;
+    if (updates.path !== undefined) set.path = updates.path;
+    if (updates.emoji !== undefined) set.emoji = updates.emoji;
+    if (updates.color !== undefined) set.color = updates.color ?? null;
+    if (updates.lastOpened !== undefined) set.lastOpened = updates.lastOpened;
+    if (updates.status !== undefined) set.status = updates.status ?? null;
+    if (updates.canopyConfigPresent !== undefined)
+      set.canopyConfigPresent = updates.canopyConfigPresent ?? null;
+    if (updates.inRepoSettings !== undefined) set.inRepoSettings = updates.inRepoSettings ?? null;
+
+    if (Object.keys(set).length > 0) {
+      db.update(projectsTable).set(set).where(eq(projectsTable.id, projectId)).run();
     }
 
-    const safeUpdates: Partial<Project> = {};
-    if (updates.name !== undefined) safeUpdates.name = updates.name;
-    if (updates.emoji !== undefined) safeUpdates.emoji = updates.emoji;
-    if (updates.color !== undefined) safeUpdates.color = updates.color;
-    if (updates.lastOpened !== undefined) safeUpdates.lastOpened = updates.lastOpened;
-    if (updates.status !== undefined) safeUpdates.status = updates.status;
-    if (updates.canopyConfigPresent !== undefined)
-      safeUpdates.canopyConfigPresent = updates.canopyConfigPresent;
-    if (updates.inRepoSettings !== undefined) safeUpdates.inRepoSettings = updates.inRepoSettings;
-
-    const updated = { ...projects[index], ...safeUpdates };
-    projects[index] = updated;
-    store.set("projects.list", projects);
-
-    return updated;
+    const row = db.select().from(projectsTable).where(eq(projectsTable.id, projectId)).get();
+    if (!row) throw new Error(`Project not found: ${projectId}`);
+    return rowToProject(row);
   }
 
   /**
@@ -256,83 +296,214 @@ export class ProjectStore {
   }
 
   getAllProjects(): Project[] {
-    const rawProjects = store.get("projects.list", []);
+    const db = getSharedDb();
+    const rows = db.select().from(projectsTable).orderBy(desc(projectsTable.lastOpened)).all();
 
-    // Defensive: ensure projects.list is a valid array
-    if (!Array.isArray(rawProjects)) {
-      console.error("[ProjectStore] projects.list is not an array, resetting to empty");
-      store.set("projects.list", []);
-      return [];
-    }
-
+    const validStatuses: ProjectStatus[] = ["active", "background", "closed", "missing"];
     const currentProjectId = this.getCurrentProjectId();
-    let needsPersistence = false;
 
-    // Normalize status for all projects (handles legacy projects without status)
-    const normalizedProjects = rawProjects
-      .filter((p) => p && typeof p === "object" && p.id) // Filter out corrupted entries
-      .map((project) => {
-        const validStatuses: ProjectStatus[] = ["active", "background", "closed"];
-        const isValidStatus = validStatuses.includes(project.status as ProjectStatus);
-
-        // Enforce single active project: only the current project can be active
-        if (project.id === currentProjectId) {
-          // This is the current project - must be active
-          if (project.status !== "active") {
-            needsPersistence = true;
-            return { ...project, status: "active" as const };
-          }
-          return project;
-        } else {
-          // Not the current project - cannot be active
-          if (project.status === "active") {
-            // Demote incorrectly active projects to background
-            needsPersistence = true;
-            console.warn(
-              `[ProjectStore] Demoting incorrectly active project ${project.id} to background`
-            );
-            return { ...project, status: "background" as const };
-          }
-
-          // Handle invalid/missing status for non-current projects
-          if (!isValidStatus) {
-            needsPersistence = true;
-            // Default to closed for safety (background would imply running processes)
-            return { ...project, status: "closed" as const };
-          }
-
-          return project;
+    for (const row of rows) {
+      if (row.id === currentProjectId) {
+        if (row.status !== "active") {
+          db.update(projectsTable)
+            .set({ status: "active" })
+            .where(eq(projectsTable.id, row.id))
+            .run();
+          row.status = "active";
         }
-      });
-
-    // Persist normalized data to heal corrupted/missing statuses
-    if (needsPersistence) {
-      console.log("[ProjectStore] Persisting normalized project statuses");
-      store.set("projects.list", normalizedProjects);
+      } else {
+        if (row.status === "active") {
+          console.warn(
+            `[ProjectStore] Demoting incorrectly active project ${row.id} to background`
+          );
+          db.update(projectsTable)
+            .set({ status: "background" })
+            .where(eq(projectsTable.id, row.id))
+            .run();
+          row.status = "background";
+        } else if (row.status !== null && !validStatuses.includes(row.status as ProjectStatus)) {
+          db.update(projectsTable)
+            .set({ status: "closed" })
+            .where(eq(projectsTable.id, row.id))
+            .run();
+          row.status = "closed";
+        }
+      }
     }
 
     if (process.env.CANOPY_VERBOSE) {
       console.log(
         "[ProjectStore] getAllProjects statuses:",
-        normalizedProjects.map((p) => ({ name: p.name, status: p.status }))
+        rows.map((r) => ({ name: r.name, status: r.status }))
       );
     }
-    return normalizedProjects.sort((a, b) => b.lastOpened - a.lastOpened);
+
+    return rows.map(rowToProject);
   }
 
   async getProjectByPath(projectPath: string): Promise<Project | null> {
     const normalizedPath = path.normalize(projectPath);
-    const projects = this.getAllProjects();
-    return projects.find((p) => p.path === normalizedPath) || null;
+    const db = getSharedDb();
+    const row = db.select().from(projectsTable).where(eq(projectsTable.path, normalizedPath)).get();
+    return row ? rowToProject(row) : null;
   }
 
   getProjectById(projectId: string): Project | null {
+    const db = getSharedDb();
+    const row = db.select().from(projectsTable).where(eq(projectsTable.id, projectId)).get();
+    return row ? rowToProject(row) : null;
+  }
+
+  /**
+   * Checks which projects have directories that no longer exist at their stored path.
+   * Updates each missing project's status to "missing" in the store and returns their IDs.
+   * Projects whose directories exist are reset from "missing" back to "closed".
+   */
+  async checkMissingProjects(): Promise<string[]> {
     const projects = this.getAllProjects();
-    return projects.find((p) => p.id === projectId) || null;
+    const currentProjectId = this.getCurrentProjectId();
+    const missingIds: string[] = [];
+
+    await Promise.allSettled(
+      projects.map(async (project) => {
+        // Never mark the active project as missing — it's currently in use
+        if (project.id === currentProjectId) return;
+
+        let exists = false;
+        try {
+          await fs.access(project.path);
+          exists = true;
+        } catch {
+          exists = false;
+        }
+
+        if (!exists && project.status !== "missing") {
+          this.updateProjectStatus(project.id, "missing");
+          missingIds.push(project.id);
+        } else if (exists && project.status === "missing") {
+          // Directory was restored — reset to closed
+          this.updateProjectStatus(project.id, "closed");
+        }
+      })
+    );
+
+    return missingIds;
+  }
+
+  /**
+   * Relocate a project to a new path, migrating all associated state.
+   *
+   * Resolves the canonical git root of newPath, computes the new project ID,
+   * copies the state directory to the new location, migrates env var keys,
+   * updates the project record (including ID if it changed), then cleans up
+   * the old state directory.
+   *
+   * If the resolved path hashes to the same project ID, only the path and
+   * status are updated (no directory migration needed).
+   */
+  async relocateProject(projectId: string, newPath: string): Promise<Project> {
+    const project = this.getProjectById(projectId);
+    if (!project) {
+      throw new Error(`Project not found: ${projectId}`);
+    }
+
+    if (projectId === this.getCurrentProjectId()) {
+      throw new Error("Cannot relocate the currently active project");
+    }
+
+    const canonicalNewPath = await this.getGitRoot(newPath);
+    const newProjectId = this.generateProjectId(canonicalNewPath);
+
+    if (newProjectId === projectId) {
+      return this.updateProject(projectId, { path: canonicalNewPath, status: "closed" });
+    }
+
+    const existingAtNewPath = this.getProjectById(newProjectId);
+    if (existingAtNewPath) {
+      throw new Error(`A project already exists at that location: ${existingAtNewPath.name}`);
+    }
+
+    const oldStateDir = this.getProjectStateDir(projectId);
+    const newStateDir = this.getProjectStateDir(newProjectId);
+
+    if (oldStateDir && newStateDir && existsSync(oldStateDir)) {
+      await fs.cp(oldStateDir, newStateDir, { recursive: true });
+    }
+
+    const projects = this.getAllProjects();
+    const index = projects.findIndex((p) => p.id === projectId);
+    if (index === -1) {
+      if (newStateDir && existsSync(newStateDir)) {
+        await fs.rm(newStateDir, { recursive: true, force: true }).catch(() => {});
+      }
+      throw new Error(`Project not found: ${projectId}`);
+    }
+
+    const oldProject = projects[index];
+    const updatedProject: Project = {
+      ...oldProject,
+      id: newProjectId,
+      path: canonicalNewPath,
+      status: "closed",
+    };
+
+    const db = getSharedDb();
+    try {
+      db.delete(projectsTable).where(eq(projectsTable.id, projectId)).run();
+      db.insert(projectsTable)
+        .values({
+          id: updatedProject.id,
+          path: updatedProject.path,
+          name: updatedProject.name,
+          emoji: updatedProject.emoji,
+          lastOpened: updatedProject.lastOpened,
+          color: updatedProject.color ?? null,
+          status: updatedProject.status ?? null,
+          canopyConfigPresent: updatedProject.canopyConfigPresent ?? null,
+          inRepoSettings: updatedProject.inRepoSettings ?? null,
+        })
+        .run();
+      projectEnvSecureStorage.migrateAllForProject(projectId, newProjectId);
+      this.invalidateProjectStateCache(projectId);
+      this.invalidateProjectStateCache(newProjectId);
+    } catch (error) {
+      db.delete(projectsTable).where(eq(projectsTable.id, newProjectId)).run();
+      db.insert(projectsTable)
+        .values({
+          id: oldProject.id,
+          path: oldProject.path,
+          name: oldProject.name,
+          emoji: oldProject.emoji,
+          lastOpened: oldProject.lastOpened,
+          color: oldProject.color ?? null,
+          status: oldProject.status ?? null,
+          canopyConfigPresent: oldProject.canopyConfigPresent ?? null,
+          inRepoSettings: oldProject.inRepoSettings ?? null,
+        })
+        .run();
+      if (newStateDir && existsSync(newStateDir)) {
+        await fs.rm(newStateDir, { recursive: true, force: true }).catch(() => {});
+      }
+      throw error;
+    }
+
+    if (oldStateDir && existsSync(oldStateDir)) {
+      await fs.rm(oldStateDir, { recursive: true, force: true }).catch((err) => {
+        logError(`Failed to clean up old state dir for project ${projectId}`, err);
+      });
+    }
+
+    return updatedProject;
   }
 
   getCurrentProjectId(): string | null {
-    return store.get("projects.currentProjectId") || null;
+    const db = getSharedDb();
+    const row = db
+      .select()
+      .from(appStateTable)
+      .where(eq(appStateTable.key, "currentProjectId"))
+      .get();
+    return row?.value ?? null;
   }
 
   getCurrentProject(): Project | null {
@@ -347,32 +518,34 @@ export class ProjectStore {
       throw new Error(`Project not found: ${projectId}`);
     }
 
-    // Mark the previous active project as background (if any)
-    // Always set to background when switching away - the status will be used
-    // by the UI to show the project in the Background section
     const previousProjectId = this.getCurrentProjectId();
-    if (previousProjectId && previousProjectId !== projectId) {
-      // Mark as background - terminals keep running but UI state is cleared
-      console.log(`[ProjectStore] Marking previous project ${previousProjectId} as background`);
-      this.updateProjectStatus(previousProjectId, "background");
+    const db = getSharedDb();
 
-      // Verify the update was applied
-      if (process.env.CANOPY_VERBOSE) {
-        const updatedPrevious = this.getProjectById(previousProjectId);
-        console.log(
-          `[ProjectStore] Previous project status after update: ${updatedPrevious?.status}`
-        );
+    // Atomic: demote previous project, update currentProjectId, activate new project
+    db.transaction((tx) => {
+      if (previousProjectId && previousProjectId !== projectId) {
+        console.log(`[ProjectStore] Marking previous project ${previousProjectId} as background`);
+        tx.update(projectsTable)
+          .set({ status: "background" })
+          .where(eq(projectsTable.id, previousProjectId))
+          .run();
       }
-    }
+      tx.insert(appStateTable)
+        .values({ key: "currentProjectId", value: projectId })
+        .onConflictDoUpdate({ target: appStateTable.key, set: { value: projectId } })
+        .run();
+      tx.update(projectsTable)
+        .set({ lastOpened: Date.now(), status: "active" })
+        .where(eq(projectsTable.id, projectId))
+        .run();
+    });
 
-    store.set("projects.currentProjectId", projectId);
-    this.updateProject(projectId, { lastOpened: Date.now(), status: "active" });
-
-    // Log final state for debugging
     if (process.env.CANOPY_VERBOSE) {
+      const updatedPrevious = previousProjectId ? this.getProjectById(previousProjectId) : null;
       console.log(`[ProjectStore] setCurrentProject complete:`, {
         newCurrentId: projectId,
         previousId: previousProjectId,
+        previousStatus: updatedPrevious?.status,
         allStatuses: this.getAllProjects().map((p) => ({ name: p.name, status: p.status })),
       });
     }
@@ -382,7 +555,8 @@ export class ProjectStore {
    * Clear the current project reference (used when closing the active project).
    */
   clearCurrentProject(): void {
-    store.set("projects.currentProjectId", undefined);
+    const db = getSharedDb();
+    db.delete(appStateTable).where(eq(appStateTable.key, "currentProjectId")).run();
   }
 
   private getStateFilePath(projectId: string): string | null {

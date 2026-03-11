@@ -59,6 +59,8 @@ interface ProjectState {
   ) => Promise<ProjectCloseResult>;
   closeActiveProject: (projectId: string) => Promise<ProjectCloseResult>;
   reopenProject: (projectId: string) => Promise<void>;
+  checkMissingProjects: () => Promise<void>;
+  locateProject: (projectId: string) => Promise<void>;
   finishProjectSwitch: () => void;
   openGitInitDialog: (directoryPath: string) => void;
   closeGitInitDialog: () => void;
@@ -228,6 +230,8 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
     try {
       const projects = await projectClient.getAll();
       set({ projects, isLoading: false });
+      // Check for missing directories in the background after updating the list
+      void get().checkMissingProjects();
     } catch (error) {
       logErrorWithContext(error, {
         operation: "load_projects",
@@ -348,7 +352,7 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
       // Snapshot outgoing project state before clearing stores so we can
       // pre-populate on switch-back (stale-while-revalidate).
       if (oldProjectId) {
-        snapshotProjectWorktrees(oldProjectId);
+        snapshotProjectWorktrees(oldProjectId, currentProject?.path);
         snapshotProjectSettings(oldProjectId);
       }
 
@@ -359,7 +363,7 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
 
       // Pre-populate stores from cached snapshots for an instant UI.
       console.log("[ProjectSwitch] Pre-populating snapshots...");
-      prePopulateWorktreeSnapshot(projectId);
+      prePopulateWorktreeSnapshot(projectId, targetProject?.path);
       prePopulateProjectSettings(projectId);
 
       // Set currentProject optimistically from the already-loaded project list.
@@ -414,7 +418,7 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
           });
           // Restore cached state for the outgoing project so the UI isn't blank.
           if (oldProjectId) {
-            prePopulateWorktreeSnapshot(oldProjectId);
+            prePopulateWorktreeSnapshot(oldProjectId, currentProject?.path);
             prePopulateProjectSettings(oldProjectId);
           }
           forceReinitializeWorktreeDataStore(oldProjectId ?? undefined);
@@ -441,7 +445,7 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
       });
       set({ error: message, isLoading: false, isSwitching: false, switchingToProjectName: null });
       if (oldProjectId) {
-        prePopulateWorktreeSnapshot(oldProjectId);
+        prePopulateWorktreeSnapshot(oldProjectId, currentProject?.path);
         prePopulateProjectSettings(oldProjectId);
       }
       forceReinitializeWorktreeDataStore(oldProjectId ?? undefined);
@@ -668,7 +672,7 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
 
       // Snapshot outgoing project state before clearing stores
       if (oldProjectId) {
-        snapshotProjectWorktrees(oldProjectId);
+        snapshotProjectWorktrees(oldProjectId, currentProject?.path);
         snapshotProjectSettings(oldProjectId);
       }
 
@@ -679,7 +683,7 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
 
       // Pre-populate stores from cached snapshots for an instant UI.
       console.log("[ProjectStore] Pre-populating snapshots...");
-      prePopulateWorktreeSnapshot(projectId);
+      prePopulateWorktreeSnapshot(projectId, targetProject?.path);
       prePopulateProjectSettings(projectId);
 
       // Set currentProject optimistically
@@ -728,7 +732,7 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
             switchingToProjectName: null,
           });
           if (oldProjectId) {
-            prePopulateWorktreeSnapshot(oldProjectId);
+            prePopulateWorktreeSnapshot(oldProjectId, currentProject?.path);
             prePopulateProjectSettings(oldProjectId);
           }
           forceReinitializeWorktreeDataStore(oldProjectId ?? undefined);
@@ -751,11 +755,40 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
       });
       set({ error: message, isLoading: false, isSwitching: false, switchingToProjectName: null });
       if (oldProjectId) {
-        prePopulateWorktreeSnapshot(oldProjectId);
+        prePopulateWorktreeSnapshot(oldProjectId, currentProject?.path);
         prePopulateProjectSettings(oldProjectId);
       }
       forceReinitializeWorktreeDataStore(oldProjectId ?? undefined);
       throw error;
+    }
+  },
+
+  checkMissingProjects: async () => {
+    try {
+      await projectClient.checkMissing();
+      const projects = await projectClient.getAll();
+      set({ projects });
+    } catch (error) {
+      logErrorWithContext(error, {
+        operation: "check_missing_projects",
+        component: "projectStore",
+      });
+    }
+  },
+
+  locateProject: async (projectId) => {
+    try {
+      const updated = await projectClient.locate(projectId);
+      if (updated) {
+        const projects = await projectClient.getAll();
+        set({ projects });
+      }
+    } catch (error) {
+      logErrorWithContext(error, {
+        operation: "locate_project",
+        component: "projectStore",
+        details: { projectId },
+      });
     }
   },
 

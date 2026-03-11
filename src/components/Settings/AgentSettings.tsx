@@ -1,24 +1,45 @@
 import { useEffect, useMemo, useState, useCallback, useRef } from "react";
 import { cn } from "@/lib/utils";
 import { getAgentIds, getAgentConfig } from "@/config/agents";
-import { useAgentSettingsStore, useCliAvailabilityStore, migrateAgentSelection } from "@/store";
+import {
+  useAgentSettingsStore,
+  useCliAvailabilityStore,
+  migrateAgentSelection,
+  useAgentPreferencesStore,
+} from "@/store";
 import { Button } from "@/components/ui/button";
 import {
   DEFAULT_AGENT_SETTINGS,
   getAgentSettingsEntry,
   DEFAULT_DANGEROUS_ARGS,
 } from "@shared/types";
-import { RotateCcw, ExternalLink, RefreshCw, Copy, Check, PackagePlus } from "lucide-react";
+import {
+  RotateCcw,
+  ExternalLink,
+  RefreshCw,
+  Copy,
+  Check,
+  PackagePlus,
+  Settings2,
+} from "lucide-react";
+import { SettingsSubtabBar } from "./SettingsSubtabBar";
 import { actionService } from "@/services/ActionService";
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
 import { AgentHelpOutput } from "./AgentHelpOutput";
 import { getInstallBlocksForCurrentOS } from "@/lib/agentInstall";
+import type { DefaultAgentId } from "@/store/agentPreferencesStore";
 
 interface AgentSettingsProps {
+  activeSubtab: string | null;
+  onSubtabChange: (id: string) => void;
   onSettingsChange?: () => void;
 }
 
-export function AgentSettings({ onSettingsChange }: AgentSettingsProps) {
+export function AgentSettings({
+  activeSubtab,
+  onSubtabChange,
+  onSettingsChange,
+}: AgentSettingsProps) {
   const {
     settings,
     isLoading,
@@ -37,12 +58,9 @@ export function AgentSettings({ onSettingsChange }: AgentSettingsProps) {
   const initializeCliAvailability = useCliAvailabilityStore((state) => state.initialize);
   const refreshCliAvailability = useCliAvailabilityStore((state) => state.refresh);
 
-  const [activeAgentId, setActiveAgentId] = useState<string | null>(null);
   const [copiedCommand, setCopiedCommand] = useState<string | null>(null);
   const copyTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const isMountedRef = useRef(true);
-  const scrollContainerRef = useRef<HTMLDivElement | null>(null);
-  const activePillRef = useRef<HTMLButtonElement | null>(null);
 
   useEffect(() => {
     initialize();
@@ -100,24 +118,20 @@ export function AgentSettings({ onSettingsChange }: AgentSettingsProps) {
     }
   }, []);
 
+  const defaultAgent = useAgentPreferencesStore((state) => state.defaultAgent);
+  const setDefaultAgent = useAgentPreferencesStore((state) => state.setDefaultAgent);
+
   const agentIds = useMemo(() => getAgentIds(), []);
   const effectiveSettings = settings ?? DEFAULT_AGENT_SETTINGS;
 
-  useEffect(() => {
-    if ((!activeAgentId || !agentIds.includes(activeAgentId)) && agentIds.length > 0) {
-      setActiveAgentId(agentIds[0]);
-    }
-  }, [activeAgentId, agentIds]);
+  // The General subtab is a reserved id that cannot conflict with agent ids.
+  const GENERAL_SUBTAB_ID = "general";
 
-  useEffect(() => {
-    if (activePillRef.current && scrollContainerRef.current) {
-      activePillRef.current.scrollIntoView({
-        behavior: "smooth",
-        block: "nearest",
-        inline: "center",
-      });
-    }
-  }, [activeAgentId]);
+  // Derive active subtab: "general" or one of the agent ids.
+  // Unknown subtab ids (not "general", not an agent) fall back to General to avoid blank screens.
+  const isGeneralActive =
+    activeSubtab === GENERAL_SUBTAB_ID || activeSubtab === null || !agentIds.includes(activeSubtab);
+  const activeAgentId = isGeneralActive ? null : activeSubtab;
 
   const agentOptions = useMemo(
     () =>
@@ -141,9 +155,7 @@ export function AgentSettings({ onSettingsChange }: AgentSettingsProps) {
     [agentIds, effectiveSettings]
   );
 
-  const activeAgent = activeAgentId
-    ? agentOptions.find((a) => a.id === activeAgentId)
-    : agentOptions[0];
+  const activeAgent = activeAgentId ? agentOptions.find((a) => a.id === activeAgentId) : null;
   const activeEntry = activeAgent
     ? getAgentSettingsEntry(effectiveSettings, activeAgent.id)
     : { customFlags: "", dangerousArgs: "", dangerousEnabled: false };
@@ -185,9 +197,9 @@ export function AgentSettings({ onSettingsChange }: AgentSettingsProps) {
       <div className="space-y-4">
         <div className="flex items-center justify-between">
           <div>
-            <h3 className="text-sm font-medium mb-1">Agent Runtime Settings</h3>
+            <h4 className="text-sm font-medium mb-1">CLI Agents</h4>
             <p className="text-xs text-canopy-text/50">
-              Configure CLI flags and options for each agent
+              Configure global agent preferences and per-agent settings
             </p>
           </div>
           <Button
@@ -203,56 +215,92 @@ export function AgentSettings({ onSettingsChange }: AgentSettingsProps) {
           </Button>
         </div>
 
-        {/* Agent Selector - Horizontal scrolling pills */}
-        <div
-          ref={scrollContainerRef}
-          tabIndex={0}
-          className="flex gap-1.5 p-1.5 bg-canopy-bg rounded-[var(--radius-lg)] border border-canopy-border overflow-x-auto scrollbar-thin focus:outline-none focus:ring-2 focus:ring-canopy-accent/50"
-        >
-          {agentOptions.map((agent) => {
-            if (!agent) return null;
-            const Icon = agent.Icon;
-            const isActive = activeAgent?.id === agent.id;
-            return (
-              <button
-                key={agent.id}
-                ref={isActive ? activePillRef : null}
-                onClick={() => setActiveAgentId(agent.id)}
-                className={cn(
-                  "flex items-center justify-center gap-2 px-3 py-2 rounded-[var(--radius-md)] text-sm font-medium transition-all flex-shrink-0",
-                  isActive
-                    ? "bg-canopy-sidebar text-canopy-text shadow-sm"
-                    : "text-canopy-text/60 hover:text-canopy-text hover:bg-white/5"
-                )}
-              >
-                {Icon && (
-                  <Icon
-                    size={18}
-                    brandColor={isActive ? agent.color : undefined}
-                    className={cn(!isActive && "opacity-60")}
-                  />
-                )}
-                <span className={cn("truncate", !agent.selected && "opacity-50")}>
-                  {agent.name}
-                </span>
-                <div className="flex items-center gap-1 shrink-0">
-                  {!agent.selected && (
-                    <span
-                      className="w-1.5 h-1.5 rounded-full bg-canopy-text/30"
-                      title="Not in workflow"
+        {/* Subtab bar: General + per-agent tabs */}
+        <SettingsSubtabBar
+          subtabs={[
+            {
+              id: GENERAL_SUBTAB_ID,
+              label: "General",
+              renderIcon: (isActive: boolean) => (
+                <Settings2
+                  size={16}
+                  className={cn(isActive ? "text-canopy-text" : "text-canopy-text/60")}
+                />
+              ),
+            },
+            ...agentOptions.map((agent) => {
+              const hasIndicators = !agent.selected || agent.dangerousEnabled;
+              return {
+                id: agent.id,
+                label: agent.name,
+                renderIcon: (isActive: boolean) =>
+                  agent.Icon ? (
+                    <agent.Icon
+                      size={18}
+                      brandColor={isActive ? agent.color : undefined}
+                      className={cn(!isActive && "opacity-60")}
                     />
-                  )}
-                  {agent.dangerousEnabled && (
-                    <span className="w-1.5 h-1.5 rounded-full bg-status-error" />
-                  )}
-                </div>
-              </button>
-            );
-          })}
-        </div>
+                  ) : null,
+                trailing: hasIndicators ? (
+                  <>
+                    {!agent.selected && (
+                      <span
+                        className="w-1.5 h-1.5 rounded-full bg-canopy-text/30"
+                        title="Not in workflow"
+                      />
+                    )}
+                    {agent.dangerousEnabled && (
+                      <span className="w-1.5 h-1.5 rounded-full bg-status-error" />
+                    )}
+                  </>
+                ) : undefined,
+              };
+            }),
+          ]}
+          activeId={isGeneralActive ? GENERAL_SUBTAB_ID : (activeAgentId ?? GENERAL_SUBTAB_ID)}
+          onChange={onSubtabChange}
+        />
+
+        {/* General subtab content */}
+        {isGeneralActive && (
+          <div
+            id="agents-general"
+            className="rounded-[var(--radius-lg)] border border-canopy-border bg-surface p-4 space-y-4"
+          >
+            <div className="pb-3 border-b border-canopy-border">
+              <h4 className="text-sm font-medium text-canopy-text">Global Agent Settings</h4>
+              <p className="text-xs text-canopy-text/50 mt-0.5">
+                Settings that apply across all agents
+              </p>
+            </div>
+
+            <div id="agents-default-agent" className="space-y-2">
+              <label className="text-sm font-medium text-canopy-text block">Default agent</label>
+              <select
+                value={defaultAgent ?? ""}
+                onChange={(e) =>
+                  setDefaultAgent(e.target.value ? (e.target.value as DefaultAgentId) : undefined)
+                }
+                className="w-full px-3 py-1.5 text-sm rounded-[var(--radius-md)] border border-canopy-border bg-canopy-bg text-canopy-text focus:border-canopy-accent focus:outline-none transition-colors"
+              >
+                <option value="">None (first available)</option>
+                {agentOptions.map((agent) => (
+                  <option key={agent.id} value={agent.id}>
+                    {agent.name}
+                  </option>
+                ))}
+              </select>
+              <p className="text-xs text-canopy-text/40">
+                Agent used for automated workflows ("What's Next?", onboarding, project
+                explanations). Distinct from the Sidecar "Default New Tab Agent" which controls the
+                browser panel opened by the + button.
+              </p>
+            </div>
+          </div>
+        )}
 
         {/* Agent Configuration Card */}
-        {activeAgent && (
+        {!isGeneralActive && activeAgent && (
           <div className="rounded-[var(--radius-lg)] border border-canopy-border bg-surface p-4 space-y-4">
             {/* Header with agent info */}
             <div className="flex items-center justify-between pb-3 border-b border-canopy-border">
@@ -310,7 +358,7 @@ export function AgentSettings({ onSettingsChange }: AgentSettingsProps) {
             </div>
 
             {/* Enable Agent Toggle */}
-            <div className="flex items-center justify-between">
+            <div id="agents-enable" className="flex items-center justify-between">
               <div>
                 <div className="text-sm font-medium text-canopy-text">Enable agent</div>
                 <div className="text-xs text-canopy-text/50">
@@ -342,7 +390,7 @@ export function AgentSettings({ onSettingsChange }: AgentSettingsProps) {
             </div>
 
             {/* Dangerous Mode Toggle */}
-            <div className="space-y-2">
+            <div id="agents-skip-permissions" className="space-y-2">
               <div className="flex items-center justify-between">
                 <div>
                   <div className="text-sm font-medium text-canopy-text">Skip Permissions</div>
@@ -383,7 +431,7 @@ export function AgentSettings({ onSettingsChange }: AgentSettingsProps) {
               if (!inlineModeFlag) return null;
               const inlineMode = activeEntry.inlineMode ?? true;
               return (
-                <div className="flex items-center justify-between">
+                <div id="agents-inline-mode" className="flex items-center justify-between">
                   <div>
                     <div className="text-sm font-medium text-canopy-text">Inline Mode</div>
                     <div className="text-xs text-canopy-text/50">
@@ -413,7 +461,7 @@ export function AgentSettings({ onSettingsChange }: AgentSettingsProps) {
 
             {/* Share Clipboard Directory Toggle - Gemini only */}
             {activeAgent.id === "gemini" && (
-              <div className="flex items-center justify-between">
+              <div id="agents-clipboard" className="flex items-center justify-between">
                 <div>
                   <div className="text-sm font-medium text-canopy-text">
                     Share Clipboard Directory
@@ -449,7 +497,7 @@ export function AgentSettings({ onSettingsChange }: AgentSettingsProps) {
             )}
 
             {/* Custom Arguments */}
-            <div className="space-y-2 pt-2 border-t border-canopy-border">
+            <div id="agents-custom-args" className="space-y-2 pt-2 border-t border-canopy-border">
               <label className="text-sm font-medium text-canopy-text">Custom Arguments</label>
               <input
                 className="w-full rounded-[var(--radius-md)] border border-canopy-border bg-canopy-bg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-canopy-accent/50 placeholder:text-canopy-text/30"
@@ -488,7 +536,10 @@ export function AgentSettings({ onSettingsChange }: AgentSettingsProps) {
               }
 
               return (
-                <div className="space-y-3 pt-4 border-t border-canopy-border">
+                <div
+                  id="agents-installation"
+                  className="space-y-3 pt-4 border-t border-canopy-border"
+                >
                   <div className="flex items-center justify-between">
                     <div>
                       <h5 className="text-sm font-medium text-canopy-text">Installation</h5>

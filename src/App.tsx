@@ -9,7 +9,7 @@ import {
   useTransition,
 } from "react";
 import "@xterm/xterm/css/xterm.css";
-import { FolderOpen, FilterX, Maximize2, RefreshCw } from "lucide-react";
+import { FolderOpen, FilterX, LayoutGrid, Plus, RefreshCw } from "lucide-react";
 import { ScrollIndicator } from "./components/Worktree/ScrollIndicator";
 import {
   isElectronAvailable,
@@ -56,7 +56,7 @@ import { PanelTransitionOverlay } from "./components/Panel";
 import {
   WorktreeCard,
   WorktreePalette,
-  WorktreeFilterPopover,
+  WorktreeSidebarSearchBar,
   WorktreeOverviewModal,
 } from "./components/Worktree";
 import { CrossWorktreeDiff } from "./components/Worktree/CrossWorktreeDiff";
@@ -97,7 +97,7 @@ import {
   useFocusStore,
   useAgentSettingsStore,
   cleanupWorktreeDataStore,
-  useToolbarPreferencesStore,
+  useAgentPreferencesStore,
   type RetryAction,
 } from "./store";
 import { useShallow } from "zustand/react/shallow";
@@ -113,6 +113,7 @@ import {
   matchesFilters,
   sortWorktrees,
   groupByType,
+  findIntegrationWorktree,
   type DerivedWorktreeMeta,
   type FilterState,
 } from "./lib/worktreeFilters";
@@ -130,6 +131,7 @@ interface SidebarContentProps {
 function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   const { worktrees, isLoading, error, refresh } = useWorktrees();
   const [isRefreshing, startRefreshTransition] = useTransition();
+  const currentProject = useProjectStore((state) => state.currentProject);
   useProjectSettings();
   const { launchAgent, availability, agentSettings } = useAgentLauncher();
   const {
@@ -188,6 +190,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
 
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const scrollContentRef = useRef<HTMLDivElement>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
   const [hiddenAbove, setHiddenAbove] = useState(0);
   const [hiddenBelow, setHiddenBelow] = useState(0);
 
@@ -241,6 +244,16 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   }, [worktrees, terminals, getWorktreeErrors]);
 
   // Apply filters and sorting
+  const mainWorktree = useMemo(
+    () => worktrees.find((w) => w.isMainWorktree) ?? worktrees[0] ?? null,
+    [worktrees]
+  );
+
+  const integrationWorktree = useMemo(
+    () => findIntegrationWorktree(worktrees, mainWorktree?.id),
+    [worktrees, mainWorktree]
+  );
+
   const { filteredWorktrees, groupedSections } = useMemo(() => {
     const filters: FilterState = {
       query,
@@ -251,8 +264,11 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
       activityFilters,
     };
 
-    // Filter worktrees
-    const filtered = worktrees.filter((worktree) => {
+    // Filter non-main worktrees only (exclude main and integration by ID)
+    const nonMain = worktrees.filter(
+      (w) => w.id !== mainWorktree?.id && w.id !== integrationWorktree?.id
+    );
+    const filtered = nonMain.filter((worktree) => {
       const derived = derivedMetaMap.get(worktree.id) ?? {
         hasErrors: false,
         terminalCount: 0,
@@ -264,7 +280,6 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
       };
       const isActive = worktree.id === activeWorktreeId;
 
-      // Always show active worktree if setting is enabled
       if (alwaysShowActive && isActive) {
         return true;
       }
@@ -272,14 +287,11 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
       return matchesFilters(worktree, filters, derived, isActive);
     });
 
-    // Filter out pinned worktrees that no longer exist
     const existingWorktreeIds = new Set(worktrees.map((w) => w.id));
     const validPinnedWorktrees = pinnedWorktrees.filter((id) => existingWorktreeIds.has(id));
 
-    // Sort worktrees
     const sorted = sortWorktrees(filtered, orderBy, validPinnedWorktrees);
 
-    // Group if enabled
     if (isGroupedByType) {
       return {
         filteredWorktrees: sorted,
@@ -300,6 +312,8 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     activityFilters,
     alwaysShowActive,
     pinnedWorktrees,
+    mainWorktree,
+    integrationWorktree,
     derivedMetaMap,
     activeWorktreeId,
   ]);
@@ -479,8 +493,8 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     );
   }
 
-  const rootPath =
-    worktrees.length > 0 && worktrees[0].path ? worktrees[0].path.split("/.git/")[0] : "";
+  const rootPath = currentProject?.path ?? "";
+  const hasNonMainWorktrees = worktrees.length > 1;
 
   const renderWorktreeCard = (worktree: WorktreeState) => (
     <WorktreeCard
@@ -503,40 +517,54 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   return (
     <div className="flex flex-col h-full">
       {/* Header Section */}
-      <div className="flex items-center justify-between px-4 py-4 border-b border-divider bg-transparent shrink-0">
-        <div className="flex items-center gap-2">
-          <h2 className="text-canopy-text font-semibold text-sm tracking-wide">Worktrees</h2>
-          <button
-            onClick={onOpenOverview}
-            className="p-1 text-canopy-text/40 hover:text-canopy-text hover:bg-white/[0.06] rounded transition-colors"
-            title={createTooltipWithShortcut("Toggle worktrees overview", "Cmd+Shift+O")}
-            aria-label="Open worktrees overview"
-          >
-            <Maximize2 className="w-3.5 h-3.5" />
-          </button>
-        </div>
+      <div className="group/header flex items-center justify-between px-4 py-2 border-b border-divider bg-transparent shrink-0">
+        <h2 className="text-canopy-text font-semibold text-sm tracking-wide">Worktrees</h2>
         <div className="flex items-center gap-1">
-          <button
-            onClick={handleRefreshAll}
-            disabled={isRefreshing}
-            className="p-1 text-canopy-text/40 hover:text-canopy-text hover:bg-white/[0.06] rounded transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-            title="Refresh sidebar"
-            aria-label="Refresh sidebar"
-          >
-            <RefreshCw className={`w-3.5 h-3.5 ${isRefreshing ? "animate-spin" : ""}`} />
-          </button>
-          <WorktreeFilterPopover />
+          <div className="invisible group-hover/header:visible group-focus-within/header:visible flex items-center gap-1">
+            <button
+              onClick={onOpenOverview}
+              className="p-1 text-canopy-text/40 hover:text-canopy-text hover:bg-white/[0.06] rounded transition-colors"
+              title={createTooltipWithShortcut("Toggle worktrees overview", "Cmd+Shift+O")}
+              aria-label="Open worktrees overview"
+            >
+              <LayoutGrid className="w-3.5 h-3.5" />
+            </button>
+            <button
+              onClick={handleRefreshAll}
+              disabled={isRefreshing}
+              className="p-1 text-canopy-text/40 hover:text-canopy-text hover:bg-white/[0.06] rounded transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+              title="Refresh sidebar"
+              aria-label="Refresh sidebar"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${isRefreshing ? "animate-spin" : ""}`} />
+            </button>
+          </div>
           <button
             onClick={() => openCreateDialog()}
-            className="flex items-center gap-1.5 text-xs font-medium px-2.5 py-1 text-canopy-text/60 hover:text-canopy-text hover:bg-white/[0.06] rounded transition-colors"
-            title="Create new worktree"
+            className="p-1 text-canopy-text/40 hover:text-canopy-text hover:bg-white/[0.06] rounded transition-colors"
+            title={createTooltipWithShortcut("Create new worktree", "Cmd+Shift+N")}
+            aria-label="Create new worktree"
           >
-            <span className="text-[11px]">+</span> New
+            <Plus className="w-3.5 h-3.5" />
           </button>
         </div>
       </div>
 
-      {/* List Section */}
+      {/* Inline search bar — only when there are non-main worktrees */}
+      {hasNonMainWorktrees && <WorktreeSidebarSearchBar inputRef={searchInputRef} />}
+
+      {/* Main worktree — always visible */}
+      {mainWorktree && <div className="shrink-0">{renderWorktreeCard(mainWorktree)}</div>}
+
+      {/* Integration branch (develop/trunk/next) — pinned below main */}
+      {integrationWorktree && (
+        <div className="shrink-0">{renderWorktreeCard(integrationWorktree)}</div>
+      )}
+
+      {/* Strong divider between pinned worktrees and scrollable list */}
+      {hasNonMainWorktrees && <div className="shrink-0 border-b-2 border-divider/60" />}
+
+      {/* Non-main worktree list */}
       <div className="relative flex-1 min-h-0">
         <div ref={scrollContainerRef} className="h-full overflow-y-auto">
           <div ref={scrollContentRef}>
@@ -859,7 +887,7 @@ function App() {
   }, []);
 
   const handleWizardFinish = useCallback(() => {
-    const defaultAgent = useToolbarPreferencesStore.getState().launcher.defaultAgent;
+    const defaultAgent = useAgentPreferencesStore.getState().defaultAgent;
     const selected = agentSettings?.agents
       ? Object.entries(agentSettings.agents)
           .filter(([, entry]) => entry.selected === true)
@@ -870,7 +898,6 @@ function App() {
     if (primaryAgent && availability[primaryAgent]) {
       launchAgent(primaryAgent, {
         worktreeId: activeWorktreeId ?? undefined,
-        prompt: "Hi! I'm ready to help with this project. What would you like to know?",
       }).catch(() => {});
     }
   }, [launchAgent, activeWorktreeId, availability, agentSettings]);

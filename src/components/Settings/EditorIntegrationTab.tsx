@@ -149,7 +149,6 @@ export function EditorIntegrationTab() {
         icon={Code2}
         title="External Editor"
         description="Choose the editor that opens when you click 'Open in editor' in the diff viewer or worktree cards."
-        iconColor="text-canopy-accent"
       >
         <div className="space-y-4">
           <div className="space-y-1">

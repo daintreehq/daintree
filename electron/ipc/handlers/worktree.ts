@@ -18,6 +18,7 @@ import {
   validatePathPattern,
 } from "../../../shared/utils/pathPattern.js";
 import { GitService } from "../../services/GitService.js";
+import { projectStore } from "../../services/ProjectStore.js";
 import { logDebug, logError } from "../../utils/logger.js";
 import { fileSearchService } from "../../services/FileSearchService.js";
 import { checkRateLimit } from "../utils.js";
@@ -258,14 +259,20 @@ export function registerWorktreeHandlers(deps: HandlerDependencies): () => void 
 
   const handleGitCompareWorktrees = async (
     _event: Electron.IpcMainInvokeEvent,
-    payload: { cwd: string; branch1: string; branch2: string; filePath?: string }
+    payload: {
+      cwd: string;
+      branch1: string;
+      branch2: string;
+      filePath?: string;
+      useMergeBase?: boolean;
+    }
   ) => {
     checkRateLimit(CHANNELS.GIT_COMPARE_WORKTREES, 20, 10_000);
     if (!payload || typeof payload !== "object") {
       throw new Error("Invalid payload");
     }
 
-    const { cwd, branch1, branch2, filePath } = payload;
+    const { cwd, branch1, branch2, filePath, useMergeBase } = payload;
 
     if (typeof cwd !== "string" || !cwd) {
       throw new Error("Invalid working directory");
@@ -279,9 +286,12 @@ export function registerWorktreeHandlers(deps: HandlerDependencies): () => void 
     if (filePath !== undefined && (typeof filePath !== "string" || !filePath)) {
       throw new Error("Invalid filePath");
     }
+    if (useMergeBase !== undefined && typeof useMergeBase !== "boolean") {
+      throw new Error("Invalid useMergeBase");
+    }
 
     const gitService = new GitService(cwd);
-    return gitService.compareWorktrees(branch1, branch2, filePath);
+    return gitService.compareWorktrees(branch1, branch2, filePath, useMergeBase);
   };
   ipcMain.handle(CHANNELS.GIT_COMPARE_WORKTREES, handleGitCompareWorktrees);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.GIT_COMPARE_WORKTREES));
@@ -431,10 +441,7 @@ export function registerWorktreeHandlers(deps: HandlerDependencies): () => void 
     }
 
     // Get the current project to determine root path
-    const projectsData = store.get("projects");
-    const currentProjectId = projectsData?.currentProjectId;
-    const projectsList = projectsData?.list;
-    const project = projectsList?.find((p) => p.id === currentProjectId);
+    const project = projectStore.getCurrentProject();
 
     if (!project || !project.path) {
       throw new Error("No active project found");
@@ -609,8 +616,7 @@ export function registerWorktreeHandlers(deps: HandlerDependencies): () => void 
     }
 
     // Get current project to scope the lookup
-    const projectsData = store.get("projects");
-    const currentProjectId = projectsData?.currentProjectId;
+    const currentProjectId = projectStore.getCurrentProjectId();
     if (!currentProjectId) {
       throw new Error("No active project found");
     }
@@ -670,8 +676,7 @@ export function registerWorktreeHandlers(deps: HandlerDependencies): () => void 
     }
 
     // Get current project to scope the cleanup
-    const projectsData = store.get("projects");
-    const currentProjectId = projectsData?.currentProjectId;
+    const currentProjectId = projectStore.getCurrentProjectId();
     if (!currentProjectId) {
       throw new Error("No active project found");
     }

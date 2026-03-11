@@ -1466,5 +1466,41 @@ Thumbs.db
   ipcMain.handle(CHANNELS.PROJECT_DISABLE_IN_REPO_SETTINGS, handleProjectDisableInRepoSettings);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.PROJECT_DISABLE_IN_REPO_SETTINGS));
 
+  const handleProjectCheckMissing = async (
+    _event: Electron.IpcMainInvokeEvent
+  ): Promise<string[]> => {
+    return projectStore.checkMissingProjects();
+  };
+  ipcMain.handle(CHANNELS.PROJECT_CHECK_MISSING, handleProjectCheckMissing);
+  handlers.push(() => ipcMain.removeHandler(CHANNELS.PROJECT_CHECK_MISSING));
+
+  const handleProjectLocate = async (
+    _event: Electron.IpcMainInvokeEvent,
+    projectId: string
+  ): Promise<Project | null> => {
+    if (typeof projectId !== "string" || !projectId) {
+      throw new Error("Invalid project ID");
+    }
+    const project = projectStore.getProjectById(projectId);
+    if (!project) {
+      throw new Error(`Project not found: ${projectId}`);
+    }
+
+    const result = await dialog.showOpenDialog({
+      title: `Locate "${project.name}"`,
+      properties: ["openDirectory"],
+      defaultPath: path.dirname(project.path),
+    });
+
+    if (result.canceled || result.filePaths.length === 0) {
+      return null;
+    }
+
+    const newPath = result.filePaths[0];
+    return projectStore.relocateProject(projectId, newPath);
+  };
+  ipcMain.handle(CHANNELS.PROJECT_LOCATE, handleProjectLocate);
+  handlers.push(() => ipcMain.removeHandler(CHANNELS.PROJECT_LOCATE));
+
   return () => handlers.forEach((cleanup) => cleanup());
 }

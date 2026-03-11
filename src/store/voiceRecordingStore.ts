@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { VoiceInputStatus } from "@shared/types";
+import type { VoiceInputStatus, VoiceTranscriptPhase } from "@shared/types";
 
 export interface VoiceRecordingTarget {
   panelId: string;
@@ -11,6 +11,8 @@ export interface VoiceRecordingTarget {
 }
 
 export interface PendingCorrection {
+  /** Stable opaque ID generated in the main process at flush time. */
+  id: string;
   /** Character offset in the draft where the uncorrected segment starts. */
   segmentStart: number;
   /** The raw text that was inserted and is awaiting correction. */
@@ -27,6 +29,8 @@ interface VoiceTranscriptBuffer {
   pendingCorrections: PendingCorrection[];
   /** Draft length at the start of the current paragraph (-1 = not set). */
   activeParagraphStart: number;
+  /** Explicit transcript lifecycle phase — derived from and updated alongside buffer state. */
+  transcriptPhase: VoiceTranscriptPhase;
 }
 
 interface VoiceAnnouncement {
@@ -60,8 +64,14 @@ interface VoiceRecordingState {
   appendDelta: (delta: string) => void;
   setDraftLengthAtSegmentStart: (panelId: string, length: number) => void;
   completeSegment: (text: string) => void;
-  addPendingCorrection: (panelId: string, segmentStart: number, rawText: string) => void;
-  resolvePendingCorrection: (panelId: string, rawText: string) => void;
+  addPendingCorrection: (
+    panelId: string,
+    id: string,
+    segmentStart: number,
+    rawText: string
+  ) => void;
+  resolvePendingCorrection: (panelId: string, id: string) => void;
+  rebasePendingCorrections: (panelId: string, afterPosition: number, delta: number) => void;
   getPendingCorrections: (panelId: string) => PendingCorrection[];
   setActiveParagraphStart: (panelId: string, length: number) => void;
   resetParagraphState: (panelId: string) => void;
@@ -83,6 +93,7 @@ function getBuffer(
       draftLengthAtSegmentStart: -1,
       pendingCorrections: [],
       activeParagraphStart: -1,
+      transcriptPhase: "idle" as VoiceTranscriptPhase,
     }
   );
 }
@@ -119,6 +130,7 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()((set, get) =
           projectId: target.projectId,
           draftLengthAtSegmentStart: -1,
           activeParagraphStart: -1,
+          transcriptPhase: "idle" as VoiceTranscriptPhase,
         },
       },
     })),
@@ -140,6 +152,7 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()((set, get) =
           [panelId]: {
             ...buffer,
             liveText: buffer.liveText + delta,
+            transcriptPhase: "interim" as VoiceTranscriptPhase,
           },
         },
       };
@@ -172,6 +185,7 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()((set, get) =
               ...buffer,
               liveText: "",
               draftLengthAtSegmentStart: -1,
+              transcriptPhase: "idle" as VoiceTranscriptPhase,
             },
           },
         };
@@ -185,12 +199,13 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()((set, get) =
             liveText: "",
             draftLengthAtSegmentStart: -1,
             completedSegments: [...buffer.completedSegments, normalized],
+            transcriptPhase: "utterance_final" as VoiceTranscriptPhase,
           },
         },
       };
     }),
 
-  addPendingCorrection: (panelId, segmentStart, rawText) =>
+  addPendingCorrection: (panelId, id, segmentStart, rawText) =>
     set((state) => {
       const buffer = getBuffer(state.panelBuffers, panelId);
       return {
@@ -198,23 +213,45 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()((set, get) =
           ...state.panelBuffers,
           [panelId]: {
             ...buffer,
-            pendingCorrections: [...buffer.pendingCorrections, { segmentStart, rawText }],
+            pendingCorrections: [...buffer.pendingCorrections, { id, segmentStart, rawText }],
+            transcriptPhase: "paragraph_pending_ai" as VoiceTranscriptPhase,
           },
         },
       };
     }),
 
-  resolvePendingCorrection: (panelId, rawText) =>
+  resolvePendingCorrection: (panelId, id) =>
     set((state) => {
       const buffer = getBuffer(state.panelBuffers, panelId);
-      const idx = buffer.pendingCorrections.findIndex((p) => p.rawText === rawText);
+      const idx = buffer.pendingCorrections.findIndex((p) => p.id === id);
       if (idx === -1) return state;
       const next = [...buffer.pendingCorrections];
       next.splice(idx, 1);
       return {
         panelBuffers: {
           ...state.panelBuffers,
-          [panelId]: { ...buffer, pendingCorrections: next },
+          [panelId]: {
+            ...buffer,
+            pendingCorrections: next,
+            transcriptPhase: (next.length === 0
+              ? "stable"
+              : "paragraph_pending_ai") as VoiceTranscriptPhase,
+          },
+        },
+      };
+    }),
+
+  rebasePendingCorrections: (panelId, afterPosition, delta) =>
+    set((state) => {
+      const buffer = getBuffer(state.panelBuffers, panelId);
+      if (buffer.pendingCorrections.length === 0) return state;
+      const rebased = buffer.pendingCorrections.map((p) =>
+        p.segmentStart > afterPosition ? { ...p, segmentStart: p.segmentStart + delta } : p
+      );
+      return {
+        panelBuffers: {
+          ...state.panelBuffers,
+          [panelId]: { ...buffer, pendingCorrections: rebased },
         },
       };
     }),
@@ -243,8 +280,16 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()((set, get) =
           ...state.panelBuffers,
           [panelId]: {
             ...buffer,
+            liveText: "",
             completedSegments: [],
+            draftLengthAtSegmentStart: -1,
             activeParagraphStart: -1,
+            // Preserve paragraph_pending_ai if corrections are still in flight;
+            // otherwise the paragraph boundary fully resets to idle.
+            transcriptPhase:
+              buffer.pendingCorrections.length > 0
+                ? ("paragraph_pending_ai" as VoiceTranscriptPhase)
+                : ("idle" as VoiceTranscriptPhase),
           },
         },
       };
@@ -280,6 +325,10 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()((set, get) =
             ...buffer,
             liveText: "",
             completedSegments,
+            transcriptPhase:
+              buffer.pendingCorrections.length > 0
+                ? ("paragraph_pending_ai" as VoiceTranscriptPhase)
+                : ("idle" as VoiceTranscriptPhase),
           },
         },
       };

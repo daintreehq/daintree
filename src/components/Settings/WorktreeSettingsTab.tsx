@@ -136,7 +136,6 @@ export function WorktreeSettingsTab() {
         icon={GitBranch}
         title="Worktree Path Pattern"
         description="Configure the default path pattern for new worktrees. Use variables to build dynamic paths based on your repository and branch names."
-        iconColor="text-canopy-accent"
       >
         <div className="space-y-4">
           <div className="space-y-2">

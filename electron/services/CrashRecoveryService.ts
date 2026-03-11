@@ -127,7 +127,6 @@ export class CrashRecoveryService {
         hasSeenWelcome: true,
         panelGridConfig: { strategy: "automatic" as const, value: 3 },
       });
-      store.set("projects", { list: [], currentProjectId: undefined });
       console.log("[CrashRecovery] Reset to fresh state");
     } catch (err) {
       console.error("[CrashRecovery] Failed to reset to fresh:", err);
@@ -263,14 +262,12 @@ export class CrashRecoveryService {
     return {
       capturedAt: Date.now(),
       appState: store.get("appState"),
-      projects: store.get("projects"),
       windowState: store.get("windowState"),
     };
   }
 
   private applySessionSnapshot(snapshot: SessionSnapshot): void {
     if (snapshot.appState) store.set("appState", snapshot.appState);
-    if (snapshot.projects) store.set("projects", snapshot.projects);
     if (snapshot.windowState) store.set("windowState", snapshot.windowState);
   }
 
@@ -332,7 +329,6 @@ interface MarkerFile {
 interface SessionSnapshot {
   capturedAt: number;
   appState?: unknown;
-  projects?: unknown;
   windowState?: unknown;
 }
 

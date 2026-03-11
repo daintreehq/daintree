@@ -1,6 +1,15 @@
 import { useMemo, useEffect, useRef, useCallback } from "react";
 import { createPortal } from "react-dom";
-import { Circle, FolderPlus, Plus, Settings2, Square, X } from "lucide-react";
+import {
+  AlertTriangle,
+  Circle,
+  FolderOpen,
+  FolderPlus,
+  Plus,
+  Settings2,
+  Square,
+  X,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
 import { getProjectGradient } from "@/lib/colorUtils";
 import { AppPaletteDialog } from "@/components/ui/AppPaletteDialog";
@@ -28,6 +37,7 @@ export interface ProjectSwitcherPaletteProps {
   onCreateFolder?: () => void;
   onStopProject?: (projectId: string) => void;
   onCloseProject?: (projectId: string) => void;
+  onLocateProject?: (projectId: string) => void;
   onOpenProjectSettings?: () => void;
   dropdownAlign?: "start" | "center" | "end";
   children?: React.ReactNode;
@@ -44,6 +54,7 @@ interface ProjectListItemProps {
   onSelect: (project: SearchableProject) => void;
   onStopProject?: (projectId: string) => void;
   onCloseProject?: (projectId: string) => void;
+  onLocateProject?: (projectId: string) => void;
 }
 
 function ProjectListItem({
@@ -53,23 +64,30 @@ function ProjectListItem({
   onSelect,
   onStopProject,
   onCloseProject,
+  onLocateProject,
 }: ProjectListItemProps) {
-  const showStop = project.processCount > 0;
+  const showStop = project.processCount > 0 && !project.isMissing;
 
   return (
     <div
       id={`project-option-${project.id}`}
       role="option"
       aria-selected={index === selectedIndex}
+      aria-disabled={project.isMissing || undefined}
       className={cn(
         "group relative w-full flex items-center gap-3 px-3 py-2 rounded-[var(--radius-md)] text-left transition-colors border border-transparent",
         project.isActive
           ? cn("text-canopy-text", index === selectedIndex && "bg-white/[0.04]")
-          : index === selectedIndex
-            ? "bg-white/[0.04] text-canopy-text cursor-pointer"
-            : "text-canopy-text/70 hover:bg-overlay-subtle hover:text-canopy-text cursor-pointer"
+          : project.isMissing
+            ? cn(
+                "text-canopy-text/50",
+                index === selectedIndex ? "bg-white/[0.04]" : "hover:bg-overlay-subtle"
+              )
+            : index === selectedIndex
+              ? "bg-white/[0.04] text-canopy-text cursor-pointer"
+              : "text-canopy-text/70 hover:bg-overlay-subtle hover:text-canopy-text cursor-pointer"
       )}
-      onClick={() => !project.isActive && onSelect(project)}
+      onClick={() => !project.isActive && !project.isMissing && onSelect(project)}
     >
       <div
         className={cn(
@@ -105,20 +123,36 @@ function ProjectListItem({
             />
           )}
 
-          <div className="ml-auto flex items-center gap-1.5 shrink-0">
-            <ProjectActionRow
-              activeAgentCount={project.activeAgentCount}
-              waitingAgentCount={project.waitingAgentCount}
-            />
+          {project.isMissing && (
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <AlertTriangle
+                    className="h-3 w-3 text-status-warning shrink-0"
+                    aria-label="Directory not found"
+                  />
+                </TooltipTrigger>
+                <TooltipContent side="bottom">Directory not found</TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
+          )}
 
-            {(showStop || onCloseProject) && (
+          <div className="ml-auto flex items-center gap-1.5 shrink-0">
+            {!project.isMissing && (
+              <ProjectActionRow
+                activeAgentCount={project.activeAgentCount}
+                waitingAgentCount={project.waitingAgentCount}
+              />
+            )}
+
+            {project.isMissing ? (
               <div
                 className={cn(
                   "flex items-center gap-1.5 transition-opacity",
                   index === selectedIndex ? "opacity-100" : "opacity-0 group-hover:opacity-100"
                 )}
               >
-                {showStop && onStopProject && (
+                {onLocateProject && (
                   <TooltipProvider>
                     <Tooltip>
                       <TooltipTrigger asChild>
@@ -126,19 +160,19 @@ function ProjectListItem({
                           type="button"
                           onClick={(e) => {
                             e.stopPropagation();
-                            onStopProject(project.id);
+                            onLocateProject(project.id);
                           }}
                           className={cn(
                             "p-0.5 rounded transition-colors cursor-pointer",
-                            "text-status-error hover:bg-status-error/10",
+                            "text-canopy-text/50 hover:bg-white/[0.06] hover:text-canopy-text/80",
                             "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent"
                           )}
-                          aria-label="Stop project"
+                          aria-label="Locate project folder"
                         >
-                          <Square className="w-3.5 h-3.5" aria-hidden="true" />
+                          <FolderOpen className="w-3.5 h-3.5" aria-hidden="true" />
                         </button>
                       </TooltipTrigger>
-                      <TooltipContent side="bottom">Stop project</TooltipContent>
+                      <TooltipContent side="bottom">Locate folder</TooltipContent>
                     </Tooltip>
                   </TooltipProvider>
                 )}
@@ -157,23 +191,86 @@ function ProjectListItem({
                             "text-canopy-text/50 hover:bg-white/[0.06] hover:text-canopy-text/80",
                             "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent"
                           )}
-                          aria-label="Close project"
+                          aria-label="Remove project"
                         >
                           <X className="w-3.5 h-3.5" aria-hidden="true" />
                         </button>
                       </TooltipTrigger>
-                      <TooltipContent side="bottom">Close project</TooltipContent>
+                      <TooltipContent side="bottom">Remove project</TooltipContent>
                     </Tooltip>
                   </TooltipProvider>
                 )}
               </div>
+            ) : (
+              (showStop || onCloseProject) && (
+                <div
+                  className={cn(
+                    "flex items-center gap-1.5 transition-opacity",
+                    index === selectedIndex ? "opacity-100" : "opacity-0 group-hover:opacity-100"
+                  )}
+                >
+                  {showStop && onStopProject && (
+                    <TooltipProvider>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onStopProject(project.id);
+                            }}
+                            className={cn(
+                              "p-0.5 rounded transition-colors cursor-pointer",
+                              "text-status-error hover:bg-status-error/10",
+                              "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent"
+                            )}
+                            aria-label="Stop project"
+                          >
+                            <Square className="w-3.5 h-3.5" aria-hidden="true" />
+                          </button>
+                        </TooltipTrigger>
+                        <TooltipContent side="bottom">Stop project</TooltipContent>
+                      </Tooltip>
+                    </TooltipProvider>
+                  )}
+                  {onCloseProject && (
+                    <TooltipProvider>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onCloseProject(project.id);
+                            }}
+                            className={cn(
+                              "p-0.5 rounded transition-colors cursor-pointer",
+                              "text-canopy-text/50 hover:bg-white/[0.06] hover:text-canopy-text/80",
+                              "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent"
+                            )}
+                            aria-label="Close project"
+                          >
+                            <X className="w-3.5 h-3.5" aria-hidden="true" />
+                          </button>
+                        </TooltipTrigger>
+                        <TooltipContent side="bottom">Close project</TooltipContent>
+                      </Tooltip>
+                    </TooltipProvider>
+                  )}
+                </div>
+              )
             )}
           </div>
         </div>
 
         <div className="flex items-center min-w-0 mt-0.5">
-          <span className="truncate text-[11px] leading-none font-mono text-canopy-text/50">
-            {project.path.split(/[/\\]/).pop()}
+          <span
+            className={cn(
+              "truncate text-[11px] leading-none font-mono",
+              project.isMissing ? "text-status-warning/70" : "text-canopy-text/50"
+            )}
+          >
+            {project.isMissing ? "Directory not found" : project.path.split(/[/\\]/).pop()}
           </span>
         </div>
       </div>
@@ -189,6 +286,7 @@ interface ProjectListContentProps {
   listRef: React.RefObject<HTMLDivElement | null>;
   onStopProject?: (projectId: string) => void;
   onCloseProject?: (projectId: string) => void;
+  onLocateProject?: (projectId: string) => void;
 }
 
 function ProjectListContent({
@@ -199,6 +297,7 @@ function ProjectListContent({
   listRef,
   onStopProject,
   onCloseProject,
+  onLocateProject,
 }: ProjectListContentProps) {
   const isSearching = query.trim().length > 0;
 
@@ -220,6 +319,7 @@ function ProjectListContent({
           onSelect={onSelect}
           onStopProject={onStopProject}
           onCloseProject={onCloseProject}
+          onLocateProject={onLocateProject}
         />
       </div>
     );
@@ -265,6 +365,7 @@ function ProjectListContent({
                   onSelect={onSelect}
                   onStopProject={onStopProject}
                   onCloseProject={onCloseProject}
+                  onLocateProject={onLocateProject}
                 />
               </div>
             ))}
@@ -326,6 +427,7 @@ interface ProjectPaletteInnerProps {
   onOpenProjectSettings?: () => void;
   onStopProject?: (projectId: string) => void;
   onCloseProject?: (projectId: string) => void;
+  onLocateProject?: (projectId: string) => void;
 }
 
 function ProjectPaletteInner({
@@ -344,6 +446,7 @@ function ProjectPaletteInner({
   onOpenProjectSettings,
   onStopProject,
   onCloseProject,
+  onLocateProject,
 }: ProjectPaletteInnerProps) {
   const projectSwitcherShortcut = useKeybindingDisplay("project.switcherPalette");
 
@@ -443,6 +546,7 @@ function ProjectPaletteInner({
           listRef={listRef}
           onStopProject={onStopProject}
           onCloseProject={onCloseProject}
+          onLocateProject={onLocateProject}
         />
       </AppPaletteDialog.Body>
 
@@ -576,6 +680,7 @@ function ModalContent({
           onOpenProjectSettings={innerProps.onOpenProjectSettings}
           onStopProject={innerProps.onStopProject}
           onCloseProject={innerProps.onCloseProject}
+          onLocateProject={innerProps.onLocateProject}
         />
       </div>
     </div>,
@@ -646,6 +751,7 @@ function DropdownContent({
           onOpenProjectSettings={innerProps.onOpenProjectSettings}
           onStopProject={innerProps.onStopProject}
           onCloseProject={innerProps.onCloseProject}
+          onLocateProject={innerProps.onLocateProject}
         />
       </PopoverContent>
     </Popover>
@@ -667,6 +773,7 @@ export function ProjectSwitcherPalette({
   onCreateFolder,
   onStopProject,
   onCloseProject,
+  onLocateProject,
   onOpenProjectSettings,
   dropdownAlign,
   children,
@@ -697,6 +804,7 @@ export function ProjectSwitcherPalette({
         onCreateFolder={onCreateFolder}
         onStopProject={onStopProject}
         onCloseProject={onCloseProject}
+        onLocateProject={onLocateProject}
         onOpenProjectSettings={onOpenProjectSettings}
         dropdownAlign={dropdownAlign}
       >
@@ -717,6 +825,7 @@ export function ProjectSwitcherPalette({
         onCreateFolder={onCreateFolder}
         onStopProject={onStopProject}
         onCloseProject={onCloseProject}
+        onLocateProject={onLocateProject}
         onOpenProjectSettings={onOpenProjectSettings}
       />
     );

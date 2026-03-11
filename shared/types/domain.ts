@@ -680,8 +680,9 @@ export interface TerminalDimensions {
  * - `active`: Currently open and in use (only one project can be active at a time)
  * - `background`: Has running processes but not currently displayed
  * - `closed`: No running processes, fully dormant
+ * - `missing`: Project directory no longer exists at the stored path
  */
-export type ProjectStatus = "active" | "background" | "closed";
+export type ProjectStatus = "active" | "background" | "closed" | "missing";
 
 /** Project (Git repository) managed by Canopy */
 export interface Project {
@@ -922,6 +923,11 @@ export interface ProjectSettings {
   };
   /** Preferred external editor for this project */
   preferredEditor?: import("./editor.js").EditorConfig;
+  /** Preferred image viewer for this project */
+  preferredImageViewer?: {
+    mode: "os" | "custom";
+    customCommand?: string;
+  };
   /** Branch prefix mode for new worktrees */
   branchPrefixMode?: "none" | "username" | "custom";
   /** Custom branch prefix string when branchPrefixMode is "custom" (e.g., "feature/") */

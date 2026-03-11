@@ -11,6 +11,8 @@ import type {
   StagingStatus,
 } from "../domain.js";
 import type { AgentSettings, AgentSettingsEntry } from "../agentSettings.js";
+import type { VoiceInputStatus } from "../voice.js";
+export type { VoiceInputStatus };
 
 import type {
   CreateWorktreeOptions,
@@ -406,6 +408,19 @@ export interface ElectronAPI {
      * Does NOT delete .canopy/ files.
      */
     disableInRepoSettings(projectId: string): Promise<Project>;
+    /**
+     * Checks all non-active projects for missing directories.
+     * Updates status to "missing" for projects whose paths no longer exist,
+     * and resets "missing" back to "closed" for paths that are accessible again.
+     * Returns the IDs of projects newly marked as missing.
+     */
+    checkMissing(): Promise<string[]>;
+    /**
+     * Opens a directory picker to let the user relocate a missing project.
+     * Updates the stored path and resets status to "closed".
+     * Returns the updated Project, or null if the user cancelled.
+     */
+    locate(projectId: string): Promise<Project | null>;
   };
   agentSettings: {
     get(): Promise<AgentSettings>;
@@ -584,7 +599,8 @@ export interface ElectronAPI {
       cwd: string,
       branch1: string,
       branch2: string,
-      filePath?: string
+      filePath?: string,
+      useMergeBase?: boolean
     ): Promise<import("./git.js").CrossWorktreeDiffResult | string>;
     getUsername(cwd: string): Promise<string | null>;
   };
@@ -628,6 +644,10 @@ export interface ElectronAPI {
     onNewTabMenuAction(
       callback: (action: import("../sidecar.js").SidecarNewTabMenuAction) => void
     ): () => void;
+  };
+  webview: {
+    /** Freeze or unfreeze a webview's JS execution via CDP Page.setWebLifecycleState */
+    setLifecycleState(webContentsId: number, frozen: boolean): Promise<void>;
   };
   hibernation: {
     getConfig(): Promise<HibernationConfig>;
@@ -717,6 +737,7 @@ export interface ElectronAPI {
     onUpdateDownloaded(callback: (info: { version: string }) => void): () => void;
     onUpdateError(callback: (info: { message: string }) => void): () => void;
     quitAndInstall(): Promise<void>;
+    checkForUpdates(): Promise<void>;
   };
   gemini: {
     /** Get Gemini config status (exists, alternate buffer enabled) */
@@ -814,17 +835,19 @@ export interface ElectronAPI {
     getSettings(): Promise<VoiceInputSettings>;
     setSettings(settings: Partial<VoiceInputSettings>): Promise<void>;
     start(): Promise<{ ok: true } | { ok: false; error: string }>;
-    stop(): Promise<{ rawText: string | null }>;
-    flushParagraph(): Promise<{ rawText: string | null }>;
+    stop(): Promise<{ rawText: string | null; correctionId: string | null }>;
+    flushParagraph(): Promise<{ rawText: string | null; correctionId: string | null }>;
     sendAudioChunk(chunk: ArrayBuffer): void;
     onTranscriptionDelta(callback: (delta: string) => void): () => void;
     onTranscriptionComplete(
       callback: (payload: { text: string; willCorrect: boolean }) => void
     ): () => void;
     onCorrectionReplace(
-      callback: (payload: { rawText: string; correctedText: string }) => void
+      callback: (payload: { correctionId: string; correctedText: string }) => void
     ): () => void;
-    onParagraphBoundary(callback: (payload: { rawText: string | null }) => void): () => void;
+    onParagraphBoundary(
+      callback: (payload: { rawText: string | null; correctionId: string | null }) => void
+    ): () => void;
     onError(callback: (error: string) => void): () => void;
     onStatus(callback: (status: VoiceInputStatus) => void): () => void;
     checkMicPermission(): Promise<MicPermissionStatus>;
@@ -909,7 +932,26 @@ export type MicPermissionStatus =
 
 export type VoiceTranscriptionModel = "nova-3" | "nova-2";
 
-export type VoiceCorrectionModel = "gpt-5-nano";
+export type VoiceCorrectionModel = "gpt-5-nano" | "gpt-5-mini";
+
+/**
+ * Paragraphing strategy for voice dictation.
+ *
+ * "spoken-command" (default): The user says "new paragraph" to insert a paragraph break.
+ *   Deepgram Dictation mode intercepts spoken commands ("new paragraph" → \n\n, "period" → ".",
+ *   "new line" → \n, etc.) rather than transcribing them literally. Manual Enter is always
+ *   available as a secondary mechanism.
+ *
+ * "manual": Paragraph breaks are inserted only via the Enter key. No spoken commands.
+ *   Best for users who prefer keyboard control or find spoken formatting commands awkward.
+ *
+ * Note: Deepgram's `paragraphs: true` parameter was evaluated and rejected as the primary
+ * mechanism — in live streaming it populates a structured JSON object rather than injecting
+ * \n\n into the transcript text, making it unreliable as an auto-paragraphing trigger.
+ * Custom keyword detection was also evaluated and rejected in favor of Deepgram Dictation,
+ * which natively handles the "new paragraph" command in Nova-3.
+ */
+export type VoiceParagraphingStrategy = "spoken-command" | "manual";
 
 export interface VoiceInputSettings {
   enabled: boolean;
@@ -921,6 +963,6 @@ export interface VoiceInputSettings {
   correctionEnabled: boolean;
   correctionModel: VoiceCorrectionModel;
   correctionCustomInstructions: string;
+  /** Controls how paragraph breaks are inserted during dictation. Defaults to "spoken-command". */
+  paragraphingStrategy: VoiceParagraphingStrategy;
 }
-
-export type VoiceInputStatus = "idle" | "connecting" | "recording" | "finishing" | "error";

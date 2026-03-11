@@ -2,7 +2,6 @@ import { useState, useEffect, useRef } from "react";
 import {
   ChevronDown,
   ChevronRight,
-  TreePine,
   Moon,
   CheckCircle,
   AlertCircle,
@@ -10,8 +9,10 @@ import {
   Wrench,
   Keyboard,
   Info,
+  ExternalLink,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { CanopyIcon } from "@/components/icons";
 import { SettingsSection } from "@/components/Settings/SettingsSection";
 import { SettingsSwitchCard } from "@/components/Settings/SettingsSwitchCard";
 import { getAgentIds, getAgentConfig } from "@/config/agents";
@@ -230,29 +231,40 @@ export function GeneralTab({ appVersion, onNavigateToAgents }: GeneralTabProps) 
 
   return (
     <div className="space-y-6">
-      <SettingsSection
-        icon={TreePine}
-        title="About"
-        description="An orchestration board for AI coding agents. Start agents on worktrees, monitor their progress, and inject context to help them understand your codebase."
+      <div
         id="general-about"
+        className="flex items-start gap-4 p-4 rounded-[var(--radius-md)] border border-canopy-border bg-canopy-bg/50"
       >
-        <div className="flex items-center gap-3">
-          <div className="h-10 w-10 bg-canopy-accent/10 rounded-[var(--radius-md)] flex items-center justify-center">
-            <TreePine className="w-5 h-5 text-canopy-accent" />
-          </div>
-          <div>
-            <div className="font-medium text-canopy-text flex items-center gap-2">
-              Canopy
-              <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-canopy-accent/15 text-canopy-accent">
-                Beta
-              </span>
-            </div>
-            <div className="text-xs text-canopy-text/50">
-              Version <span className="font-mono">{appVersion}</span>
-            </div>
-          </div>
+        <div className="h-12 w-12 bg-canopy-accent/10 rounded-xl flex items-center justify-center shrink-0">
+          <CanopyIcon size={28} className="text-canopy-accent" />
         </div>
-      </SettingsSection>
+        <div className="flex-1 min-w-0 space-y-1">
+          <div className="flex items-center gap-2">
+            <span className="text-sm font-semibold text-canopy-text">Canopy</span>
+            <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-canopy-accent/15 text-canopy-accent leading-none">
+              Beta
+            </span>
+            <span className="text-xs text-canopy-text/40 font-mono ml-auto">v{appVersion}</span>
+          </div>
+          <p className="text-xs text-canopy-text/50 leading-relaxed">
+            An orchestration board for AI coding agents. Start agents on worktrees, monitor
+            progress, and inject context.
+          </p>
+          <button
+            onClick={() =>
+              void actionService.dispatch(
+                "system.openExternal",
+                { url: "https://github.com/canopyide/canopy" },
+                { source: "user" }
+              )
+            }
+            className="flex items-center gap-1.5 text-xs text-canopy-text/40 hover:text-canopy-accent transition-colors pt-1"
+          >
+            <ExternalLink className="w-3 h-3" />
+            github.com/canopyide/canopy
+          </button>
+        </div>
+      </div>
 
       <SettingsSection
         icon={Info}
@@ -321,7 +333,6 @@ export function GeneralTab({ appVersion, onNavigateToAgents }: GeneralTabProps) 
           icon={Moon}
           title="Auto-Hibernation"
           description="Automatically stop terminals and servers for projects that have been inactive for a period of time. Reduces system resource usage."
-          iconColor="text-canopy-accent"
           id="general-hibernation"
         >
           <SettingsSwitchCard
@@ -372,7 +383,6 @@ export function GeneralTab({ appVersion, onNavigateToAgents }: GeneralTabProps) 
         icon={Activity}
         title="Display"
         description="Control which interface elements are visible."
-        iconColor="text-canopy-accent"
         id="general-project-pulse"
       >
         <SettingsSwitchCard

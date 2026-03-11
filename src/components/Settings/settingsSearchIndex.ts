@@ -4,6 +4,10 @@ export interface SettingsSearchEntry {
   id: string;
   tab: SettingsTab;
   tabLabel: string;
+  /** Optional subtab id to activate when navigating to this result. */
+  subtab?: string;
+  /** Human-readable subtab label used in search breadcrumbs and haystack. */
+  subtabLabel?: string;
   section: string;
   title: string;
   description: string;
@@ -205,11 +209,38 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
     keywords: ["worktree", "path", "pattern", "branch", "folder", "directory", "location", "git"],
   },
 
-  // CLI Agents
+  // CLI Agents — General subtab
+  {
+    id: "agents-default-agent",
+    tab: "agents",
+    tabLabel: "CLI Agents",
+    subtab: "general",
+    subtabLabel: "General",
+    section: "Global Agent Settings",
+    title: "Default Agent",
+    description:
+      'Agent used for automated workflows ("What\'s Next?", onboarding, project explanations). Distinct from the Sidecar "Default New Tab Agent".',
+    keywords: [
+      "default",
+      "agent",
+      "workflow",
+      "automated",
+      "whats next",
+      "onboarding",
+      "claude",
+      "gemini",
+      "codex",
+      "opencode",
+    ],
+  },
+
+  // CLI Agents — per-agent subtabs (default to "claude" subtab so search results land inside an agent card)
   {
     id: "agents-enable",
     tab: "agents",
     tabLabel: "CLI Agents",
+    subtab: "claude",
+    subtabLabel: "Claude",
     section: "Agent Runtime Settings",
     title: "Enable / Disable Agent",
     description: "Enable or disable individual CLI agents: Claude, Gemini, Codex, OpenCode",
@@ -219,6 +250,8 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
     id: "agents-skip-permissions",
     tab: "agents",
     tabLabel: "CLI Agents",
+    subtab: "claude",
+    subtabLabel: "Claude",
     section: "Agent Runtime Settings",
     title: "Skip Permissions",
     description: "Auto-approve all agent actions without confirmation prompts",
@@ -228,6 +261,8 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
     id: "agents-inline-mode",
     tab: "agents",
     tabLabel: "CLI Agents",
+    subtab: "claude",
+    subtabLabel: "Claude",
     section: "Agent Runtime Settings",
     title: "Inline Mode",
     description: "Disable fullscreen TUI for better resize handling and scrollback",
@@ -237,6 +272,8 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
     id: "agents-clipboard",
     tab: "agents",
     tabLabel: "CLI Agents",
+    subtab: "gemini",
+    subtabLabel: "Gemini",
     section: "Agent Runtime Settings",
     title: "Share Clipboard Directory",
     description: "Allow Gemini to read pasted clipboard images",
@@ -246,6 +283,8 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
     id: "agents-custom-args",
     tab: "agents",
     tabLabel: "CLI Agents",
+    subtab: "claude",
+    subtabLabel: "Claude",
     section: "Agent Runtime Settings",
     title: "Custom Arguments",
     description: "Extra CLI flags appended when launching agents",
@@ -255,6 +294,8 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
     id: "agents-installation",
     tab: "agents",
     tabLabel: "CLI Agents",
+    subtab: "claude",
+    subtabLabel: "Claude",
     section: "Installation",
     title: "Agent Installation",
     description: "Install and set up CLI agents. Run setup wizard to install.",
@@ -335,8 +376,9 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
     tabLabel: "Toolbar",
     section: "Launcher Palette",
     title: "Launcher Palette Settings",
-    description: "Configure the default panel type in the launcher. Always show dev server option.",
-    keywords: ["launcher", "palette", "default", "panel", "dev server", "open"],
+    description:
+      "Configure the default panel type highlighted when opening the launcher. Always show dev server option.",
+    keywords: ["launcher", "palette", "default", "panel", "dev server", "open", "selection"],
   },
   {
     id: "toolbar-reset",
@@ -408,6 +450,31 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
       "open",
       "ide",
       "windsurf",
+    ],
+  },
+
+  // Image Viewer
+  {
+    id: "image-viewer",
+    tab: "imageViewer",
+    tabLabel: "Image Viewer",
+    section: "Image Viewer",
+    title: "Image Viewer",
+    description:
+      "Configure image viewer: use OS default (Preview, Photos) or a custom command (Photoshop, GIMP)",
+    keywords: [
+      "image",
+      "viewer",
+      "photo",
+      "picture",
+      "preview",
+      "png",
+      "jpg",
+      "svg",
+      "gif",
+      "open",
+      "photoshop",
+      "gimp",
     ],
   },
 

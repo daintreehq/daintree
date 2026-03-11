@@ -126,7 +126,7 @@ export function WorktreeOverviewModal({
       const derived = derivedMetaMap.get(worktree.id);
       if (!derived) continue;
 
-      // hideMainWorktree always takes precedence for the root worktree (user's explicit intent)
+      // hideMainWorktree always takes precedence for the main worktree (user's explicit intent)
       if (hideMainWorktree && worktree.isMainWorktree) {
         continue;
       }
@@ -173,7 +173,7 @@ export function WorktreeOverviewModal({
       };
       const isActive = worktree.id === activeWorktreeId;
 
-      // hideMainWorktree always takes precedence for the root worktree (user's explicit intent)
+      // hideMainWorktree always takes precedence for the main worktree (user's explicit intent)
       if (hideMainWorktree && worktree.isMainWorktree) {
         return false;
       }
@@ -340,7 +340,7 @@ export function WorktreeOverviewModal({
                       type="button"
                       role="switch"
                       aria-checked={!hideMainWorktree}
-                      aria-label={hideMainWorktree ? "Show root worktree" : "Hide root worktree"}
+                      aria-label={hideMainWorktree ? "Show main worktree" : "Hide main worktree"}
                       onClick={() => setHideMainWorktree(!hideMainWorktree)}
                       className={cn(
                         "flex items-center gap-1.5 px-2 py-1 rounded-full text-xs transition-colors",
@@ -362,12 +362,12 @@ export function WorktreeOverviewModal({
                           hideMainWorktree && "line-through decoration-canopy-text/30"
                         )}
                       >
-                        root
+                        main
                       </span>
                     </button>
                   </TooltipTrigger>
                   <TooltipContent side="bottom">
-                    {hideMainWorktree ? "Show root worktree" : "Hide root worktree"}
+                    {hideMainWorktree ? "Show main worktree" : "Hide main worktree"}
                   </TooltipContent>
                 </Tooltip>
               </TooltipProvider>

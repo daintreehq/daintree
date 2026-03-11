@@ -126,7 +126,11 @@ const ORDER_OPTIONS: { value: OrderBy; label: string }[] = [
   { value: "alpha", label: "Alphabetical" },
 ];
 
-export function WorktreeFilterPopover() {
+interface WorktreeFilterPopoverProps {
+  hideSearchInput?: boolean;
+}
+
+export function WorktreeFilterPopover({ hideSearchInput = false }: WorktreeFilterPopoverProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [localQuery, setLocalQuery] = useState("");
   const debounceRef = useRef<NodeJS.Timeout | null>(null);
@@ -153,7 +157,10 @@ export function WorktreeFilterPopover() {
     hasActiveFilters,
   } = useWorktreeFilterStore();
 
-  const filterCount = getActiveFilterCount();
+  const fullFilterCount = getActiveFilterCount();
+  const filterCount = hideSearchInput
+    ? fullFilterCount - (query.trim().length > 0 ? 1 : 0)
+    : fullFilterCount;
   const showBadge = filterCount > 0;
 
   useEffect(() => {
@@ -194,18 +201,17 @@ export function WorktreeFilterPopover() {
       <PopoverTrigger asChild>
         <button
           className={cn(
-            "relative flex items-center justify-center w-7 h-7 rounded",
+            "relative flex items-center justify-center w-5 h-5 rounded",
             "text-canopy-text/60 hover:text-canopy-text hover:bg-white/[0.06]",
             "transition-colors",
             hasActiveFilters() && "text-canopy-accent"
           )}
           aria-label="Filter and sort worktrees"
+          aria-haspopup="dialog"
         >
           <Filter className="w-3.5 h-3.5" />
           {showBadge && (
-            <span className="absolute -top-0.5 -right-0.5 flex items-center justify-center min-w-[14px] h-[14px] px-1 text-[9px] font-medium bg-canopy-accent text-canopy-bg rounded-full">
-              {filterCount}
-            </span>
+            <span className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-canopy-accent" />
           )}
         </button>
       </PopoverTrigger>
@@ -216,39 +222,41 @@ export function WorktreeFilterPopover() {
       >
         <div className="flex flex-col">
           {/* Search */}
-          <div className="p-3 border-b border-canopy-border">
-            <div className="relative">
-              <input
-                type="text"
-                value={localQuery}
-                onChange={(e) => handleQueryChange(e.target.value)}
-                placeholder="Search worktrees..."
-                aria-label="Search worktrees"
-                className={cn(
-                  "w-full px-2.5 py-1.5 text-xs rounded",
-                  "bg-canopy-bg border border-canopy-border",
-                  "text-canopy-text placeholder-canopy-text/40",
-                  "focus:outline-none focus:border-canopy-accent/50"
+          {!hideSearchInput && (
+            <div className="p-3 border-b border-canopy-border">
+              <div className="relative">
+                <input
+                  type="text"
+                  value={localQuery}
+                  onChange={(e) => handleQueryChange(e.target.value)}
+                  placeholder="Search worktrees..."
+                  aria-label="Search worktrees"
+                  className={cn(
+                    "w-full px-2.5 py-1.5 text-xs rounded",
+                    "bg-canopy-bg border border-canopy-border",
+                    "text-canopy-text placeholder-canopy-text/40",
+                    "focus:outline-none focus:border-canopy-accent/50"
+                  )}
+                />
+                {localQuery && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (debounceRef.current) {
+                        clearTimeout(debounceRef.current);
+                      }
+                      setLocalQuery("");
+                      setQuery("");
+                    }}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 text-canopy-text/40 hover:text-canopy-text"
+                    aria-label="Clear search"
+                  >
+                    <X className="w-3 h-3" />
+                  </button>
                 )}
-              />
-              {localQuery && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (debounceRef.current) {
-                      clearTimeout(debounceRef.current);
-                    }
-                    setLocalQuery("");
-                    setQuery("");
-                  }}
-                  className="absolute right-2 top-1/2 -translate-y-1/2 text-canopy-text/40 hover:text-canopy-text"
-                  aria-label="Clear search"
-                >
-                  <X className="w-3 h-3" />
-                </button>
-              )}
+              </div>
             </div>
-          </div>
+          )}
 
           {/* Sort Order */}
           <div className="p-3 border-b border-canopy-border">

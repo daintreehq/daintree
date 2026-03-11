@@ -8,7 +8,7 @@ import {
 export { CORE_CORRECTION_PROMPT, buildCorrectionSystemPrompt };
 
 const P = "[VoiceCorrection]";
-// Paragraphs take longer than single sentences for gpt-5-nano (reasoning overhead).
+// Paragraphs take longer than single sentences for GPT-5 reasoning models.
 const CORRECTION_TIMEOUT_MS = 15000;
 const MAX_HISTORY = 3;
 // Paragraph-level correction requires more tokens: reasoning + multi-sentence output.
@@ -114,9 +114,9 @@ export class VoiceCorrectionService {
           { role: isReasoningModel ? "developer" : "system", content: systemPrompt },
           { role: "user", content: userMessage },
         ],
-        // Reasoning models (gpt-5-nano) don't support temperature and need
-        // reasoning_effort to limit internal chain-of-thought token usage.
-        ...(isReasoningModel ? { reasoning_effort: "low" } : { temperature: 0 }),
+        ...(isReasoningModel
+          ? { reasoning_effort: model === "gpt-5-mini" ? "medium" : "low" }
+          : { temperature: 0 }),
         max_completion_tokens: MAX_COMPLETION_TOKENS,
       }),
     });

@@ -19,6 +19,7 @@ export interface SearchableProject {
   status: Project["status"];
   isActive: boolean;
   isBackground: boolean;
+  isMissing: boolean;
   activeAgentCount: number;
   waitingAgentCount: number;
   processCount: number;
@@ -41,6 +42,7 @@ export interface UseProjectSwitcherPaletteReturn {
   addProject: () => Promise<void>;
   stopProject: (projectId: string) => Promise<void>;
   removeProject: (projectId: string) => Promise<void>;
+  locateProject: (projectId: string) => Promise<void>;
   stopConfirmProjectId: string | null;
   setStopConfirmProjectId: (projectId: string | null) => void;
   confirmStopProject: () => Promise<void>;
@@ -90,6 +92,7 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
   const closeProject = useProjectStore((state) => state.closeProject);
   const closeActiveProject = useProjectStore((state) => state.closeActiveProject);
   const removeProject = useProjectStore((state) => state.removeProject);
+  const locateProjectFn = useProjectStore((state) => state.locateProject);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
@@ -214,8 +217,9 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
       const stats = projectStats.get(p.id);
       const counts = terminalCounts.get(p.id);
       const isActive = p.id === currentProject?.id;
+      const isMissing = p.status === "missing";
       const hasProcesses = (stats?.processCount ?? 0) > 0;
-      const isBackground = p.status === "background" || (!isActive && hasProcesses);
+      const isBackground = p.status === "background" || (!isActive && !isMissing && hasProcesses);
 
       return {
         id: p.id,
@@ -227,6 +231,7 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
         status: p.status,
         isActive,
         isBackground,
+        isMissing,
         activeAgentCount: counts?.activeAgentCount ?? 0,
         waitingAgentCount: counts?.waitingAgentCount ?? 0,
         processCount: stats?.processCount ?? 0,
@@ -345,19 +350,13 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
 
   const selectProject = useCallback(
     async (project: SearchableProject) => {
-      close();
-
-      if (project.isActive) {
+      if (project.isActive || project.isMissing) {
         return;
       }
 
+      close();
+
       if (project.isBackground) {
-        notify({
-          type: "info",
-          title: "Reopening project",
-          message: "Reconnecting to background terminals...",
-          duration: 1500,
-        });
         try {
           await reopenProject(project.id);
         } catch (error) {
@@ -369,12 +368,6 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
           });
         }
       } else {
-        notify({
-          type: "info",
-          title: "Switching projects",
-          message: "Resetting state for clean project isolation",
-          duration: 1500,
-        });
         try {
           await switchProject(project.id);
         } catch (error) {
@@ -401,6 +394,13 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
     await addProjectFn();
   }, [close, addProjectFn]);
 
+  const locateProject = useCallback(
+    async (projectId: string) => {
+      await locateProjectFn(projectId);
+    },
+    [locateProjectFn]
+  );
+
   const stopProject = useCallback(
     async (projectId: string) => {
       close();
@@ -414,7 +414,7 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
     setIsStoppingProject(true);
 
     try {
-      const result = await closeProject(stopConfirmProjectId, { killTerminals: true });
+      await closeProject(stopConfirmProjectId, { killTerminals: true });
 
       setProjectStats((prev) => {
         const next = new Map(prev);
@@ -431,13 +431,6 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
         const next = new Map(prev);
         next.set(stopConfirmProjectId, { activeAgentCount: 0, waitingAgentCount: 0 });
         return next;
-      });
-
-      notify({
-        type: "success",
-        title: "Project stopped",
-        message: `Terminated ${result.processesKilled} process(es)`,
-        duration: 3000,
       });
 
       setStopConfirmProjectId(null);
@@ -508,6 +501,7 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
     addProject,
     stopProject,
     removeProject: removeProjectFromList,
+    locateProject,
     stopConfirmProjectId,
     setStopConfirmProjectId,
     confirmStopProject,

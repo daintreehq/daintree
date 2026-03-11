@@ -201,10 +201,10 @@ export async function getRepoStats(
           stale: true,
           lastUpdated: diskCached.lastUpdated,
         },
-        error: "GitHub token not configured",
+        error: "GitHub token not configured. Set it in Settings.",
       };
     }
-    return { stats: null, error: "GitHub token not configured" };
+    return { stats: null, error: "GitHub token not configured. Set it in Settings." };
   }
 
   if (!bypassCache) {
@@ -410,7 +410,7 @@ export async function batchCheckLinkedPRs(
 
   const client = GitHubAuth.createClient();
   if (!client) {
-    return { results: new Map(), error: "GitHub token not configured" };
+    return { results: new Map(), error: "GitHub token not configured. Set it in Settings." };
   }
 
   const context = await getRepoContext(cwd);
@@ -469,7 +469,7 @@ export async function assignIssue(
 ): Promise<AssignIssueResult> {
   const token = getGitHubToken();
   if (!token) {
-    throw new Error("GitHub token not configured");
+    throw new Error("GitHub token not configured. Set it in Settings.");
   }
 
   return withRepoContextRetry(cwd, async (context) => {
@@ -811,7 +811,7 @@ export async function listIssues(
 ): Promise<GitHubListResponse<GitHubIssue>> {
   const client = GitHubAuth.createClient();
   if (!client) {
-    throw new Error("GitHub token not configured");
+    throw new Error("GitHub token not configured. Set it in Settings.");
   }
 
   return withRepoContextRetry(options.cwd, async (context) => {
@@ -915,7 +915,7 @@ export async function listPullRequests(
 ): Promise<GitHubListResponse<GitHubPR>> {
   const client = GitHubAuth.createClient();
   if (!client) {
-    throw new Error("GitHub token not configured");
+    throw new Error("GitHub token not configured. Set it in Settings.");
   }
 
   return withRepoContextRetry(options.cwd, async (context) => {
@@ -1159,7 +1159,7 @@ export async function getIssueByNumber(
 ): Promise<GitHubIssue | null> {
   const client = GitHubAuth.createClient();
   if (!client) {
-    throw new Error("GitHub token not configured");
+    throw new Error("GitHub token not configured. Set it in Settings.");
   }
 
   try {
@@ -1192,7 +1192,7 @@ export async function getIssueByNumber(
 export async function getPRByNumber(cwd: string, prNumber: number): Promise<GitHubPR | null> {
   const client = GitHubAuth.createClient();
   if (!client) {
-    throw new Error("GitHub token not configured");
+    throw new Error("GitHub token not configured. Set it in Settings.");
   }
 
   try {

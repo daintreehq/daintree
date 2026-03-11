@@ -47,7 +47,7 @@ describe("worktreeFilterStore", () => {
     expect(useWorktreeFilterStore.getState().getActiveFilterCount()).toBe(0);
   });
 
-  it("shows root worktree by default (hideMainWorktree is false)", () => {
+  it("shows main worktree by default (hideMainWorktree is false)", () => {
     expect(useWorktreeFilterStore.getState().hideMainWorktree).toBe(false);
   });
 
