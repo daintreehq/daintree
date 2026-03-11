@@ -49,6 +49,7 @@ export interface VoiceCorrectionRequest {
   segmentCount?: number;
   uncertainWords?: string[];
   minConfidence?: number;
+  wordCount?: number;
 }
 
 export interface VoiceCorrectionResult {
@@ -82,7 +83,8 @@ export class VoiceCorrectionService {
     if (
       request.uncertainWords !== undefined &&
       request.uncertainWords.length === 0 &&
-      (request.minConfidence ?? 0) >= CONFIDENCE_SKIP_THRESHOLD
+      (request.minConfidence ?? 0) > CONFIDENCE_SKIP_THRESHOLD &&
+      (request.wordCount ?? 0) > 0
     ) {
       logDebug(`${P} Skipping correction — all words high confidence`, {
         minConfidence: request.minConfidence,

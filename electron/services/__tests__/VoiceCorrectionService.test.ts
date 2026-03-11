@@ -171,7 +171,7 @@ describe("VoiceCorrectionService", () => {
 
     const svc = new VoiceCorrectionService();
     const result = await svc.correct(
-      { rawText: "Hello world", uncertainWords: [], minConfidence: 0.95 },
+      { rawText: "Hello world", uncertainWords: [], minConfidence: 0.95, wordCount: 2 },
       BASE_SETTINGS
     );
 
@@ -189,6 +189,36 @@ describe("VoiceCorrectionService", () => {
 
     const svc = new VoiceCorrectionService();
     await svc.correct({ rawText: "Hello world" }, BASE_SETTINGS);
+
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  it("does not skip when wordCount is 0 (no confidence data available)", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(makeFetchResponse({ action: "no_change", corrected_text: "" }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const svc = new VoiceCorrectionService();
+    await svc.correct(
+      { rawText: "Hello world", uncertainWords: [], minConfidence: 1.0, wordCount: 0 },
+      BASE_SETTINGS
+    );
+
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  it("does not skip when minConfidence equals threshold exactly", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(makeFetchResponse({ action: "no_change", corrected_text: "" }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const svc = new VoiceCorrectionService();
+    await svc.correct(
+      { rawText: "Hello world", uncertainWords: [], minConfidence: 0.85, wordCount: 2 },
+      BASE_SETTINGS
+    );
 
     expect(fetchMock).toHaveBeenCalledOnce();
   });

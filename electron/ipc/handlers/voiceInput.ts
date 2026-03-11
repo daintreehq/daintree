@@ -31,6 +31,7 @@ interface QueuedCorrectionJob {
   reason: "stop";
   minConfidence?: number;
   uncertainWords?: string[];
+  wordCount?: number;
 }
 
 let sessionTranscript = "";
@@ -254,13 +255,18 @@ function getSessionCorrectionText(): string {
   return sessionTranscript.replace(/[ \t]+$/g, "");
 }
 
-function mergeSessionConfidence(): { minConfidence: number; uncertainWords: string[] } {
+function mergeSessionConfidence(): {
+  minConfidence: number;
+  uncertainWords: string[];
+  wordCount: number;
+} {
   if (sessionConfidenceSegments.length === 0) {
-    return { minConfidence: 0, uncertainWords: [] };
+    return { minConfidence: 0, uncertainWords: [], wordCount: 0 };
   }
   return {
     minConfidence: Math.min(...sessionConfidenceSegments.map((s) => s.minConfidence)),
     uncertainWords: sessionConfidenceSegments.flatMap((s) => s.uncertainWords),
+    wordCount: sessionConfidenceSegments.reduce((sum, s) => sum + s.wordCount, 0),
   };
 }
 
@@ -268,13 +274,14 @@ function buildCorrectionJob(): QueuedCorrectionJob | null {
   const rawText = getSessionCorrectionText();
   if (!rawText) return null;
 
-  const { minConfidence, uncertainWords } = mergeSessionConfidence();
+  const { minConfidence, uncertainWords, wordCount } = mergeSessionConfidence();
   const job: QueuedCorrectionJob = {
     correctionId: crypto.randomUUID(),
     rawText,
     reason: "stop",
     minConfidence,
     uncertainWords,
+    wordCount,
   };
 
   sessionTranscript = "";
@@ -305,6 +312,7 @@ function queueCorrectionRequest(job: QueuedCorrectionJob, win: Electron.BrowserW
           reason: job.reason,
           uncertainWords: job.uncertainWords,
           minConfidence: job.minConfidence,
+          wordCount: job.wordCount,
         },
         {
           model: liveSettings.correctionModel,
