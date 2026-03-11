@@ -113,6 +113,7 @@ import {
   matchesFilters,
   sortWorktrees,
   groupByType,
+  findIntegrationWorktree,
   type DerivedWorktreeMeta,
   type FilterState,
 } from "./lib/worktreeFilters";
@@ -248,6 +249,11 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     [worktrees]
   );
 
+  const integrationWorktree = useMemo(
+    () => findIntegrationWorktree(worktrees, mainWorktree?.id),
+    [worktrees, mainWorktree]
+  );
+
   const { filteredWorktrees, groupedSections } = useMemo(() => {
     const filters: FilterState = {
       query,
@@ -258,8 +264,10 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
       activityFilters,
     };
 
-    // Filter non-main worktrees only (exclude by ID to handle fallback case)
-    const nonMain = worktrees.filter((w) => w.id !== mainWorktree?.id);
+    // Filter non-main worktrees only (exclude main and integration by ID)
+    const nonMain = worktrees.filter(
+      (w) => w.id !== mainWorktree?.id && w.id !== integrationWorktree?.id
+    );
     const filtered = nonMain.filter((worktree) => {
       const derived = derivedMetaMap.get(worktree.id) ?? {
         hasErrors: false,
@@ -305,6 +313,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     alwaysShowActive,
     pinnedWorktrees,
     mainWorktree,
+    integrationWorktree,
     derivedMetaMap,
     activeWorktreeId,
   ]);
@@ -542,6 +551,11 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
 
       {/* Main worktree — always visible */}
       {mainWorktree && <div className="shrink-0">{renderWorktreeCard(mainWorktree)}</div>}
+
+      {/* Integration branch (develop/trunk/next) — pinned below main */}
+      {integrationWorktree && (
+        <div className="shrink-0">{renderWorktreeCard(integrationWorktree)}</div>
+      )}
 
       {/* Inline search bar — only when there are non-main worktrees */}
       {hasNonMainWorktrees && <WorktreeSidebarSearchBar inputRef={searchInputRef} />}
