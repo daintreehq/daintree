@@ -1,4 +1,13 @@
 import { create } from "zustand";
+import type { ActionId } from "@shared/types/actions";
+import type { NotificationActionVariant } from "@/store/notificationStore";
+
+export interface NotificationHistoryAction {
+  label: string;
+  actionId: ActionId;
+  actionArgs?: Record<string, unknown>;
+  variant?: NotificationActionVariant;
+}
 
 export interface NotificationHistoryEntry {
   id: string;
@@ -14,6 +23,7 @@ export interface NotificationHistoryEntry {
     worktreeId?: string;
     panelId?: string;
   };
+  actions?: NotificationHistoryAction[];
 }
 
 type AddEntryInput = Omit<NotificationHistoryEntry, "id" | "timestamp" | "seenAsToast"> & {

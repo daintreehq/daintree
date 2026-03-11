@@ -55,6 +55,7 @@ export function useWorktreePalette({
     items: sortedWorktrees,
     filterFn: filterWorktrees,
     maxResults: 20,
+    paletteId: "worktree",
   });
 
   const handleSelect = useCallback(

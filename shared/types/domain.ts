@@ -417,6 +417,13 @@ export interface BrowserHistory {
   future: string[];
 }
 
+export interface UrlHistoryEntry {
+  url: string;
+  title: string;
+  visitCount: number;
+  lastVisitAt: number;
+}
+
 interface BasePanelData {
   /** Unique identifier for this panel */
   id: string;

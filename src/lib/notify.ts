@@ -6,7 +6,10 @@ import {
   type NotificationAction,
   type NotificationPlacement,
 } from "@/store/notificationStore";
-import { useNotificationHistoryStore } from "@/store/slices/notificationHistorySlice";
+import {
+  useNotificationHistoryStore,
+  type NotificationHistoryAction,
+} from "@/store/slices/notificationHistorySlice";
 
 export interface NotifyPayload {
   type: NotificationType;
@@ -54,6 +57,19 @@ export function notify(payload: NotifyPayload): string {
 
   const historyMessage = inboxMessage ?? (typeof message === "string" ? message : undefined);
 
+  const allActions = [...(payload.actions ?? []), ...(payload.action ? [payload.action] : [])];
+  const historyActions: NotificationHistoryAction[] = allActions
+    .filter(
+      (a): a is NotificationAction & { actionId: NonNullable<NotificationAction["actionId"]> } =>
+        !!a.actionId
+    )
+    .map((a) => ({
+      label: a.label,
+      actionId: a.actionId,
+      actionArgs: a.actionArgs,
+      variant: a.variant,
+    }));
+
   if (placement === "grid-bar") {
     if (historyMessage) {
       useNotificationHistoryStore.getState().addEntry({
@@ -62,6 +78,7 @@ export function notify(payload: NotifyPayload): string {
         message: historyMessage,
         correlationId,
         seenAsToast: true,
+        actions: historyActions.length > 0 ? historyActions : undefined,
       });
     }
     return useNotificationStore.getState().addNotification({
@@ -82,6 +99,7 @@ export function notify(payload: NotifyPayload): string {
       message: historyMessage,
       correlationId,
       seenAsToast: shouldToast,
+      actions: historyActions.length > 0 ? historyActions : undefined,
     });
   }
 

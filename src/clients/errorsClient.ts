@@ -12,4 +12,8 @@ export const errorsClient = {
   openLogs: (): Promise<void> => {
     return window.electron.errors.openLogs();
   },
+
+  getPending: (): Promise<AppError[]> => {
+    return window.electron.errors.getPending();
+  },
 } as const;

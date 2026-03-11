@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import type { ReactNode } from "react";
+import type { ActionId } from "@shared/types/actions";
 
 const uuidv4 = () => crypto.randomUUID();
 
@@ -12,6 +13,8 @@ export interface NotificationAction {
   label: string;
   onClick: () => void | Promise<void>;
   variant?: NotificationActionVariant;
+  actionId?: ActionId;
+  actionArgs?: Record<string, unknown>;
 }
 
 export interface Notification {

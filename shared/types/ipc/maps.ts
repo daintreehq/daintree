@@ -120,6 +120,14 @@ import type { HibernationConfig } from "./hibernation.js";
 import type { AgentRegistry, AgentMetadata } from "./agentCapabilities.js";
 import type { AppThemeConfig } from "../appTheme.js";
 
+export interface OnboardingState {
+  schemaVersion: number;
+  completed: boolean;
+  currentStep: string | null;
+  firstRunToastSeen: boolean;
+  migratedFromLocalStorage: boolean;
+}
+
 // IPC Contract Maps
 
 /** Maps IPC channels to their args/result types for type-safe invoke/handle */
@@ -505,6 +513,10 @@ export interface IpcInvokeMap {
   "error:open-logs": {
     args: [];
     result: void;
+  };
+  "error:get-pending": {
+    args: [];
+    result: AppError[];
   };
 
   // Event inspector channels
@@ -1233,6 +1245,34 @@ export interface IpcInvokeMap {
     result: void;
   };
 
+  // Onboarding
+  "onboarding:get": {
+    args: [];
+    result: OnboardingState;
+  };
+  "onboarding:migrate": {
+    args: [
+      payload: {
+        agentSelectionDismissed: boolean;
+        agentSetupComplete: boolean;
+        firstRunToastSeen: boolean;
+      },
+    ];
+    result: OnboardingState;
+  };
+  "onboarding:set-step": {
+    args: [step: string | null];
+    result: void;
+  };
+  "onboarding:complete": {
+    args: [];
+    result: void;
+  };
+  "onboarding:mark-toast-seen": {
+    args: [];
+    result: void;
+  };
+
   // Voice input
   "voice-input:get-settings": {
     args: [];
@@ -1446,7 +1486,11 @@ export interface IpcEventMap {
   // Voice input events
   "voice-input:transcription-delta": string;
   "voice-input:transcription-complete": { text: string; willCorrect: boolean };
-  "voice-input:correction-queued": { correctionId: string; rawText: string; reason: string };
+  "voice-input:correction-queued": {
+    correctionId: string;
+    rawText: string;
+    reason: string;
+  };
   "voice-input:correction-replace": { correctionId: string; correctedText: string };
   "voice-input:paragraph-boundary": { rawText: string | null; correctionId: string | null };
   "voice-input:error": string;

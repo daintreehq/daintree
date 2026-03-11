@@ -1,0 +1,206 @@
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { isCanopyEnvEnabled } from "@/utils/env";
+import { TelemetryConsentStep } from "./TelemetryConsentStep";
+import { AgentSelectionStep } from "@/components/Setup/AgentSelectionStep";
+import { AgentSetupWizard } from "@/components/Setup/AgentSetupWizard";
+import type { OnboardingState } from "@shared/types";
+import type { CliAvailability } from "@shared/types";
+
+const SKIP_FIRST_RUN_DIALOGS = isCanopyEnvEnabled("CANOPY_E2E_SKIP_FIRST_RUN_DIALOGS");
+
+const LEGACY_KEYS = {
+  agentSelection: "canopy:agent-selection-dismissed",
+  agentSetup: "canopy:agent-setup-complete",
+  firstRunToast: "canopy:first-run-toast",
+} as const;
+
+type OnboardingStep = "telemetry" | "agentSelection" | "agentSetup";
+const STEP_ORDER: OnboardingStep[] = ["telemetry", "agentSelection", "agentSetup"];
+
+interface OnboardingFlowProps {
+  availability: CliAvailability;
+  onRefreshSettings: () => Promise<void>;
+}
+
+export function OnboardingFlow({ availability, onRefreshSettings }: OnboardingFlowProps) {
+  const [state, setState] = useState<OnboardingState | null>(null);
+  const [currentStep, setCurrentStep] = useState<OnboardingStep | null>(null);
+  const [agentSetupIds, setAgentSetupIds] = useState<string[]>([]);
+  const [manualWizardOpen, setManualWizardOpen] = useState(false);
+  const headingRef = useRef<HTMLHeadingElement>(null);
+
+  // Hydrate state from electron-store and run localStorage migration
+  useEffect(() => {
+    if (SKIP_FIRST_RUN_DIALOGS) return;
+    if (!window.electron?.onboarding) return;
+
+    (async () => {
+      let onboardingState = await window.electron.onboarding.get();
+
+      // Migrate legacy localStorage keys if needed
+      if (!onboardingState.migratedFromLocalStorage) {
+        let agentSelectionDismissed = false;
+        let agentSetupComplete = false;
+        let firstRunToastSeen = false;
+        try {
+          agentSelectionDismissed = !!localStorage.getItem(LEGACY_KEYS.agentSelection);
+          agentSetupComplete = !!localStorage.getItem(LEGACY_KEYS.agentSetup);
+          firstRunToastSeen = !!localStorage.getItem(LEGACY_KEYS.firstRunToast);
+        } catch {
+          // localStorage unavailable
+        }
+
+        onboardingState = await window.electron.onboarding.migrate({
+          agentSelectionDismissed,
+          agentSetupComplete,
+          firstRunToastSeen,
+        });
+
+        // Clean up legacy keys after successful migration
+        try {
+          localStorage.removeItem(LEGACY_KEYS.agentSelection);
+          localStorage.removeItem(LEGACY_KEYS.agentSetup);
+          localStorage.removeItem(LEGACY_KEYS.firstRunToast);
+        } catch {
+          // silently fail
+        }
+      }
+
+      setState(onboardingState);
+
+      if (!onboardingState.completed) {
+        const resumeStep = onboardingState.currentStep as OnboardingStep | null;
+        if (resumeStep && STEP_ORDER.includes(resumeStep)) {
+          setCurrentStep(resumeStep);
+        } else {
+          setCurrentStep(STEP_ORDER[0]);
+        }
+      }
+    })().catch(console.error);
+  }, []);
+
+  // Listen for manual wizard open events (from Settings / toolbar button)
+  useEffect(() => {
+    const handleOpenWizard = () => setManualWizardOpen(true);
+    window.addEventListener("canopy:open-agent-setup-wizard", handleOpenWizard);
+    return () => window.removeEventListener("canopy:open-agent-setup-wizard", handleOpenWizard);
+  }, []);
+
+  // Focus the heading on step transitions
+  useLayoutEffect(() => {
+    if (currentStep && document.hasFocus()) {
+      headingRef.current?.focus();
+    }
+  }, [currentStep]);
+
+  const skipAgentSetupRef = useRef(false);
+
+  const advanceStep = useCallback(async (fromStep: OnboardingStep) => {
+    const idx = STEP_ORDER.indexOf(fromStep);
+    let nextStep = STEP_ORDER[idx + 1] ?? null;
+
+    // Skip agent setup if user skipped selection or had no uninstalled agents
+    if (nextStep === "agentSetup" && skipAgentSetupRef.current) {
+      nextStep = STEP_ORDER[idx + 2] ?? null;
+    }
+
+    if (nextStep) {
+      setCurrentStep(nextStep);
+      await window.electron.onboarding.setStep(nextStep);
+    } else {
+      // Flow complete
+      setCurrentStep(null);
+      await window.electron.onboarding.complete();
+      setState((prev) => (prev ? { ...prev, completed: true, currentStep: null } : prev));
+    }
+  }, []);
+
+  // Telemetry step handlers
+  const handleTelemetryDismiss = useCallback(
+    async (enabled: boolean) => {
+      await window.electron.telemetry.setEnabled(enabled);
+      await window.electron.telemetry.markPromptShown();
+      await advanceStep("telemetry");
+    },
+    [advanceStep]
+  );
+
+  // Agent selection handlers
+  const handleAgentSelectionContinue = useCallback(
+    async (uninstalledIds: string[]) => {
+      void onRefreshSettings();
+      if (uninstalledIds.length > 0) {
+        setAgentSetupIds(uninstalledIds);
+        skipAgentSetupRef.current = false;
+      } else {
+        skipAgentSetupRef.current = true;
+      }
+      await advanceStep("agentSelection");
+    },
+    [advanceStep, onRefreshSettings]
+  );
+
+  const handleAgentSelectionSkip = useCallback(async () => {
+    skipAgentSetupRef.current = true;
+    await advanceStep("agentSelection");
+  }, [advanceStep]);
+
+  // Agent setup wizard close
+  const handleAgentSetupClose = useCallback(async () => {
+    setAgentSetupIds([]);
+    await advanceStep("agentSetup");
+  }, [advanceStep]);
+
+  // Render nothing until hydration completes or if E2E skip is enabled
+  if (SKIP_FIRST_RUN_DIALOGS) {
+    return manualWizardOpen ? (
+      <AgentSetupWizard
+        isOpen
+        onClose={() => setManualWizardOpen(false)}
+        initialAvailability={availability}
+      />
+    ) : null;
+  }
+
+  // Still hydrating
+  if (state === null) return null;
+
+  // Manual wizard re-open (from Settings / toolbar)
+  if (manualWizardOpen) {
+    return (
+      <AgentSetupWizard
+        isOpen
+        onClose={() => setManualWizardOpen(false)}
+        initialAvailability={availability}
+      />
+    );
+  }
+
+  // Onboarding already complete
+  if (state.completed || !currentStep) return null;
+
+  return (
+    <>
+      {currentStep === "telemetry" && (
+        <TelemetryConsentStep ref={headingRef} onDismiss={handleTelemetryDismiss} />
+      )}
+
+      {currentStep === "agentSelection" && (
+        <AgentSelectionStep
+          isOpen
+          onContinue={handleAgentSelectionContinue}
+          onSkip={handleAgentSelectionSkip}
+        />
+      )}
+
+      {currentStep === "agentSetup" && (
+        <AgentSetupWizard
+          isOpen
+          onClose={handleAgentSetupClose}
+          initialAvailability={availability}
+          agentIds={agentSetupIds.length > 0 ? agentSetupIds : undefined}
+        />
+      )}
+    </>
+  );
+}

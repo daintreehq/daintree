@@ -273,7 +273,7 @@ if (process.platform === "darwin") {
 
 import { registerIpcHandlers, sendToRenderer } from "./ipc/handlers.js";
 import type { HandlerDependencies } from "./ipc/types.js";
-import { registerErrorHandlers } from "./ipc/errorHandlers.js";
+import { registerErrorHandlers, flushPendingErrors } from "./ipc/errorHandlers.js";
 import { PtyClient, disposePtyClient } from "./services/PtyClient.js";
 import {
   getWorkspaceClient,
@@ -286,7 +286,7 @@ import { AgentUpdateHandler } from "./services/AgentUpdateHandler.js";
 import { SidecarManager } from "./services/SidecarManager.js";
 import { createWindowWithState } from "./windowState.js";
 import { setLoggerWindow, initializeLogger } from "./utils/logger.js";
-import { openExternalUrl } from "./utils/openExternal.js";
+import { canOpenExternalUrl, openExternalUrl } from "./utils/openExternal.js";
 import {
   classifyPartition,
   getLocalhostDevCSP,
@@ -575,6 +575,20 @@ function setupWebviewCSP(): void {
         applyCSP(partition);
       }
     });
+
+    // Route target="_blank" links and window.open() from webview guests to the system browser
+    if (contents.getType() === "webview") {
+      contents.setWindowOpenHandler(({ url }) => {
+        if (url && canOpenExternalUrl(url)) {
+          void openExternalUrl(url).catch((error) => {
+            console.error("[MAIN] Failed to open webview external URL:", error);
+          });
+        } else {
+          console.warn(`[MAIN] Blocked webview window.open for unsupported/empty URL: ${url}`);
+        }
+        return { action: "deny" };
+      });
+    }
   });
 }
 
@@ -894,11 +908,7 @@ async function createWindow(): Promise<void> {
   // race conditions where the renderer makes IPC calls before handlers exist.
 
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    console.log("[MAIN] setWindowOpenHandler triggered with URL:", url);
-    if (
-      url &&
-      (url.startsWith("http://") || url.startsWith("https://") || url.startsWith("mailto:"))
-    ) {
+    if (url && canOpenExternalUrl(url)) {
       void openExternalUrl(url).catch((error) => {
         console.error("[MAIN] Failed to open external URL:", error);
       });
@@ -1199,6 +1209,7 @@ async function createWindow(): Promise<void> {
     if (isSmokeTest) console.log("[SMOKE] CHECK: Renderer did-finish-load — OK");
     markPerformance(PERF_MARKS.RENDERER_READY);
     createAndDistributePorts();
+    flushPendingErrors();
   });
 
   workspaceClient.on("host-crash", (code: number) => {

@@ -10,45 +10,10 @@ import { isCanopyEnvEnabled } from "@/utils/env";
 import type { CliAvailability } from "@shared/types";
 import { Sparkles, ChevronLeft, ChevronRight, ArrowRight, SkipForward } from "lucide-react";
 
-const STORAGE_KEY = "canopy:agent-setup-complete";
 const AGENT_ORDER = ["claude", "gemini", "codex", "opencode"] as const;
 const POLL_INTERVAL = 3000;
 
 const SKIP_FIRST_RUN_DIALOGS = isCanopyEnvEnabled("CANOPY_E2E_SKIP_FIRST_RUN_DIALOGS");
-
-let sessionGuard = false;
-
-export function shouldShowAgentSetupWizard(availability: CliAvailability): boolean {
-  if (SKIP_FIRST_RUN_DIALOGS) return false;
-  if (sessionGuard) return false;
-
-  try {
-    if (localStorage.getItem(STORAGE_KEY)) return false;
-  } catch {
-    return false;
-  }
-
-  const anyInstalled = Object.values(availability).some((v) => v === true);
-  return !anyInstalled;
-}
-
-export function markAgentSetupComplete(): void {
-  sessionGuard = true;
-  try {
-    localStorage.setItem(STORAGE_KEY, "true");
-  } catch {
-    // silently fail
-  }
-}
-
-export function resetAgentSetupFlag(): void {
-  sessionGuard = false;
-  try {
-    localStorage.removeItem(STORAGE_KEY);
-  } catch {
-    // silently fail
-  }
-}
 
 interface AgentSetupWizardProps {
   isOpen: boolean;
@@ -162,7 +127,6 @@ export function AgentSetupWizard({
   }, [handleNext]);
 
   const handleFinish = useCallback(() => {
-    markAgentSetupComplete();
     onClose();
   }, [onClose]);
 

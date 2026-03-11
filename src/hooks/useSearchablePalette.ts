@@ -1,5 +1,6 @@
 import { useState, useCallback, useMemo, useEffect, useRef } from "react";
 import Fuse, { type IFuseOptions } from "fuse.js";
+import { usePaletteStore, type PaletteId } from "@/store/paletteStore";
 
 export interface UseSearchablePaletteOptions<T> {
   items: T[];
@@ -11,6 +12,8 @@ export interface UseSearchablePaletteOptions<T> {
   canNavigate?: (item: T) => boolean;
   /** Reset selected index when results change. Default: true */
   resetOnResultsChange?: boolean;
+  /** Palette ID for mutual exclusion. When set, isOpen is derived from the palette store. */
+  paletteId?: PaletteId;
 }
 
 export interface UseSearchablePaletteReturn<T> {
@@ -41,9 +44,15 @@ export function useSearchablePalette<T>(
     debounceMs = DEFAULT_DEBOUNCE_MS,
     canNavigate,
     resetOnResultsChange = true,
+    paletteId,
   } = options;
 
-  const [isOpen, setIsOpen] = useState(false);
+  const storeIsOpen = usePaletteStore(
+    (state) => paletteId != null && state.activePaletteId === paletteId
+  );
+  const [localIsOpen, setLocalIsOpen] = useState(false);
+  const isOpen = paletteId != null ? storeIsOpen : localIsOpen;
+
   const [query, setQuery] = useState("");
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [debouncedQuery, setDebouncedQuery] = useState("");
@@ -122,18 +131,26 @@ export function useSearchablePalette<T>(
   }, [results, resetOnResultsChange, canNavigate, findNavigable]);
 
   const open = useCallback(() => {
-    setIsOpen(true);
+    if (paletteId != null) {
+      usePaletteStore.getState().openPalette(paletteId);
+    } else {
+      setLocalIsOpen(true);
+    }
     setQuery("");
     setDebouncedQuery("");
     setSelectedIndex(0);
-  }, []);
+  }, [paletteId]);
 
   const close = useCallback(() => {
-    setIsOpen(false);
+    if (paletteId != null) {
+      usePaletteStore.getState().closePalette(paletteId);
+    } else {
+      setLocalIsOpen(false);
+    }
     setQuery("");
     setSelectedIndex(0);
     setDebouncedQuery("");
-  }, []);
+  }, [paletteId]);
 
   const toggle = useCallback(() => {
     if (isOpen) {

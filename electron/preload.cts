@@ -301,6 +301,7 @@ const CHANNELS = {
   ERROR_NOTIFY: "error:notify",
   ERROR_RETRY: "error:retry",
   ERROR_OPEN_LOGS: "error:open-logs",
+  ERROR_GET_PENDING: "error:get-pending",
 
   // Event Inspector channels
   EVENT_INSPECTOR_GET_EVENTS: "event-inspector:get-events",
@@ -533,6 +534,13 @@ const CHANNELS = {
   CRASH_RECOVERY_RESOLVE: "crash-recovery:resolve",
   CRASH_RECOVERY_GET_CONFIG: "crash-recovery:get-config",
   CRASH_RECOVERY_SET_CONFIG: "crash-recovery:set-config",
+
+  // Onboarding channels
+  ONBOARDING_GET: "onboarding:get",
+  ONBOARDING_MIGRATE: "onboarding:migrate",
+  ONBOARDING_SET_STEP: "onboarding:set-step",
+  ONBOARDING_COMPLETE: "onboarding:complete",
+  ONBOARDING_MARK_TOAST_SEEN: "onboarding:mark-toast-seen",
 } as const;
 
 const api: ElectronAPI = {
@@ -916,6 +924,8 @@ const api: ElectronAPI = {
       _typedInvoke(CHANNELS.ERROR_RETRY, { errorId, action, args }),
 
     openLogs: () => _typedInvoke(CHANNELS.ERROR_OPEN_LOGS),
+
+    getPending: () => _typedInvoke(CHANNELS.ERROR_GET_PENDING),
   },
 
   // Event Inspector API
@@ -1646,6 +1656,18 @@ const api: ElectronAPI = {
     markPromptShown: () => _typedInvoke(CHANNELS.TELEMETRY_MARK_PROMPT_SHOWN),
   },
 
+  onboarding: {
+    get: () => _typedInvoke(CHANNELS.ONBOARDING_GET),
+    migrate: (payload: {
+      agentSelectionDismissed: boolean;
+      agentSetupComplete: boolean;
+      firstRunToastSeen: boolean;
+    }) => _typedInvoke(CHANNELS.ONBOARDING_MIGRATE, payload),
+    setStep: (step: string | null) => _typedInvoke(CHANNELS.ONBOARDING_SET_STEP, step),
+    complete: () => _typedInvoke(CHANNELS.ONBOARDING_COMPLETE),
+    markToastSeen: () => _typedInvoke(CHANNELS.ONBOARDING_MARK_TOAST_SEEN),
+  },
+
   // Voice Input API
   voiceInput: {
     getSettings: () => _typedInvoke(CHANNELS.VOICE_INPUT_GET_SETTINGS),
@@ -1736,7 +1758,8 @@ const api: ElectronAPI = {
 
   crashRecovery: {
     getPending: () => _typedInvoke(CHANNELS.CRASH_RECOVERY_GET_PENDING),
-    resolve: (action: "restore" | "fresh") => _typedInvoke(CHANNELS.CRASH_RECOVERY_RESOLVE, action),
+    resolve: (action: { kind: "restore"; panelIds: string[] } | { kind: "fresh" }) =>
+      _typedInvoke(CHANNELS.CRASH_RECOVERY_RESOLVE, action),
     getConfig: () => _typedInvoke(CHANNELS.CRASH_RECOVERY_GET_CONFIG),
     setConfig: (config: { autoRestoreOnCrash?: boolean }) =>
       _typedInvoke(CHANNELS.CRASH_RECOVERY_SET_CONFIG, config),

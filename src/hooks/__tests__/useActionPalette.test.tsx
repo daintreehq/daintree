@@ -21,11 +21,13 @@ vi.mock("@/services/KeybindingService", () => ({
   },
 }));
 
+import { usePaletteStore } from "@/store/paletteStore";
 import { useActionPalette } from "../useActionPalette";
 
 describe("useActionPalette", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    usePaletteStore.setState({ activePaletteId: null });
   });
 
   it("tolerates malformed action manifest entries with missing title", async () => {

@@ -10,6 +10,7 @@ import type {
   TabGroup,
   StagingStatus,
 } from "../domain.js";
+import type { OnboardingState } from "./maps.js";
 import type { AgentSettings, AgentSettingsEntry } from "../agentSettings.js";
 import type { VoiceInputStatus } from "../voice.js";
 export type { VoiceInputStatus };
@@ -295,6 +296,7 @@ export interface ElectronAPI {
     onError(callback: (error: AppError) => void): () => void;
     retry(errorId: string, action: RetryAction, args?: Record<string, unknown>): Promise<void>;
     openLogs(): Promise<void>;
+    getPending(): Promise<AppError[]>;
   };
   eventInspector: {
     getEvents(): Promise<EventRecord[]>;
@@ -830,6 +832,17 @@ export interface ElectronAPI {
     get(): Promise<{ enabled: boolean; hasSeenPrompt: boolean }>;
     setEnabled(enabled: boolean): Promise<void>;
     markPromptShown(): Promise<void>;
+  };
+  onboarding: {
+    get(): Promise<OnboardingState>;
+    migrate(payload: {
+      agentSelectionDismissed: boolean;
+      agentSetupComplete: boolean;
+      firstRunToastSeen: boolean;
+    }): Promise<OnboardingState>;
+    setStep(step: string | null): Promise<void>;
+    complete(): Promise<void>;
+    markToastSeen(): Promise<void>;
   };
   voiceInput: {
     getSettings(): Promise<VoiceInputSettings>;

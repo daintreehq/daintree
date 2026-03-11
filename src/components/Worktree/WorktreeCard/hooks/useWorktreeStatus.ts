@@ -5,6 +5,8 @@ const MAIN_WORKTREE_NOTE_TTL_MS = 10 * 60 * 1000; // 10 minutes
 
 export type SpineState = "error" | "dirty" | "current" | "stale" | "idle";
 
+export type WorktreeLifecycleStage = "working" | "in-review" | "merged" | "ready-for-cleanup";
+
 export type ComputedSubtitleTone = "error" | "warning" | "info" | "muted";
 
 export interface ComputedSubtitle {
@@ -16,6 +18,7 @@ export interface UseWorktreeStatusResult {
   branchLabel: string;
   hasChanges: boolean;
   isComplete: boolean;
+  lifecycleStage: WorktreeLifecycleStage | null;
   effectiveNote?: string;
   effectiveSummary?: string | null;
   computedSubtitle: ComputedSubtitle;
@@ -122,6 +125,27 @@ export function useWorktreeStatus({
     !hasChanges &&
     worktree.worktreeChanges !== null;
 
+  const lifecycleStage = useMemo((): WorktreeLifecycleStage | null => {
+    if (isMainWorktree) return null;
+    if (worktree.worktreeChanges === null) return null;
+
+    if (hasChanges) return "working";
+
+    if (worktree.prState === "merged") {
+      return worktree.issueNumber ? "ready-for-cleanup" : "merged";
+    }
+
+    if (worktree.prState === "open") return "in-review";
+
+    return null;
+  }, [
+    isMainWorktree,
+    worktree.worktreeChanges,
+    hasChanges,
+    worktree.prState,
+    worktree.issueNumber,
+  ]);
+
   const lifecycle = worktree.lifecycleStatus;
   const isLifecycleRunning = lifecycle?.state === "running";
   const lifecycleLabel = useMemo(() => {
@@ -146,6 +170,7 @@ export function useWorktreeStatus({
     branchLabel,
     hasChanges,
     isComplete,
+    lifecycleStage,
     effectiveNote,
     effectiveSummary,
     computedSubtitle,
