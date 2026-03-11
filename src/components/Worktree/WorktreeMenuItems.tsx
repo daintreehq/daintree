@@ -1,7 +1,6 @@
 import type * as React from "react";
 import type { WorktreeState } from "../../types";
 import {
-  ArrowDownToLine,
   CircleDot,
   Code,
   Copy,
@@ -54,7 +53,6 @@ export interface WorktreeMenuItemsProps {
   runningRecipeId: string | null;
   isRestartValidating: boolean;
   isPinned?: boolean;
-  hasFocusedTerminal: boolean;
   counts: {
     grid: number;
     dock: number;
@@ -66,7 +64,6 @@ export interface WorktreeMenuItemsProps {
   onLaunchAgent?: (agentId: string) => void;
   onCopyContextFull: () => void;
   onCopyContextModified: () => void;
-  onInjectContext: () => void;
   onOpenEditor: () => void;
   onRevealInFinder: () => void;
   onOpenIssueSidecar?: () => void;
@@ -98,12 +95,10 @@ export function WorktreeMenuItems({
   runningRecipeId,
   isRestartValidating,
   isPinned,
-  hasFocusedTerminal,
   counts,
   onLaunchAgent,
   onCopyContextFull,
   onCopyContextModified,
-  onInjectContext,
   onOpenEditor,
   onRevealInFinder,
   onOpenIssueSidecar,
@@ -269,11 +264,6 @@ export function WorktreeMenuItems({
           <C.Item onSelect={onCopyContextModified}>Modified Files Only</C.Item>
         </C.SubContent>
       </C.Sub>
-
-      <C.Item onSelect={onInjectContext} disabled={!hasFocusedTerminal}>
-        <ArrowDownToLine className="w-3.5 h-3.5 mr-2" />
-        Inject Context into Focused Terminal
-      </C.Item>
 
       <C.Item onSelect={onOpenEditor}>
         <Code className="w-3.5 h-3.5 mr-2" />
