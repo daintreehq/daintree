@@ -43,26 +43,55 @@ function decorateWebviewElement(element: HTMLElement): MockWebviewElement {
   return webview;
 }
 
-const { terminalStoreState, useTerminalStoreMock, useIsDraggingMock, actionDispatchMock } =
-  vi.hoisted(() => {
-    const terminalStoreState = {
-      getTerminal: vi.fn(),
-      setBrowserUrl: vi.fn(),
-      setBrowserHistory: vi.fn(),
-      setBrowserZoom: vi.fn(),
-    };
-    const useTerminalStoreMock = vi.fn((selector: (state: typeof terminalStoreState) => unknown) =>
-      selector(terminalStoreState)
-    );
-    (useTerminalStoreMock as unknown as { getState: () => typeof terminalStoreState }).getState =
-      () => terminalStoreState;
-    const useIsDraggingMock = vi.fn(() => false);
-    const actionDispatchMock = vi.fn();
-    return { terminalStoreState, useTerminalStoreMock, useIsDraggingMock, actionDispatchMock };
-  });
+const {
+  terminalStoreState,
+  useTerminalStoreMock,
+  useProjectStoreMock,
+  useIsDraggingMock,
+  actionDispatchMock,
+  useUrlHistoryStoreMock,
+} = vi.hoisted(() => {
+  const terminalStoreState = {
+    getTerminal: vi.fn(),
+    setBrowserUrl: vi.fn(),
+    setBrowserHistory: vi.fn(),
+    setBrowserZoom: vi.fn(),
+  };
+  const useTerminalStoreMock = vi.fn((selector: (state: typeof terminalStoreState) => unknown) =>
+    selector(terminalStoreState)
+  );
+  (useTerminalStoreMock as unknown as { getState: () => typeof terminalStoreState }).getState =
+    () => terminalStoreState;
+  const projectStoreState = { currentProject: { id: "test-project" } };
+  const useProjectStoreMock = vi.fn((selector: (state: typeof projectStoreState) => unknown) =>
+    selector(projectStoreState)
+  );
+  const useIsDraggingMock = vi.fn(() => false);
+  const actionDispatchMock = vi.fn();
+  const urlHistoryStoreState = {
+    recordVisit: vi.fn(),
+    updateTitle: vi.fn(),
+  };
+  const useUrlHistoryStoreMock = vi.fn(
+    (selector: (state: typeof urlHistoryStoreState) => unknown) => selector(urlHistoryStoreState)
+  );
+  return {
+    terminalStoreState,
+    useTerminalStoreMock,
+    useProjectStoreMock,
+    useIsDraggingMock,
+    actionDispatchMock,
+    useUrlHistoryStoreMock,
+  };
+});
 
 vi.mock("@/store", () => ({
   useTerminalStore: useTerminalStoreMock,
+  useProjectStore: useProjectStoreMock,
+}));
+
+vi.mock("@/store/urlHistoryStore", () => ({
+  useUrlHistoryStore: useUrlHistoryStoreMock,
 }));
 
 vi.mock("@/components/DragDrop", () => ({
