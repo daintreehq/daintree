@@ -387,6 +387,64 @@ describe("TerminalInstanceService - Incremental Restore", () => {
     terminalInstanceService.destroy(id);
   });
 
+  it("should not auto-scroll to bottom after synchronous restore", async () => {
+    const id = "test-terminal-no-scroll-sync";
+    const smallState = "x".repeat(1000);
+
+    const terminal = terminalInstanceService.getOrCreate(
+      id,
+      "terminal",
+      {},
+      () => 3 as any,
+      undefined
+    );
+
+    terminal.terminal = mockTerminal;
+    terminal.latestWasAtBottom = true;
+
+    terminalInstanceService.restoreFromSerialized(id, smallState);
+
+    await flushMicrotasks();
+
+    expect(mockTerminal.scrollToBottom).not.toHaveBeenCalled();
+
+    terminalInstanceService.destroy(id);
+  });
+
+  it("should not auto-scroll to bottom after incremental restore", async () => {
+    const id = "test-terminal-no-scroll-incr";
+    const largeState = "x".repeat(INCREMENTAL_RESTORE_CONFIG.indicatorThresholdBytes + 1000);
+
+    const terminal = terminalInstanceService.getOrCreate(
+      id,
+      "terminal",
+      {},
+      () => 3 as any,
+      undefined
+    );
+
+    terminal.terminal = mockTerminal;
+    terminal.latestWasAtBottom = true;
+
+    const restorePromise = (terminalInstanceService as any).restoreFromSerializedIncremental(
+      id,
+      largeState
+    );
+
+    await flushMicrotasks();
+
+    for (let i = 0; i < 20; i++) {
+      flushIdleCallbacks();
+      await flushMicrotasks();
+    }
+
+    await restorePromise;
+
+    expect(mockTerminal.scrollToBottom).not.toHaveBeenCalled();
+
+    terminalInstanceService.destroy(id);
+  });
+
   it("should fallback to setTimeout when requestIdleCallback is unavailable", async () => {
     const id = "test-terminal-8";
     const largeState = "x".repeat(INCREMENTAL_RESTORE_CONFIG.chunkBytes * 2);

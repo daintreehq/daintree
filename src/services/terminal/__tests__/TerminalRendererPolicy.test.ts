@@ -203,7 +203,7 @@ describe("TerminalRendererPolicy", () => {
       expect(onPostWake).not.toHaveBeenCalled();
     });
 
-    it("preserves scroll-to-bottom behavior for non-alt terminals", async () => {
+    it("does not auto-scroll to bottom for non-alt terminals after wake", async () => {
       mockManagedTerminal.isAltBuffer = false;
       mockManagedTerminal.needsWake = true;
       mockManagedTerminal.lastAppliedTier = TerminalRefreshTier.BACKGROUND;
@@ -212,6 +212,7 @@ describe("TerminalRendererPolicy", () => {
 
       const terminal = mockManagedTerminal.terminal as unknown as {
         scrollToBottom: ReturnType<typeof vi.fn>;
+        refresh: ReturnType<typeof vi.fn>;
       };
 
       const { TerminalRendererPolicy } = await import("../TerminalRendererPolicy");
@@ -221,8 +222,10 @@ describe("TerminalRendererPolicy", () => {
       policy.applyRendererPolicy("test-id", TerminalRefreshTier.FOCUSED);
 
       await vi.waitFor(() => {
-        expect(terminal.scrollToBottom).toHaveBeenCalledTimes(1);
+        expect(mockDeps.wakeAndRestore).toHaveBeenCalled();
       });
+
+      expect(terminal.scrollToBottom).not.toHaveBeenCalled();
     });
   });
 

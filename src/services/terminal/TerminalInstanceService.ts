@@ -224,10 +224,6 @@ class TerminalInstanceService {
           const current = this.instances.get(id);
           if (current && current.isVisible) {
             current.terminal.refresh(0, current.terminal.rows - 1);
-
-            if (!current.isAltBuffer && current.latestWasAtBottom) {
-              this.scrollToBottom(id);
-            }
           }
         });
       }
@@ -1062,7 +1058,6 @@ class TerminalInstanceService {
         return true;
       }
 
-      const shouldAutoScroll = managed.latestWasAtBottom;
       managed.isSerializedRestoreInProgress = true;
 
       managed.terminal.reset();
@@ -1076,19 +1071,6 @@ class TerminalInstanceService {
         current.deferredOutput = [];
         for (const data of deferred) {
           this.writeToTerminal(id, data);
-        }
-
-        if (shouldAutoScroll && !current.isAltBuffer) {
-          this.scrollToBottom(id);
-
-          requestAnimationFrame(() => {
-            requestAnimationFrame(() => {
-              const latest = this.instances.get(id);
-              if (latest && latest.isVisible && !latest.isAltBuffer && shouldAutoScroll) {
-                this.scrollToBottom(id);
-              }
-            });
-          });
         }
       });
       return true;
@@ -1110,7 +1092,6 @@ class TerminalInstanceService {
     }
 
     const restoreGeneration = ++managed.restoreGeneration;
-    const shouldAutoScroll = managed.latestWasAtBottom;
     managed.isSerializedRestoreInProgress = true;
 
     const task = async (): Promise<boolean> => {
@@ -1167,19 +1148,6 @@ class TerminalInstanceService {
 
           for (const data of deferredData) {
             this.writeToTerminal(id, data);
-          }
-
-          if (shouldAutoScroll && !managed.isAltBuffer) {
-            this.scrollToBottom(id);
-
-            requestAnimationFrame(() => {
-              requestAnimationFrame(() => {
-                const latest = this.instances.get(id);
-                if (latest && latest.isVisible && !latest.isAltBuffer && shouldAutoScroll) {
-                  this.scrollToBottom(id);
-                }
-              });
-            });
           }
         }
       }

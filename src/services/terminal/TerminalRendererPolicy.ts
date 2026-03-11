@@ -111,8 +111,6 @@ export class TerminalRendererPolicy {
 
             if (ok && current.isAltBuffer) {
               this.deps.onPostWake?.(id);
-            } else if (ok && current.latestWasAtBottom && current.isVisible) {
-              current.terminal.scrollToBottom();
             }
           })
           .catch(() => {
