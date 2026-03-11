@@ -305,39 +305,38 @@ export async function assembleKeyterms(opts: KeytermAssemblyOpts): Promise<strin
     }
   }
 
-  // Gather dynamic context in parallel with a timeout
-  const dynamicPromises: Promise<void>[] = [];
-
-  // Priority 3: Branch name tokens
+  // Gather dynamic context in parallel with a timeout.
+  // Branch tokens run first (Priority 3), then terminal identifiers (Priority 4).
+  // We await sequentially to preserve priority ordering for the dedup/cap logic.
   if (projectPath) {
-    dynamicPromises.push(
-      getBranchName(projectPath).then((branchName) => {
-        if (branchName) {
-          for (const token of tokenizeBranchName(branchName)) {
-            add(token);
-          }
+    try {
+      const branchName = await Promise.race([
+        getBranchName(projectPath),
+        new Promise<null>((resolve) => setTimeout(() => resolve(null), ASSEMBLY_TIMEOUT_MS)),
+      ]);
+      if (branchName) {
+        for (const token of tokenizeBranchName(branchName)) {
+          add(token);
         }
-      })
-    );
+      }
+    } catch {
+      logDebug(`${P} Branch name lookup failed`);
+    }
   }
 
-  // Priority 4: Terminal identifiers
   if (ptyClient) {
-    dynamicPromises.push(
-      getTerminalLines(ptyClient).then((lines) => {
-        const identifiers = extractTerminalIdentifiers(lines);
-        for (const id of identifiers) {
-          add(id);
-        }
-      })
-    );
-  }
-
-  if (dynamicPromises.length > 0) {
-    await Promise.race([
-      Promise.allSettled(dynamicPromises),
-      new Promise<void>((resolve) => setTimeout(resolve, ASSEMBLY_TIMEOUT_MS)),
-    ]);
+    try {
+      const lines = await Promise.race([
+        getTerminalLines(ptyClient),
+        new Promise<string[]>((resolve) => setTimeout(() => resolve([]), ASSEMBLY_TIMEOUT_MS)),
+      ]);
+      const identifiers = extractTerminalIdentifiers(lines);
+      for (const id of identifiers) {
+        add(id);
+      }
+    } catch {
+      logDebug(`${P} Terminal identifier extraction failed`);
+    }
   }
 
   logDebug(`${P} Assembled ${result.length} keyterms`, {

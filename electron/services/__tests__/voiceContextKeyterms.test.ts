@@ -7,17 +7,18 @@ import {
   extractTerminalIdentifiers,
 } from "../voiceContextKeyterms.js";
 
-vi.mock("../GitService.js", () => {
-  const mockListBranches = vi.fn().mockResolvedValue([
-    { name: "feature/auth-login-service", current: true, commit: "abc123" },
-    { name: "main", current: false, commit: "def456" },
-  ]);
-  return {
-    GitService: class MockGitService {
-      listBranches = mockListBranches;
-    },
-  };
-});
+let gitListBranchesMock = vi.fn().mockResolvedValue([
+  { name: "feature/auth-login-service", current: true, commit: "abc123" },
+  { name: "main", current: false, commit: "def456" },
+]);
+
+vi.mock("../GitService.js", () => ({
+  GitService: class MockGitService {
+    listBranches(...args: unknown[]) {
+      return gitListBranchesMock(...args);
+    }
+  },
+}));
 
 vi.mock("../../utils/logger.js", () => ({
   logDebug: vi.fn(),
@@ -168,20 +169,12 @@ describe("assembleKeyterms", () => {
   });
 
   it("falls back gracefully when git fails", async () => {
-    const { GitService } = await import("../GitService.js");
-    const origProto = GitService.prototype.listBranches;
-    GitService.prototype.listBranches = vi
-      .fn()
-      .mockRejectedValue(new Error("git not found")) as typeof GitService.prototype.listBranches;
-    try {
-      const result = await assembleKeyterms({
-        customDictionary: ["MyTerm"],
-        projectPath: "/some/path",
-      });
-      expect(result).toContain("MyTerm");
-    } finally {
-      GitService.prototype.listBranches = origProto;
-    }
+    gitListBranchesMock.mockRejectedValueOnce(new Error("git not found"));
+    const result = await assembleKeyterms({
+      customDictionary: ["MyTerm"],
+      projectPath: "/some/path",
+    });
+    expect(result).toContain("MyTerm");
   });
 
   it("falls back gracefully when ptyClient fails", async () => {
