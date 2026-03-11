@@ -5,6 +5,7 @@ import {
   type NotificationHistoryEntry,
 } from "@/store/slices/notificationHistorySlice";
 import { NotificationCenterEntry } from "./NotificationCenterEntry";
+import { Button } from "@/components/ui/button";
 
 interface NotificationCenterProps {
   open: boolean;
@@ -74,17 +75,19 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
       <div className="flex items-center justify-between px-3 py-2 border-b border-divider">
         <span className="text-xs font-medium text-canopy-text/80">Notifications</span>
         {entries.length > 0 && (
-          <button
+          <Button
             type="button"
+            variant="ghost"
+            size="xs"
             onClick={() => {
               clearAll();
               onClose();
             }}
-            className="flex items-center gap-1 text-[10px] text-canopy-text/50 hover:text-canopy-text/80 transition-colors"
+            className="text-canopy-text/50"
           >
-            <Trash2 className="h-3 w-3" />
+            <Trash2 />
             Clear all
-          </button>
+          </Button>
         )}
       </div>
       <div className="flex-1 overflow-y-auto">

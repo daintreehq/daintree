@@ -118,5 +118,9 @@ export default defineConfig({
     host: devServerConfig.host,
     port: devServerConfig.port,
     strictPort: true,
+    headers: {
+      "Cross-Origin-Opener-Policy": "same-origin",
+      "Cross-Origin-Embedder-Policy": "credentialless",
+    },
   },
 });

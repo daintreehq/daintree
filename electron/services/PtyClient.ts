@@ -31,7 +31,6 @@ import path from "path";
 import os from "os";
 import { fileURLToPath } from "url";
 import { logInfo, logWarn } from "../utils/logger.js";
-import { SharedRingBuffer } from "../../shared/utils/SharedRingBuffer.js";
 import { RequestResponseBroker } from "./rpc/index.js";
 import { bridgePtyEvent } from "./pty/PtyEventsBridge.js";
 import type {
@@ -87,9 +86,6 @@ const DEFAULT_CONFIG: Required<PtyClientConfig> = {
   showCrashDialog: true,
   memoryLimitMb: 4096,
 };
-
-/** Default ring buffer size: 10MB for high-throughput terminal output */
-const DEFAULT_RING_BUFFER_SIZE = 10 * 1024 * 1024;
 
 /**
  * Classify crash type based on exit code and signal.
@@ -187,15 +183,6 @@ export class PtyClient extends EventEmitter {
   private readyResolve: (() => void) | null = null;
   private readyReject: ((error: Error) => void) | null = null;
 
-  /** SharedArrayBuffer array for zero-copy terminal I/O (null if unavailable) */
-  private visualBuffers: SharedArrayBuffer[] = [];
-  /** SharedArrayBuffer for semantic analysis (separate from visual buffers) */
-  private analysisBuffer: SharedArrayBuffer | null = null;
-  /** SharedArrayBuffer for global wake signal */
-  private visualSignalBuffer: SharedArrayBuffer | null = null;
-  private sharedBufferEnabled = false;
-  private readonly VISUAL_SHARD_COUNT = 4;
-
   /** Callback to notify renderer when MessagePort needs to be refreshed */
   private onPortRefresh: (() => void) | null = null;
 
@@ -212,24 +199,10 @@ export class PtyClient extends EventEmitter {
       this.readyReject = reject;
     });
 
-    try {
-      const perShardSize = Math.floor(DEFAULT_RING_BUFFER_SIZE / this.VISUAL_SHARD_COUNT);
-      for (let i = 0; i < this.VISUAL_SHARD_COUNT; i++) {
-        this.visualBuffers.push(SharedRingBuffer.create(perShardSize));
-      }
-      this.analysisBuffer = SharedRingBuffer.create(DEFAULT_RING_BUFFER_SIZE);
-      this.visualSignalBuffer = new SharedArrayBuffer(4);
-      this.sharedBufferEnabled = true;
-      console.log(
-        `[PtyClient] SharedArrayBuffer enabled (${this.VISUAL_SHARD_COUNT} visual shards × ${Math.floor(perShardSize / 1024 / 1024)}MB + 10MB analysis)`
-      );
-    } catch (error) {
-      console.warn("[PtyClient] SharedArrayBuffer unavailable, using IPC fallback:", error);
-      this.visualBuffers = [];
-      this.analysisBuffer = null;
-      this.visualSignalBuffer = null;
-      this.sharedBufferEnabled = false;
-    }
+    // SharedArrayBuffer cannot be sent to Electron UtilityProcess via postMessage
+    // ("An object could not be cloned"). This is a Chromium structured clone limitation
+    // that affects all platforms. Use IPC fallback for terminal I/O.
+    console.log("[PtyClient] Using IPC mode (SharedArrayBuffer not supported in UtilityProcess)");
 
     this.startHost();
   }
@@ -353,30 +326,6 @@ export class PtyClient extends EventEmitter {
     this.child.on("message", (msg: PtyHostEvent) => {
       this.handleHostEvent(msg);
     });
-
-    // Send all SharedArrayBuffers to host immediately after spawn
-    if (this.visualBuffers.length > 0 && this.analysisBuffer && this.visualSignalBuffer) {
-      try {
-        this.child.postMessage({
-          type: "init-buffers",
-          visualBuffers: this.visualBuffers,
-          analysisBuffer: this.analysisBuffer,
-          visualSignalBuffer: this.visualSignalBuffer,
-        });
-        console.log(
-          `[PtyClient] SharedArrayBuffers sent to Pty Host (${this.visualBuffers.length} visual shards + analysis + signal)`
-        );
-      } catch (error) {
-        console.warn(
-          "[PtyClient] SharedArrayBuffer transfer failed (using IPC fallback):",
-          error instanceof Error ? error.message : String(error)
-        );
-        this.visualBuffers = [];
-        this.analysisBuffer = null;
-        this.visualSignalBuffer = null;
-        this.sharedBufferEnabled = false;
-      }
-    }
 
     this.child.on("exit", (code) => {
       this.flushHostOutputBuffers();
@@ -1367,32 +1316,29 @@ export class PtyClient extends EventEmitter {
 
   /**
    * Get the SharedArrayBuffers for zero-copy terminal I/O (visual rendering).
-   * Returns empty array if SharedArrayBuffer is not available.
+   * Always returns empty — SharedArrayBuffer is not supported in Electron UtilityProcess.
    */
   getSharedBuffers(): {
     visualBuffers: SharedArrayBuffer[];
     signalBuffer: SharedArrayBuffer | null;
   } {
-    return {
-      visualBuffers: this.visualBuffers,
-      signalBuffer: this.visualSignalBuffer,
-    };
+    return { visualBuffers: [], signalBuffer: null };
   }
 
   /**
    * Get the SharedArrayBuffer for semantic analysis (Web Worker).
-   * Returns null if SharedArrayBuffer is not available.
+   * Always returns null — SharedArrayBuffer is not supported in Electron UtilityProcess.
    */
   getAnalysisBuffer(): SharedArrayBuffer | null {
-    return this.analysisBuffer;
+    return null;
   }
 
   /**
    * Check if SharedArrayBuffer-based I/O is enabled.
-   * Used internally and by diagnostic/debugging code.
+   * Always false — Electron UtilityProcess does not support SharedArrayBuffer transfer.
    */
   isSharedBufferEnabled(): boolean {
-    return this.sharedBufferEnabled;
+    return false;
   }
 }
 
