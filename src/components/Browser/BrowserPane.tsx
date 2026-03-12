@@ -16,12 +16,14 @@ import {
 } from "./historyUtils";
 import { actionService } from "@/services/ActionService";
 import { WebviewDialog } from "./WebviewDialog";
+import { FindBar } from "./FindBar";
 import { useIsDragging } from "@/components/DragDrop";
 import { cn } from "@/lib/utils";
 import { useConsoleCaptureStore } from "@/store/consoleCaptureStore";
 import { useProjectStore } from "@/store";
 import { useProjectSettingsStore } from "@/store/projectSettingsStore";
 import { useUrlHistoryStore } from "@/store/urlHistoryStore";
+import { useFindInPage } from "@/hooks/useFindInPage";
 
 export interface BrowserPaneProps extends BasePanelProps {
   initialUrl: string;
@@ -529,6 +531,7 @@ export function BrowserPane({
     webviewElement,
     isWebviewReady
   );
+  const findInPage = useFindInPage(id, webviewElement, isWebviewReady, isFocused);
 
   const handleOpenExternal = useCallback(() => {
     if (!hasValidUrl) return;
@@ -665,6 +668,7 @@ export function BrowserPane({
                   <div className="w-8 h-8 border-2 border-status-info border-t-transparent rounded-full animate-spin" />
                 </div>
               )}
+              {findInPage.isOpen && <FindBar find={findInPage} />}
               <webview
                 ref={setWebviewNode}
                 src={currentUrl}
