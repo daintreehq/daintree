@@ -181,6 +181,7 @@
     "electronUpdaterCompatibility": ">=2.16",
     "productName": "Canopy",
     "npmRebuild": true,
+    "electronLanguages": ["en-US"],
     "directories": {
       "buildResources": "build",
       "output": "release"
