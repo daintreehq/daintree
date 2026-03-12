@@ -510,25 +510,63 @@ if (!gotTheLock) {
     // 2. PtyManager only has runtime state (id/type/title/cwd), missing persistence fields
     // 3. Overwriting would strip command field, breaking agent terminal restoration
 
-    Promise.all([
-      workspaceClient ? workspaceClient.dispose() : Promise.resolve(),
-      mcpServerService.stop(),
-      new Promise<void>((resolve) => {
-        // Dispose orchestrator and routing before ptyClient to prevent event handlers from firing
-        disposeTaskOrchestrator();
-        disposeAgentRouter();
-        disposeAgentAvailabilityStore();
-        disposeWorkflowEngine();
+    // Gracefully shut down agent terminals to capture session IDs before killing
+    const gracefulShutdownPromise = (async () => {
+      if (!ptyClient) return;
+      try {
+        const allProjects = projectStore.getAllProjects();
+        const projectIds = allProjects.map((p) => p.id);
+        const allResults = await Promise.race([
+          Promise.all(projectIds.map((pid) => ptyClient!.gracefulKillByProject(pid))),
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error("graceful shutdown timeout")), 4000)
+          ),
+        ]);
 
-        if (ptyClient) {
-          ptyClient.dispose();
-          ptyClient = null;
+        // Persist captured session IDs into project state
+        for (let i = 0; i < projectIds.length; i++) {
+          const results = allResults[i];
+          const captured = results.filter((r) => r.agentSessionId);
+          if (captured.length === 0) continue;
+
+          const state = await projectStore.getProjectState(projectIds[i]);
+          if (!state?.terminals) continue;
+
+          for (const result of captured) {
+            const snapshot = state.terminals.find((t) => t.id === result.id);
+            if (snapshot) {
+              snapshot.agentSessionId = result.agentSessionId ?? undefined;
+            }
+          }
+          await projectStore.saveProjectState(projectIds[i], state);
         }
-        disposePtyClient();
-        disposeWorkspaceClient();
-        resolve();
-      }),
-    ])
+      } catch (error) {
+        console.warn("[MAIN] Graceful agent shutdown incomplete:", error);
+      }
+    })();
+
+    gracefulShutdownPromise
+      .then(() =>
+        Promise.all([
+          workspaceClient ? workspaceClient.dispose() : Promise.resolve(),
+          mcpServerService.stop(),
+          new Promise<void>((resolve) => {
+            // Dispose orchestrator and routing before ptyClient to prevent event handlers from firing
+            disposeTaskOrchestrator();
+            disposeAgentRouter();
+            disposeAgentAvailabilityStore();
+            disposeWorkflowEngine();
+
+            if (ptyClient) {
+              ptyClient.dispose();
+              ptyClient = null;
+            }
+            disposePtyClient();
+            disposeWorkspaceClient();
+            resolve();
+          }),
+        ])
+      )
       .then(() => {
         if (cleanupIpcHandlers) {
           cleanupIpcHandlers();

@@ -496,6 +496,59 @@ export class PtyManager extends EventEmitter {
   }
 
   /**
+   * Gracefully kill a terminal, capturing its session ID if it's an agent terminal.
+   * Falls back to immediate kill for non-agent terminals.
+   */
+  async gracefulKill(id: string): Promise<string | null> {
+    this.registry.clearTrashTimeout(id);
+
+    const terminal = this.registry.get(id);
+    if (!terminal) return null;
+
+    const sessionId = await terminal.gracefulShutdown();
+
+    // gracefulShutdown() calls kill() internally when it has a shutdown config.
+    // For non-agent terminals (or agents without shutdown config), it returns null
+    // without killing. Fall back to immediate kill in that case.
+    if (!terminal.getInfo().wasKilled && !terminal.getInfo().isExited) {
+      this.kill(id, "graceful-kill-fallback");
+    }
+
+    return sessionId;
+  }
+
+  /**
+   * Gracefully kill all terminals for a project, capturing session IDs.
+   */
+  async gracefulKillByProject(
+    projectId: string
+  ): Promise<Array<{ id: string; agentSessionId: string | null }>> {
+    const terminalIds = this.registry.getForProject(projectId);
+    if (terminalIds.length === 0) return [];
+
+    logInfo(`Gracefully killing ${terminalIds.length} terminal(s) for project ${projectId}`);
+
+    const results = await Promise.all(
+      terminalIds.map(async (terminalId) => {
+        try {
+          const sessionId = await this.gracefulKill(terminalId);
+          return { id: terminalId, agentSessionId: sessionId };
+        } catch (error) {
+          logError(`Failed to graceful-kill terminal ${terminalId}`, error);
+          try {
+            this.kill(terminalId, "graceful-kill-fallback");
+          } catch {
+            // already dead
+          }
+          return { id: terminalId, agentSessionId: null };
+        }
+      })
+    );
+
+    return results;
+  }
+
+  /**
    * Kill all terminals for a project.
    */
   killByProject(projectId: string): number {

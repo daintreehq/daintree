@@ -70,6 +70,8 @@ export interface AddTerminalOptions {
   env?: Record<string, string>;
   /** Behavior when terminal exits: "keep" preserves for review, "trash" sends to trash, "remove" deletes completely */
   exitBehavior?: PanelExitBehavior;
+  /** Captured agent session ID from graceful shutdown (used for session resume) */
+  agentSessionId?: string;
   // Note: Tab membership is now managed via createTabGroup/addPanelToGroup, not on terminals
 }
 

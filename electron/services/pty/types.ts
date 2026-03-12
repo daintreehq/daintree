@@ -50,6 +50,8 @@ export interface TerminalPublicState {
   activityTier?: "active" | "background";
   /** Whether this terminal has an active PTY process (false for orphaned terminals that exited) */
   hasPty?: boolean;
+  /** Captured agent session ID from graceful shutdown */
+  agentSessionId?: string;
 }
 
 /**
@@ -143,6 +145,10 @@ export const AGENT_SCROLLBACK = 10000;
 export const RAW_OUTPUT_BUFFER_MAX_SIZE = 100 * 1024;
 
 export const TRASH_TTL_MS = 120 * 1000;
+
+// Graceful shutdown configuration
+export const GRACEFUL_SHUTDOWN_TIMEOUT_MS = 2500;
+export const GRACEFUL_SHUTDOWN_BUFFER_SIZE = 8 * 1024;
 
 // IPC Flow Control Configuration
 export const IPC_MAX_QUEUE_BYTES = 8 * 1024 * 1024; // 8MB max per terminal

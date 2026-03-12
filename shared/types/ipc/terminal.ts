@@ -86,6 +86,8 @@ export interface TerminalState {
   devPreviewConsoleOpen?: boolean;
   /** Behavior when terminal exits */
   exitBehavior?: import("../domain.js").PanelExitBehavior;
+  /** Captured agent session ID from graceful shutdown */
+  agentSessionId?: string;
 }
 
 /** Terminal data payload for IPC */

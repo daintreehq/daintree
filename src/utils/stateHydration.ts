@@ -210,6 +210,7 @@ export interface HydrationOptions {
     devServerTerminalId?: string | null;
     devPreviewConsoleOpen?: boolean;
     exitBehavior?: import("@shared/types/domain").PanelExitBehavior;
+    agentSessionId?: string;
   }) => Promise<string>;
   setActiveWorktree: (id: string | null) => void;
   loadRecipes: (projectId: string) => Promise<void>;
@@ -445,6 +446,7 @@ export async function hydrateAppState(
                   browserZoom: isDevPreview ? saved.browserZoom : undefined,
                   devPreviewConsoleOpen: isDevPreview ? saved.devPreviewConsoleOpen : undefined,
                   exitBehavior: saved.exitBehavior,
+                  agentSessionId: saved.agentSessionId,
                 });
 
                 // Initialize frontend tier state from backend to ensure proper wake behavior
@@ -631,6 +633,7 @@ export async function hydrateAppState(
                       browserZoom: isDevPreview ? saved.browserZoom : undefined,
                       devPreviewConsoleOpen: isDevPreview ? saved.devPreviewConsoleOpen : undefined,
                       exitBehavior: saved.exitBehavior,
+                      agentSessionId: saved.agentSessionId,
                     });
 
                     // Initialize frontend tier state from backend

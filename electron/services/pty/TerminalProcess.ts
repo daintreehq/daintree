@@ -23,6 +23,8 @@ import {
   DEFAULT_SCROLLBACK,
   AGENT_SCROLLBACK,
   WRITE_INTERVAL_MS,
+  GRACEFUL_SHUTDOWN_TIMEOUT_MS,
+  GRACEFUL_SHUTDOWN_BUFFER_SIZE,
 } from "./types.js";
 import { getTerminalSerializerService } from "./TerminalSerializerService.js";
 import { events } from "../events.js";
@@ -65,6 +67,7 @@ import {
   createProcessStateValidator,
 } from "./terminalActivityPatterns.js";
 import { TerminalForensicsBuffer } from "./TerminalForensicsBuffer.js";
+import { stripAnsiCodes } from "../../../shared/utils/artifactParser.js";
 import {
   getDefaultShell,
   getDefaultShellArgs,
@@ -781,6 +784,76 @@ export class TerminalProcess {
     } catch (error) {
       console.error(`Failed to resize terminal ${this.id}:`, error);
     }
+  }
+
+  async gracefulShutdown(): Promise<string | null> {
+    const terminal = this.terminalInfo;
+
+    if (terminal.isExited || terminal.wasKilled) {
+      return null;
+    }
+
+    const agentConfig = terminal.agentId ? getEffectiveAgentConfig(terminal.agentId) : undefined;
+
+    if (!agentConfig?.shutdown) {
+      return null;
+    }
+
+    const { quitCommand, sessionIdPattern } = agentConfig.shutdown;
+    const pattern = new RegExp(sessionIdPattern);
+
+    let shutdownBuffer = "";
+    let resolved = false;
+
+    return new Promise<string | null>((resolve) => {
+      const finish = (sessionId: string | null) => {
+        if (resolved) return;
+        resolved = true;
+        clearTimeout(timer);
+
+        if (sessionId) {
+          terminal.agentSessionId = sessionId;
+        }
+
+        this.kill("graceful-shutdown");
+        resolve(sessionId);
+      };
+
+      const timer = setTimeout(() => finish(null), GRACEFUL_SHUTDOWN_TIMEOUT_MS);
+
+      const origOnData = terminal.ptyProcess.onData((data: string) => {
+        if (resolved) return;
+
+        shutdownBuffer += data;
+        if (shutdownBuffer.length > GRACEFUL_SHUTDOWN_BUFFER_SIZE) {
+          shutdownBuffer = shutdownBuffer.slice(-GRACEFUL_SHUTDOWN_BUFFER_SIZE);
+        }
+
+        const stripped = stripAnsiCodes(shutdownBuffer);
+        const match = pattern.exec(stripped);
+        if (match?.[1]) {
+          origOnData.dispose();
+          finish(match[1]);
+        }
+      });
+
+      const origOnExit = terminal.ptyProcess.onExit(() => {
+        origOnExit.dispose();
+        origOnData.dispose();
+
+        const stripped = stripAnsiCodes(shutdownBuffer);
+        const match = pattern.exec(stripped);
+        finish(match?.[1] ?? null);
+      });
+
+      try {
+        terminal.ptyProcess.write(quitCommand + "\r");
+      } catch {
+        origOnData.dispose();
+        origOnExit.dispose();
+        finish(null);
+      }
+    });
   }
 
   kill(reason?: string): void {
