@@ -47,7 +47,7 @@ describe("registerDemoHandlers", () => {
 
   it("registers handlers for all demo channels", () => {
     const cleanup = registerDemoHandlers(makeDeps(true));
-    const channels = ipcMainMock.handle.mock.calls.map(([ch]: [string]) => ch);
+    const channels = ipcMainMock.handle.mock.calls.map(([ch]: [string, ...unknown[]]) => ch);
     expect(channels).toContain("demo:move-to");
     expect(channels).toContain("demo:click");
     expect(channels).toContain("demo:screenshot");
@@ -78,7 +78,9 @@ describe("registerDemoHandlers", () => {
     registerDemoHandlers(deps);
 
     const [, handler] =
-      ipcMainMock.handle.mock.calls.find(([ch]: [string]) => ch === "demo:screenshot") ?? [];
+      ipcMainMock.handle.mock.calls.find(
+        ([ch]: [string, ...unknown[]]) => ch === "demo:screenshot"
+      ) ?? [];
     const result = await handler();
     expect(result.data).toBeInstanceOf(Uint8Array);
     expect(result.data[0]).toBe(0x89);
@@ -94,10 +96,11 @@ describe("registerDemoHandlers", () => {
     registerDemoHandlers(deps);
 
     const [, handler] =
-      ipcMainMock.handle.mock.calls.find(([ch]: [string]) => ch === "demo:move-to") ?? [];
+      ipcMainMock.handle.mock.calls.find(([ch]: [string, ...unknown[]]) => ch === "demo:move-to") ??
+      [];
 
     // Simulate renderer responding to the command
-    ipcMainMock.on.mockImplementation((channel: string, listener: Function) => {
+    ipcMainMock.on.mockImplementation((channel: string, listener: (...args: unknown[]) => void) => {
       if (channel === "demo:command-done") {
         // Simulate async response after webContents.send
         setTimeout(() => {

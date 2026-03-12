@@ -1,15 +1,16 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from "vitest";
 import { render, cleanup } from "@testing-library/react";
 
-const listeners = new Map<string, Function[]>();
+type Listener = (...args: unknown[]) => void;
+const listeners = new Map<string, Listener[]>();
 
 const ipcRendererMock = {
-  on: vi.fn((channel: string, handler: Function) => {
+  on: vi.fn((channel: string, handler: Listener) => {
     if (!listeners.has(channel)) listeners.set(channel, []);
     listeners.get(channel)!.push(handler);
   }),
-  removeListener: vi.fn((channel: string, handler: Function) => {
+  removeListener: vi.fn((channel: string, handler: Listener) => {
     const arr = listeners.get(channel);
     if (arr) {
       const idx = arr.indexOf(handler);
@@ -25,8 +26,9 @@ const webFrameMock = {
 };
 
 // Mock window.require for Electron modules
-const originalRequire = (window as unknown as { require?: Function }).require;
-(window as unknown as { require: Function }).require = (mod: string) => {
+const originalRequire = (window as unknown as { require?: (...args: unknown[]) => unknown })
+  .require;
+(window as unknown as { require: (...args: unknown[]) => unknown }).require = (mod: string) => {
   if (mod === "electron") return { ipcRenderer: ipcRendererMock, webFrame: webFrameMock };
   throw new Error(`Unexpected require: ${mod}`);
 };
@@ -160,13 +162,8 @@ describe("DemoCursor", () => {
 // Restore window.require
 afterAll(() => {
   if (originalRequire) {
-    (window as unknown as { require: Function }).require = originalRequire;
+    (window as unknown as { require: (...args: unknown[]) => unknown }).require = originalRequire;
   } else {
-    delete (window as unknown as { require?: Function }).require;
+    delete (window as unknown as { require?: (...args: unknown[]) => unknown }).require;
   }
 });
-
-function afterAll(fn: () => void) {
-  // vitest provides this globally
-  (globalThis as unknown as { afterAll: (fn: () => void) => void }).afterAll(fn);
-}
