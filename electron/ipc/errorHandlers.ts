@@ -77,6 +77,66 @@ function getErrorType(error: unknown): ErrorType {
   return "unknown";
 }
 
+function isSpawnSyscall(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const syscall = (error as NodeJS.ErrnoException).syscall;
+  if (syscall?.startsWith("spawn")) return true;
+  if (error instanceof Error && error.message.includes("posix_spawnp")) return true;
+  return false;
+}
+
+function getRecoveryHint(error: unknown): string | undefined {
+  if (error instanceof ProcessError) {
+    return "The terminal process could not start.";
+  }
+
+  if (error instanceof GitError) {
+    const msg = error.message;
+    if (msg.includes("not a git repository")) {
+      return "Run 'git init' or open a folder containing a git repo.";
+    }
+    if (msg.includes("Authentication failed") || msg.includes("authentication")) {
+      return "Check your Git credentials or SSH key configuration.";
+    }
+    return undefined;
+  }
+
+  if (error instanceof ConfigError) {
+    return "The configuration file may be corrupted — check the logs.";
+  }
+
+  if (!error || typeof error !== "object") return undefined;
+
+  const code = (error as NodeJS.ErrnoException).code;
+  const spawn = isSpawnSyscall(error);
+
+  switch (code) {
+    case "EACCES":
+    case "EPERM":
+      return spawn
+        ? "The file exists but is not executable — check permissions."
+        : "Check file permissions or run with elevated privileges.";
+    case "ENOENT":
+      return spawn
+        ? "Install the tool or add it to your PATH."
+        : "Verify the file path is correct and the file exists.";
+    case "ENOTFOUND":
+      return "Check your internet connection and DNS settings.";
+    case "ECONNREFUSED":
+      return "Ensure the target server or service is running.";
+    case "ETIMEDOUT":
+      return "Check your network connection and try again.";
+    case "ECONNRESET":
+      return "The connection was reset — try again in a moment.";
+    case "EBUSY":
+      return "Close other applications using this file and retry.";
+    case "EAGAIN":
+      return "System is temporarily busy — wait a moment and retry.";
+  }
+
+  return undefined;
+}
+
 function generateErrorId(): string {
   return `error-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 }
@@ -106,6 +166,7 @@ function createAppError(
     retryAction: options.retryAction,
     retryArgs: options.retryArgs,
     correlationId,
+    recoveryHint: getRecoveryHint(error),
   };
 }
 

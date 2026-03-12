@@ -1,7 +1,7 @@
 import { useMemo, useCallback, useState, useRef, useEffect } from "react";
 import { cn } from "@/lib/utils";
 import { useErrorStore, type AppError, type RetryAction } from "@/store";
-import { Copy, Check } from "lucide-react";
+import { Copy, Check, Lightbulb } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
 
 const ERROR_TYPE_LABELS: Record<string, string> = {
@@ -114,6 +114,12 @@ function ErrorRow({ error, isExpanded, onToggleExpand, onDismiss, onRetry }: Err
             aria-controls={`error-details-${error.id}`}
           >
             <span className="truncate block">{error.message}</span>
+            {error.recoveryHint && (
+              <span className="flex items-center gap-1 mt-0.5 text-xs text-canopy-text/60">
+                <Lightbulb className="w-3 h-3 shrink-0" />
+                {error.recoveryHint}
+              </span>
+            )}
           </button>
         </td>
         <td className="px-3 py-2 text-xs text-canopy-text/60 whitespace-nowrap">

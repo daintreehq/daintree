@@ -37,4 +37,6 @@ export interface AppError {
   fromPreviousSession?: boolean;
   /** Correlation ID linking this error across main process logs, error store, and notification history */
   correlationId?: string;
+  /** Human-readable recovery suggestion based on error classification */
+  recoveryHint?: string;
 }

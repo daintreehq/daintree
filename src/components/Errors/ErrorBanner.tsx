@@ -1,6 +1,7 @@
 import { useState, useCallback } from "react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
+import { Lightbulb } from "lucide-react";
 import type { AppError, RetryAction } from "@/store/errorStore";
 
 export interface ErrorBannerProps {
@@ -72,6 +73,11 @@ export function ErrorBanner({
       >
         <span className="shrink-0">{typeIcon}</span>
         <span className="text-status-error truncate flex-1">{error.message}</span>
+        {error.recoveryHint && (
+          <span className="text-status-error/70 text-xs shrink-0 truncate max-w-[40%]">
+            {error.recoveryHint}
+          </span>
+        )}
         {canRetry && (
           <Button
             variant="outline"
@@ -111,6 +117,12 @@ export function ErrorBanner({
             {error.source && <span className="text-xs text-status-error/80">• {error.source}</span>}
           </div>
           <p className="text-sm text-status-error truncate">{error.message}</p>
+          {error.recoveryHint && (
+            <p className="flex items-center gap-1 text-xs text-status-error/70 mt-0.5">
+              <Lightbulb className="w-3 h-3 shrink-0" />
+              {error.recoveryHint}
+            </p>
+          )}
           {error.correlationId && (
             <span className="font-mono text-[10px] text-status-error/40">
               Ref: {error.correlationId.split("-")[0]}

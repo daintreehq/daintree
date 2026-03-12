@@ -39,6 +39,7 @@ export function useErrors() {
         retryArgs: error.retryArgs,
         fromPreviousSession: error.fromPreviousSession,
         correlationId: error.correlationId,
+        recoveryHint: error.recoveryHint,
       });
 
       notify({
@@ -65,6 +66,7 @@ export function useErrors() {
             retryArgs: error.retryArgs,
             fromPreviousSession: error.fromPreviousSession,
             correlationId: error.correlationId,
+            recoveryHint: error.recoveryHint,
           });
 
           notify({

@@ -110,6 +110,43 @@ describe("errorStore", () => {
     expect(state.errors[0]?.correlationId).toBe("original-corr-id");
   });
 
+  it("preserves recoveryHint through addError", () => {
+    const id = useErrorStore.getState().addError({
+      type: "filesystem",
+      message: "EACCES: permission denied",
+      source: "fs",
+      isTransient: false,
+      recoveryHint: "Check file permissions or run with elevated privileges.",
+    });
+
+    const error = useErrorStore.getState().errors.find((e) => e.id === id);
+    expect(error?.recoveryHint).toBe("Check file permissions or run with elevated privileges.");
+  });
+
+  it("does not include recoveryHint in dedup comparison", () => {
+    vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
+    useErrorStore.getState().addError({
+      type: "network",
+      message: "Timeout",
+      source: "fetcher",
+      isTransient: true,
+      recoveryHint: "Check your network connection and try again.",
+    });
+
+    vi.setSystemTime(new Date("2026-01-01T00:00:00.200Z"));
+    useErrorStore.getState().addError({
+      type: "network",
+      message: "Timeout",
+      source: "fetcher",
+      isTransient: true,
+      recoveryHint: "Different hint text.",
+    });
+
+    const state = useErrorStore.getState();
+    expect(state.errors).toHaveLength(1);
+    expect(state.errors[0]?.recoveryHint).toBe("Check your network connection and try again.");
+  });
+
   it("clearAll fully clears error panel state", () => {
     useErrorStore.getState().setPanelOpen(true);
     useErrorStore.getState().addError({
