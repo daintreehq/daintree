@@ -57,6 +57,14 @@ import { VoiceRecordingToolbarButton } from "./VoiceRecordingToolbarButton";
 import { useUIStore } from "@/store/uiStore";
 import { useShallow } from "zustand/react/shallow";
 
+const AGENT_TOOLBAR_IDS = new Set<ToolbarButtonId>([
+  "agent-setup",
+  "claude",
+  "gemini",
+  "codex",
+  "opencode",
+]);
+
 interface ToolbarProps {
   onLaunchAgent: (
     type: "claude" | "gemini" | "codex" | "opencode" | "terminal" | "browser"
@@ -937,6 +945,27 @@ export function Toolbar({
       .map((id) => buttonRegistry[id].render());
   };
 
+  const renderLeftButtons = (buttonIds: ToolbarButtonId[]) => {
+    const visible = buttonIds.filter((id) => buttonRegistry[id]?.isAvailable);
+    const elements: React.ReactNode[] = [];
+    for (let i = 0; i < visible.length; i++) {
+      elements.push(buttonRegistry[visible[i]].render());
+      if (
+        i < visible.length - 1 &&
+        AGENT_TOOLBAR_IDS.has(visible[i]) !== AGENT_TOOLBAR_IDS.has(visible[i + 1])
+      ) {
+        elements.push(
+          <div
+            key={`group-divider-${i}`}
+            className="w-px h-5 bg-white/[0.08] mx-1"
+            aria-hidden="true"
+          />
+        );
+      }
+    }
+    return elements;
+  };
+
   const isDropdownOpen = projectSwitcher.isOpen && projectSwitcher.mode === "dropdown";
   const handleDropdownClose = useCallback(() => {
     if (projectSwitcher.mode !== "dropdown") return;
@@ -974,7 +1003,7 @@ export function Toolbar({
           <div className="w-px h-5 bg-white/[0.08] mx-1" />
 
           <div className="flex items-center gap-0.5">
-            {renderButtons(toolbarLayout.leftButtons)}
+            {renderLeftButtons(toolbarLayout.leftButtons)}
           </div>
         </div>
 
