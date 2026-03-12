@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const ipcMainMock = vi.hoisted(() => ({
   handle: vi.fn(),
@@ -10,7 +10,15 @@ vi.mock("electron", () => ({
   BrowserWindow: class {},
 }));
 
-import { sendToRenderer, typedHandle, typedSend } from "../utils.js";
+import {
+  sendToRenderer,
+  typedHandle,
+  typedSend,
+  checkRateLimit,
+  waitForRateLimitSlot,
+  drainRateLimitQueues,
+  _resetRateLimitQueuesForTest,
+} from "../utils.js";
 
 describe("ipc utils", () => {
   beforeEach(() => {
@@ -105,5 +113,146 @@ describe("ipc utils", () => {
 
     cleanup();
     expect(ipcMainMock.removeHandler).toHaveBeenCalledWith("project:get:all");
+  });
+});
+
+describe("checkRateLimit", () => {
+  beforeEach(() => {
+    _resetRateLimitQueuesForTest();
+  });
+
+  it("throws when rate limit is exceeded", () => {
+    for (let i = 0; i < 5; i++) {
+      checkRateLimit("test-channel", 5, 30_000);
+    }
+    expect(() => checkRateLimit("test-channel", 5, 30_000)).toThrow("Rate limit exceeded");
+  });
+});
+
+describe("waitForRateLimitSlot", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    _resetRateLimitQueuesForTest();
+  });
+
+  afterEach(() => {
+    _resetRateLimitQueuesForTest();
+    vi.useRealTimers();
+  });
+
+  it("resolves immediately when under the limit", async () => {
+    const results: number[] = [];
+    for (let i = 0; i < 10; i++) {
+      await waitForRateLimitSlot("test", 10, 30_000);
+      results.push(i);
+    }
+    expect(results).toHaveLength(10);
+  });
+
+  it("queues the 11th request instead of rejecting", async () => {
+    for (let i = 0; i < 10; i++) {
+      await waitForRateLimitSlot("test", 10, 30_000);
+    }
+
+    let resolved = false;
+    const promise = waitForRateLimitSlot("test", 10, 30_000).then(() => {
+      resolved = true;
+    });
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(resolved).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(30_000);
+    await promise;
+    expect(resolved).toBe(true);
+  });
+
+  it("drains queued requests FIFO as slots free up", async () => {
+    for (let i = 0; i < 10; i++) {
+      await waitForRateLimitSlot("test", 10, 30_000);
+    }
+
+    const order: number[] = [];
+    const promises = [];
+    for (let i = 0; i < 3; i++) {
+      const idx = i;
+      promises.push(
+        waitForRateLimitSlot("test", 10, 30_000).then(() => {
+          order.push(idx);
+        })
+      );
+    }
+
+    await vi.advanceTimersByTimeAsync(30_000);
+    await Promise.all(promises);
+    expect(order).toEqual([0, 1, 2]);
+  });
+
+  it("new arrivals do not bypass the queue (FIFO fairness)", async () => {
+    for (let i = 0; i < 10; i++) {
+      await waitForRateLimitSlot("test", 10, 30_000);
+    }
+
+    const order: string[] = [];
+    const first = waitForRateLimitSlot("test", 10, 30_000).then(() => {
+      order.push("first");
+    });
+
+    await vi.advanceTimersByTimeAsync(0);
+
+    const second = waitForRateLimitSlot("test", 10, 30_000).then(() => {
+      order.push("second");
+    });
+
+    await vi.advanceTimersByTimeAsync(30_000);
+    await Promise.all([first, second]);
+    expect(order).toEqual(["first", "second"]);
+  });
+
+  it("rejects when queue depth exceeds 50", async () => {
+    for (let i = 0; i < 10; i++) {
+      await waitForRateLimitSlot("test", 10, 30_000);
+    }
+
+    const queued: Promise<void>[] = [];
+    for (let i = 0; i < 50; i++) {
+      queued.push(waitForRateLimitSlot("test", 10, 30_000));
+    }
+
+    await expect(waitForRateLimitSlot("test", 10, 30_000)).rejects.toThrow("Spawn queue full");
+
+    await vi.advanceTimersByTimeAsync(300_000);
+    await Promise.all(queued);
+  });
+
+  it("drainRateLimitQueues rejects all pending waiters", async () => {
+    for (let i = 0; i < 10; i++) {
+      await waitForRateLimitSlot("test", 10, 30_000);
+    }
+
+    const promise = waitForRateLimitSlot("test", 10, 30_000);
+    drainRateLimitQueues();
+
+    await expect(promise).rejects.toThrow("App is shutting down");
+  });
+
+  it("works correctly across multiple keys", async () => {
+    for (let i = 0; i < 5; i++) {
+      await waitForRateLimitSlot("keyA", 5, 30_000);
+    }
+
+    await waitForRateLimitSlot("keyB", 5, 30_000);
+
+    let resolvedA = false;
+    waitForRateLimitSlot("keyA", 5, 30_000).then(() => {
+      resolvedA = true;
+    });
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(resolvedA).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(30_000);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(resolvedA).toBe(true);
   });
 });
