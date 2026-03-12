@@ -250,7 +250,6 @@ export interface ActionContext {
   focusedTerminalKind?: string;
   focusedTerminalType?: string;
   focusedTerminalTitle?: string;
-  isTerminalPaletteOpen?: boolean;
   isSettingsOpen?: boolean;
 }
 

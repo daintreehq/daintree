@@ -15,7 +15,6 @@ import {
   isElectronAvailable,
   useAgentLauncher,
   useWorktrees,
-  useTerminalPalette,
   useNewTerminalPalette,
   usePanelPalette,
   useProjectSwitcherPalette,
@@ -63,7 +62,7 @@ import { CrossWorktreeDiff } from "./components/Worktree/CrossWorktreeDiff";
 import { NewWorktreeDialog } from "./components/Worktree/NewWorktreeDialog";
 import { TerminalInfoDialogHost } from "./components/Terminal/TerminalInfoDialogHost";
 import { FileViewerModalHost } from "./components/FileViewer/FileViewerModalHost";
-import { TerminalPalette, NewTerminalPalette } from "./components/TerminalPalette";
+import { NewTerminalPalette } from "./components/TerminalPalette";
 import { PanelPalette } from "./components/PanelPalette/PanelPalette";
 import { MORE_AGENTS_PANEL_ID } from "./hooks/usePanelPalette";
 import { GitInitDialog, ProjectOnboardingWizard, WelcomeScreen } from "./components/Project";
@@ -680,7 +679,6 @@ function App() {
   // Grid navigation hook for directional terminal switching
   const { findNearest, findByIndex, findDockByIndex, getCurrentLocation } = useGridNavigation();
 
-  const terminalPalette = useTerminalPalette();
   const { worktrees, worktreeMap } = useWorktrees();
   const newTerminalPalette = useNewTerminalPalette({ launchAgent, worktreeMap });
   const panelPalette = usePanelPalette();
@@ -946,7 +944,6 @@ function App() {
     onToggleFocusMode: handleToggleSidebar,
     onOpenActionPalette: actionPalette.open,
     onOpenQuickSwitcher: quickSwitcher.open,
-    onOpenAgentPalette: terminalPalette.open,
     onOpenWorktreePalette: worktreePalette.open,
     onToggleWorktreeOverview: toggleWorktreeOverview,
     onOpenWorktreeOverview: openWorktreeOverview,
@@ -969,7 +966,6 @@ function App() {
     onOpenSettings: handleSettings,
     onOpenSettingsTab: handleOpenSettingsTab,
     onToggleSidebar: handleToggleSidebar,
-    onOpenAgentPalette: terminalPalette.open,
     onLaunchAgent: handleLaunchAgent,
     defaultCwd: defaultTerminalCwd,
     activeWorktreeId: activeWorktree?.id,
@@ -1053,17 +1049,6 @@ function App() {
         </Profiler>
       </DndProvider>
 
-      <TerminalPalette
-        isOpen={terminalPalette.isOpen}
-        query={terminalPalette.query}
-        results={terminalPalette.results}
-        selectedIndex={terminalPalette.selectedIndex}
-        onQueryChange={terminalPalette.setQuery}
-        onSelectPrevious={terminalPalette.selectPrevious}
-        onSelectNext={terminalPalette.selectNext}
-        onSelect={terminalPalette.selectTerminal}
-        onClose={terminalPalette.close}
-      />
       <QuickSwitcher
         isOpen={quickSwitcher.isOpen}
         query={quickSwitcher.query}

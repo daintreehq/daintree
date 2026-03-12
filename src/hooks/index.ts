@@ -11,8 +11,6 @@ export type { UseContextInjectionReturn, InjectionStatus } from "./useContextInj
 
 export { useErrors } from "./useErrors";
 
-export { useTerminalPalette } from "./useTerminalPalette";
-export type { SearchableTerminal, UseTerminalPaletteReturn } from "./useTerminalPalette";
 export { useQuickSwitcher } from "./useQuickSwitcher";
 export type { QuickSwitcherItem, UseQuickSwitcherReturn } from "./useQuickSwitcher";
 export { useNewTerminalPalette } from "./useNewTerminalPalette";
