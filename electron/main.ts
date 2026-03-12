@@ -509,7 +509,7 @@ if (!gotTheLock) {
           for (const result of captured) {
             const snapshot = state.terminals.find((t) => t.id === result.id);
             if (snapshot) {
-              snapshot.agentSessionId = result.agentSessionId;
+              snapshot.agentSessionId = result.agentSessionId ?? undefined;
             }
           }
           await projectStore.saveProjectState(projectIds[i], state);
