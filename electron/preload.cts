@@ -1202,6 +1202,7 @@ const api: ElectronAPI = {
         scope: "worktree" | "project";
         worktreeId?: string;
         createdAt: number;
+        tags?: string[];
       },
       expectedLastModified?: number
     ) => _typedInvoke(CHANNELS.NOTES_WRITE, notePath, content, metadata, expectedLastModified),

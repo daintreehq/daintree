@@ -499,6 +499,7 @@ export interface ElectronAPI {
         scope: "worktree" | "project";
         worktreeId?: string;
         createdAt: number;
+        tags?: string[];
       };
       content: string;
       path: string;
@@ -511,6 +512,7 @@ export interface ElectronAPI {
         scope: "worktree" | "project";
         worktreeId?: string;
         createdAt: number;
+        tags?: string[];
       };
       content: string;
       path: string;
@@ -525,6 +527,7 @@ export interface ElectronAPI {
         scope: "worktree" | "project";
         worktreeId?: string;
         createdAt: number;
+        tags?: string[];
       },
       expectedLastModified?: number
     ): Promise<{
@@ -543,6 +546,7 @@ export interface ElectronAPI {
         createdAt: number;
         modifiedAt: number;
         preview: string;
+        tags: string[];
       }>
     >;
     delete(notePath: string): Promise<void>;
@@ -556,6 +560,7 @@ export interface ElectronAPI {
         createdAt: number;
         modifiedAt: number;
         preview: string;
+        tags: string[];
       }>;
       query: string;
     }>;

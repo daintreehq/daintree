@@ -1040,6 +1040,7 @@ export interface IpcInvokeMap {
         scope: "worktree" | "project";
         worktreeId?: string;
         createdAt: number;
+        tags?: string[];
       };
       content: string;
       path: string;
@@ -1055,6 +1056,7 @@ export interface IpcInvokeMap {
         scope: "worktree" | "project";
         worktreeId?: string;
         createdAt: number;
+        tags?: string[];
       };
       content: string;
       path: string;
@@ -1071,6 +1073,7 @@ export interface IpcInvokeMap {
         scope: "worktree" | "project";
         worktreeId?: string;
         createdAt: number;
+        tags?: string[];
       },
       expectedLastModified?: number,
     ];
@@ -1092,6 +1095,7 @@ export interface IpcInvokeMap {
       createdAt: number;
       modifiedAt: number;
       preview: string;
+      tags: string[];
     }[];
   };
   "notes:delete": {
@@ -1110,6 +1114,7 @@ export interface IpcInvokeMap {
         createdAt: number;
         modifiedAt: number;
         preview: string;
+        tags: string[];
       }[];
       query: string;
     };
