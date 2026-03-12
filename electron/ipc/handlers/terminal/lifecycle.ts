@@ -6,7 +6,7 @@ import { ipcMain } from "electron";
 import crypto from "crypto";
 import os from "os";
 import { CHANNELS } from "../../channels.js";
-import { checkRateLimit } from "../../utils.js";
+import { waitForRateLimitSlot } from "../../utils.js";
 import { projectStore } from "../../../services/ProjectStore.js";
 import type { HandlerDependencies } from "../../types.js";
 import type { TerminalSpawnOptions } from "../../../types/index.js";
@@ -24,7 +24,7 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
     _event: Electron.IpcMainInvokeEvent,
     options: TerminalSpawnOptions
   ): Promise<string> => {
-    checkRateLimit(CHANNELS.TERMINAL_SPAWN, 10, 30_000);
+    await waitForRateLimitSlot("terminalSpawn", 10, 30_000);
     const parseResult = TerminalSpawnOptionsSchema.safeParse(options);
     if (!parseResult.success) {
       console.error("[IPC] Invalid terminal spawn options:", parseResult.error.format());
