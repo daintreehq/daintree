@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useCallback } from "react";
 import type { ReactNode } from "react";
 import { cn } from "@/lib/utils";
 
@@ -29,12 +29,50 @@ export function SettingsSubtabBar({ subtabs, activeId, onChange }: SettingsSubta
     }
   }, [activeId]);
 
+  const handleKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLDivElement>) => {
+      const container = scrollContainerRef.current;
+      if (!container) return;
+
+      const tabs = Array.from(container.querySelectorAll<HTMLElement>('[role="tab"]'));
+      const focusedIndex = tabs.indexOf(document.activeElement as HTMLElement);
+      if (focusedIndex === -1) return;
+
+      let nextIndex: number | null = null;
+
+      switch (e.key) {
+        case "ArrowRight":
+          nextIndex = (focusedIndex + 1) % tabs.length;
+          break;
+        case "ArrowLeft":
+          nextIndex = (focusedIndex - 1 + tabs.length) % tabs.length;
+          break;
+        case "Home":
+          nextIndex = 0;
+          break;
+        case "End":
+          nextIndex = tabs.length - 1;
+          break;
+        default:
+          return;
+      }
+
+      e.preventDefault();
+      tabs[nextIndex].focus();
+      const tabId = tabs[nextIndex].dataset.tab;
+      if (tabId) onChange(tabId);
+    },
+    [onChange]
+  );
+
   if (subtabs.length === 0) return null;
 
   return (
-    <nav
+    <div
       ref={scrollContainerRef}
+      role="tablist"
       aria-label="Subtab navigation"
+      onKeyDown={handleKeyDown}
       className="flex gap-1.5 p-1.5 bg-canopy-bg rounded-[var(--radius-lg)] border border-canopy-border overflow-x-auto scrollbar-thin mb-6"
     >
       {subtabs.map((subtab) => {
@@ -43,7 +81,10 @@ export function SettingsSubtabBar({ subtabs, activeId, onChange }: SettingsSubta
           <button
             key={subtab.id}
             ref={isActive ? activePillRef : null}
-            aria-current={isActive ? "true" : undefined}
+            role="tab"
+            aria-selected={isActive}
+            tabIndex={isActive ? 0 : -1}
+            data-tab={subtab.id}
             onClick={() => onChange(subtab.id)}
             className={cn(
               "flex items-center justify-center gap-2 px-3 py-2 rounded-[var(--radius-md)] text-sm font-medium transition-all flex-shrink-0",
@@ -61,6 +102,6 @@ export function SettingsSubtabBar({ subtabs, activeId, onChange }: SettingsSubta
           </button>
         );
       })}
-    </nav>
+    </div>
   );
 }

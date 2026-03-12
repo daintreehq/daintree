@@ -1,3 +1,4 @@
+import { useId } from "react";
 import type { ComponentType, ReactNode } from "react";
 import { cn } from "@/lib/utils";
 
@@ -18,10 +19,15 @@ export function SettingsSection({
   children,
   id,
 }: SettingsSectionProps) {
+  const headingId = useId();
+
   return (
-    <div className="space-y-6" id={id}>
+    <div className="space-y-6" id={id} role="group" aria-labelledby={headingId}>
       <div>
-        <h4 className="text-sm font-medium text-canopy-text mb-1.5 flex items-center gap-2">
+        <h4
+          id={headingId}
+          className="text-sm font-medium text-canopy-text mb-1.5 flex items-center gap-2"
+        >
           <Icon className={cn("w-4 h-4", iconColor)} aria-hidden="true" />
           {title}
         </h4>
