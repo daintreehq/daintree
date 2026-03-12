@@ -48,20 +48,34 @@ test.describe.serial("Core: Action Palette, Command Picker & Quick Switcher", ()
       const searchInput = window.locator(SEL.actionPalette.searchInput);
       await expect(searchInput).toBeFocused({ timeout: T_SHORT });
 
-      await searchInput.fill("toggle");
-      await window.waitForTimeout(T_SETTLE);
-
+      // Capture unfiltered count
       const options = window.locator(SEL.actionPalette.options);
       await expect(options.first()).toBeVisible({ timeout: T_MEDIUM });
+      const unfilteredCount = await options.count();
 
-      const count = await options.count();
-      expect(count).toBeGreaterThanOrEqual(1);
+      // Type a specific query that should narrow results
+      await searchInput.fill("toggle sidebar");
+      await window.waitForTimeout(T_SETTLE);
+
+      const filteredCount = await options.count();
+      expect(filteredCount).toBeGreaterThanOrEqual(1);
+      expect(filteredCount).toBeLessThan(unfilteredCount);
     });
 
     test("arrow key navigation changes selection", async () => {
       const { window } = ctx;
 
       const searchInput = window.locator(SEL.actionPalette.searchInput);
+
+      // Clear query to ensure multiple results for navigation
+      await searchInput.fill("");
+      await window.waitForTimeout(T_SETTLE);
+
+      const options = window.locator(SEL.actionPalette.options);
+      await expect(options.first()).toBeVisible({ timeout: T_MEDIUM });
+      const count = await options.count();
+      expect(count).toBeGreaterThanOrEqual(2);
+
       const initialDescendant = await searchInput.getAttribute("aria-activedescendant");
 
       await searchInput.press("ArrowDown");
@@ -70,6 +84,7 @@ test.describe.serial("Core: Action Palette, Command Picker & Quick Switcher", ()
       const newDescendant = await searchInput.getAttribute("aria-activedescendant");
       expect(newDescendant).toBeTruthy();
       expect(newDescendant).not.toBe(initialDescendant);
+      expect(newDescendant).toMatch(/^action-option-/);
     });
 
     test("closes via Escape", async () => {
@@ -132,8 +147,14 @@ test.describe.serial("Core: Action Palette, Command Picker & Quick Switcher", ()
       const { window } = ctx;
 
       const searchInput = window.locator(SEL.quickSwitcher.searchInput);
+      const options = window.locator(SEL.quickSwitcher.options);
+
+      // Type a nonsense query — results should disappear
       await searchInput.fill("nonexistent-query-xyz");
       await window.waitForTimeout(T_SETTLE);
+
+      const filteredCount = await options.count();
+      expect(filteredCount).toBe(0);
 
       await window.keyboard.press("Escape");
 
@@ -145,11 +166,12 @@ test.describe.serial("Core: Action Palette, Command Picker & Quick Switcher", ()
   // ── Command Picker (2 tests) ──────────────────────────────
 
   test.describe.serial("Command Picker", () => {
+    let commandPickerAvailable = false;
+
     test.afterAll(async () => {
       try {
         await ctx.window.keyboard.press("Escape");
         await ctx.window.waitForTimeout(T_SETTLE);
-        // Close any panels opened during tests
         let count = await getGridPanelCount(ctx.window);
         while (count > 0) {
           const panel = ctx.window.locator(SEL.panel.gridPanel).first();
@@ -167,6 +189,7 @@ test.describe.serial("Core: Action Palette, Command Picker & Quick Switcher", ()
     test("opens via button click on agent panel", async () => {
       const { window } = ctx;
 
+      // Agent panel requires CLI availability — skip if not present
       const startBtn = window.locator(SEL.agent.startButton);
       if (!(await startBtn.isVisible().catch(() => false))) {
         test.skip();
@@ -176,6 +199,7 @@ test.describe.serial("Core: Action Palette, Command Picker & Quick Switcher", ()
       await startBtn.click();
       await window.waitForTimeout(T_SETTLE);
 
+      // HybridInputBar's command picker button only renders on agent panels
       const openPickerBtn = window.locator(SEL.commandPicker.openButton);
       if (!(await openPickerBtn.isVisible({ timeout: T_LONG }).catch(() => false))) {
         test.skip();
@@ -186,29 +210,36 @@ test.describe.serial("Core: Action Palette, Command Picker & Quick Switcher", ()
 
       const dialog = window.locator(SEL.commandPicker.dialog);
       await expect(dialog).toBeVisible({ timeout: T_MEDIUM });
+      commandPickerAvailable = true;
     });
 
     test("search filters commands and Escape closes", async () => {
-      const { window } = ctx;
-
-      const dialog = window.locator(SEL.commandPicker.dialog);
-      if (!(await dialog.isVisible().catch(() => false))) {
+      if (!commandPickerAvailable) {
         test.skip();
         return;
       }
 
+      const { window } = ctx;
+
       const list = window.locator(SEL.commandPicker.list);
       await expect(list).toBeVisible({ timeout: T_MEDIUM });
+
+      const options = window.locator(SEL.commandPicker.options);
+      const unfilteredCount = await options.count();
 
       const searchInput = window.locator(SEL.commandPicker.searchInput);
       await searchInput.fill("git");
       await window.waitForTimeout(T_SETTLE);
 
-      const options = window.locator(SEL.commandPicker.options);
-      const count = await options.count();
-      expect(count).toBeGreaterThanOrEqual(1);
+      const filteredCount = await options.count();
+      expect(filteredCount).toBeGreaterThanOrEqual(1);
+      if (unfilteredCount > 1) {
+        expect(filteredCount).toBeLessThanOrEqual(unfilteredCount);
+      }
 
       await window.keyboard.press("Escape");
+
+      const dialog = window.locator(SEL.commandPicker.dialog);
       await expect(dialog).not.toBeVisible({ timeout: T_SHORT });
     });
   });
