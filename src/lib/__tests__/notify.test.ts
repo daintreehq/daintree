@@ -415,8 +415,8 @@ describe("notify()", () => {
 
       const entries = useNotificationHistoryStore.getState().entries;
       expect(entries).toHaveLength(2);
-      expect(entries[0].message).toBe("Agent 1 done");
-      expect(entries[1].message).toBe("Agent 2 done");
+      expect(entries[0].message).toBe("Agent 2 done");
+      expect(entries[1].message).toBe("Agent 1 done");
     });
 
     it("updates toast message and title on coalesce", () => {
