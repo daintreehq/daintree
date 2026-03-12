@@ -14,7 +14,12 @@ function buildAxeScanner(page: import("@playwright/test").Page) {
   return new AxeBuilder({ page })
     .setLegacyMode(true) // Required for Electron — default mode uses Target.createTarget which Electron doesn't support
     .withTags(["wcag2a", "wcag2aa"])
-    .disableRules(["aria-command-name", "color-contrast", "aria-required-children", "nested-interactive"]); // Third-party Radix UI div[role="button"], theme contrast ratios, terminal grid role children, and nested interactive controls are pre-existing issues
+    .disableRules([
+      "aria-command-name",
+      "color-contrast",
+      "aria-required-children",
+      "nested-interactive",
+    ]); // Third-party Radix UI div[role="button"], theme contrast ratios, terminal grid role children, and nested interactive controls are pre-existing issues
 }
 
 function formatViolations(violations: import("axe-core").Result[]): string {
@@ -136,22 +141,20 @@ test.describe.serial("Core: Accessibility", () => {
     test("toolbar supports arrow-key navigation", async () => {
       const { window } = ctx;
 
-      // The toolbar uses role="toolbar" with roving tabindex (WAI-ARIA toolbar pattern).
-      // Arrow keys navigate between buttons within the toolbar.
+      // The toolbar uses role="toolbar" with roving tabindex and [data-toolbar-item] markers.
       const toolbar = window.locator('[role="toolbar"]');
       await expect(toolbar).toBeVisible({ timeout: T_SHORT });
 
-      // Click the first focusable toolbar button to enter the toolbar
-      const firstButton = toolbar.locator("button:not([tabindex='-1'])").first();
-      await firstButton.click();
-      await expect(firstButton).toBeFocused({ timeout: T_SHORT });
+      // Focus the first toolbar item (uses data-toolbar-item attribute for roving tabindex).
+      const firstItem = toolbar.locator("[data-toolbar-item]:not(:disabled)").first();
+      await firstItem.focus();
+      await expect(firstItem).toBeFocused({ timeout: T_SHORT });
 
-      // ArrowRight should move focus to the next focusable element
+      // ArrowRight should move focus to the next toolbar item
       await window.keyboard.press("ArrowRight");
 
-      // Verify focus actually moved away from the first button
-      const isStillFirst = await firstButton.evaluate((el) => el === document.activeElement);
-      expect(isStillFirst).toBe(false);
+      const secondItem = toolbar.locator("[data-toolbar-item]:not(:disabled)").nth(1);
+      await expect(secondItem).toBeFocused({ timeout: T_SHORT });
     });
   });
 });
