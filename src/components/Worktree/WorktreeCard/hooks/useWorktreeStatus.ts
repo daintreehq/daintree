@@ -108,8 +108,24 @@ export function useWorktreeStatus({
       return { text: firstLineLastCommitMessage, tone: "muted" };
     }
 
+    if (worktree.issueTitle?.trim()) {
+      return { text: worktree.issueTitle.trim(), tone: "muted" };
+    }
+
+    if (worktree.prTitle?.trim() && worktree.prState !== "closed") {
+      return { text: worktree.prTitle.trim(), tone: "muted" };
+    }
+
     return { text: "No recent activity", tone: "muted" };
-  }, [worktreeErrorCount, hasChanges, worktree.worktreeChanges, firstLineLastCommitMessage]);
+  }, [
+    worktreeErrorCount,
+    hasChanges,
+    worktree.worktreeChanges,
+    firstLineLastCommitMessage,
+    worktree.issueTitle,
+    worktree.prTitle,
+    worktree.prState,
+  ]);
 
   const spineState: SpineState = useMemo(() => {
     if (worktreeErrorCount > 0 || worktree.mood === "error") return "error";
