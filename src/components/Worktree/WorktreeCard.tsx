@@ -344,12 +344,11 @@ export function WorktreeCard({
   const isWaitingCard = terminalCounts.byState.waiting > 0;
 
   const chipState = useMemo((): "complete" | "waiting" | null => {
-    if (isActive) return null;
     // Priority order: complete > waiting (add new states between as needed)
     if (isComplete) return "complete";
     if (isWaitingCard) return "waiting";
     return null;
-  }, [isActive, isComplete, isWaitingCard]);
+  }, [isComplete, isWaitingCard]);
 
   const { setNodeRef, isOver } = useDroppable({
     id: `worktree-drop-${worktree.id}`,
