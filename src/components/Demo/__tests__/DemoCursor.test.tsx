@@ -28,9 +28,9 @@ const webFrameMock = {
 // Mock window.require for Electron modules
 const originalRequire = (window as unknown as { require?: (...args: unknown[]) => unknown })
   .require;
-(window as unknown as { require: (...args: unknown[]) => unknown }).require = (mod: string) => {
+(window as unknown as { require: (...args: unknown[]) => unknown }).require = (mod: unknown) => {
   if (mod === "electron") return { ipcRenderer: ipcRendererMock, webFrame: webFrameMock };
-  throw new Error(`Unexpected require: ${mod}`);
+  throw new Error(`Unexpected require: ${String(mod)}`);
 };
 
 // Stub Element.prototype.animate (jsdom doesn't support WAAPI)
