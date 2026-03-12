@@ -350,6 +350,11 @@ class ErrorService {
   async handleRetry(payload: RetryPayload): Promise<void> {
     const { errorId, action, args } = payload;
     const maxAttempts = MAX_RETRY_ATTEMPTS[action];
+    const existing = this.activeRetries.get(errorId);
+    if (existing) {
+      existing.abort();
+    }
+
     const controller = new AbortController();
     const { signal } = controller;
 
