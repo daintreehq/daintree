@@ -85,6 +85,7 @@ export interface StoreSchema {
     }>;
     panelGridConfig?: PanelGridConfig;
     mruList?: string[];
+    actionMruList?: string[];
   };
   userConfig: {
     githubToken?: string;

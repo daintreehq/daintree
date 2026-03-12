@@ -78,6 +78,8 @@ export interface AppState {
   panelGridConfig?: import("../config.js").PanelGridConfig;
   /** Most-recently-used ordered list of quick-switcher item IDs ("terminal:<id>" | "worktree:<id>") */
   mruList?: string[];
+  /** Most-recently-used ordered list of action IDs for the action palette */
+  actionMruList?: string[];
 }
 
 /** Result from app hydration */
