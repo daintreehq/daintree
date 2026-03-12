@@ -91,6 +91,57 @@ describe("useDockBlockedState", () => {
     expect(result.current).toBe("failed");
   });
 
+  it("swaps blocked states during pending debounce without extra delay", () => {
+    const { result, rerender } = renderHook(({ state }) => useDockBlockedState(state), {
+      initialProps: { state: "waiting" as AgentState },
+    });
+
+    // Advance partway through debounce
+    act(() => {
+      vi.advanceTimersByTime(400);
+    });
+    expect(result.current).toBe(null);
+
+    // Switch to failed while timer still pending
+    rerender({ state: "failed" as const });
+
+    // The new blocked state should debounce from scratch
+    act(() => {
+      vi.advanceTimersByTime(800);
+    });
+    expect(result.current).toBe("failed");
+  });
+
+  it("handles rapid flapping without stale state updates", () => {
+    const { result, rerender } = renderHook(({ state }) => useDockBlockedState(state), {
+      initialProps: { state: "waiting" as AgentState },
+    });
+
+    // Flap: waiting -> working -> waiting -> working
+    act(() => vi.advanceTimersByTime(200));
+    rerender({ state: "working" as const });
+    act(() => vi.advanceTimersByTime(200));
+    rerender({ state: "waiting" as const });
+    act(() => vi.advanceTimersByTime(200));
+    rerender({ state: "working" as const });
+
+    // Should still be null — never stayed blocked long enough
+    act(() => vi.advanceTimersByTime(800));
+    expect(result.current).toBe(null);
+  });
+
+  it("does not update state after unmount", () => {
+    const { result, unmount } = renderHook(() => useDockBlockedState("waiting"));
+    expect(result.current).toBe(null);
+
+    unmount();
+
+    // Timer fires after unmount — should not throw or update
+    act(() => {
+      vi.advanceTimersByTime(800);
+    });
+  });
+
   it("returns null for undefined agentState", () => {
     const { result } = renderHook(() => useDockBlockedState(undefined));
     expect(result.current).toBe(null);
