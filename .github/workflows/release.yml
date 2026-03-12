@@ -110,7 +110,7 @@ jobs:
             echo "::warning::Skipping macOS notarization (manually disabled)"
             EXTRA_ARGS="-c.mac.notarize=false"
           fi
-          npx electron-builder --publish never $EXTRA_ARGS
+          npx electron-builder --publish never -c.buildDependenciesFromSource=true $EXTRA_ARGS
 
       - name: Build
         if: ${{ !startsWith(matrix.os, 'macos') }}
@@ -138,11 +138,11 @@ jobs:
             echo "::error::Missing release/latest-mac.yml - macOS auto-update will not work"
             exit 1
           fi
-          DMG_COUNT=$(ls release/*.dmg 2>/dev/null | wc -l | tr -d ' ')
-          ZIP_COUNT=$(ls release/*.zip 2>/dev/null | wc -l | tr -d ' ')
+          DMG_COUNT=$(find release -maxdepth 1 -name '*.dmg' | wc -l | tr -d ' ')
+          ZIP_COUNT=$(find release -maxdepth 1 -name '*.zip' | wc -l | tr -d ' ')
           if [ "$DMG_COUNT" -ne 3 ] || [ "$ZIP_COUNT" -ne 3 ]; then
             echo "::error::Expected 3 DMGs and 3 ZIPs, got $DMG_COUNT DMGs and $ZIP_COUNT ZIPs"
-            ls -la release/*.dmg release/*.zip 2>/dev/null || true
+            find release -maxdepth 1 \( -name '*.dmg' -o -name '*.zip' \) -exec ls -la {} +
             exit 1
           fi
           echo "✓ Found $DMG_COUNT DMGs, $ZIP_COUNT ZIPs, and latest-mac.yml"
