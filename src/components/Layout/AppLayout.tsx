@@ -7,6 +7,7 @@ import { ErrorBoundary } from "../ErrorBoundary";
 import { SidecarDock, SidecarVisibilityController } from "../Sidecar";
 import { ProjectSettingsDialog, ProjectSwitchOverlay } from "@/components/Project";
 import { ChordIndicator } from "./ChordIndicator";
+import { DemoCursor } from "../Demo";
 import { useDiagnosticsStore, useDockStore, type PanelState } from "@/store";
 import { useProjectStore } from "@/store/projectStore";
 import type { RetryAction } from "@/store";
@@ -373,6 +374,7 @@ export function AppLayout({
         projectName={switchingToProjectName ?? undefined}
       />
       <ChordIndicator />
+      {window.electron?.demo && <DemoCursor />}
     </div>
   );
 }

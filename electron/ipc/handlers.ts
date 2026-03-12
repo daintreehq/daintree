@@ -31,6 +31,7 @@ import { registerVoiceInputHandlers } from "./handlers/voiceInput.js";
 import { registerMcpServerHandlers } from "./handlers/mcpServer.js";
 import { registerWebviewHandlers } from "./handlers/webview.js";
 import { registerDiagnosticsHandlers } from "./handlers/diagnostics.js";
+import { registerDemoHandlers } from "./handlers/demo.js";
 import { events } from "../services/events.js";
 import { typedHandle, typedSend, sendToRenderer } from "./utils.js";
 
@@ -92,6 +93,7 @@ export function registerIpcHandlers(deps: HandlerDependencies): () => void {
     register(() => registerMcpServerHandlers());
     register(() => registerWebviewHandlers(deps));
     register(() => registerDiagnosticsHandlers(deps));
+    register(() => registerDemoHandlers(deps));
   } catch (error) {
     runCleanups(cleanupFunctions);
     throw error;

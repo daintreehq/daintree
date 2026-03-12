@@ -64,6 +64,7 @@ if (process.platform === "win32") {
   }
 }
 
+const isDemoMode = !app.isPackaged && process.argv.includes("--demo-mode");
 const isSmokeTest = process.argv.includes("--smoke-test");
 const smokeTestStart = isSmokeTest ? Date.now() : 0;
 if (isSmokeTest) {
@@ -1274,6 +1275,7 @@ async function createWindow(): Promise<void> {
     cliAvailabilityService,
     agentVersionService,
     agentUpdateHandler,
+    isDemoMode,
   };
   cleanupIpcHandlers = registerIpcHandlers(handlerDeps);
 

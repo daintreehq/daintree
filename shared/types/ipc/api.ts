@@ -43,6 +43,7 @@ import type {
   AgentHelpRequest,
   AgentHelpResult,
 } from "./agent.js";
+import type { DemoScreenshotResult } from "./demo.js";
 import type {
   CopyTreeResult,
   CopyTreeOptions,
@@ -1002,6 +1003,16 @@ export interface ElectronAPI {
     setConfig(
       config: Partial<import("./crashRecovery.js").CrashRecoveryConfig>
     ): Promise<import("./crashRecovery.js").CrashRecoveryConfig>;
+  };
+  demo?: {
+    moveTo(x: number, y: number, durationMs: number): Promise<void>;
+    click(): Promise<void>;
+    type(selector: string, text: string, cps?: number): Promise<void>;
+    setZoom(factor: number, durationMs?: number): Promise<void>;
+    screenshot(): Promise<DemoScreenshotResult>;
+    waitForSelector(selector: string, timeoutMs?: number): Promise<void>;
+    pause(): Promise<void>;
+    resume(): Promise<void>;
   };
 }
 
