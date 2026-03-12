@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import type { ReactNode } from "react";
+import { forwardRef, type ReactNode } from "react";
 import { FileViewerModal } from "../FileViewerModal";
 
 vi.mock("@/components/ui/AppDialog", () => {
@@ -44,7 +44,9 @@ vi.mock("@/components/Worktree/DiffViewer", () => ({
 }));
 
 vi.mock("../CodeViewer", () => ({
-  CodeViewer: () => <div data-testid="code-viewer" />,
+  CodeViewer: forwardRef((_props: Record<string, unknown>, _ref: unknown) => (
+    <div data-testid="code-viewer" />
+  )),
 }));
 
 const mockRead = vi.fn();
@@ -205,5 +207,40 @@ describe("FileViewerModal", () => {
     render(<FileViewerModal {...defaultProps} isOpen={false} />);
 
     expect(screen.queryByTestId("app-dialog")).toBeNull();
+  });
+
+  it("renders metadata bar with line count, size, and encoding when file is loaded", async () => {
+    mockRead.mockResolvedValue({ ok: true, content: "line1\nline2\nline3" });
+
+    render(<FileViewerModal {...defaultProps} />);
+
+    await waitFor(() => {
+      expect(screen.getByText(/3 lines/)).toBeTruthy();
+      expect(screen.getByText(/UTF-8/)).toBeTruthy();
+    });
+  });
+
+  it("does not render metadata bar for image files", async () => {
+    render(<FileViewerModal {...defaultProps} filePath="/project/photo.png" />);
+
+    await waitFor(() => {
+      expect(screen.getByRole("img")).toBeTruthy();
+    });
+
+    expect(screen.queryByText(/lines/)).toBeNull();
+    expect(screen.queryByText(/UTF-8/)).toBeNull();
+  });
+
+  it("does not render metadata bar when file fails to load", async () => {
+    mockRead.mockResolvedValue({ ok: false, code: "NOT_FOUND" });
+
+    render(<FileViewerModal {...defaultProps} />);
+
+    await waitFor(() => {
+      expect(screen.getByText("File no longer exists")).toBeTruthy();
+    });
+
+    expect(screen.queryByText(/lines/)).toBeNull();
+    expect(screen.queryByText(/UTF-8/)).toBeNull();
   });
 });
