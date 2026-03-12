@@ -514,7 +514,11 @@ export function TerminalContextMenu({
   return (
     <ContextMenu>
       <ContextMenuTrigger asChild>
-        <div className="contents" data-context-trigger={terminalId} onContextMenu={handleContextMenu}>
+        <div
+          className="contents"
+          data-context-trigger={terminalId}
+          onContextMenu={handleContextMenu}
+        >
           {children}
         </div>
       </ContextMenuTrigger>

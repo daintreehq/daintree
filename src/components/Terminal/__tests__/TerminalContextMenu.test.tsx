@@ -205,7 +205,13 @@ describe("extractUrlAtPoint", () => {
     return {
       element: opts.elementNull
         ? undefined
-        : { getBoundingClientRect: () => ({ ...rect, right: rect.left + rect.width, bottom: rect.top + rect.height }) },
+        : {
+            getBoundingClientRect: () => ({
+              ...rect,
+              right: rect.left + rect.width,
+              bottom: rect.top + rect.height,
+            }),
+          },
       cols,
       rows,
       buffer: {
@@ -221,7 +227,12 @@ describe("extractUrlAtPoint", () => {
 
   it("returns URL when click lands on a URL in the line", () => {
     const text = "Visit https://example.com for more info";
-    const terminal = makeMockTerminal({ text, cols: 80, rows: 24, rect: { left: 0, top: 0, width: 800, height: 480 } });
+    const terminal = makeMockTerminal({
+      text,
+      cols: 80,
+      rows: 24,
+      rect: { left: 0, top: 0, width: 800, height: 480 },
+    });
     // "https://example.com" starts at index 6, length 19
     // col 6 = clientX = (6/80)*800 + some offset to land in the cell
     const clientX = (6.5 / 80) * 800;
@@ -261,7 +272,10 @@ describe("extractUrlAtPoint", () => {
 
   it("returns null when click is outside terminal element bounds", () => {
     const text = "https://example.com";
-    const terminal = makeMockTerminal({ text, rect: { left: 100, top: 100, width: 800, height: 480 } });
+    const terminal = makeMockTerminal({
+      text,
+      rect: { left: 100, top: 100, width: 800, height: 480 },
+    });
     // Click at (50, 50) which is outside the rect starting at (100, 100)
     expect(extractUrlAtPoint(terminal, 50, 50)).toBeNull();
   });
