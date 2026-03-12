@@ -328,14 +328,14 @@ test.describe.serial("Core: Terminal & Panels", () => {
   test.describe.serial("Context Flow", () => {
     test("Copy Context button is visible when project is active", async () => {
       const { window } = ctx;
-      const btn = window.getByRole("banner").locator(SEL.toolbar.copyContext);
+      const btn = window.getByRole("toolbar").locator(SEL.toolbar.copyContext);
       await expect(btn).toBeVisible({ timeout: T_MEDIUM });
     });
 
     test("Copy Context button transitions through states", async () => {
       const { window } = ctx;
 
-      const btn = window.getByRole("banner").locator(SEL.toolbar.copyContext);
+      const btn = window.getByRole("toolbar").locator(SEL.toolbar.copyContext);
       await btn.click();
 
       await expect(btn).toBeVisible({ timeout: T_LONG });
