@@ -131,8 +131,8 @@ describe("TranscriptionBuffer", () => {
     // Second cluster: "zoo" with right-context "stand is nice"
     expect(clusters[1].words.map((w) => w.word)).toEqual(["zoo"]);
     expect(clusters[1].rightContext.map((w) => w.word)).toEqual(["stand", "is", "nice"]);
-    // Left-context of second cluster should include preceding high-confidence words
-    expect(clusters[1].leftContext.map((w) => w.word)).toEqual(["great", "tool"]);
+    // Left-context of second cluster: up to 3 words before "zoo" (indices 2,3,4 → "a","great","tool")
+    expect(clusters[1].leftContext.map((w) => w.word)).toEqual(["a", "great", "tool"]);
   });
 
   it("does not re-emit clusters that were already emitted", () => {
