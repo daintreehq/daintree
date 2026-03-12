@@ -74,8 +74,14 @@ function normalizeRemoteObject(obj: any): CdpRemoteArg {
     return { type: "primitive", kind: "undefined", value: null };
   }
 
-  if (cdpType === "string" || cdpType === "number" || cdpType === "boolean") {
+  if (cdpType === "string" || cdpType === "boolean") {
     return { type: "primitive", kind: cdpType, value: obj.value ?? null };
+  }
+
+  if (cdpType === "number") {
+    // CDP uses unserializableValue for NaN, Infinity, -Infinity, -0
+    const val = obj.unserializableValue ?? obj.value ?? null;
+    return { type: "primitive", kind: "number", value: val };
   }
 
   if (cdpType === "symbol") {
@@ -272,8 +278,10 @@ export function registerWebviewHandlers(deps: HandlerDependencies): () => void {
             handleConsoleApiCalled(webContentsId, session, params);
           } else if (method === "Runtime.executionContextsCleared") {
             session.navigationGeneration++;
-            // Notify all panes that context was cleared
+            // Reset group depth and clear stale objectIds for all panes
             for (const pid of session.paneIds) {
+              session.groupDepthByPane.set(pid, 0);
+              session.objectIdsByPane.get(pid)?.clear();
               sendToRenderer(deps.mainWindow, CHANNELS.WEBVIEW_CONSOLE_CONTEXT_CLEARED, {
                 paneId: pid,
                 navigationGeneration: session.navigationGeneration,
@@ -288,11 +296,13 @@ export function registerWebviewHandlers(deps: HandlerDependencies): () => void {
       if (!session.detachListener) {
         const detachListener = (_event: Electron.Event, _reason: string) => {
           session.runtimeEnabled = false;
+          // Debugger detach automatically removes all listeners, so just null our refs
           session.messageListener = null;
           session.detachListener = null;
-          // Mark all object refs as stale by incrementing navigation generation
           session.navigationGeneration++;
           for (const pid of session.paneIds) {
+            session.groupDepthByPane.set(pid, 0);
+            session.objectIdsByPane.get(pid)?.clear();
             sendToRenderer(deps.mainWindow, CHANNELS.WEBVIEW_CONSOLE_CONTEXT_CLEARED, {
               paneId: pid,
               navigationGeneration: session.navigationGeneration,

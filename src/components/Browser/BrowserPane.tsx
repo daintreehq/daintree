@@ -154,8 +154,7 @@ export function BrowserPane({
     }
     webContentsIdRef.current = wcId;
 
-    void window.electron.webview.startConsoleCapture(wcId, id);
-
+    // Subscribe to push events BEFORE starting capture to avoid missing early messages
     const cleanupMessage = window.electron.webview.onConsoleMessage((row: SerializedConsoleRow) => {
       if (row.paneId === id) {
         addStructuredMessage(row);
@@ -170,10 +169,12 @@ export function BrowserPane({
       }
     );
 
+    void window.electron.webview.startConsoleCapture(wcId, id);
+
     return () => {
+      void window.electron.webview.stopConsoleCapture(wcId, id);
       cleanupMessage();
       cleanupContext();
-      void window.electron.webview.stopConsoleCapture(wcId, id);
       webContentsIdRef.current = null;
     };
   }, [webviewElement, isWebviewReady, id, addStructuredMessage, markStale]);
