@@ -56,7 +56,7 @@ export function SettingsSwitchCard({
 }: SettingsSwitchCardProps) {
   const scheme = COLOR_SCHEMES[colorScheme];
   const isCard = variant === "card";
-  const showReset = isModified && onReset;
+  const showReset = isModified && onReset && !disabled;
 
   const button = (
     <button
