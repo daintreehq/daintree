@@ -20,6 +20,7 @@ function getOnboardingState(): OnboardingState {
       completed: true,
       currentStep: null,
       firstRunToastSeen: true,
+      newsletterPromptSeen: true,
       migratedFromLocalStorage: true,
     };
   }
@@ -29,6 +30,7 @@ function getOnboardingState(): OnboardingState {
       completed: false,
       currentStep: null,
       firstRunToastSeen: false,
+      newsletterPromptSeen: false,
       migratedFromLocalStorage: false,
     }
   );
@@ -90,6 +92,15 @@ export function registerOnboardingHandlers(): () => void {
     });
   });
   cleanups.push(() => ipcMain.removeHandler(CHANNELS.ONBOARDING_MARK_TOAST_SEEN));
+
+  ipcMain.handle(CHANNELS.ONBOARDING_MARK_NEWSLETTER_SEEN, () => {
+    const state = getOnboardingState();
+    store.set("onboarding", {
+      ...state,
+      newsletterPromptSeen: true,
+    });
+  });
+  cleanups.push(() => ipcMain.removeHandler(CHANNELS.ONBOARDING_MARK_NEWSLETTER_SEEN));
 
   return () => cleanups.forEach((c) => c());
 }

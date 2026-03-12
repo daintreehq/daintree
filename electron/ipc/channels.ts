@@ -383,6 +383,7 @@ export const CHANNELS = {
   ONBOARDING_SET_STEP: "onboarding:set-step",
   ONBOARDING_COMPLETE: "onboarding:complete",
   ONBOARDING_MARK_TOAST_SEEN: "onboarding:mark-toast-seen",
+  ONBOARDING_MARK_NEWSLETTER_SEEN: "onboarding:mark-newsletter-seen",
 
   // Crash Recovery channels
   CRASH_RECOVERY_GET_PENDING: "crash-recovery:get-pending",

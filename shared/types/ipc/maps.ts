@@ -125,6 +125,7 @@ export interface OnboardingState {
   completed: boolean;
   currentStep: string | null;
   firstRunToastSeen: boolean;
+  newsletterPromptSeen: boolean;
   migratedFromLocalStorage: boolean;
 }
 
@@ -1273,6 +1274,10 @@ export interface IpcInvokeMap {
     result: void;
   };
   "onboarding:mark-toast-seen": {
+    args: [];
+    result: void;
+  };
+  "onboarding:mark-newsletter-seen": {
     args: [];
     result: void;
   };

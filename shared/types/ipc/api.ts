@@ -858,6 +858,7 @@ export interface ElectronAPI {
     setStep(step: string | null): Promise<void>;
     complete(): Promise<void>;
     markToastSeen(): Promise<void>;
+    markNewsletterSeen(): Promise<void>;
   };
   voiceInput: {
     getSettings(): Promise<VoiceInputSettings>;

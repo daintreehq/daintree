@@ -138,6 +138,7 @@ export interface StoreSchema {
     completed: boolean;
     currentStep: string | null;
     firstRunToastSeen: boolean;
+    newsletterPromptSeen: boolean;
     migratedFromLocalStorage: boolean;
   };
 }
@@ -226,6 +227,7 @@ const storeOptions = {
       completed: false,
       currentStep: null,
       firstRunToastSeen: false,
+      newsletterPromptSeen: false,
       migratedFromLocalStorage: false,
     },
   },

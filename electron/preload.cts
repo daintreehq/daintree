@@ -1685,6 +1685,7 @@ const api: ElectronAPI = {
     setStep: (step: string | null) => _typedInvoke(CHANNELS.ONBOARDING_SET_STEP, step),
     complete: () => _typedInvoke(CHANNELS.ONBOARDING_COMPLETE),
     markToastSeen: () => _typedInvoke(CHANNELS.ONBOARDING_MARK_TOAST_SEEN),
+    markNewsletterSeen: () => _typedInvoke(CHANNELS.ONBOARDING_MARK_NEWSLETTER_SEEN),
   },
 
   // Voice Input API
