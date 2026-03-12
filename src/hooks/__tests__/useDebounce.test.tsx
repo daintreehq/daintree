@@ -11,10 +11,9 @@ describe("useDebounce", () => {
 
   it("does not update the value before the delay", () => {
     vi.useFakeTimers();
-    const { result, rerender } = renderHook(
-      ({ value, delay }) => useDebounce(value, delay),
-      { initialProps: { value: "a", delay: 300 } }
-    );
+    const { result, rerender } = renderHook(({ value, delay }) => useDebounce(value, delay), {
+      initialProps: { value: "a", delay: 300 },
+    });
 
     rerender({ value: "b", delay: 300 });
     vi.advanceTimersByTime(200);
@@ -25,10 +24,9 @@ describe("useDebounce", () => {
 
   it("updates the value after the delay", () => {
     vi.useFakeTimers();
-    const { result, rerender } = renderHook(
-      ({ value, delay }) => useDebounce(value, delay),
-      { initialProps: { value: "a", delay: 300 } }
-    );
+    const { result, rerender } = renderHook(({ value, delay }) => useDebounce(value, delay), {
+      initialProps: { value: "a", delay: 300 },
+    });
 
     rerender({ value: "b", delay: 300 });
     act(() => {
@@ -41,10 +39,9 @@ describe("useDebounce", () => {
 
   it("resets the timer when value changes rapidly", () => {
     vi.useFakeTimers();
-    const { result, rerender } = renderHook(
-      ({ value, delay }) => useDebounce(value, delay),
-      { initialProps: { value: "a", delay: 300 } }
-    );
+    const { result, rerender } = renderHook(({ value, delay }) => useDebounce(value, delay), {
+      initialProps: { value: "a", delay: 300 },
+    });
 
     rerender({ value: "b", delay: 300 });
     vi.advanceTimersByTime(200);
@@ -62,10 +59,9 @@ describe("useDebounce", () => {
 
   it("works with non-string types", () => {
     vi.useFakeTimers();
-    const { result, rerender } = renderHook(
-      ({ value, delay }) => useDebounce(value, delay),
-      { initialProps: { value: 42, delay: 100 } }
-    );
+    const { result, rerender } = renderHook(({ value, delay }) => useDebounce(value, delay), {
+      initialProps: { value: 42, delay: 100 },
+    });
 
     rerender({ value: 99, delay: 100 });
     act(() => {
