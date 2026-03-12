@@ -3,7 +3,7 @@
  * Channel names are inlined to avoid module format conflicts with ESM main process.
  */
 
-import { contextBridge, ipcRenderer } from "electron";
+import { contextBridge, ipcRenderer, webFrame } from "electron";
 import { isTrustedRendererUrl } from "../shared/utils/trustedRenderer.js";
 
 import type {
@@ -1877,14 +1877,8 @@ const api: ElectronAPI = {
           sendCommandDone: (requestId: string, error?: string) => {
             ipcRenderer.send(CHANNELS.DEMO_COMMAND_DONE, { requestId, error });
           },
-          getZoomFactor: () => {
-            const { webFrame } = require("electron");
-            return webFrame.getZoomFactor();
-          },
-          setZoomFactor: (factor: number) => {
-            const { webFrame } = require("electron");
-            webFrame.setZoomFactor(factor);
-          },
+          getZoomFactor: () => webFrame.getZoomFactor(),
+          setZoomFactor: (factor: number) => webFrame.setZoomFactor(factor),
         },
       }
     : {}),
