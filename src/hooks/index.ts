@@ -80,3 +80,5 @@ export type { UsePanelHandlersConfig, PanelHandlers } from "./usePanelHandlers";
 
 export { useUnsavedChanges } from "./useUnsavedChanges";
 export type { UseUnsavedChangesOptions } from "./useUnsavedChanges";
+
+export { useDebounce } from "./useDebounce";
