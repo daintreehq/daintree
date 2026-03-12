@@ -1,4 +1,12 @@
-import { useState, useEffect, useDeferredValue, useMemo, useRef, useCallback } from "react";
+import {
+  useState,
+  useEffect,
+  useDeferredValue,
+  useMemo,
+  useRef,
+  useCallback,
+  type KeyboardEvent as ReactKeyboardEvent,
+} from "react";
 import {
   useSidecarStore,
   usePerformanceModeStore,
@@ -267,8 +275,45 @@ export function SettingsDialog({
     setActiveTab(tab);
     setSearchQuery("");
     setScrollToSection(null);
-    // Subtab memory is preserved per-tab — activeSubtabs retains the last selected subtab
   }, []);
+
+  const tablistRef = useRef<HTMLDivElement>(null);
+
+  const handleTablistKeyDown = useCallback(
+    (e: ReactKeyboardEvent<HTMLDivElement>) => {
+      const container = tablistRef.current;
+      if (!container) return;
+
+      const tabs = Array.from(container.querySelectorAll<HTMLElement>('[role="tab"]'));
+      const focusedIndex = tabs.indexOf(document.activeElement as HTMLElement);
+      if (focusedIndex === -1) return;
+
+      let nextIndex: number | null = null;
+
+      switch (e.key) {
+        case "ArrowDown":
+          nextIndex = (focusedIndex + 1) % tabs.length;
+          break;
+        case "ArrowUp":
+          nextIndex = (focusedIndex - 1 + tabs.length) % tabs.length;
+          break;
+        case "Home":
+          nextIndex = 0;
+          break;
+        case "End":
+          nextIndex = tabs.length - 1;
+          break;
+        default:
+          return;
+      }
+
+      e.preventDefault();
+      tabs[nextIndex].focus();
+      const tabId = tabs[nextIndex].dataset.tab as SettingsTab | undefined;
+      if (tabId) handleNavSelect(tabId);
+    },
+    [handleNavSelect]
+  );
 
   const tabTitles: Record<SettingsTab, string> = {
     general: "General",
@@ -356,7 +401,14 @@ export function SettingsDialog({
             </p>
           )}
 
-          <nav className="flex-1 overflow-y-auto space-y-3" aria-label="Settings sections">
+          <div
+            ref={tablistRef}
+            role="tablist"
+            aria-orientation="vertical"
+            aria-label="Settings sections"
+            onKeyDown={handleTablistKeyDown}
+            className="flex-1 overflow-y-auto space-y-3"
+          >
             <NavGroup label="General">
               <NavItem
                 tab="general"
@@ -508,7 +560,7 @@ export function SettingsDialog({
                 onSelect={handleNavSelect}
               />
             </NavGroup>
-          </nav>
+          </div>
 
           <div className="pt-2 mt-2 border-t border-canopy-border px-2">
             <span className="text-[10px] text-canopy-text/30 font-mono">{appVersion}</span>
@@ -541,38 +593,76 @@ export function SettingsDialog({
 
           <div className="p-6 overflow-y-auto flex-1">
             {isSearching ? (
-              <SearchResults
-                results={searchResults}
-                query={deferredQuery}
-                onResultClick={handleResultClick}
-                activeIndex={activeResultIndex}
-              />
+              <div role="region" aria-label="Search results">
+                <SearchResults
+                  results={searchResults}
+                  query={deferredQuery}
+                  onResultClick={handleResultClick}
+                  activeIndex={activeResultIndex}
+                />
+              </div>
             ) : (
               <>
-                <div className={activeTab === "general" ? "" : "hidden"}>
+                <div
+                  role="tabpanel"
+                  id="settings-panel-general"
+                  aria-labelledby="settings-tab-general"
+                  tabIndex={0}
+                  className={activeTab === "general" ? "" : "hidden"}
+                >
                   <GeneralTab
                     appVersion={appVersion}
                     onNavigateToAgents={() => setActiveTab("agents")}
                   />
                 </div>
 
-                <div className={activeTab === "keyboard" ? "" : "hidden"}>
+                <div
+                  role="tabpanel"
+                  id="settings-panel-keyboard"
+                  aria-labelledby="settings-tab-keyboard"
+                  tabIndex={0}
+                  className={activeTab === "keyboard" ? "" : "hidden"}
+                >
                   <KeyboardShortcutsTab />
                 </div>
 
-                <div className={activeTab === "terminal" ? "" : "hidden"}>
+                <div
+                  role="tabpanel"
+                  id="settings-panel-terminal"
+                  aria-labelledby="settings-tab-terminal"
+                  tabIndex={0}
+                  className={activeTab === "terminal" ? "" : "hidden"}
+                >
                   <TerminalSettingsTab />
                 </div>
 
-                <div className={activeTab === "terminalAppearance" ? "" : "hidden"}>
+                <div
+                  role="tabpanel"
+                  id="settings-panel-terminalAppearance"
+                  aria-labelledby="settings-tab-terminalAppearance"
+                  tabIndex={0}
+                  className={activeTab === "terminalAppearance" ? "" : "hidden"}
+                >
                   <TerminalAppearanceTab />
                 </div>
 
-                <div className={activeTab === "worktree" ? "" : "hidden"}>
+                <div
+                  role="tabpanel"
+                  id="settings-panel-worktree"
+                  aria-labelledby="settings-tab-worktree"
+                  tabIndex={0}
+                  className={activeTab === "worktree" ? "" : "hidden"}
+                >
                   <WorktreeSettingsTab />
                 </div>
 
-                <div className={activeTab === "agents" ? "" : "hidden"}>
+                <div
+                  role="tabpanel"
+                  id="settings-panel-agents"
+                  aria-labelledby="settings-tab-agents"
+                  tabIndex={0}
+                  className={activeTab === "agents" ? "" : "hidden"}
+                >
                   <AgentSettings
                     activeSubtab={activeSubtabs["agents"] ?? null}
                     onSubtabChange={(id) => setActiveSubtabs((prev) => ({ ...prev, agents: id }))}
@@ -580,39 +670,93 @@ export function SettingsDialog({
                   />
                 </div>
 
-                <div className={activeTab === "github" ? "" : "hidden"}>
+                <div
+                  role="tabpanel"
+                  id="settings-panel-github"
+                  aria-labelledby="settings-tab-github"
+                  tabIndex={0}
+                  className={activeTab === "github" ? "" : "hidden"}
+                >
                   <GitHubSettingsTab />
                 </div>
 
-                <div className={activeTab === "sidecar" ? "" : "hidden"}>
+                <div
+                  role="tabpanel"
+                  id="settings-panel-sidecar"
+                  aria-labelledby="settings-tab-sidecar"
+                  tabIndex={0}
+                  className={activeTab === "sidecar" ? "" : "hidden"}
+                >
                   <SidecarSettingsTab />
                 </div>
 
-                <div className={activeTab === "toolbar" ? "" : "hidden"}>
+                <div
+                  role="tabpanel"
+                  id="settings-panel-toolbar"
+                  aria-labelledby="settings-tab-toolbar"
+                  tabIndex={0}
+                  className={activeTab === "toolbar" ? "" : "hidden"}
+                >
                   <ToolbarSettingsTab />
                 </div>
 
-                <div className={activeTab === "notifications" ? "" : "hidden"}>
+                <div
+                  role="tabpanel"
+                  id="settings-panel-notifications"
+                  aria-labelledby="settings-tab-notifications"
+                  tabIndex={0}
+                  className={activeTab === "notifications" ? "" : "hidden"}
+                >
                   <NotificationSettingsTab />
                 </div>
 
-                <div className={activeTab === "editor" ? "" : "hidden"}>
+                <div
+                  role="tabpanel"
+                  id="settings-panel-editor"
+                  aria-labelledby="settings-tab-editor"
+                  tabIndex={0}
+                  className={activeTab === "editor" ? "" : "hidden"}
+                >
                   <EditorIntegrationTab />
                 </div>
 
-                <div className={activeTab === "imageViewer" ? "" : "hidden"}>
+                <div
+                  role="tabpanel"
+                  id="settings-panel-imageViewer"
+                  aria-labelledby="settings-tab-imageViewer"
+                  tabIndex={0}
+                  className={activeTab === "imageViewer" ? "" : "hidden"}
+                >
                   <ImageViewerTab />
                 </div>
 
-                <div className={activeTab === "voice" ? "" : "hidden"}>
+                <div
+                  role="tabpanel"
+                  id="settings-panel-voice"
+                  aria-labelledby="settings-tab-voice"
+                  tabIndex={0}
+                  className={activeTab === "voice" ? "" : "hidden"}
+                >
                   <VoiceInputSettingsTab />
                 </div>
 
-                <div className={activeTab === "mcp" ? "" : "hidden"}>
+                <div
+                  role="tabpanel"
+                  id="settings-panel-mcp"
+                  aria-labelledby="settings-tab-mcp"
+                  tabIndex={0}
+                  className={activeTab === "mcp" ? "" : "hidden"}
+                >
                   <McpServerSettingsTab />
                 </div>
 
-                <div className={activeTab === "troubleshooting" ? "" : "hidden"}>
+                <div
+                  role="tabpanel"
+                  id="settings-panel-troubleshooting"
+                  aria-labelledby="settings-tab-troubleshooting"
+                  tabIndex={0}
+                  className={activeTab === "troubleshooting" ? "" : "hidden"}
+                >
                   <TroubleshootingTab />
                 </div>
               </>
@@ -626,11 +770,16 @@ export function SettingsDialog({
 
 function NavGroup({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <div>
-      <span className="text-[10px] font-medium uppercase tracking-wider text-canopy-text/30 px-3 mb-1 block select-none">
+    <div role="none">
+      <span
+        className="text-[10px] font-medium uppercase tracking-wider text-canopy-text/30 px-3 mb-1 block select-none"
+        aria-hidden="true"
+      >
         {label}
       </span>
-      <div className="space-y-0.5">{children}</div>
+      <div role="none" className="space-y-0.5">
+        {children}
+      </div>
     </div>
   );
 }
@@ -657,8 +806,15 @@ function NavItem({
   onSelect,
 }: NavItemProps) {
   const active = activeTab === tab && !isSearching;
+  const selected = activeTab === tab;
   return (
     <button
+      role="tab"
+      id={`settings-tab-${tab}`}
+      aria-selected={selected}
+      aria-controls={`settings-panel-${tab}`}
+      tabIndex={selected ? 0 : -1}
+      data-tab={tab}
       onClick={() => onSelect(tab)}
       className={cn(
         "relative text-left px-3 py-1.5 rounded-[var(--radius-md)] text-sm transition-colors flex items-center gap-2 w-full",
