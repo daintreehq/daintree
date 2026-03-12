@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import type { ReactNode } from "react";
+import { forwardRef, type ReactNode } from "react";
 import { FileViewerModal } from "../FileViewerModal";
 
 vi.mock("@/components/ui/AppDialog", () => {
@@ -43,14 +43,11 @@ vi.mock("@/components/Worktree/DiffViewer", () => ({
   DiffViewer: () => <div data-testid="diff-viewer" />,
 }));
 
-vi.mock("../CodeViewer", () => {
-  const { forwardRef } = require("react");
-  return {
-    CodeViewer: forwardRef((_props: Record<string, unknown>, _ref: unknown) => (
-      <div data-testid="code-viewer" />
-    )),
-  };
-});
+vi.mock("../CodeViewer", () => ({
+  CodeViewer: forwardRef((_props: Record<string, unknown>, _ref: unknown) => (
+    <div data-testid="code-viewer" />
+  )),
+}));
 
 const mockRead = vi.fn();
 vi.mock("@/clients/filesClient", () => ({
