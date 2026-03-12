@@ -58,11 +58,11 @@ describe("VoiceInputButton", () => {
     expect(container.innerHTML).not.toContain("lucide-mic-off");
   });
 
-  it("shows the disabled mic icon when voice input is not configured", () => {
+  it("renders nothing when voice input is not configured", () => {
     const { container } = render(
       <VoiceInputButton panelId="panel-1" projectId="project-1" projectName="Canopy" />
     );
 
-    expect(container.innerHTML).toContain("lucide-mic-off");
+    expect(container.innerHTML).toBe("");
   });
 });

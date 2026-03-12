@@ -50,6 +50,8 @@ export function VoiceInputButton({
   const showOrbit = isListening || isFinishing;
   const isActive = isListening || isFinishing;
 
+  if (!isConfigured && !isActive) return null;
+
   // Animation refs
   const wrapperRef = useRef<HTMLDivElement>(null);
   const ringRef = useRef<HTMLSpanElement>(null);
