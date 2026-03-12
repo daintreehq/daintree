@@ -55,16 +55,31 @@ function toggleInlineFormat(view: EditorView, marker: string, placeholder: strin
   view.focus();
 }
 
+const LIST_PREFIX_RE = /^(- \[[ x]\] |- |\* |\d+\. )/;
+
 function toggleLinePrefix(view: EditorView, prefix: string) {
   view.dispatch(
     view.state.changeByRange((range) => {
       const line = view.state.doc.lineAt(range.from);
-      const hasPrefix = line.text.startsWith(prefix);
-      const delta = hasPrefix ? -prefix.length : prefix.length;
+      const existingMatch = line.text.match(LIST_PREFIX_RE);
+      const existingPrefix = existingMatch ? existingMatch[0] : "";
+
+      if (existingPrefix === prefix) {
+        // Same prefix → remove it (toggle off)
+        const delta = -existingPrefix.length;
+        return {
+          changes: { from: line.from, to: line.from + existingPrefix.length, insert: "" },
+          range: EditorSelection.range(
+            Math.max(line.from, range.from + delta),
+            Math.max(line.from, range.to + delta)
+          ),
+        };
+      }
+
+      // Different or no prefix → replace with the new one
+      const delta = prefix.length - existingPrefix.length;
       return {
-        changes: hasPrefix
-          ? { from: line.from, to: line.from + prefix.length, insert: "" }
-          : { from: line.from, insert: prefix },
+        changes: { from: line.from, to: line.from + existingPrefix.length, insert: prefix },
         range: EditorSelection.range(
           Math.max(line.from, range.from + delta),
           Math.max(line.from, range.to + delta)
@@ -79,12 +94,13 @@ function toggleHeading(view: EditorView) {
   view.dispatch(
     view.state.changeByRange((range) => {
       const line = view.state.doc.lineAt(range.from);
-      const match = line.text.match(/^(#{1,3}) /);
+      const match = line.text.match(/^(#{1,6}) /);
 
       if (match) {
         const level = match[1].length;
-        const removeLen = level + 1;
+        const removeLen = level + 1; // includes trailing space
         if (level < 3) {
+          // # → ## → ### (cycle up)
           const insert = "#".repeat(level + 1) + " ";
           const delta = 1;
           return {
@@ -92,8 +108,8 @@ function toggleHeading(view: EditorView) {
             range: EditorSelection.range(range.from + delta, range.to + delta),
           };
         }
-        // At ### → remove heading
-        const delta = -(level + 1);
+        // ### or higher → remove heading entirely
+        const delta = -removeLen;
         return {
           changes: { from: line.from, to: line.from + removeLen, insert: "" },
           range: EditorSelection.range(
@@ -103,7 +119,7 @@ function toggleHeading(view: EditorView) {
         };
       }
 
-      // No heading → insert ##
+      // No heading → insert ## (h2 default)
       const insert = "## ";
       return {
         changes: { from: line.from, insert },
