@@ -256,6 +256,7 @@ export function BrowserToolbar({
                 disabled={!canGoBack}
                 className={buttonClass}
                 aria-label="Go back"
+                data-testid="browser-back"
               >
                 <ArrowLeft className="w-4 h-4" />
               </button>
@@ -274,6 +275,7 @@ export function BrowserToolbar({
                 disabled={!canGoForward}
                 className={buttonClass}
                 aria-label="Go forward"
+                data-testid="browser-forward"
               >
                 <ArrowRight className="w-4 h-4" />
               </button>
@@ -290,6 +292,7 @@ export function BrowserToolbar({
               onClick={onReload}
               className={cn(buttonClass, isLoading && "animate-spin")}
               aria-label="Reload"
+              data-testid="browser-reload"
             >
               <RotateCw className="w-4 h-4" />
             </button>

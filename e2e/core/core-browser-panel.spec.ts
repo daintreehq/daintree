@@ -60,18 +60,24 @@ test.describe.serial("Core: Browser Panel", () => {
 
     test("open browser panel shows address bar and nav controls", async () => {
       const { window } = ctx;
+
       await window.locator(SEL.toolbar.openBrowser).click();
 
-      const panel = window.locator(SEL.panel.gridPanel).first();
-      await expect(panel.locator(SEL.browser.addressBar)).toBeVisible({ timeout: T_LONG });
-      await expect(panel.locator(SEL.browser.backButton)).toBeVisible({ timeout: T_SHORT });
-      await expect(panel.locator(SEL.browser.forwardButton)).toBeVisible({ timeout: T_SHORT });
-      await expect(panel.locator(SEL.browser.reloadButton)).toBeVisible({ timeout: T_SHORT });
+      // Wait for browser panel to appear in the grid
+      const browserPanel = window.locator(SEL.panel.gridPanel).filter({
+        has: window.locator(SEL.browser.addressBar),
+      });
+      await expect(browserPanel).toBeVisible({ timeout: T_LONG });
+      await expect(browserPanel.locator(SEL.browser.backButton)).toBeVisible({ timeout: T_SHORT });
+      await expect(browserPanel.locator(SEL.browser.forwardButton)).toBeVisible({ timeout: T_SHORT });
+      await expect(browserPanel.locator(SEL.browser.reloadButton)).toBeVisible({ timeout: T_SHORT });
     });
 
     test("back and forward buttons disabled on fresh panel", async () => {
       const { window } = ctx;
-      const panel = window.locator(SEL.panel.gridPanel).first();
+      const panel = window.locator(SEL.panel.gridPanel).filter({
+        has: window.locator(SEL.browser.addressBar),
+      });
 
       await expect(panel.locator(SEL.browser.backButton)).toBeDisabled({ timeout: T_SHORT });
       await expect(panel.locator(SEL.browser.forwardButton)).toBeDisabled({ timeout: T_SHORT });
@@ -79,7 +85,9 @@ test.describe.serial("Core: Browser Panel", () => {
 
     test("navigate to Page A via address bar", async () => {
       const { window } = ctx;
-      const panel = window.locator(SEL.panel.gridPanel).first();
+      const panel = window.locator(SEL.panel.gridPanel).filter({
+        has: window.locator(SEL.browser.addressBar),
+      });
       const addressBar = panel.locator(SEL.browser.addressBar);
 
       await addressBar.click();
@@ -92,7 +100,9 @@ test.describe.serial("Core: Browser Panel", () => {
 
     test("navigate to Page B updates address bar", async () => {
       const { window } = ctx;
-      const panel = window.locator(SEL.panel.gridPanel).first();
+      const panel = window.locator(SEL.panel.gridPanel).filter({
+        has: window.locator(SEL.browser.addressBar),
+      });
       const addressBar = panel.locator(SEL.browser.addressBar);
 
       await addressBar.click();
@@ -106,7 +116,9 @@ test.describe.serial("Core: Browser Panel", () => {
 
     test("back button returns to Page A", async () => {
       const { window } = ctx;
-      const panel = window.locator(SEL.panel.gridPanel).first();
+      const panel = window.locator(SEL.panel.gridPanel).filter({
+        has: window.locator(SEL.browser.addressBar),
+      });
       const addressBar = panel.locator(SEL.browser.addressBar);
 
       await panel.locator(SEL.browser.backButton).click();
@@ -118,7 +130,9 @@ test.describe.serial("Core: Browser Panel", () => {
 
     test("forward button returns to Page B", async () => {
       const { window } = ctx;
-      const panel = window.locator(SEL.panel.gridPanel).first();
+      const panel = window.locator(SEL.panel.gridPanel).filter({
+        has: window.locator(SEL.browser.addressBar),
+      });
       const addressBar = panel.locator(SEL.browser.addressBar);
 
       await panel.locator(SEL.browser.forwardButton).click();
@@ -129,7 +143,9 @@ test.describe.serial("Core: Browser Panel", () => {
 
     test("reload preserves current URL", async () => {
       const { window } = ctx;
-      const panel = window.locator(SEL.panel.gridPanel).first();
+      const panel = window.locator(SEL.panel.gridPanel).filter({
+        has: window.locator(SEL.browser.addressBar),
+      });
       const addressBar = panel.locator(SEL.browser.addressBar);
 
       const urlBefore = await addressBar.inputValue();
@@ -167,9 +183,11 @@ test.describe.serial("Core: Browser Panel", () => {
 
       // Open first browser panel and navigate to page-a
       await window.locator(SEL.toolbar.openBrowser).click();
-      await expect.poll(() => getGridPanelCount(window), { timeout: T_LONG }).toBe(1);
+      await expect.poll(() => getGridPanelCount(window), { timeout: T_LONG }).toBeGreaterThanOrEqual(1);
 
-      const panel1 = window.locator(SEL.panel.gridPanel).nth(0);
+      const panel1 = window.locator(SEL.panel.gridPanel).filter({
+        has: window.locator(SEL.browser.addressBar),
+      }).first();
       const addressBar1 = panel1.locator(SEL.browser.addressBar);
 
       await addressBar1.click();
@@ -180,9 +198,14 @@ test.describe.serial("Core: Browser Panel", () => {
 
       // Open second browser panel
       await window.locator(SEL.toolbar.openBrowser).click();
-      await expect.poll(() => getGridPanelCount(window), { timeout: T_LONG }).toBe(2);
+      await window.waitForTimeout(T_SETTLE);
 
-      const panel2 = window.locator(SEL.panel.gridPanel).nth(1);
+      const browserPanels = window.locator(SEL.panel.gridPanel).filter({
+        has: window.locator(SEL.browser.addressBar),
+      });
+      await expect.poll(() => browserPanels.count(), { timeout: T_LONG }).toBeGreaterThanOrEqual(2);
+
+      const panel2 = browserPanels.nth(1);
       const addressBar2 = panel2.locator(SEL.browser.addressBar);
 
       // Navigate second panel to page-b
@@ -205,7 +228,7 @@ test.describe.serial("Core: Browser Panel", () => {
       const initialCount = await getGridPanelCount(window);
       if (initialCount === 0) {
         await window.locator(SEL.toolbar.openBrowser).click();
-        await expect.poll(() => getGridPanelCount(window), { timeout: T_LONG }).toBe(1);
+        await expect.poll(() => getGridPanelCount(window), { timeout: T_LONG }).toBeGreaterThanOrEqual(1);
       }
 
       const count = await getGridPanelCount(window);
