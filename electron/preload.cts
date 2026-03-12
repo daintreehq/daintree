@@ -36,6 +36,7 @@ import type {
   AttachIssuePayload,
   IssueAssociation,
   VoiceInputStatus,
+  ChecklistItemId,
 } from "../shared/types/index.js";
 import type {
   AgentStateChangePayload,
@@ -1728,7 +1729,7 @@ const api: ElectronAPI = {
     markNewsletterSeen: () => _typedInvoke(CHANNELS.ONBOARDING_MARK_NEWSLETTER_SEEN),
     getChecklist: () => _typedInvoke(CHANNELS.ONBOARDING_CHECKLIST_GET),
     dismissChecklist: () => _typedInvoke(CHANNELS.ONBOARDING_CHECKLIST_DISMISS),
-    markChecklistItem: (item: string) =>
+    markChecklistItem: (item: ChecklistItemId) =>
       _typedInvoke(CHANNELS.ONBOARDING_CHECKLIST_MARK_ITEM, item),
   },
 
