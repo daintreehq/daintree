@@ -11,3 +11,4 @@ export { useSemanticWorkerLifecycle } from "./useSemanticWorkerLifecycle";
 export { useSystemWakeHandler } from "./useSystemWakeHandler";
 export { useDevServerDiscovery } from "./useDevServerDiscovery";
 export { useAccessibilityAnnouncements } from "./useAccessibilityAnnouncements";
+export { useGettingStartedChecklist } from "./useGettingStartedChecklist";

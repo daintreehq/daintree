@@ -10,7 +10,7 @@ import type {
   TabGroup,
   StagingStatus,
 } from "../domain.js";
-import type { OnboardingState } from "./maps.js";
+import type { OnboardingState, ChecklistState, ChecklistItemId } from "./maps.js";
 import type { AgentSettings, AgentSettingsEntry } from "../agentSettings.js";
 import type { VoiceInputStatus } from "../voice.js";
 export type { VoiceInputStatus };
@@ -890,6 +890,9 @@ export interface ElectronAPI {
     complete(): Promise<void>;
     markToastSeen(): Promise<void>;
     markNewsletterSeen(): Promise<void>;
+    getChecklist(): Promise<ChecklistState>;
+    dismissChecklist(): Promise<void>;
+    markChecklistItem(item: ChecklistItemId): Promise<void>;
   };
   voiceInput: {
     getSettings(): Promise<VoiceInputSettings>;

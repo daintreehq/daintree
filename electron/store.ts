@@ -140,6 +140,14 @@ export interface StoreSchema {
     firstRunToastSeen: boolean;
     newsletterPromptSeen: boolean;
     migratedFromLocalStorage: boolean;
+    checklist: {
+      dismissed: boolean;
+      items: {
+        openedProject: boolean;
+        launchedAgent: boolean;
+        createdWorktree: boolean;
+      };
+    };
   };
 }
 
@@ -229,6 +237,14 @@ const storeOptions = {
       firstRunToastSeen: false,
       newsletterPromptSeen: false,
       migratedFromLocalStorage: false,
+      checklist: {
+        dismissed: false,
+        items: {
+          openedProject: false,
+          launchedAgent: false,
+          createdWorktree: false,
+        },
+      },
     },
   },
   cwd: process.env.CANOPY_USER_DATA,

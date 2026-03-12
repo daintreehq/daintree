@@ -21,13 +21,18 @@ const STEP_ORDER: OnboardingStep[] = ["newsletter", "telemetry", "agentSelection
 interface OnboardingFlowProps {
   availability: CliAvailability;
   onRefreshSettings: () => Promise<void>;
+  onComplete?: () => void;
 }
 
 function trackOnboarding(event: string, properties: Record<string, unknown> = {}): void {
   window.electron?.telemetry?.track(event, properties)?.catch(() => {});
 }
 
-export function OnboardingFlow({ availability, onRefreshSettings }: OnboardingFlowProps) {
+export function OnboardingFlow({
+  availability,
+  onRefreshSettings,
+  onComplete,
+}: OnboardingFlowProps) {
   const [state, setState] = useState<OnboardingState | null>(null);
   const [currentStep, setCurrentStep] = useState<OnboardingStep | null>(null);
   const [agentSetupIds, setAgentSetupIds] = useState<string[]>([]);
@@ -129,30 +134,34 @@ export function OnboardingFlow({ availability, onRefreshSettings }: OnboardingFl
 
   const skipAgentSetupRef = useRef(false);
 
-  const advanceStep = useCallback(async (fromStep: OnboardingStep) => {
-    const idx = STEP_ORDER.indexOf(fromStep);
-    let nextStep = STEP_ORDER[idx + 1] ?? null;
+  const advanceStep = useCallback(
+    async (fromStep: OnboardingStep) => {
+      const idx = STEP_ORDER.indexOf(fromStep);
+      let nextStep = STEP_ORDER[idx + 1] ?? null;
 
-    // Skip agent setup if user skipped selection or had no uninstalled agents
-    if (nextStep === "agentSetup" && skipAgentSetupRef.current) {
-      nextStep = STEP_ORDER[idx + 2] ?? null;
-    }
+      // Skip agent setup if user skipped selection or had no uninstalled agents
+      if (nextStep === "agentSetup" && skipAgentSetupRef.current) {
+        nextStep = STEP_ORDER[idx + 2] ?? null;
+      }
 
-    if (nextStep) {
-      setCurrentStep(nextStep);
-      await window.electron.onboarding.setStep(nextStep);
-    } else {
-      // Flow complete
-      completedRef.current = true;
-      trackOnboarding("onboarding_completed", {
-        totalSteps: STEP_ORDER.length,
-        durationMs: flowStartTimeRef.current > 0 ? Date.now() - flowStartTimeRef.current : 0,
-      });
-      setCurrentStep(null);
-      await window.electron.onboarding.complete();
-      setState((prev) => (prev ? { ...prev, completed: true, currentStep: null } : prev));
-    }
-  }, []);
+      if (nextStep) {
+        setCurrentStep(nextStep);
+        await window.electron.onboarding.setStep(nextStep);
+      } else {
+        // Flow complete
+        completedRef.current = true;
+        trackOnboarding("onboarding_completed", {
+          totalSteps: STEP_ORDER.length,
+          durationMs: flowStartTimeRef.current > 0 ? Date.now() - flowStartTimeRef.current : 0,
+        });
+        setCurrentStep(null);
+        await window.electron.onboarding.complete();
+        setState((prev) => (prev ? { ...prev, completed: true, currentStep: null } : prev));
+        onComplete?.();
+      }
+    },
+    [onComplete]
+  );
 
   // Newsletter step handler
   const handleNewsletterDismiss = useCallback(

@@ -120,6 +120,19 @@ import type { HibernationConfig } from "./hibernation.js";
 import type { AgentRegistry, AgentMetadata } from "./agentCapabilities.js";
 import type { AppThemeConfig } from "../appTheme.js";
 
+export type ChecklistItemId = "openedProject" | "launchedAgent" | "createdWorktree";
+
+export interface ChecklistItems {
+  openedProject: boolean;
+  launchedAgent: boolean;
+  createdWorktree: boolean;
+}
+
+export interface ChecklistState {
+  dismissed: boolean;
+  items: ChecklistItems;
+}
+
 export interface OnboardingState {
   schemaVersion: number;
   completed: boolean;
@@ -127,6 +140,7 @@ export interface OnboardingState {
   firstRunToastSeen: boolean;
   newsletterPromptSeen: boolean;
   migratedFromLocalStorage: boolean;
+  checklist: ChecklistState;
 }
 
 // IPC Contract Maps
@@ -1288,6 +1302,18 @@ export interface IpcInvokeMap {
   };
   "onboarding:mark-newsletter-seen": {
     args: [];
+    result: void;
+  };
+  "onboarding:checklist-get": {
+    args: [];
+    result: ChecklistState;
+  };
+  "onboarding:checklist-dismiss": {
+    args: [];
+    result: void;
+  };
+  "onboarding:checklist-mark-item": {
+    args: [item: ChecklistItemId];
     result: void;
   };
 

@@ -49,6 +49,7 @@ import {
   useSystemWakeHandler,
   useDevServerDiscovery,
   useAccessibilityAnnouncements,
+  useGettingStartedChecklist,
   type HydrationCallbacks,
 } from "./hooks/app";
 import { AppLayout } from "./components/Layout";
@@ -82,6 +83,7 @@ import { ShortcutReferenceDialog } from "./components/KeyboardShortcuts";
 import { Toaster } from "./components/ui/toaster";
 import { UpdateNotification } from "./components/UpdateNotification";
 import { OnboardingFlow } from "./components/Onboarding/OnboardingFlow";
+import { GettingStartedChecklist } from "./components/Onboarding/GettingStartedChecklist";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { DndProvider } from "./components/DragDrop";
 import {
@@ -827,6 +829,7 @@ function App() {
   const { isStateLoaded } = useAppHydration(hydrationCallbacks, crashResolved);
   useProjectSwitchRehydration(hydrationCallbacks);
   useFirstRunToasts(isStateLoaded);
+  const gettingStarted = useGettingStartedChecklist(isStateLoaded);
 
   const handleLaunchAgent = useCallback(
     async (type: "claude" | "gemini" | "codex" | "opencode" | "terminal" | "browser") => {
@@ -1292,7 +1295,19 @@ function App() {
 
       <Toaster />
       <UpdateNotification />
-      <OnboardingFlow availability={availability} onRefreshSettings={refreshSettings} />
+      <OnboardingFlow
+        availability={availability}
+        onRefreshSettings={refreshSettings}
+        onComplete={gettingStarted.notifyOnboardingComplete}
+      />
+      {gettingStarted.visible && gettingStarted.checklist && (
+        <GettingStartedChecklist
+          checklist={gettingStarted.checklist}
+          collapsed={gettingStarted.collapsed}
+          onDismiss={gettingStarted.dismiss}
+          onToggleCollapse={gettingStarted.toggleCollapse}
+        />
+      )}
     </ErrorBoundary>
   );
 }
