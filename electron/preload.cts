@@ -557,6 +557,9 @@ const CHANNELS = {
   ONBOARDING_COMPLETE: "onboarding:complete",
   ONBOARDING_MARK_TOAST_SEEN: "onboarding:mark-toast-seen",
   ONBOARDING_MARK_NEWSLETTER_SEEN: "onboarding:mark-newsletter-seen",
+  ONBOARDING_CHECKLIST_GET: "onboarding:checklist-get",
+  ONBOARDING_CHECKLIST_DISMISS: "onboarding:checklist-dismiss",
+  ONBOARDING_CHECKLIST_MARK_ITEM: "onboarding:checklist-mark-item",
 } as const;
 
 const api: ElectronAPI = {
@@ -1723,6 +1726,10 @@ const api: ElectronAPI = {
     complete: () => _typedInvoke(CHANNELS.ONBOARDING_COMPLETE),
     markToastSeen: () => _typedInvoke(CHANNELS.ONBOARDING_MARK_TOAST_SEEN),
     markNewsletterSeen: () => _typedInvoke(CHANNELS.ONBOARDING_MARK_NEWSLETTER_SEEN),
+    getChecklist: () => _typedInvoke(CHANNELS.ONBOARDING_CHECKLIST_GET),
+    dismissChecklist: () => _typedInvoke(CHANNELS.ONBOARDING_CHECKLIST_DISMISS),
+    markChecklistItem: (item: string) =>
+      _typedInvoke(CHANNELS.ONBOARDING_CHECKLIST_MARK_ITEM, item),
   },
 
   // Voice Input API

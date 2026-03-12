@@ -161,6 +161,8 @@
 }
 
 :root {
+  interpolate-size: allow-keywords;
+
   /* Z-index tier system
    * Establishes a clear stacking hierarchy for UI layers.
    * Higher tiers always appear above lower tiers.

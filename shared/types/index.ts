@@ -412,7 +412,12 @@ export {
 export type { AgentRegistry, AgentMetadata } from "./ipc/agentCapabilities.js";
 
 // Onboarding types
-export type { OnboardingState } from "./ipc/maps.js";
+export type {
+  OnboardingState,
+  ChecklistState,
+  ChecklistItems,
+  ChecklistItemId,
+} from "./ipc/maps.js";
 
 // Task Queue types - DAG-based task management
 export type {

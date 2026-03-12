@@ -75,6 +75,11 @@ export function useMenuActions(options: UseMenuActionsOptions): void {
           return;
         }
 
+        if (action === "show-getting-started") {
+          window.dispatchEvent(new CustomEvent("canopy:show-getting-started"));
+          return;
+        }
+
         const menuToActionMap: Record<string, ActionId> = {
           "new-terminal": "terminal.new",
           "new-worktree": "worktree.createDialog.open",

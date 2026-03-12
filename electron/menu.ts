@@ -228,6 +228,11 @@ export function createApplicationMenu(
       role: "help",
       submenu: [
         {
+          label: "Getting Started",
+          click: () => sendAction("show-getting-started"),
+        },
+        { type: "separator" },
+        {
           label: "Learn More",
           click: async () => {
             await shell.openExternal("https://github.com/gregpriday/canopy-electron");
