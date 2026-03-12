@@ -163,11 +163,10 @@ export function Toolbar({
   const panelPaletteOpen = usePaletteStore((state) => state.activePaletteId === "panel");
 
   const handleTogglePanelPalette = useCallback(() => {
-    const store = usePaletteStore.getState();
-    if (store.activePaletteId === "panel") {
-      store.closePalette("panel");
+    if (usePaletteStore.getState().activePaletteId === "panel") {
+      usePaletteStore.getState().closePalette("panel");
     } else {
-      store.openPalette("panel");
+      void actionService.dispatch("panel.palette", undefined, { source: "user" });
     }
   }, []);
 
