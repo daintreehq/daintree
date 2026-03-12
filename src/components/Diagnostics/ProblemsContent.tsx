@@ -41,7 +41,14 @@ interface ErrorRowProps {
   onCancelRetry?: () => void;
 }
 
-function ErrorRow({ error, isExpanded, onToggleExpand, onDismiss, onRetry, onCancelRetry }: ErrorRowProps) {
+function ErrorRow({
+  error,
+  isExpanded,
+  onToggleExpand,
+  onDismiss,
+  onRetry,
+  onCancelRetry,
+}: ErrorRowProps) {
   const typeLabel = ERROR_TYPE_LABELS[error.type] || "Error";
   const typeColor = ERROR_TYPE_COLORS[error.type] || "text-status-error";
   const isRetrying = !!error.retryProgress;
@@ -284,9 +291,7 @@ export function ProblemsContent({ onRetry, onCancelRetry, className }: ProblemsC
                     ? () => onRetry(error.id, error.retryAction!, error.retryArgs)
                     : undefined
                 }
-                onCancelRetry={
-                  onCancelRetry ? () => onCancelRetry(error.id) : undefined
-                }
+                onCancelRetry={onCancelRetry ? () => onCancelRetry(error.id) : undefined}
               />
             ))}
           </tbody>

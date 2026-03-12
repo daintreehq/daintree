@@ -86,11 +86,7 @@ export function ErrorBanner({
         {isRetrying && onCancelRetry && (
           <>
             <span className="text-status-warning text-[10px] shrink-0">{retryLabel}</span>
-            <Button
-              variant="ghost-danger"
-              size="xs"
-              onClick={handleCancel}
-            >
+            <Button variant="ghost-danger" size="xs" onClick={handleCancel}>
               Cancel
             </Button>
           </>
@@ -160,11 +156,7 @@ export function ErrorBanner({
           {isRetrying && onCancelRetry && (
             <>
               <span className="text-status-warning text-[10px]">{retryLabel}</span>
-              <Button
-                variant="ghost-danger"
-                size="xs"
-                onClick={handleCancel}
-              >
+              <Button variant="ghost-danger" size="xs" onClick={handleCancel}>
                 Cancel
               </Button>
             </>

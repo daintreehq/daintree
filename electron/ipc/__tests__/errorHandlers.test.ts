@@ -117,10 +117,7 @@ describe("errorHandlers", () => {
       CHANNELS.ERROR_GET_PENDING,
       expect.any(Function)
     );
-    expect(ipcMainMock.on).toHaveBeenCalledWith(
-      CHANNELS.ERROR_RETRY_CANCEL,
-      expect.any(Function)
-    );
+    expect(ipcMainMock.on).toHaveBeenCalledWith(CHANNELS.ERROR_RETRY_CANCEL, expect.any(Function));
 
     cleanup();
 
@@ -285,10 +282,7 @@ describe("errorHandlers", () => {
       const retryHandler = getInvokeHandler(CHANNELS.ERROR_RETRY);
 
       await expect(
-        retryHandler(
-          {} as never,
-          { errorId: "e3", action: "worktree" } as never
-        )
+        retryHandler({} as never, { errorId: "e3", action: "worktree" } as never)
       ).rejects.toThrow("ETIMEDOUT");
 
       expect(refresh).toHaveBeenCalledTimes(5);
@@ -403,15 +397,17 @@ describe("errorHandlers", () => {
       });
 
       // Make sleep trigger the cancel handler via the signal
-      sleepMock.mockImplementation(async (_delay: number, _val: unknown, opts?: { signal?: AbortSignal }) => {
-        if (opts?.signal) {
-          // Simulate the cancel being called during sleep
-          const cancelHandler = getOnHandler(CHANNELS.ERROR_RETRY_CANCEL);
-          cancelHandler({} as never, "e8");
-          // Now the signal should be aborted, throw AbortError
-          opts.signal.throwIfAborted();
+      sleepMock.mockImplementation(
+        async (_delay: number, _val: unknown, opts?: { signal?: AbortSignal }) => {
+          if (opts?.signal) {
+            // Simulate the cancel being called during sleep
+            const cancelHandler = getOnHandler(CHANNELS.ERROR_RETRY_CANCEL);
+            cancelHandler({} as never, "e8");
+            // Now the signal should be aborted, throw AbortError
+            opts.signal.throwIfAborted();
+          }
         }
-      });
+      );
 
       registerErrorHandlers(mockWindow as never, null, { spawn } as never);
       const retryHandler = getInvokeHandler(CHANNELS.ERROR_RETRY);

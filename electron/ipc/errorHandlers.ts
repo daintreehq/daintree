@@ -445,7 +445,9 @@ export function registerErrorHandlers(
     }
   };
   ipcMain.on(CHANNELS.ERROR_RETRY_CANCEL, handleRetryCancelListener);
-  handlers.push(() => ipcMain.removeListener(CHANNELS.ERROR_RETRY_CANCEL, handleRetryCancelListener));
+  handlers.push(() =>
+    ipcMain.removeListener(CHANNELS.ERROR_RETRY_CANCEL, handleRetryCancelListener)
+  );
 
   const handleOpenLogs = async () => {
     await errorService.openLogs();

@@ -150,9 +150,7 @@ const createErrorStore: StateCreator<ErrorStore> = (set, get) => ({
 
   clearRetryProgress: (id) => {
     set((state) => ({
-      errors: state.errors.map((e) =>
-        e.id === id ? { ...e, retryProgress: undefined } : e
-      ),
+      errors: state.errors.map((e) => (e.id === id ? { ...e, retryProgress: undefined } : e)),
     }));
   },
 
