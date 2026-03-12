@@ -665,6 +665,10 @@ export interface ElectronAPI {
         defaultValue: string;
       }) => void
     ): () => void;
+    /** Subscribe to find-in-page shortcuts forwarded from focused webview guests */
+    onFindShortcut(
+      callback: (payload: { panelId: string; shortcut: "find" | "next" | "prev" | "close" }) => void
+    ): () => void;
   };
   hibernation: {
     getConfig(): Promise<HibernationConfig>;

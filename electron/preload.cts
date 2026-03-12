@@ -412,6 +412,7 @@ const CHANNELS = {
   WEBVIEW_REGISTER_PANEL: "webview:register-panel",
   WEBVIEW_DIALOG_REQUEST: "webview:dialog-request",
   WEBVIEW_DIALOG_RESPONSE: "webview:dialog-response",
+  WEBVIEW_FIND_SHORTCUT: "webview:find-shortcut",
 
   // Hibernation channels
   HIBERNATION_GET_CONFIG: "hibernation:get-config",
@@ -1387,6 +1388,9 @@ const api: ElectronAPI = {
         defaultValue: string;
       }) => void
     ): (() => void) => _typedOn(CHANNELS.WEBVIEW_DIALOG_REQUEST, callback),
+    onFindShortcut: (
+      callback: (payload: { panelId: string; shortcut: "find" | "next" | "prev" | "close" }) => void
+    ): (() => void) => _typedOn(CHANNELS.WEBVIEW_FIND_SHORTCUT, callback),
   },
 
   // Hibernation API

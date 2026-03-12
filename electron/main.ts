@@ -694,6 +694,33 @@ function setupWebviewCSP(): void {
           }
         }
       );
+
+      // Intercept find-in-page shortcuts (Cmd/Ctrl+F, Cmd/Ctrl+G, Escape) from webview guests
+      // so the renderer can manage the find bar even when the webview has keyboard focus.
+      contents.on("before-input-event", (event, input) => {
+        if (input.type !== "keyDown") return;
+        const isMac = process.platform === "darwin";
+        const mod = isMac ? input.meta : input.control;
+
+        let shortcut: "find" | "next" | "prev" | "close" | null = null;
+        if (input.key === "Escape") {
+          shortcut = "close";
+        } else if (mod && input.key.toLowerCase() === "f" && !input.alt && !input.shift) {
+          shortcut = "find";
+        } else if (mod && input.key.toLowerCase() === "g" && !input.alt) {
+          shortcut = input.shift ? "prev" : "next";
+        }
+
+        if (!shortcut) return;
+
+        const panelId = getWebviewDialogService().getPanelId(contents.id);
+        if (!panelId) return;
+
+        event.preventDefault();
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send(CHANNELS.WEBVIEW_FIND_SHORTCUT, { panelId, shortcut });
+        }
+      });
     }
   });
 }

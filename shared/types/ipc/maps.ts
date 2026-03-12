@@ -1496,6 +1496,12 @@ export interface IpcEventMap {
     defaultValue: string;
   };
 
+  // Webview find-in-page shortcut forwarded from guest
+  "webview:find-shortcut": {
+    panelId: string;
+    shortcut: "find" | "next" | "prev" | "close";
+  };
+
   // Voice input events
   "voice-input:transcription-delta": string;
   "voice-input:transcription-complete": { text: string; willCorrect: boolean };

@@ -249,6 +249,7 @@ export const CHANNELS = {
   WEBVIEW_REGISTER_PANEL: "webview:register-panel",
   WEBVIEW_DIALOG_REQUEST: "webview:dialog-request",
   WEBVIEW_DIALOG_RESPONSE: "webview:dialog-response",
+  WEBVIEW_FIND_SHORTCUT: "webview:find-shortcut",
 
   SYSTEM_SLEEP_GET_METRICS: "system-sleep:get-metrics",
   SYSTEM_SLEEP_GET_AWAKE_TIME: "system-sleep:get-awake-time",

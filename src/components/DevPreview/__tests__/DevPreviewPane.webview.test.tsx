@@ -149,6 +149,22 @@ vi.mock("@/hooks/useWebviewDialog", () => ({
   useWebviewDialog: () => ({ currentDialog: null, handleDialogRespond: vi.fn() }),
 }));
 
+vi.mock("@/hooks/useFindInPage", () => ({
+  useFindInPage: () => ({
+    isOpen: false,
+    query: "",
+    activeMatch: 0,
+    matchCount: 0,
+    inputRef: { current: null },
+    isComposingRef: { current: false },
+    open: vi.fn(),
+    close: vi.fn(),
+    setQuery: vi.fn(),
+    goNext: vi.fn(),
+    goPrev: vi.fn(),
+  }),
+}));
+
 vi.mock("@/components/Browser/BrowserToolbar", () => ({
   BrowserToolbar: () => <div data-testid="browser-toolbar" />,
 }));
