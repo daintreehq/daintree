@@ -136,11 +136,11 @@ export function CommitList({ projectPath, onClose, initialCount }: CommitListPro
     return () => abortController.abort();
   }, [debouncedSearch, projectPath, fetchData]);
 
-  const handleLoadMore = () => {
+  const handleLoadMore = useCallback(() => {
     if (!loadingMore && hasMore) {
       fetchData(skip, true, undefined);
     }
-  };
+  }, [loadingMore, hasMore, fetchData, skip]);
 
   const handleRetry = () => {
     setSkip(0);

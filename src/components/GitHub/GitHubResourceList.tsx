@@ -222,11 +222,11 @@ export function GitHubResourceList({
     };
   }, [exactNumber, projectPath, type, filterState]);
 
-  const handleLoadMore = () => {
+  const handleLoadMore = useCallback(() => {
     if (!loadingMore && hasMore) {
       fetchData(cursor, true, undefined);
     }
-  };
+  }, [loadingMore, hasMore, fetchData, cursor]);
 
   const handleOpenInGitHub = () => {
     if (type === "issue") {
