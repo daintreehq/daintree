@@ -58,18 +58,29 @@ export function useAccessibilityAnnouncements() {
     for (const terminal of terminals) {
       if (!terminal.agentState) continue;
 
+      const prev = prevStates.get(terminal.id);
+
+      // No previous state or same state — just track it
+      if (!prev || prev.agentState === terminal.agentState) {
+        newStates.set(terminal.id, {
+          agentState: terminal.agentState,
+          stateChangeConfidence: terminal.stateChangeConfidence,
+        });
+        continue;
+      }
+
+      // Skip low-confidence heuristic transitions — keep the previous state
+      // so a later high-confidence confirmation of this state will still trigger
+      if (terminal.stateChangeConfidence !== undefined && terminal.stateChangeConfidence < 0.7) {
+        newStates.set(terminal.id, prev);
+        continue;
+      }
+
+      // State changed with sufficient confidence — record and announce
       newStates.set(terminal.id, {
         agentState: terminal.agentState,
         stateChangeConfidence: terminal.stateChangeConfidence,
       });
-
-      const prev = prevStates.get(terminal.id);
-      if (!prev || prev.agentState === terminal.agentState) continue;
-
-      // Skip low-confidence heuristic transitions
-      if (terminal.stateChangeConfidence !== undefined && terminal.stateChangeConfidence < 0.7) {
-        continue;
-      }
 
       const announcement = getAgentStateMessage(terminal.title, terminal.agentState);
       if (!announcement) continue;
