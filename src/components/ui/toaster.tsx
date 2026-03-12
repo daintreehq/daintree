@@ -1,8 +1,9 @@
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useLayoutEffect, useState, useCallback, useRef } from "react";
 import { createPortal } from "react-dom";
 import { X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useNotificationStore, type Notification } from "@/store/notificationStore";
+import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { useShallow } from "zustand/react/shallow";
 
 const ACCENT_CLASS: Record<string, string> = {
@@ -21,23 +22,48 @@ function Toast({ notification }: { notification: Notification }) {
   );
   const [isVisible, setIsVisible] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
+  const toastRef = useRef<HTMLDivElement>(null);
+  const prevFocusRef = useRef<Element | null>(null);
+
+  useLayoutEffect(() => {
+    prevFocusRef.current = document.activeElement;
+  }, []);
 
   useEffect(() => {
-    requestAnimationFrame(() => setIsVisible(true));
+    const text = typeof notification.message === "string"
+      ? notification.message
+      : (notification.inboxMessage ?? "");
+    if (!text) return;
+    const fullText = notification.title ? `${notification.title}: ${text}` : text;
+    const priority = notification.type === "error" ? "assertive" : "polite";
+    useAnnouncerStore.getState().announce(fullText, priority);
+  }, [notification.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    const handle = requestAnimationFrame(() => setIsVisible(true));
+    return () => cancelAnimationFrame(handle);
+  }, []);
+
+  const restoreFocus = useCallback(() => {
+    if (toastRef.current?.contains(document.activeElement)) {
+      (prevFocusRef.current as HTMLElement | null)?.focus?.();
+    }
   }, []);
 
   const handleDismiss = useCallback(() => {
+    restoreFocus();
     dismissNotification(notification.id);
     setIsVisible(false);
     setTimeout(() => removeNotification(notification.id), 300);
-  }, [notification.id, dismissNotification, removeNotification]);
+  }, [notification.id, dismissNotification, removeNotification, restoreFocus]);
 
   useEffect(() => {
     if (notification.dismissed && isVisible) {
+      restoreFocus();
       setIsVisible(false);
       setTimeout(() => removeNotification(notification.id), 300);
     }
-  }, [notification.dismissed, notification.id, isVisible, removeNotification]);
+  }, [notification.dismissed, notification.id, isVisible, removeNotification, restoreFocus]);
 
   useEffect(() => {
     if (notification.duration === 0 || isPaused) return;
@@ -49,6 +75,7 @@ function Toast({ notification }: { notification: Notification }) {
 
   return (
     <div
+      ref={toastRef}
       className={cn(
         "group pointer-events-auto relative flex w-full max-w-[360px] items-start gap-3",
         "rounded-[var(--radius-sm)] border-l-[3px] border border-white/[0.08]",
@@ -58,11 +85,18 @@ function Toast({ notification }: { notification: Notification }) {
         "shadow-[0_8px_24px_rgba(0,0,0,0.4)]",
         "ring-1 ring-inset ring-white/[0.05]",
         "transition-[transform,opacity] duration-300 ease-out",
+        "motion-reduce:transition-none motion-reduce:duration-0",
         isVisible ? "translate-x-0 opacity-100" : "translate-x-8 opacity-0",
         accentClass
       )}
       onMouseEnter={() => setIsPaused(true)}
       onMouseLeave={() => setIsPaused(false)}
+      onFocus={() => setIsPaused(true)}
+      onBlur={(e) => {
+        if (!e.currentTarget.contains(e.relatedTarget as Node | null)) {
+          setIsPaused(false);
+        }
+      }}
       role="alert"
     >
       <div className="flex-1 space-y-1 min-w-0 py-0.5">
