@@ -36,6 +36,25 @@ exports.default = async function afterPack(context) {
 
   console.log(`[afterPack] node-pty found at: ${nodePtyPath}`);
 
+  const betterSqlitePath = path.join(unpackedPath, "node_modules/better-sqlite3");
+
+  if (!fs.existsSync(betterSqlitePath)) {
+    throw new Error(
+      `[afterPack] CRITICAL: better-sqlite3 not found at ${betterSqlitePath}. ` +
+        "Database functionality will not work. Check asarUnpack configuration."
+    );
+  }
+
+  const betterSqliteNative = path.join(betterSqlitePath, "build/Release/better_sqlite3.node");
+  if (!fs.existsSync(betterSqliteNative)) {
+    throw new Error(
+      `[afterPack] CRITICAL: better-sqlite3 native binary not found at ${betterSqliteNative}. ` +
+        'Run "npm run rebuild" to build the native module.'
+    );
+  }
+
+  console.log(`[afterPack] better-sqlite3 verified: ${betterSqliteNative}`);
+
   if (electronPlatformName === "win32") {
     // Windows uses ConPTY exclusively (winpty removed in node-pty 1.2.0-beta)
     const compiledBinaries = ["conpty.node", "conpty_console_list.node"];
