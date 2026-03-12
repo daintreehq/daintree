@@ -104,19 +104,9 @@ describe("computeChipState", () => {
         "complete"
       );
     });
-
-    it('returns complete when lifecycleStage is "working"', () => {
-      expect(computeChipState({ ...base, lifecycleStage: "working", isComplete: true })).toBe(
-        "complete"
-      );
-    });
   });
 
   describe("null cases", () => {
-    it('returns null when lifecycleStage is "working"', () => {
-      expect(computeChipState({ ...base, lifecycleStage: "working" })).toBeNull();
-    });
-
     it('returns null when lifecycleStage is "in-review"', () => {
       expect(computeChipState({ ...base, lifecycleStage: "in-review" })).toBeNull();
     });

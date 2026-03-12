@@ -22,15 +22,14 @@ import {
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "../../ui/tooltip";
 import {
   AlertCircle,
-  CircleDashed,
+  Check,
   CircleDot,
   CornerDownRight,
-  GitMerge,
   GitPullRequest,
   MoreHorizontal,
   House,
   Pin,
-  Trash2,
+  type LucideIcon,
 } from "lucide-react";
 import type { WorktreeLifecycleStage } from "./hooks/useWorktreeStatus";
 import { useIssueTooltip, usePRTooltip } from "@/hooks/useGitHubTooltip";
@@ -247,26 +246,21 @@ export interface WorktreeHeaderProps {
 
 const LIFECYCLE_CONFIG: Record<
   WorktreeLifecycleStage,
-  { icon: typeof CircleDashed; className: string; label: string }
+  { icon: LucideIcon; className: string; label: string }
 > = {
-  working: {
-    icon: CircleDashed,
-    className: "w-3.5 h-3.5 text-canopy-text/50",
-    label: "Working",
-  },
   "in-review": {
-    icon: GitPullRequest,
-    className: "w-3.5 h-3.5 text-github-open",
+    icon: CircleDot,
+    className: "w-2.5 h-2.5 text-canopy-text/65",
     label: "In review",
   },
   merged: {
-    icon: GitMerge,
-    className: "w-3.5 h-3.5 text-github-merged",
+    icon: Check,
+    className: "w-2.5 h-2.5 text-canopy-text/35",
     label: "Merged",
   },
   "ready-for-cleanup": {
-    icon: Trash2,
-    className: "w-3.5 h-3.5 text-github-merged",
+    icon: Check,
+    className: "w-2.5 h-2.5 text-canopy-text/40",
     label: "Ready for cleanup",
   },
 };
