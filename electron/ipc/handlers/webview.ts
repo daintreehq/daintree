@@ -317,7 +317,7 @@ export function registerWebviewHandlers(deps: HandlerDependencies): () => void {
     }
   };
 
-  function handleConsoleApiCalled(wcId: number, session: CdpSession, params: unknown): void {
+  function handleConsoleApiCalled(_wcId: number, session: CdpSession, params: unknown): void {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const p = params as any;
     if (!p) return;

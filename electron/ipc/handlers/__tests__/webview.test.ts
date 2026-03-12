@@ -58,14 +58,21 @@ import type { HandlerDependencies } from "../../types.js";
 const deps: HandlerDependencies = { mainWindow: mainWindowMock as any };
 
 function getHandler(channel: string) {
-  const call = ipcMainMock.handle.mock.calls.find(([ch]: [string]) => ch.includes(channel));
+  const call = ipcMainMock.handle.mock.calls.find(([ch]: string[]) => ch.includes(channel));
   if (!call) throw new Error(`Handler not registered for ${channel}`);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   return call[1] as (...args: any[]) => Promise<any>;
 }
 
 describe("registerWebviewHandlers", () => {
+  let cleanup: (() => void) | null = null;
+
   beforeEach(() => {
+    // Clean up previous registration to reset module-level session state
+    if (cleanup) {
+      cleanup();
+      cleanup = null;
+    }
     vi.clearAllMocks();
     debuggerMock.isAttached.mockReturnValue(false);
     debuggerMock.sendCommand.mockResolvedValue(undefined);
@@ -73,8 +80,15 @@ describe("registerWebviewHandlers", () => {
     mockWebContents.isDestroyed.mockReturnValue(false);
   });
 
+  afterEach(() => {
+    if (cleanup) {
+      cleanup();
+      cleanup = null;
+    }
+  });
+
   it("registers and cleans up all IPC handlers", () => {
-    const cleanup = registerWebviewHandlers(deps);
+    cleanup = registerWebviewHandlers(deps);
     expect(ipcMainMock.handle).toHaveBeenCalledWith(
       "webview:set-lifecycle-state",
       expect.any(Function)
@@ -103,7 +117,7 @@ describe("registerWebviewHandlers", () => {
       return Promise.resolve();
     });
 
-    registerWebviewHandlers(deps);
+    cleanup = registerWebviewHandlers(deps);
     const handler = getHandler("webview:set-lifecycle-state");
     await handler(null, 42, true);
 
@@ -114,7 +128,7 @@ describe("registerWebviewHandlers", () => {
   });
 
   it("sends active state when frozen=false", async () => {
-    registerWebviewHandlers(deps);
+    cleanup = registerWebviewHandlers(deps);
     const handler = getHandler("webview:set-lifecycle-state");
     await handler(null, 42, false);
 
@@ -125,7 +139,7 @@ describe("registerWebviewHandlers", () => {
 
   it("skips attach if debugger already attached", async () => {
     debuggerMock.isAttached.mockReturnValue(true);
-    registerWebviewHandlers(deps);
+    cleanup = registerWebviewHandlers(deps);
     const handler = getHandler("webview:set-lifecycle-state");
     await handler(null, 42, true);
 
@@ -138,7 +152,7 @@ describe("registerWebviewHandlers", () => {
   it("returns early if webContents not found", async () => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     webContentsMock.fromId.mockReturnValue(null as any);
-    registerWebviewHandlers(deps);
+    cleanup = registerWebviewHandlers(deps);
     const handler = getHandler("webview:set-lifecycle-state");
     await expect(handler(null, 99, true)).resolves.toBeUndefined();
     expect(debuggerMock.attach).not.toHaveBeenCalled();
@@ -146,14 +160,14 @@ describe("registerWebviewHandlers", () => {
 
   it("returns early if webContents is destroyed", async () => {
     mockWebContents.isDestroyed.mockReturnValue(true);
-    registerWebviewHandlers(deps);
+    cleanup = registerWebviewHandlers(deps);
     const handler = getHandler("webview:set-lifecycle-state");
     await expect(handler(null, 42, true)).resolves.toBeUndefined();
     expect(debuggerMock.attach).not.toHaveBeenCalled();
   });
 
   it("throws on invalid argument types", async () => {
-    registerWebviewHandlers(deps);
+    cleanup = registerWebviewHandlers(deps);
     const handler = getHandler("webview:set-lifecycle-state");
     await expect(handler(null, "not-a-number", true)).rejects.toThrow("Invalid arguments");
     await expect(handler(null, 42, "not-a-boolean")).rejects.toThrow("Invalid arguments");
@@ -162,7 +176,7 @@ describe("registerWebviewHandlers", () => {
   it("handles expected transient debugger errors non-fatally without logging", async () => {
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     debuggerMock.sendCommand.mockRejectedValue(new Error("Target closed"));
-    registerWebviewHandlers(deps);
+    cleanup = registerWebviewHandlers(deps);
     const handler = getHandler("webview:set-lifecycle-state");
     await expect(handler(null, 42, true)).resolves.toBeUndefined();
     expect(warnSpy).not.toHaveBeenCalled();
@@ -172,7 +186,7 @@ describe("registerWebviewHandlers", () => {
   it("logs a warning for unexpected debugger errors", async () => {
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     debuggerMock.sendCommand.mockRejectedValue(new Error("Unexpected internal error"));
-    registerWebviewHandlers(deps);
+    cleanup = registerWebviewHandlers(deps);
     const handler = getHandler("webview:set-lifecycle-state");
     await expect(handler(null, 42, true)).resolves.toBeUndefined();
     expect(warnSpy).toHaveBeenCalledWith(
@@ -184,7 +198,7 @@ describe("registerWebviewHandlers", () => {
 
   describe("console capture", () => {
     it("attaches debugger and enables Runtime on startConsoleCapture", async () => {
-      registerWebviewHandlers(deps);
+      cleanup = registerWebviewHandlers(deps);
       const handler = getHandler("webview:start-console-capture");
       await handler(null, 42, "pane-1");
 
@@ -195,13 +209,13 @@ describe("registerWebviewHandlers", () => {
     });
 
     it("forwards consoleAPICalled events to renderer", async () => {
-      registerWebviewHandlers(deps);
+      cleanup = registerWebviewHandlers(deps);
       const handler = getHandler("webview:start-console-capture");
       await handler(null, 42, "pane-1");
 
       // Get the message listener that was registered
       const messageCall = debuggerMock.on.mock.calls.find(
-        ([event]: [string]) => event === "message"
+        ([event]: string[]) => event === "message"
       );
       expect(messageCall).toBeDefined();
       const messageListener = messageCall![1];
@@ -241,7 +255,7 @@ describe("registerWebviewHandlers", () => {
         return Promise.resolve();
       });
 
-      registerWebviewHandlers(deps);
+      cleanup = registerWebviewHandlers(deps);
       const handler = getHandler("webview:get-console-properties");
       const result = await handler(null, 42, "obj-123");
 
@@ -262,7 +276,7 @@ describe("registerWebviewHandlers", () => {
         return Promise.resolve();
       });
 
-      registerWebviewHandlers(deps);
+      cleanup = registerWebviewHandlers(deps);
       const handler = getHandler("webview:get-console-properties");
       const result = await handler(null, 42, "stale-obj");
 
@@ -270,12 +284,12 @@ describe("registerWebviewHandlers", () => {
     });
 
     it("tracks group depth correctly", async () => {
-      registerWebviewHandlers(deps);
+      cleanup = registerWebviewHandlers(deps);
       const handler = getHandler("webview:start-console-capture");
       await handler(null, 42, "pane-1");
 
       const messageListener = debuggerMock.on.mock.calls.find(
-        ([event]: [string]) => event === "message"
+        ([event]: string[]) => event === "message"
       )![1];
 
       // startGroup → depth 0, then children at depth 1
@@ -304,7 +318,7 @@ describe("registerWebviewHandlers", () => {
       });
 
       const calls = mainWindowMock.webContents.send.mock.calls.filter(
-        ([ch]: [string]) => ch === "webview:console-message"
+        ([ch]: string[]) => ch === "webview:console-message"
       );
       // endGroup doesn't produce a row, so 3 messages
       expect(calls).toHaveLength(3);

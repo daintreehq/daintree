@@ -1414,8 +1414,9 @@ const api: ElectronAPI = {
       ipcRenderer.invoke(CHANNELS.WEBVIEW_CLEAR_CONSOLE_CAPTURE, webContentsId, paneId),
     getConsoleProperties: (webContentsId: number, objectId: string) =>
       ipcRenderer.invoke(CHANNELS.WEBVIEW_GET_CONSOLE_PROPERTIES, webContentsId, objectId),
-    onConsoleMessage: (callback: (row: unknown) => void): (() => void) =>
-      _typedOn(CHANNELS.WEBVIEW_CONSOLE_MESSAGE, callback),
+    onConsoleMessage: (
+      callback: (row: import("../shared/types/ipc/webviewConsole.js").SerializedConsoleRow) => void
+    ): (() => void) => _typedOn(CHANNELS.WEBVIEW_CONSOLE_MESSAGE, callback),
     onConsoleContextCleared: (
       callback: (payload: { paneId: string; navigationGeneration: number }) => void
     ): (() => void) => _typedOn(CHANNELS.WEBVIEW_CONSOLE_CONTEXT_CLEARED, callback),
