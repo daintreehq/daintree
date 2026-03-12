@@ -5,7 +5,7 @@ import { createFixtureRepo } from "../helpers/fixtures";
 import { openAndOnboardProject } from "../helpers/project";
 import { getGridPanelCount } from "../helpers/panels";
 import { SEL } from "../helpers/selectors";
-import { T_SHORT, T_MEDIUM, T_LONG, T_SETTLE } from "../helpers/timeouts";
+import { T_SHORT, T_MEDIUM, T_LONG } from "../helpers/timeouts";
 
 let ctx: AppContext;
 const mod = process.platform === "darwin" ? "Meta" : "Control";
@@ -17,9 +17,7 @@ function buildAxeScanner(page: import("@playwright/test").Page) {
 }
 
 function formatViolations(violations: import("axe-core").Result[]): string {
-  return violations
-    .map((v) => `[${v.id}] ${v.help} (${v.nodes.length} nodes)`)
-    .join("\n");
+  return violations.map((v) => `[${v.id}] ${v.help} (${v.nodes.length} nodes)`).join("\n");
 }
 
 test.describe.serial("Core: Accessibility", () => {
@@ -141,9 +139,7 @@ test.describe.serial("Core: Accessibility", () => {
       expect(tagName).toBe("button");
 
       // Verify focus actually moved away from the first button
-      const isStillFirst = await firstButton.evaluate(
-        (el) => el === document.activeElement
-      );
+      const isStillFirst = await firstButton.evaluate((el) => el === document.activeElement);
       expect(isStillFirst).toBe(false);
     });
   });
