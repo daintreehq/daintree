@@ -119,6 +119,13 @@ import type { SpawnResult, TerminalStatusPayload } from "../pty-host.js";
 import type { HibernationConfig } from "./hibernation.js";
 import type { AgentRegistry, AgentMetadata } from "./agentCapabilities.js";
 import type { AppThemeConfig } from "../appTheme.js";
+import type {
+  DemoMoveToPayload,
+  DemoTypePayload,
+  DemoSetZoomPayload,
+  DemoWaitForSelectorPayload,
+  DemoScreenshotResult,
+} from "./demo.js";
 
 export type ChecklistItemId = "openedProject" | "launchedAgent" | "createdWorktree";
 
@@ -1440,6 +1447,40 @@ export interface IpcInvokeMap {
     args: [webContentsId: number, objectId: string];
     result: import("./webviewConsole.js").CdpGetPropertiesResult;
   };
+
+  // Demo mode channels (dev-only, gated by --demo-mode flag)
+  "demo:move-to": {
+    args: [payload: DemoMoveToPayload];
+    result: void;
+  };
+  "demo:click": {
+    args: [];
+    result: void;
+  };
+  "demo:type": {
+    args: [payload: DemoTypePayload];
+    result: void;
+  };
+  "demo:set-zoom": {
+    args: [payload: DemoSetZoomPayload];
+    result: void;
+  };
+  "demo:screenshot": {
+    args: [];
+    result: DemoScreenshotResult;
+  };
+  "demo:wait-for-selector": {
+    args: [payload: DemoWaitForSelectorPayload];
+    result: void;
+  };
+  "demo:pause": {
+    args: [];
+    result: void;
+  };
+  "demo:resume": {
+    args: [];
+    result: void;
+  };
 }
 
 /**
@@ -1577,6 +1618,15 @@ export interface IpcEventMap {
   "voice-input:paragraph-boundary": { rawText: string | null; correctionId: string | null };
   "voice-input:error": string;
   "voice-input:status": "idle" | "connecting" | "recording" | "error";
+
+  // Demo mode events (main → renderer command forwarding)
+  "demo:exec-move-to": DemoMoveToPayload;
+  "demo:exec-click": void;
+  "demo:exec-type": DemoTypePayload;
+  "demo:exec-set-zoom": DemoSetZoomPayload;
+  "demo:exec-pause": void;
+  "demo:exec-resume": void;
+  "demo:exec-wait-for-selector": DemoWaitForSelectorPayload;
 }
 
 export type IpcInvokeArgs<K extends keyof IpcInvokeMap> = IpcInvokeMap[K]["args"];

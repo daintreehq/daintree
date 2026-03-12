@@ -403,6 +403,24 @@ export const CHANNELS = {
   CRASH_RECOVERY_RESOLVE: "crash-recovery:resolve",
   CRASH_RECOVERY_GET_CONFIG: "crash-recovery:get-config",
   CRASH_RECOVERY_SET_CONFIG: "crash-recovery:set-config",
+
+  // Demo mode channels (dev-only)
+  DEMO_MOVE_TO: "demo:move-to",
+  DEMO_CLICK: "demo:click",
+  DEMO_TYPE: "demo:type",
+  DEMO_SET_ZOOM: "demo:set-zoom",
+  DEMO_SCREENSHOT: "demo:screenshot",
+  DEMO_WAIT_FOR_SELECTOR: "demo:wait-for-selector",
+  DEMO_PAUSE: "demo:pause",
+  DEMO_RESUME: "demo:resume",
+  DEMO_EXEC_MOVE_TO: "demo:exec-move-to",
+  DEMO_EXEC_CLICK: "demo:exec-click",
+  DEMO_EXEC_TYPE: "demo:exec-type",
+  DEMO_EXEC_SET_ZOOM: "demo:exec-set-zoom",
+  DEMO_EXEC_PAUSE: "demo:exec-pause",
+  DEMO_EXEC_RESUME: "demo:exec-resume",
+  DEMO_EXEC_WAIT_FOR_SELECTOR: "demo:exec-wait-for-selector",
+  DEMO_COMMAND_DONE: "demo:command-done",
 } as const;
 
 export type ChannelName = (typeof CHANNELS)[keyof typeof CHANNELS];

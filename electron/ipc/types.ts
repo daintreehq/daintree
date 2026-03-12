@@ -18,4 +18,5 @@ export interface HandlerDependencies {
   events?: TypedEventBus;
   agentVersionService?: AgentVersionService;
   agentUpdateHandler?: AgentUpdateHandler;
+  isDemoMode?: boolean;
 }

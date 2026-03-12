@@ -63,6 +63,8 @@ import type { ShowContextMenuPayload } from "../shared/types/menu.js";
 
 export type { ElectronAPI };
 
+const isDemoMode = process.argv.includes("--demo-mode");
+
 // Store MessagePort for direct Renderer ↔ Pty Host communication
 // Note: We cannot return MessagePort via contextBridge (it's not cloneable/transferable via that API).
 // Instead, we use window.postMessage to transfer it to the main world.
@@ -561,6 +563,24 @@ const CHANNELS = {
   ONBOARDING_CHECKLIST_GET: "onboarding:checklist-get",
   ONBOARDING_CHECKLIST_DISMISS: "onboarding:checklist-dismiss",
   ONBOARDING_CHECKLIST_MARK_ITEM: "onboarding:checklist-mark-item",
+
+  // Demo mode channels (dev-only)
+  DEMO_MOVE_TO: "demo:move-to",
+  DEMO_CLICK: "demo:click",
+  DEMO_TYPE: "demo:type",
+  DEMO_SET_ZOOM: "demo:set-zoom",
+  DEMO_SCREENSHOT: "demo:screenshot",
+  DEMO_WAIT_FOR_SELECTOR: "demo:wait-for-selector",
+  DEMO_PAUSE: "demo:pause",
+  DEMO_RESUME: "demo:resume",
+  DEMO_EXEC_MOVE_TO: "demo:exec-move-to",
+  DEMO_EXEC_CLICK: "demo:exec-click",
+  DEMO_EXEC_TYPE: "demo:exec-type",
+  DEMO_EXEC_SET_ZOOM: "demo:exec-set-zoom",
+  DEMO_EXEC_PAUSE: "demo:exec-pause",
+  DEMO_EXEC_RESUME: "demo:exec-resume",
+  DEMO_EXEC_WAIT_FOR_SELECTOR: "demo:exec-wait-for-selector",
+  DEMO_COMMAND_DONE: "demo:command-done",
 } as const;
 
 const api: ElectronAPI = {
@@ -1829,6 +1849,24 @@ const api: ElectronAPI = {
     setConfig: (config: { autoRestoreOnCrash?: boolean }) =>
       _typedInvoke(CHANNELS.CRASH_RECOVERY_SET_CONFIG, config),
   },
+  ...(isDemoMode
+    ? {
+        demo: {
+          moveTo: (x: number, y: number, durationMs: number) =>
+            _typedInvoke(CHANNELS.DEMO_MOVE_TO, { x, y, durationMs }),
+          click: () => _typedInvoke(CHANNELS.DEMO_CLICK),
+          type: (selector: string, text: string, cps?: number) =>
+            _typedInvoke(CHANNELS.DEMO_TYPE, { selector, text, cps }),
+          setZoom: (factor: number, durationMs?: number) =>
+            _typedInvoke(CHANNELS.DEMO_SET_ZOOM, { factor, durationMs }),
+          screenshot: () => _typedInvoke(CHANNELS.DEMO_SCREENSHOT),
+          waitForSelector: (selector: string, timeoutMs?: number) =>
+            _typedInvoke(CHANNELS.DEMO_WAIT_FOR_SELECTOR, { selector, timeoutMs }),
+          pause: () => _typedInvoke(CHANNELS.DEMO_PAUSE),
+          resume: () => _typedInvoke(CHANNELS.DEMO_RESUME),
+        },
+      }
+    : {}),
 };
 
 // Expose the API to the renderer process only for trusted origins in the main frame
