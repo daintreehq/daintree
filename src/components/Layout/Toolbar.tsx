@@ -143,7 +143,7 @@ export function Toolbar({
   );
   const [statsJustUpdated, setStatsJustUpdated] = useState(false);
   const prevLastUpdatedRef = useRef<number | null>(null);
-  const toolbarRef = useRef<HTMLElement>(null);
+  const toolbarRef = useRef<HTMLDivElement>(null);
   const activeToolbarIndexRef = useRef<number>(0);
 
   const { handleCopyTree } = useWorktreeActions();
