@@ -49,16 +49,21 @@ test.describe.serial("Core: Worktree Cards", () => {
       await expect(featureCard).not.toHaveAttribute("aria-label", /selected/);
     });
 
-    test("main worktree shows uncommitted changes indicator", async () => {
+    test("main worktree shows uncommitted changes, feature does not", async () => {
       const { window } = ctx;
 
       const mainCard = window.locator(SEL.worktree.card(MAIN));
+      const featureCard = window.locator(SEL.worktree.card(FEATURE));
+
       await expect
         .poll(() => mainCard.getAttribute("aria-label"), {
           timeout: T_LONG,
           message: "Main card should indicate uncommitted changes",
         })
         .toContain("has uncommitted changes");
+
+      const featureLabel = await featureCard.getAttribute("aria-label");
+      expect(featureLabel).not.toContain("has uncommitted changes");
     });
 
     test("clicking feature card switches selection", async () => {
@@ -110,6 +115,10 @@ test.describe.serial("Core: Worktree Cards", () => {
       await expect(window.getByRole("menuitem", { name: "Open in Editor" })).toBeVisible();
       await expect(window.getByRole("menuitem", { name: "Reveal in Finder" })).toBeVisible();
 
+      // Feature-only items (not shown on main worktree card)
+      await expect(window.getByRole("menuitem", { name: "Pin to Top" })).toBeVisible();
+      await expect(window.getByRole("menuitem", { name: /Delete Worktree/i })).toBeVisible();
+
       // Close the menu
       await window.keyboard.press("Escape");
       await expect(window.locator('[role="menu"]')).toHaveCount(0, { timeout: T_SHORT });
@@ -117,6 +126,8 @@ test.describe.serial("Core: Worktree Cards", () => {
 
     test("Launch submenu opens on hover and Open Terminal creates a panel", async () => {
       const { window } = ctx;
+
+      const panelsBefore = await getGridPanelCount(window);
 
       const featureCard = window.locator(SEL.worktree.card(FEATURE));
       const actionsBtn = featureCard.locator(SEL.worktree.actionsMenu);
@@ -132,7 +143,7 @@ test.describe.serial("Core: Worktree Cards", () => {
 
       await expect
         .poll(() => getGridPanelCount(window), { timeout: T_LONG })
-        .toBeGreaterThanOrEqual(1);
+        .toBe(panelsBefore + 1);
     });
 
     test("Escape dismisses the menu without side effects", async () => {
