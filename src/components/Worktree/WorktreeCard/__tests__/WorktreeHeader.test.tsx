@@ -81,28 +81,25 @@ function renderHeader(overrides: Partial<WorktreeHeaderProps> = {}) {
   );
 }
 
-function findMenuWrapper() {
-  const button = screen.getByTestId("worktree-actions-menu");
-  // Walk up to find the wrapper div with transition-opacity (the cn() div)
-  let el: HTMLElement | null = button;
-  while (el) {
-    if (el.className?.includes("transition-opacity")) return el;
-    el = el.parentElement;
-  }
-  throw new Error("Could not find menu wrapper with transition-opacity class");
+function getWrapper() {
+  return screen.getByTestId("worktree-actions-wrapper");
 }
 
 describe("WorktreeHeader menu button", () => {
-  it("has pointer-events-none when inactive", () => {
+  it("has pointer-events-none and hover/focus reveal classes when inactive", () => {
     renderHeader({ isActive: false });
-    const wrapper = findMenuWrapper();
+    const wrapper = getWrapper();
     expect(wrapper.className).toContain("pointer-events-none");
     expect(wrapper.className).toContain("opacity-0");
+    expect(wrapper.className).toContain("group-hover:pointer-events-auto");
+    expect(wrapper.className).toContain("group-hover:opacity-100");
+    expect(wrapper.className).toContain("group-focus-within:pointer-events-auto");
+    expect(wrapper.className).toContain("group-focus-within:opacity-100");
   });
 
   it("does not have pointer-events-none when active", () => {
     renderHeader({ isActive: true });
-    const wrapper = findMenuWrapper();
+    const wrapper = getWrapper();
     expect(wrapper.className).not.toContain("pointer-events-none");
     expect(wrapper.className).toContain("opacity-100");
   });
