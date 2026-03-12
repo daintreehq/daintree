@@ -10,3 +10,4 @@ export { useTerminalStoreBootstrap } from "./useTerminalStoreBootstrap";
 export { useSemanticWorkerLifecycle } from "./useSemanticWorkerLifecycle";
 export { useSystemWakeHandler } from "./useSystemWakeHandler";
 export { useDevServerDiscovery } from "./useDevServerDiscovery";
+export { useAccessibilityAnnouncements } from "./useAccessibilityAnnouncements";

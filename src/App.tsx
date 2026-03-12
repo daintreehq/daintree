@@ -48,6 +48,7 @@ import {
   useSemanticWorkerLifecycle,
   useSystemWakeHandler,
   useDevServerDiscovery,
+  useAccessibilityAnnouncements,
   type HydrationCallbacks,
 } from "./hooks/app";
 import { AppLayout } from "./components/Layout";
@@ -68,6 +69,7 @@ import { PanelPalette } from "./components/PanelPalette/PanelPalette";
 import { MORE_AGENTS_PANEL_ID } from "./hooks/usePanelPalette";
 import { GitInitDialog, ProjectOnboardingWizard, WelcomeScreen } from "./components/Project";
 import { VoiceRecordingAnnouncer } from "./components/Terminal/VoiceRecordingAnnouncer";
+import { AccessibilityAnnouncer } from "./components/Accessibility/AccessibilityAnnouncer";
 import { CreateProjectFolderDialog } from "./components/Project/CreateProjectFolderDialog";
 import { ProjectSwitcherPalette } from "./components/Project/ProjectSwitcherPalette";
 import { ActionPalette } from "./components/ActionPalette";
@@ -983,6 +985,7 @@ function App() {
   useSemanticWorkerLifecycle();
   useSystemWakeHandler();
   useDevServerDiscovery();
+  useAccessibilityAnnouncements();
 
   useEffect(() => {
     voiceRecordingService.initialize();
@@ -1019,6 +1022,7 @@ function App() {
     <ErrorBoundary variant="fullscreen" componentName="App">
       <DndProvider>
         <VoiceRecordingAnnouncer />
+        <AccessibilityAnnouncer />
         <Profiler id="app-layout" onRender={onLayoutRender}>
           <AppLayout
             sidebarContent={
