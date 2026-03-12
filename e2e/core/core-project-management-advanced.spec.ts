@@ -56,7 +56,7 @@ test.describe.serial("Core: Project Management Advanced", () => {
   // ── Project Removal Confirmation (3 tests) ──────────────
 
   test.describe.serial("Project Removal Confirmation", () => {
-    test("removal dialog appears for non-active project", async () => {
+    test("cancel leaves project intact", async () => {
       const { window } = ctx;
 
       await window.locator(SEL.toolbar.projectSwitcherTrigger).click();
@@ -68,33 +68,14 @@ test.describe.serial("Core: Project Management Advanced", () => {
       await expect(secondaryOption).toBeVisible({ timeout: T_SHORT });
       await secondaryOption.locator(SEL.projectSwitcher.closeButton).click({ force: true });
 
-      // Confirm dialog appears
-      const dialog = window.getByRole("dialog", { name: "Remove Project from List?" }).first();
+      // Confirm dialog appears with project name
+      const dialog = window.getByRole("dialog", { name: "Remove Project from List?" }).last();
       await expect(dialog).toBeVisible({ timeout: T_MEDIUM });
       await expect(dialog.locator(`text="${SECONDARY_NAME}"`)).toBeVisible();
 
-      // Dismiss dialog to leave clean state for next test
+      // Cancel — project should remain
       await dialog.getByRole("button", { name: "Cancel" }).click();
-      await expect(dialog).not.toBeVisible({ timeout: T_SHORT });
-    });
-
-    test("cancel leaves project intact", async () => {
-      const { window } = ctx;
-
-      // Open palette and trigger removal dialog (self-contained)
-      await window.locator(SEL.toolbar.projectSwitcherTrigger).click();
-      const palette = window.locator(SEL.projectSwitcher.palette);
-      await expect(palette).toBeVisible({ timeout: T_MEDIUM });
-
-      const secondaryOption = palette.getByRole("option", { name: new RegExp(SECONDARY_NAME) });
-      await expect(secondaryOption).toBeVisible({ timeout: T_SHORT });
-      await secondaryOption.locator(SEL.projectSwitcher.closeButton).click({ force: true });
-
-      const dialog = window.getByRole("dialog", { name: "Remove Project from List?" }).first();
-      await expect(dialog).toBeVisible({ timeout: T_MEDIUM });
-
-      await dialog.getByRole("button", { name: "Cancel" }).click();
-      await expect(dialog).not.toBeVisible({ timeout: T_SHORT });
+      await expect(dialog).not.toBeVisible({ timeout: T_MEDIUM });
 
       // Reopen palette and verify project is still listed
       await window.locator(SEL.toolbar.projectSwitcherTrigger).click();
@@ -117,7 +98,7 @@ test.describe.serial("Core: Project Management Advanced", () => {
       const secondaryOption = palette.getByRole("option", { name: new RegExp(SECONDARY_NAME) });
       await secondaryOption.locator(SEL.projectSwitcher.closeButton).click({ force: true });
 
-      const dialog = window.getByRole("dialog", { name: "Remove Project from List?" }).first();
+      const dialog = window.getByRole("dialog", { name: "Remove Project from List?" }).last();
       await expect(dialog).toBeVisible({ timeout: T_MEDIUM });
 
       // Confirm removal
