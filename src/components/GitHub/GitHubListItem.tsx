@@ -47,7 +47,7 @@ function getLabelStyles(color: string): React.CSSProperties {
   return {
     backgroundColor: `color-mix(in oklab, ${hex} 15%, transparent)`,
     border: `1px solid color-mix(in oklab, ${hex} 40%, transparent)`,
-    color: `color-mix(in oklab, ${hex} 85%, white)`,
+    color: `color-mix(in oklab, ${hex} 65%, white)`,
   };
 }
 
@@ -290,7 +290,11 @@ export function GitHubListItem({ item, type, onCreateWorktree }: GitHubListItemP
                 <TooltipProvider>
                   <Tooltip>
                     <TooltipTrigger asChild>
-                      <span className="text-[10px] text-muted-foreground cursor-default shrink-0">
+                      <span
+                        className="text-[10px] text-muted-foreground cursor-default shrink-0"
+                        tabIndex={0}
+                        role="note"
+                      >
                         +{overflowLabels.length}
                       </span>
                     </TooltipTrigger>
