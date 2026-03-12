@@ -3,7 +3,7 @@ import { launchApp, closeApp, type AppContext } from "../helpers/launch";
 import { createFixtureRepo } from "../helpers/fixtures";
 import { openAndOnboardProject } from "../helpers/project";
 import { SEL } from "../helpers/selectors";
-import { T_SHORT, T_MEDIUM, T_LONG, T_SETTLE } from "../helpers/timeouts";
+import { T_SHORT, T_MEDIUM, T_SETTLE } from "../helpers/timeouts";
 
 const mod = process.platform === "darwin" ? "Meta" : "Control";
 
@@ -43,9 +43,10 @@ test.describe.serial("Core: Diagnostics & Notifications", () => {
       await expect(logsTab).toHaveAttribute("aria-selected", "true", {
         timeout: T_SHORT,
       });
-      await expect(
-        window.locator(SEL.diagnostics.tab("problems"))
-      ).toHaveAttribute("aria-selected", "false");
+      await expect(window.locator(SEL.diagnostics.tab("problems"))).toHaveAttribute(
+        "aria-selected",
+        "false"
+      );
 
       const logsPanel = window.locator(SEL.diagnostics.panel("logs"));
       await expect(logsPanel).toBeVisible({ timeout: T_SHORT });
@@ -73,10 +74,7 @@ test.describe.serial("Core: Diagnostics & Notifications", () => {
       await window.keyboard.press("ArrowUp");
 
       await expect
-        .poll(
-          async () => Number(await handle.getAttribute("aria-valuenow")),
-          { timeout: T_SHORT }
-        )
+        .poll(async () => Number(await handle.getAttribute("aria-valuenow")), { timeout: T_SHORT })
         .toBeGreaterThan(before);
     });
 
@@ -127,12 +125,10 @@ test.describe.serial("Core: Diagnostics & Notifications", () => {
     test("empty state shows Configure but not Clear all", async () => {
       const { window } = ctx;
 
-      await expect(
-        window.locator(SEL.notifications.configureButton)
-      ).toBeVisible({ timeout: T_SHORT });
-      await expect(
-        window.locator(SEL.notifications.clearAllButton)
-      ).not.toBeVisible();
+      await expect(window.locator(SEL.notifications.configureButton)).toBeVisible({
+        timeout: T_SHORT,
+      });
+      await expect(window.locator(SEL.notifications.clearAllButton)).not.toBeVisible();
     });
 
     test("closes via Escape", async () => {
@@ -140,12 +136,14 @@ test.describe.serial("Core: Diagnostics & Notifications", () => {
 
       await window.keyboard.press("Escape");
 
-      await expect(
-        window.locator(SEL.notifications.bellButton)
-      ).toHaveAttribute("aria-expanded", "false", { timeout: T_SHORT });
-      await expect(
-        window.locator(SEL.notifications.emptyState)
-      ).not.toBeVisible({ timeout: T_SHORT });
+      await expect(window.locator(SEL.notifications.bellButton)).toHaveAttribute(
+        "aria-expanded",
+        "false",
+        { timeout: T_SHORT }
+      );
+      await expect(window.locator(SEL.notifications.emptyState)).not.toBeVisible({
+        timeout: T_SHORT,
+      });
     });
 
     test("closes via outside click", async () => {
@@ -160,9 +158,9 @@ test.describe.serial("Core: Diagnostics & Notifications", () => {
       // Click outside the popover (on the sidebar toggle)
       await window.locator(SEL.toolbar.toggleSidebar).click({ force: true });
 
-      await expect(
-        window.locator(SEL.notifications.emptyState)
-      ).not.toBeVisible({ timeout: T_SHORT });
+      await expect(window.locator(SEL.notifications.emptyState)).not.toBeVisible({
+        timeout: T_SHORT,
+      });
     });
 
     test("Clear all appears after onboarding generates notifications", async () => {
@@ -182,10 +180,7 @@ test.describe.serial("Core: Diagnostics & Notifications", () => {
       const clearAll = window.locator(SEL.notifications.clearAllButton);
       const hasClearAll = await clearAll.isVisible().catch(() => false);
       if (!hasClearAll) {
-        test.skip(
-          true,
-          "First-run toast did not fire — Clear all button not present"
-        );
+        test.skip(true, "First-run toast did not fire — Clear all button not present");
         return;
       }
 
