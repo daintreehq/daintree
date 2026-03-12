@@ -256,10 +256,31 @@ async function collectGit() {
   return result;
 }
 
+const SAFE_STORE_KEYS = [
+  "developerMode",
+  "hibernation",
+  "terminalConfig",
+  "keybindingOverrides",
+  "worktreeConfig",
+  "notificationSettings",
+  "windowState",
+  "onboarding",
+  "voiceInput",
+  "appTheme",
+  "crashRecovery",
+] as const;
+
 async function collectStoreConfig() {
   try {
-    const raw = store.store;
-    return redactDeep(raw);
+    const result: Record<string, unknown> = {};
+    for (const key of SAFE_STORE_KEYS) {
+      try {
+        result[key] = store.get(key);
+      } catch {
+        result[key] = { error: `Failed to read ${key}` };
+      }
+    }
+    return redactDeep(result);
   } catch {
     return { error: "Failed to read store config" };
   }
@@ -349,11 +370,13 @@ export async function collectDiagnostics(deps: HandlerDependencies): Promise<unk
   );
 
   const payload: Record<string, unknown> = {};
-  for (const result of results) {
+  for (let i = 0; i < results.length; i++) {
+    const result = results[i];
+    const key = sections[i].key;
     if (result.status === "fulfilled") {
       payload[result.value.key] = result.value.value;
     } else {
-      payload["unknown"] = { error: String(result.reason) };
+      payload[key] = { error: String(result.reason) };
     }
   }
 
