@@ -149,13 +149,12 @@ export function useWorktreeStatus({
       return worktree.issueNumber ? "ready-for-cleanup" : "merged";
     }
 
-    if (worktree.prState === "open" && !hasChanges) return "in-review";
+    if (worktree.prState === "open") return "in-review";
 
     return null;
   }, [
     isMainWorktree,
     worktree.worktreeChanges,
-    hasChanges,
     worktree.prState,
     worktree.issueNumber,
   ]);

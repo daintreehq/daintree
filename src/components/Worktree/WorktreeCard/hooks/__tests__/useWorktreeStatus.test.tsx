@@ -78,14 +78,14 @@ describe("useWorktreeStatus — lifecycleStage", () => {
     ).toBeNull();
   });
 
-  it("returns null when open PR has local changes (not in-review while dirty)", () => {
+  it('returns "in-review" when open PR has local changes', () => {
     expect(
       getLifecycleStage({
         worktreeChanges: makeChanges({ changedFileCount: 1 }),
         prState: "open",
         prNumber: 10,
       })
-    ).toBeNull();
+    ).toBe("in-review");
   });
 
   it('returns "merged" when merged PR has local changes and no issue', () => {
@@ -96,6 +96,17 @@ describe("useWorktreeStatus — lifecycleStage", () => {
         prNumber: 10,
       })
     ).toBe("merged");
+  });
+
+  it('returns "ready-for-cleanup" when merged PR has local changes and issue linked', () => {
+    expect(
+      getLifecycleStage({
+        worktreeChanges: makeChanges({ changedFileCount: 1 }),
+        prState: "merged",
+        prNumber: 10,
+        issueNumber: 42,
+      })
+    ).toBe("ready-for-cleanup");
   });
 
   it('returns "ready-for-cleanup" when PR merged and issue linked', () => {
