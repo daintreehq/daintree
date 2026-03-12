@@ -270,6 +270,12 @@ app.commandLine.appendSwitch("disable-background-timer-throttling");
 if (process.platform === "darwin") {
   app.commandLine.appendSwitch("disable-features", "CalculateNativeWinOcclusion");
 }
+// Disable Vulkan and software rasterizer on Windows — the corresponding DLLs
+// (vk_swiftshader.dll, vulkan-1.dll) are stripped from the build by afterPack.
+if (process.platform === "win32") {
+  app.commandLine.appendSwitch("disable-features", "Vulkan");
+  app.commandLine.appendSwitch("disable-software-rasterizer");
+}
 
 import { registerIpcHandlers, sendToRenderer } from "./ipc/handlers.js";
 import type { HandlerDependencies } from "./ipc/types.js";
