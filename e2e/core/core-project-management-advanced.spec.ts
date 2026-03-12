@@ -72,18 +72,32 @@ test.describe.serial("Core: Project Management Advanced", () => {
       const dialog = window.getByRole("dialog", { name: "Remove Project from List?" }).first();
       await expect(dialog).toBeVisible({ timeout: T_MEDIUM });
       await expect(dialog.locator(`text="${SECONDARY_NAME}"`)).toBeVisible();
+
+      // Dismiss dialog to leave clean state for next test
+      await dialog.getByRole("button", { name: "Cancel" }).click();
+      await expect(dialog).not.toBeVisible({ timeout: T_SHORT });
     });
 
     test("cancel leaves project intact", async () => {
       const { window } = ctx;
 
+      // Open palette and trigger removal dialog (self-contained)
+      await window.locator(SEL.toolbar.projectSwitcherTrigger).click();
+      const palette = window.locator(SEL.projectSwitcher.palette);
+      await expect(palette).toBeVisible({ timeout: T_MEDIUM });
+
+      const secondaryOption = palette.getByRole("option", { name: new RegExp(SECONDARY_NAME) });
+      await expect(secondaryOption).toBeVisible({ timeout: T_SHORT });
+      await secondaryOption.locator(SEL.projectSwitcher.closeButton).click({ force: true });
+
       const dialog = window.getByRole("dialog", { name: "Remove Project from List?" }).first();
+      await expect(dialog).toBeVisible({ timeout: T_MEDIUM });
+
       await dialog.getByRole("button", { name: "Cancel" }).click();
       await expect(dialog).not.toBeVisible({ timeout: T_SHORT });
 
       // Reopen palette and verify project is still listed
       await window.locator(SEL.toolbar.projectSwitcherTrigger).click();
-      const palette = window.locator(SEL.projectSwitcher.palette);
       await expect(palette).toBeVisible({ timeout: T_MEDIUM });
       await expect(palette.locator(`text="${SECONDARY_NAME}"`)).toBeVisible({ timeout: T_SHORT });
 
