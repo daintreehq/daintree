@@ -650,6 +650,20 @@ export interface ElectronAPI {
   webview: {
     /** Freeze or unfreeze a webview's JS execution via CDP Page.setWebLifecycleState */
     setLifecycleState(webContentsId: number, frozen: boolean): Promise<void>;
+    /** Register a webview's webContentsId with its panel ID for dialog routing */
+    registerPanel(webContentsId: number, panelId: string): Promise<void>;
+    /** Respond to a JavaScript dialog (alert/confirm/prompt) shown by a webview */
+    respondToDialog(dialogId: string, confirmed: boolean, response?: string): Promise<void>;
+    /** Subscribe to dialog requests from webview guests */
+    onDialogRequest(
+      callback: (payload: {
+        dialogId: string;
+        panelId: string;
+        type: "alert" | "confirm" | "prompt";
+        message: string;
+        defaultValue: string;
+      }) => void
+    ): () => void;
   };
   hibernation: {
     getConfig(): Promise<HibernationConfig>;

@@ -406,8 +406,11 @@ const CHANNELS = {
   SIDECAR_BLUR: "sidecar:blur",
   SIDECAR_NEW_TAB_MENU_ACTION: "sidecar:new-tab-menu-action",
 
-  // Webview throttling channels
+  // Webview channels
   WEBVIEW_SET_LIFECYCLE_STATE: "webview:set-lifecycle-state",
+  WEBVIEW_REGISTER_PANEL: "webview:register-panel",
+  WEBVIEW_DIALOG_REQUEST: "webview:dialog-request",
+  WEBVIEW_DIALOG_RESPONSE: "webview:dialog-response",
 
   // Hibernation channels
   HIBERNATION_GET_CONFIG: "hibernation:get-config",
@@ -1364,10 +1367,23 @@ const api: ElectronAPI = {
       _typedOn(CHANNELS.SIDECAR_NEW_TAB_MENU_ACTION, callback),
   },
 
-  // Webview Throttling API
+  // Webview API
   webview: {
     setLifecycleState: (webContentsId: number, frozen: boolean): Promise<void> =>
       ipcRenderer.invoke(CHANNELS.WEBVIEW_SET_LIFECYCLE_STATE, webContentsId, frozen),
+    registerPanel: (webContentsId: number, panelId: string): Promise<void> =>
+      ipcRenderer.invoke(CHANNELS.WEBVIEW_REGISTER_PANEL, { webContentsId, panelId }),
+    respondToDialog: (dialogId: string, confirmed: boolean, response?: string): Promise<void> =>
+      ipcRenderer.invoke(CHANNELS.WEBVIEW_DIALOG_RESPONSE, { dialogId, confirmed, response }),
+    onDialogRequest: (
+      callback: (payload: {
+        dialogId: string;
+        panelId: string;
+        type: "alert" | "confirm" | "prompt";
+        message: string;
+        defaultValue: string;
+      }) => void
+    ): (() => void) => _typedOn(CHANNELS.WEBVIEW_DIALOG_REQUEST, callback),
   },
 
   // Hibernation API

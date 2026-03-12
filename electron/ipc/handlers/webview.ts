@@ -1,5 +1,6 @@
 import { ipcMain, webContents } from "electron";
 import { CHANNELS } from "../channels.js";
+import { getWebviewDialogService } from "../../services/WebviewDialogService.js";
 
 export function registerWebviewHandlers(): () => void {
   const handleSetLifecycleState = async (
@@ -37,9 +38,49 @@ export function registerWebviewHandlers(): () => void {
     }
   };
 
+  const handleRegisterPanel = async (
+    _event: Electron.IpcMainInvokeEvent,
+    payload: unknown
+  ): Promise<void> => {
+    if (
+      !payload ||
+      typeof payload !== "object" ||
+      typeof (payload as { webContentsId?: unknown }).webContentsId !== "number" ||
+      typeof (payload as { panelId?: unknown }).panelId !== "string"
+    ) {
+      throw new Error("Invalid arguments: webContentsId must be number, panelId must be string");
+    }
+    const { webContentsId, panelId } = payload as { webContentsId: number; panelId: string };
+    getWebviewDialogService().registerPanel(webContentsId, panelId);
+  };
+
+  const handleDialogResponse = async (
+    _event: Electron.IpcMainInvokeEvent,
+    payload: unknown
+  ): Promise<void> => {
+    if (
+      !payload ||
+      typeof payload !== "object" ||
+      typeof (payload as { dialogId?: unknown }).dialogId !== "string" ||
+      typeof (payload as { confirmed?: unknown }).confirmed !== "boolean"
+    ) {
+      throw new Error("Invalid arguments: dialogId must be string, confirmed must be boolean");
+    }
+    const { dialogId, confirmed, response } = payload as {
+      dialogId: string;
+      confirmed: boolean;
+      response?: string;
+    };
+    getWebviewDialogService().resolveDialog(dialogId, confirmed, response);
+  };
+
   ipcMain.handle(CHANNELS.WEBVIEW_SET_LIFECYCLE_STATE, handleSetLifecycleState);
+  ipcMain.handle(CHANNELS.WEBVIEW_REGISTER_PANEL, handleRegisterPanel);
+  ipcMain.handle(CHANNELS.WEBVIEW_DIALOG_RESPONSE, handleDialogResponse);
 
   return () => {
     ipcMain.removeHandler(CHANNELS.WEBVIEW_SET_LIFECYCLE_STATE);
+    ipcMain.removeHandler(CHANNELS.WEBVIEW_REGISTER_PANEL);
+    ipcMain.removeHandler(CHANNELS.WEBVIEW_DIALOG_RESPONSE);
   };
 }

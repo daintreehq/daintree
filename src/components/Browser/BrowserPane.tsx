@@ -1,5 +1,6 @@
 import { useState, useCallback, useRef, useEffect, useMemo } from "react";
 import { useWebviewThrottle } from "@/hooks/useWebviewThrottle";
+import { useWebviewDialog } from "@/hooks/useWebviewDialog";
 import { AlertTriangle, ExternalLink } from "lucide-react";
 import { useTerminalStore } from "@/store";
 import type { BrowserHistory } from "@shared/types/domain";
@@ -14,6 +15,7 @@ import {
   pushBrowserHistory,
 } from "./historyUtils";
 import { actionService } from "@/services/ActionService";
+import { WebviewDialog } from "./WebviewDialog";
 import { useIsDragging } from "@/components/DragDrop";
 import { cn } from "@/lib/utils";
 import { useConsoleCaptureStore } from "@/store/consoleCaptureStore";
@@ -508,6 +510,11 @@ export function BrowserPane({
   ]);
 
   useWebviewThrottle(id, location, webviewElement, isWebviewReady);
+  const { currentDialog, handleDialogRespond } = useWebviewDialog(
+    id,
+    webviewElement,
+    isWebviewReady
+  );
 
   const handleOpenExternal = useCallback(() => {
     if (!hasValidUrl) return;
@@ -655,6 +662,7 @@ export function BrowserPane({
                   isDragging && "invisible pointer-events-none"
                 )}
               />
+              <WebviewDialog dialog={currentDialog} onRespond={handleDialogRespond} />
             </div>
             {isConsoleOpen && <ConsolePanel paneId={id} height={200} />}
           </>

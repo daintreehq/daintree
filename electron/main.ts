@@ -303,6 +303,7 @@ import { store } from "./store.js";
 import { MigrationRunner } from "./services/StoreMigrations.js";
 import { migrations } from "./services/migrations/index.js";
 import { initializeHibernationService } from "./services/HibernationService.js";
+import { getWebviewDialogService } from "./services/WebviewDialogService.js";
 import { GitHubAuth } from "./services/github/GitHubAuth.js";
 import { secureStorage } from "./services/SecureStorage.js";
 import {
@@ -588,6 +589,50 @@ function setupWebviewCSP(): void {
         }
         return { action: "deny" };
       });
+
+      // Intercept JavaScript dialogs (alert/confirm/prompt) from webview guests
+      contents.on(
+        "js-dialog" as string,
+        (
+          event: Electron.Event,
+          _url: string,
+          _message: string,
+          _type: string,
+          ...rest: unknown[]
+        ) => {
+          // Electron 40 js-dialog signature: (event, url, message, type, defaultValue, callback)
+          // We destructure carefully since TypeScript doesn't have built-in types for this event
+          const args = [_url, _message, _type, ...rest];
+          const message = args[1] as string;
+          const dialogType = args[2] as string;
+          const defaultValue = (args[3] as string) ?? "";
+          const callback = args[4] as (success: boolean, response?: string) => void;
+
+          event.preventDefault();
+
+          const dialogService = getWebviewDialogService();
+          const dialogId = crypto.randomUUID();
+          const panelId = dialogService.registerDialog(dialogId, contents.id, callback);
+
+          if (!panelId) {
+            callback(dialogType === "alert");
+            return;
+          }
+
+          if (mainWindow && !mainWindow.isDestroyed()) {
+            mainWindow.webContents.send("webview:dialog-request", {
+              dialogId,
+              panelId,
+              type: dialogType,
+              message,
+              defaultValue,
+            });
+          } else {
+            callback(dialogType === "alert");
+            dialogService.resolveDialog(dialogId, dialogType === "alert");
+          }
+        }
+      );
     }
   });
 }

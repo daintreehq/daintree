@@ -24,6 +24,8 @@ import { useProjectSettings } from "@/hooks/useProjectSettings";
 import { projectClient } from "@/clients";
 import { actionService } from "@/services/ActionService";
 import { useWebviewThrottle } from "@/hooks/useWebviewThrottle";
+import { useWebviewDialog } from "@/hooks/useWebviewDialog";
+import { WebviewDialog } from "../Browser/WebviewDialog";
 
 export interface DevPreviewPaneProps extends BasePanelProps {
   cwd: string;
@@ -444,6 +446,11 @@ export function DevPreviewPane({
   }, []);
 
   useWebviewThrottle(id, location, webviewElement, isWebviewReady);
+  const { currentDialog, handleDialogRespond } = useWebviewDialog(
+    id,
+    webviewElement,
+    isWebviewReady
+  );
 
   return (
     <ContentPanel
@@ -583,6 +590,7 @@ export function DevPreviewPane({
                   isDragging && "invisible pointer-events-none"
                 )}
               />
+              <WebviewDialog dialog={currentDialog} onRespond={handleDialogRespond} />
             </>
           )}
         </div>

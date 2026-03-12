@@ -1483,6 +1483,15 @@ export interface IpcEventMap {
     action: "created" | "updated" | "deleted";
   };
 
+  // Webview dialog events
+  "webview:dialog-request": {
+    dialogId: string;
+    panelId: string;
+    type: "alert" | "confirm" | "prompt";
+    message: string;
+    defaultValue: string;
+  };
+
   // Voice input events
   "voice-input:transcription-delta": string;
   "voice-input:transcription-complete": { text: string; willCorrect: boolean };
