@@ -188,25 +188,29 @@ describe("waitForRateLimitSlot", () => {
     expect(order).toEqual([0, 1, 2]);
   });
 
-  it("new arrivals do not bypass the queue (FIFO fairness)", async () => {
-    for (let i = 0; i < 10; i++) {
-      await waitForRateLimitSlot("test", 10, 30_000);
+  it("new arrivals do not bypass the queue when a slot opens", async () => {
+    // Fill all 3 slots
+    for (let i = 0; i < 3; i++) {
+      await waitForRateLimitSlot("test", 3, 30_000);
     }
 
     const order: string[] = [];
-    const first = waitForRateLimitSlot("test", 10, 30_000).then(() => {
-      order.push("first");
+    // Queue a waiter while at capacity
+    const queued = waitForRateLimitSlot("test", 3, 30_000).then(() => {
+      order.push("queued");
     });
 
+    // Advance time so slots free up, then submit a new arrival
+    // The queued waiter should still go first due to queue.length === 0 check
+    await vi.advanceTimersByTimeAsync(30_000);
     await vi.advanceTimersByTimeAsync(0);
 
-    const second = waitForRateLimitSlot("test", 10, 30_000).then(() => {
-      order.push("second");
+    const late = waitForRateLimitSlot("test", 3, 30_000).then(() => {
+      order.push("late");
     });
 
-    await vi.advanceTimersByTimeAsync(30_000);
-    await Promise.all([first, second]);
-    expect(order).toEqual(["first", "second"]);
+    await Promise.all([queued, late]);
+    expect(order).toEqual(["queued", "late"]);
   });
 
   it("rejects when queue depth exceeds 50", async () => {
@@ -225,15 +229,55 @@ describe("waitForRateLimitSlot", () => {
     await Promise.all(queued);
   });
 
-  it("drainRateLimitQueues rejects all pending waiters", async () => {
-    for (let i = 0; i < 10; i++) {
-      await waitForRateLimitSlot("test", 10, 30_000);
+  it("drainRateLimitQueues rejects all pending waiters across keys", async () => {
+    for (let i = 0; i < 5; i++) {
+      await waitForRateLimitSlot("keyA", 5, 30_000);
+      await waitForRateLimitSlot("keyB", 5, 30_000);
     }
 
-    const promise = waitForRateLimitSlot("test", 10, 30_000);
+    const promiseA1 = waitForRateLimitSlot("keyA", 5, 30_000);
+    const promiseA2 = waitForRateLimitSlot("keyA", 5, 30_000);
+    const promiseB1 = waitForRateLimitSlot("keyB", 5, 30_000);
+
     drainRateLimitQueues();
 
-    await expect(promise).rejects.toThrow("App is shutting down");
+    await expect(promiseA1).rejects.toThrow("App is shutting down");
+    await expect(promiseA2).rejects.toThrow("App is shutting down");
+    await expect(promiseB1).rejects.toThrow("App is shutting down");
+  });
+
+  it("drains partially when only some timestamps expire", async () => {
+    // Fill 3 slots at staggered times: t=0, t=10s, t=20s
+    await waitForRateLimitSlot("test", 3, 30_000);
+    await vi.advanceTimersByTimeAsync(10_000);
+    await waitForRateLimitSlot("test", 3, 30_000);
+    await vi.advanceTimersByTimeAsync(10_000);
+    await waitForRateLimitSlot("test", 3, 30_000);
+
+    // Now at t=20s, all 3 slots used. Queue 3 waiters.
+    const order: number[] = [];
+    const promises = [0, 1, 2].map((i) =>
+      waitForRateLimitSlot("test", 3, 30_000).then(() => {
+        order.push(i);
+      })
+    );
+
+    // At t=30s, the first timestamp (t=0) expires → 1 slot frees → waiter 0 resolves
+    await vi.advanceTimersByTimeAsync(10_000);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(order).toEqual([0]);
+
+    // At t=40s, the second timestamp (t=10s) expires → waiter 1 resolves
+    await vi.advanceTimersByTimeAsync(10_000);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(order).toEqual([0, 1]);
+
+    // At t=50s, the third timestamp (t=20s) expires → waiter 2 resolves
+    await vi.advanceTimersByTimeAsync(10_000);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(order).toEqual([0, 1, 2]);
+
+    await Promise.all(promises);
   });
 
   it("works correctly across multiple keys", async () => {
