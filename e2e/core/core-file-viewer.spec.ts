@@ -65,8 +65,10 @@ test.describe.serial("Core: File Viewer Modal", () => {
 
     const dialog = await waitForDialog(ctx);
 
-    // CodeViewer renders a CodeMirror editor with .cm-content
-    await expect(dialog.locator(".cm-content")).toBeVisible({ timeout: T_MEDIUM });
+    // CodeViewer renders a CodeMirror editor with .cm-content containing the file text
+    const cmContent = dialog.locator(".cm-content");
+    await expect(cmContent).toBeVisible({ timeout: T_MEDIUM });
+    await expect(cmContent).toContainText("console.log", { timeout: T_SHORT });
 
     // Metadata bar shows line count and encoding
     const metadataBar = dialog.locator(SEL.fileViewer.metadataBar);
