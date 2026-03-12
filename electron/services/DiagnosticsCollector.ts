@@ -257,7 +257,7 @@ async function collectGit() {
 }
 
 const SAFE_STORE_KEYS = [
-  "developerMode",
+  "appState",
   "hibernation",
   "terminalConfig",
   "keybindingOverrides",
