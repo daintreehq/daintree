@@ -12,7 +12,13 @@ interface BranchLabelProps {
   className?: string;
 }
 
-export function BranchLabel({ label, isActive, isMuted, isMainWorktree, className }: BranchLabelProps) {
+export function BranchLabel({
+  label,
+  isActive,
+  isMuted,
+  isMainWorktree,
+  className,
+}: BranchLabelProps) {
   const { displayName, colors, rest } = useMemo(() => {
     const parts = label.split("/");
     if (parts.length <= 1) {

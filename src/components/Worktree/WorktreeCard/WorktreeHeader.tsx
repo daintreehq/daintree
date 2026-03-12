@@ -316,7 +316,12 @@ export function WorktreeHeader({
           {isPinned && !isMainWorktree && (
             <Pin className="w-3 h-3 text-canopy-text/40 shrink-0" aria-label="Pinned" />
           )}
-          <BranchLabel label={branchLabel} isActive={isActive} isMuted={isMuted} isMainWorktree={isMainWorktree} />
+          <BranchLabel
+            label={branchLabel}
+            isActive={isActive}
+            isMuted={isMuted}
+            isMainWorktree={isMainWorktree}
+          />
           <LifecycleStageIndicator stage={lifecycleStage} />
           {worktree.isDetached && (
             <span className="text-status-warning text-xs font-medium shrink-0">(detached)</span>
