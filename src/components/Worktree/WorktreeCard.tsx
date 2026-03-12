@@ -371,6 +371,9 @@ export function WorktreeCard({
     disabled: isActive,
   });
 
+  const isMuted =
+    (isIdleCard || isStaleCard) && !isWaitingCard && !isActive && !isFocused && !isOver;
+
   const { handleContextMenu } = useWorktreeMenu({
     worktree,
     recipes,
@@ -417,12 +420,6 @@ export function WorktreeCard({
           !isActive &&
           "hover:border-canopy-accent/50 hover:shadow-lg hover:shadow-canopy-accent/5",
         isFocused && !isActive && "bg-overlay-subtle",
-        (isIdleCard || isStaleCard) &&
-          !isWaitingCard &&
-          !isActive &&
-          !isFocused &&
-          !isOver &&
-          "opacity-70 hover:opacity-100",
         isOver &&
           !isActive &&
           "ring-2 ring-canopy-accent bg-canopy-accent/10 border-canopy-accent/50 transition-all duration-200",
@@ -475,6 +472,7 @@ export function WorktreeCard({
         <WorktreeHeader
           worktree={worktree}
           isActive={isActive}
+          isMuted={isMuted}
           isMainWorktree={isMainWorktree}
           isPinned={isPinned}
           branchLabel={branchLabel}
