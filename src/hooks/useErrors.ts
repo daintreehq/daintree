@@ -41,15 +41,13 @@ export function useErrors() {
         correlationId: error.correlationId,
       });
 
-      if (error.correlationId) {
-        notify({
-          type: "error",
-          title: error.source,
-          message: error.message,
-          correlationId: error.correlationId,
-          priority: "low",
-        });
-      }
+      notify({
+        type: "error",
+        title: error.source,
+        message: error.message,
+        correlationId: error.correlationId,
+        priority: "low",
+      });
     });
 
     errorsClient
@@ -69,15 +67,13 @@ export function useErrors() {
             correlationId: error.correlationId,
           });
 
-          if (error.correlationId) {
-            notify({
-              type: "error",
-              title: error.source,
-              message: error.message,
-              correlationId: error.correlationId,
-              priority: "low",
-            });
-          }
+          notify({
+            type: "error",
+            title: error.source,
+            message: error.message,
+            correlationId: error.correlationId,
+            priority: "low",
+          });
         }
       })
       .catch(() => {
