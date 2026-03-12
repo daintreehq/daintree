@@ -343,7 +343,6 @@ export function WorktreeCard({
   const isIdleCard = spineState === "idle";
   const isStaleCard = spineState === "stale";
   const isWaitingCard = terminalCounts.byState.waiting > 0;
-  const isMuted = (isIdleCard || isStaleCard) && !isWaitingCard && !isActive && !isFocused;
 
   const chipState = useMemo(
     (): ChipState =>
@@ -371,6 +370,8 @@ export function WorktreeCard({
     },
     disabled: isActive,
   });
+
+  const isMuted = (isIdleCard || isStaleCard) && !isWaitingCard && !isActive && !isFocused && !isOver;
 
   const { handleContextMenu } = useWorktreeMenu({
     worktree,

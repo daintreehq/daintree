@@ -56,7 +56,7 @@ export function BranchLabel({
                 className={cn(
                   "text-[11px] tracking-wide font-medium px-1.5 py-0.5 rounded border shrink-0 transition-colors duration-200",
                   isMuted
-                    ? "bg-white/5 border-white/10 text-canopy-text/40"
+                    ? "bg-white/5 border-white/10 text-canopy-text/50"
                     : cn(colors.bg, colors.border, colors.text)
                 )}
               >
