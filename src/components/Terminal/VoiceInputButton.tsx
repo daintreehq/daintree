@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef } from "react";
-import { Mic, MicOff, Loader2 } from "lucide-react";
+import { Mic, Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { actionService } from "@/services/ActionService";
 import { useVoiceRecordingStore } from "@/store/voiceRecordingStore";
@@ -49,8 +49,6 @@ export function VoiceInputButton({
   // Keep orbit visible through finishing for graceful exit
   const showOrbit = isListening || isFinishing;
   const isActive = isListening || isFinishing;
-
-  if (!isConfigured && !isActive) return null;
 
   // Animation refs
   const wrapperRef = useRef<HTMLDivElement>(null);
@@ -197,6 +195,8 @@ export function VoiceInputButton({
     worktreeLabel,
   ]);
 
+  if (!isConfigured && !isActive) return null;
+
   return (
     <div
       className="relative flex items-center"
@@ -307,10 +307,8 @@ export function VoiceInputButton({
             ref={iconRef}
             className="block h-2 w-2 rounded-[1.5px] bg-current transition-transform duration-100"
           />
-        ) : isConfigured ? (
-          <Mic className="h-3.5 w-3.5 relative" />
         ) : (
-          <MicOff className="h-3.5 w-3.5" />
+          <Mic className="h-3.5 w-3.5 relative" />
         )}
       </button>
     </div>
