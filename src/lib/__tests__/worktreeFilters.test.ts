@@ -475,6 +475,15 @@ describe("sortWorktrees", () => {
     expect(sorted.map((w) => w.id)).toEqual(["1", "2"]);
   });
 
+  it("ranks worktree with newer lastActivityTimestamp above one with newer createdAt", () => {
+    const worktrees = [
+      createMockWorktree({ id: "1", name: "a", lastActivityTimestamp: 6000, createdAt: 1000 }),
+      createMockWorktree({ id: "2", name: "b", lastActivityTimestamp: null, createdAt: 5000 }),
+    ];
+    const sorted = sortWorktrees(worktrees, "recent");
+    expect(sorted.map((w) => w.id)).toEqual(["1", "2"]);
+  });
+
   it("ranks new worktree with recent createdAt above old worktree with no activity", () => {
     const worktrees = [
       createMockWorktree({ id: "1", name: "old", lastActivityTimestamp: 1000, createdAt: 500 }),
