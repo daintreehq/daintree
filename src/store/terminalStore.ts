@@ -650,27 +650,11 @@ export function setupTerminalStoreListeners() {
         return;
       }
 
-      const previousAgentState = terminal.agentState;
-
       terminalInstanceService.setAgentState(terminalId, state);
 
       useTerminalStore
         .getState()
         .updateAgentState(terminalId, state, undefined, timestamp, trigger, clampedConfidence);
-
-      if (previousAgentState === "waiting" && state !== "waiting") {
-        const inputStore = useTerminalInputStore.getState();
-        void import("./projectStore").then(({ useProjectStore }) => {
-          const projectId = useProjectStore.getState().currentProject?.id;
-          const pendingValue = inputStore.popPendingDraft(terminalId, projectId);
-          if (pendingValue && inputStore.getDraftInput(terminalId, projectId) === "") {
-            inputStore.setDraftInput(terminalId, pendingValue, projectId);
-            useTerminalInputStore.setState((s) => ({
-              pendingDraftRevision: s.pendingDraftRevision + 1,
-            }));
-          }
-        });
-      }
 
       if (state === "waiting" || state === "idle") {
         useTerminalStore.getState().processQueue(terminalId);
