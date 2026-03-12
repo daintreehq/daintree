@@ -1,4 +1,33 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
+
+vi.mock("electron", () => ({
+  ipcMain: { handle: vi.fn(), removeHandler: vi.fn(), on: vi.fn(), removeListener: vi.fn() },
+  systemPreferences: { getMediaAccessStatus: vi.fn(() => "granted") },
+  shell: { openExternal: vi.fn() },
+}));
+
+vi.mock("../../../services/VoiceTranscriptionService.js", () => ({
+  VoiceTranscriptionService: vi.fn(),
+}));
+
+vi.mock("../../../services/VoiceCorrectionService.js", () => ({
+  VoiceCorrectionService: vi.fn(),
+}));
+
+vi.mock("../../../services/ProjectStore.js", () => ({
+  projectStore: { getCurrentProject: vi.fn(() => null), getCurrentProjectId: vi.fn(() => null) },
+}));
+
+vi.mock("../../../store.js", () => ({
+  store: { get: vi.fn(() => undefined), set: vi.fn() },
+}));
+
+vi.mock("../../../services/voiceContextKeyterms.js", () => ({
+  assembleKeyterms: vi.fn(() => Promise.resolve([])),
+}));
+
+vi.mock("../../channels.js", () => ({ CHANNELS: {} }));
+
 import { TranscriptionBuffer, PromisePool } from "../voiceInput.js";
 
 function makeWord(word: string, confidence: number) {

@@ -459,7 +459,7 @@ describe("voiceInput — streaming word-level correction", () => {
 
   it("does not fire correction when correction is disabled", async () => {
     const { store } = await import("../../../store.js");
-    vi.mocked(store.get).mockReturnValue({
+    const disabledSettings = {
       enabled: true,
       deepgramApiKey: "dg-test-key",
       correctionApiKey: "",
@@ -470,7 +470,12 @@ describe("voiceInput — streaming word-level correction", () => {
       language: "en",
       transcriptionModel: "nova-3",
       paragraphingStrategy: "spoken-command",
-    });
+    };
+    // Use mockReturnValueOnce for each call to store.get during this test.
+    // getVoiceSettings() is called once per complete event.
+    vi.mocked(store.get)
+      .mockReturnValueOnce(disabledSettings)
+      .mockReturnValueOnce(disabledSettings);
 
     emitTranscriptionEvent({
       type: "complete",
