@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { renderHook } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { MORE_AGENTS_PANEL_ID } from "../usePanelPalette";
 
 const {
   getPanelKindIdsMock,
@@ -55,15 +56,15 @@ describe("usePanelPalette", () => {
   beforeEach(() => {
     vi.clearAllMocks();
 
-    getPanelKindIdsMock.mockReturnValue(["terminal"]);
+    getPanelKindIdsMock.mockReturnValue(["browser"]);
     getPanelKindConfigMock.mockImplementation((id: string) =>
-      id === "terminal"
+      id === "browser"
         ? {
-            name: "Terminal",
-            iconId: "terminal",
+            name: "Browser",
+            iconId: "browser",
             color: "#aaa",
             showInPalette: true,
-            shortcut: "Cmd+T",
+            shortcut: "Cmd+B",
           }
         : null
     );
@@ -82,5 +83,35 @@ describe("usePanelPalette", () => {
 
     const claudeEntries = result.current.results.filter((item) => item.id === "agent:claude");
     expect(claudeEntries).toHaveLength(1);
+  });
+
+  it("assigns category 'agent' to agent items", () => {
+    const { result } = renderHook(() => usePanelPalette());
+
+    const claude = result.current.results.find((item) => item.id === "agent:claude");
+    expect(claude?.category).toBe("agent");
+  });
+
+  it("assigns category 'tool' to panel kind items", () => {
+    const { result } = renderHook(() => usePanelPalette());
+
+    const browser = result.current.results.find((item) => item.id === "browser");
+    expect(browser?.category).toBe("tool");
+  });
+
+  it("assigns category 'agent' to the MORE_AGENTS_PANEL_ID entry", () => {
+    const { result } = renderHook(() => usePanelPalette());
+
+    const moreAgents = result.current.results.find((item) => item.id === MORE_AGENTS_PANEL_ID);
+    expect(moreAgents?.category).toBe("agent");
+  });
+
+  it("orders agents before tools in results", () => {
+    const { result } = renderHook(() => usePanelPalette());
+
+    const categories = result.current.results.map((item) => item.category);
+    const lastAgentIndex = categories.lastIndexOf("agent");
+    const firstToolIndex = categories.indexOf("tool");
+    expect(lastAgentIndex).toBeLessThan(firstToolIndex);
   });
 });
