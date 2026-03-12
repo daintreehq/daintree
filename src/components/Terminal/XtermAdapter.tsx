@@ -198,6 +198,18 @@ function XtermAdapterComponent({
           return true;
         }
 
+        // Let Shift+F10 and ContextMenu key bubble to DOM for panel context menu
+        if (
+          event.key === "ContextMenu" ||
+          (event.key === "F10" &&
+            event.shiftKey &&
+            !event.ctrlKey &&
+            !event.metaKey &&
+            !event.altKey)
+        ) {
+          return false;
+        }
+
         // TUI reliability: keep common readline-style Ctrl+key bindings in the terminal
         const TUI_KEYBINDS = ["p", "n", "r", "f", "b", "a", "e", "k", "u", "w", "h", "d"];
 

@@ -180,4 +180,65 @@ describe("KeybindingService", () => {
     expect(binding).toBeTruthy();
     expect(binding?.effectiveCombo).toBe("");
   });
+
+  it("matchesEvent returns true for Shift+F10", () => {
+    setPlatform("MacIntel");
+
+    const service = new KeybindingService();
+    const event = createKeyboardEvent({
+      key: "F10",
+      code: "F10",
+      shiftKey: true,
+    });
+
+    expect(service.matchesEvent(event, "Shift+F10")).toBe(true);
+  });
+
+  it("findMatchingAction returns terminal.contextMenu for Shift+F10", () => {
+    setPlatform("MacIntel");
+
+    const service = new KeybindingService();
+    const event = createKeyboardEvent({
+      key: "F10",
+      code: "F10",
+      shiftKey: true,
+    });
+
+    const match = service.findMatchingAction(event);
+    expect(match?.actionId).toBe("terminal.contextMenu");
+  });
+
+  it("disabling terminal.contextMenu with empty override prevents match", () => {
+    setPlatform("MacIntel");
+
+    const service = new KeybindingService();
+    (service as unknown as { overrides: Map<string, string[]> }).overrides.set(
+      "terminal.contextMenu",
+      []
+    );
+
+    const event = createKeyboardEvent({
+      key: "F10",
+      code: "F10",
+      shiftKey: true,
+    });
+
+    const match = service.findMatchingAction(event);
+    expect(match).toBeUndefined();
+  });
+
+  it("getEffectiveCombo returns undefined when terminal.contextMenu is disabled", () => {
+    const service = new KeybindingService();
+    (service as unknown as { overrides: Map<string, string[]> }).overrides.set(
+      "terminal.contextMenu",
+      []
+    );
+
+    expect(service.getEffectiveCombo("terminal.contextMenu")).toBeUndefined();
+  });
+
+  it("getEffectiveCombo returns Shift+F10 for terminal.contextMenu by default", () => {
+    const service = new KeybindingService();
+    expect(service.getEffectiveCombo("terminal.contextMenu")).toBe("Shift+F10");
+  });
 });
