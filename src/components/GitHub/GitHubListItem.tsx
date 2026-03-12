@@ -12,7 +12,7 @@ import {
 import { cn } from "@/lib/utils";
 import { formatTimeAgo } from "@/utils/timeAgo";
 import { actionService } from "@/services/ActionService";
-import type { GitHubIssue, GitHubPR, LinkedPRInfo } from "@shared/types/github";
+import type { GitHubIssue, GitHubPR, GitHubLabel, LinkedPRInfo } from "@shared/types/github";
 import { Avatar } from "@/components/ui/Avatar";
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
 
@@ -41,6 +41,15 @@ function getStateColor(state: string, isDraft?: boolean): string {
 
 function isPR(item: GitHubIssue | GitHubPR): item is GitHubPR {
   return "isDraft" in item;
+}
+
+function getLabelStyles(color: string): React.CSSProperties {
+  const hex = `#${color.replace(/^#/, "")}`;
+  return {
+    backgroundColor: `color-mix(in oklab, ${hex} 15%, transparent)`,
+    border: `1px solid color-mix(in oklab, ${hex} 40%, transparent)`,
+    color: `color-mix(in oklab, ${hex} 65%, white)`,
+  };
 }
 
 function getPRBadgeInfo(linkedPR: LinkedPRInfo): {
@@ -150,6 +159,9 @@ export function GitHubListItem({ item, type, onCreateWorktree }: GitHubListItemP
   const status = getButtonStatus();
   const linkedPR = !isItemPR && "linkedPR" in item ? item.linkedPR : undefined;
   const prBadgeInfo = linkedPR ? getPRBadgeInfo(linkedPR) : null;
+  const issueLabels: GitHubLabel[] = !isItemPR && "labels" in item ? (item.labels ?? []) : [];
+  const visibleLabels = issueLabels.slice(0, 3);
+  const overflowLabels = issueLabels.slice(3);
 
   return (
     <div className="p-3 hover:bg-muted/50 transition-colors group cursor-default">
@@ -298,6 +310,37 @@ export function GitHubListItem({ item, type, onCreateWorktree }: GitHubListItemP
               </>
             )}
           </div>
+          {issueLabels.length > 0 && (
+            <div className="flex items-center gap-1 mt-1 flex-wrap">
+              {visibleLabels.map((label) => (
+                <span
+                  key={label.name}
+                  style={getLabelStyles(label.color)}
+                  className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium max-w-[120px] truncate shrink-0"
+                >
+                  {label.name}
+                </span>
+              ))}
+              {overflowLabels.length > 0 && (
+                <TooltipProvider>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <span
+                        className="text-[10px] text-muted-foreground cursor-default shrink-0"
+                        tabIndex={0}
+                        role="note"
+                      >
+                        +{overflowLabels.length}
+                      </span>
+                    </TooltipTrigger>
+                    <TooltipContent side="bottom">
+                      {overflowLabels.map((l) => l.name).join(", ")}
+                    </TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
+              )}
+            </div>
+          )}
         </div>
 
         <div className="flex items-center gap-2 shrink-0">
