@@ -147,10 +147,9 @@ test.describe.serial("Core: Terminal Recipes", () => {
         .click({ force: true });
       const editorAgain = getRecipeEditor("Edit Recipe");
       await expect(editorAgain).toBeVisible({ timeout: T_MEDIUM });
-      await expect(editorAgain.locator(SEL.recipeEditor.nameInput)).toHaveValue(
-        "E2E Test Recipe",
-        { timeout: T_SHORT }
-      );
+      await expect(editorAgain.locator(SEL.recipeEditor.nameInput)).toHaveValue("E2E Test Recipe", {
+        timeout: T_SHORT,
+      });
 
       // Close without changes
       await editorAgain.locator(SEL.recipeEditor.cancelButton).click();

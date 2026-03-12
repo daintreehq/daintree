@@ -156,8 +156,8 @@ export const SEL = {
     deleteRecipeButton: (name: string) => `[aria-label="Delete recipe ${name}"]`,
   },
   recipeEditor: {
-    nameInput: '#recipe-name',
-    showInEmptyState: '#show-in-empty-state',
+    nameInput: "#recipe-name",
+    showInEmptyState: "#show-in-empty-state",
     terminalType: (i: number) => `#terminal-type-${i}`,
     terminalTitle: (i: number) => `#terminal-title-${i}`,
     terminalCommand: (i: number) => `#terminal-command-${i}`,
