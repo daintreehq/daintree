@@ -88,7 +88,10 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
             <div className="flex items-center rounded-md border border-canopy-text/10 overflow-hidden">
               <button
                 type="button"
-                onClick={() => setFilter("all")}
+                onClick={() => {
+                  setFilter("all");
+                  setFrozenUnreadIds(null);
+                }}
                 className={`px-1.5 py-0.5 text-[10px] font-medium transition-colors ${
                   filter === "all"
                     ? "bg-overlay-medium text-canopy-text/80"

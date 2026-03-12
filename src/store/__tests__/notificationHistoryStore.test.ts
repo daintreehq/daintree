@@ -213,6 +213,7 @@ describe("notificationHistorySlice", () => {
       const seenId = getState().entries[1].id;
       getState().dismissEntry(seenId);
       expect(getState().entries).toHaveLength(1);
+      expect(getState().entries[0].message).toBe("missed");
       expect(getState().unreadCount).toBe(1);
     });
 
@@ -229,9 +230,11 @@ describe("notificationHistorySlice", () => {
       const id = getState().entries[0].id;
       getState().dismissEntry(id);
       expect(getState().unreadCount).toBe(1);
+      expect(getState().entries[0].message).toBe("missed 1");
       getState().markAllRead();
       expect(getState().unreadCount).toBe(0);
       expect(getState().entries).toHaveLength(1);
+      expect(getState().entries[0].message).toBe("missed 1");
     });
   });
 });
