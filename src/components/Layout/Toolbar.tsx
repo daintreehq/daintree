@@ -1,4 +1,4 @@
-import { useRef, useState, useEffect, useMemo, useCallback } from "react";
+import { useRef, useState, useEffect, useLayoutEffect, useMemo, useCallback } from "react";
 import type React from "react";
 import { Button } from "@/components/ui/button";
 import { FixedDropdown } from "@/components/ui/fixed-dropdown";
@@ -143,6 +143,8 @@ export function Toolbar({
   );
   const [statsJustUpdated, setStatsJustUpdated] = useState(false);
   const prevLastUpdatedRef = useRef<number | null>(null);
+  const toolbarRef = useRef<HTMLDivElement>(null);
+  const activeToolbarIndexRef = useRef<number>(0);
 
   const { handleCopyTree } = useWorktreeActions();
   const terminalShortcut = useKeybindingDisplay("agent.terminal");
@@ -269,6 +271,77 @@ export function Toolbar({
     void actionService.dispatch("app.settings.openTab", { tab }, { source: "context-menu" });
   };
 
+  const getToolbarItems = useCallback(
+    () =>
+      toolbarRef.current
+        ? Array.from(
+            toolbarRef.current.querySelectorAll<HTMLElement>("[data-toolbar-item]:not(:disabled)")
+          )
+        : [],
+    []
+  );
+
+  const syncToolbarTabStops = useCallback((items: HTMLElement[], activeIdx: number) => {
+    for (const el of items) el.tabIndex = -1;
+    if (items[activeIdx]) items[activeIdx].tabIndex = 0;
+  }, []);
+
+  useLayoutEffect(() => {
+    const items = getToolbarItems();
+    if (items.length === 0) return;
+    const clamped = Math.min(activeToolbarIndexRef.current, items.length - 1);
+    activeToolbarIndexRef.current = clamped;
+    syncToolbarTabStops(items, clamped);
+  });
+
+  const handleToolbarFocusCapture = useCallback(
+    (e: React.FocusEvent<HTMLElement>) => {
+      const target = e.target as HTMLElement;
+      const items = getToolbarItems();
+      const idx = items.indexOf(target);
+      if (idx !== -1) {
+        activeToolbarIndexRef.current = idx;
+        syncToolbarTabStops(items, idx);
+      }
+    },
+    [getToolbarItems, syncToolbarTabStops]
+  );
+
+  const handleToolbarKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLElement>) => {
+      if (e.metaKey || e.altKey || e.ctrlKey) return;
+
+      const items = getToolbarItems();
+      if (items.length === 0) return;
+
+      const currentIdx = activeToolbarIndexRef.current;
+      let newIdx: number | null = null;
+
+      switch (e.key) {
+        case "ArrowRight":
+          newIdx = (currentIdx + 1) % items.length;
+          break;
+        case "ArrowLeft":
+          newIdx = (currentIdx - 1 + items.length) % items.length;
+          break;
+        case "Home":
+          newIdx = 0;
+          break;
+        case "End":
+          newIdx = items.length - 1;
+          break;
+      }
+
+      if (newIdx !== null) {
+        e.preventDefault();
+        activeToolbarIndexRef.current = newIdx;
+        syncToolbarTabStops(items, newIdx);
+        items[newIdx].focus();
+      }
+    },
+    [getToolbarItems, syncToolbarTabStops]
+  );
+
   const cliInitialized = useCliAvailabilityStore((state) => state.isInitialized);
   const hasAnyInstalledAgent = useMemo(() => {
     if (!cliInitialized) return true;
@@ -288,6 +361,7 @@ export function Toolbar({
                 <Button
                   variant="ghost"
                   size="icon"
+                  data-toolbar-item=""
                   onClick={onToggleFocusMode}
                   className="text-canopy-text hover:bg-white/[0.06] hover:text-canopy-accent transition-colors"
                   aria-label="Toggle Sidebar"
@@ -305,7 +379,7 @@ export function Toolbar({
         isAvailable: true,
       },
       "agent-setup": {
-        render: () => <AgentSetupButton key="agent-setup" />,
+        render: () => <AgentSetupButton key="agent-setup" data-toolbar-item="" />,
         isAvailable: !hasAnyInstalledAgent,
       },
       claude: {
@@ -315,6 +389,7 @@ export function Toolbar({
             type="claude"
             availability={agentAvailability?.claude}
             onOpenSettings={openAgentSettings}
+            data-toolbar-item=""
           />
         ),
         isAvailable: agentSettings?.agents?.claude?.selected ?? true,
@@ -326,6 +401,7 @@ export function Toolbar({
             type="gemini"
             availability={agentAvailability?.gemini}
             onOpenSettings={openAgentSettings}
+            data-toolbar-item=""
           />
         ),
         isAvailable: agentSettings?.agents?.gemini?.selected ?? true,
@@ -337,6 +413,7 @@ export function Toolbar({
             type="codex"
             availability={agentAvailability?.codex}
             onOpenSettings={openAgentSettings}
+            data-toolbar-item=""
           />
         ),
         isAvailable: agentSettings?.agents?.codex?.selected ?? true,
@@ -348,6 +425,7 @@ export function Toolbar({
             type="opencode"
             availability={agentAvailability?.opencode}
             onOpenSettings={openAgentSettings}
+            data-toolbar-item=""
           />
         ),
         isAvailable: agentSettings?.agents?.opencode?.selected ?? true,
@@ -360,6 +438,7 @@ export function Toolbar({
                 <Button
                   variant="ghost"
                   size="icon"
+                  data-toolbar-item=""
                   onClick={() => onLaunchAgent("terminal")}
                   className="text-canopy-text hover:bg-white/[0.06] transition-colors hover:text-canopy-accent focus-visible:text-canopy-accent"
                   aria-label="Open Terminal"
@@ -383,6 +462,7 @@ export function Toolbar({
                 <Button
                   variant="ghost"
                   size="icon"
+                  data-toolbar-item=""
                   onClick={() => onLaunchAgent("browser")}
                   className="text-canopy-text hover:bg-white/[0.06] transition-colors hover:text-canopy-accent focus-visible:text-canopy-accent"
                   aria-label="Open Browser"
@@ -407,6 +487,7 @@ export function Toolbar({
                   <Button
                     variant="ghost"
                     size="icon"
+                    data-toolbar-item=""
                     onClick={() => {
                       void actionService.dispatch("devServer.start", undefined, { source: "user" });
                     }}
@@ -437,7 +518,7 @@ export function Toolbar({
         isAvailable: true,
       },
       "voice-recording": {
-        render: () => <VoiceRecordingToolbarButton key="voice-recording" />,
+        render: () => <VoiceRecordingToolbarButton key="voice-recording" data-toolbar-item="" />,
         isAvailable: hasActiveVoiceRecording,
       },
       "github-stats": {
@@ -453,6 +534,7 @@ export function Toolbar({
                     <Button
                       ref={issuesButtonRef}
                       variant="ghost"
+                      data-toolbar-item=""
                       onClick={() => {
                         setPrsOpen(false);
                         setCommitsOpen(false);
@@ -502,6 +584,7 @@ export function Toolbar({
                     <Button
                       ref={prsButtonRef}
                       variant="ghost"
+                      data-toolbar-item=""
                       onClick={() => {
                         setIssuesOpen(false);
                         setCommitsOpen(false);
@@ -551,6 +634,7 @@ export function Toolbar({
                     <Button
                       ref={commitsButtonRef}
                       variant="ghost"
+                      data-toolbar-item=""
                       onClick={() => {
                         setIssuesOpen(false);
                         setPrsOpen(false);
@@ -603,6 +687,7 @@ export function Toolbar({
                     ref={notificationCenterButtonRef}
                     variant="ghost"
                     size="icon"
+                    data-toolbar-item=""
                     onClick={() => setNotificationCenterOpen((prev) => !prev)}
                     className="text-canopy-text hover:bg-white/[0.06] hover:text-canopy-accent transition-colors"
                     aria-label={
@@ -647,6 +732,7 @@ export function Toolbar({
                 <Button
                   variant="ghost"
                   size="icon"
+                  data-toolbar-item=""
                   onClick={() => actionService.dispatch("notes.create", {}, { source: "user" })}
                   className="text-canopy-text hover:bg-white/[0.06] hover:text-canopy-accent transition-colors"
                   aria-label="Open notes palette"
@@ -668,6 +754,7 @@ export function Toolbar({
                 <Button
                   variant="ghost"
                   size="icon"
+                  data-toolbar-item=""
                   onClick={handleCopyTreeClick}
                   disabled={isCopyingTree || !activeWorktree}
                   className={cn(
@@ -715,6 +802,7 @@ export function Toolbar({
                 <Button
                   variant="ghost"
                   size="icon"
+                  data-toolbar-item=""
                   onClick={onSettings}
                   onContextMenu={handleSettingsContextMenu}
                   className="text-canopy-text hover:bg-white/[0.06] hover:text-canopy-accent transition-colors"
@@ -737,6 +825,7 @@ export function Toolbar({
                 <Button
                   variant="ghost"
                   size="icon"
+                  data-toolbar-item=""
                   onClick={onToggleProblems}
                   className={cn(
                     "text-canopy-text hover:bg-white/[0.06] hover:text-canopy-accent relative transition-colors",
@@ -766,6 +855,7 @@ export function Toolbar({
                 <Button
                   variant="ghost"
                   size="icon"
+                  data-toolbar-item=""
                   onClick={toggleSidecar}
                   className={cn(
                     "text-canopy-text hover:bg-white/[0.06] hover:text-canopy-accent transition-colors"
@@ -844,11 +934,22 @@ export function Toolbar({
 
   return (
     <>
-      <header className="relative grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] h-12 items-center px-4 pt-1 shrink-0 app-drag-region surface-chrome border-b border-divider">
+      <div
+        ref={toolbarRef}
+        role="toolbar"
+        aria-label="Main toolbar"
+        onKeyDown={handleToolbarKeyDown}
+        onFocusCapture={handleToolbarFocusCapture}
+        className="relative grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] h-12 items-center px-4 pt-1 shrink-0 app-drag-region surface-chrome border-b border-divider"
+      >
         <div className="window-resize-strip" />
 
         {/* LEFT GROUP */}
-        <div className="flex items-center gap-1.5 app-no-drag z-20 justify-self-start">
+        <div
+          role="group"
+          aria-label="Navigation and agents"
+          className="flex items-center gap-1.5 app-no-drag z-20 justify-self-start"
+        >
           {isMac() && (
             <div
               className={cn(
@@ -867,7 +968,11 @@ export function Toolbar({
         </div>
 
         {/* CENTER GROUP - Grid-centered, shrinks gracefully on narrow windows */}
-        <div className="flex items-center justify-center min-w-0 max-w-full pointer-events-none justify-self-center">
+        <div
+          role="group"
+          aria-label="Project"
+          className="flex items-center justify-center min-w-0 max-w-full pointer-events-none justify-self-center"
+        >
           <ProjectSwitcherPalette
             mode="dropdown"
             isOpen={isDropdownOpen}
@@ -890,6 +995,7 @@ export function Toolbar({
             isRemovingProject={projectSwitcher.isRemovingProject}
           >
             <button
+              data-toolbar-item=""
               className={cn(
                 "flex items-center justify-center gap-2 px-3 h-9 rounded-[var(--radius-md)] select-none border border-white/10 shadow-[inset_0_1px_0_rgba(255,255,255,0.06)] app-no-drag pointer-events-auto outline-none min-w-0 max-w-full overflow-hidden",
                 "opacity-80 hover:opacity-100 transition-opacity cursor-pointer"
@@ -936,7 +1042,11 @@ export function Toolbar({
         </div>
 
         {/* RIGHT GROUP */}
-        <div className="flex items-center gap-1.5 app-no-drag z-20 justify-self-end">
+        <div
+          role="group"
+          aria-label="Tools and settings"
+          className="flex items-center gap-1.5 app-no-drag z-20 justify-self-end"
+        >
           <div className="flex items-center gap-0.5">
             {renderButtons(toolbarLayout.rightButtons)}
           </div>
@@ -945,7 +1055,7 @@ export function Toolbar({
 
           {buttonRegistry["sidecar-toggle"].render()}
         </div>
-      </header>
+      </div>
     </>
   );
 }

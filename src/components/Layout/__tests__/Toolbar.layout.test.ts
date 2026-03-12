@@ -16,9 +16,9 @@ describe("Toolbar layout — issue #2584 project switcher collision", () => {
       expect(source).toContain("grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)]");
     });
 
-    it("does not use flex justify-between on the header", () => {
-      // The header should no longer use flex+justify-between (the old collision-prone pattern)
-      expect(source).not.toMatch(/<header[^>]*justify-between/);
+    it("does not use flex justify-between on the toolbar root", () => {
+      // The toolbar root should no longer use flex+justify-between (the old collision-prone pattern)
+      expect(source).not.toMatch(/role="toolbar"[^>]*justify-between/);
     });
   });
 
@@ -46,6 +46,39 @@ describe("Toolbar layout — issue #2584 project switcher collision", () => {
 
     it("right group uses justify-self-end", () => {
       expect(source).toContain("justify-self-end");
+    });
+  });
+
+  describe("ARIA toolbar structure — issue #2814", () => {
+    it("toolbar root has role=toolbar and aria-label", () => {
+      expect(source).toMatch(/role="toolbar"/);
+      expect(source).toMatch(/aria-label="Main toolbar"/);
+    });
+
+    it("has three role=group regions", () => {
+      const groupMatches = source.match(/role="group"/g);
+      expect(groupMatches).not.toBeNull();
+      expect(groupMatches!.length).toBe(3);
+    });
+
+    it("groups have descriptive aria-labels", () => {
+      expect(source).toContain('aria-label="Navigation and agents"');
+      expect(source).toContain('aria-label="Project"');
+      expect(source).toContain('aria-label="Tools and settings"');
+    });
+
+    it("toolbar items are marked with data-toolbar-item", () => {
+      const itemMatches = source.match(/data-toolbar-item=""/g);
+      expect(itemMatches).not.toBeNull();
+      expect(itemMatches!.length).toBeGreaterThanOrEqual(10);
+    });
+
+    it("has onKeyDown handler for arrow navigation", () => {
+      expect(source).toContain("onKeyDown={handleToolbarKeyDown}");
+    });
+
+    it("has onFocusCapture handler for focus tracking", () => {
+      expect(source).toContain("onFocusCapture={handleToolbarFocusCapture}");
     });
   });
 

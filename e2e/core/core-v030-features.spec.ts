@@ -155,10 +155,10 @@ test.describe.serial("Core: v0.3.0 Features", () => {
       const subtabBar = window.locator(SEL.settings.subtabNav);
       await expect(subtabBar).toBeVisible({ timeout: T_MEDIUM });
 
-      // "General" subtab should be active (aria-current="true")
+      // "General" subtab should be active (aria-selected="true")
       const generalSubtab = subtabBar.locator("button", { hasText: "General" });
       await expect(generalSubtab).toBeVisible({ timeout: T_SHORT });
-      await expect(generalSubtab).toHaveAttribute("aria-current", "true", { timeout: T_SHORT });
+      await expect(generalSubtab).toHaveAttribute("aria-selected", "true", { timeout: T_SHORT });
     });
 
     test("clicking agent subtab switches active state", async () => {
@@ -175,11 +175,11 @@ test.describe.serial("Core: v0.3.0 Features", () => {
       const agentSubtab = subtabButtons.nth(1);
       await agentSubtab.click();
 
-      await expect(agentSubtab).toHaveAttribute("aria-current", "true", { timeout: T_SHORT });
+      await expect(agentSubtab).toHaveAttribute("aria-selected", "true", { timeout: T_SHORT });
 
       // General should no longer be active
       const generalSubtab = subtabBar.locator("button", { hasText: "General" });
-      await expect(generalSubtab).not.toHaveAttribute("aria-current", "true", { timeout: T_SHORT });
+      await expect(generalSubtab).toHaveAttribute("aria-selected", "false", { timeout: T_SHORT });
 
       await window.keyboard.press("Escape");
       await expect(window.locator(SEL.settings.heading)).not.toBeVisible({ timeout: T_SHORT });

@@ -8,7 +8,6 @@ async function createRegistry() {
     onOpenSettingsTab: () => {},
     onToggleSidebar: () => {},
     onToggleFocusMode: () => {},
-    onOpenAgentPalette: () => {},
     onOpenActionPalette: () => {},
     onOpenQuickSwitcher: () => {},
     onOpenWorktreePalette: () => {},

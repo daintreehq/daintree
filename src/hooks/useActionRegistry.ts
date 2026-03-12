@@ -32,7 +32,6 @@ export function useActionRegistry(options: ActionCallbacks): void {
       onOpenSettingsTab: (tab) => callbacksRef.current.onOpenSettingsTab(tab),
       onToggleSidebar: () => callbacksRef.current.onToggleSidebar(),
       onToggleFocusMode: () => callbacksRef.current.onToggleFocusMode(),
-      onOpenAgentPalette: () => callbacksRef.current.onOpenAgentPalette(),
       onOpenActionPalette: () => callbacksRef.current.onOpenActionPalette(),
       onOpenQuickSwitcher: () => callbacksRef.current.onOpenQuickSwitcher(),
       onOpenWorktreePalette: () => callbacksRef.current.onOpenWorktreePalette(),

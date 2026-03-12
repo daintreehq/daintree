@@ -11,12 +11,12 @@ describe("paletteStore", () => {
   });
 
   it("openPalette sets the active palette", () => {
-    usePaletteStore.getState().openPalette("terminal");
-    expect(usePaletteStore.getState().activePaletteId).toBe("terminal");
+    usePaletteStore.getState().openPalette("new-terminal");
+    expect(usePaletteStore.getState().activePaletteId).toBe("new-terminal");
   });
 
   it("openPalette replaces a previously open palette (mutual exclusion)", () => {
-    usePaletteStore.getState().openPalette("terminal");
+    usePaletteStore.getState().openPalette("new-terminal");
     usePaletteStore.getState().openPalette("action");
     expect(usePaletteStore.getState().activePaletteId).toBe("action");
   });
@@ -29,18 +29,18 @@ describe("paletteStore", () => {
 
   it("closePalette is a no-op when id does not match (stale close guard)", () => {
     usePaletteStore.getState().openPalette("action");
-    usePaletteStore.getState().closePalette("terminal");
+    usePaletteStore.getState().closePalette("new-terminal");
     expect(usePaletteStore.getState().activePaletteId).toBe("action");
   });
 
   it("closePalette is a no-op when no palette is open", () => {
-    usePaletteStore.getState().closePalette("terminal");
+    usePaletteStore.getState().closePalette("new-terminal");
     expect(usePaletteStore.getState().activePaletteId).toBeNull();
   });
 
   it("rapid open sequence only leaves the last palette active", () => {
     const { openPalette } = usePaletteStore.getState();
-    openPalette("terminal");
+    openPalette("new-terminal");
     openPalette("quick-switcher");
     openPalette("notes");
     openPalette("action");

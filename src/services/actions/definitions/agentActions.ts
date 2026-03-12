@@ -42,14 +42,14 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
 
   actions.set("agent.palette", () => ({
     id: "agent.palette",
-    title: "Open Agent Palette",
-    description: "Open the agent selection palette",
+    title: "Open Quick Switcher",
+    description: "Open the quick switcher to find panels",
     category: "agent",
     kind: "command",
     danger: "safe",
     scope: "renderer",
     run: async () => {
-      callbacks.onOpenAgentPalette();
+      callbacks.onOpenQuickSwitcher();
     },
   }));
 

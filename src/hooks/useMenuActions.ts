@@ -7,7 +7,6 @@ export interface UseMenuActionsOptions {
   onOpenSettings: () => void;
   onOpenSettingsTab?: (tab: string) => void;
   onToggleSidebar: () => void;
-  onOpenAgentPalette: () => void;
   onLaunchAgent: (
     agentId: "claude" | "gemini" | "codex" | "opencode" | "terminal" | "browser"
   ) => void;

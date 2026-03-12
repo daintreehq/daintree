@@ -10,7 +10,6 @@ export interface ActionCallbacks {
   onOpenSettingsTab: (tab: string) => void;
   onToggleSidebar: () => void;
   onToggleFocusMode: () => void;
-  onOpenAgentPalette: () => void;
   onOpenWorktreePalette: () => void;
   onToggleWorktreeOverview: () => void;
   onOpenWorktreeOverview: () => void;
