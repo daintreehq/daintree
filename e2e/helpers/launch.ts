@@ -18,6 +18,7 @@ export interface AppContext {
 export interface LaunchOptions {
   env?: Record<string, string>;
   userDataDir?: string;
+  waitForSelector?: string;
 }
 
 function cleanupWindowsElectronProcesses(): void {
@@ -95,9 +96,8 @@ export async function launchApp(options: LaunchOptions = {}): Promise<AppContext
 
       await window.waitForLoadState("domcontentloaded");
 
-      await window
-        .locator('[aria-label="Open settings"]')
-        .waitFor({ state: "visible", timeout: launchTimeout });
+      const readySelector = options.waitForSelector ?? '[aria-label="Open settings"]';
+      await window.locator(readySelector).waitFor({ state: "visible", timeout: launchTimeout });
 
       return { app, window, userDataDir };
     } catch (error) {
