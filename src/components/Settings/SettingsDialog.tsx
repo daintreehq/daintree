@@ -125,9 +125,8 @@ export function SettingsDialog({
       if (defaultSubtab !== undefined) {
         setActiveSubtabs((prev) => ({ ...prev, [defaultTab]: defaultSubtab }));
       }
-      if (defaultSectionId !== undefined) {
-        setScrollToSection(defaultSectionId);
-      }
+      setScrollToSection(defaultSectionId ?? null);
+      setSearchQuery("");
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen, defaultTab, defaultSubtab, defaultSectionId]);
