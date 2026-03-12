@@ -125,7 +125,7 @@ export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
   );
 
   const visibleNotes = useMemo(() => {
-    let list = selectedTag
+    const list = selectedTag
       ? searchResults.filter((n) => n.tags?.includes(selectedTag))
       : searchResults;
     return [...list].sort((a, b) => {
