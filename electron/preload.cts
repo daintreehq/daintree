@@ -302,6 +302,8 @@ const CHANNELS = {
   // Error channels
   ERROR_NOTIFY: "error:notify",
   ERROR_RETRY: "error:retry",
+  ERROR_RETRY_CANCEL: "error:retry-cancel",
+  ERROR_RETRY_PROGRESS: "error:retry-progress",
   ERROR_OPEN_LOGS: "error:open-logs",
   ERROR_GET_PENDING: "error:get-pending",
 
