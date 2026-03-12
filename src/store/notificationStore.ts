@@ -32,11 +32,16 @@ export interface Notification {
   correlationId?: string;
   /** Set to true synchronously on dismiss to avoid flicker */
   dismissed?: boolean;
+  /** Bumped on each coalesced update so useEffect deps can detect changes */
+  updatedAt?: number;
 }
+
+export type NotificationPatch = Partial<Omit<Notification, "id">>;
 
 interface NotificationStore {
   notifications: Notification[];
   addNotification: (notification: Omit<Notification, "id">) => string;
+  updateNotification: (id: string, patch: NotificationPatch) => void;
   dismissNotification: (id: string) => void;
   removeNotification: (id: string) => void;
   clearNotifications: () => void;
@@ -48,10 +53,16 @@ export const useNotificationStore = create<NotificationStore>((set) => ({
   addNotification: (notification) => {
     const id = uuidv4();
     set((state) => ({
-      notifications: [...state.notifications, { ...notification, id }],
+      notifications: [...state.notifications, { ...notification, id, updatedAt: Date.now() }],
     }));
     return id;
   },
+  updateNotification: (id, patch) =>
+    set((state) => ({
+      notifications: state.notifications.map((n) =>
+        n.id === id ? { ...n, ...patch, updatedAt: Date.now() } : n
+      ),
+    })),
   dismissNotification: (id) =>
     set((state) => ({
       notifications: state.notifications.map((n) => (n.id === id ? { ...n, dismissed: true } : n)),

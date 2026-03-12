@@ -54,6 +54,8 @@ import { ProjectSwitcherPalette } from "@/components/Project/ProjectSwitcherPale
 import { NotificationCenter } from "@/components/Notifications/NotificationCenter";
 import { useNotificationHistoryStore } from "@/store/slices/notificationHistorySlice";
 import { VoiceRecordingToolbarButton } from "./VoiceRecordingToolbarButton";
+import { useUIStore } from "@/store/uiStore";
+import { useShallow } from "zustand/react/shallow";
 
 interface ToolbarProps {
   onLaunchAgent: (
@@ -131,7 +133,13 @@ export function Toolbar({
   const prsButtonRef = useRef<HTMLButtonElement>(null);
   const commitsButtonRef = useRef<HTMLButtonElement>(null);
   const treeCopyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const [notificationCenterOpen, setNotificationCenterOpen] = useState(false);
+  const { notificationCenterOpen, toggleNotificationCenter, closeNotificationCenter } = useUIStore(
+    useShallow((s) => ({
+      notificationCenterOpen: s.notificationCenterOpen,
+      toggleNotificationCenter: s.toggleNotificationCenter,
+      closeNotificationCenter: s.closeNotificationCenter,
+    }))
+  );
   const notificationCenterButtonRef = useRef<HTMLButtonElement>(null);
   const notificationUnreadCount = useNotificationHistoryStore((s) => s.unreadCount);
   const hasActiveVoiceRecording = useVoiceRecordingStore(
@@ -690,7 +698,7 @@ export function Toolbar({
                     variant="ghost"
                     size="icon"
                     data-toolbar-item=""
-                    onClick={() => setNotificationCenterOpen((prev) => !prev)}
+                    onClick={toggleNotificationCenter}
                     className="text-canopy-text hover:bg-white/[0.06] hover:text-canopy-accent transition-colors"
                     aria-label={
                       notificationUnreadCount > 0
@@ -713,14 +721,13 @@ export function Toolbar({
             </TooltipProvider>
             <FixedDropdown
               open={notificationCenterOpen}
-              onOpenChange={setNotificationCenterOpen}
+              onOpenChange={(open) => {
+                if (!open) closeNotificationCenter();
+              }}
               anchorRef={notificationCenterButtonRef}
               className="p-0"
             >
-              <NotificationCenter
-                open={notificationCenterOpen}
-                onClose={() => setNotificationCenterOpen(false)}
-              />
+              <NotificationCenter open={notificationCenterOpen} onClose={closeNotificationCenter} />
             </FixedDropdown>
           </div>
         ),
@@ -918,6 +925,8 @@ export function Toolbar({
       sidecarOpen,
       getTimeSinceUpdate,
       notificationCenterOpen,
+      toggleNotificationCenter,
+      closeNotificationCenter,
       notificationUnreadCount,
     ]
   );

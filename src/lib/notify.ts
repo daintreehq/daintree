@@ -11,6 +11,15 @@ import {
   type NotificationHistoryAction,
 } from "@/store/slices/notificationHistorySlice";
 
+export interface CoalesceOptions {
+  key: string;
+  windowMs?: number;
+  buildMessage: (count: number) => string | ReactNode;
+  buildTitle?: (count: number) => string | undefined;
+  buildInboxMessage?: (count: number) => string | undefined;
+  buildAction?: (count: number) => NotificationAction | undefined;
+}
+
 export interface NotifyPayload {
   type: NotificationType;
   title?: string;
@@ -31,6 +40,20 @@ export interface NotifyPayload {
   priority?: NotificationPriority;
   /** Groups related notifications into a thread in the notification center */
   correlationId?: string;
+  /** When set, rapidly fired notifications with the same key coalesce into a single updating toast */
+  coalesce?: CoalesceOptions;
+}
+
+interface CoalesceEntry {
+  id: string;
+  expiresAt: number;
+  count: number;
+}
+
+const _activeCoalesced = new Map<string, CoalesceEntry>();
+
+export function _resetCoalesceMap(): void {
+  _activeCoalesced.clear();
 }
 
 /**
@@ -108,6 +131,45 @@ export function notify(payload: NotifyPayload): string {
       title: title ?? "Canopy",
       body: historyMessage,
     });
+  }
+
+  if (shouldToast && payload.coalesce) {
+    const { coalesce } = payload;
+    const windowMs = coalesce.windowMs ?? 2000;
+    const now = Date.now();
+    const existing = _activeCoalesced.get(coalesce.key);
+
+    if (existing && existing.expiresAt > now) {
+      const notification = useNotificationStore
+        .getState()
+        .notifications.find((n) => n.id === existing.id && !n.dismissed);
+
+      if (notification) {
+        existing.count += 1;
+        existing.expiresAt = now + windowMs;
+        const count = existing.count;
+
+        useNotificationStore.getState().updateNotification(existing.id, {
+          message: coalesce.buildMessage(count),
+          title: coalesce.buildTitle?.(count) ?? title,
+          inboxMessage: coalesce.buildInboxMessage?.(count),
+          action: coalesce.buildAction?.(count) ?? payload.action,
+        });
+
+        return existing.id;
+      }
+    }
+
+    const id = useNotificationStore.getState().addNotification({
+      ...payload,
+      priority,
+    });
+    _activeCoalesced.set(coalesce.key, {
+      id,
+      expiresAt: now + windowMs,
+      count: 1,
+    });
+    return id;
   }
 
   if (shouldToast) {
