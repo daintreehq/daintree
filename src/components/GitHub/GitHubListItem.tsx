@@ -15,11 +15,14 @@ import { actionService } from "@/services/ActionService";
 import type { GitHubIssue, GitHubPR, GitHubLabel, LinkedPRInfo } from "@shared/types/github";
 import { Avatar } from "@/components/ui/Avatar";
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
+import { useWorktreeDataStore } from "@/store/worktreeDataStore";
+import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 
 interface GitHubListItemProps {
   item: GitHubIssue | GitHubPR;
   type: "issue" | "pr";
   onCreateWorktree?: (item: GitHubIssue | GitHubPR) => void;
+  onSwitchToWorktree?: (worktreeId: string) => void;
 }
 
 function getStateIcon(state: string, type: "issue" | "pr") {
@@ -86,13 +89,29 @@ function middleTruncate(str: string, maxLen: number): string {
   return `${str.slice(0, prefixLen)}…${str.slice(str.length - suffixLen)}`;
 }
 
-export function GitHubListItem({ item, type, onCreateWorktree }: GitHubListItemProps) {
+export function GitHubListItem({
+  item,
+  type,
+  onCreateWorktree,
+  onSwitchToWorktree,
+}: GitHubListItemProps) {
   const [copied, setCopied] = useState(false);
   const [copyError, setCopyError] = useState(false);
   const timeoutRef = useRef<number | undefined>(undefined);
   const isItemPR = isPR(item);
   const StateIcon = getStateIcon(item.state, type);
   const stateColor = getStateColor(item.state, isItemPR && item.isDraft);
+
+  const matchedWorktree = useWorktreeDataStore((s) => {
+    for (const wt of s.worktrees.values()) {
+      if (type === "issue" ? wt.issueNumber === item.number : wt.prNumber === item.number)
+        return wt;
+    }
+    return undefined;
+  });
+  const activeWorktreeId = useWorktreeSelectionStore((s) => s.activeWorktreeId);
+  const hasWorktree = matchedWorktree !== undefined;
+  const isActiveWorktree = hasWorktree && matchedWorktree.id === activeWorktreeId;
 
   useEffect(() => {
     return () => {
@@ -142,6 +161,13 @@ export function GitHubListItem({ item, type, onCreateWorktree }: GitHubListItemP
     e.stopPropagation();
     if (onCreateWorktree) {
       onCreateWorktree(item);
+    }
+  };
+
+  const handleSwitchToWorktree = (e: MouseEvent<HTMLButtonElement>) => {
+    e.stopPropagation();
+    if (onSwitchToWorktree && matchedWorktree) {
+      onSwitchToWorktree(matchedWorktree.id);
     }
   };
 
@@ -214,6 +240,28 @@ export function GitHubListItem({ item, type, onCreateWorktree }: GitHubListItemP
                 Draft
               </span>
             )}
+            {hasWorktree && (
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <span
+                      className={cn(
+                        "shrink-0 text-[11px] px-1.5 py-0.5 rounded font-medium flex items-center gap-1",
+                        isActiveWorktree
+                          ? "bg-canopy-accent/10 text-canopy-accent"
+                          : "bg-muted text-muted-foreground"
+                      )}
+                    >
+                      <GitBranch className="w-3 h-3" />
+                      Worktree
+                    </span>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom">
+                    {isActiveWorktree ? "Active worktree" : "Has worktree"}
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+            )}
           </div>
           <div
             className="text-xs text-muted-foreground mt-1 flex items-center gap-1.5"
@@ -277,7 +325,27 @@ export function GitHubListItem({ item, type, onCreateWorktree }: GitHubListItemP
                 </span>
               </>
             )}
-            {onCreateWorktree && item.state === "OPEN" && (
+            {hasWorktree && !isActiveWorktree && onSwitchToWorktree && (
+              <>
+                <span>&middot;</span>
+                <TooltipProvider>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <button
+                        type="button"
+                        onClick={handleSwitchToWorktree}
+                        className="transition-colors flex items-center gap-1 hover:text-canopy-accent"
+                      >
+                        <GitBranch className="w-3 h-3" />
+                        <span>Switch to Worktree</span>
+                      </button>
+                    </TooltipTrigger>
+                    <TooltipContent side="bottom">Switch to existing worktree</TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
+              </>
+            )}
+            {!hasWorktree && onCreateWorktree && item.state === "OPEN" && (
               <>
                 <span>&middot;</span>
                 <TooltipProvider>
