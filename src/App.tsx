@@ -113,6 +113,7 @@ import {
   sortWorktrees,
   groupByType,
   findIntegrationWorktree,
+  buildSearchableText,
   type DerivedWorktreeMeta,
   type FilterState,
 } from "./lib/worktreeFilters";
@@ -502,8 +503,14 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   const rootPath = currentProject?.path ?? "";
   const hasNonMainWorktrees = worktrees.length > 1;
   const hasFilters = hasActiveFilters();
+  const queryLower = query ? query.toLowerCase() : "";
+  const mainMatchesQuery =
+    mainWorktree && (!query || buildSearchableText(mainWorktree).includes(queryLower));
+  const integrationMatchesQuery =
+    integrationWorktree &&
+    (!query || buildSearchableText(integrationWorktree).includes(queryLower));
   const visibleCount = hasFilters
-    ? filteredWorktrees.length + (mainWorktree ? 1 : 0) + (integrationWorktree ? 1 : 0)
+    ? filteredWorktrees.length + (mainMatchesQuery ? 1 : 0) + (integrationMatchesQuery ? 1 : 0)
     : worktrees.length;
 
   const renderWorktreeCard = (worktree: WorktreeState) => (
@@ -570,11 +577,11 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
       {/* Inline search bar — only when there are non-main worktrees */}
       {hasNonMainWorktrees && <WorktreeSidebarSearchBar inputRef={searchInputRef} />}
 
-      {/* Main worktree — always visible */}
-      {mainWorktree && <div className="shrink-0">{renderWorktreeCard(mainWorktree)}</div>}
+      {/* Main worktree — visible unless excluded by text search */}
+      {mainMatchesQuery && <div className="shrink-0">{renderWorktreeCard(mainWorktree)}</div>}
 
-      {/* Integration branch (develop/trunk/next) — pinned below main */}
-      {integrationWorktree && (
+      {/* Integration branch (develop/trunk/next) — pinned below main, subject to text search */}
+      {integrationMatchesQuery && (
         <div className="shrink-0">{renderWorktreeCard(integrationWorktree)}</div>
       )}
 
