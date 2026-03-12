@@ -2,7 +2,11 @@ import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { PackagePlus } from "lucide-react";
 
-export function AgentSetupButton() {
+export function AgentSetupButton({
+  "data-toolbar-item": dataToolbarItem,
+}: {
+  "data-toolbar-item"?: string;
+}) {
   return (
     <TooltipProvider>
       <Tooltip>
@@ -10,6 +14,7 @@ export function AgentSetupButton() {
           <Button
             variant="ghost"
             size="icon"
+            data-toolbar-item={dataToolbarItem}
             onClick={() => {
               window.dispatchEvent(new CustomEvent("canopy:open-agent-setup-wizard"));
             }}

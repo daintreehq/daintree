@@ -15,9 +15,15 @@ interface AgentButtonProps {
   type: AgentType;
   availability?: boolean;
   onOpenSettings: () => void;
+  "data-toolbar-item"?: string;
 }
 
-export function AgentButton({ type, availability, onOpenSettings }: AgentButtonProps) {
+export function AgentButton({
+  type,
+  availability,
+  onOpenSettings,
+  "data-toolbar-item": dataToolbarItem,
+}: AgentButtonProps) {
   const { showMenu } = useNativeContextMenu();
   const { worktrees } = useWorktrees();
   const displayCombo = useKeybindingDisplay(`agent.${type}`);
@@ -122,6 +128,7 @@ export function AgentButton({ type, availability, onOpenSettings }: AgentButtonP
               onClick={handleClick}
               onContextMenu={handleContextMenu}
               disabled={isLoading}
+              data-toolbar-item={dataToolbarItem}
               className={cn(
                 "text-canopy-text hover:bg-white/[0.06] transition-colors",
                 isAvailable && "hover:text-canopy-accent focus-visible:text-canopy-accent",

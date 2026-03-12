@@ -49,6 +49,39 @@ describe("Toolbar layout — issue #2584 project switcher collision", () => {
     });
   });
 
+  describe("ARIA toolbar structure — issue #2814", () => {
+    it("header has role=toolbar and aria-label", () => {
+      expect(source).toMatch(/role="toolbar"/);
+      expect(source).toMatch(/aria-label="Main toolbar"/);
+    });
+
+    it("has three role=group regions", () => {
+      const groupMatches = source.match(/role="group"/g);
+      expect(groupMatches).not.toBeNull();
+      expect(groupMatches!.length).toBe(3);
+    });
+
+    it("groups have descriptive aria-labels", () => {
+      expect(source).toContain('aria-label="Navigation and agents"');
+      expect(source).toContain('aria-label="Project"');
+      expect(source).toContain('aria-label="Tools and settings"');
+    });
+
+    it("toolbar items are marked with data-toolbar-item", () => {
+      const itemMatches = source.match(/data-toolbar-item=""/g);
+      expect(itemMatches).not.toBeNull();
+      expect(itemMatches!.length).toBeGreaterThanOrEqual(10);
+    });
+
+    it("has onKeyDown handler for arrow navigation", () => {
+      expect(source).toContain("onKeyDown={handleToolbarKeyDown}");
+    });
+
+    it("has onFocusCapture handler for focus tracking", () => {
+      expect(source).toContain("onFocusCapture={handleToolbarFocusCapture}");
+    });
+  });
+
   describe("Project switcher trigger", () => {
     it("button has overflow-hidden for truncation", () => {
       // overflow-hidden appears in className before data-testid on the same button

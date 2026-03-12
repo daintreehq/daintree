@@ -12,7 +12,11 @@ function formatDuration(seconds: number): string {
   return `${minutes}:${remainder.toString().padStart(2, "0")}`;
 }
 
-export function VoiceRecordingToolbarButton() {
+export function VoiceRecordingToolbarButton({
+  "data-toolbar-item": dataToolbarItem,
+}: {
+  "data-toolbar-item"?: string;
+}) {
   const activeTarget = useVoiceRecordingStore((state) => state.activeTarget);
   const status = useVoiceRecordingStore((state) => state.status);
   const elapsedSeconds = useVoiceRecordingStore((state) => state.elapsedSeconds);
@@ -53,6 +57,7 @@ export function VoiceRecordingToolbarButton() {
           <Button
             variant="ghost"
             size="icon"
+            data-toolbar-item={dataToolbarItem}
             onClick={() => {
               void voiceRecordingService.focusActiveTarget();
             }}
