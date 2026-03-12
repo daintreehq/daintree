@@ -106,12 +106,32 @@ describe("usePanelPalette", () => {
     expect(moreAgents?.category).toBe("agent");
   });
 
-  it("orders agents before tools in results", () => {
+  it("places agents, then MORE_AGENTS, then tools in exact order", () => {
     const { result } = renderHook(() => usePanelPalette());
 
-    const categories = result.current.results.map((item) => item.category);
-    const lastAgentIndex = categories.lastIndexOf("agent");
-    const firstToolIndex = categories.indexOf("tool");
-    expect(lastAgentIndex).toBeLessThan(firstToolIndex);
+    const ids = result.current.results.map((item) => item.id);
+    expect(ids).toEqual(["agent:claude", MORE_AGENTS_PANEL_ID, "browser"]);
+  });
+
+  it("still includes MORE_AGENTS when all agents are hidden", () => {
+    getEffectiveAgentIdsMock.mockReturnValue([]);
+
+    const { result } = renderHook(() => usePanelPalette());
+
+    const ids = result.current.results.map((item) => item.id);
+    expect(ids).toContain(MORE_AGENTS_PANEL_ID);
+    const moreAgents = result.current.results.find((item) => item.id === MORE_AGENTS_PANEL_ID);
+    expect(moreAgents?.category).toBe("agent");
+  });
+
+  it("works when no tool panel kinds exist", () => {
+    getPanelKindIdsMock.mockReturnValue([]);
+
+    const { result } = renderHook(() => usePanelPalette());
+
+    const tools = result.current.results.filter((item) => item.category === "tool");
+    expect(tools).toHaveLength(0);
+    const agents = result.current.results.filter((item) => item.category === "agent");
+    expect(agents.length).toBeGreaterThan(0);
   });
 });
