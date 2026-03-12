@@ -30,6 +30,7 @@ import { STATE_ICONS, STATE_COLORS } from "@/components/Worktree/terminalStateCo
 import { TerminalRefreshTier } from "@/types";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { useDockPanelPortal } from "./DockPanelOffscreenContainer";
+import { useDockBlockedState, getGroupBlockedAgentState } from "./useDockBlockedState";
 import { SortableTabButton } from "@/components/Panel/SortableTabButton";
 import type { TabGroup } from "@/types";
 import { buildPanelDuplicateOptions } from "@/services/terminal/panelDuplicationService";
@@ -348,6 +349,8 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
   const commandText = activePanel.activityHeadline || activePanel.lastCommand;
   const brandColor = getBrandColorHex(activePanel.agentId ?? activePanel.type);
   const agentState = activePanel.agentState;
+  const groupBlockedState = getGroupBlockedAgentState(panels);
+  const blockedState = useDockBlockedState(groupBlockedState);
   const displayTitle = getBaseTitle(activePanel.title);
   const showStateIcon = agentState && agentState !== "idle" && agentState !== "completed";
   const StateIcon = showStateIcon ? STATE_ICONS[agentState] : null;
@@ -364,7 +367,13 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
               "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2",
               "cursor-grab active:cursor-grabbing",
               isOpen &&
-                "bg-[var(--dock-item-bg-active)] text-canopy-text border-[var(--dock-item-border-active)] ring-1 ring-inset ring-canopy-accent/30"
+                "bg-[var(--dock-item-bg-active)] text-canopy-text border-[var(--dock-item-border-active)] ring-1 ring-inset ring-canopy-accent/30",
+              !isOpen &&
+                blockedState === "waiting" &&
+                "bg-[var(--dock-item-bg-waiting)] border-[var(--dock-item-border-waiting)]",
+              !isOpen &&
+                blockedState === "failed" &&
+                "bg-[var(--dock-item-bg-failed)] border-[var(--dock-item-border-failed)]"
             )}
             onClick={(e) => {
               e.preventDefault();
