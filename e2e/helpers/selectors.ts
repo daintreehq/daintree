@@ -75,6 +75,11 @@ export const SEL = {
   notes: {
     palette: '[data-testid="notes-palette"]',
   },
+  pulse: {
+    heatmap: '[role="img"][aria-label*="Activity over"]',
+    rangeTrigger: '[aria-label="Change time range"]',
+    refreshButton: '[aria-label="Refresh"]',
+  },
   reviewHub: {
     container: '[data-testid="review-hub"]',
     diffMode: '[data-testid="review-hub-diff-mode"]',
