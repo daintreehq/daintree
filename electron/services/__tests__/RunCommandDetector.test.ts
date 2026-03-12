@@ -385,7 +385,11 @@ describe("RunCommandDetector", () => {
       const taskCommands = commands.filter((cmd) => cmd.id.startsWith("task-"));
 
       expect(taskCommands).toEqual([
-        expect.objectContaining({ id: "task-lint", command: "task lint", description: "Run linter" }),
+        expect.objectContaining({
+          id: "task-lint",
+          command: "task lint",
+          description: "Run linter",
+        }),
       ]);
     });
 
@@ -412,11 +416,7 @@ describe("RunCommandDetector", () => {
     });
 
     it("returns empty for malformed YAML", async () => {
-      await fs.writeFile(
-        path.join(tempDir, "Taskfile.yml"),
-        "{{invalid yaml: [}",
-        "utf-8"
-      );
+      await fs.writeFile(path.join(tempDir, "Taskfile.yml"), "{{invalid yaml: [}", "utf-8");
 
       const commands = await detector.detect(tempDir);
       const taskCommands = commands.filter((cmd) => cmd.id.startsWith("task-"));
