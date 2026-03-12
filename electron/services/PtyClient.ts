@@ -614,6 +614,14 @@ export class PtyClient extends EventEmitter {
         this.broker.resolve((event as any).requestId, (event as any).killed ?? 0);
         break;
 
+      case "graceful-kill-result":
+        this.broker.resolve((event as any).requestId, (event as any).agentSessionId ?? null);
+        break;
+
+      case "graceful-kill-by-project-result":
+        this.broker.resolve((event as any).requestId, (event as any).results ?? []);
+        break;
+
       case "project-stats":
         this.broker.resolve(
           (event as any).requestId,
@@ -927,6 +935,28 @@ export class PtyClient extends EventEmitter {
     }
 
     this.send({ type: "project-switch", projectId });
+  }
+
+  async gracefulKill(id: string): Promise<string | null> {
+    const requestId = this.broker.generateId(`graceful-kill-${id}`);
+    const promise = this.broker.register<string | null>(requestId, 5000);
+    this.send({ type: "graceful-kill", id, requestId });
+    return promise.catch(() => {
+      this.kill(id, "graceful-kill-timeout");
+      return null;
+    });
+  }
+
+  async gracefulKillByProject(
+    projectId: string
+  ): Promise<Array<{ id: string; agentSessionId: string | null }>> {
+    const requestId = this.broker.generateId(`graceful-kill-by-project-${projectId}`);
+    const promise = this.broker.register<Array<{ id: string; agentSessionId: string | null }>>(
+      requestId,
+      10000
+    );
+    this.send({ type: "graceful-kill-by-project", projectId, requestId });
+    return promise.catch(() => []);
   }
 
   async killByProject(projectId: string): Promise<number> {

@@ -445,6 +445,7 @@ export async function hydrateAppState(
                   browserZoom: isDevPreview ? saved.browserZoom : undefined,
                   devPreviewConsoleOpen: isDevPreview ? saved.devPreviewConsoleOpen : undefined,
                   exitBehavior: saved.exitBehavior,
+                  agentSessionId: saved.agentSessionId,
                 });
 
                 // Initialize frontend tier state from backend to ensure proper wake behavior
@@ -631,6 +632,7 @@ export async function hydrateAppState(
                       browserZoom: isDevPreview ? saved.browserZoom : undefined,
                       devPreviewConsoleOpen: isDevPreview ? saved.devPreviewConsoleOpen : undefined,
                       exitBehavior: saved.exitBehavior,
+                      agentSessionId: saved.agentSessionId,
                     });
 
                     // Initialize frontend tier state from backend
