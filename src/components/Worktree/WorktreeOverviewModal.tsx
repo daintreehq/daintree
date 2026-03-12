@@ -65,6 +65,7 @@ export function WorktreeOverviewModal({
     sessionFilters,
     activityFilters,
     alwaysShowActive,
+    alwaysShowWaiting,
     pinnedWorktrees,
   } = useWorktreeFilterStore(
     useShallow((state) => ({
@@ -77,6 +78,7 @@ export function WorktreeOverviewModal({
       sessionFilters: state.sessionFilters,
       activityFilters: state.activityFilters,
       alwaysShowActive: state.alwaysShowActive,
+      alwaysShowWaiting: state.alwaysShowWaiting,
       pinnedWorktrees: state.pinnedWorktrees,
     }))
   );
@@ -183,6 +185,10 @@ export function WorktreeOverviewModal({
         return true;
       }
 
+      if (alwaysShowWaiting && derived.hasWaitingAgent) {
+        return true;
+      }
+
       return matchesFilters(worktree, filters, derived, isActive);
     });
 
@@ -213,6 +219,7 @@ export function WorktreeOverviewModal({
     sessionFilters,
     activityFilters,
     alwaysShowActive,
+    alwaysShowWaiting,
     pinnedWorktrees,
     derivedMetaMap,
     activeWorktreeId,

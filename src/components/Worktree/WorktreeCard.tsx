@@ -341,6 +341,7 @@ export function WorktreeCard({
 
   const isIdleCard = spineState === "idle";
   const isStaleCard = spineState === "stale";
+  const isWaitingCard = terminalCounts.byState.waiting > 0;
 
   const { setNodeRef, isOver } = useDroppable({
     id: `worktree-drop-${worktree.id}`,
@@ -386,7 +387,7 @@ export function WorktreeCard({
         variant === "grid" && "rounded-lg border border-divider bg-canopy-sidebar/50",
         isActive
           ? "bg-overlay-soft shadow-[inset_0_1px_0_0_rgba(255,255,255,0.05)]"
-          : "hover:bg-overlay-subtle",
+          : !isWaitingCard && "hover:bg-overlay-subtle",
         variant === "sidebar" && !isActive && "bg-transparent",
         isActive &&
           !isSingleWorktree &&
@@ -397,7 +398,11 @@ export function WorktreeCard({
           !isActive &&
           "hover:border-canopy-accent/50 hover:shadow-lg hover:shadow-canopy-accent/5",
         isFocused && !isActive && "bg-overlay-subtle",
+        isWaitingCard &&
+          !isOver &&
+          "border-l-2 border-l-[var(--color-state-waiting)] bg-[color-mix(in_oklab,var(--color-state-waiting)_6%,transparent)]",
         (isIdleCard || isStaleCard) &&
+          !isWaitingCard &&
           !isActive &&
           !isFocused &&
           !isOver &&
