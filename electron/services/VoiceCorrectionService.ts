@@ -3,6 +3,7 @@ import {
   CORE_CORRECTION_PROMPT,
   CONFIDENCE_SKIP_THRESHOLD,
   buildCorrectionSystemPrompt,
+  buildMicroCorrectionSystemPrompt,
   type CorrectionPromptContext,
 } from "../../shared/config/voiceCorrection.js";
 
@@ -10,8 +11,12 @@ export { CORE_CORRECTION_PROMPT, buildCorrectionSystemPrompt };
 
 const P = "[VoiceCorrection]";
 const CORRECTION_TIMEOUT_MS = 7000;
+const MICRO_CORRECTION_TIMEOUT_MS = 3000;
 const MAX_OUTPUT_TOKENS = 1024;
+const MICRO_MAX_OUTPUT_TOKENS = 128;
 const PROMPT_CACHE_PREFIX = "voice-correction-v4";
+const MICRO_PROMPT_CACHE_PREFIX = "voice-micro-correction-v1";
+const MICRO_CORRECTION_MODEL = "gpt-5-nano";
 
 const CORRECTION_RESULT_SCHEMA = {
   type: "object",
@@ -63,6 +68,13 @@ interface CorrectionApiResult {
   action: "no_change" | "replace";
   corrected_text: string;
   confidence: "low" | "medium" | "high";
+}
+
+export interface WordCorrectionRequest {
+  uncertainWords: string[];
+  leftContext: string;
+  rightContext: string;
+  rawSpan: string;
 }
 
 export class VoiceCorrectionService {
@@ -211,6 +223,141 @@ export class VoiceCorrectionService {
       }
       return token;
     });
+  }
+
+  async correctWord(
+    request: WordCorrectionRequest,
+    settings: VoiceCorrectionSettings
+  ): Promise<VoiceCorrectionResult> {
+    const trimmedSpan = request.rawSpan.trim();
+    if (!trimmedSpan) {
+      return {
+        action: "no_change",
+        correctedText: request.rawSpan,
+        confidence: "high",
+        confirmedText: request.rawSpan,
+      };
+    }
+
+    try {
+      const result = await Promise.race([
+        this.callMicroApi(request, settings),
+        new Promise<never>((_, reject) =>
+          setTimeout(
+            () => reject(new Error("Micro-correction timeout")),
+            MICRO_CORRECTION_TIMEOUT_MS
+          )
+        ),
+      ]);
+
+      const confirmedText =
+        result.action === "no_change"
+          ? request.rawSpan
+          : result.correctedText.trim() || request.rawSpan;
+
+      logDebug(`${P} Micro-correction success`, {
+        rawSpan: request.rawSpan,
+        confirmedText,
+        action: result.action,
+      });
+
+      return { ...result, confirmedText };
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      logWarn(`${P} Micro-correction failed, using raw text`, { error: msg });
+      return {
+        action: "no_change",
+        correctedText: request.rawSpan,
+        confidence: "low",
+        confirmedText: request.rawSpan,
+      };
+    }
+  }
+
+  private buildMicroUserMessage(request: WordCorrectionRequest): string {
+    const parts: string[] = [];
+
+    if (request.leftContext) {
+      parts.push(`<left_context>\n${request.leftContext}\n</left_context>`);
+    }
+
+    const annotated = VoiceCorrectionService.annotateUncertainWords(
+      request.rawSpan,
+      request.uncertainWords
+    );
+    parts.push(`<target>\n${annotated}\n</target>`);
+
+    if (request.rightContext) {
+      parts.push(`<right_context>\n${request.rightContext}\n</right_context>`);
+    }
+
+    return parts.join("\n\n");
+  }
+
+  private buildMicroPromptCacheKey(settings: VoiceCorrectionSettings): string {
+    const projectKey = settings.projectName ?? settings.projectPath ?? "global";
+    const dictionaryKey =
+      settings.customDictionary.length > 0 ? settings.customDictionary.join("|") : "no-dict";
+    return `${MICRO_PROMPT_CACHE_PREFIX}:${MICRO_CORRECTION_MODEL}:${projectKey}:${dictionaryKey}`;
+  }
+
+  private async callMicroApi(
+    request: WordCorrectionRequest,
+    settings: VoiceCorrectionSettings
+  ): Promise<Omit<VoiceCorrectionResult, "confirmedText">> {
+    const context: CorrectionPromptContext = {
+      projectName: settings.projectName,
+      projectPath: settings.projectPath,
+      customDictionary: settings.customDictionary,
+    };
+    const systemPrompt = buildMicroCorrectionSystemPrompt(context);
+    const userMessage = this.buildMicroUserMessage(request);
+
+    logDebug(`${P} Calling micro-correction API`, {
+      model: MICRO_CORRECTION_MODEL,
+      uncertainWords: request.uncertainWords,
+    });
+
+    const response = await fetch("https://api.openai.com/v1/responses", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${settings.apiKey}`,
+      },
+      body: JSON.stringify({
+        model: MICRO_CORRECTION_MODEL,
+        instructions: systemPrompt,
+        input: userMessage,
+        prompt_cache_key: this.buildMicroPromptCacheKey(settings),
+        service_tier: "auto",
+        reasoning: { effort: "minimal" },
+        text: {
+          format: {
+            type: "json_schema",
+            name: "voice_correction_result",
+            strict: true,
+            schema: CORRECTION_RESULT_SCHEMA,
+          },
+        },
+        max_output_tokens: MICRO_MAX_OUTPUT_TOKENS,
+      }),
+    });
+
+    if (!response.ok) {
+      throw new Error(`OpenAI API error: ${response.status}`);
+    }
+
+    const data = (await response.json()) as {
+      output_text?: string;
+      output?: Array<{ content?: Array<{ text?: string }> }>;
+    };
+    const parsed = JSON.parse(this.extractResponseText(data)) as CorrectionApiResult;
+
+    return {
+      action: parsed.action,
+      correctedText: parsed.action === "no_change" ? request.rawSpan : parsed.corrected_text,
+      confidence: parsed.confidence,
+    };
   }
 
   private async callApi(

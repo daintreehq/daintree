@@ -1280,6 +1280,10 @@ describe("VoiceTranscriptionService", () => {
         minConfidence: 0.95,
         wordCount: 2,
         uncertainWords: [],
+        words: [
+          { word: "hello", confidence: 0.99 },
+          { word: "world", confidence: 0.95 },
+        ],
       });
     });
 
@@ -1299,6 +1303,10 @@ describe("VoiceTranscriptionService", () => {
         minConfidence: 0.65,
         wordCount: 2,
         uncertainWords: ["racked"],
+        words: [
+          { word: "racked", confidence: 0.65 },
+          { word: "native", confidence: 0.92 },
+        ],
       });
     });
 
@@ -1319,6 +1327,10 @@ describe("VoiceTranscriptionService", () => {
         minConfidence: 0.75,
         wordCount: 2,
         uncertainWords: ["world"],
+        words: [
+          { word: "hello", confidence: 0.99 },
+          { word: "world", confidence: 0.75 },
+        ],
       });
     });
 
@@ -1335,6 +1347,7 @@ describe("VoiceTranscriptionService", () => {
         minConfidence: 1.0,
         wordCount: 0,
         uncertainWords: [],
+        words: [],
       });
     });
 
@@ -1382,6 +1395,7 @@ describe("VoiceTranscriptionService", () => {
         minConfidence: 0.88,
         wordCount: 1,
         uncertainWords: [],
+        words: [{ word: "hello", confidence: 0.88 }],
       });
     });
   });

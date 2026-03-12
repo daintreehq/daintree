@@ -260,6 +260,167 @@ describe("VoiceCorrectionService", () => {
     );
   });
 
+  describe("correctWord", () => {
+    it("calls gpt-5-nano with minimal reasoning and reduced max_output_tokens", async () => {
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValue(makeFetchResponse({ action: "replace", corrected_text: "Zustand" }));
+      vi.stubGlobal("fetch", fetchMock);
+
+      const svc = new VoiceCorrectionService();
+      await svc.correctWord(
+        {
+          uncertainWords: ["zoo", "stand"],
+          leftContext: "I love",
+          rightContext: "it is great",
+          rawSpan: "zoo stand",
+        },
+        BASE_SETTINGS
+      );
+
+      const body = JSON.parse((fetchMock.mock.calls[0] as [string, RequestInit])[1].body as string);
+      expect(body.model).toBe("gpt-5-nano");
+      expect(body.reasoning).toEqual({ effort: "minimal" });
+      expect(body.max_output_tokens).toBe(128);
+      expect(body.prompt_cache_key).toContain("voice-micro-correction-v1");
+    });
+
+    it("returns corrected text from the micro API", async () => {
+      vi.stubGlobal(
+        "fetch",
+        vi
+          .fn()
+          .mockResolvedValue(makeFetchResponse({ action: "replace", corrected_text: "Zustand" }))
+      );
+
+      const svc = new VoiceCorrectionService();
+      const result = await svc.correctWord(
+        {
+          uncertainWords: ["zoo", "stand"],
+          leftContext: "",
+          rightContext: "is great",
+          rawSpan: "zoo stand",
+        },
+        BASE_SETTINGS
+      );
+
+      expect(result.action).toBe("replace");
+      expect(result.confirmedText).toBe("Zustand");
+    });
+
+    it("returns no_change result when word is correct", async () => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn().mockResolvedValue(makeFetchResponse({ action: "no_change", corrected_text: "" }))
+      );
+
+      const svc = new VoiceCorrectionService();
+      const result = await svc.correctWord(
+        {
+          uncertainWords: ["react"],
+          leftContext: "",
+          rightContext: "is great",
+          rawSpan: "react",
+        },
+        BASE_SETTINGS
+      );
+
+      expect(result.action).toBe("no_change");
+      expect(result.confirmedText).toBe("react");
+    });
+
+    it("falls back to raw span on timeout (3s)", async () => {
+      vi.stubGlobal(
+        "fetch",
+        vi
+          .fn()
+          .mockImplementation(
+            () =>
+              new Promise((resolve) =>
+                setTimeout(
+                  () => resolve(makeFetchResponse({ action: "replace", corrected_text: "Fixed" })),
+                  10000
+                )
+              )
+          )
+      );
+
+      const svc = new VoiceCorrectionService();
+      const resultPromise = svc.correctWord(
+        {
+          uncertainWords: ["bad"],
+          leftContext: "",
+          rightContext: "word here now",
+          rawSpan: "bad",
+        },
+        BASE_SETTINGS
+      );
+      vi.advanceTimersByTime(4000);
+      const result = await resultPromise;
+
+      expect(result.confirmedText).toBe("bad");
+      expect(result.action).toBe("no_change");
+    });
+
+    it("includes uncertain annotations and context in user message", async () => {
+      const fetchMock = vi.fn().mockResolvedValue(makeFetchResponse({ corrected_text: "React" }));
+      vi.stubGlobal("fetch", fetchMock);
+
+      const svc = new VoiceCorrectionService();
+      await svc.correctWord(
+        {
+          uncertainWords: ["racked"],
+          leftContext: "I love",
+          rightContext: "so much today",
+          rawSpan: "racked",
+        },
+        BASE_SETTINGS
+      );
+
+      const body = JSON.parse((fetchMock.mock.calls[0] as [string, RequestInit])[1].body as string);
+      const input = body.input as string;
+      expect(input).toContain("<left_context>");
+      expect(input).toContain("I love");
+      expect(input).toContain("<target>");
+      expect(input).toContain("<uncertain>racked</uncertain>");
+      expect(input).toContain("<right_context>");
+      expect(input).toContain("so much today");
+    });
+
+    it("falls back to raw span on HTTP error", async () => {
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValue(makeFetchResponse({}, false, 500)));
+
+      const svc = new VoiceCorrectionService();
+      const result = await svc.correctWord(
+        {
+          uncertainWords: ["racked"],
+          leftContext: "",
+          rightContext: "is great now",
+          rawSpan: "racked",
+        },
+        BASE_SETTINGS
+      );
+
+      expect(result.action).toBe("no_change");
+      expect(result.confirmedText).toBe("racked");
+      expect(result.confidence).toBe("low");
+    });
+
+    it("returns raw span for empty input", async () => {
+      const fetchMock = vi.fn();
+      vi.stubGlobal("fetch", fetchMock);
+
+      const svc = new VoiceCorrectionService();
+      const result = await svc.correctWord(
+        { uncertainWords: [], leftContext: "", rightContext: "", rawSpan: "  " },
+        BASE_SETTINGS
+      );
+
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(result.action).toBe("no_change");
+    });
+  });
+
   describe("annotateUncertainWords", () => {
     it("wraps matching words with uncertain tags", () => {
       const result = VoiceCorrectionService.annotateUncertainWords("hello world foo", ["world"]);

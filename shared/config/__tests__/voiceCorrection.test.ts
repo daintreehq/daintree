@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { buildCorrectionSystemPrompt, CORE_CORRECTION_PROMPT } from "../voiceCorrection.js";
+import {
+  buildCorrectionSystemPrompt,
+  buildMicroCorrectionSystemPrompt,
+  CORE_CORRECTION_PROMPT,
+  MICRO_CORRECTION_PROMPT,
+} from "../voiceCorrection.js";
 
 describe("CORE_CORRECTION_PROMPT", () => {
   it("uses XML delimiters around the technical terms dictionary", () => {
@@ -134,5 +139,75 @@ describe("buildCorrectionSystemPrompt", () => {
       projectPath: "/Users/dev/my-app-repo",
     });
     expect(prompt).toContain("my-app-repo");
+  });
+});
+
+describe("MICRO_CORRECTION_PROMPT", () => {
+  it("is a word-level correction engine", () => {
+    expect(MICRO_CORRECTION_PROMPT).toContain("word-level correction engine");
+  });
+
+  it("references uncertain tags", () => {
+    expect(MICRO_CORRECTION_PROMPT).toContain("<uncertain>");
+  });
+
+  it("includes technical terms dictionary", () => {
+    expect(MICRO_CORRECTION_PROMPT).toContain("<terms>");
+    expect(MICRO_CORRECTION_PROMPT).toContain("Zustand");
+    expect(MICRO_CORRECTION_PROMPT).toContain("React");
+  });
+
+  it("describes adjacent word merging", () => {
+    expect(MICRO_CORRECTION_PROMPT).toContain("zoo stand");
+    expect(MICRO_CORRECTION_PROMPT).toContain("Zustand");
+  });
+});
+
+describe("buildMicroCorrectionSystemPrompt", () => {
+  it("includes the micro-correction core prompt", () => {
+    const prompt = buildMicroCorrectionSystemPrompt({});
+    expect(prompt).toContain("word-level correction engine");
+  });
+
+  it("includes guardrail at the end", () => {
+    const prompt = buildMicroCorrectionSystemPrompt({});
+    expect(prompt).toContain("no_change");
+    expect(prompt).toContain("replace");
+    expect(prompt).toContain("JSON object");
+  });
+
+  it("includes project name when provided", () => {
+    const prompt = buildMicroCorrectionSystemPrompt({ projectName: "Canopy" });
+    expect(prompt).toContain("Canopy");
+    expect(prompt).toContain("CURRENT PROJECT");
+  });
+
+  it("includes custom dictionary as required terms", () => {
+    const prompt = buildMicroCorrectionSystemPrompt({
+      customDictionary: ["Canopy", "Worktree"],
+    });
+    expect(prompt).toContain("Canopy");
+    expect(prompt).toContain("Worktree");
+    expect(prompt).toContain("REQUIRED TERMS");
+  });
+
+  it("omits project section when no project context provided", () => {
+    const prompt = buildMicroCorrectionSystemPrompt({});
+    expect(prompt).not.toContain("CURRENT PROJECT");
+  });
+
+  it("does not include custom instructions (micro prompt is leaner)", () => {
+    const prompt = buildMicroCorrectionSystemPrompt({
+      customInstructions: "Always use British spelling.",
+    });
+    expect(prompt).not.toContain("CUSTOM CONTEXT");
+  });
+
+  it("guardrail is the last section", () => {
+    const prompt = buildMicroCorrectionSystemPrompt({
+      customDictionary: ["Test"],
+    });
+    const guardrailIdx = prompt.lastIndexOf("Return a JSON object");
+    expect(guardrailIdx).toBeGreaterThan(prompt.length - 300);
   });
 });
