@@ -50,6 +50,7 @@ vi.mock("electron-updater", () => ({
 }));
 
 import { autoUpdaterService } from "../AutoUpdaterService.js";
+import { CHANNELS } from "../../ipc/channels.js";
 
 const CHECK_INTERVAL_MS = 4 * 60 * 60 * 1000;
 
@@ -252,7 +253,7 @@ describe("AutoUpdaterService", () => {
       autoUpdaterService.initialize(windowMock as any);
 
       quitAndInstallHandler = (ipcMainMock.handle as Mock).mock.calls.find(
-        (args) => args[0] === "update:quit-and-install"
+        (args) => args[0] === CHANNELS.UPDATE_QUIT_AND_INSTALL
       )![1];
 
       downloadedHandler = (autoUpdaterMock.on as Mock).mock.calls.find(
@@ -277,6 +278,17 @@ describe("AutoUpdaterService", () => {
 
       expect(cleanupOnExitMock).not.toHaveBeenCalled();
       expect(autoUpdaterMock.quitAndInstall).not.toHaveBeenCalled();
+    });
+
+    it("still calls quitAndInstall when cleanupOnExit throws", () => {
+      downloadedHandler({ version: "2.0.0" });
+      cleanupOnExitMock.mockImplementationOnce(() => {
+        throw new Error("cleanup failed");
+      });
+
+      quitAndInstallHandler();
+
+      expect(autoUpdaterMock.quitAndInstall).toHaveBeenCalledTimes(1);
     });
   });
 });

@@ -161,7 +161,11 @@ class AutoUpdaterService {
           console.warn("[MAIN] Quit-and-install called before download completed");
           return;
         }
-        getCrashRecoveryService().cleanupOnExit();
+        try {
+          getCrashRecoveryService().cleanupOnExit();
+        } catch (err) {
+          console.error("[MAIN] Crash recovery cleanup before quit-and-install failed:", err);
+        }
         autoUpdater.quitAndInstall();
       });
 
