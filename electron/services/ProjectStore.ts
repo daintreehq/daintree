@@ -849,6 +849,13 @@ export class ProjectStore {
           typeof parsed.devServerAutoDetected === "boolean"
             ? parsed.devServerAutoDetected
             : undefined,
+        devServerLoadTimeout:
+          typeof parsed.devServerLoadTimeout === "number" &&
+          Number.isFinite(parsed.devServerLoadTimeout) &&
+          parsed.devServerLoadTimeout >= 1 &&
+          parsed.devServerLoadTimeout <= 120
+            ? parsed.devServerLoadTimeout
+            : undefined,
         copyTreeSettings:
           parsed.copyTreeSettings && typeof parsed.copyTreeSettings === "object"
             ? parsed.copyTreeSettings
@@ -952,6 +959,13 @@ export class ProjectStore {
       devServerAutoDetected:
         typeof settings.devServerAutoDetected === "boolean"
           ? settings.devServerAutoDetected
+          : undefined,
+      devServerLoadTimeout:
+        typeof settings.devServerLoadTimeout === "number" &&
+        Number.isFinite(settings.devServerLoadTimeout) &&
+        settings.devServerLoadTimeout >= 1 &&
+        settings.devServerLoadTimeout <= 120
+          ? settings.devServerLoadTimeout
           : undefined,
     };
 
@@ -1440,12 +1454,14 @@ export class ProjectStore {
       version: 1;
       runCommands?: import("../types/index.js").RunCommand[];
       devServerCommand?: string;
+      devServerLoadTimeout?: number;
       copyTreeSettings?: import("../types/index.js").CopyTreeSettings;
       excludedPaths?: string[];
     } = { version: 1 };
 
     if (settings.runCommands?.length) payload.runCommands = settings.runCommands;
     if (settings.devServerCommand) payload.devServerCommand = settings.devServerCommand;
+    if (settings.devServerLoadTimeout) payload.devServerLoadTimeout = settings.devServerLoadTimeout;
     if (settings.copyTreeSettings) payload.copyTreeSettings = settings.copyTreeSettings;
     if (settings.excludedPaths?.length) payload.excludedPaths = settings.excludedPaths;
 

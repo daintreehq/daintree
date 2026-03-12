@@ -339,5 +339,45 @@ describe("projectSettingsDirty", () => {
 
       expect(areSnapshotsEqual(baseSnapshot, snapshot2)).toBe(false);
     });
+
+    it("should detect changed devServerLoadTimeout", () => {
+      const snapshot2 = createProjectSettingsSnapshot(
+        "Project",
+        "🌲",
+        "npm run dev",
+        undefined,
+        ["node_modules/**"],
+        [{ id: "1", key: "KEY", value: "value" }],
+        [{ id: "cmd1", name: "Build", command: "npm run build" }],
+        "recipe-1",
+        [{ commandId: "test", disabled: false }],
+        {},
+        "none",
+        "",
+        60
+      );
+
+      expect(areSnapshotsEqual(baseSnapshot, snapshot2)).toBe(false);
+    });
+
+    it("should treat undefined and undefined devServerLoadTimeout as equal", () => {
+      const snapshot2 = createProjectSettingsSnapshot(
+        "Project",
+        "🌲",
+        "npm run dev",
+        undefined,
+        ["node_modules/**"],
+        [{ id: "1", key: "KEY", value: "value" }],
+        [{ id: "cmd1", name: "Build", command: "npm run build" }],
+        "recipe-1",
+        [{ commandId: "test", disabled: false }],
+        {},
+        "none",
+        "",
+        undefined
+      );
+
+      expect(areSnapshotsEqual(baseSnapshot, snapshot2)).toBe(true);
+    });
   });
 });

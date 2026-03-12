@@ -919,6 +919,8 @@ export interface ProjectSettings {
   devServerDismissed?: boolean;
   /** Dev server command was auto-detected (vs manually configured) */
   devServerAutoDetected?: boolean;
+  /** Timeout in seconds before a slow-loading dev preview is automatically reloaded (default: 30, max: 120) */
+  devServerLoadTimeout?: number;
   /** CopyTree context generation configuration */
   copyTreeSettings?: CopyTreeSettings;
   /** Command overrides for project-specific customization */

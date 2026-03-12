@@ -20,6 +20,7 @@ import { useIsDragging } from "@/components/DragDrop";
 import { cn } from "@/lib/utils";
 import { useConsoleCaptureStore } from "@/store/consoleCaptureStore";
 import { useProjectStore } from "@/store";
+import { useProjectSettingsStore } from "@/store/projectSettingsStore";
 import { useUrlHistoryStore } from "@/store/urlHistoryStore";
 
 export interface BrowserPaneProps extends BasePanelProps {
@@ -67,6 +68,10 @@ export function BrowserPane({
   const clearConsoleMessages = useConsoleCaptureStore((state) => state.clearMessages);
   const removePane = useConsoleCaptureStore((state) => state.removePane);
   const projectId = useProjectStore((state) => state.currentProject?.id);
+  const devServerLoadTimeout = useProjectSettingsStore(
+    (state) => state.settings?.devServerLoadTimeout
+  );
+  const loadTimeoutMs = Math.min(Math.max(devServerLoadTimeout ?? 30, 1), 120) * 1000;
 
   const [isConsoleOpen, setIsConsoleOpen] = useState(false);
 
@@ -162,7 +167,7 @@ export function BrowserPane({
         } catch {
           // Webview detached before timeout fired
         }
-      }, 30000);
+      }, loadTimeoutMs);
     };
 
     const handleDidStopLoading = () => {
@@ -271,7 +276,16 @@ export function BrowserPane({
       webview.removeEventListener("console-message", handleConsoleMessage);
       webview.removeEventListener("page-title-updated", handlePageTitleUpdated);
     };
-  }, [webviewElement, hasValidUrl, loadError, zoomFactor, id, addConsoleMessage, projectId]);
+  }, [
+    webviewElement,
+    hasValidUrl,
+    loadError,
+    zoomFactor,
+    id,
+    addConsoleMessage,
+    projectId,
+    loadTimeoutMs,
+  ]);
 
   const handleNavigate = useCallback(
     (url: string) => {
