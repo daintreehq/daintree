@@ -1039,9 +1039,11 @@ class KeybindingService {
   private setPendingChord(combo: string): void {
     this.clearChordTimeout();
     this.pendingChord = combo;
+    this.notifyListeners();
     this.chordTimeout = setTimeout(() => {
       this.pendingChord = null;
       this.chordTimeout = null;
+      this.notifyListeners();
     }, this.CHORD_TIMEOUT_MS);
   }
 
@@ -1050,8 +1052,12 @@ class KeybindingService {
   }
 
   clearPendingChord(): void {
+    const hadChord = this.pendingChord !== null;
     this.clearChordTimeout();
     this.pendingChord = null;
+    if (hadChord) {
+      this.notifyListeners();
+    }
   }
 
   normalizeKeyForBinding(event: KeyboardEvent): string {
@@ -1214,6 +1220,40 @@ class KeybindingService {
 
   getOverridesSnapshot(): Record<string, string[]> {
     return Object.fromEntries(this.overrides.entries());
+  }
+
+  getChordCompletions(
+    prefix: string
+  ): Array<{ secondKey: string; displayKey: string; actionId: string; description: string }> {
+    const normalizedPrefix = prefix.trim().toLowerCase();
+    const results: Array<{
+      secondKey: string;
+      displayKey: string;
+      actionId: string;
+      description: string;
+    }> = [];
+
+    for (const binding of this.getAllBindingsWithEffectiveCombos()) {
+      if (!this.canExecute(binding.actionId)) continue;
+
+      const combo = binding.effectiveCombo.trim();
+      const normalizedCombo = combo.toLowerCase();
+      const spaceIdx = normalizedCombo.indexOf(" ");
+      if (spaceIdx === -1) continue;
+
+      const firstPart = normalizedCombo.slice(0, spaceIdx);
+      if (firstPart !== normalizedPrefix) continue;
+
+      const secondKey = combo.slice(combo.indexOf(" ") + 1);
+      results.push({
+        secondKey,
+        displayKey: this.formatComboForDisplay(secondKey),
+        actionId: binding.actionId,
+        description: binding.description ?? "",
+      });
+    }
+
+    return results;
   }
 }
 

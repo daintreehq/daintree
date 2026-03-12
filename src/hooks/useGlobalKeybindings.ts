@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useSyncExternalStore } from "react";
 import { keybindingService, normalizeKeyForBinding } from "../services/KeybindingService";
 import { actionService } from "../services/ActionService";
 
@@ -78,16 +78,26 @@ export function useGlobalKeybindings(enabled: boolean = true): void {
       }
     };
 
+    const handleBlur = () => keybindingService.clearPendingChord();
+    const handleVisibilityChange = () => {
+      if (document.hidden) keybindingService.clearPendingChord();
+    };
+
     // Use capture phase to intercept before other handlers
     window.addEventListener("keydown", handler, { capture: true });
-    return () => window.removeEventListener("keydown", handler, { capture: true });
+    window.addEventListener("blur", handleBlur);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => {
+      window.removeEventListener("keydown", handler, { capture: true });
+      window.removeEventListener("blur", handleBlur);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
   }, [enabled]);
 }
 
-/**
- * Hook to display the current pending chord state.
- * Useful for showing a chord indicator in the UI.
- */
+const subscribeToPendingChord = (callback: () => void) => keybindingService.subscribe(callback);
+const getPendingChordSnapshot = () => keybindingService.getPendingChord();
+
 export function usePendingChord(): string | null {
-  return keybindingService.getPendingChord();
+  return useSyncExternalStore(subscribeToPendingChord, getPendingChordSnapshot);
 }
