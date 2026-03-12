@@ -596,7 +596,7 @@ export function NewWorktreeDialog({
     if (recipeSelectionTouchedRef.current) return true;
     if (pathTouchedRef.current && worktreePath.trim()) return true;
     return false;
-  }, [branchInput, worktreePath]);
+  }, [branchInput, worktreePath, selectedIssue, selectedRecipeId]);
 
   const handleBeforeClose = useCallback((): boolean => {
     if (!isFormDirty) return true;
@@ -1129,6 +1129,7 @@ export function NewWorktreeDialog({
                         );
                         if (result.ok && result.result) {
                           setWorktreePath(result.result as string);
+                          pathTouchedRef.current = true;
                           setError(null);
                         }
                       } catch (err: unknown) {
