@@ -877,6 +877,7 @@ export interface ElectronAPI {
     get(): Promise<{ enabled: boolean; hasSeenPrompt: boolean }>;
     setEnabled(enabled: boolean): Promise<void>;
     markPromptShown(): Promise<void>;
+    track(event: string, properties: Record<string, unknown>): Promise<void>;
   };
   onboarding: {
     get(): Promise<OnboardingState>;

@@ -5,7 +5,15 @@ import {
   setTelemetryEnabled,
   hasTelemetryPromptBeenShown,
   markTelemetryPromptShown,
+  trackEvent,
 } from "../../services/TelemetryService.js";
+
+const ALLOWED_EVENTS = new Set([
+  "onboarding_step_viewed",
+  "onboarding_step_skipped",
+  "onboarding_completed",
+  "onboarding_abandoned",
+]);
 
 export function registerTelemetryHandlers(): () => void {
   const cleanups: Array<() => void> = [];
@@ -16,9 +24,9 @@ export function registerTelemetryHandlers(): () => void {
   }));
   cleanups.push(() => ipcMain.removeHandler(CHANNELS.TELEMETRY_GET));
 
-  ipcMain.handle(CHANNELS.TELEMETRY_SET_ENABLED, (_event, enabled: unknown) => {
+  ipcMain.handle(CHANNELS.TELEMETRY_SET_ENABLED, async (_event, enabled: unknown) => {
     if (typeof enabled !== "boolean") return;
-    setTelemetryEnabled(enabled);
+    await setTelemetryEnabled(enabled);
   });
   cleanups.push(() => ipcMain.removeHandler(CHANNELS.TELEMETRY_SET_ENABLED));
 
@@ -26,6 +34,13 @@ export function registerTelemetryHandlers(): () => void {
     markTelemetryPromptShown();
   });
   cleanups.push(() => ipcMain.removeHandler(CHANNELS.TELEMETRY_MARK_PROMPT_SHOWN));
+
+  ipcMain.handle(CHANNELS.TELEMETRY_TRACK, (_event, eventName: unknown, properties: unknown) => {
+    if (typeof eventName !== "string" || !ALLOWED_EVENTS.has(eventName)) return;
+    if (typeof properties !== "object" || properties === null || Array.isArray(properties)) return;
+    trackEvent(eventName, properties as Record<string, unknown>);
+  });
+  cleanups.push(() => ipcMain.removeHandler(CHANNELS.TELEMETRY_TRACK));
 
   return () => cleanups.forEach((c) => c());
 }

@@ -1253,6 +1253,10 @@ export interface IpcInvokeMap {
     args: [];
     result: void;
   };
+  "telemetry:track": {
+    args: [event: string, properties: Record<string, unknown>];
+    result: void;
+  };
 
   // Onboarding
   "onboarding:get": {
