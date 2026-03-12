@@ -79,6 +79,11 @@ export const SEL = {
     container: '[data-testid="review-hub"]',
     diffMode: '[data-testid="review-hub-diff-mode"]',
     close: '[data-testid="review-hub-close"]',
+    commitMessageInput: 'textarea[placeholder="Commit message…"]',
+    commitButton: (count: number) => `button:has-text("Commit (${count})")`,
+    cleanState: 'text="Working tree clean"',
+    stageButton: (path: string) => `[aria-label="Stage ${path}"]`,
+    unstageButton: (path: string) => `[aria-label="Unstage ${path}"]`,
   },
   welcome: {
     openFolder: 'button:has-text("Open Folder")',
