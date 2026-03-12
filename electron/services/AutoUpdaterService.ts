@@ -2,6 +2,7 @@ import { app, BrowserWindow, dialog, ipcMain } from "electron";
 import electronUpdater from "electron-updater";
 import type { UpdateInfo, ProgressInfo } from "electron-updater";
 import { CHANNELS } from "../ipc/channels.js";
+import { getCrashRecoveryService } from "./CrashRecoveryService.js";
 
 const CHECK_INTERVAL_MS = 4 * 60 * 60 * 1000; // 4 hours
 const { autoUpdater } = electronUpdater;
@@ -159,6 +160,11 @@ class AutoUpdaterService {
         if (!this.updateDownloaded) {
           console.warn("[MAIN] Quit-and-install called before download completed");
           return;
+        }
+        try {
+          getCrashRecoveryService().cleanupOnExit();
+        } catch (err) {
+          console.error("[MAIN] Crash recovery cleanup before quit-and-install failed:", err);
         }
         autoUpdater.quitAndInstall();
       });
