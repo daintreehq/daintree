@@ -7,11 +7,18 @@ import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/comp
 interface BranchLabelProps {
   label: string;
   isActive: boolean;
+  isMuted?: boolean;
   isMainWorktree?: boolean;
   className?: string;
 }
 
-export function BranchLabel({ label, isActive, isMainWorktree, className }: BranchLabelProps) {
+export function BranchLabel({
+  label,
+  isActive,
+  isMuted,
+  isMainWorktree,
+  className,
+}: BranchLabelProps) {
   const { displayName, colors, rest } = useMemo(() => {
     const parts = label.split("/");
     if (parts.length <= 1) {
@@ -47,10 +54,10 @@ export function BranchLabel({ label, isActive, isMainWorktree, className }: Bran
             {displayName && colors && (
               <span
                 className={cn(
-                  "text-[11px] tracking-wide font-medium px-1.5 py-0.5 rounded border shrink-0",
-                  colors.bg,
-                  colors.border,
-                  colors.text
+                  "text-[11px] tracking-wide font-medium px-1.5 py-0.5 rounded border shrink-0 transition-colors duration-200",
+                  isMuted
+                    ? "bg-white/5 border-white/10 text-canopy-text/50"
+                    : cn(colors.bg, colors.border, colors.text)
                 )}
               >
                 {displayName}
@@ -58,8 +65,8 @@ export function BranchLabel({ label, isActive, isMainWorktree, className }: Bran
             )}
             <span
               className={cn(
-                "truncate font-mono font-semibold text-[13px]",
-                isActive ? "text-white" : "text-canopy-text",
+                "truncate font-mono font-semibold text-[13px] transition-colors duration-200",
+                isActive ? "text-white" : isMuted ? "text-canopy-text/60" : "text-canopy-text",
                 isMainWorktree && "font-bold tracking-wide"
               )}
             >
