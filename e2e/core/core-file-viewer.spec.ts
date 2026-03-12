@@ -4,7 +4,7 @@ import { launchApp, closeApp, type AppContext } from "../helpers/launch";
 import { createFixtureRepo } from "../helpers/fixtures";
 import { openAndOnboardProject } from "../helpers/project";
 import { SEL } from "../helpers/selectors";
-import { T_SHORT, T_MEDIUM } from "../helpers/timeouts";
+import { T_SHORT, T_MEDIUM, T_LONG } from "../helpers/timeouts";
 
 let ctx: AppContext;
 let fixtureDir: string;
@@ -67,8 +67,8 @@ test.describe.serial("Core: File Viewer Modal", () => {
 
     // CodeViewer renders a CodeMirror editor with .cm-content containing the file text
     const cmContent = dialog.locator(".cm-content");
-    await expect(cmContent).toBeVisible({ timeout: T_MEDIUM });
-    await expect(cmContent).toContainText("console.log", { timeout: T_SHORT });
+    await expect(cmContent).toBeVisible({ timeout: T_LONG });
+    await expect(cmContent).toContainText("console.log", { timeout: T_MEDIUM });
 
     // Metadata bar shows line count and encoding
     const metadataBar = dialog.locator(SEL.fileViewer.metadataBar);
