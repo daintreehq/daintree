@@ -97,6 +97,7 @@ import {
   useAgentPreferencesStore,
   usePaletteStore,
   type RetryAction,
+  useActionMruStore,
 } from "./store";
 import { useShallow } from "zustand/react/shallow";
 import { useRecipeStore } from "./store/recipeStore";
@@ -657,6 +658,8 @@ function App() {
       }))
     );
 
+  const hydrateActionMru = useActionMruStore((state) => state.hydrateActionMru);
+
   useEffect(() => {
     const handleBeforeUnload = () => {
       cleanupWorktreeDataStore();
@@ -803,6 +806,7 @@ function App() {
       setReconnectError,
       hydrateTabGroups,
       hydrateMru,
+      hydrateActionMru,
     }),
     [
       addTerminal,
@@ -813,6 +817,7 @@ function App() {
       setReconnectError,
       hydrateTabGroups,
       hydrateMru,
+      hydrateActionMru,
     ]
   );
 

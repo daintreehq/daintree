@@ -26,6 +26,7 @@ export interface HydrationCallbacks {
   setReconnectError?: (id: string, error: TerminalReconnectError) => void;
   hydrateTabGroups?: (tabGroups: TabGroup[], options?: { skipPersist?: boolean }) => void;
   hydrateMru?: (list: string[]) => void;
+  hydrateActionMru?: (list: string[]) => void;
 }
 
 export function useAppHydration(callbacks: HydrationCallbacks, enabled = true) {
@@ -60,6 +61,7 @@ export function useAppHydration(callbacks: HydrationCallbacks, enabled = true) {
     callbacks.setReconnectError,
     callbacks.hydrateTabGroups,
     callbacks.hydrateMru,
+    callbacks.hydrateActionMru,
   ]);
 
   return { isStateLoaded };
