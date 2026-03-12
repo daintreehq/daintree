@@ -99,7 +99,7 @@ test.describe.serial("Core: Terminal Recipes", () => {
 
       // Verify recipe appears in the list
       await expect(window.locator(SEL.projectSettings.heading)).toBeVisible({ timeout: T_SHORT });
-      await expect(window.getByText("E2E Test Recipe")).toBeVisible({ timeout: T_MEDIUM });
+      await expect(window.getByText("E2E Test Recipe").first()).toBeVisible({ timeout: T_MEDIUM });
 
       await closeProjectSettings();
     });
