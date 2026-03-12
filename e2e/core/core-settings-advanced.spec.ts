@@ -146,8 +146,9 @@ test.describe.serial("Core: Settings Advanced", () => {
       // Wait for chord timeout (1s) + settle for recording to finish
       await window.waitForTimeout(1500);
 
-      // Click Save to apply the override
-      const saveBtn = row.locator("button", { hasText: "Save" });
+      // Click Save — it's inside the KeyRecorder, sibling of the recorder Cancel button
+      const recorderArea = window.locator(SEL.settings.shortcutCancelButton).locator("..");
+      const saveBtn = recorderArea.locator("button", { hasText: "Save" });
       await expect(saveBtn).toBeVisible({ timeout: T_SHORT });
       await saveBtn.click();
 
