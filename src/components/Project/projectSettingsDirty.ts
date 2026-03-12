@@ -5,6 +5,7 @@ export interface ProjectSettingsSnapshot {
   name: string;
   emoji: string;
   devServerCommand: string;
+  devServerLoadTimeout: number | undefined;
   projectIconSvg: string | undefined;
   excludedPaths: string[];
   environmentVariables: Record<string, string>;
@@ -42,7 +43,8 @@ export function createProjectSettingsSnapshot(
   commandOverrides: CommandOverride[],
   copyTreeSettings: CopyTreeSettings,
   branchPrefixMode: "none" | "username" | "custom" = "none",
-  branchPrefixCustom: string = ""
+  branchPrefixCustom: string = "",
+  devServerLoadTimeout: number | undefined = undefined
 ): ProjectSettingsSnapshot {
   const envVarRecord: Record<string, string> = {};
   const seenKeys = new Map<string, number>();
@@ -107,6 +109,7 @@ export function createProjectSettingsSnapshot(
     name: name.trim(),
     emoji,
     devServerCommand: devServerCommand.trim(),
+    devServerLoadTimeout,
     projectIconSvg,
     excludedPaths: sanitizedPaths,
     environmentVariables: sortedEnvVars,
@@ -133,6 +136,7 @@ export function areSnapshotsEqual(a: ProjectSettingsSnapshot, b: ProjectSettings
   if (a.name !== b.name) return false;
   if (a.emoji !== b.emoji) return false;
   if (a.devServerCommand !== b.devServerCommand) return false;
+  if (a.devServerLoadTimeout !== b.devServerLoadTimeout) return false;
   if (a.projectIconSvg !== b.projectIconSvg) return false;
   if (a.defaultWorktreeRecipeId !== b.defaultWorktreeRecipeId) return false;
 

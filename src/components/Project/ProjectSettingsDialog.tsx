@@ -117,6 +117,7 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
     undefined
   );
   const [devServerCommand, setDevServerCommand] = useState<string>("");
+  const [devServerLoadTimeout, setDevServerLoadTimeout] = useState<number | undefined>(undefined);
   const [commandOverrides, setCommandOverrides] = useState<CommandOverride[]>([]);
   const [copyTreeSettings, setCopyTreeSettings] = useState<CopyTreeSettings>({});
   const [testConfigResult, setTestConfigResult] = useState<CopyTreeTestConfigResult | null>(null);
@@ -168,12 +169,14 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
       commandOverrides,
       copyTreeSettings,
       branchPrefixMode,
-      branchPrefixCustom
+      branchPrefixCustom,
+      devServerLoadTimeout
     );
   }, [
     name,
     emoji,
     devServerCommand,
+    devServerLoadTimeout,
     projectIconSvg,
     excludedPaths,
     environmentVariables,
@@ -269,6 +272,7 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
       const initialProjectIconSvg = settings.projectIconSvg;
       const initialDefaultWorktreeRecipeId = settings.defaultWorktreeRecipeId;
       const initialDevServerCommand = settings.devServerCommand || "";
+      const initialDevServerLoadTimeout = settings.devServerLoadTimeout;
       const initialCommandOverrides = settings.commandOverrides || [];
       const initialCopyTreeSettings = settings.copyTreeSettings || {};
       const initialBranchPrefixMode = settings.branchPrefixMode ?? "none";
@@ -282,6 +286,7 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
       setProjectIconSvg(initialProjectIconSvg);
       setDefaultWorktreeRecipeId(initialDefaultWorktreeRecipeId);
       setDevServerCommand(initialDevServerCommand);
+      setDevServerLoadTimeout(initialDevServerLoadTimeout);
       setCommandOverrides(initialCommandOverrides);
       setCopyTreeSettings(initialCopyTreeSettings);
       setBranchPrefixMode(initialBranchPrefixMode);
@@ -299,7 +304,8 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
         initialCommandOverrides,
         initialCopyTreeSettings,
         initialBranchPrefixMode,
-        initialBranchPrefixCustom
+        initialBranchPrefixCustom,
+        initialDevServerLoadTimeout
       );
 
       setIsInitialized(true);
@@ -312,6 +318,7 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
       setIconError(null);
       setDefaultWorktreeRecipeId(undefined);
       setDevServerCommand("");
+      setDevServerLoadTimeout(undefined);
       setCommandOverrides([]);
       setCopyTreeSettings({});
       setTestConfigResult(null);
@@ -531,6 +538,7 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
         projectIconSvg: projectIconSvg,
         defaultWorktreeRecipeId: defaultWorktreeRecipeId,
         devServerCommand: devServerCommand.trim() || undefined,
+        devServerLoadTimeout: devServerLoadTimeout,
         commandOverrides: commandOverrides.length > 0 ? commandOverrides : undefined,
         copyTreeSettings: hasCopyTreeSettings ? sanitizedCopyTreeSettings : undefined,
         branchPrefixMode: effectivePrefixMode !== "none" ? effectivePrefixMode : undefined,
@@ -564,7 +572,8 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
         commandOverrides.length > 0 ? commandOverrides : [],
         hasCopyTreeSettings ? sanitizedCopyTreeSettings : {},
         branchPrefixMode,
-        sanitizedBranchPrefixCustom
+        sanitizedBranchPrefixCustom,
+        devServerLoadTimeout
       );
 
       requestClose({ bypassDirty: true });
@@ -893,6 +902,34 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
                         autoComplete="off"
                         aria-label="Dev server command"
                       />
+
+                      <div className="mt-3">
+                        <label
+                          htmlFor="dev-server-load-timeout"
+                          className="block text-xs text-canopy-text/60 mb-1"
+                        >
+                          Load timeout (seconds)
+                        </label>
+                        <input
+                          id="dev-server-load-timeout"
+                          type="number"
+                          min={1}
+                          max={120}
+                          value={devServerLoadTimeout ?? ""}
+                          onChange={(e) => {
+                            const raw = e.target.value;
+                            if (raw === "") {
+                              setDevServerLoadTimeout(undefined);
+                            } else {
+                              const num = Math.max(1, Math.min(120, Math.round(Number(raw))));
+                              setDevServerLoadTimeout(num);
+                            }
+                          }}
+                          className="w-28 bg-canopy-bg border border-canopy-border rounded px-3 py-2 text-sm text-canopy-text font-mono focus:outline-none focus:border-canopy-accent focus:ring-1 focus:ring-canopy-accent/30 transition-all placeholder:text-canopy-text/40"
+                          placeholder="30"
+                          aria-label="Dev server load timeout in seconds"
+                        />
+                      </div>
                     </div>
 
                     <div className="mb-6">

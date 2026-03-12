@@ -27,6 +27,12 @@ import { useWebviewThrottle } from "@/hooks/useWebviewThrottle";
 import { useWebviewDialog } from "@/hooks/useWebviewDialog";
 import { WebviewDialog } from "../Browser/WebviewDialog";
 
+const scrollCache = new Map<string, { url: string; scrollY: number }>();
+
+export function _resetScrollCacheForTests(): void {
+  scrollCache.clear();
+}
+
 export interface DevPreviewPaneProps extends BasePanelProps {
   cwd: string;
   worktreeId?: string;
@@ -108,6 +114,9 @@ export function DevPreviewPane({
   const allDetectedRunners = useProjectSettingsStore((state) => state.allDetectedRunners);
   const isSettingsLoading = useProjectSettingsStore((state) => state.isLoading);
   const isMountedRef = useRef(true);
+  const prevStatusRef = useRef(status);
+  const loadTimeoutMs =
+    Math.min(Math.max(projectSettings?.devServerLoadTimeout ?? 30, 1), 120) * 1000;
 
   const currentUrl = history.present;
   const canGoBack = history.past.length > 0;
@@ -132,6 +141,29 @@ export function DevPreviewPane({
       isMountedRef.current = false;
     };
   }, []);
+
+  useEffect(() => {
+    const prevStatus = prevStatusRef.current;
+    prevStatusRef.current = status;
+
+    if (prevStatus === "running" && status !== "running" && webviewElement) {
+      try {
+        const currentWebviewUrl = webviewElement.getURL();
+        if (currentWebviewUrl && currentWebviewUrl !== "about:blank") {
+          webviewElement
+            .executeJavaScript("window.scrollY")
+            .then((scrollY: number) => {
+              if (typeof scrollY === "number" && Number.isFinite(scrollY)) {
+                scrollCache.set(id, { url: currentWebviewUrl, scrollY });
+              }
+            })
+            .catch(() => {});
+        }
+      } catch {
+        // Webview already detached
+      }
+    }
+  }, [status, id, webviewElement]);
 
   useEffect(() => {
     setConsoleTerminalId(terminalId);
@@ -200,6 +232,7 @@ export function DevPreviewPane({
   }, [start]);
 
   const handleHardRestart = useCallback(() => {
+    scrollCache.delete(id);
     if (loadTimeoutRef.current) {
       clearTimeout(loadTimeoutRef.current);
       loadTimeoutRef.current = null;
@@ -268,7 +301,7 @@ export function DevPreviewPane({
         } catch {
           // Webview detached before timeout fired
         }
-      }, 30000);
+      }, loadTimeoutMs);
     };
 
     const handleDidStopLoading = () => {
@@ -382,7 +415,7 @@ export function DevPreviewPane({
         failLoadRetryRef.current = null;
       }
     };
-  }, [webviewElement]);
+  }, [webviewElement, loadTimeoutMs]);
 
   useEffect(() => {
     const webview = webviewElement;
@@ -397,6 +430,18 @@ export function DevPreviewPane({
       if (loadTimeoutRef.current) {
         clearTimeout(loadTimeoutRef.current);
         loadTimeoutRef.current = null;
+      }
+
+      const saved = scrollCache.get(id);
+      if (saved) {
+        try {
+          const loadedUrl = webview.getURL();
+          if (loadedUrl === saved.url && saved.scrollY > 0) {
+            webview.executeJavaScript(`window.scrollTo(0, ${saved.scrollY})`).catch(() => {});
+          }
+        } catch {
+          // Webview not ready
+        }
       }
     };
 
@@ -414,7 +459,7 @@ export function DevPreviewPane({
     return () => {
       webview.removeEventListener("dom-ready", handleDomReady);
     };
-  }, [zoomFactor, webviewElement]);
+  }, [id, zoomFactor, webviewElement]);
 
   useEffect(() => {
     if (isWebviewReady && currentUrl && currentUrl !== lastSetUrlRef.current) {
