@@ -82,6 +82,24 @@ describe("Toolbar layout — issue #2584 project switcher collision", () => {
     });
   });
 
+  describe("Agent/tool button group divider — issue #2879", () => {
+    it("defines AGENT_TOOLBAR_IDS constant for group boundary detection", () => {
+      expect(source).toContain("AGENT_TOOLBAR_IDS");
+    });
+
+    it("has renderLeftButtons helper that inserts group dividers", () => {
+      expect(source).toContain("renderLeftButtons");
+    });
+
+    it("uses renderLeftButtons for the left button group", () => {
+      expect(source).toContain("renderLeftButtons(toolbarLayout.leftButtons)");
+    });
+
+    it("divider element has aria-hidden for accessibility", () => {
+      expect(source).toMatch(/group-divider[\s\S]{0,200}aria-hidden="true"/);
+    });
+  });
+
   describe("Project switcher trigger", () => {
     it("button has overflow-hidden for truncation", () => {
       // overflow-hidden appears in className before data-testid on the same button
