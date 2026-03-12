@@ -1,6 +1,7 @@
 import path from "path";
 import fs from "fs/promises";
 import { existsSync } from "fs";
+import { load } from "js-yaml";
 import type { RunCommand } from "../types/index.js";
 
 const RESERVED_SCRIPT_NAMES = new Set(["__proto__", "constructor", "prototype"]);
@@ -18,6 +19,8 @@ export class RunCommandDetector {
     const results = await Promise.all([
       this.detectNpm(projectPath),
       this.detectMakefile(projectPath),
+      this.detectJustfile(projectPath),
+      this.detectTaskfile(projectPath),
       this.detectDjango(projectPath),
       this.detectComposer(projectPath),
     ]);
@@ -96,6 +99,116 @@ export class RunCommandDetector {
       return commands;
     } catch (error) {
       console.warn(`[RunCommandDetector] Failed to parse ${makePath}:`, error);
+      return [];
+    }
+  }
+
+  private async detectJustfile(root: string): Promise<RunCommand[]> {
+    const variants = ["justfile", "Justfile", ".justfile", "JUSTFILE"];
+    let justfilePath: string | null = null;
+    for (const name of variants) {
+      const candidate = path.join(root, name);
+      if (existsSync(candidate)) {
+        justfilePath = candidate;
+        break;
+      }
+    }
+    if (!justfilePath) return [];
+
+    try {
+      const content = await fs.readFile(justfilePath, "utf-8");
+      const lines = content.split("\n");
+      const commands: RunCommand[] = [];
+      const seen = new Set<string>();
+
+      const recipeRegex = /^([a-zA-Z_.][a-zA-Z0-9._-]*)\s*(?:[^:=][^:]*)?\s*:(?!=)/;
+      const keywordPrefixes = ["alias ", "set ", "import ", "mod ", "export "];
+
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+
+        if (keywordPrefixes.some((kw) => line.startsWith(kw))) continue;
+        if (line.includes(":=")) continue;
+
+        const match = recipeRegex.exec(line);
+        if (!match) continue;
+
+        const name = match[1];
+        if (name.startsWith("_") || seen.has(name)) continue;
+        if (!isSafeScriptName(name)) continue;
+
+        seen.add(name);
+
+        let description: string | undefined;
+        for (let j = i - 1; j >= 0; j--) {
+          const prev = lines[j].trim();
+          if (prev.startsWith("[")) continue;
+          if (prev.startsWith("#")) {
+            description = prev.replace(/^#\s*/, "");
+          }
+          break;
+        }
+
+        commands.push({
+          id: `just-${name}`,
+          name,
+          command: `just ${name}`,
+          icon: "terminal",
+          description,
+        });
+      }
+
+      return commands;
+    } catch (error) {
+      console.warn(`[RunCommandDetector] Failed to parse ${justfilePath}:`, error);
+      return [];
+    }
+  }
+
+  private async detectTaskfile(root: string): Promise<RunCommand[]> {
+    const variants = ["Taskfile.yml", "taskfile.yml", "Taskfile.yaml", "taskfile.yaml"];
+    let taskfilePath: string | null = null;
+    for (const name of variants) {
+      const candidate = path.join(root, name);
+      if (existsSync(candidate)) {
+        taskfilePath = candidate;
+        break;
+      }
+    }
+    if (!taskfilePath) return [];
+
+    try {
+      const content = await fs.readFile(taskfilePath, "utf-8");
+      const doc = load(content) as Record<string, unknown> | null;
+      if (!doc || typeof doc !== "object") return [];
+
+      const tasks = doc.tasks;
+      if (!tasks || typeof tasks !== "object") return [];
+
+      const commands: RunCommand[] = [];
+
+      for (const [name, def] of Object.entries(tasks as Record<string, unknown>)) {
+        if (name.startsWith("_")) continue;
+        if (!isSafeScriptName(name)) continue;
+        if (typeof def === "string") continue;
+        if (typeof def !== "object" || def === null) continue;
+
+        const taskDef = def as Record<string, unknown>;
+        if (taskDef.internal === true) continue;
+        if (typeof taskDef.desc !== "string") continue;
+
+        commands.push({
+          id: `task-${name}`,
+          name,
+          command: `task ${name}`,
+          icon: "terminal",
+          description: taskDef.desc,
+        });
+      }
+
+      return commands;
+    } catch (error) {
+      console.warn(`[RunCommandDetector] Failed to parse ${taskfilePath}:`, error);
       return [];
     }
   }
