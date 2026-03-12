@@ -371,7 +371,8 @@ export function WorktreeCard({
     disabled: isActive,
   });
 
-  const isMuted = (isIdleCard || isStaleCard) && !isWaitingCard && !isActive && !isFocused && !isOver;
+  const isMuted =
+    (isIdleCard || isStaleCard) && !isWaitingCard && !isActive && !isFocused && !isOver;
 
   const { handleContextMenu } = useWorktreeMenu({
     worktree,
