@@ -229,10 +229,12 @@ describe("trackEvent", () => {
 
     trackEvent("onboarding_completed", { totalSteps: 3 });
     expect(captureEventMock).toHaveBeenCalledTimes(1);
-    expect(captureEventMock.mock.calls[0][0]).toMatchObject({
-      message: "onboarding_completed",
-      tags: { kind: "analytics" },
-    });
+    expect(captureEventMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: "onboarding_completed",
+        tags: { kind: "analytics" },
+      })
+    );
     process.env.SENTRY_DSN = original;
   });
 
