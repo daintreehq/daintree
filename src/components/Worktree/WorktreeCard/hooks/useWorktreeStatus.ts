@@ -5,7 +5,7 @@ const MAIN_WORKTREE_NOTE_TTL_MS = 10 * 60 * 1000; // 10 minutes
 
 export type SpineState = "error" | "dirty" | "current" | "stale" | "idle";
 
-export type WorktreeLifecycleStage = "working" | "in-review" | "merged" | "ready-for-cleanup";
+export type WorktreeLifecycleStage = "in-review" | "merged" | "ready-for-cleanup";
 
 export type ComputedSubtitleTone = "error" | "warning" | "info" | "muted";
 
@@ -145,8 +145,6 @@ export function useWorktreeStatus({
     if (isMainWorktree) return null;
     if (worktree.worktreeChanges === null) return null;
 
-    if (hasChanges) return "working";
-
     if (worktree.prState === "merged") {
       return worktree.issueNumber ? "ready-for-cleanup" : "merged";
     }
@@ -154,13 +152,7 @@ export function useWorktreeStatus({
     if (worktree.prState === "open") return "in-review";
 
     return null;
-  }, [
-    isMainWorktree,
-    worktree.worktreeChanges,
-    hasChanges,
-    worktree.prState,
-    worktree.issueNumber,
-  ]);
+  }, [isMainWorktree, worktree.worktreeChanges, worktree.prState, worktree.issueNumber]);
 
   const lifecycle = worktree.lifecycleStatus;
   const isLifecycleRunning = lifecycle?.state === "running";
