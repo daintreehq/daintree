@@ -69,7 +69,7 @@ test.describe.serial("Core: Project Management Advanced", () => {
       await secondaryOption.locator(SEL.projectSwitcher.closeButton).click({ force: true });
 
       // Confirm dialog appears
-      const dialog = window.getByRole("dialog", { name: "Remove Project from List?" });
+      const dialog = window.getByRole("dialog", { name: "Remove Project from List?" }).first();
       await expect(dialog).toBeVisible({ timeout: T_MEDIUM });
       await expect(dialog.locator(`text="${SECONDARY_NAME}"`)).toBeVisible();
     });
@@ -77,7 +77,7 @@ test.describe.serial("Core: Project Management Advanced", () => {
     test("cancel leaves project intact", async () => {
       const { window } = ctx;
 
-      const dialog = window.getByRole("dialog", { name: "Remove Project from List?" });
+      const dialog = window.getByRole("dialog", { name: "Remove Project from List?" }).first();
       await dialog.getByRole("button", { name: "Cancel" }).click();
       await expect(dialog).not.toBeVisible({ timeout: T_SHORT });
 
@@ -103,7 +103,7 @@ test.describe.serial("Core: Project Management Advanced", () => {
       const secondaryOption = palette.getByRole("option", { name: new RegExp(SECONDARY_NAME) });
       await secondaryOption.locator(SEL.projectSwitcher.closeButton).click({ force: true });
 
-      const dialog = window.getByRole("dialog", { name: "Remove Project from List?" });
+      const dialog = window.getByRole("dialog", { name: "Remove Project from List?" }).first();
       await expect(dialog).toBeVisible({ timeout: T_MEDIUM });
 
       // Confirm removal
