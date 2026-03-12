@@ -190,4 +190,23 @@ export const SEL = {
     configureButton: 'button:has-text("Configure")',
     clearAllButton: 'button:has-text("Clear all")',
   },
+  actionPalette: {
+    dialog: '[role="dialog"][aria-label="Action palette"]',
+    searchInput: '[aria-label="Search actions"]',
+    list: "#action-palette-list",
+    options: '#action-palette-list [role="option"]',
+  },
+  quickSwitcher: {
+    dialog: '[role="dialog"][aria-label="Quick switcher"]',
+    searchInput: '[aria-label="Search terminals, agents, and worktrees"]',
+    list: "#quick-switcher-list",
+    options: '#quick-switcher-list [role="option"]',
+  },
+  commandPicker: {
+    openButton: '[aria-label="Open command picker"]',
+    dialog: '[role="dialog"][aria-label="Command picker"]',
+    searchInput: '[aria-label="Search commands"]',
+    list: "#command-list",
+    options: '#command-list [role="option"]',
+  },
 } as const;
