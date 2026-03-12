@@ -50,11 +50,14 @@ test.describe.serial("Core: Dev Preview", () => {
       await expect.poll(() => getGridPanelCount(window), { timeout: T_LONG }).toBe(before + 1);
     });
 
-    test("address bar is visible", async () => {
+    test("panel shows unconfigured state with visible address bar", async () => {
       const { window } = ctx;
 
       const addressBar = window.locator(SEL.browser.addressBar);
       await expect(addressBar).toBeVisible({ timeout: T_MEDIUM });
+
+      const configureText = window.locator("text=Configure Dev Server");
+      await expect(configureText).toBeVisible({ timeout: T_MEDIUM });
     });
 
     test("address bar navigation updates display URL", async () => {
@@ -64,8 +67,6 @@ test.describe.serial("Core: Dev Preview", () => {
       await addressBar.click();
       await addressBar.fill(`http://127.0.0.1:${port}`);
       await window.keyboard.press("Enter");
-
-      await window.waitForTimeout(T_SETTLE);
 
       await expect(addressBar).toHaveValue(new RegExp(`127\\.0\\.0\\.1:${port}`), {
         timeout: T_MEDIUM,
