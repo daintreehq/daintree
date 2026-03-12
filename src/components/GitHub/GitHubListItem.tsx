@@ -49,7 +49,9 @@ function isPR(item: GitHubIssue | GitHubPR): item is GitHubPR {
 }
 
 function getLabelStyles(color: string): React.CSSProperties {
-  const hex = `#${color.replace(/^#/, "")}`;
+  const raw = color.replace(/^#/, "");
+  if (!raw) return {};
+  const hex = `#${raw}`;
   return {
     color: `oklch(from ${hex} 0.85 c h)`,
   };
