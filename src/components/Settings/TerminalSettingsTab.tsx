@@ -220,6 +220,7 @@ export function TerminalSettingsTab() {
               { source: "user" }
             )
           }
+          lifecycleBadge="New Terminals"
         />
 
         {performanceMode && (
@@ -258,7 +259,7 @@ export function TerminalSettingsTab() {
           }
         />
 
-        {hybridInputEnabled && (
+        <div className="ml-4 border-l-2 border-canopy-border pl-4">
           <SettingsSwitchCard
             icon={MousePointerClick}
             title={hybridInputAutoFocus ? "Auto-Focus Input" : "Auto-Focus Terminal"}
@@ -278,8 +279,9 @@ export function TerminalSettingsTab() {
                 { source: "user" }
               )
             }
+            disabled={!hybridInputEnabled}
           />
-        )}
+        </div>
       </SettingsSection>
 
       <SettingsSection
@@ -303,62 +305,71 @@ export function TerminalSettingsTab() {
           onReset={() => setTwoPaneSplitEnabled(true)}
         />
 
-        {twoPaneSplitConfig.enabled && (
-          <>
-            <SettingsSwitchCard
-              icon={Monitor}
-              title={
-                twoPaneSplitConfig.preferPreview ? "Preview-Focused Layout" : "Balanced Layout"
-              }
-              subtitle={
-                twoPaneSplitConfig.preferPreview
-                  ? "Give more space to browser/dev-preview panels (65/35)"
-                  : "Start with equal space for both panels (50/50)"
-              }
-              isEnabled={twoPaneSplitConfig.preferPreview}
-              onChange={() => setPreferPreview(!twoPaneSplitConfig.preferPreview)}
-              ariaLabel="Prefer Preview Toggle"
-              isModified={twoPaneSplitConfig.preferPreview}
-              onReset={() => setPreferPreview(false)}
-            />
+        <div className="ml-4 space-y-3 border-l-2 border-canopy-border pl-4">
+          <SettingsSwitchCard
+            icon={Monitor}
+            title={twoPaneSplitConfig.preferPreview ? "Preview-Focused Layout" : "Balanced Layout"}
+            subtitle={
+              twoPaneSplitConfig.preferPreview
+                ? "Give more space to browser/dev-preview panels (65/35)"
+                : "Start with equal space for both panels (50/50)"
+            }
+            isEnabled={twoPaneSplitConfig.preferPreview}
+            onChange={() => setPreferPreview(!twoPaneSplitConfig.preferPreview)}
+            ariaLabel="Prefer Preview Toggle"
+            isModified={twoPaneSplitConfig.preferPreview}
+            onReset={() => setPreferPreview(false)}
+            disabled={!twoPaneSplitConfig.enabled}
+          />
 
-            <div className="space-y-2">
-              <label htmlFor="default-ratio-slider" className="text-sm text-canopy-text/70">
-                Default Ratio
-              </label>
-              <div className="flex items-center gap-4">
-                <input
-                  id="default-ratio-slider"
-                  type="range"
-                  min="20"
-                  max="80"
-                  value={Math.round(twoPaneSplitConfig.defaultRatio * 100)}
-                  onChange={(e) => setDefaultRatio(Number(e.target.value) / 100)}
-                  aria-valuetext={`${Math.round(twoPaneSplitConfig.defaultRatio * 100)} percent left, ${Math.round((1 - twoPaneSplitConfig.defaultRatio) * 100)} percent right`}
-                  className="flex-1 accent-canopy-accent"
-                />
-                <span
-                  className="text-xs text-canopy-text/70 font-mono w-16 text-right"
-                  aria-hidden="true"
-                >
-                  {Math.round(twoPaneSplitConfig.defaultRatio * 100)}/
-                  {Math.round((1 - twoPaneSplitConfig.defaultRatio) * 100)}
-                </span>
-              </div>
-              <p className="text-xs text-canopy-text/40">
-                Default split ratio when no worktree-specific ratio is saved.
-              </p>
+          <div
+            className={cn(
+              "space-y-2",
+              !twoPaneSplitConfig.enabled && "opacity-50 pointer-events-none"
+            )}
+          >
+            <label htmlFor="default-ratio-slider" className="text-sm text-canopy-text/70">
+              Default Ratio
+            </label>
+            <div className="flex items-center gap-4">
+              <input
+                id="default-ratio-slider"
+                type="range"
+                min="20"
+                max="80"
+                value={Math.round(twoPaneSplitConfig.defaultRatio * 100)}
+                onChange={(e) => setDefaultRatio(Number(e.target.value) / 100)}
+                aria-valuetext={`${Math.round(twoPaneSplitConfig.defaultRatio * 100)} percent left, ${Math.round((1 - twoPaneSplitConfig.defaultRatio) * 100)} percent right`}
+                className="flex-1 accent-canopy-accent"
+                disabled={!twoPaneSplitConfig.enabled}
+              />
+              <span
+                className="text-xs text-canopy-text/70 font-mono w-16 text-right"
+                aria-hidden="true"
+              >
+                {Math.round(twoPaneSplitConfig.defaultRatio * 100)}/
+                {Math.round((1 - twoPaneSplitConfig.defaultRatio) * 100)}
+              </span>
             </div>
+            <p className="text-xs text-canopy-text/40">
+              Default split ratio when no worktree-specific ratio is saved.
+            </p>
+          </div>
 
-            <button
-              onClick={resetAllWorktreeRatios}
-              className="flex items-center gap-2 text-xs text-canopy-text/50 hover:text-canopy-text/70 transition-colors"
-            >
-              <RotateCcw className="w-3 h-3" />
-              <span>Reset all worktree split ratios</span>
-            </button>
-          </>
-        )}
+          <button
+            onClick={resetAllWorktreeRatios}
+            disabled={!twoPaneSplitConfig.enabled}
+            className={cn(
+              "flex items-center gap-2 text-xs text-canopy-text/50 transition-colors",
+              twoPaneSplitConfig.enabled
+                ? "hover:text-canopy-text/70"
+                : "opacity-50 cursor-not-allowed"
+            )}
+          >
+            <RotateCcw className="w-3 h-3" />
+            <span>Reset all worktree split ratios</span>
+          </button>
+        </div>
       </SettingsSection>
 
       <SettingsSection
@@ -366,6 +377,7 @@ export function TerminalSettingsTab() {
         title="Scrollback History"
         id="terminal-scrollback"
         description="Base scrollback applies to agent terminals. Shells and dev servers use reduced limits automatically."
+        badge="New Terminals"
       >
         <div className="grid grid-cols-3 gap-2" role="radiogroup" aria-label="Scrollback presets">
           {SCROLLBACK_OPTIONS.map(({ value, label, description }) => (
