@@ -319,7 +319,9 @@ import {
 import {
   initializeAgentAvailabilityStore,
   disposeAgentAvailabilityStore,
+  getAgentAvailabilityStore,
 } from "./services/AgentAvailabilityStore.js";
+import { getActiveAgentCount, showQuitWarning } from "./utils/quitWarning.js";
 import { initializeAgentRouter, disposeAgentRouter } from "./services/AgentRouter.js";
 import { initializeWorkflowEngine, disposeWorkflowEngine } from "./services/WorkflowEngine.js";
 import { workflowLoader } from "./services/WorkflowLoader.js";
@@ -378,6 +380,7 @@ let stopProcessMemoryMonitor: (() => void) | null = null;
 const DEFAULT_TERMINAL_ID = "default";
 
 let isQuitting = false;
+let isConfirmingQuit = false;
 let resumeTimeout: NodeJS.Timeout | null = null;
 
 /** Path passed via CLI that hasn't been opened yet (app may still be initializing) */
@@ -467,12 +470,35 @@ if (!gotTheLock) {
     }
   });
 
-  app.on("before-quit", (event) => {
+  app.on("before-quit", async (event) => {
     if (isQuitting || !mainWindow || isSmokeTest) {
       return;
     }
 
+    if (isConfirmingQuit) {
+      event.preventDefault();
+      return;
+    }
+
     event.preventDefault();
+
+    const activeCount = getActiveAgentCount(getAgentAvailabilityStore());
+    if (activeCount > 0) {
+      isConfirmingQuit = true;
+      let confirmed = false;
+      try {
+        confirmed = await showQuitWarning(activeCount, dialog.showMessageBox);
+      } catch (error) {
+        console.error("[MAIN] Error showing quit warning:", error);
+      } finally {
+        isConfirmingQuit = false;
+      }
+
+      if (!confirmed) {
+        return;
+      }
+    }
+
     isQuitting = true;
 
     console.log("[MAIN] Starting graceful shutdown...");
