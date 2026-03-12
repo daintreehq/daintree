@@ -518,7 +518,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
             <button
               onClick={onOpenOverview}
               className="p-1 text-canopy-text/40 hover:text-canopy-text hover:bg-white/[0.06] rounded transition-colors"
-              title={createTooltipWithShortcut("Toggle worktrees overview", "Cmd+Shift+O")}
+              title={createTooltipWithShortcut("Open worktrees overview", "Cmd+Shift+O")}
               aria-label="Open worktrees overview"
             >
               <LayoutGrid className="w-3.5 h-3.5" />
