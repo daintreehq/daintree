@@ -10,6 +10,7 @@ import { useNotesStore } from "@/store/notesStore";
 import { useTerminalStore } from "@/store/terminalStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { notesClient, type NoteListItem, type NoteMetadata } from "@/clients/notesClient";
+import { normalizeTag } from "../../../shared/utils/noteTags";
 import CodeMirror from "@uiw/react-codemirror";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { languages } from "@codemirror/language-data";
@@ -26,6 +27,8 @@ import {
   ChevronDown,
   PenLine,
   Eye,
+  ArrowUpDown,
+  Tag,
 } from "lucide-react";
 import { MarkdownPreview } from "./MarkdownPreview";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
@@ -34,6 +37,8 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 
@@ -41,6 +46,15 @@ interface NotesPaletteProps {
   isOpen: boolean;
   onClose: () => void;
 }
+
+type SortOrder = "modified-desc" | "created-desc" | "created-asc" | "title-asc";
+
+const SORT_LABELS: Record<SortOrder, string> = {
+  "modified-desc": "Modified (newest)",
+  "created-desc": "Created (newest)",
+  "created-asc": "Created (oldest)",
+  "title-asc": "Title (A–Z)",
+};
 
 // Pattern to match default note titles like "Note 12/27/2024" or "Note 12/27/2024 (2)"
 const DEFAULT_TITLE_PATTERN = /^Note \d{1,2}\/\d{1,2}\/\d{4}( \(\d+\))?$/;
@@ -74,6 +88,13 @@ export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
   const [isOpeningPanel, setIsOpeningPanel] = useState(false);
   const [paletteViewMode, setPaletteViewMode] = useState<"edit" | "preview">("edit");
 
+  // Sort and filter state
+  const [sortOrder, setSortOrder] = useState<SortOrder>(
+    () => (sessionStorage.getItem("notes-sort-order") as SortOrder) || "modified-desc"
+  );
+  const [selectedTag, setSelectedTag] = useState<string | null>(null);
+  const [tagInput, setTagInput] = useState("");
+
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
@@ -97,6 +118,42 @@ export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
 
   const noteTitleBaseClass =
     "block w-full m-0 px-1 py-0.5 text-sm font-medium leading-tight border rounded box-border";
+
+  // Derived tag list and filtered/sorted notes
+  const availableTags = useMemo(
+    () => [...new Set(searchResults.flatMap((n) => n.tags ?? []))].sort(),
+    [searchResults]
+  );
+
+  const visibleNotes = useMemo(() => {
+    const list = selectedTag
+      ? searchResults.filter((n) => n.tags?.includes(selectedTag))
+      : searchResults;
+    return [...list].sort((a, b) => {
+      switch (sortOrder) {
+        case "modified-desc":
+          return b.modifiedAt - a.modifiedAt;
+        case "created-desc":
+          return b.createdAt - a.createdAt;
+        case "created-asc":
+          return a.createdAt - b.createdAt;
+        case "title-asc":
+          return a.title.localeCompare(b.title);
+      }
+    });
+  }, [searchResults, selectedTag, sortOrder]);
+
+  // Clear selected tag when it disappears from available tags
+  useEffect(() => {
+    if (selectedTag && !availableTags.includes(selectedTag)) {
+      setSelectedTag(null);
+    }
+  }, [availableTags, selectedTag]);
+
+  // Persist sort order to sessionStorage
+  useEffect(() => {
+    sessionStorage.setItem("notes-sort-order", sortOrder);
+  }, [sortOrder]);
 
   // Focus management
   useLayoutEffect(() => {
@@ -136,8 +193,8 @@ export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
     if (!isOpen || !lastSelectedNoteId || isLoading || isSearching || hasRestoredRef.current)
       return;
 
-    // Find the note in search results (not just notes list) for correct index
-    const noteToRestore = searchResults.find((n) => n.id === lastSelectedNoteId);
+    // Find the note in visible notes (not just notes list) for correct index
+    const noteToRestore = visibleNotes.find((n) => n.id === lastSelectedNoteId);
     if (noteToRestore) {
       // Check if it's an auto-deleteable empty note (shouldn't restore these)
       if (isDefaultTitle(noteToRestore.title) && !noteToRestore.preview) {
@@ -145,18 +202,18 @@ export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
         setLastSelectedNoteId(null);
         hasRestoredRef.current = true;
       } else {
-        const index = searchResults.indexOf(noteToRestore);
+        const index = visibleNotes.indexOf(noteToRestore);
         setSelectedNote(noteToRestore);
         setSelectedIndex(index >= 0 ? index : 0);
         hasRestoredRef.current = true;
       }
-    } else if (searchResults.length > 0) {
-      // Note not found in search results - clear the stale ID
+    } else if (visibleNotes.length > 0) {
+      // Note not found in visible notes - clear the stale ID
       setLastSelectedNoteId(null);
       hasRestoredRef.current = true;
     }
-    // Don't mark as restored if search results are empty - wait for them to load
-  }, [isOpen, lastSelectedNoteId, searchResults, isLoading, isSearching, setLastSelectedNoteId]);
+    // Don't mark as restored if visible notes are empty - wait for them to load
+  }, [isOpen, lastSelectedNoteId, visibleNotes, isLoading, isSearching, setLastSelectedNoteId]);
 
   // Listen for note updates from other components (e.g., NotesPane)
   useEffect(() => {
@@ -224,17 +281,17 @@ export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
   }, [isEditingHeaderTitle]);
 
   useEffect(() => {
-    if (selectedIndex >= searchResults.length) {
-      setSelectedIndex(Math.max(0, searchResults.length - 1));
+    if (selectedIndex >= visibleNotes.length) {
+      setSelectedIndex(Math.max(0, visibleNotes.length - 1));
     }
-  }, [searchResults.length, selectedIndex]);
+  }, [visibleNotes.length, selectedIndex]);
 
   useEffect(() => {
-    if (listRef.current && selectedIndex >= 0 && searchResults.length > 0) {
+    if (listRef.current && selectedIndex >= 0 && visibleNotes.length > 0) {
       const selectedItem = listRef.current.children[selectedIndex] as HTMLElement;
       selectedItem?.scrollIntoView({ block: "nearest" });
     }
-  }, [selectedIndex, searchResults.length]);
+  }, [selectedIndex, visibleNotes.length]);
 
   // Load note content when selected
   useEffect(() => {
@@ -363,6 +420,96 @@ export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
       }, 500);
     },
     [selectedNote, noteMetadata, noteLastModified, hasConflict, setLastSelectedNoteId]
+  );
+
+  // Handle tag operations
+  const handleAddTag = useCallback(
+    async (tag: string) => {
+      if (!selectedNote || !noteMetadata) return;
+      const normalized = normalizeTag(tag);
+      if (!normalized) return;
+      const currentTags = noteMetadata.tags ?? [];
+      if (currentTags.includes(normalized)) return;
+
+      // Cancel any pending content save to prevent race condition
+      if (saveTimeoutRef.current) {
+        clearTimeout(saveTimeoutRef.current);
+        saveTimeoutRef.current = null;
+      }
+
+      const updatedTags = [...currentTags, normalized];
+      const updatedMetadata = { ...noteMetadata, tags: updatedTags };
+      setNoteMetadata(updatedMetadata);
+
+      try {
+        const result = await notesClient.write(
+          selectedNote.path,
+          noteContent,
+          updatedMetadata,
+          noteLastModified ?? undefined
+        );
+        if (result.error === "conflict") {
+          setHasConflict(true);
+        } else if (result.lastModified) {
+          setNoteLastModified(result.lastModified);
+        }
+        await refresh();
+      } catch (e) {
+        console.error("Failed to save tags:", e);
+      }
+    },
+    [selectedNote, noteMetadata, noteContent, noteLastModified, refresh]
+  );
+
+  const handleRemoveTag = useCallback(
+    async (tag: string) => {
+      if (!selectedNote || !noteMetadata) return;
+      const currentTags = noteMetadata.tags ?? [];
+      const updatedTags = currentTags.filter((t) => t !== tag);
+      const updatedMetadata = {
+        ...noteMetadata,
+        tags: updatedTags.length > 0 ? updatedTags : undefined,
+      };
+
+      // Cancel any pending content save to prevent race condition
+      if (saveTimeoutRef.current) {
+        clearTimeout(saveTimeoutRef.current);
+        saveTimeoutRef.current = null;
+      }
+
+      setNoteMetadata(updatedMetadata);
+
+      try {
+        const result = await notesClient.write(
+          selectedNote.path,
+          noteContent,
+          updatedMetadata,
+          noteLastModified ?? undefined
+        );
+        if (result.error === "conflict") {
+          setHasConflict(true);
+        } else if (result.lastModified) {
+          setNoteLastModified(result.lastModified);
+        }
+        await refresh();
+      } catch (e) {
+        console.error("Failed to save tags:", e);
+      }
+    },
+    [selectedNote, noteMetadata, noteContent, noteLastModified, refresh]
+  );
+
+  const handleTagInputKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLInputElement>) => {
+      if (e.key === "Enter" || e.key === ",") {
+        e.preventDefault();
+        handleAddTag(tagInput);
+        setTagInput("");
+      } else if (e.key === "Backspace" && !tagInput && noteMetadata?.tags?.length) {
+        handleRemoveTag(noteMetadata.tags[noteMetadata.tags.length - 1]);
+      }
+    },
+    [tagInput, handleAddTag, handleRemoveTag, noteMetadata]
   );
 
   // Handle renaming a note in the list
@@ -507,6 +654,7 @@ export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
           createdAt: content.metadata.createdAt,
           modifiedAt: Date.now(),
           preview: "",
+          tags: [] as string[],
         };
         setSelectedNote(newNote);
         setNoteContent(content.content);
@@ -588,17 +736,17 @@ export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
         case "ArrowUp":
           e.preventDefault();
           setSelectedIndex((prev) => Math.max(0, prev - 1));
-          if (searchResults.length > 0) {
+          if (visibleNotes.length > 0) {
             const newIndex = Math.max(0, selectedIndex - 1);
-            setSelectedNote(searchResults[newIndex]);
+            setSelectedNote(visibleNotes[newIndex]);
           }
           break;
         case "ArrowDown":
           e.preventDefault();
-          setSelectedIndex((prev) => Math.min(searchResults.length - 1, prev + 1));
-          if (searchResults.length > 0) {
-            const newIndex = Math.min(searchResults.length - 1, selectedIndex + 1);
-            setSelectedNote(searchResults[newIndex]);
+          setSelectedIndex((prev) => Math.min(visibleNotes.length - 1, prev + 1));
+          if (visibleNotes.length > 0) {
+            const newIndex = Math.min(visibleNotes.length - 1, selectedIndex + 1);
+            setSelectedNote(visibleNotes[newIndex]);
           }
           break;
         case "Enter":
@@ -609,8 +757,8 @@ export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
             handleCreateNote();
           } else if (e.shiftKey && selectedNote) {
             handleOpenAsPanel("grid");
-          } else if (searchResults.length > 0 && !selectedNote) {
-            setSelectedNote(searchResults[selectedIndex]);
+          } else if (visibleNotes.length > 0 && !selectedNote) {
+            setSelectedNote(visibleNotes[selectedIndex]);
           }
           break;
         case "n":
@@ -634,7 +782,7 @@ export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
     [
       editingNoteId,
       isEditingHeaderTitle,
-      searchResults,
+      visibleNotes,
       selectedIndex,
       selectedNote,
       noteContent,
@@ -749,17 +897,77 @@ export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
             <div className="flex flex-1 min-h-0">
               {/* Notes list sidebar */}
               <div className="w-64 border-r border-canopy-border flex flex-col shrink-0">
-                {/* Search */}
-                <div className="p-2 border-b border-canopy-border">
-                  <input
-                    ref={inputRef}
-                    type="text"
-                    value={query}
-                    onChange={(e) => setQuery(e.target.value)}
-                    onKeyDown={handleKeyDown}
-                    placeholder="Search notes..."
-                    className="w-full px-3 py-2 text-sm bg-canopy-sidebar border border-canopy-border rounded-[var(--radius-md)] text-canopy-text placeholder:text-canopy-text/40 focus:outline-none focus:border-canopy-accent/40 focus:ring-1 focus:ring-canopy-accent/20"
-                  />
+                {/* Search and sort */}
+                <div className="p-2 border-b border-canopy-border space-y-1.5">
+                  <div className="flex items-center gap-1.5">
+                    <input
+                      ref={inputRef}
+                      type="text"
+                      value={query}
+                      onChange={(e) => setQuery(e.target.value)}
+                      onKeyDown={handleKeyDown}
+                      placeholder="Search notes..."
+                      className="flex-1 min-w-0 px-3 py-2 text-sm bg-canopy-sidebar border border-canopy-border rounded-[var(--radius-md)] text-canopy-text placeholder:text-canopy-text/40 focus:outline-none focus:border-canopy-accent/40 focus:ring-1 focus:ring-canopy-accent/20"
+                    />
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <button
+                          type="button"
+                          className="shrink-0 p-2 rounded-[var(--radius-md)] border border-canopy-border bg-canopy-sidebar text-canopy-text/60 hover:text-canopy-text hover:bg-canopy-sidebar/80 transition-colors"
+                          aria-label="Sort notes"
+                        >
+                          <ArrowUpDown size={14} />
+                        </button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end" className="min-w-[160px]">
+                        <DropdownMenuRadioGroup
+                          value={sortOrder}
+                          onValueChange={(v) => setSortOrder(v as SortOrder)}
+                        >
+                          {(Object.entries(SORT_LABELS) as [SortOrder, string][]).map(
+                            ([value, label]) => (
+                              <DropdownMenuRadioItem key={value} value={value}>
+                                {label}
+                              </DropdownMenuRadioItem>
+                            )
+                          )}
+                        </DropdownMenuRadioGroup>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  </div>
+
+                  {/* Tag filter bar */}
+                  {availableTags.length > 0 && (
+                    <div className="flex items-center gap-1 overflow-x-auto [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
+                      <button
+                        type="button"
+                        onClick={() => setSelectedTag(null)}
+                        className={cn(
+                          "shrink-0 px-2 py-0.5 rounded-full text-[11px] transition-colors",
+                          selectedTag === null
+                            ? "bg-canopy-accent/20 text-canopy-accent"
+                            : "bg-canopy-border/50 text-canopy-text/50 hover:text-canopy-text hover:bg-canopy-border"
+                        )}
+                      >
+                        All
+                      </button>
+                      {availableTags.map((tag) => (
+                        <button
+                          key={tag}
+                          type="button"
+                          onClick={() => setSelectedTag(selectedTag === tag ? null : tag)}
+                          className={cn(
+                            "shrink-0 px-2 py-0.5 rounded-full text-[11px] transition-colors",
+                            selectedTag === tag
+                              ? "bg-canopy-accent/20 text-canopy-accent"
+                              : "bg-canopy-border/50 text-canopy-text/50 hover:text-canopy-text hover:bg-canopy-border"
+                          )}
+                        >
+                          {tag}
+                        </button>
+                      ))}
+                    </div>
+                  )}
                 </div>
 
                 {/* List */}
@@ -768,7 +976,7 @@ export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
                     <div className="px-3 py-8 text-center text-canopy-text/50 text-sm">
                       Loading...
                     </div>
-                  ) : searchResults.length === 0 ? (
+                  ) : visibleNotes.length === 0 ? (
                     <div className="px-3 py-8 text-center text-canopy-text/50 text-sm">
                       {query.trim() ? (
                         <div className="flex flex-col items-center gap-3">
@@ -783,12 +991,14 @@ export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
                             {query.trim().length > 30 ? "..." : ""}"
                           </Button>
                         </div>
+                      ) : selectedTag ? (
+                        "No notes with this tag"
                       ) : (
                         "No notes yet"
                       )}
                     </div>
                   ) : (
-                    searchResults.map((note, index) => {
+                    visibleNotes.map((note, index) => {
                       const isEditing = editingNoteId === note.id;
 
                       return (
@@ -961,6 +1171,43 @@ export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
                         </DropdownMenuContent>
                       </DropdownMenu>
                     </div>
+
+                    {/* Tag editor */}
+                    {noteMetadata && (
+                      <div className="px-3 py-1.5 border-b border-canopy-border flex items-center gap-1.5 flex-wrap bg-overlay-subtle/50">
+                        <Tag size={12} className="text-canopy-text/40 shrink-0" />
+                        {(noteMetadata.tags ?? []).map((tag) => (
+                          <span
+                            key={tag}
+                            className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-canopy-accent/10 text-canopy-accent text-[11px]"
+                          >
+                            {tag}
+                            <button
+                              type="button"
+                              onClick={() => handleRemoveTag(tag)}
+                              className="hover:text-canopy-text transition-colors"
+                              aria-label={`Remove tag ${tag}`}
+                            >
+                              <X size={10} />
+                            </button>
+                          </span>
+                        ))}
+                        <input
+                          type="text"
+                          value={tagInput}
+                          onChange={(e) => setTagInput(e.target.value)}
+                          onKeyDown={handleTagInputKeyDown}
+                          onBlur={() => {
+                            if (tagInput.trim()) {
+                              handleAddTag(tagInput);
+                              setTagInput("");
+                            }
+                          }}
+                          placeholder={noteMetadata.tags?.length ? "" : "Add tags..."}
+                          className="flex-1 min-w-[60px] bg-transparent text-[11px] text-canopy-text placeholder:text-canopy-text/30 focus:outline-none py-0.5"
+                        />
+                      </div>
+                    )}
 
                     {/* Conflict warning */}
                     {hasConflict && (

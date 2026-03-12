@@ -124,4 +124,69 @@ describe("NotesService", () => {
     const searched = await service.search("healthy");
     expect(searched.notes.some((note) => note.path === created.path)).toBe(true);
   });
+
+  it("round-trips tags through frontmatter with normalization", async () => {
+    const metadata = makeMetadata({ tags: ["Auth", " backend "] });
+    await service.write("tagged.md", "body", metadata);
+
+    const result = await service.read("tagged.md");
+    expect(result.metadata.tags).toEqual(["auth", "backend"]);
+  });
+
+  it("returns empty tags array for notes without tags in frontmatter", async () => {
+    const created = await service.create("No tags note", "project");
+    const listed = await service.list();
+    const note = listed.find((n) => n.id === created.metadata.id);
+    expect(note).toBeDefined();
+    expect(note!.tags).toEqual([]);
+  });
+
+  it("handles scalar string tags in YAML frontmatter", async () => {
+    const notesDir = path.join(projectDir, ".canopy", "notes");
+    await fs.mkdir(notesDir, { recursive: true });
+    await fs.writeFile(
+      path.join(notesDir, "scalar-tag.md"),
+      "---\nid: scalar-1\ntitle: Scalar Tag\nscope: project\ncreatedAt: 1700000000000\ntags: auth\n---\nbody",
+      "utf8"
+    );
+
+    const listed = await service.list();
+    const note = listed.find((n) => n.id === "scalar-1");
+    expect(note).toBeDefined();
+    expect(note!.tags).toEqual(["auth"]);
+  });
+
+  it("includes tags in search results and searches tag text", async () => {
+    const tagged = makeMetadata({ id: "tag-search", tags: ["deployment"] });
+    await service.write("searchable.md", "plain content", tagged);
+
+    const untagged = makeMetadata({ id: "no-match", title: "Other" });
+    await service.write("other.md", "different content", untagged);
+
+    const result = await service.search("deployment");
+    expect(result.notes.some((n) => n.id === "tag-search")).toBe(true);
+    expect(result.notes.find((n) => n.id === "tag-search")!.tags).toEqual(["deployment"]);
+    expect(result.notes.some((n) => n.id === "no-match")).toBe(false);
+  });
+
+  it("normalizes scalar tags when reading a note", async () => {
+    const notesDir = path.join(projectDir, ".canopy", "notes");
+    await fs.mkdir(notesDir, { recursive: true });
+    await fs.writeFile(
+      path.join(notesDir, "scalar-read.md"),
+      "---\nid: sr-1\ntitle: Scalar Read\nscope: project\ncreatedAt: 1700000000000\ntags: Auth\n---\nbody",
+      "utf8"
+    );
+
+    const result = await service.read("scalar-read.md");
+    expect(result.metadata.tags).toEqual(["auth"]);
+  });
+
+  it("omits tags key from frontmatter when tags array is empty", async () => {
+    const metadata = makeMetadata({ tags: [] });
+    await service.write("no-tags.md", "body", metadata);
+
+    const raw = await fs.readFile(path.join(projectDir, ".canopy", "notes", "no-tags.md"), "utf8");
+    expect(raw).not.toContain("tags:");
+  });
 });
