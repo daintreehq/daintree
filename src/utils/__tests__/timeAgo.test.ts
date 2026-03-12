@@ -34,7 +34,6 @@ describe("formatTimeAgo", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2024-03-15T12:00:00Z"));
     const result = formatTimeAgo("2024-01-15T12:00:00Z");
-    expect(result).toMatch(/\d/);
-    expect(result).not.toContain("ago");
+    expect(result).toBe(new Date("2024-01-15T12:00:00Z").toLocaleDateString());
   });
 });

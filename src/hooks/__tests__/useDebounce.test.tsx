@@ -1,9 +1,13 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
 import { act, renderHook } from "@testing-library/react";
 import { useDebounce } from "../useDebounce";
 
 describe("useDebounce", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("returns the initial value immediately", () => {
     const { result } = renderHook(() => useDebounce("hello", 300));
     expect(result.current).toBe("hello");
@@ -18,8 +22,6 @@ describe("useDebounce", () => {
     rerender({ value: "b", delay: 300 });
     vi.advanceTimersByTime(200);
     expect(result.current).toBe("a");
-
-    vi.useRealTimers();
   });
 
   it("updates the value after the delay", () => {
@@ -33,8 +35,6 @@ describe("useDebounce", () => {
       vi.advanceTimersByTime(300);
     });
     expect(result.current).toBe("b");
-
-    vi.useRealTimers();
   });
 
   it("resets the timer when value changes rapidly", () => {
@@ -53,8 +53,24 @@ describe("useDebounce", () => {
       vi.advanceTimersByTime(100);
     });
     expect(result.current).toBe("c");
+  });
 
-    vi.useRealTimers();
+  it("resets the timer when delay changes", () => {
+    vi.useFakeTimers();
+    const { result, rerender } = renderHook(({ value, delay }) => useDebounce(value, delay), {
+      initialProps: { value: "a", delay: 300 },
+    });
+
+    rerender({ value: "b", delay: 500 });
+    act(() => {
+      vi.advanceTimersByTime(300);
+    });
+    expect(result.current).toBe("a");
+
+    act(() => {
+      vi.advanceTimersByTime(200);
+    });
+    expect(result.current).toBe("b");
   });
 
   it("works with non-string types", () => {
@@ -68,7 +84,5 @@ describe("useDebounce", () => {
       vi.advanceTimersByTime(100);
     });
     expect(result.current).toBe(99);
-
-    vi.useRealTimers();
   });
 });
