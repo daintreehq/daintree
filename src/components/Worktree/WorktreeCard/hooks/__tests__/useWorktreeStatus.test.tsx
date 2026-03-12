@@ -158,3 +158,87 @@ describe("useWorktreeStatus — lifecycleStage", () => {
     expect(result.current.lifecycleStage).toBe("ready-for-cleanup");
   });
 });
+
+describe("useWorktreeStatus — computedSubtitle", () => {
+  function getSubtitle(overrides: Partial<WorktreeState> = {}, worktreeErrorCount = 0) {
+    const { result } = renderHook(() =>
+      useWorktreeStatus({ worktree: makeWorktree(overrides), worktreeErrorCount })
+    );
+    return result.current.computedSubtitle;
+  }
+
+  it("shows error count when errors exist", () => {
+    expect(getSubtitle({}, 3)).toEqual({ text: "3 errors", tone: "error" });
+  });
+
+  it("shows last commit message when available", () => {
+    expect(
+      getSubtitle({ worktreeChanges: makeChanges({ lastCommitMessage: "fix: bug" }) })
+    ).toEqual({ text: "fix: bug", tone: "muted" });
+  });
+
+  it("falls back to issueTitle when no commit message", () => {
+    expect(
+      getSubtitle({
+        worktreeChanges: makeChanges({ lastCommitMessage: undefined }),
+        issueTitle: "Add dark mode support",
+      })
+    ).toEqual({ text: "Add dark mode support", tone: "muted" });
+  });
+
+  it("falls back to prTitle when no commit message or issueTitle", () => {
+    expect(
+      getSubtitle({
+        worktreeChanges: makeChanges({ lastCommitMessage: undefined }),
+        prTitle: "feat: dark mode",
+        prState: "open",
+      })
+    ).toEqual({ text: "feat: dark mode", tone: "muted" });
+  });
+
+  it("prefers issueTitle over prTitle", () => {
+    expect(
+      getSubtitle({
+        worktreeChanges: makeChanges({ lastCommitMessage: undefined }),
+        issueTitle: "Add dark mode support",
+        prTitle: "feat: dark mode",
+        prState: "open",
+      })
+    ).toEqual({ text: "Add dark mode support", tone: "muted" });
+  });
+
+  it("skips prTitle when prState is closed", () => {
+    expect(
+      getSubtitle({
+        worktreeChanges: makeChanges({ lastCommitMessage: undefined }),
+        prTitle: "feat: dark mode",
+        prState: "closed",
+      })
+    ).toEqual({ text: "No recent activity", tone: "muted" });
+  });
+
+  it("shows prTitle when prState is merged", () => {
+    expect(
+      getSubtitle({
+        worktreeChanges: makeChanges({ lastCommitMessage: undefined }),
+        prTitle: "feat: dark mode",
+        prState: "merged",
+      })
+    ).toEqual({ text: "feat: dark mode", tone: "muted" });
+  });
+
+  it("ignores whitespace-only issueTitle", () => {
+    expect(
+      getSubtitle({
+        worktreeChanges: makeChanges({ lastCommitMessage: undefined }),
+        issueTitle: "   ",
+      })
+    ).toEqual({ text: "No recent activity", tone: "muted" });
+  });
+
+  it('falls back to "No recent activity" when nothing available', () => {
+    expect(getSubtitle({ worktreeChanges: makeChanges({ lastCommitMessage: undefined }) })).toEqual(
+      { text: "No recent activity", tone: "muted" }
+    );
+  });
+});
