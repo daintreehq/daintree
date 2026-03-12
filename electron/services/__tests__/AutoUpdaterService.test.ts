@@ -29,6 +29,13 @@ const autoUpdaterMock = vi.hoisted(() => ({
   off: vi.fn(),
   checkForUpdatesAndNotify: vi.fn(),
   checkForUpdates: vi.fn(),
+  quitAndInstall: vi.fn(),
+}));
+
+const cleanupOnExitMock = vi.hoisted(() => vi.fn());
+
+vi.mock("../CrashRecoveryService.js", () => ({
+  getCrashRecoveryService: () => ({ cleanupOnExit: cleanupOnExitMock }),
 }));
 
 vi.mock("electron", () => ({
@@ -234,6 +241,42 @@ describe("AutoUpdaterService", () => {
       await Promise.resolve();
 
       expect(dialogMock.showMessageBox).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("quit-and-install", () => {
+    let quitAndInstallHandler: () => void;
+    let downloadedHandler: (info: { version: string }) => void;
+
+    beforeEach(() => {
+      autoUpdaterService.initialize(windowMock as any);
+
+      quitAndInstallHandler = (ipcMainMock.handle as Mock).mock.calls.find(
+        (args) => args[0] === "update:quit-and-install"
+      )![1];
+
+      downloadedHandler = (autoUpdaterMock.on as Mock).mock.calls.find(
+        (args) => args[0] === "update-downloaded"
+      )![1];
+    });
+
+    it("calls cleanupOnExit before quitAndInstall when update is downloaded", () => {
+      downloadedHandler({ version: "2.0.0" });
+
+      quitAndInstallHandler();
+
+      expect(cleanupOnExitMock).toHaveBeenCalledTimes(1);
+      expect(autoUpdaterMock.quitAndInstall).toHaveBeenCalledTimes(1);
+      expect(cleanupOnExitMock.mock.invocationCallOrder[0]).toBeLessThan(
+        autoUpdaterMock.quitAndInstall.mock.invocationCallOrder[0]
+      );
+    });
+
+    it("does not call cleanupOnExit or quitAndInstall when no update is downloaded", () => {
+      quitAndInstallHandler();
+
+      expect(cleanupOnExitMock).not.toHaveBeenCalled();
+      expect(autoUpdaterMock.quitAndInstall).not.toHaveBeenCalled();
     });
   });
 });
