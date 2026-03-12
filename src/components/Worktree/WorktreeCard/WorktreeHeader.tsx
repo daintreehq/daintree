@@ -24,6 +24,7 @@ import {
   AlertCircle,
   Check,
   CircleDot,
+  CornerDownRight,
   GitPullRequest,
   MoreHorizontal,
   House,
@@ -82,7 +83,7 @@ const IssueBadge = memo(function IssueBadge({
               e.stopPropagation();
               onOpen?.();
             }}
-            className="flex items-center gap-1.5 text-xs text-left cursor-pointer transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent shrink-0"
+            className="flex items-center gap-1.5 text-xs text-left cursor-pointer transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent min-w-0"
             aria-label={
               issueTitle
                 ? `Open issue #${issueNumber}: ${issueTitle}`
@@ -90,7 +91,9 @@ const IssueBadge = memo(function IssueBadge({
             }
           >
             <CircleDot className="w-3 h-3 text-github-open shrink-0" aria-hidden="true" />
-            <span className="text-github-open font-mono">#{issueNumber}</span>
+            <span className="truncate text-canopy-text/90 flex-1 min-w-0">
+              {issueTitle || <span className="text-github-open font-mono">#{issueNumber}</span>}
+            </span>
           </button>
         </TooltipTrigger>
         <TooltipContent side="right" align="start" className="p-3">
@@ -112,11 +115,18 @@ const IssueBadge = memo(function IssueBadge({
 interface PRBadgeProps {
   prNumber: number;
   prState?: "open" | "merged" | "closed";
+  isSubordinate: boolean;
   worktreePath: string;
   onOpen?: () => void;
 }
 
-const PRBadge = memo(function PRBadge({ prNumber, prState, worktreePath, onOpen }: PRBadgeProps) {
+const PRBadge = memo(function PRBadge({
+  prNumber,
+  prState,
+  isSubordinate,
+  worktreePath,
+  onOpen,
+}: PRBadgeProps) {
   const [isOpen, setIsOpen] = useState(false);
   const { data, loading, error, fetchTooltip, reset } = usePRTooltip(worktreePath, prNumber);
 
@@ -151,9 +161,15 @@ const PRBadge = memo(function PRBadge({ prNumber, prState, worktreePath, onOpen 
               e.stopPropagation();
               onOpen?.();
             }}
-            className="flex items-center gap-1 text-xs text-left cursor-pointer transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent shrink-0"
+            className="flex items-center gap-1 text-xs text-left cursor-pointer transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent min-w-0"
             aria-label={`Open ${prStateLabel} pull request #${prNumber} on GitHub`}
           >
+            {isSubordinate && (
+              <CornerDownRight
+                className="w-3 h-3 text-canopy-text/30 shrink-0"
+                aria-hidden="true"
+              />
+            )}
             <GitPullRequest className={cn("w-3 h-3 shrink-0", prStateColor)} aria-hidden="true" />
             <span className={cn("font-mono", prStateColor)}>#{prNumber}</span>
           </button>
@@ -418,7 +434,7 @@ export function WorktreeHeader({
       </div>
 
       {(worktree.issueNumber || (worktree.prNumber && worktree.prState !== "closed")) && (
-        <div className="flex items-center gap-1.5 mt-2">
+        <div className="flex flex-col gap-0.5 mt-2">
           {worktree.issueNumber && (
             <IssueBadge
               issueNumber={worktree.issueNumber}
@@ -431,6 +447,7 @@ export function WorktreeHeader({
             <PRBadge
               prNumber={worktree.prNumber}
               prState={worktree.prState}
+              isSubordinate={!!worktree.issueNumber}
               worktreePath={worktree.path}
               onOpen={badges.onOpenPR}
             />
