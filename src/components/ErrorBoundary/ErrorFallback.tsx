@@ -7,6 +7,7 @@ export interface ErrorFallbackProps {
   resetError: () => void;
   variant?: "fullscreen" | "section" | "component";
   componentName?: string;
+  incidentId?: string | null;
   onReport?: () => void;
 }
 
@@ -44,6 +45,7 @@ export function ErrorFallback({
   resetError,
   variant = "component",
   componentName,
+  incidentId,
   onReport,
 }: ErrorFallbackProps) {
   const sizes = VARIANT_SIZES[variant];
@@ -64,12 +66,22 @@ export function ErrorFallback({
             {variant === "component" && `${componentName || "Component"} Error`}
           </h2>
 
-          <p className={cn("text-canopy-text/80", sizes.message)}>{error.message}</p>
+          <p className={cn("text-canopy-text/80", sizes.message)}>
+            {import.meta.env.DEV
+              ? error.message
+              : "Something went wrong. Please try again or contact support."}
+          </p>
 
           {variant === "fullscreen" && (
             <p className={cn("text-canopy-text/60", sizes.message)}>
               The application encountered an unexpected error. You can try restarting or check the
               logs for more details.
+            </p>
+          )}
+
+          {!import.meta.env.DEV && incidentId && (
+            <p className={cn("text-canopy-text/50 font-mono", sizes.message)}>
+              Error ID: {incidentId.slice(-7)}
             </p>
           )}
         </div>
@@ -86,7 +98,7 @@ export function ErrorFallback({
             {variant === "fullscreen" ? "Restart Application" : "Try Again"}
           </button>
 
-          {variant === "fullscreen" && onReport && (
+          {variant !== "component" && onReport && (
             <button
               type="button"
               onClick={onReport}
@@ -111,7 +123,7 @@ export function ErrorFallback({
           </button>
         </div>
 
-        {errorInfo?.componentStack && variant !== "component" && (
+        {import.meta.env.DEV && errorInfo?.componentStack && variant !== "component" && (
           <details className="w-full mt-4">
             <summary className="cursor-pointer text-xs text-canopy-text/60 hover:text-canopy-text/80">
               Technical Details
