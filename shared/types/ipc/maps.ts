@@ -736,6 +736,10 @@ export interface IpcInvokeMap {
     args: [cwd: string];
     result: void;
   };
+  "github:open-commits": {
+    args: [cwd: string];
+    result: void;
+  };
   "github:open-issue": {
     args: [payload: { cwd: string; issueNumber: number }];
     result: void;
