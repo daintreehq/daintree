@@ -43,7 +43,10 @@ describe("actionMruStore", () => {
     const ids = Array.from({ length: 25 }, (_, i) => `action.${i}`);
     useActionMruStore.getState().hydrateActionMru(ids);
 
-    expect(useActionMruStore.getState().actionMruList.length).toBe(20);
+    const hydrated = useActionMruStore.getState().actionMruList;
+    expect(hydrated.length).toBe(20);
+    expect(hydrated[0]).toBe("action.0");
+    expect(hydrated[19]).toBe("action.19");
   });
 
   it("clears the MRU list", () => {

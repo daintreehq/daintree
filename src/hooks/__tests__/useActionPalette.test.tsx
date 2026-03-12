@@ -172,7 +172,8 @@ describe("useActionPalette", () => {
       result.current.executeAction(result.current.results[0]);
     });
 
-    expect(useActionMruStore.getState().actionMruList).toContain("a.action");
+    expect(useActionMruStore.getState().actionMruList).toEqual(["a.action"]);
+    expect(dispatchMock).toHaveBeenCalledWith("a.action", {}, { source: "user" });
   });
 
   it("does NOT record MRU when executeAction is called on disabled item", async () => {
@@ -194,5 +195,38 @@ describe("useActionPalette", () => {
 
     expect(useActionMruStore.getState().actionMruList).toEqual([]);
     expect(dispatchMock).not.toHaveBeenCalled();
+  });
+
+  it("boosts MRU actions in non-empty query results", async () => {
+    // Two actions with similar titles so Fuse scores them similarly
+    listMock.mockReturnValue([
+      makeEntry("terminal.open", "Open Terminal"),
+      makeEntry("terminal.close", "Close Terminal"),
+    ]);
+
+    // "close" is in MRU, "open" is not
+    useActionMruStore.setState({ actionMruList: ["terminal.close"] });
+
+    const { result } = renderHook(() => useActionPalette());
+
+    act(() => {
+      result.current.open();
+    });
+
+    // Type "terminal" — both should match
+    act(() => {
+      result.current.setQuery("terminal");
+    });
+
+    // Wait for debounce to settle and results to update
+    await waitFor(
+      () => {
+        expect(result.current.results.length).toBe(2);
+      },
+      { timeout: 2000 }
+    );
+
+    // MRU-boosted item should appear first when scores are similar
+    expect(result.current.results[0].id).toBe("terminal.close");
   });
 });
