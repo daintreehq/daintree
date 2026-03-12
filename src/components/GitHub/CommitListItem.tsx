@@ -47,19 +47,17 @@ export function CommitListItem({ commit }: CommitListItemProps) {
 
   const renderMessage = () => {
     if (!parsed) {
-      return (
-        <span className="text-sm font-medium text-foreground truncate">{commit.message}</span>
-      );
+      return <span className="text-sm font-medium text-foreground truncate">{commit.message}</span>;
     }
 
-    const typeColor = parsed.breaking ? "text-status-danger font-bold" : getCommitTypeColor(parsed.type);
+    const typeColor = parsed.breaking
+      ? "text-status-danger font-bold"
+      : getCommitTypeColor(parsed.type);
 
     return (
       <span className="text-sm font-medium truncate">
         <span className={typeColor}>{parsed.type}</span>
-        {parsed.scope && (
-          <span className="text-muted-foreground">({parsed.scope})</span>
-        )}
+        {parsed.scope && <span className="text-muted-foreground">({parsed.scope})</span>}
         {parsed.breaking && !parsed.type.endsWith("!") && (
           <span className="text-status-danger font-bold">!</span>
         )}
@@ -79,9 +77,7 @@ export function CommitListItem({ commit }: CommitListItemProps) {
           <div className="flex items-center gap-2">
             <TooltipProvider>
               <Tooltip>
-                <TooltipTrigger asChild>
-                  {renderMessage()}
-                </TooltipTrigger>
+                <TooltipTrigger asChild>{renderMessage()}</TooltipTrigger>
                 <TooltipContent side="bottom">{commit.message}</TooltipContent>
               </Tooltip>
             </TooltipProvider>

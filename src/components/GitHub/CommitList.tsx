@@ -212,14 +212,9 @@ export function CommitList({ projectPath, onClose, initialCount }: CommitListPro
             <div>
               {groupedRows.map((row) =>
                 row.kind === "separator" ? (
-                  <div
-                    key={`sep-${row.label}`}
-                    className="px-3 py-1.5 flex items-center gap-2"
-                  >
+                  <div key={`sep-${row.label}`} className="px-3 py-1.5 flex items-center gap-2">
                     <div className="h-px flex-1 bg-[var(--border-divider)]" />
-                    <span className="text-xs text-muted-foreground shrink-0">
-                      {row.label}
-                    </span>
+                    <span className="text-xs text-muted-foreground shrink-0">{row.label}</span>
                     <div className="h-px flex-1 bg-[var(--border-divider)]" />
                   </div>
                 ) : (

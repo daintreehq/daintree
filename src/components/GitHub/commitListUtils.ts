@@ -37,9 +37,7 @@ export function getCommitTypeColor(type: string): string {
 }
 
 function dayMidnightMs(date: Date): number {
-  const d = new Date(date);
-  d.setHours(0, 0, 0, 0);
-  return d.getTime();
+  return Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate());
 }
 
 export type DateGroupLabel = "Today" | "Yesterday" | "This Week" | string;
@@ -55,10 +53,11 @@ export function getCommitDateGroupLabel(dateString: string, now?: Date): DateGro
   if (commitMidnight === todayMidnight - oneDayMs) return "Yesterday";
   if (commitMidnight >= todayMidnight - 6 * oneDayMs) return "This Week";
 
-  const sameYear = commitDate.getFullYear() === ref.getFullYear();
+  const sameYear = commitDate.getUTCFullYear() === ref.getUTCFullYear();
   return new Intl.DateTimeFormat("en-US", {
     month: "short",
     day: "numeric",
+    timeZone: "UTC",
     ...(sameYear ? {} : { year: "numeric" }),
   }).format(commitDate);
 }
