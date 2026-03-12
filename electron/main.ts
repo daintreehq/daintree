@@ -626,7 +626,6 @@ function setupWebviewCSP(): void {
               defaultValue: defVal,
             });
           } else {
-            cb(type === "alert");
             dialogService.resolveDialog(dialogId, type === "alert");
           }
         }
