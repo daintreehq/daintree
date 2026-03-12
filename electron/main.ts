@@ -716,7 +716,11 @@ function setupWebviewCSP(): void {
         const panelId = getWebviewDialogService().getPanelId(contents.id);
         if (!panelId) return;
 
-        event.preventDefault();
+        // Only preventDefault for modifier shortcuts (Cmd+F, Cmd+G) — not Escape,
+        // which must still reach the guest for site modals, IME cancel, etc.
+        if (shortcut !== "close") {
+          event.preventDefault();
+        }
         if (mainWindow && !mainWindow.isDestroyed()) {
           mainWindow.webContents.send(CHANNELS.WEBVIEW_FIND_SHORTCUT, { panelId, shortcut });
         }

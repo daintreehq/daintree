@@ -196,4 +196,120 @@ describe("useFindInPage", () => {
     unmount();
     expect(webview.stopFindInPage).toHaveBeenCalledWith("clearSelection");
   });
+
+  it("updates match count on found-in-page event with matching requestId and finalUpdate", () => {
+    const webview = createMockWebview();
+    webview.findInPage.mockReturnValue(42);
+    const { result } = renderHook(() => useFindInPage("panel-1", webview, true, true));
+
+    act(() => result.current.open());
+    act(() => result.current.setQuery("hello"));
+
+    // Emit found-in-page with matching requestId and finalUpdate
+    act(() => {
+      webview._emit("found-in-page", {
+        result: { requestId: 42, activeMatchOrdinal: 2, matches: 5, finalUpdate: true },
+      });
+    });
+
+    expect(result.current.activeMatch).toBe(2);
+    expect(result.current.matchCount).toBe(5);
+  });
+
+  it("ignores found-in-page events with wrong requestId", () => {
+    const webview = createMockWebview();
+    webview.findInPage.mockReturnValue(42);
+    const { result } = renderHook(() => useFindInPage("panel-1", webview, true, true));
+
+    act(() => result.current.open());
+    act(() => result.current.setQuery("hello"));
+
+    act(() => {
+      webview._emit("found-in-page", {
+        result: { requestId: 999, activeMatchOrdinal: 3, matches: 10, finalUpdate: true },
+      });
+    });
+
+    expect(result.current.activeMatch).toBe(0);
+    expect(result.current.matchCount).toBe(0);
+  });
+
+  it("ignores found-in-page events with finalUpdate false", () => {
+    const webview = createMockWebview();
+    webview.findInPage.mockReturnValue(42);
+    const { result } = renderHook(() => useFindInPage("panel-1", webview, true, true));
+
+    act(() => result.current.open());
+    act(() => result.current.setQuery("hello"));
+
+    act(() => {
+      webview._emit("found-in-page", {
+        result: { requestId: 42, activeMatchOrdinal: 1, matches: 3, finalUpdate: false },
+      });
+    });
+
+    expect(result.current.activeMatch).toBe(0);
+    expect(result.current.matchCount).toBe(0);
+  });
+
+  it("restarts find on did-navigate-in-page when find bar is open", () => {
+    const webview = createMockWebview();
+    const { result } = renderHook(() => useFindInPage("panel-1", webview, true, true));
+
+    act(() => result.current.open());
+    act(() => result.current.setQuery("test"));
+    webview.findInPage.mockClear();
+
+    // Simulate SPA navigation
+    act(() => {
+      webview._emit("did-navigate-in-page", {
+        isMainFrame: true,
+        url: "http://localhost:3000/new",
+      });
+    });
+
+    expect(webview.findInPage).toHaveBeenCalledWith("test", { findNext: false });
+  });
+
+  it("does not restart find on did-navigate-in-page for non-main frame", () => {
+    const webview = createMockWebview();
+    const { result } = renderHook(() => useFindInPage("panel-1", webview, true, true));
+
+    act(() => result.current.open());
+    act(() => result.current.setQuery("test"));
+    webview.findInPage.mockClear();
+
+    act(() => {
+      webview._emit("did-navigate-in-page", {
+        isMainFrame: false,
+        url: "http://localhost:3000/iframe",
+      });
+    });
+
+    expect(webview.findInPage).not.toHaveBeenCalled();
+  });
+
+  it("handles IPC next and prev shortcuts", () => {
+    const webview = createMockWebview();
+    let shortcutCallback: (payload: { panelId: string; shortcut: string }) => void;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    onFindShortcutMock.mockImplementation((cb: any) => {
+      shortcutCallback = cb;
+      return vi.fn();
+    });
+
+    const { result } = renderHook(() => useFindInPage("panel-1", webview, true, true));
+
+    act(() => result.current.open());
+    act(() => result.current.setQuery("test"));
+    webview.findInPage.mockClear();
+
+    act(() => shortcutCallback!({ panelId: "panel-1", shortcut: "next" }));
+    expect(webview.findInPage).toHaveBeenCalledWith("test", { forward: true, findNext: true });
+
+    webview.findInPage.mockClear();
+
+    act(() => shortcutCallback!({ panelId: "panel-1", shortcut: "prev" }));
+    expect(webview.findInPage).toHaveBeenCalledWith("test", { forward: false, findNext: true });
+  });
 });
