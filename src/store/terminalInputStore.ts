@@ -24,6 +24,8 @@ export interface TerminalInputState {
   commandHistory: Map<string, string[]>;
   historyIndex: Map<string, number>;
   tempDraft: Map<string, string>;
+  pendingDrafts: Map<string, string>;
+  pendingDraftRevision: number;
   setHybridInputEnabled: (enabled: boolean) => void;
   setHybridInputAutoFocus: (enabled: boolean) => void;
   getDraftInput: (terminalId: string, projectId?: string) => string;
@@ -32,6 +34,9 @@ export interface TerminalInputState {
   bumpVoiceDraftRevision: () => void;
   clearDraftInput: (terminalId: string, projectId?: string) => void;
   clearAllDraftInputs: () => void;
+  setPendingDraft: (terminalId: string, value: string, projectId?: string) => void;
+  popPendingDraft: (terminalId: string, projectId?: string) => string | undefined;
+  clearPendingDraft: (terminalId: string, projectId?: string) => void;
   addToHistory: (terminalId: string, command: string) => void;
   navigateHistory: (
     terminalId: string,
@@ -50,6 +55,8 @@ export const useTerminalInputStore = create<TerminalInputState>()((set, get) => 
   commandHistory: new Map(),
   historyIndex: new Map(),
   tempDraft: new Map(),
+  pendingDrafts: new Map(),
+  pendingDraftRevision: 0,
   setHybridInputEnabled: (enabled) => set({ hybridInputEnabled: enabled }),
   setHybridInputAutoFocus: (enabled) => set({ hybridInputAutoFocus: enabled }),
   getDraftInput: (terminalId, projectId) => {
@@ -87,7 +94,37 @@ export const useTerminalInputStore = create<TerminalInputState>()((set, get) => 
   bumpVoiceDraftRevision: () =>
     set((state) => ({ voiceDraftRevision: state.voiceDraftRevision + 1 })),
 
-  clearAllDraftInputs: () => set({ draftInputs: new Map() }),
+  clearAllDraftInputs: () =>
+    set({ draftInputs: new Map(), pendingDrafts: new Map(), pendingDraftRevision: 0 }),
+
+  setPendingDraft: (terminalId, value, projectId) =>
+    set((state) => {
+      const key = makeDraftKey(terminalId, projectId);
+      const newPendingDrafts = new Map(state.pendingDrafts);
+      newPendingDrafts.set(key, value);
+      return { pendingDrafts: newPendingDrafts };
+    }),
+
+  popPendingDraft: (terminalId, projectId) => {
+    const key = makeDraftKey(terminalId, projectId);
+    const value = get().pendingDrafts.get(key);
+    if (value !== undefined) {
+      set((state) => {
+        const newPendingDrafts = new Map(state.pendingDrafts);
+        newPendingDrafts.delete(key);
+        return { pendingDrafts: newPendingDrafts };
+      });
+    }
+    return value;
+  },
+
+  clearPendingDraft: (terminalId, projectId) =>
+    set((state) => {
+      const key = makeDraftKey(terminalId, projectId);
+      const newPendingDrafts = new Map(state.pendingDrafts);
+      newPendingDrafts.delete(key);
+      return { pendingDrafts: newPendingDrafts };
+    }),
 
   addToHistory: (terminalId, command) =>
     set((state) => {

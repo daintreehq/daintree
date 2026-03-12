@@ -194,6 +194,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     const voiceStatus = useVoiceRecordingStore((s) => s.status);
     const activeVoicePanelId = useVoiceRecordingStore((s) => s.activeTarget?.panelId ?? null);
     const voiceDraftRevision = useTerminalInputStore((s) => s.voiceDraftRevision);
+    const pendingDraftRevision = useTerminalInputStore((s) => s.pendingDraftRevision);
     const panelWorktreeId = useTerminalStore(
       (s) => s.terminals.find((terminal) => terminal.id === terminalId)?.worktreeId
     );
@@ -507,6 +508,15 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         if (!latest || latest.disabled) return;
         if (text.trim().length === 0) return;
 
+        const agentState = useTerminalStore
+          .getState()
+          .terminals.find((t) => t.id === latest.terminalId)?.agentState;
+        if (agentState === "waiting" && text.trim().length > 0) {
+          useTerminalInputStore
+            .getState()
+            .setPendingDraft(latest.terminalId, text, latest.projectId);
+        }
+
         const payload = buildTerminalSendPayload(text);
         latest.onSend({ data: payload.data, trackerData: payload.trackerData, text });
         latest.addToHistory(latest.terminalId, text);
@@ -544,6 +554,26 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         });
       }
     }, [voiceDraftRevision, terminalId, currentProject?.id]);
+
+    // Restore pending draft after agent transitions out of "waiting" state.
+    // Mirrors the voiceDraftRevision pattern above.
+    useEffect(() => {
+      if (pendingDraftRevision === 0) return;
+      const draft = useTerminalInputStore.getState().getDraftInput(terminalId, currentProject?.id);
+      const view = editorViewRef.current;
+      if (!view) return;
+      const current = view.state.doc.toString();
+      if (draft && draft !== current) {
+        setValue(draft);
+        lastEmittedValueRef.current = draft;
+        isApplyingExternalValueRef.current = true;
+        view.dispatch({
+          changes: { from: 0, to: current.length, insert: draft },
+          selection: { anchor: draft.length },
+          scrollIntoView: true,
+        });
+      }
+    }, [pendingDraftRevision, terminalId, currentProject?.id]);
 
     // Drive voice decorations from transcript state:
     //   interim → character-level italic mark on live delta text

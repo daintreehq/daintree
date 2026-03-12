@@ -14,6 +14,8 @@ describe("terminalInputStore", () => {
       commandHistory: new Map(),
       historyIndex: new Map(),
       tempDraft: new Map(),
+      pendingDrafts: new Map(),
+      pendingDraftRevision: 0,
     });
   });
 
@@ -181,6 +183,73 @@ describe("terminalInputStore", () => {
       expect(useTerminalInputStore.getState().getDraftInput("term-1", projectA)).toBe("");
       expect(useTerminalInputStore.getState().getDraftInput("term-2", projectB)).toBe("");
       expect(useTerminalInputStore.getState().getDraftInput("term-3")).toBe("");
+    });
+
+    it("should also clear pending drafts and reset revision", () => {
+      useTerminalInputStore.getState().setPendingDraft("term-1", "pending", "project-a");
+      useTerminalInputStore.setState((s) => ({ pendingDraftRevision: s.pendingDraftRevision + 1 }));
+
+      expect(useTerminalInputStore.getState().pendingDrafts.size).toBe(1);
+      expect(useTerminalInputStore.getState().pendingDraftRevision).toBe(1);
+
+      useTerminalInputStore.getState().clearAllDraftInputs();
+
+      expect(useTerminalInputStore.getState().pendingDrafts.size).toBe(0);
+      expect(useTerminalInputStore.getState().pendingDraftRevision).toBe(0);
+    });
+  });
+
+  describe("pending drafts (option prompt preservation)", () => {
+    it("should store and retrieve a pending draft", () => {
+      const store = useTerminalInputStore.getState();
+      store.setPendingDraft("term-1", "fix the bug", "project-a");
+
+      expect(useTerminalInputStore.getState().pendingDrafts.size).toBe(1);
+
+      const value = useTerminalInputStore.getState().popPendingDraft("term-1", "project-a");
+      expect(value).toBe("fix the bug");
+      expect(useTerminalInputStore.getState().pendingDrafts.size).toBe(0);
+    });
+
+    it("should return undefined when popping non-existent pending draft", () => {
+      const value = useTerminalInputStore.getState().popPendingDraft("term-1", "project-a");
+      expect(value).toBeUndefined();
+    });
+
+    it("should scope pending drafts by project", () => {
+      const store = useTerminalInputStore.getState();
+      store.setPendingDraft("term-1", "draft-a", "project-a");
+      store.setPendingDraft("term-1", "draft-b", "project-b");
+
+      expect(useTerminalInputStore.getState().popPendingDraft("term-1", "project-a")).toBe(
+        "draft-a"
+      );
+      expect(useTerminalInputStore.getState().popPendingDraft("term-1", "project-b")).toBe(
+        "draft-b"
+      );
+    });
+
+    it("should clear a specific pending draft without affecting others", () => {
+      const store = useTerminalInputStore.getState();
+      store.setPendingDraft("term-1", "draft-1", "project-a");
+      store.setPendingDraft("term-2", "draft-2", "project-a");
+
+      useTerminalInputStore.getState().clearPendingDraft("term-1", "project-a");
+
+      expect(useTerminalInputStore.getState().pendingDrafts.size).toBe(1);
+      expect(useTerminalInputStore.getState().popPendingDraft("term-2", "project-a")).toBe(
+        "draft-2"
+      );
+    });
+
+    it("should overwrite existing pending draft on re-save", () => {
+      const store = useTerminalInputStore.getState();
+      store.setPendingDraft("term-1", "first", "project-a");
+      store.setPendingDraft("term-1", "second", "project-a");
+
+      expect(useTerminalInputStore.getState().popPendingDraft("term-1", "project-a")).toBe(
+        "second"
+      );
     });
   });
 });
