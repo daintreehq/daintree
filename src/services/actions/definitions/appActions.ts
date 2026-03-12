@@ -1,4 +1,5 @@
 import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
+import type { SettingsNavTarget } from "@/components/Settings";
 import { SettingsNavTargetSchema } from "./schemas";
 import { z } from "zod";
 import { appClient } from "@/clients";
@@ -27,12 +28,7 @@ export function registerAppActions(actions: ActionRegistry, callbacks: ActionCal
     scope: "renderer",
     argsSchema: SettingsNavTargetSchema,
     run: async (args: unknown) => {
-      const { tab, subtab, sectionId } = args as {
-        tab: string;
-        subtab?: string;
-        sectionId?: string;
-      };
-      callbacks.onOpenSettingsTab({ tab, subtab, sectionId });
+      callbacks.onOpenSettingsTab(args as SettingsNavTarget);
     },
   }));
 
