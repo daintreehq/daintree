@@ -4,6 +4,7 @@ import { z } from "zod";
 import type { ActionId, ActionContext } from "@shared/types/actions";
 import { stripAnsiCodes } from "@shared/utils/artifactParser";
 import { appClient, terminalClient } from "@/clients";
+import { computeGridColumns } from "@/lib/terminalLayout";
 import { useLayoutConfigStore } from "@/store/layoutConfigStore";
 import { useTerminalStore } from "@/store/terminalStore";
 import { useWorktreeDataStore } from "@/store/worktreeDataStore";
@@ -471,6 +472,7 @@ export function registerTerminalActions(actions: ActionRegistry, callbacks: Acti
           state.setMaximizedId(null);
         }
         state.moveTerminalToDock(targetId);
+        state.openDockTerminal(targetId);
       }
     },
   }));
@@ -663,6 +665,76 @@ export function registerTerminalActions(actions: ActionRegistry, callbacks: Acti
       const currentIndex = gridTerminals.findIndex((t) => t.id === focusedId);
       if (currentIndex >= 0 && currentIndex < gridTerminals.length - 1) {
         reorderTerminals(currentIndex, currentIndex + 1, "grid", activeWorktreeId);
+      }
+    },
+  }));
+
+  actions.set("terminal.moveUp", () => ({
+    id: "terminal.moveUp",
+    title: "Move Terminal Up",
+    description: "Move terminal up in the grid",
+    category: "terminal",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    run: async () => {
+      const state = useTerminalStore.getState();
+      const { focusedId, terminals, reorderTerminals } = state;
+      if (!focusedId) return;
+      const terminal = terminals.find((t) => t.id === focusedId);
+      if (!terminal || terminal.location === "dock") return;
+      const activeWorktreeId = callbacks.getActiveWorktreeId();
+      const gridTerminals = terminals.filter(
+        (t) =>
+          (t.location === "grid" || t.location === undefined) &&
+          (t.worktreeId ?? undefined) === (activeWorktreeId ?? undefined)
+      );
+      const currentIndex = gridTerminals.findIndex((t) => t.id === focusedId);
+      if (currentIndex < 0) return;
+      const { layoutConfig } = useLayoutConfigStore.getState();
+      const cols = computeGridColumns(
+        gridTerminals.length,
+        null,
+        layoutConfig.strategy,
+        layoutConfig.value
+      );
+      if (currentIndex >= cols) {
+        reorderTerminals(currentIndex, currentIndex - cols, "grid", activeWorktreeId);
+      }
+    },
+  }));
+
+  actions.set("terminal.moveDown", () => ({
+    id: "terminal.moveDown",
+    title: "Move Terminal Down",
+    description: "Move terminal down in the grid",
+    category: "terminal",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    run: async () => {
+      const state = useTerminalStore.getState();
+      const { focusedId, terminals, reorderTerminals } = state;
+      if (!focusedId) return;
+      const terminal = terminals.find((t) => t.id === focusedId);
+      if (!terminal || terminal.location === "dock") return;
+      const activeWorktreeId = callbacks.getActiveWorktreeId();
+      const gridTerminals = terminals.filter(
+        (t) =>
+          (t.location === "grid" || t.location === undefined) &&
+          (t.worktreeId ?? undefined) === (activeWorktreeId ?? undefined)
+      );
+      const currentIndex = gridTerminals.findIndex((t) => t.id === focusedId);
+      if (currentIndex < 0) return;
+      const { layoutConfig } = useLayoutConfigStore.getState();
+      const cols = computeGridColumns(
+        gridTerminals.length,
+        null,
+        layoutConfig.strategy,
+        layoutConfig.value
+      );
+      if (currentIndex + cols < gridTerminals.length) {
+        reorderTerminals(currentIndex, currentIndex + cols, "grid", activeWorktreeId);
       }
     },
   }));

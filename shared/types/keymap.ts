@@ -88,6 +88,10 @@ export type KeyAction =
   | "terminal.focusIndex9"
   | "terminal.moveLeft"
   | "terminal.moveRight"
+  | "terminal.moveUp"
+  | "terminal.moveDown"
+  | "terminal.moveToDock"
+  | "terminal.moveToGrid"
   | "terminal.watch"
 
   // Agent spawning
@@ -226,6 +230,10 @@ export const KEY_ACTION_VALUES: ReadonlySet<string> = new Set<string>([
   "terminal.focusIndex9",
   "terminal.moveLeft",
   "terminal.moveRight",
+  "terminal.moveUp",
+  "terminal.moveDown",
+  "terminal.moveToDock",
+  "terminal.moveToGrid",
   "terminal.watch",
   "agent.palette",
   "agent.claude",
