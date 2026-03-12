@@ -1,5 +1,6 @@
-import { useCallback, useMemo } from "react";
+import { useCallback, useMemo, useState } from "react";
 import type React from "react";
+import type { Terminal as XTermTerminal } from "@xterm/xterm";
 import { type TerminalLocation, type TerminalType } from "@/types";
 import { useTerminalStore } from "@/store";
 import { useWorktrees } from "@/hooks/useWorktrees";
@@ -22,6 +23,36 @@ import {
   ContextMenuSubTrigger,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
+
+const URL_REGEX = /(?:https?|ftp):\/\/[^\s"'<>()[\]{}]+/g;
+
+export function extractUrlAtPoint(
+  terminal: XTermTerminal,
+  clientX: number,
+  clientY: number
+): string | null {
+  const el = terminal.element;
+  if (!el) return null;
+  const rect = el.getBoundingClientRect();
+  if (clientX < rect.left || clientX > rect.right || clientY < rect.top || clientY > rect.bottom)
+    return null;
+  const col = Math.floor(((clientX - rect.left) / rect.width) * terminal.cols);
+  const row = Math.floor(((clientY - rect.top) / rect.height) * terminal.rows);
+  if (row < 0 || row >= terminal.rows || col < 0 || col >= terminal.cols) return null;
+  const bufferRow = terminal.buffer.active.viewportY + row;
+  const line = terminal.buffer.active.getLine(bufferRow);
+  if (!line) return null;
+  const text = line.translateToString(true);
+  URL_REGEX.lastIndex = 0;
+  let match;
+  while ((match = URL_REGEX.exec(text)) !== null) {
+    const url = match[0].replace(/[.,;:!?'")\]]+$/, "");
+    if (col >= match.index && col < match.index + url.length) {
+      return url;
+    }
+  }
+  return null;
+}
 
 interface TerminalContextMenuProps {
   terminalId: string;
@@ -58,6 +89,23 @@ export function TerminalContextMenu({
   const watchPanel = useTerminalStore((state) => state.watchPanel);
   const unwatchPanel = useTerminalStore((state) => state.unwatchPanel);
 
+  const [hasSelection, setHasSelection] = useState(false);
+  const [hoveredUrl, setHoveredUrl] = useState<string | null>(null);
+
+  const handleContextMenu = useCallback(
+    (e: React.MouseEvent) => {
+      const managed = terminalInstanceService.get(terminalId);
+      if (!managed?.terminal) {
+        setHasSelection(false);
+        setHoveredUrl(null);
+        return;
+      }
+      setHasSelection(!!managed.terminal.getSelection());
+      setHoveredUrl(extractUrlAtPoint(managed.terminal, e.clientX, e.clientY));
+    },
+    [terminalId]
+  );
+
   const isPaused = terminal?.flowStatus === "paused-backpressure";
 
   const currentLocation: TerminalLocation = forceLocation ?? terminal?.location ?? "grid";
@@ -68,6 +116,18 @@ export function TerminalContextMenu({
   const handleAction = useCallback(
     async (actionId: string) => {
       if (!terminal) return;
+
+      if (actionId.startsWith("open-link:")) {
+        const url = actionId.slice("open-link:".length);
+        void actionService.dispatch("system.openExternal", { url }, { source: "context-menu" });
+        return;
+      }
+
+      if (actionId.startsWith("copy-link:")) {
+        const url = actionId.slice("copy-link:".length);
+        void navigator.clipboard.writeText(url);
+        return;
+      }
 
       if (actionId.startsWith("move-to-worktree:")) {
         const worktreeId = actionId.slice("move-to-worktree:".length);
@@ -454,14 +514,14 @@ export function TerminalContextMenu({
   return (
     <ContextMenu>
       <ContextMenuTrigger asChild>
-        <div className="contents" data-context-trigger={terminalId}>
+        <div className="contents" data-context-trigger={terminalId} onContextMenu={handleContextMenu}>
           {children}
         </div>
       </ContextMenuTrigger>
       <ContextMenuContent>
         {hasPty && (
           <>
-            <ContextMenuItem onSelect={() => handleAction("copy")}>
+            <ContextMenuItem disabled={!hasSelection} onSelect={() => handleAction("copy")}>
               Copy
               <ContextMenuShortcut>{modifierKey}C</ContextMenuShortcut>
             </ContextMenuItem>
@@ -469,6 +529,17 @@ export function TerminalContextMenu({
               Paste
               <ContextMenuShortcut>{isMac ? `${modifierKey}V` : "Ctrl+⇧V"}</ContextMenuShortcut>
             </ContextMenuItem>
+            {hoveredUrl && (
+              <>
+                <ContextMenuSeparator />
+                <ContextMenuItem onSelect={() => handleAction(`open-link:${hoveredUrl}`)}>
+                  Open Link
+                </ContextMenuItem>
+                <ContextMenuItem onSelect={() => handleAction(`copy-link:${hoveredUrl}`)}>
+                  Copy Link Address
+                </ContextMenuItem>
+              </>
+            )}
             <ContextMenuSeparator />
           </>
         )}
@@ -502,7 +573,6 @@ export function TerminalContextMenu({
             <ContextMenuSubContent>{convertToItems}</ContextMenuSubContent>
           </ContextMenuSub>
         )}
-        <ContextMenuItem disabled>{modifierKey}+Click links to open in Browser</ContextMenuItem>
         <ContextMenuSeparator />
         <ContextMenuItem onSelect={() => handleAction("duplicate")}>
           Duplicate Terminal
