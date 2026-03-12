@@ -21,6 +21,7 @@ import {
   StickyNote,
   Monitor,
   Bell,
+  LayoutGrid,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { isMac, createTooltipWithShortcut } from "@/lib/platform";
@@ -40,6 +41,7 @@ import {
   useToolbarPreferencesStore,
   useCliAvailabilityStore,
   useVoiceRecordingStore,
+  usePaletteStore,
 } from "@/store";
 import type { ToolbarButtonId } from "@/../../shared/types/domain";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
@@ -165,6 +167,16 @@ export function Toolbar({
   const { handleCopyTree } = useWorktreeActions();
   const terminalShortcut = useKeybindingDisplay("agent.terminal");
   const browserShortcut = useKeybindingDisplay("agent.browser");
+  const panelPaletteShortcut = useKeybindingDisplay("panel.palette");
+  const panelPaletteOpen = usePaletteStore((state) => state.activePaletteId === "panel");
+
+  const handleTogglePanelPalette = useCallback(() => {
+    if (usePaletteStore.getState().activePaletteId === "panel") {
+      usePaletteStore.getState().closePalette("panel");
+    } else {
+      void actionService.dispatch("panel.palette", undefined, { source: "user" });
+    }
+  }, []);
 
   const handleOpenProjectSettings = useCallback(() => {
     projectSwitcher.close();
@@ -529,6 +541,31 @@ export function Toolbar({
                   : devServerCommand
                     ? "Start Dev Server"
                     : "Open Dev Preview"}
+              </TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
+        ),
+        isAvailable: true,
+      },
+      "panel-palette": {
+        render: () => (
+          <TooltipProvider key="panel-palette">
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  data-toolbar-item=""
+                  onClick={handleTogglePanelPalette}
+                  className="text-canopy-text hover:bg-white/[0.06] hover:text-canopy-accent transition-colors"
+                  aria-label={panelPaletteOpen ? "Close panel palette" : "Open panel palette"}
+                  aria-pressed={panelPaletteOpen}
+                >
+                  <LayoutGrid />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">
+                {createTooltipWithShortcut("Panel Palette", panelPaletteShortcut)}
               </TooltipContent>
             </Tooltip>
           </TooltipProvider>
@@ -907,6 +944,9 @@ export function Toolbar({
       terminalShortcut,
       browserShortcut,
       devServerCommand,
+      panelPaletteOpen,
+      panelPaletteShortcut,
+      handleTogglePanelPalette,
       hasActiveVoiceRecording,
       stats,
       currentProject,

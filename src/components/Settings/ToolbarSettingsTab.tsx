@@ -82,6 +82,11 @@ const BUTTON_METADATA: Partial<Record<ToolbarButtonId, ButtonMetadata>> = {
     icon: <Monitor className="h-4 w-4" />,
     description: "Start development server",
   },
+  "panel-palette": {
+    label: "Panel Palette",
+    icon: <LayoutGrid className="h-4 w-4" />,
+    description: "Open the panel launcher palette",
+  },
   "voice-recording": {
     label: "Voice Recording",
     icon: <Mic className="h-4 w-4" />,
