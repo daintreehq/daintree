@@ -472,9 +472,7 @@ describe("errorHandlers", () => {
       const sentError = mockWindow.webContents.send.mock.calls.find(
         ([channel]: string[]) => channel === CHANNELS.ERROR_NOTIFY
       )?.[1];
-      // posix_spawnp triggers the spawn detection but no ENOENT code — falls through to undefined
-      // unless we handle it. The isSpawnSyscall check is used by getRecoveryHint only for code-based matching
-      expect(sentError.recoveryHint).toBeUndefined();
+      expect(sentError.recoveryHint).toContain("PATH");
     });
 
     it("returns DNS hint for ENOTFOUND", async () => {
@@ -646,6 +644,133 @@ describe("errorHandlers", () => {
         ([channel]: string[]) => channel === CHANNELS.ERROR_NOTIFY
       )?.[1];
       expect(sentError.recoveryHint).toContain("terminal process");
+    });
+
+    it("returns git init hint when cause message contains 'not a git repository'", async () => {
+      const CHANNELS = await getChannels();
+      const { GitError } = await import("../../utils/errorTypes.js");
+      const mockWindow = createMockWindow();
+      registerErrorHandlers(mockWindow as never, null, null);
+
+      const spawn = vi.fn(() => {
+        throw new GitError(
+          "Git operation failed: status",
+          { rootPath: "/tmp" },
+          new Error("fatal: not a git repository (or any parent up to mount point /)")
+        );
+      });
+      registerErrorHandlers(mockWindow as never, null, { spawn } as never);
+
+      const retryHandler = getInvokeHandler(CHANNELS.ERROR_RETRY);
+      await retryHandler({} as never, {
+        errorId: "e",
+        action: "terminal",
+        args: { id: "t", cwd: "/" },
+      }).catch(() => {});
+
+      const sentError = mockWindow.webContents.send.mock.calls.find(
+        ([channel]: string[]) => channel === CHANNELS.ERROR_NOTIFY
+      )?.[1];
+      expect(sentError.recoveryHint).toContain("git init");
+    });
+
+    it("returns undefined for GitError with unrecognized message", async () => {
+      const CHANNELS = await getChannels();
+      const { GitError } = await import("../../utils/errorTypes.js");
+      const mockWindow = createMockWindow();
+      registerErrorHandlers(mockWindow as never, null, null);
+
+      const spawn = vi.fn(() => {
+        throw new GitError("Git operation failed: merge");
+      });
+      registerErrorHandlers(mockWindow as never, null, { spawn } as never);
+
+      const retryHandler = getInvokeHandler(CHANNELS.ERROR_RETRY);
+      await retryHandler({} as never, {
+        errorId: "e",
+        action: "terminal",
+        args: { id: "t", cwd: "/" },
+      }).catch(() => {});
+
+      const sentError = mockWindow.webContents.send.mock.calls.find(
+        ([channel]: string[]) => channel === CHANNELS.ERROR_NOTIFY
+      )?.[1];
+      expect(sentError.recoveryHint).toBeUndefined();
+    });
+
+    it("returns reset hint for ECONNRESET", async () => {
+      const CHANNELS = await getChannels();
+      const mockWindow = createMockWindow();
+      registerErrorHandlers(mockWindow as never, null, null);
+
+      const spawn = vi.fn(() => {
+        const err = new Error("read ECONNRESET") as NodeJS.ErrnoException;
+        err.code = "ECONNRESET";
+        throw err;
+      });
+      registerErrorHandlers(mockWindow as never, null, { spawn } as never);
+
+      const retryHandler = getInvokeHandler(CHANNELS.ERROR_RETRY);
+      await retryHandler({} as never, {
+        errorId: "e",
+        action: "terminal",
+        args: { id: "t", cwd: "/" },
+      }).catch(() => {});
+
+      const sentError = mockWindow.webContents.send.mock.calls.find(
+        ([channel]: string[]) => channel === CHANNELS.ERROR_NOTIFY
+      )?.[1];
+      expect(sentError.recoveryHint).toContain("reset");
+    });
+
+    it("returns busy hint for EBUSY", async () => {
+      const CHANNELS = await getChannels();
+      const mockWindow = createMockWindow();
+      registerErrorHandlers(mockWindow as never, null, null);
+
+      const spawn = vi.fn(() => {
+        const err = new Error("EBUSY: resource busy") as NodeJS.ErrnoException;
+        err.code = "EBUSY";
+        throw err;
+      });
+      registerErrorHandlers(mockWindow as never, null, { spawn } as never);
+
+      const retryHandler = getInvokeHandler(CHANNELS.ERROR_RETRY);
+      await retryHandler({} as never, {
+        errorId: "e",
+        action: "terminal",
+        args: { id: "t", cwd: "/" },
+      }).catch(() => {});
+
+      const sentError = mockWindow.webContents.send.mock.calls.find(
+        ([channel]: string[]) => channel === CHANNELS.ERROR_NOTIFY
+      )?.[1];
+      expect(sentError.recoveryHint).toContain("Close");
+    });
+
+    it("returns system busy hint for EAGAIN", async () => {
+      const CHANNELS = await getChannels();
+      const mockWindow = createMockWindow();
+      registerErrorHandlers(mockWindow as never, null, null);
+
+      const spawn = vi.fn(() => {
+        const err = new Error("EAGAIN") as NodeJS.ErrnoException;
+        err.code = "EAGAIN";
+        throw err;
+      });
+      registerErrorHandlers(mockWindow as never, null, { spawn } as never);
+
+      const retryHandler = getInvokeHandler(CHANNELS.ERROR_RETRY);
+      await retryHandler({} as never, {
+        errorId: "e",
+        action: "terminal",
+        args: { id: "t", cwd: "/" },
+      }).catch(() => {});
+
+      const sentError = mockWindow.webContents.send.mock.calls.find(
+        ([channel]: string[]) => channel === CHANNELS.ERROR_NOTIFY
+      )?.[1];
+      expect(sentError.recoveryHint).toContain("busy");
     });
 
     it("returns undefined recoveryHint for generic unknown error", async () => {

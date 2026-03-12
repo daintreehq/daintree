@@ -91,7 +91,7 @@ function getRecoveryHint(error: unknown): string | undefined {
   }
 
   if (error instanceof GitError) {
-    const msg = error.message;
+    const msg = error.message + (error.cause ? ` ${error.cause.message}` : "");
     if (msg.includes("not a git repository")) {
       return "Run 'git init' or open a folder containing a git repo.";
     }
@@ -109,6 +109,10 @@ function getRecoveryHint(error: unknown): string | undefined {
 
   const code = (error as NodeJS.ErrnoException).code;
   const spawn = isSpawnSyscall(error);
+
+  if (!code && spawn) {
+    return "Install the tool or add it to your PATH.";
+  }
 
   switch (code) {
     case "EACCES":
