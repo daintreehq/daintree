@@ -158,6 +158,41 @@ test.describe.serial("Core: Terminal Recipes", () => {
       await closeProjectSettings();
     });
 
+    test("edit and save updates the recipe", async () => {
+      const { window } = ctx;
+      await openRecipesTab();
+
+      await window
+        .locator(SEL.projectSettings.editRecipeButton("E2E Test Recipe"))
+        .click({ force: true });
+
+      const editor = getRecipeEditor("Edit Recipe");
+      await expect(editor).toBeVisible({ timeout: T_MEDIUM });
+
+      // Update the recipe name
+      await editor.locator(SEL.recipeEditor.nameInput).fill("E2E Updated Recipe");
+      await editor.locator(SEL.recipeEditor.updateButton).click();
+      await expect(editor).not.toBeVisible({ timeout: T_MEDIUM });
+
+      // Verify updated name appears in the list and old name is gone
+      await expect(window.getByText("E2E Updated Recipe")).toBeVisible({ timeout: T_MEDIUM });
+      await expect(window.getByText("E2E Test Recipe")).not.toBeVisible({ timeout: T_SHORT });
+
+      // Reopen to verify the update persisted
+      await window
+        .locator(SEL.projectSettings.editRecipeButton("E2E Updated Recipe"))
+        .click({ force: true });
+      const editorAgain = getRecipeEditor("Edit Recipe");
+      await expect(editorAgain.locator(SEL.recipeEditor.nameInput)).toHaveValue(
+        "E2E Updated Recipe",
+        { timeout: T_SHORT }
+      );
+      await editorAgain.locator(SEL.recipeEditor.cancelButton).click();
+      await expect(editorAgain).not.toBeVisible({ timeout: T_SHORT });
+
+      await closeProjectSettings();
+    });
+
     test("empty name shows validation error", async () => {
       const { window } = ctx;
       await openRecipesTab();
