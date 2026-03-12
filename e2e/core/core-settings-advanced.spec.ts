@@ -147,7 +147,7 @@ test.describe.serial("Core: Settings Advanced", () => {
       await window.waitForTimeout(1500);
 
       // Click Save to apply the override
-      const saveBtn = window.locator("button", { hasText: "Save" });
+      const saveBtn = row.locator("button", { hasText: "Save" });
       await expect(saveBtn).toBeVisible({ timeout: T_SHORT });
       await saveBtn.click();
 
