@@ -474,7 +474,8 @@ describe("DevPreviewPane webview lifecycle regression", () => {
   it("uses configurable load timeout from project settings", () => {
     const origSettings = useProjectSettingsStoreMock.getMockImplementation();
     useProjectSettingsStoreMock.mockImplementation(
-      (selector: (state: Record<string, unknown>) => unknown) =>
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (selector: (state: any) => unknown) =>
         selector({
           projectId: "project-1",
           settings: {
