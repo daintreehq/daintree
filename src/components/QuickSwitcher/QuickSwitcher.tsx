@@ -11,6 +11,7 @@ type QuickSwitcherProps = Pick<
   | "isOpen"
   | "query"
   | "results"
+  | "totalResults"
   | "selectedIndex"
   | "close"
   | "setQuery"
@@ -24,6 +25,7 @@ export function QuickSwitcher({
   isOpen,
   query,
   results,
+  totalResults,
   selectedIndex,
   close,
   setQuery,
@@ -68,6 +70,7 @@ export function QuickSwitcher({
       itemIdPrefix="qs-option"
       emptyMessage="No items available"
       noMatchMessage={`No items match "${query}"`}
+      totalResults={totalResults}
     />
   );
 }

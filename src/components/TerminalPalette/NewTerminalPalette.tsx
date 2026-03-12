@@ -1,12 +1,14 @@
 import { useEffect, useRef, useCallback } from "react";
 import { cn } from "@/lib/utils";
 import { AppPaletteDialog } from "@/components/ui/AppPaletteDialog";
+import { PaletteOverflowNotice } from "@/components/ui/PaletteOverflowNotice";
 import type { LaunchOption } from "./launchOptions";
 
 interface NewTerminalPaletteProps {
   isOpen: boolean;
   query: string;
   results: LaunchOption[];
+  totalResults?: number;
   selectedIndex: number;
   onQueryChange: (q: string) => void;
   onSelectPrevious: () => void;
@@ -20,6 +22,7 @@ export function NewTerminalPalette({
   isOpen,
   query,
   results,
+  totalResults,
   selectedIndex,
   onQueryChange,
   onSelectPrevious,
@@ -128,6 +131,9 @@ export function NewTerminalPalette({
             ))
           )}
         </div>
+        {totalResults != null && (
+          <PaletteOverflowNotice shown={results.length} total={totalResults} />
+        )}
       </AppPaletteDialog.Body>
 
       <AppPaletteDialog.Footer>

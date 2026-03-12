@@ -1,5 +1,6 @@
 import { useEffect, useRef, useCallback } from "react";
 import { AppPaletteDialog } from "@/components/ui/AppPaletteDialog";
+import { PaletteOverflowNotice } from "@/components/ui/PaletteOverflowNotice";
 
 export interface SearchablePaletteProps<T> {
   isOpen: boolean;
@@ -51,6 +52,8 @@ export interface SearchablePaletteProps<T> {
   headerClassName?: string;
   /** Replace the entire body content (list, empty state, beforeList, afterList are ignored) */
   renderBody?: () => React.ReactNode;
+  /** Total number of results before truncation, for overflow indicator */
+  totalResults?: number;
 }
 
 export function SearchablePalette<T>({
@@ -81,6 +84,7 @@ export function SearchablePalette<T>({
   afterList,
   headerClassName,
   renderBody,
+  totalResults,
 }: SearchablePaletteProps<T>) {
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
@@ -181,6 +185,9 @@ export function SearchablePalette<T>({
               <div ref={listRef} id={listId} role="listbox" aria-label={label}>
                 {results.map((item, index) => renderItem(item, index, index === selectedIndex))}
               </div>
+            )}
+            {totalResults != null && (
+              <PaletteOverflowNotice shown={results.length} total={totalResults} />
             )}
             {afterList}
           </>

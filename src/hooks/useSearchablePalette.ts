@@ -20,6 +20,7 @@ export interface UseSearchablePaletteReturn<T> {
   isOpen: boolean;
   query: string;
   results: T[];
+  totalResults: number;
   selectedIndex: number;
   open: () => void;
   close: () => void;
@@ -80,7 +81,7 @@ export function useSearchablePalette<T>(
     return new Fuse(items, fuseOptions);
   }, [items, fuseOptions]);
 
-  const results = useMemo<T[]>(() => {
+  const { results, totalResults } = useMemo(() => {
     let filtered: T[];
 
     if (filterFn) {
@@ -94,7 +95,7 @@ export function useSearchablePalette<T>(
       filtered = items;
     }
 
-    return filtered.slice(0, maxResults);
+    return { results: filtered.slice(0, maxResults), totalResults: filtered.length };
   }, [debouncedQuery, items, fuse, filterFn, maxResults]);
 
   const findNavigable = useCallback(
@@ -180,6 +181,7 @@ export function useSearchablePalette<T>(
     isOpen,
     query,
     results,
+    totalResults,
     selectedIndex,
     open,
     close,

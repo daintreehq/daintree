@@ -22,6 +22,7 @@ export interface UseActionPaletteReturn {
   isOpen: boolean;
   query: string;
   results: ActionPaletteItem[];
+  totalResults: number;
   selectedIndex: number;
   open: () => void;
   close: () => void;
@@ -85,6 +86,7 @@ export function useActionPalette(): UseActionPaletteReturn {
     isOpen,
     query,
     results,
+    totalResults,
     selectedIndex,
     open,
     close,
@@ -142,6 +144,7 @@ export function useActionPalette(): UseActionPaletteReturn {
     isOpen,
     query,
     results,
+    totalResults,
     selectedIndex,
     open,
     close,
