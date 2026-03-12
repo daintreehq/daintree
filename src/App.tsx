@@ -1056,6 +1056,7 @@ function App() {
         isOpen={quickSwitcher.isOpen}
         query={quickSwitcher.query}
         results={quickSwitcher.results}
+        totalResults={quickSwitcher.totalResults}
         selectedIndex={quickSwitcher.selectedIndex}
         close={quickSwitcher.close}
         setQuery={quickSwitcher.setQuery}
@@ -1068,6 +1069,7 @@ function App() {
         isOpen={newTerminalPalette.isOpen}
         query={newTerminalPalette.query}
         results={newTerminalPalette.results}
+        totalResults={newTerminalPalette.totalResults}
         selectedIndex={newTerminalPalette.selectedIndex}
         onQueryChange={newTerminalPalette.setQuery}
         onSelectPrevious={newTerminalPalette.selectPrevious}
@@ -1080,6 +1082,7 @@ function App() {
         isOpen={worktreePalette.isOpen}
         query={worktreePalette.query}
         results={worktreePalette.results}
+        totalResults={worktreePalette.totalResults}
         activeWorktreeId={worktreePalette.activeWorktreeId}
         selectedIndex={worktreePalette.selectedIndex}
         onQueryChange={worktreePalette.setQuery}
@@ -1093,6 +1096,7 @@ function App() {
         isOpen={panelPalette.isOpen}
         query={panelPalette.query}
         results={panelPalette.results}
+        totalResults={panelPalette.totalResults}
         selectedIndex={panelPalette.selectedIndex}
         onQueryChange={panelPalette.setQuery}
         onSelectPrevious={panelPalette.selectPrevious}
@@ -1181,6 +1185,7 @@ function App() {
         isOpen={actionPalette.isOpen}
         query={actionPalette.query}
         results={actionPalette.results}
+        totalResults={actionPalette.totalResults}
         selectedIndex={actionPalette.selectedIndex}
         close={actionPalette.close}
         setQuery={actionPalette.setQuery}

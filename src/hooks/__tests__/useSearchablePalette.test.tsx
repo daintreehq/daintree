@@ -58,6 +58,81 @@ describe("useSearchablePalette", () => {
     expect(result.current.selectedIndex).toBe(-1);
   });
 
+  describe("totalResults", () => {
+    it("exposes total count before slicing when results exceed maxResults", () => {
+      const items: PaletteItem[] = Array.from({ length: 25 }, (_, i) => ({
+        id: `item-${i}`,
+        name: `Item ${i}`,
+      }));
+
+      const { result } = renderHook(() =>
+        useSearchablePalette<PaletteItem>({
+          items,
+          debounceMs: 0,
+          maxResults: 20,
+        })
+      );
+
+      expect(result.current.results).toHaveLength(20);
+      expect(result.current.totalResults).toBe(25);
+    });
+
+    it("totalResults equals results.length when not truncated", () => {
+      const items: PaletteItem[] = Array.from({ length: 10 }, (_, i) => ({
+        id: `item-${i}`,
+        name: `Item ${i}`,
+      }));
+
+      const { result } = renderHook(() =>
+        useSearchablePalette<PaletteItem>({
+          items,
+          debounceMs: 0,
+          maxResults: 20,
+        })
+      );
+
+      expect(result.current.results).toHaveLength(10);
+      expect(result.current.totalResults).toBe(10);
+    });
+
+    it("totalResults updates after query change narrows results", () => {
+      const items: PaletteItem[] = [
+        ...Array.from({ length: 25 }, (_, i) => ({
+          id: `alpha-${i}`,
+          name: `Alpha ${i}`,
+        })),
+        ...Array.from({ length: 5 }, (_, i) => ({
+          id: `beta-${i}`,
+          name: `Beta ${i}`,
+        })),
+      ];
+
+      const { result } = renderHook(() =>
+        useSearchablePalette<PaletteItem>({
+          items,
+          debounceMs: 0,
+          maxResults: 20,
+          filterFn: (allItems, query) => {
+            if (!query) return allItems;
+            return allItems.filter((item) => item.name.toLowerCase().includes(query.toLowerCase()));
+          },
+        })
+      );
+
+      expect(result.current.totalResults).toBe(30);
+
+      act(() => {
+        result.current.setQuery("Beta");
+      });
+      act(() => {
+        vi.runAllTimers();
+      });
+
+      expect(result.current.results).toHaveLength(5);
+      expect(result.current.totalResults).toBe(5);
+    });
+  });
+
   describe("mutual exclusion via paletteId", () => {
     const items: PaletteItem[] = [{ id: "a", name: "A" }];
 

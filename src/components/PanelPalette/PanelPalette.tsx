@@ -1,6 +1,7 @@
 import { useEffect, useRef, useCallback } from "react";
 import { cn } from "@/lib/utils";
 import { AppPaletteDialog } from "@/components/ui/AppPaletteDialog";
+import { PaletteOverflowNotice } from "@/components/ui/PaletteOverflowNotice";
 import type { PanelKindOption } from "@/hooks/usePanelPalette";
 import { PanelKindIcon } from "./PanelKindIcon";
 
@@ -8,6 +9,7 @@ interface PanelPaletteProps {
   isOpen: boolean;
   query: string;
   results: PanelKindOption[];
+  totalResults?: number;
   selectedIndex: number;
   onQueryChange: (q: string) => void;
   onSelectPrevious: () => void;
@@ -21,6 +23,7 @@ export function PanelPalette({
   isOpen,
   query,
   results,
+  totalResults,
   selectedIndex,
   onQueryChange,
   onSelectPrevious,
@@ -133,6 +136,9 @@ export function PanelPalette({
             ))
           )}
         </div>
+        {totalResults != null && (
+          <PaletteOverflowNotice shown={results.length} total={totalResults} />
+        )}
       </AppPaletteDialog.Body>
 
       <AppPaletteDialog.Footer>

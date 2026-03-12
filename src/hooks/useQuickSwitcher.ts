@@ -25,6 +25,7 @@ export interface UseQuickSwitcherReturn {
   isOpen: boolean;
   query: string;
   results: QuickSwitcherItem[];
+  totalResults: number;
   selectedIndex: number;
   open: () => void;
   close: () => void;
@@ -141,6 +142,7 @@ export function useQuickSwitcher(): UseQuickSwitcherReturn {
     isOpen,
     query,
     results,
+    totalResults,
     selectedIndex,
     open,
     close,
@@ -186,6 +188,7 @@ export function useQuickSwitcher(): UseQuickSwitcherReturn {
     isOpen,
     query,
     results,
+    totalResults,
     selectedIndex,
     open,
     close,
