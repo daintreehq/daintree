@@ -1,7 +1,13 @@
 import { describe, it, expect } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
-import { filterSettings, countMatchesPerTab, HighlightText } from "../settingsSearchUtils";
+import {
+  filterSettings,
+  countMatchesPerTab,
+  HighlightText,
+  parseQuery,
+} from "../settingsSearchUtils";
 import { SETTINGS_SEARCH_INDEX } from "../settingsSearchIndex";
+import type { SettingsTab } from "../SettingsDialog";
 
 describe("filterSettings", () => {
   it("returns empty array for empty query", () => {
@@ -388,5 +394,119 @@ describe("tab-name ranking", () => {
         `"${group}" should return at least one tab-nav result`
       ).toBe(true);
     }
+  });
+});
+
+describe("fuzzy matching", () => {
+  it("matches prefix queries — 'notif' finds notifications", () => {
+    const results = filterSettings(SETTINGS_SEARCH_INDEX, "notif");
+    expect(results.some((r) => r.tab === "notifications")).toBe(true);
+  });
+
+  it("matches prefix queries — 'keybind' finds keyboard", () => {
+    const results = filterSettings(SETTINGS_SEARCH_INDEX, "keybind");
+    expect(results.some((r) => r.tab === "keyboard")).toBe(true);
+  });
+
+  it("matches 'shortcut' to keyboard entries", () => {
+    const results = filterSettings(SETTINGS_SEARCH_INDEX, "shortcut");
+    expect(results.some((r) => r.tab === "keyboard")).toBe(true);
+  });
+
+  it("matches 'perf' to performance mode", () => {
+    const results = filterSettings(SETTINGS_SEARCH_INDEX, "perf");
+    expect(results.some((r) => r.id === "terminal-performance-mode")).toBe(true);
+  });
+
+  it("matches 'font' to appearance entries", () => {
+    const results = filterSettings(SETTINGS_SEARCH_INDEX, "font");
+    expect(results.some((r) => r.tab === "terminalAppearance")).toBe(true);
+  });
+
+  it("matches 'dark mode' to appearance theme", () => {
+    const results = filterSettings(SETTINGS_SEARCH_INDEX, "dark mode");
+    expect(results.some((r) => r.id === "appearance-theme")).toBe(true);
+  });
+
+  it("does not return garbage for unrelated short queries", () => {
+    const results = filterSettings(SETTINGS_SEARCH_INDEX, "zzz");
+    expect(results).toHaveLength(0);
+  });
+});
+
+describe("parseQuery", () => {
+  it("extracts @modified token", () => {
+    const result = parseQuery("@modified");
+    expect(result.filterModified).toBe(true);
+    expect(result.cleanQuery).toBe("");
+    expect(result.tokens).toHaveLength(0);
+  });
+
+  it("extracts @mod shorthand", () => {
+    const result = parseQuery("@mod");
+    expect(result.filterModified).toBe(true);
+    expect(result.cleanQuery).toBe("");
+  });
+
+  it("strips @modified from compound query", () => {
+    const result = parseQuery("font @modified");
+    expect(result.filterModified).toBe(true);
+    expect(result.cleanQuery).toBe("font");
+    expect(result.tokens).toEqual(["font"]);
+  });
+
+  it("strips @mod from compound query", () => {
+    const result = parseQuery("@mod font size");
+    expect(result.filterModified).toBe(true);
+    expect(result.cleanQuery).toBe("font size");
+    expect(result.tokens).toEqual(["font", "size"]);
+  });
+
+  it("returns filterModified=false for normal queries", () => {
+    const result = parseQuery("font size");
+    expect(result.filterModified).toBe(false);
+    expect(result.cleanQuery).toBe("font size");
+    expect(result.tokens).toEqual(["font", "size"]);
+  });
+});
+
+describe("@modified filter", () => {
+  it("returns empty when @modified with no modifiedTabs", () => {
+    const results = filterSettings(SETTINGS_SEARCH_INDEX, "@modified");
+    expect(results).toHaveLength(0);
+  });
+
+  it("returns empty when @modified with empty modifiedTabs set", () => {
+    const results = filterSettings(SETTINGS_SEARCH_INDEX, "@modified", {
+      modifiedTabs: new Set<SettingsTab>(),
+    });
+    expect(results).toHaveLength(0);
+  });
+
+  it("returns all general entries when @modified with general in modifiedTabs", () => {
+    const modifiedTabs = new Set<SettingsTab>(["general"]);
+    const results = filterSettings(SETTINGS_SEARCH_INDEX, "@modified", { modifiedTabs });
+    expect(results.length).toBeGreaterThan(0);
+    expect(results.every((r) => r.tab === "general")).toBe(true);
+  });
+
+  it("filters fuzzy results by modifiedTabs with compound query", () => {
+    const modifiedTabs = new Set<SettingsTab>(["terminalAppearance"]);
+    const results = filterSettings(SETTINGS_SEARCH_INDEX, "font @modified", { modifiedTabs });
+    expect(results.length).toBeGreaterThan(0);
+    expect(results.every((r) => r.tab === "terminalAppearance")).toBe(true);
+  });
+
+  it("@mod shorthand works the same as @modified", () => {
+    const modifiedTabs = new Set<SettingsTab>(["general"]);
+    const full = filterSettings(SETTINGS_SEARCH_INDEX, "@modified", { modifiedTabs });
+    const short = filterSettings(SETTINGS_SEARCH_INDEX, "@mod", { modifiedTabs });
+    expect(full).toEqual(short);
+  });
+
+  it("compound @modified query returns empty when no modified tabs match", () => {
+    const modifiedTabs = new Set<SettingsTab>(["github"]);
+    const results = filterSettings(SETTINGS_SEARCH_INDEX, "font @modified", { modifiedTabs });
+    expect(results).toHaveLength(0);
   });
 });
