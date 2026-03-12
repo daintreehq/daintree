@@ -503,6 +503,8 @@ if (!gotTheLock) {
     isQuitting = true;
 
     console.log("[MAIN] Starting graceful shutdown...");
+    const { drainRateLimitQueues } = await import("./ipc/utils.js");
+    drainRateLimitQueues();
     getCrashRecoveryService().cleanupOnExit();
 
     // NOTE: Terminal state is persisted by the renderer via appClient.setState()
