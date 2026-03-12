@@ -18,7 +18,7 @@ test.describe.serial("Core: Settings Advanced", () => {
     if (ctx?.app) await closeApp(ctx.app);
   });
 
-  // ── Keyboard Shortcuts (4 tests) ──────────────────────────
+  // ── Keyboard Shortcuts (5 tests) ──────────────────────────
 
   test.describe.serial("Keyboard Shortcuts", () => {
     test("open settings and navigate to Keyboard tab", async () => {
@@ -97,6 +97,52 @@ test.describe.serial("Core: Settings Advanced", () => {
       const cancelBtn = window.locator(SEL.settings.shortcutCancelButton);
       await cancelBtn.click();
       await expect(recordPrompt).not.toBeVisible({ timeout: T_SHORT });
+
+      await searchInput.fill("");
+      await window.waitForTimeout(T_SETTLE);
+
+      await window.keyboard.press("Escape");
+      await expect(window.locator(SEL.settings.heading)).not.toBeVisible({ timeout: T_SHORT });
+    });
+
+    test("per-shortcut reset button restores default binding", async () => {
+      const { window } = ctx;
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await window.evaluate(() =>
+        (window as unknown as Record<string, any>).electron?.keybinding?.setOverride(
+          "panel.openSettings",
+          ["Ctrl+Shift+Z"]
+        )
+      );
+
+      await window.locator(SEL.toolbar.openSettings).click();
+      await expect(window.locator(SEL.settings.heading)).toBeVisible({ timeout: T_MEDIUM });
+
+      await window.locator(`${SEL.settings.navSidebar} button`, { hasText: "Keyboard" }).click();
+      await expect(window.locator("h3", { hasText: "Keyboard Shortcuts" })).toBeVisible({
+        timeout: T_SHORT,
+      });
+
+      const searchInput = window.locator(SEL.settings.shortcutsSearchInput);
+      await searchInput.fill("Open settings");
+      await window.waitForTimeout(T_SETTLE);
+
+      const row = window
+        .locator(".group")
+        .filter({
+          has: window.locator("button", { hasText: "Edit" }),
+        })
+        .first();
+      await row.scrollIntoViewIfNeeded();
+      await row.hover();
+
+      const resetBtn = row.locator(SEL.settings.shortcutResetButton);
+      await expect(resetBtn).toBeVisible({ timeout: T_SHORT });
+      await resetBtn.click();
+
+      await row.hover();
+      await expect(resetBtn).not.toBeVisible({ timeout: T_SHORT });
 
       await searchInput.fill("");
       await window.waitForTimeout(T_SETTLE);
