@@ -431,7 +431,6 @@ describe("errorHandlers", () => {
       const mockWindow = createMockWindow();
       registerErrorHandlers(mockWindow as never, null, null);
 
-      const { FileSystemError } = await import("../../utils/errorTypes.js");
       const spawn = vi.fn(() => {
         const err = new Error("ENOENT: no such file") as NodeJS.ErrnoException;
         err.code = "ENOENT";
