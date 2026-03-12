@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useCallback, useRef } from "react";
+import { useState, useEffect, useMemo, useCallback, useRef, type KeyboardEvent } from "react";
 import { useDebounce } from "@/hooks/useDebounce";
 import { Search, ExternalLink, RefreshCw, WifiOff, Plus, Settings } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -7,6 +7,7 @@ import { githubClient } from "@/clients/githubClient";
 import { actionService } from "@/services/ActionService";
 import { GitHubListItem } from "./GitHubListItem";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
+import { useWorktreeDataStore } from "@/store/worktreeDataStore";
 import {
   useGitHubFilterStore,
   type IssueStateFilter,
@@ -51,6 +52,9 @@ export function GitHubResourceList({
   const [error, setError] = useState<string | null>(null);
   const [loadMoreError, setLoadMoreError] = useState<string | null>(null);
   const [exactNumberNotFound, setExactNumberNotFound] = useState<number | null>(null);
+  const [activeIndex, setActiveIndex] = useState(-1);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
 
   const debouncedSearch = useDebounce(searchQuery, 300);
 
@@ -218,11 +222,11 @@ export function GitHubResourceList({
     };
   }, [exactNumber, projectPath, type, filterState]);
 
-  const handleLoadMore = () => {
+  const handleLoadMore = useCallback(() => {
     if (!loadingMore && hasMore) {
       fetchData(cursor, true, undefined);
     }
-  };
+  }, [loadingMore, hasMore, fetchData, cursor]);
 
   const handleOpenInGitHub = () => {
     if (type === "issue") {
@@ -267,6 +271,96 @@ export function GitHubResourceList({
     setCursor(null);
     fetchData(null, false, undefined);
   };
+
+  const listId = `github-${type}-list`;
+  const maxIndex = data.length - 1 + (hasMore ? 1 : 0);
+  const activeItem = activeIndex >= 0 && activeIndex < data.length ? data[activeIndex] : null;
+  const activeItemId = activeItem ? `github-${type}-option-${activeItem.number}` : undefined;
+  const isLoadMoreActive = hasMore && activeIndex === data.length;
+
+  useEffect(() => {
+    setActiveIndex(-1);
+  }, [data]);
+
+  useEffect(() => {
+    if (activeIndex >= 0 && listRef.current) {
+      const activeEl = activeItemId
+        ? document.getElementById(activeItemId)
+        : isLoadMoreActive
+          ? document.getElementById(`github-${type}-load-more`)
+          : null;
+      activeEl?.scrollIntoView({ block: "nearest" });
+    }
+  }, [activeIndex, activeItemId, isLoadMoreActive, type]);
+
+  const handleInputKeyDown = useCallback(
+    (e: KeyboardEvent<HTMLInputElement>) => {
+      switch (e.key) {
+        case "ArrowDown":
+          e.preventDefault();
+          e.stopPropagation();
+          setActiveIndex((prev) => Math.min(prev + 1, maxIndex));
+          break;
+        case "ArrowUp":
+          e.preventDefault();
+          e.stopPropagation();
+          setActiveIndex((prev) => Math.max(prev - 1, -1));
+          break;
+        case "Enter": {
+          e.preventDefault();
+          e.stopPropagation();
+          if (isLoadMoreActive) {
+            handleLoadMore();
+          } else if (activeItem) {
+            if (e.metaKey || e.ctrlKey) {
+              void actionService.dispatch(
+                "system.openExternal",
+                { url: activeItem.url },
+                { source: "user" }
+              );
+            } else {
+              const worktrees = useWorktreeDataStore.getState().worktrees;
+              let matchedWt: { id: string } | undefined;
+              for (const wt of worktrees.values()) {
+                if (
+                  type === "issue"
+                    ? wt.issueNumber === activeItem.number
+                    : wt.prNumber === activeItem.number
+                ) {
+                  matchedWt = wt;
+                  break;
+                }
+              }
+              if (matchedWt) {
+                handleSwitchToWorktree(matchedWt.id);
+              } else if (
+                activeItem.state === "OPEN" &&
+                !(type === "pr" && "isFork" in activeItem && activeItem.isFork)
+              ) {
+                handleCreateWorktree(activeItem);
+              }
+            }
+          }
+          break;
+        }
+        case "Escape":
+          e.preventDefault();
+          e.stopPropagation();
+          onClose?.();
+          break;
+      }
+    },
+    [
+      maxIndex,
+      isLoadMoreActive,
+      activeItem,
+      handleLoadMore,
+      handleSwitchToWorktree,
+      handleCreateWorktree,
+      onClose,
+      type,
+    ]
+  );
 
   const renderSkeleton = (count: number) => {
     const safeCount = Number.isFinite(count) ? Math.floor(count) : MAX_SKELETON_ITEMS;
@@ -343,10 +437,19 @@ export function GitHubResourceList({
         <div className="relative">
           <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
           <input
+            ref={inputRef}
             type="text"
             placeholder={`Search ${type === "issue" ? "issues" : "pull requests"}...`}
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
+            onKeyDown={handleInputKeyDown}
+            autoFocus
+            role="combobox"
+            aria-autocomplete="list"
+            aria-expanded={true}
+            aria-haspopup="listbox"
+            aria-controls={listId}
+            aria-activedescendant={activeItemId}
             aria-label={`Search ${type === "issue" ? "issues" : "pull requests"}`}
             className={cn(
               "w-full h-8 pl-8 pr-3 rounded-[var(--radius-md)] text-sm",
@@ -417,14 +520,21 @@ export function GitHubResourceList({
                 )}
               </div>
             )}
-            <div className="divide-y divide-[var(--border-divider)]">
-              {data.map((item) => (
+            <div
+              ref={listRef}
+              id={listId}
+              role="listbox"
+              className="divide-y divide-[var(--border-divider)]"
+            >
+              {data.map((item, index) => (
                 <GitHubListItem
                   key={item.number}
                   item={item}
                   type={type}
                   onCreateWorktree={handleCreateWorktree}
                   onSwitchToWorktree={handleSwitchToWorktree}
+                  optionId={`github-${type}-option-${item.number}`}
+                  isActive={activeIndex === index}
                 />
               ))}
             </div>
@@ -459,10 +569,14 @@ export function GitHubResourceList({
                   </div>
                 )}
                 <Button
+                  id={`github-${type}-load-more`}
                   variant="ghost"
                   onClick={handleLoadMore}
                   disabled={loadingMore}
-                  className="w-full text-muted-foreground hover:text-canopy-text"
+                  className={cn(
+                    "w-full text-muted-foreground hover:text-canopy-text",
+                    isLoadMoreActive && "ring-1 ring-canopy-accent text-canopy-text"
+                  )}
                 >
                   {loadingMore ? (
                     <>

@@ -23,6 +23,8 @@ interface GitHubListItemProps {
   type: "issue" | "pr";
   onCreateWorktree?: (item: GitHubIssue | GitHubPR) => void;
   onSwitchToWorktree?: (worktreeId: string) => void;
+  optionId?: string;
+  isActive?: boolean;
 }
 
 function getStateIcon(state: string, type: "issue" | "pr") {
@@ -94,6 +96,8 @@ export function GitHubListItem({
   type,
   onCreateWorktree,
   onSwitchToWorktree,
+  optionId,
+  isActive,
 }: GitHubListItemProps) {
   const [copied, setCopied] = useState(false);
   const [copyError, setCopyError] = useState(false);
@@ -190,7 +194,15 @@ export function GitHubListItem({
   const overflowLabels = issueLabels.slice(3);
 
   return (
-    <div className="p-3 hover:bg-muted/50 transition-colors group cursor-default">
+    <div
+      id={optionId}
+      role="option"
+      aria-selected={isActive}
+      className={cn(
+        "p-3 hover:bg-muted/50 transition-colors group cursor-default",
+        isActive && "bg-muted/50"
+      )}
+    >
       <div className="flex items-start gap-3">
         <div className={cn("mt-0.5 shrink-0", stateColor)}>
           <StateIcon className="h-4 w-4" />

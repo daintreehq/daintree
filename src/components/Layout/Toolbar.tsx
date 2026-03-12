@@ -622,14 +622,20 @@ export function Toolbar({
               </TooltipProvider>
               <FixedDropdown
                 open={issuesOpen}
-                onOpenChange={setIssuesOpen}
+                onOpenChange={(open) => {
+                  setIssuesOpen(open);
+                  if (!open) issuesButtonRef.current?.focus();
+                }}
                 anchorRef={issuesButtonRef}
                 className="p-0 w-[450px]"
               >
                 <GitHubResourceList
                   type="issue"
                   projectPath={currentProject.path}
-                  onClose={() => setIssuesOpen(false)}
+                  onClose={() => {
+                    setIssuesOpen(false);
+                    issuesButtonRef.current?.focus();
+                  }}
                   initialCount={stats?.issueCount}
                 />
               </FixedDropdown>
@@ -672,14 +678,20 @@ export function Toolbar({
               </TooltipProvider>
               <FixedDropdown
                 open={prsOpen}
-                onOpenChange={setPrsOpen}
+                onOpenChange={(open) => {
+                  setPrsOpen(open);
+                  if (!open) prsButtonRef.current?.focus();
+                }}
                 anchorRef={prsButtonRef}
                 className="p-0 w-[450px]"
               >
                 <GitHubResourceList
                   type="pr"
                   projectPath={currentProject.path}
-                  onClose={() => setPrsOpen(false)}
+                  onClose={() => {
+                    setPrsOpen(false);
+                    prsButtonRef.current?.focus();
+                  }}
                   initialCount={stats?.prCount}
                 />
               </FixedDropdown>
@@ -713,13 +725,19 @@ export function Toolbar({
               </TooltipProvider>
               <FixedDropdown
                 open={commitsOpen}
-                onOpenChange={setCommitsOpen}
+                onOpenChange={(open) => {
+                  setCommitsOpen(open);
+                  if (!open) commitsButtonRef.current?.focus();
+                }}
                 anchorRef={commitsButtonRef}
                 className="p-0 w-[450px]"
               >
                 <CommitList
                   projectPath={currentProject.path}
-                  onClose={() => setCommitsOpen(false)}
+                  onClose={() => {
+                    setCommitsOpen(false);
+                    commitsButtonRef.current?.focus();
+                  }}
                   initialCount={stats?.commitCount}
                 />
               </FixedDropdown>

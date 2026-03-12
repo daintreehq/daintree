@@ -9,9 +9,11 @@ import { parseConventionalCommit, getCommitTypeColor } from "./commitListUtils";
 
 interface CommitListItemProps {
   commit: GitCommit;
+  optionId?: string;
+  isActive?: boolean;
 }
 
-export function CommitListItem({ commit }: CommitListItemProps) {
+export function CommitListItem({ commit, optionId, isActive }: CommitListItemProps) {
   const [copied, setCopied] = useState(false);
   const timeoutRef = useRef<number | undefined>(undefined);
 
@@ -67,7 +69,15 @@ export function CommitListItem({ commit }: CommitListItemProps) {
   };
 
   return (
-    <div className="p-3 hover:bg-muted/50 transition-colors group cursor-default">
+    <div
+      id={optionId}
+      role="option"
+      aria-selected={isActive}
+      className={cn(
+        "p-3 hover:bg-muted/50 transition-colors group cursor-default",
+        isActive && "bg-muted/50"
+      )}
+    >
       <div className="flex items-start gap-3">
         <div className="mt-0.5 shrink-0 text-muted-foreground">
           <GitCommitHorizontal className="h-4 w-4" />

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef, type KeyboardEvent } from "react";
 import { useDebounce } from "@/hooks/useDebounce";
 import { Search, RefreshCw, AlertCircle, ExternalLink } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -27,10 +27,48 @@ export function CommitList({ projectPath, onClose, initialCount }: CommitListPro
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loadMoreError, setLoadMoreError] = useState<string | null>(null);
+  const [cursorIndex, setCursorIndex] = useState(-1);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
 
   const debouncedSearch = useDebounce(searchQuery, 300);
 
   const groupedRows = useMemo(() => buildGroupedRows(data), [data]);
+
+  const interactiveIndices = useMemo(
+    () =>
+      groupedRows.reduce<number[]>((acc, row, i) => {
+        if (row.kind === "commit") acc.push(i);
+        return acc;
+      }, []),
+    [groupedRows]
+  );
+
+  const maxCursor = interactiveIndices.length - 1 + (hasMore ? 1 : 0);
+  const activeRawIndex =
+    cursorIndex >= 0 && cursorIndex < interactiveIndices.length
+      ? interactiveIndices[cursorIndex]
+      : -1;
+  const activeCommitRow = activeRawIndex >= 0 ? groupedRows[activeRawIndex] : null;
+  const activeCommit = activeCommitRow?.kind === "commit" ? activeCommitRow.commit : null;
+  const activeCommitId = activeCommit ? `commit-option-${activeCommit.hash}` : undefined;
+  const isLoadMoreActive = hasMore && cursorIndex === interactiveIndices.length;
+  const listId = "commit-list";
+
+  useEffect(() => {
+    setCursorIndex(-1);
+  }, [groupedRows]);
+
+  useEffect(() => {
+    if (cursorIndex >= 0) {
+      const activeEl = activeCommitId
+        ? document.getElementById(activeCommitId)
+        : isLoadMoreActive
+          ? document.getElementById("commit-load-more")
+          : null;
+      activeEl?.scrollIntoView({ block: "nearest" });
+    }
+  }, [cursorIndex, activeCommitId, isLoadMoreActive]);
 
   const fetchData = useCallback(
     async (currentSkip: number, append: boolean = false, abortSignal?: AbortSignal) => {
@@ -98,11 +136,11 @@ export function CommitList({ projectPath, onClose, initialCount }: CommitListPro
     return () => abortController.abort();
   }, [debouncedSearch, projectPath, fetchData]);
 
-  const handleLoadMore = () => {
+  const handleLoadMore = useCallback(() => {
     if (!loadingMore && hasMore) {
       fetchData(skip, true, undefined);
     }
-  };
+  }, [loadingMore, hasMore, fetchData, skip]);
 
   const handleRetry = () => {
     setSkip(0);
@@ -113,6 +151,39 @@ export function CommitList({ projectPath, onClose, initialCount }: CommitListPro
     actionService.dispatch("github.openCommits", { projectPath }, { source: "user" });
     onClose?.();
   };
+
+  const handleInputKeyDown = useCallback(
+    (e: KeyboardEvent<HTMLInputElement>) => {
+      switch (e.key) {
+        case "ArrowDown":
+          e.preventDefault();
+          e.stopPropagation();
+          setCursorIndex((prev) => Math.min(prev + 1, maxCursor));
+          break;
+        case "ArrowUp":
+          e.preventDefault();
+          e.stopPropagation();
+          setCursorIndex((prev) => Math.max(prev - 1, -1));
+          break;
+        case "Enter": {
+          e.preventDefault();
+          e.stopPropagation();
+          if (isLoadMoreActive) {
+            handleLoadMore();
+          } else if (activeCommit) {
+            void navigator.clipboard.writeText(activeCommit.hash);
+          }
+          break;
+        }
+        case "Escape":
+          e.preventDefault();
+          e.stopPropagation();
+          onClose?.();
+          break;
+      }
+    },
+    [maxCursor, isLoadMoreActive, activeCommit, handleLoadMore, onClose]
+  );
 
   const renderSkeleton = (count: number) => {
     const safeCount = Number.isFinite(count) ? Math.floor(count) : MAX_SKELETON_ITEMS;
@@ -180,10 +251,19 @@ export function CommitList({ projectPath, onClose, initialCount }: CommitListPro
         <div className="relative">
           <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
           <input
+            ref={inputRef}
             type="text"
             placeholder="Search commits..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
+            onKeyDown={handleInputKeyDown}
+            autoFocus
+            role="combobox"
+            aria-autocomplete="list"
+            aria-expanded={true}
+            aria-haspopup="listbox"
+            aria-controls={listId}
+            aria-activedescendant={activeCommitId}
             aria-label="Search commits"
             className={cn(
               "w-full h-8 pl-8 pr-3 rounded-[var(--radius-md)] text-sm",
@@ -209,16 +289,25 @@ export function CommitList({ projectPath, onClose, initialCount }: CommitListPro
           renderEmpty()
         ) : (
           <>
-            <div>
-              {groupedRows.map((row) =>
+            <div ref={listRef} id={listId} role="listbox">
+              {groupedRows.map((row, rawIndex) =>
                 row.kind === "separator" ? (
-                  <div key={`sep-${row.label}`} className="px-3 py-1.5 flex items-center gap-2">
+                  <div
+                    key={`sep-${row.label}`}
+                    role="none"
+                    className="px-3 py-1.5 flex items-center gap-2"
+                  >
                     <div className="h-px flex-1 bg-[var(--border-divider)]" />
                     <span className="text-xs text-muted-foreground shrink-0">{row.label}</span>
                     <div className="h-px flex-1 bg-[var(--border-divider)]" />
                   </div>
                 ) : (
-                  <CommitListItem key={row.commit.hash} commit={row.commit} />
+                  <CommitListItem
+                    key={row.commit.hash}
+                    commit={row.commit}
+                    optionId={`commit-option-${row.commit.hash}`}
+                    isActive={activeRawIndex === rawIndex}
+                  />
                 )
               )}
             </div>
@@ -239,10 +328,14 @@ export function CommitList({ projectPath, onClose, initialCount }: CommitListPro
                   </div>
                 )}
                 <Button
+                  id="commit-load-more"
                   variant="ghost"
                   onClick={handleLoadMore}
                   disabled={loadingMore}
-                  className="w-full text-muted-foreground hover:text-canopy-text"
+                  className={cn(
+                    "w-full text-muted-foreground hover:text-canopy-text",
+                    isLoadMoreActive && "ring-1 ring-canopy-accent text-canopy-text"
+                  )}
                 >
                   {loadingMore ? (
                     <>
