@@ -6,9 +6,11 @@ import type { OnboardingState } from "@shared/types";
 const trackMock = vi.fn(() => Promise.resolve());
 
 const defaultOnboardingState: OnboardingState = {
+  schemaVersion: 1,
   completed: false,
   currentStep: null,
   migratedFromLocalStorage: true,
+  firstRunToastSeen: false,
 };
 
 const onboardingMock = {
