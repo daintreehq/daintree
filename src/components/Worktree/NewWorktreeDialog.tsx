@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useMemo } from "react";
+import { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { AppDialog } from "@/components/ui/AppDialog";
 import {
@@ -75,6 +75,11 @@ export function NewWorktreeDialog({
   const [prefixSelectedIndex, setPrefixSelectedIndex] = useState(0);
   const branchInputTouchedRef = useRef(false);
   const [gitUsername, setGitUsername] = useState<string | null>(null);
+
+  const [isDismissing, setIsDismissing] = useState(false);
+  const keepEditingButtonRef = useRef<HTMLButtonElement>(null);
+  const issueTouchedRef = useRef(false);
+  const pathTouchedRef = useRef(false);
 
   const assignWorktreeToSelf = usePreferencesStore((s) => s.assignWorktreeToSelf);
   const setAssignWorktreeToSelf = usePreferencesStore((s) => s.setAssignWorktreeToSelf);
@@ -390,6 +395,9 @@ export function NewWorktreeDialog({
     setGitUsername(null);
     recipeSelectionTouchedRef.current = false;
     branchInputTouchedRef.current = false;
+    issueTouchedRef.current = false;
+    pathTouchedRef.current = false;
+    setIsDismissing(false);
     setPrefixPickerOpen(false);
     setPrefixSelectedIndex(0);
 
@@ -582,6 +590,39 @@ export function NewWorktreeDialog({
     };
   }, [branchInput, rootPath]);
 
+  const isFormDirty = useMemo(() => {
+    if (branchInputTouchedRef.current && branchInput.trim()) return true;
+    if (issueTouchedRef.current) return true;
+    if (recipeSelectionTouchedRef.current) return true;
+    if (pathTouchedRef.current && worktreePath.trim()) return true;
+    return false;
+  }, [branchInput, worktreePath]);
+
+  const handleBeforeClose = useCallback((): boolean => {
+    if (!isFormDirty) return true;
+    if (isDismissing) {
+      setIsDismissing(false);
+      return false;
+    }
+    setIsDismissing(true);
+    return false;
+  }, [isFormDirty, isDismissing]);
+
+  const handleRequestClose = useCallback(() => {
+    if (handleBeforeClose()) onClose();
+  }, [handleBeforeClose, onClose]);
+
+  const handleIssueSelect = useCallback((issue: GitHubIssue | null) => {
+    setSelectedIssue(issue);
+    if (issue !== null) issueTouchedRef.current = true;
+  }, []);
+
+  useEffect(() => {
+    if (isDismissing) {
+      requestAnimationFrame(() => keepEditingButtonRef.current?.focus());
+    }
+  }, [isDismissing]);
+
   const handleCreate = async () => {
     if (!baseBranch) {
       setError("Please select a base branch");
@@ -725,6 +766,7 @@ export function NewWorktreeDialog({
     <AppDialog
       isOpen={isOpen}
       onClose={onClose}
+      onBeforeClose={handleBeforeClose}
       size="md"
       dismissible={!creating}
       data-testid="new-worktree-dialog"
@@ -779,7 +821,7 @@ export function NewWorktreeDialog({
                   <IssueSelector
                     projectPath={rootPath}
                     selectedIssue={selectedIssue}
-                    onSelect={setSelectedIssue}
+                    onSelect={handleIssueSelect}
                     disabled={creating}
                   />
                 </div>
@@ -873,7 +915,11 @@ export function NewWorktreeDialog({
                       <ChevronsUpDown className="opacity-50 shrink-0" />
                     </Button>
                   </PopoverTrigger>
-                  <PopoverContent className="w-[400px] p-0" align="start">
+                  <PopoverContent
+                    className="w-[400px] p-0"
+                    align="start"
+                    onEscapeKeyDown={(e) => e.stopPropagation()}
+                  >
                     <div className="flex items-center border-b border-canopy-border px-3">
                       <Search className="mr-2 h-4 w-4 opacity-50 shrink-0" />
                       <input
@@ -971,6 +1017,7 @@ export function NewWorktreeDialog({
                     align="start"
                     className="w-[var(--radix-popover-trigger-width)] p-0 bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] shadow-lg"
                     onOpenAutoFocus={(e) => e.preventDefault()}
+                    onEscapeKeyDown={(e) => e.stopPropagation()}
                   >
                     <div
                       ref={prefixListRef}
@@ -1060,7 +1107,10 @@ export function NewWorktreeDialog({
                     data-testid="worktree-path-input"
                     type="text"
                     value={worktreePath}
-                    onChange={(e) => setWorktreePath(e.target.value)}
+                    onChange={(e) => {
+                      setWorktreePath(e.target.value);
+                      pathTouchedRef.current = true;
+                    }}
                     placeholder="/path/to/worktree"
                     className="flex-1 px-3 py-2 bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] text-canopy-text focus:outline-none focus:ring-2 focus:ring-canopy-accent"
                     disabled={creating}
@@ -1173,7 +1223,11 @@ export function NewWorktreeDialog({
                         <ChevronsUpDown className="opacity-50 shrink-0" />
                       </Button>
                     </PopoverTrigger>
-                    <PopoverContent className="w-[400px] p-0" align="start">
+                    <PopoverContent
+                      className="w-[400px] p-0"
+                      align="start"
+                      onEscapeKeyDown={(e) => e.stopPropagation()}
+                    >
                       <div
                         id="recipe-list"
                         role="listbox"
@@ -1284,31 +1338,51 @@ export function NewWorktreeDialog({
       </AppDialog.Body>
 
       <AppDialog.Footer>
-        <Button variant="ghost" onClick={onClose} disabled={creating}>
-          Cancel
-        </Button>
-        <Button
-          onClick={handleCreate}
-          disabled={
-            creating ||
-            loading ||
-            (initialPR !== null && initialPR !== undefined && prBranchResolved === false)
-          }
-          className="min-w-[100px]"
-          data-testid="create-worktree-button"
-        >
-          {creating ? (
-            <>
-              <Loader2 className="animate-spin" />
-              Creating...
-            </>
-          ) : (
-            <>
-              <Check />
-              Create
-            </>
-          )}
-        </Button>
+        {isDismissing ? (
+          <>
+            <span role="alert" className="flex-1 text-sm text-canopy-text/70">
+              Discard unsaved changes?
+            </span>
+            <Button
+              ref={keepEditingButtonRef}
+              variant="ghost"
+              onClick={() => setIsDismissing(false)}
+            >
+              Keep Editing
+            </Button>
+            <Button variant="destructive" onClick={onClose}>
+              Discard
+            </Button>
+          </>
+        ) : (
+          <>
+            <Button variant="ghost" onClick={handleRequestClose} disabled={creating}>
+              Cancel
+            </Button>
+            <Button
+              onClick={handleCreate}
+              disabled={
+                creating ||
+                loading ||
+                (initialPR !== null && initialPR !== undefined && prBranchResolved === false)
+              }
+              className="min-w-[100px]"
+              data-testid="create-worktree-button"
+            >
+              {creating ? (
+                <>
+                  <Loader2 className="animate-spin" />
+                  Creating...
+                </>
+              ) : (
+                <>
+                  <Check />
+                  Create
+                </>
+              )}
+            </Button>
+          </>
+        )}
       </AppDialog.Footer>
     </AppDialog>
   );
