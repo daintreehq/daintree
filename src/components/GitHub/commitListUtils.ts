@@ -49,7 +49,7 @@ export function getCommitDateGroupLabel(dateString: string, now?: Date): DateGro
   const todayMidnight = dayMidnightMs(ref);
   const oneDayMs = 24 * 60 * 60 * 1000;
 
-  if (commitMidnight === todayMidnight) return "Today";
+  if (commitMidnight >= todayMidnight) return "Today";
   if (commitMidnight === todayMidnight - oneDayMs) return "Yesterday";
   if (commitMidnight >= todayMidnight - 6 * oneDayMs) return "This Week";
 

@@ -74,7 +74,7 @@ describe("parseConventionalCommit", () => {
     expect(parseConventionalCommit("feat: ")).toBeNull();
   });
 
-  it("treats empty scope as null", () => {
+  it("rejects empty scope parentheses", () => {
     const result = parseConventionalCommit("feat(): add something");
     expect(result).toBeNull();
   });
