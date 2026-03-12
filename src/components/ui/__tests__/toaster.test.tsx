@@ -1,6 +1,5 @@
 // @vitest-environment jsdom
-import { render, screen, act } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
+import { render, screen, act, fireEvent } from "@testing-library/react";
 import { describe, expect, it, beforeEach, vi, afterEach } from "vitest";
 import { useNotificationStore } from "@/store/notificationStore";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
@@ -121,7 +120,6 @@ describe("Toast accessibility", () => {
   });
 
   it("restores focus to previously focused element on dismiss", async () => {
-    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     const target = document.createElement("button");
     target.textContent = "Target";
     document.body.appendChild(target);
@@ -137,7 +135,9 @@ describe("Toast accessibility", () => {
     await act(async () => {
       dismissButton.focus();
     });
-    await user.click(dismissButton);
+    await act(async () => {
+      fireEvent.click(dismissButton);
+    });
 
     expect(document.activeElement).toBe(target);
     document.body.removeChild(target);

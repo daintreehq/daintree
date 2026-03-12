@@ -30,9 +30,10 @@ function Toast({ notification }: { notification: Notification }) {
   }, []);
 
   useEffect(() => {
-    const text = typeof notification.message === "string"
-      ? notification.message
-      : (notification.inboxMessage ?? "");
+    const text =
+      typeof notification.message === "string"
+        ? notification.message
+        : (notification.inboxMessage ?? "");
     if (!text) return;
     const fullText = notification.title ? `${notification.title}: ${text}` : text;
     const priority = notification.type === "error" ? "assertive" : "polite";
