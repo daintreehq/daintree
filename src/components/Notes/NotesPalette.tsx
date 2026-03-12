@@ -15,6 +15,7 @@ import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { languages } from "@codemirror/language-data";
 import { EditorView } from "@codemirror/view";
 import { canopyTheme } from "./editorTheme";
+import { MarkdownToolbar } from "./MarkdownToolbar";
 import {
   Plus,
   Trash2,
@@ -79,6 +80,7 @@ export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
   const searchTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const titleInputRef = useRef<HTMLInputElement>(null);
   const headerTitleInputRef = useRef<HTMLInputElement>(null);
+  const editorViewRef = useRef<EditorView | null>(null);
 
   const {
     notes,
@@ -979,7 +981,7 @@ export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
                     )}
 
                     {/* Editor / Preview */}
-                    <div className="flex-1 overflow-hidden">
+                    <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
                       {isLoadingContent ? (
                         <div className="flex items-center justify-center h-full text-canopy-text/50 text-sm">
                           Loading...
@@ -987,24 +989,30 @@ export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
                       ) : paletteViewMode === "preview" ? (
                         <MarkdownPreview content={noteContent} />
                       ) : (
-                        <div className="h-full text-[13px] font-mono [&_.cm-editor]:h-full [&_.cm-scroller]:p-4 [&_.cm-placeholder]:text-canopy-text/30 [&_.cm-placeholder]:italic">
-                          <CodeMirror
-                            value={noteContent}
-                            height="100%"
-                            theme={canopyTheme}
-                            extensions={extensions}
-                            onChange={handleContentChange}
-                            readOnly={hasConflict}
-                            basicSetup={{
-                              lineNumbers: false,
-                              foldGutter: false,
-                              highlightActiveLine: false,
-                              highlightActiveLineGutter: false,
-                            }}
-                            className="h-full"
-                            placeholder="Start writing..."
-                          />
-                        </div>
+                        <>
+                          {!hasConflict && <MarkdownToolbar editorViewRef={editorViewRef} />}
+                          <div className="flex-1 overflow-hidden text-[13px] font-mono [&_.cm-editor]:h-full [&_.cm-scroller]:p-4 [&_.cm-placeholder]:text-canopy-text/30 [&_.cm-placeholder]:italic">
+                            <CodeMirror
+                              value={noteContent}
+                              height="100%"
+                              theme={canopyTheme}
+                              extensions={extensions}
+                              onChange={handleContentChange}
+                              onCreateEditor={(view) => {
+                                editorViewRef.current = view;
+                              }}
+                              readOnly={hasConflict}
+                              basicSetup={{
+                                lineNumbers: false,
+                                foldGutter: false,
+                                highlightActiveLine: false,
+                                highlightActiveLineGutter: false,
+                              }}
+                              className="h-full"
+                              placeholder="Start writing..."
+                            />
+                          </div>
+                        </>
                       )}
                     </div>
                   </>
