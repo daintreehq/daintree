@@ -477,7 +477,7 @@ describe("VoiceRecordingService — correction matching (stable ID)", () => {
     expect(mockVoiceFns.addPendingCorrection).not.toHaveBeenCalled();
   });
 
-  it("stop() registers the whole-session pending correction before finishSession clears the target", async () => {
+  it("stop() does not register a pending correction (streaming handles corrections)", async () => {
     const { voiceRecordingService } = await import("../VoiceRecordingService");
 
     const PANEL = "panel-1";
@@ -488,21 +488,17 @@ describe("VoiceRecordingService — correction matching (stable ID)", () => {
       activeParagraphStart: -1,
     };
     mockDraftStore.drafts[PANEL] = "short phrase";
+    // Streaming architecture: stop always returns null
     electron.voiceInput.stop.mockResolvedValue({
-      rawText: "short phrase",
-      correctionId: "uuid-stop",
+      rawText: null,
+      correctionId: null,
     });
 
     voiceRecordingService.initialize();
 
     await voiceRecordingService.stop("Dictation stopped.");
 
-    expect(mockVoiceFns.addPendingCorrection).toHaveBeenCalledWith(
-      PANEL,
-      "uuid-stop",
-      0,
-      "short phrase"
-    );
+    expect(mockVoiceFns.addPendingCorrection).not.toHaveBeenCalled();
   });
 
   it("correction resolves correctly on a non-active panel (post-session scan)", async () => {

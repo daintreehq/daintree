@@ -129,6 +129,12 @@ vi.mock("../../../store.js", () => ({
   },
 }));
 
+vi.mock("../../../services/voiceContextKeyterms.js", () => ({
+  assembleKeyterms: vi.fn(({ customDictionary }: { customDictionary: string[] }) =>
+    Promise.resolve(customDictionary)
+  ),
+}));
+
 vi.mock("../../channels.js", () => ({
   CHANNELS: {
     VOICE_INPUT_GET_SETTINGS: "voice-input:get-settings",

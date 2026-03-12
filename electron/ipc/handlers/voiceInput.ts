@@ -61,6 +61,7 @@ export class TranscriptionBuffer {
   private scan(isClosing: boolean): CorrectionCluster[] {
     const clusters: CorrectionCluster[] = [];
     let i = this.cursor;
+    let hasPendingCluster = false;
 
     while (i < this.buffer.length) {
       if (this.buffer[i].confidence >= CONFIDENCE_TAG_THRESHOLD) {
@@ -91,13 +92,19 @@ export class TranscriptionBuffer {
       } else {
         // Not enough right-context yet — wait for more segments
         this.cursor = clusterStart;
+        hasPendingCluster = true;
         break;
       }
     }
 
-    // If no cluster was pending and we're not closing, advance cursor to keep
-    // recent words available as future left-context
-    if (clusters.length === 0 && !isClosing && this.cursor < this.buffer.length) {
+    // Only advance cursor for left-context retention when there is no pending
+    // cluster waiting for right-context — otherwise we'd skip past its start.
+    if (
+      !hasPendingCluster &&
+      clusters.length === 0 &&
+      !isClosing &&
+      this.cursor < this.buffer.length
+    ) {
       this.cursor = Math.max(this.cursor, this.buffer.length - RIGHT_CONTEXT_WORDS);
     }
 
