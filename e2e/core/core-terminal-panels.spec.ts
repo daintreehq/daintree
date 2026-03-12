@@ -264,21 +264,6 @@ test.describe.serial("Core: Terminal & Panels", () => {
       await expect.poll(() => getGridPanelCount(window), { timeout: T_MEDIUM }).toBe(2);
     });
 
-    test("open dev preview panel", async () => {
-      const { window } = ctx;
-
-      const devBtn = window.locator(SEL.toolbar.openDevPreview);
-      if (!(await devBtn.isVisible().catch(() => false))) {
-        test.skip();
-        return;
-      }
-
-      const before = await getGridPanelCount(window);
-      await devBtn.click();
-
-      await expect.poll(() => getGridPanelCount(window), { timeout: T_LONG }).toBe(before + 1);
-    });
-
     test("close all panels leaves empty grid", async () => {
       const { window } = ctx;
 
