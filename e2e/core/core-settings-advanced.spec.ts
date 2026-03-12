@@ -108,7 +108,6 @@ test.describe.serial("Core: Settings Advanced", () => {
     test("per-shortcut reset button restores default binding", async () => {
       const { window } = ctx;
 
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       await window.evaluate(() =>
         (window as unknown as Record<string, any>).electron?.keybinding?.setOverride(
           "panel.openSettings",
