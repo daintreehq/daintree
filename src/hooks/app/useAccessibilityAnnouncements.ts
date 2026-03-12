@@ -91,11 +91,12 @@ export function useAccessibilityAnnouncements() {
 
   // Cleanup debounce timers on unmount
   useEffect(() => {
+    const timers = debounceTimersRef.current;
     return () => {
-      for (const timer of debounceTimersRef.current.values()) {
+      for (const timer of timers.values()) {
         clearTimeout(timer);
       }
-      debounceTimersRef.current.clear();
+      timers.clear();
     };
   }, []);
 }

@@ -49,8 +49,8 @@ export function SortableWorktreeTerminal({
     transition,
   };
 
-  // Omit role from attributes since we set it explicitly
-  const { role: _, ...attributesWithoutRole } = attributes;
+  // Omit role and aria-roledescription from attributes since we set them explicitly
+  const { role: _role, "aria-roledescription": _ariaRoleDesc, ...filteredAttributes } = attributes;
 
   return (
     <div
@@ -59,7 +59,7 @@ export function SortableWorktreeTerminal({
       className={cn(isDragging && "opacity-40")}
       role="listitem"
       aria-roledescription="sortable item"
-      {...attributesWithoutRole}
+      {...filteredAttributes}
     >
       {typeof children === "function" ? (
         children({ listeners })
