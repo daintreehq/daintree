@@ -70,7 +70,8 @@ export function useVerticalScrollShadows(
       resizeObserver.disconnect();
       el.removeEventListener("scroll", throttledUpdate);
     };
-  }, [scrollRef, updateScrollState, throttledUpdate]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scrollRef.current, updateScrollState, throttledUpdate]);
 
   return {
     canScrollUp: state.canScrollUp,
