@@ -18,6 +18,7 @@ import { STATE_ICONS, STATE_COLORS } from "@/components/Worktree/terminalStateCo
 import { TerminalRefreshTier } from "@/types";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { useDockPanelPortal } from "./DockPanelOffscreenContainer";
+import { useDockBlockedState } from "./useDockBlockedState";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 
 interface DockedTerminalItemProps {
@@ -181,6 +182,7 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
   const commandText = terminal.activityHeadline || terminal.lastCommand;
   const brandColor = getBrandColorHex(terminal.agentId ?? terminal.type);
   const agentState = terminal.agentState;
+  const blockedState = useDockBlockedState(terminal.agentState);
   // Use shortened title without command summary for dock items
   const displayTitle = getBaseTitle(terminal.title);
   // Only show icon for non-idle, non-completed states (reduce noise)
@@ -199,7 +201,13 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
               "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2",
               "cursor-grab active:cursor-grabbing",
               isOpen &&
-                "bg-[var(--dock-item-bg-active)] text-canopy-text border-[var(--dock-item-border-active)] ring-1 ring-inset ring-canopy-accent/30"
+                "bg-[var(--dock-item-bg-active)] text-canopy-text border-[var(--dock-item-border-active)] ring-1 ring-inset ring-canopy-accent/30",
+              !isOpen &&
+                blockedState === "waiting" &&
+                "bg-[var(--dock-item-bg-waiting)] border-[var(--dock-item-border-waiting)]",
+              !isOpen &&
+                blockedState === "failed" &&
+                "bg-[var(--dock-item-bg-failed)] border-[var(--dock-item-border-failed)]"
             )}
             onClick={(e) => {
               // Explicitly toggle popover state on click

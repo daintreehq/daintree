@@ -206,6 +206,10 @@
   --dock-item-bg-active: color-mix(in oklab, var(--theme-accent-primary) 12%, transparent);
   --dock-item-border: var(--theme-border-subtle);
   --dock-item-border-active: rgba(var(--theme-accent-rgb), 0.32);
+  --dock-item-bg-waiting: color-mix(in oklab, var(--color-state-waiting) 8%, transparent);
+  --dock-item-border-waiting: color-mix(in oklab, var(--color-state-waiting) 35%, transparent);
+  --dock-item-bg-failed: color-mix(in oklab, var(--color-status-error) 8%, transparent);
+  --dock-item-border-failed: color-mix(in oklab, var(--color-status-error) 40%, transparent);
 
   --animation-duration: 150ms;
   --transition-duration: 150ms;
