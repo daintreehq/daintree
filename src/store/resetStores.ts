@@ -9,6 +9,7 @@ import { useErrorStore } from "./errorStore";
 import { useNotificationStore } from "./notificationStore";
 import { cleanupNotesStore } from "./notesStore";
 import { useRecipeStore } from "./recipeStore";
+import { resetGitHubFilterStore } from "./githubFilterStore";
 interface ProjectSwitchResetOptions {
   preserveTerminalIds?: Set<string>;
 }
@@ -35,4 +36,5 @@ export async function resetAllStoresForProjectSwitch(
   useErrorStore.getState().reset();
   useNotificationStore.getState().reset();
   cleanupNotesStore();
+  resetGitHubFilterStore();
 }

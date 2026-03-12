@@ -7,8 +7,15 @@ import { githubClient } from "@/clients/githubClient";
 import { actionService } from "@/services/ActionService";
 import { GitHubListItem } from "./GitHubListItem";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
+import {
+  useGitHubFilterStore,
+  type IssueStateFilter,
+  type PRStateFilter,
+} from "@/store/githubFilterStore";
 import type { GitHubIssue, GitHubPR } from "@shared/types/github";
 import { parseExactNumber } from "@/lib/parseExactNumber";
+
+type StateFilter = IssueStateFilter | PRStateFilter;
 
 function sanitizeIpcError(message: string): string {
   const cleaned = message.replace(/^Error invoking remote method '[^']+': (?:Error: )?/, "").trim();
@@ -22,10 +29,6 @@ interface GitHubResourceListProps {
   initialCount?: number | null;
 }
 
-type IssueStateFilter = "open" | "closed" | "all";
-type PRStateFilter = "open" | "closed" | "merged" | "all";
-type StateFilter = IssueStateFilter | PRStateFilter;
-
 const ITEM_HEIGHT_PX = 64;
 const MAX_SKELETON_ITEMS = 6;
 
@@ -36,7 +39,10 @@ export function GitHubResourceList({
   initialCount,
 }: GitHubResourceListProps) {
   const [searchQuery, setSearchQuery] = useState("");
-  const [filterState, setFilterState] = useState<StateFilter>("open");
+  const filterState = useGitHubFilterStore((s) => (type === "issue" ? s.issueFilter : s.prFilter));
+  const setFilterState = useGitHubFilterStore((s) =>
+    type === "issue" ? s.setIssueFilter : s.setPrFilter
+  ) as (f: StateFilter) => void;
   const [data, setData] = useState<(GitHubIssue | GitHubPR)[]>([]);
   const [cursor, setCursor] = useState<string | null>(null);
   const [hasMore, setHasMore] = useState(false);
