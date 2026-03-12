@@ -48,6 +48,7 @@ export function SortableDockItem({
       {...attributes}
       {...listeners}
       role="listitem"
+      aria-roledescription="sortable item"
     >
       <DragHandleProvider value={{ listeners }}>{children}</DragHandleProvider>
     </div>
