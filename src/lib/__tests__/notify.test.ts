@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach, vi, afterEach } from "vitest";
-import { notify } from "../notify";
+import { notify, _resetCoalesceMap } from "../notify";
 import { useNotificationStore } from "../../store/notificationStore";
 import { useNotificationHistoryStore } from "../../store/slices/notificationHistorySlice";
 
@@ -18,6 +18,7 @@ describe("notify()", () => {
   beforeEach(() => {
     useNotificationStore.setState({ notifications: [] });
     useNotificationHistoryStore.setState({ entries: [], unreadCount: 0 });
+    _resetCoalesceMap();
     mockShowNative.mockClear();
   });
 
@@ -376,6 +377,143 @@ describe("notify()", () => {
       notify({ type: "error", message: "Missed 2", priority: "high" });
 
       expect(useNotificationHistoryStore.getState().unreadCount).toBe(3);
+    });
+  });
+
+  describe("coalescing — merges rapid toasts with the same key", () => {
+    const makeCoalescePayload = (key = "agent:completed", message = "Agent done") => ({
+      type: "success" as const,
+      message,
+      priority: "high" as const,
+      title: "Agent task completed",
+      duration: 12000,
+      coalesce: {
+        key,
+        windowMs: 2000,
+        buildMessage: (count: number) => `${count} agents finished`,
+        buildTitle: () => "Agent tasks completed",
+        buildAction: (count: number) =>
+          count > 1
+            ? { label: "View all", onClick: () => {} }
+            : { label: "Go to terminal", onClick: () => {} },
+      },
+    });
+
+    it("coalesces two calls with same key into one toast", () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      const id1 = notify(makeCoalescePayload());
+      const id2 = notify(makeCoalescePayload());
+
+      expect(id1).toBe(id2);
+      expect(useNotificationStore.getState().notifications).toHaveLength(1);
+    });
+
+    it("records each event individually in history", () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      notify(makeCoalescePayload("agent:completed", "Agent 1 done"));
+      notify(makeCoalescePayload("agent:completed", "Agent 2 done"));
+
+      expect(useNotificationHistoryStore.getState().entries).toHaveLength(2);
+    });
+
+    it("updates toast message and title on coalesce", () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      notify(makeCoalescePayload());
+      notify(makeCoalescePayload());
+
+      const notification = useNotificationStore.getState().notifications[0];
+      expect(notification.message).toBe("2 agents finished");
+      expect(notification.title).toBe("Agent tasks completed");
+    });
+
+    it("updates action to multi-agent on coalesce", () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      notify(makeCoalescePayload());
+      notify(makeCoalescePayload());
+
+      const notification = useNotificationStore.getState().notifications[0];
+      expect(notification.action?.label).toBe("View all");
+    });
+
+    it("creates fresh toast after coalescing window expires", () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      const realDateNow = Date.now;
+
+      let now = 1000;
+      Date.now = () => now;
+
+      const id1 = notify(makeCoalescePayload());
+
+      now = 4000; // 3s later, past the 2s window
+      const id2 = notify(makeCoalescePayload());
+
+      expect(id1).not.toBe(id2);
+      expect(useNotificationStore.getState().notifications).toHaveLength(2);
+
+      Date.now = realDateNow;
+    });
+
+    it("refreshes window on each coalesced update", () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      const realDateNow = Date.now;
+
+      let now = 1000;
+      Date.now = () => now;
+
+      const id1 = notify(makeCoalescePayload());
+
+      now = 2500; // 1.5s later, within 2s window
+      const id2 = notify(makeCoalescePayload());
+      expect(id1).toBe(id2);
+
+      now = 4000; // 1.5s after last update, still within refreshed window
+      const id3 = notify(makeCoalescePayload());
+      expect(id1).toBe(id3);
+
+      expect(useNotificationStore.getState().notifications).toHaveLength(1);
+
+      Date.now = realDateNow;
+    });
+
+    it("does not coalesce across different keys", () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      const id1 = notify(makeCoalescePayload("agent:completed"));
+      const id2 = notify(makeCoalescePayload("agent:failed"));
+
+      expect(id1).not.toBe(id2);
+      expect(useNotificationStore.getState().notifications).toHaveLength(2);
+    });
+
+    it("starts fresh toast when existing toast is dismissed", () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      const id1 = notify(makeCoalescePayload());
+
+      // Dismiss the toast
+      useNotificationStore.getState().dismissNotification(id1);
+
+      const id2 = notify(makeCoalescePayload());
+      expect(id1).not.toBe(id2);
+      expect(useNotificationStore.getState().notifications).toHaveLength(2);
+    });
+
+    it("does not coalesce when no coalesce option is provided", () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      notify({ type: "warning", message: "Waiting 1", priority: "high" });
+      notify({ type: "warning", message: "Waiting 2", priority: "high" });
+
+      expect(useNotificationStore.getState().notifications).toHaveLength(2);
+    });
+
+    it("sets updatedAt on coalesced notification", () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      notify(makeCoalescePayload());
+      const firstUpdatedAt = useNotificationStore.getState().notifications[0].updatedAt;
+
+      notify(makeCoalescePayload());
+      const secondUpdatedAt = useNotificationStore.getState().notifications[0].updatedAt;
+
+      expect(secondUpdatedAt).toBeDefined();
+      expect(secondUpdatedAt).toBeGreaterThanOrEqual(firstUpdatedAt!);
     });
   });
 });

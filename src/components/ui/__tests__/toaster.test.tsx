@@ -234,4 +234,57 @@ describe("Toast accessibility", () => {
     expect(toast.className).toContain("motion-reduce:transition-none");
     expect(toast.className).toContain("motion-reduce:duration-0");
   });
+
+  it("resets auto-dismiss timer when updatedAt changes", async () => {
+    render(<Toaster />);
+    let toastId: string;
+    await act(async () => {
+      toastId = addToast({ duration: 3000, message: "Initial" });
+      vi.advanceTimersByTime(16);
+    });
+
+    // Advance 2s into the 3s timer
+    await act(async () => {
+      vi.advanceTimersByTime(2000);
+    });
+    expect(screen.getByText("Initial")).toBeTruthy();
+
+    // Update the notification — timer should reset
+    await act(async () => {
+      useNotificationStore.getState().updateNotification(toastId!, {
+        message: "Updated",
+      });
+    });
+
+    // Advance another 2s — original timer would have expired but reset timer hasn't
+    await act(async () => {
+      vi.advanceTimersByTime(2000);
+    });
+    expect(screen.getByText("Updated")).toBeTruthy();
+
+    // Advance past the full reset duration
+    await act(async () => {
+      vi.advanceTimersByTime(1500);
+    });
+    expect(screen.queryByText("Updated")).toBeNull();
+  });
+
+  it("re-announces via screen reader when updatedAt changes", async () => {
+    render(<Toaster />);
+    let toastId: string;
+    await act(async () => {
+      toastId = addToast({ message: "1 agent done" });
+      vi.advanceTimersByTime(16);
+    });
+
+    expect(useAnnouncerStore.getState().polite?.msg).toBe("1 agent done");
+
+    await act(async () => {
+      useNotificationStore.getState().updateNotification(toastId!, {
+        message: "2 agents done",
+      });
+    });
+
+    expect(useAnnouncerStore.getState().polite?.msg).toBe("2 agents done");
+  });
 });

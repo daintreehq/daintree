@@ -5,6 +5,10 @@ interface UIState {
   pushOverlay: () => void;
   popOverlay: () => void;
   hasOpenOverlays: () => boolean;
+  notificationCenterOpen: boolean;
+  openNotificationCenter: () => void;
+  closeNotificationCenter: () => void;
+  toggleNotificationCenter: () => void;
 }
 
 export const useUIStore = create<UIState>((set, get) => ({
@@ -18,4 +22,10 @@ export const useUIStore = create<UIState>((set, get) => ({
     })),
 
   hasOpenOverlays: () => get().overlayCount > 0,
+
+  notificationCenterOpen: false,
+  openNotificationCenter: () => set({ notificationCenterOpen: true }),
+  closeNotificationCenter: () => set({ notificationCenterOpen: false }),
+  toggleNotificationCenter: () =>
+    set((state) => ({ notificationCenterOpen: !state.notificationCenterOpen })),
 }));

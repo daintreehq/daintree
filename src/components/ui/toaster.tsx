@@ -38,7 +38,7 @@ function Toast({ notification }: { notification: Notification }) {
     const fullText = notification.title ? `${notification.title}: ${text}` : text;
     const priority = notification.type === "error" ? "assertive" : "polite";
     useAnnouncerStore.getState().announce(fullText, priority);
-  }, [notification.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [notification.id, notification.updatedAt]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     const handle = requestAnimationFrame(() => setIsVisible(true));
@@ -70,7 +70,7 @@ function Toast({ notification }: { notification: Notification }) {
     if (notification.duration === 0 || isPaused) return;
     const timer = setTimeout(handleDismiss, notification.duration || 3000);
     return () => clearTimeout(timer);
-  }, [notification.duration, handleDismiss, isPaused]);
+  }, [notification.duration, notification.updatedAt, handleDismiss, isPaused]);
 
   const accentClass = ACCENT_CLASS[notification.type] ?? "border-l-status-info";
 
