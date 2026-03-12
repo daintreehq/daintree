@@ -148,9 +148,14 @@ test.describe.serial("Core: Terminal Search & Scrollback", () => {
       const { window } = ctx;
       const panel = getFirstGridPanel(window);
 
-      await panel.locator(SEL.terminal.xtermViewport).evaluate((el) => {
-        el.scrollTop = 0;
-      });
+      // Focus the terminal then use keyboard to scroll to top
+      await panel.locator(SEL.terminal.xtermRows).click();
+      await window.waitForTimeout(T_SETTLE);
+
+      // Send Shift+PageUp multiple times to scroll to the top
+      for (let i = 0; i < 15; i++) {
+        await window.keyboard.press("Shift+PageUp");
+      }
       await window.waitForTimeout(T_SETTLE);
 
       await expect(panel.locator(SEL.terminal.xtermRows)).toContainText("SCROLLBACK_TOP", {
@@ -162,9 +167,10 @@ test.describe.serial("Core: Terminal Search & Scrollback", () => {
       const { window } = ctx;
       const panel = getFirstGridPanel(window);
 
-      await panel.locator(SEL.terminal.xtermViewport).evaluate((el) => {
-        el.scrollTop = el.scrollHeight;
-      });
+      // Send Shift+PageDown multiple times to scroll to the bottom
+      for (let i = 0; i < 15; i++) {
+        await window.keyboard.press("Shift+PageDown");
+      }
       await window.waitForTimeout(T_SETTLE);
 
       await waitForTerminalText(panel, "SCROLLBACK_BOTTOM", T_MEDIUM);
