@@ -23,10 +23,15 @@ test.describe.serial("Core: Security", () => {
   });
 
   test("main window uses secure webPreferences", async () => {
-    const prefs = await ctx.app.evaluate(({ BrowserWindow }) => {
-      const win = BrowserWindow.getAllWindows()[0];
-      return win?.webContents.getLastWebPreferences() ?? null;
-    });
+    const prefs = await ctx.app.evaluate(
+      ({ BrowserWindow }, { pageTitle }) => {
+        const win = BrowserWindow.getAllWindows().find(
+          (w) => w.webContents.getTitle() === pageTitle
+        );
+        return win?.webContents.getLastWebPreferences() ?? null;
+      },
+      { pageTitle: await ctx.window.title() }
+    );
     expect(prefs).not.toBeNull();
     expect(prefs!.contextIsolation).toBe(true);
     expect(prefs!.nodeIntegration).toBe(false);
@@ -37,6 +42,6 @@ test.describe.serial("Core: Security", () => {
     const content = await ctx.window
       .locator('meta[http-equiv="Content-Security-Policy"]')
       .getAttribute("content");
-    expect(content).toBeTruthy();
+    expect(content).toMatch(/\b(default-src|script-src)\b/);
   });
 });
