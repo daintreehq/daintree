@@ -35,6 +35,7 @@ interface SettingsSwitchCardProps {
   variant?: "card" | "compact";
   isModified?: boolean;
   onReset?: () => void;
+  resetAriaLabel?: string;
 }
 
 export function SettingsSwitchCard({
@@ -49,6 +50,7 @@ export function SettingsSwitchCard({
   variant = "card",
   isModified,
   onReset,
+  resetAriaLabel,
 }: SettingsSwitchCardProps) {
   const scheme = COLOR_SCHEMES[colorScheme];
   const isCard = variant === "card";
@@ -112,13 +114,13 @@ export function SettingsSwitchCard({
       {button}
       <button
         type="button"
-        aria-label="Reset to default"
+        aria-label={resetAriaLabel ?? `Reset ${title} to default`}
         className={cn(
           "absolute top-1/2 -translate-y-1/2 z-10 p-1 rounded-sm",
           "text-canopy-text/40 hover:text-canopy-accent",
-          "opacity-0 group-hover:opacity-100 focus-visible:opacity-100",
+          "invisible group-hover:visible group-focus-within:visible focus-visible:visible",
           "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent",
-          "transition-all",
+          "transition-colors",
           isCard ? "right-[4.5rem]" : "right-[3.25rem]"
         )}
         onClick={onReset}
