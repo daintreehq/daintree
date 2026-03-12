@@ -155,7 +155,9 @@ export function AgentSetupWizard({
       </AppDialog.Header>
 
       <AppDialog.Body>
-        {step === "health" && <SystemHealthCheckStep onSkip={handleNext} />}
+        {step === "health" && (
+          <SystemHealthCheckStep onSkip={handleNext} agentIds={effectiveAgentOrder} />
+        )}
         {step === "welcome" && (
           <WelcomeStep availability={availability} agentOrder={effectiveAgentOrder} />
         )}

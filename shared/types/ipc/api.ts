@@ -262,7 +262,7 @@ export interface ElectronAPI {
     getAgentUpdateSettings(): Promise<AgentUpdateSettings>;
     setAgentUpdateSettings(settings: AgentUpdateSettings): Promise<void>;
     startAgentUpdate(payload: StartAgentUpdatePayload): Promise<StartAgentUpdateResult>;
-    healthCheck(): Promise<SystemHealthCheckResult>;
+    healthCheck(agentIds?: string[]): Promise<SystemHealthCheckResult>;
     downloadDiagnostics(): Promise<boolean>;
     onWake(callback: (data: SystemWakePayload) => void): () => void;
   };

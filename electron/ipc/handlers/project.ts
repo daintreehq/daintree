@@ -358,9 +358,12 @@ export function registerProjectHandlers(deps: HandlerDependencies): () => void {
   ipcMain.handle(CHANNELS.SYSTEM_START_AGENT_UPDATE, handleSystemStartAgentUpdate);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.SYSTEM_START_AGENT_UPDATE));
 
-  const handleSystemHealthCheck = async () => {
+  const handleSystemHealthCheck = async (
+    _event: Electron.IpcMainInvokeEvent,
+    agentIds?: string[]
+  ) => {
     const { runSystemHealthCheck } = await import("../../services/SystemHealthCheck.js");
-    return await runSystemHealthCheck();
+    return await runSystemHealthCheck(agentIds);
   };
   ipcMain.handle(CHANNELS.SYSTEM_HEALTH_CHECK, handleSystemHealthCheck);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.SYSTEM_HEALTH_CHECK));
