@@ -4,13 +4,17 @@ import { cn } from "@/lib/utils";
 import {
   useConsoleCaptureStore,
   type ConsoleLevel,
+  type ConsoleMessage,
   EMPTY_MESSAGES,
 } from "@/store/consoleCaptureStore";
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
+import { ObjectInspector } from "./ObjectInspector";
+import { StackTrace } from "./StackTrace";
 
 interface ConsolePanelProps {
   paneId: string;
   height?: number;
+  webContentsId?: number;
 }
 
 type LevelFilter = ConsoleLevel | "all";
@@ -54,35 +58,147 @@ function formatTime(ts: number): string {
   return `${h}:${m}:${s}.${ms}`;
 }
 
-export function ConsolePanel({ paneId, height = 200 }: ConsolePanelProps) {
+// Group types that act as headers
+const GROUP_HEADER_TYPES = new Set(["startGroup", "startGroupCollapsed"]);
+
+function ConsoleRow({
+  msg,
+  webContentsId,
+  isGroupCollapsed,
+  onToggleGroup,
+}: {
+  msg: ConsoleMessage;
+  webContentsId?: number;
+  isGroupCollapsed?: boolean;
+  onToggleGroup?: () => void;
+}) {
+  const style = LEVEL_STYLES[msg.level];
+  const isGroupHeader = GROUP_HEADER_TYPES.has(msg.cdpType);
+  const indentPx = msg.groupDepth * 12;
+
+  return (
+    <div
+      className={cn(
+        "flex items-start gap-2 px-2 py-0.5 border-b border-overlay/30 hover:bg-white/3",
+        style.row
+      )}
+      style={indentPx > 0 ? { paddingLeft: `${8 + indentPx}px` } : undefined}
+    >
+      <span className="shrink-0 text-canopy-text/30 select-none tabular-nums">
+        {formatTime(msg.timestamp)}
+      </span>
+      <span
+        className={cn(
+          "shrink-0 text-[9px] font-bold tracking-wide px-1 py-0.5 rounded select-none",
+          style.badge
+        )}
+      >
+        {style.label}
+      </span>
+      <div className="min-w-0 flex-1">
+        <div className="break-all whitespace-pre-wrap">
+          {isGroupHeader && onToggleGroup && (
+            <button
+              type="button"
+              onClick={onToggleGroup}
+              className="text-canopy-text/40 mr-1 select-none hover:text-canopy-text/60"
+            >
+              {isGroupCollapsed ? "▶" : "▼"}
+            </button>
+          )}
+          {msg.args.length > 0 ? (
+            msg.args.map((arg, i) => (
+              <span key={i}>
+                {i > 0 && <span className="mx-1" />}
+                <ObjectInspector arg={arg} webContentsId={webContentsId} isStale={msg.isStale} />
+              </span>
+            ))
+          ) : (
+            <span className="text-canopy-text/50">{msg.summaryText}</span>
+          )}
+        </div>
+        {msg.stackTrace && <StackTrace stackTrace={msg.stackTrace} />}
+      </div>
+    </div>
+  );
+}
+
+export function ConsolePanel({ paneId, height = 200, webContentsId }: ConsolePanelProps) {
   const [levelFilter, setLevelFilter] = useState<LevelFilter>("all");
   const [search, setSearch] = useState("");
   const [isAtBottom, setIsAtBottom] = useState(true);
+  const [collapsedGroups, setCollapsedGroups] = useState<Set<number>>(new Set());
   const scrollRef = useRef<HTMLDivElement>(null);
-  // Track the last visible message ID to correctly trigger scroll even when
-  // filtered.length doesn't change (e.g. at 500-message buffer cap)
   const prevLastIdRef = useRef<number | null>(null);
 
-  // Use stable empty array to avoid unnecessary rerenders when pane has no messages
   const allMessages = useConsoleCaptureStore(
     (state) => state.messages.get(paneId) ?? EMPTY_MESSAGES
   );
   const clearMessages = useConsoleCaptureStore((state) => state.clearMessages);
 
+  // Apply level and search filters, then handle group collapsing
   const filtered = useMemo(() => {
-    return allMessages.filter((msg) => {
+    // First pass: filter by level and search
+    let result = allMessages.filter((msg) => {
+      // Always show group headers regardless of level filter
+      if (GROUP_HEADER_TYPES.has(msg.cdpType)) return true;
+
       if (levelFilter !== "all") {
         if (levelFilter === "warning" && msg.level !== "warning") return false;
         if (levelFilter === "error" && msg.level !== "error") return false;
-        // "log" filter: show log and info (non-warning/non-error output)
         if (levelFilter === "log" && msg.level !== "log" && msg.level !== "info") return false;
       }
       if (search) {
-        return msg.message.toLowerCase().includes(search.toLowerCase());
+        return msg.summaryText.toLowerCase().includes(search.toLowerCase());
       }
       return true;
     });
-  }, [allMessages, levelFilter, search]);
+
+    // Second pass: hide children of collapsed groups
+    if (collapsedGroups.size > 0) {
+      const hidden = new Set<number>();
+      let skipDepth: number | null = null;
+
+      result = result.filter((msg) => {
+        if (skipDepth !== null) {
+          if (msg.groupDepth > skipDepth) return false;
+          skipDepth = null;
+        }
+
+        if (GROUP_HEADER_TYPES.has(msg.cdpType) && collapsedGroups.has(msg.id)) {
+          skipDepth = msg.groupDepth;
+          return true; // Show the header, hide children
+        }
+
+        return !hidden.has(msg.id);
+      });
+    }
+
+    return result;
+  }, [allMessages, levelFilter, search, collapsedGroups]);
+
+  // Auto-collapse startGroupCollapsed entries
+  useEffect(() => {
+    const newCollapsed = new Set<number>();
+    for (const msg of allMessages) {
+      if (msg.cdpType === "startGroupCollapsed") {
+        newCollapsed.add(msg.id);
+      }
+    }
+    if (newCollapsed.size > 0) {
+      setCollapsedGroups((prev) => {
+        const merged = new Set(prev);
+        let changed = false;
+        for (const id of newCollapsed) {
+          if (!merged.has(id)) {
+            merged.add(id);
+            changed = true;
+          }
+        }
+        return changed ? merged : prev;
+      });
+    }
+  }, [allMessages]);
 
   const errorCount = useMemo(
     () => allMessages.filter((m) => m.level === "error").length,
@@ -100,8 +216,6 @@ export function ConsolePanel({ paneId, height = 200 }: ConsolePanelProps) {
     setIsAtBottom(el.scrollTop + el.clientHeight >= el.scrollHeight - threshold);
   }, []);
 
-  // Auto-scroll: track last visible message ID so we also scroll when a new
-  // message arrives after the 500-msg buffer is full (length stays the same)
   const lastVisibleId = filtered.length > 0 ? filtered[filtered.length - 1].id : null;
   useEffect(() => {
     if (lastVisibleId === prevLastIdRef.current) return;
@@ -120,6 +234,18 @@ export function ConsolePanel({ paneId, height = 200 }: ConsolePanelProps) {
       el.scrollTop = el.scrollHeight;
       setIsAtBottom(true);
     }
+  }, []);
+
+  const toggleGroup = useCallback((msgId: number) => {
+    setCollapsedGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(msgId)) {
+        next.delete(msgId);
+      } else {
+        next.add(msgId);
+      }
+      return next;
+    });
   }, []);
 
   const buttonClass =
@@ -216,31 +342,17 @@ export function ConsolePanel({ paneId, height = 200 }: ConsolePanelProps) {
             {allMessages.length === 0 ? "No console output" : "No messages match filter"}
           </div>
         ) : (
-          filtered.map((msg) => {
-            const style = LEVEL_STYLES[msg.level];
-            return (
-              <div
-                key={msg.id}
-                className={cn(
-                  "flex items-start gap-2 px-2 py-0.5 border-b border-overlay/30 hover:bg-white/3",
-                  style.row
-                )}
-              >
-                <span className="shrink-0 text-canopy-text/30 select-none tabular-nums">
-                  {formatTime(msg.timestamp)}
-                </span>
-                <span
-                  className={cn(
-                    "shrink-0 text-[9px] font-bold tracking-wide px-1 py-0.5 rounded select-none",
-                    style.badge
-                  )}
-                >
-                  {style.label}
-                </span>
-                <span className="min-w-0 break-all whitespace-pre-wrap">{msg.message}</span>
-              </div>
-            );
-          })
+          filtered.map((msg) => (
+            <ConsoleRow
+              key={msg.id}
+              msg={msg}
+              webContentsId={webContentsId}
+              isGroupCollapsed={collapsedGroups.has(msg.id)}
+              onToggleGroup={
+                GROUP_HEADER_TYPES.has(msg.cdpType) ? () => toggleGroup(msg.id) : undefined
+              }
+            />
+          ))
         )}
       </div>
     </div>

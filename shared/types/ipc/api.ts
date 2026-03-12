@@ -676,6 +676,25 @@ export interface ElectronAPI {
     onFindShortcut(
       callback: (payload: { panelId: string; shortcut: "find" | "next" | "prev" | "close" }) => void
     ): () => void;
+    /** Start CDP console capture for a webview panel */
+    startConsoleCapture(webContentsId: number, paneId: string): Promise<void>;
+    /** Stop CDP console capture for a webview panel */
+    stopConsoleCapture(webContentsId: number, paneId: string): Promise<void>;
+    /** Clear tracked object references for a webview panel */
+    clearConsoleCapture(webContentsId: number, paneId: string): Promise<void>;
+    /** Fetch properties for a CDP remote object */
+    getConsoleProperties(
+      webContentsId: number,
+      objectId: string
+    ): Promise<import("./webviewConsole.js").CdpGetPropertiesResult>;
+    /** Subscribe to structured console messages */
+    onConsoleMessage(
+      callback: (row: import("./webviewConsole.js").SerializedConsoleRow) => void
+    ): () => void;
+    /** Subscribe to execution context cleared events (navigation) */
+    onConsoleContextCleared(
+      callback: (payload: { paneId: string; navigationGeneration: number }) => void
+    ): () => void;
   };
   hibernation: {
     getConfig(): Promise<HibernationConfig>;
