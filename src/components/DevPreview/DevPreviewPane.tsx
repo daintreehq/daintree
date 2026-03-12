@@ -26,6 +26,8 @@ import { actionService } from "@/services/ActionService";
 import { useWebviewThrottle } from "@/hooks/useWebviewThrottle";
 import { useWebviewDialog } from "@/hooks/useWebviewDialog";
 import { WebviewDialog } from "../Browser/WebviewDialog";
+import { FindBar } from "../Browser/FindBar";
+import { useFindInPage } from "@/hooks/useFindInPage";
 
 const scrollCache = new Map<string, { url: string; scrollY: number }>();
 
@@ -517,6 +519,7 @@ export function DevPreviewPane({
     webviewElement,
     isWebviewReady
   );
+  const findInPage = useFindInPage(id, webviewElement, isWebviewReady, isFocused);
 
   return (
     <ContentPanel
@@ -645,6 +648,7 @@ export function DevPreviewPane({
           ) : (
             <>
               {isDragging && <div className="absolute inset-0 z-10 bg-transparent" />}
+              {findInPage.isOpen && <FindBar find={findInPage} />}
               <webview
                 ref={setWebviewNode}
                 src={currentUrl}
