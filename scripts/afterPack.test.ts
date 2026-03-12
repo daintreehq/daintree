@@ -6,6 +6,8 @@ const mockExistsSync = vi.fn();
 const mockReaddirSync = vi.fn();
 const mockMkdirSync = vi.fn();
 const mockCopyFileSync = vi.fn();
+const mockStatSync = vi.fn();
+const mockRmSync = vi.fn();
 const consoleSpy = vi.spyOn(console, "log").mockImplementation(() => {});
 
 afterAll(() => {
@@ -36,6 +38,8 @@ describe("afterPack", () => {
           readdirSync: mockReaddirSync,
           mkdirSync: mockMkdirSync,
           copyFileSync: mockCopyFileSync,
+          statSync: mockStatSync,
+          rmSync: mockRmSync,
         };
       }
       return originalRequire.apply(this, [id]);
@@ -101,6 +105,15 @@ describe("afterPack", () => {
       await expect(afterPack(createContext("darwin", "/build/mac"))).rejects.toThrow(
         /native binary not found/
       );
+    });
+
+    it("should not strip GPU DLLs on macOS", async () => {
+      mockExistsSync.mockReturnValue(true);
+
+      await afterPack(createContext("darwin", "/build/mac"));
+
+      expect(mockStatSync).not.toHaveBeenCalled();
+      expect(mockRmSync).not.toHaveBeenCalled();
     });
   });
 
@@ -179,6 +192,68 @@ describe("afterPack", () => {
       expect(mockCopyFileSync).toHaveBeenCalledTimes(2);
     });
 
+    describe("GPU DLL stripping", () => {
+      const gpuFiles = [
+        "vk_swiftshader.dll",
+        "vulkan-1.dll",
+        "vk_swiftshader_icd.json",
+        "d3dcompiler_47.dll",
+      ];
+
+      it("should strip all GPU DLLs when present", async () => {
+        mockExistsSync.mockReturnValue(true);
+        mockStatSync.mockReturnValue({ size: 5_000_000 });
+
+        await afterPack(createContext("win32", "/build/win"));
+
+        for (const file of gpuFiles) {
+          expect(mockStatSync).toHaveBeenCalledWith(path.join("/build/win", file));
+          expect(mockRmSync).toHaveBeenCalledWith(path.join("/build/win", file));
+          expect(consoleSpy).toHaveBeenCalledWith(
+            expect.stringContaining(`[afterPack] Stripped ${file}`)
+          );
+        }
+      });
+
+      it("should skip missing GPU DLLs gracefully", async () => {
+        mockExistsSync.mockReturnValue(true);
+        const enoent = new Error("ENOENT") as NodeJS.ErrnoException;
+        enoent.code = "ENOENT";
+        mockStatSync.mockImplementation(() => {
+          throw enoent;
+        });
+
+        await afterPack(createContext("win32", "/build/win"));
+
+        expect(mockRmSync).not.toHaveBeenCalled();
+        for (const file of gpuFiles) {
+          expect(consoleSpy).toHaveBeenCalledWith(`[afterPack] ${file} not present, skipping`);
+        }
+      });
+
+      it("should rethrow non-ENOENT errors", async () => {
+        mockExistsSync.mockReturnValue(true);
+        mockStatSync.mockImplementation(() => {
+          throw new Error("EPERM: permission denied");
+        });
+
+        await expect(afterPack(createContext("win32", "/build/win"))).rejects.toThrow(
+          /EPERM: permission denied/
+        );
+      });
+
+      it("should log completion message", async () => {
+        mockExistsSync.mockReturnValue(true);
+        mockStatSync.mockReturnValue({ size: 1_000_000 });
+
+        await afterPack(createContext("win32", "/build/win"));
+
+        expect(consoleSpy).toHaveBeenCalledWith(
+          "[afterPack] GPU/Vulkan DLL stripping complete"
+        );
+      });
+    });
+
     it("should throw when conpty.dll missing and third_party unavailable", async () => {
       // node-pty exists, conpty.node exists, conpty_console_list.node exists,
       // conpty/conpty.dll missing, third_party/conpty missing
@@ -233,6 +308,15 @@ describe("afterPack", () => {
       await expect(afterPack(createContext("linux", "/build/linux"))).rejects.toThrow(
         /native binary not found/
       );
+    });
+
+    it("should not strip GPU DLLs on Linux", async () => {
+      mockExistsSync.mockReturnValue(true);
+
+      await afterPack(createContext("linux", "/build/linux"));
+
+      expect(mockStatSync).not.toHaveBeenCalled();
+      expect(mockRmSync).not.toHaveBeenCalled();
     });
   });
 

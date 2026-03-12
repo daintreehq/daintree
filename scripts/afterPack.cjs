@@ -95,6 +95,32 @@ exports.default = async function afterPack(context) {
     console.log(
       "[afterPack] Windows node-pty binaries verified (conpty.node, conpty_console_list.node, conpty/conpty.dll, conpty/OpenConsole.exe)"
     );
+
+    // Strip unused GPU/Vulkan DLLs to reduce Windows installer size.
+    // Canopy does not use WebGL, 3D rendering, or GPU-intensive canvas operations.
+    const gpuFilesToStrip = [
+      "vk_swiftshader.dll",
+      "vulkan-1.dll",
+      "vk_swiftshader_icd.json",
+      "d3dcompiler_47.dll",
+    ];
+    for (const file of gpuFilesToStrip) {
+      const filePath = path.join(appOutDir, file);
+      try {
+        const stats = fs.statSync(filePath);
+        fs.rmSync(filePath);
+        console.log(
+          `[afterPack] Stripped ${file} (${(stats.size / 1024 / 1024).toFixed(1)} MB)`
+        );
+      } catch (err) {
+        if (err.code === "ENOENT") {
+          console.log(`[afterPack] ${file} not present, skipping`);
+        } else {
+          throw err;
+        }
+      }
+    }
+    console.log("[afterPack] GPU/Vulkan DLL stripping complete");
   } else {
     // macOS and Linux use pty.node
     const nativeBinaryPath = path.join(nodePtyPath, "build/Release/pty.node");
