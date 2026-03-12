@@ -37,7 +37,7 @@ test.describe.serial("Core: Settings Advanced", () => {
       await expect(window.locator(SEL.settings.shortcutsSearchInput)).toBeVisible({
         timeout: T_SHORT,
       });
-      await expect(window.locator(SEL.settings.shortcutResetAllButton)).toBeVisible({
+      await expect(window.locator(SEL.settings.shortcutResetAllButton).first()).toBeVisible({
         timeout: T_SHORT,
       });
 
