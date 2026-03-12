@@ -23,12 +23,10 @@ test.describe.serial("Core: Project Pulse", () => {
     await expect(window.locator(SEL.pulse.heatmap)).toBeVisible({ timeout: T_LONG });
   });
 
-  test("summary stats are rendered", async () => {
+  test("card header shows project name and default range", async () => {
     const { window } = ctx;
-    // The card title includes the project name
     const title = window.getByText("Pulse Test Project Pulse");
     await expect(title).toBeVisible({ timeout: T_MEDIUM });
-    // The range trigger shows current range (default 60 days)
     const rangeTrigger = window.locator(SEL.pulse.rangeTrigger);
     await expect(rangeTrigger).toContainText("60 days", { timeout: T_SHORT });
   });
