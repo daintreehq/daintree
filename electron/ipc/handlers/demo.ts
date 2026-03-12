@@ -14,8 +14,6 @@ export function registerDemoHandlers(deps: HandlerDependencies): () => void {
     return () => {};
   }
 
-  console.log("[DEMO] Demo mode handlers registered");
-
   function sendCommandAndAwait(execChannel: string, payload?: unknown): Promise<void> {
     return new Promise<void>((resolve, reject) => {
       const timeout = setTimeout(() => {
