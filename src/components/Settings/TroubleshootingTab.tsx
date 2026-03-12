@@ -10,6 +10,7 @@ import {
   CircleCheck,
   CircleX,
   RotateCw,
+  Download,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { appClient, systemClient } from "@/clients";
@@ -81,6 +82,43 @@ function SystemHealthSection() {
           })}
         </div>
       )}
+    </SettingsSection>
+  );
+}
+
+function DownloadDiagnosticsSection() {
+  const [isDownloading, setIsDownloading] = useState(false);
+  const [downloadError, setDownloadError] = useState<string | null>(null);
+
+  const handleDownload = useCallback(async () => {
+    setIsDownloading(true);
+    setDownloadError(null);
+    try {
+      await systemClient.downloadDiagnostics();
+    } catch (err) {
+      setDownloadError(err instanceof Error ? err.message : "Failed to download diagnostics");
+    } finally {
+      setIsDownloading(false);
+    }
+  }, []);
+
+  return (
+    <SettingsSection
+      icon={Download}
+      title="Download Diagnostics"
+      description="Export a detailed snapshot of your system environment, app state, and recent logs for troubleshooting."
+    >
+      <Button
+        variant="outline"
+        size="sm"
+        onClick={() => void handleDownload()}
+        disabled={isDownloading}
+        className="text-canopy-text border-canopy-border hover:bg-canopy-border hover:text-canopy-text mb-3"
+      >
+        <Download className={cn("w-4 h-4", isDownloading && "animate-spin")} />
+        {isDownloading ? "Collecting..." : "Download Diagnostics"}
+      </Button>
+      {downloadError && <p className="text-xs text-status-error mb-3">{downloadError}</p>}
     </SettingsSection>
   );
 }
@@ -263,6 +301,8 @@ export function TroubleshootingTab() {
 
   return (
     <div className="space-y-6">
+      <DownloadDiagnosticsSection />
+
       <SystemHealthSection />
 
       <SettingsSection

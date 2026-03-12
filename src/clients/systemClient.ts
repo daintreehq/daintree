@@ -45,6 +45,10 @@ export const systemClient = {
     return window.electron.system.healthCheck();
   },
 
+  downloadDiagnostics: (): Promise<boolean> => {
+    return window.electron.system.downloadDiagnostics();
+  },
+
   onWake: (
     callback: (data: { sleepDuration: number; timestamp: number }) => void
   ): (() => void) => {
