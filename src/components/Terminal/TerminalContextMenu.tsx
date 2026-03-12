@@ -342,7 +342,9 @@ export function TerminalContextMenu({
           <ContextMenuItem onSelect={() => handleAction("rename")}>Rename Browser</ContextMenuItem>
           <ContextMenuSeparator />
           <ContextMenuItem onSelect={() => handleAction("trash")}>Close Browser</ContextMenuItem>
-          <ContextMenuItem onSelect={() => handleAction("kill")}>Remove Browser</ContextMenuItem>
+          <ContextMenuItem destructive onSelect={() => handleAction("kill")}>
+            Remove Browser
+          </ContextMenuItem>
         </ContextMenuContent>
       </ContextMenu>
     );
@@ -370,7 +372,11 @@ export function TerminalContextMenu({
             Reveal in Notes Palette
           </ContextMenuItem>
           <ContextMenuSeparator />
-          <ContextMenuItem disabled={!hasNotePath} onSelect={() => handleAction("delete-note")}>
+          <ContextMenuItem
+            destructive
+            disabled={!hasNotePath}
+            onSelect={() => handleAction("delete-note")}
+          >
             Delete Note
           </ContextMenuItem>
           <ContextMenuItem onSelect={() => handleAction("trash")}>Close Note</ContextMenuItem>
@@ -411,7 +417,9 @@ export function TerminalContextMenu({
           <ContextMenuItem onSelect={() => handleAction("trash")}>
             Close Dev Preview
           </ContextMenuItem>
-          <ContextMenuItem onSelect={() => handleAction("kill")}>Stop Dev Server</ContextMenuItem>
+          <ContextMenuItem destructive onSelect={() => handleAction("kill")}>
+            Stop Dev Server
+          </ContextMenuItem>
         </ContextMenuContent>
       </ContextMenu>
     );
@@ -505,7 +513,9 @@ export function TerminalContextMenu({
         </ContextMenuItem>
         <ContextMenuSeparator />
         <ContextMenuItem onSelect={() => handleAction("trash")}>Trash Terminal</ContextMenuItem>
-        <ContextMenuItem onSelect={() => handleAction("kill")}>Kill Terminal</ContextMenuItem>
+        <ContextMenuItem destructive onSelect={() => handleAction("kill")}>
+          Kill Terminal
+        </ContextMenuItem>
       </ContextMenuContent>
     </ContextMenu>
   );
