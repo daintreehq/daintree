@@ -6,10 +6,18 @@ import { logDebug, logInfo, logWarn, logError } from "../utils/logger.js";
 
 const P = "[VoiceTranscription]";
 
+export interface CorrectionWord {
+  word: string;
+  confidence: number;
+  start?: number;
+  end?: number;
+}
+
 export interface SegmentConfidence {
   minConfidence: number;
   wordCount: number;
   uncertainWords: string[];
+  words: CorrectionWord[];
 }
 
 export type VoiceTranscriptionEvent =
@@ -69,8 +77,8 @@ export class VoiceTranscriptionService {
     const text = (this.liveText || this.utteranceSegments.join(" ")).trim();
     // Conservative: mid-utterance cut cannot reliably split words, so force LLM correction.
     const confidence: SegmentConfidence = text
-      ? { minConfidence: 0, wordCount: 0, uncertainWords: [] }
-      : { minConfidence: 1.0, wordCount: 0, uncertainWords: [] };
+      ? { minConfidence: 0, wordCount: 0, uncertainWords: [], words: [] }
+      : { minConfidence: 1.0, wordCount: 0, uncertainWords: [], words: [] };
     this.resetUtteranceState();
     if (text) {
       this._suppressingUtterance = true;
@@ -212,12 +220,15 @@ export class VoiceTranscriptionService {
           const transcript: string = alt?.transcript ?? "";
           const isFinal: boolean = data.is_final ?? false;
           const speechFinal: boolean = data.speech_final ?? false;
-          const words: Array<{ word: string; confidence: number }> = isFinal
-            ? (((alt as Record<string, unknown>)?.words as Array<{
-                word: string;
-                confidence: number;
-              }>) ?? [])
-            : [];
+          const words: Array<{ word: string; confidence: number; start?: number; end?: number }> =
+            isFinal
+              ? (((alt as Record<string, unknown>)?.words as Array<{
+                  word: string;
+                  confidence: number;
+                  start?: number;
+                  end?: number;
+                }>) ?? [])
+              : [];
 
           logDebug(`${P} Transcript event`, { isFinal, speechFinal, len: transcript.length });
 
@@ -396,10 +407,10 @@ export class VoiceTranscriptionService {
   }
 
   private computeSegmentConfidence(
-    words: Array<{ word: string; confidence: number }>
+    words: Array<{ word: string; confidence: number; start?: number; end?: number }>
   ): SegmentConfidence {
     if (words.length === 0) {
-      return { minConfidence: 1.0, wordCount: 0, uncertainWords: [] };
+      return { minConfidence: 1.0, wordCount: 0, uncertainWords: [], words: [] };
     }
     return {
       minConfidence: Math.min(...words.map((w) => w.confidence)),
@@ -407,17 +418,24 @@ export class VoiceTranscriptionService {
       uncertainWords: words
         .filter((w) => w.confidence < CONFIDENCE_TAG_THRESHOLD)
         .map((w) => w.word),
+      words: words.map((w) => ({
+        word: w.word,
+        confidence: w.confidence,
+        ...(w.start !== undefined ? { start: w.start } : {}),
+        ...(w.end !== undefined ? { end: w.end } : {}),
+      })),
     };
   }
 
   private mergeConfidence(segments: SegmentConfidence[]): SegmentConfidence {
     if (segments.length === 0) {
-      return { minConfidence: 1.0, wordCount: 0, uncertainWords: [] };
+      return { minConfidence: 1.0, wordCount: 0, uncertainWords: [], words: [] };
     }
     return {
       minConfidence: Math.min(...segments.map((s) => s.minConfidence)),
       wordCount: segments.reduce((sum, s) => sum + s.wordCount, 0),
       uncertainWords: segments.flatMap((s) => s.uncertainWords),
+      words: segments.flatMap((s) => s.words),
     };
   }
 

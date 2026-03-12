@@ -682,37 +682,7 @@ class VoiceRecordingService {
       logDebug(`${LOG_PREFIX} Sending remote stop (graceful drain)`);
       this.isStoppingSession = true;
       useVoiceRecordingStore.getState().setStatus("finishing");
-      const stopResult = await window.electron.voiceInput.stop().catch(() => null);
-
-      if (stopResult?.correctionId && stopResult.rawText) {
-        const currentTarget = useVoiceRecordingStore.getState().activeTarget;
-        if (currentTarget) {
-          const { panelId, projectId } = currentTarget;
-          const voiceState = useVoiceRecordingStore.getState();
-          const buffer = voiceState.panelBuffers[panelId];
-          if (
-            !buffer?.pendingCorrections.some((pending) => pending.id === stopResult.correctionId)
-          ) {
-            const draft = useTerminalInputStore.getState().getDraftInput(panelId, projectId);
-            const preferredStart = buffer?.sessionDraftStart ?? -1;
-            const correctionStart =
-              preferredStart >= 0 &&
-              draft.slice(preferredStart, preferredStart + stopResult.rawText.length) ===
-                stopResult.rawText
-                ? preferredStart
-                : resolveQueuedCorrectionStart(draft, stopResult.rawText);
-
-            if (correctionStart >= 0) {
-              voiceState.addPendingCorrection(
-                panelId,
-                stopResult.correctionId,
-                correctionStart,
-                stopResult.rawText
-              );
-            }
-          }
-        }
-      }
+      await window.electron.voiceInput.stop().catch(() => null);
     }
 
     if (hasSession) {

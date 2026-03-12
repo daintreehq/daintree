@@ -5,11 +5,12 @@ import { store } from "../../store.js";
 import { projectStore } from "../../services/ProjectStore.js";
 import {
   VoiceTranscriptionService,
-  type SegmentConfidence,
+  type CorrectionWord,
 } from "../../services/VoiceTranscriptionService.js";
 import { VoiceCorrectionService } from "../../services/VoiceCorrectionService.js";
 import type { HandlerDependencies } from "../types.js";
 import type { VoiceInputSettings } from "../../../shared/types/ipc/api.js";
+import { CONFIDENCE_TAG_THRESHOLD } from "../../../shared/config/voiceCorrection.js";
 import { logDebug, logWarn } from "../../utils/logger.js";
 import { assembleKeyterms } from "../../services/voiceContextKeyterms.js";
 
@@ -17,7 +18,6 @@ let service: VoiceTranscriptionService | null = null;
 let activeEventUnsubscribe: (() => void) | null = null;
 let activeDestroyListener: { sender: Electron.WebContents; fn: () => void } | null = null;
 let correctionService: VoiceCorrectionService | null = null;
-let correctionRequestTail: Promise<void> = Promise.resolve();
 
 interface CorrectionEdit {
   start: number;
@@ -26,18 +26,141 @@ interface CorrectionEdit {
   toText: string;
 }
 
-interface QueuedCorrectionJob {
-  correctionId: string;
-  rawText: string;
-  reason: "stop";
-  minConfidence?: number;
-  uncertainWords?: string[];
-  wordCount?: number;
+// ── Streaming correction infrastructure ─────────────────────────────────────
+
+const RIGHT_CONTEXT_WORDS = 3;
+const POOL_CONCURRENCY_LIMIT = 5;
+const POOL_DRAIN_TIMEOUT_MS = 3000;
+const BUFFER_PRUNE_THRESHOLD = 100;
+
+interface CorrectionCluster {
+  clusterStartIndex: number;
+  words: CorrectionWord[];
+  leftContext: CorrectionWord[];
+  rightContext: CorrectionWord[];
 }
 
-let sessionTranscript = "";
-let sessionConfidenceSegments: SegmentConfidence[] = [];
-let pendingParagraphBreak = false;
+export class TranscriptionBuffer {
+  private buffer: CorrectionWord[] = [];
+  private cursor = 0;
+
+  append(words: CorrectionWord[]): CorrectionCluster[] {
+    this.buffer.push(...words);
+    return this.scan(false);
+  }
+
+  flush(): CorrectionCluster[] {
+    return this.scan(true);
+  }
+
+  reset(): void {
+    this.buffer = [];
+    this.cursor = 0;
+  }
+
+  private scan(isClosing: boolean): CorrectionCluster[] {
+    const clusters: CorrectionCluster[] = [];
+    let i = this.cursor;
+
+    while (i < this.buffer.length) {
+      if (this.buffer[i].confidence >= CONFIDENCE_TAG_THRESHOLD) {
+        i++;
+        continue;
+      }
+
+      // Found start of a low-confidence cluster
+      const clusterStart = i;
+      while (i < this.buffer.length && this.buffer[i].confidence < CONFIDENCE_TAG_THRESHOLD) {
+        i++;
+      }
+      const clusterEnd = i;
+
+      // Count right-context words available after the cluster
+      const rightContextEnd = Math.min(this.buffer.length, clusterEnd + RIGHT_CONTEXT_WORDS);
+      const rightContextAvailable = rightContextEnd - clusterEnd;
+
+      if (rightContextAvailable >= RIGHT_CONTEXT_WORDS || isClosing) {
+        const leftStart = Math.max(0, clusterStart - RIGHT_CONTEXT_WORDS);
+        clusters.push({
+          clusterStartIndex: clusterStart,
+          words: this.buffer.slice(clusterStart, clusterEnd),
+          leftContext: this.buffer.slice(leftStart, clusterStart),
+          rightContext: this.buffer.slice(clusterEnd, rightContextEnd),
+        });
+        this.cursor = rightContextEnd;
+      } else {
+        // Not enough right-context yet — wait for more segments
+        this.cursor = clusterStart;
+        break;
+      }
+    }
+
+    // If no cluster was pending and we're not closing, advance cursor to keep
+    // recent words available as future left-context
+    if (clusters.length === 0 && !isClosing && this.cursor < this.buffer.length) {
+      this.cursor = Math.max(this.cursor, this.buffer.length - RIGHT_CONTEXT_WORDS);
+    }
+
+    this.prune();
+    return clusters;
+  }
+
+  private prune(): void {
+    if (this.cursor <= BUFFER_PRUNE_THRESHOLD) return;
+    const keepFrom = Math.max(0, this.cursor - RIGHT_CONTEXT_WORDS);
+    this.buffer = this.buffer.slice(keepFrom);
+    this.cursor -= keepFrom;
+  }
+}
+
+export class PromisePool {
+  private active = 0;
+  private queue: Array<() => void> = [];
+  private drainResolvers: Array<() => void> = [];
+
+  constructor(private readonly limit: number) {}
+
+  add(task: () => Promise<void>): void {
+    if (this.active < this.limit) {
+      this.active++;
+      void this.run(task);
+    } else {
+      this.queue.push(() => {
+        this.active++;
+        void this.run(task);
+      });
+    }
+  }
+
+  async drain(): Promise<void> {
+    if (this.active === 0 && this.queue.length === 0) return;
+    return new Promise<void>((resolve) => {
+      this.drainResolvers.push(resolve);
+    });
+  }
+
+  private async run(task: () => Promise<void>): Promise<void> {
+    try {
+      await task();
+    } catch {
+      // Errors are handled inside the task
+    } finally {
+      this.active--;
+      if (this.queue.length > 0) {
+        const next = this.queue.shift()!;
+        next();
+      } else if (this.active === 0) {
+        const resolvers = this.drainResolvers.splice(0);
+        for (const resolve of resolvers) resolve();
+      }
+    }
+  }
+}
+
+// ── Session state ───────────────────────────────────────────────────────────
+
+let sessionBuffer: TranscriptionBuffer | null = null;
+let correctionPool: PromisePool | null = null;
 let sessionProjectInfo: { name?: string; path?: string } = {};
 
 const VOICE_INPUT_DEFAULTS: VoiceInputSettings = {
@@ -201,27 +324,6 @@ function getProjectInfo(): { name?: string; path?: string } {
   return { name: currentProject.name, path: currentProject.path };
 }
 
-function appendSessionText(text: string): void {
-  const normalized = text.trim();
-  if (!normalized) return;
-
-  if (sessionTranscript) {
-    if (pendingParagraphBreak) {
-      sessionTranscript += "\n";
-    } else if (!sessionTranscript.endsWith(" ") && !sessionTranscript.endsWith("\n")) {
-      sessionTranscript += " ";
-    }
-  }
-
-  sessionTranscript += normalized;
-  pendingParagraphBreak = false;
-}
-
-function markParagraphBreak(): void {
-  if (!sessionTranscript) return;
-  pendingParagraphBreak = true;
-}
-
 function computeCompactCorrectionEdits(rawText: string, correctedText: string): CorrectionEdit[] {
   if (rawText === correctedText) return [];
 
@@ -252,122 +354,73 @@ function computeCompactCorrectionEdits(rawText: string, correctedText: string): 
   ];
 }
 
-function getSessionCorrectionText(): string {
-  return sessionTranscript.replace(/[ \t]+$/g, "");
+function wordsToText(words: CorrectionWord[]): string {
+  return words.map((w) => w.word).join(" ");
 }
 
-function mergeSessionConfidence(): {
-  minConfidence: number;
-  uncertainWords: string[];
-  wordCount: number;
-} {
-  if (sessionConfidenceSegments.length === 0) {
-    return { minConfidence: 0, uncertainWords: [], wordCount: 0 };
-  }
-  return {
-    minConfidence: Math.min(...sessionConfidenceSegments.map((s) => s.minConfidence)),
-    uncertainWords: sessionConfidenceSegments.flatMap((s) => s.uncertainWords),
-    wordCount: sessionConfidenceSegments.reduce((sum, s) => sum + s.wordCount, 0),
-  };
-}
+function fireMicroCorrection(
+  cluster: CorrectionCluster,
+  win: Electron.BrowserWindow,
+  svc: VoiceCorrectionService
+): void {
+  if (!correctionPool) return;
 
-function buildCorrectionJob(): QueuedCorrectionJob | null {
-  const rawText = getSessionCorrectionText();
-  if (!rawText) return null;
+  const rawSpan = wordsToText(cluster.words);
+  const correctionId = crypto.randomUUID();
+  const uncertainWords = cluster.words
+    .filter((w) => w.confidence < CONFIDENCE_TAG_THRESHOLD)
+    .map((w) => w.word);
 
-  const { minConfidence, uncertainWords, wordCount } = mergeSessionConfidence();
-  const job: QueuedCorrectionJob = {
-    correctionId: crypto.randomUUID(),
-    rawText,
-    reason: "stop",
-    minConfidence,
+  logDebug("[VoiceStreamCorrection] firing micro-correction", {
+    correctionId,
+    rawSpan,
     uncertainWords,
-    wordCount,
-  };
-
-  sessionTranscript = "";
-  sessionConfidenceSegments = [];
-  pendingParagraphBreak = false;
-  return job;
-}
-
-function queueCorrectionRequest(job: QueuedCorrectionJob, win: Electron.BrowserWindow): void {
-  if (!correctionService || win.isDestroyed()) {
-    return;
-  }
-
-  logDebug("[VoiceCorrectionQueue] queued job", {
-    correctionId: job.correctionId,
-    reason: job.reason,
-    rawLen: job.rawText.length,
   });
 
-  const svc = correctionService;
-  correctionRequestTail = correctionRequestTail
-    .catch(() => {})
-    .then(async () => {
-      if (!correctionService) return;
-      const liveSettings = getVoiceSettings();
-      const result = await svc.correct(
-        {
-          rawText: job.rawText,
-          reason: job.reason,
-          uncertainWords: job.uncertainWords,
-          minConfidence: job.minConfidence,
-          wordCount: job.wordCount,
-        },
-        {
-          model: liveSettings.correctionModel,
-          apiKey: liveSettings.correctionApiKey,
-          customDictionary: liveSettings.customDictionary,
-          customInstructions: liveSettings.correctionCustomInstructions,
-          projectName: sessionProjectInfo.name,
-          projectPath: sessionProjectInfo.path,
-        }
-      );
-      const edits = computeCompactCorrectionEdits(job.rawText, result.confirmedText);
-
-      if (!win.isDestroyed()) {
-        win.webContents.send(CHANNELS.VOICE_INPUT_CORRECTION_REPLACE, {
-          correctionId: job.correctionId,
-          correctedText: result.confirmedText,
-          action: result.action,
-          confidence: result.confidence,
-          rawText: job.rawText,
-          reason: job.reason,
-          edits,
-        });
-      }
-    });
-}
-
-/**
- * Join the stabilized correction buffer into a single raw text string and clear it.
- * If correction is enabled, generates a stable correctionId, fires an async
- * correction call, and optionally notifies the renderer that the correction is pending.
- * Returns the raw text chunk and correctionId (null if correction is not queued).
- */
-function flushParagraphBuffer(win: Electron.BrowserWindow | null): {
-  rawText: string | null;
-  correctionId: string | null;
-} {
-  const job = buildCorrectionJob();
-  if (!job) return { rawText: null, correctionId: null };
-
-  const liveSettings = getVoiceSettings();
-  const willCorrect = !!(liveSettings.correctionEnabled && liveSettings.correctionApiKey);
-
-  if (willCorrect && correctionService && win && !win.isDestroyed()) {
+  // Notify renderer that a correction is pending
+  if (!win.isDestroyed()) {
     win.webContents.send(CHANNELS.VOICE_INPUT_CORRECTION_QUEUED, {
-      correctionId: job.correctionId,
-      rawText: job.rawText,
-      reason: job.reason,
+      correctionId,
+      rawText: rawSpan,
+      reason: "streaming",
     });
-    queueCorrectionRequest(job, win);
-    return { rawText: job.rawText, correctionId: job.correctionId };
   }
 
-  return { rawText: job.rawText, correctionId: null };
+  correctionPool.add(async () => {
+    if (!correctionService) return;
+    const liveSettings = getVoiceSettings();
+
+    const result = await svc.correctWord(
+      {
+        uncertainWords,
+        leftContext: wordsToText(cluster.leftContext),
+        rightContext: wordsToText(cluster.rightContext),
+        rawSpan,
+      },
+      {
+        model: liveSettings.correctionModel,
+        apiKey: liveSettings.correctionApiKey,
+        customDictionary: liveSettings.customDictionary,
+        customInstructions: liveSettings.correctionCustomInstructions,
+        projectName: sessionProjectInfo.name,
+        projectPath: sessionProjectInfo.path,
+      }
+    );
+
+    const edits = computeCompactCorrectionEdits(rawSpan, result.confirmedText);
+
+    if (!win.isDestroyed()) {
+      win.webContents.send(CHANNELS.VOICE_INPUT_CORRECTION_REPLACE, {
+        correctionId,
+        correctedText: result.confirmedText,
+        action: result.action,
+        confidence: result.confidence,
+        rawText: rawSpan,
+        reason: "streaming",
+        edits,
+      });
+    }
+  });
 }
 
 export function registerVoiceInputHandlers(deps: HandlerDependencies): () => void {
@@ -396,13 +449,13 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     if (!correctionService) {
       correctionService = new VoiceCorrectionService();
     }
-    correctionRequestTail = Promise.resolve();
 
-    // Capture project info and reset the session transcript at session start.
+    // Reset streaming correction state
+    sessionBuffer = new TranscriptionBuffer();
+    correctionPool = new PromisePool(POOL_CONCURRENCY_LIMIT);
+
+    // Capture project info at session start.
     sessionProjectInfo = getProjectInfo();
-    sessionTranscript = "";
-    sessionConfidenceSegments = [];
-    pendingParagraphBreak = false;
 
     // Assemble dynamic keyterms from project context (branch, terminal output, etc.)
     let sessionSettings = settings;
@@ -429,23 +482,29 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
       } else if (voiceEvent.type === "complete") {
         const rawText = voiceEvent.text.trim();
 
-        if (rawText) {
-          appendSessionText(rawText);
-        }
-        if (voiceEvent.confidence) {
-          sessionConfidenceSegments.push(voiceEvent.confidence);
-        }
-
         // Notify the renderer so it can finalize the utterance in the draft.
-        // willCorrect is always false here: correction is batched at paragraph level.
         win.webContents.send(CHANNELS.VOICE_INPUT_TRANSCRIPTION_COMPLETE, {
           text: rawText,
           willCorrect: false,
         });
+
+        // Feed word-level data into the streaming correction buffer
+        const liveSettings = getVoiceSettings();
+        const correctionEnabled = !!(
+          liveSettings.correctionEnabled && liveSettings.correctionApiKey
+        );
+        if (
+          correctionEnabled &&
+          correctionService &&
+          sessionBuffer &&
+          voiceEvent.confidence?.words?.length
+        ) {
+          const clusters = sessionBuffer.append(voiceEvent.confidence.words);
+          for (const cluster of clusters) {
+            fireMicroCorrection(cluster, win, correctionService);
+          }
+        }
       } else if (voiceEvent.type === "paragraph_boundary") {
-        // Deepgram detected a paragraph break. Keep the structure in the session
-        // transcript, but defer the single correction request until stop.
-        markParagraphBreak();
         win.webContents.send(CHANNELS.VOICE_INPUT_PARAGRAPH_BOUNDARY, {
           rawText: null,
           correctionId: null,
@@ -486,25 +545,39 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
 
   const handleStop = async (): Promise<{ rawText: string | null; correctionId: string | null }> => {
     if (service) {
-      // Drain first (waits for pending transcriptions), then clean up subscription.
+      // Drain Deepgram first (waits for pending transcriptions, fires remaining complete events).
       await service.stopGracefully();
     }
+
+    // Flush any remaining clusters that lacked right-context
+    const win = deps.mainWindow;
+    if (sessionBuffer && correctionService && win && !win.isDestroyed()) {
+      const remaining = sessionBuffer.flush();
+      for (const cluster of remaining) {
+        fireMicroCorrection(cluster, win, correctionService);
+      }
+    }
+
+    // Wait for all in-flight micro-corrections to complete (with timeout)
+    if (correctionPool) {
+      await Promise.race([
+        correctionPool.drain(),
+        new Promise<void>((resolve) => setTimeout(resolve, POOL_DRAIN_TIMEOUT_MS)),
+      ]);
+    }
+
     cleanupActiveSubscription();
 
-    return flushParagraphBuffer(deps.mainWindow);
+    // No batch correction — streaming corrections have already been fired
+    return { rawText: null, correctionId: null };
   };
 
   const handleFlushParagraph = (): { rawText: string | null; correctionId: string | null } => {
-    // Capture in-flight utterance text before inserting a paragraph break in the draft,
-    // but defer AI correction until the session stops.
+    // Capture in-flight utterance text before inserting a paragraph break in the draft.
+    // The buffer continues to accumulate words for streaming corrections across paragraphs.
     if (service) {
-      const { text: inFlightText, confidence } = service.commitParagraphBoundary();
-      if (inFlightText) {
-        appendSessionText(inFlightText);
-      }
-      sessionConfidenceSegments.push(confidence);
+      service.commitParagraphBoundary();
     }
-    markParagraphBreak();
     return { rawText: null, correctionId: null };
   };
 
@@ -563,8 +636,7 @@ export function registerVoiceInputHandlers(deps: HandlerDependencies): () => voi
     service?.destroy();
     service = null;
     correctionService = null;
-    sessionTranscript = "";
-    sessionConfidenceSegments = [];
-    pendingParagraphBreak = false;
+    sessionBuffer = null;
+    correctionPool = null;
   };
 }
