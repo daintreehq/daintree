@@ -60,6 +60,9 @@ export { useNativeContextMenu } from "./useNativeContextMenu";
 export { useHorizontalScrollControls } from "./useHorizontalScrollControls";
 export type { UseHorizontalScrollControlsReturn } from "./useHorizontalScrollControls";
 
+export { useVerticalScrollShadows } from "./useVerticalScrollShadows";
+export type { UseVerticalScrollShadowsReturn } from "./useVerticalScrollShadows";
+
 export { useDockRenderState } from "./useDockRenderState";
 
 export { useActionPalette } from "./useActionPalette";
