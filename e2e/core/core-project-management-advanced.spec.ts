@@ -42,6 +42,11 @@ test.describe.serial("Core: Project Management Advanced", () => {
     const primaryRow = palette.locator(`text="${PRIMARY_NAME}"`);
     await primaryRow.click();
     await expect(palette).not.toBeVisible({ timeout: T_MEDIUM });
+
+    // Verify primary project is active by checking sidebar has worktree cards
+    await expect(ctx.window.locator("[data-worktree-branch]").first()).toBeVisible({
+      timeout: T_LONG,
+    });
   });
 
   test.afterAll(async () => {
@@ -58,12 +63,10 @@ test.describe.serial("Core: Project Management Advanced", () => {
       const palette = window.locator(SEL.projectSwitcher.palette);
       await expect(palette).toBeVisible({ timeout: T_MEDIUM });
 
-      // Find the secondary project row and click its remove button
-      const secondaryRow = palette.locator(`[role="presentation"]`).filter({
-        hasText: SECONDARY_NAME,
-      });
-      await expect(secondaryRow).toBeVisible({ timeout: T_SHORT });
-      await secondaryRow.locator(SEL.projectSwitcher.removeButton).click({ force: true });
+      // Find the secondary project row and click its close/remove button
+      const secondaryOption = palette.getByRole("option", { name: new RegExp(SECONDARY_NAME) });
+      await expect(secondaryOption).toBeVisible({ timeout: T_SHORT });
+      await secondaryOption.locator(SEL.projectSwitcher.closeButton).click({ force: true });
 
       // Confirm dialog appears
       const dialog = window.getByRole("dialog", { name: "Remove Project from List?" });
@@ -97,10 +100,8 @@ test.describe.serial("Core: Project Management Advanced", () => {
       const palette = window.locator(SEL.projectSwitcher.palette);
       await expect(palette).toBeVisible({ timeout: T_MEDIUM });
 
-      const secondaryRow = palette.locator(`[role="presentation"]`).filter({
-        hasText: SECONDARY_NAME,
-      });
-      await secondaryRow.locator(SEL.projectSwitcher.removeButton).click({ force: true });
+      const secondaryOption = palette.getByRole("option", { name: new RegExp(SECONDARY_NAME) });
+      await secondaryOption.locator(SEL.projectSwitcher.closeButton).click({ force: true });
 
       const dialog = window.getByRole("dialog", { name: "Remove Project from List?" });
       await expect(dialog).toBeVisible({ timeout: T_MEDIUM });
@@ -134,15 +135,20 @@ test.describe.serial("Core: Project Management Advanced", () => {
       await expect(modal).toBeVisible({ timeout: T_LONG });
       await expect(modal.locator("h2", { hasText: "Worktrees Overview" })).toBeVisible();
 
-      // At least one worktree card should be visible
-      await expect(modal.locator("[data-worktree-branch]").first()).toBeVisible({
-        timeout: T_LONG,
-      });
+      // At least one worktree card should be visible (main + feature branch = 2)
+      const cards = modal.locator("[data-worktree-branch]");
+      await expect(cards.first()).toBeVisible({ timeout: T_LONG });
+      await expect.poll(() => cards.count(), { timeout: T_MEDIUM }).toBeGreaterThanOrEqual(2);
     });
 
     test("search filtering narrows displayed worktrees", async () => {
       const { window } = ctx;
       const modal = window.locator(SEL.worktree.overviewModal);
+      const cards = modal.locator("[data-worktree-branch]");
+
+      // Capture initial card count
+      const initialCount = await cards.count();
+      expect(initialCount).toBeGreaterThanOrEqual(2);
 
       // Open filter popover
       await modal.locator(SEL.worktree.filterButton).click();
@@ -151,29 +157,30 @@ test.describe.serial("Core: Project Management Advanced", () => {
 
       const searchInput = popover.locator('[aria-label="Search worktrees"]');
 
-      // Search for a non-existent branch
+      // Search for a non-existent branch — active worktree may still show due to alwaysShowActive
       await searchInput.fill("nonexistent-branch-xyz-999");
       await window.waitForTimeout(T_SETTLE);
 
-      // Should show "No worktrees match filters" or zero cards
+      // Card count should decrease (active worktree may remain visible)
       await expect
-        .poll(() => modal.locator("[data-worktree-branch]").count(), {
+        .poll(() => cards.count(), {
           timeout: T_MEDIUM,
-          message: "Expected zero worktree cards for non-matching search",
+          message: "Expected fewer worktree cards for non-matching search",
         })
-        .toBe(0);
+        .toBeLessThan(initialCount);
 
       // Clear search
       await popover.locator('[aria-label="Clear search"]').click();
       await window.waitForTimeout(T_SETTLE);
 
-      // Cards should reappear
-      await expect(modal.locator("[data-worktree-branch]").first()).toBeVisible({
-        timeout: T_MEDIUM,
-      });
+      // All cards should reappear
+      await expect
+        .poll(() => cards.count(), { timeout: T_MEDIUM })
+        .toBeGreaterThanOrEqual(initialCount);
 
-      // Close popover
-      await window.keyboard.press("Escape");
+      // Close popover by clicking the filter button again (toggle)
+      await modal.locator(SEL.worktree.filterButton).click();
+      await expect(popover).not.toBeVisible({ timeout: T_SHORT });
     });
 
     test("sort options toggle correctly", async () => {
@@ -201,8 +208,9 @@ test.describe.serial("Core: Project Management Advanced", () => {
       await createdRadio.click();
       await expect(createdRadio).toHaveAttribute("aria-checked", "true");
 
-      // Close popover
-      await window.keyboard.press("Escape");
+      // Close popover by toggling filter button
+      await modal.locator(SEL.worktree.filterButton).click();
+      await expect(popover).not.toBeVisible({ timeout: T_SHORT });
     });
 
     test("modal closes via close button", async () => {

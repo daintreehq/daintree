@@ -71,7 +71,7 @@ export const SEL = {
     addButton: '[data-testid="project-add-button"]',
     projectSettings: 'button:has-text("Project Settings")',
     projectSettingsAlt: 'button:has-text("Settings")',
-    removeButton: '[aria-label="Remove project"]',
+    closeButton: '[aria-label="Close project"]',
   },
   trash: {
     container: '[data-testid="trash-container"]',
