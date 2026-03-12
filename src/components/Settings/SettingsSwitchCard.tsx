@@ -36,6 +36,7 @@ interface SettingsSwitchCardProps {
   isModified?: boolean;
   onReset?: () => void;
   resetAriaLabel?: string;
+  lifecycleBadge?: string;
 }
 
 export function SettingsSwitchCard({
@@ -51,6 +52,7 @@ export function SettingsSwitchCard({
   isModified,
   onReset,
   resetAriaLabel,
+  lifecycleBadge,
 }: SettingsSwitchCardProps) {
   const scheme = COLOR_SCHEMES[colorScheme];
   const isCard = variant === "card";
@@ -86,7 +88,14 @@ export function SettingsSwitchCard({
           />
         )}
         <div className="text-left">
-          <div className="text-sm font-medium">{title}</div>
+          <div className="text-sm font-medium flex items-center gap-1.5 flex-wrap">
+            {title}
+            {lifecycleBadge && (
+              <span className="inline-flex items-center px-1.5 py-0.5 rounded-sm text-[10px] font-medium bg-canopy-accent/10 border border-canopy-border/50 text-canopy-text/50 uppercase tracking-wide">
+                {lifecycleBadge}
+              </span>
+            )}
+          </div>
           <div className="text-xs opacity-70">{subtitle}</div>
         </div>
       </div>
