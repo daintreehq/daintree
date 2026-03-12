@@ -109,9 +109,7 @@ exports.default = async function afterPack(context) {
       try {
         const stats = fs.statSync(filePath);
         fs.rmSync(filePath);
-        console.log(
-          `[afterPack] Stripped ${file} (${(stats.size / 1024 / 1024).toFixed(1)} MB)`
-        );
+        console.log(`[afterPack] Stripped ${file} (${(stats.size / 1024 / 1024).toFixed(1)} MB)`);
       } catch (err) {
         if (err.code === "ENOENT") {
           console.log(`[afterPack] ${file} not present, skipping`);

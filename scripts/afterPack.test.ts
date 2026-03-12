@@ -122,6 +122,7 @@ describe("afterPack", () => {
 
     it("should succeed with Windows resource path", async () => {
       mockExistsSync.mockReturnValue(true);
+      mockStatSync.mockReturnValue({ size: 0 });
 
       await afterPack(createContext("win32", "/build/win"));
 
@@ -143,6 +144,7 @@ describe("afterPack", () => {
 
     it("should not log signing message on Windows", async () => {
       mockExistsSync.mockReturnValue(true);
+      mockStatSync.mockReturnValue({ size: 0 });
 
       await afterPack(createContext("win32", "/build/win"));
 
@@ -183,6 +185,7 @@ describe("afterPack", () => {
         .mockReturnValueOnce(true) // final validation: conpty/conpty.dll
         .mockReturnValueOnce(true); // final validation: conpty/OpenConsole.exe
       mockReaddirSync.mockReturnValue(["1.23.251008001"]);
+      mockStatSync.mockReturnValue({ size: 0 });
 
       await afterPack(createContext("win32", "/build/win"));
 
@@ -248,9 +251,7 @@ describe("afterPack", () => {
 
         await afterPack(createContext("win32", "/build/win"));
 
-        expect(consoleSpy).toHaveBeenCalledWith(
-          "[afterPack] GPU/Vulkan DLL stripping complete"
-        );
+        expect(consoleSpy).toHaveBeenCalledWith("[afterPack] GPU/Vulkan DLL stripping complete");
       });
     });
 
