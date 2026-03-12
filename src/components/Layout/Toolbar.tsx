@@ -934,7 +934,7 @@ export function Toolbar({
 
   return (
     <>
-      <header
+      <div
         ref={toolbarRef}
         role="toolbar"
         aria-label="Main toolbar"
@@ -1055,7 +1055,7 @@ export function Toolbar({
 
           {buttonRegistry["sidecar-toggle"].render()}
         </div>
-      </header>
+      </div>
     </>
   );
 }

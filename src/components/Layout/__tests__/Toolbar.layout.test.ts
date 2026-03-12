@@ -16,9 +16,9 @@ describe("Toolbar layout — issue #2584 project switcher collision", () => {
       expect(source).toContain("grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)]");
     });
 
-    it("does not use flex justify-between on the header", () => {
-      // The header should no longer use flex+justify-between (the old collision-prone pattern)
-      expect(source).not.toMatch(/<header[^>]*justify-between/);
+    it("does not use flex justify-between on the toolbar root", () => {
+      // The toolbar root should no longer use flex+justify-between (the old collision-prone pattern)
+      expect(source).not.toMatch(/role="toolbar"[^>]*justify-between/);
     });
   });
 
@@ -50,7 +50,7 @@ describe("Toolbar layout — issue #2584 project switcher collision", () => {
   });
 
   describe("ARIA toolbar structure — issue #2814", () => {
-    it("header has role=toolbar and aria-label", () => {
+    it("toolbar root has role=toolbar and aria-label", () => {
       expect(source).toMatch(/role="toolbar"/);
       expect(source).toMatch(/aria-label="Main toolbar"/);
     });
