@@ -343,6 +343,9 @@ export function WorktreeCard({
   const isStaleCard = spineState === "stale";
   const isWaitingCard = terminalCounts.byState.waiting > 0;
 
+  const chipState: "waiting" | "complete" | null =
+    isWaitingCard && !isActive ? "waiting" : isComplete && !isActive ? "complete" : null;
+
   const { setNodeRef, isOver } = useDroppable({
     id: `worktree-drop-${worktree.id}`,
     data: {
@@ -387,7 +390,7 @@ export function WorktreeCard({
         variant === "grid" && "rounded-lg border border-divider bg-canopy-sidebar/50",
         isActive
           ? "bg-overlay-soft shadow-[inset_0_1px_0_0_rgba(255,255,255,0.05)]"
-          : !isWaitingCard && "hover:bg-overlay-subtle",
+          : "hover:bg-overlay-subtle",
         variant === "sidebar" && !isActive && "bg-transparent",
         isActive &&
           !isSingleWorktree &&
@@ -398,9 +401,6 @@ export function WorktreeCard({
           !isActive &&
           "hover:border-canopy-accent/50 hover:shadow-lg hover:shadow-canopy-accent/5",
         isFocused && !isActive && "bg-overlay-subtle",
-        isWaitingCard &&
-          !isOver &&
-          "border-l-2 border-l-[var(--color-state-waiting)] bg-[color-mix(in_oklab,var(--color-state-waiting)_6%,transparent)]",
         (isIdleCard || isStaleCard) &&
           !isWaitingCard &&
           !isActive &&
@@ -433,15 +433,20 @@ export function WorktreeCard({
           )}
         />
       )}
-      {isComplete && (
+      {chipState !== null && (
         <div
           className={cn(
-            "absolute w-3 h-3 bg-github-open pointer-events-none z-10",
+            "absolute w-3 h-3 pointer-events-none z-10",
+            chipState === "waiting" ? "bg-[var(--color-state-waiting)]" : "bg-github-open",
             variant === "sidebar" ? "top-0 left-[1px]" : "top-0 left-0 rounded-tl-lg"
           )}
           style={{ clipPath: "polygon(0 0, 100% 0, 0 100%)" }}
           role="img"
-          aria-label="Completed: Issue linked, PR opened, all changes committed"
+          aria-label={
+            chipState === "waiting"
+              ? "Agent waiting for input"
+              : "Completed: Issue linked, PR opened, all changes committed"
+          }
         />
       )}
       <div className="px-4 py-5">
