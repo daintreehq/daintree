@@ -1387,6 +1387,24 @@ export interface IpcInvokeMap {
     args: [];
     result: string;
   };
+
+  // Webview console capture
+  "webview:start-console-capture": {
+    args: [webContentsId: number, paneId: string];
+    result: void;
+  };
+  "webview:stop-console-capture": {
+    args: [webContentsId: number, paneId: string];
+    result: void;
+  };
+  "webview:clear-console-capture": {
+    args: [webContentsId: number, paneId: string];
+    result: void;
+  };
+  "webview:get-console-properties": {
+    args: [webContentsId: number, objectId: string];
+    result: import("./webviewConsole.js").CdpGetPropertiesResult;
+  };
 }
 
 /**
@@ -1492,6 +1510,10 @@ export interface IpcEventMap {
     title: string;
     action: "created" | "updated" | "deleted";
   };
+
+  // Webview console events
+  "webview:console-message": import("./webviewConsole.js").SerializedConsoleRow;
+  "webview:console-context-cleared": { paneId: string; navigationGeneration: number };
 
   // Webview dialog events
   "webview:dialog-request": {

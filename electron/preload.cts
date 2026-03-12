@@ -416,6 +416,12 @@ const CHANNELS = {
   WEBVIEW_DIALOG_REQUEST: "webview:dialog-request",
   WEBVIEW_DIALOG_RESPONSE: "webview:dialog-response",
   WEBVIEW_FIND_SHORTCUT: "webview:find-shortcut",
+  WEBVIEW_START_CONSOLE_CAPTURE: "webview:start-console-capture",
+  WEBVIEW_STOP_CONSOLE_CAPTURE: "webview:stop-console-capture",
+  WEBVIEW_CLEAR_CONSOLE_CAPTURE: "webview:clear-console-capture",
+  WEBVIEW_GET_CONSOLE_PROPERTIES: "webview:get-console-properties",
+  WEBVIEW_CONSOLE_MESSAGE: "webview:console-message",
+  WEBVIEW_CONSOLE_CONTEXT_CLEARED: "webview:console-context-cleared",
 
   // Hibernation channels
   HIBERNATION_GET_CONFIG: "hibernation:get-config",
@@ -1400,6 +1406,19 @@ const api: ElectronAPI = {
     onFindShortcut: (
       callback: (payload: { panelId: string; shortcut: "find" | "next" | "prev" | "close" }) => void
     ): (() => void) => _typedOn(CHANNELS.WEBVIEW_FIND_SHORTCUT, callback),
+    startConsoleCapture: (webContentsId: number, paneId: string): Promise<void> =>
+      ipcRenderer.invoke(CHANNELS.WEBVIEW_START_CONSOLE_CAPTURE, webContentsId, paneId),
+    stopConsoleCapture: (webContentsId: number, paneId: string): Promise<void> =>
+      ipcRenderer.invoke(CHANNELS.WEBVIEW_STOP_CONSOLE_CAPTURE, webContentsId, paneId),
+    clearConsoleCapture: (webContentsId: number, paneId: string): Promise<void> =>
+      ipcRenderer.invoke(CHANNELS.WEBVIEW_CLEAR_CONSOLE_CAPTURE, webContentsId, paneId),
+    getConsoleProperties: (webContentsId: number, objectId: string) =>
+      ipcRenderer.invoke(CHANNELS.WEBVIEW_GET_CONSOLE_PROPERTIES, webContentsId, objectId),
+    onConsoleMessage: (callback: (row: unknown) => void): (() => void) =>
+      _typedOn(CHANNELS.WEBVIEW_CONSOLE_MESSAGE, callback),
+    onConsoleContextCleared: (
+      callback: (payload: { paneId: string; navigationGeneration: number }) => void
+    ): (() => void) => _typedOn(CHANNELS.WEBVIEW_CONSOLE_CONTEXT_CLEARED, callback),
   },
 
   // Hibernation API

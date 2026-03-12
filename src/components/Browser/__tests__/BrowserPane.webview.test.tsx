@@ -10,6 +10,7 @@ type MockWebviewElement = HTMLElement & {
   setZoomFactor: ReturnType<typeof vi.fn>;
   getURL: ReturnType<typeof vi.fn>;
   isLoading: ReturnType<typeof vi.fn>;
+  getWebContentsId: ReturnType<typeof vi.fn>;
   setMockLoading: (value: boolean) => void;
 };
 
@@ -36,6 +37,7 @@ function decorateWebviewElement(element: HTMLElement): MockWebviewElement {
     return currentUrl;
   });
   webview.isLoading = vi.fn(() => loading);
+  webview.getWebContentsId = vi.fn(() => 42);
   webview.setMockLoading = (value: boolean) => {
     loading = value;
   };
@@ -176,6 +178,26 @@ describe("BrowserPane webview lifecycle regression", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     vi.clearAllMocks();
+
+    // Mock window.electron.webview for CDP console capture
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (globalThis as any).window = globalThis.window ?? {};
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (window as any).electron = {
+      webview: {
+        startConsoleCapture: vi.fn(() => Promise.resolve()),
+        stopConsoleCapture: vi.fn(() => Promise.resolve()),
+        clearConsoleCapture: vi.fn(() => Promise.resolve()),
+        getConsoleProperties: vi.fn(() => Promise.resolve({ properties: [] })),
+        onConsoleMessage: vi.fn(() => vi.fn()),
+        onConsoleContextCleared: vi.fn(() => vi.fn()),
+        setLifecycleState: vi.fn(() => Promise.resolve()),
+        registerPanel: vi.fn(() => Promise.resolve()),
+        respondToDialog: vi.fn(() => Promise.resolve()),
+        onDialogRequest: vi.fn(() => vi.fn()),
+      },
+    };
+
     originalCreateElement = document.createElement.bind(document);
     document.createElement = ((tagName: string, options?: ElementCreationOptions) => {
       const element = originalCreateElement(tagName, options);

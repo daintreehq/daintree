@@ -20,6 +20,7 @@ import { FindBar } from "./FindBar";
 import { useIsDragging } from "@/components/DragDrop";
 import { cn } from "@/lib/utils";
 import { useConsoleCaptureStore } from "@/store/consoleCaptureStore";
+import type { SerializedConsoleRow } from "@shared/types/ipc/webviewConsole";
 import { useProjectStore } from "@/store";
 import { useProjectSettingsStore } from "@/store/projectSettingsStore";
 import { useUrlHistoryStore } from "@/store/urlHistoryStore";
@@ -66,9 +67,11 @@ export function BrowserPane({
   const setBrowserHistory = useTerminalStore((state) => state.setBrowserHistory);
   const setBrowserZoom = useTerminalStore((state) => state.setBrowserZoom);
   const isDragging = useIsDragging();
-  const addConsoleMessage = useConsoleCaptureStore((state) => state.addMessage);
+  const addStructuredMessage = useConsoleCaptureStore((state) => state.addStructuredMessage);
+  const markStale = useConsoleCaptureStore((state) => state.markStale);
   const clearConsoleMessages = useConsoleCaptureStore((state) => state.clearMessages);
   const removePane = useConsoleCaptureStore((state) => state.removePane);
+  const webContentsIdRef = useRef<number | null>(null);
   const projectId = useProjectStore((state) => state.currentProject?.id);
   const devServerLoadTimeout = useProjectSettingsStore(
     (state) => state.settings?.devServerLoadTimeout
@@ -138,6 +141,42 @@ export function BrowserPane({
   useEffect(() => {
     return () => removePane(id);
   }, [id, removePane]);
+
+  // CDP console capture: start when webview is ready, subscribe to push events
+  useEffect(() => {
+    if (!webviewElement || !isWebviewReady) return;
+
+    let wcId: number;
+    try {
+      wcId = (webviewElement as unknown as { getWebContentsId(): number }).getWebContentsId();
+    } catch {
+      return;
+    }
+    webContentsIdRef.current = wcId;
+
+    void window.electron.webview.startConsoleCapture(wcId, id);
+
+    const cleanupMessage = window.electron.webview.onConsoleMessage((row: SerializedConsoleRow) => {
+      if (row.paneId === id) {
+        addStructuredMessage(row);
+      }
+    });
+
+    const cleanupContext = window.electron.webview.onConsoleContextCleared(
+      (payload: { paneId: string; navigationGeneration: number }) => {
+        if (payload.paneId === id) {
+          markStale(id, payload.navigationGeneration);
+        }
+      }
+    );
+
+    return () => {
+      cleanupMessage();
+      cleanupContext();
+      void window.electron.webview.stopConsoleCapture(wcId, id);
+      webContentsIdRef.current = null;
+    };
+  }, [webviewElement, isWebviewReady, id, addStructuredMessage, markStale]);
 
   // Set up webview event listeners - reattach whenever webview element changes
   useEffect(() => {
@@ -241,10 +280,6 @@ export function BrowserPane({
       }
     };
 
-    const handleConsoleMessage = (event: Electron.ConsoleMessageEvent) => {
-      addConsoleMessage(id, event.level, event.message, event.line, event.sourceId);
-    };
-
     try {
       const existingUrl = webview.getURL();
       if (existingUrl && existingUrl !== "about:blank" && !webview.isLoading()) {
@@ -265,7 +300,6 @@ export function BrowserPane({
     webview.addEventListener("did-fail-load", handleDidFailLoad);
     webview.addEventListener("did-navigate", handleDidNavigate);
     webview.addEventListener("did-navigate-in-page", handleDidNavigateInPage);
-    webview.addEventListener("console-message", handleConsoleMessage);
     webview.addEventListener("page-title-updated", handlePageTitleUpdated);
 
     return () => {
@@ -275,19 +309,9 @@ export function BrowserPane({
       webview.removeEventListener("did-fail-load", handleDidFailLoad);
       webview.removeEventListener("did-navigate", handleDidNavigate);
       webview.removeEventListener("did-navigate-in-page", handleDidNavigateInPage);
-      webview.removeEventListener("console-message", handleConsoleMessage);
       webview.removeEventListener("page-title-updated", handlePageTitleUpdated);
     };
-  }, [
-    webviewElement,
-    hasValidUrl,
-    loadError,
-    zoomFactor,
-    id,
-    addConsoleMessage,
-    projectId,
-    loadTimeoutMs,
-  ]);
+  }, [webviewElement, hasValidUrl, loadError, zoomFactor, id, projectId, loadTimeoutMs]);
 
   const handleNavigate = useCallback(
     (url: string) => {
@@ -386,6 +410,10 @@ export function BrowserPane({
   }, []);
 
   const handleClearConsole = useCallback(() => {
+    const wcId = webContentsIdRef.current;
+    if (wcId != null) {
+      void window.electron.webview.clearConsoleCapture(wcId, id);
+    }
     clearConsoleMessages(id);
   }, [id, clearConsoleMessages]);
 
@@ -682,7 +710,13 @@ export function BrowserPane({
               />
               <WebviewDialog dialog={currentDialog} onRespond={handleDialogRespond} />
             </div>
-            {isConsoleOpen && <ConsolePanel paneId={id} height={200} />}
+            {isConsoleOpen && (
+              <ConsolePanel
+                paneId={id}
+                height={200}
+                webContentsId={webContentsIdRef.current ?? undefined}
+              />
+            )}
           </>
         )}
       </div>

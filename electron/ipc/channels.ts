@@ -252,6 +252,12 @@ export const CHANNELS = {
   WEBVIEW_DIALOG_REQUEST: "webview:dialog-request",
   WEBVIEW_DIALOG_RESPONSE: "webview:dialog-response",
   WEBVIEW_FIND_SHORTCUT: "webview:find-shortcut",
+  WEBVIEW_START_CONSOLE_CAPTURE: "webview:start-console-capture",
+  WEBVIEW_STOP_CONSOLE_CAPTURE: "webview:stop-console-capture",
+  WEBVIEW_CLEAR_CONSOLE_CAPTURE: "webview:clear-console-capture",
+  WEBVIEW_GET_CONSOLE_PROPERTIES: "webview:get-console-properties",
+  WEBVIEW_CONSOLE_MESSAGE: "webview:console-message",
+  WEBVIEW_CONSOLE_CONTEXT_CLEARED: "webview:console-context-cleared",
 
   SYSTEM_SLEEP_GET_METRICS: "system-sleep:get-metrics",
   SYSTEM_SLEEP_GET_AWAKE_TIME: "system-sleep:get-awake-time",

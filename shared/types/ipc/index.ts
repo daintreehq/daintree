@@ -19,3 +19,4 @@ export * from "./devPreview.js";
 export * from "./maps.js";
 export * from "./api.js";
 export * from "./crashRecovery.js";
+export * from "./webviewConsole.js";

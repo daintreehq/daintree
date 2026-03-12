@@ -90,7 +90,7 @@ export function registerIpcHandlers(deps: HandlerDependencies): () => void {
     register(() => registerOnboardingHandlers());
     register(() => registerVoiceInputHandlers(deps));
     register(() => registerMcpServerHandlers());
-    register(() => registerWebviewHandlers());
+    register(() => registerWebviewHandlers(deps));
     register(() => registerDiagnosticsHandlers(deps));
   } catch (error) {
     runCleanups(cleanupFunctions);
