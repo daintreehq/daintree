@@ -147,6 +147,51 @@ describe("errorStore", () => {
     expect(state.errors[0]?.recoveryHint).toBe("Check your network connection and try again.");
   });
 
+  describe("retryProgress", () => {
+    it("updateRetryProgress sets progress on matching error", () => {
+      const id = useErrorStore.getState().addError({
+        type: "process",
+        message: "spawn failed",
+        source: "pty",
+        isTransient: true,
+      });
+
+      useErrorStore.getState().updateRetryProgress(id, 2, 3);
+
+      const error = useErrorStore.getState().errors.find((e) => e.id === id);
+      expect(error?.retryProgress).toEqual({ attempt: 2, maxAttempts: 3 });
+    });
+
+    it("clearRetryProgress removes progress from matching error", () => {
+      const id = useErrorStore.getState().addError({
+        type: "process",
+        message: "spawn failed",
+        source: "pty",
+        isTransient: true,
+      });
+
+      useErrorStore.getState().updateRetryProgress(id, 1, 3);
+      useErrorStore.getState().clearRetryProgress(id);
+
+      const error = useErrorStore.getState().errors.find((e) => e.id === id);
+      expect(error?.retryProgress).toBeUndefined();
+    });
+
+    it("clearAll removes all retryProgress", () => {
+      const id = useErrorStore.getState().addError({
+        type: "process",
+        message: "spawn failed",
+        source: "pty",
+        isTransient: true,
+      });
+
+      useErrorStore.getState().updateRetryProgress(id, 1, 3);
+      useErrorStore.getState().clearAll();
+
+      expect(useErrorStore.getState().errors).toEqual([]);
+    });
+  });
+
   it("clearAll fully clears error panel state", () => {
     useErrorStore.getState().setPanelOpen(true);
     useErrorStore.getState().addError({

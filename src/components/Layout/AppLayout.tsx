@@ -24,6 +24,7 @@ interface AppLayoutProps {
   onSettings?: () => void;
   onOpenAgentSettings?: () => void;
   onRetry?: (id: string, action: RetryAction, args?: Record<string, unknown>) => void;
+  onCancelRetry?: (id: string) => void;
   agentAvailability?: CliAvailability;
   agentSettings?: AgentSettings | null;
   isHydrated?: boolean;
@@ -41,6 +42,7 @@ export function AppLayout({
   onSettings,
   onOpenAgentSettings,
   onRetry,
+  onCancelRetry,
   agentAvailability,
   agentSettings,
   isHydrated = true,
@@ -354,7 +356,7 @@ export function AppLayout({
         </div>
         {/* Unified diagnostics dock replaces LogsPanel, EventInspectorPanel, and ProblemsPanel */}
         <ErrorBoundary variant="section" componentName="DiagnosticsDock">
-          <DiagnosticsDock onRetry={onRetry} />
+          <DiagnosticsDock onRetry={onRetry} onCancelRetry={onCancelRetry} />
         </ErrorBoundary>
       </div>
 

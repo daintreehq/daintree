@@ -26,6 +26,7 @@ export interface WorktreeDetailsProps {
   onPathClick: () => void;
   onDismissError: (id: string) => void;
   onRetryError: (id: string, action: RetryAction, args?: Record<string, unknown>) => Promise<void>;
+  onCancelRetry?: (id: string) => void;
 }
 
 export function WorktreeDetails({
@@ -39,6 +40,7 @@ export function WorktreeDetails({
   onPathClick,
   onDismissError,
   onRetryError,
+  onCancelRetry,
   showLastCommit,
   lastActivityTimestamp,
   showTime = false,
@@ -130,6 +132,7 @@ export function WorktreeDetails({
                   error={error}
                   onDismiss={onDismissError}
                   onRetry={onRetryError}
+                  onCancelRetry={onCancelRetry}
                   compact
                 />
               ))}

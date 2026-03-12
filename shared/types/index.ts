@@ -164,6 +164,7 @@ export type {
   ErrorType,
   RetryAction,
   AppError,
+  RetryProgressPayload,
   // Agent session types
   Artifact,
   // Agent state change

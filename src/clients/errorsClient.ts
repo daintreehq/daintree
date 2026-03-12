@@ -1,4 +1,4 @@
-import type { AppError, RetryAction } from "@shared/types";
+import type { AppError, RetryAction, RetryProgressPayload } from "@shared/types";
 
 export const errorsClient = {
   onError: (callback: (error: AppError) => void): (() => void) => {
@@ -7,6 +7,14 @@ export const errorsClient = {
 
   retry: (errorId: string, action: RetryAction, args?: Record<string, unknown>): Promise<void> => {
     return window.electron.errors.retry(errorId, action, args);
+  },
+
+  cancelRetry: (errorId: string): void => {
+    window.electron.errors.cancelRetry(errorId);
+  },
+
+  onRetryProgress: (callback: (payload: RetryProgressPayload) => void): (() => void) => {
+    return window.electron.errors.onRetryProgress(callback);
   },
 
   openLogs: (): Promise<void> => {

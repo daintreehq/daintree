@@ -24,6 +24,7 @@ export interface AppError {
   fromPreviousSession?: boolean;
   correlationId?: string;
   recoveryHint?: string;
+  retryProgress?: { attempt: number; maxAttempts: number };
 }
 
 interface ErrorStore {
@@ -40,6 +41,8 @@ interface ErrorStore {
   getWorktreeErrors: (worktreeId: string) => AppError[];
   getTerminalErrors: (terminalId: string) => AppError[];
   getActiveErrors: () => AppError[];
+  updateRetryProgress: (id: string, attempt: number, maxAttempts: number) => void;
+  clearRetryProgress: (id: string) => void;
   reset: () => void;
 }
 
@@ -135,6 +138,20 @@ const createErrorStore: StateCreator<ErrorStore> = (set, get) => ({
 
   getActiveErrors: () => {
     return get().errors.filter((e) => !e.dismissed);
+  },
+
+  updateRetryProgress: (id, attempt, maxAttempts) => {
+    set((state) => ({
+      errors: state.errors.map((e) =>
+        e.id === id ? { ...e, retryProgress: { attempt, maxAttempts } } : e
+      ),
+    }));
+  },
+
+  clearRetryProgress: (id) => {
+    set((state) => ({
+      errors: state.errors.map((e) => (e.id === id ? { ...e, retryProgress: undefined } : e)),
+    }));
   },
 
   reset: () =>

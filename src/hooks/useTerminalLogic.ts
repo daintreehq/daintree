@@ -1,5 +1,6 @@
 import { useState, useCallback, useEffect } from "react";
 import type { RetryAction } from "@/store";
+import { useErrorStore } from "@/store";
 import { errorsClient } from "@/clients";
 
 interface UseTerminalLogicOptions {
@@ -29,6 +30,7 @@ export function useTerminalLogic({
 }: UseTerminalLogicOptions): UseTerminalLogicReturn {
   const [isExited, setIsExited] = useState(false);
   const [exitCode, setExitCode] = useState<number | null>(null);
+  const clearRetryProgress = useErrorStore((state) => state.clearRetryProgress);
 
   // Reset exit state when terminal ID or restartKey changes
   useEffect(() => {
@@ -49,9 +51,11 @@ export function useTerminalLogic({
         removeError(errorId);
       } catch (error) {
         console.error("Error retry failed:", error);
+      } finally {
+        clearRetryProgress(errorId);
       }
     },
-    [removeError]
+    [removeError, clearRetryProgress]
   );
 
   return {

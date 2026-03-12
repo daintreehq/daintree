@@ -73,7 +73,7 @@ import type {
 } from "./system.js";
 import type { AppState, HydrateResult } from "./app.js";
 import type { LogEntry, LogFilterOptions } from "./logs.js";
-import type { RetryAction, AppError } from "./errors.js";
+import type { RetryAction, AppError, RetryProgressPayload } from "./errors.js";
 import type { EventRecord, EventFilterOptions } from "./events.js";
 import type { ProjectCloseResult, ProjectStats, ProjectSwitchPayload } from "./project.js";
 import type {
@@ -1442,6 +1442,7 @@ export interface IpcEventMap {
 
   // Error events
   "error:notify": AppError;
+  "error:retry-progress": RetryProgressPayload;
 
   // Log events
   "logs:entry": LogEntry;

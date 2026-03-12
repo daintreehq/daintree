@@ -38,11 +38,20 @@ interface ErrorRowProps {
   onToggleExpand: () => void;
   onDismiss: () => void;
   onRetry?: () => void;
+  onCancelRetry?: () => void;
 }
 
-function ErrorRow({ error, isExpanded, onToggleExpand, onDismiss, onRetry }: ErrorRowProps) {
+function ErrorRow({
+  error,
+  isExpanded,
+  onToggleExpand,
+  onDismiss,
+  onRetry,
+  onCancelRetry,
+}: ErrorRowProps) {
   const typeLabel = ERROR_TYPE_LABELS[error.type] || "Error";
   const typeColor = ERROR_TYPE_COLORS[error.type] || "text-status-error";
+  const isRetrying = !!error.retryProgress;
   const canRetry = error.isTransient && error.retryAction && onRetry;
   const [copied, setCopied] = useState(false);
   const copyTimeoutRef = useRef<NodeJS.Timeout | null>(null);
@@ -127,7 +136,23 @@ function ErrorRow({ error, isExpanded, onToggleExpand, onDismiss, onRetry }: Err
         </td>
         <td className="px-3 py-2 whitespace-nowrap">
           <div className="flex items-center gap-1">
-            {canRetry && (
+            {isRetrying && onCancelRetry && (
+              <>
+                <span className="text-[10px] text-status-warning">
+                  Retrying {error.retryProgress!.attempt}/{error.retryProgress!.maxAttempts}...
+                </span>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onCancelRetry();
+                  }}
+                  className="px-2 py-0.5 text-xs text-status-error hover:text-status-error/70 border border-status-error/50 hover:bg-status-error/10 rounded"
+                >
+                  Cancel
+                </button>
+              </>
+            )}
+            {!isRetrying && canRetry && (
               <button
                 onClick={(e) => {
                   e.stopPropagation();
@@ -200,10 +225,11 @@ function ErrorRow({ error, isExpanded, onToggleExpand, onDismiss, onRetry }: Err
 
 export interface ProblemsContentProps {
   onRetry?: (id: string, action: RetryAction, args?: Record<string, unknown>) => void;
+  onCancelRetry?: (id: string) => void;
   className?: string;
 }
 
-export function ProblemsContent({ onRetry, className }: ProblemsContentProps) {
+export function ProblemsContent({ onRetry, onCancelRetry, className }: ProblemsContentProps) {
   const errors = useErrorStore((state) => state.errors);
   const dismissError = useErrorStore((state) => state.dismissError);
 
@@ -265,6 +291,7 @@ export function ProblemsContent({ onRetry, className }: ProblemsContentProps) {
                     ? () => onRetry(error.id, error.retryAction!, error.retryArgs)
                     : undefined
                 }
+                onCancelRetry={onCancelRetry ? () => onCancelRetry(error.id) : undefined}
               />
             ))}
           </tbody>

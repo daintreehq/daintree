@@ -9,6 +9,13 @@ const { retryMock } = vi.hoisted(() => ({
 vi.mock("@/clients", () => ({
   errorsClient: {
     retry: retryMock,
+    cancelRetry: vi.fn(),
+  },
+  projectClient: {
+    getProjectId: vi.fn().mockReturnValue("test-project"),
+  },
+  terminalClient: {
+    getSharedBuffers: vi.fn().mockResolvedValue(undefined),
   },
 }));
 

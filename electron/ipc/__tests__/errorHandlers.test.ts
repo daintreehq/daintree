@@ -1,8 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 
+const sleepMock = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+
 const ipcMainMock = vi.hoisted(() => ({
   handle: vi.fn(),
   removeHandler: vi.fn(),
+  on: vi.fn(),
+  removeListener: vi.fn(),
 }));
 
 const shellMock = vi.hoisted(() => ({
@@ -27,8 +31,24 @@ vi.mock("electron", () => ({
   BrowserWindow: class {},
 }));
 
+vi.mock("node:timers/promises", () => ({
+  setTimeout: sleepMock,
+}));
+
 vi.mock("../../utils/logger.js", () => loggerMock);
 vi.mock("../../store.js", () => storeMock);
+
+function createTransientError(message: string): Error {
+  const err = new Error(message);
+  (err as NodeJS.ErrnoException).code = "EBUSY";
+  return err;
+}
+
+function createNonTransientError(message: string): Error {
+  const err = new Error(message);
+  (err as NodeJS.ErrnoException).code = "ENOENT";
+  return err;
+}
 
 function createMockWindow(options: { destroyed?: boolean } = {}) {
   return {
@@ -46,8 +66,10 @@ describe("errorHandlers", () => {
 
   beforeEach(async () => {
     vi.clearAllMocks();
+    sleepMock.mockResolvedValue(undefined);
     shellMock.openPath.mockResolvedValue("");
     storeMock.store.get.mockReturnValue([]);
+    vi.spyOn(Math, "random").mockReturnValue(0.5);
 
     // Reset modules to get a fresh ErrorService singleton per test
     vi.resetModules();
@@ -70,12 +92,22 @@ describe("errorHandlers", () => {
     return call[1] as (...args: unknown[]) => Promise<unknown>;
   }
 
+  function getOnHandler(channel: string): (...args: unknown[]) => void {
+    const call = (ipcMainMock.on as Mock).mock.calls.find(
+      ([registered]: string[]) => registered === channel
+    );
+    if (!call) {
+      throw new Error(`No on-handler registered for channel: ${channel}`);
+    }
+    return call[1] as (...args: unknown[]) => void;
+  }
+
   // Re-import CHANNELS each time since we reset modules
   async function getChannels() {
     return (await import("../channels.js")).CHANNELS;
   }
 
-  it("registers retry/open-log/get-pending handlers and removes them on cleanup", async () => {
+  it("registers retry/cancel/open-log/get-pending handlers and removes them on cleanup", async () => {
     const CHANNELS = await getChannels();
     const cleanup = registerErrorHandlers(createMockWindow() as never, null, null);
 
@@ -85,12 +117,17 @@ describe("errorHandlers", () => {
       CHANNELS.ERROR_GET_PENDING,
       expect.any(Function)
     );
+    expect(ipcMainMock.on).toHaveBeenCalledWith(CHANNELS.ERROR_RETRY_CANCEL, expect.any(Function));
 
     cleanup();
 
     expect(ipcMainMock.removeHandler).toHaveBeenCalledWith(CHANNELS.ERROR_RETRY);
     expect(ipcMainMock.removeHandler).toHaveBeenCalledWith(CHANNELS.ERROR_OPEN_LOGS);
     expect(ipcMainMock.removeHandler).toHaveBeenCalledWith(CHANNELS.ERROR_GET_PENDING);
+    expect(ipcMainMock.removeListener).toHaveBeenCalledWith(
+      CHANNELS.ERROR_RETRY_CANCEL,
+      expect.any(Function)
+    );
   });
 
   it("retries terminal spawn with default cols/rows", async () => {
@@ -127,7 +164,7 @@ describe("errorHandlers", () => {
 
   it("rethrows original retry failure even when renderer webContents is unavailable", async () => {
     const CHANNELS = await getChannels();
-    const expectedError = new Error("spawn failed");
+    const expectedError = createNonTransientError("spawn failed");
     const spawn = vi.fn(() => {
       throw expectedError;
     });
@@ -189,6 +226,225 @@ describe("errorHandlers", () => {
       expect.anything(),
       expect.objectContaining({ correlationId: sentError.correlationId })
     );
+  });
+
+  describe("exponential backoff and retry limits", () => {
+    it("retries transient terminal errors up to 3 times with backoff", async () => {
+      const CHANNELS = await getChannels();
+      const mockWindow = createMockWindow();
+      let callCount = 0;
+      const spawn = vi.fn(() => {
+        callCount++;
+        if (callCount < 3) throw createTransientError("EBUSY");
+      });
+
+      registerErrorHandlers(mockWindow as never, null, { spawn } as never);
+      const retryHandler = getInvokeHandler(CHANNELS.ERROR_RETRY);
+
+      await retryHandler(
+        {} as never,
+        { errorId: "e1", action: "terminal", args: { id: "t1", cwd: "/tmp" } } as never
+      );
+
+      expect(spawn).toHaveBeenCalledTimes(3);
+      expect(sleepMock).toHaveBeenCalledTimes(2);
+      // Verify sleep was called with signal
+      expect(sleepMock.mock.calls[0][2]).toEqual({ signal: expect.any(AbortSignal) });
+    });
+
+    it("exhausts max terminal attempts (3) and rethrows", async () => {
+      const CHANNELS = await getChannels();
+      const mockWindow = createMockWindow();
+      const spawn = vi.fn(() => {
+        throw createTransientError("EBUSY");
+      });
+
+      registerErrorHandlers(mockWindow as never, null, { spawn } as never);
+      const retryHandler = getInvokeHandler(CHANNELS.ERROR_RETRY);
+
+      await expect(
+        retryHandler(
+          {} as never,
+          { errorId: "e2", action: "terminal", args: { id: "t2", cwd: "/tmp" } } as never
+        )
+      ).rejects.toThrow("EBUSY");
+
+      expect(spawn).toHaveBeenCalledTimes(3);
+      expect(sleepMock).toHaveBeenCalledTimes(2);
+    });
+
+    it("exhausts max worktree attempts (5) and rethrows", async () => {
+      const CHANNELS = await getChannels();
+      const mockWindow = createMockWindow();
+      const refresh = vi.fn().mockRejectedValue(createTransientError("ETIMEDOUT"));
+
+      registerErrorHandlers(mockWindow as never, { refresh } as never, null);
+      const retryHandler = getInvokeHandler(CHANNELS.ERROR_RETRY);
+
+      await expect(
+        retryHandler({} as never, { errorId: "e3", action: "worktree" } as never)
+      ).rejects.toThrow("ETIMEDOUT");
+
+      expect(refresh).toHaveBeenCalledTimes(5);
+      expect(sleepMock).toHaveBeenCalledTimes(4);
+    });
+
+    it("aborts immediately on non-transient error without sleeping", async () => {
+      const CHANNELS = await getChannels();
+      const mockWindow = createMockWindow();
+      const spawn = vi.fn(() => {
+        throw createNonTransientError("File not found");
+      });
+
+      registerErrorHandlers(mockWindow as never, null, { spawn } as never);
+      const retryHandler = getInvokeHandler(CHANNELS.ERROR_RETRY);
+
+      await expect(
+        retryHandler(
+          {} as never,
+          { errorId: "e4", action: "terminal", args: { id: "t4", cwd: "/tmp" } } as never
+        )
+      ).rejects.toThrow("File not found");
+
+      expect(spawn).toHaveBeenCalledTimes(1);
+      expect(sleepMock).not.toHaveBeenCalled();
+    });
+
+    it("stops retrying when a transient error becomes non-transient mid-loop", async () => {
+      const CHANNELS = await getChannels();
+      const mockWindow = createMockWindow();
+      let callCount = 0;
+      const spawn = vi.fn(() => {
+        callCount++;
+        if (callCount === 1) throw createTransientError("EBUSY");
+        throw createNonTransientError("ENOENT");
+      });
+
+      registerErrorHandlers(mockWindow as never, null, { spawn } as never);
+      const retryHandler = getInvokeHandler(CHANNELS.ERROR_RETRY);
+
+      await expect(
+        retryHandler(
+          {} as never,
+          { errorId: "e5", action: "terminal", args: { id: "t5", cwd: "/tmp" } } as never
+        )
+      ).rejects.toThrow("ENOENT");
+
+      expect(spawn).toHaveBeenCalledTimes(2);
+      expect(sleepMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("emits retry progress events for each attempt", async () => {
+      const CHANNELS = await getChannels();
+      const mockWindow = createMockWindow();
+      let callCount = 0;
+      const spawn = vi.fn(() => {
+        callCount++;
+        if (callCount < 3) throw createTransientError("EBUSY");
+      });
+
+      registerErrorHandlers(mockWindow as never, null, { spawn } as never);
+      const retryHandler = getInvokeHandler(CHANNELS.ERROR_RETRY);
+
+      await retryHandler(
+        {} as never,
+        { errorId: "e6", action: "terminal", args: { id: "t6", cwd: "/tmp" } } as never
+      );
+
+      const progressCalls = mockWindow.webContents.send.mock.calls.filter(
+        ([channel]: string[]) => channel === CHANNELS.ERROR_RETRY_PROGRESS
+      );
+
+      expect(progressCalls).toHaveLength(3);
+      expect(progressCalls[0][1]).toEqual({ id: "e6", attempt: 1, maxAttempts: 3 });
+      expect(progressCalls[1][1]).toEqual({ id: "e6", attempt: 2, maxAttempts: 3 });
+      expect(progressCalls[2][1]).toEqual({ id: "e6", attempt: 3, maxAttempts: 3 });
+    });
+
+    it("does not send ERROR_NOTIFY on cancellation (AbortError)", async () => {
+      const CHANNELS = await getChannels();
+      const mockWindow = createMockWindow();
+      const spawn = vi.fn(() => {
+        throw createTransientError("EBUSY");
+      });
+
+      // Make sleep reject with AbortError on first call
+      const abortError = new DOMException("The operation was aborted", "AbortError");
+      sleepMock.mockRejectedValueOnce(abortError);
+
+      registerErrorHandlers(mockWindow as never, null, { spawn } as never);
+      const retryHandler = getInvokeHandler(CHANNELS.ERROR_RETRY);
+
+      await expect(
+        retryHandler(
+          {} as never,
+          { errorId: "e7", action: "terminal", args: { id: "t7", cwd: "/tmp" } } as never
+        )
+      ).rejects.toThrow();
+
+      // Should NOT have sent ERROR_NOTIFY (AbortError is suppressed)
+      const notifyCalls = mockWindow.webContents.send.mock.calls.filter(
+        ([channel]: string[]) => channel === CHANNELS.ERROR_NOTIFY
+      );
+      expect(notifyCalls).toHaveLength(0);
+    });
+
+    it("cancellation via cancel handler aborts in-progress retry", async () => {
+      const CHANNELS = await getChannels();
+      const mockWindow = createMockWindow();
+      const spawn = vi.fn(() => {
+        throw createTransientError("EBUSY");
+      });
+
+      // Make sleep trigger the cancel handler via the signal
+      sleepMock.mockImplementation(
+        async (_delay: number, _val: unknown, opts?: { signal?: AbortSignal }) => {
+          if (opts?.signal) {
+            // Simulate the cancel being called during sleep
+            const cancelHandler = getOnHandler(CHANNELS.ERROR_RETRY_CANCEL);
+            cancelHandler({} as never, "e8");
+            // Now the signal should be aborted, throw AbortError
+            opts.signal.throwIfAborted();
+          }
+        }
+      );
+
+      registerErrorHandlers(mockWindow as never, null, { spawn } as never);
+      const retryHandler = getInvokeHandler(CHANNELS.ERROR_RETRY);
+
+      await expect(
+        retryHandler(
+          {} as never,
+          { errorId: "e8", action: "terminal", args: { id: "t8", cwd: "/tmp" } } as never
+        )
+      ).rejects.toThrow();
+
+      // Only one spawn attempt before the sleep/cancel
+      expect(spawn).toHaveBeenCalledTimes(1);
+    });
+
+    it("computes backoff delay with jitter correctly", async () => {
+      const CHANNELS = await getChannels();
+      const mockWindow = createMockWindow();
+      const spawn = vi.fn(() => {
+        throw createTransientError("EBUSY");
+      });
+
+      registerErrorHandlers(mockWindow as never, null, { spawn } as never);
+      const retryHandler = getInvokeHandler(CHANNELS.ERROR_RETRY);
+
+      await retryHandler(
+        {} as never,
+        { errorId: "e9", action: "terminal", args: { id: "t9", cwd: "/tmp" } } as never
+      ).catch(() => {});
+
+      // Math.random returns 0.5, so delay = floor(0.5 * (ceil - 100 + 1) + 100)
+      // Attempt 1: ceil = min(10000, 500 * 2^1) = 1000, delay = floor(0.5 * 901 + 100) = 550
+      // Attempt 2: ceil = min(10000, 500 * 2^2) = 2000, delay = floor(0.5 * 1901 + 100) = 1050
+      expect(sleepMock).toHaveBeenCalledTimes(2);
+      expect(sleepMock.mock.calls[0][0]).toBe(550);
+      expect(sleepMock.mock.calls[1][0]).toBe(1050);
+    });
   });
 
   describe("error buffering", () => {
