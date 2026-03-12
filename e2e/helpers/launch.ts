@@ -149,7 +149,11 @@ export async function waitForProcessExit(pid: number, timeoutMs = 15_000): Promi
   while (Date.now() < deadline) {
     try {
       process.kill(pid, 0);
-    } catch {
+    } catch (err: unknown) {
+      if ((err as NodeJS.ErrnoException).code === "EPERM") {
+        await wait(100);
+        continue;
+      }
       return;
     }
     await wait(100);

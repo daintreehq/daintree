@@ -3,7 +3,7 @@ import { launchApp, closeApp, waitForProcessExit, type AppContext } from "../hel
 import { createFixtureRepo } from "../helpers/fixtures";
 import { openAndOnboardProject } from "../helpers/project";
 import { SEL } from "../helpers/selectors";
-import { T_SHORT, T_MEDIUM } from "../helpers/timeouts";
+import { T_SHORT, T_MEDIUM, T_SETTLE } from "../helpers/timeouts";
 import { mkdtempSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import path from "path";
@@ -18,7 +18,9 @@ test.describe.serial("Persistence: Settings across restart", () => {
 
   test.afterAll(async () => {
     if (ctx?.app) {
+      const pid = ctx.app.process().pid;
       await closeApp(ctx.app);
+      if (pid) await waitForProcessExit(pid).catch(() => {});
       ctx = null;
     }
     rmSync(userDataDir, { recursive: true, force: true });
@@ -43,11 +45,12 @@ test.describe.serial("Persistence: Settings across restart", () => {
     await expect(toggle).toHaveAttribute("aria-checked", "true", { timeout: T_MEDIUM });
 
     await w1.keyboard.press("Escape");
+    await w1.waitForTimeout(T_SETTLE);
 
     const pid = ctx.app.process().pid!;
     await closeApp(ctx.app);
-    ctx = null;
     await waitForProcessExit(pid);
+    ctx = null;
 
     // Session 2: Relaunch with same userDataDir, verify toggle persisted
     ctx = await launchApp({ userDataDir });
@@ -79,7 +82,9 @@ test.describe.serial("Persistence: Project memory across restart", () => {
 
   test.afterAll(async () => {
     if (ctx?.app) {
+      const pid = ctx.app.process().pid;
       await closeApp(ctx.app);
+      if (pid) await waitForProcessExit(pid).catch(() => {});
       ctx = null;
     }
     rmSync(userDataDir, { recursive: true, force: true });
@@ -97,8 +102,8 @@ test.describe.serial("Persistence: Project memory across restart", () => {
 
     const pid = ctx.app.process().pid!;
     await closeApp(ctx.app);
-    ctx = null;
     await waitForProcessExit(pid);
+    ctx = null;
 
     // Session 2: Relaunch with same userDataDir, verify project is remembered
     ctx = await launchApp({ userDataDir });
