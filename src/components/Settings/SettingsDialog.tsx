@@ -37,6 +37,7 @@ import {
   ChevronRight,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useVerticalScrollShadows } from "@/hooks/useVerticalScrollShadows";
 import { appClient } from "@/clients";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { AgentSettings } from "./AgentSettings";
@@ -296,6 +297,7 @@ export function SettingsDialog({
   }, []);
 
   const tablistRef = useRef<HTMLDivElement>(null);
+  const { canScrollUp, canScrollDown } = useVerticalScrollShadows(tablistRef);
 
   const handleTablistKeyDown = useCallback(
     (e: ReactKeyboardEvent<HTMLDivElement>) => {
@@ -419,165 +421,179 @@ export function SettingsDialog({
             </p>
           )}
 
-          <div
-            ref={tablistRef}
-            role="tablist"
-            aria-orientation="vertical"
-            aria-label="Settings sections"
-            onKeyDown={handleTablistKeyDown}
-            className="flex-1 overflow-y-auto space-y-3"
-          >
-            <NavGroup label="General">
-              <NavItem
-                tab="general"
-                icon={<Settings2 className="w-4 h-4" />}
-                label="General"
-                activeTab={activeTab}
-                isSearching={isSearching}
-                matchCount={matchCounts.general}
-                modified={modifiedTabs.has("general")}
-                onSelect={handleNavSelect}
+          <div className="relative flex-1 min-h-0 overflow-hidden">
+            {canScrollUp && (
+              <div
+                aria-hidden="true"
+                className="pointer-events-none absolute inset-x-0 top-0 h-8 bg-gradient-to-b from-canopy-bg to-transparent z-10"
               />
-              <NavItem
-                tab="terminalAppearance"
-                icon={<Terminal className="w-4 h-4" />}
-                label="Appearance"
-                activeTab={activeTab}
-                isSearching={isSearching}
-                matchCount={matchCounts.terminalAppearance}
-                onSelect={handleNavSelect}
-              />
-              <NavItem
-                tab="keyboard"
-                icon={<Keyboard className="w-4 h-4" />}
-                label="Keyboard"
-                activeTab={activeTab}
-                isSearching={isSearching}
-                matchCount={matchCounts.keyboard}
-                onSelect={handleNavSelect}
-              />
-              <NavItem
-                tab="notifications"
-                icon={<Bell className="w-4 h-4" />}
-                label="Notifications"
-                activeTab={activeTab}
-                isSearching={isSearching}
-                matchCount={matchCounts.notifications}
-                onSelect={handleNavSelect}
-              />
-            </NavGroup>
+            )}
+            <div
+              ref={tablistRef}
+              role="tablist"
+              aria-orientation="vertical"
+              aria-label="Settings sections"
+              onKeyDown={handleTablistKeyDown}
+              className="h-full overflow-y-auto space-y-3"
+            >
+              <NavGroup label="General">
+                <NavItem
+                  tab="general"
+                  icon={<Settings2 className="w-4 h-4" />}
+                  label="General"
+                  activeTab={activeTab}
+                  isSearching={isSearching}
+                  matchCount={matchCounts.general}
+                  modified={modifiedTabs.has("general")}
+                  onSelect={handleNavSelect}
+                />
+                <NavItem
+                  tab="terminalAppearance"
+                  icon={<Terminal className="w-4 h-4" />}
+                  label="Appearance"
+                  activeTab={activeTab}
+                  isSearching={isSearching}
+                  matchCount={matchCounts.terminalAppearance}
+                  onSelect={handleNavSelect}
+                />
+                <NavItem
+                  tab="keyboard"
+                  icon={<Keyboard className="w-4 h-4" />}
+                  label="Keyboard"
+                  activeTab={activeTab}
+                  isSearching={isSearching}
+                  matchCount={matchCounts.keyboard}
+                  onSelect={handleNavSelect}
+                />
+                <NavItem
+                  tab="notifications"
+                  icon={<Bell className="w-4 h-4" />}
+                  label="Notifications"
+                  activeTab={activeTab}
+                  isSearching={isSearching}
+                  matchCount={matchCounts.notifications}
+                  onSelect={handleNavSelect}
+                />
+              </NavGroup>
 
-            <NavGroup label="Terminal">
-              <NavItem
-                tab="terminal"
-                icon={<LayoutGrid className="w-4 h-4" />}
-                label="Panel Grid"
-                activeTab={activeTab}
-                isSearching={isSearching}
-                matchCount={matchCounts.terminal}
-                modified={modifiedTabs.has("terminal")}
-                onSelect={handleNavSelect}
-              />
-              <NavItem
-                tab="worktree"
-                icon={<GitBranch className="w-4 h-4" />}
-                label="Worktree"
-                activeTab={activeTab}
-                isSearching={isSearching}
-                matchCount={matchCounts.worktree}
-                onSelect={handleNavSelect}
-              />
-              <NavItem
-                tab="toolbar"
-                icon={<SettingsIcon className="w-4 h-4" />}
-                label="Toolbar"
-                activeTab={activeTab}
-                isSearching={isSearching}
-                matchCount={matchCounts.toolbar}
-                onSelect={handleNavSelect}
-              />
-            </NavGroup>
+              <NavGroup label="Terminal">
+                <NavItem
+                  tab="terminal"
+                  icon={<LayoutGrid className="w-4 h-4" />}
+                  label="Panel Grid"
+                  activeTab={activeTab}
+                  isSearching={isSearching}
+                  matchCount={matchCounts.terminal}
+                  modified={modifiedTabs.has("terminal")}
+                  onSelect={handleNavSelect}
+                />
+                <NavItem
+                  tab="worktree"
+                  icon={<GitBranch className="w-4 h-4" />}
+                  label="Worktree"
+                  activeTab={activeTab}
+                  isSearching={isSearching}
+                  matchCount={matchCounts.worktree}
+                  onSelect={handleNavSelect}
+                />
+                <NavItem
+                  tab="toolbar"
+                  icon={<SettingsIcon className="w-4 h-4" />}
+                  label="Toolbar"
+                  activeTab={activeTab}
+                  isSearching={isSearching}
+                  matchCount={matchCounts.toolbar}
+                  onSelect={handleNavSelect}
+                />
+              </NavGroup>
 
-            <NavGroup label="Integrations">
-              <NavItem
-                tab="agents"
-                icon={<Waypoints className="w-4 h-4" />}
-                label="CLI Agents"
-                activeTab={activeTab}
-                isSearching={isSearching}
-                matchCount={matchCounts.agents}
-                onSelect={handleNavSelect}
-              />
-              <NavItem
-                tab="github"
-                icon={<Github className="w-4 h-4" />}
-                label="GitHub"
-                activeTab={activeTab}
-                isSearching={isSearching}
-                matchCount={matchCounts.github}
-                onSelect={handleNavSelect}
-              />
-              <NavItem
-                tab="editor"
-                icon={<Code className="w-4 h-4" />}
-                label="Editor"
-                activeTab={activeTab}
-                isSearching={isSearching}
-                matchCount={matchCounts.editor}
-                onSelect={handleNavSelect}
-              />
-              <NavItem
-                tab="imageViewer"
-                icon={<Image className="w-4 h-4" />}
-                label="Image Viewer"
-                activeTab={activeTab}
-                isSearching={isSearching}
-                matchCount={matchCounts.imageViewer}
-                onSelect={handleNavSelect}
-              />
-              <NavItem
-                tab="sidecar"
-                icon={<PanelRight className="w-4 h-4" />}
-                label="Sidecar"
-                activeTab={activeTab}
-                isSearching={isSearching}
-                matchCount={matchCounts.sidecar}
-                onSelect={handleNavSelect}
-              />
-              <NavItem
-                tab="mcp"
-                icon={<Plug className="w-4 h-4" />}
-                label="MCP Server"
-                activeTab={activeTab}
-                isSearching={isSearching}
-                matchCount={matchCounts.mcp}
-                onSelect={handleNavSelect}
-              />
-            </NavGroup>
+              <NavGroup label="Integrations">
+                <NavItem
+                  tab="agents"
+                  icon={<Waypoints className="w-4 h-4" />}
+                  label="CLI Agents"
+                  activeTab={activeTab}
+                  isSearching={isSearching}
+                  matchCount={matchCounts.agents}
+                  onSelect={handleNavSelect}
+                />
+                <NavItem
+                  tab="github"
+                  icon={<Github className="w-4 h-4" />}
+                  label="GitHub"
+                  activeTab={activeTab}
+                  isSearching={isSearching}
+                  matchCount={matchCounts.github}
+                  onSelect={handleNavSelect}
+                />
+                <NavItem
+                  tab="editor"
+                  icon={<Code className="w-4 h-4" />}
+                  label="Editor"
+                  activeTab={activeTab}
+                  isSearching={isSearching}
+                  matchCount={matchCounts.editor}
+                  onSelect={handleNavSelect}
+                />
+                <NavItem
+                  tab="imageViewer"
+                  icon={<Image className="w-4 h-4" />}
+                  label="Image Viewer"
+                  activeTab={activeTab}
+                  isSearching={isSearching}
+                  matchCount={matchCounts.imageViewer}
+                  onSelect={handleNavSelect}
+                />
+                <NavItem
+                  tab="sidecar"
+                  icon={<PanelRight className="w-4 h-4" />}
+                  label="Sidecar"
+                  activeTab={activeTab}
+                  isSearching={isSearching}
+                  matchCount={matchCounts.sidecar}
+                  onSelect={handleNavSelect}
+                />
+                <NavItem
+                  tab="mcp"
+                  icon={<Plug className="w-4 h-4" />}
+                  label="MCP Server"
+                  activeTab={activeTab}
+                  isSearching={isSearching}
+                  matchCount={matchCounts.mcp}
+                  onSelect={handleNavSelect}
+                />
+              </NavGroup>
 
-            <NavGroup label="Input">
-              <NavItem
-                tab="voice"
-                icon={<Mic className="w-4 h-4" />}
-                label="Voice Input"
-                activeTab={activeTab}
-                isSearching={isSearching}
-                matchCount={matchCounts.voice}
-                onSelect={handleNavSelect}
-              />
-            </NavGroup>
+              <NavGroup label="Input">
+                <NavItem
+                  tab="voice"
+                  icon={<Mic className="w-4 h-4" />}
+                  label="Voice Input"
+                  activeTab={activeTab}
+                  isSearching={isSearching}
+                  matchCount={matchCounts.voice}
+                  onSelect={handleNavSelect}
+                />
+              </NavGroup>
 
-            <NavGroup label="Support">
-              <NavItem
-                tab="troubleshooting"
-                icon={<LifeBuoy className="w-4 h-4" />}
-                label="Troubleshooting"
-                activeTab={activeTab}
-                isSearching={isSearching}
-                matchCount={matchCounts.troubleshooting}
-                onSelect={handleNavSelect}
+              <NavGroup label="Support">
+                <NavItem
+                  tab="troubleshooting"
+                  icon={<LifeBuoy className="w-4 h-4" />}
+                  label="Troubleshooting"
+                  activeTab={activeTab}
+                  isSearching={isSearching}
+                  matchCount={matchCounts.troubleshooting}
+                  onSelect={handleNavSelect}
+                />
+              </NavGroup>
+            </div>
+            {canScrollDown && (
+              <div
+                aria-hidden="true"
+                className="pointer-events-none absolute inset-x-0 bottom-0 h-8 bg-gradient-to-t from-canopy-bg to-transparent z-10"
               />
-            </NavGroup>
+            )}
           </div>
 
           <div className="pt-2 mt-2 border-t border-canopy-border px-2">
