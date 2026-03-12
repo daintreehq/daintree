@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { isCanopyEnvEnabled } from "@/utils/env";
+import { NewsletterStep } from "./NewsletterStep";
 import { TelemetryConsentStep } from "./TelemetryConsentStep";
 import { AgentSelectionStep } from "@/components/Setup/AgentSelectionStep";
 import { AgentSetupWizard } from "@/components/Setup/AgentSetupWizard";
@@ -14,8 +15,8 @@ const LEGACY_KEYS = {
   firstRunToast: "canopy:first-run-toast",
 } as const;
 
-type OnboardingStep = "telemetry" | "agentSelection" | "agentSetup";
-const STEP_ORDER: OnboardingStep[] = ["telemetry", "agentSelection", "agentSetup"];
+type OnboardingStep = "newsletter" | "telemetry" | "agentSelection" | "agentSetup";
+const STEP_ORDER: OnboardingStep[] = ["newsletter", "telemetry", "agentSelection", "agentSetup"];
 
 interface OnboardingFlowProps {
   availability: CliAvailability;
@@ -153,6 +154,15 @@ export function OnboardingFlow({ availability, onRefreshSettings }: OnboardingFl
     }
   }, []);
 
+  // Newsletter step handler
+  const handleNewsletterDismiss = useCallback(
+    async (_subscribed: boolean) => {
+      await window.electron.onboarding.markNewsletterSeen();
+      await advanceStep("newsletter");
+    },
+    [advanceStep]
+  );
+
   // Telemetry step handlers
   const handleTelemetryDismiss = useCallback(
     async (enabled: boolean) => {
@@ -220,6 +230,10 @@ export function OnboardingFlow({ availability, onRefreshSettings }: OnboardingFl
 
   return (
     <>
+      {currentStep === "newsletter" && (
+        <NewsletterStep ref={headingRef} onDismiss={handleNewsletterDismiss} />
+      )}
+
       {currentStep === "telemetry" && (
         <TelemetryConsentStep ref={headingRef} onDismiss={handleTelemetryDismiss} />
       )}

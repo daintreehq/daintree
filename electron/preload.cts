@@ -556,6 +556,7 @@ const CHANNELS = {
   ONBOARDING_SET_STEP: "onboarding:set-step",
   ONBOARDING_COMPLETE: "onboarding:complete",
   ONBOARDING_MARK_TOAST_SEEN: "onboarding:mark-toast-seen",
+  ONBOARDING_MARK_NEWSLETTER_SEEN: "onboarding:mark-newsletter-seen",
 } as const;
 
 const api: ElectronAPI = {
@@ -1721,6 +1722,7 @@ const api: ElectronAPI = {
     setStep: (step: string | null) => _typedInvoke(CHANNELS.ONBOARDING_SET_STEP, step),
     complete: () => _typedInvoke(CHANNELS.ONBOARDING_COMPLETE),
     markToastSeen: () => _typedInvoke(CHANNELS.ONBOARDING_MARK_TOAST_SEEN),
+    markNewsletterSeen: () => _typedInvoke(CHANNELS.ONBOARDING_MARK_NEWSLETTER_SEEN),
   },
 
   // Voice Input API
