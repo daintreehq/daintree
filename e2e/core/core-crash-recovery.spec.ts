@@ -110,18 +110,22 @@ test.describe.serial("Core: Crash Recovery", () => {
     });
   });
 
-  test("panel list shows seeded panels", async () => {
+  test("panel list shows seeded panels with correct content", async () => {
     const { window } = ctx;
 
     await expect(window.locator(SEL.crashRecovery.panelList)).toBeVisible({
       timeout: T_SHORT,
     });
 
-    for (const id of PANEL_IDS) {
-      await expect(window.locator(SEL.crashRecovery.panelRow(id))).toBeVisible({
-        timeout: T_SHORT,
-      });
-    }
+    const termRow = window.locator(SEL.crashRecovery.panelRow(PANEL_IDS[0]));
+    await expect(termRow).toBeVisible({ timeout: T_SHORT });
+    await expect(termRow).toContainText("Terminal 1");
+    await expect(termRow).toContainText("grid");
+
+    const agentRow = window.locator(SEL.crashRecovery.panelRow(PANEL_IDS[1]));
+    await expect(agentRow).toBeVisible({ timeout: T_SHORT });
+    await expect(agentRow).toContainText("Claude Agent");
+    await expect(agentRow).toContainText("dock");
 
     await expect(window.locator(SEL.crashRecovery.restoreSelectedButton)).toContainText(
       `Restore selected (${PANEL_IDS.length})`
@@ -172,18 +176,20 @@ test.describe.serial("Core: Crash Recovery", () => {
     );
   });
 
-  test("error details section expands and collapses", async () => {
+  test("error details section expands with seeded content and collapses", async () => {
     const { window } = ctx;
 
     await expect(window.locator(SEL.crashRecovery.detailsSection)).not.toBeVisible();
 
     await window.locator(SEL.crashRecovery.detailsToggle).click();
-    await expect(window.locator(SEL.crashRecovery.detailsSection)).toBeVisible({
-      timeout: T_SHORT,
-    });
+    const details = window.locator(SEL.crashRecovery.detailsSection);
+    await expect(details).toBeVisible({ timeout: T_SHORT });
+
+    await expect(details).toContainText("Test crash error for E2E");
+    await expect(details).toContainText("0.0.0-test");
 
     await window.locator(SEL.crashRecovery.detailsToggle).click();
-    await expect(window.locator(SEL.crashRecovery.detailsSection)).not.toBeVisible();
+    await expect(details).not.toBeVisible();
   });
 
   test("auto-restore checkbox toggles", async () => {
