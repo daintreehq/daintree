@@ -315,7 +315,7 @@ export function WorktreeHeader({
   );
 
   return (
-    <div className="space-y-1">
+    <div>
       <div className="flex items-center gap-2 min-h-[22px]">
         <div className="flex items-center gap-2 min-w-0 flex-1">
           {isMainWorktree && (
@@ -427,7 +427,7 @@ export function WorktreeHeader({
       </div>
 
       {(worktree.issueNumber || (worktree.prNumber && worktree.prState !== "closed")) && (
-        <div className="flex flex-col gap-0.5">
+        <div className="flex flex-col gap-0.5 mt-2">
           {worktree.issueNumber && (
             <IssueBadge
               issueNumber={worktree.issueNumber}
