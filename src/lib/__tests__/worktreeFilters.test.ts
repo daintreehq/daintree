@@ -457,6 +457,51 @@ describe("sortWorktrees", () => {
     expect(sorted[0].id).toBe("2");
   });
 
+  it("uses createdAt when lastActivityTimestamp is null", () => {
+    const worktrees = [
+      createMockWorktree({ id: "1", name: "old", lastActivityTimestamp: null, createdAt: 1000 }),
+      createMockWorktree({ id: "2", name: "new", lastActivityTimestamp: null, createdAt: 5000 }),
+    ];
+    const sorted = sortWorktrees(worktrees, "recent");
+    expect(sorted.map((w) => w.id)).toEqual(["2", "1"]);
+  });
+
+  it("uses whichever is higher between lastActivityTimestamp and createdAt", () => {
+    const worktrees = [
+      createMockWorktree({ id: "1", name: "a", lastActivityTimestamp: 2000, createdAt: 5000 }),
+      createMockWorktree({ id: "2", name: "b", lastActivityTimestamp: 4000, createdAt: 1000 }),
+    ];
+    const sorted = sortWorktrees(worktrees, "recent");
+    expect(sorted.map((w) => w.id)).toEqual(["1", "2"]);
+  });
+
+  it("ranks worktree with newer lastActivityTimestamp above one with newer createdAt", () => {
+    const worktrees = [
+      createMockWorktree({ id: "1", name: "a", lastActivityTimestamp: 6000, createdAt: 1000 }),
+      createMockWorktree({ id: "2", name: "b", lastActivityTimestamp: null, createdAt: 5000 }),
+    ];
+    const sorted = sortWorktrees(worktrees, "recent");
+    expect(sorted.map((w) => w.id)).toEqual(["1", "2"]);
+  });
+
+  it("ranks new worktree with recent createdAt above old worktree with no activity", () => {
+    const worktrees = [
+      createMockWorktree({ id: "1", name: "old", lastActivityTimestamp: 1000, createdAt: 500 }),
+      createMockWorktree({ id: "2", name: "new", lastActivityTimestamp: null, createdAt: 5000 }),
+    ];
+    const sorted = sortWorktrees(worktrees, "recent");
+    expect(sorted.map((w) => w.id)).toEqual(["2", "1"]);
+  });
+
+  it("falls back to 0 when both fields are missing", () => {
+    const worktrees = [
+      createMockWorktree({ id: "1", name: "a", lastActivityTimestamp: null, createdAt: undefined }),
+      createMockWorktree({ id: "2", name: "b", lastActivityTimestamp: 1000 }),
+    ];
+    const sorted = sortWorktrees(worktrees, "recent");
+    expect(sorted.map((w) => w.id)).toEqual(["2", "1"]);
+  });
+
   it("handles undefined createdAt", () => {
     const worktrees = [
       createMockWorktree({ id: "1", name: "a", createdAt: undefined }),

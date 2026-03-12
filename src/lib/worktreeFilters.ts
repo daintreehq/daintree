@@ -210,8 +210,8 @@ export function sortWorktrees<T extends Worktree | WorktreeState>(
     // Apply normal sorting to unpinned worktrees
     switch (orderBy) {
       case "recent": {
-        const timeA = a.lastActivityTimestamp ?? 0;
-        const timeB = b.lastActivityTimestamp ?? 0;
+        const timeA = Math.max(a.lastActivityTimestamp ?? 0, a.createdAt ?? 0);
+        const timeB = Math.max(b.lastActivityTimestamp ?? 0, b.createdAt ?? 0);
         if (timeA !== timeB) return timeB - timeA;
         return a.name.localeCompare(b.name);
       }
