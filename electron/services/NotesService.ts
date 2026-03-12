@@ -206,9 +206,14 @@ export class NotesService {
         fs.stat(absolutePath),
       ]);
       const { data, content } = matter(fileContent);
+      const rawMetadata = data as NoteMetadata;
+      const tags = normalizeTags((data as Record<string, unknown>).tags);
 
       return {
-        metadata: data as NoteMetadata,
+        metadata: {
+          ...rawMetadata,
+          ...(tags.length > 0 ? { tags } : { tags: undefined }),
+        },
         content: content.replace(/^\n/, ""),
         path: notePath,
         lastModified: stats.mtimeMs,

@@ -10,6 +10,7 @@ import { useNotesStore } from "@/store/notesStore";
 import { useTerminalStore } from "@/store/terminalStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { notesClient, type NoteListItem, type NoteMetadata } from "@/clients/notesClient";
+import { normalizeTag } from "../../../shared/utils/noteTags";
 import CodeMirror from "@uiw/react-codemirror";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { languages } from "@codemirror/language-data";
@@ -141,6 +142,13 @@ export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
       }
     });
   }, [searchResults, selectedTag, sortOrder]);
+
+  // Clear selected tag when it disappears from available tags
+  useEffect(() => {
+    if (selectedTag && !availableTags.includes(selectedTag)) {
+      setSelectedTag(null);
+    }
+  }, [availableTags, selectedTag]);
 
   // Persist sort order to sessionStorage
   useEffect(() => {
@@ -418,10 +426,16 @@ export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
   const handleAddTag = useCallback(
     async (tag: string) => {
       if (!selectedNote || !noteMetadata) return;
-      const normalized = tag.toLowerCase().trim();
+      const normalized = normalizeTag(tag);
       if (!normalized) return;
       const currentTags = noteMetadata.tags ?? [];
       if (currentTags.includes(normalized)) return;
+
+      // Cancel any pending content save to prevent race condition
+      if (saveTimeoutRef.current) {
+        clearTimeout(saveTimeoutRef.current);
+        saveTimeoutRef.current = null;
+      }
 
       const updatedTags = [...currentTags, normalized];
       const updatedMetadata = { ...noteMetadata, tags: updatedTags };
@@ -434,7 +448,11 @@ export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
           updatedMetadata,
           noteLastModified ?? undefined
         );
-        if (result.lastModified) setNoteLastModified(result.lastModified);
+        if (result.error === "conflict") {
+          setHasConflict(true);
+        } else if (result.lastModified) {
+          setNoteLastModified(result.lastModified);
+        }
         await refresh();
       } catch (e) {
         console.error("Failed to save tags:", e);
@@ -452,6 +470,13 @@ export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
         ...noteMetadata,
         tags: updatedTags.length > 0 ? updatedTags : undefined,
       };
+
+      // Cancel any pending content save to prevent race condition
+      if (saveTimeoutRef.current) {
+        clearTimeout(saveTimeoutRef.current);
+        saveTimeoutRef.current = null;
+      }
+
       setNoteMetadata(updatedMetadata);
 
       try {
@@ -461,7 +486,11 @@ export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
           updatedMetadata,
           noteLastModified ?? undefined
         );
-        if (result.lastModified) setNoteLastModified(result.lastModified);
+        if (result.error === "conflict") {
+          setHasConflict(true);
+        } else if (result.lastModified) {
+          setNoteLastModified(result.lastModified);
+        }
         await refresh();
       } catch (e) {
         console.error("Failed to save tags:", e);
