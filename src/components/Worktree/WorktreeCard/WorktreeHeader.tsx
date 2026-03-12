@@ -177,6 +177,7 @@ const PRBadge = memo(function PRBadge({ prNumber, prState, worktreePath, onOpen 
 export interface WorktreeHeaderProps {
   worktree: WorktreeState;
   isActive: boolean;
+  isMuted?: boolean;
   isMainWorktree: boolean;
   isPinned: boolean;
   branchLabel: string;
@@ -278,6 +279,7 @@ const LifecycleStageIndicator = memo(function LifecycleStageIndicator({
 export function WorktreeHeader({
   worktree,
   isActive,
+  isMuted,
   isMainWorktree,
   isPinned,
   branchLabel,
@@ -314,7 +316,7 @@ export function WorktreeHeader({
           {isPinned && !isMainWorktree && (
             <Pin className="w-3 h-3 text-canopy-text/40 shrink-0" aria-label="Pinned" />
           )}
-          <BranchLabel label={branchLabel} isActive={isActive} isMainWorktree={isMainWorktree} />
+          <BranchLabel label={branchLabel} isActive={isActive} isMuted={isMuted} isMainWorktree={isMainWorktree} />
           <LifecycleStageIndicator stage={lifecycleStage} />
           {worktree.isDetached && (
             <span className="text-status-warning text-xs font-medium shrink-0">(detached)</span>
