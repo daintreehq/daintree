@@ -31,6 +31,7 @@ const DEFAULT_LEFT_BUTTONS: ToolbarButtonId[] = [
   "terminal",
   "browser",
   "dev-server",
+  "panel-palette",
 ];
 
 const DEFAULT_RIGHT_BUTTONS: ToolbarButtonId[] = [
