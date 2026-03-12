@@ -86,6 +86,30 @@ describe("computeChipState", () => {
         computeChipState({ ...base, lifecycleStage: "ready-for-cleanup", isComplete: true })
       ).toBe("cleanup");
     });
+
+    it("failedTerminalCount error beats waiting", () => {
+      expect(computeChipState({ ...base, failedTerminalCount: 1, waitingTerminalCount: 1 })).toBe(
+        "error"
+      );
+    });
+
+    it("failedTerminalCount error beats complete", () => {
+      expect(computeChipState({ ...base, failedTerminalCount: 1, isComplete: true })).toBe("error");
+    });
+  });
+
+  describe("complete with non-cleanup lifecycle", () => {
+    it('returns complete when lifecycleStage is "in-review"', () => {
+      expect(computeChipState({ ...base, lifecycleStage: "in-review", isComplete: true })).toBe(
+        "complete"
+      );
+    });
+
+    it('returns complete when lifecycleStage is "working"', () => {
+      expect(computeChipState({ ...base, lifecycleStage: "working", isComplete: true })).toBe(
+        "complete"
+      );
+    });
   });
 
   describe("null cases", () => {
