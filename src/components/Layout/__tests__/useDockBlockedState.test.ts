@@ -2,6 +2,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { renderHook, act } from "@testing-library/react";
 import { useDockBlockedState, getGroupBlockedAgentState } from "../useDockBlockedState";
+import type { AgentState } from "shared/types/domain";
 
 describe("useDockBlockedState", () => {
   beforeEach(() => {
@@ -46,7 +47,7 @@ describe("useDockBlockedState", () => {
 
   it("clears immediately when leaving blocked state", () => {
     const { result, rerender } = renderHook(({ state }) => useDockBlockedState(state), {
-      initialProps: { state: "waiting" as const },
+      initialProps: { state: "waiting" as AgentState },
     });
 
     act(() => {
@@ -60,7 +61,7 @@ describe("useDockBlockedState", () => {
 
   it("cancels debounce if state clears before delay", () => {
     const { result, rerender } = renderHook(({ state }) => useDockBlockedState(state), {
-      initialProps: { state: "waiting" as const },
+      initialProps: { state: "waiting" as AgentState },
     });
 
     act(() => {
@@ -78,7 +79,7 @@ describe("useDockBlockedState", () => {
 
   it("swaps immediately between blocked states", () => {
     const { result, rerender } = renderHook(({ state }) => useDockBlockedState(state), {
-      initialProps: { state: "waiting" as const },
+      initialProps: { state: "waiting" as AgentState },
     });
 
     act(() => {

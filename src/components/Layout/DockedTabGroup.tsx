@@ -338,6 +338,9 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
     openDockTerminal,
   ]);
 
+  const groupBlockedState = getGroupBlockedAgentState(panels);
+  const blockedState = useDockBlockedState(groupBlockedState);
+
   if (!activePanel || panels.length === 0) {
     return null;
   }
@@ -349,8 +352,6 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
   const commandText = activePanel.activityHeadline || activePanel.lastCommand;
   const brandColor = getBrandColorHex(activePanel.agentId ?? activePanel.type);
   const agentState = activePanel.agentState;
-  const groupBlockedState = getGroupBlockedAgentState(panels);
-  const blockedState = useDockBlockedState(groupBlockedState);
   const displayTitle = getBaseTitle(activePanel.title);
   const showStateIcon = agentState && agentState !== "idle" && agentState !== "completed";
   const StateIcon = showStateIcon ? STATE_ICONS[agentState] : null;
