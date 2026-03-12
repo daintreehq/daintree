@@ -432,6 +432,36 @@ describe("fuzzy matching", () => {
     const results = filterSettings(SETTINGS_SEARCH_INDEX, "zzz");
     expect(results).toHaveLength(0);
   });
+
+  it("does not interpret Fuse extended search operators like '!'", () => {
+    const results = filterSettings(SETTINGS_SEARCH_INDEX, "!font");
+    // Should not return inverse/all results — should treat "!font" as literal
+    expect(results.length).toBeLessThan(5);
+  });
+
+  it("multi-token query requires all tokens to match (AND semantics)", () => {
+    const index = [
+      {
+        id: "a",
+        tab: "general" as const,
+        tabLabel: "General",
+        section: "S",
+        title: "Font Size",
+        description: "d",
+      },
+      {
+        id: "b",
+        tab: "general" as const,
+        tabLabel: "General",
+        section: "S",
+        title: "Color Scheme",
+        description: "d",
+      },
+    ];
+    const results = filterSettings(index, "font size");
+    expect(results.some((r) => r.id === "a")).toBe(true);
+    expect(results.some((r) => r.id === "b")).toBe(false);
+  });
 });
 
 describe("parseQuery", () => {
@@ -467,6 +497,18 @@ describe("parseQuery", () => {
     expect(result.filterModified).toBe(false);
     expect(result.cleanQuery).toBe("font size");
     expect(result.tokens).toEqual(["font", "size"]);
+  });
+
+  it("does not match embedded @modified (e.g., foo@modified)", () => {
+    const result = parseQuery("foo@modified");
+    expect(result.filterModified).toBe(false);
+    expect(result.tokens).toEqual(["foo@modified"]);
+  });
+
+  it("handles repeated @modified tokens", () => {
+    const result = parseQuery("@modified @modified font");
+    expect(result.filterModified).toBe(true);
+    expect(result.tokens).toEqual(["font"]);
   });
 });
 

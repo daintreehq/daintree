@@ -4,7 +4,7 @@ import type { SettingsSearchEntry } from "./settingsSearchIndex";
 
 export type SettingsSearchResult = SettingsSearchEntry;
 
-const MODIFIED_TOKEN_RE = /@mod(?:ified)?\b/i;
+const MODIFIED_TOKEN_RE = /(?:^|\s)@mod(?:ified)?(?=\s|$)/i;
 
 const FUSE_OPTIONS: IFuseOptions<SettingsSearchEntry> = {
   keys: [
@@ -44,7 +44,11 @@ export interface ParsedQuery {
 
 export function parseQuery(raw: string): ParsedQuery {
   const filterModified = MODIFIED_TOKEN_RE.test(raw);
-  const cleanQuery = raw.replace(MODIFIED_TOKEN_RE, "").trim();
+  // Use a global version to strip all occurrences
+  let cleanQuery = raw;
+  if (filterModified) {
+    cleanQuery = raw.replace(/(?:^|\s)@mod(?:ified)?(?=\s|$)/gi, " ").trim();
+  }
   const tokens = cleanQuery.toLowerCase().split(/\s+/).filter(Boolean);
   return { cleanQuery, tokens, filterModified };
 }
@@ -71,25 +75,26 @@ export function filterSettings(
 
   const fuse = getFuse(index);
 
-  // Build search pattern: multi-token uses $and, single token uses plain search
-  let fuseResults;
-  if (tokens.length > 1) {
-    const structured = {
-      $and: tokens.map((token) => ({
+  // Always use structured $and query; escape operator prefixes so user input
+  // like "!font" isn't interpreted as a Fuse NOT operator
+  const structured = {
+    $and: tokens.map((token) => {
+      // Prefix with ' (include operator) to force literal fuzzy matching
+      // and prevent =, !, ^, $ from being treated as Fuse operators
+      const safeToken = /^[=!'^$]/.test(token) ? `'${token}` : token;
+      return {
         $or: [
-          { title: token },
-          { keywords: token },
-          { tabLabel: token },
-          { description: token },
-          { section: token },
-          { subtabLabel: token },
+          { title: safeToken },
+          { keywords: safeToken },
+          { tabLabel: safeToken },
+          { description: safeToken },
+          { section: safeToken },
+          { subtabLabel: safeToken },
         ],
-      })),
-    };
-    fuseResults = fuse.search(structured as unknown as Expression);
-  } else {
-    fuseResults = fuse.search(cleanQuery);
-  }
+      };
+    }),
+  };
+  const fuseResults = fuse.search(structured as unknown as Expression);
 
   // Apply post-scoring: preserve existing ranking behavior
   const normalized = cleanQuery.toLowerCase();
