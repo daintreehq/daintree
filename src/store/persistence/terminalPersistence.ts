@@ -51,6 +51,7 @@ export function terminalToSnapshot(t: TerminalInstance): TerminalSnapshot {
       command: t.command?.trim() || undefined,
       ...(t.createdAt !== undefined && { createdAt: t.createdAt }),
       ...(t.exitBehavior !== undefined && { exitBehavior: t.exitBehavior }),
+      ...(t.agentSessionId && { agentSessionId: t.agentSessionId }),
     };
   } else if (t.kind === "notes") {
     return {

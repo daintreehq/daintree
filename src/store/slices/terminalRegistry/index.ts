@@ -383,6 +383,7 @@ export const createTerminalRegistrySlice =
             runtimeStatus,
             isInputLocked: options.isInputLocked,
             exitBehavior: options.exitBehavior,
+            agentSessionId: options.agentSessionId,
             // Dev-preview specific fields
             ...(kind === "dev-preview" && {
               devCommand: options.devCommand,
