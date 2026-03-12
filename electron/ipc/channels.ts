@@ -357,6 +357,7 @@ export const CHANNELS = {
   TELEMETRY_GET: "telemetry:get",
   TELEMETRY_SET_ENABLED: "telemetry:set-enabled",
   TELEMETRY_MARK_PROMPT_SHOWN: "telemetry:mark-prompt-shown",
+  TELEMETRY_TRACK: "telemetry:track",
 
   // MCP Server channels
   MCP_SERVER_GET_STATUS: "mcp-server:get-status",

@@ -514,6 +514,7 @@ const CHANNELS = {
   TELEMETRY_GET: "telemetry:get",
   TELEMETRY_SET_ENABLED: "telemetry:set-enabled",
   TELEMETRY_MARK_PROMPT_SHOWN: "telemetry:mark-prompt-shown",
+  TELEMETRY_TRACK: "telemetry:track",
 
   // Voice Input channels
   VOICE_INPUT_GET_SETTINGS: "voice-input:get-settings",
@@ -1706,6 +1707,8 @@ const api: ElectronAPI = {
     get: () => _typedInvoke(CHANNELS.TELEMETRY_GET),
     setEnabled: (enabled: boolean) => _typedInvoke(CHANNELS.TELEMETRY_SET_ENABLED, enabled),
     markPromptShown: () => _typedInvoke(CHANNELS.TELEMETRY_MARK_PROMPT_SHOWN),
+    track: (event: string, properties: Record<string, unknown>) =>
+      _typedInvoke(CHANNELS.TELEMETRY_TRACK, event, properties),
   },
 
   onboarding: {

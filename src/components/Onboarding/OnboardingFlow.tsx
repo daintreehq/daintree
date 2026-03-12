@@ -22,12 +22,19 @@ interface OnboardingFlowProps {
   onRefreshSettings: () => Promise<void>;
 }
 
+function trackOnboarding(event: string, properties: Record<string, unknown> = {}): void {
+  window.electron?.telemetry?.track(event, properties)?.catch(() => {});
+}
+
 export function OnboardingFlow({ availability, onRefreshSettings }: OnboardingFlowProps) {
   const [state, setState] = useState<OnboardingState | null>(null);
   const [currentStep, setCurrentStep] = useState<OnboardingStep | null>(null);
   const [agentSetupIds, setAgentSetupIds] = useState<string[]>([]);
   const [manualWizardOpen, setManualWizardOpen] = useState(false);
   const headingRef = useRef<HTMLHeadingElement>(null);
+  const flowStartTimeRef = useRef<number>(0);
+  const completedRef = useRef(false);
+  const currentStepRef = useRef<OnboardingStep | null>(null);
 
   // Hydrate state from electron-store and run localStorage migration
   useEffect(() => {
@@ -86,6 +93,32 @@ export function OnboardingFlow({ availability, onRefreshSettings }: OnboardingFl
     return () => window.removeEventListener("canopy:open-agent-setup-wizard", handleOpenWizard);
   }, []);
 
+  // Track step views and keep ref in sync
+  useEffect(() => {
+    currentStepRef.current = currentStep;
+    if (currentStep && state !== null) {
+      if (flowStartTimeRef.current === 0) {
+        flowStartTimeRef.current = Date.now();
+      }
+      trackOnboarding("onboarding_step_viewed", {
+        step: currentStep,
+        stepIndex: STEP_ORDER.indexOf(currentStep),
+      });
+    }
+  }, [currentStep, state]);
+
+  // Track abandonment on unmount
+  useEffect(() => {
+    return () => {
+      if (currentStepRef.current && !completedRef.current) {
+        trackOnboarding("onboarding_abandoned", {
+          lastStep: currentStepRef.current,
+          lastStepIndex: STEP_ORDER.indexOf(currentStepRef.current),
+        });
+      }
+    };
+  }, []);
+
   // Focus the heading on step transitions
   useLayoutEffect(() => {
     if (currentStep && document.hasFocus()) {
@@ -109,6 +142,11 @@ export function OnboardingFlow({ availability, onRefreshSettings }: OnboardingFl
       await window.electron.onboarding.setStep(nextStep);
     } else {
       // Flow complete
+      completedRef.current = true;
+      trackOnboarding("onboarding_completed", {
+        totalSteps: STEP_ORDER.length,
+        durationMs: flowStartTimeRef.current > 0 ? Date.now() - flowStartTimeRef.current : 0,
+      });
       setCurrentStep(null);
       await window.electron.onboarding.complete();
       setState((prev) => (prev ? { ...prev, completed: true, currentStep: null } : prev));
@@ -141,6 +179,7 @@ export function OnboardingFlow({ availability, onRefreshSettings }: OnboardingFl
   );
 
   const handleAgentSelectionSkip = useCallback(async () => {
+    trackOnboarding("onboarding_step_skipped", { step: "agentSelection" });
     skipAgentSetupRef.current = true;
     await advanceStep("agentSelection");
   }, [advanceStep]);
