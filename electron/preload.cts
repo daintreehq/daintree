@@ -19,6 +19,7 @@ import type {
   EventRecord,
   EventFilterOptions,
   RetryAction,
+  RetryProgressPayload,
   AppError,
   ElectronAPI,
   CreateWorktreeOptions,
@@ -928,6 +929,11 @@ const api: ElectronAPI = {
 
     retry: (errorId: string, action: RetryAction, args?: Record<string, unknown>) =>
       _typedInvoke(CHANNELS.ERROR_RETRY, { errorId, action, args }),
+
+    cancelRetry: (errorId: string) => ipcRenderer.send(CHANNELS.ERROR_RETRY_CANCEL, errorId),
+
+    onRetryProgress: (callback: (payload: RetryProgressPayload) => void) =>
+      _typedOn(CHANNELS.ERROR_RETRY_PROGRESS, callback),
 
     openLogs: () => _typedInvoke(CHANNELS.ERROR_OPEN_LOGS),
 

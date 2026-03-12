@@ -8,6 +8,7 @@ export interface ErrorBannerProps {
   error: AppError;
   onDismiss: (id: string) => void;
   onRetry?: (id: string, action: RetryAction, args?: Record<string, unknown>) => void;
+  onCancelRetry?: (id: string) => void;
   className?: string;
   compact?: boolean;
 }
@@ -34,22 +35,22 @@ export function ErrorBanner({
   error,
   onDismiss,
   onRetry,
+  onCancelRetry,
   className,
   compact = false,
 }: ErrorBannerProps) {
   const [isExpanded, setIsExpanded] = useState(false);
-  const [isRetrying, setIsRetrying] = useState(false);
+
+  const isRetrying = !!error.retryProgress;
 
   const handleRetry = useCallback(async () => {
     if (!error.retryAction || !onRetry) return;
-
-    setIsRetrying(true);
-    try {
-      await onRetry(error.id, error.retryAction, error.retryArgs);
-    } finally {
-      setIsRetrying(false);
-    }
+    await onRetry(error.id, error.retryAction, error.retryArgs);
   }, [error.id, error.retryAction, error.retryArgs, onRetry]);
+
+  const handleCancel = useCallback(() => {
+    onCancelRetry?.(error.id);
+  }, [error.id, onCancelRetry]);
 
   const handleDismiss = useCallback(() => {
     onDismiss(error.id);
@@ -62,6 +63,10 @@ export function ErrorBanner({
   const typeLabel = ERROR_TYPE_LABELS[error.type] || "Error";
   const typeIcon = ERROR_TYPE_ICONS[error.type] || "❌";
   const canRetry = error.isTransient && error.retryAction && onRetry;
+
+  const retryLabel = error.retryProgress
+    ? `Retrying ${error.retryProgress.attempt}/${error.retryProgress.maxAttempts}...`
+    : "Retry";
 
   if (compact) {
     return (
@@ -78,15 +83,26 @@ export function ErrorBanner({
             {error.recoveryHint}
           </span>
         )}
-        {canRetry && (
+        {isRetrying && onCancelRetry && (
+          <>
+            <span className="text-status-warning text-[10px] shrink-0">{retryLabel}</span>
+            <Button
+              variant="ghost-danger"
+              size="xs"
+              onClick={handleCancel}
+            >
+              Cancel
+            </Button>
+          </>
+        )}
+        {!isRetrying && canRetry && (
           <Button
             variant="outline"
             size="xs"
             onClick={handleRetry}
-            disabled={isRetrying}
             className="border-status-success/50 text-status-success hover:text-status-success/80"
           >
-            {isRetrying ? "..." : "Retry"}
+            Retry
           </Button>
         )}
         <Button
@@ -141,15 +157,26 @@ export function ErrorBanner({
               {isExpanded ? "Hide" : "Details"}
             </Button>
           )}
-          {canRetry && (
+          {isRetrying && onCancelRetry && (
+            <>
+              <span className="text-status-warning text-[10px]">{retryLabel}</span>
+              <Button
+                variant="ghost-danger"
+                size="xs"
+                onClick={handleCancel}
+              >
+                Cancel
+              </Button>
+            </>
+          )}
+          {!isRetrying && canRetry && (
             <Button
               variant="outline"
               size="xs"
               onClick={handleRetry}
-              disabled={isRetrying}
               className="border-status-success/50 text-status-success hover:text-status-success/80 hover:bg-status-success/10"
             >
-              {isRetrying ? "Retrying..." : "Retry"}
+              Retry
             </Button>
           )}
           <Button

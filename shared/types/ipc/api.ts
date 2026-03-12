@@ -61,7 +61,7 @@ import type {
 } from "./system.js";
 import type { AppState, HydrateResult } from "./app.js";
 import type { LogEntry, LogFilterOptions } from "./logs.js";
-import type { RetryAction, AppError } from "./errors.js";
+import type { RetryAction, AppError, RetryProgressPayload } from "./errors.js";
 import type { EventRecord, EventFilterOptions } from "./events.js";
 import type { ProjectCloseResult, ProjectStats } from "./project.js";
 import type { GitInitOptions, GitInitProgressEvent, GitInitResult } from "./gitInit.js";
@@ -296,6 +296,8 @@ export interface ElectronAPI {
   errors: {
     onError(callback: (error: AppError) => void): () => void;
     retry(errorId: string, action: RetryAction, args?: Record<string, unknown>): Promise<void>;
+    cancelRetry(errorId: string): void;
+    onRetryProgress(callback: (payload: RetryProgressPayload) => void): () => void;
     openLogs(): Promise<void>;
     getPending(): Promise<AppError[]>;
   };

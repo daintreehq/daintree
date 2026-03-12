@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { setTimeout as sleep } from "node:timers/promises";
 import { ipcMain, BrowserWindow, shell } from "electron";
 import { CHANNELS } from "./channels.js";
 import { getLogFilePath, logError as logErrorUtil } from "../utils/logger.js";
@@ -23,6 +24,21 @@ interface RetryPayload {
 }
 
 const MAX_PENDING_ERRORS = 50;
+
+const MAX_RETRY_ATTEMPTS: Record<RetryAction, number> = {
+  terminal: 3,
+  git: 3,
+  worktree: 5,
+};
+
+const BACKOFF_BASE_MS = 500;
+const BACKOFF_CAP_MS = 10_000;
+const BACKOFF_FLOOR_MS = 100;
+
+function computeRetryDelay(attempt: number): number {
+  const exponentialCeil = Math.min(BACKOFF_CAP_MS, BACKOFF_BASE_MS * Math.pow(2, attempt));
+  return Math.floor(Math.random() * (exponentialCeil - BACKOFF_FLOOR_MS + 1) + BACKOFF_FLOOR_MS);
+}
 
 function isRetryAction(value: unknown): value is RetryAction {
   return value === "terminal" || value === "git" || value === "worktree";
@@ -178,12 +194,17 @@ function isCriticalErrorType(type: ErrorType): boolean {
   return type === "config" || type === "filesystem";
 }
 
+function isAbortError(error: unknown): boolean {
+  return error instanceof Error && error.name === "AbortError";
+}
+
 class ErrorService {
   private mainWindow: BrowserWindow | null = null;
   private worktreeService: WorkspaceClient | null = null;
   private ptyClient: PtyClient | null = null;
   private pendingQueue: AppError[] = [];
   private isFlushing = false;
+  private activeRetries = new Map<string, AbortController>();
 
   initialize(
     mainWindow: BrowserWindow,
@@ -284,9 +305,23 @@ class ErrorService {
     }
   }
 
-  async handleRetry(payload: RetryPayload): Promise<void> {
-    const { action, args } = payload;
+  private sendRetryProgress(errorId: string, attempt: number, maxAttempts: number): void {
+    if (!this.canSendToRenderer()) return;
+    this.mainWindow!.webContents.send(CHANNELS.ERROR_RETRY_PROGRESS, {
+      id: errorId,
+      attempt,
+      maxAttempts,
+    });
+  }
 
+  cancelRetry(errorId: string): void {
+    const controller = this.activeRetries.get(errorId);
+    if (controller) {
+      controller.abort();
+    }
+  }
+
+  private async executeAction(action: RetryAction, args?: Record<string, unknown>): Promise<void> {
     switch (action) {
       case "terminal":
         if (this.ptyClient && typeof args?.id === "string" && typeof args?.cwd === "string") {
@@ -309,6 +344,40 @@ class ErrorService {
           await this.worktreeService.refresh();
         }
         break;
+    }
+  }
+
+  async handleRetry(payload: RetryPayload): Promise<void> {
+    const { errorId, action, args } = payload;
+    const maxAttempts = MAX_RETRY_ATTEMPTS[action];
+    const controller = new AbortController();
+    const { signal } = controller;
+
+    this.activeRetries.set(errorId, controller);
+
+    try {
+      for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        signal.throwIfAborted();
+
+        this.sendRetryProgress(errorId, attempt, maxAttempts);
+
+        try {
+          await this.executeAction(action, args);
+          return;
+        } catch (error) {
+          if (isAbortError(error)) throw error;
+          signal.throwIfAborted();
+
+          if (!isTransientError(error) || attempt === maxAttempts) {
+            throw error;
+          }
+
+          const delay = computeRetryDelay(attempt);
+          await sleep(delay, undefined, { signal });
+        }
+      }
+    } finally {
+      this.activeRetries.delete(errorId);
     }
   }
 
@@ -356,6 +425,9 @@ export function registerErrorHandlers(
       argsForError = parsedPayload.args;
       await errorService.handleRetry(parsedPayload);
     } catch (error) {
+      if (isAbortError(error)) {
+        throw error;
+      }
       errorService.notifyError(error, {
         source: `retry-${actionForError ?? "unknown"}`,
         retryAction: actionForError,
@@ -366,6 +438,14 @@ export function registerErrorHandlers(
   };
   ipcMain.handle(CHANNELS.ERROR_RETRY, handleRetry);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.ERROR_RETRY));
+
+  const handleRetryCancelListener = (_event: Electron.IpcMainEvent, errorId: unknown) => {
+    if (typeof errorId === "string") {
+      errorService.cancelRetry(errorId);
+    }
+  };
+  ipcMain.on(CHANNELS.ERROR_RETRY_CANCEL, handleRetryCancelListener);
+  handlers.push(() => ipcMain.removeListener(CHANNELS.ERROR_RETRY_CANCEL, handleRetryCancelListener));
 
   const handleOpenLogs = async () => {
     await errorService.openLogs();

@@ -923,6 +923,8 @@ function App() {
     return () => window.removeEventListener("canopy:open-notes-palette", handleOpenNotesPalette);
   }, [openNotesPalette]);
 
+  const clearRetryProgress = useErrorStore((state) => state.clearRetryProgress);
+
   const handleErrorRetry = useCallback(
     async (errorId: string, action: RetryAction, args?: Record<string, unknown>) => {
       try {
@@ -930,9 +932,19 @@ function App() {
         removeError(errorId);
       } catch (error) {
         console.error("Error retry failed:", error);
+      } finally {
+        clearRetryProgress(errorId);
       }
     },
-    [removeError]
+    [removeError, clearRetryProgress]
+  );
+
+  const handleCancelRetry = useCallback(
+    (errorId: string) => {
+      errorsClient.cancelRetry(errorId);
+      clearRetryProgress(errorId);
+    },
+    [clearRetryProgress]
   );
 
   const electronAvailable = isElectronAvailable();
@@ -1035,6 +1047,7 @@ function App() {
             onSettings={handleSettings}
             onOpenAgentSettings={handleOpenAgentSettings}
             onRetry={handleErrorRetry}
+            onCancelRetry={handleCancelRetry}
             agentAvailability={availability}
             agentSettings={agentSettings}
             isHydrated={isStateLoaded}

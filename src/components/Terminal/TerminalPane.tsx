@@ -26,6 +26,7 @@ import {
   useTerminalInputStore,
 } from "@/store";
 import { useTerminalLogic } from "@/hooks/useTerminalLogic";
+import { errorsClient } from "@/clients";
 import type { AgentState } from "@/types";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { actionService } from "@/services/ActionService";
@@ -206,6 +207,15 @@ function TerminalPaneComponent({
   );
   const dismissError = useErrorStore((state) => state.dismissError);
   const removeError = useErrorStore((state) => state.removeError);
+  const clearRetryProgress = useErrorStore((state) => state.clearRetryProgress);
+
+  const handleCancelRetry = useCallback(
+    (errorId: string) => {
+      errorsClient.cancelRetry(errorId);
+      clearRetryProgress(errorId);
+    },
+    [clearRetryProgress]
+  );
 
   const { isExited, exitCode, handleExit, handleErrorRetry } = useTerminalLogic({
     id,
@@ -609,6 +619,7 @@ function TerminalPaneComponent({
               error={error}
               onDismiss={dismissError}
               onRetry={handleErrorRetry}
+              onCancelRetry={handleCancelRetry}
               compact
             />
           ))}
