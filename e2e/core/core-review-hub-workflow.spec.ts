@@ -84,6 +84,9 @@ test.describe.serial("Core: Review Hub Workflow", () => {
 
     // Stage button should be gone
     await expect(stageBtn).toBeHidden({ timeout: T_SHORT });
+
+    // Unstaged section should show empty placeholder
+    await expect(hub.locator("text=No unstaged changes")).toBeVisible({ timeout: T_SHORT });
   });
 
   test("commit message input appears and commit button becomes enabled", async () => {
@@ -91,7 +94,7 @@ test.describe.serial("Core: Review Hub Workflow", () => {
 
     const hub = window.locator(SEL.reviewHub.container);
 
-    // CommitPanel should be visible (staged files > 0 in working-tree mode)
+    // CommitPanel renders when totalChanges > 0 in working-tree mode
     const textarea = hub.locator(SEL.reviewHub.commitMessageInput);
     await expect(textarea).toBeVisible({ timeout: T_MEDIUM });
 
@@ -121,6 +124,9 @@ test.describe.serial("Core: Review Hub Workflow", () => {
 
     // Clean state message should appear
     await expect(hub.locator(SEL.reviewHub.cleanState)).toBeVisible({ timeout: T_MEDIUM });
+
+    // CommitPanel should unmount (textarea gone)
+    await expect(hub.locator(SEL.reviewHub.commitMessageInput)).toBeHidden({ timeout: T_SHORT });
   });
 
   test("diff mode toggle switches to base-branch view", async () => {
@@ -140,9 +146,17 @@ test.describe.serial("Core: Review Hub Workflow", () => {
     await expect(baseBranchBtn).toHaveAttribute("aria-pressed", "true", { timeout: T_SHORT });
     await expect(workingTreeBtn).toHaveAttribute("aria-pressed", "false", { timeout: T_SHORT });
 
+    const hub = window.locator(SEL.reviewHub.container);
+
+    // Working-tree clean state should disappear in base-branch mode
+    await expect(hub.locator(SEL.reviewHub.cleanState)).toBeHidden({ timeout: T_MEDIUM });
+
     // Switch back to working-tree mode
     await workingTreeBtn.click();
     await expect(workingTreeBtn).toHaveAttribute("aria-pressed", "true", { timeout: T_SHORT });
+
+    // Clean state should reappear in working-tree mode
+    await expect(hub.locator(SEL.reviewHub.cleanState)).toBeVisible({ timeout: T_MEDIUM });
   });
 
   test("close button dismisses the hub", async () => {
