@@ -61,15 +61,6 @@ describe("runSystemHealthCheck", () => {
     vi.restoreAllMocks();
   });
 
-  function mockToolAvailable(tool: string, versionOutput: string) {
-    return (cmd: string, args?: readonly string[]) => {
-      const arg = Array.isArray(args) ? args[0] : "";
-      if (cmd === tool) return versionOutput;
-      if (arg === tool) return ""; // which/where success
-      return undefined;
-    };
-  }
-
   function mockAllBaselineAvailable() {
     mockedExecFileSync.mockImplementation((cmd, args) => {
       const arg = Array.isArray(args) ? args[0] : "";

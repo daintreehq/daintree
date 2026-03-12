@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   AlertTriangle,
   CircleCheck,
@@ -21,7 +21,7 @@ export function SystemHealthCheckStep({ onSkip, agentIds }: SystemHealthCheckSte
   const [error, setError] = useState<string | null>(null);
   const hasRunRef = useRef(false);
 
-  const runCheck = async () => {
+  const runCheck = useCallback(async () => {
     setIsChecking(true);
     setError(null);
     try {
@@ -32,13 +32,13 @@ export function SystemHealthCheckStep({ onSkip, agentIds }: SystemHealthCheckSte
     } finally {
       setIsChecking(false);
     }
-  };
+  }, [agentIds]);
 
   useEffect(() => {
     if (hasRunRef.current) return;
     hasRunRef.current = true;
     void runCheck();
-  }, []);
+  }, [runCheck]);
 
   const visibleResults = result?.prerequisites.filter((c) => c.severity !== "silent") ?? [];
 
