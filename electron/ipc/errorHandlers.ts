@@ -14,7 +14,7 @@ import {
 import { store } from "../store.js";
 import type { PtyClient } from "../services/PtyClient.js";
 import type { WorkspaceClient } from "../services/WorkspaceClient.js";
-import type { AppError, ErrorType, RetryAction } from "@shared/types/ipc/errors.js";
+import type { AppError, ErrorType, RetryAction } from "../../shared/types/ipc/errors.js";
 
 interface RetryPayload {
   errorId: string;
