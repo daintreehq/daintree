@@ -123,18 +123,39 @@ export function DevPreviewPane({
   const canGoForward = history.future.length > 0;
   const isUnconfigured = Boolean(currentProjectId) && !isSettingsLoading && !devCommand;
 
-  const setWebviewNode = useCallback((node: Electron.WebviewTag | null) => {
-    webviewRef.current = node;
-    if (node) {
-      lastSetUrlRef.current = "";
-      failLoadRetryCountRef.current = 0;
-      if (failLoadRetryRef.current) {
-        clearTimeout(failLoadRetryRef.current);
-        failLoadRetryRef.current = null;
+  const setWebviewNode = useCallback(
+    (node: Electron.WebviewTag | null) => {
+      if (!node && webviewRef.current) {
+        try {
+          const prevWebview = webviewRef.current;
+          const currentWebviewUrl = prevWebview.getURL();
+          if (currentWebviewUrl && currentWebviewUrl !== "about:blank") {
+            prevWebview
+              .executeJavaScript("window.scrollY")
+              .then((scrollY: number) => {
+                if (typeof scrollY === "number" && Number.isFinite(scrollY)) {
+                  scrollCache.set(id, { url: currentWebviewUrl, scrollY });
+                }
+              })
+              .catch(() => {});
+          }
+        } catch {
+          // Webview already detached
+        }
       }
-    }
-    setWebviewElement(node);
-  }, []);
+      webviewRef.current = node;
+      if (node) {
+        lastSetUrlRef.current = "";
+        failLoadRetryCountRef.current = 0;
+        if (failLoadRetryRef.current) {
+          clearTimeout(failLoadRetryRef.current);
+          failLoadRetryRef.current = null;
+        }
+      }
+      setWebviewElement(node);
+    },
+    [id]
+  );
 
   useEffect(() => {
     return () => {
