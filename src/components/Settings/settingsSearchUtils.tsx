@@ -45,10 +45,7 @@ export interface ParsedQuery {
 export function parseQuery(raw: string): ParsedQuery {
   const filterModified = MODIFIED_TOKEN_RE.test(raw);
   const cleanQuery = raw.replace(MODIFIED_TOKEN_RE, "").trim();
-  const tokens = cleanQuery
-    .toLowerCase()
-    .split(/\s+/)
-    .filter(Boolean);
+  const tokens = cleanQuery.toLowerCase().split(/\s+/).filter(Boolean);
   return { cleanQuery, tokens, filterModified };
 }
 
