@@ -123,7 +123,11 @@ export function IssueSelector({
           </div>
         </Button>
       </PopoverTrigger>
-      <PopoverContent className="w-[400px] p-0" align="start">
+      <PopoverContent
+        className="w-[400px] p-0"
+        align="start"
+        onEscapeKeyDown={(e) => e.stopPropagation()}
+      >
         <div className="flex items-center border-b border-canopy-border px-3">
           <Search className="mr-2 h-4 w-4 opacity-50 shrink-0" />
           <input
