@@ -506,6 +506,14 @@ export class PtyManager extends EventEmitter {
     if (!terminal) return null;
 
     const sessionId = await terminal.gracefulShutdown();
+
+    // gracefulShutdown() calls kill() internally when it has a shutdown config.
+    // For non-agent terminals (or agents without shutdown config), it returns null
+    // without killing. Fall back to immediate kill in that case.
+    if (!terminal.getInfo().wasKilled && !terminal.getInfo().isExited) {
+      this.kill(id, "graceful-kill-fallback");
+    }
+
     return sessionId;
   }
 

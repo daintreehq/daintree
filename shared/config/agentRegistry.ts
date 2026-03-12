@@ -289,7 +289,7 @@ export const AGENT_REGISTRY: Record<string, AgentConfig> = {
     },
     shutdown: {
       quitCommand: "/quit",
-      sessionIdPattern: "claude --resume ([a-f0-9-]{36})",
+      sessionIdPattern: "claude --resume ([\\w-]+)",
     },
     env: {
       CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
