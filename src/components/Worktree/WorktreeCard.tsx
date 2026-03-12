@@ -28,6 +28,7 @@ import { WorktreeTerminalSection } from "./WorktreeCard/WorktreeTerminalSection"
 import { useWorktreeActions } from "./WorktreeCard/hooks/useWorktreeActions";
 import { useWorktreeMenu } from "./WorktreeCard/hooks/useWorktreeMenu";
 import { useWorktreeStatus } from "./WorktreeCard/hooks/useWorktreeStatus";
+import { computeChipState, type ChipState } from "./utils/computeChipState";
 
 export interface WorktreeCardProps {
   worktree: WorktreeState;
@@ -343,12 +344,23 @@ export function WorktreeCard({
   const isStaleCard = spineState === "stale";
   const isWaitingCard = terminalCounts.byState.waiting > 0;
 
-  const chipState = useMemo((): "complete" | "waiting" | null => {
-    // Priority order: complete > waiting (add new states between as needed)
-    if (isComplete) return "complete";
-    if (isWaitingCard) return "waiting";
-    return null;
-  }, [isComplete, isWaitingCard]);
+  const chipState = useMemo(
+    (): ChipState =>
+      computeChipState({
+        worktreeErrorCount: worktreeErrors.length,
+        failedTerminalCount: terminalCounts.byState.failed,
+        waitingTerminalCount: terminalCounts.byState.waiting,
+        lifecycleStage,
+        isComplete,
+      }),
+    [
+      worktreeErrors.length,
+      terminalCounts.byState.failed,
+      terminalCounts.byState.waiting,
+      lifecycleStage,
+      isComplete,
+    ]
+  );
 
   const { setNodeRef, isOver } = useDroppable({
     id: `worktree-drop-${worktree.id}`,
@@ -441,15 +453,21 @@ export function WorktreeCard({
         <div
           className={cn(
             "absolute w-3 h-3 pointer-events-none z-10",
-            chipState === "waiting" ? "bg-[var(--color-state-waiting)]" : "bg-github-open",
+            chipState === "error" && "bg-github-closed",
+            chipState === "waiting" && "bg-state-waiting",
+            chipState === "cleanup" && "bg-github-merged",
+            chipState === "complete" && "bg-github-open",
             variant === "sidebar" ? "top-0 left-[1px]" : "top-0 left-0 rounded-tl-lg"
           )}
           style={{ clipPath: "polygon(0 0, 100% 0, 0 100%)" }}
           role="img"
           aria-label={
-            chipState === "waiting"
-              ? "Agent waiting for input"
-              : "Completed: Issue linked, PR opened, all changes committed"
+            {
+              error: "Error: attention needed",
+              waiting: "Agent waiting for input",
+              cleanup: "Ready for cleanup",
+              complete: "Complete: in review",
+            }[chipState]
           }
         />
       )}
