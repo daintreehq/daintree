@@ -235,6 +235,7 @@ export function GitHubResourceList({
 
   const openCreateDialog = useWorktreeSelectionStore((s) => s.openCreateDialog);
   const openCreateDialogForPR = useWorktreeSelectionStore((s) => s.openCreateDialogForPR);
+  const selectWorktree = useWorktreeSelectionStore((s) => s.selectWorktree);
 
   const handleCreateWorktree = useCallback(
     (item: GitHubIssue | GitHubPR) => {
@@ -246,6 +247,14 @@ export function GitHubResourceList({
       onClose?.();
     },
     [openCreateDialog, openCreateDialogForPR, onClose]
+  );
+
+  const handleSwitchToWorktree = useCallback(
+    (worktreeId: string) => {
+      selectWorktree(worktreeId);
+      onClose?.();
+    },
+    [selectWorktree, onClose]
   );
 
   const handleRetry = () => {
@@ -409,6 +418,7 @@ export function GitHubResourceList({
                   item={item}
                   type={type}
                   onCreateWorktree={handleCreateWorktree}
+                  onSwitchToWorktree={handleSwitchToWorktree}
                 />
               ))}
             </div>
