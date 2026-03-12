@@ -97,10 +97,13 @@ test.describe.serial("Core: Terminal Recipes", () => {
       await editor.locator(SEL.recipeEditor.createButton).click();
       await expect(editor).not.toBeVisible({ timeout: T_MEDIUM });
 
-      // Verify recipe appears in the list
+      // Verify project settings is still open, re-select recipes tab, and check recipe appears
       await expect(window.locator(SEL.projectSettings.heading)).toBeVisible({ timeout: T_MEDIUM });
+      await window.locator(SEL.projectSettings.recipesTab).click();
       await window.waitForTimeout(T_SETTLE);
-      await expect(window.getByText("E2E Test Recipe").first()).toBeVisible({ timeout: T_LONG });
+      await expect(
+        window.locator(SEL.projectSettings.editRecipeButton("E2E Test Recipe"))
+      ).toBeAttached({ timeout: T_LONG });
 
       await closeProjectSettings();
     });
@@ -175,9 +178,14 @@ test.describe.serial("Core: Terminal Recipes", () => {
       await editor.locator(SEL.recipeEditor.updateButton).click();
       await expect(editor).not.toBeVisible({ timeout: T_MEDIUM });
 
-      // Verify updated name appears in the list and old name is gone
-      await expect(window.getByText("E2E Updated Recipe")).toBeVisible({ timeout: T_MEDIUM });
-      await expect(window.getByText("E2E Test Recipe")).not.toBeVisible({ timeout: T_SHORT });
+      // Re-select recipes tab and verify updated name appears in the list
+      await window.locator(SEL.projectSettings.recipesTab).click();
+      await expect(
+        window.locator(SEL.projectSettings.editRecipeButton("E2E Updated Recipe"))
+      ).toBeAttached({ timeout: T_MEDIUM });
+      await expect(
+        window.locator(SEL.projectSettings.editRecipeButton("E2E Test Recipe"))
+      ).not.toBeAttached({ timeout: T_SHORT });
 
       // Reopen to verify the update persisted
       await window
