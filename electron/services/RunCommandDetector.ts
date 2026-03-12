@@ -121,7 +121,7 @@ export class RunCommandDetector {
       const commands: RunCommand[] = [];
       const seen = new Set<string>();
 
-      const recipeRegex = /^([a-zA-Z_.][a-zA-Z0-9._-]*)\s*(?:[^:=][^:]*)?\s*:(?!=)/;
+      const recipeRegex = /^@?([a-zA-Z_.][a-zA-Z0-9._-]*)\s*(?:[^:=][^:]*)?\s*:(?!=)/;
       const keywordPrefixes = ["alias ", "set ", "import ", "mod ", "export "];
 
       for (let i = 0; i < lines.length; i++) {
@@ -183,7 +183,7 @@ export class RunCommandDetector {
       if (!doc || typeof doc !== "object") return [];
 
       const tasks = doc.tasks;
-      if (!tasks || typeof tasks !== "object") return [];
+      if (!tasks || typeof tasks !== "object" || Array.isArray(tasks)) return [];
 
       const commands: RunCommand[] = [];
 
