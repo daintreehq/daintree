@@ -55,6 +55,7 @@ import { NotificationCenter } from "@/components/Notifications/NotificationCente
 import { useNotificationHistoryStore } from "@/store/slices/notificationHistorySlice";
 import { VoiceRecordingToolbarButton } from "./VoiceRecordingToolbarButton";
 import { useUIStore } from "@/store/uiStore";
+import { useShallow } from "zustand/react/shallow";
 
 interface ToolbarProps {
   onLaunchAgent: (
@@ -133,11 +134,11 @@ export function Toolbar({
   const commitsButtonRef = useRef<HTMLButtonElement>(null);
   const treeCopyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const { notificationCenterOpen, toggleNotificationCenter, closeNotificationCenter } = useUIStore(
-    (s) => ({
+    useShallow((s) => ({
       notificationCenterOpen: s.notificationCenterOpen,
       toggleNotificationCenter: s.toggleNotificationCenter,
       closeNotificationCenter: s.closeNotificationCenter,
-    })
+    }))
   );
   const notificationCenterButtonRef = useRef<HTMLButtonElement>(null);
   const notificationUnreadCount = useNotificationHistoryStore((s) => s.unreadCount);
