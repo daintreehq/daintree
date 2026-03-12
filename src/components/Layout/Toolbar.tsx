@@ -577,7 +577,10 @@ export function Toolbar({
               </TooltipProvider>
               <FixedDropdown
                 open={issuesOpen}
-                onOpenChange={setIssuesOpen}
+                onOpenChange={(open) => {
+                  setIssuesOpen(open);
+                  if (!open) issuesButtonRef.current?.focus();
+                }}
                 anchorRef={issuesButtonRef}
                 className="p-0 w-[450px]"
               >
@@ -630,7 +633,10 @@ export function Toolbar({
               </TooltipProvider>
               <FixedDropdown
                 open={prsOpen}
-                onOpenChange={setPrsOpen}
+                onOpenChange={(open) => {
+                  setPrsOpen(open);
+                  if (!open) prsButtonRef.current?.focus();
+                }}
                 anchorRef={prsButtonRef}
                 className="p-0 w-[450px]"
               >
@@ -674,7 +680,10 @@ export function Toolbar({
               </TooltipProvider>
               <FixedDropdown
                 open={commitsOpen}
-                onOpenChange={setCommitsOpen}
+                onOpenChange={(open) => {
+                  setCommitsOpen(open);
+                  if (!open) commitsButtonRef.current?.focus();
+                }}
                 anchorRef={commitsButtonRef}
                 className="p-0 w-[450px]"
               >

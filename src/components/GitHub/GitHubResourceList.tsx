@@ -287,11 +287,11 @@ export function GitHubResourceList({
       const activeEl = activeItemId
         ? document.getElementById(activeItemId)
         : isLoadMoreActive
-          ? listRef.current.nextElementSibling?.querySelector("button")
+          ? document.getElementById(`github-${type}-load-more`)
           : null;
       activeEl?.scrollIntoView({ block: "nearest" });
     }
-  }, [activeIndex, activeItemId, isLoadMoreActive]);
+  }, [activeIndex, activeItemId, isLoadMoreActive, type]);
 
   const handleInputKeyDown = useCallback(
     (e: KeyboardEvent<HTMLInputElement>) => {
@@ -333,7 +333,10 @@ export function GitHubResourceList({
               }
               if (matchedWt) {
                 handleSwitchToWorktree(matchedWt.id);
-              } else if (activeItem.state === "OPEN") {
+              } else if (
+                activeItem.state === "OPEN" &&
+                !(type === "pr" && "isFork" in activeItem && activeItem.isFork)
+              ) {
                 handleCreateWorktree(activeItem);
               }
             }
@@ -566,6 +569,7 @@ export function GitHubResourceList({
                   </div>
                 )}
                 <Button
+                  id={`github-${type}-load-more`}
                   variant="ghost"
                   onClick={handleLoadMore}
                   disabled={loadingMore}

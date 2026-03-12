@@ -64,7 +64,7 @@ export function CommitList({ projectPath, onClose, initialCount }: CommitListPro
       const activeEl = activeCommitId
         ? document.getElementById(activeCommitId)
         : isLoadMoreActive
-          ? listRef.current?.nextElementSibling?.querySelector("button")
+          ? document.getElementById("commit-load-more")
           : null;
       activeEl?.scrollIntoView({ block: "nearest" });
     }
@@ -328,6 +328,7 @@ export function CommitList({ projectPath, onClose, initialCount }: CommitListPro
                   </div>
                 )}
                 <Button
+                  id="commit-load-more"
                   variant="ghost"
                   onClick={handleLoadMore}
                   disabled={loadingMore}
