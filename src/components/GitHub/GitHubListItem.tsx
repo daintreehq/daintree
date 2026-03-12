@@ -71,9 +71,10 @@ function getPRBadgeInfo(linkedPR: LinkedPRInfo): {
 
 function middleTruncate(str: string, maxLen: number): string {
   if (str.length <= maxLen) return str;
+  if (maxLen <= 1) return "…";
   const prefixLen = Math.ceil((maxLen - 1) / 2);
   const suffixLen = Math.floor((maxLen - 1) / 2);
-  return `${str.slice(0, prefixLen)}…${str.slice(-suffixLen)}`;
+  return `${str.slice(0, prefixLen)}…${str.slice(str.length - suffixLen)}`;
 }
 
 export function GitHubListItem({ item, type, onCreateWorktree }: GitHubListItemProps) {
@@ -244,7 +245,7 @@ export function GitHubListItem({ item, type, onCreateWorktree }: GitHubListItemP
                 <TooltipProvider>
                   <Tooltip>
                     <TooltipTrigger asChild>
-                      <span className="font-mono truncate max-w-[140px]">
+                      <span className="font-mono truncate max-w-[160px]">
                         {middleTruncate(item.headRefName, 20)}
                       </span>
                     </TooltipTrigger>
@@ -258,7 +259,7 @@ export function GitHubListItem({ item, type, onCreateWorktree }: GitHubListItemP
             {!isItemPR && item.commentCount > 0 && (
               <>
                 <span>&middot;</span>
-                <span className="flex items-center gap-0.5">
+                <span className="flex items-center gap-0.5 shrink-0">
                   <MessageCircle className="w-3 h-3" />
                   {item.commentCount}
                 </span>
