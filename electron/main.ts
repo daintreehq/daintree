@@ -590,24 +590,18 @@ function setupWebviewCSP(): void {
         return { action: "deny" };
       });
 
-      // Intercept JavaScript dialogs (alert/confirm/prompt) from webview guests
+      // Intercept JavaScript dialogs (alert/confirm/prompt) from webview guests.
+      // @ts-expect-error Electron 40 emits "js-dialog" but its TS types omit it from the overload union
       contents.on(
-        "js-dialog" as string,
+        "js-dialog",
         (
           event: Electron.Event,
           _url: string,
-          _message: string,
-          _type: string,
-          ...rest: unknown[]
+          message: string,
+          dialogType: string,
+          defaultValue: string,
+          callback: (success: boolean, response?: string) => void
         ) => {
-          // Electron 40 js-dialog signature: (event, url, message, type, defaultValue, callback)
-          // We destructure carefully since TypeScript doesn't have built-in types for this event
-          const args = [_url, _message, _type, ...rest];
-          const message = args[1] as string;
-          const dialogType = args[2] as string;
-          const defaultValue = (args[3] as string) ?? "";
-          const callback = args[4] as (success: boolean, response?: string) => void;
-
           event.preventDefault();
 
           const dialogService = getWebviewDialogService();
@@ -625,7 +619,7 @@ function setupWebviewCSP(): void {
               panelId,
               type: dialogType,
               message,
-              defaultValue,
+              defaultValue: defaultValue ?? "",
             });
           } else {
             callback(dialogType === "alert");

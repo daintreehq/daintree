@@ -145,6 +145,10 @@ vi.mock("@/components/DragDrop", () => ({
   useIsDragging: useIsDraggingMock,
 }));
 
+vi.mock("@/hooks/useWebviewDialog", () => ({
+  useWebviewDialog: () => ({ currentDialog: null, handleDialogRespond: vi.fn() }),
+}));
+
 vi.mock("@/components/Browser/BrowserToolbar", () => ({
   BrowserToolbar: () => <div data-testid="browser-toolbar" />,
 }));

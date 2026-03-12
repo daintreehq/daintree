@@ -85,7 +85,7 @@ export function WebviewDialog({ dialog, onRespond }: WebviewDialogProps) {
             type="text"
             value={inputValue}
             onChange={(e) => setInputValue(e.target.value)}
-            className="w-full px-3 py-1.5 text-sm bg-canopy-input border border-canopy-border rounded-md text-canopy-text focus:outline-none focus:ring-1 focus:ring-canopy-accent/50 mb-4"
+            className="w-full px-3 py-1.5 text-sm bg-canopy-sidebar border border-canopy-border rounded-md text-canopy-text focus:outline-none focus:ring-1 focus:ring-canopy-accent/50 mb-4"
           />
         )}
 
@@ -94,7 +94,7 @@ export function WebviewDialog({ dialog, onRespond }: WebviewDialogProps) {
             <button
               type="button"
               onClick={handleCancel}
-              className="px-3 py-1.5 text-xs font-medium text-canopy-text/70 bg-canopy-bg hover:bg-canopy-hover border border-canopy-border rounded-md transition-colors focus:outline-none focus:ring-1 focus:ring-canopy-accent/50"
+              className="px-3 py-1.5 text-xs font-medium text-canopy-text/70 bg-canopy-bg hover:bg-white/5 border border-canopy-border rounded-md transition-colors focus:outline-none focus:ring-1 focus:ring-canopy-accent/50"
             >
               Cancel
             </button>
