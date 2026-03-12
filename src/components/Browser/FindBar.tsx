@@ -19,6 +19,7 @@ export function FindBar({ find }: FindBarProps) {
   } = find;
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (isComposingRef.current) return;
     if (e.key === "Escape") {
       e.preventDefault();
       close();
