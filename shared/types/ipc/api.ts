@@ -451,6 +451,7 @@ export interface ElectronAPI {
     getRepoStats(cwd: string, bypassCache?: boolean): Promise<RepositoryStats>;
     openIssues(cwd: string): Promise<void>;
     openPRs(cwd: string): Promise<void>;
+    openCommits(cwd: string): Promise<void>;
     openIssue(cwd: string, issueNumber: number): Promise<void>;
     openPR(prUrl: string): Promise<void>;
     checkCli(): Promise<GitHubCliStatus>;

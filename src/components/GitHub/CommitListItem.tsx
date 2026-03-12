@@ -1,10 +1,11 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useMemo } from "react";
 import type { MouseEvent } from "react";
 import { GitCommitHorizontal, Copy, Check } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { formatTimeAgo } from "@/utils/timeAgo";
 import type { GitCommit } from "@shared/types/github";
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
+import { parseConventionalCommit, getCommitTypeColor } from "./commitListUtils";
 
 interface CommitListItemProps {
   commit: GitCommit;
@@ -21,6 +22,8 @@ export function CommitListItem({ commit }: CommitListItemProps) {
       }
     };
   }, []);
+
+  const parsed = useMemo(() => parseConventionalCommit(commit.message), [commit.message]);
 
   const handleCopyHash = async (e: MouseEvent<HTMLButtonElement>) => {
     e.stopPropagation();
@@ -42,6 +45,29 @@ export function CommitListItem({ commit }: CommitListItemProps) {
     }
   };
 
+  const renderMessage = () => {
+    if (!parsed) {
+      return (
+        <span className="text-sm font-medium text-foreground truncate">{commit.message}</span>
+      );
+    }
+
+    const typeColor = parsed.breaking ? "text-status-danger font-bold" : getCommitTypeColor(parsed.type);
+
+    return (
+      <span className="text-sm font-medium truncate">
+        <span className={typeColor}>{parsed.type}</span>
+        {parsed.scope && (
+          <span className="text-muted-foreground">({parsed.scope})</span>
+        )}
+        {parsed.breaking && !parsed.type.endsWith("!") && (
+          <span className="text-status-danger font-bold">!</span>
+        )}
+        <span className="text-foreground">: {parsed.description}</span>
+      </span>
+    );
+  };
+
   return (
     <div className="p-3 hover:bg-muted/50 transition-colors group cursor-default">
       <div className="flex items-start gap-3">
@@ -54,9 +80,7 @@ export function CommitListItem({ commit }: CommitListItemProps) {
             <TooltipProvider>
               <Tooltip>
                 <TooltipTrigger asChild>
-                  <span className="text-sm font-medium text-foreground truncate">
-                    {commit.message}
-                  </span>
+                  {renderMessage()}
                 </TooltipTrigger>
                 <TooltipContent side="bottom">{commit.message}</TooltipContent>
               </Tooltip>

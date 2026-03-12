@@ -1,11 +1,12 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { useDebounce } from "@/hooks/useDebounce";
-import { Search, RefreshCw, AlertCircle } from "lucide-react";
+import { Search, RefreshCw, AlertCircle, ExternalLink } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { CommitListItem } from "./CommitListItem";
 import type { GitCommit, GitCommitListResponse } from "@shared/types/github";
 import { actionService } from "@/services/ActionService";
+import { buildGroupedRows } from "./commitListUtils";
 
 interface CommitListProps {
   projectPath: string;
@@ -28,6 +29,8 @@ export function CommitList({ projectPath, onClose, initialCount }: CommitListPro
   const [loadMoreError, setLoadMoreError] = useState<string | null>(null);
 
   const debouncedSearch = useDebounce(searchQuery, 300);
+
+  const groupedRows = useMemo(() => buildGroupedRows(data), [data]);
 
   const fetchData = useCallback(
     async (currentSkip: number, append: boolean = false, abortSignal?: AbortSignal) => {
@@ -104,6 +107,11 @@ export function CommitList({ projectPath, onClose, initialCount }: CommitListPro
   const handleRetry = () => {
     setSkip(0);
     fetchData(0, false, undefined);
+  };
+
+  const handleViewOnGitHub = () => {
+    actionService.dispatch("github.openCommits", { projectPath }, { source: "user" });
+    onClose?.();
   };
 
   const renderSkeleton = (count: number) => {
@@ -201,10 +209,23 @@ export function CommitList({ projectPath, onClose, initialCount }: CommitListPro
           renderEmpty()
         ) : (
           <>
-            <div className="divide-y divide-[var(--border-divider)]">
-              {data.map((commit) => (
-                <CommitListItem key={commit.hash} commit={commit} />
-              ))}
+            <div>
+              {groupedRows.map((row) =>
+                row.kind === "separator" ? (
+                  <div
+                    key={`sep-${row.label}`}
+                    className="px-3 py-1.5 flex items-center gap-2"
+                  >
+                    <div className="h-px flex-1 bg-[var(--border-divider)]" />
+                    <span className="text-xs text-muted-foreground shrink-0">
+                      {row.label}
+                    </span>
+                    <div className="h-px flex-1 bg-[var(--border-divider)]" />
+                  </div>
+                ) : (
+                  <CommitListItem key={row.commit.hash} commit={row.commit} />
+                )
+              )}
             </div>
 
             {hasMore && (
@@ -243,7 +264,16 @@ export function CommitList({ projectPath, onClose, initialCount }: CommitListPro
         )}
       </div>
 
-      <div className="p-3 border-t border-[var(--border-divider)] flex items-center justify-end shrink-0">
+      <div className="p-3 border-t border-[var(--border-divider)] flex items-center justify-between shrink-0">
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={handleViewOnGitHub}
+          className="text-muted-foreground hover:text-canopy-text"
+        >
+          <ExternalLink className="h-3.5 w-3.5" />
+          View on GitHub
+        </Button>
         <Button
           variant="ghost"
           size="sm"

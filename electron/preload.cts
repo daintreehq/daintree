@@ -1168,6 +1168,8 @@ const api: ElectronAPI = {
 
     openPRs: (cwd: string) => _typedInvoke(CHANNELS.GITHUB_OPEN_PRS, cwd),
 
+    openCommits: (cwd: string) => _typedInvoke(CHANNELS.GITHUB_OPEN_COMMITS, cwd),
+
     openIssue: (cwd: string, issueNumber: number) =>
       _typedInvoke(CHANNELS.GITHUB_OPEN_ISSUE, { cwd, issueNumber }),
 

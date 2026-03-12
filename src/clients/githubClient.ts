@@ -28,6 +28,10 @@ export const githubClient = {
     return window.electron.github.openPRs(cwd);
   },
 
+  openCommits: (cwd: string): Promise<void> => {
+    return window.electron.github.openCommits(cwd);
+  },
+
   openIssue: (cwd: string, issueNumber: number): Promise<void> => {
     return window.electron.github.openIssue(cwd, issueNumber);
   },

@@ -52,6 +52,25 @@ export function registerGithubActions(actions: ActionRegistry, _callbacks: Actio
     },
   }));
 
+  actions.set("github.openCommits", () => ({
+    id: "github.openCommits",
+    title: "Open GitHub Commits",
+    description: "Open the GitHub commits page for the current project",
+    category: "github",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    argsSchema: z.object({ projectPath: z.string().optional() }).optional(),
+    run: async (args: unknown) => {
+      const { projectPath } = (args as { projectPath?: string } | undefined) ?? {};
+      const path = projectPath ?? useProjectStore.getState().currentProject?.path;
+      if (!path) {
+        throw new Error("No project path available to open commits");
+      }
+      await githubClient.openCommits(path);
+    },
+  }));
+
   actions.set("github.openIssue", () => ({
     id: "github.openIssue",
     title: "Open GitHub Issue",

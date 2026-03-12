@@ -79,6 +79,7 @@ export type ActionId =
   | "window.close"
   | "github.openIssues"
   | "github.openPRs"
+  | "github.openCommits"
   | "github.openIssue"
   | "github.openPR"
   | "github.getRepoStats"
