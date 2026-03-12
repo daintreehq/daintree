@@ -7,6 +7,7 @@ import {
   GitMerge,
   GitPullRequestClosed,
   GitBranch,
+  MessageCircle,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { formatTimeAgo } from "@/utils/timeAgo";
@@ -66,6 +67,13 @@ function getPRBadgeInfo(linkedPR: LinkedPRInfo): {
     color: "text-github-closed",
     bgColor: "bg-github-closed/10",
   };
+}
+
+function middleTruncate(str: string, maxLen: number): string {
+  if (str.length <= maxLen) return str;
+  const prefixLen = Math.ceil((maxLen - 1) / 2);
+  const suffixLen = Math.floor((maxLen - 1) / 2);
+  return `${str.slice(0, prefixLen)}…${str.slice(-suffixLen)}`;
 }
 
 export function GitHubListItem({ item, type, onCreateWorktree }: GitHubListItemProps) {
@@ -230,6 +238,32 @@ export function GitHubListItem({ item, type, onCreateWorktree }: GitHubListItemP
             <span>{item.author.login}</span>
             <span>&middot;</span>
             <span>{formatTimeAgo(item.updatedAt)}</span>
+            {isItemPR && item.headRefName && (
+              <>
+                <span>&middot;</span>
+                <TooltipProvider>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <span className="font-mono truncate max-w-[140px]">
+                        {middleTruncate(item.headRefName, 20)}
+                      </span>
+                    </TooltipTrigger>
+                    {item.headRefName.length > 20 && (
+                      <TooltipContent side="bottom">{item.headRefName}</TooltipContent>
+                    )}
+                  </Tooltip>
+                </TooltipProvider>
+              </>
+            )}
+            {!isItemPR && item.commentCount > 0 && (
+              <>
+                <span>&middot;</span>
+                <span className="flex items-center gap-0.5">
+                  <MessageCircle className="w-3 h-3" />
+                  {item.commentCount}
+                </span>
+              </>
+            )}
             {onCreateWorktree && item.state === "OPEN" && (
               <>
                 <span>&middot;</span>
