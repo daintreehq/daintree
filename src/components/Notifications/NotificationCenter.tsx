@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Bell, Settings2, Trash2 } from "lucide-react";
+import { Bell, CheckCheck, Settings2, Trash2 } from "lucide-react";
 import {
   useNotificationHistoryStore,
   type NotificationHistoryEntry,
@@ -48,34 +48,85 @@ function groupByCorrelationId(entries: NotificationHistoryEntry[]): ThreadGroup[
 
 export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
   const entries = useNotificationHistoryStore((s) => s.entries);
+  const unreadCount = useNotificationHistoryStore((s) => s.unreadCount);
   const clearAll = useNotificationHistoryStore((s) => s.clearAll);
   const markAllRead = useNotificationHistoryStore((s) => s.markAllRead);
+  const dismissEntry = useNotificationHistoryStore((s) => s.dismissEntry);
 
-  const [unseenIds, setUnseenIds] = useState<Set<string>>(new Set());
-
-  useEffect(() => {
-    if (open) {
-      const currentEntries = useNotificationHistoryStore.getState().entries;
-      setUnseenIds(new Set(currentEntries.filter((e) => !e.seenAsToast).map((e) => e.id)));
-      markAllRead();
-    } else {
-      setUnseenIds(new Set());
-    }
-  }, [open, markAllRead]);
+  const [filter, setFilter] = useState<"all" | "unread">("all");
+  const [frozenUnreadIds, setFrozenUnreadIds] = useState<Set<string> | null>(null);
 
   useEffect(() => {
-    if (open && entries.some((e) => !e.seenAsToast)) {
-      markAllRead();
+    if (!open) {
+      setFrozenUnreadIds(null);
     }
-  }, [open, entries, markAllRead]);
+  }, [open]);
 
-  const groups = useMemo(() => groupByCorrelationId(entries), [entries]);
+  const filteredEntries = useMemo(() => {
+    if (filter === "all") return entries;
+    if (frozenUnreadIds) {
+      return entries.filter((e) => !e.seenAsToast || frozenUnreadIds.has(e.id));
+    }
+    return entries.filter((e) => !e.seenAsToast);
+  }, [entries, filter, frozenUnreadIds]);
+
+  const groups = useMemo(() => groupByCorrelationId(filteredEntries), [filteredEntries]);
+
+  const handleMarkAllRead = () => {
+    if (filter === "unread") {
+      setFrozenUnreadIds(new Set(entries.filter((e) => !e.seenAsToast).map((e) => e.id)));
+    }
+    markAllRead();
+  };
 
   return (
     <div className="w-[360px] max-h-[420px] flex flex-col">
       <div className="flex items-center justify-between px-3 py-2 border-b border-divider">
-        <span className="text-xs font-medium text-canopy-text/80">Notifications</span>
+        <div className="flex items-center gap-1.5">
+          <span className="text-xs font-medium text-canopy-text/80">Notifications</span>
+          {entries.length > 0 && (
+            <div className="flex items-center rounded-md border border-canopy-text/10 overflow-hidden">
+              <button
+                type="button"
+                onClick={() => {
+                  setFilter("all");
+                  setFrozenUnreadIds(null);
+                }}
+                className={`px-1.5 py-0.5 text-[10px] font-medium transition-colors ${
+                  filter === "all"
+                    ? "bg-overlay-medium text-canopy-text/80"
+                    : "text-canopy-text/40 hover:text-canopy-text/60"
+                }`}
+              >
+                All
+              </button>
+              <button
+                type="button"
+                onClick={() => setFilter("unread")}
+                className={`px-1.5 py-0.5 text-[10px] font-medium transition-colors ${
+                  filter === "unread"
+                    ? "bg-overlay-medium text-canopy-text/80"
+                    : "text-canopy-text/40 hover:text-canopy-text/60"
+                }`}
+              >
+                Unread
+              </button>
+            </div>
+          )}
+        </div>
         <div className="flex items-center gap-1">
+          {unreadCount > 0 && (
+            <Button
+              type="button"
+              variant="ghost"
+              size="xs"
+              onClick={handleMarkAllRead}
+              className="text-canopy-text/50"
+            >
+              <CheckCheck />
+              Mark all read
+            </Button>
+          )}
           <Button
             type="button"
             variant="ghost"
@@ -114,18 +165,27 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
         {groups.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-10 text-canopy-text/30">
             <Bell className="h-6 w-6 mb-2" />
-            <span className="text-xs">No notifications yet</span>
+            <span className="text-xs">
+              {filter === "unread" && entries.length > 0
+                ? "You're all caught up"
+                : "No notifications yet"}
+            </span>
           </div>
         ) : (
           <div className="divide-y divide-white/[0.04]">
             {groups.map((group) =>
               group.correlationId && group.entries.length > 1 ? (
-                <NotificationThread key={group.correlationId} group={group} unseenIds={unseenIds} />
+                <NotificationThread
+                  key={group.correlationId}
+                  group={group}
+                  onDismiss={dismissEntry}
+                />
               ) : (
                 <NotificationCenterEntry
                   key={group.entries[0].id}
                   entry={group.entries[0]}
-                  isNew={unseenIds.has(group.entries[0].id)}
+                  isNew={!group.entries[0].seenAsToast}
+                  onDismiss={() => dismissEntry(group.entries[0].id)}
                 />
               )
             )}
@@ -136,13 +196,24 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
   );
 }
 
-function NotificationThread({ group, unseenIds }: { group: ThreadGroup; unseenIds: Set<string> }) {
+function NotificationThread({
+  group,
+  onDismiss,
+}: {
+  group: ThreadGroup;
+  onDismiss: (id: string) => void;
+}) {
   const latest = group.entries[0];
-  const isNew = group.entries.some((e) => unseenIds.has(e.id));
+  const isNew = group.entries.some((e) => !e.seenAsToast);
 
   return (
     <div className="relative">
-      <NotificationCenterEntry entry={latest} threadCount={group.entries.length} isNew={isNew} />
+      <NotificationCenterEntry
+        entry={latest}
+        threadCount={group.entries.length}
+        isNew={isNew}
+        onDismiss={() => onDismiss(latest.id)}
+      />
     </div>
   );
 }

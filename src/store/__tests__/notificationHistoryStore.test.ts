@@ -51,22 +51,22 @@ describe("notificationHistorySlice", () => {
     expect(getState().unreadCount).toBe(3);
   });
 
-  it("respects 50-entry cap (oldest evicted)", () => {
-    for (let i = 0; i < 55; i++) {
+  it("respects 200-entry cap (oldest evicted)", () => {
+    for (let i = 0; i < 205; i++) {
       addEntry({ message: `msg-${i}` });
     }
     const { entries } = getState();
-    expect(entries).toHaveLength(50);
-    expect(entries[0].message).toBe("msg-54");
-    expect(entries[49].message).toBe("msg-5");
+    expect(entries).toHaveLength(200);
+    expect(entries[0].message).toBe("msg-204");
+    expect(entries[199].message).toBe("msg-5");
   });
 
-  it("unreadCount never exceeds 50 even with overflow", () => {
-    for (let i = 0; i < 100; i++) {
+  it("unreadCount never exceeds 200 even with overflow", () => {
+    for (let i = 0; i < 250; i++) {
       addEntry({ message: `msg-${i}` });
     }
-    expect(getState().unreadCount).toBe(50);
-    expect(getState().entries).toHaveLength(50);
+    expect(getState().unreadCount).toBe(200);
+    expect(getState().entries).toHaveLength(200);
   });
 
   it("markAllRead resets unread count but keeps entries", () => {
@@ -186,13 +186,55 @@ describe("notificationHistorySlice", () => {
     });
 
     it("unreadCount stays accurate when overflow evicts an unseen entry", () => {
-      for (let i = 0; i < 50; i++) {
+      for (let i = 0; i < 200; i++) {
         addEntry({ message: `missed-${i}` });
       }
-      expect(getState().unreadCount).toBe(50);
+      expect(getState().unreadCount).toBe(200);
       getState().addEntry({ type: "success", message: "seen", seenAsToast: true });
-      expect(getState().entries).toHaveLength(50);
-      expect(getState().unreadCount).toBe(49);
+      expect(getState().entries).toHaveLength(200);
+      expect(getState().unreadCount).toBe(199);
+    });
+  });
+
+  describe("dismissEntry", () => {
+    it("removes the entry and decrements unreadCount when entry is unread", () => {
+      addEntry({ message: "missed" });
+      const id = getState().entries[0].id;
+      expect(getState().unreadCount).toBe(1);
+      getState().dismissEntry(id);
+      expect(getState().entries).toHaveLength(0);
+      expect(getState().unreadCount).toBe(0);
+    });
+
+    it("removes the entry without changing unreadCount when entry is read", () => {
+      getState().addEntry({ type: "info", message: "seen", seenAsToast: true });
+      addEntry({ message: "missed" });
+      expect(getState().unreadCount).toBe(1);
+      const seenId = getState().entries[1].id;
+      getState().dismissEntry(seenId);
+      expect(getState().entries).toHaveLength(1);
+      expect(getState().entries[0].message).toBe("missed");
+      expect(getState().unreadCount).toBe(1);
+    });
+
+    it("is a no-op when id does not exist", () => {
+      addEntry({ message: "test" });
+      getState().dismissEntry("nonexistent-id");
+      expect(getState().entries).toHaveLength(1);
+      expect(getState().unreadCount).toBe(1);
+    });
+
+    it("works correctly with markAllRead", () => {
+      addEntry({ message: "missed 1" });
+      addEntry({ message: "missed 2" });
+      const id = getState().entries[0].id;
+      getState().dismissEntry(id);
+      expect(getState().unreadCount).toBe(1);
+      expect(getState().entries[0].message).toBe("missed 1");
+      getState().markAllRead();
+      expect(getState().unreadCount).toBe(0);
+      expect(getState().entries).toHaveLength(1);
+      expect(getState().entries[0].message).toBe("missed 1");
     });
   });
 });

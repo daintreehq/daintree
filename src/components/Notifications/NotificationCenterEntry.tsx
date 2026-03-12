@@ -1,4 +1,4 @@
-import { CheckCircle2, XCircle, Info, AlertTriangle } from "lucide-react";
+import { CheckCircle2, XCircle, Info, AlertTriangle, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { NotificationHistoryEntry } from "@/store/slices/notificationHistorySlice";
 import { actionService } from "@/services/ActionService";
@@ -26,12 +26,14 @@ interface NotificationCenterEntryProps {
   entry: NotificationHistoryEntry;
   threadCount?: number;
   isNew?: boolean;
+  onDismiss?: () => void;
 }
 
 export function NotificationCenterEntry({
   entry,
   threadCount,
   isNew = false,
+  onDismiss,
 }: NotificationCenterEntryProps) {
   const config = TYPE_CONFIG[entry.type];
   const Icon = config.icon;
@@ -39,7 +41,7 @@ export function NotificationCenterEntry({
   return (
     <div
       className={cn(
-        "flex items-start gap-2.5 px-3 py-2 hover:bg-overlay-medium transition-colors border-l-2",
+        "group flex items-start gap-2.5 px-3 py-2 hover:bg-overlay-medium transition-colors border-l-2",
         isNew ? "border-canopy-accent bg-canopy-accent/[0.04]" : "border-transparent"
       )}
     >
@@ -98,6 +100,19 @@ export function NotificationCenterEntry({
         </span>
         {isNew && (
           <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-canopy-accent shrink-0" />
+        )}
+        {onDismiss && (
+          <button
+            type="button"
+            aria-label="Dismiss notification"
+            onClick={(e) => {
+              e.stopPropagation();
+              onDismiss();
+            }}
+            className="opacity-0 group-hover:opacity-100 focus:opacity-100 h-4 w-4 flex items-center justify-center rounded text-canopy-text/40 hover:text-canopy-text/70 transition-opacity"
+          >
+            <X className="h-3 w-3" />
+          </button>
         )}
       </div>
     </div>

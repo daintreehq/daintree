@@ -16,7 +16,7 @@ export interface NotificationHistoryEntry {
   message: string;
   timestamp: number;
   correlationId?: string;
-  /** True when the user has seen this notification (shown as toast, or the notification center was opened). False when missed (app blurred or low priority, and center not yet opened). */
+  /** True when the user has seen this notification (shown as toast or explicitly marked as read). False when missed (app blurred or low priority). */
   seenAsToast: boolean;
   context?: {
     projectId?: string;
@@ -30,12 +30,13 @@ type AddEntryInput = Omit<NotificationHistoryEntry, "id" | "timestamp" | "seenAs
   seenAsToast?: boolean;
 };
 
-const MAX_ENTRIES = 50;
+const MAX_ENTRIES = 200;
 
 interface NotificationHistoryState {
   entries: NotificationHistoryEntry[];
   unreadCount: number;
   addEntry: (entry: AddEntryInput) => void;
+  dismissEntry: (id: string) => void;
   clearAll: () => void;
   markAllRead: () => void;
 }
@@ -60,6 +61,11 @@ export const useNotificationHistoryStore = create<NotificationHistoryState>((set
       return { entries: updated, unreadCount };
     });
   },
+  dismissEntry: (id) =>
+    set((state) => {
+      const entries = state.entries.filter((e) => e.id !== id);
+      return { entries, unreadCount: entries.filter((e) => !e.seenAsToast).length };
+    }),
   clearAll: () => set({ entries: [], unreadCount: 0 }),
   markAllRead: () =>
     set((state) => ({
