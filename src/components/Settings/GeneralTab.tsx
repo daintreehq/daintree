@@ -398,6 +398,14 @@ export function GeneralTab({ appVersion, onNavigateToAgents }: GeneralTabProps) 
             )
           }
           ariaLabel="Project Pulse Toggle"
+          isModified={!showProjectPulse}
+          onReset={() =>
+            void actionService.dispatch(
+              "preferences.showProjectPulse.set",
+              { show: true },
+              { source: "user" }
+            )
+          }
         />
 
         <SettingsSwitchCard
@@ -413,6 +421,14 @@ export function GeneralTab({ appVersion, onNavigateToAgents }: GeneralTabProps) 
             )
           }
           ariaLabel="Developer Tools Toggle"
+          isModified={showDeveloperTools}
+          onReset={() =>
+            void actionService.dispatch(
+              "preferences.showDeveloperTools.set",
+              { show: false },
+              { source: "user" }
+            )
+          }
         />
       </SettingsSection>
 

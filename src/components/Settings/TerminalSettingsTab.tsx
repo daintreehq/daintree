@@ -212,6 +212,14 @@ export function TerminalSettingsTab() {
           onChange={handlePerformanceModeToggle}
           ariaLabel="Performance Mode Toggle"
           colorScheme="amber"
+          isModified={performanceMode}
+          onReset={() =>
+            void actionService.dispatch(
+              "terminalConfig.setPerformanceMode",
+              { performanceMode: false },
+              { source: "user" }
+            )
+          }
         />
 
         {performanceMode && (
@@ -240,6 +248,14 @@ export function TerminalSettingsTab() {
           isEnabled={hybridInputEnabled}
           onChange={handleHybridInputEnabledToggle}
           ariaLabel="Hybrid Input Bar Toggle"
+          isModified={!hybridInputEnabled}
+          onReset={() =>
+            void actionService.dispatch(
+              "terminalConfig.setHybridInputEnabled",
+              { enabled: true },
+              { source: "user" }
+            )
+          }
         />
 
         {hybridInputEnabled && (
@@ -254,6 +270,14 @@ export function TerminalSettingsTab() {
             isEnabled={hybridInputAutoFocus}
             onChange={handleHybridInputAutoFocusToggle}
             ariaLabel="Hybrid Input Auto Focus Toggle"
+            isModified={!hybridInputAutoFocus}
+            onReset={() =>
+              void actionService.dispatch(
+                "terminalConfig.setHybridInputAutoFocus",
+                { enabled: true },
+                { source: "user" }
+              )
+            }
           />
         )}
       </SettingsSection>
@@ -275,6 +299,8 @@ export function TerminalSettingsTab() {
           isEnabled={twoPaneSplitConfig.enabled}
           onChange={() => setTwoPaneSplitEnabled(!twoPaneSplitConfig.enabled)}
           ariaLabel="Two-Pane Split Toggle"
+          isModified={!twoPaneSplitConfig.enabled}
+          onReset={() => setTwoPaneSplitEnabled(true)}
         />
 
         {twoPaneSplitConfig.enabled && (
@@ -292,6 +318,8 @@ export function TerminalSettingsTab() {
               isEnabled={twoPaneSplitConfig.preferPreview}
               onChange={() => setPreferPreview(!twoPaneSplitConfig.preferPreview)}
               ariaLabel="Prefer Preview Toggle"
+              isModified={twoPaneSplitConfig.preferPreview}
+              onReset={() => setPreferPreview(false)}
             />
 
             <div className="space-y-2">
