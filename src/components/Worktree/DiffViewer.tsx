@@ -104,6 +104,18 @@ function FileDiff({ file, viewType, language, rootPath }: FileDiffProps) {
   const tokens = useTokens(file.hunks ?? [], language);
   const diffType: DiffType = file.type as DiffType;
 
+  const { additions, deletions } = useMemo(() => {
+    let adds = 0;
+    let dels = 0;
+    for (const hunk of file.hunks ?? []) {
+      for (const change of hunk.changes) {
+        if (change.type === "insert") adds++;
+        else if (change.type === "delete") dels++;
+      }
+    }
+    return { additions: adds, deletions: dels };
+  }, [file.hunks]);
+
   const fileTyped = file as ReturnType<typeof parseDiff>[0] & {
     newPath?: string;
     oldPath?: string;
@@ -138,16 +150,24 @@ function FileDiff({ file, viewType, language, rootPath }: FileDiffProps) {
       {relPath && (
         <div className="flex items-center justify-between px-3 py-1.5 bg-canopy-sidebar border-b border-canopy-border text-xs text-canopy-text/60 font-mono">
           <span className="truncate">{relPath}</span>
-          {absolutePath && (
-            <button
-              onClick={handleOpenInEditor}
-              title={`Open in editor${firstHunkLine ? ` at line ${firstHunkLine}` : ""}`}
-              className="ml-2 shrink-0 flex items-center gap-1 px-2 py-0.5 rounded hover:bg-white/5 hover:text-canopy-text transition-colors"
-            >
-              <ExternalLink className="w-3 h-3" />
-              Open
-            </button>
-          )}
+          <div className="flex items-center gap-2 shrink-0">
+            {(additions > 0 || deletions > 0) && (
+              <span className="flex items-center gap-1">
+                {additions > 0 && <span className="text-green-400">+{additions}</span>}
+                {deletions > 0 && <span className="text-red-400">-{deletions}</span>}
+              </span>
+            )}
+            {absolutePath && (
+              <button
+                onClick={handleOpenInEditor}
+                title={`Open in editor${firstHunkLine ? ` at line ${firstHunkLine}` : ""}`}
+                className="ml-2 shrink-0 flex items-center gap-1 px-2 py-0.5 rounded hover:bg-white/5 hover:text-canopy-text transition-colors"
+              >
+                <ExternalLink className="w-3 h-3" />
+                Open
+              </button>
+            )}
+          </div>
         </div>
       )}
       <Diff

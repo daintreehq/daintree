@@ -1,12 +1,14 @@
-import { useEffect, useCallback, useState, useRef } from "react";
+import { useEffect, useCallback, useState, useRef, useMemo } from "react";
 import type { ViewType } from "react-diff-view";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { DiffViewer } from "@/components/Worktree/DiffViewer";
 import { CodeViewer } from "./CodeViewer";
+import type { CodeViewerHandle } from "./CodeViewer";
 import { filesClient } from "@/clients/filesClient";
 import { actionService } from "@/services/ActionService";
 import { ExternalLink, Copy, Check, Image as ImageIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { formatBytes } from "@/lib/formatBytes";
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
 import type { FileReadErrorCode } from "@shared/types/ipc/files";
 import { sanitizeSvg } from "@shared/utils/svgSanitizer";
@@ -84,6 +86,7 @@ export function FileViewerModal({
   const requestRef = useRef(0);
   const copyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isMountedRef = useRef(true);
+  const codeViewerRef = useRef<CodeViewerHandle>(null);
 
   const imageFile = isImageFile(filePath);
   const svgFile = isSvgFile(filePath);
@@ -204,6 +207,38 @@ export function FileViewerModal({
 
   const canShowView = loadState === "loaded" && content !== null;
   const isImageMode = loadState === "image" || loadState === "svg";
+
+  const metadata = useMemo(() => {
+    if (!canShowView || content === null) return null;
+    const lineCount = content.split("\n").length;
+    const byteSize = new TextEncoder().encode(content).byteLength;
+    return { lineCount, sizeLabel: formatBytes(byteSize) };
+  }, [canShowView, content]);
+
+  // Route Cmd+F (canopy:find-in-panel) and Cmd+L to CodeViewer
+  useEffect(() => {
+    if (!isOpen || isImageMode || mode !== "view") return;
+
+    const handleFindInPanel = () => {
+      codeViewerRef.current?.openSearch();
+    };
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === "l") {
+        const target = e.target as HTMLElement;
+        if (target.tagName === "INPUT" || target.tagName === "TEXTAREA") return;
+        e.preventDefault();
+        codeViewerRef.current?.openGotoLine();
+      }
+    };
+
+    window.addEventListener("canopy:find-in-panel", handleFindInPanel);
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("canopy:find-in-panel", handleFindInPanel);
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [isOpen, isImageMode, mode]);
 
   return (
     <AppDialog isOpen={isOpen} onClose={onClose} size="6xl" maxHeight="max-h-[90vh]">
@@ -409,12 +444,20 @@ export function FileViewerModal({
             )}
 
             {loadState === "loaded" && content !== null && (
-              <CodeViewer
-                content={content}
-                filePath={filePath}
-                initialLine={initialLine}
-                className="min-h-[300px]"
-              />
+              <>
+                {metadata && (
+                  <div className="px-3 py-1 border-b border-canopy-border text-xs text-muted-foreground font-mono">
+                    {metadata.lineCount} lines · {metadata.sizeLabel} · UTF-8
+                  </div>
+                )}
+                <CodeViewer
+                  ref={codeViewerRef}
+                  content={content}
+                  filePath={filePath}
+                  initialLine={initialLine}
+                  className="min-h-[300px]"
+                />
+              </>
             )}
           </>
         )}
