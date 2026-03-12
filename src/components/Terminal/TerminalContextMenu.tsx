@@ -319,7 +319,9 @@ export function TerminalContextMenu({
     return (
       <ContextMenu>
         <ContextMenuTrigger asChild>
-          <div className="contents">{children}</div>
+          <div className="contents" data-context-trigger={terminalId}>
+            {children}
+          </div>
         </ContextMenuTrigger>
         <ContextMenuContent>
           {layoutSection}
@@ -351,7 +353,9 @@ export function TerminalContextMenu({
     return (
       <ContextMenu>
         <ContextMenuTrigger asChild>
-          <div className="contents">{children}</div>
+          <div className="contents" data-context-trigger={terminalId}>
+            {children}
+          </div>
         </ContextMenuTrigger>
         <ContextMenuContent>
           {layoutSection}
@@ -380,7 +384,9 @@ export function TerminalContextMenu({
     return (
       <ContextMenu>
         <ContextMenuTrigger asChild>
-          <div className="contents">{children}</div>
+          <div className="contents" data-context-trigger={terminalId}>
+            {children}
+          </div>
         </ContextMenuTrigger>
         <ContextMenuContent>
           {layoutSection}
@@ -440,7 +446,9 @@ export function TerminalContextMenu({
   return (
     <ContextMenu>
       <ContextMenuTrigger asChild>
-        <div className="contents">{children}</div>
+        <div className="contents" data-context-trigger={terminalId}>
+          {children}
+        </div>
       </ContextMenuTrigger>
       <ContextMenuContent>
         {hasPty && (

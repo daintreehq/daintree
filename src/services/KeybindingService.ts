@@ -746,6 +746,14 @@ const DEFAULT_KEYBINDINGS: KeybindingConfig[] = [
     description: "Open in editor",
     category: "Worktrees",
   },
+  {
+    actionId: "terminal.contextMenu",
+    combo: "Shift+F10",
+    scope: "global",
+    priority: 0,
+    description: "Open focused panel context menu",
+    category: "Panels",
+  },
   // Unbound by default but kept for user customization
   {
     actionId: "agent.codex",

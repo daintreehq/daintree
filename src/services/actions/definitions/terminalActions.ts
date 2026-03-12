@@ -5,6 +5,7 @@ import type { ActionId, ActionContext } from "@shared/types/actions";
 import { stripAnsiCodes } from "@shared/utils/artifactParser";
 import { appClient, terminalClient } from "@/clients";
 import { computeGridColumns } from "@/lib/terminalLayout";
+import { openPanelContextMenu } from "@/lib/panelContextMenu";
 import { useLayoutConfigStore } from "@/store/layoutConfigStore";
 import { useTerminalStore } from "@/store/terminalStore";
 import { useWorktreeDataStore } from "@/store/worktreeDataStore";
@@ -1295,6 +1296,25 @@ export function registerTerminalActions(actions: ActionRegistry, callbacks: Acti
         } else {
           state.watchPanel(targetId);
         }
+      }
+    },
+  }));
+
+  actions.set("terminal.contextMenu", () => ({
+    id: "terminal.contextMenu",
+    title: "Open Context Menu",
+    description: "Open the context menu for the focused panel",
+    category: "terminal",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    argsSchema: z.object({ terminalId: z.string().optional() }),
+    run: async (args: unknown) => {
+      const { terminalId } = (args ?? {}) as { terminalId?: string };
+      const state = useTerminalStore.getState();
+      const targetId = terminalId ?? state.focusedId;
+      if (targetId) {
+        openPanelContextMenu(targetId);
       }
     },
   }));

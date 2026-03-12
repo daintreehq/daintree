@@ -1,6 +1,8 @@
 import { useEffect, useSyncExternalStore } from "react";
 import { keybindingService, normalizeKeyForBinding } from "../services/KeybindingService";
 import { actionService } from "../services/ActionService";
+import { openPanelContextMenu } from "../lib/panelContextMenu";
+import { useTerminalStore } from "../store";
 
 /**
  * Global keybinding handler that provides:
@@ -33,6 +35,25 @@ export function useGlobalKeybindings(enabled: boolean = true): void {
 
       // Don't process modifier-only keypresses
       if (isModifierOnly) return;
+
+      // Handle Shift+F10 and ContextMenu key for panel context menus.
+      // Must be checked before the editable/terminal bailouts below.
+      // Respects user overrides — if the binding is disabled, fall through.
+      if (
+        e.key === "ContextMenu" ||
+        (e.key === "F10" && e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey)
+      ) {
+        const effectiveCombo = keybindingService.getEffectiveCombo("terminal.contextMenu");
+        if (effectiveCombo !== undefined) {
+          e.preventDefault();
+          e.stopPropagation();
+          const focusedId = useTerminalStore.getState().focusedId;
+          if (focusedId) {
+            openPanelContextMenu(focusedId);
+          }
+          return;
+        }
+      }
 
       // For editable contexts without modifiers, let native behavior happen
       // Exception: allow chord completion even without modifiers
