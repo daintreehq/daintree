@@ -58,6 +58,7 @@ export function SortableWorktreeTerminal({
       style={style}
       className={cn(isDragging && "opacity-40")}
       role="listitem"
+      aria-roledescription="sortable item"
       {...attributesWithoutRole}
     >
       {typeof children === "function" ? (

@@ -23,6 +23,7 @@ import {
   type DragOverEvent,
   type CollisionDetection,
   type Modifier,
+  type Announcements,
 } from "@dnd-kit/core";
 import {
   useTerminalStore,
@@ -91,6 +92,35 @@ export interface WorktreeDragData extends DragData {
   worktreeId: string;
   origin: "accordion";
 }
+
+function getDragLabel(data: DragData | WorktreeDragData | undefined): string {
+  return data?.terminal?.title ?? "panel";
+}
+
+const dragAnnouncements: Announcements = {
+  onDragStart({ active }) {
+    return `Picked up ${getDragLabel(active.data.current as DragData | undefined)}`;
+  },
+  onDragOver({ active, over }) {
+    const label = getDragLabel(active.data.current as DragData | undefined);
+    if (over) {
+      const overLabel = getDragLabel(over.data.current as DragData | undefined);
+      return `${label} is over ${overLabel}`;
+    }
+    return `${label} is no longer over a droppable area`;
+  },
+  onDragEnd({ active, over }) {
+    const label = getDragLabel(active.data.current as DragData | undefined);
+    if (over) {
+      return `Dropped ${label}`;
+    }
+    return `${label} returned to its original position`;
+  },
+  onDragCancel({ active }) {
+    const label = getDragLabel(active.data.current as DragData | undefined);
+    return `Drag cancelled. ${label} returned to its original position`;
+  },
+};
 
 function isWorktreeDragData(
   data: DragData | WorktreeDragData | undefined
@@ -847,6 +877,7 @@ export function DndProvider({ children }: DndProviderProps) {
       onDragEnd={handleDragEnd}
       onDragCancel={handleDragCancel}
       collisionDetection={collisionDetection}
+      accessibility={{ announcements: dragAnnouncements }}
     >
       <DndPlaceholderContext.Provider value={placeholderContextValue}>
         {children}
