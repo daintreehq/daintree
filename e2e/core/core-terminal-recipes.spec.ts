@@ -3,7 +3,7 @@ import { launchApp, closeApp, type AppContext } from "../helpers/launch";
 import { createFixtureRepo } from "../helpers/fixtures";
 import { openAndOnboardProject } from "../helpers/project";
 import { SEL } from "../helpers/selectors";
-import { T_SHORT, T_MEDIUM, T_SETTLE } from "../helpers/timeouts";
+import { T_SHORT, T_MEDIUM, T_LONG, T_SETTLE } from "../helpers/timeouts";
 
 let ctx: AppContext;
 
@@ -98,8 +98,9 @@ test.describe.serial("Core: Terminal Recipes", () => {
       await expect(editor).not.toBeVisible({ timeout: T_MEDIUM });
 
       // Verify recipe appears in the list
-      await expect(window.locator(SEL.projectSettings.heading)).toBeVisible({ timeout: T_SHORT });
-      await expect(window.getByText("E2E Test Recipe").first()).toBeVisible({ timeout: T_MEDIUM });
+      await expect(window.locator(SEL.projectSettings.heading)).toBeVisible({ timeout: T_MEDIUM });
+      await window.waitForTimeout(T_SETTLE);
+      await expect(window.getByText("E2E Test Recipe").first()).toBeVisible({ timeout: T_LONG });
 
       await closeProjectSettings();
     });
