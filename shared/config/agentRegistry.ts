@@ -164,6 +164,17 @@ export interface AgentConfig {
    */
   routing?: AgentRoutingConfig;
   /**
+   * Graceful shutdown configuration for capturing session IDs.
+   * When present, the PTY host will send the quit command before killing,
+   * then scan output for the session ID pattern.
+   */
+  shutdown?: {
+    /** Command to send to trigger graceful exit (e.g., "/quit") */
+    quitCommand: string;
+    /** Regex pattern string with a capture group for the session ID */
+    sessionIdPattern: string;
+  };
+  /**
    * Environment variables to set for this agent at spawn time.
    *
    * Precedence order (lowest to highest):
@@ -276,6 +287,10 @@ export const AGENT_REGISTRY: Record<string, AgentConfig> = {
       maxConcurrent: 2,
       enabled: true,
     },
+    shutdown: {
+      quitCommand: "/quit",
+      sessionIdPattern: "claude --resume ([\\w-]+)",
+    },
     env: {
       CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
     },
@@ -375,6 +390,10 @@ export const AGENT_REGISTRY: Record<string, AgentConfig> = {
       },
       maxConcurrent: 2,
       enabled: true,
+    },
+    shutdown: {
+      quitCommand: "/quit",
+      sessionIdPattern: "gemini --resume ([\\w-]+)",
     },
     env: {
       GEMINI_CLI_ALT_SCREEN: "false",
@@ -480,6 +499,10 @@ export const AGENT_REGISTRY: Record<string, AgentConfig> = {
       },
       maxConcurrent: 2,
       enabled: true,
+    },
+    shutdown: {
+      quitCommand: "/quit",
+      sessionIdPattern: "codex resume ([\\w-]+)",
     },
   },
   opencode: {
@@ -608,6 +631,10 @@ export const AGENT_REGISTRY: Record<string, AgentConfig> = {
       },
       maxConcurrent: 1,
       enabled: true,
+    },
+    shutdown: {
+      quitCommand: "/quit",
+      sessionIdPattern: "opencode -s ([\\w-]+)",
     },
   },
 };

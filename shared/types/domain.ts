@@ -518,6 +518,8 @@ interface PtyPanelData extends BasePanelData {
   exitBehavior?: PanelExitBehavior;
   /** Detected process icon ID for dynamic terminal icons (transient, not persisted) */
   detectedProcessId?: string;
+  /** Captured agent session ID from graceful shutdown (used for session resume) */
+  agentSessionId?: string;
 }
 
 interface BrowserPanelData extends BasePanelData {
@@ -653,6 +655,8 @@ export interface TerminalInstance {
   hasPty?: boolean;
   /** Detected process icon ID for dynamic terminal icons (transient, not persisted) */
   detectedProcessId?: string;
+  /** Captured agent session ID from graceful shutdown (used for session resume) */
+  agentSessionId?: string;
   // Note: Tab membership is now stored in TabGroup objects, not on panels
 }
 
@@ -762,6 +766,8 @@ export interface TerminalSnapshot {
   createdAt?: number;
   /** Behavior when terminal exits */
   exitBehavior?: PanelExitBehavior;
+  /** Captured agent session ID from graceful shutdown (used for session resume) */
+  agentSessionId?: string;
   // Note: Tab membership is now stored in ProjectState.tabGroups, not on terminals
 }
 

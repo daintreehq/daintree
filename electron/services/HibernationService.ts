@@ -140,8 +140,9 @@ export class HibernationService {
       );
 
       try {
-        // Kill terminals (synchronous)
-        const terminalsKilled = ptyManager.killByProject(project.id);
+        // Gracefully kill terminals (allows agents to print session IDs before dying)
+        const results = await ptyManager.gracefulKillByProject(project.id);
+        const terminalsKilled = results.length;
 
         // Clear persisted state
         await projectStore.clearProjectState(project.id);
