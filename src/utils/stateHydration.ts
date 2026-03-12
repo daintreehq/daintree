@@ -222,6 +222,7 @@ export interface HydrationOptions {
   setReconnectError?: (id: string, error: TerminalReconnectError) => void;
   hydrateTabGroups?: (tabGroups: TabGroup[], options?: { skipPersist?: boolean }) => void;
   hydrateMru?: (list: string[]) => void;
+  hydrateActionMru?: (list: string[]) => void;
 }
 
 export async function hydrateAppState(
@@ -1068,6 +1069,11 @@ export async function hydrateAppState(
     // Restore MRU list
     if (options.hydrateMru && Array.isArray(appState.mruList)) {
       options.hydrateMru(appState.mruList);
+    }
+
+    // Restore action MRU list
+    if (options.hydrateActionMru && Array.isArray(appState.actionMruList)) {
+      options.hydrateActionMru(appState.actionMruList);
     }
   } catch (error) {
     logError("Failed to hydrate app state", error);
