@@ -1,4 +1,5 @@
 import type { AgentRoutingConfig } from "../types/agentSettings.js";
+import type { PrerequisiteSpec } from "../types/ipc/system.js";
 import { AGENT_BRAND_COLORS } from "../theme/index.js";
 
 export interface AgentHelpConfig {
@@ -187,6 +188,11 @@ export interface AgentConfig {
    * are enforced and cannot be overridden by this field.
    */
   env?: Record<string, string>;
+  /**
+   * Prerequisites required for this agent to function.
+   * Merged with baseline prerequisites during health checks.
+   */
+  prerequisites?: PrerequisiteSpec[];
 }
 
 export const AGENT_REGISTRY: Record<string, AgentConfig> = {
@@ -294,6 +300,15 @@ export const AGENT_REGISTRY: Record<string, AgentConfig> = {
     env: {
       CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
     },
+    prerequisites: [
+      {
+        tool: "claude",
+        label: "Claude CLI",
+        versionArgs: ["--version"],
+        severity: "fatal",
+        installUrl: "https://github.com/anthropics/claude-code",
+      },
+    ],
   },
   gemini: {
     id: "gemini",
@@ -398,6 +413,15 @@ export const AGENT_REGISTRY: Record<string, AgentConfig> = {
     env: {
       GEMINI_CLI_ALT_SCREEN: "false",
     },
+    prerequisites: [
+      {
+        tool: "gemini",
+        label: "Gemini CLI",
+        versionArgs: ["--version"],
+        severity: "fatal",
+        installUrl: "https://ai.google.dev/gemini-api/docs/cli",
+      },
+    ],
   },
   codex: {
     id: "codex",
@@ -504,6 +528,15 @@ export const AGENT_REGISTRY: Record<string, AgentConfig> = {
       quitCommand: "/quit",
       sessionIdPattern: "codex resume ([\\w-]+)",
     },
+    prerequisites: [
+      {
+        tool: "codex",
+        label: "Codex CLI",
+        versionArgs: ["--version"],
+        severity: "fatal",
+        installUrl: "https://github.com/openai/codex",
+      },
+    ],
   },
   opencode: {
     id: "opencode",
@@ -636,6 +669,15 @@ export const AGENT_REGISTRY: Record<string, AgentConfig> = {
       quitCommand: "/quit",
       sessionIdPattern: "opencode -s ([\\w-]+)",
     },
+    prerequisites: [
+      {
+        tool: "opencode",
+        label: "OpenCode CLI",
+        versionArgs: ["--version"],
+        severity: "fatal",
+        installUrl: "https://opencode.ai/docs/",
+      },
+    ],
   },
 };
 

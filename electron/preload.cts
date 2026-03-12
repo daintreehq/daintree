@@ -861,7 +861,7 @@ const api: ElectronAPI = {
     startAgentUpdate: (payload: { agentId: string; method?: string }) =>
       _typedInvoke(CHANNELS.SYSTEM_START_AGENT_UPDATE, payload),
 
-    healthCheck: () => _typedInvoke(CHANNELS.SYSTEM_HEALTH_CHECK),
+    healthCheck: (agentIds?: string[]) => _typedInvoke(CHANNELS.SYSTEM_HEALTH_CHECK, agentIds),
 
     downloadDiagnostics: () => _typedInvoke(CHANNELS.SYSTEM_DOWNLOAD_DIAGNOSTICS),
 

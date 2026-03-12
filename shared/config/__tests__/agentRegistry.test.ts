@@ -48,6 +48,40 @@ describe("agentRegistry", () => {
     });
   });
 
+  describe("prerequisites", () => {
+    it("all built-in agents have prerequisites", () => {
+      const ids = getAgentIds();
+      for (const id of ids) {
+        const config = getAgentConfig(id);
+        expect(config?.prerequisites).toBeDefined();
+        expect(config?.prerequisites?.length).toBeGreaterThan(0);
+      }
+    });
+
+    it("each prerequisite has required fields", () => {
+      const ids = getAgentIds();
+      for (const id of ids) {
+        const config = getAgentConfig(id);
+        for (const prereq of config?.prerequisites ?? []) {
+          expect(prereq.tool).toBeTruthy();
+          expect(prereq.label).toBeTruthy();
+          expect(prereq.severity).toMatch(/^(fatal|warn|silent)$/);
+          expect(prereq.versionArgs).toBeDefined();
+        }
+      }
+    });
+
+    it("each agent declares its own CLI as a fatal prerequisite", () => {
+      const ids = getAgentIds();
+      for (const id of ids) {
+        const config = getAgentConfig(id);
+        const cliPrereq = config?.prerequisites?.find((p) => p.tool === config.command);
+        expect(cliPrereq).toBeDefined();
+        expect(cliPrereq?.severity).toBe("fatal");
+      }
+    });
+  });
+
   describe("routing configuration", () => {
     it("all built-in agents have routing config", () => {
       const ids = getAgentIds();

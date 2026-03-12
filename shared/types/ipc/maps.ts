@@ -401,7 +401,7 @@ export interface IpcInvokeMap {
     result: StartAgentUpdateResult;
   };
   "system:health-check": {
-    args: [];
+    args: [agentIds?: string[]];
     result: SystemHealthCheckResult;
   };
   "system:download-diagnostics": {
