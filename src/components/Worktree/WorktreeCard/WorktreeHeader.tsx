@@ -338,6 +338,7 @@ export function WorktreeHeader({
         )}
 
         <div
+          data-testid="worktree-actions-wrapper"
           className={cn(
             "shrink-0 transition-opacity duration-150",
             isActive
