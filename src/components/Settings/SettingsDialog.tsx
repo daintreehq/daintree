@@ -55,7 +55,12 @@ import { ImageViewerTab } from "./ImageViewerTab";
 import { VoiceInputSettingsTab } from "./VoiceInputSettingsTab";
 import { McpServerSettingsTab } from "./McpServerSettingsTab";
 import { SETTINGS_SEARCH_INDEX } from "./settingsSearchIndex";
-import { filterSettings, countMatchesPerTab, HighlightText } from "./settingsSearchUtils";
+import {
+  filterSettings,
+  countMatchesPerTab,
+  HighlightText,
+  parseQuery,
+} from "./settingsSearchUtils";
 
 export interface SettingsNavTarget {
   tab: SettingsTab;
@@ -157,10 +162,57 @@ export function SettingsDialog({
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [isOpen]);
 
+  // Modified-from-default tracking
+  const performanceMode = usePerformanceModeStore((s) => s.performanceMode);
+  const scrollbackLines = useScrollbackStore((s) => s.scrollbackLines);
+  const layoutConfig = useLayoutConfigStore((s) => s.layoutConfig);
+  const hybridInputEnabled = useTerminalInputStore((s) => s.hybridInputEnabled);
+  const hybridInputAutoFocus = useTerminalInputStore((s) => s.hybridInputAutoFocus);
+  const twoPaneSplitConfig = useTwoPaneSplitStore((s) => s.config);
+  const showProjectPulse = usePreferencesStore((s) => s.showProjectPulse);
+  const showDeveloperTools = usePreferencesStore((s) => s.showDeveloperTools);
+
+  const modifiedTabs = useMemo(() => {
+    const tabs = new Set<SettingsTab>();
+
+    // General defaults: showProjectPulse=true, showDeveloperTools=false
+    if (!showProjectPulse || showDeveloperTools) tabs.add("general");
+
+    // Terminal defaults: performanceMode=false, scrollback=5000, strategy=automatic,
+    // hybridInput=true, hybridAutoFocus=true, twoPaneSplit.enabled=true, preferPreview=false, ratio=0.5
+    if (
+      performanceMode ||
+      scrollbackLines !== 5000 ||
+      layoutConfig.strategy !== "automatic" ||
+      !hybridInputEnabled ||
+      !hybridInputAutoFocus ||
+      !twoPaneSplitConfig.enabled ||
+      twoPaneSplitConfig.preferPreview ||
+      Math.round(twoPaneSplitConfig.defaultRatio * 100) !== 50
+    ) {
+      tabs.add("terminal");
+    }
+
+    return tabs;
+  }, [
+    showProjectPulse,
+    showDeveloperTools,
+    performanceMode,
+    scrollbackLines,
+    layoutConfig.strategy,
+    hybridInputEnabled,
+    hybridInputAutoFocus,
+    twoPaneSplitConfig.enabled,
+    twoPaneSplitConfig.preferPreview,
+    twoPaneSplitConfig.defaultRatio,
+  ]);
+
   const searchResults = useMemo(
-    () => filterSettings(SETTINGS_SEARCH_INDEX, deferredQuery),
-    [deferredQuery]
+    () => filterSettings(SETTINGS_SEARCH_INDEX, deferredQuery, { modifiedTabs }),
+    [deferredQuery, modifiedTabs]
   );
+
+  const cleanSearchQuery = useMemo(() => parseQuery(deferredQuery).cleanQuery, [deferredQuery]);
 
   const matchCounts = useMemo(() => countMatchesPerTab(searchResults), [searchResults]);
 
@@ -225,51 +277,6 @@ export function SettingsDialog({
       clearTimeout(highlightTimer);
     };
   }, [scrollToSection, activeTab, isSearching]);
-
-  // Modified-from-default tracking
-  const performanceMode = usePerformanceModeStore((s) => s.performanceMode);
-  const scrollbackLines = useScrollbackStore((s) => s.scrollbackLines);
-  const layoutConfig = useLayoutConfigStore((s) => s.layoutConfig);
-  const hybridInputEnabled = useTerminalInputStore((s) => s.hybridInputEnabled);
-  const hybridInputAutoFocus = useTerminalInputStore((s) => s.hybridInputAutoFocus);
-  const twoPaneSplitConfig = useTwoPaneSplitStore((s) => s.config);
-  const showProjectPulse = usePreferencesStore((s) => s.showProjectPulse);
-  const showDeveloperTools = usePreferencesStore((s) => s.showDeveloperTools);
-
-  const modifiedTabs = useMemo(() => {
-    const tabs = new Set<SettingsTab>();
-
-    // General defaults: showProjectPulse=true, showDeveloperTools=false
-    if (!showProjectPulse || showDeveloperTools) tabs.add("general");
-
-    // Terminal defaults: performanceMode=false, scrollback=5000, strategy=automatic,
-    // hybridInput=true, hybridAutoFocus=true, twoPaneSplit.enabled=true, preferPreview=false, ratio=0.5
-    if (
-      performanceMode ||
-      scrollbackLines !== 5000 ||
-      layoutConfig.strategy !== "automatic" ||
-      !hybridInputEnabled ||
-      !hybridInputAutoFocus ||
-      !twoPaneSplitConfig.enabled ||
-      twoPaneSplitConfig.preferPreview ||
-      Math.round(twoPaneSplitConfig.defaultRatio * 100) !== 50
-    ) {
-      tabs.add("terminal");
-    }
-
-    return tabs;
-  }, [
-    showProjectPulse,
-    showDeveloperTools,
-    performanceMode,
-    scrollbackLines,
-    layoutConfig.strategy,
-    hybridInputEnabled,
-    hybridInputAutoFocus,
-    twoPaneSplitConfig.enabled,
-    twoPaneSplitConfig.preferPreview,
-    twoPaneSplitConfig.defaultRatio,
-  ]);
 
   const handleNavSelect = useCallback((tab: SettingsTab) => {
     setActiveTab(tab);
@@ -597,6 +604,7 @@ export function SettingsDialog({
                 <SearchResults
                   results={searchResults}
                   query={deferredQuery}
+                  cleanQuery={cleanSearchQuery}
                   onResultClick={handleResultClick}
                   activeIndex={activeResultIndex}
                 />
@@ -853,11 +861,18 @@ function MatchBadge({ count }: { count: number }) {
 interface SearchResultsProps {
   results: ReturnType<typeof filterSettings>;
   query: string;
+  cleanQuery: string;
   onResultClick: (target: SettingsNavTarget) => void;
   activeIndex?: number;
 }
 
-function SearchResults({ results, query, onResultClick, activeIndex = -1 }: SearchResultsProps) {
+function SearchResults({
+  results,
+  query,
+  cleanQuery,
+  onResultClick,
+  activeIndex = -1,
+}: SearchResultsProps) {
   const activeRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
@@ -871,7 +886,11 @@ function SearchResults({ results, query, onResultClick, activeIndex = -1 }: Sear
         <p className="text-sm text-canopy-text/50">
           No results for <span className="font-medium text-canopy-text/70">"{query}"</span>
         </p>
-        <p className="text-xs text-canopy-text/40 mt-1">Try different keywords or check spelling</p>
+        <p className="text-xs text-canopy-text/40 mt-1">
+          {cleanQuery
+            ? "Try different keywords or check spelling"
+            : "No settings have been modified from their defaults"}
+        </p>
       </div>
     );
   }
