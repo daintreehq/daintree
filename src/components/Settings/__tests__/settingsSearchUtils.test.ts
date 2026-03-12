@@ -235,7 +235,7 @@ describe("subtab-aware search", () => {
 });
 
 describe("SETTINGS_SEARCH_INDEX", () => {
-  it("has entries covering all 12 settings tabs", () => {
+  it("has entries covering all 15 settings tabs", () => {
     const tabs = new Set(SETTINGS_SEARCH_INDEX.map((e) => e.tab));
     const expectedTabs = [
       "general",
@@ -249,6 +249,9 @@ describe("SETTINGS_SEARCH_INDEX", () => {
       "toolbar",
       "notifications",
       "editor",
+      "imageViewer",
+      "voice",
+      "mcp",
       "troubleshooting",
     ];
     for (const tab of expectedTabs) {
@@ -275,5 +278,115 @@ describe("SETTINGS_SEARCH_INDEX", () => {
 
   it("has at least 50 entries across all tabs", () => {
     expect(SETTINGS_SEARCH_INDEX.length).toBeGreaterThanOrEqual(50);
+  });
+
+  it("tabLabel values match canonical tabTitles", () => {
+    const tabTitles: Record<string, string> = {
+      general: "General",
+      keyboard: "Keyboard Shortcuts",
+      terminal: "Panel Grid",
+      terminalAppearance: "Appearance",
+      worktree: "Worktree Paths",
+      agents: "CLI Agents",
+      github: "GitHub Integration",
+      sidecar: "Sidecar Links",
+      toolbar: "Toolbar Customization",
+      notifications: "Notifications",
+      editor: "Editor Integration",
+      imageViewer: "Image Viewer",
+      voice: "Voice Input",
+      mcp: "MCP Server",
+      troubleshooting: "Troubleshooting",
+    };
+    for (const entry of SETTINGS_SEARCH_INDEX) {
+      expect(
+        entry.tabLabel,
+        `entry "${entry.id}" tabLabel should match tabTitles["${entry.tab}"]`
+      ).toBe(tabTitles[entry.tab]);
+    }
+  });
+
+  it("has a tab-nav entry for every tab", () => {
+    const tabTitles: Record<string, string> = {
+      general: "General",
+      keyboard: "Keyboard Shortcuts",
+      terminal: "Panel Grid",
+      terminalAppearance: "Appearance",
+      worktree: "Worktree Paths",
+      agents: "CLI Agents",
+      github: "GitHub Integration",
+      sidecar: "Sidecar Links",
+      toolbar: "Toolbar Customization",
+      notifications: "Notifications",
+      editor: "Editor Integration",
+      imageViewer: "Image Viewer",
+      voice: "Voice Input",
+      mcp: "MCP Server",
+      troubleshooting: "Troubleshooting",
+    };
+    for (const tabKey of Object.keys(tabTitles)) {
+      const navEntry = SETTINGS_SEARCH_INDEX.find((e) => e.id === `tab-nav-${tabKey}`);
+      expect(navEntry, `tab-nav entry should exist for "${tabKey}"`).toBeDefined();
+    }
+  });
+});
+
+describe("voice tab coverage", () => {
+  it("returns results for 'voice' query", () => {
+    const results = filterSettings(SETTINGS_SEARCH_INDEX, "voice");
+    expect(results.some((r) => r.tab === "voice")).toBe(true);
+  });
+
+  it("returns results for 'microphone' query", () => {
+    const results = filterSettings(SETTINGS_SEARCH_INDEX, "microphone");
+    expect(results.length).toBeGreaterThan(0);
+  });
+
+  it("returns results for 'deepgram' query", () => {
+    const results = filterSettings(SETTINGS_SEARCH_INDEX, "deepgram");
+    expect(results.some((r) => r.tab === "voice")).toBe(true);
+  });
+
+  it("returns results for 'speech' query", () => {
+    const results = filterSettings(SETTINGS_SEARCH_INDEX, "speech");
+    expect(results.some((r) => r.tab === "voice")).toBe(true);
+  });
+
+  it("returns results for 'transcription' query", () => {
+    const results = filterSettings(SETTINGS_SEARCH_INDEX, "transcription");
+    expect(results.some((r) => r.tab === "voice")).toBe(true);
+  });
+});
+
+describe("tab-name ranking", () => {
+  it("tab-nav entry ranks first for exact tab name queries", () => {
+    const queries = ["Panel Grid", "Keyboard Shortcuts", "Voice Input", "GitHub Integration"];
+    for (const query of queries) {
+      const results = filterSettings(SETTINGS_SEARCH_INDEX, query);
+      expect(
+        results[0]?.id.startsWith("tab-nav-"),
+        `"${query}" should return a tab-nav entry first, got "${results[0]?.id}"`
+      ).toBe(true);
+    }
+  });
+
+  it("compound queries rank field entries above tab-nav entries", () => {
+    const results = filterSettings(SETTINGS_SEARCH_INDEX, "notifications sound");
+    expect(results.length).toBeGreaterThan(0);
+    expect(
+      results[0]?.id,
+      `"notifications sound" should rank field entry first, got "${results[0]?.id}"`
+    ).toBe("notifications-sound");
+  });
+
+  it("nav group label queries return tab-nav results", () => {
+    const groups = ["general", "terminal", "integrations", "input", "support"];
+    for (const group of groups) {
+      const results = filterSettings(SETTINGS_SEARCH_INDEX, group);
+      expect(
+        results.some((r) => r.id.startsWith("tab-nav-")),
+        `"${group}" should return at least one tab-nav result`
+      ).toBe(true);
+    }
   });
 });
