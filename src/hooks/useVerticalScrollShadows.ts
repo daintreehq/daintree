@@ -70,7 +70,7 @@ export function useVerticalScrollShadows(
       resizeObserver.disconnect();
       el.removeEventListener("scroll", throttledUpdate);
     };
-  }, [scrollRef.current, updateScrollState, throttledUpdate]);
+  }, [scrollRef, updateScrollState, throttledUpdate]);
 
   return {
     canScrollUp: state.canScrollUp,
