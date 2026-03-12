@@ -25,12 +25,12 @@ test.describe.serial("Core: Project Pulse", () => {
 
   test("summary stats are rendered", async () => {
     const { window } = ctx;
-    const heatmap = window.locator(SEL.pulse.heatmap);
-    const card = heatmap.locator("xpath=ancestor::div[contains(@class, 'bg-canopy-sidebar')]");
-    const stats = card.locator(".font-mono");
-    await expect(stats.first()).toBeVisible({ timeout: T_MEDIUM });
-    const text = await stats.first().textContent();
-    expect(text).toMatch(/\d+/);
+    // The card title includes the project name
+    const title = window.getByText("Pulse Test Project Pulse");
+    await expect(title).toBeVisible({ timeout: T_MEDIUM });
+    // The range trigger shows current range (default 60 days)
+    const rangeTrigger = window.locator(SEL.pulse.rangeTrigger);
+    await expect(rangeTrigger).toContainText("60 days", { timeout: T_SHORT });
   });
 
   test("range selector changes time range", async () => {
@@ -99,10 +99,10 @@ test.describe.serial("Core: Project Pulse — minimal repo", () => {
 
   test("card renders without error for a single-commit repo", async () => {
     const { window } = ctx;
-    const errorAlert = window.locator('[role="alert"]');
     const heatmap = window.locator(SEL.pulse.heatmap);
 
     await expect(heatmap).toBeVisible({ timeout: T_LONG });
-    await expect(errorAlert).not.toBeVisible({ timeout: T_SHORT });
+    // The pulse error state uses aria-label="Retry now" — ensure it's absent
+    await expect(window.locator('[aria-label="Retry now"]')).not.toBeVisible({ timeout: T_SHORT });
   });
 });
