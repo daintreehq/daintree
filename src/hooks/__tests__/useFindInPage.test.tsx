@@ -159,12 +159,11 @@ describe("useFindInPage", () => {
   it("handles find shortcut for open/close", () => {
     const webview = createMockWebview();
     let shortcutCallback: (payload: { panelId: string; shortcut: string }) => void;
-    onFindShortcutMock.mockImplementation(
-      (cb: (payload: { panelId: string; shortcut: string }) => void) => {
-        shortcutCallback = cb;
-        return vi.fn();
-      }
-    );
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    onFindShortcutMock.mockImplementation((cb: any) => {
+      shortcutCallback = cb;
+      return vi.fn();
+    });
 
     const { result } = renderHook(() => useFindInPage("panel-1", webview, true, true));
 
@@ -178,12 +177,11 @@ describe("useFindInPage", () => {
   it("ignores shortcuts for different panels", () => {
     const webview = createMockWebview();
     let shortcutCallback: (payload: { panelId: string; shortcut: string }) => void;
-    onFindShortcutMock.mockImplementation(
-      (cb: (payload: { panelId: string; shortcut: string }) => void) => {
-        shortcutCallback = cb;
-        return vi.fn();
-      }
-    );
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    onFindShortcutMock.mockImplementation((cb: any) => {
+      shortcutCallback = cb;
+      return vi.fn();
+    });
 
     const { result } = renderHook(() => useFindInPage("panel-1", webview, true, true));
 
