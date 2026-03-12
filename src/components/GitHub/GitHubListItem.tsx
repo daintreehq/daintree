@@ -9,6 +9,7 @@ import {
   GitBranch,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { formatTimeAgo } from "@/utils/timeAgo";
 import { actionService } from "@/services/ActionService";
 import type { GitHubIssue, GitHubPR, LinkedPRInfo } from "@shared/types/github";
 import { Avatar } from "@/components/ui/Avatar";
@@ -35,18 +36,6 @@ function getStateColor(state: string, isDraft?: boolean): string {
   if (state === "MERGED") return "text-github-merged";
   if (state === "CLOSED") return "text-github-closed";
   return "text-muted-foreground";
-}
-
-function formatTimeAgo(dateString: string): string {
-  const date = new Date(dateString);
-  const now = new Date();
-  const seconds = Math.floor((now.getTime() - date.getTime()) / 1000);
-
-  if (seconds < 60) return "just now";
-  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
-  if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
-  if (seconds < 2592000) return `${Math.floor(seconds / 86400)}d ago`;
-  return date.toLocaleDateString();
 }
 
 function isPR(item: GitHubIssue | GitHubPR): item is GitHubPR {

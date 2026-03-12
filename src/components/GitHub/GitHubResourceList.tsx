@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
+import { useDebounce } from "@/hooks/useDebounce";
 import { Search, ExternalLink, RefreshCw, WifiOff, Plus, Settings } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -24,17 +25,6 @@ interface GitHubResourceListProps {
 type IssueStateFilter = "open" | "closed" | "all";
 type PRStateFilter = "open" | "closed" | "merged" | "all";
 type StateFilter = IssueStateFilter | PRStateFilter;
-
-function useDebounce<T>(value: T, delay: number): T {
-  const [debouncedValue, setDebouncedValue] = useState(value);
-
-  useEffect(() => {
-    const timer = setTimeout(() => setDebouncedValue(value), delay);
-    return () => clearTimeout(timer);
-  }, [value, delay]);
-
-  return debouncedValue;
-}
 
 const ITEM_HEIGHT_PX = 64;
 const MAX_SKELETON_ITEMS = 6;
