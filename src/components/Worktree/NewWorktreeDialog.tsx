@@ -753,7 +753,7 @@ export function NewWorktreeDialog({
           });
         } catch (assignErr) {
           const message = assignErr instanceof Error ? assignErr.message : "Failed to assign issue";
-          const issueUrl = selectedIssue.html_url;
+          const issueUrl = selectedIssue.url;
           notify({
             type: "warning",
             title: "Could not assign issue",
@@ -772,8 +772,8 @@ export function NewWorktreeDialog({
 
       // Run selected recipe if one is chosen
       if (selectedRecipe) {
+        const worktreeId = result.result as string | undefined;
         try {
-          const worktreeId = result.result as string | undefined;
           await runRecipe(selectedRecipe.id, worktreePath.trim(), worktreeId, {
             issueNumber: selectedIssue?.number,
             worktreePath: worktreePath.trim(),
