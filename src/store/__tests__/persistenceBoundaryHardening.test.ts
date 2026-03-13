@@ -33,7 +33,6 @@ function restoreLocalStorage(): void {
     return;
   }
 
-  // eslint-disable-next-line @typescript-eslint/no-dynamic-delete
   delete (globalThis as Partial<typeof globalThis>).localStorage;
 }
 
