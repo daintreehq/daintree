@@ -141,7 +141,7 @@ export function GridTabGroup({
         }
       }
       // Trash the terminal (store auto-removes from group)
-      trashTerminal(tabId);
+      trashTerminal(tabId, { showUndoToast: true });
     },
     [activeTabId, panels, group.id, setActiveTab, setFocused, trashTerminal]
   );
