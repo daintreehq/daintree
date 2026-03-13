@@ -22,9 +22,7 @@ describe("normalizeChips", () => {
 
   it("formats image label from clipboard timestamp", () => {
     const ts = new Date(2025, 0, 15, 14, 30).getTime();
-    const images = [
-      { from: 0, to: 5, filePath: `/tmp/clipboard-${ts}-abc.png`, thumbnailUrl: "" },
-    ];
+    const images = [{ from: 0, to: 5, filePath: `/tmp/clipboard-${ts}-abc.png`, thumbnailUrl: "" }];
     const result = normalizeChips(images, [], []);
     expect(result[0].label).toBe("Screenshot 14:30");
   });
@@ -81,7 +79,14 @@ describe("normalizeChips", () => {
 describe("buildSummaryLine", () => {
   it("shows single image correctly", () => {
     const items = [
-      { id: "img-0-5", kind: "image" as const, label: "Screenshot", tokenEstimate: 1000, from: 0, to: 5 },
+      {
+        id: "img-0-5",
+        kind: "image" as const,
+        label: "Screenshot",
+        tokenEstimate: 1000,
+        from: 0,
+        to: 5,
+      },
     ];
     expect(buildSummaryLine(items)).toBe("1 image \u00b7 ~1,000 tokens");
   });
@@ -103,7 +108,14 @@ describe("buildSummaryLine", () => {
 
   it("joins multiple categories with middle dot", () => {
     const items = [
-      { id: "img-0-5", kind: "image" as const, label: "Screenshot", tokenEstimate: 1000, from: 0, to: 5 },
+      {
+        id: "img-0-5",
+        kind: "image" as const,
+        label: "Screenshot",
+        tokenEstimate: 1000,
+        from: 0,
+        to: 5,
+      },
       { id: "f-10-15", kind: "file" as const, label: "a.ts", tokenEstimate: 500, from: 10, to: 15 },
     ];
     expect(buildSummaryLine(items)).toBe("1 image \u00b7 1 file \u00b7 ~1,500 tokens");
