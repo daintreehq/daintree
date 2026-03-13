@@ -123,6 +123,8 @@ export interface NotificationSettings {
   failedEnabled: boolean;
   soundEnabled: boolean;
   soundFile: string;
+  waitingEscalationEnabled: boolean;
+  waitingEscalationDelayMs: number;
 }
 
 // ElectronAPI Type (exposed via preload)
@@ -449,8 +451,8 @@ export interface ElectronAPI {
   };
   github: {
     getRepoStats(cwd: string, bypassCache?: boolean): Promise<RepositoryStats>;
-    openIssues(cwd: string): Promise<void>;
-    openPRs(cwd: string): Promise<void>;
+    openIssues(cwd: string, query?: string, state?: string): Promise<void>;
+    openPRs(cwd: string, query?: string, state?: string): Promise<void>;
     openCommits(cwd: string): Promise<void>;
     openIssue(cwd: string, issueNumber: number): Promise<void>;
     openPR(prUrl: string): Promise<void>;
@@ -779,6 +781,8 @@ export interface ElectronAPI {
     ): () => void;
     /** Sync the renderer's watched panel set to main so AgentNotificationService can gate on it */
     syncWatchedPanels(panelIds: string[]): void;
+    /** Acknowledge a waiting agent escalation (cancels pending escalation timer) */
+    acknowledgeWaiting(terminalId: string): void;
   };
   update: {
     onUpdateAvailable(callback: (info: { version: string }) => void): () => void;
@@ -874,6 +878,7 @@ export interface ElectronAPI {
         }
       | { ok: false; errors: string[] }
     >;
+    setColorVisionMode(mode: import("../appTheme.js").ColorVisionMode): Promise<void>;
   };
   telemetry: {
     get(): Promise<{ enabled: boolean; hasSeenPrompt: boolean }>;

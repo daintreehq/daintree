@@ -446,9 +446,8 @@ export class WorktreeMonitor {
       this.emitUpdate();
     } catch (error) {
       if (error instanceof WorktreeRemovedError) {
-        this.mood = "error";
-        this.summary = "⚠️ Directory not accessible";
-        this.emitUpdate();
+        this.stop();
+        this.callbacks.onRemoved?.(this.id);
         return;
       }
 

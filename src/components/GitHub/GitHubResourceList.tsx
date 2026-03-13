@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, useCallback, useRef, type KeyboardEvent } from "react";
 import { useDebounce } from "@/hooks/useDebounce";
-import { Search, X, ExternalLink, RefreshCw, WifiOff, Plus, Settings } from "lucide-react";
+import { Search, ExternalLink, RefreshCw, WifiOff, Plus, Settings, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { githubClient } from "@/clients/githubClient";
@@ -39,7 +39,12 @@ export function GitHubResourceList({
   onClose,
   initialCount,
 }: GitHubResourceListProps) {
-  const [searchQuery, setSearchQuery] = useState("");
+  const searchQuery = useGitHubFilterStore((s) =>
+    type === "issue" ? s.issueSearchQuery : s.prSearchQuery
+  );
+  const setSearchQuery = useGitHubFilterStore((s) =>
+    type === "issue" ? s.setIssueSearchQuery : s.setPrSearchQuery
+  ) as (q: string) => void;
   const filterState = useGitHubFilterStore((s) => (type === "issue" ? s.issueFilter : s.prFilter));
   const setFilterState = useGitHubFilterStore((s) =>
     type === "issue" ? s.setIssueFilter : s.setPrFilter
@@ -229,10 +234,20 @@ export function GitHubResourceList({
   }, [loadingMore, hasMore, fetchData, cursor]);
 
   const handleOpenInGitHub = () => {
+    const query = searchQuery.trim() || undefined;
+    const state = filterState as string;
     if (type === "issue") {
-      void actionService.dispatch("github.openIssues", { projectPath }, { source: "user" });
+      void actionService.dispatch(
+        "github.openIssues",
+        { projectPath, query, state },
+        { source: "user" }
+      );
     } else {
-      void actionService.dispatch("github.openPRs", { projectPath }, { source: "user" });
+      void actionService.dispatch(
+        "github.openPRs",
+        { projectPath, query, state },
+        { source: "user" }
+      );
     }
     onClose?.();
   };
@@ -266,6 +281,11 @@ export function GitHubResourceList({
     },
     [selectWorktree, onClose]
   );
+
+  const handleClearSearch = useCallback(() => {
+    setSearchQuery("");
+    inputRef.current?.focus();
+  }, [setSearchQuery]);
 
   const handleRetry = () => {
     setCursor(null);
@@ -471,10 +491,7 @@ export function GitHubResourceList({
           {searchQuery && (
             <button
               type="button"
-              onClick={() => {
-                setSearchQuery("");
-                inputRef.current?.focus();
-              }}
+              onClick={handleClearSearch}
               aria-label="Clear search"
               className="flex items-center justify-center w-5 h-5 rounded shrink-0 text-canopy-text/40 hover:text-canopy-text"
             >

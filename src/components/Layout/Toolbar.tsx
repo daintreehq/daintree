@@ -1085,6 +1085,7 @@ export function Toolbar({
             onAddProject={projectSwitcher.addProject}
             onStopProject={handleStopProject}
             onCloseProject={handleCloseProject}
+            onTogglePinProject={(projectId) => projectSwitcher.togglePinProject(projectId)}
             onOpenProjectSettings={currentProject ? handleOpenProjectSettings : undefined}
             dropdownAlign="center"
             removeConfirmProject={projectSwitcher.removeConfirmProject}

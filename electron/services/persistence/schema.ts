@@ -60,6 +60,7 @@ export const projects = sqliteTable("projects", {
   status: text("status"),
   canopyConfigPresent: integer("canopy_config_present", { mode: "boolean" }),
   inRepoSettings: integer("in_repo_settings", { mode: "boolean" }),
+  pinned: integer("pinned").notNull().default(0),
 });
 
 export const appState = sqliteTable("app_state", {

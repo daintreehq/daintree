@@ -530,6 +530,8 @@ interface BrowserPanelData extends BasePanelData {
   browserHistory?: BrowserHistory;
   /** Zoom factor for browser panes */
   browserZoom?: number;
+  /** Whether the browser console drawer is open */
+  browserConsoleOpen?: boolean;
 }
 
 interface NotesPanelData extends BasePanelData {
@@ -633,6 +635,8 @@ export interface TerminalInstance {
   browserUrl?: string;
   browserHistory?: BrowserHistory;
   browserZoom?: number;
+  /** Whether the browser console drawer is open */
+  browserConsoleOpen?: boolean;
   notePath?: string;
   noteId?: string;
   scope?: "worktree" | "project";
@@ -715,6 +719,8 @@ export interface Project {
   canopyConfigPresent?: boolean;
   /** Whether in-repo settings mode is enabled (writes to .canopy/ on update) */
   inRepoSettings?: boolean;
+  /** Whether the project is pinned to the top of the project switcher */
+  pinned?: boolean;
 }
 
 /**
@@ -746,6 +752,8 @@ export interface TerminalSnapshot {
   browserHistory?: BrowserHistory;
   /** Zoom factor for browser/dev-preview panes */
   browserZoom?: number;
+  /** Whether the browser console drawer is open */
+  browserConsoleOpen?: boolean;
   /** Dev server status for dev-preview panels */
   devServerStatus?: "stopped" | "starting" | "installing" | "running" | "error";
   /** Dev server URL for dev-preview panels */

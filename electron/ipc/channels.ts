@@ -294,6 +294,7 @@ export const CHANNELS = {
   NOTIFICATION_SHOW_NATIVE: "notification:show-native",
   NOTIFICATION_WATCH_NAVIGATE: "notification:watch-navigate",
   NOTIFICATION_SYNC_WATCHED: "notification:sync-watched",
+  NOTIFICATION_WAITING_ACKNOWLEDGE: "notification:waiting-acknowledge",
 
   // Auto-update channels
   UPDATE_AVAILABLE: "update:available",
@@ -354,6 +355,7 @@ export const CHANNELS = {
   APP_THEME_SET_COLOR_SCHEME: "app-theme:set-color-scheme",
   APP_THEME_SET_CUSTOM_SCHEMES: "app-theme:set-custom-schemes",
   APP_THEME_IMPORT: "app-theme:import",
+  APP_THEME_SET_COLOR_VISION_MODE: "app-theme:set-color-vision-mode",
 
   TELEMETRY_GET: "telemetry:get",
   TELEMETRY_SET_ENABLED: "telemetry:set-enabled",

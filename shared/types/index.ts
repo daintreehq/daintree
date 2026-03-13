@@ -256,6 +256,7 @@ export {
   getAgentSettingsEntry,
   generateAgentFlags,
   generateAgentCommand,
+  buildResumeCommand,
 } from "./agentSettings.js";
 
 // User agent registry types - user-defined agent configuration
@@ -471,4 +472,9 @@ export type {
 } from "./editor.js";
 
 // App theme types - app-wide color scheme system
-export type { AppColorSchemeTokens, AppColorScheme, AppThemeConfig } from "./appTheme.js";
+export type {
+  AppColorSchemeTokens,
+  AppColorScheme,
+  AppThemeConfig,
+  ColorVisionMode,
+} from "./appTheme.js";

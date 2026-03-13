@@ -108,10 +108,6 @@ export function useWorktreeStatus({
       return { text: firstLineLastCommitMessage, tone: "muted" };
     }
 
-    if (worktree.issueTitle?.trim()) {
-      return { text: worktree.issueTitle.trim(), tone: "muted" };
-    }
-
     if (worktree.prTitle?.trim() && worktree.prState !== "closed") {
       return { text: worktree.prTitle.trim(), tone: "muted" };
     }
@@ -122,7 +118,6 @@ export function useWorktreeStatus({
     hasChanges,
     worktree.worktreeChanges,
     firstLineLastCommitMessage,
-    worktree.issueTitle,
     worktree.prTitle,
     worktree.prState,
   ]);

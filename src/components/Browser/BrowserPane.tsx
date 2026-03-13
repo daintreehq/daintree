@@ -78,7 +78,10 @@ export function BrowserPane({
   );
   const loadTimeoutMs = Math.min(Math.max(devServerLoadTimeout ?? 30, 1), 120) * 1000;
 
-  const [isConsoleOpen, setIsConsoleOpen] = useState(false);
+  const isConsoleOpen = useTerminalStore(
+    (state) => state.getTerminal(id)?.browserConsoleOpen ?? false
+  );
+  const setBrowserConsoleOpen = useTerminalStore((state) => state.setBrowserConsoleOpen);
 
   // Initialize history from persisted state or initialUrl
   const [history, setHistory] = useState<BrowserHistory>(() => {
@@ -407,8 +410,8 @@ export function BrowserPane({
   }, [isWebviewReady]);
 
   const handleToggleConsole = useCallback(() => {
-    setIsConsoleOpen((prev) => !prev);
-  }, []);
+    setBrowserConsoleOpen(id, !isConsoleOpen);
+  }, [id, isConsoleOpen, setBrowserConsoleOpen]);
 
   const handleClearConsole = useCallback(() => {
     const wcId = webContentsIdRef.current;

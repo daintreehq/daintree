@@ -38,6 +38,7 @@ import type {
   VoiceInputStatus,
   ChecklistItemId,
 } from "../shared/types/index.js";
+import type { ColorVisionMode } from "../shared/types/appTheme.js";
 import type {
   AgentStateChangePayload,
   AgentDetectedPayload,
@@ -471,6 +472,7 @@ const CHANNELS = {
   NOTIFICATION_SHOW_WATCH: "notification:show-watch",
   NOTIFICATION_WATCH_NAVIGATE: "notification:watch-navigate",
   NOTIFICATION_SYNC_WATCHED: "notification:sync-watched",
+  NOTIFICATION_WAITING_ACKNOWLEDGE: "notification:waiting-acknowledge",
 
   // Auto-update channels
   UPDATE_AVAILABLE: "update:available",
@@ -514,6 +516,7 @@ const CHANNELS = {
   APP_THEME_SET_COLOR_SCHEME: "app-theme:set-color-scheme",
   APP_THEME_SET_CUSTOM_SCHEMES: "app-theme:set-custom-schemes",
   APP_THEME_IMPORT: "app-theme:import",
+  APP_THEME_SET_COLOR_VISION_MODE: "app-theme:set-color-vision-mode",
 
   // Telemetry channels
   TELEMETRY_GET: "telemetry:get",
@@ -1165,9 +1168,11 @@ const api: ElectronAPI = {
     getRepoStats: (cwd: string, bypassCache?: boolean) =>
       _typedInvoke(CHANNELS.GITHUB_GET_REPO_STATS, cwd, bypassCache),
 
-    openIssues: (cwd: string) => _typedInvoke(CHANNELS.GITHUB_OPEN_ISSUES, cwd),
+    openIssues: (cwd: string, query?: string, state?: string) =>
+      _typedInvoke(CHANNELS.GITHUB_OPEN_ISSUES, cwd, query, state),
 
-    openPRs: (cwd: string) => _typedInvoke(CHANNELS.GITHUB_OPEN_PRS, cwd),
+    openPRs: (cwd: string, query?: string, state?: string) =>
+      _typedInvoke(CHANNELS.GITHUB_OPEN_PRS, cwd, query, state),
 
     openCommits: (cwd: string) => _typedInvoke(CHANNELS.GITHUB_OPEN_COMMITS, cwd),
 
@@ -1531,6 +1536,8 @@ const api: ElectronAPI = {
       failedEnabled: boolean;
       soundEnabled: boolean;
       soundFile: string;
+      waitingEscalationEnabled: boolean;
+      waitingEscalationDelayMs: number;
     }> => _typedInvoke(CHANNELS.NOTIFICATION_SETTINGS_GET),
     setSettings: (
       settings: Partial<{
@@ -1539,6 +1546,8 @@ const api: ElectronAPI = {
         failedEnabled: boolean;
         soundEnabled: boolean;
         soundFile: string;
+        waitingEscalationEnabled: boolean;
+        waitingEscalationDelayMs: number;
       }>
     ) => _typedInvoke(CHANNELS.NOTIFICATION_SETTINGS_SET, settings),
     playSound: (soundFile: string) => _typedInvoke(CHANNELS.NOTIFICATION_PLAY_SOUND, soundFile),
@@ -1556,6 +1565,8 @@ const api: ElectronAPI = {
     ) => _typedOn(CHANNELS.NOTIFICATION_WATCH_NAVIGATE, callback),
     syncWatchedPanels: (panelIds: string[]) =>
       ipcRenderer.send(CHANNELS.NOTIFICATION_SYNC_WATCHED, panelIds),
+    acknowledgeWaiting: (terminalId: string) =>
+      ipcRenderer.send(CHANNELS.NOTIFICATION_WAITING_ACKNOWLEDGE, { terminalId }),
   },
 
   // Auto-Update API
@@ -1730,6 +1741,9 @@ const api: ElectronAPI = {
       _typedInvoke(CHANNELS.APP_THEME_SET_CUSTOM_SCHEMES, schemesJson),
 
     importTheme: () => _typedInvoke(CHANNELS.APP_THEME_IMPORT),
+
+    setColorVisionMode: (mode: ColorVisionMode) =>
+      _typedInvoke(CHANNELS.APP_THEME_SET_COLOR_VISION_MODE, mode),
   },
 
   telemetry: {

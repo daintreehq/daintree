@@ -189,6 +189,15 @@ export interface AgentConfig {
    */
   env?: Record<string, string>;
   /**
+   * Resume configuration for restoring a previous agent session.
+   * When present, Canopy can resume a prior session using the stored session ID
+   * instead of starting fresh.
+   */
+  resume?: {
+    /** Returns CLI args for resuming a session (e.g. ["--resume", id] or ["resume", id]) */
+    args: (sessionId: string) => string[];
+  };
+  /**
    * Prerequisites required for this agent to function.
    * Merged with baseline prerequisites during health checks.
    */
@@ -296,6 +305,9 @@ export const AGENT_REGISTRY: Record<string, AgentConfig> = {
     shutdown: {
       quitCommand: "/quit",
       sessionIdPattern: "claude --resume ([\\w-]+)",
+    },
+    resume: {
+      args: (sessionId: string) => ["--resume", sessionId],
     },
     env: {
       CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
@@ -409,6 +421,9 @@ export const AGENT_REGISTRY: Record<string, AgentConfig> = {
     shutdown: {
       quitCommand: "/quit",
       sessionIdPattern: "gemini --resume ([\\w-]+)",
+    },
+    resume: {
+      args: (sessionId: string) => ["--resume", sessionId],
     },
     env: {
       GEMINI_CLI_ALT_SCREEN: "false",
@@ -527,6 +542,9 @@ export const AGENT_REGISTRY: Record<string, AgentConfig> = {
     shutdown: {
       quitCommand: "/quit",
       sessionIdPattern: "codex resume ([\\w-]+)",
+    },
+    resume: {
+      args: (sessionId: string) => ["resume", sessionId],
     },
     prerequisites: [
       {
@@ -669,6 +687,9 @@ export const AGENT_REGISTRY: Record<string, AgentConfig> = {
       quitCommand: "/quit",
       sessionIdPattern: "opencode -s ([\\w-]+)",
     },
+    resume: {
+      args: (sessionId: string) => ["-s", sessionId],
+    },
     prerequisites: [
       {
         tool: "opencode",
@@ -676,6 +697,93 @@ export const AGENT_REGISTRY: Record<string, AgentConfig> = {
         versionArgs: ["--version"],
         severity: "fatal",
         installUrl: "https://opencode.ai/docs/",
+      },
+    ],
+  },
+  cursor: {
+    id: "cursor",
+    name: "Cursor",
+    command: "cursor-agent",
+    color: AGENT_BRAND_COLORS.cursor,
+    iconId: "cursor",
+    supportsContextInjection: true,
+    shortcut: "Cmd/Ctrl+Alt+U",
+    tooltip: "Cursor's agentic CLI",
+    version: {
+      args: ["-v"],
+    },
+    update: {
+      other: {
+        curl: "curl https://cursor.com/install -fsS | bash",
+      },
+    },
+    install: {
+      docsUrl: "https://cursor.com/features/cursor-agent",
+      byOs: {
+        macos: [
+          {
+            label: "curl",
+            commands: ["curl https://cursor.com/install -fsS | bash"],
+          },
+        ],
+        linux: [
+          {
+            label: "curl",
+            commands: ["curl https://cursor.com/install -fsS | bash"],
+          },
+        ],
+      },
+      troubleshooting: [
+        "Restart Canopy after installation to update PATH",
+        "Verify installation with: cursor-agent -v",
+        "Run 'cursor-agent login' to authenticate after installing",
+      ],
+    },
+    capabilities: {
+      scrollback: 10000,
+      blockMouseReporting: true,
+      resizeStrategy: "settled",
+      supportsBracketedPaste: true,
+      softNewlineSequence: "\x1b\r",
+      ignoredInputSequences: ["\x1b\r"],
+    },
+    detection: {
+      primaryPatterns: [
+        "\u2B22\\s+(Thinking|Reading|Planning|Searching|Running|Executing|Grepping|Editing|Listing)",
+        "esc to stop",
+      ],
+      fallbackPatterns: ["\u2B22\\s+\\w"],
+      bootCompletePatterns: ["Cursor Agent", "Welcome to Cursor Agent"],
+      promptPatterns: ["^\u2192\\s*$", "^\u2192\\s"],
+      promptHintPatterns: ["\u2192\\s+Add a follow-up"],
+      completionPatterns: ["\u2B22\\s+(Thought|Read|Planned)\\s"],
+      completionConfidence: 0.9,
+      scanLineCount: 10,
+      primaryConfidence: 0.95,
+      fallbackConfidence: 0.7,
+      promptConfidence: 0.85,
+      debounceMs: 2000,
+    },
+    routing: {
+      capabilities: ["javascript", "typescript", "python", "react", "node", "general-purpose"],
+      domains: {
+        frontend: 0.8,
+        backend: 0.8,
+        testing: 0.75,
+        refactoring: 0.8,
+        debugging: 0.8,
+        architecture: 0.75,
+      },
+      maxConcurrent: 2,
+      enabled: true,
+    },
+    prerequisites: [
+      {
+        tool: "cursor-agent",
+        label: "Cursor Agent CLI",
+        versionArgs: ["-v"],
+        severity: "fatal",
+        installUrl: "https://cursor.com/install",
       },
     ],
   },
