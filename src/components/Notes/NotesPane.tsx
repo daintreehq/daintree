@@ -5,7 +5,6 @@ import {
   AlertCircle,
   AlertTriangle,
   RefreshCw,
-  Send,
   PenLine,
   Columns2,
   Eye,
@@ -20,12 +19,6 @@ import { notesClient, type NoteMetadata } from "@/clients/notesClient";
 import { canopyTheme } from "./editorTheme";
 import { MarkdownPreview } from "./MarkdownPreview";
 import { MarkdownToolbar } from "./MarkdownToolbar";
-import { useTerminalStore } from "@/store/terminalStore";
-import { useNativeContextMenu } from "@/hooks/useNativeContextMenu";
-import { notify } from "@/lib/notify";
-import { getAgentIds, getAgentConfig } from "@/config/agents";
-import type { MenuItemOption } from "@shared/types";
-import { findTargetAgentTerminal, sendToAgent, getEditorSelection } from "@/lib/agentSend";
 
 export interface NotesPaneProps extends BasePanelProps {
   notePath: string;
@@ -60,8 +53,6 @@ export function NotesPane({
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [hasConflict, setHasConflict] = useState(false);
-  const [sent, setSent] = useState(false);
-
   const [viewMode, setViewMode] = useState<"edit" | "split" | "preview">("edit");
   const [editorMountKey, setEditorMountKey] = useState(0);
 
@@ -71,19 +62,8 @@ export function NotesPane({
   const saveVersionRef = useRef(0);
   const contentRef = useRef<string>("");
   const editorViewRef = useRef<EditorView | null>(null);
-  const sentTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const previewRef = useRef<HTMLDivElement>(null);
   const isSyncingRef = useRef(false);
-
-  const terminals = useTerminalStore((state) => state.terminals);
-  const focusedId = useTerminalStore((state) => state.focusedId);
-  const queueCommand = useTerminalStore((state) => state.queueCommand);
-  const { showMenu } = useNativeContextMenu();
-
-  // Extract worktree ID from the notes panel props (panels inherit worktree from their location)
-  const worktreeId = useTerminalStore(
-    (state) => state.terminals.find((t) => t.id === id)?.worktreeId
-  );
 
   useEffect(() => {
     let cancelled = false;
@@ -221,9 +201,6 @@ export function NotesPane({
       if (saveTimeoutRef.current) {
         clearTimeout(saveTimeoutRef.current);
       }
-      if (sentTimeoutRef.current) {
-        clearTimeout(sentTimeoutRef.current);
-      }
     };
   }, []);
 
@@ -276,147 +253,6 @@ export function NotesPane({
     }
   }, [notePath]);
 
-  const handleSendToAgent = useCallback(
-    async (agentId: string, useSelection: boolean) => {
-      const agentConfig = getAgentConfig(agentId);
-      if (!agentConfig) return;
-
-      // Get content (selection or full note)
-      const contentToSend = useSelection
-        ? getEditorSelection(editorViewRef.current, contentRef.current)
-        : contentRef.current;
-
-      if (!contentToSend.trim()) {
-        notify({
-          type: "warning",
-          message: "No content to send",
-          duration: 3000,
-        });
-        return;
-      }
-
-      // Find target terminal for this agent
-      const targetTerminal = findTargetAgentTerminal(terminals, focusedId, worktreeId, agentId);
-
-      if (!targetTerminal) {
-        notify({
-          type: "warning",
-          message: `No ${agentConfig.name} session found`,
-          duration: 3000,
-        });
-        return;
-      }
-
-      // Send to the agent
-      const result = await sendToAgent(targetTerminal.id, contentToSend, queueCommand);
-
-      if (result.success) {
-        setSent(true);
-        if (sentTimeoutRef.current) {
-          clearTimeout(sentTimeoutRef.current);
-        }
-        sentTimeoutRef.current = setTimeout(() => {
-          if (isMountedRef.current) setSent(false);
-        }, 2000);
-      } else {
-        notify({
-          type: "error",
-          message: result.error || "Failed to send",
-          duration: 3000,
-        });
-      }
-    },
-    [terminals, focusedId, worktreeId, queueCommand]
-  );
-
-  const buildSendMenu = useCallback((useSelection: boolean): MenuItemOption[] => {
-    const agentIds = getAgentIds();
-    return agentIds.map((agentId) => {
-      const config = getAgentConfig(agentId);
-      return {
-        id: `send-to:${agentId}:${useSelection ? "selection" : "note"}`,
-        label: config?.name || agentId,
-      };
-    });
-  }, []);
-
-  const handleSendMenuClick = useCallback(
-    async (event: React.MouseEvent) => {
-      event.preventDefault();
-      event.stopPropagation();
-
-      const hasSelection = editorViewRef.current?.state.selection.ranges.some(
-        (range: any) => !range.empty
-      );
-
-      const menu: MenuItemOption[] = [
-        {
-          id: "send-selection",
-          label: "Send Selection to...",
-          enabled: hasSelection,
-          submenu: buildSendMenu(true),
-        },
-        {
-          id: "send-note",
-          label: "Send Note to...",
-          submenu: buildSendMenu(false),
-        },
-        { type: "separator" },
-        {
-          id: "copy-path",
-          label: "Copy @path",
-        },
-      ];
-
-      const selectedId = await showMenu(event, menu);
-      if (!selectedId) return;
-
-      if (selectedId === "copy-path") {
-        handleCopyPath();
-        return;
-      }
-
-      if (selectedId.startsWith("send-to:")) {
-        const parts = selectedId.split(":");
-        const agentId = parts[1];
-        const useSelection = parts[2] === "selection";
-        handleSendToAgent(agentId, useSelection);
-      }
-    },
-    [buildSendMenu, showMenu, handleCopyPath, handleSendToAgent]
-  );
-
-  const handleEditorContextMenu = useCallback(
-    async (event: React.MouseEvent) => {
-      const hasSelection = editorViewRef.current?.state.selection.ranges.some(
-        (range: any) => !range.empty
-      );
-
-      const menu: MenuItemOption[] = [
-        {
-          id: "send-selection",
-          label: "Send Selection to...",
-          enabled: hasSelection,
-          submenu: buildSendMenu(true),
-        },
-        {
-          id: "send-note",
-          label: "Send Note to...",
-          submenu: buildSendMenu(false),
-        },
-      ];
-
-      const selectedId = await showMenu(event, menu);
-      if (!selectedId || !selectedId.startsWith("send-to:")) return;
-
-      const parts = selectedId.split(":");
-      const agentId = parts[1];
-      const useSelection = parts[2] === "selection";
-      handleSendToAgent(agentId, useSelection);
-    },
-    [buildSendMenu, showMenu, handleSendToAgent]
-  );
-
   const headerActions = useMemo(
     () => (
       <div className="flex items-center gap-1">
@@ -447,25 +283,6 @@ export function NotesPane({
           <Tooltip>
             <TooltipTrigger asChild>
               <button
-                onClick={handleSendMenuClick}
-                className="flex items-center gap-1.5 px-2 py-1 text-xs rounded-[var(--radius-sm)] hover:bg-canopy-text/10 text-canopy-text/60 hover:text-canopy-text transition-colors"
-                aria-label="Send to agent"
-              >
-                {sent ? (
-                  <Check className="w-3 h-3 text-status-success" />
-                ) : (
-                  <Send className="w-3 h-3" />
-                )}
-                <span>Send to...</span>
-              </button>
-            </TooltipTrigger>
-            <TooltipContent side="bottom">Send to agent</TooltipContent>
-          </Tooltip>
-        </TooltipProvider>
-        <TooltipProvider>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <button
                 onClick={handleCopyPath}
                 className="flex items-center gap-1.5 px-2 py-1 text-xs rounded-[var(--radius-sm)] hover:bg-canopy-text/10 text-canopy-text/60 hover:text-canopy-text transition-colors"
                 aria-label="Copy addressable path"
@@ -483,7 +300,7 @@ export function NotesPane({
         </TooltipProvider>
       </div>
     ),
-    [handleCopyPath, copied, handleSendMenuClick, sent, viewMode]
+    [handleCopyPath, copied, viewMode]
   );
 
   const extensions = useMemo(
@@ -544,10 +361,7 @@ export function NotesPane({
             <div className="flex flex-1 min-h-0 overflow-hidden">
               <div className="flex-1 flex flex-col min-h-0 border-r border-canopy-border">
                 {!hasConflict && <MarkdownToolbar editorViewRef={editorViewRef} />}
-                <div
-                  className="flex-1 overflow-hidden bg-canopy-bg text-[13px] font-mono [&_.cm-editor]:h-full [&_.cm-scroller]:p-2 [&_.cm-placeholder]:text-canopy-text/30 [&_.cm-placeholder]:italic"
-                  onContextMenu={handleEditorContextMenu}
-                >
+                <div className="flex-1 overflow-hidden bg-canopy-bg text-[13px] font-mono [&_.cm-editor]:h-full [&_.cm-scroller]:p-2 [&_.cm-placeholder]:text-canopy-text/30 [&_.cm-placeholder]:italic">
                   <CodeMirror
                     value={content}
                     height="100%"
@@ -575,10 +389,7 @@ export function NotesPane({
           ) : (
             <div className="flex-1 flex flex-col min-h-0">
               {!hasConflict && <MarkdownToolbar editorViewRef={editorViewRef} />}
-              <div
-                className="flex-1 overflow-hidden bg-canopy-bg text-[13px] font-mono [&_.cm-editor]:h-full [&_.cm-scroller]:p-2 [&_.cm-placeholder]:text-canopy-text/30 [&_.cm-placeholder]:italic"
-                onContextMenu={handleEditorContextMenu}
-              >
+              <div className="flex-1 overflow-hidden bg-canopy-bg text-[13px] font-mono [&_.cm-editor]:h-full [&_.cm-scroller]:p-2 [&_.cm-placeholder]:text-canopy-text/30 [&_.cm-placeholder]:italic">
                 <CodeMirror
                   value={content}
                   height="100%"
