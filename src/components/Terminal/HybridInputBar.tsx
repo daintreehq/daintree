@@ -87,6 +87,7 @@ export interface HybridInputBarProps {
   className?: string;
 }
 
+const IMAGE_EXTENSIONS = /\.(png|jpe?g|bmp|tiff?|avif|heic)$/i;
 const AI_CORRECTION_MATCH_RADIUS = 32;
 
 function resolveAICorrectionRange(
@@ -297,8 +298,6 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         }),
       []
     );
-
-    const IMAGE_EXTENSIONS = /\.(png|jpe?g|bmp|tiff?|avif|heic)$/i;
 
     const handleDragEnter = useCallback((e: React.DragEvent) => {
       if (!e.dataTransfer.types.includes("Files")) return;

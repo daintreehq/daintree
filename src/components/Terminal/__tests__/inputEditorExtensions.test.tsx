@@ -749,6 +749,14 @@ describe("createFilePasteHandler", () => {
   }
 
   it("calls onFilePaste for non-image file items with a path", () => {
+    const originalElectron = window.electron;
+    (window as unknown as Record<string, unknown>).electron = {
+      ...window.electron,
+      webUtils: {
+        getPathForFile: (file: File) => (file as unknown as { _testPath?: string })._testPath ?? "",
+      },
+    };
+
     const onFilePaste = vi.fn();
     const parent = document.createElement("div");
     const view = new EditorView({
@@ -760,7 +768,7 @@ describe("createFilePasteHandler", () => {
     });
 
     const file = new File(["content"], "test.pdf", { type: "application/pdf" });
-    Object.defineProperty(file, "path", { value: "/Users/test/test.pdf" });
+    Object.defineProperty(file, "_testPath", { value: "/Users/test/test.pdf" });
 
     const mockData = makeMockClipboardData([{ kind: "file", type: "application/pdf", file }]);
     const pasteEvent = makePasteEvent(mockData.clipboardData);
@@ -773,6 +781,7 @@ describe("createFilePasteHandler", () => {
     ]);
 
     view.destroy();
+    (window as unknown as Record<string, unknown>).electron = originalElectron;
   });
 
   it("does not call onFilePaste for image file items", () => {
