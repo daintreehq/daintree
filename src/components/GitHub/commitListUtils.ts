@@ -44,6 +44,7 @@ export type DateGroupLabel = "Today" | "Yesterday" | "This Week" | string;
 
 export function getCommitDateGroupLabel(dateString: string, now?: Date): DateGroupLabel {
   const commitDate = new Date(dateString);
+  if (isNaN(commitDate.getTime())) return "Unknown";
   const ref = now ?? new Date();
   const commitMidnight = dayMidnightMs(commitDate);
   const todayMidnight = dayMidnightMs(ref);

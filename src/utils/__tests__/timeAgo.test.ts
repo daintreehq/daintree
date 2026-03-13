@@ -30,6 +30,12 @@ describe("formatTimeAgo", () => {
     expect(formatTimeAgo("2024-01-15T12:00:00Z")).toBe("5d ago");
   });
 
+  it("returns 'Unknown' for invalid date strings", () => {
+    expect(formatTimeAgo("not-a-date")).toBe("Unknown");
+    expect(formatTimeAgo("")).toBe("Unknown");
+    expect(formatTimeAgo("garbage|data")).toBe("Unknown");
+  });
+
   it("returns a locale date string for timestamps older than 30 days", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2024-03-15T12:00:00Z"));
