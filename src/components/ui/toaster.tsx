@@ -109,24 +109,36 @@ function Toast({ notification }: { notification: Notification }) {
         <div className="text-xs text-canopy-text/70 leading-snug break-words">
           {notification.message}
         </div>
-        {notification.action && (
-          <button
-            type="button"
-            onClick={() => {
-              notification.action?.onClick();
-              handleDismiss();
-            }}
-            className={cn(
-              "mt-1.5 px-2.5 py-1 rounded-[var(--radius-xs)]",
-              "text-xs font-medium",
-              "bg-canopy-accent/10 text-canopy-accent",
-              "hover:bg-canopy-accent/20 transition-colors",
-              "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2"
-            )}
-          >
-            {notification.action.label}
-          </button>
-        )}
+        {(() => {
+          const actions = [
+            ...(notification.actions ?? []),
+            ...(notification.action ? [notification.action] : []),
+          ];
+          if (actions.length === 0) return null;
+          return (
+            <div className="mt-1.5 flex flex-wrap gap-1.5">
+              {actions.map((action) => (
+                <button
+                  key={action.label}
+                  type="button"
+                  onClick={() => {
+                    action.onClick();
+                    handleDismiss();
+                  }}
+                  className={cn(
+                    "px-2.5 py-1 rounded-[var(--radius-xs)]",
+                    "text-xs font-medium",
+                    "bg-canopy-accent/10 text-canopy-accent",
+                    "hover:bg-canopy-accent/20 transition-colors",
+                    "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2"
+                  )}
+                >
+                  {action.label}
+                </button>
+              ))}
+            </div>
+          );
+        })()}
       </div>
 
       <button
