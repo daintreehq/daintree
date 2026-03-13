@@ -66,6 +66,16 @@ describe("normalizeChips", () => {
     const result = normalizeChips(images, files, urls);
     expect(result).toHaveLength(3);
   });
+
+  it("sorts items by document position", () => {
+    const images = [{ from: 20, to: 25, filePath: "/img.png", thumbnailUrl: "" }];
+    const files = [{ from: 0, to: 5, filePath: "/code.ts", fileName: "code.ts" }];
+    const urls = [
+      { from: 10, to: 15, title: "Page", tokenEstimate: 2000, sourceUrl: "https://x.com" },
+    ];
+    const result = normalizeChips(images, files, urls);
+    expect(result.map((r) => r.kind)).toEqual(["file", "url", "image"]);
+  });
 });
 
 describe("buildSummaryLine", () => {
@@ -73,10 +83,7 @@ describe("buildSummaryLine", () => {
     const items = [
       { id: "img-0-5", kind: "image" as const, label: "Screenshot", tokenEstimate: 1000, from: 0, to: 5 },
     ];
-    const line = buildSummaryLine(items);
-    expect(line).toContain("1 image");
-    expect(line).toContain("~1,000 tokens");
-    expect(line).not.toContain("images");
+    expect(buildSummaryLine(items)).toBe("1 image \u00b7 ~1,000 tokens");
   });
 
   it("pluralizes correctly", () => {
@@ -84,19 +91,14 @@ describe("buildSummaryLine", () => {
       { id: "f-0-5", kind: "file" as const, label: "a.ts", tokenEstimate: 500, from: 0, to: 5 },
       { id: "f-10-15", kind: "file" as const, label: "b.ts", tokenEstimate: 500, from: 10, to: 15 },
     ];
-    const line = buildSummaryLine(items);
-    expect(line).toContain("2 files");
-    expect(line).toContain("~1,000 tokens");
+    expect(buildSummaryLine(items)).toBe("2 files \u00b7 ~1,000 tokens");
   });
 
   it("omits zero-count categories", () => {
     const items = [
       { id: "u-0-10", kind: "url" as const, label: "Page", tokenEstimate: 2000, from: 0, to: 10 },
     ];
-    const line = buildSummaryLine(items);
-    expect(line).toContain("1 URL");
-    expect(line).not.toContain("image");
-    expect(line).not.toContain("file");
+    expect(buildSummaryLine(items)).toBe("1 URL \u00b7 ~2,000 tokens");
   });
 
   it("joins multiple categories with middle dot", () => {
@@ -104,8 +106,7 @@ describe("buildSummaryLine", () => {
       { id: "img-0-5", kind: "image" as const, label: "Screenshot", tokenEstimate: 1000, from: 0, to: 5 },
       { id: "f-10-15", kind: "file" as const, label: "a.ts", tokenEstimate: 500, from: 10, to: 15 },
     ];
-    const line = buildSummaryLine(items);
-    expect(line).toContain("1 image \u00b7 1 file");
+    expect(buildSummaryLine(items)).toBe("1 image \u00b7 1 file \u00b7 ~1,500 tokens");
   });
 });
 

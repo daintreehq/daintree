@@ -87,6 +87,7 @@ export function normalizeChips(
     });
   }
 
+  items.sort((a, b) => a.from - b.from);
   return items;
 }
 

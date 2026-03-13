@@ -989,7 +989,9 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     const removeAttachment = useCallback((item: TrayItem) => {
       const view = editorViewRef.current;
       if (!view) return;
-      view.dispatch({ changes: { from: item.from, to: item.to, insert: "" } });
+      const doc = view.state.doc.toString();
+      const deleteTo = item.to < doc.length && doc[item.to] === " " ? item.to + 1 : item.to;
+      view.dispatch({ changes: { from: item.from, to: deleteTo, insert: "" } });
       view.focus();
     }, []);
 
@@ -1068,7 +1070,9 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
             if (prev.length === 0 && next.length === 0) return prev;
             if (
               prev.length === next.length &&
-              prev.every((p, i) => p.id === next[i].id)
+              prev.every(
+                (p, i) => p.id === next[i].id && p.tokenEstimate === next[i].tokenEstimate
+              )
             )
               return prev;
             return next;
