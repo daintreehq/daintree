@@ -105,6 +105,11 @@ export function TerminalIcon({
     if (ProcessIcon) {
       return <ProcessIcon {...finalProps} />;
     }
+    const detectedAgentConfig = getAgentConfig(detectedProcessId);
+    if (detectedAgentConfig) {
+      const AgentIcon = detectedAgentConfig.icon;
+      return <AgentIcon {...finalProps} brandColor={brandColor ?? detectedAgentConfig.color} />;
+    }
   }
 
   // Fallback to generic terminal icon
