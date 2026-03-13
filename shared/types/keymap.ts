@@ -26,6 +26,8 @@ export type KeyAction =
   | "nav.primary"
   | "nav.toggleSidebar"
   | "nav.quickSwitcher"
+  | "nav.focusRegion.next"
+  | "nav.focusRegion.prev"
 
   // File operations
   | "file.open"
@@ -178,6 +180,8 @@ export const KEY_ACTION_VALUES: ReadonlySet<string> = new Set<string>([
   "nav.primary",
   "nav.toggleSidebar",
   "nav.quickSwitcher",
+  "nav.focusRegion.next",
+  "nav.focusRegion.prev",
   "file.open",
   "file.copyPath",
   "file.copyTree",

@@ -3,6 +3,7 @@ import { useShallow } from "zustand/react/shallow";
 import { SortableContext, rectSortingStrategy } from "@dnd-kit/sortable";
 import { useDroppable } from "@dnd-kit/core";
 import { cn } from "@/lib/utils";
+import { useMacroFocusStore } from "@/store/macroFocusStore";
 import {
   useTerminalStore,
   useLayoutConfigStore,
@@ -564,6 +565,52 @@ export function ContentGrid({ className, defaultCwd, agentAvailability }: Conten
   // Use tab groups count for grid layout (each group takes one cell)
   const gridItemCount = tabGroups.length + (showPlaceholder ? 1 : 0);
 
+  const gridRegionRef = useRef<HTMLDivElement>(null);
+  const isMacroFocused = useMacroFocusStore((state) => state.focusedRegion === "grid");
+
+  useEffect(() => {
+    useMacroFocusStore.getState().setRegionRef("grid", gridRegionRef.current);
+    return () => useMacroFocusStore.getState().setRegionRef("grid", null);
+  }, []);
+
+  const handleGridRegionKeyDown = useCallback(
+    (e: React.KeyboardEvent) => {
+      if (!isMacroFocused) return;
+
+      // Arrow keys navigate between grid cells
+      const directionMap: Record<string, string> = {
+        ArrowUp: "terminal.focusUp",
+        ArrowDown: "terminal.focusDown",
+        ArrowLeft: "terminal.focusLeft",
+        ArrowRight: "terminal.focusRight",
+      };
+      const action = directionMap[e.key];
+      if (action) {
+        e.preventDefault();
+        e.stopPropagation();
+        void actionService.dispatch(
+          action as Parameters<typeof actionService.dispatch>[0],
+          undefined,
+          { source: "keybinding" }
+        );
+        return;
+      }
+
+      // Enter activates the focused terminal
+      if (e.key === "Enter" && focusedId) {
+        e.preventDefault();
+        e.stopPropagation();
+        const instance = terminalInstanceService.get(focusedId);
+        if (instance) {
+          instance.terminal.focus();
+          useMacroFocusStore.getState().clearFocus();
+        }
+        return;
+      }
+    },
+    [isMacroFocused, focusedId]
+  );
+
   const combinedGridRef = useCallback(
     (node: HTMLDivElement | null) => {
       setNodeRef(node);
@@ -876,7 +923,18 @@ export function ContentGrid({ className, defaultCwd, agentAvailability }: Conten
         const effectiveFocusedId = maximizedGroupFocusTarget ?? focusedId;
 
         return (
-          <div className={cn("h-full flex flex-col bg-canopy-bg", className)}>
+          <div
+            ref={gridRegionRef}
+            tabIndex={-1}
+            aria-label="Terminal grid"
+            data-macro-focus={isMacroFocused ? "true" : undefined}
+            onKeyDown={handleGridRegionKeyDown}
+            className={cn(
+              "h-full flex flex-col bg-canopy-bg outline-none",
+              "data-[macro-focus=true]:ring-2 data-[macro-focus=true]:ring-canopy-accent/60 data-[macro-focus=true]:ring-inset",
+              className
+            )}
+          >
             <GridNotificationBar className="mx-1 mt-1 shrink-0" />
             <div className="relative min-h-0 flex-1">
               <GridTabGroup
@@ -897,7 +955,18 @@ export function ContentGrid({ className, defaultCwd, agentAvailability }: Conten
       const terminal = gridTerminals.find((t: TerminalInstance) => t.id === maximizedId);
       if (terminal) {
         return (
-          <div className={cn("h-full flex flex-col bg-canopy-bg", className)}>
+          <div
+            ref={gridRegionRef}
+            tabIndex={-1}
+            aria-label="Terminal grid"
+            data-macro-focus={isMacroFocused ? "true" : undefined}
+            onKeyDown={handleGridRegionKeyDown}
+            className={cn(
+              "h-full flex flex-col bg-canopy-bg outline-none",
+              "data-[macro-focus=true]:ring-2 data-[macro-focus=true]:ring-canopy-accent/60 data-[macro-focus=true]:ring-inset",
+              className
+            )}
+          >
             <GridNotificationBar className="mx-1 mt-1 shrink-0" />
             <div className="relative min-h-0 flex-1">
               <GridPanel
@@ -918,7 +987,19 @@ export function ContentGrid({ className, defaultCwd, agentAvailability }: Conten
 
   if (useTwoPaneSplitMode && twoPaneTerminals) {
     return (
-      <div key="split-mode" className={cn("h-full flex flex-col", className)}>
+      <div
+        key="split-mode"
+        ref={gridRegionRef}
+        tabIndex={-1}
+        aria-label="Terminal grid"
+        data-macro-focus={isMacroFocused ? "true" : undefined}
+        onKeyDown={handleGridRegionKeyDown}
+        className={cn(
+          "h-full flex flex-col outline-none",
+          "data-[macro-focus=true]:ring-2 data-[macro-focus=true]:ring-canopy-accent/60 data-[macro-focus=true]:ring-inset",
+          className
+        )}
+      >
         <GridNotificationBar className="mx-1 mt-1 shrink-0" />
         <TerminalCountWarning className="mx-1 mt-1 shrink-0" />
         <div
@@ -944,7 +1025,19 @@ export function ContentGrid({ className, defaultCwd, agentAvailability }: Conten
   }
 
   return (
-    <div key="grid-mode" className={cn("h-full flex flex-col", className)}>
+    <div
+      key="grid-mode"
+      ref={gridRegionRef}
+      tabIndex={-1}
+      aria-label="Terminal grid"
+      data-macro-focus={isMacroFocused ? "true" : undefined}
+      onKeyDown={handleGridRegionKeyDown}
+      className={cn(
+        "h-full flex flex-col outline-none",
+        "data-[macro-focus=true]:ring-2 data-[macro-focus=true]:ring-canopy-accent/60 data-[macro-focus=true]:ring-inset",
+        className
+      )}
+    >
       <GridNotificationBar className="mx-1 mt-1 shrink-0" />
       <TerminalCountWarning className="mx-1 mt-1 shrink-0" />
       <div className="relative flex-1 min-h-0">

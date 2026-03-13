@@ -11,6 +11,8 @@ export interface ActionCallbacks {
   onOpenSettingsTab: (target: SettingsNavTarget) => void;
   onToggleSidebar: () => void;
   onToggleFocusMode: () => void;
+  onFocusRegionNext: () => void;
+  onFocusRegionPrev: () => void;
   onOpenWorktreePalette: () => void;
   onOpenQuickCreatePalette: () => void;
   onToggleWorktreeOverview: () => void;

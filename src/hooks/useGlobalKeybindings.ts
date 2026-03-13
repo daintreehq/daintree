@@ -72,8 +72,8 @@ export function useGlobalKeybindings(enabled: boolean = true): void {
         return;
       }
 
-      // Let xterm handle its own keys except for global shortcuts with modifiers or chord completion
-      if (isInTerminal && !hasModifier && !pendingChord) {
+      // Let xterm handle its own keys except for global shortcuts with modifiers, chord completion, or F6
+      if (isInTerminal && !hasModifier && !pendingChord && e.key !== "F6") {
         return;
       }
 

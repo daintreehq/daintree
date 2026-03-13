@@ -105,6 +105,7 @@ import {
 } from "./store";
 import { useShallow } from "zustand/react/shallow";
 import { useRecipeStore } from "./store/recipeStore";
+import { useMacroFocusStore } from "./store/macroFocusStore";
 import type { RecipeTerminal } from "./types";
 import { errorsClient, systemClient, worktreeClient } from "@/clients";
 import { registerBuiltInPanelComponents } from "./registry";
@@ -1005,6 +1006,8 @@ function App() {
     onOpenSettingsTab: handleOpenSettingsTab,
     onToggleSidebar: handleToggleSidebar,
     onToggleFocusMode: handleToggleSidebar,
+    onFocusRegionNext: () => useMacroFocusStore.getState().cycleNext(),
+    onFocusRegionPrev: () => useMacroFocusStore.getState().cyclePrev(),
     onOpenActionPalette: actionPalette.open,
     onOpenQuickSwitcher: quickSwitcher.open,
     onOpenWorktreePalette: worktreePalette.open,
