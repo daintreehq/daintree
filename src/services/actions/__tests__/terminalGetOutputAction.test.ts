@@ -52,6 +52,8 @@ async function createRegistry() {
     onOpenSettingsTab: () => {},
     onToggleSidebar: () => {},
     onToggleFocusMode: () => {},
+    onFocusRegionNext: () => {},
+    onFocusRegionPrev: () => {},
     onOpenActionPalette: () => {},
     onOpenQuickSwitcher: () => {},
     onOpenWorktreePalette: () => {},
