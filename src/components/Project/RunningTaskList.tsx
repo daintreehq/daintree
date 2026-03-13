@@ -34,10 +34,7 @@ export function RunningTaskList({ worktreeId }: RunningTaskListProps) {
   const quickRunTerminals = useTerminalStore(
     useShallow((state) =>
       state.terminals.filter(
-        (t) =>
-          t.spawnedBy === "quickrun" &&
-          t.worktreeId === worktreeId &&
-          t.location !== "trash"
+        (t) => t.spawnedBy === "quickrun" && t.worktreeId === worktreeId && t.location !== "trash"
       )
     )
   );
