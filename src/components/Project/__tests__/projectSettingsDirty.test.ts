@@ -451,6 +451,61 @@ describe("projectSettingsDirty", () => {
       expect(areSnapshotsEqual(snapshotA, snapshotB)).toBe(true);
     });
 
+    it("should detect change from undefined to defined preferredLocation", () => {
+      const snapshotA = createProjectSettingsSnapshot(
+        "Project",
+        "🌲",
+        "npm run dev",
+        undefined,
+        [],
+        [],
+        [{ id: "cmd1", name: "Build", command: "npm run build" }],
+        undefined,
+        [],
+        {}
+      );
+      const snapshotB = createProjectSettingsSnapshot(
+        "Project",
+        "🌲",
+        "npm run dev",
+        undefined,
+        [],
+        [],
+        [{ id: "cmd1", name: "Build", command: "npm run build", preferredLocation: "dock" }],
+        undefined,
+        [],
+        {}
+      );
+
+      expect(areSnapshotsEqual(snapshotA, snapshotB)).toBe(false);
+    });
+
+    it("should preserve preferredAutoRestart false through snapshot", () => {
+      const snapshot = createProjectSettingsSnapshot(
+        "Project",
+        "🌲",
+        "",
+        undefined,
+        [],
+        [],
+        [
+          {
+            id: "cmd1",
+            name: "Build",
+            command: "npm run build",
+            preferredLocation: "grid",
+            preferredAutoRestart: false,
+          },
+        ],
+        undefined,
+        [],
+        {}
+      );
+
+      expect(snapshot.runCommands[0].preferredLocation).toBe("grid");
+      expect(snapshot.runCommands[0].preferredAutoRestart).toBe(false);
+    });
+
     it("should preserve preferredLocation and preferredAutoRestart in snapshot", () => {
       const snapshot = createProjectSettingsSnapshot(
         "Project",
