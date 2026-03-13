@@ -378,6 +378,41 @@ describe("AgentDomainWeightsSchema", () => {
   });
 });
 
+describe("resume configuration", () => {
+  it("all built-in agents with shutdown config also have resume config", () => {
+    const ids = getAgentIds();
+    for (const id of ids) {
+      const config = getAgentConfig(id);
+      if (config?.shutdown) {
+        expect(config.resume).toBeDefined();
+        expect(typeof config.resume?.args).toBe("function");
+      }
+    }
+  });
+
+  it("claude produces --resume flag args", () => {
+    const config = getAgentConfig("claude");
+    expect(config?.resume?.args("abc-123")).toEqual(["--resume", "abc-123"]);
+  });
+
+  it("gemini produces --resume flag args", () => {
+    const config = getAgentConfig("gemini");
+    expect(config?.resume?.args("abc-123")).toEqual(["--resume", "abc-123"]);
+  });
+
+  it("codex produces resume subcommand args (no leading dash)", () => {
+    const config = getAgentConfig("codex");
+    const args = config?.resume?.args("abc-123");
+    expect(args).toEqual(["resume", "abc-123"]);
+    expect(args?.[0]).not.toMatch(/^-/);
+  });
+
+  it("opencode produces -s flag args", () => {
+    const config = getAgentConfig("opencode");
+    expect(config?.resume?.args("ses_abc")).toEqual(["-s", "ses_abc"]);
+  });
+});
+
 describe("DEFAULT_ROUTING_CONFIG", () => {
   it("has empty capabilities", () => {
     expect(DEFAULT_ROUTING_CONFIG.capabilities).toEqual([]);
