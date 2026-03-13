@@ -17,6 +17,11 @@ interface AppThemeState {
 
 function injectSchemeToDOM(scheme: AppColorScheme): void {
   applyAppThemeToRoot(document.documentElement, scheme);
+  // Reapply CVD overrides after theme injection so they aren't overwritten
+  const { colorVisionMode } = useAppThemeStore.getState();
+  if (colorVisionMode !== "default") {
+    applyColorVisionMode(document.documentElement, colorVisionMode);
+  }
 }
 
 export const useAppThemeStore = create<AppThemeState>()((set) => ({

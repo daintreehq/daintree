@@ -27,6 +27,7 @@ const SWATCH_TOKENS = [
 
 function SwatchPreview() {
   const colorVisionMode = useAppThemeStore((s) => s.colorVisionMode);
+  const selectedSchemeId = useAppThemeStore((s) => s.selectedSchemeId);
   const [colors, setColors] = useState<string[]>([]);
 
   useEffect(() => {
@@ -35,7 +36,7 @@ function SwatchPreview() {
       setColors(SWATCH_TOKENS.map((t) => styles.getPropertyValue(t.var).trim()));
     });
     return () => cancelAnimationFrame(raf);
-  }, [colorVisionMode]);
+  }, [colorVisionMode, selectedSchemeId]);
 
   if (colors.length === 0) return null;
 

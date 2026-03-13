@@ -116,7 +116,7 @@ export function TerminalAppearanceTab() {
       <SettingsSection
         icon={Eye}
         title="Color Vision"
-        description="Adjust colors for color vision deficiency. Affects status indicators and terminal ANSI colors."
+        description="Adjust colors for color vision deficiency. Affects status indicators and default terminal palette."
       >
         <ColorVisionPicker />
       </SettingsSection>
