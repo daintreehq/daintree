@@ -1134,7 +1134,7 @@ export const urlContextChipField = StateField.define<UrlContextChipEntry[]>({
   ],
 });
 
-export function createUrlPasteDetector(urlPasteField: StateField<UrlPasteEntry[]>): Extension {
+export function createUrlPasteDetector(): Extension {
   return EditorView.updateListener.of((update) => {
     if (!update.docChanged) return;
 

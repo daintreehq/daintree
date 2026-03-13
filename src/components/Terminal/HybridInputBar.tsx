@@ -339,10 +339,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       []
     );
 
-    const urlPasteDetector = useMemo(
-      () => createUrlPasteDetector(urlPasteFieldInstance),
-      [urlPasteFieldInstance]
-    );
+    const urlPasteDetector = useMemo(() => createUrlPasteDetector(), []);
 
     const plainPasteKeymap = useMemo(() => createPlainPasteKeymap(), []);
 
