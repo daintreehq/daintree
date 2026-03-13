@@ -111,4 +111,38 @@ describe("TrashContainer", () => {
 
     expect(useAnnouncerStore.getState().polite).toBeNull();
   });
+
+  it("clears pulse when count decreases while pulsing", () => {
+    const items = [makeTrashedItem("1")];
+    const { container, rerender } = render(<TrashContainer trashedTerminals={items} />);
+
+    // Trigger pulse
+    rerender(<TrashContainer trashedTerminals={[...items, makeTrashedItem("2")]} />);
+    expect(container.querySelector(".animate-trash-pulse")).not.toBeNull();
+
+    // Restore a panel (count decreases) before timeout
+    rerender(<TrashContainer trashedTerminals={[items[0]]} />);
+    expect(container.querySelector(".animate-trash-pulse")).toBeNull();
+  });
+
+  it("restarts pulse on rapid successive increases", () => {
+    const items = [makeTrashedItem("1")];
+    const { container, rerender } = render(<TrashContainer trashedTerminals={items} />);
+
+    // First increase
+    rerender(<TrashContainer trashedTerminals={[...items, makeTrashedItem("2")]} />);
+    expect(container.querySelector(".animate-trash-pulse")).not.toBeNull();
+
+    // Second increase before timeout — should still be pulsing
+    rerender(
+      <TrashContainer trashedTerminals={[...items, makeTrashedItem("2"), makeTrashedItem("3")]} />
+    );
+    expect(container.querySelector(".animate-trash-pulse")).not.toBeNull();
+
+    // Timer from second increase should clear the pulse
+    act(() => {
+      vi.advanceTimersByTime(500);
+    });
+    expect(container.querySelector(".animate-trash-pulse")).toBeNull();
+  });
 });

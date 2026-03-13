@@ -42,21 +42,22 @@ type TrashDisplayItem = GroupedTrashItem | GroupedTrashGroup;
 
 export function TrashContainer({ trashedTerminals, compact = false }: TrashContainerProps) {
   const [isOpen, setIsOpen] = useState(false);
-  const [isPulsing, setIsPulsing] = useState(false);
+  const [pulseKey, setPulseKey] = useState(0);
   const prevLengthRef = useRef(trashedTerminals.length);
   const { worktreeMap } = useWorktrees();
 
   useEffect(() => {
     const increased = trashedTerminals.length > prevLengthRef.current;
     prevLengthRef.current = trashedTerminals.length;
-    if (increased) {
-      setIsPulsing(true);
-      const shortcut = isMac() ? "Cmd+Shift+T" : "Ctrl+Shift+T";
-      useAnnouncerStore.getState().announce(`Panel closed — press ${shortcut} to restore`);
-      const timer = setTimeout(() => setIsPulsing(false), 450);
-      return () => clearTimeout(timer);
+    if (!increased) {
+      setPulseKey(0);
+      return undefined;
     }
-    return undefined;
+    setPulseKey((k) => k + 1);
+    const shortcut = isMac() ? "Cmd+Shift+T" : "Ctrl+Shift+T";
+    useAnnouncerStore.getState().announce(`Panel closed — press ${shortcut} to restore`);
+    const timer = setTimeout(() => setPulseKey(0), 450);
+    return () => clearTimeout(timer);
   }, [trashedTerminals.length]);
 
   // Group trash items by groupRestoreId
@@ -155,7 +156,7 @@ export function TrashContainer({ trashedTerminals, compact = false }: TrashConta
           aria-controls={contentId}
           aria-label={`Trash: ${count} terminal${count === 1 ? "" : "s"}`}
         >
-          <span className={cn("relative", isPulsing && "animate-trash-pulse")}>
+          <span key={pulseKey} className={cn("relative", pulseKey > 0 && "animate-trash-pulse")}>
             <Trash2 className="w-3.5 h-3.5 text-canopy-text/60" aria-hidden="true" />
             {compact && count > 0 && (
               <span className="absolute -top-1.5 -right-1.5 z-10 flex items-center justify-center min-w-[14px] h-[14px] px-0.5 rounded-full bg-canopy-text/40 text-[10px] font-bold text-white">
