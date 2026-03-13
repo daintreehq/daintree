@@ -117,6 +117,9 @@ jobs:
       - name: Install Claude Code
         run: npm install -g @anthropic-ai/claude-code
 
+      - name: Install OpenCode
+        run: npm install -g opencode-ai
+
       - name: Configure Claude Code (macOS/Linux)
         if: runner.os != 'Windows'
         run: |
