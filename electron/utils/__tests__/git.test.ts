@@ -190,6 +190,40 @@ describe("listCommits", () => {
     expect(result.total).toBe(5);
   });
 
+  it("parses multiple commits where one has pipe-heavy body", async () => {
+    mockGit.raw.mockResolvedValueOnce("2").mockResolvedValueOnce(
+      makeLogOutput([
+        {
+          hash: "aaa111",
+          short: "aaa111",
+          msg: "docs: add table",
+          body: "| A | B | C |\n|---|---|---|\n| 1 | 2 | 3 |",
+          name: "Alice",
+          email: "alice@test.com",
+          date: "2024-01-15T12:00:00+00:00",
+        },
+        {
+          hash: "bbb222",
+          short: "bbb222",
+          msg: "fix: normal commit",
+          body: "",
+          name: "Bob",
+          email: "bob@test.com",
+          date: "2024-01-14T12:00:00+00:00",
+        },
+      ])
+    );
+
+    const result = await listCommits({ cwd: "/test", branch: "main" });
+
+    expect(result.items).toHaveLength(2);
+    expect(result.items[0].body).toBe("| A | B | C |\n|---|---|---|\n| 1 | 2 | 3 |");
+    expect(result.items[0].date).toBe("2024-01-15T12:00:00+00:00");
+    expect(result.items[1].hash).toBe("bbb222");
+    expect(result.items[1].body).toBeUndefined();
+    expect(result.items[1].date).toBe("2024-01-14T12:00:00+00:00");
+  });
+
   it("handles empty commit body", async () => {
     mockGit.raw.mockResolvedValueOnce("1").mockResolvedValueOnce(
       makeLogOutput([
