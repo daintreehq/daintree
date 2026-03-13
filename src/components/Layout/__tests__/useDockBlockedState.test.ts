@@ -218,6 +218,10 @@ describe("isGroupDeprioritized", () => {
     expect(isGroupDeprioritized(panels)).toBe(false);
   });
 
+  it("returns true for single panel with undefined agentState", () => {
+    expect(isGroupDeprioritized([{ agentState: undefined }])).toBe(true);
+  });
+
   it("returns false for empty array", () => {
     expect(isGroupDeprioritized([])).toBe(false);
   });
