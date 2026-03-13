@@ -55,7 +55,8 @@ interface RecipeState {
     name: string,
     worktreeId: string | undefined,
     terminals: RecipeTerminal[],
-    showInEmptyState?: boolean
+    showInEmptyState?: boolean,
+    autoAssign?: "always" | "never" | "prompt"
   ) => Promise<void>;
   updateRecipe: (
     id: string,
@@ -113,7 +114,14 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
     }
   },
 
-  createRecipe: async (projectId, name, worktreeId, terminals, showInEmptyState = false) => {
+  createRecipe: async (
+    projectId,
+    name,
+    worktreeId,
+    terminals,
+    showInEmptyState = false,
+    autoAssign
+  ) => {
     if (terminals.length === 0) {
       throw new Error("Recipe must contain at least one terminal");
     }
@@ -129,6 +137,7 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
       terminals: terminals.map(sanitizeRecipeTerminal),
       createdAt: Date.now(),
       showInEmptyState,
+      autoAssign,
     };
 
     const newRecipes = [...get().recipes, newRecipe];

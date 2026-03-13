@@ -12,6 +12,7 @@ export interface ActionCallbacks {
   onToggleSidebar: () => void;
   onToggleFocusMode: () => void;
   onOpenWorktreePalette: () => void;
+  onOpenQuickCreatePalette: () => void;
   onToggleWorktreeOverview: () => void;
   onOpenWorktreeOverview: () => void;
   onCloseWorktreeOverview: () => void;

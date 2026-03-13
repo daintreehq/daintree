@@ -35,6 +35,7 @@ export function useActionRegistry(options: ActionCallbacks): void {
       onOpenActionPalette: () => callbacksRef.current.onOpenActionPalette(),
       onOpenQuickSwitcher: () => callbacksRef.current.onOpenQuickSwitcher(),
       onOpenWorktreePalette: () => callbacksRef.current.onOpenWorktreePalette(),
+      onOpenQuickCreatePalette: () => callbacksRef.current.onOpenQuickCreatePalette(),
       onToggleWorktreeOverview: () => callbacksRef.current.onToggleWorktreeOverview(),
       onOpenWorktreeOverview: () => callbacksRef.current.onOpenWorktreeOverview(),
       onCloseWorktreeOverview: () => callbacksRef.current.onCloseWorktreeOverview(),

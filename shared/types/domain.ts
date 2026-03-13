@@ -869,6 +869,13 @@ export interface TerminalRecipe {
   showInEmptyState?: boolean;
   /** Timestamp of last run (milliseconds since epoch) */
   lastUsedAt?: number;
+  /** Controls whether the linked GitHub issue is auto-assigned during quick worktree creation */
+  autoAssign?: "always" | "never" | "prompt";
+}
+
+/** Returns the effective autoAssign mode for a recipe, defaulting to "always" for legacy recipes */
+export function getAutoAssign(recipe: TerminalRecipe): "always" | "never" | "prompt" {
+  return recipe.autoAssign ?? "always";
 }
 
 // Project Settings Types

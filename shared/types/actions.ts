@@ -150,6 +150,7 @@ export type ActionId =
   | "worktree.switchIndex"
   | "agent.launch"
   | "app.settings.openTab"
+  | "worktree.quickCreate"
   | "worktree.createDialog.open"
   | "worktree.select"
   | "worktree.copyTree"

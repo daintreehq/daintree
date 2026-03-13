@@ -1,10 +1,11 @@
 import type { ActionRegistry } from "../actionTypes";
 import { z } from "zod";
-import { worktreeClient } from "@/clients";
+import { worktreeClient, githubClient } from "@/clients";
 import { useProjectStore } from "@/store/projectStore";
 import { useRecipeStore } from "@/store/recipeStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useWorktreeDataStore } from "@/store/worktreeDataStore";
+import { useGitHubConfigStore } from "@/store/githubConfigStore";
 
 export function registerWorkflowActions(actions: ActionRegistry): void {
   actions.set("worktree.createWithRecipe", () => ({
@@ -30,20 +31,32 @@ export function registerWorkflowActions(actions: ActionRegistry): void {
         .describe("Branch to base the worktree on (defaults to main worktree's branch)"),
       recipeId: z.string().optional().describe("Recipe ID to run after creation"),
       fromRemote: z.boolean().optional().describe("Set true if baseBranch is a remote branch"),
+      useExistingBranch: z
+        .boolean()
+        .optional()
+        .describe("Use an existing branch instead of creating a new one"),
+      issueNumber: z
+        .number()
+        .optional()
+        .describe("GitHub issue number to auto-assign to the current user after creation"),
     }),
     resultSchema: z.object({
       worktreeId: z.string(),
       worktreePath: z.string(),
       branch: z.string(),
       recipeLaunched: z.boolean(),
+      assignedToSelf: z.boolean(),
     }),
     run: async (args: unknown) => {
-      const { branchName, baseBranch, recipeId, fromRemote } = args as {
-        branchName: string;
-        baseBranch?: string;
-        recipeId?: string;
-        fromRemote?: boolean;
-      };
+      const { branchName, baseBranch, recipeId, fromRemote, useExistingBranch, issueNumber } =
+        args as {
+          branchName: string;
+          baseBranch?: string;
+          recipeId?: string;
+          fromRemote?: boolean;
+          useExistingBranch?: boolean;
+          issueNumber?: number;
+        };
 
       const currentProject = useProjectStore.getState().currentProject;
       if (!currentProject) {
@@ -93,6 +106,7 @@ export function registerWorkflowActions(actions: ActionRegistry): void {
           newBranch: availableBranch,
           path,
           fromRemote: fromRemote ?? false,
+          useExistingBranch: useExistingBranch ?? false,
         },
         rootPath
       );
@@ -101,7 +115,9 @@ export function registerWorkflowActions(actions: ActionRegistry): void {
         throw new Error("Failed to create worktree: no worktreeId returned from backend");
       }
 
-      // Set as active worktree
+      // Mark as pending before selecting so the data store can re-apply terminal policy
+      // once worktree data arrives from the workspace host polling cycle.
+      useWorktreeSelectionStore.getState().setPendingWorktree(worktreeId);
       useWorktreeSelectionStore.getState().selectWorktree(worktreeId);
 
       // Run recipe if specified (already validated above)
@@ -110,8 +126,23 @@ export function registerWorkflowActions(actions: ActionRegistry): void {
         await useRecipeStore.getState().runRecipe(recipeId, path, worktreeId, {
           worktreePath: path,
           branchName: availableBranch,
+          issueNumber,
         });
         recipeLaunched = true;
+      }
+
+      // Auto-assign GitHub issue if requested
+      let assignedToSelf = false;
+      if (issueNumber) {
+        const username = useGitHubConfigStore.getState().config?.username;
+        if (username) {
+          try {
+            await githubClient.assignIssue(rootPath, issueNumber, username);
+            assignedToSelf = true;
+          } catch {
+            // Silent failure — assignment is best-effort
+          }
+        }
       }
 
       return {
@@ -119,6 +150,7 @@ export function registerWorkflowActions(actions: ActionRegistry): void {
         worktreePath: path,
         branch: availableBranch,
         recipeLaunched,
+        assignedToSelf,
       };
     },
   }));

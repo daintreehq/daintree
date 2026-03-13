@@ -41,6 +41,7 @@ interface NewWorktreeDialogProps {
   onWorktreeCreated?: () => void;
   initialIssue?: GitHubIssue | null;
   initialPR?: GitHubPR | null;
+  initialRecipeId?: string | null;
 }
 
 export function NewWorktreeDialog({
@@ -50,6 +51,7 @@ export function NewWorktreeDialog({
   onWorktreeCreated,
   initialIssue,
   initialPR,
+  initialRecipeId,
 }: NewWorktreeDialogProps) {
   const [branches, setBranches] = useState<BranchInfo[]>([]);
   const [loading, setLoading] = useState(false);
@@ -170,9 +172,11 @@ export function NewWorktreeDialog({
     if (globalRecipes.length === 0) return;
     if (recipeSelectionTouchedRef.current) return;
 
-    // Priority: 1) Last selected recipe (including explicit "no recipe"), 2) Project default, 3) null
+    // Priority: 0) initialRecipeId from palette fallback, 1) Last selected recipe (including explicit "no recipe"), 2) Project default, 3) null
     // undefined = never set, null = explicit "no recipe", string = recipe ID
-    if (lastSelectedWorktreeRecipeId !== undefined) {
+    if (initialRecipeId && globalRecipes.some((r) => r.id === initialRecipeId)) {
+      setSelectedRecipeId(initialRecipeId);
+    } else if (lastSelectedWorktreeRecipeId !== undefined) {
       // User has made a previous selection (either null for "no recipe" or a recipe ID)
       if (
         lastSelectedWorktreeRecipeId === null ||
@@ -196,6 +200,7 @@ export function NewWorktreeDialog({
     lastSelectedWorktreeRecipeId,
     defaultRecipeId,
     projectId,
+    initialRecipeId,
     setLastSelectedWorktreeRecipeIdByProject,
   ]);
 
