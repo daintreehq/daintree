@@ -142,7 +142,10 @@ export function CommitListItem({ commit, optionId, isActive }: CommitListItemPro
                   <span>{formatTimeAgo(commit.date)}</span>
                 </TooltipTrigger>
                 <TooltipContent side="bottom">
-                  {new Date(commit.date).toLocaleString()}
+                  {(() => {
+                    const d = new Date(commit.date);
+                    return isNaN(d.getTime()) ? "Unknown" : d.toLocaleString();
+                  })()}
                 </TooltipContent>
               </Tooltip>
             </TooltipProvider>
