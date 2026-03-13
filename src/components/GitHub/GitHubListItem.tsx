@@ -283,19 +283,17 @@ export function GitHubListItem({
               <>
                 <DropdownMenuSeparator />
                 {isForkPR ? (
-                  <TooltipProvider>
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <DropdownMenuItem disabled>
-                          <GitBranch className="h-3.5 w-3.5 mr-2" />
-                          Create Worktree
-                        </DropdownMenuItem>
-                      </TooltipTrigger>
-                      <TooltipContent side="left">
-                        Not available for fork PRs — the branch is on a different remote
-                      </TooltipContent>
-                    </Tooltip>
-                  </TooltipProvider>
+                  <DropdownMenuItem disabled>
+                    <div className="flex flex-col gap-0.5">
+                      <span className="flex items-center gap-2">
+                        <GitBranch className="h-3.5 w-3.5" />
+                        Create Worktree
+                      </span>
+                      <span className="text-[10px] text-muted-foreground leading-tight">
+                        Not available for fork PRs
+                      </span>
+                    </div>
+                  </DropdownMenuItem>
                 ) : (
                   <DropdownMenuItem onSelect={() => onCreateWorktree(item)}>
                     <GitBranch className="h-3.5 w-3.5 mr-2" />
