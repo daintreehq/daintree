@@ -2,7 +2,6 @@ import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 import { z } from "zod";
 import type { ActionContext } from "@shared/types/actions";
 import { terminalInstanceService } from "@/services/terminal/TerminalInstanceService";
-import { confirmAgentTrash } from "@/utils/agentTrashConfirm";
 import { useTerminalStore } from "@/store/terminalStore";
 
 export function registerWorktreeSessionActions(
@@ -131,7 +130,6 @@ export function registerWorktreeSessionActions(
       const terminalsInWorktree = state.terminals.filter(
         (t) => t.worktreeId === targetWorktreeId && t.location !== "trash"
       );
-      if (!confirmAgentTrash(terminalsInWorktree)) return;
       state.bulkTrashByWorktree(targetWorktreeId);
     },
   }));
