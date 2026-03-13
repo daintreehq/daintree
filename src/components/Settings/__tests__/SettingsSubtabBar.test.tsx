@@ -176,6 +176,13 @@ describe("SettingsSubtabBar", () => {
   describe("scroll overflow chevrons", () => {
     it("does not render chevrons when content fits", () => {
       render(<SettingsSubtabBar subtabs={SUBTABS} activeId="claude" onChange={vi.fn()} />);
+      const tablist = screen.getByRole("tablist");
+
+      act(() => {
+        setScrollGeometry(tablist, { scrollWidth: 300, clientWidth: 300, scrollLeft: 0 });
+        resizeObserverCallback([], {} as ResizeObserver);
+      });
+
       expect(screen.queryByLabelText("Scroll tabs left")).toBeNull();
       expect(screen.queryByLabelText("Scroll tabs right")).toBeNull();
     });
@@ -219,22 +226,165 @@ describe("SettingsSubtabBar", () => {
       expect(screen.queryByLabelText("Scroll tabs right")).toBeTruthy();
     });
 
-    it("chevron buttons have correct aria-labels", () => {
+    it("clicking right chevron calls scrollIntoView on first clipped tab", () => {
+      render(<SettingsSubtabBar subtabs={SUBTABS} activeId="claude" onChange={vi.fn()} />);
+      const tablist = screen.getByRole("tablist");
+      const tabs = screen.getAllByRole("tab");
+
+      act(() => {
+        setScrollGeometry(tablist, { scrollWidth: 500, clientWidth: 300, scrollLeft: 0 });
+        resizeObserverCallback([], {} as ResizeObserver);
+      });
+
+      tablist.getBoundingClientRect = () =>
+        ({
+          left: 0,
+          right: 300,
+          top: 0,
+          bottom: 40,
+          width: 300,
+          height: 40,
+          x: 0,
+          y: 0,
+          toJSON: () => ({}),
+        }) as DOMRect;
+      tabs[0].getBoundingClientRect = () =>
+        ({
+          left: 0,
+          right: 100,
+          top: 0,
+          bottom: 40,
+          width: 100,
+          height: 40,
+          x: 0,
+          y: 0,
+          toJSON: () => ({}),
+        }) as DOMRect;
+      tabs[1].getBoundingClientRect = () =>
+        ({
+          left: 100,
+          right: 200,
+          top: 0,
+          bottom: 40,
+          width: 100,
+          height: 40,
+          x: 100,
+          y: 0,
+          toJSON: () => ({}),
+        }) as DOMRect;
+      tabs[2].getBoundingClientRect = () =>
+        ({
+          left: 200,
+          right: 350,
+          top: 0,
+          bottom: 40,
+          width: 150,
+          height: 40,
+          x: 200,
+          y: 0,
+          toJSON: () => ({}),
+        }) as DOMRect;
+
+      const scrollIntoViewSpy = vi.fn();
+      tabs[2].scrollIntoView = scrollIntoViewSpy;
+
+      fireEvent.click(screen.getByLabelText("Scroll tabs right"));
+      expect(scrollIntoViewSpy).toHaveBeenCalledWith({
+        behavior: "smooth",
+        block: "nearest",
+        inline: "end",
+      });
+    });
+
+    it("clicking left chevron calls scrollIntoView on last clipped-left tab", () => {
+      render(<SettingsSubtabBar subtabs={SUBTABS} activeId="claude" onChange={vi.fn()} />);
+      const tablist = screen.getByRole("tablist");
+      const tabs = screen.getAllByRole("tab");
+
+      act(() => {
+        setScrollGeometry(tablist, { scrollWidth: 500, clientWidth: 300, scrollLeft: 200 });
+        resizeObserverCallback([], {} as ResizeObserver);
+      });
+
+      tablist.getBoundingClientRect = () =>
+        ({
+          left: 0,
+          right: 300,
+          top: 0,
+          bottom: 40,
+          width: 300,
+          height: 40,
+          x: 0,
+          y: 0,
+          toJSON: () => ({}),
+        }) as DOMRect;
+      tabs[0].getBoundingClientRect = () =>
+        ({
+          left: -100,
+          right: -10,
+          top: 0,
+          bottom: 40,
+          width: 90,
+          height: 40,
+          x: -100,
+          y: 0,
+          toJSON: () => ({}),
+        }) as DOMRect;
+      tabs[1].getBoundingClientRect = () =>
+        ({
+          left: 0,
+          right: 100,
+          top: 0,
+          bottom: 40,
+          width: 100,
+          height: 40,
+          x: 0,
+          y: 0,
+          toJSON: () => ({}),
+        }) as DOMRect;
+      tabs[2].getBoundingClientRect = () =>
+        ({
+          left: 100,
+          right: 200,
+          top: 0,
+          bottom: 40,
+          width: 100,
+          height: 40,
+          x: 100,
+          y: 0,
+          toJSON: () => ({}),
+        }) as DOMRect;
+
+      const scrollIntoViewSpy = vi.fn();
+      tabs[0].scrollIntoView = scrollIntoViewSpy;
+
+      fireEvent.click(screen.getByLabelText("Scroll tabs left"));
+      expect(scrollIntoViewSpy).toHaveBeenCalledWith({
+        behavior: "smooth",
+        block: "nearest",
+        inline: "start",
+      });
+    });
+
+    it("updates chevron visibility on scroll events", () => {
       render(<SettingsSubtabBar subtabs={SUBTABS} activeId="claude" onChange={vi.fn()} />);
       const tablist = screen.getByRole("tablist");
 
       act(() => {
-        setScrollGeometry(tablist, { scrollWidth: 600, clientWidth: 200, scrollLeft: 100 });
+        setScrollGeometry(tablist, { scrollWidth: 500, clientWidth: 300, scrollLeft: 0 });
         resizeObserverCallback([], {} as ResizeObserver);
       });
 
-      expect(screen.getByLabelText("Scroll tabs left")).toBeTruthy();
-      expect(screen.getByLabelText("Scroll tabs right")).toBeTruthy();
-    });
+      expect(screen.queryByLabelText("Scroll tabs right")).toBeTruthy();
+      expect(screen.queryByLabelText("Scroll tabs left")).toBeNull();
 
-    it("tablist role is preserved with chevron wrapper", () => {
-      render(<SettingsSubtabBar subtabs={SUBTABS} activeId="claude" onChange={vi.fn()} />);
-      expect(screen.getByRole("tablist")).toBeTruthy();
+      act(() => {
+        setScrollGeometry(tablist, { scrollWidth: 500, clientWidth: 300, scrollLeft: 100 });
+        fireEvent.scroll(tablist);
+      });
+
+      expect(screen.queryByLabelText("Scroll tabs left")).toBeTruthy();
+      expect(screen.queryByLabelText("Scroll tabs right")).toBeTruthy();
     });
   });
 });
