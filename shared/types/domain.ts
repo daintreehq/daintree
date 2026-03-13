@@ -719,6 +719,8 @@ export interface Project {
   canopyConfigPresent?: boolean;
   /** Whether in-repo settings mode is enabled (writes to .canopy/ on update) */
   inRepoSettings?: boolean;
+  /** Whether the project is pinned to the top of the project switcher */
+  pinned?: boolean;
 }
 
 /**

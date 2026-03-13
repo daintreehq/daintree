@@ -1204,6 +1204,7 @@ function App() {
         }}
         onStopProject={(projectId) => projectSwitcherPalette.stopProject(projectId)}
         onCloseProject={(projectId) => projectSwitcherPalette.removeProject(projectId)}
+        onTogglePinProject={(projectId) => projectSwitcherPalette.togglePinProject(projectId)}
         onOpenProjectSettings={() => {
           projectSwitcherPalette.close();
           void actionService.dispatch("project.settings.open", undefined, { source: "user" });
