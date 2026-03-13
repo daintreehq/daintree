@@ -584,7 +584,7 @@ function PanelHeaderComponent({
       )}
 
       <div className="flex items-center gap-1">
-        {/* Overflow menu — contains Restart, Move to Dock, and headerActions */}
+        {/* Overflow menu — contains Restart, Cancel Watch, and headerActions */}
         {hasOverflowItems && (
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
@@ -651,7 +651,7 @@ function PanelHeaderComponent({
                   aria-label="Move to Dock"
                   data-testid="panel-move-to-dock"
                 >
-                  <DockToBottomIcon className="w-3 h-3" />
+                  <DockToBottomIcon className="w-3 h-3" aria-hidden="true" />
                 </button>
               </TooltipTrigger>
               <TooltipContent side="bottom">Move to Dock</TooltipContent>
