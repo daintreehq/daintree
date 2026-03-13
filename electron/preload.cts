@@ -38,6 +38,7 @@ import type {
   VoiceInputStatus,
   ChecklistItemId,
 } from "../shared/types/index.js";
+import type { ColorVisionMode } from "../shared/types/appTheme.js";
 import type {
   AgentStateChangePayload,
   AgentDetectedPayload,
@@ -1732,7 +1733,7 @@ const api: ElectronAPI = {
 
     importTheme: () => _typedInvoke(CHANNELS.APP_THEME_IMPORT),
 
-    setColorVisionMode: (mode: string) =>
+    setColorVisionMode: (mode: ColorVisionMode) =>
       _typedInvoke(CHANNELS.APP_THEME_SET_COLOR_VISION_MODE, mode),
   },
 
