@@ -57,6 +57,14 @@ export type KeyAction =
   | "worktree.openEditor"
   | "worktree.openPalette"
   | "worktree.overview"
+  | "worktree.sessions.minimizeAll"
+  | "worktree.sessions.maximizeAll"
+  | "worktree.sessions.restartAll"
+  | "worktree.sessions.endAll"
+  | "worktree.sessions.closeCompleted"
+  | "worktree.sessions.closeFailed"
+  | "worktree.sessions.trashAll"
+  | "worktree.sessions.resetRenderers"
 
   // Tab navigation actions
   | "tab.next"
@@ -211,6 +219,14 @@ export const KEY_ACTION_VALUES: ReadonlySet<string> = new Set<string>([
   "worktree.openEditor",
   "worktree.openPalette",
   "worktree.overview",
+  "worktree.sessions.minimizeAll",
+  "worktree.sessions.maximizeAll",
+  "worktree.sessions.restartAll",
+  "worktree.sessions.endAll",
+  "worktree.sessions.closeCompleted",
+  "worktree.sessions.closeFailed",
+  "worktree.sessions.trashAll",
+  "worktree.sessions.resetRenderers",
   "tab.next",
   "tab.previous",
   "terminal.close",
