@@ -764,6 +764,8 @@ class TerminalInstanceService {
     const managed = this.instances.get(id);
     if (!managed) return;
 
+    if (state === "directing") return;
+
     managed.canonicalAgentState = state;
 
     if (state !== "waiting") {
@@ -772,6 +774,8 @@ class TerminalInstanceService {
 
     const previousState = managed.agentState;
     if (previousState === state) return;
+
+    if (previousState === "directing" && state === "waiting") return;
 
     managed.agentState = state;
 

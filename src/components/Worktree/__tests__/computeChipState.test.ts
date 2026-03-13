@@ -5,7 +5,6 @@ const base: ComputeChipStateInput = {
   worktreeErrorCount: 0,
   failedTerminalCount: 0,
   waitingTerminalCount: 0,
-  directingTerminalCount: 0,
   lifecycleStage: null,
   isComplete: false,
 };
@@ -41,26 +40,6 @@ describe("computeChipState", () => {
     });
   });
 
-  describe("directing suppresses waiting", () => {
-    it("returns null when waiting terminals are being directed", () => {
-      expect(
-        computeChipState({ ...base, waitingTerminalCount: 1, directingTerminalCount: 1 })
-      ).toBeNull();
-    });
-
-    it("returns waiting when no terminals are being directed", () => {
-      expect(
-        computeChipState({ ...base, waitingTerminalCount: 1, directingTerminalCount: 0 })
-      ).toBe("waiting");
-    });
-
-    it("error still beats directing", () => {
-      expect(
-        computeChipState({ ...base, failedTerminalCount: 1, directingTerminalCount: 1 })
-      ).toBe("error");
-    });
-  });
-
   describe("priority ordering", () => {
     it("error beats waiting", () => {
       expect(computeChipState({ ...base, worktreeErrorCount: 1, waitingTerminalCount: 1 })).toBe(
@@ -84,7 +63,6 @@ describe("computeChipState", () => {
           worktreeErrorCount: 1,
           failedTerminalCount: 1,
           waitingTerminalCount: 1,
-          directingTerminalCount: 1,
           lifecycleStage: "ready-for-cleanup",
           isComplete: true,
         })
