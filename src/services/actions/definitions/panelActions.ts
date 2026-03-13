@@ -137,6 +137,10 @@ export function registerPanelActions(actions: ActionRegistry, callbacks: ActionC
   const activateSidecarTab = async (tabId: string): Promise<void> => {
     const state = useSidecarStore.getState();
     const tab = state.tabs.find((t) => t.id === tabId);
+    if (!tab) {
+      return;
+    }
+
     state.setActiveTab(tabId);
 
     if (!tab?.url) {

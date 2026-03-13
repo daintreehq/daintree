@@ -466,6 +466,11 @@ export function registerTerminalActions(actions: ActionRegistry, callbacks: Acti
       const state = useTerminalStore.getState();
       const targetId = terminalId ?? state.focusedId;
       if (targetId) {
+        const terminal = state.terminals.find((t) => t.id === targetId);
+        if (!terminal) {
+          return;
+        }
+
         // Check if moving a group that contains the maximized panel
         const group = state.getPanelGroup(targetId);
         if (group && state.maximizedId && group.panelIds.includes(state.maximizedId)) {
@@ -473,7 +478,11 @@ export function registerTerminalActions(actions: ActionRegistry, callbacks: Acti
           state.setMaximizedId(null);
         }
         state.moveTerminalToDock(targetId);
-        state.openDockTerminal(targetId);
+
+        const moved = useTerminalStore.getState().terminals.find((t) => t.id === targetId);
+        if (moved?.location === "dock") {
+          state.openDockTerminal(targetId);
+        }
       }
     },
   }));
@@ -588,6 +597,11 @@ export function registerTerminalActions(actions: ActionRegistry, callbacks: Acti
       const state = useTerminalStore.getState();
       const targetId = terminalId ?? state.focusedId;
       if (targetId) {
+        const terminal = state.terminals.find((t) => t.id === targetId);
+        if (!terminal || terminal.worktreeId === worktreeId) {
+          return;
+        }
+
         state.setFocused(null);
         state.moveTerminalToWorktree(targetId, worktreeId);
       }
