@@ -520,6 +520,8 @@ describe("createCustomKeymap", () => {
             onArrowRight: () => false,
             onTab: () => false,
             onCtrlC: () => false,
+            onStash: () => false,
+            onPopStash: () => false,
           }),
         ],
       }),
