@@ -1,25 +1,6 @@
 import { create } from "zustand";
-import { persist, createJSONStorage, type StateStorage } from "zustand/middleware";
-
-const memoryStorage: StateStorage = (() => {
-  const storage = new Map<string, string>();
-  return {
-    getItem: (name) => storage.get(name) ?? null,
-    setItem: (name, value) => {
-      storage.set(name, value);
-    },
-    removeItem: (name) => {
-      storage.delete(name);
-    },
-  };
-})();
-
-function getSafeStorage(): StateStorage {
-  if (typeof localStorage !== "undefined") {
-    return localStorage;
-  }
-  return memoryStorage;
-}
+import { persist } from "zustand/middleware";
+import { createSafeJSONStorage } from "./persistence/safeStorage";
 
 interface PreferencesState {
   showProjectPulse: boolean;
@@ -55,7 +36,7 @@ export const usePreferencesStore = create<PreferencesState>()(
     }),
     {
       name: "canopy-preferences",
-      storage: createJSONStorage(() => getSafeStorage()),
+      storage: createSafeJSONStorage(),
       version: 1,
       migrate: (persisted, version) => {
         if (version === 0 || version === undefined) {

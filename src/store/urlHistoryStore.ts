@@ -1,6 +1,7 @@
 import { create } from "zustand";
-import { persist, createJSONStorage, type StateStorage } from "zustand/middleware";
+import { persist } from "zustand/middleware";
 import type { UrlHistoryEntry } from "@shared/types/domain";
+import { createSafeJSONStorage } from "./persistence/safeStorage";
 
 const MAX_ENTRIES_PER_PROJECT = 500;
 
@@ -11,31 +12,6 @@ const RECENCY_BUCKETS = [
   { maxAgeMs: 90 * 24 * 3600 * 1000, weight: 30 },
   { maxAgeMs: Infinity, weight: 10 },
 ];
-
-const memoryStorage: StateStorage = (() => {
-  const storage = new Map<string, string>();
-  return {
-    getItem: (name) => storage.get(name) ?? null,
-    setItem: (name, value) => {
-      storage.set(name, value);
-    },
-    removeItem: (name) => {
-      storage.delete(name);
-    },
-  };
-})();
-
-function getSafeStorage(): StateStorage {
-  if (
-    typeof localStorage !== "undefined" &&
-    typeof localStorage.getItem === "function" &&
-    typeof localStorage.setItem === "function" &&
-    typeof localStorage.removeItem === "function"
-  ) {
-    return localStorage;
-  }
-  return memoryStorage;
-}
 
 export function frecencyScore(entry: UrlHistoryEntry, now: number): number {
   const ageMs = now - entry.lastVisitAt;
@@ -121,7 +97,7 @@ export const useUrlHistoryStore = create<UrlHistoryState>()(
     }),
     {
       name: "canopy-url-history",
-      storage: createJSONStorage(() => getSafeStorage()),
+      storage: createSafeJSONStorage(),
       partialize: (state) => ({ entries: state.entries }),
     }
   )

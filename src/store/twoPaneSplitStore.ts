@@ -1,30 +1,6 @@
 import { create } from "zustand";
-import { persist, createJSONStorage, type StateStorage } from "zustand/middleware";
-
-const memoryStorage: StateStorage = (() => {
-  const storage = new Map<string, string>();
-  return {
-    getItem: (name) => storage.get(name) ?? null,
-    setItem: (name, value) => {
-      storage.set(name, value);
-    },
-    removeItem: (name) => {
-      storage.delete(name);
-    },
-  };
-})();
-
-function getSafeStorage(): StateStorage {
-  if (typeof localStorage !== "undefined") {
-    try {
-      localStorage.getItem("__test__");
-      return localStorage;
-    } catch {
-      return memoryStorage;
-    }
-  }
-  return memoryStorage;
-}
+import { persist } from "zustand/middleware";
+import { createSafeJSONStorage } from "./persistence/safeStorage";
 
 export interface TwoPaneSplitConfig {
   enabled: boolean;
@@ -114,7 +90,7 @@ export const useTwoPaneSplitStore = create<TwoPaneSplitState>()(
     }),
     {
       name: "canopy-two-pane-split",
-      storage: createJSONStorage(() => getSafeStorage()),
+      storage: createSafeJSONStorage(),
     }
   )
 );
