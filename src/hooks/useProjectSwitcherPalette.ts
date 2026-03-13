@@ -260,7 +260,20 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
 
   const results = useMemo<SearchableProject[]>(() => {
     if (!debouncedQuery.trim()) {
-      return sortedProjects.slice(0, MAX_RESULTS);
+      // Ensure pinned projects are always visible when browsing
+      const pinned = sortedProjects.filter((p) => p.isPinned);
+      const rest = sortedProjects.filter((p) => !p.isPinned);
+      const combined = [...pinned, ...rest];
+      // Deduplicate while preserving order (pinned first, then rest by recency)
+      const seen = new Set<string>();
+      const deduped: SearchableProject[] = [];
+      for (const p of combined) {
+        if (!seen.has(p.id)) {
+          seen.add(p.id);
+          deduped.push(p);
+        }
+      }
+      return deduped.slice(0, MAX_RESULTS);
     }
 
     const fuseResults = fuse.search(debouncedQuery);

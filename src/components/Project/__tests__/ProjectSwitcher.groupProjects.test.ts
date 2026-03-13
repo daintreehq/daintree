@@ -64,7 +64,7 @@ describe("ProjectSwitcher groupProjects", () => {
     expect(grouped.recent.map((p) => p.id)).toEqual(["c"]);
   });
 
-  it("keeps active project in active group even if pinned", () => {
+  it("keeps active project in active group even if pinned (no duplication)", () => {
     const projectA = makeProject({
       id: "a",
       path: "/a",
@@ -78,6 +78,34 @@ describe("ProjectSwitcher groupProjects", () => {
 
     expect(grouped.active.map((p) => p.id)).toEqual(["a"]);
     expect(grouped.pinned.map((p) => p.id)).toEqual(["b"]);
+
+    // Verify no project appears in multiple groups
+    const allIds = [
+      ...grouped.pinned.map((p) => p.id),
+      ...grouped.active.map((p) => p.id),
+      ...grouped.background.map((p) => p.id),
+      ...grouped.recent.map((p) => p.id),
+    ];
+    expect(allIds).toHaveLength(new Set(allIds).size);
+  });
+
+  it("places pinned projects with running processes in pinned (not background)", () => {
+    const projectA = makeProject({
+      id: "a",
+      path: "/a",
+      name: "A",
+      pinned: true,
+      status: "background",
+    });
+    const projectB = makeProject({ id: "b", path: "/b", name: "B", status: "active" });
+
+    const stats = new Map<string, ProjectStats>();
+    stats.set(projectA.id, makeStats({ processCount: 3, terminalCount: 2 }));
+
+    const grouped = groupProjects([projectA, projectB], projectB.id, stats);
+
+    expect(grouped.pinned.map((p) => p.id)).toEqual(["a"]);
+    expect(grouped.background.map((p) => p.id)).toEqual([]);
   });
 
   it("sorts pinned projects by lastOpened descending", () => {

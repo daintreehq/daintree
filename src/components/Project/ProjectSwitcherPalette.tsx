@@ -151,7 +151,7 @@ function ProjectListItem({
               />
             )}
 
-            {onTogglePinProject && !project.isMissing && (
+            {onTogglePinProject && (
               <div
                 className={cn(
                   "flex items-center transition-opacity",
