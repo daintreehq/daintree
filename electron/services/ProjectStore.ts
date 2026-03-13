@@ -58,6 +58,7 @@ function rowToProject(row: ProjectRow): Project {
     project.canopyConfigPresent = row.canopyConfigPresent;
   if (row.inRepoSettings !== null && row.inRepoSettings !== undefined)
     project.inRepoSettings = row.inRepoSettings;
+  if (row.pinned) project.pinned = true;
   return project;
 }
 
@@ -266,6 +267,7 @@ export class ProjectStore {
       status: string | null;
       canopyConfigPresent: boolean | null;
       inRepoSettings: boolean | null;
+      pinned: number;
     }> = {};
     if (updates.name !== undefined) set.name = updates.name;
     if (updates.path !== undefined) set.path = updates.path;
@@ -276,6 +278,7 @@ export class ProjectStore {
     if (updates.canopyConfigPresent !== undefined)
       set.canopyConfigPresent = updates.canopyConfigPresent ?? null;
     if (updates.inRepoSettings !== undefined) set.inRepoSettings = updates.inRepoSettings ?? null;
+    if (updates.pinned !== undefined) set.pinned = updates.pinned ? 1 : 0;
 
     if (Object.keys(set).length > 0) {
       db.update(projectsTable).set(set).where(eq(projectsTable.id, projectId)).run();
@@ -461,6 +464,7 @@ export class ProjectStore {
           status: updatedProject.status ?? null,
           canopyConfigPresent: updatedProject.canopyConfigPresent ?? null,
           inRepoSettings: updatedProject.inRepoSettings ?? null,
+          pinned: updatedProject.pinned ? 1 : 0,
         })
         .run();
       projectEnvSecureStorage.migrateAllForProject(projectId, newProjectId);
@@ -479,6 +483,7 @@ export class ProjectStore {
           status: oldProject.status ?? null,
           canopyConfigPresent: oldProject.canopyConfigPresent ?? null,
           inRepoSettings: oldProject.inRepoSettings ?? null,
+          pinned: oldProject.pinned ? 1 : 0,
         })
         .run();
       if (newStateDir && existsSync(newStateDir)) {

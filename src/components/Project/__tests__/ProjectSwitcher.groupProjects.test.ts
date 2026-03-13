@@ -11,6 +11,7 @@ function makeProject(overrides: Partial<Project> & Pick<Project, "id" | "path" |
     lastOpened: overrides.lastOpened ?? Date.now(),
     color: overrides.color,
     status: overrides.status,
+    pinned: overrides.pinned,
   };
 }
 
@@ -49,5 +50,51 @@ describe("ProjectSwitcher groupProjects", () => {
 
     const groupedWithCurrent = groupProjects([projectA, projectB], projectB.id, new Map());
     expect(groupedWithCurrent.active.map((p) => p.id)).toEqual(["b"]);
+  });
+
+  it("places pinned non-active projects in the pinned group", () => {
+    const projectA = makeProject({ id: "a", path: "/a", name: "A", pinned: true });
+    const projectB = makeProject({ id: "b", path: "/b", name: "B", status: "active" });
+    const projectC = makeProject({ id: "c", path: "/c", name: "C" });
+
+    const grouped = groupProjects([projectA, projectB, projectC], projectB.id, new Map());
+
+    expect(grouped.pinned.map((p) => p.id)).toEqual(["a"]);
+    expect(grouped.active.map((p) => p.id)).toEqual(["b"]);
+    expect(grouped.recent.map((p) => p.id)).toEqual(["c"]);
+  });
+
+  it("keeps active project in active group even if pinned", () => {
+    const projectA = makeProject({
+      id: "a",
+      path: "/a",
+      name: "A",
+      pinned: true,
+      status: "active",
+    });
+    const projectB = makeProject({ id: "b", path: "/b", name: "B", pinned: true });
+
+    const grouped = groupProjects([projectA, projectB], projectA.id, new Map());
+
+    expect(grouped.active.map((p) => p.id)).toEqual(["a"]);
+    expect(grouped.pinned.map((p) => p.id)).toEqual(["b"]);
+  });
+
+  it("sorts pinned projects by lastOpened descending", () => {
+    const projectA = makeProject({ id: "a", path: "/a", name: "A", pinned: true, lastOpened: 100 });
+    const projectB = makeProject({ id: "b", path: "/b", name: "B", pinned: true, lastOpened: 300 });
+    const projectC = makeProject({ id: "c", path: "/c", name: "C", pinned: true, lastOpened: 200 });
+
+    const grouped = groupProjects([projectA, projectB, projectC], null, new Map());
+
+    expect(grouped.pinned.map((p) => p.id)).toEqual(["b", "c", "a"]);
+  });
+
+  it("returns empty pinned array when no projects are pinned", () => {
+    const projectA = makeProject({ id: "a", path: "/a", name: "A" });
+
+    const grouped = groupProjects([projectA], null, new Map());
+
+    expect(grouped.pinned).toEqual([]);
   });
 });
