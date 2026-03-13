@@ -1070,9 +1070,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
             if (prev.length === 0 && next.length === 0) return prev;
             if (
               prev.length === next.length &&
-              prev.every(
-                (p, i) => p.id === next[i].id && p.tokenEstimate === next[i].tokenEstimate
-              )
+              prev.every((p, i) => p.id === next[i].id && p.tokenEstimate === next[i].tokenEstimate)
             )
               return prev;
             return next;
