@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import { useUrlHistoryStore, frecencyScore, getFrecencySuggestions } from "../urlHistoryStore";
 import type { UrlHistoryEntry } from "@shared/types/domain";
 
@@ -183,5 +183,34 @@ describe("getFrecencySuggestions", () => {
   it("limits results to specified count", () => {
     const results = getFrecencySuggestions(entries, "localhost", 2);
     expect(results).toHaveLength(2);
+  });
+});
+
+describe("urlHistoryStore storage fallback", () => {
+  it("falls back to memory storage when localStorage is missing required methods", async () => {
+    const originalLocalStorage = globalThis.localStorage;
+
+    Object.defineProperty(globalThis, "localStorage", {
+      value: { getItem: vi.fn() },
+      configurable: true,
+      writable: true,
+    });
+
+    vi.resetModules();
+
+    const { useUrlHistoryStore: isolatedStore } = await import("../urlHistoryStore");
+
+    expect(() => {
+      isolatedStore.setState({ entries: {} });
+      isolatedStore.getState().recordVisit("proj1", "http://localhost:3000/", "Home");
+    }).not.toThrow();
+
+    expect(isolatedStore.getState().entries["proj1"]).toHaveLength(1);
+
+    Object.defineProperty(globalThis, "localStorage", {
+      value: originalLocalStorage,
+      configurable: true,
+      writable: true,
+    });
   });
 });
