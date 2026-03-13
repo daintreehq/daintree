@@ -37,7 +37,7 @@ import { HybridInputBar, type HybridInputBarHandle } from "./HybridInputBar";
 import { getTerminalFocusTarget } from "./terminalFocus";
 import { registerPanelFocusHandler } from "./terminalFocusRegistry";
 import { getCanopyCommand, isEscapedCommand, unescapeCommand } from "./canopySlashCommands";
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { DropdownMenuItem } from "@/components/ui/dropdown-menu";
 
 export type { TerminalType };
 
@@ -558,28 +558,18 @@ function TerminalPaneComponent({
     const agentConfig = getAgentConfig(effectiveAgentId);
     const agentName = agentConfig?.name ?? effectiveAgentId;
     return (
-      <TooltipProvider>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <button
-              type="button"
-              onClick={(e) => {
-                e.stopPropagation();
-                void actionService.dispatch(
-                  "app.settings.openTab",
-                  { tab: "agents", subtab: effectiveAgentId },
-                  { source: "user" }
-                );
-              }}
-              className="p-1 rounded-[var(--radius-sm)] text-canopy-text/50 hover:text-canopy-text hover:bg-canopy-text/10 transition-colors"
-              aria-label={`Configure ${agentName} settings`}
-            >
-              <Settings className="w-3 h-3" />
-            </button>
-          </TooltipTrigger>
-          <TooltipContent side="bottom">{agentName} Settings</TooltipContent>
-        </Tooltip>
-      </TooltipProvider>
+      <DropdownMenuItem
+        onSelect={() =>
+          void actionService.dispatch(
+            "app.settings.openTab",
+            { tab: "agents", subtab: effectiveAgentId },
+            { source: "user" }
+          )
+        }
+      >
+        <Settings className="w-3 h-3 mr-2" />
+        {agentName} Settings
+      </DropdownMenuItem>
     );
   }, [effectiveAgentId]);
 
