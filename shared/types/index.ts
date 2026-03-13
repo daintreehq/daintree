@@ -190,6 +190,7 @@ export type {
   FileReadErrorCode,
   // Electron API
   ElectronAPI,
+  UrlContextResult,
   NotificationSettings,
   VoiceInputSettings,
   VoiceInputStatus,

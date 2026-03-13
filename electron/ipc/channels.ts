@@ -352,6 +352,8 @@ export const CHANNELS = {
 
   CLIPBOARD_SAVE_IMAGE: "clipboard:save-image",
 
+  URL_CONTEXT_RESOLVE: "url-context:resolve",
+
   APP_THEME_GET: "app-theme:get",
   APP_THEME_SET_COLOR_SCHEME: "app-theme:set-color-scheme",
   APP_THEME_SET_CUSTOM_SCHEMES: "app-theme:set-custom-schemes",

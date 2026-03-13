@@ -24,6 +24,7 @@ import { registerAppAgentHandlers } from "./handlers/appAgent.js";
 import { registerAgentCapabilitiesHandlers } from "./handlers/agentCapabilities.js";
 import { registerCliHandlers } from "./handlers/cli.js";
 import { registerClipboardHandlers } from "./handlers/clipboard.js";
+import { registerUrlContextHandlers } from "./handlers/urlContext.js";
 import { registerGitWriteHandlers } from "./handlers/git-write.js";
 import { registerTelemetryHandlers } from "./handlers/telemetry.js";
 import { registerOnboardingHandlers } from "./handlers/onboarding.js";
@@ -86,6 +87,7 @@ export function registerIpcHandlers(deps: HandlerDependencies): () => void {
     register(() => registerAgentCapabilitiesHandlers());
     register(() => registerCliHandlers());
     register(() => registerClipboardHandlers());
+    register(() => registerUrlContextHandlers());
     register(() => registerGitWriteHandlers(deps));
     register(() => registerTelemetryHandlers());
     register(() => registerOnboardingHandlers());

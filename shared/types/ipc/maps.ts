@@ -13,7 +13,12 @@ import type { GitInitOptions, GitInitProgressEvent, GitInitResult } from "./gitI
 import type { AgentSettings } from "../agentSettings.js";
 import type { UserAgentRegistry, UserAgentConfig } from "../userAgentRegistry.js";
 import type { KeyAction } from "../keymap.js";
-import type { KeybindingImportResult, MicPermissionStatus, VoiceInputSettings } from "./api.js";
+import type {
+  KeybindingImportResult,
+  MicPermissionStatus,
+  VoiceInputSettings,
+  UrlContextResult,
+} from "./api.js";
 
 import type {
   WorktreeSetActivePayload,
@@ -1214,6 +1219,12 @@ export interface IpcInvokeMap {
   "clipboard:save-image": {
     args: [];
     result: { ok: true; filePath: string; thumbnailDataUrl: string } | { ok: false; error: string };
+  };
+
+  // URL context channels
+  "url-context:resolve": {
+    args: [url: string];
+    result: UrlContextResult;
   };
 
   // Notification settings channels
