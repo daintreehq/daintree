@@ -17,10 +17,17 @@ export function confirmAgentTrash(terminals: TerminalLike[]): boolean {
   const blocking = terminals.filter(isBlockingAgentState);
   if (blocking.length === 0) return true;
 
+  const stateLabel =
+    blocking.length === 1
+      ? blocking[0].agentState === "waiting"
+        ? "waiting for input"
+        : "actively working"
+      : "actively working or waiting";
+
   const message =
     blocking.length === 1
-      ? "This agent is actively working. Closing it will stop the agent mid-task and may leave files in a partially modified state. Continue?"
-      : `${blocking.length} agents are actively working or waiting. Closing them will stop the agents mid-task and may leave files in a partially modified state. Continue?`;
+      ? `This agent is ${stateLabel}. Closing it will stop the agent mid-task and may leave files in a partially modified state. Continue?`
+      : `${blocking.length} agents are ${stateLabel}. Closing them will stop the agents mid-task and may leave files in a partially modified state. Continue?`;
 
   return window.confirm(message);
 }
