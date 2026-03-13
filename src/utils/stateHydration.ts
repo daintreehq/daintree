@@ -853,6 +853,8 @@ export async function hydrateAppState(
             }
           }
 
+          if (!checkCurrent()) return;
+
           // Restore background panels in staggered batches
           if (backgroundTasks.length > 0) {
             logHydrationInfo(
@@ -872,6 +874,8 @@ export async function hydrateAppState(
             );
           }
         }
+
+        if (!checkCurrent()) return;
 
         // Restore any orphaned backend terminals not in saved state (append at end)
         const orphanedTerminals = Array.from(backendTerminalMap.values());

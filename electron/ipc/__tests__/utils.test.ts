@@ -342,10 +342,21 @@ describe("restore quota", () => {
     armRestoreQuota(2, 5_000);
     expect(consumeRestoreQuota()).toBe(true);
 
+    // Re-arm with longer TTL — old 5s timer should be cleared
     armRestoreQuota(3, 10_000);
     expect(consumeRestoreQuota()).toBe(true);
     expect(consumeRestoreQuota()).toBe(true);
     expect(consumeRestoreQuota()).toBe(true);
+    expect(consumeRestoreQuota()).toBe(false);
+
+    // Advance past the original 5s TTL — quota should still be 0 (not re-expired)
+    armRestoreQuota(5, 20_000);
+    vi.advanceTimersByTime(5_000);
+    // If old timer wasn't cleared, quota would be wiped at 5s. It shouldn't be.
+    expect(consumeRestoreQuota()).toBe(true);
+
+    // But advancing to 20s should expire the new TTL
+    vi.advanceTimersByTime(15_000);
     expect(consumeRestoreQuota()).toBe(false);
   });
 
