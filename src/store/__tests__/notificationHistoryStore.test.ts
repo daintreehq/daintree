@@ -196,6 +196,62 @@ describe("notificationHistorySlice", () => {
     });
   });
 
+  describe("markSummarized", () => {
+    it("defaults summarized to false on new entries", () => {
+      addEntry({ message: "test" });
+      expect(getState().entries[0].summarized).toBe(false);
+    });
+
+    it("marks only targeted entries as summarized", () => {
+      addEntry({ message: "a" });
+      addEntry({ message: "b" });
+      addEntry({ message: "c" });
+      const entries = getState().entries;
+      getState().markSummarized([entries[0].id, entries[2].id]);
+      const updated = getState().entries;
+      expect(updated[0].summarized).toBe(true);
+      expect(updated[1].summarized).toBe(false);
+      expect(updated[2].summarized).toBe(true);
+    });
+
+    it("does not change unreadCount", () => {
+      addEntry({ message: "missed" });
+      addEntry({ message: "missed 2" });
+      expect(getState().unreadCount).toBe(2);
+      const ids = getState().entries.map((e) => e.id);
+      getState().markSummarized(ids);
+      expect(getState().unreadCount).toBe(2);
+    });
+
+    it("is independent from markAllRead", () => {
+      addEntry({ message: "test" });
+      const id = getState().entries[0].id;
+      getState().markSummarized([id]);
+      expect(getState().entries[0].summarized).toBe(true);
+      expect(getState().entries[0].seenAsToast).toBe(false);
+      getState().markAllRead();
+      expect(getState().entries[0].summarized).toBe(true);
+      expect(getState().entries[0].seenAsToast).toBe(true);
+    });
+
+    it("does not mutate already-summarized entries", () => {
+      addEntry({ message: "test" });
+      const id = getState().entries[0].id;
+      getState().markSummarized([id]);
+      const before = getState().entries[0];
+      getState().markSummarized([id]);
+      const after = getState().entries[0];
+      expect(after).toBe(before);
+    });
+
+    it("new entries after markSummarized default to summarized=false", () => {
+      addEntry({ message: "old" });
+      getState().markSummarized([getState().entries[0].id]);
+      addEntry({ message: "new" });
+      expect(getState().entries[0].summarized).toBe(false);
+    });
+  });
+
   describe("dismissEntry", () => {
     it("removes the entry and decrements unreadCount when entry is unread", () => {
       addEntry({ message: "missed" });
