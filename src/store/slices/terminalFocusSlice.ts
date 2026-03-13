@@ -331,6 +331,9 @@ export const createTerminalFocusSlice =
         if (terminal && panelKindHasPty(terminal.kind ?? "terminal")) {
           terminalInstanceService.wake(id);
         }
+        if (terminal?.agentState === "waiting") {
+          window.electron?.notification?.acknowledgeWaiting(id);
+        }
         set({ activeDockTerminalId: id, focusedId: id });
       },
 

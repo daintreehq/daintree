@@ -13,12 +13,21 @@ const AVAILABLE_SOUNDS: { file: string; label: string }[] = [
   { file: "error.wav", label: "Error" },
 ];
 
+const ESCALATION_DELAY_OPTIONS: { value: number; label: string }[] = [
+  { value: 60_000, label: "1 minute" },
+  { value: 180_000, label: "3 minutes" },
+  { value: 300_000, label: "5 minutes" },
+  { value: 600_000, label: "10 minutes" },
+];
+
 const DEFAULT_SETTINGS: NotificationSettings = {
   completedEnabled: false,
   waitingEnabled: false,
   failedEnabled: false,
   soundEnabled: false,
   soundFile: "chime.wav",
+  waitingEscalationEnabled: true,
+  waitingEscalationDelayMs: 180_000,
 };
 
 type LoadState = "loading" | "ready" | "error";
@@ -83,6 +92,35 @@ export function NotificationSettingsTab() {
             checked={settings.waitingEnabled}
             onChange={(v) => update({ waitingEnabled: v })}
           />
+          {settings.waitingEnabled && (
+            <div className="ml-6 space-y-3 border-l border-canopy-border pl-4">
+              <SettingsCheckbox
+                id="notif-waiting-escalation"
+                label="Escalate if still waiting"
+                description="Fire an additional OS notification if a docked agent remains waiting after the delay below"
+                checked={settings.waitingEscalationEnabled}
+                onChange={(v) => update({ waitingEscalationEnabled: v })}
+              />
+              {settings.waitingEscalationEnabled && (
+                <div className="space-y-1">
+                  <label className="text-sm font-medium text-canopy-text block">
+                    Escalation delay
+                  </label>
+                  <select
+                    value={settings.waitingEscalationDelayMs}
+                    onChange={(e) => update({ waitingEscalationDelayMs: Number(e.target.value) })}
+                    className="px-3 py-2 text-sm rounded-[var(--radius-md)] border border-canopy-border bg-canopy-bg text-canopy-text focus:border-canopy-accent focus:outline-none transition-colors"
+                  >
+                    {ESCALATION_DELAY_OPTIONS.map(({ value, label }) => (
+                      <option key={value} value={value}>
+                        {label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+            </div>
+          )}
           <SettingsCheckbox
             id="notif-failed"
             label="Agent failed"

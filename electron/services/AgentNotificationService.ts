@@ -27,6 +27,7 @@ interface PendingNotification {
 
 class AgentNotificationService {
   private completionTimers = new Map<string, NodeJS.Timeout>();
+  private waitingEscalationTimers = new Map<string, NodeJS.Timeout>();
   private notificationQueue: PendingNotification[] = [];
   private staggerTimer: NodeJS.Timeout | null = null;
   private lastSoundHandle: SoundHandle | null = null;
@@ -58,14 +59,25 @@ class AgentNotificationService {
 
     if (state === previousState) return;
 
+    const key = agentId ?? worktreeId ?? "agent";
+
     // Cancel any pending completion timer for this agent when it leaves "completed"
     if (previousState === "completed" && state !== "completed") {
-      const key = agentId ?? worktreeId ?? "agent";
       const timer = this.completionTimers.get(key);
       if (timer) {
         clearTimeout(timer);
         this.completionTimers.delete(key);
       }
+    }
+
+    // Cancel waiting escalation when agent leaves "waiting"
+    if (previousState === "waiting" && state !== "waiting") {
+      this.clearWaitingEscalation(key);
+    }
+
+    // Schedule waiting escalation for docked agents (independent of watched status)
+    if (state === "waiting" && terminalId) {
+      this.scheduleWaitingEscalation(key, worktreeId, terminalId, agentId);
     }
 
     // Skip if all OS notification types are disabled (off by default).
@@ -81,12 +93,7 @@ class AgentNotificationService {
     if (!isWatched) return;
 
     if (state === "completed" && settings.completedEnabled) {
-      this.scheduleCompletionNotification(
-        agentId ?? worktreeId ?? "agent",
-        worktreeId,
-        terminalId,
-        agentId
-      );
+      this.scheduleCompletionNotification(key, worktreeId, terminalId, agentId);
     } else if (state === "waiting" && settings.waitingEnabled) {
       // Waiting (permission request) is urgent — show immediately, bypass queue stagger
       const label = this.getLabel(agentId, worktreeId);
@@ -145,6 +152,62 @@ class AgentNotificationService {
     }, COMPLETION_DEBOUNCE_MS);
 
     this.completionTimers.set(key, timer);
+  }
+
+  private scheduleWaitingEscalation(
+    key: string,
+    worktreeId?: string,
+    terminalId?: string,
+    agentId?: string
+  ): void {
+    if (this.waitingEscalationTimers.has(key)) {
+      clearTimeout(this.waitingEscalationTimers.get(key)!);
+    }
+
+    const settings = store.get("notificationSettings");
+    if (!settings.waitingEscalationEnabled || !settings.waitingEnabled) return;
+
+    // Only escalate for docked terminals
+    const terminals = store.get("appState").terminals;
+    const terminal = terminalId ? terminals.find((t) => t.id === terminalId) : undefined;
+    if (!terminal || terminal.location !== "dock") return;
+
+    const timer = setTimeout(() => {
+      this.waitingEscalationTimers.delete(key);
+      const currentSettings = store.get("notificationSettings");
+      if (!currentSettings.waitingEscalationEnabled || !currentSettings.waitingEnabled) return;
+
+      const label = terminal.title || this.getLabel(agentId, worktreeId);
+      this.playNotificationSound(currentSettings.soundEnabled);
+      notificationService.showNativeNotification(
+        "Agent still waiting",
+        `${label} has been waiting for input`
+      );
+    }, settings.waitingEscalationDelayMs);
+
+    this.waitingEscalationTimers.set(key, timer);
+  }
+
+  private clearWaitingEscalation(key: string): void {
+    const timer = this.waitingEscalationTimers.get(key);
+    if (timer) {
+      clearTimeout(timer);
+      this.waitingEscalationTimers.delete(key);
+    }
+  }
+
+  acknowledgeWaiting(terminalId: string): void {
+    // Try the terminal ID as key first, then scan for matching entries
+    if (this.waitingEscalationTimers.has(terminalId)) {
+      this.clearWaitingEscalation(terminalId);
+      return;
+    }
+    // The key may be agentId; look up terminal in store to find its agentId
+    const terminals = store.get("appState").terminals;
+    const terminal = terminals.find((t) => t.id === terminalId);
+    if (terminal?.agentId && this.waitingEscalationTimers.has(terminal.agentId)) {
+      this.clearWaitingEscalation(terminal.agentId);
+    }
   }
 
   private enqueue(
@@ -246,6 +309,11 @@ class AgentNotificationService {
       clearTimeout(timer);
     }
     this.completionTimers.clear();
+
+    for (const timer of this.waitingEscalationTimers.values()) {
+      clearTimeout(timer);
+    }
+    this.waitingEscalationTimers.clear();
 
     if (this.staggerTimer) {
       clearTimeout(this.staggerTimer);

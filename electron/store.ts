@@ -100,6 +100,8 @@ export interface StoreSchema {
     failedEnabled: boolean;
     soundEnabled: boolean;
     soundFile: string;
+    waitingEscalationEnabled: boolean;
+    waitingEscalationDelayMs: number;
   };
   userAgentRegistry: UserAgentRegistry;
   agentUpdateSettings: AgentUpdateSettings;
@@ -191,6 +193,8 @@ const storeOptions = {
       failedEnabled: false,
       soundEnabled: false,
       soundFile: "chime.wav",
+      waitingEscalationEnabled: true,
+      waitingEscalationDelayMs: 180_000,
     },
     userAgentRegistry: {},
     agentUpdateSettings: {

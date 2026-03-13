@@ -294,6 +294,7 @@ export const CHANNELS = {
   NOTIFICATION_SHOW_NATIVE: "notification:show-native",
   NOTIFICATION_WATCH_NAVIGATE: "notification:watch-navigate",
   NOTIFICATION_SYNC_WATCHED: "notification:sync-watched",
+  NOTIFICATION_WAITING_ACKNOWLEDGE: "notification:waiting-acknowledge",
 
   // Auto-update channels
   UPDATE_AVAILABLE: "update:available",

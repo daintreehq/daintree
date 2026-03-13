@@ -471,6 +471,7 @@ const CHANNELS = {
   NOTIFICATION_SHOW_WATCH: "notification:show-watch",
   NOTIFICATION_WATCH_NAVIGATE: "notification:watch-navigate",
   NOTIFICATION_SYNC_WATCHED: "notification:sync-watched",
+  NOTIFICATION_WAITING_ACKNOWLEDGE: "notification:waiting-acknowledge",
 
   // Auto-update channels
   UPDATE_AVAILABLE: "update:available",
@@ -1531,6 +1532,8 @@ const api: ElectronAPI = {
       failedEnabled: boolean;
       soundEnabled: boolean;
       soundFile: string;
+      waitingEscalationEnabled: boolean;
+      waitingEscalationDelayMs: number;
     }> => _typedInvoke(CHANNELS.NOTIFICATION_SETTINGS_GET),
     setSettings: (
       settings: Partial<{
@@ -1539,6 +1542,8 @@ const api: ElectronAPI = {
         failedEnabled: boolean;
         soundEnabled: boolean;
         soundFile: string;
+        waitingEscalationEnabled: boolean;
+        waitingEscalationDelayMs: number;
       }>
     ) => _typedInvoke(CHANNELS.NOTIFICATION_SETTINGS_SET, settings),
     playSound: (soundFile: string) => _typedInvoke(CHANNELS.NOTIFICATION_PLAY_SOUND, soundFile),
@@ -1556,6 +1561,8 @@ const api: ElectronAPI = {
     ) => _typedOn(CHANNELS.NOTIFICATION_WATCH_NAVIGATE, callback),
     syncWatchedPanels: (panelIds: string[]) =>
       ipcRenderer.send(CHANNELS.NOTIFICATION_SYNC_WATCHED, panelIds),
+    acknowledgeWaiting: (terminalId: string) =>
+      ipcRenderer.send(CHANNELS.NOTIFICATION_WAITING_ACKNOWLEDGE, { terminalId }),
   },
 
   // Auto-Update API
