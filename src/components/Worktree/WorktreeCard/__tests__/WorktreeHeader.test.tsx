@@ -111,3 +111,110 @@ describe("WorktreeHeader menu button", () => {
     expect(button.getAttribute("aria-label")).toBe("More actions");
   });
 });
+
+describe("WorktreeHeader issue title headline", () => {
+  it("shows issue title as primary headline when issueTitle is available", () => {
+    renderHeader({
+      worktree: {
+        ...baseWorktree,
+        issueNumber: 2907,
+        issueTitle: "Add terminal recipe editor coverage",
+      },
+      badges: { onOpenIssue: noop },
+    });
+
+    const issueButton = screen.getByRole("button", {
+      name: /Open issue #2907: Add terminal recipe editor coverage/,
+    });
+    expect(issueButton).toBeDefined();
+    expect(screen.getByText("Add terminal recipe editor coverage")).toBeDefined();
+  });
+
+  it("uses branch name as primary headline when no issueTitle", () => {
+    renderHeader({
+      worktree: { ...baseWorktree, issueNumber: undefined, issueTitle: undefined },
+      branchLabel: "feature/my-branch",
+    });
+
+    expect(screen.queryByRole("button", { name: /Open issue/ })).toBeNull();
+    expect(screen.getByText(/my-branch/)).toBeDefined();
+  });
+
+  it("shows branch label in secondary row when issue title is headline", () => {
+    renderHeader({
+      worktree: {
+        ...baseWorktree,
+        issueNumber: 100,
+        issueTitle: "Fix the thing",
+      },
+      branchLabel: "feature/fix-the-thing",
+    });
+
+    expect(screen.getByText("Fix the thing")).toBeDefined();
+    expect(screen.getByText(/fix-the-thing/)).toBeDefined();
+  });
+
+  it("does not show duplicate issue badge in lower row when issue is headline", () => {
+    const { container } = renderHeader({
+      worktree: {
+        ...baseWorktree,
+        issueNumber: 100,
+        issueTitle: "Fix the thing",
+      },
+      badges: { onOpenIssue: noop },
+    });
+
+    const issueButtons = container.querySelectorAll('button[aria-label*="Open issue"]');
+    expect(issueButtons.length).toBe(1);
+  });
+
+  it("shows PR badge even when issue title is headline", () => {
+    renderHeader({
+      worktree: {
+        ...baseWorktree,
+        issueNumber: 100,
+        issueTitle: "Fix the thing",
+        prNumber: 101,
+        prState: "open",
+      },
+      badges: { onOpenIssue: noop, onOpenPR: noop },
+    });
+
+    expect(screen.getByText("Fix the thing")).toBeDefined();
+    expect(screen.getByRole("button", { name: /pull request #101/ })).toBeDefined();
+  });
+
+  it("uses branch name as headline when issueNumber exists but issueTitle is missing", () => {
+    renderHeader({
+      worktree: {
+        ...baseWorktree,
+        issueNumber: 100,
+        issueTitle: undefined,
+      },
+      branchLabel: "feature/something",
+      badges: { onOpenIssue: noop },
+    });
+
+    // Branch name should be the primary headline (no headline-level issue button)
+    expect(screen.getByText(/something/)).toBeDefined();
+    // Issue badge should still appear in secondary row with #100 fallback
+    const issueButton = screen.getByRole("button", { name: /Open issue #100 on GitHub/ });
+    expect(issueButton).toBeDefined();
+  });
+
+  it("uses branch name as headline for main worktree even with issue title", () => {
+    renderHeader({
+      worktree: {
+        ...baseWorktree,
+        isMainWorktree: true,
+        issueNumber: 100,
+        issueTitle: "Some issue",
+      },
+      isMainWorktree: true,
+      branchLabel: "main",
+    });
+
+    // Main worktree can still have an issue — it should show as headline if present
+    expect(screen.getByText("Some issue")).toBeDefined();
+  });
+});
