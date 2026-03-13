@@ -76,7 +76,7 @@ describe("WorktreeMonitor", () => {
     vi.useRealTimers();
   });
 
-  it("calls onRemoved and stops when WorktreeRemovedError is thrown", async () => {
+  it("calls onRemoved and stops polling when WorktreeRemovedError is thrown", async () => {
     mockGetWorktreeChangesWithStats.mockRejectedValue(new WorktreeRemovedError("/test/worktree"));
 
     const callbacks = makeCallbacks();
@@ -86,6 +86,10 @@ describe("WorktreeMonitor", () => {
 
     expect(callbacks.onRemoved).toHaveBeenCalledWith("/test/worktree");
     expect(callbacks.onUpdate).not.toHaveBeenCalled();
+
+    mockGetWorktreeChangesWithStats.mockClear();
+    await vi.advanceTimersByTimeAsync(TEST_CONFIG.pollIntervalMax * 2);
+    expect(mockGetWorktreeChangesWithStats).not.toHaveBeenCalled();
   });
 
   it("calls onUpdate on successful git status", async () => {
