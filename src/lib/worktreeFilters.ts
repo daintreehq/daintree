@@ -56,16 +56,37 @@ export function buildSearchableText(worktree: Worktree | WorktreeState): string 
   const parts = [
     worktree.name,
     worktree.branch ?? "",
-    worktree.path,
     worktree.issueNumber ? `#${worktree.issueNumber}` : "",
     worktree.prNumber ? `#${worktree.prNumber}` : "",
-    worktree.summary ?? "",
     worktree.issueTitle ?? "",
     worktree.prTitle ?? "",
-    worktree.aiNote ?? "",
   ];
 
   return parts.filter(Boolean).join(" ").toLowerCase();
+}
+
+function scoreField(field: string, query: string, startsWith: number, contains: number): number {
+  if (!field) return 0;
+  if (field.startsWith(query)) return startsWith;
+  if (field.includes(query)) return contains;
+  return 0;
+}
+
+export function scoreWorktree(worktree: Worktree | WorktreeState, query: string): number {
+  const q = query.toLowerCase().trim();
+  if (!q) return 0;
+
+  const name = worktree.name.toLowerCase();
+  const branch = (worktree.branch ?? "").toLowerCase();
+  const issueTitle = (worktree.issueTitle ?? "").toLowerCase();
+  const prTitle = (worktree.prTitle ?? "").toLowerCase();
+
+  return Math.max(
+    scoreField(issueTitle, q, 4, 3),
+    scoreField(name, q, 4, 3),
+    scoreField(branch, q, 2, 1),
+    scoreField(prTitle, q, 2, 1)
+  );
 }
 
 export function computeStatus(
@@ -114,8 +135,7 @@ export function matchesFilters(
         return false;
       }
     } else {
-      const searchable = buildSearchableText(worktree);
-      if (!searchable.includes(filters.query.toLowerCase())) {
+      if (scoreWorktree(worktree, filters.query) === 0) {
         return false;
       }
     }
@@ -226,6 +246,23 @@ export function sortWorktrees<T extends Worktree | WorktreeState>(
       default:
         return 0;
     }
+  });
+}
+
+export function sortWorktreesByRelevance<T extends Worktree | WorktreeState>(
+  worktrees: T[],
+  query: string,
+  orderBy: OrderBy,
+  pinnedWorktrees: string[] = []
+): T[] {
+  const sorted = sortWorktrees(worktrees, orderBy, pinnedWorktrees);
+  if (!query.trim()) return sorted;
+
+  return [...sorted].sort((a, b) => {
+    const scoreA = scoreWorktree(a, query);
+    const scoreB = scoreWorktree(b, query);
+    if (scoreA !== scoreB) return scoreB - scoreA;
+    return 0; // preserve sortWorktrees order as tiebreaker
   });
 }
 

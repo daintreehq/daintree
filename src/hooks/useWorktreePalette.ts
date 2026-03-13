@@ -3,6 +3,7 @@ import type { WorktreeState } from "@/types";
 import { useWorktreeSelectionStore } from "@/store";
 import { useShallow } from "zustand/react/shallow";
 import { useSearchablePalette, type UseSearchablePaletteReturn } from "./useSearchablePalette";
+import { scoreWorktree } from "@/lib/worktreeFilters";
 
 export type UseWorktreePaletteReturn = UseSearchablePaletteReturn<WorktreeState> & {
   activeWorktreeId: string | null;
@@ -36,18 +37,12 @@ export function useWorktreePalette({
 
   const filterWorktrees = useCallback((items: WorktreeState[], query: string): WorktreeState[] => {
     if (!query.trim()) return items;
-    const search = query.trim().toLowerCase();
-    return items.filter((worktree) => {
-      const branch = worktree.branch ?? "";
-      const issueTitle = worktree.issueTitle ?? "";
-      const prTitle = worktree.prTitle ?? "";
-      return (
-        worktree.name.toLowerCase().includes(search) ||
-        branch.toLowerCase().includes(search) ||
-        worktree.path.toLowerCase().includes(search) ||
-        issueTitle.toLowerCase().includes(search) ||
-        prTitle.toLowerCase().includes(search)
-      );
+    const matched = items.filter((worktree) => scoreWorktree(worktree, query) > 0);
+    return [...matched].sort((a, b) => {
+      const scoreA = scoreWorktree(a, query);
+      const scoreB = scoreWorktree(b, query);
+      if (scoreA !== scoreB) return scoreB - scoreA;
+      return 0;
     });
   }, []);
 
