@@ -502,9 +502,18 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   const rootPath = currentProject?.path ?? "";
   const hasNonMainWorktrees = worktrees.length > 1;
   const hasFilters = hasActiveFilters();
-  const mainMatchesQuery = mainWorktree && (!query || scoreWorktree(mainWorktree, query) > 0);
-  const integrationMatchesQuery =
-    integrationWorktree && (!query || scoreWorktree(integrationWorktree, query) > 0);
+  const worktreeMatchesQuery = (w: WorktreeState) => {
+    if (!query) return true;
+    if (scoreWorktree(w, query) > 0) return true;
+    const trimmed = query.trim();
+    if (trimmed.startsWith("#")) {
+      const num = parseInt(trimmed.slice(1), 10);
+      if (num > 0 && (w.issueNumber === num || w.prNumber === num)) return true;
+    }
+    return false;
+  };
+  const mainMatchesQuery = mainWorktree && worktreeMatchesQuery(mainWorktree);
+  const integrationMatchesQuery = integrationWorktree && worktreeMatchesQuery(integrationWorktree);
   const visibleCount = hasFilters
     ? filteredWorktrees.length + (mainMatchesQuery ? 1 : 0) + (integrationMatchesQuery ? 1 : 0)
     : worktrees.length;

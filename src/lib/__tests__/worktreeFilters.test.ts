@@ -243,6 +243,16 @@ describe("scoreWorktree", () => {
     expect(scoreWorktree(worktree, "auth")).toBe(1);
   });
 
+  it("returns 2 when prTitle starts with query", () => {
+    const worktree = createMockWorktree({
+      name: "main",
+      branch: "main",
+      issueTitle: undefined,
+      prTitle: "Auth fix for login",
+    });
+    expect(scoreWorktree(worktree, "auth")).toBe(2);
+  });
+
   it("returns 1 when only prTitle contains query", () => {
     const worktree = createMockWorktree({
       name: "main",
@@ -251,6 +261,16 @@ describe("scoreWorktree", () => {
       prTitle: "Fix authentication",
     });
     expect(scoreWorktree(worktree, "auth")).toBe(1);
+  });
+
+  it("takes max score across all matching fields", () => {
+    const worktree = createMockWorktree({
+      name: "auth-settings",
+      branch: "feature/auth-fix",
+      issueTitle: "Fix database auth",
+    });
+    // name.startsWith = 4, issueTitle.includes = 3, branch.includes = 1 → max = 4
+    expect(scoreWorktree(worktree, "auth")).toBe(4);
   });
 
   it("is case-insensitive", () => {
@@ -312,21 +332,22 @@ describe("sortWorktreesByRelevance", () => {
     expect(result.map((w) => w.id)).toEqual(["2", "1"]);
   });
 
-  it("sorts by relevance score when query is active", () => {
+  it("sorts by relevance score overriding alpha order", () => {
     const worktrees = [
       createMockWorktree({
         id: "1",
-        name: "main",
+        name: "aaa-worktree",
         branch: "feature/auth-fix",
         issueTitle: "Fix database auth",
       }),
       createMockWorktree({
         id: "2",
-        name: "main2",
+        name: "zzz-worktree",
         branch: "main",
         issueTitle: "Authentication refactor",
       }),
     ];
+    // Alpha sort would put id:1 (aaa) first, but relevance puts id:2 first (score 4 vs 3)
     const result = sortWorktreesByRelevance(worktrees, "auth", "alpha");
     expect(result[0].id).toBe("2"); // issueTitle starts-with (score 4)
     expect(result[1].id).toBe("1"); // issueTitle contains (score 3)
@@ -353,14 +374,15 @@ describe("sortWorktreesByRelevance", () => {
     expect(result[1].id).toBe("1");
   });
 
-  it("keeps main worktree and pinned order as baseline", () => {
+  it("keeps main worktree first as tiebreaker when scores are equal", () => {
     const worktrees = [
       createMockWorktree({ id: "1", name: "auth-test", isMainWorktree: true }),
-      createMockWorktree({ id: "2", name: "auth-feature", issueTitle: "Auth feature" }),
+      createMockWorktree({ id: "2", name: "auth-feature" }),
     ];
     const result = sortWorktreesByRelevance(worktrees, "auth", "alpha");
-    // Both score high, but main worktree gets sortWorktrees priority as tiebreaker
-    expect(result.length).toBe(2);
+    // Both score 4 (name starts-with), main first via sortWorktrees tiebreaker
+    expect(result[0].id).toBe("1");
+    expect(result[1].id).toBe("2");
   });
 });
 
@@ -435,6 +457,30 @@ describe("matchesFilters", () => {
     const worktree = createMockWorktree({ name: "main" });
     const filters = createEmptyFilters();
     filters.query = "nonexistent";
+    const meta = createEmptyMeta();
+    expect(matchesFilters(worktree, filters, meta, false)).toBe(false);
+  });
+
+  it("matches #number shortcut by issueNumber", () => {
+    const worktree = createMockWorktree({ issueNumber: 123 });
+    const filters = createEmptyFilters();
+    filters.query = "#123";
+    const meta = createEmptyMeta();
+    expect(matchesFilters(worktree, filters, meta, false)).toBe(true);
+  });
+
+  it("matches #number shortcut by prNumber", () => {
+    const worktree = createMockWorktree({ prNumber: 456 });
+    const filters = createEmptyFilters();
+    filters.query = "#456";
+    const meta = createEmptyMeta();
+    expect(matchesFilters(worktree, filters, meta, false)).toBe(true);
+  });
+
+  it("does not match #number when neither issueNumber nor prNumber match", () => {
+    const worktree = createMockWorktree({ issueNumber: 100, prNumber: 200 });
+    const filters = createEmptyFilters();
+    filters.query = "#999";
     const meta = createEmptyMeta();
     expect(matchesFilters(worktree, filters, meta, false)).toBe(false);
   });
