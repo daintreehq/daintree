@@ -12,7 +12,13 @@ import {
 import { cn } from "@/lib/utils";
 import { formatTimeAgo } from "@/utils/timeAgo";
 import { actionService } from "@/services/ActionService";
-import type { GitHubIssue, GitHubPR, GitHubLabel, LinkedPRInfo } from "@shared/types/github";
+import type {
+  GitHubIssue,
+  GitHubPR,
+  GitHubLabel,
+  LinkedPRInfo,
+  GitHubPRCIStatus,
+} from "@shared/types/github";
 import { Avatar } from "@/components/ui/Avatar";
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
 import { useWorktreeDataStore } from "@/store/worktreeDataStore";
@@ -89,6 +95,21 @@ function middleTruncate(str: string, maxLen: number): string {
   const prefixLen = Math.ceil((maxLen - 1) / 2);
   const suffixLen = Math.floor((maxLen - 1) / 2);
   return `${str.slice(0, prefixLen)}…${str.slice(str.length - suffixLen)}`;
+}
+
+function getCIStatusInfo(status: GitHubPRCIStatus): { color: string; tooltip: string } {
+  switch (status) {
+    case "SUCCESS":
+      return { color: "bg-status-success", tooltip: "All checks passed" };
+    case "PENDING":
+    case "EXPECTED":
+      return { color: "bg-status-warning", tooltip: "Checks pending" };
+    case "FAILURE":
+    case "ERROR":
+      return { color: "bg-status-error", tooltip: "Checks failing" };
+    default:
+      return { color: "bg-muted-foreground", tooltip: "Check status unknown" };
+  }
 }
 
 export function GitHubListItem({
@@ -225,6 +246,24 @@ export function GitHubListItem({
                 <TooltipContent side="bottom">Open in GitHub</TooltipContent>
               </Tooltip>
             </TooltipProvider>
+            {isItemPR && item.state === "OPEN" && item.ciStatus && (
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <span
+                      className={cn(
+                        "shrink-0 w-2 h-2 rounded-full",
+                        getCIStatusInfo(item.ciStatus).color
+                      )}
+                      aria-label={getCIStatusInfo(item.ciStatus).tooltip}
+                    />
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom">
+                    {getCIStatusInfo(item.ciStatus).tooltip}
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+            )}
             {prBadgeInfo && linkedPR && (
               <TooltipProvider>
                 <Tooltip>

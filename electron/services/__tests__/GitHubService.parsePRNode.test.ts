@@ -4,6 +4,8 @@ import { describe, it, expect } from "vitest";
 // by verifying that the fields are correctly extracted from raw GraphQL node data.
 // We test the transformation logic directly by duplicating the function shape.
 
+type GitHubPRCIStatus = "SUCCESS" | "FAILURE" | "ERROR" | "PENDING" | "EXPECTED";
+
 interface RawPRNode {
   number: number;
   title: string;
@@ -17,6 +19,11 @@ interface RawPRNode {
   baseRepository?: { nameWithOwner?: string } | null;
   author?: { login?: string; avatarUrl?: string } | null;
   reviews?: { totalCount?: number };
+  commits?: {
+    nodes?: Array<{
+      commit?: { statusCheckRollup?: { state?: string } | null } | null;
+    }>;
+  };
 }
 
 // Inline the logic from parsePRNode to keep tests self-contained
@@ -37,6 +44,10 @@ function parsePRNode(node: RawPRNode) {
   const baseName = baseRepo?.nameWithOwner;
   const isFork = headName && baseName ? headName !== baseName : undefined;
 
+  const ciStatus = node.commits?.nodes?.[0]?.commit?.statusCheckRollup?.state as
+    | GitHubPRCIStatus
+    | undefined;
+
   return {
     number: node.number,
     title: node.title,
@@ -51,6 +62,7 @@ function parsePRNode(node: RawPRNode) {
     reviewCount: reviewsData?.totalCount,
     headRefName: (node.headRefName as string) || undefined,
     isFork: isFork ?? undefined,
+    ciStatus,
   };
 }
 
@@ -151,5 +163,66 @@ describe("parsePRNode", () => {
   it("preserves OPEN state when not merged", () => {
     const result = parsePRNode(baseNode);
     expect(result.state).toBe("OPEN");
+  });
+
+  it("extracts ciStatus SUCCESS from statusCheckRollup", () => {
+    const result = parsePRNode({
+      ...baseNode,
+      commits: { nodes: [{ commit: { statusCheckRollup: { state: "SUCCESS" } } }] },
+    });
+    expect(result.ciStatus).toBe("SUCCESS");
+  });
+
+  it("extracts ciStatus FAILURE from statusCheckRollup", () => {
+    const result = parsePRNode({
+      ...baseNode,
+      commits: { nodes: [{ commit: { statusCheckRollup: { state: "FAILURE" } } }] },
+    });
+    expect(result.ciStatus).toBe("FAILURE");
+  });
+
+  it("extracts ciStatus PENDING from statusCheckRollup", () => {
+    const result = parsePRNode({
+      ...baseNode,
+      commits: { nodes: [{ commit: { statusCheckRollup: { state: "PENDING" } } }] },
+    });
+    expect(result.ciStatus).toBe("PENDING");
+  });
+
+  it("extracts ciStatus ERROR from statusCheckRollup", () => {
+    const result = parsePRNode({
+      ...baseNode,
+      commits: { nodes: [{ commit: { statusCheckRollup: { state: "ERROR" } } }] },
+    });
+    expect(result.ciStatus).toBe("ERROR");
+  });
+
+  it("extracts ciStatus EXPECTED from statusCheckRollup", () => {
+    const result = parsePRNode({
+      ...baseNode,
+      commits: { nodes: [{ commit: { statusCheckRollup: { state: "EXPECTED" } } }] },
+    });
+    expect(result.ciStatus).toBe("EXPECTED");
+  });
+
+  it("sets ciStatus to undefined when statusCheckRollup is null", () => {
+    const result = parsePRNode({
+      ...baseNode,
+      commits: { nodes: [{ commit: { statusCheckRollup: null } }] },
+    });
+    expect(result.ciStatus).toBeUndefined();
+  });
+
+  it("sets ciStatus to undefined when commits nodes is empty", () => {
+    const result = parsePRNode({
+      ...baseNode,
+      commits: { nodes: [] },
+    });
+    expect(result.ciStatus).toBeUndefined();
+  });
+
+  it("sets ciStatus to undefined when commits field is absent", () => {
+    const result = parsePRNode(baseNode);
+    expect(result.ciStatus).toBeUndefined();
   });
 });
