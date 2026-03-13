@@ -272,6 +272,13 @@ export function TerminalContextMenu({
             { source: "context-menu" }
           );
           break;
+        case "background":
+          void actionService.dispatch(
+            "terminal.background",
+            { terminalId },
+            { source: "context-menu" }
+          );
+          break;
         case "trash":
           void actionService.dispatch("terminal.trash", { terminalId }, { source: "context-menu" });
           break;
@@ -401,6 +408,9 @@ export function TerminalContextMenu({
           </ContextMenuItem>
           <ContextMenuItem onSelect={() => handleAction("rename")}>Rename Browser</ContextMenuItem>
           <ContextMenuSeparator />
+          <ContextMenuItem onSelect={() => handleAction("background")}>
+            Send to Background
+          </ContextMenuItem>
           <ContextMenuItem onSelect={() => handleAction("trash")}>Close Browser</ContextMenuItem>
           <ContextMenuItem destructive onSelect={() => handleAction("kill")}>
             Remove Browser
@@ -432,6 +442,9 @@ export function TerminalContextMenu({
             Reveal in Notes Palette
           </ContextMenuItem>
           <ContextMenuSeparator />
+          <ContextMenuItem onSelect={() => handleAction("background")}>
+            Send to Background
+          </ContextMenuItem>
           <ContextMenuItem
             destructive
             disabled={!hasNotePath}
@@ -474,6 +487,9 @@ export function TerminalContextMenu({
             Rename Dev Preview
           </ContextMenuItem>
           <ContextMenuSeparator />
+          <ContextMenuItem onSelect={() => handleAction("background")}>
+            Send to Background
+          </ContextMenuItem>
           <ContextMenuItem onSelect={() => handleAction("trash")}>
             Close Dev Preview
           </ContextMenuItem>
@@ -586,6 +602,9 @@ export function TerminalContextMenu({
           View Terminal Info
         </ContextMenuItem>
         <ContextMenuSeparator />
+        <ContextMenuItem onSelect={() => handleAction("background")}>
+          Send to Background
+        </ContextMenuItem>
         <ContextMenuItem onSelect={() => handleAction("trash")}>Trash Terminal</ContextMenuItem>
         <ContextMenuItem destructive onSelect={() => handleAction("kill")}>
           Kill Terminal

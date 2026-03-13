@@ -270,7 +270,7 @@ export type TerminalKind = PanelKind;
 export type TerminalType = "terminal" | LegacyAgentType;
 
 /** Location of a panel instance in the UI */
-export type PanelLocation = "grid" | "dock" | "trash";
+export type PanelLocation = "grid" | "dock" | "trash" | "background";
 
 /** Tab group location (subset of PanelLocation, excludes trash) */
 export type TabGroupLocation = "grid" | "dock";

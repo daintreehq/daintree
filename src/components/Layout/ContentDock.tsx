@@ -12,6 +12,7 @@ import { DockedTabGroup } from "./DockedTabGroup";
 import { TrashContainer } from "./TrashContainer";
 import { WaitingContainer } from "./WaitingContainer";
 import { FailedContainer } from "./FailedContainer";
+import { BackgroundContainer } from "./BackgroundContainer";
 import {
   SortableDockItem,
   SortableDockPlaceholder,
@@ -256,8 +257,9 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
       {/* Separator between terminals and action containers */}
       {tabGroups.length > 0 && <div className="w-px h-5 bg-[var(--dock-border)] mx-1 shrink-0" />}
 
-      {/* Action containers: Waiting + Failed + Trash */}
+      {/* Action containers: Background + Waiting + Failed + Trash */}
       <div className="shrink-0 pl-1 flex items-center gap-2">
+        <BackgroundContainer compact={isCompact} />
         <WaitingContainer compact={isCompact} />
         <FailedContainer compact={isCompact} />
         <TrashContainer trashedTerminals={trashedItems} compact={isCompact} />

@@ -49,6 +49,7 @@ export type {
   AddTerminalOptions,
   TrashedTerminal,
   TrashedTerminalGroupMetadata,
+  BackgroundedTerminal,
   TerminalRegistrySlice,
   TerminalRegistryMiddleware,
   TerminalRegistryStoreApi,
@@ -64,6 +65,7 @@ export const createTerminalRegistrySlice =
     (({ clearTrashExpiryTimer, scheduleTrashExpiry }) => ({
       terminals: [],
       trashedTerminals: new Map(),
+      backgroundedTerminals: new Map(),
       tabGroups: new Map(),
 
       addTerminal: async (options) => {
@@ -737,8 +739,13 @@ export const createTerminalRegistrySlice =
           stopDevPreviewByPanelId(id);
         }
 
-        // Only 'dock' or 'grid' are valid original locations - treat undefined as 'grid'
-        const originalLocation: "dock" | "grid" = terminal.location === "dock" ? "dock" : "grid";
+        // Resolve original location: if backgrounded, use stored original; otherwise use current
+        const backgroundedInfo = get().backgroundedTerminals.get(id);
+        const originalLocation: "dock" | "grid" = backgroundedInfo
+          ? backgroundedInfo.originalLocation
+          : terminal.location === "dock"
+            ? "dock"
+            : "grid";
 
         // Only call PTY operations for PTY-backed terminals
         if (panelKindHasPty(terminal.kind ?? "terminal")) {
@@ -781,8 +788,20 @@ export const createTerminalRegistrySlice =
             }
           }
 
+          // Clear backgrounded metadata if trashing from background
+          let newBackgrounded = state.backgroundedTerminals;
+          if (state.backgroundedTerminals.has(id)) {
+            newBackgrounded = new Map(state.backgroundedTerminals);
+            newBackgrounded.delete(id);
+          }
+
           saveTerminals(newTerminals);
-          return { terminals: newTerminals, trashedTerminals: newTrashed, tabGroups: newTabGroups };
+          return {
+            terminals: newTerminals,
+            trashedTerminals: newTrashed,
+            backgroundedTerminals: newBackgrounded,
+            tabGroups: newTabGroups,
+          };
         });
 
         scheduleTrashExpiry(id, expiresAt);
@@ -1135,6 +1154,92 @@ export const createTerminalRegistrySlice =
         return get().trashedTerminals.has(id);
       },
 
+      backgroundTerminal: (id) => {
+        const terminal = get().terminals.find((t) => t.id === id);
+        if (!terminal) return;
+        if (terminal.location === "trash" || terminal.location === "background") return;
+
+        const originalLocation: "dock" | "grid" = terminal.location === "dock" ? "dock" : "grid";
+
+        set((state) => {
+          const newTerminals = state.terminals.map((t) =>
+            t.id === id ? { ...t, location: "background" as const } : t
+          );
+          const newBackgrounded = new Map(state.backgroundedTerminals);
+          newBackgrounded.set(id, { id, originalLocation });
+
+          // Remove panel from tab group (same dissolve logic as trashTerminal)
+          let newTabGroups = state.tabGroups;
+          for (const group of state.tabGroups.values()) {
+            if (group.panelIds.includes(id)) {
+              newTabGroups = new Map(state.tabGroups);
+              const newPanelIds = group.panelIds.filter((pid) => pid !== id);
+
+              if (newPanelIds.length <= 1) {
+                newTabGroups.delete(group.id);
+              } else {
+                const newActiveTabId =
+                  group.activeTabId === id ? (newPanelIds[0] ?? "") : group.activeTabId;
+                newTabGroups.set(group.id, {
+                  ...group,
+                  panelIds: newPanelIds,
+                  activeTabId: newActiveTabId,
+                });
+              }
+              saveTabGroups(newTabGroups);
+              break;
+            }
+          }
+
+          saveTerminals(newTerminals);
+          return {
+            terminals: newTerminals,
+            backgroundedTerminals: newBackgrounded,
+            tabGroups: newTabGroups,
+          };
+        });
+
+        // Apply background render tier for PTY-backed panels (keep PTY alive but suppress visual streaming)
+        if (panelKindHasPty(terminal.kind ?? "terminal")) {
+          terminalInstanceService.applyRendererPolicy(id, TerminalRefreshTier.BACKGROUND);
+        }
+      },
+
+      restoreBackgroundTerminal: (id, targetWorktreeId) => {
+        const backgroundedInfo = get().backgroundedTerminals.get(id);
+        const restoreLocation = backgroundedInfo?.originalLocation ?? "grid";
+        const terminal = get().terminals.find((t) => t.id === id);
+
+        set((state) => {
+          const newTerminals = state.terminals.map((t) =>
+            t.id === id
+              ? {
+                  ...t,
+                  location: restoreLocation,
+                  worktreeId: targetWorktreeId !== undefined ? targetWorktreeId : t.worktreeId,
+                }
+              : t
+          );
+          const newBackgrounded = new Map(state.backgroundedTerminals);
+          newBackgrounded.delete(id);
+          saveTerminals(newTerminals);
+          return { terminals: newTerminals, backgroundedTerminals: newBackgrounded };
+        });
+
+        // Restore render tier for PTY-backed panels
+        if (terminal && panelKindHasPty(terminal.kind ?? "terminal")) {
+          if (restoreLocation === "dock") {
+            optimizeForDock(id);
+          } else {
+            terminalInstanceService.applyRendererPolicy(id, TerminalRefreshTier.VISIBLE);
+          }
+        }
+      },
+
+      isInBackground: (id) => {
+        return get().backgroundedTerminals.has(id);
+      },
+
       reorderTerminals: (fromIndex, toIndex, location = "grid", worktreeId) => {
         if (fromIndex === toIndex) return;
 
@@ -1149,6 +1254,7 @@ export const createTerminalRegistrySlice =
           );
           const dockTerminals = state.terminals.filter((t) => t.location === "dock");
           const trashTerminals = state.terminals.filter((t) => t.location === "trash");
+          const backgroundTerminals = state.terminals.filter((t) => t.location === "background");
 
           const terminalsInLocation = location === "grid" ? gridTerminals : dockTerminals;
           const scopedTerminals = terminalsInLocation.filter(matchesWorktree);
@@ -1175,8 +1281,8 @@ export const createTerminalRegistrySlice =
 
           const newTerminals =
             location === "grid"
-              ? [...updatedLocation, ...dockTerminals, ...trashTerminals]
-              : [...gridTerminals, ...updatedLocation, ...trashTerminals];
+              ? [...updatedLocation, ...dockTerminals, ...trashTerminals, ...backgroundTerminals]
+              : [...gridTerminals, ...updatedLocation, ...trashTerminals, ...backgroundTerminals];
 
           saveTerminals(newTerminals);
           return { terminals: newTerminals };
@@ -1200,6 +1306,9 @@ export const createTerminalRegistrySlice =
           const dockTerminals = state.terminals.filter((t) => t.id !== id && t.location === "dock");
           const trashTerminals = state.terminals.filter(
             (t) => t.id !== id && t.location === "trash"
+          );
+          const backgroundTerminals = state.terminals.filter(
+            (t) => t.id !== id && t.location === "background"
           );
 
           const targetList = location === "grid" ? gridTerminals : dockTerminals;
@@ -1232,8 +1341,8 @@ export const createTerminalRegistrySlice =
 
           const newTerminals =
             location === "grid"
-              ? [...updatedTargetList, ...dockTerminals, ...trashTerminals]
-              : [...gridTerminals, ...updatedTargetList, ...trashTerminals];
+              ? [...updatedTargetList, ...dockTerminals, ...trashTerminals, ...backgroundTerminals]
+              : [...gridTerminals, ...updatedTargetList, ...trashTerminals, ...backgroundTerminals];
 
           saveTerminals(newTerminals);
           return { terminals: newTerminals };
@@ -2583,6 +2692,7 @@ export const createTerminalRegistrySlice =
           );
           const dockTerminals = state.terminals.filter((t) => t.location === "dock");
           const trashTerminals = state.terminals.filter((t) => t.location === "trash");
+          const backgroundTerminals = state.terminals.filter((t) => t.location === "background");
 
           // Get terminals in the target location/worktree
           const terminalsInLocation = location === "grid" ? gridTerminals : dockTerminals;
@@ -2629,8 +2739,18 @@ export const createTerminalRegistrySlice =
           // Reconstruct the full terminals array
           const newTerminals =
             location === "grid"
-              ? [...newLocationTerminals, ...dockTerminals, ...trashTerminals]
-              : [...gridTerminals, ...newLocationTerminals, ...trashTerminals];
+              ? [
+                  ...newLocationTerminals,
+                  ...dockTerminals,
+                  ...trashTerminals,
+                  ...backgroundTerminals,
+                ]
+              : [
+                  ...gridTerminals,
+                  ...newLocationTerminals,
+                  ...trashTerminals,
+                  ...backgroundTerminals,
+                ];
 
           saveTerminals(newTerminals);
           return { terminals: newTerminals };
@@ -2671,12 +2791,12 @@ export const createTerminalRegistrySlice =
           // Validate group location
           const groupLocation = group.location === "dock" ? "dock" : "grid";
 
-          // Filter to only valid, non-trashed panels (check both trashedTerminals map AND location field)
+          // Filter to only valid, non-trashed/backgrounded panels
           const validPanelIds = group.panelIds.filter((id) => {
             if (!terminalIdSet.has(id)) return false;
             if (trashedTerminals.has(id)) return false;
             const terminal = terminals.find((t) => t.id === id);
-            if (terminal?.location === "trash") return false;
+            if (terminal?.location === "trash" || terminal?.location === "background") return false;
             return true;
           });
 

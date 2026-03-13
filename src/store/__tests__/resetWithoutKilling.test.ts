@@ -55,6 +55,7 @@ describe("resetWithoutKilling", () => {
       terminals: [],
       tabGroups: new Map(),
       trashedTerminals: new Map(),
+      backgroundedTerminals: new Map(),
       focusedId: null,
       maximizedId: null,
       commandQueue: [],
