@@ -405,16 +405,16 @@ export function WorktreeCard({
       ref={isActive ? undefined : setNodeRef}
       className={cn(
         "group relative transition-all duration-200",
-        variant === "sidebar" && "border-b border-divider",
+        variant === "sidebar" && "border-b border-subtle",
         variant === "grid" && "rounded-lg border border-divider bg-canopy-sidebar/50",
         isActive
-          ? "bg-overlay-soft shadow-[inset_0_1px_0_0_rgba(255,255,255,0.05)]"
+          ? "bg-overlay-emphasis shadow-[inset_0_1px_0_0_rgba(255,255,255,0.05)]"
           : "hover:bg-overlay-subtle",
         variant === "sidebar" && !isActive && "bg-transparent",
         isActive &&
           !isSingleWorktree &&
           variant === "sidebar" &&
-          "before:absolute before:right-0 before:top-2 before:bottom-2 before:w-[2px] before:rounded-l before:bg-[var(--color-state-active)] before:content-[''] before:z-10 motion-safe:before:animate-in motion-safe:before:fade-in motion-safe:before:duration-200",
+          "before:absolute before:left-0 before:top-2 before:bottom-2 before:w-[2px] before:rounded-r before:bg-[var(--color-state-active)] before:content-[''] before:z-10 motion-safe:before:animate-in motion-safe:before:fade-in motion-safe:before:duration-200",
         variant === "grid" && isActive && "border-[var(--color-state-active)]/70 shadow-md",
         variant === "grid" &&
           !isActive &&

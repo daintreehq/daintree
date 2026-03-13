@@ -102,7 +102,7 @@ export function BranchLabel({
                 "truncate font-mono transition-colors duration-200",
                 isMainWorktree ? "text-[13px] font-bold tracking-wide" : "text-[11px] font-medium",
                 isActive
-                  ? "text-canopy-text/80"
+                  ? "text-canopy-text/95"
                   : isMuted
                     ? "text-canopy-text/40"
                     : "text-canopy-text/60"
