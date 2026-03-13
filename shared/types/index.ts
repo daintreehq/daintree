@@ -53,6 +53,7 @@ export type {
   TerminalRestartError,
   TerminalReconnectError,
   TerminalRuntimeStatus,
+  TerminalSpawnSource,
   TerminalInstance,
   PtySpawnOptions,
   TerminalDimensions,

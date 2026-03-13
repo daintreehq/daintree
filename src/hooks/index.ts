@@ -49,6 +49,9 @@ export type { LayoutState } from "./useLayoutState";
 export { useWindowNotifications } from "./useWindowNotifications";
 export { useWatchedPanelNotifications } from "./useWatchedPanelNotifications";
 
+export { useReEntrySummary } from "./useReEntrySummary";
+export type { ReEntrySummaryState, ReEntryCounts } from "./useReEntrySummary";
+
 export { useWorktreeActions } from "./useWorktreeActions";
 export type { UseWorktreeActionsOptions, WorktreeActions } from "./useWorktreeActions";
 

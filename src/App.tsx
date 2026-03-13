@@ -29,6 +29,7 @@ import {
   useWorktreeActions,
   useMenuActions,
   useErrors,
+  useReEntrySummary,
 } from "./hooks";
 import { useActionRegistry } from "./hooks/useActionRegistry";
 import { useUpdateListener } from "./hooks/useUpdateListener";
@@ -83,6 +84,7 @@ import { NotesPalette } from "./components/Notes";
 import { SettingsDialog, type SettingsTab, type SettingsNavTarget } from "./components/Settings";
 import { ShortcutReferenceDialog } from "./components/KeyboardShortcuts";
 import { Toaster } from "./components/ui/toaster";
+import { ReEntrySummary } from "./components/ui/ReEntrySummary";
 import { UpdateNotification } from "./components/UpdateNotification";
 import { OnboardingFlow } from "./components/Onboarding/OnboardingFlow";
 import { GettingStartedChecklist } from "./components/Onboarding/GettingStartedChecklist";
@@ -113,9 +115,10 @@ import { useWorktreeFilterStore } from "./store/worktreeFilterStore";
 import {
   matchesFilters,
   sortWorktrees,
+  sortWorktreesByRelevance,
   groupByType,
   findIntegrationWorktree,
-  buildSearchableText,
+  scoreWorktree,
   type DerivedWorktreeMeta,
   type FilterState,
 } from "./lib/worktreeFilters";
@@ -291,9 +294,12 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     const existingWorktreeIds = new Set(worktrees.map((w) => w.id));
     const validPinnedWorktrees = pinnedWorktrees.filter((id) => existingWorktreeIds.has(id));
 
-    const sorted = sortWorktrees(filtered, orderBy, validPinnedWorktrees);
+    const hasQuery = query.trim().length > 0;
+    const sorted = hasQuery
+      ? sortWorktreesByRelevance(filtered, query, orderBy, validPinnedWorktrees)
+      : sortWorktrees(filtered, orderBy, validPinnedWorktrees);
 
-    if (isGroupedByType) {
+    if (isGroupedByType && !hasQuery) {
       return {
         filteredWorktrees: sorted,
         groupedSections: groupByType(sorted, orderBy, validPinnedWorktrees),
@@ -498,12 +504,18 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   const rootPath = currentProject?.path ?? "";
   const hasNonMainWorktrees = worktrees.length > 1;
   const hasFilters = hasActiveFilters();
-  const queryLower = query ? query.toLowerCase() : "";
-  const mainMatchesQuery =
-    mainWorktree && (!query || buildSearchableText(mainWorktree).includes(queryLower));
-  const integrationMatchesQuery =
-    integrationWorktree &&
-    (!query || buildSearchableText(integrationWorktree).includes(queryLower));
+  const worktreeMatchesQuery = (w: WorktreeState) => {
+    if (!query) return true;
+    if (scoreWorktree(w, query) > 0) return true;
+    const trimmed = query.trim();
+    if (trimmed.startsWith("#")) {
+      const num = parseInt(trimmed.slice(1), 10);
+      if (num > 0 && (w.issueNumber === num || w.prNumber === num)) return true;
+    }
+    return false;
+  };
+  const mainMatchesQuery = mainWorktree && worktreeMatchesQuery(mainWorktree);
+  const integrationMatchesQuery = integrationWorktree && worktreeMatchesQuery(integrationWorktree);
   const visibleCount = hasFilters
     ? filteredWorktrees.length + (mainMatchesQuery ? 1 : 0) + (integrationMatchesQuery ? 1 : 0)
     : worktrees.length;
@@ -686,6 +698,7 @@ function App() {
   useAppThemeConfig();
   useWindowNotifications();
   useWatchedPanelNotifications();
+  const reEntrySummary = useReEntrySummary();
   useUpdateListener();
   useMcpBridge();
   const [homeDir, setHomeDir] = useState<string | undefined>(undefined);
@@ -1310,6 +1323,7 @@ function App() {
       <PanelTransitionOverlay />
 
       <Toaster />
+      <ReEntrySummary state={reEntrySummary} />
       <UpdateNotification />
       <OnboardingFlow
         availability={availability}

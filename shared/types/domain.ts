@@ -371,6 +371,9 @@ export type TerminalFlowStatus = "running" | "paused-backpressure" | "paused-use
 /** Runtime lifecycle status for terminals (visibility + flow + exit/error) */
 export type TerminalRuntimeStatus = TerminalFlowStatus | "background" | "exited" | "error";
 
+/** Origin that spawned a terminal */
+export type TerminalSpawnSource = "quickrun" | "recipe" | "agent" | "palette";
+
 /** Structured error state for terminal restart failures */
 export interface TerminalRestartError {
   /** Human-readable error message */
@@ -520,6 +523,12 @@ interface PtyPanelData extends BasePanelData {
   detectedProcessId?: string;
   /** Captured agent session ID from graceful shutdown (used for session resume) */
   agentSessionId?: string;
+  /** Origin that spawned this terminal */
+  spawnedBy?: TerminalSpawnSource;
+  /** Timestamp when this terminal was created */
+  startedAt?: number;
+  /** Exit code from the last process exit */
+  exitCode?: number;
 }
 
 interface BrowserPanelData extends BasePanelData {
@@ -661,6 +670,12 @@ export interface TerminalInstance {
   detectedProcessId?: string;
   /** Captured agent session ID from graceful shutdown (used for session resume) */
   agentSessionId?: string;
+  /** Origin that spawned this terminal */
+  spawnedBy?: TerminalSpawnSource;
+  /** Timestamp when this terminal was created */
+  startedAt?: number;
+  /** Exit code from the last process exit */
+  exitCode?: number;
   // Note: Tab membership is now stored in TabGroup objects, not on panels
 }
 

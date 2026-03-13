@@ -1,4 +1,4 @@
-import type { MouseEvent } from "react";
+import { useState, useRef, useEffect } from "react";
 import {
   CircleDot,
   CheckCircle2,
@@ -6,12 +6,23 @@ import {
   GitMerge,
   GitPullRequestClosed,
   GitBranch,
+  MoreHorizontal,
+  ExternalLink,
+  Copy,
+  Check,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { formatTimeAgo } from "@/utils/timeAgo";
 import { actionService } from "@/services/ActionService";
 import type { GitHubIssue, GitHubPR, GitHubLabel, GitHubPRCIStatus } from "@shared/types/github";
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
+import {
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+} from "@/components/ui/dropdown-menu";
 import { useWorktreeDataStore } from "@/store/worktreeDataStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 
@@ -45,30 +56,6 @@ function isPR(item: GitHubIssue | GitHubPR): item is GitHubPR {
   return "isDraft" in item;
 }
 
-function buildTooltipLines(item: GitHubIssue | GitHubPR, isItemPR: boolean): string[] {
-  const lines: string[] = ["Open in GitHub"];
-
-  if (isItemPR && (item as GitHubPR).isDraft) {
-    lines.push("Draft");
-  }
-
-  if (isItemPR && (item as GitHubPR).headRefName) {
-    lines.push(`Branch: ${(item as GitHubPR).headRefName}`);
-  }
-
-  if (!isItemPR && "linkedPR" in item && item.linkedPR) {
-    const lpr = item.linkedPR;
-    lines.push(`Linked PR: #${lpr.number} (${lpr.state.toLowerCase()})`);
-  }
-
-  const issueLabels: GitHubLabel[] = !isItemPR && "labels" in item ? (item.labels ?? []) : [];
-  if (issueLabels.length > 0) {
-    lines.push(`Labels: ${issueLabels.map((l) => l.name).join(", ")}`);
-  }
-
-  return lines;
-}
-
 function getCIStatusInfo(status: GitHubPRCIStatus): { color: string; tooltip: string } {
   switch (status) {
     case "SUCCESS":
@@ -96,6 +83,17 @@ export function GitHubListItem({
   const StateIcon = getStateIcon(item.state, type);
   const stateColor = getStateColor(item.state, isItemPR && item.isDraft);
 
+  const [copied, setCopied] = useState(false);
+  const copyTimeoutRef = useRef<number | undefined>(undefined);
+
+  useEffect(() => {
+    return () => {
+      if (copyTimeoutRef.current) {
+        clearTimeout(copyTimeoutRef.current);
+      }
+    };
+  }, []);
+
   const matchedWorktree = useWorktreeDataStore((s) => {
     for (const wt of s.worktrees.values()) {
       if (type === "issue" ? wt.issueNumber === item.number : wt.prNumber === item.number)
@@ -107,27 +105,26 @@ export function GitHubListItem({
   const hasWorktree = matchedWorktree !== undefined;
   const isActiveWorktree = hasWorktree && matchedWorktree.id === activeWorktreeId;
 
-  const handleOpenExternal = (e: MouseEvent<HTMLButtonElement>) => {
-    e.stopPropagation();
+  const isForkPR = isItemPR && (item as GitHubPR).isFork === true;
+
+  const handleOpenExternal = () => {
     void actionService.dispatch("system.openExternal", { url: item.url }, { source: "user" });
   };
 
-  const handleCreateWorktree = (e: MouseEvent<HTMLButtonElement>) => {
-    e.stopPropagation();
-    if (onCreateWorktree) {
-      onCreateWorktree(item);
+  const handleCopyNumber = async () => {
+    if (copyTimeoutRef.current) {
+      clearTimeout(copyTimeoutRef.current);
+    }
+    try {
+      await navigator.clipboard.writeText(String(item.number));
+      setCopied(true);
+      copyTimeoutRef.current = window.setTimeout(() => setCopied(false), 1500);
+    } catch {
+      // clipboard not available
     }
   };
 
-  const handleSwitchToWorktree = (e: MouseEvent<HTMLButtonElement>) => {
-    e.stopPropagation();
-    if (onSwitchToWorktree && matchedWorktree) {
-      onSwitchToWorktree(matchedWorktree.id);
-    }
-  };
-
-  const tooltipLines = buildTooltipLines(item, isItemPR);
-  const isForkPR = isItemPR && (item as GitHubPR).isFork === true;
+  const issueLabels: GitHubLabel[] = !isItemPR && "labels" in item ? (item.labels ?? []) : [];
 
   return (
     <div
@@ -135,141 +132,178 @@ export function GitHubListItem({
       role="option"
       aria-selected={isActive}
       className={cn(
-        "p-3 hover:bg-muted/50 transition-colors group cursor-default",
+        "hover:bg-muted/50 transition-colors group cursor-default",
         isActive && "bg-muted/50"
       )}
     >
-      <div className="flex items-start gap-3">
-        <div className={cn("mt-0.5 shrink-0", stateColor)}>
+      {/* Top row: state icon, title, CI dot, #number copy */}
+      <div className="flex items-center gap-2 px-3 pt-2.5">
+        <span className={cn("shrink-0", stateColor)}>
           <StateIcon className="h-4 w-4" />
-        </div>
+        </span>
 
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2">
-            <TooltipProvider>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <button
-                    type="button"
-                    onClick={handleOpenExternal}
-                    className="text-sm font-medium text-foreground truncate hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 cursor-pointer text-left"
-                    aria-label={`Open ${type} "${item.title}" in GitHub`}
-                  >
-                    {item.title}
-                  </button>
-                </TooltipTrigger>
-                <TooltipContent side="bottom">
-                  {tooltipLines.map((line, i) => (
-                    <div key={i}>{line}</div>
-                  ))}
-                </TooltipContent>
-              </Tooltip>
-            </TooltipProvider>
-            {isItemPR && item.state === "OPEN" && item.ciStatus && (
-              <TooltipProvider>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <span
-                      className={cn(
-                        "shrink-0 w-2 h-2 rounded-full",
-                        getCIStatusInfo(item.ciStatus).color
-                      )}
-                      aria-label={getCIStatusInfo(item.ciStatus).tooltip}
-                    />
-                  </TooltipTrigger>
-                  <TooltipContent side="bottom">
-                    {getCIStatusInfo(item.ciStatus).tooltip}
-                  </TooltipContent>
-                </Tooltip>
-              </TooltipProvider>
-            )}
-            <span className="text-xs text-muted-foreground shrink-0">#{item.number}</span>
-            {hasWorktree && (
-              <TooltipProvider>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <span
-                      className={cn(
-                        "shrink-0",
-                        isActiveWorktree ? "text-canopy-accent" : "text-muted-foreground"
-                      )}
-                    >
-                      <GitBranch className="w-3.5 h-3.5" />
-                    </span>
-                  </TooltipTrigger>
-                  <TooltipContent side="bottom">
-                    {isActiveWorktree ? "Active worktree" : "Has worktree"}
-                  </TooltipContent>
-                </Tooltip>
-              </TooltipProvider>
-            )}
-          </div>
-          <div className="text-xs text-muted-foreground mt-1 flex items-center gap-1.5">
-            <span>{item.author.login}</span>
+        <span className="flex-1 min-w-0 text-sm font-medium text-foreground truncate">
+          {item.title}
+        </span>
+
+        {isItemPR && item.state === "OPEN" && item.ciStatus && (
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span
+                  className={cn(
+                    "shrink-0 w-2 h-2 rounded-full",
+                    getCIStatusInfo(item.ciStatus).color
+                  )}
+                  aria-label={getCIStatusInfo(item.ciStatus).tooltip}
+                />
+              </TooltipTrigger>
+              <TooltipContent side="bottom">
+                {getCIStatusInfo(item.ciStatus).tooltip}
+              </TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
+        )}
+
+        <TooltipProvider>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  void handleCopyNumber();
+                }}
+                className="shrink-0 text-xs text-muted-foreground hover:text-foreground transition-colors flex items-center gap-0.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded px-1"
+                aria-label={`Copy number ${item.number}`}
+              >
+                <span>#{item.number}</span>
+                {copied ? (
+                  <Check className="w-3 h-3 text-status-success" />
+                ) : (
+                  <Copy className="w-3 h-3 opacity-0 group-hover:opacity-100 transition-opacity" />
+                )}
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">{copied ? "Copied!" : "Copy number"}</TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
+      </div>
+
+      {/* Bottom row: metadata + worktree indicator + ellipsis menu */}
+      <div className="flex items-center gap-1.5 px-3 pb-2.5 mt-0.5 text-xs text-muted-foreground">
+        <span>{item.author.login}</span>
+        <span>&middot;</span>
+        <span>{formatTimeAgo(item.updatedAt)}</span>
+
+        {isItemPR && (item as GitHubPR).headRefName && (
+          <>
             <span>&middot;</span>
-            <span>{formatTimeAgo(item.updatedAt)}</span>
-          </div>
-        </div>
+            <span className="truncate max-w-[120px]">{(item as GitHubPR).headRefName}</span>
+          </>
+        )}
 
-        <div
-          className={cn(
-            "flex items-center gap-1 shrink-0 transition-opacity motion-reduce:transition-none",
-            isActive
-              ? "opacity-100"
-              : "opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto"
-          )}
-        >
-          {hasWorktree && !isActiveWorktree && onSwitchToWorktree && (
-            <TooltipProvider>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <button
-                    type="button"
-                    onClick={handleSwitchToWorktree}
-                    tabIndex={isActive ? 0 : -1}
-                    className="text-xs px-2 py-1 rounded hover:bg-muted transition-colors flex items-center gap-1 hover:text-canopy-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                  >
-                    <GitBranch className="w-3 h-3" />
-                    <span>Switch</span>
-                  </button>
-                </TooltipTrigger>
-                <TooltipContent side="bottom">Switch to existing worktree</TooltipContent>
-              </Tooltip>
-            </TooltipProvider>
-          )}
-          {!hasWorktree && onCreateWorktree && item.state === "OPEN" && (
-            <TooltipProvider>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <span className="inline-flex">
-                    <button
-                      type="button"
-                      onClick={handleCreateWorktree}
-                      tabIndex={isActive ? 0 : -1}
-                      disabled={isForkPR}
-                      className={cn(
-                        "text-xs px-2 py-1 rounded transition-colors flex items-center gap-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-                        isForkPR
-                          ? "opacity-40 cursor-not-allowed"
-                          : "hover:bg-muted hover:text-canopy-accent"
-                      )}
-                    >
-                      <GitBranch className="w-3 h-3" />
-                      <span>Create Worktree</span>
-                    </button>
-                  </span>
-                </TooltipTrigger>
-                <TooltipContent side="bottom">
-                  {isForkPR
-                    ? "Not available for fork PRs — the branch is on a different remote"
-                    : type === "issue"
-                      ? "Create Worktree from Issue"
-                      : "Create Worktree from PR"}
-                </TooltipContent>
-              </Tooltip>
-            </TooltipProvider>
-          )}
-        </div>
+        {!isItemPR && issueLabels.length > 0 && (
+          <>
+            <span>&middot;</span>
+            {issueLabels.slice(0, 2).map((label) => (
+              <span key={label.name} className="inline-flex items-center gap-1">
+                <span
+                  className="w-2 h-2 rounded-full shrink-0"
+                  style={{ backgroundColor: `#${label.color}` }}
+                />
+                <span className="truncate max-w-[80px]">{label.name}</span>
+              </span>
+            ))}
+          </>
+        )}
+
+        {!isItemPR && "linkedPR" in item && item.linkedPR && (
+          <>
+            <span>&middot;</span>
+            <span className="text-muted-foreground">PR #{item.linkedPR.number}</span>
+          </>
+        )}
+
+        <span className="flex-1" />
+
+        {hasWorktree && (
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span
+                  className={cn(
+                    "shrink-0",
+                    isActiveWorktree ? "text-canopy-accent" : "text-muted-foreground"
+                  )}
+                >
+                  <GitBranch className="w-3.5 h-3.5" />
+                </span>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">
+                {isActiveWorktree ? "Active worktree" : "Has worktree"}
+              </TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
+        )}
+
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <button
+              type="button"
+              onClick={(e) => e.stopPropagation()}
+              className={cn(
+                "shrink-0 p-0.5 rounded hover:bg-muted transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                isActive
+                  ? "opacity-100"
+                  : "opacity-0 group-hover:opacity-100 group-focus-within:opacity-100"
+              )}
+              aria-label="More actions"
+            >
+              <MoreHorizontal className="h-3.5 w-3.5" />
+            </button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent side="bottom" align="end">
+            <DropdownMenuItem onSelect={() => handleOpenExternal()}>
+              <ExternalLink className="h-3.5 w-3.5 mr-2" />
+              Open in GitHub
+            </DropdownMenuItem>
+
+            {hasWorktree && !isActiveWorktree && onSwitchToWorktree && matchedWorktree && (
+              <>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onSelect={() => onSwitchToWorktree(matchedWorktree.id)}>
+                  <GitBranch className="h-3.5 w-3.5 mr-2" />
+                  Switch to Worktree
+                </DropdownMenuItem>
+              </>
+            )}
+
+            {!hasWorktree && onCreateWorktree && item.state === "OPEN" && (
+              <>
+                <DropdownMenuSeparator />
+                {isForkPR ? (
+                  <DropdownMenuItem disabled>
+                    <div className="flex flex-col gap-0.5">
+                      <span className="flex items-center gap-2">
+                        <GitBranch className="h-3.5 w-3.5" />
+                        Create Worktree
+                      </span>
+                      <span className="text-[10px] text-muted-foreground leading-tight">
+                        Not available for fork PRs
+                      </span>
+                    </div>
+                  </DropdownMenuItem>
+                ) : (
+                  <DropdownMenuItem onSelect={() => onCreateWorktree(item)}>
+                    <GitBranch className="h-3.5 w-3.5 mr-2" />
+                    Create Worktree
+                  </DropdownMenuItem>
+                )}
+              </>
+            )}
+          </DropdownMenuContent>
+        </DropdownMenu>
       </div>
     </div>
   );

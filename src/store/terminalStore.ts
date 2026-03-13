@@ -762,6 +762,11 @@ export function setupTerminalStoreListeners() {
       return;
     }
 
+    // Store exit code on the terminal before applying exit behavior
+    useTerminalStore.setState((s) => ({
+      terminals: s.terminals.map((t) => (t.id === id ? { ...t, exitCode } : t)),
+    }));
+
     state.setRuntimeStatus(id, "exited");
 
     // If already trashed, this is TTL expiry cleanup - permanently remove

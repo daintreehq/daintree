@@ -13,6 +13,35 @@ import { terminalClient } from "@/clients";
 import { formatWithBracketedPaste } from "@shared/utils/terminalInputProtocol";
 import { fireWatchNotification } from "@/lib/watchNotification";
 import {
+  ArrowDownFromLine,
+  ArrowDownToLine,
+  Bell,
+  BellOff,
+  Bot,
+  Clipboard,
+  Copy,
+  CopyPlus,
+  ExternalLink,
+  GitBranch,
+  Globe,
+  Info,
+  LayoutGrid,
+  Link,
+  Lock,
+  Maximize2,
+  Minimize2,
+  OctagonX,
+  Pencil,
+  Play,
+  RefreshCw,
+  Repeat2,
+  RotateCcw,
+  Search,
+  SquareTerminal,
+  Trash2,
+  Unlock,
+} from "lucide-react";
+import {
   ContextMenu,
   ContextMenuContent,
   ContextMenuItem,
@@ -23,6 +52,8 @@ import {
   ContextMenuSubTrigger,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
+
+const ICON_CLASS = "w-3.5 h-3.5 mr-2 shrink-0";
 
 const URL_REGEX = /(?:https?|ftp):\/\/[^\s"'<>()[\]{}]+/g;
 
@@ -349,7 +380,10 @@ export function TerminalContextMenu({
     <>
       {worktrees.length > 1 && (
         <ContextMenuSub>
-          <ContextMenuSubTrigger>Move to Worktree</ContextMenuSubTrigger>
+          <ContextMenuSubTrigger>
+            <GitBranch className={ICON_CLASS} aria-hidden="true" />
+            Move to Worktree
+          </ContextMenuSubTrigger>
           <ContextMenuSubContent>
             {worktrees.map((wt) => {
               const isCurrent = wt.id === terminal.worktreeId;
@@ -360,6 +394,7 @@ export function TerminalContextMenu({
                   disabled={isCurrent}
                   onSelect={() => handleAction(`move-to-worktree:${wt.id}`)}
                 >
+                  <GitBranch className={ICON_CLASS} aria-hidden="true" />
                   {label}
                 </ContextMenuItem>
               );
@@ -370,10 +405,20 @@ export function TerminalContextMenu({
       <ContextMenuItem
         onSelect={() => handleAction(currentLocation === "grid" ? "move-to-dock" : "move-to-grid")}
       >
+        {currentLocation === "grid" ? (
+          <ArrowDownToLine className={ICON_CLASS} aria-hidden="true" />
+        ) : (
+          <LayoutGrid className={ICON_CLASS} aria-hidden="true" />
+        )}
         {currentLocation === "grid" ? "Move to Dock" : "Move to Grid"}
       </ContextMenuItem>
       {currentLocation === "grid" && (
         <ContextMenuItem onSelect={() => handleAction("toggle-maximize")}>
+          {isMaximized ? (
+            <Minimize2 className={ICON_CLASS} aria-hidden="true" />
+          ) : (
+            <Maximize2 className={ICON_CLASS} aria-hidden="true" />
+          )}
           {isMaximized ? "Restore Size" : "Maximize"}
           <ContextMenuShortcut>^⇧F</ContextMenuShortcut>
         </ContextMenuItem>
@@ -394,25 +439,37 @@ export function TerminalContextMenu({
           {layoutSection}
           <ContextMenuSeparator />
           <ContextMenuItem onSelect={() => handleAction("reload-browser")}>
+            <RefreshCw className={ICON_CLASS} aria-hidden="true" />
             Reload Page
           </ContextMenuItem>
           <ContextMenuItem disabled={!hasUrl} onSelect={() => handleAction("open-external")}>
+            <Globe className={ICON_CLASS} aria-hidden="true" />
             Open in Browser
           </ContextMenuItem>
           <ContextMenuItem disabled={!hasUrl} onSelect={() => handleAction("copy-url")}>
+            <Link className={ICON_CLASS} aria-hidden="true" />
             Copy URL
           </ContextMenuItem>
           <ContextMenuSeparator />
           <ContextMenuItem onSelect={() => handleAction("duplicate")}>
+            <CopyPlus className={ICON_CLASS} aria-hidden="true" />
             Duplicate Browser
           </ContextMenuItem>
-          <ContextMenuItem onSelect={() => handleAction("rename")}>Rename Browser</ContextMenuItem>
+          <ContextMenuItem onSelect={() => handleAction("rename")}>
+            <Pencil className={ICON_CLASS} aria-hidden="true" />
+            Rename Browser
+          </ContextMenuItem>
           <ContextMenuSeparator />
           <ContextMenuItem onSelect={() => handleAction("background")}>
+            <ArrowDownFromLine className={ICON_CLASS} aria-hidden="true" />
             Send to Background
           </ContextMenuItem>
-          <ContextMenuItem onSelect={() => handleAction("trash")}>Close Browser</ContextMenuItem>
+          <ContextMenuItem onSelect={() => handleAction("trash")}>
+            <Trash2 className={ICON_CLASS} aria-hidden="true" />
+            Close Browser
+          </ContextMenuItem>
           <ContextMenuItem destructive onSelect={() => handleAction("kill")}>
+            <OctagonX className={ICON_CLASS} aria-hidden="true" />
             Remove Browser
           </ContextMenuItem>
         </ContextMenuContent>
@@ -433,16 +490,19 @@ export function TerminalContextMenu({
           {layoutSection}
           <ContextMenuSeparator />
           <ContextMenuItem disabled={!hasNotePath} onSelect={() => handleAction("rename")}>
+            <Pencil className={ICON_CLASS} aria-hidden="true" />
             Rename Note
           </ContextMenuItem>
           <ContextMenuItem
             disabled={!hasNotePath}
             onSelect={() => handleAction("reveal-in-palette")}
           >
+            <Search className={ICON_CLASS} aria-hidden="true" />
             Reveal in Notes Palette
           </ContextMenuItem>
           <ContextMenuSeparator />
           <ContextMenuItem onSelect={() => handleAction("background")}>
+            <ArrowDownFromLine className={ICON_CLASS} aria-hidden="true" />
             Send to Background
           </ContextMenuItem>
           <ContextMenuItem
@@ -450,9 +510,13 @@ export function TerminalContextMenu({
             disabled={!hasNotePath}
             onSelect={() => handleAction("delete-note")}
           >
+            <Trash2 className={ICON_CLASS} aria-hidden="true" />
             Delete Note
           </ContextMenuItem>
-          <ContextMenuItem onSelect={() => handleAction("trash")}>Close Note</ContextMenuItem>
+          <ContextMenuItem onSelect={() => handleAction("trash")}>
+            <Trash2 className={ICON_CLASS} aria-hidden="true" />
+            Close Note
+          </ContextMenuItem>
         </ContextMenuContent>
       </ContextMenu>
     );
@@ -471,29 +535,37 @@ export function TerminalContextMenu({
           {layoutSection}
           <ContextMenuSeparator />
           <ContextMenuItem onSelect={() => handleAction("reload-browser")}>
+            <RefreshCw className={ICON_CLASS} aria-hidden="true" />
             Reload Preview
           </ContextMenuItem>
           <ContextMenuItem disabled={!hasUrl} onSelect={() => handleAction("open-external")}>
+            <Globe className={ICON_CLASS} aria-hidden="true" />
             Open in Browser
           </ContextMenuItem>
           <ContextMenuItem disabled={!hasUrl} onSelect={() => handleAction("copy-url")}>
+            <Link className={ICON_CLASS} aria-hidden="true" />
             Copy URL
           </ContextMenuItem>
           <ContextMenuSeparator />
           <ContextMenuItem onSelect={() => handleAction("duplicate")}>
+            <CopyPlus className={ICON_CLASS} aria-hidden="true" />
             Duplicate Dev Preview
           </ContextMenuItem>
           <ContextMenuItem onSelect={() => handleAction("rename")}>
+            <Pencil className={ICON_CLASS} aria-hidden="true" />
             Rename Dev Preview
           </ContextMenuItem>
           <ContextMenuSeparator />
           <ContextMenuItem onSelect={() => handleAction("background")}>
+            <ArrowDownFromLine className={ICON_CLASS} aria-hidden="true" />
             Send to Background
           </ContextMenuItem>
           <ContextMenuItem onSelect={() => handleAction("trash")}>
+            <Trash2 className={ICON_CLASS} aria-hidden="true" />
             Close Dev Preview
           </ContextMenuItem>
           <ContextMenuItem destructive onSelect={() => handleAction("kill")}>
+            <OctagonX className={ICON_CLASS} aria-hidden="true" />
             Stop Dev Server
           </ContextMenuItem>
         </ContextMenuContent>
@@ -507,6 +579,7 @@ export function TerminalContextMenu({
     <>
       {(!isPlainTerminal || !!currentAgentId) && (
         <ContextMenuItem onSelect={() => handleAction("convert-to:terminal")}>
+          <SquareTerminal className={ICON_CLASS} aria-hidden="true" />
           Terminal
         </ContextMenuItem>
       )}
@@ -520,6 +593,7 @@ export function TerminalContextMenu({
             disabled={isCurrent}
             onSelect={() => handleAction(`convert-to:${agentId}`)}
           >
+            <Bot className={ICON_CLASS} aria-hidden="true" />
             {config.name}
           </ContextMenuItem>
         );
@@ -542,10 +616,12 @@ export function TerminalContextMenu({
         {hasPty && (
           <>
             <ContextMenuItem disabled={!hasSelection} onSelect={() => handleAction("copy")}>
+              <Copy className={ICON_CLASS} aria-hidden="true" />
               Copy
               <ContextMenuShortcut>{modifierKey}C</ContextMenuShortcut>
             </ContextMenuItem>
             <ContextMenuItem onSelect={() => handleAction("paste")}>
+              <Clipboard className={ICON_CLASS} aria-hidden="true" />
               Paste
               <ContextMenuShortcut>{isMac ? `${modifierKey}V` : "Ctrl+⇧V"}</ContextMenuShortcut>
             </ContextMenuItem>
@@ -553,9 +629,11 @@ export function TerminalContextMenu({
               <>
                 <ContextMenuSeparator />
                 <ContextMenuItem onSelect={() => handleAction(`open-link:${hoveredUrl}`)}>
+                  <ExternalLink className={ICON_CLASS} aria-hidden="true" />
                   Open Link
                 </ContextMenuItem>
                 <ContextMenuItem onSelect={() => handleAction(`copy-link:${hoveredUrl}`)}>
+                  <Link className={ICON_CLASS} aria-hidden="true" />
                   Copy Link Address
                 </ContextMenuItem>
               </>
@@ -567,46 +645,74 @@ export function TerminalContextMenu({
         <ContextMenuSeparator />
         {hasPty && (
           <ContextMenuItem onSelect={() => handleAction("restart")}>
+            <RotateCcw className={ICON_CLASS} aria-hidden="true" />
             Restart Terminal
           </ContextMenuItem>
         )}
         {hasPty && (
-          <ContextMenuItem onSelect={() => handleAction("redraw")}>Redraw Terminal</ContextMenuItem>
+          <ContextMenuItem onSelect={() => handleAction("redraw")}>
+            <RefreshCw className={ICON_CLASS} aria-hidden="true" />
+            Redraw Terminal
+          </ContextMenuItem>
         )}
         {isPaused && (
           <ContextMenuItem onSelect={() => handleAction("force-resume")}>
+            <Play className={ICON_CLASS} aria-hidden="true" />
             Force Resume (Paused)
           </ContextMenuItem>
         )}
         <ContextMenuItem onSelect={() => handleAction("toggle-input-lock")}>
+          {terminal.isInputLocked ? (
+            <Unlock className={ICON_CLASS} aria-hidden="true" />
+          ) : (
+            <Lock className={ICON_CLASS} aria-hidden="true" />
+          )}
           {terminal.isInputLocked ? "Unlock Input" : "Lock Input"}
         </ContextMenuItem>
         {terminal.agentId && (
           <ContextMenuItem onSelect={() => handleAction("toggle-watch")}>
+            {isWatched ? (
+              <BellOff className={ICON_CLASS} aria-hidden="true" />
+            ) : (
+              <Bell className={ICON_CLASS} aria-hidden="true" />
+            )}
             {isWatched ? "Cancel Watch" : "Watch Terminal"}
             <ContextMenuShortcut>{isMac ? "⌘⇧W" : "Ctrl+⇧W"}</ContextMenuShortcut>
           </ContextMenuItem>
         )}
         {showConvertTo && (
           <ContextMenuSub>
-            <ContextMenuSubTrigger>Convert to</ContextMenuSubTrigger>
+            <ContextMenuSubTrigger>
+              <Repeat2 className={ICON_CLASS} aria-hidden="true" />
+              Convert to
+            </ContextMenuSubTrigger>
             <ContextMenuSubContent>{convertToItems}</ContextMenuSubContent>
           </ContextMenuSub>
         )}
         <ContextMenuSeparator />
         <ContextMenuItem onSelect={() => handleAction("duplicate")}>
+          <CopyPlus className={ICON_CLASS} aria-hidden="true" />
           Duplicate Terminal
         </ContextMenuItem>
-        <ContextMenuItem onSelect={() => handleAction("rename")}>Rename Terminal</ContextMenuItem>
+        <ContextMenuItem onSelect={() => handleAction("rename")}>
+          <Pencil className={ICON_CLASS} aria-hidden="true" />
+          Rename Terminal
+        </ContextMenuItem>
         <ContextMenuItem onSelect={() => handleAction("view-info")}>
+          <Info className={ICON_CLASS} aria-hidden="true" />
           View Terminal Info
         </ContextMenuItem>
         <ContextMenuSeparator />
         <ContextMenuItem onSelect={() => handleAction("background")}>
+          <ArrowDownFromLine className={ICON_CLASS} aria-hidden="true" />
           Send to Background
         </ContextMenuItem>
-        <ContextMenuItem onSelect={() => handleAction("trash")}>Trash Terminal</ContextMenuItem>
+        <ContextMenuItem onSelect={() => handleAction("trash")}>
+          <Trash2 className={ICON_CLASS} aria-hidden="true" />
+          Trash Terminal
+        </ContextMenuItem>
         <ContextMenuItem destructive onSelect={() => handleAction("kill")}>
+          <OctagonX className={ICON_CLASS} aria-hidden="true" />
           Kill Terminal
         </ContextMenuItem>
       </ContextMenuContent>

@@ -30,7 +30,7 @@ interface GitHubResourceListProps {
   initialCount?: number | null;
 }
 
-const ITEM_HEIGHT_PX = 56;
+const ITEM_HEIGHT_PX = 68;
 const MAX_SKELETON_ITEMS = 6;
 
 export function GitHubResourceList({
@@ -399,21 +399,17 @@ export function GitHubResourceList({
           {Array.from({ length: renderCount }).map((_, i) => (
             <div
               key={i}
-              className="p-3 animate-pulse-delayed box-border"
+              className="animate-pulse-delayed box-border"
               style={{ height: `${ITEM_HEIGHT_PX}px` }}
             >
-              <div className="flex items-start gap-3 h-full">
-                <div className="w-4 h-4 rounded-full bg-muted mt-0.5 shrink-0" />
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2">
-                    <div className="h-5 bg-muted rounded w-3/4" />
-                    <div className="h-4 bg-muted rounded w-10 shrink-0" />
-                  </div>
-                  <div className="mt-1 flex items-center gap-1.5">
-                    <div className="h-4 bg-muted rounded w-16" />
-                    <div className="h-4 bg-muted rounded w-14" />
-                  </div>
-                </div>
+              <div className="flex items-center gap-2 px-3 pt-2.5">
+                <div className="w-4 h-4 rounded-full bg-muted shrink-0" />
+                <div className="h-4 bg-muted rounded flex-1" />
+                <div className="h-4 bg-muted rounded w-8 shrink-0" />
+              </div>
+              <div className="flex items-center gap-1.5 px-3 mt-1.5 pb-2.5">
+                <div className="h-3 bg-muted rounded w-16" />
+                <div className="h-3 bg-muted rounded w-14" />
               </div>
             </div>
           ))}

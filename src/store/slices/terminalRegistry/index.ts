@@ -388,6 +388,8 @@ export const createTerminalRegistrySlice =
             isInputLocked: options.isInputLocked,
             exitBehavior: options.exitBehavior,
             agentSessionId: options.agentSessionId,
+            spawnedBy: options.spawnedBy,
+            startedAt: Date.now(),
             // Dev-preview specific fields
             ...(kind === "dev-preview" && {
               devCommand: options.devCommand,
@@ -1576,6 +1578,8 @@ export const createTerminalRegistrySlice =
                     agentSessionId: undefined,
                     isRestarting: true,
                     restartError: undefined,
+                    exitCode: undefined,
+                    startedAt: Date.now(),
                   }
                 : t
             );

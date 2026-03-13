@@ -33,7 +33,7 @@ vi.mock("../logger.js", () => ({
   logError: vi.fn(),
 }));
 
-import { getLatestTrackedFileMtime, getWorktreeChangesWithStats } from "../git.js";
+import { getLatestTrackedFileMtime, getWorktreeChangesWithStats, listCommits } from "../git.js";
 import { simpleGit } from "simple-git";
 import { promises as fs } from "fs";
 
@@ -136,5 +136,151 @@ describe("getWorktreeChangesWithStats", () => {
     await expect(getWorktreeChangesWithStats("/valid/worktree", true)).rejects.not.toThrow(
       WorktreeRemovedError
     );
+  });
+});
+
+describe("listCommits", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  function makeLogOutput(
+    commits: {
+      hash: string;
+      short: string;
+      msg: string;
+      body: string;
+      name: string;
+      email: string;
+      date: string;
+    }[]
+  ): string {
+    return commits
+      .map(
+        (c) =>
+          `${c.hash}\x00${c.short}\x00${c.msg}\x00${c.body}\x00${c.name}\x00${c.email}\x00${c.date}\x00END`
+      )
+      .join("\n");
+  }
+
+  it("parses commits with pipe characters in body", async () => {
+    mockGit.raw
+      .mockResolvedValueOnce("5") // rev-list --count
+      .mockResolvedValueOnce(
+        makeLogOutput([
+          {
+            hash: "abc123def456",
+            short: "abc123d",
+            msg: "feat: add table",
+            body: "| Col A | Col B |\n|-------|-------|",
+            name: "Test Author",
+            email: "test@test.com",
+            date: "2024-01-15T12:00:00+00:00",
+          },
+        ])
+      );
+
+    const result = await listCommits({ cwd: "/test", branch: "main" });
+
+    expect(result.items).toHaveLength(1);
+    expect(result.items[0].hash).toBe("abc123def456");
+    expect(result.items[0].message).toBe("feat: add table");
+    expect(result.items[0].body).toBe("| Col A | Col B |\n|-------|-------|");
+    expect(result.items[0].date).toBe("2024-01-15T12:00:00+00:00");
+    expect(result.total).toBe(5);
+  });
+
+  it("parses multiple commits where one has pipe-heavy body", async () => {
+    mockGit.raw.mockResolvedValueOnce("2").mockResolvedValueOnce(
+      makeLogOutput([
+        {
+          hash: "aaa111",
+          short: "aaa111",
+          msg: "docs: add table",
+          body: "| A | B | C |\n|---|---|---|\n| 1 | 2 | 3 |",
+          name: "Alice",
+          email: "alice@test.com",
+          date: "2024-01-15T12:00:00+00:00",
+        },
+        {
+          hash: "bbb222",
+          short: "bbb222",
+          msg: "fix: normal commit",
+          body: "",
+          name: "Bob",
+          email: "bob@test.com",
+          date: "2024-01-14T12:00:00+00:00",
+        },
+      ])
+    );
+
+    const result = await listCommits({ cwd: "/test", branch: "main" });
+
+    expect(result.items).toHaveLength(2);
+    expect(result.items[0].body).toBe("| A | B | C |\n|---|---|---|\n| 1 | 2 | 3 |");
+    expect(result.items[0].date).toBe("2024-01-15T12:00:00+00:00");
+    expect(result.items[1].hash).toBe("bbb222");
+    expect(result.items[1].body).toBeUndefined();
+    expect(result.items[1].date).toBe("2024-01-14T12:00:00+00:00");
+  });
+
+  it("handles empty commit body", async () => {
+    mockGit.raw.mockResolvedValueOnce("1").mockResolvedValueOnce(
+      makeLogOutput([
+        {
+          hash: "def456",
+          short: "def456",
+          msg: "fix: typo",
+          body: "",
+          name: "Author",
+          email: "a@b.com",
+          date: "2024-01-15T12:00:00+00:00",
+        },
+      ])
+    );
+
+    const result = await listCommits({ cwd: "/test", branch: "main" });
+
+    expect(result.items).toHaveLength(1);
+    expect(result.items[0].body).toBeUndefined();
+  });
+
+  it("respects hasMore pagination", async () => {
+    const commits = Array.from({ length: 3 }, (_, i) => ({
+      hash: `hash${i}`,
+      short: `h${i}`,
+      msg: `msg ${i}`,
+      body: "",
+      name: "A",
+      email: "a@b.com",
+      date: "2024-01-15T12:00:00+00:00",
+    }));
+
+    mockGit.raw.mockResolvedValueOnce("10").mockResolvedValueOnce(makeLogOutput(commits));
+
+    const result = await listCommits({ cwd: "/test", branch: "main", limit: 2 });
+
+    expect(result.items).toHaveLength(2);
+    expect(result.hasMore).toBe(true);
+  });
+
+  it("passes --grep when search is provided", async () => {
+    mockGit.raw.mockResolvedValueOnce("0").mockResolvedValueOnce("");
+
+    await listCommits({ cwd: "/test", branch: "main", search: "bugfix" });
+
+    const logCall = mockGit.raw.mock.calls[1][0] as string[];
+    expect(logCall).toContain("--grep=bugfix");
+    expect(logCall).toContain("-i");
+  });
+
+  it("returns empty result on git error", async () => {
+    mockGit.raw.mockRejectedValue(new Error("not a git repo"));
+
+    const result = await listCommits({ cwd: "/invalid" });
+
+    expect(result.items).toEqual([]);
+    expect(result.hasMore).toBe(false);
+    expect(result.total).toBe(0);
   });
 });

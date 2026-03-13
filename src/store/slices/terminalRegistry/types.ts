@@ -13,6 +13,7 @@ import type {
   TabGroup,
   TabGroupLocation,
   BrowserHistory,
+  TerminalSpawnSource,
 } from "@/types";
 import type { PanelKind } from "@/types";
 
@@ -74,6 +75,8 @@ export interface AddTerminalOptions {
   exitBehavior?: PanelExitBehavior;
   /** Captured agent session ID from graceful shutdown (used for session resume) */
   agentSessionId?: string;
+  /** Origin that spawned this terminal */
+  spawnedBy?: TerminalSpawnSource;
   // Note: Tab membership is now managed via createTabGroup/addPanelToGroup, not on terminals
 }
 

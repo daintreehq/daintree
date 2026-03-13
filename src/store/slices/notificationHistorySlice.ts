@@ -18,6 +18,8 @@ export interface NotificationHistoryEntry {
   correlationId?: string;
   /** True when the user has seen this notification (shown as toast or explicitly marked as read). False when missed (app blurred or low priority). */
   seenAsToast: boolean;
+  /** True after being included in a re-entry summary shown on window refocus. */
+  summarized: boolean;
   context?: {
     projectId?: string;
     worktreeId?: string;
@@ -26,7 +28,10 @@ export interface NotificationHistoryEntry {
   actions?: NotificationHistoryAction[];
 }
 
-type AddEntryInput = Omit<NotificationHistoryEntry, "id" | "timestamp" | "seenAsToast"> & {
+type AddEntryInput = Omit<
+  NotificationHistoryEntry,
+  "id" | "timestamp" | "seenAsToast" | "summarized"
+> & {
   seenAsToast?: boolean;
 };
 
@@ -39,6 +44,7 @@ interface NotificationHistoryState {
   dismissEntry: (id: string) => void;
   clearAll: () => void;
   markAllRead: () => void;
+  markSummarized: (ids: string[]) => void;
 }
 
 export const useNotificationHistoryStore = create<NotificationHistoryState>((set) => ({
@@ -49,6 +55,7 @@ export const useNotificationHistoryStore = create<NotificationHistoryState>((set
     const newEntry: NotificationHistoryEntry = {
       ...entry,
       seenAsToast,
+      summarized: false,
       id: crypto.randomUUID(),
       timestamp: Date.now(),
     };
@@ -72,6 +79,15 @@ export const useNotificationHistoryStore = create<NotificationHistoryState>((set
       unreadCount: 0,
       entries: state.entries.map((e) => (e.seenAsToast ? e : { ...e, seenAsToast: true })),
     })),
+  markSummarized: (ids) =>
+    set((state) => {
+      const idSet = new Set(ids);
+      return {
+        entries: state.entries.map((e) =>
+          idSet.has(e.id) && !e.summarized ? { ...e, summarized: true } : e
+        ),
+      };
+    }),
 }));
 
 /** Returns all history entries that share the given correlationId */
