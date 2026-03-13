@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, useCallback, useRef, type KeyboardEvent } from "react";
 import { useDebounce } from "@/hooks/useDebounce";
-import { Search, ExternalLink, RefreshCw, WifiOff, Plus, Settings } from "lucide-react";
+import { Search, ExternalLink, RefreshCw, WifiOff, Plus, Settings, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { githubClient } from "@/clients/githubClient";
@@ -39,7 +39,12 @@ export function GitHubResourceList({
   onClose,
   initialCount,
 }: GitHubResourceListProps) {
-  const [searchQuery, setSearchQuery] = useState("");
+  const searchQuery = useGitHubFilterStore((s) =>
+    type === "issue" ? s.issueSearchQuery : s.prSearchQuery
+  );
+  const setSearchQuery = useGitHubFilterStore((s) =>
+    type === "issue" ? s.setIssueSearchQuery : s.setPrSearchQuery
+  ) as (q: string) => void;
   const filterState = useGitHubFilterStore((s) => (type === "issue" ? s.issueFilter : s.prFilter));
   const setFilterState = useGitHubFilterStore((s) =>
     type === "issue" ? s.setIssueFilter : s.setPrFilter
@@ -267,6 +272,11 @@ export function GitHubResourceList({
     [selectWorktree, onClose]
   );
 
+  const handleClearSearch = useCallback(() => {
+    setSearchQuery("");
+    inputRef.current?.focus();
+  }, [setSearchQuery]);
+
   const handleRetry = () => {
     setCursor(null);
     fetchData(null, false, undefined);
@@ -452,13 +462,23 @@ export function GitHubResourceList({
             aria-activedescendant={activeItemId}
             aria-label={`Search ${type === "issue" ? "issues" : "pull requests"}`}
             className={cn(
-              "w-full h-8 pl-8 pr-3 rounded-[var(--radius-md)] text-sm",
+              "w-full h-8 pl-8 pr-8 rounded-[var(--radius-md)] text-sm",
               "bg-overlay-soft border border-[var(--border-overlay)]",
               "text-canopy-text placeholder:text-muted-foreground",
               "focus:outline-none focus:ring-1 focus:ring-canopy-accent focus:border-canopy-accent",
               "transition-colors"
             )}
           />
+          {searchQuery && (
+            <button
+              type="button"
+              onClick={handleClearSearch}
+              className="absolute right-2.5 top-1/2 -translate-y-1/2 flex items-center justify-center w-4 h-4 rounded text-muted-foreground hover:text-canopy-text"
+              aria-label="Clear search"
+            >
+              <X className="w-3 h-3" />
+            </button>
+          )}
         </div>
 
         <div
