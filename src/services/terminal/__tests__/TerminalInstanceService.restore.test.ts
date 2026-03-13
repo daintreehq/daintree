@@ -463,7 +463,14 @@ describe("TerminalInstanceService - Incremental Restore", () => {
     mockTerminal.buffer.active.baseY = 200;
     mockTerminal.buffer.active.viewportY = 150;
 
-    // After write, simulate buffer repopulated with new baseY
+    // reset clears buffer state; write repopulates it
+    const origReset = mockTerminal.reset;
+    mockTerminal.reset = vi.fn(() => {
+      origReset();
+      mockTerminal.buffer.active.baseY = 0;
+      mockTerminal.buffer.active.viewportY = 0;
+    });
+
     const origWrite = mockTerminal.write;
     mockTerminal.write = vi.fn((data: string, callback?: () => void) => {
       mockTerminal.buffer.active.baseY = 300;
@@ -475,6 +482,7 @@ describe("TerminalInstanceService - Incremental Restore", () => {
     await flushMicrotasks();
 
     // offset was 200 - 150 = 50, new baseY = 300, so scrollToLine(250)
+    expect(mockTerminal.scrollToLine).toHaveBeenCalledTimes(1);
     expect(mockTerminal.scrollToLine).toHaveBeenCalledWith(250);
     expect(mockTerminal.scrollToBottom).not.toHaveBeenCalled();
 
@@ -553,8 +561,43 @@ describe("TerminalInstanceService - Incremental Restore", () => {
     await restorePromise;
 
     // offset was 200 - 150 = 50, new baseY = 300, so scrollToLine(250)
+    expect(mockTerminal.scrollToLine).toHaveBeenCalledTimes(1);
     expect(mockTerminal.scrollToLine).toHaveBeenCalledWith(250);
     expect(mockTerminal.scrollToBottom).not.toHaveBeenCalled();
+
+    terminalInstanceService.destroy(id);
+  });
+
+  it("sync restore clamps scroll to 0 when offset exceeds new baseY", async () => {
+    const id = "test-scroll-sync-clamp";
+    const smallState = "x".repeat(1000);
+
+    const terminal = terminalInstanceService.getOrCreate(
+      id,
+      "terminal",
+      {},
+      () => 3 as any,
+      undefined
+    );
+
+    terminal.terminal = mockTerminal;
+    terminal.isUserScrolledBack = true;
+    mockTerminal.buffer.active.baseY = 200;
+    mockTerminal.buffer.active.viewportY = 100;
+
+    const origWrite = mockTerminal.write;
+    mockTerminal.write = vi.fn((data: string, callback?: () => void) => {
+      mockTerminal.buffer.active.baseY = 50;
+      mockTerminal.buffer.active.viewportY = 50;
+      origWrite(data, callback);
+    });
+
+    terminalInstanceService.restoreFromSerialized(id, smallState);
+    await flushMicrotasks();
+
+    // offset was 200 - 100 = 100, new baseY = 50, so Math.max(0, 50 - 100) = 0
+    expect(mockTerminal.scrollToLine).toHaveBeenCalledTimes(1);
+    expect(mockTerminal.scrollToLine).toHaveBeenCalledWith(0);
 
     terminalInstanceService.destroy(id);
   });
@@ -599,6 +642,7 @@ describe("TerminalInstanceService - Incremental Restore", () => {
     await restorePromise;
 
     // offset was 200 - 100 = 100, new baseY = 50, so Math.max(0, 50 - 100) = 0
+    expect(mockTerminal.scrollToLine).toHaveBeenCalledTimes(1);
     expect(mockTerminal.scrollToLine).toHaveBeenCalledWith(0);
 
     terminalInstanceService.destroy(id);
