@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/clients", () => ({
@@ -35,14 +36,17 @@ vi.mock("../TerminalAddonManager", () => ({
 
 describe("TerminalInstanceService detach blur", () => {
   type DetachTestService = {
-    instances: Map<string, any>;
+    instances: Map<string, unknown>;
     offscreenManager: {
       ensureHiddenContainer: () => HTMLDivElement | null;
       getOffscreenSlot: (id: string) => HTMLDivElement | undefined;
     };
     detach: (id: string, container: HTMLElement | null) => void;
     detachForProjectSwitch: (id: string) => void;
-    resizeController: { clearResizeJob: any; clearSettledTimer: any };
+    resizeController: {
+      clearResizeJob: (managed: unknown) => void;
+      clearSettledTimer: (id: string) => void;
+    };
   };
 
   let service: DetachTestService;
