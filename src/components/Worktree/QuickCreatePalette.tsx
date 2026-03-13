@@ -1,9 +1,11 @@
+import { useCallback } from "react";
 import { cn } from "@/lib/utils";
 import { SearchablePalette } from "@/components/ui/SearchablePalette";
 import type { QuickCreateItem, UseQuickCreatePaletteReturn } from "@/hooks/useQuickCreatePalette";
 import { getAutoAssign } from "@shared/types/domain";
 import type { TerminalRecipe } from "@/types";
 import { Settings2 } from "lucide-react";
+import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 
 const TYPE_BADGES: Record<string, string> = {
   terminal: "Terminal",
@@ -87,6 +89,12 @@ export interface QuickCreatePaletteProps {
 }
 
 export function QuickCreatePalette({ palette }: QuickCreatePaletteProps) {
+  const closeQuickCreate = useWorktreeSelectionStore((s) => s.closeQuickCreate);
+  const handleClose = useCallback(() => {
+    closeQuickCreate();
+    palette.close();
+  }, [closeQuickCreate, palette]);
+
   const showAssignToggle =
     palette.selectedRecipe && getAutoAssign(palette.selectedRecipe) === "prompt";
 
@@ -100,7 +108,7 @@ export function QuickCreatePalette({ palette }: QuickCreatePaletteProps) {
       onSelectPrevious={palette.selectPrevious}
       onSelectNext={palette.selectNext}
       onConfirm={palette.confirmSelection}
-      onClose={palette.close}
+      onClose={handleClose}
       getItemId={(item) => item.id}
       renderItem={(item, _index, isSelected) => (
         <RecipeListItem
@@ -108,8 +116,7 @@ export function QuickCreatePalette({ palette }: QuickCreatePaletteProps) {
           item={item}
           isSelected={isSelected}
           onClick={() => {
-            palette.setSelectedIndex(_index);
-            palette.confirmSelection();
+            palette.confirmItem(item);
           }}
         />
       )}

@@ -115,7 +115,9 @@ export function registerWorkflowActions(actions: ActionRegistry): void {
         throw new Error("Failed to create worktree: no worktreeId returned from backend");
       }
 
-      // Set as active worktree
+      // Mark as pending before selecting so the data store can re-apply terminal policy
+      // once worktree data arrives from the workspace host polling cycle.
+      useWorktreeSelectionStore.getState().setPendingWorktree(worktreeId);
       useWorktreeSelectionStore.getState().selectWorktree(worktreeId);
 
       // Run recipe if specified (already validated above)
@@ -124,6 +126,7 @@ export function registerWorkflowActions(actions: ActionRegistry): void {
         await useRecipeStore.getState().runRecipe(recipeId, path, worktreeId, {
           worktreePath: path,
           branchName: availableBranch,
+          issueNumber,
         });
         recipeLaunched = true;
       }

@@ -1,4 +1,4 @@
-import { useState, useCallback, useTransition } from "react";
+import { useState, useCallback, useTransition, useEffect } from "react";
 import { useShallow } from "zustand/react/shallow";
 import type { TerminalRecipe } from "@/types";
 import { useRecipeStore } from "@/store/recipeStore";
@@ -20,6 +20,7 @@ function isCustomize(item: QuickCreateItem): item is QuickCreateItem & { _kind: 
 
 export type UseQuickCreatePaletteReturn = UseSearchablePaletteReturn<QuickCreateItem> & {
   confirmSelection: () => void;
+  confirmItem: (item: QuickCreateItem) => void;
   isPending: boolean;
   assignToSelf: boolean;
   setAssignToSelf: (value: boolean) => void;
@@ -59,6 +60,14 @@ export function useQuickCreatePalette(): UseQuickCreatePaletteReturn {
     paletteId: "quick-create",
   });
 
+  // Sync worktreeStore.quickCreate.isOpen → paletteStore
+  // When the sidebar "+" button calls openQuickCreate(), this opens the palette
+  useEffect(() => {
+    if (quickCreate.isOpen && !palette.isOpen) {
+      palette.open();
+    }
+  }, [quickCreate.isOpen, palette.isOpen, palette]);
+
   const issue = quickCreate.issue;
   const pr = quickCreate.pr;
 
@@ -69,109 +78,116 @@ export function useQuickCreatePalette(): UseQuickCreatePaletteReturn {
       ? palette.results[palette.selectedIndex]
       : null;
 
-  const confirmSelection = useCallback(() => {
-    if (isPending) return;
-    if (!selectedRecipe) {
-      palette.close();
-      return;
-    }
+  const doConfirm = useCallback(
+    (item: QuickCreateItem | null) => {
+      if (isPending) return;
+      if (!item) {
+        palette.close();
+        return;
+      }
 
-    // Customize fallback → open full modal
-    if (isCustomize(selectedRecipe)) {
-      closeQuickCreate();
-      palette.close();
-      openCreateDialog(issue);
-      return;
-    }
+      // Customize fallback → open full modal
+      if (isCustomize(item)) {
+        closeQuickCreate();
+        palette.close();
+        openCreateDialog(issue);
+        return;
+      }
 
-    const recipe = selectedRecipe as TerminalRecipe & { _kind: "recipe" };
+      const recipe = item as TerminalRecipe & { _kind: "recipe" };
 
-    // Derive branch name from issue or PR context
-    const issueTitle = issue?.title ?? pr?.title;
-    const issueNumber = issue?.number;
-    if (!issueTitle) {
-      // No context to derive a branch name — fall through to full modal
-      closeQuickCreate();
-      palette.close();
-      openCreateDialog(issue, { initialRecipeId: recipe.id });
-      return;
-    }
+      // Derive branch name from issue or PR context
+      const issueTitle = issue?.title ?? pr?.title;
+      const issueNumber = issue?.number;
+      if (!issueTitle) {
+        // No context to derive a branch name — fall through to full modal
+        closeQuickCreate();
+        palette.close();
+        openCreateDialog(issue, { initialRecipeId: recipe.id });
+        return;
+      }
 
-    const prefix = issue ? (detectPrefixFromIssue(issue) ?? "feature") : "feature";
-    const slug = generateBranchSlug(issueTitle);
-    if (!slug) {
-      closeQuickCreate();
-      palette.close();
-      openCreateDialog(issue, { initialRecipeId: recipe.id });
-      return;
-    }
+      const prefix = issue ? (detectPrefixFromIssue(issue) ?? "feature") : "feature";
+      const slug = generateBranchSlug(issueTitle);
+      if (!slug) {
+        closeQuickCreate();
+        palette.close();
+        openCreateDialog(issue, { initialRecipeId: recipe.id });
+        return;
+      }
 
-    const issuePrefix = issueNumber ? `issue-${issueNumber}-` : "";
-    const branchName = buildBranchName(prefix, `${issuePrefix}${slug}`);
+      const issuePrefix = issueNumber ? `issue-${issueNumber}-` : "";
+      const branchName = buildBranchName(prefix, `${issuePrefix}${slug}`);
 
-    const autoAssign = getAutoAssign(recipe);
-    const shouldAssign = autoAssign === "always" || (autoAssign === "prompt" && assignToSelf);
+      const autoAssign = getAutoAssign(recipe);
+      const shouldAssign = autoAssign === "always" || (autoAssign === "prompt" && assignToSelf);
 
-    startTransition(async () => {
-      try {
-        const result = await actionService.dispatch(
-          "worktree.createWithRecipe",
-          {
-            branchName,
-            recipeId: recipe.id,
-            issueNumber: shouldAssign ? issueNumber : undefined,
-          },
-          { source: "user", confirmed: true }
-        );
+      startTransition(async () => {
+        try {
+          const result = await actionService.dispatch(
+            "worktree.createWithRecipe",
+            {
+              branchName,
+              recipeId: recipe.id,
+              issueNumber: shouldAssign ? issueNumber : undefined,
+            },
+            { source: "user", confirmed: true }
+          );
 
-        if (result.ok) {
-          const { branch, assignedToSelf: wasAssigned } = result.result as {
-            worktreeId: string;
-            worktreePath: string;
-            branch: string;
-            recipeLaunched: boolean;
-            assignedToSelf: boolean;
-          };
+          if (result.ok) {
+            const { branch, assignedToSelf: wasAssigned } = result.result as {
+              worktreeId: string;
+              worktreePath: string;
+              branch: string;
+              recipeLaunched: boolean;
+              assignedToSelf: boolean;
+            };
 
-          const assignMsg = wasAssigned && issueNumber ? ` · assigned #${issueNumber} to you` : "";
+            const assignMsg =
+              wasAssigned && issueNumber ? ` · assigned #${issueNumber} to you` : "";
 
-          notify({
-            type: "success",
-            title: "Worktree Created",
-            message: `${branch}${assignMsg}`,
-          });
-        } else {
+            notify({
+              type: "success",
+              title: "Worktree Created",
+              message: `${branch}${assignMsg}`,
+            });
+          } else {
+            notify({
+              type: "error",
+              title: "Creation Failed",
+              message: result.error.message,
+            });
+          }
+        } catch (error) {
           notify({
             type: "error",
             title: "Creation Failed",
-            message: result.error.message,
+            message: error instanceof Error ? error.message : "Unknown error",
           });
+        } finally {
+          closeQuickCreate();
+          palette.close();
         }
-      } catch (error) {
-        notify({
-          type: "error",
-          title: "Creation Failed",
-          message: error instanceof Error ? error.message : "Unknown error",
-        });
-      } finally {
-        closeQuickCreate();
-        palette.close();
-      }
-    });
-  }, [
-    isPending,
-    selectedRecipe,
-    closeQuickCreate,
-    openCreateDialog,
-    issue,
-    pr,
-    assignToSelf,
-    palette,
-  ]);
+      });
+    },
+    [isPending, closeQuickCreate, openCreateDialog, issue, pr, assignToSelf, palette]
+  );
+
+  const confirmSelection = useCallback(() => {
+    doConfirm(selectedRecipe);
+  }, [doConfirm, selectedRecipe]);
+
+  const confirmItem = useCallback(
+    (item: QuickCreateItem) => {
+      doConfirm(item);
+    },
+    [doConfirm]
+  );
 
   return {
     ...palette,
     confirmSelection,
+    confirmItem,
     isPending,
     assignToSelf,
     setAssignToSelf,

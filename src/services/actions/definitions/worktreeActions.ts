@@ -127,7 +127,7 @@ export function registerWorktreeActions(actions: ActionRegistry, callbacks: Acti
     danger: "safe",
     scope: "renderer",
     run: async () => {
-      callbacks.onOpenQuickCreatePalette();
+      useWorktreeSelectionStore.getState().openQuickCreate();
     },
   }));
 

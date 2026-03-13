@@ -199,7 +199,14 @@ export function RecipeEditor({
         if (!currentProject?.id) {
           throw new Error("No project selected");
         }
-        await createRecipe(currentProject.id, recipeName, worktreeId, terminals, showInEmptyState);
+        await createRecipe(
+          currentProject.id,
+          recipeName,
+          worktreeId,
+          terminals,
+          showInEmptyState,
+          autoAssign
+        );
       }
 
       if (onSave) {
