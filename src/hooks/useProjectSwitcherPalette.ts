@@ -21,6 +21,7 @@ export interface SearchableProject {
   isActive: boolean;
   isBackground: boolean;
   isMissing: boolean;
+  isPinned: boolean;
   activeAgentCount: number;
   waitingAgentCount: number;
   processCount: number;
@@ -44,6 +45,7 @@ export interface UseProjectSwitcherPaletteReturn {
   stopProject: (projectId: string) => Promise<void>;
   removeProject: (projectId: string) => Promise<void>;
   locateProject: (projectId: string) => Promise<void>;
+  togglePinProject: (projectId: string) => Promise<void>;
   stopConfirmProjectId: string | null;
   setStopConfirmProjectId: (projectId: string | null) => void;
   confirmStopProject: () => Promise<void>;
@@ -235,6 +237,7 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
         isActive,
         isBackground,
         isMissing,
+        isPinned: p.pinned ?? false,
         activeAgentCount: counts?.activeAgentCount ?? 0,
         waitingAgentCount: counts?.waitingAgentCount ?? 0,
         processCount: stats?.processCount ?? 0,
@@ -257,7 +260,20 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
 
   const results = useMemo<SearchableProject[]>(() => {
     if (!debouncedQuery.trim()) {
-      return sortedProjects.slice(0, MAX_RESULTS);
+      // Ensure pinned projects are always visible when browsing
+      const pinned = sortedProjects.filter((p) => p.isPinned);
+      const rest = sortedProjects.filter((p) => !p.isPinned);
+      const combined = [...pinned, ...rest];
+      // Deduplicate while preserving order (pinned first, then rest by recency)
+      const seen = new Set<string>();
+      const deduped: SearchableProject[] = [];
+      for (const p of combined) {
+        if (!seen.has(p.id)) {
+          seen.add(p.id);
+          deduped.push(p);
+        }
+      }
+      return deduped.slice(0, MAX_RESULTS);
     }
 
     const fuseResults = fuse.search(debouncedQuery);
@@ -413,6 +429,25 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
     [locateProjectFn]
   );
 
+  const togglePinProject = useCallback(
+    async (projectId: string) => {
+      const project = searchableProjects.find((p) => p.id === projectId);
+      if (!project) return;
+      try {
+        await projectClient.update(projectId, { pinned: !project.isPinned });
+        await loadProjects();
+      } catch (error) {
+        notify({
+          type: "error",
+          title: "Failed to update project",
+          message: error instanceof Error ? error.message : "Unknown error",
+          duration: 5000,
+        });
+      }
+    },
+    [searchableProjects, loadProjects]
+  );
+
   const stopProject = useCallback(
     async (projectId: string) => {
       close();
@@ -514,6 +549,7 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
     stopProject,
     removeProject: removeProjectFromList,
     locateProject,
+    togglePinProject,
     stopConfirmProjectId,
     setStopConfirmProjectId,
     confirmStopProject,
