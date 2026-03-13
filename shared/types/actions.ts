@@ -236,7 +236,9 @@ export type ActionId =
   | "notes.delete"
   | "notes.reveal"
   | "devServer.start"
-  | "worktree.compareDiff";
+  | "worktree.compareDiff"
+  | "terminal.stashInput"
+  | "terminal.popStash";
 
 export interface ActionContext {
   projectId?: string;

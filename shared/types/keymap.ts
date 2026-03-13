@@ -95,6 +95,8 @@ export type KeyAction =
   | "terminal.watch"
   | "terminal.background"
   | "terminal.contextMenu"
+  | "terminal.stashInput"
+  | "terminal.popStash"
 
   // Agent spawning
   | "agent.palette"
@@ -239,6 +241,8 @@ export const KEY_ACTION_VALUES: ReadonlySet<string> = new Set<string>([
   "terminal.moveToGrid",
   "terminal.watch",
   "terminal.contextMenu",
+  "terminal.stashInput",
+  "terminal.popStash",
   "agent.palette",
   "agent.claude",
   "agent.gemini",
