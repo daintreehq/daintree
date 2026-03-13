@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import { X, Bell, AlertTriangle, AlertCircle, CheckCircle2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useUIStore } from "@/store/uiStore";
-import { useWorktreeStore } from "@/store/worktreeStore";
+import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import type { ReEntrySummaryState } from "@/hooks/useReEntrySummary";
 
 const AUTO_DISMISS_MS = 8000;
@@ -79,7 +79,7 @@ export function ReEntrySummary({ state }: { state: ReEntrySummaryState }) {
 
   const handleGoToWorktree = () => {
     if (state.singleWorktreeId) {
-      useWorktreeStore.getState().selectWorktree(state.singleWorktreeId);
+      useWorktreeSelectionStore.getState().selectWorktree(state.singleWorktreeId);
     }
     state.dismiss();
   };
