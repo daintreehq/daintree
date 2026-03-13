@@ -144,6 +144,23 @@ export async function closeApp(app: ElectronApplication): Promise<void> {
   }
 }
 
+export async function waitForProcessExit(pid: number, timeoutMs = 15_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      process.kill(pid, 0);
+    } catch (err: unknown) {
+      if ((err as NodeJS.ErrnoException).code === "EPERM") {
+        await wait(100);
+        continue;
+      }
+      return;
+    }
+    await wait(100);
+  }
+  throw new Error(`Process ${pid} did not exit within ${timeoutMs}ms`);
+}
+
 export async function mockOpenDialog(
   app: ElectronApplication,
   directoryPath: string
