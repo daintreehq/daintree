@@ -27,6 +27,8 @@ import {
   type SlashCommandContext,
 } from "./hybridInputParsing";
 import { CommandPickerHost } from "@/components/Commands";
+import { PromptHistoryPalette } from "./PromptHistoryPalette";
+import { useCommandHistoryStore } from "@/store/commandHistoryStore";
 import { useCommandStore } from "@/store/commandStore";
 import { useProjectStore } from "@/store/projectStore";
 import { useTerminalStore, useVoiceRecordingStore, useWorktreeDataStore } from "@/store";
@@ -172,6 +174,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     const popStashedEditorState = useTerminalInputStore((s) => s.popStashedEditorState);
     // Get projectId early so it can be used for draft input initialization
     const projectId = useProjectStore((s) => s.currentProject?.id);
+    const isFocusedTerminal = useTerminalStore((s) => s.focusedId === terminalId);
     const hasStash = useTerminalInputStore((s) => {
       const key = projectId ? `${projectId}:${terminalId}` : terminalId;
       return s.stashedEditorStates.has(key);
@@ -196,6 +199,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     const isApplyingExternalValueRef = useRef(false);
     const lastEnterKeydownNewlineRef = useRef(false);
     const handledEnterRef = useRef(false);
+    const historyPaletteOpenRef = useRef<(() => void) | null>(null);
     const inputShellRef = useRef<HTMLDivElement | null>(null);
     const menuRef = useRef<HTMLDivElement | null>(null);
     const rootRef = useRef<HTMLDivElement | null>(null);
@@ -598,6 +602,9 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         latest.onSend({ data: payload.data, trackerData: payload.trackerData, text });
         latest.addToHistory(latest.terminalId, text);
         latest.resetHistoryIndex(latest.terminalId);
+        if (latest.projectId) {
+          useCommandHistoryStore.getState().recordPrompt(latest.projectId, text, agentId ?? null);
+        }
 
         setIsExpanded(false);
         applyEditorValue("", { selection: EditorSelection.create([EditorSelection.cursor(0)]) });
@@ -606,7 +613,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         setAtContext(null);
         setSlashContext(null);
       },
-      [applyEditorValue]
+      [applyEditorValue, agentId]
     );
 
     // Voice segments are flushed to the draft store by VoiceRecordingService
@@ -1278,6 +1285,10 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
             setIsExpanded((v) => !v);
             return true;
           },
+          onHistorySearch: () => {
+            historyPaletteOpenRef.current?.();
+            return true;
+          },
         }),
       [
         applyAutocompleteSelection,
@@ -1610,6 +1621,13 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
             />
           </div>
         </AppDialog>
+        {isFocusedTerminal && (
+          <PromptHistoryPalette
+            terminalId={terminalId}
+            projectId={projectId}
+            onOpenRef={historyPaletteOpenRef}
+          />
+        )}
       </>
     );
   }
