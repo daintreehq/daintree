@@ -22,6 +22,13 @@ import { logDebug, logWarn, logError } from "@/utils/logger";
 import { PERF_MARKS } from "@shared/perf/marks";
 import { markRendererPerformance } from "@/utils/performance";
 
+function canAutoInitializeTerminalIngest(): boolean {
+  return (
+    typeof window !== "undefined" &&
+    typeof window.electron?.terminal?.getSharedBuffers === "function"
+  );
+}
+
 class TerminalInstanceService {
   private instances = new Map<string, ManagedTerminal>();
   private dataBuffer = new TerminalOutputIngestService((id, data) =>
@@ -43,7 +50,9 @@ class TerminalInstanceService {
   private wakeManager: TerminalWakeManager;
 
   constructor() {
-    this.dataBuffer.initialize();
+    if (canAutoInitializeTerminalIngest()) {
+      void this.dataBuffer.initialize();
+    }
 
     this.resizeController = new TerminalResizeController({
       getInstance: (id) => this.instances.get(id),

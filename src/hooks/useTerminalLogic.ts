@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect } from "react";
-import type { RetryAction } from "@/store";
-import { useErrorStore } from "@/store";
+import type { RetryAction } from "@/store/errorStore";
+import { useErrorStore } from "@/store/errorStore";
 import { errorsClient } from "@/clients";
 
 interface UseTerminalLogicOptions {
