@@ -197,10 +197,7 @@ export function WorktreeTerminalSection({
                         )}
 
                         {term.agentState === "directing" && (
-                          <Pencil
-                            className="w-3 h-3 text-status-info"
-                            aria-label="Directing"
-                          />
+                          <Pencil className="w-3 h-3 text-status-info" aria-label="Directing" />
                         )}
 
                         {term.agentState === "failed" && (
