@@ -63,3 +63,10 @@ export function getGroupBlockedAgentState(
   if (hasFailed) return "failed";
   return undefined;
 }
+
+export function isGroupDeprioritized(panels: ReadonlyArray<{ agentState?: AgentState }>): boolean {
+  if (panels.length === 0) return false;
+  return panels.every(
+    (p) => !p.agentState || p.agentState === "idle" || p.agentState === "completed"
+  );
+}
