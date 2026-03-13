@@ -35,6 +35,7 @@ import { useUpdateListener } from "./hooks/useUpdateListener";
 import { useActionPalette } from "./hooks/useActionPalette";
 import { useQuickSwitcher } from "./hooks/useQuickSwitcher";
 import { useWorktreePalette } from "./hooks/useWorktreePalette";
+import { useQuickCreatePalette } from "./hooks/useQuickCreatePalette";
 import { useDoubleShift } from "./hooks/useDoubleShift";
 import { useMcpBridge } from "./hooks/useMcpBridge";
 import { createTooltipWithShortcut } from "./lib/platform";
@@ -60,6 +61,7 @@ import {
   WorktreePalette,
   WorktreeSidebarSearchBar,
   WorktreeOverviewModal,
+  QuickCreatePalette,
 } from "./components/Worktree";
 import { CrossWorktreeDiff } from "./components/Worktree/CrossWorktreeDiff";
 import { NewWorktreeDialog } from "./components/Worktree/NewWorktreeDialog";
@@ -139,16 +141,16 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     focusedWorktreeId,
     selectWorktree,
     createDialog,
-    openCreateDialog,
     closeCreateDialog,
+    openQuickCreate,
   } = useWorktreeSelectionStore(
     useShallow((state) => ({
       activeWorktreeId: state.activeWorktreeId,
       focusedWorktreeId: state.focusedWorktreeId,
       selectWorktree: state.selectWorktree,
       createDialog: state.createDialog,
-      openCreateDialog: state.openCreateDialog,
       closeCreateDialog: state.closeCreateDialog,
+      openQuickCreate: state.openQuickCreate,
     }))
   );
 
@@ -564,7 +566,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
             </button>
           </div>
           <button
-            onClick={() => openCreateDialog()}
+            onClick={() => openQuickCreate()}
             className="p-1 text-canopy-text/40 hover:text-canopy-text hover:bg-white/[0.06] rounded transition-colors"
             title={createTooltipWithShortcut("Create new worktree", "Cmd+Shift+N")}
             aria-label="Create new worktree"
@@ -638,6 +640,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
           onWorktreeCreated={refresh}
           initialIssue={createDialog.initialIssue}
           initialPR={createDialog.initialPR}
+          initialRecipeId={createDialog.initialRecipeId}
         />
       )}
     </div>
@@ -778,6 +781,7 @@ function App() {
   );
 
   const worktreePalette = useWorktreePalette({ worktrees });
+  const quickCreatePalette = useQuickCreatePalette();
 
   const openDiagnosticsDock = useDiagnosticsStore((state) => state.openDock);
   const removeError = useErrorStore((state) => state.removeError);
@@ -994,6 +998,7 @@ function App() {
     onOpenActionPalette: actionPalette.open,
     onOpenQuickSwitcher: quickSwitcher.open,
     onOpenWorktreePalette: worktreePalette.open,
+    onOpenQuickCreatePalette: quickCreatePalette.open,
     onToggleWorktreeOverview: toggleWorktreeOverview,
     onOpenWorktreeOverview: openWorktreeOverview,
     onCloseWorktreeOverview: closeWorktreeOverview,
@@ -1141,6 +1146,7 @@ function App() {
         onConfirm={worktreePalette.confirmSelection}
         onClose={worktreePalette.close}
       />
+      <QuickCreatePalette palette={quickCreatePalette} />
       <PanelPalette
         isOpen={panelPalette.isOpen}
         query={panelPalette.query}
