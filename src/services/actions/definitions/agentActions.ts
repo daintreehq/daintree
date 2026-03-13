@@ -219,7 +219,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
       const state = useTerminalStore.getState();
       const { useWorktreeSelectionStore } = await import("@/store/worktreeStore");
       const activeWorktreeId = useWorktreeSelectionStore.getState().activeWorktreeId;
-      state.focusNextBlockedDock(activeWorktreeId);
+      state.focusNextBlockedDock(activeWorktreeId ?? undefined);
     },
   }));
 
