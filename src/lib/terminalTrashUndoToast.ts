@@ -1,5 +1,5 @@
 import { notify } from "@/lib/notify";
-import { TRASH_UNDO_TOAST_DURATION_MS } from "@shared/config/trash";
+import { TRASH_TTL_MS, TRASH_UNDO_TOAST_DURATION_MS } from "@shared/config/trash";
 
 const COALESCE_KEY = "terminal-trash-undo";
 const COALESCE_WINDOW_MS = 2_000;
@@ -7,9 +7,20 @@ const COALESCE_WINDOW_MS = 2_000;
 interface PendingRestore {
   id: string;
   groupRestoreId?: string;
+  addedAt: number;
 }
 
 let pendingRestoreTargets: PendingRestore[] = [];
+let cleanupTimer: ReturnType<typeof setTimeout> | null = null;
+
+function scheduleCleanup(): void {
+  if (cleanupTimer) return;
+  cleanupTimer = setTimeout(() => {
+    cleanupTimer = null;
+    const cutoff = Date.now() - TRASH_TTL_MS;
+    pendingRestoreTargets = pendingRestoreTargets.filter((t) => t.addedAt > cutoff);
+  }, TRASH_TTL_MS + 500);
+}
 
 function restoreAll(): void {
   const targets = pendingRestoreTargets;
@@ -41,7 +52,8 @@ function restoreAll(): void {
 }
 
 export function showTrashUndoToast(title: string, id: string, groupRestoreId?: string): void {
-  pendingRestoreTargets.push({ id, groupRestoreId });
+  pendingRestoreTargets.push({ id, groupRestoreId, addedAt: Date.now() });
+  scheduleCleanup();
 
   notify({
     type: "info",
