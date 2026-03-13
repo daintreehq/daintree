@@ -90,10 +90,10 @@ export function SidecarVisibilityController(): null {
         console.error("Failed to restore tab:", error);
       } finally {
         isRestoringRef.current = false;
-        const pendingRestore = pendingRestoreRef.current;
-        if (pendingRestore) {
+        const pending = pendingRestoreRef.current as { tabId: string; tabUrl: string } | null;
+        if (pending) {
           pendingRestoreRef.current = null;
-          void ensureTabAndRestore(pendingRestore.tabId, pendingRestore.tabUrl);
+          void ensureTabAndRestore(pending.tabId, pending.tabUrl);
         }
       }
     },

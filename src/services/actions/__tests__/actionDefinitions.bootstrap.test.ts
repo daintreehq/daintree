@@ -9,6 +9,7 @@ function createCallbacks() {
     onOpenActionPalette: () => {},
     onOpenQuickSwitcher: () => {},
     onOpenWorktreePalette: () => {},
+    onOpenQuickCreatePalette: () => {},
     onToggleWorktreeOverview: () => {},
     onOpenWorktreeOverview: () => {},
     onCloseWorktreeOverview: () => {},

@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { TerminalInstance } from "@shared/types/domain";
 import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 
 const mocks = vi.hoisted(() => {
@@ -142,6 +143,7 @@ const mocks = vi.hoisted(() => {
   Object.defineProperty(globalThis, "document", {
     value: {
       getElementById: vi.fn(() => null),
+      hasFocus: vi.fn(() => true),
     },
     configurable: true,
     writable: true,
@@ -218,6 +220,7 @@ function createCallbacks(overrides: Partial<ActionCallbacks> = {}): ActionCallba
     onToggleSidebar: vi.fn(),
     onToggleFocusMode: vi.fn(),
     onOpenWorktreePalette: vi.fn(),
+    onOpenQuickCreatePalette: vi.fn(),
     onToggleWorktreeOverview: vi.fn(),
     onOpenWorktreeOverview: vi.fn(),
     onCloseWorktreeOverview: vi.fn(),
@@ -251,11 +254,12 @@ function buildRegistry(
   return actions;
 }
 
-function createTerminal(overrides: Record<string, unknown> = {}) {
+function createTerminal(overrides: Record<string, unknown> = {}): TerminalInstance {
   return {
     id: "term-1",
     kind: "terminal",
     type: "terminal",
+    title: "Terminal",
     cwd: "/repo",
     cols: 80,
     rows: 24,
@@ -264,7 +268,7 @@ function createTerminal(overrides: Record<string, unknown> = {}) {
     hasPty: true,
     isVisible: true,
     ...overrides,
-  };
+  } as TerminalInstance;
 }
 
 beforeEach(() => {
@@ -296,7 +300,7 @@ beforeEach(() => {
     pendingWorktreeId: null,
     expandedWorktrees: new Set<string>(),
     expandedTerminals: new Set<string>(),
-    createDialog: { isOpen: false, initialIssue: null, initialPR: null },
+    createDialog: { isOpen: false, initialIssue: null, initialPR: null, initialRecipeId: null },
     crossDiffDialog: { isOpen: false, initialWorktreeId: null },
     _policyGeneration: 0,
     lastFocusedTerminalByWorktree: new Map<string, string>(),
