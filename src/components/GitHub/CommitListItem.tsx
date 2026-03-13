@@ -104,12 +104,21 @@ export function CommitListItem({ commit, optionId, isActive }: CommitListItemPro
                       copied && "text-status-success"
                     )}
                   >
-                    {copied ? (
-                      <Check className="h-3 w-3" />
-                    ) : (
-                      <Copy className="h-3 w-3 opacity-0 group-hover:opacity-100 transition-opacity" />
-                    )}
                     <span>{commit.shortHash}</span>
+                    <span className="relative h-3 w-3 shrink-0">
+                      <Copy
+                        className={cn(
+                          "absolute inset-0 h-3 w-3 transition-opacity",
+                          copied ? "opacity-0" : "opacity-0 group-hover:opacity-100"
+                        )}
+                      />
+                      <Check
+                        className={cn(
+                          "absolute inset-0 h-3 w-3 transition-opacity",
+                          copied ? "opacity-100" : "opacity-0"
+                        )}
+                      />
+                    </span>
                   </button>
                 </TooltipTrigger>
                 <TooltipContent side="bottom">
