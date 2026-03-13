@@ -182,7 +182,9 @@ function PanelHeaderComponent({
 
   // Whether the overflow "..." menu has any items to show
   const hasOverflowItems =
-    (canRestart && !!onRestart) || (!!onMinimize && !isMaximized && location !== "dock") || !!headerActions;
+    (canRestart && !!onRestart) ||
+    (!!onMinimize && !isMaximized && location !== "dock") ||
+    !!headerActions;
 
   // Restart handler for Radix DropdownMenu onSelect
   const handleRestartSelect = useCallback(
@@ -615,17 +617,13 @@ function PanelHeaderComponent({
                 </DropdownMenuItem>
               )}
               {onMinimize && !isMaximized && location !== "dock" && (
-                <DropdownMenuItem
-                  onSelect={() => onMinimize()}
-                >
+                <DropdownMenuItem onSelect={() => onMinimize()}>
                   <DockToBottomIcon className="w-3 h-3 mr-2" />
                   Move to Dock
                 </DropdownMenuItem>
               )}
               {showWatchButton && isWatched && (
-                <DropdownMenuItem
-                  onSelect={() => unwatchPanel(id)}
-                >
+                <DropdownMenuItem onSelect={() => unwatchPanel(id)}>
                   <Bell className="w-3 h-3 mr-2" aria-hidden="true" />
                   Cancel Watch
                 </DropdownMenuItem>
