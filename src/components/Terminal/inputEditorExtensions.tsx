@@ -907,7 +907,10 @@ export function createFilePasteHandler(
 
 const URL_REGEX = /https?:\/\/[^\s<>"{}|\\^`[\]]+/g;
 
+let nextUrlEntryId = 0;
+
 export interface UrlPasteEntry {
+  id: number;
   from: number;
   to: number;
   url: string;
@@ -917,11 +920,11 @@ export interface UrlPasteEntry {
 
 export const addUrlPasteEntry = StateEffect.define<UrlPasteEntry>();
 export const updateUrlPasteStatus = StateEffect.define<{
-  url: string;
+  id: number;
   status: UrlPasteEntry["status"];
   errorMessage?: string;
 }>();
-export const removeUrlPasteEntry = StateEffect.define<{ url: string }>();
+export const removeUrlPasteEntry = StateEffect.define<{ id: number }>();
 
 interface UrlContextChipEntry {
   from: number;
@@ -935,16 +938,17 @@ export const addUrlContextChip = StateEffect.define<UrlContextChipEntry>();
 
 class UrlFetchAffordanceWidget extends WidgetType {
   constructor(
+    readonly entryId: number,
     readonly url: string,
     readonly status: UrlPasteEntry["status"],
     readonly errorMessage: string | undefined,
-    readonly onFetch: (url: string) => void
+    readonly onFetch: (entryId: number, url: string) => void
   ) {
     super();
   }
 
   eq(other: UrlFetchAffordanceWidget) {
-    return this.url === other.url && this.status === other.status;
+    return this.entryId === other.entryId && this.status === other.status;
   }
 
   toDOM() {
@@ -966,13 +970,14 @@ class UrlFetchAffordanceWidget extends WidgetType {
     }
 
     const onFetch = this.onFetch;
+    const entryId = this.entryId;
     const url = this.url;
     const status = this.status;
     btn.addEventListener("mousedown", (e) => {
       e.preventDefault();
       e.stopPropagation();
       if (status !== "loading") {
-        onFetch(url);
+        onFetch(entryId, url);
       }
     });
 
@@ -1030,7 +1035,9 @@ class UrlContextChipWidget extends WidgetType {
   }
 }
 
-export function createUrlPasteField(onFetch: (url: string) => void): StateField<UrlPasteEntry[]> {
+export function createUrlPasteField(
+  onFetch: (entryId: number, url: string) => void
+): StateField<UrlPasteEntry[]> {
   return StateField.define<UrlPasteEntry[]>({
     create() {
       return [];
@@ -1053,20 +1060,17 @@ export function createUrlPasteField(onFetch: (url: string) => void): StateField<
 
       for (const effect of tr.effects) {
         if (effect.is(addUrlPasteEntry)) {
-          const existing = entries.find((e) => e.url === effect.value.url);
-          if (!existing) {
-            entries = [...entries, effect.value];
-          }
+          entries = [...entries, effect.value];
         }
         if (effect.is(updateUrlPasteStatus)) {
           entries = entries.map((e) =>
-            e.url === effect.value.url
+            e.id === effect.value.id
               ? { ...e, status: effect.value.status, errorMessage: effect.value.errorMessage }
               : e
           );
         }
         if (effect.is(removeUrlPasteEntry)) {
-          entries = entries.filter((e) => e.url !== effect.value.url);
+          entries = entries.filter((e) => e.id !== effect.value.id);
         }
       }
       return entries;
@@ -1076,7 +1080,7 @@ export function createUrlPasteField(onFetch: (url: string) => void): StateField<
         if (entries.length === 0) return Decoration.none;
         const ranges = entries.map((e) =>
           Decoration.widget({
-            widget: new UrlFetchAffordanceWidget(e.url, e.status, e.errorMessage, onFetch),
+            widget: new UrlFetchAffordanceWidget(e.id, e.url, e.status, e.errorMessage, onFetch),
             side: 1,
           }).range(e.to)
         );
@@ -1134,36 +1138,37 @@ export function createUrlPasteDetector(urlPasteField: StateField<UrlPasteEntry[]
   return EditorView.updateListener.of((update) => {
     if (!update.docChanged) return;
 
-    let isPaste = false;
+    const pastedRanges: { from: number; to: number }[] = [];
     for (const tr of update.transactions) {
       if (tr.isUserEvent("input.paste")) {
-        isPaste = true;
-        break;
+        tr.changes.iterChangedRanges((_fromA, _toA, fromB, toB) => {
+          pastedRanges.push({ from: fromB, to: toB });
+        });
       }
     }
-    if (!isPaste) return;
-
-    const existingEntries = update.state.field(urlPasteField, false) ?? [];
-    const existingUrls = new Set(existingEntries.map((e) => e.url));
-    const chipEntries = update.state.field(urlContextChipField, false) ?? [];
-    const chipUrls = new Set(chipEntries.map((e) => e.sourceUrl));
+    if (pastedRanges.length === 0) return;
 
     const effects: ReturnType<typeof addUrlPasteEntry.of>[] = [];
     const doc = update.state.doc.toString();
 
-    let match: RegExpExecArray | null;
-    const regex = new RegExp(URL_REGEX.source, "g");
-    while ((match = regex.exec(doc)) !== null) {
-      const url = match[0];
-      if (existingUrls.has(url) || chipUrls.has(url)) continue;
-      effects.push(
-        addUrlPasteEntry.of({
-          from: match.index,
-          to: match.index + url.length,
-          url,
-          status: "idle",
-        })
-      );
+    for (const range of pastedRanges) {
+      const pastedText = doc.slice(range.from, range.to);
+      let match: RegExpExecArray | null;
+      const regex = new RegExp(URL_REGEX.source, "g");
+      while ((match = regex.exec(pastedText)) !== null) {
+        const url = match[0];
+        const from = range.from + match.index;
+        const to = from + url.length;
+        effects.push(
+          addUrlPasteEntry.of({
+            id: nextUrlEntryId++,
+            from,
+            to,
+            url,
+            status: "idle",
+          })
+        );
+      }
     }
 
     if (effects.length > 0) {
@@ -1180,10 +1185,10 @@ export function createPlainPasteKeymap(): Extension {
         run(view) {
           navigator.clipboard.readText().then((text) => {
             if (!text) return;
-            const cursor = view.state.selection.main.head;
+            const { from, to } = view.state.selection.main;
             view.dispatch({
-              changes: { from: cursor, insert: text },
-              selection: { anchor: cursor + text.length },
+              changes: { from, to, insert: text },
+              selection: { anchor: from + text.length },
             });
           });
           return true;
