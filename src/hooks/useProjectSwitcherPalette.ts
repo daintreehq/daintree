@@ -52,6 +52,7 @@ export interface UseProjectSwitcherPaletteReturn {
   setRemoveConfirmProject: (project: SearchableProject | null) => void;
   confirmRemoveProject: () => Promise<void>;
   isRemovingProject: boolean;
+  backgroundWaitingCount: number;
 }
 
 const FUSE_OPTIONS: IFuseOptions<SearchableProject> = {
@@ -215,6 +216,17 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
     }
   }, [isOpen, projects, fetchStats]);
 
+  useEffect(() => {
+    if (isOpen) return;
+    if (projects.length <= 1) return;
+
+    const id = setInterval(() => {
+      void fetchStats();
+    }, 10_000);
+
+    return () => clearInterval(id);
+  }, [isOpen, projects.length, fetchStats]);
+
   const searchableProjects = useMemo<SearchableProject[]>(() => {
     return projects.map((p) => {
       const stats = projectStats.get(p.id);
@@ -241,6 +253,14 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
       };
     });
   }, [projects, projectStats, terminalCounts, currentProject?.id]);
+
+  const backgroundWaitingCount = useMemo(
+    () =>
+      searchableProjects
+        .filter((p) => !p.isActive && p.waitingAgentCount > 0)
+        .reduce((sum, p) => sum + p.waitingAgentCount, 0),
+    [searchableProjects]
+  );
 
   const sortedProjects = useMemo<SearchableProject[]>(() => {
     return [...searchableProjects].sort((a, b) => {
@@ -522,5 +542,6 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
     setRemoveConfirmProject,
     confirmRemoveProject,
     isRemovingProject,
+    backgroundWaitingCount,
   };
 }
