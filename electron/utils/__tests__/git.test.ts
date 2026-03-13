@@ -144,25 +144,40 @@ describe("listCommits", () => {
     vi.clearAllMocks();
   });
 
-  function makeLogOutput(commits: { hash: string; short: string; msg: string; body: string; name: string; email: string; date: string }[]): string {
-    return commits.map((c) =>
-      `${c.hash}\x00${c.short}\x00${c.msg}\x00${c.body}\x00${c.name}\x00${c.email}\x00${c.date}\x00END`
-    ).join("\n");
+  function makeLogOutput(
+    commits: {
+      hash: string;
+      short: string;
+      msg: string;
+      body: string;
+      name: string;
+      email: string;
+      date: string;
+    }[]
+  ): string {
+    return commits
+      .map(
+        (c) =>
+          `${c.hash}\x00${c.short}\x00${c.msg}\x00${c.body}\x00${c.name}\x00${c.email}\x00${c.date}\x00END`
+      )
+      .join("\n");
   }
 
   it("parses commits with pipe characters in body", async () => {
     mockGit.raw
       .mockResolvedValueOnce("5") // rev-list --count
       .mockResolvedValueOnce(
-        makeLogOutput([{
-          hash: "abc123def456",
-          short: "abc123d",
-          msg: "feat: add table",
-          body: "| Col A | Col B |\n|-------|-------|",
-          name: "Test Author",
-          email: "test@test.com",
-          date: "2024-01-15T12:00:00+00:00",
-        }])
+        makeLogOutput([
+          {
+            hash: "abc123def456",
+            short: "abc123d",
+            msg: "feat: add table",
+            body: "| Col A | Col B |\n|-------|-------|",
+            name: "Test Author",
+            email: "test@test.com",
+            date: "2024-01-15T12:00:00+00:00",
+          },
+        ])
       );
 
     const result = await listCommits({ cwd: "/test", branch: "main" });
@@ -176,10 +191,9 @@ describe("listCommits", () => {
   });
 
   it("handles empty commit body", async () => {
-    mockGit.raw
-      .mockResolvedValueOnce("1")
-      .mockResolvedValueOnce(
-        makeLogOutput([{
+    mockGit.raw.mockResolvedValueOnce("1").mockResolvedValueOnce(
+      makeLogOutput([
+        {
           hash: "def456",
           short: "def456",
           msg: "fix: typo",
@@ -187,8 +201,9 @@ describe("listCommits", () => {
           name: "Author",
           email: "a@b.com",
           date: "2024-01-15T12:00:00+00:00",
-        }])
-      );
+        },
+      ])
+    );
 
     const result = await listCommits({ cwd: "/test", branch: "main" });
 
@@ -207,9 +222,7 @@ describe("listCommits", () => {
       date: "2024-01-15T12:00:00+00:00",
     }));
 
-    mockGit.raw
-      .mockResolvedValueOnce("10")
-      .mockResolvedValueOnce(makeLogOutput(commits));
+    mockGit.raw.mockResolvedValueOnce("10").mockResolvedValueOnce(makeLogOutput(commits));
 
     const result = await listCommits({ cwd: "/test", branch: "main", limit: 2 });
 
@@ -218,9 +231,7 @@ describe("listCommits", () => {
   });
 
   it("passes --grep when search is provided", async () => {
-    mockGit.raw
-      .mockResolvedValueOnce("0")
-      .mockResolvedValueOnce("");
+    mockGit.raw.mockResolvedValueOnce("0").mockResolvedValueOnce("");
 
     await listCommits({ cwd: "/test", branch: "main", search: "bugfix" });
 
