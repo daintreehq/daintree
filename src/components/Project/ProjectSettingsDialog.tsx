@@ -30,6 +30,9 @@ import {
   GitBranch,
   Copy,
   FolderOpen,
+  PanelBottom,
+  LayoutGrid,
+  RefreshCw,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -558,6 +561,8 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
         id: cmd.id || "",
         name: cmd.name,
         command: cmd.command,
+        preferredLocation: cmd.preferredLocation,
+        preferredAutoRestart: cmd.preferredAutoRestart,
       }));
 
       initialSnapshotRef.current = createProjectSettingsSnapshot(
@@ -1799,6 +1804,57 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
                                       {cmd.description}
                                     </p>
                                   )}
+                                  <div className="flex items-center gap-3 mt-2">
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setRunCommands((prev) => {
+                                          const updated = [...prev];
+                                          const current = updated[index].preferredLocation;
+                                          updated[index] = {
+                                            ...cmd,
+                                            preferredLocation: current === "dock" ? "grid" : "dock",
+                                          };
+                                          return updated;
+                                        });
+                                      }}
+                                      className={cn(
+                                        "flex items-center gap-1.5 px-2 py-1 rounded text-xs transition-colors",
+                                        cmd.preferredLocation === "dock"
+                                          ? "bg-canopy-accent/15 text-canopy-accent"
+                                          : "text-canopy-text/60 hover:text-canopy-text hover:bg-canopy-border/30"
+                                      )}
+                                    >
+                                      {cmd.preferredLocation === "dock" ? (
+                                        <PanelBottom className="h-3 w-3" />
+                                      ) : (
+                                        <LayoutGrid className="h-3 w-3" />
+                                      )}
+                                      {cmd.preferredLocation === "dock" ? "Dock" : "Grid"}
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setRunCommands((prev) => {
+                                          const updated = [...prev];
+                                          updated[index] = {
+                                            ...cmd,
+                                            preferredAutoRestart: !cmd.preferredAutoRestart,
+                                          };
+                                          return updated;
+                                        });
+                                      }}
+                                      className={cn(
+                                        "flex items-center gap-1.5 px-2 py-1 rounded text-xs transition-colors",
+                                        cmd.preferredAutoRestart
+                                          ? "bg-canopy-accent/15 text-canopy-accent"
+                                          : "text-canopy-text/60 hover:text-canopy-text hover:bg-canopy-border/30"
+                                      )}
+                                    >
+                                      <RefreshCw className="h-3 w-3" />
+                                      Auto-restart {cmd.preferredAutoRestart ? "On" : "Off"}
+                                    </button>
+                                  </div>
                                 </div>
                                 <div className="flex flex-col gap-1">
                                   <button

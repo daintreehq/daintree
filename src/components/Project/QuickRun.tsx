@@ -36,6 +36,8 @@ type SuggestionItem =
       type: "saved";
       icon?: string;
       description?: string;
+      preferredLocation?: "dock" | "grid";
+      preferredAutoRestart?: boolean;
     }
   | {
       label: string;
@@ -151,6 +153,8 @@ export function QuickRun({ projectId }: QuickRunProps) {
           : item.type === "script"
             ? "Pinned script"
             : "Pinned from history",
+      preferredLocation: runAsDocked ? "dock" : "grid",
+      preferredAutoRestart: autoRestart,
     };
 
     try {
@@ -192,6 +196,8 @@ export function QuickRun({ projectId }: QuickRunProps) {
           type: "saved" as const,
           icon: saved?.icon || r.icon,
           description: saved?.description || r.description,
+          preferredLocation: saved?.preferredLocation,
+          preferredAutoRestart: saved?.preferredAutoRestart,
         };
       });
 
@@ -204,6 +210,8 @@ export function QuickRun({ projectId }: QuickRunProps) {
         type: "saved" as const,
         icon: cmd.icon,
         description: cmd.description,
+        preferredLocation: cmd.preferredLocation,
+        preferredAutoRestart: cmd.preferredAutoRestart,
       }));
 
     const savedOptions = [...savedDetected, ...savedCustom];
@@ -263,13 +271,30 @@ export function QuickRun({ projectId }: QuickRunProps) {
     });
   };
 
-  const handleRun = async (cmd: string) => {
+  const handleRunItem = async (item: SuggestionItem) => {
+    const cmd = item.value;
     if (!cmd.trim()) return;
 
     const activeWorktree = activeWorktreeId ? worktreeMap.get(activeWorktreeId) : null;
     const cwd = activeWorktree?.path;
 
     if (!cwd) return;
+
+    // Apply stored preferences for saved items, fall back to global state
+    const useDock =
+      item.type === "saved" && item.preferredLocation !== undefined
+        ? item.preferredLocation === "dock"
+        : runAsDocked;
+    const useAutoRestart =
+      item.type === "saved" && item.preferredAutoRestart !== undefined
+        ? item.preferredAutoRestart
+        : autoRestart;
+
+    // Update visible toggles to reflect the preferences being used
+    if (item.type === "saved") {
+      if (item.preferredLocation !== undefined) setRunAsDocked(useDock);
+      if (item.preferredAutoRestart !== undefined) setAutoRestart(useAutoRestart);
+    }
 
     saveHistory(cmd);
     setShowSuggestions(false);
@@ -283,20 +308,24 @@ export function QuickRun({ projectId }: QuickRunProps) {
         title: cmd,
         cwd: cwd,
         command: cmd,
-        location: runAsDocked ? "dock" : "grid",
+        location: useDock ? "dock" : "grid",
         worktreeId: activeWorktreeId || undefined,
-        exitBehavior: autoRestart ? "restart" : undefined,
+        exitBehavior: useAutoRestart ? "restart" : undefined,
       });
     } catch (error) {
       console.error("Failed to spawn terminal:", error);
     }
   };
 
+  const handleRun = async (cmd: string) => {
+    await handleRunItem({ label: cmd, value: cmd, type: "history" });
+  };
+
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter") {
       e.preventDefault();
       if (focusedSuggestionIndex >= 0 && suggestions[focusedSuggestionIndex]) {
-        handleRun(suggestions[focusedSuggestionIndex].value);
+        handleRunItem(suggestions[focusedSuggestionIndex]);
       } else {
         handleRun(input);
       }
@@ -491,7 +520,7 @@ export function QuickRun({ projectId }: QuickRunProps) {
                         )}
                         onClick={() => {
                           setInput(item.value);
-                          handleRun(item.value);
+                          handleRunItem(item);
                         }}
                       >
                         {item.type === "saved" ? (

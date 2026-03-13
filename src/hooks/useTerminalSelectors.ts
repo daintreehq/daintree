@@ -16,6 +16,7 @@ function isTerminalVisible(
 ): boolean {
   if (isInTrash(terminal.id)) return false;
   if (terminal.location === "trash") return false;
+  if (terminal.location === "background") return false;
   if (isTerminalOrphaned(terminal, worktreeIds)) return false;
   return true;
 }
@@ -112,6 +113,27 @@ export function useFailedTerminals(): TerminalInstance[] {
 
 export function useFailedTerminalIds(): string[] {
   return useFailedTerminals().map((t) => t.id);
+}
+
+export function useBackgroundedTerminals(): TerminalInstance[] {
+  const worktreeIds = useWorktreeDataStore(
+    useShallow((state) => {
+      const ids = new Set<string>();
+      for (const [id, wt] of state.worktrees) {
+        ids.add(id);
+        if (wt.worktreeId) ids.add(wt.worktreeId);
+      }
+      return ids;
+    })
+  );
+
+  return useTerminalStore(
+    useShallow((state) =>
+      state.terminals.filter(
+        (t) => t.location === "background" && !isTerminalOrphaned(t, worktreeIds)
+      )
+    )
+  );
 }
 
 /**

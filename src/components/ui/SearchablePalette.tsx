@@ -129,8 +129,13 @@ export function SearchablePalette<T>({
           break;
         case "Escape":
           e.preventDefault();
-          e.stopPropagation();
-          onClose();
+          if (query !== "") {
+            onQueryChange("");
+            e.nativeEvent.stopImmediatePropagation();
+          } else {
+            e.stopPropagation();
+            onClose();
+          }
           break;
         case "Tab":
           e.preventDefault();
@@ -143,7 +148,7 @@ export function SearchablePalette<T>({
           break;
       }
     },
-    [onKeyDown, onSelectPrevious, onSelectNext, onConfirm, onClose]
+    [onKeyDown, onSelectPrevious, onSelectNext, onConfirm, onClose, query, onQueryChange]
   );
 
   const activeDescendant =

@@ -104,6 +104,15 @@ export const LIST_PRS_QUERY = `
           reviews(first: 1) {
             totalCount
           }
+          commits(last: 1) {
+            nodes {
+              commit {
+                statusCheckRollup {
+                  state
+                }
+              }
+            }
+          }
         }
       }
     }
@@ -166,6 +175,15 @@ export const SEARCH_QUERY = `
           }
           reviews(first: 1) {
             totalCount
+          }
+          commits(last: 1) {
+            nodes {
+              commit {
+                statusCheckRollup {
+                  state
+                }
+              }
+            }
           }
         }
       }

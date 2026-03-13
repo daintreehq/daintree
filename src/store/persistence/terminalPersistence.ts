@@ -22,7 +22,7 @@ export function terminalToSnapshot(t: TerminalInstance): TerminalSnapshot {
     kind: t.kind,
     title: t.title,
     worktreeId: t.worktreeId,
-    location: t.location === "trash" ? "grid" : t.location,
+    location: t.location === "trash" || t.location === "background" ? "grid" : t.location,
   };
 
   if (t.kind === "dev-preview") {
@@ -76,7 +76,11 @@ export function terminalToSnapshot(t: TerminalInstance): TerminalSnapshot {
 const DEFAULT_OPTIONS: Required<Omit<TerminalPersistenceOptions, "getProjectId">> &
   Pick<TerminalPersistenceOptions, "getProjectId"> = {
   debounceMs: 500,
-  filter: (t) => t.location !== "trash" && t.kind !== "assistant" && !isSmokeTestTerminalId(t.id),
+  filter: (t) =>
+    t.location !== "trash" &&
+    t.location !== "background" &&
+    t.kind !== "assistant" &&
+    !isSmokeTestTerminalId(t.id),
   transform: terminalToSnapshot,
   getProjectId: undefined,
 };

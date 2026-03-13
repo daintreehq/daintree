@@ -50,6 +50,8 @@ export interface GitHubIssue {
   linkedPR?: LinkedPRInfo;
 }
 
+export type GitHubPRCIStatus = "SUCCESS" | "FAILURE" | "ERROR" | "PENDING" | "EXPECTED";
+
 /** GitHub pull request representation */
 export interface GitHubPR {
   /** PR number */
@@ -72,6 +74,8 @@ export interface GitHubPR {
   headRefName?: string;
   /** Whether this PR originates from a fork repository */
   isFork?: boolean;
+  /** CI status rollup from the latest commit */
+  ciStatus?: GitHubPRCIStatus;
 }
 
 /** Issue tooltip data (subset of full issue for hover display) */

@@ -241,4 +241,82 @@ describe("KeybindingService", () => {
     const service = new KeybindingService();
     expect(service.getEffectiveCombo("terminal.contextMenu")).toBe("Shift+F10");
   });
+
+  describe("getChordCompletions", () => {
+    it("returns completions with category and isPrefix fields", () => {
+      setPlatform("MacIntel");
+      const service = new KeybindingService();
+
+      const completions = service.getChordCompletions("Cmd+K");
+      expect(completions.length).toBeGreaterThan(0);
+
+      for (const c of completions) {
+        expect(c).toHaveProperty("category");
+        expect(c).toHaveProperty("isPrefix");
+        expect(typeof c.category).toBe("string");
+        expect(typeof c.isPrefix).toBe("boolean");
+      }
+    });
+
+    it("returns correct categories from bindings", () => {
+      setPlatform("MacIntel");
+      const service = new KeybindingService();
+
+      const completions = service.getChordCompletions("Cmd+K");
+      const closeAll = completions.find((c) => c.actionId === "terminal.closeAll");
+      expect(closeAll).toBeTruthy();
+      expect(closeAll?.category).toBe("Terminal");
+
+      const worktreePalette = completions.find((c) => c.actionId === "worktree.openPalette");
+      expect(worktreePalette).toBeTruthy();
+      expect(worktreePalette?.category).toBe("Worktrees");
+    });
+
+    it("defaults category to 'Other' when binding has no category", () => {
+      setPlatform("MacIntel");
+      const service = new KeybindingService();
+      service.registerBinding({
+        actionId: "test.noCategory",
+        combo: "Cmd+K Cmd+X",
+        scope: "global",
+        priority: 0,
+        description: "Test no category",
+      });
+
+      const completions = service.getChordCompletions("Cmd+K");
+      const entry = completions.find((c) => c.actionId === "test.noCategory");
+      expect(entry?.category).toBe("Other");
+    });
+
+    it("detects sub-prefix entries with isPrefix: true", () => {
+      setPlatform("MacIntel");
+      const service = new KeybindingService();
+
+      // Register a 3-part chord so "Cmd+G" becomes a sub-prefix of "Cmd+K"
+      service.registerBinding({
+        actionId: "test.deepChord",
+        combo: "Cmd+K Cmd+G Cmd+X",
+        scope: "global",
+        priority: 0,
+        description: "Deep chord test",
+        category: "Test",
+      });
+
+      const completions = service.getChordCompletions("Cmd+K");
+      const subPrefix = completions.find((c) => c.secondKey === "Cmd+G");
+      expect(subPrefix?.isPrefix).toBe(true);
+
+      // Regular entries should not be prefixes
+      const closeAll = completions.find((c) => c.actionId === "terminal.closeAll");
+      expect(closeAll?.isPrefix).toBe(false);
+    });
+
+    it("returns empty array for non-chord prefix", () => {
+      setPlatform("MacIntel");
+      const service = new KeybindingService();
+
+      const completions = service.getChordCompletions("Cmd+Z");
+      expect(completions).toEqual([]);
+    });
+  });
 });

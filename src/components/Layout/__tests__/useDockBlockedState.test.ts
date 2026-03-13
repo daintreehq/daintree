@@ -1,7 +1,11 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { renderHook, act } from "@testing-library/react";
-import { useDockBlockedState, getGroupBlockedAgentState } from "../useDockBlockedState";
+import {
+  useDockBlockedState,
+  getGroupBlockedAgentState,
+  isGroupDeprioritized,
+} from "../useDockBlockedState";
 import type { AgentState } from "shared/types/domain";
 
 describe("useDockBlockedState", () => {
@@ -171,5 +175,54 @@ describe("getGroupBlockedAgentState", () => {
 
   it("returns undefined for empty panels", () => {
     expect(getGroupBlockedAgentState([])).toBe(undefined);
+  });
+});
+
+describe("isGroupDeprioritized", () => {
+  it("returns true when all panels are idle", () => {
+    const panels = [{ agentState: "idle" as const }, { agentState: "idle" as const }];
+    expect(isGroupDeprioritized(panels)).toBe(true);
+  });
+
+  it("returns true when all panels are completed", () => {
+    const panels = [{ agentState: "completed" as const }, { agentState: "completed" as const }];
+    expect(isGroupDeprioritized(panels)).toBe(true);
+  });
+
+  it("returns true for mix of idle, completed, and undefined", () => {
+    const panels = [
+      { agentState: "idle" as const },
+      { agentState: "completed" as const },
+      { agentState: undefined },
+    ];
+    expect(isGroupDeprioritized(panels)).toBe(true);
+  });
+
+  it("returns false when any panel is working", () => {
+    const panels = [{ agentState: "idle" as const }, { agentState: "working" as const }];
+    expect(isGroupDeprioritized(panels)).toBe(false);
+  });
+
+  it("returns false when any panel is running", () => {
+    const panels = [{ agentState: "idle" as const }, { agentState: "running" as const }];
+    expect(isGroupDeprioritized(panels)).toBe(false);
+  });
+
+  it("returns false when any panel is waiting", () => {
+    const panels = [{ agentState: "completed" as const }, { agentState: "waiting" as const }];
+    expect(isGroupDeprioritized(panels)).toBe(false);
+  });
+
+  it("returns false when any panel is failed", () => {
+    const panels = [{ agentState: "idle" as const }, { agentState: "failed" as const }];
+    expect(isGroupDeprioritized(panels)).toBe(false);
+  });
+
+  it("returns true for single panel with undefined agentState", () => {
+    expect(isGroupDeprioritized([{ agentState: undefined }])).toBe(true);
+  });
+
+  it("returns false for empty array", () => {
+    expect(isGroupDeprioritized([])).toBe(false);
   });
 });

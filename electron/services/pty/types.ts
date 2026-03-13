@@ -144,7 +144,7 @@ export const AGENT_SCROLLBACK = 10000;
 // Raw output buffer for non-headless terminals (100KB max)
 export const RAW_OUTPUT_BUFFER_MAX_SIZE = 100 * 1024;
 
-export const TRASH_TTL_MS = 120 * 1000;
+export { TRASH_TTL_MS } from "../../../shared/config/trash.js";
 
 // Graceful shutdown configuration
 export const GRACEFUL_SHUTDOWN_TIMEOUT_MS = 2500;

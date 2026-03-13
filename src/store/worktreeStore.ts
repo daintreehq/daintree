@@ -11,6 +11,13 @@ interface CreateDialogState {
   isOpen: boolean;
   initialIssue: GitHubIssue | null;
   initialPR: GitHubPR | null;
+  initialRecipeId: string | null;
+}
+
+interface QuickCreateState {
+  isOpen: boolean;
+  issue: GitHubIssue | null;
+  pr: GitHubPR | null;
 }
 
 interface CrossDiffDialogState {
@@ -25,6 +32,7 @@ interface WorktreeSelectionState {
   expandedWorktrees: Set<string>;
   expandedTerminals: Set<string>;
   createDialog: CreateDialogState;
+  quickCreate: QuickCreateState;
   crossDiffDialog: CrossDiffDialogState;
   _policyGeneration: number;
   lastFocusedTerminalByWorktree: Map<string, string>;
@@ -39,9 +47,14 @@ interface WorktreeSelectionState {
   collapseAllWorktrees: () => void;
   toggleTerminalsExpanded: (id: string) => void;
   setTerminalsExpanded: (id: string, expanded: boolean) => void;
-  openCreateDialog: (initialIssue?: GitHubIssue | null) => void;
+  openCreateDialog: (
+    initialIssue?: GitHubIssue | null,
+    options?: { initialRecipeId?: string | null }
+  ) => void;
   openCreateDialogForPR: (pr: GitHubPR) => void;
   closeCreateDialog: () => void;
+  openQuickCreate: (context?: { issue?: GitHubIssue | null; pr?: GitHubPR | null }) => void;
+  closeQuickCreate: () => void;
   openCrossWorktreeDiff: (initialWorktreeId?: string | null) => void;
   closeCrossWorktreeDiff: () => void;
   trackTerminalFocus: (worktreeId: string, terminalId: string) => void;
@@ -202,7 +215,8 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
   pendingWorktreeId: null,
   expandedWorktrees: new Set<string>(),
   expandedTerminals: new Set<string>(),
-  createDialog: { isOpen: false, initialIssue: null, initialPR: null },
+  createDialog: { isOpen: false, initialIssue: null, initialPR: null, initialRecipeId: null },
+  quickCreate: { isOpen: false, issue: null, pr: null },
   crossDiffDialog: { isOpen: false, initialWorktreeId: null },
   _policyGeneration: 0,
   lastFocusedTerminalByWorktree: new Map<string, string>(),
@@ -378,22 +392,48 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
       return { expandedTerminals: next };
     }),
 
-  openCreateDialog: (initialIssue = null) => {
+  openCreateDialog: (initialIssue = null, options) => {
     if (useFocusStore.getState().isFocusMode && typeof window !== "undefined") {
       window.dispatchEvent(new Event("canopy:toggle-focus-mode"));
     }
-    set({ createDialog: { isOpen: true, initialIssue, initialPR: null } });
+    set({
+      createDialog: {
+        isOpen: true,
+        initialIssue,
+        initialPR: null,
+        initialRecipeId: options?.initialRecipeId ?? null,
+      },
+    });
   },
 
   openCreateDialogForPR: (pr) => {
     if (useFocusStore.getState().isFocusMode && typeof window !== "undefined") {
       window.dispatchEvent(new Event("canopy:toggle-focus-mode"));
     }
-    set({ createDialog: { isOpen: true, initialIssue: null, initialPR: pr } });
+    set({
+      createDialog: { isOpen: true, initialIssue: null, initialPR: pr, initialRecipeId: null },
+    });
   },
 
   closeCreateDialog: () =>
-    set({ createDialog: { isOpen: false, initialIssue: null, initialPR: null } }),
+    set({
+      createDialog: { isOpen: false, initialIssue: null, initialPR: null, initialRecipeId: null },
+    }),
+
+  openQuickCreate: (context) => {
+    if (useFocusStore.getState().isFocusMode && typeof window !== "undefined") {
+      window.dispatchEvent(new Event("canopy:toggle-focus-mode"));
+    }
+    set({
+      quickCreate: {
+        isOpen: true,
+        issue: context?.issue ?? null,
+        pr: context?.pr ?? null,
+      },
+    });
+  },
+
+  closeQuickCreate: () => set({ quickCreate: { isOpen: false, issue: null, pr: null } }),
 
   openCrossWorktreeDiff: (initialWorktreeId = null) =>
     set({ crossDiffDialog: { isOpen: true, initialWorktreeId } }),
@@ -422,7 +462,8 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
       pendingWorktreeId: null,
       expandedWorktrees: new Set<string>(),
       expandedTerminals: new Set<string>(),
-      createDialog: { isOpen: false, initialIssue: null, initialPR: null },
+      createDialog: { isOpen: false, initialIssue: null, initialPR: null, initialRecipeId: null },
+      quickCreate: { isOpen: false, issue: null, pr: null },
       crossDiffDialog: { isOpen: false, initialWorktreeId: null },
       lastFocusedTerminalByWorktree: new Map<string, string>(),
     }),

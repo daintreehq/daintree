@@ -55,10 +55,18 @@ export function useGlobalKeybindings(enabled: boolean = true): void {
         }
       }
 
+      // Escape cancels any pending chord — consume the event to prevent xterm leakage
+      const pendingChord = keybindingService.getPendingChord();
+      if (e.key === "Escape" && pendingChord) {
+        e.preventDefault();
+        e.stopPropagation();
+        keybindingService.clearPendingChord();
+        return;
+      }
+
       // For editable contexts without modifiers, let native behavior happen
       // Exception: allow chord completion even without modifiers
       const hasModifier = e.metaKey || e.ctrlKey;
-      const pendingChord = keybindingService.getPendingChord();
 
       if (isEditable && !hasModifier && !pendingChord) {
         return;

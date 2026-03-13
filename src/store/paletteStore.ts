@@ -7,7 +7,8 @@ export type PaletteId =
   | "panel"
   | "action"
   | "notes"
-  | "project-switcher";
+  | "project-switcher"
+  | "quick-create";
 
 interface PaletteState {
   activePaletteId: PaletteId | null;

@@ -5,38 +5,57 @@ import { useAnimatedPresence } from "@/hooks/useAnimatedPresence";
 import { usePendingChord } from "@/hooks/useGlobalKeybindings";
 import { keybindingService } from "@/services/KeybindingService";
 
-const EXPAND_DELAY_MS = 600;
+const SHOW_DELAY_MS = 200;
 
 export function ChordIndicator() {
   const pendingChord = usePendingChord();
-  const [expanded, setExpanded] = useState(false);
-  const expandTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [showOverlay, setShowOverlay] = useState(false);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Cache last chord/completions so exit animation doesn't show empty content
+  const lastChordRef = useRef<string>("");
+  const lastCompletionsRef = useRef<ReturnType<typeof keybindingService.getChordCompletions>>([]);
 
   const { isVisible, shouldRender } = useAnimatedPresence({
-    isOpen: pendingChord !== null,
+    isOpen: showOverlay,
   });
 
   useEffect(() => {
     if (pendingChord) {
-      expandTimerRef.current = setTimeout(() => {
-        setExpanded(true);
-      }, EXPAND_DELAY_MS);
+      lastChordRef.current = pendingChord;
+      lastCompletionsRef.current = keybindingService.getChordCompletions(pendingChord);
+      // If overlay is already showing (chord deepened), keep it visible
+      if (!showOverlay) {
+        timerRef.current = setTimeout(() => {
+          setShowOverlay(true);
+        }, SHOW_DELAY_MS);
+      }
     } else {
-      setExpanded(false);
+      setShowOverlay(false);
     }
 
     return () => {
-      if (expandTimerRef.current) {
-        clearTimeout(expandTimerRef.current);
-        expandTimerRef.current = null;
+      if (timerRef.current) {
+        clearTimeout(timerRef.current);
+        timerRef.current = null;
       }
     };
-  }, [pendingChord]);
+  }, [pendingChord, showOverlay]);
 
   if (!shouldRender) return null;
 
-  const displayChord = pendingChord ? keybindingService.formatComboForDisplay(pendingChord) : "";
-  const completions = pendingChord ? keybindingService.getChordCompletions(pendingChord) : [];
+  const displayChord = keybindingService.formatComboForDisplay(lastChordRef.current);
+  const completions = lastCompletionsRef.current;
+
+  // Group completions by category
+  const grouped = new Map<string, typeof completions>();
+  for (const c of completions) {
+    const list = grouped.get(c.category);
+    if (list) {
+      list.push(c);
+    } else {
+      grouped.set(c.category, [c]);
+    }
+  }
 
   return createPortal(
     <div
@@ -66,14 +85,25 @@ export function ChordIndicator() {
           <span className="text-xs text-canopy-text/50">Esc to cancel</span>
         </div>
 
-        {expanded && completions.length > 0 && (
+        {completions.length > 0 && (
           <div className="border-t border-[var(--border-overlay)] px-3 py-2 max-h-48 overflow-y-auto">
-            {completions.map((c) => (
-              <div key={c.actionId} className="flex items-center gap-3 py-1 text-xs">
-                <kbd className="min-w-[3rem] text-right font-medium text-canopy-text/80">
-                  {c.displayKey}
-                </kbd>
-                <span className="text-canopy-text/50 truncate">{c.description}</span>
+            {Array.from(grouped.entries()).map(([category, items], groupIdx) => (
+              <div key={category}>
+                {groupIdx > 0 && <div className="border-t border-[var(--border-overlay)] my-1.5" />}
+                <div className="text-[10px] font-medium uppercase tracking-wider text-canopy-text/30 px-1 py-1">
+                  {category}
+                </div>
+                {items.map((c) => (
+                  <div
+                    key={c.actionId || c.secondKey}
+                    className="flex items-center gap-3 py-1 text-xs"
+                  >
+                    <kbd className="min-w-[3rem] text-right font-medium text-canopy-text/80">
+                      {c.isPrefix ? `${c.displayKey} +` : c.displayKey}
+                    </kbd>
+                    <span className="text-canopy-text/50 truncate">{c.description}</span>
+                  </div>
+                ))}
               </div>
             ))}
           </div>

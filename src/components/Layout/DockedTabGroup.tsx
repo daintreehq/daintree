@@ -30,10 +30,15 @@ import { STATE_ICONS, STATE_COLORS } from "@/components/Worktree/terminalStateCo
 import { TerminalRefreshTier } from "@/types";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { useDockPanelPortal } from "./DockPanelOffscreenContainer";
-import { useDockBlockedState, getGroupBlockedAgentState } from "./useDockBlockedState";
+import {
+  useDockBlockedState,
+  getGroupBlockedAgentState,
+  isGroupDeprioritized,
+} from "./useDockBlockedState";
 import { SortableTabButton } from "@/components/Panel/SortableTabButton";
 import type { TabGroup } from "@/types";
 import { buildPanelDuplicateOptions } from "@/services/terminal/panelDuplicationService";
+import { confirmAgentTrash } from "@/utils/agentTrashConfirm";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 
 interface DockedTabGroupProps {
@@ -218,6 +223,9 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
 
   const handleTabClose = useCallback(
     (tabId: string) => {
+      const terminal = panels.find((p) => p.id === tabId);
+      if (terminal && !confirmAgentTrash([terminal])) return;
+
       // If closing the active tab, switch to another tab first
       if (tabId === activeTabId) {
         const currentIndex = panels.findIndex((p) => p.id === tabId);
@@ -228,7 +236,7 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
         }
       }
       // Trash the terminal (store auto-removes from group)
-      trashTerminal(tabId);
+      trashTerminal(tabId, { showUndoToast: true });
     },
     [activeTabId, panels, group.id, setActiveTab, setFocused, trashTerminal]
   );
@@ -340,6 +348,7 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
 
   const groupBlockedState = getGroupBlockedAgentState(panels);
   const blockedState = useDockBlockedState(groupBlockedState);
+  const isDeprioritized = !isOpen && isGroupDeprioritized(panels);
 
   if (!activePanel || panels.length === 0) {
     return null;
@@ -374,7 +383,8 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
                 "bg-[var(--dock-item-bg-waiting)] border-[var(--dock-item-border-waiting)]",
               !isOpen &&
                 blockedState === "failed" &&
-                "bg-[var(--dock-item-bg-failed)] border-[var(--dock-item-border-failed)]"
+                "bg-[var(--dock-item-bg-failed)] border-[var(--dock-item-border-failed)]",
+              isDeprioritized && "opacity-50"
             )}
             onClick={(e) => {
               e.preventDefault();
@@ -393,12 +403,7 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
             }}
             aria-label={`${activePanel.title} (${panels.length} tabs) - Click to preview, double-click to move to grid, drag to reorder`}
           >
-            <div
-              className={cn(
-                "flex items-center justify-center transition-opacity shrink-0",
-                isOpen || isActive ? "opacity-100" : "opacity-70"
-              )}
-            >
+            <div className="flex items-center justify-center shrink-0">
               <TerminalIcon
                 type={activePanel.type}
                 kind={activePanel.kind}

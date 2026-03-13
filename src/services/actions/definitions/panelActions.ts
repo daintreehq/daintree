@@ -20,13 +20,13 @@ export function registerPanelActions(actions: ActionRegistry, callbacks: ActionC
     argsSchema: z
       .object({
         worktreeId: z.string().optional(),
-        location: z.enum(["grid", "dock", "trash"]).optional(),
+        location: z.enum(["grid", "dock", "trash", "background"]).optional(),
       })
       .optional(),
     run: async (args: unknown) => {
       const { worktreeId, location } = (args ?? {}) as {
         worktreeId?: string;
-        location?: "grid" | "dock" | "trash";
+        location?: "grid" | "dock" | "trash" | "background";
       };
       const state = useTerminalStore.getState();
       let panels = state.terminals;
@@ -38,7 +38,7 @@ export function registerPanelActions(actions: ActionRegistry, callbacks: ActionC
       if (location) {
         panels = panels.filter((p) => p.location === location);
       } else {
-        panels = panels.filter((p) => p.location !== "trash");
+        panels = panels.filter((p) => p.location !== "trash" && p.location !== "background");
       }
 
       const sidecarState = useSidecarStore.getState();
@@ -84,6 +84,10 @@ export function registerPanelActions(actions: ActionRegistry, callbacks: ActionC
       const { panelId, worktreeId } = args as { panelId: string; worktreeId?: string };
       const terminalState = useTerminalStore.getState();
       const panel = terminalState.terminals.find((t) => t.id === panelId && t.location !== "trash");
+      // Auto-restore backgrounded panels when focused via action
+      if (panel?.location === "background") {
+        terminalState.restoreBackgroundTerminal(panelId);
+      }
       if (!panel) {
         throw new Error("Terminal panel no longer exists");
       }

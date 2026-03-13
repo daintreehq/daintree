@@ -21,11 +21,13 @@ function normalizeExitBehavior(t: RecipeTerminal): "" | "keep" | "trash" | "remo
 function serializeEditorState(
   name: string,
   terminals: RecipeTerminal[],
-  showInEmptyState: boolean
+  showInEmptyState: boolean,
+  autoAssign: "always" | "never" | "prompt"
 ): string {
   return JSON.stringify({
     name,
     showInEmptyState,
+    autoAssign,
     terminals: terminals.map((t) => ({
       type: t.type,
       title: t.title ?? "",
@@ -82,6 +84,7 @@ export function RecipeEditor({
     { type: "terminal", title: "", command: "", env: {} },
   ]);
   const [showInEmptyState, setShowInEmptyState] = useState(false);
+  const [autoAssign, setAutoAssign] = useState<"always" | "never" | "prompt">("always");
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const recipeNameInputRef = useRef<HTMLInputElement>(null);
@@ -92,20 +95,24 @@ export function RecipeEditor({
     if (recipe) {
       const nextTerminals = recipe.terminals.map(cloneTerminal);
       const nextShowInEmptyState = recipe.showInEmptyState ?? false;
+      const nextAutoAssign = recipe.autoAssign ?? "always";
       setRecipeName(recipe.name);
       setTerminals(nextTerminals);
       setShowInEmptyState(nextShowInEmptyState);
+      setAutoAssign(nextAutoAssign);
       initialStateRef.current = serializeEditorState(
         recipe.name,
         nextTerminals,
-        nextShowInEmptyState
+        nextShowInEmptyState,
+        nextAutoAssign
       );
     } else if (initialTerminals && initialTerminals.length > 0) {
       const nextTerminals = initialTerminals.map(cloneTerminal);
       setRecipeName("");
       setTerminals(nextTerminals);
       setShowInEmptyState(false);
-      initialStateRef.current = serializeEditorState("", nextTerminals, false);
+      setAutoAssign("always");
+      initialStateRef.current = serializeEditorState("", nextTerminals, false, "always");
     } else {
       const nextTerminals: RecipeTerminal[] = [
         { type: "terminal", title: "", command: "", env: {} },
@@ -113,14 +120,17 @@ export function RecipeEditor({
       setRecipeName("");
       setTerminals(nextTerminals);
       setShowInEmptyState(false);
-      initialStateRef.current = serializeEditorState("", nextTerminals, false);
+      setAutoAssign("always");
+      initialStateRef.current = serializeEditorState("", nextTerminals, false, "always");
     }
     setError(null);
   }, [recipe, initialTerminals, isOpen]);
 
   const isDirty = useMemo(
-    () => serializeEditorState(recipeName, terminals, showInEmptyState) !== initialStateRef.current,
-    [recipeName, terminals, showInEmptyState]
+    () =>
+      serializeEditorState(recipeName, terminals, showInEmptyState, autoAssign) !==
+      initialStateRef.current,
+    [recipeName, terminals, showInEmptyState, autoAssign]
   );
 
   const { onBeforeClose } = useUnsavedChanges({ isDirty });
@@ -183,12 +193,20 @@ export function RecipeEditor({
           name: recipeName,
           terminals,
           showInEmptyState,
+          autoAssign,
         });
       } else {
         if (!currentProject?.id) {
           throw new Error("No project selected");
         }
-        await createRecipe(currentProject.id, recipeName, worktreeId, terminals, showInEmptyState);
+        await createRecipe(
+          currentProject.id,
+          recipeName,
+          worktreeId,
+          terminals,
+          showInEmptyState,
+          autoAssign
+        );
       }
 
       if (onSave) {
@@ -255,6 +273,27 @@ export function RecipeEditor({
           </label>
           <p id="show-in-empty-state-help" className="text-xs text-text-muted mt-1 ml-6">
             Display this recipe as a primary launcher when the worktree has no active terminals
+          </p>
+        </div>
+
+        <div className="mb-4">
+          <label htmlFor="auto-assign" className="block text-sm font-medium text-canopy-text mb-1">
+            Auto-assign Issue
+          </label>
+          <select
+            id="auto-assign"
+            value={autoAssign}
+            onChange={(e) => setAutoAssign(e.target.value as "always" | "never" | "prompt")}
+            aria-describedby="auto-assign-help"
+            className="w-full px-3 py-2 bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] text-canopy-text focus:outline-none focus:ring-2 focus:ring-canopy-accent"
+          >
+            <option value="always">Always assign to me</option>
+            <option value="prompt">Ask before assigning</option>
+            <option value="never">Never assign</option>
+          </select>
+          <p id="auto-assign-help" className="text-xs text-text-muted mt-1">
+            Controls whether the linked GitHub issue is automatically assigned to you during quick
+            worktree creation
           </p>
         </div>
 

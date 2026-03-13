@@ -188,6 +188,8 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
   // Only show icon for non-idle, non-completed states (reduce noise)
   const showStateIcon = agentState && agentState !== "idle" && agentState !== "completed";
   const StateIcon = showStateIcon ? STATE_ICONS[agentState] : null;
+  const isDeprioritized =
+    !isOpen && (!agentState || agentState === "idle" || agentState === "completed");
 
   return (
     <Popover open={isOpen} onOpenChange={handleOpenChange}>
@@ -207,7 +209,8 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
                 "bg-[var(--dock-item-bg-waiting)] border-[var(--dock-item-border-waiting)]",
               !isOpen &&
                 blockedState === "failed" &&
-                "bg-[var(--dock-item-bg-failed)] border-[var(--dock-item-border-failed)]"
+                "bg-[var(--dock-item-bg-failed)] border-[var(--dock-item-border-failed)]",
+              isDeprioritized && "opacity-50"
             )}
             onClick={(e) => {
               // Explicitly toggle popover state on click
@@ -229,12 +232,7 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
             }}
             aria-label={`${terminal.title} - Click to preview, double-click to move to grid, drag to reorder`}
           >
-            <div
-              className={cn(
-                "flex items-center justify-center transition-opacity shrink-0",
-                isOpen || isActive ? "opacity-100" : "opacity-70"
-              )}
-            >
+            <div className="flex items-center justify-center shrink-0">
               <TerminalIcon
                 type={terminal.type}
                 kind={terminal.kind}

@@ -3,6 +3,7 @@ import { TerminalTypeSchema } from "./schemas";
 import { z } from "zod";
 import type { ActionId, ActionContext } from "@shared/types/actions";
 import { stripAnsiCodes } from "@shared/utils/artifactParser";
+import { confirmAgentTrash } from "@/utils/agentTrashConfirm";
 import { appClient, terminalClient } from "@/clients";
 import { computeGridColumns } from "@/lib/terminalLayout";
 import { openPanelContextMenu } from "@/lib/panelContextMenu";
@@ -23,13 +24,13 @@ export function registerTerminalActions(actions: ActionRegistry, callbacks: Acti
     argsSchema: z
       .object({
         worktreeId: z.string().optional(),
-        location: z.enum(["grid", "dock", "trash"]).optional(),
+        location: z.enum(["grid", "dock", "trash", "background"]).optional(),
       })
       .optional(),
     run: async (args: unknown) => {
       const { worktreeId, location } = (args ?? {}) as {
         worktreeId?: string;
-        location?: "grid" | "dock" | "trash";
+        location?: "grid" | "dock" | "trash" | "background";
       };
       const state = useTerminalStore.getState();
       let terminals = state.terminals;
@@ -43,8 +44,8 @@ export function registerTerminalActions(actions: ActionRegistry, callbacks: Acti
       if (location) {
         terminals = terminals.filter((t) => t.location === location);
       } else {
-        // By default, exclude trashed terminals
-        terminals = terminals.filter((t) => t.location !== "trash");
+        // By default, exclude trashed and backgrounded terminals
+        terminals = terminals.filter((t) => t.location !== "trash" && t.location !== "background");
       }
 
       // Return essential metadata only (avoid returning full PTY buffers)
@@ -224,7 +225,9 @@ export function registerTerminalActions(actions: ActionRegistry, callbacks: Acti
       const targetId =
         terminalId ?? state.focusedId ?? state.terminals.find((t) => t.location !== "trash")?.id;
       if (targetId) {
-        state.trashTerminal(targetId);
+        const terminal = state.terminals.find((t) => t.id === targetId);
+        if (terminal && !confirmAgentTrash([terminal])) return;
+        state.trashTerminal(targetId, { showUndoToast: true });
         const remaining = useTerminalStore
           .getState()
           .terminals.filter((t) => t.location !== "trash");
@@ -249,7 +252,28 @@ export function registerTerminalActions(actions: ActionRegistry, callbacks: Acti
       const state = useTerminalStore.getState();
       const targetId = terminalId ?? state.focusedId;
       if (targetId) {
-        state.trashTerminal(targetId);
+        const terminal = state.terminals.find((t) => t.id === targetId);
+        if (terminal && !confirmAgentTrash([terminal])) return;
+        state.trashTerminal(targetId, { showUndoToast: true });
+      }
+    },
+  }));
+
+  actions.set("terminal.background", () => ({
+    id: "terminal.background",
+    title: "Send to Background",
+    description: "Hide terminal from view while keeping its process alive",
+    category: "terminal",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    argsSchema: z.object({ terminalId: z.string().optional() }).optional(),
+    run: async (args: unknown) => {
+      const { terminalId } = (args as { terminalId?: string } | undefined) ?? {};
+      const state = useTerminalStore.getState();
+      const targetId = terminalId ?? state.focusedId;
+      if (targetId) {
+        state.backgroundTerminal(targetId);
       }
     },
   }));
@@ -902,7 +926,8 @@ export function registerTerminalActions(actions: ActionRegistry, callbacks: Acti
         (t) =>
           t.location !== "trash" && (t.worktreeId ?? undefined) === (activeWorktreeId ?? undefined)
       );
-      terminalsToClose.forEach((t) => state.trashTerminal(t.id));
+      if (!confirmAgentTrash(terminalsToClose)) return;
+      terminalsToClose.forEach((t) => state.trashTerminal(t.id, { showUndoToast: true }));
     },
   }));
 

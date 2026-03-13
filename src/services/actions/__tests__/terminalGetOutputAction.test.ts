@@ -55,6 +55,7 @@ async function createRegistry() {
     onOpenActionPalette: () => {},
     onOpenQuickSwitcher: () => {},
     onOpenWorktreePalette: () => {},
+    onOpenQuickCreatePalette: () => {},
     onToggleWorktreeOverview: () => {},
     onOpenWorktreeOverview: () => {},
     onCloseWorktreeOverview: () => {},

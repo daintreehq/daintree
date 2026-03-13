@@ -270,7 +270,7 @@ export type TerminalKind = PanelKind;
 export type TerminalType = "terminal" | LegacyAgentType;
 
 /** Location of a panel instance in the UI */
-export type PanelLocation = "grid" | "dock" | "trash";
+export type PanelLocation = "grid" | "dock" | "trash" | "background";
 
 /** Tab group location (subset of PanelLocation, excludes trash) */
 export type TabGroupLocation = "grid" | "dock";
@@ -869,6 +869,13 @@ export interface TerminalRecipe {
   showInEmptyState?: boolean;
   /** Timestamp of last run (milliseconds since epoch) */
   lastUsedAt?: number;
+  /** Controls whether the linked GitHub issue is auto-assigned during quick worktree creation */
+  autoAssign?: "always" | "never" | "prompt";
+}
+
+/** Returns the effective autoAssign mode for a recipe, defaulting to "always" for legacy recipes */
+export function getAutoAssign(recipe: TerminalRecipe): "always" | "never" | "prompt" {
+  return recipe.autoAssign ?? "always";
 }
 
 // Project Settings Types
@@ -885,6 +892,10 @@ export interface RunCommand {
   icon?: string;
   /** Optional description (e.g. the script content from package.json) */
   description?: string;
+  /** Preferred panel location when running this command */
+  preferredLocation?: "dock" | "grid";
+  /** Whether to auto-restart the command on exit */
+  preferredAutoRestart?: boolean;
 }
 
 /** CopyTree context generation settings */

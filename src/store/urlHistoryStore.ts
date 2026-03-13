@@ -12,7 +12,6 @@ const RECENCY_BUCKETS = [
   { maxAgeMs: 90 * 24 * 3600 * 1000, weight: 30 },
   { maxAgeMs: Infinity, weight: 10 },
 ];
-
 export function frecencyScore(entry: UrlHistoryEntry, now: number): number {
   const ageMs = now - entry.lastVisitAt;
   const bucket = RECENCY_BUCKETS.find((b) => ageMs <= b.maxAgeMs)!;

@@ -93,6 +93,7 @@ export type KeyAction =
   | "terminal.moveToDock"
   | "terminal.moveToGrid"
   | "terminal.watch"
+  | "terminal.background"
   | "terminal.contextMenu"
 
   // Agent spawning
@@ -107,6 +108,7 @@ export type KeyAction =
   | "agent.focusNextFailed"
   | "agent.focusNextAgent"
   | "agent.focusPreviousAgent"
+  | "dock.focusNextWaiting"
 
   // Find/Search
   | "find.inFocusedPanel"
@@ -248,6 +250,7 @@ export const KEY_ACTION_VALUES: ReadonlySet<string> = new Set<string>([
   "agent.focusNextFailed",
   "agent.focusNextAgent",
   "agent.focusPreviousAgent",
+  "dock.focusNextWaiting",
   "find.inFocusedPanel",
   "window.zoomIn",
   "window.zoomOut",

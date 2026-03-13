@@ -156,6 +156,9 @@ test.describe.serial("Core: Action Palette, Command Picker & Quick Switcher", ()
       const filteredCount = await options.count();
       expect(filteredCount).toBe(0);
 
+      // First Escape clears the search query (two-step escape behavior)
+      await window.keyboard.press("Escape");
+      // Second Escape closes the dialog
       await window.keyboard.press("Escape");
 
       const dialog = window.locator(SEL.quickSwitcher.dialog);
@@ -237,6 +240,9 @@ test.describe.serial("Core: Action Palette, Command Picker & Quick Switcher", ()
         expect(filteredCount).toBeLessThanOrEqual(unfilteredCount);
       }
 
+      // First Escape clears the search query (two-step escape behavior)
+      await window.keyboard.press("Escape");
+      // Second Escape closes the dialog
       await window.keyboard.press("Escape");
 
       const dialog = window.locator(SEL.commandPicker.dialog);

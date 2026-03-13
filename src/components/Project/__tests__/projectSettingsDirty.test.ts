@@ -42,11 +42,15 @@ describe("projectSettingsDirty", () => {
         id: "cmd1",
         name: "Build",
         command: "npm run build",
+        preferredLocation: undefined,
+        preferredAutoRestart: undefined,
       });
       expect(snapshot.runCommands[1]).toEqual({
         id: "cmd2",
         name: "",
         command: "test",
+        preferredLocation: undefined,
+        preferredAutoRestart: undefined,
       });
       expect(snapshot.defaultWorktreeRecipeId).toBe("recipe-123");
     });
@@ -358,6 +362,174 @@ describe("projectSettingsDirty", () => {
       );
 
       expect(areSnapshotsEqual(baseSnapshot, snapshot2)).toBe(false);
+    });
+
+    it("should detect changed preferredLocation on runCommand", () => {
+      const snapshotA = createProjectSettingsSnapshot(
+        "Project",
+        "🌲",
+        "npm run dev",
+        undefined,
+        ["node_modules/**"],
+        [{ id: "1", key: "KEY", value: "value" }],
+        [{ id: "cmd1", name: "Build", command: "npm run build", preferredLocation: "grid" }],
+        "recipe-1",
+        [{ commandId: "test", disabled: false }],
+        {}
+      );
+      const snapshotB = createProjectSettingsSnapshot(
+        "Project",
+        "🌲",
+        "npm run dev",
+        undefined,
+        ["node_modules/**"],
+        [{ id: "1", key: "KEY", value: "value" }],
+        [{ id: "cmd1", name: "Build", command: "npm run build", preferredLocation: "dock" }],
+        "recipe-1",
+        [{ commandId: "test", disabled: false }],
+        {}
+      );
+
+      expect(areSnapshotsEqual(snapshotA, snapshotB)).toBe(false);
+    });
+
+    it("should detect changed preferredAutoRestart on runCommand", () => {
+      const snapshotA = createProjectSettingsSnapshot(
+        "Project",
+        "🌲",
+        "npm run dev",
+        undefined,
+        ["node_modules/**"],
+        [{ id: "1", key: "KEY", value: "value" }],
+        [{ id: "cmd1", name: "Build", command: "npm run build", preferredAutoRestart: false }],
+        "recipe-1",
+        [{ commandId: "test", disabled: false }],
+        {}
+      );
+      const snapshotB = createProjectSettingsSnapshot(
+        "Project",
+        "🌲",
+        "npm run dev",
+        undefined,
+        ["node_modules/**"],
+        [{ id: "1", key: "KEY", value: "value" }],
+        [{ id: "cmd1", name: "Build", command: "npm run build", preferredAutoRestart: true }],
+        "recipe-1",
+        [{ commandId: "test", disabled: false }],
+        {}
+      );
+
+      expect(areSnapshotsEqual(snapshotA, snapshotB)).toBe(false);
+    });
+
+    it("should treat undefined and missing preferredLocation as equal", () => {
+      const snapshotA = createProjectSettingsSnapshot(
+        "Project",
+        "🌲",
+        "npm run dev",
+        undefined,
+        ["node_modules/**"],
+        [{ id: "1", key: "KEY", value: "value" }],
+        [{ id: "cmd1", name: "Build", command: "npm run build" }],
+        "recipe-1",
+        [{ commandId: "test", disabled: false }],
+        {}
+      );
+      const snapshotB = createProjectSettingsSnapshot(
+        "Project",
+        "🌲",
+        "npm run dev",
+        undefined,
+        ["node_modules/**"],
+        [{ id: "1", key: "KEY", value: "value" }],
+        [{ id: "cmd1", name: "Build", command: "npm run build", preferredLocation: undefined }],
+        "recipe-1",
+        [{ commandId: "test", disabled: false }],
+        {}
+      );
+
+      expect(areSnapshotsEqual(snapshotA, snapshotB)).toBe(true);
+    });
+
+    it("should detect change from undefined to defined preferredLocation", () => {
+      const snapshotA = createProjectSettingsSnapshot(
+        "Project",
+        "🌲",
+        "npm run dev",
+        undefined,
+        [],
+        [],
+        [{ id: "cmd1", name: "Build", command: "npm run build" }],
+        undefined,
+        [],
+        {}
+      );
+      const snapshotB = createProjectSettingsSnapshot(
+        "Project",
+        "🌲",
+        "npm run dev",
+        undefined,
+        [],
+        [],
+        [{ id: "cmd1", name: "Build", command: "npm run build", preferredLocation: "dock" }],
+        undefined,
+        [],
+        {}
+      );
+
+      expect(areSnapshotsEqual(snapshotA, snapshotB)).toBe(false);
+    });
+
+    it("should preserve preferredAutoRestart false through snapshot", () => {
+      const snapshot = createProjectSettingsSnapshot(
+        "Project",
+        "🌲",
+        "",
+        undefined,
+        [],
+        [],
+        [
+          {
+            id: "cmd1",
+            name: "Build",
+            command: "npm run build",
+            preferredLocation: "grid",
+            preferredAutoRestart: false,
+          },
+        ],
+        undefined,
+        [],
+        {}
+      );
+
+      expect(snapshot.runCommands[0].preferredLocation).toBe("grid");
+      expect(snapshot.runCommands[0].preferredAutoRestart).toBe(false);
+    });
+
+    it("should preserve preferredLocation and preferredAutoRestart in snapshot", () => {
+      const snapshot = createProjectSettingsSnapshot(
+        "Project",
+        "🌲",
+        "",
+        undefined,
+        [],
+        [],
+        [
+          {
+            id: "cmd1",
+            name: "Build",
+            command: "npm run build",
+            preferredLocation: "dock",
+            preferredAutoRestart: true,
+          },
+        ],
+        undefined,
+        [],
+        {}
+      );
+
+      expect(snapshot.runCommands[0].preferredLocation).toBe("dock");
+      expect(snapshot.runCommands[0].preferredAutoRestart).toBe(true);
     });
 
     it("should treat undefined and undefined devServerLoadTimeout as equal", () => {

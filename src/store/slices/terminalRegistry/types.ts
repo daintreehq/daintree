@@ -94,9 +94,15 @@ export interface TrashedTerminal {
   groupMetadata?: TrashedTerminalGroupMetadata;
 }
 
+export interface BackgroundedTerminal {
+  id: string;
+  originalLocation: "dock" | "grid";
+}
+
 export interface TerminalRegistrySlice {
   terminals: TerminalInstance[];
   trashedTerminals: Map<string, TrashedTerminal>;
+  backgroundedTerminals: Map<string, BackgroundedTerminal>;
   /** Explicit tab group storage - single source of truth for tab membership and order */
   tabGroups: Map<string, TabGroup>;
 
@@ -127,15 +133,19 @@ export interface TerminalRegistrySlice {
   moveTerminalToGrid: (id: string) => boolean;
   toggleTerminalLocation: (id: string) => void;
 
-  trashTerminal: (id: string) => void;
+  trashTerminal: (id: string, options?: { showUndoToast?: boolean }) => void;
   /** Trash all panels in a group together, storing group metadata for restoration */
-  trashPanelGroup: (panelId: string) => void;
+  trashPanelGroup: (panelId: string, options?: { showUndoToast?: boolean }) => void;
   restoreTerminal: (id: string, targetWorktreeId?: string) => void;
   /** Restore all panels with the given groupRestoreId, recreating the tab group */
   restoreTrashedGroup: (groupRestoreId: string, targetWorktreeId?: string) => void;
   markAsTrashed: (id: string, expiresAt: number, originalLocation: "dock" | "grid") => void;
   markAsRestored: (id: string) => void;
   isInTrash: (id: string) => boolean;
+
+  backgroundTerminal: (id: string) => void;
+  restoreBackgroundTerminal: (id: string, targetWorktreeId?: string) => void;
+  isInBackground: (id: string) => boolean;
 
   reorderTerminals: (
     fromIndex: number,

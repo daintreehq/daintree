@@ -75,6 +75,8 @@ export const SEL = {
     openOverviewButton: '[aria-label="Open worktrees overview"]',
     overviewModal: '[role="dialog"][aria-labelledby="worktree-overview-title"]',
     overviewClose: '[aria-label="Close overview"]',
+    quickCreatePalette: '[role="dialog"][aria-label="Quick create worktree palette"]',
+    quickCreateCustomize: "#quick-create-option-__customize__",
   },
   dock: {
     container: "#dock-container",

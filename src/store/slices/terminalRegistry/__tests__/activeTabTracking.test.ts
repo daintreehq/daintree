@@ -52,6 +52,7 @@ describe("unified active tab tracking", () => {
       terminals: [],
       tabGroups: new Map(),
       trashedTerminals: new Map(),
+      backgroundedTerminals: new Map(),
       focusedId: null,
       maximizedId: null,
       commandQueue: [],
