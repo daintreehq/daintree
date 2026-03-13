@@ -523,6 +523,7 @@ describe("createCustomKeymap", () => {
             onStash: () => false,
             onPopStash: () => false,
             onExpand: () => false,
+            onHistorySearch: () => false,
           }),
         ],
       }),
