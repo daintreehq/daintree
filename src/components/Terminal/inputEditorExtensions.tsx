@@ -510,7 +510,7 @@ export function createCustomKeymap(config: CustomKeymapConfig): Extension {
         },
       },
       {
-        key: "Mod-Shift-a",
+        key: "Mod-Shift-x",
         run() {
           return config.onPopStash();
         },

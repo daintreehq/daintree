@@ -979,8 +979,15 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       const stashed = popStashedEditorState(latest.terminalId, latest.projectId);
       if (!stashed) return false;
       view.setState(stashed);
+      // Re-apply current compartment configs since setState restores stale config
+      view.dispatch({
+        effects: [
+          editableCompartmentRef.current.reconfigure(EditorView.editable.of(!latest.disabled)),
+          keymapCompartmentRef.current.reconfigure(keymapExtension),
+        ],
+      });
       return true;
-    }, [popStashedEditorState]);
+    }, [popStashedEditorState, keymapExtension]);
 
     const keymapExtension = useMemo(
       () =>
@@ -1386,7 +1393,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
                   onClick={handlePopStash}
                   className="flex items-center justify-center h-5 w-5 rounded-sm text-canopy-accent/70 hover:text-canopy-accent hover:bg-white/[0.06] transition-colors cursor-pointer"
                   aria-label="Restore stashed input"
-                  title="Restore stashed input (⌘⇧A)"
+                  title="Restore stashed input (⌘⇧X)"
                 >
                   <Archive className="h-3.5 w-3.5" />
                 </button>

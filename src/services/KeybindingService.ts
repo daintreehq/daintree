@@ -98,7 +98,7 @@ const DEFAULT_KEYBINDINGS: KeybindingConfig[] = [
   },
   {
     actionId: "terminal.popStash",
-    combo: "Cmd+Shift+A",
+    combo: "Cmd+Shift+X",
     scope: "global",
     priority: 0,
     description: "Restore stashed input",
