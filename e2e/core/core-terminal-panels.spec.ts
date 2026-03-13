@@ -236,8 +236,11 @@ test.describe.serial("Core: Terminal & Panels", () => {
       const { window } = ctx;
 
       const panel = getFirstGridPanel(window);
-      const minimizeBtn = panel.locator(SEL.panel.minimize).first();
-      await minimizeBtn.click({ force: true });
+      const overflowBtn = panel.locator(SEL.panel.overflowMenu).first();
+      await overflowBtn.click();
+      const minimizeBtn = window.locator(SEL.panel.minimize).first();
+      await expect(minimizeBtn).toBeVisible({ timeout: T_SHORT });
+      await minimizeBtn.click();
 
       await expect.poll(() => getGridPanelCount(window), { timeout: T_MEDIUM }).toBe(2);
 
@@ -249,8 +252,11 @@ test.describe.serial("Core: Terminal & Panels", () => {
       const { window } = ctx;
 
       const panel = getFirstGridPanel(window);
-      const minimizeBtn = panel.locator(SEL.panel.minimize).first();
-      await minimizeBtn.click({ force: true });
+      const overflowBtn = panel.locator(SEL.panel.overflowMenu).first();
+      await overflowBtn.click();
+      const minimizeBtn = window.locator(SEL.panel.minimize).first();
+      await expect(minimizeBtn).toBeVisible({ timeout: T_SHORT });
+      await minimizeBtn.click();
 
       await expect.poll(() => getGridPanelCount(window), { timeout: T_MEDIUM }).toBe(1);
     });
