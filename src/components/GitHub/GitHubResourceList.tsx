@@ -30,7 +30,7 @@ interface GitHubResourceListProps {
   initialCount?: number | null;
 }
 
-const ITEM_HEIGHT_PX = 64;
+const ITEM_HEIGHT_PX = 56;
 const MAX_SKELETON_ITEMS = 6;
 
 export function GitHubResourceList({
@@ -410,15 +410,8 @@ export function GitHubResourceList({
                     <div className="h-4 bg-muted rounded w-10 shrink-0" />
                   </div>
                   <div className="mt-1 flex items-center gap-1.5">
-                    <div className="h-4 bg-muted rounded w-10" />
-                    <div className="h-4 bg-muted rounded w-12" />
+                    <div className="h-4 bg-muted rounded w-16" />
                     <div className="h-4 bg-muted rounded w-14" />
-                  </div>
-                </div>
-                <div className="flex items-center gap-2 shrink-0">
-                  <div className="flex -space-x-1.5">
-                    <div className="w-5 h-5 rounded-full bg-muted border-2 border-canopy-sidebar" />
-                    <div className="w-5 h-5 rounded-full bg-muted border-2 border-canopy-sidebar" />
                   </div>
                 </div>
               </div>
