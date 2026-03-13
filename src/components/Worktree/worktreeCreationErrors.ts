@@ -53,7 +53,7 @@ export function mapCreationError(rawMessage: string, onClose?: () => void): Work
     };
   }
 
-  if (rawMessage.includes("already exists")) {
+  if (rawMessage.includes("already exists") && rawMessage.includes("work tree")) {
     return {
       friendly: "A worktree already exists at this path.",
       raw: rawMessage,

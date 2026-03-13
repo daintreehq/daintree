@@ -460,7 +460,7 @@ export function NewWorktreeDialog({
       })
       .catch((err) => {
         if (!isCurrent) return;
-        setCreationError(mapCreationError(`Failed to load branches: ${err.message}`));
+        setValidationError(`Failed to load branches: ${err.message}`);
         setBranches([]);
         setBaseBranch("");
         setFromRemote(false);
@@ -1057,6 +1057,8 @@ export function NewWorktreeDialog({
                         onChange={(e) => {
                           setBranchInput(e.target.value);
                           branchInputTouchedRef.current = true;
+                          setValidationError(null);
+                          setCreationError(null);
                         }}
                         onKeyDown={handlePrefixKeyDown}
                         placeholder="feature/add-user-auth"
@@ -1176,6 +1178,8 @@ export function NewWorktreeDialog({
                       onChange={(e) => {
                         setWorktreePath(e.target.value);
                         pathTouchedRef.current = true;
+                        setValidationError(null);
+                        setCreationError(null);
                       }}
                       placeholder="/path/to/worktree"
                       className="w-full px-3 pr-10 py-2 bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] text-canopy-text focus:outline-none focus:ring-2 focus:ring-canopy-accent"
@@ -1209,9 +1213,7 @@ export function NewWorktreeDialog({
                       } catch (err: unknown) {
                         console.error("Failed to open directory picker:", err);
                         const message = err instanceof Error ? err.message : "Unknown error";
-                        setCreationError(
-                          mapCreationError(`Failed to open directory picker: ${message}`)
-                        );
+                        setValidationError(`Failed to open directory picker: ${message}`);
                       }
                     }}
                     disabled={creating}
@@ -1476,6 +1478,8 @@ export function NewWorktreeDialog({
               disabled={
                 creating ||
                 loading ||
+                isCheckingBranch ||
+                isGeneratingPath ||
                 (initialPR !== null && initialPR !== undefined && prBranchResolved === false)
               }
               className="min-w-[100px]"
