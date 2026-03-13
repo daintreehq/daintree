@@ -173,6 +173,7 @@ describe("CliAvailabilityService", () => {
         gemini: true,
         codex: true,
         opencode: true,
+        cursor: true,
       });
     });
   });
@@ -188,6 +189,7 @@ describe("CliAvailabilityService", () => {
         gemini: true,
         codex: true,
         opencode: true,
+        cursor: true,
       });
 
       // Clear mocks
@@ -231,6 +233,7 @@ describe("CliAvailabilityService", () => {
         gemini: true,
         codex: true,
         opencode: true,
+        cursor: true,
       });
 
       expect(freshService.getAvailability()).toEqual(result);
