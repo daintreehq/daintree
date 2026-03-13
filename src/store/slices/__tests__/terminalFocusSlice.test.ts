@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, beforeAll, afterAll } from "vitest";
 import { createTerminalFocusSlice, type TerminalFocusSlice } from "../terminalFocusSlice";
 import type { TerminalInstance } from "../terminalRegistrySlice";
 
@@ -331,5 +331,125 @@ describe("TerminalFocusSlice - Tab Group Maximize", () => {
 
     expect(state.maximizedId).toBe(null);
     expect(state.maximizeTarget).toBe(null);
+  });
+});
+
+describe("TerminalFocusSlice - focusNextBlockedDock", () => {
+  beforeAll(() => {
+    // openDockTerminal accesses window.electron?.notification?.acknowledgeWaiting
+    (globalThis as any).window = { electron: { notification: { acknowledgeWaiting: vi.fn() } } };
+  });
+
+  afterAll(() => {
+    delete (globalThis as any).window;
+  });
+
+  const makeDockTerminal = (
+    id: string,
+    agentState: string,
+    worktreeId = "worktree-1"
+  ): TerminalInstance =>
+    ({
+      id,
+      title: id,
+      type: "claude",
+      cwd: "/test",
+      location: "dock",
+      agentState,
+      isVisible: true,
+      cols: 80,
+      rows: 24,
+      worktreeId,
+    }) as TerminalInstance;
+
+  let terminals: TerminalInstance[];
+  let getTerminals: ReturnType<typeof vi.fn>;
+  let state: TerminalFocusSlice;
+  let setState: ReturnType<typeof vi.fn>;
+  let getState: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    terminals = [];
+    getTerminals = vi.fn(() => terminals);
+    setState = vi.fn((updater: unknown) => {
+      const currentState = getState();
+      const updates = typeof updater === "function" ? updater(currentState) : updater;
+      state = { ...currentState, ...updates };
+    });
+    getState = vi.fn(() => state);
+    state = createTerminalFocusSlice(getTerminals)(setState, getState, {} as never);
+  });
+
+  it("should be a no-op when no dock terminals are blocked", () => {
+    terminals = [makeDockTerminal("d1", "idle"), makeDockTerminal("d2", "working")];
+    state.focusNextBlockedDock("worktree-1");
+    expect(state.activeDockTerminalId).toBeNull();
+  });
+
+  it("should select the first blocked dock terminal when none is currently open", () => {
+    terminals = [makeDockTerminal("d1", "idle"), makeDockTerminal("d2", "waiting")];
+    state.focusNextBlockedDock("worktree-1");
+    expect(state.activeDockTerminalId).toBe("d2");
+    expect(state.focusedId).toBe("d2");
+  });
+
+  it("should prioritize failed over waiting", () => {
+    terminals = [
+      makeDockTerminal("d1", "waiting"),
+      makeDockTerminal("d2", "failed"),
+      makeDockTerminal("d3", "waiting"),
+    ];
+    state.focusNextBlockedDock("worktree-1");
+    expect(state.activeDockTerminalId).toBe("d2");
+  });
+
+  it("should cycle through blocked terminals with wrap-around", () => {
+    terminals = [
+      makeDockTerminal("d1", "failed"),
+      makeDockTerminal("d2", "waiting"),
+      makeDockTerminal("d3", "waiting"),
+    ];
+
+    // First call: selects d1 (failed, first in sorted order)
+    state.focusNextBlockedDock("worktree-1");
+    expect(state.activeDockTerminalId).toBe("d1");
+
+    // Second call: d2 (first waiting)
+    state.focusNextBlockedDock("worktree-1");
+    expect(state.activeDockTerminalId).toBe("d2");
+
+    // Third call: d3 (second waiting)
+    state.focusNextBlockedDock("worktree-1");
+    expect(state.activeDockTerminalId).toBe("d3");
+
+    // Fourth call: wraps back to d1
+    state.focusNextBlockedDock("worktree-1");
+    expect(state.activeDockTerminalId).toBe("d1");
+  });
+
+  it("should ignore grid terminals and other worktrees", () => {
+    terminals = [
+      {
+        ...makeDockTerminal("g1", "failed"),
+        location: "grid",
+      } as TerminalInstance,
+      makeDockTerminal("d1", "failed", "worktree-2"),
+      makeDockTerminal("d2", "waiting"),
+    ];
+    state.focusNextBlockedDock("worktree-1");
+    expect(state.activeDockTerminalId).toBe("d2");
+  });
+
+  it("should call setActiveTab for grouped panels", () => {
+    terminals = [makeDockTerminal("d1", "failed")];
+    const mockGetPanelGroup = vi.fn(() => ({ id: "group-1", panelIds: ["d1", "d-other"] }));
+    const setActiveTabSpy = vi.spyOn(state, "setActiveTab");
+
+    state.focusNextBlockedDock("worktree-1", mockGetPanelGroup);
+
+    expect(mockGetPanelGroup).toHaveBeenCalledWith("d1");
+    expect(setActiveTabSpy).toHaveBeenCalledWith("group-1", "d1");
+    expect(state.activeDockTerminalId).toBe("d1");
   });
 });
