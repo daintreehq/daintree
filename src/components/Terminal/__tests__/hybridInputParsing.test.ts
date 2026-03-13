@@ -98,6 +98,22 @@ describe("getSlashCommandContext", () => {
   it("rejects consecutive slashes like //help", () => {
     expect(getSlashCommandContext("//help", 3)).toBeNull();
   });
+
+  it("activates for bare slash at start", () => {
+    const ctx = getSlashCommandContext("/", 1);
+    expect(ctx).not.toBeNull();
+    expect(ctx?.start).toBe(0);
+    expect(ctx?.tokenEnd).toBe(1);
+    expect(ctx?.query).toBe("/");
+  });
+
+  it("activates for bare slash mid-text", () => {
+    const ctx = getSlashCommandContext("echo /", 6);
+    expect(ctx).not.toBeNull();
+    expect(ctx?.start).toBe(5);
+    expect(ctx?.tokenEnd).toBe(6);
+    expect(ctx?.query).toBe("/");
+  });
 });
 
 describe("getLeadingSlashCommand", () => {
@@ -206,10 +222,7 @@ describe("getAllSlashCommandTokens", () => {
 
   it("skips consecutive slashes", () => {
     const tokens = getAllSlashCommandTokens("//help");
-    expect(tokens).toHaveLength(1);
-    // The second / is preceded by the first /, not whitespace, so only the first token from position 0
-    // Actually: first / is at pos 0, scans forward to find "//help" as one token
-    expect(tokens[0]).toEqual({ start: 0, end: 6, command: "//help" });
+    expect(tokens).toHaveLength(0);
   });
 
   it("returns empty for text with no slash commands", () => {

@@ -95,6 +95,11 @@ export function getAllSlashCommandTokens(text: string): SlashCommandToken[] {
     const slashStart = i;
     i++; // Move past /
 
+    // Reject consecutive slashes (e.g. //help, ///foo)
+    if (i < text.length && text[i] === "/") {
+      continue;
+    }
+
     // Scan forward for token end (first whitespace or end of string)
     while (i < text.length && !/\s/.test(text[i])) {
       i++;
