@@ -12,7 +12,6 @@ vi.mock("react-dom", async () => {
   return { ...actual, createPortal: (children: ReactNode) => children };
 });
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 vi.mock("@/store/worktreeDataStore", () => ({
   useWorktreeDataStore: vi.fn((selector: (s: { worktrees: Map<string, any> }) => unknown) =>
     selector({ worktrees: new Map() })
