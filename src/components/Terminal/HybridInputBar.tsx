@@ -612,7 +612,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         setAtContext(null);
         setSlashContext(null);
       },
-      [applyEditorValue]
+      [applyEditorValue, agentId]
     );
 
     // Voice segments are flushed to the draft store by VoiceRecordingService
