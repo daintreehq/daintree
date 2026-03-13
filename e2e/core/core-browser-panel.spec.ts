@@ -69,8 +69,12 @@ test.describe.serial("Core: Browser Panel", () => {
       });
       await expect(browserPanel).toBeVisible({ timeout: T_LONG });
       await expect(browserPanel.locator(SEL.browser.backButton)).toBeVisible({ timeout: T_SHORT });
-      await expect(browserPanel.locator(SEL.browser.forwardButton)).toBeVisible({ timeout: T_SHORT });
-      await expect(browserPanel.locator(SEL.browser.reloadButton)).toBeVisible({ timeout: T_SHORT });
+      await expect(browserPanel.locator(SEL.browser.forwardButton)).toBeVisible({
+        timeout: T_SHORT,
+      });
+      await expect(browserPanel.locator(SEL.browser.reloadButton)).toBeVisible({
+        timeout: T_SHORT,
+      });
     });
 
     test("back and forward buttons disabled on fresh panel", async () => {
@@ -183,11 +187,16 @@ test.describe.serial("Core: Browser Panel", () => {
 
       // Open first browser panel and navigate to page-a
       await window.locator(SEL.toolbar.openBrowser).click();
-      await expect.poll(() => getGridPanelCount(window), { timeout: T_LONG }).toBeGreaterThanOrEqual(1);
+      await expect
+        .poll(() => getGridPanelCount(window), { timeout: T_LONG })
+        .toBeGreaterThanOrEqual(1);
 
-      const panel1 = window.locator(SEL.panel.gridPanel).filter({
-        has: window.locator(SEL.browser.addressBar),
-      }).first();
+      const panel1 = window
+        .locator(SEL.panel.gridPanel)
+        .filter({
+          has: window.locator(SEL.browser.addressBar),
+        })
+        .first();
       const addressBar1 = panel1.locator(SEL.browser.addressBar);
 
       await addressBar1.click();
@@ -228,7 +237,9 @@ test.describe.serial("Core: Browser Panel", () => {
       const initialCount = await getGridPanelCount(window);
       if (initialCount === 0) {
         await window.locator(SEL.toolbar.openBrowser).click();
-        await expect.poll(() => getGridPanelCount(window), { timeout: T_LONG }).toBeGreaterThanOrEqual(1);
+        await expect
+          .poll(() => getGridPanelCount(window), { timeout: T_LONG })
+          .toBeGreaterThanOrEqual(1);
       }
 
       const count = await getGridPanelCount(window);
