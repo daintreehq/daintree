@@ -77,9 +77,7 @@ describe("WorktreeMonitor", () => {
   });
 
   it("calls onRemoved and stops when WorktreeRemovedError is thrown", async () => {
-    mockGetWorktreeChangesWithStats.mockRejectedValue(
-      new WorktreeRemovedError("/test/worktree")
-    );
+    mockGetWorktreeChangesWithStats.mockRejectedValue(new WorktreeRemovedError("/test/worktree"));
 
     const callbacks = makeCallbacks();
     const monitor = new WorktreeMonitor(TEST_WORKTREE, TEST_CONFIG, callbacks, "main");

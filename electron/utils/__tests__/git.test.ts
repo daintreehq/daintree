@@ -133,8 +133,8 @@ describe("getWorktreeChangesWithStats", () => {
   it("does not throw WorktreeRemovedError for unrelated git errors", async () => {
     mockGit.status.mockRejectedValue(new Error("fatal: unable to access remote"));
 
-    await expect(
-      getWorktreeChangesWithStats("/valid/worktree", true)
-    ).rejects.not.toThrow(WorktreeRemovedError);
+    await expect(getWorktreeChangesWithStats("/valid/worktree", true)).rejects.not.toThrow(
+      WorktreeRemovedError
+    );
   });
 });
