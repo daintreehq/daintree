@@ -207,6 +207,22 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     },
   }));
 
+  actions.set("dock.focusNextWaiting", () => ({
+    id: "dock.focusNextWaiting",
+    title: "Focus Next Blocked Dock Agent",
+    description: "Jump to the next waiting or failed agent in the dock (failed before waiting)",
+    category: "agent",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    run: async () => {
+      const state = useTerminalStore.getState();
+      const { useWorktreeSelectionStore } = await import("@/store/worktreeStore");
+      const activeWorktreeId = useWorktreeSelectionStore.getState().activeWorktreeId;
+      state.focusNextBlockedDock(activeWorktreeId);
+    },
+  }));
+
   actions.set("agent.focusPreviousAgent", () => ({
     id: "agent.focusPreviousAgent",
     title: "Focus Previous Agent",
