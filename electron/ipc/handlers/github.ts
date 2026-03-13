@@ -9,7 +9,7 @@ import type {
 } from "../../types/index.js";
 import { getWorkspaceClient } from "../../services/WorkspaceClient.js";
 
-function buildGitHubSearchQuery(
+export function buildGitHubSearchQuery(
   searchText: string | undefined,
   state: string | undefined,
   resourceType: "issue" | "pr"
