@@ -3,8 +3,6 @@ import { useShallow } from "zustand/react/shallow";
 import type { TerminalRecipe } from "@/types";
 import { useRecipeStore } from "@/store/recipeStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
-import { useProjectStore } from "@/store/projectStore";
-import { useGitHubConfigStore } from "@/store/githubConfigStore";
 import { useSearchablePalette, type UseSearchablePaletteReturn } from "./useSearchablePalette";
 import { actionService } from "@/services/ActionService";
 import { getAutoAssign } from "@shared/types/domain";
@@ -37,8 +35,6 @@ export function useQuickCreatePalette(): UseQuickCreatePaletteReturn {
       closeQuickCreate: s.closeQuickCreate,
     }))
   );
-  const currentProject = useProjectStore((s) => s.currentProject);
-
   const [isPending, startTransition] = useTransition();
   const [assignToSelf, setAssignToSelf] = useState(true);
 
@@ -171,7 +167,6 @@ export function useQuickCreatePalette(): UseQuickCreatePaletteReturn {
     pr,
     assignToSelf,
     palette,
-    currentProject,
   ]);
 
   return {

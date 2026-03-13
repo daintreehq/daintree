@@ -141,7 +141,6 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     focusedWorktreeId,
     selectWorktree,
     createDialog,
-    openCreateDialog,
     closeCreateDialog,
     openQuickCreate,
   } = useWorktreeSelectionStore(
@@ -150,7 +149,6 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
       focusedWorktreeId: state.focusedWorktreeId,
       selectWorktree: state.selectWorktree,
       createDialog: state.createDialog,
-      openCreateDialog: state.openCreateDialog,
       closeCreateDialog: state.closeCreateDialog,
       openQuickCreate: state.openQuickCreate,
     }))
