@@ -337,11 +337,19 @@ describe("TerminalFocusSlice - Tab Group Maximize", () => {
 describe("TerminalFocusSlice - focusNextBlockedDock", () => {
   beforeAll(() => {
     // openDockTerminal accesses window.electron?.notification?.acknowledgeWaiting
-    (globalThis as any).window = { electron: { notification: { acknowledgeWaiting: vi.fn() } } };
+    Object.defineProperty(globalThis, "window", {
+      value: { electron: { notification: { acknowledgeWaiting: vi.fn() } } },
+      writable: true,
+      configurable: true,
+    });
   });
 
   afterAll(() => {
-    delete (globalThis as any).window;
+    Object.defineProperty(globalThis, "window", {
+      value: undefined,
+      writable: true,
+      configurable: true,
+    });
   });
 
   const makeDockTerminal = (
@@ -363,16 +371,16 @@ describe("TerminalFocusSlice - focusNextBlockedDock", () => {
     }) as TerminalInstance;
 
   let terminals: TerminalInstance[];
-  let getTerminals: ReturnType<typeof vi.fn>;
+  let getTerminals: any;
   let state: TerminalFocusSlice;
-  let setState: ReturnType<typeof vi.fn>;
-  let getState: ReturnType<typeof vi.fn>;
+  let setState: any;
+  let getState: any;
 
   beforeEach(() => {
     vi.clearAllMocks();
     terminals = [];
     getTerminals = vi.fn(() => terminals);
-    setState = vi.fn((updater: unknown) => {
+    setState = vi.fn((updater) => {
       const currentState = getState();
       const updates = typeof updater === "function" ? updater(currentState) : updater;
       state = { ...currentState, ...updates };
