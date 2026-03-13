@@ -372,8 +372,10 @@ interface FileChipState {
   tokens: AtFileToken[];
 }
 
+const DIFF_TOKEN_PATHS = new Set(["diff", "diff:staged", "diff:head"]);
+
 function buildFileChipState(text: string): FileChipState {
-  const tokens = getAllAtFileTokens(text);
+  const tokens = getAllAtFileTokens(text).filter((t) => !DIFF_TOKEN_PATHS.has(t.path));
   if (tokens.length === 0) {
     return { decorations: Decoration.none, tokens: [] };
   }

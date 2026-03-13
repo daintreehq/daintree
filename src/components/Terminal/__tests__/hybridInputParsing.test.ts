@@ -293,6 +293,27 @@ describe("getDiffContext", () => {
     expect(ctx).not.toBeNull();
     expect(ctx?.diffType).toBeNull(); // partial, not a full match
   });
+
+  it("activates with caret in middle of @diff:staged", () => {
+    const text = "@diff:staged";
+    const caret = "@diff:st".length;
+    const ctx = getDiffContext(text, caret);
+    expect(ctx).not.toBeNull();
+    expect(ctx?.atStart).toBe(0);
+    expect(ctx?.diffType).toBe("staged"); // full token is diff:staged
+  });
+
+  it("returns null when caret is before the @", () => {
+    const text = "check @diff";
+    const caret = 3; // before @
+    expect(getDiffContext(text, caret)).toBeNull();
+  });
+
+  it("returns null when caret is after the token with trailing text", () => {
+    const text = "@diff rest";
+    const caret = "@diff r".length; // past the @diff token
+    expect(getDiffContext(text, caret)).toBeNull();
+  });
 });
 
 describe("getAllAtDiffTokens", () => {
@@ -322,5 +343,24 @@ describe("getAllAtDiffTokens", () => {
   it("returns empty for text with no diff tokens", () => {
     const tokens = getAllAtDiffTokens("just plain text");
     expect(tokens).toHaveLength(0);
+  });
+
+  it("finds diff tokens alongside @file tokens", () => {
+    const tokens = getAllAtDiffTokens("@diff @src/file.ts @diff:head");
+    expect(tokens).toHaveLength(2);
+    expect(tokens[0].diffType).toBe("unstaged");
+    expect(tokens[1].diffType).toBe("head");
+  });
+
+  it("handles duplicate diff tokens", () => {
+    const tokens = getAllAtDiffTokens("@diff @diff");
+    expect(tokens).toHaveLength(2);
+  });
+
+  it("handles newline-delimited tokens", () => {
+    const tokens = getAllAtDiffTokens("@diff\n@diff:staged");
+    expect(tokens).toHaveLength(2);
+    expect(tokens[0].diffType).toBe("unstaged");
+    expect(tokens[1].diffType).toBe("staged");
   });
 });

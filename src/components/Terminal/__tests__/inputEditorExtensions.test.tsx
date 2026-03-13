@@ -8,6 +8,7 @@ import {
   computeAutoSize,
   createAutoSize,
   createCustomKeymap,
+  createFileChipField,
   fileDropChipField,
   addFileDropChip,
   createFilePasteHandler,
@@ -1157,5 +1158,29 @@ describe("diffChipField", () => {
       changes: { from: 0, to: 5, insert: "hello" },
     });
     expect(tr.state.field(diffChipField).tokens).toHaveLength(0);
+  });
+});
+
+describe("fileChipField excludes diff tokens", () => {
+  it("does not treat @diff as a file token", () => {
+    const fileChipStateField = createFileChipField();
+    const state = EditorState.create({
+      doc: "@diff @src/file.ts",
+      extensions: [fileChipStateField],
+    });
+    const chipState = state.field(fileChipStateField);
+    expect(chipState.tokens).toHaveLength(1);
+    expect(chipState.tokens[0].path).toBe("src/file.ts");
+  });
+
+  it("does not treat @diff:staged or @diff:head as file tokens", () => {
+    const fileChipStateField = createFileChipField();
+    const state = EditorState.create({
+      doc: "@diff:staged @diff:head @src/App.tsx",
+      extensions: [fileChipStateField],
+    });
+    const chipState = state.field(fileChipStateField);
+    expect(chipState.tokens).toHaveLength(1);
+    expect(chipState.tokens[0].path).toBe("src/App.tsx");
   });
 });

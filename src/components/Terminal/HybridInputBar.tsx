@@ -495,6 +495,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       lastEmittedValueRef.current = draft;
       setAtContext(null);
       setSlashContext(null);
+      setDiffContext(null);
       setSelectedIndex(0);
       lastQueryRef.current = "";
       lastEnterKeydownNewlineRef.current = false;
@@ -1010,6 +1011,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
             sendText(nextValue);
             setAtContext(null);
             setSlashContext(null);
+            setDiffContext(null);
             setSelectedIndex(0);
             lastQueryRef.current = "";
             return;
@@ -1021,6 +1023,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
           });
           setAtContext(null);
           setSlashContext(null);
+          setDiffContext(null);
           setSelectedIndex(0);
           lastQueryRef.current = "";
           return;
@@ -1041,6 +1044,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
             sendText(nextValue);
             setAtContext(null);
             setSlashContext(null);
+            setDiffContext(null);
             setSelectedIndex(0);
             lastQueryRef.current = "";
             return;
@@ -1052,6 +1056,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
           });
           setAtContext(null);
           setSlashContext(null);
+          setDiffContext(null);
           setSelectedIndex(0);
           lastQueryRef.current = "";
         }
@@ -1293,6 +1298,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
 
             setAtContext(null);
             setSlashContext(null);
+            setDiffContext(null);
             lastEnterKeydownNewlineRef.current = false;
             handledEnterRef.current = false;
             submitAfterCompositionRef.current = false;
@@ -1413,6 +1419,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
             if (latest.isAutocompleteOpen) {
               setAtContext(null);
               setSlashContext(null);
+              setDiffContext(null);
               return true;
             }
 
