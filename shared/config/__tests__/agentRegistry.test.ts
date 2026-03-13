@@ -29,6 +29,16 @@ describe("agentRegistry", () => {
       expect(ids).toContain("gemini");
       expect(ids).toContain("codex");
       expect(ids).toContain("opencode");
+      expect(ids).toContain("cursor");
+    });
+
+    it("each built-in agent has a non-empty color", () => {
+      const ids = getAgentIds();
+      for (const id of ids) {
+        const config = getAgentConfig(id);
+        expect(config?.color).toBeTruthy();
+        expect(config?.color).toMatch(/^#[0-9a-fA-F]{6}$/);
+      }
     });
 
     it("returns agent config for built-in agents", () => {

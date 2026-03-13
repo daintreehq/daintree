@@ -1,6 +1,5 @@
 import type { AgentRoutingConfig } from "../types/agentSettings.js";
 import type { PrerequisiteSpec } from "../types/ipc/system.js";
-import { AGENT_BRAND_COLORS } from "../theme/index.js";
 
 export interface AgentHelpConfig {
   args: string[];
@@ -209,7 +208,7 @@ export const AGENT_REGISTRY: Record<string, AgentConfig> = {
     id: "claude",
     name: "Claude",
     command: "claude",
-    color: AGENT_BRAND_COLORS.claude,
+    color: "#CC785C",
     iconId: "claude",
     supportsContextInjection: true,
     shortcut: "Cmd/Ctrl+Alt+C",
@@ -326,7 +325,7 @@ export const AGENT_REGISTRY: Record<string, AgentConfig> = {
     id: "gemini",
     name: "Gemini",
     command: "gemini",
-    color: AGENT_BRAND_COLORS.gemini,
+    color: "#4285F4",
     iconId: "gemini",
     supportsContextInjection: true,
     shortcut: "Cmd/Ctrl+Alt+G",
@@ -442,7 +441,7 @@ export const AGENT_REGISTRY: Record<string, AgentConfig> = {
     id: "codex",
     name: "Codex",
     command: "codex",
-    color: AGENT_BRAND_COLORS.codex,
+    color: "#e4e4e7",
     iconId: "codex",
     supportsContextInjection: true,
     shortcut: "Cmd/Ctrl+Alt+X",
@@ -560,7 +559,7 @@ export const AGENT_REGISTRY: Record<string, AgentConfig> = {
     id: "opencode",
     name: "OpenCode",
     command: "opencode",
-    color: AGENT_BRAND_COLORS.opencode,
+    color: "#10b981",
     iconId: "opencode",
     supportsContextInjection: true,
     shortcut: "Cmd/Ctrl+Alt+O",
@@ -704,7 +703,7 @@ export const AGENT_REGISTRY: Record<string, AgentConfig> = {
     id: "cursor",
     name: "Cursor",
     command: "cursor-agent",
-    color: AGENT_BRAND_COLORS.cursor,
+    color: "#3ee6eb",
     iconId: "cursor",
     supportsContextInjection: true,
     shortcut: "Cmd/Ctrl+Alt+U",
