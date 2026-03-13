@@ -136,21 +136,16 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   const currentProject = useProjectStore((state) => state.currentProject);
   useProjectSettings();
   const { launchAgent, availability, agentSettings } = useAgentLauncher();
-  const {
-    activeWorktreeId,
-    focusedWorktreeId,
-    selectWorktree,
-    createDialog,
-    closeCreateDialog,
-  } = useWorktreeSelectionStore(
-    useShallow((state) => ({
-      activeWorktreeId: state.activeWorktreeId,
-      focusedWorktreeId: state.focusedWorktreeId,
-      selectWorktree: state.selectWorktree,
-      createDialog: state.createDialog,
-      closeCreateDialog: state.closeCreateDialog,
-    }))
-  );
+  const { activeWorktreeId, focusedWorktreeId, selectWorktree, createDialog, closeCreateDialog } =
+    useWorktreeSelectionStore(
+      useShallow((state) => ({
+        activeWorktreeId: state.activeWorktreeId,
+        focusedWorktreeId: state.focusedWorktreeId,
+        selectWorktree: state.selectWorktree,
+        createDialog: state.createDialog,
+        closeCreateDialog: state.closeCreateDialog,
+      }))
+    );
 
   // Filter/sort state - destructured for stable memoization
   const {
