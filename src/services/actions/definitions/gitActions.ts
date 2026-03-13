@@ -1,4 +1,5 @@
 import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
+import type { ActionContext } from "@shared/types/actions";
 import { GitStatusSchema, PulseRangeDaysSchema } from "./schemas";
 import { z } from "zod";
 
@@ -104,10 +105,12 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
     kind: "command",
     danger: "safe",
     scope: "renderer",
-    argsSchema: z.object({ cwd: z.string() }),
-    run: async (args: unknown) => {
-      const { cwd } = args as { cwd: string };
-      await window.electron.git.stageAll(cwd);
+    argsSchema: z.object({ cwd: z.string().optional() }).optional(),
+    run: async (args: unknown, ctx: ActionContext) => {
+      const { cwd } = (args ?? {}) as { cwd?: string };
+      const resolvedCwd = cwd ?? ctx.activeWorktreePath;
+      if (!resolvedCwd) throw new Error("No active worktree");
+      await window.electron.git.stageAll(resolvedCwd);
     },
   }));
 
@@ -134,10 +137,15 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
     kind: "command",
     danger: "confirm",
     scope: "renderer",
-    argsSchema: z.object({ cwd: z.string(), message: z.string().min(1) }),
-    run: async (args: unknown) => {
-      const { cwd, message } = args as { cwd: string; message: string };
-      return await window.electron.git.commit(cwd, message);
+    argsSchema: z
+      .object({ cwd: z.string().optional(), message: z.string().min(1).optional() })
+      .optional(),
+    run: async (args: unknown, ctx: ActionContext) => {
+      const { cwd, message } = (args ?? {}) as { cwd?: string; message?: string };
+      const resolvedCwd = cwd ?? ctx.activeWorktreePath;
+      if (!resolvedCwd) throw new Error("No active worktree");
+      if (!message) throw new Error("Commit message is required");
+      return await window.electron.git.commit(resolvedCwd, message);
     },
   }));
 
@@ -149,10 +157,14 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
     kind: "command",
     danger: "confirm",
     scope: "renderer",
-    argsSchema: z.object({ cwd: z.string(), setUpstream: z.boolean().optional() }),
-    run: async (args: unknown) => {
-      const { cwd, setUpstream } = args as { cwd: string; setUpstream?: boolean };
-      return await window.electron.git.push(cwd, setUpstream);
+    argsSchema: z
+      .object({ cwd: z.string().optional(), setUpstream: z.boolean().optional() })
+      .optional(),
+    run: async (args: unknown, ctx: ActionContext) => {
+      const { cwd, setUpstream } = (args ?? {}) as { cwd?: string; setUpstream?: boolean };
+      const resolvedCwd = cwd ?? ctx.activeWorktreePath;
+      if (!resolvedCwd) throw new Error("No active worktree");
+      return await window.electron.git.push(resolvedCwd, setUpstream);
     },
   }));
 
