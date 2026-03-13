@@ -13,6 +13,25 @@ async function writeFile(filePath: string, contents: string): Promise<void> {
   await fs.writeFile(filePath, contents, "utf8");
 }
 
+function overrideHome(dir: string): Record<string, string | undefined> {
+  const prev: Record<string, string | undefined> = {
+    HOME: process.env.HOME,
+    USERPROFILE: process.env.USERPROFILE,
+    XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME,
+  };
+  process.env.HOME = dir;
+  process.env.USERPROFILE = dir;
+  delete process.env.XDG_CONFIG_HOME;
+  return prev;
+}
+
+function restoreHome(prev: Record<string, string | undefined>): void {
+  for (const [key, val] of Object.entries(prev)) {
+    if (val !== undefined) process.env[key] = val;
+    else delete process.env[key];
+  }
+}
+
 describe("SlashCommandService", () => {
   it("includes /add-dir in Claude built-ins", async () => {
     const homeRoot = await makeTempDir();
@@ -285,11 +304,7 @@ Create an issue.
     const homeRoot = await makeTempDir();
     const root = await makeTempDir();
     const service = new SlashCommandService();
-
-    const prevHome = process.env.HOME;
-    const prevXdg = process.env.XDG_CONFIG_HOME;
-    process.env.HOME = homeRoot;
-    delete process.env.XDG_CONFIG_HOME;
+    const prev = overrideHome(homeRoot);
 
     try {
       await fs.mkdir(path.join(root, ".git"));
@@ -312,8 +327,7 @@ Commit instructions here.
       expect(skill?.description).toBe("Create a conventional commit");
       expect(skill?.kind).toBe("skill");
     } finally {
-      process.env.HOME = prevHome;
-      if (prevXdg !== undefined) process.env.XDG_CONFIG_HOME = prevXdg;
+      restoreHome(prev);
       await fs.rm(homeRoot, { recursive: true, force: true });
       await fs.rm(root, { recursive: true, force: true });
     }
@@ -323,11 +337,7 @@ Commit instructions here.
     const homeRoot = await makeTempDir();
     const projectRoot = await makeTempDir();
     const service = new SlashCommandService();
-
-    const prevHome = process.env.HOME;
-    const prevXdg = process.env.XDG_CONFIG_HOME;
-    process.env.HOME = homeRoot;
-    delete process.env.XDG_CONFIG_HOME;
+    const prev = overrideHome(homeRoot);
 
     try {
       await fs.mkdir(path.join(projectRoot, ".git"));
@@ -349,8 +359,7 @@ Research things.
       expect(skill?.scope).toBe("user");
       expect(skill?.description).toBe("Deep research skill");
     } finally {
-      process.env.HOME = prevHome;
-      if (prevXdg !== undefined) process.env.XDG_CONFIG_HOME = prevXdg;
+      restoreHome(prev);
       await fs.rm(homeRoot, { recursive: true, force: true });
       await fs.rm(projectRoot, { recursive: true, force: true });
     }
@@ -360,11 +369,7 @@ Research things.
     const homeRoot = await makeTempDir();
     const root = await makeTempDir();
     const service = new SlashCommandService();
-
-    const prevHome = process.env.HOME;
-    const prevXdg = process.env.XDG_CONFIG_HOME;
-    process.env.HOME = homeRoot;
-    delete process.env.XDG_CONFIG_HOME;
+    const prev = overrideHome(homeRoot);
 
     try {
       await fs.mkdir(path.join(root, ".git"));
@@ -397,8 +402,7 @@ Deploy via skill.
       expect(deploy?.kind).toBe("skill");
       expect(deploy?.description).toBe("Deploy skill");
     } finally {
-      process.env.HOME = prevHome;
-      if (prevXdg !== undefined) process.env.XDG_CONFIG_HOME = prevXdg;
+      restoreHome(prev);
       await fs.rm(homeRoot, { recursive: true, force: true });
       await fs.rm(root, { recursive: true, force: true });
     }
@@ -408,11 +412,7 @@ Deploy via skill.
     const homeRoot = await makeTempDir();
     const root = await makeTempDir();
     const service = new SlashCommandService();
-
-    const prevHome = process.env.HOME;
-    const prevXdg = process.env.XDG_CONFIG_HOME;
-    process.env.HOME = homeRoot;
-    delete process.env.XDG_CONFIG_HOME;
+    const prev = overrideHome(homeRoot);
 
     try {
       await fs.mkdir(path.join(root, ".git"));
@@ -433,8 +433,7 @@ Not for users.
 
       expect(internal).toBeUndefined();
     } finally {
-      process.env.HOME = prevHome;
-      if (prevXdg !== undefined) process.env.XDG_CONFIG_HOME = prevXdg;
+      restoreHome(prev);
       await fs.rm(homeRoot, { recursive: true, force: true });
       await fs.rm(root, { recursive: true, force: true });
     }
@@ -443,11 +442,7 @@ Not for users.
   it("handles missing skills directory gracefully", async () => {
     const root = await makeTempDir();
     const service = new SlashCommandService();
-
-    const prevHome = process.env.HOME;
-    const prevXdg = process.env.XDG_CONFIG_HOME;
-    process.env.HOME = root;
-    delete process.env.XDG_CONFIG_HOME;
+    const prev = overrideHome(root);
 
     try {
       await fs.mkdir(path.join(root, ".git"));
@@ -457,8 +452,7 @@ Not for users.
       const skills = commands.filter((c) => c.kind === "skill");
       expect(skills).toHaveLength(0);
     } finally {
-      process.env.HOME = prevHome;
-      if (prevXdg !== undefined) process.env.XDG_CONFIG_HOME = prevXdg;
+      restoreHome(prev);
       await fs.rm(root, { recursive: true, force: true });
     }
   });
@@ -467,11 +461,7 @@ Not for users.
     const homeRoot = await makeTempDir();
     const root = await makeTempDir();
     const service = new SlashCommandService();
-
-    const prevHome = process.env.HOME;
-    const prevXdg = process.env.XDG_CONFIG_HOME;
-    process.env.HOME = homeRoot;
-    delete process.env.XDG_CONFIG_HOME;
+    const prev = overrideHome(homeRoot);
 
     try {
       await fs.mkdir(path.join(root, ".git"));
@@ -505,8 +495,7 @@ Nested.
       expect(nested).toBeUndefined();
       expect(nestedAlt).toBeUndefined();
     } finally {
-      process.env.HOME = prevHome;
-      if (prevXdg !== undefined) process.env.XDG_CONFIG_HOME = prevXdg;
+      restoreHome(prev);
       await fs.rm(homeRoot, { recursive: true, force: true });
       await fs.rm(root, { recursive: true, force: true });
     }
@@ -516,11 +505,7 @@ Nested.
     const homeRoot = await makeTempDir();
     const root = await makeTempDir();
     const service = new SlashCommandService();
-
-    const prevHome = process.env.HOME;
-    const prevXdg = process.env.XDG_CONFIG_HOME;
-    process.env.HOME = homeRoot;
-    delete process.env.XDG_CONFIG_HOME;
+    const prev = overrideHome(homeRoot);
 
     try {
       await fs.mkdir(path.join(root, ".git"));
@@ -539,8 +524,7 @@ Just some instructions without frontmatter.
       expect(skill).toBeDefined();
       expect(skill?.description).toBe("Skill");
     } finally {
-      process.env.HOME = prevHome;
-      if (prevXdg !== undefined) process.env.XDG_CONFIG_HOME = prevXdg;
+      restoreHome(prev);
       await fs.rm(homeRoot, { recursive: true, force: true });
       await fs.rm(root, { recursive: true, force: true });
     }
