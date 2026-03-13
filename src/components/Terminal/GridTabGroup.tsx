@@ -4,6 +4,7 @@ import { GridPanel } from "./GridPanel";
 import type { TabGroup } from "@/types";
 import type { TabInfo } from "@/components/Panel/TabButton";
 import { buildPanelDuplicateOptions } from "@/services/terminal/panelDuplicationService";
+import { confirmAgentTrash } from "@/utils/agentTrashConfirm";
 import { focusPanelInput } from "./terminalFocusRegistry";
 
 export interface GridTabGroupProps {
@@ -131,6 +132,9 @@ export function GridTabGroup({
   // Handle tab close - move to trash (store handles group cleanup)
   const handleTabClose = useCallback(
     (tabId: string) => {
+      const terminal = panels.find((p) => p.id === tabId);
+      if (terminal && !confirmAgentTrash([terminal])) return;
+
       // If closing the active tab, switch to another tab first
       if (tabId === activeTabId) {
         const currentIndex = panels.findIndex((p) => p.id === tabId);
