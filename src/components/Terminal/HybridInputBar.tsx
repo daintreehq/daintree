@@ -979,15 +979,15 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       const stashed = popStashedEditorState(latest.terminalId, latest.projectId);
       if (!stashed) return false;
       view.setState(stashed);
-      // Re-apply current compartment configs since setState restores stale config
+      // Re-apply current editable config since setState restores stale config.
+      // Keymap callbacks read from latestRef so they stay current without reconfigure.
       view.dispatch({
-        effects: [
-          editableCompartmentRef.current.reconfigure(EditorView.editable.of(!latest.disabled)),
-          keymapCompartmentRef.current.reconfigure(keymapExtension),
-        ],
+        effects: editableCompartmentRef.current.reconfigure(
+          EditorView.editable.of(!latest.disabled)
+        ),
       });
       return true;
-    }, [popStashedEditorState, keymapExtension]);
+    }, [popStashedEditorState]);
 
     const keymapExtension = useMemo(
       () =>
