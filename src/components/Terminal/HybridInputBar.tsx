@@ -548,9 +548,10 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         { key: "diff:staged", label: "Staged diff (@diff:staged)", value: "@diff:staged" },
         { key: "diff:head", label: "HEAD diff (@diff:head)", value: "@diff:head" },
       ];
-      const partial = diffContext.tokenEnd > diffContext.atStart + 1
-        ? value.slice(diffContext.atStart + 1, diffContext.tokenEnd)
-        : "";
+      const partial =
+        diffContext.tokenEnd > diffContext.atStart + 1
+          ? value.slice(diffContext.atStart + 1, diffContext.tokenEnd)
+          : "";
       if (!partial) return items;
       return items.filter((item) => item.value.slice(1).startsWith(partial));
     }, [diffContext, value]);
@@ -642,7 +643,13 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         window.removeEventListener("resize", onResize);
         ro.disconnect();
       };
-    }, [activeMode, atContext?.atStart, diffContext?.atStart, isAutocompleteOpen, slashContext?.start]);
+    }, [
+      activeMode,
+      atContext?.atStart,
+      diffContext?.atStart,
+      isAutocompleteOpen,
+      slashContext?.start,
+    ]);
 
     useEffect(() => {
       const activeQuery =
@@ -658,7 +665,13 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         lastQueryRef.current = activeQuery;
         setSelectedIndex(0);
       }
-    }, [activeMode, atContext?.queryForSearch, diffContext?.atStart, diffContext?.tokenEnd, slashContext?.query]);
+    }, [
+      activeMode,
+      atContext?.queryForSearch,
+      diffContext?.atStart,
+      diffContext?.tokenEnd,
+      slashContext?.query,
+    ]);
 
     useEffect(() => {
       if (!isAutocompleteOpen) return;
@@ -1573,9 +1586,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
             !disabled ? createFileDropChipTooltip() : []
           ),
           diffChipField,
-          diffChipTooltipCompartmentRef.current.of(
-            !disabled ? createDiffChipTooltip() : []
-          ),
+          diffChipTooltipCompartmentRef.current.of(!disabled ? createDiffChipTooltip() : []),
           interimMarkField,
           pendingAIField,
           keymapCompartmentRef.current.of(keymapExtension),
@@ -1771,7 +1782,13 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
               isLoading={isLoading}
               onSelect={handleAutocompleteSelect}
               style={{ left: `${menuLeftPx}px` }}
-              ariaLabel={activeMode === "command" ? "Command autocomplete" : activeMode === "diff" ? "Diff autocomplete" : "File autocomplete"}
+              ariaLabel={
+                activeMode === "command"
+                  ? "Command autocomplete"
+                  : activeMode === "diff"
+                    ? "Diff autocomplete"
+                    : "File autocomplete"
+              }
             />
 
             {isDragOverFiles && (

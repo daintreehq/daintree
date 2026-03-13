@@ -12,7 +12,20 @@ const DIFF_TOKEN_MAP: Record<string, DiffContextType> = {
   "diff:head": "head",
 };
 
-const DIFF_PREFIXES = ["diff", "diff:", "diff:s", "diff:st", "diff:sta", "diff:stag", "diff:stage", "diff:staged", "diff:h", "diff:he", "diff:hea", "diff:head"];
+const DIFF_PREFIXES = [
+  "diff",
+  "diff:",
+  "diff:s",
+  "diff:st",
+  "diff:sta",
+  "diff:stag",
+  "diff:stage",
+  "diff:staged",
+  "diff:h",
+  "diff:he",
+  "diff:hea",
+  "diff:head",
+];
 
 export function getDiffContext(text: string, caret: number): AtDiffContext | null {
   if (caret < 0 || caret > text.length) return null;
