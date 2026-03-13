@@ -120,7 +120,7 @@ export function GitHubListItem({
       setCopied(true);
       copyTimeoutRef.current = window.setTimeout(() => setCopied(false), 1500);
     } catch {
-      // clipboard not available
+      setCopied(false);
     }
   };
 

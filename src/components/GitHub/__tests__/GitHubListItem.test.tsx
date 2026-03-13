@@ -194,9 +194,23 @@ describe("GitHubListItem", () => {
     expect(avatar.getAttribute("src")).toBe("https://example.com/alice.png");
   });
 
+  it("renders only first assignee avatar when multiple assignees", () => {
+    const issueWithMultiple: GitHubIssue = {
+      ...baseIssue,
+      assignees: [
+        { login: "alice", avatarUrl: "https://example.com/alice.png" },
+        { login: "bob", avatarUrl: "https://example.com/bob.png" },
+      ],
+    };
+    render(<GitHubListItem item={issueWithMultiple} type="issue" />);
+    expect(screen.getByAltText("alice")).toBeTruthy();
+    expect(screen.queryByAltText("bob")).toBeNull();
+  });
+
   it("does not render assignee avatar when no assignees", () => {
-    render(<GitHubListItem item={baseIssue} type="issue" />);
-    expect(screen.queryByAltText("testuser")).toBeNull();
+    const { container } = render(<GitHubListItem item={baseIssue} type="issue" />);
+    const avatarImages = container.querySelectorAll("img[alt]");
+    expect(avatarImages).toHaveLength(0);
   });
 
   it("does not render assignee avatar for PRs", () => {
@@ -226,6 +240,12 @@ describe("GitHubListItem", () => {
   it("does not show create worktree for closed issues", () => {
     const closedIssue: GitHubIssue = { ...baseIssue, state: "CLOSED" };
     render(<GitHubListItem item={closedIssue} type="issue" onCreateWorktree={vi.fn()} />);
+    expect(screen.queryByLabelText("Create worktree")).toBeNull();
+  });
+
+  it("does not show create worktree for fork PRs", () => {
+    const forkPR: GitHubPR = { ...basePR, isFork: true };
+    render(<GitHubListItem item={forkPR} type="pr" onCreateWorktree={vi.fn()} />);
     expect(screen.queryByLabelText("Create worktree")).toBeNull();
   });
 
