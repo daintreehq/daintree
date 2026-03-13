@@ -756,10 +756,10 @@ const DEFAULT_KEYBINDINGS: KeybindingConfig[] = [
   },
   {
     actionId: "worktree.copyTree",
-    combo: "c",
-    scope: "worktreeList",
-    priority: 5,
-    description: "Copy tree context",
+    combo: "Cmd+Shift+C",
+    scope: "global",
+    priority: 0,
+    description: "Copy tree context for active worktree",
     category: "Worktrees",
   },
   {
@@ -778,21 +778,46 @@ const DEFAULT_KEYBINDINGS: KeybindingConfig[] = [
     description: "Open focused panel context menu",
     category: "Panels",
   },
-  // Unbound by default but kept for user customization
+  // Git write operations (Cmd+K chord prefix)
   {
-    actionId: "agent.codex",
-    combo: "",
+    actionId: "git.stageAll",
+    combo: "Cmd+K Cmd+A",
     scope: "global",
     priority: 0,
-    description: "Launch Codex agent (unbound, configure in settings)",
+    description: "Stage all changes",
+    category: "Git",
+  },
+  {
+    actionId: "git.commit",
+    combo: "Cmd+K Cmd+C",
+    scope: "global",
+    priority: 0,
+    description: "Commit staged changes",
+    category: "Git",
+  },
+  {
+    actionId: "git.push",
+    combo: "Cmd+K Cmd+P",
+    scope: "global",
+    priority: 0,
+    description: "Push to remote",
+    category: "Git",
+  },
+  // Agent launchers
+  {
+    actionId: "agent.codex",
+    combo: "Cmd+Alt+X",
+    scope: "global",
+    priority: 0,
+    description: "Launch Codex agent",
     category: "Agents",
   },
   {
     actionId: "agent.opencode",
-    combo: "",
+    combo: "Cmd+Alt+O",
     scope: "global",
     priority: 0,
-    description: "Launch OpenCode agent (unbound, configure in settings)",
+    description: "Launch OpenCode agent",
     category: "Agents",
   },
 ];

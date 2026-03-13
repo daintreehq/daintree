@@ -37,6 +37,9 @@ export type KeyAction =
   | "ui.escape"
 
   // Git/Worktree actions
+  | "git.commit"
+  | "git.push"
+  | "git.stageAll"
   | "git.toggle"
   | "worktree.next"
   | "worktree.previous"
@@ -180,6 +183,9 @@ export const KEY_ACTION_VALUES: ReadonlySet<string> = new Set<string>([
   "file.copyTree",
   "ui.refresh",
   "ui.escape",
+  "git.commit",
+  "git.push",
+  "git.stageAll",
   "git.toggle",
   "worktree.next",
   "worktree.previous",
