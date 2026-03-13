@@ -459,7 +459,15 @@ describe("projectSettingsDirty", () => {
         undefined,
         [],
         [],
-        [{ id: "cmd1", name: "Build", command: "npm run build", preferredLocation: "dock", preferredAutoRestart: true }],
+        [
+          {
+            id: "cmd1",
+            name: "Build",
+            command: "npm run build",
+            preferredLocation: "dock",
+            preferredAutoRestart: true,
+          },
+        ],
         undefined,
         [],
         {}
