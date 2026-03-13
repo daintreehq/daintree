@@ -475,6 +475,9 @@ export const createTerminalRegistrySlice =
           const newTrashed = new Map(state.trashedTerminals);
           newTrashed.delete(id);
 
+          const newBackgrounded = new Map(state.backgroundedTerminals);
+          newBackgrounded.delete(id);
+
           // Remove panel from any tab group on permanent deletion
           const newTabGroups = new Map(state.tabGroups);
           for (const [groupId, group] of newTabGroups) {
@@ -499,7 +502,12 @@ export const createTerminalRegistrySlice =
 
           saveTerminals(newTerminals);
           saveTabGroups(newTabGroups);
-          return { terminals: newTerminals, trashedTerminals: newTrashed, tabGroups: newTabGroups };
+          return {
+            terminals: newTerminals,
+            trashedTerminals: newTrashed,
+            backgroundedTerminals: newBackgrounded,
+            tabGroups: newTabGroups,
+          };
         });
 
         const remainingTerminals = get().terminals;
