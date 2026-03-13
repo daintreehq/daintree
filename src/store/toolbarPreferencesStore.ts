@@ -1,26 +1,7 @@
 import { create } from "zustand";
-import { persist, createJSONStorage, type StateStorage } from "zustand/middleware";
+import { persist } from "zustand/middleware";
 import type { ToolbarPreferences, ToolbarButtonId } from "@/../../shared/types/domain";
-
-const memoryStorage: StateStorage = (() => {
-  const storage = new Map<string, string>();
-  return {
-    getItem: (name) => storage.get(name) ?? null,
-    setItem: (name, value) => {
-      storage.set(name, value);
-    },
-    removeItem: (name) => {
-      storage.delete(name);
-    },
-  };
-})();
-
-function getSafeStorage(): StateStorage {
-  if (typeof localStorage !== "undefined") {
-    return localStorage;
-  }
-  return memoryStorage;
-}
+import { createSafeJSONStorage } from "./persistence/safeStorage";
 
 const DEFAULT_LEFT_BUTTONS: ToolbarButtonId[] = [
   "agent-setup",
@@ -172,7 +153,7 @@ export const useToolbarPreferencesStore = create<ToolbarPreferencesState>()(
     }),
     {
       name: "canopy-toolbar-preferences",
-      storage: createJSONStorage(() => getSafeStorage()),
+      storage: createSafeJSONStorage(),
       // defaultAgent has been moved to agentPreferencesStore. Exclude it from
       // persistence so it is no longer written back to this key.
       partialize: (state) => ({
