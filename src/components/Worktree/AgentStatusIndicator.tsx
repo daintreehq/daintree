@@ -59,6 +59,14 @@ const STATE_CONFIG: Record<
     label: "failed",
     tooltip: "Agent ran into an issue",
   },
+  directing: {
+    icon: "✎",
+    color: "text-status-info",
+    borderColor: "border-status-info",
+    pulse: false,
+    label: "directing",
+    tooltip: "You are typing a prompt for this agent",
+  },
 };
 
 export function AgentStatusIndicator({ state, className }: AgentStatusIndicatorProps) {
@@ -99,8 +107,9 @@ export function AgentStatusIndicator({ state, className }: AgentStatusIndicatorP
 }
 
 const STATE_PRIORITY: Record<AgentState, number> = {
-  failed: 6,
-  working: 5,
+  failed: 7,
+  working: 6,
+  directing: 5,
   running: 4,
   completed: 3,
   waiting: 2,

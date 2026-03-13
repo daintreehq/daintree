@@ -342,7 +342,7 @@ export function WorktreeCard({
 
   const isIdleCard = spineState === "idle";
   const isStaleCard = spineState === "stale";
-  const isWaitingCard = terminalCounts.byState.waiting > 0;
+  const isWaitingCard = terminalCounts.byState.waiting > 0 && terminalCounts.byState.directing === 0;
 
   const chipState = useMemo(
     (): ChipState =>
@@ -350,6 +350,7 @@ export function WorktreeCard({
         worktreeErrorCount: worktreeErrors.length,
         failedTerminalCount: terminalCounts.byState.failed,
         waitingTerminalCount: terminalCounts.byState.waiting,
+        directingTerminalCount: terminalCounts.byState.directing,
         lifecycleStage,
         isComplete,
       }),
@@ -357,6 +358,7 @@ export function WorktreeCard({
       worktreeErrors.length,
       terminalCounts.byState.failed,
       terminalCounts.byState.waiting,
+      terminalCounts.byState.directing,
       lifecycleStage,
       isComplete,
     ]

@@ -211,8 +211,8 @@ export type NotificationPayload = Omit<Notification, "id"> & { id?: string };
 
 // Agent/Task/Run Types
 
-/** Agent lifecycle state: idle | working | running | waiting | completed | failed */
-export type AgentState = "idle" | "working" | "running" | "waiting" | "completed" | "failed";
+/** Agent lifecycle state: idle | working | running | waiting | directing | completed | failed */
+export type AgentState = "idle" | "working" | "running" | "waiting" | "directing" | "completed" | "failed";
 
 /** Task state: draft | queued | running | blocked | completed | failed | cancelled */
 export type TaskState =

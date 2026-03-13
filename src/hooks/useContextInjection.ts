@@ -20,7 +20,7 @@ export interface UseContextInjectionReturn {
 }
 
 function isAgentReady(agentState: AgentState | undefined): boolean {
-  return agentState === "idle" || agentState === "waiting";
+  return agentState === "idle" || agentState === "waiting" || agentState === "directing";
 }
 
 // Global shared state for injection tracking with event-based subscription

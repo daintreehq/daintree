@@ -6,13 +6,14 @@ export interface ComputeChipStateInput {
   worktreeErrorCount: number;
   failedTerminalCount: number;
   waitingTerminalCount: number;
+  directingTerminalCount: number;
   lifecycleStage: WorktreeLifecycleStage | null;
   isComplete: boolean;
 }
 
 export function computeChipState(input: ComputeChipStateInput): ChipState {
   if (input.worktreeErrorCount > 0 || input.failedTerminalCount > 0) return "error";
-  if (input.waitingTerminalCount > 0) return "waiting";
+  if (input.waitingTerminalCount > 0 && input.directingTerminalCount === 0) return "waiting";
   if (input.lifecycleStage === "merged" || input.lifecycleStage === "ready-for-cleanup")
     return "cleanup";
   if (input.isComplete) return "complete";

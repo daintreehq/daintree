@@ -285,6 +285,7 @@ function XtermAdapterComponent({
             const softNewline = getSoftNewlineSequence(terminalType);
             terminalClient.write(terminalId, softNewline);
             terminalInstanceService.notifyUserInput(terminalId);
+            terminalInstanceService.clearDirectingState(terminalId);
             onInput?.(softNewline);
           }
           return false;
@@ -303,6 +304,7 @@ function XtermAdapterComponent({
             const submit = "\r";
             terminalClient.write(terminalId, submit);
             terminalInstanceService.notifyUserInput(terminalId);
+            terminalInstanceService.clearDirectingState(terminalId);
             onInput?.(submit);
           }
           return false;

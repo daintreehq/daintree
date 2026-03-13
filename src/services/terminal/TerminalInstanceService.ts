@@ -17,6 +17,7 @@ import { TerminalLinkHandler } from "./TerminalLinkHandler";
 import { TerminalResizeController } from "./TerminalResizeController";
 import { TerminalRendererPolicy } from "./TerminalRendererPolicy";
 import { TerminalWakeManager } from "./TerminalWakeManager";
+import { useTerminalStore } from "@/store/terminalStore";
 import { getEffectiveAgentConfig } from "@shared/config/agentRegistry";
 import { logDebug, logWarn, logError } from "@/utils/logger";
 import { PERF_MARKS } from "@shared/perf/marks";
@@ -78,6 +79,8 @@ class TerminalInstanceService {
     this.onUserInput(id);
   }
 
+  private static readonly DIRECTING_DEBOUNCE_MS = 2500;
+
   private onUserInput(id: string): void {
     const managed = this.instances.get(id);
     if (!managed) return;
@@ -93,6 +96,50 @@ class TerminalInstanceService {
       current.inputBurstTimer = undefined;
       this.rendererPolicy.applyRendererPolicy(id, current.getRefreshTier());
     }, 1000);
+
+    if (managed.kind === "agent" && managed.canonicalAgentState === "waiting") {
+      if (managed.agentState !== "directing") {
+        managed.agentState = "directing";
+        for (const callback of managed.agentStateSubscribers) {
+          try {
+            callback("directing");
+          } catch (err) {
+            logError("Agent state callback error", err);
+          }
+        }
+        useTerminalStore.getState().updateAgentState(id, "directing");
+      }
+
+      if (managed.directingTimer !== undefined) {
+        clearTimeout(managed.directingTimer);
+      }
+      managed.directingTimer = window.setTimeout(() => {
+        this.clearDirectingState(id);
+      }, TerminalInstanceService.DIRECTING_DEBOUNCE_MS);
+    }
+  }
+
+  clearDirectingState(id: string): void {
+    const managed = this.instances.get(id);
+    if (!managed || managed.agentState !== "directing") return;
+
+    if (managed.directingTimer !== undefined) {
+      clearTimeout(managed.directingTimer);
+      managed.directingTimer = undefined;
+    }
+
+    const revertState = managed.canonicalAgentState ?? "waiting";
+    managed.agentState = revertState;
+
+    for (const callback of managed.agentStateSubscribers) {
+      try {
+        callback(revertState);
+      } catch (err) {
+        logError("Agent state callback error", err);
+      }
+    }
+
+    useTerminalStore.getState().updateAgentState(id, revertState);
   }
 
   prewarmTerminal(
@@ -717,6 +764,12 @@ class TerminalInstanceService {
     const managed = this.instances.get(id);
     if (!managed) return;
 
+    managed.canonicalAgentState = state;
+
+    if (state !== "waiting") {
+      this.clearDirectingState(id);
+    }
+
     const previousState = managed.agentState;
     if (previousState === state) return;
 
@@ -988,6 +1041,10 @@ class TerminalInstanceService {
     if (managed.inputBurstTimer !== undefined) {
       clearTimeout(managed.inputBurstTimer);
       managed.inputBurstTimer = undefined;
+    }
+    if (managed.directingTimer !== undefined) {
+      clearTimeout(managed.directingTimer);
+      managed.directingTimer = undefined;
     }
     if (managed.resizeSuppressionTimer !== undefined) {
       clearTimeout(managed.resizeSuppressionTimer);
