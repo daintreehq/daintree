@@ -459,8 +459,10 @@ export function WorktreeHeader({
         </div>
       </div>
 
-      {/* Secondary row: branch label when issue title is headline, and/or PR badge */}
-      {(hasIssueTitle || (worktree.prNumber && worktree.prState !== "closed")) && (
+      {/* Secondary row: branch label when issue title is headline, issue badge fallback, and/or PR badge */}
+      {(hasIssueTitle ||
+        (worktree.issueNumber && !hasIssueTitle) ||
+        (worktree.prNumber && worktree.prState !== "closed")) && (
         <div className="flex flex-col gap-0.5 mt-1.5">
           {hasIssueTitle && (
             <BranchLabel
@@ -470,11 +472,18 @@ export function WorktreeHeader({
               isMainWorktree={false}
             />
           )}
+          {worktree.issueNumber && !hasIssueTitle && (
+            <IssueBadge
+              issueNumber={worktree.issueNumber}
+              worktreePath={worktree.path}
+              onOpen={badges.onOpenIssue}
+            />
+          )}
           {worktree.prNumber && worktree.prState !== "closed" && (
             <PRBadge
               prNumber={worktree.prNumber}
               prState={worktree.prState}
-              isSubordinate={hasIssueTitle || !!worktree.issueNumber}
+              isSubordinate={!!worktree.issueNumber}
               worktreePath={worktree.path}
               onOpen={badges.onOpenPR}
             />

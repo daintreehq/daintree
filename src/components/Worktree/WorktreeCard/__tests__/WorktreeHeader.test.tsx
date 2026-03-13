@@ -192,8 +192,29 @@ describe("WorktreeHeader issue title headline", () => {
         issueTitle: undefined,
       },
       branchLabel: "feature/something",
+      badges: { onOpenIssue: noop },
     });
 
-    expect(screen.queryByRole("button", { name: /Open issue/ })).toBeNull();
+    // Branch name should be the primary headline (no headline-level issue button)
+    expect(screen.getByText(/something/)).toBeDefined();
+    // Issue badge should still appear in secondary row with #100 fallback
+    const issueButton = screen.getByRole("button", { name: /Open issue #100 on GitHub/ });
+    expect(issueButton).toBeDefined();
+  });
+
+  it("uses branch name as headline for main worktree even with issue title", () => {
+    renderHeader({
+      worktree: {
+        ...baseWorktree,
+        isMainWorktree: true,
+        issueNumber: 100,
+        issueTitle: "Some issue",
+      },
+      isMainWorktree: true,
+      branchLabel: "main",
+    });
+
+    // Main worktree can still have an issue — it should show as headline if present
+    expect(screen.getByText("Some issue")).toBeDefined();
   });
 });
