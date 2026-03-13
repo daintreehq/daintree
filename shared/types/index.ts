@@ -303,8 +303,6 @@ export type {
 
 // Sidecar types - browser dock
 export type {
-  SidecarLayoutMode,
-  SidecarLayoutModePreference,
   SidecarLinkType,
   SidecarLink,
   LinkTemplate,
@@ -324,7 +322,6 @@ export {
   SIDECAR_MIN_WIDTH,
   SIDECAR_MAX_WIDTH,
   SIDECAR_DEFAULT_WIDTH,
-  MIN_GRID_WIDTH,
 } from "./sidecar.js";
 
 // Voice types - canonical phase model for voice session and transcript lifecycle

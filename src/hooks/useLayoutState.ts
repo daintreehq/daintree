@@ -9,8 +9,6 @@ import {
   type PanelState,
   type DiagnosticsTab,
 } from "@/store";
-import type { SidecarLayoutMode } from "@shared/types";
-
 export interface LayoutState {
   isFocusMode: boolean;
   toggleFocusMode: (currentState: PanelState) => void;
@@ -23,9 +21,7 @@ export interface LayoutState {
 
   sidecarOpen: boolean;
   sidecarWidth: number;
-  sidecarLayoutMode: SidecarLayoutMode;
   toggleSidecar: () => void;
-  updateSidecarLayoutMode: (width: number, sidebarWidth: number) => void;
 
   performanceMode: boolean;
   errorCount: number;
@@ -53,9 +49,7 @@ export function useLayoutState(): LayoutState {
     useShallow((state) => ({
       sidecarOpen: state.isOpen,
       sidecarWidth: state.width,
-      sidecarLayoutMode: state.layoutMode,
       toggleSidecar: state.toggle,
-      updateSidecarLayoutMode: state.updateLayoutMode,
     }))
   );
 

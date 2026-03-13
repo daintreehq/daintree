@@ -1,25 +1,17 @@
 import { create, type StateCreator } from "zustand";
 import { persist, createJSONStorage } from "zustand/middleware";
-import type {
-  SidecarLayoutMode,
-  SidecarLayoutModePreference,
-  SidecarTab,
-  SidecarLink,
-} from "@shared/types";
+import type { SidecarTab, SidecarLink } from "@shared/types";
 import {
   DEFAULT_SIDECAR_TABS,
   SIDECAR_MIN_WIDTH,
   SIDECAR_MAX_WIDTH,
   SIDECAR_DEFAULT_WIDTH,
-  MIN_GRID_WIDTH,
   DEFAULT_SYSTEM_LINKS,
 } from "@shared/types";
 
 interface SidecarState {
   isOpen: boolean;
   width: number;
-  layoutMode: SidecarLayoutMode;
-  layoutModePreference: SidecarLayoutModePreference;
   activeTabId: string | null;
   tabs: SidecarTab[];
   createdTabs: Set<string>;
@@ -45,7 +37,6 @@ interface SidecarActions {
   updateTabTitle: (id: string, title: string) => void;
   updateTabUrl: (id: string, url: string) => void;
   updateTabIcon: (id: string, icon: string | undefined) => void;
-  updateLayoutMode: (windowWidth: number, sidebarWidth: number) => void;
   markTabCreated: (id: string) => void;
   isTabCreated: (id: string) => boolean;
   reset: () => void;
@@ -61,8 +52,6 @@ interface SidecarActions {
 const initialState: SidecarState = {
   isOpen: false,
   width: SIDECAR_DEFAULT_WIDTH,
-  layoutMode: "push",
-  layoutModePreference: "auto",
   activeTabId: null,
   tabs: DEFAULT_SIDECAR_TABS,
   createdTabs: new Set<string>(),
@@ -259,18 +248,6 @@ const createSidecarStore: StateCreator<SidecarState & SidecarActions> = (set, ge
       tabs: s.tabs.map((t) => (t.id === id ? { ...t, icon } : t)),
     })),
 
-  updateLayoutMode: (windowWidth, sidebarWidth) => {
-    const { width, layoutModePreference } = get();
-
-    if (layoutModePreference !== "auto") {
-      set({ layoutMode: layoutModePreference });
-      return;
-    }
-
-    const remainingSpace = windowWidth - sidebarWidth - width;
-    set({ layoutMode: remainingSpace < MIN_GRID_WIDTH ? "overlay" : "push" });
-  },
-
   markTabCreated: (id) =>
     set((s) => {
       const newSet = new Set(s.createdTabs);
@@ -447,7 +424,6 @@ const sidecarStoreCreator: StateCreator<
         typeof persisted.width === "number"
           ? Math.min(Math.max(persisted.width, SIDECAR_MIN_WIDTH), SIDECAR_MAX_WIDTH)
           : currentState.width,
-      layoutModePreference: "auto",
       defaultNewTabUrl:
         typeof persisted.defaultNewTabUrl === "string" && persisted.defaultNewTabUrl.trim()
           ? persisted.defaultNewTabUrl.trim()

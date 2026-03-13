@@ -241,15 +241,6 @@ export function AppLayout({
   }, []);
 
   useEffect(() => {
-    const handleResize = () => {
-      layout.updateSidecarLayoutMode(window.innerWidth, layout.isFocusMode ? 0 : sidebarWidth);
-    };
-    window.addEventListener("resize", handleResize);
-    handleResize();
-    return () => window.removeEventListener("resize", handleResize);
-  }, [sidebarWidth, layout.updateSidecarLayoutMode, layout.isFocusMode, layout.sidecarWidth]);
-
-  useEffect(() => {
     if (!layout.sidecarOpen) {
       window.electron.sidecar.hide();
     }
@@ -336,8 +327,7 @@ export function AppLayout({
               <div className="flex-1 overflow-hidden min-h-0">{children}</div>
               {/* Terminal Dock Region - manages dock visibility and overlays */}
               <TerminalDockRegion />
-              {/* Overlay mode - sidecar floats over content */}
-              {layout.sidecarOpen && layout.sidecarLayoutMode === "overlay" && (
+              {layout.sidecarOpen && (
                 <ErrorBoundary variant="section" componentName="SidecarDock">
                   <div className="absolute right-0 top-0 bottom-0 z-50 shadow-2xl border-l border-canopy-border">
                     <SidecarDock />
@@ -346,14 +336,6 @@ export function AppLayout({
               )}
             </main>
           </ErrorBoundary>
-          {/* Push mode - sidecar is part of flex layout */}
-          {layout.sidecarOpen && layout.sidecarLayoutMode === "push" && (
-            <ErrorBoundary variant="section" componentName="SidecarDock">
-              <div className="border-l border-canopy-border flex-shrink-0">
-                <SidecarDock />
-              </div>
-            </ErrorBoundary>
-          )}
         </div>
         {/* Unified diagnostics dock replaces LogsPanel, EventInspectorPanel, and ProblemsPanel */}
         <ErrorBoundary variant="section" componentName="DiagnosticsDock">
