@@ -38,9 +38,9 @@ export function SettingsSubtabBar({ subtabs, activeId, onChange }: SettingsSubta
     if (!container) return;
     const containerLeft = container.getBoundingClientRect().left;
     const tabs = Array.from(container.querySelectorAll<HTMLElement>('[role="tab"]'));
-    const target = [...tabs].reverse().find(
-      (tab) => tab.getBoundingClientRect().left < containerLeft - 1
-    );
+    const target = [...tabs]
+      .reverse()
+      .find((tab) => tab.getBoundingClientRect().left < containerLeft - 1);
     target?.scrollIntoView({ behavior: "smooth", block: "nearest", inline: "start" });
   }, []);
 
@@ -49,9 +49,7 @@ export function SettingsSubtabBar({ subtabs, activeId, onChange }: SettingsSubta
     if (!container) return;
     const containerRight = container.getBoundingClientRect().right;
     const tabs = Array.from(container.querySelectorAll<HTMLElement>('[role="tab"]'));
-    const target = tabs.find(
-      (tab) => tab.getBoundingClientRect().right > containerRight + 1
-    );
+    const target = tabs.find((tab) => tab.getBoundingClientRect().right > containerRight + 1);
     target?.scrollIntoView({ behavior: "smooth", block: "nearest", inline: "end" });
   }, []);
 

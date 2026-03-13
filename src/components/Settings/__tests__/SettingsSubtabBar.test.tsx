@@ -10,7 +10,7 @@ const SUBTABS = [
 ];
 
 let resizeObserverCallback: ResizeObserverCallback;
-const mockResizeObserver = vi.fn((cb: ResizeObserverCallback) => {
+const mockResizeObserver = vi.fn(function (this: unknown, cb: ResizeObserverCallback) {
   resizeObserverCallback = cb;
   return {
     observe: vi.fn(),
@@ -42,11 +42,19 @@ afterEach(() => {
 
 function setScrollGeometry(
   el: HTMLElement,
-  { scrollWidth, clientWidth, scrollLeft }: { scrollWidth: number; clientWidth: number; scrollLeft: number }
+  {
+    scrollWidth,
+    clientWidth,
+    scrollLeft,
+  }: { scrollWidth: number; clientWidth: number; scrollLeft: number }
 ) {
   Object.defineProperty(el, "scrollWidth", { value: scrollWidth, configurable: true });
   Object.defineProperty(el, "clientWidth", { value: clientWidth, configurable: true });
-  Object.defineProperty(el, "scrollLeft", { value: scrollLeft, configurable: true, writable: true });
+  Object.defineProperty(el, "scrollLeft", {
+    value: scrollLeft,
+    configurable: true,
+    writable: true,
+  });
 }
 
 describe("SettingsSubtabBar", () => {
