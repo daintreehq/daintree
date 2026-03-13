@@ -522,6 +522,7 @@ describe("createCustomKeymap", () => {
             onCtrlC: () => false,
             onStash: () => false,
             onPopStash: () => false,
+            onExpand: () => false,
           }),
         ],
       }),

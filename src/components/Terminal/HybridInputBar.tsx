@@ -31,10 +31,11 @@ import { useCommandStore } from "@/store/commandStore";
 import { useProjectStore } from "@/store/projectStore";
 import { useTerminalStore, useVoiceRecordingStore, useWorktreeDataStore } from "@/store";
 import { VoiceInputButton } from "./VoiceInputButton";
-import { Archive } from "lucide-react";
+import { Archive, Maximize2, Minimize2 } from "lucide-react";
 import { registerInputController, unregisterInputController } from "@/store/terminalInputStore";
 import type { CommandContext, CommandResult } from "@shared/types/commands";
 import { isEnterLikeLineBreakInputEvent } from "./hybridInputEvents";
+import { AppDialog } from "@/components/ui/AppDialog";
 import {
   inputTheme,
   createContentAttributes,
@@ -139,6 +140,7 @@ interface LatestState {
     currentInput: string
   ) => string | null;
   isVoiceActiveForPanel: boolean;
+  isExpanded: boolean;
 }
 
 export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarProps>(
@@ -187,6 +189,10 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     const fileChipTooltipCompartmentRef = useRef(new Compartment());
     const imageChipTooltipCompartmentRef = useRef(new Compartment());
     const fileDropChipTooltipCompartmentRef = useRef(new Compartment());
+    const autoSizeCompartmentRef = useRef(new Compartment());
+    const [isExpanded, setIsExpanded] = useState(false);
+    const modalEditorHostRef = useRef<HTMLDivElement | null>(null);
+    const compactEditorHostRef = useRef<HTMLDivElement | null>(null);
     const isApplyingExternalValueRef = useRef(false);
     const lastEnterKeydownNewlineRef = useRef(false);
     const handledEnterRef = useRef(false);
@@ -452,6 +458,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       clearDraftInput,
       navigateHistory,
       isVoiceActiveForPanel,
+      isExpanded,
     };
 
     useLayoutEffect(() => {
@@ -592,6 +599,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         latest.addToHistory(latest.terminalId, text);
         latest.resetHistoryIndex(latest.terminalId);
 
+        setIsExpanded(false);
         applyEditorValue("", { selection: EditorSelection.create([EditorSelection.cursor(0)]) });
         latest.clearDraftInput(latest.terminalId, latest.projectId);
         useVoiceRecordingStore.getState().clearAICorrectionSpans(latest.terminalId);
@@ -700,6 +708,10 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       const text = view?.state.doc.toString() ?? latest?.value ?? "";
       sendText(text);
     }, [sendText]);
+
+    const collapseEditor = useCallback(() => {
+      setIsExpanded(false);
+    }, []);
 
     const focusEditor = useCallback(() => {
       const view = editorViewRef.current;
@@ -1015,6 +1027,8 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
             const nextTarget = event.relatedTarget as HTMLElement | null;
             const root = rootRef.current;
             if (root && nextTarget && root.contains(nextTarget)) return false;
+            const modalHost = modalEditorHostRef.current;
+            if (modalHost && nextTarget && modalHost.contains(nextTarget)) return false;
 
             setAtContext(null);
             setSlashContext(null);
@@ -1141,6 +1155,11 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
               return true;
             }
 
+            if (latest.isExpanded) {
+              setIsExpanded(false);
+              return true;
+            }
+
             if (latest.disabled) return false;
             if (!latest.onSendKey) return false;
 
@@ -1256,6 +1275,10 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
           },
           onStash: handleStash,
           onPopStash: handlePopStash,
+          onExpand: () => {
+            setIsExpanded(true);
+            return true;
+          },
         }),
       [
         applyAutocompleteSelection,
@@ -1284,7 +1307,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
           EditorView.lineWrapping,
           drawSelection(),
           createContentAttributes(),
-          createAutoSize(),
+          autoSizeCompartmentRef.current.of(createAutoSize()),
           placeholderCompartmentRef.current.of(createPlaceholder(placeholder)),
           editableCompartmentRef.current.of(EditorView.editable.of(!disabled)),
           chipCompartmentRef.current.of(createSlashChipField({ commandMap })),
@@ -1417,6 +1440,35 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       });
     }, [value]);
 
+    useEffect(() => {
+      const view = editorViewRef.current;
+      if (!view) return;
+      const compactHost = compactEditorHostRef.current;
+      const modalHost = modalEditorHostRef.current;
+
+      if (isExpanded && modalHost) {
+        modalHost.appendChild(view.dom);
+        view.dispatch({
+          effects: autoSizeCompartmentRef.current.reconfigure([]),
+        });
+        view.dom.style.height = "";
+        view.scrollDOM.style.overflowY = "auto";
+        requestAnimationFrame(() => {
+          view.requestMeasure();
+          view.focus();
+        });
+      } else if (!isExpanded && compactHost) {
+        compactHost.appendChild(view.dom);
+        view.dispatch({
+          effects: autoSizeCompartmentRef.current.reconfigure(createAutoSize()),
+        });
+        requestAnimationFrame(() => {
+          view.requestMeasure();
+          view.focus();
+        });
+      }
+    }, [isExpanded]);
+
     const barContent = (
       <div className="group cursor-text bg-canopy-bg px-4 pb-3 pt-3">
         <div className="flex items-end gap-2">
@@ -1457,12 +1509,33 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
 
             <div className="relative flex-1">
               <div
-                ref={editorHostRef}
-                className={cn("w-full", "text-canopy-text", disabled && "pointer-events-none")}
+                ref={(node) => {
+                  editorHostRef.current = node;
+                  compactEditorHostRef.current = node;
+                }}
+                className={cn(
+                  "w-full min-h-[20px]",
+                  "text-canopy-text",
+                  disabled && "pointer-events-none"
+                )}
               />
             </div>
 
             <div className="flex items-center pr-1.5">
+              <button
+                type="button"
+                onClick={() => setIsExpanded((v) => !v)}
+                disabled={disabled}
+                className="flex items-center justify-center h-5 w-5 rounded-sm text-canopy-text/50 hover:text-canopy-text hover:bg-white/[0.06] transition-colors cursor-pointer"
+                aria-label={isExpanded ? "Collapse editor" : "Expand editor"}
+                title={isExpanded ? "Collapse editor (⌘⇧E)" : "Expand editor (⌘⇧E)"}
+              >
+                {isExpanded ? (
+                  <Minimize2 className="h-3.5 w-3.5" />
+                ) : (
+                  <Maximize2 className="h-3.5 w-3.5" />
+                )}
+              </button>
               {hasStash && (
                 <button
                   type="button"
@@ -1515,6 +1588,24 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
           {barContent}
         </div>
         <CommandPickerHost context={commandContext} onCommandExecuted={handleCommandExecuted} />
+        <AppDialog
+          isOpen={isExpanded}
+          onClose={collapseEditor}
+          size="xl"
+          maxHeight="max-h-[70vh]"
+          dismissible
+        >
+          <AppDialog.Header>
+            <AppDialog.Title>Expanded Editor</AppDialog.Title>
+            <AppDialog.CloseButton />
+          </AppDialog.Header>
+          <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
+            <div
+              ref={modalEditorHostRef}
+              className="flex-1 min-h-[200px] overflow-auto text-canopy-text p-4"
+            />
+          </div>
+        </AppDialog>
       </>
     );
   }

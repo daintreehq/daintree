@@ -508,6 +508,7 @@ interface CustomKeymapConfig {
   onCtrlC: (hasSelection: boolean) => boolean;
   onStash: () => boolean;
   onPopStash: () => boolean;
+  onExpand: () => boolean;
 }
 
 export function createCustomKeymap(config: CustomKeymapConfig): Extension {
@@ -580,6 +581,12 @@ export function createCustomKeymap(config: CustomKeymapConfig): Extension {
         key: "Mod-Shift-x",
         run() {
           return config.onPopStash();
+        },
+      },
+      {
+        key: "Mod-Shift-e",
+        run() {
+          return config.onExpand();
         },
       },
     ])
