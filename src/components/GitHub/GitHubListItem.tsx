@@ -49,11 +49,11 @@ function isPR(item: GitHubIssue | GitHubPR): item is GitHubPR {
 }
 
 function getLabelStyles(color: string): React.CSSProperties {
-  const hex = `#${color.replace(/^#/, "")}`;
+  const raw = color.replace(/^#/, "");
+  if (!raw) return {};
+  const hex = `#${raw}`;
   return {
-    backgroundColor: `color-mix(in oklab, ${hex} 15%, transparent)`,
-    border: `1px solid color-mix(in oklab, ${hex} 40%, transparent)`,
-    color: `color-mix(in oklab, ${hex} 65%, white)`,
+    color: `oklch(from ${hex} 0.85 c h)`,
   };
 }
 
@@ -396,7 +396,7 @@ export function GitHubListItem({
                 <span
                   key={label.name}
                   style={getLabelStyles(label.color)}
-                  className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium max-w-[120px] truncate shrink-0"
+                  className="inline-flex items-center text-[10px] font-medium max-w-[120px] truncate shrink-0"
                 >
                   {label.name}
                 </span>
