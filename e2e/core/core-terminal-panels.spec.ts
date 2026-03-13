@@ -90,7 +90,11 @@ test.describe.serial("Core: Terminal & Panels", () => {
       const { window } = ctx;
 
       const panel = getFirstGridPanel(window);
-      const minimizeBtn = panel.locator(SEL.panel.minimize).first();
+      // Open the overflow menu, then click "Move to Dock" inside the dropdown
+      const overflowBtn = panel.locator(SEL.panel.overflowMenu).first();
+      await overflowBtn.click();
+      const minimizeBtn = window.locator(SEL.panel.minimize).first();
+      await expect(minimizeBtn).toBeVisible({ timeout: T_SHORT });
       await minimizeBtn.click();
 
       await expect(panel).not.toBeVisible({ timeout: T_SHORT });
@@ -166,11 +170,20 @@ test.describe.serial("Core: Terminal & Panels", () => {
       const { window } = ctx;
 
       const panel = getFirstGridPanel(window);
-      const restartBtn = panel.locator(SEL.panel.restart).first();
-      await restartBtn.click({ force: true });
+      // Hover to ensure button is interactable, then open overflow menu
+      const overflowBtn = panel.locator(SEL.panel.overflowMenu).first();
+      await panel.hover();
+      await overflowBtn.click();
 
-      await window.waitForTimeout(T_SETTLE);
-      await restartBtn.click({ force: true });
+      // First click on Restart arms confirmation (menu stays open)
+      const restartBtn = window.locator(SEL.panel.restart).first();
+      await expect(restartBtn).toBeVisible({ timeout: T_SHORT });
+      await restartBtn.click();
+
+      // Second click confirms the restart (text changes to "Confirm Restart")
+      const confirmBtn = window.locator(SEL.panel.restartConfirm).first();
+      await expect(confirmBtn).toBeVisible({ timeout: T_SHORT });
+      await confirmBtn.click();
 
       await expect(panel).toBeVisible({ timeout: T_LONG });
     });
@@ -223,8 +236,11 @@ test.describe.serial("Core: Terminal & Panels", () => {
       const { window } = ctx;
 
       const panel = getFirstGridPanel(window);
-      const minimizeBtn = panel.locator(SEL.panel.minimize).first();
-      await minimizeBtn.click({ force: true });
+      const overflowBtn = panel.locator(SEL.panel.overflowMenu).first();
+      await overflowBtn.click();
+      const minimizeBtn = window.locator(SEL.panel.minimize).first();
+      await expect(minimizeBtn).toBeVisible({ timeout: T_SHORT });
+      await minimizeBtn.click();
 
       await expect.poll(() => getGridPanelCount(window), { timeout: T_MEDIUM }).toBe(2);
 
@@ -236,8 +252,11 @@ test.describe.serial("Core: Terminal & Panels", () => {
       const { window } = ctx;
 
       const panel = getFirstGridPanel(window);
-      const minimizeBtn = panel.locator(SEL.panel.minimize).first();
-      await minimizeBtn.click({ force: true });
+      const overflowBtn = panel.locator(SEL.panel.overflowMenu).first();
+      await overflowBtn.click();
+      const minimizeBtn = window.locator(SEL.panel.minimize).first();
+      await expect(minimizeBtn).toBeVisible({ timeout: T_SHORT });
+      await minimizeBtn.click();
 
       await expect.poll(() => getGridPanelCount(window), { timeout: T_MEDIUM }).toBe(1);
     });
