@@ -414,7 +414,7 @@ export function KeyboardShortcutsTab() {
       <div className="flex items-center gap-3">
         <div
           className={cn(
-            "flex items-center gap-1.5 px-2 py-1.5 flex-1 rounded-[var(--radius-md)]",
+            "flex items-center gap-1.5 px-2 py-1.5 flex-1 min-w-0 rounded-[var(--radius-md)]",
             "bg-canopy-bg border border-canopy-border",
             "focus-within:border-canopy-accent focus-within:ring-1 focus-within:ring-canopy-accent/20"
           )}
