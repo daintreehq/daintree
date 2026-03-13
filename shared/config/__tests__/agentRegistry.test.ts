@@ -48,6 +48,24 @@ describe("agentRegistry", () => {
     });
   });
 
+  describe("contextWindow", () => {
+    it("claude has 200k context window", () => {
+      expect(getAgentConfig("claude")?.contextWindow).toBe(200_000);
+    });
+
+    it("gemini has 1M context window", () => {
+      expect(getAgentConfig("gemini")?.contextWindow).toBe(1_000_000);
+    });
+
+    it("codex has 128k context window", () => {
+      expect(getAgentConfig("codex")?.contextWindow).toBe(128_000);
+    });
+
+    it("agents without contextWindow return undefined", () => {
+      expect(getAgentConfig("cursor")?.contextWindow).toBeUndefined();
+    });
+  });
+
   describe("prerequisites", () => {
     it("all built-in agents have prerequisites", () => {
       const ids = getAgentIds();

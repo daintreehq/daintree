@@ -68,6 +68,8 @@ import {
   updateUrlPasteStatus,
   removeUrlPasteEntry,
 } from "./inputEditorExtensions";
+import { AttachmentTray } from "./AttachmentTray";
+import { normalizeChips, getContextWindow, type TrayItem } from "./attachmentTray";
 
 export interface HybridInputBarHandle {
   focus: () => void;
@@ -212,6 +214,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     const [menuLeftPx, setMenuLeftPx] = useState<number>(0);
     const dragDepthRef = useRef(0);
     const [isDragOverFiles, setIsDragOverFiles] = useState(false);
+    const [attachments, setAttachments] = useState<TrayItem[]>([]);
     const [initializationState, setInitializationState] = useState<"initializing" | "initialized">(
       "initializing"
     );
@@ -983,6 +986,13 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       [focusEditor, focusEditorWithCursorAtEnd]
     );
 
+    const removeAttachment = useCallback((item: TrayItem) => {
+      const view = editorViewRef.current;
+      if (!view) return;
+      view.dispatch({ changes: { from: item.from, to: item.to, insert: "" } });
+      view.focus();
+    }, []);
+
     const lastSlashContextRef = useRef<SlashCommandContext | null>(null);
     const lastAtContextRef = useRef<AtFileContext | null>(null);
 
@@ -1049,6 +1059,20 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
               setSlashContext(null);
             }
           }
+
+          const imgs = update.state.field(imageChipField, false) ?? [];
+          const files = update.state.field(fileDropChipField, false) ?? [];
+          const urls = update.state.field(urlContextChipField, false) ?? [];
+          const next = normalizeChips(imgs, files, urls);
+          setAttachments((prev) => {
+            if (prev.length === 0 && next.length === 0) return prev;
+            if (
+              prev.length === next.length &&
+              prev.every((p, i) => p.id === next[i].id)
+            )
+              return prev;
+            return next;
+          });
         }),
       []
     );
@@ -1691,6 +1715,12 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
               />
             </div>
           </div>
+          <AttachmentTray
+            items={attachments}
+            totalTokens={attachments.reduce((s, a) => s + a.tokenEstimate, 0)}
+            contextWindow={getContextWindow(agentId)}
+            onRemove={removeAttachment}
+          />
         </div>
       </div>
     );
