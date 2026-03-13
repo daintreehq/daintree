@@ -5,6 +5,7 @@ import { GitHubStatsCache } from "./GitHubStatsCache.js";
 import type {
   GitHubIssue,
   GitHubPR,
+  GitHubPRCIStatus,
   GitHubUser,
   GitHubListOptions,
   GitHubListResponse,
@@ -789,6 +790,13 @@ function parsePRNode(node: Record<string, unknown>): GitHubPR {
   const baseName = baseRepo?.nameWithOwner;
   const isFork = headName && baseName ? headName !== baseName : undefined;
 
+  const commitsData = node.commits as
+    | { nodes?: Array<{ commit?: { statusCheckRollup?: { state?: string } | null } | null }> }
+    | undefined;
+  const ciStatus = commitsData?.nodes?.[0]?.commit?.statusCheckRollup?.state as
+    | GitHubPRCIStatus
+    | undefined;
+
   return {
     number: node.number as number,
     title: node.title as string,
@@ -803,6 +811,7 @@ function parsePRNode(node: Record<string, unknown>): GitHubPR {
     reviewCount: reviewsData?.totalCount,
     headRefName: (node.headRefName as string) || undefined,
     isFork: isFork ?? undefined,
+    ciStatus,
   };
 }
 
