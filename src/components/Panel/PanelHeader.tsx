@@ -184,7 +184,7 @@ function PanelHeaderComponent({
   const showMoveToDock = !!onMinimize && !isMaximized && location !== "dock";
   const showCancelWatch = showWatchButton && isWatched;
   const hasOverflowItems =
-    (canRestart && !!onRestart) || showMoveToDock || showCancelWatch || !!headerActions;
+    (canRestart && !!onRestart) || showCancelWatch || !!headerActions;
 
   // Restart handler for Radix DropdownMenu onSelect
   const handleRestartSelect = useCallback(
@@ -617,12 +617,6 @@ function PanelHeaderComponent({
                     : "Restart Session"}
                 </DropdownMenuItem>
               )}
-              {showMoveToDock && (
-                <DropdownMenuItem onSelect={() => onMinimize!()} data-testid="panel-move-to-dock">
-                  <DockToBottomIcon className="w-3 h-3 mr-2" />
-                  Move to Dock
-                </DropdownMenuItem>
-              )}
               {showCancelWatch && (
                 <DropdownMenuItem onSelect={() => unwatchPanel(id)}>
                   <Bell className="w-3 h-3 mr-2" aria-hidden="true" />
@@ -630,7 +624,7 @@ function PanelHeaderComponent({
                 </DropdownMenuItem>
               )}
               {headerActions &&
-                ((canRestart && !!onRestart) || showMoveToDock || showCancelWatch) && (
+                ((canRestart && !!onRestart) || showCancelWatch) && (
                   <DropdownMenuSeparator />
                 )}
               {headerActions && (
@@ -640,6 +634,29 @@ function PanelHeaderComponent({
               )}
             </DropdownMenuContent>
           </DropdownMenu>
+        )}
+
+        {/* Move to Dock — visible button for grid panels */}
+        {showMoveToDock && (
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onMinimize!();
+                  }}
+                  onPointerDown={(e) => e.stopPropagation()}
+                  className="p-1.5 hover:bg-canopy-text/10 focus-visible:bg-canopy-text/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2 text-canopy-text/60 hover:text-canopy-text transition-colors"
+                  aria-label="Move to Dock"
+                  data-testid="panel-move-to-dock"
+                >
+                  <DockToBottomIcon className="w-3 h-3" />
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">Move to Dock</TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
         )}
 
         {/* Middle control: Maximize / Exit Focus / Restore-to-Grid */}
