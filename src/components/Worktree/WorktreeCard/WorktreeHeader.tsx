@@ -50,6 +50,7 @@ interface IssueBadgeProps {
   issueTitle?: string;
   worktreePath: string;
   onOpen?: () => void;
+  isHeadline?: boolean;
 }
 
 const IssueBadge = memo(function IssueBadge({
@@ -57,6 +58,7 @@ const IssueBadge = memo(function IssueBadge({
   issueTitle,
   worktreePath,
   onOpen,
+  isHeadline,
 }: IssueBadgeProps) {
   const [isOpen, setIsOpen] = useState(false);
   const { data, loading, error, fetchTooltip, reset } = useIssueTooltip(worktreePath, issueNumber);
@@ -83,15 +85,26 @@ const IssueBadge = memo(function IssueBadge({
               e.stopPropagation();
               onOpen?.();
             }}
-            className="flex items-center gap-1.5 text-xs text-left cursor-pointer transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent min-w-0"
+            className={cn(
+              "flex items-center gap-1.5 text-left cursor-pointer transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent min-w-0",
+              isHeadline ? "text-[13px]" : "text-xs"
+            )}
             aria-label={
               issueTitle
                 ? `Open issue #${issueNumber}: ${issueTitle}`
                 : `Open issue #${issueNumber} on GitHub`
             }
           >
-            <CircleDot className="w-3 h-3 text-github-open shrink-0" aria-hidden="true" />
-            <span className="truncate text-canopy-text/90 flex-1 min-w-0">
+            <CircleDot
+              className={cn("text-github-open shrink-0", isHeadline ? "w-3.5 h-3.5" : "w-3 h-3")}
+              aria-hidden="true"
+            />
+            <span
+              className={cn(
+                "truncate flex-1 min-w-0",
+                isHeadline ? "text-white font-medium" : "text-canopy-text/90"
+              )}
+            >
               {issueTitle || <span className="text-github-open font-mono">#{issueNumber}</span>}
             </span>
           </button>
@@ -316,6 +329,8 @@ export function WorktreeHeader({
     [menu]
   );
 
+  const hasIssueTitle = !!(worktree.issueNumber && worktree.issueTitle);
+
   return (
     <div>
       <div className="flex items-center gap-2 min-h-[22px]">
@@ -332,12 +347,22 @@ export function WorktreeHeader({
           {isPinned && !isMainWorktree && (
             <Pin className="w-3 h-3 text-canopy-text/40 shrink-0" aria-label="Pinned" />
           )}
-          <BranchLabel
-            label={branchLabel}
-            isActive={isActive}
-            isMuted={isMuted}
-            isMainWorktree={isMainWorktree}
-          />
+          {hasIssueTitle ? (
+            <IssueBadge
+              issueNumber={worktree.issueNumber!}
+              issueTitle={worktree.issueTitle}
+              worktreePath={worktree.path}
+              onOpen={badges.onOpenIssue}
+              isHeadline
+            />
+          ) : (
+            <BranchLabel
+              label={branchLabel}
+              isActive={isActive}
+              isMuted={isMuted}
+              isMainWorktree={isMainWorktree}
+            />
+          )}
           <LifecycleStageIndicator stage={lifecycleStage} />
           {worktree.isDetached && (
             <span className="text-status-warning text-xs font-medium shrink-0">(detached)</span>
@@ -434,21 +459,22 @@ export function WorktreeHeader({
         </div>
       </div>
 
-      {(worktree.issueNumber || (worktree.prNumber && worktree.prState !== "closed")) && (
-        <div className="flex flex-col gap-0.5 mt-2">
-          {worktree.issueNumber && (
-            <IssueBadge
-              issueNumber={worktree.issueNumber}
-              issueTitle={worktree.issueTitle}
-              worktreePath={worktree.path}
-              onOpen={badges.onOpenIssue}
+      {/* Secondary row: branch label when issue title is headline, and/or PR badge */}
+      {(hasIssueTitle || (worktree.prNumber && worktree.prState !== "closed")) && (
+        <div className="flex flex-col gap-0.5 mt-1.5">
+          {hasIssueTitle && (
+            <BranchLabel
+              label={branchLabel}
+              isActive={isActive}
+              isMuted={isMuted}
+              isMainWorktree={false}
             />
           )}
           {worktree.prNumber && worktree.prState !== "closed" && (
             <PRBadge
               prNumber={worktree.prNumber}
               prState={worktree.prState}
-              isSubordinate={!!worktree.issueNumber}
+              isSubordinate={hasIssueTitle || !!worktree.issueNumber}
               worktreePath={worktree.path}
               onOpen={badges.onOpenPR}
             />

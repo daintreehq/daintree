@@ -188,16 +188,16 @@ describe("useWorktreeStatus — computedSubtitle", () => {
     ).toEqual({ text: "fix: bug", tone: "muted" });
   });
 
-  it("falls back to issueTitle when no commit message", () => {
+  it("does not use issueTitle in subtitle (issue title is now the headline)", () => {
     expect(
       getSubtitle({
         worktreeChanges: makeChanges({ lastCommitMessage: undefined }),
         issueTitle: "Add dark mode support",
       })
-    ).toEqual({ text: "Add dark mode support", tone: "muted" });
+    ).toEqual({ text: "No recent activity", tone: "muted" });
   });
 
-  it("falls back to prTitle when no commit message or issueTitle", () => {
+  it("falls back to prTitle when no commit message", () => {
     expect(
       getSubtitle({
         worktreeChanges: makeChanges({ lastCommitMessage: undefined }),
@@ -207,7 +207,7 @@ describe("useWorktreeStatus — computedSubtitle", () => {
     ).toEqual({ text: "feat: dark mode", tone: "muted" });
   });
 
-  it("prefers issueTitle over prTitle", () => {
+  it("falls back to prTitle even when issueTitle is present (issue title shown as headline)", () => {
     expect(
       getSubtitle({
         worktreeChanges: makeChanges({ lastCommitMessage: undefined }),
@@ -215,7 +215,7 @@ describe("useWorktreeStatus — computedSubtitle", () => {
         prTitle: "feat: dark mode",
         prState: "open",
       })
-    ).toEqual({ text: "Add dark mode support", tone: "muted" });
+    ).toEqual({ text: "feat: dark mode", tone: "muted" });
   });
 
   it("skips prTitle when prState is closed", () => {
@@ -238,11 +238,11 @@ describe("useWorktreeStatus — computedSubtitle", () => {
     ).toEqual({ text: "feat: dark mode", tone: "muted" });
   });
 
-  it("ignores whitespace-only issueTitle", () => {
+  it("ignores issueTitle entirely in subtitle fallback", () => {
     expect(
       getSubtitle({
         worktreeChanges: makeChanges({ lastCommitMessage: undefined }),
-        issueTitle: "   ",
+        issueTitle: "Valid issue title",
       })
     ).toEqual({ text: "No recent activity", tone: "muted" });
   });
