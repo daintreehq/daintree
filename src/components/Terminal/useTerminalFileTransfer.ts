@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import { terminalClient } from "@/clients";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
+import { escapeShellArgOptional } from "@shared/utils/shellEscape.js";
 
 /**
  * Image file extension pattern shared with HybridInputBar.
@@ -9,8 +10,7 @@ import { terminalInstanceService } from "@/services/TerminalInstanceService";
 export const IMAGE_EXTENSIONS = /\.(png|jpe?g|bmp|tiff?|avif|heic)$/i;
 
 /**
- * Checks whether a ClipboardEvent contains an image item
- * (either an image/* MIME type or a file with an image extension).
+ * Checks whether a ClipboardEvent contains an image MIME type item.
  */
 function hasImageClipboardItem(event: ClipboardEvent): boolean {
   const items = event.clipboardData?.items;
@@ -35,6 +35,8 @@ interface UseTerminalFileTransferOptions {
  * - **Text paste:** Passes through to xterm's native handler (bracketed paste, etc.).
  * - **File drop:** Resolves file paths via `webUtils.getPathForFile()` and writes them
  *   into the terminal as text. Works for both image and non-image files.
+ *
+ * Paths are shell-escaped so filenames with spaces or metacharacters are safe.
  */
 export function useTerminalFileTransfer(
   containerRef: React.RefObject<HTMLDivElement | null>,
@@ -58,10 +60,10 @@ export function useTerminalFileTransfer(
         const result = await window.electron.clipboard.saveImage();
         if (!result.ok) return;
 
-        const { filePath } = result;
-        terminalClient.write(terminalId, filePath);
+        const escaped = escapeShellArgOptional(result.filePath);
+        terminalClient.write(terminalId, escaped);
         terminalInstanceService.notifyUserInput(terminalId);
-        onInput?.(filePath);
+        onInput?.(escaped);
       } catch {
         // IPC may fail if window is closing
       }
@@ -97,15 +99,15 @@ export function useTerminalFileTransfer(
       if (isInputLocked) return;
       if (!e.dataTransfer?.files.length) return;
 
-      const paths: string[] = [];
+      const escapedPaths: string[] = [];
       for (const file of Array.from(e.dataTransfer.files)) {
         const filePath = window.electron.webUtils.getPathForFile(file);
-        if (filePath) paths.push(filePath);
+        if (filePath) escapedPaths.push(escapeShellArgOptional(filePath));
       }
 
-      if (paths.length === 0) return;
+      if (escapedPaths.length === 0) return;
 
-      const text = paths.join(" ");
+      const text = escapedPaths.join(" ");
       terminalClient.write(terminalId, text);
       terminalInstanceService.notifyUserInput(terminalId);
       onInput?.(text);

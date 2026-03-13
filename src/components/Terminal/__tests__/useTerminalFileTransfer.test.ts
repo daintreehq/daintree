@@ -2,8 +2,10 @@
  * @vitest-environment jsdom
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { renderHook, act, cleanup } from "@testing-library/react";
+import { useRef } from "react";
 
-// Mock terminalClient and terminalInstanceService before importing the hook
+// Mock terminalClient and terminalInstanceService
 vi.mock("@/clients", () => ({
   terminalClient: {
     write: vi.fn(),
@@ -16,13 +18,9 @@ vi.mock("@/services/TerminalInstanceService", () => ({
   },
 }));
 
-import { IMAGE_EXTENSIONS } from "../useTerminalFileTransfer";
+import { IMAGE_EXTENSIONS, useTerminalFileTransfer } from "../useTerminalFileTransfer";
 import { terminalClient } from "@/clients";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
-
-// We test the hook's behavior indirectly by simulating what the hook does:
-// attaching event listeners and checking they call the right things.
-// For unit tests, we focus on the exported constants and the behavior contract.
 
 describe("IMAGE_EXTENSIONS", () => {
   it("matches common image formats", () => {
@@ -51,7 +49,7 @@ describe("IMAGE_EXTENSIONS", () => {
   });
 });
 
-describe("terminal file transfer behavior", () => {
+describe("useTerminalFileTransfer hook", () => {
   let container: HTMLDivElement;
   let originalElectron: unknown;
 
@@ -79,9 +77,24 @@ describe("terminal file transfer behavior", () => {
   });
 
   afterEach(() => {
-    document.body.removeChild(container);
+    cleanup();
+    if (container.parentNode) document.body.removeChild(container);
     (window as unknown as Record<string, unknown>).electron = originalElectron;
   });
+
+  function renderFileTransferHook(options?: {
+    isInputLocked?: boolean;
+    onInput?: (data: string) => void;
+  }) {
+    return renderHook(() => {
+      const ref = useRef<HTMLDivElement>(container);
+      useTerminalFileTransfer(ref, {
+        terminalId: "term-1",
+        isInputLocked: options?.isInputLocked,
+        onInput: options?.onInput,
+      });
+    });
+  }
 
   function makePasteEvent(hasImage: boolean): ClipboardEvent {
     const items = hasImage
@@ -99,46 +112,76 @@ describe("terminal file transfer behavior", () => {
     return event;
   }
 
-  it("image paste calls saveImage and writes path to terminal", async () => {
-    // Simulate what the hook does for an image paste
+  function makeDropEvent(files: File[]): DragEvent {
+    const event = new Event("drop", { bubbles: true, cancelable: true }) as DragEvent;
+    Object.defineProperty(event, "dataTransfer", {
+      value: {
+        files,
+        types: ["Files"],
+        dropEffect: "none",
+      },
+    });
+    return event;
+  }
+
+  function makeDragEvent(type: string, hasFiles: boolean): DragEvent {
+    const event = new Event(type, { bubbles: true, cancelable: true }) as DragEvent;
+    Object.defineProperty(event, "dataTransfer", {
+      value: {
+        types: hasFiles ? ["Files"] : ["text/plain"],
+        dropEffect: "none",
+      },
+    });
+    return event;
+  }
+
+  // --- Image paste tests ---
+
+  it("image paste calls saveImage and writes escaped path to terminal", async () => {
+    renderFileTransferHook();
     const event = makePasteEvent(true);
-    const items = event.clipboardData?.items;
-    const hasImage =
-      items &&
-      Array.from(items as unknown as ArrayLike<DataTransferItem>).some((i) =>
-        i.type.startsWith("image/")
-      );
 
-    expect(hasImage).toBe(true);
+    await act(async () => {
+      container.dispatchEvent(event);
+      // Allow async saveImage to resolve
+      await vi.waitFor(() => {
+        expect(terminalClient.write).toHaveBeenCalled();
+      });
+    });
 
-    // Simulate the hook's behavior
-    event.preventDefault();
-    const result = await window.electron.clipboard.saveImage();
-    expect(result.ok).toBe(true);
-    if (result.ok) {
-      terminalClient.write("term-1", result.filePath);
-      terminalInstanceService.notifyUserInput("term-1");
-    }
-
+    // Path contains dots, so escapeShellArgOptional wraps in single quotes
     expect(terminalClient.write).toHaveBeenCalledWith(
       "term-1",
-      "/tmp/canopy-clipboard/clipboard-123-abc.png"
+      "'/tmp/canopy-clipboard/clipboard-123-abc.png'"
     );
     expect(terminalInstanceService.notifyUserInput).toHaveBeenCalledWith("term-1");
+    expect(event.defaultPrevented).toBe(true);
   });
 
-  it("text-only paste does not call saveImage", () => {
-    const event = makePasteEvent(false);
-    const items = event.clipboardData?.items;
-    const hasImage =
-      items &&
-      Array.from(items as unknown as ArrayLike<DataTransferItem>).some((i) =>
-        i.type.startsWith("image/")
-      );
+  it("image paste calls onInput with the escaped path", async () => {
+    const onInput = vi.fn();
+    renderFileTransferHook({ onInput });
+    const event = makePasteEvent(true);
 
-    expect(hasImage).toBe(false);
-    // Hook would return early, not calling saveImage
+    await act(async () => {
+      container.dispatchEvent(event);
+      await vi.waitFor(() => {
+        expect(onInput).toHaveBeenCalled();
+      });
+    });
+
+    expect(onInput).toHaveBeenCalledWith("'/tmp/canopy-clipboard/clipboard-123-abc.png'");
+  });
+
+  it("text-only paste does not call saveImage and is not prevented", () => {
+    renderFileTransferHook();
+    const event = makePasteEvent(false);
+
+    container.dispatchEvent(event);
+
     expect(window.electron.clipboard.saveImage).not.toHaveBeenCalled();
+    expect(terminalClient.write).not.toHaveBeenCalled();
+    expect(event.defaultPrevented).toBe(false);
   });
 
   it("image paste with saveImage failure does not write to terminal", async () => {
@@ -147,65 +190,169 @@ describe("terminal file transfer behavior", () => {
       error: "No image in clipboard",
     });
 
-    const result = await window.electron.clipboard.saveImage();
-    expect(result.ok).toBe(false);
+    renderFileTransferHook();
+    const event = makePasteEvent(true);
 
-    // Hook would return early
+    await act(async () => {
+      container.dispatchEvent(event);
+      // Wait a tick for the async handler to complete
+      await Promise.resolve();
+    });
+
+    expect(event.defaultPrevented).toBe(true);
     expect(terminalClient.write).not.toHaveBeenCalled();
   });
 
-  it("file drop resolves paths and writes them to terminal", () => {
-    const file1 = new File([""], "document.pdf");
-    Object.defineProperty(file1, "_testPath", { value: "/Users/test/document.pdf" });
+  it("image paste is blocked when isInputLocked is true", () => {
+    renderFileTransferHook({ isInputLocked: true });
+    const event = makePasteEvent(true);
 
-    const file2 = new File([""], "screenshot.png");
-    Object.defineProperty(file2, "_testPath", { value: "/Users/test/screenshot.png" });
+    container.dispatchEvent(event);
 
-    const paths: string[] = [];
-    for (const file of [file1, file2]) {
-      const filePath = window.electron.webUtils.getPathForFile(file);
-      if (filePath) paths.push(filePath);
-    }
+    expect(window.electron.clipboard.saveImage).not.toHaveBeenCalled();
+    expect(terminalClient.write).not.toHaveBeenCalled();
+    expect(event.defaultPrevented).toBe(false);
+  });
 
-    expect(paths).toEqual(["/Users/test/document.pdf", "/Users/test/screenshot.png"]);
+  it("image paste escapes paths with spaces", async () => {
+    (window.electron.clipboard.saveImage as ReturnType<typeof vi.fn>).mockResolvedValue({
+      ok: true,
+      filePath: "/tmp/canopy clipboard/my screenshot.png",
+      thumbnailDataUrl: "data:image/png;base64,abc",
+    });
 
-    const text = paths.join(" ");
-    terminalClient.write("term-1", text);
-    terminalInstanceService.notifyUserInput("term-1");
+    renderFileTransferHook();
+    const event = makePasteEvent(true);
 
+    await act(async () => {
+      container.dispatchEvent(event);
+      await vi.waitFor(() => {
+        expect(terminalClient.write).toHaveBeenCalled();
+      });
+    });
+
+    // escapeShellArgOptional wraps paths with spaces in single quotes
     expect(terminalClient.write).toHaveBeenCalledWith(
       "term-1",
-      "/Users/test/document.pdf /Users/test/screenshot.png"
+      "'/tmp/canopy clipboard/my screenshot.png'"
     );
   });
 
+  // --- File drop tests ---
+
+  it("file drop resolves paths and writes them to terminal", () => {
+    renderFileTransferHook();
+
+    const file1 = new File([""], "document.pdf");
+    Object.defineProperty(file1, "_testPath", { value: "/Users/test/document.pdf" });
+
+    const file2 = new File([""], "script.sh");
+    Object.defineProperty(file2, "_testPath", { value: "/Users/test/script.sh" });
+
+    const event = makeDropEvent([file1, file2]);
+    container.dispatchEvent(event);
+
+    expect(terminalClient.write).toHaveBeenCalledWith(
+      "term-1",
+      "'/Users/test/document.pdf' '/Users/test/script.sh'"
+    );
+    expect(terminalInstanceService.notifyUserInput).toHaveBeenCalledWith("term-1");
+    expect(event.defaultPrevented).toBe(true);
+  });
+
+  it("file drop escapes paths with spaces", () => {
+    renderFileTransferHook();
+
+    const file = new File([""], "my file.pdf");
+    Object.defineProperty(file, "_testPath", { value: "/Users/test/my file.pdf" });
+
+    const event = makeDropEvent([file]);
+    container.dispatchEvent(event);
+
+    expect(terminalClient.write).toHaveBeenCalledWith("term-1", "'/Users/test/my file.pdf'");
+  });
+
   it("file drop with unresolved path skips that file", () => {
+    renderFileTransferHook();
+
     const file1 = new File([""], "resolved.pdf");
     Object.defineProperty(file1, "_testPath", { value: "/Users/test/resolved.pdf" });
 
     const file2 = new File([""], "unresolved.pdf");
     // No _testPath → getPathForFile returns ""
 
-    const paths: string[] = [];
-    for (const file of [file1, file2]) {
-      const filePath = window.electron.webUtils.getPathForFile(file);
-      if (filePath) paths.push(filePath);
-    }
+    const event = makeDropEvent([file1, file2]);
+    container.dispatchEvent(event);
 
-    expect(paths).toEqual(["/Users/test/resolved.pdf"]);
-
-    const text = paths.join(" ");
-    terminalClient.write("term-1", text);
-
-    expect(terminalClient.write).toHaveBeenCalledWith("term-1", "/Users/test/resolved.pdf");
+    expect(terminalClient.write).toHaveBeenCalledWith("term-1", "'/Users/test/resolved.pdf'");
   });
 
-  it("drop with no files does not write to terminal", () => {
-    const paths: string[] = [];
-    // Simulate empty file list
-    if (paths.length === 0) return;
+  it("file drop with all unresolved paths does not write to terminal", () => {
+    renderFileTransferHook();
 
-    terminalClient.write("term-1", paths.join(" "));
+    const file = new File([""], "unresolved.pdf");
+    // No _testPath → returns ""
+
+    const event = makeDropEvent([file]);
+    container.dispatchEvent(event);
+
+    expect(terminalClient.write).not.toHaveBeenCalled();
+  });
+
+  it("file drop is blocked when isInputLocked is true", () => {
+    renderFileTransferHook({ isInputLocked: true });
+
+    const file = new File([""], "file.pdf");
+    Object.defineProperty(file, "_testPath", { value: "/Users/test/file.pdf" });
+
+    const event = makeDropEvent([file]);
+    container.dispatchEvent(event);
+
+    expect(terminalClient.write).not.toHaveBeenCalled();
+  });
+
+  it("file drop calls onInput with the joined paths", () => {
+    const onInput = vi.fn();
+    renderFileTransferHook({ onInput });
+
+    const file = new File([""], "file.ts");
+    Object.defineProperty(file, "_testPath", { value: "/Users/test/file.ts" });
+
+    const event = makeDropEvent([file]);
+    container.dispatchEvent(event);
+
+    expect(onInput).toHaveBeenCalledWith("'/Users/test/file.ts'");
+  });
+
+  // --- Drag event tests ---
+
+  it("dragover with files sets dropEffect to copy and prevents default", () => {
+    renderFileTransferHook();
+    const event = makeDragEvent("dragover", true);
+    container.dispatchEvent(event);
+
+    expect(event.defaultPrevented).toBe(true);
+  });
+
+  it("dragover without files does not prevent default", () => {
+    renderFileTransferHook();
+    const event = makeDragEvent("dragover", false);
+    container.dispatchEvent(event);
+
+    expect(event.defaultPrevented).toBe(false);
+  });
+
+  // --- Cleanup test ---
+
+  it("removes event listeners on unmount", () => {
+    const { unmount } = renderFileTransferHook();
+    unmount();
+
+    // After unmount, events should not trigger any behavior
+    const event = makePasteEvent(true);
+    container.dispatchEvent(event);
+
+    expect(window.electron.clipboard.saveImage).not.toHaveBeenCalled();
     expect(terminalClient.write).not.toHaveBeenCalled();
   });
 });
