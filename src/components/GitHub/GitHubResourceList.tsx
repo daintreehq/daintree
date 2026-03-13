@@ -345,10 +345,11 @@ export function GitHubResourceList({
         }
         case "Escape":
           e.preventDefault();
-          e.stopPropagation();
           if (searchQuery !== "") {
             setSearchQuery("");
+            e.nativeEvent.stopImmediatePropagation();
           } else {
+            e.stopPropagation();
             onClose?.();
           }
           break;
