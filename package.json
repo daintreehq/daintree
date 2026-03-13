@@ -65,6 +65,7 @@
     "node-gyp": "^10.3.1"
   },
   "devDependencies": {
+    "@axe-core/playwright": "^4.11.1",
     "@codemirror/lang-markdown": "^6.5.0",
     "@codemirror/language-data": "^6.5.2",
     "@deepgram/sdk": "^4.11.3",
