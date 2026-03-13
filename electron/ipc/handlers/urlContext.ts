@@ -42,9 +42,14 @@ const PRIVATE_IP_PATTERNS = [
   /^10\./,
   /^172\.(1[6-9]|2\d|3[01])\./,
   /^192\.168\./,
+  /^169\.254\./,
+  /^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./,
   /^0\.0\.0\.0$/,
   /^::1$/,
   /^fe80:/i,
+  /^fc00:/i,
+  /^fd/i,
+  /^::ffff:(127\.|10\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.)/i,
 ];
 
 async function isSafeUrl(urlStr: string): Promise<boolean> {
@@ -248,16 +253,37 @@ async function fetchUrlAsMarkdown(urlStr: string): Promise<UrlContextResult> {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
 
-    let response: Response;
+    let response!: Response;
+    let currentUrl = urlStr;
+    const maxRedirects = 5;
     try {
-      response = await fetch(urlStr, {
-        signal: controller.signal,
-        headers: {
-          "User-Agent": "Canopy/1.0 (URL Context Resolver)",
-          Accept: "text/html, application/xhtml+xml, */*",
-        },
-        redirect: "follow",
-      });
+      for (let i = 0; i <= maxRedirects; i++) {
+        response = await fetch(currentUrl, {
+          signal: controller.signal,
+          headers: {
+            "User-Agent": "Canopy/1.0 (URL Context Resolver)",
+            Accept: "text/html, application/xhtml+xml, */*",
+          },
+          redirect: "manual",
+        });
+
+        if (response.status >= 300 && response.status < 400) {
+          const location = response.headers.get("location");
+          if (!location) break;
+          const redirectUrl = new URL(location, currentUrl).href;
+          const redirectSafe = await isSafeUrl(redirectUrl);
+          if (!redirectSafe) {
+            return {
+              ok: false,
+              reason: "blocked",
+              message: "Redirect points to a private or local address",
+            };
+          }
+          currentUrl = redirectUrl;
+          continue;
+        }
+        break;
+      }
     } finally {
       clearTimeout(timeout);
     }

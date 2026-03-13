@@ -281,12 +281,12 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     const editorViewRefForUrl = editorViewRef;
     const urlPasteFieldInstance = useMemo(
       () =>
-        createUrlPasteField((url: string) => {
+        createUrlPasteField((entryId: number, url: string) => {
           const view = editorViewRefForUrl.current;
           if (!view) return;
 
           view.dispatch({
-            effects: updateUrlPasteStatus.of({ url, status: "loading" }),
+            effects: updateUrlPasteStatus.of({ id: entryId, status: "loading" }),
           });
 
           window.electron.urlContext
@@ -297,13 +297,13 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
 
               if (result.ok) {
                 const entries = currentView.state.field(urlPasteFieldInstance, false) ?? [];
-                const entry = entries.find((e) => e.url === url);
+                const entry = entries.find((e) => e.id === entryId);
                 if (!entry) return;
 
                 currentView.dispatch({
                   changes: { from: entry.from, to: entry.to, insert: result.markdown },
                   effects: [
-                    removeUrlPasteEntry.of({ url }),
+                    removeUrlPasteEntry.of({ id: entryId }),
                     addUrlContextChip.of({
                       from: entry.from,
                       to: entry.from + result.markdown.length,
@@ -316,7 +316,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
               } else {
                 currentView.dispatch({
                   effects: updateUrlPasteStatus.of({
-                    url,
+                    id: entryId,
                     status: "error",
                     errorMessage: result.message,
                   }),
@@ -328,7 +328,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
               if (!currentView) return;
               currentView.dispatch({
                 effects: updateUrlPasteStatus.of({
-                  url,
+                  id: entryId,
                   status: "error",
                   errorMessage: "Failed to fetch URL",
                 }),
