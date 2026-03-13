@@ -728,14 +728,14 @@ export const AGENT_REGISTRY: Record<string, AgentConfig> = {
     },
     detection: {
       primaryPatterns: [
-        "\u2B22\\s+(Thought|Read|Planned|Searching|Running|Executing)",
+        "\u2B22\\s+(Thinking|Reading|Planning|Searching|Running|Executing|Grepping|Editing|Listing)",
         "esc to stop",
       ],
       fallbackPatterns: ["\u2B22\\s+\\w"],
       bootCompletePatterns: ["Cursor Agent", "Welcome to Cursor Agent"],
-      promptPatterns: ["^>\\s*$", "^>\\s"],
+      promptPatterns: ["^\u2192\\s*$", "^\u2192\\s"],
       promptHintPatterns: ["\u2192\\s+Add a follow-up"],
-      completionPatterns: ["\u2192\\s+\\S"],
+      completionPatterns: ["\u2B22\\s+(Thought|Read|Planned)\\s"],
       completionConfidence: 0.9,
       scanLineCount: 10,
       primaryConfidence: 0.95,
