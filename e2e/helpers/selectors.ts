@@ -49,8 +49,15 @@ export const SEL = {
   },
   terminal: {
     xtermRows: ".xterm-rows",
+    xtermViewport: ".xterm-viewport",
     cmEditor: ".cm-content",
     titleButton: '[aria-label*="title"]',
+    searchInput: "[data-terminal-search-input]",
+    searchClose: '[aria-label="Close search"]',
+    searchPrevious: '[aria-label="Previous match"]',
+    searchNext: '[aria-label="Next match"]',
+    searchCaseToggle: '[aria-label="Toggle case sensitivity"]',
+    searchRegexToggle: '[aria-label="Toggle regex mode"]',
   },
   worktree: {
     card: (branch: string) => `[data-worktree-branch="${branch}"]`,
