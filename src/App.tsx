@@ -136,23 +136,16 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   const currentProject = useProjectStore((state) => state.currentProject);
   useProjectSettings();
   const { launchAgent, availability, agentSettings } = useAgentLauncher();
-  const {
-    activeWorktreeId,
-    focusedWorktreeId,
-    selectWorktree,
-    createDialog,
-    closeCreateDialog,
-    openQuickCreate,
-  } = useWorktreeSelectionStore(
-    useShallow((state) => ({
-      activeWorktreeId: state.activeWorktreeId,
-      focusedWorktreeId: state.focusedWorktreeId,
-      selectWorktree: state.selectWorktree,
-      createDialog: state.createDialog,
-      closeCreateDialog: state.closeCreateDialog,
-      openQuickCreate: state.openQuickCreate,
-    }))
-  );
+  const { activeWorktreeId, focusedWorktreeId, selectWorktree, createDialog, closeCreateDialog } =
+    useWorktreeSelectionStore(
+      useShallow((state) => ({
+        activeWorktreeId: state.activeWorktreeId,
+        focusedWorktreeId: state.focusedWorktreeId,
+        selectWorktree: state.selectWorktree,
+        createDialog: state.createDialog,
+        closeCreateDialog: state.closeCreateDialog,
+      }))
+    );
 
   // Filter/sort state - destructured for stable memoization
   const {
@@ -566,9 +559,13 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
             </button>
           </div>
           <button
-            onClick={() => openQuickCreate()}
+            onClick={() =>
+              actionService.dispatch("worktree.createDialog.open", undefined, {
+                source: "user",
+              })
+            }
             className="p-1 text-canopy-text/40 hover:text-canopy-text hover:bg-white/[0.06] rounded transition-colors"
-            title={createTooltipWithShortcut("Create new worktree", "Cmd+Shift+N")}
+            title="Create new worktree"
             aria-label="Create new worktree"
           >
             <Plus className="w-3.5 h-3.5" />

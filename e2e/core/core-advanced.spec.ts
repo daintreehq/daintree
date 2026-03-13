@@ -140,12 +140,7 @@ test.describe.serial("Core: Advanced", () => {
       const newBtn = window.locator('button[aria-label="Create new worktree"]');
       await newBtn.click();
 
-      // Quick create palette opens first; click "Customize…" to reach the full dialog
-      const quickPalette = window.locator(SEL.worktree.quickCreatePalette);
-      await expect(quickPalette).toBeVisible({ timeout: T_MEDIUM });
-      const customizeBtn = window.locator(SEL.worktree.quickCreateCustomize);
-      await customizeBtn.click();
-
+      // Plus button opens the full create dialog directly
       const branchInput = window.locator(SEL.worktree.branchNameInput);
       await expect(branchInput).toBeVisible({ timeout: T_MEDIUM });
       await branchInput.fill("e2e/test-worktree");
