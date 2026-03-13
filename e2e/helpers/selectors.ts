@@ -65,6 +65,15 @@ export const SEL = {
     backButton: '[data-testid="browser-back"]',
     forwardButton: '[data-testid="browser-forward"]',
     reloadButton: '[data-testid="browser-reload"]',
+    navBack: '[aria-label="Go back"]',
+    navForward: '[aria-label="Go forward"]',
+    navReload: '[aria-label="Reload page"]',
+    zoomIn: '[aria-label="Zoom in"]',
+    zoomOut: '[aria-label="Zoom out"]',
+    zoomReset: '[aria-label="Reset zoom"]',
+  },
+  devPreview: {
+    consoleToggle: '[aria-label="Show Terminal"], [aria-label="Hide Terminal"]',
   },
   projectSwitcher: {
     palette: '[data-testid="project-switcher-palette"]',
