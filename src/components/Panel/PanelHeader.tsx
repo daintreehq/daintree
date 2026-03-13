@@ -181,10 +181,10 @@ function PanelHeaderComponent({
   const showWatchButton = !!agentId;
 
   // Whether the overflow "..." menu has any items to show
+  const showMoveToDock = !!onMinimize && !isMaximized && location !== "dock";
+  const showCancelWatch = showWatchButton && isWatched;
   const hasOverflowItems =
-    (canRestart && !!onRestart) ||
-    (!!onMinimize && !isMaximized && location !== "dock") ||
-    !!headerActions;
+    (canRestart && !!onRestart) || showMoveToDock || showCancelWatch || !!headerActions;
 
   // Restart handler for Radix DropdownMenu onSelect
   const handleRestartSelect = useCallback(
@@ -616,21 +616,22 @@ function PanelHeaderComponent({
                     : "Restart Session"}
                 </DropdownMenuItem>
               )}
-              {onMinimize && !isMaximized && location !== "dock" && (
-                <DropdownMenuItem onSelect={() => onMinimize()}>
+              {showMoveToDock && (
+                <DropdownMenuItem onSelect={() => onMinimize!()}>
                   <DockToBottomIcon className="w-3 h-3 mr-2" />
                   Move to Dock
                 </DropdownMenuItem>
               )}
-              {showWatchButton && isWatched && (
+              {showCancelWatch && (
                 <DropdownMenuItem onSelect={() => unwatchPanel(id)}>
                   <Bell className="w-3 h-3 mr-2" aria-hidden="true" />
                   Cancel Watch
                 </DropdownMenuItem>
               )}
-              {headerActions && (canRestart || onMinimize || (showWatchButton && isWatched)) && (
-                <DropdownMenuSeparator />
-              )}
+              {headerActions &&
+                ((canRestart && !!onRestart) || showMoveToDock || showCancelWatch) && (
+                  <DropdownMenuSeparator />
+                )}
               {headerActions && (
                 <div role="presentation" onKeyDown={(e) => e.stopPropagation()}>
                   {headerActions}
