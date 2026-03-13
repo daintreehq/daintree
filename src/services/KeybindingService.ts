@@ -1262,18 +1262,27 @@ class KeybindingService {
     return Object.fromEntries(this.overrides.entries());
   }
 
-  getChordCompletions(
-    prefix: string
-  ): Array<{ secondKey: string; displayKey: string; actionId: string; description: string }> {
+  getChordCompletions(prefix: string): Array<{
+    secondKey: string;
+    displayKey: string;
+    actionId: string;
+    description: string;
+    category: string;
+    isPrefix: boolean;
+  }> {
     const normalizedPrefix = prefix.trim().toLowerCase();
     const results: Array<{
       secondKey: string;
       displayKey: string;
       actionId: string;
       description: string;
+      category: string;
+      isPrefix: boolean;
     }> = [];
 
-    for (const binding of this.getAllBindingsWithEffectiveCombos()) {
+    const allBindings = this.getAllBindingsWithEffectiveCombos();
+
+    for (const binding of allBindings) {
       if (!this.canExecute(binding.actionId)) continue;
 
       const combo = binding.effectiveCombo.trim();
@@ -1285,11 +1294,22 @@ class KeybindingService {
       if (firstPart !== normalizedPrefix) continue;
 
       const secondKey = combo.slice(combo.indexOf(" ") + 1);
+
+      // Check if this secondKey is itself a prefix for deeper chords
+      const fullPrefix = `${normalizedPrefix} ${secondKey.trim().toLowerCase()}`;
+      const isPrefix = allBindings.some((b) => {
+        if (!b.effectiveCombo) return false;
+        const nc = b.effectiveCombo.trim().toLowerCase();
+        return nc.startsWith(fullPrefix + " ");
+      });
+
       results.push({
         secondKey,
         displayKey: this.formatComboForDisplay(secondKey),
         actionId: binding.actionId,
         description: binding.description ?? "",
+        category: binding.category ?? "Other",
+        isPrefix,
       });
     }
 
