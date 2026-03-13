@@ -301,7 +301,10 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
         // Get current terminals from store and save to per-project state
         const currentTerminals = useTerminalStore.getState().terminals;
         const terminalsToSave: TerminalSnapshot[] = currentTerminals
-          .filter((t) => t.location !== "trash" && !isSmokeTestTerminalId(t.id))
+          .filter(
+            (t) =>
+              t.location !== "trash" && t.location !== "background" && !isSmokeTestTerminalId(t.id)
+          )
           .map(terminalToSnapshot);
 
         const terminalSizes: Record<string, { cols: number; rows: number }> = {};
@@ -630,7 +633,10 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
         // Get current terminals from store and save to per-project state
         const currentTerminals = useTerminalStore.getState().terminals;
         const terminalsToSave: TerminalSnapshot[] = currentTerminals
-          .filter((t) => t.location !== "trash" && !isSmokeTestTerminalId(t.id))
+          .filter(
+            (t) =>
+              t.location !== "trash" && t.location !== "background" && !isSmokeTestTerminalId(t.id)
+          )
           .map(terminalToSnapshot);
 
         const terminalSizes: Record<string, { cols: number; rows: number }> = {};

@@ -68,6 +68,7 @@ describe("updateActivity early-exit (#2701)", () => {
       terminals: [],
       tabGroups: new Map(),
       trashedTerminals: new Map(),
+      backgroundedTerminals: new Map(),
       focusedId: null,
       maximizedId: null,
       commandQueue: [],

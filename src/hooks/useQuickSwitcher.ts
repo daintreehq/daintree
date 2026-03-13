@@ -73,11 +73,17 @@ export function useQuickSwitcher(): UseQuickSwitcherReturn {
       if (t.hasPty === false) continue;
       if (!isPtyPanel(t)) continue;
       const worktreeName = t.worktreeId ? worktreeMap.get(t.worktreeId)?.name : undefined;
+      const isBackground = t.location === "background";
+      const baseSubtitle = worktreeName ?? t.cwd ?? undefined;
       result.push({
         id: `terminal:${t.id}`,
         type: "terminal",
         title: t.title,
-        subtitle: worktreeName ?? t.cwd ?? undefined,
+        subtitle: isBackground
+          ? baseSubtitle
+            ? `${baseSubtitle} · Backgrounded`
+            : "Backgrounded"
+          : baseSubtitle,
         terminalType: t.type,
         terminalKind: t.kind,
         agentId: t.agentId,
@@ -158,6 +164,9 @@ export function useQuickSwitcher(): UseQuickSwitcherReturn {
     paletteId: "quick-switcher",
   });
 
+  const restoreBackgroundTerminal = useTerminalStore((state) => state.restoreBackgroundTerminal);
+  const activateTerminal = useTerminalStore((state) => state.activateTerminal);
+
   const selectItem = useCallback(
     (item: QuickSwitcherItem) => {
       if (item.type === "terminal") {
@@ -168,14 +177,21 @@ export function useQuickSwitcher(): UseQuickSwitcherReturn {
         ) {
           selectWorktree(item.worktreeId);
         }
-        setFocused(terminalId);
+        // Restore backgrounded panels before focusing
+        const terminal = useTerminalStore.getState().terminals.find((t) => t.id === terminalId);
+        if (terminal?.location === "background") {
+          restoreBackgroundTerminal(terminalId);
+          activateTerminal(terminalId);
+        } else {
+          setFocused(terminalId);
+        }
       } else if (item.type === "worktree") {
         const worktreeId = item.id.replace("worktree:", "");
         selectWorktree(worktreeId);
       }
       close();
     },
-    [setFocused, selectWorktree, close]
+    [setFocused, selectWorktree, close, restoreBackgroundTerminal, activateTerminal]
   );
 
   const confirmSelection = useCallback(() => {

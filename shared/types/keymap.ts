@@ -93,6 +93,7 @@ export type KeyAction =
   | "terminal.moveToDock"
   | "terminal.moveToGrid"
   | "terminal.watch"
+  | "terminal.background"
   | "terminal.contextMenu"
 
   // Agent spawning

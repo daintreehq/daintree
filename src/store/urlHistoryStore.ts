@@ -26,8 +26,15 @@ const memoryStorage: StateStorage = (() => {
 })();
 
 function getSafeStorage(): StateStorage {
-  if (typeof localStorage !== "undefined" && typeof localStorage.setItem === "function") {
-    return localStorage;
+  if (typeof localStorage !== "undefined") {
+    const storage = localStorage as unknown as Partial<StateStorage>;
+    if (
+      typeof storage.getItem === "function" &&
+      typeof storage.setItem === "function" &&
+      typeof storage.removeItem === "function"
+    ) {
+      return localStorage;
+    }
   }
   return memoryStorage;
 }

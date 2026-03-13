@@ -20,6 +20,7 @@ function isTerminalVisible(
 ): boolean {
   if (isInTrash(terminal.id)) return false;
   if (terminal.location === "trash") return false;
+  if (terminal.location === "background") return false;
   if (isTerminalOrphaned(terminal, worktreeIds)) return false;
   return true;
 }

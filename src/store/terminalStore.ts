@@ -465,6 +465,7 @@ export const useTerminalStore = create<PanelGridState>()((set, get, api) => {
       set({
         terminals: [],
         trashedTerminals: new Map(),
+        backgroundedTerminals: new Map(),
         tabGroups: new Map(),
         activeTabByGroup: new Map(),
         focusedId: null,
@@ -507,6 +508,7 @@ export const useTerminalStore = create<PanelGridState>()((set, get, api) => {
       set({
         terminals: [],
         trashedTerminals: new Map(),
+        backgroundedTerminals: new Map(),
         tabGroups: new Map(),
         activeTabByGroup: new Map(),
         focusedId: null,
