@@ -5,6 +5,8 @@ import {
   Circle,
   FolderOpen,
   FolderPlus,
+  Pin,
+  PinOff,
   Plus,
   Settings2,
   Square,
@@ -39,6 +41,7 @@ export interface ProjectSwitcherPaletteProps {
   onStopProject?: (projectId: string) => void;
   onCloseProject?: (projectId: string) => void;
   onLocateProject?: (projectId: string) => void;
+  onTogglePinProject?: (projectId: string) => void;
   onOpenProjectSettings?: () => void;
   dropdownAlign?: "start" | "center" | "end";
   children?: React.ReactNode;
@@ -56,6 +59,7 @@ interface ProjectListItemProps {
   onStopProject?: (projectId: string) => void;
   onCloseProject?: (projectId: string) => void;
   onLocateProject?: (projectId: string) => void;
+  onTogglePinProject?: (projectId: string) => void;
 }
 
 function ProjectListItem({
@@ -66,6 +70,7 @@ function ProjectListItem({
   onStopProject,
   onCloseProject,
   onLocateProject,
+  onTogglePinProject,
 }: ProjectListItemProps) {
   const showStop = project.processCount > 0 && !project.isMissing;
 
@@ -144,6 +149,50 @@ function ProjectListItem({
                 activeAgentCount={project.activeAgentCount}
                 waitingAgentCount={project.waitingAgentCount}
               />
+            )}
+
+            {onTogglePinProject && !project.isMissing && (
+              <div
+                className={cn(
+                  "flex items-center transition-opacity",
+                  project.isPinned
+                    ? "opacity-60"
+                    : index === selectedIndex
+                      ? "opacity-100"
+                      : "opacity-0 group-hover:opacity-100"
+                )}
+              >
+                <TooltipProvider>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onTogglePinProject(project.id);
+                        }}
+                        className={cn(
+                          "p-0.5 rounded transition-colors cursor-pointer",
+                          project.isPinned
+                            ? "text-canopy-accent/70 hover:text-canopy-accent"
+                            : "text-canopy-text/50 hover:bg-white/[0.06] hover:text-canopy-text/80",
+                          "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent"
+                        )}
+                        aria-label={project.isPinned ? "Unpin project" : "Pin project"}
+                      >
+                        {project.isPinned ? (
+                          <PinOff className="w-3.5 h-3.5" aria-hidden="true" />
+                        ) : (
+                          <Pin className="w-3.5 h-3.5" aria-hidden="true" />
+                        )}
+                      </button>
+                    </TooltipTrigger>
+                    <TooltipContent side="bottom">
+                      {project.isPinned ? "Unpin" : "Pin"}
+                    </TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
+              </div>
             )}
 
             {project.isMissing ? (
@@ -288,6 +337,7 @@ interface ProjectListContentProps {
   onStopProject?: (projectId: string) => void;
   onCloseProject?: (projectId: string) => void;
   onLocateProject?: (projectId: string) => void;
+  onTogglePinProject?: (projectId: string) => void;
 }
 
 function ProjectListContent({
@@ -299,14 +349,20 @@ function ProjectListContent({
   onStopProject,
   onCloseProject,
   onLocateProject,
+  onTogglePinProject,
 }: ProjectListContentProps) {
   const isSearching = query.trim().length > 0;
 
   const sections = useMemo(() => {
     if (isSearching || results.length === 0) return null;
+    const pinned = results.filter((p) => p.isPinned && !p.isActive);
     const current = results.filter((p) => p.isActive);
-    const previous = results.filter((p) => !p.isActive);
-    return [current, previous].filter((s) => s.length > 0);
+    const rest = results.filter((p) => !p.isActive && !p.isPinned);
+    return [
+      { key: "pinned", label: "Pinned", items: pinned },
+      { key: "current", label: null, items: current },
+      { key: "other", label: null, items: rest },
+    ].filter((s) => s.items.length > 0);
   }, [results, isSearching]);
 
   const renderItem = (project: SearchableProject) => {
@@ -321,6 +377,7 @@ function ProjectListContent({
           onStopProject={onStopProject}
           onCloseProject={onCloseProject}
           onLocateProject={onLocateProject}
+          onTogglePinProject={onTogglePinProject}
         />
       </div>
     );
@@ -337,10 +394,10 @@ function ProjectListContent({
           </div>
         ) : sections ? (
           sections.map((section, sectionIdx) => {
-            const isActiveSection = section[0]?.isActive;
+            const isActiveSection = section.items[0]?.isActive;
             const isLast = sectionIdx === sections.length - 1;
             return (
-              <div key={sectionIdx}>
+              <div key={section.key}>
                 {sectionIdx > 0 && <div className="h-[3px] bg-white/[0.08]" />}
                 <div
                   className={cn(
@@ -350,7 +407,12 @@ function ProjectListContent({
                     isActiveSection && "bg-overlay-subtle"
                   )}
                 >
-                  {section.map(renderItem)}
+                  {section.label && (
+                    <div className="px-3 py-1 text-[10px] font-medium tracking-wider uppercase text-canopy-text/40 select-none">
+                      {section.label}
+                    </div>
+                  )}
+                  {section.items.map(renderItem)}
                 </div>
               </div>
             );
@@ -367,6 +429,7 @@ function ProjectListContent({
                   onStopProject={onStopProject}
                   onCloseProject={onCloseProject}
                   onLocateProject={onLocateProject}
+                  onTogglePinProject={onTogglePinProject}
                 />
               </div>
             ))}
@@ -429,6 +492,7 @@ interface ProjectPaletteInnerProps {
   onStopProject?: (projectId: string) => void;
   onCloseProject?: (projectId: string) => void;
   onLocateProject?: (projectId: string) => void;
+  onTogglePinProject?: (projectId: string) => void;
 }
 
 function ProjectPaletteInner({
@@ -448,6 +512,7 @@ function ProjectPaletteInner({
   onStopProject,
   onCloseProject,
   onLocateProject,
+  onTogglePinProject,
 }: ProjectPaletteInnerProps) {
   const projectSwitcherShortcut = useKeybindingDisplay("project.switcherPalette");
 
@@ -548,6 +613,7 @@ function ProjectPaletteInner({
           onStopProject={onStopProject}
           onCloseProject={onCloseProject}
           onLocateProject={onLocateProject}
+          onTogglePinProject={onTogglePinProject}
         />
       </AppPaletteDialog.Body>
 
@@ -684,6 +750,7 @@ function ModalContent({
           onStopProject={innerProps.onStopProject}
           onCloseProject={innerProps.onCloseProject}
           onLocateProject={innerProps.onLocateProject}
+          onTogglePinProject={innerProps.onTogglePinProject}
         />
       </div>
     </div>,
@@ -755,6 +822,7 @@ function DropdownContent({
           onStopProject={innerProps.onStopProject}
           onCloseProject={innerProps.onCloseProject}
           onLocateProject={innerProps.onLocateProject}
+          onTogglePinProject={innerProps.onTogglePinProject}
         />
       </PopoverContent>
     </Popover>
@@ -777,6 +845,7 @@ export function ProjectSwitcherPalette({
   onStopProject,
   onCloseProject,
   onLocateProject,
+  onTogglePinProject,
   onOpenProjectSettings,
   dropdownAlign,
   children,
@@ -808,6 +877,7 @@ export function ProjectSwitcherPalette({
         onStopProject={onStopProject}
         onCloseProject={onCloseProject}
         onLocateProject={onLocateProject}
+        onTogglePinProject={onTogglePinProject}
         onOpenProjectSettings={onOpenProjectSettings}
         dropdownAlign={dropdownAlign}
       >
@@ -829,6 +899,7 @@ export function ProjectSwitcherPalette({
         onStopProject={onStopProject}
         onCloseProject={onCloseProject}
         onLocateProject={onLocateProject}
+        onTogglePinProject={onTogglePinProject}
         onOpenProjectSettings={onOpenProjectSettings}
       />
     );

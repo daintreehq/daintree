@@ -72,6 +72,13 @@ export function ProjectSwitcher() {
     [projectSwitcher]
   );
 
+  const handleTogglePinProject = useCallback(
+    (projectId: string) => {
+      void projectSwitcher.togglePinProject(projectId);
+    },
+    [projectSwitcher]
+  );
+
   const stopDialog = (
     <ConfirmDialog
       isOpen={projectSwitcher.stopConfirmProjectId != null}
@@ -110,6 +117,7 @@ export function ProjectSwitcher() {
             onStopProject={handleStopProject}
             onCloseProject={handleCloseProject}
             onLocateProject={handleLocateProject}
+            onTogglePinProject={handleTogglePinProject}
             removeConfirmProject={projectSwitcher.removeConfirmProject}
             onRemoveConfirmClose={() => projectSwitcher.setRemoveConfirmProject(null)}
             onConfirmRemove={projectSwitcher.confirmRemoveProject}
