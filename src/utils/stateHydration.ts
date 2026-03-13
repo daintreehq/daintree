@@ -17,7 +17,7 @@ import type {
 } from "@/types";
 import { keybindingService } from "@/services/KeybindingService";
 import { getAgentConfig, isRegisteredAgent } from "@/config/agents";
-import { generateAgentCommand } from "@shared/types";
+import { generateAgentCommand, buildResumeCommand } from "@shared/types";
 import { normalizeScrollbackLines } from "@shared/config/scrollback";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { isTerminalWarmInProjectSwitchCache } from "@/services/projectSwitchRendererCache";
@@ -710,15 +710,31 @@ export async function hydrateAppState(
                     const agentId = effectiveAgentId;
                     let command = saved.command?.trim() || undefined;
 
-                    if (agentId && agentSettings) {
-                      const agentConfig = getAgentConfig(agentId);
-                      const baseCommand = agentConfig?.command || agentId;
-                      command = generateAgentCommand(
-                        baseCommand,
-                        agentSettings.agents?.[agentId] ?? {},
-                        agentId,
-                        { clipboardDirectory }
-                      );
+                    if (agentId) {
+                      if (saved.agentSessionId) {
+                        const resumeCmd = buildResumeCommand(agentId, saved.agentSessionId);
+                        if (resumeCmd) {
+                          command = resumeCmd;
+                        } else if (agentSettings) {
+                          const agentConfig = getAgentConfig(agentId);
+                          const baseCommand = agentConfig?.command || agentId;
+                          command = generateAgentCommand(
+                            baseCommand,
+                            agentSettings.agents?.[agentId] ?? {},
+                            agentId,
+                            { clipboardDirectory }
+                          );
+                        }
+                      } else if (agentSettings) {
+                        const agentConfig = getAgentConfig(agentId);
+                        const baseCommand = agentConfig?.command || agentId;
+                        command = generateAgentCommand(
+                          baseCommand,
+                          agentSettings.agents?.[agentId] ?? {},
+                          agentId,
+                          { clipboardDirectory }
+                        );
+                      }
                     }
 
                     // Preserve the original kind (dev-preview, terminal, etc.) unless it's an agent

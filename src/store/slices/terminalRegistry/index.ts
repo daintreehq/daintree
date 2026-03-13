@@ -1,7 +1,7 @@
 import type { StateCreator } from "zustand";
 import type { TerminalRuntimeStatus, TerminalLocation, TabGroup, TabGroupLocation } from "@/types";
 import { terminalClient, agentSettingsClient, projectClient, systemClient } from "@/clients";
-import { generateAgentCommand } from "@shared/types";
+import { generateAgentCommand, buildResumeCommand } from "@shared/types";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { TerminalRefreshTier } from "@/types";
 import { validateTerminalConfig } from "@/utils/terminalValidation";
@@ -1373,27 +1373,37 @@ export const createTerminalRegistrySlice =
         const isAgent = !!effectiveAgentId;
 
         if (isAgent && effectiveAgentId) {
-          try {
-            const [agentSettings, tmpDir] = await Promise.all([
-              agentSettingsClient.get(),
-              systemClient.getTmpDir().catch(() => ""),
-            ]);
-            if (agentSettings) {
-              const agentConfig = getAgentConfig(effectiveAgentId);
-              const baseCommand = agentConfig?.command || effectiveAgentId;
-              const clipboardDirectory = tmpDir ? `${tmpDir}/canopy-clipboard` : undefined;
-              commandToRun = generateAgentCommand(
-                baseCommand,
-                agentSettings.agents?.[effectiveAgentId] ?? {},
-                effectiveAgentId,
-                { clipboardDirectory }
+          const sessionId = currentTerminal.agentSessionId;
+          if (sessionId) {
+            const resumeCmd = buildResumeCommand(effectiveAgentId, sessionId);
+            if (resumeCmd) {
+              commandToRun = resumeCmd;
+            }
+          }
+
+          if (commandToRun === currentTerminal.command) {
+            try {
+              const [agentSettings, tmpDir] = await Promise.all([
+                agentSettingsClient.get(),
+                systemClient.getTmpDir().catch(() => ""),
+              ]);
+              if (agentSettings) {
+                const agentConfig = getAgentConfig(effectiveAgentId);
+                const baseCommand = agentConfig?.command || effectiveAgentId;
+                const clipboardDirectory = tmpDir ? `${tmpDir}/canopy-clipboard` : undefined;
+                commandToRun = generateAgentCommand(
+                  baseCommand,
+                  agentSettings.agents?.[effectiveAgentId] ?? {},
+                  effectiveAgentId,
+                  { clipboardDirectory }
+                );
+              }
+            } catch (error) {
+              console.warn(
+                "[TerminalStore] Failed to load agent settings for restart, using saved command:",
+                error
               );
             }
-          } catch (error) {
-            console.warn(
-              "[TerminalStore] Failed to load agent settings for restart, using saved command:",
-              error
-            );
           }
         }
 
@@ -1440,6 +1450,7 @@ export const createTerminalRegistrySlice =
                     stateChangeTrigger: undefined,
                     stateChangeConfidence: undefined,
                     command: spawnCommand,
+                    agentSessionId: undefined,
                     isRestarting: true,
                     restartError: undefined,
                   }

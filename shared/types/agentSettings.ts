@@ -276,3 +276,26 @@ export function generateAgentCommand(
 
   return parts.join(" ");
 }
+
+/**
+ * Builds a resume command for an agent using a previously captured session ID.
+ * Skips all normal flags (model, custom flags, inline mode) — the resumed session
+ * already has its configuration embedded.
+ *
+ * @returns The resume command string, or undefined if the agent has no resume config.
+ */
+export function buildResumeCommand(agentId: string, sessionId: string): string | undefined {
+  const agentConfig = getEffectiveAgentConfig(agentId);
+  if (!agentConfig?.resume) return undefined;
+
+  const args = agentConfig.resume.args(sessionId);
+  const parts = [agentConfig.command];
+  for (const arg of args) {
+    if (arg.startsWith("-")) {
+      parts.push(arg);
+    } else {
+      parts.push(escapeShellArg(arg));
+    }
+  }
+  return parts.join(" ");
+}
