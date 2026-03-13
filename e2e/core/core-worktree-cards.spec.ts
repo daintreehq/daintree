@@ -4,7 +4,7 @@ import { createFixtureRepo } from "../helpers/fixtures";
 import { openAndOnboardProject } from "../helpers/project";
 import { getGridPanelCount } from "../helpers/panels";
 import { SEL } from "../helpers/selectors";
-import { T_SHORT, T_MEDIUM, T_LONG } from "../helpers/timeouts";
+import { T_SHORT, T_MEDIUM, T_LONG, T_SETTLE } from "../helpers/timeouts";
 
 let ctx: AppContext;
 const MAIN = "main";
@@ -179,6 +179,8 @@ test.describe.serial("Core: Worktree Cards", () => {
     test("Escape dismisses the menu without side effects", async () => {
       const { window } = ctx;
 
+      // Wait for any panel creation from prior test to settle
+      await window.waitForTimeout(T_SETTLE);
       const panelsBefore = await getGridPanelCount(window);
 
       const featureCard = window.locator(SEL.worktree.card(FEATURE));
