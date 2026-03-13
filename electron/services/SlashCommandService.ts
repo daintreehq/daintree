@@ -273,7 +273,7 @@ async function readSkillFrontmatter(
     const invocableMatch = frontmatter.match(/^user-invocable:\s*(.+)$/m);
     let userInvocable = true;
     if (invocableMatch) {
-      const val = invocableMatch[1]?.trim().toLowerCase();
+      const val = stripWrappingQuotes(invocableMatch[1] ?? "").toLowerCase();
       if (val === "false" || val === "no") userInvocable = false;
     }
 
