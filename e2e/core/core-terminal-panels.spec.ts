@@ -169,15 +169,20 @@ test.describe.serial("Core: Terminal & Panels", () => {
       const { window } = ctx;
 
       const panel = getFirstGridPanel(window);
-      // Open overflow menu and click Restart (first click arms it)
+      // Hover to ensure button is interactable, then open overflow menu
       const overflowBtn = panel.locator(SEL.panel.overflowMenu).first();
+      await panel.hover();
       await overflowBtn.click();
-      const restartBtn = window.locator(SEL.panel.restart).first();
-      await restartBtn.click({ force: true });
 
-      // Second click confirms the restart (menu stays open while armed, text changes)
+      // First click on Restart arms confirmation (menu stays open)
+      const restartBtn = window.locator(SEL.panel.restart).first();
+      await expect(restartBtn).toBeVisible({ timeout: T_SHORT });
+      await restartBtn.click();
+
+      // Second click confirms the restart (text changes to "Confirm Restart")
       const confirmBtn = window.locator(SEL.panel.restartConfirm).first();
-      await confirmBtn.click({ force: true });
+      await expect(confirmBtn).toBeVisible({ timeout: T_SHORT });
+      await confirmBtn.click();
 
       await expect(panel).toBeVisible({ timeout: T_LONG });
     });
