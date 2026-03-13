@@ -77,6 +77,8 @@ export interface AddTerminalOptions {
   agentSessionId?: string;
   /** Origin that spawned this terminal */
   spawnedBy?: TerminalSpawnSource;
+  /** Bypass rate limiter during session restore (consumes main-process quota) */
+  restore?: boolean;
   // Note: Tab membership is now managed via createTabGroup/addPanelToGroup, not on terminals
 }
 

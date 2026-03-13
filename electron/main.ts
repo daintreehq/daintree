@@ -1301,6 +1301,10 @@ async function createWindow(): Promise<void> {
   // Assign late-init workspaceClient to deps so handlers see it
   handlerDeps.worktreeService = workspaceClient;
 
+  // Arm restore quota before loading renderer so hydration spawns bypass rate limiter
+  const { armRestoreQuota } = await import("./ipc/utils.js");
+  armRestoreQuota(50, 120_000);
+
   // Now safe to load renderer — all handlers registered and all services ready
   loadRenderer("after-services-ready");
 

@@ -293,6 +293,7 @@ export const createTerminalRegistrySlice =
               title,
               worktreeId: options.worktreeId,
               env: mergedEnv,
+              restore: options.restore,
             });
           }
 

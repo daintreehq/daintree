@@ -54,6 +54,26 @@ interface RateLimitState {
 const MAX_QUEUE_DEPTH = 50;
 const rateLimitQueues = new Map<string, RateLimitState>();
 
+let restoreQuota = 0;
+let restoreQuotaTimer: ReturnType<typeof setTimeout> | null = null;
+
+export function armRestoreQuota(count: number, ttlMs: number): void {
+  restoreQuota = count;
+  if (restoreQuotaTimer !== null) {
+    clearTimeout(restoreQuotaTimer);
+  }
+  restoreQuotaTimer = setTimeout(() => {
+    restoreQuota = 0;
+    restoreQuotaTimer = null;
+  }, ttlMs);
+}
+
+export function consumeRestoreQuota(): boolean {
+  if (restoreQuota <= 0) return false;
+  restoreQuota--;
+  return true;
+}
+
 function getOrCreateState(key: string): RateLimitState {
   let state = rateLimitQueues.get(key);
   if (!state) {
@@ -129,6 +149,11 @@ export function drainRateLimitQueues(): void {
 export function _resetRateLimitQueuesForTest(): void {
   drainRateLimitQueues();
   rateLimitTimestamps.clear();
+  restoreQuota = 0;
+  if (restoreQuotaTimer !== null) {
+    clearTimeout(restoreQuotaTimer);
+    restoreQuotaTimer = null;
+  }
 }
 
 export function sendToRenderer(
