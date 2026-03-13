@@ -1,6 +1,31 @@
 import { create } from "zustand";
+import type { EditorState } from "@codemirror/state";
 
 const MAX_HISTORY_SIZE = 100;
+
+// Controller registry — module-level Map (not Zustand state) to avoid triggering
+// subscriber rerenders when HybridInputBar mounts/unmounts.
+interface InputController {
+  stash: () => void;
+  pop: () => void;
+}
+const inputControllers = new Map<string, InputController>();
+
+export function registerInputController(terminalId: string, controller: InputController): void {
+  inputControllers.set(terminalId, controller);
+}
+
+export function unregisterInputController(terminalId: string): void {
+  inputControllers.delete(terminalId);
+}
+
+export function triggerStashInput(terminalId: string): void {
+  inputControllers.get(terminalId)?.stash();
+}
+
+export function triggerPopStash(terminalId: string): void {
+  inputControllers.get(terminalId)?.pop();
+}
 
 /**
  * Creates a composite key for draft inputs that includes the project context.
@@ -37,6 +62,10 @@ export interface TerminalInputState {
   setPendingDraft: (terminalId: string, value: string, projectId?: string) => void;
   popPendingDraft: (terminalId: string, projectId?: string) => string | undefined;
   clearPendingDraft: (terminalId: string, projectId?: string) => void;
+  stashedEditorStates: Map<string, EditorState>;
+  stashEditorState: (terminalId: string, state: EditorState, projectId?: string) => void;
+  popStashedEditorState: (terminalId: string, projectId?: string) => EditorState | undefined;
+  hasStashedEditorState: (terminalId: string, projectId?: string) => boolean;
   addToHistory: (terminalId: string, command: string) => void;
   navigateHistory: (
     terminalId: string,
@@ -57,6 +86,7 @@ export const useTerminalInputStore = create<TerminalInputState>()((set, get) => 
   tempDraft: new Map(),
   pendingDrafts: new Map(),
   pendingDraftRevision: 0,
+  stashedEditorStates: new Map(),
   setHybridInputEnabled: (enabled) => set({ hybridInputEnabled: enabled }),
   setHybridInputAutoFocus: (enabled) => set({ hybridInputAutoFocus: enabled }),
   getDraftInput: (terminalId, projectId) => {
@@ -95,7 +125,38 @@ export const useTerminalInputStore = create<TerminalInputState>()((set, get) => 
     set((state) => ({ voiceDraftRevision: state.voiceDraftRevision + 1 })),
 
   clearAllDraftInputs: () =>
-    set({ draftInputs: new Map(), pendingDrafts: new Map(), pendingDraftRevision: 0 }),
+    set({
+      draftInputs: new Map(),
+      pendingDrafts: new Map(),
+      pendingDraftRevision: 0,
+      stashedEditorStates: new Map(),
+    }),
+
+  stashEditorState: (terminalId, editorState, projectId) =>
+    set((state) => {
+      const key = makeDraftKey(terminalId, projectId);
+      const newStashed = new Map(state.stashedEditorStates);
+      newStashed.set(key, editorState);
+      return { stashedEditorStates: newStashed };
+    }),
+
+  popStashedEditorState: (terminalId, projectId) => {
+    const key = makeDraftKey(terminalId, projectId);
+    const stashed = get().stashedEditorStates.get(key);
+    if (stashed !== undefined) {
+      set((state) => {
+        const newStashed = new Map(state.stashedEditorStates);
+        newStashed.delete(key);
+        return { stashedEditorStates: newStashed };
+      });
+    }
+    return stashed;
+  },
+
+  hasStashedEditorState: (terminalId, projectId) => {
+    const key = makeDraftKey(terminalId, projectId);
+    return get().stashedEditorStates.has(key);
+  },
 
   setPendingDraft: (terminalId, value, projectId) =>
     set((state) => {

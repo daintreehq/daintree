@@ -1351,4 +1351,36 @@ export function registerTerminalActions(actions: ActionRegistry, callbacks: Acti
       }
     },
   }));
+
+  actions.set("terminal.stashInput", () => ({
+    id: "terminal.stashInput" as ActionId,
+    title: "Stash Input",
+    description: "Park the current hybrid input draft to a temporary stash slot",
+    category: "terminal",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    run: async () => {
+      const { triggerStashInput } = await import("@/store/terminalInputStore");
+      const state = useTerminalStore.getState();
+      const targetId = state.focusedId;
+      if (targetId) triggerStashInput(targetId);
+    },
+  }));
+
+  actions.set("terminal.popStash", () => ({
+    id: "terminal.popStash" as ActionId,
+    title: "Restore Stashed Input",
+    description: "Restore the previously stashed hybrid input draft",
+    category: "terminal",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    run: async () => {
+      const { triggerPopStash } = await import("@/store/terminalInputStore");
+      const state = useTerminalStore.getState();
+      const targetId = state.focusedId;
+      if (targetId) triggerPopStash(targetId);
+    },
+  }));
 }

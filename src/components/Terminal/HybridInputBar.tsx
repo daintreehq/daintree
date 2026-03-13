@@ -31,6 +31,8 @@ import { useCommandStore } from "@/store/commandStore";
 import { useProjectStore } from "@/store/projectStore";
 import { useTerminalStore, useVoiceRecordingStore, useWorktreeDataStore } from "@/store";
 import { VoiceInputButton } from "./VoiceInputButton";
+import { Archive } from "lucide-react";
+import { registerInputController, unregisterInputController } from "@/store/terminalInputStore";
 import type { CommandContext, CommandResult } from "@shared/types/commands";
 import { isEnterLikeLineBreakInputEvent } from "./hybridInputEvents";
 import {
@@ -164,8 +166,14 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     const isInHistoryMode = useTerminalInputStore(
       (s) => (s.historyIndex.get(terminalId) ?? -1) !== -1
     );
+    const stashEditorState = useTerminalInputStore((s) => s.stashEditorState);
+    const popStashedEditorState = useTerminalInputStore((s) => s.popStashedEditorState);
     // Get projectId early so it can be used for draft input initialization
     const projectId = useProjectStore((s) => s.currentProject?.id);
+    const hasStash = useTerminalInputStore((s) => {
+      const key = projectId ? `${projectId}:${terminalId}` : terminalId;
+      return s.stashedEditorStates.has(key);
+    });
     const [value, setValue] = useState(() => getDraftInput(terminalId, projectId));
     const submitAfterCompositionRef = useRef(false);
     const isComposingRef = useRef(false);
@@ -1020,6 +1028,39 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       [applyAutocompleteSelection, sendFromEditor]
     );
 
+    const handleStash = useCallback(() => {
+      const view = editorViewRef.current;
+      if (!view) return false;
+      const doc = view.state.doc.toString();
+      if (doc.length === 0) return true;
+      const latest = latestRef.current;
+      if (!latest) return false;
+      stashEditorState(latest.terminalId, view.state, latest.projectId);
+      view.dispatch({
+        changes: { from: 0, to: view.state.doc.length, insert: "" },
+        selection: EditorSelection.cursor(0),
+      });
+      return true;
+    }, [stashEditorState]);
+
+    const handlePopStash = useCallback(() => {
+      const view = editorViewRef.current;
+      if (!view) return false;
+      const latest = latestRef.current;
+      if (!latest) return false;
+      const stashed = popStashedEditorState(latest.terminalId, latest.projectId);
+      if (!stashed) return false;
+      view.setState(stashed);
+      // Re-apply current editable config since setState restores stale config.
+      // Keymap callbacks read from latestRef so they stay current without reconfigure.
+      view.dispatch({
+        effects: editableCompartmentRef.current.reconfigure(
+          EditorView.editable.of(!latest.disabled)
+        ),
+      });
+      return true;
+    }, [popStashedEditorState]);
+
     const keymapExtension = useMemo(
       () =>
         createCustomKeymap({
@@ -1213,8 +1254,16 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
             latest.onSendKey("ctrl+c");
             return true;
           },
+          onStash: handleStash,
+          onPopStash: handlePopStash,
         }),
-      [applyAutocompleteSelection, handleHistoryNavigation, sendFromEditor]
+      [
+        applyAutocompleteSelection,
+        handleHistoryNavigation,
+        handleStash,
+        handlePopStash,
+        sendFromEditor,
+      ]
     );
 
     useLayoutEffect(() => {
@@ -1275,6 +1324,14 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       };
       // eslint-disable-next-line react-hooks/exhaustive-deps -- Editor created once, updated via compartments
     }, [terminalId]);
+
+    useEffect(() => {
+      registerInputController(terminalId, {
+        stash: handleStash,
+        pop: handlePopStash,
+      });
+      return () => unregisterInputController(terminalId);
+    }, [terminalId, handleStash, handlePopStash]);
 
     useEffect(() => {
       const view = editorViewRef.current;
@@ -1406,6 +1463,17 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
             </div>
 
             <div className="flex items-center pr-1.5">
+              {hasStash && (
+                <button
+                  type="button"
+                  onClick={handlePopStash}
+                  className="flex items-center justify-center h-5 w-5 rounded-sm text-canopy-accent/70 hover:text-canopy-accent hover:bg-white/[0.06] transition-colors cursor-pointer"
+                  aria-label="Restore stashed input"
+                  title="Restore stashed input (⌘⇧X)"
+                >
+                  <Archive className="h-3.5 w-3.5" />
+                </button>
+              )}
               <VoiceInputButton
                 panelId={terminalId}
                 panelTitle={agentId ? getAgentConfig(agentId)?.name : undefined}

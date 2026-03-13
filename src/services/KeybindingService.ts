@@ -89,6 +89,22 @@ const DEFAULT_KEYBINDINGS: KeybindingConfig[] = [
     category: "Terminal",
   },
   {
+    actionId: "terminal.stashInput",
+    combo: "Cmd+Shift+S",
+    scope: "global",
+    priority: 0,
+    description: "Stash current input",
+    category: "Terminal",
+  },
+  {
+    actionId: "terminal.popStash",
+    combo: "Cmd+Shift+X",
+    scope: "global",
+    priority: 0,
+    description: "Restore stashed input",
+    category: "Terminal",
+  },
+  {
     actionId: "terminal.toggleDock",
     combo: "Cmd+Alt+M",
     scope: "global",

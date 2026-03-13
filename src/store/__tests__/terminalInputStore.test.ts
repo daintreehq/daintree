@@ -4,6 +4,7 @@
  */
 
 import { describe, it, expect, beforeEach } from "vitest";
+import { EditorState } from "@codemirror/state";
 import { useTerminalInputStore } from "../terminalInputStore";
 
 describe("terminalInputStore", () => {
@@ -16,6 +17,7 @@ describe("terminalInputStore", () => {
       tempDraft: new Map(),
       pendingDrafts: new Map(),
       pendingDraftRevision: 0,
+      stashedEditorStates: new Map(),
     });
   });
 
@@ -196,6 +198,66 @@ describe("terminalInputStore", () => {
 
       expect(useTerminalInputStore.getState().pendingDrafts.size).toBe(0);
       expect(useTerminalInputStore.getState().pendingDraftRevision).toBe(0);
+    });
+  });
+
+  describe("stashed editor states", () => {
+    function makeState(doc: string) {
+      return EditorState.create({ doc });
+    }
+
+    it("should stash and pop an EditorState", () => {
+      const state = makeState("hello world");
+      useTerminalInputStore.getState().stashEditorState("term-1", state, "project-a");
+      expect(useTerminalInputStore.getState().hasStashedEditorState("term-1", "project-a")).toBe(
+        true
+      );
+
+      const popped = useTerminalInputStore.getState().popStashedEditorState("term-1", "project-a");
+      expect(popped).toBe(state);
+      expect(useTerminalInputStore.getState().hasStashedEditorState("term-1", "project-a")).toBe(
+        false
+      );
+    });
+
+    it("should return undefined when popping non-existent stash", () => {
+      const popped = useTerminalInputStore.getState().popStashedEditorState("term-1", "project-a");
+      expect(popped).toBeUndefined();
+    });
+
+    it("should scope stash by project", () => {
+      const stateA = makeState("project a content");
+      const stateB = makeState("project b content");
+      const store = useTerminalInputStore.getState();
+      store.stashEditorState("term-1", stateA, "project-a");
+      store.stashEditorState("term-1", stateB, "project-b");
+
+      expect(useTerminalInputStore.getState().popStashedEditorState("term-1", "project-a")).toBe(
+        stateA
+      );
+      expect(useTerminalInputStore.getState().popStashedEditorState("term-1", "project-b")).toBe(
+        stateB
+      );
+    });
+
+    it("should overwrite stash on re-stash", () => {
+      const first = makeState("first");
+      const second = makeState("second");
+      const store = useTerminalInputStore.getState();
+      store.stashEditorState("term-1", first, "project-a");
+      store.stashEditorState("term-1", second, "project-a");
+
+      const popped = useTerminalInputStore.getState().popStashedEditorState("term-1", "project-a");
+      expect(popped).toBe(second);
+    });
+
+    it("should be cleared by clearAllDraftInputs", () => {
+      const store = useTerminalInputStore.getState();
+      store.stashEditorState("term-1", makeState("content"), "project-a");
+      expect(useTerminalInputStore.getState().stashedEditorStates.size).toBe(1);
+
+      useTerminalInputStore.getState().clearAllDraftInputs();
+      expect(useTerminalInputStore.getState().stashedEditorStates.size).toBe(0);
     });
   });
 
