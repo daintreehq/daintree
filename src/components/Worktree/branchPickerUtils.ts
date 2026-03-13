@@ -101,7 +101,13 @@ export function buildBranchRows(
   recentBranchNames.forEach((name, i) => recentRankMap.set(name, i + 1));
 
   if (!trimmedQuery) {
-    return buildEmptyQueryRows(branches, recentSet, recentRankMap, worktreeByBranch, emptyQueryLimit);
+    return buildEmptyQueryRows(
+      branches,
+      recentSet,
+      recentRankMap,
+      worktreeByBranch,
+      emptyQueryLimit
+    );
   }
 
   return buildFuzzyQueryRows(branches, trimmedQuery, recentSet, recentRankMap, worktreeByBranch);

@@ -270,7 +270,8 @@ export function NewWorktreeDialog({
       if (wt.branch) map.set(wt.branch, wt);
     }
     return map;
-  }, [branches]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- rebuild when branch list refreshes
+  }, [branchOptions]);
 
   const branchRows = useMemo(
     () =>
@@ -482,11 +483,14 @@ export function NewWorktreeDialog({
 
     let isCurrent = true;
 
-    worktreeClient.getRecentBranches(rootPath).then((recent) => {
-      if (isCurrent) setRecentBranchNames(recent);
-    }).catch(() => {
-      if (isCurrent) setRecentBranchNames([]);
-    });
+    worktreeClient
+      .getRecentBranches(rootPath)
+      .then((recent) => {
+        if (isCurrent) setRecentBranchNames(recent);
+      })
+      .catch(() => {
+        if (isCurrent) setRecentBranchNames([]);
+      });
 
     worktreeClient
       .listBranches(rootPath)
@@ -1135,7 +1139,10 @@ export function NewWorktreeDialog({
                                 </span>
                                 <span className="flex items-center gap-1 shrink-0">
                                   {row.inUseWorktree && (
-                                    <span className="text-xs text-canopy-warning" title={`In use by worktree: ${row.inUseWorktree.name}`}>
+                                    <span
+                                      className="text-xs text-status-warning"
+                                      title={`In use by worktree: ${row.inUseWorktree.name}`}
+                                    >
                                       in use
                                     </span>
                                   )}
