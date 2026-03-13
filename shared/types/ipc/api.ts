@@ -123,6 +123,8 @@ export interface NotificationSettings {
   failedEnabled: boolean;
   soundEnabled: boolean;
   soundFile: string;
+  waitingEscalationEnabled: boolean;
+  waitingEscalationDelayMs: number;
 }
 
 // ElectronAPI Type (exposed via preload)
@@ -779,6 +781,8 @@ export interface ElectronAPI {
     ): () => void;
     /** Sync the renderer's watched panel set to main so AgentNotificationService can gate on it */
     syncWatchedPanels(panelIds: string[]): void;
+    /** Acknowledge a waiting agent escalation (cancels pending escalation timer) */
+    acknowledgeWaiting(terminalId: string): void;
   };
   update: {
     onUpdateAvailable(callback: (info: { version: string }) => void): () => void;

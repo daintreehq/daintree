@@ -1221,6 +1221,8 @@ export interface IpcInvokeMap {
       failedEnabled: boolean;
       soundEnabled: boolean;
       soundFile: string;
+      waitingEscalationEnabled: boolean;
+      waitingEscalationDelayMs: number;
     };
   };
   "notification:settings-set": {
@@ -1231,6 +1233,8 @@ export interface IpcInvokeMap {
         failedEnabled: boolean;
         soundEnabled: boolean;
         soundFile: string;
+        waitingEscalationEnabled: boolean;
+        waitingEscalationDelayMs: number;
       }>,
     ];
     result: void;
