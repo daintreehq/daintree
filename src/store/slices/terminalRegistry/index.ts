@@ -107,6 +107,7 @@ export const createTerminalRegistrySlice =
               browserUrl: options.browserUrl || "http://localhost:3000",
               browserHistory: options.browserHistory,
               browserZoom: options.browserZoom,
+              browserConsoleOpen: options.browserConsoleOpen,
               type: "terminal" as const,
               cwd: "",
               cols: 80,
@@ -1938,6 +1939,22 @@ export const createTerminalRegistrySlice =
 
           const newTerminals = state.terminals.map((t) =>
             t.id === id ? { ...t, browserZoom: zoom } : t
+          );
+
+          saveTerminals(newTerminals);
+          return { terminals: newTerminals };
+        });
+      },
+
+      setBrowserConsoleOpen: (id, isOpen) => {
+        set((state) => {
+          const terminal = state.terminals.find((t) => t.id === id);
+          if (!terminal) return state;
+          if (terminal.kind !== "browser") return state;
+          if (terminal.browserConsoleOpen === isOpen) return state;
+
+          const newTerminals = state.terminals.map((t) =>
+            t.id === id ? { ...t, browserConsoleOpen: isOpen } : t
           );
 
           saveTerminals(newTerminals);

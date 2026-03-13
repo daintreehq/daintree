@@ -64,6 +64,8 @@ export interface AddTerminalOptions {
   devServerError?: { type: string; message: string };
   /** Terminal ID associated with dev server for dev-preview panels (kind === 'dev-preview') */
   devServerTerminalId?: string;
+  /** Whether the browser console drawer is open (kind === 'browser') */
+  browserConsoleOpen?: boolean;
   /** Whether the dev-preview console drawer is open (kind === 'dev-preview') */
   devPreviewConsoleOpen?: boolean;
   /** Environment variables to set for this terminal */
@@ -160,6 +162,7 @@ export interface TerminalRegistrySlice {
   setBrowserUrl: (id: string, url: string) => void;
   setBrowserHistory: (id: string, history: BrowserHistory) => void;
   setBrowserZoom: (id: string, zoom: number) => void;
+  setBrowserConsoleOpen: (id: string, isOpen: boolean) => void;
   setDevPreviewConsoleOpen: (id: string, isOpen: boolean) => void;
   setDevServerState: (
     id: string,

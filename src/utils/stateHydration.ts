@@ -208,6 +208,7 @@ export interface HydrationOptions {
     devServerUrl?: string | null;
     devServerError?: { type: string; message: string } | null;
     devServerTerminalId?: string | null;
+    browserConsoleOpen?: boolean;
     devPreviewConsoleOpen?: boolean;
     exitBehavior?: import("@shared/types/domain").PanelExitBehavior;
     agentSessionId?: string;
@@ -802,6 +803,7 @@ export async function hydrateAppState(
                     browserUrl: saved.browserUrl,
                     browserHistory: saved.browserHistory,
                     browserZoom: saved.browserZoom,
+                    browserConsoleOpen: kind === "browser" ? saved.browserConsoleOpen : undefined,
                     notePath: saved.notePath,
                     noteId: saved.noteId,
                     scope: saved.scope as "worktree" | "project" | undefined,
