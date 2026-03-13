@@ -135,7 +135,11 @@ export function useQuickCreatePalette(): UseQuickCreatePaletteReturn {
           );
 
           if (result.ok) {
-            const { branch, assignedToSelf: wasAssigned } = result.result as {
+            const {
+              worktreeId: createdWorktreeId,
+              branch,
+              assignedToSelf: wasAssigned,
+            } = result.result as {
               worktreeId: string;
               worktreePath: string;
               branch: string;
@@ -150,6 +154,11 @@ export function useQuickCreatePalette(): UseQuickCreatePaletteReturn {
               type: "success",
               title: "Worktree Created",
               message: `${branch}${assignMsg}`,
+              action: {
+                label: "Undo",
+                actionId: "worktree.delete",
+                actionArgs: { worktreeId: createdWorktreeId, force: true },
+              },
             });
           } else {
             notify({
