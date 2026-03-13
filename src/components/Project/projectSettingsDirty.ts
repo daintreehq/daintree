@@ -9,7 +9,13 @@ export interface ProjectSettingsSnapshot {
   projectIconSvg: string | undefined;
   excludedPaths: string[];
   environmentVariables: Record<string, string>;
-  runCommands: Array<{ id: string; name: string; command: string }>;
+  runCommands: Array<{
+    id: string;
+    name: string;
+    command: string;
+    preferredLocation?: "dock" | "grid";
+    preferredAutoRestart?: boolean;
+  }>;
   defaultWorktreeRecipeId: string | undefined;
   commandOverrides: CommandOverride[];
   copyTreeSettings: CopyTreeSettings;
@@ -29,6 +35,8 @@ interface RunCommand {
   command: string;
   icon?: string;
   description?: string;
+  preferredLocation?: "dock" | "grid";
+  preferredAutoRestart?: boolean;
 }
 
 export function createProjectSettingsSnapshot(
@@ -77,6 +85,8 @@ export function createProjectSettingsSnapshot(
       id: cmd.id,
       name: cmd.name.trim(),
       command: cmd.command.trim(),
+      preferredLocation: cmd.preferredLocation,
+      preferredAutoRestart: cmd.preferredAutoRestart,
     }))
     .filter((cmd) => cmd.name || cmd.command);
 
@@ -157,7 +167,9 @@ export function areSnapshotsEqual(a: ProjectSettingsSnapshot, b: ProjectSettings
     if (
       a.runCommands[i].id !== b.runCommands[i].id ||
       a.runCommands[i].name !== b.runCommands[i].name ||
-      a.runCommands[i].command !== b.runCommands[i].command
+      a.runCommands[i].command !== b.runCommands[i].command ||
+      a.runCommands[i].preferredLocation !== b.runCommands[i].preferredLocation ||
+      a.runCommands[i].preferredAutoRestart !== b.runCommands[i].preferredAutoRestart
     ) {
       return false;
     }

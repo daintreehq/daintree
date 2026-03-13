@@ -892,6 +892,10 @@ export interface RunCommand {
   icon?: string;
   /** Optional description (e.g. the script content from package.json) */
   description?: string;
+  /** Preferred panel location when running this command */
+  preferredLocation?: "dock" | "grid";
+  /** Whether to auto-restart the command on exit */
+  preferredAutoRestart?: boolean;
 }
 
 /** CopyTree context generation settings */
