@@ -1168,9 +1168,11 @@ const api: ElectronAPI = {
     getRepoStats: (cwd: string, bypassCache?: boolean) =>
       _typedInvoke(CHANNELS.GITHUB_GET_REPO_STATS, cwd, bypassCache),
 
-    openIssues: (cwd: string) => _typedInvoke(CHANNELS.GITHUB_OPEN_ISSUES, cwd),
+    openIssues: (cwd: string, query?: string, state?: string) =>
+      _typedInvoke(CHANNELS.GITHUB_OPEN_ISSUES, cwd, query, state),
 
-    openPRs: (cwd: string) => _typedInvoke(CHANNELS.GITHUB_OPEN_PRS, cwd),
+    openPRs: (cwd: string, query?: string, state?: string) =>
+      _typedInvoke(CHANNELS.GITHUB_OPEN_PRS, cwd, query, state),
 
     openCommits: (cwd: string) => _typedInvoke(CHANNELS.GITHUB_OPEN_COMMITS, cwd),
 

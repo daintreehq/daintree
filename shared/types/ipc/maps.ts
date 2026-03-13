@@ -729,11 +729,11 @@ export interface IpcInvokeMap {
     result: RepositoryStats;
   };
   "github:open-issues": {
-    args: [cwd: string];
+    args: [cwd: string, query?: string, state?: string];
     result: void;
   };
   "github:open-prs": {
-    args: [cwd: string];
+    args: [cwd: string, query?: string, state?: string];
     result: void;
   };
   "github:open-commits": {

@@ -22,14 +22,21 @@ export function registerGithubActions(actions: ActionRegistry, _callbacks: Actio
     kind: "command",
     danger: "safe",
     scope: "renderer",
-    argsSchema: z.object({ projectPath: z.string().optional() }).optional(),
+    argsSchema: z
+      .object({
+        projectPath: z.string().optional(),
+        query: z.string().optional(),
+        state: z.string().optional(),
+      })
+      .optional(),
     run: async (args: unknown) => {
-      const { projectPath } = (args as { projectPath?: string } | undefined) ?? {};
+      const { projectPath, query, state } =
+        (args as { projectPath?: string; query?: string; state?: string } | undefined) ?? {};
       const path = projectPath ?? useProjectStore.getState().currentProject?.path;
       if (!path) {
         throw new Error("No project path available to open issues");
       }
-      await githubClient.openIssues(path);
+      await githubClient.openIssues(path, query, state);
     },
   }));
 
@@ -41,14 +48,21 @@ export function registerGithubActions(actions: ActionRegistry, _callbacks: Actio
     kind: "command",
     danger: "safe",
     scope: "renderer",
-    argsSchema: z.object({ projectPath: z.string().optional() }).optional(),
+    argsSchema: z
+      .object({
+        projectPath: z.string().optional(),
+        query: z.string().optional(),
+        state: z.string().optional(),
+      })
+      .optional(),
     run: async (args: unknown) => {
-      const { projectPath } = (args as { projectPath?: string } | undefined) ?? {};
+      const { projectPath, query, state } =
+        (args as { projectPath?: string; query?: string; state?: string } | undefined) ?? {};
       const path = projectPath ?? useProjectStore.getState().currentProject?.path;
       if (!path) {
         throw new Error("No project path available to open pull requests");
       }
-      await githubClient.openPRs(path);
+      await githubClient.openPRs(path, query, state);
     },
   }));
 

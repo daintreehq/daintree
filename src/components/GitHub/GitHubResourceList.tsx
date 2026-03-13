@@ -234,10 +234,20 @@ export function GitHubResourceList({
   }, [loadingMore, hasMore, fetchData, cursor]);
 
   const handleOpenInGitHub = () => {
+    const query = searchQuery.trim() || undefined;
+    const state = filterState as string;
     if (type === "issue") {
-      void actionService.dispatch("github.openIssues", { projectPath }, { source: "user" });
+      void actionService.dispatch(
+        "github.openIssues",
+        { projectPath, query, state },
+        { source: "user" }
+      );
     } else {
-      void actionService.dispatch("github.openPRs", { projectPath }, { source: "user" });
+      void actionService.dispatch(
+        "github.openPRs",
+        { projectPath, query, state },
+        { source: "user" }
+      );
     }
     onClose?.();
   };
