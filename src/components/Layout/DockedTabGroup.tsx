@@ -38,6 +38,7 @@ import {
 import { SortableTabButton } from "@/components/Panel/SortableTabButton";
 import type { TabGroup } from "@/types";
 import { buildPanelDuplicateOptions } from "@/services/terminal/panelDuplicationService";
+import { confirmAgentTrash } from "@/utils/agentTrashConfirm";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 
 interface DockedTabGroupProps {
@@ -222,6 +223,9 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
 
   const handleTabClose = useCallback(
     (tabId: string) => {
+      const terminal = panels.find((p) => p.id === tabId);
+      if (terminal && !confirmAgentTrash([terminal])) return;
+
       // If closing the active tab, switch to another tab first
       if (tabId === activeTabId) {
         const currentIndex = panels.findIndex((p) => p.id === tabId);

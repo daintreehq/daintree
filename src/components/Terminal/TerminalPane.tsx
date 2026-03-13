@@ -37,6 +37,7 @@ import { HybridInputBar, type HybridInputBarHandle } from "./HybridInputBar";
 import { getTerminalFocusTarget } from "./terminalFocus";
 import { registerPanelFocusHandler } from "./terminalFocusRegistry";
 import { getCanopyCommand, isEscapedCommand, unescapeCommand } from "./canopySlashCommands";
+import { confirmAgentTrash } from "@/utils/agentTrashConfirm";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 
 export type { TerminalType };
@@ -474,8 +475,9 @@ function TerminalPaneComponent({
   }, []);
 
   const handleTrash = useCallback(() => {
+    if (!confirmAgentTrash([{ agentId, agentState }])) return;
     trashTerminal(id);
-  }, [trashTerminal, id]);
+  }, [trashTerminal, id, agentId, agentState]);
 
   const handleDismissReconnectError = useCallback(() => {
     clearReconnectError(id);

@@ -1,6 +1,7 @@
 import { useCallback } from "react";
 import { useTerminalStore } from "@/store";
 import { getTerminalAnimationDuration } from "@/lib/animationUtils";
+import { confirmAgentTrash } from "@/utils/agentTrashConfirm";
 import type { PanelLifecycle } from "./usePanelLifecycle";
 
 export interface UsePanelHandlersConfig {
@@ -35,6 +36,13 @@ export function usePanelHandlers({
         removeTerminal(terminalId);
         onAfterClose?.();
       } else {
+        const state = useTerminalStore.getState();
+        const group = state.getPanelGroup(terminalId);
+        const panelsToCheck = group
+          ? state.terminals.filter((t) => group.panelIds.includes(t.id))
+          : state.terminals.filter((t) => t.id === terminalId);
+        if (!confirmAgentTrash(panelsToCheck)) return;
+
         const duration = getTerminalAnimationDuration();
         lifecycle.setIsTrashing(true);
         lifecycle.timeoutRef.current = setTimeout(() => {
