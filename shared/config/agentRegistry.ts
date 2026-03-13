@@ -189,6 +189,15 @@ export interface AgentConfig {
    */
   env?: Record<string, string>;
   /**
+   * Resume configuration for restoring a previous agent session.
+   * When present, Canopy can resume a prior session using the stored session ID
+   * instead of starting fresh.
+   */
+  resume?: {
+    /** Returns CLI args for resuming a session (e.g. ["--resume", id] or ["resume", id]) */
+    args: (sessionId: string) => string[];
+  };
+  /**
    * Prerequisites required for this agent to function.
    * Merged with baseline prerequisites during health checks.
    */
@@ -296,6 +305,9 @@ export const AGENT_REGISTRY: Record<string, AgentConfig> = {
     shutdown: {
       quitCommand: "/quit",
       sessionIdPattern: "claude --resume ([\\w-]+)",
+    },
+    resume: {
+      args: (sessionId: string) => ["--resume", sessionId],
     },
     env: {
       CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
@@ -409,6 +421,9 @@ export const AGENT_REGISTRY: Record<string, AgentConfig> = {
     shutdown: {
       quitCommand: "/quit",
       sessionIdPattern: "gemini --resume ([\\w-]+)",
+    },
+    resume: {
+      args: (sessionId: string) => ["--resume", sessionId],
     },
     env: {
       GEMINI_CLI_ALT_SCREEN: "false",
@@ -527,6 +542,9 @@ export const AGENT_REGISTRY: Record<string, AgentConfig> = {
     shutdown: {
       quitCommand: "/quit",
       sessionIdPattern: "codex resume ([\\w-]+)",
+    },
+    resume: {
+      args: (sessionId: string) => ["resume", sessionId],
     },
     prerequisites: [
       {
@@ -668,6 +686,9 @@ export const AGENT_REGISTRY: Record<string, AgentConfig> = {
     shutdown: {
       quitCommand: "/quit",
       sessionIdPattern: "opencode -s ([\\w-]+)",
+    },
+    resume: {
+      args: (sessionId: string) => ["-s", sessionId],
     },
     prerequisites: [
       {

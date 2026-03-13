@@ -256,6 +256,7 @@ export {
   getAgentSettingsEntry,
   generateAgentFlags,
   generateAgentCommand,
+  buildResumeCommand,
 } from "./agentSettings.js";
 
 // User agent registry types - user-defined agent configuration
