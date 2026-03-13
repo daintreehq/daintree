@@ -273,6 +273,14 @@ const DEFAULT_KEYBINDINGS: KeybindingConfig[] = [
     category: "Agents",
   },
   {
+    actionId: "dock.focusNextWaiting",
+    combo: "Cmd+Shift+/",
+    scope: "global",
+    priority: 0,
+    description: "Jump to next blocked dock agent (failed then waiting)",
+    category: "Agents",
+  },
+  {
     actionId: "terminal.inject",
     combo: "Cmd+Shift+I",
     scope: "global",

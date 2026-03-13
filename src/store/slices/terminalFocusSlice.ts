@@ -87,6 +87,12 @@ export interface TerminalFocusSlice {
   focusNextAgent: (isInTrash: (id: string) => boolean, validWorktreeIds: Set<string>) => void;
   focusPreviousAgent: (isInTrash: (id: string) => boolean, validWorktreeIds: Set<string>) => void;
 
+  // Dock-specific blocked agent cycling (failed > waiting priority)
+  focusNextBlockedDock: (
+    activeWorktreeId: string | undefined,
+    getPanelGroup?: (panelId: string) => { id: string; panelIds: string[] } | undefined
+  ) => void;
+
   handleTerminalRemoved: (
     removedId: string,
     terminals: TerminalInstance[],
@@ -508,6 +514,41 @@ export const createTerminalFocusSlice =
         // Activate and ping the terminal for visual feedback
         activateTerminal(prevTerminal.id);
         pingTerminal(prevTerminal.id);
+      },
+
+      focusNextBlockedDock: (activeWorktreeId, getPanelGroup) => {
+        const terminals = getTerminals();
+        const { activeDockTerminalId, openDockTerminal, setActiveTab, pingTerminal } = get();
+
+        const dockTerminals = terminals.filter(
+          (t) =>
+            t.location === "dock" &&
+            (t.worktreeId ?? undefined) === (activeWorktreeId ?? undefined) &&
+            (t.agentState === "failed" || t.agentState === "waiting")
+        );
+
+        if (dockTerminals.length === 0) return;
+
+        // Sort: failed first, then waiting; preserve original order within each group
+        const sorted = [
+          ...dockTerminals.filter((t) => t.agentState === "failed"),
+          ...dockTerminals.filter((t) => t.agentState === "waiting"),
+        ];
+
+        const currentIndex = sorted.findIndex((t) => t.id === activeDockTerminalId);
+        const nextIndex = (currentIndex + 1) % sorted.length;
+        const nextTerminal = sorted[nextIndex];
+
+        // Activate the correct tab in the group before opening the dock popover
+        if (getPanelGroup) {
+          const group = getPanelGroup(nextTerminal.id);
+          if (group) {
+            setActiveTab(group.id, nextTerminal.id);
+          }
+        }
+
+        openDockTerminal(nextTerminal.id);
+        pingTerminal(nextTerminal.id);
       },
 
       handleTerminalRemoved: (removedId, remainingTerminals, removedIndex) => {
