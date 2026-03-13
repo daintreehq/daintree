@@ -27,6 +27,9 @@ import {
   type SlashCommandContext,
 } from "./hybridInputParsing";
 import { CommandPickerHost } from "@/components/Commands";
+import { PromptHistoryPalette } from "./PromptHistoryPalette";
+import { useCommandHistoryStore } from "@/store/commandHistoryStore";
+import { usePaletteStore } from "@/store/paletteStore";
 import { useCommandStore } from "@/store/commandStore";
 import { useProjectStore } from "@/store/projectStore";
 import { useTerminalStore, useVoiceRecordingStore, useWorktreeDataStore } from "@/store";
@@ -598,6 +601,9 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         latest.onSend({ data: payload.data, trackerData: payload.trackerData, text });
         latest.addToHistory(latest.terminalId, text);
         latest.resetHistoryIndex(latest.terminalId);
+        if (latest.projectId) {
+          useCommandHistoryStore.getState().recordPrompt(latest.projectId, text, agentId ?? null);
+        }
 
         setIsExpanded(false);
         applyEditorValue("", { selection: EditorSelection.create([EditorSelection.cursor(0)]) });
@@ -1278,6 +1284,10 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
             setIsExpanded((v) => !v);
             return true;
           },
+          onHistorySearch: () => {
+            usePaletteStore.getState().openPalette("prompt-history");
+            return true;
+          },
         }),
       [
         applyAutocompleteSelection,
@@ -1610,6 +1620,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
             />
           </div>
         </AppDialog>
+        <PromptHistoryPalette terminalId={terminalId} projectId={projectId} />
       </>
     );
   }

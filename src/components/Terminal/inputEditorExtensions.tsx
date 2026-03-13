@@ -509,6 +509,7 @@ interface CustomKeymapConfig {
   onStash: () => boolean;
   onPopStash: () => boolean;
   onExpand: () => boolean;
+  onHistorySearch: () => boolean;
 }
 
 export function createCustomKeymap(config: CustomKeymapConfig): Extension {
@@ -587,6 +588,12 @@ export function createCustomKeymap(config: CustomKeymapConfig): Extension {
         key: "Mod-Shift-e",
         run() {
           return config.onExpand();
+        },
+      },
+      {
+        key: "Mod-r",
+        run() {
+          return config.onHistorySearch();
         },
       },
     ])
