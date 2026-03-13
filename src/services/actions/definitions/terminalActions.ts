@@ -3,7 +3,6 @@ import { TerminalTypeSchema } from "./schemas";
 import { z } from "zod";
 import type { ActionId, ActionContext } from "@shared/types/actions";
 import { stripAnsiCodes } from "@shared/utils/artifactParser";
-import { confirmAgentTrash } from "@/utils/agentTrashConfirm";
 import { appClient, terminalClient } from "@/clients";
 import { computeGridColumns } from "@/lib/terminalLayout";
 import { openPanelContextMenu } from "@/lib/panelContextMenu";
@@ -225,8 +224,6 @@ export function registerTerminalActions(actions: ActionRegistry, callbacks: Acti
       const targetId =
         terminalId ?? state.focusedId ?? state.terminals.find((t) => t.location !== "trash")?.id;
       if (targetId) {
-        const terminal = state.terminals.find((t) => t.id === targetId);
-        if (terminal && !confirmAgentTrash([terminal])) return;
         state.trashTerminal(targetId, { showUndoToast: true });
         const remaining = useTerminalStore
           .getState()
@@ -252,8 +249,6 @@ export function registerTerminalActions(actions: ActionRegistry, callbacks: Acti
       const state = useTerminalStore.getState();
       const targetId = terminalId ?? state.focusedId;
       if (targetId) {
-        const terminal = state.terminals.find((t) => t.id === targetId);
-        if (terminal && !confirmAgentTrash([terminal])) return;
         state.trashTerminal(targetId, { showUndoToast: true });
       }
     },
@@ -926,7 +921,6 @@ export function registerTerminalActions(actions: ActionRegistry, callbacks: Acti
         (t) =>
           t.location !== "trash" && (t.worktreeId ?? undefined) === (activeWorktreeId ?? undefined)
       );
-      if (!confirmAgentTrash(terminalsToClose)) return;
       terminalsToClose.forEach((t) => state.trashTerminal(t.id, { showUndoToast: true }));
     },
   }));
