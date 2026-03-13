@@ -224,7 +224,7 @@ export function registerTerminalActions(actions: ActionRegistry, callbacks: Acti
       const targetId =
         terminalId ?? state.focusedId ?? state.terminals.find((t) => t.location !== "trash")?.id;
       if (targetId) {
-        state.trashTerminal(targetId);
+        state.trashTerminal(targetId, { showUndoToast: true });
         const remaining = useTerminalStore
           .getState()
           .terminals.filter((t) => t.location !== "trash");
@@ -249,7 +249,7 @@ export function registerTerminalActions(actions: ActionRegistry, callbacks: Acti
       const state = useTerminalStore.getState();
       const targetId = terminalId ?? state.focusedId;
       if (targetId) {
-        state.trashTerminal(targetId);
+        state.trashTerminal(targetId, { showUndoToast: true });
       }
     },
   }));
@@ -888,7 +888,7 @@ export function registerTerminalActions(actions: ActionRegistry, callbacks: Acti
         (t) =>
           t.location !== "trash" && (t.worktreeId ?? undefined) === (activeWorktreeId ?? undefined)
       );
-      terminalsToClose.forEach((t) => state.trashTerminal(t.id));
+      terminalsToClose.forEach((t) => state.trashTerminal(t.id, { showUndoToast: true }));
     },
   }));
 

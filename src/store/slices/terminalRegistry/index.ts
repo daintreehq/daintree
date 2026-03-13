@@ -28,6 +28,7 @@ import {
 import { saveTerminals, saveTabGroups } from "./persistence";
 import { createTrashExpiryHelpers } from "./trash";
 import { optimizeForDock } from "./layout";
+import { TRASH_TTL_MS } from "@shared/config/trash";
 
 function stopDevPreviewByPanelId(panelId: string): void {
   if (typeof window === "undefined") return;
@@ -730,7 +731,7 @@ export const createTerminalRegistrySlice =
         const terminal = get().terminals.find((t) => t.id === id);
         if (!terminal) return;
 
-        const expiresAt = Date.now() + 120000;
+        const expiresAt = Date.now() + TRASH_TTL_MS;
 
         if (terminal.kind === "dev-preview") {
           stopDevPreviewByPanelId(id);
@@ -802,7 +803,7 @@ export const createTerminalRegistrySlice =
           return;
         }
 
-        const expiresAt = Date.now() + 120000;
+        const expiresAt = Date.now() + TRASH_TTL_MS;
         const groupRestoreId = `group-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
         const panelIds = [...group.panelIds];
         const activeTabId = group.activeTabId ?? panelIds[0] ?? "";
