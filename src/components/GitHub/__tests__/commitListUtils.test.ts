@@ -1,7 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
   parseConventionalCommit,
-  getCommitTypeColor,
   getCommitDateGroupLabel,
   buildGroupedRows,
 } from "../commitListUtils";
@@ -87,31 +86,6 @@ describe("parseConventionalCommit", () => {
       breaking: false,
       description: "button alignment",
     });
-  });
-});
-
-describe("getCommitTypeColor", () => {
-  it("returns green for feat", () => {
-    expect(getCommitTypeColor("feat")).toBe("text-category-green");
-  });
-
-  it("returns rose for fix", () => {
-    expect(getCommitTypeColor("fix")).toBe("text-category-rose");
-  });
-
-  it("is case-insensitive", () => {
-    expect(getCommitTypeColor("FEAT")).toBe("text-category-green");
-    expect(getCommitTypeColor("Fix")).toBe("text-category-rose");
-  });
-
-  it("returns muted for unknown types", () => {
-    expect(getCommitTypeColor("unknown")).toBe("text-muted-foreground");
-  });
-
-  it("returns muted for chore/build/ci", () => {
-    expect(getCommitTypeColor("chore")).toBe("text-muted-foreground");
-    expect(getCommitTypeColor("build")).toBe("text-muted-foreground");
-    expect(getCommitTypeColor("ci")).toBe("text-muted-foreground");
   });
 });
 

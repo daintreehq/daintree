@@ -18,24 +18,6 @@ export function parseConventionalCommit(message: string): ParsedCommit | null {
   return { type, scope: trimmedScope, breaking: !!breakingMark, description };
 }
 
-const COMMIT_TYPE_COLORS: Record<string, string> = {
-  feat: "text-category-green",
-  fix: "text-category-rose",
-  docs: "text-category-teal",
-  style: "text-category-purple",
-  refactor: "text-category-purple",
-  perf: "text-category-amber",
-  test: "text-category-cyan",
-  chore: "text-muted-foreground",
-  build: "text-muted-foreground",
-  ci: "text-muted-foreground",
-  revert: "text-category-orange",
-};
-
-export function getCommitTypeColor(type: string): string {
-  return COMMIT_TYPE_COLORS[type.toLowerCase()] ?? "text-muted-foreground";
-}
-
 function dayMidnightMs(date: Date): number {
   return Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate());
 }
