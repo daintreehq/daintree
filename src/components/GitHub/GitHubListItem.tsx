@@ -10,12 +10,7 @@ import {
 import { cn } from "@/lib/utils";
 import { formatTimeAgo } from "@/utils/timeAgo";
 import { actionService } from "@/services/ActionService";
-import type {
-  GitHubIssue,
-  GitHubPR,
-  GitHubLabel,
-  GitHubPRCIStatus,
-} from "@shared/types/github";
+import type { GitHubIssue, GitHubPR, GitHubLabel, GitHubPRCIStatus } from "@shared/types/github";
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
 import { useWorktreeDataStore } from "@/store/worktreeDataStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
