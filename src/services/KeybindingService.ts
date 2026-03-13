@@ -1262,34 +1262,82 @@ class KeybindingService {
     return Object.fromEntries(this.overrides.entries());
   }
 
-  getChordCompletions(
-    prefix: string
-  ): Array<{ secondKey: string; displayKey: string; actionId: string; description: string }> {
+  getChordCompletions(prefix: string): Array<{
+    secondKey: string;
+    displayKey: string;
+    actionId: string;
+    description: string;
+    category: string;
+    isPrefix: boolean;
+  }> {
     const normalizedPrefix = prefix.trim().toLowerCase();
     const results: Array<{
       secondKey: string;
       displayKey: string;
       actionId: string;
       description: string;
+      category: string;
+      isPrefix: boolean;
     }> = [];
 
-    for (const binding of this.getAllBindingsWithEffectiveCombos()) {
+    const allBindings = this.getAllBindingsWithEffectiveCombos();
+
+    // Track which second keys lead to deeper chords (3+ part combos)
+    const deeperPrefixes = new Map<string, { key: string; category: string }>();
+    const addedSecondKeys = new Set<string>();
+
+    // First pass: detect deeper chord prefixes (scope-filtered)
+    for (const binding of allBindings) {
+      if (!this.canExecute(binding.actionId)) continue;
+      if (!binding.effectiveCombo) continue;
+      const parts = binding.effectiveCombo.trim().split(" ");
+      if (parts.length < 3) continue;
+      if (parts[0].toLowerCase() !== normalizedPrefix) continue;
+
+      const nextKey = parts[1];
+      const normalizedNext = nextKey.toLowerCase();
+      if (!deeperPrefixes.has(normalizedNext)) {
+        deeperPrefixes.set(normalizedNext, {
+          key: nextKey,
+          category: binding.category ?? "Other",
+        });
+      }
+    }
+
+    // Second pass: build results for 2-part chords matching prefix
+    for (const binding of allBindings) {
       if (!this.canExecute(binding.actionId)) continue;
 
       const combo = binding.effectiveCombo.trim();
-      const normalizedCombo = combo.toLowerCase();
-      const spaceIdx = normalizedCombo.indexOf(" ");
-      if (spaceIdx === -1) continue;
+      const parts = combo.split(" ");
+      if (parts.length !== 2) continue;
+      if (parts[0].toLowerCase() !== normalizedPrefix) continue;
 
-      const firstPart = normalizedCombo.slice(0, spaceIdx);
-      if (firstPart !== normalizedPrefix) continue;
+      const secondKey = parts[1];
+      const normalizedSecond = secondKey.toLowerCase();
+      addedSecondKeys.add(normalizedSecond);
 
-      const secondKey = combo.slice(combo.indexOf(" ") + 1);
       results.push({
         secondKey,
         displayKey: this.formatComboForDisplay(secondKey),
         actionId: binding.actionId,
         description: binding.description ?? "",
+        category: binding.category ?? "Other",
+        isPrefix: deeperPrefixes.has(normalizedSecond),
+      });
+    }
+
+    // Third pass: add synthetic entries for sub-prefixes with no direct 2-part binding
+    for (const [normalizedKey, info] of deeperPrefixes) {
+      if (addedSecondKeys.has(normalizedKey)) continue;
+
+      results.push({
+        secondKey: info.key,
+        displayKey: this.formatComboForDisplay(info.key),
+        actionId: "",
+        description: "...",
+        category: info.category,
+        isPrefix: true,
       });
     }
 
