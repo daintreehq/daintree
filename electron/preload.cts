@@ -38,6 +38,7 @@ import type {
   VoiceInputStatus,
   ChecklistItemId,
 } from "../shared/types/index.js";
+import type { ColorVisionMode } from "../shared/types/appTheme.js";
 import type {
   AgentStateChangePayload,
   AgentDetectedPayload,
@@ -515,6 +516,7 @@ const CHANNELS = {
   APP_THEME_SET_COLOR_SCHEME: "app-theme:set-color-scheme",
   APP_THEME_SET_CUSTOM_SCHEMES: "app-theme:set-custom-schemes",
   APP_THEME_IMPORT: "app-theme:import",
+  APP_THEME_SET_COLOR_VISION_MODE: "app-theme:set-color-vision-mode",
 
   // Telemetry channels
   TELEMETRY_GET: "telemetry:get",
@@ -1737,6 +1739,9 @@ const api: ElectronAPI = {
       _typedInvoke(CHANNELS.APP_THEME_SET_CUSTOM_SCHEMES, schemesJson),
 
     importTheme: () => _typedInvoke(CHANNELS.APP_THEME_IMPORT),
+
+    setColorVisionMode: (mode: ColorVisionMode) =>
+      _typedInvoke(CHANNELS.APP_THEME_SET_COLOR_VISION_MODE, mode),
   },
 
   telemetry: {

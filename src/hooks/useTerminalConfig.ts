@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { useTerminalFontStore } from "@/store";
 import { useTerminalColorSchemeStore } from "@/store/terminalColorSchemeStore";
+import { useAppThemeStore } from "@/store/appThemeStore";
 import { terminalConfigClient } from "@/clients/terminalConfigClient";
 
 /**
@@ -57,6 +58,8 @@ export function useTerminalConfig() {
     };
   }, [setFontSize, setFontFamily, setSelectedSchemeId, addCustomScheme]);
 
+  const colorVisionMode = useAppThemeStore((state) => state.colorVisionMode);
+
   useEffect(() => {
     const theme = useTerminalColorSchemeStore.getState().getEffectiveTheme();
     terminalInstanceService.applyGlobalOptions({
@@ -65,5 +68,6 @@ export function useTerminalConfig() {
       fontFamily,
     });
     // customSchemes in deps ensures re-run when a custom scheme is added/changed
-  }, [selectedSchemeId, customSchemes, fontSize, fontFamily]);
+    // colorVisionMode in deps ensures terminal ANSI colors update when CVD mode changes
+  }, [selectedSchemeId, customSchemes, fontSize, fontFamily, colorVisionMode]);
 }

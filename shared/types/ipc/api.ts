@@ -878,6 +878,7 @@ export interface ElectronAPI {
         }
       | { ok: false; errors: string[] }
     >;
+    setColorVisionMode(mode: import("../appTheme.js").ColorVisionMode): Promise<void>;
   };
   telemetry: {
     get(): Promise<{ enabled: boolean; hasSeenPrompt: boolean }>;

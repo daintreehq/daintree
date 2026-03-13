@@ -1271,6 +1271,10 @@ export interface IpcInvokeMap {
         }
       | { ok: false; errors: string[] };
   };
+  "app-theme:set-color-vision-mode": {
+    args: [mode: import("../appTheme.js").ColorVisionMode];
+    result: void;
+  };
   "telemetry:get": {
     args: [];
     result: { enabled: boolean; hasSeenPrompt: boolean };
