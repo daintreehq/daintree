@@ -770,6 +770,18 @@ export class WorkspaceClient extends EventEmitter {
     return result.branches;
   }
 
+  async getRecentBranches(rootPath: string): Promise<string[]> {
+    const requestId = this.generateRequestId();
+
+    const result = await this.sendWithResponse<{ branches: string[] }>({
+      type: "get-recent-branches",
+      requestId,
+      rootPath,
+    });
+
+    return result.branches;
+  }
+
   async createWorktree(rootPath: string, options: CreateWorktreeOptions): Promise<string> {
     const requestId = this.generateRequestId();
 
