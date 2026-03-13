@@ -565,13 +565,10 @@ export function ContentGrid({ className, defaultCwd, agentAvailability }: Conten
   // Use tab groups count for grid layout (each group takes one cell)
   const gridItemCount = tabGroups.length + (showPlaceholder ? 1 : 0);
 
-  const gridRegionRef = useRef<HTMLDivElement>(null);
-  const isMacroFocused = useMacroFocusStore((state) => state.focusedRegion === "grid");
-
-  useEffect(() => {
-    useMacroFocusStore.getState().setRegionRef("grid", gridRegionRef.current);
-    return () => useMacroFocusStore.getState().setRegionRef("grid", null);
+  const gridRegionRef = useCallback((node: HTMLDivElement | null) => {
+    useMacroFocusStore.getState().setRegionRef("grid", node);
   }, []);
+  const isMacroFocused = useMacroFocusStore((state) => state.focusedRegion === "grid");
 
   const handleGridRegionKeyDown = useCallback(
     (e: React.KeyboardEvent) => {

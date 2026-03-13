@@ -65,10 +65,10 @@ export function useGlobalKeybindings(enabled: boolean = true): void {
       }
 
       // For editable contexts without modifiers, let native behavior happen
-      // Exception: allow chord completion even without modifiers
+      // Exception: allow chord completion even without modifiers, and F6 for region cycling
       const hasModifier = e.metaKey || e.ctrlKey;
 
-      if (isEditable && !hasModifier && !pendingChord) {
+      if (isEditable && !hasModifier && !pendingChord && e.key !== "F6") {
         return;
       }
 

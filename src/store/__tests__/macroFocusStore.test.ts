@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import { useMacroFocusStore } from "../macroFocusStore";
 
 describe("macroFocusStore", () => {
@@ -132,6 +132,41 @@ describe("macroFocusStore", () => {
       expect(store.refs.get("grid")).toBe(el);
       store.setRegionRef("grid", null);
       expect(store.refs.has("grid")).toBe(false);
+    });
+  });
+
+  describe("focus side effects", () => {
+    it("calls focus() on the registered ref when cycling", () => {
+      const el = document.createElement("div");
+      el.focus = vi.fn();
+      const store = useMacroFocusStore.getState();
+      store.setRegionRef("grid", el);
+      store.cycleNext(); // grid
+      expect(el.focus).toHaveBeenCalled();
+    });
+
+    it("recovers when focusedRegion is stale (no longer visible)", () => {
+      const store = useMacroFocusStore.getState();
+      store.setVisibility("dock", true);
+      store.cycleNext(); // grid
+      store.cycleNext(); // dock
+      expect(useMacroFocusStore.getState().focusedRegion).toBe("dock");
+      // Hide dock while it's focused
+      store.setVisibility("dock", false);
+      expect(useMacroFocusStore.getState().focusedRegion).toBeNull();
+      // Cycling from null after visibility change
+      store.cycleNext();
+      expect(useMacroFocusStore.getState().focusedRegion).toBe("grid");
+    });
+
+    it("handles single visible region cycling", () => {
+      const store = useMacroFocusStore.getState();
+      store.setVisibility("sidebar", false);
+      // Only grid is visible
+      store.cycleNext(); // grid
+      expect(useMacroFocusStore.getState().focusedRegion).toBe("grid");
+      store.cycleNext(); // still grid (only one visible)
+      expect(useMacroFocusStore.getState().focusedRegion).toBe("grid");
     });
   });
 });
