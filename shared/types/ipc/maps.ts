@@ -1220,6 +1220,10 @@ export interface IpcInvokeMap {
     args: [];
     result: { ok: true; filePath: string; thumbnailDataUrl: string } | { ok: false; error: string };
   };
+  "clipboard:thumbnail-from-path": {
+    args: [filePath: string];
+    result: { ok: true; filePath: string; thumbnailDataUrl: string } | { ok: false; error: string };
+  };
 
   // URL context channels
   "url-context:resolve": {

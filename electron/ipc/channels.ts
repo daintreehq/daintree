@@ -351,6 +351,7 @@ export const CHANNELS = {
   CLI_GET_STATUS: "cli:get-status",
 
   CLIPBOARD_SAVE_IMAGE: "clipboard:save-image",
+  CLIPBOARD_THUMBNAIL_FROM_PATH: "clipboard:thumbnail-from-path",
 
   URL_CONTEXT_RESOLVE: "url-context:resolve",
 

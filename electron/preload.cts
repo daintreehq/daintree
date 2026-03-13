@@ -3,7 +3,7 @@
  * Channel names are inlined to avoid module format conflicts with ESM main process.
  */
 
-import { contextBridge, ipcRenderer, webFrame } from "electron";
+import { contextBridge, ipcRenderer, webFrame, webUtils } from "electron";
 import { isTrustedRendererUrl } from "../shared/utils/trustedRenderer.js";
 
 import type {
@@ -511,6 +511,7 @@ const CHANNELS = {
 
   // Clipboard channels
   CLIPBOARD_SAVE_IMAGE: "clipboard:save-image",
+  CLIPBOARD_THUMBNAIL_FROM_PATH: "clipboard:thumbnail-from-path",
 
   // URL Context channels
   URL_CONTEXT_RESOLVE: "url-context:resolve",
@@ -1736,6 +1737,13 @@ const api: ElectronAPI = {
   // Clipboard API
   clipboard: {
     saveImage: () => _typedInvoke(CHANNELS.CLIPBOARD_SAVE_IMAGE),
+    thumbnailFromPath: (filePath: string) =>
+      _typedInvoke(CHANNELS.CLIPBOARD_THUMBNAIL_FROM_PATH, filePath),
+  },
+
+  // Web Utils API
+  webUtils: {
+    getPathForFile: (file: File) => webUtils.getPathForFile(file),
   },
 
   // URL Context API

@@ -926,7 +926,7 @@ export function createFilePasteHandler(
       for (const item of items) {
         if (item.kind === "file" && !item.type.startsWith("image/")) {
           const file = item.getAsFile();
-          const filePath = (file as unknown as { path?: string })?.path;
+          const filePath = file ? window.electron.webUtils.getPathForFile(file) : undefined;
           if (file && filePath) {
             const name =
               file.name.trim() || filePath.split(/[/\\]/).filter(Boolean).pop() || filePath;

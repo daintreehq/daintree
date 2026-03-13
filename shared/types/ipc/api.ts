@@ -876,6 +876,14 @@ export interface ElectronAPI {
     saveImage(): Promise<
       { ok: true; filePath: string; thumbnailDataUrl: string } | { ok: false; error: string }
     >;
+    thumbnailFromPath(
+      filePath: string
+    ): Promise<
+      { ok: true; filePath: string; thumbnailDataUrl: string } | { ok: false; error: string }
+    >;
+  };
+  webUtils: {
+    getPathForFile(file: File): string;
   };
   urlContext: {
     resolve(url: string): Promise<UrlContextResult>;
