@@ -184,7 +184,7 @@ export function ProjectSwitcher() {
               <Button
                 variant="ghost"
                 className={cn(
-                  "w-full justify-between h-12 px-2.5",
+                  "relative w-full justify-between h-12 px-2.5",
                   "rounded-[var(--radius-lg)]",
                   "border border-white/[0.06]",
                   "bg-overlay-subtle shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]",
@@ -211,6 +211,13 @@ export function ProjectSwitcher() {
                   </div>
                 </div>
                 <ChevronsUpDown className="shrink-0 text-muted-foreground/40 group-hover:text-muted-foreground/70 transition-colors" />
+                {projectSwitcher.backgroundWaitingCount > 0 && (
+                  <span
+                    role="status"
+                    aria-label={`${projectSwitcher.backgroundWaitingCount} background project${projectSwitcher.backgroundWaitingCount === 1 ? "" : "s"} waiting`}
+                    className="absolute top-1 right-1 h-2 w-2 rounded-full bg-state-waiting ring-2 ring-[var(--color-canopy-sidebar)]"
+                  />
+                )}
               </Button>
             </TooltipTrigger>
             <TooltipContent side="right">
