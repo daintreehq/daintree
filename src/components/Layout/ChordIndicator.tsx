@@ -11,6 +11,9 @@ export function ChordIndicator() {
   const pendingChord = usePendingChord();
   const [showOverlay, setShowOverlay] = useState(false);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Cache last chord/completions so exit animation doesn't show empty content
+  const lastChordRef = useRef<string>("");
+  const lastCompletionsRef = useRef<ReturnType<typeof keybindingService.getChordCompletions>>([]);
 
   const { isVisible, shouldRender } = useAnimatedPresence({
     isOpen: showOverlay,
@@ -18,6 +21,8 @@ export function ChordIndicator() {
 
   useEffect(() => {
     if (pendingChord) {
+      lastChordRef.current = pendingChord;
+      lastCompletionsRef.current = keybindingService.getChordCompletions(pendingChord);
       // If overlay is already showing (chord deepened), keep it visible
       if (!showOverlay) {
         timerRef.current = setTimeout(() => {
@@ -38,8 +43,8 @@ export function ChordIndicator() {
 
   if (!shouldRender) return null;
 
-  const displayChord = pendingChord ? keybindingService.formatComboForDisplay(pendingChord) : "";
-  const completions = pendingChord ? keybindingService.getChordCompletions(pendingChord) : [];
+  const displayChord = keybindingService.formatComboForDisplay(lastChordRef.current);
+  const completions = lastCompletionsRef.current;
 
   // Group completions by category
   const grouped = new Map<string, typeof completions>();
@@ -89,7 +94,10 @@ export function ChordIndicator() {
                   {category}
                 </div>
                 {items.map((c) => (
-                  <div key={c.actionId} className="flex items-center gap-3 py-1 text-xs">
+                  <div
+                    key={c.actionId || c.secondKey}
+                    className="flex items-center gap-3 py-1 text-xs"
+                  >
                     <kbd className="min-w-[3rem] text-right font-medium text-canopy-text/80">
                       {c.isPrefix ? `${c.displayKey} +` : c.displayKey}
                     </kbd>

@@ -1286,8 +1286,9 @@ class KeybindingService {
     const deeperPrefixes = new Map<string, { key: string; category: string }>();
     const addedSecondKeys = new Set<string>();
 
-    // First pass: detect deeper chord prefixes
+    // First pass: detect deeper chord prefixes (scope-filtered)
     for (const binding of allBindings) {
+      if (!this.canExecute(binding.actionId)) continue;
       if (!binding.effectiveCombo) continue;
       const parts = binding.effectiveCombo.trim().split(" ");
       if (parts.length < 3) continue;
