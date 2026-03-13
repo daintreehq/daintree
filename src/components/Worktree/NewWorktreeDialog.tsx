@@ -12,6 +12,7 @@ import {
   UserPlus,
   Play,
   Info,
+  ChevronDown,
 } from "lucide-react";
 import type { BranchInfo, CreateWorktreeOptions } from "@/types/electron";
 import type { GitHubIssue, GitHubPR } from "@shared/types/github";
@@ -27,7 +28,9 @@ import { toBranchOption, filterBranches, type BranchOption } from "./branchPicke
 import { usePreferencesStore } from "@/store/preferencesStore";
 import { useGitHubConfigStore } from "@/store/githubConfigStore";
 import { notify } from "@/lib/notify";
+import { systemClient } from "@/clients/systemClient";
 import { useRecipeStore } from "@/store/recipeStore";
+import { mapCreationError, type WorktreeCreationError } from "./worktreeCreationErrors";
 import { useProjectStore } from "@/store/projectStore";
 import type { ProjectSettings } from "@/types";
 
@@ -51,7 +54,10 @@ export function NewWorktreeDialog({
   const [branches, setBranches] = useState<BranchInfo[]>([]);
   const [loading, setLoading] = useState(false);
   const [creating, setCreating] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [validationError, setValidationError] = useState<string | null>(null);
+  const [creationError, setCreationError] = useState<WorktreeCreationError | null>(null);
+  const [isCheckingBranch, setIsCheckingBranch] = useState(false);
+  const [isGeneratingPath, setIsGeneratingPath] = useState(false);
 
   const [baseBranch, setBaseBranch] = useState("");
   const [branchInput, setBranchInput] = useState("");
@@ -375,7 +381,10 @@ export function NewWorktreeDialog({
     if (!isOpen) return;
 
     setLoading(true);
-    setError(null);
+    setValidationError(null);
+    setCreationError(null);
+    setIsCheckingBranch(false);
+    setIsGeneratingPath(false);
     setBranchWasAutoResolved(false);
     setPathWasAutoResolved(false);
     setPrBranchResolved(null);
@@ -451,7 +460,7 @@ export function NewWorktreeDialog({
       })
       .catch((err) => {
         if (!isCurrent) return;
-        setError(`Failed to load branches: ${err.message}`);
+        setValidationError(`Failed to load branches: ${err.message}`);
         setBranches([]);
         setBaseBranch("");
         setFromRemote(false);
@@ -504,6 +513,8 @@ export function NewWorktreeDialog({
     if (!trimmedInput || !rootPath) {
       setBranchWasAutoResolved(false);
       setPathWasAutoResolved(false);
+      setIsCheckingBranch(false);
+      setIsGeneratingPath(false);
       return;
     }
 
@@ -515,12 +526,16 @@ export function NewWorktreeDialog({
     if (parsed.hasPrefix && (!parsed.slug || !parsed.slug.trim())) {
       setBranchWasAutoResolved(false);
       setPathWasAutoResolved(false);
+      setIsCheckingBranch(false);
+      setIsGeneratingPath(false);
       return;
     }
 
     // Check for invalid characters in the slug part
     if (parsed.hasPrefix) {
       if (/[\s.]$/.test(parsed.slug) || /^[.-]/.test(parsed.slug) || /[\\:]/.test(parsed.slug)) {
+        setIsCheckingBranch(false);
+        setIsGeneratingPath(false);
         return;
       }
     } else {
@@ -529,9 +544,14 @@ export function NewWorktreeDialog({
         /^[.-]/.test(trimmedInput) ||
         /[/\\:]/.test(trimmedInput)
       ) {
+        setIsCheckingBranch(false);
+        setIsGeneratingPath(false);
         return;
       }
     }
+
+    setIsCheckingBranch(true);
+    setIsGeneratingPath(true);
 
     const abortController = new AbortController();
 
@@ -543,6 +563,9 @@ export function NewWorktreeDialog({
         worktreeClient.getDefaultPath(rootPath, fullBranchName),
       ]).then((results) => {
         if (abortController.signal.aborted) return;
+
+        setIsCheckingBranch(false);
+        setIsGeneratingPath(false);
 
         const branchResult = results[0];
         const pathResult = results[1];
@@ -587,6 +610,8 @@ export function NewWorktreeDialog({
     return () => {
       clearTimeout(timeoutId);
       abortController.abort();
+      setIsCheckingBranch(false);
+      setIsGeneratingPath(false);
     };
   }, [branchInput, rootPath]);
 
@@ -631,13 +656,13 @@ export function NewWorktreeDialog({
 
   const handleCreate = async () => {
     if (!baseBranch) {
-      setError("Please select a base branch");
+      setValidationError("Please select a base branch");
       return;
     }
 
     const trimmedInput = branchInput.trim();
     if (!trimmedInput) {
-      setError("Please enter a branch name");
+      setValidationError("Please enter a branch name");
       return;
     }
 
@@ -647,7 +672,7 @@ export function NewWorktreeDialog({
     if (parsed.hasPrefix) {
       // Require non-empty slug when prefix is present
       if (!parsed.slug || !parsed.slug.trim()) {
-        setError("Please enter a branch name after the prefix");
+        setValidationError("Please enter a branch name after the prefix");
         return;
       }
 
@@ -657,39 +682,40 @@ export function NewWorktreeDialog({
         /^[.-]/.test(parsed.prefix) ||
         parsed.prefix.includes("..")
       ) {
-        setError("Branch prefix contains invalid characters");
+        setValidationError("Branch prefix contains invalid characters");
         return;
       }
 
       // Validate slug part
       if (/[\s.]$/.test(parsed.slug) || /^[.-]/.test(parsed.slug)) {
-        setError("Branch name cannot start with '.', '-' or end with space or '.'");
+        setValidationError("Branch name cannot start with '.', '-' or end with space or '.'");
         return;
       }
       if (/[\\:]/.test(parsed.slug) || parsed.slug.includes("..")) {
-        setError("Branch name contains invalid characters");
+        setValidationError("Branch name contains invalid characters");
         return;
       }
     } else {
       if (/[\s.]$/.test(trimmedInput) || /^[.-]/.test(trimmedInput)) {
-        setError("Branch name cannot start with '.', '-' or end with space or '.'");
+        setValidationError("Branch name cannot start with '.', '-' or end with space or '.'");
         return;
       }
       if (/[/\\:]/.test(trimmedInput) || trimmedInput.includes("..")) {
-        setError("Branch name contains invalid characters");
+        setValidationError("Branch name contains invalid characters");
         return;
       }
     }
 
     if (!worktreePath.trim()) {
-      setError("Please enter a worktree path");
+      setValidationError("Please enter a worktree path");
       return;
     }
 
     const fullBranchName = parsed.fullBranchName;
 
     setCreating(true);
-    setError(null);
+    setValidationError(null);
+    setCreationError(null);
 
     try {
       // For PR checkout, detect if the branch already exists locally (use existing)
@@ -727,18 +753,27 @@ export function NewWorktreeDialog({
           });
         } catch (assignErr) {
           const message = assignErr instanceof Error ? assignErr.message : "Failed to assign issue";
+          const issueUrl = selectedIssue.url;
           notify({
             type: "warning",
             title: "Could not assign issue",
             message: `${message} — you can assign it manually on GitHub`,
+            actions: issueUrl
+              ? [
+                  {
+                    label: "Assign on GitHub",
+                    onClick: () => systemClient.openExternal(issueUrl),
+                  },
+                ]
+              : [],
           });
         }
       }
 
       // Run selected recipe if one is chosen
       if (selectedRecipe) {
+        const worktreeId = result.result as string | undefined;
         try {
-          const worktreeId = result.result as string | undefined;
           await runRecipe(selectedRecipe.id, worktreePath.trim(), worktreeId, {
             issueNumber: selectedIssue?.number,
             worktreePath: worktreePath.trim(),
@@ -746,10 +781,28 @@ export function NewWorktreeDialog({
           });
         } catch (recipeErr) {
           const message = recipeErr instanceof Error ? recipeErr.message : "Failed to run recipe";
+          const recipeId = selectedRecipe.id;
+          const recipePath = worktreePath.trim();
+          const recipeWorktreeId = worktreeId;
+          const recipeContext = {
+            issueNumber: selectedIssue?.number,
+            worktreePath: recipePath,
+            branchName: fullBranchName,
+          };
           notify({
             type: "warning",
             title: "Could not run recipe",
             message: `${message} — worktree was created successfully`,
+            actions: [
+              {
+                label: "Retry Recipe",
+                onClick: () => {
+                  runRecipe(recipeId, recipePath, recipeWorktreeId, recipeContext).catch(
+                    console.error
+                  );
+                },
+              },
+            ],
           });
         }
       }
@@ -762,7 +815,7 @@ export function NewWorktreeDialog({
       setFromRemote(false);
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : "Failed to create worktree";
-      setError(message);
+      setCreationError(mapCreationError(message, onClose));
     } finally {
       setCreating(false);
     }
@@ -1004,10 +1057,12 @@ export function NewWorktreeDialog({
                         onChange={(e) => {
                           setBranchInput(e.target.value);
                           branchInputTouchedRef.current = true;
+                          setValidationError(null);
+                          setCreationError(null);
                         }}
                         onKeyDown={handlePrefixKeyDown}
                         placeholder="feature/add-user-auth"
-                        className="w-full px-3 py-2 bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] text-canopy-text focus:outline-none focus:ring-2 focus:ring-canopy-accent font-mono text-sm"
+                        className="w-full px-3 pr-10 py-2 bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] text-canopy-text focus:outline-none focus:ring-2 focus:ring-canopy-accent font-mono text-sm"
                         disabled={creating}
                         aria-describedby={
                           branchWasAutoResolved ? "branch-resolved-hint" : undefined
@@ -1017,6 +1072,12 @@ export function NewWorktreeDialog({
                         aria-controls="prefix-list"
                         aria-expanded={prefixPickerOpen}
                       />
+                      {isCheckingBranch && (
+                        <Loader2
+                          className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 animate-spin text-canopy-text/40 pointer-events-none"
+                          aria-hidden="true"
+                        />
+                      )}
                     </div>
                   </PopoverTrigger>
                   <PopoverContent
@@ -1108,19 +1169,29 @@ export function NewWorktreeDialog({
                   </Tooltip>
                 </div>
                 <div className="flex gap-2 items-center">
-                  <input
-                    id="worktree-path"
-                    data-testid="worktree-path-input"
-                    type="text"
-                    value={worktreePath}
-                    onChange={(e) => {
-                      setWorktreePath(e.target.value);
-                      pathTouchedRef.current = true;
-                    }}
-                    placeholder="/path/to/worktree"
-                    className="flex-1 px-3 py-2 bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] text-canopy-text focus:outline-none focus:ring-2 focus:ring-canopy-accent"
-                    disabled={creating}
-                  />
+                  <div className="relative flex-1">
+                    <input
+                      id="worktree-path"
+                      data-testid="worktree-path-input"
+                      type="text"
+                      value={worktreePath}
+                      onChange={(e) => {
+                        setWorktreePath(e.target.value);
+                        pathTouchedRef.current = true;
+                        setValidationError(null);
+                        setCreationError(null);
+                      }}
+                      placeholder="/path/to/worktree"
+                      className="w-full px-3 pr-10 py-2 bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] text-canopy-text focus:outline-none focus:ring-2 focus:ring-canopy-accent"
+                      disabled={creating}
+                    />
+                    {isGeneratingPath && (
+                      <Loader2
+                        className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 animate-spin text-canopy-text/40 pointer-events-none"
+                        aria-hidden="true"
+                      />
+                    )}
+                  </div>
                   <Button
                     variant="outline"
                     size="sm"
@@ -1136,12 +1207,13 @@ export function NewWorktreeDialog({
                         if (result.ok && result.result) {
                           setWorktreePath(result.result as string);
                           pathTouchedRef.current = true;
-                          setError(null);
+                          setValidationError(null);
+                          setCreationError(null);
                         }
                       } catch (err: unknown) {
                         console.error("Failed to open directory picker:", err);
                         const message = err instanceof Error ? err.message : "Unknown error";
-                        setError(`Failed to open directory picker: ${message}`);
+                        setValidationError(`Failed to open directory picker: ${message}`);
                       }
                     }}
                     disabled={creating}
@@ -1333,10 +1405,45 @@ export function NewWorktreeDialog({
                 </div>
               )}
 
-              {error && (
-                <div className="flex items-start gap-2 p-3 bg-status-error/10 border border-status-error/20 rounded-[var(--radius-md)]">
+              {validationError && (
+                <div
+                  role="alert"
+                  className="flex items-start gap-2 p-3 bg-status-error/10 border border-status-error/20 rounded-[var(--radius-md)]"
+                >
                   <AlertCircle className="w-4 h-4 text-status-error mt-0.5 flex-shrink-0" />
-                  <p className="text-sm text-status-error">{error}</p>
+                  <p className="text-sm text-status-error">{validationError}</p>
+                </div>
+              )}
+
+              {creationError && (
+                <div
+                  role="alert"
+                  className="p-3 bg-status-error/10 border border-status-error/20 rounded-[var(--radius-md)] space-y-2"
+                >
+                  <div className="flex items-start gap-2">
+                    <AlertCircle className="w-4 h-4 text-status-error mt-0.5 flex-shrink-0" />
+                    <p className="text-sm text-status-error">{creationError.friendly}</p>
+                  </div>
+                  {creationError.recovery && (
+                    <button
+                      type="button"
+                      onClick={creationError.recovery.onAction}
+                      className="ml-6 text-xs font-medium text-status-error underline underline-offset-2 hover:text-status-error/80"
+                    >
+                      {creationError.recovery.label}
+                    </button>
+                  )}
+                  {creationError.raw !== creationError.friendly && (
+                    <details className="ml-6">
+                      <summary className="flex items-center gap-1 text-xs text-canopy-text/50 cursor-pointer select-none">
+                        <ChevronDown className="w-3 h-3" />
+                        Show details
+                      </summary>
+                      <pre className="mt-1.5 overflow-x-auto rounded bg-status-error/5 p-2 font-mono text-[11px] text-canopy-text/50 whitespace-pre-wrap break-all">
+                        {creationError.raw}
+                      </pre>
+                    </details>
+                  )}
                 </div>
               )}
             </div>
@@ -1371,6 +1478,8 @@ export function NewWorktreeDialog({
               disabled={
                 creating ||
                 loading ||
+                isCheckingBranch ||
+                isGeneratingPath ||
                 (initialPR !== null && initialPR !== undefined && prBranchResolved === false)
               }
               className="min-w-[100px]"
@@ -1380,6 +1489,11 @@ export function NewWorktreeDialog({
                 <>
                   <Loader2 className="animate-spin" />
                   Creating...
+                </>
+              ) : creationError ? (
+                <>
+                  <Check />
+                  Retry
                 </>
               ) : (
                 <>
