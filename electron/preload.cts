@@ -512,6 +512,9 @@ const CHANNELS = {
   // Clipboard channels
   CLIPBOARD_SAVE_IMAGE: "clipboard:save-image",
 
+  // URL Context channels
+  URL_CONTEXT_RESOLVE: "url-context:resolve",
+
   // App Theme channels
   APP_THEME_GET: "app-theme:get",
   APP_THEME_SET_COLOR_SCHEME: "app-theme:set-color-scheme",
@@ -1733,6 +1736,11 @@ const api: ElectronAPI = {
   // Clipboard API
   clipboard: {
     saveImage: () => _typedInvoke(CHANNELS.CLIPBOARD_SAVE_IMAGE),
+  },
+
+  // URL Context API
+  urlContext: {
+    resolve: (url: string) => _typedInvoke(CHANNELS.URL_CONTEXT_RESOLVE, url),
   },
 
   appTheme: {

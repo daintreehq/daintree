@@ -15,6 +15,20 @@ import type { AgentSettings, AgentSettingsEntry } from "../agentSettings.js";
 import type { VoiceInputStatus } from "../voice.js";
 export type { VoiceInputStatus };
 
+export type UrlContextResult =
+  | {
+      ok: true;
+      title: string;
+      markdown: string;
+      tokenEstimate: number;
+      sourceUrl: string;
+    }
+  | {
+      ok: false;
+      reason: "blocked" | "auth-required" | "fetch-error" | "too-large" | "parse-error";
+      message: string;
+    };
+
 import type {
   CreateWorktreeOptions,
   BranchInfo,
@@ -862,6 +876,9 @@ export interface ElectronAPI {
     saveImage(): Promise<
       { ok: true; filePath: string; thumbnailDataUrl: string } | { ok: false; error: string }
     >;
+  };
+  urlContext: {
+    resolve(url: string): Promise<UrlContextResult>;
   };
   appTheme: {
     get(): Promise<AppThemeConfig>;
