@@ -87,6 +87,17 @@ describe("computeChipState", () => {
       ).toBe("cleanup");
     });
 
+    it("cleanup beats complete and waiting combined", () => {
+      expect(
+        computeChipState({
+          ...base,
+          lifecycleStage: "merged",
+          isComplete: true,
+          waitingTerminalCount: 1,
+        })
+      ).toBe("cleanup");
+    });
+
     it("failedTerminalCount error beats waiting", () => {
       expect(computeChipState({ ...base, failedTerminalCount: 1, waitingTerminalCount: 1 })).toBe(
         "error"
@@ -103,6 +114,17 @@ describe("computeChipState", () => {
       expect(computeChipState({ ...base, lifecycleStage: "in-review", isComplete: true })).toBe(
         "complete"
       );
+    });
+
+    it('returns complete when "in-review", complete, and waiting are all present', () => {
+      expect(
+        computeChipState({
+          ...base,
+          lifecycleStage: "in-review",
+          isComplete: true,
+          waitingTerminalCount: 1,
+        })
+      ).toBe("complete");
     });
   });
 
