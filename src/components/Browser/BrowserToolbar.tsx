@@ -250,7 +250,14 @@ export function BrowserToolbar({
         <Tooltip>
           <TooltipTrigger asChild>
             <span className="inline-flex">
-              <button type="button" onClick={onBack} disabled={!canGoBack} className={buttonClass}>
+              <button
+                type="button"
+                onClick={onBack}
+                disabled={!canGoBack}
+                className={buttonClass}
+                aria-label="Go back"
+                data-testid="browser-back"
+              >
                 <ArrowLeft className="w-4 h-4" />
               </button>
             </span>
@@ -267,6 +274,8 @@ export function BrowserToolbar({
                 onClick={onForward}
                 disabled={!canGoForward}
                 className={buttonClass}
+                aria-label="Go forward"
+                data-testid="browser-forward"
               >
                 <ArrowRight className="w-4 h-4" />
               </button>
@@ -282,6 +291,8 @@ export function BrowserToolbar({
               type="button"
               onClick={onReload}
               className={cn(buttonClass, isLoading && "animate-spin")}
+              aria-label="Reload"
+              data-testid="browser-reload"
             >
               <RotateCw className="w-4 h-4" />
             </button>
