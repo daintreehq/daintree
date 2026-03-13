@@ -44,6 +44,7 @@ const mocks = vi.hoisted(() => {
     submit: vi.fn(),
     forceResume: vi.fn(),
     spawn: vi.fn(),
+    trash: vi.fn().mockResolvedValue(undefined),
     write: vi.fn(),
     resize: vi.fn(),
     kill: vi.fn(),
@@ -394,6 +395,64 @@ describe("terminal action hardening", () => {
     await moveToWorktree.run({ terminalId: "term-a", worktreeId: "wt-1" }, {} as never);
     expect(useTerminalStore.getState().focusedId).toBe("term-a");
   });
+
+  it("quits the app only when closing the last remaining non-trashed terminal", async () => {
+    const actions = buildRegistry(registerTerminalActions);
+    const closeTerminal = actions.get("terminal.close")!();
+
+    useTerminalStore.setState({
+      terminals: [
+        createTerminal({ id: "term-1", location: "grid" }),
+        createTerminal({ id: "term-2", location: "trash" }),
+      ],
+      focusedId: "term-1",
+    });
+
+    await closeTerminal.run(undefined, {} as never);
+    expect(mocks.appClient.quit).toHaveBeenCalledTimes(1);
+
+    mocks.appClient.quit.mockClear();
+    useTerminalStore.setState({
+      terminals: [
+        createTerminal({ id: "term-a", location: "grid" }),
+        createTerminal({ id: "term-b", location: "grid" }),
+      ],
+      focusedId: "term-a",
+    });
+
+    await closeTerminal.run(undefined, {} as never);
+    expect(mocks.appClient.quit).not.toHaveBeenCalled();
+  });
+
+  it("duplicates trashed terminals back into the grid with a copied title", async () => {
+    const actions = buildRegistry(registerTerminalActions);
+    const duplicate = actions.get("terminal.duplicate")!();
+    const addTerminal = vi.fn().mockResolvedValue("copy-id");
+
+    useTerminalStore.setState({
+      terminals: [
+        createTerminal({
+          id: "term-trash",
+          location: "trash",
+          title: "Broken Session",
+          command: "npm test",
+          isInputLocked: true,
+        }),
+      ],
+      addTerminal,
+    } as never);
+
+    await duplicate.run({ terminalId: "term-trash" }, {} as never);
+
+    expect(addTerminal).toHaveBeenCalledWith(
+      expect.objectContaining({
+        location: "grid",
+        title: "Broken Session (copy)",
+        command: "npm test",
+        isInputLocked: true,
+      })
+    );
+  });
 });
 
 describe("panel action hardening", () => {
@@ -432,6 +491,66 @@ describe("panel action hardening", () => {
 
     expect(useSidecarStore.getState().tabs).toEqual([]);
     expect(useSidecarStore.getState().createdTabs.size).toBe(0);
+  });
+
+  it("reuses the active blank tab when opening a foreground URL", async () => {
+    const actions = buildRegistry(registerPanelActions);
+    const openUrl = actions.get("sidecar.openUrl")!();
+
+    vi.mocked(document.getElementById).mockReturnValue({
+      getBoundingClientRect: () => ({
+        x: 10,
+        y: 20,
+        width: 300,
+        height: 400,
+      }),
+    } as never);
+
+    useSidecarStore.setState({
+      isOpen: false,
+      activeTabId: "blank-1",
+      tabs: [{ id: "blank-1", title: "New Tab", url: null }],
+      createdTabs: new Set<string>(),
+    });
+
+    await openUrl.run({ url: "https://example.com/reused", title: "Reused" }, {} as never);
+
+    const state = useSidecarStore.getState();
+    expect(state.tabs).toHaveLength(1);
+    expect(state.tabs[0]).toMatchObject({
+      id: "blank-1",
+      title: "Reused",
+      url: "https://example.com/reused",
+    });
+    expect(state.isOpen).toBe(true);
+    expect(mocks.sidecar.create).toHaveBeenCalledWith({
+      tabId: "blank-1",
+      url: "https://example.com/reused",
+    });
+    expect(mocks.sidecar.show).toHaveBeenCalled();
+  });
+
+  it("throws for focus requests targeting trashed or missing panels", async () => {
+    const setActiveWorktree = vi.fn();
+    const activateTerminal = vi.fn();
+    useWorktreeSelectionStore.setState({ setActiveWorktree } as never);
+    useTerminalStore.setState({
+      terminals: [createTerminal({ id: "trashed", location: "trash" })],
+      activateTerminal,
+    } as never);
+
+    const actions = buildRegistry(registerPanelActions);
+    const focusPanel = actions.get("panel.focus")!();
+
+    await expect(
+      focusPanel.run({ panelId: "trashed", worktreeId: "wt-2" }, {} as never)
+    ).rejects.toThrow("Terminal panel no longer exists");
+    await expect(focusPanel.run({ panelId: "missing" }, {} as never)).rejects.toThrow(
+      "Terminal panel no longer exists"
+    );
+
+    expect(setActiveWorktree).not.toHaveBeenCalled();
+    expect(activateTerminal).not.toHaveBeenCalled();
   });
 });
 
@@ -549,5 +668,50 @@ describe("worktree action hardening", () => {
 
     expect(mocks.githubClient.getIssueUrl).toHaveBeenCalledWith("/repo", 44);
     expect(mocks.actionService.dispatch).not.toHaveBeenCalled();
+  });
+
+  it("propagates alias dispatch failures for worktree.copyContext", async () => {
+    const actions = buildRegistry(registerWorktreeActions);
+    const copyContext = actions.get("worktree.copyContext")!();
+    mocks.actionService.dispatch.mockResolvedValueOnce({
+      ok: false,
+      error: { message: "copyTree exploded" },
+    });
+
+    await expect(copyContext.run({ format: "markdown" }, {} as never)).rejects.toThrow(
+      "copyTree exploded"
+    );
+  });
+
+  it("returns the dispatched alias result for worktree.copyContext", async () => {
+    const actions = buildRegistry(registerWorktreeActions);
+    const copyContext = actions.get("worktree.copyContext")!();
+    mocks.actionService.dispatch.mockResolvedValueOnce({
+      ok: true,
+      result: { worktreeId: "wt-9", fileCount: 2 },
+    });
+
+    await expect(copyContext.run({ format: "markdown" }, {} as never)).resolves.toEqual({
+      worktreeId: "wt-9",
+      fileCount: 2,
+    });
+  });
+
+  it("reports missing terminal or worktree context for worktree.inject", async () => {
+    const onInject = vi.fn();
+    const actions = buildRegistry(registerWorktreeActions, { onInject });
+    const inject = actions.get("worktree.inject")!();
+
+    expect(inject.isEnabled?.({} as never)).toBe(false);
+    expect(inject.disabledReason?.({} as never)).toBe("No focused terminal to inject into");
+
+    await expect(inject.run(undefined, {} as never)).rejects.toThrow(
+      "No focused terminal to inject into"
+    );
+    await expect(inject.run(undefined, { focusedTerminalId: "term-1" } as never)).rejects.toThrow(
+      "No worktree selected"
+    );
+
+    expect(onInject).not.toHaveBeenCalled();
   });
 });
