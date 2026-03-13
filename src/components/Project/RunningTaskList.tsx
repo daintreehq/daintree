@@ -11,13 +11,6 @@ const AUTO_CLEAR_DELAY = 3000;
 
 type TaskStatus = "running" | "success" | "failed" | "restarting";
 
-interface TaskSnapshot {
-  id: string;
-  command: string;
-  startedAt: number;
-  status: TaskStatus;
-}
-
 function deriveTaskStatus(t: TerminalInstance): TaskStatus {
   if (t.isRestarting) return "restarting";
   if (t.runtimeStatus === "exited") {
@@ -69,23 +62,23 @@ export function RunningTaskList({ worktreeId }: RunningTaskListProps) {
 
   // Auto-clear successful tasks after delay
   useEffect(() => {
+    const timers = autoClearTimers.current;
     for (const t of quickRunTerminals) {
       const status = deriveTaskStatus(t);
-      if (status === "success" && !dismissedIds.has(t.id) && !autoClearTimers.current.has(t.id)) {
+      if (status === "success" && !dismissedIds.has(t.id) && !timers.has(t.id)) {
         const timer = setTimeout(() => {
           setDismissedIds((prev) => new Set(prev).add(t.id));
-          autoClearTimers.current.delete(t.id);
+          timers.delete(t.id);
         }, AUTO_CLEAR_DELAY);
-        autoClearTimers.current.set(t.id, timer);
+        timers.set(t.id, timer);
       }
     }
 
     return () => {
-      // Clean up timers for terminals that no longer exist
-      for (const [id, timer] of autoClearTimers.current) {
+      for (const [id, timer] of timers) {
         if (!quickRunTerminals.some((t) => t.id === id)) {
           clearTimeout(timer);
-          autoClearTimers.current.delete(id);
+          timers.delete(id);
         }
       }
     };
