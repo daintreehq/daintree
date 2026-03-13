@@ -65,6 +65,13 @@ export function buildSearchableText(worktree: Worktree | WorktreeState): string 
   return parts.filter(Boolean).join(" ").toLowerCase();
 }
 
+function scoreField(field: string, query: string, startsWith: number, contains: number): number {
+  if (!field) return 0;
+  if (field.startsWith(query)) return startsWith;
+  if (field.includes(query)) return contains;
+  return 0;
+}
+
 export function scoreWorktree(worktree: Worktree | WorktreeState, query: string): number {
   const q = query.toLowerCase().trim();
   if (!q) return 0;
@@ -74,16 +81,12 @@ export function scoreWorktree(worktree: Worktree | WorktreeState, query: string)
   const issueTitle = (worktree.issueTitle ?? "").toLowerCase();
   const prTitle = (worktree.prTitle ?? "").toLowerCase();
 
-  if (issueTitle && issueTitle.startsWith(q)) return 4;
-  if (issueTitle && issueTitle.includes(q)) return 3;
-  if (name.startsWith(q)) return 4;
-  if (name.includes(q)) return 3;
-  if (branch.startsWith(q)) return 2;
-  if (branch.includes(q)) return 1;
-  if (prTitle.startsWith(q)) return 2;
-  if (prTitle.includes(q)) return 1;
-
-  return 0;
+  return Math.max(
+    scoreField(issueTitle, q, 4, 3),
+    scoreField(name, q, 4, 3),
+    scoreField(branch, q, 2, 1),
+    scoreField(prTitle, q, 2, 1)
+  );
 }
 
 export function computeStatus(
