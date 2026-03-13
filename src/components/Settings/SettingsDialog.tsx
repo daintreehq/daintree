@@ -253,6 +253,7 @@ export function SettingsDialog({
       if (searchQuery) {
         e.stopPropagation();
         setSearchQuery("");
+      } else {
         searchInputRef.current?.blur();
       }
     } else if (isSearching && searchResults.length > 0) {
@@ -383,8 +384,17 @@ export function SettingsDialog({
         <div className="w-48 border-r border-canopy-border bg-canopy-bg/50 p-3 flex flex-col shrink-0">
           <h2 className="text-sm font-semibold text-canopy-text mb-2 px-2">Settings</h2>
 
-          <div className="relative mb-2">
-            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-canopy-text/40 pointer-events-none" />
+          <div
+            className={cn(
+              "flex items-center gap-1.5 px-2 py-1.5 mb-2 rounded-[var(--radius-md)]",
+              "bg-canopy-bg border border-canopy-border",
+              "focus-within:border-canopy-accent focus-within:ring-1 focus-within:ring-canopy-accent/20"
+            )}
+          >
+            <Search
+              className="w-3.5 h-3.5 shrink-0 text-canopy-text/40 pointer-events-none"
+              aria-hidden="true"
+            />
             <input
               ref={searchInputRef}
               type="text"
@@ -393,20 +403,17 @@ export function SettingsDialog({
               onChange={(e) => setSearchQuery(e.target.value)}
               onKeyDown={handleSearchKeyDown}
               aria-label="Search settings"
-              className={cn(
-                "w-full pl-7 pr-6 py-1.5 text-xs rounded-[var(--radius-md)] border transition-colors",
-                "bg-canopy-bg border-canopy-border text-canopy-text placeholder:text-canopy-text/40",
-                "focus:outline-none focus:border-canopy-accent"
-              )}
+              className="flex-1 min-w-0 text-xs bg-transparent text-canopy-text placeholder:text-canopy-text/40 focus:outline-none"
             />
             {searchQuery && (
               <button
+                type="button"
                 onClick={() => {
                   setSearchQuery("");
                   searchInputRef.current?.focus();
                 }}
                 aria-label="Clear search"
-                className="absolute right-2 top-1/2 -translate-y-1/2 text-canopy-text/40 hover:text-canopy-text transition-colors"
+                className="flex items-center justify-center w-5 h-5 rounded shrink-0 text-canopy-text/40 hover:text-canopy-text"
               >
                 <X className="w-3 h-3" />
               </button>
