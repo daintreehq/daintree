@@ -137,10 +137,19 @@ describe("branchPickerUtils", () => {
 
   describe("filterBranches (deprecated, backward compat)", () => {
     const branches: BranchOption[] = [
-      makeBranchOption("main", { isCurrent: true, labelText: "main (current)", searchText: "main (current)" }),
+      makeBranchOption("main", {
+        isCurrent: true,
+        labelText: "main (current)",
+        searchText: "main (current)",
+      }),
       makeBranchOption("feature/auth"),
       makeBranchOption("feature/ui-improvements"),
-      makeBranchOption("origin/develop", { isRemote: true, remoteName: "origin", labelText: "origin/develop (remote)", searchText: "origin/develop (remote)" }),
+      makeBranchOption("origin/develop", {
+        isRemote: true,
+        remoteName: "origin",
+        labelText: "origin/develop (remote)",
+        searchText: "origin/develop (remote)",
+      }),
     ];
 
     it("returns all branches when query is empty", () => {
@@ -227,9 +236,7 @@ describe("branchPickerUtils", () => {
       });
 
       it("soft caps at emptyQueryLimit", () => {
-        const manyBranches = Array.from({ length: 600 }, (_, i) =>
-          makeBranchOption(`branch-${i}`)
-        );
+        const manyBranches = Array.from({ length: 600 }, (_, i) => makeBranchOption(`branch-${i}`));
         const rows = buildBranchRows(manyBranches, {
           query: "",
           recentBranchNames: [],
