@@ -72,6 +72,9 @@ export const SEL = {
     reviewHubButton: '[aria-label="Open Review & Commit"]',
     filterButton: '[aria-label="Filter and sort worktrees"]',
     filterPopover: '[data-testid="worktree-filter-popover"]',
+    openOverviewButton: '[aria-label="Open worktrees overview"]',
+    overviewModal: '[role="dialog"][aria-labelledby="worktree-overview-title"]',
+    overviewClose: '[aria-label="Close overview"]',
   },
   dock: {
     container: "#dock-container",
@@ -96,6 +99,7 @@ export const SEL = {
     addButton: '[data-testid="project-add-button"]',
     projectSettings: 'button:has-text("Project Settings")',
     projectSettingsAlt: 'button:has-text("Settings")',
+    closeButton: '[aria-label="Close project"]',
   },
   trash: {
     container: '[data-testid="trash-container"]',
