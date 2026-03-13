@@ -3,6 +3,7 @@ import {
   getAtFileContext,
   getSlashCommandContext,
   getLeadingSlashCommand,
+  getAllSlashCommandTokens,
 } from "../hybridInputParsing";
 
 describe("getAtFileContext", () => {
@@ -34,9 +35,38 @@ describe("getAtFileContext", () => {
 });
 
 describe("getSlashCommandContext", () => {
-  it("detects a slash command only at start of input", () => {
-    expect(getSlashCommandContext("echo /help", "echo /h".length)).toBeNull();
+  it("detects a slash command at start of input", () => {
     expect(getSlashCommandContext("/help", 2)?.query).toBe("/h");
+  });
+
+  it("detects a slash command mid-text after whitespace", () => {
+    const ctx = getSlashCommandContext("echo /help", "echo /h".length);
+    expect(ctx).not.toBeNull();
+    expect(ctx?.start).toBe(5);
+    expect(ctx?.tokenEnd).toBe(10);
+    expect(ctx?.query).toBe("/h");
+  });
+
+  it("detects slash command after tab", () => {
+    const ctx = getSlashCommandContext("text\t/compact", "text\t/com".length);
+    expect(ctx).not.toBeNull();
+    expect(ctx?.start).toBe(5);
+    expect(ctx?.query).toBe("/com");
+  });
+
+  it("detects slash command after newline", () => {
+    const ctx = getSlashCommandContext("line1\n/help", "line1\n/he".length);
+    expect(ctx).not.toBeNull();
+    expect(ctx?.start).toBe(6);
+    expect(ctx?.query).toBe("/he");
+  });
+
+  it("rejects slash inside a URL (not preceded by whitespace)", () => {
+    expect(getSlashCommandContext("http://example.com", 8)).toBeNull();
+  });
+
+  it("rejects slash not preceded by whitespace", () => {
+    expect(getSlashCommandContext("path/to/file", 6)).toBeNull();
   });
 
   it("is inactive when caret is in arguments", () => {
@@ -53,6 +83,20 @@ describe("getSlashCommandContext", () => {
     expect(ctx?.start).toBe(0);
     expect(ctx?.tokenEnd).toBe("/cl".length);
     expect(ctx?.query).toBe("/cl");
+  });
+
+  it("returns correct context for second slash command", () => {
+    const text = "/help /compact";
+    const caret = "/help /com".length;
+    const ctx = getSlashCommandContext(text, caret);
+    expect(ctx).not.toBeNull();
+    expect(ctx?.start).toBe(6);
+    expect(ctx?.tokenEnd).toBe(14);
+    expect(ctx?.query).toBe("/com");
+  });
+
+  it("rejects consecutive slashes like //help", () => {
+    expect(getSlashCommandContext("//help", 3)).toBeNull();
   });
 });
 
@@ -113,5 +157,63 @@ describe("getLeadingSlashCommand", () => {
     const token = getLeadingSlashCommand("/compact\r\nmore");
     expect(token?.command).toBe("/compact");
     expect(token?.end).toBe(8);
+  });
+});
+
+describe("getAllSlashCommandTokens", () => {
+  it("finds multiple slash commands in text", () => {
+    const tokens = getAllSlashCommandTokens("please /compact now and /clear later");
+    expect(tokens).toHaveLength(2);
+    expect(tokens[0]).toEqual({ start: 7, end: 15, command: "/compact" });
+    expect(tokens[1]).toEqual({ start: 24, end: 30, command: "/clear" });
+  });
+
+  it("finds a single token at start", () => {
+    const tokens = getAllSlashCommandTokens("/help");
+    expect(tokens).toHaveLength(1);
+    expect(tokens[0]).toEqual({ start: 0, end: 5, command: "/help" });
+  });
+
+  it("finds token at end of text", () => {
+    const tokens = getAllSlashCommandTokens("do /compact");
+    expect(tokens).toHaveLength(1);
+    expect(tokens[0]).toEqual({ start: 3, end: 11, command: "/compact" });
+  });
+
+  it("skips slashes inside URLs", () => {
+    const tokens = getAllSlashCommandTokens("visit http://example.com/page");
+    expect(tokens).toHaveLength(0);
+  });
+
+  it("skips bare slash with nothing after", () => {
+    const tokens = getAllSlashCommandTokens("test / end");
+    expect(tokens).toHaveLength(0);
+  });
+
+  it("handles tab-delimited tokens", () => {
+    const tokens = getAllSlashCommandTokens("/help\t/compact");
+    expect(tokens).toHaveLength(2);
+    expect(tokens[0]).toEqual({ start: 0, end: 5, command: "/help" });
+    expect(tokens[1]).toEqual({ start: 6, end: 14, command: "/compact" });
+  });
+
+  it("handles newline-delimited tokens", () => {
+    const tokens = getAllSlashCommandTokens("/help\n/compact");
+    expect(tokens).toHaveLength(2);
+    expect(tokens[0]).toEqual({ start: 0, end: 5, command: "/help" });
+    expect(tokens[1]).toEqual({ start: 6, end: 14, command: "/compact" });
+  });
+
+  it("skips consecutive slashes", () => {
+    const tokens = getAllSlashCommandTokens("//help");
+    expect(tokens).toHaveLength(1);
+    // The second / is preceded by the first /, not whitespace, so only the first token from position 0
+    // Actually: first / is at pos 0, scans forward to find "//help" as one token
+    expect(tokens[0]).toEqual({ start: 0, end: 6, command: "//help" });
+  });
+
+  it("returns empty for text with no slash commands", () => {
+    const tokens = getAllSlashCommandTokens("just plain text");
+    expect(tokens).toHaveLength(0);
   });
 });

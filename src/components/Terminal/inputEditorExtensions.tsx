@@ -10,7 +10,12 @@ import type { Extension } from "@codemirror/state";
 import { StateField, StateEffect, Prec, Compartment } from "@codemirror/state";
 import { insertNewline } from "@codemirror/commands";
 import type { SlashCommand } from "@shared/types";
-import { getLeadingSlashCommand, getAllAtFileTokens, type AtFileToken } from "./hybridInputParsing";
+import {
+  getAllSlashCommandTokens,
+  getAllAtFileTokens,
+  type AtFileToken,
+  type SlashCommandToken,
+} from "./hybridInputParsing";
 
 const MAX_TEXTAREA_HEIGHT_PX = 160;
 const LINE_HEIGHT_PX = 20;
@@ -208,29 +213,36 @@ interface SlashChipFieldConfig {
   commandMap: Map<string, SlashCommand>;
 }
 
+interface SlashChipState {
+  decorations: ReturnType<typeof Decoration.set>;
+  tokens: SlashCommandToken[];
+}
+
+function buildSlashChipState(text: string, config: SlashChipFieldConfig): SlashChipState {
+  const tokens = getAllSlashCommandTokens(text);
+  if (tokens.length === 0) {
+    return { decorations: Decoration.none, tokens: [] };
+  }
+
+  const ranges = tokens.map((token) => {
+    const isValid = config.commandMap.has(token.command);
+    const mark = isValid ? slashChipMark : invalidChipMark;
+    return mark.range(token.start, token.end);
+  });
+
+  return { decorations: Decoration.set(ranges), tokens };
+}
+
 export function createSlashChipField(config: SlashChipFieldConfig) {
-  return StateField.define({
+  return StateField.define<SlashChipState>({
     create(state) {
-      const token = getLeadingSlashCommand(state.doc.toString());
-      if (!token) return Decoration.none;
-
-      const isValid = config.commandMap.has(token.command);
-      const mark = isValid ? slashChipMark : invalidChipMark;
-
-      return Decoration.set([mark.range(token.start, token.end)]);
+      return buildSlashChipState(state.doc.toString(), config);
     },
-    update(deco, tr) {
-      if (!tr.docChanged) return deco;
-
-      const token = getLeadingSlashCommand(tr.state.doc.toString());
-      if (!token) return Decoration.none;
-
-      const isValid = config.commandMap.has(token.command);
-      const mark = isValid ? slashChipMark : invalidChipMark;
-
-      return Decoration.set([mark.range(token.start, token.end)]);
+    update(value, tr) {
+      if (!tr.docChanged) return value;
+      return buildSlashChipState(tr.state.doc.toString(), config);
     },
-    provide: (f) => EditorView.decorations.from(f),
+    provide: (f) => EditorView.decorations.from(f, (state) => state.decorations),
   });
 }
 
@@ -249,8 +261,9 @@ function createTooltipContent(command: SlashCommand): HTMLElement {
 
 export function createSlashTooltip(commandMap: Map<string, SlashCommand>) {
   return hoverTooltip((view, pos) => {
-    const token = getLeadingSlashCommand(view.state.doc.toString());
-    if (!token || pos < token.start || pos >= token.end) return null;
+    const tokens = getAllSlashCommandTokens(view.state.doc.toString());
+    const token = tokens.find((t) => pos >= t.start && pos < t.end);
+    if (!token) return null;
 
     const command = commandMap.get(token.command);
     if (!command) return null;

@@ -41,14 +41,19 @@ export interface SlashCommandContext {
 
 export function getSlashCommandContext(text: string, caret: number): SlashCommandContext | null {
   if (caret < 0 || caret > text.length) return null;
-  if (!text.startsWith("/")) return null;
-  if (caret < 1) return null;
+  const beforeCaret = text.slice(0, caret);
+  const slashStart = beforeCaret.lastIndexOf("/");
+  if (slashStart === -1) return null;
+  if (slashStart > 0 && !/\s/.test(beforeCaret[slashStart - 1])) return null;
 
-  const whitespaceMatch = text.slice(1).match(/\s/);
-  const tokenEnd = whitespaceMatch ? whitespaceMatch.index! + 1 : text.length;
-  if (caret > tokenEnd) return null;
+  let tokenEnd = slashStart + 1;
+  while (tokenEnd < text.length && !/\s/.test(text[tokenEnd])) {
+    tokenEnd++;
+  }
 
-  return { start: 0, tokenEnd, query: text.slice(0, caret) };
+  if (caret < slashStart + 1 || caret > tokenEnd) return null;
+
+  return { start: slashStart, tokenEnd, query: text.slice(slashStart, caret) };
 }
 
 export interface SlashCommandToken {
@@ -70,6 +75,42 @@ export function getLeadingSlashCommand(text: string): SlashCommandToken | null {
     end: tokenEnd,
     command: text.slice(0, tokenEnd),
   };
+}
+
+export function getAllSlashCommandTokens(text: string): SlashCommandToken[] {
+  const tokens: SlashCommandToken[] = [];
+  let i = 0;
+
+  while (i < text.length) {
+    if (text[i] !== "/") {
+      i++;
+      continue;
+    }
+
+    if (i > 0 && !/\s/.test(text[i - 1])) {
+      i++;
+      continue;
+    }
+
+    const slashStart = i;
+    i++; // Move past /
+
+    // Scan forward for token end (first whitespace or end of string)
+    while (i < text.length && !/\s/.test(text[i])) {
+      i++;
+    }
+
+    // Must have at least one character after /
+    if (i > slashStart + 1) {
+      tokens.push({
+        start: slashStart,
+        end: i,
+        command: text.slice(slashStart, i),
+      });
+    }
+  }
+
+  return tokens;
 }
 
 export interface AtFileToken {
