@@ -62,6 +62,9 @@ export const SEL = {
   },
   browser: {
     addressBar: '[data-testid="browser-address-bar"]',
+    backButton: '[data-testid="browser-back"]',
+    forwardButton: '[data-testid="browser-forward"]',
+    reloadButton: '[data-testid="browser-reload"]',
   },
   projectSwitcher: {
     palette: '[data-testid="project-switcher-palette"]',
