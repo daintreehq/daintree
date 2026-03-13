@@ -241,7 +241,13 @@ export function FileViewerModal({
   }, [isOpen, isImageMode, mode]);
 
   return (
-    <AppDialog isOpen={isOpen} onClose={onClose} size="6xl" maxHeight="max-h-[90vh]" data-testid="file-viewer-dialog">
+    <AppDialog
+      isOpen={isOpen}
+      onClose={onClose}
+      size="6xl"
+      maxHeight="max-h-[90vh]"
+      data-testid="file-viewer-dialog"
+    >
       <AppDialog.Header className="py-3">
         <div className="flex items-center gap-3 min-w-0">
           <TooltipProvider>
@@ -446,7 +452,10 @@ export function FileViewerModal({
             {loadState === "loaded" && content !== null && (
               <>
                 {metadata && (
-                  <div data-testid="file-viewer-metadata" className="px-3 py-1 border-b border-canopy-border text-xs text-muted-foreground font-mono">
+                  <div
+                    data-testid="file-viewer-metadata"
+                    className="px-3 py-1 border-b border-canopy-border text-xs text-muted-foreground font-mono"
+                  >
                     {metadata.lineCount} lines · {metadata.sizeLabel} · UTF-8
                   </div>
                 )}
