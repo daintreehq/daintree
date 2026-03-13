@@ -149,6 +149,7 @@ export type WorkspaceHostRequest =
     }
   // Branch operations
   | { type: "list-branches"; requestId: string; rootPath: string }
+  | { type: "get-recent-branches"; requestId: string; rootPath: string }
   // Git operations
   | {
       type: "get-file-diff";
@@ -232,6 +233,7 @@ export type WorkspaceHostEvent =
   | { type: "delete-worktree-result"; requestId: string; success: boolean; error?: string }
   // Branch operation responses
   | { type: "list-branches-result"; requestId: string; branches: BranchInfo[]; error?: string }
+  | { type: "get-recent-branches-result"; requestId: string; branches: string[]; error?: string }
   // Git operation responses
   | { type: "get-file-diff-result"; requestId: string; diff: string; error?: string }
   // Spontaneous updates (no requestId - these are pushed events)

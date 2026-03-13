@@ -606,6 +606,9 @@ const api: ElectronAPI = {
 
     listBranches: (rootPath: string) => _typedInvoke(CHANNELS.WORKTREE_LIST_BRANCHES, { rootPath }),
 
+    getRecentBranches: (rootPath: string) =>
+      _typedInvoke(CHANNELS.WORKTREE_GET_RECENT_BRANCHES, { rootPath }),
+
     getDefaultPath: (rootPath: string, branchName: string): Promise<string> =>
       _typedInvoke(CHANNELS.WORKTREE_GET_DEFAULT_PATH, { rootPath, branchName }),
 

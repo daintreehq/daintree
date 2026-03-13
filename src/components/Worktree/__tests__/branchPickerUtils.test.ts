@@ -3,9 +3,41 @@ import {
   formatBranchLabel,
   toBranchOption,
   filterBranches,
+  buildBranchRows,
   type BranchOption,
+  type BranchPickerRow,
 } from "../branchPickerUtils";
 import type { BranchInfo } from "@/types/electron";
+import type { WorktreeState } from "@shared/types";
+
+function makeBranchOption(name: string, overrides?: Partial<BranchOption>): BranchOption {
+  return {
+    name,
+    isCurrent: false,
+    isRemote: false,
+    remoteName: null,
+    labelText: name,
+    searchText: name.toLowerCase(),
+    ...overrides,
+  };
+}
+
+function makeWorktreeState(branch: string): WorktreeState {
+  return {
+    id: `wt-${branch}`,
+    path: `/worktrees/${branch}`,
+    name: branch,
+    branch,
+    isCurrent: false,
+    worktreeId: `wt-${branch}`,
+    worktreeChanges: null,
+    lastActivityTimestamp: null,
+  };
+}
+
+function getSelectableRows(rows: BranchPickerRow[]) {
+  return rows.filter((r) => r.kind === "option");
+}
 
 describe("branchPickerUtils", () => {
   describe("formatBranchLabel", () => {
@@ -75,238 +107,6 @@ describe("branchPickerUtils", () => {
     });
   });
 
-  describe("filterBranches", () => {
-    const branches: BranchOption[] = [
-      {
-        name: "main",
-        isCurrent: true,
-        isRemote: false,
-        remoteName: null,
-        labelText: "main (current)",
-        searchText: "main (current)",
-      },
-      {
-        name: "feature/auth",
-        isCurrent: false,
-        isRemote: false,
-        remoteName: null,
-        labelText: "feature/auth",
-        searchText: "feature/auth",
-      },
-      {
-        name: "feature/ui-improvements",
-        isCurrent: false,
-        isRemote: false,
-        remoteName: null,
-        labelText: "feature/ui-improvements",
-        searchText: "feature/ui-improvements",
-      },
-      {
-        name: "origin/develop",
-        isCurrent: false,
-        isRemote: true,
-        remoteName: "origin",
-        labelText: "origin/develop (remote)",
-        searchText: "origin/develop (remote)",
-      },
-    ];
-
-    it("returns all branches when query is empty", () => {
-      const result = filterBranches(branches, "", 200);
-      expect(result).toEqual(branches);
-    });
-
-    it("filters branches by substring (case-insensitive)", () => {
-      const result = filterBranches(branches, "feature", 200);
-      expect(result).toHaveLength(2);
-      expect(result.map((b) => b.name)).toEqual(["feature/auth", "feature/ui-improvements"]);
-    });
-
-    it("filters by case-insensitive match", () => {
-      const result = filterBranches(branches, "FEATURE", 200);
-      expect(result).toHaveLength(2);
-    });
-
-    it("matches partial strings", () => {
-      const result = filterBranches(branches, "ui", 200);
-      expect(result).toHaveLength(1);
-      expect(result[0].name).toBe("feature/ui-improvements");
-    });
-
-    it("matches labels including (current) and (remote)", () => {
-      const result = filterBranches(branches, "current", 200);
-      expect(result).toHaveLength(1);
-      expect(result[0].name).toBe("main");
-
-      const result2 = filterBranches(branches, "remote", 200);
-      expect(result2).toHaveLength(1);
-      expect(result2[0].name).toBe("origin/develop");
-    });
-
-    it("limits results to specified limit", () => {
-      const manyBranches = Array.from({ length: 300 }, (_, i) => ({
-        name: `branch-${i}`,
-        isCurrent: false,
-        isRemote: false,
-        remoteName: null,
-        labelText: `branch-${i}`,
-        searchText: `branch-${i}`,
-      }));
-
-      const result = filterBranches(manyBranches, "", 200);
-      expect(result).toHaveLength(200);
-    });
-
-    it("limits filtered results", () => {
-      const manyFeatures = Array.from({ length: 300 }, (_, i) => ({
-        name: `feature/branch-${i}`,
-        isCurrent: false,
-        isRemote: false,
-        remoteName: null,
-        labelText: `feature/branch-${i}`,
-        searchText: `feature/branch-${i}`,
-      }));
-
-      const result = filterBranches(manyFeatures, "feature", 150);
-      expect(result).toHaveLength(150);
-    });
-
-    it("returns empty array when no matches", () => {
-      const result = filterBranches(branches, "nonexistent", 200);
-      expect(result).toEqual([]);
-    });
-
-    it("handles empty branch list", () => {
-      const result = filterBranches([], "", 200);
-      expect(result).toEqual([]);
-
-      const result2 = filterBranches([], "anything", 200);
-      expect(result2).toEqual([]);
-    });
-
-    it("handles whitespace-only query as empty", () => {
-      const result = filterBranches(branches, "   ", 200);
-      expect(result).toEqual(branches);
-    });
-
-    it("trims query before matching", () => {
-      const result = filterBranches(branches, " feature ", 200);
-      expect(result).toHaveLength(2);
-      expect(result.map((b) => b.name)).toEqual(["feature/auth", "feature/ui-improvements"]);
-    });
-
-    it("uses default limit of 200 when not specified", () => {
-      const manyBranches = Array.from({ length: 300 }, (_, i) => ({
-        name: `branch-${i}`,
-        isCurrent: false,
-        isRemote: false,
-        remoteName: null,
-        labelText: `branch-${i}`,
-        searchText: `branch-${i}`,
-      }));
-
-      const result = filterBranches(manyBranches, "");
-      expect(result).toHaveLength(200);
-    });
-
-    it("handles limit of 0", () => {
-      const result = filterBranches(branches, "", 0);
-      expect(result).toEqual([]);
-
-      const result2 = filterBranches(branches, "feature", 0);
-      expect(result2).toEqual([]);
-    });
-
-    it("preserves order of branches", () => {
-      const orderedBranches: BranchOption[] = [
-        {
-          name: "z-last",
-          isCurrent: false,
-          isRemote: false,
-          remoteName: null,
-          labelText: "z-last",
-          searchText: "z-last",
-        },
-        {
-          name: "a-first",
-          isCurrent: false,
-          isRemote: false,
-          remoteName: null,
-          labelText: "a-first",
-          searchText: "a-first",
-        },
-        {
-          name: "m-middle",
-          isCurrent: false,
-          isRemote: false,
-          remoteName: null,
-          labelText: "m-middle",
-          searchText: "m-middle",
-        },
-      ];
-
-      const result = filterBranches(orderedBranches, "", 10);
-      expect(result.map((b) => b.name)).toEqual(["z-last", "a-first", "m-middle"]);
-    });
-
-    it("handles branches with special characters", () => {
-      const specialBranches: BranchOption[] = [
-        {
-          name: "feature/foo-bar",
-          isCurrent: false,
-          isRemote: false,
-          remoteName: null,
-          labelText: "feature/foo-bar",
-          searchText: "feature/foo-bar",
-        },
-        {
-          name: "feature/foo_bar",
-          isCurrent: false,
-          isRemote: false,
-          remoteName: null,
-          labelText: "feature/foo_bar",
-          searchText: "feature/foo_bar",
-        },
-        {
-          name: "feature/foo.bar",
-          isCurrent: false,
-          isRemote: false,
-          remoteName: null,
-          labelText: "feature/foo.bar",
-          searchText: "feature/foo.bar",
-        },
-      ];
-
-      const result = filterBranches(specialBranches, "foo-bar", 10);
-      expect(result).toHaveLength(1);
-      expect(result[0].name).toBe("feature/foo-bar");
-
-      const result2 = filterBranches(specialBranches, "foo_bar", 10);
-      expect(result2).toHaveLength(1);
-      expect(result2[0].name).toBe("feature/foo_bar");
-
-      const result3 = filterBranches(specialBranches, "foo.bar", 10);
-      expect(result3).toHaveLength(1);
-      expect(result3[0].name).toBe("feature/foo.bar");
-    });
-
-    it("stops filtering early when limit is reached", () => {
-      const manyFeatures = Array.from({ length: 1000 }, (_, i) => ({
-        name: `feature/branch-${i}`,
-        isCurrent: false,
-        isRemote: false,
-        remoteName: null,
-        labelText: `feature/branch-${i}`,
-        searchText: `feature/branch-${i}`,
-      }));
-
-      const result = filterBranches(manyFeatures, "feature", 50);
-      expect(result).toHaveLength(50);
-      expect(result[0].name).toBe("feature/branch-0");
-      expect(result[49].name).toBe("feature/branch-49");
-    });
-  });
-
   describe("toBranchOption edge cases", () => {
     it("handles branch names with mixed case", () => {
       const branch: BranchInfo = {
@@ -332,6 +132,291 @@ describe("branchPickerUtils", () => {
       expect(option.labelText).toBe("main (remote)");
       expect(option.isRemote).toBe(true);
       expect(option.remoteName).toBe("origin");
+    });
+  });
+
+  describe("filterBranches (deprecated, backward compat)", () => {
+    const branches: BranchOption[] = [
+      makeBranchOption("main", { isCurrent: true, labelText: "main (current)", searchText: "main (current)" }),
+      makeBranchOption("feature/auth"),
+      makeBranchOption("feature/ui-improvements"),
+      makeBranchOption("origin/develop", { isRemote: true, remoteName: "origin", labelText: "origin/develop (remote)", searchText: "origin/develop (remote)" }),
+    ];
+
+    it("returns all branches when query is empty", () => {
+      const result = filterBranches(branches, "", 200);
+      expect(result).toEqual(branches);
+    });
+
+    it("filters branches by substring (case-insensitive)", () => {
+      const result = filterBranches(branches, "feature", 200);
+      expect(result).toHaveLength(2);
+      expect(result.map((b) => b.name)).toEqual(["feature/auth", "feature/ui-improvements"]);
+    });
+
+    it("handles empty branch list", () => {
+      expect(filterBranches([], "", 200)).toEqual([]);
+      expect(filterBranches([], "anything", 200)).toEqual([]);
+    });
+
+    it("handles limit of 0", () => {
+      expect(filterBranches(branches, "", 0)).toEqual([]);
+    });
+  });
+
+  describe("buildBranchRows", () => {
+    const branches: BranchOption[] = [
+      makeBranchOption("main"),
+      makeBranchOption("feature/auth"),
+      makeBranchOption("feature/ui-improvements"),
+      makeBranchOption("feature/issue-2841-improve-branch-picker-fuzzy"),
+      makeBranchOption("bugfix/login-crash"),
+    ];
+
+    describe("empty query (MRU sorting)", () => {
+      it("returns all branches without section header when no recent branches", () => {
+        const rows = buildBranchRows(branches, {
+          query: "",
+          recentBranchNames: [],
+          worktreeByBranch: new Map(),
+        });
+        const selectable = getSelectableRows(rows);
+        expect(selectable).toHaveLength(5);
+        expect(rows.every((r) => r.kind === "option")).toBe(true);
+      });
+
+      it("shows recent branches first with section header", () => {
+        const rows = buildBranchRows(branches, {
+          query: "",
+          recentBranchNames: ["feature/auth", "main"],
+          worktreeByBranch: new Map(),
+        });
+
+        expect(rows[0]).toEqual({ kind: "section", label: "Recent" });
+        const selectable = getSelectableRows(rows);
+        expect(selectable[0].name).toBe("feature/auth");
+        expect(selectable[0].isRecent).toBe(true);
+        expect(selectable[1].name).toBe("main");
+        expect(selectable[1].isRecent).toBe(true);
+        expect(selectable[2].isRecent).toBe(false);
+      });
+
+      it("respects MRU order for recent branches", () => {
+        const rows = buildBranchRows(branches, {
+          query: "",
+          recentBranchNames: ["bugfix/login-crash", "feature/auth"],
+          worktreeByBranch: new Map(),
+        });
+
+        const selectable = getSelectableRows(rows);
+        expect(selectable[0].name).toBe("bugfix/login-crash");
+        expect(selectable[1].name).toBe("feature/auth");
+      });
+
+      it("ignores recent branch names that don't exist in the branch list", () => {
+        const rows = buildBranchRows(branches, {
+          query: "",
+          recentBranchNames: ["nonexistent", "feature/auth"],
+          worktreeByBranch: new Map(),
+        });
+
+        const selectable = getSelectableRows(rows);
+        const recent = selectable.filter((r) => r.isRecent);
+        expect(recent).toHaveLength(1);
+        expect(recent[0].name).toBe("feature/auth");
+      });
+
+      it("soft caps at emptyQueryLimit", () => {
+        const manyBranches = Array.from({ length: 600 }, (_, i) =>
+          makeBranchOption(`branch-${i}`)
+        );
+        const rows = buildBranchRows(manyBranches, {
+          query: "",
+          recentBranchNames: [],
+          worktreeByBranch: new Map(),
+          emptyQueryLimit: 500,
+        });
+
+        const selectable = getSelectableRows(rows);
+        expect(selectable.length).toBeLessThanOrEqual(500);
+      });
+    });
+
+    describe("fuzzy search", () => {
+      it("matches substring queries", () => {
+        const rows = buildBranchRows(branches, {
+          query: "auth",
+          recentBranchNames: [],
+          worktreeByBranch: new Map(),
+        });
+
+        const selectable = getSelectableRows(rows);
+        expect(selectable.length).toBeGreaterThanOrEqual(1);
+        expect(selectable[0].name).toBe("feature/auth");
+      });
+
+      it("matches fuzzy queries across slash separators", () => {
+        const rows = buildBranchRows(branches, {
+          query: "feature auth",
+          recentBranchNames: [],
+          worktreeByBranch: new Map(),
+        });
+
+        const selectable = getSelectableRows(rows);
+        expect(selectable.length).toBeGreaterThanOrEqual(1);
+        const names = selectable.map((r) => r.name);
+        expect(names).toContain("feature/auth");
+      });
+
+      it("matches deep in branch name (ignoreLocation: true)", () => {
+        const rows = buildBranchRows(branches, {
+          query: "2841",
+          recentBranchNames: [],
+          worktreeByBranch: new Map(),
+        });
+
+        const selectable = getSelectableRows(rows);
+        expect(selectable.length).toBeGreaterThanOrEqual(1);
+        expect(selectable[0].name).toBe("feature/issue-2841-improve-branch-picker-fuzzy");
+      });
+
+      it("returns match ranges for highlighting", () => {
+        const rows = buildBranchRows(branches, {
+          query: "auth",
+          recentBranchNames: [],
+          worktreeByBranch: new Map(),
+        });
+
+        const selectable = getSelectableRows(rows);
+        expect(selectable[0].matchRanges.length).toBeGreaterThan(0);
+        // Fuse may return multiple non-contiguous ranges for fuzzy matching
+        // Verify the ranges cover the characters in the match
+        const allHighlighted = selectable[0].matchRanges.map((r) =>
+          selectable[0].name.substring(r.start, r.end + 1)
+        );
+        expect(allHighlighted.join("")).toContain("au");
+      });
+
+      it("returns empty for no matches", () => {
+        const rows = buildBranchRows(branches, {
+          query: "zzzznonexistent",
+          recentBranchNames: [],
+          worktreeByBranch: new Map(),
+        });
+        expect(getSelectableRows(rows)).toHaveLength(0);
+      });
+
+      it("no section headers in fuzzy results", () => {
+        const rows = buildBranchRows(branches, {
+          query: "feature",
+          recentBranchNames: ["feature/auth"],
+          worktreeByBranch: new Map(),
+        });
+        expect(rows.every((r) => r.kind === "option")).toBe(true);
+      });
+    });
+
+    describe("special characters in branch names", () => {
+      const specialBranches = [
+        makeBranchOption("feature/foo-bar"),
+        makeBranchOption("feature/foo_bar"),
+        makeBranchOption("feature/foo.bar"),
+        makeBranchOption("!hotfix/urgent"),
+        makeBranchOption("^caret/branch"),
+        makeBranchOption("$dollar/branch"),
+      ];
+
+      it("does not crash on branch names with !, ^, $ prefixes", () => {
+        const rows = buildBranchRows(specialBranches, {
+          query: "hotfix",
+          recentBranchNames: [],
+          worktreeByBranch: new Map(),
+        });
+        expect(getSelectableRows(rows).length).toBeGreaterThanOrEqual(1);
+      });
+
+      it("matches branches with dots and underscores", () => {
+        const rows = buildBranchRows(specialBranches, {
+          query: "foo.bar",
+          recentBranchNames: [],
+          worktreeByBranch: new Map(),
+        });
+        const selectable = getSelectableRows(rows);
+        expect(selectable.length).toBeGreaterThanOrEqual(1);
+        expect(selectable[0].name).toBe("feature/foo.bar");
+      });
+    });
+
+    describe("worktree-in-use detection", () => {
+      it("attaches worktree state to in-use branches", () => {
+        const wt = makeWorktreeState("feature/auth");
+        const worktreeByBranch = new Map([["feature/auth", wt]]);
+
+        const rows = buildBranchRows(branches, {
+          query: "",
+          recentBranchNames: [],
+          worktreeByBranch,
+        });
+
+        const selectable = getSelectableRows(rows);
+        const authRow = selectable.find((r) => r.name === "feature/auth");
+        expect(authRow?.inUseWorktree).toBe(wt);
+      });
+
+      it("leaves inUseWorktree null for non-in-use branches", () => {
+        const rows = buildBranchRows(branches, {
+          query: "",
+          recentBranchNames: [],
+          worktreeByBranch: new Map(),
+        });
+
+        const selectable = getSelectableRows(rows);
+        expect(selectable.every((r) => r.inUseWorktree === null)).toBe(true);
+      });
+
+      it("attaches worktree state in fuzzy results", () => {
+        const wt = makeWorktreeState("feature/auth");
+        const worktreeByBranch = new Map([["feature/auth", wt]]);
+
+        const rows = buildBranchRows(branches, {
+          query: "auth",
+          recentBranchNames: [],
+          worktreeByBranch,
+        });
+
+        const selectable = getSelectableRows(rows);
+        expect(selectable[0].inUseWorktree).toBe(wt);
+      });
+    });
+
+    describe("edge cases", () => {
+      it("handles empty branch list", () => {
+        const rows = buildBranchRows([], {
+          query: "",
+          recentBranchNames: [],
+          worktreeByBranch: new Map(),
+        });
+        expect(rows).toHaveLength(0);
+      });
+
+      it("handles empty branch list with query", () => {
+        const rows = buildBranchRows([], {
+          query: "test",
+          recentBranchNames: [],
+          worktreeByBranch: new Map(),
+        });
+        expect(rows).toHaveLength(0);
+      });
+
+      it("handles whitespace-only query as empty", () => {
+        const rows = buildBranchRows(branches, {
+          query: "   ",
+          recentBranchNames: [],
+          worktreeByBranch: new Map(),
+        });
+        const selectable = getSelectableRows(rows);
+        expect(selectable).toHaveLength(5);
+      });
     });
   });
 });

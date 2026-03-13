@@ -24,7 +24,14 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { parseBranchInput, suggestPrefixes, detectPrefixFromIssue } from "./branchPrefixUtils";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
-import { toBranchOption, filterBranches, type BranchOption } from "./branchPickerUtils";
+import {
+  toBranchOption,
+  buildBranchRows,
+  type BranchOption,
+  type BranchPickerRow,
+} from "./branchPickerUtils";
+import { useWorktreeDataStore } from "@/store/worktreeDataStore";
+import type { WorktreeState } from "@shared/types";
 import { usePreferencesStore } from "@/store/preferencesStore";
 import { useGitHubConfigStore } from "@/store/githubConfigStore";
 import { notify } from "@/lib/notify";
@@ -33,6 +40,42 @@ import { useRecipeStore } from "@/store/recipeStore";
 import { mapCreationError, type WorktreeCreationError } from "./worktreeCreationErrors";
 import { useProjectStore } from "@/store/projectStore";
 import type { ProjectSettings } from "@/types";
+
+function HighlightBranchText({
+  text,
+  matchRanges,
+  nameLength,
+}: {
+  text: string;
+  matchRanges: { start: number; end: number }[];
+  nameLength: number;
+}) {
+  if (matchRanges.length === 0) return <>{text}</>;
+
+  const nodes: React.ReactNode[] = [];
+  let lastIndex = 0;
+
+  for (let i = 0; i < matchRanges.length; i++) {
+    const { start, end } = matchRanges[i];
+    if (start >= nameLength) break;
+    const clampedEnd = Math.min(end, nameLength - 1);
+    if (start > lastIndex) {
+      nodes.push(text.substring(lastIndex, start));
+    }
+    nodes.push(
+      <mark key={i} className="bg-canopy-accent/25 text-inherit rounded-sm">
+        {text.substring(start, clampedEnd + 1)}
+      </mark>
+    );
+    lastIndex = clampedEnd + 1;
+  }
+
+  if (lastIndex < text.length) {
+    nodes.push(text.substring(lastIndex));
+  }
+
+  return <>{nodes}</>;
+}
 
 interface NewWorktreeDialogProps {
   isOpen: boolean;
@@ -73,6 +116,7 @@ export function NewWorktreeDialog({
   const [branchPickerOpen, setBranchPickerOpen] = useState(false);
   const [branchQuery, setBranchQuery] = useState("");
   const [selectedIndex, setSelectedIndex] = useState(0);
+  const [recentBranchNames, setRecentBranchNames] = useState<string[]>([]);
 
   const [projectSettings, setProjectSettings] = useState<ProjectSettings | null>(null);
   const [selectedRecipeId, setSelectedRecipeId] = useState<string | null>(null);
@@ -219,9 +263,28 @@ export function NewWorktreeDialog({
 
   const branchOptions = useMemo(() => branches.map(toBranchOption), [branches]);
 
-  const filteredBranches = useMemo(
-    () => filterBranches(branchOptions, branchQuery, 200),
-    [branchOptions, branchQuery]
+  const worktreeByBranch = useMemo(() => {
+    const map = new Map<string, WorktreeState>();
+    const worktrees = useWorktreeDataStore.getState().getWorktreeList();
+    for (const wt of worktrees) {
+      if (wt.branch) map.set(wt.branch, wt);
+    }
+    return map;
+  }, [branches]);
+
+  const branchRows = useMemo(
+    () =>
+      buildBranchRows(branchOptions, {
+        query: branchQuery,
+        recentBranchNames,
+        worktreeByBranch,
+      }),
+    [branchOptions, branchQuery, recentBranchNames, worktreeByBranch]
+  );
+
+  const selectableRows = useMemo(
+    () => branchRows.filter((r): r is BranchPickerRow & { kind: "option" } => r.kind === "option"),
+    [branchRows]
   );
 
   const selectedBranchOption = useMemo(
@@ -282,11 +345,13 @@ export function NewWorktreeDialog({
   }, [branchQuery]);
 
   useEffect(() => {
-    if (branchListRef.current && selectedIndex >= 0 && filteredBranches.length > 0) {
-      const selectedItem = branchListRef.current.children[selectedIndex] as HTMLElement;
-      selectedItem?.scrollIntoView({ block: "nearest" });
+    if (branchListRef.current && selectedIndex >= 0 && selectableRows.length > 0) {
+      const el = branchListRef.current.querySelector(
+        `[data-option-index="${selectedIndex}"]`
+      ) as HTMLElement;
+      el?.scrollIntoView({ block: "nearest" });
     }
-  }, [selectedIndex, filteredBranches.length]);
+  }, [selectedIndex, selectableRows.length]);
 
   const handleBranchSelect = (option: BranchOption) => {
     setBaseBranch(option.name);
@@ -295,7 +360,7 @@ export function NewWorktreeDialog({
   };
 
   const handleBranchKeyDown = (e: React.KeyboardEvent) => {
-    if (filteredBranches.length === 0) {
+    if (selectableRows.length === 0) {
       if (e.key === "Escape") {
         e.preventDefault();
         setBranchPickerOpen(false);
@@ -306,16 +371,16 @@ export function NewWorktreeDialog({
     switch (e.key) {
       case "ArrowDown":
         e.preventDefault();
-        setSelectedIndex((prev) => (prev + 1) % filteredBranches.length);
+        setSelectedIndex((prev) => (prev + 1) % selectableRows.length);
         break;
       case "ArrowUp":
         e.preventDefault();
-        setSelectedIndex((prev) => (prev - 1 + filteredBranches.length) % filteredBranches.length);
+        setSelectedIndex((prev) => (prev - 1 + selectableRows.length) % selectableRows.length);
         break;
       case "Enter":
         e.preventDefault();
-        if (filteredBranches[selectedIndex]) {
-          handleBranchSelect(filteredBranches[selectedIndex]);
+        if (selectableRows[selectedIndex]) {
+          handleBranchSelect(selectableRows[selectedIndex]);
         }
         break;
       case "Escape":
@@ -416,6 +481,12 @@ export function NewWorktreeDialog({
     setPrefixSelectedIndex(0);
 
     let isCurrent = true;
+
+    worktreeClient.getRecentBranches(rootPath).then((recent) => {
+      if (isCurrent) setRecentBranchNames(recent);
+    }).catch(() => {
+      if (isCurrent) setRecentBranchNames([]);
+    });
 
     worktreeClient
       .listBranches(rootPath)
@@ -999,7 +1070,7 @@ export function NewWorktreeDialog({
                         aria-controls="branch-list"
                         aria-expanded={branchPickerOpen}
                         aria-activedescendant={
-                          filteredBranches.length > 0 && selectedIndex >= 0
+                          selectableRows.length > 0 && selectedIndex >= 0
                             ? `branch-option-${selectedIndex}`
                             : undefined
                         }
@@ -1011,35 +1082,76 @@ export function NewWorktreeDialog({
                       role="listbox"
                       className="max-h-[300px] overflow-y-auto p-1"
                     >
-                      {filteredBranches.length === 0 ? (
+                      {selectableRows.length === 0 ? (
                         <div className="py-6 text-center text-sm text-muted-foreground">
                           {branchQuery ? "No branches found" : "No branches available"}
                         </div>
                       ) : (
-                        filteredBranches.map((option, index) => (
-                          <div
-                            key={option.name}
-                            id={`branch-option-${index}`}
-                            role="option"
-                            aria-selected={option.name === baseBranch}
-                            onClick={() => handleBranchSelect(option)}
-                            className={cn(
-                              "flex items-center justify-between gap-2 px-2 py-1.5 text-sm rounded-[var(--radius-sm)] cursor-pointer hover:bg-canopy-border",
-                              option.name === baseBranch && "bg-canopy-border",
-                              index === selectedIndex && "bg-canopy-accent/10"
-                            )}
-                          >
-                            <span className="truncate">{option.labelText}</span>
-                            {option.name === baseBranch && (
-                              <Check className="h-4 w-4 shrink-0 text-canopy-accent" />
-                            )}
-                          </div>
-                        ))
+                        (() => {
+                          let optionIndex = 0;
+                          return branchRows.map((row) => {
+                            if (row.kind === "section") {
+                              return (
+                                <div
+                                  key={`section-${row.label}`}
+                                  role="presentation"
+                                  className="px-2 py-1 text-xs font-medium text-canopy-text/50 uppercase tracking-wider"
+                                >
+                                  {row.label}
+                                </div>
+                              );
+                            }
+                            const idx = optionIndex++;
+                            return (
+                              <div
+                                key={row.name}
+                                id={`branch-option-${idx}`}
+                                data-option-index={idx}
+                                role="option"
+                                aria-selected={row.name === baseBranch}
+                                onClick={() => {
+                                  if (row.inUseWorktree) {
+                                    actionService.dispatch("worktree.setActive", {
+                                      worktreeId: row.inUseWorktree.id,
+                                    });
+                                    setBranchPickerOpen(false);
+                                    onClose();
+                                    return;
+                                  }
+                                  handleBranchSelect(row);
+                                }}
+                                className={cn(
+                                  "flex items-center justify-between gap-2 px-2 py-1.5 text-sm rounded-[var(--radius-sm)] cursor-pointer hover:bg-canopy-border",
+                                  row.name === baseBranch && "bg-canopy-border",
+                                  idx === selectedIndex && "bg-canopy-accent/10"
+                                )}
+                              >
+                                <span className="truncate">
+                                  <HighlightBranchText
+                                    text={row.labelText}
+                                    matchRanges={row.matchRanges}
+                                    nameLength={row.name.length}
+                                  />
+                                </span>
+                                <span className="flex items-center gap-1 shrink-0">
+                                  {row.inUseWorktree && (
+                                    <span className="text-xs text-canopy-warning" title={`In use by worktree: ${row.inUseWorktree.name}`}>
+                                      in use
+                                    </span>
+                                  )}
+                                  {row.name === baseBranch && (
+                                    <Check className="h-4 w-4 text-canopy-accent" />
+                                  )}
+                                </span>
+                              </div>
+                            );
+                          });
+                        })()
                       )}
                     </div>
-                    {!branchQuery && filteredBranches.length >= 200 && (
+                    {!branchQuery && branchOptions.length > 500 && (
                       <div className="border-t border-canopy-border px-3 py-2 text-xs text-canopy-text/60">
-                        Showing first 200 branches. Type to narrow results.
+                        Showing first 500 branches. Type to search.
                       </div>
                     )}
                   </PopoverContent>

@@ -183,6 +183,10 @@ export interface IpcInvokeMap {
     args: [payload: { rootPath: string }];
     result: BranchInfo[];
   };
+  "worktree:get-recent-branches": {
+    args: [payload: { rootPath: string }];
+    result: string[];
+  };
   "worktree:get-default-path": {
     args: [payload: { rootPath: string; branchName: string }];
     result: string;

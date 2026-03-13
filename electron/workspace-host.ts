@@ -169,6 +169,10 @@ port.on("message", async (rawMsg: any) => {
         await workspaceService.listBranches(request.requestId, request.rootPath);
         break;
 
+      case "get-recent-branches":
+        await workspaceService.getRecentBranches(request.requestId, request.rootPath);
+        break;
+
       case "get-file-diff":
         await workspaceService.getFileDiff(
           request.requestId,

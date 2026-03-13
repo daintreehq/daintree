@@ -1539,6 +1539,37 @@ export class WorkspaceService {
     }
   }
 
+  async getRecentBranches(requestId: string, rootPath: string): Promise<void> {
+    try {
+      const git = simpleGit(rootPath);
+      const rawReflog = await git.raw(["reflog", "--format=%gs"]);
+
+      if (!rawReflog?.trim()) {
+        this.sendEvent({ type: "get-recent-branches-result", requestId, branches: [] });
+        return;
+      }
+
+      const seen = new Set<string>();
+      const branches: string[] = [];
+      const checkoutRegex = /^checkout: moving from \S+ to (\S+)$/;
+
+      for (const line of rawReflog.split("\n")) {
+        const m = line.match(checkoutRegex);
+        if (!m) continue;
+        const name = m[1].trim();
+        if (/^[0-9a-f]{40}$/i.test(name)) continue;
+        if (!seen.has(name)) {
+          seen.add(name);
+          branches.push(name);
+        }
+      }
+
+      this.sendEvent({ type: "get-recent-branches-result", requestId, branches });
+    } catch {
+      this.sendEvent({ type: "get-recent-branches-result", requestId, branches: [] });
+    }
+  }
+
   async getFileDiff(
     requestId: string,
     cwd: string,
