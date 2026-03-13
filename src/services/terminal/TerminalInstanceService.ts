@@ -1069,10 +1069,19 @@ class TerminalInstanceService {
 
       managed.isSerializedRestoreInProgress = true;
 
+      const scrollBackOffset = managed.isUserScrolledBack
+        ? managed.terminal.buffer.active.baseY - managed.terminal.buffer.active.viewportY
+        : 0;
+
       managed.terminal.reset();
       managed.terminal.write(serializedState, () => {
         const current = this.instances.get(id);
         if (current !== managed) return;
+
+        if (scrollBackOffset > 0) {
+          const newBaseY = current.terminal.buffer.active.baseY;
+          current.terminal.scrollToLine(Math.max(0, newBaseY - scrollBackOffset));
+        }
 
         current.isSerializedRestoreInProgress = false;
 
@@ -1104,6 +1113,10 @@ class TerminalInstanceService {
     managed.isSerializedRestoreInProgress = true;
 
     const task = async (): Promise<boolean> => {
+      const scrollBackOffset = managed.isUserScrolledBack
+        ? managed.terminal.buffer.active.baseY - managed.terminal.buffer.active.viewportY
+        : 0;
+
       try {
         if (this.instances.get(id) !== managed || managed.restoreGeneration !== restoreGeneration) {
           return false;
@@ -1150,6 +1163,11 @@ class TerminalInstanceService {
         return false;
       } finally {
         if (this.instances.get(id) === managed && managed.restoreGeneration === restoreGeneration) {
+          if (scrollBackOffset > 0) {
+            const newBaseY = managed.terminal.buffer.active.baseY;
+            managed.terminal.scrollToLine(Math.max(0, newBaseY - scrollBackOffset));
+          }
+
           managed.isSerializedRestoreInProgress = false;
 
           const deferredData = managed.deferredOutput;
