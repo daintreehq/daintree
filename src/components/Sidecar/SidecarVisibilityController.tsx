@@ -18,6 +18,7 @@ export function SidecarVisibilityController(): null {
   const overlayCount = useUIStore((state) => state.overlayCount);
   const hasOverlays = overlayCount > 0;
   const isRestoringRef = useRef(false);
+  const pendingRestoreRef = useRef<{ tabId: string; tabUrl: string } | null>(null);
 
   const prevHasOverlaysRef = useRef(hasOverlays);
   const prevSidecarOpenRef = useRef(sidecarOpen);
@@ -25,8 +26,12 @@ export function SidecarVisibilityController(): null {
 
   const ensureTabAndRestore = useCallback(
     async (tabId: string, tabUrl: string) => {
-      if (isRestoringRef.current) return;
+      if (isRestoringRef.current) {
+        pendingRestoreRef.current = { tabId, tabUrl };
+        return;
+      }
       isRestoringRef.current = true;
+      pendingRestoreRef.current = null;
 
       try {
         const state = useSidecarStore.getState();
@@ -85,6 +90,11 @@ export function SidecarVisibilityController(): null {
         console.error("Failed to restore tab:", error);
       } finally {
         isRestoringRef.current = false;
+        const pending = pendingRestoreRef.current as { tabId: string; tabUrl: string } | null;
+        if (pending) {
+          pendingRestoreRef.current = null;
+          void ensureTabAndRestore(pending.tabId, pending.tabUrl);
+        }
       }
     },
     [markTabCreated]

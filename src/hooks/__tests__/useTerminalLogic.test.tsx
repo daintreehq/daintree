@@ -2,8 +2,9 @@
 import { act, renderHook } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { retryMock } = vi.hoisted(() => ({
+const { retryMock, getSharedBuffersMock } = vi.hoisted(() => ({
   retryMock: vi.fn().mockResolvedValue(undefined),
+  getSharedBuffersMock: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock("@/clients", () => ({
@@ -15,7 +16,7 @@ vi.mock("@/clients", () => ({
     getProjectId: vi.fn().mockReturnValue("test-project"),
   },
   terminalClient: {
-    getSharedBuffers: vi.fn().mockResolvedValue(undefined),
+    getSharedBuffers: getSharedBuffersMock,
   },
 }));
 
@@ -26,7 +27,7 @@ describe("useTerminalLogic", () => {
     vi.clearAllMocks();
   });
 
-  it("normalizes invalid exit codes to 0", () => {
+  it("normalizes invalid exit codes to 0 without bootstrapping terminal ingestion", () => {
     const { result } = renderHook(() =>
       useTerminalLogic({
         id: "term-1",
@@ -40,5 +41,7 @@ describe("useTerminalLogic", () => {
 
     expect(result.current.isExited).toBe(true);
     expect(result.current.exitCode).toBe(0);
+    expect(retryMock).not.toHaveBeenCalled();
+    expect(getSharedBuffersMock).not.toHaveBeenCalled();
   });
 });

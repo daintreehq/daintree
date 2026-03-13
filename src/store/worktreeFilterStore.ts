@@ -1,37 +1,6 @@
 import { create } from "zustand";
-import { persist, createJSONStorage, type StateStorage } from "zustand/middleware";
-
-const memoryStorage: StateStorage = (() => {
-  const storage = new Map<string, string>();
-  return {
-    getItem: (name) => storage.get(name) ?? null,
-    setItem: (name, value) => {
-      storage.set(name, value);
-    },
-    removeItem: (name) => {
-      storage.delete(name);
-    },
-  };
-})();
-
-function getSafeStorage(): StateStorage {
-  if (typeof localStorage !== "undefined") {
-    const storage = localStorage as unknown as Partial<StateStorage>;
-    const hasStorageApi =
-      typeof storage.getItem === "function" &&
-      typeof storage.setItem === "function" &&
-      typeof storage.removeItem === "function";
-    if (hasStorageApi) {
-      try {
-        storage.getItem!("__test__");
-        return storage as StateStorage;
-      } catch {
-        return memoryStorage;
-      }
-    }
-  }
-  return memoryStorage;
-}
+import { persist } from "zustand/middleware";
+import { createSafeJSONStorage } from "./persistence/safeStorage";
 
 export type OrderBy = "recent" | "created" | "alpha";
 
@@ -247,7 +216,7 @@ export const useWorktreeFilterStore = create<WorktreeFilterStore>()(
     }),
     {
       name: "canopy-worktree-filters",
-      storage: createJSONStorage(() => getSafeStorage()),
+      storage: createSafeJSONStorage(),
       partialize: (state): PersistedState => ({
         query: state.query,
         orderBy: state.orderBy,
