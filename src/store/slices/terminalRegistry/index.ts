@@ -1408,6 +1408,10 @@ export const createTerminalRegistrySlice =
         }
 
         const spawnCommand = commandToRun;
+        // Track session ID for restore-on-failure; resume command is transient,
+        // so keep the original command as the durable stored command
+        const consumedSessionId = currentTerminal.agentSessionId;
+        const durableCommand = consumedSessionId ? currentTerminal.command : spawnCommand;
 
         try {
           // CAPTURE LIVE DIMENSIONS before destroying the frontend
@@ -1449,7 +1453,7 @@ export const createTerminalRegistrySlice =
                     lastStateChange: isAgent ? Date.now() : undefined,
                     stateChangeTrigger: undefined,
                     stateChangeConfidence: undefined,
-                    command: spawnCommand,
+                    command: durableCommand,
                     agentSessionId: undefined,
                     isRestarting: true,
                     restartError: undefined,
@@ -1540,7 +1544,15 @@ export const createTerminalRegistrySlice =
           unmarkTerminalRestarting(id);
           set((state) => ({
             terminals: state.terminals.map((t) =>
-              t.id === id ? { ...t, isRestarting: false, restartError } : t
+              t.id === id
+                ? {
+                    ...t,
+                    isRestarting: false,
+                    restartError,
+                    // Restore session ID so user can retry resume
+                    ...(consumedSessionId ? { agentSessionId: consumedSessionId } : {}),
+                  }
+                : t
             ),
           }));
 
