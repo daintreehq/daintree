@@ -66,6 +66,7 @@ export interface StoreSchema {
       scope?: "worktree" | "project";
       createdAt?: number;
       devCommand?: string;
+      browserConsoleOpen?: boolean;
       devPreviewConsoleOpen?: boolean;
     }>;
     /** @deprecated Recipes are now stored per-project. This field is kept for migration only. */
@@ -100,6 +101,8 @@ export interface StoreSchema {
     failedEnabled: boolean;
     soundEnabled: boolean;
     soundFile: string;
+    waitingEscalationEnabled: boolean;
+    waitingEscalationDelayMs: number;
   };
   userAgentRegistry: UserAgentRegistry;
   agentUpdateSettings: AgentUpdateSettings;
@@ -191,6 +194,8 @@ const storeOptions = {
       failedEnabled: false,
       soundEnabled: false,
       soundFile: "chime.wav",
+      waitingEscalationEnabled: true,
+      waitingEscalationDelayMs: 180_000,
     },
     userAgentRegistry: {},
     agentUpdateSettings: {

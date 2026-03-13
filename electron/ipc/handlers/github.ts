@@ -9,6 +9,43 @@ import type {
 } from "../../types/index.js";
 import { getWorkspaceClient } from "../../services/WorkspaceClient.js";
 
+export function buildGitHubSearchQuery(
+  searchText: string | undefined,
+  state: string | undefined,
+  resourceType: "issue" | "pr"
+): string {
+  const parts: string[] = [];
+
+  const defaultState = "open";
+  const effectiveState = state || defaultState;
+
+  if (effectiveState !== "open") {
+    if (resourceType === "pr" && effectiveState === "merged") {
+      parts.push("is:merged");
+    } else if (effectiveState === "closed") {
+      parts.push("is:closed");
+    } else if (effectiveState === "all") {
+      // No state qualifier for "all"
+    }
+  }
+
+  if (searchText?.trim()) {
+    parts.push(searchText.trim());
+  }
+
+  // If state is "open" and no search text, return empty to preserve bare URL
+  if (effectiveState === "open" && !searchText?.trim()) {
+    return "";
+  }
+
+  // If we have search text but state is open, add is:open so GitHub doesn't default differently
+  if (effectiveState === "open" && searchText?.trim()) {
+    parts.unshift("is:open");
+  }
+
+  return parts.join(" ");
+}
+
 export function registerGithubHandlers(_deps: HandlerDependencies): () => void {
   const handlers: Array<() => void> = [];
 
@@ -66,7 +103,12 @@ export function registerGithubHandlers(_deps: HandlerDependencies): () => void {
   ipcMain.handle(CHANNELS.GITHUB_GET_REPO_STATS, handleGitHubGetRepoStats);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.GITHUB_GET_REPO_STATS));
 
-  const handleGitHubOpenIssues = async (_event: Electron.IpcMainInvokeEvent, cwd: string) => {
+  const handleGitHubOpenIssues = async (
+    _event: Electron.IpcMainInvokeEvent,
+    cwd: string,
+    query?: string,
+    state?: string
+  ) => {
     if (typeof cwd !== "string" || !cwd) {
       throw new Error("Invalid working directory");
     }
@@ -75,12 +117,19 @@ export function registerGithubHandlers(_deps: HandlerDependencies): () => void {
     if (!repoUrl) {
       throw new Error("Not a GitHub repository");
     }
-    await shell.openExternal(`${repoUrl}/issues`);
+    const q = buildGitHubSearchQuery(query, state, "issue");
+    const url = q ? `${repoUrl}/issues?q=${encodeURIComponent(q)}` : `${repoUrl}/issues`;
+    await shell.openExternal(url);
   };
   ipcMain.handle(CHANNELS.GITHUB_OPEN_ISSUES, handleGitHubOpenIssues);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.GITHUB_OPEN_ISSUES));
 
-  const handleGitHubOpenPRs = async (_event: Electron.IpcMainInvokeEvent, cwd: string) => {
+  const handleGitHubOpenPRs = async (
+    _event: Electron.IpcMainInvokeEvent,
+    cwd: string,
+    query?: string,
+    state?: string
+  ) => {
     if (typeof cwd !== "string" || !cwd) {
       throw new Error("Invalid working directory");
     }
@@ -89,7 +138,9 @@ export function registerGithubHandlers(_deps: HandlerDependencies): () => void {
     if (!repoUrl) {
       throw new Error("Not a GitHub repository");
     }
-    await shell.openExternal(`${repoUrl}/pulls`);
+    const q = buildGitHubSearchQuery(query, state, "pr");
+    const url = q ? `${repoUrl}/pulls?q=${encodeURIComponent(q)}` : `${repoUrl}/pulls`;
+    await shell.openExternal(url);
   };
   ipcMain.handle(CHANNELS.GITHUB_OPEN_PRS, handleGitHubOpenPRs);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.GITHUB_OPEN_PRS));

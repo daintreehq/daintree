@@ -82,6 +82,8 @@ export interface TerminalState {
   devServerError?: { type: string; message: string };
   /** Terminal ID associated with dev server for dev-preview panels */
   devServerTerminalId?: string;
+  /** Whether the browser console drawer is open */
+  browserConsoleOpen?: boolean;
   /** Whether the dev-preview console drawer is open */
   devPreviewConsoleOpen?: boolean;
   /** Behavior when terminal exits */

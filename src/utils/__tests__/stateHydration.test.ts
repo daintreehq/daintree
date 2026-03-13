@@ -1103,4 +1103,159 @@ describe("hydrateAppState", () => {
     // Should call hydrateTabGroups with empty array and skipPersist on error
     expect(hydrateTabGroups).toHaveBeenCalledWith([], { skipPersist: true });
   });
+
+  it("uses resume command when agent panel has agentSessionId and no backend process", async () => {
+    appClientMock.hydrate.mockResolvedValue({
+      appState: {
+        terminals: [
+          {
+            id: "agent-1",
+            kind: "agent",
+            type: "claude",
+            agentId: "claude",
+            title: "Claude",
+            cwd: "/project",
+            location: "grid",
+            command: "claude --model sonnet-4",
+            agentSessionId: "session-uuid-123",
+          },
+        ],
+        sidebarWidth: 350,
+      },
+      terminalConfig,
+      project,
+      agentSettings: {
+        agents: {
+          claude: { customFlags: "--model sonnet-4" },
+        },
+      },
+    });
+
+    const addTerminal = vi.fn().mockResolvedValue("agent-1");
+    const setActiveWorktree = vi.fn();
+    const loadRecipes = vi.fn().mockResolvedValue(undefined);
+    const openDiagnosticsDock = vi.fn();
+
+    await hydrateAppState({
+      addTerminal,
+      setActiveWorktree,
+      loadRecipes,
+      openDiagnosticsDock,
+    });
+
+    expect(addTerminal).toHaveBeenCalledTimes(1);
+    const callArgs = addTerminal.mock.calls[0][0];
+
+    // Should use resume command instead of regenerated command
+    expect(callArgs.command).toBe("claude --resume session-uuid-123");
+    expect(callArgs.command).not.toContain("--model");
+    expect(callArgs.command).not.toContain("sonnet-4");
+
+    // agentSessionId should NOT be forwarded (cleared on respawn)
+    expect(callArgs.agentSessionId).toBeUndefined();
+  });
+
+  it("uses fresh command when agent panel has no agentSessionId", async () => {
+    appClientMock.hydrate.mockResolvedValue({
+      appState: {
+        terminals: [
+          {
+            id: "agent-1",
+            kind: "agent",
+            type: "claude",
+            agentId: "claude",
+            title: "Claude",
+            cwd: "/project",
+            location: "grid",
+            command: "claude",
+          },
+        ],
+        sidebarWidth: 350,
+      },
+      terminalConfig,
+      project,
+      agentSettings: {
+        agents: {
+          claude: { customFlags: "--model sonnet-4" },
+        },
+      },
+    });
+
+    const addTerminal = vi.fn().mockResolvedValue("agent-1");
+    const setActiveWorktree = vi.fn();
+    const loadRecipes = vi.fn().mockResolvedValue(undefined);
+    const openDiagnosticsDock = vi.fn();
+
+    await hydrateAppState({
+      addTerminal,
+      setActiveWorktree,
+      loadRecipes,
+      openDiagnosticsDock,
+    });
+
+    expect(addTerminal).toHaveBeenCalledTimes(1);
+    const callArgs = addTerminal.mock.calls[0][0];
+
+    // Should use fresh generated command (no resume)
+    expect(callArgs.command).toContain("--model");
+    expect(callArgs.command).not.toContain("--resume");
+  });
+
+  it("preserves agentSessionId on successful reconnect to live backend", async () => {
+    appClientMock.hydrate.mockResolvedValue({
+      appState: {
+        terminals: [
+          {
+            id: "agent-1",
+            kind: "agent",
+            type: "claude",
+            agentId: "claude",
+            title: "Claude",
+            cwd: "/project",
+            location: "grid",
+            command: "claude",
+            agentSessionId: "session-uuid-456",
+          },
+        ],
+        sidebarWidth: 350,
+      },
+      terminalConfig,
+      project,
+      agentSettings,
+    });
+
+    // Backend has the terminal running
+    terminalClientMock.getForProject.mockResolvedValue([
+      {
+        id: "agent-1",
+        hasPty: true,
+        cwd: "/project",
+        kind: "agent",
+        type: "claude",
+        agentId: "claude",
+        title: "Claude",
+        agentState: "waiting",
+        lastStateChange: 123456789,
+      },
+    ]);
+
+    const addTerminal = vi.fn().mockResolvedValue("agent-1");
+    const setActiveWorktree = vi.fn();
+    const loadRecipes = vi.fn().mockResolvedValue(undefined);
+    const openDiagnosticsDock = vi.fn();
+
+    await hydrateAppState({
+      addTerminal,
+      setActiveWorktree,
+      loadRecipes,
+      openDiagnosticsDock,
+    });
+
+    expect(addTerminal).toHaveBeenCalledTimes(1);
+    const callArgs = addTerminal.mock.calls[0][0];
+
+    // On reconnect, agentSessionId should be preserved
+    expect(callArgs.existingId).toBe("agent-1");
+    expect(callArgs.agentSessionId).toBe("session-uuid-456");
+  });
 });

@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { AGENT_REGISTRY, getEffectiveAgentConfig } from "../config/agentRegistry.js";
-import { escapeShellArg } from "../utils/shellEscape.js";
+import { escapeShellArg, escapeShellArgOptional } from "../utils/shellEscape.js";
 
 /**
  * Domain weights for agent routing (0-1 scale).
@@ -274,5 +274,28 @@ export function generateAgentCommand(
     }
   }
 
+  return parts.join(" ");
+}
+
+/**
+ * Builds a resume command for an agent using a previously captured session ID.
+ * Skips all normal flags (model, custom flags, inline mode) — the resumed session
+ * already has its configuration embedded.
+ *
+ * @returns The resume command string, or undefined if the agent has no resume config.
+ */
+export function buildResumeCommand(agentId: string, sessionId: string): string | undefined {
+  const agentConfig = getEffectiveAgentConfig(agentId);
+  if (!agentConfig?.resume) return undefined;
+
+  const args = agentConfig.resume.args(sessionId);
+  const parts = [agentConfig.command];
+  for (const arg of args) {
+    if (arg.startsWith("-")) {
+      parts.push(arg);
+    } else {
+      parts.push(escapeShellArgOptional(arg));
+    }
+  }
   return parts.join(" ");
 }

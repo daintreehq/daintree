@@ -433,7 +433,8 @@ export async function getWorktreeChangesWithStats(
     if (
       errorMessage.includes("ENOENT") ||
       errorMessage.includes("no such file or directory") ||
-      errorMessage.includes("Unable to read current working directory")
+      errorMessage.includes("Unable to read current working directory") ||
+      errorMessage.includes("not a git repository")
     ) {
       throw new WorktreeRemovedError(cwd, error instanceof Error ? error : undefined);
     }

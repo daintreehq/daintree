@@ -729,11 +729,11 @@ export interface IpcInvokeMap {
     result: RepositoryStats;
   };
   "github:open-issues": {
-    args: [cwd: string];
+    args: [cwd: string, query?: string, state?: string];
     result: void;
   };
   "github:open-prs": {
-    args: [cwd: string];
+    args: [cwd: string, query?: string, state?: string];
     result: void;
   };
   "github:open-commits": {
@@ -1221,6 +1221,8 @@ export interface IpcInvokeMap {
       failedEnabled: boolean;
       soundEnabled: boolean;
       soundFile: string;
+      waitingEscalationEnabled: boolean;
+      waitingEscalationDelayMs: number;
     };
   };
   "notification:settings-set": {
@@ -1231,6 +1233,8 @@ export interface IpcInvokeMap {
         failedEnabled: boolean;
         soundEnabled: boolean;
         soundFile: string;
+        waitingEscalationEnabled: boolean;
+        waitingEscalationDelayMs: number;
       }>,
     ];
     result: void;
@@ -1266,6 +1270,10 @@ export interface IpcInvokeMap {
           };
         }
       | { ok: false; errors: string[] };
+  };
+  "app-theme:set-color-vision-mode": {
+    args: [mode: import("../appTheme.js").ColorVisionMode];
+    result: void;
   };
   "telemetry:get": {
     args: [];

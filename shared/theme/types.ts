@@ -90,7 +90,10 @@ export interface AppColorScheme {
   tokens: AppColorSchemeTokens;
 }
 
+export type ColorVisionMode = "default" | "red-green" | "blue-yellow";
+
 export interface AppThemeConfig {
   colorSchemeId: string;
   customSchemes?: string;
+  colorVisionMode?: ColorVisionMode;
 }

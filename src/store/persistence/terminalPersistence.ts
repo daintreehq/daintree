@@ -68,6 +68,7 @@ export function terminalToSnapshot(t: TerminalInstance): TerminalSnapshot {
       ...(t.browserUrl && { browserUrl: t.browserUrl }),
       ...(t.browserHistory && { browserHistory: t.browserHistory }),
       ...(t.browserZoom != null && { browserZoom: t.browserZoom }),
+      ...(t.browserConsoleOpen !== undefined && { browserConsoleOpen: t.browserConsoleOpen }),
     };
   }
 }

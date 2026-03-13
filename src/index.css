@@ -349,6 +349,34 @@
     background: transparent;
   }
 
+  /* Color vision deficiency overrides — Red-Green (Deuteranopia / Protanopia) */
+  html[data-colorblind="red-green"] {
+    --theme-status-success: #009e73;
+    --theme-status-danger: #fe6100;
+    --theme-activity-active: #648fff;
+    --theme-activity-working: #648fff;
+    --theme-github-open: #648fff;
+    --theme-github-closed: #fe6100;
+    --theme-terminal-selection: #1a1f2e;
+    --theme-terminal-red: #d55e00;
+    --theme-terminal-green: #009e73;
+    --theme-terminal-bright-red: #fe6100;
+    --theme-terminal-bright-green: #48c9a0;
+    --theme-terminal-magenta: #cc79a7;
+    --theme-terminal-bright-magenta: #d98fc4;
+  }
+
+  /* Color vision deficiency overrides — Blue-Yellow (Tritanopia) */
+  html[data-colorblind="blue-yellow"] {
+    --theme-status-warning: #94a3b8;
+    --theme-activity-waiting: #94a3b8;
+    --theme-github-merged: #f97316;
+    --theme-terminal-yellow: #cc79a7;
+    --theme-terminal-blue: #0072b2;
+    --theme-terminal-bright-yellow: #d98fc4;
+    --theme-terminal-bright-blue: #56b4e9;
+  }
+
   /* Xterm font - required for correct font measurement */
   .xterm {
     font-family: "JetBrains Mono", monospace;
