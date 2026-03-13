@@ -56,6 +56,7 @@ export function TrashContainer({ trashedTerminals, compact = false }: TrashConta
       const timer = setTimeout(() => setIsPulsing(false), 450);
       return () => clearTimeout(timer);
     }
+    return undefined;
   }, [trashedTerminals.length]);
 
   // Group trash items by groupRestoreId
