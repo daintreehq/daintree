@@ -80,13 +80,33 @@ describe("webviewCsp", () => {
       expect(csp).toContain("wss://127.0.0.1:*");
     });
 
-    it("does not allow non-localhost external origins", () => {
+    it("does not allow external origins in script-src or default-src", () => {
+      const csp = getLocalhostDevCSP();
+      const directives = Object.fromEntries(
+        csp.split("; ").map((d) => {
+          const [name, ...rest] = d.split(" ");
+          return [name, rest.join(" ")];
+        })
+      );
+
+      expect(directives["default-src"]).not.toMatch(/(?:^|\s)https:(?:\s|$)/);
+      expect(directives["script-src"]).not.toMatch(/(?:^|\s)https:(?:\s|$)/);
+      expect(csp).not.toContain("http://example.com");
+    });
+
+    it("allows blob: frames for iframe-based previews", () => {
       const csp = getLocalhostDevCSP();
 
-      // Should have https://localhost but not https: wildcard
-      expect(csp).toContain("https://localhost:*");
-      expect(csp).not.toMatch(/https:\s/); // No bare "https:" wildcard
-      expect(csp).not.toContain("http://example.com");
+      expect(csp).toContain("frame-src");
+      expect(csp).toMatch(/frame-src[^;]*blob:/);
+      expect(csp).toMatch(/frame-src[^;]*http:\/\/localhost:\*/);
+      expect(csp).toMatch(/frame-src[^;]*https:\/\/localhost:\*/);
+    });
+
+    it("allows external HTTPS images", () => {
+      const csp = getLocalhostDevCSP();
+
+      expect(csp).toMatch(/img-src[^;]*https:/);
     });
   });
 
