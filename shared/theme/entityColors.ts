@@ -3,6 +3,7 @@ export const AGENT_BRAND_COLORS = {
   gemini: "#4285F4",
   codex: "#e4e4e7",
   opencode: "#10b981",
+  cursor: "#3ee6eb",
 } as const;
 
 export const PANEL_KIND_BRAND_COLORS = {

@@ -3,6 +3,7 @@ export { ClaudeIcon } from "./ClaudeIcon";
 export { GeminiIcon } from "./GeminiIcon";
 export { CodexIcon } from "./CodexIcon";
 export { OpenCodeIcon } from "./OpenCodeIcon";
+export { CursorIcon } from "./CursorIcon";
 
 // JavaScript ecosystem
 export { NpmIcon } from "./NpmIcon";
