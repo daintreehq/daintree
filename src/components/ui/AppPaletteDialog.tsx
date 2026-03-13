@@ -206,7 +206,7 @@ AppPaletteDialog.Input = function AppPaletteInput({
         "w-full px-3 py-2 text-sm",
         "bg-canopy-sidebar border border-canopy-border rounded-[var(--radius-md)]",
         "text-canopy-text placeholder:text-canopy-text/40",
-        "focus:outline-none focus:border-canopy-accent/40 focus:ring-1 focus:ring-canopy-accent/20",
+        "focus:outline-none focus:border-canopy-accent focus:ring-1 focus:ring-canopy-accent/20",
         className
       )}
       {...props}

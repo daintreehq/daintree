@@ -365,8 +365,13 @@ export function GitHubResourceList({
         }
         case "Escape":
           e.preventDefault();
-          e.stopPropagation();
-          onClose?.();
+          if (searchQuery !== "") {
+            setSearchQuery("");
+            e.nativeEvent.stopImmediatePropagation();
+          } else {
+            e.stopPropagation();
+            onClose?.();
+          }
           break;
       }
     },
@@ -379,6 +384,7 @@ export function GitHubResourceList({
       handleCreateWorktree,
       onClose,
       type,
+      searchQuery,
     ]
   );
 
@@ -454,8 +460,17 @@ export function GitHubResourceList({
   return (
     <div className="w-[450px] flex flex-col max-h-[500px]">
       <div className="p-3 border-b border-[var(--border-divider)] space-y-3 shrink-0">
-        <div className="relative">
-          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
+        <div
+          className={cn(
+            "flex items-center gap-1.5 px-2 py-1.5 rounded-[var(--radius-md)]",
+            "bg-overlay-soft border border-[var(--border-overlay)]",
+            "focus-within:border-canopy-accent focus-within:ring-1 focus-within:ring-canopy-accent/20"
+          )}
+        >
+          <Search
+            className="w-3.5 h-3.5 shrink-0 text-canopy-text/40 pointer-events-none"
+            aria-hidden="true"
+          />
           <input
             ref={inputRef}
             type="text"
@@ -471,20 +486,14 @@ export function GitHubResourceList({
             aria-controls={listId}
             aria-activedescendant={activeItemId}
             aria-label={`Search ${type === "issue" ? "issues" : "pull requests"}`}
-            className={cn(
-              "w-full h-8 pl-8 pr-8 rounded-[var(--radius-md)] text-sm",
-              "bg-overlay-soft border border-[var(--border-overlay)]",
-              "text-canopy-text placeholder:text-muted-foreground",
-              "focus:outline-none focus:ring-1 focus:ring-canopy-accent focus:border-canopy-accent",
-              "transition-colors"
-            )}
+            className="flex-1 min-w-0 text-sm bg-transparent text-canopy-text placeholder:text-muted-foreground focus:outline-none"
           />
           {searchQuery && (
             <button
               type="button"
               onClick={handleClearSearch}
-              className="absolute right-2.5 top-1/2 -translate-y-1/2 flex items-center justify-center w-4 h-4 rounded text-muted-foreground hover:text-canopy-text"
               aria-label="Clear search"
+              className="flex items-center justify-center w-5 h-5 rounded shrink-0 text-canopy-text/40 hover:text-canopy-text"
             >
               <X className="w-3 h-3" />
             </button>
