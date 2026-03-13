@@ -2,9 +2,11 @@ import { describe, it, expect, beforeEach, vi, afterEach } from "vitest";
 import {
   getWorktreeType,
   buildSearchableText,
+  scoreWorktree,
   computeStatus,
   matchesFilters,
   sortWorktrees,
+  sortWorktreesByRelevance,
   groupByType,
   hasAnyFilters,
   findIntegrationWorktree,
@@ -150,9 +152,9 @@ describe("buildSearchableText", () => {
     expect(buildSearchableText(worktree)).toContain("feature/my-branch");
   });
 
-  it("includes path", () => {
+  it("does not include path", () => {
     const worktree = createMockWorktree({ path: "/home/user/my-project" });
-    expect(buildSearchableText(worktree)).toContain("/home/user/my-project");
+    expect(buildSearchableText(worktree)).not.toContain("/home/user/my-project");
   });
 
   it("includes issue number with hash", () => {
@@ -165,9 +167,9 @@ describe("buildSearchableText", () => {
     expect(buildSearchableText(worktree)).toContain("#456");
   });
 
-  it("includes summary", () => {
+  it("does not include summary", () => {
     const worktree = createMockWorktree({ summary: "Working on feature X" });
-    expect(buildSearchableText(worktree)).toContain("working on feature x");
+    expect(buildSearchableText(worktree)).not.toContain("working on feature x");
   });
 
   it("includes issue title", () => {
@@ -180,15 +182,185 @@ describe("buildSearchableText", () => {
     expect(buildSearchableText(worktree)).toContain("fix authentication bug");
   });
 
-  it("includes aiNote", () => {
+  it("does not include aiNote", () => {
     const worktree = createMockWorktree({ aiNote: "Agent is implementing tests" });
-    expect(buildSearchableText(worktree)).toContain("agent is implementing tests");
+    expect(buildSearchableText(worktree)).not.toContain("agent is implementing tests");
   });
 
   it("returns lowercase text", () => {
     const worktree = createMockWorktree({ name: "MyWorktree", branch: "Feature/Test" });
     const text = buildSearchableText(worktree);
     expect(text).toBe(text.toLowerCase());
+  });
+});
+
+describe("scoreWorktree", () => {
+  it("returns 0 for empty query", () => {
+    const worktree = createMockWorktree({ name: "test" });
+    expect(scoreWorktree(worktree, "")).toBe(0);
+  });
+
+  it("returns 0 when no field matches", () => {
+    const worktree = createMockWorktree({ name: "main", branch: "main" });
+    expect(scoreWorktree(worktree, "nonexistent")).toBe(0);
+  });
+
+  it("returns 4 when issueTitle starts with query", () => {
+    const worktree = createMockWorktree({ issueTitle: "Authentication refactor" });
+    expect(scoreWorktree(worktree, "auth")).toBe(4);
+  });
+
+  it("returns 3 when issueTitle contains but does not start with query", () => {
+    const worktree = createMockWorktree({ issueTitle: "Fix authentication bug" });
+    expect(scoreWorktree(worktree, "auth")).toBe(3);
+  });
+
+  it("returns 4 when name starts with query", () => {
+    const worktree = createMockWorktree({ name: "auth-feature", issueTitle: undefined });
+    expect(scoreWorktree(worktree, "auth")).toBe(4);
+  });
+
+  it("returns 3 when name contains but does not start with query", () => {
+    const worktree = createMockWorktree({ name: "fix-auth", issueTitle: undefined });
+    expect(scoreWorktree(worktree, "auth")).toBe(3);
+  });
+
+  it("returns 2 when branch starts with query", () => {
+    const worktree = createMockWorktree({
+      name: "main",
+      branch: "auth-feature",
+      issueTitle: undefined,
+    });
+    expect(scoreWorktree(worktree, "auth")).toBe(2);
+  });
+
+  it("returns 1 when branch contains but does not start with query", () => {
+    const worktree = createMockWorktree({
+      name: "main",
+      branch: "feature/auth-fix",
+      issueTitle: undefined,
+    });
+    expect(scoreWorktree(worktree, "auth")).toBe(1);
+  });
+
+  it("returns 1 when only prTitle contains query", () => {
+    const worktree = createMockWorktree({
+      name: "main",
+      branch: "main",
+      issueTitle: undefined,
+      prTitle: "Fix authentication",
+    });
+    expect(scoreWorktree(worktree, "auth")).toBe(1);
+  });
+
+  it("is case-insensitive", () => {
+    const worktree = createMockWorktree({ issueTitle: "Authentication Refactor" });
+    expect(scoreWorktree(worktree, "AUTH")).toBe(4);
+  });
+
+  it("handles null fields safely", () => {
+    const worktree = createMockWorktree({
+      name: "test",
+      branch: undefined,
+      issueTitle: undefined,
+      prTitle: undefined,
+    });
+    expect(scoreWorktree(worktree, "test")).toBe(4);
+  });
+
+  it("does not match path", () => {
+    const worktree = createMockWorktree({
+      name: "main",
+      branch: "main",
+      path: "/home/user/auth-project",
+    });
+    expect(scoreWorktree(worktree, "auth")).toBe(0);
+  });
+
+  it("does not match summary", () => {
+    const worktree = createMockWorktree({
+      name: "main",
+      branch: "main",
+      summary: "Working on authentication",
+    });
+    expect(scoreWorktree(worktree, "auth")).toBe(0);
+  });
+
+  it("does not match aiNote", () => {
+    const worktree = createMockWorktree({
+      name: "main",
+      branch: "main",
+      aiNote: "Agent fixing auth",
+    });
+    expect(scoreWorktree(worktree, "auth")).toBe(0);
+  });
+
+  it("issueTitle starts-with ranks above issueTitle contains", () => {
+    const startsWith = createMockWorktree({ issueTitle: "Authentication refactor" });
+    const contains = createMockWorktree({ issueTitle: "Fix authentication bug" });
+    expect(scoreWorktree(startsWith, "auth")).toBeGreaterThan(scoreWorktree(contains, "auth"));
+  });
+});
+
+describe("sortWorktreesByRelevance", () => {
+  it("returns sortWorktrees order when query is empty", () => {
+    const worktrees = [
+      createMockWorktree({ id: "1", name: "b" }),
+      createMockWorktree({ id: "2", name: "a" }),
+    ];
+    const result = sortWorktreesByRelevance(worktrees, "", "alpha");
+    expect(result.map((w) => w.id)).toEqual(["2", "1"]);
+  });
+
+  it("sorts by relevance score when query is active", () => {
+    const worktrees = [
+      createMockWorktree({
+        id: "1",
+        name: "main",
+        branch: "feature/auth-fix",
+        issueTitle: "Fix database auth",
+      }),
+      createMockWorktree({
+        id: "2",
+        name: "main2",
+        branch: "main",
+        issueTitle: "Authentication refactor",
+      }),
+    ];
+    const result = sortWorktreesByRelevance(worktrees, "auth", "alpha");
+    expect(result[0].id).toBe("2"); // issueTitle starts-with (score 4)
+    expect(result[1].id).toBe("1"); // issueTitle contains (score 3)
+  });
+
+  it("preserves sortWorktrees order as tiebreaker for equal scores", () => {
+    const worktrees = [
+      createMockWorktree({ id: "1", name: "z-auth", issueTitle: "auth feature z" }),
+      createMockWorktree({ id: "2", name: "a-auth", issueTitle: "auth feature a" }),
+    ];
+    const result = sortWorktreesByRelevance(worktrees, "auth", "alpha");
+    // Both score 4 (issueTitle starts-with), so alpha order preserved
+    expect(result[0].id).toBe("2");
+    expect(result[1].id).toBe("1");
+  });
+
+  it("places score-0 bypass items after scored items", () => {
+    const worktrees = [
+      createMockWorktree({ id: "1", name: "unrelated", branch: "main" }),
+      createMockWorktree({ id: "2", name: "auth-fix", issueTitle: "Auth fix" }),
+    ];
+    const result = sortWorktreesByRelevance(worktrees, "auth", "alpha");
+    expect(result[0].id).toBe("2");
+    expect(result[1].id).toBe("1");
+  });
+
+  it("keeps main worktree and pinned order as baseline", () => {
+    const worktrees = [
+      createMockWorktree({ id: "1", name: "auth-test", isMainWorktree: true }),
+      createMockWorktree({ id: "2", name: "auth-feature", issueTitle: "Auth feature" }),
+    ];
+    const result = sortWorktreesByRelevance(worktrees, "auth", "alpha");
+    // Both score high, but main worktree gets sortWorktrees priority as tiebreaker
+    expect(result.length).toBe(2);
   });
 });
 
@@ -263,6 +435,18 @@ describe("matchesFilters", () => {
     const worktree = createMockWorktree({ name: "main" });
     const filters = createEmptyFilters();
     filters.query = "nonexistent";
+    const meta = createEmptyMeta();
+    expect(matchesFilters(worktree, filters, meta, false)).toBe(false);
+  });
+
+  it("does not match query that only appears in path", () => {
+    const worktree = createMockWorktree({
+      name: "main",
+      branch: "main",
+      path: "/home/user/auth-project",
+    });
+    const filters = createEmptyFilters();
+    filters.query = "auth";
     const meta = createEmptyMeta();
     expect(matchesFilters(worktree, filters, meta, false)).toBe(false);
   });

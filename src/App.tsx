@@ -113,9 +113,10 @@ import { useWorktreeFilterStore } from "./store/worktreeFilterStore";
 import {
   matchesFilters,
   sortWorktrees,
+  sortWorktreesByRelevance,
   groupByType,
   findIntegrationWorktree,
-  buildSearchableText,
+  scoreWorktree,
   type DerivedWorktreeMeta,
   type FilterState,
 } from "./lib/worktreeFilters";
@@ -291,9 +292,12 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     const existingWorktreeIds = new Set(worktrees.map((w) => w.id));
     const validPinnedWorktrees = pinnedWorktrees.filter((id) => existingWorktreeIds.has(id));
 
-    const sorted = sortWorktrees(filtered, orderBy, validPinnedWorktrees);
+    const hasQuery = query.trim().length > 0;
+    const sorted = hasQuery
+      ? sortWorktreesByRelevance(filtered, query, orderBy, validPinnedWorktrees)
+      : sortWorktrees(filtered, orderBy, validPinnedWorktrees);
 
-    if (isGroupedByType) {
+    if (isGroupedByType && !hasQuery) {
       return {
         filteredWorktrees: sorted,
         groupedSections: groupByType(sorted, orderBy, validPinnedWorktrees),
@@ -498,12 +502,9 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   const rootPath = currentProject?.path ?? "";
   const hasNonMainWorktrees = worktrees.length > 1;
   const hasFilters = hasActiveFilters();
-  const queryLower = query ? query.toLowerCase() : "";
-  const mainMatchesQuery =
-    mainWorktree && (!query || buildSearchableText(mainWorktree).includes(queryLower));
+  const mainMatchesQuery = mainWorktree && (!query || scoreWorktree(mainWorktree, query) > 0);
   const integrationMatchesQuery =
-    integrationWorktree &&
-    (!query || buildSearchableText(integrationWorktree).includes(queryLower));
+    integrationWorktree && (!query || scoreWorktree(integrationWorktree, query) > 0);
   const visibleCount = hasFilters
     ? filteredWorktrees.length + (mainMatchesQuery ? 1 : 0) + (integrationMatchesQuery ? 1 : 0)
     : worktrees.length;
