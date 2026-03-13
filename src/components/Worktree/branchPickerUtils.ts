@@ -168,7 +168,7 @@ function buildFuzzyQueryRows(
   worktreeByBranch: Map<string, WorktreeState>
 ): BranchPickerRow[] {
   const fuse = getFuse(branches);
-  const results = fuse.search(query);
+  const results = fuse.search(query, { limit: 200 });
 
   return results.map((result) => {
     const matchRanges: BranchMatchRange[] = [];
