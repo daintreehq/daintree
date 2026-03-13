@@ -65,23 +65,15 @@ test.describe.serial("Core: File Viewer Modal", () => {
 
     const dialog = await waitForDialog(ctx);
 
-    // Metadata bar shows line count and encoding (appears before CodeMirror initializes)
+    // Wait for the file to load — metadata bar and CodeMirror content appear together.
+    // On Windows CI, the IPC file read can be slow, so use T_LONG for the first check.
     const metadataBar = dialog.locator(SEL.fileViewer.metadataBar);
     await expect(metadataBar).toBeVisible({ timeout: T_LONG });
     await expect(metadataBar).toContainText("lines", { timeout: T_SHORT });
     await expect(metadataBar).toContainText("UTF-8", { timeout: T_SHORT });
 
-    // CodeViewer renders a CodeMirror editor with .cm-content containing the file text.
-    // On Windows CI, CodeMirror can take an extra-long time to initialize, so use
-    // a generous timeout and verify the file content appears somewhere in the dialog.
-    const cmContent = dialog.locator(".cm-content");
-    const cmVisible = await cmContent.isVisible().catch(() => false);
-    if (cmVisible) {
-      await expect(cmContent).toContainText("console.log", { timeout: T_MEDIUM });
-    } else {
-      // Fallback: wait for CodeMirror or the text to appear in the dialog
-      await expect(dialog).toContainText("console.log", { timeout: T_LONG });
-    }
+    // CodeViewer renders a CodeMirror editor with the file text
+    await expect(dialog).toContainText("console.log", { timeout: T_LONG });
 
     await closeDialog(ctx);
   });

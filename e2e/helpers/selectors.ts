@@ -93,9 +93,9 @@ export const SEL = {
     startButton: '[aria-label="Start Claude Agent"]',
   },
   fileViewer: {
-    dialog: '[role="dialog"]',
+    dialog: '[data-testid="file-viewer-dialog"]',
     closeButton: '[aria-label="Close dialog"]',
-    metadataBar: ".font-mono",
+    metadataBar: '[data-testid="file-viewer-metadata"]',
     image: "img",
   },
 } as const;
