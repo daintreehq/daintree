@@ -4,7 +4,7 @@ import {
   buildSummaryLine,
   getContextWindow,
   isWarningUsage,
-} from "../attachmentTray";
+} from "../attachmentTrayUtils";
 
 describe("normalizeChips", () => {
   it("returns empty array for empty inputs", () => {

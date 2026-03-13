@@ -103,7 +103,7 @@ export function buildSummaryLine(items: TrayItem[]): string {
   if (counts.file > 0) parts.push(`${counts.file} file${counts.file !== 1 ? "s" : ""}`);
   if (counts.url > 0) parts.push(`${counts.url} URL${counts.url !== 1 ? "s" : ""}`);
 
-  return `${parts.join(" \u00b7 ")} \u00b7 ~${totalTokens.toLocaleString()} tokens`;
+  return `${parts.join(" \u00b7 ")} \u00b7 ~${totalTokens.toLocaleString("en-US")} tokens`;
 }
 
 export function getContextWindow(agentId: string | undefined): number {

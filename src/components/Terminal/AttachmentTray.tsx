@@ -1,8 +1,8 @@
 import { memo } from "react";
 import { X, ImageIcon, FileText, Link } from "lucide-react";
 import { cn } from "@/lib/utils";
-import type { TrayItem } from "./attachmentTray";
-import { buildSummaryLine, isWarningUsage } from "./attachmentTray";
+import type { TrayItem } from "./attachmentTrayUtils";
+import { buildSummaryLine, isWarningUsage } from "./attachmentTrayUtils";
 
 interface AttachmentTrayProps {
   items: TrayItem[];

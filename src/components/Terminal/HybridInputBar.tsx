@@ -69,7 +69,7 @@ import {
   removeUrlPasteEntry,
 } from "./inputEditorExtensions";
 import { AttachmentTray } from "./AttachmentTray";
-import { normalizeChips, getContextWindow, type TrayItem } from "./attachmentTray";
+import { normalizeChips, getContextWindow, type TrayItem } from "./attachmentTrayUtils";
 
 export interface HybridInputBarHandle {
   focus: () => void;
