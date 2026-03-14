@@ -477,6 +477,7 @@ export class TaskQueueService {
       worktreeId: task.worktreeId,
       result: result?.summary ?? "Task completed",
       artifacts: result?.artifacts,
+      data: result?.data,
       timestamp: now,
     });
 

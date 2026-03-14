@@ -13,7 +13,10 @@ import { taskQueueService, TaskQueueService } from "./TaskQueueService.js";
 import { workflowPersistence, WorkflowPersistence } from "./persistence/WorkflowPersistence.js";
 import type { WorkflowRun, NodeState } from "../../shared/types/workflowRun.js";
 import type { WorkflowNode, WorkflowCondition } from "../../shared/types/workflow.js";
-import type { TaskRecord } from "../../shared/types/task.js";
+import type { TaskRecord, TaskResult } from "../../shared/types/task.js";
+
+const TEMPLATE_REGEX = /\{\{\s*([^}]+?)\s*\}\}/g;
+const MAX_RESULT_DATA_BYTES = 1_048_576; // 1 MB
 
 export class WorkflowEngine {
   /** Active workflow runs (runId -> WorkflowRun) */
@@ -221,6 +224,16 @@ export class WorkflowEngine {
       resolvedDeps.push(taskId);
     }
 
+    let resolvedArgs = node.config.args;
+    if (resolvedArgs) {
+      try {
+        resolvedArgs = this.resolveTemplateArgs(resolvedArgs, run.nodeStates);
+      } catch (error) {
+        this.failNode(node.id, run, (error as Error).message);
+        throw error;
+      }
+    }
+
     const task = await this.queueService.createTask({
       title: `Workflow ${run.workflowId} - Node ${node.id}`,
       description: `Execute action: ${node.config.actionId}`,
@@ -231,7 +244,7 @@ export class WorkflowEngine {
         workflowId: run.workflowId,
         nodeId: node.id,
         actionId: node.config.actionId,
-        actionArgs: node.config.args,
+        actionArgs: resolvedArgs,
       },
     });
 
@@ -254,6 +267,7 @@ export class WorkflowEngine {
     taskId: string;
     result: string;
     artifacts?: string[];
+    data?: Record<string, unknown>;
     timestamp: number;
   }): Promise<void> {
     const mapping = this.taskToNode.get(payload.taskId);
@@ -271,11 +285,23 @@ export class WorkflowEngine {
       return;
     }
 
+    if (payload.data) {
+      const dataJson = JSON.stringify(payload.data);
+      if (Buffer.byteLength(dataJson, "utf8") > MAX_RESULT_DATA_BYTES) {
+        const sizeMB = (Buffer.byteLength(dataJson, "utf8") / 1_048_576).toFixed(2);
+        this.failNode(mapping.nodeId, run, `Node result data exceeds 1 MB limit (${sizeMB} MB)`);
+        await this.schedulePersist();
+        await this.checkWorkflowCompletion(run);
+        return;
+      }
+    }
+
     nodeState.status = "completed";
     nodeState.completedAt = payload.timestamp;
     nodeState.result = {
       summary: payload.result,
       artifacts: payload.artifacts,
+      data: payload.data,
     };
 
     const definition = run.definition;
@@ -285,13 +311,20 @@ export class WorkflowEngine {
       return;
     }
 
-    const nextNodeIds = await this.evaluateRouting(node, nodeState, run, "onSuccess");
+    try {
+      const nextNodeIds = await this.evaluateRouting(node, nodeState, run, "onSuccess");
 
-    for (const nextId of nextNodeIds) {
-      const nextNode = definition.nodes.find((n) => n.id === nextId);
-      if (nextNode && !run.scheduledNodes.has(nextId)) {
-        await this.compileNodeToTask(nextNode, run);
+      for (const nextId of nextNodeIds) {
+        const nextNode = definition.nodes.find((n) => n.id === nextId);
+        if (nextNode && !run.scheduledNodes.has(nextId)) {
+          await this.compileNodeToTask(nextNode, run);
+        }
       }
+    } catch (error) {
+      console.error(
+        `[WorkflowEngine] Error during routing after node ${mapping.nodeId} completion:`,
+        error
+      );
     }
 
     await this.schedulePersist();
@@ -474,6 +507,104 @@ export class WorkflowEngine {
     }
 
     return current;
+  }
+
+  /**
+   * Resolve template expressions in workflow node args.
+   * Supports {{nodeId.path.to.value}} syntax resolved against completed upstream node results.
+   * Pure placeholders (entire value is a single {{...}}) return the raw typed value.
+   * Embedded placeholders (mixed with text) stringify non-string resolved values.
+   */
+  private resolveTemplateArgs(
+    args: Record<string, unknown>,
+    nodeStates: Record<string, NodeState>
+  ): Record<string, unknown> {
+    const resolved: Record<string, unknown> = {};
+
+    for (const [key, value] of Object.entries(args)) {
+      resolved[key] = this.resolveTemplateValue(value, nodeStates);
+    }
+
+    return resolved;
+  }
+
+  private resolveTemplateValue(value: unknown, nodeStates: Record<string, NodeState>): unknown {
+    if (typeof value === "string") {
+      return this.resolveTemplateString(value, nodeStates);
+    }
+
+    if (Array.isArray(value)) {
+      return value.map((item) => this.resolveTemplateValue(item, nodeStates));
+    }
+
+    if (value !== null && typeof value === "object") {
+      const resolved: Record<string, unknown> = {};
+      for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+        resolved[k] = this.resolveTemplateValue(v, nodeStates);
+      }
+      return resolved;
+    }
+
+    return value;
+  }
+
+  private resolveTemplateString(value: string, nodeStates: Record<string, NodeState>): unknown {
+    const pureMatch = value.match(/^\{\{\s*([^}]+?)\s*\}\}$/);
+    if (pureMatch) {
+      return this.resolveExpression(pureMatch[1], nodeStates);
+    }
+
+    if (!TEMPLATE_REGEX.test(value)) {
+      return value;
+    }
+
+    TEMPLATE_REGEX.lastIndex = 0;
+    return value.replace(TEMPLATE_REGEX, (_match, expression: string) => {
+      const resolved = this.resolveExpression(expression, nodeStates);
+      if (typeof resolved === "string") {
+        return resolved;
+      }
+      return JSON.stringify(resolved);
+    });
+  }
+
+  private resolveExpression(expression: string, nodeStates: Record<string, NodeState>): unknown {
+    const dotIndex = expression.indexOf(".");
+    if (dotIndex === -1) {
+      throw new Error(
+        `Invalid template expression "{{${expression}}}": must be in format {{nodeId.path}}`
+      );
+    }
+
+    const nodeId = expression.substring(0, dotIndex);
+    const path = expression.substring(dotIndex + 1);
+
+    const nodeState = nodeStates[nodeId];
+    if (!nodeState) {
+      throw new Error(
+        `Template expression "{{${expression}}}": node "${nodeId}" not found in workflow`
+      );
+    }
+
+    if (nodeState.status !== "completed" || !nodeState.result) {
+      throw new Error(
+        `Template expression "{{${expression}}}": node "${nodeId}" has not completed (status: ${nodeState.status})`
+      );
+    }
+
+    return this.resolveJsonPath(nodeState.result, path);
+  }
+
+  /**
+   * Mark a node as failed and evaluate onFailure routing.
+   */
+  private failNode(nodeId: string, run: WorkflowRun, error: string): void {
+    const nodeState = run.nodeStates[nodeId];
+    if (!nodeState) return;
+
+    nodeState.status = "failed";
+    nodeState.completedAt = Date.now();
+    nodeState.result = { error };
   }
 
   /**
