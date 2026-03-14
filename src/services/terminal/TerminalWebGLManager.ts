@@ -32,8 +32,16 @@ export class TerminalWebGLManager {
     } catch {
       // WebGL unavailable (CI, older GPU, context limit) — stay on DOM renderer.
       // Clean up partially-constructed addon to prevent leaks.
-      try { clDisposable?.dispose(); } catch { /* ignore */ }
-      try { addon?.dispose(); } catch { /* ignore */ }
+      try {
+        clDisposable?.dispose();
+      } catch {
+        // ignore
+      }
+      try {
+        addon?.dispose();
+      } catch {
+        // ignore
+      }
     }
   }
 
