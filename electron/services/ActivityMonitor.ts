@@ -253,13 +253,17 @@ export class ActivityMonitor {
   private rewriteWindowStart = 0;
   private rewriteCount = 0;
 
-  // Status line noise filter patterns (token counts, costs, progress indicators)
+  // Status line noise filter patterns (token counts, costs, progress indicators, spinners)
   private static readonly STATUS_LINE_PATTERNS: RegExp[] = [
     /\b\d+\s*tokens?\b/i,
     /\$\d+\.\d+/,
     /\b\d+%\b/,
     /\[\d+\/\d+\]/,
     /⏱️?\s*\d+[smh]/,
+    /[\u2800-\u28FF]/, // Braille spinner characters (⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏)
+    /esc to interrupt/i, // Claude Code / Gemini CLI status line marker
+    /[✽✻✦]\s/, // Claude Code deliberation / Gemini tool icons
+    /\b(?:working|thinking|deliberating|responding|running)\b.*[([]/i, // Spinner verb + context
   ];
 
   // State preservation for project switch
@@ -644,20 +648,20 @@ export class ActivityMonitor {
       // when patterns are still visible in xterm but not in the rolling buffer.
     }
 
-    // Now handle busy state - reset debounce timer
-    if (this.state === "busy" && !isLikelyUserEcho) {
-      this.resetDebounceTimer();
-    }
-
     if (!data || isLikelyUserEcho) {
       return;
     }
 
-    // Filter status line rewrites (token counts, costs, progress) from volume-based activity.
+    // Filter status line rewrites (token counts, costs, spinners, progress) from activity.
     // These CR-based single-line updates don't represent real agent output.
-    // Debounce timer is already reset above to keep busy state alive.
+    // Cosmetic redraws must NOT reset the debounce timer (Issue #3189).
     if (this.isStatusLineRewrite(data)) {
       return;
+    }
+
+    // Reset debounce timer only for semantic output (after filtering cosmetic redraws)
+    if (this.state === "busy") {
+      this.resetDebounceTimer();
     }
 
     // Update pattern buffer and check for working patterns (non-polling terminals only)
@@ -894,7 +898,7 @@ export class ActivityMonitor {
         count++;
       }
     }
-    if (data.includes("\x1b[2K") || data.includes("\x1b[K")) {
+    if (data.includes("\x1b[2K") || data.includes("\x1b[K") || /\x1b\[\d*A/.test(data)) {
       count++;
     }
     return count;
@@ -917,7 +921,12 @@ export class ActivityMonitor {
         }
       }
     }
-    if (!hasRewrite && !data.includes("\x1b[2K") && !data.includes("\x1b[K")) {
+    if (
+      !hasRewrite &&
+      !data.includes("\x1b[2K") &&
+      !data.includes("\x1b[K") &&
+      !/\x1b\[\d*A/.test(data)
+    ) {
       return false;
     }
 
