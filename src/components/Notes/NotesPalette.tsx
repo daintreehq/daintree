@@ -144,6 +144,13 @@ export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
     });
   }, [searchResults, selectedTag, sortOrder]);
 
+  // Derive whether to show a synthetic "Create note" list item
+  const trimmedQuery = query.trim();
+  const showCreateItem =
+    visibleNotes.length === 0 && trimmedQuery.length > 0 && !isLoading && !isSearching;
+  const createDisplayTitle =
+    trimmedQuery.length > 40 ? `${trimmedQuery.slice(0, 40)}…` : trimmedQuery;
+
   // Clear selected tag when it disappears from available tags
   useEffect(() => {
     if (selectedTag && !availableTags.includes(selectedTag)) {
@@ -744,18 +751,22 @@ export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
       switch (e.key) {
         case "ArrowUp":
           e.preventDefault();
-          setSelectedIndex((prev) => Math.max(0, prev - 1));
-          if (visibleNotes.length > 0) {
-            const newIndex = Math.max(0, selectedIndex - 1);
-            setSelectedNote(visibleNotes[newIndex]);
+          if (!showCreateItem) {
+            setSelectedIndex((prev) => Math.max(0, prev - 1));
+            if (visibleNotes.length > 0) {
+              const newIndex = Math.max(0, selectedIndex - 1);
+              setSelectedNote(visibleNotes[newIndex]);
+            }
           }
           break;
         case "ArrowDown":
           e.preventDefault();
-          setSelectedIndex((prev) => Math.min(visibleNotes.length - 1, prev + 1));
-          if (visibleNotes.length > 0) {
-            const newIndex = Math.min(visibleNotes.length - 1, selectedIndex + 1);
-            setSelectedNote(visibleNotes[newIndex]);
+          if (!showCreateItem) {
+            setSelectedIndex((prev) => Math.min(visibleNotes.length - 1, prev + 1));
+            if (visibleNotes.length > 0) {
+              const newIndex = Math.min(visibleNotes.length - 1, selectedIndex + 1);
+              setSelectedNote(visibleNotes[newIndex]);
+            }
           }
           break;
         case "Enter":
@@ -766,6 +777,8 @@ export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
             handleCreateNote();
           } else if (e.shiftKey && selectedNote) {
             handleOpenAsPanel("grid");
+          } else if (showCreateItem) {
+            handleCreateNote(trimmedQuery);
           } else if (visibleNotes.length > 0 && !selectedNote) {
             setSelectedNote(visibleNotes[selectedIndex]);
           }
@@ -795,6 +808,8 @@ export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
       selectedIndex,
       selectedNote,
       noteContent,
+      showCreateItem,
+      trimmedQuery,
       handleCreateNote,
       handleOpenAsPanel,
       deleteIfAutoDeleteable,
@@ -985,26 +1000,24 @@ export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
                     <div className="px-3 py-8 text-center text-canopy-text/50 text-sm">
                       Loading...
                     </div>
+                  ) : showCreateItem ? (
+                    <div
+                      role="option"
+                      aria-selected={selectedIndex === 0}
+                      className={cn(
+                        "relative flex items-center gap-2 px-3 py-1.5 cursor-pointer transition-colors",
+                        "bg-overlay-soft text-canopy-text before:absolute before:left-0 before:top-1.5 before:bottom-1.5 before:w-[2px] before:rounded-r before:bg-canopy-accent before:content-['']"
+                      )}
+                      onClick={() => handleCreateNote(trimmedQuery)}
+                    >
+                      <Plus className="shrink-0 w-3.5 h-3.5 text-canopy-accent" />
+                      <span className="text-sm font-medium truncate">
+                        Create &ldquo;{createDisplayTitle}&rdquo;
+                      </span>
+                    </div>
                   ) : visibleNotes.length === 0 ? (
                     <div className="px-3 py-8 text-center text-canopy-text/50 text-sm">
-                      {query.trim() ? (
-                        <div className="flex flex-col items-center gap-3">
-                          <span>No notes match "{query}"</span>
-                          <Button
-                            onClick={() => handleCreateNote(query.trim())}
-                            variant="secondary"
-                            size="sm"
-                            className="bg-canopy-accent/10 hover:bg-canopy-accent/20 text-canopy-accent"
-                          >
-                            Create "{query.trim().slice(0, 30)}
-                            {query.trim().length > 30 ? "..." : ""}"
-                          </Button>
-                        </div>
-                      ) : selectedTag ? (
-                        "No notes with this tag"
-                      ) : (
-                        "No notes yet"
-                      )}
+                      {selectedTag ? "No notes with this tag" : "No notes yet"}
                     </div>
                   ) : (
                     visibleNotes.map((note, index) => {
