@@ -17,6 +17,8 @@ import {
   pendingAIField,
   setPendingAIRanges,
   diffChipField,
+  terminalChipField,
+  selectionChipField,
 } from "../inputEditorExtensions";
 
 describe("computeAutoSize", () => {
@@ -1182,5 +1184,84 @@ describe("fileChipField excludes diff tokens", () => {
     const chipState = state.field(fileChipStateField);
     expect(chipState.tokens).toHaveLength(1);
     expect(chipState.tokens[0].path).toBe("src/App.tsx");
+  });
+
+  it("does not treat @terminal as a file token", () => {
+    const fileChipStateField = createFileChipField();
+    const state = EditorState.create({
+      doc: "@terminal @src/file.ts",
+      extensions: [fileChipStateField],
+    });
+    const chipState = state.field(fileChipStateField);
+    expect(chipState.tokens).toHaveLength(1);
+    expect(chipState.tokens[0].path).toBe("src/file.ts");
+  });
+
+  it("does not treat @selection as a file token", () => {
+    const fileChipStateField = createFileChipField();
+    const state = EditorState.create({
+      doc: "@selection @src/file.ts",
+      extensions: [fileChipStateField],
+    });
+    const chipState = state.field(fileChipStateField);
+    expect(chipState.tokens).toHaveLength(1);
+    expect(chipState.tokens[0].path).toBe("src/file.ts");
+  });
+});
+
+describe("terminalChipField", () => {
+  it("creates decorations for @terminal tokens", () => {
+    const state = EditorState.create({
+      doc: "check @terminal please",
+      extensions: [terminalChipField],
+    });
+    const chipState = state.field(terminalChipField);
+    expect(chipState.tokens).toHaveLength(1);
+    expect(chipState.tokens[0].start).toBe(6);
+    expect(chipState.tokens[0].end).toBe(15);
+  });
+
+  it("returns empty for text without @terminal", () => {
+    const state = EditorState.create({
+      doc: "just plain text",
+      extensions: [terminalChipField],
+    });
+    const chipState = state.field(terminalChipField);
+    expect(chipState.tokens).toHaveLength(0);
+  });
+
+  it("updates when document changes", () => {
+    const state = EditorState.create({
+      doc: "@terminal",
+      extensions: [terminalChipField],
+    });
+    expect(state.field(terminalChipField).tokens).toHaveLength(1);
+
+    const tr = state.update({
+      changes: { from: 0, to: 9, insert: "hello" },
+    });
+    expect(tr.state.field(terminalChipField).tokens).toHaveLength(0);
+  });
+});
+
+describe("selectionChipField", () => {
+  it("creates decorations for @selection tokens", () => {
+    const state = EditorState.create({
+      doc: "check @selection please",
+      extensions: [selectionChipField],
+    });
+    const chipState = state.field(selectionChipField);
+    expect(chipState.tokens).toHaveLength(1);
+    expect(chipState.tokens[0].start).toBe(6);
+    expect(chipState.tokens[0].end).toBe(16);
+  });
+
+  it("returns empty for text without @selection", () => {
+    const state = EditorState.create({
+      doc: "just plain text",
+      extensions: [selectionChipField],
+    });
+    const chipState = state.field(selectionChipField);
+    expect(chipState.tokens).toHaveLength(0);
   });
 });
