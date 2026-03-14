@@ -12,6 +12,7 @@ import { EditorView, drawSelection } from "@codemirror/view";
 import { Compartment, EditorSelection, EditorState } from "@codemirror/state";
 import type { LegacyAgentType } from "@shared/types";
 import { getAgentConfig } from "@/config/agents";
+import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { cn } from "@/lib/utils";
 import { buildTerminalSendPayload } from "@/lib/terminalInput";
 import { useFileAutocomplete } from "@/hooks/useFileAutocomplete";
@@ -1135,6 +1136,21 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
               const latest = latestRef.current;
               if (latest?.isInHistoryMode) {
                 latest.resetHistoryIndex(latest.terminalId);
+              }
+
+              const isUserChange = update.transactions.some(
+                (tr) => tr.isUserEvent("input") || tr.isUserEvent("delete")
+              );
+              if (isUserChange) {
+                const terminalId = latest?.terminalId;
+                if (terminalId) {
+                  const resultingValue = update.state.doc.toString();
+                  if (resultingValue.trim().length === 0) {
+                    terminalInstanceService.clearDirectingState(terminalId);
+                  } else {
+                    terminalInstanceService.notifyUserInput(terminalId);
+                  }
+                }
               }
             }
           }
