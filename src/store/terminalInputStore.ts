@@ -39,6 +39,23 @@ function makeDraftKey(terminalId: string, projectId?: string): string {
   return projectId ? `${projectId}:${terminalId}` : terminalId;
 }
 
+function deleteTerminalKeys<V>(map: Map<string, V>, terminalId: string): Map<string, V> {
+  const suffix = `:${terminalId}`;
+  let changed = false;
+  for (const key of map.keys()) {
+    if (key === terminalId || key.endsWith(suffix)) {
+      changed = true;
+      break;
+    }
+  }
+  if (!changed) return map;
+  const next = new Map(map);
+  for (const key of [...next.keys()]) {
+    if (key === terminalId || key.endsWith(suffix)) next.delete(key);
+  }
+  return next;
+}
+
 export interface TerminalInputState {
   hybridInputEnabled: boolean;
   hybridInputAutoFocus: boolean;
@@ -74,6 +91,7 @@ export interface TerminalInputState {
   ) => string | null;
   resetHistoryIndex: (terminalId: string) => void;
   getHistoryLength: (terminalId: string) => number;
+  clearTerminalState: (terminalId: string) => void;
 }
 
 export const useTerminalInputStore = create<TerminalInputState>()((set, get) => ({
@@ -284,4 +302,36 @@ export const useTerminalInputStore = create<TerminalInputState>()((set, get) => 
     const history = get().commandHistory.get(terminalId);
     return history?.length ?? 0;
   },
+
+  clearTerminalState: (terminalId) =>
+    set((state) => {
+      const newDraftInputs = deleteTerminalKeys(state.draftInputs, terminalId);
+      const newPendingDrafts = deleteTerminalKeys(state.pendingDrafts, terminalId);
+      const newStashed = deleteTerminalKeys(state.stashedEditorStates, terminalId);
+
+      const newHistory = new Map(state.commandHistory);
+      const hadHistory = newHistory.delete(terminalId);
+
+      const newIndex = new Map(state.historyIndex);
+      const hadIndex = newIndex.delete(terminalId);
+
+      const newTempDraft = new Map(state.tempDraft);
+      const hadTemp = newTempDraft.delete(terminalId);
+
+      const compositeChanged =
+        newDraftInputs !== state.draftInputs ||
+        newPendingDrafts !== state.pendingDrafts ||
+        newStashed !== state.stashedEditorStates;
+
+      if (!compositeChanged && !hadHistory && !hadIndex && !hadTemp) return state;
+
+      return {
+        draftInputs: newDraftInputs,
+        pendingDrafts: newPendingDrafts,
+        stashedEditorStates: newStashed,
+        commandHistory: hadHistory ? newHistory : state.commandHistory,
+        historyIndex: hadIndex ? newIndex : state.historyIndex,
+        tempDraft: hadTemp ? newTempDraft : state.tempDraft,
+      };
+    }),
 }));
