@@ -65,6 +65,10 @@ export class TerminalWebGLManager {
     this.currentId = null;
   }
 
+  isCurrent(id: string): boolean {
+    return this.currentId === id;
+  }
+
   detachIfCurrent(id: string): void {
     if (this.currentId === id) {
       this.detachCurrent();

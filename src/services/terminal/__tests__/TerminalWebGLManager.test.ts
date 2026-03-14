@@ -175,6 +175,18 @@ describe("TerminalWebGLManager", () => {
     expect(managed2.terminal.loadAddon).toHaveBeenCalledTimes(1);
   });
 
+  it("isCurrent returns true only for the attached terminal", () => {
+    const managed = makeManagedTerminal();
+    expect(manager.isCurrent("t1")).toBe(false);
+
+    manager.attachToFocused("t1", managed);
+    expect(manager.isCurrent("t1")).toBe(true);
+    expect(manager.isCurrent("t2")).toBe(false);
+
+    manager.detachCurrent();
+    expect(manager.isCurrent("t1")).toBe(false);
+  });
+
   it("detachIfCurrent only detaches when id matches", () => {
     const managed = makeManagedTerminal();
     manager.attachToFocused("t1", managed);
