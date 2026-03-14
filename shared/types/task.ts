@@ -27,6 +27,8 @@ export interface TaskResult {
   summary?: string;
   /** List of artifact paths or identifiers produced */
   artifacts?: string[];
+  /** Structured data for inter-node data flow in workflows */
+  data?: Record<string, unknown>;
   /** Error message if task failed */
   error?: string;
 }

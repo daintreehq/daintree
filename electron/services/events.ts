@@ -749,6 +749,7 @@ export type CanopyEventMap = {
     worktreeId?: string;
     result: string;
     artifacts?: string[];
+    data?: Record<string, unknown>;
   }>;
 
   /**
