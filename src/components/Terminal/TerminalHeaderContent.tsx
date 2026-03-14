@@ -54,7 +54,7 @@ function TerminalHeaderContentComponent({
         ? "bg-[color-mix(in_oklab,var(--color-state-working)_15%,transparent)] border-state-working/40"
         : agentState === "waiting"
           ? "bg-[color-mix(in_oklab,var(--color-state-waiting)_15%,transparent)] border-state-waiting/40"
-          : agentState === "running"
+          : agentState === "directing" || agentState === "running"
             ? "bg-[color-mix(in_oklab,var(--color-status-info)_15%,transparent)] border-status-info/40"
             : "bg-[color-mix(in_oklab,var(--color-status-error)_15%,transparent)] border-status-error/40";
 

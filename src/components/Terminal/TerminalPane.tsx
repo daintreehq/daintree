@@ -834,6 +834,7 @@ function TerminalPaneComponent({
                 if (isEscapedCommand(text)) {
                   const unescapedText = unescapeCommand(text);
                   terminalInstanceService.notifyUserInput(id);
+                  terminalInstanceService.clearDirectingState(id);
                   terminalClient.submit(id, unescapedText);
                   handleInput(trackerData);
                   return;
@@ -842,6 +843,7 @@ function TerminalPaneComponent({
                 const canopyCommand = getCanopyCommand(text);
                 if (canopyCommand) {
                   terminalInstanceService.notifyUserInput(id);
+                  terminalInstanceService.clearDirectingState(id);
                   void Promise.resolve(canopyCommand.execute({ terminalId: id, worktreeId })).catch(
                     (error) => {
                       console.error(`Canopy command '${canopyCommand.label}' failed:`, error);
@@ -851,6 +853,7 @@ function TerminalPaneComponent({
                 }
 
                 terminalInstanceService.notifyUserInput(id);
+                terminalInstanceService.clearDirectingState(id);
                 terminalClient.submit(id, text);
                 handleInput(trackerData);
               }
