@@ -47,6 +47,7 @@ class TerminalInstanceService {
   >();
   private offscreenManager = new TerminalOffscreenManager();
   private linkHandler = new TerminalLinkHandler();
+  private cachedSelections = new Map<string, string>();
   private resizeController: TerminalResizeController;
   private rendererPolicy: TerminalRendererPolicy;
   private webGLManager = new TerminalWebGLManager();
@@ -510,6 +511,14 @@ class TerminalInstanceService {
     });
     listeners.push(() => scrollDisposable.dispose());
 
+    const selectionDisposable = terminal.onSelectionChange(() => {
+      const sel = terminal.getSelection();
+      if (sel) {
+        this.cachedSelections.set(id, sel);
+      }
+    });
+    listeners.push(() => selectionDisposable.dispose());
+
     if (agentId) {
       const agentConfig = getEffectiveAgentConfig(agentId);
       const titlePatterns = agentConfig?.detection?.titleStatePatterns;
@@ -602,6 +611,10 @@ class TerminalInstanceService {
 
   get(id: string): ManagedTerminal | null {
     return this.instances.get(id) ?? null;
+  }
+
+  getCachedSelection(id: string): string {
+    return this.cachedSelections.get(id) ?? "";
   }
 
   waitForInstance(id: string, options: { timeoutMs?: number } = {}): Promise<void> {
@@ -1174,6 +1187,7 @@ class TerminalInstanceService {
     this.offscreenManager.removeOffscreenSlot(id);
     this.suppressedExitUntil.delete(id);
     this.cwdProviders.delete(id);
+    this.cachedSelections.delete(id);
     this.wakeManager.clearWakeState(id);
     this.rendererPolicy.clearTierState(id);
   }

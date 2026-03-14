@@ -6,6 +6,10 @@ import {
   getAllSlashCommandTokens,
   getDiffContext,
   getAllAtDiffTokens,
+  getTerminalContext,
+  getAllAtTerminalTokens,
+  getSelectionContext,
+  getAllAtSelectionTokens,
 } from "../hybridInputParsing";
 
 describe("getAtFileContext", () => {
@@ -362,5 +366,124 @@ describe("getAllAtDiffTokens", () => {
     expect(tokens).toHaveLength(2);
     expect(tokens[0].diffType).toBe("unstaged");
     expect(tokens[1].diffType).toBe("staged");
+  });
+});
+
+describe("getTerminalContext", () => {
+  it("detects @terminal at the caret", () => {
+    const text = "check @terminal please";
+    const caret = "check @terminal".length;
+    const ctx = getTerminalContext(text, caret);
+    expect(ctx).not.toBeNull();
+    expect(ctx?.atStart).toBe(6);
+    expect(ctx?.tokenEnd).toBe("check @terminal".length);
+  });
+
+  it("returns null for short prefixes like @t or @te", () => {
+    expect(getTerminalContext("@t", 2)).toBeNull();
+    expect(getTerminalContext("@te", 3)).toBeNull();
+    expect(getTerminalContext("@ter", 4)).toBeNull();
+  });
+
+  it("activates for partial prefix @term", () => {
+    const ctx = getTerminalContext("@term", 5);
+    expect(ctx).not.toBeNull();
+    expect(ctx?.atStart).toBe(0);
+  });
+
+  it("returns null for non-terminal @ tokens", () => {
+    expect(getTerminalContext("@src/file.ts", 5)).toBeNull();
+  });
+
+  it("requires @ to be preceded by whitespace", () => {
+    expect(getTerminalContext("no@terminal", "no@terminal".length)).toBeNull();
+  });
+});
+
+describe("getAllAtTerminalTokens", () => {
+  it("finds @terminal tokens in text", () => {
+    const tokens = getAllAtTerminalTokens("check @terminal please");
+    expect(tokens).toHaveLength(1);
+    expect(tokens[0]).toEqual({ start: 6, end: 15 });
+  });
+
+  it("ignores partial @term (not a complete token)", () => {
+    const tokens = getAllAtTerminalTokens("@term not terminal");
+    expect(tokens).toHaveLength(0);
+  });
+
+  it("finds multiple @terminal tokens", () => {
+    const tokens = getAllAtTerminalTokens("@terminal and @terminal");
+    expect(tokens).toHaveLength(2);
+  });
+
+  it("ignores @terminal not preceded by whitespace", () => {
+    const tokens = getAllAtTerminalTokens("no@terminal");
+    expect(tokens).toHaveLength(0);
+  });
+
+  it("returns empty for text with no terminal tokens", () => {
+    const tokens = getAllAtTerminalTokens("just plain text");
+    expect(tokens).toHaveLength(0);
+  });
+
+  it("finds @terminal alongside @diff and @file tokens", () => {
+    const tokens = getAllAtTerminalTokens("@terminal @diff @src/file.ts");
+    expect(tokens).toHaveLength(1);
+    expect(tokens[0].start).toBe(0);
+  });
+});
+
+describe("getSelectionContext", () => {
+  it("detects @selection at the caret", () => {
+    const text = "check @selection please";
+    const caret = "check @selection".length;
+    const ctx = getSelectionContext(text, caret);
+    expect(ctx).not.toBeNull();
+    expect(ctx?.atStart).toBe(6);
+    expect(ctx?.tokenEnd).toBe("check @selection".length);
+  });
+
+  it("returns null for short prefixes like @s or @se", () => {
+    expect(getSelectionContext("@s", 2)).toBeNull();
+    expect(getSelectionContext("@se", 3)).toBeNull();
+    expect(getSelectionContext("@sel", 4)).toBeNull();
+  });
+
+  it("activates for partial prefix @sele", () => {
+    const ctx = getSelectionContext("@sele", 5);
+    expect(ctx).not.toBeNull();
+    expect(ctx?.atStart).toBe(0);
+  });
+
+  it("returns null for non-selection @ tokens", () => {
+    expect(getSelectionContext("@src/file.ts", 5)).toBeNull();
+  });
+
+  it("requires @ to be preceded by whitespace", () => {
+    expect(getSelectionContext("no@selection", "no@selection".length)).toBeNull();
+  });
+});
+
+describe("getAllAtSelectionTokens", () => {
+  it("finds @selection tokens in text", () => {
+    const tokens = getAllAtSelectionTokens("check @selection please");
+    expect(tokens).toHaveLength(1);
+    expect(tokens[0]).toEqual({ start: 6, end: 16 });
+  });
+
+  it("ignores partial @sele (not a complete token)", () => {
+    const tokens = getAllAtSelectionTokens("@sele not selection");
+    expect(tokens).toHaveLength(0);
+  });
+
+  it("finds multiple @selection tokens", () => {
+    const tokens = getAllAtSelectionTokens("@selection and @selection");
+    expect(tokens).toHaveLength(2);
+  });
+
+  it("returns empty for text with no selection tokens", () => {
+    const tokens = getAllAtSelectionTokens("just plain text");
+    expect(tokens).toHaveLength(0);
   });
 });

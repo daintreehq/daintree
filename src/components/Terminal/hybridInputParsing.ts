@@ -90,6 +90,142 @@ export function getAllAtDiffTokens(text: string): AtDiffToken[] {
   return tokens;
 }
 
+// --- @terminal context ---
+
+export interface AtTerminalContext {
+  atStart: number;
+  tokenEnd: number;
+}
+
+const TERMINAL_PREFIXES = ["term", "termi", "termin", "termina", "terminal"];
+
+export function getTerminalContext(text: string, caret: number): AtTerminalContext | null {
+  if (caret < 0 || caret > text.length) return null;
+  const beforeCaret = text.slice(0, caret);
+  const atStart = beforeCaret.lastIndexOf("@");
+  if (atStart === -1) return null;
+  if (atStart > 0 && !/\s/.test(beforeCaret[atStart - 1])) return null;
+
+  let tokenEnd = atStart + 1;
+  while (tokenEnd < text.length && !/\s/.test(text[tokenEnd])) {
+    tokenEnd++;
+  }
+
+  if (caret < atStart + 1 || caret > tokenEnd) return null;
+
+  const partial = text.slice(atStart + 1, caret);
+  if (partial.length < 4) return null;
+  if (!TERMINAL_PREFIXES.some((p) => p.startsWith(partial) || partial === p)) return null;
+
+  return { atStart, tokenEnd };
+}
+
+export interface AtTerminalToken {
+  start: number;
+  end: number;
+}
+
+export function getAllAtTerminalTokens(text: string): AtTerminalToken[] {
+  const tokens: AtTerminalToken[] = [];
+  let i = 0;
+
+  while (i < text.length) {
+    if (text[i] !== "@") {
+      i++;
+      continue;
+    }
+
+    if (i > 0 && !/\s/.test(text[i - 1])) {
+      i++;
+      continue;
+    }
+
+    const atStart = i;
+    i++;
+
+    const tokenStart = i;
+    while (i < text.length && !/\s/.test(text[i])) {
+      i++;
+    }
+
+    const token = text.slice(tokenStart, i);
+    if (token === "terminal") {
+      tokens.push({ start: atStart, end: i });
+    }
+  }
+
+  return tokens;
+}
+
+// --- @selection context ---
+
+export interface AtSelectionContext {
+  atStart: number;
+  tokenEnd: number;
+}
+
+const SELECTION_PREFIXES = ["sele", "selec", "select", "selecti", "selectio", "selection"];
+
+export function getSelectionContext(text: string, caret: number): AtSelectionContext | null {
+  if (caret < 0 || caret > text.length) return null;
+  const beforeCaret = text.slice(0, caret);
+  const atStart = beforeCaret.lastIndexOf("@");
+  if (atStart === -1) return null;
+  if (atStart > 0 && !/\s/.test(beforeCaret[atStart - 1])) return null;
+
+  let tokenEnd = atStart + 1;
+  while (tokenEnd < text.length && !/\s/.test(text[tokenEnd])) {
+    tokenEnd++;
+  }
+
+  if (caret < atStart + 1 || caret > tokenEnd) return null;
+
+  const partial = text.slice(atStart + 1, caret);
+  if (partial.length < 4) return null;
+  if (!SELECTION_PREFIXES.some((p) => p.startsWith(partial) || partial === p)) return null;
+
+  return { atStart, tokenEnd };
+}
+
+export interface AtSelectionToken {
+  start: number;
+  end: number;
+}
+
+export function getAllAtSelectionTokens(text: string): AtSelectionToken[] {
+  const tokens: AtSelectionToken[] = [];
+  let i = 0;
+
+  while (i < text.length) {
+    if (text[i] !== "@") {
+      i++;
+      continue;
+    }
+
+    if (i > 0 && !/\s/.test(text[i - 1])) {
+      i++;
+      continue;
+    }
+
+    const atStart = i;
+    i++;
+
+    const tokenStart = i;
+    while (i < text.length && !/\s/.test(text[i])) {
+      i++;
+    }
+
+    const token = text.slice(tokenStart, i);
+    if (token === "selection") {
+      tokens.push({ start: atStart, end: i });
+    }
+  }
+
+  return tokens;
+}
+
+// --- @file context ---
+
 export interface AtFileContext {
   atStart: number;
   tokenEnd: number;

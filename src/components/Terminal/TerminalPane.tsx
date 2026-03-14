@@ -818,6 +818,7 @@ function TerminalPaneComponent({
             cwd={cwd}
             agentId={effectiveAgentId}
             agentHasLifecycleEvent={stateChangeTrigger !== undefined}
+            agentState={agentState}
             restartKey={restartKey}
             onActivate={handleClick}
             onSend={({ trackerData, text }) => {
