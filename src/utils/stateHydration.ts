@@ -25,7 +25,7 @@ import { panelKindHasPty } from "@shared/config/panelKindRegistry";
 import { isSmokeTestTerminalId } from "@shared/utils/smokeTestTerminals";
 import { logDebug, logInfo, logWarn, logError } from "@/utils/logger";
 import { PERF_MARKS } from "@shared/perf/marks";
-import { markRendererPerformance } from "@/utils/performance";
+import { markRendererPerformance, withRendererSpan } from "@/utils/performance";
 import { isCanopyEnvEnabled } from "@/utils/env";
 
 const RECONNECT_TIMEOUT_MS = 2000;
@@ -137,7 +137,8 @@ async function runInBatches<T>(
 
 async function restoreTerminalSnapshots(
   tasks: TerminalRestoreTask[],
-  isCurrent: () => boolean
+  isCurrent: () => boolean,
+  switchId?: string
 ): Promise<void> {
   if (tasks.length === 0) {
     return;
@@ -145,8 +146,10 @@ async function restoreTerminalSnapshots(
 
   let serializedStateBatch: Record<string, string | null> | null = null;
   try {
-    serializedStateBatch = await terminalClient.getSerializedStates(
-      tasks.map((task) => task.terminalId)
+    serializedStateBatch = await withRendererSpan(
+      PERF_MARKS.HYDRATE_GET_SERIALIZED_STATES,
+      () => terminalClient.getSerializedStates(tasks.map((task) => task.terminalId)),
+      { switchId: switchId ?? null }
     );
   } catch (batchError) {
     logWarn("Batch serialized state fetch failed; falling back to per-terminal requests", {
@@ -273,12 +276,20 @@ export async function hydrateAppState(
 
   suppressMruRecording(true);
   try {
-    await ensureHydrationBootstrap();
+    await withRendererSpan(
+      PERF_MARKS.HYDRATE_BOOTSTRAP,
+      () => ensureHydrationBootstrap(),
+      { switchId: _switchId ?? null }
+    );
     if (!checkCurrent()) return;
 
     // Batch fetch initial state
     const [hydrateResult, tmpDir] = await Promise.all([
-      appClient.hydrate(),
+      withRendererSpan(
+        PERF_MARKS.HYDRATE_APP_CLIENT,
+        () => appClient.hydrate(),
+        { switchId: _switchId ?? null }
+      ),
       systemClient.getTmpDir().catch(() => ""),
     ]);
     const { appState, terminalConfig, project: currentProject, agentSettings } = hydrateResult;
@@ -364,7 +375,11 @@ export async function hydrateAppState(
 
     if (currentProjectId) {
       try {
-        const backendTerminals = await terminalClient.getForProject(currentProjectId);
+        const backendTerminals = await withRendererSpan(
+          PERF_MARKS.HYDRATE_GET_TERMINALS,
+          () => terminalClient.getForProject(currentProjectId),
+          { switchId: _switchId ?? null }
+        );
         if (!checkCurrent()) return;
 
         logHydrationInfo(
@@ -1028,7 +1043,11 @@ export async function hydrateAppState(
           shouldDeferSnapshotRestore
         );
 
-        await restoreTerminalSnapshots(criticalTasks, checkCurrent);
+        await withRendererSpan(
+          PERF_MARKS.HYDRATE_RESTORE_SNAPSHOTS_CRITICAL,
+          () => restoreTerminalSnapshots(criticalTasks, checkCurrent, _switchId ?? undefined),
+          { switchId: _switchId ?? null, criticalCount: criticalTasks.length }
+        );
         if (!checkCurrent()) return;
 
         if (deferredTasks.length > 0) {
@@ -1039,7 +1058,7 @@ export async function hydrateAppState(
 
           scheduleDeferredSnapshotRestore(async () => {
             if (!checkCurrent()) return;
-            await restoreTerminalSnapshots(deferredTasks, checkCurrent);
+            await restoreTerminalSnapshots(deferredTasks, checkCurrent, _switchId ?? undefined);
             if (!checkCurrent()) return;
 
             markRendererPerformance("hydrate_restore_snapshots_deferred_complete", {

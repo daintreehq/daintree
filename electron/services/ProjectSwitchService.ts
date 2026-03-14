@@ -9,7 +9,7 @@ import { sendToRenderer } from "../ipc/utils.js";
 import { randomUUID } from "crypto";
 import { store } from "../store.js";
 import { PERF_MARKS } from "../../shared/perf/marks.js";
-import { markPerformance } from "../utils/performance.js";
+import { markPerformance, withPerformanceSpan } from "../utils/performance.js";
 
 export class ProjectSwitchService {
   private deps: HandlerDependencies;
@@ -61,7 +61,11 @@ export class ProjectSwitchService {
 
     try {
       await this.cleanupWorktreeService();
-      const cleanupPromise = this.cleanupSupportingServices(projectId);
+      const cleanupPromise = withPerformanceSpan(
+        PERF_MARKS.PROJECT_SWITCH_CLEANUP,
+        () => this.cleanupSupportingServices(projectId),
+        { projectId }
+      );
 
       console.log("[ProjectSwitch] Previous project cleanup in progress");
 
@@ -76,7 +80,14 @@ export class ProjectSwitchService {
         throw new Error(`Project not found after update: ${projectId}`);
       }
 
-      await Promise.all([cleanupPromise, this.loadNewProject(project)]);
+      await Promise.all([
+        cleanupPromise,
+        withPerformanceSpan(
+          PERF_MARKS.PROJECT_SWITCH_LOAD_PROJECT,
+          () => this.loadNewProject(project),
+          { projectId }
+        ),
+      ]);
 
       const switchId = randomUUID();
       sendToRenderer(this.deps.mainWindow, CHANNELS.PROJECT_ON_SWITCH, {
