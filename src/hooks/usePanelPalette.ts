@@ -23,12 +23,11 @@ export type UsePanelPaletteReturn = UseSearchablePaletteReturn<PanelKindOption> 
   confirmSelection: () => PanelKindOption | null;
 };
 
-const AGENT_LAUNCH_ACTIONS: Record<string, KeyAction> = {
-  claude: "agent.claude",
-  gemini: "agent.gemini",
-  codex: "agent.codex",
-  opencode: "agent.opencode",
-};
+import { BUILT_IN_AGENT_IDS } from "@shared/config/agentIds";
+
+const AGENT_LAUNCH_ACTIONS: Record<string, KeyAction> = Object.fromEntries(
+  BUILT_IN_AGENT_IDS.map((id) => [id, `agent.${id}` as KeyAction])
+);
 
 function filterPanelKinds(items: PanelKindOption[], query: string): PanelKindOption[] {
   if (!query.trim()) return items;

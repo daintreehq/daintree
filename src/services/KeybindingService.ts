@@ -1,3 +1,5 @@
+import { AGENT_REGISTRY } from "@shared/config/agentRegistry";
+
 export type KeyScope = "global" | "terminal" | "modal" | "worktreeList" | "sidecar";
 
 export interface KeybindingConfig {
@@ -240,22 +242,16 @@ const DEFAULT_KEYBINDINGS: KeybindingConfig[] = [
     description: "Open quick switcher",
     category: "Agents",
   },
-  {
-    actionId: "agent.claude",
-    combo: "Cmd+Alt+C",
-    scope: "global",
-    priority: 0,
-    description: "Launch Claude agent",
-    category: "Agents",
-  },
-  {
-    actionId: "agent.gemini",
-    combo: "Cmd+Alt+G",
-    scope: "global",
-    priority: 0,
-    description: "Launch Gemini agent",
-    category: "Agents",
-  },
+  ...Object.entries(AGENT_REGISTRY)
+    .filter(([, config]) => config.shortcut)
+    .map(([id, config]) => ({
+      actionId: `agent.${id}`,
+      combo: config.shortcut!.replace("Cmd/Ctrl", "Cmd"),
+      scope: "global" as const,
+      priority: 0,
+      description: `Launch ${config.name} agent`,
+      category: "Agents",
+    })),
   {
     actionId: "agent.terminal",
     combo: "Cmd+Alt+N",
@@ -883,23 +879,6 @@ const DEFAULT_KEYBINDINGS: KeybindingConfig[] = [
     priority: 0,
     description: "Reset renderers for all sessions in active worktree",
     category: "Worktree Sessions",
-  },
-  // Agent launchers
-  {
-    actionId: "agent.codex",
-    combo: "Cmd+Alt+X",
-    scope: "global",
-    priority: 0,
-    description: "Launch Codex agent",
-    category: "Agents",
-  },
-  {
-    actionId: "agent.opencode",
-    combo: "Cmd+Alt+O",
-    scope: "global",
-    priority: 0,
-    description: "Launch OpenCode agent",
-    category: "Agents",
   },
 ];
 
