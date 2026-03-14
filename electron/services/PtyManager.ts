@@ -16,6 +16,7 @@ import {
   type PtyManagerEvents,
 } from "./pty/index.js";
 import { disposeTerminalSerializerService } from "./pty/TerminalSerializerService.js";
+import { deleteSessionFile } from "./pty/terminalSessionPersistence.js";
 
 /**
  * PtyManager - Facade for terminal process management.
@@ -271,6 +272,10 @@ export class PtyManager extends EventEmitter {
         this.registry.delete(id);
       }
     }
+
+    deleteSessionFile(id).catch((err) => {
+      logWarn(`Failed to delete session file for terminal ${id}`, err);
+    });
   }
 
   /**

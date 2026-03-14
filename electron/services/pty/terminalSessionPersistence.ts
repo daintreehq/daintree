@@ -1,5 +1,5 @@
 import { existsSync, readFileSync, statSync, writeFileSync, unlinkSync, mkdirSync } from "fs";
-import { mkdir, writeFile, unlink } from "node:fs/promises";
+import { mkdir, readdir, stat, writeFile, unlink } from "node:fs/promises";
 import { resilientRename, resilientRenameSync } from "../../utils/fs.js";
 import path from "node:path";
 import type { Terminal as HeadlessTerminalType, IMarker } from "@xterm/headless";
@@ -14,6 +14,11 @@ export const TERMINAL_SESSION_PERSISTENCE_ENABLED: boolean =
   process.env.CANOPY_TERMINAL_SESSION_PERSISTENCE !== "0";
 export const SESSION_SNAPSHOT_DEBOUNCE_MS = 5000;
 export const SESSION_SNAPSHOT_MAX_BYTES = 5 * 1024 * 1024;
+
+export const SESSION_EVICTION_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
+export const SESSION_EVICTION_MAX_BYTES = 100 * 1024 * 1024; // 100 MB
+const EVICTION_TTL_BUFFER_MS = 30_000; // 30s clock-skew safety buffer
+const STAT_CHUNK_SIZE = 10;
 
 export function getSessionDir(): string | null {
   const userData = process.env.CANOPY_USER_DATA;
@@ -146,4 +151,116 @@ export async function persistSessionSnapshotAsync(
     });
     throw error;
   }
+}
+
+export async function deleteSessionFile(terminalId: string): Promise<void> {
+  const sessionPath = getSessionPath(terminalId);
+  if (!sessionPath) return;
+  await unlink(sessionPath).catch((e: NodeJS.ErrnoException) => {
+    if (e.code !== "ENOENT") throw e;
+  });
+}
+
+interface SessionFileInfo {
+  id: string;
+  filePath: string;
+  size: number;
+  mtimeMs: number;
+}
+
+async function scanSessionFiles(): Promise<SessionFileInfo[]> {
+  const dir = getSessionDir();
+  if (!dir) return [];
+
+  let entries;
+  try {
+    entries = await readdir(dir, { withFileTypes: true });
+  } catch (e: unknown) {
+    if ((e as NodeJS.ErrnoException).code === "ENOENT") return [];
+    throw e;
+  }
+
+  const restoreFiles = entries.filter((e) => e.isFile() && e.name.endsWith(".restore"));
+  const results: SessionFileInfo[] = [];
+
+  for (let i = 0; i < restoreFiles.length; i += STAT_CHUNK_SIZE) {
+    const chunk = restoreFiles.slice(i, i + STAT_CHUNK_SIZE);
+    const chunkResults = await Promise.all(
+      chunk.map(async (entry) => {
+        const filePath = path.join(dir, entry.name);
+        try {
+          const s = await stat(filePath);
+          return {
+            id: entry.name.replace(/\.restore$/, ""),
+            filePath,
+            size: s.size,
+            mtimeMs: s.mtimeMs,
+          };
+        } catch {
+          return null;
+        }
+      })
+    );
+    for (const r of chunkResults) {
+      if (r) results.push(r);
+    }
+  }
+
+  return results;
+}
+
+export async function evictSessionFiles(opts: {
+  ttlMs: number;
+  maxBytes: number;
+  knownIds?: Set<string>;
+}): Promise<{ deleted: number; bytesFreed: number }> {
+  const files = await scanSessionFiles();
+  if (files.length === 0) return { deleted: 0, bytesFreed: 0 };
+
+  const now = Date.now();
+  const ttlCutoff = opts.ttlMs + EVICTION_TTL_BUFFER_MS;
+  let deleted = 0;
+  let bytesFreed = 0;
+  const survivors: SessionFileInfo[] = [];
+
+  // Pass 1: TTL + orphan eviction
+  for (const file of files) {
+    const isExpired = now - file.mtimeMs > ttlCutoff;
+    const isOrphan = opts.knownIds !== undefined && !opts.knownIds.has(file.id);
+
+    if (isExpired || isOrphan) {
+      try {
+        await unlink(file.filePath);
+        deleted++;
+        bytesFreed += file.size;
+      } catch (e: unknown) {
+        if ((e as NodeJS.ErrnoException).code !== "ENOENT") {
+          console.warn(`[sessionEviction] Failed to delete ${file.filePath}:`, e);
+        }
+      }
+    } else {
+      survivors.push(file);
+    }
+  }
+
+  // Pass 2: size cap enforcement (oldest first)
+  let totalSize = survivors.reduce((sum, f) => sum + f.size, 0);
+  if (totalSize > opts.maxBytes) {
+    survivors.sort((a, b) => a.mtimeMs - b.mtimeMs);
+    for (const file of survivors) {
+      if (totalSize <= opts.maxBytes) break;
+      try {
+        await unlink(file.filePath);
+        deleted++;
+        bytesFreed += file.size;
+        totalSize -= file.size;
+      } catch (e: unknown) {
+        if ((e as NodeJS.ErrnoException).code !== "ENOENT") {
+          console.warn(`[sessionEviction] Failed to delete ${file.filePath}:`, e);
+        }
+      }
+    }
+  }
+
+  return { deleted, bytesFreed };
 }

@@ -304,6 +304,11 @@ import { store } from "./store.js";
 import { MigrationRunner } from "./services/StoreMigrations.js";
 import { migrations } from "./services/migrations/index.js";
 import { initializeHibernationService } from "./services/HibernationService.js";
+import {
+  evictSessionFiles,
+  SESSION_EVICTION_TTL_MS,
+  SESSION_EVICTION_MAX_BYTES,
+} from "./services/pty/terminalSessionPersistence.js";
 import { getWebviewDialogService } from "./services/WebviewDialogService.js";
 import { GitHubAuth } from "./services/github/GitHubAuth.js";
 import { secureStorage } from "./services/SecureStorage.js";
@@ -876,6 +881,46 @@ async function initializeDeferredServices(
   mcpServerService.start(window).catch((err) => {
     console.error("[MAIN] MCP server failed to start:", err);
   });
+
+  // Fire-and-forget session file eviction (non-blocking)
+  (async () => {
+    try {
+      const allProjects = projectStore.getAllProjects();
+      const knownIds = new Set<string>();
+
+      // Gather terminal IDs from all project states
+      const states = await Promise.all(allProjects.map((p) => projectStore.getProjectState(p.id)));
+      for (const state of states) {
+        if (state?.terminals) {
+          for (const t of state.terminals) {
+            knownIds.add(t.id);
+          }
+        }
+      }
+
+      // Also include terminals from appState (migration fallback)
+      const appTerminals = store.get("appState")?.terminals;
+      if (Array.isArray(appTerminals)) {
+        for (const t of appTerminals) {
+          knownIds.add(t.id);
+        }
+      }
+
+      const result = await evictSessionFiles({
+        ttlMs: SESSION_EVICTION_TTL_MS,
+        maxBytes: SESSION_EVICTION_MAX_BYTES,
+        knownIds,
+      });
+
+      if (result.deleted > 0) {
+        console.log(
+          `[MAIN] Session eviction: deleted ${result.deleted} file(s), freed ${(result.bytesFreed / 1024 / 1024).toFixed(1)} MB`
+        );
+      }
+    } catch (err) {
+      console.warn("[MAIN] Session eviction failed:", err);
+    }
+  })();
 
   const elapsed = Date.now() - startTime;
   console.log(`[MAIN] All deferred services initialized in ${elapsed}ms`);
