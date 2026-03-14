@@ -30,7 +30,7 @@ vi.mock("@/services/ActionService", () => ({
 }));
 
 vi.mock("@/utils/timeAgo", () => ({
-  formatTimeAgo: (date: string) => `time:${date}`,
+  formatTimeAgo: (date: number | string) => `time:${date}`,
 }));
 
 const baseIssue: GitHubIssue = {
