@@ -172,7 +172,8 @@ describe("GitHubListItem", () => {
 
   it("renders #number badge", () => {
     render(<GitHubListItem item={baseIssue} type="issue" />);
-    expect(screen.getByText("#42")).toBeTruthy();
+    const copyButton = screen.getByLabelText("Copy number 42");
+    expect(copyButton.textContent).toBe("#42");
   });
 
   it("applies selected state when isActive", () => {
@@ -180,5 +181,91 @@ describe("GitHubListItem", () => {
     const option = container.querySelector("[role='option']");
     expect(option?.getAttribute("aria-selected")).toBe("true");
     expect(option?.className).toContain("bg-muted/50");
+  });
+
+  it("renders assignee avatar for issues with assignees", () => {
+    const issueWithAssignee: GitHubIssue = {
+      ...baseIssue,
+      assignees: [{ login: "alice", avatarUrl: "https://example.com/alice.png" }],
+    };
+    render(<GitHubListItem item={issueWithAssignee} type="issue" />);
+    const avatar = screen.getByAltText("alice");
+    expect(avatar).toBeTruthy();
+    expect(avatar.getAttribute("src")).toBe("https://example.com/alice.png");
+  });
+
+  it("renders only first assignee avatar when multiple assignees", () => {
+    const issueWithMultiple: GitHubIssue = {
+      ...baseIssue,
+      assignees: [
+        { login: "alice", avatarUrl: "https://example.com/alice.png" },
+        { login: "bob", avatarUrl: "https://example.com/bob.png" },
+      ],
+    };
+    render(<GitHubListItem item={issueWithMultiple} type="issue" />);
+    expect(screen.getByAltText("alice")).toBeTruthy();
+    expect(screen.queryByAltText("bob")).toBeNull();
+  });
+
+  it("does not render assignee avatar when no assignees", () => {
+    const { container } = render(<GitHubListItem item={baseIssue} type="issue" />);
+    const avatarImages = container.querySelectorAll("img[alt]");
+    expect(avatarImages).toHaveLength(0);
+  });
+
+  it("does not render assignee avatar for PRs", () => {
+    render(<GitHubListItem item={basePR} type="pr" />);
+    const images = screen.queryAllByRole("img");
+    expect(images).toHaveLength(0);
+  });
+
+  it("shows create worktree button on open issues without worktree", () => {
+    const onCreateWorktree = vi.fn();
+    render(<GitHubListItem item={baseIssue} type="issue" onCreateWorktree={onCreateWorktree} />);
+    const createBtn = screen.getByLabelText("Create worktree");
+    expect(createBtn).toBeTruthy();
+    expect(createBtn.className).toContain("opacity-0");
+  });
+
+  it("create worktree button calls onCreateWorktree on click", async () => {
+    const onCreateWorktree = vi.fn();
+    render(<GitHubListItem item={baseIssue} type="issue" onCreateWorktree={onCreateWorktree} />);
+    const createBtn = screen.getByLabelText("Create worktree");
+    await act(async () => {
+      fireEvent.click(createBtn);
+    });
+    expect(onCreateWorktree).toHaveBeenCalledWith(baseIssue);
+  });
+
+  it("does not show create worktree for closed issues", () => {
+    const closedIssue: GitHubIssue = { ...baseIssue, state: "CLOSED" };
+    render(<GitHubListItem item={closedIssue} type="issue" onCreateWorktree={vi.fn()} />);
+    expect(screen.queryByLabelText("Create worktree")).toBeNull();
+  });
+
+  it("does not show create worktree for fork PRs", () => {
+    const forkPR: GitHubPR = { ...basePR, isFork: true };
+    render(<GitHubListItem item={forkPR} type="pr" onCreateWorktree={vi.fn()} />);
+    expect(screen.queryByLabelText("Create worktree")).toBeNull();
+  });
+
+  it("does not show Copy icon - only # prefix and Check on copy", async () => {
+    const { container } = render(<GitHubListItem item={baseIssue} type="issue" />);
+    // No Copy icon should exist
+    expect(container.querySelector(".lucide-copy")).toBeNull();
+
+    const copyButton = screen.getByLabelText("Copy number 42");
+    // Before copy: shows # prefix
+    expect(copyButton.textContent).toBe("#42");
+
+    await act(async () => {
+      fireEvent.click(copyButton);
+    });
+
+    // After copy: Check icon replaces #
+    const checkIcon = copyButton.querySelector(".text-status-success");
+    expect(checkIcon).not.toBeNull();
+    // The # should not be visible during copied state
+    expect(copyButton.textContent).toBe("42");
   });
 });

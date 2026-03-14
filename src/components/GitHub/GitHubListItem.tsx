@@ -8,9 +8,9 @@ import {
   GitBranch,
   MoreHorizontal,
   ExternalLink,
-  Copy,
   Check,
 } from "lucide-react";
+import { Avatar } from "@/components/ui/Avatar";
 import { cn } from "@/lib/utils";
 import { formatTimeAgo } from "@/utils/timeAgo";
 import { actionService } from "@/services/ActionService";
@@ -120,7 +120,7 @@ export function GitHubListItem({
       setCopied(true);
       copyTimeoutRef.current = window.setTimeout(() => setCopied(false), 1500);
     } catch {
-      // clipboard not available
+      setCopied(false);
     }
   };
 
@@ -177,12 +177,8 @@ export function GitHubListItem({
                 className="shrink-0 text-xs text-muted-foreground hover:text-foreground transition-colors flex items-center gap-0.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded px-1"
                 aria-label={`Copy number ${item.number}`}
               >
-                <span>#{item.number}</span>
-                {copied ? (
-                  <Check className="w-3 h-3 text-status-success" />
-                ) : (
-                  <Copy className="w-3 h-3 opacity-0 group-hover:opacity-100 transition-opacity" />
-                )}
+                {copied ? <Check className="w-3 h-3 text-status-success" /> : <span>#</span>}
+                <span>{item.number}</span>
               </button>
             </TooltipTrigger>
             <TooltipContent side="bottom">{copied ? "Copied!" : "Copy number"}</TooltipContent>
@@ -227,7 +223,16 @@ export function GitHubListItem({
 
         <span className="flex-1" />
 
-        {hasWorktree && (
+        {!isItemPR && item.assignees.length > 0 && (
+          <Avatar
+            src={item.assignees[0].avatarUrl}
+            alt={item.assignees[0].login}
+            title={`Assigned to ${item.assignees[0].login}`}
+            className="w-4 h-4 shrink-0"
+          />
+        )}
+
+        {hasWorktree ? (
           <TooltipProvider>
             <Tooltip>
               <TooltipTrigger asChild>
@@ -245,7 +250,26 @@ export function GitHubListItem({
               </TooltipContent>
             </Tooltip>
           </TooltipProvider>
-        )}
+        ) : item.state === "OPEN" && !isForkPR && onCreateWorktree ? (
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onCreateWorktree(item);
+                  }}
+                  className="shrink-0 text-muted-foreground/40 hover:text-muted-foreground transition-colors opacity-0 group-hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded p-0.5"
+                  aria-label="Create worktree"
+                >
+                  <GitBranch className="w-3.5 h-3.5" />
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">Create worktree</TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
+        ) : null}
 
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
