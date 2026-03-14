@@ -17,7 +17,9 @@ const {
   finishProjectSwitchMock,
   finalizeProjectSwitchRendererCacheMock,
   wakeMock,
+  getMock,
   panelKindUsesTerminalUiMock,
+  isTerminalWarmInProjectSwitchCacheMock,
   terminalState,
   worktreeSelectionState,
 } = vi.hoisted(() => ({
@@ -27,7 +29,9 @@ const {
   finishProjectSwitchMock: vi.fn(),
   finalizeProjectSwitchRendererCacheMock: vi.fn(),
   wakeMock: vi.fn(),
+  getMock: vi.fn(),
   panelKindUsesTerminalUiMock: vi.fn(),
+  isTerminalWarmInProjectSwitchCacheMock: vi.fn(),
   terminalState: {
     terminals: [] as Array<{
       id: string;
@@ -75,6 +79,7 @@ vi.mock("@/store/worktreeStore", () => ({
 vi.mock("@/services/TerminalInstanceService", () => ({
   terminalInstanceService: {
     wake: wakeMock,
+    get: getMock,
   },
 }));
 
@@ -84,6 +89,7 @@ vi.mock("@shared/config/panelKindRegistry", () => ({
 
 vi.mock("@/services/projectSwitchRendererCache", () => ({
   finalizeProjectSwitchRendererCache: finalizeProjectSwitchRendererCacheMock,
+  isTerminalWarmInProjectSwitchCache: isTerminalWarmInProjectSwitchCacheMock,
 }));
 
 import { useProjectSwitchRehydration } from "../useProjectSwitchRehydration";
@@ -115,6 +121,8 @@ describe("useProjectSwitchRehydration", () => {
       };
     });
     panelKindUsesTerminalUiMock.mockImplementation((kind?: string) => kind !== "browser");
+    isTerminalWarmInProjectSwitchCacheMock.mockReturnValue(false);
+    getMock.mockReturnValue(null);
     terminalState.terminals = [];
     terminalState.activeDockTerminalId = null;
     worktreeSelectionState.activeWorktreeId = null;
@@ -191,6 +199,76 @@ describe("useProjectSwitchRehydration", () => {
       ["dock-in-active-worktree"],
     ]);
     expect(finalizeProjectSwitchRendererCacheMock).toHaveBeenCalledWith("project-d");
+  });
+
+  it("skips wake for terminals that are warm in the project switch cache with a live instance", async () => {
+    hydrateAppStateMock.mockResolvedValue(undefined);
+
+    terminalState.terminals = [
+      { id: "warm-terminal", kind: "terminal", worktreeId: "wt-active" },
+      { id: "cold-terminal", kind: "terminal", worktreeId: "wt-active" },
+    ];
+    terminalState.activeDockTerminalId = null;
+    worktreeSelectionState.activeWorktreeId = "wt-active";
+
+    isTerminalWarmInProjectSwitchCacheMock.mockImplementation(
+      (_projectId: string, terminalId: string) => terminalId === "warm-terminal"
+    );
+    getMock.mockImplementation((id: string) => (id === "warm-terminal" ? { terminal: {} } : null));
+
+    renderHook(() => useProjectSwitchRehydration(callbacks));
+
+    onSwitchHandler?.({
+      switchId: "switch-warm",
+      project: { id: "project-warm", name: "Project Warm" },
+    });
+
+    await vi.waitFor(() => {
+      expect(finishProjectSwitchMock).toHaveBeenCalledTimes(1);
+    });
+
+    expect(wakeMock).toHaveBeenCalledTimes(1);
+    expect(wakeMock).toHaveBeenCalledWith("cold-terminal");
+    expect(wakeMock).not.toHaveBeenCalledWith("warm-terminal");
+    expect(isTerminalWarmInProjectSwitchCacheMock).toHaveBeenCalledWith(
+      "project-warm",
+      "warm-terminal"
+    );
+    expect(isTerminalWarmInProjectSwitchCacheMock).toHaveBeenCalledWith(
+      "project-warm",
+      "cold-terminal"
+    );
+    expect(finalizeProjectSwitchRendererCacheMock).toHaveBeenCalledWith("project-warm");
+  });
+
+  it("wakes a cache-warm terminal when the xterm instance is no longer alive", async () => {
+    hydrateAppStateMock.mockResolvedValue(undefined);
+
+    terminalState.terminals = [{ id: "stale-terminal", kind: "terminal", worktreeId: "wt-active" }];
+    terminalState.activeDockTerminalId = null;
+    worktreeSelectionState.activeWorktreeId = "wt-active";
+
+    isTerminalWarmInProjectSwitchCacheMock.mockReturnValue(true);
+    getMock.mockReturnValue(null);
+
+    renderHook(() => useProjectSwitchRehydration(callbacks));
+
+    onSwitchHandler?.({
+      switchId: "switch-stale",
+      project: { id: "project-stale", name: "Project Stale" },
+    });
+
+    await vi.waitFor(() => {
+      expect(finishProjectSwitchMock).toHaveBeenCalledTimes(1);
+    });
+
+    expect(wakeMock).toHaveBeenCalledTimes(1);
+    expect(wakeMock).toHaveBeenCalledWith("stale-terminal");
+    expect(isTerminalWarmInProjectSwitchCacheMock).toHaveBeenCalledWith(
+      "project-stale",
+      "stale-terminal"
+    );
+    expect(getMock).toHaveBeenCalledWith("stale-terminal");
   });
 
   it("skips malformed project-switched events without hydrating or finalizing", async () => {

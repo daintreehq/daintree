@@ -13,7 +13,10 @@ import { useProjectStore, useTerminalStore } from "@/store";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { panelKindUsesTerminalUi } from "@shared/config/panelKindRegistry";
-import { finalizeProjectSwitchRendererCache } from "@/services/projectSwitchRendererCache";
+import {
+  finalizeProjectSwitchRendererCache,
+  isTerminalWarmInProjectSwitchCache,
+} from "@/services/projectSwitchRendererCache";
 import type { HydrationCallbacks } from "./useAppHydration";
 
 interface ProjectSwitchedEventDetail {
@@ -79,7 +82,12 @@ export function useProjectSwitchRehydration(callbacks: HydrationCallbacks) {
           const isInActiveWorktree = (terminal.worktreeId ?? null) === activeWorktreeId;
 
           if (isActiveDockTerminal || isInActiveWorktree) {
-            terminalInstanceService.wake(terminal.id);
+            const isWarm =
+              isTerminalWarmInProjectSwitchCache(projectId, terminal.id) &&
+              Boolean(terminalInstanceService.get(terminal.id));
+            if (!isWarm) {
+              terminalInstanceService.wake(terminal.id);
+            }
           }
         }
 
