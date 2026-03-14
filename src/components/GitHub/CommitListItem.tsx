@@ -49,13 +49,17 @@ export function CommitListItem({ commit, optionId, isActive }: CommitListItemPro
 
   const renderMessage = () => {
     if (!parsed) {
-      return <span className="text-sm font-medium text-foreground truncate">{commit.message}</span>;
+      return (
+        <span className="flex-1 min-w-0 text-sm font-medium text-foreground truncate">
+          {commit.message}
+        </span>
+      );
     }
 
     const typeColor = parsed.breaking ? "text-status-danger font-bold" : "text-muted-foreground";
 
     return (
-      <span className="text-sm font-medium truncate">
+      <span className="flex-1 min-w-0 text-sm font-medium truncate">
         <span className={typeColor}>{parsed.type}</span>
         {parsed.scope && <span className="text-muted-foreground">({parsed.scope})</span>}
         {parsed.breaking && !parsed.type.endsWith("!") && (
@@ -72,25 +76,25 @@ export function CommitListItem({ commit, optionId, isActive }: CommitListItemPro
       role="option"
       aria-selected={isActive}
       className={cn(
-        "p-3 hover:bg-muted/50 transition-colors group cursor-default",
+        "hover:bg-muted/50 transition-colors group cursor-default",
         isActive && "bg-muted/50"
       )}
     >
-      <div className="flex items-start gap-3">
-        <div className="mt-0.5 shrink-0 text-muted-foreground">
-          <GitCommitHorizontal className="h-4 w-4" />
-        </div>
+      <div className="flex items-start gap-2 px-3 py-2.5">
+        <span className="shrink-0 mt-0.5 text-muted-foreground">
+          <GitCommitHorizontal className="size-4" />
+        </span>
 
         <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2">
+          {/* Title row: message + trailing #hash copy */}
+          <div className="flex items-center gap-1.5 min-w-0">
             <TooltipProvider>
               <Tooltip>
                 <TooltipTrigger asChild>{renderMessage()}</TooltipTrigger>
                 <TooltipContent side="bottom">{commit.message}</TooltipContent>
               </Tooltip>
             </TooltipProvider>
-          </div>
-          <div className="text-xs text-muted-foreground mt-1 flex items-center gap-1.5">
+
             <TooltipProvider>
               <Tooltip>
                 <TooltipTrigger asChild>
@@ -98,13 +102,12 @@ export function CommitListItem({ commit, optionId, isActive }: CommitListItemPro
                     type="button"
                     onClick={handleCopyHash}
                     className={cn(
-                      "font-mono hover:text-foreground transition-colors flex items-center",
+                      "shrink-0 text-xs text-muted-foreground hover:text-foreground transition-colors flex items-center gap-0.5 font-mono focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded px-1",
                       copied && "text-status-success"
                     )}
+                    aria-label={`Copy hash ${commit.shortHash}`}
                   >
-                    <span className="inline-flex items-center justify-center w-3 shrink-0">
-                      {copied ? <Check className="h-3 w-3" /> : <span>#</span>}
-                    </span>
+                    {copied ? <Check className="w-3 h-3 text-status-success" /> : <span>#</span>}
                     <span>{commit.shortHash}</span>
                   </button>
                 </TooltipTrigger>
@@ -113,7 +116,10 @@ export function CommitListItem({ commit, optionId, isActive }: CommitListItemPro
                 </TooltipContent>
               </Tooltip>
             </TooltipProvider>
-            <span>&middot;</span>
+          </div>
+
+          {/* Metadata row: author · time */}
+          <div className="flex items-center gap-1.5 mt-0.5 text-xs text-muted-foreground">
             <TooltipProvider>
               <Tooltip>
                 <TooltipTrigger asChild>
