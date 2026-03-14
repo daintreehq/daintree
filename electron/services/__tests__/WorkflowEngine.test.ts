@@ -326,4 +326,266 @@ describe("WorkflowEngine", () => {
       expect(runs[0].nodeStates["node-1"].result?.summary).toBe("Done");
     });
   });
+
+  describe("template resolution", () => {
+    const templateWorkflow: WorkflowDefinition = {
+      id: "template-workflow",
+      name: "Template Workflow",
+      version: "1.0.0",
+      nodes: [
+        {
+          id: "node-1",
+          type: "action",
+          config: { actionId: "action-1", args: {} },
+          onSuccess: ["node-2"],
+        },
+        {
+          id: "node-2",
+          type: "action",
+          config: {
+            actionId: "action-2",
+            args: { count: "{{node-1.data.count}}", label: "static-value" },
+          },
+          dependencies: ["node-1"],
+        },
+      ],
+    };
+
+    beforeEach(() => {
+      mockLoader.getWorkflow.mockResolvedValue({ definition: templateWorkflow });
+    });
+
+    it("resolves pure placeholder to raw typed value", async () => {
+      await engine.startWorkflow("template-workflow");
+
+      mockQueueService.createTask.mockClear();
+
+      events.emit("task:completed", {
+        taskId: "task-node-1",
+        result: "Done",
+        data: { count: 42 },
+        timestamp: Date.now(),
+      });
+
+      await new Promise((resolve) => setTimeout(resolve, 10));
+
+      expect(mockQueueService.createTask).toHaveBeenCalledWith(
+        expect.objectContaining({
+          metadata: expect.objectContaining({
+            nodeId: "node-2",
+            actionArgs: { count: 42, label: "static-value" },
+          }),
+        })
+      );
+    });
+
+    it("resolves embedded placeholder by stringifying non-string values", async () => {
+      const embeddedWorkflow: WorkflowDefinition = {
+        id: "embedded-workflow",
+        name: "Embedded Workflow",
+        version: "1.0.0",
+        nodes: [
+          {
+            id: "node-1",
+            type: "action",
+            config: { actionId: "action-1", args: {} },
+            onSuccess: ["node-2"],
+          },
+          {
+            id: "node-2",
+            type: "action",
+            config: {
+              actionId: "action-2",
+              args: { msg: "Errors: {{node-1.data.count}} found" },
+            },
+            dependencies: ["node-1"],
+          },
+        ],
+      };
+
+      mockLoader.getWorkflow.mockResolvedValue({ definition: embeddedWorkflow });
+      await engine.startWorkflow("embedded-workflow");
+
+      mockQueueService.createTask.mockClear();
+
+      events.emit("task:completed", {
+        taskId: "task-node-1",
+        result: "Done",
+        data: { count: 5 },
+        timestamp: Date.now(),
+      });
+
+      await new Promise((resolve) => setTimeout(resolve, 10));
+
+      expect(mockQueueService.createTask).toHaveBeenCalledWith(
+        expect.objectContaining({
+          metadata: expect.objectContaining({
+            actionArgs: { msg: "Errors: 5 found" },
+          }),
+        })
+      );
+    });
+
+    it("passes through args without templates unchanged", async () => {
+      const noTemplateWorkflow: WorkflowDefinition = {
+        id: "no-template-workflow",
+        name: "No Template",
+        version: "1.0.0",
+        nodes: [
+          {
+            id: "node-1",
+            type: "action",
+            config: { actionId: "action-1", args: { plain: "hello", num: 123 } },
+          },
+        ],
+      };
+
+      mockLoader.getWorkflow.mockResolvedValue({ definition: noTemplateWorkflow });
+      await engine.startWorkflow("no-template-workflow");
+
+      expect(mockQueueService.createTask).toHaveBeenCalledWith(
+        expect.objectContaining({
+          metadata: expect.objectContaining({
+            actionArgs: { plain: "hello", num: 123 },
+          }),
+        })
+      );
+    });
+
+    it("resolves nested data paths", async () => {
+      const nestedWorkflow: WorkflowDefinition = {
+        id: "nested-workflow",
+        name: "Nested",
+        version: "1.0.0",
+        nodes: [
+          {
+            id: "node-1",
+            type: "action",
+            config: { actionId: "action-1", args: {} },
+            onSuccess: ["node-2"],
+          },
+          {
+            id: "node-2",
+            type: "action",
+            config: {
+              actionId: "action-2",
+              args: { val: "{{node-1.data.nested.deep.value}}" },
+            },
+            dependencies: ["node-1"],
+          },
+        ],
+      };
+
+      mockLoader.getWorkflow.mockResolvedValue({ definition: nestedWorkflow });
+      await engine.startWorkflow("nested-workflow");
+
+      mockQueueService.createTask.mockClear();
+
+      events.emit("task:completed", {
+        taskId: "task-node-1",
+        result: "Done",
+        data: { nested: { deep: { value: "found-it" } } },
+        timestamp: Date.now(),
+      });
+
+      await new Promise((resolve) => setTimeout(resolve, 10));
+
+      expect(mockQueueService.createTask).toHaveBeenCalledWith(
+        expect.objectContaining({
+          metadata: expect.objectContaining({
+            actionArgs: { val: "found-it" },
+          }),
+        })
+      );
+    });
+
+    it("can reference result.summary from upstream node", async () => {
+      const summaryWorkflow: WorkflowDefinition = {
+        id: "summary-workflow",
+        name: "Summary Ref",
+        version: "1.0.0",
+        nodes: [
+          {
+            id: "node-1",
+            type: "action",
+            config: { actionId: "action-1", args: {} },
+            onSuccess: ["node-2"],
+          },
+          {
+            id: "node-2",
+            type: "action",
+            config: {
+              actionId: "action-2",
+              args: { prevSummary: "{{node-1.summary}}" },
+            },
+            dependencies: ["node-1"],
+          },
+        ],
+      };
+
+      mockLoader.getWorkflow.mockResolvedValue({ definition: summaryWorkflow });
+      await engine.startWorkflow("summary-workflow");
+
+      mockQueueService.createTask.mockClear();
+
+      events.emit("task:completed", {
+        taskId: "task-node-1",
+        result: "Lint passed",
+        timestamp: Date.now(),
+      });
+
+      await new Promise((resolve) => setTimeout(resolve, 10));
+
+      expect(mockQueueService.createTask).toHaveBeenCalledWith(
+        expect.objectContaining({
+          metadata: expect.objectContaining({
+            actionArgs: { prevSummary: "Lint passed" },
+          }),
+        })
+      );
+    });
+  });
+
+  describe("data flow through task:completed event", () => {
+    it("stores data from task:completed payload in nodeState.result", async () => {
+      await engine.startWorkflow("test-workflow");
+
+      events.emit("task:completed", {
+        taskId: "task-node-1",
+        result: "Done",
+        data: { errorCount: 0, files: ["a.ts", "b.ts"] },
+        timestamp: Date.now(),
+      });
+
+      await new Promise((resolve) => setTimeout(resolve, 10));
+
+      const runs = await engine.listAllRuns();
+      const nodeState = runs[0].nodeStates["node-1"];
+      expect(nodeState.result?.data).toEqual({ errorCount: 0, files: ["a.ts", "b.ts"] });
+    });
+  });
+
+  describe("size guard", () => {
+    it("fails node when result data exceeds 1 MB", async () => {
+      await engine.startWorkflow("test-workflow");
+
+      const largeData: Record<string, unknown> = {
+        bigField: "x".repeat(1_100_000),
+      };
+
+      events.emit("task:completed", {
+        taskId: "task-node-1",
+        result: "Done",
+        data: largeData,
+        timestamp: Date.now(),
+      });
+
+      await new Promise((resolve) => setTimeout(resolve, 10));
+
+      const runs = await engine.listAllRuns();
+      const nodeState = runs[0].nodeStates["node-1"];
+      expect(nodeState.status).toBe("failed");
+      expect(nodeState.result?.error).toContain("exceeds 1 MB limit");
+    });
+  });
 });
