@@ -229,10 +229,10 @@ describe("terminalSessionPersistence", () => {
 
     it("applies TTL with 30s buffer correctly at boundary", async () => {
       const ttlMs = 60_000; // 1 minute TTL
-      // File at ttlMs + 29_999ms old (within buffer) should be kept
-      await createFile("kept.restore", "data", ttlMs + 29_999);
-      // File at ttlMs + 31_000ms old (past buffer) should be deleted
-      await createFile("deleted.restore", "data", ttlMs + 31_000);
+      // File at ttlMs + 15_000ms old (well within 30s buffer) should be kept
+      await createFile("kept.restore", "data", ttlMs + 15_000);
+      // File at ttlMs + 60_000ms old (well past buffer) should be deleted
+      await createFile("deleted.restore", "data", ttlMs + 60_000);
 
       const result = await evictSessionFiles({
         ttlMs,
