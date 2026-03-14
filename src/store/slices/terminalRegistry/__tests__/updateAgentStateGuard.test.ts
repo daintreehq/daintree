@@ -111,19 +111,24 @@ describe("updateAgentState store action (#3217)", () => {
 });
 
 describe("setupTerminalStoreListeners directing guard (#3217)", () => {
+  function shouldSuppressBackendState(
+    currentState: string | undefined,
+    incomingState: string
+  ): boolean {
+    return currentState === "directing" && incomingState === "waiting";
+  }
+
   it("backend waiting is suppressed when store terminal is in directing state", () => {
     useTerminalStore.setState({ terminals: [baseTerminal] });
 
     const terminal = useTerminalStore.getState().terminals.find((t) => t.id === "test-terminal-1");
-    const shouldSuppress = terminal?.agentState === "directing" && "waiting" === "waiting";
-    expect(shouldSuppress).toBe(true);
+    expect(shouldSuppressBackendState(terminal?.agentState, "waiting")).toBe(true);
   });
 
   it("backend working is not suppressed when store terminal is in directing state", () => {
     useTerminalStore.setState({ terminals: [baseTerminal] });
 
     const terminal = useTerminalStore.getState().terminals.find((t) => t.id === "test-terminal-1");
-    const shouldSuppress = terminal?.agentState === "directing" && "working" === "waiting";
-    expect(shouldSuppress).toBe(false);
+    expect(shouldSuppressBackendState(terminal?.agentState, "working")).toBe(false);
   });
 });
