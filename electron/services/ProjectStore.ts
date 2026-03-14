@@ -1502,7 +1502,11 @@ export class ProjectStore {
       excludedPaths?: string[];
       agentInstructions?: string;
       worktreePathPattern?: string;
-      terminalSettings?: { shellArgs?: string[]; defaultWorkingDirectory?: string; scrollbackLines?: number };
+      terminalSettings?: {
+        shellArgs?: string[];
+        defaultWorkingDirectory?: string;
+        scrollbackLines?: number;
+      };
     } = { version: 1 };
 
     if (settings.runCommands?.length) payload.runCommands = settings.runCommands;
@@ -1515,10 +1519,18 @@ export class ProjectStore {
     if (settings.worktreePathPattern) payload.worktreePathPattern = settings.worktreePathPattern;
 
     if (settings.terminalSettings) {
-      const shareableTerminal: { shellArgs?: string[]; defaultWorkingDirectory?: string; scrollbackLines?: number } = {};
-      if (settings.terminalSettings.shellArgs?.length) shareableTerminal.shellArgs = settings.terminalSettings.shellArgs;
-      if (settings.terminalSettings.defaultWorkingDirectory) shareableTerminal.defaultWorkingDirectory = settings.terminalSettings.defaultWorkingDirectory;
-      if (settings.terminalSettings.scrollbackLines !== undefined) shareableTerminal.scrollbackLines = settings.terminalSettings.scrollbackLines;
+      const shareableTerminal: {
+        shellArgs?: string[];
+        defaultWorkingDirectory?: string;
+        scrollbackLines?: number;
+      } = {};
+      if (settings.terminalSettings.shellArgs?.length)
+        shareableTerminal.shellArgs = settings.terminalSettings.shellArgs;
+      if (settings.terminalSettings.defaultWorkingDirectory)
+        shareableTerminal.defaultWorkingDirectory =
+          settings.terminalSettings.defaultWorkingDirectory;
+      if (settings.terminalSettings.scrollbackLines !== undefined)
+        shareableTerminal.scrollbackLines = settings.terminalSettings.scrollbackLines;
       if (Object.keys(shareableTerminal).length > 0) payload.terminalSettings = shareableTerminal;
     }
 

@@ -2251,7 +2251,9 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
                             className="block text-xs font-medium text-canopy-text/60 mb-1"
                           >
                             Shell program
-                            <span className="ml-1 text-canopy-text/40">(machine-local, not shared)</span>
+                            <span className="ml-1 text-canopy-text/40">
+                              (machine-local, not shared)
+                            </span>
                           </label>
                           <input
                             id="terminal-shell"
