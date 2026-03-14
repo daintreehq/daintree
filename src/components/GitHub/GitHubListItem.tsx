@@ -142,9 +142,16 @@ export function GitHubListItem({
           <StateIcon className="h-4 w-4" />
         </span>
 
-        <span className="flex-1 min-w-0 text-sm font-medium text-foreground truncate">
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            handleOpenExternal();
+          }}
+          className="flex-1 min-w-0 text-sm font-medium text-foreground truncate text-left hover:underline cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded"
+        >
           {item.title}
-        </span>
+        </button>
 
         {isItemPR && item.state === "OPEN" && item.ciStatus && (
           <TooltipProvider>
@@ -217,7 +224,20 @@ export function GitHubListItem({
         {!isItemPR && "linkedPR" in item && item.linkedPR && (
           <>
             <span>&middot;</span>
-            <span className="text-muted-foreground">PR #{item.linkedPR.number}</span>
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                void actionService.dispatch(
+                  "system.openExternal",
+                  { url: item.linkedPR!.url },
+                  { source: "user" }
+                );
+              }}
+              className="text-muted-foreground hover:text-foreground hover:underline cursor-pointer transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded px-0.5"
+            >
+              PR #{item.linkedPR.number}
+            </button>
           </>
         )}
 

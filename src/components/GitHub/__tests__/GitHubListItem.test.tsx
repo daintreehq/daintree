@@ -6,6 +6,7 @@ import { render, screen, fireEvent, act, cleanup } from "@testing-library/react"
 import type { ReactNode } from "react";
 import { GitHubListItem } from "../GitHubListItem";
 import type { GitHubIssue, GitHubPR } from "@shared/types/github";
+import { actionService } from "@/services/ActionService";
 
 vi.mock("react-dom", async () => {
   const actual = await vi.importActual<typeof import("react-dom")>("react-dom");
@@ -70,16 +71,40 @@ afterEach(() => {
 });
 
 describe("GitHubListItem", () => {
-  it("renders issue title as a span", () => {
+  it("renders issue title as a clickable button", () => {
     render(<GitHubListItem item={baseIssue} type="issue" />);
     const title = screen.getByText("Fix the thing");
-    expect(title.tagName).toBe("SPAN");
+    expect(title.tagName).toBe("BUTTON");
   });
 
-  it("renders PR title as a span", () => {
+  it("renders PR title as a clickable button", () => {
     render(<GitHubListItem item={basePR} type="pr" />);
     const title = screen.getByText("Add new feature");
-    expect(title.tagName).toBe("SPAN");
+    expect(title.tagName).toBe("BUTTON");
+  });
+
+  it("clicking issue title dispatches system.openExternal with item URL", () => {
+    render(<GitHubListItem item={baseIssue} type="issue" />);
+    fireEvent.click(screen.getByText("Fix the thing"));
+    expect(actionService.dispatch).toHaveBeenCalledWith(
+      "system.openExternal",
+      { url: "https://github.com/test/repo/issues/42" },
+      { source: "user" }
+    );
+  });
+
+  it("clicking linked PR dispatches system.openExternal with PR URL", () => {
+    const issueWithPR: GitHubIssue = {
+      ...baseIssue,
+      linkedPR: { number: 55, state: "OPEN", url: "https://github.com/test/repo/pull/55" },
+    };
+    render(<GitHubListItem item={issueWithPR} type="issue" />);
+    fireEvent.click(screen.getByText("PR #55"));
+    expect(actionService.dispatch).toHaveBeenCalledWith(
+      "system.openExternal",
+      { url: "https://github.com/test/repo/pull/55" },
+      { source: "user" }
+    );
   });
 
   it("renders author and time in metadata row", () => {
