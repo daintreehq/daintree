@@ -740,6 +740,27 @@ body,
   will-change: transform, opacity;
 }
 
+/* Trash pulse animation - for trash icon when panels are added */
+@keyframes trash-pulse {
+  0% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  30% {
+    transform: scale(1.15);
+    opacity: 0.85;
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+.animate-trash-pulse {
+  animation: trash-pulse 400ms cubic-bezier(0.4, 0, 0.2, 1) both;
+  will-change: transform, opacity;
+}
+
 /* Respect user's motion preferences */
 @media (prefers-reduced-motion: reduce) {
   .animate-activity-pulse,
@@ -749,7 +770,8 @@ body,
   .animate-pulse-delayed,
   .status-working,
   .animate-badge-bump,
-  .animate-activity-blip {
+  .animate-activity-blip,
+  .animate-trash-pulse {
     animation: none;
     opacity: 1;
     transform: none;
