@@ -112,6 +112,7 @@ export function GitHubResourceList({
           search: debouncedSearch || undefined,
           state: filterState as "open" | "closed" | "merged" | "all",
           cursor: currentCursor || undefined,
+          bypassCache: !append,
         };
 
         const result =

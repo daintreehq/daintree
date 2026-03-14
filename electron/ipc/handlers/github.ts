@@ -285,7 +285,13 @@ export function registerGithubHandlers(_deps: HandlerDependencies): () => void {
 
   const handleGitHubListIssues = async (
     _event: Electron.IpcMainInvokeEvent,
-    options: { cwd: string; search?: string; state?: "open" | "closed" | "all"; cursor?: string }
+    options: {
+      cwd: string;
+      search?: string;
+      state?: "open" | "closed" | "all";
+      cursor?: string;
+      bypassCache?: boolean;
+    }
   ) => {
     if (!options || typeof options.cwd !== "string" || !options.cwd) {
       throw new Error("Invalid options: cwd is required");
@@ -304,6 +310,7 @@ export function registerGithubHandlers(_deps: HandlerDependencies): () => void {
       search?: string;
       state?: "open" | "closed" | "merged" | "all";
       cursor?: string;
+      bypassCache?: boolean;
     }
   ) => {
     if (!options || typeof options.cwd !== "string" || !options.cwd) {

@@ -1205,6 +1205,7 @@ const api: ElectronAPI = {
       search?: string;
       state?: "open" | "closed" | "all";
       cursor?: string;
+      bypassCache?: boolean;
     }) => ipcRenderer.invoke(CHANNELS.GITHUB_LIST_ISSUES, options),
 
     listPullRequests: (options: {
@@ -1212,6 +1213,7 @@ const api: ElectronAPI = {
       search?: string;
       state?: "open" | "closed" | "merged" | "all";
       cursor?: string;
+      bypassCache?: boolean;
     }) => ipcRenderer.invoke(CHANNELS.GITHUB_LIST_PRS, options),
 
     assignIssue: (cwd: string, issueNumber: number, username: string): Promise<void> =>

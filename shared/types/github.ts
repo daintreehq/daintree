@@ -166,6 +166,8 @@ export interface GitHubListOptions {
   state?: "open" | "closed" | "merged" | "all";
   /** Pagination cursor */
   cursor?: string;
+  /** Skip the in-memory list cache and fetch fresh data */
+  bypassCache?: boolean;
 }
 
 /** Paginated response for GitHub lists */
