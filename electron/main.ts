@@ -26,6 +26,7 @@ import {
   startEventLoopLagMonitor,
   startProcessMemoryMonitor,
 } from "./utils/performance.js";
+import { startAppMetricsMonitor } from "./services/ProcessMemoryMonitor.js";
 
 fixPath();
 
@@ -383,6 +384,7 @@ let activeRendererPort: MessagePortMain | null = null;
 let activePtyHostPort: MessagePortMain | null = null;
 let stopEventLoopLagMonitor: (() => void) | null = null;
 let stopProcessMemoryMonitor: (() => void) | null = null;
+let stopAppMetricsMonitor: (() => void) | null = null;
 
 const DEFAULT_TERMINAL_ID = "default";
 
@@ -592,6 +594,10 @@ if (!gotTheLock) {
         if (stopProcessMemoryMonitor) {
           stopProcessMemoryMonitor();
           stopProcessMemoryMonitor = null;
+        }
+        if (stopAppMetricsMonitor) {
+          stopAppMetricsMonitor();
+          stopAppMetricsMonitor = null;
         }
         console.log("[MAIN] Graceful shutdown complete");
         app.exit(0);
@@ -1669,6 +1675,10 @@ async function createWindow(): Promise<void> {
     stopProcessMemoryMonitor = startProcessMemoryMonitor();
   }
 
+  if (!stopAppMetricsMonitor) {
+    stopAppMetricsMonitor = startAppMetricsMonitor();
+  }
+
   // Cleanup handler
   mainWindow.on("closed", async () => {
     if (eventBufferUnsubscribe) eventBufferUnsubscribe();
@@ -1682,6 +1692,10 @@ async function createWindow(): Promise<void> {
     if (stopProcessMemoryMonitor) {
       stopProcessMemoryMonitor();
       stopProcessMemoryMonitor = null;
+    }
+    if (stopAppMetricsMonitor) {
+      stopAppMetricsMonitor();
+      stopAppMetricsMonitor = null;
     }
 
     // Clean up window-specific IPC handlers
