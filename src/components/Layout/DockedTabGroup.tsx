@@ -463,7 +463,6 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
         sideOffset={10}
         collisionPadding={collisionPadding}
         onInteractOutside={(e) => handleDockInteractOutside(e, portalContainer)}
-        onEscapeKeyDown={(e) => e.preventDefault()}
         onOpenAutoFocus={(event) => {
           event.preventDefault();
           const focusTarget = getTerminalFocusTarget({

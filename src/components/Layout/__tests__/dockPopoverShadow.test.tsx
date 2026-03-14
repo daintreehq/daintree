@@ -57,4 +57,48 @@ describe("Dock Popover Visual Layer - Issue #2316", () => {
       expect(content).toContain("--shadow-dock-panel-popover");
     });
   });
+
+  describe("Persistent Popover - Issue #3110", () => {
+    it("should use onInteractOutside to prevent outside-click dismiss in DockedTerminalItem", async () => {
+      const fs = await import("fs/promises");
+      const path = await import("path");
+
+      const filePath = path.resolve(__dirname, "../DockedTerminalItem.tsx");
+      const content = await fs.readFile(filePath, "utf-8");
+
+      expect(content).toContain("onInteractOutside");
+      expect(content).toContain("handleDockInteractOutside");
+    });
+
+    it("should use onInteractOutside to prevent outside-click dismiss in DockedTabGroup", async () => {
+      const fs = await import("fs/promises");
+      const path = await import("path");
+
+      const filePath = path.resolve(__dirname, "../DockedTabGroup.tsx");
+      const content = await fs.readFile(filePath, "utf-8");
+
+      expect(content).toContain("onInteractOutside");
+      expect(content).toContain("handleDockInteractOutside");
+    });
+
+    it("should not block Escape key in DockedTerminalItem", async () => {
+      const fs = await import("fs/promises");
+      const path = await import("path");
+
+      const filePath = path.resolve(__dirname, "../DockedTerminalItem.tsx");
+      const content = await fs.readFile(filePath, "utf-8");
+
+      expect(content).not.toContain("onEscapeKeyDown={(e) => e.preventDefault()}");
+    });
+
+    it("should not block Escape key in DockedTabGroup", async () => {
+      const fs = await import("fs/promises");
+      const path = await import("path");
+
+      const filePath = path.resolve(__dirname, "../DockedTabGroup.tsx");
+      const content = await fs.readFile(filePath, "utf-8");
+
+      expect(content).not.toContain("onEscapeKeyDown={(e) => e.preventDefault()}");
+    });
+  });
 });

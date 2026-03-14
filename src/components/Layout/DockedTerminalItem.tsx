@@ -294,7 +294,6 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
         sideOffset={10}
         collisionPadding={collisionPadding}
         onInteractOutside={(e) => handleDockInteractOutside(e, portalContainer)}
-        onEscapeKeyDown={(e) => e.preventDefault()}
         onOpenAutoFocus={(event) => {
           event.preventDefault();
           const focusTarget = getTerminalFocusTarget({
