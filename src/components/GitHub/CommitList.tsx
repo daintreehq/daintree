@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo, useRef, type KeyboardEvent } from "react";
+import { useState, useEffect, useCallback, useRef, type KeyboardEvent } from "react";
 import { useDebounce } from "@/hooks/useDebounce";
 import { Search, RefreshCw, AlertCircle, ExternalLink } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -6,7 +6,6 @@ import { cn } from "@/lib/utils";
 import { CommitListItem } from "./CommitListItem";
 import type { GitCommit, GitCommitListResponse } from "@shared/types/github";
 import { actionService } from "@/services/ActionService";
-import { buildGroupedRows } from "./commitListUtils";
 
 interface CommitListProps {
   projectPath: string;
@@ -33,31 +32,16 @@ export function CommitList({ projectPath, onClose, initialCount }: CommitListPro
 
   const debouncedSearch = useDebounce(searchQuery, 300);
 
-  const groupedRows = useMemo(() => buildGroupedRows(data), [data]);
-
-  const interactiveIndices = useMemo(
-    () =>
-      groupedRows.reduce<number[]>((acc, row, i) => {
-        if (row.kind === "commit") acc.push(i);
-        return acc;
-      }, []),
-    [groupedRows]
-  );
-
-  const maxCursor = interactiveIndices.length - 1 + (hasMore ? 1 : 0);
-  const activeRawIndex =
-    cursorIndex >= 0 && cursorIndex < interactiveIndices.length
-      ? interactiveIndices[cursorIndex]
-      : -1;
-  const activeCommitRow = activeRawIndex >= 0 ? groupedRows[activeRawIndex] : null;
-  const activeCommit = activeCommitRow?.kind === "commit" ? activeCommitRow.commit : null;
+  const maxCursor = data.length - 1 + (hasMore ? 1 : 0);
+  const activeCommit =
+    cursorIndex >= 0 && cursorIndex < data.length ? data[cursorIndex] : null;
   const activeCommitId = activeCommit ? `commit-option-${activeCommit.hash}` : undefined;
-  const isLoadMoreActive = hasMore && cursorIndex === interactiveIndices.length;
+  const isLoadMoreActive = hasMore && cursorIndex === data.length;
   const listId = "commit-list";
 
   useEffect(() => {
     setCursorIndex(-1);
-  }, [groupedRows]);
+  }, [data]);
 
   useEffect(() => {
     if (cursorIndex >= 0) {
@@ -290,26 +274,14 @@ export function CommitList({ projectPath, onClose, initialCount }: CommitListPro
         ) : (
           <>
             <div ref={listRef} id={listId} role="listbox">
-              {groupedRows.map((row, rawIndex) =>
-                row.kind === "separator" ? (
-                  <div
-                    key={`sep-${row.label}`}
-                    role="none"
-                    className="px-3 py-1.5 flex items-center gap-2"
-                  >
-                    <div className="h-px flex-1 bg-[var(--border-divider)]" />
-                    <span className="text-xs text-muted-foreground shrink-0">{row.label}</span>
-                    <div className="h-px flex-1 bg-[var(--border-divider)]" />
-                  </div>
-                ) : (
-                  <CommitListItem
-                    key={row.commit.hash}
-                    commit={row.commit}
-                    optionId={`commit-option-${row.commit.hash}`}
-                    isActive={activeRawIndex === rawIndex}
-                  />
-                )
-              )}
+              {data.map((commit, index) => (
+                <CommitListItem
+                  key={commit.hash}
+                  commit={commit}
+                  optionId={`commit-option-${commit.hash}`}
+                  isActive={cursorIndex === index}
+                />
+              ))}
             </div>
 
             {hasMore && (
