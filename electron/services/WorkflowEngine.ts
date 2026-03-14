@@ -13,7 +13,7 @@ import { taskQueueService, TaskQueueService } from "./TaskQueueService.js";
 import { workflowPersistence, WorkflowPersistence } from "./persistence/WorkflowPersistence.js";
 import type { WorkflowRun, NodeState } from "../../shared/types/workflowRun.js";
 import type { WorkflowNode, WorkflowCondition } from "../../shared/types/workflow.js";
-import type { TaskRecord, TaskResult } from "../../shared/types/task.js";
+import type { TaskRecord } from "../../shared/types/task.js";
 
 const TEMPLATE_REGEX = /\{\{\s*([^}]+?)\s*\}\}/g;
 const MAX_RESULT_DATA_BYTES = 1_048_576; // 1 MB
