@@ -4,6 +4,13 @@ const { getSharedBuffersMock } = vi.hoisted(() => ({
   getSharedBuffersMock: vi.fn(),
 }));
 
+vi.mock("@xterm/addon-webgl", () => ({
+  WebglAddon: vi.fn().mockImplementation(() => ({
+    dispose: vi.fn(),
+    onContextLoss: vi.fn(() => ({ dispose: vi.fn() })),
+  })),
+}));
+
 vi.mock("@/clients", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/clients")>();
   return {
