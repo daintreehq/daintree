@@ -832,52 +832,51 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
 
         let resolvedText = text;
 
+        // Parse ALL tokens from the original text before any replacements.
+        // This prevents expanded content (e.g. terminal output containing
+        // literal "@selection" or "@diff") from being falsely re-parsed.
+        const terminalTokens = getAllAtTerminalTokens(text);
+        const selectionTokens = getAllAtSelectionTokens(text);
+        const diffTokens = getAllAtDiffTokens(text);
+
+        // Build replacement map: { start, end, replacement } for each token,
+        // then apply all in reverse order in a single pass.
+        const replacements: Array<{ start: number; end: number; replacement: string }> = [];
+
         // Resolve @terminal tokens (synchronous — direct buffer access)
-        const terminalTokens = getAllAtTerminalTokens(resolvedText);
-        if (terminalTokens.length > 0) {
-          const sorted = [...terminalTokens].sort((a, b) => b.start - a.start);
-          for (const token of sorted) {
-            const managed = terminalInstanceService.get(terminalId);
-            let replacement: string;
-            if (managed) {
-              const buffer = managed.terminal.buffer.active;
-              const start = Math.max(0, buffer.length - 100);
-              const lines: string[] = [];
-              for (let i = start; i < buffer.length; i++) {
-                const line = buffer.getLine(i);
-                if (line) lines.push(line.translateToString(true));
-              }
-              const content = lines.join("\n").trimEnd();
-              replacement = content ? "```\n" + content + "\n```" : "[No terminal output]";
-            } else {
-              replacement = "[Terminal not available]";
+        for (const token of terminalTokens) {
+          const managed = terminalInstanceService.get(terminalId);
+          let replacement: string;
+          if (managed) {
+            const buffer = managed.terminal.buffer.active;
+            const start = Math.max(0, buffer.length - 100);
+            const lines: string[] = [];
+            for (let i = start; i < buffer.length; i++) {
+              const line = buffer.getLine(i);
+              if (line) lines.push(line.translateToString(true));
             }
-            resolvedText =
-              resolvedText.slice(0, token.start) + replacement + resolvedText.slice(token.end);
+            const content = lines.join("\n").trimEnd();
+            replacement = content ? "```\n" + content + "\n```" : "[No terminal output]";
+          } else {
+            replacement = "[Terminal not available]";
           }
+          replacements.push({ start: token.start, end: token.end, replacement });
         }
 
         // Resolve @selection tokens (synchronous — cached selection)
-        const selectionTokens = getAllAtSelectionTokens(resolvedText);
-        if (selectionTokens.length > 0) {
-          const sorted = [...selectionTokens].sort((a, b) => b.start - a.start);
-          for (const token of sorted) {
-            const selection = terminalInstanceService.getCachedSelection(terminalId);
-            const replacement = selection
-              ? "```\n" + selection + "\n```"
-              : "[No terminal selection]";
-            resolvedText =
-              resolvedText.slice(0, token.start) + replacement + resolvedText.slice(token.end);
-          }
+        for (const token of selectionTokens) {
+          const selection = terminalInstanceService.getCachedSelection(terminalId);
+          const replacement = selection
+            ? "```\n" + selection + "\n```"
+            : "[No terminal selection]";
+          replacements.push({ start: token.start, end: token.end, replacement });
         }
 
-        // Resolve @diff tokens before sending
-        const diffTokens = getAllAtDiffTokens(resolvedText);
+        // Resolve @diff tokens (async — IPC call)
         if (diffTokens.length > 0) {
           isSendingRef.current = true;
           try {
-            const sorted = [...diffTokens].sort((a, b) => b.start - a.start);
-            for (const token of sorted) {
+            for (const token of diffTokens) {
               let replacement: string;
               try {
                 const raw = await window.electron.git.getWorkingDiff(cwd, token.diffType);
@@ -895,16 +894,29 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
                 const msg = err instanceof Error ? err.message : String(err);
                 replacement = `[Error fetching diff: ${msg}]`;
               }
-              resolvedText =
-                resolvedText.slice(0, token.start) + replacement + resolvedText.slice(token.end);
+              replacements.push({ start: token.start, end: token.end, replacement });
             }
           } finally {
             isSendingRef.current = false;
           }
         }
 
-        // Auto-attach error output if error chip is active
-        if (agentStateRef.current === "failed" && !errorChipDismissedRef.current) {
+        // Apply all replacements in reverse order (highest offset first)
+        // so earlier offsets remain valid.
+        if (replacements.length > 0) {
+          replacements.sort((a, b) => b.start - a.start);
+          for (const r of replacements) {
+            resolvedText = resolvedText.slice(0, r.start) + r.replacement + resolvedText.slice(r.end);
+          }
+        }
+
+        // Auto-attach error output if error chip is active and @terminal
+        // wasn't already used (avoids duplicating the same output).
+        if (
+          agentStateRef.current === "failed" &&
+          !errorChipDismissedRef.current &&
+          terminalTokens.length === 0
+        ) {
           const managed = terminalInstanceService.get(terminalId);
           if (managed) {
             const buffer = managed.terminal.buffer.active;
