@@ -17,6 +17,8 @@ import {
   checkRateLimit,
   waitForRateLimitSlot,
   drainRateLimitQueues,
+  armRestoreQuota,
+  consumeRestoreQuota,
   _resetRateLimitQueuesForTest,
 } from "../utils.js";
 
@@ -298,5 +300,72 @@ describe("waitForRateLimitSlot", () => {
     await vi.advanceTimersByTimeAsync(30_000);
     await vi.advanceTimersByTimeAsync(0);
     expect(resolvedA).toBe(true);
+  });
+});
+
+describe("restore quota", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    _resetRateLimitQueuesForTest();
+  });
+
+  afterEach(() => {
+    _resetRateLimitQueuesForTest();
+    vi.useRealTimers();
+  });
+
+  it("consumeRestoreQuota returns true exactly N times after armRestoreQuota(N)", () => {
+    armRestoreQuota(3, 60_000);
+
+    expect(consumeRestoreQuota()).toBe(true);
+    expect(consumeRestoreQuota()).toBe(true);
+    expect(consumeRestoreQuota()).toBe(true);
+    expect(consumeRestoreQuota()).toBe(false);
+    expect(consumeRestoreQuota()).toBe(false);
+  });
+
+  it("consumeRestoreQuota returns false when no quota is armed", () => {
+    expect(consumeRestoreQuota()).toBe(false);
+  });
+
+  it("quota expires after TTL", () => {
+    armRestoreQuota(10, 5_000);
+
+    expect(consumeRestoreQuota()).toBe(true);
+
+    vi.advanceTimersByTime(5_000);
+
+    expect(consumeRestoreQuota()).toBe(false);
+  });
+
+  it("re-arming resets the quota and TTL", () => {
+    armRestoreQuota(2, 5_000);
+    expect(consumeRestoreQuota()).toBe(true);
+
+    // Re-arm with longer TTL — old 5s timer should be cleared
+    armRestoreQuota(3, 10_000);
+    expect(consumeRestoreQuota()).toBe(true);
+    expect(consumeRestoreQuota()).toBe(true);
+    expect(consumeRestoreQuota()).toBe(true);
+    expect(consumeRestoreQuota()).toBe(false);
+
+    // Advance past the original 5s TTL — quota should still be 0 (not re-expired)
+    armRestoreQuota(5, 20_000);
+    vi.advanceTimersByTime(5_000);
+    // If old timer wasn't cleared, quota would be wiped at 5s. It shouldn't be.
+    expect(consumeRestoreQuota()).toBe(true);
+
+    // But advancing to 20s should expire the new TTL
+    vi.advanceTimersByTime(15_000);
+    expect(consumeRestoreQuota()).toBe(false);
+  });
+
+  it("_resetRateLimitQueuesForTest clears quota state", () => {
+    armRestoreQuota(5, 60_000);
+    expect(consumeRestoreQuota()).toBe(true);
+
+    _resetRateLimitQueuesForTest();
+
+    expect(consumeRestoreQuota()).toBe(false);
   });
 });

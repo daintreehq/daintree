@@ -1258,4 +1258,254 @@ describe("hydrateAppState", () => {
     expect(callArgs.existingId).toBe("agent-1");
     expect(callArgs.agentSessionId).toBe("session-uuid-456");
   });
+
+  it("restores active worktree panels before background worktree panels", async () => {
+    const callOrder: string[] = [];
+
+    appClientMock.hydrate.mockResolvedValue({
+      appState: {
+        terminals: [
+          {
+            id: "bg-1",
+            title: "BG Terminal 1",
+            cwd: "/project",
+            worktreeId: "wt-bg",
+            location: "grid",
+            type: "terminal",
+          },
+          {
+            id: "bg-2",
+            title: "BG Terminal 2",
+            cwd: "/project",
+            worktreeId: "wt-bg",
+            location: "grid",
+            type: "terminal",
+          },
+          {
+            id: "active-1",
+            title: "Active Terminal",
+            cwd: "/project",
+            worktreeId: "wt-active",
+            location: "grid",
+            type: "terminal",
+          },
+          {
+            id: "bg-3",
+            title: "BG Terminal 3",
+            cwd: "/project",
+            worktreeId: "wt-bg2",
+            location: "grid",
+            type: "terminal",
+          },
+        ],
+        activeWorktreeId: "wt-active",
+        sidebarWidth: 350,
+      },
+      terminalConfig,
+      project,
+      agentSettings,
+    });
+
+    terminalClientMock.getForProject.mockResolvedValue([
+      {
+        id: "bg-1",
+        cwd: "/project",
+        worktreeId: "wt-bg",
+        title: "BG Terminal 1",
+        type: "terminal",
+        kind: "terminal",
+      },
+      {
+        id: "bg-2",
+        cwd: "/project",
+        worktreeId: "wt-bg",
+        title: "BG Terminal 2",
+        type: "terminal",
+        kind: "terminal",
+      },
+      {
+        id: "active-1",
+        cwd: "/project",
+        worktreeId: "wt-active",
+        title: "Active Terminal",
+        type: "terminal",
+        kind: "terminal",
+      },
+      {
+        id: "bg-3",
+        cwd: "/project",
+        worktreeId: "wt-bg2",
+        title: "BG Terminal 3",
+        type: "terminal",
+        kind: "terminal",
+      },
+    ]);
+
+    const addTerminal = vi.fn().mockImplementation((opts: { existingId?: string }) => {
+      callOrder.push(opts.existingId ?? "unknown");
+      return Promise.resolve(opts.existingId ?? "id");
+    });
+    const setActiveWorktree = vi.fn();
+    const loadRecipes = vi.fn().mockResolvedValue(undefined);
+    const openDiagnosticsDock = vi.fn();
+
+    await hydrateAppState({
+      addTerminal,
+      setActiveWorktree,
+      loadRecipes,
+      openDiagnosticsDock,
+    });
+
+    expect(addTerminal).toHaveBeenCalledTimes(4);
+
+    // Active worktree panel should be restored first
+    expect(callOrder[0]).toBe("active-1");
+
+    // Background panels should come after
+    expect(callOrder.slice(1).sort()).toEqual(["bg-1", "bg-2", "bg-3"]);
+  });
+
+  it("passes restore: true on respawned terminals", async () => {
+    appClientMock.hydrate.mockResolvedValue({
+      appState: {
+        terminals: [
+          {
+            id: "term-1",
+            title: "Terminal 1",
+            cwd: "/project",
+            location: "grid",
+            type: "terminal",
+          },
+        ],
+        sidebarWidth: 350,
+      },
+      terminalConfig,
+      project,
+      agentSettings,
+    });
+
+    // No backend terminal → will attempt reconnect fallback → respawn
+    terminalClientMock.getForProject.mockResolvedValue([]);
+
+    const addTerminal = vi.fn().mockResolvedValue("term-1");
+    const setActiveWorktree = vi.fn();
+    const loadRecipes = vi.fn().mockResolvedValue(undefined);
+    const openDiagnosticsDock = vi.fn();
+
+    await hydrateAppState({
+      addTerminal,
+      setActiveWorktree,
+      loadRecipes,
+      openDiagnosticsDock,
+    });
+
+    expect(addTerminal).toHaveBeenCalledTimes(1);
+    const callArgs = addTerminal.mock.calls[0][0] as Record<string, unknown>;
+    expect(callArgs.restore).toBe(true);
+  });
+
+  it("does not pass restore on reconnected terminals", async () => {
+    appClientMock.hydrate.mockResolvedValue({
+      appState: {
+        terminals: [
+          {
+            id: "term-1",
+            title: "Terminal 1",
+            cwd: "/project",
+            location: "grid",
+            type: "terminal",
+          },
+        ],
+        sidebarWidth: 350,
+      },
+      terminalConfig,
+      project,
+      agentSettings,
+    });
+
+    terminalClientMock.getForProject.mockResolvedValue([
+      {
+        id: "term-1",
+        cwd: "/project",
+        title: "Terminal 1",
+        type: "terminal",
+        kind: "terminal",
+      },
+    ]);
+
+    const addTerminal = vi.fn().mockResolvedValue("term-1");
+    const setActiveWorktree = vi.fn();
+    const loadRecipes = vi.fn().mockResolvedValue(undefined);
+    const openDiagnosticsDock = vi.fn();
+
+    await hydrateAppState({
+      addTerminal,
+      setActiveWorktree,
+      loadRecipes,
+      openDiagnosticsDock,
+    });
+
+    expect(addTerminal).toHaveBeenCalledTimes(1);
+    const callArgs = addTerminal.mock.calls[0][0] as Record<string, unknown>;
+    // Reconnects should not have restore flag
+    expect(callArgs.restore).toBeUndefined();
+  });
+
+  it("isolates failures within a batch using Promise.allSettled semantics", async () => {
+    appClientMock.hydrate.mockResolvedValue({
+      appState: {
+        terminals: [
+          {
+            id: "fail-1",
+            title: "Fail Terminal",
+            cwd: "/project",
+            worktreeId: "wt-bg",
+            location: "grid",
+            type: "terminal",
+          },
+          {
+            id: "success-1",
+            title: "Success Terminal",
+            cwd: "/project",
+            worktreeId: "wt-bg",
+            location: "grid",
+            type: "terminal",
+          },
+        ],
+        activeWorktreeId: "wt-active",
+        sidebarWidth: 350,
+      },
+      terminalConfig,
+      project,
+      agentSettings,
+    });
+
+    // No backend terminals → respawn path
+    terminalClientMock.getForProject.mockResolvedValue([]);
+
+    let callCount = 0;
+    const addTerminal = vi.fn().mockImplementation(() => {
+      callCount++;
+      if (callCount === 1) {
+        return Promise.reject(new Error("Spawn failed"));
+      }
+      return Promise.resolve("success-1");
+    });
+    const setActiveWorktree = vi.fn();
+    const loadRecipes = vi.fn().mockResolvedValue(undefined);
+    const openDiagnosticsDock = vi.fn();
+
+    // Should not throw despite first panel failing
+    await expect(
+      hydrateAppState({
+        addTerminal,
+        setActiveWorktree,
+        loadRecipes,
+        openDiagnosticsDock,
+      })
+    ).resolves.toBeUndefined();
+
+    // Both should have been attempted
+    expect(addTerminal).toHaveBeenCalledTimes(2);
+  });
 });

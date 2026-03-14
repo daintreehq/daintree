@@ -6,7 +6,7 @@ import { ipcMain } from "electron";
 import crypto from "crypto";
 import os from "os";
 import { CHANNELS } from "../../channels.js";
-import { waitForRateLimitSlot } from "../../utils.js";
+import { waitForRateLimitSlot, consumeRestoreQuota } from "../../utils.js";
 import { projectStore } from "../../../services/ProjectStore.js";
 import type { HandlerDependencies } from "../../types.js";
 import type { TerminalSpawnOptions } from "../../../types/index.js";
@@ -24,7 +24,6 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
     _event: Electron.IpcMainInvokeEvent,
     options: TerminalSpawnOptions
   ): Promise<string> => {
-    await waitForRateLimitSlot("terminalSpawn", 10, 30_000);
     const parseResult = TerminalSpawnOptionsSchema.safeParse(options);
     if (!parseResult.success) {
       console.error("[IPC] Invalid terminal spawn options:", parseResult.error.format());
@@ -32,6 +31,11 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
     }
 
     const validatedOptions = parseResult.data;
+
+    const bypassedRateLimit = validatedOptions.restore === true && consumeRestoreQuota();
+    if (!bypassedRateLimit) {
+      await waitForRateLimitSlot("terminalSpawn", 10, 30_000);
+    }
 
     const cols = Math.max(1, Math.min(500, Math.floor(validatedOptions.cols) || 80));
     const rows = Math.max(1, Math.min(500, Math.floor(validatedOptions.rows) || 30));
