@@ -57,6 +57,7 @@
   },
   "dependencies": {
     "@mozilla/readability": "^0.6.0",
+    "@xterm/addon-webgl": "^0.19.0",
     "better-sqlite3": "^12.6.2",
     "copytree": "^0.14.2",
     "js-yaml": "^4.1.1",

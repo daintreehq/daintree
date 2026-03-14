@@ -16,6 +16,7 @@ import { TerminalOffscreenManager } from "./TerminalOffscreenManager";
 import { TerminalLinkHandler } from "./TerminalLinkHandler";
 import { TerminalResizeController } from "./TerminalResizeController";
 import { TerminalRendererPolicy } from "./TerminalRendererPolicy";
+import { TerminalWebGLManager } from "./TerminalWebGLManager";
 import { TerminalWakeManager } from "./TerminalWakeManager";
 import { useTerminalStore } from "@/store/terminalStore";
 import { getEffectiveAgentConfig } from "@shared/config/agentRegistry";
@@ -48,6 +49,7 @@ class TerminalInstanceService {
   private linkHandler = new TerminalLinkHandler();
   private resizeController: TerminalResizeController;
   private rendererPolicy: TerminalRendererPolicy;
+  private webGLManager = new TerminalWebGLManager();
   private wakeManager: TerminalWakeManager;
 
   constructor() {
@@ -72,6 +74,13 @@ class TerminalInstanceService {
       getInstance: (id) => this.instances.get(id),
       wakeAndRestore: (id) => this.wakeManager.wakeAndRestore(id),
       onPostWake: (id) => this.handlePostWake(id),
+      onTierApplied: (id, tier, managed) => {
+        if (tier === TerminalRefreshTier.FOCUSED) {
+          this.webGLManager.attachToFocused(id, managed);
+        } else {
+          this.webGLManager.detachCurrent();
+        }
+      },
     });
   }
 
@@ -617,6 +626,9 @@ class TerminalInstanceService {
       managed.terminal.open(managed.hostElement);
       managed.isOpened = true;
       logDebug(`[TIS.attach] Opened terminal ${id}`);
+      if (managed.lastAppliedTier === TerminalRefreshTier.FOCUSED) {
+        this.webGLManager.attachToFocused(id, managed);
+      }
     }
     managed.lastAttachAt = Date.now();
     managed.isDetached = false;
@@ -1095,6 +1107,7 @@ class TerminalInstanceService {
       logWarn("Error disposing file links", { error });
     }
 
+    this.webGLManager.onTerminalDestroyed(id);
     managed.terminal.dispose();
 
     if (managed.hostElement.parentElement) {
@@ -1113,6 +1126,7 @@ class TerminalInstanceService {
     this.instances.forEach((_, id) => this.destroy(id));
     this.offscreenManager.dispose();
     this.wakeManager.dispose();
+    this.webGLManager.dispose();
     this.rendererPolicy.dispose();
   }
 
