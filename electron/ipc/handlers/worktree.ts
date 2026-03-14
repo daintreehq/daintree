@@ -28,6 +28,23 @@ import { checkRateLimit } from "../utils.js";
 // This is stored in-process since taskId is transient orchestration metadata
 const taskWorktreeMap = new Map<string, Map<string, Set<string>>>();
 
+async function resolveWorktreePattern(rootPath: string): Promise<string> {
+  const project = await projectStore.getProjectByPath(rootPath);
+  if (project) {
+    const settings = await projectStore.getProjectSettings(project.id);
+    if (settings?.worktreePathPattern) {
+      const validation = validatePathPattern(settings.worktreePathPattern);
+      if (validation.valid) {
+        return settings.worktreePathPattern;
+      }
+    }
+  }
+  const configPattern = store.get("worktreeConfig.pathPattern");
+  return typeof configPattern === "string" && configPattern.trim()
+    ? configPattern
+    : DEFAULT_WORKTREE_PATH_PATTERN;
+}
+
 function getProjectTaskMap(projectId: string): Map<string, Set<string>> {
   if (!taskWorktreeMap.has(projectId)) {
     taskWorktreeMap.set(projectId, new Map());
@@ -180,11 +197,7 @@ export function registerWorktreeHandlers(deps: HandlerDependencies): () => void 
       throw new Error("Invalid branchName: must be a non-empty string");
     }
 
-    const configPattern = store.get("worktreeConfig.pathPattern");
-    const pattern =
-      typeof configPattern === "string" && configPattern.trim()
-        ? configPattern
-        : DEFAULT_WORKTREE_PATH_PATTERN;
+    const pattern = await resolveWorktreePattern(rootPath);
 
     const validation = validatePathPattern(pattern);
     if (!validation.valid) {
@@ -473,13 +486,8 @@ export function registerWorktreeHandlers(deps: HandlerDependencies): () => void 
     const baseBranchName = `task-${taskId}`;
     const availableBranchName = await gitService.findAvailableBranchName(baseBranchName);
 
-    // Generate path using the worktree path pattern
-    const configPattern = store.get("worktreeConfig.pathPattern");
-    const pattern =
-      typeof configPattern === "string" && configPattern.trim()
-        ? configPattern
-        : DEFAULT_WORKTREE_PATH_PATTERN;
-
+    // Generate path using the worktree path pattern (project-level → global → default)
+    const pattern = await resolveWorktreePattern(rootPath);
     const initialPath = generateWorktreePath(rootPath, availableBranchName, pattern);
     const availablePath = gitService.findAvailablePath(initialPath);
 

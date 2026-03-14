@@ -887,6 +887,10 @@ export class ProjectStore {
           typeof parsed.agentInstructions === "string" && parsed.agentInstructions.trim()
             ? parsed.agentInstructions
             : undefined,
+        worktreePathPattern:
+          typeof parsed.worktreePathPattern === "string" && parsed.worktreePathPattern.trim()
+            ? parsed.worktreePathPattern.trim()
+            : undefined,
       };
 
       return settings;
@@ -1467,6 +1471,7 @@ export class ProjectStore {
       copyTreeSettings?: import("../types/index.js").CopyTreeSettings;
       excludedPaths?: string[];
       agentInstructions?: string;
+      worktreePathPattern?: string;
     } = { version: 1 };
 
     if (settings.runCommands?.length) payload.runCommands = settings.runCommands;
@@ -1476,6 +1481,7 @@ export class ProjectStore {
     if (settings.excludedPaths?.length) payload.excludedPaths = settings.excludedPaths;
     if (settings.agentInstructions?.trim())
       payload.agentInstructions = settings.agentInstructions.trim();
+    if (settings.worktreePathPattern) payload.worktreePathPattern = settings.worktreePathPattern;
 
     const uniqueSuffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const tempFilePath = `${filePath}.${uniqueSuffix}.tmp`;

@@ -29,6 +29,7 @@ import {
   Lock,
   ShieldAlert,
   GitBranch,
+  FolderTree,
   Copy,
   FolderOpen,
   PanelBottom,
@@ -64,6 +65,7 @@ import {
   type ProjectSettingsSnapshot,
 } from "./projectSettingsDirty";
 import { isSensitiveEnvKey } from "@shared/utils/envVars";
+import { validatePathPattern, previewPathPattern } from "@shared/utils/pathPattern";
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
 
 interface ProjectSettingsDialogProps {
@@ -129,6 +131,7 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
   const [branchPrefixMode, setBranchPrefixMode] = useState<"none" | "username" | "custom">("none");
   const [branchPrefixCustom, setBranchPrefixCustom] = useState<string>("");
   const [agentInstructions, setAgentInstructions] = useState<string>("");
+  const [worktreePathPattern, setWorktreePathPattern] = useState<string>("");
   const fileInputRef = useRef<HTMLInputElement>(null);
   const initialSnapshotRef = useRef<ProjectSettingsSnapshot | null>(null);
   const [showUnsavedChangesDialog, setShowUnsavedChangesDialog] = useState(false);
@@ -176,7 +179,8 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
       branchPrefixMode,
       branchPrefixCustom,
       devServerLoadTimeout,
-      agentInstructions
+      agentInstructions,
+      worktreePathPattern
     );
   }, [
     name,
@@ -193,6 +197,7 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
     branchPrefixMode,
     branchPrefixCustom,
     agentInstructions,
+    worktreePathPattern,
     currentProject,
   ]);
 
@@ -285,6 +290,7 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
       const initialBranchPrefixMode = settings.branchPrefixMode ?? "none";
       const initialBranchPrefixCustom = settings.branchPrefixCustom ?? "";
       const initialAgentInstructions = settings.agentInstructions ?? "";
+      const initialWorktreePathPattern = settings.worktreePathPattern ?? "";
 
       setName(currentProject.name);
       setEmoji(currentProject.emoji || "🌲");
@@ -300,6 +306,7 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
       setBranchPrefixMode(initialBranchPrefixMode);
       setBranchPrefixCustom(initialBranchPrefixCustom);
       setAgentInstructions(initialAgentInstructions);
+      setWorktreePathPattern(initialWorktreePathPattern);
 
       initialSnapshotRef.current = createProjectSettingsSnapshot(
         currentProject.name,
@@ -315,7 +322,8 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
         initialBranchPrefixMode,
         initialBranchPrefixCustom,
         initialDevServerLoadTimeout,
-        initialAgentInstructions
+        initialAgentInstructions,
+        initialWorktreePathPattern
       );
 
       setIsInitialized(true);
@@ -337,6 +345,7 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
       setBranchPrefixMode("none");
       setBranchPrefixCustom("");
       setAgentInstructions("");
+      setWorktreePathPattern("");
       hasLoadedRecipes.current = false;
       setActiveTab("general");
       initialSnapshotRef.current = null;
@@ -540,6 +549,7 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
       const sanitizedBranchPrefixCustom = branchPrefixCustom.trim();
       const effectivePrefixMode =
         branchPrefixMode === "custom" && !sanitizedBranchPrefixCustom ? "none" : branchPrefixMode;
+      const sanitizedWorktreePathPattern = worktreePathPattern.trim() || undefined;
 
       await saveSettings({
         ...settings,
@@ -556,6 +566,7 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
         branchPrefixCustom:
           effectivePrefixMode === "custom" ? sanitizedBranchPrefixCustom : undefined,
         agentInstructions: agentInstructions.trim() || undefined,
+        worktreePathPattern: sanitizedWorktreePathPattern,
         insecureEnvironmentVariables: undefined,
         unresolvedSecureEnvironmentVariables: undefined,
       });
@@ -588,7 +599,8 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
         branchPrefixMode,
         sanitizedBranchPrefixCustom,
         devServerLoadTimeout,
-        agentInstructions
+        agentInstructions,
+        worktreePathPattern.trim()
       );
 
       requestClose({ bypassDirty: true });
@@ -2115,6 +2127,63 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
                           )}
                         </div>
                       )}
+                    </div>
+
+                    <div className="pt-2">
+                      <h3 className="text-sm font-semibold text-canopy-text/80 mb-2 flex items-center gap-2">
+                        <FolderTree className="h-4 w-4" />
+                        Worktree Path Pattern
+                      </h3>
+                      <p className="text-xs text-canopy-text/60 mb-4">
+                        Override the global worktree path pattern for this project. Leave empty to
+                        use the global default.
+                      </p>
+
+                      <input
+                        type="text"
+                        value={worktreePathPattern}
+                        onChange={(e) => setWorktreePathPattern(e.target.value)}
+                        placeholder="e.g. {parent-dir}/{base-folder}-worktrees/{branch-slug}"
+                        className="w-full px-3 py-2 bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] text-sm text-canopy-text font-mono focus:outline-none focus:ring-2 focus:ring-canopy-accent"
+                      />
+
+                      {worktreePathPattern.trim() &&
+                        (() => {
+                          const validation = validatePathPattern(worktreePathPattern.trim());
+                          if (!validation.valid) {
+                            return <p className="mt-2 text-xs text-red-400">{validation.error}</p>;
+                          }
+                          const rootPath =
+                            currentProject?.path ?? "/Users/name/Projects/my-project";
+                          const preview = previewPathPattern(worktreePathPattern.trim(), rootPath);
+                          return (
+                            <div className="mt-2 p-3 rounded-[var(--radius-md)] bg-canopy-bg/50 border border-canopy-border">
+                              <span className="block text-xs font-medium text-canopy-text/70 mb-1">
+                                Preview:
+                              </span>
+                              <code className="text-xs text-canopy-accent break-all">
+                                {preview}
+                              </code>
+                            </div>
+                          );
+                        })()}
+
+                      <div className="mt-3 grid grid-cols-2 gap-2">
+                        {[
+                          { var: "{parent-dir}", desc: "Parent directory of the repo" },
+                          { var: "{base-folder}", desc: "Repository folder name" },
+                          { var: "{branch-slug}", desc: "Sanitized branch name (required)" },
+                          { var: "{repo-name}", desc: "Alias for {base-folder}" },
+                        ].map(({ var: v, desc }) => (
+                          <div
+                            key={v}
+                            className="text-xs p-2 rounded-[var(--radius-md)] bg-canopy-bg/30 border border-canopy-border"
+                          >
+                            <code className="text-canopy-accent">{v}</code>
+                            <span className="text-canopy-text/50 ml-1">{desc}</span>
+                          </div>
+                        ))}
+                      </div>
                     </div>
                   </div>
 

@@ -22,6 +22,7 @@ export interface ProjectSettingsSnapshot {
   branchPrefixMode: "none" | "username" | "custom";
   branchPrefixCustom: string;
   agentInstructions: string;
+  worktreePathPattern: string;
 }
 
 interface EnvVar {
@@ -54,7 +55,8 @@ export function createProjectSettingsSnapshot(
   branchPrefixMode: "none" | "username" | "custom" = "none",
   branchPrefixCustom: string = "",
   devServerLoadTimeout: number | undefined = undefined,
-  agentInstructions: string = ""
+  agentInstructions: string = "",
+  worktreePathPattern: string = ""
 ): ProjectSettingsSnapshot {
   const envVarRecord: Record<string, string> = {};
   const seenKeys = new Map<string, number>();
@@ -132,6 +134,7 @@ export function createProjectSettingsSnapshot(
     branchPrefixMode: normalizedMode,
     branchPrefixCustom: normalizedMode === "custom" ? trimmedCustom : "",
     agentInstructions: agentInstructions.trim(),
+    worktreePathPattern: worktreePathPattern.trim(),
   };
 }
 
@@ -214,6 +217,7 @@ export function areSnapshotsEqual(a: ProjectSettingsSnapshot, b: ProjectSettings
   if (a.branchPrefixMode !== b.branchPrefixMode) return false;
   if (a.branchPrefixCustom !== b.branchPrefixCustom) return false;
   if (a.agentInstructions !== b.agentInstructions) return false;
+  if (a.worktreePathPattern !== b.worktreePathPattern) return false;
 
   return true;
 }

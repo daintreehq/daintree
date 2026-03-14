@@ -27,6 +27,7 @@ import {
   DEFAULT_WORKTREE_PATH_PATTERN,
   validatePathPattern,
 } from "../../../shared/utils/pathPattern.js";
+import { projectStore } from "../ProjectStore.js";
 
 /** Arguments for the github:work-issue command */
 export interface GitHubWorkIssueArgs {
@@ -420,12 +421,24 @@ export const githubWorkIssueCommand: CanopyCommand<GitHubWorkIssueArgs, GitHubWo
       };
     }
 
-    // Generate worktree path using configured pattern (from rootPath)
-    const configPattern = store.get("worktreeConfig.pathPattern");
-    const pattern =
-      typeof configPattern === "string" && configPattern.trim()
-        ? configPattern
-        : DEFAULT_WORKTREE_PATH_PATTERN;
+    // Generate worktree path using configured pattern (project-level → global → default)
+    let pattern = DEFAULT_WORKTREE_PATH_PATTERN;
+    const project = await projectStore.getProjectByPath(rootPath);
+    if (project) {
+      const settings = await projectStore.getProjectSettings(project.id);
+      if (settings?.worktreePathPattern) {
+        const projValidation = validatePathPattern(settings.worktreePathPattern);
+        if (projValidation.valid) {
+          pattern = settings.worktreePathPattern;
+        }
+      }
+    }
+    if (pattern === DEFAULT_WORKTREE_PATH_PATTERN) {
+      const configPattern = store.get("worktreeConfig.pathPattern");
+      if (typeof configPattern === "string" && configPattern.trim()) {
+        pattern = configPattern;
+      }
+    }
 
     const validation = validatePathPattern(pattern);
     if (!validation.valid) {

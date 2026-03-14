@@ -1000,6 +1000,8 @@ export interface ProjectSettings {
   branchPrefixCustom?: string;
   /** Project-specific instructions prepended to every new agent session prompt */
   agentInstructions?: string;
+  /** Per-project worktree path pattern override (uses global default when unset) */
+  worktreePathPattern?: string;
 }
 
 // Toolbar Customization Types
