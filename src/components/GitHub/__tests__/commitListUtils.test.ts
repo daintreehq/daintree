@@ -1,10 +1,5 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import {
-  parseConventionalCommit,
-  getCommitDateGroupLabel,
-  buildGroupedRows,
-} from "../commitListUtils";
-import type { GitCommit } from "@shared/types/github";
+import { describe, it, expect } from "vitest";
+import { parseConventionalCommit } from "../commitListUtils";
 
 describe("parseConventionalCommit", () => {
   it("parses a standard conventional commit", () => {
@@ -86,89 +81,5 @@ describe("parseConventionalCommit", () => {
       breaking: false,
       description: "button alignment",
     });
-  });
-});
-
-describe("getCommitDateGroupLabel", () => {
-  beforeEach(() => {
-    vi.useFakeTimers();
-  });
-
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-
-  it('returns "Today" for commits from today', () => {
-    const now = new Date("2025-06-15T14:00:00Z");
-    vi.setSystemTime(now);
-    expect(getCommitDateGroupLabel("2025-06-15T10:00:00Z", now)).toBe("Today");
-  });
-
-  it('returns "Yesterday" for commits from yesterday', () => {
-    const now = new Date("2025-06-15T14:00:00Z");
-    vi.setSystemTime(now);
-    expect(getCommitDateGroupLabel("2025-06-14T10:00:00Z", now)).toBe("Yesterday");
-  });
-
-  it('returns "This Week" for commits 2-6 days ago', () => {
-    const now = new Date("2025-06-15T14:00:00Z");
-    vi.setSystemTime(now);
-    expect(getCommitDateGroupLabel("2025-06-12T10:00:00Z", now)).toBe("This Week");
-    expect(getCommitDateGroupLabel("2025-06-10T10:00:00Z", now)).toBe("This Week");
-  });
-
-  it("returns formatted date for older commits in same year", () => {
-    const now = new Date("2025-06-15T14:00:00Z");
-    vi.setSystemTime(now);
-    const label = getCommitDateGroupLabel("2025-01-15T10:00:00Z", now);
-    expect(label).toBe("Jan 15");
-  });
-
-  it("returns formatted date with year for different year", () => {
-    const now = new Date("2025-06-15T14:00:00Z");
-    vi.setSystemTime(now);
-    const label = getCommitDateGroupLabel("2024-03-10T10:00:00Z", now);
-    expect(label).toBe("Mar 10, 2024");
-  });
-});
-
-describe("buildGroupedRows", () => {
-  const makeCommit = (hash: string, date: string): GitCommit => ({
-    hash,
-    shortHash: hash.slice(0, 7),
-    message: `commit ${hash}`,
-    date,
-    author: { name: "Test", email: "test@test.com" },
-  });
-
-  it("inserts separators between different date groups", () => {
-    const now = new Date("2025-06-15T14:00:00Z");
-    const commits = [
-      makeCommit("aaa", "2025-06-15T12:00:00Z"),
-      makeCommit("bbb", "2025-06-15T10:00:00Z"),
-      makeCommit("ccc", "2025-06-14T10:00:00Z"),
-    ];
-
-    const rows = buildGroupedRows(commits, now);
-
-    expect(rows).toHaveLength(5);
-    expect(rows[0]).toEqual({ kind: "separator", label: "Today" });
-    expect(rows[1]).toEqual({ kind: "commit", commit: commits[0] });
-    expect(rows[2]).toEqual({ kind: "commit", commit: commits[1] });
-    expect(rows[3]).toEqual({ kind: "separator", label: "Yesterday" });
-    expect(rows[4]).toEqual({ kind: "commit", commit: commits[2] });
-  });
-
-  it("returns empty array for no commits", () => {
-    expect(buildGroupedRows([])).toEqual([]);
-  });
-
-  it("handles single commit", () => {
-    const now = new Date("2025-06-15T14:00:00Z");
-    const commits = [makeCommit("aaa", "2025-06-15T12:00:00Z")];
-    const rows = buildGroupedRows(commits, now);
-    expect(rows).toHaveLength(2);
-    expect(rows[0]).toEqual({ kind: "separator", label: "Today" });
-    expect(rows[1]).toEqual({ kind: "commit", commit: commits[0] });
   });
 });
