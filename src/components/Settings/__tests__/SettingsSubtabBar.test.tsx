@@ -202,7 +202,9 @@ describe("SettingsSubtabBar", () => {
         resizeObserverCallback([], {} as ResizeObserver);
       });
 
-      expect(screen.getByLabelText("Scroll tabs right").getAttribute("aria-disabled")).toBe("false");
+      expect(screen.getByLabelText("Scroll tabs right").getAttribute("aria-disabled")).toBe(
+        "false"
+      );
       expect(screen.getByLabelText("Scroll tabs left").getAttribute("aria-disabled")).toBe("true");
     });
 
@@ -229,7 +231,9 @@ describe("SettingsSubtabBar", () => {
       });
 
       expect(screen.getByLabelText("Scroll tabs left").getAttribute("aria-disabled")).toBe("false");
-      expect(screen.getByLabelText("Scroll tabs right").getAttribute("aria-disabled")).toBe("false");
+      expect(screen.getByLabelText("Scroll tabs right").getAttribute("aria-disabled")).toBe(
+        "false"
+      );
     });
 
     it("clicking right arrow calls scrollIntoView on first clipped tab", () => {
@@ -401,7 +405,9 @@ describe("SettingsSubtabBar", () => {
         resizeObserverCallback([], {} as ResizeObserver);
       });
 
-      expect(screen.getByLabelText("Scroll tabs right").getAttribute("aria-disabled")).toBe("false");
+      expect(screen.getByLabelText("Scroll tabs right").getAttribute("aria-disabled")).toBe(
+        "false"
+      );
       expect(screen.getByLabelText("Scroll tabs left").getAttribute("aria-disabled")).toBe("true");
 
       act(() => {
@@ -410,7 +416,9 @@ describe("SettingsSubtabBar", () => {
       });
 
       expect(screen.getByLabelText("Scroll tabs left").getAttribute("aria-disabled")).toBe("false");
-      expect(screen.getByLabelText("Scroll tabs right").getAttribute("aria-disabled")).toBe("false");
+      expect(screen.getByLabelText("Scroll tabs right").getAttribute("aria-disabled")).toBe(
+        "false"
+      );
     });
   });
 });
