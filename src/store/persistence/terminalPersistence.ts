@@ -52,6 +52,7 @@ export function terminalToSnapshot(t: TerminalInstance): TerminalSnapshot {
       ...(t.createdAt !== undefined && { createdAt: t.createdAt }),
       ...(t.exitBehavior !== undefined && { exitBehavior: t.exitBehavior }),
       ...(t.agentSessionId && { agentSessionId: t.agentSessionId }),
+      ...(t.agentLaunchFlags?.length && { agentLaunchFlags: t.agentLaunchFlags }),
     };
   } else if (t.kind === "notes") {
     return {

@@ -7,7 +7,7 @@ import { useWorktrees } from "./useWorktrees";
 import { isElectronAvailable } from "./useElectron";
 import { agentSettingsClient, systemClient } from "@/clients";
 import type { AgentSettings, CliAvailability } from "@shared/types";
-import { generateAgentCommand } from "@shared/types";
+import { generateAgentCommand, buildAgentLaunchFlags } from "@shared/types";
 import { getAgentConfig, isRegisteredAgent } from "@/config/agents";
 
 const CLIPBOARD_DIR_NAME = "canopy-clipboard";
@@ -114,6 +114,7 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
       const isAgent = isRegisteredAgent(agentId);
 
       let command: string | undefined;
+      let launchFlags: string[] | undefined;
       if (agentConfig) {
         const entry = agentSettings?.agents?.[agentId] ?? {};
 
@@ -133,6 +134,11 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
           interactive: launchOptions?.interactive ?? true,
           clipboardDirectory,
         });
+
+        // Capture process-level flags for session resume persistence
+        if (isAgent) {
+          launchFlags = buildAgentLaunchFlags(entry, agentId);
+        }
       }
 
       const options: AddTerminalOptions = {
@@ -144,6 +150,7 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
         worktreeId: targetWorktreeId || undefined,
         command,
         location: launchOptions?.location,
+        agentLaunchFlags: launchFlags,
       };
 
       try {

@@ -258,6 +258,7 @@ export {
   getAgentSettingsEntry,
   generateAgentFlags,
   generateAgentCommand,
+  buildAgentLaunchFlags,
   buildResumeCommand,
 } from "./agentSettings.js";
 
