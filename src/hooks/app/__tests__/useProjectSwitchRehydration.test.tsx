@@ -214,9 +214,7 @@ describe("useProjectSwitchRehydration", () => {
     isTerminalWarmInProjectSwitchCacheMock.mockImplementation(
       (_projectId: string, terminalId: string) => terminalId === "warm-terminal"
     );
-    getMock.mockImplementation((id: string) =>
-      id === "warm-terminal" ? { terminal: {} } : null
-    );
+    getMock.mockImplementation((id: string) => (id === "warm-terminal" ? { terminal: {} } : null));
 
     renderHook(() => useProjectSwitchRehydration(callbacks));
 
@@ -238,9 +236,7 @@ describe("useProjectSwitchRehydration", () => {
   it("wakes a cache-warm terminal when the xterm instance is no longer alive", async () => {
     hydrateAppStateMock.mockResolvedValue(undefined);
 
-    terminalState.terminals = [
-      { id: "stale-terminal", kind: "terminal", worktreeId: "wt-active" },
-    ];
+    terminalState.terminals = [{ id: "stale-terminal", kind: "terminal", worktreeId: "wt-active" }];
     terminalState.activeDockTerminalId = null;
     worktreeSelectionState.activeWorktreeId = "wt-active";
 
