@@ -314,4 +314,128 @@ describe("terminalInputStore", () => {
       );
     });
   });
+
+  describe("clearTerminalState", () => {
+    function makeState(doc: string) {
+      return EditorState.create({ doc });
+    }
+
+    it("should clear all 6 maps for the given terminal", () => {
+      const store = useTerminalInputStore.getState();
+
+      store.setDraftInput("term-1", "draft", "project-a");
+      store.setPendingDraft("term-1", "pending", "project-a");
+      store.stashEditorState("term-1", makeState("stashed"), "project-a");
+      store.addToHistory("term-1", "echo hello");
+      store.navigateHistory("term-1", "up", "current");
+
+      const before = useTerminalInputStore.getState();
+      expect(before.draftInputs.size).toBe(1);
+      expect(before.pendingDrafts.size).toBe(1);
+      expect(before.stashedEditorStates.size).toBe(1);
+      expect(before.commandHistory.has("term-1")).toBe(true);
+      expect(before.historyIndex.has("term-1")).toBe(true);
+      expect(before.tempDraft.has("term-1")).toBe(true);
+
+      useTerminalInputStore.getState().clearTerminalState("term-1");
+
+      const after = useTerminalInputStore.getState();
+      expect(after.draftInputs.size).toBe(0);
+      expect(after.pendingDrafts.size).toBe(0);
+      expect(after.stashedEditorStates.size).toBe(0);
+      expect(after.commandHistory.has("term-1")).toBe(false);
+      expect(after.historyIndex.has("term-1")).toBe(false);
+      expect(after.tempDraft.has("term-1")).toBe(false);
+    });
+
+    it("should clear cross-project composite keys for the terminal", () => {
+      const store = useTerminalInputStore.getState();
+
+      store.setDraftInput("term-1", "draft-a", "project-a");
+      store.setDraftInput("term-1", "draft-b", "project-b");
+      store.setPendingDraft("term-1", "pending-a", "project-a");
+      store.setPendingDraft("term-1", "pending-b", "project-b");
+      store.stashEditorState("term-1", makeState("a"), "project-a");
+      store.stashEditorState("term-1", makeState("b"), "project-b");
+
+      expect(useTerminalInputStore.getState().draftInputs.size).toBe(2);
+      expect(useTerminalInputStore.getState().pendingDrafts.size).toBe(2);
+      expect(useTerminalInputStore.getState().stashedEditorStates.size).toBe(2);
+
+      useTerminalInputStore.getState().clearTerminalState("term-1");
+
+      expect(useTerminalInputStore.getState().draftInputs.size).toBe(0);
+      expect(useTerminalInputStore.getState().pendingDrafts.size).toBe(0);
+      expect(useTerminalInputStore.getState().stashedEditorStates.size).toBe(0);
+    });
+
+    it("should not affect entries for a different terminal across all 6 maps", () => {
+      const store = useTerminalInputStore.getState();
+
+      store.setDraftInput("term-1", "draft-1", "project-a");
+      store.setDraftInput("term-2", "draft-2", "project-a");
+      store.setPendingDraft("term-1", "p1", "project-a");
+      store.setPendingDraft("term-2", "p2", "project-a");
+      store.stashEditorState("term-1", makeState("s1"), "project-a");
+      store.stashEditorState("term-2", makeState("s2"), "project-a");
+      store.addToHistory("term-1", "cmd-1");
+      store.addToHistory("term-2", "cmd-2");
+      store.navigateHistory("term-1", "up", "");
+      store.navigateHistory("term-2", "up", "");
+
+      useTerminalInputStore.getState().clearTerminalState("term-1");
+
+      const after = useTerminalInputStore.getState();
+      expect(after.getDraftInput("term-2", "project-a")).toBe("draft-2");
+      expect(after.commandHistory.get("term-2")).toEqual(["cmd-2"]);
+      expect(after.pendingDrafts.size).toBe(1);
+      expect(after.hasStashedEditorState("term-2", "project-a")).toBe(true);
+      expect(after.historyIndex.has("term-2")).toBe(true);
+      expect(after.tempDraft.has("term-2")).toBe(true);
+    });
+
+    it("should not delete entries for terminal IDs that are substrings (term-1 vs term-10)", () => {
+      const store = useTerminalInputStore.getState();
+
+      store.setDraftInput("term-1", "draft-1", "project-a");
+      store.setDraftInput("term-10", "draft-10", "project-a");
+      store.addToHistory("term-1", "cmd-1");
+      store.addToHistory("term-10", "cmd-10");
+
+      useTerminalInputStore.getState().clearTerminalState("term-1");
+
+      const after = useTerminalInputStore.getState();
+      expect(after.getDraftInput("term-10", "project-a")).toBe("draft-10");
+      expect(after.commandHistory.get("term-10")).toEqual(["cmd-10"]);
+      expect(after.getDraftInput("term-1", "project-a")).toBe("");
+      expect(after.commandHistory.has("term-1")).toBe(false);
+    });
+
+    it("should be a no-op for a nonexistent terminal in a populated store", () => {
+      const store = useTerminalInputStore.getState();
+      store.setDraftInput("term-2", "draft", "project-a");
+      store.addToHistory("term-2", "cmd");
+
+      const before = useTerminalInputStore.getState();
+      useTerminalInputStore.getState().clearTerminalState("nonexistent");
+      const after = useTerminalInputStore.getState();
+
+      expect(after).toBe(before);
+    });
+
+    it("should clear legacy bare-key entries (no project context)", () => {
+      const store = useTerminalInputStore.getState();
+
+      store.setDraftInput("term-1", "legacy-draft");
+      store.setPendingDraft("term-1", "legacy-pending");
+      store.stashEditorState("term-1", makeState("legacy"));
+
+      useTerminalInputStore.getState().clearTerminalState("term-1");
+
+      const after = useTerminalInputStore.getState();
+      expect(after.draftInputs.size).toBe(0);
+      expect(after.pendingDrafts.size).toBe(0);
+      expect(after.stashedEditorStates.size).toBe(0);
+    });
+  });
 });
