@@ -4,7 +4,6 @@ import headless from "@xterm/headless";
 const { Terminal: HeadlessTerminal } = headless;
 import serialize, { type SerializeAddon as SerializeAddonType } from "@xterm/addon-serialize";
 const { SerializeAddon } = serialize;
-import type { TerminalType } from "../../../shared/types/domain.js";
 import { AGENT_REGISTRY, getEffectiveAgentConfig } from "../../../shared/config/agentRegistry.js";
 import { ProcessDetector, type DetectionResult } from "../ProcessDetector.js";
 import type { ProcessTreeCache } from "../ProcessTreeCache.js";
