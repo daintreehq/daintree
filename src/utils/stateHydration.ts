@@ -406,6 +406,7 @@ export async function hydrateAppState(
 
           interface PanelRestoreTaskEntry {
             priority: number;
+            isPty: boolean;
             execute: () => Promise<void>;
           }
 
@@ -421,11 +422,32 @@ export async function hydrateAppState(
             const isActiveWorktree = savedWorktreeId === activeWorktreeId;
             const priority = isActiveWorktree ? 0 : 1;
 
+            // Determine isPty at task-build time so we can partition tasks
+            // for concurrent (non-PTY) vs staggered (PTY) execution.
+            const backendTerminal = backendTerminalMap.get(saved.id);
+            let taskIsPty: boolean;
+            if (backendTerminal) {
+              taskIsPty = true;
+            } else {
+              let inferredKind: TerminalKind = saved.kind ?? "terminal";
+              if (!saved.kind) {
+                if (saved.browserUrl !== undefined) {
+                  inferredKind = "browser";
+                } else if (saved.notePath !== undefined || saved.noteId !== undefined) {
+                  inferredKind = "notes";
+                } else if (saved.title === "Assistant" || saved.title?.startsWith("Assistant")) {
+                  inferredKind = "assistant";
+                } else if (!saved.cwd && !saved.command) {
+                  inferredKind = "assistant";
+                }
+              }
+              taskIsPty = inferredKind === "assistant" ? false : panelKindHasPty(inferredKind);
+            }
+
             panelTasks.push({
               priority,
+              isPty: taskIsPty,
               execute: async () => {
-                const backendTerminal = backendTerminalMap.get(saved.id);
-
                 if (backendTerminal) {
                   // PTY terminal - reconnect to existing backend process
                   logHydrationInfo(`Reconnecting to terminal: ${saved.id}`);
@@ -846,14 +868,32 @@ export async function hydrateAppState(
             });
           }
 
-          // Execute panel restore tasks in priority order with staggered batching.
-          // Priority 0 (active worktree) panels restore first for instant interactivity,
-          // then remaining panels restore in batches with delays to prevent CPU spikes.
-          const priorityTasks = panelTasks.filter((t) => t.priority === 0);
-          const backgroundTasks = panelTasks.filter((t) => t.priority === 1);
+          // Execute panel restore tasks: non-PTY panels run concurrently (they only
+          // do synchronous Zustand mutations with no IPC), then PTY panels restore
+          // with priority ordering and staggered batching to throttle process spawning.
+          const nonPtyTasks = panelTasks.filter((t) => !t.isPty);
+          const ptyPriorityTasks = panelTasks.filter((t) => t.isPty && t.priority === 0);
+          const ptyBackgroundTasks = panelTasks.filter((t) => t.isPty && t.priority === 1);
 
-          // Restore priority panels immediately (sequentially to preserve order)
-          for (const task of priorityTasks) {
+          // Restore all non-PTY panels concurrently (browser, notes, dev-preview).
+          // These only perform synchronous store mutations, so no throttling is needed.
+          if (nonPtyTasks.length > 0) {
+            logHydrationInfo(`Restoring ${nonPtyTasks.length} non-PTY panel(s) concurrently`);
+            await Promise.allSettled(
+              nonPtyTasks.map(async (task) => {
+                try {
+                  await task.execute();
+                } catch (error) {
+                  logWarn("Failed to restore non-PTY panel", { error });
+                }
+              })
+            );
+          }
+
+          if (!checkCurrent()) return;
+
+          // Restore priority PTY panels sequentially (active worktree, for instant interactivity)
+          for (const task of ptyPriorityTasks) {
             try {
               await task.execute();
             } catch (error) {
@@ -863,13 +903,13 @@ export async function hydrateAppState(
 
           if (!checkCurrent()) return;
 
-          // Restore background panels in staggered batches
-          if (backgroundTasks.length > 0) {
+          // Restore background PTY panels in staggered batches
+          if (ptyBackgroundTasks.length > 0) {
             logHydrationInfo(
-              `Staggering ${backgroundTasks.length} background panel(s) in batches of ${RESTORE_SPAWN_BATCH_SIZE}`
+              `Staggering ${ptyBackgroundTasks.length} background PTY panel(s) in batches of ${RESTORE_SPAWN_BATCH_SIZE}`
             );
             await runInBatches(
-              backgroundTasks,
+              ptyBackgroundTasks,
               RESTORE_SPAWN_BATCH_SIZE,
               RESTORE_SPAWN_BATCH_DELAY_MS,
               async (task) => {

@@ -1508,4 +1508,311 @@ describe("hydrateAppState", () => {
     // Both should have been attempted
     expect(addTerminal).toHaveBeenCalledTimes(2);
   });
+
+  it("restores non-PTY panels before PTY panels are added", async () => {
+    const callOrder: string[] = [];
+
+    appClientMock.hydrate.mockResolvedValue({
+      appState: {
+        terminals: [
+          {
+            id: "term-1",
+            kind: "terminal",
+            title: "Terminal",
+            cwd: "/project",
+            location: "grid",
+            type: "terminal",
+          },
+          {
+            id: "browser-1",
+            kind: "browser",
+            title: "Browser",
+            cwd: "/project",
+            location: "grid",
+            browserUrl: "http://localhost:3000",
+          },
+          {
+            id: "notes-1",
+            kind: "notes",
+            title: "Notes",
+            cwd: "/project",
+            location: "grid",
+            noteId: "note-abc",
+          },
+        ],
+        sidebarWidth: 350,
+      },
+      terminalConfig,
+      project,
+      agentSettings,
+    });
+
+    terminalClientMock.getForProject.mockResolvedValue([
+      {
+        id: "term-1",
+        cwd: "/project",
+        title: "Terminal",
+        type: "terminal",
+        kind: "terminal",
+      },
+    ]);
+
+    const addTerminal = vi
+      .fn()
+      .mockImplementation((opts: { kind?: string; requestedId?: string; existingId?: string }) => {
+        callOrder.push(opts.kind ?? "unknown");
+        return Promise.resolve(opts.requestedId ?? opts.existingId ?? "id");
+      });
+    const setActiveWorktree = vi.fn();
+    const loadRecipes = vi.fn().mockResolvedValue(undefined);
+    const openDiagnosticsDock = vi.fn();
+
+    await hydrateAppState({
+      addTerminal,
+      setActiveWorktree,
+      loadRecipes,
+      openDiagnosticsDock,
+    });
+
+    expect(addTerminal).toHaveBeenCalledTimes(3);
+
+    // Non-PTY panels (browser, notes) should be restored before PTY panel (terminal)
+    const terminalIndex = callOrder.indexOf("terminal");
+    const browserIndex = callOrder.indexOf("browser");
+    const notesIndex = callOrder.indexOf("notes");
+
+    expect(browserIndex).toBeLessThan(terminalIndex);
+    expect(notesIndex).toBeLessThan(terminalIndex);
+  });
+
+  it("preserves order for all-non-PTY panel workspace", async () => {
+    appClientMock.hydrate.mockResolvedValue({
+      appState: {
+        terminals: [
+          {
+            id: "browser-1",
+            kind: "browser",
+            title: "Browser 1",
+            cwd: "/project",
+            location: "grid",
+            browserUrl: "http://localhost:3000",
+          },
+          {
+            id: "notes-1",
+            kind: "notes",
+            title: "Notes 1",
+            cwd: "/project",
+            location: "grid",
+            noteId: "note-1",
+          },
+          {
+            id: "dev-preview-1",
+            kind: "dev-preview",
+            title: "Dev Preview",
+            cwd: "/project",
+            location: "grid",
+            command: "npm run dev",
+            browserUrl: "http://localhost:5173",
+          },
+        ],
+        sidebarWidth: 350,
+      },
+      terminalConfig,
+      project,
+      agentSettings,
+    });
+
+    const addTerminal = vi.fn().mockImplementation((opts: { requestedId?: string }) => {
+      return Promise.resolve(opts.requestedId ?? "id");
+    });
+    const setActiveWorktree = vi.fn();
+    const loadRecipes = vi.fn().mockResolvedValue(undefined);
+    const openDiagnosticsDock = vi.fn();
+
+    await hydrateAppState({
+      addTerminal,
+      setActiveWorktree,
+      loadRecipes,
+      openDiagnosticsDock,
+    });
+
+    expect(addTerminal).toHaveBeenCalledTimes(3);
+
+    // All three non-PTY panels should be restored with correct kinds in order
+    expect(addTerminal.mock.calls[0][0]).toEqual(
+      expect.objectContaining({ kind: "browser", requestedId: "browser-1" })
+    );
+    expect(addTerminal.mock.calls[1][0]).toEqual(
+      expect.objectContaining({ kind: "notes", requestedId: "notes-1" })
+    );
+    expect(addTerminal.mock.calls[2][0]).toEqual(
+      expect.objectContaining({ kind: "dev-preview", requestedId: "dev-preview-1" })
+    );
+  });
+
+  it("restores non-PTY panels from mixed worktrees concurrently before PTY panels", async () => {
+    const callOrder: string[] = [];
+
+    appClientMock.hydrate.mockResolvedValue({
+      appState: {
+        terminals: [
+          {
+            id: "term-active",
+            kind: "terminal",
+            title: "Active Terminal",
+            cwd: "/project",
+            worktreeId: "wt-active",
+            location: "grid",
+            type: "terminal",
+          },
+          {
+            id: "browser-bg",
+            kind: "browser",
+            title: "BG Browser",
+            cwd: "/project",
+            worktreeId: "wt-bg",
+            location: "grid",
+            browserUrl: "http://localhost:3000",
+          },
+          {
+            id: "notes-active",
+            kind: "notes",
+            title: "Active Notes",
+            cwd: "/project",
+            worktreeId: "wt-active",
+            location: "grid",
+            noteId: "note-1",
+          },
+          {
+            id: "term-bg",
+            kind: "terminal",
+            title: "BG Terminal",
+            cwd: "/project",
+            worktreeId: "wt-bg",
+            location: "grid",
+            type: "terminal",
+          },
+        ],
+        activeWorktreeId: "wt-active",
+        sidebarWidth: 350,
+      },
+      terminalConfig,
+      project,
+      agentSettings,
+    });
+
+    terminalClientMock.getForProject.mockResolvedValue([
+      {
+        id: "term-active",
+        cwd: "/project",
+        worktreeId: "wt-active",
+        title: "Active Terminal",
+        type: "terminal",
+        kind: "terminal",
+      },
+      {
+        id: "term-bg",
+        cwd: "/project",
+        worktreeId: "wt-bg",
+        title: "BG Terminal",
+        type: "terminal",
+        kind: "terminal",
+      },
+    ]);
+
+    const addTerminal = vi
+      .fn()
+      .mockImplementation((opts: { kind?: string; requestedId?: string; existingId?: string }) => {
+        callOrder.push(`${opts.kind}:${opts.requestedId ?? opts.existingId}`);
+        return Promise.resolve(opts.requestedId ?? opts.existingId ?? "id");
+      });
+    const setActiveWorktree = vi.fn();
+    const loadRecipes = vi.fn().mockResolvedValue(undefined);
+    const openDiagnosticsDock = vi.fn();
+
+    await hydrateAppState({
+      addTerminal,
+      setActiveWorktree,
+      loadRecipes,
+      openDiagnosticsDock,
+    });
+
+    expect(addTerminal).toHaveBeenCalledTimes(4);
+
+    // Both non-PTY panels (from different worktrees) should come before either PTY panel
+    const browserIdx = callOrder.findIndex((c) => c.startsWith("browser:"));
+    const notesIdx = callOrder.findIndex((c) => c.startsWith("notes:"));
+    const firstPtyIdx = callOrder.findIndex((c) => c.startsWith("terminal:"));
+
+    expect(browserIdx).toBeLessThan(firstPtyIdx);
+    expect(notesIdx).toBeLessThan(firstPtyIdx);
+  });
+
+  it("treats dev-preview with backend terminal as PTY-grouped", async () => {
+    const callOrder: string[] = [];
+
+    appClientMock.hydrate.mockResolvedValue({
+      appState: {
+        terminals: [
+          {
+            id: "browser-1",
+            kind: "browser",
+            title: "Browser",
+            cwd: "/project",
+            location: "grid",
+            browserUrl: "http://localhost:3000",
+          },
+          {
+            id: "dev-preview-1",
+            kind: "dev-preview",
+            title: "Dev Preview",
+            cwd: "/project",
+            location: "grid",
+            command: "npm run dev",
+            browserUrl: "http://localhost:5173",
+          },
+        ],
+        sidebarWidth: 350,
+      },
+      terminalConfig,
+      project,
+      agentSettings,
+    });
+
+    // dev-preview-1 has a live backend terminal — should be treated as PTY
+    terminalClientMock.getForProject.mockResolvedValue([
+      {
+        id: "dev-preview-1",
+        cwd: "/project",
+        title: "Dev Preview",
+        type: "dev-preview",
+        kind: "dev-preview",
+      },
+    ]);
+
+    const addTerminal = vi
+      .fn()
+      .mockImplementation((opts: { kind?: string; requestedId?: string; existingId?: string }) => {
+        callOrder.push(opts.kind ?? "unknown");
+        return Promise.resolve(opts.requestedId ?? opts.existingId ?? "id");
+      });
+    const setActiveWorktree = vi.fn();
+    const loadRecipes = vi.fn().mockResolvedValue(undefined);
+    const openDiagnosticsDock = vi.fn();
+
+    await hydrateAppState({
+      addTerminal,
+      setActiveWorktree,
+      loadRecipes,
+      openDiagnosticsDock,
+    });
+
+    expect(addTerminal).toHaveBeenCalledTimes(2);
+
+    // Browser (non-PTY, no backend) should come before dev-preview (has backend terminal)
+    const browserIdx = callOrder.indexOf("browser");
+    const devPreviewIdx = callOrder.indexOf("dev-preview");
+
+    expect(browserIdx).toBeLessThan(devPreviewIdx);
+  });
 });
