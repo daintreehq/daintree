@@ -833,7 +833,7 @@ export async function listIssues(
       options.cursor ?? ""
     );
 
-    if (!options.search) {
+    if (!options.search && !options.bypassCache) {
       const cached = issueListCache.get(cacheKey);
       if (cached) return cached;
     }
@@ -937,7 +937,7 @@ export async function listPullRequests(
       options.cursor ?? ""
     );
 
-    if (!options.search) {
+    if (!options.search && !options.bypassCache) {
       const cached = prListCache.get(cacheKey);
       if (cached) return cached;
     }

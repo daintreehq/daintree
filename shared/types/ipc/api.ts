@@ -482,12 +482,14 @@ export interface ElectronAPI {
       search?: string;
       state?: "open" | "closed" | "all";
       cursor?: string;
+      bypassCache?: boolean;
     }): Promise<import("../github.js").GitHubListResponse<import("../github.js").GitHubIssue>>;
     listPullRequests(options: {
       cwd: string;
       search?: string;
       state?: "open" | "closed" | "merged" | "all";
       cursor?: string;
+      bypassCache?: boolean;
     }): Promise<import("../github.js").GitHubListResponse<import("../github.js").GitHubPR>>;
     assignIssue(cwd: string, issueNumber: number, username: string): Promise<void>;
     getIssueTooltip(
