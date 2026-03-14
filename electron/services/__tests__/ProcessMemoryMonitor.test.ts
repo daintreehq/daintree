@@ -41,7 +41,7 @@ function makeMetric(type: string, workingSetSizeKB: number, pid = 1000): Electro
     },
     sandboxed: false,
     integrityLevel: "unknown",
-    cpu: { percentCPUUsage: 0, idleCPUUsage: 0 },
+    cpu: { percentCPUUsage: 0, idleWakeupsPerSecond: 0 },
   } as Electron.ProcessMetric;
 }
 
