@@ -76,12 +76,14 @@ class TerminalInstanceService {
       wakeAndRestore: (id) => this.wakeManager.wakeAndRestore(id),
       onPostWake: (id) => this.handlePostWake(id),
       onTierApplied: (id, tier, managed) => {
-        if (tier === TerminalRefreshTier.FOCUSED || tier === TerminalRefreshTier.BURST) {
-          this.webGLManager.attachToFocused(id, managed);
-        } else if (tier === TerminalRefreshTier.VISIBLE && this.webGLManager.isCurrent(id)) {
-          // Retain WebGL lease for the current holder transitioning to VISIBLE
+        if (
+          tier === TerminalRefreshTier.FOCUSED ||
+          tier === TerminalRefreshTier.BURST ||
+          tier === TerminalRefreshTier.VISIBLE
+        ) {
+          this.webGLManager.ensureContext(id, managed);
         } else {
-          this.webGLManager.detachIfCurrent(id);
+          this.webGLManager.releaseContext(id);
         }
       },
     });
@@ -690,9 +692,10 @@ class TerminalInstanceService {
       logDebug(`[TIS.attach] Opened terminal ${id}`);
       if (
         managed.lastAppliedTier === TerminalRefreshTier.FOCUSED ||
-        managed.lastAppliedTier === TerminalRefreshTier.BURST
+        managed.lastAppliedTier === TerminalRefreshTier.BURST ||
+        managed.lastAppliedTier === TerminalRefreshTier.VISIBLE
       ) {
-        this.webGLManager.attachToFocused(id, managed);
+        this.webGLManager.ensureContext(id, managed);
       }
     }
     managed.lastAttachAt = Date.now();

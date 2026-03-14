@@ -211,6 +211,7 @@ describe("onTierApplied handler — WebGL manager integration", () => {
     return {
       terminal: { loadAddon: vi.fn() },
       isOpened: true,
+      lastActiveTime: Date.now(),
     } as unknown as ManagedTerminal;
   }
 
@@ -224,70 +225,72 @@ describe("onTierApplied handler — WebGL manager integration", () => {
   });
 
   function simulateOnTierApplied(id: string, tier: TerminalRefreshTier, m: ManagedTerminal) {
-    if (tier === TerminalRefreshTier.FOCUSED || tier === TerminalRefreshTier.BURST) {
-      webGLManager.attachToFocused(id, m);
-    } else if (tier === TerminalRefreshTier.VISIBLE && webGLManager.isCurrent(id)) {
-      // retain-only
+    if (
+      tier === TerminalRefreshTier.FOCUSED ||
+      tier === TerminalRefreshTier.BURST ||
+      tier === TerminalRefreshTier.VISIBLE
+    ) {
+      webGLManager.ensureContext(id, m);
     } else {
-      webGLManager.detachIfCurrent(id);
+      webGLManager.releaseContext(id);
     }
   }
 
   it("BURST does not detach WebGL from focused terminal", () => {
     simulateOnTierApplied("t1", TerminalRefreshTier.FOCUSED, managed);
-    expect(webGLManager.isCurrent("t1")).toBe(true);
+    expect(webGLManager.isActive("t1")).toBe(true);
 
     simulateOnTierApplied("t1", TerminalRefreshTier.BURST, managed);
-    expect(webGLManager.isCurrent("t1")).toBe(true);
+    expect(webGLManager.isActive("t1")).toBe(true);
   });
 
-  it("FOCUSED → VISIBLE retains lease for current holder", () => {
+  it("FOCUSED → VISIBLE retains context", () => {
     simulateOnTierApplied("t1", TerminalRefreshTier.FOCUSED, managed);
-    expect(webGLManager.isCurrent("t1")).toBe(true);
+    expect(webGLManager.isActive("t1")).toBe(true);
 
     simulateOnTierApplied("t1", TerminalRefreshTier.VISIBLE, managed);
-    expect(webGLManager.isCurrent("t1")).toBe(true);
+    expect(webGLManager.isActive("t1")).toBe(true);
   });
 
-  it("VISIBLE non-holder does not steal the lease", () => {
+  it("VISIBLE terminal acquires its own context", () => {
     const managed2 = makeManagedTerminal();
     simulateOnTierApplied("t1", TerminalRefreshTier.FOCUSED, managed);
-    expect(webGLManager.isCurrent("t1")).toBe(true);
+    expect(webGLManager.isActive("t1")).toBe(true);
 
     simulateOnTierApplied("t2", TerminalRefreshTier.VISIBLE, managed2);
-    expect(webGLManager.isCurrent("t1")).toBe(true);
-    expect(webGLManager.isCurrent("t2")).toBe(false);
+    expect(webGLManager.isActive("t1")).toBe(true);
+    expect(webGLManager.isActive("t2")).toBe(true);
   });
 
-  it("BACKGROUND detaches the current holder", () => {
+  it("BACKGROUND releases context for that terminal only", () => {
+    const managed2 = makeManagedTerminal();
     simulateOnTierApplied("t1", TerminalRefreshTier.FOCUSED, managed);
-    expect(webGLManager.isCurrent("t1")).toBe(true);
+    simulateOnTierApplied("t2", TerminalRefreshTier.VISIBLE, managed2);
 
     simulateOnTierApplied("t1", TerminalRefreshTier.BACKGROUND, managed);
-    expect(webGLManager.isCurrent("t1")).toBe(false);
+    expect(webGLManager.isActive("t1")).toBe(false);
+    expect(webGLManager.isActive("t2")).toBe(true);
   });
 
-  it("focus switch A→B transfers lease correctly", () => {
+  it("focus switch A→B keeps both active when both visible", () => {
     const managedB = makeManagedTerminal();
     simulateOnTierApplied("t1", TerminalRefreshTier.FOCUSED, managed);
-    expect(webGLManager.isCurrent("t1")).toBe(true);
+    expect(webGLManager.isActive("t1")).toBe(true);
 
     simulateOnTierApplied("t2", TerminalRefreshTier.FOCUSED, managedB);
-    expect(webGLManager.isCurrent("t1")).toBe(false);
-    expect(webGLManager.isCurrent("t2")).toBe(true);
+    expect(webGLManager.isActive("t1")).toBe(true);
+    expect(webGLManager.isActive("t2")).toBe(true);
   });
 
-  it("A retains at VISIBLE while B takes focus", () => {
+  it("A retains context at VISIBLE while B takes focus", () => {
     const managedB = makeManagedTerminal();
     simulateOnTierApplied("t1", TerminalRefreshTier.FOCUSED, managed);
 
-    // t1 downgrades to VISIBLE (retains)
     simulateOnTierApplied("t1", TerminalRefreshTier.VISIBLE, managed);
-    expect(webGLManager.isCurrent("t1")).toBe(true);
+    expect(webGLManager.isActive("t1")).toBe(true);
 
-    // t2 takes focus — steals lease
     simulateOnTierApplied("t2", TerminalRefreshTier.FOCUSED, managedB);
-    expect(webGLManager.isCurrent("t2")).toBe(true);
-    expect(webGLManager.isCurrent("t1")).toBe(false);
+    expect(webGLManager.isActive("t2")).toBe(true);
+    expect(webGLManager.isActive("t1")).toBe(true);
   });
 });
