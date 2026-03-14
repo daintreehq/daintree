@@ -239,6 +239,8 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     const [terminalContext, setTerminalContext] = useState<AtTerminalContext | null>(null);
     const [selectionContext, setSelectionContext] = useState<AtSelectionContext | null>(null);
     const [errorChipDismissed, setErrorChipDismissed] = useState(false);
+    const errorChipDismissedRef = useRef(false);
+    const agentStateRef = useRef<AgentState | undefined>(undefined);
     const prevAgentStateRef = useRef<AgentState | undefined>(undefined);
     const [selectedIndex, setSelectedIndex] = useState(0);
     const lastQueryRef = useRef<string>("");
@@ -899,7 +901,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         }
 
         // Auto-attach error output if error chip is active
-        if (agentState === "failed" && !errorChipDismissed) {
+        if (agentStateRef.current === "failed" && !errorChipDismissedRef.current) {
           const managed = terminalInstanceService.get(terminalId);
           if (managed) {
             const buffer = managed.terminal.buffer.active;
@@ -915,6 +917,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
             }
           }
           setErrorChipDismissed(true);
+          errorChipDismissedRef.current = true;
         }
 
         const payload = buildTerminalSendPayload(resolvedText);
@@ -1032,8 +1035,10 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     ]);
 
     useEffect(() => {
+      agentStateRef.current = agentState;
       if (agentState === "failed" && prevAgentStateRef.current !== "failed") {
         setErrorChipDismissed(false);
+        errorChipDismissedRef.current = false;
       }
       prevAgentStateRef.current = agentState;
     }, [agentState]);
@@ -2069,7 +2074,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
               <span className="text-xs font-medium">Attach error output</span>
               <button
                 type="button"
-                onClick={() => setErrorChipDismissed(true)}
+                onClick={() => { setErrorChipDismissed(true); errorChipDismissedRef.current = true; }}
                 className="ml-0.5 rounded-sm p-0.5 hover:bg-status-error/20 transition-colors cursor-pointer"
                 aria-label="Dismiss error context"
               >
