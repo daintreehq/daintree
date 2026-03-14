@@ -440,6 +440,12 @@ export const CHANNELS = {
   DEMO_EXEC_RESUME: "demo:exec-resume",
   DEMO_EXEC_WAIT_FOR_SELECTOR: "demo:exec-wait-for-selector",
   DEMO_COMMAND_DONE: "demo:command-done",
+
+  // Workflow approval channels
+  WORKFLOW_RESOLVE_APPROVAL: "workflow:resolve-approval",
+  WORKFLOW_LIST_PENDING_APPROVALS: "workflow:list-pending-approvals",
+  WORKFLOW_APPROVAL_REQUESTED: "workflow:approval-requested",
+  WORKFLOW_APPROVAL_CLEARED: "workflow:approval-cleared",
 } as const;
 
 export type ChannelName = (typeof CHANNELS)[keyof typeof CHANNELS];

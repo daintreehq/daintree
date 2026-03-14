@@ -45,7 +45,7 @@ export type WorkflowCondition = z.infer<typeof WorkflowConditionSchema>;
  * Node type - currently only 'action' is supported.
  * Future types could include 'command' for shell commands or 'recipe' for terminal recipes.
  */
-export const WorkflowNodeTypeSchema = z.enum(["action"]);
+export const WorkflowNodeTypeSchema = z.enum(["action", "approval"]);
 export type WorkflowNodeType = z.infer<typeof WorkflowNodeTypeSchema>;
 
 /**
@@ -60,25 +60,49 @@ export const WorkflowActionConfigSchema = z.object({
 export type WorkflowActionConfig = z.infer<typeof WorkflowActionConfigSchema>;
 
 /**
+ * Configuration for an approval node.
+ */
+export const WorkflowApprovalConfigSchema = z.object({
+  /** Prompt to display to the user when requesting approval */
+  prompt: z.string().min(1),
+  /** Optional timeout in milliseconds — auto-rejects if exceeded */
+  timeoutMs: z.number().positive().optional(),
+});
+export type WorkflowApprovalConfig = z.infer<typeof WorkflowApprovalConfigSchema>;
+
+/**
  * A node in the workflow graph.
  * Nodes represent individual steps with dependencies and routing.
  */
-export const WorkflowNodeSchema = z.object({
-  /** Unique identifier within the workflow */
-  id: z.string().min(1),
-  /** Node type - determines what config is expected */
-  type: WorkflowNodeTypeSchema,
-  /** Configuration for this node (varies by type) */
-  config: WorkflowActionConfigSchema,
-  /** Node IDs this node depends on (must complete before this runs) */
-  dependencies: z.array(z.string()).optional(),
-  /** Node IDs to run on successful completion */
-  onSuccess: z.array(z.string()).optional(),
-  /** Node IDs to run on failure */
-  onFailure: z.array(z.string()).optional(),
-  /** Declarative conditions for advanced routing */
-  conditions: z.array(WorkflowConditionSchema).optional(),
-});
+export const WorkflowNodeSchema = z
+  .object({
+    /** Unique identifier within the workflow */
+    id: z.string().min(1),
+    /** Node type - determines what config is expected */
+    type: WorkflowNodeTypeSchema,
+    /** Configuration for this node (varies by type) */
+    config: z.union([WorkflowActionConfigSchema, WorkflowApprovalConfigSchema]),
+    /** Node IDs this node depends on (must complete before this runs) */
+    dependencies: z.array(z.string()).optional(),
+    /** Node IDs to run on successful completion */
+    onSuccess: z.array(z.string()).optional(),
+    /** Node IDs to run on failure */
+    onFailure: z.array(z.string()).optional(),
+    /** Declarative conditions for advanced routing */
+    conditions: z.array(WorkflowConditionSchema).optional(),
+  })
+  .refine(
+    (node) => {
+      if (node.type === "action") {
+        return WorkflowActionConfigSchema.safeParse(node.config).success;
+      }
+      if (node.type === "approval") {
+        return WorkflowApprovalConfigSchema.safeParse(node.config).success;
+      }
+      return false;
+    },
+    { message: "Config must match node type (action requires actionId, approval requires prompt)" }
+  );
 export type WorkflowNode = z.infer<typeof WorkflowNodeSchema>;
 
 /**
