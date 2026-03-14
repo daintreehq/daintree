@@ -90,6 +90,8 @@ export interface TerminalState {
   exitBehavior?: import("../domain.js").PanelExitBehavior;
   /** Captured agent session ID from graceful shutdown */
   agentSessionId?: string;
+  /** Process-level flags captured at launch time, persisted for session resume */
+  agentLaunchFlags?: string[];
 }
 
 /** Terminal data payload for IPC */
