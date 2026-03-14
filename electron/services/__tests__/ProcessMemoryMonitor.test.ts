@@ -57,6 +57,7 @@ describe("ProcessMemoryMonitor", () => {
   afterEach(() => {
     stop?.();
     vi.useRealTimers();
+    Object.defineProperty(app, "isPackaged", { value: false, writable: true });
   });
 
   it("logs debug samples for monitored process types", () => {
@@ -171,8 +172,6 @@ describe("ProcessMemoryMonitor", () => {
     vi.advanceTimersByTime(30_000);
 
     expect(v8.writeHeapSnapshot).not.toHaveBeenCalled();
-
-    Object.defineProperty(app, "isPackaged", { value: false, writable: true });
   });
 
   it("respects snapshot cooldown — no double-write within 5 minutes", () => {
@@ -201,7 +200,7 @@ describe("ProcessMemoryMonitor", () => {
     expect(v8.writeHeapSnapshot).toHaveBeenCalledTimes(2);
   });
 
-  it("catches and logs snapshot errors", () => {
+  it("catches and logs snapshot errors without consuming cooldown", () => {
     mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 700 * 1024, 100)]);
     Object.defineProperty(app, "isPackaged", { value: false, writable: true });
     vi.mocked(v8.writeHeapSnapshot).mockImplementationOnce(() => {
@@ -213,6 +212,36 @@ describe("ProcessMemoryMonitor", () => {
 
     expect(logWarn).toHaveBeenCalledWith("heap-snapshot-failed", {
       error: "Error: disk full",
+    });
+
+    // Next tick should retry since cooldown was not consumed
+    vi.advanceTimersByTime(30_000);
+    expect(v8.writeHeapSnapshot).toHaveBeenCalledTimes(2);
+  });
+
+  it("cooldown is per-PID — different PIDs get independent snapshots", () => {
+    mockGetAppMetrics.mockReturnValue([
+      makeMetric("Browser", 700 * 1024, 100),
+      makeMetric("Browser", 700 * 1024, 200),
+    ]);
+    Object.defineProperty(app, "isPackaged", { value: false, writable: true });
+
+    stop = startAppMetricsMonitor();
+    vi.advanceTimersByTime(30_000);
+
+    expect(v8.writeHeapSnapshot).toHaveBeenCalledTimes(2);
+  });
+
+  it("catches and logs polling errors without crashing", () => {
+    mockGetAppMetrics.mockImplementationOnce(() => {
+      throw new Error("metrics unavailable");
+    });
+
+    stop = startAppMetricsMonitor();
+    vi.advanceTimersByTime(30_000);
+
+    expect(logWarn).toHaveBeenCalledWith("process-memory-poll-failed", {
+      error: "Error: metrics unavailable",
     });
   });
 
