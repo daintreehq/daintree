@@ -5,7 +5,7 @@ import { describe, it, expect, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { NodeStatusBadge } from "../NodeStatusBadge";
-import type { TaskState } from "@shared/types/domain";
+import type { NodeStatus } from "@shared/types/workflowRun";
 
 vi.mock("react-dom", async () => {
   const actual = await vi.importActual<typeof import("react-dom")>("react-dom");
@@ -13,7 +13,7 @@ vi.mock("react-dom", async () => {
 });
 
 describe("NodeStatusBadge", () => {
-  const states: TaskState[] = [
+  const states: NodeStatus[] = [
     "draft",
     "queued",
     "running",
@@ -21,6 +21,7 @@ describe("NodeStatusBadge", () => {
     "completed",
     "failed",
     "cancelled",
+    "awaiting-approval",
   ];
 
   it.each(states)("renders status badge for %s", (status) => {

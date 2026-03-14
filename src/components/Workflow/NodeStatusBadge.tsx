@@ -1,14 +1,14 @@
 import { cn } from "@/lib/utils";
-import type { TaskState } from "@shared/types/domain";
+import type { NodeStatus } from "@shared/types/workflowRun";
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
 
 interface NodeStatusBadgeProps {
-  status: TaskState;
+  status: NodeStatus;
   className?: string;
 }
 
 const STATUS_CONFIG: Record<
-  TaskState,
+  NodeStatus,
   { icon: string; color: string; pulse: boolean; label: string }
 > = {
   running: { icon: "▶", color: "text-status-info", pulse: true, label: "Running" },
@@ -18,6 +18,12 @@ const STATUS_CONFIG: Record<
   queued: { icon: "○", color: "text-text-muted", pulse: false, label: "Queued" },
   draft: { icon: "○", color: "text-text-muted", pulse: false, label: "Pending" },
   blocked: { icon: "⏸", color: "text-status-warning", pulse: false, label: "Blocked" },
+  "awaiting-approval": {
+    icon: "⏳",
+    color: "text-status-warning",
+    pulse: true,
+    label: "Awaiting Approval",
+  },
 };
 
 export function NodeStatusBadge({ status, className }: NodeStatusBadgeProps) {
