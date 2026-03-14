@@ -5,7 +5,7 @@ const { Terminal: HeadlessTerminal } = headless;
 import serialize, { type SerializeAddon as SerializeAddonType } from "@xterm/addon-serialize";
 const { SerializeAddon } = serialize;
 import type { TerminalType } from "../../../shared/types/domain.js";
-import { getEffectiveAgentConfig } from "../../../shared/config/agentRegistry.js";
+import { AGENT_REGISTRY, getEffectiveAgentConfig } from "../../../shared/config/agentRegistry.js";
 import { ProcessDetector, type DetectionResult } from "../ProcessDetector.js";
 import type { ProcessTreeCache } from "../ProcessTreeCache.js";
 import { ActivityMonitor } from "../ActivityMonitor.js";
@@ -1311,14 +1311,9 @@ export class TerminalProcess {
         terminal.type = result.agentType;
 
         if (!terminal.title || terminal.title === previousType || terminal.title === "Terminal") {
-          const agentNames: Record<TerminalType, string> = {
-            claude: "Claude",
-            gemini: "Gemini",
-            codex: "Codex",
-            opencode: "OpenCode",
-            terminal: "Terminal",
-          };
-          terminal.title = agentNames[result.agentType];
+          const config = AGENT_REGISTRY[result.agentType];
+          terminal.title =
+            config?.name ?? (result.agentType === "terminal" ? "Terminal" : result.agentType);
         }
 
         this.lastDetectedProcessIconId = result.processIconId;
