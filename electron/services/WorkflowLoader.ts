@@ -10,7 +10,6 @@ import path from "path";
 import { fileURLToPath } from "url";
 import {
   WorkflowDefinitionSchema,
-  type WorkflowDefinition,
   type WorkflowNode,
   type LoopNode,
   type WorkflowValidationResult,
@@ -378,14 +377,21 @@ export class WorkflowLoader {
     hasCycle: boolean;
     cyclePath?: string[];
   } {
+    // Build a forward-directed adjacency list:
+    // - dependencies: depNode → this node (dep must run first)
+    // - onSuccess/onFailure: this node → target (this node triggers target)
     const adj = new Map<string, string[]>();
     for (const node of nodes) {
-      const edges = [
-        ...(node.dependencies || []),
-        ...(node.onSuccess || []),
-        ...(node.onFailure || []),
-      ];
-      adj.set(node.id, edges);
+      if (!adj.has(node.id)) adj.set(node.id, []);
+      // Forward routing edges
+      for (const target of [...(node.onSuccess || []), ...(node.onFailure || [])]) {
+        adj.get(node.id)!.push(target);
+      }
+      // Dependency edges: dependency → this node (forward execution order)
+      for (const depId of node.dependencies || []) {
+        if (!adj.has(depId)) adj.set(depId, []);
+        adj.get(depId)!.push(node.id);
+      }
     }
 
     const visited = new Set<string>();

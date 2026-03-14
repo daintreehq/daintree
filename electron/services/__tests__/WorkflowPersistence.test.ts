@@ -171,7 +171,8 @@ describe("WorkflowPersistence", () => {
 
       expect(loaded[0].definition.id).toBe("custom-workflow");
       expect(loaded[0].definition.name).toBe("Custom Workflow");
-      expect(loaded[0].definition.nodes[0].config.args).toEqual({ foo: "bar" });
+      const node = loaded[0].definition.nodes[0];
+      expect(node.type === "action" && node.config.args).toEqual({ foo: "bar" });
     });
 
     it("overwrites existing runs on subsequent saves", async () => {

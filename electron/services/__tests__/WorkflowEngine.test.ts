@@ -18,7 +18,7 @@ import type { WorkflowLoader } from "../WorkflowLoader.js";
 import type { TaskQueueService } from "../TaskQueueService.js";
 import type { WorkflowPersistence } from "../persistence/WorkflowPersistence.js";
 import type { WorkflowDefinition } from "../../../shared/types/workflow.js";
-import type { WorkflowRun } from "../../../shared/types/workflowRun.js";
+import type { WorkflowRun, LoopNodeState } from "../../../shared/types/workflowRun.js";
 
 describe("WorkflowEngine", () => {
   let engine: WorkflowEngine;
@@ -1522,8 +1522,8 @@ describe("WorkflowEngine", () => {
       const loopState = run.nodeStates["my-loop"];
 
       expect(loopState.status).toBe("completed");
-      expect((loopState as any).exitedEarly).toBe(true);
-      expect((loopState as any).currentIteration).toBe(0);
+      expect((loopState as LoopNodeState).exitedEarly).toBe(true);
+      expect((loopState as LoopNodeState).currentIteration).toBe(0);
     });
 
     it("loop exhausts maxIterations", async () => {
@@ -1589,7 +1589,7 @@ describe("WorkflowEngine", () => {
 
       // Loop completes (not fails) after maxIterations
       expect(loopState.status).toBe("completed");
-      expect((loopState as any).exitedEarly).toBe(false);
+      expect((loopState as LoopNodeState).exitedEarly).toBe(false);
     });
 
     it("schedules all body nodes including ones with dependencies", async () => {

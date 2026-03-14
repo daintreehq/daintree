@@ -538,10 +538,44 @@ describe("WorkflowLoader", () => {
     });
 
     it("detects cycle mixing dependencies and routing edges", () => {
+      // step1 depends on step3, step1 onSuccess -> step2, step2 onSuccess -> step3,
+      // step3 depends on step2 (redundant) AND step3 onSuccess -> step1 = real cycle
       const result = loader.validate({
         id: "mixed-cycle",
         version: "1.0.0",
         name: "Mixed Cycle",
+        nodes: [
+          {
+            id: "step1",
+            type: "action",
+            config: { actionId: "s1" },
+            onSuccess: ["step2"],
+          },
+          {
+            id: "step2",
+            type: "action",
+            config: { actionId: "s2" },
+            onSuccess: ["step3"],
+          },
+          {
+            id: "step3",
+            type: "action",
+            config: { actionId: "s3" },
+            onSuccess: ["step1"],
+          },
+        ],
+      });
+
+      expect(result.valid).toBe(false);
+      expect(result.errors?.some((e) => e.type === "cycle")).toBe(true);
+    });
+
+    it("allows redundant dependency and onSuccess (not a cycle)", () => {
+      // step1 depends on step2, and step2 onSuccess -> step1: same direction, not a cycle
+      const result = loader.validate({
+        id: "redundant",
+        version: "1.0.0",
+        name: "Redundant",
         nodes: [
           {
             id: "step1",
@@ -558,8 +592,7 @@ describe("WorkflowLoader", () => {
         ],
       });
 
-      expect(result.valid).toBe(false);
-      expect(result.errors?.some((e) => e.type === "cycle")).toBe(true);
+      expect(result.valid).toBe(true);
     });
   });
 
@@ -634,9 +667,7 @@ describe("WorkflowLoader", () => {
               maxIterations: 5,
               exitCondition: { type: "result", path: "data.passed", op: "==", value: true },
             },
-            body: [
-              { id: "run-test", type: "action", config: { actionId: "test.run" } },
-            ],
+            body: [{ id: "run-test", type: "action", config: { actionId: "test.run" } }],
           },
         ],
       });
@@ -722,7 +753,9 @@ describe("WorkflowLoader", () => {
 
       expect(result.valid).toBe(false);
       expect(result.errors?.some((e) => e.type === "loop")).toBe(true);
-      expect(result.errors?.some((e) => e.message.includes("Nested loop nodes are not supported"))).toBe(true);
+      expect(
+        result.errors?.some((e) => e.message.includes("Nested loop nodes are not supported"))
+      ).toBe(true);
     });
 
     it("rejects pipe character in node IDs", () => {
@@ -730,9 +763,7 @@ describe("WorkflowLoader", () => {
         id: "pipe-id",
         version: "1.0.0",
         name: "Pipe ID",
-        nodes: [
-          { id: "step|1", type: "action", config: { actionId: "test" } },
-        ],
+        nodes: [{ id: "step|1", type: "action", config: { actionId: "test" } }],
       });
 
       expect(result.valid).toBe(false);
@@ -749,9 +780,7 @@ describe("WorkflowLoader", () => {
             id: "my-loop",
             type: "loop",
             config: { maxIterations: 3 },
-            body: [
-              { id: "body|node", type: "action", config: { actionId: "test" } },
-            ],
+            body: [{ id: "body|node", type: "action", config: { actionId: "test" } }],
           },
         ],
       });
@@ -888,16 +917,16 @@ describe("WorkflowLoader", () => {
             id: "my-loop",
             type: "loop",
             config: { maxIterations: 3 },
-            body: [
-              { id: "shared-id", type: "action", config: { actionId: "test2" } },
-            ],
+            body: [{ id: "shared-id", type: "action", config: { actionId: "test2" } }],
           },
         ],
       });
 
       expect(result.valid).toBe(false);
       expect(result.errors?.some((e) => e.type === "duplicate")).toBe(true);
-      expect(result.errors?.some((e) => e.message.includes("conflicts with outer node ID"))).toBe(true);
+      expect(result.errors?.some((e) => e.message.includes("conflicts with outer node ID"))).toBe(
+        true
+      );
     });
 
     it("outer DAG with loop node validates correctly", () => {
@@ -952,9 +981,7 @@ describe("WorkflowLoader", () => {
             type: "loop",
             config: { maxIterations: 3 },
             dependencies: ["step1"],
-            body: [
-              { id: "body-step", type: "action", config: { actionId: "test" } },
-            ],
+            body: [{ id: "body-step", type: "action", config: { actionId: "test" } }],
           },
         ],
       });
