@@ -441,6 +441,40 @@ describe("resume configuration", () => {
   });
 });
 
+describe("titleStatePatterns", () => {
+  it("gemini has titleStatePatterns with working and waiting arrays", () => {
+    const config = getAgentConfig("gemini");
+    expect(config?.detection?.titleStatePatterns).toBeDefined();
+    expect(config!.detection!.titleStatePatterns!.working).toEqual(["\u2726"]);
+    expect(config!.detection!.titleStatePatterns!.waiting).toEqual(["\u25C7", "\u270B"]);
+  });
+
+  it("non-gemini agents do not have titleStatePatterns", () => {
+    const claude = getAgentConfig("claude");
+    expect(claude?.detection?.titleStatePatterns).toBeUndefined();
+
+    const codex = getAgentConfig("codex");
+    expect(codex?.detection?.titleStatePatterns).toBeUndefined();
+  });
+
+  it("user registry merge does not remove built-in titleStatePatterns", () => {
+    setUserRegistry({
+      gemini: {
+        id: "gemini",
+        name: "Gemini Custom",
+        command: "gemini",
+        args: [],
+        iconId: "gemini",
+        color: "green",
+        supportsContextInjection: false,
+      } as AgentConfig,
+    });
+    const effective = getEffectiveAgentConfig("gemini");
+    expect(effective?.detection?.titleStatePatterns).toBeDefined();
+    expect(effective!.detection!.titleStatePatterns!.working).toEqual(["\u2726"]);
+  });
+});
+
 describe("DEFAULT_ROUTING_CONFIG", () => {
   it("has empty capabilities", () => {
     expect(DEFAULT_ROUTING_CONFIG.capabilities).toEqual([]);
