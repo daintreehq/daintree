@@ -186,6 +186,11 @@ export interface AgentConfig {
    * Note: Agent-specific exclusions (e.g., CI/NONINTERACTIVE for Gemini)
    * are enforced and cannot be overridden by this field.
    */
+  /**
+   * Approximate context window size in tokens for this agent's model.
+   * Used by the attachment tray to warn when context usage is high.
+   */
+  contextWindow?: number;
   env?: Record<string, string>;
   /**
    * Resume configuration for restoring a previous agent session.
@@ -251,6 +256,7 @@ export const AGENT_REGISTRY: Record<string, AgentConfig> = {
         "Run 'claude auth login' to authenticate after installing",
       ],
     },
+    contextWindow: 200_000,
     capabilities: {
       scrollback: 10000,
       supportsBracketedPaste: true,
@@ -367,6 +373,7 @@ export const AGENT_REGISTRY: Record<string, AgentConfig> = {
         "Run 'gemini auth login' after installing to authenticate",
       ],
     },
+    contextWindow: 1_000_000,
     capabilities: {
       scrollback: 10000,
       blockAltScreen: true,
@@ -484,6 +491,7 @@ export const AGENT_REGISTRY: Record<string, AgentConfig> = {
         "Run 'codex auth login' after installing to authenticate",
       ],
     },
+    contextWindow: 128_000,
     capabilities: {
       scrollback: 10000,
       blockAltScreen: true,
