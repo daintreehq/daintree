@@ -1,11 +1,11 @@
 import { useState, useRef, useEffect, useMemo } from "react";
 import type { MouseEvent } from "react";
-import { GitCommitHorizontal, Copy, Check } from "lucide-react";
+import { GitCommitHorizontal, Check } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { formatTimeAgo } from "@/utils/timeAgo";
 import type { GitCommit } from "@shared/types/github";
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
-import { parseConventionalCommit, getCommitTypeColor } from "./commitListUtils";
+import { parseConventionalCommit } from "./commitListUtils";
 
 interface CommitListItemProps {
   commit: GitCommit;
@@ -52,9 +52,7 @@ export function CommitListItem({ commit, optionId, isActive }: CommitListItemPro
       return <span className="text-sm font-medium text-foreground truncate">{commit.message}</span>;
     }
 
-    const typeColor = parsed.breaking
-      ? "text-status-danger font-bold"
-      : getCommitTypeColor(parsed.type);
+    const typeColor = parsed.breaking ? "text-status-danger font-bold" : "text-muted-foreground";
 
     return (
       <span className="text-sm font-medium truncate">
@@ -100,25 +98,14 @@ export function CommitListItem({ commit, optionId, isActive }: CommitListItemPro
                     type="button"
                     onClick={handleCopyHash}
                     className={cn(
-                      "font-mono hover:text-foreground transition-colors flex items-center gap-1",
+                      "font-mono hover:text-foreground transition-colors flex items-center",
                       copied && "text-status-success"
                     )}
                   >
-                    <span>{commit.shortHash}</span>
-                    <span className="relative h-3 w-3 shrink-0">
-                      <Copy
-                        className={cn(
-                          "absolute inset-0 h-3 w-3 transition-opacity",
-                          copied ? "opacity-0" : "opacity-0 group-hover:opacity-100"
-                        )}
-                      />
-                      <Check
-                        className={cn(
-                          "absolute inset-0 h-3 w-3 transition-opacity",
-                          copied ? "opacity-100" : "opacity-0"
-                        )}
-                      />
+                    <span className="inline-flex items-center justify-center w-3 shrink-0">
+                      {copied ? <Check className="h-3 w-3" /> : <span>#</span>}
                     </span>
+                    <span>{commit.shortHash}</span>
                   </button>
                 </TooltipTrigger>
                 <TooltipContent side="bottom">
