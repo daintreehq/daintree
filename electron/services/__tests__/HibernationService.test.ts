@@ -94,6 +94,42 @@ describe("HibernationService", () => {
     });
   });
 
+  it("does not call clearProjectState during hibernation", async () => {
+    const gracefulKillMock = vi.fn(async () => [{ id: "t1" }]);
+    const ptyManagerMock = {
+      getProjectStats: () => ({ terminalCount: 2 }),
+      gracefulKillByProject: gracefulKillMock,
+    };
+
+    vi.doMock("../PtyManager.js", () => ({
+      getPtyManager: () => ptyManagerMock,
+    }));
+
+    const inactiveProject = {
+      id: "proj-1",
+      name: "Old Project",
+      lastOpened: Date.now() - 25 * 60 * 60 * 1000, // 25 hours ago
+    };
+
+    (storeMock.get as Mock).mockReturnValue({
+      enabled: true,
+      inactiveThresholdHours: 24,
+    });
+
+    projectStoreMock.getCurrentProjectId.mockReturnValue("active-proj");
+    projectStoreMock.getAllProjects.mockReturnValue([inactiveProject]);
+
+    const { HibernationService: FreshService } = await import("../HibernationService.js");
+    const service = new FreshService();
+
+    await (service as any).checkAndHibernate();
+
+    expect(gracefulKillMock).toHaveBeenCalledWith("proj-1");
+    expect(projectStoreMock.clearProjectState).not.toHaveBeenCalled();
+
+    vi.doUnmock("../PtyManager.js");
+  });
+
   it("clears pending initial check when stopped before timeout", () => {
     (storeMock.get as Mock).mockReturnValue({
       enabled: true,
