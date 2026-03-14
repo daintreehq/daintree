@@ -229,6 +229,50 @@ describe("TerminalRendererPolicy", () => {
     });
   });
 
+  describe("onTierApplied callback", () => {
+    it("fires immediately on upgrade to FOCUSED", async () => {
+      const onTierApplied = vi.fn();
+      mockDeps.onTierApplied = onTierApplied;
+      mockManagedTerminal.lastAppliedTier = TerminalRefreshTier.VISIBLE;
+
+      const { TerminalRendererPolicy } = await import("../TerminalRendererPolicy");
+      policy = new TerminalRendererPolicy(mockDeps);
+
+      policy.applyRendererPolicy("test-id", TerminalRefreshTier.FOCUSED);
+
+      expect(onTierApplied).toHaveBeenCalledWith(
+        "test-id",
+        TerminalRefreshTier.FOCUSED,
+        mockManagedTerminal
+      );
+    });
+
+    it("fires after hysteresis on downgrade from FOCUSED", async () => {
+      const onTierApplied = vi.fn();
+      mockDeps.onTierApplied = onTierApplied;
+      mockManagedTerminal.lastAppliedTier = TerminalRefreshTier.FOCUSED;
+
+      const { TerminalRendererPolicy } = await import("../TerminalRendererPolicy");
+      policy = new TerminalRendererPolicy(mockDeps);
+
+      policy.applyRendererPolicy("test-id", TerminalRefreshTier.VISIBLE);
+
+      // Should NOT fire immediately (hysteresis)
+      expect(onTierApplied).not.toHaveBeenCalled();
+
+      // Advance past hysteresis timer
+      vi.useFakeTimers();
+      vi.advanceTimersByTime(600);
+      vi.useRealTimers();
+
+      expect(onTierApplied).toHaveBeenCalledWith(
+        "test-id",
+        TerminalRefreshTier.VISIBLE,
+        mockManagedTerminal
+      );
+    });
+  });
+
   describe("clearTierState", () => {
     it("should remove tier state for terminal", () => {
       policy.initializeBackendTier("test-id", "background");
