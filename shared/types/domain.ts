@@ -251,8 +251,11 @@ export interface RunRecord {
 
 // Panel Types
 
+import type { BuiltInAgentId } from "../config/agentIds.js";
+
 export type AgentId = string;
-export type LegacyAgentType = "claude" | "gemini" | "codex" | "opencode";
+/** @deprecated Use BuiltInAgentId from shared/config/agentIds.ts instead */
+export type LegacyAgentType = BuiltInAgentId;
 
 /** Built-in panel kinds */
 export type BuiltInPanelKind = "terminal" | "agent" | "browser" | "notes" | "dev-preview";
@@ -1000,6 +1003,7 @@ export type ToolbarButtonId =
   | "gemini"
   | "codex"
   | "opencode"
+  | "cursor"
   | "terminal"
   | "browser"
   | "dev-server"
@@ -1032,10 +1036,11 @@ export interface LauncherDefaults {
     | "gemini"
     | "codex"
     | "opencode"
+    | "cursor"
     | "browser"
     | "dev-server";
   /** Default agent for automated workflows like "What's Next?" */
-  defaultAgent?: "claude" | "gemini" | "codex" | "opencode";
+  defaultAgent?: BuiltInAgentId;
 }
 
 /** Complete toolbar preferences configuration */

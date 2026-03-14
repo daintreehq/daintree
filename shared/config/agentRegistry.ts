@@ -1,5 +1,6 @@
 import type { AgentRoutingConfig } from "../types/agentSettings.js";
 import type { PrerequisiteSpec } from "../types/ipc/system.js";
+import type { BuiltInAgentId } from "./agentIds.js";
 
 export interface AgentHelpConfig {
   args: string[];
@@ -209,6 +210,8 @@ export interface AgentConfig {
 }
 
 export const AGENT_REGISTRY: Record<string, AgentConfig> = {
+  // NOTE: When adding a new agent here, also add its ID to BUILT_IN_AGENT_IDS in agentIds.ts.
+  // The _registryCheck below will produce a compile error if they get out of sync.
   claude: {
     id: "claude",
     name: "Claude",
@@ -795,6 +798,12 @@ export const AGENT_REGISTRY: Record<string, AgentConfig> = {
     ],
   },
 };
+
+const _registryCheck: Record<BuiltInAgentId, AgentConfig> = AGENT_REGISTRY as Record<
+  BuiltInAgentId,
+  AgentConfig
+>;
+void _registryCheck;
 
 export function getAgentIds(): string[] {
   return Object.keys(AGENT_REGISTRY);

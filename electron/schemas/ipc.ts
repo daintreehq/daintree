@@ -5,6 +5,7 @@
 import { z } from "zod";
 import { TerminalTypeSchema } from "./agent.js";
 import { panelKindHasPty } from "../../shared/config/panelKindRegistry.js";
+import { BUILT_IN_AGENT_IDS } from "../../shared/config/agentIds.js";
 
 // ============================================================================
 // Terminal Entry Validation Schemas
@@ -260,7 +261,7 @@ export const FileSearchPayloadSchema = z.object({
 });
 
 export const SlashCommandListRequestSchema = z.object({
-  agentId: z.enum(["claude", "gemini", "codex", "opencode"]),
+  agentId: z.enum(BUILT_IN_AGENT_IDS),
   projectPath: z.string().optional(),
 });
 

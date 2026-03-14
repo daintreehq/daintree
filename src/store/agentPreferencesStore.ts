@@ -1,13 +1,12 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import { createSafeJSONStorage, readLocalStorageItemSafely } from "./persistence/safeStorage";
+import { BUILT_IN_AGENT_IDS, type BuiltInAgentId } from "@shared/config/agentIds";
 
-export type DefaultAgentId = "claude" | "gemini" | "codex" | "opencode";
-
-const VALID_AGENT_IDS: readonly DefaultAgentId[] = ["claude", "gemini", "codex", "opencode"];
+export type DefaultAgentId = BuiltInAgentId;
 
 function isValidAgentId(value: unknown): value is DefaultAgentId {
-  return typeof value === "string" && (VALID_AGENT_IDS as string[]).includes(value);
+  return typeof value === "string" && (BUILT_IN_AGENT_IDS as readonly string[]).includes(value);
 }
 
 interface AgentPreferences {

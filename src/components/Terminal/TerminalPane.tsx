@@ -31,7 +31,7 @@ import type { AgentState } from "@/types";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { actionService } from "@/services/ActionService";
 import { InputTracker } from "@/services/clearCommandDetection";
-import { getAgentConfig } from "@/config/agents";
+import { getAgentConfig, isRegisteredAgent } from "@/config/agents";
 import { terminalClient } from "@/clients";
 import { HybridInputBar, type HybridInputBarHandle } from "./HybridInputBar";
 import { getTerminalFocusTarget } from "./terminalFocus";
@@ -184,9 +184,9 @@ function TerminalPaneComponent({
   const hybridInputEnabled = useTerminalInputStore((state) => state.hybridInputEnabled);
   const hybridInputAutoFocus = useTerminalInputStore((state) => state.hybridInputAutoFocus);
   const effectiveAgentId =
-    agentId === "claude" || agentId === "gemini" || agentId === "codex" || agentId === "opencode"
+    agentId && isRegisteredAgent(agentId)
       ? agentId
-      : type === "claude" || type === "gemini" || type === "codex" || type === "opencode"
+      : type && isRegisteredAgent(type)
         ? type
         : undefined;
   const isAgentTerminal = effectiveAgentId !== undefined;

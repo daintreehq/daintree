@@ -20,9 +20,7 @@ import type { UseProjectSwitcherPaletteReturn } from "@/hooks";
 interface AppLayoutProps {
   children?: ReactNode;
   sidebarContent?: ReactNode;
-  onLaunchAgent?: (
-    type: "claude" | "gemini" | "codex" | "opencode" | "terminal" | "browser"
-  ) => void;
+  onLaunchAgent?: (type: string) => void;
   onSettings?: () => void;
   onOpenAgentSettings?: () => void;
   onRetry?: (id: string, action: RetryAction, args?: Record<string, unknown>) => void;

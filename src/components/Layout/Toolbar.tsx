@@ -59,18 +59,15 @@ import { VoiceRecordingToolbarButton } from "./VoiceRecordingToolbarButton";
 import { useUIStore } from "@/store/uiStore";
 import { useShallow } from "zustand/react/shallow";
 
+import { BUILT_IN_AGENT_IDS } from "@shared/config/agentIds";
+
 const AGENT_TOOLBAR_IDS = new Set<ToolbarButtonId>([
   "agent-setup",
-  "claude",
-  "gemini",
-  "codex",
-  "opencode",
+  ...(BUILT_IN_AGENT_IDS as unknown as ToolbarButtonId[]),
 ]);
 
 interface ToolbarProps {
-  onLaunchAgent: (
-    type: "claude" | "gemini" | "codex" | "opencode" | "terminal" | "browser"
-  ) => void;
+  onLaunchAgent: (type: string) => void;
   onSettings: () => void;
   onOpenAgentSettings?: () => void;
   errorCount?: number;
