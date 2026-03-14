@@ -11,9 +11,11 @@ import { events } from "./events.js";
 import { workflowLoader, WorkflowLoader } from "./WorkflowLoader.js";
 import { taskQueueService, TaskQueueService } from "./TaskQueueService.js";
 import { workflowPersistence, WorkflowPersistence } from "./persistence/WorkflowPersistence.js";
-import type { WorkflowRun, NodeState } from "../../shared/types/workflowRun.js";
-import type { WorkflowNode, WorkflowCondition } from "../../shared/types/workflow.js";
+import type { WorkflowRun, NodeState, LoopNodeState } from "../../shared/types/workflowRun.js";
+import type { WorkflowNode, WorkflowCondition, LoopNode } from "../../shared/types/workflow.js";
 import type { TaskRecord } from "../../shared/types/task.js";
+
+const COMPOSITE_SEP = "|";
 
 const TEMPLATE_REGEX = /\{\{\s*([^}]+?)\s*\}\}/g;
 const MAX_RESULT_DATA_BYTES = 1_048_576; // 1 MB
@@ -189,10 +191,41 @@ export class WorkflowEngine {
       .map((run) => ({ ...run }));
   }
 
+  /** Build a composite key for loop body tasks: "loopId|iterIndex|bodyNodeId" */
+  private buildCompositeId(loopId: string, iterIndex: number, bodyNodeId: string): string {
+    return `${loopId}${COMPOSITE_SEP}${iterIndex}${COMPOSITE_SEP}${bodyNodeId}`;
+  }
+
+  /** Parse a composite key. Returns null for plain (non-loop) node IDs. */
+  private parseCompositeId(
+    key: string
+  ): { loopNodeId: string; iterIndex: number; bodyNodeId: string } | null {
+    const first = key.indexOf(COMPOSITE_SEP);
+    if (first === -1) return null;
+    const second = key.indexOf(COMPOSITE_SEP, first + 1);
+    if (second === -1) return null;
+    return {
+      loopNodeId: key.substring(0, first),
+      iterIndex: parseInt(key.substring(first + 1, second), 10),
+      bodyNodeId: key.substring(second + 1),
+    };
+  }
+
+  /** Find a loop node in the workflow definition by ID. */
+  private findLoopNode(definition: import("../../shared/types/workflow.js").WorkflowDefinition, loopNodeId: string): LoopNode | undefined {
+    const node = definition.nodes.find((n) => n.id === loopNodeId);
+    return node?.type === "loop" ? (node as LoopNode) : undefined;
+  }
+
   /**
    * Compile a workflow node to a task and enqueue it.
    */
-  private async compileNodeToTask(node: WorkflowNode, run: WorkflowRun): Promise<TaskRecord> {
+  private async compileNodeToTask(node: WorkflowNode, run: WorkflowRun): Promise<TaskRecord | null> {
+    if (node.type === "loop") {
+      await this.compileLoopNode(node as LoopNode, run);
+      return null;
+    }
+
     if (run.scheduledNodes.has(node.id)) {
       const existing = await this.queueService.getTask(run.taskMapping[node.id]);
       if (existing) {
@@ -268,6 +301,149 @@ export class WorkflowEngine {
   }
 
   /**
+   * Compile a loop node: create LoopNodeState, start iteration 0.
+   */
+  private async compileLoopNode(loopNode: LoopNode, run: WorkflowRun): Promise<void> {
+    if (run.scheduledNodes.has(loopNode.id)) return;
+    run.scheduledNodes.add(loopNode.id);
+
+    const loopState: LoopNodeState = {
+      status: "running",
+      startedAt: Date.now(),
+      currentIteration: 0,
+      maxIterations: loopNode.config.maxIterations,
+      exitedEarly: false,
+    };
+    run.nodeStates[loopNode.id] = loopState;
+
+    await this.compileBodyIteration(loopNode, run, 0);
+  }
+
+  /**
+   * Schedule the root nodes of a loop body iteration.
+   */
+  private async compileBodyIteration(
+    loopNode: LoopNode,
+    run: WorkflowRun,
+    iterIndex: number
+  ): Promise<void> {
+    const rootNodes = loopNode.body.filter(
+      (n) => !n.dependencies || n.dependencies.length === 0
+    );
+
+    for (const bodyNode of rootNodes) {
+      await this.compileSingleBodyNode(bodyNode, loopNode, run, iterIndex);
+    }
+  }
+
+  /**
+   * Compile a single body node within a loop iteration.
+   * Uses composite IDs: "loopId|iterIndex|bodyNodeId".
+   */
+  private async compileSingleBodyNode(
+    bodyNode: WorkflowNode,
+    loopNode: LoopNode,
+    run: WorkflowRun,
+    iterIndex: number
+  ): Promise<void> {
+    if (bodyNode.type !== "action") return;
+
+    const compositeId = this.buildCompositeId(loopNode.id, iterIndex, bodyNode.id);
+
+    if (run.scheduledNodes.has(compositeId)) return;
+    run.scheduledNodes.add(compositeId);
+
+    const now = Date.now();
+    const nodeState: NodeState = {
+      status: "draft",
+      startedAt: now,
+    };
+    run.nodeStates[compositeId] = nodeState;
+
+    // Resolve dependencies within the same iteration
+    const dependencies = bodyNode.dependencies || [];
+    const resolvedDeps: string[] = [];
+    for (const depId of dependencies) {
+      const depCompositeId = this.buildCompositeId(loopNode.id, iterIndex, depId);
+      const taskId = run.taskMapping[depCompositeId];
+      if (!taskId) {
+        throw new Error(
+          `Cannot compile body node ${bodyNode.id} in loop ${loopNode.id}: dependency ${depId} has not been scheduled yet`
+        );
+      }
+      resolvedDeps.push(taskId);
+    }
+
+    // For iteration > 0, build alias map: plain body node IDs -> previous iteration's states
+    let resolvedArgs = bodyNode.config.args;
+    if (resolvedArgs && this.hasTemplateExpressions(resolvedArgs)) {
+      const stateContext = { ...run.nodeStates };
+      if (iterIndex > 0) {
+        for (const bn of loopNode.body) {
+          const prevComposite = this.buildCompositeId(loopNode.id, iterIndex - 1, bn.id);
+          const prevState = run.nodeStates[prevComposite];
+          if (prevState) {
+            stateContext[bn.id] = prevState;
+          }
+        }
+      }
+      try {
+        resolvedArgs = this.resolveTemplateArgs(resolvedArgs, stateContext);
+      } catch (error) {
+        await this.failBodyNode(compositeId, loopNode, run, (error as Error).message);
+        return;
+      }
+    }
+
+    const task = await this.queueService.createTask({
+      title: `Workflow ${run.workflowId} - Loop ${loopNode.id}[${iterIndex}] - ${bodyNode.id}`,
+      description: `Execute action: ${bodyNode.config.actionId}`,
+      priority: 0,
+      dependencies: resolvedDeps,
+      metadata: {
+        workflowRunId: run.runId,
+        workflowId: run.workflowId,
+        nodeId: compositeId,
+        loopNodeId: loopNode.id,
+        iterIndex,
+        bodyNodeId: bodyNode.id,
+        actionId: bodyNode.config.actionId,
+        actionArgs: resolvedArgs,
+      },
+    });
+
+    nodeState.taskId = task.id;
+    nodeState.status = task.status;
+    run.taskMapping[compositeId] = task.id;
+
+    this.taskToNode.set(task.id, { runId: run.runId, nodeId: compositeId });
+
+    await this.queueService.enqueueTask(task.id);
+  }
+
+  /**
+   * Mark a body node as failed and check loop iteration completion.
+   */
+  private async failBodyNode(
+    compositeId: string,
+    loopNode: LoopNode,
+    run: WorkflowRun,
+    error: string
+  ): Promise<void> {
+    const nodeState = run.nodeStates[compositeId];
+    if (!nodeState) return;
+
+    nodeState.status = "failed";
+    nodeState.completedAt = Date.now();
+    nodeState.result = { error };
+
+    const parsed = this.parseCompositeId(compositeId);
+    if (parsed) {
+      await this.checkLoopIterationComplete(loopNode, run, parsed.iterIndex);
+    }
+  }
+
+  /**
    * Handle task completion event.
    * Updates node state, evaluates conditions, and schedules next nodes.
    */
@@ -322,6 +498,15 @@ export class WorkflowEngine {
       artifacts: payload.artifacts,
       data: payload.data,
     };
+
+    // Check if this is a loop body task
+    const composite = this.parseCompositeId(mapping.nodeId);
+    if (composite) {
+      await this.handleBodyNodeComplete(composite, run);
+      await this.schedulePersist();
+      await this.checkWorkflowCompletion(run);
+      return;
+    }
 
     const definition = run.definition;
     const node = definition.nodes.find((n) => n.id === mapping.nodeId);
@@ -379,6 +564,15 @@ export class WorkflowEngine {
     nodeState.result = {
       error: payload.error,
     };
+
+    // Check if this is a loop body task
+    const composite = this.parseCompositeId(mapping.nodeId);
+    if (composite) {
+      await this.handleBodyNodeFailed(composite, run);
+      await this.schedulePersist();
+      await this.checkWorkflowCompletion(run);
+      return;
+    }
 
     const definition = run.definition;
     const node = definition.nodes.find((n) => n.id === mapping.nodeId);
@@ -446,6 +640,179 @@ export class WorkflowEngine {
     });
 
     return allConditionsPass ? targets : [];
+  }
+
+  /**
+   * Handle completion of a loop body node.
+   * Schedule same-iteration successors, then check if the iteration is complete.
+   */
+  private async handleBodyNodeComplete(
+    composite: { loopNodeId: string; iterIndex: number; bodyNodeId: string },
+    run: WorkflowRun
+  ): Promise<void> {
+    const loopNode = this.findLoopNode(run.definition, composite.loopNodeId);
+    if (!loopNode) return;
+
+    const bodyNode = loopNode.body.find((n) => n.id === composite.bodyNodeId);
+    if (!bodyNode) return;
+
+    // Schedule same-iteration onSuccess successors
+    for (const nextId of bodyNode.onSuccess || []) {
+      const nextBodyNode = loopNode.body.find((n) => n.id === nextId);
+      if (nextBodyNode) {
+        const nextComposite = this.buildCompositeId(composite.loopNodeId, composite.iterIndex, nextId);
+        if (!run.scheduledNodes.has(nextComposite)) {
+          await this.compileSingleBodyNode(nextBodyNode, loopNode, run, composite.iterIndex);
+        }
+      }
+    }
+
+    await this.checkLoopIterationComplete(loopNode, run, composite.iterIndex);
+  }
+
+  /**
+   * Handle failure of a loop body node.
+   * Schedule same-iteration onFailure successors, then check iteration completion.
+   */
+  private async handleBodyNodeFailed(
+    composite: { loopNodeId: string; iterIndex: number; bodyNodeId: string },
+    run: WorkflowRun
+  ): Promise<void> {
+    const loopNode = this.findLoopNode(run.definition, composite.loopNodeId);
+    if (!loopNode) return;
+
+    const bodyNode = loopNode.body.find((n) => n.id === composite.bodyNodeId);
+    if (!bodyNode) return;
+
+    // Schedule same-iteration onFailure successors
+    for (const nextId of bodyNode.onFailure || []) {
+      const nextBodyNode = loopNode.body.find((n) => n.id === nextId);
+      if (nextBodyNode) {
+        const nextComposite = this.buildCompositeId(composite.loopNodeId, composite.iterIndex, nextId);
+        if (!run.scheduledNodes.has(nextComposite)) {
+          await this.compileSingleBodyNode(nextBodyNode, loopNode, run, composite.iterIndex);
+        }
+      }
+    }
+
+    await this.checkLoopIterationComplete(loopNode, run, composite.iterIndex);
+  }
+
+  /**
+   * Check if all body nodes for a given iteration are terminal.
+   * If so, evaluate the loop's exit condition and decide: exit, next iteration, or maxed out.
+   */
+  private async checkLoopIterationComplete(
+    loopNode: LoopNode,
+    run: WorkflowRun,
+    iterIndex: number
+  ): Promise<void> {
+    // Check if all scheduled body nodes for this iteration are terminal
+    for (const bodyNode of loopNode.body) {
+      const compositeId = this.buildCompositeId(loopNode.id, iterIndex, bodyNode.id);
+      if (!run.scheduledNodes.has(compositeId)) continue;
+      const state = run.nodeStates[compositeId];
+      if (!state) return;
+      if (state.status !== "completed" && state.status !== "failed" && state.status !== "cancelled") {
+        return; // Still in progress
+      }
+    }
+
+    const loopState = run.nodeStates[loopNode.id] as LoopNodeState;
+    if (!loopState || loopState.status !== "running") return;
+
+    // Build a state context for exit condition evaluation using this iteration's body states
+    const iterStates: Record<string, NodeState> = {};
+    for (const bodyNode of loopNode.body) {
+      const compositeId = this.buildCompositeId(loopNode.id, iterIndex, bodyNode.id);
+      const state = run.nodeStates[compositeId];
+      if (state) {
+        iterStates[bodyNode.id] = state;
+      }
+    }
+
+    // Check if any body node in this iteration failed (loop fails if unhandled body failure)
+    const anyBodyFailed = loopNode.body.some((bn) => {
+      const cid = this.buildCompositeId(loopNode.id, iterIndex, bn.id);
+      const state = run.nodeStates[cid];
+      return state?.status === "failed";
+    });
+
+    // Evaluate exit condition
+    let exitConditionMet = false;
+    if (loopNode.config.exitCondition && !anyBodyFailed) {
+      // Find the last terminal body node to use as the "current" node state for condition evaluation
+      const lastBodyNode = loopNode.body[loopNode.body.length - 1];
+      const lastComposite = this.buildCompositeId(loopNode.id, iterIndex, lastBodyNode.id);
+      const lastState = run.nodeStates[lastComposite];
+      if (lastState) {
+        exitConditionMet = this.evaluateCondition(
+          loopNode.config.exitCondition,
+          lastState,
+          { ...run, nodeStates: { ...run.nodeStates, ...iterStates } }
+        );
+      }
+    }
+
+    const now = Date.now();
+
+    if (exitConditionMet) {
+      // Exit early — loop succeeded
+      loopState.status = "completed";
+      loopState.completedAt = now;
+      loopState.exitedEarly = true;
+      await this.routeLoopCompletion(loopNode, loopState, run, "onSuccess");
+    } else if (anyBodyFailed) {
+      // Body failed without recovery — loop fails
+      loopState.status = "failed";
+      loopState.completedAt = now;
+      loopState.result = { error: `Loop body failed at iteration ${iterIndex}` };
+      await this.routeLoopCompletion(loopNode, loopState, run, "onFailure");
+    } else if (iterIndex < loopNode.config.maxIterations - 1) {
+      // Start next iteration
+      const nextIter = iterIndex + 1;
+      loopState.currentIteration = nextIter;
+      await this.compileBodyIteration(loopNode, run, nextIter);
+    } else {
+      // Max iterations reached without exit condition — loop completes (not a failure)
+      loopState.status = "completed";
+      loopState.completedAt = now;
+      loopState.exitedEarly = false;
+      await this.routeLoopCompletion(loopNode, loopState, run, "onSuccess");
+    }
+  }
+
+  /**
+   * Route the outer graph after a loop node completes or fails.
+   */
+  private async routeLoopCompletion(
+    loopNode: LoopNode,
+    loopState: NodeState,
+    run: WorkflowRun,
+    routingKey: "onSuccess" | "onFailure"
+  ): Promise<void> {
+    const nextNodeIds = await this.evaluateRouting(loopNode, loopState, run, routingKey);
+
+    if (nextNodeIds.length > 0) {
+      for (const nextId of nextNodeIds) {
+        const nextNode = run.definition.nodes.find((n) => n.id === nextId);
+        if (nextNode && !run.scheduledNodes.has(nextId)) {
+          await this.compileNodeToTask(nextNode, run);
+        }
+      }
+    } else if (routingKey === "onFailure") {
+      // No failure handler — fail the workflow
+      const now = Date.now();
+      run.status = "failed";
+      run.completedAt = now;
+      events.emit("workflow:failed", {
+        runId: run.runId,
+        workflowId: run.workflowId,
+        workflowVersion: run.workflowVersion,
+        error: `Loop node ${loopNode.id} failed`,
+        timestamp: now,
+      });
+    }
   }
 
   /**
@@ -681,8 +1048,11 @@ export class WorkflowEngine {
       return;
     }
 
-    const scheduledNodeIds = Array.from(run.scheduledNodes);
-    const allScheduledNodesTerminal = scheduledNodeIds.every((nodeId) => {
+    // Only check top-level (non-composite) node IDs — loop body tasks are invisible to the outer graph
+    const outerNodeIds = Array.from(run.scheduledNodes).filter(
+      (nodeId) => this.parseCompositeId(nodeId) === null
+    );
+    const allScheduledNodesTerminal = outerNodeIds.every((nodeId) => {
       const nodeState = run.nodeStates[nodeId];
       if (!nodeState) {
         return false;
@@ -698,7 +1068,7 @@ export class WorkflowEngine {
       return;
     }
 
-    const anyScheduledNodeFailed = scheduledNodeIds.some((nodeId) => {
+    const anyScheduledNodeFailed = outerNodeIds.some((nodeId) => {
       const nodeState = run.nodeStates[nodeId];
       return nodeState?.status === "failed";
     });
@@ -852,7 +1222,17 @@ export class WorkflowEngine {
     }
 
     // Process routing for nodes that reached terminal states while down
+    // Track loop iterations that need completion checking
+    const loopItersToCheck = new Set<string>();
+
     for (const { nodeId, nodeState } of nodesToProcess) {
+      // Handle composite (loop body) nodes differently
+      const composite = this.parseCompositeId(nodeId);
+      if (composite) {
+        loopItersToCheck.add(`${composite.loopNodeId}|${composite.iterIndex}`);
+        continue;
+      }
+
       const node = run.definition.nodes.find((n) => n.id === nodeId);
       if (!node) {
         console.error(`[WorkflowEngine] Recovery: node ${nodeId} not found in workflow definition`);
@@ -886,6 +1266,16 @@ export class WorkflowEngine {
             }
           }
         }
+      }
+    }
+
+    // Re-evaluate loop iterations that had body tasks complete/fail during downtime
+    for (const key of loopItersToCheck) {
+      const [loopNodeId, iterStr] = key.split("|");
+      const loopNode = this.findLoopNode(run.definition, loopNodeId);
+      if (loopNode) {
+        await this.checkLoopIterationComplete(loopNode, run, parseInt(iterStr, 10));
+        hasRecoveryChanges = true;
       }
     }
 
