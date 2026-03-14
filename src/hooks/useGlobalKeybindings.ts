@@ -65,15 +65,15 @@ export function useGlobalKeybindings(enabled: boolean = true): void {
       }
 
       // For editable contexts without modifiers, let native behavior happen
-      // Exception: allow chord completion even without modifiers
+      // Exception: allow chord completion even without modifiers, and F6 for region cycling
       const hasModifier = e.metaKey || e.ctrlKey;
 
-      if (isEditable && !hasModifier && !pendingChord) {
+      if (isEditable && !hasModifier && !pendingChord && e.key !== "F6") {
         return;
       }
 
-      // Let xterm handle its own keys except for global shortcuts with modifiers or chord completion
-      if (isInTerminal && !hasModifier && !pendingChord) {
+      // Let xterm handle its own keys except for global shortcuts with modifiers, chord completion, or F6
+      if (isInTerminal && !hasModifier && !pendingChord && e.key !== "F6") {
         return;
       }
 

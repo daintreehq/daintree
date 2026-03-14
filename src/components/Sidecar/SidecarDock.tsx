@@ -7,6 +7,7 @@ import { SidecarLaunchpad } from "./SidecarLaunchpad";
 import { SIDECAR_MIN_WIDTH, SIDECAR_MAX_WIDTH } from "@shared/types";
 import { getAIAgentInfo } from "@/lib/aiAgentDetection";
 import { useKeybindingScope } from "@/hooks/useKeybinding";
+import { useMacroFocusStore } from "@/store/macroFocusStore";
 import { useNativeContextMenu } from "@/hooks";
 import type { MenuItemOption } from "@/types";
 import { actionService } from "@/services/ActionService";
@@ -22,6 +23,13 @@ export function SidecarDock() {
   const [isFocused, setIsFocused] = useState(false);
 
   useKeybindingScope("sidecar", isFocused);
+
+  const isMacroFocused = useMacroFocusStore((state) => state.focusedRegion === "sidecar");
+
+  useEffect(() => {
+    useMacroFocusStore.getState().setRegionRef("sidecar", dockRef.current);
+    return () => useMacroFocusStore.getState().setRegionRef("sidecar", null);
+  }, []);
 
   const enabledLinks = useMemo(
     () => links.filter((l) => l.enabled).sort((a, b) => a.order - b.order),
@@ -449,7 +457,13 @@ export function SidecarDock() {
   return (
     <div
       ref={dockRef}
-      className="flex flex-col h-full bg-canopy-bg relative sidecar-dock"
+      role="region"
+      aria-label="Sidecar"
+      data-macro-focus={isMacroFocused ? "true" : undefined}
+      className={cn(
+        "flex flex-col h-full bg-canopy-bg relative sidecar-dock outline-none",
+        "data-[macro-focus=true]:ring-2 data-[macro-focus=true]:ring-canopy-accent/60 data-[macro-focus=true]:ring-inset"
+      )}
       style={{ width }}
       onFocus={handleDockFocus}
       onBlur={handleDockBlur}

@@ -33,6 +33,22 @@ const DEFAULT_KEYBINDINGS: KeybindingConfig[] = [
     category: "Navigation",
   },
   {
+    actionId: "nav.focusRegion.next",
+    combo: "F6",
+    scope: "global",
+    priority: 5,
+    description: "Focus next region",
+    category: "Navigation",
+  },
+  {
+    actionId: "nav.focusRegion.prev",
+    combo: "Shift+F6",
+    scope: "global",
+    priority: 5,
+    description: "Focus previous region",
+    category: "Navigation",
+  },
+  {
     actionId: "terminal.new",
     combo: "Cmd+T",
     scope: "global",

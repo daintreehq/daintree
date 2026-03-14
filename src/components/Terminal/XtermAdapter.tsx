@@ -210,6 +210,11 @@ function XtermAdapterComponent({
           return false;
         }
 
+        // Intercept F6 for macro-region focus cycling before terminal processing
+        if (event.key === "F6") {
+          return false;
+        }
+
         // TUI reliability: keep common readline-style Ctrl+key bindings in the terminal
         const TUI_KEYBINDS = ["p", "n", "r", "f", "b", "a", "e", "k", "u", "w", "h", "d"];
 
