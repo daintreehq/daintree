@@ -1592,35 +1592,27 @@ describe("WorkflowEngine", () => {
       expect((loopState as any).exitedEarly).toBe(false);
     });
 
-    it("schedules body successors within the same iteration", async () => {
+    it("schedules all body nodes including ones with dependencies", async () => {
       mockLoader.getWorkflow.mockResolvedValue({ definition: loopWorkflow });
       await engine.startWorkflow("loop-workflow");
 
-      // Complete the root body node (generate) in iteration 0
-      // The "test" node depends on "generate" in the body, so it won't be auto-scheduled
-      // But "generate" has no onSuccess, so we need a workflow where generate -> test via onSuccess
-      // Actually in loopWorkflow, "test" depends on "generate" — that dependency is handled at creation time
-      // Let's check: compileSingleBodyNode resolves dependencies within the iteration
-      // The "test" node has dependencies: ["generate"], so it needs generate to be scheduled first
-      // compileBodyIteration only schedules root nodes (no deps), which is "generate"
-      // After "generate" completes, handleBodyNodeComplete should schedule successors
-
-      // Actually, dependencies are different from onSuccess. Dependencies are resolved at task creation.
-      // For body nodes with dependencies, they need to be compiled separately.
-      // Let me check: compileBodyIteration only schedules root nodes.
-      // handleBodyNodeComplete schedules onSuccess successors.
-      // But "test" uses dependencies, not onSuccess from "generate".
-      // So "test" needs to be scheduled as a dependent task at creation time... but compileBodyIteration
-      // only does roots. We need to also schedule non-root nodes that have their deps met.
-
-      // Actually, looking at the implementation, compileBodyIteration only schedules roots.
-      // Non-root nodes with deps are not auto-scheduled. They get scheduled when their deps complete.
-      // But body nodes don't have onSuccess by default pointing to dependents.
-      // This is a potential issue... Let me verify by checking what happens.
-
-      // The dependency-based scheduling pattern means the task queue handles deps.
-      // compileSingleBodyNode resolves deps to task IDs and passes them to createTask.
-      // So all body nodes should be scheduled at iteration start, not just roots.
+      // Both "generate" (root) and "test" (has dep on generate) should be scheduled
+      expect(mockQueueService.createTask).toHaveBeenCalledWith(
+        expect.objectContaining({
+          metadata: expect.objectContaining({
+            nodeId: "my-loop|0|generate",
+            bodyNodeId: "generate",
+          }),
+        })
+      );
+      expect(mockQueueService.createTask).toHaveBeenCalledWith(
+        expect.objectContaining({
+          metadata: expect.objectContaining({
+            nodeId: "my-loop|0|test",
+            bodyNodeId: "test",
+          }),
+        })
+      );
     });
 
     it("loop body failure causes loop to fail", async () => {
