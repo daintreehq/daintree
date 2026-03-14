@@ -71,5 +71,17 @@ describe("formatTimeAgo", () => {
       vi.setSystemTime(now);
       expect(formatTimeAgo(now.getTime() - 5 * 86_400_000)).toBe("5d ago");
     });
+
+    it("returns a locale date string for epoch ms older than 30 days", () => {
+      vi.useFakeTimers();
+      const now = new Date("2024-03-15T12:00:00Z");
+      vi.setSystemTime(now);
+      const oldDate = new Date("2024-01-15T12:00:00Z");
+      expect(formatTimeAgo(oldDate.getTime())).toBe(oldDate.toLocaleDateString());
+    });
+
+    it("returns 'Unknown' for NaN input", () => {
+      expect(formatTimeAgo(NaN)).toBe("Unknown");
+    });
   });
 });
