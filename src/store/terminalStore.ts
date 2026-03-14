@@ -427,7 +427,6 @@ export const useTerminalStore = create<PanelGridState>()((set, get, api) => {
     reset: async () => {
       const state = get();
 
-      const { terminalInstanceService } = await import("@/services/TerminalInstanceService");
       for (const terminal of state.terminals) {
         try {
           terminalInstanceService.destroy(terminal.id);
@@ -468,8 +467,6 @@ export const useTerminalStore = create<PanelGridState>()((set, get, api) => {
       const state = get();
 
       flushTerminalPersistence();
-
-      const { terminalInstanceService } = await import("@/services/TerminalInstanceService");
 
       const allTerminalIds = state.terminals.map((t) => t.id);
       terminalInstanceService.suppressResizesDuringProjectSwitch(

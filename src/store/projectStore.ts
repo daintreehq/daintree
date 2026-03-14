@@ -26,6 +26,7 @@ import {
 } from "@/services/projectSwitchRendererCache";
 import { isSmokeTestTerminalId } from "@shared/utils/smokeTestTerminals";
 import { createSafeJSONStorage } from "./persistence/safeStorage";
+import { terminalInstanceService } from "@/services/TerminalInstanceService";
 
 interface ProjectState {
   projects: Project[];
@@ -111,20 +112,18 @@ function evictRendererTerminalInstances(terminalIds: string[]): void {
     return;
   }
 
-  void import("@/services/TerminalInstanceService")
-    .then(({ terminalInstanceService }) => {
-      for (const terminalId of terminalIds) {
-        terminalInstanceService.destroy(terminalId);
-      }
-    })
-    .catch((error) => {
-      logErrorWithContext(error, {
-        operation: "evict_project_switch_terminal_instances",
-        component: "projectStore",
-        errorType: "process",
-        details: { terminalCount: terminalIds.length },
-      });
+  try {
+    for (const terminalId of terminalIds) {
+      terminalInstanceService.destroy(terminalId);
+    }
+  } catch (error) {
+    logErrorWithContext(error, {
+      operation: "evict_project_switch_terminal_instances",
+      component: "projectStore",
+      errorType: "process",
+      details: { terminalCount: terminalIds.length },
     });
+  }
 }
 
 const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
@@ -272,7 +271,6 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
           .map(terminalToSnapshot);
 
         const terminalSizes: Record<string, { cols: number; rows: number }> = {};
-        const { terminalInstanceService } = await import("@/services/TerminalInstanceService");
         for (const terminal of currentTerminals) {
           const instance = terminalInstanceService.get(terminal.id);
           if (instance) {
@@ -604,7 +602,6 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
           .map(terminalToSnapshot);
 
         const terminalSizes: Record<string, { cols: number; rows: number }> = {};
-        const { terminalInstanceService } = await import("@/services/TerminalInstanceService");
         for (const terminal of currentTerminals) {
           const instance = terminalInstanceService.get(terminal.id);
           if (instance) {
