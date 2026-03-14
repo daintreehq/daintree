@@ -190,11 +190,11 @@ export function SettingsDialog({
     // General defaults: showProjectPulse=true, showDeveloperTools=false
     if (!showProjectPulse || showDeveloperTools) tabs.add("general");
 
-    // Terminal defaults: performanceMode=false, scrollback=5000, strategy=automatic,
+    // Terminal defaults: performanceMode=false, scrollback=2500, strategy=automatic,
     // hybridInput=true, hybridAutoFocus=true, twoPaneSplit.enabled=true, preferPreview=false, ratio=0.5
     if (
       performanceMode ||
-      scrollbackLines !== 5000 ||
+      scrollbackLines !== 2500 ||
       layoutConfig.strategy !== "automatic" ||
       !hybridInputEnabled ||
       !hybridInputAutoFocus ||
