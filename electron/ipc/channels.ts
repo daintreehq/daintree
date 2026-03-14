@@ -53,6 +53,7 @@ export const CHANNELS = {
   TERMINAL_BACKEND_CRASHED: "terminal:backend-crashed",
   TERMINAL_BACKEND_READY: "terminal:backend-ready",
   TERMINAL_SEND_KEY: "terminal:send-key",
+  TERMINAL_AGENT_TITLE_STATE: "terminal:agent-title-state",
 
   FILES_SEARCH: "files:search",
   FILES_READ: "files:read",

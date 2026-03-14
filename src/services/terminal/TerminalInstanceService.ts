@@ -499,6 +499,28 @@ class TerminalInstanceService {
     });
     listeners.push(() => scrollDisposable.dispose());
 
+    if (agentId) {
+      const agentConfig = getEffectiveAgentConfig(agentId);
+      const titlePatterns = agentConfig?.detection?.titleStatePatterns;
+      if (titlePatterns) {
+        const titleDisposable = terminal.onTitleChange((title: string) => {
+          for (const pattern of titlePatterns.working) {
+            if (title.includes(pattern)) {
+              window.electron.terminal.reportTitleState(id, "working");
+              return;
+            }
+          }
+          for (const pattern of titlePatterns.waiting) {
+            if (title.includes(pattern)) {
+              window.electron.terminal.reportTitleState(id, "waiting");
+              return;
+            }
+          }
+        });
+        listeners.push(() => titleDisposable.dispose());
+      }
+    }
+
     const inputDisposable = terminal.onData((data) => {
       if (!managed.isInputLocked) {
         this.onUserInput(id);

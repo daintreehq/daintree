@@ -37,6 +37,7 @@ const VALID_AGENT_STATE_CHANGE_TRIGGERS: ReadonlySet<AgentStateChangeTrigger> = 
   "timeout",
   "exit",
   "activity",
+  "title",
 ]);
 
 function normalizeAgentTrigger(trigger: string): AgentStateChangeTrigger {

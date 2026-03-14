@@ -786,6 +786,9 @@ const api: ElectronAPI = {
 
     sendKey: (id: string, key: string) => ipcRenderer.send(CHANNELS.TERMINAL_SEND_KEY, id, key),
 
+    reportTitleState: (id: string, state: "working" | "waiting") =>
+      ipcRenderer.send(CHANNELS.TERMINAL_AGENT_TITLE_STATE, { id, state }),
+
     onSpawnResult: (callback: (id: string, result: SpawnResultPayload) => void): (() => void) => {
       const handler = (_event: Electron.IpcRendererEvent, id: unknown, result: unknown) => {
         if (typeof id === "string" && typeof result === "object" && result !== null) {

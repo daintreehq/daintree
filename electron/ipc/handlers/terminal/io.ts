@@ -124,6 +124,27 @@ export function registerTerminalIOHandlers(deps: HandlerDependencies): () => voi
     ipcMain.removeListener(CHANNELS.TERMINAL_ACKNOWLEDGE_DATA, handleTerminalAcknowledgeData)
   );
 
+  const handleTerminalAgentTitleState = (
+    _event: Electron.IpcMainEvent,
+    payload: { id: string; state: string }
+  ) => {
+    try {
+      if (!payload || typeof payload !== "object") return;
+      const { id, state } = payload;
+      if (typeof id !== "string" || !id) return;
+      if (state !== "working" && state !== "waiting") return;
+
+      const event = state === "working" ? { type: "busy" } : { type: "prompt" };
+      ptyClient.transitionState(id, event, "title", 0.98);
+    } catch (error) {
+      console.error("[IPC] Error handling agent title state:", error);
+    }
+  };
+  ipcMain.on(CHANNELS.TERMINAL_AGENT_TITLE_STATE, handleTerminalAgentTitleState);
+  handlers.push(() =>
+    ipcMain.removeListener(CHANNELS.TERMINAL_AGENT_TITLE_STATE, handleTerminalAgentTitleState)
+  );
+
   const handleTerminalForceResume = async (
     _event: Electron.IpcMainInvokeEvent,
     id: string

@@ -31,6 +31,7 @@ export const AgentStateChangeTriggerSchema = z.enum([
   "timeout",
   "exit",
   "activity",
+  "title",
 ]);
 
 export const AgentSpawnedSchema = EventContextSchema.extend({
