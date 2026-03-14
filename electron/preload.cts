@@ -278,6 +278,16 @@ const CHANNELS = {
   NOTES_SEARCH: "notes:search",
   NOTES_UPDATED: "notes:updated",
 
+  // Workflow channels
+  WORKFLOW_LIST: "workflow:list",
+  WORKFLOW_START: "workflow:start",
+  WORKFLOW_CANCEL: "workflow:cancel",
+  WORKFLOW_GET_RUN: "workflow:get-run",
+  WORKFLOW_LIST_RUNS: "workflow:list-runs",
+  WORKFLOW_STARTED: "workflow:started",
+  WORKFLOW_COMPLETED: "workflow:completed",
+  WORKFLOW_FAILED: "workflow:failed",
+
   // Dev Preview channels
   DEV_PREVIEW_ENSURE: "dev-preview:ensure",
   DEV_PREVIEW_RESTART: "dev-preview:restart",
@@ -1285,6 +1295,48 @@ const api: ElectronAPI = {
         action: "created" | "updated" | "deleted";
       }) => void
     ) => _typedOn(CHANNELS.NOTES_UPDATED, callback),
+  },
+
+  // Workflow API
+  workflow: {
+    listWorkflows: () => _typedInvoke(CHANNELS.WORKFLOW_LIST),
+
+    startWorkflow: (workflowId: string) => _typedInvoke(CHANNELS.WORKFLOW_START, workflowId),
+
+    cancelWorkflow: (runId: string) => _typedInvoke(CHANNELS.WORKFLOW_CANCEL, runId),
+
+    getWorkflowRun: (runId: string) => _typedInvoke(CHANNELS.WORKFLOW_GET_RUN, runId),
+
+    listRuns: () => _typedInvoke(CHANNELS.WORKFLOW_LIST_RUNS),
+
+    onStarted: (
+      callback: (data: {
+        runId: string;
+        workflowId: string;
+        workflowVersion: string;
+        timestamp: number;
+      }) => void
+    ) => _typedOn(CHANNELS.WORKFLOW_STARTED, callback),
+
+    onCompleted: (
+      callback: (data: {
+        runId: string;
+        workflowId: string;
+        workflowVersion: string;
+        duration: number;
+        timestamp: number;
+      }) => void
+    ) => _typedOn(CHANNELS.WORKFLOW_COMPLETED, callback),
+
+    onFailed: (
+      callback: (data: {
+        runId: string;
+        workflowId: string;
+        workflowVersion: string;
+        error: string;
+        timestamp: number;
+      }) => void
+    ) => _typedOn(CHANNELS.WORKFLOW_FAILED, callback),
   },
 
   // Dev Preview API

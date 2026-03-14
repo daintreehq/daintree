@@ -320,6 +320,16 @@ export const CHANNELS = {
   NOTES_SEARCH: "notes:search",
   NOTES_UPDATED: "notes:updated",
 
+  // Workflow channels
+  WORKFLOW_LIST: "workflow:list",
+  WORKFLOW_START: "workflow:start",
+  WORKFLOW_CANCEL: "workflow:cancel",
+  WORKFLOW_GET_RUN: "workflow:get-run",
+  WORKFLOW_LIST_RUNS: "workflow:list-runs",
+  WORKFLOW_STARTED: "workflow:started",
+  WORKFLOW_COMPLETED: "workflow:completed",
+  WORKFLOW_FAILED: "workflow:failed",
+
   DEV_PREVIEW_ENSURE: "dev-preview:ensure",
   DEV_PREVIEW_RESTART: "dev-preview:restart",
   DEV_PREVIEW_STOP: "dev-preview:stop",
