@@ -294,7 +294,8 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
     tabLabel: "Panel Grid",
     section: "Scrollback History",
     title: "Scrollback History",
-    description: "Set base scrollback lines for terminal history: 1,000, 5,000, or 10,000 lines",
+    description:
+      "Set base scrollback lines for terminal history: 1,000, 2,500, 5,000, or 10,000 lines",
     keywords: ["scrollback", "history", "lines", "buffer", "memory", "terminal"],
   },
   {

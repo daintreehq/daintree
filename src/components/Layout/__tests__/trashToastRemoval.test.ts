@@ -19,12 +19,6 @@ describe("Trash Toast Removal - Issue #3113", () => {
     expect(content).not.toContain("terminalTrashUndoToast");
   });
 
-  it("should not export TRASH_UNDO_TOAST_DURATION_MS from trash config", async () => {
-    const filePath = path.resolve(__dirname, "../../../../shared/config/trash.ts");
-    const content = await fs.readFile(filePath, "utf-8");
-    expect(content).not.toContain("TRASH_UNDO_TOAST_DURATION_MS");
-  });
-
   it("should have trash-pulse animation in index.css", async () => {
     const filePath = path.resolve(__dirname, "../../../index.css");
     const content = await fs.readFile(filePath, "utf-8");

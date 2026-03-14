@@ -60,7 +60,8 @@ const STRATEGIES: Array<{
 
 const SCROLLBACK_OPTIONS = [
   { value: 1000, label: "1,000 lines", description: "Low memory" },
-  { value: 5000, label: "5,000 lines", description: "Balanced" },
+  { value: 2500, label: "2,500 lines", description: "Balanced" },
+  { value: 5000, label: "5,000 lines", description: "Extended" },
   { value: 10000, label: "10,000 lines", description: "Full history" },
 ] as const;
 
@@ -379,7 +380,7 @@ export function TerminalSettingsTab() {
         description="Base scrollback applies to agent terminals. Shells and dev servers use reduced limits automatically."
         badge="New Terminals"
       >
-        <div className="grid grid-cols-3 gap-2" role="radiogroup" aria-label="Scrollback presets">
+        <div className="grid grid-cols-4 gap-2" role="radiogroup" aria-label="Scrollback presets">
           {SCROLLBACK_OPTIONS.map(({ value, label, description }) => (
             <button
               key={value}

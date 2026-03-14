@@ -6,6 +6,20 @@ import {
   SCROLLBACK_MAX,
 } from "../scrollback.js";
 
+describe("scrollback constants", () => {
+  it("SCROLLBACK_DEFAULT is 2500", () => {
+    expect(SCROLLBACK_DEFAULT).toBe(2500);
+  });
+
+  it("SCROLLBACK_MIN is 100", () => {
+    expect(SCROLLBACK_MIN).toBe(100);
+  });
+
+  it("SCROLLBACK_MAX is 10000", () => {
+    expect(SCROLLBACK_MAX).toBe(10000);
+  });
+});
+
 describe("normalizeScrollbackLines", () => {
   it("returns default for non-numeric input", () => {
     expect(normalizeScrollbackLines("not-a-number")).toBe(SCROLLBACK_DEFAULT);
