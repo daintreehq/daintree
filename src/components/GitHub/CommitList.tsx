@@ -33,8 +33,7 @@ export function CommitList({ projectPath, onClose, initialCount }: CommitListPro
   const debouncedSearch = useDebounce(searchQuery, 300);
 
   const maxCursor = data.length - 1 + (hasMore ? 1 : 0);
-  const activeCommit =
-    cursorIndex >= 0 && cursorIndex < data.length ? data[cursorIndex] : null;
+  const activeCommit = cursorIndex >= 0 && cursorIndex < data.length ? data[cursorIndex] : null;
   const activeCommitId = activeCommit ? `commit-option-${activeCommit.hash}` : undefined;
   const isLoadMoreActive = hasMore && cursorIndex === data.length;
   const listId = "commit-list";
