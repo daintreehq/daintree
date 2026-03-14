@@ -628,12 +628,13 @@ describe("WorkflowLoader", () => {
       expect(result.errors?.some((e) => e.type === "cycle")).toBe(true);
     });
 
-    it("allows redundant dependency and onSuccess (not a cycle)", () => {
-      // step1 depends on step2, and step2 onSuccess -> step1: same direction, not a cycle
+    it("allows redundant dependency with onSuccess (not a cycle)", () => {
+      // step1 depends on step2, AND step2 succeeds → step1
+      // Both edges go step2 → step1, which is redundant but not cyclic
       const result = loader.validate({
-        id: "redundant",
+        id: "redundant-edges",
         version: "1.0.0",
-        name: "Redundant",
+        name: "Redundant Edges",
         nodes: [
           {
             id: "step1",
