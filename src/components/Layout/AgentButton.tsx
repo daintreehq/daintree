@@ -9,7 +9,9 @@ import { useWorktrees } from "@/hooks/useWorktrees";
 import type { MenuItemOption } from "@/types";
 import { actionService } from "@/services/ActionService";
 
-type AgentType = "claude" | "gemini" | "codex" | "opencode";
+import type { BuiltInAgentId } from "@shared/config/agentIds";
+
+type AgentType = BuiltInAgentId;
 
 interface AgentButtonProps {
   type: AgentType;

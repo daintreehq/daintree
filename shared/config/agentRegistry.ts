@@ -209,6 +209,8 @@ export interface AgentConfig {
 }
 
 export const AGENT_REGISTRY: Record<string, AgentConfig> = {
+  // NOTE: When adding a new agent here, also add its ID to BUILT_IN_AGENT_IDS in agentIds.ts.
+  // The _registryCheck below will produce a compile error if they get out of sync.
   claude: {
     id: "claude",
     name: "Claude",
@@ -795,6 +797,17 @@ export const AGENT_REGISTRY: Record<string, AgentConfig> = {
     ],
   },
 };
+
+import { BUILT_IN_AGENT_IDS } from "./agentIds.js";
+
+// Runtime check: every BuiltInAgentId must have an entry in the registry.
+for (const id of BUILT_IN_AGENT_IDS) {
+  if (!(id in AGENT_REGISTRY)) {
+    throw new Error(
+      `AGENT_REGISTRY is missing entry for built-in agent "${id}". Update AGENT_REGISTRY or BUILT_IN_AGENT_IDS.`
+    );
+  }
+}
 
 export function getAgentIds(): string[] {
   return Object.keys(AGENT_REGISTRY);

@@ -8,6 +8,7 @@ import { projectStore } from "../../services/ProjectStore.js";
 import { runCommandDetector } from "../../services/RunCommandDetector.js";
 import { ProjectSwitchService } from "../../services/ProjectSwitchService.js";
 import { sendToRenderer } from "../utils.js";
+import { getAgentIds } from "../../../shared/config/agentRegistry.js";
 import { randomUUID } from "crypto";
 import type { HandlerDependencies } from "../types.js";
 import type { Project, ProjectSettings, TerminalRecipe, TabGroup } from "../../types/index.js";
@@ -256,7 +257,7 @@ export function registerProjectHandlers(deps: HandlerDependencies): () => void {
   const handleSystemGetCliAvailability = async () => {
     if (!cliAvailabilityService) {
       console.warn("[IPC] CliAvailabilityService not available");
-      return { claude: false, gemini: false, codex: false };
+      return Object.fromEntries(getAgentIds().map((id) => [id, false]));
     }
 
     const cached = cliAvailabilityService.getAvailability();
@@ -272,7 +273,7 @@ export function registerProjectHandlers(deps: HandlerDependencies): () => void {
   const handleSystemRefreshCliAvailability = async () => {
     if (!cliAvailabilityService) {
       console.warn("[IPC] CliAvailabilityService not available");
-      return { claude: false, gemini: false, codex: false };
+      return Object.fromEntries(getAgentIds().map((id) => [id, false]));
     }
 
     return await cliAvailabilityService.refresh();

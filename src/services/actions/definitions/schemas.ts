@@ -1,13 +1,7 @@
 import { z } from "zod";
+import { BUILT_IN_AGENT_IDS, BUILT_IN_TERMINAL_TYPES } from "@shared/config/agentIds";
 
-export const AgentIdSchema = z.enum([
-  "claude",
-  "gemini",
-  "codex",
-  "opencode",
-  "terminal",
-  "browser",
-]);
+export const AgentIdSchema = z.enum([...BUILT_IN_AGENT_IDS, "terminal", "browser"]);
 
 export const LaunchLocationSchema = z.enum(["grid", "dock"]);
 
@@ -35,9 +29,9 @@ export const SettingsNavTargetSchema = z.object({
   sectionId: z.string().optional(),
 });
 
-export const TerminalTypeSchema = z.enum(["terminal", "claude", "gemini", "codex", "opencode"]);
+export const TerminalTypeSchema = z.enum(BUILT_IN_TERMINAL_TYPES);
 
-export const LegacyAgentTypeSchema = z.enum(["claude", "gemini", "codex", "opencode"]);
+export const LegacyAgentTypeSchema = z.enum(BUILT_IN_AGENT_IDS);
 
 export const GitStatusSchema = z.enum([
   "modified",

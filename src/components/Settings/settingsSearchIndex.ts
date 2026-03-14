@@ -1,4 +1,6 @@
 import type { SettingsTab } from "./SettingsDialog";
+import { BUILT_IN_AGENT_IDS } from "@shared/config/agentIds";
+import { AGENT_REGISTRY } from "@shared/config/agentRegistry";
 
 export interface SettingsSearchEntry {
   id: string;
@@ -86,8 +88,14 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
     tabLabel: "CLI Agents",
     section: "Settings Navigation",
     title: "CLI Agents",
-    description: "Configure Claude, Gemini, Codex, and OpenCode agent settings",
-    keywords: ["integrations", "agents", "claude", "gemini", "codex", "opencode"],
+    description: "Configure CLI agent settings",
+    keywords: [
+      "integrations",
+      "agents",
+      ...BUILT_IN_AGENT_IDS.flatMap((id) =>
+        [id, AGENT_REGISTRY[id]?.name?.toLowerCase()].filter(Boolean)
+      ),
+    ],
   },
   {
     id: "tab-nav-github",
@@ -386,10 +394,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
       "automated",
       "whats next",
       "onboarding",
-      "claude",
-      "gemini",
-      "codex",
-      "opencode",
+      ...BUILT_IN_AGENT_IDS,
     ],
   },
 
@@ -402,8 +407,8 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
     subtabLabel: "Claude",
     section: "Agent Runtime Settings",
     title: "Enable / Disable Agent",
-    description: "Enable or disable individual CLI agents: Claude, Gemini, Codex, OpenCode",
-    keywords: ["agent", "enable", "disable", "claude", "gemini", "codex", "opencode", "select"],
+    description: "Enable or disable individual CLI agents",
+    keywords: ["agent", "enable", "disable", ...BUILT_IN_AGENT_IDS, "select"],
   },
   {
     id: "agents-skip-permissions",

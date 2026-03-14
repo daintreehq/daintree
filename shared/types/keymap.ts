@@ -4,6 +4,9 @@
  * These types define the keyboard shortcut system used throughout the application.
  */
 
+import type { AgentKeyAction } from "../config/agentIds.js";
+import { BUILT_IN_AGENT_KEY_ACTIONS } from "../config/agentIds.js";
+
 /**
  * Semantic actions that can be triggered by keyboard shortcuts.
  * Actions are namespaced by category for organization.
@@ -113,10 +116,7 @@ export type KeyAction =
 
   // Agent spawning
   | "agent.palette"
-  | "agent.claude"
-  | "agent.gemini"
-  | "agent.codex"
-  | "agent.opencode"
+  | AgentKeyAction
   | "agent.terminal"
   | "agent.focusNextWaiting"
   | "agent.focusNextWorking"
@@ -270,10 +270,7 @@ export const KEY_ACTION_VALUES: ReadonlySet<string> = new Set<string>([
   "terminal.stashInput",
   "terminal.popStash",
   "agent.palette",
-  "agent.claude",
-  "agent.gemini",
-  "agent.codex",
-  "agent.opencode",
+  ...BUILT_IN_AGENT_KEY_ACTIONS,
   "agent.terminal",
   "agent.focusNextWaiting",
   "agent.focusNextWorking",

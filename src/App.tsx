@@ -859,7 +859,7 @@ function App() {
   const gettingStarted = useGettingStartedChecklist(isStateLoaded);
 
   const handleLaunchAgent = useCallback(
-    async (type: "claude" | "gemini" | "codex" | "opencode" | "terminal" | "browser") => {
+    async (type: string) => {
       await launchAgent(type);
     },
     [launchAgent]

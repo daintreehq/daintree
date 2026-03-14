@@ -23,11 +23,14 @@ import { useNativeContextMenu, useHorizontalScrollControls } from "@/hooks";
 import type { MenuItemOption } from "@/types";
 import { actionService } from "@/services/ActionService";
 
+import { AGENT_REGISTRY } from "@/config/agents";
+import { BUILT_IN_AGENT_IDS } from "@shared/config/agentIds";
+
 const AGENT_OPTIONS = [
-  { type: "claude" as const, label: "Claude" },
-  { type: "gemini" as const, label: "Gemini" },
-  { type: "codex" as const, label: "Codex" },
-  { type: "opencode" as const, label: "OpenCode" },
+  ...BUILT_IN_AGENT_IDS.map((id) => ({
+    type: id,
+    label: AGENT_REGISTRY[id]?.name ?? id,
+  })),
   { type: "terminal" as const, label: "Terminal" },
   { type: "browser" as const, label: "Browser" },
 ];

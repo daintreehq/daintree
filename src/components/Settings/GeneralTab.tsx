@@ -17,6 +17,7 @@ import { SettingsSection } from "@/components/Settings/SettingsSection";
 import { SettingsSwitchCard } from "@/components/Settings/SettingsSwitchCard";
 import { getAgentIds, getAgentConfig } from "@/config/agents";
 import { DEFAULT_AGENT_SETTINGS, getAgentSettingsEntry } from "@shared/types";
+import { BUILT_IN_AGENT_IDS } from "@shared/config/agentIds";
 import type { HibernationConfig, CliAvailability, AgentSettings } from "@shared/types";
 import { usePreferencesStore } from "@/store";
 import { keybindingService } from "@/services/KeybindingService";
@@ -32,10 +33,7 @@ const CURATED_SHORTCUTS = [
     category: "Agents",
     actionIds: [
       "panel.palette",
-      "agent.claude",
-      "agent.gemini",
-      "agent.codex",
-      "agent.opencode",
+      ...BUILT_IN_AGENT_IDS.map((id) => `agent.${id}`),
       "agent.terminal",
       "terminal.inject",
     ],
