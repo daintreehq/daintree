@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 
 type TitleStatePatterns = {
@@ -86,7 +87,7 @@ describe("title state hysteresis (#3217)", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     managed = {};
-    reportFn = vi.fn();
+    reportFn = vi.fn<(state: "working" | "waiting") => void>();
     handler = createTitleHandler(GEMINI_PATTERNS, managed, reportFn);
   });
 
