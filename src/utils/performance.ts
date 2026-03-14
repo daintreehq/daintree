@@ -69,6 +69,19 @@ export function startRendererSpan(
   };
 }
 
+export async function withRendererSpan<T>(
+  mark: PerfMarkName | string,
+  task: () => Promise<T>,
+  meta?: Record<string, unknown>
+): Promise<T> {
+  const done = startRendererSpan(mark, meta);
+  try {
+    return await task();
+  } finally {
+    done();
+  }
+}
+
 export function startRendererMemoryMonitor(intervalMs = 15000): () => void {
   if (typeof window === "undefined" || !isRendererPerfCaptureEnabled()) {
     return () => {};
