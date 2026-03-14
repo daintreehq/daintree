@@ -17,7 +17,7 @@ const VALID_TRANSITIONS: Record<AgentState, AgentState[]> = {
   waiting: ["working", "failed"],
   directing: [], // Renderer-only state, never produced by main process
   completed: ["working", "waiting", "failed"], // Allow resuming work, prompt, or error override
-  failed: ["failed"],
+  failed: ["failed", "working"],
 };
 
 export function isValidTransition(from: AgentState, to: AgentState): boolean {
@@ -61,7 +61,12 @@ export function nextAgentState(current: AgentState, event: AgentEvent): AgentSta
       break;
 
     case "input":
-      if (current === "waiting" || current === "idle" || current === "completed") {
+      if (
+        current === "waiting" ||
+        current === "idle" ||
+        current === "completed" ||
+        current === "failed"
+      ) {
         return "working";
       }
       break;

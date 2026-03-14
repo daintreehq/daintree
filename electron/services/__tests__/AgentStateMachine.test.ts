@@ -57,9 +57,12 @@ describe("AgentStateMachine", () => {
       expect(isValidTransition("failed", "failed")).toBe(true);
     });
 
+    it("should allow failed → working (user input recovery)", () => {
+      expect(isValidTransition("failed", "working")).toBe(true);
+    });
+
     it("should not allow failed → other states", () => {
       expect(isValidTransition("failed", "idle")).toBe(false);
-      expect(isValidTransition("failed", "working")).toBe(false);
       expect(isValidTransition("failed", "waiting")).toBe(false);
       expect(isValidTransition("failed", "completed")).toBe(false);
     });
@@ -164,10 +167,21 @@ describe("AgentStateMachine", () => {
         expect(nextAgentState("completed", event)).toBe("working");
       });
 
-      it("should not transition from other states on input", () => {
+      it("should transition failed → working on input (Issue #3190)", () => {
+        const event: AgentEvent = { type: "input" };
+        expect(nextAgentState("failed", event)).toBe("working");
+      });
+
+      it("should not transition from working on input", () => {
         const event: AgentEvent = { type: "input" };
         expect(nextAgentState("working", event)).toBe("working");
-        expect(nextAgentState("failed", event)).toBe("failed");
+      });
+
+      it("should not allow heuristic events to escape failed state", () => {
+        expect(nextAgentState("failed", { type: "busy" })).toBe("failed");
+        expect(nextAgentState("failed", { type: "prompt" })).toBe("failed");
+        expect(nextAgentState("failed", { type: "completion" })).toBe("failed");
+        expect(nextAgentState("failed", { type: "output", data: "x" })).toBe("failed");
       });
     });
 
