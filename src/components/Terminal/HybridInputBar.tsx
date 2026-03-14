@@ -866,9 +866,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         // Resolve @selection tokens (synchronous — cached selection)
         for (const token of selectionTokens) {
           const selection = terminalInstanceService.getCachedSelection(terminalId);
-          const replacement = selection
-            ? "```\n" + selection + "\n```"
-            : "[No terminal selection]";
+          const replacement = selection ? "```\n" + selection + "\n```" : "[No terminal selection]";
           replacements.push({ start: token.start, end: token.end, replacement });
         }
 
@@ -906,7 +904,8 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         if (replacements.length > 0) {
           replacements.sort((a, b) => b.start - a.start);
           for (const r of replacements) {
-            resolvedText = resolvedText.slice(0, r.start) + r.replacement + resolvedText.slice(r.end);
+            resolvedText =
+              resolvedText.slice(0, r.start) + r.replacement + resolvedText.slice(r.end);
           }
         }
 
