@@ -550,6 +550,14 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
       const effectivePrefixMode =
         branchPrefixMode === "custom" && !sanitizedBranchPrefixCustom ? "none" : branchPrefixMode;
       const sanitizedWorktreePathPattern = worktreePathPattern.trim() || undefined;
+      if (sanitizedWorktreePathPattern) {
+        const patternValidation = validatePathPattern(sanitizedWorktreePathPattern);
+        if (!patternValidation.valid) {
+          setSaveError(`Invalid worktree path pattern: ${patternValidation.error}`);
+          setIsSaving(false);
+          return;
+        }
+      }
 
       await saveSettings({
         ...settings,
