@@ -468,9 +468,10 @@ export class WorkflowEngine {
         prompt: config.prompt,
         requestedAt: nodeState.startedAt ?? run.startedAt,
         timeoutMs: config.timeoutMs,
-        timeoutAt: config.timeoutMs && nodeState.startedAt
-          ? nodeState.startedAt + config.timeoutMs
-          : undefined,
+        timeoutAt:
+          config.timeoutMs && nodeState.startedAt
+            ? nodeState.startedAt + config.timeoutMs
+            : undefined,
       });
     }
 

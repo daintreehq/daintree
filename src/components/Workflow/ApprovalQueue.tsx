@@ -54,24 +54,27 @@ export function ApprovalQueue() {
     };
   }, []);
 
-  const handleResolve = useCallback(async (approval: PendingApproval, approved: boolean) => {
-    const key = `${approval.runId}::${approval.nodeId}`;
-    setSubmitting((prev) => new Set(prev).add(key));
-    try {
-      await window.electron.workflow.resolveApproval({
-        runId: approval.runId,
-        nodeId: approval.nodeId,
-        approved,
-        feedback: feedbackMap[key] || undefined,
-      });
-    } catch {
-      setSubmitting((prev) => {
-        const next = new Set(prev);
-        next.delete(key);
-        return next;
-      });
-    }
-  }, [feedbackMap]);
+  const handleResolve = useCallback(
+    async (approval: PendingApproval, approved: boolean) => {
+      const key = `${approval.runId}::${approval.nodeId}`;
+      setSubmitting((prev) => new Set(prev).add(key));
+      try {
+        await window.electron.workflow.resolveApproval({
+          runId: approval.runId,
+          nodeId: approval.nodeId,
+          approved,
+          feedback: feedbackMap[key] || undefined,
+        });
+      } catch {
+        setSubmitting((prev) => {
+          const next = new Set(prev);
+          next.delete(key);
+          return next;
+        });
+      }
+    },
+    [feedbackMap]
+  );
 
   if (approvals.length === 0) return null;
 
