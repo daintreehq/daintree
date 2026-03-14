@@ -13,8 +13,11 @@ import {
 
 function createMockHeadless(bufferType: "normal" | "alternate" = "normal") {
   let currentType = bufferType;
+  let markerLine = 0;
   const writeFn = vi.fn().mockImplementation((data: string) => {
     if (data === "\x1b[?1049l") currentType = "normal";
+    const newlines = (data.match(/\r\n/g) || []).length;
+    markerLine += newlines;
   });
   return {
     write: writeFn,
@@ -24,7 +27,10 @@ function createMockHeadless(bufferType: "normal" | "alternate" = "normal") {
       },
       normal: { baseY: 0, cursorY: 0, length: 100 },
     },
-    registerMarker: vi.fn().mockReturnValue({ line: 0, dispose: vi.fn() }),
+    registerMarker: vi.fn().mockImplementation(() => ({
+      line: markerLine,
+      dispose: vi.fn(),
+    })),
   };
 }
 
@@ -81,6 +87,11 @@ describe("terminalSessionPersistence", () => {
       c[0].includes("Session restored")
     );
     expect(bannerCall).toBeDefined();
+
+    // Start marker should be on the banner row (after the \r\n separator),
+    // not on the last historical content line
+    expect(result.bannerStartMarker!.line).toBeGreaterThan(0);
+    expect(result.bannerEndMarker!.line).toBeGreaterThan(result.bannerStartMarker!.line);
   });
 
   it("ignores oversized snapshots and returns not restored", async () => {

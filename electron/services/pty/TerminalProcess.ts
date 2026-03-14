@@ -1012,11 +1012,6 @@ export class TerminalProcess {
           ? addon.serialize({ range: { start: bannerEnd, end: bufLen - 1 } })
           : "";
 
-      this._restoreBannerStart?.dispose();
-      this._restoreBannerEnd?.dispose();
-      this._restoreBannerStart = null;
-      this._restoreBannerEnd = null;
-
       if (beforePart && afterPart) return beforePart + "\r\n" + afterPart;
       return beforePart || afterPart || addon.serialize();
     } catch {

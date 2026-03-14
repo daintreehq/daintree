@@ -88,8 +88,9 @@ export function restoreSessionFromFile(
       ? `─── Restored · ${ts} · previous session was in a full-screen app ───`
       : `─── Session restored · ${ts} ───`;
 
+    headlessTerminal.write("\r\n");
     const bannerStartMarker = headlessTerminal.registerMarker(0) ?? null;
-    headlessTerminal.write(`\r\n\x1b[2m\x1b[38;5;240m${label}\x1b[0m\r\n`);
+    headlessTerminal.write(`\x1b[2m\x1b[38;5;240m${label}\x1b[0m\r\n`);
     const bannerEndMarker = headlessTerminal.registerMarker(0) ?? null;
 
     return { restored: true, bannerStartMarker, bannerEndMarker };
