@@ -76,6 +76,11 @@ describe("WebGL lease through tier transitions", () => {
 
   it("FOCUSED → BURST → FOCUSED does not cause redundant onTierApplied calls", () => {
     vi.useFakeTimers();
+    (globalThis as unknown as { window: Window & typeof globalThis }).window = {
+      ...(globalThis as unknown as { window?: Window & typeof globalThis }).window,
+      setTimeout: globalThis.setTimeout,
+      clearTimeout: globalThis.clearTimeout,
+    } as Window & typeof globalThis;
     mockManagedTerminal.lastAppliedTier = TerminalRefreshTier.FOCUSED;
 
     // Keystroke: FOCUSED → BURST (upgrade, immediate)
@@ -118,6 +123,11 @@ describe("WebGL lease through tier transitions", () => {
 
   it("FOCUSED → VISIBLE is a downgrade and uses hysteresis", () => {
     vi.useFakeTimers();
+    (globalThis as unknown as { window: Window & typeof globalThis }).window = {
+      ...(globalThis as unknown as { window?: Window & typeof globalThis }).window,
+      setTimeout: globalThis.setTimeout,
+      clearTimeout: globalThis.clearTimeout,
+    } as Window & typeof globalThis;
     mockManagedTerminal.lastAppliedTier = TerminalRefreshTier.FOCUSED;
 
     policy.applyRendererPolicy("t1", TerminalRefreshTier.VISIBLE);
@@ -137,6 +147,11 @@ describe("WebGL lease through tier transitions", () => {
 
   it("FOCUSED → BACKGROUND fires onTierApplied after hysteresis", () => {
     vi.useFakeTimers();
+    (globalThis as unknown as { window: Window & typeof globalThis }).window = {
+      ...(globalThis as unknown as { window?: Window & typeof globalThis }).window,
+      setTimeout: globalThis.setTimeout,
+      clearTimeout: globalThis.clearTimeout,
+    } as Window & typeof globalThis;
     mockManagedTerminal.lastAppliedTier = TerminalRefreshTier.FOCUSED;
 
     policy.applyRendererPolicy("t1", TerminalRefreshTier.BACKGROUND);
