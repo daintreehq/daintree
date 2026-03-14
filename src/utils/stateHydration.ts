@@ -233,6 +233,7 @@ export interface HydrationOptions {
     devPreviewConsoleOpen?: boolean;
     exitBehavior?: import("@shared/types/domain").PanelExitBehavior;
     agentSessionId?: string;
+    agentLaunchFlags?: string[];
     restore?: boolean;
   }) => Promise<string>;
   setActiveWorktree: (id: string | null) => void;
