@@ -230,8 +230,14 @@ describe("useProjectSwitchRehydration", () => {
     expect(wakeMock).toHaveBeenCalledTimes(1);
     expect(wakeMock).toHaveBeenCalledWith("cold-terminal");
     expect(wakeMock).not.toHaveBeenCalledWith("warm-terminal");
-    expect(isTerminalWarmInProjectSwitchCacheMock).toHaveBeenCalledWith("project-warm", "warm-terminal");
-    expect(isTerminalWarmInProjectSwitchCacheMock).toHaveBeenCalledWith("project-warm", "cold-terminal");
+    expect(isTerminalWarmInProjectSwitchCacheMock).toHaveBeenCalledWith(
+      "project-warm",
+      "warm-terminal"
+    );
+    expect(isTerminalWarmInProjectSwitchCacheMock).toHaveBeenCalledWith(
+      "project-warm",
+      "cold-terminal"
+    );
     expect(finalizeProjectSwitchRendererCacheMock).toHaveBeenCalledWith("project-warm");
   });
 
@@ -258,7 +264,10 @@ describe("useProjectSwitchRehydration", () => {
 
     expect(wakeMock).toHaveBeenCalledTimes(1);
     expect(wakeMock).toHaveBeenCalledWith("stale-terminal");
-    expect(isTerminalWarmInProjectSwitchCacheMock).toHaveBeenCalledWith("project-stale", "stale-terminal");
+    expect(isTerminalWarmInProjectSwitchCacheMock).toHaveBeenCalledWith(
+      "project-stale",
+      "stale-terminal"
+    );
     expect(getMock).toHaveBeenCalledWith("stale-terminal");
   });
 
