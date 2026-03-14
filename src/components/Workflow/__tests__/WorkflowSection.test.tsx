@@ -13,10 +13,7 @@ vi.mock("react-dom", async () => {
   return { ...actual, createPortal: (children: ReactNode) => children };
 });
 
-function makeRun(
-  runId: string,
-  overrides: Partial<WorkflowRunIpc> = {}
-): WorkflowRunIpc {
+function makeRun(runId: string, overrides: Partial<WorkflowRunIpc> = {}): WorkflowRunIpc {
   return {
     runId,
     workflowId: "wf-1",

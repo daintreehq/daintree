@@ -16,10 +16,7 @@ vi.hoisted(() => {
 
 import { useWorkflowStore } from "../workflowStore";
 
-function makeRun(
-  runId: string,
-  overrides: Partial<WorkflowRunIpc> = {}
-): WorkflowRunIpc {
+function makeRun(runId: string, overrides: Partial<WorkflowRunIpc> = {}): WorkflowRunIpc {
   return {
     runId,
     workflowId: "wf-1",
@@ -63,9 +60,7 @@ describe("workflowStore", () => {
   });
 
   it("trims to 20 runs on init", async () => {
-    const runs = Array.from({ length: 25 }, (_, i) =>
-      makeRun(`r-${i}`, { startedAt: i })
-    );
+    const runs = Array.from({ length: 25 }, (_, i) => makeRun(`r-${i}`, { startedAt: i }));
     vi.mocked(window.electron.workflow.listRuns).mockResolvedValue(runs);
 
     await useWorkflowStore.getState().init();

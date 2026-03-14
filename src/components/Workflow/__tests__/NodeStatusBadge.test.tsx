@@ -13,7 +13,15 @@ vi.mock("react-dom", async () => {
 });
 
 describe("NodeStatusBadge", () => {
-  const states: TaskState[] = ["draft", "queued", "running", "blocked", "completed", "failed", "cancelled"];
+  const states: TaskState[] = [
+    "draft",
+    "queued",
+    "running",
+    "blocked",
+    "completed",
+    "failed",
+    "cancelled",
+  ];
 
   it.each(states)("renders status badge for %s", (status) => {
     render(<NodeStatusBadge status={status} />);

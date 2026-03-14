@@ -55,7 +55,9 @@ describe("RunCard", () => {
 
   it("shows cancel button only when running", () => {
     const onCancel = vi.fn();
-    const { rerender } = render(<RunCard run={makeRun({ status: "running" })} onCancel={onCancel} />);
+    const { rerender } = render(
+      <RunCard run={makeRun({ status: "running" })} onCancel={onCancel} />
+    );
     expect(screen.getByLabelText("Cancel workflow run")).toBeDefined();
 
     rerender(<RunCard run={makeRun({ status: "completed" })} onCancel={onCancel} />);
