@@ -58,15 +58,10 @@ export function IssueSelector({
     return () => abortController.abort();
   }, [open, debouncedQuery, projectPath]);
 
-  useEffect(() => {
-    if (open) return;
-
-    const timer = setTimeout(() => {
-      setQuery("");
-    }, 90_000);
-
-    return () => clearTimeout(timer);
-  }, [open]);
+  const handleOpenChange = (nextOpen: boolean) => {
+    setOpen(nextOpen);
+    if (!nextOpen) setQuery("");
+  };
 
   const handleClear = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -74,7 +69,7 @@ export function IssueSelector({
   };
 
   return (
-    <Popover open={open} onOpenChange={setOpen}>
+    <Popover open={open} onOpenChange={handleOpenChange}>
       <PopoverTrigger asChild>
         <Button
           variant="outline"
@@ -155,7 +150,7 @@ export function IssueSelector({
                 aria-selected={selectedIssue?.number === issue.number}
                 onClick={() => {
                   onSelect(issue);
-                  setOpen(false);
+                  handleOpenChange(false);
                 }}
                 className={cn(
                   "flex items-center gap-2 px-2 py-1.5 text-sm rounded-[var(--radius-sm)] cursor-pointer hover:bg-canopy-border",
