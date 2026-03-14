@@ -2,6 +2,7 @@ import type {
   Project,
   ProjectState,
   ProjectSettings,
+  ProjectTerminalSettings,
   ProjectStatus,
   TerminalRecipe,
   WorkflowDefinition,
@@ -20,6 +21,7 @@ import { TerminalSnapshotSchema, filterValidTerminalEntries } from "../schemas/i
 import { logError } from "../utils/logger.js";
 import { projectEnvSecureStorage } from "./ProjectEnvSecureStorage.js";
 import { isSensitiveEnvKey } from "../../shared/utils/envVars.js";
+import { normalizeScrollbackLines } from "../../shared/config/scrollback.js";
 import { getSharedDb } from "./persistence/db.js";
 import {
   projects as projectsTable,
@@ -737,6 +739,32 @@ export class ProjectStore {
     return path.join(stateDir, SETTINGS_FILENAME);
   }
 
+  private parseTerminalSettings(raw: unknown): ProjectTerminalSettings | undefined {
+    if (!raw || typeof raw !== "object") return undefined;
+    const obj = raw as Record<string, unknown>;
+    const result: ProjectTerminalSettings = {};
+
+    if (typeof obj.shell === "string" && obj.shell.trim() && path.isAbsolute(obj.shell.trim())) {
+      result.shell = obj.shell.trim();
+    }
+    if (Array.isArray(obj.shellArgs)) {
+      const args = obj.shellArgs.filter((a): a is string => typeof a === "string");
+      if (args.length > 0) result.shellArgs = args;
+    }
+    if (
+      typeof obj.defaultWorkingDirectory === "string" &&
+      obj.defaultWorkingDirectory.trim() &&
+      path.isAbsolute(obj.defaultWorkingDirectory.trim())
+    ) {
+      result.defaultWorkingDirectory = obj.defaultWorkingDirectory.trim();
+    }
+    if (typeof obj.scrollbackLines === "number" || typeof obj.scrollbackLines === "string") {
+      result.scrollbackLines = normalizeScrollbackLines(obj.scrollbackLines);
+    }
+
+    return Object.keys(result).length > 0 ? result : undefined;
+  }
+
   async getProjectSettings(projectId: string): Promise<ProjectSettings> {
     const filePath = this.getSettingsFilePath(projectId);
     if (!filePath || !existsSync(filePath)) {
@@ -891,6 +919,7 @@ export class ProjectStore {
           typeof parsed.worktreePathPattern === "string" && parsed.worktreePathPattern.trim()
             ? parsed.worktreePathPattern.trim()
             : undefined,
+        terminalSettings: this.parseTerminalSettings(parsed.terminalSettings),
       };
 
       return settings;
@@ -980,6 +1009,7 @@ export class ProjectStore {
         settings.devServerLoadTimeout <= 120
           ? settings.devServerLoadTimeout
           : undefined,
+      terminalSettings: this.parseTerminalSettings(settings.terminalSettings),
     };
 
     // Sanitize SVG
@@ -1472,6 +1502,7 @@ export class ProjectStore {
       excludedPaths?: string[];
       agentInstructions?: string;
       worktreePathPattern?: string;
+      terminalSettings?: { shellArgs?: string[]; defaultWorkingDirectory?: string; scrollbackLines?: number };
     } = { version: 1 };
 
     if (settings.runCommands?.length) payload.runCommands = settings.runCommands;
@@ -1482,6 +1513,14 @@ export class ProjectStore {
     if (settings.agentInstructions?.trim())
       payload.agentInstructions = settings.agentInstructions.trim();
     if (settings.worktreePathPattern) payload.worktreePathPattern = settings.worktreePathPattern;
+
+    if (settings.terminalSettings) {
+      const shareableTerminal: { shellArgs?: string[]; defaultWorkingDirectory?: string; scrollbackLines?: number } = {};
+      if (settings.terminalSettings.shellArgs?.length) shareableTerminal.shellArgs = settings.terminalSettings.shellArgs;
+      if (settings.terminalSettings.defaultWorkingDirectory) shareableTerminal.defaultWorkingDirectory = settings.terminalSettings.defaultWorkingDirectory;
+      if (settings.terminalSettings.scrollbackLines !== undefined) shareableTerminal.scrollbackLines = settings.terminalSettings.scrollbackLines;
+      if (Object.keys(shareableTerminal).length > 0) payload.terminalSettings = shareableTerminal;
+    }
 
     const uniqueSuffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const tempFilePath = `${filePath}.${uniqueSuffix}.tmp`;

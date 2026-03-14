@@ -62,7 +62,27 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
     const projectId = currentProject?.id;
     const projectPath = currentProject?.path;
 
-    let cwd = validatedOptions.cwd || projectPath || os.homedir();
+    // Fetch project-level terminal overrides for non-agent terminals
+    let projectShell: string | undefined;
+    let projectArgs: string[] | undefined;
+    let projectCwd: string | undefined;
+    if (projectId && kind !== "agent") {
+      const projSettings = await projectStore.getProjectSettings(projectId);
+      const ts = projSettings.terminalSettings;
+      if (ts) {
+        if (!validatedOptions.shell && ts.shell) {
+          projectShell = ts.shell;
+        }
+        if (ts.shellArgs) {
+          projectArgs = ts.shellArgs;
+        }
+        if (!validatedOptions.cwd && ts.defaultWorkingDirectory) {
+          projectCwd = ts.defaultWorkingDirectory;
+        }
+      }
+    }
+
+    let cwd = validatedOptions.cwd || projectCwd || projectPath || os.homedir();
 
     const fs = await import("fs");
     const path = await import("path");
@@ -109,10 +129,15 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
       );
     }
 
+    // Resolve shell and args: project overrides > spawn options > defaults
+    const resolvedShell = validatedOptions.shell || projectShell;
+    const resolvedArgs = projectArgs;
+
     try {
       ptyClient.spawn(id, {
         cwd,
-        shell: validatedOptions.shell,
+        shell: resolvedShell,
+        args: resolvedArgs,
         cols,
         rows,
         env: validatedOptions.env,
@@ -138,7 +163,7 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
           const isAgent = kind === "agent" || Boolean(agentId);
           if (isAgent) {
             if (process.platform === "win32") {
-              const shell = (validatedOptions.shell || getDefaultShell()).toLowerCase();
+              const shell = (resolvedShell || getDefaultShell()).toLowerCase();
               const shellBasename = shell.split(/[\\/]/).pop() ?? shell;
               if (shellBasename === "cmd.exe" || shellBasename === "cmd") {
                 finalCommand = `${trimmedCommand} & exit`;

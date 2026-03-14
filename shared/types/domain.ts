@@ -946,6 +946,18 @@ export interface CopyTreeSettings {
   alwaysExclude?: string[];
 }
 
+/** Per-project terminal configuration overrides */
+export interface ProjectTerminalSettings {
+  /** Override shell executable path (machine-local, not stored in .canopy/settings.json) */
+  shell?: string;
+  /** Override shell arguments (replaces default args when set) */
+  shellArgs?: string[];
+  /** Override default working directory for new terminals */
+  defaultWorkingDirectory?: string;
+  /** Override scrollback line count (100–10,000) */
+  scrollbackLines?: number;
+}
+
 /** Project-level settings that persist per repository */
 export interface ProjectSettings {
   /** List of custom run commands for this project */
@@ -1002,6 +1014,8 @@ export interface ProjectSettings {
   agentInstructions?: string;
   /** Per-project worktree path pattern override (uses global default when unset) */
   worktreePathPattern?: string;
+  /** Per-project terminal configuration overrides */
+  terminalSettings?: ProjectTerminalSettings;
 }
 
 // Toolbar Customization Types

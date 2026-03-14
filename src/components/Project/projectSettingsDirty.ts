@@ -1,5 +1,5 @@
 import type { CommandOverride } from "@shared/types/commands";
-import type { CopyTreeSettings } from "@shared/types/domain";
+import type { CopyTreeSettings, ProjectTerminalSettings } from "@shared/types/domain";
 
 export interface ProjectSettingsSnapshot {
   name: string;
@@ -23,6 +23,7 @@ export interface ProjectSettingsSnapshot {
   branchPrefixCustom: string;
   agentInstructions: string;
   worktreePathPattern: string;
+  terminalSettings: ProjectTerminalSettings | undefined;
 }
 
 interface EnvVar {
@@ -56,7 +57,8 @@ export function createProjectSettingsSnapshot(
   branchPrefixCustom: string = "",
   devServerLoadTimeout: number | undefined = undefined,
   agentInstructions: string = "",
-  worktreePathPattern: string = ""
+  worktreePathPattern: string = "",
+  terminalSettings: ProjectTerminalSettings | undefined = undefined
 ): ProjectSettingsSnapshot {
   const envVarRecord: Record<string, string> = {};
   const seenKeys = new Map<string, number>();
@@ -135,7 +137,21 @@ export function createProjectSettingsSnapshot(
     branchPrefixCustom: normalizedMode === "custom" ? trimmedCustom : "",
     agentInstructions: agentInstructions.trim(),
     worktreePathPattern: worktreePathPattern.trim(),
+    terminalSettings: normalizeTerminalSettings(terminalSettings),
   };
+}
+
+function normalizeTerminalSettings(
+  ts: ProjectTerminalSettings | undefined
+): ProjectTerminalSettings | undefined {
+  if (!ts) return undefined;
+  const result: ProjectTerminalSettings = {};
+  if (ts.shell?.trim()) result.shell = ts.shell.trim();
+  if (ts.shellArgs && ts.shellArgs.length > 0) result.shellArgs = [...ts.shellArgs];
+  if (ts.defaultWorkingDirectory?.trim())
+    result.defaultWorkingDirectory = ts.defaultWorkingDirectory.trim();
+  if (ts.scrollbackLines !== undefined) result.scrollbackLines = ts.scrollbackLines;
+  return Object.keys(result).length > 0 ? result : undefined;
 }
 
 function areStringArraysEqual(a: string[] | undefined, b: string[] | undefined): boolean {
@@ -218,6 +234,20 @@ export function areSnapshotsEqual(a: ProjectSettingsSnapshot, b: ProjectSettings
   if (a.branchPrefixCustom !== b.branchPrefixCustom) return false;
   if (a.agentInstructions !== b.agentInstructions) return false;
   if (a.worktreePathPattern !== b.worktreePathPattern) return false;
+
+  // Terminal settings comparison
+  const aTs = a.terminalSettings;
+  const bTs = b.terminalSettings;
+  if (!aTs && !bTs) {
+    // both undefined — equal
+  } else if (!aTs || !bTs) {
+    return false;
+  } else {
+    if (aTs.shell !== bTs.shell) return false;
+    if (aTs.defaultWorkingDirectory !== bTs.defaultWorkingDirectory) return false;
+    if (aTs.scrollbackLines !== bTs.scrollbackLines) return false;
+    if (!areStringArraysEqual(aTs.shellArgs, bTs.shellArgs)) return false;
+  }
 
   return true;
 }

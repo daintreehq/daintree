@@ -8,6 +8,7 @@ import { validateTerminalConfig } from "@/utils/terminalValidation";
 import { isRegisteredAgent, getAgentConfig } from "@/config/agents";
 import { panelKindHasPty, panelKindUsesTerminalUi } from "@shared/config/panelKindRegistry";
 import { useScrollbackStore } from "@/store/scrollbackStore";
+import { useProjectSettingsStore } from "@/store/projectSettingsStore";
 import { usePerformanceModeStore } from "@/store/performanceModeStore";
 import { useTerminalFontStore } from "@/store/terminalFontStore";
 import { getScrollbackForType, PERFORMANCE_MODE_SCROLLBACK } from "@/utils/scrollbackConfig";
@@ -304,9 +305,15 @@ export const createTerminalRegistrySlice =
             const { performanceMode } = usePerformanceModeStore.getState();
             const { fontSize, fontFamily } = useTerminalFontStore.getState();
 
+            // Project-level scrollback override for non-agent terminals
+            const projectScrollback =
+              kind !== "agent"
+                ? useProjectSettingsStore.getState().settings?.terminalSettings?.scrollbackLines
+                : undefined;
+
             const effectiveScrollback = performanceMode
               ? PERFORMANCE_MODE_SCROLLBACK
-              : getScrollbackForType(legacyType, scrollbackLines);
+              : getScrollbackForType(legacyType, projectScrollback ?? scrollbackLines);
 
             const terminalOptions = getXtermOptions({
               fontSize,

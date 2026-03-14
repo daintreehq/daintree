@@ -50,6 +50,8 @@ import type {
   CopyTreeSettings,
   CopyTreeTestConfigResult,
 } from "@/types";
+import type { ProjectTerminalSettings } from "@shared/types/domain";
+import { SCROLLBACK_MIN, SCROLLBACK_MAX } from "@shared/config/scrollback";
 import { copyTreeClient } from "@/clients/copyTreeClient";
 import { getProjectGradient } from "@/lib/colorUtils";
 import { cn } from "@/lib/utils";
@@ -132,6 +134,10 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
   const [branchPrefixCustom, setBranchPrefixCustom] = useState<string>("");
   const [agentInstructions, setAgentInstructions] = useState<string>("");
   const [worktreePathPattern, setWorktreePathPattern] = useState<string>("");
+  const [terminalShell, setTerminalShell] = useState<string>("");
+  const [terminalShellArgs, setTerminalShellArgs] = useState<string>("");
+  const [terminalDefaultCwd, setTerminalDefaultCwd] = useState<string>("");
+  const [terminalScrollback, setTerminalScrollback] = useState<string>("");
   const fileInputRef = useRef<HTMLInputElement>(null);
   const initialSnapshotRef = useRef<ProjectSettingsSnapshot | null>(null);
   const [showUnsavedChangesDialog, setShowUnsavedChangesDialog] = useState(false);
@@ -163,6 +169,22 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
   const exportTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const hasLoadedRecipes = useRef(false);
 
+  const currentTerminalSettings = useMemo((): ProjectTerminalSettings | undefined => {
+    const result: ProjectTerminalSettings = {};
+    if (terminalShell.trim()) result.shell = terminalShell.trim();
+    if (terminalShellArgs.trim()) {
+      result.shellArgs = terminalShellArgs.trim().split(/\s+/);
+    }
+    if (terminalDefaultCwd.trim()) result.defaultWorkingDirectory = terminalDefaultCwd.trim();
+    if (terminalScrollback.trim()) {
+      const num = Number(terminalScrollback);
+      if (Number.isFinite(num) && num >= SCROLLBACK_MIN && num <= SCROLLBACK_MAX) {
+        result.scrollbackLines = Math.trunc(num);
+      }
+    }
+    return Object.keys(result).length > 0 ? result : undefined;
+  }, [terminalShell, terminalShellArgs, terminalDefaultCwd, terminalScrollback]);
+
   const currentSnapshot = useMemo(() => {
     if (!currentProject) return null;
     return createProjectSettingsSnapshot(
@@ -180,7 +202,8 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
       branchPrefixCustom,
       devServerLoadTimeout,
       agentInstructions,
-      worktreePathPattern
+      worktreePathPattern,
+      currentTerminalSettings
     );
   }, [
     name,
@@ -199,6 +222,7 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
     agentInstructions,
     worktreePathPattern,
     currentProject,
+    currentTerminalSettings,
   ]);
 
   const isDirty = useMemo(() => {
@@ -291,6 +315,7 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
       const initialBranchPrefixCustom = settings.branchPrefixCustom ?? "";
       const initialAgentInstructions = settings.agentInstructions ?? "";
       const initialWorktreePathPattern = settings.worktreePathPattern ?? "";
+      const initialTerminalSettings = settings.terminalSettings;
 
       setName(currentProject.name);
       setEmoji(currentProject.emoji || "🌲");
@@ -307,6 +332,14 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
       setBranchPrefixCustom(initialBranchPrefixCustom);
       setAgentInstructions(initialAgentInstructions);
       setWorktreePathPattern(initialWorktreePathPattern);
+      setTerminalShell(initialTerminalSettings?.shell ?? "");
+      setTerminalShellArgs(initialTerminalSettings?.shellArgs?.join(" ") ?? "");
+      setTerminalDefaultCwd(initialTerminalSettings?.defaultWorkingDirectory ?? "");
+      setTerminalScrollback(
+        initialTerminalSettings?.scrollbackLines !== undefined
+          ? String(initialTerminalSettings.scrollbackLines)
+          : ""
+      );
 
       initialSnapshotRef.current = createProjectSettingsSnapshot(
         currentProject.name,
@@ -323,7 +356,8 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
         initialBranchPrefixCustom,
         initialDevServerLoadTimeout,
         initialAgentInstructions,
-        initialWorktreePathPattern
+        initialWorktreePathPattern,
+        initialTerminalSettings
       );
 
       setIsInitialized(true);
@@ -346,6 +380,10 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
       setBranchPrefixCustom("");
       setAgentInstructions("");
       setWorktreePathPattern("");
+      setTerminalShell("");
+      setTerminalShellArgs("");
+      setTerminalDefaultCwd("");
+      setTerminalScrollback("");
       hasLoadedRecipes.current = false;
       setActiveTab("general");
       initialSnapshotRef.current = null;
@@ -575,6 +613,7 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
           effectivePrefixMode === "custom" ? sanitizedBranchPrefixCustom : undefined,
         agentInstructions: agentInstructions.trim() || undefined,
         worktreePathPattern: sanitizedWorktreePathPattern,
+        terminalSettings: currentTerminalSettings,
         insecureEnvironmentVariables: undefined,
         unresolvedSecureEnvironmentVariables: undefined,
       });
@@ -608,7 +647,8 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
         sanitizedBranchPrefixCustom,
         devServerLoadTimeout,
         agentInstructions,
-        worktreePathPattern.trim()
+        worktreePathPattern.trim(),
+        currentTerminalSettings
       );
 
       requestClose({ bypassDirty: true });
@@ -2191,6 +2231,110 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
                             <span className="text-canopy-text/50 ml-1">{desc}</span>
                           </div>
                         ))}
+                      </div>
+                    </div>
+
+                    <div className="mt-6 pt-6 border-t border-canopy-border">
+                      <h3 className="text-sm font-semibold text-canopy-text/80 mb-2 flex items-center gap-2">
+                        <Terminal className="h-4 w-4" />
+                        Terminal Defaults
+                      </h3>
+                      <p className="text-xs text-canopy-text/60 mb-4">
+                        Override the default shell and scrollback for terminals spawned in this
+                        project. These apply to new terminals only.
+                      </p>
+
+                      <div className="space-y-4">
+                        <div>
+                          <label
+                            htmlFor="terminal-shell"
+                            className="block text-xs font-medium text-canopy-text/60 mb-1"
+                          >
+                            Shell program
+                            <span className="ml-1 text-canopy-text/40">(machine-local, not shared)</span>
+                          </label>
+                          <input
+                            id="terminal-shell"
+                            type="text"
+                            value={terminalShell}
+                            onChange={(e) => setTerminalShell(e.target.value)}
+                            className="w-full bg-canopy-bg border border-canopy-border rounded px-3 py-2 text-sm text-canopy-text font-mono focus:outline-none focus:border-canopy-accent focus:ring-1 focus:ring-canopy-accent/30 transition-all placeholder:text-canopy-text/40"
+                            placeholder="/bin/zsh"
+                            spellCheck={false}
+                            autoComplete="off"
+                          />
+                        </div>
+
+                        <div>
+                          <label
+                            htmlFor="terminal-shell-args"
+                            className="block text-xs font-medium text-canopy-text/60 mb-1"
+                          >
+                            Shell arguments
+                            <span className="ml-1 text-canopy-text/40">(space-separated)</span>
+                          </label>
+                          <input
+                            id="terminal-shell-args"
+                            type="text"
+                            value={terminalShellArgs}
+                            onChange={(e) => setTerminalShellArgs(e.target.value)}
+                            className="w-full bg-canopy-bg border border-canopy-border rounded px-3 py-2 text-sm text-canopy-text font-mono focus:outline-none focus:border-canopy-accent focus:ring-1 focus:ring-canopy-accent/30 transition-all placeholder:text-canopy-text/40"
+                            placeholder="-l"
+                            spellCheck={false}
+                            autoComplete="off"
+                          />
+                        </div>
+
+                        <div>
+                          <label
+                            htmlFor="terminal-default-cwd"
+                            className="block text-xs font-medium text-canopy-text/60 mb-1"
+                          >
+                            Default working directory
+                          </label>
+                          <input
+                            id="terminal-default-cwd"
+                            type="text"
+                            value={terminalDefaultCwd}
+                            onChange={(e) => setTerminalDefaultCwd(e.target.value)}
+                            className="w-full bg-canopy-bg border border-canopy-border rounded px-3 py-2 text-sm text-canopy-text font-mono focus:outline-none focus:border-canopy-accent focus:ring-1 focus:ring-canopy-accent/30 transition-all placeholder:text-canopy-text/40"
+                            placeholder="/path/to/working/directory"
+                            spellCheck={false}
+                            autoComplete="off"
+                          />
+                        </div>
+
+                        <div>
+                          <label
+                            htmlFor="terminal-scrollback"
+                            className="block text-xs font-medium text-canopy-text/60 mb-1"
+                          >
+                            Scrollback lines
+                            <span className="ml-1 text-canopy-text/40">
+                              ({SCROLLBACK_MIN}–{SCROLLBACK_MAX}, leave empty for app default)
+                            </span>
+                          </label>
+                          <input
+                            id="terminal-scrollback"
+                            type="number"
+                            min={SCROLLBACK_MIN}
+                            max={SCROLLBACK_MAX}
+                            value={terminalScrollback}
+                            onChange={(e) => setTerminalScrollback(e.target.value)}
+                            className="w-28 bg-canopy-bg border border-canopy-border rounded px-3 py-2 text-sm text-canopy-text font-mono focus:outline-none focus:border-canopy-accent focus:ring-1 focus:ring-canopy-accent/30 transition-all placeholder:text-canopy-text/40"
+                            placeholder="2500"
+                          />
+                          {terminalScrollback.trim() &&
+                            (() => {
+                              const num = Number(terminalScrollback);
+                              return Number.isFinite(num) &&
+                                (num < SCROLLBACK_MIN || num > SCROLLBACK_MAX) ? (
+                                <p className="text-xs text-status-error mt-1">
+                                  Must be between {SCROLLBACK_MIN} and {SCROLLBACK_MAX}
+                                </p>
+                              ) : null;
+                            })()}
+                        </div>
                       </div>
                     </div>
                   </div>

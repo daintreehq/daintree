@@ -82,6 +82,7 @@ export type {
   // Project settings types
   RunCommand,
   ProjectSettings,
+  ProjectTerminalSettings,
   CopyTreeSettings,
   // Panel exit behavior
   PanelExitBehavior,
