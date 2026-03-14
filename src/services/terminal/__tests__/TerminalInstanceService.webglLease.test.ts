@@ -1,12 +1,22 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { TerminalRefreshTier } from "../../../../shared/types/domain";
 import type { ManagedTerminal } from "../types";
+import { TIER_DOWNGRADE_HYSTERESIS_MS } from "../types";
 import type { RendererPolicyDeps } from "../TerminalRendererPolicy";
 
 vi.mock("@/clients", () => ({
   terminalClient: {
     setActivityTier: vi.fn(),
   },
+}));
+
+vi.mock("@xterm/addon-webgl", () => ({
+  WebglAddon: vi.fn(function () {
+    return {
+      dispose: vi.fn(),
+      onContextLoss: vi.fn(() => ({ dispose: vi.fn() })),
+    };
+  }),
 }));
 
 describe("WebGL lease through tier transitions", () => {
@@ -98,7 +108,7 @@ describe("WebGL lease through tier transitions", () => {
     expect(onTierApplied).toHaveBeenCalledTimes(1);
 
     // After hysteresis
-    vi.advanceTimersByTime(500);
+    vi.advanceTimersByTime(TIER_DOWNGRADE_HYSTERESIS_MS);
     expect(onTierApplied).toHaveBeenCalledTimes(2);
     expect(onTierApplied).toHaveBeenLastCalledWith(
       "t1",
@@ -135,7 +145,7 @@ describe("WebGL lease through tier transitions", () => {
     expect(onTierApplied).not.toHaveBeenCalled();
     expect(mockManagedTerminal.pendingTier).toBe(TerminalRefreshTier.VISIBLE);
 
-    vi.advanceTimersByTime(500);
+    vi.advanceTimersByTime(TIER_DOWNGRADE_HYSTERESIS_MS);
     expect(onTierApplied).toHaveBeenCalledWith(
       "t1",
       TerminalRefreshTier.VISIBLE,
@@ -157,7 +167,7 @@ describe("WebGL lease through tier transitions", () => {
     policy.applyRendererPolicy("t1", TerminalRefreshTier.BACKGROUND);
     expect(onTierApplied).not.toHaveBeenCalled();
 
-    vi.advanceTimersByTime(500);
+    vi.advanceTimersByTime(TIER_DOWNGRADE_HYSTERESIS_MS);
     expect(onTierApplied).toHaveBeenCalledWith(
       "t1",
       TerminalRefreshTier.BACKGROUND,
@@ -165,5 +175,119 @@ describe("WebGL lease through tier transitions", () => {
     );
 
     vi.useRealTimers();
+  });
+
+  it("pending FOCUSED downgrade is cancelled by renewed BURST", () => {
+    vi.useFakeTimers();
+    (globalThis as unknown as { window: Window & typeof globalThis }).window = {
+      ...(globalThis as unknown as { window?: Window & typeof globalThis }).window,
+      setTimeout: globalThis.setTimeout,
+      clearTimeout: globalThis.clearTimeout,
+    } as Window & typeof globalThis;
+    mockManagedTerminal.lastAppliedTier = TerminalRefreshTier.BURST;
+
+    // Burst timer wants to downgrade to FOCUSED
+    policy.applyRendererPolicy("t1", TerminalRefreshTier.FOCUSED);
+    expect(mockManagedTerminal.pendingTier).toBe(TerminalRefreshTier.FOCUSED);
+
+    // Another keystroke arrives before hysteresis expires → BURST upgrade cancels pending
+    policy.applyRendererPolicy("t1", TerminalRefreshTier.BURST);
+    expect(mockManagedTerminal.pendingTier).toBeUndefined();
+    expect(mockManagedTerminal.tierChangeTimer).toBeUndefined();
+
+    // After hysteresis, no callback should have fired — the pending FOCUSED was cancelled
+    vi.advanceTimersByTime(TIER_DOWNGRADE_HYSTERESIS_MS);
+    expect(onTierApplied).not.toHaveBeenCalled();
+
+    vi.useRealTimers();
+  });
+});
+
+describe("onTierApplied handler — WebGL manager integration", () => {
+  let webGLManager: import("../TerminalWebGLManager").TerminalWebGLManager;
+  let managed: ManagedTerminal;
+
+  function makeManagedTerminal(): ManagedTerminal {
+    return {
+      terminal: { loadAddon: vi.fn() },
+      isOpened: true,
+    } as unknown as ManagedTerminal;
+  }
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    vi.resetModules();
+
+    const { TerminalWebGLManager } = await import("../TerminalWebGLManager");
+    webGLManager = new TerminalWebGLManager();
+    managed = makeManagedTerminal();
+  });
+
+  function simulateOnTierApplied(id: string, tier: TerminalRefreshTier, m: ManagedTerminal) {
+    if (tier === TerminalRefreshTier.FOCUSED || tier === TerminalRefreshTier.BURST) {
+      webGLManager.attachToFocused(id, m);
+    } else if (tier === TerminalRefreshTier.VISIBLE && webGLManager.isCurrent(id)) {
+      // retain-only
+    } else {
+      webGLManager.detachIfCurrent(id);
+    }
+  }
+
+  it("BURST does not detach WebGL from focused terminal", () => {
+    simulateOnTierApplied("t1", TerminalRefreshTier.FOCUSED, managed);
+    expect(webGLManager.isCurrent("t1")).toBe(true);
+
+    simulateOnTierApplied("t1", TerminalRefreshTier.BURST, managed);
+    expect(webGLManager.isCurrent("t1")).toBe(true);
+  });
+
+  it("FOCUSED → VISIBLE retains lease for current holder", () => {
+    simulateOnTierApplied("t1", TerminalRefreshTier.FOCUSED, managed);
+    expect(webGLManager.isCurrent("t1")).toBe(true);
+
+    simulateOnTierApplied("t1", TerminalRefreshTier.VISIBLE, managed);
+    expect(webGLManager.isCurrent("t1")).toBe(true);
+  });
+
+  it("VISIBLE non-holder does not steal the lease", () => {
+    const managed2 = makeManagedTerminal();
+    simulateOnTierApplied("t1", TerminalRefreshTier.FOCUSED, managed);
+    expect(webGLManager.isCurrent("t1")).toBe(true);
+
+    simulateOnTierApplied("t2", TerminalRefreshTier.VISIBLE, managed2);
+    expect(webGLManager.isCurrent("t1")).toBe(true);
+    expect(webGLManager.isCurrent("t2")).toBe(false);
+  });
+
+  it("BACKGROUND detaches the current holder", () => {
+    simulateOnTierApplied("t1", TerminalRefreshTier.FOCUSED, managed);
+    expect(webGLManager.isCurrent("t1")).toBe(true);
+
+    simulateOnTierApplied("t1", TerminalRefreshTier.BACKGROUND, managed);
+    expect(webGLManager.isCurrent("t1")).toBe(false);
+  });
+
+  it("focus switch A→B transfers lease correctly", () => {
+    const managedB = makeManagedTerminal();
+    simulateOnTierApplied("t1", TerminalRefreshTier.FOCUSED, managed);
+    expect(webGLManager.isCurrent("t1")).toBe(true);
+
+    simulateOnTierApplied("t2", TerminalRefreshTier.FOCUSED, managedB);
+    expect(webGLManager.isCurrent("t1")).toBe(false);
+    expect(webGLManager.isCurrent("t2")).toBe(true);
+  });
+
+  it("A retains at VISIBLE while B takes focus", () => {
+    const managedB = makeManagedTerminal();
+    simulateOnTierApplied("t1", TerminalRefreshTier.FOCUSED, managed);
+
+    // t1 downgrades to VISIBLE (retains)
+    simulateOnTierApplied("t1", TerminalRefreshTier.VISIBLE, managed);
+    expect(webGLManager.isCurrent("t1")).toBe(true);
+
+    // t2 takes focus — steals lease
+    simulateOnTierApplied("t2", TerminalRefreshTier.FOCUSED, managedB);
+    expect(webGLManager.isCurrent("t2")).toBe(true);
+    expect(webGLManager.isCurrent("t1")).toBe(false);
   });
 });
