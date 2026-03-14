@@ -354,318 +354,354 @@ export function AgentSettings({
         )}
 
         {/* Agent Configuration Card */}
-        {!isGeneralActive && activeAgent && (
-          <div className="rounded-[var(--radius-lg)] border border-canopy-border bg-surface p-4 space-y-4">
-            {/* Header with agent info */}
-            <div className="flex items-center justify-between pb-3 border-b border-canopy-border">
-              <div className="flex items-center gap-3">
-                {activeAgent.Icon && <activeAgent.Icon size={24} brandColor={activeAgent.color} />}
-                <div>
-                  <h4 className="text-sm font-medium text-canopy-text">
-                    {activeAgent.name} Settings
-                  </h4>
-                  <p className="text-xs text-canopy-text/50">
-                    Configure how {activeAgent.name.toLowerCase()} runs in terminals
-                  </p>
+        {!isGeneralActive &&
+          activeAgent &&
+          filteredAgentOptions.some((a) => a.id === activeAgent.id) && (
+            <div className="rounded-[var(--radius-lg)] border border-canopy-border bg-surface p-4 space-y-4">
+              {/* Header with agent info */}
+              <div className="flex items-center justify-between pb-3 border-b border-canopy-border">
+                <div className="flex items-center gap-3">
+                  {activeAgent.Icon && (
+                    <activeAgent.Icon size={24} brandColor={activeAgent.color} />
+                  )}
+                  <div>
+                    <h4 className="text-sm font-medium text-canopy-text">
+                      {activeAgent.name} Settings
+                    </h4>
+                    <p className="text-xs text-canopy-text/50">
+                      Configure how {activeAgent.name.toLowerCase()} runs in terminals
+                    </p>
+                  </div>
                 </div>
-              </div>
-              <div className="flex items-center gap-2">
-                {activeAgent.usageUrl && (
+                <div className="flex items-center gap-2">
+                  {activeAgent.usageUrl && (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="text-canopy-text/50 hover:text-canopy-text"
+                      onClick={async () => {
+                        const url = activeAgent.usageUrl?.trim();
+                        if (!url) return;
+                        try {
+                          const result = await actionService.dispatch(
+                            "system.openExternal",
+                            { url },
+                            { source: "user" }
+                          );
+                          if (!result.ok) {
+                            throw new Error(result.error.message);
+                          }
+                        } catch (error) {
+                          console.error("Failed to open usage URL:", error);
+                        }
+                      }}
+                    >
+                      <ExternalLink size={14} />
+                      View Usage
+                    </Button>
+                  )}
                   <Button
                     size="sm"
                     variant="ghost"
                     className="text-canopy-text/50 hover:text-canopy-text"
                     onClick={async () => {
-                      const url = activeAgent.usageUrl?.trim();
-                      if (!url) return;
-                      try {
-                        const result = await actionService.dispatch(
-                          "system.openExternal",
-                          { url },
-                          { source: "user" }
-                        );
-                        if (!result.ok) {
-                          throw new Error(result.error.message);
-                        }
-                      } catch (error) {
-                        console.error("Failed to open usage URL:", error);
-                      }
+                      await reset(activeAgent.id);
+                      onSettingsChange?.();
                     }}
                   >
-                    <ExternalLink size={14} />
-                    View Usage
+                    <RotateCcw size={14} />
+                    Reset
                   </Button>
-                )}
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  className="text-canopy-text/50 hover:text-canopy-text"
-                  onClick={async () => {
-                    await reset(activeAgent.id);
-                    onSettingsChange?.();
-                  }}
-                >
-                  <RotateCcw size={14} />
-                  Reset
-                </Button>
+                </div>
               </div>
-            </div>
 
-            {/* Enable Agent Toggle */}
-            <div id="agents-enable">
-              <SettingsSwitchCard
-                variant="compact"
-                title="Enable agent"
-                subtitle="When disabled, this agent is hidden everywhere and treated as if it is not installed"
-                isEnabled={activeEntry.selected !== false}
-                onChange={() => {
-                  const current = activeEntry.selected !== false;
-                  void (async () => {
-                    await setAgentSelected(activeAgent.id, !current);
-                    onSettingsChange?.();
-                  })();
-                }}
-                ariaLabel={`Enable ${activeAgent.name}`}
-              />
-            </div>
-
-            {/* Dangerous Mode Toggle */}
-            <div id="agents-skip-permissions" className="space-y-2">
-              <SettingsSwitchCard
-                variant="compact"
-                title="Skip Permissions"
-                subtitle="Auto-approve all actions"
-                isEnabled={activeEntry.dangerousEnabled ?? false}
-                onChange={() => {
-                  const current = activeEntry.dangerousEnabled ?? false;
-                  void (async () => {
-                    await updateAgent(activeAgent.id, { dangerousEnabled: !current });
-                    onSettingsChange?.();
-                  })();
-                }}
-                ariaLabel={`Skip permissions for ${activeAgent.name}`}
-                colorScheme="danger"
-              />
-
-              {activeEntry.dangerousEnabled && defaultDangerousArg && (
-                <div className="flex items-center gap-2 px-3 py-2 rounded-[var(--radius-md)] bg-status-error/10 border border-status-error/20">
-                  <code className="text-xs text-status-error font-mono">{defaultDangerousArg}</code>
-                  <span className="text-xs text-canopy-text/40">added to command</span>
-                </div>
-              )}
-            </div>
-
-            {/* Inline Mode Toggle - only for agents that support it */}
-            {(() => {
-              const agentCfg = getAgentConfig(activeAgent.id);
-              const inlineModeFlag = agentCfg?.capabilities?.inlineModeFlag;
-              if (!inlineModeFlag) return null;
-              const inlineMode = activeEntry.inlineMode ?? true;
-              return (
-                <div id="agents-inline-mode">
-                  <SettingsSwitchCard
-                    variant="compact"
-                    title="Inline Mode"
-                    subtitle="Disable fullscreen TUI for better resize handling and scrollback"
-                    isEnabled={inlineMode}
-                    onChange={() => {
-                      void (async () => {
-                        await updateAgent(activeAgent.id, { inlineMode: !inlineMode });
-                        onSettingsChange?.();
-                      })();
-                    }}
-                    ariaLabel={`Inline mode for ${activeAgent.name}`}
-                  />
-                </div>
-              );
-            })()}
-
-            {/* Share Clipboard Directory Toggle - Gemini only */}
-            {activeAgent.id === "gemini" && (
-              <div id="agents-clipboard">
+              {/* Enable Agent Toggle */}
+              <div id="agents-enable">
                 <SettingsSwitchCard
                   variant="compact"
-                  title="Share Clipboard Directory"
-                  subtitle="Allow Gemini to read pasted clipboard images via --include-directories"
-                  isEnabled={activeEntry.shareClipboardDirectory !== false}
+                  title="Enable agent"
+                  subtitle="When disabled, this agent is hidden everywhere and treated as if it is not installed"
+                  isEnabled={activeEntry.selected !== false}
                   onChange={() => {
-                    const current = activeEntry.shareClipboardDirectory !== false;
+                    const current = activeEntry.selected !== false;
                     void (async () => {
-                      await updateAgent(activeAgent.id, { shareClipboardDirectory: !current });
+                      await setAgentSelected(activeAgent.id, !current);
                       onSettingsChange?.();
                     })();
                   }}
-                  ariaLabel="Share clipboard directory with Gemini"
+                  ariaLabel={`Enable ${activeAgent.name}`}
                 />
               </div>
-            )}
 
-            {/* Custom Arguments */}
-            <div id="agents-custom-args" className="space-y-2 pt-2 border-t border-canopy-border">
-              <label className="text-sm font-medium text-canopy-text">Custom Arguments</label>
-              <input
-                className="w-full rounded-[var(--radius-md)] border border-canopy-border bg-canopy-bg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-canopy-accent/50 placeholder:text-canopy-text/30"
-                value={activeEntry.customFlags ?? ""}
-                onChange={(e) => updateAgent(activeAgent.id, { customFlags: e.target.value })}
-                placeholder="--verbose --max-tokens=4096"
-              />
-              <p className="text-xs text-canopy-text/40">Extra CLI flags appended when launching</p>
-            </div>
+              {/* Dangerous Mode Toggle */}
+              <div id="agents-skip-permissions" className="space-y-2">
+                <SettingsSwitchCard
+                  variant="compact"
+                  title="Skip Permissions"
+                  subtitle="Auto-approve all actions"
+                  isEnabled={activeEntry.dangerousEnabled ?? false}
+                  onChange={() => {
+                    const current = activeEntry.dangerousEnabled ?? false;
+                    void (async () => {
+                      await updateAgent(activeAgent.id, { dangerousEnabled: !current });
+                      onSettingsChange?.();
+                    })();
+                  }}
+                  ariaLabel={`Skip permissions for ${activeAgent.name}`}
+                  colorScheme="danger"
+                />
 
-            {/* Help Output */}
-            <AgentHelpOutput
-              agentId={activeAgent.id}
-              agentName={activeAgent.name}
-              usageUrl={activeAgent.usageUrl}
-            />
+                {activeEntry.dangerousEnabled && defaultDangerousArg && (
+                  <div className="flex items-center gap-2 px-3 py-2 rounded-[var(--radius-md)] bg-status-error/10 border border-status-error/20">
+                    <code className="text-xs text-status-error font-mono">
+                      {defaultDangerousArg}
+                    </code>
+                    <span className="text-xs text-canopy-text/40">added to command</span>
+                  </div>
+                )}
+              </div>
 
-            {/* Installation Section */}
-            {(() => {
-              const agentConfig = getAgentConfig(activeAgent.id);
-              const isCliAvailable = cliAvailability[activeAgent.id];
-              const isLoading = isCliLoading;
-              const installBlocks = agentConfig ? getInstallBlocksForCurrentOS(agentConfig) : null;
-              const hasInstallConfig = agentConfig?.install;
-
-              if (isCliAvailable === true) {
-                return null;
-              }
-
-              if (isLoading) {
+              {/* Inline Mode Toggle - only for agents that support it */}
+              {(() => {
+                const agentCfg = getAgentConfig(activeAgent.id);
+                const inlineModeFlag = agentCfg?.capabilities?.inlineModeFlag;
+                if (!inlineModeFlag) return null;
+                const inlineMode = activeEntry.inlineMode ?? true;
                 return (
-                  <div className="pt-4 border-t border-canopy-border">
-                    <div className="text-xs text-canopy-text/40">Checking CLI availability...</div>
+                  <div id="agents-inline-mode">
+                    <SettingsSwitchCard
+                      variant="compact"
+                      title="Inline Mode"
+                      subtitle="Disable fullscreen TUI for better resize handling and scrollback"
+                      isEnabled={inlineMode}
+                      onChange={() => {
+                        void (async () => {
+                          await updateAgent(activeAgent.id, { inlineMode: !inlineMode });
+                          onSettingsChange?.();
+                        })();
+                      }}
+                      ariaLabel={`Inline mode for ${activeAgent.name}`}
+                    />
                   </div>
                 );
-              }
+              })()}
 
-              return (
-                <div
-                  id="agents-installation"
-                  className="space-y-3 pt-4 border-t border-canopy-border"
-                >
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <h5 className="text-sm font-medium text-canopy-text">Installation</h5>
-                      <p className="text-xs text-canopy-text/50">
-                        {activeAgent.name} CLI not found
-                      </p>
-                    </div>
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      onClick={() => void handleRefreshCliAvailability()}
-                      disabled={isRefreshingCli}
-                      className="text-canopy-text/50 hover:text-canopy-text"
-                    >
-                      <RefreshCw
-                        size={14}
-                        className={cn("mr-1.5", isRefreshingCli && "animate-spin")}
-                      />
-                      Re-check
-                    </Button>
-                  </div>
+              {/* Share Clipboard Directory Toggle - Gemini only */}
+              {activeAgent.id === "gemini" && (
+                <div id="agents-clipboard">
+                  <SettingsSwitchCard
+                    variant="compact"
+                    title="Share Clipboard Directory"
+                    subtitle="Allow Gemini to read pasted clipboard images via --include-directories"
+                    isEnabled={activeEntry.shareClipboardDirectory !== false}
+                    onChange={() => {
+                      const current = activeEntry.shareClipboardDirectory !== false;
+                      void (async () => {
+                        await updateAgent(activeAgent.id, { shareClipboardDirectory: !current });
+                        onSettingsChange?.();
+                      })();
+                    }}
+                    ariaLabel="Share clipboard directory with Gemini"
+                  />
+                </div>
+              )}
 
-                  {cliError && (
-                    <div className="px-3 py-2 rounded-[var(--radius-md)] bg-status-error/10 border border-status-error/20">
-                      <p className="text-xs text-status-error">
-                        Re-check failed. Try again or restart the app.
-                      </p>
-                    </div>
-                  )}
+              {/* Custom Arguments */}
+              <div id="agents-custom-args" className="space-y-2 pt-2 border-t border-canopy-border">
+                <label className="text-sm font-medium text-canopy-text">Custom Arguments</label>
+                <input
+                  className="w-full rounded-[var(--radius-md)] border border-canopy-border bg-canopy-bg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-canopy-accent/50 placeholder:text-canopy-text/30"
+                  value={activeEntry.customFlags ?? ""}
+                  onChange={(e) => updateAgent(activeAgent.id, { customFlags: e.target.value })}
+                  placeholder="--verbose --max-tokens=4096"
+                />
+                <p className="text-xs text-canopy-text/40">
+                  Extra CLI flags appended when launching
+                </p>
+              </div>
 
-                  {installBlocks && installBlocks.length > 0 ? (
-                    <div className="space-y-3">
-                      {installBlocks.map((block, blockIndex) => (
-                        <div
-                          key={blockIndex}
-                          className="rounded-[var(--radius-md)] border border-canopy-border bg-surface p-3 space-y-2"
-                        >
-                          {block.label && (
-                            <div className="text-xs font-medium text-canopy-text/70">
-                              {block.label}
-                            </div>
-                          )}
+              {/* Help Output */}
+              <AgentHelpOutput
+                agentId={activeAgent.id}
+                agentName={activeAgent.name}
+                usageUrl={activeAgent.usageUrl}
+              />
 
-                          {block.steps && block.steps.length > 0 && (
-                            <ul className="space-y-1 text-xs text-canopy-text/60">
-                              {block.steps.map((step, stepIndex) => (
-                                <li key={stepIndex} className="flex gap-2">
-                                  <span className="text-canopy-text/40">{stepIndex + 1}.</span>
-                                  <span>{step}</span>
-                                </li>
-                              ))}
-                            </ul>
-                          )}
+              {/* Installation Section */}
+              {(() => {
+                const agentConfig = getAgentConfig(activeAgent.id);
+                const isCliAvailable = cliAvailability[activeAgent.id];
+                const isLoading = isCliLoading;
+                const installBlocks = agentConfig
+                  ? getInstallBlocksForCurrentOS(agentConfig)
+                  : null;
+                const hasInstallConfig = agentConfig?.install;
 
-                          {block.commands && block.commands.length > 0 && (
-                            <div className="space-y-1.5">
-                              {block.commands.map((command, cmdIndex) => (
-                                <div
-                                  key={cmdIndex}
-                                  className="flex items-center gap-2 px-3 py-2 rounded-[var(--radius-md)] bg-canopy-bg border border-canopy-border"
-                                >
-                                  <code className="flex-1 text-xs font-mono text-canopy-text">
-                                    {command}
-                                  </code>
-                                  <TooltipProvider>
-                                    <Tooltip>
-                                      <TooltipTrigger asChild>
-                                        <button
-                                          onClick={() => void handleCopyCommand(command)}
-                                          className="shrink-0 p-1 hover:bg-white/5 rounded transition-colors"
-                                          aria-label="Copy command"
-                                        >
-                                          {copiedCommand === command ? (
-                                            <Check size={14} className="text-canopy-accent" />
-                                          ) : (
-                                            <Copy size={14} className="text-canopy-text/40" />
-                                          )}
-                                        </button>
-                                      </TooltipTrigger>
-                                      <TooltipContent side="bottom">Copy command</TooltipContent>
-                                    </Tooltip>
-                                  </TooltipProvider>
-                                </div>
-                              ))}
-                            </div>
-                          )}
+                if (isCliAvailable === true) {
+                  return null;
+                }
 
-                          {block.notes && block.notes.length > 0 && (
-                            <div className="space-y-1 text-xs text-canopy-text/40">
-                              {block.notes.map((note, noteIndex) => (
-                                <p key={noteIndex}>{note}</p>
-                              ))}
-                            </div>
-                          )}
-                        </div>
-                      ))}
-
-                      {agentConfig?.install?.troubleshooting &&
-                        agentConfig.install.troubleshooting.length > 0 && (
-                          <div className="px-3 py-2 rounded-[var(--radius-md)] bg-status-warning/10 border border-status-warning/20">
-                            <div className="text-xs font-medium text-status-warning mb-1">
-                              Troubleshooting
-                            </div>
-                            <ul className="space-y-0.5 text-xs text-canopy-text/60">
-                              {agentConfig.install.troubleshooting.map((tip, tipIndex) => (
-                                <li key={tipIndex}>• {tip}</li>
-                              ))}
-                            </ul>
-                          </div>
-                        )}
-
-                      <div className="px-3 py-2 rounded-[var(--radius-md)] bg-canopy-bg/50 border border-canopy-border/50">
-                        <p className="text-xs text-canopy-text/40">
-                          ⚠️ Review commands before running them in your terminal
-                        </p>
+                if (isLoading) {
+                  return (
+                    <div className="pt-4 border-t border-canopy-border">
+                      <div className="text-xs text-canopy-text/40">
+                        Checking CLI availability...
                       </div>
                     </div>
-                  ) : hasInstallConfig?.docsUrl ? (
-                    <div className="px-4 py-6 rounded-[var(--radius-md)] border border-canopy-border bg-surface text-center">
-                      <p className="text-xs text-canopy-text/60 mb-3">
-                        No OS-specific install instructions available
-                      </p>
+                  );
+                }
+
+                return (
+                  <div
+                    id="agents-installation"
+                    className="space-y-3 pt-4 border-t border-canopy-border"
+                  >
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <h5 className="text-sm font-medium text-canopy-text">Installation</h5>
+                        <p className="text-xs text-canopy-text/50">
+                          {activeAgent.name} CLI not found
+                        </p>
+                      </div>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => void handleRefreshCliAvailability()}
+                        disabled={isRefreshingCli}
+                        className="text-canopy-text/50 hover:text-canopy-text"
+                      >
+                        <RefreshCw
+                          size={14}
+                          className={cn("mr-1.5", isRefreshingCli && "animate-spin")}
+                        />
+                        Re-check
+                      </Button>
+                    </div>
+
+                    {cliError && (
+                      <div className="px-3 py-2 rounded-[var(--radius-md)] bg-status-error/10 border border-status-error/20">
+                        <p className="text-xs text-status-error">
+                          Re-check failed. Try again or restart the app.
+                        </p>
+                      </div>
+                    )}
+
+                    {installBlocks && installBlocks.length > 0 ? (
+                      <div className="space-y-3">
+                        {installBlocks.map((block, blockIndex) => (
+                          <div
+                            key={blockIndex}
+                            className="rounded-[var(--radius-md)] border border-canopy-border bg-surface p-3 space-y-2"
+                          >
+                            {block.label && (
+                              <div className="text-xs font-medium text-canopy-text/70">
+                                {block.label}
+                              </div>
+                            )}
+
+                            {block.steps && block.steps.length > 0 && (
+                              <ul className="space-y-1 text-xs text-canopy-text/60">
+                                {block.steps.map((step, stepIndex) => (
+                                  <li key={stepIndex} className="flex gap-2">
+                                    <span className="text-canopy-text/40">{stepIndex + 1}.</span>
+                                    <span>{step}</span>
+                                  </li>
+                                ))}
+                              </ul>
+                            )}
+
+                            {block.commands && block.commands.length > 0 && (
+                              <div className="space-y-1.5">
+                                {block.commands.map((command, cmdIndex) => (
+                                  <div
+                                    key={cmdIndex}
+                                    className="flex items-center gap-2 px-3 py-2 rounded-[var(--radius-md)] bg-canopy-bg border border-canopy-border"
+                                  >
+                                    <code className="flex-1 text-xs font-mono text-canopy-text">
+                                      {command}
+                                    </code>
+                                    <TooltipProvider>
+                                      <Tooltip>
+                                        <TooltipTrigger asChild>
+                                          <button
+                                            onClick={() => void handleCopyCommand(command)}
+                                            className="shrink-0 p-1 hover:bg-white/5 rounded transition-colors"
+                                            aria-label="Copy command"
+                                          >
+                                            {copiedCommand === command ? (
+                                              <Check size={14} className="text-canopy-accent" />
+                                            ) : (
+                                              <Copy size={14} className="text-canopy-text/40" />
+                                            )}
+                                          </button>
+                                        </TooltipTrigger>
+                                        <TooltipContent side="bottom">Copy command</TooltipContent>
+                                      </Tooltip>
+                                    </TooltipProvider>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+
+                            {block.notes && block.notes.length > 0 && (
+                              <div className="space-y-1 text-xs text-canopy-text/40">
+                                {block.notes.map((note, noteIndex) => (
+                                  <p key={noteIndex}>{note}</p>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        ))}
+
+                        {agentConfig?.install?.troubleshooting &&
+                          agentConfig.install.troubleshooting.length > 0 && (
+                            <div className="px-3 py-2 rounded-[var(--radius-md)] bg-status-warning/10 border border-status-warning/20">
+                              <div className="text-xs font-medium text-status-warning mb-1">
+                                Troubleshooting
+                              </div>
+                              <ul className="space-y-0.5 text-xs text-canopy-text/60">
+                                {agentConfig.install.troubleshooting.map((tip, tipIndex) => (
+                                  <li key={tipIndex}>• {tip}</li>
+                                ))}
+                              </ul>
+                            </div>
+                          )}
+
+                        <div className="px-3 py-2 rounded-[var(--radius-md)] bg-canopy-bg/50 border border-canopy-border/50">
+                          <p className="text-xs text-canopy-text/40">
+                            ⚠️ Review commands before running them in your terminal
+                          </p>
+                        </div>
+                      </div>
+                    ) : hasInstallConfig?.docsUrl ? (
+                      <div className="px-4 py-6 rounded-[var(--radius-md)] border border-canopy-border bg-surface text-center">
+                        <p className="text-xs text-canopy-text/60 mb-3">
+                          No OS-specific install instructions available
+                        </p>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => {
+                            const url = agentConfig?.install?.docsUrl;
+                            if (url) {
+                              void window.electron.system.openExternal(url);
+                            }
+                          }}
+                          className="text-canopy-accent hover:text-canopy-accent/80"
+                        >
+                          <ExternalLink size={14} />
+                          Open Install Docs
+                        </Button>
+                      </div>
+                    ) : (
+                      <div className="px-4 py-6 rounded-[var(--radius-md)] border border-canopy-border bg-surface text-center">
+                        <p className="text-xs text-canopy-text/60">
+                          No installation instructions configured for this agent
+                        </p>
+                      </div>
+                    )}
+
+                    {hasInstallConfig?.docsUrl && installBlocks && installBlocks.length > 0 && (
                       <Button
                         size="sm"
                         variant="ghost"
@@ -675,41 +711,17 @@ export function AgentSettings({
                             void window.electron.system.openExternal(url);
                           }
                         }}
-                        className="text-canopy-accent hover:text-canopy-accent/80"
+                        className="w-full text-canopy-text/50 hover:text-canopy-text"
                       >
                         <ExternalLink size={14} />
-                        Open Install Docs
+                        View Official Documentation
                       </Button>
-                    </div>
-                  ) : (
-                    <div className="px-4 py-6 rounded-[var(--radius-md)] border border-canopy-border bg-surface text-center">
-                      <p className="text-xs text-canopy-text/60">
-                        No installation instructions configured for this agent
-                      </p>
-                    </div>
-                  )}
-
-                  {hasInstallConfig?.docsUrl && installBlocks && installBlocks.length > 0 && (
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      onClick={() => {
-                        const url = agentConfig?.install?.docsUrl;
-                        if (url) {
-                          void window.electron.system.openExternal(url);
-                        }
-                      }}
-                      className="w-full text-canopy-text/50 hover:text-canopy-text"
-                    >
-                      <ExternalLink size={14} />
-                      View Official Documentation
-                    </Button>
-                  )}
-                </div>
-              );
-            })()}
-          </div>
-        )}
+                    )}
+                  </div>
+                );
+              })()}
+            </div>
+          )}
       </div>
     </div>
   );
