@@ -37,6 +37,7 @@ import { Archive, Maximize2, Minimize2 } from "lucide-react";
 import { registerInputController, unregisterInputController } from "@/store/terminalInputStore";
 import type { CommandContext, CommandResult } from "@shared/types/commands";
 import { isEnterLikeLineBreakInputEvent } from "./hybridInputEvents";
+import { IMAGE_EXTENSIONS } from "./useTerminalFileTransfer";
 import { AppDialog } from "@/components/ui/AppDialog";
 import {
   inputTheme,
@@ -87,7 +88,6 @@ export interface HybridInputBarProps {
   className?: string;
 }
 
-const IMAGE_EXTENSIONS = /\.(png|jpe?g|bmp|tiff?|avif|heic)$/i;
 const AI_CORRECTION_MATCH_RADIUS = 32;
 
 function resolveAICorrectionRange(

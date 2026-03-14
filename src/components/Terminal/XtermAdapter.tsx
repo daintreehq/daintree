@@ -11,6 +11,7 @@ import { getXtermOptions } from "@/config/xtermConfig";
 import { getSoftNewlineSequence } from "../../../shared/utils/terminalInputProtocol.js";
 import { keybindingService } from "@/services/KeybindingService";
 import { actionService } from "@/services/ActionService";
+import { useTerminalFileTransfer } from "./useTerminalFileTransfer";
 
 export interface XtermAdapterProps {
   terminalId: string;
@@ -78,6 +79,9 @@ function XtermAdapterComponent({
   const [isAltBuffer, setIsAltBuffer] = useState(() =>
     terminalInstanceService.getAltBufferState(terminalId)
   );
+
+  // Attach image paste and file drag-and-drop handlers to the xterm container
+  useTerminalFileTransfer(containerRef, { terminalId, isInputLocked, onInput });
 
   const hasVisibleBufferContent = useCallback(() => {
     const managed = terminalInstanceService.get(terminalId);
