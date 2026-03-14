@@ -16,6 +16,7 @@ import {
   LayoutGrid,
   Loader2,
   PanelBottom,
+  Pencil,
   Play,
   Terminal,
   XCircle,
@@ -193,6 +194,10 @@ export function WorktreeTerminalSection({
                             className="w-3 h-3 text-status-warning"
                             aria-label="Waiting for input"
                           />
+                        )}
+
+                        {term.agentState === "directing" && (
+                          <Pencil className="w-3 h-3 text-status-info" aria-label="Directing" />
                         )}
 
                         {term.agentState === "failed" && (

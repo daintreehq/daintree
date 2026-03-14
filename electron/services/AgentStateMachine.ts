@@ -15,6 +15,7 @@ const VALID_TRANSITIONS: Record<AgentState, AgentState[]> = {
   working: ["waiting", "completed", "failed"],
   running: ["idle"], // Shell process state - managed by TerminalProcess, not this state machine
   waiting: ["working", "failed"],
+  directing: [], // Renderer-only state, never produced by main process
   completed: ["working", "waiting", "failed"], // Allow resuming work, prompt, or error override
   failed: ["failed"],
 };
