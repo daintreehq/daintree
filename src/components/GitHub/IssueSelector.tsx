@@ -58,6 +58,16 @@ export function IssueSelector({
     return () => abortController.abort();
   }, [open, debouncedQuery, projectPath]);
 
+  useEffect(() => {
+    if (open) return;
+
+    const timer = setTimeout(() => {
+      setQuery("");
+    }, 90_000);
+
+    return () => clearTimeout(timer);
+  }, [open]);
+
   const handleClear = (e: React.MouseEvent) => {
     e.stopPropagation();
     onSelect(null);
