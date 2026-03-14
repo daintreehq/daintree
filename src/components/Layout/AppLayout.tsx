@@ -8,6 +8,7 @@ import { SidecarDock, SidecarVisibilityController } from "../Sidecar";
 import { ProjectSettingsDialog, ProjectSwitchOverlay } from "@/components/Project";
 import { ChordIndicator } from "./ChordIndicator";
 import { DemoCursor } from "../Demo";
+import { ApprovalQueue } from "../Workflow/ApprovalQueue";
 import { useDiagnosticsStore, useDockStore, type PanelState } from "@/store";
 import { useProjectStore } from "@/store/projectStore";
 import { useMacroFocusStore } from "@/store/macroFocusStore";
@@ -371,6 +372,7 @@ export function AppLayout({
         projectName={switchingToProjectName ?? undefined}
       />
       <ChordIndicator />
+      <ApprovalQueue />
       {window.electron?.demo && <DemoCursor />}
     </div>
   );

@@ -1047,6 +1047,39 @@ export interface ElectronAPI {
     onStarted(callback: (data: WorkflowStartedPayload) => void): () => void;
     onCompleted(callback: (data: WorkflowCompletedPayload) => void): () => void;
     onFailed(callback: (data: WorkflowFailedPayload) => void): () => void;
+    listPendingApprovals(): Promise<
+      Array<{
+        runId: string;
+        nodeId: string;
+        workflowId: string;
+        workflowName: string;
+        prompt: string;
+        requestedAt: number;
+        timeoutMs?: number;
+        timeoutAt?: number;
+      }>
+    >;
+    resolveApproval(payload: {
+      runId: string;
+      nodeId: string;
+      approved: boolean;
+      feedback?: string;
+    }): Promise<void>;
+    onApprovalRequested(
+      callback: (payload: {
+        runId: string;
+        nodeId: string;
+        workflowId: string;
+        workflowName: string;
+        prompt: string;
+        requestedAt: number;
+        timeoutMs?: number;
+        timeoutAt?: number;
+      }) => void
+    ): () => void;
+    onApprovalCleared(
+      callback: (payload: { runId: string; nodeId: string; reason: string }) => void
+    ): () => void;
   };
   mcpBridge: {
     /** Listen for manifest requests from main process */
