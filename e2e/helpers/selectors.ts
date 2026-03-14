@@ -138,6 +138,10 @@ export const SEL = {
     panel: '[aria-label^="Claude agent:"]',
     startButton: '[aria-label="Start Claude Agent"]',
   },
+  opencodeAgent: {
+    panel: '[aria-label^="OpenCode agent:"]',
+    startButton: '[aria-label="Start OpenCode Agent"]',
+  },
   fileViewer: {
     dialog: '[data-testid="file-viewer-dialog"]',
     closeButton: '[aria-label="Close dialog"]',
