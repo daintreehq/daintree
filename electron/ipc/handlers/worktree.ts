@@ -22,28 +22,12 @@ import { projectStore } from "../../services/ProjectStore.js";
 import { logDebug, logError } from "../../utils/logger.js";
 import { fileSearchService } from "../../services/FileSearchService.js";
 import { checkRateLimit } from "../utils.js";
+import { resolveWorktreePattern } from "../../utils/worktreePattern.js";
 
 // In-memory map to track taskId -> worktreeIds for orchestration
 // Scoped by projectId to avoid cross-project collisions
 // This is stored in-process since taskId is transient orchestration metadata
 const taskWorktreeMap = new Map<string, Map<string, Set<string>>>();
-
-async function resolveWorktreePattern(rootPath: string): Promise<string> {
-  const project = await projectStore.getProjectByPath(rootPath);
-  if (project) {
-    const settings = await projectStore.getProjectSettings(project.id);
-    if (settings?.worktreePathPattern) {
-      const validation = validatePathPattern(settings.worktreePathPattern);
-      if (validation.valid) {
-        return settings.worktreePathPattern;
-      }
-    }
-  }
-  const configPattern = store.get("worktreeConfig.pathPattern");
-  return typeof configPattern === "string" && configPattern.trim()
-    ? configPattern
-    : DEFAULT_WORKTREE_PATH_PATTERN;
-}
 
 function getProjectTaskMap(projectId: string): Map<string, Set<string>> {
   if (!taskWorktreeMap.has(projectId)) {
