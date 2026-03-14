@@ -30,6 +30,7 @@ describe("HibernationService", () => {
   });
 
   afterEach(() => {
+    vi.doUnmock("../PtyManager.js");
     vi.useRealTimers();
     vi.restoreAllMocks();
   });
@@ -126,8 +127,6 @@ describe("HibernationService", () => {
 
     expect(gracefulKillMock).toHaveBeenCalledWith("proj-1");
     expect(projectStoreMock.clearProjectState).not.toHaveBeenCalled();
-
-    vi.doUnmock("../PtyManager.js");
   });
 
   it("clears pending initial check when stopped before timeout", () => {
