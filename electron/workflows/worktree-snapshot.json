@@ -2,23 +2,24 @@
   "id": "worktree-snapshot",
   "version": "1.0.0",
   "name": "Worktree Snapshot",
-  "description": "Capture current worktree state and create a summary note",
+  "description": "List worktrees, get current worktree details, and create a summary note",
   "nodes": [
-    {
-      "id": "get-current",
-      "type": "action",
-      "config": {
-        "actionId": "worktree.getCurrent"
-      },
-      "onSuccess": ["create-snapshot-note"],
-      "onFailure": ["note-snapshot-error"]
-    },
     {
       "id": "list-worktrees",
       "type": "action",
       "config": {
         "actionId": "worktree.list"
       },
+      "onSuccess": ["get-current"],
+      "onFailure": ["note-snapshot-error"]
+    },
+    {
+      "id": "get-current",
+      "type": "action",
+      "config": {
+        "actionId": "worktree.getCurrent"
+      },
+      "dependencies": ["list-worktrees"],
       "onSuccess": ["create-snapshot-note"],
       "onFailure": ["note-snapshot-error"]
     },
@@ -32,7 +33,7 @@
           "content": "Worktree snapshot captured successfully. Review worktree state in the sidebar."
         }
       },
-      "dependencies": ["get-current", "list-worktrees"]
+      "dependencies": ["get-current"]
     },
     {
       "id": "note-snapshot-error",
@@ -41,7 +42,7 @@
         "actionId": "notes.create",
         "args": {
           "title": "Worktree Snapshot Failed",
-          "content": "Failed to capture worktree snapshot. Check that a worktree is active."
+          "content": "Failed to capture worktree snapshot. An error occurred while querying worktree state."
         }
       }
     }
