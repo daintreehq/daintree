@@ -603,6 +603,12 @@ const CHANNELS = {
   DEMO_EXEC_RESUME: "demo:exec-resume",
   DEMO_EXEC_WAIT_FOR_SELECTOR: "demo:exec-wait-for-selector",
   DEMO_COMMAND_DONE: "demo:command-done",
+
+  // Workflow approval channels
+  WORKFLOW_RESOLVE_APPROVAL: "workflow:resolve-approval",
+  WORKFLOW_LIST_PENDING_APPROVALS: "workflow:list-pending-approvals",
+  WORKFLOW_APPROVAL_REQUESTED: "workflow:approval-requested",
+  WORKFLOW_APPROVAL_CLEARED: "workflow:approval-cleared",
 } as const;
 
 const api: ElectronAPI = {
@@ -1337,6 +1343,55 @@ const api: ElectronAPI = {
         timestamp: number;
       }) => void
     ) => _typedOn(CHANNELS.WORKFLOW_FAILED, callback),
+
+    listPendingApprovals: () => _typedInvoke(CHANNELS.WORKFLOW_LIST_PENDING_APPROVALS),
+
+    resolveApproval: (payload: {
+      runId: string;
+      nodeId: string;
+      approved: boolean;
+      feedback?: string;
+    }) => _typedInvoke(CHANNELS.WORKFLOW_RESOLVE_APPROVAL, payload),
+
+    onApprovalRequested: (
+      callback: (payload: {
+        runId: string;
+        nodeId: string;
+        workflowId: string;
+        workflowName: string;
+        prompt: string;
+        requestedAt: number;
+        timeoutMs?: number;
+        timeoutAt?: number;
+      }) => void
+    ) => {
+      const handler = (
+        _event: Electron.IpcRendererEvent,
+        payload: {
+          runId: string;
+          nodeId: string;
+          workflowId: string;
+          workflowName: string;
+          prompt: string;
+          requestedAt: number;
+          timeoutMs?: number;
+          timeoutAt?: number;
+        }
+      ) => callback(payload);
+      ipcRenderer.on(CHANNELS.WORKFLOW_APPROVAL_REQUESTED, handler);
+      return () => ipcRenderer.removeListener(CHANNELS.WORKFLOW_APPROVAL_REQUESTED, handler);
+    },
+
+    onApprovalCleared: (
+      callback: (payload: { runId: string; nodeId: string; reason: string }) => void
+    ) => {
+      const handler = (
+        _event: Electron.IpcRendererEvent,
+        payload: { runId: string; nodeId: string; reason: string }
+      ) => callback(payload);
+      ipcRenderer.on(CHANNELS.WORKFLOW_APPROVAL_CLEARED, handler);
+      return () => ipcRenderer.removeListener(CHANNELS.WORKFLOW_APPROVAL_CLEARED, handler);
+    },
   },
 
   // Dev Preview API

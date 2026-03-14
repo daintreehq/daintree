@@ -30,12 +30,9 @@
     },
     {
       "id": "review",
-      "type": "action",
+      "type": "approval",
       "config": {
-        "actionId": "terminal.executeCommand",
-        "args": {
-          "command": "echo 'Code review checkpoint - manual approval required'"
-        }
+        "prompt": "Lint and tests passed. Review the changes and approve to merge, or reject to address review comments."
       },
       "onSuccess": ["merge"],
       "onFailure": ["notify-review-failure"]
