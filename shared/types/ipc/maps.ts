@@ -131,6 +131,7 @@ import type {
   DemoWaitForSelectorPayload,
   DemoScreenshotResult,
 } from "./demo.js";
+import type { PendingWorkflowApproval } from "../workflowRun.js";
 
 export type ChecklistItemId = "openedProject" | "launchedAgent" | "createdWorktree";
 
@@ -1546,6 +1547,16 @@ export interface IpcInvokeMap {
   };
   "demo:resume": {
     args: [];
+    result: void;
+  };
+
+  // Workflow approval channels
+  "workflow:list-pending-approvals": {
+    args: [];
+    result: PendingWorkflowApproval[];
+  };
+  "workflow:resolve-approval": {
+    args: [payload: { runId: string; nodeId: string; approved: boolean; feedback?: string }];
     result: void;
   };
 }
