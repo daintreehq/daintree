@@ -8,6 +8,7 @@ import type {
 } from "../shared/types/index.js";
 import type { IssueAssociation } from "../shared/types/ipc/worktree.js";
 import type { AppError } from "../shared/types/ipc/errors.js";
+import type { BuiltInTerminalType } from "../shared/config/agentIds.js";
 import { DEFAULT_AGENT_SETTINGS, DEFAULT_APP_AGENT_CONFIG } from "../shared/types/index.js";
 import type { AppThemeConfig } from "../shared/types/appTheme.js";
 
@@ -49,7 +50,7 @@ export interface StoreSchema {
     terminals: Array<{
       id: string;
       kind?: "terminal" | "agent" | "browser" | "notes" | "dev-preview" | string;
-      type?: "terminal" | "claude" | "gemini" | "codex" | "opencode";
+      type?: BuiltInTerminalType;
       agentId?: string;
       title: string;
       cwd?: string;
@@ -75,7 +76,7 @@ export interface StoreSchema {
       name: string;
       worktreeId?: string;
       terminals: Array<{
-        type: "terminal" | "claude" | "gemini" | "codex" | "opencode";
+        type: BuiltInTerminalType;
         title?: string;
         command?: string;
         env?: Record<string, string>;
