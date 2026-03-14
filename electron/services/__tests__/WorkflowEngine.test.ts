@@ -1592,11 +1592,11 @@ describe("WorkflowEngine", () => {
       expect((loopState as LoopNodeState).exitedEarly).toBe(false);
     });
 
-    it("schedules all body nodes including ones with dependencies", async () => {
+    it("schedules dependent body nodes after their deps complete", async () => {
       mockLoader.getWorkflow.mockResolvedValue({ definition: loopWorkflow });
       await engine.startWorkflow("loop-workflow");
 
-      // Both "generate" (root) and "test" (has dep on generate) should be scheduled
+      // Only "generate" (root) should be scheduled initially
       expect(mockQueueService.createTask).toHaveBeenCalledWith(
         expect.objectContaining({
           metadata: expect.objectContaining({
@@ -1605,6 +1605,25 @@ describe("WorkflowEngine", () => {
           }),
         })
       );
+      // "test" should NOT be scheduled yet (depends on generate)
+      expect(mockQueueService.createTask).not.toHaveBeenCalledWith(
+        expect.objectContaining({
+          metadata: expect.objectContaining({
+            nodeId: "my-loop|0|test",
+          }),
+        })
+      );
+
+      // Complete "generate" — this should trigger scheduling of "test"
+      events.emit("task:completed", {
+        taskId: "task-my-loop|0|generate",
+        result: "Generated code",
+        data: { code: "hello world" },
+        timestamp: Date.now(),
+      });
+
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
       expect(mockQueueService.createTask).toHaveBeenCalledWith(
         expect.objectContaining({
           metadata: expect.objectContaining({
@@ -1613,6 +1632,48 @@ describe("WorkflowEngine", () => {
           }),
         })
       );
+    });
+
+    it("loop with maxIterations=1 completes after single iteration", async () => {
+      const singleIterWorkflow: WorkflowDefinition = {
+        id: "single-iter",
+        name: "Single Iteration",
+        version: "1.0.0",
+        nodes: [
+          {
+            id: "my-loop",
+            type: "loop",
+            config: {
+              maxIterations: 1,
+              exitCondition: { type: "result", path: "data.passed", op: "==", value: true },
+            },
+            body: [{ id: "run-test", type: "action", config: { actionId: "test.run" } }],
+          },
+        ],
+      };
+
+      mockLoader.getWorkflow.mockResolvedValue({ definition: singleIterWorkflow });
+      const runId = await engine.startWorkflow("single-iter");
+
+      // Complete iteration 0 without meeting exit condition
+      events.emit("task:completed", {
+        taskId: "task-my-loop|0|run-test",
+        result: "Tests failed",
+        data: { passed: false },
+        timestamp: Date.now(),
+      });
+
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      const runs = await engine.listAllRuns();
+      const run = runs.find((r) => r.runId === runId)!;
+      const loopState = run.nodeStates["my-loop"] as LoopNodeState;
+
+      // Should complete (not fail) — max iterations reached
+      expect(loopState.status).toBe("completed");
+      expect(loopState.exitedEarly).toBe(false);
+      // Should NOT have scheduled iteration 1
+      expect(run.scheduledNodes.has("my-loop|1|run-test")).toBe(false);
     });
 
     it("loop body failure causes loop to fail", async () => {

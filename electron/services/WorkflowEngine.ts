@@ -331,23 +331,19 @@ export class WorkflowEngine {
   }
 
   /**
-   * Schedule all body nodes for a loop iteration.
-   * Root nodes (no deps) are compiled first, then dependent nodes.
-   * The task queue handles execution ordering via dependencies.
+   * Schedule root body nodes for a loop iteration.
+   * Only root nodes (no dependencies) are scheduled immediately.
+   * Dependent body nodes are scheduled when their deps complete via handleBodyNodeComplete().
+   * This ensures template expressions can resolve against completed dependency results.
    */
   private async compileBodyIteration(
     loopNode: LoopNode,
     run: WorkflowRun,
     iterIndex: number
   ): Promise<void> {
-    // Sort: roots first, then nodes with dependencies
     const roots = loopNode.body.filter((n) => !n.dependencies || n.dependencies.length === 0);
-    const withDeps = loopNode.body.filter((n) => n.dependencies && n.dependencies.length > 0);
 
     for (const bodyNode of roots) {
-      await this.compileSingleBodyNode(bodyNode, loopNode, run, iterIndex);
-    }
-    for (const bodyNode of withDeps) {
       await this.compileSingleBodyNode(bodyNode, loopNode, run, iterIndex);
     }
   }
@@ -660,7 +656,8 @@ export class WorkflowEngine {
 
   /**
    * Handle completion of a loop body node.
-   * Schedule same-iteration successors, then check if the iteration is complete.
+   * Schedule dependent body nodes whose deps are now all met, then onSuccess routing,
+   * then check if the iteration is complete.
    */
   private async handleBodyNodeComplete(
     composite: { loopNodeId: string; iterIndex: number; bodyNodeId: string },
@@ -671,6 +668,32 @@ export class WorkflowEngine {
 
     const bodyNode = loopNode.body.find((n) => n.id === composite.bodyNodeId);
     if (!bodyNode) return;
+
+    // Schedule body nodes whose dependencies are now all satisfied
+    for (const candidate of loopNode.body) {
+      if (!candidate.dependencies || candidate.dependencies.length === 0) continue;
+      const candidateComposite = this.buildCompositeId(
+        composite.loopNodeId,
+        composite.iterIndex,
+        candidate.id
+      );
+      if (run.scheduledNodes.has(candidateComposite)) continue;
+
+      // Check if all deps for this candidate are completed
+      const allDepsMet = candidate.dependencies.every((depId) => {
+        const depComposite = this.buildCompositeId(
+          composite.loopNodeId,
+          composite.iterIndex,
+          depId
+        );
+        const depState = run.nodeStates[depComposite];
+        return depState?.status === "completed";
+      });
+
+      if (allDepsMet) {
+        await this.compileSingleBodyNode(candidate, loopNode, run, composite.iterIndex);
+      }
+    }
 
     // Schedule same-iteration onSuccess successors
     for (const nextId of bodyNode.onSuccess || []) {
