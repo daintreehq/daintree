@@ -542,6 +542,10 @@ export const createTerminalRegistrySlice =
             return state;
           }
 
+          if (terminal.agentState === "directing" && agentState === "waiting") {
+            return state;
+          }
+
           const newTerminals = state.terminals.map((t) =>
             t.id === id
               ? {
