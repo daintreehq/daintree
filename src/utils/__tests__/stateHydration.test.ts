@@ -1509,7 +1509,7 @@ describe("hydrateAppState", () => {
     expect(addTerminal).toHaveBeenCalledTimes(2);
   });
 
-  it("restores non-PTY panels before PTY panels begin reconnecting", async () => {
+  it("restores non-PTY panels before PTY panels are added", async () => {
     const callOrder: string[] = [];
 
     appClientMock.hydrate.mockResolvedValue({
@@ -1746,5 +1746,73 @@ describe("hydrateAppState", () => {
 
     expect(browserIdx).toBeLessThan(firstPtyIdx);
     expect(notesIdx).toBeLessThan(firstPtyIdx);
+  });
+
+  it("treats dev-preview with backend terminal as PTY-grouped", async () => {
+    const callOrder: string[] = [];
+
+    appClientMock.hydrate.mockResolvedValue({
+      appState: {
+        terminals: [
+          {
+            id: "browser-1",
+            kind: "browser",
+            title: "Browser",
+            cwd: "/project",
+            location: "grid",
+            browserUrl: "http://localhost:3000",
+          },
+          {
+            id: "dev-preview-1",
+            kind: "dev-preview",
+            title: "Dev Preview",
+            cwd: "/project",
+            location: "grid",
+            command: "npm run dev",
+            browserUrl: "http://localhost:5173",
+          },
+        ],
+        sidebarWidth: 350,
+      },
+      terminalConfig,
+      project,
+      agentSettings,
+    });
+
+    // dev-preview-1 has a live backend terminal — should be treated as PTY
+    terminalClientMock.getForProject.mockResolvedValue([
+      {
+        id: "dev-preview-1",
+        cwd: "/project",
+        title: "Dev Preview",
+        type: "dev-preview",
+        kind: "dev-preview",
+      },
+    ]);
+
+    const addTerminal = vi
+      .fn()
+      .mockImplementation((opts: { kind?: string; requestedId?: string; existingId?: string }) => {
+        callOrder.push(opts.kind ?? "unknown");
+        return Promise.resolve(opts.requestedId ?? opts.existingId ?? "id");
+      });
+    const setActiveWorktree = vi.fn();
+    const loadRecipes = vi.fn().mockResolvedValue(undefined);
+    const openDiagnosticsDock = vi.fn();
+
+    await hydrateAppState({
+      addTerminal,
+      setActiveWorktree,
+      loadRecipes,
+      openDiagnosticsDock,
+    });
+
+    expect(addTerminal).toHaveBeenCalledTimes(2);
+
+    // Browser (non-PTY, no backend) should come before dev-preview (has backend terminal)
+    const browserIdx = callOrder.indexOf("browser");
+    const devPreviewIdx = callOrder.indexOf("dev-preview");
+
+    expect(browserIdx).toBeLessThan(devPreviewIdx);
   });
 });
