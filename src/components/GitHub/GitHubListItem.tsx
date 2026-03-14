@@ -258,17 +258,34 @@ export function GitHubListItem({
               <TooltipProvider>
                 <Tooltip>
                   <TooltipTrigger asChild>
-                    <span
-                      className={cn(
-                        "shrink-0",
-                        isActiveWorktree ? "text-canopy-accent" : "text-muted-foreground"
-                      )}
-                    >
-                      <GitBranch className="w-3.5 h-3.5" />
-                    </span>
+                    {isActiveWorktree ? (
+                      <span className="shrink-0 text-canopy-accent">
+                        <GitBranch className="w-3.5 h-3.5" />
+                      </span>
+                    ) : onSwitchToWorktree && matchedWorktree ? (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onSwitchToWorktree(matchedWorktree.id);
+                        }}
+                        className="shrink-0 text-github-open hover:text-github-open/80 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded p-0.5"
+                        aria-label="Switch to worktree"
+                      >
+                        <GitBranch className="w-3.5 h-3.5" />
+                      </button>
+                    ) : (
+                      <span className="shrink-0 text-github-open">
+                        <GitBranch className="w-3.5 h-3.5" />
+                      </span>
+                    )}
                   </TooltipTrigger>
                   <TooltipContent side="bottom">
-                    {isActiveWorktree ? "Active worktree" : "Has worktree"}
+                    {isActiveWorktree
+                      ? "Active worktree"
+                      : onSwitchToWorktree && matchedWorktree
+                        ? "Switch to worktree"
+                        : "Has worktree"}
                   </TooltipContent>
                 </Tooltip>
               </TooltipProvider>
