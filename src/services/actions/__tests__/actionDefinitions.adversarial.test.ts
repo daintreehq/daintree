@@ -219,6 +219,8 @@ function createCallbacks(overrides: Partial<ActionCallbacks> = {}): ActionCallba
     onOpenSettingsTab: vi.fn(),
     onToggleSidebar: vi.fn(),
     onToggleFocusMode: vi.fn(),
+    onFocusRegionNext: vi.fn(),
+    onFocusRegionPrev: vi.fn(),
     onOpenWorktreePalette: vi.fn(),
     onOpenQuickCreatePalette: vi.fn(),
     onToggleWorktreeOverview: vi.fn(),

@@ -10,6 +10,7 @@ import { ChordIndicator } from "./ChordIndicator";
 import { DemoCursor } from "../Demo";
 import { useDiagnosticsStore, useDockStore, type PanelState } from "@/store";
 import { useProjectStore } from "@/store/projectStore";
+import { useMacroFocusStore } from "@/store/macroFocusStore";
 import type { RetryAction } from "@/store";
 import { appClient } from "@/clients";
 import type { CliAvailability, AgentSettings } from "@shared/types";
@@ -238,6 +239,22 @@ export function AppLayout({
     const handleResetSidebarWidth = () => setSidebarWidth(DEFAULT_SIDEBAR_WIDTH);
     window.addEventListener("canopy:reset-sidebar-width", handleResetSidebarWidth);
     return () => window.removeEventListener("canopy:reset-sidebar-width", handleResetSidebarWidth);
+  }, []);
+
+  // Sync macro focus region visibility from layout state
+  useEffect(() => {
+    useMacroFocusStore.getState().setVisibility("sidebar", !layout.isFocusMode);
+  }, [layout.isFocusMode]);
+
+  useEffect(() => {
+    useMacroFocusStore.getState().setVisibility("sidecar", layout.sidecarOpen);
+  }, [layout.sidecarOpen]);
+
+  // Clear macro focus on mouse interaction
+  useEffect(() => {
+    const handleMouseDown = () => useMacroFocusStore.getState().clearFocus();
+    window.addEventListener("mousedown", handleMouseDown, { capture: true });
+    return () => window.removeEventListener("mousedown", handleMouseDown, { capture: true });
   }, []);
 
   useEffect(() => {
