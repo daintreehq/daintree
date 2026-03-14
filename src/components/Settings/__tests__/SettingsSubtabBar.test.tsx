@@ -173,8 +173,14 @@ describe("SettingsSubtabBar", () => {
     expect(onChange).toHaveBeenCalledWith("codex");
   });
 
-  describe("scroll overflow chevrons", () => {
-    it("does not render chevrons when content fits", () => {
+  describe("scroll overflow arrow buttons", () => {
+    it("always renders both arrow buttons", () => {
+      render(<SettingsSubtabBar subtabs={SUBTABS} activeId="claude" onChange={vi.fn()} />);
+      expect(screen.getByLabelText("Scroll tabs left")).toBeTruthy();
+      expect(screen.getByLabelText("Scroll tabs right")).toBeTruthy();
+    });
+
+    it("disables both arrows when content fits", () => {
       render(<SettingsSubtabBar subtabs={SUBTABS} activeId="claude" onChange={vi.fn()} />);
       const tablist = screen.getByRole("tablist");
 
@@ -183,11 +189,11 @@ describe("SettingsSubtabBar", () => {
         resizeObserverCallback([], {} as ResizeObserver);
       });
 
-      expect(screen.queryByLabelText("Scroll tabs left")).toBeNull();
-      expect(screen.queryByLabelText("Scroll tabs right")).toBeNull();
+      expect(screen.getByLabelText("Scroll tabs left").getAttribute("aria-disabled")).toBe("true");
+      expect(screen.getByLabelText("Scroll tabs right").getAttribute("aria-disabled")).toBe("true");
     });
 
-    it("renders right chevron when scrollable to the right", () => {
+    it("enables right arrow when scrollable to the right", () => {
       render(<SettingsSubtabBar subtabs={SUBTABS} activeId="claude" onChange={vi.fn()} />);
       const tablist = screen.getByRole("tablist");
 
@@ -196,11 +202,11 @@ describe("SettingsSubtabBar", () => {
         resizeObserverCallback([], {} as ResizeObserver);
       });
 
-      expect(screen.queryByLabelText("Scroll tabs right")).toBeTruthy();
-      expect(screen.queryByLabelText("Scroll tabs left")).toBeNull();
+      expect(screen.getByLabelText("Scroll tabs right").getAttribute("aria-disabled")).toBe("false");
+      expect(screen.getByLabelText("Scroll tabs left").getAttribute("aria-disabled")).toBe("true");
     });
 
-    it("renders left chevron when scrolled away from start", () => {
+    it("enables left arrow when scrolled away from start", () => {
       render(<SettingsSubtabBar subtabs={SUBTABS} activeId="claude" onChange={vi.fn()} />);
       const tablist = screen.getByRole("tablist");
 
@@ -209,11 +215,11 @@ describe("SettingsSubtabBar", () => {
         resizeObserverCallback([], {} as ResizeObserver);
       });
 
-      expect(screen.queryByLabelText("Scroll tabs left")).toBeTruthy();
-      expect(screen.queryByLabelText("Scroll tabs right")).toBeNull();
+      expect(screen.getByLabelText("Scroll tabs left").getAttribute("aria-disabled")).toBe("false");
+      expect(screen.getByLabelText("Scroll tabs right").getAttribute("aria-disabled")).toBe("true");
     });
 
-    it("renders both chevrons when scrolled to middle", () => {
+    it("enables both arrows when scrolled to middle", () => {
       render(<SettingsSubtabBar subtabs={SUBTABS} activeId="claude" onChange={vi.fn()} />);
       const tablist = screen.getByRole("tablist");
 
@@ -222,11 +228,11 @@ describe("SettingsSubtabBar", () => {
         resizeObserverCallback([], {} as ResizeObserver);
       });
 
-      expect(screen.queryByLabelText("Scroll tabs left")).toBeTruthy();
-      expect(screen.queryByLabelText("Scroll tabs right")).toBeTruthy();
+      expect(screen.getByLabelText("Scroll tabs left").getAttribute("aria-disabled")).toBe("false");
+      expect(screen.getByLabelText("Scroll tabs right").getAttribute("aria-disabled")).toBe("false");
     });
 
-    it("clicking right chevron calls scrollIntoView on first clipped tab", () => {
+    it("clicking right arrow calls scrollIntoView on first clipped tab", () => {
       render(<SettingsSubtabBar subtabs={SUBTABS} activeId="claude" onChange={vi.fn()} />);
       const tablist = screen.getByRole("tablist");
       const tabs = screen.getAllByRole("tab");
@@ -296,7 +302,7 @@ describe("SettingsSubtabBar", () => {
       });
     });
 
-    it("clicking left chevron calls scrollIntoView on last clipped-left tab", () => {
+    it("clicking left arrow calls scrollIntoView on last clipped-left tab", () => {
       render(<SettingsSubtabBar subtabs={SUBTABS} activeId="claude" onChange={vi.fn()} />);
       const tablist = screen.getByRole("tablist");
       const tabs = screen.getAllByRole("tab");
@@ -366,7 +372,27 @@ describe("SettingsSubtabBar", () => {
       });
     });
 
-    it("updates chevron visibility on scroll events", () => {
+    it("does not scroll when clicking disabled arrow", () => {
+      render(<SettingsSubtabBar subtabs={SUBTABS} activeId="claude" onChange={vi.fn()} />);
+      const tablist = screen.getByRole("tablist");
+      const tabs = screen.getAllByRole("tab");
+
+      act(() => {
+        setScrollGeometry(tablist, { scrollWidth: 300, clientWidth: 300, scrollLeft: 0 });
+        resizeObserverCallback([], {} as ResizeObserver);
+      });
+
+      const scrollIntoViewSpy = vi.fn();
+      tabs[0].scrollIntoView = scrollIntoViewSpy;
+      tabs[1].scrollIntoView = scrollIntoViewSpy;
+      tabs[2].scrollIntoView = scrollIntoViewSpy;
+
+      fireEvent.click(screen.getByLabelText("Scroll tabs left"));
+      fireEvent.click(screen.getByLabelText("Scroll tabs right"));
+      expect(scrollIntoViewSpy).not.toHaveBeenCalled();
+    });
+
+    it("updates arrow disabled state on scroll events", () => {
       render(<SettingsSubtabBar subtabs={SUBTABS} activeId="claude" onChange={vi.fn()} />);
       const tablist = screen.getByRole("tablist");
 
@@ -375,16 +401,16 @@ describe("SettingsSubtabBar", () => {
         resizeObserverCallback([], {} as ResizeObserver);
       });
 
-      expect(screen.queryByLabelText("Scroll tabs right")).toBeTruthy();
-      expect(screen.queryByLabelText("Scroll tabs left")).toBeNull();
+      expect(screen.getByLabelText("Scroll tabs right").getAttribute("aria-disabled")).toBe("false");
+      expect(screen.getByLabelText("Scroll tabs left").getAttribute("aria-disabled")).toBe("true");
 
       act(() => {
         setScrollGeometry(tablist, { scrollWidth: 500, clientWidth: 300, scrollLeft: 100 });
         fireEvent.scroll(tablist);
       });
 
-      expect(screen.queryByLabelText("Scroll tabs left")).toBeTruthy();
-      expect(screen.queryByLabelText("Scroll tabs right")).toBeTruthy();
+      expect(screen.getByLabelText("Scroll tabs left").getAttribute("aria-disabled")).toBe("false");
+      expect(screen.getByLabelText("Scroll tabs right").getAttribute("aria-disabled")).toBe("false");
     });
   });
 });
