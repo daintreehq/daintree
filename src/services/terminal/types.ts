@@ -71,6 +71,10 @@ export interface ManagedTerminal {
   directingTimer?: number;
   canonicalAgentState?: AgentState;
 
+  // Title-based state detection hysteresis (per-terminal)
+  titleReportTimer?: number;
+  pendingTitleState?: "working" | "waiting";
+
   // Input lock state (read-only monitor mode)
   isInputLocked?: boolean;
 
