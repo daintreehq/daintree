@@ -27,7 +27,7 @@ import {
 } from "@/store";
 import { useTerminalLogic } from "@/hooks/useTerminalLogic";
 import { errorsClient } from "@/clients";
-import type { AgentState } from "@/types";
+import type { AgentState, LegacyAgentType } from "@/types";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { actionService } from "@/services/ActionService";
 import { InputTracker } from "@/services/clearCommandDetection";
@@ -183,12 +183,13 @@ function TerminalPaneComponent({
   const isBackendRecovering = backendStatus === "recovering";
   const hybridInputEnabled = useTerminalInputStore((state) => state.hybridInputEnabled);
   const hybridInputAutoFocus = useTerminalInputStore((state) => state.hybridInputAutoFocus);
-  const effectiveAgentId =
+  const effectiveAgentId = (
     agentId && isRegisteredAgent(agentId)
       ? agentId
       : type && isRegisteredAgent(type)
         ? type
-        : undefined;
+        : undefined
+  ) as LegacyAgentType | undefined;
   const isAgentTerminal = effectiveAgentId !== undefined;
   const showHybridInputBar = isAgentTerminal && hybridInputEnabled;
 

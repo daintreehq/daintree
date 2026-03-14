@@ -267,7 +267,7 @@ export function AppLayout({
   }, []);
 
   const handleLaunchAgent = useCallback(
-    (type: "claude" | "gemini" | "codex" | "opencode" | "terminal" | "browser") => {
+    (type: string) => {
       onLaunchAgent?.(type);
     },
     [onLaunchAgent]

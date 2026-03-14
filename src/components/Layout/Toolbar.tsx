@@ -457,6 +457,18 @@ export function Toolbar({
         ),
         isAvailable: agentSettings?.agents?.opencode?.selected ?? true,
       },
+      cursor: {
+        render: () => (
+          <AgentButton
+            key="cursor"
+            type="cursor"
+            availability={agentAvailability?.cursor}
+            onOpenSettings={openAgentSettings}
+            data-toolbar-item=""
+          />
+        ),
+        isAvailable: agentSettings?.agents?.cursor?.selected ?? true,
+      },
       terminal: {
         render: () => (
           <TooltipProvider key="terminal">
