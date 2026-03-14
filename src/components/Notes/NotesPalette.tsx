@@ -214,9 +214,13 @@ export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
       }
     }
 
-    // No prior selection or cleared stale/empty note — select the first visible note
-    setSelectedNote(visibleNotes[0]);
-    setSelectedIndex(0);
+    // No prior selection or cleared stale/empty note — select the first non-empty visible note
+    const fallback = visibleNotes.find((n) => !(isDefaultTitle(n.title) && !n.preview));
+    if (fallback) {
+      const idx = visibleNotes.indexOf(fallback);
+      setSelectedNote(fallback);
+      setSelectedIndex(idx >= 0 ? idx : 0);
+    }
     hasRestoredRef.current = true;
   }, [isOpen, lastSelectedNoteId, visibleNotes, isLoading, isSearching, setLastSelectedNoteId]);
 
