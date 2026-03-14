@@ -103,13 +103,7 @@ export const useTerminalStore = create<PanelGridState>()((set, get, api) => {
       clearTerminalRestartGuard(id);
       get().clearQueue(id);
       get().handleTerminalRemoved(id, remainingTerminals, removedIndex);
-      // Clear draft input for the current project when terminal is removed
-      // Use dynamic import to avoid circular dependency with projectStore
-      void import("./projectStore").then(({ useProjectStore }) => {
-        const projectId = useProjectStore.getState().currentProject?.id;
-        useTerminalInputStore.getState().clearDraftInput(id, projectId);
-        useTerminalInputStore.getState().clearPendingDraft(id, projectId);
-      });
+      useTerminalInputStore.getState().clearTerminalState(id);
 
       // Auto-clear watch if panel is removed while watched
       get().unwatchPanel(id);
