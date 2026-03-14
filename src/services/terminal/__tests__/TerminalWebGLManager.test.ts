@@ -1,14 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { ManagedTerminal } from "../types";
 
-const mockDispose = vi.fn();
-const mockOnContextLoss = vi.fn(() => ({ dispose: vi.fn() }));
+const mockAddonDispose = vi.fn();
+const mockContextLossDispose = vi.fn();
+const mockOnContextLoss = vi.fn((_handler: () => void) => ({ dispose: mockContextLossDispose }));
 
 vi.mock("@xterm/addon-webgl", () => ({
-  WebglAddon: vi.fn().mockImplementation(() => ({
-    dispose: mockDispose,
-    onContextLoss: mockOnContextLoss,
-  })),
+  WebglAddon: vi.fn(),
 }));
 
 function makeManagedTerminal(overrides: Partial<ManagedTerminal> = {}): ManagedTerminal {
@@ -23,22 +21,27 @@ function makeManagedTerminal(overrides: Partial<ManagedTerminal> = {}): ManagedT
 
 describe("TerminalWebGLManager", () => {
   let manager: import("../TerminalWebGLManager").TerminalWebGLManager;
-  let WebglAddon: ReturnType<typeof vi.fn>;
+  let WebglAddonMock: ReturnType<typeof vi.fn>;
 
   beforeEach(async () => {
     vi.clearAllMocks();
+
+    const webglMod = await import("@xterm/addon-webgl");
+    WebglAddonMock = webglMod.WebglAddon as unknown as ReturnType<typeof vi.fn>;
+    WebglAddonMock.mockImplementation(() => ({
+      dispose: mockAddonDispose,
+      onContextLoss: mockOnContextLoss,
+    }));
+
     const mod = await import("../TerminalWebGLManager");
     manager = new mod.TerminalWebGLManager();
-    WebglAddon = (await import("@xterm/addon-webgl")).WebglAddon as unknown as ReturnType<
-      typeof vi.fn
-    >;
   });
 
   it("attaches WebGL addon to focused terminal", () => {
     const managed = makeManagedTerminal();
     manager.attachToFocused("t1", managed);
 
-    expect(WebglAddon).toHaveBeenCalledTimes(1);
+    expect(WebglAddonMock).toHaveBeenCalledTimes(1);
     expect(managed.terminal.loadAddon).toHaveBeenCalledTimes(1);
   });
 
@@ -46,7 +49,7 @@ describe("TerminalWebGLManager", () => {
     const managed = makeManagedTerminal({ isOpened: false });
     manager.attachToFocused("t1", managed);
 
-    expect(WebglAddon).not.toHaveBeenCalled();
+    expect(WebglAddonMock).not.toHaveBeenCalled();
   });
 
   it("is a no-op when already attached to the same terminal", () => {
@@ -54,7 +57,7 @@ describe("TerminalWebGLManager", () => {
     manager.attachToFocused("t1", managed);
     manager.attachToFocused("t1", managed);
 
-    expect(WebglAddon).toHaveBeenCalledTimes(1);
+    expect(WebglAddonMock).toHaveBeenCalledTimes(1);
   });
 
   it("disposes previous addon before attaching to a new terminal", () => {
@@ -62,11 +65,11 @@ describe("TerminalWebGLManager", () => {
     const managed2 = makeManagedTerminal();
 
     manager.attachToFocused("t1", managed1);
-    expect(WebglAddon).toHaveBeenCalledTimes(1);
+    expect(WebglAddonMock).toHaveBeenCalledTimes(1);
 
     manager.attachToFocused("t2", managed2);
-    expect(mockDispose).toHaveBeenCalledTimes(1);
-    expect(WebglAddon).toHaveBeenCalledTimes(2);
+    expect(mockAddonDispose).toHaveBeenCalledTimes(1);
+    expect(WebglAddonMock).toHaveBeenCalledTimes(2);
   });
 
   it("silently falls back when loadAddon throws", () => {
@@ -76,7 +79,7 @@ describe("TerminalWebGLManager", () => {
     });
 
     expect(() => manager.attachToFocused("t1", managed)).not.toThrow();
-    expect(WebglAddon).toHaveBeenCalledTimes(1);
+    expect(WebglAddonMock).toHaveBeenCalledTimes(1);
   });
 
   it("disposes addon on context loss", () => {
@@ -91,7 +94,7 @@ describe("TerminalWebGLManager", () => {
 
     expect(contextLossHandler).toBeDefined();
     contextLossHandler!();
-    expect(mockDispose).toHaveBeenCalled();
+    expect(mockAddonDispose).toHaveBeenCalled();
   });
 
   it("onTerminalDestroyed clears state for matching terminal", () => {
@@ -99,9 +102,8 @@ describe("TerminalWebGLManager", () => {
     manager.attachToFocused("t1", managed);
     manager.onTerminalDestroyed("t1");
 
-    // After destroy, attaching same id should create new addon (not skip)
     manager.attachToFocused("t1", managed);
-    expect(WebglAddon).toHaveBeenCalledTimes(2);
+    expect(WebglAddonMock).toHaveBeenCalledTimes(2);
   });
 
   it("onTerminalDestroyed is a no-op for non-matching terminal", () => {
@@ -109,9 +111,8 @@ describe("TerminalWebGLManager", () => {
     manager.attachToFocused("t1", managed);
     manager.onTerminalDestroyed("t2");
 
-    // Should still skip since t1 is still attached
     manager.attachToFocused("t1", managed);
-    expect(WebglAddon).toHaveBeenCalledTimes(1);
+    expect(WebglAddonMock).toHaveBeenCalledTimes(1);
   });
 
   it("dispose detaches current addon", () => {
@@ -119,7 +120,7 @@ describe("TerminalWebGLManager", () => {
     manager.attachToFocused("t1", managed);
     manager.dispose();
 
-    expect(mockDispose).toHaveBeenCalled();
+    expect(mockAddonDispose).toHaveBeenCalled();
   });
 
   it("detachCurrent is safe to call when no addon is attached", () => {
