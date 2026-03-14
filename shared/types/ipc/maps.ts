@@ -952,6 +952,10 @@ export interface IpcInvokeMap {
     args: [cwd: string];
     result: string | null;
   };
+  "git:get-working-diff": {
+    args: [payload: { cwd: string; type: "unstaged" | "staged" | "head" }];
+    result: string;
+  };
 
   // Sidecar channels
   "sidecar:create": {

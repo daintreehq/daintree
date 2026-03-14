@@ -23,8 +23,12 @@ import {
   formatAtFileToken,
   getAtFileContext,
   getSlashCommandContext,
+  getDiffContext,
+  getAllAtDiffTokens,
   type AtFileContext,
   type SlashCommandContext,
+  type AtDiffContext,
+  type DiffContextType,
 } from "./hybridInputParsing";
 import { CommandPickerHost } from "@/components/Commands";
 import { PromptHistoryPalette } from "./PromptHistoryPalette";
@@ -68,6 +72,8 @@ import {
   addUrlContextChip,
   updateUrlPasteStatus,
   removeUrlPasteEntry,
+  diffChipField,
+  createDiffChipTooltip,
 } from "./inputEditorExtensions";
 import { AttachmentTray } from "./AttachmentTray";
 import { normalizeChips, getContextWindow, type TrayItem } from "./attachmentTrayUtils";
@@ -127,13 +133,14 @@ interface LatestState {
   disabled: boolean;
   isInitializing: boolean;
   isInHistoryMode: boolean;
-  activeMode: "command" | "file" | null;
+  activeMode: "command" | "file" | "diff" | null;
   isAutocompleteOpen: boolean;
   autocompleteItems: AutocompleteItem[];
   selectedIndex: number;
   value: string;
   atContext: AtFileContext | null;
   slashContext: SlashCommandContext | null;
+  diffContext: AtDiffContext | null;
   onSend: HybridInputBarProps["onSend"];
   onSendKey?: HybridInputBarProps["onSendKey"];
   addToHistory: (terminalId: string, command: string) => void;
@@ -195,6 +202,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     const fileChipTooltipCompartmentRef = useRef(new Compartment());
     const imageChipTooltipCompartmentRef = useRef(new Compartment());
     const fileDropChipTooltipCompartmentRef = useRef(new Compartment());
+    const diffChipTooltipCompartmentRef = useRef(new Compartment());
     const autoSizeCompartmentRef = useRef(new Compartment());
     const [isExpanded, setIsExpanded] = useState(false);
     const modalEditorHostRef = useRef<HTMLDivElement | null>(null);
@@ -209,6 +217,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     const lastEmittedValueRef = useRef<string>(value);
     const [atContext, setAtContext] = useState<AtFileContext | null>(null);
     const [slashContext, setSlashContext] = useState<SlashCommandContext | null>(null);
+    const [diffContext, setDiffContext] = useState<AtDiffContext | null>(null);
     const [selectedIndex, setSelectedIndex] = useState(0);
     const lastQueryRef = useRef<string>("");
     const [menuLeftPx, setMenuLeftPx] = useState<number>(0);
@@ -489,6 +498,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       lastEmittedValueRef.current = draft;
       setAtContext(null);
       setSlashContext(null);
+      setDiffContext(null);
       setSelectedIndex(0);
       lastQueryRef.current = "";
       lastEnterKeydownNewlineRef.current = false;
@@ -512,7 +522,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       return agentName ? `Type a command for ${agentName}…` : "Type a command…";
     }, [agentId]);
 
-    const activeMode = slashContext ? "command" : atContext ? "file" : null;
+    const activeMode = slashContext ? "command" : diffContext ? "diff" : atContext ? "file" : null;
     const isAutocompleteOpen = activeMode !== null && !disabled;
 
     const { files: autocompleteFiles, isLoading: isAutocompleteLoading } = useFileAutocomplete({
@@ -535,7 +545,25 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       projectPath: cwd,
     });
 
+    const autocompleteDiffItems = useMemo((): AutocompleteItem[] => {
+      if (!diffContext) return [];
+      const items: AutocompleteItem[] = [
+        { key: "diff", label: "Working tree diff (@diff)", value: "@diff" },
+        { key: "diff:staged", label: "Staged diff (@diff:staged)", value: "@diff:staged" },
+        { key: "diff:head", label: "HEAD diff (@diff:head)", value: "@diff:head" },
+      ];
+      const partial =
+        diffContext.tokenEnd > diffContext.atStart + 1
+          ? value.slice(diffContext.atStart + 1, diffContext.tokenEnd)
+          : "";
+      if (!partial) return items;
+      return items.filter((item) => item.value.slice(1).startsWith(partial));
+    }, [diffContext, value]);
+
     const autocompleteItems = useMemo((): AutocompleteItem[] => {
+      if (activeMode === "diff") {
+        return autocompleteDiffItems;
+      }
       if (activeMode === "file") {
         return autocompleteFiles.map((file) => ({ key: file, label: file, value: file }));
       }
@@ -543,14 +571,14 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         return autocompleteCommands;
       }
       return [];
-    }, [activeMode, autocompleteCommands, autocompleteFiles]);
+    }, [activeMode, autocompleteDiffItems, autocompleteCommands, autocompleteFiles]);
 
     const isLoading =
       activeMode === "file"
         ? isAutocompleteLoading
         : activeMode === "command"
           ? isCommandsLoading
-          : false;
+          : false; // diff items are static, never loading
 
     latestRef.current = {
       terminalId,
@@ -565,6 +593,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       value,
       atContext,
       slashContext,
+      diffContext,
       onSend,
       onSendKey,
       addToHistory,
@@ -582,11 +611,13 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       if (!view || !shell) return;
 
       const anchorIndex =
-        activeMode === "file"
-          ? atContext?.atStart
-          : activeMode === "command"
-            ? (slashContext?.start ?? 0)
-            : null;
+        activeMode === "diff"
+          ? diffContext?.atStart
+          : activeMode === "file"
+            ? atContext?.atStart
+            : activeMode === "command"
+              ? (slashContext?.start ?? 0)
+              : null;
       if (anchorIndex === null || anchorIndex === undefined) return;
 
       const compute = () => {
@@ -616,21 +647,35 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         window.removeEventListener("resize", onResize);
         ro.disconnect();
       };
-    }, [activeMode, atContext?.atStart, isAutocompleteOpen, slashContext?.start]);
+    }, [
+      activeMode,
+      atContext?.atStart,
+      diffContext?.atStart,
+      isAutocompleteOpen,
+      slashContext?.start,
+    ]);
 
     useEffect(() => {
       const activeQuery =
-        activeMode === "file"
-          ? `file:${atContext?.queryForSearch ?? ""}`
-          : activeMode === "command"
-            ? `command:${slashContext?.query ?? ""}`
-            : "";
+        activeMode === "diff"
+          ? `diff:${diffContext?.atStart ?? ""}:${diffContext?.tokenEnd ?? ""}`
+          : activeMode === "file"
+            ? `file:${atContext?.queryForSearch ?? ""}`
+            : activeMode === "command"
+              ? `command:${slashContext?.query ?? ""}`
+              : "";
 
       if (activeQuery !== lastQueryRef.current) {
         lastQueryRef.current = activeQuery;
         setSelectedIndex(0);
       }
-    }, [activeMode, atContext?.queryForSearch, slashContext?.query]);
+    }, [
+      activeMode,
+      atContext?.queryForSearch,
+      diffContext?.atStart,
+      diffContext?.tokenEnd,
+      slashContext?.query,
+    ]);
 
     useEffect(() => {
       if (!isAutocompleteOpen) return;
@@ -643,6 +688,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         if (root.contains(target)) return;
         setAtContext(null);
         setSlashContext(null);
+        setDiffContext(null);
       };
 
       document.addEventListener("pointerdown", onPointerDown, true);
@@ -702,14 +748,51 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       []
     );
 
+    const isSendingRef = useRef(false);
+
     const sendText = useCallback(
-      (text: string) => {
+      async (text: string) => {
         const latest = latestRef.current;
         if (!latest || latest.disabled) return;
         if (text.trim().length === 0) return;
+        if (isSendingRef.current) return;
 
-        const payload = buildTerminalSendPayload(text);
-        latest.onSend({ data: payload.data, trackerData: payload.trackerData, text });
+        // Resolve @diff tokens before sending
+        const diffTokens = getAllAtDiffTokens(text);
+        let resolvedText = text;
+        if (diffTokens.length > 0) {
+          isSendingRef.current = true;
+          try {
+            // Process in reverse order to preserve positions
+            const sorted = [...diffTokens].sort((a, b) => b.start - a.start);
+            for (const token of sorted) {
+              let replacement: string;
+              try {
+                const raw = await window.electron.git.getWorkingDiff(cwd, token.diffType);
+                if (raw) {
+                  replacement = "```diff\n" + raw + "\n```";
+                } else {
+                  const labels: Record<DiffContextType, string> = {
+                    unstaged: "working tree",
+                    staged: "staged",
+                    head: "HEAD",
+                  };
+                  replacement = `No ${labels[token.diffType]} changes.`;
+                }
+              } catch (err) {
+                const msg = err instanceof Error ? err.message : String(err);
+                replacement = `[Error fetching diff: ${msg}]`;
+              }
+              resolvedText =
+                resolvedText.slice(0, token.start) + replacement + resolvedText.slice(token.end);
+            }
+          } finally {
+            isSendingRef.current = false;
+          }
+        }
+
+        const payload = buildTerminalSendPayload(resolvedText);
+        latest.onSend({ data: payload.data, trackerData: payload.trackerData, text: resolvedText });
         latest.addToHistory(latest.terminalId, text);
         latest.resetHistoryIndex(latest.terminalId);
         if (latest.projectId) {
@@ -722,8 +805,9 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         useVoiceRecordingStore.getState().clearAICorrectionSpans(latest.terminalId);
         setAtContext(null);
         setSlashContext(null);
+        setDiffContext(null);
       },
-      [applyEditorValue, agentId]
+      [applyEditorValue, agentId, cwd]
     );
 
     // Voice segments are flushed to the draft store by VoiceRecordingService
@@ -884,6 +968,38 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         const caret = view.state.selection.main.head;
         const slashCtx = getSlashCommandContext(currentValue, caret) ?? latest.slashContext;
 
+        if (latest.activeMode === "diff") {
+          const ctx = getDiffContext(currentValue, caret) ?? latest.diffContext;
+          if (!ctx) return;
+
+          const token = `${item.value} `;
+          const before = currentValue.slice(0, ctx.atStart);
+          const after = currentValue.slice(ctx.tokenEnd);
+          const nextValue = `${before}${token}${after}`;
+          const nextCaret = before.length + token.length;
+
+          if (action === "execute") {
+            sendText(nextValue);
+            setDiffContext(null);
+            setAtContext(null);
+            setSlashContext(null);
+            setSelectedIndex(0);
+            lastQueryRef.current = "";
+            return;
+          }
+
+          applyEditorValue(nextValue, {
+            selection: EditorSelection.create([EditorSelection.cursor(nextCaret)]),
+            focus: true,
+          });
+          setDiffContext(null);
+          setAtContext(null);
+          setSlashContext(null);
+          setSelectedIndex(0);
+          lastQueryRef.current = "";
+          return;
+        }
+
         if (latest.activeMode === "file") {
           const ctx = getAtFileContext(currentValue, caret);
           if (!ctx) return;
@@ -898,6 +1014,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
             sendText(nextValue);
             setAtContext(null);
             setSlashContext(null);
+            setDiffContext(null);
             setSelectedIndex(0);
             lastQueryRef.current = "";
             return;
@@ -909,6 +1026,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
           });
           setAtContext(null);
           setSlashContext(null);
+          setDiffContext(null);
           setSelectedIndex(0);
           lastQueryRef.current = "";
           return;
@@ -929,6 +1047,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
             sendText(nextValue);
             setAtContext(null);
             setSlashContext(null);
+            setDiffContext(null);
             setSelectedIndex(0);
             lastQueryRef.current = "";
             return;
@@ -940,6 +1059,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
           });
           setAtContext(null);
           setSlashContext(null);
+          setDiffContext(null);
           setSelectedIndex(0);
           lastQueryRef.current = "";
         }
@@ -997,6 +1117,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
 
     const lastSlashContextRef = useRef<SlashCommandContext | null>(null);
     const lastAtContextRef = useRef<AtFileContext | null>(null);
+    const lastDiffContextRef = useRef<AtDiffContext | null>(null);
 
     const editorUpdateListener = useMemo(
       () =>
@@ -1024,7 +1145,6 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
 
             const slash = getSlashCommandContext(text, caret);
             if (slash) {
-              // Only update if context actually changed
               const prev = lastSlashContextRef.current;
               if (
                 !prev ||
@@ -1039,11 +1159,44 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
                 lastAtContextRef.current = null;
                 setAtContext(null);
               }
+              if (lastDiffContextRef.current !== null) {
+                lastDiffContextRef.current = null;
+                setDiffContext(null);
+              }
               return;
             }
 
+            // Check diff context before file context so @diff is not treated as a file path
+            const diffCtx = getDiffContext(text, caret);
+            if (diffCtx) {
+              const prevDiff = lastDiffContextRef.current;
+              if (
+                !prevDiff ||
+                prevDiff.atStart !== diffCtx.atStart ||
+                prevDiff.tokenEnd !== diffCtx.tokenEnd ||
+                prevDiff.diffType !== diffCtx.diffType
+              ) {
+                lastDiffContextRef.current = diffCtx;
+                setDiffContext(diffCtx);
+              }
+              if (lastAtContextRef.current !== null) {
+                lastAtContextRef.current = null;
+                setAtContext(null);
+              }
+              if (lastSlashContextRef.current !== null) {
+                lastSlashContextRef.current = null;
+                setSlashContext(null);
+              }
+              return;
+            }
+
+            // Clear diff context if no longer active
+            if (lastDiffContextRef.current !== null) {
+              lastDiffContextRef.current = null;
+              setDiffContext(null);
+            }
+
             const atCtx = getAtFileContext(text, caret);
-            // Only update if context actually changed
             const prevAt = lastAtContextRef.current;
             if (
               (atCtx &&
@@ -1171,6 +1324,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
 
             setAtContext(null);
             setSlashContext(null);
+            setDiffContext(null);
             lastEnterKeydownNewlineRef.current = false;
             handledEnterRef.current = false;
             submitAfterCompositionRef.current = false;
@@ -1291,6 +1445,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
             if (latest.isAutocompleteOpen) {
               setAtContext(null);
               setSlashContext(null);
+              setDiffContext(null);
               return true;
             }
 
@@ -1463,6 +1618,8 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
           fileDropChipTooltipCompartmentRef.current.of(
             !disabled ? createFileDropChipTooltip() : []
           ),
+          diffChipField,
+          diffChipTooltipCompartmentRef.current.of(!disabled ? createDiffChipTooltip() : []),
           interimMarkField,
           pendingAIField,
           keymapCompartmentRef.current.of(keymapExtension),
@@ -1574,6 +1731,17 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       const view = editorViewRef.current;
       if (!view) return;
 
+      view.dispatch({
+        effects: diffChipTooltipCompartmentRef.current.reconfigure(
+          !disabled ? createDiffChipTooltip() : []
+        ),
+      });
+    }, [disabled]);
+
+    useEffect(() => {
+      const view = editorViewRef.current;
+      if (!view) return;
+
       const current = view.state.doc.toString();
       if (value === current) return;
 
@@ -1647,7 +1815,13 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
               isLoading={isLoading}
               onSelect={handleAutocompleteSelect}
               style={{ left: `${menuLeftPx}px` }}
-              ariaLabel={activeMode === "command" ? "Command autocomplete" : "File autocomplete"}
+              ariaLabel={
+                activeMode === "command"
+                  ? "Command autocomplete"
+                  : activeMode === "diff"
+                    ? "Diff autocomplete"
+                    : "File autocomplete"
+              }
             />
 
             {isDragOverFiles && (

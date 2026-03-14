@@ -1,3 +1,95 @@
+export type DiffContextType = "unstaged" | "staged" | "head";
+
+export interface AtDiffContext {
+  atStart: number;
+  tokenEnd: number;
+  diffType: DiffContextType | null;
+}
+
+const DIFF_TOKEN_MAP: Record<string, DiffContextType> = {
+  diff: "unstaged",
+  "diff:staged": "staged",
+  "diff:head": "head",
+};
+
+const DIFF_PREFIXES = [
+  "diff",
+  "diff:",
+  "diff:s",
+  "diff:st",
+  "diff:sta",
+  "diff:stag",
+  "diff:stage",
+  "diff:staged",
+  "diff:h",
+  "diff:he",
+  "diff:hea",
+  "diff:head",
+];
+
+export function getDiffContext(text: string, caret: number): AtDiffContext | null {
+  if (caret < 0 || caret > text.length) return null;
+  const beforeCaret = text.slice(0, caret);
+  const atStart = beforeCaret.lastIndexOf("@");
+  if (atStart === -1) return null;
+  if (atStart > 0 && !/\s/.test(beforeCaret[atStart - 1])) return null;
+
+  let tokenEnd = atStart + 1;
+  while (tokenEnd < text.length && !/\s/.test(text[tokenEnd])) {
+    tokenEnd++;
+  }
+
+  if (caret < atStart + 1 || caret > tokenEnd) return null;
+
+  const token = text.slice(atStart + 1, tokenEnd);
+
+  // Check if the partial text typed so far matches a diff prefix
+  const partial = text.slice(atStart + 1, caret);
+  if (!DIFF_PREFIXES.some((p) => p.startsWith(partial) || partial === p)) return null;
+
+  const diffType = DIFF_TOKEN_MAP[token] ?? null;
+  return { atStart, tokenEnd, diffType };
+}
+
+export interface AtDiffToken {
+  start: number;
+  end: number;
+  diffType: DiffContextType;
+}
+
+export function getAllAtDiffTokens(text: string): AtDiffToken[] {
+  const tokens: AtDiffToken[] = [];
+  let i = 0;
+
+  while (i < text.length) {
+    if (text[i] !== "@") {
+      i++;
+      continue;
+    }
+
+    if (i > 0 && !/\s/.test(text[i - 1])) {
+      i++;
+      continue;
+    }
+
+    const atStart = i;
+    i++;
+
+    const tokenStart = i;
+    while (i < text.length && !/\s/.test(text[i])) {
+      i++;
+    }
+
+    const token = text.slice(tokenStart, i);
+    const diffType = DIFF_TOKEN_MAP[token];
+    if (diffType) {
+      tokens.push({ start: atStart, end: i, diffType });
+    }
+  }
+
+  return tokens;
+}
+
 export interface AtFileContext {
   atStart: number;
   tokenEnd: number;

@@ -400,6 +400,7 @@ const CHANNELS = {
   GIT_GET_STAGING_STATUS: "git:get-staging-status",
   GIT_COMPARE_WORKTREES: "git:compare-worktrees",
   GIT_GET_USERNAME: "git:get-username",
+  GIT_GET_WORKING_DIFF: "git:get-working-diff",
 
   // Sidecar channels
   SIDECAR_CREATE: "sidecar:create",
@@ -1355,6 +1356,9 @@ const api: ElectronAPI = {
       }),
 
     getUsername: (cwd: string) => _typedInvoke(CHANNELS.GIT_GET_USERNAME, cwd),
+
+    getWorkingDiff: (cwd: string, type: "unstaged" | "staged" | "head") =>
+      _typedInvoke(CHANNELS.GIT_GET_WORKING_DIFF, { cwd, type }),
   },
 
   // Terminal Config API

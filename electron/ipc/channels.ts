@@ -230,6 +230,7 @@ export const CHANNELS = {
   GIT_GET_STAGING_STATUS: "git:get-staging-status",
   GIT_COMPARE_WORKTREES: "git:compare-worktrees",
   GIT_GET_USERNAME: "git:get-username",
+  GIT_GET_WORKING_DIFF: "git:get-working-diff",
 
   SIDECAR_CREATE: "sidecar:create",
   SIDECAR_SHOW: "sidecar:show",
