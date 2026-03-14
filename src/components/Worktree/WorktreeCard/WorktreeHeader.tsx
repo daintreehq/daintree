@@ -51,6 +51,7 @@ interface IssueBadgeProps {
   worktreePath: string;
   onOpen?: () => void;
   isHeadline?: boolean;
+  isActive?: boolean;
 }
 
 const IssueBadge = memo(function IssueBadge({
@@ -59,6 +60,7 @@ const IssueBadge = memo(function IssueBadge({
   worktreePath,
   onOpen,
   isHeadline,
+  isActive,
 }: IssueBadgeProps) {
   const [isOpen, setIsOpen] = useState(false);
   const { data, loading, error, fetchTooltip, reset } = useIssueTooltip(worktreePath, issueNumber);
@@ -102,7 +104,11 @@ const IssueBadge = memo(function IssueBadge({
             <span
               className={cn(
                 "truncate flex-1 min-w-0",
-                isHeadline ? "text-white font-medium" : "text-canopy-text/90"
+                isHeadline
+                  ? isActive
+                    ? "text-white/95 font-medium"
+                    : "text-canopy-text/60 font-medium"
+                  : "text-canopy-text/90"
               )}
             >
               {issueTitle || <span className="text-github-open font-mono">#{issueNumber}</span>}
@@ -354,6 +360,7 @@ export function WorktreeHeader({
               worktreePath={worktree.path}
               onOpen={badges.onOpenIssue}
               isHeadline
+              isActive={isActive}
             />
           ) : (
             <BranchLabel

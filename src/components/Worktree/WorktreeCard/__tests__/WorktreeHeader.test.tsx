@@ -130,6 +130,38 @@ describe("WorktreeHeader issue title headline", () => {
     expect(screen.getByText("Add terminal recipe editor coverage")).toBeDefined();
   });
 
+  it("applies active text styling to issue headline when isActive", () => {
+    const { container } = renderHeader({
+      worktree: {
+        ...baseWorktree,
+        issueNumber: 2907,
+        issueTitle: "Add terminal recipe editor coverage",
+      },
+      isActive: true,
+      badges: { onOpenIssue: noop },
+    });
+
+    const titleSpan = container.querySelector('button[aria-label*="Open issue"] .truncate');
+    expect(titleSpan).toBeDefined();
+    expect(titleSpan!.className).toContain("text-white/95");
+  });
+
+  it("applies inactive text styling to issue headline when not active", () => {
+    const { container } = renderHeader({
+      worktree: {
+        ...baseWorktree,
+        issueNumber: 2907,
+        issueTitle: "Add terminal recipe editor coverage",
+      },
+      isActive: false,
+      badges: { onOpenIssue: noop },
+    });
+
+    const titleSpan = container.querySelector('button[aria-label*="Open issue"] .truncate');
+    expect(titleSpan).toBeDefined();
+    expect(titleSpan!.className).toContain("text-canopy-text/60");
+  });
+
   it("uses branch name as primary headline when no issueTitle", () => {
     renderHeader({
       worktree: { ...baseWorktree, issueNumber: undefined, issueTitle: undefined },
