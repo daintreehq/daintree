@@ -191,29 +191,37 @@ export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
 
   // Restore last selected note after notes are loaded and search results are ready
   useEffect(() => {
-    if (!isOpen || !lastSelectedNoteId || isLoading || isSearching || hasRestoredRef.current)
-      return;
+    if (!isOpen || isLoading || isSearching || hasRestoredRef.current) return;
+    if (visibleNotes.length === 0) return;
 
-    // Find the note in visible notes (not just notes list) for correct index
-    const noteToRestore = visibleNotes.find((n) => n.id === lastSelectedNoteId);
-    if (noteToRestore) {
-      // Check if it's an auto-deleteable empty note (shouldn't restore these)
-      if (isDefaultTitle(noteToRestore.title) && !noteToRestore.preview) {
-        // Clear the lastSelectedNoteId since this note would be auto-deleted anyway
-        setLastSelectedNoteId(null);
-        hasRestoredRef.current = true;
+    if (lastSelectedNoteId) {
+      // Find the note in visible notes (not just notes list) for correct index
+      const noteToRestore = visibleNotes.find((n) => n.id === lastSelectedNoteId);
+      if (noteToRestore) {
+        // Check if it's an auto-deleteable empty note (shouldn't restore these)
+        if (isDefaultTitle(noteToRestore.title) && !noteToRestore.preview) {
+          setLastSelectedNoteId(null);
+        } else {
+          const index = visibleNotes.indexOf(noteToRestore);
+          setSelectedNote(noteToRestore);
+          setSelectedIndex(index >= 0 ? index : 0);
+          hasRestoredRef.current = true;
+          return;
+        }
       } else {
-        const index = visibleNotes.indexOf(noteToRestore);
-        setSelectedNote(noteToRestore);
-        setSelectedIndex(index >= 0 ? index : 0);
-        hasRestoredRef.current = true;
+        // Note not found in visible notes - clear the stale ID
+        setLastSelectedNoteId(null);
       }
-    } else if (visibleNotes.length > 0) {
-      // Note not found in visible notes - clear the stale ID
-      setLastSelectedNoteId(null);
-      hasRestoredRef.current = true;
     }
-    // Don't mark as restored if visible notes are empty - wait for them to load
+
+    // No prior selection or cleared stale/empty note — select the first non-empty visible note
+    const fallback = visibleNotes.find((n) => !(isDefaultTitle(n.title) && !n.preview));
+    if (fallback) {
+      const idx = visibleNotes.indexOf(fallback);
+      setSelectedNote(fallback);
+      setSelectedIndex(idx >= 0 ? idx : 0);
+    }
+    hasRestoredRef.current = true;
   }, [isOpen, lastSelectedNoteId, visibleNotes, isLoading, isSearching, setLastSelectedNoteId]);
 
   // Listen for note updates from other components (e.g., NotesPane)
@@ -833,7 +841,7 @@ export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
     <>
       {createPortal(
         <div
-          className="fixed inset-0 z-[var(--z-modal)] flex items-center justify-center bg-black/40 backdrop-blur-sm backdrop-saturate-[1.25]"
+          className="fixed inset-0 z-[var(--z-modal)] flex items-center justify-center bg-black/40 backdrop-blur-xs backdrop-saturate-[1.25] motion-safe:animate-in motion-safe:fade-in motion-safe:duration-150"
           onClick={handleBackdropClick}
           role="dialog"
           aria-modal="true"
@@ -843,14 +851,14 @@ export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
           <div
             ref={dialogRef}
             className={cn(
-              "w-full max-w-3xl mx-4 bg-canopy-bg border border-[var(--border-overlay)] rounded-[var(--radius-xl)] shadow-modal overflow-hidden",
-              "animate-in fade-in slide-in-from-top-4 duration-150",
+              "w-full max-w-2xl mx-4 bg-canopy-bg border border-[var(--border-overlay)] rounded-[var(--radius-xl)] shadow-modal overflow-hidden",
+              "motion-safe:animate-in motion-safe:fade-in motion-safe:zoom-in-95 motion-safe:duration-200",
               "flex flex-col h-[80vh] max-h-[900px]"
             )}
             onClick={(e) => e.stopPropagation()}
           >
             {/* Header */}
-            <div className="px-3 py-2 border-b border-canopy-border flex items-center justify-between shrink-0">
+            <div className="px-3 py-1.5 border-b border-canopy-border flex items-center justify-between shrink-0">
               <div className="flex items-center gap-3">
                 <span className="text-[11px] text-canopy-text/50">Notes</span>
                 <span className="text-[11px] text-canopy-text/50 font-mono">
@@ -1087,7 +1095,7 @@ export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
                 {selectedNote ? (
                   <>
                     {/* Note header */}
-                    <div className="px-3 h-10 border-b border-canopy-border flex items-center justify-between shrink-0 bg-overlay-subtle">
+                    <div className="px-3 h-9 border-b border-canopy-border flex items-center justify-between shrink-0 bg-overlay-subtle">
                       <TooltipProvider>
                         <Tooltip open={isEditingHeaderTitle ? false : undefined}>
                           <TooltipTrigger asChild>
