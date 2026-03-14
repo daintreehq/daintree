@@ -98,9 +98,6 @@ export interface AtTerminalContext {
 }
 
 const TERMINAL_PREFIXES = [
-  "t",
-  "te",
-  "ter",
   "term",
   "termi",
   "termin",
@@ -173,9 +170,6 @@ export interface AtSelectionContext {
 }
 
 const SELECTION_PREFIXES = [
-  "s",
-  "se",
-  "sel",
   "sele",
   "selec",
   "select",
