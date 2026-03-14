@@ -632,6 +632,7 @@ export interface ElectronAPI {
       useMergeBase?: boolean
     ): Promise<import("./git.js").CrossWorktreeDiffResult | string>;
     getUsername(cwd: string): Promise<string | null>;
+    getWorkingDiff(cwd: string, type: "unstaged" | "staged" | "head"): Promise<string>;
   };
   terminalConfig: {
     get(): Promise<TerminalConfig>;

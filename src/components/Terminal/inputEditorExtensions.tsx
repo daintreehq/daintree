@@ -13,8 +13,11 @@ import type { SlashCommand } from "@shared/types";
 import {
   getAllSlashCommandTokens,
   getAllAtFileTokens,
+  getAllAtDiffTokens,
   type AtFileToken,
+  type AtDiffToken,
   type SlashCommandToken,
+  type DiffContextType,
 } from "./hybridInputParsing";
 
 const MAX_TEXTAREA_HEIGHT_PX = 160;
@@ -120,6 +123,24 @@ export const inputTheme = EditorView.theme(
       borderRadius: "3px",
     },
     ".cm-file-drop-chip svg": {
+      height: "14px",
+      width: "14px",
+      flexShrink: "0",
+    },
+    ".cm-diff-chip": {
+      display: "inline-flex",
+      alignItems: "center",
+      height: "20px",
+      verticalAlign: "bottom",
+      whiteSpace: "nowrap",
+      gap: "4px",
+      padding: "0 5px",
+      color: "var(--theme-accent-primary)",
+      fontWeight: 600,
+      background: "color-mix(in oklab, var(--theme-syntax-chip) 10%, transparent)",
+      borderRadius: "3px",
+    },
+    ".cm-diff-chip svg": {
       height: "14px",
       width: "14px",
       flexShrink: "0",
@@ -351,8 +372,10 @@ interface FileChipState {
   tokens: AtFileToken[];
 }
 
+const DIFF_TOKEN_PATHS = new Set(["diff", "diff:staged", "diff:head"]);
+
 function buildFileChipState(text: string): FileChipState {
-  const tokens = getAllAtFileTokens(text);
+  const tokens = getAllAtFileTokens(text).filter((t) => !DIFF_TOKEN_PATHS.has(t.path));
   if (tokens.length === 0) {
     return { decorations: Decoration.none, tokens: [] };
   }
@@ -941,6 +964,121 @@ export function createFilePasteHandler(
       onFilePaste(view, files);
       return true;
     },
+  });
+}
+
+// --- Diff context chip (replace widget showing git-branch icon + diff label) ---
+
+const DIFF_LABELS: Record<DiffContextType, string> = {
+  unstaged: "Working tree diff",
+  staged: "Staged diff",
+  head: "HEAD diff",
+};
+
+const GIT_BRANCH_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="6" x2="6" y1="3" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg>`;
+
+interface DiffChipState {
+  decorations: ReturnType<typeof Decoration.set>;
+  tokens: AtDiffToken[];
+}
+
+function buildDiffChipState(text: string): DiffChipState {
+  const tokens = getAllAtDiffTokens(text);
+  if (tokens.length === 0) {
+    return { decorations: Decoration.none, tokens: [] };
+  }
+
+  const decorations = tokens.map((token) =>
+    Decoration.replace({
+      widget: new DiffChipWidget(token.diffType),
+    }).range(token.start, token.end)
+  );
+  return { decorations: Decoration.set(decorations), tokens };
+}
+
+class DiffChipWidget extends WidgetType {
+  constructor(readonly diffType: DiffContextType) {
+    super();
+  }
+
+  eq(other: DiffChipWidget) {
+    return this.diffType === other.diffType;
+  }
+
+  toDOM() {
+    const span = document.createElement("span");
+    span.className = "cm-diff-chip";
+    span.setAttribute("role", "img");
+    span.setAttribute("aria-label", `Diff: ${DIFF_LABELS[this.diffType]}`);
+
+    const icon = document.createElement("span");
+    icon.innerHTML = GIT_BRANCH_ICON_SVG;
+    icon.style.display = "inline-flex";
+    icon.style.alignItems = "center";
+    span.appendChild(icon);
+
+    const label = document.createElement("span");
+    label.setAttribute("aria-hidden", "true");
+    label.textContent = DIFF_LABELS[this.diffType];
+    span.appendChild(label);
+
+    return span;
+  }
+
+  ignoreEvent() {
+    return false;
+  }
+}
+
+export const diffChipField = StateField.define<DiffChipState>({
+  create(state) {
+    return buildDiffChipState(state.doc.toString());
+  },
+  update(value, tr) {
+    if (!tr.docChanged) return value;
+    return buildDiffChipState(tr.state.doc.toString());
+  },
+  provide: (f) => [
+    EditorView.decorations.from(f, (state) => state.decorations),
+    EditorView.atomicRanges.of((view) => {
+      const chipState = view.state.field(f, false);
+      if (!chipState || chipState.tokens.length === 0) return Decoration.none;
+      const ranges = chipState.tokens.map((t) => Decoration.mark({}).range(t.start, t.end));
+      return Decoration.set(ranges, true);
+    }),
+  ],
+});
+
+export function createDiffChipTooltip() {
+  return hoverTooltip((view, pos) => {
+    const chipState = view.state.field(diffChipField, false);
+    if (!chipState) return null;
+
+    const token = chipState.tokens.find((t) => pos >= t.start && pos < t.end);
+    if (!token) return null;
+
+    return {
+      pos: token.start,
+      end: token.end,
+      above: true,
+      create() {
+        const dom = document.createElement("div");
+        dom.className = "px-2 py-1 text-xs";
+        dom.style.cssText = `
+          background: color-mix(in oklab, var(--theme-surface-canvas) 95%, transparent);
+          border-radius: 4px;
+          border: 1px solid var(--theme-border-subtle);
+          box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+        `;
+
+        const desc = document.createElement("p");
+        desc.className = "text-[11px] text-text-primary/80 leading-snug";
+        desc.textContent = `Attaches ${DIFF_LABELS[token.diffType].toLowerCase()} as context`;
+        dom.appendChild(desc);
+
+        return { dom };
+      },
+    };
   });
 }
 

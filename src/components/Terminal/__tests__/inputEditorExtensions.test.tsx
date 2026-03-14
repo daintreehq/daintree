@@ -8,6 +8,7 @@ import {
   computeAutoSize,
   createAutoSize,
   createCustomKeymap,
+  createFileChipField,
   fileDropChipField,
   addFileDropChip,
   createFilePasteHandler,
@@ -15,6 +16,7 @@ import {
   setInterimRange,
   pendingAIField,
   setPendingAIRanges,
+  diffChipField,
 } from "../inputEditorExtensions";
 
 describe("computeAutoSize", () => {
@@ -1091,5 +1093,94 @@ describe("voice decoration phase integration", () => {
     expect(view.state.field(interimMarkField).iter().value).toBeNull();
     expect(view.state.field(pendingAIField).iter().value).toBeNull();
     view.destroy();
+  });
+});
+
+describe("diffChipField", () => {
+  it("creates decorations for @diff tokens", () => {
+    const state = EditorState.create({
+      doc: "check @diff please",
+      extensions: [diffChipField],
+    });
+    const chipState = state.field(diffChipField);
+    expect(chipState.tokens).toHaveLength(1);
+    expect(chipState.tokens[0].diffType).toBe("unstaged");
+    expect(chipState.tokens[0].start).toBe(6);
+    expect(chipState.tokens[0].end).toBe(11);
+  });
+
+  it("creates decorations for @diff:staged tokens", () => {
+    const state = EditorState.create({
+      doc: "@diff:staged",
+      extensions: [diffChipField],
+    });
+    const chipState = state.field(diffChipField);
+    expect(chipState.tokens).toHaveLength(1);
+    expect(chipState.tokens[0].diffType).toBe("staged");
+  });
+
+  it("creates decorations for @diff:head tokens", () => {
+    const state = EditorState.create({
+      doc: "@diff:head",
+      extensions: [diffChipField],
+    });
+    const chipState = state.field(diffChipField);
+    expect(chipState.tokens).toHaveLength(1);
+    expect(chipState.tokens[0].diffType).toBe("head");
+  });
+
+  it("finds multiple diff tokens", () => {
+    const state = EditorState.create({
+      doc: "@diff and @diff:staged and @diff:head",
+      extensions: [diffChipField],
+    });
+    const chipState = state.field(diffChipField);
+    expect(chipState.tokens).toHaveLength(3);
+  });
+
+  it("returns empty for text without diff tokens", () => {
+    const state = EditorState.create({
+      doc: "just plain text",
+      extensions: [diffChipField],
+    });
+    const chipState = state.field(diffChipField);
+    expect(chipState.tokens).toHaveLength(0);
+  });
+
+  it("updates when document changes", () => {
+    const state = EditorState.create({
+      doc: "@diff",
+      extensions: [diffChipField],
+    });
+    expect(state.field(diffChipField).tokens).toHaveLength(1);
+
+    const tr = state.update({
+      changes: { from: 0, to: 5, insert: "hello" },
+    });
+    expect(tr.state.field(diffChipField).tokens).toHaveLength(0);
+  });
+});
+
+describe("fileChipField excludes diff tokens", () => {
+  it("does not treat @diff as a file token", () => {
+    const fileChipStateField = createFileChipField();
+    const state = EditorState.create({
+      doc: "@diff @src/file.ts",
+      extensions: [fileChipStateField],
+    });
+    const chipState = state.field(fileChipStateField);
+    expect(chipState.tokens).toHaveLength(1);
+    expect(chipState.tokens[0].path).toBe("src/file.ts");
+  });
+
+  it("does not treat @diff:staged or @diff:head as file tokens", () => {
+    const fileChipStateField = createFileChipField();
+    const state = EditorState.create({
+      doc: "@diff:staged @diff:head @src/App.tsx",
+      extensions: [fileChipStateField],
+    });
+    const chipState = state.field(fileChipStateField);
+    expect(chipState.tokens).toHaveLength(1);
+    expect(chipState.tokens[0].path).toBe("src/App.tsx");
   });
 });

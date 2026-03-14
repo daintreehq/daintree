@@ -278,5 +278,49 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
   ipcMain.handle(CHANNELS.GIT_GET_STAGING_STATUS, handleGetStagingStatus);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.GIT_GET_STAGING_STATUS));
 
+  const DIFF_LINE_LIMIT = 500;
+
+  const handleGetWorkingDiff = async (
+    _event: Electron.IpcMainInvokeEvent,
+    payload: { cwd: string; type: "unstaged" | "staged" | "head" }
+  ): Promise<string> => {
+    checkRateLimit(CHANNELS.GIT_GET_WORKING_DIFF, 20, 10_000);
+    validateCwd(payload?.cwd);
+    const diffType = payload?.type;
+    if (diffType !== "unstaged" && diffType !== "staged" && diffType !== "head") {
+      throw new Error("Invalid diff type: must be 'unstaged', 'staged', or 'head'");
+    }
+
+    const { simpleGit } = await import("simple-git");
+    const git = simpleGit(payload.cwd);
+
+    let raw: string;
+    switch (diffType) {
+      case "unstaged":
+        raw = await git.diff();
+        break;
+      case "staged":
+        raw = await git.diff(["--cached"]);
+        break;
+      case "head":
+        raw = await git.diff(["HEAD"]);
+        break;
+    }
+
+    if (!raw) return "";
+
+    const lines = raw.split("\n");
+    if (lines.length > DIFF_LINE_LIMIT) {
+      return (
+        lines.slice(0, DIFF_LINE_LIMIT).join("\n") +
+        `\n[Diff truncated — showing first ${DIFF_LINE_LIMIT} of ${lines.length} lines]`
+      );
+    }
+
+    return raw;
+  };
+  ipcMain.handle(CHANNELS.GIT_GET_WORKING_DIFF, handleGetWorkingDiff);
+  handlers.push(() => ipcMain.removeHandler(CHANNELS.GIT_GET_WORKING_DIFF));
+
   return () => handlers.forEach((cleanup) => cleanup());
 }
