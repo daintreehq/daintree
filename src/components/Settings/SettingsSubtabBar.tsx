@@ -92,30 +92,28 @@ export function SettingsSubtabBar({ subtabs, activeId, onChange }: SettingsSubta
   if (subtabs.length === 0) return null;
 
   return (
-    <div className="relative mb-6">
-      {canScrollLeft && (
-        <div className="absolute left-0 top-1/2 -translate-y-1/2 z-10 pointer-events-none bg-gradient-to-r from-canopy-bg via-canopy-bg/90 to-transparent pr-4 rounded-l-[var(--radius-lg)]">
-          <button
-            type="button"
-            onClick={handleScrollLeft}
-            className={cn(
-              "pointer-events-auto p-1.5 text-canopy-text/60 hover:text-canopy-text",
-              "rounded-[var(--radius-md)] transition-colors",
-              "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent"
-            )}
-            aria-label="Scroll tabs left"
-          >
-            <ChevronLeft className="w-4 h-4" />
-          </button>
-        </div>
-      )}
+    <div className="flex items-center gap-1 mb-6">
+      <button
+        type="button"
+        aria-disabled={!canScrollLeft}
+        onClick={() => canScrollLeft && handleScrollLeft()}
+        className={cn(
+          "flex-shrink-0 p-1.5 text-canopy-text/60 rounded-[var(--radius-md)] transition-colors",
+          "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent",
+          "aria-disabled:opacity-40 aria-disabled:cursor-not-allowed",
+          "hover:not-aria-disabled:text-canopy-text hover:not-aria-disabled:bg-white/5"
+        )}
+        aria-label="Scroll tabs left"
+      >
+        <ChevronLeft className="w-4 h-4" />
+      </button>
 
       <div
         ref={scrollContainerRef}
         role="tablist"
         aria-label="Subtab navigation"
         onKeyDown={handleKeyDown}
-        className="flex gap-1.5 p-1.5 bg-canopy-bg rounded-[var(--radius-lg)] border border-canopy-border overflow-x-auto no-scrollbar scroll-smooth"
+        className="flex-1 min-w-0 flex gap-1.5 p-1.5 bg-canopy-bg rounded-[var(--radius-lg)] border border-canopy-border overflow-x-auto no-scrollbar scroll-smooth"
       >
         {subtabs.map((subtab) => {
           const isActive = subtab.id === activeId;
@@ -146,22 +144,20 @@ export function SettingsSubtabBar({ subtabs, activeId, onChange }: SettingsSubta
         })}
       </div>
 
-      {canScrollRight && (
-        <div className="absolute right-0 top-1/2 -translate-y-1/2 z-10 pointer-events-none bg-gradient-to-l from-canopy-bg via-canopy-bg/90 to-transparent pl-4 rounded-r-[var(--radius-lg)]">
-          <button
-            type="button"
-            onClick={handleScrollRight}
-            className={cn(
-              "pointer-events-auto p-1.5 text-canopy-text/60 hover:text-canopy-text",
-              "rounded-[var(--radius-md)] transition-colors",
-              "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent"
-            )}
-            aria-label="Scroll tabs right"
-          >
-            <ChevronRight className="w-4 h-4" />
-          </button>
-        </div>
-      )}
+      <button
+        type="button"
+        aria-disabled={!canScrollRight}
+        onClick={() => canScrollRight && handleScrollRight()}
+        className={cn(
+          "flex-shrink-0 p-1.5 text-canopy-text/60 rounded-[var(--radius-md)] transition-colors",
+          "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent",
+          "aria-disabled:opacity-40 aria-disabled:cursor-not-allowed",
+          "hover:not-aria-disabled:text-canopy-text hover:not-aria-disabled:bg-white/5"
+        )}
+        aria-label="Scroll tabs right"
+      >
+        <ChevronRight className="w-4 h-4" />
+      </button>
     </div>
   );
 }
