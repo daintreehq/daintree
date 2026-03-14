@@ -60,6 +60,28 @@ export function registerWorkflowHandlers(deps: HandlerDependencies): () => void 
     })
   );
 
+  handlers.push(
+    typedHandle(CHANNELS.WORKFLOW_LIST_PENDING_APPROVALS, async () => {
+      const engine = getWorkflowEngine();
+      if (!engine) return [];
+      return engine.listPendingApprovals();
+    })
+  );
+
+  handlers.push(
+    typedHandle(CHANNELS.WORKFLOW_RESOLVE_APPROVAL, async (payload) => {
+      const engine = requireEngine();
+      if (!payload || typeof payload !== "object") throw new Error("Invalid payload");
+      if (!payload.runId || !payload.nodeId) throw new Error("Missing runId or nodeId");
+      await engine.resolveApproval(
+        payload.runId,
+        payload.nodeId,
+        payload.approved,
+        payload.feedback
+      );
+    })
+  );
+
   if (deps.events) {
     const unsubStarted = deps.events.on("workflow:started", (payload) => {
       typedSend(deps.mainWindow, CHANNELS.WORKFLOW_STARTED, payload);
@@ -75,6 +97,16 @@ export function registerWorkflowHandlers(deps: HandlerDependencies): () => void 
       typedSend(deps.mainWindow, CHANNELS.WORKFLOW_FAILED, payload);
     });
     handlers.push(unsubFailed);
+
+    const unsubApprovalRequested = deps.events.on("workflow:approval-requested", (payload) => {
+      typedSend(deps.mainWindow, CHANNELS.WORKFLOW_APPROVAL_REQUESTED, payload);
+    });
+    handlers.push(unsubApprovalRequested);
+
+    const unsubApprovalCleared = deps.events.on("workflow:approval-cleared", (payload) => {
+      typedSend(deps.mainWindow, CHANNELS.WORKFLOW_APPROVAL_CLEARED, payload);
+    });
+    handlers.push(unsubApprovalCleared);
   }
 
   return () => {

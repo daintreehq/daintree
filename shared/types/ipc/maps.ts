@@ -1181,6 +1181,16 @@ export interface IpcInvokeMap {
     result: import("./api.js").WorkflowRunIpc[];
   };
 
+  // Workflow approval channels
+  "workflow:list-pending-approvals": {
+    args: [];
+    result: import("../workflowRun.js").PendingWorkflowApproval[];
+  };
+  "workflow:resolve-approval": {
+    args: [payload: { runId: string; nodeId: string; approved: boolean; feedback?: string }];
+    result: void;
+  };
+
   // Dev Preview channels
   "dev-preview:ensure": {
     args: [request: DevPreviewEnsureRequest];
@@ -1648,6 +1658,23 @@ export interface IpcEventMap {
   "workflow:started": import("./api.js").WorkflowStartedPayload;
   "workflow:completed": import("./api.js").WorkflowCompletedPayload;
   "workflow:failed": import("./api.js").WorkflowFailedPayload;
+  "workflow:approval-requested": {
+    runId: string;
+    nodeId: string;
+    workflowId: string;
+    workflowName: string;
+    prompt: string;
+    requestedAt: number;
+    timeoutMs?: number;
+    timeoutAt?: number;
+    timestamp: number;
+  };
+  "workflow:approval-cleared": {
+    runId: string;
+    nodeId: string;
+    reason: string;
+    timestamp: number;
+  };
 
   // Webview console events
   "webview:console-message": import("./webviewConsole.js").SerializedConsoleRow;

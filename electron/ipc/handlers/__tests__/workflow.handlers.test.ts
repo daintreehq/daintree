@@ -99,39 +99,43 @@ describe("registerWorkflowHandlers", () => {
     return handler;
   }
 
-  it("registers all 5 invoke handlers", () => {
+  it("registers all 7 invoke handlers", () => {
     registerWorkflowHandlers(deps);
 
-    expect(mockIpcMainHandle).toHaveBeenCalledTimes(5);
+    expect(mockIpcMainHandle).toHaveBeenCalledTimes(7);
     const channels = mockIpcMainHandle.mock.calls.map((c: unknown[]) => c[0]);
     expect(channels).toContain("workflow:list");
     expect(channels).toContain("workflow:start");
     expect(channels).toContain("workflow:cancel");
     expect(channels).toContain("workflow:get-run");
     expect(channels).toContain("workflow:list-runs");
+    expect(channels).toContain("workflow:list-pending-approvals");
+    expect(channels).toContain("workflow:resolve-approval");
   });
 
-  it("subscribes to 3 event bus events", () => {
+  it("subscribes to 5 event bus events", () => {
     registerWorkflowHandlers(deps);
 
-    expect(deps.events!.on).toHaveBeenCalledTimes(3);
+    expect(deps.events!.on).toHaveBeenCalledTimes(5);
     const eventNames = (deps.events!.on as ReturnType<typeof vi.fn>).mock.calls.map(
       (c: unknown[]) => c[0]
     );
     expect(eventNames).toContain("workflow:started");
     expect(eventNames).toContain("workflow:completed");
     expect(eventNames).toContain("workflow:failed");
+    expect(eventNames).toContain("workflow:approval-requested");
+    expect(eventNames).toContain("workflow:approval-cleared");
   });
 
   it("cleanup removes all handlers and event subscriptions", () => {
-    const unsubFns = [vi.fn(), vi.fn(), vi.fn()];
+    const unsubFns = [vi.fn(), vi.fn(), vi.fn(), vi.fn(), vi.fn()];
     let callIdx = 0;
     (deps.events!.on as ReturnType<typeof vi.fn>).mockImplementation(() => unsubFns[callIdx++]);
 
     const cleanup = registerWorkflowHandlers(deps);
     cleanup();
 
-    expect(mockIpcMainRemoveHandler).toHaveBeenCalledTimes(5);
+    expect(mockIpcMainRemoveHandler).toHaveBeenCalledTimes(7);
     for (const unsub of unsubFns) {
       expect(unsub).toHaveBeenCalledTimes(1);
     }
@@ -333,7 +337,7 @@ describe("registerWorkflowHandlers", () => {
       const depsNoEvents = makeMockDeps({ events: undefined });
       const cleanup = registerWorkflowHandlers(depsNoEvents);
 
-      expect(mockIpcMainHandle).toHaveBeenCalledTimes(5);
+      expect(mockIpcMainHandle).toHaveBeenCalledTimes(7);
       expect(() => cleanup()).not.toThrow();
     });
   });

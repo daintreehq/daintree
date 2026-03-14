@@ -83,6 +83,7 @@ describe("WorkflowEngine", () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     engine.dispose();
   });
 
@@ -1431,6 +1432,358 @@ describe("WorkflowEngine", () => {
       // Verify recovery node was scheduled via onFailure routing
       expect(runs[0].scheduledNodes.has("node-recovery")).toBe(true);
       expect(runs[0].nodeStates["node-recovery"]).toBeDefined();
+    });
+  });
+  describe("approval nodes", () => {
+    const approvalWorkflow: WorkflowDefinition = {
+      id: "approval-workflow",
+      name: "Approval Workflow",
+      version: "1.0.0",
+      nodes: [
+        {
+          id: "check",
+          type: "action",
+          config: { actionId: "action-check", args: {} },
+          onSuccess: ["approve"],
+        },
+        {
+          id: "approve",
+          type: "approval",
+          config: { prompt: "Do you approve this?" },
+          dependencies: ["check"],
+          onSuccess: ["deploy"],
+          onFailure: ["rollback"],
+        },
+        {
+          id: "deploy",
+          type: "action",
+          config: { actionId: "action-deploy", args: {} },
+          dependencies: ["approve"],
+        },
+        {
+          id: "rollback",
+          type: "action",
+          config: { actionId: "action-rollback", args: {} },
+          dependencies: ["approve"],
+        },
+      ],
+    };
+
+    beforeEach(() => {
+      mockLoader.getWorkflow.mockResolvedValue({ definition: approvalWorkflow });
+    });
+
+    it("sets approval node to awaiting-approval and does not create a task", async () => {
+      const runId = await engine.startWorkflow("approval-workflow");
+
+      // Should have created task for "check" node only
+      expect(mockQueueService.createTask).toHaveBeenCalledTimes(1);
+      expect(mockQueueService.createTask).toHaveBeenCalledWith(
+        expect.objectContaining({
+          metadata: expect.objectContaining({ nodeId: "check" }),
+        })
+      );
+
+      // Now complete the "check" task
+      mockQueueService.createTask.mockClear();
+      events.emit("task:completed", {
+        taskId: "task-check",
+        result: "Checks passed",
+        timestamp: Date.now(),
+      });
+
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      // Approval node should NOT create a task
+      expect(mockQueueService.createTask).not.toHaveBeenCalled();
+
+      // Get the run and check the approval node state
+      const run = await engine.getWorkflowRun(runId);
+      expect(run).not.toBeNull();
+      expect(run!.nodeStates["approve"]?.status).toBe("awaiting-approval");
+      expect(run!.status).toBe("running");
+    });
+
+    it("emits workflow:approval-requested event when approval node is reached", async () => {
+      const eventSpy = vi.fn();
+      const unsub = events.on("workflow:approval-requested", eventSpy);
+
+      await engine.startWorkflow("approval-workflow");
+
+      events.emit("task:completed", {
+        taskId: "task-check",
+        result: "Checks passed",
+        timestamp: Date.now(),
+      });
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      expect(eventSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          nodeId: "approve",
+          workflowId: "approval-workflow",
+          workflowName: "Approval Workflow",
+          prompt: "Do you approve this?",
+        })
+      );
+
+      unsub();
+    });
+
+    it("routes to onSuccess when approved", async () => {
+      const runId = await engine.startWorkflow("approval-workflow");
+
+      events.emit("task:completed", {
+        taskId: "task-check",
+        result: "Checks passed",
+        timestamp: Date.now(),
+      });
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      mockQueueService.createTask.mockClear();
+
+      await engine.resolveApproval(runId, "approve", true, "Looks good");
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      // Should have scheduled the deploy node
+      expect(mockQueueService.createTask).toHaveBeenCalledWith(
+        expect.objectContaining({
+          metadata: expect.objectContaining({ nodeId: "deploy" }),
+        })
+      );
+
+      const run = await engine.getWorkflowRun(runId);
+      expect(run!.nodeStates["approve"].status).toBe("completed");
+      expect(run!.nodeStates["approve"].approvalDecision?.approved).toBe(true);
+      expect(run!.nodeStates["approve"].approvalDecision?.feedback).toBe("Looks good");
+    });
+
+    it("routes to onFailure when rejected", async () => {
+      const runId = await engine.startWorkflow("approval-workflow");
+
+      events.emit("task:completed", {
+        taskId: "task-check",
+        result: "Checks passed",
+        timestamp: Date.now(),
+      });
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      mockQueueService.createTask.mockClear();
+
+      await engine.resolveApproval(runId, "approve", false, "Needs changes");
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      // Should have scheduled the rollback node
+      expect(mockQueueService.createTask).toHaveBeenCalledWith(
+        expect.objectContaining({
+          metadata: expect.objectContaining({ nodeId: "rollback" }),
+        })
+      );
+
+      const run = await engine.getWorkflowRun(runId);
+      expect(run!.nodeStates["approve"].status).toBe("failed");
+      expect(run!.nodeStates["approve"].approvalDecision?.approved).toBe(false);
+    });
+
+    it("does not complete workflow while approval is pending", async () => {
+      const completedSpy = vi.fn();
+      const unsub = events.on("workflow:completed", completedSpy);
+
+      const runId = await engine.startWorkflow("approval-workflow");
+
+      events.emit("task:completed", {
+        taskId: "task-check",
+        result: "Checks passed",
+        timestamp: Date.now(),
+      });
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      const run = await engine.getWorkflowRun(runId);
+      expect(run!.status).toBe("running");
+      expect(completedSpy).not.toHaveBeenCalled();
+
+      unsub();
+    });
+
+    it("cancel cleans up pending approvals", async () => {
+      const clearedSpy = vi.fn();
+      const unsub = events.on("workflow:approval-cleared", clearedSpy);
+
+      const runId = await engine.startWorkflow("approval-workflow");
+
+      events.emit("task:completed", {
+        taskId: "task-check",
+        result: "Checks passed",
+        timestamp: Date.now(),
+      });
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      await engine.cancelWorkflow(runId);
+
+      expect(clearedSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          runId,
+          nodeId: "approve",
+          reason: "cancelled",
+        })
+      );
+
+      // Resolving after cancel should throw
+      await expect(engine.resolveApproval(runId, "approve", true)).rejects.toThrow(
+        "No pending approval found"
+      );
+
+      unsub();
+    });
+
+    it("listPendingApprovals returns correct list", async () => {
+      const runId = await engine.startWorkflow("approval-workflow");
+
+      events.emit("task:completed", {
+        taskId: "task-check",
+        result: "Checks passed",
+        timestamp: Date.now(),
+      });
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      const pending = engine.listPendingApprovals();
+      expect(pending).toHaveLength(1);
+      expect(pending[0]).toEqual(
+        expect.objectContaining({
+          runId,
+          nodeId: "approve",
+          workflowId: "approval-workflow",
+          workflowName: "Approval Workflow",
+          prompt: "Do you approve this?",
+        })
+      );
+    });
+
+    it("auto-rejects on timeout", async () => {
+      vi.useFakeTimers();
+
+      const timeoutWorkflow: WorkflowDefinition = {
+        id: "timeout-workflow",
+        name: "Timeout Workflow",
+        version: "1.0.0",
+        nodes: [
+          {
+            id: "approve",
+            type: "approval",
+            config: { prompt: "Quick approval?", timeoutMs: 5000 },
+            onFailure: ["fallback"],
+          },
+          {
+            id: "fallback",
+            type: "action",
+            config: { actionId: "action-fallback", args: {} },
+            dependencies: ["approve"],
+          },
+        ],
+      };
+
+      mockLoader.getWorkflow.mockResolvedValue({ definition: timeoutWorkflow });
+      const runId = await engine.startWorkflow("timeout-workflow");
+
+      const run = await engine.getWorkflowRun(runId);
+      expect(run!.nodeStates["approve"]?.status).toBe("awaiting-approval");
+
+      // Advance past timeout — this fires the setTimeout callback synchronously
+      vi.advanceTimersByTime(5100);
+
+      // Switch to real timers so async resolution can flush
+      vi.useRealTimers();
+      await new Promise((resolve) => setTimeout(resolve, 100));
+
+      const updatedRun = await engine.getWorkflowRun(runId);
+      expect(updatedRun!.nodeStates["approve"].status).toBe("failed");
+      expect(updatedRun!.nodeStates["approve"].approvalDecision?.feedback).toBe(
+        "Approval timed out"
+      );
+    });
+
+    it("recovery re-emits approval-requested for awaiting-approval nodes", async () => {
+      const persistedRun: WorkflowRun = {
+        runId: "recovery-run",
+        workflowId: "approval-workflow",
+        workflowVersion: "1.0.0",
+        status: "running",
+        startedAt: Date.now() - 10000,
+        definition: approvalWorkflow,
+        nodeStates: {
+          check: { status: "completed", taskId: "task-check", completedAt: Date.now() - 5000 },
+          approve: { status: "awaiting-approval", startedAt: Date.now() - 3000 },
+        },
+        taskMapping: { check: "task-check" },
+        scheduledNodes: new Set(["check", "approve"]),
+        evaluatedConditions: [],
+      };
+
+      mockPersistence.load.mockResolvedValue([persistedRun]);
+
+      const eventSpy = vi.fn();
+      const unsub = events.on("workflow:approval-requested", eventSpy);
+
+      await engine.initialize("test-project-id");
+
+      expect(eventSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          runId: "recovery-run",
+          nodeId: "approve",
+          prompt: "Do you approve this?",
+        })
+      );
+
+      // Run should still be running
+      const runs = await engine.listAllRuns();
+      expect(runs[0].status).toBe("running");
+
+      unsub();
+    });
+
+    it("recovery auto-rejects expired timeout approval nodes", async () => {
+      const timeoutWorkflow: WorkflowDefinition = {
+        id: "timeout-workflow",
+        name: "Timeout Workflow",
+        version: "1.0.0",
+        nodes: [
+          {
+            id: "approve",
+            type: "approval",
+            config: { prompt: "Quick approval?", timeoutMs: 5000 },
+            onFailure: ["fallback"],
+          },
+          {
+            id: "fallback",
+            type: "action",
+            config: { actionId: "action-fallback", args: {} },
+            dependencies: ["approve"],
+          },
+        ],
+      };
+
+      const startedAt = Date.now() - 10000; // 10 seconds ago
+      const persistedRun: WorkflowRun = {
+        runId: "expired-run",
+        workflowId: "timeout-workflow",
+        workflowVersion: "1.0.0",
+        status: "running",
+        startedAt,
+        definition: timeoutWorkflow,
+        nodeStates: {
+          approve: { status: "awaiting-approval", startedAt },
+        },
+        taskMapping: {},
+        scheduledNodes: new Set(["approve"]),
+        evaluatedConditions: [],
+      };
+
+      mockPersistence.load.mockResolvedValue([persistedRun]);
+
+      await engine.initialize("test-project-id");
+
+      const runs = await engine.listAllRuns();
+      expect(runs[0].nodeStates["approve"].status).toBe("failed");
+      expect(runs[0].nodeStates["approve"].approvalDecision?.timedOut).toBe(true);
     });
   });
 });
