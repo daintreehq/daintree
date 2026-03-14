@@ -33,6 +33,7 @@ import {
 } from "./hooks";
 import { useActionRegistry } from "./hooks/useActionRegistry";
 import { useUpdateListener } from "./hooks/useUpdateListener";
+import { useWorkflowListener } from "./hooks/useWorkflowListener";
 import { useActionPalette } from "./hooks/useActionPalette";
 import { useQuickSwitcher } from "./hooks/useQuickSwitcher";
 import { useWorktreePalette } from "./hooks/useWorktreePalette";
@@ -81,6 +82,7 @@ import { QuickSwitcher } from "./components/QuickSwitcher";
 import { ConfirmDialog } from "./components/ui/ConfirmDialog";
 import { RecipeEditor } from "./components/TerminalRecipe/RecipeEditor";
 import { NotesPalette } from "./components/Notes";
+import { WorkflowSection } from "./components/Workflow";
 import { SettingsDialog, type SettingsTab, type SettingsNavTarget } from "./components/Settings";
 import { ShortcutReferenceDialog } from "./components/KeyboardShortcuts";
 import { Toaster } from "./components/ui/toaster";
@@ -635,6 +637,8 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
         <ScrollIndicator direction="below" count={hiddenBelow} onClick={scrollToBottom} />
       </div>
 
+      <WorkflowSection />
+
       <RecipeEditor
         worktreeId={recipeEditorWorktreeId}
         initialTerminals={recipeEditorInitialTerminals}
@@ -701,6 +705,7 @@ function App() {
   useWatchedPanelNotifications();
   const reEntrySummary = useReEntrySummary();
   useUpdateListener();
+  useWorkflowListener();
   useMcpBridge();
   const [homeDir, setHomeDir] = useState<string | undefined>(undefined);
   useEffect(() => {
