@@ -21,40 +21,44 @@ export function startAppMetricsMonitor(): () => void {
   const snapshotCooldowns = new Map<number, number>();
 
   const timer = setInterval(() => {
-    const metrics = app.getAppMetrics();
+    try {
+      const metrics = app.getAppMetrics();
 
-    for (const proc of metrics) {
-      if (!MONITORED_TYPES.has(proc.type)) continue;
+      for (const proc of metrics) {
+        if (!MONITORED_TYPES.has(proc.type)) continue;
 
-      const mb = proc.memory.workingSetSize / 1024;
-      logDebug("process-memory-sample", { pid: proc.pid, type: proc.type, mb: Math.round(mb) });
+        const mb = proc.memory.workingSetSize / 1024;
+        logDebug("process-memory-sample", { pid: proc.pid, type: proc.type, mb: Math.round(mb) });
 
-      const threshold = WARN_THRESHOLDS_MB[proc.type];
-      if (threshold !== undefined && mb > threshold) {
-        logWarn("process-memory-threshold-exceeded", {
-          pid: proc.pid,
-          type: proc.type,
-          mb: Math.round(mb),
-          thresholdMb: threshold,
-        });
-      }
+        const threshold = WARN_THRESHOLDS_MB[proc.type];
+        if (threshold !== undefined && mb > threshold) {
+          logWarn("process-memory-threshold-exceeded", {
+            pid: proc.pid,
+            type: proc.type,
+            mb: Math.round(mb),
+            thresholdMb: threshold,
+          });
+        }
 
-      if (proc.type === "Browser" && mb > SNAPSHOT_THRESHOLD_MB && !app.isPackaged) {
-        const now = Date.now();
-        const last = snapshotCooldowns.get(proc.pid) ?? 0;
-        if (now - last > SNAPSHOT_COOLDOWN_MS) {
-          snapshotCooldowns.set(proc.pid, now);
-          try {
-            const dir = app.getPath("logs");
-            mkdirSync(dir, { recursive: true });
-            const file = path.join(dir, `heap-${proc.pid}-${now}.heapsnapshot`);
-            const written = v8.writeHeapSnapshot(file);
-            logWarn("heap-snapshot-written", { path: written });
-          } catch (err) {
-            logWarn("heap-snapshot-failed", { error: String(err) });
+        if (proc.type === "Browser" && mb > SNAPSHOT_THRESHOLD_MB && !app.isPackaged) {
+          const now = Date.now();
+          const last = snapshotCooldowns.get(proc.pid) ?? 0;
+          if (now - last > SNAPSHOT_COOLDOWN_MS) {
+            try {
+              const dir = app.getPath("logs");
+              mkdirSync(dir, { recursive: true });
+              const file = path.join(dir, `heap-${proc.pid}-${now}.heapsnapshot`);
+              const written = v8.writeHeapSnapshot(file);
+              snapshotCooldowns.set(proc.pid, now);
+              logWarn("heap-snapshot-written", { path: written });
+            } catch (err) {
+              logWarn("heap-snapshot-failed", { error: String(err) });
+            }
           }
         }
       }
+    } catch (err) {
+      logWarn("process-memory-poll-failed", { error: String(err) });
     }
   }, POLL_INTERVAL_MS);
 
