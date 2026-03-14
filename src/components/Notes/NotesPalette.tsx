@@ -11,6 +11,7 @@ import { useTerminalStore } from "@/store/terminalStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { notesClient, type NoteListItem, type NoteMetadata } from "@/clients/notesClient";
 import { normalizeTag } from "../../../shared/utils/noteTags";
+import { formatTimeAgo } from "@/utils/timeAgo";
 import CodeMirror from "@uiw/react-codemirror";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { languages } from "@codemirror/language-data";
@@ -117,7 +118,7 @@ export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
   const { activeWorktreeId } = useWorktreeSelectionStore();
 
   const noteTitleBaseClass =
-    "block w-full m-0 px-1 py-0.5 text-sm font-medium leading-tight border rounded box-border";
+    "flex-1 min-w-0 m-0 px-1 py-0.5 text-sm font-medium leading-tight border rounded box-border";
 
   // Derived tag list and filtered/sorted notes
   const availableTags = useMemo(
@@ -971,7 +972,7 @@ export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
                 </div>
 
                 {/* List */}
-                <div ref={listRef} role="listbox" className="flex-1 overflow-y-auto p-2">
+                <div ref={listRef} role="listbox" className="flex-1 overflow-y-auto">
                   {isLoading || isSearching ? (
                     <div className="px-3 py-8 text-center text-canopy-text/50 text-sm">
                       Loading...
@@ -1007,47 +1008,54 @@ export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
                           role="option"
                           aria-selected={selectedNote?.id === note.id}
                           className={cn(
-                            "relative flex items-start px-3 py-2 cursor-pointer transition-colors group rounded-[var(--radius-md)] mb-0.5 border",
+                            "relative flex items-start px-3 py-1.5 cursor-pointer transition-colors group",
                             "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-1",
                             selectedNote?.id === note.id
-                              ? "bg-overlay-soft border-overlay text-canopy-text before:absolute before:left-0 before:top-2 before:bottom-2 before:w-[2px] before:rounded-r before:bg-canopy-accent before:content-['']"
+                              ? "bg-overlay-soft text-canopy-text before:absolute before:left-0 before:top-1.5 before:bottom-1.5 before:w-[2px] before:rounded-r before:bg-canopy-accent before:content-['']"
                               : index === selectedIndex
-                                ? "bg-overlay-soft border-transparent text-canopy-text"
-                                : "border-transparent text-canopy-text/70 hover:bg-overlay-subtle hover:text-canopy-text"
+                                ? "bg-overlay-soft text-canopy-text"
+                                : "text-canopy-text/70 hover:bg-overlay-subtle hover:text-canopy-text"
                           )}
                           onClick={() => handleSelectNote(note, index)}
                           onDoubleClick={(e) => handleStartRename(note, e)}
                         >
                           <div className="flex-1 min-w-0">
-                            <input
-                              ref={isEditing ? titleInputRef : null}
-                              type="text"
-                              value={isEditing ? editingTitle : note.title}
-                              readOnly={!isEditing}
-                              onChange={(e) => {
-                                if (!isEditing) return;
-                                setEditingTitle(e.target.value);
-                              }}
-                              onKeyDown={(e) => {
-                                if (!isEditing) return;
-                                handleTitleKeyDown(note, e);
-                              }}
-                              onBlur={() => {
-                                if (!isEditing) return;
-                                handleTitleBlur(note);
-                              }}
-                              onClick={(e) => {
-                                if (isEditing) e.stopPropagation();
-                              }}
-                              tabIndex={isEditing ? 0 : -1}
-                              className={cn(
-                                noteTitleBaseClass,
-                                "appearance-none focus:outline-none",
-                                isEditing
-                                  ? "bg-canopy-sidebar border-canopy-accent text-canopy-text cursor-text"
-                                  : "bg-transparent border-transparent text-inherit truncate cursor-default pointer-events-none"
+                            <div className="flex items-baseline gap-1 min-w-0">
+                              <input
+                                ref={isEditing ? titleInputRef : null}
+                                type="text"
+                                value={isEditing ? editingTitle : note.title}
+                                readOnly={!isEditing}
+                                onChange={(e) => {
+                                  if (!isEditing) return;
+                                  setEditingTitle(e.target.value);
+                                }}
+                                onKeyDown={(e) => {
+                                  if (!isEditing) return;
+                                  handleTitleKeyDown(note, e);
+                                }}
+                                onBlur={() => {
+                                  if (!isEditing) return;
+                                  handleTitleBlur(note);
+                                }}
+                                onClick={(e) => {
+                                  if (isEditing) e.stopPropagation();
+                                }}
+                                tabIndex={isEditing ? 0 : -1}
+                                className={cn(
+                                  noteTitleBaseClass,
+                                  "appearance-none focus:outline-none",
+                                  isEditing
+                                    ? "bg-canopy-sidebar border-canopy-accent text-canopy-text cursor-text"
+                                    : "bg-transparent border-transparent text-inherit truncate cursor-default pointer-events-none"
+                                )}
+                              />
+                              {!isEditing && (
+                                <span className="shrink-0 text-[11px] text-canopy-text/40 tabular-nums">
+                                  {formatTimeAgo(note.modifiedAt)}
+                                </span>
                               )}
-                            />
+                            </div>
                             <div className="text-[11px] text-canopy-text/40 truncate mt-0.5 px-1">
                               {note.preview || "Empty note"}
                             </div>
