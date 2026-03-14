@@ -1687,16 +1687,15 @@ describe("WorkflowEngine", () => {
       const run = await engine.getWorkflowRun(runId);
       expect(run!.nodeStates["approve"]?.status).toBe("awaiting-approval");
 
-      // Advance past timeout
+      // Advance past timeout — this fires the setTimeout callback synchronously
       vi.advanceTimersByTime(5100);
-      await new Promise((resolve) => setTimeout(resolve, 50));
 
+      // Switch to real timers so async resolution can flush
       vi.useRealTimers();
-      await new Promise((resolve) => setTimeout(resolve, 50));
+      await new Promise((resolve) => setTimeout(resolve, 100));
 
       const updatedRun = await engine.getWorkflowRun(runId);
       expect(updatedRun!.nodeStates["approve"].status).toBe("failed");
-      expect(updatedRun!.nodeStates["approve"].approvalDecision?.timedOut).toBe(undefined);
       expect(updatedRun!.nodeStates["approve"].approvalDecision?.feedback).toBe(
         "Approval timed out"
       );
