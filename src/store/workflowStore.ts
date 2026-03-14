@@ -16,8 +16,12 @@ interface WorkflowState {
 
 function trimRuns(runs: Map<string, WorkflowRunIpc>): Map<string, WorkflowRunIpc> {
   if (runs.size <= MAX_RUNS) return runs;
-  const sorted = [...runs.entries()].sort((a, b) => b[1].startedAt - a[1].startedAt);
-  return new Map(sorted.slice(0, MAX_RUNS));
+  const active = [...runs.entries()].filter(([, r]) => r.status === "running");
+  const inactive = [...runs.entries()]
+    .filter(([, r]) => r.status !== "running")
+    .sort((a, b) => b[1].startedAt - a[1].startedAt);
+  const kept = [...active, ...inactive.slice(0, MAX_RUNS - active.length)];
+  return new Map(kept);
 }
 
 export const useWorkflowStore = create<WorkflowState>((set, get) => ({

@@ -17,10 +17,17 @@ export function useWorkflowListener(): void {
       useWorkflowStore.getState().refreshRun(runId);
     });
 
+    const unsubscribe = useWorkflowStore.subscribe((state, prev) => {
+      if (!state.isInitialized && prev.isInitialized) {
+        state.init();
+      }
+    });
+
     return () => {
       cleanupStarted();
       cleanupCompleted();
       cleanupFailed();
+      unsubscribe();
     };
   }, []);
 }

@@ -59,13 +59,16 @@ describe("workflowStore", () => {
     expect(useWorkflowStore.getState().runs.size).toBe(2);
   });
 
-  it("trims to 20 runs on init", async () => {
+  it("trims to 20 runs on init keeping newest", async () => {
     const runs = Array.from({ length: 25 }, (_, i) => makeRun(`r-${i}`, { startedAt: i }));
     vi.mocked(window.electron.workflow.listRuns).mockResolvedValue(runs);
 
     await useWorkflowStore.getState().init();
 
-    expect(useWorkflowStore.getState().runs.size).toBe(20);
+    const state = useWorkflowStore.getState();
+    expect(state.runs.size).toBe(20);
+    expect(state.runs.has("r-24")).toBe(true);
+    expect(state.runs.has("r-0")).toBe(false);
   });
 
   it("refreshRun upserts a run", async () => {
@@ -122,5 +125,22 @@ describe("workflowStore", () => {
     await initPromise;
 
     expect(useWorkflowStore.getState().runs.size).toBe(0);
+    expect(useWorkflowStore.getState().isInitialized).toBe(false);
+  });
+
+  it("trim preserves running runs over newer completed ones", async () => {
+    const runs: WorkflowRunIpc[] = [
+      makeRun("old-running", { startedAt: 1, status: "running" }),
+      ...Array.from({ length: 20 }, (_, i) =>
+        makeRun(`completed-${i}`, { startedAt: 100 + i, status: "completed" })
+      ),
+    ];
+    vi.mocked(window.electron.workflow.listRuns).mockResolvedValue(runs);
+
+    await useWorkflowStore.getState().init();
+
+    const state = useWorkflowStore.getState();
+    expect(state.runs.has("old-running")).toBe(true);
+    expect(state.runs.size).toBe(20);
   });
 });
