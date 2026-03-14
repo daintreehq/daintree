@@ -228,7 +228,11 @@ export function GitHubListItem({
               type="button"
               onClick={(e) => {
                 e.stopPropagation();
-                void actionService.dispatch("system.openExternal", { url: item.linkedPR!.url }, { source: "user" });
+                void actionService.dispatch(
+                  "system.openExternal",
+                  { url: item.linkedPR!.url },
+                  { source: "user" }
+                );
               }}
               className="text-muted-foreground hover:text-foreground hover:underline cursor-pointer transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded px-0.5"
             >
