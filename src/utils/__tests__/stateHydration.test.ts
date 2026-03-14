@@ -1557,10 +1557,12 @@ describe("hydrateAppState", () => {
       },
     ]);
 
-    const addTerminal = vi.fn().mockImplementation((opts: { kind?: string; requestedId?: string; existingId?: string }) => {
-      callOrder.push(opts.kind ?? "unknown");
-      return Promise.resolve(opts.requestedId ?? opts.existingId ?? "id");
-    });
+    const addTerminal = vi
+      .fn()
+      .mockImplementation((opts: { kind?: string; requestedId?: string; existingId?: string }) => {
+        callOrder.push(opts.kind ?? "unknown");
+        return Promise.resolve(opts.requestedId ?? opts.existingId ?? "id");
+      });
     const setActiveWorktree = vi.fn();
     const loadRecipes = vi.fn().mockResolvedValue(undefined);
     const openDiagnosticsDock = vi.fn();
@@ -1718,10 +1720,12 @@ describe("hydrateAppState", () => {
       },
     ]);
 
-    const addTerminal = vi.fn().mockImplementation((opts: { kind?: string; requestedId?: string; existingId?: string }) => {
-      callOrder.push(`${opts.kind}:${opts.requestedId ?? opts.existingId}`);
-      return Promise.resolve(opts.requestedId ?? opts.existingId ?? "id");
-    });
+    const addTerminal = vi
+      .fn()
+      .mockImplementation((opts: { kind?: string; requestedId?: string; existingId?: string }) => {
+        callOrder.push(`${opts.kind}:${opts.requestedId ?? opts.existingId}`);
+        return Promise.resolve(opts.requestedId ?? opts.existingId ?? "id");
+      });
     const setActiveWorktree = vi.fn();
     const loadRecipes = vi.fn().mockResolvedValue(undefined);
     const openDiagnosticsDock = vi.fn();

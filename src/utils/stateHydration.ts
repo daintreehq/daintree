@@ -435,10 +435,7 @@ export async function hydrateAppState(
                   inferredKind = "browser";
                 } else if (saved.notePath !== undefined || saved.noteId !== undefined) {
                   inferredKind = "notes";
-                } else if (
-                  saved.title === "Assistant" ||
-                  saved.title?.startsWith("Assistant")
-                ) {
+                } else if (saved.title === "Assistant" || saved.title?.startsWith("Assistant")) {
                   inferredKind = "assistant";
                 } else if (!saved.cwd && !saved.command) {
                   inferredKind = "assistant";
@@ -881,9 +878,7 @@ export async function hydrateAppState(
           // Restore all non-PTY panels concurrently (browser, notes, dev-preview).
           // These only perform synchronous store mutations, so no throttling is needed.
           if (nonPtyTasks.length > 0) {
-            logHydrationInfo(
-              `Restoring ${nonPtyTasks.length} non-PTY panel(s) concurrently`
-            );
+            logHydrationInfo(`Restoring ${nonPtyTasks.length} non-PTY panel(s) concurrently`);
             await Promise.allSettled(
               nonPtyTasks.map(async (task) => {
                 try {
