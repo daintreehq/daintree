@@ -512,21 +512,68 @@ class TerminalInstanceService {
       const agentConfig = getEffectiveAgentConfig(agentId);
       const titlePatterns = agentConfig?.detection?.titleStatePatterns;
       if (titlePatterns) {
+        let lastReportedTitleState: "working" | "waiting" | undefined;
+
         const titleDisposable = terminal.onTitleChange((title: string) => {
+          let matched: "working" | "waiting" | undefined;
           for (const pattern of titlePatterns.working) {
             if (title.includes(pattern)) {
-              window.electron.terminal.reportTitleState(id, "working");
-              return;
+              matched = "working";
+              break;
             }
           }
-          for (const pattern of titlePatterns.waiting) {
-            if (title.includes(pattern)) {
-              window.electron.terminal.reportTitleState(id, "waiting");
-              return;
+          if (!matched) {
+            for (const pattern of titlePatterns.waiting) {
+              if (title.includes(pattern)) {
+                matched = "waiting";
+                break;
+              }
             }
+          }
+          if (!matched) {
+            if (managed.titleReportTimer !== undefined) {
+              clearTimeout(managed.titleReportTimer);
+              managed.titleReportTimer = undefined;
+              managed.pendingTitleState = undefined;
+            }
+            return;
+          }
+
+          if (matched === "working") {
+            if (managed.titleReportTimer !== undefined) {
+              clearTimeout(managed.titleReportTimer);
+              managed.titleReportTimer = undefined;
+              managed.pendingTitleState = undefined;
+            }
+            if (lastReportedTitleState !== "working") {
+              lastReportedTitleState = "working";
+              window.electron.terminal.reportTitleState(id, "working");
+            }
+          } else {
+            managed.pendingTitleState = "waiting";
+            if (managed.titleReportTimer !== undefined) {
+              clearTimeout(managed.titleReportTimer);
+            }
+            managed.titleReportTimer = window.setTimeout(() => {
+              managed.titleReportTimer = undefined;
+              if (managed.pendingTitleState === "waiting") {
+                managed.pendingTitleState = undefined;
+                if (lastReportedTitleState !== "waiting") {
+                  lastReportedTitleState = "waiting";
+                  window.electron.terminal.reportTitleState(id, "waiting");
+                }
+              }
+            }, 250);
           }
         });
-        listeners.push(() => titleDisposable.dispose());
+        listeners.push(() => {
+          titleDisposable.dispose();
+          if (managed.titleReportTimer !== undefined) {
+            clearTimeout(managed.titleReportTimer);
+            managed.titleReportTimer = undefined;
+            managed.pendingTitleState = undefined;
+          }
+        });
       }
     }
 
@@ -1085,6 +1132,11 @@ class TerminalInstanceService {
     if (managed.directingTimer !== undefined) {
       clearTimeout(managed.directingTimer);
       managed.directingTimer = undefined;
+    }
+    if (managed.titleReportTimer !== undefined) {
+      clearTimeout(managed.titleReportTimer);
+      managed.titleReportTimer = undefined;
+      managed.pendingTitleState = undefined;
     }
     if (managed.resizeSuppressionTimer !== undefined) {
       clearTimeout(managed.resizeSuppressionTimer);

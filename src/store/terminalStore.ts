@@ -645,6 +645,10 @@ export function setupTerminalStoreListeners() {
 
       terminalInstanceService.setAgentState(terminalId, state);
 
+      if (terminal.agentState === "directing" && state === "waiting") {
+        return;
+      }
+
       useTerminalStore
         .getState()
         .updateAgentState(terminalId, state, undefined, timestamp, trigger, clampedConfidence);
