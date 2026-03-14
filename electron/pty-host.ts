@@ -969,7 +969,8 @@ port.on("message", async (rawMsg: any) => {
             | "heuristic"
             | "ai-classification"
             | "timeout"
-            | "exit",
+            | "exit"
+            | "title",
           msg.confidence,
           msg.spawnedAt
         );

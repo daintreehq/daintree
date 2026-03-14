@@ -24,7 +24,8 @@ export type AgentStateChangeTrigger =
   | "ai-classification"
   | "timeout"
   | "exit"
-  | "activity";
+  | "activity"
+  | "title";
 
 /** Agent state */
 export type AgentState = "idle" | "working" | "running" | "waiting" | "completed" | "failed";

@@ -99,6 +99,15 @@ export interface AgentDetectionConfig {
    * Confidence level when completion pattern matches (default: 0.90).
    */
   completionConfidence?: number;
+
+  /**
+   * Patterns matched against terminal window title (OSC 0/2) for state detection.
+   * Substrings checked via includes() against the title string.
+   */
+  titleStatePatterns?: {
+    working: string[];
+    waiting: string[];
+  };
 }
 
 export interface AgentConfig {
@@ -402,6 +411,10 @@ export const AGENT_REGISTRY: Record<string, AgentConfig> = {
       fallbackConfidence: 0.7,
       promptConfidence: 0.85,
       debounceMs: 2000,
+      titleStatePatterns: {
+        working: ["\u2726"],
+        waiting: ["\u25C7", "\u270B"],
+      },
     },
     routing: {
       capabilities: [

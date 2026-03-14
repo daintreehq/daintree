@@ -358,7 +358,8 @@ export type AgentStateChangeTrigger =
   | "ai-classification"
   | "timeout"
   | "exit"
-  | "activity";
+  | "activity"
+  | "title";
 
 /**
  * Renderer refresh rate tiers for terminal UI updates.

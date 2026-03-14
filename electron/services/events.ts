@@ -392,7 +392,8 @@ export type AgentStateChangeTrigger =
   | "ai-classification"
   | "timeout"
   | "exit"
-  | "activity";
+  | "activity"
+  | "title";
 
 /**
  * Base event payload with optional trace correlation ID and event context.

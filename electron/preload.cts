@@ -189,6 +189,7 @@ const CHANNELS = {
   TERMINAL_BACKEND_CRASHED: "terminal:backend-crashed",
   TERMINAL_BACKEND_READY: "terminal:backend-ready",
   TERMINAL_SEND_KEY: "terminal:send-key",
+  TERMINAL_AGENT_TITLE_STATE: "terminal:agent-title-state",
 
   // Files channels
   FILES_SEARCH: "files:search",
@@ -785,6 +786,9 @@ const api: ElectronAPI = {
     },
 
     sendKey: (id: string, key: string) => ipcRenderer.send(CHANNELS.TERMINAL_SEND_KEY, id, key),
+
+    reportTitleState: (id: string, state: "working" | "waiting") =>
+      ipcRenderer.send(CHANNELS.TERMINAL_AGENT_TITLE_STATE, { id, state }),
 
     onSpawnResult: (callback: (id: string, result: SpawnResultPayload) => void): (() => void) => {
       const handler = (_event: Electron.IpcRendererEvent, id: unknown, result: unknown) => {
