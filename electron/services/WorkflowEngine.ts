@@ -348,13 +348,7 @@ export class WorkflowEngine {
     if (timeoutMs) {
       const handle = setTimeout(() => {
         this.pendingApprovals.delete(key);
-        void this.handleApprovalResolution(
-          run.runId,
-          nodeId,
-          false,
-          "Approval timed out",
-          true
-        );
+        void this.handleApprovalResolution(run.runId, nodeId, false, "Approval timed out", true);
       }, timeoutMs);
       this.approvalTimeouts.set(key, handle);
     }
