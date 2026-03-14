@@ -113,6 +113,20 @@ describe("title state hysteresis (#3217)", () => {
     expect(reportFn).toHaveBeenCalledTimes(1);
   });
 
+  it("resets debounce window on repeated waiting titles", () => {
+    handler("◇ Ready");
+    vi.advanceTimersByTime(200);
+    expect(reportFn).not.toHaveBeenCalled();
+
+    handler("✋ Action required");
+    vi.advanceTimersByTime(200);
+    expect(reportFn).not.toHaveBeenCalled();
+
+    vi.advanceTimersByTime(50);
+    expect(reportFn).toHaveBeenCalledWith("waiting");
+    expect(reportFn).toHaveBeenCalledTimes(1);
+  });
+
   it("cancels pending waiting when working arrives", () => {
     handler("◇ Ready");
     expect(reportFn).not.toHaveBeenCalled();

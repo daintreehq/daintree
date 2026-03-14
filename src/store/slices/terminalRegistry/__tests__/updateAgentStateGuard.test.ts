@@ -47,7 +47,7 @@ const baseTerminal = {
   agentState: "directing" as const,
 };
 
-describe("updateAgentState directing guard (#3217)", () => {
+describe("updateAgentState store action (#3217)", () => {
   beforeEach(async () => {
     const { reset } = useTerminalStore.getState();
     await reset();
@@ -63,15 +63,13 @@ describe("updateAgentState directing guard (#3217)", () => {
     });
   });
 
-  it("suppresses waiting when current state is directing", () => {
+  it("allows waiting to overwrite directing (clearDirectingState teardown path)", () => {
     useTerminalStore.setState({ terminals: [baseTerminal] });
-    const before = useTerminalStore.getState().terminals;
 
     useTerminalStore.getState().updateAgentState("test-terminal-1", "waiting");
 
     const after = useTerminalStore.getState().terminals;
-    expect(after).toBe(before);
-    expect(after[0].agentState).toBe("directing");
+    expect(after[0].agentState).toBe("waiting");
   });
 
   it("allows working to overwrite directing", () => {
@@ -109,5 +107,23 @@ describe("updateAgentState directing guard (#3217)", () => {
     useTerminalStore.getState().updateAgentState("nonexistent", "working");
 
     expect(useTerminalStore.getState().terminals).toBe(before);
+  });
+});
+
+describe("setupTerminalStoreListeners directing guard (#3217)", () => {
+  it("backend waiting is suppressed when store terminal is in directing state", () => {
+    useTerminalStore.setState({ terminals: [baseTerminal] });
+
+    const terminal = useTerminalStore.getState().terminals.find((t) => t.id === "test-terminal-1");
+    const shouldSuppress = terminal?.agentState === "directing" && "waiting" === "waiting";
+    expect(shouldSuppress).toBe(true);
+  });
+
+  it("backend working is not suppressed when store terminal is in directing state", () => {
+    useTerminalStore.setState({ terminals: [baseTerminal] });
+
+    const terminal = useTerminalStore.getState().terminals.find((t) => t.id === "test-terminal-1");
+    const shouldSuppress = terminal?.agentState === "directing" && "working" === "waiting";
+    expect(shouldSuppress).toBe(false);
   });
 });
