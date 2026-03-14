@@ -180,6 +180,21 @@ describe("SettingsSubtabBar", () => {
       expect(screen.getByLabelText("Scroll tabs right")).toBeTruthy();
     });
 
+    it("renders both arrows disabled with a single tab", () => {
+      const subtabs = [{ id: "only", label: "Only Tab" }];
+      render(<SettingsSubtabBar subtabs={subtabs} activeId="only" onChange={vi.fn()} />);
+      const tablist = screen.getByRole("tablist");
+
+      act(() => {
+        setScrollGeometry(tablist, { scrollWidth: 100, clientWidth: 300, scrollLeft: 0 });
+        resizeObserverCallback([], {} as ResizeObserver);
+      });
+
+      expect(screen.getByLabelText("Scroll tabs left").getAttribute("aria-disabled")).toBe("true");
+      expect(screen.getByLabelText("Scroll tabs right").getAttribute("aria-disabled")).toBe("true");
+      expect(screen.getAllByRole("tab")).toHaveLength(1);
+    });
+
     it("disables both arrows when content fits", () => {
       render(<SettingsSubtabBar subtabs={SUBTABS} activeId="claude" onChange={vi.fn()} />);
       const tablist = screen.getByRole("tablist");
