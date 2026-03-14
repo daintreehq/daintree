@@ -533,6 +533,8 @@ interface PtyPanelData extends BasePanelData {
   detectedProcessId?: string;
   /** Captured agent session ID from graceful shutdown (used for session resume) */
   agentSessionId?: string;
+  /** Process-level flags captured at launch time, persisted for session resume */
+  agentLaunchFlags?: string[];
   /** Origin that spawned this terminal */
   spawnedBy?: TerminalSpawnSource;
   /** Timestamp when this terminal was created */
@@ -680,6 +682,8 @@ export interface TerminalInstance {
   detectedProcessId?: string;
   /** Captured agent session ID from graceful shutdown (used for session resume) */
   agentSessionId?: string;
+  /** Process-level flags captured at launch time, persisted for session resume */
+  agentLaunchFlags?: string[];
   /** Origin that spawned this terminal */
   spawnedBy?: TerminalSpawnSource;
   /** Timestamp when this terminal was created */
@@ -801,6 +805,8 @@ export interface TerminalSnapshot {
   exitBehavior?: PanelExitBehavior;
   /** Captured agent session ID from graceful shutdown (used for session resume) */
   agentSessionId?: string;
+  /** Process-level flags captured at launch time, persisted for session resume */
+  agentLaunchFlags?: string[];
   // Note: Tab membership is now stored in ProjectState.tabGroups, not on terminals
 }
 

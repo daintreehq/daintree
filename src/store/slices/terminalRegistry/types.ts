@@ -75,6 +75,8 @@ export interface AddTerminalOptions {
   exitBehavior?: PanelExitBehavior;
   /** Captured agent session ID from graceful shutdown (used for session resume) */
   agentSessionId?: string;
+  /** Process-level flags captured at launch time, persisted for session resume */
+  agentLaunchFlags?: string[];
   /** Origin that spawned this terminal */
   spawnedBy?: TerminalSpawnSource;
   /** Bypass rate limiter during session restore (consumes main-process quota) */

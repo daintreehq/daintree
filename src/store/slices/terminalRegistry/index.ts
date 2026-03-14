@@ -389,6 +389,7 @@ export const createTerminalRegistrySlice =
             isInputLocked: options.isInputLocked,
             exitBehavior: options.exitBehavior,
             agentSessionId: options.agentSessionId,
+            agentLaunchFlags: options.agentLaunchFlags,
             spawnedBy: options.spawnedBy,
             startedAt: Date.now(),
             // Dev-preview specific fields
@@ -1497,7 +1498,11 @@ export const createTerminalRegistrySlice =
         if (isAgent && effectiveAgentId) {
           const sessionId = currentTerminal.agentSessionId;
           if (sessionId) {
-            const resumeCmd = buildResumeCommand(effectiveAgentId, sessionId);
+            const resumeCmd = buildResumeCommand(
+              effectiveAgentId,
+              sessionId,
+              currentTerminal.agentLaunchFlags
+            );
             if (resumeCmd) {
               commandToRun = resumeCmd;
             }
