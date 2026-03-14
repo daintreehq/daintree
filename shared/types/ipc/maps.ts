@@ -1159,6 +1159,28 @@ export interface IpcInvokeMap {
     };
   };
 
+  // Workflow channels
+  "workflow:list": {
+    args: [];
+    result: import("../workflow.js").WorkflowSummary[];
+  };
+  "workflow:start": {
+    args: [workflowId: string];
+    result: string;
+  };
+  "workflow:cancel": {
+    args: [runId: string];
+    result: void;
+  };
+  "workflow:get-run": {
+    args: [runId: string];
+    result: import("./api.js").WorkflowRunIpc | null;
+  };
+  "workflow:list-runs": {
+    args: [];
+    result: import("./api.js").WorkflowRunIpc[];
+  };
+
   // Dev Preview channels
   "dev-preview:ensure": {
     args: [request: DevPreviewEnsureRequest];
@@ -1621,6 +1643,11 @@ export interface IpcEventMap {
     title: string;
     action: "created" | "updated" | "deleted";
   };
+
+  // Workflow events
+  "workflow:started": import("./api.js").WorkflowStartedPayload;
+  "workflow:completed": import("./api.js").WorkflowCompletedPayload;
+  "workflow:failed": import("./api.js").WorkflowFailedPayload;
 
   // Webview console events
   "webview:console-message": import("./webviewConsole.js").SerializedConsoleRow;
