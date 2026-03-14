@@ -35,8 +35,9 @@ export class TerminalWebGLManager {
     let clDisposable: IDisposable | null = null;
     try {
       addon = new WebglAddon();
+      const ownAddon = addon;
       clDisposable = addon.onContextLoss(() => {
-        if (this.pool.has(id)) {
+        if (this.pool.get(id)?.addon === ownAddon) {
           this.releaseContext(id);
         }
       });

@@ -144,6 +144,38 @@ describe("TerminalWebGLManager", () => {
     expect(() => contextLossHandler!()).not.toThrow();
   });
 
+  it("stale context loss callback does not tear down reacquired addon for same id", () => {
+    let firstContextLossHandler: (() => void) | undefined;
+    let callCount = 0;
+    const firstDispose = vi.fn();
+    const secondDispose = vi.fn();
+
+    WebglAddonMock.mockImplementation(function () {
+      callCount++;
+      const d = callCount === 1 ? firstDispose : secondDispose;
+      return {
+        dispose: d,
+        onContextLoss: vi.fn((handler: () => void) => {
+          if (callCount === 1) firstContextLossHandler = handler;
+          return { dispose: vi.fn() };
+        }),
+      };
+    });
+
+    const managed = makeManagedTerminal();
+    manager.ensureContext("t1", managed);
+    manager.releaseContext("t1");
+
+    // Reacquire the same id with a new addon
+    manager.ensureContext("t1", managed);
+    expect(manager.isActive("t1")).toBe(true);
+
+    // Fire stale context loss from the first addon — must NOT release the new addon
+    firstContextLossHandler!();
+    expect(manager.isActive("t1")).toBe(true);
+    expect(secondDispose).not.toHaveBeenCalled();
+  });
+
   it("onTerminalDestroyed removes state without calling addon.dispose", () => {
     const perAddonDispose = vi.fn();
     WebglAddonMock.mockImplementation(function () {
