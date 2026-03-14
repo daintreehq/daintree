@@ -323,7 +323,19 @@ export function CommitList({ projectPath, onClose, initialCount }: CommitListPro
             )}
           </>
         ) : error ? (
-          renderError()
+          <div className="p-8 text-center text-muted-foreground">
+            <AlertCircle className="h-5 w-5 mx-auto mb-2 opacity-50" />
+            <p className="text-sm">{error}</p>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={handleRetry}
+              className="mt-2 text-muted-foreground hover:text-canopy-text"
+            >
+              <RefreshCw className="h-3.5 w-3.5" />
+              Retry
+            </Button>
+          </div>
         ) : (
           renderEmpty()
         )}
