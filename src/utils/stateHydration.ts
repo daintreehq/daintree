@@ -28,7 +28,7 @@ import { PERF_MARKS } from "@shared/perf/marks";
 import { markRendererPerformance } from "@/utils/performance";
 import { isCanopyEnvEnabled } from "@/utils/env";
 
-const RECONNECT_TIMEOUT_MS = 10000;
+const RECONNECT_TIMEOUT_MS = 2000;
 const RESTORE_CONCURRENCY = 8;
 const RESTORE_SPAWN_BATCH_SIZE = 3;
 const RESTORE_SPAWN_BATCH_DELAY_MS = 100;
