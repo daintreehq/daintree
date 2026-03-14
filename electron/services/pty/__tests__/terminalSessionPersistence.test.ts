@@ -9,6 +9,8 @@ import {
   persistSessionSnapshotAsync,
   persistSessionSnapshotSync,
   restoreSessionFromFile,
+  deleteSessionFile,
+  evictSessionFiles,
 } from "../terminalSessionPersistence.js";
 
 function createMockHeadless(bufferType: "normal" | "alternate" = "normal") {
@@ -134,5 +136,158 @@ describe("terminalSessionPersistence", () => {
     expect(writeArgs).toContain("\x1b[?1049l");
     const tuiBanner = writeArgs.find((a: string) => a.includes("full-screen app"));
     expect(tuiBanner).toBeDefined();
+  });
+
+  describe("deleteSessionFile", () => {
+    it("deletes an existing .restore file", async () => {
+      const sessionDir = path.join(userDataDir, "terminal-sessions");
+      await fsp.mkdir(sessionDir, { recursive: true });
+      const filePath = path.join(sessionDir, "term-1.restore");
+      await fsp.writeFile(filePath, "data", "utf8");
+
+      await deleteSessionFile("term-1");
+
+      expect(fs.existsSync(filePath)).toBe(false);
+    });
+
+    it("no-ops on a missing file (ENOENT-safe)", async () => {
+      await expect(deleteSessionFile("nonexistent-term")).resolves.toBeUndefined();
+    });
+
+    it("no-ops for an invalid terminal ID", async () => {
+      await expect(deleteSessionFile("../escape")).resolves.toBeUndefined();
+    });
+  });
+
+  describe("evictSessionFiles", () => {
+    let sessionDir: string;
+
+    beforeEach(async () => {
+      sessionDir = path.join(userDataDir, "terminal-sessions");
+      await fsp.mkdir(sessionDir, { recursive: true });
+    });
+
+    async function createFile(name: string, content: string, ageMs: number = 0) {
+      const filePath = path.join(sessionDir, name);
+      await fsp.writeFile(filePath, content, "utf8");
+      if (ageMs > 0) {
+        const mtime = new Date(Date.now() - ageMs);
+        await fsp.utimes(filePath, mtime, mtime);
+      }
+    }
+
+    it("returns zeros when session directory does not exist", async () => {
+      await fsp.rm(sessionDir, { recursive: true, force: true });
+      const result = await evictSessionFiles({ ttlMs: 1000, maxBytes: 1024 });
+      expect(result).toEqual({ deleted: 0, bytesFreed: 0 });
+    });
+
+    it("ignores .tmp files and non-.restore files", async () => {
+      await createFile("term-1.tmp", "temporary data");
+      await createFile("term-2.txt", "text data");
+      await createFile("term-3.restore", "valid data");
+
+      const result = await evictSessionFiles({
+        ttlMs: 1000,
+        maxBytes: 1024 * 1024,
+        knownIds: new Set(["term-3"]),
+      });
+
+      expect(result.deleted).toBe(0);
+      expect(fs.existsSync(path.join(sessionDir, "term-1.tmp"))).toBe(true);
+      expect(fs.existsSync(path.join(sessionDir, "term-2.txt"))).toBe(true);
+      expect(fs.existsSync(path.join(sessionDir, "term-3.restore"))).toBe(true);
+    });
+
+    it("deletes orphan files whose IDs are not in knownIds", async () => {
+      await createFile("known-term.restore", "keep me");
+      await createFile("orphan-term.restore", "delete me");
+
+      const result = await evictSessionFiles({
+        ttlMs: 30 * 24 * 60 * 60 * 1000,
+        maxBytes: 1024 * 1024,
+        knownIds: new Set(["known-term"]),
+      });
+
+      expect(result.deleted).toBe(1);
+      expect(fs.existsSync(path.join(sessionDir, "known-term.restore"))).toBe(true);
+      expect(fs.existsSync(path.join(sessionDir, "orphan-term.restore"))).toBe(false);
+    });
+
+    it("preserves files within TTL that are in knownIds", async () => {
+      await createFile("term-1.restore", "recent data");
+
+      const result = await evictSessionFiles({
+        ttlMs: 30 * 24 * 60 * 60 * 1000,
+        maxBytes: 1024 * 1024,
+        knownIds: new Set(["term-1"]),
+      });
+
+      expect(result.deleted).toBe(0);
+      expect(fs.existsSync(path.join(sessionDir, "term-1.restore"))).toBe(true);
+    });
+
+    it("applies TTL with 30s buffer correctly at boundary", async () => {
+      const ttlMs = 60_000; // 1 minute TTL
+      // File at ttlMs + 29_999ms old (within buffer) should be kept
+      await createFile("kept.restore", "data", ttlMs + 29_999);
+      // File at ttlMs + 31_000ms old (past buffer) should be deleted
+      await createFile("deleted.restore", "data", ttlMs + 31_000);
+
+      const result = await evictSessionFiles({
+        ttlMs,
+        maxBytes: 1024 * 1024,
+      });
+
+      expect(result.deleted).toBe(1);
+      expect(fs.existsSync(path.join(sessionDir, "kept.restore"))).toBe(true);
+      expect(fs.existsSync(path.join(sessionDir, "deleted.restore"))).toBe(false);
+    });
+
+    it("enforces maxBytes by deleting oldest files first", async () => {
+      // Create 3 files of 100 bytes each, with different ages
+      const content = "x".repeat(100);
+      await createFile("oldest.restore", content, 3000);
+      await createFile("middle.restore", content, 2000);
+      await createFile("newest.restore", content, 1000);
+
+      const result = await evictSessionFiles({
+        ttlMs: 30 * 24 * 60 * 60 * 1000,
+        maxBytes: 200, // only room for 2 files
+      });
+
+      expect(result.deleted).toBe(1);
+      expect(fs.existsSync(path.join(sessionDir, "oldest.restore"))).toBe(false);
+      expect(fs.existsSync(path.join(sessionDir, "middle.restore"))).toBe(true);
+      expect(fs.existsSync(path.join(sessionDir, "newest.restore"))).toBe(true);
+    });
+
+    it("reports accurate deleted count and bytesFreed", async () => {
+      const content50 = "x".repeat(50);
+      const content100 = "x".repeat(100);
+      await createFile("orphan1.restore", content50);
+      await createFile("orphan2.restore", content100);
+
+      const result = await evictSessionFiles({
+        ttlMs: 30 * 24 * 60 * 60 * 1000,
+        maxBytes: 1024 * 1024,
+        knownIds: new Set(),
+      });
+
+      expect(result.deleted).toBe(2);
+      expect(result.bytesFreed).toBe(150);
+    });
+
+    it("works without knownIds (TTL-only mode)", async () => {
+      const ttlMs = 60_000;
+      await createFile("old.restore", "data", ttlMs + 60_000);
+      await createFile("recent.restore", "data", 1000);
+
+      const result = await evictSessionFiles({ ttlMs, maxBytes: 1024 * 1024 });
+
+      expect(result.deleted).toBe(1);
+      expect(fs.existsSync(path.join(sessionDir, "old.restore"))).toBe(false);
+      expect(fs.existsSync(path.join(sessionDir, "recent.restore"))).toBe(true);
+    });
   });
 });
