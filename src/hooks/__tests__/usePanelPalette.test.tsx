@@ -27,6 +27,7 @@ vi.mock("@/registry/panelComponentRegistry", () => ({
 }));
 
 vi.mock("@shared/config/agentRegistry", () => ({
+  AGENT_REGISTRY: {},
   getEffectiveAgentIds: getEffectiveAgentIdsMock,
   getEffectiveAgentConfig: getEffectiveAgentConfigMock,
 }));

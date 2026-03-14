@@ -18,13 +18,13 @@ vi.mock("@/hooks/useElectron", () => ({
 }));
 
 vi.mock("@/config/agents", () => ({
-  getAgentIds: () => ["claude", "gemini", "codex", "opencode"],
+  getAgentIds: () => ["claude", "gemini", "codex", "opencode", "cursor"],
 }));
 
 import { useCliAvailabilityStore, cleanupCliAvailabilityStore } from "../cliAvailabilityStore";
 
-const defaultAvail = { claude: false, gemini: false, codex: false, opencode: false };
-const installedAvail = { claude: true, gemini: false, codex: true, opencode: false };
+const defaultAvail = { claude: false, gemini: false, codex: false, opencode: false, cursor: false };
+const installedAvail = { claude: true, gemini: false, codex: true, opencode: false, cursor: false };
 
 describe("cliAvailabilityStore", () => {
   beforeEach(() => {

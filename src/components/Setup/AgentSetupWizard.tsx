@@ -5,6 +5,7 @@ import { AgentSetupStep } from "./AgentSetupStep";
 import { EmbeddedTerminal } from "./EmbeddedTerminal";
 import { SystemHealthCheckStep } from "./SystemHealthCheckStep";
 import { AGENT_REGISTRY, getAgentConfig } from "@/config/agents";
+import { BUILT_IN_AGENT_IDS } from "@shared/config/agentIds";
 import { cliAvailabilityClient } from "@/clients";
 import { isCanopyEnvEnabled } from "@/utils/env";
 import type { CliAvailability } from "@shared/types";
@@ -17,7 +18,7 @@ import {
   PackagePlus,
 } from "lucide-react";
 
-const AGENT_ORDER = ["claude", "gemini", "codex", "opencode"] as const;
+const AGENT_ORDER = BUILT_IN_AGENT_IDS;
 const POLL_INTERVAL = 3000;
 
 const SKIP_FIRST_RUN_DIALOGS = isCanopyEnvEnabled("CANOPY_E2E_SKIP_FIRST_RUN_DIALOGS");

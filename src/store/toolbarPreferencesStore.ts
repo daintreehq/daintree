@@ -2,13 +2,11 @@ import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import type { ToolbarPreferences, ToolbarButtonId } from "@/../../shared/types/domain";
 import { createSafeJSONStorage } from "./persistence/safeStorage";
+import { BUILT_IN_AGENT_IDS } from "@shared/config/agentIds";
 
 const DEFAULT_LEFT_BUTTONS: ToolbarButtonId[] = [
   "agent-setup",
-  "claude",
-  "gemini",
-  "codex",
-  "opencode",
+  ...(BUILT_IN_AGENT_IDS as unknown as ToolbarButtonId[]),
   "terminal",
   "browser",
   "dev-server",
