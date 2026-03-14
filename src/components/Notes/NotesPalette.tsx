@@ -147,10 +147,7 @@ export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
   // Derive whether to show a synthetic "Create note" list item
   const trimmedQuery = query.trim();
   const showCreateItem =
-    visibleNotes.length === 0 &&
-    trimmedQuery.length > 0 &&
-    !isLoading &&
-    !isSearching;
+    visibleNotes.length === 0 && trimmedQuery.length > 0 && !isLoading && !isSearching;
   const createDisplayTitle =
     trimmedQuery.length > 40 ? `${trimmedQuery.slice(0, 40)}…` : trimmedQuery;
 
