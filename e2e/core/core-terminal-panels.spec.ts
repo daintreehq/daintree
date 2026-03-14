@@ -90,10 +90,8 @@ test.describe.serial("Core: Terminal & Panels", () => {
       const { window } = ctx;
 
       const panel = getFirstGridPanel(window);
-      // Open the overflow menu, then click "Move to Dock" inside the dropdown
-      const overflowBtn = panel.locator(SEL.panel.overflowMenu).first();
-      await overflowBtn.click();
-      const minimizeBtn = window.locator(SEL.panel.minimize).first();
+      // Click the visible "Move to Dock" button on the panel header
+      const minimizeBtn = panel.locator(SEL.panel.minimize).first();
       await expect(minimizeBtn).toBeVisible({ timeout: T_SHORT });
       await minimizeBtn.click();
 
@@ -236,9 +234,7 @@ test.describe.serial("Core: Terminal & Panels", () => {
       const { window } = ctx;
 
       const panel = getFirstGridPanel(window);
-      const overflowBtn = panel.locator(SEL.panel.overflowMenu).first();
-      await overflowBtn.click();
-      const minimizeBtn = window.locator(SEL.panel.minimize).first();
+      const minimizeBtn = panel.locator(SEL.panel.minimize).first();
       await expect(minimizeBtn).toBeVisible({ timeout: T_SHORT });
       await minimizeBtn.click();
 
@@ -252,9 +248,7 @@ test.describe.serial("Core: Terminal & Panels", () => {
       const { window } = ctx;
 
       const panel = getFirstGridPanel(window);
-      const overflowBtn = panel.locator(SEL.panel.overflowMenu).first();
-      await overflowBtn.click();
-      const minimizeBtn = window.locator(SEL.panel.minimize).first();
+      const minimizeBtn = panel.locator(SEL.panel.minimize).first();
       await expect(minimizeBtn).toBeVisible({ timeout: T_SHORT });
       await minimizeBtn.click();
 
