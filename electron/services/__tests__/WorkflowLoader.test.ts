@@ -596,8 +596,7 @@ describe("WorkflowLoader", () => {
     });
 
     it("detects cycle mixing dependencies and routing edges", () => {
-      // step1 depends on step3, step1 onSuccess -> step2, step2 onSuccess -> step3,
-      // step3 depends on step2 (redundant) AND step3 onSuccess -> step1 = real cycle
+      // step1 → step2 (onSuccess), step2 → step3 (dep reversed), step3 → step1 (onSuccess)
       const result = loader.validate({
         id: "mixed-cycle",
         version: "1.0.0",
@@ -613,12 +612,12 @@ describe("WorkflowLoader", () => {
             id: "step2",
             type: "action",
             config: { actionId: "s2" },
-            onSuccess: ["step3"],
           },
           {
             id: "step3",
             type: "action",
             config: { actionId: "s3" },
+            dependencies: ["step2"],
             onSuccess: ["step1"],
           },
         ],
