@@ -5,7 +5,12 @@ import { terminalClient } from "@/clients";
 import { TerminalRefreshTier } from "@/types";
 import type { TerminalType } from "@/types";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
-import { useScrollbackStore, usePerformanceModeStore, useTerminalFontStore } from "@/store";
+import {
+  useScrollbackStore,
+  usePerformanceModeStore,
+  useTerminalFontStore,
+  useProjectSettingsStore,
+} from "@/store";
 import { getScrollbackForType, PERFORMANCE_MODE_SCROLLBACK } from "@/utils/scrollbackConfig";
 import { getXtermOptions } from "@/config/xtermConfig";
 import { getSoftNewlineSequence } from "../../../shared/utils/terminalInputProtocol.js";
@@ -60,18 +65,22 @@ function XtermAdapterComponent({
   }, []);
 
   const scrollbackLines = useScrollbackStore((state) => state.scrollbackLines);
+  const projectScrollback = useProjectSettingsStore(
+    (state) => state.settings?.terminalSettings?.scrollbackLines
+  );
   const performanceMode = usePerformanceModeStore((state) => state.performanceMode);
   const fontSize = useTerminalFontStore((state) => state.fontSize);
   const fontFamily = useTerminalFontStore((state) => state.fontFamily);
 
-  // Calculate effective scrollback: performance mode overrides, otherwise use type-based policy
+  // Calculate effective scrollback: performance mode overrides, then project override, then app default
   const effectiveScrollback = useMemo(() => {
     if (performanceMode) {
       return PERFORMANCE_MODE_SCROLLBACK;
     }
-    // Use scrollbackLines directly (0 means unlimited, handled by getScrollbackForType)
-    return getScrollbackForType(terminalType, scrollbackLines);
-  }, [performanceMode, scrollbackLines, terminalType]);
+    const isAgent = terminalType !== "terminal";
+    const baseScrollback = !isAgent && projectScrollback ? projectScrollback : scrollbackLines;
+    return getScrollbackForType(terminalType, baseScrollback);
+  }, [performanceMode, scrollbackLines, projectScrollback, terminalType]);
 
   // Alt buffer state for TUI applications (OpenCode, vim, htop, etc.)
   // When in alt buffer, we remove padding and let the TUI fill the entire space
