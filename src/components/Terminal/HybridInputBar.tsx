@@ -37,7 +37,7 @@ import { useCommandStore } from "@/store/commandStore";
 import { useProjectStore } from "@/store/projectStore";
 import { useTerminalStore, useVoiceRecordingStore, useWorktreeDataStore } from "@/store";
 import { VoiceInputButton } from "./VoiceInputButton";
-import { Archive, Maximize2, Minimize2 } from "lucide-react";
+import { Archive } from "lucide-react";
 import { registerInputController, unregisterInputController } from "@/store/terminalInputStore";
 import type { CommandContext, CommandResult } from "@shared/types/commands";
 import { isEnterLikeLineBreakInputEvent } from "./hybridInputEvents";
@@ -1855,20 +1855,6 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
             </div>
 
             <div className="flex items-center pr-1.5">
-              <button
-                type="button"
-                onClick={() => setIsExpanded((v) => !v)}
-                disabled={disabled}
-                className="flex items-center justify-center h-5 w-5 rounded-sm text-canopy-text/50 hover:text-canopy-text hover:bg-white/[0.06] transition-colors cursor-pointer"
-                aria-label={isExpanded ? "Collapse editor" : "Expand editor"}
-                title={isExpanded ? "Collapse editor (⌘⇧E)" : "Expand editor (⌘⇧E)"}
-              >
-                {isExpanded ? (
-                  <Minimize2 className="h-3.5 w-3.5" />
-                ) : (
-                  <Maximize2 className="h-3.5 w-3.5" />
-                )}
-              </button>
               {hasStash && (
                 <button
                   type="button"
