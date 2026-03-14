@@ -436,6 +436,7 @@ export type {
   WorkflowCondition,
   WorkflowNodeType,
   WorkflowActionConfig,
+  WorkflowApprovalConfig,
   WorkflowNode,
   WorkflowDefinition,
   WorkflowValidationResult,
@@ -450,6 +451,7 @@ export {
   WorkflowConditionSchema,
   WorkflowNodeTypeSchema,
   WorkflowActionConfigSchema,
+  WorkflowApprovalConfigSchema,
   WorkflowNodeSchema,
   WorkflowDefinitionSchema,
 } from "./workflow.js";
@@ -457,7 +459,10 @@ export {
 // Workflow Run types - runtime execution state
 export type {
   WorkflowRunStatus,
+  NodeStatus,
   NodeState,
+  ApprovalDecision,
+  PendingWorkflowApproval,
   EvaluatedCondition,
   WorkflowRun,
 } from "./workflowRun.js";
