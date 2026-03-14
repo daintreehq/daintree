@@ -369,7 +369,6 @@ describe("ActivityMonitor", () => {
       expect(monitor.getState()).toBe("busy");
       onStateChange.mockClear();
 
-      monitor.onInput("h");
       for (let i = 0; i < 5; i++) {
         monitor.onData("\r⠋ Working (esc to interrupt)");
         vi.advanceTimersByTime(100);
@@ -467,6 +466,36 @@ describe("ActivityMonitor", () => {
         vi.advanceTimersByTime(100);
       }
 
+      expect(monitor.getState()).toBe("idle");
+
+      monitor.dispose();
+    });
+
+    it("should stay busy when real output follows cosmetic redraws", () => {
+      const onStateChange = vi.fn();
+      const monitor = new ActivityMonitor("test-1", 1000, onStateChange, {
+        idleDebounceMs: 300,
+      });
+
+      monitor.onInput("run\r");
+      expect(monitor.getState()).toBe("busy");
+      onStateChange.mockClear();
+
+      // Send cosmetic spinner frames for 200ms (within debounce window)
+      for (let i = 0; i < 2; i++) {
+        monitor.onData("\r⠙ Working (esc to interrupt)");
+        vi.advanceTimersByTime(100);
+      }
+
+      // Now send real semantic output — this should reset the debounce timer
+      monitor.onData("\nFile created: src/index.ts\n");
+      vi.advanceTimersByTime(200);
+
+      // Should still be busy because the real output reset the debounce
+      expect(monitor.getState()).toBe("busy");
+
+      // After full debounce window with no more output, should go idle
+      vi.advanceTimersByTime(300);
       expect(monitor.getState()).toBe("idle");
 
       monitor.dispose();
