@@ -26,6 +26,13 @@ vi.mock("@xterm/addon-canvas", () => ({
   },
 }));
 
+vi.mock("@xterm/addon-webgl", () => ({
+  WebglAddon: vi.fn().mockImplementation(() => ({
+    dispose: vi.fn(),
+    onContextLoss: vi.fn(() => ({ dispose: vi.fn() })),
+  })),
+}));
+
 vi.mock("../TerminalAddonManager", () => ({
   setupTerminalAddons: vi.fn(() => ({
     fitAddon: { fit: vi.fn() },

@@ -8,6 +8,13 @@ vi.mock("@xterm/addon-canvas", () => ({
   },
 }));
 
+vi.mock("@xterm/addon-webgl", () => ({
+  WebglAddon: vi.fn().mockImplementation(() => ({
+    dispose: vi.fn(),
+    onContextLoss: vi.fn(() => ({ dispose: vi.fn() })),
+  })),
+}));
+
 vi.mock("@/clients", () => ({
   terminalClient: {
     onData: vi.fn(() => vi.fn()),

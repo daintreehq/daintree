@@ -229,6 +229,39 @@ describe("TerminalRendererPolicy", () => {
     });
   });
 
+  describe("onTierApplied callback", () => {
+    it("fires immediately on upgrade to FOCUSED", async () => {
+      const onTierApplied = vi.fn();
+      mockDeps.onTierApplied = onTierApplied;
+      mockManagedTerminal.lastAppliedTier = TerminalRefreshTier.VISIBLE;
+
+      const { TerminalRendererPolicy } = await import("../TerminalRendererPolicy");
+      policy = new TerminalRendererPolicy(mockDeps);
+
+      policy.applyRendererPolicy("test-id", TerminalRefreshTier.FOCUSED);
+
+      expect(onTierApplied).toHaveBeenCalledWith(
+        "test-id",
+        TerminalRefreshTier.FOCUSED,
+        mockManagedTerminal
+      );
+    });
+
+    it("does not fire for no-op tier changes", async () => {
+      const onTierApplied = vi.fn();
+      mockDeps.onTierApplied = onTierApplied;
+      mockManagedTerminal.lastAppliedTier = TerminalRefreshTier.FOCUSED;
+
+      const { TerminalRendererPolicy } = await import("../TerminalRendererPolicy");
+      policy = new TerminalRendererPolicy(mockDeps);
+
+      // Same tier — should be a no-op, callback should not fire
+      policy.applyRendererPolicy("test-id", TerminalRefreshTier.FOCUSED);
+
+      expect(onTierApplied).not.toHaveBeenCalled();
+    });
+  });
+
   describe("clearTierState", () => {
     it("should remove tier state for terminal", () => {
       policy.initializeBackendTier("test-id", "background");
