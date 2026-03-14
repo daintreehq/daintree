@@ -73,7 +73,12 @@ export function registerWorkflowHandlers(deps: HandlerDependencies): () => void 
       const engine = requireEngine();
       if (!payload || typeof payload !== "object") throw new Error("Invalid payload");
       if (!payload.runId || !payload.nodeId) throw new Error("Missing runId or nodeId");
-      await engine.resolveApproval(payload.runId, payload.nodeId, payload.approved, payload.feedback);
+      await engine.resolveApproval(
+        payload.runId,
+        payload.nodeId,
+        payload.approved,
+        payload.feedback
+      );
     })
   );
 

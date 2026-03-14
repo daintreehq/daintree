@@ -1786,5 +1786,4 @@ describe("WorkflowEngine", () => {
       expect(runs[0].nodeStates["approve"].approvalDecision?.timedOut).toBe(true);
     });
   });
-
 });
