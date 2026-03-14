@@ -938,7 +938,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         setTerminalContext(null);
         setSelectionContext(null);
       },
-      [applyEditorValue, agentId, cwd]
+      [applyEditorValue, agentId, cwd, terminalId]
     );
 
     // Voice segments are flushed to the draft store by VoiceRecordingService

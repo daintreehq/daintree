@@ -120,6 +120,7 @@ export function getTerminalContext(text: string, caret: number): AtTerminalConte
   if (caret < atStart + 1 || caret > tokenEnd) return null;
 
   const partial = text.slice(atStart + 1, caret);
+  if (partial.length < 4) return null;
   if (!TERMINAL_PREFIXES.some((p) => p.startsWith(partial) || partial === p)) return null;
 
   return { atStart, tokenEnd };
@@ -193,6 +194,7 @@ export function getSelectionContext(text: string, caret: number): AtSelectionCon
   if (caret < atStart + 1 || caret > tokenEnd) return null;
 
   const partial = text.slice(atStart + 1, caret);
+  if (partial.length < 4) return null;
   if (!SELECTION_PREFIXES.some((p) => p.startsWith(partial) || partial === p)) return null;
 
   return { atStart, tokenEnd };
