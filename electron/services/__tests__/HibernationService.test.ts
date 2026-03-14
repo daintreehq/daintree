@@ -6,8 +6,8 @@ const storeMock = vi.hoisted(() => ({
 }));
 
 const projectStoreMock = vi.hoisted(() => ({
-  getCurrentProjectId: vi.fn(() => null),
-  getAllProjects: vi.fn(() => []),
+  getCurrentProjectId: vi.fn<() => string | null>(() => null),
+  getAllProjects: vi.fn<() => Array<{ id: string; name: string; lastOpened: number }>>(() => []),
   clearProjectState: vi.fn(async () => {}),
 }));
 
@@ -30,6 +30,7 @@ describe("HibernationService", () => {
   });
 
   afterEach(() => {
+    vi.doUnmock("../PtyManager.js");
     vi.useRealTimers();
     vi.restoreAllMocks();
   });
@@ -92,6 +93,40 @@ describe("HibernationService", () => {
       enabled: true,
       inactiveThresholdHours: 72,
     });
+  });
+
+  it("does not call clearProjectState during hibernation", async () => {
+    const gracefulKillMock = vi.fn(async () => [{ id: "t1" }]);
+    const ptyManagerMock = {
+      getProjectStats: () => ({ terminalCount: 2 }),
+      gracefulKillByProject: gracefulKillMock,
+    };
+
+    vi.doMock("../PtyManager.js", () => ({
+      getPtyManager: () => ptyManagerMock,
+    }));
+
+    const inactiveProject = {
+      id: "proj-1",
+      name: "Old Project",
+      lastOpened: Date.now() - 25 * 60 * 60 * 1000, // 25 hours ago
+    };
+
+    (storeMock.get as Mock).mockReturnValue({
+      enabled: true,
+      inactiveThresholdHours: 24,
+    });
+
+    projectStoreMock.getCurrentProjectId.mockReturnValue("active-proj");
+    projectStoreMock.getAllProjects.mockReturnValue([inactiveProject]);
+
+    const { HibernationService: FreshService } = await import("../HibernationService.js");
+    const service = new FreshService();
+
+    await (service as unknown as { checkAndHibernate(): Promise<void> }).checkAndHibernate();
+
+    expect(gracefulKillMock).toHaveBeenCalledWith("proj-1");
+    expect(projectStoreMock.clearProjectState).not.toHaveBeenCalled();
   });
 
   it("clears pending initial check when stopped before timeout", () => {
