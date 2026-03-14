@@ -575,7 +575,11 @@ export class ActivityMonitor {
     this.lastDataTimestamp = now;
 
     const isLikelyUserEcho = data ? this.isLikelyUserEcho(data, now) : false;
-    if (data && !isLikelyUserEcho) {
+    // Detect cosmetic status line rewrites early so they can be excluded
+    // from all activity tracking (debounce, line-rewrite detection, byte counting). Issue #3189.
+    const isCosmeticRedraw = data ? this.isStatusLineRewrite(data) : false;
+
+    if (data && !isLikelyUserEcho && !isCosmeticRedraw) {
       this.lastActivityTimestamp = now;
     }
 
@@ -584,13 +588,14 @@ export class ActivityMonitor {
       this.revalidateStateAfterWake();
     }
 
-    if (data && !isLikelyUserEcho) {
+    if (data && !isLikelyUserEcho && !isCosmeticRedraw) {
       this.updateLineRewriteDetection(data, now);
     }
 
     // For polling-enabled terminals: check raw stream for patterns FIRST
     // This runs BEFORE the busy-state early return to ensure instant detection
-    if (data && this.getVisibleLines && !isLikelyUserEcho) {
+    // Skip cosmetic redraws to prevent spinner frames from triggering busy. Issue #3189.
+    if (data && this.getVisibleLines && !isLikelyUserEcho && !isCosmeticRedraw) {
       // Use rolling buffer to catch patterns split across PTY chunks
       this.updatePatternBuffer(data);
       const bufferText = stripAnsi(this.patternBuffer);
@@ -652,10 +657,8 @@ export class ActivityMonitor {
       return;
     }
 
-    // Filter status line rewrites (token counts, costs, spinners, progress) from activity.
-    // These CR-based single-line updates don't represent real agent output.
-    // Cosmetic redraws must NOT reset the debounce timer (Issue #3189).
-    if (this.isStatusLineRewrite(data)) {
+    // Filter cosmetic redraws from remaining activity tracking (debounce, byte counting).
+    if (isCosmeticRedraw) {
       return;
     }
 
@@ -898,7 +901,7 @@ export class ActivityMonitor {
         count++;
       }
     }
-    if (data.includes("\x1b[2K") || data.includes("\x1b[K") || /\x1b\[\d*A/.test(data)) {
+    if (data.includes("\x1b[2K") || data.includes("\x1b[K") || /\u001b\[\d*A/.test(data)) {
       count++;
     }
     return count;
@@ -925,7 +928,7 @@ export class ActivityMonitor {
       !hasRewrite &&
       !data.includes("\x1b[2K") &&
       !data.includes("\x1b[K") &&
-      !/\x1b\[\d*A/.test(data)
+      !/\u001b\[\d*A/.test(data)
     ) {
       return false;
     }
