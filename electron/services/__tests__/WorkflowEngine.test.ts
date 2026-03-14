@@ -1703,7 +1703,6 @@ describe("WorkflowEngine", () => {
     });
 
     it("recovery re-emits approval-requested for awaiting-approval nodes", async () => {
-      const approvalNode = approvalWorkflow.nodes.find((n) => n.id === "approve")!;
       const persistedRun: WorkflowRun = {
         runId: "recovery-run",
         workflowId: "approval-workflow",

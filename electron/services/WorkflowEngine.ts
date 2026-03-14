@@ -269,6 +269,10 @@ export class WorkflowEngine {
     const resolvedDeps: string[] = [];
 
     for (const depId of dependencies) {
+      // Approval nodes don't create tasks — skip them as task dependencies
+      const depNode = run.definition.nodes.find((n) => n.id === depId);
+      if (depNode?.type === "approval") continue;
+
       const taskId = run.taskMapping[depId];
       if (!taskId) {
         throw new Error(
