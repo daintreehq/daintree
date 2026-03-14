@@ -138,9 +138,9 @@ export interface TerminalRegistrySlice {
   moveTerminalToGrid: (id: string) => boolean;
   toggleTerminalLocation: (id: string) => void;
 
-  trashTerminal: (id: string, options?: { showUndoToast?: boolean }) => void;
+  trashTerminal: (id: string) => void;
   /** Trash all panels in a group together, storing group metadata for restoration */
-  trashPanelGroup: (panelId: string, options?: { showUndoToast?: boolean }) => void;
+  trashPanelGroup: (panelId: string) => void;
   restoreTerminal: (id: string, targetWorktreeId?: string) => void;
   /** Restore all panels with the given groupRestoreId, recreating the tab group */
   restoreTrashedGroup: (groupRestoreId: string, targetWorktreeId?: string) => void;

@@ -1,9 +1,11 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect, useRef } from "react";
 import { Trash2 } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { isMac } from "@/lib/platform";
 import { useWorktrees } from "@/hooks/useWorktrees";
+import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import type { TerminalInstance } from "@/store";
 import type { TrashedTerminal, TrashedTerminalGroupMetadata } from "@/store/slices";
 import { TrashBinItem } from "./TrashBinItem";
@@ -40,7 +42,23 @@ type TrashDisplayItem = GroupedTrashItem | GroupedTrashGroup;
 
 export function TrashContainer({ trashedTerminals, compact = false }: TrashContainerProps) {
   const [isOpen, setIsOpen] = useState(false);
+  const [pulseKey, setPulseKey] = useState(0);
+  const prevLengthRef = useRef(trashedTerminals.length);
   const { worktreeMap } = useWorktrees();
+
+  useEffect(() => {
+    const increased = trashedTerminals.length > prevLengthRef.current;
+    prevLengthRef.current = trashedTerminals.length;
+    if (!increased) {
+      setPulseKey(0);
+      return undefined;
+    }
+    setPulseKey((k) => k + 1);
+    const shortcut = isMac() ? "Cmd+Shift+T" : "Ctrl+Shift+T";
+    useAnnouncerStore.getState().announce(`Panel closed — press ${shortcut} to restore`);
+    const timer = setTimeout(() => setPulseKey(0), 450);
+    return () => clearTimeout(timer);
+  }, [trashedTerminals.length]);
 
   // Group trash items by groupRestoreId
   const displayItems = useMemo((): TrashDisplayItem[] => {
@@ -138,7 +156,7 @@ export function TrashContainer({ trashedTerminals, compact = false }: TrashConta
           aria-controls={contentId}
           aria-label={`Trash: ${count} terminal${count === 1 ? "" : "s"}`}
         >
-          <span className="relative">
+          <span key={pulseKey} className={cn("relative", pulseKey > 0 && "animate-trash-pulse")}>
             <Trash2 className="w-3.5 h-3.5 text-canopy-text/60" aria-hidden="true" />
             {compact && count > 0 && (
               <span className="absolute -top-1.5 -right-1.5 z-10 flex items-center justify-center min-w-[14px] h-[14px] px-0.5 rounded-full bg-canopy-text/40 text-[10px] font-bold text-white">

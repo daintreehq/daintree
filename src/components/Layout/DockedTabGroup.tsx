@@ -232,7 +232,7 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
         }
       }
       // Trash the terminal (store auto-removes from group)
-      trashTerminal(tabId, { showUndoToast: true });
+      trashTerminal(tabId);
     },
     [activeTabId, panels, group.id, setActiveTab, setFocused, trashTerminal]
   );

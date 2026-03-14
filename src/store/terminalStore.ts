@@ -36,7 +36,6 @@ import { useTerminalInputStore } from "./terminalInputStore";
 import type { CrashType } from "@shared/types/pty-host";
 import { isAgentTerminal } from "@/utils/terminalType";
 import { logInfo, logWarn, logError } from "@/utils/logger";
-import { showTrashUndoToast } from "@/lib/terminalTrashUndoToast";
 
 export type { TerminalInstance, AddTerminalOptions, QueuedCommand, CrashType };
 export { isAgentReady };
@@ -140,7 +139,7 @@ export const useTerminalStore = create<PanelGridState>()((set, get, api) => {
     getTerminals,
     (id) => get().removeTerminal(id),
     (id) => get().restartTerminal(id),
-    (id) => get().trashTerminal(id, { showUndoToast: true }),
+    (id) => get().trashTerminal(id),
     (id) => get().moveTerminalToDock(id),
     (id) => get().moveTerminalToGrid(id),
     () => get().focusedId,
@@ -196,17 +195,12 @@ export const useTerminalStore = create<PanelGridState>()((set, get, api) => {
       return moveSucceeded;
     },
 
-    trashTerminal: (id: string, options?: { showUndoToast?: boolean }) => {
+    trashTerminal: (id: string) => {
       const state = get();
-      const terminal = state.terminals.find((t) => t.id === id);
       registrySlice.trashTerminal(id);
 
       // Clear watch when panel is trashed (onTerminalRemoved only fires on full removal)
       get().unwatchPanel(id);
-
-      if (options?.showUndoToast && terminal) {
-        showTrashUndoToast(terminal.title ?? "Terminal", id);
-      }
 
       const updates: Partial<PanelGridState> = {};
 
@@ -228,23 +222,13 @@ export const useTerminalStore = create<PanelGridState>()((set, get, api) => {
       }
     },
 
-    trashPanelGroup: (panelId: string, options?: { showUndoToast?: boolean }) => {
+    trashPanelGroup: (panelId: string) => {
       const state = get();
       // Get the group before trashing to identify all panels
       const group = registrySlice.getPanelGroup(panelId);
       const panelIdsInGroup = group?.panelIds ?? [panelId];
 
-      // Capture title for undo toast before trashing
-      const anchorTerminal = state.terminals.find((t) => t.id === panelId);
-      const toastTitle = anchorTerminal?.title ?? "Terminal";
-
       registrySlice.trashPanelGroup(panelId);
-
-      if (options?.showUndoToast) {
-        // Read groupRestoreId from trashed state (set synchronously by registrySlice)
-        const trashedEntry = get().trashedTerminals.get(panelId);
-        showTrashUndoToast(toastTitle, panelId, trashedEntry?.groupRestoreId);
-      }
 
       const updates: Partial<PanelGridState> = {};
 

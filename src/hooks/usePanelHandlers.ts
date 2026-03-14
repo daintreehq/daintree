@@ -39,7 +39,7 @@ export function usePanelHandlers({
         lifecycle.setIsTrashing(true);
         lifecycle.timeoutRef.current = setTimeout(() => {
           try {
-            trashPanelGroup(terminalId, { showUndoToast: true });
+            trashPanelGroup(terminalId);
           } catch (error) {
             console.error("Failed to trash terminal:", error);
           } finally {
