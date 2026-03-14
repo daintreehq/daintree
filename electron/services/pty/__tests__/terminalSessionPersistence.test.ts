@@ -183,20 +183,22 @@ describe("terminalSessionPersistence", () => {
     });
 
     it("ignores .tmp files and non-.restore files", async () => {
-      await createFile("term-1.tmp", "temporary data");
-      await createFile("term-2.txt", "text data");
-      await createFile("term-3.restore", "valid data");
+      await createFile("term-1.restore.tmp", "atomic write in progress");
+      await createFile("term-2.tmp", "other temporary data");
+      await createFile("term-3.txt", "text data");
+      await createFile("term-4.restore", "valid data");
 
       const result = await evictSessionFiles({
         ttlMs: 1000,
         maxBytes: 1024 * 1024,
-        knownIds: new Set(["term-3"]),
+        knownIds: new Set(["term-4"]),
       });
 
       expect(result.deleted).toBe(0);
-      expect(fs.existsSync(path.join(sessionDir, "term-1.tmp"))).toBe(true);
-      expect(fs.existsSync(path.join(sessionDir, "term-2.txt"))).toBe(true);
-      expect(fs.existsSync(path.join(sessionDir, "term-3.restore"))).toBe(true);
+      expect(fs.existsSync(path.join(sessionDir, "term-1.restore.tmp"))).toBe(true);
+      expect(fs.existsSync(path.join(sessionDir, "term-2.tmp"))).toBe(true);
+      expect(fs.existsSync(path.join(sessionDir, "term-3.txt"))).toBe(true);
+      expect(fs.existsSync(path.join(sessionDir, "term-4.restore"))).toBe(true);
     });
 
     it("deletes orphan files whose IDs are not in knownIds", async () => {
@@ -276,6 +278,20 @@ describe("terminalSessionPersistence", () => {
 
       expect(result.deleted).toBe(2);
       expect(result.bytesFreed).toBe(150);
+    });
+
+    it("deletes known files that exceed TTL", async () => {
+      const ttlMs = 60_000;
+      await createFile("known-old.restore", "old data", ttlMs + 60_000);
+
+      const result = await evictSessionFiles({
+        ttlMs,
+        maxBytes: 1024 * 1024,
+        knownIds: new Set(["known-old"]),
+      });
+
+      expect(result.deleted).toBe(1);
+      expect(fs.existsSync(path.join(sessionDir, "known-old.restore"))).toBe(false);
     });
 
     it("works without knownIds (TTL-only mode)", async () => {
