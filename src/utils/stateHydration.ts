@@ -276,20 +276,16 @@ export async function hydrateAppState(
 
   suppressMruRecording(true);
   try {
-    await withRendererSpan(
-      PERF_MARKS.HYDRATE_BOOTSTRAP,
-      () => ensureHydrationBootstrap(),
-      { switchId: _switchId ?? null }
-    );
+    await withRendererSpan(PERF_MARKS.HYDRATE_BOOTSTRAP, () => ensureHydrationBootstrap(), {
+      switchId: _switchId ?? null,
+    });
     if (!checkCurrent()) return;
 
     // Batch fetch initial state
     const [hydrateResult, tmpDir] = await Promise.all([
-      withRendererSpan(
-        PERF_MARKS.HYDRATE_APP_CLIENT,
-        () => appClient.hydrate(),
-        { switchId: _switchId ?? null }
-      ),
+      withRendererSpan(PERF_MARKS.HYDRATE_APP_CLIENT, () => appClient.hydrate(), {
+        switchId: _switchId ?? null,
+      }),
       systemClient.getTmpDir().catch(() => ""),
     ]);
     const { appState, terminalConfig, project: currentProject, agentSettings } = hydrateResult;
