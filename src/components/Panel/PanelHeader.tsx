@@ -625,11 +625,7 @@ function PanelHeaderComponent({
               {headerActions && ((canRestart && !!onRestart) || showCancelWatch) && (
                 <DropdownMenuSeparator />
               )}
-              {headerActions && (
-                <div role="presentation" onKeyDown={(e) => e.stopPropagation()}>
-                  {headerActions}
-                </div>
-              )}
+              {headerActions}
             </DropdownMenuContent>
           </DropdownMenu>
         )}
