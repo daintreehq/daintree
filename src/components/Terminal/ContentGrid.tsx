@@ -695,7 +695,7 @@ export function ContentGrid({ className, defaultCwd, agentAvailability }: Conten
           return {
             id: `new:${id}`,
             label: `New ${config?.name ?? id}`,
-            enabled: canLaunch(id as "claude" | "gemini" | "codex" | "opencode" | "terminal"),
+            enabled: canLaunch(id),
           };
         });
 

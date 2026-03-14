@@ -1,6 +1,5 @@
 import type { AgentRoutingConfig } from "../types/agentSettings.js";
 import type { PrerequisiteSpec } from "../types/ipc/system.js";
-import type { BuiltInAgentId } from "./agentIds.js";
 
 export interface AgentHelpConfig {
   args: string[];
@@ -799,11 +798,16 @@ export const AGENT_REGISTRY: Record<string, AgentConfig> = {
   },
 };
 
-const _registryCheck: Record<BuiltInAgentId, AgentConfig> = AGENT_REGISTRY as Record<
-  BuiltInAgentId,
-  AgentConfig
->;
-void _registryCheck;
+import { BUILT_IN_AGENT_IDS } from "./agentIds.js";
+
+// Runtime check: every BuiltInAgentId must have an entry in the registry.
+for (const id of BUILT_IN_AGENT_IDS) {
+  if (!(id in AGENT_REGISTRY)) {
+    throw new Error(
+      `AGENT_REGISTRY is missing entry for built-in agent "${id}". Update AGENT_REGISTRY or BUILT_IN_AGENT_IDS.`
+    );
+  }
+}
 
 export function getAgentIds(): string[] {
   return Object.keys(AGENT_REGISTRY);
