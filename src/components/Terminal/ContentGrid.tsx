@@ -680,7 +680,7 @@ export function ContentGrid({ className, defaultCwd, agentAvailability }: Conten
       if (!target) return;
       if (target.closest(".terminal-pane")) return;
 
-      const canLaunch = (agentId: "claude" | "gemini" | "codex" | "opencode" | "terminal") => {
+      const canLaunch = (agentId: string) => {
         if (agentId === "terminal") return true;
         if (!agentAvailability) return true;
         return agentAvailability[agentId] === true;

@@ -3,6 +3,7 @@ import { AgentIdSchema, LaunchLocationSchema } from "./schemas";
 import { z } from "zod";
 import { useTerminalStore } from "@/store/terminalStore";
 import { AGENT_REGISTRY } from "@/config/agents";
+import type { ActionId } from "@shared/types/actions";
 
 export function registerAgentActions(actions: ActionRegistry, callbacks: ActionCallbacks): void {
   actions.set("agent.launch", () => ({
@@ -55,7 +56,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
   }));
 
   for (const [id, config] of Object.entries(AGENT_REGISTRY)) {
-    const actionId = `agent.${id}`;
+    const actionId = `agent.${id}` as ActionId;
     actions.set(actionId, () => ({
       id: actionId,
       title: `Launch ${config.name}`,
