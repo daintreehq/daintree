@@ -878,6 +878,20 @@ export class TerminalProcess {
     }
     this.inputWriteQueue = [];
 
+    // Flush session snapshot synchronously before marking as killed.
+    // Once wasKilled is set, all persistence paths are blocked, and
+    // disposeHeadless() destroys the buffer — so this is the last chance.
+    if (TERMINAL_SESSION_PERSISTENCE_ENABLED && !this.isAgentTerminal) {
+      try {
+        const state = this.getSerializedState();
+        if (state && Buffer.byteLength(state, "utf8") <= SESSION_SNAPSHOT_MAX_BYTES) {
+          persistSessionSnapshotSync(this.id, state);
+        }
+      } catch {
+        // best-effort only
+      }
+    }
+
     terminal.wasKilled = true;
     this.clearSessionPersistTimer();
 

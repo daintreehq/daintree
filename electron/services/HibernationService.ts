@@ -140,12 +140,11 @@ export class HibernationService {
       );
 
       try {
-        // Gracefully kill terminals (allows agents to print session IDs before dying)
+        // Gracefully kill terminals (allows agents to print session IDs before dying).
+        // Project state (state.json) is preserved so terminal IDs remain valid
+        // for matching .restore snapshot files on re-open.
         const results = await ptyManager.gracefulKillByProject(project.id);
         const terminalsKilled = results.length;
-
-        // Clear persisted state
-        await projectStore.clearProjectState(project.id);
 
         console.log(
           `[HibernationService] Hibernated "${project.name}": ${terminalsKilled} terminals killed`
