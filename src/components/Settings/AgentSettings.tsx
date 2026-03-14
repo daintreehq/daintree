@@ -21,6 +21,8 @@ import {
   Check,
   PackagePlus,
   Settings2,
+  Search,
+  X,
 } from "lucide-react";
 import { SettingsSubtabBar } from "./SettingsSubtabBar";
 import { SettingsSwitchCard } from "./SettingsSwitchCard";
@@ -29,6 +31,8 @@ import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/comp
 import { AgentHelpOutput } from "./AgentHelpOutput";
 import { getInstallBlocksForCurrentOS } from "@/lib/agentInstall";
 import type { DefaultAgentId } from "@/store/agentPreferencesStore";
+
+const GENERAL_SUBTAB_ID = "general";
 
 interface AgentSettingsProps {
   activeSubtab: string | null;
@@ -60,6 +64,8 @@ export function AgentSettings({
   const refreshCliAvailability = useCliAvailabilityStore((state) => state.refresh);
 
   const [copiedCommand, setCopiedCommand] = useState<string | null>(null);
+  const [searchQuery, setSearchQuery] = useState("");
+  const searchInputRef = useRef<HTMLInputElement>(null);
   const copyTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const isMountedRef = useRef(true);
 
@@ -125,9 +131,6 @@ export function AgentSettings({
   const agentIds = useMemo(() => getAgentIds(), []);
   const effectiveSettings = settings ?? DEFAULT_AGENT_SETTINGS;
 
-  // The General subtab is a reserved id that cannot conflict with agent ids.
-  const GENERAL_SUBTAB_ID = "general";
-
   // Derive active subtab: "general" or one of the agent ids.
   // Unknown subtab ids (not "general", not an agent) fall back to General to avoid blank screens.
   const isGeneralActive =
@@ -155,6 +158,19 @@ export function AgentSettings({
         .filter((a): a is NonNullable<typeof a> => a !== null),
     [agentIds, effectiveSettings]
   );
+
+  const filteredAgentOptions = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    if (!q) return agentOptions;
+    return agentOptions.filter((a) => a.name.toLowerCase().includes(q));
+  }, [agentOptions, searchQuery]);
+
+  useEffect(() => {
+    if (!searchQuery.trim()) return;
+    if (activeAgentId && !filteredAgentOptions.some((a) => a.id === activeAgentId)) {
+      onSubtabChange(GENERAL_SUBTAB_ID);
+    }
+  }, [searchQuery, filteredAgentOptions, activeAgentId, onSubtabChange]);
 
   const activeAgent = activeAgentId ? agentOptions.find((a) => a.id === activeAgentId) : null;
   const activeEntry = activeAgent
@@ -216,6 +232,43 @@ export function AgentSettings({
           </Button>
         </div>
 
+        {agentOptions.length > 5 && (
+          <div
+            className={cn(
+              "flex items-center gap-1.5 px-2 py-1.5 rounded-[var(--radius-md)]",
+              "bg-canopy-bg border border-canopy-border",
+              "focus-within:border-canopy-accent focus-within:ring-1 focus-within:ring-canopy-accent/20"
+            )}
+          >
+            <Search
+              className="w-3.5 h-3.5 shrink-0 text-canopy-text/40 pointer-events-none"
+              aria-hidden="true"
+            />
+            <input
+              ref={searchInputRef}
+              type="text"
+              placeholder="Filter agents…"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              aria-label="Filter agents"
+              className="flex-1 min-w-0 text-xs bg-transparent text-canopy-text placeholder:text-canopy-text/40 focus:outline-none"
+            />
+            {searchQuery && (
+              <button
+                type="button"
+                onClick={() => {
+                  setSearchQuery("");
+                  searchInputRef.current?.focus();
+                }}
+                aria-label="Clear filter"
+                className="flex items-center justify-center w-5 h-5 rounded shrink-0 text-canopy-text/40 hover:text-canopy-text"
+              >
+                <X className="w-3 h-3" />
+              </button>
+            )}
+          </div>
+        )}
+
         {/* Subtab bar: General + per-agent tabs */}
         <SettingsSubtabBar
           subtabs={[
@@ -229,7 +282,7 @@ export function AgentSettings({
                 />
               ),
             },
-            ...agentOptions.map((agent) => {
+            ...filteredAgentOptions.map((agent) => {
               const hasIndicators = !agent.selected || agent.dangerousEnabled;
               return {
                 id: agent.id,
