@@ -1,5 +1,6 @@
 import type { ITheme } from "@xterm/xterm";
 import type { AppColorScheme, AppColorSchemeTokens } from "./types.js";
+import { hexToRgbTriplet } from "./themes.js";
 
 export function getTerminalScrollbarDefaults(type: "dark" | "light") {
   const ch = type === "dark" ? "255, 255, 255" : "0, 0, 0";
@@ -41,8 +42,22 @@ export function getTerminalThemeFromAppTokens(tokens: AppColorSchemeTokens): ITh
 }
 
 export function getTerminalThemeFromAppScheme(scheme: AppColorScheme): ITheme {
+  const idle = scheme.tokens["activity-idle"];
+  const scrollbar = idle.startsWith("#")
+    ? getTerminalScrollbarFromHex(idle)
+    : getTerminalScrollbarDefaults(scheme.type);
+
   return {
     ...getTerminalThemeFromAppTokens(scheme.tokens),
-    ...getTerminalScrollbarDefaults(scheme.type),
+    ...scrollbar,
+  };
+}
+
+function getTerminalScrollbarFromHex(hex: string) {
+  const rgb = hexToRgbTriplet(hex);
+  return {
+    scrollbarSliderBackground: `rgba(${rgb}, 0.4)`,
+    scrollbarSliderHoverBackground: `rgba(${rgb}, 0.6)`,
+    scrollbarSliderActiveBackground: `rgba(${rgb}, 0.8)`,
   };
 }
