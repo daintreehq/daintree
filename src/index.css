@@ -4,6 +4,9 @@
 @theme inline {
   --color-*: initial;
 
+  --color-white: #ffffff;
+  --color-black: #000000;
+
   --color-surface-canvas: var(--theme-surface-canvas);
   --color-surface-sidebar: var(--theme-surface-sidebar);
   --color-surface-panel: var(--theme-surface-panel);
