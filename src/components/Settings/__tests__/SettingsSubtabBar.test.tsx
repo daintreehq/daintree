@@ -84,19 +84,22 @@ describe("SettingsSubtabBar", () => {
     expect(claudeTab.getAttribute("tabindex")).toBe("-1");
   });
 
-  it("navigates tabs with ArrowRight/ArrowLeft keys", () => {
+  it("navigates tabs with ArrowRight/ArrowLeft keys and moves focus", () => {
     const onChange = vi.fn();
     render(<SettingsSubtabBar subtabs={SUBTABS} activeId="claude" onChange={onChange} />);
     const tablist = screen.getByRole("tablist");
     const claudeTab = screen.getByText("Claude").closest("button")!;
+    const geminiTab = screen.getByText("Gemini").closest("button")!;
 
     claudeTab.focus();
     fireEvent.keyDown(tablist, { key: "ArrowRight" });
     expect(onChange).toHaveBeenCalledWith("gemini");
+    expect(document.activeElement).toBe(geminiTab);
 
     onChange.mockClear();
     fireEvent.keyDown(tablist, { key: "ArrowLeft" });
     expect(onChange).toHaveBeenCalledWith("claude");
+    expect(document.activeElement).toBe(claudeTab);
   });
 
   it("wraps around with ArrowRight on last tab", () => {
@@ -104,25 +107,44 @@ describe("SettingsSubtabBar", () => {
     render(<SettingsSubtabBar subtabs={SUBTABS} activeId="codex" onChange={onChange} />);
     const tablist = screen.getByRole("tablist");
     const codexTab = screen.getByText("Codex").closest("button")!;
+    const claudeTab = screen.getByText("Claude").closest("button")!;
 
     codexTab.focus();
     fireEvent.keyDown(tablist, { key: "ArrowRight" });
     expect(onChange).toHaveBeenCalledWith("claude");
+    expect(document.activeElement).toBe(claudeTab);
   });
 
-  it("navigates to first/last with Home/End keys", () => {
+  it("wraps around with ArrowLeft on first tab", () => {
+    const onChange = vi.fn();
+    render(<SettingsSubtabBar subtabs={SUBTABS} activeId="claude" onChange={onChange} />);
+    const tablist = screen.getByRole("tablist");
+    const claudeTab = screen.getByText("Claude").closest("button")!;
+    const codexTab = screen.getByText("Codex").closest("button")!;
+
+    claudeTab.focus();
+    fireEvent.keyDown(tablist, { key: "ArrowLeft" });
+    expect(onChange).toHaveBeenCalledWith("codex");
+    expect(document.activeElement).toBe(codexTab);
+  });
+
+  it("navigates to first/last with Home/End keys and moves focus", () => {
     const onChange = vi.fn();
     render(<SettingsSubtabBar subtabs={SUBTABS} activeId="gemini" onChange={onChange} />);
     const tablist = screen.getByRole("tablist");
     const geminiTab = screen.getByText("Gemini").closest("button")!;
+    const claudeTab = screen.getByText("Claude").closest("button")!;
+    const codexTab = screen.getByText("Codex").closest("button")!;
 
     geminiTab.focus();
     fireEvent.keyDown(tablist, { key: "Home" });
     expect(onChange).toHaveBeenCalledWith("claude");
+    expect(document.activeElement).toBe(claudeTab);
 
     onChange.mockClear();
     fireEvent.keyDown(tablist, { key: "End" });
     expect(onChange).toHaveBeenCalledWith("codex");
+    expect(document.activeElement).toBe(codexTab);
   });
 
   it("does not render scroll arrow buttons", () => {
