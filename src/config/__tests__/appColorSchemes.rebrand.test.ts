@@ -115,6 +115,28 @@ describe("appColorSchemes rebrand — semantic color separation", () => {
     });
   });
 
+  describe("semantic alias invariants — serengeti scheme", () => {
+    it("activity-working is green, not accent-primary", () => {
+      const tokens = getScheme("serengeti").tokens;
+      expect(tokens["activity-working"]).not.toBe(tokens["accent-primary"]);
+      expect(tokens["activity-working"]).toBe("#22c55e");
+    });
+
+    it("activity-active matches activity-working (same green family)", () => {
+      const tokens = getScheme("serengeti").tokens;
+      expect(tokens["activity-active"]).toBe(tokens["activity-working"]);
+    });
+
+    it("activity-working differs from status-success (in-progress vs completed)", () => {
+      const tokens = getScheme("serengeti").tokens;
+      expect(tokens["activity-working"]).not.toBe(tokens["status-success"]);
+    });
+
+    it("accent-primary is brand eucalyptus green", () => {
+      expect(getScheme("serengeti").tokens["accent-primary"]).toBe("#3F9366");
+    });
+  });
+
   describe("WCAG AA contrast — primary button", () => {
     it.each(BUILT_IN_APP_SCHEMES.map((s) => [s.id, s]))(
       'scheme "%s": accent-foreground on accent-primary passes WCAG AA (≥4.5:1)',

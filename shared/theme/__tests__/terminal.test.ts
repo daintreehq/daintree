@@ -56,6 +56,13 @@ describe("getTerminalThemeFromAppScheme", () => {
     expect(theme.scrollbarSliderActiveBackground).toBe("rgba(61, 78, 92, 0.8)");
   });
 
+  it("maps Serengeti terminal-black to text-primary, not canvas", () => {
+    const serengeti = BUILT_IN_APP_SCHEMES.find((s) => s.id === "serengeti")!;
+    const theme = getTerminalThemeFromAppScheme(serengeti);
+    expect(theme.black).toBe("#4A3F35");
+    expect(theme.black).not.toBe(serengeti.tokens["surface-canvas"]);
+  });
+
   it("uses light generic defaults for non-hex light scheme", () => {
     const scheme: AppColorScheme = {
       ...BUILT_IN_APP_SCHEMES[0],
