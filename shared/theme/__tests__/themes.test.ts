@@ -284,6 +284,44 @@ describe("built-in schemes — Fiordland", () => {
   });
 });
 
+describe("built-in schemes — Highlands theme", () => {
+  const highlands = BUILT_IN_APP_SCHEMES.find((s) => s.id === "highlands")!;
+
+  it("exists with correct metadata", () => {
+    expect(highlands).toBeDefined();
+    expect(highlands.name).toBe("Highlands");
+    expect(highlands.type).toBe("dark");
+    expect(highlands.builtin).toBe(true);
+  });
+
+  it("preserves mandatory eucalyptus accent", () => {
+    expect(highlands.tokens["accent-primary"]).toBe("#3F9366");
+  });
+
+  it("uses contrast-adjusted syntax colors", () => {
+    expect(highlands.tokens["syntax-keyword"]).toBe("#B872A5");
+    expect(highlands.tokens["syntax-function"]).toBe("#6898B5");
+    expect(highlands.tokens["syntax-number"]).toBe("#BE7055");
+    expect(highlands.tokens["status-danger"]).toBe("#E35040");
+  });
+
+  it("auto-derives terminal-black/white/bright-black from surfaces and activity", () => {
+    expect(highlands.tokens["terminal-black"]).toBe("#1A1614");
+    expect(highlands.tokens["terminal-white"]).toBe("#C9D1D9");
+    expect(highlands.tokens["terminal-bright-black"]).toBe("#4A4238");
+  });
+
+  it("produces all required token keys", () => {
+    for (const key of APP_THEME_TOKEN_KEYS) {
+      expect(highlands.tokens).toHaveProperty(key, expect.any(String));
+    }
+  });
+
+  it("passes critical contrast checks without warnings", () => {
+    expect(getAppThemeWarnings(highlands)).toEqual([]);
+  });
+});
+
 describe("normalizeAppColorScheme", () => {
   it("uses a light fallback base for partial light themes", () => {
     const scheme = normalizeAppColorScheme({
