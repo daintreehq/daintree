@@ -33,19 +33,21 @@ export const AttachmentTray = memo(function AttachmentTray({
       className={cn(
         "mt-1.5 rounded-sm border px-2.5 py-1.5 text-[11px] leading-tight",
         warning
-          ? "border-yellow-500/40 bg-yellow-500/[0.06]"
+          ? "border-activity-waiting/40 bg-activity-waiting/[0.06]"
           : "border-white/[0.06] bg-white/[0.02]"
       )}
     >
       <div
         className={cn(
           "flex items-center justify-between gap-2 font-medium",
-          warning ? "text-yellow-400" : "text-canopy-text/60"
+          warning ? "text-activity-waiting" : "text-canopy-text/60"
         )}
       >
         <span>{summary}</span>
         {warning && (
-          <span className="shrink-0 text-[10px] text-yellow-400/80">Context limit approaching</span>
+          <span className="shrink-0 text-[10px] text-activity-waiting/80">
+            Context limit approaching
+          </span>
         )}
       </div>
 

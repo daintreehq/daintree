@@ -21,10 +21,10 @@ interface EditingServer {
 }
 
 const STATUS_COLORS: Record<string, string> = {
-  running: "bg-emerald-500",
-  starting: "bg-amber-500",
+  running: "bg-status-success",
+  starting: "bg-status-warning",
   stopped: "bg-canopy-text/30",
-  error: "bg-red-500",
+  error: "bg-status-danger",
 };
 
 export function McpServersTab({ servers, onChange, runStates }: McpServersTabProps) {
@@ -132,9 +132,9 @@ export function McpServersTab({ servers, onChange, runStates }: McpServersTabPro
           </Button>
         </div>
 
-        <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2 mb-4">
+        <div className="rounded-lg border border-status-warning/30 bg-status-warning/5 px-3 py-2 mb-4">
           <div className="flex gap-2 items-start">
-            <AlertTriangle className="w-3.5 h-3.5 text-amber-500 mt-0.5 shrink-0" />
+            <AlertTriangle className="w-3.5 h-3.5 text-status-warning mt-0.5 shrink-0" />
             <p className="text-xs text-canopy-text/70">
               Environment variables defined here are stored in{" "}
               <code className="text-[11px] bg-canopy-bg/80 px-1 py-0.5 rounded">
@@ -175,7 +175,7 @@ export function McpServersTab({ servers, onChange, runStates }: McpServersTabPro
                     {config.command} {(config.args ?? []).join(" ")}
                   </div>
                   {state?.status === "error" && state.error && (
-                    <div className="text-xs text-red-400 mt-0.5 truncate">{state.error}</div>
+                    <div className="text-xs text-status-danger mt-0.5 truncate">{state.error}</div>
                   )}
                 </div>
                 <div className="flex gap-1 shrink-0">
@@ -191,7 +191,7 @@ export function McpServersTab({ servers, onChange, runStates }: McpServersTabPro
                   <Button
                     size="sm"
                     variant="ghost"
-                    className="h-7 px-2 text-xs text-red-400 hover:text-red-300"
+                    className="h-7 px-2 text-xs text-status-danger hover:text-status-danger"
                     onClick={() => handleRemove(name)}
                     disabled={!!editing}
                   >
@@ -209,7 +209,7 @@ export function McpServersTab({ servers, onChange, runStates }: McpServersTabPro
               {editing.originalName ? "Edit Server" : "Add Server"}
             </h5>
 
-            {editError && <p className="text-xs text-red-400">{editError}</p>}
+            {editError && <p className="text-xs text-status-danger">{editError}</p>}
 
             <div>
               <label className="text-xs text-canopy-text/60 block mb-1">Name</label>

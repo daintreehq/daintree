@@ -148,7 +148,7 @@ export function CrashRecoveryDialog({
       data-testid="crash-recovery-dialog"
     >
       <AppDialog.Header>
-        <AppDialog.Title icon={<AlertTriangle className="h-5 w-5 text-amber-400" />}>
+        <AppDialog.Title icon={<AlertTriangle className="h-5 w-5 text-status-warning" />}>
           Canopy Crashed
         </AppDialog.Title>
       </AppDialog.Header>
@@ -192,7 +192,7 @@ export function CrashRecoveryDialog({
 
             {suspectCount > 0 && (
               <p
-                className="text-xs text-amber-400/90 bg-amber-500/10 rounded px-2 py-1.5"
+                className="text-xs text-status-warning/90 bg-status-warning/10 rounded px-2 py-1.5"
                 data-testid="suspect-warning"
               >
                 {suspectCount} panel{suspectCount > 1 ? "s were" : " was"} created shortly before
@@ -301,7 +301,7 @@ export function CrashRecoveryDialog({
               {crash.entry.errorMessage && (
                 <div className="mt-2">
                   <div className="text-xs text-canopy-text/50 mb-1">Error</div>
-                  <pre className="text-xs text-red-400 bg-red-500/10 rounded p-2 overflow-x-auto whitespace-pre-wrap break-all">
+                  <pre className="text-xs text-status-danger bg-status-danger/10 rounded p-2 overflow-x-auto whitespace-pre-wrap break-all">
                     {crash.entry.errorMessage}
                   </pre>
                 </div>
@@ -345,7 +345,7 @@ export function CrashRecoveryDialog({
 
               {privacyWarningShown && !copied && (
                 <p
-                  className="text-xs text-amber-400/90 bg-amber-500/10 rounded px-2 py-1.5"
+                  className="text-xs text-status-warning/90 bg-status-warning/10 rounded px-2 py-1.5"
                   data-testid="privacy-warning"
                 >
                   Crash info may include file paths. Click again to copy and open GitHub Issues.
@@ -402,7 +402,7 @@ function PanelRow({
         <span className="text-xs text-canopy-text/40">{panel.location}</span>
         {panel.isSuspect && (
           <span
-            className="text-amber-400"
+            className="text-status-warning"
             title="Created shortly before crash"
             data-testid={`suspect-badge-${panel.id}`}
           >

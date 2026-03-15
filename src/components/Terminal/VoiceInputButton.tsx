@@ -257,7 +257,7 @@ export function VoiceInputButton({
             ? "bg-canopy-accent/10 text-canopy-accent hover:bg-canopy-accent/15"
             : cn(
                 status === "error"
-                  ? "text-yellow-400 hover:text-yellow-300"
+                  ? "text-activity-waiting hover:text-activity-waiting/80"
                   : "text-canopy-text/50 hover:text-canopy-text/80 hover:bg-white/[0.06]"
               ),
           disabled && !isActive && "pointer-events-none opacity-40"

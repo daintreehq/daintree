@@ -14,19 +14,19 @@ const MAX_DEPTH = 5;
 function PrimitiveValue({ arg }: { arg: CdpRemoteArg & { type: "primitive" } }) {
   switch (arg.kind) {
     case "string":
-      return <span className="text-green-400">&quot;{String(arg.value)}&quot;</span>;
+      return <span className="text-syntax-string">&quot;{String(arg.value)}&quot;</span>;
     case "number":
-      return <span className="text-blue-400">{String(arg.value)}</span>;
+      return <span className="text-syntax-number">{String(arg.value)}</span>;
     case "boolean":
-      return <span className="text-purple-400">{String(arg.value)}</span>;
+      return <span className="text-category-purple">{String(arg.value)}</span>;
     case "null":
       return <span className="text-canopy-text/40">null</span>;
     case "undefined":
       return <span className="text-canopy-text/40">undefined</span>;
     case "symbol":
-      return <span className="text-yellow-400">{String(arg.value)}</span>;
+      return <span className="text-syntax-keyword">{String(arg.value)}</span>;
     case "bigint":
-      return <span className="text-blue-400">{String(arg.value)}</span>;
+      return <span className="text-syntax-number">{String(arg.value)}</span>;
     default:
       return <span>{String(arg.value)}</span>;
   }
@@ -50,7 +50,7 @@ function PropertyTree({
     <div className="pl-3 border-l border-white/10">
       {visibleProps.map((prop) => (
         <div key={prop.name} className="flex items-start gap-1">
-          <span className="text-purple-300 shrink-0">{prop.name}</span>
+          <span className="text-text-secondary shrink-0">{prop.name}</span>
           <span className="text-canopy-text/40 shrink-0">:</span>
           {prop.value ? (
             <ObjectInspector
@@ -121,7 +121,7 @@ export function ObjectInspector({
   }
 
   if (arg.type === "function") {
-    return <span className="text-cyan-400 italic">ƒ {arg.description}</span>;
+    return <span className="text-category-cyan italic">ƒ {arg.description}</span>;
   }
 
   // Object type

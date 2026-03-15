@@ -394,7 +394,7 @@ export function createSlashTooltip(commandMap: Map<string, SlashCommand>) {
           background: color-mix(in oklab, var(--theme-surface-canvas) 95%, transparent);
           border-radius: 4px;
           border: 1px solid var(--theme-border-subtle);
-          box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+          box-shadow: 0 2px 8px var(--theme-scrim-soft);
         `;
 
         dom.appendChild(createTooltipContent(command));
@@ -468,9 +468,9 @@ export function createFileChipTooltip() {
         const dom = document.createElement("div");
         dom.className = "px-2 py-1 text-xs";
         dom.style.cssText = `
-          background: rgba(24, 24, 27, 0.95);
+          background: var(--theme-surface-panel-elevated);
           border-radius: 4px;
-          box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+          box-shadow: 0 2px 8px var(--theme-scrim-soft);
         `;
 
         dom.appendChild(createFileTooltipContent(token));
@@ -807,9 +807,9 @@ export function createImageChipTooltip() {
         const dom = document.createElement("div");
         dom.className = "px-2 py-2";
         dom.style.cssText = `
-          background: rgba(24, 24, 27, 0.95);
+          background: var(--theme-surface-panel-elevated);
           border-radius: 6px;
-          box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+          box-shadow: 0 4px 12px var(--theme-scrim-medium);
         `;
 
         const img = document.createElement("img");
@@ -821,7 +821,7 @@ export function createImageChipTooltip() {
 
         const pathEl = document.createElement("p");
         pathEl.style.cssText =
-          "font-size: 10px; color: rgba(255,255,255,0.45); margin-top: 4px; word-break: break-all; max-width: 200px;";
+          "font-size: 10px; color: var(--theme-text-muted); margin-top: 4px; word-break: break-all; max-width: 200px;";
         pathEl.textContent = entry.filePath;
         dom.appendChild(pathEl);
 
@@ -960,14 +960,14 @@ export function createFileDropChipTooltip() {
         const dom = document.createElement("div");
         dom.className = "px-2 py-1 text-xs";
         dom.style.cssText = `
-          background: rgba(24, 24, 27, 0.95);
+          background: var(--theme-surface-panel-elevated);
           border-radius: 4px;
-          box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+          box-shadow: 0 2px 8px var(--theme-scrim-soft);
         `;
 
         const pathEl = document.createElement("p");
         pathEl.style.cssText =
-          "font-size: 10px; color: rgba(255,255,255,0.7); word-break: break-all; max-width: 300px; font-family: var(--font-mono, monospace);";
+          "font-size: 10px; color: var(--theme-text-secondary); word-break: break-all; max-width: 300px; font-family: var(--font-mono, monospace);";
         pathEl.textContent = entry.filePath;
         dom.appendChild(pathEl);
 
@@ -1108,7 +1108,7 @@ export function createDiffChipTooltip() {
           background: color-mix(in oklab, var(--theme-surface-canvas) 95%, transparent);
           border-radius: 4px;
           border: 1px solid var(--theme-border-subtle);
-          box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+          box-shadow: 0 2px 8px var(--theme-scrim-soft);
         `;
 
         const desc = document.createElement("p");
@@ -1213,7 +1213,7 @@ export function createTerminalChipTooltip() {
           background: color-mix(in oklab, var(--theme-surface-canvas) 95%, transparent);
           border-radius: 4px;
           border: 1px solid var(--theme-border-subtle);
-          box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+          box-shadow: 0 2px 8px var(--theme-scrim-soft);
         `;
 
         const desc = document.createElement("p");
@@ -1316,7 +1316,7 @@ export function createSelectionChipTooltip() {
           background: color-mix(in oklab, var(--theme-surface-canvas) 95%, transparent);
           border-radius: 4px;
           border: 1px solid var(--theme-border-subtle);
-          box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+          box-shadow: 0 2px 8px var(--theme-scrim-soft);
         `;
 
         const desc = document.createElement("p");
