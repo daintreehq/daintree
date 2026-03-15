@@ -5,6 +5,7 @@ import {
   getBuiltInAppSchemeForType,
   getAppThemeWarnings,
   normalizeAppColorScheme,
+  resolveAppTheme,
 } from "../themes.js";
 import { APP_THEME_TOKEN_KEYS, type AppColorSchemeTokens } from "../types.js";
 
@@ -142,7 +143,7 @@ describe("createCanopyTokens — caller overrides win via spread", () => {
 });
 
 describe("built-in schemes — Daintree has explicit category colors", () => {
-  const canopy = BUILT_IN_APP_SCHEMES.find((s) => s.id === "canopy")!;
+  const canopy = BUILT_IN_APP_SCHEMES.find((s) => s.id === "daintree")!;
 
   it("has all 12 category colors set", () => {
     expect(canopy.tokens["category-blue"]).toBe("oklch(0.7 0.13 250)");
@@ -206,5 +207,22 @@ describe("getAppThemeWarnings", () => {
     });
 
     expect(getAppThemeWarnings(scheme)).not.toEqual([]);
+  });
+});
+
+describe("legacy app scheme ID aliasing", () => {
+  it('resolveAppTheme("canopy") returns the daintree scheme', () => {
+    const scheme = resolveAppTheme("canopy");
+    expect(scheme.id).toBe("daintree");
+  });
+
+  it('resolveAppTheme("canopy-slate") returns the daintree scheme', () => {
+    const scheme = resolveAppTheme("canopy-slate");
+    expect(scheme.id).toBe("daintree");
+  });
+
+  it('resolveAppTheme("daintree") returns the daintree scheme', () => {
+    const scheme = resolveAppTheme("daintree");
+    expect(scheme.id).toBe("daintree");
   });
 });

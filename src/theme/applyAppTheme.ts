@@ -75,7 +75,7 @@ export function applyColorVisionMode(root: HTMLElement, mode: ColorVisionMode): 
 }
 
 export function applyDefaultAppTheme(root: HTMLElement): AppColorScheme {
-  const scheme = resolveAppTheme("canopy");
+  const scheme = resolveAppTheme("daintree");
   applyAppThemeToRoot(root, scheme);
   return scheme;
 }
