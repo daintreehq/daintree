@@ -97,17 +97,60 @@ describe("color system contract", () => {
     );
   });
 
-  it("maps .dark --primary-foreground to --color-accent-primary-foreground, not --color-accent-foreground", () => {
-    const darkBlock = indexCss.match(/\.dark\s*\{[^}]+\}/s)?.[0] ?? "";
-    expect(darkBlock).toMatch(/--primary-foreground:\s*var\(--color-accent-primary-foreground\)/);
-    expect(darkBlock).not.toMatch(/--primary-foreground:\s*var\(--color-accent-foreground\)/);
+  it("wires :root --background to --theme-surface-canvas", () => {
+    expect(indexCss).toMatch(/--background:\s*var\(--theme-surface-canvas\)/);
   });
 
-  it("maps .dark --sidebar-primary-foreground to --color-accent-primary-foreground", () => {
+  it("wires :root --primary-foreground to --theme-accent-foreground", () => {
+    expect(indexCss).toMatch(/--primary-foreground:\s*var\(--theme-accent-foreground\)/);
+  });
+
+  it(".dark block contains only --chart-* declarations", () => {
     const darkBlock = indexCss.match(/\.dark\s*\{[^}]+\}/s)?.[0] ?? "";
-    expect(darkBlock).toMatch(
-      /--sidebar-primary-foreground:\s*var\(--color-accent-primary-foreground\)/
-    );
+    const declarations = darkBlock.match(/--[\w-]+:/g) ?? [];
+    for (const decl of declarations) {
+      expect(decl, `Unexpected non-chart declaration in .dark: ${decl}`).toMatch(/^--chart-\d+:$/);
+    }
+    expect(declarations.length).toBe(5);
+  });
+
+  it("suppresses Tailwind default palette with --color-*: initial", () => {
+    const themeBlock = indexCss.match(/@theme\s+inline\s*\{[\s\S]*?\}/)?.[0] ?? "";
+    expect(themeBlock).toMatch(/--color-\*:\s*initial/);
+  });
+
+  it("exports structural category color variants (-subtle, -text, -border)", () => {
+    const categories = [
+      "blue",
+      "purple",
+      "cyan",
+      "green",
+      "amber",
+      "orange",
+      "teal",
+      "indigo",
+      "rose",
+      "pink",
+      "violet",
+      "slate",
+    ];
+    const variants = ["subtle", "text", "border"];
+    for (const cat of categories) {
+      for (const variant of variants) {
+        expect(
+          exportedColorVars.has(`category-${cat}-${variant}`),
+          `Missing --color-category-${cat}-${variant}`
+        ).toBe(true);
+      }
+    }
+  });
+
+  it("does not import github-dark.min.css", () => {
+    expect(indexCss).not.toContain("github-dark.min.css");
+  });
+
+  it("contains no rgba(0,0,0) shadow values", () => {
+    expect(indexCss).not.toMatch(/rgba\(0,\s*0,\s*0/);
   });
 
   it("--color-accent-foreground in @theme inline resolves through shadcn --accent-foreground (preserves hover behavior)", () => {
