@@ -11,6 +11,31 @@ import {
 } from "../themes.js";
 import { APP_THEME_TOKEN_KEYS, type AppColorSchemeTokens } from "../types.js";
 
+function wcagContrastRatio(hex1: string, hex2: string): number {
+  function luminance(hex: string): number {
+    const c = hex.replace("#", "");
+    const e =
+      c.length === 3
+        ? c
+            .split("")
+            .map((ch) => `${ch}${ch}`)
+            .join("")
+        : c;
+    const toLinear = (v: number) => {
+      const n = v / 255;
+      return n <= 0.04045 ? n / 12.92 : ((n + 0.055) / 1.055) ** 2.4;
+    };
+    return (
+      0.2126 * toLinear(parseInt(e.slice(0, 2), 16)) +
+      0.7152 * toLinear(parseInt(e.slice(2, 4), 16)) +
+      0.0722 * toLinear(parseInt(e.slice(4, 6), 16))
+    );
+  }
+  const l1 = luminance(hex1);
+  const l2 = luminance(hex2);
+  return (Math.max(l1, l2) + 0.05) / (Math.min(l1, l2) + 0.05);
+}
+
 const REQUIRED_TOKENS = {
   "surface-canvas": "#ffffff",
   "surface-sidebar": "#f8f8f8",
@@ -390,6 +415,69 @@ describe("built-in schemes — Redwoods has correct tokens and derived values", 
 
   it("passes getAppThemeWarnings with no contrast violations", () => {
     expect(getAppThemeWarnings(redwoods)).toEqual([]);
+  });
+});
+
+describe("built-in schemes — Serengeti light theme", () => {
+  const serengeti = BUILT_IN_APP_SCHEMES.find((s) => s.id === "serengeti")!;
+
+  it("exists in BUILT_IN_APP_SCHEMES as a light builtin", () => {
+    expect(serengeti).toBeDefined();
+    expect(serengeti.type).toBe("light");
+    expect(serengeti.builtin).toBe(true);
+  });
+
+  it("produces all 79 required token keys", () => {
+    for (const key of APP_THEME_TOKEN_KEYS) {
+      expect(serengeti.tokens).toHaveProperty(key, expect.any(String));
+    }
+  });
+
+  it("overrides terminal-black to text-primary, not surface-canvas", () => {
+    expect(serengeti.tokens["terminal-black"]).toBe("#4A3F35");
+    expect(serengeti.tokens["terminal-black"]).not.toBe(serengeti.tokens["surface-canvas"]);
+  });
+
+  it("syntax-comment is distinct from text-muted", () => {
+    expect(serengeti.tokens["syntax-comment"]).toBe("#6E6259");
+    expect(serengeti.tokens["text-muted"]).toBe("#9B8D7A");
+    expect(serengeti.tokens["syntax-comment"]).not.toBe(serengeti.tokens["text-muted"]);
+  });
+
+  it("syntax-function differs from accent-primary", () => {
+    expect(serengeti.tokens["accent-primary"]).toBe("#3F9366");
+    expect(serengeti.tokens["syntax-function"]).toBe("#256645");
+    expect(serengeti.tokens["syntax-function"]).not.toBe(serengeti.tokens["accent-primary"]);
+  });
+
+  it("passes critical-pair WCAG contrast checks (zero warnings)", () => {
+    expect(getAppThemeWarnings(serengeti)).toEqual([]);
+  });
+
+  it.each([
+    "syntax-keyword",
+    "syntax-string",
+    "syntax-function",
+    "syntax-number",
+    "syntax-comment",
+    "syntax-punctuation",
+    "syntax-operator",
+    "syntax-link",
+    "syntax-quote",
+    "syntax-chip",
+  ] as const)("%s meets WCAG AA 4.5:1 against canvas", (token) => {
+    const fg = serengeti.tokens[token];
+    const bg = serengeti.tokens["surface-canvas"];
+    const ratio = wcagContrastRatio(fg, bg);
+    expect(
+      ratio,
+      `${token} "${fg}" on canvas "${bg}" = ${ratio.toFixed(2)}:1, needs ≥4.5:1`
+    ).toBeGreaterThanOrEqual(4.5);
+  });
+
+  it("uses lower-lightness oklch category colors for light mode", () => {
+    expect(serengeti.tokens["category-blue"]).toBe("oklch(0.62 0.14 250)");
+    expect(serengeti.tokens["category-slate"]).toBe("oklch(0.58 0.04 240)");
   });
 });
 
