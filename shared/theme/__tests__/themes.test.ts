@@ -216,6 +216,74 @@ describe("getBuiltInAppSchemeForType — returns Bondi for light", () => {
   });
 });
 
+describe("built-in schemes — Fiordland", () => {
+  const fiordland = BUILT_IN_APP_SCHEMES.find((s) => s.id === "fiordland")!;
+
+  it("exists with correct metadata", () => {
+    expect(fiordland).toBeDefined();
+    expect(fiordland.name).toBe("Fiordland");
+    expect(fiordland.type).toBe("dark");
+    expect(fiordland.builtin).toBe(true);
+  });
+
+  it("produces all 79 token keys", () => {
+    for (const key of APP_THEME_TOKEN_KEYS) {
+      expect(fiordland.tokens).toHaveProperty(key, expect.any(String));
+    }
+  });
+
+  it("uses the brand accent-primary", () => {
+    expect(fiordland.tokens["accent-primary"]).toBe("#3F9366");
+  });
+
+  it("derives accent-foreground from text-inverse", () => {
+    expect(fiordland.tokens["accent-foreground"]).toBe("#070D12");
+  });
+
+  it("uses contrast-safe status-danger", () => {
+    expect(fiordland.tokens["status-danger"]).toBe("#E04055");
+  });
+
+  it("overrides overlay tokens for deep background", () => {
+    expect(fiordland.tokens["overlay-subtle"]).toBe("rgba(255, 255, 255, 0.03)");
+    expect(fiordland.tokens["overlay-soft"]).toBe("rgba(255, 255, 255, 0.05)");
+    expect(fiordland.tokens["overlay-medium"]).toBe("rgba(255, 255, 255, 0.08)");
+    expect(fiordland.tokens["overlay-strong"]).toBe("rgba(255, 255, 255, 0.12)");
+    expect(fiordland.tokens["overlay-emphasis"]).toBe("rgba(255, 255, 255, 0.18)");
+  });
+
+  it("derives terminal-black from surface-canvas", () => {
+    expect(fiordland.tokens["terminal-black"]).toBe("#070D12");
+  });
+
+  it("derives terminal-white from text-primary", () => {
+    expect(fiordland.tokens["terminal-white"]).toBe("#D4E0D6");
+  });
+
+  it("derives terminal-bright-black from activity-idle", () => {
+    expect(fiordland.tokens["terminal-bright-black"]).toBe("#3D4E5C");
+  });
+
+  it("has all 12 category colors set", () => {
+    expect(fiordland.tokens["category-blue"]).toBe("oklch(0.7 0.13 250)");
+    expect(fiordland.tokens["category-purple"]).toBe("oklch(0.7 0.13 310)");
+    expect(fiordland.tokens["category-cyan"]).toBe("oklch(0.72 0.11 215)");
+    expect(fiordland.tokens["category-green"]).toBe("oklch(0.7 0.13 145)");
+    expect(fiordland.tokens["category-amber"]).toBe("oklch(0.73 0.14 75)");
+    expect(fiordland.tokens["category-orange"]).toBe("oklch(0.7 0.14 45)");
+    expect(fiordland.tokens["category-teal"]).toBe("oklch(0.7 0.11 185)");
+    expect(fiordland.tokens["category-indigo"]).toBe("oklch(0.7 0.13 275)");
+    expect(fiordland.tokens["category-rose"]).toBe("oklch(0.7 0.14 5)");
+    expect(fiordland.tokens["category-pink"]).toBe("oklch(0.72 0.13 340)");
+    expect(fiordland.tokens["category-violet"]).toBe("oklch(0.7 0.13 295)");
+    expect(fiordland.tokens["category-slate"]).toBe("oklch(0.65 0.04 240)");
+  });
+
+  it("passes contrast validation with no warnings", () => {
+    expect(getAppThemeWarnings(fiordland)).toEqual([]);
+  });
+});
+
 describe("normalizeAppColorScheme", () => {
   it("uses a light fallback base for partial light themes", () => {
     const scheme = normalizeAppColorScheme({
