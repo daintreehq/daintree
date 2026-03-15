@@ -381,6 +381,15 @@ export const CHANNELS = {
   TELEMETRY_MARK_PROMPT_SHOWN: "telemetry:mark-prompt-shown",
   TELEMETRY_TRACK: "telemetry:track",
 
+  // Privacy & Data channels
+  PRIVACY_GET_SETTINGS: "privacy:get-settings",
+  PRIVACY_SET_TELEMETRY_LEVEL: "privacy:set-telemetry-level",
+  PRIVACY_SET_LOG_RETENTION: "privacy:set-log-retention",
+  PRIVACY_OPEN_DATA_FOLDER: "privacy:open-data-folder",
+  PRIVACY_CLEAR_CACHE: "privacy:clear-cache",
+  PRIVACY_RESET_ALL_DATA: "privacy:reset-all-data",
+  PRIVACY_GET_DATA_FOLDER_PATH: "privacy:get-data-folder-path",
+
   // MCP Server channels
   MCP_SERVER_GET_STATUS: "mcp-server:get-status",
   MCP_SERVER_SET_ENABLED: "mcp-server:set-enabled",

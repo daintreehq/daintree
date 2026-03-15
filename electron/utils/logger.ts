@@ -1,5 +1,13 @@
 import { getErrorDetails } from "./errorTypes.js";
-import { appendFileSync, mkdirSync, existsSync, writeFileSync, readdirSync } from "fs";
+import {
+  appendFileSync,
+  mkdirSync,
+  existsSync,
+  writeFileSync,
+  readdirSync,
+  statSync,
+  unlinkSync,
+} from "fs";
 import { join } from "path";
 import type { BrowserWindow } from "electron";
 import { logBuffer, type LogEntry } from "../services/LogBuffer.js";
@@ -53,6 +61,33 @@ export function initializeLogger(path: string): void {
 
   // Clear all log files at startup for single-session logging
   clearSessionLogs(path);
+}
+
+export function pruneOldLogs(basePath: string, retentionDays: number | 0): void {
+  if (retentionDays === 0) return;
+
+  const threshold = Date.now() - retentionDays * 24 * 60 * 60 * 1000;
+  const dirs = [join(basePath, "logs"), join(basePath, "debug")];
+
+  for (const dir of dirs) {
+    if (!existsSync(dir)) continue;
+    try {
+      const files = readdirSync(dir);
+      for (const file of files) {
+        try {
+          const filePath = join(dir, file);
+          const stats = statSync(filePath);
+          if (stats.isFile() && stats.mtimeMs < threshold) {
+            unlinkSync(filePath);
+          }
+        } catch {
+          // Skip locked or inaccessible files
+        }
+      }
+    } catch {
+      // Directory read failed — non-fatal
+    }
+  }
 }
 
 function getLogDirectory(): string {

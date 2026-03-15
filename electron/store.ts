@@ -118,6 +118,10 @@ export interface StoreSchema {
     enabled: boolean;
     hasSeenPrompt: boolean;
   };
+  privacy: {
+    telemetryLevel: "off" | "errors" | "full";
+    logRetentionDays: 7 | 30 | 90 | 0;
+  };
   voiceInput: {
     enabled: boolean;
     apiKey: string;
@@ -216,6 +220,10 @@ const storeOptions = {
     telemetry: {
       enabled: false,
       hasSeenPrompt: false,
+    },
+    privacy: {
+      telemetryLevel: "off" as const,
+      logRetentionDays: 30 as const,
     },
     voiceInput: {
       enabled: false,

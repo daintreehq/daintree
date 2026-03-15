@@ -27,6 +27,7 @@ import { registerClipboardHandlers } from "./handlers/clipboard.js";
 import { registerUrlContextHandlers } from "./handlers/urlContext.js";
 import { registerGitWriteHandlers } from "./handlers/git-write.js";
 import { registerTelemetryHandlers } from "./handlers/telemetry.js";
+import { registerPrivacyHandlers } from "./handlers/privacy.js";
 import { registerOnboardingHandlers } from "./handlers/onboarding.js";
 import { registerVoiceInputHandlers } from "./handlers/voiceInput.js";
 import { registerMcpServerHandlers } from "./handlers/mcpServer.js";
@@ -91,6 +92,7 @@ export function registerIpcHandlers(deps: HandlerDependencies): () => void {
     register(() => registerUrlContextHandlers());
     register(() => registerGitWriteHandlers(deps));
     register(() => registerTelemetryHandlers());
+    register(() => registerPrivacyHandlers());
     register(() => registerOnboardingHandlers());
     register(() => registerVoiceInputHandlers(deps));
     register(() => registerMcpServerHandlers());
