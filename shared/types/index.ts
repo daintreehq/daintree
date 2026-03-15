@@ -83,6 +83,7 @@ export type {
   RunCommand,
   ProjectSettings,
   ProjectTerminalSettings,
+  ProjectMcpServerConfig,
   CopyTreeSettings,
   // Panel exit behavior
   PanelExitBehavior,
@@ -140,6 +141,8 @@ export type {
   // Project close IPC types
   ProjectCloseResult,
   ProjectStats,
+  ProjectMcpServerRunState,
+  ProjectMcpServerStatus,
   // GitHub IPC types
   RepositoryStats,
   GitHubCliStatus,

@@ -35,6 +35,7 @@ import {
   PanelBottom,
   LayoutGrid,
   RefreshCw,
+  Server,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -50,7 +51,8 @@ import type {
   CopyTreeSettings,
   CopyTreeTestConfigResult,
 } from "@/types";
-import type { ProjectTerminalSettings } from "@shared/types/domain";
+import type { ProjectTerminalSettings, ProjectMcpServerConfig } from "@shared/types/domain";
+import type { ProjectMcpServerRunState } from "@shared/types/ipc/project";
 import { SCROLLBACK_MIN, SCROLLBACK_MAX } from "@shared/config/scrollback";
 import { copyTreeClient } from "@/clients/copyTreeClient";
 import { getProjectGradient } from "@/lib/colorUtils";
@@ -60,6 +62,7 @@ import { RecipeEditor } from "@/components/TerminalRecipe/RecipeEditor";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { LiveTimeAgo } from "@/components/Worktree/LiveTimeAgo";
 import { CommandOverridesTab } from "@/components/Settings/CommandOverridesTab";
+import { McpServersTab } from "./McpServersTab";
 import type { CommandOverride } from "@shared/types/commands";
 import {
   createProjectSettingsSnapshot,
@@ -82,7 +85,14 @@ interface EnvVar {
   value: string;
 }
 
-type ProjectSettingsTab = "general" | "context" | "automation" | "recipes" | "commands" | "agent";
+type ProjectSettingsTab =
+  | "general"
+  | "context"
+  | "automation"
+  | "recipes"
+  | "commands"
+  | "agent"
+  | "mcp";
 
 function formatBytes(bytes: number): string {
   if (bytes === 0) return "0 B";
@@ -138,6 +148,8 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
   const [terminalShellArgs, setTerminalShellArgs] = useState<string>("");
   const [terminalDefaultCwd, setTerminalDefaultCwd] = useState<string>("");
   const [terminalScrollback, setTerminalScrollback] = useState<string>("");
+  const [mcpServers, setMcpServers] = useState<Record<string, ProjectMcpServerConfig>>({});
+  const [mcpRunStates, setMcpRunStates] = useState<ProjectMcpServerRunState[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const initialSnapshotRef = useRef<ProjectSettingsSnapshot | null>(null);
   const [showUnsavedChangesDialog, setShowUnsavedChangesDialog] = useState(false);
@@ -203,7 +215,8 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
       devServerLoadTimeout,
       agentInstructions,
       worktreePathPattern,
-      currentTerminalSettings
+      currentTerminalSettings,
+      mcpServers
     );
   }, [
     name,
@@ -223,6 +236,7 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
     worktreePathPattern,
     currentProject,
     currentTerminalSettings,
+    mcpServers,
   ]);
 
   const isDirty = useMemo(() => {
@@ -316,6 +330,7 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
       const initialAgentInstructions = settings.agentInstructions ?? "";
       const initialWorktreePathPattern = settings.worktreePathPattern ?? "";
       const initialTerminalSettings = settings.terminalSettings;
+      const initialMcpServers = settings.mcpServers ?? {};
 
       setName(currentProject.name);
       setEmoji(currentProject.emoji || "🌲");
@@ -340,6 +355,7 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
           ? String(initialTerminalSettings.scrollbackLines)
           : ""
       );
+      setMcpServers(initialMcpServers);
 
       initialSnapshotRef.current = createProjectSettingsSnapshot(
         currentProject.name,
@@ -357,7 +373,8 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
         initialDevServerLoadTimeout,
         initialAgentInstructions,
         initialWorktreePathPattern,
-        initialTerminalSettings
+        initialTerminalSettings,
+        initialMcpServers
       );
 
       setIsInitialized(true);
@@ -384,6 +401,8 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
       setTerminalShellArgs("");
       setTerminalDefaultCwd("");
       setTerminalScrollback("");
+      setMcpServers({});
+      setMcpRunStates([]);
       hasLoadedRecipes.current = false;
       setActiveTab("general");
       initialSnapshotRef.current = null;
@@ -398,6 +417,23 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
       hasLoadedRecipes.current = false;
     }
   }, [projectId, isOpen]);
+
+  // Subscribe to MCP server status changes
+  useEffect(() => {
+    if (!isOpen || !projectId) return;
+
+    window.electron.projectMcp
+      .getStatuses(projectId)
+      .then(setMcpRunStates)
+      .catch(() => {});
+
+    const cleanup = window.electron.projectMcp.onStatusChanged((payload) => {
+      if (payload.projectId === projectId) {
+        setMcpRunStates(payload.servers as ProjectMcpServerRunState[]);
+      }
+    });
+    return cleanup;
+  }, [isOpen, projectId]);
 
   useEffect(() => {
     if (!isOpen) {
@@ -614,6 +650,7 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
         agentInstructions: agentInstructions.trim() || undefined,
         worktreePathPattern: sanitizedWorktreePathPattern,
         terminalSettings: currentTerminalSettings,
+        mcpServers: Object.keys(mcpServers).length > 0 ? mcpServers : undefined,
         insecureEnvironmentVariables: undefined,
         unresolvedSecureEnvironmentVariables: undefined,
       });
@@ -648,7 +685,8 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
         devServerLoadTimeout,
         agentInstructions,
         worktreePathPattern.trim(),
-        currentTerminalSettings
+        currentTerminalSettings,
+        mcpServers
       );
 
       requestClose({ bypassDirty: true });
@@ -811,6 +849,7 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
     recipes: "Recipes",
     commands: "Commands",
     agent: "Agent",
+    mcp: "MCP Servers",
   };
 
   return (
@@ -867,6 +906,13 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
               icon={<Bot className="w-4 h-4" />}
             >
               Agent
+            </NavButton>
+            <NavButton
+              active={activeTab === "mcp"}
+              onClick={() => setActiveTab("mcp")}
+              icon={<Server className="w-4 h-4" />}
+            >
+              MCP Servers
             </NavButton>
           </div>
 
@@ -2549,6 +2595,15 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
                         </div>
                       </div>
                     </div>
+                  </div>
+
+                  {/* MCP Servers Tab */}
+                  <div className={activeTab === "mcp" ? "" : "hidden"}>
+                    <McpServersTab
+                      servers={mcpServers}
+                      onChange={setMcpServers}
+                      runStates={mcpRunStates}
+                    />
                   </div>
                 </>
               )}
