@@ -46,7 +46,7 @@ function statusLabel(status: string): { label: string; className: string } {
     case "C":
       return { label: "C", className: "text-github-merged" };
     default:
-      return { label: status, className: "text-neutral-400" };
+      return { label: status, className: "text-text-muted" };
   }
 }
 
