@@ -196,50 +196,60 @@ export function GitHubListItem({
           </div>
 
           {/* Metadata row: author, time, branch/labels, worktree, menu */}
-          <div className="flex items-center gap-1.5 mt-0.5 text-xs text-muted-foreground">
-            <span>{item.author.login}</span>
-            <span>&middot;</span>
-            <span>{formatTimeAgo(item.updatedAt)}</span>
+          <div className="flex items-center gap-1.5 mt-0.5 text-xs text-muted-foreground flex-nowrap overflow-hidden">
+            <span className="shrink-0">{item.author.login}</span>
+            <span className="shrink-0">&middot;</span>
+            <span className="whitespace-nowrap shrink-0">{formatTimeAgo(item.updatedAt)}</span>
 
             {isItemPR && (item as GitHubPR).headRefName && (
               <>
-                <span>&middot;</span>
+                <span className="shrink-0">&middot;</span>
                 <span className="truncate max-w-[120px]">{(item as GitHubPR).headRefName}</span>
               </>
             )}
 
             {!isItemPR && issueLabels.length > 0 && (
               <>
-                <span>&middot;</span>
-                {issueLabels.slice(0, 2).map((label) => (
-                  <span key={label.name} className="inline-flex items-center gap-1">
-                    <span
-                      className="w-2 h-2 rounded-full shrink-0"
-                      style={{ backgroundColor: `#${label.color}` }}
-                    />
-                    <span className="truncate max-w-[80px]">{label.name}</span>
-                  </span>
-                ))}
+                <span className="shrink-0">&middot;</span>
+                <span className="inline-flex items-center gap-1 min-w-0 shrink max-w-[180px]">
+                  {issueLabels.slice(0, 2).map((label) => (
+                    <span key={label.name} className="inline-flex items-center gap-1 min-w-0">
+                      <span
+                        className="w-2 h-2 rounded-full shrink-0"
+                        style={{ backgroundColor: `#${label.color}` }}
+                      />
+                      <span className="truncate min-w-0 max-w-[80px]">{label.name}</span>
+                    </span>
+                  ))}
+                </span>
               </>
             )}
 
             {!isItemPR && "linkedPR" in item && item.linkedPR && (
               <>
-                <span>&middot;</span>
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    void actionService.dispatch(
-                      "system.openExternal",
-                      { url: item.linkedPR!.url },
-                      { source: "user" }
-                    );
-                  }}
-                  className="text-muted-foreground hover:text-foreground hover:underline cursor-pointer transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded px-0.5"
-                >
-                  PR #{item.linkedPR.number}
-                </button>
+                <span className="shrink-0">&middot;</span>
+                <TooltipProvider>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          void actionService.dispatch(
+                            "system.openExternal",
+                            { url: item.linkedPR!.url },
+                            { source: "user" }
+                          );
+                        }}
+                        className="shrink-0 text-muted-foreground hover:text-foreground transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded p-0.5"
+                        aria-label={`Linked PR #${item.linkedPR.number}`}
+                      >
+                        <GitPullRequest className="w-3 h-3" />
+                      </button>
+                    </TooltipTrigger>
+                    <TooltipContent side="bottom">PR #{item.linkedPR.number}</TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
               </>
             )}
 

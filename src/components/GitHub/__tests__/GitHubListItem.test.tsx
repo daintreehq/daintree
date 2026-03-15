@@ -99,7 +99,7 @@ describe("GitHubListItem", () => {
       linkedPR: { number: 55, state: "OPEN", url: "https://github.com/test/repo/pull/55" },
     };
     render(<GitHubListItem item={issueWithPR} type="issue" />);
-    fireEvent.click(screen.getByText("PR #55"));
+    fireEvent.click(screen.getByRole("button", { name: "Linked PR #55" }));
     expect(actionService.dispatch).toHaveBeenCalledWith(
       "system.openExternal",
       { url: "https://github.com/test/repo/pull/55" },
@@ -186,13 +186,32 @@ describe("GitHubListItem", () => {
     expect(screen.getByLabelText("All checks passed")).toBeTruthy();
   });
 
-  it("renders linked PR info for issues", () => {
+  it("renders linked PR icon button for issues", () => {
     const issueWithPR: GitHubIssue = {
       ...baseIssue,
       linkedPR: { number: 55, state: "OPEN", url: "https://github.com/test/repo/pull/55" },
     };
     render(<GitHubListItem item={issueWithPR} type="issue" />);
-    expect(screen.getByText("PR #55")).toBeTruthy();
+    const prButton = screen.getByRole("button", { name: "Linked PR #55" });
+    expect(prButton).toBeTruthy();
+    expect(prButton.querySelector("svg")).not.toBeNull();
+  });
+
+  it("renders labels and linked PR together without conflict", () => {
+    const issueWithBoth: GitHubIssue = {
+      ...baseIssue,
+      labels: [
+        { name: "bug", color: "d73a4a" },
+        { name: "high-priority", color: "e11d48" },
+      ],
+      linkedPR: { number: 55, state: "OPEN", url: "https://github.com/test/repo/pull/55" },
+      assignees: [{ login: "alice", avatarUrl: "https://example.com/alice.png" }],
+    };
+    render(<GitHubListItem item={issueWithBoth} type="issue" />);
+    expect(screen.getByText("bug")).toBeTruthy();
+    expect(screen.getByText("high-priority")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Linked PR #55" })).toBeTruthy();
+    expect(screen.getByAltText("alice")).toBeTruthy();
   });
 
   it("renders #number badge", () => {
