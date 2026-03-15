@@ -5,6 +5,11 @@ const storeMock = vi.hoisted(() => ({
   get: vi.fn(),
 }));
 
+const projectStoreMock = vi.hoisted(() => ({
+  getEffectiveNotificationSettings: vi.fn(),
+  getCurrentProjectId: vi.fn(() => null),
+}));
+
 const notificationServiceMock = vi.hoisted(() => ({
   showWatchNotification: vi.fn(),
   showNativeNotification: vi.fn(),
@@ -15,6 +20,10 @@ const playSoundMock = vi.hoisted(() => vi.fn(() => ({ cancel: vi.fn() })));
 
 vi.mock("../../store.js", () => ({
   store: storeMock,
+}));
+
+vi.mock("../ProjectStore.js", () => ({
+  projectStore: projectStoreMock,
 }));
 
 vi.mock("../NotificationService.js", () => ({
@@ -67,6 +76,7 @@ function mockStore(
     if (key === "appState") return appState;
     return undefined;
   });
+  projectStoreMock.getEffectiveNotificationSettings.mockReturnValue(notifSettings);
 }
 
 function makePayload(state: AgentState, previousState: AgentState = "working") {

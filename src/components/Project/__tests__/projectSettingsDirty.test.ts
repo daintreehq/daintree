@@ -551,5 +551,95 @@ describe("projectSettingsDirty", () => {
 
       expect(areSnapshotsEqual(baseSnapshot, snapshot2)).toBe(true);
     });
+
+    it("should detect changed notificationOverrides", () => {
+      const snapshotA = createProjectSettingsSnapshot(
+        "Project",
+        "🌲",
+        "npm run dev",
+        undefined,
+        [],
+        [],
+        [],
+        undefined,
+        [],
+        {},
+        "none",
+        "",
+        undefined,
+        "",
+        "",
+        undefined,
+        {},
+        undefined
+      );
+      const snapshotB = createProjectSettingsSnapshot(
+        "Project",
+        "🌲",
+        "npm run dev",
+        undefined,
+        [],
+        [],
+        [],
+        undefined,
+        [],
+        {},
+        "none",
+        "",
+        undefined,
+        "",
+        "",
+        undefined,
+        {},
+        { completedEnabled: true }
+      );
+
+      expect(areSnapshotsEqual(snapshotA, snapshotB)).toBe(false);
+    });
+
+    it("should treat undefined and empty notificationOverrides as equal", () => {
+      const snapshotA = createProjectSettingsSnapshot(
+        "Project",
+        "🌲",
+        "npm run dev",
+        undefined,
+        [],
+        [],
+        [],
+        undefined,
+        [],
+        {},
+        "none",
+        "",
+        undefined,
+        "",
+        "",
+        undefined,
+        {},
+        undefined
+      );
+      const snapshotB = createProjectSettingsSnapshot(
+        "Project",
+        "🌲",
+        "npm run dev",
+        undefined,
+        [],
+        [],
+        [],
+        undefined,
+        [],
+        {},
+        "none",
+        "",
+        undefined,
+        "",
+        "",
+        undefined,
+        {},
+        {}
+      );
+
+      expect(areSnapshotsEqual(snapshotA, snapshotB)).toBe(true);
+    });
   });
 });
