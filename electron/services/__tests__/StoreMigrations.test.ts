@@ -5,6 +5,7 @@ import path from "path";
 import type { Migration } from "../StoreMigrations.js";
 import { MigrationRunner } from "../StoreMigrations.js";
 import { migration004 } from "../migrations/004-upgrade-correction-model.js";
+import { migration006 } from "../migrations/006-rename-theme-canopy-to-daintree.js";
 
 type MockStoreData = Record<string, unknown>;
 
@@ -177,6 +178,43 @@ describe("MigrationRunner", () => {
       const store = createMockStore(storePath, {});
       migration004.up(store as never);
       expect(store.data.voiceInput).toBeUndefined();
+    });
+  });
+
+  describe("migration 006 — rename theme canopy to daintree", () => {
+    it('renames colorSchemeId "canopy" to "daintree" and preserves sibling fields', () => {
+      const store = createMockStore(storePath, {
+        appTheme: { colorSchemeId: "canopy", colorVisionMode: "default", customSchemes: "[]" },
+      });
+      migration006.up(store as never);
+      const appTheme = store.data.appTheme as Record<string, unknown>;
+      expect(appTheme.colorSchemeId).toBe("daintree");
+      expect(appTheme.colorVisionMode).toBe("default");
+      expect(appTheme.customSchemes).toBe("[]");
+    });
+
+    it('renames colorSchemeId "canopy-slate" to "daintree"', () => {
+      const store = createMockStore(storePath, {
+        appTheme: { colorSchemeId: "canopy-slate" },
+      });
+      migration006.up(store as never);
+      const appTheme = store.data.appTheme as Record<string, unknown>;
+      expect(appTheme.colorSchemeId).toBe("daintree");
+    });
+
+    it('leaves "daintree" unchanged', () => {
+      const store = createMockStore(storePath, {
+        appTheme: { colorSchemeId: "daintree" },
+      });
+      migration006.up(store as never);
+      const appTheme = store.data.appTheme as Record<string, unknown>;
+      expect(appTheme.colorSchemeId).toBe("daintree");
+    });
+
+    it("skips when no appTheme settings exist", () => {
+      const store = createMockStore(storePath, {});
+      migration006.up(store as never);
+      expect(store.data.appTheme).toBeUndefined();
     });
   });
 

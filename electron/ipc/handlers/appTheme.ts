@@ -9,7 +9,7 @@ function getAppThemeConfig(): AppThemeConfig {
   if (config && typeof config === "object" && !Array.isArray(config)) {
     return config as AppThemeConfig;
   }
-  return { colorSchemeId: "canopy" };
+  return { colorSchemeId: "daintree" };
 }
 
 export function registerAppThemeHandlers(): () => void {

@@ -5,7 +5,7 @@ import type {
   AppThemeValidationWarning,
 } from "./types.js";
 
-export const DEFAULT_APP_SCHEME_ID = "canopy";
+export const DEFAULT_APP_SCHEME_ID = "daintree";
 
 const GITHUB_TOKENS: Pick<
   AppColorSchemeTokens,
@@ -194,8 +194,8 @@ const INTERNAL_LIGHT_FALLBACK_SCHEME: AppColorScheme = {
 
 export const BUILT_IN_APP_SCHEMES: AppColorScheme[] = [
   {
-    id: "canopy",
-    name: "Canopy",
+    id: "daintree",
+    name: "Daintree",
     type: "dark",
     builtin: true,
     tokens: createCanopyTokens("dark", {
@@ -242,70 +242,6 @@ export const BUILT_IN_APP_SCHEMES: AppColorScheme[] = [
       "syntax-link": "#72c1ea",
       "syntax-quote": "#adb5bb",
       "syntax-chip": "#7fd4cf",
-      "focus-ring": "rgba(255, 255, 255, 0.18)",
-      "category-blue": "oklch(0.7 0.13 250)",
-      "category-purple": "oklch(0.7 0.13 310)",
-      "category-cyan": "oklch(0.72 0.11 215)",
-      "category-green": "oklch(0.7 0.13 145)",
-      "category-amber": "oklch(0.73 0.14 75)",
-      "category-orange": "oklch(0.7 0.14 45)",
-      "category-teal": "oklch(0.7 0.11 185)",
-      "category-indigo": "oklch(0.7 0.13 275)",
-      "category-rose": "oklch(0.7 0.14 5)",
-      "category-pink": "oklch(0.72 0.13 340)",
-      "category-violet": "oklch(0.7 0.13 295)",
-      "category-slate": "oklch(0.65 0.04 240)",
-    }),
-  },
-  {
-    id: "canopy-slate",
-    name: "Canopy Slate",
-    type: "dark",
-    builtin: true,
-    tokens: createCanopyTokens("dark", {
-      "surface-canvas": "#0f172a",
-      "surface-sidebar": "#0a1120",
-      "surface-panel": "#131e32",
-      "surface-panel-elevated": "#1e2d45",
-      "surface-grid": "#080d1a",
-      "text-primary": "#e2e8f0",
-      "text-secondary": "color-mix(in oklab, #e2e8f0 65%, #0f172a)",
-      "text-muted": "#94a3b8",
-      "text-inverse": "#0f172a",
-      "border-default": "#1e293b",
-      "accent-primary": "#3F9366",
-      "status-success": "#5F8B6D",
-      "status-warning": "#C59A4E",
-      "status-danger": "#C8746C",
-      "status-info": "#7B8C96",
-      "activity-active": "#22c55e",
-      "activity-idle": "#334155",
-      "activity-working": "#22c55e",
-      "activity-waiting": "#fbbf24",
-      "terminal-selection": "#1a2c22",
-      "terminal-red": "#f87171",
-      "terminal-green": "#10b981",
-      "terminal-yellow": "#fbbf24",
-      "terminal-blue": "#38bdf8",
-      "terminal-magenta": "#a855f7",
-      "terminal-cyan": "#22d3ee",
-      "terminal-bright-red": "#fca5a5",
-      "terminal-bright-green": "#34d399",
-      "terminal-bright-yellow": "#fcd34d",
-      "terminal-bright-blue": "#7dd3fc",
-      "terminal-bright-magenta": "#c084fc",
-      "terminal-bright-cyan": "#67e8f9",
-      "terminal-bright-white": "#fafafa",
-      "syntax-comment": "#7685a2",
-      "syntax-punctuation": "#cfd8f2",
-      "syntax-number": "#f0b778",
-      "syntax-string": "#9dcb86",
-      "syntax-operator": "#91d4e6",
-      "syntax-keyword": "#c0a3f0",
-      "syntax-function": "#8db4fb",
-      "syntax-link": "#7dc8f0",
-      "syntax-quote": "#b1bac5",
-      "syntax-chip": "#84d7d2",
       "focus-ring": "rgba(255, 255, 255, 0.18)",
       "category-blue": "oklch(0.7 0.13 250)",
       "category-purple": "oklch(0.7 0.13 310)",
@@ -380,11 +316,17 @@ export function hexToRgbTriplet(hex: string): string {
   return `${red}, ${green}, ${blue}`;
 }
 
+export const LEGACY_APP_SCHEME_ID_ALIASES: Record<string, string> = {
+  canopy: "daintree",
+  "canopy-slate": "daintree",
+};
+
 export function getAppThemeById(
   id: string,
   customSchemes: AppColorScheme[] = []
 ): AppColorScheme | undefined {
-  return [...BUILT_IN_APP_SCHEMES, ...customSchemes].find((scheme) => scheme.id === id);
+  const resolvedId = LEGACY_APP_SCHEME_ID_ALIASES[id] ?? id;
+  return [...BUILT_IN_APP_SCHEMES, ...customSchemes].find((scheme) => scheme.id === resolvedId);
 }
 
 export function getBuiltInAppSchemeForType(type: "dark" | "light"): AppColorScheme {
