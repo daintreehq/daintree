@@ -9,6 +9,8 @@ export const DEFAULT_TERMINAL_FONT_FAMILY = '"JetBrains Mono", monospace';
 // on screen and better match VS Code's perceived density/performance.
 export const DEFAULT_TERMINAL_FONT_SIZE = 12;
 
+const FONT_LOAD_TIMEOUT_MS = 3_000;
+
 let fontLoadPromise: Promise<void> | null = null;
 
 export function ensureTerminalFontLoaded(): Promise<void> {
@@ -20,9 +22,9 @@ export function ensureTerminalFontLoaded(): Promise<void> {
   }
 
   const size = `${DEFAULT_TERMINAL_FONT_SIZE}px 'JetBrains Mono'`;
-  fontLoadPromise = Promise.all([
-    document.fonts.load(size),
-    document.fonts.load(`bold ${size}`),
+  fontLoadPromise = Promise.race([
+    Promise.all([document.fonts.load(size), document.fonts.load(`bold ${size}`)]),
+    new Promise<FontFace[]>((resolve) => setTimeout(() => resolve([]), FONT_LOAD_TIMEOUT_MS)),
   ]).then(
     () => undefined,
     () => undefined
