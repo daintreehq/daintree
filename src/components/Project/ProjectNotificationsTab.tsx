@@ -88,6 +88,7 @@ export function ProjectNotificationsTab({ overrides, onChange }: ProjectNotifica
             <SettingsCheckbox
               id="proj-notif-completed"
               label="Enabled"
+              description="Override the global completed notification setting"
               checked={effective("completedEnabled") as boolean}
               onChange={(v) => setOverride("completedEnabled", v)}
             />
@@ -109,6 +110,7 @@ export function ProjectNotificationsTab({ overrides, onChange }: ProjectNotifica
             <SettingsCheckbox
               id="proj-notif-waiting"
               label="Enabled"
+              description="Override the global waiting notification setting"
               checked={effective("waitingEnabled") as boolean}
               onChange={(v) => setOverride("waitingEnabled", v)}
             />
@@ -133,6 +135,7 @@ export function ProjectNotificationsTab({ overrides, onChange }: ProjectNotifica
                   <SettingsCheckbox
                     id="proj-notif-escalation"
                     label="Enabled"
+                    description="Override the global escalation setting"
                     checked={effective("waitingEscalationEnabled") as boolean}
                     onChange={(v) => setOverride("waitingEscalationEnabled", v)}
                   />
@@ -182,6 +185,7 @@ export function ProjectNotificationsTab({ overrides, onChange }: ProjectNotifica
             <SettingsCheckbox
               id="proj-notif-failed"
               label="Enabled"
+              description="Override the global failed notification setting"
               checked={effective("failedEnabled") as boolean}
               onChange={(v) => setOverride("failedEnabled", v)}
             />
