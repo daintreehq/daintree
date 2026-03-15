@@ -20,11 +20,8 @@ import {
   Copy,
   Check,
   PackagePlus,
-  Settings2,
-  Search,
-  X,
 } from "lucide-react";
-import { SettingsSubtabBar } from "./SettingsSubtabBar";
+import { AgentSelectorDropdown } from "./AgentSelectorDropdown";
 import { SettingsSwitchCard } from "./SettingsSwitchCard";
 import { actionService } from "@/services/ActionService";
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
@@ -64,8 +61,6 @@ export function AgentSettings({
   const refreshCliAvailability = useCliAvailabilityStore((state) => state.refresh);
 
   const [copiedCommand, setCopiedCommand] = useState<string | null>(null);
-  const [searchQuery, setSearchQuery] = useState("");
-  const searchInputRef = useRef<HTMLInputElement>(null);
   const copyTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const isMountedRef = useRef(true);
 
@@ -159,19 +154,6 @@ export function AgentSettings({
     [agentIds, effectiveSettings]
   );
 
-  const filteredAgentOptions = useMemo(() => {
-    const q = searchQuery.trim().toLowerCase();
-    if (!q) return agentOptions;
-    return agentOptions.filter((a) => a.name.toLowerCase().includes(q));
-  }, [agentOptions, searchQuery]);
-
-  useEffect(() => {
-    if (!searchQuery.trim()) return;
-    if (activeAgentId && !filteredAgentOptions.some((a) => a.id === activeAgentId)) {
-      onSubtabChange(GENERAL_SUBTAB_ID);
-    }
-  }, [searchQuery, filteredAgentOptions, activeAgentId, onSubtabChange]);
-
   const activeAgent = activeAgentId ? agentOptions.find((a) => a.id === activeAgentId) : null;
   const activeEntry = activeAgent
     ? getAgentSettingsEntry(effectiveSettings, activeAgent.id)
@@ -232,87 +214,10 @@ export function AgentSettings({
           </Button>
         </div>
 
-        {agentOptions.length > 5 && (
-          <div
-            className={cn(
-              "flex items-center gap-1.5 px-2 py-1.5 rounded-[var(--radius-md)]",
-              "bg-canopy-bg border border-canopy-border",
-              "focus-within:border-canopy-accent focus-within:ring-1 focus-within:ring-canopy-accent/20"
-            )}
-          >
-            <Search
-              className="w-3.5 h-3.5 shrink-0 text-canopy-text/40 pointer-events-none"
-              aria-hidden="true"
-            />
-            <input
-              ref={searchInputRef}
-              type="text"
-              placeholder="Filter agents…"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              aria-label="Filter agents"
-              className="flex-1 min-w-0 text-xs bg-transparent text-canopy-text placeholder:text-canopy-text/40 focus:outline-none"
-            />
-            {searchQuery && (
-              <button
-                type="button"
-                onClick={() => {
-                  setSearchQuery("");
-                  searchInputRef.current?.focus();
-                }}
-                aria-label="Clear filter"
-                className="flex items-center justify-center w-5 h-5 rounded shrink-0 text-canopy-text/40 hover:text-canopy-text"
-              >
-                <X className="w-3 h-3" />
-              </button>
-            )}
-          </div>
-        )}
-
-        {/* Subtab bar: General + per-agent tabs */}
-        <SettingsSubtabBar
-          subtabs={[
-            {
-              id: GENERAL_SUBTAB_ID,
-              label: "General",
-              renderIcon: (isActive: boolean) => (
-                <Settings2
-                  size={16}
-                  className={cn(isActive ? "text-canopy-text" : "text-canopy-text/60")}
-                />
-              ),
-            },
-            ...filteredAgentOptions.map((agent) => {
-              const hasIndicators = !agent.selected || agent.dangerousEnabled;
-              return {
-                id: agent.id,
-                label: agent.name,
-                renderIcon: (isActive: boolean) =>
-                  agent.Icon ? (
-                    <agent.Icon
-                      size={18}
-                      brandColor={isActive ? agent.color : undefined}
-                      className={cn(!isActive && "opacity-60")}
-                    />
-                  ) : null,
-                trailing: hasIndicators ? (
-                  <>
-                    {!agent.selected && (
-                      <span
-                        className="w-1.5 h-1.5 rounded-full bg-canopy-text/30"
-                        title="Not in workflow"
-                      />
-                    )}
-                    {agent.dangerousEnabled && (
-                      <span className="w-1.5 h-1.5 rounded-full bg-status-error" />
-                    )}
-                  </>
-                ) : undefined,
-              };
-            }),
-          ]}
-          activeId={isGeneralActive ? GENERAL_SUBTAB_ID : (activeAgentId ?? GENERAL_SUBTAB_ID)}
-          onChange={onSubtabChange}
+        <AgentSelectorDropdown
+          agentOptions={agentOptions}
+          activeSubtab={isGeneralActive ? GENERAL_SUBTAB_ID : (activeAgentId ?? GENERAL_SUBTAB_ID)}
+          onSubtabChange={onSubtabChange}
         />
 
         {/* General subtab content */}
@@ -356,7 +261,7 @@ export function AgentSettings({
         {/* Agent Configuration Card */}
         {!isGeneralActive &&
           activeAgent &&
-          filteredAgentOptions.some((a) => a.id === activeAgent.id) && (
+          agentOptions.some((a) => a.id === activeAgent.id) && (
             <div className="rounded-[var(--radius-lg)] border border-canopy-border bg-surface p-4 space-y-4">
               {/* Header with agent info */}
               <div className="flex items-center justify-between pb-3 border-b border-canopy-border">
