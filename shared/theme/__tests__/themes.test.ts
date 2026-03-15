@@ -1,10 +1,13 @@
 import { describe, it, expect } from "vitest";
 import {
   BUILT_IN_APP_SCHEMES,
+  DEFAULT_APP_SCHEME_ID,
   createCanopyTokens,
+  getAppThemeById,
   getBuiltInAppSchemeForType,
   getAppThemeWarnings,
   normalizeAppColorScheme,
+  resolveAppTheme,
 } from "../themes.js";
 import { APP_THEME_TOKEN_KEYS, type AppColorSchemeTokens } from "../types.js";
 
@@ -142,7 +145,7 @@ describe("createCanopyTokens — caller overrides win via spread", () => {
 });
 
 describe("built-in schemes — Daintree has explicit category colors", () => {
-  const canopy = BUILT_IN_APP_SCHEMES.find((s) => s.id === "canopy")!;
+  const canopy = BUILT_IN_APP_SCHEMES.find((s) => s.id === "daintree")!;
 
   it("has all 12 category colors set", () => {
     expect(canopy.tokens["category-blue"]).toBe("oklch(0.7 0.13 250)");
@@ -206,5 +209,39 @@ describe("getAppThemeWarnings", () => {
     });
 
     expect(getAppThemeWarnings(scheme)).not.toEqual([]);
+  });
+});
+
+describe("legacy app scheme ID aliasing", () => {
+  it("DEFAULT_APP_SCHEME_ID is daintree", () => {
+    expect(DEFAULT_APP_SCHEME_ID).toBe("daintree");
+  });
+
+  it('getAppThemeById("canopy") resolves to daintree via alias, not fallback', () => {
+    const scheme = getAppThemeById("canopy");
+    expect(scheme).toBeDefined();
+    expect(scheme!.id).toBe("daintree");
+  });
+
+  it('getAppThemeById("canopy-slate") resolves to daintree via alias', () => {
+    const scheme = getAppThemeById("canopy-slate");
+    expect(scheme).toBeDefined();
+    expect(scheme!.id).toBe("daintree");
+  });
+
+  it("getAppThemeById returns undefined for unknown IDs (not fallback)", () => {
+    expect(getAppThemeById("nonexistent")).toBeUndefined();
+  });
+
+  it('resolveAppTheme("daintree") returns the daintree scheme', () => {
+    const scheme = resolveAppTheme("daintree");
+    expect(scheme.id).toBe("daintree");
+  });
+
+  it("removed IDs are not present in BUILT_IN_APP_SCHEMES", () => {
+    const ids = BUILT_IN_APP_SCHEMES.map((s) => s.id);
+    expect(ids).not.toContain("canopy");
+    expect(ids).not.toContain("canopy-slate");
+    expect(ids).toContain("daintree");
   });
 });

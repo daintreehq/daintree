@@ -215,7 +215,7 @@ const storeOptions = {
     appAgentConfig: DEFAULT_APP_AGENT_CONFIG,
     worktreeIssueMap: {},
     appTheme: {
-      colorSchemeId: "canopy",
+      colorSchemeId: "daintree",
     },
     telemetry: {
       enabled: false,
