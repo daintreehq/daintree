@@ -517,18 +517,15 @@ describe("Hokkaido built-in scheme", () => {
     ["syntax-operator", "#006A71", 4.5],
     ["syntax-function", "#2D7A52", 4.5],
     ["syntax-punctuation", "#3A4D5C", 4.5],
-  ] as const)(
-    "%s (%s) meets WCAG AA contrast (≥%s:1) on canvas",
-    (token, _hex, minimum) => {
-      const fg = hokkaido.tokens[token];
-      const bg = hokkaido.tokens["surface-canvas"];
-      const ratio = wcagContrastRatio(fg, bg);
-      expect(
-        ratio,
-        `${token} "${fg}" on canvas "${bg}" = ${ratio.toFixed(2)}:1, needs ≥${minimum}:1`
-      ).toBeGreaterThanOrEqual(minimum);
-    }
-  );
+  ] as const)("%s (%s) meets WCAG AA contrast (≥%s:1) on canvas", (token, _hex, minimum) => {
+    const fg = hokkaido.tokens[token];
+    const bg = hokkaido.tokens["surface-canvas"];
+    const ratio = wcagContrastRatio(fg, bg);
+    expect(
+      ratio,
+      `${token} "${fg}" on canvas "${bg}" = ${ratio.toFixed(2)}:1, needs ≥${minimum}:1`
+    ).toBeGreaterThanOrEqual(minimum);
+  });
 });
 
 describe("normalizeAppColorScheme", () => {
