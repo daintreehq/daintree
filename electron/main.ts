@@ -374,6 +374,7 @@ let cliAvailabilityService: CliAvailabilityService | null = null;
 let agentVersionService: AgentVersionService | null = null;
 let agentUpdateHandler: AgentUpdateHandler | null = null;
 let sidecarManager: SidecarManager | null = null;
+let projectMcpManager: ProjectMcpManager | null = null;
 let cleanupIpcHandlers: (() => void) | null = null;
 let cleanupErrorHandlers: (() => void) | null = null;
 let eventBuffer: EventBuffer | null = null;
@@ -562,7 +563,7 @@ if (!gotTheLock) {
         Promise.all([
           workspaceClient ? workspaceClient.dispose() : Promise.resolve(),
           mcpServerService.stop(),
-          projectMcpManager.stopAll(),
+          projectMcpManager ? projectMcpManager.stopAll() : Promise.resolve(),
           new Promise<void>((resolve) => {
             // Dispose orchestrator and routing before ptyClient to prevent event handlers from firing
             disposeTaskOrchestrator();
@@ -1321,7 +1322,7 @@ async function createWindow(): Promise<void> {
   // Register IPC handlers BEFORE loading the renderer so that no IPC calls
   // arrive before handlers exist. The deps object is mutable — workspaceClient
   // is assigned after pty-host is ready, and handlers access it lazily.
-  const projectMcpManager = new ProjectMcpManager(mainWindow);
+  projectMcpManager = new ProjectMcpManager(mainWindow);
 
   console.log("[MAIN] Registering IPC handlers...");
   const handlerDeps: HandlerDependencies = {
@@ -1332,7 +1333,7 @@ async function createWindow(): Promise<void> {
     cliAvailabilityService,
     agentVersionService,
     agentUpdateHandler,
-    projectMcpManager,
+    projectMcpManager: projectMcpManager ?? undefined,
     isDemoMode,
   };
   cleanupIpcHandlers = registerIpcHandlers(handlerDeps);
@@ -1522,7 +1523,7 @@ async function createWindow(): Promise<void> {
       const mcpSettings = await projectStore.getProjectSettings(currentProject.id);
       const servers = mcpSettings?.mcpServers;
       if (servers && Object.keys(servers).length > 0) {
-        await projectMcpManager.startForProject(currentProject.id, currentProject.path, servers);
+        await projectMcpManager!.startForProject(currentProject.id, currentProject.path, servers);
         console.log(
           `[MAIN] Started ${Object.keys(servers).length} project MCP server(s) for ${currentProject.name}`
         );

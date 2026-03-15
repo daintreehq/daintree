@@ -39,6 +39,7 @@ import type {
   ChecklistItemId,
 } from "../shared/types/index.js";
 import type { ColorVisionMode } from "../shared/types/appTheme.js";
+import type { ProjectMcpServerRunState } from "../shared/types/ipc/project.js";
 import type {
   AgentStateChangePayload,
   AgentDetectedPayload,
@@ -1969,10 +1970,7 @@ const api: ElectronAPI = {
   projectMcp: {
     getStatuses: (projectId: string) => _typedInvoke(CHANNELS.PROJECT_MCP_GET_STATUSES, projectId),
     onStatusChanged: (
-      callback: (payload: {
-        projectId: string;
-        servers: Array<{ name: string; status: string; pid?: number; error?: string }>;
-      }) => void
+      callback: (payload: { projectId: string; servers: ProjectMcpServerRunState[] }) => void
     ) => _typedOn(CHANNELS.PROJECT_MCP_STATUS_CHANGED, callback),
   },
 
