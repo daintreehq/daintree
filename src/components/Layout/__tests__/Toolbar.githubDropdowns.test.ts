@@ -12,7 +12,7 @@ describe("Toolbar GitHub dropdown search clearing — issue #3251", () => {
   });
 
   it("imports useGitHubFilterStore", () => {
-    expect(source).toContain('import { useGitHubFilterStore }');
+    expect(source).toContain("import { useGitHubFilterStore }");
   });
 
   it("destructures setIssueSearchQuery from the store", () => {
@@ -26,8 +26,8 @@ describe("Toolbar GitHub dropdown search clearing — issue #3251", () => {
   it("clears issue search query in onOpenChange callback", () => {
     // The issues FixedDropdown onOpenChange should clear the search
     const issuesDropdown = source.slice(
-      source.indexOf('onOpenChange={(open) => {'),
-      source.indexOf('onOpenChange={(open) => {') + 200
+      source.indexOf("onOpenChange={(open) => {"),
+      source.indexOf("onOpenChange={(open) => {") + 200
     );
     expect(issuesDropdown).toContain('setIssueSearchQuery("")');
   });
@@ -43,17 +43,14 @@ describe("Toolbar GitHub dropdown search clearing — issue #3251", () => {
 
   it("clears PR search query in PR onOpenChange callback", () => {
     // Find the second onOpenChange (for PRs dropdown)
-    const firstIdx = source.indexOf('onOpenChange={(open) => {');
-    const secondIdx = source.indexOf('onOpenChange={(open) => {', firstIdx + 1);
+    const firstIdx = source.indexOf("onOpenChange={(open) => {");
+    const secondIdx = source.indexOf("onOpenChange={(open) => {", firstIdx + 1);
     const prsDropdown = source.slice(secondIdx, secondIdx + 200);
     expect(prsDropdown).toContain('setPrSearchQuery("")');
   });
 
   it("clears PR search query in PR onClose callback", () => {
-    const prsOnClose = source.slice(
-      source.indexOf('type="pr"'),
-      source.indexOf('type="pr"') + 300
-    );
+    const prsOnClose = source.slice(source.indexOf('type="pr"'), source.indexOf('type="pr"') + 300);
     expect(prsOnClose).toContain('setPrSearchQuery("")');
   });
 
