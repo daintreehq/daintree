@@ -99,7 +99,7 @@ describe("GitHubListItem", () => {
       linkedPR: { number: 55, state: "OPEN", url: "https://github.com/test/repo/pull/55" },
     };
     render(<GitHubListItem item={issueWithPR} type="issue" />);
-    fireEvent.click(screen.getByText("PR #55"));
+    fireEvent.click(screen.getByRole("button", { name: "Linked PR #55" }));
     expect(actionService.dispatch).toHaveBeenCalledWith(
       "system.openExternal",
       { url: "https://github.com/test/repo/pull/55" },
@@ -192,7 +192,7 @@ describe("GitHubListItem", () => {
       linkedPR: { number: 55, state: "OPEN", url: "https://github.com/test/repo/pull/55" },
     };
     render(<GitHubListItem item={issueWithPR} type="issue" />);
-    expect(screen.getByText("PR #55")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Linked PR #55" })).toBeTruthy();
   });
 
   it("renders #number badge", () => {
