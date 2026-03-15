@@ -127,6 +127,10 @@ npm run fix          # Auto-fix lint/format
 npm run rebuild      # Rebuild native modules (node-pty)
 ```
 
+### CI Testing Strategy
+
+PRs run typecheck, lint, format, and unit tests only — no E2E. Full E2E suites run nightly and as release gates. Add the `run-e2e` label to a PR to trigger E2E core and online tests on every commit (use when working on E2E tests).
+
 Theme docs: `docs/architecture/theme-system.md`
 
 ## Adding New Features

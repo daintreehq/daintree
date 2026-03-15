@@ -3,6 +3,7 @@ name: E2E Core Tests
 on:
   pull_request:
     branches: [main, develop]
+    types: [labeled, synchronize]
   schedule:
     - cron: "0 3 * * *"
   workflow_dispatch:
@@ -36,6 +37,10 @@ env:
 jobs:
   # Determine which platforms to run on
   matrix-setup:
+    # Skip PR runs unless the 'run-e2e' label is present
+    if: >
+      github.event_name != 'pull_request' ||
+      contains(github.event.pull_request.labels.*.name, 'run-e2e')
     runs-on: ubuntu-22.04
     outputs:
       matrix: ${{ steps.set.outputs.matrix }}

@@ -25,6 +25,13 @@ npm run package      # Distribute
 npm run rebuild      # Rebuild native modules
 ```
 
+### CI Testing Strategy
+
+- **PRs:** Run typecheck, lint, format, and unit tests only (no E2E). Fast feedback loop.
+- **Nightly:** Full E2E core and online test suites run on schedule.
+- **Releases:** Full E2E core and online suites gate the release publish.
+- **On-demand:** Add the `run-e2e` label to a PR to trigger both E2E core and online test suites on every commit. Use this when working on E2E tests themselves.
+
 ## Architecture
 
 - **Main (`electron/`):** Handles node-pty, git operations, services, and IPC.
