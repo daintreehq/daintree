@@ -41,6 +41,21 @@ describe("getTerminalThemeFromAppScheme", () => {
     expect(theme.scrollbarSliderBackground).toBe("rgba(255, 255, 255, 0.20)");
   });
 
+  it("maps Fiordland scheme tokens correctly", () => {
+    const fiordland = BUILT_IN_APP_SCHEMES.find((s) => s.id === "fiordland")!;
+    const theme = getTerminalThemeFromAppScheme(fiordland);
+    expect(theme.background).toBe("#070D12");
+    expect(theme.foreground).toBe("#D4E0D6");
+    expect(theme.selectionBackground).toBe("#1A2C22");
+    expect(theme.red).toBe("#F7768E");
+    expect(theme.green).toBe("#9ECE6A");
+    expect(theme.brightWhite).toBe("#C0CAF5");
+    // activity-idle #3D4E5C → rgba(61, 78, 92, ...)
+    expect(theme.scrollbarSliderBackground).toBe("rgba(61, 78, 92, 0.4)");
+    expect(theme.scrollbarSliderHoverBackground).toBe("rgba(61, 78, 92, 0.6)");
+    expect(theme.scrollbarSliderActiveBackground).toBe("rgba(61, 78, 92, 0.8)");
+  });
+
   it("uses light generic defaults for non-hex light scheme", () => {
     const scheme: AppColorScheme = {
       ...BUILT_IN_APP_SCHEMES[0],
