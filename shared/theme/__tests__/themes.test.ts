@@ -415,6 +415,85 @@ describe("normalizeAppColorScheme", () => {
   });
 });
 
+describe("built-in schemes — Atacama light theme", () => {
+  const atacama = BUILT_IN_APP_SCHEMES.find((s) => s.id === "atacama")!;
+
+  it("exists in BUILT_IN_APP_SCHEMES as a light theme", () => {
+    expect(atacama).toBeDefined();
+    expect(atacama.type).toBe("light");
+    expect(atacama.builtin).toBe(true);
+  });
+
+  it("is retrievable via getAppThemeById", () => {
+    expect(getAppThemeById("atacama")).toBe(atacama);
+  });
+
+  it("uses WCAG-safe text-muted (#6B6560), not the original #9A9386", () => {
+    expect(atacama.tokens["text-muted"]).toBe("#6B6560");
+  });
+
+  it("has accent-foreground explicitly set", () => {
+    expect(atacama.tokens["accent-foreground"]).toBe("#08140e");
+  });
+
+  it("has near-black terminal-bright-white for light background", () => {
+    expect(atacama.tokens["terminal-bright-white"]).toBe("#1A1210");
+  });
+
+  it("auto-derives terminal-black from surface-canvas", () => {
+    expect(atacama.tokens["terminal-black"]).toBe(atacama.tokens["surface-canvas"]);
+  });
+
+  it("auto-derives terminal-white from text-primary", () => {
+    expect(atacama.tokens["terminal-white"]).toBe(atacama.tokens["text-primary"]);
+  });
+
+  it("auto-derives terminal-bright-black from activity-idle", () => {
+    expect(atacama.tokens["terminal-bright-black"]).toBe(atacama.tokens["activity-idle"]);
+  });
+
+  it("has signature indigo keywords and teal functions", () => {
+    expect(atacama.tokens["syntax-keyword"]).toBe("#293D71");
+    expect(atacama.tokens["syntax-function"]).toBe("#1B5F5C");
+  });
+
+  it("has correct mineral-desert surface hierarchy", () => {
+    expect(atacama.tokens["surface-canvas"]).toBe("#F4F4F2");
+    expect(atacama.tokens["surface-panel"]).toBe("#FAFAF8");
+    expect(atacama.tokens["surface-panel-elevated"]).toBe("#FFFFFF");
+  });
+
+  it("has light-appropriate category colors (oklch L=0.58-0.68)", () => {
+    expect(atacama.tokens["category-blue"]).toBe("oklch(0.62 0.14 250)");
+    expect(atacama.tokens["category-purple"]).toBe("oklch(0.64 0.14 310)");
+    expect(atacama.tokens["category-cyan"]).toBe("oklch(0.65 0.12 215)");
+    expect(atacama.tokens["category-green"]).toBe("oklch(0.63 0.13 145)");
+    expect(atacama.tokens["category-amber"]).toBe("oklch(0.68 0.14 75)");
+    expect(atacama.tokens["category-orange"]).toBe("oklch(0.66 0.15 45)");
+    expect(atacama.tokens["category-teal"]).toBe("oklch(0.64 0.11 185)");
+    expect(atacama.tokens["category-indigo"]).toBe("oklch(0.61 0.13 275)");
+    expect(atacama.tokens["category-rose"]).toBe("oklch(0.63 0.14 5)");
+    expect(atacama.tokens["category-pink"]).toBe("oklch(0.66 0.13 340)");
+    expect(atacama.tokens["category-violet"]).toBe("oklch(0.63 0.13 295)");
+    expect(atacama.tokens["category-slate"]).toBe("oklch(0.58 0.04 240)");
+  });
+
+  it("produces all required token keys", () => {
+    for (const key of APP_THEME_TOKEN_KEYS) {
+      expect(atacama.tokens).toHaveProperty(key, expect.any(String));
+    }
+  });
+
+  it("passes all critical contrast checks", () => {
+    expect(getAppThemeWarnings(atacama)).toEqual([]);
+  });
+
+  it("has unique ID in BUILT_IN_APP_SCHEMES", () => {
+    const ids = BUILT_IN_APP_SCHEMES.map((s) => s.id);
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+});
+
 describe("getAppThemeWarnings", () => {
   it("reports low-contrast critical token pairs", () => {
     const scheme = normalizeAppColorScheme({
