@@ -12,7 +12,7 @@ const GITHUB_TOKENS: Pick<
   "github-draft": "#8b949e",
 };
 
-function createCanopyTokens(
+export function createCanopyTokens(
   type: "dark" | "light",
   tokens: Partial<AppColorSchemeTokens> &
     Pick<
