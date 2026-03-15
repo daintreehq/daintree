@@ -4,34 +4,47 @@ import type { ManagedTerminal } from "./types";
 
 const WEBGL_DISABLED = import.meta.env.CANOPY_DISABLE_WEBGL === "1";
 
-export class TerminalWebGLManager {
-  private currentId: string | null = null;
-  private currentAddon: WebglAddon | null = null;
-  private contextLossDisposable: IDisposable | null = null;
+interface WebGLEntry {
+  addon: WebglAddon;
+  contextLossDisposable: IDisposable;
+}
 
-  attachToFocused(id: string, managed: ManagedTerminal): void {
+export class TerminalWebGLManager {
+  static readonly MAX_CONTEXTS = 16;
+
+  private pool = new Map<string, WebGLEntry>();
+  private lruOrder: string[] = [];
+
+  ensureContext(id: string, managed: ManagedTerminal): void {
     if (WEBGL_DISABLED) return;
-    if (this.currentId === id) return;
     if (!managed.isOpened) return;
 
-    this.detachCurrent();
+    if (this.pool.has(id)) {
+      this.moveLruToEnd(id);
+      return;
+    }
+
+    if (this.pool.size >= TerminalWebGLManager.MAX_CONTEXTS) {
+      const evictId = this.lruOrder[0];
+      if (evictId) {
+        this.doRelease(evictId);
+      }
+    }
 
     let addon: WebglAddon | null = null;
     let clDisposable: IDisposable | null = null;
     try {
       addon = new WebglAddon();
+      const ownAddon = addon;
       clDisposable = addon.onContextLoss(() => {
-        if (this.currentId === id && this.currentAddon === addon) {
-          this.detachCurrent();
+        if (this.pool.get(id)?.addon === ownAddon) {
+          this.releaseContext(id);
         }
       });
       managed.terminal.loadAddon(addon);
-      this.currentId = id;
-      this.currentAddon = addon;
-      this.contextLossDisposable = clDisposable;
+      this.pool.set(id, { addon, contextLossDisposable: clDisposable });
+      this.lruOrder.push(id);
     } catch {
-      // WebGL unavailable (CI, older GPU, context limit) — stay on DOM renderer.
-      // Clean up partially-constructed addon to prevent leaks.
       try {
         clDisposable?.dispose();
       } catch {
@@ -45,47 +58,66 @@ export class TerminalWebGLManager {
     }
   }
 
-  detachCurrent(): void {
-    if (this.contextLossDisposable) {
-      try {
-        this.contextLossDisposable.dispose();
-      } catch {
-        // ignore
-      }
-      this.contextLossDisposable = null;
+  releaseContext(id: string): void {
+    if (this.pool.has(id)) {
+      this.doRelease(id);
     }
-    if (this.currentAddon) {
-      try {
-        this.currentAddon.dispose();
-      } catch {
-        // ignore
-      }
-      this.currentAddon = null;
-    }
-    this.currentId = null;
   }
 
-  isCurrent(id: string): boolean {
-    return this.currentId === id;
-  }
-
-  detachIfCurrent(id: string): void {
-    if (this.currentId === id) {
-      this.detachCurrent();
-    }
+  isActive(id: string): boolean {
+    return this.pool.has(id);
   }
 
   onTerminalDestroyed(id: string): void {
-    if (this.currentId === id) {
-      // Null out references without disposing — the terminal itself is being
-      // disposed and will clean up the addon.
-      this.contextLossDisposable = null;
-      this.currentAddon = null;
-      this.currentId = null;
+    const entry = this.pool.get(id);
+    if (entry) {
+      try {
+        entry.contextLossDisposable.dispose();
+      } catch {
+        // ignore
+      }
+      this.pool.delete(id);
+      this.removeFromLru(id);
     }
   }
 
   dispose(): void {
-    this.detachCurrent();
+    for (const id of [...this.pool.keys()]) {
+      this.doRelease(id);
+    }
+  }
+
+  private doRelease(id: string): void {
+    const entry = this.pool.get(id);
+    if (!entry) return;
+
+    this.pool.delete(id);
+    this.removeFromLru(id);
+
+    try {
+      entry.contextLossDisposable.dispose();
+    } catch {
+      // ignore
+    }
+    try {
+      entry.addon.dispose();
+    } catch {
+      // ignore
+    }
+  }
+
+  private moveLruToEnd(id: string): void {
+    const idx = this.lruOrder.indexOf(id);
+    if (idx !== -1) {
+      this.lruOrder.splice(idx, 1);
+    }
+    this.lruOrder.push(id);
+  }
+
+  private removeFromLru(id: string): void {
+    const idx = this.lruOrder.indexOf(id);
+    if (idx !== -1) {
+      this.lruOrder.splice(idx, 1);
+    }
   }
 }
