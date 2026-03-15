@@ -173,8 +173,10 @@ export function trackEvent(event: string, properties: Record<string, unknown> = 
   const telemetry = store.get("telemetry");
   const enabled = telemetry?.enabled ?? false;
   const hasSeenPrompt = telemetry?.hasSeenPrompt ?? false;
+  const level = getTelemetryLevel();
 
-  if (enabled && captureEventFn) {
+  // Only send analytics events at "full" level; "errors" only permits crash reports via Sentry
+  if (level === "full" && captureEventFn) {
     captureEventFn({
       message: event,
       level: "info" as unknown as undefined,

@@ -358,16 +358,17 @@ import {
   getCrashRecoveryService,
 } from "./services/CrashRecoveryService.js";
 
-// Initialize logger early with userData path
-initializeLogger(app.getPath("userData"));
-
-// Prune old log files based on retention setting (fire-and-forget)
+// Prune old log files based on retention setting (must run before initializeLogger
+// which truncates all .log files, refreshing mtime and preventing mtime-based pruning)
 {
   const retentionDays = store.get("privacy")?.logRetentionDays ?? 30;
   if (retentionDays > 0) {
     pruneOldLogs(app.getPath("userData"), retentionDays);
   }
 }
+
+// Initialize logger early with userData path
+initializeLogger(app.getPath("userData"));
 
 // Register commands early so they're available when IPC handlers start
 registerCommands();
