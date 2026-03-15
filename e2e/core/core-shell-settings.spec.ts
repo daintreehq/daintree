@@ -191,6 +191,11 @@ test.describe.serial("Core: Shell & Settings", () => {
       const generalTab = window.locator(`${SEL.settings.navSidebar} button:has-text("General")`);
       await generalTab.click();
 
+      const displaySubtab = window.locator(
+        '#settings-panel-general button[role="tab"]:has-text("Display")'
+      );
+      await displaySubtab.click();
+
       const toggle = window.locator(SEL.settings.projectPulseToggle);
       await expect(toggle).toBeVisible({ timeout: T_MEDIUM });
       await expect(toggle).toHaveAttribute("aria-checked", "true", { timeout: T_MEDIUM });
@@ -244,6 +249,10 @@ test.describe.serial("Core: Shell & Settings", () => {
 
       const generalTab = window.locator(`${SEL.settings.navSidebar} button:has-text("General")`);
       await generalTab.click();
+      const displaySubtab = window.locator(
+        '#settings-panel-general button[role="tab"]:has-text("Display")'
+      );
+      await displaySubtab.click();
       const pulseToggle = window.locator(SEL.settings.projectPulseToggle);
       await expect(pulseToggle).toHaveAttribute("aria-checked", "false", { timeout: T_MEDIUM });
 

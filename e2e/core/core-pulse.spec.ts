@@ -69,6 +69,11 @@ test.describe.serial("Core: Project Pulse", () => {
     const generalTab = window.locator(`${SEL.settings.navSidebar} button:has-text("General")`);
     await generalTab.click();
 
+    const displaySubtab = window.locator(
+      '#settings-panel-general button[role="tab"]:has-text("Display")'
+    );
+    await displaySubtab.click();
+
     const toggle = window.locator(SEL.settings.projectPulseToggle);
     await expect(toggle).toBeVisible({ timeout: T_MEDIUM });
     await expect(toggle).toHaveAttribute("aria-checked", "true", { timeout: T_SHORT });
