@@ -562,6 +562,9 @@ const CHANNELS = {
   VOICE_INPUT_PARAGRAPH_BOUNDARY: "voice-input:paragraph-boundary",
 
   // MCP Server channels
+  PROJECT_MCP_GET_STATUSES: "project-mcp:get-statuses",
+  PROJECT_MCP_STATUS_CHANGED: "project-mcp:status-changed",
+
   MCP_SERVER_GET_STATUS: "mcp-server:get-status",
   MCP_SERVER_SET_ENABLED: "mcp-server:set-enabled",
   MCP_SERVER_SET_PORT: "mcp-server:set-port",
@@ -1961,6 +1964,16 @@ const api: ElectronAPI = {
     setApiKey: (apiKey: string) => _typedInvoke(CHANNELS.MCP_SERVER_SET_API_KEY, apiKey),
     generateApiKey: () => _typedInvoke(CHANNELS.MCP_SERVER_GENERATE_API_KEY),
     getConfigSnippet: () => _typedInvoke(CHANNELS.MCP_SERVER_GET_CONFIG_SNIPPET),
+  },
+
+  projectMcp: {
+    getStatuses: (projectId: string) => _typedInvoke(CHANNELS.PROJECT_MCP_GET_STATUSES, projectId),
+    onStatusChanged: (
+      callback: (payload: {
+        projectId: string;
+        servers: Array<{ name: string; status: string; pid?: number; error?: string }>;
+      }) => void
+    ) => _typedOn(CHANNELS.PROJECT_MCP_STATUS_CHANGED, callback),
   },
 
   mcpBridge: {

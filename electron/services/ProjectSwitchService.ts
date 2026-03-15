@@ -63,7 +63,7 @@ export class ProjectSwitchService {
       await this.cleanupWorktreeService();
       const cleanupPromise = withPerformanceSpan(
         PERF_MARKS.PROJECT_SWITCH_CLEANUP,
-        () => this.cleanupSupportingServices(projectId),
+        () => this.cleanupSupportingServices(projectId, previousProjectId ?? null),
         { projectId }
       );
 
@@ -88,6 +88,9 @@ export class ProjectSwitchService {
           { projectId }
         ),
       ]);
+
+      // Start MCP servers for the new project after cleanup is complete
+      await this.startProjectMcpServers(updatedProject);
 
       const switchId = randomUUID();
       sendToRenderer(this.deps.mainWindow, CHANNELS.PROJECT_ON_SWITCH, {
@@ -163,7 +166,10 @@ export class ProjectSwitchService {
     }
   }
 
-  private async cleanupSupportingServices(projectId: string): Promise<void> {
+  private async cleanupSupportingServices(
+    projectId: string,
+    previousProjectId: string | null
+  ): Promise<void> {
     console.log("[ProjectSwitch] Cleaning up previous project state...");
 
     const safeCall = (fn: () => unknown): Promise<unknown> => Promise.resolve().then(fn);
@@ -174,11 +180,20 @@ export class ProjectSwitchService {
         ? safeCall(() => this.deps.eventBuffer!.onProjectSwitch())
         : Promise.resolve(),
       safeCall(() => taskQueueService.onProjectSwitch(projectId)),
+      previousProjectId && this.deps.projectMcpManager
+        ? safeCall(() => this.deps.projectMcpManager!.stopForProject(previousProjectId!))
+        : Promise.resolve(),
     ]);
 
     cleanupResults.forEach((result, index) => {
       if (result.status === "rejected") {
-        const serviceNames = ["PtyClient", "LogBuffer", "EventBuffer", "TaskQueueService"];
+        const serviceNames = [
+          "PtyClient",
+          "LogBuffer",
+          "EventBuffer",
+          "TaskQueueService",
+          "ProjectMcpManager",
+        ];
         console.error(`[ProjectSwitch] ${serviceNames[index]} cleanup failed:`, result.reason);
       }
     });
@@ -231,6 +246,22 @@ export class ProjectSwitchService {
       }
     } catch (error) {
       console.error("[ProjectSwitch] Failed to apply in-repo identity:", error);
+    }
+  }
+
+  private async startProjectMcpServers(project: Project): Promise<void> {
+    if (!this.deps.projectMcpManager) return;
+    try {
+      const settings = await projectStore.getProjectSettings(project.id);
+      const servers = settings?.mcpServers;
+      if (servers && Object.keys(servers).length > 0) {
+        await this.deps.projectMcpManager.startForProject(project.id, project.path, servers);
+        console.log(
+          `[ProjectSwitch] Started ${Object.keys(servers).length} MCP server(s) for project ${project.name}`
+        );
+      }
+    } catch (error) {
+      console.error("[ProjectSwitch] Failed to start project MCP servers:", error);
     }
   }
 

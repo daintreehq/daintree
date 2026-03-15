@@ -563,6 +563,13 @@ export function registerProjectHandlers(deps: HandlerDependencies): () => void {
         // Kill terminals when explicitly requested (freeing resources completely)
         const terminalsKilled = await deps.ptyClient!.killByProject(projectId);
 
+        // Stop any running MCP servers for this project
+        if (deps.projectMcpManager) {
+          await deps.projectMcpManager.stopForProject(projectId).catch((err: unknown) => {
+            console.error(`[IPC] project:close: Failed to stop MCP servers for ${projectId}:`, err);
+          });
+        }
+
         // Clear persisted state
         await projectStore.clearProjectState(projectId);
 
@@ -608,6 +615,13 @@ export function registerProjectHandlers(deps: HandlerDependencies): () => void {
   };
   ipcMain.handle(CHANNELS.PROJECT_CLOSE, handleProjectClose);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.PROJECT_CLOSE));
+
+  const handleProjectMcpGetStatuses = (_event: Electron.IpcMainInvokeEvent, projectId: string) => {
+    if (typeof projectId !== "string" || !projectId) return [];
+    return deps.projectMcpManager?.getStatuses(projectId) ?? [];
+  };
+  ipcMain.handle(CHANNELS.PROJECT_MCP_GET_STATUSES, handleProjectMcpGetStatuses);
+  handlers.push(() => ipcMain.removeHandler(CHANNELS.PROJECT_MCP_GET_STATUSES));
 
   const handleProjectReopen = async (_event: Electron.IpcMainInvokeEvent, projectId: string) => {
     if (typeof projectId !== "string" || !projectId) {

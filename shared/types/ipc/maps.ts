@@ -80,7 +80,12 @@ import type { AppState, HydrateResult } from "./app.js";
 import type { LogEntry, LogFilterOptions } from "./logs.js";
 import type { RetryAction, AppError, RetryProgressPayload } from "./errors.js";
 import type { EventRecord, EventFilterOptions } from "./events.js";
-import type { ProjectCloseResult, ProjectStats, ProjectSwitchPayload } from "./project.js";
+import type {
+  ProjectCloseResult,
+  ProjectStats,
+  ProjectSwitchPayload,
+  ProjectMcpServerRunState,
+} from "./project.js";
 import type {
   RepositoryStats,
   GitHubCliStatus,
@@ -1548,6 +1553,12 @@ export interface IpcInvokeMap {
     args: [];
     result: void;
   };
+
+  // Project MCP server channels
+  "project-mcp:get-statuses": {
+    args: [projectId: string];
+    result: ProjectMcpServerRunState[];
+  };
 }
 
 /**
@@ -1716,6 +1727,12 @@ export interface IpcEventMap {
   "demo:exec-pause": void;
   "demo:exec-resume": void;
   "demo:exec-wait-for-selector": DemoWaitForSelectorPayload;
+
+  // Project MCP server events
+  "project-mcp:status-changed": {
+    projectId: string;
+    servers: ProjectMcpServerRunState[];
+  };
 }
 
 export type IpcInvokeArgs<K extends keyof IpcInvokeMap> = IpcInvokeMap[K]["args"];

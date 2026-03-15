@@ -337,6 +337,7 @@ import { autoUpdaterService } from "./services/AutoUpdaterService.js";
 import { SMOKE_BOOT_TIMEOUT_MS, runSmokeFunctionalChecks } from "./services/smokeTest.js";
 import { initializeTelemetry } from "./services/TelemetryService.js";
 import { mcpServerService } from "./services/McpServerService.js";
+import { ProjectMcpManager } from "./services/ProjectMcpManager.js";
 import {
   initializeCrashRecoveryService,
   getCrashRecoveryService,
@@ -561,6 +562,7 @@ if (!gotTheLock) {
         Promise.all([
           workspaceClient ? workspaceClient.dispose() : Promise.resolve(),
           mcpServerService.stop(),
+          projectMcpManager.stopAll(),
           new Promise<void>((resolve) => {
             // Dispose orchestrator and routing before ptyClient to prevent event handlers from firing
             disposeTaskOrchestrator();
@@ -1319,6 +1321,8 @@ async function createWindow(): Promise<void> {
   // Register IPC handlers BEFORE loading the renderer so that no IPC calls
   // arrive before handlers exist. The deps object is mutable — workspaceClient
   // is assigned after pty-host is ready, and handlers access it lazily.
+  const projectMcpManager = new ProjectMcpManager(mainWindow);
+
   console.log("[MAIN] Registering IPC handlers...");
   const handlerDeps: HandlerDependencies = {
     mainWindow,
@@ -1328,6 +1332,7 @@ async function createWindow(): Promise<void> {
     cliAvailabilityService,
     agentVersionService,
     agentUpdateHandler,
+    projectMcpManager,
     isDemoMode,
   };
   cleanupIpcHandlers = registerIpcHandlers(handlerDeps);
@@ -1509,6 +1514,22 @@ async function createWindow(): Promise<void> {
     }
   } else if (currentProject && !workspaceReady) {
     console.warn("[MAIN] Workspace service unavailable - skipping worktree loading");
+  }
+
+  // Start per-project MCP servers for the current project
+  if (currentProject) {
+    try {
+      const mcpSettings = await projectStore.getProjectSettings(currentProject.id);
+      const servers = mcpSettings?.mcpServers;
+      if (servers && Object.keys(servers).length > 0) {
+        await projectMcpManager.startForProject(currentProject.id, currentProject.path, servers);
+        console.log(
+          `[MAIN] Started ${Object.keys(servers).length} project MCP server(s) for ${currentProject.name}`
+        );
+      }
+    } catch (error) {
+      console.error("[MAIN] Failed to start project MCP servers:", error);
+    }
   }
 
   // Initialize task queue for the current project

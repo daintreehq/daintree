@@ -1507,6 +1507,10 @@ export class ProjectStore {
         defaultWorkingDirectory?: string;
         scrollbackLines?: number;
       };
+      mcpServers?: Record<
+        string,
+        { command: string; args?: string[]; env?: Record<string, string>; cwd?: string }
+      >;
     } = { version: 1 };
 
     if (settings.runCommands?.length) payload.runCommands = settings.runCommands;
@@ -1532,6 +1536,10 @@ export class ProjectStore {
       if (settings.terminalSettings.scrollbackLines !== undefined)
         shareableTerminal.scrollbackLines = settings.terminalSettings.scrollbackLines;
       if (Object.keys(shareableTerminal).length > 0) payload.terminalSettings = shareableTerminal;
+    }
+
+    if (settings.mcpServers && Object.keys(settings.mcpServers).length > 0) {
+      payload.mcpServers = settings.mcpServers;
     }
 
     const uniqueSuffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;

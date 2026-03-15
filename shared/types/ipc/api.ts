@@ -121,6 +121,7 @@ import type {
 } from "./github.js";
 import type { TerminalConfig } from "./config.js";
 import type { HibernationConfig } from "./hibernation.js";
+import type { ProjectMcpServerRunState } from "./project.js";
 import type { SystemSleepMetrics } from "./systemSleep.js";
 import type { KeyAction } from "../keymap.js";
 
@@ -1037,6 +1038,12 @@ export interface ElectronAPI {
     generateApiKey(): Promise<string>;
     /** Get the JSON config snippet to paste into an MCP client config */
     getConfigSnippet(): Promise<string>;
+  };
+  projectMcp: {
+    getStatuses(projectId: string): Promise<ProjectMcpServerRunState[]>;
+    onStatusChanged(
+      callback: (payload: { projectId: string; servers: ProjectMcpServerRunState[] }) => void
+    ): () => void;
   };
   workflow: {
     listWorkflows(): Promise<WorkflowSummary[]>;
