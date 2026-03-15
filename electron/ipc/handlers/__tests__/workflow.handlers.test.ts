@@ -265,14 +265,13 @@ describe("registerWorkflowHandlers", () => {
       expect(result[1].runId).toBe("run-2");
     });
 
-    it("throws when engine is null", async () => {
+    it("returns empty array when engine is null", async () => {
       mockGetWorkflowEngine.mockReturnValue(null);
 
       registerWorkflowHandlers(deps);
+      const result = await getHandler("workflow:list-runs")({});
 
-      await expect(getHandler("workflow:list-runs")({})).rejects.toThrow(
-        "WorkflowEngine not initialized"
-      );
+      expect(result).toEqual([]);
     });
   });
 
