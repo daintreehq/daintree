@@ -51,7 +51,7 @@ export type WorkflowNodeType = z.infer<typeof WorkflowNodeTypeSchema>;
  * Configuration for an action node.
  */
 export const WorkflowActionConfigSchema = z.object({
-  /** Action ID from ActionService (e.g., "terminal.executeCommand") */
+  /** Action ID from ActionService (e.g., "terminal.sendCommand") */
   actionId: z.string().min(1),
   /** Arguments to pass to the action */
   args: z.record(z.string(), z.unknown()).optional(),
