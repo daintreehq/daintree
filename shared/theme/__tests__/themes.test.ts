@@ -452,9 +452,29 @@ describe("built-in schemes — Atacama light theme", () => {
     expect(atacama.tokens["terminal-bright-black"]).toBe(atacama.tokens["activity-idle"]);
   });
 
+  it("has signature indigo keywords and teal functions", () => {
+    expect(atacama.tokens["syntax-keyword"]).toBe("#293D71");
+    expect(atacama.tokens["syntax-function"]).toBe("#1B5F5C");
+  });
+
+  it("has correct mineral-desert surface hierarchy", () => {
+    expect(atacama.tokens["surface-canvas"]).toBe("#F4F4F2");
+    expect(atacama.tokens["surface-panel"]).toBe("#FAFAF8");
+    expect(atacama.tokens["surface-panel-elevated"]).toBe("#FFFFFF");
+  });
+
   it("has light-appropriate category colors (oklch L=0.58-0.68)", () => {
     expect(atacama.tokens["category-blue"]).toBe("oklch(0.62 0.14 250)");
+    expect(atacama.tokens["category-purple"]).toBe("oklch(0.64 0.14 310)");
+    expect(atacama.tokens["category-cyan"]).toBe("oklch(0.65 0.12 215)");
+    expect(atacama.tokens["category-green"]).toBe("oklch(0.63 0.13 145)");
+    expect(atacama.tokens["category-amber"]).toBe("oklch(0.68 0.14 75)");
+    expect(atacama.tokens["category-orange"]).toBe("oklch(0.66 0.15 45)");
+    expect(atacama.tokens["category-teal"]).toBe("oklch(0.64 0.11 185)");
     expect(atacama.tokens["category-indigo"]).toBe("oklch(0.61 0.13 275)");
+    expect(atacama.tokens["category-rose"]).toBe("oklch(0.63 0.14 5)");
+    expect(atacama.tokens["category-pink"]).toBe("oklch(0.66 0.13 340)");
+    expect(atacama.tokens["category-violet"]).toBe("oklch(0.63 0.13 295)");
     expect(atacama.tokens["category-slate"]).toBe("oklch(0.58 0.04 240)");
   });
 
