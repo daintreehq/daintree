@@ -151,8 +151,8 @@ test.describe.serial("Core: v0.3.0 Features", () => {
       });
       await agentsNav.click();
 
-      // Subtab bar should be visible with aria-label="Subtab navigation"
-      const subtabBar = window.locator(SEL.settings.subtabNav);
+      // Subtab bar should be visible — scope to agents panel to avoid matching General's subtab bar
+      const subtabBar = window.locator(`#settings-panel-agents ${SEL.settings.subtabNav}`);
       await expect(subtabBar).toBeVisible({ timeout: T_MEDIUM });
 
       // "General" subtab should be active (aria-selected="true")
@@ -164,7 +164,7 @@ test.describe.serial("Core: v0.3.0 Features", () => {
     test("clicking agent subtab switches active state", async () => {
       const { window } = ctx;
 
-      const subtabBar = window.locator(SEL.settings.subtabNav);
+      const subtabBar = window.locator(`#settings-panel-agents ${SEL.settings.subtabNav}`);
       const subtabButtons = subtabBar.locator("button");
       const count = await subtabButtons.count();
 
