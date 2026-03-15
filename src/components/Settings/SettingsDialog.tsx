@@ -35,6 +35,7 @@ import {
   Image,
   Search,
   ChevronRight,
+  KeyRound,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useVerticalScrollShadows } from "@/hooks/useVerticalScrollShadows";
@@ -55,6 +56,7 @@ import { EditorIntegrationTab } from "./EditorIntegrationTab";
 import { ImageViewerTab } from "./ImageViewerTab";
 import { VoiceInputSettingsTab } from "./VoiceInputSettingsTab";
 import { McpServerSettingsTab } from "./McpServerSettingsTab";
+import { EnvironmentSettingsTab } from "./EnvironmentSettingsTab";
 import { SETTINGS_SEARCH_INDEX } from "./settingsSearchIndex";
 import {
   filterSettings,
@@ -93,6 +95,7 @@ export type SettingsTab =
   | "imageViewer"
   | "voice"
   | "mcp"
+  | "environment"
   | "troubleshooting";
 
 export function SettingsDialog({
@@ -351,6 +354,7 @@ export function SettingsDialog({
     imageViewer: "Image Viewer",
     voice: "Voice Input",
     mcp: "MCP Server",
+    environment: "Environment Variables",
     troubleshooting: "Troubleshooting",
   };
 
@@ -369,6 +373,7 @@ export function SettingsDialog({
     imageViewer: <Image className="w-5 h-5 text-canopy-text/60" />,
     voice: <Mic className="w-5 h-5 text-canopy-text/60" />,
     mcp: <Plug className="w-5 h-5 text-canopy-text/60" />,
+    environment: <KeyRound className="w-5 h-5 text-canopy-text/60" />,
     troubleshooting: <LifeBuoy className="w-5 h-5 text-canopy-text/60" />,
   };
 
@@ -510,6 +515,15 @@ export function SettingsDialog({
                   activeTab={activeTab}
                   isSearching={isSearching}
                   matchCount={matchCounts.toolbar}
+                  onSelect={handleNavSelect}
+                />
+                <NavItem
+                  tab="environment"
+                  icon={<KeyRound className="w-4 h-4" />}
+                  label="Environment"
+                  activeTab={activeTab}
+                  isSearching={isSearching}
+                  matchCount={matchCounts.environment}
                   onSelect={handleNavSelect}
                 />
               </NavGroup>
@@ -795,6 +809,16 @@ export function SettingsDialog({
                   className={activeTab === "mcp" ? "" : "hidden"}
                 >
                   <McpServerSettingsTab />
+                </div>
+
+                <div
+                  role="tabpanel"
+                  id="settings-panel-environment"
+                  aria-labelledby="settings-tab-environment"
+                  tabIndex={0}
+                  className={activeTab === "environment" ? "" : "hidden"}
+                >
+                  <EnvironmentSettingsTab />
                 </div>
 
                 <div

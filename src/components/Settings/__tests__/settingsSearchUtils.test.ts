@@ -241,7 +241,7 @@ describe("subtab-aware search", () => {
 });
 
 describe("SETTINGS_SEARCH_INDEX", () => {
-  it("has entries covering all 15 settings tabs", () => {
+  it("has entries covering all 16 settings tabs", () => {
     const tabs = new Set(SETTINGS_SEARCH_INDEX.map((e) => e.tab));
     const expectedTabs = [
       "general",
@@ -258,6 +258,7 @@ describe("SETTINGS_SEARCH_INDEX", () => {
       "imageViewer",
       "voice",
       "mcp",
+      "environment",
       "troubleshooting",
     ];
     for (const tab of expectedTabs) {
@@ -302,6 +303,7 @@ describe("SETTINGS_SEARCH_INDEX", () => {
       imageViewer: "Image Viewer",
       voice: "Voice Input",
       mcp: "MCP Server",
+      environment: "Environment Variables",
       troubleshooting: "Troubleshooting",
     };
     for (const entry of SETTINGS_SEARCH_INDEX) {
@@ -328,6 +330,7 @@ describe("SETTINGS_SEARCH_INDEX", () => {
       imageViewer: "Image Viewer",
       voice: "Voice Input",
       mcp: "MCP Server",
+      environment: "Environment Variables",
       troubleshooting: "Troubleshooting",
     };
     for (const tabKey of Object.keys(tabTitles)) {
