@@ -171,7 +171,6 @@ function flushPreConsentBuffer(): void {
 
 export function trackEvent(event: string, properties: Record<string, unknown> = {}): void {
   const telemetry = store.get("telemetry");
-  const enabled = telemetry?.enabled ?? false;
   const hasSeenPrompt = telemetry?.hasSeenPrompt ?? false;
   const level = getTelemetryLevel();
 

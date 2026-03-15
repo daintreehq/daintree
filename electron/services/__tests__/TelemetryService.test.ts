@@ -223,7 +223,9 @@ describe("trackEvent", () => {
   it("sends directly when telemetry is enabled and Sentry is initialized", async () => {
     const original = process.env.SENTRY_DSN;
     process.env.SENTRY_DSN = "https://test@sentry.io/123";
-    storeMock.get.mockReturnValue({ enabled: true, hasSeenPrompt: true });
+    storeMock._data.telemetry = { enabled: true, hasSeenPrompt: true };
+    storeMock._data.privacy = { telemetryLevel: "full", logRetentionDays: 30 };
+    storeMock.get.mockImplementation((key: string) => storeMock._data[key]);
     await initializeTelemetry();
     captureEventMock.mockClear();
 
