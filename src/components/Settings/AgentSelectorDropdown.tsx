@@ -64,7 +64,7 @@ export function AgentSelectorDropdown({
       onSubtabChange(id);
       setOpen(false);
     },
-    [onSubtabChange],
+    [onSubtabChange]
   );
 
   const handleKeyDown = useCallback(
@@ -86,10 +86,11 @@ export function AgentSelectorDropdown({
           break;
       }
     },
-    [items, activeIndex, handleSelect],
+    [items, activeIndex, handleSelect]
   );
 
-  const selectedAgent = activeSubtab !== GENERAL_ID ? agentOptions.find((a) => a.id === activeSubtab) : null;
+  const selectedAgent =
+    activeSubtab !== GENERAL_ID ? agentOptions.find((a) => a.id === activeSubtab) : null;
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
@@ -103,7 +104,7 @@ export function AgentSelectorDropdown({
             "flex items-center gap-2 w-full px-3 py-2 text-sm rounded-[var(--radius-md)]",
             "border border-canopy-border bg-canopy-bg text-canopy-text",
             "hover:border-canopy-accent/50 transition-colors",
-            "focus:outline-none focus:ring-2 focus:ring-canopy-accent/50",
+            "focus:outline-none focus:ring-2 focus:ring-canopy-accent/50"
           )}
         >
           {selectedAgent ? (
@@ -135,7 +136,10 @@ export function AgentSelectorDropdown({
           )}
           <ChevronDown
             size={14}
-            className={cn("shrink-0 text-canopy-text/40 transition-transform", open && "rotate-180")}
+            className={cn(
+              "shrink-0 text-canopy-text/40 transition-transform",
+              open && "rotate-180"
+            )}
           />
         </button>
       </PopoverTrigger>
@@ -166,17 +170,11 @@ export function AgentSelectorDropdown({
             className="flex-1 min-w-0 text-xs bg-transparent text-canopy-text placeholder:text-canopy-text/40 focus:outline-none"
           />
         </div>
-        <div
-          role="listbox"
-          id="agent-selector-list"
-          className="overflow-y-auto max-h-60 p-1"
-        >
+        <div role="listbox" id="agent-selector-list" className="overflow-y-auto max-h-60 p-1">
           {items.map((item, index) => {
             const isActive = index === activeIndex;
             const isSelected =
-              item.kind === "general"
-                ? activeSubtab === GENERAL_ID
-                : activeSubtab === item.id;
+              item.kind === "general" ? activeSubtab === GENERAL_ID : activeSubtab === item.id;
 
             return (
               <div
@@ -192,7 +190,7 @@ export function AgentSelectorDropdown({
                   "flex items-center gap-2 px-2 py-1.5 rounded-[var(--radius-sm)] cursor-pointer text-sm",
                   isActive && "bg-canopy-accent/10",
                   isSelected && "text-canopy-accent",
-                  !isActive && !isSelected && "text-canopy-text",
+                  !isActive && !isSelected && "text-canopy-text"
                 )}
               >
                 {item.kind === "general" ? (
@@ -205,11 +203,7 @@ export function AgentSelectorDropdown({
                   </>
                 ) : (
                   <>
-                    <item.agent.Icon
-                      size={16}
-                      brandColor={item.agent.color}
-                      className="shrink-0"
-                    />
+                    <item.agent.Icon size={16} brandColor={item.agent.color} className="shrink-0" />
                     <span className="flex-1 min-w-0 truncate">{item.agent.name}</span>
                     {(!item.agent.selected || item.agent.dangerousEnabled) && (
                       <span className="flex items-center gap-1 shrink-0">
