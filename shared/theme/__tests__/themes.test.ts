@@ -236,6 +236,10 @@ describe("built-in schemes — Fiordland", () => {
     expect(fiordland.tokens["accent-primary"]).toBe("#3F9366");
   });
 
+  it("derives accent-foreground from text-inverse", () => {
+    expect(fiordland.tokens["accent-foreground"]).toBe("#070D12");
+  });
+
   it("uses contrast-safe status-danger", () => {
     expect(fiordland.tokens["status-danger"]).toBe("#E04055");
   });
