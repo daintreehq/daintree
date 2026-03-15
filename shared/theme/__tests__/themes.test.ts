@@ -393,6 +393,48 @@ describe("built-in schemes — Redwoods has correct tokens and derived values", 
   });
 });
 
+describe("built-in schemes — Serengeti light theme", () => {
+  const serengeti = BUILT_IN_APP_SCHEMES.find((s) => s.id === "serengeti")!;
+
+  it("exists in BUILT_IN_APP_SCHEMES as a light builtin", () => {
+    expect(serengeti).toBeDefined();
+    expect(serengeti.type).toBe("light");
+    expect(serengeti.builtin).toBe(true);
+  });
+
+  it("produces all 79 required token keys", () => {
+    for (const key of APP_THEME_TOKEN_KEYS) {
+      expect(serengeti.tokens).toHaveProperty(key, expect.any(String));
+    }
+  });
+
+  it("overrides terminal-black to text-primary, not surface-canvas", () => {
+    expect(serengeti.tokens["terminal-black"]).toBe("#4A3F35");
+    expect(serengeti.tokens["terminal-black"]).not.toBe(serengeti.tokens["surface-canvas"]);
+  });
+
+  it("syntax-comment is distinct from text-muted", () => {
+    expect(serengeti.tokens["syntax-comment"]).toBe("#6E6259");
+    expect(serengeti.tokens["text-muted"]).toBe("#9B8D7A");
+    expect(serengeti.tokens["syntax-comment"]).not.toBe(serengeti.tokens["text-muted"]);
+  });
+
+  it("syntax-function differs from accent-primary", () => {
+    expect(serengeti.tokens["accent-primary"]).toBe("#3F9366");
+    expect(serengeti.tokens["syntax-function"]).toBe("#256645");
+    expect(serengeti.tokens["syntax-function"]).not.toBe(serengeti.tokens["accent-primary"]);
+  });
+
+  it("passes all WCAG contrast checks (zero warnings)", () => {
+    expect(getAppThemeWarnings(serengeti)).toEqual([]);
+  });
+
+  it("uses lower-lightness oklch category colors for light mode", () => {
+    expect(serengeti.tokens["category-blue"]).toBe("oklch(0.62 0.14 250)");
+    expect(serengeti.tokens["category-slate"]).toBe("oklch(0.58 0.04 240)");
+  });
+});
+
 describe("normalizeAppColorScheme", () => {
   it("uses a light fallback base for partial light themes", () => {
     const scheme = normalizeAppColorScheme({
