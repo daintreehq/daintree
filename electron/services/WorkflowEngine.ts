@@ -11,7 +11,12 @@ import { events } from "./events.js";
 import { workflowLoader, WorkflowLoader } from "./WorkflowLoader.js";
 import { taskQueueService, TaskQueueService } from "./TaskQueueService.js";
 import { workflowPersistence, WorkflowPersistence } from "./persistence/WorkflowPersistence.js";
-import type { WorkflowRun, NodeState, LoopNodeState } from "../../shared/types/workflowRun.js";
+import type {
+  WorkflowRun,
+  NodeState,
+  LoopNodeState,
+  PendingWorkflowApproval,
+} from "../../shared/types/workflowRun.js";
 import type { WorkflowNode, WorkflowCondition, LoopNode } from "../../shared/types/workflow.js";
 import type { TaskRecord } from "../../shared/types/task.js";
 
@@ -26,6 +31,15 @@ export class WorkflowEngine {
 
   /** Reverse index for fast lookup (taskId -> { runId, nodeId }) */
   private taskToNode: Map<string, { runId: string; nodeId: string }> = new Map();
+
+  /** Pending approval resolvers keyed by "runId::nodeId" */
+  private pendingApprovals: Map<
+    string,
+    { resolve: (approved: boolean, feedback?: string) => void }
+  > = new Map();
+
+  /** Timeout handles for approval nodes with timeoutMs */
+  private approvalTimeouts: Map<string, NodeJS.Timeout> = new Map();
 
   /** Unsubscribe functions for event listeners */
   private unsubscribers: Array<() => void> = [];
@@ -150,7 +164,15 @@ export class WorkflowEngine {
     run.status = "cancelled";
     run.completedAt = now;
 
+    // Clear pending approvals for this run
+    this.clearPendingApprovals(runId, "cancelled");
+
     for (const [nodeId, nodeState] of Object.entries(run.nodeStates)) {
+      if (nodeState.status === "awaiting-approval") {
+        nodeState.status = "cancelled";
+        nodeState.completedAt = now;
+        continue;
+      }
       if (nodeState.taskId && nodeState.status !== "completed" && nodeState.status !== "failed") {
         try {
           await this.queueService.cancelTask(nodeState.taskId);
@@ -233,6 +255,7 @@ export class WorkflowEngine {
     }
 
     if (run.scheduledNodes.has(node.id)) {
+      if (node.type === "approval") return null;
       const existing = await this.queueService.getTask(run.taskMapping[node.id]);
       if (existing) {
         return existing;
@@ -242,6 +265,35 @@ export class WorkflowEngine {
     run.scheduledNodes.add(node.id);
 
     const now = Date.now();
+
+    // Approval nodes don't create tasks — they suspend the workflow
+    if (node.type === "approval") {
+      const config = node.config as { prompt: string; timeoutMs?: number };
+      const nodeState: NodeState = {
+        status: "awaiting-approval",
+        startedAt: now,
+      };
+      run.nodeStates[node.id] = nodeState;
+
+      const timeoutAt = config.timeoutMs ? now + config.timeoutMs : undefined;
+
+      this.setupApprovalWait(run, node.id, config.prompt, config.timeoutMs, timeoutAt);
+
+      events.emit("workflow:approval-requested", {
+        runId: run.runId,
+        nodeId: node.id,
+        workflowId: run.workflowId,
+        workflowName: run.definition.name,
+        prompt: config.prompt,
+        requestedAt: now,
+        timeoutMs: config.timeoutMs,
+        timeoutAt,
+        timestamp: now,
+      });
+
+      await this.schedulePersist();
+      return null;
+    }
 
     const nodeState: NodeState = {
       status: "draft",
@@ -254,10 +306,9 @@ export class WorkflowEngine {
     const resolvedDeps: string[] = [];
 
     for (const depId of dependencies) {
-      // Loop nodes don't have task mappings — their completion gates downstream
-      // scheduling via routeLoopCompletion, so we skip them as task-level deps
+      // Loop and approval nodes don't have task mappings — skip them as task-level deps
       const depNode = run.definition.nodes.find((n) => n.id === depId);
-      if (depNode?.type === "loop") continue;
+      if (depNode?.type === "loop" || depNode?.type === "approval") continue;
 
       const taskId = run.taskMapping[depId];
       if (!taskId) {
@@ -268,7 +319,9 @@ export class WorkflowEngine {
       resolvedDeps.push(taskId);
     }
 
-    let resolvedArgs = node.config.args;
+    const actionConfig = node.config as { actionId: string; args?: Record<string, unknown> };
+
+    let resolvedArgs = actionConfig.args;
     if (resolvedArgs && this.hasTemplateExpressions(resolvedArgs)) {
       for (const depId of dependencies) {
         const depState = run.nodeStates[depId];
@@ -288,14 +341,14 @@ export class WorkflowEngine {
 
     const task = await this.queueService.createTask({
       title: `Workflow ${run.workflowId} - Node ${node.id}`,
-      description: `Execute action: ${node.config.actionId}`,
+      description: `Execute action: ${actionConfig.actionId}`,
       priority: 0,
       dependencies: resolvedDeps,
       metadata: {
         workflowRunId: run.runId,
         workflowId: run.workflowId,
         nodeId: node.id,
-        actionId: node.config.actionId,
+        actionId: actionConfig.actionId,
         actionArgs: resolvedArgs,
       },
     });
@@ -453,6 +506,158 @@ export class WorkflowEngine {
     if (parsed) {
       await this.checkLoopIterationComplete(loopNode, run, parsed.iterIndex);
     }
+  }
+
+  /**
+   * Set up the internal approval wait: store resolver, start timeout if configured.
+   */
+  private setupApprovalWait(
+    run: WorkflowRun,
+    nodeId: string,
+    _prompt: string,
+    timeoutMs?: number,
+    _timeoutAt?: number
+  ): void {
+    const key = `${run.runId}::${nodeId}`;
+
+    this.pendingApprovals.set(key, {
+      resolve: (_approved: boolean, _feedback?: string) => {
+        // Placeholder — resolveApproval() calls handleApprovalResolution directly
+      },
+    });
+
+    if (timeoutMs) {
+      const handle = setTimeout(() => {
+        this.pendingApprovals.delete(key);
+        void this.handleApprovalResolution(run.runId, nodeId, false, "Approval timed out", true);
+      }, timeoutMs);
+      this.approvalTimeouts.set(key, handle);
+    }
+  }
+
+  /**
+   * Internal handler for approval resolution — marks node, emits events, routes downstream.
+   */
+  private async handleApprovalResolution(
+    runId: string,
+    nodeId: string,
+    approved: boolean,
+    feedback?: string,
+    timedOut?: boolean
+  ): Promise<void> {
+    const run = this.runs.get(runId);
+    if (!run || run.status !== "running") return;
+
+    const nodeState = run.nodeStates[nodeId];
+    if (!nodeState || nodeState.status !== "awaiting-approval") return;
+
+    const key = `${runId}::${nodeId}`;
+    this.pendingApprovals.delete(key);
+
+    const timeoutHandle = this.approvalTimeouts.get(key);
+    if (timeoutHandle) {
+      clearTimeout(timeoutHandle);
+      this.approvalTimeouts.delete(key);
+    }
+
+    const now = Date.now();
+    nodeState.status = approved ? "completed" : "failed";
+    nodeState.completedAt = now;
+    nodeState.approvalDecision = {
+      approved,
+      feedback,
+      resolvedAt: now,
+      timedOut,
+    };
+
+    events.emit("workflow:approval-cleared", {
+      runId,
+      nodeId,
+      reason: timedOut ? "timeout" : "resolved",
+      timestamp: now,
+    });
+
+    const node = run.definition.nodes.find((n) => n.id === nodeId);
+    if (node) {
+      const routingKey = approved ? "onSuccess" : "onFailure";
+      const nextNodeIds = await this.evaluateRouting(node, nodeState, run, routingKey);
+
+      if (!approved && nextNodeIds.length === 0) {
+        run.status = "failed";
+        run.completedAt = now;
+        events.emit("workflow:failed", {
+          runId,
+          workflowId: run.workflowId,
+          workflowVersion: run.workflowVersion,
+          error: `Approval rejected for node ${nodeId}${feedback ? `: ${feedback}` : ""}`,
+          timestamp: now,
+        });
+      } else {
+        for (const nextId of nextNodeIds) {
+          const nextNode = run.definition.nodes.find((n) => n.id === nextId);
+          if (nextNode && !run.scheduledNodes.has(nextId)) {
+            await this.compileNodeToTask(nextNode, run);
+          }
+        }
+      }
+    }
+
+    await this.schedulePersist();
+    await this.checkWorkflowCompletion(run);
+  }
+
+  /**
+   * Resolve a pending approval node.
+   * Called via IPC when the user approves or rejects.
+   */
+  async resolveApproval(
+    runId: string,
+    nodeId: string,
+    approved: boolean,
+    feedback?: string
+  ): Promise<void> {
+    const key = `${runId}::${nodeId}`;
+    if (!this.pendingApprovals.has(key)) {
+      throw new Error(`No pending approval found for run ${runId}, node ${nodeId}`);
+    }
+    this.pendingApprovals.delete(key);
+    await this.handleApprovalResolution(runId, nodeId, approved, feedback);
+  }
+
+  /**
+   * List all currently pending approval requests.
+   */
+  listPendingApprovals(): PendingWorkflowApproval[] {
+    const approvals: PendingWorkflowApproval[] = [];
+
+    for (const [key] of this.pendingApprovals) {
+      const [runId, nodeId] = key.split("::");
+      const run = this.runs.get(runId);
+      if (!run || run.status !== "running") continue;
+
+      const nodeState = run.nodeStates[nodeId];
+      if (!nodeState || nodeState.status !== "awaiting-approval") continue;
+
+      const node = run.definition.nodes.find((n) => n.id === nodeId);
+      if (!node || node.type !== "approval") continue;
+
+      const config = node.config as { prompt: string; timeoutMs?: number };
+      approvals.push({
+        runId,
+        nodeId,
+        workflowId: run.workflowId,
+        workflowName: run.definition.name,
+        prompt: config.prompt,
+        requestedAt: nodeState.startedAt ?? run.startedAt,
+        timeoutMs: config.timeoutMs,
+        timeoutAt:
+          config.timeoutMs && nodeState.startedAt
+            ? nodeState.startedAt + config.timeoutMs
+            : undefined,
+      });
+    }
+
+    return approvals;
   }
 
   /**
@@ -1139,6 +1344,7 @@ export class WorkflowEngine {
         nodeState.status === "failed" ||
         nodeState.status === "cancelled"
       );
+      // Note: "awaiting-approval" is NOT terminal — workflow stays running
     });
 
     if (!allScheduledNodesTerminal) {
@@ -1256,6 +1462,50 @@ export class WorkflowEngine {
         nodeState.status === "failed" ||
         nodeState.status === "cancelled"
       ) {
+        continue;
+      }
+
+      // Handle approval nodes that were awaiting approval when app restarted
+      if (nodeState.status === "awaiting-approval") {
+        const node = run.definition.nodes.find((n) => n.id === nodeId);
+        if (!node || node.type !== "approval") continue;
+
+        const config = node.config as { prompt: string; timeoutMs?: number };
+        const timeoutAt =
+          config.timeoutMs && nodeState.startedAt
+            ? nodeState.startedAt + config.timeoutMs
+            : undefined;
+
+        // If timeout has expired, auto-reject
+        if (timeoutAt && Date.now() >= timeoutAt) {
+          nodeState.status = "failed";
+          nodeState.completedAt = Date.now();
+          nodeState.approvalDecision = {
+            approved: false,
+            feedback: "Approval timed out during restart",
+            resolvedAt: Date.now(),
+            timedOut: true,
+          };
+          hasRecoveryChanges = true;
+          nodesToProcess.push({ nodeId, nodeState });
+        } else {
+          // Re-emit the approval request to re-surface in UI
+          const remainingTimeout = timeoutAt ? timeoutAt - Date.now() : config.timeoutMs;
+          this.setupApprovalWait(run, nodeId, config.prompt, remainingTimeout, timeoutAt);
+
+          events.emit("workflow:approval-requested", {
+            runId: run.runId,
+            nodeId,
+            workflowId: run.workflowId,
+            workflowName: run.definition.name,
+            prompt: config.prompt,
+            requestedAt: nodeState.startedAt ?? run.startedAt,
+            timeoutMs: config.timeoutMs,
+            timeoutAt,
+            timestamp: Date.now(),
+          });
+          hasActiveTasks = true;
+        }
         continue;
       }
 
@@ -1424,11 +1674,46 @@ export class WorkflowEngine {
   }
 
   /**
+   * Clear all pending approval resolvers and timeouts for a given run (or all runs).
+   */
+  private clearPendingApprovals(
+    runId?: string,
+    reason: "resolved" | "cancelled" | "timeout" = "cancelled"
+  ): void {
+    const now = Date.now();
+    const keysToRemove: string[] = [];
+
+    for (const [key] of this.pendingApprovals) {
+      if (!runId || key.startsWith(`${runId}::`)) {
+        keysToRemove.push(key);
+      }
+    }
+
+    for (const key of keysToRemove) {
+      this.pendingApprovals.delete(key);
+      const timeoutHandle = this.approvalTimeouts.get(key);
+      if (timeoutHandle) {
+        clearTimeout(timeoutHandle);
+        this.approvalTimeouts.delete(key);
+      }
+      const [rId, nId] = key.split("::");
+      events.emit("workflow:approval-cleared", {
+        runId: rId,
+        nodeId: nId,
+        reason,
+        timestamp: now,
+      });
+    }
+  }
+
+  /**
    * Dispose the workflow engine.
    * Unsubscribes from events and clears run state.
    */
   dispose(): void {
     this.isDisposed = true;
+
+    this.clearPendingApprovals(undefined, "cancelled");
 
     for (const unsub of this.unsubscribers) {
       unsub();

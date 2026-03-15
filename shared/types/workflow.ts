@@ -44,7 +44,7 @@ export type WorkflowCondition = z.infer<typeof WorkflowConditionSchema>;
 /**
  * Node type - 'action' for task execution, 'loop' for bounded retry sub-graphs.
  */
-export const WorkflowNodeTypeSchema = z.enum(["action", "loop"]);
+export const WorkflowNodeTypeSchema = z.enum(["action", "approval", "loop"]);
 export type WorkflowNodeType = z.infer<typeof WorkflowNodeTypeSchema>;
 
 /**
@@ -57,6 +57,17 @@ export const WorkflowActionConfigSchema = z.object({
   args: z.record(z.string(), z.unknown()).optional(),
 });
 export type WorkflowActionConfig = z.infer<typeof WorkflowActionConfigSchema>;
+
+/**
+ * Configuration for an approval node.
+ */
+export const WorkflowApprovalConfigSchema = z.object({
+  /** Prompt to display to the user when requesting approval */
+  prompt: z.string().min(1),
+  /** Optional timeout in milliseconds — auto-rejects if exceeded */
+  timeoutMs: z.number().positive().optional(),
+});
+export type WorkflowApprovalConfig = z.infer<typeof WorkflowApprovalConfigSchema>;
 
 /**
  * Configuration for a loop node.
@@ -89,6 +100,15 @@ export const WorkflowActionNodeSchema = z.object({
 });
 
 /**
+ * Approval node schema.
+ */
+export const WorkflowApprovalNodeSchema = z.object({
+  ...WorkflowNodeBaseFields,
+  type: z.literal("approval"),
+  config: WorkflowApprovalConfigSchema,
+});
+
+/**
  * Manual TypeScript types — z.infer<> cannot handle recursive schemas.
  */
 export interface ActionNode {
@@ -96,6 +116,17 @@ export interface ActionNode {
   label?: string;
   type: "action";
   config: WorkflowActionConfig;
+  dependencies?: string[];
+  onSuccess?: string[];
+  onFailure?: string[];
+  conditions?: WorkflowCondition[];
+}
+
+export interface ApprovalNode {
+  id: string;
+  label?: string;
+  type: "approval";
+  config: WorkflowApprovalConfig;
   dependencies?: string[];
   onSuccess?: string[];
   onFailure?: string[];
@@ -114,7 +145,7 @@ export interface LoopNode {
   conditions?: WorkflowCondition[];
 }
 
-export type WorkflowNode = ActionNode | LoopNode;
+export type WorkflowNode = ActionNode | ApprovalNode | LoopNode;
 
 /**
  * Loop node schema — uses z.lazy() for recursive body reference.
@@ -127,11 +158,11 @@ export const WorkflowLoopNodeSchema = z.object({
 });
 
 /**
- * Recursive workflow node schema (discriminated union of action + loop).
+ * Recursive workflow node schema (discriminated union of action + approval + loop).
  * Typed as z.ZodType<WorkflowNode> to break TypeScript's infinite instantiation on recursive schemas.
  */
 export const WorkflowNodeSchema: z.ZodType<WorkflowNode> = z.lazy(() =>
-  z.union([WorkflowActionNodeSchema, WorkflowLoopNodeSchema])
+  z.union([WorkflowActionNodeSchema, WorkflowApprovalNodeSchema, WorkflowLoopNodeSchema])
 );
 
 /**

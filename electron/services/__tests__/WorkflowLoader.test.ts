@@ -265,6 +265,62 @@ describe("WorkflowLoader", () => {
       expect(result.valid).toBe(false);
     });
 
+    it("validates an approval node with prompt", () => {
+      const result = loader.validate({
+        id: "approval-workflow",
+        version: "1.0.0",
+        name: "Approval Workflow",
+        nodes: [
+          {
+            id: "approve",
+            type: "approval",
+            config: { prompt: "Do you approve?" },
+          },
+        ],
+      });
+
+      expect(result.valid).toBe(true);
+    });
+
+    it("validates an approval node with timeoutMs", () => {
+      const result = loader.validate({
+        id: "approval-timeout",
+        version: "1.0.0",
+        name: "Approval Timeout",
+        nodes: [
+          {
+            id: "approve",
+            type: "approval",
+            config: { prompt: "Quick approval?", timeoutMs: 30000 },
+          },
+        ],
+      });
+
+      expect(result.valid).toBe(true);
+    });
+
+    it("rejects approval node without prompt", () => {
+      const result = loader.validate({
+        id: "no-prompt",
+        version: "1.0.0",
+        name: "No Prompt",
+        nodes: [{ id: "approve", type: "approval", config: {} }],
+      });
+
+      expect(result.valid).toBe(false);
+    });
+
+    it("rejects approval node with empty prompt", () => {
+      const result = loader.validate({
+        id: "empty-prompt",
+        version: "1.0.0",
+        name: "Empty Prompt",
+        nodes: [{ id: "approve", type: "approval", config: { prompt: "" } }],
+      });
+
+      expect(result.valid).toBe(false);
+    });
+
     it("rejects invalid condition operator", () => {
       const result = loader.validate({
         id: "bad-condition",
