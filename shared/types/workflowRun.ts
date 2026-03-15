@@ -63,6 +63,16 @@ export interface NodeState {
 }
 
 /**
+ * State of a loop node execution within a workflow run.
+ * Loop body task entries use composite IDs: "loopNodeId|iterIndex|bodyNodeId".
+ */
+export interface LoopNodeState extends NodeState {
+  currentIteration: number;
+  maxIterations: number;
+  exitedEarly: boolean;
+}
+
+/**
  * Record of a condition evaluation for workflow routing.
  */
 export interface EvaluatedCondition {

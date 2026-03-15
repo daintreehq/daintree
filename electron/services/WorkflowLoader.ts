@@ -10,7 +10,8 @@ import path from "path";
 import { fileURLToPath } from "url";
 import {
   WorkflowDefinitionSchema,
-  type WorkflowDefinition,
+  type WorkflowNode,
+  type LoopNode,
   type WorkflowValidationResult,
   type WorkflowValidationError,
   type LoadedWorkflow,
@@ -157,7 +158,13 @@ export class WorkflowLoader {
 
     const workflow = parseResult.data;
 
-    // Step 2: Check for duplicate node IDs
+    // Step 2: Check for pipe character in node IDs (reserved as composite key separator)
+    this.validateNodeIdChars(workflow.nodes, errors, "nodes");
+    if (errors.length > 0) {
+      return { valid: false, errors };
+    }
+
+    // Step 3: Check for duplicate node IDs (top-level only; loop bodies checked separately)
     const nodeIds = new Set<string>();
     for (const node of workflow.nodes) {
       if (nodeIds.has(node.id)) {
@@ -174,53 +181,10 @@ export class WorkflowLoader {
       return { valid: false, errors };
     }
 
-    // Step 3: Check for invalid node references
-    const nodeIndex = new Map(workflow.nodes.map((n, i) => [n.id, i]));
+    // Step 4: Validate loop nodes (nested loops, body IDs, body references, body cycles)
     for (const node of workflow.nodes) {
-      const idx = nodeIndex.get(node.id);
-
-      // Check dependencies
-      for (const depId of node.dependencies || []) {
-        if (!nodeIds.has(depId)) {
-          errors.push({
-            type: "reference",
-            message: `Node '${node.id}' references unknown dependency: ${depId}`,
-            path: `nodes[${idx}].dependencies`,
-          });
-        }
-      }
-
-      // Check onSuccess references
-      for (const nextId of node.onSuccess || []) {
-        if (!nodeIds.has(nextId)) {
-          errors.push({
-            type: "reference",
-            message: `Node '${node.id}' references unknown onSuccess node: ${nextId}`,
-            path: `nodes[${idx}].onSuccess`,
-          });
-        }
-      }
-
-      // Check onFailure references
-      for (const nextId of node.onFailure || []) {
-        if (!nodeIds.has(nextId)) {
-          errors.push({
-            type: "reference",
-            message: `Node '${node.id}' references unknown onFailure node: ${nextId}`,
-            path: `nodes[${idx}].onFailure`,
-          });
-        }
-      }
-
-      // Check condition taskId references
-      for (const condition of node.conditions || []) {
-        if (condition.taskId && !nodeIds.has(condition.taskId)) {
-          errors.push({
-            type: "reference",
-            message: `Node '${node.id}' condition references unknown task: ${condition.taskId}`,
-            path: `nodes[${idx}].conditions`,
-          });
-        }
+      if (node.type === "loop") {
+        this.validateLoopNode(node, nodeIds, errors);
       }
     }
 
@@ -228,8 +192,19 @@ export class WorkflowLoader {
       return { valid: false, errors };
     }
 
-    // Step 4: Detect cycles using DFS
-    const cycleResult = this.detectCycles(workflow);
+    // Step 5: Check for invalid node references (top-level only)
+    const nodeIndex = new Map(workflow.nodes.map((n, i) => [n.id, i]));
+    for (const node of workflow.nodes) {
+      const idx = nodeIndex.get(node.id);
+      this.validateNodeReferences(node, nodeIds, `nodes[${idx}]`, errors);
+    }
+
+    if (errors.length > 0) {
+      return { valid: false, errors };
+    }
+
+    // Step 6: Detect cycles in the outer DAG (loop bodies are opaque)
+    const cycleResult = this.detectCycles(workflow.nodes);
     if (cycleResult.hasCycle) {
       errors.push({
         type: "cycle",
@@ -239,7 +214,7 @@ export class WorkflowLoader {
       return { valid: false, errors };
     }
 
-    // Step 5: Warnings for potential issues
+    // Step 7: Warnings for potential issues
     const entryNodes = workflow.nodes.filter((n) => !n.dependencies || n.dependencies.length === 0);
     if (entryNodes.length === 0) {
       warnings.push("No entry nodes found (all nodes have dependencies)");
@@ -260,24 +235,163 @@ export class WorkflowLoader {
   }
 
   /**
-   * Detect cycles in the workflow graph using DFS.
-   * Builds an adjacency list from dependencies and routing edges (onSuccess/onFailure).
-   * This ensures no execution path can loop infinitely.
+   * Validate that no node IDs contain the pipe character (reserved as composite key separator).
    */
-  private detectCycles(workflow: WorkflowDefinition): {
+  private validateNodeIdChars(
+    nodes: WorkflowNode[],
+    errors: WorkflowValidationError[],
+    pathPrefix: string
+  ): void {
+    for (let i = 0; i < nodes.length; i++) {
+      const node = nodes[i];
+      if (node.id.includes("|")) {
+        errors.push({
+          type: "schema",
+          message: `Node ID '${node.id}' must not contain '|' (reserved separator)`,
+          path: `${pathPrefix}[${i}].id`,
+        });
+      }
+      if (node.type === "loop") {
+        this.validateNodeIdChars(node.body, errors, `${pathPrefix}[${i}].body`);
+      }
+    }
+  }
+
+  /**
+   * Validate a loop node: reject nested loops, validate body IDs, body references, body cycles.
+   */
+  private validateLoopNode(
+    loopNode: LoopNode,
+    outerNodeIds: Set<string>,
+    errors: WorkflowValidationError[]
+  ): void {
+    // Reject nested loops
+    for (const bodyNode of loopNode.body) {
+      if (bodyNode.type === "loop") {
+        errors.push({
+          type: "loop",
+          message: `Nested loop nodes are not supported (loop '${loopNode.id}' contains loop '${bodyNode.id}')`,
+          path: `loop '${loopNode.id}'.body`,
+        });
+        return;
+      }
+    }
+
+    // Validate body node IDs are unique within the body
+    const bodyNodeIds = new Set<string>();
+    for (const bodyNode of loopNode.body) {
+      if (bodyNodeIds.has(bodyNode.id)) {
+        errors.push({
+          type: "duplicate",
+          message: `Duplicate body node ID '${bodyNode.id}' in loop '${loopNode.id}'`,
+          path: `loop '${loopNode.id}'.body`,
+        });
+      }
+      bodyNodeIds.add(bodyNode.id);
+    }
+
+    // Validate body node IDs do not collide with outer node IDs
+    for (const bodyNodeId of bodyNodeIds) {
+      if (outerNodeIds.has(bodyNodeId)) {
+        errors.push({
+          type: "duplicate",
+          message: `Body node ID '${bodyNodeId}' in loop '${loopNode.id}' conflicts with outer node ID`,
+          path: `loop '${loopNode.id}'.body`,
+        });
+      }
+    }
+
+    // Validate body node references only point to other body nodes
+    for (const bodyNode of loopNode.body) {
+      this.validateNodeReferences(bodyNode, bodyNodeIds, `loop '${loopNode.id}'.body`, errors);
+    }
+
+    // Detect cycles within loop body
+    const bodyCycleResult = this.detectCycles(loopNode.body);
+    if (bodyCycleResult.hasCycle) {
+      errors.push({
+        type: "cycle",
+        message: `Cycle detected in loop '${loopNode.id}' body: ${bodyCycleResult.cyclePath?.join(" -> ")}`,
+        details: { cycle: bodyCycleResult.cyclePath },
+      });
+    }
+  }
+
+  /**
+   * Validate that a node's references (dependencies, onSuccess, onFailure, conditions)
+   * only point to known node IDs within a given scope.
+   */
+  private validateNodeReferences(
+    node: WorkflowNode,
+    validIds: Set<string>,
+    pathPrefix: string,
+    errors: WorkflowValidationError[]
+  ): void {
+    for (const depId of node.dependencies || []) {
+      if (!validIds.has(depId)) {
+        errors.push({
+          type: "reference",
+          message: `Node '${node.id}' references unknown dependency: ${depId}`,
+          path: `${pathPrefix}.dependencies`,
+        });
+      }
+    }
+
+    for (const nextId of node.onSuccess || []) {
+      if (!validIds.has(nextId)) {
+        errors.push({
+          type: "reference",
+          message: `Node '${node.id}' references unknown onSuccess node: ${nextId}`,
+          path: `${pathPrefix}.onSuccess`,
+        });
+      }
+    }
+
+    for (const nextId of node.onFailure || []) {
+      if (!validIds.has(nextId)) {
+        errors.push({
+          type: "reference",
+          message: `Node '${node.id}' references unknown onFailure node: ${nextId}`,
+          path: `${pathPrefix}.onFailure`,
+        });
+      }
+    }
+
+    for (const condition of node.conditions || []) {
+      if (condition.taskId && !validIds.has(condition.taskId)) {
+        errors.push({
+          type: "reference",
+          message: `Node '${node.id}' condition references unknown task: ${condition.taskId}`,
+          path: `${pathPrefix}.conditions`,
+        });
+      }
+    }
+  }
+
+  /**
+   * Detect cycles in a node graph using DFS.
+   * Builds an adjacency list from dependencies and routing edges (onSuccess/onFailure).
+   * Works on both the outer workflow graph and loop body sub-graphs.
+   */
+  private detectCycles(nodes: WorkflowNode[]): {
     hasCycle: boolean;
     cyclePath?: string[];
   } {
-    // Build adjacency list: node -> all nodes it can reach
-    // Include dependencies (must run before), onSuccess, and onFailure edges
+    // Build a forward-directed adjacency list:
+    // - dependencies: depNode → this node (dep must run first)
+    // - onSuccess/onFailure: this node → target (this node triggers target)
     const adj = new Map<string, string[]>();
-    for (const node of workflow.nodes) {
-      const edges = [
-        ...(node.dependencies || []),
-        ...(node.onSuccess || []),
-        ...(node.onFailure || []),
-      ];
-      adj.set(node.id, edges);
+    for (const node of nodes) {
+      if (!adj.has(node.id)) adj.set(node.id, []);
+      // Forward routing edges
+      for (const target of [...(node.onSuccess || []), ...(node.onFailure || [])]) {
+        adj.get(node.id)!.push(target);
+      }
+      // Dependency edges: dependency → this node (forward execution order)
+      for (const depId of node.dependencies || []) {
+        if (!adj.has(depId)) adj.set(depId, []);
+        adj.get(depId)!.push(node.id);
+      }
     }
 
     const visited = new Set<string>();
