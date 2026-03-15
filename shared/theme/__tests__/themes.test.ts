@@ -341,9 +341,9 @@ describe("built-in schemes — Namib theme", () => {
   });
 
   it("derives terminal-black/white/bright-black from surfaces and activity", () => {
-    expect(namib.tokens["terminal-black"]).toBe("#1C0F0B");
-    expect(namib.tokens["terminal-white"]).toBe("#E5E0D8");
-    expect(namib.tokens["terminal-bright-black"]).toBe("#4A3530");
+    expect(namib.tokens["terminal-black"]).toBe(namib.tokens["surface-canvas"]);
+    expect(namib.tokens["terminal-white"]).toBe(namib.tokens["text-primary"]);
+    expect(namib.tokens["terminal-bright-black"]).toBe(namib.tokens["activity-idle"]);
   });
 
   it("produces all 79 required token keys", () => {
