@@ -1,0 +1,77 @@
+{
+  "id": "code-quality-check",
+  "version": "1.0.0",
+  "name": "Code Quality Check",
+  "description": "Open a terminal and run typecheck, lint, and format checks sequentially",
+  "nodes": [
+    {
+      "id": "open-terminal",
+      "type": "action",
+      "config": {
+        "actionId": "terminal.new"
+      },
+      "onSuccess": ["run-check"],
+      "onFailure": ["note-terminal-error"]
+    },
+    {
+      "id": "run-check",
+      "type": "action",
+      "config": {
+        "actionId": "terminal.sendCommand",
+        "args": {
+          "terminalId": "{{open-terminal.data.terminalId}}",
+          "command": "npm run check"
+        }
+      },
+      "dependencies": ["open-terminal"],
+      "onSuccess": ["run-build"],
+      "onFailure": ["note-check-failure"]
+    },
+    {
+      "id": "run-build",
+      "type": "action",
+      "config": {
+        "actionId": "terminal.sendCommand",
+        "args": {
+          "terminalId": "{{open-terminal.data.terminalId}}",
+          "command": "npm run build"
+        }
+      },
+      "dependencies": ["run-check"],
+      "onFailure": ["note-build-failure"]
+    },
+    {
+      "id": "note-terminal-error",
+      "type": "action",
+      "config": {
+        "actionId": "notes.create",
+        "args": {
+          "title": "Code Quality - Terminal Error",
+          "content": "Failed to open a terminal for the code quality check workflow."
+        }
+      }
+    },
+    {
+      "id": "note-check-failure",
+      "type": "action",
+      "config": {
+        "actionId": "notes.create",
+        "args": {
+          "title": "Code Quality - Check Failed",
+          "content": "Typecheck, lint, or format issues detected. Run 'npm run fix' to auto-fix what's possible."
+        }
+      }
+    },
+    {
+      "id": "note-build-failure",
+      "type": "action",
+      "config": {
+        "actionId": "notes.create",
+        "args": {
+          "title": "Code Quality - Build Failed",
+          "content": "Production build failed. Check the terminal output for errors."
+        }
+      }
+    }
+  ]
+}

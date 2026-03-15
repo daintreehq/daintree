@@ -2,6 +2,8 @@
  * Tests for WorkflowLoader - Workflow validation and loading.
  */
 
+import path from "path";
+import fs from "fs/promises";
 import { describe, it, expect, beforeEach } from "vitest";
 import { WorkflowLoader } from "../WorkflowLoader.js";
 import type { WorkflowDefinition } from "../../../shared/types/workflow.js";
@@ -594,8 +596,7 @@ describe("WorkflowLoader", () => {
     });
 
     it("detects cycle mixing dependencies and routing edges", () => {
-      // step1 depends on step3, step1 onSuccess -> step2, step2 onSuccess -> step3,
-      // step3 depends on step2 (redundant) AND step3 onSuccess -> step1 = real cycle
+      // step1 → step2 (onSuccess), step2 → step3 (dep reversed), step3 → step1 (onSuccess)
       const result = loader.validate({
         id: "mixed-cycle",
         version: "1.0.0",
@@ -611,12 +612,12 @@ describe("WorkflowLoader", () => {
             id: "step2",
             type: "action",
             config: { actionId: "s2" },
-            onSuccess: ["step3"],
           },
           {
             id: "step3",
             type: "action",
             config: { actionId: "s3" },
+            dependencies: ["step2"],
             onSuccess: ["step1"],
           },
         ],
@@ -626,12 +627,13 @@ describe("WorkflowLoader", () => {
       expect(result.errors?.some((e) => e.type === "cycle")).toBe(true);
     });
 
-    it("allows redundant dependency and onSuccess (not a cycle)", () => {
-      // step1 depends on step2, and step2 onSuccess -> step1: same direction, not a cycle
+    it("allows redundant dependency with onSuccess (not a cycle)", () => {
+      // step1 depends on step2, AND step2 succeeds → step1
+      // Both edges go step2 → step1, which is redundant but not cyclic
       const result = loader.validate({
-        id: "redundant",
+        id: "redundant-edges",
         version: "1.0.0",
-        name: "Redundant",
+        name: "Redundant Edges",
         nodes: [
           {
             id: "step1",
@@ -1132,5 +1134,96 @@ describe("WorkflowLoader", () => {
       const found = await loader.getWorkflow("workflow1");
       expect(found).toBeNull();
     });
+  });
+});
+
+describe("built-in workflows from disk", () => {
+  const WORKFLOWS_DIR = path.resolve(process.cwd(), "electron/workflows");
+  let loader: WorkflowLoader;
+  let jsonFiles: string[];
+
+  beforeEach(async () => {
+    loader = new WorkflowLoader();
+    const files = await fs.readdir(WORKFLOWS_DIR);
+    jsonFiles = files.filter((f) => f.endsWith(".json"));
+  });
+
+  it("finds at least 3 built-in workflow files", () => {
+    expect(jsonFiles.length).toBeGreaterThanOrEqual(3);
+  });
+
+  it("each built-in workflow passes loadFromFile validation", async () => {
+    for (const file of jsonFiles) {
+      const filePath = path.join(WORKFLOWS_DIR, file);
+      const loaded = await loader.loadFromFile(filePath, "built-in");
+      expect(loaded, `${file} should load successfully`).not.toBeNull();
+      expect(loaded!.source).toBe("built-in");
+    }
+  });
+
+  it("each built-in workflow has unique id matching filename", async () => {
+    const ids = new Set<string>();
+    for (const file of jsonFiles) {
+      const filePath = path.join(WORKFLOWS_DIR, file);
+      const loaded = await loader.loadFromFile(filePath, "built-in");
+      const expectedId = file.replace(".json", "");
+      expect(loaded!.definition.id, `${file} id should match filename`).toBe(expectedId);
+      expect(
+        ids.has(loaded!.definition.id),
+        `duplicate workflow id: ${loaded!.definition.id}`
+      ).toBe(false);
+      ids.add(loaded!.definition.id);
+    }
+  });
+
+  it("no built-in workflow uses non-existent terminal.executeCommand", async () => {
+    for (const file of jsonFiles) {
+      const filePath = path.join(WORKFLOWS_DIR, file);
+      const loaded = await loader.loadFromFile(filePath, "built-in");
+      for (const node of loaded!.definition.nodes) {
+        if (node.type !== "action") continue;
+        const config = node.config as { actionId: string };
+        expect(
+          config.actionId,
+          `${file}: node "${node.id}" uses removed action "terminal.executeCommand"`
+        ).not.toBe("terminal.executeCommand");
+      }
+    }
+  });
+
+  it("each built-in workflow uses only known action IDs", async () => {
+    const knownActionIds = new Set([
+      "terminal.new",
+      "terminal.sendCommand",
+      "terminal.close",
+      "terminal.list",
+      "notes.create",
+      "notes.list",
+      "notes.openPalette",
+      "worktree.list",
+      "worktree.getCurrent",
+      "worktree.refresh",
+      "worktree.refreshPullRequests",
+      "github.openPRs",
+      "github.openIssues",
+      "github.openCommits",
+      "git.stageAll",
+      "git.commit",
+      "git.push",
+      "git.getStagingStatus",
+    ]);
+
+    for (const file of jsonFiles) {
+      const filePath = path.join(WORKFLOWS_DIR, file);
+      const loaded = await loader.loadFromFile(filePath, "built-in");
+      for (const node of loaded!.definition.nodes) {
+        if (node.type !== "action") continue;
+        const config = node.config as { actionId: string };
+        expect(
+          knownActionIds.has(config.actionId),
+          `${file}: node "${node.id}" uses unknown actionId "${config.actionId}"`
+        ).toBe(true);
+      }
+    }
   });
 });
