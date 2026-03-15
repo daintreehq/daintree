@@ -2,8 +2,11 @@ import type { SVGProps } from "react";
 
 type CircleProps = SVGProps<SVGSVGElement> & { className?: string };
 
-const HALF = "15.708";
-const DASH = `${HALF} ${HALF}`;
+// r=6, strokeWidth=2 → 14px diameter in 16x16 viewBox (1px padding prevents clipping)
+// Circumference = 2π × 6 = 37.699
+const DASH = "28.274"; // 270° arc (C × 0.75)
+const GAP = "9.425"; // 90° gap (C × 0.25)
+const OFFSET = "28.274"; // positions gap at bottom-right (3:00 to 6:00)
 
 export function SpinnerCircle({ className, ...props }: CircleProps) {
   return (
@@ -11,11 +14,12 @@ export function SpinnerCircle({ className, ...props }: CircleProps) {
       <circle
         cx="8"
         cy="8"
-        r="5"
+        r="6"
         stroke="currentColor"
         strokeWidth="2"
-        strokeDasharray={DASH}
-        strokeDashoffset="7.854"
+        strokeLinecap="round"
+        strokeDasharray={`${DASH} ${GAP}`}
+        strokeDashoffset={OFFSET}
       />
     </svg>
   );
@@ -24,7 +28,7 @@ export function SpinnerCircle({ className, ...props }: CircleProps) {
 export function HollowCircle({ className, ...props }: CircleProps) {
   return (
     <svg viewBox="0 0 16 16" fill="none" className={className} {...props}>
-      <circle cx="8" cy="8" r="5" stroke="currentColor" strokeWidth="2" />
+      <circle cx="8" cy="8" r="6" stroke="currentColor" strokeWidth="2" />
     </svg>
   );
 }
@@ -35,11 +39,12 @@ export function InteractingCircle({ className, ...props }: CircleProps) {
       <circle
         cx="8"
         cy="8"
-        r="5"
+        r="6"
         stroke="currentColor"
         strokeWidth="2"
-        strokeDasharray={DASH}
-        strokeDashoffset="-7.854"
+        strokeLinecap="round"
+        strokeDasharray={`${DASH} ${GAP}`}
+        strokeDashoffset={OFFSET}
       />
     </svg>
   );

@@ -20,7 +20,7 @@ export const STATE_COLORS: Record<AgentState, string> = {
   working: "text-state-working",
   running: "text-status-info",
   waiting: "text-state-waiting",
-  directing: "text-status-info",
+  directing: "text-category-blue",
   idle: "text-canopy-text/40",
   completed: "text-status-success",
   failed: "text-status-error",

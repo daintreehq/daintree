@@ -656,6 +656,7 @@ body,
 
 .animate-spin-slow {
   animation: spin-slow 1.4s linear infinite;
+  transform-origin: center;
   will-change: transform;
 }
 
