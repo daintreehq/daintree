@@ -481,6 +481,56 @@ describe("built-in schemes — Serengeti light theme", () => {
   });
 });
 
+describe("Hokkaido built-in scheme", () => {
+  const hokkaido = BUILT_IN_APP_SCHEMES.find((s) => s.id === "hokkaido")!;
+
+  it("is present in BUILT_IN_APP_SCHEMES with correct metadata", () => {
+    expect(hokkaido).toBeDefined();
+    expect(hokkaido.name).toBe("Hokkaido");
+    expect(hokkaido.type).toBe("light");
+    expect(hokkaido.builtin).toBe(true);
+  });
+
+  it("uses the fixed brand accent-primary", () => {
+    expect(hokkaido.tokens["accent-primary"]).toBe("#3F9366");
+  });
+
+  it("uses the cool grey-white canvas", () => {
+    expect(hokkaido.tokens["surface-canvas"]).toBe("#F4F7F9");
+  });
+
+  it("has all required token keys", () => {
+    for (const key of APP_THEME_TOKEN_KEYS) {
+      expect(hokkaido.tokens).toHaveProperty(key, expect.any(String));
+    }
+  });
+
+  it("passes all critical contrast pair validations", () => {
+    expect(getAppThemeWarnings(hokkaido)).toEqual([]);
+  });
+
+  it.each([
+    ["syntax-keyword", "#795293", 4.5],
+    ["syntax-string", "#B94665", 4.5],
+    ["syntax-comment", "#5A7485", 4.5],
+    ["syntax-number", "#2E5E82", 4.5],
+    ["syntax-operator", "#006A71", 4.5],
+    ["syntax-function", "#2D7A52", 4.5],
+    ["syntax-punctuation", "#3A4D5C", 4.5],
+  ] as const)(
+    "%s (%s) meets WCAG AA contrast (≥%s:1) on canvas",
+    (token, _hex, minimum) => {
+      const fg = hokkaido.tokens[token];
+      const bg = hokkaido.tokens["surface-canvas"];
+      const ratio = wcagContrastRatio(fg, bg);
+      expect(
+        ratio,
+        `${token} "${fg}" on canvas "${bg}" = ${ratio.toFixed(2)}:1, needs ≥${minimum}:1`
+      ).toBeGreaterThanOrEqual(minimum);
+    }
+  );
+});
+
 describe("normalizeAppColorScheme", () => {
   it("uses a light fallback base for partial light themes", () => {
     const scheme = normalizeAppColorScheme({
