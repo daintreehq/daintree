@@ -387,6 +387,10 @@ describe("built-in schemes — Redwoods has correct tokens and derived values", 
       expect(redwoods.tokens).toHaveProperty(key, expect.any(String));
     }
   });
+
+  it("passes getAppThemeWarnings with no contrast violations", () => {
+    expect(getAppThemeWarnings(redwoods)).toEqual([]);
+  });
 });
 
 describe("normalizeAppColorScheme", () => {
