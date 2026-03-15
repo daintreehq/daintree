@@ -85,6 +85,36 @@ describe("appColorSchemes rebrand — semantic color separation", () => {
     });
   });
 
+  describe("semantic alias invariants — redwoods scheme", () => {
+    it("surface-canvas is old-bark brown (#1A1210)", () => {
+      expect(getScheme("redwoods").tokens["surface-canvas"]).toBe("#1A1210");
+    });
+
+    it("syntax-string is sorrel green (#8CC255)", () => {
+      expect(getScheme("redwoods").tokens["syntax-string"]).toBe("#8CC255");
+    });
+
+    it("accent-primary is shared brand green (#3F9366)", () => {
+      expect(getScheme("redwoods").tokens["accent-primary"]).toBe("#3F9366");
+    });
+
+    it("activity-active is green, not accent-primary", () => {
+      const tokens = getScheme("redwoods").tokens;
+      expect(tokens["activity-active"]).not.toBe(tokens["accent-primary"]);
+      expect(tokens["activity-active"]).toBe("#22c55e");
+    });
+
+    it("activity-active matches activity-working (same green family)", () => {
+      const tokens = getScheme("redwoods").tokens;
+      expect(tokens["activity-active"]).toBe(tokens["activity-working"]);
+    });
+
+    it("activity-working differs from status-success (in-progress vs completed)", () => {
+      const tokens = getScheme("redwoods").tokens;
+      expect(tokens["activity-working"]).not.toBe(tokens["status-success"]);
+    });
+  });
+
   describe("WCAG AA contrast — primary button", () => {
     it.each(BUILT_IN_APP_SCHEMES.map((s) => [s.id, s]))(
       'scheme "%s": accent-foreground on accent-primary passes WCAG AA (≥4.5:1)',
