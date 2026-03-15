@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import type { ITheme } from "@xterm/xterm";
-import { TERMINAL_SCROLLBAR_DEFAULTS } from "@shared/theme";
+import { getTerminalScrollbarDefaults } from "@shared/theme";
 import {
   BUILT_IN_SCHEMES,
   DEFAULT_SCHEME_ID,
@@ -45,7 +45,7 @@ export const useTerminalColorSchemeStore = create<TerminalColorSchemeState>()((s
 
     return {
       ...scheme.colors,
-      ...TERMINAL_SCROLLBAR_DEFAULTS,
+      ...getTerminalScrollbarDefaults(scheme.type),
     };
   },
 }));

@@ -2,35 +2,6 @@ import type { AppColorScheme, AppColorSchemeTokens, AppThemeTokenKey } from "./t
 
 export const DEFAULT_APP_SCHEME_ID = "canopy";
 
-const CATEGORY_TOKENS: Pick<
-  AppColorSchemeTokens,
-  | "category-blue"
-  | "category-purple"
-  | "category-cyan"
-  | "category-green"
-  | "category-amber"
-  | "category-orange"
-  | "category-teal"
-  | "category-indigo"
-  | "category-rose"
-  | "category-pink"
-  | "category-violet"
-  | "category-slate"
-> = {
-  "category-blue": "oklch(0.7 0.13 250)",
-  "category-purple": "oklch(0.7 0.13 310)",
-  "category-cyan": "oklch(0.72 0.11 215)",
-  "category-green": "oklch(0.7 0.13 145)",
-  "category-amber": "oklch(0.73 0.14 75)",
-  "category-orange": "oklch(0.7 0.14 45)",
-  "category-teal": "oklch(0.7 0.11 185)",
-  "category-indigo": "oklch(0.7 0.13 275)",
-  "category-rose": "oklch(0.7 0.14 5)",
-  "category-pink": "oklch(0.72 0.13 340)",
-  "category-violet": "oklch(0.7 0.13 295)",
-  "category-slate": "oklch(0.65 0.04 240)",
-};
-
 const GITHUB_TOKENS: Pick<
   AppColorSchemeTokens,
   "github-open" | "github-merged" | "github-closed" | "github-draft"
@@ -41,7 +12,8 @@ const GITHUB_TOKENS: Pick<
   "github-draft": "#8b949e",
 };
 
-function createCanopyTokens(
+export function createCanopyTokens(
+  type: "dark" | "light",
   tokens: Partial<AppColorSchemeTokens> &
     Pick<
       AppColorSchemeTokens,
@@ -101,24 +73,48 @@ function createCanopyTokens(
       ? `rgba(${hexToRgbTriplet(tokens["accent-primary"])}, 0.3)`
       : `color-mix(in oklab, ${tokens["accent-primary"]} 30%, transparent)`);
 
+  const dark = type === "dark";
+
   return {
-    ...CATEGORY_TOKENS,
     ...GITHUB_TOKENS,
-    "border-subtle": tokens["border-subtle"] ?? "rgba(255, 255, 255, 0.08)",
-    "border-strong": tokens["border-strong"] ?? "rgba(255, 255, 255, 0.14)",
-    "border-divider": tokens["border-divider"] ?? "rgba(255, 255, 255, 0.05)",
+    "category-blue": tokens["category-blue"] ?? "oklch(0.7 0.13 250)",
+    "category-purple": tokens["category-purple"] ?? "oklch(0.7 0.13 310)",
+    "category-cyan": tokens["category-cyan"] ?? "oklch(0.72 0.11 215)",
+    "category-green": tokens["category-green"] ?? "oklch(0.7 0.13 145)",
+    "category-amber": tokens["category-amber"] ?? "oklch(0.73 0.14 75)",
+    "category-orange": tokens["category-orange"] ?? "oklch(0.7 0.14 45)",
+    "category-teal": tokens["category-teal"] ?? "oklch(0.7 0.11 185)",
+    "category-indigo": tokens["category-indigo"] ?? "oklch(0.7 0.13 275)",
+    "category-rose": tokens["category-rose"] ?? "oklch(0.7 0.14 5)",
+    "category-pink": tokens["category-pink"] ?? "oklch(0.72 0.13 340)",
+    "category-violet": tokens["category-violet"] ?? "oklch(0.7 0.13 295)",
+    "category-slate": tokens["category-slate"] ?? "oklch(0.65 0.04 240)",
+    "border-subtle":
+      tokens["border-subtle"] ?? (dark ? "rgba(255, 255, 255, 0.08)" : "rgba(0, 0, 0, 0.06)"),
+    "border-strong":
+      tokens["border-strong"] ?? (dark ? "rgba(255, 255, 255, 0.14)" : "rgba(0, 0, 0, 0.12)"),
+    "border-divider":
+      tokens["border-divider"] ?? (dark ? "rgba(255, 255, 255, 0.05)" : "rgba(0, 0, 0, 0.05)"),
     "accent-foreground": tokens["accent-foreground"] ?? tokens["text-inverse"],
     "accent-soft": accentSoft,
     "accent-muted": accentMuted,
-    "focus-ring": tokens["focus-ring"] ?? "rgba(255, 255, 255, 0.18)",
-    "overlay-subtle": tokens["overlay-subtle"] ?? "rgba(255, 255, 255, 0.02)",
-    "overlay-soft": tokens["overlay-soft"] ?? "rgba(255, 255, 255, 0.03)",
-    "overlay-medium": tokens["overlay-medium"] ?? "rgba(255, 255, 255, 0.04)",
-    "overlay-strong": tokens["overlay-strong"] ?? "rgba(255, 255, 255, 0.06)",
-    "overlay-emphasis": tokens["overlay-emphasis"] ?? "rgba(255, 255, 255, 0.1)",
-    "scrim-soft": tokens["scrim-soft"] ?? "rgba(0, 0, 0, 0.2)",
-    "scrim-medium": tokens["scrim-medium"] ?? "rgba(0, 0, 0, 0.45)",
-    "scrim-strong": tokens["scrim-strong"] ?? "rgba(0, 0, 0, 0.62)",
+    "focus-ring":
+      tokens["focus-ring"] ?? (dark ? "rgba(255, 255, 255, 0.18)" : "rgba(0, 0, 0, 0.15)"),
+    "overlay-subtle":
+      tokens["overlay-subtle"] ?? (dark ? "rgba(255, 255, 255, 0.02)" : "rgba(0, 0, 0, 0.02)"),
+    "overlay-soft":
+      tokens["overlay-soft"] ?? (dark ? "rgba(255, 255, 255, 0.03)" : "rgba(0, 0, 0, 0.03)"),
+    "overlay-medium":
+      tokens["overlay-medium"] ?? (dark ? "rgba(255, 255, 255, 0.04)" : "rgba(0, 0, 0, 0.04)"),
+    "overlay-strong":
+      tokens["overlay-strong"] ?? (dark ? "rgba(255, 255, 255, 0.06)" : "rgba(0, 0, 0, 0.05)"),
+    "overlay-emphasis":
+      tokens["overlay-emphasis"] ?? (dark ? "rgba(255, 255, 255, 0.1)" : "rgba(0, 0, 0, 0.08)"),
+    "scrim-soft": tokens["scrim-soft"] ?? (dark ? "rgba(0, 0, 0, 0.2)" : "rgba(0, 0, 0, 0.12)"),
+    "scrim-medium":
+      tokens["scrim-medium"] ?? (dark ? "rgba(0, 0, 0, 0.45)" : "rgba(0, 0, 0, 0.30)"),
+    "scrim-strong":
+      tokens["scrim-strong"] ?? (dark ? "rgba(0, 0, 0, 0.62)" : "rgba(0, 0, 0, 0.45)"),
     "terminal-black": tokens["terminal-black"] ?? tokens["surface-canvas"],
     "terminal-white": tokens["terminal-white"] ?? tokens["text-primary"],
     "terminal-bright-black": tokens["terminal-bright-black"] ?? tokens["activity-idle"],
@@ -132,7 +128,7 @@ export const BUILT_IN_APP_SCHEMES: AppColorScheme[] = [
     name: "Canopy",
     type: "dark",
     builtin: true,
-    tokens: createCanopyTokens({
+    tokens: createCanopyTokens("dark", {
       "surface-canvas": "#19191a",
       "surface-sidebar": "#131312",
       "surface-panel": "#1d1d1e",
@@ -177,6 +173,18 @@ export const BUILT_IN_APP_SCHEMES: AppColorScheme[] = [
       "syntax-quote": "#adb5bb",
       "syntax-chip": "#7fd4cf",
       "focus-ring": "rgba(255, 255, 255, 0.18)",
+      "category-blue": "oklch(0.7 0.13 250)",
+      "category-purple": "oklch(0.7 0.13 310)",
+      "category-cyan": "oklch(0.72 0.11 215)",
+      "category-green": "oklch(0.7 0.13 145)",
+      "category-amber": "oklch(0.73 0.14 75)",
+      "category-orange": "oklch(0.7 0.14 45)",
+      "category-teal": "oklch(0.7 0.11 185)",
+      "category-indigo": "oklch(0.7 0.13 275)",
+      "category-rose": "oklch(0.7 0.14 5)",
+      "category-pink": "oklch(0.72 0.13 340)",
+      "category-violet": "oklch(0.7 0.13 295)",
+      "category-slate": "oklch(0.65 0.04 240)",
     }),
   },
   {
@@ -184,7 +192,7 @@ export const BUILT_IN_APP_SCHEMES: AppColorScheme[] = [
     name: "Canopy Slate",
     type: "dark",
     builtin: true,
-    tokens: createCanopyTokens({
+    tokens: createCanopyTokens("dark", {
       "surface-canvas": "#0f172a",
       "surface-sidebar": "#0a1120",
       "surface-panel": "#131e32",
@@ -229,6 +237,18 @@ export const BUILT_IN_APP_SCHEMES: AppColorScheme[] = [
       "syntax-quote": "#b1bac5",
       "syntax-chip": "#84d7d2",
       "focus-ring": "rgba(255, 255, 255, 0.18)",
+      "category-blue": "oklch(0.7 0.13 250)",
+      "category-purple": "oklch(0.7 0.13 310)",
+      "category-cyan": "oklch(0.72 0.11 215)",
+      "category-green": "oklch(0.7 0.13 145)",
+      "category-amber": "oklch(0.73 0.14 75)",
+      "category-orange": "oklch(0.7 0.14 45)",
+      "category-teal": "oklch(0.7 0.11 185)",
+      "category-indigo": "oklch(0.7 0.13 275)",
+      "category-rose": "oklch(0.7 0.14 5)",
+      "category-pink": "oklch(0.72 0.13 340)",
+      "category-violet": "oklch(0.7 0.13 295)",
+      "category-slate": "oklch(0.65 0.04 240)",
     }),
   },
 ];

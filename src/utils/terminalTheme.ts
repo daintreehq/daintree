@@ -2,7 +2,7 @@ import {
   BUILT_IN_APP_SCHEMES,
   DEFAULT_APP_SCHEME_ID,
   getTerminalThemeFromAppScheme,
-  TERMINAL_SCROLLBAR_DEFAULTS,
+  getTerminalScrollbarDefaults,
 } from "@shared/theme";
 
 const DEFAULT_APP_SCHEME =
@@ -63,6 +63,8 @@ export function getTerminalThemeFromCSS(): typeof CANOPY_TERMINAL_THEME {
     ),
     brightCyan: getVar("--theme-terminal-bright-cyan", CANOPY_TERMINAL_THEME.brightCyan ?? ""),
     brightWhite: getVar("--theme-terminal-bright-white", CANOPY_TERMINAL_THEME.brightWhite ?? ""),
-    ...TERMINAL_SCROLLBAR_DEFAULTS,
+    ...getTerminalScrollbarDefaults(
+      (document.documentElement.dataset.colorMode as "dark" | "light") ?? "dark"
+    ),
   };
 }

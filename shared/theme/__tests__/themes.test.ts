@@ -1,0 +1,161 @@
+import { describe, it, expect } from "vitest";
+import { BUILT_IN_APP_SCHEMES, createCanopyTokens } from "../themes.js";
+import { APP_THEME_TOKEN_KEYS } from "../types.js";
+
+const REQUIRED_TOKENS = {
+  "surface-canvas": "#ffffff",
+  "surface-sidebar": "#f8f8f8",
+  "surface-panel": "#f0f0f0",
+  "surface-panel-elevated": "#e8e8e8",
+  "surface-grid": "#fafafa",
+  "text-primary": "#1a1a1a",
+  "text-secondary": "#555555",
+  "text-muted": "#888888",
+  "text-inverse": "#ffffff",
+  "border-default": "#d0d0d0",
+  "accent-primary": "#3F9366",
+  "status-success": "#5F8B6D",
+  "status-warning": "#C59A4E",
+  "status-danger": "#C8746C",
+  "status-info": "#7B8C96",
+  "activity-active": "#22c55e",
+  "activity-idle": "#a0a0a0",
+  "activity-working": "#22c55e",
+  "activity-waiting": "#fbbf24",
+  "terminal-selection": "#d0e8d8",
+  "terminal-red": "#dc2626",
+  "terminal-green": "#16a34a",
+  "terminal-yellow": "#ca8a04",
+  "terminal-blue": "#2563eb",
+  "terminal-magenta": "#9333ea",
+  "terminal-cyan": "#0891b2",
+  "terminal-bright-red": "#ef4444",
+  "terminal-bright-green": "#22c55e",
+  "terminal-bright-yellow": "#eab308",
+  "terminal-bright-blue": "#3b82f6",
+  "terminal-bright-magenta": "#a855f7",
+  "terminal-bright-cyan": "#06b6d4",
+  "terminal-bright-white": "#1a1a1a",
+  "syntax-comment": "#6b7280",
+  "syntax-punctuation": "#374151",
+  "syntax-number": "#b45309",
+  "syntax-string": "#15803d",
+  "syntax-operator": "#0e7490",
+  "syntax-keyword": "#7c3aed",
+  "syntax-function": "#2563eb",
+  "syntax-link": "#0284c7",
+  "syntax-quote": "#6b7280",
+  "syntax-chip": "#0d9488",
+} as const;
+
+describe("createCanopyTokens — light mode derived defaults", () => {
+  const lightTokens = createCanopyTokens("light", REQUIRED_TOKENS);
+
+  it("sets black-based border defaults for light mode", () => {
+    expect(lightTokens["border-subtle"]).toBe("rgba(0, 0, 0, 0.06)");
+    expect(lightTokens["border-strong"]).toBe("rgba(0, 0, 0, 0.12)");
+    expect(lightTokens["border-divider"]).toBe("rgba(0, 0, 0, 0.05)");
+  });
+
+  it("sets black-based overlay defaults for light mode", () => {
+    expect(lightTokens["overlay-subtle"]).toBe("rgba(0, 0, 0, 0.02)");
+    expect(lightTokens["overlay-soft"]).toBe("rgba(0, 0, 0, 0.03)");
+    expect(lightTokens["overlay-medium"]).toBe("rgba(0, 0, 0, 0.04)");
+    expect(lightTokens["overlay-strong"]).toBe("rgba(0, 0, 0, 0.05)");
+    expect(lightTokens["overlay-emphasis"]).toBe("rgba(0, 0, 0, 0.08)");
+  });
+
+  it("sets lighter scrim defaults for light mode", () => {
+    expect(lightTokens["scrim-soft"]).toBe("rgba(0, 0, 0, 0.12)");
+    expect(lightTokens["scrim-medium"]).toBe("rgba(0, 0, 0, 0.30)");
+    expect(lightTokens["scrim-strong"]).toBe("rgba(0, 0, 0, 0.45)");
+  });
+
+  it("sets black-based focus-ring for light mode", () => {
+    expect(lightTokens["focus-ring"]).toBe("rgba(0, 0, 0, 0.15)");
+  });
+});
+
+describe("createCanopyTokens — dark mode derived defaults match built-in", () => {
+  const darkTokens = createCanopyTokens("dark", REQUIRED_TOKENS);
+
+  it("sets white-based border defaults for dark mode", () => {
+    expect(darkTokens["border-subtle"]).toBe("rgba(255, 255, 255, 0.08)");
+    expect(darkTokens["border-strong"]).toBe("rgba(255, 255, 255, 0.14)");
+    expect(darkTokens["border-divider"]).toBe("rgba(255, 255, 255, 0.05)");
+  });
+
+  it("sets white-based overlay defaults for dark mode", () => {
+    expect(darkTokens["overlay-subtle"]).toBe("rgba(255, 255, 255, 0.02)");
+    expect(darkTokens["overlay-emphasis"]).toBe("rgba(255, 255, 255, 0.1)");
+  });
+
+  it("sets standard scrim defaults for dark mode", () => {
+    expect(darkTokens["scrim-soft"]).toBe("rgba(0, 0, 0, 0.2)");
+    expect(darkTokens["scrim-medium"]).toBe("rgba(0, 0, 0, 0.45)");
+    expect(darkTokens["scrim-strong"]).toBe("rgba(0, 0, 0, 0.62)");
+  });
+});
+
+describe("createCanopyTokens — category color overrides", () => {
+  it("uses default category colors when not overridden", () => {
+    const tokens = createCanopyTokens("dark", REQUIRED_TOKENS);
+    expect(tokens["category-blue"]).toBe("oklch(0.7 0.13 250)");
+    expect(tokens["category-rose"]).toBe("oklch(0.7 0.14 5)");
+    expect(tokens["category-slate"]).toBe("oklch(0.65 0.04 240)");
+  });
+
+  it("allows per-token category color overrides", () => {
+    const tokens = createCanopyTokens("dark", {
+      ...REQUIRED_TOKENS,
+      "category-blue": "oklch(0.5 0.15 250)",
+      "category-rose": "#ff0000",
+    });
+    expect(tokens["category-blue"]).toBe("oklch(0.5 0.15 250)");
+    expect(tokens["category-rose"]).toBe("#ff0000");
+    expect(tokens["category-green"]).toBe("oklch(0.7 0.13 145)");
+  });
+});
+
+describe("createCanopyTokens — caller overrides win via spread", () => {
+  it("explicit border-subtle in tokens overrides the dark default", () => {
+    const tokens = createCanopyTokens("dark", {
+      ...REQUIRED_TOKENS,
+      "border-subtle": "rgba(100, 100, 100, 0.5)",
+    });
+    expect(tokens["border-subtle"]).toBe("rgba(100, 100, 100, 0.5)");
+  });
+
+  it("explicit overlay-emphasis in tokens overrides the light default", () => {
+    const tokens = createCanopyTokens("light", {
+      ...REQUIRED_TOKENS,
+      "overlay-emphasis": "rgba(50, 50, 50, 0.2)",
+    });
+    expect(tokens["overlay-emphasis"]).toBe("rgba(50, 50, 50, 0.2)");
+  });
+});
+
+describe("built-in schemes — Daintree has explicit category colors", () => {
+  const canopy = BUILT_IN_APP_SCHEMES.find((s) => s.id === "canopy")!;
+
+  it("has all 12 category colors set", () => {
+    expect(canopy.tokens["category-blue"]).toBe("oklch(0.7 0.13 250)");
+    expect(canopy.tokens["category-purple"]).toBe("oklch(0.7 0.13 310)");
+    expect(canopy.tokens["category-cyan"]).toBe("oklch(0.72 0.11 215)");
+    expect(canopy.tokens["category-green"]).toBe("oklch(0.7 0.13 145)");
+    expect(canopy.tokens["category-amber"]).toBe("oklch(0.73 0.14 75)");
+    expect(canopy.tokens["category-orange"]).toBe("oklch(0.7 0.14 45)");
+    expect(canopy.tokens["category-teal"]).toBe("oklch(0.7 0.11 185)");
+    expect(canopy.tokens["category-indigo"]).toBe("oklch(0.7 0.13 275)");
+    expect(canopy.tokens["category-rose"]).toBe("oklch(0.7 0.14 5)");
+    expect(canopy.tokens["category-pink"]).toBe("oklch(0.72 0.13 340)");
+    expect(canopy.tokens["category-violet"]).toBe("oklch(0.7 0.13 295)");
+    expect(canopy.tokens["category-slate"]).toBe("oklch(0.65 0.04 240)");
+  });
+
+  it("produces all required token keys", () => {
+    for (const key of APP_THEME_TOKEN_KEYS) {
+      expect(canopy.tokens).toHaveProperty(key, expect.any(String));
+    }
+  });
+});

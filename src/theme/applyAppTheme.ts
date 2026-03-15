@@ -46,6 +46,7 @@ export function applyAppThemeToRoot(root: HTMLElement, scheme: AppColorScheme): 
 
   root.dataset.theme = scheme.id;
   root.dataset.colorMode = scheme.type;
+  root.style.colorScheme = scheme.type;
   root.classList.toggle("dark", scheme.type === "dark");
   root.classList.toggle("light", scheme.type === "light");
 }
