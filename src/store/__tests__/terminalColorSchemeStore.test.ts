@@ -97,9 +97,15 @@ describe("terminalColorSchemeStore", () => {
     expect(theme.red).toBe("#ff0000");
   });
 
-  it("getEffectiveTheme adds scrollbar defaults for non-canopy schemes", () => {
+  it("getEffectiveTheme adds dark scrollbar defaults for dark schemes", () => {
     useTerminalColorSchemeStore.getState().setSelectedSchemeId("dracula");
     const theme = useTerminalColorSchemeStore.getState().getEffectiveTheme();
     expect(theme.scrollbarSliderBackground).toBe("rgba(255, 255, 255, 0.20)");
+  });
+
+  it("getEffectiveTheme adds light scrollbar defaults for light schemes", () => {
+    useTerminalColorSchemeStore.getState().setSelectedSchemeId("solarized-light");
+    const theme = useTerminalColorSchemeStore.getState().getEffectiveTheme();
+    expect(theme.scrollbarSliderBackground).toBe("rgba(0, 0, 0, 0.20)");
   });
 });
