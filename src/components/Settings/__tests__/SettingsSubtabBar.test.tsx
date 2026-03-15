@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, fireEvent, act } from "@testing-library/react";
+import { describe, it, expect, vi } from "vitest";
+import { render, screen, fireEvent } from "@testing-library/react";
 import { SettingsSubtabBar } from "../SettingsSubtabBar";
 
 const SUBTABS = [
@@ -8,54 +8,6 @@ const SUBTABS = [
   { id: "gemini", label: "Gemini" },
   { id: "codex", label: "Codex" },
 ];
-
-let resizeObserverCallback: ResizeObserverCallback;
-const mockResizeObserver = vi.fn(function (this: unknown, cb: ResizeObserverCallback) {
-  resizeObserverCallback = cb;
-  return {
-    observe: vi.fn(),
-    unobserve: vi.fn(),
-    disconnect: vi.fn(),
-  };
-});
-
-const originalRAF = globalThis.requestAnimationFrame;
-const originalCAF = globalThis.cancelAnimationFrame;
-const originalResizeObserver = globalThis.ResizeObserver;
-
-beforeEach(() => {
-  globalThis.ResizeObserver = mockResizeObserver as unknown as typeof ResizeObserver;
-  globalThis.requestAnimationFrame = (cb: FrameRequestCallback) => {
-    cb(0);
-    return 0;
-  };
-  globalThis.cancelAnimationFrame = vi.fn();
-  Element.prototype.scrollIntoView = vi.fn();
-});
-
-afterEach(() => {
-  globalThis.ResizeObserver = originalResizeObserver;
-  globalThis.requestAnimationFrame = originalRAF;
-  globalThis.cancelAnimationFrame = originalCAF;
-  vi.restoreAllMocks();
-});
-
-function setScrollGeometry(
-  el: HTMLElement,
-  {
-    scrollWidth,
-    clientWidth,
-    scrollLeft,
-  }: { scrollWidth: number; clientWidth: number; scrollLeft: number }
-) {
-  Object.defineProperty(el, "scrollWidth", { value: scrollWidth, configurable: true });
-  Object.defineProperty(el, "clientWidth", { value: clientWidth, configurable: true });
-  Object.defineProperty(el, "scrollLeft", {
-    value: scrollLeft,
-    configurable: true,
-    writable: true,
-  });
-}
 
 describe("SettingsSubtabBar", () => {
   it("renders all subtab buttons", () => {
@@ -132,19 +84,22 @@ describe("SettingsSubtabBar", () => {
     expect(claudeTab.getAttribute("tabindex")).toBe("-1");
   });
 
-  it("navigates tabs with ArrowRight/ArrowLeft keys", () => {
+  it("navigates tabs with ArrowRight/ArrowLeft keys and moves focus", () => {
     const onChange = vi.fn();
     render(<SettingsSubtabBar subtabs={SUBTABS} activeId="claude" onChange={onChange} />);
     const tablist = screen.getByRole("tablist");
     const claudeTab = screen.getByText("Claude").closest("button")!;
+    const geminiTab = screen.getByText("Gemini").closest("button")!;
 
     claudeTab.focus();
     fireEvent.keyDown(tablist, { key: "ArrowRight" });
     expect(onChange).toHaveBeenCalledWith("gemini");
+    expect(document.activeElement).toBe(geminiTab);
 
     onChange.mockClear();
     fireEvent.keyDown(tablist, { key: "ArrowLeft" });
     expect(onChange).toHaveBeenCalledWith("claude");
+    expect(document.activeElement).toBe(claudeTab);
   });
 
   it("wraps around with ArrowRight on last tab", () => {
@@ -152,288 +107,49 @@ describe("SettingsSubtabBar", () => {
     render(<SettingsSubtabBar subtabs={SUBTABS} activeId="codex" onChange={onChange} />);
     const tablist = screen.getByRole("tablist");
     const codexTab = screen.getByText("Codex").closest("button")!;
+    const claudeTab = screen.getByText("Claude").closest("button")!;
 
     codexTab.focus();
     fireEvent.keyDown(tablist, { key: "ArrowRight" });
     expect(onChange).toHaveBeenCalledWith("claude");
+    expect(document.activeElement).toBe(claudeTab);
   });
 
-  it("navigates to first/last with Home/End keys", () => {
+  it("wraps around with ArrowLeft on first tab", () => {
+    const onChange = vi.fn();
+    render(<SettingsSubtabBar subtabs={SUBTABS} activeId="claude" onChange={onChange} />);
+    const tablist = screen.getByRole("tablist");
+    const claudeTab = screen.getByText("Claude").closest("button")!;
+    const codexTab = screen.getByText("Codex").closest("button")!;
+
+    claudeTab.focus();
+    fireEvent.keyDown(tablist, { key: "ArrowLeft" });
+    expect(onChange).toHaveBeenCalledWith("codex");
+    expect(document.activeElement).toBe(codexTab);
+  });
+
+  it("navigates to first/last with Home/End keys and moves focus", () => {
     const onChange = vi.fn();
     render(<SettingsSubtabBar subtabs={SUBTABS} activeId="gemini" onChange={onChange} />);
     const tablist = screen.getByRole("tablist");
     const geminiTab = screen.getByText("Gemini").closest("button")!;
+    const claudeTab = screen.getByText("Claude").closest("button")!;
+    const codexTab = screen.getByText("Codex").closest("button")!;
 
     geminiTab.focus();
     fireEvent.keyDown(tablist, { key: "Home" });
     expect(onChange).toHaveBeenCalledWith("claude");
+    expect(document.activeElement).toBe(claudeTab);
 
     onChange.mockClear();
     fireEvent.keyDown(tablist, { key: "End" });
     expect(onChange).toHaveBeenCalledWith("codex");
+    expect(document.activeElement).toBe(codexTab);
   });
 
-  describe("scroll overflow arrow buttons", () => {
-    it("always renders both arrow buttons", () => {
-      render(<SettingsSubtabBar subtabs={SUBTABS} activeId="claude" onChange={vi.fn()} />);
-      expect(screen.getByLabelText("Scroll tabs left")).toBeTruthy();
-      expect(screen.getByLabelText("Scroll tabs right")).toBeTruthy();
-    });
-
-    it("renders both arrows disabled with a single tab", () => {
-      const subtabs = [{ id: "only", label: "Only Tab" }];
-      render(<SettingsSubtabBar subtabs={subtabs} activeId="only" onChange={vi.fn()} />);
-      const tablist = screen.getByRole("tablist");
-
-      act(() => {
-        setScrollGeometry(tablist, { scrollWidth: 100, clientWidth: 300, scrollLeft: 0 });
-        resizeObserverCallback([], {} as ResizeObserver);
-      });
-
-      expect(screen.getByLabelText("Scroll tabs left").getAttribute("aria-disabled")).toBe("true");
-      expect(screen.getByLabelText("Scroll tabs right").getAttribute("aria-disabled")).toBe("true");
-      expect(screen.getAllByRole("tab")).toHaveLength(1);
-    });
-
-    it("disables both arrows when content fits", () => {
-      render(<SettingsSubtabBar subtabs={SUBTABS} activeId="claude" onChange={vi.fn()} />);
-      const tablist = screen.getByRole("tablist");
-
-      act(() => {
-        setScrollGeometry(tablist, { scrollWidth: 300, clientWidth: 300, scrollLeft: 0 });
-        resizeObserverCallback([], {} as ResizeObserver);
-      });
-
-      expect(screen.getByLabelText("Scroll tabs left").getAttribute("aria-disabled")).toBe("true");
-      expect(screen.getByLabelText("Scroll tabs right").getAttribute("aria-disabled")).toBe("true");
-    });
-
-    it("enables right arrow when scrollable to the right", () => {
-      render(<SettingsSubtabBar subtabs={SUBTABS} activeId="claude" onChange={vi.fn()} />);
-      const tablist = screen.getByRole("tablist");
-
-      act(() => {
-        setScrollGeometry(tablist, { scrollWidth: 500, clientWidth: 300, scrollLeft: 0 });
-        resizeObserverCallback([], {} as ResizeObserver);
-      });
-
-      expect(screen.getByLabelText("Scroll tabs right").getAttribute("aria-disabled")).toBe(
-        "false"
-      );
-      expect(screen.getByLabelText("Scroll tabs left").getAttribute("aria-disabled")).toBe("true");
-    });
-
-    it("enables left arrow when scrolled away from start", () => {
-      render(<SettingsSubtabBar subtabs={SUBTABS} activeId="claude" onChange={vi.fn()} />);
-      const tablist = screen.getByRole("tablist");
-
-      act(() => {
-        setScrollGeometry(tablist, { scrollWidth: 500, clientWidth: 300, scrollLeft: 200 });
-        resizeObserverCallback([], {} as ResizeObserver);
-      });
-
-      expect(screen.getByLabelText("Scroll tabs left").getAttribute("aria-disabled")).toBe("false");
-      expect(screen.getByLabelText("Scroll tabs right").getAttribute("aria-disabled")).toBe("true");
-    });
-
-    it("enables both arrows when scrolled to middle", () => {
-      render(<SettingsSubtabBar subtabs={SUBTABS} activeId="claude" onChange={vi.fn()} />);
-      const tablist = screen.getByRole("tablist");
-
-      act(() => {
-        setScrollGeometry(tablist, { scrollWidth: 600, clientWidth: 200, scrollLeft: 100 });
-        resizeObserverCallback([], {} as ResizeObserver);
-      });
-
-      expect(screen.getByLabelText("Scroll tabs left").getAttribute("aria-disabled")).toBe("false");
-      expect(screen.getByLabelText("Scroll tabs right").getAttribute("aria-disabled")).toBe(
-        "false"
-      );
-    });
-
-    it("clicking right arrow calls scrollIntoView on first clipped tab", () => {
-      render(<SettingsSubtabBar subtabs={SUBTABS} activeId="claude" onChange={vi.fn()} />);
-      const tablist = screen.getByRole("tablist");
-      const tabs = screen.getAllByRole("tab");
-
-      act(() => {
-        setScrollGeometry(tablist, { scrollWidth: 500, clientWidth: 300, scrollLeft: 0 });
-        resizeObserverCallback([], {} as ResizeObserver);
-      });
-
-      tablist.getBoundingClientRect = () =>
-        ({
-          left: 0,
-          right: 300,
-          top: 0,
-          bottom: 40,
-          width: 300,
-          height: 40,
-          x: 0,
-          y: 0,
-          toJSON: () => ({}),
-        }) as DOMRect;
-      tabs[0].getBoundingClientRect = () =>
-        ({
-          left: 0,
-          right: 100,
-          top: 0,
-          bottom: 40,
-          width: 100,
-          height: 40,
-          x: 0,
-          y: 0,
-          toJSON: () => ({}),
-        }) as DOMRect;
-      tabs[1].getBoundingClientRect = () =>
-        ({
-          left: 100,
-          right: 200,
-          top: 0,
-          bottom: 40,
-          width: 100,
-          height: 40,
-          x: 100,
-          y: 0,
-          toJSON: () => ({}),
-        }) as DOMRect;
-      tabs[2].getBoundingClientRect = () =>
-        ({
-          left: 200,
-          right: 350,
-          top: 0,
-          bottom: 40,
-          width: 150,
-          height: 40,
-          x: 200,
-          y: 0,
-          toJSON: () => ({}),
-        }) as DOMRect;
-
-      const scrollIntoViewSpy = vi.fn();
-      tabs[2].scrollIntoView = scrollIntoViewSpy;
-
-      fireEvent.click(screen.getByLabelText("Scroll tabs right"));
-      expect(scrollIntoViewSpy).toHaveBeenCalledWith({
-        behavior: "smooth",
-        block: "nearest",
-        inline: "end",
-      });
-    });
-
-    it("clicking left arrow calls scrollIntoView on last clipped-left tab", () => {
-      render(<SettingsSubtabBar subtabs={SUBTABS} activeId="claude" onChange={vi.fn()} />);
-      const tablist = screen.getByRole("tablist");
-      const tabs = screen.getAllByRole("tab");
-
-      act(() => {
-        setScrollGeometry(tablist, { scrollWidth: 500, clientWidth: 300, scrollLeft: 200 });
-        resizeObserverCallback([], {} as ResizeObserver);
-      });
-
-      tablist.getBoundingClientRect = () =>
-        ({
-          left: 0,
-          right: 300,
-          top: 0,
-          bottom: 40,
-          width: 300,
-          height: 40,
-          x: 0,
-          y: 0,
-          toJSON: () => ({}),
-        }) as DOMRect;
-      tabs[0].getBoundingClientRect = () =>
-        ({
-          left: -100,
-          right: -10,
-          top: 0,
-          bottom: 40,
-          width: 90,
-          height: 40,
-          x: -100,
-          y: 0,
-          toJSON: () => ({}),
-        }) as DOMRect;
-      tabs[1].getBoundingClientRect = () =>
-        ({
-          left: 0,
-          right: 100,
-          top: 0,
-          bottom: 40,
-          width: 100,
-          height: 40,
-          x: 0,
-          y: 0,
-          toJSON: () => ({}),
-        }) as DOMRect;
-      tabs[2].getBoundingClientRect = () =>
-        ({
-          left: 100,
-          right: 200,
-          top: 0,
-          bottom: 40,
-          width: 100,
-          height: 40,
-          x: 100,
-          y: 0,
-          toJSON: () => ({}),
-        }) as DOMRect;
-
-      const scrollIntoViewSpy = vi.fn();
-      tabs[0].scrollIntoView = scrollIntoViewSpy;
-
-      fireEvent.click(screen.getByLabelText("Scroll tabs left"));
-      expect(scrollIntoViewSpy).toHaveBeenCalledWith({
-        behavior: "smooth",
-        block: "nearest",
-        inline: "start",
-      });
-    });
-
-    it("does not scroll when clicking disabled arrow", () => {
-      render(<SettingsSubtabBar subtabs={SUBTABS} activeId="claude" onChange={vi.fn()} />);
-      const tablist = screen.getByRole("tablist");
-      const tabs = screen.getAllByRole("tab");
-
-      act(() => {
-        setScrollGeometry(tablist, { scrollWidth: 300, clientWidth: 300, scrollLeft: 0 });
-        resizeObserverCallback([], {} as ResizeObserver);
-      });
-
-      const scrollIntoViewSpy = vi.fn();
-      tabs[0].scrollIntoView = scrollIntoViewSpy;
-      tabs[1].scrollIntoView = scrollIntoViewSpy;
-      tabs[2].scrollIntoView = scrollIntoViewSpy;
-
-      fireEvent.click(screen.getByLabelText("Scroll tabs left"));
-      fireEvent.click(screen.getByLabelText("Scroll tabs right"));
-      expect(scrollIntoViewSpy).not.toHaveBeenCalled();
-    });
-
-    it("updates arrow disabled state on scroll events", () => {
-      render(<SettingsSubtabBar subtabs={SUBTABS} activeId="claude" onChange={vi.fn()} />);
-      const tablist = screen.getByRole("tablist");
-
-      act(() => {
-        setScrollGeometry(tablist, { scrollWidth: 500, clientWidth: 300, scrollLeft: 0 });
-        resizeObserverCallback([], {} as ResizeObserver);
-      });
-
-      expect(screen.getByLabelText("Scroll tabs right").getAttribute("aria-disabled")).toBe(
-        "false"
-      );
-      expect(screen.getByLabelText("Scroll tabs left").getAttribute("aria-disabled")).toBe("true");
-
-      act(() => {
-        setScrollGeometry(tablist, { scrollWidth: 500, clientWidth: 300, scrollLeft: 100 });
-        fireEvent.scroll(tablist);
-      });
-
-      expect(screen.getByLabelText("Scroll tabs left").getAttribute("aria-disabled")).toBe("false");
-      expect(screen.getByLabelText("Scroll tabs right").getAttribute("aria-disabled")).toBe(
-        "false"
-      );
-    });
+  it("does not render scroll arrow buttons", () => {
+    render(<SettingsSubtabBar subtabs={SUBTABS} activeId="claude" onChange={vi.fn()} />);
+    expect(screen.queryByLabelText("Scroll tabs left")).toBeNull();
+    expect(screen.queryByLabelText("Scroll tabs right")).toBeNull();
   });
 });
