@@ -45,7 +45,7 @@ export const useTerminalColorSchemeStore = create<TerminalColorSchemeState>()((s
 
     return {
       ...scheme.colors,
-      ...getTerminalScrollbarDefaults("dark"),
+      ...getTerminalScrollbarDefaults(scheme.type),
     };
   },
 }));
