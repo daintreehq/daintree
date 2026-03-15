@@ -357,6 +357,38 @@ describe("built-in schemes — Namib theme", () => {
   });
 });
 
+describe("built-in schemes — Redwoods has correct tokens and derived values", () => {
+  const redwoods = BUILT_IN_APP_SCHEMES.find((s) => s.id === "redwoods")!;
+
+  it("exists as a dark builtin scheme", () => {
+    expect(redwoods).toBeDefined();
+    expect(redwoods.type).toBe("dark");
+    expect(redwoods.builtin).toBe(true);
+  });
+
+  it("has the shared brand accent", () => {
+    expect(redwoods.tokens["accent-primary"]).toBe("#3F9366");
+  });
+
+  it("derives terminal-black from surface-canvas", () => {
+    expect(redwoods.tokens["terminal-black"]).toBe("#1A1210");
+  });
+
+  it("derives terminal-white from text-primary", () => {
+    expect(redwoods.tokens["terminal-white"]).toBe("#D4C5B8");
+  });
+
+  it("derives terminal-bright-black from activity-idle", () => {
+    expect(redwoods.tokens["terminal-bright-black"]).toBe("#52423D");
+  });
+
+  it("produces all required token keys", () => {
+    for (const key of APP_THEME_TOKEN_KEYS) {
+      expect(redwoods.tokens).toHaveProperty(key, expect.any(String));
+    }
+  });
+});
+
 describe("normalizeAppColorScheme", () => {
   it("uses a light fallback base for partial light themes", () => {
     const scheme = normalizeAppColorScheme({
