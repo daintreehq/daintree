@@ -142,7 +142,7 @@ test.describe.serial("Core: v0.3.0 Features", () => {
       }
     });
 
-    test("CLI Agents tab shows subtabs with General active by default", async () => {
+    test("CLI Agents tab shows dropdown selector with General active by default", async () => {
       const { window } = ctx;
 
       // Navigate to CLI Agents tab
@@ -151,37 +151,39 @@ test.describe.serial("Core: v0.3.0 Features", () => {
       });
       await agentsNav.click();
 
-      // Subtab bar should be visible within the agents panel
+      // Agent selector dropdown should be visible within the agents panel
       const agentsPanel = window.locator("#settings-panel-agents");
-      const subtabBar = agentsPanel.locator(SEL.settings.subtabNav);
-      await expect(subtabBar).toBeVisible({ timeout: T_MEDIUM });
+      const dropdownTrigger = agentsPanel.locator('button[aria-haspopup="listbox"]');
+      await expect(dropdownTrigger).toBeVisible({ timeout: T_MEDIUM });
 
-      // "General" subtab should be active (aria-selected="true")
-      const generalSubtab = subtabBar.locator("button", { hasText: "General" });
-      await expect(generalSubtab).toBeVisible({ timeout: T_SHORT });
-      await expect(generalSubtab).toHaveAttribute("aria-selected", "true", { timeout: T_SHORT });
+      // Trigger should display "General" as the selected item
+      await expect(dropdownTrigger).toContainText("General", { timeout: T_SHORT });
     });
 
-    test("clicking agent subtab switches active state", async () => {
+    test("selecting agent from dropdown switches active state", async () => {
       const { window } = ctx;
 
       const agentsPanel = window.locator("#settings-panel-agents");
-      const subtabBar = agentsPanel.locator(SEL.settings.subtabNav);
-      const subtabButtons = subtabBar.locator("button");
-      const count = await subtabButtons.count();
+      const dropdownTrigger = agentsPanel.locator('button[aria-haspopup="listbox"]');
 
-      // General + at least one registered agent (Claude, Gemini, etc.)
+      // Open the dropdown
+      await dropdownTrigger.click();
+
+      // The listbox should appear with General + agent options
+      const listbox = window.locator('[role="listbox"]#agent-selector-list');
+      await expect(listbox).toBeVisible({ timeout: T_SHORT });
+      const options = listbox.locator('[role="option"]');
+      const count = await options.count();
       expect(count).toBeGreaterThanOrEqual(2);
 
-      // Click the second subtab (first agent) and verify it becomes active
-      const agentSubtab = subtabButtons.nth(1);
-      await agentSubtab.click();
+      // Click the second option (first agent) to select it
+      const agentOption = options.nth(1);
+      const agentName = await agentOption.textContent();
+      await agentOption.click();
 
-      await expect(agentSubtab).toHaveAttribute("aria-selected", "true", { timeout: T_SHORT });
-
-      // General should no longer be active
-      const generalSubtab = subtabBar.locator("button", { hasText: "General" });
-      await expect(generalSubtab).toHaveAttribute("aria-selected", "false", { timeout: T_SHORT });
+      // Dropdown should close and trigger should show the selected agent name
+      await expect(listbox).not.toBeVisible({ timeout: T_SHORT });
+      await expect(dropdownTrigger).toContainText(agentName!.trim(), { timeout: T_SHORT });
 
       await window.keyboard.press("Escape");
       await expect(window.locator(SEL.settings.heading)).not.toBeVisible({ timeout: T_SHORT });
