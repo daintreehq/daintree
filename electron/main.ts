@@ -11,6 +11,7 @@ import {
   session,
 } from "electron";
 import path from "path";
+import fs from "fs";
 import { existsSync } from "fs";
 import { fileURLToPath, pathToFileURL } from "url";
 import os from "os";
@@ -37,6 +38,20 @@ fixPath();
 const hasExplicitUserDataDir = process.argv.some((a) => a.startsWith("--user-data-dir"));
 if (!app.isPackaged && !hasExplicitUserDataDir) {
   app.setPath("userData", path.join(app.getPath("appData"), `${app.name}-dev`));
+}
+
+// Handle --reset-data: wipe userData before Chromium acquires file locks
+if (process.argv.includes("--reset-data")) {
+  const userDataPath = app.getPath("userData");
+  if (fs.existsSync(userDataPath)) {
+    for (const entry of fs.readdirSync(userDataPath)) {
+      try {
+        fs.rmSync(path.join(userDataPath, entry), { recursive: true, force: true });
+      } catch {
+        // Skip locked files
+      }
+    }
+  }
 }
 
 // Enable native Wayland support on Linux (Electron < 38)
@@ -287,7 +302,7 @@ import { AgentVersionService } from "./services/AgentVersionService.js";
 import { AgentUpdateHandler } from "./services/AgentUpdateHandler.js";
 import { SidecarManager } from "./services/SidecarManager.js";
 import { createWindowWithState } from "./windowState.js";
-import { setLoggerWindow, initializeLogger } from "./utils/logger.js";
+import { setLoggerWindow, initializeLogger, pruneOldLogs } from "./utils/logger.js";
 import { canOpenExternalUrl, openExternalUrl } from "./utils/openExternal.js";
 import {
   classifyPartition,
@@ -345,6 +360,14 @@ import {
 
 // Initialize logger early with userData path
 initializeLogger(app.getPath("userData"));
+
+// Prune old log files based on retention setting (fire-and-forget)
+{
+  const retentionDays = store.get("privacy")?.logRetentionDays ?? 30;
+  if (retentionDays > 0) {
+    pruneOldLogs(app.getPath("userData"), retentionDays);
+  }
+}
 
 // Register commands early so they're available when IPC handlers start
 registerCommands();

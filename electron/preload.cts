@@ -1895,6 +1895,18 @@ const api: ElectronAPI = {
       _typedInvoke(CHANNELS.TELEMETRY_TRACK, event, properties),
   },
 
+  privacy: {
+    getSettings: () => _typedInvoke(CHANNELS.PRIVACY_GET_SETTINGS),
+    setTelemetryLevel: (level: "off" | "errors" | "full") =>
+      _typedInvoke(CHANNELS.PRIVACY_SET_TELEMETRY_LEVEL, level),
+    setLogRetention: (days: 7 | 30 | 90 | 0) =>
+      _typedInvoke(CHANNELS.PRIVACY_SET_LOG_RETENTION, days),
+    openDataFolder: () => _typedInvoke(CHANNELS.PRIVACY_OPEN_DATA_FOLDER),
+    clearCache: () => _typedInvoke(CHANNELS.PRIVACY_CLEAR_CACHE),
+    resetAllData: () => _typedInvoke(CHANNELS.PRIVACY_RESET_ALL_DATA),
+    getDataFolderPath: () => _typedInvoke(CHANNELS.PRIVACY_GET_DATA_FOLDER_PATH),
+  },
+
   onboarding: {
     get: () => _typedInvoke(CHANNELS.ONBOARDING_GET),
     migrate: (payload: {
