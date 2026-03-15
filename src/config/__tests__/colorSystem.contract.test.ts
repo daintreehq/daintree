@@ -97,6 +97,10 @@ describe("color system contract", () => {
     );
   });
 
+  it("wires :root --background to --theme-surface-canvas", () => {
+    expect(indexCss).toMatch(/--background:\s*var\(--theme-surface-canvas\)/);
+  });
+
   it("wires :root --primary-foreground to --theme-accent-foreground", () => {
     expect(indexCss).toMatch(/--primary-foreground:\s*var\(--theme-accent-foreground\)/);
   });

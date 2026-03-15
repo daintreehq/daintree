@@ -672,7 +672,7 @@ code.hljs {
   /* Canopy prose theme - customized typography for dark theme */
   .prose-canopy {
     --tw-prose-body: var(--color-canopy-text);
-    --tw-prose-headings: #ffffff;
+    --tw-prose-headings: var(--color-text-primary);
     --tw-prose-lead: color-mix(in oklab, var(--color-canopy-text) 80%, transparent);
     --tw-prose-links: var(--color-canopy-accent);
     --tw-prose-bold: var(--color-canopy-text);
@@ -773,7 +773,7 @@ code.hljs {
   .prose-canopy :where(h3) {
     font-size: 1rem;
     font-weight: 600;
-    color: color-mix(in oklab, #ffffff 85%, transparent);
+    color: color-mix(in oklab, var(--color-text-primary) 85%, transparent);
   }
 
   /* Tighter code block spacing */
@@ -1208,16 +1208,16 @@ body,
   35% {
     /* Overshoot: selected + extra brightness */
     background-color: var(--color-surface-highlight);
-    border-color: rgba(255, 255, 255, 0.25);
-    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.25);
+    border-color: color-mix(in oklab, var(--theme-border-strong) 84%, var(--theme-text-primary));
+    box-shadow: inset 0 0 0 1px var(--theme-overlay-medium);
   }
   100% {
     /* Settled: matches .terminal-selected exactly */
     background-color: var(--color-surface-highlight);
-    border-color: rgba(255, 255, 255, 0.15);
+    border-color: color-mix(in oklab, var(--theme-border-strong) 92%, var(--theme-text-primary));
     box-shadow:
-      inset 0 0 0 1px rgba(255, 255, 255, 0.05),
-      0 0 0 1px rgba(255, 255, 255, 0.1);
+      inset 0 0 0 1px var(--theme-overlay-soft),
+      0 0 0 1px var(--theme-overlay-strong);
   }
 }
 
@@ -1537,7 +1537,7 @@ body[data-performance-mode="true"] .github-status-error {
 /* Selection styling */
 .diff-viewer .diff-code::selection,
 .diff-viewer .diff-code *::selection {
-  background: rgba(122, 162, 247, 0.3);
+  background: color-mix(in oklch, var(--color-accent-primary) 30%, transparent);
 }
 
 /* Scrollbar styling for diff viewer */
