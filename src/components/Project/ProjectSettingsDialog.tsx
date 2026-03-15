@@ -36,6 +36,7 @@ import {
   LayoutGrid,
   RefreshCw,
   Server,
+  Bell,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -63,7 +64,9 @@ import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { LiveTimeAgo } from "@/components/Worktree/LiveTimeAgo";
 import { CommandOverridesTab } from "@/components/Settings/CommandOverridesTab";
 import { McpServersTab } from "./McpServersTab";
+import { ProjectNotificationsTab } from "./ProjectNotificationsTab";
 import type { CommandOverride } from "@shared/types/commands";
+import type { NotificationSettings } from "@shared/types/ipc/api";
 import {
   createProjectSettingsSnapshot,
   areSnapshotsEqual,
@@ -92,7 +95,8 @@ type ProjectSettingsTab =
   | "recipes"
   | "commands"
   | "agent"
-  | "mcp";
+  | "mcp"
+  | "notifications";
 
 function formatBytes(bytes: number): string {
   if (bytes === 0) return "0 B";
@@ -150,6 +154,9 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
   const [terminalScrollback, setTerminalScrollback] = useState<string>("");
   const [mcpServers, setMcpServers] = useState<Record<string, ProjectMcpServerConfig>>({});
   const [mcpRunStates, setMcpRunStates] = useState<ProjectMcpServerRunState[]>([]);
+  const [notificationOverrides, setNotificationOverrides] = useState<Partial<NotificationSettings>>(
+    {}
+  );
   const fileInputRef = useRef<HTMLInputElement>(null);
   const initialSnapshotRef = useRef<ProjectSettingsSnapshot | null>(null);
   const [showUnsavedChangesDialog, setShowUnsavedChangesDialog] = useState(false);
@@ -216,7 +223,8 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
       agentInstructions,
       worktreePathPattern,
       currentTerminalSettings,
-      mcpServers
+      mcpServers,
+      notificationOverrides
     );
   }, [
     name,
@@ -237,6 +245,7 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
     currentProject,
     currentTerminalSettings,
     mcpServers,
+    notificationOverrides,
   ]);
 
   const isDirty = useMemo(() => {
@@ -331,6 +340,7 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
       const initialWorktreePathPattern = settings.worktreePathPattern ?? "";
       const initialTerminalSettings = settings.terminalSettings;
       const initialMcpServers = settings.mcpServers ?? {};
+      const initialNotificationOverrides = settings.notificationOverrides ?? {};
 
       setName(currentProject.name);
       setEmoji(currentProject.emoji || "🌲");
@@ -356,6 +366,7 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
           : ""
       );
       setMcpServers(initialMcpServers);
+      setNotificationOverrides(initialNotificationOverrides);
 
       initialSnapshotRef.current = createProjectSettingsSnapshot(
         currentProject.name,
@@ -374,7 +385,8 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
         initialAgentInstructions,
         initialWorktreePathPattern,
         initialTerminalSettings,
-        initialMcpServers
+        initialMcpServers,
+        initialNotificationOverrides
       );
 
       setIsInitialized(true);
@@ -403,6 +415,7 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
       setTerminalScrollback("");
       setMcpServers({});
       setMcpRunStates([]);
+      setNotificationOverrides({});
       hasLoadedRecipes.current = false;
       setActiveTab("general");
       initialSnapshotRef.current = null;
@@ -651,6 +664,8 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
         worktreePathPattern: sanitizedWorktreePathPattern,
         terminalSettings: currentTerminalSettings,
         mcpServers: Object.keys(mcpServers).length > 0 ? mcpServers : undefined,
+        notificationOverrides:
+          Object.keys(notificationOverrides).length > 0 ? notificationOverrides : undefined,
         insecureEnvironmentVariables: undefined,
         unresolvedSecureEnvironmentVariables: undefined,
       });
@@ -686,7 +701,8 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
         agentInstructions,
         worktreePathPattern.trim(),
         currentTerminalSettings,
-        mcpServers
+        mcpServers,
+        notificationOverrides
       );
 
       requestClose({ bypassDirty: true });
@@ -913,6 +929,13 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
               icon={<Server className="w-4 h-4" />}
             >
               MCP Servers
+            </NavButton>
+            <NavButton
+              active={activeTab === "notifications"}
+              onClick={() => setActiveTab("notifications")}
+              icon={<Bell className="w-4 h-4" />}
+            >
+              Notifications
             </NavButton>
           </div>
 
@@ -2605,6 +2628,14 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
                       servers={mcpServers}
                       onChange={setMcpServers}
                       runStates={mcpRunStates}
+                    />
+                  </div>
+
+                  {/* Notifications Tab */}
+                  <div className={activeTab === "notifications" ? "" : "hidden"}>
+                    <ProjectNotificationsTab
+                      overrides={notificationOverrides}
+                      onChange={setNotificationOverrides}
                     />
                   </div>
                 </>

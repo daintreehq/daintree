@@ -4,6 +4,7 @@ import type {
   ProjectTerminalSettings,
   ProjectMcpServerConfig,
 } from "@shared/types/domain";
+import type { NotificationSettings } from "@shared/types/ipc/api";
 
 export interface ProjectSettingsSnapshot {
   name: string;
@@ -29,6 +30,7 @@ export interface ProjectSettingsSnapshot {
   worktreePathPattern: string;
   terminalSettings: ProjectTerminalSettings | undefined;
   mcpServers: Record<string, ProjectMcpServerConfig>;
+  notificationOverrides: Partial<NotificationSettings> | undefined;
 }
 
 interface EnvVar {
@@ -64,7 +66,8 @@ export function createProjectSettingsSnapshot(
   agentInstructions: string = "",
   worktreePathPattern: string = "",
   terminalSettings: ProjectTerminalSettings | undefined = undefined,
-  mcpServers: Record<string, ProjectMcpServerConfig> = {}
+  mcpServers: Record<string, ProjectMcpServerConfig> = {},
+  notificationOverrides: Partial<NotificationSettings> | undefined = undefined
 ): ProjectSettingsSnapshot {
   const envVarRecord: Record<string, string> = {};
   const seenKeys = new Map<string, number>();
@@ -145,6 +148,7 @@ export function createProjectSettingsSnapshot(
     worktreePathPattern: worktreePathPattern.trim(),
     terminalSettings: normalizeTerminalSettings(terminalSettings),
     mcpServers: normalizeMcpServers(mcpServers),
+    notificationOverrides: normalizeNotificationOverrides(notificationOverrides),
   };
 }
 
@@ -180,6 +184,24 @@ function normalizeTerminalSettings(
   if (ts.defaultWorkingDirectory?.trim())
     result.defaultWorkingDirectory = ts.defaultWorkingDirectory.trim();
   if (ts.scrollbackLines !== undefined) result.scrollbackLines = ts.scrollbackLines;
+  return Object.keys(result).length > 0 ? result : undefined;
+}
+
+function normalizeNotificationOverrides(
+  overrides: Partial<NotificationSettings> | undefined
+): Partial<NotificationSettings> | undefined {
+  if (!overrides) return undefined;
+  const result: Partial<NotificationSettings> = {};
+  if (overrides.completedEnabled !== undefined)
+    result.completedEnabled = overrides.completedEnabled;
+  if (overrides.waitingEnabled !== undefined) result.waitingEnabled = overrides.waitingEnabled;
+  if (overrides.failedEnabled !== undefined) result.failedEnabled = overrides.failedEnabled;
+  if (overrides.soundEnabled !== undefined) result.soundEnabled = overrides.soundEnabled;
+  if (overrides.soundFile !== undefined) result.soundFile = overrides.soundFile;
+  if (overrides.waitingEscalationEnabled !== undefined)
+    result.waitingEscalationEnabled = overrides.waitingEscalationEnabled;
+  if (overrides.waitingEscalationDelayMs !== undefined)
+    result.waitingEscalationDelayMs = overrides.waitingEscalationDelayMs;
   return Object.keys(result).length > 0 ? result : undefined;
 }
 
@@ -295,6 +317,23 @@ export function areSnapshotsEqual(a: ProjectSettingsSnapshot, b: ProjectSettings
     for (const k of aEnvKeys) {
       if (aServer.env![k] !== bServer.env?.[k]) return false;
     }
+  }
+
+  // Notification overrides comparison
+  const aNotif = a.notificationOverrides;
+  const bNotif = b.notificationOverrides;
+  if (!aNotif && !bNotif) {
+    // both undefined — equal
+  } else if (!aNotif || !bNotif) {
+    return false;
+  } else {
+    if (aNotif.completedEnabled !== bNotif.completedEnabled) return false;
+    if (aNotif.waitingEnabled !== bNotif.waitingEnabled) return false;
+    if (aNotif.failedEnabled !== bNotif.failedEnabled) return false;
+    if (aNotif.soundEnabled !== bNotif.soundEnabled) return false;
+    if (aNotif.soundFile !== bNotif.soundFile) return false;
+    if (aNotif.waitingEscalationEnabled !== bNotif.waitingEscalationEnabled) return false;
+    if (aNotif.waitingEscalationDelayMs !== bNotif.waitingEscalationDelayMs) return false;
   }
 
   return true;
