@@ -152,6 +152,15 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
     keywords: ["input", "voice", "microphone", "speech", "dictation", "mic"],
   },
   {
+    id: "tab-nav-environment",
+    tab: "environment",
+    tabLabel: "Environment Variables",
+    section: "Settings Navigation",
+    title: "Environment Variables",
+    description: "Per-project environment variables injected into all terminals",
+    keywords: ["terminal", "environment", "variables", "env", "project", "inject", "secrets"],
+  },
+  {
     id: "tab-nav-troubleshooting",
     tab: "troubleshooting",
     tabLabel: "Troubleshooting",
@@ -909,5 +918,31 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
     description:
       "Generate a bearer token to secure MCP connections. Clients must include the token in the Authorization header.",
     keywords: ["mcp", "api", "key", "auth", "token", "bearer", "security", "password"],
+  },
+
+  // Environment Variables
+  {
+    id: "environment-variables",
+    tab: "environment",
+    tabLabel: "Environment Variables",
+    section: "Environment Variables",
+    title: "Project Environment Variables",
+    description:
+      "Add, edit, and delete key/value environment variables for the current project. Injected into new terminals at spawn time.",
+    keywords: [
+      "env",
+      "environment",
+      "variables",
+      "project",
+      "api key",
+      "secret",
+      "token",
+      "password",
+      "PATH",
+      "inject",
+      "terminal",
+      "encryption",
+      "dotenv",
+    ],
   },
 ];
