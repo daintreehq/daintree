@@ -1,4 +1,4 @@
-import { ipcMain, dialog, BrowserWindow } from "electron";
+import { ipcMain, dialog, BrowserWindow, nativeTheme } from "electron";
 import { CHANNELS } from "../channels.js";
 import { store } from "../../store.js";
 import { parseAppThemeFile } from "../../utils/appThemeImporter.js";
@@ -6,10 +6,23 @@ import type { AppThemeConfig, ColorVisionMode } from "../../../shared/types/appT
 
 function getAppThemeConfig(): AppThemeConfig {
   const config = store.get("appTheme");
-  if (config && typeof config === "object" && !Array.isArray(config)) {
+  const hasStoredScheme =
+    config &&
+    typeof config === "object" &&
+    !Array.isArray(config) &&
+    "colorSchemeId" in config &&
+    typeof config.colorSchemeId === "string" &&
+    config.colorSchemeId;
+
+  if (hasStoredScheme) {
     return config as AppThemeConfig;
   }
-  return { colorSchemeId: "daintree" };
+
+  const defaultSchemeId = nativeTheme.shouldUseDarkColors ? "daintree" : "bondi";
+  return {
+    ...(config && typeof config === "object" && !Array.isArray(config) ? config : {}),
+    colorSchemeId: defaultSchemeId,
+  } as AppThemeConfig;
 }
 
 export function registerAppThemeHandlers(): () => void {

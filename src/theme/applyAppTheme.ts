@@ -75,7 +75,9 @@ export function applyColorVisionMode(root: HTMLElement, mode: ColorVisionMode): 
 }
 
 export function applyDefaultAppTheme(root: HTMLElement): AppColorScheme {
-  const scheme = resolveAppTheme("daintree");
+  const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+  const schemeId = prefersDark ? "daintree" : "bondi";
+  const scheme = resolveAppTheme(schemeId);
   applyAppThemeToRoot(root, scheme);
   return scheme;
 }

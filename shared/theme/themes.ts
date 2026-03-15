@@ -257,6 +257,72 @@ export const BUILT_IN_APP_SCHEMES: AppColorScheme[] = [
       "category-slate": "oklch(0.65 0.04 240)",
     }),
   },
+  {
+    id: "bondi",
+    name: "Bondi",
+    type: "light",
+    builtin: true,
+    tokens: createCanopyTokens("light", {
+      "surface-canvas": "#F6F0E4",
+      "surface-sidebar": "#EDE7DB",
+      "surface-panel": "#FDFCFA",
+      "surface-panel-elevated": "#FFFFFF",
+      "surface-grid": "#E8E2D6",
+      "text-primary": "#1B3626",
+      "text-secondary": "color-mix(in oklab, #1B3626 65%, #F6F0E4)",
+      "text-muted": "#8B8C86",
+      "text-inverse": "#1B3626",
+      "border-default": "#D8D2C4",
+      "accent-primary": "#3F9366",
+      "accent-foreground": "#08140e",
+      "status-success": "#2A7A4B",
+      "status-warning": "#B08800",
+      "status-danger": "#A31D27",
+      "status-info": "#2B5573",
+      "activity-active": "#22c55e",
+      "activity-idle": "#8b95a1",
+      "activity-working": "#22c55e",
+      "activity-waiting": "#B08800",
+      "terminal-black": "#1B3626",
+      "terminal-white": "#8B8C86",
+      "terminal-selection": "rgba(43, 85, 115, 0.2)",
+      "terminal-red": "#C0392B",
+      "terminal-green": "#2A7A4B",
+      "terminal-yellow": "#B08800",
+      "terminal-blue": "#2B5573",
+      "terminal-magenta": "#7B5EA7",
+      "terminal-cyan": "#1FA8B1",
+      "terminal-bright-red": "#E32B31",
+      "terminal-bright-green": "#3A9B6B",
+      "terminal-bright-yellow": "#C49A00",
+      "terminal-bright-blue": "#3B6B8A",
+      "terminal-bright-magenta": "#9070BC",
+      "terminal-bright-cyan": "#2DC0CA",
+      "terminal-bright-white": "#2C3E30",
+      "syntax-comment": "#8B8C86",
+      "syntax-punctuation": "#2C3E30",
+      "syntax-number": "#778A9C",
+      "syntax-string": "#2B5573",
+      "syntax-operator": "#2B5573",
+      "syntax-keyword": "#A31D27",
+      "syntax-function": "#1FA8B1",
+      "syntax-link": "#2B5573",
+      "syntax-quote": "#8B8C86",
+      "syntax-chip": "#1FA8B1",
+      "category-blue": "oklch(0.62 0.14 250)",
+      "category-purple": "oklch(0.64 0.14 310)",
+      "category-cyan": "oklch(0.65 0.12 215)",
+      "category-green": "oklch(0.63 0.13 145)",
+      "category-amber": "oklch(0.68 0.14 75)",
+      "category-orange": "oklch(0.66 0.15 45)",
+      "category-teal": "oklch(0.64 0.11 185)",
+      "category-indigo": "oklch(0.61 0.13 275)",
+      "category-rose": "oklch(0.63 0.14 5)",
+      "category-pink": "oklch(0.66 0.13 340)",
+      "category-violet": "oklch(0.63 0.13 295)",
+      "category-slate": "oklch(0.58 0.04 240)",
+    }),
+  },
 ];
 
 export const APP_THEME_PREVIEW_KEYS = {
@@ -330,10 +396,10 @@ export function getAppThemeById(
 }
 
 export function getBuiltInAppSchemeForType(type: "dark" | "light"): AppColorScheme {
-  if (type === "light") {
-    return INTERNAL_LIGHT_FALLBACK_SCHEME;
-  }
-  return BUILT_IN_APP_SCHEMES.find((scheme) => scheme.type === type) ?? BUILT_IN_APP_SCHEMES[0];
+  return (
+    BUILT_IN_APP_SCHEMES.find((scheme) => scheme.type === type) ??
+    (type === "light" ? INTERNAL_LIGHT_FALLBACK_SCHEME : BUILT_IN_APP_SCHEMES[0])
+  );
 }
 
 export function resolveAppTheme(id: string, customSchemes: AppColorScheme[] = []): AppColorScheme {

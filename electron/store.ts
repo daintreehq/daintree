@@ -113,7 +113,7 @@ export interface StoreSchema {
   projectEnv: Record<string, string>;
   appAgentConfig: AppAgentConfig;
   worktreeIssueMap: Record<string, IssueAssociation>;
-  appTheme: AppThemeConfig;
+  appTheme: Partial<AppThemeConfig>;
   telemetry: {
     enabled: boolean;
     hasSeenPrompt: boolean;
@@ -214,9 +214,7 @@ const storeOptions = {
     projectEnv: {},
     appAgentConfig: DEFAULT_APP_AGENT_CONFIG,
     worktreeIssueMap: {},
-    appTheme: {
-      colorSchemeId: "daintree",
-    },
+    appTheme: {},
     telemetry: {
       enabled: false,
       hasSeenPrompt: false,

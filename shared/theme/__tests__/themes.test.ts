@@ -169,6 +169,53 @@ describe("built-in schemes — Daintree has explicit category colors", () => {
   });
 });
 
+describe("built-in schemes — Bondi light theme", () => {
+  const bondi = BUILT_IN_APP_SCHEMES.find((s) => s.id === "bondi")!;
+
+  it("exists in BUILT_IN_APP_SCHEMES with type light", () => {
+    expect(bondi).toBeDefined();
+    expect(bondi.type).toBe("light");
+    expect(bondi.builtin).toBe(true);
+  });
+
+  it("produces all required token keys", () => {
+    for (const key of APP_THEME_TOKEN_KEYS) {
+      expect(bondi.tokens).toHaveProperty(key, expect.any(String));
+    }
+  });
+
+  it("has explicitly overridden terminal-black and terminal-white", () => {
+    expect(bondi.tokens["terminal-black"]).toBe("#1B3626");
+    expect(bondi.tokens["terminal-white"]).toBe("#8B8C86");
+  });
+
+  it("has the correct accent-primary", () => {
+    expect(bondi.tokens["accent-primary"]).toBe("#3F9366");
+  });
+
+  it("has sandstone cream canvas", () => {
+    expect(bondi.tokens["surface-canvas"]).toBe("#F6F0E4");
+  });
+
+  it("uses lower oklch lightness for category colors", () => {
+    expect(bondi.tokens["category-blue"]).toBe("oklch(0.62 0.14 250)");
+    expect(bondi.tokens["category-slate"]).toBe("oklch(0.58 0.04 240)");
+  });
+});
+
+describe("getBuiltInAppSchemeForType — returns Bondi for light", () => {
+  it("returns the bondi scheme for light type", () => {
+    const lightScheme = getBuiltInAppSchemeForType("light");
+    expect(lightScheme.id).toBe("bondi");
+    expect(lightScheme.type).toBe("light");
+  });
+
+  it("returns a dark scheme for dark type", () => {
+    const darkScheme = getBuiltInAppSchemeForType("dark");
+    expect(darkScheme.type).toBe("dark");
+  });
+});
+
 describe("normalizeAppColorScheme", () => {
   it("uses a light fallback base for partial light themes", () => {
     const scheme = normalizeAppColorScheme({
