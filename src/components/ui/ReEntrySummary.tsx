@@ -93,7 +93,7 @@ export function ReEntrySummary({ state }: { state: ReEntrySummaryState }) {
         className={cn(
           "pointer-events-auto relative flex flex-col w-full max-w-[360px]",
           "rounded-[var(--radius-sm)] border-l-[3px] border border-white/[0.08]",
-          "bg-zinc-900/60 backdrop-blur-xl",
+          "bg-surface-panel/60 backdrop-blur-xl",
           "px-3 py-2.5 pr-2",
           "text-sm text-canopy-text",
           "shadow-[0_8px_24px_rgba(0,0,0,0.4)]",

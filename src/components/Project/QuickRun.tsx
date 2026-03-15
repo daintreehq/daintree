@@ -379,7 +379,7 @@ export function QuickRun({ projectId }: QuickRunProps) {
       {isExpanded && (
         <div id="quick-run-panel" className="px-4 pb-3 pt-1">
           {!isWorktreeValid ? (
-            <div className="text-xs text-gray-500 text-center py-2">
+            <div className="text-xs text-text-muted text-center py-2">
               Select a worktree above to enable Quick Run
             </div>
           ) : (

@@ -2245,7 +2245,9 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
                         (() => {
                           const validation = validatePathPattern(worktreePathPattern.trim());
                           if (!validation.valid) {
-                            return <p className="mt-2 text-xs text-red-400">{validation.error}</p>;
+                            return (
+                              <p className="mt-2 text-xs text-status-danger">{validation.error}</p>
+                            );
                           }
                           const rootPath =
                             currentProject?.path ?? "/Users/name/Projects/my-project";
@@ -2584,9 +2586,9 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
                             className={cn(
                               "text-xs tabular-nums",
                               agentInstructions.length >= 5000
-                                ? "text-red-500"
+                                ? "text-status-danger"
                                 : agentInstructions.length >= 4000
-                                  ? "text-amber-500"
+                                  ? "text-status-warning"
                                   : "text-canopy-text/40"
                             )}
                           >

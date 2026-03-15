@@ -46,7 +46,7 @@ export function DiffViewer({ diff, filePath, viewType = "split", rootPath }: Dif
 
   if (!diff || diff === "NO_CHANGES") {
     return (
-      <div className="flex items-center justify-center p-8 text-neutral-500">
+      <div className="flex items-center justify-center p-8 text-text-muted">
         No changes detected
       </div>
     );
@@ -54,7 +54,7 @@ export function DiffViewer({ diff, filePath, viewType = "split", rootPath }: Dif
 
   if (diff === "BINARY_FILE") {
     return (
-      <div className="flex items-center justify-center p-8 text-neutral-500">
+      <div className="flex items-center justify-center p-8 text-text-muted">
         Binary file - cannot display diff
       </div>
     );
@@ -62,7 +62,7 @@ export function DiffViewer({ diff, filePath, viewType = "split", rootPath }: Dif
 
   if (diff === "FILE_TOO_LARGE") {
     return (
-      <div className="flex items-center justify-center p-8 text-neutral-500">
+      <div className="flex items-center justify-center p-8 text-text-muted">
         File too large to display diff ({">"} 1MB)
       </div>
     );
@@ -70,7 +70,7 @@ export function DiffViewer({ diff, filePath, viewType = "split", rootPath }: Dif
 
   if (files.length === 0) {
     return (
-      <div className="flex items-center justify-center p-8 text-neutral-500">
+      <div className="flex items-center justify-center p-8 text-text-muted">
         Unable to parse diff
       </div>
     );
@@ -153,8 +153,8 @@ function FileDiff({ file, viewType, language, rootPath }: FileDiffProps) {
           <div className="flex items-center gap-2 shrink-0">
             {(additions > 0 || deletions > 0) && (
               <span className="flex items-center gap-1">
-                {additions > 0 && <span className="text-green-400">+{additions}</span>}
-                {deletions > 0 && <span className="text-red-400">-{deletions}</span>}
+                {additions > 0 && <span className="text-status-success">+{additions}</span>}
+                {deletions > 0 && <span className="text-status-danger">-{deletions}</span>}
               </span>
             )}
             {absolutePath && (

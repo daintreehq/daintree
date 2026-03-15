@@ -140,22 +140,22 @@ function ApprovalCard({
   };
 
   return (
-    <div className="rounded-lg border border-neutral-700 bg-neutral-900 p-4 shadow-lg">
+    <div className="rounded-lg border border-border-default bg-surface-panel p-4 shadow-lg">
       <div className="mb-2 flex items-center gap-2">
-        <AlertTriangle className="h-4 w-4 shrink-0 text-amber-400" />
-        <span className="text-xs font-medium text-neutral-400">{approval.workflowName}</span>
+        <AlertTriangle className="h-4 w-4 shrink-0 text-status-warning" />
+        <span className="text-xs font-medium text-text-muted">{approval.workflowName}</span>
         {timeLeft !== null && (
-          <span className="ml-auto flex items-center gap-1 text-xs text-neutral-500">
+          <span className="ml-auto flex items-center gap-1 text-xs text-text-muted">
             <Clock className="h-3 w-3" />
             {formatTime(timeLeft)}
           </span>
         )}
       </div>
 
-      <p className="mb-3 text-sm text-neutral-200">{approval.prompt}</p>
+      <p className="mb-3 text-sm text-text-primary">{approval.prompt}</p>
 
       <textarea
-        className="mb-3 w-full rounded border border-neutral-700 bg-neutral-800 p-2 text-xs text-neutral-300 placeholder-neutral-500 focus:border-neutral-500 focus:outline-none"
+        className="mb-3 w-full rounded border border-border-default bg-surface-panel-elevated p-2 text-xs text-text-secondary placeholder:text-text-muted focus:border-border-default focus:outline-none"
         placeholder="Optional feedback..."
         rows={2}
         value={feedback}
@@ -165,7 +165,7 @@ function ApprovalCard({
 
       <div className="flex gap-2">
         <button
-          className="flex flex-1 items-center justify-center gap-1.5 rounded bg-green-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-green-500 disabled:opacity-50"
+          className="flex flex-1 items-center justify-center gap-1.5 rounded bg-status-success px-3 py-1.5 text-xs font-medium text-text-inverse hover:bg-status-success/80 disabled:opacity-50"
           onClick={onApprove}
           disabled={isSubmitting}
         >
@@ -173,7 +173,7 @@ function ApprovalCard({
           Approve
         </button>
         <button
-          className="flex flex-1 items-center justify-center gap-1.5 rounded bg-red-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-red-500 disabled:opacity-50"
+          className="flex flex-1 items-center justify-center gap-1.5 rounded bg-status-danger px-3 py-1.5 text-xs font-medium text-text-inverse hover:bg-status-danger/80 disabled:opacity-50"
           onClick={onReject}
           disabled={isSubmitting}
         >
