@@ -629,22 +629,6 @@ body,
   will-change: transform, opacity;
 }
 
-/* Directing state: breathing opacity on the half-fill arc */
-@keyframes directing-fill {
-  0%,
-  100% {
-    opacity: 1;
-  }
-  50% {
-    opacity: 0.4;
-  }
-}
-
-.animate-directing-fill {
-  animation: directing-fill 2s ease-in-out infinite;
-  will-change: opacity;
-}
-
 /* Voice recording: rotating conic border ring */
 @keyframes voice-ring-spin {
   to {
@@ -791,12 +775,6 @@ body,
     animation: none;
     opacity: 1;
     transform: none;
-    will-change: auto;
-  }
-
-  .animate-directing-fill {
-    animation: none;
-    opacity: 0.7;
     will-change: auto;
   }
 
