@@ -866,6 +866,7 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
     commands: "Commands",
     agent: "Agent",
     mcp: "MCP Servers",
+    notifications: "Notifications",
   };
 
   return (
