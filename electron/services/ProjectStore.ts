@@ -22,6 +22,7 @@ import { logError } from "../utils/logger.js";
 import { projectEnvSecureStorage } from "./ProjectEnvSecureStorage.js";
 import { isSensitiveEnvKey } from "../../shared/utils/envVars.js";
 import { normalizeScrollbackLines } from "../../shared/config/scrollback.js";
+import { store } from "../store.js";
 import { getSharedDb } from "./persistence/db.js";
 import {
   projects as projectsTable,
@@ -800,6 +801,65 @@ export class ProjectStore {
     return Object.keys(result).length > 0 ? result : undefined;
   }
 
+  private parseNotificationOverrides(
+    raw: unknown
+  ): Partial<import("../../shared/types/ipc/api.js").NotificationSettings> | undefined {
+    if (!raw || typeof raw !== "object") return undefined;
+    const obj = raw as Record<string, unknown>;
+    const result: Partial<import("../../shared/types/ipc/api.js").NotificationSettings> = {};
+
+    if (typeof obj.completedEnabled === "boolean") result.completedEnabled = obj.completedEnabled;
+    if (typeof obj.waitingEnabled === "boolean") result.waitingEnabled = obj.waitingEnabled;
+    if (typeof obj.failedEnabled === "boolean") result.failedEnabled = obj.failedEnabled;
+    if (typeof obj.soundEnabled === "boolean") result.soundEnabled = obj.soundEnabled;
+    if (
+      typeof obj.soundFile === "string" &&
+      ["chime.wav", "ping.wav", "complete.wav", "waiting.wav", "error.wav"].includes(obj.soundFile)
+    ) {
+      result.soundFile = obj.soundFile;
+    }
+    if (typeof obj.waitingEscalationEnabled === "boolean") {
+      result.waitingEscalationEnabled = obj.waitingEscalationEnabled;
+    }
+    if (
+      typeof obj.waitingEscalationDelayMs === "number" &&
+      Number.isFinite(obj.waitingEscalationDelayMs)
+    ) {
+      result.waitingEscalationDelayMs = Math.max(
+        30_000,
+        Math.min(3_600_000, obj.waitingEscalationDelayMs)
+      );
+    }
+
+    return Object.keys(result).length > 0 ? result : undefined;
+  }
+
+  private notificationOverridesCache = new Map<
+    string,
+    Partial<import("../../shared/types/ipc/api.js").NotificationSettings> | undefined
+  >();
+
+  getEffectiveNotificationSettings(): import("../../shared/types/ipc/api.js").NotificationSettings {
+    const global = store.get("notificationSettings");
+    const projectId = this.getCurrentProjectId();
+    if (!projectId) return global;
+
+    const overrides = this.notificationOverridesCache.get(projectId);
+    if (!overrides) return global;
+
+    return {
+      completedEnabled: overrides.completedEnabled ?? global.completedEnabled,
+      waitingEnabled: overrides.waitingEnabled ?? global.waitingEnabled,
+      failedEnabled: overrides.failedEnabled ?? global.failedEnabled,
+      soundEnabled: overrides.soundEnabled ?? global.soundEnabled,
+      soundFile: overrides.soundFile ?? global.soundFile,
+      waitingEscalationEnabled:
+        overrides.waitingEscalationEnabled ?? global.waitingEscalationEnabled,
+      waitingEscalationDelayMs:
+        overrides.waitingEscalationDelayMs ?? global.waitingEscalationDelayMs,
+    };
+  }
+
   async getProjectSettings(projectId: string): Promise<ProjectSettings> {
     const filePath = this.getSettingsFilePath(projectId);
     if (!filePath || !existsSync(filePath)) {
@@ -956,7 +1016,10 @@ export class ProjectStore {
             : undefined,
         terminalSettings: this.parseTerminalSettings(parsed.terminalSettings),
         mcpServers: this.parseMcpServers(parsed.mcpServers),
+        notificationOverrides: this.parseNotificationOverrides(parsed.notificationOverrides),
       };
+
+      this.notificationOverridesCache.set(projectId, settings.notificationOverrides);
 
       return settings;
     } catch (error) {
@@ -1046,7 +1109,10 @@ export class ProjectStore {
           ? settings.devServerLoadTimeout
           : undefined,
       terminalSettings: this.parseTerminalSettings(settings.terminalSettings),
+      notificationOverrides: this.parseNotificationOverrides(settings.notificationOverrides),
     };
+
+    this.notificationOverridesCache.set(projectId, sanitizedSettings.notificationOverrides);
 
     // Sanitize SVG
     if (settings.projectIconSvg) {

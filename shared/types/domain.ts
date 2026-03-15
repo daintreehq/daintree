@@ -1026,6 +1026,8 @@ export interface ProjectSettings {
   terminalSettings?: ProjectTerminalSettings;
   /** Per-project MCP server definitions (started on project open, stopped on close) */
   mcpServers?: Record<string, ProjectMcpServerConfig>;
+  /** Per-project notification overrides (machine-local, never written to .canopy/settings.json) */
+  notificationOverrides?: Partial<import("./ipc/api.js").NotificationSettings>;
 }
 
 // Toolbar Customization Types

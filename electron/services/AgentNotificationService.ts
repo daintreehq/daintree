@@ -4,6 +4,7 @@ import { existsSync } from "fs";
 import { events } from "./events.js";
 import { notificationService, type WatchNotificationContext } from "./NotificationService.js";
 import { store } from "../store.js";
+import { projectStore } from "./ProjectStore.js";
 import { playSound, type SoundHandle } from "../utils/soundPlayer.js";
 import { CHANNELS } from "../ipc/channels.js";
 
@@ -55,7 +56,7 @@ class AgentNotificationService {
     timestamp: number;
   }): void {
     const { state, previousState, worktreeId, terminalId, agentId } = payload;
-    const settings = store.get("notificationSettings");
+    const settings = projectStore.getEffectiveNotificationSettings();
 
     if (state === previousState) return;
 
@@ -135,7 +136,7 @@ class AgentNotificationService {
 
     const timer = setTimeout(() => {
       this.completionTimers.delete(key);
-      const settings = store.get("notificationSettings");
+      const settings = projectStore.getEffectiveNotificationSettings();
       if (!settings.completedEnabled) return;
       const label = this.getLabel(agentId, worktreeId);
       this.enqueue(
@@ -163,7 +164,7 @@ class AgentNotificationService {
       clearTimeout(this.waitingEscalationTimers.get(terminalId)!);
     }
 
-    const settings = store.get("notificationSettings");
+    const settings = projectStore.getEffectiveNotificationSettings();
     if (!settings.waitingEscalationEnabled || !settings.waitingEnabled) return;
 
     // Only escalate for docked terminals
@@ -173,7 +174,7 @@ class AgentNotificationService {
 
     const timer = setTimeout(() => {
       this.waitingEscalationTimers.delete(terminalId);
-      const currentSettings = store.get("notificationSettings");
+      const currentSettings = projectStore.getEffectiveNotificationSettings();
       if (!currentSettings.waitingEscalationEnabled || !currentSettings.waitingEnabled) return;
 
       // Re-read terminal state — skip if moved out of dock or removed
@@ -273,7 +274,7 @@ class AgentNotificationService {
   private playNotificationSound(enabled: boolean, fileOverride?: string): void {
     if (!enabled) return;
 
-    const settings = store.get("notificationSettings");
+    const settings = projectStore.getEffectiveNotificationSettings();
     const soundFile = fileOverride ?? settings.soundFile;
     const soundPath = path.join(SOUNDS_DIR, soundFile);
 
