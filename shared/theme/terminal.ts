@@ -34,6 +34,8 @@ export function getTerminalThemeFromAppTokens(tokens: AppColorSchemeTokens): ITh
     brightMagenta: tokens["terminal-bright-magenta"],
     brightCyan: tokens["terminal-bright-cyan"],
     brightWhite: tokens["terminal-bright-white"],
+    // Defaults to dark — this function receives bare tokens without type info.
+    // Callers with a full AppColorScheme should use getTerminalThemeFromAppScheme instead.
     ...getTerminalScrollbarDefaults("dark"),
   };
 }
