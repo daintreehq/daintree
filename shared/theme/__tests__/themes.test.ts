@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { BUILT_IN_APP_SCHEMES, createCanopyTokens } from "../themes";
-import { APP_THEME_TOKEN_KEYS } from "../types";
+import { BUILT_IN_APP_SCHEMES, createCanopyTokens } from "../themes.js";
+import { APP_THEME_TOKEN_KEYS } from "../types.js";
 
 const REQUIRED_TOKENS = {
   "surface-canvas": "#ffffff",

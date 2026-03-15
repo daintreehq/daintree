@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
-import { getTerminalScrollbarDefaults, getTerminalThemeFromAppScheme } from "../terminal";
-import { BUILT_IN_APP_SCHEMES } from "../themes";
-import type { AppColorScheme } from "../types";
+import { getTerminalScrollbarDefaults, getTerminalThemeFromAppScheme } from "../terminal.js";
+import { BUILT_IN_APP_SCHEMES } from "../themes.js";
+import type { AppColorScheme } from "../types.js";
 
 describe("getTerminalScrollbarDefaults", () => {
   it("returns white-channel values for dark mode", () => {
