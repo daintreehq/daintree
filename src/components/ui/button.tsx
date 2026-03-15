@@ -10,9 +10,9 @@ const buttonVariants = cva(
     variants: {
       variant: {
         default:
-          "bg-primary text-accent-foreground [text-shadow:0_1px_0_rgba(255,255,255,0.15)] ring-1 ring-white/20 shadow-sm shadow-black/40 inset-shadow-[0_1px_0_rgba(255,255,255,0.15)] hover:brightness-110 hover:shadow-primary/20 active:brightness-95 active:inset-shadow-none",
+          "bg-primary text-text-inverse [text-shadow:0_1px_0_rgba(255,255,255,0.15)] ring-1 ring-white/20 shadow-sm shadow-black/40 inset-shadow-[0_1px_0_rgba(255,255,255,0.15)] hover:brightness-110 hover:shadow-primary/20 active:brightness-95 active:inset-shadow-none",
         destructive:
-          "bg-destructive text-accent-foreground [text-shadow:0_1px_0_rgba(255,255,255,0.15)] ring-1 ring-white/20 shadow-sm shadow-black/40 inset-shadow-[0_1px_0_rgba(255,255,255,0.15)] hover:brightness-110 hover:shadow-destructive/20 active:brightness-95 active:inset-shadow-none focus-visible:ring-destructive",
+          "bg-destructive text-text-inverse [text-shadow:0_1px_0_rgba(255,255,255,0.15)] ring-1 ring-white/20 shadow-sm shadow-black/40 inset-shadow-[0_1px_0_rgba(255,255,255,0.15)] hover:brightness-110 hover:shadow-destructive/20 active:brightness-95 active:inset-shadow-none focus-visible:ring-destructive",
         outline:
           "ring-1 ring-white/10 bg-overlay-soft backdrop-blur-md text-canopy-text shadow-sm shadow-black/20 hover:bg-overlay-strong hover:ring-white/20 hover:text-accent-foreground active:bg-overlay-soft active:shadow-none",
         secondary:
@@ -26,10 +26,10 @@ const buttonVariants = cva(
           "text-status-error hover:bg-status-error/10 focus-visible:ring-status-error",
         "ghost-success": "text-status-success hover:bg-status-success/10",
         "ghost-info": "text-status-info hover:bg-status-info/10",
-        info: "bg-status-info text-accent-foreground [text-shadow:0_1px_0_rgba(255,255,255,0.15)] ring-1 ring-white/20 shadow-sm shadow-black/40 inset-shadow-[0_1px_0_rgba(255,255,255,0.15)] hover:brightness-110 active:brightness-95 active:inset-shadow-none",
-        glow: "bg-primary text-accent-foreground [text-shadow:0_1px_0_rgba(255,255,255,0.15)] shadow-[0_0_15px_rgba(var(--theme-accent-rgb),0.3)] ring-1 ring-white/25 hover:shadow-[0_0_25px_rgba(var(--theme-accent-rgb),0.45)] hover:brightness-110 active:shadow-inner active:brightness-95",
+        info: "bg-status-info text-text-inverse [text-shadow:0_1px_0_rgba(255,255,255,0.15)] ring-1 ring-white/20 shadow-sm shadow-black/40 inset-shadow-[0_1px_0_rgba(255,255,255,0.15)] hover:brightness-110 active:brightness-95 active:inset-shadow-none",
+        glow: "bg-primary text-text-inverse [text-shadow:0_1px_0_rgba(255,255,255,0.15)] shadow-[0_0_15px_rgba(var(--theme-accent-rgb),0.3)] ring-1 ring-white/25 hover:shadow-[0_0_25px_rgba(var(--theme-accent-rgb),0.45)] hover:brightness-110 active:shadow-inner active:brightness-95",
         vibrant:
-          "bg-gradient-to-b from-primary to-primary/80 text-accent-foreground [text-shadow:0_1px_0_rgba(255,255,255,0.15)] shadow-md shadow-primary/20 ring-1 ring-white/25 hover:brightness-110 active:brightness-90 active:shadow-inner",
+          "bg-gradient-to-b from-primary to-primary/80 text-text-inverse [text-shadow:0_1px_0_rgba(255,255,255,0.15)] shadow-md shadow-primary/20 ring-1 ring-white/25 hover:brightness-110 active:brightness-90 active:shadow-inner",
       },
       size: {
         default: "h-8 px-4 py-1.5 gap-2 [&_svg]:size-4",
