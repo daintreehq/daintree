@@ -554,7 +554,7 @@ export function DevPreviewPane({
           onZoomChange={handleZoomChange}
         />
 
-        <div className="relative flex-1 min-h-0 bg-white">
+        <div className="relative flex-1 min-h-0 bg-surface-canvas">
           {isRestarting || status === "starting" || status === "installing" ? (
             <div className="absolute inset-0 flex flex-col items-center justify-center bg-canopy-bg">
               <div className="w-12 h-12 border-2 border-status-info border-t-transparent rounded-full animate-spin mb-4" />

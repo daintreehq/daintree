@@ -259,6 +259,13 @@ describe("DevPreviewPane webview lifecycle regression", () => {
     };
   });
 
+  it("uses theme-backed preview chrome surfaces", () => {
+    const { container } = render(<DevPreviewPane {...baseProps} />);
+    const themedSurface = container.querySelector(".bg-surface-canvas");
+    expect(themedSurface).toBeTruthy();
+    expect(container.querySelector(".bg-white")).toBeNull();
+  });
+
   afterEach(() => {
     document.createElement = originalCreateElement;
     vi.runOnlyPendingTimers();

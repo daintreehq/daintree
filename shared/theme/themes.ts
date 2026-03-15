@@ -1,4 +1,9 @@
-import type { AppColorScheme, AppColorSchemeTokens, AppThemeTokenKey } from "./types.js";
+import type {
+  AppColorScheme,
+  AppColorSchemeTokens,
+  AppThemeTokenKey,
+  AppThemeValidationWarning,
+} from "./types.js";
 
 export const DEFAULT_APP_SCHEME_ID = "canopy";
 
@@ -121,6 +126,71 @@ export function createCanopyTokens(
     ...tokens,
   };
 }
+
+const INTERNAL_LIGHT_FALLBACK_SCHEME: AppColorScheme = {
+  id: "canopy-light-base",
+  name: "Canopy Light Base",
+  type: "light",
+  builtin: true,
+  tokens: createCanopyTokens("light", {
+    "surface-canvas": "#f6f4ef",
+    "surface-sidebar": "#ebe7de",
+    "surface-panel": "#fffdf8",
+    "surface-panel-elevated": "#fdfbf6",
+    "surface-grid": "#f0ede5",
+    "text-primary": "#1f2937",
+    "text-secondary": "color-mix(in oklab, #1f2937 72%, #f6f4ef)",
+    "text-muted": "#5f6b76",
+    "text-inverse": "#10161b",
+    "border-default": "#d8d2c6",
+    "accent-primary": "#3F9366",
+    "accent-foreground": "#08140e",
+    "status-success": "#2f6f4f",
+    "status-warning": "#85551a",
+    "status-danger": "#94463e",
+    "status-info": "#4b5f74",
+    "activity-active": "#22c55e",
+    "activity-idle": "#8b95a1",
+    "activity-working": "#22c55e",
+    "activity-waiting": "#d97706",
+    "terminal-selection": "#dbe9de",
+    "terminal-red": "#b42318",
+    "terminal-green": "#1f8f58",
+    "terminal-yellow": "#a16207",
+    "terminal-blue": "#2563eb",
+    "terminal-magenta": "#8b5cf6",
+    "terminal-cyan": "#0f766e",
+    "terminal-bright-red": "#dc2626",
+    "terminal-bright-green": "#16a34a",
+    "terminal-bright-yellow": "#ca8a04",
+    "terminal-bright-blue": "#3b82f6",
+    "terminal-bright-magenta": "#a855f7",
+    "terminal-bright-cyan": "#0891b2",
+    "terminal-bright-white": "#0f172a",
+    "syntax-comment": "#6b7280",
+    "syntax-punctuation": "#334155",
+    "syntax-number": "#b45309",
+    "syntax-string": "#15803d",
+    "syntax-operator": "#0f766e",
+    "syntax-keyword": "#7c3aed",
+    "syntax-function": "#2563eb",
+    "syntax-link": "#0369a1",
+    "syntax-quote": "#64748b",
+    "syntax-chip": "#0f766e",
+    "category-blue": "oklch(0.62 0.14 250)",
+    "category-purple": "oklch(0.64 0.14 310)",
+    "category-cyan": "oklch(0.65 0.12 215)",
+    "category-green": "oklch(0.63 0.13 145)",
+    "category-amber": "oklch(0.68 0.14 75)",
+    "category-orange": "oklch(0.66 0.15 45)",
+    "category-teal": "oklch(0.64 0.11 185)",
+    "category-indigo": "oklch(0.61 0.13 275)",
+    "category-rose": "oklch(0.63 0.14 5)",
+    "category-pink": "oklch(0.66 0.13 340)",
+    "category-violet": "oklch(0.63 0.13 295)",
+    "category-slate": "oklch(0.58 0.04 240)",
+  }),
+};
 
 export const BUILT_IN_APP_SCHEMES: AppColorScheme[] = [
   {
@@ -317,6 +387,13 @@ export function getAppThemeById(
   return [...BUILT_IN_APP_SCHEMES, ...customSchemes].find((scheme) => scheme.id === id);
 }
 
+export function getBuiltInAppSchemeForType(type: "dark" | "light"): AppColorScheme {
+  if (type === "light") {
+    return INTERNAL_LIGHT_FALLBACK_SCHEME;
+  }
+  return BUILT_IN_APP_SCHEMES.find((scheme) => scheme.type === type) ?? BUILT_IN_APP_SCHEMES[0];
+}
+
 export function resolveAppTheme(id: string, customSchemes: AppColorScheme[] = []): AppColorScheme {
   return getAppThemeById(id, customSchemes) ?? BUILT_IN_APP_SCHEMES[0];
 }
@@ -362,22 +439,155 @@ export function normalizeAppThemeTokens(
   return normalized;
 }
 
+function isHexColor(value: string): boolean {
+  return /^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i.test(value);
+}
+
+function inferThemeTypeFromHex(hex: string): "dark" | "light" {
+  const clean = hex.replace("#", "");
+  const expanded =
+    clean.length === 3
+      ? clean
+          .split("")
+          .map((char) => `${char}${char}`)
+          .join("")
+      : clean;
+  const red = parseInt(expanded.slice(0, 2), 16);
+  const green = parseInt(expanded.slice(2, 4), 16);
+  const blue = parseInt(expanded.slice(4, 6), 16);
+  const luminance = (0.299 * red + 0.587 * green + 0.114 * blue) / 255;
+  return luminance < 0.5 ? "dark" : "light";
+}
+
+export function inferAppThemeTypeFromTokens(
+  maybeTokens: Record<string, unknown>
+): "dark" | "light" | undefined {
+  const surfaceToken = maybeTokens["surface-canvas"] ?? maybeTokens["canopy-bg"];
+  if (typeof surfaceToken === "string" && isHexColor(surfaceToken.trim())) {
+    return inferThemeTypeFromHex(surfaceToken.trim());
+  }
+  return undefined;
+}
+
+function hexToLinear(channel: number): number {
+  const normalized = channel / 255;
+  return normalized <= 0.04045 ? normalized / 12.92 : ((normalized + 0.055) / 1.055) ** 2.4;
+}
+
+function relativeLuminance(hex: string): number {
+  const clean = hex.replace("#", "");
+  const expanded =
+    clean.length === 3
+      ? clean
+          .split("")
+          .map((char) => `${char}${char}`)
+          .join("")
+      : clean;
+  const red = hexToLinear(parseInt(expanded.slice(0, 2), 16));
+  const green = hexToLinear(parseInt(expanded.slice(2, 4), 16));
+  const blue = hexToLinear(parseInt(expanded.slice(4, 6), 16));
+  return 0.2126 * red + 0.7152 * green + 0.0722 * blue;
+}
+
+function contrastRatio(foreground: string, background: string): number {
+  const l1 = relativeLuminance(foreground);
+  const l2 = relativeLuminance(background);
+  const lighter = Math.max(l1, l2);
+  const darker = Math.min(l1, l2);
+  return (lighter + 0.05) / (darker + 0.05);
+}
+
+function pickReadableForeground(background: string, candidates: string[]): string {
+  const validCandidates = candidates.filter(isHexColor);
+  if (!isHexColor(background) || validCandidates.length === 0) {
+    return "#000000";
+  }
+
+  let bestCandidate = validCandidates[0];
+  let bestContrast = contrastRatio(bestCandidate, background);
+
+  for (const candidate of validCandidates.slice(1)) {
+    const candidateContrast = contrastRatio(candidate, background);
+    if (candidateContrast > bestContrast) {
+      bestCandidate = candidate;
+      bestContrast = candidateContrast;
+    }
+  }
+
+  return bestCandidate;
+}
+
+const CRITICAL_CONTRAST_PAIRS: Array<{
+  foreground: AppThemeTokenKey;
+  background: AppThemeTokenKey;
+  minimum: number;
+}> = [
+  { foreground: "text-primary", background: "surface-canvas", minimum: 4.5 },
+  { foreground: "text-primary", background: "surface-panel", minimum: 4.5 },
+  { foreground: "text-primary", background: "surface-panel-elevated", minimum: 4.5 },
+  { foreground: "text-primary", background: "surface-sidebar", minimum: 4.5 },
+  { foreground: "accent-foreground", background: "accent-primary", minimum: 4.5 },
+];
+
+export function getAppThemeWarnings(scheme: AppColorScheme): AppThemeValidationWarning[] {
+  const warnings: AppThemeValidationWarning[] = [];
+
+  for (const pair of CRITICAL_CONTRAST_PAIRS) {
+    const fg = scheme.tokens[pair.foreground];
+    const bg = scheme.tokens[pair.background];
+
+    if (!isHexColor(fg) || !isHexColor(bg)) {
+      continue;
+    }
+
+    const ratio = contrastRatio(fg, bg);
+    if (ratio < pair.minimum) {
+      warnings.push({
+        message: `${pair.foreground} on ${pair.background} is ${ratio.toFixed(2)}:1; target is ${pair.minimum.toFixed(1)}:1`,
+      });
+    }
+  }
+
+  return warnings;
+}
+
 export function normalizeAppColorScheme(
-  maybeScheme: Partial<AppColorScheme>,
+  maybeScheme: Partial<Omit<AppColorScheme, "tokens">> & { tokens?: Record<string, unknown> },
   fallback: AppColorScheme = BUILT_IN_APP_SCHEMES[0]
 ): AppColorScheme {
+  const explicitType =
+    maybeScheme.type === "light"
+      ? "light"
+      : maybeScheme.type === "dark"
+        ? "dark"
+        : inferAppThemeTypeFromTokens(
+            (maybeScheme.tokens as Record<string, unknown> | undefined) ?? {}
+          );
+  const resolvedType = explicitType ?? fallback.type;
+  const baseScheme =
+    fallback.type === resolvedType ? fallback : getBuiltInAppSchemeForType(resolvedType);
+
+  const rawTokens = (maybeScheme.tokens as Record<string, unknown> | undefined) ?? {};
+  const normalizedTokens = normalizeAppThemeTokens(rawTokens, baseScheme.tokens);
+  if (
+    typeof rawTokens["accent-foreground"] !== "string" &&
+    typeof normalizedTokens["accent-primary"] === "string"
+  ) {
+    normalizedTokens["accent-foreground"] = pickReadableForeground(
+      normalizedTokens["accent-primary"],
+      [normalizedTokens["text-inverse"], normalizedTokens["text-primary"], "#ffffff", "#000000"]
+    );
+  }
+
   return {
-    id: typeof maybeScheme.id === "string" && maybeScheme.id.trim() ? maybeScheme.id : fallback.id,
+    id:
+      typeof maybeScheme.id === "string" && maybeScheme.id.trim() ? maybeScheme.id : baseScheme.id,
     name:
       typeof maybeScheme.name === "string" && maybeScheme.name.trim()
         ? maybeScheme.name
-        : fallback.name,
-    type:
-      maybeScheme.type === "light" ? "light" : maybeScheme.type === "dark" ? "dark" : fallback.type,
+        : baseScheme.name,
+    type: resolvedType,
     builtin: false,
-    tokens: normalizeAppThemeTokens(
-      (maybeScheme.tokens as Record<string, unknown> | undefined) ?? {},
-      fallback.tokens
-    ),
+    tokens: normalizedTokens,
   };
 }

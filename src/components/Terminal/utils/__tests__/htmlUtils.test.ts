@@ -143,6 +143,7 @@ describe("linkifyHtml", () => {
     const result = linkifyHtml("Visit https://example.com for info");
     expect(result).toContain('<a href="https://example.com"');
     expect(result).toContain('target="_blank"');
+    expect(result).toContain("color:var(--theme-syntax-link, #38bdf8)");
   });
 
   it("handles URLs with escaped ampersands", () => {

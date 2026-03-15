@@ -143,7 +143,7 @@ describe("WorktreeHeader issue title headline", () => {
 
     const titleSpan = container.querySelector('button[aria-label*="Open issue"] .truncate');
     expect(titleSpan).toBeDefined();
-    expect(titleSpan!.className).toContain("text-white/95");
+    expect(titleSpan!.className).toContain("text-text-primary");
   });
 
   it("applies inactive text styling to issue headline when not active", () => {

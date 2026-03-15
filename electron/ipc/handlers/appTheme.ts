@@ -1,7 +1,7 @@
 import { ipcMain, dialog, BrowserWindow } from "electron";
 import { CHANNELS } from "../channels.js";
 import { store } from "../../store.js";
-import { parseColorSchemeFile } from "../../utils/colorSchemeImporter.js";
+import { parseAppThemeFile } from "../../utils/appThemeImporter.js";
 import type { AppThemeConfig, ColorVisionMode } from "../../../shared/types/appTheme.js";
 
 function getAppThemeConfig(): AppThemeConfig {
@@ -88,7 +88,7 @@ export function registerAppThemeHandlers(): () => void {
       return { ok: false, errors: ["Import cancelled"] };
     }
 
-    return parseColorSchemeFile(result.filePaths[0]);
+    return parseAppThemeFile(result.filePaths[0]);
   };
   ipcMain.handle(CHANNELS.APP_THEME_IMPORT, handleAppThemeImport);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.APP_THEME_IMPORT));

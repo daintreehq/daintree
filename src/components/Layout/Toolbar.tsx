@@ -391,7 +391,7 @@ export function Toolbar({
                   size="icon"
                   data-toolbar-item=""
                   onClick={onToggleFocusMode}
-                  className="text-canopy-text hover:bg-white/[0.06] hover:text-canopy-accent transition-colors"
+                  className="text-canopy-text hover:bg-overlay-medium hover:text-canopy-accent transition-colors"
                   aria-label="Toggle Sidebar"
                   aria-pressed={!isFocusMode}
                 >
@@ -480,7 +480,7 @@ export function Toolbar({
                   size="icon"
                   data-toolbar-item=""
                   onClick={() => onLaunchAgent("terminal")}
-                  className="text-canopy-text hover:bg-white/[0.06] transition-colors hover:text-canopy-accent focus-visible:text-canopy-accent"
+                  className="text-canopy-text hover:bg-overlay-medium transition-colors hover:text-canopy-accent focus-visible:text-canopy-accent"
                   aria-label="Open Terminal"
                 >
                   <Terminal />
@@ -504,7 +504,7 @@ export function Toolbar({
                   size="icon"
                   data-toolbar-item=""
                   onClick={() => onLaunchAgent("browser")}
-                  className="text-canopy-text hover:bg-white/[0.06] transition-colors hover:text-canopy-accent focus-visible:text-canopy-accent"
+                  className="text-canopy-text hover:bg-overlay-medium transition-colors hover:text-canopy-accent focus-visible:text-canopy-accent"
                   aria-label="Open Browser"
                 >
                   <Globe />
@@ -532,7 +532,7 @@ export function Toolbar({
                       void actionService.dispatch("devServer.start", undefined, { source: "user" });
                     }}
                     disabled={!currentProject}
-                    className="text-canopy-text hover:bg-white/[0.06] transition-colors hover:text-canopy-accent focus-visible:text-canopy-accent"
+                    className="text-canopy-text hover:bg-overlay-medium transition-colors hover:text-canopy-accent focus-visible:text-canopy-accent"
                     aria-label={
                       !currentProject
                         ? "Open a project to use Dev Preview"
@@ -567,7 +567,7 @@ export function Toolbar({
                   size="icon"
                   data-toolbar-item=""
                   onClick={handleTogglePanelPalette}
-                  className="text-canopy-text hover:bg-white/[0.06] hover:text-canopy-accent transition-colors"
+                  className="text-canopy-text hover:bg-overlay-medium hover:text-canopy-accent transition-colors"
                   aria-label={panelPaletteOpen ? "Close panel palette" : "Open panel palette"}
                   aria-pressed={panelPaletteOpen}
                 >
@@ -610,10 +610,11 @@ export function Toolbar({
                         if (willOpen) refreshStats({ force: true });
                       }}
                       className={cn(
-                        "text-canopy-text hover:bg-overlay-medium hover:text-white h-full px-3 gap-2 rounded-none rounded-l-[var(--radius-md)]",
+                        "text-canopy-text hover:bg-overlay-medium hover:text-text-primary h-full px-3 gap-2 rounded-none rounded-l-[var(--radius-md)]",
                         stats?.issueCount === 0 && "opacity-50",
                         isStale && "opacity-60",
-                        issuesOpen && "bg-white/[0.04] ring-1 ring-github-open/20 text-white"
+                        issuesOpen &&
+                          "bg-overlay-medium ring-1 ring-github-open/20 text-text-primary"
                       )}
                       aria-label={`${stats?.issueCount ?? "\u2014"} open issues${isStale ? " (cached)" : ""}`}
                     >
@@ -670,10 +671,11 @@ export function Toolbar({
                         if (willOpen) refreshStats({ force: true });
                       }}
                       className={cn(
-                        "text-canopy-text hover:bg-overlay-medium hover:text-white h-full px-3 gap-2 rounded-none",
+                        "text-canopy-text hover:bg-overlay-medium hover:text-text-primary h-full px-3 gap-2 rounded-none",
                         stats?.prCount === 0 && "opacity-50",
                         isStale && "opacity-60",
-                        prsOpen && "bg-white/[0.04] ring-1 ring-github-merged/20 text-white"
+                        prsOpen &&
+                          "bg-overlay-medium ring-1 ring-github-merged/20 text-text-primary"
                       )}
                       aria-label={`${stats?.prCount ?? "\u2014"} open pull requests${isStale ? " (cached)" : ""}`}
                     >
@@ -728,9 +730,10 @@ export function Toolbar({
                         setCommitsOpen(!commitsOpen);
                       }}
                       className={cn(
-                        "text-canopy-text hover:bg-overlay-medium hover:text-white h-full px-3 gap-2 rounded-none rounded-r-[var(--radius-md)]",
+                        "text-canopy-text hover:bg-overlay-medium hover:text-text-primary h-full px-3 gap-2 rounded-none rounded-r-[var(--radius-md)]",
                         stats?.commitCount === 0 && "opacity-50",
-                        commitsOpen && "bg-white/[0.04] ring-1 ring-white/20 text-white"
+                        commitsOpen &&
+                          "bg-overlay-medium ring-1 ring-border-strong text-text-primary"
                       )}
                       aria-label={`${stats?.commitCount ?? "\u2014"} commits`}
                     >
@@ -782,7 +785,7 @@ export function Toolbar({
                     size="icon"
                     data-toolbar-item=""
                     onClick={toggleNotificationCenter}
-                    className="text-canopy-text hover:bg-white/[0.06] hover:text-canopy-accent transition-colors"
+                    className="text-canopy-text hover:bg-overlay-medium hover:text-canopy-accent transition-colors"
                     aria-label={
                       notificationUnreadCount > 0
                         ? `Notifications — ${notificationUnreadCount} unread`
@@ -826,7 +829,7 @@ export function Toolbar({
                   size="icon"
                   data-toolbar-item=""
                   onClick={() => actionService.dispatch("notes.create", {}, { source: "user" })}
-                  className="text-canopy-text hover:bg-white/[0.06] hover:text-canopy-accent transition-colors"
+                  className="text-canopy-text hover:bg-overlay-medium hover:text-canopy-accent transition-colors"
                   aria-label="Open notes palette"
                 >
                   <StickyNote />
@@ -853,7 +856,7 @@ export function Toolbar({
                     "transition-colors",
                     treeCopied
                       ? "text-status-success bg-status-success/10"
-                      : "text-canopy-text hover:bg-white/[0.06] hover:text-canopy-accent",
+                      : "text-canopy-text hover:bg-overlay-medium hover:text-canopy-accent",
                     isCopyingTree && "cursor-wait opacity-70",
                     !activeWorktree && "opacity-50"
                   )}
@@ -897,7 +900,7 @@ export function Toolbar({
                   data-toolbar-item=""
                   onClick={onSettings}
                   onContextMenu={handleSettingsContextMenu}
-                  className="text-canopy-text hover:bg-white/[0.06] hover:text-canopy-accent transition-colors"
+                  className="text-canopy-text hover:bg-overlay-medium hover:text-canopy-accent transition-colors"
                   aria-label="Open settings"
                 >
                   <SlidersHorizontal />
@@ -920,7 +923,7 @@ export function Toolbar({
                   data-toolbar-item=""
                   onClick={onToggleProblems}
                   className={cn(
-                    "text-canopy-text hover:bg-white/[0.06] hover:text-canopy-accent relative transition-colors",
+                    "text-canopy-text hover:bg-overlay-medium hover:text-canopy-accent relative transition-colors",
                     errorCount > 0 && "text-status-error"
                   )}
                   aria-label={`Problems: ${errorCount} error${errorCount !== 1 ? "s" : ""}`}
@@ -950,7 +953,7 @@ export function Toolbar({
                   data-toolbar-item=""
                   onClick={toggleSidecar}
                   className={cn(
-                    "text-canopy-text hover:bg-white/[0.06] hover:text-canopy-accent transition-colors"
+                    "text-canopy-text hover:bg-overlay-medium hover:text-canopy-accent transition-colors"
                   )}
                   aria-label={sidecarOpen ? "Close context sidecar" : "Open context sidecar"}
                   aria-pressed={sidecarOpen}
@@ -1035,7 +1038,7 @@ export function Toolbar({
         elements.push(
           <div
             key={`group-divider-${i}`}
-            className="w-px h-5 bg-white/[0.08] mx-1"
+            className="w-px h-5 bg-border-divider mx-1"
             aria-hidden="true"
           />
         );
@@ -1078,7 +1081,7 @@ export function Toolbar({
           )}
           {buttonRegistry["sidebar-toggle"].render()}
 
-          <div className="w-px h-5 bg-white/[0.08] mx-1" />
+          <div className="w-px h-5 bg-border-divider mx-1" />
 
           <div className="flex items-center gap-0.5">
             {renderLeftButtons(toolbarLayout.leftButtons)}
@@ -1170,7 +1173,7 @@ export function Toolbar({
             {renderButtons(toolbarLayout.rightButtons)}
           </div>
 
-          <div className="w-px h-5 bg-white/[0.08] mx-1" />
+          <div className="w-px h-5 bg-border-divider mx-1" />
 
           {buttonRegistry["sidecar-toggle"].render()}
         </div>

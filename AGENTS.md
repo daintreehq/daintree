@@ -127,6 +127,8 @@ npm run fix          # Auto-fix lint/format
 npm run rebuild      # Rebuild native modules (node-pty)
 ```
 
+Theme docs: `docs/architecture/theme-system.md`
+
 ## Adding New Features
 
 **New action:** Add ID to `shared/types/actions.ts` → create definition in `src/services/actions/definitions/*.ts` → auto-registered via `useActionRegistry`.

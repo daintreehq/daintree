@@ -94,11 +94,11 @@ export function ConsoleDrawer({
 
   return (
     <div className="flex flex-col border-t border-overlay bg-surface">
-      <div className="flex items-stretch bg-black/20">
+      <div className="flex items-stretch bg-overlay-soft">
         <button
           type="button"
           onClick={toggleDrawer}
-          className="flex min-h-8 min-w-0 flex-1 items-center gap-2 border-r border-overlay/70 px-3 py-1.5 text-xs font-semibold text-canopy-text/80 transition-colors hover:bg-black/30 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-status-info"
+          className="flex min-h-8 min-w-0 flex-1 items-center gap-2 border-r border-overlay/70 px-3 py-1.5 text-xs font-semibold text-canopy-text/80 transition-colors hover:bg-overlay-medium focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-status-info"
           aria-expanded={isOpen}
           aria-controls={`console-drawer-${terminalId}`}
           aria-label={toggleLabel}
@@ -126,7 +126,7 @@ export function ConsoleDrawer({
                     disabled={hardRestartDisabled}
                     className={cn(
                       "flex min-h-8 shrink-0 items-center gap-2 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wide text-canopy-text/80 transition-colors",
-                      "hover:bg-black/30 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-status-info disabled:cursor-not-allowed disabled:opacity-40",
+                      "hover:bg-overlay-medium focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-status-info disabled:cursor-not-allowed disabled:opacity-40",
                       isRestarting && "text-server-starting"
                     )}
                     aria-label={restartTooltip}
@@ -148,7 +148,7 @@ export function ConsoleDrawer({
         className={cn("overflow-hidden transition-[height]", isOpen ? "h-[300px]" : "h-0")}
         aria-hidden={!isOpen}
       >
-        <div className="h-[300px] bg-black">
+        <div className="h-[300px] bg-surface-canvas">
           <XtermAdapter
             terminalId={terminalId}
             getRefreshTier={getRefreshTier}

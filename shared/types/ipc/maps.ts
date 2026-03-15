@@ -1319,17 +1319,7 @@ export interface IpcInvokeMap {
   };
   "app-theme:import": {
     args: [];
-    result:
-      | {
-          ok: true;
-          scheme: {
-            id: string;
-            name: string;
-            type: "dark" | "light";
-            colors: Record<string, string>;
-          };
-        }
-      | { ok: false; errors: string[] };
+    result: import("../appTheme.js").AppThemeImportResult;
   };
   "app-theme:set-color-vision-mode": {
     args: [mode: import("../appTheme.js").ColorVisionMode];

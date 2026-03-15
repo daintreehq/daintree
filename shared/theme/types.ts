@@ -97,3 +97,15 @@ export interface AppThemeConfig {
   customSchemes?: string;
   colorVisionMode?: ColorVisionMode;
 }
+
+export interface AppThemeValidationWarning {
+  message: string;
+}
+
+export type AppThemeImportResult =
+  | {
+      ok: true;
+      scheme: AppColorScheme;
+      warnings: AppThemeValidationWarning[];
+    }
+  | { ok: false; errors: string[] };

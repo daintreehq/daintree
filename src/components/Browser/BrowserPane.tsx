@@ -651,7 +651,10 @@ export function BrowserPane({
       onAddTab={onAddTab}
     >
       <div
-        className={cn("relative flex-1 min-h-0 flex flex-col bg-white", isConsoleOpen && "min-h-0")}
+        className={cn(
+          "relative flex-1 min-h-0 flex flex-col bg-surface-canvas",
+          isConsoleOpen && "min-h-0"
+        )}
       >
         {!hasValidUrl ? (
           <div className="absolute inset-0 flex flex-col items-center justify-center bg-canopy-bg text-canopy-text p-6">
@@ -667,7 +670,7 @@ export function BrowserPane({
                     key={example}
                     type="button"
                     onClick={() => handleNavigate(`http://${example}`)}
-                    className="px-3 py-1.5 text-xs font-mono text-canopy-text/50 bg-white/5 hover:bg-white/10 border border-white/10 rounded-md transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-canopy-accent/50"
+                    className="px-3 py-1.5 text-xs font-mono text-canopy-text/50 bg-overlay-soft hover:bg-overlay-medium border border-overlay rounded-md transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-canopy-accent/50"
                   >
                     {example}
                   </button>
@@ -683,7 +686,7 @@ export function BrowserPane({
             <button
               type="button"
               onClick={handleOpenExternal}
-              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md hover:bg-white/5 transition-colors group focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-canopy-accent/50"
+              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md hover:bg-overlay-soft transition-colors group focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-canopy-accent/50"
             >
               <ExternalLink className="h-3.5 w-3.5 text-canopy-text/50 group-hover:text-canopy-text/70 transition-colors" />
               <span className="text-xs text-canopy-text/50 group-hover:text-canopy-text/70 transition-colors">

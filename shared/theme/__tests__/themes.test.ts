@@ -1,6 +1,12 @@
 import { describe, it, expect } from "vitest";
-import { BUILT_IN_APP_SCHEMES, createCanopyTokens } from "../themes.js";
-import { APP_THEME_TOKEN_KEYS } from "../types.js";
+import {
+  BUILT_IN_APP_SCHEMES,
+  createCanopyTokens,
+  getBuiltInAppSchemeForType,
+  getAppThemeWarnings,
+  normalizeAppColorScheme,
+} from "../themes.js";
+import { APP_THEME_TOKEN_KEYS, type AppColorSchemeTokens } from "../types.js";
 
 const REQUIRED_TOKENS = {
   "surface-canvas": "#ffffff",
@@ -157,5 +163,48 @@ describe("built-in schemes — Daintree has explicit category colors", () => {
     for (const key of APP_THEME_TOKEN_KEYS) {
       expect(canopy.tokens).toHaveProperty(key, expect.any(String));
     }
+  });
+});
+
+describe("normalizeAppColorScheme", () => {
+  it("uses a light fallback base for partial light themes", () => {
+    const scheme = normalizeAppColorScheme({
+      id: "custom-light",
+      name: "Custom Light",
+      type: "light",
+      tokens: {
+        "surface-canvas": "#ffffff",
+      } as Partial<AppColorSchemeTokens> as AppColorSchemeTokens,
+    });
+
+    expect(scheme.type).toBe("light");
+    expect(scheme.tokens["surface-canvas"]).toBe("#ffffff");
+    expect(scheme.tokens["surface-panel"]).not.toBe(
+      BUILT_IN_APP_SCHEMES[0].tokens["surface-panel"]
+    );
+    expect(scheme.tokens["surface-panel"]).toBe(
+      getBuiltInAppSchemeForType("light").tokens["surface-panel"]
+    );
+  });
+});
+
+describe("getAppThemeWarnings", () => {
+  it("reports low-contrast critical token pairs", () => {
+    const scheme = normalizeAppColorScheme({
+      id: "low-contrast",
+      name: "Low Contrast",
+      type: "dark",
+      tokens: {
+        "surface-canvas": "#202020",
+        "surface-panel": "#202020",
+        "surface-panel-elevated": "#202020",
+        "surface-sidebar": "#202020",
+        "text-primary": "#444444",
+        "accent-primary": "#555555",
+        "accent-foreground": "#666666",
+      } as Partial<AppColorSchemeTokens> as AppColorSchemeTokens,
+    });
+
+    expect(getAppThemeWarnings(scheme)).not.toEqual([]);
   });
 });

@@ -926,18 +926,7 @@ export interface ElectronAPI {
     get(): Promise<AppThemeConfig>;
     setColorScheme(schemeId: string): Promise<void>;
     setCustomSchemes(schemesJson: string): Promise<void>;
-    importTheme(): Promise<
-      | {
-          ok: true;
-          scheme: {
-            id: string;
-            name: string;
-            type: "dark" | "light";
-            colors: Record<string, string>;
-          };
-        }
-      | { ok: false; errors: string[] }
-    >;
+    importTheme(): Promise<import("../appTheme.js").AppThemeImportResult>;
     setColorVisionMode(mode: import("../appTheme.js").ColorVisionMode): Promise<void>;
   };
   telemetry: {

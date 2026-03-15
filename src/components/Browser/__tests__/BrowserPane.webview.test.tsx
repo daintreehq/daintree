@@ -229,6 +229,13 @@ describe("BrowserPane webview lifecycle regression", () => {
     expect(webview.hasAttribute("allowpopups")).toBe(true);
   });
 
+  it("uses theme-backed browser chrome surfaces", () => {
+    const { container } = render(<BrowserPane {...baseProps} />);
+    const themedSurface = container.querySelector(".bg-surface-canvas");
+    expect(themedSurface).toBeTruthy();
+    expect(container.querySelector(".bg-white")).toBeNull();
+  });
+
   it("recovers ready/loading state from an already-loaded webview", async () => {
     const { container } = render(<BrowserPane {...baseProps} />);
     const webview = getWebviewElement(container);

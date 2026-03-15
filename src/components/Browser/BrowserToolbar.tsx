@@ -241,7 +241,7 @@ export function BrowserToolbar({
   const canZoomIn = zoomFactor < maxZoom - 0.001;
 
   const buttonClass =
-    "p-1.5 rounded hover:bg-white/10 disabled:opacity-30 disabled:cursor-not-allowed transition-colors";
+    "p-1.5 rounded hover:bg-overlay-medium disabled:opacity-30 disabled:cursor-not-allowed transition-colors";
 
   return (
     <div className="flex items-center gap-1.5 px-2 py-1.5 bg-surface border-b border-overlay">
@@ -332,7 +332,7 @@ export function BrowserToolbar({
                     disabled={!isNonDefaultZoom}
                     className={cn(
                       "px-1.5 py-1 rounded text-xs font-medium transition-colors",
-                      "hover:bg-white/10 disabled:opacity-40 disabled:cursor-not-allowed",
+                      "hover:bg-overlay-medium disabled:opacity-40 disabled:cursor-not-allowed",
                       isNonDefaultZoom ? "text-status-info" : "text-canopy-text/60"
                     )}
                     aria-label="Reset zoom"
@@ -398,7 +398,7 @@ export function BrowserToolbar({
               className={cn(
                 "w-full pl-7 pr-2 py-1 text-xs rounded",
                 "bg-canopy-bg border border-overlay",
-                "focus:outline-none focus:border-white/20",
+                "focus:outline-none focus:border-border-strong",
                 "text-canopy-text placeholder:text-canopy-text/40",
                 error && "border-status-error/50"
               )}
@@ -432,7 +432,7 @@ export function BrowserToolbar({
                 onMouseEnter={() => setHighlightedIndex(index)}
                 className={cn(
                   "w-full text-left px-2.5 py-1.5 flex flex-col gap-0.5 cursor-pointer",
-                  index === highlightedIndex ? "bg-white/10" : "hover:bg-white/5"
+                  index === highlightedIndex ? "bg-overlay-medium" : "hover:bg-overlay-soft"
                 )}
               >
                 {entry.title && (
@@ -487,7 +487,7 @@ export function BrowserToolbar({
               <button
                 type="button"
                 onClick={onToggleConsole}
-                className={cn(buttonClass, isConsoleOpen && "bg-white/15 text-canopy-text")}
+                className={cn(buttonClass, isConsoleOpen && "bg-overlay-emphasis text-canopy-text")}
                 aria-label="Toggle console"
                 aria-pressed={isConsoleOpen}
               >

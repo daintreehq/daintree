@@ -107,7 +107,7 @@ describe("ConsoleDrawer", () => {
       const { container } = render(
         <ConsoleDrawer terminalId={mockTerminalId} defaultOpen={false} />
       );
-      const innerContainer = container.querySelector(".h-\\[300px\\].bg-black");
+      const innerContainer = container.querySelector(".h-\\[300px\\].bg-surface-canvas");
       expect(innerContainer).toBeTruthy();
       expect(innerContainer?.className).toContain("h-[300px]");
     });

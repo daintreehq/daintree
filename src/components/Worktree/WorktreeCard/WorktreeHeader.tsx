@@ -106,7 +106,7 @@ const IssueBadge = memo(function IssueBadge({
                 "truncate flex-1 min-w-0",
                 isHeadline
                   ? isActive
-                    ? "text-white/95 font-medium"
+                    ? "text-text-primary font-medium"
                     : "text-canopy-text/60 font-medium"
                   : "text-canopy-text/90"
               )}
@@ -408,7 +408,7 @@ export function WorktreeHeader({
                   <DropdownMenuTrigger asChild>
                     <button
                       onClick={(e) => e.stopPropagation()}
-                      className="p-1 text-canopy-text/60 hover:text-white hover:bg-white/5 rounded transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent"
+                      className="p-1 text-canopy-text/60 hover:text-text-primary hover:bg-overlay-soft rounded transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent"
                       aria-label="More actions"
                       data-testid="worktree-actions-menu"
                     >
