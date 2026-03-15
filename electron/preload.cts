@@ -542,6 +542,15 @@ const CHANNELS = {
   TELEMETRY_MARK_PROMPT_SHOWN: "telemetry:mark-prompt-shown",
   TELEMETRY_TRACK: "telemetry:track",
 
+  // Privacy & Data channels
+  PRIVACY_GET_SETTINGS: "privacy:get-settings",
+  PRIVACY_SET_TELEMETRY_LEVEL: "privacy:set-telemetry-level",
+  PRIVACY_SET_LOG_RETENTION: "privacy:set-log-retention",
+  PRIVACY_OPEN_DATA_FOLDER: "privacy:open-data-folder",
+  PRIVACY_CLEAR_CACHE: "privacy:clear-cache",
+  PRIVACY_RESET_ALL_DATA: "privacy:reset-all-data",
+  PRIVACY_GET_DATA_FOLDER_PATH: "privacy:get-data-folder-path",
+
   // Voice Input channels
   VOICE_INPUT_GET_SETTINGS: "voice-input:get-settings",
   VOICE_INPUT_SET_SETTINGS: "voice-input:set-settings",
@@ -1893,6 +1902,18 @@ const api: ElectronAPI = {
     markPromptShown: () => _typedInvoke(CHANNELS.TELEMETRY_MARK_PROMPT_SHOWN),
     track: (event: string, properties: Record<string, unknown>) =>
       _typedInvoke(CHANNELS.TELEMETRY_TRACK, event, properties),
+  },
+
+  privacy: {
+    getSettings: () => _typedInvoke(CHANNELS.PRIVACY_GET_SETTINGS),
+    setTelemetryLevel: (level: "off" | "errors" | "full") =>
+      _typedInvoke(CHANNELS.PRIVACY_SET_TELEMETRY_LEVEL, level),
+    setLogRetention: (days: 7 | 30 | 90 | 0) =>
+      _typedInvoke(CHANNELS.PRIVACY_SET_LOG_RETENTION, days),
+    openDataFolder: () => _typedInvoke(CHANNELS.PRIVACY_OPEN_DATA_FOLDER),
+    clearCache: () => _typedInvoke(CHANNELS.PRIVACY_CLEAR_CACHE),
+    resetAllData: () => _typedInvoke(CHANNELS.PRIVACY_RESET_ALL_DATA),
+    getDataFolderPath: () => _typedInvoke(CHANNELS.PRIVACY_GET_DATA_FOLDER_PATH),
   },
 
   onboarding: {

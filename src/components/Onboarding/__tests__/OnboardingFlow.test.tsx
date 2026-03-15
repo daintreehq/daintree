@@ -34,11 +34,16 @@ const telemetryMock = {
   track: trackMock,
 };
 
+const privacyMock = {
+  setTelemetryLevel: vi.fn(() => Promise.resolve()),
+};
+
 vi.stubGlobal("window", {
   ...globalThis.window,
   electron: {
     onboarding: onboardingMock,
     telemetry: telemetryMock,
+    privacy: privacyMock,
   },
   addEventListener: vi.fn(),
   removeEventListener: vi.fn(),

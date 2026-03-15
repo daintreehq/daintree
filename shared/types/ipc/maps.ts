@@ -1352,6 +1352,40 @@ export interface IpcInvokeMap {
     result: void;
   };
 
+  // Privacy & Data
+  "privacy:get-settings": {
+    args: [];
+    result: {
+      telemetryLevel: "off" | "errors" | "full";
+      logRetentionDays: 0 | 7 | 30 | 90;
+      dataFolderPath: string;
+    };
+  };
+  "privacy:set-telemetry-level": {
+    args: [level: "off" | "errors" | "full"];
+    result: void;
+  };
+  "privacy:set-log-retention": {
+    args: [days: 0 | 7 | 30 | 90];
+    result: void;
+  };
+  "privacy:open-data-folder": {
+    args: [];
+    result: void;
+  };
+  "privacy:clear-cache": {
+    args: [];
+    result: void;
+  };
+  "privacy:reset-all-data": {
+    args: [];
+    result: void;
+  };
+  "privacy:get-data-folder-path": {
+    args: [];
+    result: string;
+  };
+
   // Onboarding
   "onboarding:get": {
     args: [];

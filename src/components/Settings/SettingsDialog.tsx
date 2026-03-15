@@ -36,6 +36,7 @@ import {
   Search,
   ChevronRight,
   KeyRound,
+  Shield,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useVerticalScrollShadows } from "@/hooks/useVerticalScrollShadows";
@@ -57,6 +58,7 @@ import { ImageViewerTab } from "./ImageViewerTab";
 import { VoiceInputSettingsTab } from "./VoiceInputSettingsTab";
 import { McpServerSettingsTab } from "./McpServerSettingsTab";
 import { EnvironmentSettingsTab } from "./EnvironmentSettingsTab";
+import { PrivacyDataTab } from "./PrivacyDataTab";
 import { SETTINGS_SEARCH_INDEX } from "./settingsSearchIndex";
 import {
   filterSettings,
@@ -96,6 +98,7 @@ export type SettingsTab =
   | "voice"
   | "mcp"
   | "environment"
+  | "privacy"
   | "troubleshooting";
 
 export function SettingsDialog({
@@ -355,6 +358,7 @@ export function SettingsDialog({
     voice: "Voice Input",
     mcp: "MCP Server",
     environment: "Environment Variables",
+    privacy: "Privacy & Data",
     troubleshooting: "Troubleshooting",
   };
 
@@ -374,6 +378,7 @@ export function SettingsDialog({
     voice: <Mic className="w-5 h-5 text-canopy-text/60" />,
     mcp: <Plug className="w-5 h-5 text-canopy-text/60" />,
     environment: <KeyRound className="w-5 h-5 text-canopy-text/60" />,
+    privacy: <Shield className="w-5 h-5 text-canopy-text/60" />,
     troubleshooting: <LifeBuoy className="w-5 h-5 text-canopy-text/60" />,
   };
 
@@ -484,6 +489,15 @@ export function SettingsDialog({
                   activeTab={activeTab}
                   isSearching={isSearching}
                   matchCount={matchCounts.notifications}
+                  onSelect={handleNavSelect}
+                />
+                <NavItem
+                  tab="privacy"
+                  icon={<Shield className="w-4 h-4" />}
+                  label="Privacy & Data"
+                  activeTab={activeTab}
+                  isSearching={isSearching}
+                  matchCount={matchCounts.privacy}
                   onSelect={handleNavSelect}
                 />
               </NavGroup>
@@ -819,6 +833,19 @@ export function SettingsDialog({
                   className={activeTab === "environment" ? "" : "hidden"}
                 >
                   <EnvironmentSettingsTab />
+                </div>
+
+                <div
+                  role="tabpanel"
+                  id="settings-panel-privacy"
+                  aria-labelledby="settings-tab-privacy"
+                  tabIndex={0}
+                  className={activeTab === "privacy" ? "" : "hidden"}
+                >
+                  <PrivacyDataTab
+                    activeSubtab={activeSubtabs["privacy"] ?? null}
+                    onSubtabChange={(id) => setActiveSubtabs((prev) => ({ ...prev, privacy: id }))}
+                  />
                 </div>
 
                 <div

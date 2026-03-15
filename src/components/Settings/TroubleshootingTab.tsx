@@ -5,7 +5,6 @@ import {
   Trash2,
   Bug,
   AlertTriangle,
-  Shield,
   ShieldCheck,
   CircleCheck,
   CircleX,
@@ -128,16 +127,8 @@ export function TroubleshootingTab() {
   const [focusEventsTab, setFocusEventsTab] = useState(false);
   const [verboseLogging, setVerboseLogging] = useState(false);
   const [verboseLoggingPending, setVerboseLoggingPending] = useState(false);
-  const [telemetryEnabled, setTelemetryEnabled] = useState(false);
-  const [telemetryPending, setTelemetryPending] = useState(false);
 
   useEffect(() => {
-    if (window.electron?.telemetry) {
-      window.electron.telemetry.get().then(({ enabled }) => {
-        setTelemetryEnabled(enabled);
-      });
-    }
-
     appClient.getState().then((appState) => {
       if (appState?.developerMode) {
         setDeveloperMode(appState.developerMode.enabled);
@@ -157,21 +148,6 @@ export function TroubleshootingTab() {
         console.error("Failed to get verbose logging state:", error);
       });
   }, []);
-
-  const handleToggleTelemetry = useCallback(async () => {
-    if (telemetryPending || !window.electron?.telemetry) return;
-    const newState = !telemetryEnabled;
-    setTelemetryPending(true);
-    setTelemetryEnabled(newState);
-    try {
-      await window.electron.telemetry.setEnabled(newState);
-    } catch (err) {
-      console.error("Failed to set telemetry:", err);
-      setTelemetryEnabled(!newState);
-    } finally {
-      setTelemetryPending(false);
-    }
-  }, [telemetryEnabled, telemetryPending]);
 
   const saveDeveloperModeSettings = useCallback(
     async (settings: NonNullable<AppState["developerMode"]>) => {
@@ -327,22 +303,6 @@ export function TroubleshootingTab() {
             Clear Logs
           </Button>
         </div>
-      </SettingsSection>
-
-      <SettingsSection
-        icon={Shield}
-        title="Crash Reporting"
-        description="Automatically send crash reports and error details to help improve Canopy. No personal data, file contents, or credentials are collected."
-      >
-        <SettingsSwitchCard
-          icon={Shield}
-          title="Enable Crash Reporting"
-          subtitle="Collects: error messages, stack traces, app version, OS. Changes apply on next app restart."
-          isEnabled={telemetryEnabled}
-          onChange={handleToggleTelemetry}
-          ariaLabel="Enable crash reporting"
-          disabled={telemetryPending}
-        />
       </SettingsSection>
 
       <SettingsSection

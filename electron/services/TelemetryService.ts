@@ -104,9 +104,49 @@ export function isTelemetryEnabled(): boolean {
   return store.get("telemetry")?.enabled ?? false;
 }
 
+export type TelemetryLevel = "off" | "errors" | "full";
+
+export function getTelemetryLevel(): TelemetryLevel {
+  const privacy = store.get("privacy");
+  if (privacy?.telemetryLevel) return privacy.telemetryLevel;
+
+  // Migrate from legacy boolean
+  const enabled = store.get("telemetry")?.enabled ?? false;
+  const level: TelemetryLevel = enabled ? "errors" : "off";
+  store.set("privacy", { ...privacy, telemetryLevel: level });
+  return level;
+}
+
+export async function setTelemetryLevel(level: TelemetryLevel): Promise<void> {
+  const privacy = store.get("privacy") ?? {
+    telemetryLevel: "off" as const,
+    logRetentionDays: 30 as const,
+  };
+  store.set("privacy", { ...privacy, telemetryLevel: level });
+
+  // Keep legacy telemetry.enabled in sync
+  const enabled = level !== "off";
+  const telemetry = store.get("telemetry") ?? { enabled: false, hasSeenPrompt: false };
+  store.set("telemetry", { ...telemetry, enabled });
+
+  if (enabled) {
+    await initializeTelemetry();
+    flushPreConsentBuffer();
+  } else {
+    preConsentBuffer.length = 0;
+  }
+}
+
 export async function setTelemetryEnabled(enabled: boolean): Promise<void> {
   const current = store.get("telemetry") ?? { enabled: false, hasSeenPrompt: false };
   store.set("telemetry", { ...current, enabled });
+
+  // Keep privacy.telemetryLevel in sync
+  const privacy = store.get("privacy") ?? {
+    telemetryLevel: "off" as const,
+    logRetentionDays: 30 as const,
+  };
+  store.set("privacy", { ...privacy, telemetryLevel: enabled ? "errors" : "off" });
 
   if (enabled) {
     await initializeTelemetry();
@@ -131,10 +171,11 @@ function flushPreConsentBuffer(): void {
 
 export function trackEvent(event: string, properties: Record<string, unknown> = {}): void {
   const telemetry = store.get("telemetry");
-  const enabled = telemetry?.enabled ?? false;
   const hasSeenPrompt = telemetry?.hasSeenPrompt ?? false;
+  const level = getTelemetryLevel();
 
-  if (enabled && captureEventFn) {
+  // Only send analytics events at "full" level; "errors" only permits crash reports via Sentry
+  if (level === "full" && captureEventFn) {
     captureEventFn({
       message: event,
       level: "info" as unknown as undefined,

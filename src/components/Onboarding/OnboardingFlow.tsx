@@ -175,7 +175,7 @@ export function OnboardingFlow({
   // Telemetry step handlers
   const handleTelemetryDismiss = useCallback(
     async (enabled: boolean) => {
-      await window.electron.telemetry.setEnabled(enabled);
+      await window.electron.privacy.setTelemetryLevel(enabled ? "errors" : "off");
       await window.electron.telemetry.markPromptShown();
       await advanceStep("telemetry");
     },

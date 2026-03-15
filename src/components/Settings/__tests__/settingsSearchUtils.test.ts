@@ -241,7 +241,7 @@ describe("subtab-aware search", () => {
 });
 
 describe("SETTINGS_SEARCH_INDEX", () => {
-  it("has entries covering all 16 settings tabs", () => {
+  it("has entries covering all 17 settings tabs", () => {
     const tabs = new Set(SETTINGS_SEARCH_INDEX.map((e) => e.tab));
     const expectedTabs = [
       "general",
@@ -259,6 +259,7 @@ describe("SETTINGS_SEARCH_INDEX", () => {
       "voice",
       "mcp",
       "environment",
+      "privacy",
       "troubleshooting",
     ];
     for (const tab of expectedTabs) {
@@ -304,6 +305,7 @@ describe("SETTINGS_SEARCH_INDEX", () => {
       voice: "Voice Input",
       mcp: "MCP Server",
       environment: "Environment Variables",
+      privacy: "Privacy & Data",
       troubleshooting: "Troubleshooting",
     };
     for (const entry of SETTINGS_SEARCH_INDEX) {
@@ -331,6 +333,7 @@ describe("SETTINGS_SEARCH_INDEX", () => {
       voice: "Voice Input",
       mcp: "MCP Server",
       environment: "Environment Variables",
+      privacy: "Privacy & Data",
       troubleshooting: "Troubleshooting",
     };
     for (const tabKey of Object.keys(tabTitles)) {

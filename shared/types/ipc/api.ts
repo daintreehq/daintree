@@ -946,6 +946,19 @@ export interface ElectronAPI {
     markPromptShown(): Promise<void>;
     track(event: string, properties: Record<string, unknown>): Promise<void>;
   };
+  privacy: {
+    getSettings(): Promise<{
+      telemetryLevel: "off" | "errors" | "full";
+      logRetentionDays: 7 | 30 | 90 | 0;
+      dataFolderPath: string;
+    }>;
+    setTelemetryLevel(level: "off" | "errors" | "full"): Promise<void>;
+    setLogRetention(days: 7 | 30 | 90 | 0): Promise<void>;
+    openDataFolder(): Promise<void>;
+    clearCache(): Promise<void>;
+    resetAllData(): Promise<void>;
+    getDataFolderPath(): Promise<string>;
+  };
   onboarding: {
     get(): Promise<OnboardingState>;
     migrate(payload: {
