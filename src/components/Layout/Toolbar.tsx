@@ -45,6 +45,7 @@ import {
 import type { ToolbarButtonId } from "@/../../shared/types/domain";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useWorktreeDataStore } from "@/store/worktreeDataStore";
+import { useGitHubFilterStore } from "@/store/githubFilterStore";
 import { useRepositoryStats } from "@/hooks/useRepositoryStats";
 import { useNativeContextMenu } from "@/hooks";
 import type { CliAvailability, AgentSettings } from "@shared/types";
@@ -131,6 +132,8 @@ export function Toolbar({
   const [issuesOpen, setIssuesOpen] = useState(false);
   const [prsOpen, setPrsOpen] = useState(false);
   const [commitsOpen, setCommitsOpen] = useState(false);
+  const setIssueSearchQuery = useGitHubFilterStore((s) => s.setIssueSearchQuery);
+  const setPrSearchQuery = useGitHubFilterStore((s) => s.setPrSearchQuery);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [treeCopied, setTreeCopied] = useState(false);
   const [isCopyingTree, setIsCopyingTree] = useState(false);
@@ -599,12 +602,12 @@ export function Toolbar({
                       data-toolbar-item=""
                       onClick={() => {
                         setPrsOpen(false);
+                        setPrSearchQuery("");
                         setCommitsOpen(false);
                         const willOpen = !issuesOpen;
                         setIssuesOpen(willOpen);
-                        if (willOpen) {
-                          refreshStats({ force: true });
-                        }
+                        if (!willOpen) setIssueSearchQuery("");
+                        if (willOpen) refreshStats({ force: true });
                       }}
                       className={cn(
                         "text-canopy-text hover:bg-overlay-medium hover:text-white h-full px-3 gap-2 rounded-none rounded-l-[var(--radius-md)]",
@@ -631,7 +634,10 @@ export function Toolbar({
                 open={issuesOpen}
                 onOpenChange={(open) => {
                   setIssuesOpen(open);
-                  if (!open) issuesButtonRef.current?.focus();
+                  if (!open) {
+                    setIssueSearchQuery("");
+                    issuesButtonRef.current?.focus();
+                  }
                 }}
                 anchorRef={issuesButtonRef}
                 className="p-0 w-[450px]"
@@ -641,6 +647,7 @@ export function Toolbar({
                   projectPath={currentProject.path}
                   onClose={() => {
                     setIssuesOpen(false);
+                    setIssueSearchQuery("");
                     issuesButtonRef.current?.focus();
                   }}
                   initialCount={stats?.issueCount}
@@ -655,12 +662,12 @@ export function Toolbar({
                       data-toolbar-item=""
                       onClick={() => {
                         setIssuesOpen(false);
+                        setIssueSearchQuery("");
                         setCommitsOpen(false);
                         const willOpen = !prsOpen;
                         setPrsOpen(willOpen);
-                        if (willOpen) {
-                          refreshStats({ force: true });
-                        }
+                        if (!willOpen) setPrSearchQuery("");
+                        if (willOpen) refreshStats({ force: true });
                       }}
                       className={cn(
                         "text-canopy-text hover:bg-overlay-medium hover:text-white h-full px-3 gap-2 rounded-none",
@@ -687,7 +694,10 @@ export function Toolbar({
                 open={prsOpen}
                 onOpenChange={(open) => {
                   setPrsOpen(open);
-                  if (!open) prsButtonRef.current?.focus();
+                  if (!open) {
+                    setPrSearchQuery("");
+                    prsButtonRef.current?.focus();
+                  }
                 }}
                 anchorRef={prsButtonRef}
                 className="p-0 w-[450px]"
@@ -697,6 +707,7 @@ export function Toolbar({
                   projectPath={currentProject.path}
                   onClose={() => {
                     setPrsOpen(false);
+                    setPrSearchQuery("");
                     prsButtonRef.current?.focus();
                   }}
                   initialCount={stats?.prCount}
@@ -711,7 +722,9 @@ export function Toolbar({
                       data-toolbar-item=""
                       onClick={() => {
                         setIssuesOpen(false);
+                        setIssueSearchQuery("");
                         setPrsOpen(false);
+                        setPrSearchQuery("");
                         setCommitsOpen(!commitsOpen);
                       }}
                       className={cn(

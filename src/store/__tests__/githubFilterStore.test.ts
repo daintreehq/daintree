@@ -67,13 +67,22 @@ describe("githubFilterStore", () => {
     expect(state.prSearchQuery).toBe("pr query");
   });
 
-  it("clearing a search query does not affect filters", () => {
+  it("clearing issue search query does not affect issueFilter", () => {
     useGitHubFilterStore.getState().setIssueFilter("closed");
     useGitHubFilterStore.getState().setIssueSearchQuery("some query");
     useGitHubFilterStore.getState().setIssueSearchQuery("");
     const state = useGitHubFilterStore.getState();
     expect(state.issueSearchQuery).toBe("");
     expect(state.issueFilter).toBe("closed");
+  });
+
+  it("clearing PR search query does not affect prFilter", () => {
+    useGitHubFilterStore.getState().setPrFilter("merged");
+    useGitHubFilterStore.getState().setPrSearchQuery("some query");
+    useGitHubFilterStore.getState().setPrSearchQuery("");
+    const state = useGitHubFilterStore.getState();
+    expect(state.prSearchQuery).toBe("");
+    expect(state.prFilter).toBe("merged");
   });
 
   it("resetGitHubFilterStore resets filters and search queries", () => {
