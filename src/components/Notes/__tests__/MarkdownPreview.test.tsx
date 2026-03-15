@@ -32,6 +32,14 @@ describe("MarkdownPreview", () => {
     expect(screen.getByText(/console/)).toBeTruthy();
   });
 
+  it("highlights fenced code blocks with hljs class tokens", () => {
+    const { container } = render(<MarkdownPreview content={"```javascript\nconst x = 1;\n```"} />);
+    const codeEl = container.querySelector("code.hljs");
+    expect(codeEl).toBeTruthy();
+    const hasTokenClass = codeEl?.querySelector("[class*='hljs-']") !== null;
+    expect(hasTokenClass).toBe(true);
+  });
+
   it("opens external http links via electron", () => {
     render(<MarkdownPreview content="[click](https://example.com)" />);
     const link = screen.getByText("click");
