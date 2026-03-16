@@ -294,7 +294,7 @@ beforeEach(() => {
     isInitialized: false,
   });
 
-  useScrollbackStore.setState({ scrollbackLines: 2500 });
+  useScrollbackStore.setState({ scrollbackLines: 1000 });
   usePerformanceModeStore.setState({ performanceMode: false });
   useTerminalFontStore.setState({ fontSize: 14, fontFamily: "JetBrains Mono" });
   useTerminalInputStore.setState({
@@ -568,7 +568,7 @@ describe("preferences action hardening", () => {
       successArgs: { scrollbackLines: 2000 },
       failureArgs: { scrollbackLines: 9000 },
       read: () => useScrollbackStore.getState().scrollbackLines,
-      initial: 2500,
+      initial: 1000,
       expected: 2000,
       clientMock: mocks.terminalConfigClient.setScrollback,
     },

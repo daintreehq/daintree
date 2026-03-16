@@ -138,7 +138,7 @@ export const WRITE_MAX_CHUNK_SIZE = 50;
 export const WRITE_INTERVAL_MS = 5;
 
 // Scrollback configuration
-// Headless PTY scrollback is intentionally lower than the renderer default (2500)
+// Headless PTY scrollback is intentionally equal to the renderer default (1000)
 // because headless terminals only need enough buffer for agent state detection,
 // not full user-visible scroll history.
 export const DEFAULT_SCROLLBACK = 1000;

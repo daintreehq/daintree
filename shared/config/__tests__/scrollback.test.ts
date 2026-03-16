@@ -7,8 +7,8 @@ import {
 } from "../scrollback.js";
 
 describe("scrollback constants", () => {
-  it("SCROLLBACK_DEFAULT is 2500", () => {
-    expect(SCROLLBACK_DEFAULT).toBe(2500);
+  it("SCROLLBACK_DEFAULT is 1000", () => {
+    expect(SCROLLBACK_DEFAULT).toBe(1000);
   });
 
   it("SCROLLBACK_MIN is 100", () => {

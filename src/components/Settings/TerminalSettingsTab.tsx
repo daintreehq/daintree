@@ -61,10 +61,10 @@ const STRATEGIES: Array<{
 ];
 
 const SCROLLBACK_OPTIONS = [
-  { value: 1000, label: "1,000 lines", description: "Low memory" },
-  { value: 2500, label: "2,500 lines", description: "Balanced" },
-  { value: 5000, label: "5,000 lines", description: "Extended" },
-  { value: 10000, label: "10,000 lines", description: "Full history" },
+  { value: 500, label: "500 lines", description: "Minimal" },
+  { value: 1000, label: "1,000 lines", description: "Default" },
+  { value: 2500, label: "2,500 lines", description: "Extended" },
+  { value: 5000, label: "5,000 lines", description: "Full history" },
 ] as const;
 
 const TYPICAL_TERMINAL_COUNTS: Partial<Record<TerminalType, number>> = {
@@ -531,15 +531,16 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
               className="text-xs text-canopy-text/50 space-y-1.5 bg-canopy-bg/50 rounded-[var(--radius-md)] p-3"
             >
               <div className="font-medium text-canopy-text/70 mb-2">
-                Typical session (6 agents, 6 shells, 2 dev servers):
+                Typical session (8 agents, 8 shells):
               </div>
               <div className="flex justify-between">
-                <span>Agent terminals (6)</span>
+                <span>Agent terminals (8)</span>
                 <span className="font-mono text-canopy-text/70">
                   {formatBytes(
                     (memoryEstimate.perType.claude ?? 0) +
                       (memoryEstimate.perType.gemini ?? 0) +
-                      (memoryEstimate.perType.codex ?? 0)
+                      (memoryEstimate.perType.codex ?? 0) +
+                      (memoryEstimate.perType.opencode ?? 0)
                   )}
                 </span>
               </div>
