@@ -5,23 +5,34 @@ interface PullRequestServiceLike {
   start(): Promise<void>;
   reset(): void;
   refresh(): void;
-  getStatus(): { isPolling: boolean; candidateCount: number; resolvedCount: number; isEnabled: boolean };
+  getStatus(): {
+    isPolling: boolean;
+    candidateCount: number;
+    resolvedCount: number;
+    isEnabled: boolean;
+  };
 }
 
 export interface PRIntegrationCallbacks {
-  onPRDetected(worktreeId: string, data: {
-    prNumber: number;
-    prUrl: string;
-    prState: "open" | "closed" | "merged";
-    prTitle?: string;
-    issueNumber?: number;
-    issueTitle?: string;
-  }): void;
+  onPRDetected(
+    worktreeId: string,
+    data: {
+      prNumber: number;
+      prUrl: string;
+      prState: "open" | "closed" | "merged";
+      prTitle?: string;
+      issueNumber?: number;
+      issueTitle?: string;
+    }
+  ): void;
   onPRCleared(worktreeId: string): void;
-  onIssueDetected(worktreeId: string, data: {
-    issueNumber: number;
-    issueTitle: string;
-  }): void;
+  onIssueDetected(
+    worktreeId: string,
+    data: {
+      issueNumber: number;
+      issueTitle: string;
+    }
+  ): void;
   onIssueNotFound(worktreeId: string, issueNumber: number): void;
 }
 
@@ -32,7 +43,7 @@ export class PRIntegrationService {
   constructor(
     private readonly prService: PullRequestServiceLike,
     private readonly eventBus: TypedEventBus,
-    private readonly callbacks: PRIntegrationCallbacks,
+    private readonly callbacks: PRIntegrationCallbacks
   ) {}
 
   isInitializedFor(path: string): boolean {
@@ -91,12 +102,15 @@ export class PRIntegrationService {
     // by sys:worktree:update, but PullRequestService only reads these fields.
     for (const candidate of getMonitorCandidates()) {
       if (candidate.branch && candidate.branch !== "main" && candidate.branch !== "master") {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        this.eventBus.emit("sys:worktree:update", {
-          worktreeId: candidate.worktreeId,
-          branch: candidate.branch,
-          issueNumber: candidate.issueNumber,
-        } as any);
+        this.eventBus.emit(
+          "sys:worktree:update",
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          {
+            worktreeId: candidate.worktreeId,
+            branch: candidate.branch,
+            issueNumber: candidate.issueNumber,
+          } as any
+        );
       }
     }
 
