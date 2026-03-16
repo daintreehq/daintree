@@ -4,11 +4,13 @@ import {
   ANSI_COLOR_KEYS,
   DEFAULT_SCHEME_ID,
   getSchemeById,
+  APP_THEME_TERMINAL_SCHEME_MAP,
+  getMappedTerminalScheme,
 } from "../terminalColorSchemes";
 
 describe("terminalColorSchemes", () => {
-  it("has exactly 8 built-in schemes", () => {
-    expect(BUILT_IN_SCHEMES).toHaveLength(8);
+  it("has exactly 18 built-in schemes", () => {
+    expect(BUILT_IN_SCHEMES).toHaveLength(18);
   });
 
   it("all schemes have unique IDs", () => {
@@ -32,10 +34,9 @@ describe("terminalColorSchemes", () => {
     expect(getSchemeById(DEFAULT_SCHEME_ID)!.name).toBe("Match App Theme");
   });
 
-  it("solarized-light is the only light scheme", () => {
+  it("has 6 light schemes", () => {
     const lightSchemes = BUILT_IN_SCHEMES.filter((s) => s.type === "light");
-    expect(lightSchemes).toHaveLength(1);
-    expect(lightSchemes[0].id).toBe("solarized-light");
+    expect(lightSchemes).toHaveLength(6);
   });
 
   it("getSchemeById returns undefined for unknown ID", () => {
@@ -48,5 +49,40 @@ describe("terminalColorSchemes", () => {
     expect(scheme.colors.selectionBackground).toBe("#1a2c22");
     expect(scheme.colors.green).toBe("#10b981");
     expect(scheme.colors.brightGreen).toBe("#34d399");
+  });
+
+  it("APP_THEME_TERMINAL_SCHEME_MAP covers all 12 app themes", () => {
+    const expectedThemes = [
+      "daintree",
+      "fiordland",
+      "highlands",
+      "arashiyama",
+      "galapagos",
+      "namib",
+      "redwoods",
+      "bondi",
+      "svalbard",
+      "atacama",
+      "serengeti",
+      "hokkaido",
+    ];
+    expect(Object.keys(APP_THEME_TERMINAL_SCHEME_MAP).sort()).toEqual(expectedThemes.sort());
+  });
+
+  it("every mapped terminal scheme resolves to an existing scheme", () => {
+    for (const [appTheme, terminalSchemeId] of Object.entries(APP_THEME_TERMINAL_SCHEME_MAP)) {
+      const scheme = getSchemeById(terminalSchemeId);
+      expect(scheme, `${appTheme} → ${terminalSchemeId} not found`).toBeDefined();
+    }
+  });
+
+  it("getMappedTerminalScheme returns scheme for known app theme", () => {
+    const scheme = getMappedTerminalScheme("fiordland");
+    expect(scheme).toBeDefined();
+    expect(scheme!.id).toBe("tokyo-night");
+  });
+
+  it("getMappedTerminalScheme returns undefined for unknown app theme", () => {
+    expect(getMappedTerminalScheme("nonexistent")).toBeUndefined();
   });
 });

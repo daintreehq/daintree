@@ -4,8 +4,10 @@ import { getTerminalScrollbarDefaults } from "@shared/theme";
 import {
   BUILT_IN_SCHEMES,
   DEFAULT_SCHEME_ID,
+  getMappedTerminalScheme,
   type TerminalColorScheme,
 } from "@/config/terminalColorSchemes";
+import { useAppThemeStore } from "@/store/appThemeStore";
 import { getTerminalThemeFromCSS } from "@/utils/terminalTheme";
 
 interface TerminalColorSchemeState {
@@ -22,6 +24,9 @@ export function selectWrapperBackground(state: TerminalColorSchemeState): string
   const scheme = allSchemes.find((s) => s.id === state.selectedSchemeId);
 
   if (!scheme || scheme.id === DEFAULT_SCHEME_ID) {
+    const appThemeId = useAppThemeStore.getState().selectedSchemeId;
+    const mapped = getMappedTerminalScheme(appThemeId);
+    if (mapped?.colors.background) return mapped.colors.background;
     return "var(--theme-surface-canvas)";
   }
 
@@ -35,7 +40,16 @@ function computeEffectiveTheme(
   const allSchemes = [...BUILT_IN_SCHEMES, ...customSchemes];
   const scheme = allSchemes.find((s) => s.id === selectedSchemeId);
 
-  if (!scheme || scheme.id === DEFAULT_SCHEME_ID) {
+  if (!scheme) {
+    return getTerminalThemeFromCSS();
+  }
+
+  if (scheme.id === DEFAULT_SCHEME_ID) {
+    const appThemeId = useAppThemeStore.getState().selectedSchemeId;
+    const mapped = getMappedTerminalScheme(appThemeId);
+    if (mapped) {
+      return { ...mapped.colors, ...getTerminalScrollbarDefaults(mapped.type) };
+    }
     return getTerminalThemeFromCSS();
   }
 
