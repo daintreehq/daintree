@@ -14,8 +14,7 @@ let _isLinux: boolean | undefined;
 
 export function isLinux(): boolean {
   if (_isLinux === undefined) {
-    _isLinux =
-      typeof navigator !== "undefined" && navigator.userAgent.includes("Linux");
+    _isLinux = typeof navigator !== "undefined" && navigator.userAgent.includes("Linux");
   }
   return _isLinux;
 }

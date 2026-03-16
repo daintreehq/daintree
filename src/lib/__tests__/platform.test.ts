@@ -54,19 +54,13 @@ describe("isLinux", () => {
 
 describe("isMac", () => {
   it("returns true for a macOS platform", async () => {
-    stubNavigator(
-      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
-      "MacIntel"
-    );
+    stubNavigator("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36", "MacIntel");
     const { isMac } = await import("../platform");
     expect(isMac()).toBe(true);
   });
 
   it("returns false for a Linux platform", async () => {
-    stubNavigator(
-      "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36",
-      "Linux x86_64"
-    );
+    stubNavigator("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36", "Linux x86_64");
     const { isMac } = await import("../platform");
     expect(isMac()).toBe(false);
   });
