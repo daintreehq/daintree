@@ -137,6 +137,32 @@ describe("ErrorFallback", () => {
     });
   });
 
+  describe("icons", () => {
+    it("renders an SVG icon instead of emoji for each variant", () => {
+      vi.stubEnv("DEV", false);
+      for (const variant of ["fullscreen", "section", "component"] as const) {
+        const { container, unmount } = render(<ErrorFallback {...baseProps} variant={variant} />);
+        expect(container.querySelector("svg")).toBeTruthy();
+        expect(container.textContent).not.toContain("\u26A0\uFE0F");
+        unmount();
+      }
+    });
+
+    it("applies correct size class per variant", () => {
+      vi.stubEnv("DEV", false);
+      const expected = { fullscreen: "size-16", section: "size-9", component: "size-6" } as const;
+      for (const [variant, sizeClass] of Object.entries(expected) as [
+        keyof typeof expected,
+        string,
+      ][]) {
+        const { container, unmount } = render(<ErrorFallback {...baseProps} variant={variant} />);
+        const svg = container.querySelector("svg");
+        expect(svg?.getAttribute("class")).toContain(sizeClass);
+        unmount();
+      }
+    });
+  });
+
   describe("incident ID edge cases", () => {
     it("does not render Error ID when incidentId is null", () => {
       vi.stubEnv("DEV", false);
