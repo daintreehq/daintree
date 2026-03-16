@@ -370,6 +370,100 @@ describe("built-in schemes — Fiordland", () => {
   });
 });
 
+describe("built-in schemes — Galápagos", () => {
+  const galapagos = BUILT_IN_APP_SCHEMES.find((s) => s.id === "galapagos")!;
+
+  it("exists with correct metadata", () => {
+    expect(galapagos).toBeDefined();
+    expect(galapagos.name).toBe("Galápagos");
+    expect(galapagos.type).toBe("dark");
+    expect(galapagos.builtin).toBe(true);
+  });
+
+  it("produces all required token keys", () => {
+    for (const key of APP_THEME_TOKEN_KEYS) {
+      expect(galapagos.tokens).toHaveProperty(key, expect.any(String));
+    }
+  });
+
+  it("has redesigned terminal normal colors", () => {
+    expect(galapagos.tokens["terminal-red"]).toBe("#D96C6C");
+    expect(galapagos.tokens["terminal-green"]).toBe("#62A862");
+    expect(galapagos.tokens["terminal-yellow"]).toBe("#C9A040");
+    expect(galapagos.tokens["terminal-blue"]).toBe("#5693BF");
+    expect(galapagos.tokens["terminal-magenta"]).toBe("#B882B0");
+    expect(galapagos.tokens["terminal-cyan"]).toBe("#4DB8C2");
+  });
+
+  it("has redesigned syntax tokens", () => {
+    expect(galapagos.tokens["syntax-comment"]).toBe("#617B7F");
+    expect(galapagos.tokens["syntax-punctuation"]).toBe("#A0AFBA");
+    expect(galapagos.tokens["syntax-keyword"]).toBe("#BB9AF7");
+    expect(galapagos.tokens["syntax-operator"]).toBe("#6CB8CC");
+    expect(galapagos.tokens["syntax-chip"]).toBe("#D4A853");
+    expect(galapagos.tokens["syntax-number"]).toBe("#D4895A");
+  });
+
+  it.each([
+    "terminal-red",
+    "terminal-green",
+    "terminal-yellow",
+    "terminal-blue",
+    "terminal-magenta",
+    "terminal-cyan",
+  ] as const)("%s meets WCAG 3:1 contrast against canvas", (token) => {
+    const fg = galapagos.tokens[token];
+    const bg = galapagos.tokens["surface-canvas"];
+    const ratio = wcagContrastRatio(fg, bg);
+    expect(
+      ratio,
+      `${token} "${fg}" on canvas "${bg}" = ${ratio.toFixed(2)}:1, needs ≥3:1`
+    ).toBeGreaterThanOrEqual(3);
+  });
+
+  it("syntax-punctuation has ≥20% HSL lightness gap from syntax-comment", () => {
+    function hslLightness(hex: string): number {
+      const c = hex.replace("#", "");
+      const r = parseInt(c.slice(0, 2), 16) / 255;
+      const g = parseInt(c.slice(2, 4), 16) / 255;
+      const b = parseInt(c.slice(4, 6), 16) / 255;
+      const max = Math.max(r, g, b);
+      const min = Math.min(r, g, b);
+      return ((max + min) / 2) * 100;
+    }
+    const commentL = hslLightness(galapagos.tokens["syntax-comment"]);
+    const punctuationL = hslLightness(galapagos.tokens["syntax-punctuation"]);
+    expect(punctuationL - commentL).toBeGreaterThanOrEqual(20);
+  });
+
+  it("syntax-keyword and syntax-operator are in different hue families (≥50° apart)", () => {
+    function hslHue(hex: string): number {
+      const c = hex.replace("#", "");
+      const r = parseInt(c.slice(0, 2), 16) / 255;
+      const g = parseInt(c.slice(2, 4), 16) / 255;
+      const b = parseInt(c.slice(4, 6), 16) / 255;
+      const max = Math.max(r, g, b);
+      const min = Math.min(r, g, b);
+      const d = max - min;
+      if (d === 0) return 0;
+      let h = 0;
+      if (max === r) h = ((g - b) / d + 6) % 6;
+      else if (max === g) h = (b - r) / d + 2;
+      else h = (r - g) / d + 4;
+      return h * 60;
+    }
+    const keywordHue = hslHue(galapagos.tokens["syntax-keyword"]);
+    const operatorHue = hslHue(galapagos.tokens["syntax-operator"]);
+    const hueDiff = Math.abs(keywordHue - operatorHue);
+    const wrappedDiff = Math.min(hueDiff, 360 - hueDiff);
+    expect(wrappedDiff).toBeGreaterThanOrEqual(50);
+  });
+
+  it("passes critical contrast checks without warnings", () => {
+    expect(getAppThemeWarnings(galapagos)).toEqual([]);
+  });
+});
+
 describe("built-in schemes — Highlands theme", () => {
   const highlands = BUILT_IN_APP_SCHEMES.find((s) => s.id === "highlands")!;
 
