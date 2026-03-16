@@ -63,6 +63,18 @@ describe("NewsletterStep", () => {
     expect(onDismiss).toHaveBeenCalledWith(true);
   });
 
+  it("trims whitespace from email before constructing the URL", () => {
+    render(<NewsletterStep onDismiss={onDismiss} />);
+    fireEvent.change(screen.getByLabelText("Email address"), {
+      target: { value: "  test@example.com  " },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Subscribe" }));
+
+    const firstCall = openExternalMock.mock.calls[0] as unknown as [string];
+    const calledUrl = new URL(firstCall[0]);
+    expect(calledUrl.searchParams.get("fields[email]")).toBe("test@example.com");
+  });
+
   it("calls onDismiss(false) on 'No thanks' without calling openExternal", () => {
     render(<NewsletterStep onDismiss={onDismiss} />);
     fireEvent.click(screen.getByRole("button", { name: "No thanks" }));
