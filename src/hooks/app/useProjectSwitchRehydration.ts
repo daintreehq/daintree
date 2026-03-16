@@ -1,31 +1,39 @@
-/**
- * useProjectSwitchRehydration - Handles state re-hydration on project switch.
- *
- * Extracts project switch re-hydration logic from App.tsx.
- * Uses switchId to prevent stale hydrations from overlapping switches.
- */
-
 import { useEffect, useRef } from "react";
-import { hydrateAppState } from "../../utils/stateHydration";
+import { hydrateAppState, type HydrationOptions } from "../../utils/stateHydration";
 import { isElectronAvailable } from "../useElectron";
 import { projectClient } from "@/clients";
-import { useProjectStore, useTerminalStore } from "@/store";
+import {
+  useProjectStore,
+  useTerminalStore,
+  useDiagnosticsStore,
+  useFocusStore,
+  useActionMruStore,
+} from "@/store";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
+import { useRecipeStore } from "@/store/recipeStore";
 import { panelKindUsesTerminalUi } from "@shared/config/panelKindRegistry";
 import {
   finalizeProjectSwitchRendererCache,
   isTerminalWarmInProjectSwitchCache,
 } from "@/services/projectSwitchRendererCache";
-import type { HydrationCallbacks } from "./useAppHydration";
 
 interface ProjectSwitchedEventDetail {
   switchId: string;
   projectId: string;
 }
 
-export function useProjectSwitchRehydration(callbacks: HydrationCallbacks) {
-  // Track the current switchId to prevent stale hydrations
+export function useProjectSwitchRehydration() {
+  const addTerminal = useTerminalStore((s) => s.addTerminal);
+  const setReconnectError = useTerminalStore((s) => s.setReconnectError);
+  const hydrateTabGroups = useTerminalStore((s) => s.hydrateTabGroups);
+  const hydrateMru = useTerminalStore((s) => s.hydrateMru);
+  const setActiveWorktree = useWorktreeSelectionStore((s) => s.setActiveWorktree);
+  const loadRecipes = useRecipeStore((s) => s.loadRecipes);
+  const openDiagnosticsDock = useDiagnosticsStore((s) => s.openDock);
+  const setFocusMode = useFocusStore((s) => s.setFocusMode);
+  const hydrateActionMru = useActionMruStore((s) => s.hydrateActionMru);
+
   const currentSwitchIdRef = useRef<string | null>(null);
 
   useEffect(() => {
@@ -33,12 +41,23 @@ export function useProjectSwitchRehydration(callbacks: HydrationCallbacks) {
       return;
     }
 
+    const callbacks: HydrationOptions = {
+      addTerminal: addTerminal as HydrationOptions["addTerminal"],
+      setActiveWorktree,
+      loadRecipes,
+      openDiagnosticsDock,
+      setFocusMode,
+      setReconnectError,
+      hydrateTabGroups,
+      hydrateMru,
+      hydrateActionMru,
+    };
+
     const handleProjectSwitch = async (event: Event) => {
       const customEvent = event as CustomEvent<ProjectSwitchedEventDetail>;
       const switchId = customEvent.detail?.switchId;
       const projectId = customEvent.detail?.projectId;
 
-      // Enforce non-empty switchId for staleness checks
       if (!switchId || !projectId) {
         console.error(
           "[useProjectSwitchRehydration] Missing switch metadata in project-switched event, skipping hydration"
@@ -46,7 +65,6 @@ export function useProjectSwitchRehydration(callbacks: HydrationCallbacks) {
         return;
       }
 
-      // Update the current switchId - any previous hydration is now stale
       currentSwitchIdRef.current = switchId;
 
       console.log(
@@ -56,7 +74,6 @@ export function useProjectSwitchRehydration(callbacks: HydrationCallbacks) {
       try {
         await hydrateAppState(callbacks, switchId, () => currentSwitchIdRef.current === switchId);
 
-        // Check if this hydration is still current before waking terminals
         if (currentSwitchIdRef.current !== switchId) {
           console.log(
             `[useProjectSwitchRehydration] Skipping wake - hydration superseded by newer switch (current: ${currentSwitchIdRef.current}, this: ${switchId})`
@@ -68,7 +85,6 @@ export function useProjectSwitchRehydration(callbacks: HydrationCallbacks) {
         const activeWorktreeId = useWorktreeSelectionStore.getState().activeWorktreeId ?? null;
 
         for (const terminal of terminals) {
-          // Check staleness before each wake to handle rapid switches
           if (currentSwitchIdRef.current !== switchId) {
             console.log(`[useProjectSwitchRehydration] Aborting wake loop - switch superseded`);
             break;
@@ -100,7 +116,6 @@ export function useProjectSwitchRehydration(callbacks: HydrationCallbacks) {
           error
         );
       } finally {
-        // Only finalize if this is still the current switch
         if (currentSwitchIdRef.current === switchId) {
           finalizeProjectSwitchRendererCache(projectId);
           useProjectStore.getState().finishProjectSwitch();
@@ -115,9 +130,6 @@ export function useProjectSwitchRehydration(callbacks: HydrationCallbacks) {
       console.log(
         `[useProjectSwitchRehydration] Received PROJECT_ON_SWITCH from main process (project: ${project.name}, switchId: ${switchId}), re-hydrating...`
       );
-      // Note: Browser state is NOT reset here. Browser state is keyed by panelId (and
-      // optionally worktreeId), so different projects have different panel IDs and won't
-      // conflict. This preserves zoom factors across project switches.
       window.dispatchEvent(
         new CustomEvent<ProjectSwitchedEventDetail>("project-switched", {
           detail: { switchId, projectId: project.id },
@@ -130,14 +142,14 @@ export function useProjectSwitchRehydration(callbacks: HydrationCallbacks) {
       cleanup();
     };
   }, [
-    callbacks.addTerminal,
-    callbacks.setActiveWorktree,
-    callbacks.loadRecipes,
-    callbacks.openDiagnosticsDock,
-    callbacks.setFocusMode,
-    callbacks.setReconnectError,
-    callbacks.hydrateTabGroups,
-    callbacks.hydrateMru,
-    callbacks.hydrateActionMru,
+    addTerminal,
+    setActiveWorktree,
+    loadRecipes,
+    openDiagnosticsDock,
+    setFocusMode,
+    setReconnectError,
+    hydrateTabGroups,
+    hydrateMru,
+    hydrateActionMru,
   ]);
 }

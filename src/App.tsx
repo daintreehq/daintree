@@ -53,7 +53,14 @@ import {
   useDevServerDiscovery,
   useAccessibilityAnnouncements,
   useGettingStartedChecklist,
-  type HydrationCallbacks,
+  useUnloadCleanup,
+  useHomeDir,
+  usePerformanceMonitors,
+  useSettingsDialog,
+  useWorktreeOverview,
+  useAppEventListeners,
+  useErrorRetry,
+  useActiveWorktreeSync,
 } from "./hooks/app";
 import { AppLayout } from "./components/Layout";
 import { ContentGrid } from "./components/Terminal";
@@ -83,7 +90,7 @@ import { ConfirmDialog } from "./components/ui/ConfirmDialog";
 import { RecipeEditor } from "./components/TerminalRecipe/RecipeEditor";
 import { NotesPalette } from "./components/Notes";
 import { WorkflowSection } from "./components/Workflow";
-import { SettingsDialog, type SettingsTab, type SettingsNavTarget } from "./components/Settings";
+import { SettingsDialog } from "./components/Settings";
 import { ShortcutReferenceDialog } from "./components/KeyboardShortcuts";
 import { Toaster } from "./components/ui/toaster";
 import { ReEntrySummary } from "./components/ui/ReEntrySummary";
@@ -97,19 +104,13 @@ import {
   useWorktreeSelectionStore,
   useProjectStore,
   useErrorStore,
-  useDiagnosticsStore,
-  useFocusStore,
-  cleanupWorktreeDataStore,
   useAgentPreferencesStore,
   usePaletteStore,
-  type RetryAction,
-  useActionMruStore,
 } from "./store";
 import { useShallow } from "zustand/react/shallow";
-import { useRecipeStore } from "./store/recipeStore";
 import { useMacroFocusStore } from "./store/macroFocusStore";
 import type { RecipeTerminal } from "./types";
-import { errorsClient, systemClient, worktreeClient } from "@/clients";
+import { systemClient } from "@/clients";
 import { registerBuiltInPanelComponents } from "./registry";
 
 // Register built-in panel components before any renders
@@ -126,8 +127,6 @@ import {
   type FilterState,
 } from "./lib/worktreeFilters";
 import type { WorktreeState, PanelKind } from "./types";
-import { startRendererMemoryMonitor } from "./utils/performance";
-import { startLongTaskMonitor } from "./utils/longTaskMonitor";
 import { actionService } from "./services/ActionService";
 import { voiceRecordingService } from "./services/VoiceRecordingService";
 import { useRenderProfiler } from "./utils/renderProfiler";
@@ -663,6 +662,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
 
 function App() {
   useErrors();
+  useUnloadCleanup();
 
   const { crossDiffDialog, closeCrossWorktreeDiff } = useWorktreeSelectionStore(
     useShallow((state) => ({
@@ -671,34 +671,15 @@ function App() {
     }))
   );
 
-  const { focusedId, addTerminal, setReconnectError, hydrateTabGroups, hydrateMru } =
-    useTerminalStore(
-      useShallow((state) => ({
-        focusedId: state.focusedId,
-        addTerminal: state.addTerminal,
-        setReconnectError: state.setReconnectError,
-        hydrateTabGroups: state.hydrateTabGroups,
-        hydrateMru: state.hydrateMru,
-      }))
-    );
+  const { focusedId, addTerminal } = useTerminalStore(
+    useShallow((state) => ({
+      focusedId: state.focusedId,
+      addTerminal: state.addTerminal,
+    }))
+  );
 
-  const hydrateActionMru = useActionMruStore((state) => state.hydrateActionMru);
-
-  useEffect(() => {
-    const handleBeforeUnload = () => {
-      cleanupWorktreeDataStore();
-    };
-
-    window.addEventListener("beforeunload", handleBeforeUnload);
-
-    return () => {
-      window.removeEventListener("beforeunload", handleBeforeUnload);
-      cleanupWorktreeDataStore();
-    };
-  }, []);
   const { launchAgent, availability, agentSettings, refreshSettings } = useAgentLauncher();
 
-  const loadRecipes = useRecipeStore((state) => state.loadRecipes);
   useTerminalConfig();
   useAppThemeConfig();
   useWindowNotifications();
@@ -707,10 +688,7 @@ function App() {
   useUpdateListener();
   useWorkflowListener();
   useMcpBridge();
-  const [homeDir, setHomeDir] = useState<string | undefined>(undefined);
-  useEffect(() => {
-    systemClient.getHomeDir().then(setHomeDir).catch(console.error);
-  }, []);
+  const { homeDir } = useHomeDir();
 
   // Grid navigation hook for directional terminal switching
   const { findNearest, findByIndex, findDockByIndex, getCurrentLocation } = useGridNavigation();
@@ -734,119 +712,40 @@ function App() {
   const createFolderDialogOpen = useProjectStore((state) => state.createFolderDialogOpen);
   const closeCreateFolderDialog = useProjectStore((state) => state.closeCreateFolderDialog);
   const openCreateFolderDialog = useProjectStore((state) => state.openCreateFolderDialog);
-  const { setActiveWorktree, selectWorktree, activeWorktreeId, focusedWorktreeId } =
-    useWorktreeSelectionStore(
-      useShallow((state) => ({
-        setActiveWorktree: state.setActiveWorktree,
-        selectWorktree: state.selectWorktree,
-        activeWorktreeId: state.activeWorktreeId,
-        focusedWorktreeId: state.focusedWorktreeId,
-      }))
-    );
-  const lastSyncedActiveRef = useRef<{ projectId: string | null; worktreeId: string | null }>({
-    projectId: null,
-    worktreeId: null,
-  });
-  const activeWorktree = useMemo(
-    () => worktrees.find((w) => w.id === activeWorktreeId) ?? null,
-    [worktrees, activeWorktreeId]
+  const { selectWorktree, activeWorktreeId, focusedWorktreeId } = useWorktreeSelectionStore(
+    useShallow((state) => ({
+      selectWorktree: state.selectWorktree,
+      activeWorktreeId: state.activeWorktreeId,
+      focusedWorktreeId: state.focusedWorktreeId,
+    }))
   );
-  useEffect(() => {
-    if (worktrees.length === 0) return;
 
-    const worktreeExists = activeWorktreeId && worktrees.some((w) => w.id === activeWorktreeId);
-    if (!worktreeExists) {
-      const mainWorktree = worktrees.find((w) => w.isMainWorktree) ?? worktrees[0];
-      selectWorktree(mainWorktree.id);
-    }
-  }, [worktrees, activeWorktreeId, selectWorktree]);
-  useEffect(() => {
-    const projectId = currentProject?.id ?? null;
-    const selectedWorktreeId = activeWorktreeId ?? null;
-
-    if (!projectId || !selectedWorktreeId) {
-      lastSyncedActiveRef.current = { projectId, worktreeId: null };
-      return;
-    }
-
-    const worktreeExists = worktrees.some((w) => w.id === selectedWorktreeId);
-    if (!worktreeExists) {
-      return;
-    }
-
-    if (
-      lastSyncedActiveRef.current.projectId === projectId &&
-      lastSyncedActiveRef.current.worktreeId === selectedWorktreeId
-    ) {
-      return;
-    }
-
-    lastSyncedActiveRef.current = { projectId, worktreeId: selectedWorktreeId };
-    worktreeClient.setActive(selectedWorktreeId).catch(() => {
-      if (
-        lastSyncedActiveRef.current.projectId === projectId &&
-        lastSyncedActiveRef.current.worktreeId === selectedWorktreeId
-      ) {
-        lastSyncedActiveRef.current = { projectId, worktreeId: null };
-      }
-    });
-  }, [activeWorktreeId, currentProject?.id, worktrees]);
-  const defaultTerminalCwd = useMemo(
-    () => activeWorktree?.path ?? currentProject?.path ?? "",
-    [activeWorktree, currentProject]
-  );
+  const { activeWorktree, defaultTerminalCwd } = useActiveWorktreeSync();
 
   const worktreePalette = useWorktreePalette({ worktrees });
   const quickCreatePalette = useQuickCreatePalette();
 
-  const openDiagnosticsDock = useDiagnosticsStore((state) => state.openDock);
-  const removeError = useErrorStore((state) => state.removeError);
-  const setFocusMode = useFocusStore((state) => state.setFocusMode);
-
-  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
-  const [settingsTab, setSettingsTab] = useState<SettingsTab>("general");
-  const [settingsSubtab, setSettingsSubtab] = useState<string | undefined>();
-  const [settingsSectionId, setSettingsSectionId] = useState<string | undefined>();
+  const {
+    isSettingsOpen,
+    settingsTab,
+    settingsSubtab,
+    settingsSectionId,
+    handleSettings,
+    handleOpenSettingsTab,
+    setIsSettingsOpen,
+  } = useSettingsDialog();
   const [isShortcutsOpen, setIsShortcutsOpen] = useState(false);
   const isNotesPaletteOpen = usePaletteStore((state) => state.activePaletteId === "notes");
-  const [isWorktreeOverviewOpen, setIsWorktreeOverviewOpen] = useState(false);
+  const {
+    isWorktreeOverviewOpen,
+    toggleWorktreeOverview,
+    openWorktreeOverview,
+    closeWorktreeOverview,
+  } = useWorktreeOverview();
   const onLayoutRender = useRenderProfiler("app-layout", { sampleRate: 0.15 });
   const onContentGridRender = useRenderProfiler("content-grid", { sampleRate: 0.15 });
 
-  useEffect(() => {
-    const stopMonitor = startRendererMemoryMonitor();
-    const stopLongTaskMonitor = startLongTaskMonitor();
-    return () => {
-      stopMonitor();
-      stopLongTaskMonitor();
-    };
-  }, []);
-
-  // Hydration callbacks for state restoration
-  const hydrationCallbacks: HydrationCallbacks = useMemo(
-    () => ({
-      addTerminal,
-      setActiveWorktree,
-      loadRecipes,
-      openDiagnosticsDock,
-      setFocusMode,
-      setReconnectError,
-      hydrateTabGroups,
-      hydrateMru,
-      hydrateActionMru,
-    }),
-    [
-      addTerminal,
-      setActiveWorktree,
-      loadRecipes,
-      openDiagnosticsDock,
-      setFocusMode,
-      setReconnectError,
-      hydrateTabGroups,
-      hydrateMru,
-      hydrateActionMru,
-    ]
-  );
+  usePerformanceMonitors();
 
   // Crash recovery gate — must resolve before hydration runs
   const {
@@ -858,8 +757,8 @@ function App() {
   const crashResolved = crashState.status !== "loading" && crashState.status !== "pending";
 
   // App lifecycle hooks
-  const { isStateLoaded } = useAppHydration(hydrationCallbacks, crashResolved);
-  useProjectSwitchRehydration(hydrationCallbacks);
+  const { isStateLoaded } = useAppHydration(crashResolved);
+  useProjectSwitchRehydration();
   useFirstRunToasts(isStateLoaded);
   const gettingStarted = useGettingStartedChecklist(isStateLoaded);
 
@@ -869,13 +768,6 @@ function App() {
     },
     [launchAgent]
   );
-
-  const handleSettings = useCallback(() => {
-    setSettingsTab("general");
-    setSettingsSubtab(undefined);
-    setSettingsSectionId(undefined);
-    setIsSettingsOpen(true);
-  }, []);
 
   const handleWizardFinish = useCallback(() => {
     const defaultAgent = useAgentPreferencesStore.getState().defaultAgent;
@@ -893,104 +785,15 @@ function App() {
     }
   }, [launchAgent, activeWorktreeId, availability, agentSettings]);
 
-  const handleOpenSettingsTab = useCallback((target: SettingsNavTarget) => {
-    const allowedTabs: SettingsTab[] = [
-      "general",
-      "keyboard",
-      "terminal",
-      "terminalAppearance",
-      "worktree",
-      "agents",
-      "github",
-      "sidecar",
-      "toolbar",
-      "notifications",
-      "editor",
-      "imageViewer",
-      "voice",
-      "mcp",
-      "troubleshooting",
-    ];
-    const tab = allowedTabs.includes(target.tab as SettingsTab)
-      ? (target.tab as SettingsTab)
-      : "general";
-    setSettingsTab(tab);
-    setSettingsSubtab(target.subtab);
-    setSettingsSectionId(target.sectionId);
-    setIsSettingsOpen(true);
-  }, []);
-
-  useEffect(() => {
-    const handleOpenSettingsTabEvent = (event: Event) => {
-      const customEvent = event as CustomEvent<unknown>;
-      const detail = customEvent.detail;
-      const target: SettingsNavTarget =
-        typeof detail === "string"
-          ? { tab: detail as SettingsTab }
-          : detail && typeof detail === "object" && "tab" in detail
-            ? (detail as SettingsNavTarget)
-            : { tab: "general" };
-      handleOpenSettingsTab(target);
-    };
-
-    window.addEventListener("canopy:open-settings-tab", handleOpenSettingsTabEvent);
-    return () => window.removeEventListener("canopy:open-settings-tab", handleOpenSettingsTabEvent);
-  }, [handleOpenSettingsTab]);
-
-  const openNotesPalette = useCallback(() => {
-    usePaletteStore.getState().openPalette("notes");
-  }, []);
-
   const closeNotesPalette = useCallback(() => {
     usePaletteStore.getState().closePalette("notes");
   }, []);
 
-  const toggleWorktreeOverview = useCallback(() => {
-    setIsWorktreeOverviewOpen((prev) => !prev);
-  }, []);
-
-  const openWorktreeOverview = useCallback(() => {
-    setIsWorktreeOverviewOpen(true);
-  }, []);
-
-  const closeWorktreeOverview = useCallback(() => {
-    setIsWorktreeOverviewOpen(false);
-  }, []);
-
   const overviewWorktreeActions = useWorktreeActions({ launchAgent });
 
-  useEffect(() => {
-    const handleOpenNotesPalette = () => {
-      openNotesPalette();
-    };
+  useAppEventListeners();
 
-    window.addEventListener("canopy:open-notes-palette", handleOpenNotesPalette);
-    return () => window.removeEventListener("canopy:open-notes-palette", handleOpenNotesPalette);
-  }, [openNotesPalette]);
-
-  const clearRetryProgress = useErrorStore((state) => state.clearRetryProgress);
-
-  const handleErrorRetry = useCallback(
-    async (errorId: string, action: RetryAction, args?: Record<string, unknown>) => {
-      try {
-        await errorsClient.retry(errorId, action, args);
-        removeError(errorId);
-      } catch (error) {
-        console.error("Error retry failed:", error);
-      } finally {
-        clearRetryProgress(errorId);
-      }
-    },
-    [removeError, clearRetryProgress]
-  );
-
-  const handleCancelRetry = useCallback(
-    (errorId: string) => {
-      errorsClient.cancelRetry(errorId);
-      clearRetryProgress(errorId);
-    },
-    [clearRetryProgress]
-  );
+  const { handleErrorRetry, handleCancelRetry } = useErrorRetry();
 
   const electronAvailable = isElectronAvailable();
   const { inject } = useContextInjection();
