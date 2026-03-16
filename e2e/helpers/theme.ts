@@ -172,7 +172,7 @@ export async function getThemeChromeMetrics(
       const cardBackground = resolveEffectiveBackground(worktreeCard);
       const sectionBackground = resolveEffectiveBackground(detailsSection);
 
-      const rootBackground = resolveEffectiveBackground(document.documentElement);
+      const rootBackground = resolveEffectiveBackground(document.body);
       const sidebarBackground = sidebar ? resolveEffectiveBackground(sidebar) : rootBackground;
       const gridContainerBackground = gridContainer
         ? resolveEffectiveBackground(gridContainer)

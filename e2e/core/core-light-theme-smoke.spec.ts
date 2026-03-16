@@ -49,6 +49,12 @@ test.describe.serial("Core: Light Theme Smoke", () => {
       ).toContainText(PROJECT_NAME);
       expect
         .soft(
+          metrics.projectTitleContrast,
+          `${schemeId}: project title text should meet WCAG AA contrast`
+        )
+        .toBeGreaterThanOrEqual(4.5);
+      expect
+        .soft(
           metrics.quickRunFieldBorderContrast,
           `${schemeId}: quick-run input border should stay visibly separated`
         )

@@ -570,6 +570,30 @@ describe("Hokkaido built-in scheme", () => {
   });
 });
 
+describe("built-in schemes — Svalbard light terminal fallbacks", () => {
+  const svalbard = BUILT_IN_APP_SCHEMES.find((s) => s.id === "svalbard")!;
+
+  it("auto-derives terminal-black from text-primary for light themes", () => {
+    expect(svalbard.tokens["terminal-black"]).toBe(svalbard.tokens["text-primary"]);
+  });
+
+  it("auto-derives terminal-white from surface-canvas for light themes", () => {
+    expect(svalbard.tokens["terminal-white"]).toBe(svalbard.tokens["surface-canvas"]);
+  });
+});
+
+describe("built-in schemes — Hokkaido light terminal fallbacks", () => {
+  const hokkaido = BUILT_IN_APP_SCHEMES.find((s) => s.id === "hokkaido")!;
+
+  it("auto-derives terminal-black from text-primary for light themes", () => {
+    expect(hokkaido.tokens["terminal-black"]).toBe(hokkaido.tokens["text-primary"]);
+  });
+
+  it("auto-derives terminal-white from surface-canvas for light themes", () => {
+    expect(hokkaido.tokens["terminal-white"]).toBe(hokkaido.tokens["surface-canvas"]);
+  });
+});
+
 describe("normalizeAppColorScheme", () => {
   it("uses a light fallback base for partial light themes", () => {
     const scheme = normalizeAppColorScheme({
