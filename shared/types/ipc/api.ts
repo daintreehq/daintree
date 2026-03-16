@@ -260,6 +260,10 @@ export interface ElectronAPI {
     sendKey(id: string, key: string): void;
     reportTitleState(id: string, state: "working" | "waiting"): void;
     onSpawnResult(callback: (id: string, result: SpawnResult) => void): () => void;
+    onReduceScrollback(
+      callback: (data: { terminalIds: string[]; targetLines: number }) => void
+    ): () => void;
+    onRestoreScrollback(callback: (data: { terminalIds: string[] }) => void): () => void;
   };
   files: {
     search(payload: FileSearchPayload): Promise<FileSearchResult>;

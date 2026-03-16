@@ -282,4 +282,14 @@ export const terminalClient = {
   onSpawnResult: (callback: (id: string, result: SpawnResult) => void): (() => void) => {
     return window.electron.terminal.onSpawnResult(callback);
   },
+
+  onReduceScrollback: (
+    callback: (data: { terminalIds: string[]; targetLines: number }) => void
+  ): (() => void) => {
+    return window.electron.terminal.onReduceScrollback(callback);
+  },
+
+  onRestoreScrollback: (callback: (data: { terminalIds: string[] }) => void): (() => void) => {
+    return window.electron.terminal.onRestoreScrollback(callback);
+  },
 } as const;
