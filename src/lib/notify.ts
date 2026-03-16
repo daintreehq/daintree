@@ -96,20 +96,21 @@ export function notify(payload: NotifyPayload): string {
     }));
 
   if (placement === "grid-bar") {
-    if (historyMessage) {
-      useNotificationHistoryStore.getState().addEntry({
-        type,
-        title,
-        message: historyMessage,
-        correlationId,
-        seenAsToast: true,
-        countable: payload.countable,
-        actions: historyActions.length > 0 ? historyActions : undefined,
-      });
-    }
+    const entryId = historyMessage
+      ? useNotificationHistoryStore.getState().addEntry({
+          type,
+          title,
+          message: historyMessage,
+          correlationId,
+          seenAsToast: true,
+          countable: payload.countable,
+          actions: historyActions.length > 0 ? historyActions : undefined,
+        })
+      : undefined;
     return useNotificationStore.getState().addNotification({
       ...payload,
       priority,
+      historyEntryId: entryId,
     });
   }
 
@@ -118,17 +119,17 @@ export function notify(payload: NotifyPayload): string {
   const shouldToast = priority === "watch" || (priority === "high" && isFocused);
   const shouldNative = priority === "watch";
 
-  if (historyMessage) {
-    useNotificationHistoryStore.getState().addEntry({
-      type,
-      title,
-      message: historyMessage,
-      correlationId,
-      seenAsToast: shouldToast,
-      countable: payload.countable,
-      actions: historyActions.length > 0 ? historyActions : undefined,
-    });
-  }
+  const historyEntryId = historyMessage
+    ? useNotificationHistoryStore.getState().addEntry({
+        type,
+        title,
+        message: historyMessage,
+        correlationId,
+        seenAsToast: shouldToast,
+        countable: payload.countable,
+        actions: historyActions.length > 0 ? historyActions : undefined,
+      })
+    : undefined;
 
   if (shouldNative && historyMessage && typeof window !== "undefined") {
     window.electron?.notification?.showNative?.({
@@ -167,6 +168,7 @@ export function notify(payload: NotifyPayload): string {
     const id = useNotificationStore.getState().addNotification({
       ...payload,
       priority,
+      historyEntryId,
     });
     _activeCoalesced.set(coalesce.key, {
       id,
@@ -180,6 +182,7 @@ export function notify(payload: NotifyPayload): string {
     return useNotificationStore.getState().addNotification({
       ...payload,
       priority,
+      historyEntryId,
     });
   }
 

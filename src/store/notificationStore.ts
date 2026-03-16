@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import type { ReactNode } from "react";
 import type { ActionId } from "@shared/types/actions";
+import { useNotificationHistoryStore } from "@/store/slices/notificationHistorySlice";
 
 const uuidv4 = () => crypto.randomUUID();
 
@@ -34,6 +35,8 @@ export interface Notification {
   dismissed?: boolean;
   /** Bumped on each coalesced update so useEffect deps can detect changes */
   updatedAt?: number;
+  /** Links this toast to its notification history entry for overflow tracking */
+  historyEntryId?: string;
 }
 
 export type NotificationPatch = Partial<Omit<Notification, "id">>;
@@ -48,13 +51,28 @@ interface NotificationStore {
   reset: () => void;
 }
 
+export const MAX_VISIBLE_TOASTS = 3;
+
 export const useNotificationStore = create<NotificationStore>((set) => ({
   notifications: [],
   addNotification: (notification) => {
     const id = uuidv4();
-    set((state) => ({
-      notifications: [...state.notifications, { ...notification, id, updatedAt: Date.now() }],
-    }));
+    set((state) => {
+      const active = state.notifications.filter((n) => !n.dismissed && n.placement !== "grid-bar");
+      let notifications = state.notifications;
+      if (active.length >= MAX_VISIBLE_TOASTS) {
+        const oldest = active[0];
+        notifications = notifications.map((n) =>
+          n.id === oldest.id ? { ...n, dismissed: true } : n
+        );
+        if (oldest.historyEntryId) {
+          useNotificationHistoryStore.getState().markUnseenAsToast(oldest.historyEntryId);
+        }
+      }
+      return {
+        notifications: [...notifications, { ...notification, id, updatedAt: Date.now() }],
+      };
+    });
     return id;
   },
   updateNotification: (id, patch) =>
