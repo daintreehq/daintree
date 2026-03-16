@@ -102,15 +102,13 @@ export class PRIntegrationService {
     // by sys:worktree:update, but PullRequestService only reads these fields.
     for (const candidate of getMonitorCandidates()) {
       if (candidate.branch && candidate.branch !== "main" && candidate.branch !== "master") {
-        this.eventBus.emit(
-          "sys:worktree:update",
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          {
-            worktreeId: candidate.worktreeId,
-            branch: candidate.branch,
-            issueNumber: candidate.issueNumber,
-          } as any
-        );
+        /* eslint-disable @typescript-eslint/no-explicit-any */
+        this.eventBus.emit("sys:worktree:update", {
+          worktreeId: candidate.worktreeId,
+          branch: candidate.branch,
+          issueNumber: candidate.issueNumber,
+        } as any);
+        /* eslint-enable @typescript-eslint/no-explicit-any */
       }
     }
 
