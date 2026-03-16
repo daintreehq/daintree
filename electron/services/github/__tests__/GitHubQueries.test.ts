@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { buildBatchPRQuery } from "../GitHubQueries.js";
+import { buildBatchPRQuery, LIST_PRS_QUERY } from "../GitHubQueries.js";
+
+describe("LIST_PRS_QUERY", () => {
+  it("uses IssueOrder (not PullRequestOrder) for the orderBy variable type", () => {
+    expect(LIST_PRS_QUERY).toContain("$orderBy: IssueOrder");
+    expect(LIST_PRS_QUERY).not.toContain("PullRequestOrder");
+  });
+});
 
 describe("buildBatchPRQuery", () => {
   it("escapes owner, repo, and branch values in generated GraphQL query", () => {

@@ -74,7 +74,7 @@ export const LIST_ISSUES_QUERY = `
 `;
 
 export const LIST_PRS_QUERY = `
-  query GetPRs($owner: String!, $repo: String!, $states: [PullRequestState!], $cursor: String, $limit: Int = 20, $orderBy: PullRequestOrder) {
+  query GetPRs($owner: String!, $repo: String!, $states: [PullRequestState!], $cursor: String, $limit: Int = 20, $orderBy: IssueOrder) {
     repository(owner: $owner, name: $repo) {
       pullRequests(first: $limit, after: $cursor, states: $states, orderBy: $orderBy) {
         totalCount
