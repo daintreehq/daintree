@@ -854,6 +854,28 @@ function App() {
     voiceRecordingService.initialize();
   }, []);
 
+  // Prevent browser-default file navigation when files are dropped on non-terminal areas
+  useEffect(() => {
+    const handleDragOver = (e: DragEvent) => {
+      if (!e.dataTransfer?.types.includes("Files")) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "none";
+    };
+
+    const handleDrop = (e: DragEvent) => {
+      if (!e.dataTransfer?.types.includes("Files")) return;
+      e.preventDefault();
+    };
+
+    document.addEventListener("dragover", handleDragOver);
+    document.addEventListener("drop", handleDrop);
+
+    return () => {
+      document.removeEventListener("dragover", handleDragOver);
+      document.removeEventListener("drop", handleDrop);
+    };
+  }, []);
+
   if (!isElectronAvailable()) {
     return (
       <div className="h-screen w-screen flex items-center justify-center bg-canopy-bg">
