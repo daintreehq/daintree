@@ -718,7 +718,12 @@ export function SettingsDialog({
                   tabIndex={0}
                   className={activeTab === "terminalAppearance" ? "" : "hidden"}
                 >
-                  <TerminalAppearanceTab />
+                  <TerminalAppearanceTab
+                    activeSubtab={activeSubtabs["terminalAppearance"] ?? null}
+                    onSubtabChange={(id) =>
+                      setActiveSubtabs((prev) => ({ ...prev, terminalAppearance: id }))
+                    }
+                  />
                 </div>
 
                 <div
