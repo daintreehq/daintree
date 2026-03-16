@@ -52,7 +52,6 @@
     "perf:nightly": "tsx scripts/perf/run.ts --mode nightly",
     "perf:soak": "tsx scripts/perf/run.ts --mode soak",
     "perf:trend": "tsx scripts/perf/report/trend.ts --mode ci",
-    "stress-test": "tsx scripts/tui-stress-test.tsx",
     "prepare": "husky"
   },
   "dependencies": {
