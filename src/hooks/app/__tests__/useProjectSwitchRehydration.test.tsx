@@ -22,6 +22,7 @@ const {
   isTerminalWarmInProjectSwitchCacheMock,
   terminalState,
   worktreeSelectionState,
+  storeMocks,
 } = vi.hoisted(() => ({
   hydrateAppStateMock: vi.fn(),
   isElectronAvailableMock: vi.fn(() => true),
@@ -43,6 +44,17 @@ const {
   worktreeSelectionState: {
     activeWorktreeId: null as string | null,
   },
+  storeMocks: {
+    addTerminal: vi.fn(),
+    setReconnectError: vi.fn(),
+    hydrateTabGroups: vi.fn(),
+    hydrateMru: vi.fn(),
+    setActiveWorktree: vi.fn(),
+    loadRecipes: vi.fn(),
+    openDock: vi.fn(),
+    setFocusMode: vi.fn(),
+    hydrateActionMru: vi.fn(),
+  },
 }));
 
 vi.mock("../../../utils/stateHydration", () => ({
@@ -59,21 +71,39 @@ vi.mock("@/clients", () => ({
   },
 }));
 
+const terminalStoreSelector = (sel: (s: unknown) => unknown) => {
+  const state = {
+    addTerminal: storeMocks.addTerminal,
+    setReconnectError: storeMocks.setReconnectError,
+    hydrateTabGroups: storeMocks.hydrateTabGroups,
+    hydrateMru: storeMocks.hydrateMru,
+  };
+  return sel(state);
+};
+terminalStoreSelector.getState = () => terminalState;
+
 vi.mock("@/store", () => ({
   useProjectStore: {
     getState: () => ({
       finishProjectSwitch: finishProjectSwitchMock,
     }),
   },
-  useTerminalStore: {
-    getState: () => terminalState,
-  },
+  useTerminalStore: terminalStoreSelector,
+  useDiagnosticsStore: (sel: (s: unknown) => unknown) => sel({ openDock: storeMocks.openDock }),
+  useFocusStore: (sel: (s: unknown) => unknown) => sel({ setFocusMode: storeMocks.setFocusMode }),
+  useActionMruStore: (sel: (s: unknown) => unknown) =>
+    sel({ hydrateActionMru: storeMocks.hydrateActionMru }),
 }));
 
-vi.mock("@/store/worktreeStore", () => ({
-  useWorktreeSelectionStore: {
-    getState: () => worktreeSelectionState,
-  },
+vi.mock("@/store/worktreeStore", () => {
+  const selector = (sel: (s: unknown) => unknown) =>
+    sel({ setActiveWorktree: storeMocks.setActiveWorktree });
+  selector.getState = () => worktreeSelectionState;
+  return { useWorktreeSelectionStore: selector };
+});
+
+vi.mock("@/store/recipeStore", () => ({
+  useRecipeStore: (sel: (s: unknown) => unknown) => sel({ loadRecipes: storeMocks.loadRecipes }),
 }));
 
 vi.mock("@/services/TerminalInstanceService", () => ({
@@ -98,18 +128,6 @@ describe("useProjectSwitchRehydration", () => {
   let onSwitchHandler:
     | ((payload: { switchId: string; project: { id: string; name: string } }) => void)
     | null = null;
-
-  const callbacks = {
-    addTerminal: vi.fn(),
-    setActiveWorktree: vi.fn(),
-    loadRecipes: vi.fn(),
-    openDiagnosticsDock: vi.fn(),
-    setFocusMode: vi.fn(),
-    setReconnectError: vi.fn(),
-    hydrateTabGroups: vi.fn(),
-    hydrateMru: vi.fn(),
-    hydrateActionMru: vi.fn(),
-  };
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -140,7 +158,7 @@ describe("useProjectSwitchRehydration", () => {
     ];
     worktreeSelectionState.activeWorktreeId = "wt-active";
 
-    renderHook(() => useProjectSwitchRehydration(callbacks));
+    renderHook(() => useProjectSwitchRehydration());
 
     onSwitchHandler?.({
       switchId: "switch-1",
@@ -182,7 +200,7 @@ describe("useProjectSwitchRehydration", () => {
     terminalState.activeDockTerminalId = "dock-active";
     worktreeSelectionState.activeWorktreeId = "wt-active";
 
-    renderHook(() => useProjectSwitchRehydration(callbacks));
+    renderHook(() => useProjectSwitchRehydration());
 
     onSwitchHandler?.({
       switchId: "switch-3",
@@ -216,7 +234,7 @@ describe("useProjectSwitchRehydration", () => {
     );
     getMock.mockImplementation((id: string) => (id === "warm-terminal" ? { terminal: {} } : null));
 
-    renderHook(() => useProjectSwitchRehydration(callbacks));
+    renderHook(() => useProjectSwitchRehydration());
 
     onSwitchHandler?.({
       switchId: "switch-warm",
@@ -251,7 +269,7 @@ describe("useProjectSwitchRehydration", () => {
     isTerminalWarmInProjectSwitchCacheMock.mockReturnValue(true);
     getMock.mockReturnValue(null);
 
-    renderHook(() => useProjectSwitchRehydration(callbacks));
+    renderHook(() => useProjectSwitchRehydration());
 
     onSwitchHandler?.({
       switchId: "switch-stale",
@@ -272,7 +290,7 @@ describe("useProjectSwitchRehydration", () => {
   });
 
   it("skips malformed project-switched events without hydrating or finalizing", async () => {
-    renderHook(() => useProjectSwitchRehydration(callbacks));
+    renderHook(() => useProjectSwitchRehydration());
 
     window.dispatchEvent(
       new CustomEvent("project-switched", {
