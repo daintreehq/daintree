@@ -288,9 +288,17 @@ export async function hydrateAppState(
       }),
       systemClient.getTmpDir().catch(() => ""),
     ]);
-    const { appState, terminalConfig, project: currentProject, agentSettings } = hydrateResult;
+    const {
+      appState,
+      terminalConfig,
+      project: currentProject,
+      agentSettings,
+      gpuWebGLHardware,
+    } = hydrateResult;
     const clipboardDirectory = tmpDir ? `${tmpDir}/${CLIPBOARD_DIR_NAME}` : undefined;
     if (!checkCurrent()) return;
+
+    terminalInstanceService.setGPUHardwareAvailable(gpuWebGLHardware ?? true);
 
     // Hydrate terminal config (scrollback, performance mode) BEFORE restoring terminals
     try {

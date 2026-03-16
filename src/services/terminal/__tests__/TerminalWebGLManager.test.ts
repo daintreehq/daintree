@@ -232,6 +232,53 @@ describe("TerminalWebGLManager", () => {
     expect(manager.isActive("t2")).toBe(true);
   });
 
+  describe("GPU hardware availability", () => {
+    it("ensureContext is a no-op when hardware is unavailable", () => {
+      manager.setHardwareAvailable(false);
+      const managed = makeManagedTerminal();
+      manager.ensureContext("t1", managed);
+
+      expect(WebglAddonMock).not.toHaveBeenCalled();
+      expect(managed.terminal.loadAddon).not.toHaveBeenCalled();
+      expect(manager.isActive("t1")).toBe(false);
+    });
+
+    it("ensureContext attaches after restoring hardware availability", () => {
+      manager.setHardwareAvailable(false);
+      manager.setHardwareAvailable(true);
+      const managed = makeManagedTerminal();
+      manager.ensureContext("t1", managed);
+
+      expect(WebglAddonMock).toHaveBeenCalledTimes(1);
+      expect(manager.isActive("t1")).toBe(true);
+    });
+
+    it("setting hardware unavailable does not affect already-active contexts", () => {
+      const managed = makeManagedTerminal();
+      manager.ensureContext("t1", managed);
+      expect(manager.isActive("t1")).toBe(true);
+
+      manager.setHardwareAvailable(false);
+      expect(manager.isActive("t1")).toBe(true);
+    });
+
+    it("logs a warning only once when skipping due to software GPU", () => {
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      manager.setHardwareAvailable(false);
+
+      const managed1 = makeManagedTerminal();
+      const managed2 = makeManagedTerminal();
+      manager.ensureContext("t1", managed1);
+      manager.ensureContext("t2", managed2);
+
+      const softwareWarnings = warnSpy.mock.calls.filter(
+        (args) => typeof args[0] === "string" && args[0].includes("software-only GPU")
+      );
+      expect(softwareWarnings).toHaveLength(1);
+      warnSpy.mockRestore();
+    });
+  });
+
   describe("LRU eviction", () => {
     it("evicts the least recently used entry when pool reaches MAX_CONTEXTS", async () => {
       const { TerminalWebGLManager } = await import("../TerminalWebGLManager");
