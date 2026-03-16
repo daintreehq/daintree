@@ -171,13 +171,13 @@ describe("Windows Git PATH discovery", () => {
 
     const candidates = getCandidatePaths();
     expect(candidates).toContainEqual(
-      expect.stringContaining(path.join("C:\\Program Files", "Git", "cmd")),
+      expect.stringContaining(path.join("C:\\Program Files", "Git", "cmd"))
     );
     expect(candidates).toContainEqual(
-      expect.stringContaining(path.join("C:\\Program Files (x86)", "Git", "cmd")),
+      expect.stringContaining(path.join("C:\\Program Files (x86)", "Git", "cmd"))
     );
     expect(candidates).toContainEqual(
-      expect.stringContaining(path.join("C:\\ProgramData\\chocolatey", "bin")),
+      expect.stringContaining(path.join("C:\\ProgramData\\chocolatey", "bin"))
     );
   });
 
