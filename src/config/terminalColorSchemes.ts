@@ -43,6 +43,7 @@ export type AnsiColorKey = (typeof ANSI_COLOR_KEYS)[number];
 export const DEFAULT_SCHEME_ID = "canopy";
 
 const defaultAppScheme = resolveAppTheme(DEFAULT_APP_THEME_ID);
+const daintreeAppScheme = resolveAppTheme("daintree");
 
 export const BUILT_IN_SCHEMES: TerminalColorScheme[] = [
   {
@@ -51,6 +52,13 @@ export const BUILT_IN_SCHEMES: TerminalColorScheme[] = [
     type: defaultAppScheme.type,
     builtin: true,
     colors: getTerminalThemeFromAppScheme(defaultAppScheme),
+  },
+  {
+    id: "daintree",
+    name: "Daintree",
+    type: "dark",
+    builtin: true,
+    colors: getTerminalThemeFromAppScheme(daintreeAppScheme),
   },
   {
     id: "dracula",
@@ -610,7 +618,7 @@ export function getSchemeById(id: string): TerminalColorScheme | undefined {
 }
 
 export const APP_THEME_TERMINAL_SCHEME_MAP: Record<string, string> = {
-  daintree: "catppuccin-mocha",
+  daintree: "daintree",
   fiordland: "tokyo-night",
   highlands: "gruvbox-dark",
   arashiyama: "everforest-dark",
