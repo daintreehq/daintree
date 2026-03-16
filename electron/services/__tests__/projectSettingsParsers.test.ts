@@ -56,7 +56,7 @@ describe("parseMcpServers", () => {
 
   it("filters non-string env values", () => {
     const result = parseMcpServers({
-      server: { command: "node", env: { GOOD: "value", BAD: 42 as any } },
+      server: { command: "node", env: { GOOD: "value", BAD: 42 as unknown } },
     });
     expect(result!.server.env).toEqual({ GOOD: "value" });
   });
@@ -107,7 +107,7 @@ describe("parseTerminalSettings", () => {
   });
 
   it("filters non-string shellArgs", () => {
-    const result = parseTerminalSettings({ shellArgs: ["-l", 42 as any, true as any] });
+    const result = parseTerminalSettings({ shellArgs: ["-l", 42 as unknown, true as unknown] });
     expect(result!.shellArgs).toEqual(["-l"]);
   });
 });
@@ -153,8 +153,8 @@ describe("parseNotificationOverrides", () => {
 
   it("ignores non-boolean values for boolean fields", () => {
     const result = parseNotificationOverrides({
-      completedEnabled: "yes" as any,
-      waitingEnabled: 1 as any,
+      completedEnabled: "yes" as unknown,
+      waitingEnabled: 1 as unknown,
     });
     expect(result).toBeUndefined();
   });

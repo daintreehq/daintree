@@ -1,5 +1,4 @@
 import type { ProjectState } from "../types/index.js";
-import path from "path";
 import fs from "fs/promises";
 import { existsSync } from "fs";
 import { resilientRename, resilientWriteFile, resilientUnlink } from "../utils/fs.js";
