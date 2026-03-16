@@ -48,8 +48,6 @@ function rowToProject(row: ProjectRow): Project {
   return project;
 }
 
-export { rowToProject };
-
 export class ProjectStore {
   private projectsConfigDir: string;
   private settingsManager: ProjectSettingsManager;
