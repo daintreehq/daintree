@@ -87,9 +87,7 @@ export function useEditorKeymap({
     if (!stashed) return false;
     view.setState(stashed);
     view.dispatch({
-      effects: editableCompartmentRef.current.reconfigure(
-        EditorView.editable.of(!latest.disabled)
-      ),
+      effects: editableCompartmentRef.current.reconfigure(EditorView.editable.of(!latest.disabled)),
     });
     return true;
   }, [popStashedEditorState, editorViewRef, latestRef, editableCompartmentRef]);
