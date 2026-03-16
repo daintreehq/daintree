@@ -33,7 +33,7 @@ export interface ProjectSettingsSnapshot {
   notificationOverrides: Partial<NotificationSettings> | undefined;
 }
 
-interface EnvVar {
+export interface EnvVar {
   id: string;
   key: string;
   value: string;
