@@ -91,6 +91,8 @@ export function PanelPalette({
     <button
       key={kind.id}
       id={`panel-option-${kind.id}`}
+      tabIndex={-1}
+      onPointerDown={(e) => e.preventDefault()}
       role="option"
       aria-selected={index === selectedIndex}
       ref={(el) => {

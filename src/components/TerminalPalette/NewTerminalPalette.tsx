@@ -112,6 +112,8 @@ export function NewTerminalPalette({
               <button
                 key={option.id}
                 id={`new-terminal-option-${option.id}`}
+                tabIndex={-1}
+                onPointerDown={(e) => e.preventDefault()}
                 role="option"
                 aria-selected={index === selectedIndex}
                 className={cn(
