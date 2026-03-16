@@ -143,7 +143,7 @@ class PullRequestService {
     this.updateDebounceTimer = setTimeout(() => {
       this.updateDebounceTimer = null;
 
-      if (this.hasUnresolvedCandidates()) {
+      if (this.hasUnresolvedCandidates() && this.isEnabled) {
         logDebug("Running debounced PR check", { candidateCount: this.candidates.size });
         void this.checkForPRs();
 
@@ -215,12 +215,16 @@ class PullRequestService {
     if (!this.cwd) {
       return;
     }
+    if (this.pollTimer) {
+      clearTimeout(this.pollTimer);
+      this.pollTimer = null;
+    }
     this.nextRetryAt = 0;
     this.consecutiveErrors = 0;
     clearPRCaches();
     await this.checkForPRs();
 
-    if (this.isPolling && !this.pollTimer && this.hasUnresolvedCandidates()) {
+    if (this.isPolling && this.hasUnresolvedCandidates()) {
       this.scheduleNextPoll();
     }
   }
