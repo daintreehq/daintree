@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import { hydrateAppState } from "../../utils/stateHydration";
+import { hydrateAppState, type HydrationOptions } from "../../utils/stateHydration";
 import { isElectronAvailable } from "../useElectron";
 import { projectClient } from "@/clients";
 import {
@@ -41,8 +41,8 @@ export function useProjectSwitchRehydration() {
       return;
     }
 
-    const callbacks = {
-      addTerminal,
+    const callbacks: HydrationOptions = {
+      addTerminal: addTerminal as HydrationOptions["addTerminal"],
       setActiveWorktree,
       loadRecipes,
       openDiagnosticsDock,

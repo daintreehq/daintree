@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { hydrateAppState } from "../../utils/stateHydration";
+import { hydrateAppState, type HydrationOptions } from "../../utils/stateHydration";
 import { isElectronAvailable } from "../useElectron";
 import { useTerminalStore } from "@/store";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
@@ -30,7 +30,7 @@ export function useAppHydration(enabled = true) {
     const restoreState = async () => {
       try {
         await hydrateAppState({
-          addTerminal,
+          addTerminal: addTerminal as HydrationOptions["addTerminal"],
           setActiveWorktree,
           loadRecipes,
           openDiagnosticsDock,

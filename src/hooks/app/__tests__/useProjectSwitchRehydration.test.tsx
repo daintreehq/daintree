@@ -71,29 +71,31 @@ vi.mock("@/clients", () => ({
   },
 }));
 
-const terminalStoreSelector = (sel: (s: unknown) => unknown) => {
-  const state = {
-    addTerminal: storeMocks.addTerminal,
-    setReconnectError: storeMocks.setReconnectError,
-    hydrateTabGroups: storeMocks.hydrateTabGroups,
-    hydrateMru: storeMocks.hydrateMru,
-  };
-  return sel(state);
-};
-terminalStoreSelector.getState = () => terminalState;
+vi.mock("@/store", () => {
+  const selector = ((sel: (s: unknown) => unknown) => {
+    const state = {
+      addTerminal: storeMocks.addTerminal,
+      setReconnectError: storeMocks.setReconnectError,
+      hydrateTabGroups: storeMocks.hydrateTabGroups,
+      hydrateMru: storeMocks.hydrateMru,
+    };
+    return sel(state);
+  }) as ((sel: (s: unknown) => unknown) => unknown) & { getState: () => unknown };
+  selector.getState = () => terminalState;
 
-vi.mock("@/store", () => ({
-  useProjectStore: {
-    getState: () => ({
-      finishProjectSwitch: finishProjectSwitchMock,
-    }),
-  },
-  useTerminalStore: terminalStoreSelector,
-  useDiagnosticsStore: (sel: (s: unknown) => unknown) => sel({ openDock: storeMocks.openDock }),
-  useFocusStore: (sel: (s: unknown) => unknown) => sel({ setFocusMode: storeMocks.setFocusMode }),
-  useActionMruStore: (sel: (s: unknown) => unknown) =>
-    sel({ hydrateActionMru: storeMocks.hydrateActionMru }),
-}));
+  return {
+    useProjectStore: {
+      getState: () => ({
+        finishProjectSwitch: finishProjectSwitchMock,
+      }),
+    },
+    useTerminalStore: selector,
+    useDiagnosticsStore: (sel: (s: unknown) => unknown) => sel({ openDock: storeMocks.openDock }),
+    useFocusStore: (sel: (s: unknown) => unknown) => sel({ setFocusMode: storeMocks.setFocusMode }),
+    useActionMruStore: (sel: (s: unknown) => unknown) =>
+      sel({ hydrateActionMru: storeMocks.hydrateActionMru }),
+  };
+});
 
 vi.mock("@/store/worktreeStore", () => {
   const selector = (sel: (s: unknown) => unknown) =>
