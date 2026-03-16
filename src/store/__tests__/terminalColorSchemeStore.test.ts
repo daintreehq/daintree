@@ -58,10 +58,10 @@ describe("terminalColorSchemeStore", () => {
     expect(useTerminalColorSchemeStore.getState().selectedSchemeId).toBe("dracula");
   });
 
-  it("getEffectiveTheme returns mapped catppuccin-mocha theme for default daintree", () => {
+  it("getEffectiveTheme returns daintree theme for default daintree", () => {
     const theme = useTerminalColorSchemeStore.getState().getEffectiveTheme();
-    expect(theme.background).toBe("#1e1e2e");
-    expect(theme.cursor).toBe("#f5e0dc");
+    expect(theme.background).toBe("#19191a");
+    expect(theme.cursor).toBe("#3F9366");
   });
 
   it("getEffectiveTheme returns tokyo-night for fiordland app theme", () => {
@@ -150,7 +150,7 @@ describe("terminalColorSchemeStore", () => {
   describe("selectWrapperBackground", () => {
     it("returns mapped scheme background for default canopy scheme", () => {
       const bg = selectWrapperBackground(useTerminalColorSchemeStore.getState());
-      expect(bg).toBe("#1e1e2e");
+      expect(bg).toBe("#19191a");
     });
 
     it("returns mapped scheme background when app theme changes", () => {

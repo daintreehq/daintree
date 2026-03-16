@@ -63,8 +63,26 @@ function computeEffectiveTheme(
   };
 }
 
+let _cachedTheme: ITheme | null = null;
+let _cachedSchemeId: string | null = null;
+let _cachedCustomSchemes: TerminalColorScheme[] | null = null;
+let _cachedAppThemeId: string | null = null;
+
 export function selectEffectiveTheme(state: TerminalColorSchemeState): ITheme {
-  return computeEffectiveTheme(state.selectedSchemeId, state.customSchemes);
+  const appThemeId = useAppThemeStore.getState().selectedSchemeId;
+  if (
+    _cachedTheme !== null &&
+    _cachedSchemeId === state.selectedSchemeId &&
+    _cachedCustomSchemes === state.customSchemes &&
+    _cachedAppThemeId === appThemeId
+  ) {
+    return _cachedTheme;
+  }
+  _cachedSchemeId = state.selectedSchemeId;
+  _cachedCustomSchemes = state.customSchemes;
+  _cachedAppThemeId = appThemeId;
+  _cachedTheme = computeEffectiveTheme(state.selectedSchemeId, state.customSchemes);
+  return _cachedTheme;
 }
 
 export const useTerminalColorSchemeStore = create<TerminalColorSchemeState>()((set, get) => ({
