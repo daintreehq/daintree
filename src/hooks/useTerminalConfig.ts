@@ -59,6 +59,7 @@ export function useTerminalConfig() {
   }, [setFontSize, setFontFamily, setSelectedSchemeId, addCustomScheme]);
 
   const colorVisionMode = useAppThemeStore((state) => state.colorVisionMode);
+  const appThemeId = useAppThemeStore((state) => state.selectedSchemeId);
 
   useEffect(() => {
     const theme = useTerminalColorSchemeStore.getState().getEffectiveTheme();
@@ -69,5 +70,6 @@ export function useTerminalConfig() {
     });
     // customSchemes in deps ensures re-run when a custom scheme is added/changed
     // colorVisionMode in deps ensures terminal ANSI colors update when CVD mode changes
-  }, [selectedSchemeId, customSchemes, fontSize, fontFamily, colorVisionMode]);
+    // appThemeId in deps ensures terminal updates when app theme changes while "canopy" is selected
+  }, [selectedSchemeId, customSchemes, fontSize, fontFamily, colorVisionMode, appThemeId]);
 }
