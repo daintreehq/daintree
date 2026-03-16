@@ -1,4 +1,4 @@
-import type { AgentId } from "../domain.js";
+import type { AgentId } from "../agent.js";
 
 /** Open external URL payload */
 export interface SystemOpenExternalPayload {

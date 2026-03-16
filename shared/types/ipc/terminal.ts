@@ -1,5 +1,6 @@
-import type { TerminalType, TerminalKind, AgentId, TerminalLocation } from "../domain.js";
-import type { AgentState } from "../domain.js";
+import type { TerminalType, TerminalKind, TerminalLocation } from "../panel.js";
+import type { AgentId } from "../agent.js";
+import type { AgentState } from "../agent.js";
 
 /** Terminal spawn options */
 export interface TerminalSpawnOptions {
@@ -61,7 +62,7 @@ export interface TerminalState {
   /** Current URL for browser/dev-preview panes */
   browserUrl?: string;
   /** Navigation history for browser/dev-preview panes */
-  browserHistory?: import("../domain.js").BrowserHistory;
+  browserHistory?: import("../browser.js").BrowserHistory;
   /** Zoom factor for browser/dev-preview panes */
   browserZoom?: number;
   /** Path to note file (kind === 'notes') */
@@ -87,7 +88,7 @@ export interface TerminalState {
   /** Whether the dev-preview console drawer is open */
   devPreviewConsoleOpen?: boolean;
   /** Behavior when terminal exits */
-  exitBehavior?: import("../domain.js").PanelExitBehavior;
+  exitBehavior?: import("../panel.js").PanelExitBehavior;
   /** Captured agent session ID from graceful shutdown */
   agentSessionId?: string;
   /** Process-level flags captured at launch time, persisted for session resume */

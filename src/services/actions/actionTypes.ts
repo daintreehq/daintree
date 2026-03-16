@@ -1,5 +1,5 @@
 import type { ActionDefinition, ActionId } from "@shared/types/actions";
-import type { Worktree } from "@shared/types/domain";
+import type { Worktree } from "@shared/types/worktree";
 import type { SettingsNavTarget } from "@/components/Settings";
 
 export type ActionRegistry = Map<ActionId, () => ActionDefinition<unknown, unknown>>;

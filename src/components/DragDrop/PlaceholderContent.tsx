@@ -1,4 +1,4 @@
-import type { PanelKind } from "@shared/types/domain";
+import type { PanelKind } from "@shared/types/panel";
 import { getPanelKindColor } from "@shared/config/panelKindRegistry";
 
 interface PlaceholderContentProps {

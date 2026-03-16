@@ -11,13 +11,8 @@
  * All types are serializable (no functions, no circular refs) for IPC transport.
  */
 
-import type {
-  Worktree,
-  WorktreeChanges,
-  FileChangeDetail,
-  WorktreeMood,
-  WorktreeLifecycleStatus,
-} from "./domain.js";
+import type { FileChangeDetail, WorktreeChanges } from "./git.js";
+import type { Worktree, WorktreeMood, WorktreeLifecycleStatus } from "./worktree.js";
 import type {
   CopyTreeOptions,
   CopyTreeProgress,

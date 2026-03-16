@@ -9,7 +9,8 @@ import {
 } from "path";
 import { realpathSync, existsSync } from "fs";
 import { simpleGit, SimpleGit, BranchSummary } from "simple-git";
-import type { Worktree, WorktreeChanges } from "../../shared/types/domain.js";
+import type { Worktree } from "../../shared/types/worktree.js";
+import type { WorktreeChanges } from "../../shared/types/git.js";
 import type {
   WorkspaceHostEvent,
   WorktreeSnapshot,

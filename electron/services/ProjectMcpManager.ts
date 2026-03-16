@@ -1,6 +1,6 @@
 import { spawn, type ChildProcess } from "child_process";
 import type { BrowserWindow } from "electron";
-import type { ProjectMcpServerConfig } from "../../shared/types/domain.js";
+import type { ProjectMcpServerConfig } from "../../shared/types/project.js";
 import type { ProjectMcpServerRunState } from "../../shared/types/ipc/project.js";
 import { CHANNELS } from "../ipc/channels.js";
 import { sendToRenderer } from "../ipc/utils.js";

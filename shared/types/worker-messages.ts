@@ -3,7 +3,7 @@
  * Worker runs in browser context, polling a SharedArrayBuffer for terminal data.
  */
 
-import type { AgentState, AgentStateChangeTrigger } from "./domain.js";
+import type { AgentState, AgentStateChangeTrigger } from "./agent.js";
 import type { Artifact } from "./ipc.js";
 
 // Worker → Main Thread Messages

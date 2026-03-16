@@ -1,4 +1,4 @@
-import type { GitStatus } from "../domain.js";
+import type { GitStatus } from "../git.js";
 
 /** Get file diff payload */
 export interface GitGetFileDiffPayload {

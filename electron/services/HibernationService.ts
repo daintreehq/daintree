@@ -1,4 +1,4 @@
-import type { AgentState } from "../../shared/types/domain.js";
+import type { AgentState } from "../../shared/types/agent.js";
 import { store } from "../store.js";
 import { projectStore } from "./ProjectStore.js";
 import { logInfo, logError } from "../utils/logger.js";

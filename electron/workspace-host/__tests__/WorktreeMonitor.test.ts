@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import type { Worktree } from "../../../shared/types/domain.js";
+import type { Worktree } from "../../../shared/types/worktree.js";
 import { WorktreeRemovedError } from "../../utils/errorTypes.js";
 
 const mockGetWorktreeChangesWithStats = vi.fn();

@@ -11,7 +11,7 @@ import type {
   DetachIssuePayload,
   IssueAssociation,
 } from "../../../shared/types/ipc/worktree.js";
-import type { WorktreeState } from "../../../shared/types/domain.js";
+import type { WorktreeState } from "../../../shared/types/worktree.js";
 import { generateWorktreePath, validatePathPattern } from "../../../shared/utils/pathPattern.js";
 import { GitService } from "../../services/GitService.js";
 import { projectStore } from "../../services/ProjectStore.js";

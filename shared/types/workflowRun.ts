@@ -5,7 +5,7 @@
  * task mappings, and routing decisions.
  */
 
-import type { TaskState } from "./domain.js";
+import type { TaskState } from "./agent.js";
 import type { TaskResult } from "./task.js";
 import type { WorkflowCondition } from "./workflow.js";
 

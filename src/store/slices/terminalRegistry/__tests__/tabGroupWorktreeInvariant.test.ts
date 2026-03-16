@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { TerminalRefreshTier } from "@/types";
 import type { TerminalInstance } from "../../terminalRegistrySlice";
-import type { TabGroup } from "@shared/types/domain";
+import type { TabGroup } from "@shared/types/panel";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 
 vi.mock("@/clients", () => ({

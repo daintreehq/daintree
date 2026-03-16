@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { TerminalRefreshTier } from "../../../../shared/types/domain";
+import { TerminalRefreshTier } from "../../../../shared/types/panel";
 
 const mockTerminalClient = {
   onData: vi.fn(() => vi.fn()),

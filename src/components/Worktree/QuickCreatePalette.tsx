@@ -2,7 +2,7 @@ import { useCallback } from "react";
 import { cn } from "@/lib/utils";
 import { SearchablePalette } from "@/components/ui/SearchablePalette";
 import type { QuickCreateItem, UseQuickCreatePaletteReturn } from "@/hooks/useQuickCreatePalette";
-import { getAutoAssign } from "@shared/types/domain";
+import { getAutoAssign } from "@shared/types/project";
 import type { TerminalRecipe } from "@/types";
 import { Settings2 } from "lucide-react";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";

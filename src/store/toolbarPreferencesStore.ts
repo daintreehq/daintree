@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
-import type { ToolbarPreferences, ToolbarButtonId } from "@/../../shared/types/domain";
+import type { ToolbarPreferences, ToolbarButtonId } from "@/../../shared/types/toolbar";
 import { createSafeJSONStorage } from "./persistence/safeStorage";
 import { BUILT_IN_AGENT_IDS } from "@shared/config/agentIds";
 

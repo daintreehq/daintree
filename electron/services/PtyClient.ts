@@ -46,7 +46,8 @@ import type {
 } from "../../shared/types/pty-host.js";
 import type { TerminalSnapshot } from "./PtyManager.js";
 import type { AgentStateChangeTrigger } from "../types/index.js";
-import type { AgentState, TerminalType, TerminalKind, AgentId } from "../../shared/types/domain.js";
+import type { AgentState, AgentId } from "../../shared/types/agent.js";
+import type { TerminalType, TerminalKind } from "../../shared/types/panel.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -1048,7 +1049,7 @@ export class PtyClient extends EventEmitter {
 
   /** Get terminals filtered by agent state */
   async getTerminalsByStateAsync(
-    state: import("../../shared/types/domain.js").AgentState
+    state: import("../../shared/types/agent.js").AgentState
   ): Promise<TerminalInfoResponse[]> {
     const requestId = this.broker.generateId(`terminals-by-state-${state}`);
     const promise = this.broker.register<TerminalInfoResponse[]>(requestId);

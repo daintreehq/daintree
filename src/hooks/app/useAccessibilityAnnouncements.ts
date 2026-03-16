@@ -1,7 +1,7 @@
 import { useEffect, useRef } from "react";
 import { useTerminalStore } from "@/store";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
-import type { AgentState } from "@shared/types/domain";
+import type { AgentState } from "@shared/types/agent";
 
 interface TerminalStateSnapshot {
   agentState?: AgentState;

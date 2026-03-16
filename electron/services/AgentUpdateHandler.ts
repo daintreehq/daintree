@@ -1,7 +1,7 @@
 import crypto from "crypto";
 import os from "os";
 import { getEffectiveAgentConfig } from "../../shared/config/agentRegistry.js";
-import type { AgentId } from "../../shared/types/domain.js";
+import type { AgentId } from "../../shared/types/agent.js";
 import type {
   StartAgentUpdatePayload,
   StartAgentUpdateResult,

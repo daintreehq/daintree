@@ -1,6 +1,6 @@
 import { create, type StateCreator } from "zustand";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
-import { TerminalRefreshTier } from "@shared/types/domain";
+import { TerminalRefreshTier } from "@shared/types/panel";
 import type { GitHubIssue, GitHubPR } from "@shared/types/github";
 import { useFocusStore } from "@/store/focusStore";
 import { logErrorWithContext } from "@/utils/errorContext";

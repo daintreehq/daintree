@@ -1,14 +1,14 @@
+import type { StagingStatus } from "../git.js";
+import type { AgentId } from "../agent.js";
+import type { TabGroup } from "../panel.js";
+import type { WorktreeState } from "../worktree.js";
 import type {
-  WorktreeState,
   Project,
   ProjectSettings,
   RunCommand,
-  AgentId,
   TerminalRecipe,
   TerminalSnapshot,
-  TabGroup,
-  StagingStatus,
-} from "../domain.js";
+} from "../project.js";
 import type { GitInitOptions, GitInitProgressEvent, GitInitResult } from "./gitInit.js";
 import type { AgentSettings } from "../agentSettings.js";
 import type { UserAgentRegistry, UserAgentConfig } from "../userAgentRegistry.js";

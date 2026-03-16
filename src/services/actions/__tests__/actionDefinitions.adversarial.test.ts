@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { TerminalInstance } from "@shared/types/domain";
+import type { TerminalInstance } from "@shared/types/panel";
 import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 
 const mocks = vi.hoisted(() => {
