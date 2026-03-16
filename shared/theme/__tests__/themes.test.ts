@@ -353,7 +353,6 @@ describe("built-in schemes — Fiordland", () => {
 
 describe("built-in schemes — Galápagos", () => {
   const galapagos = BUILT_IN_APP_SCHEMES.find((s) => s.id === "galapagos")!;
-  const canvas = "#131A1C";
 
   it("exists with correct metadata", () => {
     expect(galapagos).toBeDefined();
