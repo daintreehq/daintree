@@ -33,7 +33,8 @@ test.describe.serial("Core: Light Theme Smoke", () => {
     if (ctx?.app) await closeApp(ctx.app);
   });
 
-  test("light themes keep key chrome readable and capture screenshots", async (_, testInfo) => {
+  // eslint-disable-next-line no-empty-pattern
+  test("light themes keep key chrome readable and capture screenshots", async ({}, testInfo) => {
     const { window } = ctx;
 
     for (const schemeId of LIGHT_SCHEME_IDS) {

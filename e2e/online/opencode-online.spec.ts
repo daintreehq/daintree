@@ -63,7 +63,16 @@ test.describe("OpenCode Online Flow", () => {
         const text = await getTerminalText(agentPanel);
         const lower = text.toLowerCase();
 
-        if (lower.includes("ask anything") || /build\s+opencode/i.test(text)) {
+        // Also check the CodeMirror input placeholder for ready state
+        const cmText = await cmEditor.innerText().catch(() => "");
+        const cmLower = cmText.toLowerCase();
+
+        if (
+          lower.includes("ask anything") ||
+          /build\s+opencode/i.test(text) ||
+          cmLower.includes("type a command") ||
+          lower.includes("database migration complete")
+        ) {
           reachedReady = true;
         } else if (lower.includes("provider") || lower.includes("/connect")) {
           await cmEditor.click();
