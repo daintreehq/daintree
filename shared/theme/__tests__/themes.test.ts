@@ -283,6 +283,10 @@ describe("built-in schemes — Bondi light theme", () => {
     expect(bondi.tokens["category-blue"]).toBe("oklch(0.62 0.14 250)");
     expect(bondi.tokens["category-slate"]).toBe("oklch(0.58 0.04 240)");
   });
+
+  it("passes critical contrast validation with no warnings", () => {
+    expect(getAppThemeWarnings(bondi)).toEqual([]);
+  });
 });
 
 describe("getBuiltInAppSchemeForType — returns Bondi for light", () => {
