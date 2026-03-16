@@ -779,7 +779,7 @@ describe("createFilePasteHandler", () => {
 
     expect(onFilePaste).toHaveBeenCalledOnce();
     expect(onFilePaste).toHaveBeenCalledWith(view, [
-      { path: "/Users/test/test.pdf", name: "test.pdf" },
+      { path: "/Users/test/test.pdf", name: "test.pdf", size: 7 },
     ]);
 
     view.destroy();
