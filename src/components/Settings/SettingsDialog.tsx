@@ -683,7 +683,12 @@ export function SettingsDialog({
                 >
                   <GeneralTab
                     appVersion={appVersion}
-                    onNavigateToAgents={() => setActiveTab("agents")}
+                    onNavigateToAgents={(agentId?: string) => {
+                      setActiveTab("agents");
+                      if (agentId) {
+                        setActiveSubtabs((prev) => ({ ...prev, agents: agentId }));
+                      }
+                    }}
                     activeSubtab={activeSubtabs["general"] ?? null}
                     onSubtabChange={(id) => setActiveSubtabs((prev) => ({ ...prev, general: id }))}
                   />
