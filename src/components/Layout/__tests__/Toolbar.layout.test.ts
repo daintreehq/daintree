@@ -100,6 +100,20 @@ describe("Toolbar layout — issue #2584 project switcher collision", () => {
     });
   });
 
+  describe("Window resize strip — issue #3273 Linux native title bar", () => {
+    it("imports isLinux from platform", () => {
+      expect(source).toContain("isLinux");
+    });
+
+    it("window-resize-strip is guarded by !isLinux()", () => {
+      expect(source).toMatch(/!isLinux\(\)\s*&&\s*<div className="window-resize-strip"/);
+    });
+
+    it("window-resize-strip is not rendered unconditionally", () => {
+      expect(source).not.toMatch(/^\s*<div className="window-resize-strip"\s*\/>/m);
+    });
+  });
+
   describe("Project switcher trigger", () => {
     it("button has overflow-hidden for truncation", () => {
       expect(source).toContain('data-testid="project-switcher-trigger"');

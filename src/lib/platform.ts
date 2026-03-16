@@ -10,6 +10,18 @@ export function isMac(): boolean {
   return _isMac;
 }
 
+let _isLinux: boolean | undefined;
+
+export function isLinux(): boolean {
+  if (_isLinux === undefined) {
+    _isLinux =
+      typeof navigator !== "undefined" &&
+      !!navigator.userAgent &&
+      navigator.userAgent.includes("Linux");
+  }
+  return _isLinux;
+}
+
 /**
  * Format a keyboard shortcut string for tooltip display using OS-appropriate modifier names.
  * Uses text labels (not symbols) for clarity in tooltips.
