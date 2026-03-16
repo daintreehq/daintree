@@ -5,6 +5,8 @@ export interface ThemeChromeMetrics {
   projectTitleContrast: number;
   quickRunFieldBorderContrast: number;
   worktreeSectionContrast: number;
+  sidebarVsCanvasContrast: number;
+  panelVsGridContrast: number;
 }
 
 export async function setAppTheme(page: Page, schemeId: string): Promise<void> {
@@ -141,6 +143,9 @@ export async function getThemeChromeMetrics(
       const projectTrigger = document.querySelector<HTMLElement>(selectors.projectTrigger);
       const quickRunInput = document.querySelector<HTMLInputElement>(selectors.quickRunInput);
       const worktreeCard = document.querySelector<HTMLElement>(selectors.worktreeCard);
+      const sidebar = document.querySelector<HTMLElement>(selectors.sidebar);
+      const gridPanel = document.querySelector<HTMLElement>(selectors.gridPanel);
+      const gridContainer = document.querySelector<HTMLElement>(selectors.gridContainer);
 
       if (!projectTrigger || !quickRunInput || !worktreeCard) {
         throw new Error("Required theme smoke selectors were not found");
@@ -167,6 +172,15 @@ export async function getThemeChromeMetrics(
       const cardBackground = resolveEffectiveBackground(worktreeCard);
       const sectionBackground = resolveEffectiveBackground(detailsSection);
 
+      const rootBackground = resolveEffectiveBackground(document.body);
+      const sidebarBackground = sidebar ? resolveEffectiveBackground(sidebar) : rootBackground;
+      const gridContainerBackground = gridContainer
+        ? resolveEffectiveBackground(gridContainer)
+        : rootBackground;
+      const panelBackground = gridPanel
+        ? resolveEffectiveBackground(gridPanel)
+        : gridContainerBackground;
+
       return {
         projectTitleContrast: contrastRatio(
           parseColor(getComputedStyle(projectTitle).color),
@@ -174,6 +188,8 @@ export async function getThemeChromeMetrics(
         ),
         quickRunFieldBorderContrast: contrastRatio(fieldBorderColor, quickRunBackground),
         worktreeSectionContrast: contrastRatio(sectionBackground, cardBackground),
+        sidebarVsCanvasContrast: contrastRatio(sidebarBackground, rootBackground),
+        panelVsGridContrast: contrastRatio(panelBackground, gridContainerBackground),
       };
     },
     {
@@ -181,6 +197,9 @@ export async function getThemeChromeMetrics(
       quickRunInput: '[aria-label="Command input"]',
       worktreeCard: SEL.worktree.card(branch),
       projectName: options.projectName,
+      sidebar: 'aside[aria-label="Sidebar"]',
+      gridPanel: SEL.panel.gridPanel,
+      gridContainer: "#terminal-grid",
     }
   );
 }

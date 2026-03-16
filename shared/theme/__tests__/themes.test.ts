@@ -86,17 +86,17 @@ describe("createCanopyTokens — light mode derived defaults", () => {
   const lightTokens = createCanopyTokens("light", REQUIRED_TOKENS);
 
   it("derives border defaults from the theme's foreground ink for light mode", () => {
-    expect(lightTokens["border-subtle"]).toBe("rgba(26, 26, 26, 0.06)");
-    expect(lightTokens["border-strong"]).toBe("rgba(26, 26, 26, 0.12)");
+    expect(lightTokens["border-subtle"]).toBe("rgba(26, 26, 26, 0.12)");
+    expect(lightTokens["border-strong"]).toBe("rgba(26, 26, 26, 0.2)");
     expect(lightTokens["border-divider"]).toBe("rgba(26, 26, 26, 0.08)");
   });
 
   it("derives overlay defaults from the theme's foreground ink for light mode", () => {
     expect(lightTokens["overlay-subtle"]).toBe("rgba(26, 26, 26, 0.04)");
-    expect(lightTokens["overlay-soft"]).toBe("rgba(26, 26, 26, 0.06)");
-    expect(lightTokens["overlay-medium"]).toBe("rgba(26, 26, 26, 0.08)");
-    expect(lightTokens["overlay-strong"]).toBe("rgba(26, 26, 26, 0.1)");
-    expect(lightTokens["overlay-emphasis"]).toBe("rgba(26, 26, 26, 0.14)");
+    expect(lightTokens["overlay-soft"]).toBe("rgba(26, 26, 26, 0.08)");
+    expect(lightTokens["overlay-medium"]).toBe("rgba(26, 26, 26, 0.12)");
+    expect(lightTokens["overlay-strong"]).toBe("rgba(26, 26, 26, 0.16)");
+    expect(lightTokens["overlay-emphasis"]).toBe("rgba(26, 26, 26, 0.2)");
   });
 
   it("sets lighter scrim defaults for light mode", () => {
@@ -106,12 +106,12 @@ describe("createCanopyTokens — light mode derived defaults", () => {
   });
 
   it("derives focus-ring from the theme's foreground ink for light mode", () => {
-    expect(lightTokens["focus-ring"]).toBe("rgba(26, 26, 26, 0.15)");
+    expect(lightTokens["focus-ring"]).toBe("rgba(26, 26, 26, 0.2)");
   });
 
   it("keeps the default Bondi overlays warm instead of neutral black", () => {
     const bondi = BUILT_IN_APP_SCHEMES.find((scheme) => scheme.id === "bondi")!;
-    expect(bondi.tokens["overlay-soft"]).toBe("rgba(27, 54, 38, 0.06)");
+    expect(bondi.tokens["overlay-soft"]).toBe("rgba(27, 54, 38, 0.08)");
     expect(bondi.tokens["border-divider"]).toBe("rgba(27, 54, 38, 0.08)");
   });
 });
@@ -172,6 +172,34 @@ describe("createCanopyTokens — caller overrides win via spread", () => {
       "overlay-emphasis": "rgba(50, 50, 50, 0.2)",
     });
     expect(tokens["overlay-emphasis"]).toBe("rgba(50, 50, 50, 0.2)");
+  });
+});
+
+describe("createCanopyTokens — accent-soft/muted branch by type", () => {
+  it("uses higher alpha for dark accent-soft/muted", () => {
+    const darkTokens = createCanopyTokens("dark", REQUIRED_TOKENS);
+    expect(darkTokens["accent-soft"]).toBe("rgba(63, 147, 102, 0.18)");
+    expect(darkTokens["accent-muted"]).toBe("rgba(63, 147, 102, 0.3)");
+  });
+
+  it("uses lower alpha for light accent-soft/muted", () => {
+    const lightTokens = createCanopyTokens("light", REQUIRED_TOKENS);
+    expect(lightTokens["accent-soft"]).toBe("rgba(63, 147, 102, 0.12)");
+    expect(lightTokens["accent-muted"]).toBe("rgba(63, 147, 102, 0.2)");
+  });
+});
+
+describe("createCanopyTokens — terminal fallbacks branch by type", () => {
+  it("dark: terminal-black = surface-canvas, terminal-white = text-primary", () => {
+    const darkTokens = createCanopyTokens("dark", REQUIRED_TOKENS);
+    expect(darkTokens["terminal-black"]).toBe(REQUIRED_TOKENS["surface-canvas"]);
+    expect(darkTokens["terminal-white"]).toBe(REQUIRED_TOKENS["text-primary"]);
+  });
+
+  it("light: terminal-black = text-primary, terminal-white = surface-canvas", () => {
+    const lightTokens = createCanopyTokens("light", REQUIRED_TOKENS);
+    expect(lightTokens["terminal-black"]).toBe(REQUIRED_TOKENS["text-primary"]);
+    expect(lightTokens["terminal-white"]).toBe(REQUIRED_TOKENS["surface-canvas"]);
   });
 });
 
@@ -542,6 +570,30 @@ describe("Hokkaido built-in scheme", () => {
   });
 });
 
+describe("built-in schemes — Svalbard light terminal fallbacks", () => {
+  const svalbard = BUILT_IN_APP_SCHEMES.find((s) => s.id === "svalbard")!;
+
+  it("auto-derives terminal-black from text-primary for light themes", () => {
+    expect(svalbard.tokens["terminal-black"]).toBe(svalbard.tokens["text-primary"]);
+  });
+
+  it("auto-derives terminal-white from surface-canvas for light themes", () => {
+    expect(svalbard.tokens["terminal-white"]).toBe(svalbard.tokens["surface-canvas"]);
+  });
+});
+
+describe("built-in schemes — Hokkaido light terminal fallbacks", () => {
+  const hokkaido = BUILT_IN_APP_SCHEMES.find((s) => s.id === "hokkaido")!;
+
+  it("auto-derives terminal-black from text-primary for light themes", () => {
+    expect(hokkaido.tokens["terminal-black"]).toBe(hokkaido.tokens["text-primary"]);
+  });
+
+  it("auto-derives terminal-white from surface-canvas for light themes", () => {
+    expect(hokkaido.tokens["terminal-white"]).toBe(hokkaido.tokens["surface-canvas"]);
+  });
+});
+
 describe("normalizeAppColorScheme", () => {
   it("uses a light fallback base for partial light themes", () => {
     const scheme = normalizeAppColorScheme({
@@ -589,12 +641,12 @@ describe("built-in schemes — Atacama light theme", () => {
     expect(atacama.tokens["terminal-bright-white"]).toBe("#1A1210");
   });
 
-  it("auto-derives terminal-black from surface-canvas", () => {
-    expect(atacama.tokens["terminal-black"]).toBe(atacama.tokens["surface-canvas"]);
+  it("auto-derives terminal-black from text-primary for light themes", () => {
+    expect(atacama.tokens["terminal-black"]).toBe(atacama.tokens["text-primary"]);
   });
 
-  it("auto-derives terminal-white from text-primary", () => {
-    expect(atacama.tokens["terminal-white"]).toBe(atacama.tokens["text-primary"]);
+  it("auto-derives terminal-white from surface-canvas for light themes", () => {
+    expect(atacama.tokens["terminal-white"]).toBe(atacama.tokens["surface-canvas"]);
   });
 
   it("auto-derives terminal-bright-black from activity-idle", () => {

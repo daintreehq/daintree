@@ -70,8 +70,10 @@ export function createCanopyTokens(
   const dark = type === "dark";
   const lightInk = tokens["text-primary"];
   const overlayTone = dark ? "#ffffff" : lightInk;
-  const accentSoft = tokens["accent-soft"] ?? withAlpha(tokens["accent-primary"], 0.18);
-  const accentMuted = tokens["accent-muted"] ?? withAlpha(tokens["accent-primary"], 0.3);
+  const accentSoft =
+    tokens["accent-soft"] ?? withAlpha(tokens["accent-primary"], dark ? 0.18 : 0.12);
+  const accentMuted =
+    tokens["accent-muted"] ?? withAlpha(tokens["accent-primary"], dark ? 0.3 : 0.2);
 
   return {
     ...GITHUB_TOKENS,
@@ -87,25 +89,27 @@ export function createCanopyTokens(
     "category-pink": tokens["category-pink"] ?? "oklch(0.72 0.13 340)",
     "category-violet": tokens["category-violet"] ?? "oklch(0.7 0.13 295)",
     "category-slate": tokens["category-slate"] ?? "oklch(0.65 0.04 240)",
-    "border-subtle": tokens["border-subtle"] ?? withAlpha(overlayTone, dark ? 0.08 : 0.06),
-    "border-strong": tokens["border-strong"] ?? withAlpha(overlayTone, dark ? 0.14 : 0.12),
+    "border-subtle": tokens["border-subtle"] ?? withAlpha(overlayTone, dark ? 0.08 : 0.12),
+    "border-strong": tokens["border-strong"] ?? withAlpha(overlayTone, dark ? 0.14 : 0.2),
     "border-divider": tokens["border-divider"] ?? withAlpha(overlayTone, dark ? 0.05 : 0.08),
     "accent-foreground": tokens["accent-foreground"] ?? tokens["text-inverse"],
     "accent-soft": accentSoft,
     "accent-muted": accentMuted,
-    "focus-ring": tokens["focus-ring"] ?? withAlpha(overlayTone, dark ? 0.18 : 0.15),
+    "focus-ring": tokens["focus-ring"] ?? withAlpha(overlayTone, dark ? 0.18 : 0.2),
     "overlay-subtle": tokens["overlay-subtle"] ?? withAlpha(overlayTone, dark ? 0.02 : 0.04),
-    "overlay-soft": tokens["overlay-soft"] ?? withAlpha(overlayTone, dark ? 0.03 : 0.06),
-    "overlay-medium": tokens["overlay-medium"] ?? withAlpha(overlayTone, dark ? 0.04 : 0.08),
-    "overlay-strong": tokens["overlay-strong"] ?? withAlpha(overlayTone, dark ? 0.06 : 0.1),
-    "overlay-emphasis": tokens["overlay-emphasis"] ?? withAlpha(overlayTone, dark ? 0.1 : 0.14),
+    "overlay-soft": tokens["overlay-soft"] ?? withAlpha(overlayTone, dark ? 0.03 : 0.08),
+    "overlay-medium": tokens["overlay-medium"] ?? withAlpha(overlayTone, dark ? 0.04 : 0.12),
+    "overlay-strong": tokens["overlay-strong"] ?? withAlpha(overlayTone, dark ? 0.06 : 0.16),
+    "overlay-emphasis": tokens["overlay-emphasis"] ?? withAlpha(overlayTone, dark ? 0.1 : 0.2),
     "scrim-soft": tokens["scrim-soft"] ?? (dark ? "rgba(0, 0, 0, 0.2)" : "rgba(0, 0, 0, 0.12)"),
     "scrim-medium":
       tokens["scrim-medium"] ?? (dark ? "rgba(0, 0, 0, 0.45)" : "rgba(0, 0, 0, 0.30)"),
     "scrim-strong":
       tokens["scrim-strong"] ?? (dark ? "rgba(0, 0, 0, 0.62)" : "rgba(0, 0, 0, 0.45)"),
-    "terminal-black": tokens["terminal-black"] ?? tokens["surface-canvas"],
-    "terminal-white": tokens["terminal-white"] ?? tokens["text-primary"],
+    "terminal-black":
+      tokens["terminal-black"] ?? (dark ? tokens["surface-canvas"] : tokens["text-primary"]),
+    "terminal-white":
+      tokens["terminal-white"] ?? (dark ? tokens["text-primary"] : tokens["surface-canvas"]),
     "terminal-bright-black": tokens["terminal-bright-black"] ?? tokens["activity-idle"],
     ...tokens,
   };

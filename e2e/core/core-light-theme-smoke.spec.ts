@@ -49,6 +49,12 @@ test.describe.serial("Core: Light Theme Smoke", () => {
       ).toContainText(PROJECT_NAME);
       expect
         .soft(
+          metrics.projectTitleContrast,
+          `${schemeId}: project title text should meet WCAG AA contrast`
+        )
+        .toBeGreaterThanOrEqual(4.5);
+      expect
+        .soft(
           metrics.quickRunFieldBorderContrast,
           `${schemeId}: quick-run input border should stay visibly separated`
         )
@@ -59,6 +65,18 @@ test.describe.serial("Core: Light Theme Smoke", () => {
           `${schemeId}: worktree sections should remain visually separated`
         )
         .toBeGreaterThanOrEqual(1.08);
+      expect
+        .soft(
+          metrics.sidebarVsCanvasContrast,
+          `${schemeId}: sidebar should be visually separated from canvas`
+        )
+        .toBeGreaterThanOrEqual(1.08);
+      expect
+        .soft(
+          metrics.panelVsGridContrast,
+          `${schemeId}: panel background should differ from grid background`
+        )
+        .toBeGreaterThanOrEqual(1.05);
 
       const screenshotPath = testInfo.outputPath(`light-theme-${schemeId}.png`);
       await window.screenshot({ path: screenshotPath, fullPage: true });
