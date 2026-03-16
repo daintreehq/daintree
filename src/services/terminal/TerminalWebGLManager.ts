@@ -10,7 +10,11 @@ interface WebGLEntry {
 }
 
 export class TerminalWebGLManager {
-  static readonly MAX_CONTEXTS = 16;
+  // Chromium caps active WebGL contexts at 16 per renderer process.
+  // Reserve 4 slots for potential non-terminal WebGL consumers in the
+  // main renderer (browser/dev-preview panels are process-isolated via
+  // <webview> partitions and have their own budgets).
+  static readonly MAX_CONTEXTS = 12;
 
   private pool = new Map<string, WebGLEntry>();
   private lruOrder: string[] = [];
