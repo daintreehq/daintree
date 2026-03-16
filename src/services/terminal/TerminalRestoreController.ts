@@ -60,10 +60,7 @@ export class TerminalRestoreController {
     }
   }
 
-  async restoreFromSerializedIncremental(
-    id: string,
-    serializedState: string
-  ): Promise<boolean> {
+  async restoreFromSerializedIncremental(id: string, serializedState: string): Promise<boolean> {
     const managed = this.deps.getInstance(id);
     if (!managed) {
       logWarn(`Cannot restore: terminal ${id} not found`);

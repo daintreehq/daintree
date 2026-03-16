@@ -83,7 +83,10 @@ describe("TerminalScrollbackController", () => {
 
     it("reduces scrollback and writes notice when scrollback content exceeds target", () => {
       const managed = makeMockManaged();
-      Object.defineProperty(managed.terminal.buffer.active, "length", { value: 3000, writable: true });
+      Object.defineProperty(managed.terminal.buffer.active, "length", {
+        value: 3000,
+        writable: true,
+      });
       reduceScrollback(managed, 500);
 
       expect(managed.terminal.options.scrollback).toBe(500);
@@ -93,7 +96,10 @@ describe("TerminalScrollbackController", () => {
 
     it("reduces scrollback without notice when scrollback content is within target", () => {
       const managed = makeMockManaged();
-      Object.defineProperty(managed.terminal.buffer.active, "length", { value: 100, writable: true });
+      Object.defineProperty(managed.terminal.buffer.active, "length", {
+        value: 100,
+        writable: true,
+      });
       reduceScrollback(managed, 500);
 
       expect(managed.terminal.options.scrollback).toBe(500);

@@ -2,11 +2,7 @@ import { Terminal } from "@xterm/xterm";
 import { terminalClient } from "@/clients";
 import { TerminalRefreshTier, TerminalType } from "@/types";
 import type { AgentState } from "@/types";
-import {
-  ManagedTerminal,
-  RefreshTierProvider,
-  AgentStateCallback,
-} from "./types";
+import { ManagedTerminal, RefreshTierProvider, AgentStateCallback } from "./types";
 import { setupTerminalAddons } from "./TerminalAddonManager";
 import { TerminalOutputIngestService } from "./TerminalOutputIngestService";
 import { TerminalParserHandler } from "./TerminalParserHandler";
@@ -90,8 +86,7 @@ class TerminalInstanceService {
     this.wakeManager = new TerminalWakeManager({
       getInstance: (id) => this.instances.get(id),
       hasInstance: (id) => this.instances.has(id),
-      restoreFromSerialized: (id, state) =>
-        this.restoreController.restoreFromSerialized(id, state),
+      restoreFromSerialized: (id, state) => this.restoreController.restoreFromSerialized(id, state),
       restoreFromSerializedIncremental: (id, state) =>
         this.restoreController.restoreFromSerializedIncremental(id, state),
     });
@@ -1207,10 +1202,7 @@ class TerminalInstanceService {
     return this.restoreController.restoreFromSerialized(id, serializedState);
   }
 
-  restoreFromSerializedIncremental(
-    id: string,
-    serializedState: string
-  ): Promise<boolean> {
+  restoreFromSerializedIncremental(id: string, serializedState: string): Promise<boolean> {
     return this.restoreController.restoreFromSerializedIncremental(id, serializedState);
   }
 
