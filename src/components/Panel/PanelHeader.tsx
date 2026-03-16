@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import React, { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import {
   X,
   Maximize2,
@@ -29,7 +29,7 @@ import { getBrandColorHex } from "@/lib/colorUtils";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import { DockToBottomIcon } from "@/components/icons";
 import { useDragHandle } from "@/components/DragDrop/DragHandleContext";
-import { useBackgroundPanelStats } from "@/hooks";
+import { useBackgroundPanelStats, useHorizontalScrollControls } from "@/hooks";
 import { useTerminalStore } from "@/store/terminalStore";
 import {
   DropdownMenu,
@@ -272,6 +272,30 @@ function PanelHeaderComponent({
   const canReorderTabs = hasTabs && !!onTabReorder && !!groupId;
   const tabIds = tabs?.map((t) => t.id) ?? [];
 
+  const { canScrollLeft: tabsCanScrollLeft, canScrollRight: tabsCanScrollRight } =
+    useHorizontalScrollControls(tabListRef);
+
+  const activeTabId = tabs?.find((t) => t.isActive)?.id ?? null;
+
+  useLayoutEffect(() => {
+    const container = tabListRef.current;
+    if (!container || !activeTabId || isDragging) return;
+
+    const tabEl = container.querySelector(`[data-tab-id="${activeTabId}"]`) as HTMLElement | null;
+    if (!tabEl) return;
+
+    const containerLeft = container.scrollLeft;
+    const containerRight = containerLeft + container.clientWidth;
+    const tabLeft = tabEl.offsetLeft;
+    const tabRight = tabLeft + tabEl.offsetWidth;
+
+    if (tabLeft < containerLeft) {
+      container.scrollTo({ left: tabLeft, behavior: "smooth" });
+    } else if (tabRight > containerRight) {
+      container.scrollTo({ left: tabRight - container.clientWidth, behavior: "smooth" });
+    }
+  }, [activeTabId, isDragging]);
+
   // Sensors for tab drag-and-drop (require small distance to differentiate from clicks)
   const tabSensors = useSensors(
     useSensor(PointerSensor, {
@@ -342,6 +366,14 @@ function PanelHeaderComponent({
     [tabs, onTabClick]
   );
 
+  const tabFadeFrom = isMaximized
+    ? "from-canopy-sidebar"
+    : location === "dock"
+      ? "from-surface"
+      : isFocused
+        ? "from-overlay-subtle"
+        : "from-canopy-bg";
+
   return (
     <div
       {...dragListeners}
@@ -371,97 +403,113 @@ function PanelHeaderComponent({
             modifiers={[restrictToHorizontalAxis, restrictToParentElement]}
           >
             <SortableContext items={tabIds} strategy={horizontalListSortingStrategy}>
-              <div
-                ref={tabListRef}
-                className="flex items-center min-w-0 flex-1 overflow-x-auto scrollbar-none"
-                role="tablist"
-                aria-label="Panel tabs"
-                onKeyDown={handleTabListKeyDown}
-              >
-                {tabs.map((tab) => (
-                  <SortableTabButton
-                    key={tab.id}
-                    id={tab.id}
-                    title={getBaseTitle(tab.title)}
-                    type={tab.type}
-                    agentId={tab.agentId}
-                    detectedProcessId={tab.detectedProcessId}
-                    kind={tab.kind}
-                    agentState={tab.agentState}
-                    isActive={tab.isActive}
-                    onClick={() => onTabClick?.(tab.id)}
-                    onClose={() => onTabClose?.(tab.id)}
-                    onRename={onTabRename ? (newTitle) => onTabRename(tab.id, newTitle) : undefined}
-                  />
-                ))}
-                {onAddTab && (
-                  <TooltipProvider>
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            onAddTab();
-                          }}
-                          onPointerDown={(e) => e.stopPropagation()}
-                          className="shrink-0 p-1.5 hover:bg-canopy-text/10 text-canopy-text/40 hover:text-canopy-text transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-1"
-                          aria-label="Duplicate panel as new tab"
-                          type="button"
-                        >
-                          <Plus className="w-3 h-3" aria-hidden="true" />
-                        </button>
-                      </TooltipTrigger>
-                      <TooltipContent side="bottom">Duplicate panel as new tab</TooltipContent>
-                    </Tooltip>
-                  </TooltipProvider>
+              <div className="relative min-w-0 flex-1 flex">
+                {tabsCanScrollLeft && (
+                  <div className={cn("absolute left-0 inset-y-0 w-8 pointer-events-none z-10 bg-gradient-to-r to-transparent", tabFadeFrom)} />
+                )}
+                <div
+                  ref={tabListRef}
+                  className="flex items-center min-w-0 flex-1 overflow-x-auto scrollbar-none"
+                  role="tablist"
+                  aria-label="Panel tabs"
+                  onKeyDown={handleTabListKeyDown}
+                >
+                  {tabs.map((tab) => (
+                    <SortableTabButton
+                      key={tab.id}
+                      id={tab.id}
+                      title={getBaseTitle(tab.title)}
+                      type={tab.type}
+                      agentId={tab.agentId}
+                      detectedProcessId={tab.detectedProcessId}
+                      kind={tab.kind}
+                      agentState={tab.agentState}
+                      isActive={tab.isActive}
+                      onClick={() => onTabClick?.(tab.id)}
+                      onClose={() => onTabClose?.(tab.id)}
+                      onRename={onTabRename ? (newTitle) => onTabRename(tab.id, newTitle) : undefined}
+                    />
+                  ))}
+                  {onAddTab && (
+                    <TooltipProvider>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onAddTab();
+                            }}
+                            onPointerDown={(e) => e.stopPropagation()}
+                            className="shrink-0 p-1.5 hover:bg-canopy-text/10 text-canopy-text/40 hover:text-canopy-text transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-1"
+                            aria-label="Duplicate panel as new tab"
+                            type="button"
+                          >
+                            <Plus className="w-3 h-3" aria-hidden="true" />
+                          </button>
+                        </TooltipTrigger>
+                        <TooltipContent side="bottom">Duplicate panel as new tab</TooltipContent>
+                      </Tooltip>
+                    </TooltipProvider>
+                  )}
+                </div>
+                {tabsCanScrollRight && (
+                  <div className={cn("absolute right-0 inset-y-0 w-8 pointer-events-none z-10 bg-gradient-to-l to-transparent", tabFadeFrom)} />
                 )}
               </div>
             </SortableContext>
           </DndContext>
         ) : (
-          <div
-            ref={tabListRef}
-            className="flex items-center min-w-0 flex-1 overflow-x-auto scrollbar-none"
-            role="tablist"
-            aria-label="Panel tabs"
-            onKeyDown={handleTabListKeyDown}
-          >
-            {tabs.map((tab) => (
-              <TabButton
-                key={tab.id}
-                id={tab.id}
-                title={getBaseTitle(tab.title)}
-                type={tab.type}
-                agentId={tab.agentId}
-                detectedProcessId={tab.detectedProcessId}
-                kind={tab.kind}
-                agentState={tab.agentState}
-                isActive={tab.isActive}
-                onClick={() => onTabClick?.(tab.id)}
-                onClose={() => onTabClose?.(tab.id)}
-                onRename={onTabRename ? (newTitle) => onTabRename(tab.id, newTitle) : undefined}
-              />
-            ))}
-            {onAddTab && (
-              <TooltipProvider>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onAddTab();
-                      }}
-                      onPointerDown={(e) => e.stopPropagation()}
-                      className="shrink-0 p-1.5 hover:bg-canopy-text/10 text-canopy-text/40 hover:text-canopy-text transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-1"
-                      aria-label="Duplicate panel as new tab"
-                      type="button"
-                    >
-                      <Plus className="w-3 h-3" aria-hidden="true" />
-                    </button>
-                  </TooltipTrigger>
-                  <TooltipContent side="bottom">Duplicate panel as new tab</TooltipContent>
-                </Tooltip>
-              </TooltipProvider>
+          <div className="relative min-w-0 flex-1 flex">
+            {tabsCanScrollLeft && (
+              <div className={cn("absolute left-0 inset-y-0 w-8 pointer-events-none z-10 bg-gradient-to-r to-transparent", tabFadeFrom)} />
+            )}
+            <div
+              ref={tabListRef}
+              className="flex items-center min-w-0 flex-1 overflow-x-auto scrollbar-none"
+              role="tablist"
+              aria-label="Panel tabs"
+              onKeyDown={handleTabListKeyDown}
+            >
+              {tabs.map((tab) => (
+                <TabButton
+                  key={tab.id}
+                  id={tab.id}
+                  title={getBaseTitle(tab.title)}
+                  type={tab.type}
+                  agentId={tab.agentId}
+                  detectedProcessId={tab.detectedProcessId}
+                  kind={tab.kind}
+                  agentState={tab.agentState}
+                  isActive={tab.isActive}
+                  onClick={() => onTabClick?.(tab.id)}
+                  onClose={() => onTabClose?.(tab.id)}
+                  onRename={onTabRename ? (newTitle) => onTabRename(tab.id, newTitle) : undefined}
+                />
+              ))}
+              {onAddTab && (
+                <TooltipProvider>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onAddTab();
+                        }}
+                        onPointerDown={(e) => e.stopPropagation()}
+                        className="shrink-0 p-1.5 hover:bg-canopy-text/10 text-canopy-text/40 hover:text-canopy-text transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-1"
+                        aria-label="Duplicate panel as new tab"
+                        type="button"
+                      >
+                        <Plus className="w-3 h-3" aria-hidden="true" />
+                      </button>
+                    </TooltipTrigger>
+                    <TooltipContent side="bottom">Duplicate panel as new tab</TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
+              )}
+            </div>
+            {tabsCanScrollRight && (
+              <div className={cn("absolute right-0 inset-y-0 w-8 pointer-events-none z-10 bg-gradient-to-l to-transparent", tabFadeFrom)} />
             )}
           </div>
         )
