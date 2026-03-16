@@ -45,15 +45,15 @@ export function useBranchInput({
 
     setFromRemote(false);
     setSelectedIssue(initialIssue ?? null);
-    branchInputTouchedRef.current = false;
-    issueTouchedRef.current = false;
 
     if (initialPR?.headRefName) {
       setBranchInput(initialPR.headRefName);
-      branchInputTouchedRef.current = true;
     } else {
       setBranchInput("");
     }
+
+    branchInputTouchedRef.current = false;
+    issueTouchedRef.current = false;
   }, [isOpen, initialIssue, initialPR]);
 
   // Auto-set branch from configured prefix
