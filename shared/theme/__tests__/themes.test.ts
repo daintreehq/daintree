@@ -387,35 +387,58 @@ describe("built-in schemes — Galápagos", () => {
   });
 
   it.each([
-    ["terminal-red", "#D96C6C"],
-    ["terminal-green", "#62A862"],
-    ["terminal-yellow", "#C9A040"],
-    ["terminal-blue", "#5693BF"],
-    ["terminal-magenta", "#B882B0"],
-    ["terminal-cyan", "#4DB8C2"],
-  ] as const)("%s (%s) meets WCAG 3:1 contrast against canvas", (token, hex) => {
-    const ratio = wcagContrastRatio(hex, canvas);
+    "terminal-red",
+    "terminal-green",
+    "terminal-yellow",
+    "terminal-blue",
+    "terminal-magenta",
+    "terminal-cyan",
+  ] as const)("%s meets WCAG 3:1 contrast against canvas", (token) => {
+    const fg = galapagos.tokens[token];
+    const bg = galapagos.tokens["surface-canvas"];
+    const ratio = wcagContrastRatio(fg, bg);
     expect(
       ratio,
-      `${token} "${hex}" on canvas "${canvas}" = ${ratio.toFixed(2)}:1, needs ≥3:1`
+      `${token} "${fg}" on canvas "${bg}" = ${ratio.toFixed(2)}:1, needs ≥3:1`
     ).toBeGreaterThanOrEqual(3);
   });
 
-  it("syntax-punctuation is significantly lighter than syntax-comment", () => {
-    // #617B7F HSL lightness ~44%, #A0AFBA HSL lightness ~67% — gap ≥20%
-    const commentRatio = wcagContrastRatio(galapagos.tokens["syntax-comment"], canvas);
-    const punctuationRatio = wcagContrastRatio(galapagos.tokens["syntax-punctuation"], canvas);
-    expect(punctuationRatio - commentRatio).toBeGreaterThan(2);
+  it("syntax-punctuation has ≥20% HSL lightness gap from syntax-comment", () => {
+    function hslLightness(hex: string): number {
+      const c = hex.replace("#", "");
+      const r = parseInt(c.slice(0, 2), 16) / 255;
+      const g = parseInt(c.slice(2, 4), 16) / 255;
+      const b = parseInt(c.slice(4, 6), 16) / 255;
+      const max = Math.max(r, g, b);
+      const min = Math.min(r, g, b);
+      return ((max + min) / 2) * 100;
+    }
+    const commentL = hslLightness(galapagos.tokens["syntax-comment"]);
+    const punctuationL = hslLightness(galapagos.tokens["syntax-punctuation"]);
+    expect(punctuationL - commentL).toBeGreaterThanOrEqual(20);
   });
 
-  it("syntax-keyword (violet) is in a different hue family from syntax-operator (cyan)", () => {
-    // #BB9AF7 is violet (H≈261), #6CB8CC is cyan (H≈193) — different families
-    expect(galapagos.tokens["syntax-keyword"]).toBe("#BB9AF7");
-    expect(galapagos.tokens["syntax-operator"]).toBe("#6CB8CC");
-    const keywordRatio = wcagContrastRatio(galapagos.tokens["syntax-keyword"], canvas);
-    const operatorRatio = wcagContrastRatio(galapagos.tokens["syntax-operator"], canvas);
-    expect(keywordRatio).toBeGreaterThanOrEqual(3);
-    expect(operatorRatio).toBeGreaterThanOrEqual(3);
+  it("syntax-keyword and syntax-operator are in different hue families (≥50° apart)", () => {
+    function hslHue(hex: string): number {
+      const c = hex.replace("#", "");
+      const r = parseInt(c.slice(0, 2), 16) / 255;
+      const g = parseInt(c.slice(2, 4), 16) / 255;
+      const b = parseInt(c.slice(4, 6), 16) / 255;
+      const max = Math.max(r, g, b);
+      const min = Math.min(r, g, b);
+      const d = max - min;
+      if (d === 0) return 0;
+      let h = 0;
+      if (max === r) h = ((g - b) / d + 6) % 6;
+      else if (max === g) h = (b - r) / d + 2;
+      else h = (r - g) / d + 4;
+      return h * 60;
+    }
+    const keywordHue = hslHue(galapagos.tokens["syntax-keyword"]);
+    const operatorHue = hslHue(galapagos.tokens["syntax-operator"]);
+    const hueDiff = Math.abs(keywordHue - operatorHue);
+    const wrappedDiff = Math.min(hueDiff, 360 - hueDiff);
+    expect(wrappedDiff).toBeGreaterThanOrEqual(50);
   });
 
   it("passes critical contrast checks without warnings", () => {
