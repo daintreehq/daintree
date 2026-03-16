@@ -31,7 +31,7 @@ describe("TerminalRestartStatusBanner", () => {
     expect(container.innerHTML).toBe("");
   });
 
-  it("renders spinner text for auto-restarting variant", () => {
+  it("renders spinner text for auto-restarting variant and excludes exit-error content", () => {
     render(
       <TerminalRestartStatusBanner
         variant={{ type: "auto-restarting" }}
@@ -40,9 +40,11 @@ describe("TerminalRestartStatusBanner", () => {
       />
     );
     expect(screen.getByText("Auto-restarting\u2026")).toBeTruthy();
+    expect(screen.queryByText(/session exited/i)).toBeNull();
+    expect(screen.queryByRole("button", { name: /restart session/i })).toBeNull();
   });
 
-  it("renders exit code message for exit-error variant", () => {
+  it("renders exit code message for exit-error variant and excludes auto-restart content", () => {
     render(
       <TerminalRestartStatusBanner
         variant={{ type: "exit-error", exitCode: 1 }}
@@ -51,6 +53,7 @@ describe("TerminalRestartStatusBanner", () => {
       />
     );
     expect(screen.getByText("Session exited with code 1")).toBeTruthy();
+    expect(screen.queryByText("Auto-restarting\u2026")).toBeNull();
   });
 
   it("calls onRestart when restart button is clicked", () => {
