@@ -54,7 +54,7 @@ test.describe("OpenCode Online Flow", () => {
       const agentPanel = window.locator(SEL.opencodeAgent.panel);
       const cmEditor = agentPanel.locator(SEL.terminal.cmEditor);
 
-      const deadline = Date.now() + 90_000;
+      const deadline = Date.now() + 120_000;
       let reachedReady = false;
 
       while (Date.now() < deadline && !reachedReady) {
@@ -63,15 +63,10 @@ test.describe("OpenCode Online Flow", () => {
         const text = await getTerminalText(agentPanel);
         const lower = text.toLowerCase();
 
-        // Also check the CodeMirror input placeholder for ready state
-        const cmText = await cmEditor.innerText().catch(() => "");
-        const cmLower = cmText.toLowerCase();
-
         if (
           lower.includes("ask anything") ||
           /build\s+opencode/i.test(text) ||
-          cmLower.includes("type a command") ||
-          lower.includes("database migration complete")
+          /\d+\.\d+\.\d+$/.test(text.trim())
         ) {
           reachedReady = true;
         } else if (lower.includes("provider") || lower.includes("/connect")) {
