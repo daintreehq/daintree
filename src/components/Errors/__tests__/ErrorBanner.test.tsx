@@ -32,18 +32,21 @@ describe("ErrorBanner", () => {
     });
 
     it("renders an SVG icon in full mode", () => {
-      const { container } = render(
-        <ErrorBanner error={makeError()} onDismiss={onDismiss} />
-      );
+      const { container } = render(<ErrorBanner error={makeError()} onDismiss={onDismiss} />);
       expect(container.querySelector("svg")).toBeTruthy();
     });
 
     it("does not contain emoji characters", () => {
-      const { container } = render(
-        <ErrorBanner error={makeError()} onDismiss={onDismiss} />
-      );
+      const { container } = render(<ErrorBanner error={makeError()} onDismiss={onDismiss} />);
       const text = container.textContent ?? "";
-      for (const emoji of ["\u{1F4C2}", "\u2699\uFE0F", "\u{1F4C1}", "\u{1F310}", "\u26A0\uFE0F", "\u274C"]) {
+      for (const emoji of [
+        "\u{1F4C2}",
+        "\u2699\uFE0F",
+        "\u{1F4C1}",
+        "\u{1F310}",
+        "\u26A0\uFE0F",
+        "\u274C",
+      ]) {
         expect(text).not.toContain(emoji);
       }
     });
@@ -67,10 +70,7 @@ describe("ErrorBanner", () => {
 
   it("shows recovery hint with lightbulb icon", () => {
     const { container } = render(
-      <ErrorBanner
-        error={makeError({ recoveryHint: "Try pulling first" })}
-        onDismiss={onDismiss}
-      />
+      <ErrorBanner error={makeError({ recoveryHint: "Try pulling first" })} onDismiss={onDismiss} />
     );
     expect(screen.getByText("Try pulling first")).toBeTruthy();
     const svgs = container.querySelectorAll("svg");

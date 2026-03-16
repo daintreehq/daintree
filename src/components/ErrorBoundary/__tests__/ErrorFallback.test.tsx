@@ -141,9 +141,7 @@ describe("ErrorFallback", () => {
     it("renders an SVG icon instead of emoji for each variant", () => {
       vi.stubEnv("DEV", false);
       for (const variant of ["fullscreen", "section", "component"] as const) {
-        const { container, unmount } = render(
-          <ErrorFallback {...baseProps} variant={variant} />
-        );
+        const { container, unmount } = render(<ErrorFallback {...baseProps} variant={variant} />);
         expect(container.querySelector("svg")).toBeTruthy();
         expect(container.textContent).not.toContain("\u26A0\uFE0F");
         unmount();
@@ -157,9 +155,7 @@ describe("ErrorFallback", () => {
         keyof typeof expected,
         string,
       ][]) {
-        const { container, unmount } = render(
-          <ErrorFallback {...baseProps} variant={variant} />
-        );
+        const { container, unmount } = render(<ErrorFallback {...baseProps} variant={variant} />);
         const svg = container.querySelector("svg");
         expect(svg?.getAttribute("class")).toContain(sizeClass);
         unmount();
