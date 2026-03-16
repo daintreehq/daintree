@@ -16,6 +16,7 @@ import {
   selectWrapperBackground,
   selectEffectiveTheme,
 } from "@/store/terminalColorSchemeStore";
+import { useAppThemeStore } from "@/store/appThemeStore";
 import { getScrollbackForType, PERFORMANCE_MODE_SCROLLBACK } from "@/utils/scrollbackConfig";
 import { getXtermOptions } from "@/config/xtermConfig";
 import { getSoftNewlineSequence } from "../../../shared/utils/terminalInputProtocol.js";
@@ -76,7 +77,13 @@ function XtermAdapterComponent({
   const performanceMode = usePerformanceModeStore((state) => state.performanceMode);
   const fontSize = useTerminalFontStore((state) => state.fontSize);
   const fontFamily = useTerminalFontStore((state) => state.fontFamily);
-  const wrapperBackground = useTerminalColorSchemeStore(selectWrapperBackground);
+  const appThemeSelectedId = useAppThemeStore((s) => s.selectedSchemeId);
+  const terminalSchemeId = useTerminalColorSchemeStore((s) => s.selectedSchemeId);
+  const terminalCustomSchemes = useTerminalColorSchemeStore((s) => s.customSchemes);
+  const wrapperBackground = useMemo(
+    () => selectWrapperBackground(useTerminalColorSchemeStore.getState()),
+    [appThemeSelectedId, terminalSchemeId, terminalCustomSchemes]
+  );
   const effectiveTheme = useTerminalColorSchemeStore(selectEffectiveTheme);
 
   // Calculate effective scrollback: performance mode overrides, then project override, then app default

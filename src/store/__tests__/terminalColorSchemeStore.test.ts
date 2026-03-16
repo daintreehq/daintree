@@ -43,6 +43,8 @@ describe("terminalColorSchemeStore", () => {
     });
     useAppThemeStore.setState({
       selectedSchemeId: "daintree",
+      customSchemes: [],
+      colorVisionMode: "default",
     });
   });
 
@@ -132,6 +134,13 @@ describe("terminalColorSchemeStore", () => {
     expect(theme.scrollbarSliderBackground).toBe("rgba(0, 0, 0, 0.20)");
   });
 
+  it("getEffectiveTheme falls back to CSS for unmapped custom app theme", () => {
+    useAppThemeStore.setState({ selectedSchemeId: "custom-unknown-theme" });
+    const theme = useTerminalColorSchemeStore.getState().getEffectiveTheme();
+    expect(theme).toBeDefined();
+    expect(theme.background).toBeDefined();
+  });
+
   it("getEffectiveTheme adds light scrollbar defaults for light mapped scheme", () => {
     useAppThemeStore.setState({ selectedSchemeId: "bondi" });
     const theme = useTerminalColorSchemeStore.getState().getEffectiveTheme();
@@ -173,6 +182,12 @@ describe("terminalColorSchemeStore", () => {
       });
       const bg = selectWrapperBackground(useTerminalColorSchemeStore.getState());
       expect(bg).toBe("#222222");
+    });
+
+    it("falls back to CSS variable for unmapped custom app theme", () => {
+      useAppThemeStore.setState({ selectedSchemeId: "custom-unknown-theme" });
+      const bg = selectWrapperBackground(useTerminalColorSchemeStore.getState());
+      expect(bg).toBe("var(--theme-surface-canvas)");
     });
 
     it("falls back to CSS variable for unknown scheme id", () => {
