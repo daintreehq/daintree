@@ -16,7 +16,7 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { SCROLLBACK_MIN, SCROLLBACK_MAX } from "@shared/config/scrollback";
 import { validatePathPattern, previewPathPattern } from "@shared/utils/pathPattern";
-import type { RunCommand, TerminalRecipe, Worktree } from "@/types";
+import type { RunCommand, TerminalRecipe } from "@/types";
 import type { Project } from "@shared/types/domain";
 
 interface AutomationTabProps {
@@ -265,7 +265,10 @@ export function AutomationTab({
               ) : globalRecipes.length === 0 ? (
                 <div className="text-sm text-canopy-text/60 text-center py-4 border border-dashed border-canopy-border rounded-[var(--radius-md)]">
                   No global recipes available.{" "}
-                  <button onClick={onNavigateToRecipes} className="text-canopy-accent hover:underline">
+                  <button
+                    onClick={onNavigateToRecipes}
+                    className="text-canopy-accent hover:underline"
+                  >
                     Create a recipe
                   </button>
                 </div>
@@ -427,9 +430,7 @@ export function AutomationTab({
             const preview = previewPathPattern(worktreePathPattern.trim(), rootPath);
             return (
               <div className="mt-2 p-3 rounded-[var(--radius-md)] bg-canopy-bg/50 border border-canopy-border">
-                <span className="block text-xs font-medium text-canopy-text/70 mb-1">
-                  Preview:
-                </span>
+                <span className="block text-xs font-medium text-canopy-text/70 mb-1">Preview:</span>
                 <code className="text-xs text-canopy-accent break-all">{preview}</code>
               </div>
             );
@@ -546,8 +547,7 @@ export function AutomationTab({
             {terminalScrollback.trim() &&
               (() => {
                 const num = Number(terminalScrollback);
-                return Number.isFinite(num) &&
-                  (num < SCROLLBACK_MIN || num > SCROLLBACK_MAX) ? (
+                return Number.isFinite(num) && (num < SCROLLBACK_MIN || num > SCROLLBACK_MAX) ? (
                   <p className="text-xs text-status-error mt-1">
                     Must be between {SCROLLBACK_MIN} and {SCROLLBACK_MAX}
                   </p>

@@ -1,25 +1,11 @@
 import { useState, useEffect, useRef, useMemo } from "react";
-import {
-  Terminal,
-  Bot,
-  X,
-  Settings,
-  FileCode,
-  Zap,
-  Command,
-  CookingPot,
-  Server,
-  Bell,
-} from "lucide-react";
+import { Bot, X, Settings, FileCode, Zap, Command, CookingPot, Server, Bell } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { useProjectSettings } from "@/hooks";
 import { useProjectStore } from "@/store/projectStore";
 import { useWorktrees } from "@/hooks/useWorktrees";
-import type {
-  RunCommand,
-  CopyTreeSettings,
-} from "@/types";
+import type { RunCommand, CopyTreeSettings } from "@/types";
 import type { ProjectTerminalSettings, ProjectMcpServerConfig } from "@shared/types/project";
 import type { ProjectMcpServerRunState } from "@shared/types/ipc/project";
 import { SCROLLBACK_MIN, SCROLLBACK_MAX } from "@shared/config/scrollback";

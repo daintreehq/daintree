@@ -1,14 +1,5 @@
 import { useState, useRef } from "react";
-import {
-  Image,
-  Upload,
-  X,
-  Rocket,
-  Check,
-  GitBranch,
-  FolderOpen,
-  Copy,
-} from "lucide-react";
+import { Image, Upload, X, Rocket, Check, GitBranch, FolderOpen, Copy } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { EmojiPicker } from "@/components/ui/emoji-picker";
@@ -248,7 +239,10 @@ export function GeneralTab({
         />
 
         <div className="mt-3">
-          <label htmlFor="dev-server-load-timeout" className="block text-xs text-canopy-text/60 mb-1">
+          <label
+            htmlFor="dev-server-load-timeout"
+            className="block text-xs text-canopy-text/60 mb-1"
+          >
             Load timeout (seconds)
           </label>
           <input
@@ -297,9 +291,7 @@ export function GeneralTab({
               {(() => {
                 const sanitized = sanitizeSvg(projectIconSvg);
                 if (!sanitized.ok) {
-                  return (
-                    <Image className="h-8 w-8 text-canopy-text/40" aria-hidden="true" />
-                  );
+                  return <Image className="h-8 w-8 text-canopy-text/40" aria-hidden="true" />;
                 }
                 return (
                   <img
@@ -370,8 +362,7 @@ export function GeneralTab({
           <div className="flex items-center gap-2 mb-3 text-xs text-canopy-text/60">
             <FolderOpen className="h-3.5 w-3.5 text-status-success shrink-0" />
             <span>
-              Settings loaded from{" "}
-              <code className="font-mono text-canopy-text/80">.canopy/</code>
+              Settings loaded from <code className="font-mono text-canopy-text/80">.canopy/</code>
             </span>
           </div>
         )}
@@ -444,8 +435,8 @@ export function GeneralTab({
                   project name, emoji, color
                 </li>
                 <li className="flex items-center gap-2">
-                  <span className="font-mono text-canopy-text/80">.canopy/settings.json</span>—
-                  run commands, dev server, context settings
+                  <span className="font-mono text-canopy-text/80">.canopy/settings.json</span>— run
+                  commands, dev server, context settings
                 </li>
               </ul>
               <p className="mt-2 text-xs text-canopy-text/50">
