@@ -661,7 +661,7 @@ export const AGENT_REGISTRY: Record<string, AgentConfig> = {
     },
     capabilities: {
       scrollback: 10000,
-      blockAltScreen: true,
+      blockAltScreen: false,
       supportsBracketedPaste: true,
       softNewlineSequence: "\n",
       ignoredInputSequences: ["\n", "\x1b\r"],

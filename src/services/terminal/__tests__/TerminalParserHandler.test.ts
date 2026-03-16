@@ -96,6 +96,26 @@ describe("TerminalParserHandler", () => {
     expect(csiHandlers).toHaveLength(1);
   });
 
+  it("should NOT register alt screen blocker for OpenCode agent", () => {
+    mockManaged.agentId = "opencode";
+    mockManaged.type = "opencode";
+
+    new TerminalParserHandler(mockManaged);
+
+    const altScreenBlocker = csiHandlers.find((h) => h.opts.prefix === "?" && h.opts.final === "h");
+    expect(altScreenBlocker).toBeUndefined();
+  });
+
+  it("should register alt screen blocker for Codex agent (blockAltScreen: true)", () => {
+    mockManaged.agentId = "codex";
+    mockManaged.type = "codex";
+
+    new TerminalParserHandler(mockManaged);
+
+    const altScreenBlocker = csiHandlers.find((h) => h.opts.prefix === "?" && h.opts.final === "h");
+    expect(altScreenBlocker).toBeDefined();
+  });
+
   it("should dispose handlers correctly", () => {
     const handler = new TerminalParserHandler(mockManaged);
     // With default config (no blocking), no handlers are registered
