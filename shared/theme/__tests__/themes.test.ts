@@ -368,14 +368,14 @@ describe("built-in schemes — Highlands theme", () => {
   it("uses contrast-adjusted syntax colors", () => {
     expect(highlands.tokens["syntax-keyword"]).toBe("#B872A5");
     expect(highlands.tokens["syntax-function"]).toBe("#6898B5");
-    expect(highlands.tokens["syntax-number"]).toBe("#BE7055");
+    expect(highlands.tokens["syntax-number"]).toBe("#C080A0");
     expect(highlands.tokens["status-danger"]).toBe("#E35040");
   });
 
   it("auto-derives terminal-black/white/bright-black from surfaces and activity", () => {
     expect(highlands.tokens["terminal-black"]).toBe("#1A1614");
     expect(highlands.tokens["terminal-white"]).toBe("#C9D1D9");
-    expect(highlands.tokens["terminal-bright-black"]).toBe("#4A4238");
+    expect(highlands.tokens["terminal-bright-black"]).toBe("#73665A");
   });
 
   it("produces all required token keys", () => {

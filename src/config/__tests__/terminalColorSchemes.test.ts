@@ -9,8 +9,8 @@ import {
 } from "../terminalColorSchemes";
 
 describe("terminalColorSchemes", () => {
-  it("has exactly 22 built-in schemes", () => {
-    expect(BUILT_IN_SCHEMES).toHaveLength(22);
+  it("has exactly 23 built-in schemes", () => {
+    expect(BUILT_IN_SCHEMES).toHaveLength(23);
   });
 
   it("all schemes have unique IDs", () => {
@@ -84,6 +84,7 @@ describe("terminalColorSchemes", () => {
         "daintree",
         "dracula",
         "github-dark",
+        "highlands",
         "redwoods",
         "solarized-light",
       ])
@@ -100,6 +101,14 @@ describe("terminalColorSchemes", () => {
     const scheme = getMappedTerminalScheme("redwoods");
     expect(scheme).toBeDefined();
     expect(scheme!.id).toBe("redwoods");
+  });
+
+  it("highlands maps to its own generated terminal scheme", () => {
+    const scheme = getMappedTerminalScheme("highlands");
+    expect(scheme).toBeDefined();
+    expect(scheme!.id).toBe("highlands");
+    expect(scheme!.type).toBe("dark");
+    expect(scheme!.colors.background).toBe("#1A1614");
   });
 
   it("getMappedTerminalScheme returns undefined for unknown app theme", () => {
