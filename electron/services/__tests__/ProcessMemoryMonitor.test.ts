@@ -313,15 +313,9 @@ describe("ProcessMemoryMonitor", () => {
 
     stop = startAppMetricsMonitor();
 
-    // Need 15 min startup suppression + 30 buckets (30 min of buckets)
-    // Total: at least 30 min of bucket history after 15 min startup = need 45 min total
-    // But dual suppression is AND — once 30 buckets AND 15 min both met.
-    // 30 buckets = 30 × 2 ticks = 60 ticks = 30 min. Startup suppression = 15 min.
-    // So at 30 min (60 ticks), we have 30 buckets AND 30 min > 15 min — both pass.
-    // But need 31 min (62 ticks) for the 31st bucket to trigger evaluation.
-    // Actually: first bucket commits at tick 2, second at tick 4, ..., 30th at tick 60.
-    // At tick 60 (30 min), emaHistory.length = 30, AND 30 min > 15 min.
-    // Trend is evaluated on bucket commit, so first evaluation at tick 60.
+    // First bucket commits at tick 2, 30th at tick 60 (30 min).
+    // At tick 60, emaHistory.length = 30 AND elapsed > 15 min — both suppression
+    // gates pass and trend evaluation begins. We advance a bit past to be safe.
 
     vi.advanceTimersByTime(62 * 30_000); // 31 min
 
@@ -338,10 +332,11 @@ describe("ProcessMemoryMonitor", () => {
     ).toBeGreaterThanOrEqual(5);
   });
 
-  it("suppresses trend warning during first 15 minutes of monitoring", () => {
-    // Rapid growth (well above threshold) but only run for 14 minutes
+  it("suppresses trend warning before 30 buckets are accumulated", () => {
+    // Rapid growth but only 14 minutes (28 ticks = 14 buckets).
+    // Both suppression gates block: elapsed < 15 min AND buckets < 30.
     const baseMb = 100;
-    const growthPerTickMb = 1; // Very aggressive growth
+    const growthPerTickMb = 1;
     let tick = 0;
 
     mockGetAppMetrics.mockImplementation(() => {
@@ -352,8 +347,6 @@ describe("ProcessMemoryMonitor", () => {
 
     stop = startAppMetricsMonitor();
 
-    // 14 minutes = 28 ticks. Only 14 buckets committed. Startup suppression AND
-    // bucket count (< 30) both prevent trend evaluation.
     vi.advanceTimersByTime(28 * 30_000);
 
     const trendCalls = vi

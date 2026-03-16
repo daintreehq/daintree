@@ -91,8 +91,8 @@ export function startAppMetricsMonitor(): () => void {
           ) {
             const oldest = state.emaHistory[0]!;
             const newest = state.emaHistory[BUCKET_WINDOW - 1]!;
-            // BUCKET_WINDOW buckets × 60s each = 1800s = 0.5 hours
-            const growthMbPerHour = (newest - oldest) / 0.5;
+            const windowHours = ((BUCKET_WINDOW - 1) * 60) / 3600;
+            const growthMbPerHour = (newest - oldest) / windowHours;
             if (growthMbPerHour > TREND_WARN_MB_PER_HOUR) {
               logWarn("process-memory-trend-warning", {
                 pid: proc.pid,
@@ -103,7 +103,7 @@ export function startAppMetricsMonitor(): () => void {
           }
 
           state.tickInBucket = 0;
-          state.bucketMin = mb;
+          state.bucketMin = Infinity;
         }
 
         if (proc.type === "Browser" && mb > SNAPSHOT_THRESHOLD_MB && !app.isPackaged) {
