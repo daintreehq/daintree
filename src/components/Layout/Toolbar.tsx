@@ -24,7 +24,7 @@ import {
   LayoutGrid,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { isMac, createTooltipWithShortcut } from "@/lib/platform";
+import { isMac, isLinux, createTooltipWithShortcut } from "@/lib/platform";
 import { getProjectGradient } from "@/lib/colorUtils";
 import { GitHubResourceList, CommitList } from "@/components/GitHub";
 import { AgentButton } from "./AgentButton";
@@ -1063,7 +1063,7 @@ export function Toolbar({
         onFocusCapture={handleToolbarFocusCapture}
         className="relative grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] h-12 items-center px-4 pt-1 shrink-0 app-drag-region surface-chrome border-b border-divider"
       >
-        <div className="window-resize-strip" />
+        {!isLinux() && <div className="window-resize-strip" />}
 
         {/* LEFT GROUP */}
         <div
