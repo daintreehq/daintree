@@ -1,15 +1,14 @@
+import type { GitStatus, StagingStatus } from "../git.js";
+import type { AgentId } from "../agent.js";
+import type { TabGroup } from "../panel.js";
+import type { WorktreeState } from "../worktree.js";
 import type {
-  WorktreeState,
   Project,
   ProjectSettings,
   RunCommand,
-  GitStatus,
-  AgentId,
   TerminalRecipe,
   TerminalSnapshot,
-  TabGroup,
-  StagingStatus,
-} from "../domain.js";
+} from "../project.js";
 import type { OnboardingState, ChecklistState, ChecklistItemId } from "./maps.js";
 import type { AgentSettings, AgentSettingsEntry } from "../agentSettings.js";
 import type { VoiceInputStatus } from "../voice.js";
@@ -226,7 +225,7 @@ export interface ElectronAPI {
     acknowledgeData(id: string, length: number): void;
     getForProject(projectId: string): Promise<BackendTerminalInfo[]>;
     getAvailableTerminals(): Promise<BackendTerminalInfo[]>;
-    getTerminalsByState(state: import("../domain.js").AgentState): Promise<BackendTerminalInfo[]>;
+    getTerminalsByState(state: import("../agent.js").AgentState): Promise<BackendTerminalInfo[]>;
     getAllTerminals(): Promise<BackendTerminalInfo[]>;
     reconnect(terminalId: string): Promise<TerminalReconnectResult>;
     replayHistory(terminalId: string, maxLines?: number): Promise<{ replayed: number }>;

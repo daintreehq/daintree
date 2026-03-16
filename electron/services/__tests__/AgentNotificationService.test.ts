@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { AgentState } from "../../../shared/types/domain.js";
+import type { AgentState } from "../../../shared/types/agent.js";
 
 const storeMock = vi.hoisted(() => ({
   get: vi.fn(),

@@ -1,4 +1,4 @@
-import type { Project } from "../domain.js";
+import type { Project } from "../project.js";
 
 /** Payload for project:on-switch event with cancellation token */
 export interface ProjectSwitchPayload {

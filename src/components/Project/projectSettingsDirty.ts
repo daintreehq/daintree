@@ -3,7 +3,7 @@ import type {
   CopyTreeSettings,
   ProjectTerminalSettings,
   ProjectMcpServerConfig,
-} from "@shared/types/domain";
+} from "@shared/types/project";
 import type { NotificationSettings } from "@shared/types/ipc/api";
 
 export interface ProjectSettingsSnapshot {

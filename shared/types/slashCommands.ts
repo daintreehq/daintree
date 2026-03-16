@@ -1,4 +1,4 @@
-import type { LegacyAgentType } from "./domain.js";
+import type { LegacyAgentType } from "./agent.js";
 
 export type SlashCommandScope = "built-in" | "global" | "user" | "project";
 

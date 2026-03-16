@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import type { AgentState } from "shared/types/domain";
+import type { AgentState } from "shared/types/agent";
 
 type BlockedState = "waiting" | "failed" | null;
 

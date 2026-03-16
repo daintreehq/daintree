@@ -1,4 +1,4 @@
-import type { TerminalType } from "../../shared/types/domain.js";
+import type { TerminalType } from "../../shared/types/panel.js";
 import type { ProcessTreeCache } from "./ProcessTreeCache.js";
 import { logDebug, logWarn } from "../utils/logger.js";
 import { AGENT_REGISTRY } from "../../shared/config/agentRegistry.js";

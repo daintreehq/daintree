@@ -13,7 +13,7 @@ import {
   type DerivedWorktreeMeta,
   type FilterState,
 } from "../worktreeFilters";
-import type { Worktree } from "@shared/types/domain";
+import type { Worktree } from "@shared/types/worktree";
 
 const createMockWorktree = (overrides: Partial<Worktree> = {}): Worktree => ({
   id: "test-id",

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { TerminalRefreshTier } from "../../../../shared/types/domain";
+import { TerminalRefreshTier } from "../../../../shared/types/panel";
 import type { ManagedTerminal } from "../types";
 import { TIER_DOWNGRADE_HYSTERESIS_MS } from "../types";
 import type { RendererPolicyDeps } from "../TerminalRendererPolicy";

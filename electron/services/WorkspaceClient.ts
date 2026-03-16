@@ -25,7 +25,7 @@ import type {
   CreateWorktreeOptions,
   BranchInfo,
 } from "../../shared/types/workspace-host.js";
-import type { Worktree } from "../../shared/types/domain.js";
+import type { Worktree } from "../../shared/types/worktree.js";
 import type {
   CopyTreeOptions,
   CopyTreeProgress,

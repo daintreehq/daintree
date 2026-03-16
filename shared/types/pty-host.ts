@@ -7,13 +7,8 @@
  * All types are serializable (no functions, no circular refs) for IPC transport.
  */
 
-import type {
-  AgentState,
-  AgentId,
-  TerminalType,
-  TerminalKind,
-  TerminalFlowStatus,
-} from "./domain.js";
+import type { AgentState, AgentId } from "./agent.js";
+import type { TerminalType, TerminalKind, TerminalFlowStatus } from "./panel.js";
 
 export type { TerminalFlowStatus };
 

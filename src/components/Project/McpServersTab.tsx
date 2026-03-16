@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Plus, Trash2, AlertTriangle, Server } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import type { ProjectMcpServerConfig } from "@shared/types/domain";
+import type { ProjectMcpServerConfig } from "@shared/types/project";
 import type { ProjectMcpServerRunState } from "@shared/types/ipc/project";
 import { cn } from "@/lib/utils";
 

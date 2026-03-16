@@ -2,7 +2,7 @@ import { ipcMain } from "electron";
 import { CHANNELS } from "../channels.js";
 import { checkRateLimit } from "../utils.js";
 import type { HandlerDependencies } from "../types.js";
-import type { GitStatus } from "../../../shared/types/domain.js";
+import type { GitStatus } from "../../../shared/types/git.js";
 
 interface StagingFileEntry {
   path: string;

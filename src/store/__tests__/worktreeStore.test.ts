@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { TerminalRefreshTier } from "@shared/types/domain";
+import { TerminalRefreshTier } from "@shared/types/panel";
 
 const {
   appSetStateMock,
