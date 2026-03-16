@@ -165,6 +165,11 @@ export function Toolbar({
   const terminalShortcut = useKeybindingDisplay("agent.terminal");
   const browserShortcut = useKeybindingDisplay("agent.browser");
   const panelPaletteShortcut = useKeybindingDisplay("panel.palette");
+  const sidebarShortcut = useKeybindingDisplay("nav.toggleSidebar");
+  const diagnosticsShortcut = useKeybindingDisplay("panel.toggleDiagnostics");
+  const sidecarShortcut = useKeybindingDisplay("panel.toggleSidecar");
+  const notesShortcut = useKeybindingDisplay("notes.openPalette");
+  const settingsShortcut = useKeybindingDisplay("app.settings");
   const panelPaletteOpen = usePaletteStore((state) => state.activePaletteId === "panel");
 
   const handleTogglePanelPalette = useCallback(() => {
@@ -395,7 +400,10 @@ export function Toolbar({
                 </Button>
               </TooltipTrigger>
               <TooltipContent side="bottom">
-                {createTooltipWithShortcut(isFocusMode ? "Show Sidebar" : "Hide Sidebar", "Cmd+B")}
+                {createTooltipWithShortcut(
+                  isFocusMode ? "Show Sidebar" : "Hide Sidebar",
+                  sidebarShortcut
+                )}
               </TooltipContent>
             </Tooltip>
           </TooltipProvider>
@@ -478,7 +486,7 @@ export function Toolbar({
                 </Button>
               </TooltipTrigger>
               <TooltipContent side="bottom">
-                {terminalShortcut ? `Open Terminal (${terminalShortcut})` : "Open Terminal"}
+                {createTooltipWithShortcut("Open Terminal", terminalShortcut)}
               </TooltipContent>
             </Tooltip>
           </TooltipProvider>
@@ -502,7 +510,7 @@ export function Toolbar({
                 </Button>
               </TooltipTrigger>
               <TooltipContent side="bottom">
-                {browserShortcut ? `Open Browser (${browserShortcut})` : "Open Browser"}
+                {createTooltipWithShortcut("Open Browser", browserShortcut)}
               </TooltipContent>
             </Tooltip>
           </TooltipProvider>
@@ -826,7 +834,9 @@ export function Toolbar({
                   <StickyNote />
                 </Button>
               </TooltipTrigger>
-              <TooltipContent side="bottom">Notes</TooltipContent>
+              <TooltipContent side="bottom">
+                {createTooltipWithShortcut("Notes", notesShortcut)}
+              </TooltipContent>
             </Tooltip>
           </TooltipProvider>
         ),
@@ -897,7 +907,9 @@ export function Toolbar({
                   <SlidersHorizontal />
                 </Button>
               </TooltipTrigger>
-              <TooltipContent side="bottom">Open Settings</TooltipContent>
+              <TooltipContent side="bottom">
+                {createTooltipWithShortcut("Open Settings", settingsShortcut)}
+              </TooltipContent>
             </Tooltip>
           </TooltipProvider>
         ),
@@ -926,7 +938,7 @@ export function Toolbar({
                 </Button>
               </TooltipTrigger>
               <TooltipContent side="bottom">
-                {createTooltipWithShortcut("Show Problems Panel", "Ctrl+Shift+M")}
+                {createTooltipWithShortcut("Show Problems Panel", diagnosticsShortcut)}
               </TooltipContent>
             </Tooltip>
           </TooltipProvider>
@@ -957,7 +969,10 @@ export function Toolbar({
                 </Button>
               </TooltipTrigger>
               <TooltipContent side="bottom">
-                {sidecarOpen ? "Close Context Sidecar" : "Open Context Sidecar"}
+                {createTooltipWithShortcut(
+                  sidecarOpen ? "Close Context Sidecar" : "Open Context Sidecar",
+                  sidecarShortcut
+                )}
               </TooltipContent>
             </Tooltip>
           </TooltipProvider>
@@ -974,6 +989,11 @@ export function Toolbar({
       onLaunchAgent,
       terminalShortcut,
       browserShortcut,
+      sidebarShortcut,
+      diagnosticsShortcut,
+      sidecarShortcut,
+      notesShortcut,
+      settingsShortcut,
       devServerCommand,
       panelPaletteOpen,
       panelPaletteShortcut,
