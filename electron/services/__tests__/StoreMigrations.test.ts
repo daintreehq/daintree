@@ -6,6 +6,7 @@ import type { Migration } from "../StoreMigrations.js";
 import { MigrationRunner } from "../StoreMigrations.js";
 import { migration004 } from "../migrations/004-upgrade-correction-model.js";
 import { migration006 } from "../migrations/006-rename-theme-canopy-to-daintree.js";
+import { migration007 } from "../migrations/007-reduce-default-terminal-scrollback.js";
 
 type MockStoreData = Record<string, unknown>;
 
@@ -215,6 +216,42 @@ describe("MigrationRunner", () => {
       const store = createMockStore(storePath, {});
       migration006.up(store as never);
       expect(store.data.appTheme).toBeUndefined();
+    });
+  });
+
+  describe("migration 007 — reduce default terminal scrollback", () => {
+    it("migrates scrollbackLines from 2500 to 1000 and preserves sibling fields", () => {
+      const store = createMockStore(storePath, {
+        terminalConfig: { scrollbackLines: 2500, performanceMode: false },
+      });
+      migration007.up(store as never);
+      const config = store.data.terminalConfig as Record<string, unknown>;
+      expect(config.scrollbackLines).toBe(1000);
+      expect(config.performanceMode).toBe(false);
+    });
+
+    it("leaves scrollbackLines at 1000 unchanged (new install default)", () => {
+      const store = createMockStore(storePath, {
+        terminalConfig: { scrollbackLines: 1000 },
+      });
+      migration007.up(store as never);
+      const config = store.data.terminalConfig as Record<string, unknown>;
+      expect(config.scrollbackLines).toBe(1000);
+    });
+
+    it("leaves custom scrollbackLines unchanged", () => {
+      const store = createMockStore(storePath, {
+        terminalConfig: { scrollbackLines: 5000 },
+      });
+      migration007.up(store as never);
+      const config = store.data.terminalConfig as Record<string, unknown>;
+      expect(config.scrollbackLines).toBe(5000);
+    });
+
+    it("skips when no terminalConfig exists", () => {
+      const store = createMockStore(storePath, {});
+      migration007.up(store as never);
+      expect(store.data.terminalConfig).toBeUndefined();
     });
   });
 

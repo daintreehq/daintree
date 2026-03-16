@@ -171,7 +171,7 @@ const storeOptions = {
       isMaximized: false,
     },
     terminalConfig: {
-      scrollbackLines: 2500,
+      scrollbackLines: 1000,
       performanceMode: false,
       hybridInputEnabled: true,
       hybridInputAutoFocus: true,

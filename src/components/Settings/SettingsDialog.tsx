@@ -66,6 +66,7 @@ import {
   HighlightText,
   parseQuery,
 } from "./settingsSearchUtils";
+import { SCROLLBACK_DEFAULT } from "@shared/config/scrollback";
 
 export interface SettingsNavTarget {
   tab: SettingsTab;
@@ -196,11 +197,11 @@ export function SettingsDialog({
     // General defaults: showProjectPulse=true, showDeveloperTools=false
     if (!showProjectPulse || showDeveloperTools) tabs.add("general");
 
-    // Terminal defaults: performanceMode=false, scrollback=2500, strategy=automatic,
+    // Terminal defaults: performanceMode=false, scrollback=SCROLLBACK_DEFAULT, strategy=automatic,
     // hybridInput=true, hybridAutoFocus=true, twoPaneSplit.enabled=true, preferPreview=false, ratio=0.5
     if (
       performanceMode ||
-      scrollbackLines !== 2500 ||
+      scrollbackLines !== SCROLLBACK_DEFAULT ||
       layoutConfig.strategy !== "automatic" ||
       !hybridInputEnabled ||
       !hybridInputAutoFocus ||

@@ -2396,7 +2396,7 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
                             value={terminalScrollback}
                             onChange={(e) => setTerminalScrollback(e.target.value)}
                             className="w-28 bg-canopy-bg border border-canopy-border rounded px-3 py-2 text-sm text-canopy-text font-mono focus:outline-none focus:border-canopy-accent focus:ring-1 focus:ring-canopy-accent/30 transition-all placeholder:text-text-muted"
-                            placeholder="2500"
+                            placeholder="1000"
                           />
                           {terminalScrollback.trim() &&
                             (() => {

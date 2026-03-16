@@ -12,8 +12,8 @@ export const PERFORMANCE_MODE_SCROLLBACK = 100;
 
 const AGENT_SCROLLBACK_POLICY: ScrollbackPolicy = {
   multiplier: 1.0,
-  maxLines: 10000,
-  minLines: 1000,
+  maxLines: 5000,
+  minLines: 500,
 };
 
 const SCROLLBACK_POLICIES: Record<string, ScrollbackPolicy> = {
