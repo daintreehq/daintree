@@ -9,8 +9,8 @@ import {
 } from "../terminalColorSchemes";
 
 describe("terminalColorSchemes", () => {
-  it("has exactly 23 built-in schemes", () => {
-    expect(BUILT_IN_SCHEMES).toHaveLength(23);
+  it("has exactly 24 built-in schemes", () => {
+    expect(BUILT_IN_SCHEMES).toHaveLength(24);
   });
 
   it("all schemes have unique IDs", () => {
@@ -34,9 +34,9 @@ describe("terminalColorSchemes", () => {
     expect(getSchemeById(DEFAULT_SCHEME_ID)!.name).toBe("Match App Theme");
   });
 
-  it("has 6 light schemes", () => {
+  it("has 7 light schemes", () => {
     const lightSchemes = BUILT_IN_SCHEMES.filter((s) => s.type === "light");
-    expect(lightSchemes).toHaveLength(6);
+    expect(lightSchemes).toHaveLength(7);
   });
 
   it("getSchemeById returns undefined for unknown ID", () => {
@@ -85,6 +85,7 @@ describe("terminalColorSchemes", () => {
         "dracula",
         "github-dark",
         "highlands",
+        "hokkaido",
         "redwoods",
         "solarized-light",
       ])

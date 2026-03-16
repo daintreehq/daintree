@@ -679,6 +679,37 @@ export const BUILT_IN_SCHEMES: TerminalColorScheme[] = [
       brightWhite: "#ffffff",
     },
   },
+  // Hokkaido — frost-blue winter palette, cool-shifted ANSI colors
+  {
+    id: "hokkaido",
+    name: "Hokkaido",
+    type: "light",
+    builtin: true,
+    colors: {
+      background: "#FAFCFD",
+      foreground: "#2B3540",
+      cursor: "#3E7D86",
+      cursorAccent: "#FAFCFD",
+      selectionBackground: "#D0E4EE",
+      selectionForeground: "#2B3540",
+      black: "#2B3540",
+      red: "#BF616A",
+      green: "#4A8C5C",
+      yellow: "#A07A2E",
+      blue: "#5E81AC",
+      magenta: "#7B5C8C",
+      cyan: "#3E7D86",
+      white: "#C8D8E4",
+      brightBlack: "#5A6B7A",
+      brightRed: "#D9747D",
+      brightGreen: "#62A872",
+      brightYellow: "#C49A3E",
+      brightBlue: "#7AA0C8",
+      brightMagenta: "#9A7AAA",
+      brightCyan: "#5A9EA8",
+      brightWhite: "#EEF3F7",
+    },
+  },
 ];
 
 export function getSchemeById(id: string): TerminalColorScheme | undefined {
@@ -697,7 +728,7 @@ export const APP_THEME_TERMINAL_SCHEME_MAP: Record<string, string> = {
   svalbard: "atom-one-light",
   atacama: "atom-one-light",
   serengeti: "solarized-light",
-  hokkaido: "atom-one-light",
+  hokkaido: "hokkaido",
 };
 
 export function getMappedTerminalScheme(appThemeId: string): TerminalColorScheme | undefined {
