@@ -28,6 +28,20 @@ export function selectWrapperBackground(state: TerminalColorSchemeState): string
   return scheme.colors.background ?? "var(--theme-surface-canvas)";
 }
 
+export function selectEffectiveTheme(state: TerminalColorSchemeState): ITheme {
+  const allSchemes = [...BUILT_IN_SCHEMES, ...state.customSchemes];
+  const scheme = allSchemes.find((s) => s.id === state.selectedSchemeId);
+
+  if (!scheme || scheme.id === DEFAULT_SCHEME_ID) {
+    return getTerminalThemeFromCSS();
+  }
+
+  return {
+    ...scheme.colors,
+    ...getTerminalScrollbarDefaults(scheme.type),
+  };
+}
+
 export const useTerminalColorSchemeStore = create<TerminalColorSchemeState>()((set, get) => ({
   selectedSchemeId: DEFAULT_SCHEME_ID,
   customSchemes: [],
