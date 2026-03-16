@@ -17,6 +17,17 @@ interface TerminalColorSchemeState {
   getEffectiveTheme: () => ITheme;
 }
 
+export function selectWrapperBackground(state: TerminalColorSchemeState): string {
+  const allSchemes = [...BUILT_IN_SCHEMES, ...state.customSchemes];
+  const scheme = allSchemes.find((s) => s.id === state.selectedSchemeId);
+
+  if (!scheme || scheme.id === DEFAULT_SCHEME_ID) {
+    return "var(--theme-surface-canvas)";
+  }
+
+  return (scheme.colors.background as string) ?? "var(--theme-surface-canvas)";
+}
+
 export const useTerminalColorSchemeStore = create<TerminalColorSchemeState>()((set, get) => ({
   selectedSchemeId: DEFAULT_SCHEME_ID,
   customSchemes: [],

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { useTerminalColorSchemeStore } from "../terminalColorSchemeStore";
+import { useTerminalColorSchemeStore, selectWrapperBackground } from "../terminalColorSchemeStore";
 import { DEFAULT_SCHEME_ID } from "@/config/terminalColorSchemes";
 import type { TerminalColorScheme } from "@/config/terminalColorSchemes";
 
@@ -107,5 +107,40 @@ describe("terminalColorSchemeStore", () => {
     useTerminalColorSchemeStore.getState().setSelectedSchemeId("solarized-light");
     const theme = useTerminalColorSchemeStore.getState().getEffectiveTheme();
     expect(theme.scrollbarSliderBackground).toBe("rgba(0, 0, 0, 0.20)");
+  });
+
+  describe("selectWrapperBackground", () => {
+    it("returns CSS variable for default scheme", () => {
+      const bg = selectWrapperBackground(useTerminalColorSchemeStore.getState());
+      expect(bg).toBe("var(--theme-surface-canvas)");
+    });
+
+    it("returns hex color for built-in non-default scheme", () => {
+      useTerminalColorSchemeStore.getState().setSelectedSchemeId("dracula");
+      const bg = selectWrapperBackground(useTerminalColorSchemeStore.getState());
+      expect(bg).toBe("#282a36");
+    });
+
+    it("returns hex color for custom scheme", () => {
+      useTerminalColorSchemeStore.getState().addCustomScheme(CUSTOM_SCHEME);
+      useTerminalColorSchemeStore.getState().setSelectedSchemeId("custom-test");
+      const bg = selectWrapperBackground(useTerminalColorSchemeStore.getState());
+      expect(bg).toBe("#111111");
+    });
+
+    it("returns updated color when custom scheme is replaced", () => {
+      const store = useTerminalColorSchemeStore.getState();
+      store.addCustomScheme(CUSTOM_SCHEME);
+      store.setSelectedSchemeId("custom-test");
+      store.addCustomScheme({ ...CUSTOM_SCHEME, colors: { ...CUSTOM_SCHEME.colors, background: "#222222" } });
+      const bg = selectWrapperBackground(useTerminalColorSchemeStore.getState());
+      expect(bg).toBe("#222222");
+    });
+
+    it("falls back to CSS variable for unknown scheme id", () => {
+      useTerminalColorSchemeStore.setState({ selectedSchemeId: "nonexistent" });
+      const bg = selectWrapperBackground(useTerminalColorSchemeStore.getState());
+      expect(bg).toBe("var(--theme-surface-canvas)");
+    });
   });
 });
