@@ -1,3 +1,4 @@
+import type { AgentState } from "../../shared/types/domain.js";
 import { store } from "../store.js";
 import { projectStore } from "./ProjectStore.js";
 
@@ -10,6 +11,9 @@ const DEFAULT_CONFIG: HibernationConfig = {
   enabled: false,
   inactiveThresholdHours: 24,
 };
+
+const MEMORY_PRESSURE_INACTIVE_MS = 30 * 60 * 1000;
+const ACTIVE_AGENT_STATES: ReadonlySet<AgentState> = new Set(["working", "running", "directing"]);
 
 /**
  * HibernationService - Auto-hibernates inactive projects to free resources.
@@ -151,6 +155,48 @@ export class HibernationService {
         );
       } catch (error) {
         console.error(`[HibernationService] Failed to hibernate project "${project.name}":`, error);
+      }
+    }
+  }
+
+  async hibernateUnderMemoryPressure(): Promise<void> {
+    const config = this.getConfig();
+    if (!config.enabled) return;
+
+    const currentProjectId = projectStore.getCurrentProjectId();
+    const projects = projectStore.getAllProjects();
+    const now = Date.now();
+
+    const { getPtyManager } = await import("./PtyManager.js");
+    const ptyManager = getPtyManager();
+    const allTerminals = ptyManager.getAll();
+
+    for (const project of projects) {
+      if (project.id === currentProjectId) continue;
+
+      const inactiveDuration = now - (project.lastOpened || 0);
+      if (inactiveDuration < MEMORY_PRESSURE_INACTIVE_MS) continue;
+
+      const projectTerminals = allTerminals.filter((t) => t.projectId === project.id);
+      if (projectTerminals.length === 0) continue;
+
+      const hasActiveAgent = projectTerminals.some(
+        (t) => t.agentState && ACTIVE_AGENT_STATES.has(t.agentState)
+      );
+      if (hasActiveAgent) continue;
+
+      console.log(
+        `[HibernationService] Memory-pressure hibernating project "${project.name}" ` +
+          `(inactive for ${Math.floor(inactiveDuration / 60000)} minutes, ${projectTerminals.length} terminals)`
+      );
+
+      try {
+        await ptyManager.gracefulKillByProject(project.id);
+      } catch (error) {
+        console.error(
+          `[HibernationService] Failed to memory-pressure hibernate project "${project.name}":`,
+          error
+        );
       }
     }
   }

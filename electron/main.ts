@@ -1,3 +1,14 @@
+import nodeV8 from "node:v8";
+import vm from "node:vm";
+
+let exposeGc: (() => void) | undefined;
+try {
+  nodeV8.setFlagsFromString("--expose_gc");
+  exposeGc = vm.runInNewContext("gc") as () => void;
+} catch {
+  // GC exposure not available — non-critical
+}
+
 import {
   app,
   BrowserWindow,
@@ -319,7 +330,10 @@ import { taskQueueService } from "./services/TaskQueueService.js";
 import { store } from "./store.js";
 import { MigrationRunner } from "./services/StoreMigrations.js";
 import { migrations } from "./services/migrations/index.js";
-import { initializeHibernationService } from "./services/HibernationService.js";
+import {
+  initializeHibernationService,
+  getHibernationService,
+} from "./services/HibernationService.js";
 import {
   evictSessionFiles,
   SESSION_EVICTION_TTL_MS,
@@ -1722,7 +1736,22 @@ async function createWindow(): Promise<void> {
   }
 
   if (!stopAppMetricsMonitor) {
-    stopAppMetricsMonitor = startAppMetricsMonitor();
+    stopAppMetricsMonitor = startAppMetricsMonitor({
+      clearCaches: async () => {
+        await session.defaultSession.clearCache();
+        await session.defaultSession.clearStorageData({
+          storages: ["shadercache", "cachestorage"],
+        });
+        try {
+          exposeGc?.();
+        } catch {
+          // GC call failed — non-critical
+        }
+      },
+      hibernateIdleProjects: async () => {
+        await getHibernationService().hibernateUnderMemoryPressure();
+      },
+    });
   }
 
   // Cleanup handler
