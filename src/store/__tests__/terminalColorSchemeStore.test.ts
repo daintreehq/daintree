@@ -71,11 +71,11 @@ describe("terminalColorSchemeStore", () => {
     expect(theme.foreground).toBe("#f8f8f2");
   });
 
-  it("getEffectiveTheme returns Canopy Ember for highlands app theme", () => {
+  it("getEffectiveTheme returns Highlands theme for highlands app theme", () => {
     useAppThemeStore.setState({ selectedSchemeId: "highlands" });
     const theme = useTerminalColorSchemeStore.getState().getEffectiveTheme();
-    expect(theme.background).toBe("#211916");
-    expect(theme.foreground).toBe("#e8ddd2");
+    expect(theme.background).toBe("#1A1614");
+    expect(theme.foreground).toBe("#C9D1D9");
   });
 
   it("getEffectiveTheme returns solarized-light for bondi app theme", () => {
