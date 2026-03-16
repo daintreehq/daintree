@@ -893,13 +893,6 @@ function App() {
     }
   }, [launchAgent, activeWorktreeId, availability, agentSettings]);
 
-  const handleOpenAgentSettings = useCallback(() => {
-    setSettingsTab("agents");
-    setSettingsSubtab(undefined);
-    setSettingsSectionId(undefined);
-    setIsSettingsOpen(true);
-  }, []);
-
   const handleOpenSettingsTab = useCallback((target: SettingsNavTarget) => {
     const allowedTabs: SettingsTab[] = [
       "general",
@@ -1100,7 +1093,6 @@ function App() {
             }
             onLaunchAgent={handleLaunchAgent}
             onSettings={handleSettings}
-            onOpenAgentSettings={handleOpenAgentSettings}
             onRetry={handleErrorRetry}
             onCancelRetry={handleCancelRetry}
             agentAvailability={availability}

@@ -16,14 +16,12 @@ type AgentType = BuiltInAgentId;
 interface AgentButtonProps {
   type: AgentType;
   availability?: boolean;
-  onOpenSettings: () => void;
   "data-toolbar-item"?: string;
 }
 
 export function AgentButton({
   type,
   availability,
-  onOpenSettings,
   "data-toolbar-item": dataToolbarItem,
 }: AgentButtonProps) {
   const { showMenu } = useNativeContextMenu();
@@ -54,7 +52,11 @@ export function AgentButton({
     if (isAvailable) {
       void actionService.dispatch("agent.launch", { agentId: type }, { source: "user" });
     } else {
-      onOpenSettings();
+      void actionService.dispatch(
+        "app.settings.openTab",
+        { tab: "agents", subtab: type },
+        { source: "user" }
+      );
     }
   };
 
