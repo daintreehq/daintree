@@ -428,19 +428,17 @@ describe("createAutoSize integration", () => {
     const scrollDOM = view.scrollDOM;
     // Track how many times overflowY is actually written to the DOM
     let overflowWriteCount = 0;
-    const originalStyleSetter = Object.getOwnPropertyDescriptor(
-      CSSStyleDeclaration.prototype,
-      "overflowY"
-    );
-    if (originalStyleSetter?.set) {
-      vi.spyOn(scrollDOM.style, "overflowY", "set").mockImplementation(function (
-        this: CSSStyleDeclaration,
-        val: string
-      ) {
+    let currentOverflowY = "";
+    Object.defineProperty(scrollDOM.style, "overflowY", {
+      get() {
+        return currentOverflowY;
+      },
+      set(val: string) {
         overflowWriteCount++;
-        originalStyleSetter.set!.call(this, val);
-      });
-    }
+        currentOverflowY = val;
+      },
+      configurable: true,
+    });
 
     // First dispatch — should write overflowY once ("hidden")
     view.dispatch({ changes: { from: 0, insert: "a" } });
