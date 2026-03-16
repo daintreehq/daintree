@@ -284,7 +284,12 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
             const from = cursor + insertText.length;
             insertText += token + " ";
             effects.push(
-              addFileDropChip.of({ from, to: from + token.length, filePath: file.path, fileName: file.name })
+              addFileDropChip.of({
+                from,
+                to: from + token.length,
+                filePath: file.path,
+                fileName: file.name,
+              })
             );
           }
           view.dispatch({
@@ -327,7 +332,11 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
                 });
               } else {
                 currentView.dispatch({
-                  effects: updateUrlPasteStatus.of({ id: entryId, status: "error", errorMessage: result.message }),
+                  effects: updateUrlPasteStatus.of({
+                    id: entryId,
+                    status: "error",
+                    errorMessage: result.message,
+                  }),
                 });
               }
             })
@@ -335,7 +344,11 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
               const currentView = editorViewRefForUrl.current;
               if (!currentView) return;
               currentView.dispatch({
-                effects: updateUrlPasteStatus.of({ id: entryId, status: "error", errorMessage: "Failed to fetch URL" }),
+                effects: updateUrlPasteStatus.of({
+                  id: entryId,
+                  status: "error",
+                  errorMessage: "Failed to fetch URL",
+                }),
               });
             });
         }),
@@ -578,7 +591,9 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         }
         if (shouldChangeDoc) isApplyingExternalValueRef.current = true;
         view.dispatch({
-          ...(shouldChangeDoc ? { changes: { from: 0, to: view.state.doc.length, insert: nextValue } } : {}),
+          ...(shouldChangeDoc
+            ? { changes: { from: 0, to: view.state.doc.length, insert: nextValue } }
+            : {}),
           ...(shouldChangeSelection ? { selection: options?.selection } : {}),
           scrollIntoView: true,
         });
@@ -589,7 +604,6 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
 
     const { sendText } = useTokenResolution({
       latestRef,
-      editorViewRef,
       agentStateRef,
       errorChipDismissedRef,
       applyEditorValue,
@@ -1000,13 +1014,19 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
           imageChipField,
           imageChipTooltipCompartmentRef.current.of(!disabled ? createImageChipTooltip() : []),
           fileDropChipField,
-          fileDropChipTooltipCompartmentRef.current.of(!disabled ? createFileDropChipTooltip() : []),
+          fileDropChipTooltipCompartmentRef.current.of(
+            !disabled ? createFileDropChipTooltip() : []
+          ),
           diffChipField,
           diffChipTooltipCompartmentRef.current.of(!disabled ? createDiffChipTooltip() : []),
           terminalChipField,
-          terminalChipTooltipCompartmentRef.current.of(!disabled ? createTerminalChipTooltip() : []),
+          terminalChipTooltipCompartmentRef.current.of(
+            !disabled ? createTerminalChipTooltip() : []
+          ),
           selectionChipField,
-          selectionChipTooltipCompartmentRef.current.of(!disabled ? createSelectionChipTooltip() : []),
+          selectionChipTooltipCompartmentRef.current.of(
+            !disabled ? createSelectionChipTooltip() : []
+          ),
           interimMarkField,
           pendingAIField,
           keymapCompartmentRef.current.of(keymapExtension),
@@ -1038,29 +1058,39 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
 
     // --- Compartment reconfigure effects ---
 
+    // Compartment refs are stable (useRef inside useEditorCompartments) — intentionally omitted from deps.
+    /* eslint-disable react-hooks/exhaustive-deps */
     useEffect(() => {
       const view = editorViewRef.current;
       if (!view) return;
-      view.dispatch({ effects: placeholderCompartmentRef.current.reconfigure(createPlaceholder(placeholder)) });
+      view.dispatch({
+        effects: placeholderCompartmentRef.current.reconfigure(createPlaceholder(placeholder)),
+      });
     }, [placeholder]);
 
     useEffect(() => {
       const view = editorViewRef.current;
       if (!view) return;
-      view.dispatch({ effects: editableCompartmentRef.current.reconfigure(EditorView.editable.of(!disabled)) });
+      view.dispatch({
+        effects: editableCompartmentRef.current.reconfigure(EditorView.editable.of(!disabled)),
+      });
     }, [disabled]);
 
     useEffect(() => {
       const view = editorViewRef.current;
       if (!view) return;
-      view.dispatch({ effects: chipCompartmentRef.current.reconfigure(createSlashChipField({ commandMap })) });
+      view.dispatch({
+        effects: chipCompartmentRef.current.reconfigure(createSlashChipField({ commandMap })),
+      });
     }, [commandMap]);
 
     useEffect(() => {
       const view = editorViewRef.current;
       if (!view) return;
       view.dispatch({
-        effects: tooltipCompartmentRef.current.reconfigure(!disabled ? createSlashTooltip(commandMap) : []),
+        effects: tooltipCompartmentRef.current.reconfigure(
+          !disabled ? createSlashTooltip(commandMap) : []
+        ),
       });
     }, [commandMap, disabled]);
 
@@ -1068,7 +1098,9 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       const view = editorViewRef.current;
       if (!view) return;
       view.dispatch({
-        effects: fileChipTooltipCompartmentRef.current.reconfigure(!disabled ? createFileChipTooltip() : []),
+        effects: fileChipTooltipCompartmentRef.current.reconfigure(
+          !disabled ? createFileChipTooltip() : []
+        ),
       });
     }, [disabled]);
 
@@ -1076,7 +1108,9 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       const view = editorViewRef.current;
       if (!view) return;
       view.dispatch({
-        effects: imageChipTooltipCompartmentRef.current.reconfigure(!disabled ? createImageChipTooltip() : []),
+        effects: imageChipTooltipCompartmentRef.current.reconfigure(
+          !disabled ? createImageChipTooltip() : []
+        ),
       });
     }, [disabled]);
 
@@ -1084,7 +1118,9 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       const view = editorViewRef.current;
       if (!view) return;
       view.dispatch({
-        effects: fileDropChipTooltipCompartmentRef.current.reconfigure(!disabled ? createFileDropChipTooltip() : []),
+        effects: fileDropChipTooltipCompartmentRef.current.reconfigure(
+          !disabled ? createFileDropChipTooltip() : []
+        ),
       });
     }, [disabled]);
 
@@ -1092,9 +1128,12 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       const view = editorViewRef.current;
       if (!view) return;
       view.dispatch({
-        effects: diffChipTooltipCompartmentRef.current.reconfigure(!disabled ? createDiffChipTooltip() : []),
+        effects: diffChipTooltipCompartmentRef.current.reconfigure(
+          !disabled ? createDiffChipTooltip() : []
+        ),
       });
     }, [disabled]);
+    /* eslint-enable react-hooks/exhaustive-deps */
 
     useEffect(() => {
       const view = editorViewRef.current;
