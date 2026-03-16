@@ -156,6 +156,8 @@ export interface GitCommitListResponse {
 
 // List Options and Response Types
 
+export type GitHubSortOrder = "created" | "updated";
+
 /** GitHub list options */
 export interface GitHubListOptions {
   /** Working directory to determine repository */
@@ -168,6 +170,8 @@ export interface GitHubListOptions {
   cursor?: string;
   /** Skip the in-memory list cache and fetch fresh data */
   bypassCache?: boolean;
+  /** Sort order field */
+  sortOrder?: GitHubSortOrder;
 }
 
 /** Paginated response for GitHub lists */

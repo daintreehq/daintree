@@ -652,9 +652,10 @@ function buildListCacheKey(
   repo: string,
   state: string,
   search: string,
+  sortOrder: string,
   cursor: string
 ): string {
-  return `${type}:${owner}/${repo}:${state}:${search}:${cursor}`;
+  return `${type}:${owner}/${repo}:${state}:${search}:${sortOrder}:${cursor}`;
 }
 
 function mapIssueStates(state?: string): string[] {
@@ -828,6 +829,12 @@ export async function listIssues(
     throw new Error("GitHub token not configured. Set it in Settings.");
   }
 
+  const resolvedSortOrder = options.sortOrder ?? "created";
+  const orderBy = {
+    field: resolvedSortOrder === "updated" ? "UPDATED_AT" : "CREATED_AT",
+    direction: "DESC",
+  };
+
   return withRepoContextRetry(options.cwd, async (context) => {
     const cacheKey = buildListCacheKey(
       "issue",
@@ -835,6 +842,7 @@ export async function listIssues(
       context.repo,
       options.state ?? "open",
       options.search ?? "",
+      resolvedSortOrder,
       options.cursor ?? ""
     );
 
@@ -878,6 +886,7 @@ export async function listIssues(
           states,
           cursor: options.cursor,
           limit: 20,
+          orderBy,
         })) as GraphQlQueryResponseData;
 
         const issues = response?.repository?.issues;
@@ -932,6 +941,12 @@ export async function listPullRequests(
     throw new Error("GitHub token not configured. Set it in Settings.");
   }
 
+  const resolvedSortOrder = options.sortOrder ?? "created";
+  const orderBy = {
+    field: resolvedSortOrder === "updated" ? "UPDATED_AT" : "CREATED_AT",
+    direction: "DESC",
+  };
+
   return withRepoContextRetry(options.cwd, async (context) => {
     const cacheKey = buildListCacheKey(
       "pr",
@@ -939,6 +954,7 @@ export async function listPullRequests(
       context.repo,
       options.state ?? "open",
       options.search ?? "",
+      resolvedSortOrder,
       options.cursor ?? ""
     );
 
@@ -985,6 +1001,7 @@ export async function listPullRequests(
           states,
           cursor: options.cursor,
           limit: 20,
+          orderBy,
         })) as GraphQlQueryResponseData;
 
         const pullRequests = response?.repository?.pullRequests;

@@ -513,6 +513,7 @@ export interface ElectronAPI {
       state?: "open" | "closed" | "all";
       cursor?: string;
       bypassCache?: boolean;
+      sortOrder?: import("../github.js").GitHubSortOrder;
     }): Promise<import("../github.js").GitHubListResponse<import("../github.js").GitHubIssue>>;
     listPullRequests(options: {
       cwd: string;
@@ -520,6 +521,7 @@ export interface ElectronAPI {
       state?: "open" | "closed" | "merged" | "all";
       cursor?: string;
       bypassCache?: boolean;
+      sortOrder?: import("../github.js").GitHubSortOrder;
     }): Promise<import("../github.js").GitHubListResponse<import("../github.js").GitHubPR>>;
     assignIssue(cwd: string, issueNumber: number, username: string): Promise<void>;
     getIssueTooltip(

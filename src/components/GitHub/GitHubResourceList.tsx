@@ -13,7 +13,7 @@ import {
   type IssueStateFilter,
   type PRStateFilter,
 } from "@/store/githubFilterStore";
-import type { GitHubIssue, GitHubPR } from "@shared/types/github";
+import type { GitHubIssue, GitHubPR, GitHubSortOrder } from "@shared/types/github";
 import { parseExactNumber } from "@/lib/parseExactNumber";
 
 type StateFilter = IssueStateFilter | PRStateFilter;
@@ -49,6 +49,12 @@ export function GitHubResourceList({
   const setFilterState = useGitHubFilterStore((s) =>
     type === "issue" ? s.setIssueFilter : s.setPrFilter
   ) as (f: StateFilter) => void;
+  const sortOrder = useGitHubFilterStore((s) =>
+    type === "issue" ? s.issueSortOrder : s.prSortOrder
+  );
+  const setSortOrder = useGitHubFilterStore((s) =>
+    type === "issue" ? s.setIssueSortOrder : s.setPrSortOrder
+  ) as (o: GitHubSortOrder) => void;
   const [data, setData] = useState<(GitHubIssue | GitHubPR)[]>([]);
   const [cursor, setCursor] = useState<string | null>(null);
   const [hasMore, setHasMore] = useState(false);
@@ -113,6 +119,7 @@ export function GitHubResourceList({
           state: filterState as "open" | "closed" | "merged" | "all",
           cursor: currentCursor || undefined,
           bypassCache: !append,
+          sortOrder,
         };
 
         const result =
@@ -149,7 +156,7 @@ export function GitHubResourceList({
         }
       }
     },
-    [projectPath, debouncedSearch, filterState, type]
+    [projectPath, debouncedSearch, filterState, type, sortOrder]
   );
 
   useEffect(() => {
@@ -514,6 +521,50 @@ export function GitHubResourceList({
               </button>
             );
           })}
+        </div>
+
+        <div role="radiogroup" aria-label="Sort order">
+          <div className="text-[10px] font-medium text-canopy-text/50 uppercase tracking-wide mb-1.5">
+            Sort by
+          </div>
+          <div className="flex flex-col gap-1">
+            {(
+              [
+                { value: "created", label: "Newest" },
+                { value: "updated", label: "Recently updated" },
+              ] as const
+            ).map((option) => (
+              <button
+                key={option.value}
+                type="button"
+                onClick={() => setSortOrder(option.value)}
+                role="radio"
+                aria-checked={sortOrder === option.value}
+                className={cn(
+                  "flex items-center gap-2 px-2 py-1 text-xs rounded",
+                  sortOrder === option.value
+                    ? "bg-canopy-accent/10 text-canopy-accent"
+                    : "text-canopy-text/70 hover:bg-overlay-medium"
+                )}
+              >
+                <div
+                  className={cn(
+                    "w-3 h-3 rounded-full border",
+                    sortOrder === option.value
+                      ? "border-canopy-accent bg-canopy-accent"
+                      : "border-canopy-border"
+                  )}
+                >
+                  {sortOrder === option.value && (
+                    <div className="w-full h-full flex items-center justify-center">
+                      <div className="w-1.5 h-1.5 bg-white rounded-full" />
+                    </div>
+                  )}
+                </div>
+                {option.label}
+              </button>
+            ))}
+          </div>
         </div>
       </div>
 
