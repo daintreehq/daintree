@@ -7,7 +7,7 @@ import {
   isAbsolute,
   normalize as pathNormalize,
 } from "path";
-import { realpathSync } from "fs";
+import { realpathSync, existsSync } from "fs";
 import { simpleGit, SimpleGit, BranchSummary } from "simple-git";
 import type { Worktree, WorktreeChanges } from "../../shared/types/domain.js";
 import type {
@@ -711,7 +711,12 @@ export class WorkspaceService {
   }
 
   private async poll(monitor: MonitorState, force: boolean = false): Promise<void> {
-    if (!monitor.isRunning || (!force && monitor.pollingStrategy.isCircuitBreakerTripped())) {
+    if (!monitor.isRunning) return;
+
+    if (!force && monitor.pollingStrategy.isCircuitBreakerTripped()) {
+      if (!existsSync(monitor.path)) {
+        this.handleExternalWorktreeRemoval(monitor);
+      }
       return;
     }
 
@@ -1032,7 +1037,12 @@ export class WorkspaceService {
     }
 
     // Emit removal events for frontend cleanup
-    if (this.projectScopeId && monitor.projectScopeId === this.projectScopeId) {
+    if (this.projectScopeId) {
+      if (monitor.projectScopeId !== this.projectScopeId) {
+        console.warn(
+          `[WorkspaceHost] Scope ID mismatch on removal: monitor=${monitor.projectScopeId}, service=${this.projectScopeId}`
+        );
+      }
       this.sendEvent({ type: "worktree-removed", worktreeId, projectScopeId: this.projectScopeId });
       events.emit("sys:worktree:remove", { worktreeId, timestamp: Date.now() });
     }
