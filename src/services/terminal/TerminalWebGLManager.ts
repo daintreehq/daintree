@@ -18,9 +18,22 @@ export class TerminalWebGLManager {
 
   private pool = new Map<string, WebGLEntry>();
   private lruOrder: string[] = [];
+  private hardwareAvailable = true;
+  private hasLoggedSoftwareSkip = false;
+
+  setHardwareAvailable(available: boolean): void {
+    this.hardwareAvailable = available;
+  }
 
   ensureContext(id: string, managed: ManagedTerminal): void {
     if (WEBGL_DISABLED) return;
+    if (!this.hardwareAvailable) {
+      if (!this.hasLoggedSoftwareSkip) {
+        console.warn("[TerminalWebGLManager] Skipping WebGL: software-only GPU detected");
+        this.hasLoggedSoftwareSkip = true;
+      }
+      return;
+    }
     if (!managed.isOpened) return;
 
     if (this.pool.has(id)) {

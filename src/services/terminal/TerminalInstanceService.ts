@@ -104,6 +104,10 @@ class TerminalInstanceService {
     });
   }
 
+  setGPUHardwareAvailable(available: boolean): void {
+    this.webGLManager.setHardwareAvailable(available);
+  }
+
   notifyUserInput(id: string): void {
     this.onUserInput(id);
   }

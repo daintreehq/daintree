@@ -88,4 +88,5 @@ export interface HydrateResult {
   terminalConfig: TerminalConfig;
   project: import("../domain.js").Project | null;
   agentSettings: import("../agentSettings.js").AgentSettings;
+  gpuWebGLHardware: boolean;
 }

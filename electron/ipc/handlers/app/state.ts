@@ -9,6 +9,8 @@ import {
 } from "../../../schemas/ipc.js";
 import { getCrashRecoveryService } from "../../../services/CrashRecoveryService.js";
 
+import { isWebGLHardwareAccelerated } from "../../../utils/gpuDetection.js";
+
 export function registerAppStateHandlers(): () => void {
   const handlers: Array<() => void> = [];
 
@@ -234,11 +236,20 @@ export function registerAppStateHandlers(): () => void {
       `[AppHydrate] Project: ${currentProject?.name ?? "none"} - terminals from ${terminalsSource} (${terminalsToUse.length} valid), focusMode: ${focusModeToUse}`
     );
 
+    const gpuStatus = app.getGPUFeatureStatus();
+    const gpuWebGLHardware = isWebGLHardwareAccelerated(gpuStatus.webgl2);
+    if (!gpuWebGLHardware) {
+      console.warn(
+        `[AppHydrate] Software-only WebGL2 detected (status: ${gpuStatus.webgl2}). WebGL terminal renderer will be disabled.`
+      );
+    }
+
     return {
       appState,
       terminalConfig: store.get("terminalConfig"),
       project: currentProject,
       agentSettings: store.get("agentSettings"),
+      gpuWebGLHardware,
     };
   };
   ipcMain.handle(CHANNELS.APP_HYDRATE, handleAppHydrate);

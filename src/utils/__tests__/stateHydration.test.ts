@@ -99,6 +99,7 @@ vi.mock("@/services/KeybindingService", () => ({
 }));
 
 const initializeBackendTierMock = vi.fn();
+const setGPUHardwareAvailableMock = vi.fn();
 
 vi.mock("@/services/TerminalInstanceService", () => ({
   terminalInstanceService: {
@@ -106,6 +107,7 @@ vi.mock("@/services/TerminalInstanceService", () => ({
     restoreFetchedState: restoreFetchedStateMock,
     initializeBackendTier: initializeBackendTierMock,
     get: getManagedTerminalMock,
+    setGPUHardwareAvailable: setGPUHardwareAvailableMock,
   },
 }));
 
@@ -1814,5 +1816,73 @@ describe("hydrateAppState", () => {
     const devPreviewIdx = callOrder.indexOf("dev-preview");
 
     expect(browserIdx).toBeLessThan(devPreviewIdx);
+  });
+
+  it("calls setGPUHardwareAvailable(false) when gpuWebGLHardware is false", async () => {
+    appClientMock.hydrate.mockResolvedValue({
+      appState: {
+        terminals: [],
+        sidebarWidth: 350,
+      },
+      terminalConfig,
+      project,
+      agentSettings,
+      gpuWebGLHardware: false,
+    });
+
+    await hydrateAppState({
+      addTerminal: vi.fn().mockResolvedValue("terminal-id"),
+      setActiveWorktree: vi.fn(),
+      loadRecipes: vi.fn().mockResolvedValue(undefined),
+      openDiagnosticsDock: vi.fn(),
+    });
+
+    expect(setGPUHardwareAvailableMock).toHaveBeenCalledTimes(1);
+    expect(setGPUHardwareAvailableMock).toHaveBeenCalledWith(false);
+  });
+
+  it("calls setGPUHardwareAvailable(true) when gpuWebGLHardware is true", async () => {
+    appClientMock.hydrate.mockResolvedValue({
+      appState: {
+        terminals: [],
+        sidebarWidth: 350,
+      },
+      terminalConfig,
+      project,
+      agentSettings,
+      gpuWebGLHardware: true,
+    });
+
+    await hydrateAppState({
+      addTerminal: vi.fn().mockResolvedValue("terminal-id"),
+      setActiveWorktree: vi.fn(),
+      loadRecipes: vi.fn().mockResolvedValue(undefined),
+      openDiagnosticsDock: vi.fn(),
+    });
+
+    expect(setGPUHardwareAvailableMock).toHaveBeenCalledTimes(1);
+    expect(setGPUHardwareAvailableMock).toHaveBeenCalledWith(true);
+  });
+
+  it("defaults to setGPUHardwareAvailable(true) when gpuWebGLHardware is absent", async () => {
+    appClientMock.hydrate.mockResolvedValue({
+      appState: {
+        terminals: [],
+        sidebarWidth: 350,
+      },
+      terminalConfig,
+      project,
+      agentSettings,
+    });
+
+    await hydrateAppState({
+      addTerminal: vi.fn().mockResolvedValue("terminal-id"),
+      setActiveWorktree: vi.fn(),
+      loadRecipes: vi.fn().mockResolvedValue(undefined),
+      openDiagnosticsDock: vi.fn(),
+    });
+
+    expect(setGPUHardwareAvailableMock).toHaveBeenCalledTimes(1);
+    expect(setGPUHardwareAvailableMock).toHaveBeenCalledWith(true);
   });
 });
