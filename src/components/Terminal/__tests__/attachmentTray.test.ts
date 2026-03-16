@@ -40,6 +40,12 @@ describe("normalizeChips", () => {
     expect(result[0].fileSize).toBeUndefined();
   });
 
+  it("preserves fileSize of zero", () => {
+    const files = [{ from: 0, to: 5, fileName: "empty.txt", fileSize: 0 }];
+    const result = normalizeChips([], files);
+    expect(result[0].fileSize).toBe(0);
+  });
+
   it("combines all chip types", () => {
     const images = [{ from: 0, to: 5, filePath: "/img.png", thumbnailUrl: "" }];
     const files = [{ from: 10, to: 15, fileName: "code.ts", fileSize: 1234 }];
