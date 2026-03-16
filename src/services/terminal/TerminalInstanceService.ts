@@ -23,6 +23,9 @@ import { getEffectiveAgentConfig } from "@shared/config/agentRegistry";
 import { logDebug, logWarn, logError } from "@/utils/logger";
 import { PERF_MARKS } from "@shared/perf/marks";
 import { markRendererPerformance } from "@/utils/performance";
+import { useScrollbackStore } from "@/store/scrollbackStore";
+import { usePerformanceModeStore } from "@/store/performanceModeStore";
+import { getScrollbackForType, PERFORMANCE_MODE_SCROLLBACK } from "@/utils/scrollbackConfig";
 
 // eslint-disable-next-line no-control-regex
 const URXVT_MOUSE_RE = /^\x1b\[\d+;\d+;\d+M/;
@@ -1116,6 +1119,39 @@ class TerminalInstanceService {
    */
   initializeBackendTier(id: string, tier: "active" | "background"): void {
     this.rendererPolicy.initializeBackendTier(id, tier);
+  }
+
+  reduceScrollback(id: string, targetLines: number): void {
+    const managed = this.instances.get(id);
+    if (!managed) return;
+    if (managed.isFocused) return;
+    if (managed.isUserScrolledBack) return;
+
+    const currentScrollback = managed.terminal.options.scrollback ?? 0;
+    if (currentScrollback <= targetLines) return;
+
+    const bufferLength = managed.terminal.buffer.active.length;
+    managed.terminal.options.scrollback = targetLines;
+
+    if (bufferLength > targetLines) {
+      managed.terminal.write(
+        `\r\n\x1b[33m[Canopy] Scrollback reduced to ${targetLines} lines due to memory pressure. Older history is no longer available.\x1b[0m\r\n`
+      );
+    }
+  }
+
+  restoreScrollback(id: string): void {
+    const managed = this.instances.get(id);
+    if (!managed) return;
+
+    const { scrollbackLines } = useScrollbackStore.getState();
+    const { performanceMode } = usePerformanceModeStore.getState();
+
+    const restored = performanceMode
+      ? PERFORMANCE_MODE_SCROLLBACK
+      : getScrollbackForType(managed.type, scrollbackLines);
+
+    managed.terminal.options.scrollback = restored;
   }
 
   addExitListener(id: string, cb: (exitCode: number) => void): () => void {

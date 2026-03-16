@@ -513,6 +513,8 @@ let flowStatusUnsubscribe: (() => void) | null = null;
 let backendCrashedUnsubscribe: (() => void) | null = null;
 let backendReadyUnsubscribe: (() => void) | null = null;
 let spawnResultUnsubscribe: (() => void) | null = null;
+let reduceScrollbackUnsubscribe: (() => void) | null = null;
+let restoreScrollbackUnsubscribe: (() => void) | null = null;
 let recoveryTimer: NodeJS.Timeout | null = null;
 let beforeUnloadHandler: (() => void) | null = null;
 
@@ -596,6 +598,14 @@ export function cleanupTerminalStoreListeners() {
   if (spawnResultUnsubscribe) {
     spawnResultUnsubscribe();
     spawnResultUnsubscribe = null;
+  }
+  if (reduceScrollbackUnsubscribe) {
+    reduceScrollbackUnsubscribe();
+    reduceScrollbackUnsubscribe = null;
+  }
+  if (restoreScrollbackUnsubscribe) {
+    restoreScrollbackUnsubscribe();
+    restoreScrollbackUnsubscribe = null;
   }
   if (recoveryTimer) {
     clearTimeout(recoveryTimer);
@@ -857,6 +867,22 @@ export function setupTerminalStoreListeners() {
       }
     }
   });
+
+  reduceScrollbackUnsubscribe = terminalRegistryController.onReduceScrollback(
+    ({ terminalIds, targetLines }) => {
+      for (const id of terminalIds) {
+        terminalInstanceService.reduceScrollback(id, targetLines);
+      }
+    }
+  );
+
+  restoreScrollbackUnsubscribe = terminalRegistryController.onRestoreScrollback(
+    ({ terminalIds }) => {
+      for (const id of terminalIds) {
+        terminalInstanceService.restoreScrollback(id);
+      }
+    }
+  );
 
   // Flush pending terminal persistence on window close to prevent data loss
   beforeUnloadHandler = () => {
