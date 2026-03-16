@@ -27,6 +27,7 @@ const common = {
   external,
   logLevel: "info",
   absWorkingDir: root,
+  pure: isProd ? ["console.log", "console.info", "console.warn", "console.debug"] : [],
   define: {
     "process.env.SENTRY_DSN": JSON.stringify(process.env.SENTRY_DSN || ""),
   },
