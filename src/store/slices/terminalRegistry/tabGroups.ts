@@ -291,14 +291,10 @@ export const createTabGroupActions = (
     // This makes group order follow terminal array order (which reorderTabGroups manipulates)
     explicitGroups.sort((a, b) => {
       const aFirstIndex = Math.min(
-        ...a.panelIds
-          .map((id) => terminals.findIndex((t) => t.id === id))
-          .filter((i) => i !== -1)
+        ...a.panelIds.map((id) => terminals.findIndex((t) => t.id === id)).filter((i) => i !== -1)
       );
       const bFirstIndex = Math.min(
-        ...b.panelIds
-          .map((id) => terminals.findIndex((t) => t.id === id))
-          .filter((i) => i !== -1)
+        ...b.panelIds.map((id) => terminals.findIndex((t) => t.id === id)).filter((i) => i !== -1)
       );
       return aFirstIndex - bFirstIndex;
     });
@@ -568,10 +564,7 @@ export const createTabGroupActions = (
 
       // Add any terminals in other worktrees (preserve their relative order)
       for (const terminal of terminalsInLocation) {
-        if (
-          !processedIds.has(terminal.id) &&
-          (terminal.worktreeId ?? null) !== targetWorktreeId
-        ) {
+        if (!processedIds.has(terminal.id) && (terminal.worktreeId ?? null) !== targetWorktreeId) {
           newLocationTerminals.push(terminal);
           processedIds.add(terminal.id);
         }
@@ -580,18 +573,8 @@ export const createTabGroupActions = (
       // Reconstruct the full terminals array
       const newTerminals =
         location === "grid"
-          ? [
-              ...newLocationTerminals,
-              ...dockTerminals,
-              ...trashTerminals,
-              ...backgroundTerminals,
-            ]
-          : [
-              ...gridTerminals,
-              ...newLocationTerminals,
-              ...trashTerminals,
-              ...backgroundTerminals,
-            ];
+          ? [...newLocationTerminals, ...dockTerminals, ...trashTerminals, ...backgroundTerminals]
+          : [...gridTerminals, ...newLocationTerminals, ...trashTerminals, ...backgroundTerminals];
 
       saveTerminals(newTerminals);
       return { terminals: newTerminals };

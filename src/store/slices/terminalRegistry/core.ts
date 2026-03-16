@@ -79,8 +79,7 @@ export const createCorePanelActions = (
           : requestedLocation;
       const activeWorktreeId = useWorktreeSelectionStore.getState().activeWorktreeId;
       const isInActiveWorktree = (options.worktreeId ?? null) === (activeWorktreeId ?? null);
-      const shouldBackground =
-        location === "dock" || (location === "grid" && !isInActiveWorktree);
+      const shouldBackground = location === "dock" || (location === "grid" && !isInActiveWorktree);
       const runtimeStatus: TerminalRuntimeStatus = shouldBackground ? "background" : "running";
 
       let terminal: TerminalInstance;
@@ -232,8 +231,7 @@ export const createCorePanelActions = (
         : requestedLocation;
     const activeWorktreeId = useWorktreeSelectionStore.getState().activeWorktreeId;
     const isInActiveWorktree = (options.worktreeId ?? null) === (activeWorktreeId ?? null);
-    const shouldBackground =
-      location === "dock" || (location === "grid" && !isInActiveWorktree);
+    const shouldBackground = location === "dock" || (location === "grid" && !isInActiveWorktree);
     const runtimeStatus: TerminalRuntimeStatus = shouldBackground ? "background" : "running";
 
     // Fetch project environment variables and merge with spawn options
@@ -406,9 +404,7 @@ export const createCorePanelActions = (
         let newTerminals: TerminalInstance[];
         if (existingIndex >= 0) {
           // Update existing terminal in place (reconnection case or double hydration)
-          console.log(
-            `[TerminalStore] Terminal ${id} already exists, updating instead of adding`
-          );
+          console.log(`[TerminalStore] Terminal ${id} already exists, updating instead of adding`);
           const existing = state.terminals[existingIndex];
           // Preserve existing agentState/lastStateChange/exitBehavior if new values are undefined
           const preservedTerminal = isReconnect

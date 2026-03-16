@@ -289,9 +289,7 @@ export const createTrashActions = (
 
     // Determine restore location - prefer metadata, fallback to originalLocation from any panel
     const restoreLocation =
-      anchorPanel?.groupMetadata?.location ??
-      groupPanels[0]?.trashed?.originalLocation ??
-      "grid";
+      anchorPanel?.groupMetadata?.location ?? groupPanels[0]?.trashed?.originalLocation ?? "grid";
     const worktreeId =
       targetWorktreeId !== undefined
         ? targetWorktreeId
