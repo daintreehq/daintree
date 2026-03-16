@@ -9,8 +9,8 @@ import {
 } from "../terminalColorSchemes";
 
 describe("terminalColorSchemes", () => {
-  it("has exactly 24 built-in schemes", () => {
-    expect(BUILT_IN_SCHEMES).toHaveLength(24);
+  it("has exactly 25 built-in schemes", () => {
+    expect(BUILT_IN_SCHEMES).toHaveLength(25);
   });
 
   it("all schemes have unique IDs", () => {
@@ -82,7 +82,7 @@ describe("terminalColorSchemes", () => {
         "atom-one-light",
         "canopy-ember",
         "daintree",
-        "dracula",
+        "fiordland",
         "github-dark",
         "highlands",
         "hokkaido",
@@ -95,7 +95,7 @@ describe("terminalColorSchemes", () => {
   it("getMappedTerminalScheme returns scheme for known app theme", () => {
     const scheme = getMappedTerminalScheme("fiordland");
     expect(scheme).toBeDefined();
-    expect(scheme!.id).toBe("dracula");
+    expect(scheme!.id).toBe("fiordland");
   });
 
   it("redwoods maps to its bespoke terminal scheme", () => {
