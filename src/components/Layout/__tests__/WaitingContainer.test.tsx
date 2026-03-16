@@ -9,7 +9,7 @@ const mockWaiting: TerminalInstance[] = [
   {
     id: "t1",
     title: "Agent 1",
-    type: "agent",
+    type: "claude",
     kind: "terminal",
     worktreeId: "w1",
     location: "grid",
