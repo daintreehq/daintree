@@ -351,6 +351,78 @@ describe("built-in schemes — Fiordland", () => {
   });
 });
 
+describe("built-in schemes — Galápagos", () => {
+  const galapagos = BUILT_IN_APP_SCHEMES.find((s) => s.id === "galapagos")!;
+  const canvas = "#131A1C";
+
+  it("exists with correct metadata", () => {
+    expect(galapagos).toBeDefined();
+    expect(galapagos.name).toBe("Galápagos");
+    expect(galapagos.type).toBe("dark");
+    expect(galapagos.builtin).toBe(true);
+  });
+
+  it("produces all required token keys", () => {
+    for (const key of APP_THEME_TOKEN_KEYS) {
+      expect(galapagos.tokens).toHaveProperty(key, expect.any(String));
+    }
+  });
+
+  it("has redesigned terminal normal colors", () => {
+    expect(galapagos.tokens["terminal-red"]).toBe("#D96C6C");
+    expect(galapagos.tokens["terminal-green"]).toBe("#62A862");
+    expect(galapagos.tokens["terminal-yellow"]).toBe("#C9A040");
+    expect(galapagos.tokens["terminal-blue"]).toBe("#5693BF");
+    expect(galapagos.tokens["terminal-magenta"]).toBe("#B882B0");
+    expect(galapagos.tokens["terminal-cyan"]).toBe("#4DB8C2");
+  });
+
+  it("has redesigned syntax tokens", () => {
+    expect(galapagos.tokens["syntax-comment"]).toBe("#617B7F");
+    expect(galapagos.tokens["syntax-punctuation"]).toBe("#A0AFBA");
+    expect(galapagos.tokens["syntax-keyword"]).toBe("#BB9AF7");
+    expect(galapagos.tokens["syntax-operator"]).toBe("#6CB8CC");
+    expect(galapagos.tokens["syntax-chip"]).toBe("#D4A853");
+    expect(galapagos.tokens["syntax-number"]).toBe("#D4895A");
+  });
+
+  it.each([
+    ["terminal-red", "#D96C6C"],
+    ["terminal-green", "#62A862"],
+    ["terminal-yellow", "#C9A040"],
+    ["terminal-blue", "#5693BF"],
+    ["terminal-magenta", "#B882B0"],
+    ["terminal-cyan", "#4DB8C2"],
+  ] as const)("%s (%s) meets WCAG 3:1 contrast against canvas", (token, hex) => {
+    const ratio = wcagContrastRatio(hex, canvas);
+    expect(
+      ratio,
+      `${token} "${hex}" on canvas "${canvas}" = ${ratio.toFixed(2)}:1, needs ≥3:1`
+    ).toBeGreaterThanOrEqual(3);
+  });
+
+  it("syntax-punctuation is significantly lighter than syntax-comment", () => {
+    // #617B7F HSL lightness ~44%, #A0AFBA HSL lightness ~67% — gap ≥20%
+    const commentRatio = wcagContrastRatio(galapagos.tokens["syntax-comment"], canvas);
+    const punctuationRatio = wcagContrastRatio(galapagos.tokens["syntax-punctuation"], canvas);
+    expect(punctuationRatio - commentRatio).toBeGreaterThan(2);
+  });
+
+  it("syntax-keyword (violet) is in a different hue family from syntax-operator (cyan)", () => {
+    // #BB9AF7 is violet (H≈261), #6CB8CC is cyan (H≈193) — different families
+    expect(galapagos.tokens["syntax-keyword"]).toBe("#BB9AF7");
+    expect(galapagos.tokens["syntax-operator"]).toBe("#6CB8CC");
+    const keywordRatio = wcagContrastRatio(galapagos.tokens["syntax-keyword"], canvas);
+    const operatorRatio = wcagContrastRatio(galapagos.tokens["syntax-operator"], canvas);
+    expect(keywordRatio).toBeGreaterThanOrEqual(3);
+    expect(operatorRatio).toBeGreaterThanOrEqual(3);
+  });
+
+  it("passes critical contrast checks without warnings", () => {
+    expect(getAppThemeWarnings(galapagos)).toEqual([]);
+  });
+});
+
 describe("built-in schemes — Highlands theme", () => {
   const highlands = BUILT_IN_APP_SCHEMES.find((s) => s.id === "highlands")!;
 
