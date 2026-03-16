@@ -470,6 +470,88 @@ describe("terminal action hardening", () => {
       })
     );
   });
+
+  it("duplicates focused panel when called with undefined args (keybinding path)", async () => {
+    const actions = buildRegistry(registerTerminalActions);
+    const duplicate = actions.get("terminal.duplicate")!();
+    const addTerminal = vi.fn().mockResolvedValue("copy-id");
+
+    useTerminalStore.setState({
+      terminals: [createTerminal({ id: "term-a", title: "My Shell" })],
+      focusedId: "term-a",
+      addTerminal,
+    } as never);
+
+    await duplicate.run(undefined, {} as never);
+
+    expect(addTerminal).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "terminal",
+        title: "My Shell (copy)",
+      })
+    );
+  });
+
+  it("duplicates the lone non-trashed panel when focusedId is null", async () => {
+    const actions = buildRegistry(registerTerminalActions);
+    const duplicate = actions.get("terminal.duplicate")!();
+    const addTerminal = vi.fn().mockResolvedValue("copy-id");
+
+    useTerminalStore.setState({
+      terminals: [
+        createTerminal({ id: "term-only", title: "Lonely" }),
+        createTerminal({ id: "term-trash", location: "trash" }),
+      ],
+      focusedId: null,
+      addTerminal,
+    } as never);
+
+    await duplicate.run(undefined, {} as never);
+
+    expect(addTerminal).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: "Lonely (copy)",
+      })
+    );
+  });
+
+  it("falls back to creating a new terminal when no panels exist", async () => {
+    const actions = buildRegistry(registerTerminalActions);
+    const duplicate = actions.get("terminal.duplicate")!();
+    const addTerminal = vi.fn().mockResolvedValue("new-id");
+
+    useTerminalStore.setState({
+      terminals: [],
+      focusedId: null,
+      addTerminal,
+    } as never);
+
+    await duplicate.run(undefined, {} as never);
+
+    expect(addTerminal).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "terminal",
+        cwd: "/repo",
+        location: "grid",
+      })
+    );
+  });
+
+  it("does nothing when multiple panels exist but none is focused", async () => {
+    const actions = buildRegistry(registerTerminalActions);
+    const duplicate = actions.get("terminal.duplicate")!();
+    const addTerminal = vi.fn().mockResolvedValue("copy-id");
+
+    useTerminalStore.setState({
+      terminals: [createTerminal({ id: "term-a" }), createTerminal({ id: "term-b" })],
+      focusedId: null,
+      addTerminal,
+    } as never);
+
+    await duplicate.run(undefined, {} as never);
+
+    expect(addTerminal).not.toHaveBeenCalled();
+  });
 });
 
 describe("panel action hardening", () => {

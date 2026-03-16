@@ -51,8 +51,16 @@ const DEFAULT_KEYBINDINGS: KeybindingConfig[] = [
     category: "Navigation",
   },
   {
-    actionId: "terminal.new",
+    actionId: "terminal.duplicate",
     combo: "Cmd+T",
+    scope: "global",
+    priority: 0,
+    description: "Duplicate focused panel",
+    category: "Terminal",
+  },
+  {
+    actionId: "terminal.new",
+    combo: "Cmd+Alt+T",
     scope: "global",
     priority: 0,
     description: "New terminal",

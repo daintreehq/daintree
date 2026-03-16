@@ -2,6 +2,7 @@ import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 import { TerminalTypeSchema } from "./schemas";
 import { z } from "zod";
 import { useTerminalStore } from "@/store/terminalStore";
+import { buildPanelDuplicateOptions } from "@/services/terminal/panelDuplicationService";
 export function registerTerminalSpawnActions(
   actions: ActionRegistry,
   callbacks: ActionCallbacks
@@ -28,34 +29,37 @@ export function registerTerminalSpawnActions(
 
   actions.set("terminal.duplicate", () => ({
     id: "terminal.duplicate",
-    title: "Duplicate Terminal",
-    description: "Create a duplicate of the terminal",
+    title: "Duplicate Panel",
+    description: "Duplicate the focused panel, or create a new terminal if no panels exist",
     category: "terminal",
     kind: "command",
     danger: "safe",
     scope: "renderer",
-    argsSchema: z.object({ terminalId: z.string().optional() }),
+    argsSchema: z.object({ terminalId: z.string().optional() }).optional(),
     run: async (args: unknown) => {
-      const { terminalId } = args as { terminalId?: string };
+      const { terminalId } = (args as { terminalId?: string } | undefined) ?? {};
       const state = useTerminalStore.getState();
-      const targetId = terminalId ?? state.focusedId;
+      const nonTrashed = state.terminals.filter((t) => t.location !== "trash");
+      const targetId =
+        terminalId ?? state.focusedId ?? (nonTrashed.length === 1 ? nonTrashed[0].id : undefined);
+
       if (targetId) {
         const terminal = state.terminals.find((t) => t.id === targetId);
         if (!terminal) return;
 
-        const location = terminal.location === "trash" ? "grid" : (terminal.location ?? "grid");
-
+        const location =
+          terminal.location === "grid" || terminal.location === "dock" ? terminal.location : "grid";
+        const options = await buildPanelDuplicateOptions(terminal, location);
+        if (terminal.title) {
+          options.title = `${terminal.title} (copy)`;
+        }
+        await state.addTerminal(options);
+      } else if (nonTrashed.length === 0) {
         await state.addTerminal({
-          kind: terminal.kind,
-          type: terminal.type,
-          agentId: terminal.agentId,
-          cwd: terminal.cwd,
-          location,
-          title: terminal.title ? `${terminal.title} (copy)` : undefined,
-          worktreeId: terminal.worktreeId,
-          command: terminal.command,
-          isInputLocked: terminal.isInputLocked,
-          browserUrl: terminal.browserUrl,
+          type: "terminal",
+          cwd: callbacks.getDefaultCwd(),
+          location: "grid",
+          worktreeId: callbacks.getActiveWorktreeId(),
         });
       }
     },

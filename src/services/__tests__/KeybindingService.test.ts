@@ -161,24 +161,40 @@ describe("KeybindingService", () => {
   it("does not report conflicts for bindings disabled by empty override list", () => {
     const service = new KeybindingService();
 
-    (service as unknown as { overrides: Map<string, string[]> }).overrides.set("terminal.new", []);
+    (service as unknown as { overrides: Map<string, string[]> }).overrides.set(
+      "terminal.duplicate",
+      []
+    );
 
     const conflicts = service.findConflicts("Cmd+T");
-    expect(conflicts.some((binding) => binding.actionId === "terminal.new")).toBe(false);
+    expect(conflicts.some((binding) => binding.actionId === "terminal.duplicate")).toBe(false);
   });
 
   it("surfaces empty effective combo for disabled overrides", () => {
     const service = new KeybindingService();
 
-    (service as unknown as { overrides: Map<string, string[]> }).overrides.set("terminal.new", []);
+    (service as unknown as { overrides: Map<string, string[]> }).overrides.set(
+      "terminal.duplicate",
+      []
+    );
 
     const all = service.getAllBindingsWithEffectiveCombos();
-    const binding = all.find((entry) => entry.actionId === "terminal.new") as
+    const binding = all.find((entry) => entry.actionId === "terminal.duplicate") as
       | (KeybindingConfig & { effectiveCombo: string })
       | undefined;
 
     expect(binding).toBeTruthy();
     expect(binding?.effectiveCombo).toBe("");
+  });
+
+  it("binds Cmd+T to terminal.duplicate by default", () => {
+    const service = new KeybindingService();
+    expect(service.getBinding("terminal.duplicate")?.combo).toBe("Cmd+T");
+  });
+
+  it("binds Cmd+Alt+T to terminal.new by default", () => {
+    const service = new KeybindingService();
+    expect(service.getBinding("terminal.new")?.combo).toBe("Cmd+Alt+T");
   });
 
   it("matchesEvent returns true for Shift+F10", () => {

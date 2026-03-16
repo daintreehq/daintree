@@ -109,6 +109,7 @@ export type KeyAction =
   | "terminal.moveToDock"
   | "terminal.moveToGrid"
   | "terminal.watch"
+  | "terminal.duplicate"
   | "terminal.background"
   | "terminal.contextMenu"
   | "terminal.stashInput"
@@ -266,6 +267,7 @@ export const KEY_ACTION_VALUES: ReadonlySet<string> = new Set<string>([
   "terminal.moveToDock",
   "terminal.moveToGrid",
   "terminal.watch",
+  "terminal.duplicate",
   "terminal.contextMenu",
   "terminal.stashInput",
   "terminal.popStash",
