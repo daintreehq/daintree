@@ -24,6 +24,15 @@ import { logDebug, logWarn, logError } from "@/utils/logger";
 import { PERF_MARKS } from "@shared/perf/marks";
 import { markRendererPerformance } from "@/utils/performance";
 
+const URXVT_MOUSE_RE = /^\x1b\[\d+;\d+;\d+M/;
+
+export function isMouseSequence(data: string): boolean {
+  if (data.startsWith("\x1b[M")) return true;
+  if (data.startsWith("\x1b[<")) return true;
+  if (URXVT_MOUSE_RE.test(data)) return true;
+  return false;
+}
+
 function canAutoInitializeTerminalIngest(): boolean {
   return (
     typeof window !== "undefined" &&
@@ -592,7 +601,9 @@ class TerminalInstanceService {
 
     const inputDisposable = terminal.onData((data) => {
       if (!managed.isInputLocked) {
-        this.onUserInput(id);
+        if (!isMouseSequence(data)) {
+          this.onUserInput(id);
+        }
         terminalClient.write(id, data);
         if (onInput) {
           onInput(data);
