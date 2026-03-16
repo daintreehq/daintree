@@ -77,13 +77,9 @@ function XtermAdapterComponent({
   const performanceMode = usePerformanceModeStore((state) => state.performanceMode);
   const fontSize = useTerminalFontStore((state) => state.fontSize);
   const fontFamily = useTerminalFontStore((state) => state.fontFamily);
-  const appThemeSelectedId = useAppThemeStore((s) => s.selectedSchemeId);
-  const terminalSchemeId = useTerminalColorSchemeStore((s) => s.selectedSchemeId);
-  const terminalCustomSchemes = useTerminalColorSchemeStore((s) => s.customSchemes);
-  const wrapperBackground = useMemo(
-    () => selectWrapperBackground(useTerminalColorSchemeStore.getState()),
-    [appThemeSelectedId, terminalSchemeId, terminalCustomSchemes]
-  );
+  // Subscribe to app theme so wrapper background + effective theme re-compute on theme change
+  useAppThemeStore((s) => s.selectedSchemeId);
+  const wrapperBackground = useTerminalColorSchemeStore(selectWrapperBackground);
   const effectiveTheme = useTerminalColorSchemeStore(selectEffectiveTheme);
 
   // Calculate effective scrollback: performance mode overrides, then project override, then app default
