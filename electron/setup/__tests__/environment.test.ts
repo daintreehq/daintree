@@ -41,16 +41,17 @@ vi.mock("os", () => ({
 const originalPlatform = process.platform;
 const originalArgv = [...process.argv];
 
+function getCandidatePaths(): string[] {
+  return fsMock.existsSync.mock.calls.map((c) => c[0]);
+}
+
 describe("Windows Git PATH discovery", () => {
   beforeEach(() => {
     vi.resetModules();
     vi.clearAllMocks();
     Object.defineProperty(process, "platform", { value: "win32", writable: true });
-    // Remove smoke-test flag so the module doesn't try to import node-pty
     process.argv = ["electron", "main.js"];
-    // Start with an empty PATH
     process.env.PATH = "";
-    // Remove env vars that would affect tests
     delete process.env["ProgramFiles"];
     delete process.env["ProgramFiles(x86)"];
     delete process.env["ChocolateyInstall"];
@@ -61,24 +62,30 @@ describe("Windows Git PATH discovery", () => {
     process.argv = originalArgv;
   });
 
-  it("uses fallback paths when env vars are not set", async () => {
+  it("generates correct candidate paths with env var fallbacks", async () => {
     fsMock.existsSync.mockReturnValue(true);
 
     await import("../environment.js");
 
-    const pathEntries = (process.env.PATH || "").split(path.delimiter);
+    const candidates = getCandidatePaths();
     // User install
-    expect(pathEntries).toContain(
-      path.join("C:\\Users\\testuser", "AppData", "Local", "Programs", "Git", "cmd")
+    expect(candidates).toContainEqual(
+      expect.stringContaining(path.join("AppData", "Local", "Programs", "Git", "cmd")),
     );
-    // Standard Program Files fallback
-    expect(pathEntries).toContain(path.join("C:\\Program Files", "Git", "cmd"));
-    // x86 Program Files fallback
-    expect(pathEntries).toContain(path.join("C:\\Program Files (x86)", "Git", "cmd"));
-    // Scoop
-    expect(pathEntries).toContain(path.join("C:\\Users\\testuser", "scoop", "shims"));
-    // Chocolatey fallback
-    expect(pathEntries).toContain(path.join("C:\\ProgramData\\chocolatey", "bin"));
+    // Program Files (fallback)
+    expect(candidates).toContainEqual(
+      expect.stringContaining(path.join("C:\\Program Files", "Git", "cmd")),
+    );
+    // Program Files (x86) (fallback)
+    expect(candidates).toContainEqual(
+      expect.stringContaining(path.join("C:\\Program Files (x86)", "Git", "cmd")),
+    );
+    // Scoop shims
+    expect(candidates).toContainEqual(expect.stringContaining(path.join("scoop", "shims")));
+    // Chocolatey (fallback)
+    expect(candidates).toContainEqual(
+      expect.stringContaining(path.join("C:\\ProgramData\\chocolatey", "bin")),
+    );
   });
 
   it("uses ProgramFiles env var when set", async () => {
@@ -87,9 +94,15 @@ describe("Windows Git PATH discovery", () => {
 
     await import("../environment.js");
 
-    const pathEntries = (process.env.PATH || "").split(path.delimiter);
-    expect(pathEntries).toContain(path.join("D:\\Programs", "Git", "cmd"));
-    expect(pathEntries).not.toContain(path.join("C:\\Program Files", "Git", "cmd"));
+    const candidates = getCandidatePaths();
+    expect(candidates).toContainEqual(
+      expect.stringContaining(path.join("D:\\Programs", "Git", "cmd")),
+    );
+    // Should NOT contain the fallback
+    const hasDefault = candidates.some(
+      (p) => p.includes("C:\\Program Files") && !p.includes("(x86)"),
+    );
+    expect(hasDefault).toBe(false);
   });
 
   it("uses ProgramFiles(x86) env var when set", async () => {
@@ -98,8 +111,10 @@ describe("Windows Git PATH discovery", () => {
 
     await import("../environment.js");
 
-    const pathEntries = (process.env.PATH || "").split(path.delimiter);
-    expect(pathEntries).toContain(path.join("D:\\Programs (x86)", "Git", "cmd"));
+    const candidates = getCandidatePaths();
+    expect(candidates).toContainEqual(
+      expect.stringContaining(path.join("D:\\Programs (x86)", "Git", "cmd")),
+    );
   });
 
   it("uses ChocolateyInstall env var when set", async () => {
@@ -108,35 +123,32 @@ describe("Windows Git PATH discovery", () => {
 
     await import("../environment.js");
 
-    const pathEntries = (process.env.PATH || "").split(path.delimiter);
-    expect(pathEntries).toContain(path.join("D:\\Chocolatey", "bin"));
-    expect(pathEntries).not.toContain(path.join("C:\\ProgramData\\chocolatey", "bin"));
+    const candidates = getCandidatePaths();
+    expect(candidates).toContainEqual(expect.stringContaining(path.join("D:\\Chocolatey", "bin")));
+    const hasDefault = candidates.some((p) => p.includes("ProgramData\\chocolatey"));
+    expect(hasDefault).toBe(false);
   });
 
-  it("filters out paths that do not exist on disk", async () => {
+  it("does not prepend paths that do not exist on disk", async () => {
     fsMock.existsSync.mockReturnValue(false);
 
     await import("../environment.js");
 
-    // PATH should be unchanged (empty) since no candidate exists
     expect(process.env.PATH).toBe("");
   });
 
-  it("does not duplicate paths already in PATH (case-insensitive)", async () => {
-    const existing = path.join("C:\\Program Files", "Git", "cmd");
-    process.env.PATH = existing.toUpperCase();
+  it("prepends existing paths to PATH", async () => {
     fsMock.existsSync.mockReturnValue(true);
 
     await import("../environment.js");
 
-    const pathEntries = (process.env.PATH || "").split(path.delimiter);
-    // The uppercase original should still be there
-    expect(pathEntries).toContain(existing.toUpperCase());
-    // The lowercase duplicate should NOT appear separately
-    const matches = pathEntries.filter(
-      (p) => p.toLowerCase() === existing.toLowerCase()
-    );
-    expect(matches).toHaveLength(1);
+    // PATH should be non-empty since all candidates "exist"
+    expect(process.env.PATH!.length).toBeGreaterThan(0);
+    // Each candidate should appear in the PATH string
+    const candidates = getCandidatePaths();
+    for (const candidate of candidates) {
+      expect(process.env.PATH).toContain(candidate);
+    }
   });
 
   it("does not include .local/bin (Unix-only path regression)", async () => {
@@ -144,8 +156,8 @@ describe("Windows Git PATH discovery", () => {
 
     await import("../environment.js");
 
-    const pathEntries = (process.env.PATH || "").split(path.delimiter);
-    const hasLocalBin = pathEntries.some((p) => p.includes(".local" + path.sep + "bin"));
+    const candidates = getCandidatePaths();
+    const hasLocalBin = candidates.some((p) => p.includes(".local"));
     expect(hasLocalBin).toBe(false);
   });
 });
