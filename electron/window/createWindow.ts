@@ -1,0 +1,242 @@
+import { app, BrowserWindow, ipcMain } from "electron";
+import path from "path";
+import { createWindowWithState } from "../windowState.js";
+import { setLoggerWindow } from "../utils/logger.js";
+import { canOpenExternalUrl, openExternalUrl } from "../utils/openExternal.js";
+import { isTrustedRendererUrl } from "../../shared/utils/trustedRenderer.js";
+import { isLocalhostUrl } from "../../shared/utils/urlUtils.js";
+import { getDevServerUrl } from "../../shared/config/devServer.js";
+import { CHANNELS } from "../ipc/channels.js";
+import { sendToRenderer } from "../ipc/handlers.js";
+import { getCrashRecoveryService } from "../services/CrashRecoveryService.js";
+import { PERF_MARKS } from "../../shared/perf/marks.js";
+import { markPerformance } from "../utils/performance.js";
+import { isSmokeTest } from "../setup/environment.js";
+import { SMOKE_BOOT_TIMEOUT_MS } from "../services/smokeTest.js";
+
+export interface CreateWindowResult {
+  win: BrowserWindow;
+  loadRenderer: (reason: string) => void;
+  smokeTestTimer: ReturnType<typeof setTimeout> | undefined;
+  smokeRendererUnresponsive: () => boolean;
+}
+
+export function setupBrowserWindow(dirname: string): CreateWindowResult {
+  let smokeTestTimer: ReturnType<typeof setTimeout> | undefined;
+  let _smokeRendererUnresponsive = false;
+
+  if (isSmokeTest) {
+    console.log("[SMOKE] Starting %ds startup safety timeout", SMOKE_BOOT_TIMEOUT_MS / 1000);
+    smokeTestTimer = setTimeout(() => {
+      console.error("[SMOKE] FAILED — app did not finish loading within startup timeout");
+      app.exit(1);
+    }, SMOKE_BOOT_TIMEOUT_MS);
+    smokeTestTimer.unref();
+  }
+
+  console.log("[MAIN] Creating window...");
+  const win = createWindowWithState({
+    minWidth: 800,
+    minHeight: 600,
+    webPreferences: {
+      preload: path.join(dirname, "preload.cjs"),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+      webviewTag: true,
+      navigateOnDragDrop: false,
+      backgroundThrottling: false,
+    },
+    ...(process.platform === "darwin"
+      ? {
+          titleBarStyle: "hiddenInset" as const,
+          trafficLightPosition: { x: 12, y: 18 },
+        }
+      : process.platform === "win32"
+        ? {
+            titleBarStyle: "hidden" as const,
+            titleBarOverlay: {
+              color: "#19191a",
+              symbolColor: "#a1a1aa",
+              height: 36,
+            },
+          }
+        : {}),
+    backgroundColor: "#19191a",
+  });
+  markPerformance(PERF_MARKS.MAIN_WINDOW_CREATED);
+
+  if (isSmokeTest) {
+    win.on("unresponsive", () => {
+      _smokeRendererUnresponsive = true;
+      console.error("[SMOKE] FAILED — main window became unresponsive");
+    });
+  }
+
+  let rendererLoadRequested = false;
+  const loadRenderer = (reason: string): void => {
+    if (!win || win.isDestroyed() || rendererLoadRequested) return;
+    rendererLoadRequested = true;
+    console.log(`[MAIN] Loading renderer (${reason})...`);
+    if (process.env.NODE_ENV === "development") {
+      const devServerUrl = getDevServerUrl();
+      console.log(`[MAIN] Loading Vite dev server at ${devServerUrl}`);
+      win.loadURL(devServerUrl);
+    } else {
+      console.log("[MAIN] Loading production build via app:// protocol");
+      win.loadURL("app://canopy/index.html");
+    }
+  };
+
+  // Window open handler
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    if (url && canOpenExternalUrl(url)) {
+      void openExternalUrl(url).catch((error) => {
+        console.error("[MAIN] Failed to open external URL:", error);
+      });
+    } else {
+      console.warn(`[MAIN] Blocked window.open for unsupported/empty URL: ${url}`);
+    }
+    return { action: "deny" };
+  });
+
+  // Block same-window navigations to untrusted origins
+  const webContents = win.webContents;
+  webContents.on("will-navigate", (event, navigationUrl) => {
+    if (!isTrustedRendererUrl(navigationUrl)) {
+      console.error(
+        "[MAIN] Blocked navigation to untrusted URL:",
+        navigationUrl,
+        "from:",
+        webContents.getURL()
+      );
+      event.preventDefault();
+    }
+  });
+
+  webContents.on("will-redirect", (event, redirectUrl) => {
+    if (!isTrustedRendererUrl(redirectUrl)) {
+      console.error(
+        "[MAIN] Blocked redirect to untrusted URL:",
+        redirectUrl,
+        "from:",
+        webContents.getURL()
+      );
+      event.preventDefault();
+    }
+  });
+
+  // Harden webview security
+  win.webContents.on("will-attach-webview", (event, webPreferences, params) => {
+    const allowedPartitions = ["persist:browser", "persist:dev-preview"];
+    const isAllowedLocalhostUrl = isLocalhostUrl(params.src);
+    const isValidPartition =
+      allowedPartitions.includes(params.partition || "") ||
+      (params.partition?.startsWith("persist:dev-preview-") ?? false);
+
+    if (!isAllowedLocalhostUrl || !isValidPartition) {
+      console.warn(
+        `[MAIN] Blocked webview attachment: url=${params.src}, partition=${params.partition}`
+      );
+      event.preventDefault();
+      return;
+    }
+
+    delete webPreferences.preload;
+    webPreferences.nodeIntegration = false;
+    webPreferences.contextIsolation = true;
+    webPreferences.sandbox = true;
+    webPreferences.navigateOnDragDrop = false;
+    webPreferences.disableBlinkFeatures = "Auxclick";
+  });
+
+  // Prevent Cmd+W / Ctrl+W from closing the window
+  const wc = win.webContents;
+  wc.on("before-input-event", (_event, input) => {
+    const isMac = process.platform === "darwin";
+    const isCloseShortcut =
+      input.type === "keyDown" &&
+      input.key.toLowerCase() === "w" &&
+      ((isMac && input.meta && !input.control) || (!isMac && input.control && !input.meta)) &&
+      !input.alt;
+
+    wc.setIgnoreMenuShortcuts(isCloseShortcut);
+  });
+
+  setLoggerWindow(win);
+
+  // Detect renderer crashes
+  win.webContents.on("render-process-gone", (_event, details) => {
+    if (details.reason === "clean-exit") return;
+    console.error("[MAIN] Renderer process gone:", details.reason, details.exitCode);
+    getCrashRecoveryService().recordCrash(
+      new Error(`Renderer process gone: ${details.reason} (exit code ${details.exitCode})`)
+    );
+  });
+
+  // Fullscreen events
+  win.on("enter-full-screen", () => {
+    sendToRenderer(win, CHANNELS.WINDOW_FULLSCREEN_CHANGE, true);
+  });
+  win.on("leave-full-screen", () => {
+    sendToRenderer(win, CHANNELS.WINDOW_FULLSCREEN_CHANGE, false);
+  });
+  win.on("enter-html-full-screen", () => {
+    sendToRenderer(win, CHANNELS.WINDOW_FULLSCREEN_CHANGE, true);
+  });
+  win.on("leave-html-full-screen", () => {
+    sendToRenderer(win, CHANNELS.WINDOW_FULLSCREEN_CHANGE, false);
+  });
+
+  // Window IPC handlers
+  ipcMain.handle(CHANNELS.WINDOW_TOGGLE_FULLSCREEN, () => {
+    if (win && !win.isDestroyed()) {
+      const isSimpleFullScreen = win.isSimpleFullScreen();
+      win.setSimpleFullScreen(!isSimpleFullScreen);
+      return !isSimpleFullScreen;
+    }
+    return false;
+  });
+
+  ipcMain.handle(CHANNELS.WINDOW_RELOAD, (event) => {
+    event.sender.reload();
+  });
+
+  ipcMain.handle(CHANNELS.WINDOW_FORCE_RELOAD, (event) => {
+    event.sender.reloadIgnoringCache();
+  });
+
+  ipcMain.handle(CHANNELS.WINDOW_TOGGLE_DEVTOOLS, (event) => {
+    if (!app.isPackaged) {
+      event.sender.toggleDevTools();
+    }
+  });
+
+  const getZoomStep = () => 0.5;
+
+  ipcMain.handle(CHANNELS.WINDOW_ZOOM_IN, (event) => {
+    const current = event.sender.getZoomLevel();
+    event.sender.setZoomLevel(current + getZoomStep());
+  });
+
+  ipcMain.handle(CHANNELS.WINDOW_ZOOM_OUT, (event) => {
+    const current = event.sender.getZoomLevel();
+    event.sender.setZoomLevel(current - getZoomStep());
+  });
+
+  ipcMain.handle(CHANNELS.WINDOW_ZOOM_RESET, (event) => {
+    event.sender.setZoomLevel(0);
+  });
+
+  ipcMain.handle(CHANNELS.WINDOW_CLOSE, (event) => {
+    const bw = BrowserWindow.fromWebContents(event.sender);
+    bw?.close();
+  });
+
+  return {
+    win,
+    loadRenderer,
+    smokeTestTimer,
+    smokeRendererUnresponsive: () => _smokeRendererUnresponsive,
+  };
+}
