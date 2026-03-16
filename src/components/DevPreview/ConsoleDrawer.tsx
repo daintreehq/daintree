@@ -1,7 +1,7 @@
 import { useState, useCallback, useEffect } from "react";
 import { ChevronUp, RotateCw } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { Button } from "@/components/ui/button";
+
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
 import { XtermAdapter } from "../Terminal/XtermAdapter";
 import { terminalInstanceService } from "../../services/TerminalInstanceService";
@@ -120,21 +120,19 @@ export function ConsoleDrawer({
             <Tooltip>
               <TooltipTrigger asChild>
                 <span className="inline-flex">
-                  <Button
+                  <button
                     type="button"
                     onClick={onHardRestart}
                     disabled={hardRestartDisabled}
                     className={cn(
-                      "flex min-h-8 shrink-0 items-center gap-2 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wide text-canopy-text/80 transition-colors",
-                      "hover:bg-overlay-medium focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-status-info disabled:cursor-not-allowed disabled:opacity-40",
-                      isRestarting && "text-server-starting"
+                      "p-1.5 rounded hover:bg-overlay-medium disabled:opacity-30 disabled:cursor-not-allowed transition-colors",
+                      isRestarting && "animate-spin"
                     )}
                     aria-label={restartTooltip}
                     aria-busy={isRestarting}
                   >
-                    <RotateCw className={cn("h-3.5 w-3.5", isRestarting && "animate-spin")} />
-                    <span>Restart</span>
-                  </Button>
+                    <RotateCw className="h-3.5 w-3.5" />
+                  </button>
                 </span>
               </TooltipTrigger>
               <TooltipContent side="bottom">{restartTooltip}</TooltipContent>

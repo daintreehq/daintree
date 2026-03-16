@@ -180,6 +180,20 @@ describe("ConsoleDrawer", () => {
       expect(screen.getByRole("button", { name: "Hard restart dev preview" })).toBeTruthy();
     });
 
+    it("renders restart button as icon-only with no visible text", () => {
+      render(
+        <ConsoleDrawer
+          terminalId={mockTerminalId}
+          defaultOpen={false}
+          onHardRestart={vi.fn()}
+          status="running"
+        />
+      );
+      const restartButton = screen.getByRole("button", { name: "Hard restart dev preview" });
+      expect(restartButton.textContent).toBe("");
+      expect(restartButton.querySelector("svg")).toBeTruthy();
+    });
+
     it("calls onHardRestart when restart button is clicked", () => {
       const onHardRestart = vi.fn();
       render(
