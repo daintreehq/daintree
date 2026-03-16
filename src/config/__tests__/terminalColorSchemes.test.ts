@@ -10,7 +10,7 @@ import {
 
 describe("terminalColorSchemes", () => {
   it("has exactly 23 built-in schemes", () => {
-    expect(BUILT_IN_SCHEMES).toHaveLength(22);
+    expect(BUILT_IN_SCHEMES).toHaveLength(23);
   });
 
   it("all schemes have unique IDs", () => {
