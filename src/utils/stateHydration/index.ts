@@ -1,12 +1,6 @@
 import { appClient, terminalClient, worktreeClient, projectClient, systemClient } from "@/clients";
 import { suppressMruRecording } from "@/store/worktreeStore";
-import { terminalConfigClient } from "@/clients/terminalConfigClient";
-import {
-  useLayoutConfigStore,
-  useScrollbackStore,
-  usePerformanceModeStore,
-  useTerminalInputStore,
-} from "@/store";
+import { useLayoutConfigStore } from "@/store";
 import { useUserAgentRegistryStore } from "@/store/userAgentRegistryStore";
 import type {
   TerminalType,
@@ -18,7 +12,6 @@ import type {
 import { keybindingService } from "@/services/KeybindingService";
 import { getAgentConfig, isRegisteredAgent } from "@/config/agents";
 import { generateAgentCommand, buildResumeCommand } from "@shared/types";
-import { normalizeScrollbackLines } from "@shared/config/scrollback";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { isTerminalWarmInProjectSwitchCache } from "@/services/projectSwitchRendererCache";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
@@ -35,6 +28,7 @@ import {
   RESTORE_SPAWN_BATCH_SIZE,
   RESTORE_SPAWN_BATCH_DELAY_MS,
 } from "./batchScheduler";
+import { normalizeAndApplyScrollback } from "./scrollbackConfig";
 
 const RECONNECT_TIMEOUT_MS = 2000;
 const RESTORE_CONCURRENCY = 8;
@@ -227,37 +221,7 @@ export async function hydrateAppState(
 
     terminalInstanceService.setGPUHardwareAvailable(gpuWebGLHardware ?? true);
 
-    // Hydrate terminal config (scrollback, performance mode) BEFORE restoring terminals
-    try {
-      if (terminalConfig?.scrollbackLines !== undefined) {
-        const { scrollbackLines } = terminalConfig;
-        const normalizedScrollback = normalizeScrollbackLines(scrollbackLines);
-
-        if (normalizedScrollback !== scrollbackLines) {
-          logHydrationInfo(
-            `Normalizing scrollback from ${scrollbackLines} to ${normalizedScrollback}`
-          );
-          terminalConfigClient.setScrollback(normalizedScrollback).catch((err) => {
-            logWarn("Failed to persist scrollback normalization", { error: err });
-          });
-        }
-
-        useScrollbackStore.getState().setScrollbackLines(normalizedScrollback);
-      }
-      if (terminalConfig?.performanceMode !== undefined) {
-        usePerformanceModeStore.getState().setPerformanceMode(terminalConfig.performanceMode);
-      }
-      if (terminalConfig) {
-        useTerminalInputStore
-          .getState()
-          .setHybridInputEnabled(terminalConfig.hybridInputEnabled ?? true);
-        useTerminalInputStore
-          .getState()
-          .setHybridInputAutoFocus(terminalConfig.hybridInputAutoFocus ?? true);
-      }
-    } catch (error) {
-      logWarn("Failed to hydrate terminal config", { error });
-    }
+    normalizeAndApplyScrollback(terminalConfig, logHydrationInfo);
 
     if (!appState) {
       logWarn("App state returned undefined during hydration, using defaults");
