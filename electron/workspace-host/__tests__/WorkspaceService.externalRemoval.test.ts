@@ -203,6 +203,8 @@ describe("WorkspaceService external worktree removal", () => {
       // Call poll directly (private method access)
       await service["poll"](monitor, false);
 
+      // Should have checked the correct path
+      expect(mockExistsSync).toHaveBeenCalledWith("/test/worktree");
       // Should have called handleExternalWorktreeRemoval → sendEvent
       expect(mockSendEvent).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -234,12 +236,41 @@ describe("WorkspaceService external worktree removal", () => {
 
       await service["poll"](monitor, false);
 
+      // Should have checked the correct path
+      expect(mockExistsSync).toHaveBeenCalledWith("/test/worktree");
       // Should NOT have sent worktree-removed
       expect(mockSendEvent).not.toHaveBeenCalledWith(
         expect.objectContaining({ type: "worktree-removed" })
       );
       // Monitor should still be in the map
       expect(service["monitors"].has("/test/worktree")).toBe(true);
+    });
+
+    it("does not remove main worktree even when circuit breaker tripped and path is gone", async () => {
+      const monitor = createMonitorState({
+        isRunning: true,
+        isMainWorktree: true,
+        pollingStrategy: {
+          updateConfig: vi.fn(),
+          setBaseInterval: vi.fn(),
+          isCircuitBreakerTripped: vi.fn().mockReturnValue(true),
+          calculateNextInterval: vi.fn().mockReturnValue(10000),
+          recordSuccess: vi.fn(),
+          recordFailure: vi.fn(),
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        } as any,
+      });
+      service["monitors"].set("/test/worktree", monitor);
+
+      mockExistsSync.mockReturnValue(false);
+
+      await service["poll"](monitor, false);
+
+      // Main worktree should NOT be removed
+      expect(service["monitors"].has("/test/worktree")).toBe(true);
+      expect(mockSendEvent).not.toHaveBeenCalledWith(
+        expect.objectContaining({ type: "worktree-removed" })
+      );
     });
   });
 
@@ -264,6 +295,8 @@ describe("WorkspaceService external worktree removal", () => {
       );
       // Warning should be logged
       expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("Scope ID mismatch"));
+      // Monitor should be cleaned up
+      expect(service["monitors"].has("/test/worktree")).toBe(false);
 
       warnSpy.mockRestore();
     });
