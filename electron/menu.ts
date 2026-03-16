@@ -170,8 +170,13 @@ export function createApplicationMenu(
       label: "Terminal",
       submenu: [
         {
-          label: "New Terminal",
+          label: "Duplicate Panel",
           accelerator: "CommandOrControl+T",
+          click: () => sendAction("duplicate-panel"),
+        },
+        {
+          label: "New Terminal",
+          accelerator: "CommandOrControl+Alt+T",
           click: () => sendAction("new-terminal"),
         },
         ...(buildAgentMenuItems().length > 0
