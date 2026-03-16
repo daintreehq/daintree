@@ -12,6 +12,7 @@ const mockWaiting: TerminalInstance[] = [
     type: "agent",
     kind: "terminal",
     worktreeId: "w1",
+    location: "grid",
   } as TerminalInstance,
 ];
 
