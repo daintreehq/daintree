@@ -29,6 +29,7 @@ import { utilityProcess, UtilityProcess, dialog, app, MessagePortMain } from "el
 import { EventEmitter } from "events";
 import path from "path";
 import os from "os";
+import { spawnSync } from "child_process";
 import { fileURLToPath } from "url";
 import { logInfo, logWarn } from "../utils/logger.js";
 import { RequestResponseBroker } from "./rpc/index.js";
@@ -723,6 +724,17 @@ export class PtyClient extends EventEmitter {
           killed = true;
         } catch {
           // ignore - fall back to direct kill
+        }
+      }
+
+      if (!killed && process.platform === "win32") {
+        const result = spawnSync("taskkill", ["/T", "/F", "/PID", String(pid)], {
+          windowsHide: true,
+          stdio: "ignore",
+          timeout: 3000,
+        });
+        if (result.status === 0 || result.status === 128) {
+          killed = true;
         }
       }
 
