@@ -79,6 +79,11 @@ describe("getRestartBannerVariant", () => {
     expect(result).toEqual({ type: "none" });
   });
 
+  it("returns exit-error when exitBehavior is undefined", () => {
+    const result = getRestartBannerVariant({ ...base, exitBehavior: undefined });
+    expect(result).toEqual({ type: "exit-error", exitCode: 1 });
+  });
+
   it("preserves the exit code in the exit-error variant", () => {
     const result = getRestartBannerVariant({ ...base, exitCode: 137 });
     expect(result).toEqual({ type: "exit-error", exitCode: 137 });
