@@ -27,13 +27,17 @@ import { logDebug, logInfo, logWarn, logError } from "@/utils/logger";
 import { PERF_MARKS } from "@shared/perf/marks";
 import { markRendererPerformance, withRendererSpan } from "@/utils/performance";
 import { isCanopyEnvEnabled } from "@/utils/env";
+import {
+  type TerminalRestoreTask,
+  splitSnapshotRestoreTasks,
+  scheduleDeferredSnapshotRestore,
+  runInBatches,
+  RESTORE_SPAWN_BATCH_SIZE,
+  RESTORE_SPAWN_BATCH_DELAY_MS,
+} from "./batchScheduler";
 
 const RECONNECT_TIMEOUT_MS = 2000;
 const RESTORE_CONCURRENCY = 8;
-const RESTORE_SPAWN_BATCH_SIZE = 3;
-const RESTORE_SPAWN_BATCH_DELAY_MS = 100;
-const DEFERRED_RESTORE_IDLE_TIMEOUT_MS = 1200;
-const DEFERRED_RESTORE_FALLBACK_DELAY_MS = 32;
 const CLIPBOARD_DIR_NAME = "canopy-clipboard";
 const VERBOSE_HYDRATION_LOGGING = isCanopyEnvEnabled("CANOPY_VERBOSE");
 
@@ -43,13 +47,6 @@ function logHydrationInfo(message: string, context?: Record<string, unknown>): v
 }
 
 let hydrationBootstrapPromise: Promise<void> | null = null;
-
-interface TerminalRestoreTask {
-  terminalId: string;
-  label: string;
-  worktreeId?: string;
-  location: "grid" | "dock";
-}
 
 async function ensureHydrationBootstrap(): Promise<void> {
   if (!hydrationBootstrapPromise) {
@@ -63,76 +60,6 @@ async function ensureHydrationBootstrap(): Promise<void> {
   }
 
   await hydrationBootstrapPromise;
-}
-
-function splitSnapshotRestoreTasks(
-  tasks: TerminalRestoreTask[],
-  activeWorktreeId: string | null,
-  enableDeferredRestore: boolean
-): { criticalTasks: TerminalRestoreTask[]; deferredTasks: TerminalRestoreTask[] } {
-  if (!enableDeferredRestore || tasks.length <= 1) {
-    return { criticalTasks: tasks, deferredTasks: [] };
-  }
-
-  const criticalTasks: TerminalRestoreTask[] = [];
-  const deferredTasks: TerminalRestoreTask[] = [];
-
-  for (const task of tasks) {
-    const isDockTask = task.location === "dock";
-    const isProjectScopedTask = task.worktreeId == null;
-    const isActiveWorktreeTask = task.worktreeId === activeWorktreeId;
-
-    if (isDockTask || isProjectScopedTask || isActiveWorktreeTask) {
-      criticalTasks.push(task);
-    } else {
-      deferredTasks.push(task);
-    }
-  }
-
-  if (criticalTasks.length === 0 && deferredTasks.length > 0) {
-    const fallbackTask = deferredTasks.shift();
-    if (fallbackTask) {
-      criticalTasks.push(fallbackTask);
-    }
-  }
-
-  return { criticalTasks, deferredTasks };
-}
-
-function scheduleDeferredSnapshotRestore(runRestore: () => Promise<void>): void {
-  const execute = () => {
-    void runRestore().catch((error) => {
-      logWarn("Deferred terminal snapshot restore failed", { error });
-    });
-  };
-
-  if (typeof window !== "undefined" && typeof window.requestIdleCallback === "function") {
-    window.requestIdleCallback(() => execute(), {
-      timeout: DEFERRED_RESTORE_IDLE_TIMEOUT_MS,
-    });
-    return;
-  }
-
-  setTimeout(execute, DEFERRED_RESTORE_FALLBACK_DELAY_MS);
-}
-
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-async function runInBatches<T>(
-  items: T[],
-  batchSize: number,
-  delayMs: number,
-  runner: (item: T) => Promise<void>
-): Promise<void> {
-  for (let i = 0; i < items.length; i += batchSize) {
-    const batch = items.slice(i, i + batchSize);
-    await Promise.allSettled(batch.map(runner));
-    if (i + batchSize < items.length) {
-      await delay(delayMs);
-    }
-  }
 }
 
 async function restoreTerminalSnapshots(
