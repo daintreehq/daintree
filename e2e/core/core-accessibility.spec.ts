@@ -96,7 +96,7 @@ test.describe.serial("Core: Accessibility", () => {
           .waitFor({ state: "visible", timeout: T_LONG });
 
         const results = await buildAxeScanner(window)
-          .exclude(".xterm-rows") // xterm.js terminal row content triggers color-contrast false positives
+          .exclude(".xterm-screen") // xterm.js terminal content triggers color-contrast false positives
           .exclude(".xterm-viewport") // scrollable-region-focusable false positive
           .analyze();
         expect(results.violations, formatViolations(results.violations)).toEqual([]);

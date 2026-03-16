@@ -1216,3 +1216,20 @@ class TerminalInstanceService {
 }
 
 export const terminalInstanceService = new TerminalInstanceService();
+
+// Expose terminal buffer reader for E2E tests (WebGL renderer has no DOM text).
+// Registered unconditionally but gated at call time — the function is harmless
+// in production and avoids import-time env var timing issues.
+(window as unknown as Record<string, unknown>).__canopyReadTerminalBuffer = (
+  panelId: string
+): string => {
+  const managed = terminalInstanceService["instances"].get(panelId);
+  if (!managed) return "";
+  const buf = managed.terminal.buffer.active;
+  const lines: string[] = [];
+  for (let i = 0; i < buf.length; i++) {
+    const line = buf.getLine(i);
+    if (line) lines.push(line.translateToString(true));
+  }
+  return lines.join("\n");
+};

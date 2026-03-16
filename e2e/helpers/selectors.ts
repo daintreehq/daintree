@@ -50,7 +50,7 @@ export const SEL = {
     tab: '[role="tab"]',
   },
   terminal: {
-    xtermRows: ".xterm-rows",
+    xtermRows: ".xterm-screen",
     xtermViewport: ".xterm-viewport",
     cmEditor: ".cm-content",
     titleButton: '[aria-label*="title"]',

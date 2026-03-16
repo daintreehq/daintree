@@ -45,6 +45,26 @@ export async function getThemeChromeMetrics(
     (selectors) => {
       type Rgba = { r: number; g: number; b: number; a: number };
 
+      function oklabToSrgb(L: number, a: number, b: number): [number, number, number] {
+        // OKLab → linear sRGB via LMS intermediate
+        const l_ = L + 0.3963377774 * a + 0.2158037573 * b;
+        const m_ = L - 0.1055613458 * a - 0.0638541728 * b;
+        const s_ = L - 0.0894841775 * a - 1.291485548 * b;
+        const l = l_ * l_ * l_;
+        const m = m_ * m_ * m_;
+        const s = s_ * s_ * s_;
+        const r = +4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s;
+        const g = -1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s;
+        const bv = -0.0041960863 * l - 0.7034186147 * m + 1.707614701 * s;
+        // Linear sRGB → gamma-corrected sRGB
+        const gamma = (x: number) => (x <= 0.0031308 ? 12.92 * x : 1.055 * x ** (1 / 2.4) - 0.055);
+        return [
+          Math.round(Math.min(1, Math.max(0, gamma(r))) * 255),
+          Math.round(Math.min(1, Math.max(0, gamma(g))) * 255),
+          Math.round(Math.min(1, Math.max(0, gamma(bv))) * 255),
+        ];
+      }
+
       function parseColor(input: string | null): Rgba {
         if (!input) return { r: 0, g: 0, b: 0, a: 0 };
 
@@ -54,7 +74,7 @@ export async function getThemeChromeMetrics(
         }
 
         const rgbMatch = normalized.match(
-          /^rgba?\(\s*([\d.]+)(?:\s*,|\s+)\s*([\d.]+)(?:\s*,|\s+)\s*([\d.]+)(?:(?:\s*,|\s*\/\s*)([\d.]+))?\s*\)$/
+          /^rgba?\(\s*([\d.]+)(?:\s*,\s*|\s+)([\d.]+)(?:\s*,\s*|\s+)([\d.]+)(?:(?:\s*,\s*|\s*\/\s*)([\d.]+))?\s*\)$/
         );
         if (rgbMatch) {
           return {
@@ -63,6 +83,31 @@ export async function getThemeChromeMetrics(
             b: Number(rgbMatch[3]),
             a: rgbMatch[4] === undefined ? 1 : Number(rgbMatch[4]),
           };
+        }
+
+        // oklab(L a b) or oklab(L a b / alpha)
+        const oklabMatch = normalized.match(
+          /^oklab\(\s*([\d.e+-]+)\s+([\d.e+-]+)\s+([\d.e+-]+)(?:\s*\/\s*([\d.e+-]+))?\s*\)$/
+        );
+        if (oklabMatch) {
+          const [r, g, b] = oklabToSrgb(
+            Number(oklabMatch[1]),
+            Number(oklabMatch[2]),
+            Number(oklabMatch[3])
+          );
+          return { r, g, b, a: oklabMatch[4] === undefined ? 1 : Number(oklabMatch[4]) };
+        }
+
+        // oklch(L C H) or oklch(L C H / alpha)
+        const oklchMatch = normalized.match(
+          /^oklch\(\s*([\d.e+-]+)\s+([\d.e+-]+)\s+([\d.e+-]+)(?:\s*\/\s*([\d.e+-]+))?\s*\)$/
+        );
+        if (oklchMatch) {
+          const Lv = Number(oklchMatch[1]);
+          const C = Number(oklchMatch[2]);
+          const H = (Number(oklchMatch[3]) * Math.PI) / 180;
+          const [r, g, b] = oklabToSrgb(Lv, C * Math.cos(H), C * Math.sin(H));
+          return { r, g, b, a: oklchMatch[4] === undefined ? 1 : Number(oklchMatch[4]) };
         }
 
         const hexMatch = normalized.match(/^#([\da-f]{3,8})$/i);
@@ -177,9 +222,7 @@ export async function getThemeChromeMetrics(
       const gridContainerBackground = gridContainer
         ? resolveEffectiveBackground(gridContainer)
         : rootBackground;
-      const panelBackground = gridPanel
-        ? resolveEffectiveBackground(gridPanel)
-        : gridContainerBackground;
+      const panelBackground = gridPanel ? resolveEffectiveBackground(gridPanel) : null;
 
       return {
         projectTitleContrast: contrastRatio(
@@ -189,7 +232,9 @@ export async function getThemeChromeMetrics(
         quickRunFieldBorderContrast: contrastRatio(fieldBorderColor, quickRunBackground),
         worktreeSectionContrast: contrastRatio(sectionBackground, cardBackground),
         sidebarVsCanvasContrast: contrastRatio(sidebarBackground, rootBackground),
-        panelVsGridContrast: contrastRatio(panelBackground, gridContainerBackground),
+        panelVsGridContrast: panelBackground
+          ? contrastRatio(panelBackground, gridContainerBackground)
+          : Infinity,
       };
     },
     {

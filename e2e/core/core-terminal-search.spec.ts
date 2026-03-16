@@ -158,9 +158,9 @@ test.describe.serial("Core: Terminal Search & Scrollback", () => {
       }
       await window.waitForTimeout(T_SETTLE);
 
-      await expect(panel.locator(SEL.terminal.xtermRows)).toContainText("SCROLLBACK_TOP", {
-        timeout: T_MEDIUM,
-      });
+      // Verify the scrollback buffer contains earlier output
+      // (WebGL renderer does not expose text in DOM, so use buffer API)
+      await waitForTerminalText(panel, "SCROLLBACK_TOP", T_MEDIUM);
     });
 
     test("scrolling back to bottom restores latest output", async () => {
