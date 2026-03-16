@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { IPty } from "node-pty";
 import { TerminalProcess } from "../TerminalProcess.js";
+import type { TerminalType } from "../../../../shared/types/panel.js";
 
 type SpawnFn = (file: string, args: string[], options: any) => IPty;
 
@@ -38,7 +39,7 @@ function createMockPty(): IPty {
 type TerminalProcessOptions = ConstructorParameters<typeof TerminalProcess>[1];
 
 function createAgentTerminal(
-  agentId: string,
+  agentId: TerminalType,
   options?: Partial<TerminalProcessOptions>
 ): TerminalProcess {
   return new TerminalProcess(
