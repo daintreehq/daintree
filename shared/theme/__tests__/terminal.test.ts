@@ -46,7 +46,7 @@ describe("getTerminalThemeFromAppScheme", () => {
     const theme = getTerminalThemeFromAppScheme(fiordland);
     expect(theme.background).toBe("#070D12");
     expect(theme.foreground).toBe("#D4E0D6");
-    expect(theme.selectionBackground).toBe("#1A2C22");
+    expect(theme.selectionBackground).toBe("#162E3A");
     expect(theme.red).toBe("#D06775");
     expect(theme.green).toBe("#66A88B");
     expect(theme.brightWhite).toBe("#D4E3EF");

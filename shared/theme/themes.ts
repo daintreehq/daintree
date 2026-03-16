@@ -350,7 +350,7 @@ export const BUILT_IN_APP_SCHEMES: AppColorScheme[] = [
       "overlay-medium": "rgba(255, 255, 255, 0.08)",
       "overlay-strong": "rgba(255, 255, 255, 0.12)",
       "overlay-emphasis": "rgba(255, 255, 255, 0.18)",
-      "terminal-selection": "#1A2C22",
+      "terminal-selection": "#162E3A",
       "terminal-red": "#D06775",
       "terminal-green": "#66A88B",
       "terminal-yellow": "#C4A671",
