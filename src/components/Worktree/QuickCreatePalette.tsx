@@ -29,6 +29,8 @@ function RecipeListItem({
     return (
       <button
         type="button"
+        tabIndex={-1}
+        onPointerDown={(e) => e.preventDefault()}
         id={`quick-create-option-${item.id}`}
         onClick={onClick}
         className={cn(
@@ -53,6 +55,8 @@ function RecipeListItem({
   return (
     <button
       type="button"
+      tabIndex={-1}
+      onPointerDown={(e) => e.preventDefault()}
       id={`quick-create-option-${recipe.id}`}
       onClick={onClick}
       className={cn(

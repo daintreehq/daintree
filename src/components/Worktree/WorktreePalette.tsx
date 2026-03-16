@@ -13,6 +13,8 @@ function WorktreeListItem({ worktree, isActive, isSelected, onClick }: WorktreeL
   return (
     <button
       type="button"
+      tabIndex={-1}
+      onPointerDown={(e) => e.preventDefault()}
       id={`worktree-option-${worktree.id}`}
       onClick={onClick}
       className={cn(

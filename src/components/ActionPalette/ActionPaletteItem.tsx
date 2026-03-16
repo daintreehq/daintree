@@ -15,6 +15,8 @@ export function ActionPaletteItem({ item, isSelected, onSelect }: ActionPaletteI
   const buttonContent = (
     <button
       id={`action-option-${item.id}`}
+      tabIndex={-1}
+      onPointerDown={(e) => e.preventDefault()}
       role="option"
       aria-selected={isSelected}
       aria-disabled={!item.enabled}

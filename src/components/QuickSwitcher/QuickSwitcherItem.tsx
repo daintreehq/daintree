@@ -16,6 +16,8 @@ export function QuickSwitcherItem({ item, isSelected, onClick }: QuickSwitcherIt
     <button
       id={`qs-option-${item.id}`}
       type="button"
+      tabIndex={-1}
+      onPointerDown={(e) => e.preventDefault()}
       className={cn(
         "relative w-full flex items-center gap-3 px-3 py-2 rounded-[var(--radius-md)] text-left",
         "transition-colors",
