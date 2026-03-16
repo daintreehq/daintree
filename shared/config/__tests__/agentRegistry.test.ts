@@ -406,6 +406,28 @@ describe("AgentDomainWeightsSchema", () => {
   });
 });
 
+describe("blockAltScreen capabilities", () => {
+  it("opencode allows alt screen for Bubble Tea TUI", () => {
+    const config = getAgentConfig("opencode");
+    expect(config?.capabilities?.blockAltScreen).toBe(false);
+  });
+
+  it("codex blocks alt screen (uses inline mode)", () => {
+    const config = getAgentConfig("codex");
+    expect(config?.capabilities?.blockAltScreen).toBe(true);
+  });
+
+  it("claude does not explicitly set blockAltScreen (defaults to false)", () => {
+    const config = getAgentConfig("claude");
+    expect(config?.capabilities?.blockAltScreen).toBeUndefined();
+  });
+
+  it("gemini blocks alt screen", () => {
+    const config = getAgentConfig("gemini");
+    expect(config?.capabilities?.blockAltScreen).toBe(true);
+  });
+});
+
 describe("resume configuration", () => {
   it("all built-in agents with shutdown config also have resume config", () => {
     const ids = getAgentIds();
