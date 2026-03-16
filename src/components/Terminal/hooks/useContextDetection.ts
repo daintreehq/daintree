@@ -12,11 +12,7 @@ import {
   type AtTerminalContext,
   type AtSelectionContext,
 } from "../hybridInputParsing";
-import {
-  imageChipField,
-  fileDropChipField,
-  urlContextChipField,
-} from "../inputEditorExtensions";
+import { imageChipField, fileDropChipField, urlContextChipField } from "../inputEditorExtensions";
 import { normalizeChips, type TrayItem } from "../attachmentTrayUtils";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 
@@ -130,11 +126,7 @@ export function useContextDetection({
           const termCtx = getTerminalContext(text, caret);
           if (termCtx) {
             const prev = lastTerminalContextRef.current;
-            if (
-              !prev ||
-              prev.atStart !== termCtx.atStart ||
-              prev.tokenEnd !== termCtx.tokenEnd
-            ) {
+            if (!prev || prev.atStart !== termCtx.atStart || prev.tokenEnd !== termCtx.tokenEnd) {
               lastTerminalContextRef.current = termCtx;
               setTerminalContext(termCtx);
             }
@@ -164,11 +156,7 @@ export function useContextDetection({
           const selCtx = getSelectionContext(text, caret);
           if (selCtx) {
             const prev = lastSelectionContextRef.current;
-            if (
-              !prev ||
-              prev.atStart !== selCtx.atStart ||
-              prev.tokenEnd !== selCtx.tokenEnd
-            ) {
+            if (!prev || prev.atStart !== selCtx.atStart || prev.tokenEnd !== selCtx.tokenEnd) {
               lastSelectionContextRef.current = selCtx;
               setSelectionContext(selCtx);
             }
@@ -246,9 +234,7 @@ export function useContextDetection({
           if (prev.length === 0 && next.length === 0) return prev;
           if (
             prev.length === next.length &&
-            prev.every(
-              (p, i) => p.id === next[i].id && p.tokenEstimate === next[i].tokenEstimate
-            )
+            prev.every((p, i) => p.id === next[i].id && p.tokenEstimate === next[i].tokenEstimate)
           )
             return prev;
           return next;
