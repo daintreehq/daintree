@@ -379,7 +379,7 @@ function PanelHeaderComponent({
       ? "from-surface"
       : isFocused
         ? "from-overlay-subtle"
-        : "from-canopy-bg";
+        : "from-surface";
 
   return (
     <div
@@ -426,45 +426,47 @@ function PanelHeaderComponent({
                   aria-label="Panel tabs"
                   onKeyDown={handleTabListKeyDown}
                 >
-                  {tabs.map((tab) => (
-                    <SortableTabButton
-                      key={tab.id}
-                      id={tab.id}
-                      title={getBaseTitle(tab.title)}
-                      type={tab.type}
-                      agentId={tab.agentId}
-                      detectedProcessId={tab.detectedProcessId}
-                      kind={tab.kind}
-                      agentState={tab.agentState}
-                      isActive={tab.isActive}
-                      onClick={() => onTabClick?.(tab.id)}
-                      onClose={() => onTabClose?.(tab.id)}
-                      onRename={
-                        onTabRename ? (newTitle) => onTabRename(tab.id, newTitle) : undefined
-                      }
-                    />
-                  ))}
-                  {onAddTab && (
-                    <TooltipProvider>
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              onAddTab();
-                            }}
-                            onPointerDown={(e) => e.stopPropagation()}
-                            className="shrink-0 p-1.5 hover:bg-canopy-text/10 text-canopy-text/40 hover:text-canopy-text transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-1"
-                            aria-label="Duplicate panel as new tab"
-                            type="button"
-                          >
-                            <Plus className="w-3 h-3" aria-hidden="true" />
-                          </button>
-                        </TooltipTrigger>
-                        <TooltipContent side="bottom">Duplicate panel as new tab</TooltipContent>
-                      </Tooltip>
-                    </TooltipProvider>
-                  )}
+                  <div className="flex items-center">
+                    {tabs.map((tab) => (
+                      <SortableTabButton
+                        key={tab.id}
+                        id={tab.id}
+                        title={getBaseTitle(tab.title)}
+                        type={tab.type}
+                        agentId={tab.agentId}
+                        detectedProcessId={tab.detectedProcessId}
+                        kind={tab.kind}
+                        agentState={tab.agentState}
+                        isActive={tab.isActive}
+                        onClick={() => onTabClick?.(tab.id)}
+                        onClose={() => onTabClose?.(tab.id)}
+                        onRename={
+                          onTabRename ? (newTitle) => onTabRename(tab.id, newTitle) : undefined
+                        }
+                      />
+                    ))}
+                    {onAddTab && (
+                      <TooltipProvider>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                onAddTab();
+                              }}
+                              onPointerDown={(e) => e.stopPropagation()}
+                              className="shrink-0 p-1.5 hover:bg-canopy-text/10 text-canopy-text/40 hover:text-canopy-text transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-1"
+                              aria-label="Duplicate panel as new tab"
+                              type="button"
+                            >
+                              <Plus className="w-3 h-3" aria-hidden="true" />
+                            </button>
+                          </TooltipTrigger>
+                          <TooltipContent side="bottom">Duplicate panel as new tab</TooltipContent>
+                        </Tooltip>
+                      </TooltipProvider>
+                    )}
+                  </div>
                 </div>
                 {tabsCanScrollRight && (
                   <div
@@ -494,43 +496,45 @@ function PanelHeaderComponent({
               aria-label="Panel tabs"
               onKeyDown={handleTabListKeyDown}
             >
-              {tabs.map((tab) => (
-                <TabButton
-                  key={tab.id}
-                  id={tab.id}
-                  title={getBaseTitle(tab.title)}
-                  type={tab.type}
-                  agentId={tab.agentId}
-                  detectedProcessId={tab.detectedProcessId}
-                  kind={tab.kind}
-                  agentState={tab.agentState}
-                  isActive={tab.isActive}
-                  onClick={() => onTabClick?.(tab.id)}
-                  onClose={() => onTabClose?.(tab.id)}
-                  onRename={onTabRename ? (newTitle) => onTabRename(tab.id, newTitle) : undefined}
-                />
-              ))}
-              {onAddTab && (
-                <TooltipProvider>
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          onAddTab();
-                        }}
-                        onPointerDown={(e) => e.stopPropagation()}
-                        className="shrink-0 p-1.5 hover:bg-canopy-text/10 text-canopy-text/40 hover:text-canopy-text transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-1"
-                        aria-label="Duplicate panel as new tab"
-                        type="button"
-                      >
-                        <Plus className="w-3 h-3" aria-hidden="true" />
-                      </button>
-                    </TooltipTrigger>
-                    <TooltipContent side="bottom">Duplicate panel as new tab</TooltipContent>
-                  </Tooltip>
-                </TooltipProvider>
-              )}
+              <div className="flex items-center">
+                {tabs.map((tab) => (
+                  <TabButton
+                    key={tab.id}
+                    id={tab.id}
+                    title={getBaseTitle(tab.title)}
+                    type={tab.type}
+                    agentId={tab.agentId}
+                    detectedProcessId={tab.detectedProcessId}
+                    kind={tab.kind}
+                    agentState={tab.agentState}
+                    isActive={tab.isActive}
+                    onClick={() => onTabClick?.(tab.id)}
+                    onClose={() => onTabClose?.(tab.id)}
+                    onRename={onTabRename ? (newTitle) => onTabRename(tab.id, newTitle) : undefined}
+                  />
+                ))}
+                {onAddTab && (
+                  <TooltipProvider>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onAddTab();
+                          }}
+                          onPointerDown={(e) => e.stopPropagation()}
+                          className="shrink-0 p-1.5 hover:bg-canopy-text/10 text-canopy-text/40 hover:text-canopy-text transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-1"
+                          aria-label="Duplicate panel as new tab"
+                          type="button"
+                        >
+                          <Plus className="w-3 h-3" aria-hidden="true" />
+                        </button>
+                      </TooltipTrigger>
+                      <TooltipContent side="bottom">Duplicate panel as new tab</TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
+                )}
+              </div>
             </div>
             {tabsCanScrollRight && (
               <div
