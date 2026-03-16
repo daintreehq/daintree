@@ -10,7 +10,8 @@ vi.mock("@/config/agents", () => ({
 }));
 
 const buildResumeCommandMock = vi.fn(
-  (agentId: string, sessionId: string, _flags?: string[]) => `${agentId} --resume ${sessionId}`
+  (agentId: string, sessionId: string, _flags?: string[]): string | undefined =>
+    `${agentId} --resume ${sessionId}`
 );
 
 vi.mock("@shared/types", () => ({
