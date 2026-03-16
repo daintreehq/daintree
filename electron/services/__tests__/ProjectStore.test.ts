@@ -1,52 +1,6 @@
-/**
- * Tests for ProjectStore - Project state management and path safety validation.
- *
- * Note: These tests focus on the pure functions and validation logic that can be
- * tested without the Electron runtime. The ProjectStore class methods that require
- * the Electron `app` module and `electron-store` are tested via integration tests.
- */
-
 import { describe, it, expect } from "vitest";
-import { createHash } from "crypto";
 import path from "path";
-
-// We test the logic of ProjectStore by recreating the key functions
-// since the actual class depends on Electron runtime
-
-/**
- * Generates a stable ID for a project based on its path.
- * This is a copy of the private method for testing.
- */
-function generateProjectId(projectPath: string): string {
-  return createHash("sha256").update(projectPath).digest("hex");
-}
-
-/**
- * Validates that a project ID has the expected format (64-character hex string).
- * This is a copy of the private method for testing.
- */
-function isValidProjectId(projectId: string): boolean {
-  return /^[0-9a-f]{64}$/.test(projectId);
-}
-
-/**
- * Creates a mock getProjectStateDir function that validates IDs and prevents path traversal.
- * This mimics the private method in ProjectStore.
- */
-function createGetProjectStateDir(projectsConfigDir: string) {
-  return function getProjectStateDir(projectId: string): string | null {
-    if (!isValidProjectId(projectId)) {
-      return null;
-    }
-    const stateDir = path.join(projectsConfigDir, projectId);
-    const normalized = path.normalize(stateDir);
-    // Ensure the path stays within projectsConfigDir (prevent traversal)
-    if (!normalized.startsWith(projectsConfigDir + path.sep)) {
-      return null;
-    }
-    return normalized;
-  };
-}
+import { generateProjectId, isValidProjectId, getProjectStateDir } from "../projectStorePaths.js";
 
 describe("ProjectStore", () => {
   describe("generateProjectId", () => {
@@ -114,7 +68,6 @@ describe("ProjectStore", () => {
     });
 
     it("rejects uppercase hex characters", () => {
-      // Our regex uses lowercase only
       expect(isValidProjectId("A".repeat(64))).toBe(false);
       expect(isValidProjectId("ABCDEF".repeat(10) + "abcd")).toBe(false);
     });
@@ -141,71 +94,64 @@ describe("ProjectStore", () => {
 
   describe("getProjectStateDir", () => {
     const projectsConfigDir = path.resolve("/home/user/.config/canopy/projects");
-    const getProjectStateDir = createGetProjectStateDir(projectsConfigDir);
 
     it("returns valid path for valid hex ID", () => {
       const validId = "a".repeat(64);
-      const dir = getProjectStateDir(validId);
+      const dir = getProjectStateDir(projectsConfigDir, validId);
       expect(dir).toBe(path.join(projectsConfigDir, validId));
     });
 
     it("returns null for invalid project ID", () => {
-      expect(getProjectStateDir("invalid")).toBeNull();
-      expect(getProjectStateDir("")).toBeNull();
-      expect(getProjectStateDir("short")).toBeNull();
+      expect(getProjectStateDir(projectsConfigDir, "invalid")).toBeNull();
+      expect(getProjectStateDir(projectsConfigDir, "")).toBeNull();
+      expect(getProjectStateDir(projectsConfigDir, "short")).toBeNull();
     });
 
     it("rejects path traversal attempt with ../", () => {
       const maliciousId = "../../../etc/passwd";
-      const dir = getProjectStateDir(maliciousId);
+      const dir = getProjectStateDir(projectsConfigDir, maliciousId);
       expect(dir).toBeNull();
     });
 
     it("rejects path with .. in middle", () => {
-      // Even if someone managed to create a 64-char string with dots
-      // (impossible since dots aren't hex), the validation catches it
       const attemptedTraversal = "a".repeat(30) + ".." + "a".repeat(32);
-      const dir = getProjectStateDir(attemptedTraversal);
+      const dir = getProjectStateDir(projectsConfigDir, attemptedTraversal);
       expect(dir).toBeNull();
     });
 
     it("accepts generated project IDs", () => {
       const projectPath = "/Users/foo/my-repo";
       const id = generateProjectId(projectPath);
-      const dir = getProjectStateDir(id);
+      const dir = getProjectStateDir(projectsConfigDir, id);
 
       expect(dir).not.toBeNull();
       expect(dir).toBe(path.join(projectsConfigDir, id));
     });
 
     it("only allows hex IDs in state dir paths", () => {
-      // Generate a real ID and verify it works
       const realId = generateProjectId("/some/path");
-      expect(getProjectStateDir(realId)).not.toBeNull();
+      expect(getProjectStateDir(projectsConfigDir, realId)).not.toBeNull();
 
-      // Verify non-hex doesn't work
-      expect(getProjectStateDir("test-project-name")).toBeNull();
-      expect(getProjectStateDir("my_project_123")).toBeNull();
+      expect(getProjectStateDir(projectsConfigDir, "test-project-name")).toBeNull();
+      expect(getProjectStateDir(projectsConfigDir, "my_project_123")).toBeNull();
     });
   });
 
   describe("path safety integration", () => {
     const projectsConfigDir = path.resolve("/home/user/.config/canopy/projects");
-    const getProjectStateDir = createGetProjectStateDir(projectsConfigDir);
 
     it("prevents accessing files outside projectsConfigDir", () => {
-      // Various path traversal attempts
       const attacks = [
         "../../../etc/passwd",
-        "..%2F..%2F..%2Fetc%2Fpasswd", // URL encoded
+        "..%2F..%2F..%2Fetc%2Fpasswd",
         "....//....//etc/passwd",
-        "..\\..\\..\\etc\\passwd", // Windows style
+        "..\\..\\..\\etc\\passwd",
         "/etc/passwd",
         "a/../../../etc/passwd",
       ];
 
       for (const attack of attacks) {
-        const result = getProjectStateDir(attack);
+        const result = getProjectStateDir(projectsConfigDir, attack);
         expect(result).toBeNull();
       }
     });
@@ -213,25 +159,20 @@ describe("ProjectStore", () => {
     it("end-to-end: project path to secure state dir", () => {
       const projectPath = "/Users/developer/my-project";
 
-      // Generate ID
       const id = generateProjectId(projectPath);
       expect(isValidProjectId(id)).toBe(true);
 
-      // Get state dir
-      const stateDir = getProjectStateDir(id);
+      const stateDir = getProjectStateDir(projectsConfigDir, id);
       expect(stateDir).not.toBeNull();
 
-      // Verify it's within the config dir
       expect(stateDir!.startsWith(projectsConfigDir)).toBe(true);
 
-      // Verify it doesn't contain the original path
       expect(stateDir!.includes(projectPath)).toBe(false);
     });
   });
 
   describe("edge cases", () => {
     it("handles null-like inputs gracefully", () => {
-      // TypeScript would prevent these, but let's verify runtime behavior
       expect(isValidProjectId("null")).toBe(false);
       expect(isValidProjectId("undefined")).toBe(false);
     });
@@ -243,8 +184,6 @@ describe("ProjectStore", () => {
     });
 
     it("handles symlink-like path patterns", () => {
-      // While actual symlink resolution happens elsewhere, the ID generation
-      // should handle paths that look like symlinks
       const symlinkPath = "/Users/foo/link -> /actual/path";
       const id = generateProjectId(symlinkPath);
       expect(id).toMatch(/^[a-f0-9]{64}$/);
@@ -266,7 +205,7 @@ describe("ProjectStore ID collision resistance", () => {
       "/Users/foo/project2",
       "/Users/foo/projects",
       "/Users/foo/project/",
-      "/users/foo/project", // different case
+      "/users/foo/project",
     ];
 
     const ids = paths.map(generateProjectId);
@@ -288,18 +227,7 @@ describe("ProjectStore ID collision resistance", () => {
   });
 });
 
-/**
- * Tests for ProjectSettings validation logic.
- *
- * These tests verify that settings fields are properly validated and sanitized.
- * The actual file I/O is tested via integration tests; these focus on the
- * parsing and validation logic.
- */
 describe("ProjectSettings validation", () => {
-  /**
-   * Validates a raw parsed settings object and returns sanitized ProjectSettings.
-   * This mimics the validation logic in ProjectStore.getProjectSettings().
-   */
   function validateAndSanitizeSettings(parsed: unknown): {
     runCommands: Array<{ label: string; command: string; icon?: string; description?: string }>;
     environmentVariables?: Record<string, string>;
@@ -500,7 +428,6 @@ describe("ProjectSettings validation", () => {
         devServerCommand: "npm run dev -- --port 3000",
       };
 
-      // Simulate round-trip: stringify then parse
       const serialized = JSON.stringify(originalSettings, null, 2);
       const parsed = JSON.parse(serialized);
       const validated = validateAndSanitizeSettings(parsed);
@@ -514,7 +441,6 @@ describe("ProjectSettings validation", () => {
     });
 
     it("handles corrupted JSON gracefully", () => {
-      // Simulate what happens when we get a parsed object with wrong types
       const corrupted = {
         runCommands: "not an array",
         projectIconSvg: 12345,
@@ -621,11 +547,10 @@ describe("relocateProject — ID derivation helpers (smoke tests only)", () => {
 
   it("state dir path is computed correctly for new project ID", () => {
     const projectsConfigDir = path.resolve("/home/user/.config/canopy/projects");
-    const getProjectStateDir = createGetProjectStateDir(projectsConfigDir);
 
     const newPath = "/Users/foo/new-location";
     const newId = generateProjectId(newPath);
-    const newStateDir = getProjectStateDir(newId);
+    const newStateDir = getProjectStateDir(projectsConfigDir, newId);
 
     expect(newStateDir).not.toBeNull();
     expect(newStateDir!.startsWith(projectsConfigDir)).toBe(true);
