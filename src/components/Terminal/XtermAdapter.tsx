@@ -14,6 +14,7 @@ import {
 import {
   useTerminalColorSchemeStore,
   selectWrapperBackground,
+  selectEffectiveTheme,
 } from "@/store/terminalColorSchemeStore";
 import { getScrollbackForType, PERFORMANCE_MODE_SCROLLBACK } from "@/utils/scrollbackConfig";
 import { getXtermOptions } from "@/config/xtermConfig";
@@ -76,6 +77,7 @@ function XtermAdapterComponent({
   const fontSize = useTerminalFontStore((state) => state.fontSize);
   const fontFamily = useTerminalFontStore((state) => state.fontFamily);
   const wrapperBackground = useTerminalColorSchemeStore(selectWrapperBackground);
+  const effectiveTheme = useTerminalColorSchemeStore(selectEffectiveTheme);
 
   // Calculate effective scrollback: performance mode overrides, then project override, then app default
   const effectiveScrollback = useMemo(() => {
@@ -114,8 +116,9 @@ function XtermAdapterComponent({
         fontFamily,
         scrollback: effectiveScrollback,
         performanceMode,
+        theme: effectiveTheme,
       }),
-    [effectiveScrollback, performanceMode, fontSize, fontFamily]
+    [effectiveScrollback, performanceMode, fontSize, fontFamily, effectiveTheme]
   );
 
   // Push-based resize handler using ResizeObserver dimensions directly
