@@ -398,11 +398,11 @@ describe("ProcessMemoryMonitor", () => {
       };
     });
 
-    function advancePolls(n: number): Promise<void> {
+    async function advancePolls(n: number): Promise<void> {
       for (let i = 0; i < n; i++) {
         vi.advanceTimersByTime(30_000);
       }
-      return vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(0);
     }
 
     it("works without actions parameter (backward compat)", () => {
