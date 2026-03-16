@@ -68,7 +68,6 @@ export interface ManagedTerminal {
   inputBurstTimer?: number;
 
   // Directing state: renderer-only ephemeral state for user typing into waiting agent
-  directingTimer?: number;
   canonicalAgentState?: AgentState;
 
   // Title-based state detection hysteresis (per-terminal)
