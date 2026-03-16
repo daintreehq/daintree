@@ -20,7 +20,11 @@ vi.mock("@shared/config/agentRegistry", async (importOriginal) => {
   };
 });
 
-import { TerminalResizeController, type ResizeControllerDeps } from "../TerminalResizeController";
+import {
+  TerminalResizeController,
+  getXtermCellDimensions,
+  type ResizeControllerDeps,
+} from "../TerminalResizeController";
 
 function createManagedTerminal() {
   const terminal = {
@@ -281,5 +285,121 @@ describe("TerminalResizeController", () => {
     controller.forceImmediateResize("term-1");
 
     expect(resizeMock).not.toHaveBeenCalled();
+  });
+
+  describe("getXtermCellDimensions", () => {
+    it("returns cell dimensions when internal structure is populated", () => {
+      const terminal = {
+        _core: {
+          _renderService: {
+            dimensions: { css: { cell: { width: 8.5, height: 17 } } },
+          },
+        },
+      } as any;
+
+      expect(getXtermCellDimensions(terminal)).toEqual({
+        width: 8.5,
+        height: 17,
+      });
+    });
+
+    it("returns null when _core is undefined", () => {
+      const terminal = {} as any;
+      expect(getXtermCellDimensions(terminal)).toBeNull();
+    });
+
+    it("returns null when _renderService is undefined", () => {
+      const terminal = { _core: {} } as any;
+      expect(getXtermCellDimensions(terminal)).toBeNull();
+    });
+
+    it("returns null when cell dimensions have non-number values", () => {
+      const terminal = {
+        _core: {
+          _renderService: {
+            dimensions: {
+              css: { cell: { width: "bad", height: "data" } },
+            },
+          },
+        },
+      } as any;
+
+      expect(getXtermCellDimensions(terminal)).toBeNull();
+    });
+
+    it("returns null when accessing _core throws", () => {
+      const terminal = {} as any;
+      Object.defineProperty(terminal, "_core", {
+        get() {
+          throw new Error("exploded");
+        },
+      });
+
+      expect(getXtermCellDimensions(terminal)).toBeNull();
+    });
+  });
+
+  describe("resize cell-dimension paths", () => {
+    it("computes cols/rows from cell dims without calling fitAddon.fit()", () => {
+      const managed = createManagedTerminal();
+      (managed.terminal as any)._core = {
+        _renderService: {
+          dimensions: { css: { cell: { width: 10, height: 20 } } },
+        },
+      };
+
+      const controller = new TerminalResizeController({
+        getInstance: vi.fn(() => managed),
+        dataBuffer: {
+          flushForTerminal: vi.fn(),
+          resetForTerminal: vi.fn(),
+        } as any,
+      });
+
+      const result = controller.resize("term-1", 1000, 500);
+
+      expect(result).toEqual({ cols: 100, rows: 25 });
+      expect(managed.fitAddon.fit).not.toHaveBeenCalled();
+    });
+
+    it("falls back to fitAddon.fit() when cell dims are null", () => {
+      const managed = createManagedTerminal();
+      // No _core property — getXtermCellDimensions returns null
+
+      const controller = new TerminalResizeController({
+        getInstance: vi.fn(() => managed),
+        dataBuffer: {
+          flushForTerminal: vi.fn(),
+          resetForTerminal: vi.fn(),
+        } as any,
+      });
+
+      const result = controller.resize("term-1", 1200, 900);
+
+      expect(result).not.toBeNull();
+      expect(managed.fitAddon.fit).toHaveBeenCalled();
+    });
+
+    it("falls back to fitAddon.fit() when cell dims are zero", () => {
+      const managed = createManagedTerminal();
+      (managed.terminal as any)._core = {
+        _renderService: {
+          dimensions: { css: { cell: { width: 0, height: 0 } } },
+        },
+      };
+
+      const controller = new TerminalResizeController({
+        getInstance: vi.fn(() => managed),
+        dataBuffer: {
+          flushForTerminal: vi.fn(),
+          resetForTerminal: vi.fn(),
+        } as any,
+      });
+
+      const result = controller.resize("term-1", 1200, 900);
+
+      expect(result).not.toBeNull();
+      expect(managed.fitAddon.fit).toHaveBeenCalled();
+    });
   });
 });
