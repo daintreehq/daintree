@@ -482,7 +482,7 @@ describe("built-in schemes — Serengeti light theme", () => {
 
   it("syntax-comment is distinct from text-muted", () => {
     expect(serengeti.tokens["syntax-comment"]).toBe("#6E6259");
-    expect(serengeti.tokens["text-muted"]).toBe("#9B8D7A");
+    expect(serengeti.tokens["text-muted"]).toBe("#7A6E63");
     expect(serengeti.tokens["syntax-comment"]).not.toBe(serengeti.tokens["text-muted"]);
   });
 
@@ -515,6 +515,30 @@ describe("built-in schemes — Serengeti light theme", () => {
       ratio,
       `${token} "${fg}" on canvas "${bg}" = ${ratio.toFixed(2)}:1, needs ≥4.5:1`
     ).toBeGreaterThanOrEqual(4.5);
+  });
+
+  it("delegates terminal-white and terminal-bright-black to defaults", () => {
+    expect(serengeti.tokens["terminal-white"]).toBe(serengeti.tokens["surface-canvas"]);
+    expect(serengeti.tokens["terminal-bright-black"]).toBe(serengeti.tokens["activity-idle"]);
+    expect(serengeti.tokens["terminal-bright-white"]).toBe("#2A2018");
+  });
+
+  it("text-muted meets WCAG AA 3:1 against surface-panel", () => {
+    const ratio = wcagContrastRatio(
+      serengeti.tokens["text-muted"],
+      serengeti.tokens["surface-panel"]
+    );
+    expect(
+      ratio,
+      `text-muted on surface-panel = ${ratio.toFixed(2)}:1, needs ≥3:1`
+    ).toBeGreaterThanOrEqual(3);
+  });
+
+  it("uses earthy activity colors instead of neon", () => {
+    expect(serengeti.tokens["activity-active"]).toBe("#1D9B5E");
+    expect(serengeti.tokens["activity-working"]).toBe("#1D9B5E");
+    expect(serengeti.tokens["activity-waiting"]).toBe("#C17F2E");
+    expect(serengeti.tokens["activity-idle"]).toBe("#8C8782");
   });
 
   it("uses lower-lightness oklch category colors for light mode", () => {
