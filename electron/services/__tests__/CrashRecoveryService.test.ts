@@ -11,6 +11,7 @@ const storeMock = vi.hoisted(() => ({
 const appMock = vi.hoisted(() => ({
   getPath: vi.fn(() => "/fake/userData"),
   getVersion: vi.fn(() => "1.0.0"),
+  isPackaged: false as boolean,
 }));
 
 vi.mock("../../store.js", () => ({
@@ -36,6 +37,7 @@ describe("CrashRecoveryService", () => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "crash-recovery-test-"));
     userData = tmpDir;
     appMock.getPath.mockReturnValue(userData);
+    appMock.isPackaged = false;
     storeMock.get.mockReturnValue({ autoRestoreOnCrash: false });
     storeMock.set.mockImplementation(() => {});
     vi.spyOn(console, "log").mockImplementation(() => {});
@@ -58,6 +60,7 @@ describe("CrashRecoveryService", () => {
       const marker = JSON.parse(fs.readFileSync(markerPath, "utf8"));
       expect(typeof marker.sessionStartMs).toBe("number");
       expect(marker.appVersion).toBe("1.0.0");
+      expect(marker.isPackaged).toBe(false);
     });
 
     it("returns null pending crash when no marker exists", () => {
@@ -122,6 +125,119 @@ describe("CrashRecoveryService", () => {
       svc.initialize();
 
       expect(svc.getPendingCrash()).toBeNull();
+    });
+
+    it("silently discards orphaned dev-mode marker in dev session", () => {
+      const markerPath = path.join(userData, "running.lock");
+      fs.writeFileSync(
+        markerPath,
+        JSON.stringify({
+          sessionStartMs: Date.now() - 5000,
+          appVersion: "1.0.0",
+          platform: "win32",
+          isPackaged: false,
+        })
+      );
+
+      appMock.isPackaged = false;
+      const svc = makeService();
+      svc.initialize();
+
+      expect(svc.getPendingCrash()).toBeNull();
+    });
+
+    it("surfaces dev-mode marker with crashLogPath as a genuine crash", () => {
+      const crashDir = path.join(userData, "crashes");
+      fs.mkdirSync(crashDir, { recursive: true });
+      const crashLogPath = path.join(crashDir, "crash-dev-123.json");
+      fs.writeFileSync(
+        crashLogPath,
+        JSON.stringify({
+          id: "dev-123",
+          timestamp: Date.now(),
+          appVersion: "1.0.0",
+          platform: "win32",
+          osVersion: "10.0",
+          arch: "x64",
+          errorMessage: "real dev crash",
+        })
+      );
+
+      const markerPath = path.join(userData, "running.lock");
+      fs.writeFileSync(
+        markerPath,
+        JSON.stringify({
+          sessionStartMs: Date.now() - 5000,
+          appVersion: "1.0.0",
+          platform: "win32",
+          isPackaged: false,
+          crashLogPath,
+        })
+      );
+
+      appMock.isPackaged = false;
+      const svc = makeService();
+      svc.initialize();
+
+      const pending = svc.getPendingCrash();
+      expect(pending).not.toBeNull();
+      expect(pending!.entry.errorMessage).toBe("real dev crash");
+    });
+
+    it("surfaces dev-mode marker when current session is packaged", () => {
+      const markerPath = path.join(userData, "running.lock");
+      fs.writeFileSync(
+        markerPath,
+        JSON.stringify({
+          sessionStartMs: Date.now() - 5000,
+          appVersion: "1.0.0",
+          platform: "win32",
+          isPackaged: false,
+        })
+      );
+
+      appMock.isPackaged = true;
+      const svc = makeService();
+      svc.initialize();
+
+      expect(svc.getPendingCrash()).not.toBeNull();
+    });
+
+    it("surfaces legacy marker without isPackaged field in dev session", () => {
+      const markerPath = path.join(userData, "running.lock");
+      fs.writeFileSync(
+        markerPath,
+        JSON.stringify({
+          sessionStartMs: Date.now() - 5000,
+          appVersion: "1.0.0",
+          platform: "darwin",
+        })
+      );
+
+      appMock.isPackaged = false;
+      const svc = makeService();
+      svc.initialize();
+
+      expect(svc.getPendingCrash()).not.toBeNull();
+    });
+
+    it("surfaces packaged marker in dev session", () => {
+      const markerPath = path.join(userData, "running.lock");
+      fs.writeFileSync(
+        markerPath,
+        JSON.stringify({
+          sessionStartMs: Date.now() - 5000,
+          appVersion: "1.0.0",
+          platform: "darwin",
+          isPackaged: true,
+        })
+      );
+
+      appMock.isPackaged = false;
+      const svc = makeService();
+      svc.initialize();
+
+      expect(svc.getPendingCrash()).not.toBeNull();
     });
   });
 
