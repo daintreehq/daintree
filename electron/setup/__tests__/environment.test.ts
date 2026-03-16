@@ -48,7 +48,7 @@ function getCandidatePaths(): string[] {
 describe("Windows Git PATH discovery", () => {
   beforeEach(() => {
     vi.resetModules();
-    vi.clearAllMocks();
+    vi.resetAllMocks();
     Object.defineProperty(process, "platform", { value: "win32", writable: true });
     process.argv = ["electron", "main.js"];
     process.env.PATH = "";
@@ -159,5 +159,43 @@ describe("Windows Git PATH discovery", () => {
     const candidates = getCandidatePaths();
     const hasLocalBin = candidates.some((p) => p.includes(".local"));
     expect(hasLocalBin).toBe(false);
+  });
+
+  it("falls back to defaults when env vars are empty strings", async () => {
+    process.env["ProgramFiles"] = "";
+    process.env["ProgramFiles(x86)"] = "";
+    process.env["ChocolateyInstall"] = "";
+    fsMock.existsSync.mockReturnValue(true);
+
+    await import("../environment.js");
+
+    const candidates = getCandidatePaths();
+    expect(candidates).toContainEqual(
+      expect.stringContaining(path.join("C:\\Program Files", "Git", "cmd")),
+    );
+    expect(candidates).toContainEqual(
+      expect.stringContaining(path.join("C:\\Program Files (x86)", "Git", "cmd")),
+    );
+    expect(candidates).toContainEqual(
+      expect.stringContaining(path.join("C:\\ProgramData\\chocolatey", "bin")),
+    );
+  });
+
+  it("preserves existing PATH entries when prepending", async () => {
+    process.env.PATH = "C:\\existing\\bin";
+    fsMock.existsSync.mockReturnValue(true);
+
+    await import("../environment.js");
+
+    // Original entry must still be present at the end
+    expect(process.env.PATH).toContain("C:\\existing\\bin");
+    // New candidates should appear before the existing entry
+    const pathStr = process.env.PATH!;
+    const existingIdx = pathStr.indexOf("C:\\existing\\bin");
+    const candidates = getCandidatePaths();
+    for (const candidate of candidates) {
+      const candidateIdx = pathStr.indexOf(candidate);
+      expect(candidateIdx).toBeLessThan(existingIdx);
+    }
   });
 });
