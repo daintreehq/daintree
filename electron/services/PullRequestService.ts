@@ -253,7 +253,11 @@ class PullRequestService {
         logDebug("Circuit breaker tripped - scheduling retry", { delayMs: delay });
         this.pollTimer = setTimeout(() => {
           this.pollTimer = null;
-          this.scheduleNextPoll();
+          if (!this.isPolling) return;
+          logDebug("Circuit breaker recovery - running immediate check");
+          this.consecutiveErrors = 0;
+          this.nextRetryAt = 0;
+          void this.checkForPRs().then(() => this.scheduleNextPoll());
         }, delay);
       }
       return;
