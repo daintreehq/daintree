@@ -20,6 +20,7 @@ export function OnboardingProgressIndicator({
         {Array.from({ length: total }, (_, i) => (
           <div
             key={i}
+            data-testid={`progress-dot-${i}`}
             className={`h-1.5 w-1.5 rounded-full transition-colors ${
               i === currentIndex
                 ? "bg-canopy-accent"

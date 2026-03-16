@@ -129,7 +129,7 @@ describe("OnboardingFlow progress indicator", () => {
     const indicator = baseElement.ownerDocument.querySelector(
       '[data-testid="onboarding-progress"]'
     )!;
-    const dots = indicator.querySelectorAll('[class*="rounded-full"]');
+    const dots = indicator.querySelectorAll('[data-testid^="progress-dot-"]');
     expect(dots).toHaveLength(4);
     expect(dots[0]?.getAttribute("aria-current")).toBe("step");
     expect(dots[1]?.getAttribute("aria-current")).toBeNull();
@@ -153,7 +153,7 @@ describe("OnboardingFlow progress indicator", () => {
       const indicator = baseElement.ownerDocument.querySelector(
         '[data-testid="onboarding-progress"]'
       )!;
-      const dots = indicator.querySelectorAll('[class*="rounded-full"]');
+      const dots = indicator.querySelectorAll('[data-testid^="progress-dot-"]');
       expect(dots[1]?.getAttribute("aria-current")).toBe("step");
       expect(dots[0]?.getAttribute("aria-current")).toBeNull();
     });
