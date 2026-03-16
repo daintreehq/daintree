@@ -2,10 +2,15 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import fs from "fs/promises";
 import path from "path";
 import os from "os";
+import type { ProjectSettings } from "../../types/index.js";
 import { ProjectIdentityFiles } from "../ProjectIdentityFiles.js";
 
 const CANOPY_PROJECT_JSON = ".canopy/project.json";
 const CANOPY_SETTINGS_JSON = ".canopy/settings.json";
+
+function makeSettings(overrides: Partial<ProjectSettings> = {}): ProjectSettings {
+  return { runCommands: [], ...overrides };
+}
 
 describe("writeInRepoProjectIdentity", () => {
   let tmpDir: string;
@@ -91,11 +96,14 @@ describe("writeInRepoSettings", () => {
   });
 
   it("creates .canopy/ directory and settings.json when absent", async () => {
-    await identityFiles.writeInRepoSettings(tmpDir, {
-      runCommands: [{ id: "dev", name: "Dev Server", command: "npm run dev" }],
-      devServerCommand: "npm run dev",
-      excludedPaths: ["node_modules"],
-    } as any);
+    await identityFiles.writeInRepoSettings(
+      tmpDir,
+      makeSettings({
+        runCommands: [{ id: "dev", name: "Dev Server", command: "npm run dev" }],
+        devServerCommand: "npm run dev",
+        excludedPaths: ["node_modules"],
+      })
+    );
 
     const filePath = path.join(tmpDir, CANOPY_SETTINGS_JSON);
     const content = JSON.parse(await fs.readFile(filePath, "utf-8"));
@@ -106,54 +114,50 @@ describe("writeInRepoSettings", () => {
   });
 
   it("omits machine-local fields: devServerDismissed", async () => {
-    await identityFiles.writeInRepoSettings(tmpDir, {
-      runCommands: [],
-      devServerDismissed: true,
-    } as any);
+    await identityFiles.writeInRepoSettings(tmpDir, makeSettings({ devServerDismissed: true }));
     const content = JSON.parse(await fs.readFile(path.join(tmpDir, CANOPY_SETTINGS_JSON), "utf-8"));
     expect(content).not.toHaveProperty("devServerDismissed");
   });
 
   it("omits machine-local fields: devServerAutoDetected", async () => {
-    await identityFiles.writeInRepoSettings(tmpDir, {
-      runCommands: [],
-      devServerAutoDetected: true,
-    } as any);
+    await identityFiles.writeInRepoSettings(tmpDir, makeSettings({ devServerAutoDetected: true }));
     const content = JSON.parse(await fs.readFile(path.join(tmpDir, CANOPY_SETTINGS_JSON), "utf-8"));
     expect(content).not.toHaveProperty("devServerAutoDetected");
   });
 
   it("omits environment variables from output", async () => {
-    await identityFiles.writeInRepoSettings(tmpDir, {
-      runCommands: [],
-      environmentVariables: { API_KEY: "secret123" },
-      secureEnvironmentVariables: ["DB_PASS"],
-    } as any);
+    await identityFiles.writeInRepoSettings(
+      tmpDir,
+      makeSettings({
+        environmentVariables: { API_KEY: "secret123" },
+        secureEnvironmentVariables: ["DB_PASS"],
+      })
+    );
     const content = JSON.parse(await fs.readFile(path.join(tmpDir, CANOPY_SETTINGS_JSON), "utf-8"));
     expect(content).not.toHaveProperty("environmentVariables");
     expect(content).not.toHaveProperty("secureEnvironmentVariables");
   });
 
   it("omits projectIconSvg from output", async () => {
-    await identityFiles.writeInRepoSettings(tmpDir, {
-      runCommands: [],
-      projectIconSvg: "<svg>...</svg>",
-    } as any);
+    await identityFiles.writeInRepoSettings(
+      tmpDir,
+      makeSettings({ projectIconSvg: "<svg>...</svg>" })
+    );
     const content = JSON.parse(await fs.readFile(path.join(tmpDir, CANOPY_SETTINGS_JSON), "utf-8"));
     expect(content).not.toHaveProperty("projectIconSvg");
   });
 
   it("includes copyTreeSettings when present", async () => {
-    await identityFiles.writeInRepoSettings(tmpDir, {
-      runCommands: [],
-      copyTreeSettings: { maxFileSize: 50000 },
-    } as any);
+    await identityFiles.writeInRepoSettings(
+      tmpDir,
+      makeSettings({ copyTreeSettings: { maxFileSize: 50000 } })
+    );
     const content = JSON.parse(await fs.readFile(path.join(tmpDir, CANOPY_SETTINGS_JSON), "utf-8"));
     expect(content.copyTreeSettings).toEqual({ maxFileSize: 50000 });
   });
 
   it("is atomic: no .tmp files left after write", async () => {
-    await identityFiles.writeInRepoSettings(tmpDir, { runCommands: [] } as any);
+    await identityFiles.writeInRepoSettings(tmpDir, makeSettings());
     const canopyDir = path.join(tmpDir, ".canopy");
     const files = await fs.readdir(canopyDir);
     const tmpFiles = files.filter((f) => f.endsWith(".tmp"));
@@ -161,16 +165,19 @@ describe("writeInRepoSettings", () => {
   });
 
   it("writes pretty-printed JSON (2-space indent)", async () => {
-    await identityFiles.writeInRepoSettings(tmpDir, {
-      runCommands: [{ id: "build", name: "Build", command: "npm run build" }],
-    } as any);
+    await identityFiles.writeInRepoSettings(
+      tmpDir,
+      makeSettings({
+        runCommands: [{ id: "build", name: "Build", command: "npm run build" }],
+      })
+    );
     const raw = await fs.readFile(path.join(tmpDir, CANOPY_SETTINGS_JSON), "utf-8");
     expect(raw).toContain("\n");
     expect(raw).toContain("  ");
   });
 
   it("omits runCommands from output when empty", async () => {
-    await identityFiles.writeInRepoSettings(tmpDir, { runCommands: [] } as any);
+    await identityFiles.writeInRepoSettings(tmpDir, makeSettings());
     const content = JSON.parse(await fs.readFile(path.join(tmpDir, CANOPY_SETTINGS_JSON), "utf-8"));
     expect(content).not.toHaveProperty("runCommands");
   });
