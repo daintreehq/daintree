@@ -482,7 +482,7 @@ export class PtyManager extends EventEmitter {
   /**
    * Get terminals filtered by agent state.
    */
-  getTerminalsByState(state: import("../../shared/types/domain.js").AgentState): TerminalInfo[] {
+  getTerminalsByState(state: import("../../shared/types/agent.js").AgentState): TerminalInfo[] {
     return this.registry
       .getAll()
       .filter((t) => t.getInfo().agentState === state)

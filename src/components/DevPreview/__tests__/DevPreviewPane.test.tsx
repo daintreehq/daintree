@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import type { BrowserHistory } from "@shared/types/domain";
+import type { BrowserHistory } from "@shared/types/browser";
 import type { DevPreviewStatus } from "@/hooks/useDevServer";
 import { normalizeBrowserUrl } from "../../Browser/browserUtils";
 import { shouldAdoptDetectedDevServerUrl } from "../urlSync";

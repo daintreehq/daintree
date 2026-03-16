@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
-import type { UrlHistoryEntry } from "@shared/types/domain";
+import type { UrlHistoryEntry } from "@shared/types/browser";
 import { createSafeJSONStorage } from "./persistence/safeStorage";
 
 const MAX_ENTRIES_PER_PROJECT = 500;

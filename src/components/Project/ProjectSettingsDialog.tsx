@@ -52,7 +52,7 @@ import type {
   CopyTreeSettings,
   CopyTreeTestConfigResult,
 } from "@/types";
-import type { ProjectTerminalSettings, ProjectMcpServerConfig } from "@shared/types/domain";
+import type { ProjectTerminalSettings, ProjectMcpServerConfig } from "@shared/types/project";
 import type { ProjectMcpServerRunState } from "@shared/types/ipc/project";
 import { SCROLLBACK_MIN, SCROLLBACK_MAX } from "@shared/config/scrollback";
 import { copyTreeClient } from "@/clients/copyTreeClient";

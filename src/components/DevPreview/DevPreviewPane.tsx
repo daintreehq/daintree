@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { useTerminalStore } from "@/store";
 import { useProjectStore } from "@/store/projectStore";
 import { useProjectSettingsStore } from "@/store/projectSettingsStore";
-import type { BrowserHistory } from "@shared/types/domain";
+import type { BrowserHistory } from "@shared/types/browser";
 import { ContentPanel, type BasePanelProps } from "@/components/Panel";
 import { BrowserToolbar } from "../Browser/BrowserToolbar";
 import { normalizeBrowserUrl } from "../Browser/browserUtils";

@@ -29,7 +29,7 @@ const ZOOM_PRESETS = [
   { value: 2.0, label: "200%" },
 ];
 const ZOOM_VALUES = ZOOM_PRESETS.map((preset) => preset.value);
-const EMPTY_ENTRIES: import("@shared/types/domain").UrlHistoryEntry[] = [];
+const EMPTY_ENTRIES: import("@shared/types/browser").UrlHistoryEntry[] = [];
 
 interface BrowserToolbarProps {
   terminalId?: string;

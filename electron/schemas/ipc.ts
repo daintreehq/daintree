@@ -105,7 +105,7 @@ export const AppStateTerminalEntrySchema = z
 
 /**
  * Schema for terminal snapshots in ProjectState.terminals (per-project state).
- * Matches the TerminalSnapshot interface from shared/types/domain.ts.
+ * Matches the TerminalSnapshot interface from shared/types/project.ts.
  * Uses passthrough() to preserve unknown fields for forward compatibility with extensions.
  *
  * PTY-backed panels (terminal, agent, dev-preview) require `type` and `cwd`.

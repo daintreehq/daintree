@@ -275,7 +275,7 @@ export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () 
       }
 
       const terminals = await ptyClient.getTerminalsByStateAsync(
-        state as import("../../../../shared/types/domain.js").AgentState
+        state as import("../../../../shared/types/agent.js").AgentState
       );
 
       const sanitized = terminals

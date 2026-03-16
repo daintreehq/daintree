@@ -1,4 +1,4 @@
-import type { PanelKind, BuiltInPanelKind } from "../types/domain.js";
+import type { PanelKind, BuiltInPanelKind } from "../types/panel.js";
 import { getAgentConfig } from "./agentRegistry.js";
 import { PANEL_KIND_BRAND_COLORS } from "../theme/index.js";
 

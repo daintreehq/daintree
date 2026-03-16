@@ -42,7 +42,7 @@ import {
   useVoiceRecordingStore,
   usePaletteStore,
 } from "@/store";
-import type { ToolbarButtonId } from "@/../../shared/types/domain";
+import type { ToolbarButtonId } from "@/../../shared/types/toolbar";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useWorktreeDataStore } from "@/store/worktreeDataStore";
 import { useGitHubFilterStore } from "@/store/githubFilterStore";

@@ -5,7 +5,7 @@
  * Tasks represent units of work with dependencies that form a directed acyclic graph.
  */
 
-import type { TaskState } from "./domain.js";
+import type { TaskState } from "./agent.js";
 import type { AgentDomainWeights } from "./agentSettings.js";
 
 /**

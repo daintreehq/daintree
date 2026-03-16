@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { BrowserHistory } from "@shared/types/domain";
+import type { BrowserHistory } from "@shared/types/browser";
 import {
   goBackBrowserHistory,
   goForwardBrowserHistory,

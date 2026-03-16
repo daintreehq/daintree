@@ -34,7 +34,7 @@ import {
 } from "lucide-react";
 import { ClaudeIcon, GeminiIcon, CodexIcon, OpenCodeIcon } from "@/components/icons";
 import { useToolbarPreferencesStore } from "@/store";
-import type { ToolbarButtonId } from "@/../../shared/types/domain";
+import type { ToolbarButtonId } from "@/../../shared/types/toolbar";
 import { cn } from "@/lib/utils";
 import { SettingsSection } from "./SettingsSection";
 import { SettingsSwitchCard } from "./SettingsSwitchCard";

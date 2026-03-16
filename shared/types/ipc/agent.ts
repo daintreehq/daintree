@@ -1,4 +1,4 @@
-import type { AgentId } from "../domain.js";
+import type { AgentId } from "../agent.js";
 
 /** An artifact extracted from an agent session */
 export interface Artifact {

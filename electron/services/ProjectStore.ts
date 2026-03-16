@@ -742,10 +742,10 @@ export class ProjectStore {
 
   private parseMcpServers(
     raw: unknown
-  ): Record<string, import("../../shared/types/domain.js").ProjectMcpServerConfig> | undefined {
+  ): Record<string, import("../../shared/types/project.js").ProjectMcpServerConfig> | undefined {
     if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
     const obj = raw as Record<string, unknown>;
-    const result: Record<string, import("../../shared/types/domain.js").ProjectMcpServerConfig> =
+    const result: Record<string, import("../../shared/types/project.js").ProjectMcpServerConfig> =
       {};
 
     for (const [name, entry] of Object.entries(obj)) {
@@ -753,7 +753,7 @@ export class ProjectStore {
       const e = entry as Record<string, unknown>;
       if (typeof e.command !== "string" || !e.command.trim()) continue;
 
-      const config: import("../../shared/types/domain.js").ProjectMcpServerConfig = {
+      const config: import("../../shared/types/project.js").ProjectMcpServerConfig = {
         command: e.command.trim(),
       };
       if (Array.isArray(e.args)) {

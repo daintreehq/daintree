@@ -8,7 +8,7 @@ function mockStore(agents: Array<{ agentId: string; state: string }>): AgentAvai
       agents.map((a) => ({
         agentId: a.agentId,
         available: a.state === "idle" || a.state === "waiting",
-        state: a.state as import("../../../shared/types/domain.js").AgentState,
+        state: a.state as import("../../../shared/types/agent.js").AgentState,
         concurrentTasks: 0,
         lastStateChange: 0,
       })),

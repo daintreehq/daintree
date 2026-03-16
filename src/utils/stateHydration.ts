@@ -221,7 +221,7 @@ export interface HydrationOptions {
     skipCommandExecution?: boolean; // Store command but don't execute on spawn
     isInputLocked?: boolean; // Restore input lock state
     browserUrl?: string; // URL for browser panes
-    browserHistory?: import("@shared/types/domain").BrowserHistory;
+    browserHistory?: import("@shared/types/browser").BrowserHistory;
     browserZoom?: number;
     notePath?: string; // Path to note file (kind === 'notes')
     noteId?: string; // Note ID (kind === 'notes')
@@ -234,7 +234,7 @@ export interface HydrationOptions {
     devServerTerminalId?: string | null;
     browserConsoleOpen?: boolean;
     devPreviewConsoleOpen?: boolean;
-    exitBehavior?: import("@shared/types/domain").PanelExitBehavior;
+    exitBehavior?: import("@shared/types/panel").PanelExitBehavior;
     agentSessionId?: string;
     agentLaunchFlags?: string[];
     restore?: boolean;

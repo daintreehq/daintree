@@ -3,7 +3,7 @@ import { useWebviewThrottle } from "@/hooks/useWebviewThrottle";
 import { useWebviewDialog } from "@/hooks/useWebviewDialog";
 import { AlertTriangle, ExternalLink } from "lucide-react";
 import { useTerminalStore } from "@/store";
-import type { BrowserHistory } from "@shared/types/domain";
+import type { BrowserHistory } from "@shared/types/browser";
 import { ContentPanel, type BasePanelProps } from "@/components/Panel";
 import { BrowserToolbar } from "./BrowserToolbar";
 import { ConsolePanel } from "./ConsolePanel";

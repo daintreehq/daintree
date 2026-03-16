@@ -1,4 +1,4 @@
-import type { Worktree, WorktreeState } from "@shared/types/domain";
+import type { Worktree, WorktreeState } from "@shared/types/worktree";
 import { BRANCH_PREFIX_MAP } from "@shared/config/branchPrefixes";
 import { parseExactNumber } from "@/lib/parseExactNumber";
 import type {

@@ -9,12 +9,8 @@
  */
 
 import { simpleGit } from "simple-git";
-import type {
-  WorktreeChanges,
-  FileChangeDetail,
-  Worktree,
-  WorktreeMood,
-} from "../../shared/types/domain.js";
+import type { WorktreeChanges, FileChangeDetail } from "../../shared/types/git.js";
+import type { Worktree, WorktreeMood } from "../../shared/types/worktree.js";
 import type { WorktreeSnapshot } from "../../shared/types/workspace-host.js";
 import { invalidateGitStatusCache, getWorktreeChangesWithStats } from "../utils/git.js";
 import { WorktreeRemovedError } from "../utils/errorTypes.js";

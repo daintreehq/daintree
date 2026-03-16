@@ -3,53 +3,50 @@
  *
  * This module provides a single source of truth for type definitions
  * used across the main process, renderer process, and preload script.
- *
- * Organization:
- * - domain.ts: Core business entities (Worktree, DevServer, Terminal, etc.)
- * - ipc.ts: IPC payloads and options (TerminalSpawnOptions, CopyTreeOptions, etc.)
- * - config.ts: Application configuration types (CanopyConfig, etc.)
- * - keymap.ts: Keyboard shortcut types (KeyAction, KeyMapConfig, etc.)
  */
 
-// Domain types - core business entities
+// Git types
 export type {
-  // Git types
   GitStatus,
   FileChangeDetail,
   WorktreeChanges,
   StagingFileEntry,
   StagingStatus,
-  // Worktree types
+} from "./git.js";
+
+// Worktree types
+export type {
   WorktreeMood,
   WorktreeLifecyclePhase,
   WorktreeLifecycleState,
   WorktreeLifecycleStatus,
   Worktree,
   WorktreeState,
-  // Notification types
-  NotificationType,
-  Notification,
-  NotificationPayload,
-  // Agent types
+} from "./worktree.js";
+
+// Notification types
+export type { NotificationType, Notification, NotificationPayload } from "./notification.js";
+
+// Agent types
+export type {
   AgentState,
   TaskState,
   RunRecord,
   LegacyAgentType,
-  // Panel types (new architecture)
+  AgentStateChangeTrigger,
+} from "./agent.js";
+
+// Panel types
+export type {
   BuiltInPanelKind,
   PanelKind,
   PanelLocation,
   PanelInstance,
-  PanelSnapshot,
-  BrowserHistory,
-  // Tab group types
   TabGroupLocation,
   TabGroup,
-  // Terminal types (deprecated aliases for backward compat)
   TerminalKind,
   TerminalType,
   TerminalLocation,
-  AgentStateChangeTrigger,
   TerminalRestartError,
   TerminalReconnectError,
   TerminalRuntimeStatus,
@@ -59,35 +56,32 @@ export type {
   TerminalDimensions,
   DockMode,
   DockRenderState,
-} from "./domain.js";
+  PanelExitBehavior,
+} from "./panel.js";
 
-// Panel type guards
-export { isBuiltInPanelKind, isPtyPanelKind } from "./domain.js";
+// Panel type guards and enums (value exports)
+export { isBuiltInPanelKind, isPtyPanelKind, TerminalRefreshTier } from "./panel.js";
 
-// Export enums separately (not as types)
-export { TerminalRefreshTier } from "./domain.js";
+// Browser types
+export type { BrowserHistory } from "./browser.js";
 
-// Continue with domain type exports
+// Project types
 export type {
-  // Project types
   ProjectStatus,
   Project,
   TerminalSnapshot,
+  PanelSnapshot,
   TerminalLayout,
   ProjectState,
-  // Recipe types
   RecipeTerminalType,
   RecipeTerminal,
   TerminalRecipe,
-  // Project settings types
   RunCommand,
   ProjectSettings,
   ProjectTerminalSettings,
   ProjectMcpServerConfig,
   CopyTreeSettings,
-  // Panel exit behavior
-  PanelExitBehavior,
-} from "./domain.js";
+} from "./project.js";
 
 // IPC types - communication payloads
 export type {

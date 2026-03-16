@@ -5,7 +5,7 @@
  * output and performs artifact extraction and agent state detection off the main thread.
  */
 
-import type { AgentState } from "../../shared/types/domain.js";
+import type { AgentState } from "../../shared/types/agent.js";
 import type { Artifact } from "../../shared/types/ipc.js";
 import type {
   WorkerOutboundMessage,

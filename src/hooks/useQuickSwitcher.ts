@@ -4,7 +4,7 @@ import { useShallow } from "zustand/react/shallow";
 import { useTerminalStore, type TerminalInstance } from "@/store";
 import { useWorktrees } from "./useWorktrees";
 import { useWorktreeSelectionStore } from "@/store";
-import { isPtyPanel } from "@shared/types/domain";
+import { isPtyPanel } from "@shared/types/panel";
 import { useSearchablePalette } from "./useSearchablePalette";
 
 export type QuickSwitcherItemType = "terminal" | "worktree";
