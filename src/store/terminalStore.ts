@@ -33,6 +33,7 @@ import { TerminalRefreshTier as TerminalRefreshTierEnum } from "@/types";
 import { terminalRegistryController } from "@/controllers";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { useTerminalInputStore } from "./terminalInputStore";
+import { useConsoleCaptureStore } from "./consoleCaptureStore";
 import type { CrashType } from "@shared/types/pty-host";
 import { isAgentTerminal } from "@/utils/terminalType";
 import { logInfo, logWarn, logError } from "@/utils/logger";
@@ -104,6 +105,7 @@ export const useTerminalStore = create<PanelGridState>()((set, get, api) => {
       get().clearQueue(id);
       get().handleTerminalRemoved(id, remainingTerminals, removedIndex);
       useTerminalInputStore.getState().clearTerminalState(id);
+      useConsoleCaptureStore.getState().removePane(id);
 
       // Auto-clear watch if panel is removed while watched
       get().unwatchPanel(id);
