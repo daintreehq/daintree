@@ -459,9 +459,10 @@ describe("built-in schemes — Arashiyama bamboo-grove dark theme", () => {
     expect(ratio, `selection contrast ${ratio.toFixed(2)}:1 needs ≥3:1`).toBeGreaterThanOrEqual(3);
   });
 
-  it("syntax-keyword and syntax-number are visually distinct", () => {
+  it("has redesigned syntax-keyword and syntax-number values", () => {
     expect(arashiyama.tokens["syntax-keyword"]).toBe("#E06268");
     expect(arashiyama.tokens["syntax-number"]).toBe("#D4A046");
+    expect(arashiyama.tokens["syntax-number"]).not.toBe(arashiyama.tokens["syntax-string"]);
   });
 
   it("produces all required token keys", () => {
