@@ -606,7 +606,7 @@ export class WorkspaceService {
         maxRetryDelayMs: 800,
       });
 
-      await ensureNoteFile(path);
+      await ensureNoteFile(absolutePath);
 
       await this.lifecycleService.copyCanopyDir(rootPath, absolutePath);
 
@@ -850,30 +850,11 @@ export class WorkspaceService {
         if (cacheKey) {
           this.listService.invalidateCache(cacheKey);
         }
-
-        if (branchToDelete) {
-          try {
-            await this.git.raw(["branch", "-d", branchToDelete]);
-            console.log(`[WorkspaceHost] Deleted branch: ${branchToDelete} (safe)`);
-          } catch (branchError) {
-            const errorMsg = (branchError as Error).message || "";
-            if (errorMsg.includes("not found")) {
-              console.log(`[WorkspaceHost] Branch already deleted: ${branchToDelete}`);
-            } else if (errorMsg.includes("not fully merged")) {
-              throw new Error(
-                `Branch '${branchToDelete}' has unmerged changes. Enable force delete to remove it.`
-              );
-            } else if (errorMsg.includes("checked out at") || errorMsg.includes("Cannot delete")) {
-              throw new Error(
-                `Cannot delete branch '${branchToDelete}': ${errorMsg.split("\n")[0]}`
-              );
-            } else {
-              throw new Error(`Failed to delete branch '${branchToDelete}': ${errorMsg}`);
-            }
-          }
-        }
       }
 
+      // Clean up the monitor immediately after worktree removal succeeds,
+      // before attempting branch deletion — so the monitor doesn't linger
+      // if branch deletion fails.
       monitor.stop();
       this.monitors.delete(worktreeId);
 
@@ -884,6 +865,27 @@ export class WorkspaceService {
           projectScopeId: this.projectScopeId,
         });
       }
+
+      if (branchToDelete && this.git) {
+        try {
+          await this.git.raw(["branch", "-d", branchToDelete]);
+          console.log(`[WorkspaceHost] Deleted branch: ${branchToDelete} (safe)`);
+        } catch (branchError) {
+          const errorMsg = (branchError as Error).message || "";
+          if (errorMsg.includes("not found")) {
+            console.log(`[WorkspaceHost] Branch already deleted: ${branchToDelete}`);
+          } else if (errorMsg.includes("not fully merged")) {
+            throw new Error(
+              `Branch '${branchToDelete}' has unmerged changes. Enable force delete to remove it.`
+            );
+          } else if (errorMsg.includes("checked out at") || errorMsg.includes("Cannot delete")) {
+            throw new Error(`Cannot delete branch '${branchToDelete}': ${errorMsg.split("\n")[0]}`);
+          } else {
+            throw new Error(`Failed to delete branch '${branchToDelete}': ${errorMsg}`);
+          }
+        }
+      }
+
       this.sendEvent({ type: "delete-worktree-result", requestId, success: true });
     } catch (error) {
       this.sendEvent({
