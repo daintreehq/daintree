@@ -356,8 +356,11 @@ describe("WorktreeLifecycleService", () => {
 
     describe("platform-specific process killing", () => {
       const originalPlatform = process.platform;
+      let processKillSpy: ReturnType<typeof vi.spyOn> | undefined;
 
       afterEach(() => {
+        processKillSpy?.mockRestore();
+        processKillSpy = undefined;
         Object.defineProperty(process, "platform", { value: originalPlatform });
         vi.useRealTimers();
       });
@@ -403,7 +406,7 @@ describe("WorktreeLifecycleService", () => {
         Object.defineProperty(process, "platform", { value: "darwin" });
         vi.useFakeTimers();
 
-        const processKillSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+        processKillSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
 
         const listeners: Record<string, ((...args: unknown[]) => void)[]> = {};
         const child = {
@@ -438,8 +441,6 @@ describe("WorktreeLifecycleService", () => {
         // Emit close to resolve the promise
         listeners["close"]?.forEach((cb) => cb(null));
         await resultPromise;
-
-        processKillSpy.mockRestore();
       });
 
       it("injects USERPROFILE and PATHEXT on Windows", async () => {
@@ -459,6 +460,39 @@ describe("WorktreeLifecycleService", () => {
         expect(spawnEnv).toHaveProperty("PATHEXT");
         expect(spawnEnv).toHaveProperty("SystemRoot");
         expect(spawnEnv).not.toHaveProperty("HOME");
+      });
+
+      it("falls back to child.kill() on Windows when pid is undefined", async () => {
+        Object.defineProperty(process, "platform", { value: "win32" });
+        vi.useFakeTimers();
+
+        const listeners: Record<string, ((...args: unknown[]) => void)[]> = {};
+        const child = {
+          pid: undefined,
+          stdout: { on: vi.fn() },
+          stderr: { on: vi.fn() },
+          on: vi.fn((event: string, cb: (...args: unknown[]) => void) => {
+            listeners[event] ??= [];
+            listeners[event].push(cb);
+          }),
+          kill: vi.fn(),
+        };
+        mockSpawn.mockReturnValue(child);
+
+        const resultPromise = service.runCommands(["slow-cmd"], {
+          cwd: "/test",
+          env: {},
+          timeoutMs: 1000,
+          onProgress: vi.fn(),
+        });
+
+        vi.advanceTimersByTime(1001);
+
+        expect(mockSpawnSync).not.toHaveBeenCalled();
+        expect(child.kill).toHaveBeenCalled();
+
+        listeners["close"]?.forEach((cb) => cb(1));
+        await resultPromise;
       });
     });
   });
