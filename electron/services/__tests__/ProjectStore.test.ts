@@ -1,5 +1,4 @@
 import { describe, it, expect } from "vitest";
-import { createHash } from "crypto";
 import path from "path";
 import { generateProjectId, isValidProjectId, getProjectStateDir } from "../projectStorePaths.js";
 
