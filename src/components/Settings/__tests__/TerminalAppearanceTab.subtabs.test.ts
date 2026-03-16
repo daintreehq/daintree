@@ -38,6 +38,10 @@ describe("Appearance tab search index subtab metadata", () => {
     (e) => e.tab === "terminalAppearance" && !e.id.startsWith("tab-nav-")
   );
 
+  it("has exactly 5 appearance field entries", () => {
+    expect(appearanceFieldEntries).toHaveLength(5);
+  });
+
   it("all Appearance field entries have valid subtab metadata", () => {
     const validSubtabs = new Set(APPEARANCE_SUBTAB_IDS);
     const validLabels = new Set(["App", "Terminal"]);
@@ -75,8 +79,9 @@ describe("Appearance tab search index subtab metadata", () => {
     }
   });
 
-  it("tab-nav-terminalAppearance entry does not have subtab", () => {
+  it("tab-nav-terminalAppearance entry does not have subtab or subtabLabel", () => {
     const navEntry = SETTINGS_SEARCH_INDEX.find((e) => e.id === "tab-nav-terminalAppearance");
     expect(navEntry?.subtab).toBeUndefined();
+    expect(navEntry?.subtabLabel).toBeUndefined();
   });
 });
