@@ -134,4 +134,35 @@ describe("githubFilterStore", () => {
     expect(state.issueSortOrder).toBe("created");
     expect(state.prSortOrder).toBe("created");
   });
+
+  it("changing sort order does not disturb filters or search queries", () => {
+    useGitHubFilterStore.getState().setIssueFilter("closed");
+    useGitHubFilterStore.getState().setPrFilter("merged");
+    useGitHubFilterStore.getState().setIssueSearchQuery("bug");
+    useGitHubFilterStore.getState().setPrSearchQuery("feat");
+    useGitHubFilterStore.getState().setIssueSortOrder("updated");
+    useGitHubFilterStore.getState().setPrSortOrder("updated");
+    const state = useGitHubFilterStore.getState();
+    expect(state.issueFilter).toBe("closed");
+    expect(state.prFilter).toBe("merged");
+    expect(state.issueSearchQuery).toBe("bug");
+    expect(state.prSearchQuery).toBe("feat");
+  });
+
+  it("resetGitHubFilterStore resets all six fields from dirty state", () => {
+    useGitHubFilterStore.getState().setIssueFilter("all");
+    useGitHubFilterStore.getState().setPrFilter("closed");
+    useGitHubFilterStore.getState().setIssueSearchQuery("search1");
+    useGitHubFilterStore.getState().setPrSearchQuery("search2");
+    useGitHubFilterStore.getState().setIssueSortOrder("updated");
+    useGitHubFilterStore.getState().setPrSortOrder("updated");
+    resetGitHubFilterStore();
+    const state = useGitHubFilterStore.getState();
+    expect(state.issueFilter).toBe("open");
+    expect(state.prFilter).toBe("open");
+    expect(state.issueSearchQuery).toBe("");
+    expect(state.prSearchQuery).toBe("");
+    expect(state.issueSortOrder).toBe("created");
+    expect(state.prSortOrder).toBe("created");
+  });
 });
