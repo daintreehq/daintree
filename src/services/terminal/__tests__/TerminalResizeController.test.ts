@@ -339,6 +339,53 @@ describe("TerminalResizeController", () => {
         getXtermCellDimensions(terminal as unknown as import("@xterm/xterm").Terminal)
       ).toBeNull();
     });
+
+    it("returns null for NaN dimensions", () => {
+      expect(
+        getXtermCellDimensions(
+          fakeTerminal({
+            _renderService: { dimensions: { css: { cell: { width: NaN, height: 17 } } } },
+          })
+        )
+      ).toBeNull();
+    });
+
+    it("returns null for negative dimensions", () => {
+      expect(
+        getXtermCellDimensions(
+          fakeTerminal({
+            _renderService: { dimensions: { css: { cell: { width: 8, height: -1 } } } },
+          })
+        )
+      ).toBeNull();
+    });
+
+    it("returns null for Infinity dimensions", () => {
+      expect(
+        getXtermCellDimensions(
+          fakeTerminal({
+            _renderService: { dimensions: { css: { cell: { width: Infinity, height: 17 } } } },
+          })
+        )
+      ).toBeNull();
+    });
+
+    it("returns null when intermediate levels are null", () => {
+      expect(
+        getXtermCellDimensions(
+          fakeTerminal({
+            _renderService: { dimensions: { css: null } },
+          })
+        )
+      ).toBeNull();
+      expect(
+        getXtermCellDimensions(
+          fakeTerminal({
+            _renderService: { dimensions: null },
+          })
+        )
+      ).toBeNull();
+    });
   });
 
   describe("resize cell-dimension paths", () => {
@@ -373,6 +420,8 @@ describe("TerminalResizeController", () => {
 
       expect(result).toEqual({ cols: 100, rows: 25 });
       expect(managed.fitAddon.fit).not.toHaveBeenCalled();
+      expect(managed.terminal.resize).toHaveBeenCalledWith(100, 25);
+      expect(resizeMock).toHaveBeenCalledWith("term-1", 100, 25);
     });
 
     it("falls back to fitAddon.fit() when cell dims are null", () => {
@@ -387,6 +436,11 @@ describe("TerminalResizeController", () => {
 
       expect(result).not.toBeNull();
       expect(managed.fitAddon.fit).toHaveBeenCalled();
+      expect(resizeMock).toHaveBeenCalledWith(
+        "term-1",
+        managed.terminal.cols,
+        managed.terminal.rows
+      );
     });
 
     it("falls back to fitAddon.fit() when cell dims are zero", () => {
@@ -402,6 +456,11 @@ describe("TerminalResizeController", () => {
 
       expect(result).not.toBeNull();
       expect(managed.fitAddon.fit).toHaveBeenCalled();
+      expect(resizeMock).toHaveBeenCalledWith(
+        "term-1",
+        managed.terminal.cols,
+        managed.terminal.rows
+      );
     });
   });
 });

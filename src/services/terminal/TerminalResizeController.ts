@@ -28,11 +28,12 @@ interface XtermCoreRenderDimensions {
  * xterm.js 6.0 does not expose a public API for per-cell pixel dimensions.
  * The official @xterm/addon-fit (0.11) accesses the same private path
  * (`_core._renderService.dimensions`) — see its proposeDimensions() source.
- * Upstream tracking: xtermjs/xterm.js#702 (closed without a public API).
+ * Upstream tracking: xtermjs/xterm.js#702 (closed; no public API in 6.0).
  *
- * This helper uses a narrow structural type instead of `any` and fails
- * closed to `null` so callers can fall back to fitAddon.fit().
- * Replace with a public API when one is available upstream.
+ * This helper uses a narrow structural type instead of `any` and rejects
+ * non-finite, zero, or negative values. Returns `null` on any failure so
+ * callers can fall back to fitAddon.fit().
+ * Replace with a public API when one is available in our xterm version.
  */
 export function getXtermCellDimensions(
   terminal: Terminal
@@ -43,7 +44,11 @@ export function getXtermCellDimensions(
     if (
       dimensions &&
       typeof dimensions.width === "number" &&
-      typeof dimensions.height === "number"
+      typeof dimensions.height === "number" &&
+      Number.isFinite(dimensions.width) &&
+      Number.isFinite(dimensions.height) &&
+      dimensions.width > 0 &&
+      dimensions.height > 0
     ) {
       return { width: dimensions.width, height: dimensions.height };
     }
