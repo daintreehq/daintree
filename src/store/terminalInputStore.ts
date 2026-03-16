@@ -148,6 +148,9 @@ export const useTerminalInputStore = create<TerminalInputState>()((set, get) => 
       pendingDrafts: new Map(),
       pendingDraftRevision: 0,
       stashedEditorStates: new Map(),
+      commandHistory: new Map(),
+      historyIndex: new Map(),
+      tempDraft: new Map(),
     }),
 
   stashEditorState: (terminalId, editorState, projectId) =>
