@@ -27,9 +27,10 @@ import { markRendererPerformance } from "@/utils/performance";
 // eslint-disable-next-line no-control-regex
 const URXVT_MOUSE_RE = /^\x1b\[\d+;\d+;\d+M/;
 
-export function isMouseSequence(data: string): boolean {
+export function isNonKeyboardInput(data: string): boolean {
   if (data.startsWith("\x1b[M")) return true;
   if (data.startsWith("\x1b[<")) return true;
+  if (data === "\x1b[I" || data === "\x1b[O") return true;
   if (URXVT_MOUSE_RE.test(data)) return true;
   return false;
 }
@@ -602,7 +603,7 @@ class TerminalInstanceService {
 
     const inputDisposable = terminal.onData((data) => {
       if (!managed.isInputLocked) {
-        if (!isMouseSequence(data)) {
+        if (!isNonKeyboardInput(data)) {
           this.onUserInput(id);
         }
         terminalClient.write(id, data);
