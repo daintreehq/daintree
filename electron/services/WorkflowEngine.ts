@@ -14,15 +14,23 @@ import { workflowPersistence, WorkflowPersistence } from "./persistence/Workflow
 import type {
   WorkflowRun,
   NodeState,
-  LoopNodeState,
   PendingWorkflowApproval,
 } from "../../shared/types/workflowRun.js";
-import type { WorkflowNode, WorkflowCondition, LoopNode } from "../../shared/types/workflow.js";
+import type { WorkflowNode, LoopNode } from "../../shared/types/workflow.js";
 import type { TaskRecord } from "../../shared/types/task.js";
 
-const COMPOSITE_SEP = "|";
+import { evaluateCondition } from "./workflow/ConditionEvaluator.js";
+import { hasTemplateExpressions, resolveTemplateArgs } from "./workflow/TemplateResolver.js";
+import { ApprovalManager } from "./workflow/ApprovalManager.js";
+import {
+  LoopCompiler,
+  buildCompositeId,
+  parseCompositeId,
+  findLoopNode,
+  COMPOSITE_SEP,
+} from "./workflow/LoopCompiler.js";
+import { PersistenceCoordinator } from "./workflow/PersistenceCoordinator.js";
 
-const TEMPLATE_REGEX = /\{\{\s*([^}]+?)\s*\}\}/g;
 const MAX_RESULT_DATA_BYTES = 1_048_576; // 1 MB
 
 export class WorkflowEngine {
@@ -31,15 +39,6 @@ export class WorkflowEngine {
 
   /** Reverse index for fast lookup (taskId -> { runId, nodeId }) */
   private taskToNode: Map<string, { runId: string; nodeId: string }> = new Map();
-
-  /** Pending approval resolvers keyed by "runId::nodeId" */
-  private pendingApprovals: Map<
-    string,
-    { resolve: (approved: boolean, feedback?: string) => void }
-  > = new Map();
-
-  /** Timeout handles for approval nodes with timeoutMs */
-  private approvalTimeouts: Map<string, NodeJS.Timeout> = new Map();
 
   /** Unsubscribe functions for event listeners */
   private unsubscribers: Array<() => void> = [];
@@ -53,11 +52,23 @@ export class WorkflowEngine {
   /** Whether persistence is enabled */
   private persistenceEnabled: boolean = true;
 
+  private approvalManager: ApprovalManager;
+  private loopCompiler: LoopCompiler;
+  private persistenceCoordinator: PersistenceCoordinator;
+
   constructor(
     private loader: WorkflowLoader = workflowLoader,
     private queueService: TaskQueueService = taskQueueService,
-    private persistence: WorkflowPersistence = workflowPersistence
+    persistence: WorkflowPersistence = workflowPersistence
   ) {
+    this.approvalManager = new ApprovalManager();
+    this.loopCompiler = new LoopCompiler(queueService, this.taskToNode);
+    this.persistenceCoordinator = new PersistenceCoordinator(
+      persistence,
+      this.runs,
+      this.taskToNode
+    );
+
     this.unsubscribers.push(
       events.on("task:completed", (payload) => {
         void this.handleTaskComplete(payload);
@@ -71,11 +82,6 @@ export class WorkflowEngine {
     );
   }
 
-  /**
-   * Start a workflow execution.
-   * Loads the workflow definition, creates run state, compiles root nodes to tasks,
-   * and emits workflow:started event.
-   */
   async startWorkflow(workflowId: string): Promise<string> {
     if (this.isDisposed) {
       throw new Error("WorkflowEngine is disposed");
@@ -146,10 +152,6 @@ export class WorkflowEngine {
     }
   }
 
-  /**
-   * Cancel a running workflow.
-   * Cancels all non-terminal tasks and emits workflow:failed event.
-   */
   async cancelWorkflow(runId: string): Promise<void> {
     const run = this.runs.get(runId);
     if (!run) {
@@ -164,8 +166,7 @@ export class WorkflowEngine {
     run.status = "cancelled";
     run.completedAt = now;
 
-    // Clear pending approvals for this run
-    this.clearPendingApprovals(runId, "cancelled");
+    this.approvalManager.clearPendingApprovals(runId, "cancelled");
 
     for (const [nodeId, nodeState] of Object.entries(run.nodeStates)) {
       if (nodeState.status === "awaiting-approval") {
@@ -196,61 +197,23 @@ export class WorkflowEngine {
     await this.schedulePersist();
   }
 
-  /**
-   * Get workflow run state.
-   */
   async getWorkflowRun(runId: string): Promise<WorkflowRun | null> {
     const run = this.runs.get(runId);
     return run ? { ...run } : null;
   }
 
-  /**
-   * List active workflow runs.
-   */
   async listActiveRuns(): Promise<WorkflowRun[]> {
     return Array.from(this.runs.values())
       .filter((run) => run.status === "running")
       .map((run) => ({ ...run }));
   }
 
-  /** Build a composite key for loop body tasks: "loopId|iterIndex|bodyNodeId" */
-  private buildCompositeId(loopId: string, iterIndex: number, bodyNodeId: string): string {
-    return `${loopId}${COMPOSITE_SEP}${iterIndex}${COMPOSITE_SEP}${bodyNodeId}`;
-  }
-
-  /** Parse a composite key. Returns null for plain (non-loop) node IDs. */
-  private parseCompositeId(
-    key: string
-  ): { loopNodeId: string; iterIndex: number; bodyNodeId: string } | null {
-    const first = key.indexOf(COMPOSITE_SEP);
-    if (first === -1) return null;
-    const second = key.indexOf(COMPOSITE_SEP, first + 1);
-    if (second === -1) return null;
-    return {
-      loopNodeId: key.substring(0, first),
-      iterIndex: parseInt(key.substring(first + 1, second), 10),
-      bodyNodeId: key.substring(second + 1),
-    };
-  }
-
-  /** Find a loop node in the workflow definition by ID. */
-  private findLoopNode(
-    definition: import("../../shared/types/workflow.js").WorkflowDefinition,
-    loopNodeId: string
-  ): LoopNode | undefined {
-    const node = definition.nodes.find((n) => n.id === loopNodeId);
-    return node?.type === "loop" ? (node as LoopNode) : undefined;
-  }
-
-  /**
-   * Compile a workflow node to a task and enqueue it.
-   */
   private async compileNodeToTask(
     node: WorkflowNode,
     run: WorkflowRun
   ): Promise<TaskRecord | null> {
     if (node.type === "loop") {
-      await this.compileLoopNode(node as LoopNode, run);
+      await this.loopCompiler.compileLoopNode(node as LoopNode, run);
       return null;
     }
 
@@ -266,7 +229,6 @@ export class WorkflowEngine {
 
     const now = Date.now();
 
-    // Approval nodes don't create tasks — they suspend the workflow
     if (node.type === "approval") {
       const config = node.config as { prompt: string; timeoutMs?: number };
       const nodeState: NodeState = {
@@ -277,7 +239,9 @@ export class WorkflowEngine {
 
       const timeoutAt = config.timeoutMs ? now + config.timeoutMs : undefined;
 
-      this.setupApprovalWait(run, node.id, config.prompt, config.timeoutMs, timeoutAt);
+      this.approvalManager.setupApprovalWait(run.runId, node.id, config.timeoutMs, () => {
+        void this.handleApprovalResolution(run.runId, node.id, false, "Approval timed out", true);
+      });
 
       events.emit("workflow:approval-requested", {
         runId: run.runId,
@@ -306,7 +270,6 @@ export class WorkflowEngine {
     const resolvedDeps: string[] = [];
 
     for (const depId of dependencies) {
-      // Loop and approval nodes don't have task mappings — skip them as task-level deps
       const depNode = run.definition.nodes.find((n) => n.id === depId);
       if (depNode?.type === "loop" || depNode?.type === "approval") continue;
 
@@ -322,7 +285,7 @@ export class WorkflowEngine {
     const actionConfig = node.config as { actionId: string; args?: Record<string, unknown> };
 
     let resolvedArgs = actionConfig.args;
-    if (resolvedArgs && this.hasTemplateExpressions(resolvedArgs)) {
+    if (resolvedArgs && hasTemplateExpressions(resolvedArgs)) {
       for (const depId of dependencies) {
         const depState = run.nodeStates[depId];
         if (!depState || depState.status !== "completed") {
@@ -332,7 +295,7 @@ export class WorkflowEngine {
         }
       }
       try {
-        resolvedArgs = this.resolveTemplateArgs(resolvedArgs, run.nodeStates);
+        resolvedArgs = resolveTemplateArgs(resolvedArgs, run.nodeStates);
       } catch (error) {
         await this.failNode(node.id, run, (error as Error).message);
         throw error;
@@ -364,180 +327,6 @@ export class WorkflowEngine {
     return task;
   }
 
-  /**
-   * Compile a loop node: create LoopNodeState, start iteration 0.
-   */
-  private async compileLoopNode(loopNode: LoopNode, run: WorkflowRun): Promise<void> {
-    if (run.scheduledNodes.has(loopNode.id)) return;
-    run.scheduledNodes.add(loopNode.id);
-
-    const loopState: LoopNodeState = {
-      status: "running",
-      startedAt: Date.now(),
-      currentIteration: 0,
-      maxIterations: loopNode.config.maxIterations,
-      exitedEarly: false,
-    };
-    run.nodeStates[loopNode.id] = loopState;
-
-    await this.compileBodyIteration(loopNode, run, 0);
-  }
-
-  /**
-   * Schedule root body nodes for a loop iteration.
-   * Only root nodes (no dependencies) are scheduled immediately.
-   * Dependent body nodes are scheduled when their deps complete via handleBodyNodeComplete().
-   * This ensures template expressions can resolve against completed dependency results.
-   */
-  private async compileBodyIteration(
-    loopNode: LoopNode,
-    run: WorkflowRun,
-    iterIndex: number
-  ): Promise<void> {
-    const roots = loopNode.body.filter((n) => !n.dependencies || n.dependencies.length === 0);
-
-    for (const bodyNode of roots) {
-      await this.compileSingleBodyNode(bodyNode, loopNode, run, iterIndex);
-    }
-  }
-
-  /**
-   * Compile a single body node within a loop iteration.
-   * Uses composite IDs: "loopId|iterIndex|bodyNodeId".
-   */
-  private async compileSingleBodyNode(
-    bodyNode: WorkflowNode,
-    loopNode: LoopNode,
-    run: WorkflowRun,
-    iterIndex: number
-  ): Promise<void> {
-    if (bodyNode.type !== "action") return;
-
-    const compositeId = this.buildCompositeId(loopNode.id, iterIndex, bodyNode.id);
-
-    if (run.scheduledNodes.has(compositeId)) return;
-    run.scheduledNodes.add(compositeId);
-
-    const now = Date.now();
-    const nodeState: NodeState = {
-      status: "draft",
-      startedAt: now,
-    };
-    run.nodeStates[compositeId] = nodeState;
-
-    // Resolve dependencies within the same iteration
-    const dependencies = bodyNode.dependencies || [];
-    const resolvedDeps: string[] = [];
-    for (const depId of dependencies) {
-      const depCompositeId = this.buildCompositeId(loopNode.id, iterIndex, depId);
-      const taskId = run.taskMapping[depCompositeId];
-      if (!taskId) {
-        throw new Error(
-          `Cannot compile body node ${bodyNode.id} in loop ${loopNode.id}: dependency ${depId} has not been scheduled yet`
-        );
-      }
-      resolvedDeps.push(taskId);
-    }
-
-    // For iteration > 0, build alias map: plain body node IDs -> previous iteration's states
-    let resolvedArgs = bodyNode.config.args;
-    if (resolvedArgs && this.hasTemplateExpressions(resolvedArgs)) {
-      const stateContext = { ...run.nodeStates };
-      if (iterIndex > 0) {
-        for (const bn of loopNode.body) {
-          const prevComposite = this.buildCompositeId(loopNode.id, iterIndex - 1, bn.id);
-          const prevState = run.nodeStates[prevComposite];
-          if (prevState) {
-            stateContext[bn.id] = prevState;
-          }
-        }
-      }
-      try {
-        resolvedArgs = this.resolveTemplateArgs(resolvedArgs, stateContext);
-      } catch (error) {
-        await this.failBodyNode(compositeId, loopNode, run, (error as Error).message);
-        return;
-      }
-    }
-
-    const task = await this.queueService.createTask({
-      title: `Workflow ${run.workflowId} - Loop ${loopNode.id}[${iterIndex}] - ${bodyNode.id}`,
-      description: `Execute action: ${bodyNode.config.actionId}`,
-      priority: 0,
-      dependencies: resolvedDeps,
-      metadata: {
-        workflowRunId: run.runId,
-        workflowId: run.workflowId,
-        nodeId: compositeId,
-        loopNodeId: loopNode.id,
-        iterIndex,
-        bodyNodeId: bodyNode.id,
-        actionId: bodyNode.config.actionId,
-        actionArgs: resolvedArgs,
-      },
-    });
-
-    nodeState.taskId = task.id;
-    nodeState.status = task.status;
-    run.taskMapping[compositeId] = task.id;
-
-    this.taskToNode.set(task.id, { runId: run.runId, nodeId: compositeId });
-
-    await this.queueService.enqueueTask(task.id);
-  }
-
-  /**
-   * Mark a body node as failed and check loop iteration completion.
-   */
-  private async failBodyNode(
-    compositeId: string,
-    loopNode: LoopNode,
-    run: WorkflowRun,
-    error: string
-  ): Promise<void> {
-    const nodeState = run.nodeStates[compositeId];
-    if (!nodeState) return;
-
-    nodeState.status = "failed";
-    nodeState.completedAt = Date.now();
-    nodeState.result = { error };
-
-    const parsed = this.parseCompositeId(compositeId);
-    if (parsed) {
-      await this.checkLoopIterationComplete(loopNode, run, parsed.iterIndex);
-    }
-  }
-
-  /**
-   * Set up the internal approval wait: store resolver, start timeout if configured.
-   */
-  private setupApprovalWait(
-    run: WorkflowRun,
-    nodeId: string,
-    _prompt: string,
-    timeoutMs?: number,
-    _timeoutAt?: number
-  ): void {
-    const key = `${run.runId}::${nodeId}`;
-
-    this.pendingApprovals.set(key, {
-      resolve: (_approved: boolean, _feedback?: string) => {
-        // Placeholder — resolveApproval() calls handleApprovalResolution directly
-      },
-    });
-
-    if (timeoutMs) {
-      const handle = setTimeout(() => {
-        this.pendingApprovals.delete(key);
-        void this.handleApprovalResolution(run.runId, nodeId, false, "Approval timed out", true);
-      }, timeoutMs);
-      this.approvalTimeouts.set(key, handle);
-    }
-  }
-
-  /**
-   * Internal handler for approval resolution — marks node, emits events, routes downstream.
-   */
   private async handleApprovalResolution(
     runId: string,
     nodeId: string,
@@ -551,14 +340,7 @@ export class WorkflowEngine {
     const nodeState = run.nodeStates[nodeId];
     if (!nodeState || nodeState.status !== "awaiting-approval") return;
 
-    const key = `${runId}::${nodeId}`;
-    this.pendingApprovals.delete(key);
-
-    const timeoutHandle = this.approvalTimeouts.get(key);
-    if (timeoutHandle) {
-      clearTimeout(timeoutHandle);
-      this.approvalTimeouts.delete(key);
-    }
+    this.approvalManager.deletePendingApproval(runId, nodeId);
 
     const now = Date.now();
     nodeState.status = approved ? "completed" : "failed";
@@ -606,31 +388,23 @@ export class WorkflowEngine {
     await this.checkWorkflowCompletion(run);
   }
 
-  /**
-   * Resolve a pending approval node.
-   * Called via IPC when the user approves or rejects.
-   */
   async resolveApproval(
     runId: string,
     nodeId: string,
     approved: boolean,
     feedback?: string
   ): Promise<void> {
-    const key = `${runId}::${nodeId}`;
-    if (!this.pendingApprovals.has(key)) {
+    if (!this.approvalManager.hasPendingApproval(runId, nodeId)) {
       throw new Error(`No pending approval found for run ${runId}, node ${nodeId}`);
     }
-    this.pendingApprovals.delete(key);
+    this.approvalManager.deletePendingApproval(runId, nodeId);
     await this.handleApprovalResolution(runId, nodeId, approved, feedback);
   }
 
-  /**
-   * List all currently pending approval requests.
-   */
   listPendingApprovals(): PendingWorkflowApproval[] {
     const approvals: PendingWorkflowApproval[] = [];
 
-    for (const [key] of this.pendingApprovals) {
+    for (const key of this.approvalManager.pendingApprovalKeys()) {
       const [runId, nodeId] = key.split("::");
       const run = this.runs.get(runId);
       if (!run || run.status !== "running") continue;
@@ -660,10 +434,6 @@ export class WorkflowEngine {
     return approvals;
   }
 
-  /**
-   * Handle task completion event.
-   * Updates node state, evaluates conditions, and schedules next nodes.
-   */
   private async handleTaskComplete(payload: {
     taskId: string;
     result: string;
@@ -716,10 +486,10 @@ export class WorkflowEngine {
       data: payload.data,
     };
 
-    // Check if this is a loop body task
-    const composite = this.parseCompositeId(mapping.nodeId);
+    const composite = parseCompositeId(mapping.nodeId);
     if (composite) {
-      await this.handleBodyNodeComplete(composite, run);
+      await this.loopCompiler.handleBodyNodeComplete(composite, run);
+      await this.handleLoopPostCompletion(composite, run);
       await this.schedulePersist();
       await this.checkWorkflowCompletion(run);
       return;
@@ -752,10 +522,6 @@ export class WorkflowEngine {
     await this.checkWorkflowCompletion(run);
   }
 
-  /**
-   * Handle task failure event.
-   * Updates node state, evaluates onFailure routing, and may fail the workflow.
-   */
   private async handleTaskFailed(payload: {
     taskId: string;
     error: string;
@@ -782,10 +548,10 @@ export class WorkflowEngine {
       error: payload.error,
     };
 
-    // Check if this is a loop body task
-    const composite = this.parseCompositeId(mapping.nodeId);
+    const composite = parseCompositeId(mapping.nodeId);
     if (composite) {
-      await this.handleBodyNodeFailed(composite, run);
+      await this.loopCompiler.handleBodyNodeFailed(composite, run);
+      await this.handleLoopPostCompletion(composite, run);
       await this.schedulePersist();
       await this.checkWorkflowCompletion(run);
       return;
@@ -824,10 +590,23 @@ export class WorkflowEngine {
     await this.checkWorkflowCompletion(run);
   }
 
-  /**
-   * Evaluate routing logic (onSuccess or onFailure) and conditions.
-   * Returns the list of node IDs to schedule next.
-   */
+  private async handleLoopPostCompletion(
+    composite: { loopNodeId: string; iterIndex: number; bodyNodeId: string },
+    run: WorkflowRun
+  ): Promise<void> {
+    const loopNode = findLoopNode(run.definition, composite.loopNodeId);
+    if (!loopNode) return;
+
+    const loopState = run.nodeStates[loopNode.id];
+    if (!loopState) return;
+
+    if (loopState.status === "completed") {
+      await this.routeLoopCompletion(loopNode, loopState, run, "onSuccess");
+    } else if (loopState.status === "failed") {
+      await this.routeLoopCompletion(loopNode, loopState, run, "onFailure");
+    }
+  }
+
   private async evaluateRouting(
     node: WorkflowNode,
     nodeState: NodeState,
@@ -844,7 +623,7 @@ export class WorkflowEngine {
     }
 
     const allConditionsPass = node.conditions.every((condition) => {
-      const result = this.evaluateCondition(condition, nodeState, run);
+      const result = evaluateCondition(condition, nodeState, run);
 
       run.evaluatedConditions.push({
         nodeId: node.id,
@@ -859,214 +638,6 @@ export class WorkflowEngine {
     return allConditionsPass ? targets : [];
   }
 
-  /**
-   * Handle completion of a loop body node.
-   * Schedule dependent body nodes whose deps are now all met, then onSuccess routing,
-   * then check if the iteration is complete.
-   */
-  private async handleBodyNodeComplete(
-    composite: { loopNodeId: string; iterIndex: number; bodyNodeId: string },
-    run: WorkflowRun
-  ): Promise<void> {
-    const loopNode = this.findLoopNode(run.definition, composite.loopNodeId);
-    if (!loopNode) return;
-
-    const bodyNode = loopNode.body.find((n) => n.id === composite.bodyNodeId);
-    if (!bodyNode) return;
-
-    // Schedule body nodes whose dependencies are now all satisfied
-    for (const candidate of loopNode.body) {
-      if (!candidate.dependencies || candidate.dependencies.length === 0) continue;
-      const candidateComposite = this.buildCompositeId(
-        composite.loopNodeId,
-        composite.iterIndex,
-        candidate.id
-      );
-      if (run.scheduledNodes.has(candidateComposite)) continue;
-
-      // Check if all deps for this candidate are completed
-      const allDepsMet = candidate.dependencies.every((depId) => {
-        const depComposite = this.buildCompositeId(
-          composite.loopNodeId,
-          composite.iterIndex,
-          depId
-        );
-        const depState = run.nodeStates[depComposite];
-        return depState?.status === "completed";
-      });
-
-      if (allDepsMet) {
-        await this.compileSingleBodyNode(candidate, loopNode, run, composite.iterIndex);
-      }
-    }
-
-    // Schedule same-iteration onSuccess successors
-    for (const nextId of bodyNode.onSuccess || []) {
-      const nextBodyNode = loopNode.body.find((n) => n.id === nextId);
-      if (nextBodyNode) {
-        const nextComposite = this.buildCompositeId(
-          composite.loopNodeId,
-          composite.iterIndex,
-          nextId
-        );
-        if (!run.scheduledNodes.has(nextComposite)) {
-          await this.compileSingleBodyNode(nextBodyNode, loopNode, run, composite.iterIndex);
-        }
-      }
-    }
-
-    await this.checkLoopIterationComplete(loopNode, run, composite.iterIndex);
-  }
-
-  /**
-   * Handle failure of a loop body node.
-   * Schedule same-iteration onFailure successors, then check iteration completion.
-   * If no onFailure handler, cancel remaining non-terminal body tasks in this iteration.
-   */
-  private async handleBodyNodeFailed(
-    composite: { loopNodeId: string; iterIndex: number; bodyNodeId: string },
-    run: WorkflowRun
-  ): Promise<void> {
-    const loopNode = this.findLoopNode(run.definition, composite.loopNodeId);
-    if (!loopNode) return;
-
-    const bodyNode = loopNode.body.find((n) => n.id === composite.bodyNodeId);
-    if (!bodyNode) return;
-
-    const hasFailureHandler = bodyNode.onFailure && bodyNode.onFailure.length > 0;
-
-    // Schedule same-iteration onFailure successors
-    if (hasFailureHandler) {
-      for (const nextId of bodyNode.onFailure!) {
-        const nextBodyNode = loopNode.body.find((n) => n.id === nextId);
-        if (nextBodyNode) {
-          const nextComposite = this.buildCompositeId(
-            composite.loopNodeId,
-            composite.iterIndex,
-            nextId
-          );
-          if (!run.scheduledNodes.has(nextComposite)) {
-            await this.compileSingleBodyNode(nextBodyNode, loopNode, run, composite.iterIndex);
-          }
-        }
-      }
-    } else {
-      // No failure handler — cancel remaining non-terminal body tasks in this iteration
-      for (const bn of loopNode.body) {
-        const cid = this.buildCompositeId(composite.loopNodeId, composite.iterIndex, bn.id);
-        const state = run.nodeStates[cid];
-        if (
-          state &&
-          state.status !== "completed" &&
-          state.status !== "failed" &&
-          state.status !== "cancelled"
-        ) {
-          state.status = "cancelled";
-          state.completedAt = Date.now();
-          if (state.taskId) {
-            try {
-              await this.queueService.cancelTask(state.taskId);
-            } catch (_e) {
-              /* best effort */
-            }
-          }
-        }
-      }
-    }
-
-    await this.checkLoopIterationComplete(loopNode, run, composite.iterIndex);
-  }
-
-  /**
-   * Check if all body nodes for a given iteration are terminal.
-   * If so, evaluate the loop's exit condition and decide: exit, next iteration, or maxed out.
-   */
-  private async checkLoopIterationComplete(
-    loopNode: LoopNode,
-    run: WorkflowRun,
-    iterIndex: number
-  ): Promise<void> {
-    // Check if all scheduled body nodes for this iteration are terminal
-    for (const bodyNode of loopNode.body) {
-      const compositeId = this.buildCompositeId(loopNode.id, iterIndex, bodyNode.id);
-      if (!run.scheduledNodes.has(compositeId)) continue;
-      const state = run.nodeStates[compositeId];
-      if (!state) return;
-      if (
-        state.status !== "completed" &&
-        state.status !== "failed" &&
-        state.status !== "cancelled"
-      ) {
-        return; // Still in progress
-      }
-    }
-
-    const loopState = run.nodeStates[loopNode.id] as LoopNodeState;
-    if (!loopState || loopState.status !== "running") return;
-
-    // Build a state context for exit condition evaluation using this iteration's body states
-    const iterStates: Record<string, NodeState> = {};
-    for (const bodyNode of loopNode.body) {
-      const compositeId = this.buildCompositeId(loopNode.id, iterIndex, bodyNode.id);
-      const state = run.nodeStates[compositeId];
-      if (state) {
-        iterStates[bodyNode.id] = state;
-      }
-    }
-
-    // Check if any body node in this iteration failed (loop fails if unhandled body failure)
-    const anyBodyFailed = loopNode.body.some((bn) => {
-      const cid = this.buildCompositeId(loopNode.id, iterIndex, bn.id);
-      const state = run.nodeStates[cid];
-      return state?.status === "failed";
-    });
-
-    // Evaluate exit condition
-    let exitConditionMet = false;
-    if (loopNode.config.exitCondition && !anyBodyFailed) {
-      // Find the last terminal body node to use as the "current" node state for condition evaluation
-      const lastBodyNode = loopNode.body[loopNode.body.length - 1];
-      const lastComposite = this.buildCompositeId(loopNode.id, iterIndex, lastBodyNode.id);
-      const lastState = run.nodeStates[lastComposite];
-      if (lastState) {
-        exitConditionMet = this.evaluateCondition(loopNode.config.exitCondition, lastState, {
-          ...run,
-          nodeStates: { ...run.nodeStates, ...iterStates },
-        });
-      }
-    }
-
-    const now = Date.now();
-
-    if (exitConditionMet) {
-      // Exit early — loop succeeded
-      loopState.status = "completed";
-      loopState.completedAt = now;
-      loopState.exitedEarly = true;
-      await this.routeLoopCompletion(loopNode, loopState, run, "onSuccess");
-    } else if (anyBodyFailed) {
-      // Body failed without recovery — loop fails
-      loopState.status = "failed";
-      loopState.completedAt = now;
-      loopState.result = { error: `Loop body failed at iteration ${iterIndex}` };
-      await this.routeLoopCompletion(loopNode, loopState, run, "onFailure");
-    } else if (iterIndex < loopNode.config.maxIterations - 1) {
-      // Start next iteration
-      const nextIter = iterIndex + 1;
-      loopState.currentIteration = nextIter;
-      await this.compileBodyIteration(loopNode, run, nextIter);
-    } else {
-      // Max iterations reached without exit condition — loop completes (not a failure)
-      loopState.status = "completed";
-      loopState.completedAt = now;
-      loopState.exitedEarly = false;
-      await this.routeLoopCompletion(loopNode, loopState, run, "onSuccess");
-    }
-  }
-
-  /**
-   * Route the outer graph after a loop node completes or fails.
-   */
   private async routeLoopCompletion(
     loopNode: LoopNode,
     loopState: NodeState,
@@ -1083,7 +654,6 @@ export class WorkflowEngine {
         }
       }
     } else if (routingKey === "onFailure") {
-      // No failure handler — fail the workflow
       const now = Date.now();
       run.status = "failed";
       run.completedAt = now;
@@ -1097,192 +667,6 @@ export class WorkflowEngine {
     }
   }
 
-  /**
-   * Evaluate a single condition.
-   */
-  private evaluateCondition(
-    condition: WorkflowCondition,
-    nodeState: NodeState,
-    run: WorkflowRun
-  ): boolean {
-    if (condition.type === "status") {
-      const targetNodeId = condition.taskId || "";
-      const targetState = targetNodeId ? run.nodeStates[targetNodeId] : nodeState;
-
-      if (!targetState) {
-        return false;
-      }
-
-      const actualValue = targetState.status;
-      return this.compareValues(actualValue, condition.op, condition.value);
-    }
-
-    if (condition.type === "result") {
-      const targetNodeId = condition.taskId || "";
-      const targetState = targetNodeId ? run.nodeStates[targetNodeId] : nodeState;
-
-      if (!targetState || !targetState.result) {
-        return false;
-      }
-
-      const resolvedValue = this.resolveJsonPath(targetState.result, condition.path);
-      return this.compareValues(resolvedValue, condition.op, condition.value);
-    }
-
-    return false;
-  }
-
-  /**
-   * Compare two values using an operator.
-   */
-  private compareValues(actual: unknown, op: string, expected: unknown): boolean {
-    switch (op) {
-      case "==":
-        return actual === expected;
-      case "!=":
-        return actual !== expected;
-      case ">":
-        return typeof actual === "number" && typeof expected === "number" && actual > expected;
-      case "<":
-        return typeof actual === "number" && typeof expected === "number" && actual < expected;
-      case ">=":
-        return typeof actual === "number" && typeof expected === "number" && actual >= expected;
-      case "<=":
-        return typeof actual === "number" && typeof expected === "number" && actual <= expected;
-      default:
-        return false;
-    }
-  }
-
-  /**
-   * Resolve a simple JSONPath expression.
-   * Supports basic dot notation (e.g., "summary", "artifacts.0").
-   */
-  private resolveJsonPath(obj: unknown, path: string): unknown {
-    if (!path || !obj || typeof obj !== "object") {
-      return undefined;
-    }
-
-    const parts = path.split(".");
-    let current: unknown = obj;
-
-    for (const part of parts) {
-      if (current === null || typeof current !== "object") {
-        return undefined;
-      }
-
-      current = (current as Record<string, unknown>)[part];
-    }
-
-    return current;
-  }
-
-  /**
-   * Resolve template expressions in workflow node args.
-   * Supports {{nodeId.path.to.value}} syntax resolved against completed upstream node results.
-   * Pure placeholders (entire value is a single {{...}}) return the raw typed value.
-   * Embedded placeholders (mixed with text) stringify non-string resolved values.
-   */
-  private resolveTemplateArgs(
-    args: Record<string, unknown>,
-    nodeStates: Record<string, NodeState>
-  ): Record<string, unknown> {
-    const resolved: Record<string, unknown> = {};
-
-    for (const [key, value] of Object.entries(args)) {
-      resolved[key] = this.resolveTemplateValue(value, nodeStates);
-    }
-
-    return resolved;
-  }
-
-  private hasTemplateExpressions(value: unknown): boolean {
-    if (typeof value === "string") {
-      TEMPLATE_REGEX.lastIndex = 0;
-      return TEMPLATE_REGEX.test(value);
-    }
-    if (Array.isArray(value)) {
-      return value.some((item) => this.hasTemplateExpressions(item));
-    }
-    if (value !== null && typeof value === "object") {
-      return Object.values(value as Record<string, unknown>).some((v) =>
-        this.hasTemplateExpressions(v)
-      );
-    }
-    return false;
-  }
-
-  private resolveTemplateValue(value: unknown, nodeStates: Record<string, NodeState>): unknown {
-    if (typeof value === "string") {
-      return this.resolveTemplateString(value, nodeStates);
-    }
-
-    if (Array.isArray(value)) {
-      return value.map((item) => this.resolveTemplateValue(item, nodeStates));
-    }
-
-    if (value !== null && typeof value === "object") {
-      const resolved: Record<string, unknown> = {};
-      for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
-        resolved[k] = this.resolveTemplateValue(v, nodeStates);
-      }
-      return resolved;
-    }
-
-    return value;
-  }
-
-  private resolveTemplateString(value: string, nodeStates: Record<string, NodeState>): unknown {
-    const pureMatch = value.match(/^\{\{\s*([^}]+?)\s*\}\}$/);
-    if (pureMatch) {
-      return this.resolveExpression(pureMatch[1], nodeStates);
-    }
-
-    TEMPLATE_REGEX.lastIndex = 0;
-    if (!TEMPLATE_REGEX.test(value)) {
-      return value;
-    }
-
-    TEMPLATE_REGEX.lastIndex = 0;
-    return value.replace(TEMPLATE_REGEX, (_match, expression: string) => {
-      const resolved = this.resolveExpression(expression, nodeStates);
-      if (typeof resolved === "string") {
-        return resolved;
-      }
-      return JSON.stringify(resolved);
-    });
-  }
-
-  private resolveExpression(expression: string, nodeStates: Record<string, NodeState>): unknown {
-    const dotIndex = expression.indexOf(".");
-    if (dotIndex === -1) {
-      throw new Error(
-        `Invalid template expression "{{${expression}}}": must be in format {{nodeId.path}}`
-      );
-    }
-
-    const nodeId = expression.substring(0, dotIndex);
-    const path = expression.substring(dotIndex + 1);
-
-    const nodeState = nodeStates[nodeId];
-    if (!nodeState) {
-      throw new Error(
-        `Template expression "{{${expression}}}": node "${nodeId}" not found in workflow`
-      );
-    }
-
-    if (nodeState.status !== "completed" || !nodeState.result) {
-      throw new Error(
-        `Template expression "{{${expression}}}": node "${nodeId}" has not completed (status: ${nodeState.status})`
-      );
-    }
-
-    return this.resolveJsonPath(nodeState.result, path);
-  }
-
-  /**
-   * Mark a node as failed and evaluate onFailure routing.
-   */
   private async failNode(nodeId: string, run: WorkflowRun, error: string): Promise<void> {
     const nodeState = run.nodeStates[nodeId];
     if (!nodeState) return;
@@ -1321,18 +705,13 @@ export class WorkflowEngine {
     await this.checkWorkflowCompletion(run);
   }
 
-  /**
-   * Check if the workflow is complete (all scheduled nodes are in terminal states).
-   * If complete, emit workflow:completed or workflow:failed event.
-   */
   private async checkWorkflowCompletion(run: WorkflowRun): Promise<void> {
     if (run.status !== "running") {
       return;
     }
 
-    // Only check top-level (non-composite) node IDs — loop body tasks are invisible to the outer graph
     const outerNodeIds = Array.from(run.scheduledNodes).filter(
-      (nodeId) => this.parseCompositeId(nodeId) === null
+      (nodeId) => parseCompositeId(nodeId) === null
     );
     const allScheduledNodesTerminal = outerNodeIds.every((nodeId) => {
       const nodeState = run.nodeStates[nodeId];
@@ -1344,7 +723,6 @@ export class WorkflowEngine {
         nodeState.status === "failed" ||
         nodeState.status === "cancelled"
       );
-      // Note: "awaiting-approval" is NOT terminal — workflow stays running
     });
 
     if (!allScheduledNodesTerminal) {
@@ -1383,22 +761,14 @@ export class WorkflowEngine {
     await this.schedulePersist();
   }
 
-  /**
-   * Initialize the engine for a project.
-   * Loads persisted workflow runs and rebuilds taskToNode index.
-   * For runs in "running" status, checks task queue state and handles orphaned workflows.
-   */
   async initialize(projectId: string): Promise<void> {
     this.currentProjectId = projectId;
     await this.loadFromDisk(projectId);
   }
 
-  /**
-   * Handle project switch: flush pending saves, clear memory, load new project's workflow runs.
-   */
   async onProjectSwitch(newProjectId?: string): Promise<void> {
     if (this.currentProjectId) {
-      await this.persistence.flush(this.currentProjectId);
+      await this.persistenceCoordinator.flush(this.currentProjectId);
     }
 
     this.runs.clear();
@@ -1412,48 +782,23 @@ export class WorkflowEngine {
     }
   }
 
-  /**
-   * Load workflow runs from disk for a project.
-   * Rebuilds the taskToNode reverse index.
-   * Handles crash recovery for running workflows.
-   */
   private async loadFromDisk(projectId: string): Promise<void> {
     if (!this.persistenceEnabled) return;
 
-    const loadedRuns = await this.persistence.load(projectId);
-    this.runs.clear();
-    this.taskToNode.clear();
+    await this.persistenceCoordinator.loadFromDisk(projectId);
 
-    for (const run of loadedRuns) {
-      this.runs.set(run.runId, run);
-
-      // Rebuild taskToNode reverse index
-      for (const [nodeId, taskId] of Object.entries(run.taskMapping)) {
-        this.taskToNode.set(taskId, { runId: run.runId, nodeId });
-      }
-    }
-
-    // Crash recovery: handle workflows that were running when the app restarted
     for (const run of this.runs.values()) {
       if (run.status === "running") {
         await this.handleRunningWorkflowRecovery(run);
       }
     }
-
-    console.log(`[WorkflowEngine] Loaded ${this.runs.size} workflow runs for project ${projectId}`);
   }
 
-  /**
-   * Handle recovery for a workflow that was running when the app restarted.
-   * Checks if tasks are still active in the task queue and marks orphaned workflows as failed.
-   * For tasks that completed/failed while down, re-runs routing logic to schedule downstream nodes.
-   */
   private async handleRunningWorkflowRecovery(run: WorkflowRun): Promise<void> {
     let hasOrphanedTasks = false;
     let hasActiveTasks = false;
     let hasRecoveryChanges = false;
 
-    // Track nodes that completed/failed while we were down (need routing)
     const nodesToProcess: Array<{ nodeId: string; nodeState: NodeState }> = [];
 
     for (const [nodeId, nodeState] of Object.entries(run.nodeStates)) {
@@ -1465,7 +810,6 @@ export class WorkflowEngine {
         continue;
       }
 
-      // Handle approval nodes that were awaiting approval when app restarted
       if (nodeState.status === "awaiting-approval") {
         const node = run.definition.nodes.find((n) => n.id === nodeId);
         if (!node || node.type !== "approval") continue;
@@ -1476,7 +820,6 @@ export class WorkflowEngine {
             ? nodeState.startedAt + config.timeoutMs
             : undefined;
 
-        // If timeout has expired, auto-reject
         if (timeoutAt && Date.now() >= timeoutAt) {
           nodeState.status = "failed";
           nodeState.completedAt = Date.now();
@@ -1489,9 +832,16 @@ export class WorkflowEngine {
           hasRecoveryChanges = true;
           nodesToProcess.push({ nodeId, nodeState });
         } else {
-          // Re-emit the approval request to re-surface in UI
           const remainingTimeout = timeoutAt ? timeoutAt - Date.now() : config.timeoutMs;
-          this.setupApprovalWait(run, nodeId, config.prompt, remainingTimeout, timeoutAt);
+          this.approvalManager.setupApprovalWait(run.runId, nodeId, remainingTimeout, () => {
+            void this.handleApprovalResolution(
+              run.runId,
+              nodeId,
+              false,
+              "Approval timed out",
+              true
+            );
+          });
 
           events.emit("workflow:approval-requested", {
             runId: run.runId,
@@ -1513,11 +863,9 @@ export class WorkflowEngine {
         continue;
       }
 
-      // Check if the task still exists in the queue
       const task = await this.queueService.getTask(nodeState.taskId);
 
       if (!task) {
-        // Task is missing from queue - mark node as failed
         console.warn(
           `[WorkflowEngine] Crash recovery: task ${nodeState.taskId} for node ${nodeId} is missing from queue`
         );
@@ -1528,14 +876,12 @@ export class WorkflowEngine {
         hasRecoveryChanges = true;
         nodesToProcess.push({ nodeId, nodeState });
       } else if (task.status === "completed") {
-        // Task completed while we were down
         nodeState.status = "completed";
         nodeState.completedAt = task.completedAt ?? Date.now();
         nodeState.result = task.result;
         hasRecoveryChanges = true;
         nodesToProcess.push({ nodeId, nodeState });
       } else if (task.status === "failed" || task.status === "cancelled") {
-        // Task failed/cancelled while we were down
         nodeState.status = task.status;
         nodeState.completedAt = task.completedAt ?? Date.now();
         nodeState.result = task.result;
@@ -1543,20 +889,16 @@ export class WorkflowEngine {
         hasRecoveryChanges = true;
         nodesToProcess.push({ nodeId, nodeState });
       } else {
-        // Task is still active (queued, blocked, running)
         hasActiveTasks = true;
       }
     }
 
-    // Process routing for nodes that reached terminal states while down
-    // Track loop iterations that need completion checking
     const loopItersToCheck = new Set<string>();
 
     for (const { nodeId, nodeState } of nodesToProcess) {
-      // Handle composite (loop body) nodes differently
-      const composite = this.parseCompositeId(nodeId);
+      const composite = parseCompositeId(nodeId);
       if (composite) {
-        loopItersToCheck.add(`${composite.loopNodeId}|${composite.iterIndex}`);
+        loopItersToCheck.add(`${composite.loopNodeId}${COMPOSITE_SEP}${composite.iterIndex}`);
         continue;
       }
 
@@ -1566,7 +908,6 @@ export class WorkflowEngine {
         continue;
       }
 
-      // Re-run routing logic based on the node's terminal state
       if (nodeState.status === "completed") {
         const nextNodeIds = await this.evaluateRouting(node, nodeState, run, "onSuccess");
         for (const nextId of nextNodeIds) {
@@ -1596,26 +937,26 @@ export class WorkflowEngine {
       }
     }
 
-    // Re-evaluate loop iterations that had body tasks complete/fail during downtime
     for (const key of loopItersToCheck) {
-      const [loopNodeId, iterStr] = key.split("|");
-      const loopNode = this.findLoopNode(run.definition, loopNodeId);
+      const sepIdx = key.indexOf(COMPOSITE_SEP);
+      const loopNodeId = key.substring(0, sepIdx);
+      const iterStr = key.substring(sepIdx + 1);
+      const loopNode = findLoopNode(run.definition, loopNodeId);
       if (loopNode) {
-        await this.checkLoopIterationComplete(loopNode, run, parseInt(iterStr, 10));
+        await this.loopCompiler.checkLoopIterationComplete(
+          loopNode,
+          run,
+          parseInt(iterStr, 10)
+        );
         hasRecoveryChanges = true;
       }
     }
 
-    // Check workflow completion after processing recovered nodes
     await this.checkWorkflowCompletion(run);
 
-    // Persist recovery changes immediately (bypass debounce since this is initialization)
     if (hasRecoveryChanges && this.currentProjectId) {
       try {
-        const runsArray = Array.from(this.runs.values());
-        await this.persistence.flush(this.currentProjectId);
-        await this.persistence.save(this.currentProjectId, runsArray);
-        await this.persistence.flush(this.currentProjectId);
+        await this.persistenceCoordinator.saveImmediate(this.currentProjectId);
       } catch (error) {
         console.error(
           `[WorkflowEngine] Failed to persist recovery changes for workflow ${run.runId}:`,
@@ -1624,7 +965,6 @@ export class WorkflowEngine {
       }
     }
 
-    // Log recovery summary
     if (hasOrphanedTasks && !hasActiveTasks && run.status === "failed") {
       console.warn(
         `[WorkflowEngine] Crash recovery: marked workflow ${run.runId} as failed due to orphaned tasks`
@@ -1636,84 +976,29 @@ export class WorkflowEngine {
     }
   }
 
-  /**
-   * Schedule a debounced persistence save.
-   * Swallows errors to prevent unhandled rejections in event handlers.
-   */
   private async schedulePersist(): Promise<void> {
-    if (!this.persistenceEnabled || !this.currentProjectId) return;
-
-    try {
-      const runsArray = Array.from(this.runs.values());
-      await this.persistence.save(this.currentProjectId, runsArray);
-    } catch (error) {
-      console.error("[WorkflowEngine] Failed to persist workflow state:", error);
-    }
+    await this.persistenceCoordinator.schedulePersist(
+      this.currentProjectId,
+      this.persistenceEnabled
+    );
   }
 
-  /**
-   * Enable or disable persistence (useful for testing).
-   */
   setPersistenceEnabled(enabled: boolean): void {
     this.persistenceEnabled = enabled;
   }
 
-  /**
-   * Force an immediate save to disk.
-   */
   async flushPersistence(): Promise<void> {
-    if (!this.currentProjectId) return;
-    await this.persistence.flush(this.currentProjectId);
+    await this.persistenceCoordinator.flush(this.currentProjectId);
   }
 
-  /**
-   * List all workflow runs (for debugging/UI).
-   */
   async listAllRuns(): Promise<WorkflowRun[]> {
     return Array.from(this.runs.values()).map((run) => ({ ...run }));
   }
 
-  /**
-   * Clear all pending approval resolvers and timeouts for a given run (or all runs).
-   */
-  private clearPendingApprovals(
-    runId?: string,
-    reason: "resolved" | "cancelled" | "timeout" = "cancelled"
-  ): void {
-    const now = Date.now();
-    const keysToRemove: string[] = [];
-
-    for (const [key] of this.pendingApprovals) {
-      if (!runId || key.startsWith(`${runId}::`)) {
-        keysToRemove.push(key);
-      }
-    }
-
-    for (const key of keysToRemove) {
-      this.pendingApprovals.delete(key);
-      const timeoutHandle = this.approvalTimeouts.get(key);
-      if (timeoutHandle) {
-        clearTimeout(timeoutHandle);
-        this.approvalTimeouts.delete(key);
-      }
-      const [rId, nId] = key.split("::");
-      events.emit("workflow:approval-cleared", {
-        runId: rId,
-        nodeId: nId,
-        reason,
-        timestamp: now,
-      });
-    }
-  }
-
-  /**
-   * Dispose the workflow engine.
-   * Unsubscribes from events and clears run state.
-   */
   dispose(): void {
     this.isDisposed = true;
 
-    this.clearPendingApprovals(undefined, "cancelled");
+    this.approvalManager.dispose();
 
     for (const unsub of this.unsubscribers) {
       unsub();
@@ -1727,9 +1012,6 @@ export class WorkflowEngine {
 
 let workflowEngine: WorkflowEngine | null = null;
 
-/**
- * Initialize the workflow engine singleton.
- */
 export function initializeWorkflowEngine(): WorkflowEngine {
   if (!workflowEngine) {
     workflowEngine = new WorkflowEngine();
@@ -1737,16 +1019,10 @@ export function initializeWorkflowEngine(): WorkflowEngine {
   return workflowEngine;
 }
 
-/**
- * Get the workflow engine instance.
- */
 export function getWorkflowEngine(): WorkflowEngine | null {
   return workflowEngine;
 }
 
-/**
- * Dispose the workflow engine singleton.
- */
 export function disposeWorkflowEngine(): void {
   if (workflowEngine) {
     workflowEngine.dispose();
