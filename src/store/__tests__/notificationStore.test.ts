@@ -77,6 +77,20 @@ describe("notificationStore — toast cap", () => {
     expect(active).toHaveLength(7);
   });
 
+  it("adding a grid-bar notification does not displace an active toast", () => {
+    addToast({ message: "toast-1" });
+    addToast({ message: "toast-2" });
+    addToast({ message: "toast-3" });
+
+    addToast({ message: "grid-bar-1", placement: "grid-bar" });
+
+    const active = getState().notifications.filter(
+      (n) => !n.dismissed && n.placement !== "grid-bar"
+    );
+    expect(active).toHaveLength(3);
+    expect(active.every((n) => !n.dismissed)).toBe(true);
+  });
+
   it("marks displaced toast's history entry as unseen", () => {
     useNotificationHistoryStore.getState().addEntry({
       type: "info",
