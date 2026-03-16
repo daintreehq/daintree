@@ -125,6 +125,7 @@ describe("TerminalInstanceService - Scrollback", () => {
 
       service.reduceScrollback("t1", 500);
       expect(managed.terminal.options.scrollback).toBe(5000);
+      expect(managed.writtenData).toHaveLength(0);
     });
 
     it("skips terminals with active text selection", () => {
@@ -134,6 +135,7 @@ describe("TerminalInstanceService - Scrollback", () => {
 
       service.reduceScrollback("t1", 500);
       expect(managed.terminal.options.scrollback).toBe(5000);
+      expect(managed.writtenData).toHaveLength(0);
     });
 
     it("skips when current scrollback already at or below target", () => {
