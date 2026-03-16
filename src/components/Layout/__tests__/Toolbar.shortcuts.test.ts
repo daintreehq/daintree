@@ -77,45 +77,45 @@ describe("Toolbar shortcut tooltips — issue #3443", () => {
     });
 
     it("uses createTooltipWithShortcut for sidecar tooltip", () => {
-      expect(source).toMatch(/createTooltipWithShortcut\([^)]*sidecarShortcut\)/);
+      expect(source).toMatch(/createTooltipWithShortcut\([\s\S]*?sidecarShortcut\s*\)/);
     });
 
     it("uses createTooltipWithShortcut for sidebar tooltip with dynamic shortcut", () => {
-      expect(source).toMatch(/createTooltipWithShortcut\([^)]*sidebarShortcut\)/);
+      expect(source).toMatch(/createTooltipWithShortcut\([\s\S]*?sidebarShortcut\s*\)/);
     });
   });
 
   describe("useMemo dependency array", () => {
     it("includes sidebarShortcut in useMemo deps", () => {
-      const depsMatch = source.match(/\],\s*\[([^\]]+)\]\s*\);/s);
+      const depsMatch = source.match(/\}\),\s*\[([^\]]+)\]\s*\);/s);
       expect(depsMatch).not.toBeNull();
       const deps = depsMatch![1];
       expect(deps).toContain("sidebarShortcut");
     });
 
     it("includes diagnosticsShortcut in useMemo deps", () => {
-      const depsMatch = source.match(/\],\s*\[([^\]]+)\]\s*\);/s);
+      const depsMatch = source.match(/\}\),\s*\[([^\]]+)\]\s*\);/s);
       expect(depsMatch).not.toBeNull();
       const deps = depsMatch![1];
       expect(deps).toContain("diagnosticsShortcut");
     });
 
     it("includes sidecarShortcut in useMemo deps", () => {
-      const depsMatch = source.match(/\],\s*\[([^\]]+)\]\s*\);/s);
+      const depsMatch = source.match(/\}\),\s*\[([^\]]+)\]\s*\);/s);
       expect(depsMatch).not.toBeNull();
       const deps = depsMatch![1];
       expect(deps).toContain("sidecarShortcut");
     });
 
     it("includes notesShortcut in useMemo deps", () => {
-      const depsMatch = source.match(/\],\s*\[([^\]]+)\]\s*\);/s);
+      const depsMatch = source.match(/\}\),\s*\[([^\]]+)\]\s*\);/s);
       expect(depsMatch).not.toBeNull();
       const deps = depsMatch![1];
       expect(deps).toContain("notesShortcut");
     });
 
     it("includes settingsShortcut in useMemo deps", () => {
-      const depsMatch = source.match(/\],\s*\[([^\]]+)\]\s*\);/s);
+      const depsMatch = source.match(/\}\),\s*\[([^\]]+)\]\s*\);/s);
       expect(depsMatch).not.toBeNull();
       const deps = depsMatch![1];
       expect(deps).toContain("settingsShortcut");
