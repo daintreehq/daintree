@@ -129,24 +129,7 @@ export function createProcessStateValidator(
         return !shellHelperProcesses.has(name) && !shellProcesses.has(name);
       });
 
-      if (significantChildren.length > 0) {
-        if (process.platform === "win32") {
-          for (const child of children) {
-            const grandchildren = processTreeCache.getChildren(child.pid);
-            const significantGrandchildren = grandchildren.filter((gc) => {
-              const basename = gc.comm.split("/").pop()?.toLowerCase() || gc.comm.toLowerCase();
-              const name = basename.replace(/\.exe$/, "");
-              return !shellHelperProcesses.has(name) && !shellProcesses.has(name);
-            });
-            if (significantGrandchildren.length > 0) {
-              return true;
-            }
-          }
-        }
-        return false;
-      }
-
-      return false;
+      return significantChildren.length > 0;
     },
   };
 }

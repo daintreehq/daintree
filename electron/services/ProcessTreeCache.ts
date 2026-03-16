@@ -1,4 +1,5 @@
 import { exec } from "child_process";
+import os from "node:os";
 import { promisify } from "util";
 
 const execAsync = promisify(exec);
@@ -22,6 +23,10 @@ export class ProcessTreeCache {
   private isWindows: boolean = process.platform === "win32";
   private refreshCallbacks: Set<RefreshCallback> = new Set();
   private lastError: Error | null = null;
+  private cpuSnapshots = new Map<
+    string,
+    { kernelTicks: bigint; userTicks: bigint; wallMs: number }
+  >();
 
   constructor(private pollIntervalMs: number = 2500) {} // 2.5 seconds (increased from 1s to reduce CPU load)
 
@@ -158,19 +163,29 @@ export class ProcessTreeCache {
   }
 
   private async refreshWindows(): Promise<void> {
-    // Use PowerShell's Get-CimInstance for efficient batch query
-    const { stdout } = await execAsync(
-      `powershell -NoProfile -NonInteractive -NoLogo -Command "$ErrorActionPreference = 'SilentlyContinue'; Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,Name,CommandLine | ConvertTo-Json -Compress"`,
-      {
-        timeout: 10000,
-        maxBuffer: 10 * 1024 * 1024,
-      }
-    );
+    // Use PowerShell's Get-CimInstance with calculated properties to fetch CPU timing fields.
+    // KernelModeTime/UserModeTime are cast to [string] to preserve UInt64 precision in JSON.
+    // CreationDate uses .ToString('o') for consistent ISO 8601 across PS 5.1 and PS 7.
+    // NOTE: Use regular string concatenation — template literals would interpolate $_ as JS variables.
+    const psCommand =
+      'powershell -NoProfile -NonInteractive -NoLogo -Command "' +
+      "$ErrorActionPreference = 'SilentlyContinue'; " +
+      "Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,Name,CommandLine," +
+      "@{N='KernelModeTime';E={[string]$_.KernelModeTime}}," +
+      "@{N='UserModeTime';E={[string]$_.UserModeTime}}," +
+      "@{N='CreationDate';E={if ($_.CreationDate) { $_.CreationDate.ToString('o') } else { $null }}} | " +
+      'ConvertTo-Json -Compress"';
+
+    const { stdout } = await execAsync(psCommand, {
+      timeout: 10000,
+      maxBuffer: 10 * 1024 * 1024,
+    });
 
     const trimmed = stdout.replace(/^\uFEFF/, "").trim();
     if (!trimmed || trimmed === "null") {
       this.cache = new Map();
       this.childrenMap = new Map();
+      this.cpuSnapshots.clear();
       return;
     }
 
@@ -188,6 +203,9 @@ export class ProcessTreeCache {
 
     const newCache = new Map<number, ProcessInfo>();
     const newChildrenMap = new Map<number, number[]>();
+    const now = Date.now();
+    const numCpus = Math.max(os.cpus().length, 1);
+    const activeSnapshotKeys = new Set<string>();
 
     for (const p of processes) {
       const pid = parseInt(String(p?.ProcessId), 10);
@@ -207,17 +225,46 @@ export class ProcessTreeCache {
           ? p.CommandLine.trim()
           : name;
 
+      // Compute delta-based CPU% from KernelModeTime/UserModeTime (100ns tick values)
+      const snapshotKey = p.CreationDate ? `${pid}:${p.CreationDate}` : String(pid);
+      activeSnapshotKeys.add(snapshotKey);
+
+      const kernelTicks = BigInt(p.KernelModeTime ?? "0");
+      const userTicks = BigInt(p.UserModeTime ?? "0");
+
+      let cpuPercent = 0;
+      const prior = this.cpuSnapshots.get(snapshotKey);
+      if (prior && prior.wallMs < now) {
+        const totalDelta = kernelTicks - prior.kernelTicks + (userTicks - prior.userTicks);
+        if (totalDelta >= 0n) {
+          const deltaWallMs = BigInt(now - prior.wallMs);
+          const capacity = deltaWallMs * 10000n * BigInt(numCpus);
+          if (capacity > 0n) {
+            cpuPercent = Math.min(Number((totalDelta * 10000n) / capacity) / 100, 100);
+          }
+        }
+      }
+
+      this.cpuSnapshots.set(snapshotKey, { kernelTicks, userTicks, wallMs: now });
+
       newCache.set(pid, {
         pid,
         ppid,
         comm: name,
         command,
-        cpuPercent: 0, // Windows CPU% requires performance counters; use 0 as fallback
+        cpuPercent,
       });
 
       const children = newChildrenMap.get(ppid) || [];
       children.push(pid);
       newChildrenMap.set(ppid, children);
+    }
+
+    // Prune stale snapshot entries for processes that no longer exist
+    for (const key of this.cpuSnapshots.keys()) {
+      if (!activeSnapshotKeys.has(key)) {
+        this.cpuSnapshots.delete(key);
+      }
     }
 
     this.cache = newCache;
