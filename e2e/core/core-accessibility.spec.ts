@@ -88,7 +88,7 @@ test.describe.serial("Core: Accessibility", () => {
         const { window } = ctx;
         const before = await getGridPanelCount(window);
 
-        await window.keyboard.press(`${mod}+t`);
+        await window.keyboard.press(`${mod}+Alt+t`);
         await expect.poll(() => getGridPanelCount(window), { timeout: T_LONG }).toBe(before + 1);
         await window
           .locator(SEL.terminal.xtermRows)

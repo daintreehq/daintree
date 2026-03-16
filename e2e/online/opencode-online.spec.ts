@@ -97,7 +97,9 @@ test.describe("OpenCode Online Flow", () => {
       const agentPanel = window.locator(SEL.opencodeAgent.panel);
       const cmEditor = agentPanel.locator(SEL.terminal.cmEditor);
       await cmEditor.click();
-      await cmEditor.pressSequentially("Please say hello world", { delay: 30 });
+      await window.waitForTimeout(500);
+      await window.keyboard.type("Please say hello world", { delay: 30 });
+      await window.waitForTimeout(200);
       await window.keyboard.press("Enter");
     });
 

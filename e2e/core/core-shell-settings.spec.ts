@@ -104,17 +104,17 @@ test.describe.serial("Core: Shell & Settings", () => {
       await openAndOnboardProject(ctx.app, ctx.window, fixtureDir, "Shell Settings Test");
     });
 
-    test("Cmd+T opens a new terminal", async () => {
+    test("Cmd+Alt+T opens a new terminal", async () => {
       const { window } = ctx;
       const before = await getGridPanelCount(window);
-      await window.keyboard.press(`${mod}+t`);
+      await window.keyboard.press(`${mod}+Alt+t`);
       await expect.poll(() => getGridPanelCount(window), { timeout: T_LONG }).toBe(before + 1);
     });
 
-    test("Cmd+T opens a second terminal", async () => {
+    test("Cmd+Alt+T opens a second terminal", async () => {
       const { window } = ctx;
       const before = await getGridPanelCount(window);
-      await window.keyboard.press(`${mod}+t`);
+      await window.keyboard.press(`${mod}+Alt+t`);
       await expect.poll(() => getGridPanelCount(window), { timeout: T_LONG }).toBe(before + 1);
     });
 
