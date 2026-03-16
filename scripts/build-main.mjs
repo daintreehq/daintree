@@ -93,7 +93,12 @@ async function run() {
   // Config for ESM files (Main, Hosts)
   const esmConfig = {
     ...common,
-    entryPoints: ["electron/main.ts", "electron/pty-host.ts", "electron/workspace-host.ts"],
+    entryPoints: [
+      "electron/bootstrap.ts",
+      "electron/main.ts",
+      "electron/pty-host.ts",
+      "electron/workspace-host.ts",
+    ],
     outdir: "dist-electron/electron",
     format: "esm",
     splitting: true, // Share chunks between main/hosts

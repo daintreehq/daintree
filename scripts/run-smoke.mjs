@@ -12,7 +12,11 @@ const electronPath = require("electron");
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(SCRIPT_DIR, "..");
 
-const BUILD_ARTIFACTS = ["dist/index.html", "dist-electron/electron/main.js"];
+const BUILD_ARTIFACTS = [
+  "dist/index.html",
+  "dist-electron/electron/bootstrap.js",
+  "dist-electron/electron/main.js",
+];
 
 const REQUIRED_MARKERS = [
   "[SMOKE] CHECK: node-pty native module",

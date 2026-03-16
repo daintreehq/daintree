@@ -6,7 +6,7 @@
     "name": "Greg Priday",
     "email": "greg@siteorigin.com"
   },
-  "main": "dist-electron/electron/main.js",
+  "main": "dist-electron/electron/bootstrap.js",
   "type": "module",
   "engines": {
     "node": ">=22.12.0"
