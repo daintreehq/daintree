@@ -659,9 +659,22 @@ describe("built-in schemes — Atacama light theme", () => {
   });
 
   it("has correct mineral-desert surface hierarchy", () => {
-    expect(atacama.tokens["surface-canvas"]).toBe("#F4F4F2");
-    expect(atacama.tokens["surface-panel"]).toBe("#FAFAF8");
+    expect(atacama.tokens["surface-canvas"]).toBe("#F0F0ED");
+    expect(atacama.tokens["surface-panel"]).toBe("#F8F8F6");
     expect(atacama.tokens["surface-panel-elevated"]).toBe("#FFFFFF");
+  });
+
+  it("has distinct syntax-operator (#4A5D7B) different from syntax-keyword", () => {
+    expect(atacama.tokens["syntax-operator"]).toBe("#4A5D7B");
+    expect(atacama.tokens["syntax-operator"]).not.toBe(
+      atacama.tokens["syntax-keyword"],
+    );
+  });
+
+  it("has text-secondary color-mix referencing current surface-canvas", () => {
+    expect(atacama.tokens["text-secondary"]).toBe(
+      "color-mix(in oklab, #3A3431 72%, #F0F0ED)",
+    );
   });
 
   it("has light-appropriate category colors (oklch L=0.58-0.68)", () => {
