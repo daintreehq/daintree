@@ -471,7 +471,8 @@ export function NewWorktreeDialog({
               countable: false,
             });
           } catch (assignErr) {
-            const message = assignErr instanceof Error ? assignErr.message : "Failed to assign issue";
+            const message =
+              assignErr instanceof Error ? assignErr.message : "Failed to assign issue";
             const issueUrl = selectedIssue.url;
             notify({
               type: "warning",

@@ -25,7 +25,10 @@ export function useRecipePicker({
   lastSelectedWorktreeRecipeId: string | null | undefined;
   projectId: string;
   initialRecipeId?: string | null;
-  setLastSelectedWorktreeRecipeIdByProject: (projectId: string, recipeId: string | null | undefined) => void;
+  setLastSelectedWorktreeRecipeIdByProject: (
+    projectId: string,
+    recipeId: string | null | undefined
+  ) => void;
 }): UseRecipePickerResult {
   const [selectedRecipeId, setSelectedRecipeId] = useState<string | null>(null);
   const [recipePickerOpen, setRecipePickerOpen] = useState(false);

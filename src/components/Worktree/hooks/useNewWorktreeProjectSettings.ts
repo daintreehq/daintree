@@ -58,9 +58,7 @@ export function useNewWorktreeProjectSettings({
       .catch((err) => console.error("Failed to load project settings:", err));
 
     if (recipes.length === 0 && currentProject?.id) {
-      loadRecipes(currentProject.id).catch((err) =>
-        console.error("Failed to load recipes:", err)
-      );
+      loadRecipes(currentProject.id).catch((err) => console.error("Failed to load recipes:", err));
     }
   }, [isOpen, currentProject, recipes.length, loadRecipes]);
 
