@@ -570,8 +570,36 @@ describe("Hokkaido built-in scheme", () => {
   });
 });
 
-describe("built-in schemes — Svalbard light terminal fallbacks", () => {
+describe("built-in schemes — Svalbard light theme", () => {
   const svalbard = BUILT_IN_APP_SCHEMES.find((s) => s.id === "svalbard")!;
+
+  it("exists with correct metadata", () => {
+    expect(svalbard).toBeDefined();
+    expect(svalbard.name).toBe("Svalbard");
+    expect(svalbard.type).toBe("light");
+    expect(svalbard.builtin).toBe(true);
+  });
+
+  it("has arctic surface hierarchy with wider spread", () => {
+    expect(svalbard.tokens["surface-canvas"]).toBe("#DFEAF1");
+    expect(svalbard.tokens["surface-sidebar"]).toBe("#C8D7E3");
+    expect(svalbard.tokens["surface-panel"]).toBe("#EFF5F9");
+    expect(svalbard.tokens["surface-panel-elevated"]).toBe("#FFFFFF");
+    expect(svalbard.tokens["surface-grid"]).toBe("#B8C8D6");
+  });
+
+  it("has explicit border overrides (not alpha-derived)", () => {
+    expect(svalbard.tokens["border-default"]).toBe("#9EB4C4");
+    expect(svalbard.tokens["border-subtle"]).toBe("#A8BCC9");
+    expect(svalbard.tokens["border-strong"]).toBe("#8BA5B8");
+  });
+
+  it("has cold arctic activity indicators", () => {
+    expect(svalbard.tokens["activity-active"]).toBe("#006B8F");
+    expect(svalbard.tokens["activity-working"]).toBe("#006B8F");
+    expect(svalbard.tokens["activity-waiting"]).toBe("#4C5980");
+    expect(svalbard.tokens["activity-idle"]).toBe("#7A8E9E");
+  });
 
   it("auto-derives terminal-black from text-primary for light themes", () => {
     expect(svalbard.tokens["terminal-black"]).toBe(svalbard.tokens["text-primary"]);
@@ -579,6 +607,48 @@ describe("built-in schemes — Svalbard light terminal fallbacks", () => {
 
   it("auto-derives terminal-white from surface-canvas for light themes", () => {
     expect(svalbard.tokens["terminal-white"]).toBe(svalbard.tokens["surface-canvas"]);
+  });
+
+  it("sidebar vs canvas contrast ≥ 1.08", () => {
+    const ratio = wcagContrastRatio(
+      svalbard.tokens["surface-sidebar"],
+      svalbard.tokens["surface-canvas"]
+    );
+    expect(ratio).toBeGreaterThanOrEqual(1.08);
+  });
+
+  it("border-default vs canvas contrast ≥ 1.2", () => {
+    const ratio = wcagContrastRatio(
+      svalbard.tokens["border-default"],
+      svalbard.tokens["surface-canvas"]
+    );
+    expect(ratio).toBeGreaterThanOrEqual(1.2);
+  });
+
+  it("panel vs grid contrast ≥ 1.05", () => {
+    const ratio = wcagContrastRatio(
+      svalbard.tokens["surface-panel"],
+      svalbard.tokens["surface-grid"]
+    );
+    expect(ratio).toBeGreaterThanOrEqual(1.05);
+  });
+
+  it("text-primary meets WCAG AA (≥ 4.5:1) on panel", () => {
+    const ratio = wcagContrastRatio(
+      svalbard.tokens["text-primary"],
+      svalbard.tokens["surface-panel"]
+    );
+    expect(ratio).toBeGreaterThanOrEqual(4.5);
+  });
+
+  it("produces all required token keys", () => {
+    for (const key of APP_THEME_TOKEN_KEYS) {
+      expect(svalbard.tokens).toHaveProperty(key, expect.any(String));
+    }
+  });
+
+  it("passes all critical contrast checks", () => {
+    expect(getAppThemeWarnings(svalbard)).toEqual([]);
   });
 });
 
