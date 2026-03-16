@@ -38,8 +38,7 @@ export function getXtermCellDimensions(
   terminal: Terminal
 ): { width: number; height: number } | null {
   try {
-    const core = (terminal as Terminal & { _core?: XtermCoreRenderDimensions })
-      ._core;
+    const core = (terminal as Terminal & { _core?: XtermCoreRenderDimensions })._core;
     const dimensions = core?._renderService?.dimensions?.css?.cell;
     if (
       dimensions &&
