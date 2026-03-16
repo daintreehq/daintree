@@ -1,17 +1,22 @@
 import { events } from "./events.js";
-import { batchCheckLinkedPRs, type PRCheckCandidate, type LinkedPR } from "./GitHubService.js";
+import {
+  batchCheckLinkedPRs,
+  clearPRCaches,
+  type PRCheckCandidate,
+  type LinkedPR,
+} from "./GitHubService.js";
 import { logInfo, logWarn, logDebug } from "../utils/logger.js";
 import type { WorktreeSnapshot as WorktreeState } from "../../shared/types/workspace-host.js";
 
 const DEFAULT_POLL_INTERVAL_MS = 60 * 1000;
 
-const ERROR_BACKOFF_INTERVALS = [5 * 60 * 1000, 10 * 60 * 1000, 30 * 60 * 1000];
+const ERROR_BACKOFF_INTERVALS = [1 * 60 * 1000, 2 * 60 * 1000, 5 * 60 * 1000];
 
 const MAX_CONSECUTIVE_ERRORS = 3;
 const UPDATE_DEBOUNCE_MS = 100;
 
 // Slow-cadence revalidation for resolved PRs to detect state changes (merged/closed)
-const RESOLVED_REVALIDATION_INTERVAL_MS = 10 * 60 * 1000; // 10 minutes
+const RESOLVED_REVALIDATION_INTERVAL_MS = 90 * 1000; // 90 seconds
 
 interface WorktreeContext {
   issueNumber?: number;
@@ -43,7 +48,11 @@ class PullRequestService {
   private cwd: string = "";
   private isPolling: boolean = false;
   private consecutiveErrors: number = 0;
-  private isEnabled: boolean = true;
+  private nextRetryAt: number = 0;
+
+  get isEnabled(): boolean {
+    return this.nextRetryAt === 0 || Date.now() >= this.nextRetryAt;
+  }
 
   private candidates = new Map<string, WorktreeContext>();
   private resolvedWorktrees = new Set<string>();
@@ -134,7 +143,7 @@ class PullRequestService {
     this.updateDebounceTimer = setTimeout(() => {
       this.updateDebounceTimer = null;
 
-      if (this.hasUnresolvedCandidates()) {
+      if (this.hasUnresolvedCandidates() && this.isEnabled) {
         logDebug("Running debounced PR check", { candidateCount: this.candidates.size });
         void this.checkForPRs();
 
@@ -174,7 +183,7 @@ class PullRequestService {
     }
 
     this.isPolling = true;
-    this.isEnabled = true;
+    this.nextRetryAt = 0;
     this.consecutiveErrors = 0;
 
     logInfo("PullRequestService started", { intervalMs: this.pollIntervalMs });
@@ -206,11 +215,16 @@ class PullRequestService {
     if (!this.cwd) {
       return;
     }
-    this.isEnabled = true;
+    if (this.pollTimer) {
+      clearTimeout(this.pollTimer);
+      this.pollTimer = null;
+    }
+    this.nextRetryAt = 0;
     this.consecutiveErrors = 0;
+    clearPRCaches();
     await this.checkForPRs();
 
-    if (this.isPolling && !this.pollTimer && this.hasUnresolvedCandidates()) {
+    if (this.isPolling && this.hasUnresolvedCandidates()) {
       this.scheduleNextPoll();
     }
   }
@@ -221,7 +235,7 @@ class PullRequestService {
     this.resolvedWorktrees.clear();
     this.detectedPRs.clear();
     this.consecutiveErrors = 0;
-    this.isEnabled = true;
+    this.nextRetryAt = 0;
   }
 
   public destroy(): void {
@@ -233,7 +247,23 @@ class PullRequestService {
   }
 
   private scheduleNextPoll(): void {
-    if (!this.isPolling || !this.isEnabled) {
+    if (!this.isPolling) {
+      return;
+    }
+
+    if (!this.isEnabled) {
+      const delay = this.nextRetryAt - Date.now();
+      if (delay > 0) {
+        logDebug("Circuit breaker tripped - scheduling retry", { delayMs: delay });
+        this.pollTimer = setTimeout(() => {
+          this.pollTimer = null;
+          if (!this.isPolling) return;
+          logDebug("Circuit breaker recovery - running immediate check");
+          this.consecutiveErrors = 0;
+          this.nextRetryAt = 0;
+          void this.checkForPRs().then(() => this.scheduleNextPoll());
+        }, delay);
+      }
       return;
     }
 
@@ -265,12 +295,23 @@ class PullRequestService {
   }
 
   private scheduleRevalidation(): void {
-    if (!this.isPolling || !this.isEnabled) {
+    if (!this.isPolling) {
       return;
     }
 
     if (this.revalidationTimer) {
       clearTimeout(this.revalidationTimer);
+    }
+
+    if (!this.isEnabled) {
+      const delay = this.nextRetryAt - Date.now();
+      if (delay > 0) {
+        this.revalidationTimer = setTimeout(() => {
+          this.revalidationTimer = null;
+          this.scheduleRevalidation();
+        }, delay);
+      }
+      return;
     }
 
     this.revalidationTimer = setTimeout(() => {
@@ -453,11 +494,13 @@ class PullRequestService {
     logWarn("PR check failed", { error: errorMsg, consecutiveErrors: this.consecutiveErrors });
 
     if (this.consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
-      logWarn("Too many consecutive errors - disabling PR polling");
-      this.isEnabled = false;
+      const backoffIndex = Math.min(this.consecutiveErrors - 1, ERROR_BACKOFF_INTERVALS.length - 1);
+      const backoffMs = ERROR_BACKOFF_INTERVALS[backoffIndex];
+      this.nextRetryAt = Date.now() + backoffMs;
+      logWarn("Too many consecutive errors - pausing PR polling", { retryInMs: backoffMs });
       events.emit("ui:notify", {
         type: "warning",
-        message: "PR detection paused due to errors. Refresh to retry.",
+        message: "PR detection paused due to errors. Will retry automatically.",
         id: "pr-service-circuit-breaker",
       });
     }

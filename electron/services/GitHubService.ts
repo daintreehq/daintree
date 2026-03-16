@@ -641,6 +641,11 @@ export function clearGitHubCaches(): void {
   prTooltipCache.clear();
 }
 
+export function clearPRCaches(): void {
+  prListCache.clear();
+  prTooltipCache.clear();
+}
+
 function buildListCacheKey(
   type: "issue" | "pr",
   owner: string,
