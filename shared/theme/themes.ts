@@ -932,7 +932,7 @@ export const BUILT_IN_APP_SCHEMES: AppColorScheme[] = [
       "syntax-operator": "#006A71",
       "syntax-punctuation": "#3A4D5C",
       "syntax-link": "#2E5E82",
-      "syntax-quote": "#5A7485",
+      "syntax-quote": "#526D7E",
       "syntax-chip": "#006A71",
       "category-blue": "oklch(0.62 0.14 250)",
       "category-purple": "oklch(0.60 0.14 310)",

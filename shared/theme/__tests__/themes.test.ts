@@ -678,6 +678,25 @@ describe("Hokkaido built-in scheme", () => {
     expect(hokkaido.tokens["surface-canvas"]).toBe("#EEF3F7");
   });
 
+  it("has stepped surface hierarchy with panel lighter than canvas", () => {
+    expect(hokkaido.tokens["surface-panel"]).toBe("#FAFCFD");
+    expect(hokkaido.tokens["surface-sidebar"]).toBe("#DDE6EE");
+    expect(hokkaido.tokens["surface-grid"]).toBe("#CDD9E3");
+  });
+
+  it("overrides border tokens with visible hex values", () => {
+    expect(hokkaido.tokens["border-default"]).toBe("#B8CAD6");
+    expect(hokkaido.tokens["border-subtle"]).toBe("#D8E5ED");
+    expect(hokkaido.tokens["border-divider"]).toBe("#E5EFF4");
+    expect(hokkaido.tokens["border-strong"]).toBe("#AABFCC");
+  });
+
+  it("uses theme-appropriate activity indicators instead of neon green", () => {
+    expect(hokkaido.tokens["activity-active"]).not.toBe("#22c55e");
+    expect(hokkaido.tokens["activity-working"]).not.toBe("#22c55e");
+    expect(hokkaido.tokens["activity-waiting"]).not.toBe("#d97706");
+  });
+
   it("has all required token keys", () => {
     for (const key of APP_THEME_TOKEN_KEYS) {
       expect(hokkaido.tokens).toHaveProperty(key, expect.any(String));
@@ -696,6 +715,7 @@ describe("Hokkaido built-in scheme", () => {
     ["syntax-operator", "#006A71", 4.5],
     ["syntax-function", "#2D7A52", 4.5],
     ["syntax-punctuation", "#3A4D5C", 4.5],
+    ["syntax-quote", "#526D7E", 4.5],
   ] as const)("%s (%s) meets WCAG AA contrast (≥%s:1) on canvas", (token, _hex, minimum) => {
     const fg = hokkaido.tokens[token];
     const bg = hokkaido.tokens["surface-canvas"];
