@@ -2,7 +2,7 @@ import v8 from "node:v8";
 import path from "node:path";
 import { mkdirSync } from "node:fs";
 import { app } from "electron";
-import { logDebug, logWarn } from "../utils/logger.js";
+import { logDebug, logInfo, logWarn } from "../utils/logger.js";
 
 const POLL_INTERVAL_MS = 30_000;
 const SNAPSHOT_COOLDOWN_MS = 5 * 60 * 1000;
@@ -23,6 +23,10 @@ const EMA_ALPHA = 2 / (BUCKET_WINDOW + 1);
 const STARTUP_SUPPRESSION_MS = 15 * 60 * 1000;
 const TREND_WARN_MB_PER_HOUR = 5;
 
+export const WARMUP_INTERVALS = 5;
+export const PRESSURE_COUNT_TIER2 = 3;
+export const MITIGATION_COOLDOWN_MS = 10 * 60 * 1000;
+
 interface PidTrendState {
   startedAt: number;
   tickInBucket: number;
@@ -31,18 +35,29 @@ interface PidTrendState {
   emaHistory: number[];
 }
 
+export interface MemoryPressureActions {
+  clearCaches: () => Promise<void>;
+  hibernateIdleProjects: () => Promise<void>;
+}
+
 function getProcessMemoryMb(proc: Electron.ProcessMetric): number {
   return (proc.memory.privateBytes ?? proc.memory.workingSetSize) / 1024;
 }
 
-export function startAppMetricsMonitor(): () => void {
+export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => void {
   const snapshotCooldowns = new Map<number, number>();
   const trendState = new Map<number, PidTrendState>();
+  let pollCount = 0;
+  let consecutivePressureCount = 0;
+  let lastTier2At = 0;
+  let mitigationInFlight = false;
 
   const timer = setInterval(() => {
     try {
+      pollCount++;
       const metrics = app.getAppMetrics();
       const activePids = new Set<number>();
+      let hasPressure = false;
 
       for (const proc of metrics) {
         if (!MONITORED_TYPES.has(proc.type)) continue;
@@ -53,6 +68,7 @@ export function startAppMetricsMonitor(): () => void {
 
         const threshold = WARN_THRESHOLDS_MB[proc.type];
         if (threshold !== undefined && mb > threshold) {
+          hasPressure = true;
           logWarn("process-memory-threshold-exceeded", {
             pid: proc.pid,
             type: proc.type,
@@ -131,6 +147,47 @@ export function startAppMetricsMonitor(): () => void {
       for (const pid of snapshotCooldowns.keys()) {
         if (!activePids.has(pid)) snapshotCooldowns.delete(pid);
       }
+
+      if (pollCount <= WARMUP_INTERVALS || !actions) {
+        consecutivePressureCount = 0;
+        return;
+      }
+
+      if (hasPressure) {
+        consecutivePressureCount++;
+      } else {
+        consecutivePressureCount = 0;
+        return;
+      }
+
+      if (mitigationInFlight) return;
+
+      mitigationInFlight = true;
+      void (async () => {
+        try {
+          logInfo("memory-pressure-tier1-mitigation", {
+            pollCount,
+            consecutivePressureCount,
+          });
+          await actions.clearCaches();
+
+          if (
+            consecutivePressureCount >= PRESSURE_COUNT_TIER2 &&
+            Date.now() - lastTier2At >= MITIGATION_COOLDOWN_MS
+          ) {
+            logInfo("memory-pressure-tier2-mitigation", {
+              pollCount,
+              consecutivePressureCount,
+            });
+            await actions.hibernateIdleProjects();
+            lastTier2At = Date.now();
+          }
+        } catch (err) {
+          logWarn("memory-pressure-mitigation-failed", { error: String(err) });
+        } finally {
+          mitigationInFlight = false;
+        }
+      })();
     } catch (err) {
       logWarn("process-memory-poll-failed", { error: String(err) });
     }
