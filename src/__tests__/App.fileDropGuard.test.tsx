@@ -3,34 +3,7 @@
  */
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { renderHook, cleanup } from "@testing-library/react";
-import { useEffect } from "react";
-
-/**
- * Extracted copy of the drag-guard hook from App.tsx for isolated testing.
- * This avoids mounting the full App component with all its dependencies.
- */
-function useFileDropGuard() {
-  useEffect(() => {
-    const handleDragOver = (e: DragEvent) => {
-      if (!e.dataTransfer?.types.includes("Files")) return;
-      e.preventDefault();
-      e.dataTransfer.dropEffect = "none";
-    };
-
-    const handleDrop = (e: DragEvent) => {
-      if (!e.dataTransfer?.types.includes("Files")) return;
-      e.preventDefault();
-    };
-
-    document.addEventListener("dragover", handleDragOver);
-    document.addEventListener("drop", handleDrop);
-
-    return () => {
-      document.removeEventListener("dragover", handleDragOver);
-      document.removeEventListener("drop", handleDrop);
-    };
-  }, []);
-}
+import { useFileDropGuard } from "@/hooks/useFileDropGuard";
 
 function createDragEvent(
   type: string,
@@ -45,7 +18,7 @@ function createDragEvent(
   return { event, dataTransfer };
 }
 
-describe("file drop guard", () => {
+describe("useFileDropGuard", () => {
   afterEach(() => {
     cleanup();
   });
@@ -88,6 +61,34 @@ describe("file drop guard", () => {
     expect(event.defaultPrevented).toBe(false);
   });
 
+  it("skips events already handled by a child (defaultPrevented)", () => {
+    renderHook(() => useFileDropGuard());
+
+    const { event, dataTransfer } = createDragEvent("dragover", ["Files"]);
+    // Simulate a child component calling preventDefault before bubble reaches document
+    event.preventDefault();
+
+    document.dispatchEvent(event);
+
+    // dropEffect should remain unchanged — our handler skipped
+    expect(dataTransfer.dropEffect).toBe("copy");
+  });
+
+  it("catches file drops bubbling from a child element", () => {
+    renderHook(() => useFileDropGuard());
+
+    const child = document.createElement("div");
+    document.body.appendChild(child);
+
+    const { event, dataTransfer } = createDragEvent("dragover", ["Files"]);
+    child.dispatchEvent(event);
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(dataTransfer.dropEffect).toBe("none");
+
+    document.body.removeChild(child);
+  });
+
   it("removes listeners on unmount", () => {
     const addSpy = vi.spyOn(document, "addEventListener");
     const removeSpy = vi.spyOn(document, "removeEventListener");
@@ -103,9 +104,13 @@ describe("file drop guard", () => {
     expect(removeSpy).toHaveBeenCalledWith("drop", expect.any(Function));
 
     // Verify events are no longer handled after unmount
-    const { event } = createDragEvent("dragover", ["Files"]);
-    document.dispatchEvent(event);
-    expect(event.defaultPrevented).toBe(false);
+    const { event: dragEvent } = createDragEvent("dragover", ["Files"]);
+    document.dispatchEvent(dragEvent);
+    expect(dragEvent.defaultPrevented).toBe(false);
+
+    const { event: dropEvent } = createDragEvent("drop", ["Files"]);
+    document.dispatchEvent(dropEvent);
+    expect(dropEvent.defaultPrevented).toBe(false);
 
     addSpy.mockRestore();
     removeSpy.mockRestore();
