@@ -59,7 +59,12 @@ describe("getRestartBannerVariant", () => {
   it("returns none when restartError is present", () => {
     const result = getRestartBannerVariant({
       ...base,
-      restartError: { message: "failed", code: "RESTART_FAILED", timestamp: Date.now(), recoverable: false },
+      restartError: {
+        message: "failed",
+        code: "RESTART_FAILED",
+        timestamp: Date.now(),
+        recoverable: false,
+      },
     });
     expect(result).toEqual({ type: "none" });
   });
