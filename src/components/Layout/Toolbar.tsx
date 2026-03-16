@@ -412,7 +412,6 @@ export function Toolbar({
             key="claude"
             type="claude"
             availability={agentAvailability?.claude}
-
             data-toolbar-item=""
           />
         ),
@@ -424,7 +423,6 @@ export function Toolbar({
             key="gemini"
             type="gemini"
             availability={agentAvailability?.gemini}
-
             data-toolbar-item=""
           />
         ),
@@ -436,7 +434,6 @@ export function Toolbar({
             key="codex"
             type="codex"
             availability={agentAvailability?.codex}
-
             data-toolbar-item=""
           />
         ),
@@ -448,7 +445,6 @@ export function Toolbar({
             key="opencode"
             type="opencode"
             availability={agentAvailability?.opencode}
-
             data-toolbar-item=""
           />
         ),
@@ -460,7 +456,6 @@ export function Toolbar({
             key="cursor"
             type="cursor"
             availability={agentAvailability?.cursor}
-
             data-toolbar-item=""
           />
         ),
