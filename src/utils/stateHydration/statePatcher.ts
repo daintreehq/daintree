@@ -99,8 +99,8 @@ export function inferAgentIdFromTitle(
   title: string | undefined,
   kind: TerminalKind | undefined,
   existingAgentId: string | undefined,
-  terminalId: string,
-  logContext: string
+  _terminalId: string,
+  _logContext: string
 ): string | undefined {
   if (existingAgentId) return existingAgentId;
   if (kind !== "agent") return undefined;

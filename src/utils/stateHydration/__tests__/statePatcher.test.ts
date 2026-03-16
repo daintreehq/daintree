@@ -277,7 +277,7 @@ describe("buildArgsForRespawn", () => {
         agentId: "claude",
         cwd: "/p",
         location: "grid",
-        exitBehavior: "close",
+        exitBehavior: "keep",
       },
       "agent",
       "/p",
@@ -290,14 +290,14 @@ describe("buildArgsForRespawn", () => {
 
   it("preserves exitBehavior for non-agent panels", () => {
     const result = buildArgsForRespawn(
-      { id: "t1", kind: "terminal" as const, cwd: "/p", location: "grid", exitBehavior: "close" },
+      { id: "t1", kind: "terminal" as const, cwd: "/p", location: "grid", exitBehavior: "keep" },
       "terminal",
       "/p",
       undefined,
       false,
       undefined
     );
-    expect(result.exitBehavior).toBe("close");
+    expect(result.exitBehavior).toBe("keep");
   });
 });
 
