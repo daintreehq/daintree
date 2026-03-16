@@ -199,6 +199,21 @@ describe("terminalInputStore", () => {
       expect(useTerminalInputStore.getState().pendingDrafts.size).toBe(0);
       expect(useTerminalInputStore.getState().pendingDraftRevision).toBe(0);
     });
+
+    it("should clear commandHistory, historyIndex, and tempDraft", () => {
+      useTerminalInputStore.getState().addToHistory("term-1", "echo hello");
+      useTerminalInputStore.getState().navigateHistory("term-1", "up", "current-input");
+
+      expect(useTerminalInputStore.getState().commandHistory.size).toBe(1);
+      expect(useTerminalInputStore.getState().historyIndex.has("term-1")).toBe(true);
+      expect(useTerminalInputStore.getState().tempDraft.has("term-1")).toBe(true);
+
+      useTerminalInputStore.getState().clearAllDraftInputs();
+
+      expect(useTerminalInputStore.getState().commandHistory.size).toBe(0);
+      expect(useTerminalInputStore.getState().historyIndex.size).toBe(0);
+      expect(useTerminalInputStore.getState().tempDraft.size).toBe(0);
+    });
   });
 
   describe("stashed editor states", () => {
