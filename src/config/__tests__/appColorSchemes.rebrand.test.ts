@@ -119,7 +119,7 @@ describe("appColorSchemes rebrand — semantic color separation", () => {
     it("activity-working is green, not accent-primary", () => {
       const tokens = getScheme("serengeti").tokens;
       expect(tokens["activity-working"]).not.toBe(tokens["accent-primary"]);
-      expect(tokens["activity-working"]).toBe("#22c55e");
+      expect(tokens["activity-working"]).toBe("#1D9B5E");
     });
 
     it("activity-active matches activity-working (same green family)", () => {
