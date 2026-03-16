@@ -65,6 +65,7 @@ export function GitHubResourceList({
   const [loadMoreError, setLoadMoreError] = useState<string | null>(null);
   const [exactNumberNotFound, setExactNumberNotFound] = useState<number | null>(null);
   const [activeIndex, setActiveIndex] = useState(-1);
+  const [sortPopoverOpen, setSortPopoverOpen] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
 
@@ -498,11 +499,12 @@ export function GitHubResourceList({
               </button>
             )}
           </div>
-          <Popover>
+          <Popover open={sortPopoverOpen} onOpenChange={setSortPopoverOpen}>
             <PopoverTrigger asChild>
               <button
                 type="button"
                 aria-label={`Sort ${type === "issue" ? "issues" : "pull requests"}`}
+                aria-haspopup="dialog"
                 className={cn(
                   "relative flex items-center justify-center w-7 h-7 rounded shrink-0",
                   "text-canopy-text/60 hover:text-canopy-text hover:bg-tint/[0.06]",
@@ -516,7 +518,19 @@ export function GitHubResourceList({
                 )}
               </button>
             </PopoverTrigger>
-            <PopoverContent align="end" sideOffset={8} className="w-48 p-3">
+            <PopoverContent
+              align="end"
+              sideOffset={8}
+              className="w-48 p-3"
+              onMouseDown={(e: React.MouseEvent) => e.stopPropagation()}
+              onTouchStart={(e: React.TouchEvent) => e.stopPropagation()}
+              onKeyDown={(e: React.KeyboardEvent) => {
+                if (e.key === "Escape") {
+                  e.stopPropagation();
+                  setSortPopoverOpen(false);
+                }
+              }}
+            >
               <div className="text-[10px] font-medium text-canopy-text/50 uppercase tracking-wide mb-2">
                 Sort by
               </div>
