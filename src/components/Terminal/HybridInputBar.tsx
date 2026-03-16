@@ -2097,9 +2097,9 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
             ref={inputShellRef}
             className={cn(
               "group/shell relative",
-              "flex w-full items-center gap-1.5 rounded-sm border border-border-subtle bg-overlay-soft py-1 shadow-[0_6px_12px_rgba(0,0,0,0.18)] transition-colors",
+              "flex w-full items-center gap-1.5 rounded-sm border border-border-subtle bg-overlay-soft py-1 shadow-[0_6px_12px_var(--color-scrim-soft)] transition-colors",
               "group-hover:border-border-default group-hover:bg-overlay-medium",
-              "focus-within:border-border-strong focus-within:ring-1 focus-within:ring-overlay-emphasis focus-within:bg-overlay-soft",
+              "focus-within:border-canopy-accent/45 focus-within:ring-1 focus-within:ring-canopy-accent/16 focus-within:bg-overlay-medium",
               isVoiceActiveForPanel &&
                 "border-canopy-accent/60 bg-canopy-accent/[0.12] shadow-[0_0_0_1px_rgba(var(--theme-accent-rgb),0.35),0_0_16px_rgba(var(--theme-accent-rgb),0.15)]",
               isDragOverFiles && "border-canopy-accent/60 ring-1 ring-canopy-accent/30",

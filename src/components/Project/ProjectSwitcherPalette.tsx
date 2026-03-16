@@ -83,15 +83,20 @@ function ProjectListItem({
       className={cn(
         "group relative w-full flex items-center gap-3 px-3 py-2 rounded-[var(--radius-md)] text-left transition-colors border border-transparent",
         project.isActive
-          ? cn("text-canopy-text", index === selectedIndex && "bg-tint/[0.04]")
+          ? cn(
+              "text-canopy-text",
+              index === selectedIndex && "bg-overlay-soft border-border-subtle"
+            )
           : project.isMissing
             ? cn(
                 "text-canopy-text/50",
-                index === selectedIndex ? "bg-tint/[0.04]" : "hover:bg-overlay-subtle"
+                index === selectedIndex
+                  ? "bg-overlay-soft border-border-subtle"
+                  : "hover:bg-overlay-soft"
               )
             : index === selectedIndex
-              ? "bg-tint/[0.04] text-canopy-text cursor-pointer"
-              : "text-canopy-text/70 hover:bg-overlay-subtle hover:text-canopy-text cursor-pointer"
+              ? "bg-overlay-soft border-border-subtle text-canopy-text cursor-pointer"
+              : "text-canopy-text/70 hover:bg-overlay-soft hover:text-canopy-text cursor-pointer"
       )}
       onClick={() => !project.isActive && !project.isMissing && onSelect(project)}
     >

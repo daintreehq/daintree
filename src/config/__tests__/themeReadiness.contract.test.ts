@@ -13,8 +13,14 @@ const CRITICAL_THEME_FILES = [
   "src/components/DevPreview/ConsoleDrawer.tsx",
   "src/components/DevPreview/DevPreviewPane.tsx",
   "src/components/DevPreview/DevPreviewToolbar.tsx",
+  "src/components/Layout/Toolbar.tsx",
+  "src/components/Project/ProjectSwitcher.tsx",
+  "src/components/Project/QuickRun.tsx",
+  "src/components/Terminal/HybridInputBar.tsx",
   "src/components/Terminal/XtermAdapter.tsx",
   "src/components/Worktree/WorktreeCard/WorktreeHeader.tsx",
+  "src/components/Worktree/WorktreeCard/WorktreeDetailsSection.tsx",
+  "src/components/Worktree/WorktreeCard/WorktreeTerminalSection.tsx",
 ] as const;
 
 const FORBIDDEN_PATTERNS: Array<[RegExp, string]> = [

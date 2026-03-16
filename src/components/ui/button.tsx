@@ -14,14 +14,15 @@ const buttonVariants = cva(
         destructive:
           "bg-destructive text-text-inverse [text-shadow:0_1px_0_rgba(255,255,255,0.15)] ring-1 ring-tint/20 shadow-sm shadow-black/40 inset-shadow-[0_1px_0_rgba(255,255,255,0.15)] hover:brightness-110 hover:shadow-destructive/20 active:brightness-95 active:inset-shadow-none focus-visible:ring-destructive",
         outline:
-          "ring-1 ring-tint/10 bg-overlay-soft backdrop-blur-md text-canopy-text shadow-sm shadow-black/20 hover:bg-overlay-strong hover:ring-tint/20 hover:text-accent-foreground active:bg-overlay-soft active:shadow-none",
+          "ring-1 ring-border-subtle bg-surface-panel-elevated/95 backdrop-blur-md text-canopy-text shadow-sm shadow-black/10 inset-shadow-[0_1px_0_var(--color-overlay-soft)] hover:bg-surface-panel-elevated hover:ring-border-default hover:text-canopy-text active:bg-overlay-soft active:shadow-none",
         secondary:
           "bg-secondary text-secondary-foreground ring-1 ring-tint/[0.08] shadow-sm shadow-black/20 hover:bg-secondary/90 active:shadow-none",
-        ghost: "text-canopy-text/70 hover:bg-overlay-strong hover:text-canopy-text",
+        ghost:
+          "text-text-secondary hover:bg-overlay-soft hover:text-canopy-text focus-visible:text-canopy-text",
         link: "text-primary underline-offset-4 hover:underline",
         subtle:
-          "bg-overlay-soft text-canopy-text/60 ring-1 ring-tint/[0.06] hover:bg-overlay-strong hover:text-canopy-text",
-        pill: "rounded-full bg-overlay-soft backdrop-blur-md ring-1 ring-canopy-border/50 text-canopy-text/70 hover:bg-overlay-strong hover:ring-canopy-border hover:text-canopy-text",
+          "bg-surface-panel text-text-secondary ring-1 ring-border-subtle hover:bg-surface-panel-elevated hover:ring-border-default hover:text-canopy-text",
+        pill: "rounded-full bg-surface-panel backdrop-blur-md ring-1 ring-border-subtle text-text-secondary hover:bg-surface-panel-elevated hover:ring-border-default hover:text-canopy-text",
         "ghost-danger":
           "text-status-error hover:bg-status-error/10 focus-visible:ring-status-error",
         "ghost-success": "text-status-success hover:bg-status-success/10",

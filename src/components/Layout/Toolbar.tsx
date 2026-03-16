@@ -1119,14 +1119,14 @@ export function Toolbar({
             <button
               data-toolbar-item=""
               className={cn(
-                "flex items-center justify-center gap-2 px-3 h-9 rounded-[var(--radius-md)] select-none border border-tint/10 shadow-[inset_0_1px_0_var(--color-overlay-strong)] app-no-drag pointer-events-auto outline-none min-w-0 max-w-full overflow-hidden",
-                "opacity-80 hover:opacity-100 transition-opacity cursor-pointer"
+                "app-no-drag pointer-events-auto flex h-9 min-w-0 max-w-full items-center justify-center gap-2 overflow-hidden rounded-[var(--radius-md)] border border-border-subtle px-3 shadow-[inset_0_1px_0_var(--color-overlay-strong)] outline-none",
+                "cursor-pointer transition-colors hover:border-border-default hover:shadow-[inset_0_1px_0_var(--color-overlay-emphasis)]"
               )}
               data-testid="project-switcher-trigger"
               style={{
                 background: currentProject
-                  ? getProjectGradient(currentProject.color)
-                  : "linear-gradient(135deg, var(--color-overlay-soft), var(--color-overlay-subtle))",
+                  ? `linear-gradient(180deg, color-mix(in oklab, var(--color-overlay-soft) 70%, transparent), color-mix(in oklab, var(--color-overlay-medium) 75%, transparent)), ${getProjectGradient(currentProject.color)}`
+                  : "linear-gradient(135deg, var(--color-surface-panel-elevated), var(--color-surface-panel))",
               }}
               onClick={() => projectSwitcher.open("dropdown")}
             >
@@ -1135,18 +1135,18 @@ export function Toolbar({
                   <span className="text-base leading-none shrink-0" aria-label="Project emoji">
                     {currentProject.emoji}
                   </span>
-                  <span className="text-xs font-medium text-tint/90 tracking-wide truncate min-w-0">
+                  <span className="min-w-0 truncate text-xs font-semibold tracking-wide text-canopy-text [text-shadow:0_1px_0_rgba(255,255,255,0.18)]">
                     {currentProject.name}
                   </span>
                   {branchName && (
                     <span
-                      className="font-mono text-[10px] tabular-nums text-tint/70 px-1.5 py-0.5 rounded-full bg-tint/10 shrink-0"
+                      className="shrink-0 rounded-full border border-border-subtle bg-overlay-soft px-1.5 py-0.5 font-mono text-[10px] tabular-nums text-text-secondary"
                       aria-label={`Current branch ${branchName}`}
                     >
                       {branchName}
                     </span>
                   )}
-                  <ChevronsUpDown className="h-3 w-3 text-tint/50 ml-0.5 shrink-0" />
+                  <ChevronsUpDown className="ml-0.5 h-3 w-3 shrink-0 text-text-muted" />
                 </>
               ) : (
                 <>
@@ -1156,7 +1156,7 @@ export function Toolbar({
                   <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-canopy-accent/20 text-canopy-accent shrink-0">
                     Beta
                   </span>
-                  <ChevronsUpDown className="h-3 w-3 text-canopy-text/50 ml-0.5 shrink-0" />
+                  <ChevronsUpDown className="ml-0.5 h-3 w-3 shrink-0 text-text-muted" />
                 </>
               )}
             </button>

@@ -67,18 +67,11 @@ export function createCanopyTokens(
       | "syntax-chip"
     >
 ): AppColorSchemeTokens {
-  const accentSoft =
-    tokens["accent-soft"] ??
-    (tokens["accent-primary"].startsWith("#")
-      ? `rgba(${hexToRgbTriplet(tokens["accent-primary"])}, 0.18)`
-      : `color-mix(in oklab, ${tokens["accent-primary"]} 18%, transparent)`);
-  const accentMuted =
-    tokens["accent-muted"] ??
-    (tokens["accent-primary"].startsWith("#")
-      ? `rgba(${hexToRgbTriplet(tokens["accent-primary"])}, 0.3)`
-      : `color-mix(in oklab, ${tokens["accent-primary"]} 30%, transparent)`);
-
   const dark = type === "dark";
+  const lightInk = tokens["text-primary"];
+  const overlayTone = dark ? "#ffffff" : lightInk;
+  const accentSoft = tokens["accent-soft"] ?? withAlpha(tokens["accent-primary"], 0.18);
+  const accentMuted = tokens["accent-muted"] ?? withAlpha(tokens["accent-primary"], 0.3);
 
   return {
     ...GITHUB_TOKENS,
@@ -94,27 +87,18 @@ export function createCanopyTokens(
     "category-pink": tokens["category-pink"] ?? "oklch(0.72 0.13 340)",
     "category-violet": tokens["category-violet"] ?? "oklch(0.7 0.13 295)",
     "category-slate": tokens["category-slate"] ?? "oklch(0.65 0.04 240)",
-    "border-subtle":
-      tokens["border-subtle"] ?? (dark ? "rgba(255, 255, 255, 0.08)" : "rgba(0, 0, 0, 0.06)"),
-    "border-strong":
-      tokens["border-strong"] ?? (dark ? "rgba(255, 255, 255, 0.14)" : "rgba(0, 0, 0, 0.12)"),
-    "border-divider":
-      tokens["border-divider"] ?? (dark ? "rgba(255, 255, 255, 0.05)" : "rgba(0, 0, 0, 0.08)"),
+    "border-subtle": tokens["border-subtle"] ?? withAlpha(overlayTone, dark ? 0.08 : 0.06),
+    "border-strong": tokens["border-strong"] ?? withAlpha(overlayTone, dark ? 0.14 : 0.12),
+    "border-divider": tokens["border-divider"] ?? withAlpha(overlayTone, dark ? 0.05 : 0.08),
     "accent-foreground": tokens["accent-foreground"] ?? tokens["text-inverse"],
     "accent-soft": accentSoft,
     "accent-muted": accentMuted,
-    "focus-ring":
-      tokens["focus-ring"] ?? (dark ? "rgba(255, 255, 255, 0.18)" : "rgba(0, 0, 0, 0.15)"),
-    "overlay-subtle":
-      tokens["overlay-subtle"] ?? (dark ? "rgba(255, 255, 255, 0.02)" : "rgba(0, 0, 0, 0.04)"),
-    "overlay-soft":
-      tokens["overlay-soft"] ?? (dark ? "rgba(255, 255, 255, 0.03)" : "rgba(0, 0, 0, 0.06)"),
-    "overlay-medium":
-      tokens["overlay-medium"] ?? (dark ? "rgba(255, 255, 255, 0.04)" : "rgba(0, 0, 0, 0.08)"),
-    "overlay-strong":
-      tokens["overlay-strong"] ?? (dark ? "rgba(255, 255, 255, 0.06)" : "rgba(0, 0, 0, 0.10)"),
-    "overlay-emphasis":
-      tokens["overlay-emphasis"] ?? (dark ? "rgba(255, 255, 255, 0.1)" : "rgba(0, 0, 0, 0.14)"),
+    "focus-ring": tokens["focus-ring"] ?? withAlpha(overlayTone, dark ? 0.18 : 0.15),
+    "overlay-subtle": tokens["overlay-subtle"] ?? withAlpha(overlayTone, dark ? 0.02 : 0.04),
+    "overlay-soft": tokens["overlay-soft"] ?? withAlpha(overlayTone, dark ? 0.03 : 0.06),
+    "overlay-medium": tokens["overlay-medium"] ?? withAlpha(overlayTone, dark ? 0.04 : 0.08),
+    "overlay-strong": tokens["overlay-strong"] ?? withAlpha(overlayTone, dark ? 0.06 : 0.1),
+    "overlay-emphasis": tokens["overlay-emphasis"] ?? withAlpha(overlayTone, dark ? 0.1 : 0.14),
     "scrim-soft": tokens["scrim-soft"] ?? (dark ? "rgba(0, 0, 0, 0.2)" : "rgba(0, 0, 0, 0.12)"),
     "scrim-medium":
       tokens["scrim-medium"] ?? (dark ? "rgba(0, 0, 0, 0.45)" : "rgba(0, 0, 0, 0.30)"),
@@ -125,6 +109,14 @@ export function createCanopyTokens(
     "terminal-bright-black": tokens["terminal-bright-black"] ?? tokens["activity-idle"],
     ...tokens,
   };
+}
+
+function withAlpha(color: string, alpha: number): string {
+  if (color.startsWith("#")) {
+    return `rgba(${hexToRgbTriplet(color)}, ${alpha})`;
+  }
+
+  return `color-mix(in oklab, ${color} ${(alpha * 100).toFixed(1)}%, transparent)`;
 }
 
 const INTERNAL_LIGHT_FALLBACK_SCHEME: AppColorScheme = {
@@ -264,15 +256,15 @@ export const BUILT_IN_APP_SCHEMES: AppColorScheme[] = [
     builtin: true,
     tokens: createCanopyTokens("light", {
       "surface-canvas": "#F6F0E4",
-      "surface-sidebar": "#EDE7DB",
-      "surface-panel": "#FDFCFA",
-      "surface-panel-elevated": "#FFFFFF",
+      "surface-sidebar": "#E5DDCF",
+      "surface-panel": "#FFF9F1",
+      "surface-panel-elevated": "#FFFDF9",
       "surface-grid": "#E8E2D6",
       "text-primary": "#1B3626",
-      "text-secondary": "color-mix(in oklab, #1B3626 65%, #F6F0E4)",
-      "text-muted": "#8B8C86",
+      "text-secondary": "color-mix(in oklab, #1B3626 74%, #F6F0E4)",
+      "text-muted": "#6E746D",
       "text-inverse": "#1B3626",
-      "border-default": "#D8D2C4",
+      "border-default": "#CFC4B3",
       "accent-primary": "#3F9366",
       "accent-foreground": "#08140e",
       "status-success": "#2A7A4B",
@@ -284,8 +276,8 @@ export const BUILT_IN_APP_SCHEMES: AppColorScheme[] = [
       "activity-working": "#22c55e",
       "activity-waiting": "#B08800",
       "terminal-black": "#1B3626",
-      "terminal-white": "#8B8C86",
-      "terminal-selection": "rgba(43, 85, 115, 0.2)",
+      "terminal-white": "#6E746D",
+      "terminal-selection": "rgba(43, 85, 115, 0.24)",
       "terminal-red": "#C0392B",
       "terminal-green": "#2A7A4B",
       "terminal-yellow": "#B08800",

@@ -85,18 +85,18 @@ const REQUIRED_TOKENS = {
 describe("createCanopyTokens — light mode derived defaults", () => {
   const lightTokens = createCanopyTokens("light", REQUIRED_TOKENS);
 
-  it("sets black-based border defaults for light mode", () => {
-    expect(lightTokens["border-subtle"]).toBe("rgba(0, 0, 0, 0.06)");
-    expect(lightTokens["border-strong"]).toBe("rgba(0, 0, 0, 0.12)");
-    expect(lightTokens["border-divider"]).toBe("rgba(0, 0, 0, 0.08)");
+  it("derives border defaults from the theme's foreground ink for light mode", () => {
+    expect(lightTokens["border-subtle"]).toBe("rgba(26, 26, 26, 0.06)");
+    expect(lightTokens["border-strong"]).toBe("rgba(26, 26, 26, 0.12)");
+    expect(lightTokens["border-divider"]).toBe("rgba(26, 26, 26, 0.08)");
   });
 
-  it("sets black-based overlay defaults for light mode", () => {
-    expect(lightTokens["overlay-subtle"]).toBe("rgba(0, 0, 0, 0.04)");
-    expect(lightTokens["overlay-soft"]).toBe("rgba(0, 0, 0, 0.06)");
-    expect(lightTokens["overlay-medium"]).toBe("rgba(0, 0, 0, 0.08)");
-    expect(lightTokens["overlay-strong"]).toBe("rgba(0, 0, 0, 0.10)");
-    expect(lightTokens["overlay-emphasis"]).toBe("rgba(0, 0, 0, 0.14)");
+  it("derives overlay defaults from the theme's foreground ink for light mode", () => {
+    expect(lightTokens["overlay-subtle"]).toBe("rgba(26, 26, 26, 0.04)");
+    expect(lightTokens["overlay-soft"]).toBe("rgba(26, 26, 26, 0.06)");
+    expect(lightTokens["overlay-medium"]).toBe("rgba(26, 26, 26, 0.08)");
+    expect(lightTokens["overlay-strong"]).toBe("rgba(26, 26, 26, 0.1)");
+    expect(lightTokens["overlay-emphasis"]).toBe("rgba(26, 26, 26, 0.14)");
   });
 
   it("sets lighter scrim defaults for light mode", () => {
@@ -105,8 +105,14 @@ describe("createCanopyTokens — light mode derived defaults", () => {
     expect(lightTokens["scrim-strong"]).toBe("rgba(0, 0, 0, 0.45)");
   });
 
-  it("sets black-based focus-ring for light mode", () => {
-    expect(lightTokens["focus-ring"]).toBe("rgba(0, 0, 0, 0.15)");
+  it("derives focus-ring from the theme's foreground ink for light mode", () => {
+    expect(lightTokens["focus-ring"]).toBe("rgba(26, 26, 26, 0.15)");
+  });
+
+  it("keeps the default Bondi overlays warm instead of neutral black", () => {
+    const bondi = BUILT_IN_APP_SCHEMES.find((scheme) => scheme.id === "bondi")!;
+    expect(bondi.tokens["overlay-soft"]).toBe("rgba(27, 54, 38, 0.06)");
+    expect(bondi.tokens["border-divider"]).toBe("rgba(27, 54, 38, 0.08)");
   });
 });
 
@@ -211,7 +217,7 @@ describe("built-in schemes — Bondi light theme", () => {
 
   it("has explicitly overridden terminal-black and terminal-white", () => {
     expect(bondi.tokens["terminal-black"]).toBe("#1B3626");
-    expect(bondi.tokens["terminal-white"]).toBe("#8B8C86");
+    expect(bondi.tokens["terminal-white"]).toBe("#6E746D");
   });
 
   it("has the correct accent-primary", () => {
@@ -220,6 +226,14 @@ describe("built-in schemes — Bondi light theme", () => {
 
   it("has sandstone cream canvas", () => {
     expect(bondi.tokens["surface-canvas"]).toBe("#F6F0E4");
+  });
+
+  it("uses stronger light chrome tokens to keep cards and inputs separated", () => {
+    expect(bondi.tokens["surface-sidebar"]).toBe("#E5DDCF");
+    expect(bondi.tokens["surface-panel"]).toBe("#FFF9F1");
+    expect(bondi.tokens["surface-panel-elevated"]).toBe("#FFFDF9");
+    expect(bondi.tokens["text-muted"]).toBe("#6E746D");
+    expect(bondi.tokens["border-default"]).toBe("#CFC4B3");
   });
 
   it("uses lower oklch lightness for category colors", () => {
