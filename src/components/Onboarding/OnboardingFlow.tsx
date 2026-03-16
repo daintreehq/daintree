@@ -4,6 +4,7 @@ import { NewsletterStep } from "./NewsletterStep";
 import { TelemetryConsentStep } from "./TelemetryConsentStep";
 import { AgentSelectionStep } from "@/components/Setup/AgentSelectionStep";
 import { AgentSetupWizard } from "@/components/Setup/AgentSetupWizard";
+import { OnboardingProgressIndicator } from "./OnboardingProgressIndicator";
 import type { OnboardingState } from "@shared/types";
 import type { CliAvailability } from "@shared/types";
 
@@ -237,8 +238,15 @@ export function OnboardingFlow({
   // Onboarding already complete
   if (state.completed || !currentStep) return null;
 
+  const currentStepIndex = STEP_ORDER.indexOf(currentStep);
+
   return (
     <>
+      <OnboardingProgressIndicator
+        currentIndex={currentStepIndex}
+        total={STEP_ORDER.length}
+      />
+
       {currentStep === "newsletter" && (
         <NewsletterStep ref={headingRef} onDismiss={handleNewsletterDismiss} />
       )}

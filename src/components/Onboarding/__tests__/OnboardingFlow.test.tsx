@@ -103,6 +103,114 @@ vi.mock("@/components/Setup/AgentSetupWizard", () => ({
 
 import { OnboardingFlow } from "../OnboardingFlow";
 
+describe("OnboardingFlow progress indicator", () => {
+  const defaultProps = {
+    availability: {} as import("@shared/types").CliAvailability,
+    onRefreshSettings: vi.fn(() => Promise.resolve()),
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    onboardingMock.get.mockResolvedValue({ ...defaultOnboardingState });
+  });
+
+  it("renders progress indicator with 4 dots on first step", async () => {
+    const { baseElement } = await act(async () => {
+      return render(<OnboardingFlow {...defaultProps} />);
+    });
+
+    await vi.waitFor(() => {
+      const indicator = baseElement.ownerDocument.querySelector(
+        '[data-testid="onboarding-progress"]'
+      );
+      expect(indicator).toBeTruthy();
+    });
+
+    const indicator = baseElement.ownerDocument.querySelector(
+      '[data-testid="onboarding-progress"]'
+    )!;
+    const dots = indicator.querySelectorAll('[class*="rounded-full"]');
+    expect(dots).toHaveLength(4);
+    expect(dots[0]?.getAttribute("aria-current")).toBe("step");
+    expect(dots[1]?.getAttribute("aria-current")).toBeNull();
+  });
+
+  it("advances active dot when step changes", async () => {
+    const { getByTestId, baseElement } = await act(async () => {
+      return render(<OnboardingFlow {...defaultProps} />);
+    });
+
+    await vi.waitFor(() => {
+      expect(trackMock).toHaveBeenCalledWith("onboarding_step_viewed", expect.any(Object));
+    });
+
+    // Advance to telemetry step
+    await act(async () => {
+      getByTestId("newsletter-dismiss").click();
+    });
+
+    await vi.waitFor(() => {
+      const indicator = baseElement.ownerDocument.querySelector(
+        '[data-testid="onboarding-progress"]'
+      )!;
+      const dots = indicator.querySelectorAll('[class*="rounded-full"]');
+      expect(dots[1]?.getAttribute("aria-current")).toBe("step");
+      expect(dots[0]?.getAttribute("aria-current")).toBeNull();
+    });
+  });
+
+  it("is not rendered after onboarding completes", async () => {
+    const { getByTestId, baseElement } = await act(async () => {
+      return render(<OnboardingFlow {...defaultProps} />);
+    });
+
+    await vi.waitFor(() => {
+      expect(trackMock).toHaveBeenCalled();
+    });
+
+    // Complete the flow: newsletter → telemetry → skip agent selection
+    await act(async () => {
+      getByTestId("newsletter-dismiss").click();
+    });
+    await act(async () => {
+      getByTestId("accept").click();
+    });
+    await vi.waitFor(() => {
+      expect(getByTestId("agent-selection-step")).toBeTruthy();
+    });
+    await act(async () => {
+      getByTestId("skip").click();
+    });
+
+    await vi.waitFor(() => {
+      expect(trackMock).toHaveBeenCalledWith("onboarding_completed", expect.any(Object));
+    });
+
+    const indicator = baseElement.ownerDocument.querySelector(
+      '[data-testid="onboarding-progress"]'
+    );
+    expect(indicator).toBeNull();
+  });
+
+  it("includes screen reader text with step count", async () => {
+    const { baseElement } = await act(async () => {
+      return render(<OnboardingFlow {...defaultProps} />);
+    });
+
+    await vi.waitFor(() => {
+      const indicator = baseElement.ownerDocument.querySelector(
+        '[data-testid="onboarding-progress"]'
+      );
+      expect(indicator).toBeTruthy();
+    });
+
+    const srText = baseElement.ownerDocument
+      .querySelector('[data-testid="onboarding-progress"]')!
+      .querySelector(".sr-only");
+    expect(srText?.textContent).toBe("Step 1 of 4");
+  });
+});
+
 describe("OnboardingFlow telemetry tracking", () => {
   const defaultProps = {
     availability: {} as import("@shared/types").CliAvailability,
