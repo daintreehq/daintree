@@ -40,6 +40,7 @@ import { useWorktreePalette } from "./hooks/useWorktreePalette";
 import { useQuickCreatePalette } from "./hooks/useQuickCreatePalette";
 import { useDoubleShift } from "./hooks/useDoubleShift";
 import { useMcpBridge } from "./hooks/useMcpBridge";
+import { useFileDropGuard } from "./hooks/useFileDropGuard";
 import { createTooltipWithShortcut } from "./lib/platform";
 import { useCrashRecoveryGate } from "./hooks/app/useCrashRecoveryGate";
 import { CrashRecoveryDialog } from "./components/Recovery/CrashRecoveryDialog";
@@ -853,6 +854,8 @@ function App() {
   useEffect(() => {
     voiceRecordingService.initialize();
   }, []);
+
+  useFileDropGuard();
 
   if (!isElectronAvailable()) {
     return (
