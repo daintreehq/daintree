@@ -191,6 +191,8 @@ const CHANNELS = {
   TERMINAL_BACKEND_READY: "terminal:backend-ready",
   TERMINAL_SEND_KEY: "terminal:send-key",
   TERMINAL_AGENT_TITLE_STATE: "terminal:agent-title-state",
+  TERMINAL_REDUCE_SCROLLBACK: "terminal:reduce-scrollback",
+  TERMINAL_RESTORE_SCROLLBACK: "terminal:restore-scrollback",
 
   // Files channels
   FILES_SEARCH: "files:search",
