@@ -253,20 +253,39 @@ describe("built-in schemes — Bondi light theme", () => {
   });
 
   it("has sandstone cream canvas", () => {
-    expect(bondi.tokens["surface-canvas"]).toBe("#F6F0E4");
+    expect(bondi.tokens["surface-canvas"]).toBe("#F3EFE4");
   });
 
   it("uses stronger light chrome tokens to keep cards and inputs separated", () => {
-    expect(bondi.tokens["surface-sidebar"]).toBe("#E5DDCF");
-    expect(bondi.tokens["surface-panel"]).toBe("#FFF9F1");
-    expect(bondi.tokens["surface-panel-elevated"]).toBe("#FFFDF9");
+    expect(bondi.tokens["surface-sidebar"]).toBe("#E6DEC9");
+    expect(bondi.tokens["surface-panel"]).toBe("#FFFCF7");
+    expect(bondi.tokens["surface-panel-elevated"]).toBe("#FFFFFF");
     expect(bondi.tokens["text-muted"]).toBe("#6E746D");
-    expect(bondi.tokens["border-default"]).toBe("#CFC4B3");
+    expect(bondi.tokens["border-default"]).toBe("#C8B89E");
+  });
+
+  it("has explicit overlay-subtle override for sufficient contrast", () => {
+    expect(bondi.tokens["overlay-subtle"]).toBe("rgba(27, 54, 38, 0.06)");
+  });
+
+  it("has corrected text-inverse (light cream, not same as text-primary)", () => {
+    expect(bondi.tokens["text-inverse"]).toBe("#F3EFE4");
+    expect(bondi.tokens["text-inverse"]).not.toBe(bondi.tokens["text-primary"]);
+  });
+
+  it("uses muted coastal activity colors instead of neon green", () => {
+    expect(bondi.tokens["activity-active"]).toBe("#1D9B5E");
+    expect(bondi.tokens["activity-working"]).toBe("#1D9B5E");
+    expect(bondi.tokens["activity-waiting"]).toBe("#C17F2E");
   });
 
   it("uses lower oklch lightness for category colors", () => {
     expect(bondi.tokens["category-blue"]).toBe("oklch(0.62 0.14 250)");
     expect(bondi.tokens["category-slate"]).toBe("oklch(0.58 0.04 240)");
+  });
+
+  it("passes critical contrast validation with no warnings", () => {
+    expect(getAppThemeWarnings(bondi)).toEqual([]);
   });
 });
 
