@@ -1,6 +1,7 @@
 import type { AgentState } from "../../shared/types/domain.js";
 import { store } from "../store.js";
 import { projectStore } from "./ProjectStore.js";
+import { logInfo, logError } from "../utils/logger.js";
 
 export interface HibernationConfig {
   enabled: boolean;
@@ -13,7 +14,12 @@ const DEFAULT_CONFIG: HibernationConfig = {
 };
 
 const MEMORY_PRESSURE_INACTIVE_MS = 30 * 60 * 1000;
-const ACTIVE_AGENT_STATES: ReadonlySet<AgentState> = new Set(["working", "running", "directing"]);
+const ACTIVE_AGENT_STATES: ReadonlySet<AgentState> = new Set([
+  "working",
+  "running",
+  "waiting",
+  "directing",
+]);
 
 /**
  * HibernationService - Auto-hibernates inactive projects to free resources.
@@ -160,9 +166,6 @@ export class HibernationService {
   }
 
   async hibernateUnderMemoryPressure(): Promise<void> {
-    const config = this.getConfig();
-    if (!config.enabled) return;
-
     const currentProjectId = projectStore.getCurrentProjectId();
     const projects = projectStore.getAllProjects();
     const now = Date.now();
@@ -185,18 +188,20 @@ export class HibernationService {
       );
       if (hasActiveAgent) continue;
 
-      console.log(
-        `[HibernationService] Memory-pressure hibernating project "${project.name}" ` +
-          `(inactive for ${Math.floor(inactiveDuration / 60000)} minutes, ${projectTerminals.length} terminals)`
-      );
+      logInfo("memory-pressure-hibernate-project", {
+        project: project.name,
+        projectId: project.id,
+        inactiveMinutes: Math.floor(inactiveDuration / 60000),
+        terminalCount: projectTerminals.length,
+      });
 
       try {
         await ptyManager.gracefulKillByProject(project.id);
       } catch (error) {
-        console.error(
-          `[HibernationService] Failed to memory-pressure hibernate project "${project.name}":`,
-          error
-        );
+        logError("memory-pressure-hibernate-failed", error, {
+          project: project.name,
+          projectId: project.id,
+        });
       }
     }
   }

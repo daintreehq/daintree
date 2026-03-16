@@ -1738,10 +1738,18 @@ async function createWindow(): Promise<void> {
   if (!stopAppMetricsMonitor) {
     stopAppMetricsMonitor = startAppMetricsMonitor({
       clearCaches: async () => {
-        await session.defaultSession.clearCache();
-        await session.defaultSession.clearStorageData({
-          storages: ["shadercache", "cachestorage"],
-        });
+        try {
+          await session.defaultSession.clearCache();
+        } catch {
+          // Cache clear failed — non-critical
+        }
+        try {
+          await session.defaultSession.clearStorageData({
+            storages: ["shadercache", "cachestorage"],
+          });
+        } catch {
+          // Storage data clear failed — non-critical
+        }
         try {
           exposeGc?.();
         } catch {

@@ -19,6 +19,11 @@ vi.mock("../ProjectStore.js", () => ({
   projectStore: projectStoreMock,
 }));
 
+vi.mock("../../utils/logger.js", () => ({
+  logInfo: vi.fn(),
+  logError: vi.fn(),
+}));
+
 import { HibernationService } from "../HibernationService.js";
 
 describe("HibernationService", () => {
@@ -158,11 +163,11 @@ describe("HibernationService", () => {
       };
     }
 
-    it("returns early when hibernation is disabled", async () => {
-      const gracefulKillMock = vi.fn(async () => []);
+    it("runs even when auto-hibernation is disabled", async () => {
+      const gracefulKillMock = vi.fn(async () => [{ id: "t1" }]);
       vi.doMock("../PtyManager.js", () => ({
         getPtyManager: () => ({
-          getAll: () => [],
+          getAll: () => [makeTerminal({ agentState: "idle" })],
           gracefulKillByProject: gracefulKillMock,
         }),
       }));
@@ -172,11 +177,16 @@ describe("HibernationService", () => {
         inactiveThresholdHours: 24,
       });
 
+      projectStoreMock.getCurrentProjectId.mockReturnValue("other-proj");
+      projectStoreMock.getAllProjects.mockReturnValue([
+        { id: "proj-1", name: "Old", lastOpened: Date.now() - THIRTY_ONE_MINUTES },
+      ]);
+
       const { HibernationService: FreshService } = await import("../HibernationService.js");
       const service = new FreshService();
       await service.hibernateUnderMemoryPressure();
 
-      expect(gracefulKillMock).not.toHaveBeenCalled();
+      expect(gracefulKillMock).toHaveBeenCalledWith("proj-1");
     });
 
     it("skips the current active project", async () => {
@@ -223,27 +233,30 @@ describe("HibernationService", () => {
       expect(gracefulKillMock).not.toHaveBeenCalled();
     });
 
-    it("skips projects with active agent terminals", async () => {
-      const gracefulKillMock = vi.fn(async () => []);
-      vi.doMock("../PtyManager.js", () => ({
-        getPtyManager: () => ({
-          getAll: () => [makeTerminal({ agentState: "working" })],
-          gracefulKillByProject: gracefulKillMock,
-        }),
-      }));
+    it.each(["working", "running", "waiting", "directing"] as const)(
+      "skips projects with %s agent terminals",
+      async (agentState) => {
+        const gracefulKillMock = vi.fn(async () => []);
+        vi.doMock("../PtyManager.js", () => ({
+          getPtyManager: () => ({
+            getAll: () => [makeTerminal({ agentState })],
+            gracefulKillByProject: gracefulKillMock,
+          }),
+        }));
 
-      (storeMock.get as Mock).mockReturnValue({ enabled: true, inactiveThresholdHours: 24 });
-      projectStoreMock.getCurrentProjectId.mockReturnValue("other-proj");
-      projectStoreMock.getAllProjects.mockReturnValue([
-        { id: "proj-1", name: "Busy", lastOpened: Date.now() - THIRTY_ONE_MINUTES },
-      ]);
+        (storeMock.get as Mock).mockReturnValue({ enabled: true, inactiveThresholdHours: 24 });
+        projectStoreMock.getCurrentProjectId.mockReturnValue("other-proj");
+        projectStoreMock.getAllProjects.mockReturnValue([
+          { id: "proj-1", name: "Busy", lastOpened: Date.now() - THIRTY_ONE_MINUTES },
+        ]);
 
-      const { HibernationService: FreshService } = await import("../HibernationService.js");
-      const service = new FreshService();
-      await service.hibernateUnderMemoryPressure();
+        const { HibernationService: FreshService } = await import("../HibernationService.js");
+        const service = new FreshService();
+        await service.hibernateUnderMemoryPressure();
 
-      expect(gracefulKillMock).not.toHaveBeenCalled();
-    });
+        expect(gracefulKillMock).not.toHaveBeenCalled();
+      }
+    );
 
     it("hibernates eligible idle projects", async () => {
       const gracefulKillMock = vi.fn(async () => [{ id: "t1" }]);
