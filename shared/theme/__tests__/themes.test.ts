@@ -400,7 +400,7 @@ describe("built-in schemes — Namib theme", () => {
 
   it("has the correct accent and canvas colors", () => {
     expect(namib.tokens["accent-primary"]).toBe("#3F9366");
-    expect(namib.tokens["surface-canvas"]).toBe("#1C0F0B");
+    expect(namib.tokens["surface-canvas"]).toBe("#1A1714");
   });
 
   it("has the scarab cyan keyword color", () => {
