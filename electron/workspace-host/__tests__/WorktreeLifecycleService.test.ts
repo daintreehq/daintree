@@ -316,7 +316,7 @@ describe("WorktreeLifecycleService", () => {
       expect(result.error).toContain("ENOENT");
     });
 
-    it("injects PATH and HOME on Unix", async () => {
+    it.skipIf(process.platform === "win32")("injects PATH and HOME on Unix", async () => {
       const child = makeFakeProcess(0);
       mockSpawn.mockReturnValue(child);
 
@@ -333,6 +333,28 @@ describe("WorktreeLifecycleService", () => {
             CANOPY_WORKTREE_PATH: "/wt",
             PATH: expect.any(String),
             HOME: expect.any(String),
+          }),
+        })
+      );
+    });
+
+    it.runIf(process.platform === "win32")("injects PATH and USERPROFILE on Windows", async () => {
+      const child = makeFakeProcess(0);
+      mockSpawn.mockReturnValue(child);
+
+      await service.runCommands(["echo test"], {
+        cwd: "/test",
+        env: { CANOPY_WORKTREE_PATH: "/wt" },
+        onProgress: vi.fn(),
+      });
+
+      expect(mockSpawn).toHaveBeenCalledWith(
+        "echo test",
+        expect.objectContaining({
+          env: expect.objectContaining({
+            CANOPY_WORKTREE_PATH: "/wt",
+            PATH: expect.any(String),
+            USERPROFILE: expect.any(String),
           }),
         })
       );
