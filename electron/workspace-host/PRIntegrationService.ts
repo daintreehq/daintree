@@ -53,7 +53,7 @@ export class PRIntegrationService {
     this.initializedForPath = projectRootPath;
 
     this.prEventUnsubscribers.push(
-      this.eventBus.on("sys:pr:detected", (data: any) => {
+      this.eventBus.on("sys:pr:detected", (data) => {
         this.callbacks.onPRDetected(data.worktreeId, {
           prNumber: data.prNumber,
           prUrl: data.prUrl,
@@ -66,7 +66,7 @@ export class PRIntegrationService {
     );
 
     this.prEventUnsubscribers.push(
-      this.eventBus.on("sys:issue:detected", (data: any) => {
+      this.eventBus.on("sys:issue:detected", (data) => {
         this.callbacks.onIssueDetected(data.worktreeId, {
           issueNumber: data.issueNumber,
           issueTitle: data.issueTitle,
@@ -81,14 +81,17 @@ export class PRIntegrationService {
     );
 
     this.prEventUnsubscribers.push(
-      this.eventBus.on("sys:pr:cleared", (data: any) => {
+      this.eventBus.on("sys:pr:cleared", (data) => {
         this.callbacks.onPRCleared(data.worktreeId);
       })
     );
 
-    // Seed PR service with existing monitors as candidates
+    // Seed PR service with existing monitors as candidates.
+    // The partial object doesn't match the full WorktreeSnapshot type expected
+    // by sys:worktree:update, but PullRequestService only reads these fields.
     for (const candidate of getMonitorCandidates()) {
       if (candidate.branch && candidate.branch !== "main" && candidate.branch !== "master") {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         this.eventBus.emit("sys:worktree:update", {
           worktreeId: candidate.worktreeId,
           branch: candidate.branch,
