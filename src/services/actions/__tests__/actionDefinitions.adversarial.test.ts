@@ -205,7 +205,18 @@ vi.mock("../../../store/persistence/terminalPersistence", () => ({
   },
 }));
 
-const { registerTerminalActions } = await import("../definitions/terminalActions");
+const { registerTerminalQueryActions } = await import("../definitions/terminalQueryActions");
+const { registerTerminalSpawnActions } = await import("../definitions/terminalSpawnActions");
+const { registerTerminalLifecycleActions } =
+  await import("../definitions/terminalLifecycleActions");
+const { registerTerminalLayoutActions } = await import("../definitions/terminalLayoutActions");
+
+function registerTerminalActions(actions: ActionRegistry, callbacks: ActionCallbacks): void {
+  registerTerminalQueryActions(actions, callbacks);
+  registerTerminalSpawnActions(actions, callbacks);
+  registerTerminalLifecycleActions(actions, callbacks);
+  registerTerminalLayoutActions(actions, callbacks);
+}
 const { registerPanelActions } = await import("../definitions/panelActions");
 const { registerWorktreeActions } = await import("../definitions/worktreeActions");
 const { useTerminalStore } = await import("../../../store/terminalStore");
