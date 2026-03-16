@@ -537,6 +537,58 @@ describe("built-in schemes — Namib theme", () => {
   });
 });
 
+describe("built-in schemes — Arashiyama bamboo-grove dark theme", () => {
+  const arashiyama = BUILT_IN_APP_SCHEMES.find((s) => s.id === "arashiyama")!;
+
+  it("exists with correct metadata", () => {
+    expect(arashiyama).toBeDefined();
+    expect(arashiyama.name).toBe("Arashiyama");
+    expect(arashiyama.type).toBe("dark");
+    expect(arashiyama.builtin).toBe(true);
+  });
+
+  it("uses standard green for activity-working", () => {
+    expect(arashiyama.tokens["activity-working"]).toBe("#22c55e");
+  });
+
+  it("uses warm amber for activity-waiting", () => {
+    expect(arashiyama.tokens["activity-waiting"]).toBe("#C89A3A");
+  });
+
+  it("preserves intentional muted green for activity-active", () => {
+    expect(arashiyama.tokens["activity-active"]).toBe("#3F9366");
+  });
+
+  it("uses a true red for terminal-bright-red", () => {
+    expect(arashiyama.tokens["terminal-bright-red"]).toBe("#E06058");
+  });
+
+  it("terminal-selection passes 3:1 contrast against canvas", () => {
+    expect(arashiyama.tokens["terminal-selection"]).toBe("#A3573B");
+    const ratio = wcagContrastRatio(
+      arashiyama.tokens["terminal-selection"],
+      arashiyama.tokens["surface-canvas"]
+    );
+    expect(ratio, `selection contrast ${ratio.toFixed(2)}:1 needs ≥3:1`).toBeGreaterThanOrEqual(3);
+  });
+
+  it("has redesigned syntax-keyword and syntax-number values", () => {
+    expect(arashiyama.tokens["syntax-keyword"]).toBe("#E06268");
+    expect(arashiyama.tokens["syntax-number"]).toBe("#D4A046");
+    expect(arashiyama.tokens["syntax-number"]).not.toBe(arashiyama.tokens["syntax-string"]);
+  });
+
+  it("produces all required token keys", () => {
+    for (const key of APP_THEME_TOKEN_KEYS) {
+      expect(arashiyama.tokens).toHaveProperty(key, expect.any(String));
+    }
+  });
+
+  it("passes contrast validation with no warnings", () => {
+    expect(getAppThemeWarnings(arashiyama)).toEqual([]);
+  });
+});
+
 describe("built-in schemes — Redwoods has correct tokens and derived values", () => {
   const redwoods = BUILT_IN_APP_SCHEMES.find((s) => s.id === "redwoods")!;
 
