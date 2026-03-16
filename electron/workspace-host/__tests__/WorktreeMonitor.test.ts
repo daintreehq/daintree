@@ -28,12 +28,14 @@ vi.mock("../../utils/gitUtils.js", () => ({
   clearGitDirCache: vi.fn(),
 }));
 
-vi.mock("../../utils/gitFileWatcher.js", () => ({
-  GitFileWatcher: vi.fn().mockImplementation(() => ({
-    start: vi.fn().mockReturnValue(false),
-    dispose: vi.fn(),
-  })),
-}));
+vi.mock("../../utils/gitFileWatcher.js", () => {
+  return {
+    GitFileWatcher: class {
+      start() { return false; }
+      dispose() {}
+    },
+  };
+});
 
 vi.mock("../../services/worktree/index.js", () => ({
   AdaptivePollingStrategy: vi.fn(function () {
