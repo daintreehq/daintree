@@ -92,10 +92,14 @@ function getVendorChunk(id: string): string | undefined {
   return "vendor";
 }
 
-export default defineConfig({
+export default defineConfig(({ mode }) => ({
   envPrefix: ["VITE_", "CANOPY_"],
   plugins: [react(), tailwindcss(), cspTransformPlugin()],
   base: "./",
+  esbuild:
+    mode === "production"
+      ? { pure: ["console.log", "console.info", "console.warn", "console.debug"] }
+      : {},
   build: {
     outDir: "dist",
     emptyOutDir: true,
@@ -123,4 +127,4 @@ export default defineConfig({
       "Cross-Origin-Embedder-Policy": "credentialless",
     },
   },
-});
+}));
