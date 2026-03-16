@@ -523,6 +523,17 @@ describe("built-in schemes — Serengeti light theme", () => {
     expect(serengeti.tokens["terminal-bright-white"]).toBe("#2A2018");
   });
 
+  it("text-muted meets WCAG AA 3:1 against surface-panel", () => {
+    const ratio = wcagContrastRatio(
+      serengeti.tokens["text-muted"],
+      serengeti.tokens["surface-panel"]
+    );
+    expect(
+      ratio,
+      `text-muted on surface-panel = ${ratio.toFixed(2)}:1, needs ≥3:1`
+    ).toBeGreaterThanOrEqual(3);
+  });
+
   it("uses earthy activity colors instead of neon", () => {
     expect(serengeti.tokens["activity-active"]).toBe("#1D9B5E");
     expect(serengeti.tokens["activity-working"]).toBe("#1D9B5E");
