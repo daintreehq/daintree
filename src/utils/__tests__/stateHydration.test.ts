@@ -1837,6 +1837,7 @@ describe("hydrateAppState", () => {
       openDiagnosticsDock: vi.fn(),
     });
 
+    expect(setGPUHardwareAvailableMock).toHaveBeenCalledTimes(1);
     expect(setGPUHardwareAvailableMock).toHaveBeenCalledWith(false);
   });
 
@@ -1859,6 +1860,7 @@ describe("hydrateAppState", () => {
       openDiagnosticsDock: vi.fn(),
     });
 
+    expect(setGPUHardwareAvailableMock).toHaveBeenCalledTimes(1);
     expect(setGPUHardwareAvailableMock).toHaveBeenCalledWith(true);
   });
 
@@ -1880,6 +1882,7 @@ describe("hydrateAppState", () => {
       openDiagnosticsDock: vi.fn(),
     });
 
+    expect(setGPUHardwareAvailableMock).toHaveBeenCalledTimes(1);
     expect(setGPUHardwareAvailableMock).toHaveBeenCalledWith(true);
   });
 });
