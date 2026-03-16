@@ -32,7 +32,6 @@ export type {
   AgentState,
   TaskState,
   RunRecord,
-  AgentId,
   LegacyAgentType,
   AgentStateChangeTrigger,
 } from "./agent.js";
@@ -50,7 +49,6 @@ export type {
   TerminalLocation,
   TerminalRestartError,
   TerminalReconnectError,
-  TerminalFlowStatus,
   TerminalRuntimeStatus,
   TerminalSpawnSource,
   TerminalInstance,
@@ -65,7 +63,7 @@ export type {
 export { isBuiltInPanelKind, isPtyPanelKind, TerminalRefreshTier } from "./panel.js";
 
 // Browser types
-export type { BrowserHistory, UrlHistoryEntry } from "./browser.js";
+export type { BrowserHistory } from "./browser.js";
 
 // Project types
 export type {
@@ -74,7 +72,6 @@ export type {
   TerminalSnapshot,
   PanelSnapshot,
   TerminalLayout,
-  FocusPanelState,
   ProjectState,
   RecipeTerminalType,
   RecipeTerminal,
@@ -85,17 +82,6 @@ export type {
   ProjectMcpServerConfig,
   CopyTreeSettings,
 } from "./project.js";
-
-// Project value exports
-export { getAutoAssign } from "./project.js";
-
-// Toolbar types
-export type {
-  ToolbarButtonId,
-  ToolbarLayout,
-  LauncherDefaults,
-  ToolbarPreferences,
-} from "./toolbar.js";
 
 // IPC types - communication payloads
 export type {
@@ -309,6 +295,7 @@ export type {
   AgentCompletedPayload,
   AgentFailedPayload,
   AgentKilledPayload,
+  TerminalFlowStatus,
   TerminalStatusPayload,
   SpawnResult,
   SpawnError,
