@@ -3,6 +3,7 @@ import type { BrowserHistory } from "@shared/types/browser";
 import type { PanelExitBehavior } from "@shared/types/panel";
 import { isRegisteredAgent, getAgentConfig } from "@/config/agents";
 import { generateAgentCommand, buildResumeCommand } from "@shared/types";
+import { logWarn } from "@/utils/logger";
 
 export interface AddTerminalArgs {
   kind?: TerminalKind;
@@ -99,8 +100,8 @@ export function inferAgentIdFromTitle(
   title: string | undefined,
   kind: TerminalKind | undefined,
   existingAgentId: string | undefined,
-  _terminalId: string,
-  _logContext: string
+  terminalId: string,
+  logContext: string
 ): string | undefined {
   if (existingAgentId) return existingAgentId;
   if (kind !== "agent") return undefined;
@@ -111,6 +112,9 @@ export function inferAgentIdFromTitle(
   if (titleLower.includes("codex")) return "codex";
   if (titleLower.includes("opencode")) return "opencode";
 
+  logWarn(
+    `${logContext} agent terminal ${terminalId} missing agentId and title doesn't match known agents: "${title ?? ""}"`
+  );
   return undefined;
 }
 

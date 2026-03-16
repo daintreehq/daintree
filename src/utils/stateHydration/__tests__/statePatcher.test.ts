@@ -1,15 +1,23 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
+
+vi.mock("@/utils/logger", () => ({
+  logWarn: vi.fn(),
+}));
 
 vi.mock("@/config/agents", () => ({
   isRegisteredAgent: (type: string) => ["claude", "gemini", "codex", "opencode"].includes(type),
   getAgentConfig: (id: string) => ({ command: id }),
 }));
 
+const buildResumeCommandMock = vi.fn(
+  (agentId: string, sessionId: string, _flags?: string[]) => `${agentId} --resume ${sessionId}`
+);
+
 vi.mock("@shared/types", () => ({
   generateAgentCommand: (base: string, _settings: unknown, _id: string, _opts: unknown) =>
     `${base} --generated`,
-  buildResumeCommand: (agentId: string, sessionId: string, _flags?: string[]) =>
-    `${agentId} --resume ${sessionId}`,
+  buildResumeCommand: (...args: unknown[]) =>
+    buildResumeCommandMock(...(args as [string, string, string[]?])),
 }));
 
 const {
@@ -22,6 +30,12 @@ const {
   buildArgsForNonPtyRecreation,
   buildArgsForOrphanedTerminal,
 } = await import("../statePatcher");
+
+beforeEach(() => {
+  buildResumeCommandMock.mockImplementation(
+    (agentId: string, sessionId: string) => `${agentId} --resume ${sessionId}`
+  );
+});
 
 describe("inferKind", () => {
   it("returns saved kind when present", () => {
@@ -286,6 +300,27 @@ describe("buildArgsForRespawn", () => {
       undefined
     );
     expect(result.exitBehavior).toBeUndefined();
+  });
+
+  it("falls back to fresh command when resume returns undefined", () => {
+    buildResumeCommandMock.mockReturnValue(undefined);
+    const result = buildArgsForRespawn(
+      {
+        id: "t1",
+        kind: "agent" as const,
+        agentId: "claude",
+        cwd: "/p",
+        location: "grid",
+        agentSessionId: "sess-expired",
+      },
+      "agent",
+      "/p",
+      { agents: { claude: {} } },
+      false,
+      "/tmp/clip"
+    );
+    expect(result.command).toBe("claude --generated");
+    expect(result.kind).toBe("agent");
   });
 
   it("preserves exitBehavior for non-agent panels", () => {
