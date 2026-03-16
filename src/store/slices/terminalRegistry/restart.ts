@@ -100,8 +100,7 @@ export const createRestartActions = (
     if (!validation.valid) {
       // Set error state instead of attempting doomed restart
       // Use the first non-recoverable error's code, or the first error's code
-      const primaryError =
-        validation.errors.find((e) => !e.recoverable) || validation.errors[0];
+      const primaryError = validation.errors.find((e) => !e.recoverable) || validation.errors[0];
 
       const restartError = {
         message: validation.errors.map((e) => e.message).join("; "),
@@ -120,10 +119,7 @@ export const createRestartActions = (
           t.id === id ? { ...t, isRestarting: false, restartError } : t
         ),
       }));
-      console.warn(
-        `[TerminalStore] Restart validation failed for terminal ${id}:`,
-        restartError
-      );
+      console.warn(`[TerminalStore] Restart validation failed for terminal ${id}:`, restartError);
       return;
     }
 
@@ -135,9 +131,7 @@ export const createRestartActions = (
       // Terminal was removed or trashed while we were validating
       unmarkTerminalRestarting(id);
       set((state) => ({
-        terminals: state.terminals.map((t) =>
-          t.id === id ? { ...t, isRestarting: false } : t
-        ),
+        terminals: state.terminals.map((t) => (t.id === id ? { ...t, isRestarting: false } : t)),
       }));
       console.warn(`[TerminalStore] Terminal ${id} no longer exists or was trashed`);
       return;
@@ -298,9 +292,7 @@ export const createRestartActions = (
 
       unmarkTerminalRestarting(id);
       set((state) => ({
-        terminals: state.terminals.map((t) =>
-          t.id === id ? { ...t, isRestarting: false } : t
-        ),
+        terminals: state.terminals.map((t) => (t.id === id ? { ...t, isRestarting: false } : t)),
       }));
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
@@ -346,24 +338,18 @@ export const createRestartActions = (
         ),
       }));
 
-      console.error(
-        `[TerminalStore] Failed to restart terminal ${id} during ${phase}:`,
-        error,
-        {
-          cwd: currentTerminal.cwd,
-          command: commandToRun,
-          isAgent,
-          agentId: effectiveAgentId,
-        }
-      );
+      console.error(`[TerminalStore] Failed to restart terminal ${id} during ${phase}:`, error, {
+        cwd: currentTerminal.cwd,
+        command: commandToRun,
+        isAgent,
+        agentId: effectiveAgentId,
+      });
     }
   },
 
   clearTerminalError: (id) => {
     set((state) => ({
-      terminals: state.terminals.map((t) =>
-        t.id === id ? { ...t, restartError: undefined } : t
-      ),
+      terminals: state.terminals.map((t) => (t.id === id ? { ...t, restartError: undefined } : t)),
     }));
   },
 
@@ -463,11 +449,7 @@ export const createRestartActions = (
         return state;
       }
 
-      const runtimeStatus = deriveRuntimeStatus(
-        terminal.isVisible,
-        status,
-        terminal.runtimeStatus
-      );
+      const runtimeStatus = deriveRuntimeStatus(terminal.isVisible, status, terminal.runtimeStatus);
 
       return {
         terminals: state.terminals.map((t) =>
@@ -489,9 +471,7 @@ export const createRestartActions = (
       }
 
       return {
-        terminals: state.terminals.map((t) =>
-          t.id === id ? { ...t, runtimeStatus: status } : t
-        ),
+        terminals: state.terminals.map((t) => (t.id === id ? { ...t, runtimeStatus: status } : t)),
       };
     });
   },
@@ -504,9 +484,7 @@ export const createRestartActions = (
       if (terminal.isInputLocked === locked) return state;
 
       const updated = {
-        terminals: state.terminals.map((t) =>
-          t.id === id ? { ...t, isInputLocked: locked } : t
-        ),
+        terminals: state.terminals.map((t) => (t.id === id ? { ...t, isInputLocked: locked } : t)),
       };
 
       saveTerminals(updated.terminals);
@@ -526,9 +504,7 @@ export const createRestartActions = (
       const locked = !terminal.isInputLocked;
 
       const updated = {
-        terminals: state.terminals.map((t) =>
-          t.id === id ? { ...t, isInputLocked: locked } : t
-        ),
+        terminals: state.terminals.map((t) => (t.id === id ? { ...t, isInputLocked: locked } : t)),
       };
 
       saveTerminals(updated.terminals);
@@ -677,9 +653,7 @@ export const createRestartActions = (
 
       unmarkTerminalRestarting(id);
       set((state) => ({
-        terminals: state.terminals.map((t) =>
-          t.id === id ? { ...t, isRestarting: false } : t
-        ),
+        terminals: state.terminals.map((t) => (t.id === id ? { ...t, isRestarting: false } : t)),
       }));
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);

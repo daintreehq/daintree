@@ -76,9 +76,7 @@ export const createOrderingActions = (
         (t) => t.id !== id && (t.location === "grid" || t.location === undefined)
       );
       const dockTerminals = state.terminals.filter((t) => t.id !== id && t.location === "dock");
-      const trashTerminals = state.terminals.filter(
-        (t) => t.id !== id && t.location === "trash"
-      );
+      const trashTerminals = state.terminals.filter((t) => t.id !== id && t.location === "trash");
       const backgroundTerminals = state.terminals.filter(
         (t) => t.id !== id && t.location === "background"
       );

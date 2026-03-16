@@ -11,7 +11,10 @@ type Get = TerminalRegistryStoreApi["getState"];
 export const createBackgroundActions = (
   set: Set,
   get: Get
-): Pick<TerminalRegistrySlice, "backgroundTerminal" | "restoreBackgroundTerminal" | "isInBackground"> => ({
+): Pick<
+  TerminalRegistrySlice,
+  "backgroundTerminal" | "restoreBackgroundTerminal" | "isInBackground"
+> => ({
   backgroundTerminal: (id) => {
     const terminal = get().terminals.find((t) => t.id === id);
     if (!terminal) return;
