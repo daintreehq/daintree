@@ -57,7 +57,12 @@ export function TwoPaneSplitLayout({
 
   // Backfill panel IDs for legacy entries migrated from v0 (panels are [null, null])
   useEffect(() => {
-    if (storedEntry && storedEntry.panels[0] === null && storedEntry.panels[1] === null && activeWorktreeId) {
+    if (
+      storedEntry &&
+      storedEntry.panels[0] === null &&
+      storedEntry.panels[1] === null &&
+      activeWorktreeId
+    ) {
       setWorktreeRatio(activeWorktreeId, storedEntry.ratio, [terminals[0].id, terminals[1].id]);
     }
   }, [storedEntry, activeWorktreeId, terminals, setWorktreeRatio]);
