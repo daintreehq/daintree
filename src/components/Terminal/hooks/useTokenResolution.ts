@@ -1,5 +1,4 @@
 import { useCallback, useRef, type Dispatch, type SetStateAction } from "react";
-import type { EditorView } from "@codemirror/view";
 import { EditorSelection } from "@codemirror/state";
 import type { AgentState } from "@/types";
 import type { LegacyAgentType } from "@shared/types";
@@ -13,7 +12,13 @@ import {
   getAllAtDiffTokens,
   type DiffContextType,
 } from "../hybridInputParsing";
-import type { AtFileContext, SlashCommandContext, AtDiffContext, AtTerminalContext, AtSelectionContext } from "../hybridInputParsing";
+import type {
+  AtFileContext,
+  SlashCommandContext,
+  AtDiffContext,
+  AtTerminalContext,
+  AtSelectionContext,
+} from "../hybridInputParsing";
 
 interface LatestRefShape {
   terminalId: string;
@@ -28,7 +33,6 @@ interface LatestRefShape {
 
 interface UseTokenResolutionParams {
   latestRef: React.RefObject<LatestRefShape | null>;
-  editorViewRef: React.RefObject<EditorView | null>;
   agentStateRef: React.RefObject<AgentState | undefined>;
   errorChipDismissedRef: React.RefObject<boolean>;
   applyEditorValue: (
@@ -49,7 +53,6 @@ interface UseTokenResolutionParams {
 
 export function useTokenResolution({
   latestRef,
-  editorViewRef,
   agentStateRef,
   errorChipDismissedRef,
   applyEditorValue,
@@ -137,8 +140,7 @@ export function useTokenResolution({
       if (replacements.length > 0) {
         replacements.sort((a, b) => b.start - a.start);
         for (const r of replacements) {
-          resolvedText =
-            resolvedText.slice(0, r.start) + r.replacement + resolvedText.slice(r.end);
+          resolvedText = resolvedText.slice(0, r.start) + r.replacement + resolvedText.slice(r.end);
         }
       }
 
@@ -183,23 +185,8 @@ export function useTokenResolution({
       setTerminalContext(null);
       setSelectionContext(null);
     },
-    [
-      applyEditorValue,
-      agentId,
-      cwd,
-      terminalId,
-      latestRef,
-      editorViewRef,
-      agentStateRef,
-      errorChipDismissedRef,
-      setIsExpanded,
-      setErrorChipDismissed,
-      setAtContext,
-      setSlashContext,
-      setDiffContext,
-      setTerminalContext,
-      setSelectionContext,
-    ]
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- refs are stable
+    [applyEditorValue, agentId, cwd, terminalId]
   );
 
   return { sendText };
