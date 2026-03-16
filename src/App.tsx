@@ -126,6 +126,7 @@ import {
   type DerivedWorktreeMeta,
   type FilterState,
 } from "./lib/worktreeFilters";
+import { parseExactNumber } from "./lib/parseExactNumber";
 import type { WorktreeState, PanelKind } from "./types";
 import { actionService } from "./services/ActionService";
 import { voiceRecordingService } from "./services/VoiceRecordingService";
@@ -281,12 +282,13 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
         hasCompletedAgent: false,
       };
       const isActive = worktree.id === activeWorktreeId;
+      const hasActiveQuery = query.trim().length > 0;
 
-      if (alwaysShowActive && isActive) {
+      if (alwaysShowActive && isActive && !hasActiveQuery) {
         return true;
       }
 
-      if (alwaysShowWaiting && derived.hasWaitingAgent) {
+      if (alwaysShowWaiting && derived.hasWaitingAgent && !hasActiveQuery) {
         return true;
       }
 
@@ -508,13 +510,11 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   const hasFilters = hasActiveFilters();
   const worktreeMatchesQuery = (w: WorktreeState) => {
     if (!query) return true;
-    if (scoreWorktree(w, query) > 0) return true;
-    const trimmed = query.trim();
-    if (trimmed.startsWith("#")) {
-      const num = parseInt(trimmed.slice(1), 10);
-      if (num > 0 && (w.issueNumber === num || w.prNumber === num)) return true;
+    const exactNum = parseExactNumber(query);
+    if (exactNum !== null) {
+      return w.issueNumber === exactNum || w.prNumber === exactNum;
     }
-    return false;
+    return scoreWorktree(w, query) > 0;
   };
   const mainMatchesQuery = mainWorktree && worktreeMatchesQuery(mainWorktree);
   const integrationMatchesQuery = integrationWorktree && worktreeMatchesQuery(integrationWorktree);

@@ -174,18 +174,18 @@ export function WorktreeOverviewModal({
         hasCompletedAgent: false,
       };
       const isActive = worktree.id === activeWorktreeId;
+      const hasActiveQuery = query.trim().length > 0;
 
       // hideMainWorktree always takes precedence for the main worktree (user's explicit intent)
       if (hideMainWorktree && worktree.isMainWorktree) {
         return false;
       }
 
-      // Always show active worktree if setting is enabled
-      if (alwaysShowActive && isActive) {
+      if (alwaysShowActive && isActive && !hasActiveQuery) {
         return true;
       }
 
-      if (alwaysShowWaiting && derived.hasWaitingAgent) {
+      if (alwaysShowWaiting && derived.hasWaitingAgent && !hasActiveQuery) {
         return true;
       }
 

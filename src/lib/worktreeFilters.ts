@@ -130,7 +130,7 @@ export function matchesFilters(
   // Text search
   if (filters.query.length > 0) {
     const exactNum = parseExactNumber(filters.query);
-    if (exactNum !== null && filters.query.trim().startsWith("#")) {
+    if (exactNum !== null) {
       if (worktree.issueNumber !== exactNum && worktree.prNumber !== exactNum) {
         return false;
       }

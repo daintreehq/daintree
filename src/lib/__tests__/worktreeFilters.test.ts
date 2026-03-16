@@ -477,6 +477,42 @@ describe("matchesFilters", () => {
     expect(matchesFilters(worktree, filters, meta, false)).toBe(true);
   });
 
+  it("matches bare number by issueNumber", () => {
+    const worktree = createMockWorktree({ issueNumber: 123 });
+    const filters = createEmptyFilters();
+    filters.query = "123";
+    const meta = createEmptyMeta();
+    expect(matchesFilters(worktree, filters, meta, false)).toBe(true);
+  });
+
+  it("matches bare number by prNumber", () => {
+    const worktree = createMockWorktree({ prNumber: 456 });
+    const filters = createEmptyFilters();
+    filters.query = "456";
+    const meta = createEmptyMeta();
+    expect(matchesFilters(worktree, filters, meta, false)).toBe(true);
+  });
+
+  it("does not match bare number via text fallback when no issue/PR matches", () => {
+    const worktree = createMockWorktree({
+      branch: "feature/issue-123-fix",
+      issueNumber: undefined,
+      prNumber: undefined,
+    });
+    const filters = createEmptyFilters();
+    filters.query = "123";
+    const meta = createEmptyMeta();
+    expect(matchesFilters(worktree, filters, meta, false)).toBe(false);
+  });
+
+  it("matches bare number with whitespace padding", () => {
+    const worktree = createMockWorktree({ issueNumber: 123 });
+    const filters = createEmptyFilters();
+    filters.query = " 123 ";
+    const meta = createEmptyMeta();
+    expect(matchesFilters(worktree, filters, meta, false)).toBe(true);
+  });
+
   it("does not match #number when neither issueNumber nor prNumber match", () => {
     const worktree = createMockWorktree({ issueNumber: 100, prNumber: 200 });
     const filters = createEmptyFilters();
