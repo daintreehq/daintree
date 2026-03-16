@@ -94,8 +94,8 @@ describe("appColorSchemes rebrand — semantic color separation", () => {
       expect(getScheme("redwoods").tokens["syntax-string"]).toBe("#8CC255");
     });
 
-    it("accent-primary is shared brand green (#3F9366)", () => {
-      expect(getScheme("redwoods").tokens["accent-primary"]).toBe("#3F9366");
+    it("accent-primary is forest green (#4D9E6A)", () => {
+      expect(getScheme("redwoods").tokens["accent-primary"]).toBe("#4D9E6A");
     });
 
     it("activity-active is green, not accent-primary", () => {
