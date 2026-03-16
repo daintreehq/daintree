@@ -23,7 +23,11 @@ export function selectWrapperBackground(state: TerminalColorSchemeState): string
   const allSchemes = [...BUILT_IN_SCHEMES, ...state.customSchemes];
   const scheme = allSchemes.find((s) => s.id === state.selectedSchemeId);
 
-  if (!scheme || scheme.id === DEFAULT_SCHEME_ID) {
+  if (!scheme) {
+    return "var(--theme-surface-canvas)";
+  }
+
+  if (scheme.id === DEFAULT_SCHEME_ID) {
     const appThemeId = useAppThemeStore.getState().selectedSchemeId;
     const mapped = getMappedTerminalScheme(appThemeId);
     if (mapped?.colors.background) return mapped.colors.background;
