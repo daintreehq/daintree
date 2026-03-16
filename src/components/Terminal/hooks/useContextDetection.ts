@@ -12,7 +12,7 @@ import {
   type AtTerminalContext,
   type AtSelectionContext,
 } from "../hybridInputParsing";
-import { imageChipField, fileDropChipField, urlContextChipField } from "../inputEditorExtensions";
+import { imageChipField, fileDropChipField } from "../inputEditorExtensions";
 import { normalizeChips, type TrayItem } from "../attachmentTrayUtils";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 
@@ -228,8 +228,7 @@ export function useContextDetection({
 
         const imgs = update.state.field(imageChipField, false) ?? [];
         const files = update.state.field(fileDropChipField, false) ?? [];
-        const urls = update.state.field(urlContextChipField, false) ?? [];
-        const next = normalizeChips(imgs, files, urls);
+        const next = normalizeChips(imgs, files);
         setAttachments((prev) => {
           if (prev.length === 0 && next.length === 0) return prev;
           if (
