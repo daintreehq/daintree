@@ -38,7 +38,6 @@ describe("TerminalSearchBar", () => {
   it("renders the sr-only live region on initial mount with correct attributes", () => {
     renderSearchBar();
     const liveRegion = screen.getByRole("status");
-    expect(liveRegion).toBeDefined();
     expect(liveRegion.getAttribute("aria-live")).toBe("polite");
     expect(liveRegion.getAttribute("aria-atomic")).toBe("true");
     expect(liveRegion.textContent).toBe("");
