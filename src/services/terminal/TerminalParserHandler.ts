@@ -95,6 +95,24 @@ export class TerminalParserHandler {
       this.disposables.push(altScreenSetHandler);
     }
 
+    // Block DECRQM (Request Mode) queries: CSI ? Pm $ p
+    // xterm.js 6.0 has a bug in its minified requestMode handler that throws
+    // "i is not defined", crashing the parser and dropping all subsequent output.
+    // OpenCode (Bubble Tea) sends these during startup for capability detection.
+    // Silently consuming them is safe — the app doesn't need DECRQM responses.
+    const decrqmHandler = terminal.parser.registerCsiHandler(
+      { prefix: "?", intermediates: "$", final: "p" },
+      () => true // Consume and discard
+    );
+    this.disposables.push(decrqmHandler);
+
+    // Also block the non-private DECRQM variant: CSI Pm $ p
+    const decrqmNonPrivateHandler = terminal.parser.registerCsiHandler(
+      { intermediates: "$", final: "p" },
+      () => true
+    );
+    this.disposables.push(decrqmNonPrivateHandler);
+
     // Block mouse reporting mode toggles (enables programs to capture mouse events).
     // We block this for agent terminals to avoid surprising interactions inside the app.
     if (capabilities.blockMouseReporting) {
