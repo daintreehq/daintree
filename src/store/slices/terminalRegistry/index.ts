@@ -13,6 +13,7 @@ import { usePerformanceModeStore } from "@/store/performanceModeStore";
 import { useTerminalFontStore } from "@/store/terminalFontStore";
 import { getScrollbackForType, PERFORMANCE_MODE_SCROLLBACK } from "@/utils/scrollbackConfig";
 import { getXtermOptions } from "@/config/xtermConfig";
+import { useTerminalColorSchemeStore } from "@/store/terminalColorSchemeStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { markTerminalRestarting, unmarkTerminalRestarting } from "@/store/restartExitSuppression";
 import { useLayoutConfigStore } from "@/store/layoutConfigStore";
@@ -315,11 +316,13 @@ export const createTerminalRegistrySlice =
               ? PERFORMANCE_MODE_SCROLLBACK
               : getScrollbackForType(legacyType, projectScrollback ?? scrollbackLines);
 
+            const { getEffectiveTheme } = useTerminalColorSchemeStore.getState();
             const terminalOptions = getXtermOptions({
               fontSize,
               fontFamily,
               scrollback: effectiveScrollback,
               performanceMode,
+              theme: getEffectiveTheme(),
             });
 
             // Prewarm ALL terminal types to ensure managed instance exists.

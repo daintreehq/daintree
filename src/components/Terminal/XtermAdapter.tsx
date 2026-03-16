@@ -76,6 +76,8 @@ function XtermAdapterComponent({
   const fontSize = useTerminalFontStore((state) => state.fontSize);
   const fontFamily = useTerminalFontStore((state) => state.fontFamily);
   const wrapperBackground = useTerminalColorSchemeStore(selectWrapperBackground);
+  const selectedSchemeId = useTerminalColorSchemeStore((state) => state.selectedSchemeId);
+  const customSchemes = useTerminalColorSchemeStore((state) => state.customSchemes);
 
   // Calculate effective scrollback: performance mode overrides, then project override, then app default
   const effectiveScrollback = useMemo(() => {
@@ -114,8 +116,9 @@ function XtermAdapterComponent({
         fontFamily,
         scrollback: effectiveScrollback,
         performanceMode,
+        theme: useTerminalColorSchemeStore.getState().getEffectiveTheme(),
       }),
-    [effectiveScrollback, performanceMode, fontSize, fontFamily]
+    [effectiveScrollback, performanceMode, fontSize, fontFamily, selectedSchemeId, customSchemes]
   );
 
   // Push-based resize handler using ResizeObserver dimensions directly
