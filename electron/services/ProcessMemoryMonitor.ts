@@ -17,17 +17,38 @@ const SNAPSHOT_THRESHOLD_MB = 600;
 
 const MONITORED_TYPES = new Set(["Browser", "Tab", "Utility"]);
 
+const BUCKET_TICKS = 2;
+const BUCKET_WINDOW = 30;
+const EMA_ALPHA = 2 / (BUCKET_WINDOW + 1);
+const STARTUP_SUPPRESSION_MS = 15 * 60 * 1000;
+const TREND_WARN_MB_PER_HOUR = 5;
+
+interface PidTrendState {
+  startedAt: number;
+  tickInBucket: number;
+  bucketMin: number;
+  ema: number;
+  emaHistory: number[];
+}
+
+function getProcessMemoryMb(proc: Electron.ProcessMetric): number {
+  return (proc.memory.privateBytes ?? proc.memory.workingSetSize) / 1024;
+}
+
 export function startAppMetricsMonitor(): () => void {
   const snapshotCooldowns = new Map<number, number>();
+  const trendState = new Map<number, PidTrendState>();
 
   const timer = setInterval(() => {
     try {
       const metrics = app.getAppMetrics();
+      const activePids = new Set<number>();
 
       for (const proc of metrics) {
         if (!MONITORED_TYPES.has(proc.type)) continue;
 
-        const mb = proc.memory.workingSetSize / 1024;
+        activePids.add(proc.pid);
+        const mb = getProcessMemoryMb(proc);
         logDebug("process-memory-sample", { pid: proc.pid, type: proc.type, mb: Math.round(mb) });
 
         const threshold = WARN_THRESHOLDS_MB[proc.type];
@@ -38,6 +59,51 @@ export function startAppMetricsMonitor(): () => void {
             mb: Math.round(mb),
             thresholdMb: threshold,
           });
+        }
+
+        // Trend detection: bucket-minimum + EMA
+        let state = trendState.get(proc.pid);
+        if (!state) {
+          state = {
+            startedAt: Date.now(),
+            tickInBucket: 0,
+            bucketMin: mb,
+            ema: mb,
+            emaHistory: [],
+          };
+          trendState.set(proc.pid, state);
+        }
+
+        state.bucketMin = Math.min(state.bucketMin, mb);
+        state.tickInBucket++;
+
+        if (state.tickInBucket === BUCKET_TICKS) {
+          state.ema = EMA_ALPHA * state.bucketMin + (1 - EMA_ALPHA) * state.ema;
+          state.emaHistory.push(state.ema);
+          if (state.emaHistory.length > BUCKET_WINDOW) {
+            state.emaHistory.shift();
+          }
+
+          // Evaluate trend with dual suppression
+          if (
+            Date.now() - state.startedAt >= STARTUP_SUPPRESSION_MS &&
+            state.emaHistory.length === BUCKET_WINDOW
+          ) {
+            const oldest = state.emaHistory[0]!;
+            const newest = state.emaHistory[BUCKET_WINDOW - 1]!;
+            const windowHours = ((BUCKET_WINDOW - 1) * 60) / 3600;
+            const growthMbPerHour = (newest - oldest) / windowHours;
+            if (growthMbPerHour > TREND_WARN_MB_PER_HOUR) {
+              logWarn("process-memory-trend-warning", {
+                pid: proc.pid,
+                type: proc.type,
+                growthMbPerHour: Math.round(growthMbPerHour),
+              });
+            }
+          }
+
+          state.tickInBucket = 0;
+          state.bucketMin = Infinity;
         }
 
         if (proc.type === "Browser" && mb > SNAPSHOT_THRESHOLD_MB && !app.isPackaged) {
@@ -56,6 +122,14 @@ export function startAppMetricsMonitor(): () => void {
             }
           }
         }
+      }
+
+      // Prune stale PID state
+      for (const pid of trendState.keys()) {
+        if (!activePids.has(pid)) trendState.delete(pid);
+      }
+      for (const pid of snapshotCooldowns.keys()) {
+        if (!activePids.has(pid)) snapshotCooldowns.delete(pid);
       }
     } catch (err) {
       logWarn("process-memory-poll-failed", { error: String(err) });
