@@ -1126,6 +1126,7 @@ export class WorkspaceService {
         // Re-discover worktrees to find new/removed ones
         await this.discoverAndSyncWorktrees();
         await this.refreshAll();
+        await pullRequestService.refresh();
       }
       this.sendEvent({ type: "refresh-result", requestId, success: true });
     } catch (error) {
