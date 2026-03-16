@@ -433,8 +433,8 @@ describe("built-in schemes — Redwoods has correct tokens and derived values", 
     expect(redwoods.builtin).toBe(true);
   });
 
-  it("has the shared brand accent", () => {
-    expect(redwoods.tokens["accent-primary"]).toBe("#3F9366");
+  it("has the forest green accent", () => {
+    expect(redwoods.tokens["accent-primary"]).toBe("#4D9E6A");
   });
 
   it("derives terminal-black from surface-canvas", () => {
@@ -442,7 +442,7 @@ describe("built-in schemes — Redwoods has correct tokens and derived values", 
   });
 
   it("derives terminal-white from text-primary", () => {
-    expect(redwoods.tokens["terminal-white"]).toBe("#D4C5B8");
+    expect(redwoods.tokens["terminal-white"]).toBe("#D0C8B5");
   });
 
   it("derives terminal-bright-black from activity-idle", () => {
