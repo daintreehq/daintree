@@ -198,6 +198,12 @@ export class CrashRecoveryService {
         return null;
       }
 
+      if (!app.isPackaged && marker.isPackaged === false && !marker.crashLogPath) {
+        console.log("[CrashRecovery] Orphaned dev-mode marker — discarding (not a crash)");
+        this.deleteMarker();
+        return null;
+      }
+
       this.deleteMarker();
 
       const logPath = marker.crashLogPath ?? null;
@@ -253,6 +259,7 @@ export class CrashRecoveryService {
         sessionStartMs: this.sessionStartMs,
         appVersion: app.getVersion(),
         platform: process.platform,
+        isPackaged: app.isPackaged,
         crashLogPath: crashEntry
           ? path.join(this.crashesDir, `crash-${crashEntry.id}.json`)
           : undefined,
@@ -397,6 +404,7 @@ interface MarkerFile {
   appVersion: string;
   platform: string;
   crashLogPath?: string;
+  isPackaged?: boolean;
 }
 
 interface SessionSnapshot {
