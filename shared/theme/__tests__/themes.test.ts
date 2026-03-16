@@ -575,6 +575,7 @@ describe("built-in schemes — Svalbard light theme", () => {
 
   it("exists with correct metadata", () => {
     expect(svalbard).toBeDefined();
+    expect(svalbard.id).toBe("svalbard");
     expect(svalbard.name).toBe("Svalbard");
     expect(svalbard.type).toBe("light");
     expect(svalbard.builtin).toBe(true);
@@ -607,6 +608,10 @@ describe("built-in schemes — Svalbard light theme", () => {
 
   it("auto-derives terminal-white from surface-canvas for light themes", () => {
     expect(svalbard.tokens["terminal-white"]).toBe(svalbard.tokens["surface-canvas"]);
+  });
+
+  it("auto-derives terminal-bright-black from activity-idle", () => {
+    expect(svalbard.tokens["terminal-bright-black"]).toBe(svalbard.tokens["activity-idle"]);
   });
 
   it("sidebar vs canvas contrast ≥ 1.08", () => {
