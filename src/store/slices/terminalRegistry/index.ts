@@ -41,7 +41,7 @@ export const createTerminalRegistrySlice =
       ...createBackgroundActions(set, get),
       ...createOrderingActions(set, get),
       ...createRestartActions(set, get),
-      ...createBrowserActions(set, get),
+      ...createBrowserActions(set),
       ...createTabGroupActions(set, get),
     };
   };

@@ -3,11 +3,9 @@ import { panelKindUsesTerminalUi } from "@shared/config/panelKindRegistry";
 import { saveTerminals } from "./persistence";
 
 type Set = TerminalRegistryStoreApi["setState"];
-type Get = TerminalRegistryStoreApi["getState"];
 
 export const createBrowserActions = (
-  set: Set,
-  get: Get
+  set: Set
 ): Pick<
   TerminalRegistrySlice,
   | "setBrowserUrl"
