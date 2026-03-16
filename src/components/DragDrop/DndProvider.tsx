@@ -267,97 +267,94 @@ export function DndProvider({ children }: DndProviderProps) {
     }
   }, []);
 
-  const handleDragOver = useCallback(
-    (event: DragOverEvent) => {
-      const { active, over } = event;
-      if (!over) {
-        setOverContainer(null);
-        setPlaceholderIndex(null);
-        return;
+  const handleDragOver = useCallback((event: DragOverEvent) => {
+    const { active, over } = event;
+    if (!over) {
+      setOverContainer(null);
+      setPlaceholderIndex(null);
+      return;
+    }
+
+    const activeDataCurrent = active.data.current as DragData | WorktreeDragData | undefined;
+    const overData = over.data.current as
+      | { container?: "grid" | "dock"; sortable?: { containerId?: string; index?: number } }
+      | undefined;
+
+    // Determine which container we're over
+    let detectedContainer: "grid" | "dock" | null = null;
+
+    if (overData?.container) {
+      detectedContainer = overData.container;
+    } else if (overData?.sortable?.containerId) {
+      const containerId = overData.sortable.containerId;
+      if (containerId === "grid-container") {
+        detectedContainer = "grid";
+      } else if (containerId === "dock-container") {
+        detectedContainer = "dock";
       }
+      // Accordion containers (worktree-*-accordion) are ignored for grid/dock detection
+    } else {
+      const overId = over.id as string;
+      // Skip accordion drop targets for non-accordion drags
+      const parsedId = parseAccordionDragId(overId);
+      const terminalId = parsedId ?? overId;
+      const currentTerminals = useTerminalStore.getState().terminals;
+      const overTerminal = currentTerminals.find((t) => t.id === terminalId);
+      if (overTerminal && !parsedId) {
+        // Only set container for non-accordion terminals
+        detectedContainer = overTerminal.location === "dock" ? "dock" : "grid";
+      }
+    }
 
-      const activeDataCurrent = active.data.current as DragData | WorktreeDragData | undefined;
-      const overData = over.data.current as
-        | { container?: "grid" | "dock"; sortable?: { containerId?: string; index?: number } }
-        | undefined;
+    setOverContainer(detectedContainer);
 
-      // Determine which container we're over
-      let detectedContainer: "grid" | "dock" | null = null;
+    // Handle placeholder for cross-container drag (dock -> grid)
+    // Skip placeholders for accordion drags - they stay within their container
+    const sourceContainer = activeDataCurrent?.sourceLocation;
+    const isAccordionDrag = isWorktreeDragData(activeDataCurrent);
 
-      if (overData?.container) {
-        detectedContainer = overData.container;
-      } else if (overData?.sortable?.containerId) {
-        const containerId = overData.sortable.containerId;
-        if (containerId === "grid-container") {
-          detectedContainer = "grid";
-        } else if (containerId === "dock-container") {
-          detectedContainer = "dock";
+    if (!isAccordionDrag && sourceContainer === "dock" && detectedContainer === "grid") {
+      // Get tab groups to compute group-based placeholder index
+      // ContentGrid uses tab groups for SortableContext, so placeholderIndex must be a group index
+      const activeWorktreeId = useWorktreeSelectionStore.getState().activeWorktreeId;
+      const tabGroups = useTerminalStore
+        .getState()
+        .getTabGroups("grid", activeWorktreeId ?? undefined);
+
+      const overId = over.id as string;
+
+      // Determine group index based on what we're hovering over
+      let groupIndex = -1;
+
+      if (overId === GRID_PLACEHOLDER_ID) {
+        // Hovering over the placeholder itself - use sortable.index if available
+        // (this can happen during drag oscillation)
+        if (overData?.sortable?.index !== undefined) {
+          groupIndex = Math.min(Math.max(0, overData.sortable.index), tabGroups.length);
+        } else {
+          // Fallback to end
+          groupIndex = tabGroups.length;
         }
-        // Accordion containers (worktree-*-accordion) are ignored for grid/dock detection
       } else {
-        const overId = over.id as string;
-        // Skip accordion drop targets for non-accordion drags
-        const parsedId = parseAccordionDragId(overId);
-        const terminalId = parsedId ?? overId;
-        const currentTerminals = useTerminalStore.getState().terminals;
-        const overTerminal = currentTerminals.find((t) => t.id === terminalId);
-        if (overTerminal && !parsedId) {
-          // Only set container for non-accordion terminals
-          detectedContainer = overTerminal.location === "dock" ? "dock" : "grid";
-        }
-      }
+        // Hovering over a real group or terminal - find which group it belongs to
+        groupIndex = tabGroups.findIndex((g) => g.id === overId || g.panelIds.includes(overId));
 
-      setOverContainer(detectedContainer);
-
-      // Handle placeholder for cross-container drag (dock -> grid)
-      // Skip placeholders for accordion drags - they stay within their container
-      const sourceContainer = activeDataCurrent?.sourceLocation;
-      const isAccordionDrag = isWorktreeDragData(activeDataCurrent);
-
-      if (!isAccordionDrag && sourceContainer === "dock" && detectedContainer === "grid") {
-        // Get tab groups to compute group-based placeholder index
-        // ContentGrid uses tab groups for SortableContext, so placeholderIndex must be a group index
-        const activeWorktreeId = useWorktreeSelectionStore.getState().activeWorktreeId;
-        const tabGroups = useTerminalStore
-          .getState()
-          .getTabGroups("grid", activeWorktreeId ?? undefined);
-
-        const overId = over.id as string;
-
-        // Determine group index based on what we're hovering over
-        let groupIndex = -1;
-
-        if (overId === GRID_PLACEHOLDER_ID) {
-          // Hovering over the placeholder itself - use sortable.index if available
-          // (this can happen during drag oscillation)
+        if (groupIndex === -1) {
+          // Not found in any group - could be hovering over container or using sortable.index
           if (overData?.sortable?.index !== undefined) {
             groupIndex = Math.min(Math.max(0, overData.sortable.index), tabGroups.length);
           } else {
-            // Fallback to end
+            // Dropping on empty grid or container itself - append to end
             groupIndex = tabGroups.length;
           }
-        } else {
-          // Hovering over a real group or terminal - find which group it belongs to
-          groupIndex = tabGroups.findIndex((g) => g.id === overId || g.panelIds.includes(overId));
-
-          if (groupIndex === -1) {
-            // Not found in any group - could be hovering over container or using sortable.index
-            if (overData?.sortable?.index !== undefined) {
-              groupIndex = Math.min(Math.max(0, overData.sortable.index), tabGroups.length);
-            } else {
-              // Dropping on empty grid or container itself - append to end
-              groupIndex = tabGroups.length;
-            }
-          }
         }
-
-        setPlaceholderIndex(groupIndex);
-      } else {
-        setPlaceholderIndex(null);
       }
-    },
-    []
-  );
+
+      setPlaceholderIndex(groupIndex);
+    } else {
+      setPlaceholderIndex(null);
+    }
+  }, []);
 
   const handleDragEnd = useCallback(
     (event: DragEndEvent) => {
