@@ -20,13 +20,20 @@ vi.mock("node:v8", () => ({
 
 vi.mock("../../utils/logger.js", () => ({
   logDebug: vi.fn(),
+  logInfo: vi.fn(),
   logWarn: vi.fn(),
 }));
 
 import { app } from "electron";
 import v8 from "node:v8";
-import { logDebug, logWarn } from "../../utils/logger.js";
-import { startAppMetricsMonitor } from "../ProcessMemoryMonitor.js";
+import { logDebug, logInfo, logWarn } from "../../utils/logger.js";
+import {
+  startAppMetricsMonitor,
+  WARMUP_INTERVALS,
+  PRESSURE_COUNT_TIER2,
+  MITIGATION_COOLDOWN_MS,
+  type MemoryPressureActions,
+} from "../ProcessMemoryMonitor.js";
 
 const mockGetAppMetrics = app.getAppMetrics as ReturnType<typeof vi.fn>;
 
@@ -296,11 +303,6 @@ describe("ProcessMemoryMonitor", () => {
   });
 
   it("emits trend warning after sustained growth exceeding 5 MB/hr", () => {
-    // Simulate steady growth over 31 minutes (62 ticks × 30s)
-    // Start at 100 MB, grow ~3 MB per 60s bucket = ~180 MB/hr... too fast.
-    // We want growth just above threshold: 5 MB/hr = 2.5 MB per 30 min window
-    // Start at 100 MB, grow 0.1 MB per tick → 6.2 MB over 62 ticks (31 min)
-    // Per 0.5 hours that's ~6 MB/hr > 5 MB/hr threshold
     const baseMb = 100;
     const growthPerTickMb = 0.1; // ~6 MB/hr
     let tick = 0;
@@ -312,10 +314,6 @@ describe("ProcessMemoryMonitor", () => {
     });
 
     stop = startAppMetricsMonitor();
-
-    // First bucket commits at tick 2, 30th at tick 60 (30 min).
-    // At tick 60, emaHistory.length = 30 AND elapsed > 15 min — both suppression
-    // gates pass and trend evaluation begins. We advance a bit past to be safe.
 
     vi.advanceTimersByTime(62 * 30_000); // 31 min
 
@@ -333,8 +331,6 @@ describe("ProcessMemoryMonitor", () => {
   });
 
   it("suppresses trend warning before 30 buckets are accumulated", () => {
-    // Rapid growth but only 14 minutes (28 ticks = 14 buckets).
-    // Both suppression gates block: elapsed < 15 min AND buckets < 30.
     const baseMb = 100;
     const growthPerTickMb = 1;
     let tick = 0;
@@ -356,8 +352,6 @@ describe("ProcessMemoryMonitor", () => {
   });
 
   it("does not trigger trend warning when single-sample spikes are absorbed by bucket-minimum", () => {
-    // Flat baseline of 100 MB but every odd tick spikes to 200 MB.
-    // Bucket-minimum should always pick the baseline (100 MB), so EMA stays flat.
     const baseKB = 100 * 1024;
     const spikeKB = 200 * 1024;
     let tick = 0;
@@ -370,7 +364,6 @@ describe("ProcessMemoryMonitor", () => {
 
     stop = startAppMetricsMonitor();
 
-    // Run 62 ticks (31 min) — enough for full trend evaluation window
     vi.advanceTimersByTime(62 * 30_000);
 
     const trendCalls = vi
@@ -380,21 +373,147 @@ describe("ProcessMemoryMonitor", () => {
   });
 
   it("prunes trend state for PIDs that are no longer reported", () => {
-    // Start with PID 500, then remove it
     mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 200 * 1024, 500)]);
 
     stop = startAppMetricsMonitor();
     vi.advanceTimersByTime(30_000);
 
-    // Now only PID 600 is returned — PID 500 should be pruned
     mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 200 * 1024, 600)]);
     vi.advanceTimersByTime(30_000);
 
-    // Confirm new PID gets sampled (no crash from stale state)
     expect(logDebug).toHaveBeenCalledWith("process-memory-sample", {
       pid: 600,
       type: "Browser",
       mb: 200,
+    });
+  });
+
+  describe("memory pressure mitigation", () => {
+    let mockActions: MemoryPressureActions;
+
+    beforeEach(() => {
+      mockActions = {
+        clearCaches: vi.fn().mockResolvedValue(undefined),
+        hibernateIdleProjects: vi.fn().mockResolvedValue(undefined),
+      };
+    });
+
+    async function advancePolls(n: number): Promise<void> {
+      for (let i = 0; i < n; i++) {
+        vi.advanceTimersByTime(30_000);
+      }
+      await vi.advanceTimersByTimeAsync(0);
+    }
+
+    it("works without actions parameter (backward compat)", () => {
+      mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 350 * 1024, 100)]);
+      stop = startAppMetricsMonitor();
+      vi.advanceTimersByTime(30_000 * 10);
+      // No crash, no mitigation called
+    });
+
+    it("does not call clearCaches during warmup period", async () => {
+      mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 350 * 1024, 100)]);
+      stop = startAppMetricsMonitor(mockActions);
+
+      await advancePolls(WARMUP_INTERVALS);
+
+      expect(mockActions.clearCaches).not.toHaveBeenCalled();
+    });
+
+    it("calls clearCaches on first pressure poll after warmup", async () => {
+      mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 350 * 1024, 100)]);
+      stop = startAppMetricsMonitor(mockActions);
+
+      // Advance past warmup
+      await advancePolls(WARMUP_INTERVALS + 1);
+
+      expect(mockActions.clearCaches).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not call hibernateIdleProjects before sustained pressure threshold", async () => {
+      mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 350 * 1024, 100)]);
+      stop = startAppMetricsMonitor(mockActions);
+
+      // Warmup + pressure count less than tier2
+      await advancePolls(WARMUP_INTERVALS + PRESSURE_COUNT_TIER2 - 1);
+
+      expect(mockActions.hibernateIdleProjects).not.toHaveBeenCalled();
+    });
+
+    it("calls hibernateIdleProjects after sustained pressure threshold", async () => {
+      mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 350 * 1024, 100)]);
+      stop = startAppMetricsMonitor(mockActions);
+
+      await advancePolls(WARMUP_INTERVALS + PRESSURE_COUNT_TIER2);
+
+      expect(mockActions.hibernateIdleProjects).toHaveBeenCalledTimes(1);
+    });
+
+    it("resets consecutive pressure count when pressure subsides", async () => {
+      mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 350 * 1024, 100)]);
+      stop = startAppMetricsMonitor(mockActions);
+
+      // Past warmup + 2 pressure polls
+      await advancePolls(WARMUP_INTERVALS + 2);
+
+      // Drop below threshold
+      mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 200 * 1024, 100)]);
+      await advancePolls(1);
+
+      // Resume pressure — should restart count from 0
+      mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 350 * 1024, 100)]);
+      await advancePolls(PRESSURE_COUNT_TIER2 - 1);
+
+      expect(mockActions.hibernateIdleProjects).not.toHaveBeenCalled();
+    });
+
+    it("respects tier 2 cooldown — no re-trigger within cooldown period", async () => {
+      mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 350 * 1024, 100)]);
+      stop = startAppMetricsMonitor(mockActions);
+
+      // Trigger tier 2
+      await advancePolls(WARMUP_INTERVALS + PRESSURE_COUNT_TIER2);
+      expect(mockActions.hibernateIdleProjects).toHaveBeenCalledTimes(1);
+
+      // Continue pressure — should not trigger again within cooldown
+      await advancePolls(PRESSURE_COUNT_TIER2);
+      expect(mockActions.hibernateIdleProjects).toHaveBeenCalledTimes(1);
+    });
+
+    it("allows tier 2 re-trigger after cooldown expires", async () => {
+      mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 350 * 1024, 100)]);
+      stop = startAppMetricsMonitor(mockActions);
+
+      // Trigger tier 2
+      await advancePolls(WARMUP_INTERVALS + PRESSURE_COUNT_TIER2);
+      expect(mockActions.hibernateIdleProjects).toHaveBeenCalledTimes(1);
+
+      // Advance past cooldown (keep pressure)
+      const cooldownPolls = Math.ceil(MITIGATION_COOLDOWN_MS / 30_000);
+      await advancePolls(cooldownPolls + 1);
+
+      expect(mockActions.hibernateIdleProjects).toHaveBeenCalledTimes(2);
+    });
+
+    it("logs tier 1 and tier 2 mitigation events", async () => {
+      mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 350 * 1024, 100)]);
+      stop = startAppMetricsMonitor(mockActions);
+
+      await advancePolls(WARMUP_INTERVALS + PRESSURE_COUNT_TIER2);
+
+      expect(logInfo).toHaveBeenCalledWith("memory-pressure-tier1-mitigation", expect.any(Object));
+      expect(logInfo).toHaveBeenCalledWith("memory-pressure-tier2-mitigation", expect.any(Object));
+    });
+
+    it("does not trigger mitigation when no process exceeds threshold", async () => {
+      mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 200 * 1024, 100)]);
+      stop = startAppMetricsMonitor(mockActions);
+
+      await advancePolls(WARMUP_INTERVALS + PRESSURE_COUNT_TIER2 + 5);
+
+      expect(mockActions.clearCaches).not.toHaveBeenCalled();
+      expect(mockActions.hibernateIdleProjects).not.toHaveBeenCalled();
     });
   });
 });
