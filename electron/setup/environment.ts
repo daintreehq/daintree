@@ -51,10 +51,16 @@ if (process.platform === "linux") {
 }
 
 if (process.platform === "win32") {
+  const programFiles = process.env["ProgramFiles"] || "C:\\Program Files";
+  const programFilesX86 = process.env["ProgramFiles(x86)"] || "C:\\Program Files (x86)";
+  const chocoInstall = process.env["ChocolateyInstall"] || "C:\\ProgramData\\chocolatey";
+
   const extraPaths = [
     path.join(os.homedir(), "AppData", "Local", "Programs", "Git", "cmd"),
-    "C:\\Program Files\\Git\\cmd",
-    path.join(os.homedir(), ".local", "bin"),
+    path.join(programFiles, "Git", "cmd"),
+    path.join(programFilesX86, "Git", "cmd"),
+    path.join(os.homedir(), "scoop", "shims"),
+    path.join(chocoInstall, "bin"),
   ];
   const current = process.env.PATH || "";
   const existingEntries = current.split(path.delimiter).map((e) => e.toLowerCase());
