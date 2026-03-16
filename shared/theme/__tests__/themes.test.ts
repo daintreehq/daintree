@@ -400,17 +400,17 @@ describe("built-in schemes — Namib theme", () => {
 
   it("has the correct accent and canvas colors", () => {
     expect(namib.tokens["accent-primary"]).toBe("#3F9366");
-    expect(namib.tokens["surface-canvas"]).toBe("#1C0F0B");
+    expect(namib.tokens["surface-canvas"]).toBe("#1A1714");
   });
 
   it("has the scarab cyan keyword color", () => {
     expect(namib.tokens["syntax-keyword"]).toBe("#48C0B2");
   });
 
-  it("derives terminal-black/white/bright-black from surfaces and activity", () => {
+  it("derives terminal-black/white from surfaces and overrides bright-black", () => {
     expect(namib.tokens["terminal-black"]).toBe(namib.tokens["surface-canvas"]);
     expect(namib.tokens["terminal-white"]).toBe(namib.tokens["text-primary"]);
-    expect(namib.tokens["terminal-bright-black"]).toBe(namib.tokens["activity-idle"]);
+    expect(namib.tokens["terminal-bright-black"]).toBe("#5A5347");
   });
 
   it("produces all 79 required token keys", () => {
