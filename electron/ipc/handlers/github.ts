@@ -291,6 +291,7 @@ export function registerGithubHandlers(_deps: HandlerDependencies): () => void {
       state?: "open" | "closed" | "all";
       cursor?: string;
       bypassCache?: boolean;
+      sortOrder?: "created" | "updated";
     }
   ) => {
     if (!options || typeof options.cwd !== "string" || !options.cwd) {
@@ -311,6 +312,7 @@ export function registerGithubHandlers(_deps: HandlerDependencies): () => void {
       state?: "open" | "closed" | "merged" | "all";
       cursor?: string;
       bypassCache?: boolean;
+      sortOrder?: "created" | "updated";
     }
   ) => {
     if (!options || typeof options.cwd !== "string" || !options.cwd) {
