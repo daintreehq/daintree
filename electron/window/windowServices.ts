@@ -695,10 +695,17 @@ export async function setupWindowServices(
     ipcMain.removeHandler(CHANNELS.WINDOW_ZOOM_RESET);
     ipcMain.removeHandler(CHANNELS.WINDOW_CLOSE);
 
+    if (projectMcpManager) {
+      projectMcpManager.stopAll().catch(console.error);
+      projectMcpManager = null;
+    }
+
     if (workspaceClient) workspaceClient.dispose();
+    workspaceClient = null;
     disposeWorkspaceClient();
 
     if (sidecarManager) sidecarManager.destroy();
+    sidecarManager = null;
 
     disposeTaskOrchestrator();
     disposeAgentRouter();
@@ -706,6 +713,7 @@ export async function setupWindowServices(
     disposeWorkflowEngine();
 
     if (ptyClient) ptyClient.dispose();
+    ptyClient = null;
     disposePtyClient();
 
     getSystemSleepService().dispose();
