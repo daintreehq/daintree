@@ -1,7 +1,16 @@
 import { useState, useCallback } from "react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
-import { Lightbulb } from "lucide-react";
+import {
+  FolderOpen,
+  Globe,
+  HardDrive,
+  Lightbulb,
+  Settings,
+  TriangleAlert,
+  XCircle,
+  type LucideIcon,
+} from "lucide-react";
 import type { AppError, RetryAction } from "@/store/errorStore";
 
 export interface ErrorBannerProps {
@@ -22,13 +31,13 @@ const ERROR_TYPE_LABELS: Record<string, string> = {
   unknown: "Error",
 };
 
-const ERROR_TYPE_ICONS: Record<string, string> = {
-  git: "📂",
-  process: "⚙️",
-  filesystem: "📁",
-  network: "🌐",
-  config: "⚠️",
-  unknown: "❌",
+const ERROR_TYPE_ICONS: Record<string, LucideIcon> = {
+  git: FolderOpen,
+  process: Settings,
+  filesystem: HardDrive,
+  network: Globe,
+  config: TriangleAlert,
+  unknown: XCircle,
 };
 
 export function ErrorBanner({
@@ -61,7 +70,7 @@ export function ErrorBanner({
   }, []);
 
   const typeLabel = ERROR_TYPE_LABELS[error.type] || "Error";
-  const typeIcon = ERROR_TYPE_ICONS[error.type] || "❌";
+  const TypeIcon = ERROR_TYPE_ICONS[error.type] ?? XCircle;
   const canRetry = error.isTransient && error.retryAction && onRetry;
 
   const retryLabel = error.retryProgress
@@ -76,7 +85,7 @@ export function ErrorBanner({
           className
         )}
       >
-        <span className="shrink-0">{typeIcon}</span>
+        <TypeIcon className="w-4 h-4 shrink-0 text-status-error" />
         <span className="text-status-error truncate flex-1">{error.message}</span>
         {error.recoveryHint && (
           <span className="text-status-error/70 text-xs shrink-0 truncate max-w-[40%]">
@@ -122,7 +131,7 @@ export function ErrorBanner({
       role="alert"
     >
       <div className="flex items-center gap-2 px-3 py-2 bg-[color-mix(in_oklab,var(--color-status-error)_12%,transparent)]">
-        <span className="shrink-0 text-lg">{typeIcon}</span>
+        <TypeIcon className="w-5 h-5 shrink-0 text-status-error" />
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
             <span className="text-xs text-status-error font-medium">{typeLabel}</span>

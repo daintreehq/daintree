@@ -1,5 +1,6 @@
 import { cn } from "@/lib/utils";
 import { actionService } from "@/services/ActionService";
+import { TriangleAlert } from "lucide-react";
 
 export interface ErrorFallbackProps {
   error: Error;
@@ -20,19 +21,19 @@ const VARIANT_STYLES = {
 
 const VARIANT_SIZES = {
   fullscreen: {
-    icon: "text-6xl",
+    icon: "size-16",
     title: "text-2xl",
     message: "text-base",
     button: "px-6 py-3 text-base",
   },
   section: {
-    icon: "text-4xl",
+    icon: "size-9",
     title: "text-xl",
     message: "text-sm",
     button: "px-4 py-2 text-sm",
   },
   component: {
-    icon: "text-2xl",
+    icon: "size-6",
     title: "text-base",
     message: "text-xs",
     button: "px-3 py-1.5 text-xs",
@@ -57,7 +58,7 @@ export function ErrorFallback({
   return (
     <div className={cn(VARIANT_STYLES[variant])}>
       <div className="flex flex-col items-center gap-4 max-w-2xl">
-        <div className={cn("text-status-error", sizes.icon)}>⚠️</div>
+        <TriangleAlert className={cn("text-status-error", sizes.icon)} />
 
         <div className="text-center space-y-2">
           <h2 className={cn("font-semibold text-status-error", sizes.title)}>
