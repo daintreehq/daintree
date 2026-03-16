@@ -229,6 +229,11 @@ test.describe.serial("Core: Shell & Settings", () => {
       );
       await appearanceTab.click();
 
+      const terminalSubtab = window.locator(
+        '#settings-panel-terminalAppearance button[role="tab"]:has-text("Terminal")'
+      );
+      await terminalSubtab.click();
+
       const fontSelect = window.locator(SEL.settings.fontFamilySelect);
       await expect(fontSelect).toBeVisible({ timeout: T_MEDIUM });
       await expect(fontSelect).toHaveValue("jetbrains", { timeout: T_MEDIUM });
@@ -268,6 +273,10 @@ test.describe.serial("Core: Shell & Settings", () => {
         `${SEL.settings.navSidebar} button:has-text("Appearance")`
       );
       await appearanceTab.click();
+      const terminalSubtab = window.locator(
+        '#settings-panel-terminalAppearance button[role="tab"]:has-text("Terminal")'
+      );
+      await terminalSubtab.click();
       const fontSelect = window.locator(SEL.settings.fontFamilySelect);
       await expect(fontSelect).toHaveValue("system", { timeout: T_MEDIUM });
 
