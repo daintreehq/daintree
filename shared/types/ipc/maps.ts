@@ -13,11 +13,7 @@ import type { GitInitOptions, GitInitProgressEvent, GitInitResult } from "./gitI
 import type { AgentSettings } from "../agentSettings.js";
 import type { UserAgentRegistry, UserAgentConfig } from "../userAgentRegistry.js";
 import type { KeyAction } from "../keymap.js";
-import type {
-  KeybindingImportResult,
-  MicPermissionStatus,
-  VoiceInputSettings,
-} from "./api.js";
+import type { KeybindingImportResult, MicPermissionStatus, VoiceInputSettings } from "./api.js";
 
 import type {
   WorktreeSetActivePayload,
