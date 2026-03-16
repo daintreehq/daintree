@@ -43,20 +43,6 @@ export interface WorkflowFailedPayload {
   timestamp: number;
 }
 
-export type UrlContextResult =
-  | {
-      ok: true;
-      title: string;
-      markdown: string;
-      tokenEstimate: number;
-      sourceUrl: string;
-    }
-  | {
-      ok: false;
-      reason: "blocked" | "auth-required" | "fetch-error" | "too-large" | "parse-error";
-      message: string;
-    };
-
 import type {
   CreateWorktreeOptions,
   BranchInfo,
@@ -923,9 +909,6 @@ export interface ElectronAPI {
   };
   webUtils: {
     getPathForFile(file: File): string;
-  };
-  urlContext: {
-    resolve(url: string): Promise<UrlContextResult>;
   };
   appTheme: {
     get(): Promise<AppThemeConfig>;

@@ -60,13 +60,7 @@ import {
   addFileDropChip,
   interimMarkField,
   pendingAIField,
-  createUrlPasteField,
-  createUrlPasteDetector,
   createPlainPasteKeymap,
-  urlContextChipField,
-  addUrlContextChip,
-  updateUrlPasteStatus,
-  removeUrlPasteEntry,
   diffChipField,
   createDiffChipTooltip,
   terminalChipField,
@@ -301,62 +295,6 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       []
     );
 
-    const editorViewRefForUrl = editorViewRef;
-    const urlPasteFieldInstance = useMemo(
-      () =>
-        createUrlPasteField((entryId: number, url: string) => {
-          const view = editorViewRefForUrl.current;
-          if (!view) return;
-          view.dispatch({ effects: updateUrlPasteStatus.of({ id: entryId, status: "loading" }) });
-          window.electron.urlContext
-            .resolve(url)
-            .then((result) => {
-              const currentView = editorViewRefForUrl.current;
-              if (!currentView) return;
-              if (result.ok) {
-                const entries = currentView.state.field(urlPasteFieldInstance, false) ?? [];
-                const entry = entries.find((e) => e.id === entryId);
-                if (!entry) return;
-                currentView.dispatch({
-                  changes: { from: entry.from, to: entry.to, insert: result.markdown },
-                  effects: [
-                    removeUrlPasteEntry.of({ id: entryId }),
-                    addUrlContextChip.of({
-                      from: entry.from,
-                      to: entry.from + result.markdown.length,
-                      title: result.title,
-                      tokenEstimate: result.tokenEstimate,
-                      sourceUrl: result.sourceUrl,
-                    }),
-                  ],
-                });
-              } else {
-                currentView.dispatch({
-                  effects: updateUrlPasteStatus.of({
-                    id: entryId,
-                    status: "error",
-                    errorMessage: result.message,
-                  }),
-                });
-              }
-            })
-            .catch(() => {
-              const currentView = editorViewRefForUrl.current;
-              if (!currentView) return;
-              currentView.dispatch({
-                effects: updateUrlPasteStatus.of({
-                  id: entryId,
-                  status: "error",
-                  errorMessage: "Failed to fetch URL",
-                }),
-              });
-            });
-        }),
-      // eslint-disable-next-line react-hooks/exhaustive-deps
-      []
-    );
-
-    const urlPasteDetector = useMemo(() => createUrlPasteDetector(), []);
     const plainPasteKeymap = useMemo(() => createPlainPasteKeymap(), []);
 
     useEffect(() => {
@@ -1034,9 +972,6 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
           domEventHandlers,
           imagePasteExtension,
           filePasteExtension,
-          urlPasteFieldInstance,
-          urlContextChipField,
-          urlPasteDetector,
           plainPasteKeymap,
         ],
       });

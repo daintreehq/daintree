@@ -2,7 +2,7 @@ import { getEffectiveAgentConfig } from "@shared/config/agentRegistry";
 
 export interface TrayItem {
   id: string;
-  kind: "image" | "file" | "url";
+  kind: "image" | "file";
   label: string;
   tokenEstimate: number;
   from: number;
@@ -19,14 +19,6 @@ interface FileEntry {
   from: number;
   to: number;
   fileName: string;
-}
-
-interface UrlEntry {
-  from: number;
-  to: number;
-  title: string;
-  tokenEstimate: number;
-  sourceUrl: string;
 }
 
 const IMAGE_TOKEN_ESTIMATE = 1_000;
@@ -49,8 +41,7 @@ function imageLabel(filePath: string): string {
 
 export function normalizeChips(
   images: readonly ImageEntry[],
-  files: readonly FileEntry[],
-  urls: readonly UrlEntry[]
+  files: readonly FileEntry[]
 ): TrayItem[] {
   const items: TrayItem[] = [];
 
@@ -76,23 +67,12 @@ export function normalizeChips(
     });
   }
 
-  for (const url of urls) {
-    items.push({
-      id: `url-${url.from}-${url.to}`,
-      kind: "url",
-      label: url.title || url.sourceUrl,
-      tokenEstimate: url.tokenEstimate,
-      from: url.from,
-      to: url.to,
-    });
-  }
-
   items.sort((a, b) => a.from - b.from);
   return items;
 }
 
 export function buildSummaryLine(items: TrayItem[]): string {
-  const counts = { image: 0, file: 0, url: 0 };
+  const counts = { image: 0, file: 0 };
   let totalTokens = 0;
   for (const item of items) {
     counts[item.kind]++;
@@ -102,7 +82,6 @@ export function buildSummaryLine(items: TrayItem[]): string {
   const parts: string[] = [];
   if (counts.image > 0) parts.push(`${counts.image} image${counts.image !== 1 ? "s" : ""}`);
   if (counts.file > 0) parts.push(`${counts.file} file${counts.file !== 1 ? "s" : ""}`);
-  if (counts.url > 0) parts.push(`${counts.url} URL${counts.url !== 1 ? "s" : ""}`);
 
   return `${parts.join(" \u00b7 ")} \u00b7 ~${totalTokens.toLocaleString("en-US")} tokens`;
 }

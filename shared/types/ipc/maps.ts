@@ -17,7 +17,6 @@ import type {
   KeybindingImportResult,
   MicPermissionStatus,
   VoiceInputSettings,
-  UrlContextResult,
 } from "./api.js";
 
 import type {
@@ -1264,12 +1263,6 @@ export interface IpcInvokeMap {
   "clipboard:thumbnail-from-path": {
     args: [filePath: string];
     result: { ok: true; filePath: string; thumbnailDataUrl: string } | { ok: false; error: string };
-  };
-
-  // URL context channels
-  "url-context:resolve": {
-    args: [url: string];
-    result: UrlContextResult;
   };
 
   // Notification settings channels

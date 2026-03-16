@@ -1,5 +1,5 @@
 import { memo } from "react";
-import { X, ImageIcon, FileText, Link } from "lucide-react";
+import { X, ImageIcon, FileText } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { TrayItem } from "./attachmentTrayUtils";
 import { buildSummaryLine, isWarningUsage } from "./attachmentTrayUtils";
@@ -14,7 +14,6 @@ interface AttachmentTrayProps {
 const KIND_ICON = {
   image: ImageIcon,
   file: FileText,
-  url: Link,
 } as const;
 
 export const AttachmentTray = memo(function AttachmentTray({
