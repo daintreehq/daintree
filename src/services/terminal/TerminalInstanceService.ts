@@ -27,6 +27,7 @@ import { useScrollbackStore } from "@/store/scrollbackStore";
 import { usePerformanceModeStore } from "@/store/performanceModeStore";
 import { useProjectSettingsStore } from "@/store/projectSettingsStore";
 import { getScrollbackForType, PERFORMANCE_MODE_SCROLLBACK } from "@/utils/scrollbackConfig";
+import { SCROLLBACK_BACKGROUND } from "@shared/config/scrollback";
 
 // eslint-disable-next-line no-control-regex
 const URXVT_MOUSE_RE = /^\x1b\[\d+;\d+;\d+M/;
@@ -91,6 +92,12 @@ class TerminalInstanceService {
       wakeAndRestore: (id) => this.wakeManager.wakeAndRestore(id),
       onPostWake: (id) => this.handlePostWake(id),
       onTierApplied: (id, tier, managed) => {
+        if (tier === TerminalRefreshTier.BACKGROUND) {
+          this.reduceScrollback(id, SCROLLBACK_BACKGROUND);
+        } else {
+          this.restoreScrollback(id);
+        }
+
         if (
           tier === TerminalRefreshTier.FOCUSED ||
           tier === TerminalRefreshTier.BURST ||
@@ -526,6 +533,9 @@ class TerminalInstanceService {
 
       if (isAtBottom) {
         this.unseenTracker.clearUnseen(id, false);
+        if (managed.lastAppliedTier === TerminalRefreshTier.BACKGROUND) {
+          this.reduceScrollback(id, SCROLLBACK_BACKGROUND);
+        }
       } else {
         this.unseenTracker.updateScrollState(id, true);
       }
@@ -536,6 +546,8 @@ class TerminalInstanceService {
       const sel = terminal.getSelection();
       if (sel) {
         this.cachedSelections.set(id, sel);
+      } else if (managed.lastAppliedTier === TerminalRefreshTier.BACKGROUND) {
+        this.reduceScrollback(id, SCROLLBACK_BACKGROUND);
       }
     });
     listeners.push(() => selectionDisposable.dispose());
@@ -956,6 +968,10 @@ class TerminalInstanceService {
     // the resize path, sending redundant PTY resize events that cause Ink-based
     // TUIs (Gemini CLI) to detect idle re-render loops.
     this.resizeController.clearResizeJob(managed);
+
+    if (!isAltBuffer && managed.lastAppliedTier === TerminalRefreshTier.BACKGROUND) {
+      this.reduceScrollback(id, SCROLLBACK_BACKGROUND);
+    }
   }
 
   addAltBufferListener(id: string, callback: (isAltBuffer: boolean) => void): () => void {
@@ -1131,6 +1147,8 @@ class TerminalInstanceService {
     if (!managed) return;
     if (managed.isFocused) return;
     if (managed.isUserScrolledBack) return;
+    if (managed.isAltBuffer) return;
+    if (managed.terminal.hasSelection()) return;
 
     const currentScrollback = managed.terminal.options.scrollback ?? 0;
     if (currentScrollback <= targetLines) return;

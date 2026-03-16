@@ -70,11 +70,13 @@ function makeMockManaged(overrides: Record<string, unknown> = {}) {
       rows: 24,
       buffer: { active: { length: 3000 } },
       write: (data: string) => writtenData.push(data),
+      hasSelection: vi.fn(() => false),
     },
     type: "terminal",
     kind: "terminal",
     isFocused: false,
     isUserScrolledBack: false,
+    isAltBuffer: false,
     writtenData,
     ...overrides,
   };
@@ -115,6 +117,25 @@ describe("TerminalInstanceService - Scrollback", () => {
 
       service.reduceScrollback("t1", 500);
       expect(managed.terminal.options.scrollback).toBe(5000);
+    });
+
+    it("skips terminals in alt buffer mode", () => {
+      const managed = makeMockManaged({ isAltBuffer: true });
+      service.instances.set("t1", managed);
+
+      service.reduceScrollback("t1", 500);
+      expect(managed.terminal.options.scrollback).toBe(5000);
+      expect(managed.writtenData).toHaveLength(0);
+    });
+
+    it("skips terminals with active text selection", () => {
+      const managed = makeMockManaged();
+      managed.terminal.hasSelection = vi.fn(() => true);
+      service.instances.set("t1", managed);
+
+      service.reduceScrollback("t1", 500);
+      expect(managed.terminal.options.scrollback).toBe(5000);
+      expect(managed.writtenData).toHaveLength(0);
     });
 
     it("skips when current scrollback already at or below target", () => {
