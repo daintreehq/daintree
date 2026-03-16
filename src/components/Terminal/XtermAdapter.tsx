@@ -11,6 +11,10 @@ import {
   useTerminalFontStore,
   useProjectSettingsStore,
 } from "@/store";
+import {
+  useTerminalColorSchemeStore,
+  selectWrapperBackground,
+} from "@/store/terminalColorSchemeStore";
 import { getScrollbackForType, PERFORMANCE_MODE_SCROLLBACK } from "@/utils/scrollbackConfig";
 import { getXtermOptions } from "@/config/xtermConfig";
 import { getSoftNewlineSequence } from "../../../shared/utils/terminalInputProtocol.js";
@@ -71,6 +75,7 @@ function XtermAdapterComponent({
   const performanceMode = usePerformanceModeStore((state) => state.performanceMode);
   const fontSize = useTerminalFontStore((state) => state.fontSize);
   const fontFamily = useTerminalFontStore((state) => state.fontFamily);
+  const wrapperBackground = useTerminalColorSchemeStore(selectWrapperBackground);
 
   // Calculate effective scrollback: performance mode overrides, then project override, then app default
   const effectiveScrollback = useMemo(() => {
@@ -452,13 +457,11 @@ function XtermAdapterComponent({
   return (
     <div
       className={cn(
-        // Base container styling
-        "w-full h-full text-text-primary overflow-hidden bg-canopy-bg",
-        // In normal buffer mode: apply padding and rounded corners
-        // In alt buffer mode (TUI apps like OpenCode, vim, htop): remove padding for tight full-screen fit
+        "w-full h-full text-text-primary overflow-hidden",
         !isAltBuffer && "pl-3 pt-3 pb-3 pr-3 rounded-b-[var(--radius-lg)]",
         className
       )}
+      style={{ backgroundColor: wrapperBackground }}
     >
       <div ref={containerRef} className="w-full h-full min-h-0 min-w-0" />
     </div>
