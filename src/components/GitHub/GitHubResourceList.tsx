@@ -1,7 +1,8 @@
 import { useState, useEffect, useMemo, useCallback, useRef, type KeyboardEvent } from "react";
 import { useDebounce } from "@/hooks/useDebounce";
-import { Search, ExternalLink, RefreshCw, WifiOff, Plus, Settings, X } from "lucide-react";
+import { Search, ExternalLink, RefreshCw, WifiOff, Plus, Settings, X, Filter } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
 import { githubClient } from "@/clients/githubClient";
 import { actionService } from "@/services/ActionService";
@@ -64,6 +65,7 @@ export function GitHubResourceList({
   const [loadMoreError, setLoadMoreError] = useState<string | null>(null);
   const [exactNumberNotFound, setExactNumberNotFound] = useState<number | null>(null);
   const [activeIndex, setActiveIndex] = useState(-1);
+  const [sortPopoverOpen, setSortPopoverOpen] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
 
@@ -457,44 +459,121 @@ export function GitHubResourceList({
   return (
     <div className="w-[450px] flex flex-col max-h-[500px]">
       <div className="p-3 border-b border-[var(--border-divider)] space-y-3 shrink-0">
-        <div
-          className={cn(
-            "flex items-center gap-1.5 px-2 py-1.5 rounded-[var(--radius-md)]",
-            "bg-overlay-soft border border-[var(--border-overlay)]",
-            "focus-within:border-canopy-accent focus-within:ring-1 focus-within:ring-canopy-accent/20"
-          )}
-        >
-          <Search
-            className="w-3.5 h-3.5 shrink-0 text-canopy-text/40 pointer-events-none"
-            aria-hidden="true"
-          />
-          <input
-            ref={inputRef}
-            type="text"
-            placeholder={`Search ${type === "issue" ? "issues" : "pull requests"}...`}
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            onKeyDown={handleInputKeyDown}
-            autoFocus
-            role="combobox"
-            aria-autocomplete="list"
-            aria-expanded={true}
-            aria-haspopup="listbox"
-            aria-controls={listId}
-            aria-activedescendant={activeItemId}
-            aria-label={`Search ${type === "issue" ? "issues" : "pull requests"}`}
-            className="flex-1 min-w-0 text-sm bg-transparent text-canopy-text placeholder:text-muted-foreground focus:outline-none"
-          />
-          {searchQuery && (
-            <button
-              type="button"
-              onClick={handleClearSearch}
-              aria-label="Clear search"
-              className="flex items-center justify-center w-5 h-5 rounded shrink-0 text-canopy-text/40 hover:text-canopy-text"
+        <div className="flex items-center gap-2">
+          <div
+            className={cn(
+              "flex items-center gap-1.5 px-2 py-1.5 rounded-[var(--radius-md)] flex-1 min-w-0",
+              "bg-overlay-soft border border-[var(--border-overlay)]",
+              "focus-within:border-canopy-accent focus-within:ring-1 focus-within:ring-canopy-accent/20"
+            )}
+          >
+            <Search
+              className="w-3.5 h-3.5 shrink-0 text-canopy-text/40 pointer-events-none"
+              aria-hidden="true"
+            />
+            <input
+              ref={inputRef}
+              type="text"
+              placeholder={`Search ${type === "issue" ? "issues" : "pull requests"}...`}
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              onKeyDown={handleInputKeyDown}
+              autoFocus
+              role="combobox"
+              aria-autocomplete="list"
+              aria-expanded={true}
+              aria-haspopup="listbox"
+              aria-controls={listId}
+              aria-activedescendant={activeItemId}
+              aria-label={`Search ${type === "issue" ? "issues" : "pull requests"}`}
+              className="flex-1 min-w-0 text-sm bg-transparent text-canopy-text placeholder:text-muted-foreground focus:outline-none"
+            />
+            {searchQuery && (
+              <button
+                type="button"
+                onClick={handleClearSearch}
+                aria-label="Clear search"
+                className="flex items-center justify-center w-5 h-5 rounded shrink-0 text-canopy-text/40 hover:text-canopy-text"
+              >
+                <X className="w-3 h-3" />
+              </button>
+            )}
+          </div>
+          <Popover open={sortPopoverOpen} onOpenChange={setSortPopoverOpen}>
+            <PopoverTrigger asChild>
+              <button
+                type="button"
+                aria-label={`Sort ${type === "issue" ? "issues" : "pull requests"}`}
+                aria-haspopup="dialog"
+                className={cn(
+                  "relative flex items-center justify-center w-7 h-7 rounded shrink-0",
+                  "text-canopy-text/60 hover:text-canopy-text hover:bg-tint/[0.06]",
+                  "transition-colors",
+                  sortOrder !== "created" && "text-canopy-accent"
+                )}
+              >
+                <Filter className="w-3.5 h-3.5" />
+                {sortOrder !== "created" && (
+                  <span className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-canopy-accent" />
+                )}
+              </button>
+            </PopoverTrigger>
+            <PopoverContent
+              align="end"
+              sideOffset={8}
+              className="w-48 p-3"
+              onMouseDown={(e: React.MouseEvent) => e.stopPropagation()}
+              onTouchStart={(e: React.TouchEvent) => e.stopPropagation()}
+              onKeyDown={(e: React.KeyboardEvent) => {
+                if (e.key === "Escape") {
+                  e.stopPropagation();
+                  setSortPopoverOpen(false);
+                }
+              }}
             >
-              <X className="w-3 h-3" />
-            </button>
-          )}
+              <div className="text-[10px] font-medium text-canopy-text/50 uppercase tracking-wide mb-2">
+                Sort by
+              </div>
+              <div className="flex flex-col gap-1" role="radiogroup" aria-label="Sort order">
+                {(
+                  [
+                    { value: "created", label: "Newest" },
+                    { value: "updated", label: "Recently updated" },
+                  ] as const
+                ).map((option) => (
+                  <button
+                    key={option.value}
+                    type="button"
+                    onClick={() => setSortOrder(option.value)}
+                    role="radio"
+                    aria-checked={sortOrder === option.value}
+                    className={cn(
+                      "flex items-center gap-2 px-2 py-1 text-xs rounded",
+                      sortOrder === option.value
+                        ? "bg-canopy-accent/10 text-canopy-accent"
+                        : "text-canopy-text/70 hover:bg-overlay-medium"
+                    )}
+                  >
+                    <div
+                      className={cn(
+                        "w-3 h-3 rounded-full border",
+                        sortOrder === option.value
+                          ? "border-canopy-accent bg-canopy-accent"
+                          : "border-canopy-border"
+                      )}
+                    >
+                      {sortOrder === option.value && (
+                        <div className="w-full h-full flex items-center justify-center">
+                          <div className="w-1.5 h-1.5 bg-white rounded-full" />
+                        </div>
+                      )}
+                    </div>
+                    {option.label}
+                  </button>
+                ))}
+              </div>
+            </PopoverContent>
+          </Popover>
         </div>
 
         <div
@@ -521,50 +600,6 @@ export function GitHubResourceList({
               </button>
             );
           })}
-        </div>
-
-        <div role="radiogroup" aria-label="Sort order">
-          <div className="text-[10px] font-medium text-canopy-text/50 uppercase tracking-wide mb-1.5">
-            Sort by
-          </div>
-          <div className="flex flex-col gap-1">
-            {(
-              [
-                { value: "created", label: "Newest" },
-                { value: "updated", label: "Recently updated" },
-              ] as const
-            ).map((option) => (
-              <button
-                key={option.value}
-                type="button"
-                onClick={() => setSortOrder(option.value)}
-                role="radio"
-                aria-checked={sortOrder === option.value}
-                className={cn(
-                  "flex items-center gap-2 px-2 py-1 text-xs rounded",
-                  sortOrder === option.value
-                    ? "bg-canopy-accent/10 text-canopy-accent"
-                    : "text-canopy-text/70 hover:bg-overlay-medium"
-                )}
-              >
-                <div
-                  className={cn(
-                    "w-3 h-3 rounded-full border",
-                    sortOrder === option.value
-                      ? "border-canopy-accent bg-canopy-accent"
-                      : "border-canopy-border"
-                  )}
-                >
-                  {sortOrder === option.value && (
-                    <div className="w-full h-full flex items-center justify-center">
-                      <div className="w-1.5 h-1.5 bg-white rounded-full" />
-                    </div>
-                  )}
-                </div>
-                {option.label}
-              </button>
-            ))}
-          </div>
         </div>
       </div>
 
