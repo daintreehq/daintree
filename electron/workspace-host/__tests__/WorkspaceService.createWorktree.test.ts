@@ -86,12 +86,14 @@ vi.mock("../../services/events.js", () => ({
   events: new EventEmitter(),
 }));
 
-vi.mock("../../utils/gitFileWatcher.js", () => ({
-  GitFileWatcher: vi.fn().mockImplementation(() => ({
-    start: vi.fn().mockReturnValue(false),
-    dispose: vi.fn(),
-  })),
-}));
+vi.mock("../../utils/gitFileWatcher.js", () => {
+  return {
+    GitFileWatcher: class {
+      start() { return false; }
+      dispose() {}
+    },
+  };
+});
 
 vi.mock("fs/promises", () => ({
   stat: vi.fn().mockRejectedValue(new Error("ENOENT")),
