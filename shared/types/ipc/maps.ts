@@ -1610,6 +1610,8 @@ export interface IpcEventMap {
     timestamp: number;
   };
   "terminal:backend-ready": void;
+  "terminal:reduce-scrollback": { terminalIds: string[]; targetLines: number };
+  "terminal:restore-scrollback": { terminalIds: string[] };
 
   // Agent events
   "agent:state-changed": AgentStateChangePayload;

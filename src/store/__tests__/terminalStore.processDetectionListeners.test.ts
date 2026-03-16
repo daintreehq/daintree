@@ -137,6 +137,8 @@ vi.mock("@/clients", () => ({
     onBackendCrashed: onBackendCrashedMock,
     onBackendReady: onBackendReadyMock,
     onSpawnResult: onSpawnResultMock,
+    onReduceScrollback: vi.fn(() => vi.fn()),
+    onRestoreScrollback: vi.fn(() => vi.fn()),
   },
   appClient: {
     setState: vi.fn().mockResolvedValue(undefined),

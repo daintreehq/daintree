@@ -191,6 +191,8 @@ const CHANNELS = {
   TERMINAL_BACKEND_READY: "terminal:backend-ready",
   TERMINAL_SEND_KEY: "terminal:send-key",
   TERMINAL_AGENT_TITLE_STATE: "terminal:agent-title-state",
+  TERMINAL_REDUCE_SCROLLBACK: "terminal:reduce-scrollback",
+  TERMINAL_RESTORE_SCROLLBACK: "terminal:restore-scrollback",
 
   // Files channels
   FILES_SEARCH: "files:search",
@@ -828,6 +830,13 @@ const api: ElectronAPI = {
       ipcRenderer.on(CHANNELS.TERMINAL_SPAWN_RESULT, handler);
       return () => ipcRenderer.removeListener(CHANNELS.TERMINAL_SPAWN_RESULT, handler);
     },
+
+    onReduceScrollback: (
+      callback: (data: { terminalIds: string[]; targetLines: number }) => void
+    ) => _typedOn(CHANNELS.TERMINAL_REDUCE_SCROLLBACK, callback),
+
+    onRestoreScrollback: (callback: (data: { terminalIds: string[] }) => void) =>
+      _typedOn(CHANNELS.TERMINAL_RESTORE_SCROLLBACK, callback),
   },
 
   // Files API
