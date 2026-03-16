@@ -9,10 +9,7 @@ import {
 } from "../../../schemas/ipc.js";
 import { getCrashRecoveryService } from "../../../services/CrashRecoveryService.js";
 
-export function isWebGLHardwareAccelerated(webgl2: unknown): boolean {
-  if (typeof webgl2 !== "string") return true;
-  return webgl2.startsWith("enabled") && webgl2 !== "enabled_readback";
-}
+import { isWebGLHardwareAccelerated } from "../../../utils/gpuDetection.js";
 
 export function registerAppStateHandlers(): () => void {
   const handlers: Array<() => void> = [];
@@ -240,12 +237,10 @@ export function registerAppStateHandlers(): () => void {
     );
 
     const gpuStatus = app.getGPUFeatureStatus();
-    const gpuWebGLHardware = isWebGLHardwareAccelerated(
-      (gpuStatus as Record<string, unknown>).webgl2
-    );
+    const gpuWebGLHardware = isWebGLHardwareAccelerated(gpuStatus.webgl2);
     if (!gpuWebGLHardware) {
       console.warn(
-        `[AppHydrate] Software-only WebGL2 detected (status: ${(gpuStatus as Record<string, unknown>).webgl2}). WebGL terminal renderer will be disabled.`
+        `[AppHydrate] Software-only WebGL2 detected (status: ${gpuStatus.webgl2}). WebGL terminal renderer will be disabled.`
       );
     }
 

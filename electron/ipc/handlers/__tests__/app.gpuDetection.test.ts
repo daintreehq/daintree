@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { isWebGLHardwareAccelerated } from "../app/state.js";
+import { isWebGLHardwareAccelerated } from "../../../utils/gpuDetection.js";
 
 describe("isWebGLHardwareAccelerated", () => {
   it('returns true for "enabled"', () => {
