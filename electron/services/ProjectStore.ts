@@ -14,7 +14,6 @@ import { app } from "electron";
 import { GitService } from "./GitService.js";
 import { isCanopyError } from "../utils/errorTypes.js";
 import { logError } from "../utils/logger.js";
-import { projectEnvSecureStorage } from "./ProjectEnvSecureStorage.js";
 import { store } from "../store.js";
 import { getSharedDb } from "./persistence/db.js";
 import {
