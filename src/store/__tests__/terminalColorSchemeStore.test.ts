@@ -64,11 +64,11 @@ describe("terminalColorSchemeStore", () => {
     expect(theme.cursor).toBe("#3F9366");
   });
 
-  it("getEffectiveTheme returns dracula for fiordland app theme", () => {
+  it("getEffectiveTheme returns fiordland theme for fiordland app theme", () => {
     useAppThemeStore.setState({ selectedSchemeId: "fiordland" });
     const theme = useTerminalColorSchemeStore.getState().getEffectiveTheme();
-    expect(theme.background).toBe("#282a36");
-    expect(theme.foreground).toBe("#f8f8f2");
+    expect(theme.background).toBe("#070D12");
+    expect(theme.foreground).toBe("#B5C7D6");
   });
 
   it("getEffectiveTheme returns Highlands theme for highlands app theme", () => {
