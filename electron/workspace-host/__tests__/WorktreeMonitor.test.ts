@@ -11,11 +11,28 @@ vi.mock("../../utils/git.js", () => ({
 }));
 
 vi.mock("simple-git", () => ({
-  simpleGit: vi.fn(() => ({ raw: vi.fn() })),
+  simpleGit: vi.fn(() => ({ raw: vi.fn(), log: vi.fn().mockResolvedValue({ latest: null }) })),
 }));
 
 vi.mock("../../services/worktree/mood.js", () => ({
   categorizeWorktree: vi.fn().mockReturnValue("stable"),
+}));
+
+vi.mock("../../services/issueExtractor.js", () => ({
+  extractIssueNumberSync: vi.fn().mockReturnValue(null),
+  extractIssueNumber: vi.fn().mockResolvedValue(null),
+}));
+
+vi.mock("../../utils/gitUtils.js", () => ({
+  getGitDir: vi.fn().mockReturnValue(null),
+  clearGitDirCache: vi.fn(),
+}));
+
+vi.mock("../../utils/gitFileWatcher.js", () => ({
+  GitFileWatcher: vi.fn().mockImplementation(() => ({
+    start: vi.fn().mockReturnValue(false),
+    dispose: vi.fn(),
+  })),
 }));
 
 vi.mock("../../services/worktree/index.js", () => ({
@@ -55,6 +72,7 @@ const TEST_CONFIG: WorktreeMonitorConfig = {
   adaptiveBackoff: false,
   pollIntervalMax: 10000,
   circuitBreakerThreshold: 5,
+  gitWatchEnabled: false,
 };
 
 function makeCallbacks(overrides?: Partial<WorktreeMonitorCallbacks>): WorktreeMonitorCallbacks {
@@ -128,5 +146,77 @@ describe("WorktreeMonitor", () => {
     expect(callbacks.onRemoved).not.toHaveBeenCalled();
 
     monitor.stop();
+  });
+
+  it("includes createdAt, lifecycleStatus, projectScopeId in snapshot", () => {
+    const callbacks = makeCallbacks();
+    const monitor = new WorktreeMonitor(TEST_WORKTREE, TEST_CONFIG, callbacks, "main");
+    monitor.setCreatedAt(1234567890);
+    monitor.setProjectScopeId("scope-1");
+    monitor.setLifecycleStatus({ phase: "setup", state: "running", totalCommands: 1, startedAt: 1234567890 });
+
+    const snapshot = monitor.getSnapshot();
+    expect(snapshot.createdAt).toBe(1234567890);
+    expect(snapshot.lifecycleStatus).toEqual(expect.objectContaining({ phase: "setup", state: "running" }));
+  });
+
+  it("includes prTitle and issueTitle in snapshot after setPRInfo", () => {
+    const callbacks = makeCallbacks();
+    const monitor = new WorktreeMonitor(TEST_WORKTREE, TEST_CONFIG, callbacks, "main");
+    monitor.setPRInfo({
+      prNumber: 42,
+      prUrl: "https://github.com/test/pr/42",
+      prState: "open",
+      prTitle: "Fix bug",
+      issueTitle: "Bug report",
+    });
+
+    const snapshot = monitor.getSnapshot();
+    expect(snapshot.prNumber).toBe(42);
+    expect(snapshot.prTitle).toBe("Fix bug");
+    expect(snapshot.issueTitle).toBe("Bug report");
+  });
+
+  it("clearPRInfo removes PR fields", () => {
+    const callbacks = makeCallbacks();
+    const monitor = new WorktreeMonitor(TEST_WORKTREE, TEST_CONFIG, callbacks, "main");
+    monitor.setPRInfo({ prNumber: 42, prUrl: "url", prState: "open", prTitle: "Title" });
+    monitor.clearPRInfo();
+
+    const snapshot = monitor.getSnapshot();
+    expect(snapshot.prNumber).toBeUndefined();
+    expect(snapshot.prTitle).toBeUndefined();
+  });
+
+  it("hasInitialStatus is false before start", () => {
+    const callbacks = makeCallbacks();
+    const monitor = new WorktreeMonitor(TEST_WORKTREE, TEST_CONFIG, callbacks, "main");
+    expect(monitor.hasInitialStatus).toBe(false);
+  });
+
+  it("hasInitialStatus is true after successful updateGitStatus", async () => {
+    mockGetWorktreeChangesWithStats.mockResolvedValue({
+      worktreeId: "/test/worktree",
+      rootPath: "/test",
+      changes: [],
+      changedFileCount: 0,
+      lastUpdated: Date.now(),
+    });
+
+    const callbacks = makeCallbacks();
+    const monitor = new WorktreeMonitor(TEST_WORKTREE, TEST_CONFIG, callbacks, "main");
+    await monitor.start();
+
+    expect(monitor.hasInitialStatus).toBe(true);
+
+    monitor.stop();
+  });
+
+  it("isMainWorktree is settable", () => {
+    const callbacks = makeCallbacks();
+    const monitor = new WorktreeMonitor(TEST_WORKTREE, TEST_CONFIG, callbacks, "main");
+    expect(monitor.isMainWorktree).toBe(false);
+    monitor.isMainWorktree = true;
+    expect(monitor.isMainWorktree).toBe(true);
   });
 });

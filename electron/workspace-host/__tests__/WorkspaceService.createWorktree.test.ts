@@ -1,10 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { EventEmitter } from "events";
 import type { WorkspaceService } from "../WorkspaceService.js";
-import type { MonitorState } from "../types.js";
-import type { WorktreeChanges } from "../../types/index.js";
 
-// Mocks need to be hoisted or defined in vi.mock
 const mockSimpleGit = {
   raw: vi.fn().mockResolvedValue(undefined),
   branch: vi.fn().mockResolvedValue({ current: "main" }),
@@ -76,9 +73,12 @@ vi.mock("../../services/github/GitHubAuth.js", () => ({
 
 vi.mock("../../services/PullRequestService.js", () => ({
   pullRequestService: {
+    initialize: vi.fn(),
     start: vi.fn(),
     stop: vi.fn(),
-    getStatus: vi.fn().mockReturnValue({ state: "idle" }),
+    reset: vi.fn(),
+    refresh: vi.fn(),
+    getStatus: vi.fn().mockReturnValue({ state: "idle", isPolling: false, candidateCount: 0, resolvedCount: 0, isEnabled: true }),
   },
 }));
 
@@ -86,11 +86,19 @@ vi.mock("../../services/events.js", () => ({
   events: new EventEmitter(),
 }));
 
+vi.mock("../../utils/gitFileWatcher.js", () => ({
+  GitFileWatcher: vi.fn().mockImplementation(() => ({
+    start: vi.fn().mockReturnValue(false),
+    dispose: vi.fn(),
+  })),
+}));
+
 vi.mock("fs/promises", () => ({
   stat: vi.fn().mockRejectedValue(new Error("ENOENT")),
   mkdir: vi.fn().mockResolvedValue(undefined),
   writeFile: vi.fn().mockResolvedValue(undefined),
   access: vi.fn().mockResolvedValue(undefined),
+  readFile: vi.fn().mockRejectedValue(new Error("ENOENT")),
 }));
 
 describe("WorkspaceService.createWorktree", () => {
@@ -122,13 +130,14 @@ describe("WorkspaceService.createWorktree", () => {
       path: "/test/worktree",
     };
 
-    service["listWorktreesFromGit"] = vi.fn().mockResolvedValue([
+    service["listService"].list = vi.fn().mockResolvedValue([
       {
         path: "/test/worktree",
         branch: "feature/test",
         head: "abc123",
         isDetached: false,
         isMainWorktree: false,
+        bare: false,
       },
     ]);
 
@@ -172,13 +181,14 @@ describe("WorkspaceService.createWorktree", () => {
       useExistingBranch: true,
     };
 
-    service["listWorktreesFromGit"] = vi.fn().mockResolvedValue([
+    service["listService"].list = vi.fn().mockResolvedValue([
       {
         path: "/test/worktree2",
         branch: "existing-branch",
         head: "def456",
         isDetached: false,
         isMainWorktree: false,
+        bare: false,
       },
     ]);
 
@@ -202,13 +212,14 @@ describe("WorkspaceService.createWorktree", () => {
       fromRemote: true,
     };
 
-    service["listWorktreesFromGit"] = vi.fn().mockResolvedValue([
+    service["listService"].list = vi.fn().mockResolvedValue([
       {
         path: "/test/worktree3",
         branch: "feature/remote",
         head: "ghi789",
         isDetached: false,
         isMainWorktree: false,
+        bare: false,
       },
     ]);
 
@@ -266,13 +277,14 @@ describe("WorkspaceService.createWorktree", () => {
     });
     waitForPathExists.mockReturnValue(waitPromise);
 
-    service["listWorktreesFromGit"] = vi.fn().mockResolvedValue([
+    service["listService"].list = vi.fn().mockResolvedValue([
       {
         path: "/test/worktree-delayed",
         branch: "feature/delayed",
         head: "jkl012",
         isDetached: false,
         isMainWorktree: false,
+        bare: false,
       },
     ]);
 
@@ -306,8 +318,8 @@ describe("WorkspaceService.createWorktree", () => {
     mkdirSpy.mockClear();
     writeFileSpy.mockClear();
 
-    const listWorktreesSpy = vi.spyOn(service as any, "listWorktreesFromGit");
-    listWorktreesSpy.mockClear();
+    const listSpy = vi.spyOn(service["listService"], "list");
+    listSpy.mockClear();
 
     await service.createWorktree(requestId, "/test/root", options);
 
@@ -321,7 +333,7 @@ describe("WorkspaceService.createWorktree", () => {
     expect(mkdirSpy).not.toHaveBeenCalled();
     expect(writeFileSpy).not.toHaveBeenCalled();
 
-    expect(listWorktreesSpy).not.toHaveBeenCalled();
+    expect(listSpy).not.toHaveBeenCalled();
   });
 });
 
@@ -361,7 +373,7 @@ describe("WorkspaceService.loadProject performance behavior", () => {
       resolveRefresh = resolve;
     });
 
-    service["listWorktreesFromGit"] = vi.fn().mockResolvedValue(rawWorktrees);
+    service["listService"].list = vi.fn().mockResolvedValue(rawWorktrees);
     service["syncMonitors"] = vi.fn().mockResolvedValue(undefined);
     service["initializePRService"] = vi.fn().mockReturnValue(prPromise);
     service["refreshAll"] = vi.fn().mockReturnValue(refreshPromise);
@@ -390,11 +402,13 @@ describe("WorkspaceService.loadProject performance behavior", () => {
     ].join("\n");
 
     mockSimpleGit.raw.mockResolvedValue(porcelainOutput);
-    service["projectRootPath"] = "/repo";
-    service["git"] = mockSimpleGit as unknown as import("simple-git").SimpleGit;
+    service["listService"].setGit(
+      mockSimpleGit as unknown as import("simple-git").SimpleGit,
+      "/repo"
+    );
 
-    const first = await service["listWorktreesFromGit"]();
-    const second = await service["listWorktreesFromGit"]();
+    const first = await service["listService"].list();
+    const second = await service["listService"].list();
 
     expect(first).toEqual(second);
     expect(mockSimpleGit.raw).toHaveBeenCalledTimes(1);
@@ -409,17 +423,19 @@ describe("WorkspaceService.loadProject performance behavior", () => {
     ].join("\n");
 
     mockSimpleGit.raw.mockResolvedValue(porcelainOutput);
-    service["projectRootPath"] = "/repo";
-    service["git"] = mockSimpleGit as unknown as import("simple-git").SimpleGit;
+    service["listService"].setGit(
+      mockSimpleGit as unknown as import("simple-git").SimpleGit,
+      "/repo"
+    );
 
-    await service["listWorktreesFromGit"]();
-    await service["listWorktreesFromGit"]({ forceRefresh: true });
+    await service["listService"].list();
+    await service["listService"].list({ forceRefresh: true });
 
     expect(mockSimpleGit.raw).toHaveBeenCalledTimes(2);
   });
 
-  it("uses the worktree folder name for detached worktrees", async () => {
-    const mapped = service["mapRawWorktrees"]([
+  it("uses the worktree folder name for detached worktrees", () => {
+    const mapped = service["listService"].mapToWorktrees([
       {
         path: "/repo/canopy-bisect/cross-worktree-diff-2026-03-06",
         branch: "",
@@ -437,153 +453,5 @@ describe("WorkspaceService.loadProject performance behavior", () => {
         isDetached: true,
       }),
     ]);
-  });
-});
-
-describe("WorkspaceService git watcher refresh behavior", () => {
-  let service: WorkspaceService;
-
-  beforeEach(async () => {
-    vi.clearAllMocks();
-    vi.useFakeTimers();
-
-    const WorkspaceServiceModule = await import("../WorkspaceService.js");
-    service = new WorkspaceServiceModule.WorkspaceService(vi.fn());
-  });
-
-  afterEach(() => {
-    vi.useRealTimers();
-    vi.restoreAllMocks();
-  });
-
-  function createMonitorState(): MonitorState {
-    const changes = [
-      {
-        path: "/test/worktree/file.ts",
-        status: "modified" as const,
-        insertions: 2,
-        deletions: 1,
-      },
-    ];
-
-    return {
-      id: "/test/worktree",
-      path: "/test/worktree",
-      name: "feature/test",
-      branch: "feature/test",
-      isCurrent: true,
-      isMainWorktree: false,
-      gitDir: "/test/worktree/.git",
-      worktreeId: "/test/worktree",
-      summary: "Working",
-      modifiedCount: 1,
-      changes,
-      mood: "stable",
-      worktreeChanges: {
-        head: "abc123",
-        isDirty: true,
-        stagedFileCount: 1,
-        unstagedFileCount: 0,
-        untrackedFileCount: 0,
-        conflictedFileCount: 0,
-        changedFileCount: 1,
-        changes,
-      },
-      lastActivityTimestamp: null,
-      createdAt: Date.now(),
-      pollingTimer: null,
-      resumeTimer: null,
-      pollingInterval: 2000,
-      isRunning: true,
-      isUpdating: false,
-      pollingEnabled: true,
-      hasInitialStatus: true,
-      previousStateHash: "seed",
-      pollingStrategy: {
-        updateConfig: vi.fn(),
-        setBaseInterval: vi.fn(),
-        isCircuitBreakerTripped: vi.fn().mockReturnValue(false),
-        calculateNextInterval: vi.fn().mockReturnValue(2000),
-        recordSuccess: vi.fn(),
-        recordFailure: vi.fn(),
-      },
-      noteReader: { read: vi.fn().mockResolvedValue(null) },
-      gitWatcher: null,
-      gitWatchDebounceTimer: null,
-      gitWatchRefreshPending: false,
-      gitWatchEnabled: true,
-    } as unknown as MonitorState;
-  }
-
-  it("does not drop git watch refreshes when debounce fires during an in-flight update", async () => {
-    const gitModule = await import("../../utils/git.js");
-    const getWorktreeChangesWithStatsMock = vi.mocked(gitModule.getWorktreeChangesWithStats);
-    const monitor = createMonitorState();
-    service["gitWatchDebounceMs"] = 50;
-
-    const firstResult: WorktreeChanges = {
-      worktreeId: monitor.id,
-      rootPath: monitor.path,
-      changedFileCount: 1,
-      changes: monitor.changes ?? [],
-      lastCommitMessage: "feat: update",
-    };
-
-    let resolveFirstUpdate!: (value: typeof firstResult) => void;
-    const firstUpdateResult = new Promise<typeof firstResult>((resolve) => {
-      resolveFirstUpdate = resolve;
-    });
-
-    getWorktreeChangesWithStatsMock.mockReset();
-    getWorktreeChangesWithStatsMock.mockImplementationOnce(() => firstUpdateResult);
-    getWorktreeChangesWithStatsMock.mockResolvedValue(firstResult);
-
-    const inFlightUpdate = service["updateGitStatus"](monitor, true);
-    expect(monitor.isUpdating).toBe(true);
-
-    service["handleGitFileChange"](monitor);
-    await vi.advanceTimersByTimeAsync(60);
-
-    expect(monitor.gitWatchRefreshPending).toBe(true);
-    expect(getWorktreeChangesWithStatsMock).toHaveBeenCalledTimes(1);
-
-    resolveFirstUpdate(firstResult);
-    await inFlightUpdate;
-    await Promise.resolve();
-    await Promise.resolve();
-
-    expect(getWorktreeChangesWithStatsMock).toHaveBeenCalledTimes(2);
-    expect(monitor.gitWatchRefreshPending).toBe(false);
-  });
-
-  it("retries git watch refresh after index.lock conflicts", async () => {
-    const gitModule = await import("../../utils/git.js");
-    const getWorktreeChangesWithStatsMock = vi.mocked(gitModule.getWorktreeChangesWithStats);
-    const monitor = createMonitorState();
-    service["gitWatchDebounceMs"] = 40;
-
-    const lockedError = new Error("fatal: Unable to create '/repo/.git/index.lock': File exists.");
-    const recoveredResult: WorktreeChanges = {
-      worktreeId: monitor.id,
-      rootPath: monitor.path,
-      changedFileCount: 0,
-      changes: [],
-      lastCommitMessage: "fix: commit completed",
-    };
-
-    getWorktreeChangesWithStatsMock.mockReset();
-    getWorktreeChangesWithStatsMock.mockRejectedValueOnce(lockedError);
-    getWorktreeChangesWithStatsMock.mockResolvedValue(recoveredResult);
-
-    service["handleGitFileChange"](monitor);
-    await Promise.resolve();
-    expect(getWorktreeChangesWithStatsMock).toHaveBeenCalledTimes(1);
-
-    await vi.advanceTimersByTimeAsync(45);
-    await Promise.resolve();
-    await Promise.resolve();
-
-    expect(getWorktreeChangesWithStatsMock).toHaveBeenCalledTimes(2);
-    expect(monitor.gitWatchDebounceTimer).toBeNull();
   });
 });

@@ -1,9 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { EventEmitter } from "events";
 import type { WorkspaceService } from "../WorkspaceService.js";
-import type { MonitorState } from "../types.js";
+import type { WorktreeMonitor } from "../WorktreeMonitor.js";
+import type { Worktree } from "../../../shared/types/worktree.js";
 
-/** Normalize a path to forward slashes for cross-platform mock matching */
 const n = (p: string) => (p as string).replace(/\\/g, "/");
 
 const mockSimpleGit = {
@@ -75,14 +75,24 @@ vi.mock("../../services/github/GitHubAuth.js", () => ({
 
 vi.mock("../../services/PullRequestService.js", () => ({
   pullRequestService: {
+    initialize: vi.fn(),
     start: vi.fn(),
     stop: vi.fn(),
-    getStatus: vi.fn().mockReturnValue({ state: "idle" }),
+    reset: vi.fn(),
+    refresh: vi.fn(),
+    getStatus: vi.fn().mockReturnValue({ state: "idle", isPolling: false, candidateCount: 0, resolvedCount: 0, isEnabled: true }),
   },
 }));
 
 vi.mock("../../services/events.js", () => ({
   events: new EventEmitter(),
+}));
+
+vi.mock("../../utils/gitFileWatcher.js", () => ({
+  GitFileWatcher: vi.fn().mockImplementation(() => ({
+    start: vi.fn().mockReturnValue(false),
+    dispose: vi.fn(),
+  })),
 }));
 
 vi.mock("fs/promises", () => ({
@@ -98,72 +108,36 @@ vi.mock("child_process", () => ({
   spawn: vi.fn(),
 }));
 
+function createTestWorktree(overrides: Partial<Worktree> = {}): Worktree {
+  return {
+    id: "/test/worktree",
+    path: "/test/worktree",
+    name: "feature/test",
+    branch: "feature/test",
+    isCurrent: false,
+    isMainWorktree: false,
+    gitDir: "/test/worktree/.git",
+    ...overrides,
+  };
+}
+
 describe("WorkspaceService.deleteWorktree", () => {
   let service: WorkspaceService;
   let mockSendEvent: ReturnType<typeof vi.fn>;
-
-  function createMonitorState(overrides: Partial<MonitorState> = {}): MonitorState {
-    return {
-      id: "/test/worktree",
-      path: "/test/worktree",
-      name: "feature/test",
-      branch: "feature/test",
-      isCurrent: false,
-      isMainWorktree: false,
-      gitDir: "/test/worktree/.git",
-      worktreeId: "/test/worktree",
-      summary: "Working",
-      modifiedCount: 0,
-      changes: [],
-      mood: "stable",
-      worktreeChanges: {
-        worktreeId: "/test/worktree",
-        rootPath: "/test/worktree",
-        changedFileCount: 0,
-        changes: [],
-      },
-      lastActivityTimestamp: null,
-      createdAt: Date.now(),
-      pollingTimer: null,
-      resumeTimer: null,
-      pollingInterval: 10000,
-      isRunning: false,
-      isUpdating: false,
-      pollingEnabled: true,
-      hasInitialStatus: true,
-      previousStateHash: "seed",
-      pollingStrategy: {
-        updateConfig: vi.fn(),
-        setBaseInterval: vi.fn(),
-        isCircuitBreakerTripped: vi.fn().mockReturnValue(false),
-        calculateNextInterval: vi.fn().mockReturnValue(10000),
-        recordSuccess: vi.fn(),
-        recordFailure: vi.fn(),
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      } as any,
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      noteReader: { read: vi.fn().mockResolvedValue(null) } as any,
-      gitWatcher: null,
-      gitWatchDebounceTimer: null,
-      gitWatchRefreshPending: false,
-      gitWatchEnabled: false,
-      lastGitStatusCompletedAt: 0,
-      ...overrides,
-    } as MonitorState;
-  }
+  let WorktreeMonitorClass: typeof WorktreeMonitor;
 
   beforeEach(async () => {
     vi.clearAllMocks();
     mockSendEvent = vi.fn();
 
     const WorkspaceServiceModule = await import("../WorkspaceService.js");
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     service = new WorkspaceServiceModule.WorkspaceService(mockSendEvent as any);
 
-    // Set up minimal project state
+    const WorktreeMonitorModule = await import("../WorktreeMonitor.js");
+    WorktreeMonitorClass = WorktreeMonitorModule.WorktreeMonitor;
+
     service["projectRootPath"] = "/test/root";
     service["projectScopeId"] = "test-scope";
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     service["git"] = mockSimpleGit as any;
   });
 
@@ -171,9 +145,27 @@ describe("WorkspaceService.deleteWorktree", () => {
     vi.restoreAllMocks();
   });
 
+  function createAndRegisterMonitor(overrides: Partial<Worktree> = {}): WorktreeMonitor {
+    const wt = createTestWorktree(overrides);
+    const monitor = new WorktreeMonitorClass(
+      wt,
+      {
+        basePollingInterval: 10000,
+        adaptiveBackoff: false,
+        pollIntervalMax: 30000,
+        circuitBreakerThreshold: 3,
+        gitWatchEnabled: false,
+      },
+      { onUpdate: vi.fn() },
+      "main"
+    );
+    monitor.setProjectScopeId("test-scope");
+    service["monitors"].set(wt.id, monitor);
+    return monitor;
+  }
+
   it("sends delete-worktree-result success after removing monitor", async () => {
-    const monitor = createMonitorState();
-    service["monitors"].set("/test/worktree", monitor);
+    createAndRegisterMonitor();
 
     await service.deleteWorktree("req-1", "/test/worktree");
 
@@ -200,8 +192,7 @@ describe("WorkspaceService.deleteWorktree", () => {
   });
 
   it("blocks deletion of main worktree", async () => {
-    const mainMonitor = createMonitorState({ isMainWorktree: true });
-    service["monitors"].set("/test/worktree", mainMonitor);
+    createAndRegisterMonitor({ isMainWorktree: true });
 
     await service.deleteWorktree("req-3", "/test/worktree");
 
@@ -220,7 +211,6 @@ describe("WorkspaceService.deleteWorktree", () => {
     const mockAccess = vi.mocked(fsModule.access);
     const mockReadFile = vi.mocked(fsModule.readFile);
 
-    // Make the main repo config exist
     mockAccess.mockImplementation(async (p: unknown) => {
       if (n(p as string).endsWith("/test/root/.canopy/config.json")) return undefined;
       throw new Error("ENOENT");
@@ -230,7 +220,6 @@ describe("WorkspaceService.deleteWorktree", () => {
     const childProcessModule = await import("child_process");
     const mockSpawn = vi.mocked(childProcessModule.spawn);
 
-    // Record a global call log so we can compare cross-module ordering
     const globalCallLog: string[] = [];
 
     mockSpawn.mockImplementation(() => {
@@ -244,7 +233,6 @@ describe("WorkspaceService.deleteWorktree", () => {
         }),
         kill: vi.fn(),
       };
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       return child as any;
     });
 
@@ -252,18 +240,15 @@ describe("WorkspaceService.deleteWorktree", () => {
       globalCallLog.push(`git:${args.join(" ")}`);
     });
 
-    const monitor = createMonitorState();
-    service["monitors"].set("/test/worktree", monitor);
+    createAndRegisterMonitor();
 
     await service.deleteWorktree("req-4", "/test/worktree");
 
     const spawnPos = globalCallLog.indexOf("spawn");
     const gitRemovePos = globalCallLog.findIndex((e) => e.includes("worktree remove"));
 
-    // Both must have happened
     expect(spawnPos).toBeGreaterThanOrEqual(0);
     expect(gitRemovePos).toBeGreaterThanOrEqual(0);
-    // Teardown (spawn) must precede git worktree remove
     expect(spawnPos).toBeLessThan(gitRemovePos);
   });
 
@@ -287,20 +272,17 @@ describe("WorkspaceService.deleteWorktree", () => {
         stdout: { on: vi.fn() },
         stderr: { on: vi.fn() },
         on: vi.fn((event: string, cb: (...args: unknown[]) => void) => {
-          if (event === "close") setTimeout(() => cb(1), 0); // non-zero exit
+          if (event === "close") setTimeout(() => cb(1), 0);
         }),
         kill: vi.fn(),
       };
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       return child as any;
     });
 
-    const monitor = createMonitorState();
-    service["monitors"].set("/test/worktree", monitor);
+    createAndRegisterMonitor();
 
     await service.deleteWorktree("req-5", "/test/worktree");
 
-    // Deletion succeeded despite teardown failure
     expect(mockSendEvent).toHaveBeenCalledWith(
       expect.objectContaining({
         type: "delete-worktree-result",
@@ -317,8 +299,7 @@ describe("WorkspaceService.deleteWorktree", () => {
     const childProcessModule = await import("child_process");
     const mockSpawn = vi.mocked(childProcessModule.spawn);
 
-    const monitor = createMonitorState();
-    service["monitors"].set("/test/worktree", monitor);
+    createAndRegisterMonitor();
 
     await service.deleteWorktree("req-6", "/test/worktree");
 
