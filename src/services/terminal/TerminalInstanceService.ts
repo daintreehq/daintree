@@ -1207,7 +1207,7 @@ class TerminalInstanceService {
     return this.restoreController.restoreFromSerialized(id, serializedState);
   }
 
-  private restoreFromSerializedIncremental(
+  restoreFromSerializedIncremental(
     id: string,
     serializedState: string
   ): Promise<boolean> {

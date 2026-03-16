@@ -121,7 +121,7 @@ describe("TerminalAgentStateController", () => {
 
     it("does not set directing for non-agent terminals", () => {
       const managed = makeMockManaged({
-        kind: "terminal" as any,
+        kind: "terminal",
         canonicalAgentState: "waiting",
         agentState: "waiting",
       });

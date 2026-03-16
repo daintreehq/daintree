@@ -17,6 +17,10 @@ vi.mock("@/store/projectSettingsStore", () => ({
   useProjectSettingsStore: { getState: () => mockProjectSettingsStore },
 }));
 
+function getWrittenData(managed: ManagedTerminal): string[] {
+  return (managed as unknown as { writtenData: string[] }).writtenData;
+}
+
 function makeMockManaged(overrides: Record<string, unknown> = {}): ManagedTerminal {
   const writtenData: string[] = [];
   return {
@@ -79,21 +83,21 @@ describe("TerminalScrollbackController", () => {
 
     it("reduces scrollback and writes notice when scrollback content exceeds target", () => {
       const managed = makeMockManaged();
-      managed.terminal.buffer.active.length = 3000;
+      Object.defineProperty(managed.terminal.buffer.active, "length", { value: 3000, writable: true });
       reduceScrollback(managed, 500);
 
       expect(managed.terminal.options.scrollback).toBe(500);
-      expect((managed as any).writtenData).toHaveLength(1);
-      expect((managed as any).writtenData[0]).toContain("Scrollback reduced to 500 lines");
+      expect(getWrittenData(managed)).toHaveLength(1);
+      expect(getWrittenData(managed)[0]).toContain("Scrollback reduced to 500 lines");
     });
 
     it("reduces scrollback without notice when scrollback content is within target", () => {
       const managed = makeMockManaged();
-      managed.terminal.buffer.active.length = 100;
+      Object.defineProperty(managed.terminal.buffer.active, "length", { value: 100, writable: true });
       reduceScrollback(managed, 500);
 
       expect(managed.terminal.options.scrollback).toBe(500);
-      expect((managed as any).writtenData).toHaveLength(0);
+      expect(getWrittenData(managed)).toHaveLength(0);
     });
   });
 

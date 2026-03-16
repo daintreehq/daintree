@@ -16,8 +16,9 @@ vi.mock("@/utils/logger", () => ({
 describe("TerminalRestoreController", () => {
   let controller: TerminalRestoreController;
   let instances: Map<string, ManagedTerminal>;
-  let writeDataSpy: ReturnType<typeof vi.fn>;
-  let mockTerminal: any;
+  let writeDataSpy: (id: string, data: string | Uint8Array) => void;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let mockTerminal: Record<string, any>;
   let writeCallbacks: Map<number, () => void>;
   let writeCallId: number;
   let idleCallbacks: Map<number, () => void>;
@@ -31,15 +32,15 @@ describe("TerminalRestoreController", () => {
     idleCallbacks = new Map();
     idleCallbackId = 0;
 
-    global.requestIdleCallback = vi.fn((callback: () => void) => {
+    global.requestIdleCallback = vi.fn((callback: IdleRequestCallback) => {
       const id = ++idleCallbackId;
-      idleCallbacks.set(id, callback);
+      idleCallbacks.set(id, callback as unknown as () => void);
       return id;
-    }) as any;
+    });
 
     global.cancelIdleCallback = vi.fn((id: number) => {
       idleCallbacks.delete(id);
-    }) as any;
+    });
 
     mockTerminal = {
       reset: vi.fn(),
@@ -65,7 +66,7 @@ describe("TerminalRestoreController", () => {
     };
 
     instances = new Map();
-    writeDataSpy = vi.fn();
+    writeDataSpy = vi.fn<(id: string, data: string | Uint8Array) => void>();
 
     controller = new TerminalRestoreController({
       getInstance: (id) => instances.get(id),
@@ -188,7 +189,7 @@ describe("TerminalRestoreController", () => {
       await restorePromise;
 
       const totalWritten = mockTerminal.write.mock.calls
-        .map((call: any) => call[0].length)
+        .map((call: [string, ...unknown[]]) => call[0].length)
         .reduce((sum: number, len: number) => sum + len, 0);
       expect(totalWritten).toBe(largeState.length);
     });
