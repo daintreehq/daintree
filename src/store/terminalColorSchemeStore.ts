@@ -25,7 +25,7 @@ export function selectWrapperBackground(state: TerminalColorSchemeState): string
     return "var(--theme-surface-canvas)";
   }
 
-  return (scheme.colors.background as string) ?? "var(--theme-surface-canvas)";
+  return scheme.colors.background ?? "var(--theme-surface-canvas)";
 }
 
 export const useTerminalColorSchemeStore = create<TerminalColorSchemeState>()((set, get) => ({

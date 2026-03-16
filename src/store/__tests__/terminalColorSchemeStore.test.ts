@@ -145,5 +145,17 @@ describe("terminalColorSchemeStore", () => {
       const bg = selectWrapperBackground(useTerminalColorSchemeStore.getState());
       expect(bg).toBe("var(--theme-surface-canvas)");
     });
+
+    it("falls back to CSS variable when custom scheme has no background", () => {
+      const noBackground: TerminalColorScheme = {
+        ...CUSTOM_SCHEME,
+        id: "no-bg",
+        colors: { ...CUSTOM_SCHEME.colors, background: undefined },
+      };
+      useTerminalColorSchemeStore.getState().addCustomScheme(noBackground);
+      useTerminalColorSchemeStore.getState().setSelectedSchemeId("no-bg");
+      const bg = selectWrapperBackground(useTerminalColorSchemeStore.getState());
+      expect(bg).toBe("var(--theme-surface-canvas)");
+    });
   });
 });
