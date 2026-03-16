@@ -64,7 +64,8 @@ export function setupBrowserWindow(dirname: string): CreateWindowResult {
   ) {
     try {
       const parsed = JSON.parse(themeConfig.customSchemes);
-      if (Array.isArray(parsed)) customSchemes = parsed.map((s: AppColorScheme) => normalizeAppColorScheme(s));
+      if (Array.isArray(parsed))
+        customSchemes = parsed.map((s: AppColorScheme) => normalizeAppColorScheme(s));
     } catch {
       // Malformed custom schemes — fall back to built-in only
     }
