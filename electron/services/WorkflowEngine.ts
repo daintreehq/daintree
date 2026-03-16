@@ -213,6 +213,15 @@ export class WorkflowEngine {
   ): Promise<TaskRecord | null> {
     if (node.type === "loop") {
       await this.loopCompiler.compileLoopNode(node as LoopNode, run);
+      // Route if loop completed/failed during compilation (e.g., template resolution failure)
+      const loopState = run.nodeStates[node.id];
+      if (loopState) {
+        if (loopState.status === "completed") {
+          await this.routeLoopCompletion(node as LoopNode, loopState, run, "onSuccess");
+        } else if (loopState.status === "failed") {
+          await this.routeLoopCompletion(node as LoopNode, loopState, run, "onFailure");
+        }
+      }
       return null;
     }
 
@@ -943,6 +952,15 @@ export class WorkflowEngine {
       const loopNode = findLoopNode(run.definition, loopNodeId);
       if (loopNode) {
         await this.loopCompiler.checkLoopIterationComplete(loopNode, run, parseInt(iterStr, 10));
+        // Route if loop reached terminal state during recovery
+        const loopState = run.nodeStates[loopNode.id];
+        if (loopState) {
+          if (loopState.status === "completed") {
+            await this.routeLoopCompletion(loopNode, loopState, run, "onSuccess");
+          } else if (loopState.status === "failed") {
+            await this.routeLoopCompletion(loopNode, loopState, run, "onFailure");
+          }
+        }
         hasRecoveryChanges = true;
       }
     }
