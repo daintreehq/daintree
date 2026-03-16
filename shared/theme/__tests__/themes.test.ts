@@ -660,8 +660,11 @@ describe("built-in schemes — Atacama light theme", () => {
 
   it("has correct mineral-desert surface hierarchy", () => {
     expect(atacama.tokens["surface-canvas"]).toBe("#F0F0ED");
+    expect(atacama.tokens["surface-sidebar"]).toBe("#E5E4DF");
     expect(atacama.tokens["surface-panel"]).toBe("#F8F8F6");
     expect(atacama.tokens["surface-panel-elevated"]).toBe("#FFFFFF");
+    expect(atacama.tokens["surface-grid"]).toBe("#DCDAD4");
+    expect(atacama.tokens["border-default"]).toBe("#C6C4BF");
   });
 
   it("has distinct syntax-operator (#4A5D7B) different from syntax-keyword", () => {
