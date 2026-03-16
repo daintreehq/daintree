@@ -1431,7 +1431,7 @@ body[data-performance-mode="true"] .github-status-error {
   -webkit-app-region: no-drag;
 }
 
-/* Safety strip for resizing on Windows/Linux frameless windows.
+/* Safety strip for resizing on Windows frameless windows.
    This reserves the top 3px for the OS resize cursor so the drag
    handler doesn't steal the mouse event at the very edge.
 */

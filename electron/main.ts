@@ -1086,16 +1086,16 @@ async function createWindow(): Promise<void> {
           titleBarStyle: "hiddenInset" as const,
           trafficLightPosition: { x: 12, y: 18 },
         }
-      : {
-          titleBarStyle: "hidden" as const,
-          ...(process.platform === "win32" && {
+      : process.platform === "win32"
+        ? {
+            titleBarStyle: "hidden" as const,
             titleBarOverlay: {
               color: "#19191a",
               symbolColor: "#a1a1aa",
               height: 36,
             },
-          }),
-        }),
+          }
+        : {}),
     backgroundColor: "#19191a",
   });
   markPerformance(PERF_MARKS.MAIN_WINDOW_CREATED);
