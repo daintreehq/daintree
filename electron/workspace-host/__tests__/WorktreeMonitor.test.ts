@@ -31,7 +31,9 @@ vi.mock("../../utils/gitUtils.js", () => ({
 vi.mock("../../utils/gitFileWatcher.js", () => {
   return {
     GitFileWatcher: class {
-      start() { return false; }
+      start() {
+        return false;
+      }
       dispose() {}
     },
   };
@@ -155,11 +157,18 @@ describe("WorktreeMonitor", () => {
     const monitor = new WorktreeMonitor(TEST_WORKTREE, TEST_CONFIG, callbacks, "main");
     monitor.setCreatedAt(1234567890);
     monitor.setProjectScopeId("scope-1");
-    monitor.setLifecycleStatus({ phase: "setup", state: "running", totalCommands: 1, startedAt: 1234567890 });
+    monitor.setLifecycleStatus({
+      phase: "setup",
+      state: "running",
+      totalCommands: 1,
+      startedAt: 1234567890,
+    });
 
     const snapshot = monitor.getSnapshot();
     expect(snapshot.createdAt).toBe(1234567890);
-    expect(snapshot.lifecycleStatus).toEqual(expect.objectContaining({ phase: "setup", state: "running" }));
+    expect(snapshot.lifecycleStatus).toEqual(
+      expect.objectContaining({ phase: "setup", state: "running" })
+    );
   });
 
   it("includes prTitle and issueTitle in snapshot after setPRInfo", () => {

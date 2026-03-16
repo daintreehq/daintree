@@ -1,11 +1,6 @@
 import PQueue from "p-queue";
 import { mkdir, writeFile, stat } from "fs/promises";
-import {
-  join as pathJoin,
-  dirname,
-  resolve as pathResolve,
-  isAbsolute,
-} from "path";
+import { join as pathJoin, dirname, resolve as pathResolve, isAbsolute } from "path";
 import { simpleGit, SimpleGit, BranchSummary } from "simple-git";
 import type { Worktree } from "../../shared/types/worktree.js";
 import type {
@@ -78,107 +73,103 @@ export class WorkspaceService {
   private prService: PRIntegrationService;
 
   constructor(private readonly sendEvent: (event: WorkspaceHostEvent) => void) {
-    this.prService = new PRIntegrationService(
-      pullRequestService,
-      events,
-      {
-        onPRDetected: (worktreeId, data) => {
-          const monitor = this.monitors.get(worktreeId);
-          if (!monitor || monitor.projectScopeId !== this.projectScopeId) {
-            return;
-          }
+    this.prService = new PRIntegrationService(pullRequestService, events, {
+      onPRDetected: (worktreeId, data) => {
+        const monitor = this.monitors.get(worktreeId);
+        if (!monitor || monitor.projectScopeId !== this.projectScopeId) {
+          return;
+        }
 
-          monitor.setPRInfo({
+        monitor.setPRInfo({
+          prNumber: data.prNumber,
+          prUrl: data.prUrl,
+          prState: data.prState,
+          prTitle: data.prTitle,
+          issueTitle: data.issueTitle,
+        });
+        if (monitor.hasInitialStatus) {
+          this.emitUpdate(monitor);
+        }
+
+        if (this.projectScopeId) {
+          this.sendEvent({
+            type: "pr-detected",
+            worktreeId,
             prNumber: data.prNumber,
             prUrl: data.prUrl,
             prState: data.prState,
             prTitle: data.prTitle,
+            issueNumber: data.issueNumber,
             issueTitle: data.issueTitle,
+            projectScopeId: this.projectScopeId,
           });
-          if (monitor.hasInitialStatus) {
-            this.emitUpdate(monitor);
-          }
+        }
+      },
+      onPRCleared: (worktreeId) => {
+        const monitor = this.monitors.get(worktreeId);
+        if (!monitor || monitor.projectScopeId !== this.projectScopeId) {
+          return;
+        }
 
-          if (this.projectScopeId) {
-            this.sendEvent({
-              type: "pr-detected",
-              worktreeId,
-              prNumber: data.prNumber,
-              prUrl: data.prUrl,
-              prState: data.prState,
-              prTitle: data.prTitle,
-              issueNumber: data.issueNumber,
-              issueTitle: data.issueTitle,
-              projectScopeId: this.projectScopeId,
-            });
-          }
-        },
-        onPRCleared: (worktreeId) => {
-          const monitor = this.monitors.get(worktreeId);
-          if (!monitor || monitor.projectScopeId !== this.projectScopeId) {
-            return;
-          }
+        monitor.clearPRInfo();
+        if (monitor.hasInitialStatus) {
+          this.emitUpdate(monitor);
+        }
 
-          monitor.clearPRInfo();
-          if (monitor.hasInitialStatus) {
-            this.emitUpdate(monitor);
-          }
+        if (this.projectScopeId) {
+          this.sendEvent({
+            type: "pr-cleared",
+            worktreeId,
+            projectScopeId: this.projectScopeId,
+          });
+        }
+      },
+      onIssueDetected: (worktreeId, data) => {
+        const monitor = this.monitors.get(worktreeId);
+        if (!monitor || monitor.projectScopeId !== this.projectScopeId) {
+          return;
+        }
 
-          if (this.projectScopeId) {
-            this.sendEvent({
-              type: "pr-cleared",
-              worktreeId,
-              projectScopeId: this.projectScopeId,
-            });
-          }
-        },
-        onIssueDetected: (worktreeId, data) => {
-          const monitor = this.monitors.get(worktreeId);
-          if (!monitor || monitor.projectScopeId !== this.projectScopeId) {
-            return;
-          }
+        monitor.setIssueTitle(data.issueTitle);
+        if (monitor.hasInitialStatus) {
+          this.emitUpdate(monitor);
+        }
 
-          monitor.setIssueTitle(data.issueTitle);
-          if (monitor.hasInitialStatus) {
-            this.emitUpdate(monitor);
-          }
+        if (this.projectScopeId) {
+          this.sendEvent({
+            type: "issue-detected",
+            worktreeId,
+            issueNumber: data.issueNumber,
+            issueTitle: data.issueTitle,
+            projectScopeId: this.projectScopeId,
+          });
+        }
+      },
+      onIssueNotFound: (worktreeId, issueNumber) => {
+        const monitor = this.monitors.get(worktreeId);
+        if (!monitor || monitor.projectScopeId !== this.projectScopeId) {
+          return;
+        }
+        if (monitor.issueNumber !== issueNumber) {
+          return;
+        }
 
-          if (this.projectScopeId) {
-            this.sendEvent({
-              type: "issue-detected",
-              worktreeId,
-              issueNumber: data.issueNumber,
-              issueTitle: data.issueTitle,
-              projectScopeId: this.projectScopeId,
-            });
-          }
-        },
-        onIssueNotFound: (worktreeId, issueNumber) => {
-          const monitor = this.monitors.get(worktreeId);
-          if (!monitor || monitor.projectScopeId !== this.projectScopeId) {
-            return;
-          }
-          if (monitor.issueNumber !== issueNumber) {
-            return;
-          }
+        monitor.setIssueNumber(undefined);
+        monitor.setIssueTitle(undefined);
+        if (monitor.hasInitialStatus) {
+          this.emitUpdate(monitor);
+        }
 
-          monitor.setIssueNumber(undefined);
-          monitor.setIssueTitle(undefined);
-          if (monitor.hasInitialStatus) {
-            this.emitUpdate(monitor);
-          }
-
-          if (this.projectScopeId) {
-            this.sendEvent({
-              type: "issue-not-found",
-              worktreeId,
-              issueNumber,
-              projectScopeId: this.projectScopeId,
-            });
-          }
-        },
-      }
-    );
+        if (this.projectScopeId) {
+          this.sendEvent({
+            type: "issue-not-found",
+            worktreeId,
+            issueNumber,
+            projectScopeId: this.projectScopeId,
+          });
+        }
+      },
+    });
   }
 
   async loadProject(
@@ -1103,20 +1094,17 @@ ${lines.map((l) => "+" + l).join("\n")}`;
       return Promise.resolve();
     }
 
-    return this.prService.initialize(
-      this.projectRootPath,
-      () => {
-        const candidates: Array<{ worktreeId: string; branch?: string; issueNumber?: number }> = [];
-        for (const monitor of this.monitors.values()) {
-          candidates.push({
-            worktreeId: monitor.id,
-            branch: monitor.branch,
-            issueNumber: monitor.issueNumber,
-          });
-        }
-        return candidates;
+    return this.prService.initialize(this.projectRootPath, () => {
+      const candidates: Array<{ worktreeId: string; branch?: string; issueNumber?: number }> = [];
+      for (const monitor of this.monitors.values()) {
+        candidates.push({
+          worktreeId: monitor.id,
+          branch: monitor.branch,
+          issueNumber: monitor.issueNumber,
+        });
       }
-    );
+      return candidates;
+    });
   }
 
   async onProjectSwitch(requestId: string): Promise<void> {

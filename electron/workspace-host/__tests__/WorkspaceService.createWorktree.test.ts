@@ -78,7 +78,15 @@ vi.mock("../../services/PullRequestService.js", () => ({
     stop: vi.fn(),
     reset: vi.fn(),
     refresh: vi.fn(),
-    getStatus: vi.fn().mockReturnValue({ state: "idle", isPolling: false, candidateCount: 0, resolvedCount: 0, isEnabled: true }),
+    getStatus: vi
+      .fn()
+      .mockReturnValue({
+        state: "idle",
+        isPolling: false,
+        candidateCount: 0,
+        resolvedCount: 0,
+        isEnabled: true,
+      }),
   },
 }));
 
@@ -89,7 +97,9 @@ vi.mock("../../services/events.js", () => ({
 vi.mock("../../utils/gitFileWatcher.js", () => {
   return {
     GitFileWatcher: class {
-      start() { return false; }
+      start() {
+        return false;
+      }
       dispose() {}
     },
   };

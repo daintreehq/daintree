@@ -4,7 +4,11 @@ import { existsSync } from "fs";
 import { simpleGit } from "simple-git";
 import type PQueue from "p-queue";
 import type { WorktreeChanges, FileChangeDetail } from "../../shared/types/git.js";
-import type { Worktree, WorktreeMood, WorktreeLifecycleStatus } from "../../shared/types/worktree.js";
+import type {
+  Worktree,
+  WorktreeMood,
+  WorktreeLifecycleStatus,
+} from "../../shared/types/worktree.js";
 import type { WorktreeSnapshot } from "../../shared/types/workspace-host.js";
 import { invalidateGitStatusCache, getWorktreeChangesWithStats } from "../utils/git.js";
 import { getGitDir } from "../utils/gitUtils.js";
@@ -760,10 +764,7 @@ export class WorktreeMonitor {
     }
   }
 
-  private async extractIssueNumberAsync(
-    branchName: string,
-    folderName?: string
-  ): Promise<void> {
+  private async extractIssueNumberAsync(branchName: string, folderName?: string): Promise<void> {
     try {
       const issueNum = await extractIssueNumber(branchName, folderName);
       if (issueNum && this._isRunning && this._branch === branchName) {
