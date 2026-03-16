@@ -3,6 +3,7 @@ import type React from "react";
 import type { Terminal as XTermTerminal } from "@xterm/xterm";
 import { type TerminalLocation, type TerminalType } from "@/types";
 import { useTerminalStore } from "@/store";
+import { useShallow } from "zustand/react/shallow";
 import { useWorktrees } from "@/hooks/useWorktrees";
 import { AGENT_IDS, getAgentConfig } from "@/config/agents";
 import { isValidBrowserUrl } from "@/components/Browser/browserUtils";
@@ -100,7 +101,9 @@ export function TerminalContextMenu({
   children,
   forceLocation,
 }: TerminalContextMenuProps) {
-  const terminal = useTerminalStore((state) => state.terminals.find((t) => t.id === terminalId));
+  const terminal = useTerminalStore(
+    useShallow((state) => state.terminals.find((t) => t.id === terminalId))
+  );
   const maximizeTarget = useTerminalStore((s) => s.maximizeTarget);
   const getPanelGroup = useTerminalStore((s) => s.getPanelGroup);
 

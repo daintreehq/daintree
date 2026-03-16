@@ -31,6 +31,7 @@ import {
   useWorktreeSelectionStore,
   type TerminalInstance,
 } from "@/store";
+import { useShallow } from "zustand/react/shallow";
 import { TerminalDragPreview } from "./TerminalDragPreview";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { parseAccordionDragId } from "./SortableWorktreeTerminal";
@@ -224,7 +225,7 @@ export function DndProvider({ children }: DndProviderProps) {
     })
   );
 
-  const terminals = useTerminalStore((state) => state.terminals);
+  const terminals = useTerminalStore(useShallow((state) => state.terminals));
   const reorderTerminals = useTerminalStore((s) => s.reorderTerminals);
   const reorderTabGroups = useTerminalStore((s) => s.reorderTabGroups);
   const moveTerminalToPosition = useTerminalStore((s) => s.moveTerminalToPosition);
@@ -298,7 +299,8 @@ export function DndProvider({ children }: DndProviderProps) {
         // Skip accordion drop targets for non-accordion drags
         const parsedId = parseAccordionDragId(overId);
         const terminalId = parsedId ?? overId;
-        const overTerminal = terminals.find((t) => t.id === terminalId);
+        const currentTerminals = useTerminalStore.getState().terminals;
+        const overTerminal = currentTerminals.find((t) => t.id === terminalId);
         if (overTerminal && !parsedId) {
           // Only set container for non-accordion terminals
           detectedContainer = overTerminal.location === "dock" ? "dock" : "grid";
@@ -354,12 +356,15 @@ export function DndProvider({ children }: DndProviderProps) {
         setPlaceholderIndex(null);
       }
     },
-    [terminals]
+    []
   );
 
   const handleDragEnd = useCallback(
     (event: DragEndEvent) => {
       const { active, over } = event;
+
+      // Read fresh terminal list from store to avoid stale closures
+      const terminals = useTerminalStore.getState().terminals;
 
       // Capture dragged terminal ID from data (works for both sortable and worktree list)
       const data = active.data.current as DragData | undefined;
@@ -785,7 +790,6 @@ export function DndProvider({ children }: DndProviderProps) {
     [
       activeData,
       overContainer,
-      terminals,
       reorderTerminals,
       reorderTabGroups,
       moveTerminalToPosition,
