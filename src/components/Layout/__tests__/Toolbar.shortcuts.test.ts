@@ -77,11 +77,17 @@ describe("Toolbar shortcut tooltips — issue #3443", () => {
     });
 
     it("uses createTooltipWithShortcut for sidecar tooltip", () => {
-      expect(source).toMatch(/createTooltipWithShortcut\([\s\S]*?sidecarShortcut\s*\)/);
+      const sidecarBlock = source.match(/"sidecar-toggle":\s*\{[\s\S]*?isAvailable/);
+      expect(sidecarBlock).not.toBeNull();
+      expect(sidecarBlock![0]).toContain("createTooltipWithShortcut");
+      expect(sidecarBlock![0]).toContain("sidecarShortcut");
     });
 
     it("uses createTooltipWithShortcut for sidebar tooltip with dynamic shortcut", () => {
-      expect(source).toMatch(/createTooltipWithShortcut\([\s\S]*?sidebarShortcut\s*\)/);
+      const sidebarBlock = source.match(/"sidebar-toggle":\s*\{[\s\S]*?isAvailable/);
+      expect(sidebarBlock).not.toBeNull();
+      expect(sidebarBlock![0]).toContain("createTooltipWithShortcut");
+      expect(sidebarBlock![0]).toContain("sidebarShortcut");
     });
   });
 
