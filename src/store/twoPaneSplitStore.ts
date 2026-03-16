@@ -20,8 +20,16 @@ interface TwoPaneSplitState {
   setEnabled: (enabled: boolean) => void;
   setDefaultRatio: (ratio: number) => void;
   setPreferPreview: (prefer: boolean) => void;
-  setWorktreeRatio: (worktreeId: string, ratio: number, panels: [string | null, string | null]) => void;
-  commitRatioIfChanged: (worktreeId: string, pendingRatio: number | null, panels: [string | null, string | null]) => void;
+  setWorktreeRatio: (
+    worktreeId: string,
+    ratio: number,
+    panels: [string | null, string | null]
+  ) => void;
+  commitRatioIfChanged: (
+    worktreeId: string,
+    pendingRatio: number | null,
+    panels: [string | null, string | null]
+  ) => void;
   getWorktreeRatio: (worktreeId: string | null) => number;
   resetWorktreeRatio: (worktreeId: string) => void;
   resetAllWorktreeRatios: () => void;
@@ -67,7 +75,11 @@ export const useTwoPaneSplitStore = create<TwoPaneSplitState>()(
         const state = get();
         const current = state.ratioByWorktreeId[worktreeId];
         const clampedRatio = Math.max(0.2, Math.min(0.8, pendingRatio));
-        if (current?.ratio !== clampedRatio || current?.panels[0] !== panels[0] || current?.panels[1] !== panels[1]) {
+        if (
+          current?.ratio !== clampedRatio ||
+          current?.panels[0] !== panels[0] ||
+          current?.panels[1] !== panels[1]
+        ) {
           set((state) => ({
             ratioByWorktreeId: {
               ...state.ratioByWorktreeId,
@@ -99,7 +111,10 @@ export const useTwoPaneSplitStore = create<TwoPaneSplitState>()(
       storage: createSafeJSONStorage(),
       migrate: (persisted: unknown, fromVersion: number) => {
         if (fromVersion === 0) {
-          const old = persisted as { ratioByWorktreeId?: Record<string, number> } & Record<string, unknown>;
+          const old = persisted as { ratioByWorktreeId?: Record<string, number> } & Record<
+            string,
+            unknown
+          >;
           const entries = old.ratioByWorktreeId ?? {};
           const migrated: Record<string, WorktreeRatioEntry> = {};
           for (const [id, scalar] of Object.entries(entries)) {

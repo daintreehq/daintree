@@ -2,7 +2,10 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { useTwoPaneSplitStore } from "../twoPaneSplitStore";
 import type { WorktreeRatioEntry } from "../twoPaneSplitStore";
 
-function entry(ratio: number, panels: [string | null, string | null] = [null, null]): WorktreeRatioEntry {
+function entry(
+  ratio: number,
+  panels: [string | null, string | null] = [null, null]
+): WorktreeRatioEntry {
   return { ratio, panels };
 }
 
@@ -17,7 +20,9 @@ describe("twoPaneSplitStore", () => {
   describe("commitRatioIfChanged", () => {
     it("stores ratio and panels when none exists", () => {
       useTwoPaneSplitStore.getState().commitRatioIfChanged("wt1", 0.7, ["a", "b"]);
-      expect(useTwoPaneSplitStore.getState().ratioByWorktreeId["wt1"]).toEqual(entry(0.7, ["a", "b"]));
+      expect(useTwoPaneSplitStore.getState().ratioByWorktreeId["wt1"]).toEqual(
+        entry(0.7, ["a", "b"])
+      );
     });
 
     it("does not update store when ratio and panels are unchanged", () => {
@@ -30,7 +35,9 @@ describe("twoPaneSplitStore", () => {
     it("updates when panels change even if ratio is the same", () => {
       useTwoPaneSplitStore.setState({ ratioByWorktreeId: { wt1: entry(0.7, ["a", "b"]) } });
       useTwoPaneSplitStore.getState().commitRatioIfChanged("wt1", 0.7, ["b", "a"]);
-      expect(useTwoPaneSplitStore.getState().ratioByWorktreeId["wt1"]).toEqual(entry(0.7, ["b", "a"]));
+      expect(useTwoPaneSplitStore.getState().ratioByWorktreeId["wt1"]).toEqual(
+        entry(0.7, ["b", "a"])
+      );
     });
 
     it("no-ops when pendingRatio is null", () => {
@@ -40,10 +47,14 @@ describe("twoPaneSplitStore", () => {
 
     it("clamps ratio to [0.2, 0.8]", () => {
       useTwoPaneSplitStore.getState().commitRatioIfChanged("wt1", 0.95, ["a", "b"]);
-      expect(useTwoPaneSplitStore.getState().ratioByWorktreeId["wt1"]).toEqual(entry(0.8, ["a", "b"]));
+      expect(useTwoPaneSplitStore.getState().ratioByWorktreeId["wt1"]).toEqual(
+        entry(0.8, ["a", "b"])
+      );
 
       useTwoPaneSplitStore.getState().commitRatioIfChanged("wt1", 0.05, ["a", "b"]);
-      expect(useTwoPaneSplitStore.getState().ratioByWorktreeId["wt1"]).toEqual(entry(0.2, ["a", "b"]));
+      expect(useTwoPaneSplitStore.getState().ratioByWorktreeId["wt1"]).toEqual(
+        entry(0.2, ["a", "b"])
+      );
     });
 
     it("no-ops when out-of-range value clamps to the already-stored value", () => {
@@ -57,10 +68,14 @@ describe("twoPaneSplitStore", () => {
   describe("no-op persistence invariants (relevant to issue #2638 transition)", () => {
     it("null commit after a successful commit leaves ratio intact", () => {
       useTwoPaneSplitStore.getState().commitRatioIfChanged("wt1", 0.65, ["a", "b"]);
-      expect(useTwoPaneSplitStore.getState().ratioByWorktreeId["wt1"]).toEqual(entry(0.65, ["a", "b"]));
+      expect(useTwoPaneSplitStore.getState().ratioByWorktreeId["wt1"]).toEqual(
+        entry(0.65, ["a", "b"])
+      );
 
       useTwoPaneSplitStore.getState().commitRatioIfChanged("wt1", null, ["a", "b"]);
-      expect(useTwoPaneSplitStore.getState().ratioByWorktreeId["wt1"]).toEqual(entry(0.65, ["a", "b"]));
+      expect(useTwoPaneSplitStore.getState().ratioByWorktreeId["wt1"]).toEqual(
+        entry(0.65, ["a", "b"])
+      );
     });
 
     it("ratio survives a null commit and is readable by getWorktreeRatio", () => {
@@ -73,10 +88,14 @@ describe("twoPaneSplitStore", () => {
     it("a non-null commit overwrites the previous stored ratio", () => {
       useTwoPaneSplitStore.getState().commitRatioIfChanged("wt1", 0.5, ["a", "b"]);
       useTwoPaneSplitStore.getState().commitRatioIfChanged("wt1", 0.7, ["a", "b"]);
-      expect(useTwoPaneSplitStore.getState().ratioByWorktreeId["wt1"]).toEqual(entry(0.7, ["a", "b"]));
+      expect(useTwoPaneSplitStore.getState().ratioByWorktreeId["wt1"]).toEqual(
+        entry(0.7, ["a", "b"])
+      );
 
       useTwoPaneSplitStore.getState().commitRatioIfChanged("wt1", null, ["a", "b"]);
-      expect(useTwoPaneSplitStore.getState().ratioByWorktreeId["wt1"]).toEqual(entry(0.7, ["a", "b"]));
+      expect(useTwoPaneSplitStore.getState().ratioByWorktreeId["wt1"]).toEqual(
+        entry(0.7, ["a", "b"])
+      );
     });
 
     it("does not affect other worktrees when one worktree commits null", () => {
@@ -86,7 +105,9 @@ describe("twoPaneSplitStore", () => {
 
       useTwoPaneSplitStore.getState().commitRatioIfChanged("wt1", null, ["a", "b"]);
 
-      expect(useTwoPaneSplitStore.getState().ratioByWorktreeId["wt2"]).toEqual(entry(0.4, ["c", "d"]));
+      expect(useTwoPaneSplitStore.getState().ratioByWorktreeId["wt2"]).toEqual(
+        entry(0.4, ["c", "d"])
+      );
     });
   });
 
@@ -100,7 +121,9 @@ describe("twoPaneSplitStore", () => {
 
       useTwoPaneSplitStore.getState().setWorktreeRatio("wt1", 0.7, ["a", "b"]);
       expect(useTwoPaneSplitStore.getState().ratioByWorktreeId).not.toBe(before);
-      expect(useTwoPaneSplitStore.getState().ratioByWorktreeId["wt1"]).toEqual(entry(0.7, ["a", "b"]));
+      expect(useTwoPaneSplitStore.getState().ratioByWorktreeId["wt1"]).toEqual(
+        entry(0.7, ["a", "b"])
+      );
     });
 
     it("clamps the value to [0.2, 0.8]", () => {
@@ -121,7 +144,9 @@ describe("twoPaneSplitStore", () => {
       useTwoPaneSplitStore.getState().resetWorktreeRatio("wt1");
 
       expect(useTwoPaneSplitStore.getState().ratioByWorktreeId["wt1"]).toBeUndefined();
-      expect(useTwoPaneSplitStore.getState().ratioByWorktreeId["wt2"]).toEqual(entry(0.4, ["c", "d"]));
+      expect(useTwoPaneSplitStore.getState().ratioByWorktreeId["wt2"]).toEqual(
+        entry(0.4, ["c", "d"])
+      );
     });
 
     it("getWorktreeRatio returns defaultRatio after reset", () => {
