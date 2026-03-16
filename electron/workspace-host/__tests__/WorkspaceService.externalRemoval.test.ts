@@ -263,9 +263,7 @@ describe("WorkspaceService external worktree removal", () => {
         })
       );
       // Warning should be logged
-      expect(warnSpy).toHaveBeenCalledWith(
-        expect.stringContaining("Scope ID mismatch")
-      );
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("Scope ID mismatch"));
 
       warnSpy.mockRestore();
     });
