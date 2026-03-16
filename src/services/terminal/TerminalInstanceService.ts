@@ -6,7 +6,6 @@ import {
   ManagedTerminal,
   RefreshTierProvider,
   AgentStateCallback,
-  INCREMENTAL_RESTORE_CONFIG,
 } from "./types";
 import { setupTerminalAddons } from "./TerminalAddonManager";
 import { TerminalOutputIngestService } from "./TerminalOutputIngestService";
@@ -18,15 +17,13 @@ import { TerminalResizeController } from "./TerminalResizeController";
 import { TerminalRendererPolicy } from "./TerminalRendererPolicy";
 import { TerminalWebGLManager } from "./TerminalWebGLManager";
 import { TerminalWakeManager } from "./TerminalWakeManager";
-import { useTerminalStore } from "@/store/terminalStore";
+import { TerminalAgentStateController } from "./TerminalAgentStateController";
+import { TerminalRestoreController } from "./TerminalRestoreController";
+import { reduceScrollback, restoreScrollback } from "./TerminalScrollbackController";
 import { getEffectiveAgentConfig } from "@shared/config/agentRegistry";
 import { logDebug, logWarn, logError } from "@/utils/logger";
 import { PERF_MARKS } from "@shared/perf/marks";
 import { markRendererPerformance } from "@/utils/performance";
-import { useScrollbackStore } from "@/store/scrollbackStore";
-import { usePerformanceModeStore } from "@/store/performanceModeStore";
-import { useProjectSettingsStore } from "@/store/projectSettingsStore";
-import { getScrollbackForType, PERFORMANCE_MODE_SCROLLBACK } from "@/utils/scrollbackConfig";
 import { SCROLLBACK_BACKGROUND } from "@shared/config/scrollback";
 
 // eslint-disable-next-line no-control-regex
@@ -68,6 +65,8 @@ class TerminalInstanceService {
   private rendererPolicy: TerminalRendererPolicy;
   private webGLManager = new TerminalWebGLManager();
   private wakeManager: TerminalWakeManager;
+  private agentStateController: TerminalAgentStateController;
+  private restoreController: TerminalRestoreController;
 
   constructor() {
     if (canAutoInitializeTerminalIngest()) {
@@ -79,12 +78,22 @@ class TerminalInstanceService {
       dataBuffer: this.dataBuffer,
     });
 
+    this.agentStateController = new TerminalAgentStateController({
+      getInstance: (id) => this.instances.get(id),
+    });
+
+    this.restoreController = new TerminalRestoreController({
+      getInstance: (id) => this.instances.get(id),
+      writeData: (id, data) => this.writeToTerminal(id, data),
+    });
+
     this.wakeManager = new TerminalWakeManager({
       getInstance: (id) => this.instances.get(id),
       hasInstance: (id) => this.instances.has(id),
-      restoreFromSerialized: (id, state) => this.restoreFromSerialized(id, state),
+      restoreFromSerialized: (id, state) =>
+        this.restoreController.restoreFromSerialized(id, state),
       restoreFromSerializedIncremental: (id, state) =>
-        this.restoreFromSerializedIncremental(id, state),
+        this.restoreController.restoreFromSerializedIncremental(id, state),
     });
 
     this.rendererPolicy = new TerminalRendererPolicy({
@@ -93,9 +102,9 @@ class TerminalInstanceService {
       onPostWake: (id) => this.handlePostWake(id),
       onTierApplied: (id, tier, managed) => {
         if (tier === TerminalRefreshTier.BACKGROUND) {
-          this.reduceScrollback(id, SCROLLBACK_BACKGROUND);
+          reduceScrollback(managed, SCROLLBACK_BACKGROUND);
         } else {
-          this.restoreScrollback(id);
+          restoreScrollback(managed);
         }
 
         if (
@@ -119,8 +128,6 @@ class TerminalInstanceService {
     this.onUserInput(id);
   }
 
-  private static readonly DIRECTING_DEBOUNCE_MS = 2500;
-
   private onUserInput(id: string): void {
     const managed = this.instances.get(id);
     if (!managed) return;
@@ -137,49 +144,11 @@ class TerminalInstanceService {
       this.rendererPolicy.applyRendererPolicy(id, current.getRefreshTier());
     }, 1000);
 
-    if (managed.kind === "agent" && managed.canonicalAgentState === "waiting") {
-      if (managed.agentState !== "directing") {
-        managed.agentState = "directing";
-        for (const callback of managed.agentStateSubscribers) {
-          try {
-            callback("directing");
-          } catch (err) {
-            logError("Agent state callback error", err);
-          }
-        }
-        useTerminalStore.getState().updateAgentState(id, "directing");
-      }
-
-      if (managed.directingTimer !== undefined) {
-        clearTimeout(managed.directingTimer);
-      }
-      managed.directingTimer = window.setTimeout(() => {
-        this.clearDirectingState(id);
-      }, TerminalInstanceService.DIRECTING_DEBOUNCE_MS);
-    }
+    this.agentStateController.onUserInput(id);
   }
 
   clearDirectingState(id: string): void {
-    const managed = this.instances.get(id);
-    if (!managed || managed.agentState !== "directing") return;
-
-    if (managed.directingTimer !== undefined) {
-      clearTimeout(managed.directingTimer);
-      managed.directingTimer = undefined;
-    }
-
-    const revertState = managed.canonicalAgentState ?? "waiting";
-    managed.agentState = revertState;
-
-    for (const callback of managed.agentStateSubscribers) {
-      try {
-        callback(revertState);
-      } catch (err) {
-        logError("Agent state callback error", err);
-      }
-    }
-
-    useTerminalStore.getState().updateAgentState(id, revertState);
+    this.agentStateController.clearDirectingState(id);
   }
 
   prewarmTerminal(
@@ -534,7 +503,7 @@ class TerminalInstanceService {
       if (isAtBottom) {
         this.unseenTracker.clearUnseen(id, false);
         if (managed.lastAppliedTier === TerminalRefreshTier.BACKGROUND) {
-          this.reduceScrollback(id, SCROLLBACK_BACKGROUND);
+          reduceScrollback(managed, SCROLLBACK_BACKGROUND);
         }
       } else {
         this.unseenTracker.updateScrollState(id, true);
@@ -547,7 +516,7 @@ class TerminalInstanceService {
       if (sel) {
         this.cachedSelections.set(id, sel);
       } else if (managed.lastAppliedTier === TerminalRefreshTier.BACKGROUND) {
-        this.reduceScrollback(id, SCROLLBACK_BACKGROUND);
+        reduceScrollback(managed, SCROLLBACK_BACKGROUND);
       }
     });
     listeners.push(() => selectionDisposable.dispose());
@@ -898,31 +867,7 @@ class TerminalInstanceService {
   }
 
   setAgentState(id: string, state: AgentState): void {
-    const managed = this.instances.get(id);
-    if (!managed) return;
-
-    if (state === "directing") return;
-
-    managed.canonicalAgentState = state;
-
-    if (state !== "waiting") {
-      this.clearDirectingState(id);
-    }
-
-    const previousState = managed.agentState;
-    if (previousState === state) return;
-
-    if (previousState === "directing" && state === "waiting") return;
-
-    managed.agentState = state;
-
-    for (const callback of managed.agentStateSubscribers) {
-      try {
-        callback(state);
-      } catch (err) {
-        logError("Agent state callback error", err);
-      }
-    }
+    this.agentStateController.setAgentState(id, state);
   }
 
   private handlePostWake(id: string): void {
@@ -970,7 +915,7 @@ class TerminalInstanceService {
     this.resizeController.clearResizeJob(managed);
 
     if (!isAltBuffer && managed.lastAppliedTier === TerminalRefreshTier.BACKGROUND) {
-      this.reduceScrollback(id, SCROLLBACK_BACKGROUND);
+      reduceScrollback(managed, SCROLLBACK_BACKGROUND);
     }
   }
 
@@ -1145,45 +1090,13 @@ class TerminalInstanceService {
   reduceScrollback(id: string, targetLines: number): void {
     const managed = this.instances.get(id);
     if (!managed) return;
-    if (managed.isFocused) return;
-    if (managed.isUserScrolledBack) return;
-    if (managed.isAltBuffer) return;
-    if (managed.terminal.hasSelection()) return;
-
-    const currentScrollback = managed.terminal.options.scrollback ?? 0;
-    if (currentScrollback <= targetLines) return;
-
-    const scrollbackUsed = managed.terminal.buffer.active.length - managed.terminal.rows;
-    managed.terminal.options.scrollback = targetLines;
-
-    if (scrollbackUsed > targetLines) {
-      managed.terminal.write(
-        `\r\n\x1b[33m[Canopy] Scrollback reduced to ${targetLines} lines due to memory pressure. Older history is no longer available.\x1b[0m\r\n`
-      );
-    }
+    reduceScrollback(managed, targetLines);
   }
 
   restoreScrollback(id: string): void {
     const managed = this.instances.get(id);
     if (!managed) return;
-
-    const { scrollbackLines } = useScrollbackStore.getState();
-    const { performanceMode } = usePerformanceModeStore.getState();
-
-    if (performanceMode) {
-      managed.terminal.options.scrollback = PERFORMANCE_MODE_SCROLLBACK;
-      return;
-    }
-
-    const isAgent = managed.kind === "agent";
-    const projectScrollback = !isAgent
-      ? useProjectSettingsStore.getState().settings?.terminalSettings?.scrollbackLines
-      : undefined;
-
-    managed.terminal.options.scrollback = getScrollbackForType(
-      managed.type,
-      projectScrollback ?? scrollbackLines
-    );
+    restoreScrollback(managed);
   }
 
   addExitListener(id: string, cb: (exitCode: number) => void): () => void {
@@ -1231,10 +1144,7 @@ class TerminalInstanceService {
       clearTimeout(managed.inputBurstTimer);
       managed.inputBurstTimer = undefined;
     }
-    if (managed.directingTimer !== undefined) {
-      clearTimeout(managed.directingTimer);
-      managed.directingTimer = undefined;
-    }
+    this.agentStateController.destroy(id);
     if (managed.titleReportTimer !== undefined) {
       clearTimeout(managed.titleReportTimer);
       managed.titleReportTimer = undefined;
@@ -1245,9 +1155,7 @@ class TerminalInstanceService {
       managed.resizeSuppressionTimer = undefined;
     }
 
-    managed.restoreGeneration++;
-    managed.isSerializedRestoreInProgress = false;
-    managed.deferredOutput = [];
+    this.restoreController.destroy(id);
 
     managed.exitSubscribers.clear();
     managed.agentStateSubscribers.clear();
@@ -1283,171 +1191,27 @@ class TerminalInstanceService {
     this.wakeManager.dispose();
     this.webGLManager.dispose();
     this.rendererPolicy.dispose();
+    this.agentStateController.dispose();
+    this.restoreController.dispose();
   }
 
   async restoreFetchedState(id: string, serializedState: string | null): Promise<boolean> {
-    if (!serializedState) {
-      logWarn(`No serialized state for terminal ${id}`);
-      return false;
-    }
-
-    if (serializedState.length > INCREMENTAL_RESTORE_CONFIG.indicatorThresholdBytes) {
-      return await this.restoreFromSerializedIncremental(id, serializedState);
-    }
-
-    return this.restoreFromSerialized(id, serializedState);
+    return this.restoreController.restoreFetchedState(id, serializedState);
   }
 
   async fetchAndRestore(id: string): Promise<boolean> {
-    try {
-      const serializedState = await terminalClient.getSerializedState(id);
-      return await this.restoreFetchedState(id, serializedState);
-    } catch (error) {
-      logError(`Failed to fetch state for terminal ${id}`, error);
-      return false;
-    }
+    return this.restoreController.fetchAndRestore(id);
   }
 
   restoreFromSerialized(id: string, serializedState: string): boolean {
-    const managed = this.instances.get(id);
-    if (!managed) {
-      logWarn(`Cannot restore: terminal ${id} not found`);
-      return false;
-    }
-
-    try {
-      if (serializedState.length > INCREMENTAL_RESTORE_CONFIG.indicatorThresholdBytes) {
-        void this.restoreFromSerializedIncremental(id, serializedState);
-        return true;
-      }
-
-      managed.isSerializedRestoreInProgress = true;
-
-      const scrollBackOffset = managed.isUserScrolledBack
-        ? managed.terminal.buffer.active.baseY - managed.terminal.buffer.active.viewportY
-        : 0;
-
-      managed.terminal.reset();
-      managed.terminal.write(serializedState, () => {
-        const current = this.instances.get(id);
-        if (current !== managed) return;
-
-        if (scrollBackOffset > 0) {
-          const newBaseY = current.terminal.buffer.active.baseY;
-          current.terminal.scrollToLine(Math.max(0, newBaseY - scrollBackOffset));
-        }
-
-        current.isSerializedRestoreInProgress = false;
-
-        const deferred = current.deferredOutput;
-        current.deferredOutput = [];
-        for (const data of deferred) {
-          this.writeToTerminal(id, data);
-        }
-      });
-      return true;
-    } catch (error) {
-      managed.isSerializedRestoreInProgress = false;
-      logError(`Failed to restore terminal ${id}`, error);
-      return false;
-    }
+    return this.restoreController.restoreFromSerialized(id, serializedState);
   }
 
-  private async restoreFromSerializedIncremental(
+  private restoreFromSerializedIncremental(
     id: string,
     serializedState: string
   ): Promise<boolean> {
-    const managed = this.instances.get(id);
-    if (!managed) {
-      logWarn(`Cannot restore: terminal ${id} not found`);
-      return false;
-    }
-
-    const restoreGeneration = ++managed.restoreGeneration;
-    managed.isSerializedRestoreInProgress = true;
-
-    const task = async (): Promise<boolean> => {
-      const scrollBackOffset = managed.isUserScrolledBack
-        ? managed.terminal.buffer.active.baseY - managed.terminal.buffer.active.viewportY
-        : 0;
-
-      try {
-        if (this.instances.get(id) !== managed || managed.restoreGeneration !== restoreGeneration) {
-          return false;
-        }
-
-        managed.terminal.reset();
-
-        let offset = 0;
-        const total = serializedState.length;
-
-        while (offset < total) {
-          if (
-            this.instances.get(id) !== managed ||
-            managed.restoreGeneration !== restoreGeneration
-          ) {
-            return false;
-          }
-
-          const chunkSize = Math.min(INCREMENTAL_RESTORE_CONFIG.chunkBytes, total - offset);
-          const chunk = serializedState.substring(offset, offset + chunkSize);
-          offset += chunkSize;
-
-          await Promise.race([
-            new Promise<void>((resolve, reject) => {
-              try {
-                managed.terminal.write(chunk, () => resolve());
-              } catch (err) {
-                reject(err);
-              }
-            }),
-            new Promise<void>((_, reject) =>
-              setTimeout(() => reject(new Error("Write timeout")), 5000)
-            ),
-          ]);
-
-          if (offset < total) {
-            await this.yieldToUI();
-          }
-        }
-
-        return true;
-      } catch (error) {
-        logError(`Incremental restore failed for ${id}`, error);
-        return false;
-      } finally {
-        if (this.instances.get(id) === managed && managed.restoreGeneration === restoreGeneration) {
-          if (scrollBackOffset > 0) {
-            const newBaseY = managed.terminal.buffer.active.baseY;
-            managed.terminal.scrollToLine(Math.max(0, newBaseY - scrollBackOffset));
-          }
-
-          managed.isSerializedRestoreInProgress = false;
-
-          const deferredData = managed.deferredOutput;
-          managed.deferredOutput = [];
-
-          for (const data of deferredData) {
-            this.writeToTerminal(id, data);
-          }
-        }
-      }
-    };
-
-    const writePromise = managed.writeChain.then(task).catch((err) => {
-      logError(`Write chain error for ${id}`, err);
-      return false;
-    });
-
-    managed.writeChain = writePromise.then(() => {});
-
-    return writePromise;
-  }
-
-  private yieldToUI(): Promise<void> {
-    return new Promise((resolve) => {
-      requestIdleCallback(() => resolve(), { timeout: INCREMENTAL_RESTORE_CONFIG.timeBudgetMs });
-    });
+    return this.restoreController.restoreFromSerializedIncremental(id, serializedState);
   }
 
   setInputLocked(id: string, locked: boolean): void {
