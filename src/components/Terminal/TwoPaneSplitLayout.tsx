@@ -45,31 +45,29 @@ export function TwoPaneSplitLayout({
   const ratioByWorktreeId = useTwoPaneSplitStore((state) => state.ratioByWorktreeId);
   const defaultRatio = useTwoPaneSplitStore((state) => state.config.defaultRatio);
   const preferPreview = useTwoPaneSplitStore((state) => state.config.preferPreview);
-  const setWorktreeRatio = useTwoPaneSplitStore((state) => state.setWorktreeRatio);
   const commitRatioIfChanged = useTwoPaneSplitStore((state) => state.commitRatioIfChanged);
   const resetWorktreeRatio = useTwoPaneSplitStore((state) => state.resetWorktreeRatio);
 
   commitRatioIfChangedRef.current = commitRatioIfChanged;
 
-  const worktreeRatio = activeWorktreeId ? ratioByWorktreeId[activeWorktreeId] : undefined;
+  const storedEntry = activeWorktreeId ? ratioByWorktreeId[activeWorktreeId] : undefined;
 
-  // Track terminal order to detect swaps and invert ratio accordingly
-  const prevTerminalIdsRef = useRef<[string, string] | null>(null);
-
-  useEffect(() => {
-    const currentIds: [string, string] = [terminals[0].id, terminals[1].id];
-    const prevIds = prevTerminalIdsRef.current;
-
-    // Detect if terminals were swapped (same IDs but reversed order)
-    if (prevIds && prevIds[0] === currentIds[1] && prevIds[1] === currentIds[0]) {
-      // Terminals were swapped - invert the ratio so panels keep their sizes
-      if (activeWorktreeId && worktreeRatio !== undefined) {
-        setWorktreeRatio(activeWorktreeId, 1 - worktreeRatio);
-      }
+  const effectiveStoredRatio = useMemo(() => {
+    if (!storedEntry) return undefined;
+    const [storedLeft, storedRight] = storedEntry.panels;
+    const currentLeftId = terminals[0].id;
+    const currentRightId = terminals[1].id;
+    if (
+      storedLeft !== null &&
+      storedRight !== null &&
+      storedLeft !== currentLeftId &&
+      storedLeft === currentRightId &&
+      storedRight === currentLeftId
+    ) {
+      return 1 - storedEntry.ratio;
     }
-
-    prevTerminalIdsRef.current = currentIds;
-  }, [terminals, activeWorktreeId, worktreeRatio, setWorktreeRatio]);
+    return storedEntry.ratio;
+  }, [storedEntry, terminals]);
 
   const computeDefaultRatio = useCallback(() => {
     if (!preferPreview) return defaultRatio;
@@ -91,11 +89,11 @@ export function TwoPaneSplitLayout({
     if (localRatio !== null) {
       return localRatio;
     }
-    if (worktreeRatio !== undefined) {
-      return worktreeRatio;
+    if (effectiveStoredRatio !== undefined) {
+      return effectiveStoredRatio;
     }
     return computeDefaultRatio();
-  }, [localRatio, worktreeRatio, computeDefaultRatio]);
+  }, [localRatio, effectiveStoredRatio, computeDefaultRatio]);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -122,10 +120,11 @@ export function TwoPaneSplitLayout({
 
   const flushPendingRatio = useCallback(() => {
     if (localRatio !== null && activeWorktreeId) {
-      commitRatioIfChanged(activeWorktreeId, localRatio);
+      const panels: [string, string] = [terminals[0].id, terminals[1].id];
+      commitRatioIfChanged(activeWorktreeId, localRatio, panels);
       setLocalRatio(null);
     }
-  }, [localRatio, activeWorktreeId, commitRatioIfChanged]);
+  }, [localRatio, activeWorktreeId, commitRatioIfChanged, terminals]);
 
   const handleRatioCommit = useCallback(() => {
     flushPendingRatio();
@@ -163,7 +162,8 @@ export function TwoPaneSplitLayout({
 
       // Flush pending ratio if present
       if (pendingRatio !== null && worktreeId) {
-        commitRatioIfChangedRef.current(worktreeId, pendingRatio);
+        const panels: [string, string] = [terminalsRef.current[0].id, terminalsRef.current[1].id];
+        commitRatioIfChangedRef.current(worktreeId, pendingRatio, panels);
       }
     };
   }, []);

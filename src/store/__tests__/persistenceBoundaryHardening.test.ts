@@ -139,10 +139,13 @@ describe("persistence boundary hardening", () => {
     const { useTwoPaneSplitStore } = await import("../twoPaneSplitStore");
 
     expect(() => {
-      useTwoPaneSplitStore.getState().commitRatioIfChanged("wt-1", 0.67);
+      useTwoPaneSplitStore.getState().commitRatioIfChanged("wt-1", 0.67, ["panel-a", "panel-b"]);
     }).not.toThrow();
 
-    expect(useTwoPaneSplitStore.getState().ratioByWorktreeId["wt-1"]).toBe(0.67);
+    expect(useTwoPaneSplitStore.getState().ratioByWorktreeId["wt-1"]).toEqual({
+      ratio: 0.67,
+      panels: ["panel-a", "panel-b"],
+    });
   });
 
   it("worktreeFilterStore remains usable when hydration reads throw", async () => {
