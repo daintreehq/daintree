@@ -10,7 +10,7 @@ import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import type { TerminalInstance } from "@/store/terminalStore";
 import type { TerminalLocation } from "@shared/types";
-import type { LucideIcon } from "lucide-react";
+import type { ComponentType } from "react";
 
 function getLocationIcon(location: TerminalLocation | undefined) {
   if (location === "dock") return <PanelBottom className="w-3 h-3" />;
@@ -18,7 +18,7 @@ function getLocationIcon(location: TerminalLocation | undefined) {
 }
 
 export interface StatusContainerConfig {
-  icon: LucideIcon;
+  icon: ComponentType<{ className?: string }>;
   iconColor: string;
   badgeColor: string;
   badgeTextColor: string;
