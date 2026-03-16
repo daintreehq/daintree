@@ -8,12 +8,12 @@ import {
 
 describe("normalizeChips", () => {
   it("returns empty array for empty inputs", () => {
-    expect(normalizeChips([], [], [])).toEqual([]);
+    expect(normalizeChips([], [])).toEqual([]);
   });
 
   it("normalizes image entries with flat token estimate", () => {
     const images = [{ from: 0, to: 5, filePath: "/tmp/img.png", thumbnailUrl: "" }];
-    const result = normalizeChips(images, [], []);
+    const result = normalizeChips(images, []);
     expect(result).toHaveLength(1);
     expect(result[0].kind).toBe("image");
     expect(result[0].tokenEstimate).toBe(1000);
@@ -23,56 +23,31 @@ describe("normalizeChips", () => {
   it("formats image label from clipboard timestamp", () => {
     const ts = new Date(2025, 0, 15, 14, 30).getTime();
     const images = [{ from: 0, to: 5, filePath: `/tmp/clipboard-${ts}-abc.png`, thumbnailUrl: "" }];
-    const result = normalizeChips(images, [], []);
+    const result = normalizeChips(images, []);
     expect(result[0].label).toBe("Screenshot 14:30");
   });
 
   it("normalizes file entries with flat token estimate", () => {
     const files = [{ from: 0, to: 5, filePath: "/tmp/code.ts", fileName: "code.ts" }];
-    const result = normalizeChips([], files, []);
+    const result = normalizeChips([], files);
     expect(result).toHaveLength(1);
     expect(result[0].kind).toBe("file");
     expect(result[0].tokenEstimate).toBe(500);
     expect(result[0].label).toBe("code.ts");
   });
 
-  it("uses url entry tokenEstimate directly", () => {
-    const urls = [
-      { from: 0, to: 10, title: "Docs", tokenEstimate: 3500, sourceUrl: "https://example.com" },
-    ];
-    const result = normalizeChips([], [], urls);
-    expect(result).toHaveLength(1);
-    expect(result[0].kind).toBe("url");
-    expect(result[0].tokenEstimate).toBe(3500);
-    expect(result[0].label).toBe("Docs");
-  });
-
-  it("falls back to sourceUrl when title is empty", () => {
-    const urls = [
-      { from: 0, to: 10, title: "", tokenEstimate: 100, sourceUrl: "https://example.com" },
-    ];
-    const result = normalizeChips([], [], urls);
-    expect(result[0].label).toBe("https://example.com");
-  });
-
   it("combines all chip types", () => {
     const images = [{ from: 0, to: 5, filePath: "/img.png", thumbnailUrl: "" }];
     const files = [{ from: 10, to: 15, filePath: "/code.ts", fileName: "code.ts" }];
-    const urls = [
-      { from: 20, to: 30, title: "Page", tokenEstimate: 2000, sourceUrl: "https://x.com" },
-    ];
-    const result = normalizeChips(images, files, urls);
-    expect(result).toHaveLength(3);
+    const result = normalizeChips(images, files);
+    expect(result).toHaveLength(2);
   });
 
   it("sorts items by document position", () => {
     const images = [{ from: 20, to: 25, filePath: "/img.png", thumbnailUrl: "" }];
     const files = [{ from: 0, to: 5, filePath: "/code.ts", fileName: "code.ts" }];
-    const urls = [
-      { from: 10, to: 15, title: "Page", tokenEstimate: 2000, sourceUrl: "https://x.com" },
-    ];
-    const result = normalizeChips(images, files, urls);
-    expect(result.map((r) => r.kind)).toEqual(["file", "url", "image"]);
+    const result = normalizeChips(images, files);
+    expect(result.map((r) => r.kind)).toEqual(["file", "image"]);
   });
 });
 
@@ -97,13 +72,6 @@ describe("buildSummaryLine", () => {
       { id: "f-10-15", kind: "file" as const, label: "b.ts", tokenEstimate: 500, from: 10, to: 15 },
     ];
     expect(buildSummaryLine(items)).toBe("2 files \u00b7 ~1,000 tokens");
-  });
-
-  it("omits zero-count categories", () => {
-    const items = [
-      { id: "u-0-10", kind: "url" as const, label: "Page", tokenEstimate: 2000, from: 0, to: 10 },
-    ];
-    expect(buildSummaryLine(items)).toBe("1 URL \u00b7 ~2,000 tokens");
   });
 
   it("joins multiple categories with middle dot", () => {

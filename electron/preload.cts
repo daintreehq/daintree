@@ -528,9 +528,6 @@ const CHANNELS = {
   CLIPBOARD_SAVE_IMAGE: "clipboard:save-image",
   CLIPBOARD_THUMBNAIL_FROM_PATH: "clipboard:thumbnail-from-path",
 
-  // URL Context channels
-  URL_CONTEXT_RESOLVE: "url-context:resolve",
-
   // App Theme channels
   APP_THEME_GET: "app-theme:get",
   APP_THEME_SET_COLOR_SCHEME: "app-theme:set-color-scheme",
@@ -1885,11 +1882,6 @@ const api: ElectronAPI = {
   // Web Utils API
   webUtils: {
     getPathForFile: (file: File) => webUtils.getPathForFile(file),
-  },
-
-  // URL Context API
-  urlContext: {
-    resolve: (url: string) => _typedInvoke(CHANNELS.URL_CONTEXT_RESOLVE, url),
   },
 
   appTheme: {

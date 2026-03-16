@@ -55,12 +55,10 @@
     "prepare": "husky"
   },
   "dependencies": {
-    "@mozilla/readability": "^0.6.0",
     "@xterm/addon-webgl": "^0.19.0",
     "better-sqlite3": "^12.6.2",
     "copytree": "^0.14.2",
     "js-yaml": "^4.1.1",
-    "node-html-markdown": "^2.0.0",
     "node-pty": "1.2.0-beta.11"
   },
   "overrides": {
@@ -141,7 +139,7 @@
     "husky": "^9.1.7",
     "ink": "^6.5.1",
     "ink-spinner": "^5.0.0",
-    "jsdom": "^27.4.0",
+    "jsdom": "^29.0.0",
     "lint-staged": "^16.2.7",
     "lucide-react": "^0.555.0",
     "nodemon": "^3.1.11",
