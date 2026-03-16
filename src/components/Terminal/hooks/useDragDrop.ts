@@ -44,7 +44,7 @@ export function useDragDrop(editorViewRef: React.RefObject<EditorView | null>) {
 
       type ResolvedFile =
         | { type: "image"; filePath: string; thumbnailDataUrl: string }
-        | { type: "file"; filePath: string; fileName: string };
+        | { type: "file"; filePath: string; fileName: string; fileSize: number };
 
       const resolved: ResolvedFile[] = [];
 
@@ -59,13 +59,13 @@ export function useDragDrop(editorViewRef: React.RefObject<EditorView | null>) {
             if (result.ok) {
               resolved.push({ type: "image", filePath, thumbnailDataUrl: result.thumbnailDataUrl });
             } else {
-              resolved.push({ type: "file", filePath, fileName: name });
+              resolved.push({ type: "file", filePath, fileName: name, fileSize: file.size });
             }
           } catch {
-            resolved.push({ type: "file", filePath, fileName: name });
+            resolved.push({ type: "file", filePath, fileName: name, fileSize: file.size });
           }
         } else {
-          resolved.push({ type: "file", filePath, fileName: name });
+          resolved.push({ type: "file", filePath, fileName: name, fileSize: file.size });
         }
       }
 
@@ -98,6 +98,7 @@ export function useDragDrop(editorViewRef: React.RefObject<EditorView | null>) {
                 to: from + token.length,
                 filePath: entry.filePath,
                 fileName: entry.fileName,
+                fileSize: entry.fileSize,
               })
             );
           }
