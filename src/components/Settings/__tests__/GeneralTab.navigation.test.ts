@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
+import { BUILT_IN_AGENT_IDS } from "@shared/config/agentIds";
 
 /**
  * Tests for the agent navigation callback contract in GeneralTab.
@@ -62,8 +63,7 @@ describe("onNavigateToAgents callback contract", () => {
   });
 
   it("works with all built-in agent IDs", () => {
-    const agentIds = ["claude", "gemini", "codex"];
-    for (const id of agentIds) {
+    for (const id of BUILT_IN_AGENT_IDS) {
       const { onNavigateToAgents, setActiveSubtabs } = createSettingsDialogCallback();
       onNavigateToAgents(id);
 

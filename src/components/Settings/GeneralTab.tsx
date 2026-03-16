@@ -318,7 +318,7 @@ export function GeneralTab({
                       onClick={() => onNavigateToAgents?.(id)}
                     >
                       <span className="text-canopy-text/70">{name}</span>
-                      <div className="flex items-center gap-2">
+                      <span className="flex items-center gap-2">
                         {!isSelected ? (
                           <span className="text-canopy-text/40 text-xs">Disabled</span>
                         ) : isAvailable ? (
@@ -332,7 +332,7 @@ export function GeneralTab({
                             <span className="text-status-warning text-xs">CLI not found</span>
                           </>
                         )}
-                      </div>
+                      </span>
                     </button>
                   );
                 })}
