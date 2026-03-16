@@ -25,6 +25,7 @@ import { PERF_MARKS } from "@shared/perf/marks";
 import { markRendererPerformance } from "@/utils/performance";
 import { useScrollbackStore } from "@/store/scrollbackStore";
 import { usePerformanceModeStore } from "@/store/performanceModeStore";
+import { useProjectSettingsStore } from "@/store/projectSettingsStore";
 import { getScrollbackForType, PERFORMANCE_MODE_SCROLLBACK } from "@/utils/scrollbackConfig";
 
 // eslint-disable-next-line no-control-regex
@@ -1130,10 +1131,10 @@ class TerminalInstanceService {
     const currentScrollback = managed.terminal.options.scrollback ?? 0;
     if (currentScrollback <= targetLines) return;
 
-    const bufferLength = managed.terminal.buffer.active.length;
+    const scrollbackUsed = managed.terminal.buffer.active.length - managed.terminal.rows;
     managed.terminal.options.scrollback = targetLines;
 
-    if (bufferLength > targetLines) {
+    if (scrollbackUsed > targetLines) {
       managed.terminal.write(
         `\r\n\x1b[33m[Canopy] Scrollback reduced to ${targetLines} lines due to memory pressure. Older history is no longer available.\x1b[0m\r\n`
       );
@@ -1147,11 +1148,20 @@ class TerminalInstanceService {
     const { scrollbackLines } = useScrollbackStore.getState();
     const { performanceMode } = usePerformanceModeStore.getState();
 
-    const restored = performanceMode
-      ? PERFORMANCE_MODE_SCROLLBACK
-      : getScrollbackForType(managed.type, scrollbackLines);
+    if (performanceMode) {
+      managed.terminal.options.scrollback = PERFORMANCE_MODE_SCROLLBACK;
+      return;
+    }
 
-    managed.terminal.options.scrollback = restored;
+    const isAgent = managed.kind === "agent";
+    const projectScrollback = !isAgent
+      ? useProjectSettingsStore.getState().settings?.terminalSettings?.scrollbackLines
+      : undefined;
+
+    managed.terminal.options.scrollback = getScrollbackForType(
+      managed.type,
+      projectScrollback ?? scrollbackLines
+    );
   }
 
   addExitListener(id: string, cb: (exitCode: number) => void): () => void {
