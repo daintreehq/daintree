@@ -1,0 +1,62 @@
+import React from "react";
+import { AlertTriangle, Loader2, RotateCcw, X } from "lucide-react";
+import { InlineStatusBanner } from "./InlineStatusBanner";
+import type { RestartBannerVariant } from "./restartStatus";
+
+export interface TerminalRestartStatusBannerProps {
+  variant: RestartBannerVariant;
+  onRestart: () => void;
+  onDismiss: () => void;
+}
+
+function TerminalRestartStatusBannerComponent({
+  variant,
+  onRestart,
+  onDismiss,
+}: TerminalRestartStatusBannerProps) {
+  switch (variant.type) {
+    case "none":
+      return null;
+
+    case "auto-restarting":
+      return (
+        <div className="flex items-center gap-2 px-3 py-1.5 text-xs text-canopy-text/60 bg-canopy-accent/5 border-b border-canopy-border shrink-0">
+          <Loader2 className="h-3 w-3 animate-spin text-canopy-accent" />
+          <span>Auto-restarting…</span>
+        </div>
+      );
+
+    case "exit-error":
+      return (
+        <InlineStatusBanner
+          icon={AlertTriangle}
+          title={`Session exited with code ${variant.exitCode}`}
+          severity="error"
+          animated={false}
+          actions={[
+            {
+              id: "restart",
+              label: "Restart Session",
+              icon: RotateCcw,
+              variant: "dangerFilled",
+              onClick: onRestart,
+              title: "Restart Session",
+              ariaLabel: "Restart session",
+            },
+            {
+              id: "dismiss",
+              label: "Dismiss",
+              icon: X,
+              variant: "danger",
+              iconOnly: true,
+              onClick: onDismiss,
+              title: "Dismiss",
+              ariaLabel: "Dismiss restart prompt",
+            },
+          ]}
+        />
+      );
+  }
+}
+
+export const TerminalRestartStatusBanner = React.memo(TerminalRestartStatusBannerComponent);

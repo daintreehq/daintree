@@ -11,7 +11,8 @@ import { cn } from "@/lib/utils";
 import { XtermAdapter } from "./XtermAdapter";
 import { ArtifactOverlay } from "./ArtifactOverlay";
 import { TerminalSearchBar } from "./TerminalSearchBar";
-import { TerminalRestartBanner } from "./TerminalRestartBanner";
+import { TerminalRestartStatusBanner } from "./TerminalRestartStatusBanner";
+import { getRestartBannerVariant } from "./restartStatus";
 import { TerminalErrorBanner } from "./TerminalErrorBanner";
 import { SpawnErrorBanner } from "./SpawnErrorBanner";
 import { ReconnectErrorBanner } from "./ReconnectErrorBanner";
@@ -684,27 +685,19 @@ function TerminalPaneComponent({
         />
       )}
 
-      {isExited &&
-        exitCode !== null &&
-        exitCode !== 0 &&
-        exitCode !== 130 &&
-        !dismissedRestartPrompt &&
-        !restartError &&
-        !isRestarting &&
-        exitBehavior !== "restart" && (
-          <TerminalRestartBanner
-            exitCode={exitCode}
-            onRestart={handleRestart}
-            onDismiss={() => setDismissedRestartPrompt(true)}
-          />
-        )}
-
-      {isAutoRestarting && (
-        <div className="flex items-center gap-2 px-3 py-1.5 text-xs text-canopy-text/60 bg-canopy-accent/5 border-b border-canopy-border shrink-0">
-          <Loader2 className="h-3 w-3 animate-spin text-canopy-accent" />
-          <span>Auto-restarting…</span>
-        </div>
-      )}
+      <TerminalRestartStatusBanner
+        variant={getRestartBannerVariant({
+          isExited,
+          exitCode,
+          dismissedRestartPrompt,
+          restartError,
+          isRestarting,
+          isAutoRestarting,
+          exitBehavior,
+        })}
+        onRestart={handleRestart}
+        onDismiss={() => setDismissedRestartPrompt(true)}
+      />
 
       <div className="flex-1 min-h-0 bg-canopy-bg flex flex-col">
         <div className="flex-1 relative min-h-0">
