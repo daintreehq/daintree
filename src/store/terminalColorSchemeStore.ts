@@ -28,9 +28,12 @@ export function selectWrapperBackground(state: TerminalColorSchemeState): string
   return scheme.colors.background ?? "var(--theme-surface-canvas)";
 }
 
-export function selectEffectiveTheme(state: TerminalColorSchemeState): ITheme {
-  const allSchemes = [...BUILT_IN_SCHEMES, ...state.customSchemes];
-  const scheme = allSchemes.find((s) => s.id === state.selectedSchemeId);
+function computeEffectiveTheme(
+  selectedSchemeId: string,
+  customSchemes: TerminalColorScheme[]
+): ITheme {
+  const allSchemes = [...BUILT_IN_SCHEMES, ...customSchemes];
+  const scheme = allSchemes.find((s) => s.id === selectedSchemeId);
 
   if (!scheme || scheme.id === DEFAULT_SCHEME_ID) {
     return getTerminalThemeFromCSS();
@@ -40,6 +43,10 @@ export function selectEffectiveTheme(state: TerminalColorSchemeState): ITheme {
     ...scheme.colors,
     ...getTerminalScrollbarDefaults(scheme.type),
   };
+}
+
+export function selectEffectiveTheme(state: TerminalColorSchemeState): ITheme {
+  return computeEffectiveTheme(state.selectedSchemeId, state.customSchemes);
 }
 
 export const useTerminalColorSchemeStore = create<TerminalColorSchemeState>()((set, get) => ({
@@ -61,16 +68,6 @@ export const useTerminalColorSchemeStore = create<TerminalColorSchemeState>()((s
 
   getEffectiveTheme: (): ITheme => {
     const { selectedSchemeId, customSchemes } = get();
-    const allSchemes = [...BUILT_IN_SCHEMES, ...customSchemes];
-    const scheme = allSchemes.find((s) => s.id === selectedSchemeId);
-
-    if (!scheme || scheme.id === DEFAULT_SCHEME_ID) {
-      return getTerminalThemeFromCSS();
-    }
-
-    return {
-      ...scheme.colors,
-      ...getTerminalScrollbarDefaults(scheme.type),
-    };
+    return computeEffectiveTheme(selectedSchemeId, customSchemes);
   },
 }));
