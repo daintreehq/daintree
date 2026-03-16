@@ -653,7 +653,7 @@ export const BUILT_IN_APP_SCHEMES: AppColorScheme[] = [
       "status-success": "#5A8A70",
       "status-warning": "#B88B40",
       "status-danger": "#C86858",
-      "status-info": "#6A8090",
+      "status-info": "#708898",
       "activity-active": "#22c55e",
       "activity-idle": "#3A3328",
       "activity-working": "#22c55e",
