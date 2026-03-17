@@ -223,7 +223,6 @@ export function DemoCursor() {
             const opts = {
               bubbles: true,
               cancelable: true,
-              view: window,
               clientX: cx,
               clientY: cy,
             };
