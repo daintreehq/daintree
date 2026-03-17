@@ -1,7 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ProcessInfo } from "../../ProcessTreeCache.js";
 import type { ProcessTreeCache } from "../../ProcessTreeCache.js";
-import { createProcessStateValidator } from "../terminalActivityPatterns.js";
+import {
+  createProcessStateValidator,
+  buildActivityMonitorOptions,
+} from "../terminalActivityPatterns.js";
 
 function createMockProcessTreeCache(
   childrenByPid: Map<number, ProcessInfo[]>,
@@ -86,5 +89,46 @@ describe("createProcessStateValidator", () => {
     const cache = createMockProcessTreeCache(new Map([[1, children]]));
     const validator = createProcessStateValidator(1, cache)!;
     expect(validator.hasActiveChildren()).toBe(false);
+  });
+});
+
+describe("buildActivityMonitorOptions", () => {
+  it("returns undefined getVisibleLines/getCursorLine when no agent ID", () => {
+    const result = buildActivityMonitorOptions(undefined, {});
+    expect(result.getVisibleLines).toBeUndefined();
+    expect(result.getCursorLine).toBeUndefined();
+    expect(result.agentId).toBeUndefined();
+  });
+
+  it("passes through closures when agent ID is provided", () => {
+    const getVisibleLines = (n: number) => [`line ${n}`];
+    const getCursorLine = () => "cursor line" as string | null;
+    const result = buildActivityMonitorOptions("claude", { getVisibleLines, getCursorLine });
+    expect(result.getVisibleLines).toBe(getVisibleLines);
+    expect(result.getCursorLine).toBe(getCursorLine);
+    expect(result.agentId).toBe("claude");
+  });
+
+  it("defaults ignoredInputSequences to escape-return", () => {
+    const result = buildActivityMonitorOptions(undefined, {});
+    expect(result.ignoredInputSequences).toEqual(["\x1b\r"]);
+  });
+
+  it("sets idle debounce for agent terminals", () => {
+    const result = buildActivityMonitorOptions("claude", {});
+    expect(result.idleDebounceMs).toBeDefined();
+    expect(typeof result.idleDebounceMs).toBe("number");
+  });
+
+  it("populates pattern config fields for a known agent", () => {
+    const result = buildActivityMonitorOptions("claude", {});
+    expect(result.outputActivityDetection).toEqual({
+      enabled: true,
+      windowMs: 1000,
+      minFrames: 2,
+      minBytes: 32,
+    });
+    expect(result.patternConfig).toBeDefined();
+    expect(result.bootCompletePatterns).toBeDefined();
   });
 });
