@@ -762,7 +762,7 @@ function PanelHeaderComponent({
                   aria-label="Collapse to Dock"
                   data-testid="panel-collapse-to-dock"
                 >
-                  <DockToBottomIcon className="w-3 h-3" />
+                  <DockToBottomIcon className="w-3 h-3" aria-hidden="true" />
                 </button>
               </TooltipTrigger>
               <TooltipContent side="bottom">Collapse to Dock</TooltipContent>
