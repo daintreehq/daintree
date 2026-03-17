@@ -132,7 +132,7 @@ describe("registerShutdownHandler", () => {
     const deps = makeDeps(overrides);
     registerShutdownHandler(deps);
     const beforeQuitCb = appMock.on.mock.calls.find(
-      ([ev]: [string]) => ev === "before-quit"
+      (args: string[]) => args[0] === "before-quit"
     )![1] as (event: { preventDefault: () => void }) => Promise<void>;
     return { deps, beforeQuitCb };
   }

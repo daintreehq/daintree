@@ -21,7 +21,7 @@ vi.mock("../../services/CrashRecoveryService.js", () => ({
   })),
 }));
 
-vi.mock("../menu.js", () => ({
+vi.mock("../../menu.js", () => ({
   handleDirectoryOpen: vi.fn(),
 }));
 
@@ -48,15 +48,11 @@ describe("registerAppLifecycleHandlers – signal handling", () => {
     vi.clearAllMocks();
     vi.useFakeTimers();
     processOnSpy = vi.spyOn(process, "on").mockImplementation(() => process);
-    processExitSpy = vi
-      .spyOn(process, "exit")
-      .mockImplementation(() => undefined as never);
+    processExitSpy = vi.spyOn(process, "exit").mockImplementation(() => undefined as never);
   });
 
   it("registers SIGTERM and SIGINT handlers regardless of isPackaged", async () => {
-    const { registerAppLifecycleHandlers } = await import(
-      "../appLifecycle.js"
-    );
+    const { registerAppLifecycleHandlers } = await import("../appLifecycle.js");
 
     for (const packaged of [false, true]) {
       vi.clearAllMocks();
@@ -64,7 +60,7 @@ describe("registerAppLifecycleHandlers – signal handling", () => {
       registerAppLifecycleHandlers(makeOpts());
 
       const signalCalls = processOnSpy.mock.calls.filter(
-        ([sig]) => sig === "SIGTERM" || sig === "SIGINT"
+        ([sig]: string[]) => sig === "SIGTERM" || sig === "SIGINT"
       );
       expect(signalCalls).toHaveLength(2);
       expect(signalCalls[0][0]).toBe("SIGTERM");
@@ -73,14 +69,10 @@ describe("registerAppLifecycleHandlers – signal handling", () => {
   });
 
   it("signal handler calls setSignalShutdown, schedules timeout, and calls app.quit", async () => {
-    const { registerAppLifecycleHandlers } = await import(
-      "../appLifecycle.js"
-    );
+    const { registerAppLifecycleHandlers } = await import("../appLifecycle.js");
     registerAppLifecycleHandlers(makeOpts());
 
-    const sigTermCall = processOnSpy.mock.calls.find(
-      ([sig]) => sig === "SIGTERM"
-    );
+    const sigTermCall = processOnSpy.mock.calls.find(([sig]: string[]) => sig === "SIGTERM");
     const handler = sigTermCall![1] as () => void;
 
     handler();
@@ -93,14 +85,10 @@ describe("registerAppLifecycleHandlers – signal handling", () => {
   });
 
   it("signal handler is idempotent — second call is a no-op", async () => {
-    const { registerAppLifecycleHandlers } = await import(
-      "../appLifecycle.js"
-    );
+    const { registerAppLifecycleHandlers } = await import("../appLifecycle.js");
     registerAppLifecycleHandlers(makeOpts());
 
-    const sigTermCall = processOnSpy.mock.calls.find(
-      ([sig]) => sig === "SIGTERM"
-    );
+    const sigTermCall = processOnSpy.mock.calls.find(([sig]: string[]) => sig === "SIGTERM");
     const handler = sigTermCall![1] as () => void;
 
     handler();

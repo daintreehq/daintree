@@ -11,9 +11,7 @@ describe("signalShutdownState", () => {
   });
 
   it("becomes true after setSignalShutdown", async () => {
-    const { isSignalShutdown, setSignalShutdown } = await import(
-      "../signalShutdownState.js"
-    );
+    const { isSignalShutdown, setSignalShutdown } = await import("../signalShutdownState.js");
     setSignalShutdown();
     expect(isSignalShutdown()).toBe(true);
   });
