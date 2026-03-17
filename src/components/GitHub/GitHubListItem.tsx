@@ -146,17 +146,35 @@ export function GitHubListItem({
       onClick={isSelectionActive && onToggleSelect ? (e) => onToggleSelect(e) : undefined}
     >
       <div className="flex items-start gap-2 px-3 py-2.5">
-        {type === "issue" && (isSelectionActive || isSelected) ? (
-          <span
-            aria-hidden="true"
-            className={cn(
-              "shrink-0 mt-0.5 w-4 h-4 rounded border flex items-center justify-center transition-colors",
-              isSelected
-                ? "bg-canopy-accent border-canopy-accent"
-                : "border-canopy-border hover:border-canopy-accent/60"
-            )}
-          >
-            {isSelected && <Check className="w-3 h-3 text-white" />}
+        {type === "issue" && onToggleSelect ? (
+          <span className="shrink-0 mt-0.5 relative w-4 h-4">
+            {/* State icon: visible by default, hidden on hover or when selection active */}
+            <span
+              className={cn(
+                "absolute inset-0",
+                stateColor,
+                isSelectionActive || isSelected ? "hidden" : "group-hover:hidden"
+              )}
+            >
+              <StateIcon className="h-4 w-4" />
+            </span>
+            {/* Checkbox: hidden by default, visible on hover or when selection active */}
+            <span
+              aria-hidden="true"
+              onClick={(e) => {
+                e.stopPropagation();
+                onToggleSelect(e);
+              }}
+              className={cn(
+                "absolute inset-0 rounded border flex items-center justify-center transition-colors cursor-pointer",
+                isSelected
+                  ? "bg-canopy-accent border-canopy-accent"
+                  : "border-canopy-border hover:border-canopy-accent/60",
+                isSelectionActive || isSelected ? "flex" : "hidden group-hover:flex"
+              )}
+            >
+              {isSelected && <Check className="w-3 h-3 text-white" />}
+            </span>
           </span>
         ) : (
           <span className={cn("shrink-0 mt-0.5", stateColor)}>

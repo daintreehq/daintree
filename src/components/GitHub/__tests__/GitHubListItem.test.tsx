@@ -229,20 +229,34 @@ describe("GitHubListItem", () => {
 
   it("applies selected styling and aria-selected when isSelected", () => {
     const { container } = render(
-      <GitHubListItem item={baseIssue} type="issue" isSelected isSelectionActive />
+      <GitHubListItem
+        item={baseIssue}
+        type="issue"
+        isSelected
+        isSelectionActive
+        onToggleSelect={vi.fn()}
+      />
     );
     const option = container.querySelector("[role='option']");
     expect(option?.getAttribute("aria-selected")).toBe("true");
     expect(option?.className).toContain("bg-canopy-accent/10");
   });
 
-  it("shows checkbox instead of state icon when selection is active", () => {
+  it("shows checked checkbox when selected", () => {
     const { container } = render(
-      <GitHubListItem item={baseIssue} type="issue" isSelected isSelectionActive />
+      <GitHubListItem
+        item={baseIssue}
+        type="issue"
+        isSelected
+        isSelectionActive
+        onToggleSelect={vi.fn()}
+      />
     );
-    const checkbox = container.querySelector("[aria-hidden='true']");
-    expect(checkbox).not.toBeNull();
-    expect(checkbox?.className).toContain("bg-canopy-accent");
+    const checkboxes = container.querySelectorAll("[aria-hidden='true']");
+    const checked = Array.from(checkboxes).find((el) =>
+      (el.getAttribute("class") ?? "").includes("bg-canopy-accent")
+    );
+    expect(checked).not.toBeUndefined();
   });
 
   it("calls onToggleSelect when clicking title during active selection", () => {
