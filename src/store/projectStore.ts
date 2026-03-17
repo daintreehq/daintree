@@ -20,6 +20,7 @@ import {
 } from "./projectSettingsStore";
 import { logErrorWithContext } from "@/utils/errorContext";
 import { useUrlHistoryStore } from "./urlHistoryStore";
+import { useProjectGroupsStore } from "./projectGroupsStore";
 import {
   prepareProjectSwitchRendererCache,
   cancelPreparedProjectSwitchRendererCache,
@@ -460,6 +461,7 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
     set({ isLoading: true, error: null });
     try {
       await projectClient.remove(id);
+      useProjectGroupsStore.getState().removeProjectFromAllGroups(id);
       await get().loadProjects();
       if (get().currentProject?.id === id) {
         set({ currentProject: null });
