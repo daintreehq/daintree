@@ -5,6 +5,7 @@ import type { WorktreeState } from "../../types";
 import type { GitHubIssue } from "@shared/types/github";
 import { useWorktreeTerminals } from "../../hooks/useWorktreeTerminals";
 import { useDroppable } from "@dnd-kit/core";
+import type { SyntheticListenerMap } from "@dnd-kit/core/dist/hooks/utilities";
 import {
   useErrorStore,
   useTerminalStore,
@@ -45,6 +46,10 @@ export interface WorktreeCardProps {
   homeDir?: string;
   variant?: "sidebar" | "grid";
   onAfterTerminalSelect?: () => void;
+  sortableRef?: (node: HTMLElement | null) => void;
+  dragHandleListeners?: SyntheticListenerMap;
+  dragHandleActivatorRef?: (node: HTMLElement | null) => void;
+  isDraggingSort?: boolean;
 }
 
 export function WorktreeCard({
@@ -62,6 +67,10 @@ export function WorktreeCard({
   homeDir,
   variant = "sidebar",
   onAfterTerminalSelect,
+  sortableRef,
+  dragHandleListeners,
+  dragHandleActivatorRef,
+  isDraggingSort,
 }: WorktreeCardProps) {
   const isExpanded = useWorktreeSelectionStore(
     useCallback((state) => state.expandedWorktrees.has(worktree.id), [worktree.id])
@@ -387,6 +396,14 @@ export function WorktreeCard({
     disabled: isActive,
   });
 
+  const mergedRef = useCallback(
+    (node: HTMLElement | null) => {
+      if (!isActive) setNodeRef(node);
+      sortableRef?.(node);
+    },
+    [isActive, setNodeRef, sortableRef]
+  );
+
   const isMuted =
     (isIdleCard || isStaleCard) && !isWaitingCard && !isActive && !isFocused && !isOver;
 
@@ -418,7 +435,7 @@ export function WorktreeCard({
 
   const cardContent = (
     <div
-      ref={isActive ? undefined : setNodeRef}
+      ref={mergedRef}
       className={cn(
         "group relative transition-all duration-200",
         variant === "sidebar" && "border-b border-border-subtle",
@@ -500,6 +517,9 @@ export function WorktreeCard({
           branchLabel={branchLabel}
           lifecycleStage={lifecycleStage}
           worktreeErrorCount={worktreeErrors.length}
+          dragHandleListeners={dragHandleListeners}
+          dragHandleActivatorRef={dragHandleActivatorRef}
+          isDraggingSort={isDraggingSort}
           badges={{
             onOpenIssue: worktree.issueNumber ? handleOpenIssueExternal : undefined,
             onOpenPR: worktree.prNumber ? handleOpenPRExternal : undefined,
