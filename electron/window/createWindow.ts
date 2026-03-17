@@ -29,7 +29,7 @@ export function setupBrowserWindow(dirname: string): CreateWindowResult {
   let _smokeRendererUnresponsive = false;
 
   if (isSmokeTest) {
-    console.log("[SMOKE] Starting %ds startup safety timeout", SMOKE_BOOT_TIMEOUT_MS / 1000);
+    console.error("[SMOKE] Starting %ds startup safety timeout", SMOKE_BOOT_TIMEOUT_MS / 1000);
     smokeTestTimer = setTimeout(() => {
       console.error("[SMOKE] FAILED — app did not finish loading within startup timeout");
       app.exit(1);

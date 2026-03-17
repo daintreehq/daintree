@@ -412,7 +412,7 @@ export async function setupWindowServices(
   // Handle reloads
   win.webContents.on("did-finish-load", () => {
     console.log("[MAIN] Renderer loaded, ensuring MessagePort connection...");
-    if (isSmokeTest) console.log("[SMOKE] CHECK: Renderer did-finish-load — OK");
+    if (isSmokeTest) console.error("[SMOKE] CHECK: Renderer did-finish-load — OK");
     markPerformance(PERF_MARKS.RENDERER_READY);
     createAndDistributePorts(win);
     flushPendingErrors();
@@ -575,12 +575,12 @@ export async function setupWindowServices(
   if (isSmokeTest) {
     if (opts.smokeTestTimer) clearTimeout(opts.smokeTestTimer);
     const bootMs = Date.now() - smokeTestStart;
-    console.log("[SMOKE] CHECK: Window created — OK");
-    console.log("[SMOKE] CHECK: PTY service — %s", ptyReady ? "OK" : "FAILED");
-    console.log("[SMOKE] CHECK: Workspace service — %s", workspaceReady ? "OK" : "FAILED");
-    console.log("[SMOKE] CHECK: Auto-updater module — OK");
-    console.log("[SMOKE] GPU feature status:", JSON.stringify(app.getGPUFeatureStatus()));
-    console.log("[SMOKE] Boot completed in %dms", bootMs);
+    console.error("[SMOKE] CHECK: Window created — OK");
+    console.error("[SMOKE] CHECK: PTY service — %s", ptyReady ? "OK" : "FAILED");
+    console.error("[SMOKE] CHECK: Workspace service — %s", workspaceReady ? "OK" : "FAILED");
+    console.error("[SMOKE] CHECK: Auto-updater module — OK");
+    console.error("[SMOKE] GPU feature status:", JSON.stringify(app.getGPUFeatureStatus()));
+    console.error("[SMOKE] Boot completed in %dms", bootMs);
 
     if (!ptyReady || !workspaceReady) {
       console.error("[SMOKE] FAILED — one or more services did not start");

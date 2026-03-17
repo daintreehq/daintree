@@ -77,11 +77,11 @@ export const isSmokeTest = process.argv.includes("--smoke-test");
 export const smokeTestStart = isSmokeTest ? Date.now() : 0;
 
 if (isSmokeTest) {
-  console.log("[SMOKE] Smoke test mode enabled");
-  console.log("[SMOKE] Platform:", process.platform, process.arch);
-  console.log("[SMOKE] Electron:", process.versions.electron);
-  console.log("[SMOKE] Node:", process.versions.node);
-  console.log("[SMOKE] Chrome:", process.versions.chrome);
+  console.error("[SMOKE] Smoke test mode enabled");
+  console.error("[SMOKE] Platform:", process.platform, process.arch);
+  console.error("[SMOKE] Electron:", process.versions.electron);
+  console.error("[SMOKE] Node:", process.versions.node);
+  console.error("[SMOKE] Chrome:", process.versions.chrome);
 
   // Fail fast on renderer or child process crashes
   app.on("render-process-gone", (_event, _wc, details) => {
@@ -111,7 +111,7 @@ if (isSmokeTest) {
       rows: 24,
     });
     testProc.kill();
-    console.log("[SMOKE] CHECK: node-pty native module — OK");
+    console.error("[SMOKE] CHECK: node-pty native module — OK");
   } catch (err) {
     console.error("[SMOKE] FAILED — node-pty native module:", (err as Error).message);
     app.exit(1);
