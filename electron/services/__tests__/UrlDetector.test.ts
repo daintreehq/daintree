@@ -63,9 +63,9 @@ describe("UrlDetector", () => {
         expect(result.url).toBe("http://localhost:3000/");
       });
 
-      it("returns first URL if no localhost variant exists", () => {
+      it("returns last URL if no localhost variant exists", () => {
         const result = detector.scanOutput("http://127.0.0.1:3000 and http://127.0.0.1:4000", "");
-        expect(result.url).toBe("http://127.0.0.1:3000/");
+        expect(result.url).toBe("http://127.0.0.1:4000/");
       });
 
       it("maintains 8192 character buffer for split URL detection", () => {
@@ -139,13 +139,12 @@ describe("UrlDetector", () => {
         expect(result.url).toBe("http://localhost/");
       });
 
-      it("prefers first localhost URL when multiple in same chunk", () => {
+      it("prefers last localhost URL when multiple in same chunk", () => {
         const result = detector.scanOutput(
           "Old: http://localhost:3000 New: http://localhost:4000",
           ""
         );
-        // TODO: Should prefer latest (4000) but currently returns first (3000)
-        expect(result.url).toBe("http://localhost:3000/");
+        expect(result.url).toBe("http://localhost:4000/");
       });
 
       it("does not detect IPv6 bracket notation URLs", () => {

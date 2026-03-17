@@ -35,6 +35,6 @@ export class UrlDetector {
 
     const localPattern = /localhost/i;
     const localUrls = urls.filter((url) => localPattern.test(url));
-    return localUrls.length > 0 ? localUrls[0] : urls[0];
+    return localUrls.length > 0 ? localUrls[localUrls.length - 1] : urls[urls.length - 1];
   }
 }
