@@ -1,4 +1,4 @@
-import * as pty from "node-pty";
+import type * as pty from "node-pty";
 import type { Terminal as HeadlessTerminalType } from "@xterm/headless";
 import headless from "@xterm/headless";
 const { Terminal: HeadlessTerminal } = headless;
@@ -16,9 +16,6 @@ import {
   type TerminalPublicState,
   type TerminalSnapshot,
   OUTPUT_BUFFER_SIZE,
-  SEMANTIC_BUFFER_MAX_LINES,
-  SEMANTIC_BUFFER_MAX_LINE_LENGTH,
-  SEMANTIC_FLUSH_INTERVAL_MS,
   DEFAULT_SCROLLBACK,
   AGENT_SCROLLBACK,
   WRITE_INTERVAL_MS,
@@ -59,22 +56,14 @@ import {
   persistSessionSnapshotAsync,
 } from "./terminalSessionPersistence.js";
 import {
-  buildPatternConfig,
-  buildBootCompletePatterns,
-  buildPromptPatterns,
-  buildPromptHintPatterns,
-  buildCompletionPatterns,
   createProcessStateValidator,
+  buildActivityMonitorOptions,
 } from "./terminalActivityPatterns.js";
 import { TerminalForensicsBuffer } from "./TerminalForensicsBuffer.js";
+import { SemanticBufferManager } from "./SemanticBufferManager.js";
 import { stripAnsiCodes } from "../../../shared/utils/artifactParser.js";
-import {
-  getDefaultShell,
-  getDefaultShellArgs,
-  buildNonInteractiveEnv,
-  AGENT_ENV_EXCLUSIONS,
-} from "./terminalShell.js";
-import { filterEnvironment, injectCanopyMetadata } from "./EnvironmentFilter.js";
+import { getDefaultShell, getDefaultShellArgs } from "./terminalShell.js";
+import { buildTerminalEnv, acquirePtyProcess } from "./terminalSpawn.js";
 
 type CursorBuffer = {
   cursorY?: number;
@@ -107,8 +96,7 @@ export class TerminalProcess {
   private lastWriteErrorLogTime = 0;
   private suppressedWriteErrorCount = 0;
 
-  private pendingSemanticData = "";
-  private semanticFlushTimer: NodeJS.Timeout | null = null;
+  private semanticBufferManager!: SemanticBufferManager;
 
   private inputWriteQueue: string[] = [];
   private inputWriteTimeout: NodeJS.Timeout | null = null;
@@ -256,113 +244,17 @@ export class TerminalProcess {
       ? (options.agentId ?? (options.type !== "terminal" ? options.type : id))
       : undefined;
 
-    const baseEnv = process.env as Record<string, string | undefined>;
-
-    // Filter sensitive credentials from the inherited process environment only.
-    // options.env contains intentional overrides (e.g. project settings env vars
-    // resolved from secure storage) and is merged in after filtering so those
-    // intentional values are not inadvertently stripped.
-    const filteredBaseEnv = filterEnvironment(baseEnv);
-    const intentionalEnv = options.env
-      ? (Object.fromEntries(
-          Object.entries(options.env).filter(([, v]) => v !== undefined)
-        ) as Record<string, string>)
-      : {};
-    const mergedEnv = injectCanopyMetadata(
-      { ...filteredBaseEnv, ...intentionalEnv },
-      {
-        paneId: id,
-        cwd: options.cwd,
-        projectId: options.projectId,
-        worktreeId: options.worktreeId,
-      }
+    const env = buildTerminalEnv(options, id, shell, this.isAgentTerminal, agentId);
+    const ptyProcess = acquirePtyProcess(
+      id,
+      options,
+      env,
+      shell,
+      args,
+      this.isAgentTerminal,
+      deps.ptyPool,
+      (error, context) => this.logWriteError(error, context)
     );
-
-    // For agent terminals, use non-interactive environment to suppress prompts
-    // (oh-my-zsh updates, Homebrew notifications, etc.)
-    // Pass agentId for agent-specific exclusions (e.g., Gemini CLI is sensitive to CI=1)
-    // Then merge agent-specific env vars from the agent registry config,
-    // filtering out any excluded vars to prevent bypassing agent-specific safeguards
-    const agentConfig = agentId ? getEffectiveAgentConfig(agentId) : undefined;
-    const agentEnv = agentConfig?.env ?? {};
-    const normalizedAgentId = agentId?.toLowerCase();
-    const exclusions = new Set(
-      normalizedAgentId ? (AGENT_ENV_EXCLUSIONS[normalizedAgentId] ?? []) : []
-    );
-    const filteredAgentEnv = Object.fromEntries(
-      Object.entries(agentEnv).filter(([key]) => !exclusions.has(key) && !key.startsWith("CANOPY_"))
-    ) as Record<string, string>;
-    const env: Record<string, string> = this.isAgentTerminal
-      ? { ...buildNonInteractiveEnv(mergedEnv, shell, agentId), ...filteredAgentEnv }
-      : mergedEnv;
-
-    const canUsePool =
-      deps.ptyPool &&
-      !this.isAgentTerminal &&
-      !options.shell &&
-      !options.env &&
-      !options.args &&
-      options.kind !== "dev-preview";
-    let pooledPty = canUsePool ? deps.ptyPool!.acquire() : null;
-
-    let ptyProcess: pty.IPty;
-
-    if (pooledPty) {
-      try {
-        pooledPty.resize(options.cols, options.rows);
-      } catch (resizeError) {
-        console.warn(
-          `[TerminalProcess] Failed to resize pooled PTY for ${id}, falling back to spawn:`,
-          resizeError
-        );
-        try {
-          pooledPty.kill();
-        } catch {
-          // Process may already be dead
-        }
-        pooledPty = null;
-      }
-    }
-
-    if (pooledPty) {
-      ptyProcess = pooledPty;
-
-      if (process.platform === "win32") {
-        const shellLower = shell.toLowerCase();
-        try {
-          if (shellLower.includes("powershell") || shellLower.includes("pwsh")) {
-            ptyProcess.write(`Set-Location "${options.cwd.replace(/"/g, '""')}"\r`);
-          } else {
-            ptyProcess.write(`cd /d "${options.cwd.replace(/"/g, '\\"')}"\r`);
-          }
-        } catch (error) {
-          this.logWriteError(error, { operation: "write(cwd)" });
-        }
-      } else {
-        try {
-          ptyProcess.write(`cd "${options.cwd.replace(/"/g, '\\"')}"\r`);
-        } catch (error) {
-          this.logWriteError(error, { operation: "write(cwd)" });
-        }
-      }
-
-      if (process.env.CANOPY_VERBOSE) {
-        console.log(`[TerminalProcess] Acquired terminal ${id} from pool (instant spawn)`);
-      }
-    } else {
-      try {
-        ptyProcess = pty.spawn(shell, args, {
-          name: "xterm-256color",
-          cols: options.cols,
-          rows: options.rows,
-          cwd: options.cwd,
-          env,
-        });
-      } catch (error) {
-        console.error(`Failed to spawn terminal ${id}:`, error);
-        throw error;
-      }
-    }
 
     this._scrollback = this.isAgentTerminal ? AGENT_SCROLLBACK : DEFAULT_SCROLLBACK;
 
@@ -395,8 +287,6 @@ export class TerminalProcess {
       lastOutputTime: spawnedAt,
       lastCheckTime: spawnedAt,
       semanticBuffer: [],
-      pendingSemanticData: "",
-      semanticFlushTimer: null,
       inputWriteQueue: [],
       inputWriteTimeout: null,
       headlessTerminal,
@@ -414,6 +304,7 @@ export class TerminalProcess {
     // Ratatui's input parser (Codex, OpenCode) and Ink's state (Claude Code).
     // The frontend xterm.js is the sole query responder for agent terminals.
 
+    this.semanticBufferManager = new SemanticBufferManager(this.terminalInfo);
     this.setupPtyHandlers(ptyProcess);
 
     const ptyPid = ptyProcess.pid;
@@ -446,7 +337,17 @@ export class TerminalProcess {
           }
           deps.agentStateService.handleActivityState(this.terminalInfo, state, metadata);
         },
-        { ...this.getActivityMonitorOptions(), processStateValidator }
+        {
+          ...buildActivityMonitorOptions(
+            this.terminalInfo.agentId ??
+              (this.terminalInfo.type !== "terminal" ? this.terminalInfo.type : undefined),
+            {
+              getVisibleLines: (n) => this.getLastNLines(n),
+              getCursorLine: () => this.getCursorLine(),
+            }
+          ),
+          processStateValidator,
+        }
       );
       this.activityMonitor.startPolling();
     }
@@ -879,7 +780,7 @@ export class TerminalProcess {
       this.activityMonitor = null;
     }
 
-    this.flushPendingSemanticData();
+    this.semanticBufferManager.flush();
 
     if (this.inputWriteTimeout) {
       clearTimeout(this.inputWriteTimeout);
@@ -1114,7 +1015,14 @@ export class TerminalProcess {
           this.deps.agentStateService.handleActivityState(this.terminalInfo, state, metadata);
         },
         {
-          ...this.getActivityMonitorOptions(),
+          ...buildActivityMonitorOptions(
+            this.terminalInfo.agentId ??
+              (this.terminalInfo.type !== "terminal" ? this.terminalInfo.type : undefined),
+            {
+              getVisibleLines: (n) => this.getLastNLines(n),
+              getCursorLine: () => this.getCursorLine(),
+            }
+          ),
           processStateValidator,
           initialState,
           skipInitialStateEmit: preserveState,
@@ -1122,50 +1030,6 @@ export class TerminalProcess {
       );
       this.activityMonitor.startPolling();
     }
-  }
-
-  private getActivityMonitorOptions(): import("../ActivityMonitor.js").ActivityMonitorOptions {
-    const effectiveAgentId =
-      this.terminalInfo.agentId ??
-      (this.terminalInfo.type !== "terminal" ? this.terminalInfo.type : undefined);
-    const agentConfig = effectiveAgentId ? getEffectiveAgentConfig(effectiveAgentId) : undefined;
-    const ignoredInputSequences = agentConfig?.capabilities?.ignoredInputSequences ?? ["\x1b\r"];
-
-    const detection = effectiveAgentId
-      ? getEffectiveAgentConfig(effectiveAgentId)?.detection
-      : undefined;
-    const patternConfig = buildPatternConfig(detection, effectiveAgentId);
-    const bootCompletePatterns = buildBootCompletePatterns(detection, effectiveAgentId);
-    const promptPatterns = buildPromptPatterns(detection, effectiveAgentId);
-    const promptHintPatterns = buildPromptHintPatterns(detection, effectiveAgentId);
-    const completionPatterns = buildCompletionPatterns(detection, effectiveAgentId);
-
-    const outputActivityDetection = {
-      enabled: true,
-      windowMs: 1000,
-      minFrames: 2,
-      minBytes: 32,
-    };
-
-    const getVisibleLines = effectiveAgentId ? (n: number) => this.getLastNLines(n) : undefined;
-    const getCursorLine = effectiveAgentId ? () => this.getCursorLine() : undefined;
-
-    return {
-      ignoredInputSequences,
-      agentId: effectiveAgentId,
-      outputActivityDetection,
-      getVisibleLines,
-      getCursorLine,
-      patternConfig,
-      bootCompletePatterns,
-      promptPatterns,
-      promptHintPatterns,
-      completionPatterns,
-      completionConfidence: detection?.completionConfidence,
-      promptScanLineCount: detection?.promptScanLineCount,
-      promptConfidence: detection?.promptConfidence,
-      idleDebounceMs: effectiveAgentId ? (detection?.debounceMs ?? 2000) : undefined,
-    };
   }
 
   stopActivityMonitor(): void {
@@ -1197,10 +1061,7 @@ export class TerminalProcess {
     this.stopProcessDetector();
     this.stopActivityMonitor();
 
-    if (this.semanticFlushTimer) {
-      clearTimeout(this.semanticFlushTimer);
-      this.semanticFlushTimer = null;
-    }
+    this.semanticBufferManager.dispose();
 
     if (
       TERMINAL_SESSION_PERSISTENCE_ENABLED &&
@@ -1274,7 +1135,7 @@ export class TerminalProcess {
 
       this.emitData(data);
       this.forensicsBuffer.capture(data);
-      this.debouncedSemanticUpdate(data);
+      this.semanticBufferManager.onData(data);
 
       if (this.isAgentTerminal) {
         terminal.outputBuffer += data;
@@ -1302,7 +1163,7 @@ export class TerminalProcess {
 
       this.stopProcessDetector();
       this.stopActivityMonitor();
-      this.flushPendingSemanticData();
+      this.semanticBufferManager.flush();
 
       if (this.inputWriteTimeout) {
         clearTimeout(this.inputWriteTimeout);
@@ -1436,7 +1297,7 @@ export class TerminalProcess {
     }
 
     if (!terminal.agentId) {
-      const lastCommand = result.currentCommand || this.getLastCommand();
+      const lastCommand = result.currentCommand || this.semanticBufferManager.getLastCommand();
 
       const { headline, status, type } = this.headlineGenerator.generate({
         terminalId: this.id,
@@ -1479,79 +1340,6 @@ export class TerminalProcess {
           events.emit("agent:state-changed", validated.data);
         }
       }
-    }
-  }
-
-  private getLastCommand(): string | undefined {
-    const buffer = this.terminalInfo.semanticBuffer;
-    if (buffer.length === 0) return undefined;
-
-    for (let i = buffer.length - 1; i >= 0 && i >= buffer.length - 10; i--) {
-      let line = buffer[i].trim();
-
-      if (line.length === 0) continue;
-
-      line = line.replace(/^[^@]*@[^:]*:[^\s]*\s*[$>%#]\s*/, "");
-      line = line.replace(/^~?[^\s]*[$>%#]\s*/, "");
-      line = line.replace(/^[$>%#]\s*/, "");
-
-      if (line.length > 0) {
-        return line;
-      }
-    }
-    return undefined;
-  }
-
-  private debouncedSemanticUpdate(data: string): void {
-    this.pendingSemanticData += data;
-
-    if (this.semanticFlushTimer) {
-      return;
-    }
-
-    this.semanticFlushTimer = setTimeout(() => {
-      if (this.pendingSemanticData) {
-        this.updateSemanticBuffer(this.pendingSemanticData);
-        this.pendingSemanticData = "";
-      }
-      this.semanticFlushTimer = null;
-    }, SEMANTIC_FLUSH_INTERVAL_MS);
-  }
-
-  private updateSemanticBuffer(chunk: string): void {
-    const terminal = this.terminalInfo;
-    const normalized = chunk.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
-    const lines = normalized.split("\n");
-
-    if (terminal.semanticBuffer.length > 0 && lines.length > 0 && !normalized.startsWith("\n")) {
-      terminal.semanticBuffer[terminal.semanticBuffer.length - 1] += lines[0];
-      lines.shift();
-    }
-
-    const processedLines = lines
-      .filter((line) => line.length > 0 || terminal.semanticBuffer.length > 0)
-      .map((line) => {
-        if (line.length > SEMANTIC_BUFFER_MAX_LINE_LENGTH) {
-          return line.substring(0, SEMANTIC_BUFFER_MAX_LINE_LENGTH) + "... [truncated]";
-        }
-        return line;
-      });
-
-    terminal.semanticBuffer.push(...processedLines);
-
-    if (terminal.semanticBuffer.length > SEMANTIC_BUFFER_MAX_LINES) {
-      terminal.semanticBuffer = terminal.semanticBuffer.slice(-SEMANTIC_BUFFER_MAX_LINES);
-    }
-  }
-
-  private flushPendingSemanticData(): void {
-    if (this.semanticFlushTimer) {
-      clearTimeout(this.semanticFlushTimer);
-      this.semanticFlushTimer = null;
-    }
-    if (this.pendingSemanticData) {
-      this.updateSemanticBuffer(this.pendingSemanticData);
-      this.pendingSemanticData = "";
     }
   }
 

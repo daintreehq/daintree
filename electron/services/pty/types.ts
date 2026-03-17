@@ -60,8 +60,6 @@ export interface TerminalRuntime {
   headlessTerminal?: HeadlessTerminal;
   serializeAddon?: SerializeAddon;
   processDetector?: ProcessDetector;
-  pendingSemanticData: string;
-  semanticFlushTimer: NodeJS.Timeout | null;
   inputWriteQueue: string[];
   inputWriteTimeout: NodeJS.Timeout | null;
   outputBuffer: string;
@@ -86,10 +84,6 @@ export interface TerminalInfo extends TerminalPublicState {
   serializeAddon?: SerializeAddon;
   /** @deprecated Internal to TerminalProcess */
   processDetector?: ProcessDetector;
-  /** @deprecated Internal buffer - use TerminalProcess.getSemanticBuffer() */
-  pendingSemanticData: string;
-  /** @deprecated Internal timer */
-  semanticFlushTimer: NodeJS.Timeout | null;
   /** @deprecated Internal queue - use TerminalProcess.write() */
   inputWriteQueue: string[];
   /** @deprecated Internal timer */

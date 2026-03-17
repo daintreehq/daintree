@@ -33,8 +33,6 @@ function createMockTerminalProcess(options: {
     worktreeId: options.worktreeId,
     outputBuffer: "",
     semanticBuffer: [],
-    pendingSemanticData: "",
-    semanticFlushTimer: null,
     inputWriteQueue: [],
     inputWriteTimeout: null,
     ptyProcess: { pid: 12345 },
