@@ -16,6 +16,7 @@ import { disposeWorkspaceClient } from "../services/WorkspaceClient.js";
 import { mcpServerService } from "../services/McpServerService.js";
 import { getCrashRecoveryService } from "../services/CrashRecoveryService.js";
 import { isSmokeTest } from "../setup/environment.js";
+import { isSignalShutdown } from "./signalShutdownState.js";
 
 export interface ShutdownDeps {
   getPtyClient: () => PtyClient | null;
@@ -40,32 +41,38 @@ let isConfirmingQuit = false;
 
 export function registerShutdownHandler(deps: ShutdownDeps): void {
   app.on("before-quit", async (event) => {
-    if (isQuitting || !deps.getMainWindow() || isSmokeTest) {
+    if (isQuitting || isSmokeTest) {
       return;
     }
+
+    const canShowDialog = !isSignalShutdown() && deps.getMainWindow() != null;
 
     if (isConfirmingQuit) {
       event.preventDefault();
       return;
     }
 
-    event.preventDefault();
+    if (canShowDialog) {
+      event.preventDefault();
 
-    const activeCount = getActiveAgentCount(getAgentAvailabilityStore());
-    if (activeCount > 0) {
-      isConfirmingQuit = true;
-      let confirmed = false;
-      try {
-        confirmed = await showQuitWarning(activeCount, dialog.showMessageBox);
-      } catch (error) {
-        console.error("[MAIN] Error showing quit warning:", error);
-      } finally {
-        isConfirmingQuit = false;
-      }
+      const activeCount = getActiveAgentCount(getAgentAvailabilityStore());
+      if (activeCount > 0) {
+        isConfirmingQuit = true;
+        let confirmed = false;
+        try {
+          confirmed = await showQuitWarning(activeCount, dialog.showMessageBox);
+        } catch (error) {
+          console.error("[MAIN] Error showing quit warning:", error);
+        } finally {
+          isConfirmingQuit = false;
+        }
 
-      if (!confirmed) {
-        return;
+        if (!confirmed) {
+          return;
+        }
       }
+    } else {
+      event.preventDefault();
     }
 
     isQuitting = true;
