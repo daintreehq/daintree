@@ -1,10 +1,9 @@
 import { Menu, dialog, BrowserWindow, shell, app } from "electron";
-import { randomUUID } from "crypto";
 import { projectStore } from "./services/ProjectStore.js";
-import { getWorkspaceClient } from "./services/WorkspaceClient.js";
 import { CHANNELS } from "./ipc/channels.js";
 import { getEffectiveRegistry } from "../shared/config/agentRegistry.js";
 import type { CliAvailabilityService } from "./services/CliAvailabilityService.js";
+import type { ProjectSwitchService } from "./services/ProjectSwitchService.js";
 import * as CliInstallService from "./services/CliInstallService.js";
 import { autoUpdaterService } from "./services/AutoUpdaterService.js";
 
@@ -22,7 +21,8 @@ function convertShortcutToAccelerator(shortcut: string): string {
 
 export function createApplicationMenu(
   mainWindow: BrowserWindow,
-  cliAvailabilityService?: CliAvailabilityService
+  cliAvailabilityService?: CliAvailabilityService,
+  projectSwitchService?: ProjectSwitchService
 ): void {
   const getTargetBrowserWindow = (
     browserWindow: Electron.BaseWindow | undefined
@@ -84,7 +84,12 @@ export function createApplicationMenu(
 
             if (!result.canceled && result.filePaths.length > 0) {
               const directoryPath = result.filePaths[0];
-              await handleDirectoryOpen(directoryPath, mainWindow, cliAvailabilityService);
+              await handleDirectoryOpen(
+                directoryPath,
+                mainWindow,
+                cliAvailabilityService,
+                projectSwitchService
+              );
             }
           },
         },
@@ -95,7 +100,11 @@ export function createApplicationMenu(
         },
         {
           label: "Open Recent",
-          submenu: buildRecentProjectsMenu(mainWindow, cliAvailabilityService),
+          submenu: buildRecentProjectsMenu(
+            mainWindow,
+            cliAvailabilityService,
+            projectSwitchService
+          ),
         },
         { type: "separator" },
         {
@@ -210,7 +219,7 @@ export function createApplicationMenu(
                 detail: `The \`canopy\` command is now available at:\n${status.path}\n\nRun \`canopy .\` in any terminal to open that directory in Canopy.`,
                 buttons: ["OK"],
               });
-              createApplicationMenu(mainWindow, cliAvailabilityService);
+              createApplicationMenu(mainWindow, cliAvailabilityService, projectSwitchService);
             } catch (err) {
               const message = err instanceof Error ? err.message : String(err);
               await dialog.showMessageBox({
@@ -293,7 +302,8 @@ export function createApplicationMenu(
 
 function buildRecentProjectsMenu(
   mainWindow: BrowserWindow,
-  cliAvailabilityService?: CliAvailabilityService
+  cliAvailabilityService?: CliAvailabilityService,
+  projectSwitchService?: ProjectSwitchService
 ): Electron.MenuItemConstructorOptions[] {
   const projects = projectStore.getAllProjects();
 
@@ -306,7 +316,12 @@ function buildRecentProjectsMenu(
   const menuItems: Electron.MenuItemConstructorOptions[] = sortedProjects.map((project) => ({
     label: `${project.emoji || "📁"} ${project.name} - ${project.path}`,
     click: async () => {
-      await handleDirectoryOpen(project.path, mainWindow, cliAvailabilityService);
+      await handleDirectoryOpen(
+        project.path,
+        mainWindow,
+        cliAvailabilityService,
+        projectSwitchService
+      );
     },
   }));
 
@@ -316,35 +331,39 @@ function buildRecentProjectsMenu(
 export async function handleDirectoryOpen(
   directoryPath: string,
   mainWindow: BrowserWindow,
-  cliAvailabilityService?: CliAvailabilityService
+  cliAvailabilityService?: CliAvailabilityService,
+  projectSwitchService?: ProjectSwitchService
 ): Promise<void> {
   if (mainWindow.isDestroyed()) return;
 
   try {
     const project = await projectStore.addProject(directoryPath);
 
-    await projectStore.setCurrentProject(project.id);
-
-    const updatedProject = projectStore.getProjectById(project.id);
-    if (!updatedProject) {
-      throw new Error(`Project not found after update: ${project.id}`);
-    }
-
-    await getWorkspaceClient().refresh();
-
-    if (!mainWindow.isDestroyed() && !mainWindow.webContents.isDestroyed()) {
-      try {
-        const switchId = randomUUID();
-        mainWindow.webContents.send(CHANNELS.PROJECT_ON_SWITCH, {
-          project: updatedProject,
-          switchId,
-        });
-      } catch {
-        // Silently ignore send failures during window disposal.
+    if (projectSwitchService) {
+      await projectSwitchService.switchProject(project.id);
+    } else {
+      const { getWorkspaceClient } = await import("./services/WorkspaceClient.js");
+      const { randomUUID } = await import("crypto");
+      await projectStore.setCurrentProject(project.id);
+      const updatedProject = projectStore.getProjectById(project.id);
+      if (!updatedProject) {
+        throw new Error(`Project not found after update: ${project.id}`);
+      }
+      await getWorkspaceClient().refresh();
+      if (!mainWindow.isDestroyed() && !mainWindow.webContents.isDestroyed()) {
+        try {
+          const switchId = randomUUID();
+          mainWindow.webContents.send(CHANNELS.PROJECT_ON_SWITCH, {
+            project: updatedProject,
+            switchId,
+          });
+        } catch {
+          // Silently ignore send failures during window disposal.
+        }
       }
     }
 
-    createApplicationMenu(mainWindow, cliAvailabilityService);
+    createApplicationMenu(mainWindow, cliAvailabilityService, projectSwitchService);
   } catch (error) {
     console.error("Failed to open project:", error);
 

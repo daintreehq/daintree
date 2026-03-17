@@ -1,5 +1,6 @@
 import { app, BrowserWindow } from "electron";
 import type { CliAvailabilityService } from "../services/CliAvailabilityService.js";
+import type { ProjectSwitchService } from "../services/ProjectSwitchService.js";
 import { handleDirectoryOpen } from "../menu.js";
 import { getCrashRecoveryService } from "../services/CrashRecoveryService.js";
 import { setSignalShutdown } from "./signalShutdownState.js";
@@ -30,6 +31,7 @@ export interface AppLifecycleOptions {
   onCreateWindow: () => void | Promise<void>;
   getMainWindow: () => BrowserWindow | null;
   getCliAvailabilityService: () => CliAvailabilityService | null;
+  getProjectSwitchService: () => ProjectSwitchService | null;
 }
 
 export function registerAppLifecycleHandlers(opts: AppLifecycleOptions): void {
@@ -66,7 +68,8 @@ export function registerAppLifecycleHandlers(opts: AppLifecycleOptions): void {
         handleDirectoryOpen(
           cliPath,
           mainWindow,
-          opts.getCliAvailabilityService() ?? undefined
+          opts.getCliAvailabilityService() ?? undefined,
+          opts.getProjectSwitchService() ?? undefined
         ).catch((err) => console.error("[MAIN] Failed to open CLI path:", err));
       } else {
         pendingCliPath = cliPath;
