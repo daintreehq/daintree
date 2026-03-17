@@ -104,6 +104,9 @@ export const LIST_PRS_QUERY = `
           reviews(first: 1) {
             totalCount
           }
+          comments {
+            totalCount
+          }
           commits(last: 1) {
             nodes {
               commit {
@@ -174,6 +177,9 @@ export const SEARCH_QUERY = `
             avatarUrl
           }
           reviews(first: 1) {
+            totalCount
+          }
+          comments {
             totalCount
           }
           commits(last: 1) {
@@ -287,6 +293,9 @@ export const GET_PR_QUERY = `
           }
         }
         reviews(first: 1) {
+          totalCount
+        }
+        comments {
           totalCount
         }
       }

@@ -74,6 +74,8 @@ export interface GitHubPR {
   headRefName?: string;
   /** Whether this PR originates from a fork repository */
   isFork?: boolean;
+  /** Number of comments */
+  commentCount?: number;
   /** CI status rollup from the latest commit */
   ciStatus?: GitHubPRCIStatus;
 }

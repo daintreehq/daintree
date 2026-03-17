@@ -1,10 +1,32 @@
 import { describe, expect, it } from "vitest";
-import { buildBatchPRQuery, LIST_PRS_QUERY } from "../GitHubQueries.js";
+import {
+  buildBatchPRQuery,
+  LIST_PRS_QUERY,
+  SEARCH_QUERY,
+  GET_PR_QUERY,
+} from "../GitHubQueries.js";
 
 describe("LIST_PRS_QUERY", () => {
   it("uses IssueOrder (not PullRequestOrder) for the orderBy variable type", () => {
     expect(LIST_PRS_QUERY).toContain("$orderBy: IssueOrder");
     expect(LIST_PRS_QUERY).not.toContain("PullRequestOrder");
+  });
+
+  it("fetches comments totalCount", () => {
+    expect(LIST_PRS_QUERY).toContain("comments");
+    expect(LIST_PRS_QUERY).toContain("totalCount");
+  });
+});
+
+describe("SEARCH_QUERY", () => {
+  it("fetches comments totalCount in PR fragment", () => {
+    expect(SEARCH_QUERY).toContain("comments");
+  });
+});
+
+describe("GET_PR_QUERY", () => {
+  it("fetches comments totalCount", () => {
+    expect(GET_PR_QUERY).toContain("comments");
   });
 });
 

@@ -782,6 +782,7 @@ function parseIssueNode(node: Record<string, unknown>): GitHubIssue {
 function parsePRNode(node: Record<string, unknown>): GitHubPR {
   const author = node.author as { login?: string; avatarUrl?: string } | null;
   const reviewsData = node.reviews as { totalCount?: number };
+  const commentsData = node.comments as { totalCount?: number };
   const merged = node.merged as boolean;
   const rawState = node.state as string;
   const headRepo = node.headRepository as { nameWithOwner?: string } | null;
@@ -815,6 +816,7 @@ function parsePRNode(node: Record<string, unknown>): GitHubPR {
       avatarUrl: author?.avatarUrl ?? "",
     },
     reviewCount: reviewsData?.totalCount,
+    commentCount: commentsData?.totalCount,
     headRefName: (node.headRefName as string) || undefined,
     isFork: isFork ?? undefined,
     ciStatus,

@@ -9,6 +9,7 @@ import {
   MoreHorizontal,
   ExternalLink,
   Check,
+  MessageSquare,
 } from "lucide-react";
 import { Avatar } from "@/components/ui/Avatar";
 import { cn } from "@/lib/utils";
@@ -221,6 +222,16 @@ export function GitHubListItem({
                       <span className="truncate min-w-0 max-w-[80px]">{label.name}</span>
                     </span>
                   ))}
+                </span>
+              </>
+            )}
+
+            {(item.commentCount ?? 0) >= 1 && (
+              <>
+                <span className="shrink-0">&middot;</span>
+                <span className="inline-flex items-center gap-0.5 shrink-0">
+                  <MessageSquare className="w-3 h-3" />
+                  <span>{item.commentCount}</span>
                 </span>
               </>
             )}

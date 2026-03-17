@@ -19,6 +19,7 @@ interface RawPRNode {
   baseRepository?: { nameWithOwner?: string } | null;
   author?: { login?: string; avatarUrl?: string } | null;
   reviews?: { totalCount?: number };
+  comments?: { totalCount?: number };
   commits?: {
     nodes?: Array<{
       commit?: { statusCheckRollup?: { state?: string } | null } | null;
@@ -30,6 +31,7 @@ interface RawPRNode {
 function parsePRNode(node: RawPRNode) {
   const author = node.author;
   const reviewsData = node.reviews;
+  const commentsData = node.comments;
   const merged = node.merged;
   const rawState = node.state as string;
   const headRepo = node.headRepository;
@@ -60,6 +62,7 @@ function parsePRNode(node: RawPRNode) {
       avatarUrl: author?.avatarUrl ?? "",
     },
     reviewCount: reviewsData?.totalCount,
+    commentCount: commentsData?.totalCount,
     headRefName: (node.headRefName as string) || undefined,
     isFork: isFork ?? undefined,
     ciStatus,
@@ -224,5 +227,20 @@ describe("parsePRNode", () => {
   it("sets ciStatus to undefined when commits field is absent", () => {
     const result = parsePRNode(baseNode);
     expect(result.ciStatus).toBeUndefined();
+  });
+
+  it("extracts commentCount from comments totalCount", () => {
+    const result = parsePRNode({ ...baseNode, comments: { totalCount: 5 } });
+    expect(result.commentCount).toBe(5);
+  });
+
+  it("extracts commentCount of 0 from comments totalCount", () => {
+    const result = parsePRNode({ ...baseNode, comments: { totalCount: 0 } });
+    expect(result.commentCount).toBe(0);
+  });
+
+  it("sets commentCount to undefined when comments field is absent", () => {
+    const result = parsePRNode(baseNode);
+    expect(result.commentCount).toBeUndefined();
   });
 });
