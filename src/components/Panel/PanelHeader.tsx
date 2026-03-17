@@ -144,6 +144,7 @@ function PanelHeaderComponent({
   // Armed restart confirmation state (2-click pattern with 3s timeout)
   const [armedRestartId, setArmedRestartId] = useState<string | null>(null);
   const [countdown, setCountdown] = useState<number | null>(null);
+  const [overflowTooltipOpen, setOverflowTooltipOpen] = useState(false);
   const armedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const countdownIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const ARMED_TIMEOUT_MS = 3000;
@@ -189,6 +190,7 @@ function PanelHeaderComponent({
 
   // Whether the overflow "..." menu has any items to show
   const showMoveToDock = !!onMinimize && !isMaximized && location !== "dock";
+  const showCollapseToDock = !!onMinimize && location === "dock";
   const showCancelWatch = showWatchButton && isWatched;
   const hasOverflowItems = (canRestart && !!onRestart) || showCancelWatch || !!headerActions;
 
@@ -666,49 +668,60 @@ function PanelHeaderComponent({
       <div className="flex items-center gap-1">
         {/* Overflow menu — contains Restart, Cancel Watch, and headerActions */}
         {hasOverflowItems && (
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <button
-                type="button"
-                onPointerDown={(e) => e.stopPropagation()}
-                className="p-1.5 hover:bg-canopy-text/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2 text-canopy-text/60 hover:text-canopy-text transition-colors"
-                aria-label="More panel actions"
-              >
-                <Ellipsis className="w-3 h-3" aria-hidden="true" />
-              </button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="min-w-[160px]">
-              {canRestart && onRestart && (
-                <DropdownMenuItem
-                  onSelect={handleRestartSelect}
-                  className={cn(
-                    armedRestartId === id && "bg-status-warning/10 text-status-warning"
-                  )}
-                  data-testid={armedRestartId === id ? "panel-restart-confirm" : "panel-restart"}
-                  aria-label={
-                    armedRestartId === id
-                      ? `Armed — click again to confirm restart. ${countdown !== null ? `${countdown} seconds remaining` : ""}`
-                      : "Restart Session"
-                  }
-                >
-                  <RotateCcw className="w-3 h-3 mr-2" aria-hidden="true" />
-                  {armedRestartId === id
-                    ? `Confirm Restart (${countdown ?? 0}s)`
-                    : "Restart Session"}
-                </DropdownMenuItem>
-              )}
-              {showCancelWatch && (
-                <DropdownMenuItem onSelect={() => unwatchPanel(id)}>
-                  <Bell className="w-3 h-3 mr-2" aria-hidden="true" />
-                  Cancel Watch
-                </DropdownMenuItem>
-              )}
-              {headerActions && ((canRestart && !!onRestart) || showCancelWatch) && (
-                <DropdownMenuSeparator />
-              )}
-              {headerActions}
-            </DropdownMenuContent>
-          </DropdownMenu>
+          <TooltipProvider>
+            <DropdownMenu
+              onOpenChange={(open) => {
+                if (open) setOverflowTooltipOpen(false);
+              }}
+            >
+              <Tooltip open={overflowTooltipOpen} onOpenChange={setOverflowTooltipOpen}>
+                <TooltipTrigger asChild>
+                  <DropdownMenuTrigger asChild>
+                    <button
+                      type="button"
+                      onPointerDown={(e) => e.stopPropagation()}
+                      className="p-1.5 hover:bg-canopy-text/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2 text-canopy-text/60 hover:text-canopy-text transition-colors"
+                      aria-label="More panel actions"
+                    >
+                      <Ellipsis className="w-3 h-3" aria-hidden="true" />
+                    </button>
+                  </DropdownMenuTrigger>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">More panel actions</TooltipContent>
+              </Tooltip>
+              <DropdownMenuContent align="end" className="min-w-[160px]">
+                {canRestart && onRestart && (
+                  <DropdownMenuItem
+                    onSelect={handleRestartSelect}
+                    className={cn(
+                      armedRestartId === id && "bg-status-warning/10 text-status-warning"
+                    )}
+                    data-testid={armedRestartId === id ? "panel-restart-confirm" : "panel-restart"}
+                    aria-label={
+                      armedRestartId === id
+                        ? `Armed — click again to confirm restart. ${countdown !== null ? `${countdown} seconds remaining` : ""}`
+                        : "Restart Session"
+                    }
+                  >
+                    <RotateCcw className="w-3 h-3 mr-2" aria-hidden="true" />
+                    {armedRestartId === id
+                      ? `Confirm Restart (${countdown ?? 0}s)`
+                      : "Restart Session"}
+                  </DropdownMenuItem>
+                )}
+                {showCancelWatch && (
+                  <DropdownMenuItem onSelect={() => unwatchPanel(id)}>
+                    <Bell className="w-3 h-3 mr-2" aria-hidden="true" />
+                    Cancel Watch
+                  </DropdownMenuItem>
+                )}
+                {headerActions && ((canRestart && !!onRestart) || showCancelWatch) && (
+                  <DropdownMenuSeparator />
+                )}
+                {headerActions}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </TooltipProvider>
         )}
 
         {/* Move to Dock — visible button for grid panels */}
@@ -734,6 +747,29 @@ function PanelHeaderComponent({
           </TooltipProvider>
         )}
 
+        {/* Collapse to Dock — visible when panel is expanded from dock */}
+        {showCollapseToDock && (
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onMinimize!();
+                  }}
+                  onPointerDown={(e) => e.stopPropagation()}
+                  className="p-1.5 hover:bg-canopy-text/10 focus-visible:bg-canopy-text/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2 text-canopy-text/60 hover:text-canopy-text transition-colors"
+                  aria-label="Collapse to Dock"
+                  data-testid="panel-collapse-to-dock"
+                >
+                  <DockToBottomIcon className="w-3 h-3" />
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">Collapse to Dock</TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
+        )}
+
         {/* Middle control: Maximize / Exit Focus / Restore-to-Grid */}
         {location === "dock" && onRestore ? (
           <TooltipProvider>
@@ -746,12 +782,12 @@ function PanelHeaderComponent({
                   }}
                   onPointerDown={(e) => e.stopPropagation()}
                   className="p-1.5 hover:bg-canopy-text/10 focus-visible:bg-canopy-text/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2 text-canopy-text/60 hover:text-canopy-text transition-colors"
-                  aria-label="Restore to grid"
+                  aria-label="Restore to Grid"
                 >
                   <Maximize2 className="w-3 h-3" aria-hidden="true" />
                 </button>
               </TooltipTrigger>
-              <TooltipContent side="bottom">Restore to grid</TooltipContent>
+              <TooltipContent side="bottom">Restore to Grid</TooltipContent>
             </Tooltip>
           </TooltipProvider>
         ) : onToggleMaximize && isMaximized ? (
