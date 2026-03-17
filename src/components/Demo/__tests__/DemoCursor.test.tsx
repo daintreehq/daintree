@@ -166,10 +166,12 @@ describe("DemoCursor", () => {
       requestId: "req-type-cm",
     });
 
-    await new Promise((r) => setTimeout(r, 200));
+    await vi.waitFor(
+      () => expect(demoMock.sendCommandDone).toHaveBeenCalledWith("req-type-cm", undefined),
+      { timeout: 2000, interval: 20 }
+    );
 
     expect(view.state.doc.toString()).toBe("ab");
-    expect(demoMock.sendCommandDone).toHaveBeenCalledWith("req-type-cm", undefined);
 
     view.destroy();
     document.body.removeChild(container);
