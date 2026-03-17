@@ -28,9 +28,7 @@ describe("GET_PR_QUERY", () => {
 
 describe("buildBatchPRQuery — no comments field", () => {
   it("does not include comments in batch query output", () => {
-    const query = buildBatchPRQuery("owner", "repo", [
-      { worktreeId: "wt-1", branchName: "main" },
-    ]);
+    const query = buildBatchPRQuery("owner", "repo", [{ worktreeId: "wt-1", branchName: "main" }]);
     expect(query).not.toContain("comments");
   });
 });
