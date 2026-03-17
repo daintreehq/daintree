@@ -53,6 +53,9 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
 
+      - name: Clean npm cache
+        run: npm cache clean --force
+
       - name: Install dependencies (Windows)
         if: matrix.os == 'windows-latest'
         run: npm ci
