@@ -148,10 +148,10 @@ export function WorktreeDetails({
           {effectiveNote && (
             <div className="p-3 rounded-[var(--radius-lg)] bg-status-warning/5 border border-status-warning/20">
               <div className="text-xs text-status-warning/90 whitespace-pre-wrap font-mono">
-                {parsedNoteSegments.map((segment, index) =>
+                {parsedNoteSegments.map((segment) =>
                   segment.type === "link" ? (
                     <a
-                      key={index}
+                      key={`${segment.type}-${segment.start}`}
                       href={segment.content}
                       target="_blank"
                       rel="noopener noreferrer"
@@ -161,7 +161,7 @@ export function WorktreeDetails({
                       {segment.content}
                     </a>
                   ) : (
-                    <span key={index}>{segment.content}</span>
+                    <span key={`${segment.type}-${segment.start}`}>{segment.content}</span>
                   )
                 )}
               </div>
