@@ -3,6 +3,7 @@ import { render, screen, fireEvent } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mockActivateTerminal = vi.fn();
+const mockPingTerminal = vi.fn();
 const mockSelectWorktree = vi.fn();
 const mockTrackTerminalFocus = vi.fn();
 
@@ -20,6 +21,7 @@ vi.mock("@/store/terminalStore", () => ({
   useTerminalStore: {
     getState: () => ({
       activateTerminal: mockActivateTerminal,
+      pingTerminal: mockPingTerminal,
     }),
   },
 }));
@@ -122,7 +124,9 @@ describe("AttentionBar", () => {
     render(<AttentionBar />);
     fireEvent.click(screen.getByText("Claude Agent"));
     expect(mockActivateTerminal).toHaveBeenCalledWith("t-1");
+    expect(mockPingTerminal).toHaveBeenCalledWith("t-1");
     expect(mockTrackTerminalFocus).not.toHaveBeenCalled();
+    expect(mockSelectWorktree).not.toHaveBeenCalled();
   });
 
   it("switches worktree then activates terminal when agent is on different worktree", () => {
@@ -133,6 +137,7 @@ describe("AttentionBar", () => {
     expect(mockTrackTerminalFocus).toHaveBeenCalledWith("wt-other", "t-1");
     expect(mockSelectWorktree).toHaveBeenCalledWith("wt-other");
     expect(mockActivateTerminal).toHaveBeenCalledWith("t-1");
+    expect(mockPingTerminal).toHaveBeenCalledWith("t-1");
   });
 
   it("calls selectWorktree when clicking a conflict item", () => {
@@ -141,6 +146,8 @@ describe("AttentionBar", () => {
     render(<AttentionBar />);
     fireEvent.click(screen.getByText("feature/fix-bug"));
     expect(mockSelectWorktree).toHaveBeenCalledWith("wt-conflict");
+    expect(mockActivateTerminal).not.toHaveBeenCalled();
+    expect(mockTrackTerminalFocus).not.toHaveBeenCalled();
   });
 
   it("falls back to worktree name when branch is not set", () => {

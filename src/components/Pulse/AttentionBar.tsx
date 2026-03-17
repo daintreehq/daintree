@@ -34,6 +34,7 @@ export function AttentionBar() {
             useWorktreeSelectionStore.getState().selectWorktree(worktreeId);
           }
           useTerminalStore.getState().activateTerminal(terminal.id);
+          useTerminalStore.getState().pingTerminal(terminal.id);
         },
       });
     }
