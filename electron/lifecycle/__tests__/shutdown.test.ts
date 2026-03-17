@@ -143,6 +143,7 @@ describe("registerShutdownHandler", () => {
     const event = makeEvent();
     await beforeQuitCb(event);
     expect(event.preventDefault).not.toHaveBeenCalled();
+    expect(crashRecoveryMock.cleanupOnExit).not.toHaveBeenCalled();
     expect(appMock.exit).not.toHaveBeenCalled();
   });
 
