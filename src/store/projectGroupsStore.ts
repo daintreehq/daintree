@@ -54,6 +54,7 @@ export const useProjectGroupsStore = create<ProjectGroupsState>()(
 
       addProjectToGroup: (groupId, projectId) => {
         set((state) => {
+          if (!state.groups.some((g) => g.id === groupId)) return state;
           // Track which groups lost the project (for auto-cleanup)
           const previousGroupIds = new Set(
             state.groups

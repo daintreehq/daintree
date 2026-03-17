@@ -88,6 +88,16 @@ describe("projectGroupsStore", () => {
       expect(groups).toHaveLength(1);
       expect(groups[0].id).toBe(idB);
     });
+
+    it("is a no-op when target groupId does not exist", () => {
+      const id = useProjectGroupsStore.getState().createGroup("My Group");
+      useProjectGroupsStore.getState().addProjectToGroup(id, "project-1");
+      useProjectGroupsStore.getState().addProjectToGroup("non-existent-group", "project-1");
+      // Project should still be in the original group
+      const groups = useProjectGroupsStore.getState().groups;
+      expect(groups).toHaveLength(1);
+      expect(groups[0].projectIds).toEqual(["project-1"]);
+    });
   });
 
   describe("removeProjectFromGroup", () => {

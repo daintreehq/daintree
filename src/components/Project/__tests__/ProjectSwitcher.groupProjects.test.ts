@@ -178,12 +178,11 @@ describe("buildSwitcherSections", () => {
     expect(sections[0].isUserGroup).toBe(true);
     expect(sections[0].items.map((p) => p.id)).toEqual(["a"]);
 
-    // Remaining ungrouped projects go to automatic sections
-    const pinnedSection = sections.find((s) => s.key === "pinned");
-    expect(pinnedSection?.items.map((p) => p.id)).toEqual(["b"]);
+    // Assert full section order: user groups first, then pinned, current, other
+    expect(sections.map((s) => s.key)).toEqual(["g1", "pinned", "current"]);
 
-    const currentSection = sections.find((s) => s.key === "current");
-    expect(currentSection?.items.map((p) => p.id)).toEqual(["c"]);
+    expect(sections[1].items.map((p) => p.id)).toEqual(["b"]);
+    expect(sections[2].items.map((p) => p.id)).toEqual(["c"]);
   });
 
   it("respects group order", () => {
@@ -235,10 +234,9 @@ describe("buildSwitcherSections", () => {
     const groups: ProjectGroup[] = [];
 
     const sections = buildSwitcherSections(projects, groups);
-    const currentSection = sections.find((s) => s.key === "current");
-    const otherSection = sections.find((s) => s.key === "other");
-    expect(currentSection?.items.map((p) => p.id)).toEqual(["a"]);
-    expect(otherSection?.items.map((p) => p.id)).toEqual(["b"]);
+    expect(sections.map((s) => s.key)).toEqual(["current", "other"]);
+    expect(sections[0].items.map((p) => p.id)).toEqual(["a"]);
+    expect(sections[1].items.map((p) => p.id)).toEqual(["b"]);
   });
 
   it("a project in a user group does not appear in automatic sections", () => {

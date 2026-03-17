@@ -9,6 +9,7 @@ import type { Project, ProjectStats } from "@shared/types";
 import { projectClient, terminalClient } from "@/clients";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
 import { isAgentTerminal } from "@/utils/terminalType";
+import { buildSwitcherSections } from "@/components/Project/projectGrouping";
 
 export type ProjectSwitcherMode = "modal" | "dropdown";
 
@@ -305,12 +306,21 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
           deduped.push(p);
         }
       }
-      return deduped.slice(0, MAX_RESULTS);
+      const truncated = deduped.slice(0, MAX_RESULTS);
+
+      // When groups exist, reorder results to match visual section order
+      // so keyboard navigation (selectedIndex) aligns with rendered order
+      if (groups.length > 0) {
+        const sections = buildSwitcherSections(truncated, groups);
+        return sections.flatMap((s) => s.items);
+      }
+
+      return truncated;
     }
 
     const fuseResults = fuse.search(debouncedQuery);
     return fuseResults.slice(0, MAX_RESULTS).map((r) => r.item);
-  }, [debouncedQuery, sortedProjects, fuse]);
+  }, [debouncedQuery, sortedProjects, fuse, groups]);
 
   useEffect(() => {
     if (results.length === 0) {
