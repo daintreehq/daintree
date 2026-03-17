@@ -230,4 +230,78 @@ describe("GlobalTerminalScannerService", () => {
     expect(servers[0].port).toBe(4000);
     expect(servers[1].port).toBe(3000);
   });
+
+  it("skips spawn-result with success: false", async () => {
+    createService();
+    await vi.waitFor(() => expect(ptyClient.getAllTerminalsAsync).toHaveBeenCalled());
+
+    ptyClient.emit("spawn-result", "t9", { success: false });
+
+    await new Promise((r) => setTimeout(r, 10));
+    expect(ptyClient.getTerminalAsync).not.toHaveBeenCalled();
+    expect(ptyClient.setIpcDataMirror).not.toHaveBeenCalledWith("t9", true);
+  });
+
+  it("tracks terminals with kind: undefined (non-dev-preview)", async () => {
+    createService();
+    await vi.waitFor(() => expect(ptyClient.getAllTerminalsAsync).toHaveBeenCalled());
+
+    ptyClient.getTerminalAsync.mockResolvedValue({
+      id: "t10",
+      kind: undefined,
+      hasPty: true,
+      cwd: "/",
+      spawnedAt: 10,
+    });
+
+    ptyClient.emit("spawn-result", "t10", { success: true });
+    await vi.waitFor(() => expect(ptyClient.setIpcDataMirror).toHaveBeenCalledWith("t10", true));
+  });
+
+  it("skips spawn-result when getTerminalAsync returns hasPty: false", async () => {
+    createService();
+    await vi.waitFor(() => expect(ptyClient.getAllTerminalsAsync).toHaveBeenCalled());
+
+    ptyClient.getTerminalAsync.mockResolvedValue({
+      id: "t11",
+      kind: "terminal",
+      hasPty: false,
+      cwd: "/",
+      spawnedAt: 11,
+    });
+
+    ptyClient.emit("spawn-result", "t11", { success: true });
+    await vi.waitFor(() => expect(ptyClient.getTerminalAsync).toHaveBeenCalledWith("t11"));
+
+    expect(ptyClient.setIpcDataMirror).not.toHaveBeenCalledWith("t11", true);
+  });
+
+  it("handles terminal exit then respawn with same ID", async () => {
+    ptyClient.getAllTerminalsAsync.mockResolvedValue([
+      { id: "t1", hasPty: true, kind: "terminal", cwd: "/", spawnedAt: 1 },
+    ]);
+
+    createService();
+    await vi.waitFor(() => expect(ptyClient.setIpcDataMirror).toHaveBeenCalledWith("t1", true));
+
+    ptyClient.emit("data", "t1", "http://localhost:3000\n");
+    ptyClient.emit("exit", "t1", 0);
+
+    expect(service.getAll()).toHaveLength(0);
+
+    ptyClient.getTerminalAsync.mockResolvedValue({
+      id: "t1",
+      kind: "terminal",
+      hasPty: true,
+      cwd: "/",
+      spawnedAt: 100,
+    });
+
+    ptyClient.emit("spawn-result", "t1", { success: true });
+    await vi.waitFor(() => expect(ptyClient.setIpcDataMirror).toHaveBeenLastCalledWith("t1", true));
+
+    ptyClient.emit("data", "t1", "http://localhost:5000\n");
+    expect(service.getAll()).toHaveLength(1);
+    expect(service.getAll()[0].port).toBe(5000);
+  });
 });

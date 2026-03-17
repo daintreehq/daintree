@@ -54,7 +54,7 @@ export class GlobalTerminalScannerService {
     if (!result.success) return;
     try {
       const info = await this.ptyClient.getTerminalAsync(id);
-      if (!info || info.kind === "dev-preview") return;
+      if (!info || info.kind === "dev-preview" || info.hasPty === false) return;
       this.trackTerminal(info.id, info.worktreeId, info.title);
     } catch {
       // Ignore lookup failures
