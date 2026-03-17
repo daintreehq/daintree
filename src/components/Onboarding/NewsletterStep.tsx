@@ -3,7 +3,6 @@ import { Mail, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
-// TODO: Replace with the actual MailerLite hosted subscribe page slug from the dashboard
 const NEWSLETTER_SUBSCRIBE_URL = "https://subscribepage.io/canopy";
 
 interface NewsletterStepProps {

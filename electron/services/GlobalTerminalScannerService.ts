@@ -14,6 +14,7 @@ export class GlobalTerminalScannerService {
   private serversByPort = new Map<number, DetectedDevServer>();
   private urlDetector = new UrlDetector();
   private onChangedCallback: ((servers: DetectedDevServer[]) => void) | null = null;
+  private readonly textDecoder = new TextDecoder();
 
   private dataHandler: (id: string, data: string | Uint8Array) => void;
   private exitHandler: (id: string, exitCode: number) => void;
@@ -65,7 +66,7 @@ export class GlobalTerminalScannerService {
     const entry = this.tracked.get(id);
     if (!entry || entry.urlFound) return;
 
-    const text = typeof data === "string" ? data : new TextDecoder().decode(data);
+    const text = typeof data === "string" ? data : this.textDecoder.decode(data);
     const result = this.urlDetector.scanOutput(text, entry.buffer);
     entry.buffer = result.buffer;
 

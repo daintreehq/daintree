@@ -428,8 +428,6 @@ export function DndProvider({ children }: DndProviderProps) {
       // Capture dragged terminal ID from data (works for both sortable and worktree list)
       const data = active.data.current as DragData | undefined;
       const draggedId = data?.terminal?.id ?? (active?.id ? String(active.id) : null);
-      console.log(`[DND_DEBUG] handleDragEnd id=${draggedId} over=${over?.id}`);
-
       // Capture source location before clearing
       const sourceLocation = activeData?.sourceLocation ?? null;
 
@@ -495,20 +493,12 @@ export function DndProvider({ children }: DndProviderProps) {
       // Track if this is a worktree drop (skip reorder logic, but still run stabilization)
       const isWorktreeDrop = overData?.type === "worktree" && !!overData.worktreeId;
       if (isWorktreeDrop) {
-        console.log(`[DND_DEBUG] Worktree drop detected: ${overData.worktreeId}`);
-
         // Block worktree drops for multi-panel groups (would split the group)
         if (isGroupDrag) {
-          console.log(
-            `[DND_DEBUG] Blocking worktree drop for multi-panel group ${activeData.groupId}`
-          );
           // Cancel the drop - fall through to stabilization only
         } else {
           const currentTerminal = terminals.find((t) => t.id === draggedId);
           if (currentTerminal && currentTerminal.worktreeId !== overData.worktreeId) {
-            console.log(
-              `[DND_DEBUG] Moving terminal ${draggedId} to worktree ${overData.worktreeId}`
-            );
             moveTerminalToWorktree(draggedId, overData.worktreeId!);
             setFocused(null);
           }
@@ -747,12 +737,9 @@ export function DndProvider({ children }: DndProviderProps) {
 
       stabilizationTimerRef.current = setTimeout(() => {
         stabilizationTimerRef.current = null;
-        console.log("[DND_DEBUG] Running stabilization");
-
         // Skip stabilization for remaining grid terminals if this was a worktree drop.
         // The remaining terminals just reflow and don't require a renderer reset.
         if (isWorktreeDrop) {
-          console.log("[DND_DEBUG] Skipping stabilization for worktree drop");
           return;
         }
 
@@ -781,7 +768,6 @@ export function DndProvider({ children }: DndProviderProps) {
 
           const managed = terminalInstanceService.get(terminal.id);
           if (managed?.hostElement.isConnected) {
-            console.log(`[DND_DEBUG] Resetting renderer for ${terminal.id}`);
             // Force service visibility true since we know grid terminals should be visible
             managed.isVisible = true;
 
@@ -794,7 +780,6 @@ export function DndProvider({ children }: DndProviderProps) {
 
             terminalInstanceService.resetRenderer(terminal.id);
           } else {
-            console.log(`[DND_DEBUG] Skipping reset for ${terminal.id} - not connected`);
           }
         }
 

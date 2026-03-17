@@ -364,8 +364,6 @@ export const createRestartActions = (
   },
 
   moveTerminalToWorktree: (id, worktreeId) => {
-    console.log(`[TERM_DEBUG] moveTerminalToWorktree id=${id} worktree=${worktreeId}`);
-
     const terminal = get().terminals.find((t) => t.id === id);
     if (!terminal) {
       console.warn(`Cannot move terminal ${id}: terminal not found`);

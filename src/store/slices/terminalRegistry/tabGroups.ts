@@ -607,7 +607,6 @@ export const createTabGroupActions = (
 
       // Deduplicate group IDs - keep first occurrence
       if (seenGroupIds.has(group.id)) {
-        console.log(`[TabGroup] Hydration: Dropping duplicate group ID ${group.id}`);
         continue;
       }
       seenGroupIds.add(group.id);
@@ -631,9 +630,6 @@ export const createTabGroupActions = (
       const finalPanelIds = uniquePanelIds.filter((id) => !panelsAlreadyInGroups.has(id));
 
       if (finalPanelIds.length <= 1) {
-        console.log(
-          `[TabGroup] Hydration: Dropping group ${group.id} with ${finalPanelIds.length} valid unique panels`
-        );
         continue;
       }
 
@@ -699,16 +695,6 @@ export const createTabGroupActions = (
 
             if (needsLocationUpdate || needsWorktreeUpdate) {
               terminalsUpdated = true;
-              if (needsLocationUpdate) {
-                console.log(
-                  `[TabGroup] Hydration: Normalizing panel ${t.id} location from ${t.location} to ${group.location}`
-                );
-              }
-              if (needsWorktreeUpdate) {
-                console.log(
-                  `[TabGroup] Hydration: Normalizing panel ${t.id} worktreeId from ${t.worktreeId} to ${group.worktreeId}`
-                );
-              }
               return {
                 ...t,
                 location: group.location,
@@ -737,7 +723,6 @@ export const createTabGroupActions = (
       return { terminals: newTerminals, tabGroups: sanitizedGroups };
     });
 
-    console.log(`[TabGroup] Hydration complete: ${sanitizedGroups.size} groups restored`);
   },
 
   // @deprecated - kept for backward compatibility during migration
