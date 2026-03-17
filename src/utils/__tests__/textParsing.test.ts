@@ -41,11 +41,34 @@ describe("parseNoteWithLinks", () => {
     ]);
   });
 
-  it("should produce unique start values for all segments", () => {
-    const result = parseNoteWithLinks("text https://x.com more https://y.com end");
-    const starts = result.map((s) => s.start);
-    const uniqueStarts = new Set(starts);
-    expect(uniqueStarts.size).toBe(starts.length);
+  it("should handle URL at start with trailing text", () => {
+    const result = parseNoteWithLinks("https://start.com is first");
+    expect(result).toEqual([
+      { type: "link", content: "https://start.com", start: 0 },
+      { type: "text", content: " is first", start: 17 },
+    ]);
+  });
+
+  it("should handle URL at end with leading text", () => {
+    const result = parseNoteWithLinks("check out https://end.com");
+    expect(result).toEqual([
+      { type: "text", content: "check out ", start: 0 },
+      { type: "link", content: "https://end.com", start: 10 },
+    ]);
+  });
+
+  it("should satisfy round-trip invariant: segments reconstruct the original string", () => {
+    const input = "Hello https://a.com world https://b.com!";
+    const result = parseNoteWithLinks(input);
+
+    const reconstructed = result.map((s) => s.content).join("");
+    expect(reconstructed).toBe(input);
+
+    for (const segment of result) {
+      expect(input.slice(segment.start, segment.start + segment.content.length)).toBe(
+        segment.content
+      );
+    }
   });
 
   it("should return empty array for empty string", () => {
