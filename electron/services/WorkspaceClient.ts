@@ -134,7 +134,8 @@ export class WorkspaceClient extends EventEmitter {
       this.readyReject = reject;
     });
 
-    const hostPath = path.join(__dirname, "workspace-host.js");
+    const electronDir = path.basename(__dirname) === "chunks" ? path.dirname(__dirname) : __dirname;
+    const hostPath = path.join(electronDir, "workspace-host.js");
     console.log(`[WorkspaceClient] Starting Workspace Host from: ${hostPath}`);
 
     try {
