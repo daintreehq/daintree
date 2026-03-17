@@ -342,6 +342,9 @@ export const CHANNELS = {
   DEV_PREVIEW_GET_STATE: "dev-preview:get-state",
   DEV_PREVIEW_STATE_CHANGED: "dev-preview:state-changed",
 
+  GLOBAL_DEV_SERVERS_GET: "global-dev-servers:get",
+  GLOBAL_DEV_SERVERS_CHANGED: "global-dev-servers:changed",
+
   COMMANDS_LIST: "commands:list",
   COMMANDS_GET: "commands:get",
   COMMANDS_EXECUTE: "commands:execute",
