@@ -63,6 +63,11 @@ describe("UrlDetector", () => {
         expect(result.url).toBe("http://localhost:3000/");
       });
 
+      it("prefers localhost even when it appears before a later non-localhost URL", () => {
+        const result = detector.scanOutput("http://localhost:3000 and http://127.0.0.1:4000", "");
+        expect(result.url).toBe("http://localhost:3000/");
+      });
+
       it("returns last URL if no localhost variant exists", () => {
         const result = detector.scanOutput("http://127.0.0.1:3000 and http://127.0.0.1:4000", "");
         expect(result.url).toBe("http://127.0.0.1:4000/");
