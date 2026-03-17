@@ -185,6 +185,8 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   const clearAllFilters = useWorktreeFilterStore((state) => state.clearAll);
   const hasActiveFilters = useWorktreeFilterStore((state) => state.hasActiveFilters);
   const unpinWorktree = useWorktreeFilterStore((state) => state.unpinWorktree);
+  const collapsedWorktrees = useWorktreeFilterStore((state) => state.collapsedWorktrees);
+  const expandWorktree = useWorktreeFilterStore((state) => state.expandWorktree);
 
   // Terminal store for derived metadata
   const terminals = useTerminalStore(useShallow((state) => state.terminals));
@@ -219,12 +221,14 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     });
   }, [isRefreshing, startRefreshTransition]);
 
-  // Clean up stale pinned worktrees
+  // Clean up stale pinned and collapsed worktrees
   useEffect(() => {
     const existingIds = new Set(worktrees.map((w) => w.id));
     const stalePins = pinnedWorktrees.filter((id) => !existingIds.has(id));
     stalePins.forEach((id) => unpinWorktree(id));
-  }, [worktrees, pinnedWorktrees, unpinWorktree]);
+    const staleCollapsed = collapsedWorktrees.filter((id) => !existingIds.has(id));
+    staleCollapsed.forEach((id) => expandWorktree(id));
+  }, [worktrees, pinnedWorktrees, unpinWorktree, collapsedWorktrees, expandWorktree]);
 
   // Compute derived metadata for each worktree
   const derivedMetaMap = useMemo(() => {
