@@ -808,11 +808,9 @@ export function GitHubResourceList({
 
       {type === "issue" && (
         <IssueBulkActionBar
-          selectedIssues={
-            Array.from(selection.selectedIds)
-              .map((id) => issueCacheRef.current.get(id))
-              .filter((issue): issue is GitHubIssue => issue !== undefined)
-          }
+          selectedIssues={Array.from(selection.selectedIds)
+            .map((id) => issueCacheRef.current.get(id))
+            .filter((issue): issue is GitHubIssue => issue !== undefined)}
           onClear={selection.clear}
         />
       )}

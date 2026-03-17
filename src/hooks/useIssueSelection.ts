@@ -60,18 +60,15 @@ export function useIssueSelection(): UseIssueSelectionReturn {
     lastSelectedIndexRef.current = index;
   }, []);
 
-  const toggleRange = useCallback(
-    (toIndex: number, getIdAt: (index: number) => number) => {
-      const fromIndex = lastSelectedIndexRef.current;
-      if (fromIndex < 0) {
-        dispatch({ type: "TOGGLE", id: getIdAt(toIndex) });
-        lastSelectedIndexRef.current = toIndex;
-        return;
-      }
-      dispatch({ type: "TOGGLE_RANGE", fromIndex, toIndex, getIdAt });
-    },
-    []
-  );
+  const toggleRange = useCallback((toIndex: number, getIdAt: (index: number) => number) => {
+    const fromIndex = lastSelectedIndexRef.current;
+    if (fromIndex < 0) {
+      dispatch({ type: "TOGGLE", id: getIdAt(toIndex) });
+      lastSelectedIndexRef.current = toIndex;
+      return;
+    }
+    dispatch({ type: "TOGGLE_RANGE", fromIndex, toIndex, getIdAt });
+  }, []);
 
   const selectAll = useCallback((ids: number[]) => {
     dispatch({ type: "SELECT_ALL", ids });
