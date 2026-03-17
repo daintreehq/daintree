@@ -1,6 +1,8 @@
 import { describe, it, expect } from "vitest";
 import type { Project, ProjectStats } from "@shared/types";
-import { groupProjects } from "../projectGrouping";
+import { groupProjects, buildSwitcherSections } from "../projectGrouping";
+import type { SearchableProject } from "@/hooks/useProjectSwitcherPalette";
+import type { ProjectGroup } from "@/store/projectGroupsStore";
 
 function makeProject(overrides: Partial<Project> & Pick<Project, "id" | "path" | "name">): Project {
   return {
@@ -124,5 +126,128 @@ describe("ProjectSwitcher groupProjects", () => {
     const grouped = groupProjects([projectA], null, new Map());
 
     expect(grouped.pinned).toEqual([]);
+  });
+});
+
+function makeSearchableProject(
+  overrides: Partial<SearchableProject> & Pick<SearchableProject, "id" | "name">
+): SearchableProject {
+  return {
+    id: overrides.id,
+    name: overrides.name,
+    path: overrides.path ?? `/repo/${overrides.id}`,
+    emoji: overrides.emoji ?? "🌲",
+    lastOpened: overrides.lastOpened ?? Date.now(),
+    status: overrides.status ?? "active",
+    isActive: overrides.isActive ?? false,
+    isBackground: overrides.isBackground ?? false,
+    isMissing: overrides.isMissing ?? false,
+    isPinned: overrides.isPinned ?? false,
+    activeAgentCount: overrides.activeAgentCount ?? 0,
+    waitingAgentCount: overrides.waitingAgentCount ?? 0,
+    processCount: overrides.processCount ?? 0,
+    color: overrides.color,
+  };
+}
+
+function makeGroup(
+  overrides: Partial<ProjectGroup> & Pick<ProjectGroup, "id" | "name">
+): ProjectGroup {
+  return {
+    id: overrides.id,
+    name: overrides.name,
+    projectIds: overrides.projectIds ?? [],
+    order: overrides.order ?? 0,
+  };
+}
+
+describe("buildSwitcherSections", () => {
+  it("places grouped projects in their group section before automatic sections", () => {
+    const projects = [
+      makeSearchableProject({ id: "a", name: "A" }),
+      makeSearchableProject({ id: "b", name: "B", isPinned: true }),
+      makeSearchableProject({ id: "c", name: "C", isActive: true }),
+    ];
+
+    const groups = [makeGroup({ id: "g1", name: "My Group", projectIds: ["a"], order: 0 })];
+
+    const sections = buildSwitcherSections(projects, groups);
+
+    expect(sections[0].key).toBe("g1");
+    expect(sections[0].label).toBe("My Group");
+    expect(sections[0].isUserGroup).toBe(true);
+    expect(sections[0].items.map((p) => p.id)).toEqual(["a"]);
+
+    // Remaining ungrouped projects go to automatic sections
+    const pinnedSection = sections.find((s) => s.key === "pinned");
+    expect(pinnedSection?.items.map((p) => p.id)).toEqual(["b"]);
+
+    const currentSection = sections.find((s) => s.key === "current");
+    expect(currentSection?.items.map((p) => p.id)).toEqual(["c"]);
+  });
+
+  it("respects group order", () => {
+    const projects = [
+      makeSearchableProject({ id: "a", name: "A" }),
+      makeSearchableProject({ id: "b", name: "B" }),
+    ];
+
+    const groups = [
+      makeGroup({ id: "g1", name: "Second", projectIds: ["b"], order: 1 }),
+      makeGroup({ id: "g2", name: "First", projectIds: ["a"], order: 0 }),
+    ];
+
+    const sections = buildSwitcherSections(projects, groups);
+
+    expect(sections[0].label).toBe("First");
+    expect(sections[1].label).toBe("Second");
+  });
+
+  it("filters out non-existent project IDs in a group", () => {
+    const projects = [makeSearchableProject({ id: "a", name: "A" })];
+
+    const groups = [
+      makeGroup({ id: "g1", name: "My Group", projectIds: ["a", "non-existent"], order: 0 }),
+    ];
+
+    const sections = buildSwitcherSections(projects, groups);
+    expect(sections[0].items).toHaveLength(1);
+    expect(sections[0].items[0].id).toBe("a");
+  });
+
+  it("omits empty groups (all project IDs non-existent)", () => {
+    const projects = [makeSearchableProject({ id: "a", name: "A" })];
+
+    const groups = [
+      makeGroup({ id: "g1", name: "Empty Group", projectIds: ["non-existent"], order: 0 }),
+    ];
+
+    const sections = buildSwitcherSections(projects, groups);
+    expect(sections.every((s) => s.key !== "g1")).toBe(true);
+  });
+
+  it("ungrouped projects fall through to automatic sections", () => {
+    const projects = [
+      makeSearchableProject({ id: "a", name: "A", isActive: true }),
+      makeSearchableProject({ id: "b", name: "B" }),
+    ];
+
+    const groups: ProjectGroup[] = [];
+
+    const sections = buildSwitcherSections(projects, groups);
+    const currentSection = sections.find((s) => s.key === "current");
+    const otherSection = sections.find((s) => s.key === "other");
+    expect(currentSection?.items.map((p) => p.id)).toEqual(["a"]);
+    expect(otherSection?.items.map((p) => p.id)).toEqual(["b"]);
+  });
+
+  it("a project in a user group does not appear in automatic sections", () => {
+    const projects = [makeSearchableProject({ id: "a", name: "A", isPinned: true })];
+
+    const groups = [makeGroup({ id: "g1", name: "My Group", projectIds: ["a"], order: 0 })];
+
+    const sections = buildSwitcherSections(projects, groups);
+    const pinnedSection = sections.find((s) => s.key === "pinned");
+    expect(pinnedSection).toBeUndefined();
   });
 });
