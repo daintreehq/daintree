@@ -7,8 +7,8 @@ const mockSelectWorktree = vi.fn();
 const mockTrackTerminalFocus = vi.fn();
 
 const { useWaitingTerminalsMock, useConflictedWorktreesMock } = vi.hoisted(() => ({
-  useWaitingTerminalsMock: vi.fn(() => []),
-  useConflictedWorktreesMock: vi.fn(() => []),
+  useWaitingTerminalsMock: vi.fn((): Record<string, unknown>[] => []),
+  useConflictedWorktreesMock: vi.fn((): Record<string, unknown>[] => []),
 }));
 
 vi.mock("@/hooks/useTerminalSelectors", () => ({
@@ -110,8 +110,9 @@ describe("AttentionBar", () => {
     ]);
 
     render(<AttentionBar />);
-    const buttons = screen.getAllByRole("button");
-    expect(buttons).toHaveLength(3);
+    const allItems = screen.getAllByRole("listitem");
+    const chipButtons = allItems.filter((el) => el.tagName === "BUTTON");
+    expect(chipButtons).toHaveLength(3);
     expect(screen.getByText("+1 more")).toBeTruthy();
   });
 
