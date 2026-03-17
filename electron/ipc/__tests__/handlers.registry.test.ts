@@ -7,7 +7,13 @@ const registerMocks = vi.hoisted(() => ({
   registerCopyTreeHandlers: vi.fn(),
   registerAiHandlers: vi.fn(),
   registerSlashCommandHandlers: vi.fn(),
-  registerProjectHandlers: vi.fn(),
+  registerSystemShellHandlers: vi.fn(),
+  registerEditorConfigHandlers: vi.fn(),
+  registerAgentCliHandlers: vi.fn(),
+  registerProjectCrudHandlers: vi.fn(),
+  registerProjectRecipesHandlers: vi.fn(),
+  registerTerminalLayoutHandlers: vi.fn(),
+  registerProjectInRepoSettingsHandlers: vi.fn(),
   registerGithubHandlers: vi.fn(),
   registerAppHandlers: vi.fn(),
   registerSidecarHandlers: vi.fn(),
@@ -56,8 +62,26 @@ vi.mock("../handlers/ai.js", () => ({
 vi.mock("../handlers/slashCommands.js", () => ({
   registerSlashCommandHandlers: registerMocks.registerSlashCommandHandlers,
 }));
-vi.mock("../handlers/project.js", () => ({
-  registerProjectHandlers: registerMocks.registerProjectHandlers,
+vi.mock("../handlers/systemShell.js", () => ({
+  registerSystemShellHandlers: registerMocks.registerSystemShellHandlers,
+}));
+vi.mock("../handlers/editorConfig.js", () => ({
+  registerEditorConfigHandlers: registerMocks.registerEditorConfigHandlers,
+}));
+vi.mock("../handlers/agentCli.js", () => ({
+  registerAgentCliHandlers: registerMocks.registerAgentCliHandlers,
+}));
+vi.mock("../handlers/projectCrud.js", () => ({
+  registerProjectCrudHandlers: registerMocks.registerProjectCrudHandlers,
+}));
+vi.mock("../handlers/projectRecipes.js", () => ({
+  registerProjectRecipesHandlers: registerMocks.registerProjectRecipesHandlers,
+}));
+vi.mock("../handlers/terminalLayout.js", () => ({
+  registerTerminalLayoutHandlers: registerMocks.registerTerminalLayoutHandlers,
+}));
+vi.mock("../handlers/projectInRepoSettings.js", () => ({
+  registerProjectInRepoSettingsHandlers: registerMocks.registerProjectInRepoSettingsHandlers,
 }));
 vi.mock("../handlers/github.js", () => ({
   registerGithubHandlers: registerMocks.registerGithubHandlers,
