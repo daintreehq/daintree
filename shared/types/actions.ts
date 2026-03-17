@@ -147,6 +147,7 @@ export type ActionId =
   | "recipe.editor.openFromLayout"
   | "panel.focus"
   | "panel.focusIndex"
+  | "panel.palette"
   | "worktree.switchIndex"
   | "agent.launch"
   | "app.settings.openTab"

@@ -2,6 +2,8 @@ import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { Check, ChevronDown, ChevronUp, X, FolderOpen, Bot, GitBranch } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { actionService } from "@/services/ActionService";
+import type { ActionId } from "@shared/types/actions";
 import type { ChecklistState } from "@shared/types/ipc/maps";
 
 interface GettingStartedChecklistProps {
@@ -11,21 +13,29 @@ interface GettingStartedChecklistProps {
   onToggleCollapse: () => void;
 }
 
-const CHECKLIST_ITEMS = [
+const CHECKLIST_ITEMS: {
+  id: "openedProject" | "launchedAgent" | "createdWorktree";
+  label: string;
+  icon: typeof FolderOpen;
+  actionId: ActionId;
+}[] = [
   {
-    id: "openedProject" as const,
+    id: "openedProject",
     label: "Open a project",
     icon: FolderOpen,
+    actionId: "project.openDialog",
   },
   {
-    id: "launchedAgent" as const,
+    id: "launchedAgent",
     label: "Launch an AI agent",
     icon: Bot,
+    actionId: "panel.palette",
   },
   {
-    id: "createdWorktree" as const,
+    id: "createdWorktree",
     label: "Create a worktree",
     icon: GitBranch,
+    actionId: "worktree.createDialog.open",
   },
 ];
 
@@ -107,19 +117,13 @@ export function GettingStartedChecklist({
             "overflow-hidden transition-all duration-300 ease-in-out",
             collapsed ? "h-0" : "h-auto"
           )}
+          {...(collapsed ? { inert: true } : {})}
         >
           <div className="px-3 pb-3 space-y-1.5">
-            {CHECKLIST_ITEMS.map(({ id, label, icon: Icon }) => {
+            {CHECKLIST_ITEMS.map(({ id, label, icon: Icon, actionId }) => {
               const done = checklist.items[id];
-              return (
-                <div
-                  key={id}
-                  className={cn(
-                    "flex items-center gap-2.5 rounded-[var(--radius-xs)] px-2 py-1.5",
-                    "transition-colors duration-200",
-                    done ? "opacity-60" : "opacity-100"
-                  )}
-                >
+              const content = (
+                <>
                   <div
                     className={cn(
                       "h-4 w-4 rounded-full border flex items-center justify-center shrink-0 transition-colors duration-200",
@@ -142,7 +146,41 @@ export function GettingStartedChecklist({
                   >
                     {label}
                   </span>
-                </div>
+                </>
+              );
+
+              const sharedClasses = cn(
+                "flex items-center gap-2.5 rounded-[var(--radius-xs)] px-2 py-1.5",
+                "transition-colors duration-200",
+                done ? "opacity-60" : "opacity-100"
+              );
+
+              if (done) {
+                return (
+                  <div key={id} className={sharedClasses}>
+                    {content}
+                  </div>
+                );
+              }
+
+              return (
+                <button
+                  key={id}
+                  type="button"
+                  onClick={() =>
+                    void actionService.dispatch(actionId, undefined, {
+                      source: "user",
+                    })
+                  }
+                  className={cn(
+                    sharedClasses,
+                    "w-full text-left cursor-pointer",
+                    "hover:bg-tint/10",
+                    "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2"
+                  )}
+                >
+                  {content}
+                </button>
               );
             })}
           </div>
