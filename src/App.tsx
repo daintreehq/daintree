@@ -975,7 +975,8 @@ function App() {
         onSelectNext={panelPalette.selectNext}
         onSelect={(kind) => {
           const result = panelPalette.handleSelect(kind);
-          if (panelPalette.phase === "model" && result.category === "model") {
+          if (!result) return;
+          if (result.category === "model") {
             const agentId = panelPalette.pendingAgentId;
             if (agentId) {
               const modelId = result.id === DEFAULT_MODEL_OPTION_ID ? undefined : result.id;
@@ -983,17 +984,14 @@ function App() {
             }
             return;
           }
-          if (kind.id === MORE_AGENTS_PANEL_ID) return;
-          if (kind.id.startsWith("agent:")) {
-            // If phase transitioned to model, don't launch yet
-            if (panelPalette.phase === "model") return;
-            const agentId = kind.id.slice("agent:".length);
+          if (result.id.startsWith("agent:")) {
+            const agentId = result.id.slice("agent:".length);
             if (agentId) {
               launchAgent(agentId);
             }
           } else {
             addTerminal({
-              kind: kind.id as PanelKind,
+              kind: result.id as PanelKind,
               cwd: defaultTerminalCwd,
               worktreeId: activeWorktreeId ?? undefined,
               location: "grid",

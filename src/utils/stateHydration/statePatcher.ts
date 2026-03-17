@@ -266,7 +266,7 @@ export function buildArgsForRespawn(
           baseCommand,
           agentSettings.agents?.[agentId] ?? {},
           agentId,
-          { clipboardDirectory }
+          { clipboardDirectory, modelId: saved.agentModelId }
         );
       }
     } else if (agentSettings) {
@@ -274,6 +274,7 @@ export function buildArgsForRespawn(
       const baseCommand = agentConfig?.command || agentId;
       command = generateAgentCommand(baseCommand, agentSettings.agents?.[agentId] ?? {}, agentId, {
         clipboardDirectory,
+        modelId: saved.agentModelId,
       });
     }
   }

@@ -29,7 +29,7 @@ export const DEFAULT_MODEL_OPTION_ID = "__default__";
 export type UsePanelPaletteReturn = UseSearchablePaletteReturn<PanelKindOption> & {
   phase: PanelPalettePhase;
   pendingAgentId: string | null;
-  handleSelect: (option: PanelKindOption) => PanelKindOption;
+  handleSelect: (option: PanelKindOption) => PanelKindOption | null;
   confirmSelection: () => PanelKindOption | null;
   backToPanel: () => void;
 };
@@ -188,6 +188,11 @@ export function usePanelPalette(): UsePanelPaletteReturn {
     setPendingAgentId(null);
   }, []);
 
+  const open = useCallback(() => {
+    resetPhase();
+    paletteRest.open();
+  }, [resetPhase, paletteRest]);
+
   const close = useCallback(() => {
     baseClose();
     resetPhase();
@@ -208,7 +213,7 @@ export function usePanelPalette(): UsePanelPaletteReturn {
   );
 
   const handleSelect = useCallback(
-    (option: PanelKindOption): PanelKindOption => {
+    (option: PanelKindOption): PanelKindOption | null => {
       if (phase === "panel") {
         if (option.id === MORE_AGENTS_PANEL_ID) {
           close();
@@ -217,14 +222,14 @@ export function usePanelPalette(): UsePanelPaletteReturn {
             { tab: "agents" },
             { source: "user" }
           );
-          return option;
+          return null;
         }
         if (option.id.startsWith("agent:")) {
           const agentId = option.id.slice("agent:".length);
           const agentConfig = getEffectiveAgentConfig(agentId);
           if (agentConfig?.models?.length) {
             enterModelPhase(agentId);
-            return option;
+            return null;
           }
         }
         close();
@@ -270,6 +275,7 @@ export function usePanelPalette(): UsePanelPaletteReturn {
     selectedIndex,
     close,
     ...paletteRest,
+    open,
     phase,
     pendingAgentId,
     handleSelect,
