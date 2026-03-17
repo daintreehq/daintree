@@ -18,6 +18,7 @@ export interface DerivedWorktreeMeta {
   hasWaitingAgent: boolean;
   hasFailedAgent: boolean;
   hasCompletedAgent: boolean;
+  hasMergeConflict: boolean;
 }
 
 export type WorktreeTypeId =

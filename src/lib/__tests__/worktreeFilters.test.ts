@@ -42,6 +42,7 @@ const createEmptyMeta = (): DerivedWorktreeMeta => ({
   hasWaitingAgent: false,
   hasFailedAgent: false,
   hasCompletedAgent: false,
+  hasMergeConflict: false,
 });
 
 describe("getWorktreeType", () => {
