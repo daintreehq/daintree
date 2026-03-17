@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import { EditorView } from "@codemirror/view";
+import { Transaction } from "@codemirror/state";
 import type {
   DemoMoveToPayload,
   DemoTypePayload,
@@ -151,7 +152,7 @@ export function DemoCursor() {
               cmView.dispatch({
                 changes: { from: pos, insert: char },
                 selection: { anchor: pos + char.length },
-                annotations: EditorView.userEvent.of("input"),
+                annotations: Transaction.userEvent.of("input"),
               });
               await pauseAwareDelay(delay);
             }
