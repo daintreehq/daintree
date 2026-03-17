@@ -99,6 +99,8 @@ export interface TerminalSnapshot {
   agentSessionId?: string;
   /** Process-level flags captured at launch time, persisted for session resume */
   agentLaunchFlags?: string[];
+  /** Model ID selected at launch time for per-panel model selection */
+  agentModelId?: string;
   // Note: Tab membership is now stored in ProjectState.tabGroups, not on terminals
 }
 

@@ -382,6 +382,7 @@ export const createCorePanelActions = (
         exitBehavior: options.exitBehavior,
         agentSessionId: options.agentSessionId,
         agentLaunchFlags: options.agentLaunchFlags,
+        agentModelId: options.agentModelId,
         spawnedBy: options.spawnedBy,
         startedAt: Date.now(),
         // Dev-preview specific fields
