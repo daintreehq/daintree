@@ -35,7 +35,7 @@ vi.mock("../../../services/ProjectStore.js", () => ({
 
 import { ipcMain } from "electron";
 import { CHANNELS } from "../../channels.js";
-import { registerProjectHandlers } from "../project.js";
+import { registerProjectCrudHandlers } from "../projectCrud.js";
 import type { HandlerDependencies } from "../../types.js";
 
 describe("project:close handler", () => {
@@ -68,7 +68,7 @@ describe("project:close handler", () => {
       ptyClient,
     } as unknown as HandlerDependencies;
 
-    registerProjectHandlers(deps);
+    registerProjectCrudHandlers(deps);
 
     const calls = (ipcMain.handle as unknown as { mock: { calls: Array<[string, unknown]> } }).mock
       .calls;
@@ -115,7 +115,7 @@ describe("project:close handler", () => {
       ptyClient,
     } as unknown as HandlerDependencies;
 
-    registerProjectHandlers(deps);
+    registerProjectCrudHandlers(deps);
 
     const calls = (ipcMain.handle as unknown as { mock: { calls: Array<[string, unknown]> } }).mock
       .calls;
