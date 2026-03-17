@@ -35,8 +35,10 @@ export function useGlobalSecondTicker(): number {
   useEffect(() => {
     listeners.add(setTick);
     if (listeners.size === 1) {
-      startGlobalTicker();
       document.addEventListener("visibilitychange", handleVisibility);
+      if (!document.hidden) {
+        startGlobalTicker();
+      }
     }
 
     return () => {
