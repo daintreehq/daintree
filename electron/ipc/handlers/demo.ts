@@ -120,6 +120,7 @@ export function registerDemoHandlers(deps: HandlerDependencies): () => void {
 
   function stopCapture(): DemoStopCaptureResult {
     captureActive = false;
+    captureToken++;
     if (captureTimer !== null) {
       clearTimeout(captureTimer);
       captureTimer = null;
@@ -135,14 +136,19 @@ export function registerDemoHandlers(deps: HandlerDependencies): () => void {
       throw new Error("Capture already in progress");
     }
 
+    captureActive = true;
     const fps = payload.fps ?? 30;
     captureMaxFrames = payload.maxFrames ?? 9000;
     const intervalMs = Math.round(1000 / fps);
 
-    captureSessionDir = payload.outputDir ?? (await mkdtemp(join(tmpdir(), "canopy-capture-")));
+    try {
+      captureSessionDir = payload.outputDir ?? (await mkdtemp(join(tmpdir(), "canopy-capture-")));
+    } catch (err) {
+      captureActive = false;
+      throw err;
+    }
     captureFrameCount = 0;
     captureBusy = false;
-    captureActive = true;
     const token = ++captureToken;
 
     function scheduleNext(): void {
@@ -158,10 +164,15 @@ export function registerDemoHandlers(deps: HandlerDependencies): () => void {
           if (!captureActive || token !== captureToken) return;
           const filename = `frame-${String(captureFrameCount + 1).padStart(6, "0")}.png`;
           await writeFile(join(captureSessionDir!, filename), image.toPNG());
+          if (!captureActive || token !== captureToken) return;
           captureFrameCount++;
           if (captureFrameCount >= captureMaxFrames) {
             stopCapture();
           } else {
+            scheduleNext();
+          }
+        } catch {
+          if (captureActive && token === captureToken) {
             scheduleNext();
           }
         } finally {

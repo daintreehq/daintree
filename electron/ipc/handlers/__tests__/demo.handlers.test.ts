@@ -302,4 +302,91 @@ describe("frame capture pipeline", () => {
     await vi.advanceTimersByTimeAsync(100);
     expect(fsMock.writeFile).not.toHaveBeenCalled();
   });
+
+  it("getCaptureStatus reports active while capturing", async () => {
+    const deps = makeDeps(true);
+    const cleanup = registerDemoHandlers(deps);
+
+    const startHandler = getHandler("demo:start-capture");
+    await startHandler({}, { fps: 30 });
+
+    await vi.advanceTimersByTimeAsync(34);
+
+    const statusHandler = getHandler("demo:get-capture-status");
+    const status = (await statusHandler({})) as {
+      active: boolean;
+      frameCount: number;
+      outputDir: string | null;
+    };
+
+    expect(status.active).toBe(true);
+    expect(status.frameCount).toBe(1);
+    expect(status.outputDir).toBe("/tmp/canopy-capture-abc123");
+
+    cleanup();
+  });
+
+  it("continues capturing after capturePage error", async () => {
+    const deps = makeDeps(true);
+    const capturePage = deps.mainWindow.webContents.capturePage as ReturnType<typeof vi.fn>;
+    capturePage.mockRejectedValueOnce(new Error("GPU error")).mockResolvedValue({
+      toPNG: () => Buffer.from([0x89, 0x50, 0x4e, 0x47]),
+      getSize: () => ({ width: 1920, height: 1080 }),
+    });
+
+    const cleanup = registerDemoHandlers(deps);
+
+    const startHandler = getHandler("demo:start-capture");
+    await startHandler({}, { fps: 30 });
+
+    // First tick — capturePage throws
+    await vi.advanceTimersByTimeAsync(34);
+    expect(fsMock.writeFile).not.toHaveBeenCalled();
+
+    // Second tick — should recover and write a frame
+    await vi.advanceTimersByTimeAsync(34);
+    expect(fsMock.writeFile).toHaveBeenCalledTimes(1);
+
+    const statusHandler = getHandler("demo:get-capture-status");
+    const status = (await statusHandler({})) as { active: boolean; frameCount: number };
+    expect(status.active).toBe(true);
+    expect(status.frameCount).toBe(1);
+
+    cleanup();
+  });
+
+  it("supports start/stop/restart cycle with fresh state", async () => {
+    const deps = makeDeps(true);
+    const cleanup = registerDemoHandlers(deps);
+
+    fsMock.mkdtemp
+      .mockResolvedValueOnce("/tmp/canopy-capture-session1")
+      .mockResolvedValueOnce("/tmp/canopy-capture-session2");
+
+    const startHandler = getHandler("demo:start-capture");
+    const stopHandler = getHandler("demo:stop-capture");
+
+    // First session
+    await startHandler({}, { fps: 30 });
+    await vi.advanceTimersByTimeAsync(34);
+    const result1 = (await stopHandler({})) as { outputDir: string; frameCount: number };
+    expect(result1.outputDir).toBe("/tmp/canopy-capture-session1");
+    expect(result1.frameCount).toBe(1);
+
+    // Second session — should have fresh frame count
+    await startHandler({}, { fps: 30 });
+    await vi.advanceTimersByTimeAsync(34);
+    await vi.advanceTimersByTimeAsync(34);
+    const result2 = (await stopHandler({})) as { outputDir: string; frameCount: number };
+    expect(result2.outputDir).toBe("/tmp/canopy-capture-session2");
+    expect(result2.frameCount).toBe(2);
+
+    // Filenames should restart from 000001 in second session
+    expect(fsMock.writeFile).toHaveBeenCalledWith(
+      "/tmp/canopy-capture-session2/frame-000001.png",
+      expect.any(Buffer)
+    );
+
+    cleanup();
+  });
 });
