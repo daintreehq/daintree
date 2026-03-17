@@ -216,7 +216,7 @@ export function Toolbar({
     [projectSwitcher]
   );
 
-  const getTimeSinceUpdate = (timestamp: number | null): string => {
+  const getTimeSinceUpdate = useCallback((timestamp: number | null): string => {
     if (timestamp == null || !Number.isFinite(timestamp) || timestamp <= 0) {
       return "unknown";
     }
@@ -233,7 +233,7 @@ export function Toolbar({
 
     const days = Math.floor(hours / 24);
     return `${days}d ago`;
-  };
+  }, []);
 
   useEffect(() => {
     return window.electron.window.onFullscreenChange(setIsFullscreen);
@@ -271,7 +271,7 @@ export function Toolbar({
     setStatsJustUpdated(false);
   }, []);
 
-  const handleCopyTreeClick = async () => {
+  const handleCopyTreeClick = useCallback(async () => {
     if (isCopyingTree || !activeWorktree) return;
 
     setIsCopyingTree(true);
@@ -296,27 +296,30 @@ export function Toolbar({
     } finally {
       setIsCopyingTree(false);
     }
-  };
+  }, [isCopyingTree, activeWorktree, handleCopyTree]);
 
-  const handleSettingsContextMenu = async (event: React.MouseEvent) => {
-    const template: MenuItemOption[] = [
-      { id: "settings:general", label: "General" },
-      { id: "settings:agents", label: "Agents" },
-      { id: "settings:terminal", label: "Terminal" },
-      { id: "settings:keyboard", label: "Keyboard" },
-      { id: "settings:notifications", label: "Notifications" },
-      { id: "settings:sidecar", label: "Sidecar" },
-      { type: "separator" },
-      { id: "settings:toolbar", label: "Customize Toolbar…" },
-      { id: "settings:troubleshooting", label: "Troubleshooting" },
-    ];
+  const handleSettingsContextMenu = useCallback(
+    async (event: React.MouseEvent) => {
+      const template: MenuItemOption[] = [
+        { id: "settings:general", label: "General" },
+        { id: "settings:agents", label: "Agents" },
+        { id: "settings:terminal", label: "Terminal" },
+        { id: "settings:keyboard", label: "Keyboard" },
+        { id: "settings:notifications", label: "Notifications" },
+        { id: "settings:sidecar", label: "Sidecar" },
+        { type: "separator" },
+        { id: "settings:toolbar", label: "Customize Toolbar…" },
+        { id: "settings:troubleshooting", label: "Troubleshooting" },
+      ];
 
-    const actionId = await showMenu(event, template);
-    if (!actionId) return;
+      const actionId = await showMenu(event, template);
+      if (!actionId) return;
 
-    const tab = actionId.replace("settings:", "");
-    void actionService.dispatch("app.settings.openTab", { tab }, { source: "context-menu" });
-  };
+      const tab = actionId.replace("settings:", "");
+      void actionService.dispatch("app.settings.openTab", { tab }, { source: "context-menu" });
+    },
+    [showMenu]
+  );
 
   const getToolbarItems = useCallback(
     () =>

@@ -1,6 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { EventEmitter } from "events";
 import { GlobalTerminalScannerService } from "../GlobalTerminalScannerService.js";
+import type { DetectedDevServer } from "../../../shared/types/ipc/globalDevServers.js";
+import type { PtyClient } from "../PtyClient.js";
 
 function createMockPtyClient() {
   const emitter = new EventEmitter();
@@ -17,15 +19,15 @@ type MockPtyClient = ReturnType<typeof createMockPtyClient>;
 describe("GlobalTerminalScannerService", () => {
   let ptyClient: MockPtyClient;
   let service: GlobalTerminalScannerService;
-  let onChangedSpy: ReturnType<typeof vi.fn>;
+  let onChangedSpy: ReturnType<typeof vi.fn<(servers: DetectedDevServer[]) => void>>;
 
   beforeEach(() => {
     ptyClient = createMockPtyClient();
-    onChangedSpy = vi.fn();
+    onChangedSpy = vi.fn<(servers: DetectedDevServer[]) => void>();
   });
 
   function createService() {
-    service = new GlobalTerminalScannerService(ptyClient as any);
+    service = new GlobalTerminalScannerService(ptyClient as unknown as PtyClient);
     service.onChanged(onChangedSpy);
     return service;
   }
