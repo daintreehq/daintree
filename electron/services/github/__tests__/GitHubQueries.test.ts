@@ -1,10 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  buildBatchPRQuery,
-  LIST_PRS_QUERY,
-  SEARCH_QUERY,
-  GET_PR_QUERY,
-} from "../GitHubQueries.js";
+import { buildBatchPRQuery, LIST_PRS_QUERY, SEARCH_QUERY, GET_PR_QUERY } from "../GitHubQueries.js";
 
 describe("LIST_PRS_QUERY", () => {
   it("uses IssueOrder (not PullRequestOrder) for the orderBy variable type", () => {
