@@ -23,6 +23,7 @@ import {
   getWorkspaceClientRef,
   getProjectMcpManagerRef,
   getCliAvailabilityServiceRef,
+  getProjectSwitchServiceRef,
   getCleanupIpcHandlers,
   setCleanupIpcHandlers,
   getCleanupErrorHandlers,
@@ -145,6 +146,7 @@ if (!gotTheLock) {
     onCreateWindow: createWindow,
     getMainWindow,
     getCliAvailabilityService: getCliAvailabilityServiceRef,
+    getProjectSwitchService: getProjectSwitchServiceRef,
   });
 
   registerShutdownHandler({
