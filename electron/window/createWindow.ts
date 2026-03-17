@@ -1,6 +1,9 @@
-import { app, BrowserWindow, ipcMain } from "electron";
+import { app, BrowserWindow, ipcMain, nativeTheme } from "electron";
 import path from "path";
 import { createWindowWithState } from "../windowState.js";
+import { store } from "../store.js";
+import { resolveAppTheme, normalizeAppColorScheme } from "../../shared/theme/index.js";
+import type { AppColorScheme } from "../../shared/theme/index.js";
 import { setLoggerWindow } from "../utils/logger.js";
 import { canOpenExternalUrl, openExternalUrl } from "../utils/openExternal.js";
 import { isTrustedRendererUrl } from "../../shared/utils/trustedRenderer.js";
@@ -34,8 +37,46 @@ export function setupBrowserWindow(dirname: string): CreateWindowResult {
     smokeTestTimer.unref();
   }
 
+  // Resolve the saved theme to set the correct background color at construction time,
+  // avoiding a dark flash when a light theme is active.
+  const themeConfig = store.get("appTheme");
+  let colorSchemeId: string;
+  if (
+    themeConfig &&
+    typeof themeConfig === "object" &&
+    !Array.isArray(themeConfig) &&
+    "colorSchemeId" in themeConfig &&
+    typeof themeConfig.colorSchemeId === "string" &&
+    themeConfig.colorSchemeId
+  ) {
+    colorSchemeId = themeConfig.colorSchemeId.trim();
+  } else {
+    colorSchemeId = nativeTheme.shouldUseDarkColors ? "daintree" : "bondi";
+  }
+
+  let customSchemes: AppColorScheme[] = [];
+  if (
+    themeConfig &&
+    typeof themeConfig === "object" &&
+    !Array.isArray(themeConfig) &&
+    "customSchemes" in themeConfig &&
+    typeof themeConfig.customSchemes === "string"
+  ) {
+    try {
+      const parsed = JSON.parse(themeConfig.customSchemes);
+      if (Array.isArray(parsed))
+        customSchemes = parsed.map((s: AppColorScheme) => normalizeAppColorScheme(s));
+    } catch {
+      // Malformed custom schemes — fall back to built-in only
+    }
+  }
+
+  const scheme = resolveAppTheme(colorSchemeId, customSchemes);
+  const windowBg = scheme.tokens["surface-canvas"];
+
   console.log("[MAIN] Creating window...");
   const win = createWindowWithState({
+    show: false,
     minWidth: 800,
     minHeight: 600,
     webPreferences: {
@@ -56,15 +97,27 @@ export function setupBrowserWindow(dirname: string): CreateWindowResult {
         ? {
             titleBarStyle: "hidden" as const,
             titleBarOverlay: {
-              color: "#19191a",
+              color: windowBg,
               symbolColor: "#a1a1aa",
               height: 36,
             },
           }
         : {}),
-    backgroundColor: "#19191a",
+    backgroundColor: windowBg,
   });
   markPerformance(PERF_MARKS.MAIN_WINDOW_CREATED);
+
+  // Defer showing the window until first paint to prevent background flash
+  let isShown = false;
+  const showWindow = () => {
+    if (isShown || win.isDestroyed()) return;
+    isShown = true;
+    clearTimeout(showTimeout);
+    win.show();
+  };
+  win.once("ready-to-show", showWindow);
+  const showTimeout = setTimeout(showWindow, 2500);
+  win.once("closed", () => clearTimeout(showTimeout));
 
   if (isSmokeTest) {
     win.on("unresponsive", () => {
