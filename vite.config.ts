@@ -78,22 +78,30 @@ export default defineConfig(({ mode }) => ({
       output: {
         codeSplitting: {
           groups: [
-            { name: "vendor-xterm", test: /@xterm[\\/]/, priority: 70 },
+            { name: "vendor-xterm", test: /node_modules[\\/]@xterm[\\/]/, priority: 70 },
             {
               name: "vendor-editor",
-              test: /(@codemirror[\\/]|@uiw[\\/]|refractor[\\/])/,
+              test: /node_modules[\\/](@codemirror[\\/]|@uiw[\\/]|refractor[\\/])/,
               priority: 60,
             },
-            { name: "vendor-motion", test: /framer-motion[\\/]/, priority: 50 },
-            { name: "vendor-icons", test: /lucide-react[\\/]/, priority: 40 },
+            {
+              name: "vendor-motion",
+              test: /node_modules[\\/]framer-motion[\\/]/,
+              priority: 50,
+            },
+            {
+              name: "vendor-icons",
+              test: /node_modules[\\/]lucide-react[\\/]/,
+              priority: 40,
+            },
             {
               name: "vendor-ai-github",
-              test: /(@octokit[\\/]|@ai-sdk[\\/]|[\\/]ai[\\/])/,
+              test: /node_modules[\\/](@octokit[\\/]|@ai-sdk[\\/]|ai[\\/])/,
               priority: 30,
             },
             {
               name: "vendor-zod",
-              test: /(zod[\\/]|zod-to-json-schema[\\/])/,
+              test: /node_modules[\\/](zod[\\/]|zod-to-json-schema[\\/])/,
               priority: 20,
             },
             { name: "vendor", test: /node_modules[\\/]/, priority: 10 },
