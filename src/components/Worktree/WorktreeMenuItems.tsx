@@ -13,6 +13,8 @@ import {
   Link,
   Maximize2,
   Minimize2,
+  PanelTopClose,
+  PanelTopOpen,
   Pin,
   PinOff,
   Play,
@@ -76,6 +78,8 @@ export interface WorktreeMenuItemsProps {
   onRunRecipe: (recipeId: string) => void;
   onSaveLayout?: () => void;
   onTogglePin?: () => void;
+  onToggleCollapse?: () => void;
+  isCollapsed?: boolean;
   onMinimizeAll: () => void;
   onMaximizeAll: () => void;
   onRestartAll: () => void;
@@ -111,6 +115,8 @@ export function WorktreeMenuItems({
   onRunRecipe,
   onSaveLayout,
   onTogglePin,
+  onToggleCollapse,
+  isCollapsed,
   onMinimizeAll,
   onMaximizeAll,
   onRestartAll,
@@ -281,6 +287,22 @@ export function WorktreeMenuItems({
             <>
               <Pin className="w-3.5 h-3.5 mr-2" />
               Pin to Top
+            </>
+          )}
+        </C.Item>
+      )}
+
+      {onToggleCollapse && (
+        <C.Item onSelect={onToggleCollapse}>
+          {isCollapsed ? (
+            <>
+              <PanelTopOpen className="w-3.5 h-3.5 mr-2" />
+              Expand Card
+            </>
+          ) : (
+            <>
+              <PanelTopClose className="w-3.5 h-3.5 mr-2" />
+              Collapse Card
             </>
           )}
         </C.Item>

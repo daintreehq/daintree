@@ -23,6 +23,7 @@ import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "../../
 import {
   AlertCircle,
   Check,
+  ChevronRight,
   CircleDot,
   CornerDownRight,
   GitPullRequest,
@@ -215,6 +216,10 @@ export interface WorktreeHeaderProps {
   isMuted?: boolean;
   isMainWorktree: boolean;
   isPinned: boolean;
+  isCollapsed?: boolean;
+  canCollapse?: boolean;
+  onToggleCollapse?: (e: React.MouseEvent) => void;
+  contentId?: string;
   branchLabel: string;
   lifecycleStage: WorktreeLifecycleStage | null;
   worktreeErrorCount: number;
@@ -248,6 +253,8 @@ export interface WorktreeHeaderProps {
     onRunRecipe: (recipeId: string) => void;
     onSaveLayout?: () => void;
     onTogglePin?: () => void;
+    onToggleCollapse?: () => void;
+    isCollapsed?: boolean;
     onLaunchAgent?: (agentId: string) => void;
     onMinimizeAll: () => void;
     onMaximizeAll: () => void;
@@ -317,6 +324,10 @@ export function WorktreeHeader({
   isMuted,
   isMainWorktree,
   isPinned,
+  isCollapsed,
+  canCollapse,
+  onToggleCollapse,
+  contentId,
   branchLabel,
   lifecycleStage,
   worktreeErrorCount,
@@ -395,12 +406,31 @@ export function WorktreeHeader({
         <div
           data-testid="worktree-actions-wrapper"
           className={cn(
-            "shrink-0 transition-opacity duration-150",
-            isActive
+            "flex items-center gap-0.5 shrink-0 transition-opacity duration-150",
+            isCollapsed
               ? "opacity-100"
-              : "opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto"
+              : isActive
+                ? "opacity-100"
+                : "opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto"
           )}
         >
+          {canCollapse && (
+            <button
+              onClick={onToggleCollapse}
+              className="p-1 text-canopy-text/60 hover:text-text-primary hover:bg-overlay-soft rounded transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent"
+              aria-expanded={!isCollapsed}
+              aria-controls={contentId}
+              aria-label={isCollapsed ? "Expand card" : "Collapse card"}
+            >
+              <ChevronRight
+                className={cn(
+                  "w-3.5 h-3.5 transition-transform duration-200",
+                  isCollapsed ? "rotate-0" : "rotate-90"
+                )}
+                aria-hidden="true"
+              />
+            </button>
+          )}
           <DropdownMenu>
             <TooltipProvider>
               <Tooltip>
@@ -451,6 +481,8 @@ export function WorktreeHeader({
                 onRunRecipe={menu.onRunRecipe}
                 onSaveLayout={menu.onSaveLayout}
                 onTogglePin={menu.onTogglePin}
+                onToggleCollapse={menu.onToggleCollapse}
+                isCollapsed={menu.isCollapsed}
                 onMinimizeAll={menu.onMinimizeAll}
                 onMaximizeAll={menu.onMaximizeAll}
                 onRestartAll={menu.onRestartAll}
@@ -467,9 +499,10 @@ export function WorktreeHeader({
       </div>
 
       {/* Secondary row: branch label when issue title is headline, issue badge fallback, and/or PR badge */}
-      {(hasIssueTitle ||
-        (worktree.issueNumber && !hasIssueTitle) ||
-        (worktree.prNumber && worktree.prState !== "closed")) && (
+      {!isCollapsed &&
+        (hasIssueTitle ||
+          (worktree.issueNumber && !hasIssueTitle) ||
+          (worktree.prNumber && worktree.prState !== "closed")) && (
         <div className="flex flex-col gap-0.5 mt-1.5">
           {worktree.issueNumber && !hasIssueTitle && (
             <IssueBadge
