@@ -156,4 +156,52 @@ describe("SemanticBufferManager", () => {
 
     manager.dispose();
   });
+
+  it("normalizes \\r\\n and bare \\r to \\n", () => {
+    const info = createTerminalInfo();
+    const manager = new SemanticBufferManager(info);
+
+    manager.onData("line1\r\nline2\rline3\n");
+    vi.advanceTimersByTime(100);
+
+    expect(info.semanticBuffer).toContain("line1");
+    expect(info.semanticBuffer).toContain("line2");
+    expect(info.semanticBuffer).toContain("line3");
+
+    manager.dispose();
+  });
+
+  it("onData with empty string is a no-op after flush", () => {
+    const info = createTerminalInfo();
+    const manager = new SemanticBufferManager(info);
+
+    manager.onData("");
+    vi.advanceTimersByTime(100);
+
+    expect(info.semanticBuffer).toEqual([]);
+
+    manager.dispose();
+  });
+
+  it("getLastCommand() returns undefined when all lines are prompt-only", () => {
+    const info = createTerminalInfo({
+      semanticBuffer: ["user@host:/path$ ", "$ ", ""],
+    });
+    const manager = new SemanticBufferManager(info);
+
+    expect(manager.getLastCommand()).toBeUndefined();
+
+    manager.dispose();
+  });
+
+  it("getLastCommand() only searches the last 10 lines", () => {
+    const lines = Array.from({ length: 15 }, () => "");
+    lines[0] = "old command";
+    const info = createTerminalInfo({ semanticBuffer: lines });
+    const manager = new SemanticBufferManager(info);
+
+    expect(manager.getLastCommand()).toBeUndefined();
+
+    manager.dispose();
+  });
 });
