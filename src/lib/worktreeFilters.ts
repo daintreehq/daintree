@@ -18,6 +18,7 @@ export interface DerivedWorktreeMeta {
   hasWaitingAgent: boolean;
   hasFailedAgent: boolean;
   hasCompletedAgent: boolean;
+  hasMergeConflict: boolean;
 }
 
 export type WorktreeTypeId =
@@ -363,6 +364,33 @@ export function hasAnyFilters(filters: FilterState): boolean {
     filters.sessionFilters.size > 0 ||
     filters.activityFilters.size > 0
   );
+}
+
+export function filterTriageWorktrees<T extends Worktree | WorktreeState>(
+  worktrees: T[],
+  derivedMetaMap: Map<string, DerivedWorktreeMeta>,
+  mainWorktreeId: string | undefined,
+  integrationWorktreeId: string | undefined,
+  query: string
+): T[] {
+  const nonMain = worktrees.filter(
+    (w) => w.id !== mainWorktreeId && w.id !== integrationWorktreeId
+  );
+  return nonMain.filter((w) => {
+    const meta = derivedMetaMap.get(w.id);
+    if (!meta) return false;
+    const qualifies =
+      meta.hasWaitingAgent || meta.hasFailedAgent || meta.hasErrors || meta.hasMergeConflict;
+    if (!qualifies) return false;
+    if (query.trim().length > 0) {
+      const exactNum = parseExactNumber(query);
+      if (exactNum !== null) {
+        return w.issueNumber === exactNum || w.prNumber === exactNum;
+      }
+      return scoreWorktree(w, query) > 0;
+    }
+    return true;
+  });
 }
 
 export const INTEGRATION_BRANCH_NAMES = ["develop", "trunk", "next"] as const;

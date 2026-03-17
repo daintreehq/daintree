@@ -351,7 +351,7 @@ export async function getWorktreeChangesWithStats(
 
     if (status.conflicted) {
       for (const file of status.conflicted) {
-        await addChange(file, "modified");
+        await addChange(file, "conflicted");
       }
     }
 
