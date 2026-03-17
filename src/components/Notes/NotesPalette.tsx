@@ -10,7 +10,6 @@ import { useNotesStore } from "@/store/notesStore";
 import { useTerminalStore } from "@/store/terminalStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import type { NoteListItem } from "@/clients/notesClient";
-import { formatTimeAgo } from "@/utils/timeAgo";
 import CodeMirror from "@uiw/react-codemirror";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { languages } from "@codemirror/language-data";
@@ -19,7 +18,6 @@ import { canopyTheme } from "./editorTheme";
 import { MarkdownToolbar } from "./MarkdownToolbar";
 import {
   Plus,
-  Trash2,
   ExternalLink,
   X,
   AlertTriangle,
@@ -45,6 +43,8 @@ import { useNoteSearch, SORT_LABELS, type SortOrder } from "@/hooks/useNoteSearc
 import { useNoteEditor } from "@/hooks/useNoteEditor";
 import { useNoteTitleEdit } from "@/hooks/useNoteTitleEdit";
 import { useNoteActions } from "@/hooks/useNoteActions";
+import { NoteListItemRow } from "./NoteListItem";
+import { NotesPaletteFooter } from "./NotesPaletteFooter";
 
 interface NotesPaletteProps {
   isOpen: boolean;
@@ -158,9 +158,6 @@ export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
     selectedNote,
     setSelectedNote,
   });
-
-  const noteTitleBaseClass =
-    "flex-1 min-w-0 m-0 px-1 py-0.5 text-sm font-medium leading-tight border rounded box-border";
 
   // Focus management
   useLayoutEffect(() => {
@@ -361,81 +358,18 @@ export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
                       {search.selectedTag ? "No notes with this tag" : "No notes yet"}
                     </div>
                   ) : (
-                    search.visibleNotes.map((note, index) => {
-                      const isEditing = titleEdit.editingNoteId === note.id;
-                      return (
-                        <div
-                          key={note.id}
-                          role="option"
-                          aria-selected={selectedNote?.id === note.id}
-                          className={cn(
-                            "relative flex items-start px-3 py-1.5 cursor-pointer transition-colors group",
-                            "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-1",
-                            selectedNote?.id === note.id
-                              ? "bg-overlay-soft text-canopy-text before:absolute before:left-0 before:top-1.5 before:bottom-1.5 before:w-[2px] before:rounded-r before:bg-canopy-accent before:content-['']"
-                              : index === actions.selectedIndex
-                                ? "bg-overlay-soft text-canopy-text"
-                                : "text-canopy-text/70 hover:bg-overlay-subtle hover:text-canopy-text"
-                          )}
-                          onClick={() => actions.handleSelectNote(note, index)}
-                          onDoubleClick={(e) => titleEdit.handleStartRename(note, e)}
-                        >
-                          <div className="flex-1 min-w-0">
-                            <div className="flex items-baseline gap-1 min-w-0">
-                              <input
-                                ref={isEditing ? titleEdit.titleInputRef : null}
-                                type="text"
-                                value={isEditing ? titleEdit.editingTitle : note.title}
-                                readOnly={!isEditing}
-                                onChange={(e) => {
-                                  if (isEditing) titleEdit.setEditingTitle(e.target.value);
-                                }}
-                                onKeyDown={(e) => {
-                                  if (isEditing) titleEdit.handleTitleKeyDown(note, e);
-                                }}
-                                onBlur={() => {
-                                  if (isEditing) titleEdit.handleTitleBlur(note);
-                                }}
-                                onClick={(e) => {
-                                  if (isEditing) e.stopPropagation();
-                                }}
-                                tabIndex={isEditing ? 0 : -1}
-                                className={cn(
-                                  noteTitleBaseClass,
-                                  "appearance-none focus:outline-none",
-                                  isEditing
-                                    ? "bg-canopy-sidebar border-canopy-accent text-canopy-text cursor-text"
-                                    : "bg-transparent border-transparent text-inherit truncate cursor-default pointer-events-none"
-                                )}
-                              />
-                              {!isEditing && (
-                                <span className="shrink-0 text-[11px] text-canopy-text/40 tabular-nums">
-                                  {formatTimeAgo(note.modifiedAt)}
-                                </span>
-                              )}
-                            </div>
-                            <div className="text-[11px] text-canopy-text/40 truncate mt-0.5 px-1">
-                              {note.preview || "Empty note"}
-                            </div>
-                          </div>
-                          <TooltipProvider>
-                            <Tooltip>
-                              <TooltipTrigger asChild>
-                                <button
-                                  type="button"
-                                  onClick={(e) => actions.handleDeleteNote(note, e)}
-                                  className="shrink-0 opacity-0 group-hover:opacity-100 p-1 rounded-[var(--radius-sm)] hover:bg-status-error/10 text-canopy-text/40 hover:text-status-error transition-all"
-                                  aria-label="Delete note"
-                                >
-                                  <Trash2 size={12} />
-                                </button>
-                              </TooltipTrigger>
-                              <TooltipContent side="bottom">Delete note</TooltipContent>
-                            </Tooltip>
-                          </TooltipProvider>
-                        </div>
-                      );
-                    })
+                    search.visibleNotes.map((note, index) => (
+                      <NoteListItemRow
+                        key={note.id}
+                        note={note}
+                        index={index}
+                        isSelected={selectedNote?.id === note.id}
+                        isHighlighted={index === actions.selectedIndex}
+                        titleEdit={titleEdit}
+                        onSelect={actions.handleSelectNote}
+                        onDelete={actions.handleDeleteNote}
+                      />
+                    ))
                   )}
                 </div>
               </div>
@@ -649,47 +583,7 @@ export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
             </div>
 
             {/* Footer */}
-            <div className="px-3 py-2 border-t border-canopy-border bg-canopy-sidebar/50 text-xs text-canopy-text/50 flex items-center gap-4 shrink-0">
-              <span>
-                <kbd className="px-1.5 py-0.5 rounded-[var(--radius-sm)] bg-canopy-border text-canopy-text/60">
-                  ↑
-                </kbd>
-                <kbd className="px-1.5 py-0.5 rounded-[var(--radius-sm)] bg-canopy-border text-canopy-text/60 ml-1">
-                  ↓
-                </kbd>
-                <span className="ml-1.5">to navigate</span>
-              </span>
-              <span>
-                <kbd className="px-1.5 py-0.5 rounded-[var(--radius-sm)] bg-canopy-border text-canopy-text/60">
-                  Enter
-                </kbd>
-                <span className="ml-1.5">to select</span>
-              </span>
-              <span>
-                <kbd className="px-1.5 py-0.5 rounded-[var(--radius-sm)] bg-canopy-border text-canopy-text/60">
-                  ⇧Enter
-                </kbd>
-                <span className="ml-1.5">grid</span>
-              </span>
-              <span>
-                <kbd className="px-1.5 py-0.5 rounded-[var(--radius-sm)] bg-canopy-border text-canopy-text/60">
-                  ⇧⌘Enter
-                </kbd>
-                <span className="ml-1.5">dock</span>
-              </span>
-              <span>
-                <kbd className="px-1.5 py-0.5 rounded-[var(--radius-sm)] bg-canopy-border text-canopy-text/60">
-                  ⌘N
-                </kbd>
-                <span className="ml-1.5">new</span>
-              </span>
-              <span>
-                <kbd className="px-1.5 py-0.5 rounded-[var(--radius-sm)] bg-canopy-border text-canopy-text/60">
-                  Esc
-                </kbd>
-                <span className="ml-1.5">{selectedNote ? "deselect" : "close"}</span>
-              </span>
-            </div>
+            <NotesPaletteFooter hasSelection={!!selectedNote} />
           </div>
         </div>,
         document.body
