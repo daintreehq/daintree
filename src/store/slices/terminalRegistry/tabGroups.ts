@@ -722,7 +722,6 @@ export const createTabGroupActions = (
       }
       return { terminals: newTerminals, tabGroups: sanitizedGroups };
     });
-
   },
 
   // @deprecated - kept for backward compatibility during migration

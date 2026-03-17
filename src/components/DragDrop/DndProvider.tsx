@@ -755,10 +755,6 @@ export function DndProvider({ children }: DndProviderProps) {
             (t.worktreeId ?? undefined) === (activeWorktreeId ?? undefined)
         );
 
-        console.log(
-          `[DND_DEBUG] Stabilizing ${gridTerminalsList.length} terminals in active worktree ${activeWorktreeId}`
-        );
-
         for (const terminal of gridTerminalsList) {
           // Flush any pending resize jobs that could have stale dimensions
           terminalInstanceService.flushResize(terminal.id);
@@ -779,7 +775,6 @@ export function DndProvider({ children }: DndProviderProps) {
             terminalInstanceService.applyRendererPolicy(terminal.id, tier);
 
             terminalInstanceService.resetRenderer(terminal.id);
-          } else {
           }
         }
 
