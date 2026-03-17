@@ -119,4 +119,16 @@ describe("buildActivityMonitorOptions", () => {
     expect(result.idleDebounceMs).toBeDefined();
     expect(typeof result.idleDebounceMs).toBe("number");
   });
+
+  it("populates pattern config fields for a known agent", () => {
+    const result = buildActivityMonitorOptions("claude", {});
+    expect(result.outputActivityDetection).toEqual({
+      enabled: true,
+      windowMs: 1000,
+      minFrames: 2,
+      minBytes: 32,
+    });
+    expect(result.patternConfig).toBeDefined();
+    expect(result.bootCompletePatterns).toBeDefined();
+  });
 });
