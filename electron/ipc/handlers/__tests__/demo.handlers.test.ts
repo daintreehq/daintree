@@ -56,9 +56,9 @@ describe("registerDemoHandlers", () => {
     cleanup();
   });
 
-  it("registers 12 IPC handlers when isDemoMode is true", () => {
+  it("registers 13 IPC handlers when isDemoMode is true", () => {
     const cleanup = registerDemoHandlers(makeDeps(true));
-    expect(ipcMainMock.handle).toHaveBeenCalledTimes(12);
+    expect(ipcMainMock.handle).toHaveBeenCalledTimes(13);
     cleanup();
   });
 
@@ -66,6 +66,7 @@ describe("registerDemoHandlers", () => {
     const cleanup = registerDemoHandlers(makeDeps(true));
     const channels = ipcMainMock.handle.mock.calls.map(([ch]: unknown[]) => ch);
     expect(channels).toContain("demo:move-to");
+    expect(channels).toContain("demo:move-to-selector");
     expect(channels).toContain("demo:click");
     expect(channels).toContain("demo:screenshot");
     expect(channels).toContain("demo:type");
@@ -80,11 +81,12 @@ describe("registerDemoHandlers", () => {
     cleanup();
   });
 
-  it("cleanup removes all 12 handlers", () => {
+  it("cleanup removes all 13 handlers", () => {
     const cleanup = registerDemoHandlers(makeDeps(true));
     cleanup();
-    expect(ipcMainMock.removeHandler).toHaveBeenCalledTimes(12);
+    expect(ipcMainMock.removeHandler).toHaveBeenCalledTimes(13);
     expect(ipcMainMock.removeHandler).toHaveBeenCalledWith("demo:move-to");
+    expect(ipcMainMock.removeHandler).toHaveBeenCalledWith("demo:move-to-selector");
     expect(ipcMainMock.removeHandler).toHaveBeenCalledWith("demo:click");
     expect(ipcMainMock.removeHandler).toHaveBeenCalledWith("demo:screenshot");
     expect(ipcMainMock.removeHandler).toHaveBeenCalledWith("demo:type");
@@ -135,6 +137,38 @@ describe("registerDemoHandlers", () => {
     expect(deps.mainWindow.webContents.send as ReturnType<typeof vi.fn>).toHaveBeenCalledWith(
       "demo:exec-move-to",
       { x: 25, y: 75, durationMs: 500, requestId: "test-request-id" }
+    );
+  });
+
+  it("moveToSelector handler sends exec event and awaits done", async () => {
+    const deps = makeDeps(true);
+    registerDemoHandlers(deps);
+
+    const [, handler] =
+      ipcMainMock.handle.mock.calls.find(([ch]: unknown[]) => ch === "demo:move-to-selector") ?? [];
+
+    ipcMainMock.on.mockImplementation((channel: string, listener: (...args: unknown[]) => void) => {
+      if (channel === "demo:command-done") {
+        setTimeout(() => {
+          listener({}, { requestId: "test-request-id" });
+        }, 10);
+      }
+    });
+
+    const result = await handler(
+      {},
+      { selector: ".my-btn", durationMs: 300, offsetX: 5, offsetY: -3 }
+    );
+    expect(result).toBeUndefined();
+    expect(deps.mainWindow.webContents.send as ReturnType<typeof vi.fn>).toHaveBeenCalledWith(
+      "demo:exec-move-to-selector",
+      {
+        selector: ".my-btn",
+        durationMs: 300,
+        offsetX: 5,
+        offsetY: -3,
+        requestId: "test-request-id",
+      }
     );
   });
 

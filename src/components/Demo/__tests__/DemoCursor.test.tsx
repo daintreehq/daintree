@@ -48,6 +48,17 @@ describe("DemoCursor", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     listenerMap.clear();
+    // Set window dimensions for % to px conversion
+    Object.defineProperty(window, "innerWidth", {
+      value: 1000,
+      writable: true,
+      configurable: true,
+    });
+    Object.defineProperty(window, "innerHeight", {
+      value: 800,
+      writable: true,
+      configurable: true,
+    });
   });
 
   afterEach(() => {
@@ -64,6 +75,10 @@ describe("DemoCursor", () => {
   it("registers exec command listeners on mount", () => {
     render(<DemoCursor />);
     expect(demoMock.onExecCommand).toHaveBeenCalledWith("demo:exec-move-to", expect.any(Function));
+    expect(demoMock.onExecCommand).toHaveBeenCalledWith(
+      "demo:exec-move-to-selector",
+      expect.any(Function)
+    );
     expect(demoMock.onExecCommand).toHaveBeenCalledWith("demo:exec-click", expect.any(Function));
     expect(demoMock.onExecCommand).toHaveBeenCalledWith("demo:exec-type", expect.any(Function));
     expect(demoMock.onExecCommand).toHaveBeenCalledWith("demo:exec-set-zoom", expect.any(Function));
@@ -78,26 +93,114 @@ describe("DemoCursor", () => {
 
   it("cleans up listeners on unmount", () => {
     const { unmount } = render(<DemoCursor />);
-    // All 8 onExecCommand calls return cleanup functions
-    expect(demoMock.onExecCommand).toHaveBeenCalledTimes(8);
+    // All 9 onExecCommand calls return cleanup functions
+    expect(demoMock.onExecCommand).toHaveBeenCalledTimes(9);
     unmount();
     // After unmount, listeners should be removed
     expect(listenerMap.get("demo:exec-move-to")?.length ?? 0).toBe(0);
+    expect(listenerMap.get("demo:exec-move-to-selector")?.length ?? 0).toBe(0);
     expect(listenerMap.get("demo:exec-click")?.length ?? 0).toBe(0);
   });
 
-  it("moveTo calls element.animate and sends done with requestId", async () => {
+  it("moveTo converts percent to px and calls element.animate", async () => {
     render(<DemoCursor />);
     emit("demo:exec-move-to", { x: 30, y: 40, durationMs: 500, requestId: "req-1" });
 
     await new Promise((r) => setTimeout(r, 10));
 
     expect(Element.prototype.animate).toHaveBeenCalled();
+    // Verify keyframes use transform (not left/top)
+    const animateFn = Element.prototype.animate as ReturnType<typeof vi.fn>;
+    const keyframes = animateFn.mock.calls[0][0] as Array<{ transform: string }>;
+    expect(keyframes[0]).toHaveProperty("transform");
+    expect(keyframes[keyframes.length - 1].transform).toContain("translate(");
     expect(demoMock.sendCommandDone).toHaveBeenCalledWith("req-1", undefined);
   });
 
-  it("click calls element.animate for press and release", async () => {
+  it("moveToSelector animates to element center", async () => {
+    const el = document.createElement("div");
+    el.id = "selector-target";
+    el.checkVisibility = vi.fn(() => true);
+    el.scrollIntoView = vi.fn();
+    el.getBoundingClientRect = vi.fn(
+      () =>
+        ({
+          left: 100,
+          top: 200,
+          width: 50,
+          height: 30,
+          right: 150,
+          bottom: 230,
+          x: 100,
+          y: 200,
+          toJSON: () => {},
+        }) as DOMRect
+    );
+    document.body.appendChild(el);
+
     render(<DemoCursor />);
+    emit("demo:exec-move-to-selector", {
+      selector: "#selector-target",
+      durationMs: 400,
+      requestId: "req-sel-1",
+    });
+
+    await new Promise((r) => setTimeout(r, 10));
+
+    expect(el.scrollIntoView).toHaveBeenCalledWith({
+      behavior: "instant",
+      block: "nearest",
+      inline: "nearest",
+    });
+    expect(demoMock.sendCommandDone).toHaveBeenCalledWith("req-sel-1", undefined);
+
+    document.body.removeChild(el);
+  });
+
+  it("moveToSelector rejects when no visible element matches", async () => {
+    render(<DemoCursor />);
+    emit("demo:exec-move-to-selector", {
+      selector: "#nonexistent",
+      durationMs: 400,
+      requestId: "req-sel-2",
+    });
+
+    await new Promise((r) => setTimeout(r, 10));
+
+    expect(demoMock.sendCommandDone).toHaveBeenCalledWith(
+      "req-sel-2",
+      "Selector not found or not visible: #nonexistent"
+    );
+  });
+
+  it("click dispatches mousedown/mouseup/click events", async () => {
+    render(<DemoCursor />);
+
+    const target = document.createElement("button");
+    const events: string[] = [];
+    target.addEventListener("mousedown", () => events.push("mousedown"));
+    target.addEventListener("mouseup", () => events.push("mouseup"));
+    target.addEventListener("click", () => events.push("click"));
+
+    const origElementFromPoint = document.elementFromPoint;
+    document.elementFromPoint = vi.fn(() => target);
+
+    emit("demo:exec-click", { requestId: "req-click-1" });
+
+    await new Promise((r) => setTimeout(r, 10));
+
+    expect(events).toEqual(["mousedown", "mouseup", "click"]);
+    expect(demoMock.sendCommandDone).toHaveBeenCalledWith("req-click-1", undefined);
+
+    document.elementFromPoint = origElementFromPoint;
+  });
+
+  it("click calls element.animate for press and release on SVG wrapper", async () => {
+    render(<DemoCursor />);
+
+    const origElementFromPoint = document.elementFromPoint;
+    document.elementFromPoint = vi.fn(() => null);
+
     emit("demo:exec-click", { requestId: "req-2" });
 
     await new Promise((r) => setTimeout(r, 10));
@@ -106,6 +209,8 @@ describe("DemoCursor", () => {
       (Element.prototype.animate as ReturnType<typeof vi.fn>).mock.calls.length
     ).toBeGreaterThanOrEqual(2);
     expect(demoMock.sendCommandDone).toHaveBeenCalledWith("req-2", undefined);
+
+    document.elementFromPoint = origElementFromPoint;
   });
 
   it("pause sends done immediately", () => {
