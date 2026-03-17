@@ -88,3 +88,16 @@ export { useUnsavedChanges } from "./useUnsavedChanges";
 export type { UseUnsavedChangesOptions } from "./useUnsavedChanges";
 
 export { useDebounce } from "./useDebounce";
+
+export { useNoteSearch } from "./useNoteSearch";
+export type { SortOrder, UseNoteSearchReturn } from "./useNoteSearch";
+export { SORT_LABELS } from "./useNoteSearch";
+
+export { useNoteEditor } from "./useNoteEditor";
+export type { UseNoteEditorReturn } from "./useNoteEditor";
+
+export { useNoteTitleEdit } from "./useNoteTitleEdit";
+export type { UseNoteTitleEditReturn } from "./useNoteTitleEdit";
+
+export { useNoteActions } from "./useNoteActions";
+export type { UseNoteActionsReturn } from "./useNoteActions";
