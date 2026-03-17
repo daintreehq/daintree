@@ -1,10 +1,6 @@
 import type { KeyAction } from "../../shared/types/keymap.js";
 
-import type {
-  KeyScope,
-  KeybindingConfig,
-  KeybindingResolutionResult,
-} from "./keybindingUtils";
+import type { KeyScope, KeybindingConfig, KeybindingResolutionResult } from "./keybindingUtils";
 import { normalizeKeyForBinding, parseCombo } from "./keybindingUtils";
 import { DEFAULT_KEYBINDINGS } from "./defaultKeybindings";
 
@@ -43,10 +39,7 @@ class KeybindingService {
 
   async setOverride(actionId: string, combo: string[]): Promise<void> {
     if (typeof window !== "undefined" && window.electron?.keybinding) {
-      await window.electron.keybinding.setOverride(
-        actionId as KeyAction,
-        combo
-      );
+      await window.electron.keybinding.setOverride(actionId as KeyAction, combo);
       this.overrides.set(actionId, combo);
       this.notifyListeners();
     }
@@ -54,9 +47,7 @@ class KeybindingService {
 
   async removeOverride(actionId: string): Promise<void> {
     if (typeof window !== "undefined" && window.electron?.keybinding) {
-      await window.electron.keybinding.removeOverride(
-        actionId as KeyAction
-      );
+      await window.electron.keybinding.removeOverride(actionId as KeyAction);
       this.overrides.delete(actionId);
       this.notifyListeners();
     }
