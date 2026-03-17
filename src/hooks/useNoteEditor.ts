@@ -54,26 +54,28 @@ export function useNoteEditor({
   latestSelectedNoteRef.current = selectedNote;
 
   // Flush-on-switch: when selectedNote changes, save pending content immediately
+  // Capture note path at setup time to avoid stale ref during cleanup
+  const selectedNotePath = selectedNote?.path ?? null;
   useEffect(() => {
+    const notePath = selectedNotePath;
     return () => {
       if (saveTimeoutRef.current) {
         clearTimeout(saveTimeoutRef.current);
         saveTimeoutRef.current = null;
 
-        const note = latestSelectedNoteRef.current;
         const content = latestContentRef.current;
         const metadata = latestMetadataRef.current;
         const lastMod = latestLastModifiedRef.current;
         const conflict = latestHasConflictRef.current;
 
-        if (note && metadata && !conflict) {
+        if (notePath && metadata && !conflict) {
           notesClient
-            .write(note.path, content, metadata, lastMod ?? undefined)
+            .write(notePath, content, metadata, lastMod ?? undefined)
             .catch((e) => console.error("Failed to flush save:", e));
         }
       }
     };
-  }, [selectedNote?.id]);
+  }, [selectedNotePath]);
 
   // Load note content when selected
   useEffect(() => {
