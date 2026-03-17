@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { EventEmitter } from "events";
 
 const ipcMainMock = vi.hoisted(() => ({
   handle: vi.fn(),
@@ -19,6 +20,33 @@ const fsMock = vi.hoisted(() => ({
 }));
 
 vi.mock("fs/promises", () => fsMock);
+
+vi.mock("fs", () => ({
+  readdirSync: vi.fn(() => ["frame_0001.png", "frame_0002.png", "frame_0003.png"]),
+  mkdirSync: vi.fn(),
+}));
+
+let mockProc: EventEmitter & {
+  stdout: EventEmitter;
+  stderr: EventEmitter;
+  kill: ReturnType<typeof vi.fn>;
+};
+
+function createMockProc() {
+  const proc = new EventEmitter() as EventEmitter & {
+    stdout: EventEmitter;
+    stderr: EventEmitter;
+    kill: ReturnType<typeof vi.fn>;
+  };
+  proc.stdout = new EventEmitter();
+  proc.stderr = new EventEmitter();
+  proc.kill = vi.fn();
+  return proc;
+}
+
+vi.mock("child_process", () => ({
+  spawn: vi.fn(() => mockProc),
+}));
 
 import { registerDemoHandlers } from "../demo.js";
 import type { HandlerDependencies } from "../../types.js";
@@ -48,6 +76,7 @@ function getHandler(channel: string): (...args: unknown[]) => unknown {
 describe("registerDemoHandlers", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockProc = createMockProc();
   });
 
   it("is a no-op when isDemoMode is false", () => {
@@ -56,9 +85,9 @@ describe("registerDemoHandlers", () => {
     cleanup();
   });
 
-  it("registers 12 IPC handlers when isDemoMode is true", () => {
+  it("registers 13 IPC handlers when isDemoMode is true", () => {
     const cleanup = registerDemoHandlers(makeDeps(true));
-    expect(ipcMainMock.handle).toHaveBeenCalledTimes(12);
+    expect(ipcMainMock.handle).toHaveBeenCalledTimes(13);
     cleanup();
   });
 
@@ -77,13 +106,14 @@ describe("registerDemoHandlers", () => {
     expect(channels).toContain("demo:start-capture");
     expect(channels).toContain("demo:stop-capture");
     expect(channels).toContain("demo:get-capture-status");
+    expect(channels).toContain("demo:encode");
     cleanup();
   });
 
-  it("cleanup removes all 12 handlers", () => {
+  it("cleanup removes all 13 handlers", () => {
     const cleanup = registerDemoHandlers(makeDeps(true));
     cleanup();
-    expect(ipcMainMock.removeHandler).toHaveBeenCalledTimes(12);
+    expect(ipcMainMock.removeHandler).toHaveBeenCalledTimes(13);
     expect(ipcMainMock.removeHandler).toHaveBeenCalledWith("demo:move-to");
     expect(ipcMainMock.removeHandler).toHaveBeenCalledWith("demo:click");
     expect(ipcMainMock.removeHandler).toHaveBeenCalledWith("demo:screenshot");
@@ -96,6 +126,7 @@ describe("registerDemoHandlers", () => {
     expect(ipcMainMock.removeHandler).toHaveBeenCalledWith("demo:start-capture");
     expect(ipcMainMock.removeHandler).toHaveBeenCalledWith("demo:stop-capture");
     expect(ipcMainMock.removeHandler).toHaveBeenCalledWith("demo:get-capture-status");
+    expect(ipcMainMock.removeHandler).toHaveBeenCalledWith("demo:encode");
   });
 
   it("screenshot handler returns Uint8Array with PNG magic bytes", async () => {
@@ -112,6 +143,166 @@ describe("registerDemoHandlers", () => {
     expect(result.data[3]).toBe(0x47);
     expect(result.width).toBe(1920);
     expect(result.height).toBe(1080);
+  });
+
+  describe("handleEncode", () => {
+    function getEncodeHandler() {
+      registerDemoHandlers(makeDeps(true));
+      const [, handler] =
+        ipcMainMock.handle.mock.calls.find(([ch]: unknown[]) => ch === "demo:encode") ?? [];
+      return handler;
+    }
+
+    function makeEvent(isDestroyed = false) {
+      return {
+        sender: {
+          send: vi.fn(),
+          isDestroyed: vi.fn(() => isDestroyed),
+        },
+      };
+    }
+
+    it("resolves with outputPath and durationMs on success", async () => {
+      const handler = getEncodeHandler();
+      const event = makeEvent();
+
+      const promise = handler(event, {
+        framesDir: "/tmp/frames",
+        outputPath: "/tmp/out.mp4",
+        preset: "youtube-1080p",
+      });
+
+      mockProc.emit("close", 0);
+      const result = await promise;
+
+      expect(result.outputPath).toBe("/tmp/out.mp4");
+      expect(typeof result.durationMs).toBe("number");
+    });
+
+    it("rejects when no PNG frames found", async () => {
+      const fsMod = await import("fs");
+      (fsMod.readdirSync as ReturnType<typeof vi.fn>).mockReturnValueOnce([]);
+
+      const handler = getEncodeHandler();
+      const event = makeEvent();
+
+      await expect(
+        handler(event, {
+          framesDir: "/tmp/empty",
+          outputPath: "/tmp/out.mp4",
+          preset: "youtube-4k",
+        })
+      ).rejects.toThrow("No PNG frames matching frame_NNNN.png found");
+    });
+
+    it("rejects on spawn error event", async () => {
+      const handler = getEncodeHandler();
+      const event = makeEvent();
+
+      const promise = handler(event, {
+        framesDir: "/tmp/frames",
+        outputPath: "/tmp/out.mp4",
+        preset: "web-webm",
+      });
+
+      mockProc.emit("error", new Error("spawn ENOENT"));
+      await expect(promise).rejects.toThrow("Encode failed: spawn ENOENT");
+    });
+
+    it("rejects on non-zero exit code with stderr", async () => {
+      const handler = getEncodeHandler();
+      const event = makeEvent();
+
+      const promise = handler(event, {
+        framesDir: "/tmp/frames",
+        outputPath: "/tmp/out.mp4",
+        preset: "web-webm",
+      });
+
+      mockProc.stderr.emit("data", Buffer.from("Unknown encoder libx264"));
+      mockProc.emit("close", 1);
+      await expect(promise).rejects.toThrow("ffmpeg exited with code 1");
+    });
+
+    it("creates output directory before encoding", async () => {
+      const fsMod = await import("fs");
+      const handler = getEncodeHandler();
+      const event = makeEvent();
+
+      const promise = handler(event, {
+        framesDir: "/tmp/frames",
+        outputPath: "/tmp/output/video.mp4",
+        preset: "youtube-1080p",
+      });
+
+      mockProc.emit("close", 0);
+      await promise;
+
+      expect(fsMod.mkdirSync).toHaveBeenCalledWith("/tmp/output", { recursive: true });
+    });
+
+    it("sends progress events via IPC", async () => {
+      const handler = getEncodeHandler();
+      const event = makeEvent(false);
+
+      const promise = handler(event, {
+        framesDir: "/tmp/frames",
+        outputPath: "/tmp/out.mp4",
+        preset: "youtube-1080p",
+      });
+
+      mockProc.stdout.emit("data", Buffer.from("frame=2\nfps=30\nprogress=continue\n"));
+      mockProc.emit("close", 0);
+      await promise;
+
+      expect(event.sender.send).toHaveBeenCalledWith(
+        "demo:encode:progress",
+        expect.objectContaining({
+          frame: 2,
+          fps: 30,
+          percentComplete: expect.any(Number),
+          etaSeconds: expect.any(Number),
+        })
+      );
+    });
+
+    it("does not send progress when sender is destroyed", async () => {
+      const handler = getEncodeHandler();
+      const event = makeEvent(true);
+
+      const promise = handler(event, {
+        framesDir: "/tmp/frames",
+        outputPath: "/tmp/out.mp4",
+        preset: "youtube-1080p",
+      });
+
+      mockProc.stdout.emit("data", Buffer.from("frame=2\nfps=30\nprogress=continue\n"));
+      mockProc.emit("close", 0);
+      await promise;
+
+      expect(event.sender.send).not.toHaveBeenCalled();
+    });
+
+    it("spawns ffmpeg with the resolved binary path", async () => {
+      const { spawn: spawnMock } = await import("child_process");
+      const handler = getEncodeHandler();
+      const event = makeEvent();
+
+      const promise = handler(event, {
+        framesDir: "/tmp/frames",
+        outputPath: "/tmp/out.mp4",
+        preset: "youtube-1080p",
+      });
+
+      mockProc.emit("close", 0);
+      await promise;
+
+      expect(spawnMock).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.arrayContaining(["-c:v", "libx264"]),
+        expect.any(Object)
+      );
+    });
   });
 
   it("moveTo handler sends exec event with requestId and awaits done", async () => {
@@ -165,6 +356,7 @@ describe("registerDemoHandlers", () => {
 describe("frame capture pipeline", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockProc = createMockProc();
     vi.useFakeTimers();
   });
 

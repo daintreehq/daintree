@@ -135,6 +135,9 @@ import type {
   DemoStartCaptureResult,
   DemoStopCaptureResult,
   DemoCaptureStatus,
+  DemoEncodePayload,
+  DemoEncodeProgressEvent,
+  DemoEncodeResult,
 } from "./demo.js";
 
 export type ChecklistItemId = "openedProject" | "launchedAgent" | "createdWorktree";
@@ -1587,6 +1590,10 @@ export interface IpcInvokeMap {
     args: [];
     result: DemoCaptureStatus;
   };
+  "demo:encode": {
+    args: [payload: DemoEncodePayload];
+    result: DemoEncodeResult;
+  };
 
   // Project MCP server channels
   "project-mcp:get-statuses": {
@@ -1764,6 +1771,7 @@ export interface IpcEventMap {
   "demo:exec-resume": void;
   "demo:exec-wait-for-selector": DemoWaitForSelectorPayload;
   "demo:exec-sleep": DemoSleepPayload;
+  "demo:encode:progress": DemoEncodeProgressEvent;
 
   // Project MCP server events
   "project-mcp:status-changed": {

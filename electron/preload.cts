@@ -620,6 +620,8 @@ const CHANNELS = {
   DEMO_START_CAPTURE: "demo:start-capture",
   DEMO_STOP_CAPTURE: "demo:stop-capture",
   DEMO_GET_CAPTURE_STATUS: "demo:get-capture-status",
+  DEMO_ENCODE: "demo:encode",
+  DEMO_ENCODE_PROGRESS: "demo:encode:progress",
 
   // Workflow approval channels
   WORKFLOW_RESOLVE_APPROVAL: "workflow:resolve-approval",
@@ -2064,6 +2066,11 @@ const api: ElectronAPI = {
             _typedInvoke(CHANNELS.DEMO_START_CAPTURE, payload),
           stopCapture: () => _typedInvoke(CHANNELS.DEMO_STOP_CAPTURE),
           getCaptureStatus: () => _typedInvoke(CHANNELS.DEMO_GET_CAPTURE_STATUS),
+          encode: (payload: import("../shared/types/ipc/demo.js").DemoEncodePayload) =>
+            _typedInvoke(CHANNELS.DEMO_ENCODE, payload),
+          onEncodeProgress: (
+            callback: (event: import("../shared/types/ipc/demo.js").DemoEncodeProgressEvent) => void
+          ) => _typedOn(CHANNELS.DEMO_ENCODE_PROGRESS, callback),
           onExecCommand: (
             channel: string,
             callback: (payload: Record<string, unknown>) => void

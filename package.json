@@ -131,6 +131,7 @@
     "eslint-plugin-prettier": "^5.5.5",
     "eslint-plugin-react-hooks": "7.1.0-canary-c80a0750-20260312",
     "execa": "^9.6.0",
+    "ffmpeg-static": "^5.2.0",
     "fix-path": "^5.0.0",
     "framer-motion": "^12.37.0",
     "frimousse": "^0.3.0",
