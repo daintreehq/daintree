@@ -80,6 +80,7 @@ describe("registerAppLifecycleHandlers – signal handling", () => {
     expect(setSignalShutdownMock).toHaveBeenCalledOnce();
     expect(appMock.quit).toHaveBeenCalledOnce();
 
+    expect(processExitSpy).not.toHaveBeenCalled();
     vi.advanceTimersByTime(5000);
     expect(processExitSpy).toHaveBeenCalledWith(0);
   });
@@ -93,6 +94,22 @@ describe("registerAppLifecycleHandlers – signal handling", () => {
 
     handler();
     handler();
+
+    expect(setSignalShutdownMock).toHaveBeenCalledOnce();
+    expect(appMock.quit).toHaveBeenCalledOnce();
+  });
+
+  it("SIGTERM then SIGINT shares the same one-shot guard", async () => {
+    const { registerAppLifecycleHandlers } = await import("../appLifecycle.js");
+    registerAppLifecycleHandlers(makeOpts());
+
+    const sigTermCall = processOnSpy.mock.calls.find(([sig]: string[]) => sig === "SIGTERM");
+    const sigIntCall = processOnSpy.mock.calls.find(([sig]: string[]) => sig === "SIGINT");
+    const termHandler = sigTermCall![1] as () => void;
+    const intHandler = sigIntCall![1] as () => void;
+
+    termHandler();
+    intHandler();
 
     expect(setSignalShutdownMock).toHaveBeenCalledOnce();
     expect(appMock.quit).toHaveBeenCalledOnce();
