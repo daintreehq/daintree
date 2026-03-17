@@ -56,6 +56,7 @@ function XtermAdapterComponent({
   const exitUnsubRef = useRef<(() => void) | null>(null);
   const rafIdRef = useRef<number | null>(null);
   const resizeDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingFitRef = useRef(false);
 
   // Store the latest getRefreshTier in a ref to prevent stale closures.
   // This ensures the service always calls the current version of the callback.
@@ -137,9 +138,13 @@ function XtermAdapterComponent({
       const width = rect.width;
       const height = rect.height;
 
-      // Filter collapsed/zero states
+      // Filter collapsed/zero states and hidden windows (clientWidth/Height return 0 when hidden)
       if (width === 0 || height === 0) return;
       if (width < MIN_CONTAINER_SIZE || height < MIN_CONTAINER_SIZE) return;
+      if (document.visibilityState !== "visible") {
+        pendingFitRef.current = true;
+        return;
+      }
 
       const dims = terminalInstanceService.resize(terminalId, width, height);
 
@@ -155,10 +160,12 @@ function XtermAdapterComponent({
     const container = containerRef.current;
     if (!container) return;
 
-    // Retry logic: if container has no size (e.g. during drag/mount transition),
-    // schedule a retry on next animation frame. This fixes blank terminals when
-    // xterm initializes with 0x0 dimensions during drag preview.
     if (container.clientWidth === 0 || container.clientHeight === 0) {
+      if (document.visibilityState !== "visible") {
+        pendingFitRef.current = true;
+        return;
+      }
+      // Retry on next frame for drag/mount transitions where container isn't sized yet
       requestAnimationFrame(() => {
         if (containerRef.current) performFit();
       });
@@ -406,6 +413,18 @@ function XtermAdapterComponent({
       terminalInstanceService.boostRefreshRate(terminalId);
     }
   }, [terminalId, stableRefreshTierProvider, currentTier]);
+
+  // Refit terminal when window becomes visible again after being hidden
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible" && pendingFitRef.current) {
+        pendingFitRef.current = false;
+        performFit();
+      }
+    };
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => document.removeEventListener("visibilitychange", handleVisibilityChange);
+  }, [performFit]);
 
   // Subscribe to alt buffer state changes for TUI applications (OpenCode, vim, htop, etc.)
   // When in alt buffer, we need to sync the container styling
