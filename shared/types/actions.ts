@@ -236,6 +236,7 @@ export type ActionId =
   | "notes.delete"
   | "notes.reveal"
   | "devServer.start"
+  | "devServer.openDetected"
   | "worktree.compareDiff"
   | "terminal.stashInput"
   | "terminal.popStash";

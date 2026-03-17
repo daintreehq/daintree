@@ -634,6 +634,12 @@ export interface ElectronAPI {
     getState(request: DevPreviewSessionRequest): Promise<DevPreviewSessionState>;
     onStateChanged(callback: (data: DevPreviewStateChangedPayload) => void): () => void;
   };
+  globalDevServers: {
+    get(): Promise<import("./globalDevServers.js").GlobalDevServersGetResult>;
+    onChanged(
+      callback: (data: import("./globalDevServers.js").GlobalDevServersChangedPayload) => void
+    ): () => void;
+  };
   git: {
     getFileDiff(cwd: string, filePath: string, status: GitStatus): Promise<string>;
     getProjectPulse(options: {

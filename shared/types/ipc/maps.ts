@@ -113,6 +113,10 @@ import type {
   DevPreviewSessionState,
   DevPreviewStateChangedPayload,
 } from "./devPreview.js";
+import type {
+  GlobalDevServersGetResult,
+  GlobalDevServersChangedPayload,
+} from "./globalDevServers.js";
 import type { ProjectPulse, PulseRangeDays } from "../pulse.js";
 import type {
   GitCommitListOptions,
@@ -1222,6 +1226,12 @@ export interface IpcInvokeMap {
     result: DevPreviewSessionState;
   };
 
+  // Global Dev Servers channels
+  "global-dev-servers:get": {
+    args: [];
+    result: GlobalDevServersGetResult;
+  };
+
   // Auto-update channels
   "update:quit-and-install": {
     args: [];
@@ -1705,6 +1715,9 @@ export interface IpcEventMap {
 
   // Dev Preview events
   "dev-preview:state-changed": DevPreviewStateChangedPayload;
+
+  // Global Dev Servers events
+  "global-dev-servers:changed": GlobalDevServersChangedPayload;
 
   // Notes events
   "notes:updated": {

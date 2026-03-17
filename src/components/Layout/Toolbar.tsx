@@ -22,6 +22,7 @@ import {
   Monitor,
   Bell,
   LayoutGrid,
+  Radio,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { isMac, isLinux, createTooltipWithShortcut } from "@/lib/platform";
@@ -56,6 +57,8 @@ import { ProjectSwitcherPalette } from "@/components/Project/ProjectSwitcherPale
 import { NotificationCenter } from "@/components/Notifications/NotificationCenter";
 import { useNotificationHistoryStore } from "@/store/slices/notificationHistorySlice";
 import { VoiceRecordingToolbarButton } from "./VoiceRecordingToolbarButton";
+import { DetectedServersList } from "@/components/DetectedServers/DetectedServersList";
+import type { DetectedDevServer } from "@shared/types/ipc/globalDevServers";
 import { useUIStore } from "@/store/uiStore";
 import { useShallow } from "zustand/react/shallow";
 
@@ -126,6 +129,20 @@ export function Toolbar({
   const toggleSidecar = useSidecarStore((state) => state.toggle);
   const showDeveloperTools = usePreferencesStore((state) => state.showDeveloperTools);
   const toolbarLayout = useToolbarPreferencesStore((state) => state.layout);
+
+  const [detectedServers, setDetectedServers] = useState<DetectedDevServer[]>([]);
+  const [detectedServersOpen, setDetectedServersOpen] = useState(false);
+  const detectedServersButtonRef = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    void window.electron.globalDevServers.get().then((result) => {
+      setDetectedServers(result.servers);
+    });
+    const cleanup = window.electron.globalDevServers.onChanged((payload) => {
+      setDetectedServers(payload.servers);
+    });
+    return cleanup;
+  }, []);
 
   const [issuesOpen, setIssuesOpen] = useState(false);
   const [prsOpen, setPrsOpen] = useState(false);
@@ -199,7 +216,7 @@ export function Toolbar({
     [projectSwitcher]
   );
 
-  const getTimeSinceUpdate = (timestamp: number | null): string => {
+  const getTimeSinceUpdate = useCallback((timestamp: number | null): string => {
     if (timestamp == null || !Number.isFinite(timestamp) || timestamp <= 0) {
       return "unknown";
     }
@@ -216,7 +233,7 @@ export function Toolbar({
 
     const days = Math.floor(hours / 24);
     return `${days}d ago`;
-  };
+  }, []);
 
   useEffect(() => {
     return window.electron.window.onFullscreenChange(setIsFullscreen);
@@ -254,7 +271,7 @@ export function Toolbar({
     setStatsJustUpdated(false);
   }, []);
 
-  const handleCopyTreeClick = async () => {
+  const handleCopyTreeClick = useCallback(async () => {
     if (isCopyingTree || !activeWorktree) return;
 
     setIsCopyingTree(true);
@@ -279,27 +296,30 @@ export function Toolbar({
     } finally {
       setIsCopyingTree(false);
     }
-  };
+  }, [isCopyingTree, activeWorktree, handleCopyTree]);
 
-  const handleSettingsContextMenu = async (event: React.MouseEvent) => {
-    const template: MenuItemOption[] = [
-      { id: "settings:general", label: "General" },
-      { id: "settings:agents", label: "Agents" },
-      { id: "settings:terminal", label: "Terminal" },
-      { id: "settings:keyboard", label: "Keyboard" },
-      { id: "settings:notifications", label: "Notifications" },
-      { id: "settings:sidecar", label: "Sidecar" },
-      { type: "separator" },
-      { id: "settings:toolbar", label: "Customize Toolbar…" },
-      { id: "settings:troubleshooting", label: "Troubleshooting" },
-    ];
+  const handleSettingsContextMenu = useCallback(
+    async (event: React.MouseEvent) => {
+      const template: MenuItemOption[] = [
+        { id: "settings:general", label: "General" },
+        { id: "settings:agents", label: "Agents" },
+        { id: "settings:terminal", label: "Terminal" },
+        { id: "settings:keyboard", label: "Keyboard" },
+        { id: "settings:notifications", label: "Notifications" },
+        { id: "settings:sidecar", label: "Sidecar" },
+        { type: "separator" },
+        { id: "settings:toolbar", label: "Customize Toolbar…" },
+        { id: "settings:troubleshooting", label: "Troubleshooting" },
+      ];
 
-    const actionId = await showMenu(event, template);
-    if (!actionId) return;
+      const actionId = await showMenu(event, template);
+      if (!actionId) return;
 
-    const tab = actionId.replace("settings:", "");
-    void actionService.dispatch("app.settings.openTab", { tab }, { source: "context-menu" });
-  };
+      const tab = actionId.replace("settings:", "");
+      void actionService.dispatch("app.settings.openTab", { tab }, { source: "context-menu" });
+    },
+    [showMenu]
+  );
 
   const getToolbarItems = useCallback(
     () =>
@@ -519,40 +539,87 @@ export function Toolbar({
       },
       "dev-server": {
         render: () => (
-          <TooltipProvider key="dev-server">
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <span className="inline-flex">
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    data-toolbar-item=""
-                    onClick={() => {
-                      void actionService.dispatch("devServer.start", undefined, { source: "user" });
+          <div key="dev-server" className="relative inline-flex items-center gap-0.5">
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span className="inline-flex">
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      data-toolbar-item=""
+                      onClick={() => {
+                        void actionService.dispatch("devServer.start", undefined, {
+                          source: "user",
+                        });
+                      }}
+                      disabled={!currentProject}
+                      className="text-canopy-text hover:bg-overlay-medium transition-colors hover:text-canopy-accent focus-visible:text-canopy-accent"
+                      aria-label={
+                        !currentProject
+                          ? "Open a project to use Dev Preview"
+                          : devServerCommand
+                            ? "Start Dev Server"
+                            : "Open Dev Preview"
+                      }
+                    >
+                      <Monitor />
+                    </Button>
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">
+                  {!currentProject
+                    ? "Open a project to use Dev Preview"
+                    : devServerCommand
+                      ? "Start Dev Server"
+                      : "Open Dev Preview"}
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
+            {detectedServers.length > 0 && (
+              <>
+                <TooltipProvider>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button
+                        ref={detectedServersButtonRef}
+                        variant="ghost"
+                        size="icon"
+                        data-toolbar-item=""
+                        onClick={() => setDetectedServersOpen(!detectedServersOpen)}
+                        className="relative text-canopy-text hover:bg-overlay-medium transition-colors hover:text-canopy-accent focus-visible:text-canopy-accent h-8 w-8"
+                        aria-label={`${detectedServers.length} detected dev servers`}
+                      >
+                        <Radio className="h-4 w-4" />
+                        <span className="absolute -top-0.5 -right-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-canopy-accent text-[10px] font-bold text-accent-foreground">
+                          {detectedServers.length}
+                        </span>
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent side="bottom">Detected Dev Servers</TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
+                <FixedDropdown
+                  open={detectedServersOpen}
+                  onOpenChange={setDetectedServersOpen}
+                  anchorRef={detectedServersButtonRef}
+                  className="p-0 w-[350px]"
+                >
+                  <DetectedServersList
+                    servers={detectedServers}
+                    onOpen={(url) => {
+                      void actionService.dispatch(
+                        "devServer.openDetected",
+                        { url },
+                        { source: "user" }
+                      );
                     }}
-                    disabled={!currentProject}
-                    className="text-canopy-text hover:bg-overlay-medium transition-colors hover:text-canopy-accent focus-visible:text-canopy-accent"
-                    aria-label={
-                      !currentProject
-                        ? "Open a project to use Dev Preview"
-                        : devServerCommand
-                          ? "Start Dev Server"
-                          : "Open Dev Preview"
-                    }
-                  >
-                    <Monitor />
-                  </Button>
-                </span>
-              </TooltipTrigger>
-              <TooltipContent side="bottom">
-                {!currentProject
-                  ? "Open a project to use Dev Preview"
-                  : devServerCommand
-                    ? "Start Dev Server"
-                    : "Open Dev Preview"}
-              </TooltipContent>
-            </Tooltip>
-          </TooltipProvider>
+                    onClose={() => setDetectedServersOpen(false)}
+                  />
+                </FixedDropdown>
+              </>
+            )}
+          </div>
         ),
         isAvailable: true,
       },
@@ -1027,6 +1094,10 @@ export function Toolbar({
       toggleNotificationCenter,
       closeNotificationCenter,
       notificationUnreadCount,
+      detectedServers,
+      detectedServersOpen,
+      setIssueSearchQuery,
+      setPrSearchQuery,
     ]
   );
 
