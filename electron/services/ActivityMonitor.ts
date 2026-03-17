@@ -85,6 +85,7 @@ export class ActivityMonitor {
   private readonly WORKING_HOLD_MS = 200;
   private readonly SPINNER_ACTIVE_MS = 1500;
   private readonly COMPLETION_HOLD_MS = 500;
+  private readonly WORKING_INDICATOR_TTL_MS = 5000;
   private workingHoldUntil = 0;
 
   // Subsystem instances
@@ -104,6 +105,7 @@ export class ActivityMonitor {
   private lastActivityTimestamp = Date.now();
   private lastDataTimestamp = Date.now();
   private lastOutputActivityAt = 0;
+  private lastWorkingIndicatorTimestamp = 0;
   private promptStableSince = 0;
   private readonly SLEEP_DETECTION_THRESHOLD_MS = 5000;
   private pendingStateRevalidation = false;
@@ -323,6 +325,10 @@ export class ActivityMonitor {
       const patternResult = this.patternDetector.detect(this.patternBuf.getText());
       this.lastPatternResult = patternResult;
 
+      if (patternResult.isWorking) {
+        this.lastWorkingIndicatorTimestamp = now;
+      }
+
       if (patternResult.isWorking && !this.isResizeSuppressed(now)) {
         this.becomeBusyFromPattern(patternResult.confidence, now);
       }
@@ -376,6 +382,7 @@ export class ActivityMonitor {
     this.workingHoldUntil = 0;
     this.lastDataTimestamp = 0;
     this.lastOutputActivityAt = 0;
+    this.lastWorkingIndicatorTimestamp = 0;
     this.promptStableSince = 0;
   }
 
@@ -735,6 +742,15 @@ export class ActivityMonitor {
       }
 
       if (this.lastPatternResult?.isWorking) {
+        this.resetDebounceTimer();
+        return;
+      }
+
+      if (
+        this.lastWorkingIndicatorTimestamp > 0 &&
+        Date.now() - this.lastWorkingIndicatorTimestamp <
+          this.WORKING_INDICATOR_TTL_MS
+      ) {
         this.resetDebounceTimer();
         return;
       }

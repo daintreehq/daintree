@@ -887,6 +887,49 @@ describe("ActivityMonitor", () => {
 
       monitor.dispose();
     });
+
+    it("should not transition to idle mid-stream when pattern buffer evicts working indicator (Issue #3540)", () => {
+      const onStateChange = vi.fn();
+      const monitor = new ActivityMonitor("test-1", 1000, onStateChange, {
+        patternConfig: {
+          primaryPatterns: [/esc to interrupt/i],
+        },
+      });
+
+      // Go busy via input
+      monitor.onInput("\r");
+      expect(onStateChange).toHaveBeenCalledTimes(1);
+      expect(onStateChange).toHaveBeenCalledWith("test-1", 1000, "busy", {
+        trigger: "input",
+      });
+
+      // Send data containing the working indicator — stamps lastWorkingIndicatorTimestamp
+      monitor.onData("\nesc to interrupt\n");
+      vi.advanceTimersByTime(500);
+
+      // Send a large data burst (>2000 chars) that evicts the working indicator from the pattern buffer
+      monitor.onData("x".repeat(3000));
+      vi.advanceTimersByTime(500);
+
+      // Pattern buffer no longer contains "esc to interrupt", so lastPatternResult.isWorking is false.
+      // Without the fix, the next debounce firing would transition to idle.
+      // Wait for the debounce to fire (2500ms from last data)
+      vi.advanceTimersByTime(2500);
+
+      // With the fix: TTL guard keeps the timer alive because lastWorkingIndicatorTimestamp
+      // is within WORKING_INDICATOR_TTL_MS (5000ms)
+      expect(onStateChange).toHaveBeenCalledTimes(1); // still only the initial busy
+
+      // Now wait long enough for the TTL to expire (5000ms total from when indicator was last seen)
+      // The indicator was seen at ~t=0+small offset. We've advanced ~3500ms so far.
+      // Advance another 5000ms to ensure TTL expires and the debounce fires without extension.
+      vi.advanceTimersByTime(5000);
+
+      expect(onStateChange).toHaveBeenCalledTimes(2);
+      expect(onStateChange).toHaveBeenNthCalledWith(2, "test-1", 1000, "idle");
+
+      monitor.dispose();
+    });
   });
 
   describe("Mixed input and output activity", () => {
