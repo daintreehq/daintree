@@ -585,11 +585,13 @@ export async function hydrateAppState(
 
         if (!checkCurrent()) return;
 
-        // Restore any orphaned backend terminals not in saved state (append at end)
-        // Filter out the startup "default" terminal when it has no project attribution —
-        // it would be incorrectly added to new projects that have no saved state.
+        // Restore any orphaned backend terminals not in saved state (append at end).
+        // When no panels were saved (brand-new project), skip the startup "default"
+        // terminal — its projectId may have been backfilled by TerminalRegistry's
+        // lastKnownProjectId fallback, incorrectly attributing it to the new project.
+        const hasSavedPanels = appState.terminals && appState.terminals.length > 0;
         const orphanedTerminals = Array.from(backendTerminalMap.values()).filter(
-          (t) => !(t.id === "default" && !t.projectId)
+          (t) => !(t.id === "default" && !hasSavedPanels)
         );
         if (orphanedTerminals.length > 0) {
           logHydrationInfo(
