@@ -18,9 +18,7 @@ export function registerProjectCrudHandlers(deps: HandlerDependencies): () => vo
   const { mainWindow } = deps;
   const handlers: Array<() => void> = [];
 
-  // Pass deps directly so ProjectSwitchService sees late-init services
-  // (worktreeService, eventBuffer) when they become available.
-  const projectSwitchService = new ProjectSwitchService(deps);
+  const projectSwitchService = deps.projectSwitchService ?? new ProjectSwitchService(deps);
 
   const handleProjectGetAll = async () => {
     return projectStore.getAllProjects();

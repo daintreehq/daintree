@@ -25,6 +25,7 @@ import { SidecarManager } from "../services/SidecarManager.js";
 import { EventBuffer } from "../services/EventBuffer.js";
 import { CHANNELS } from "../ipc/channels.js";
 import { createApplicationMenu, handleDirectoryOpen } from "../menu.js";
+import { ProjectSwitchService } from "../services/ProjectSwitchService.js";
 import { projectStore } from "../services/ProjectStore.js";
 import { taskQueueService } from "../services/TaskQueueService.js";
 import { store } from "../store.js";
@@ -84,6 +85,7 @@ let agentVersionService: AgentVersionService | null = null;
 let agentUpdateHandler: AgentUpdateHandler | null = null;
 let sidecarManager: SidecarManager | null = null;
 let projectMcpManager: ProjectMcpManager | null = null;
+let projectSwitchService: ProjectSwitchService | null = null;
 let cleanupIpcHandlers: (() => void) | null = null;
 let cleanupErrorHandlers: (() => void) | null = null;
 let eventBuffer: EventBuffer | null = null;
@@ -106,6 +108,9 @@ export function getWorkspaceClientRef(): WorkspaceClient | null {
 }
 export function getProjectMcpManagerRef(): ProjectMcpManager | null {
   return projectMcpManager;
+}
+export function getProjectSwitchServiceRef(): ProjectSwitchService | null {
+  return projectSwitchService;
 }
 export function getCliAvailabilityServiceRef(): CliAvailabilityService | null {
   return cliAvailabilityService;
@@ -185,7 +190,7 @@ async function initializeDeferredServices(
     cliService.checkAvailability().then((availability) => {
       console.log("[MAIN] CLI availability checked:", availability);
       console.log("[MAIN] Rebuilding menu with agent availability...");
-      createApplicationMenu(window, cliService);
+      createApplicationMenu(window, cliService, projectSwitchService ?? undefined);
       return availability;
     }),
   ]);
@@ -312,7 +317,7 @@ export async function setupWindowServices(
   // Menu & Notifications
   console.log("[MAIN] Creating application menu (initial, no agent availability yet)...");
   cliAvailabilityService = new CliAvailabilityService();
-  createApplicationMenu(win, cliAvailabilityService);
+  createApplicationMenu(win, cliAvailabilityService, undefined);
 
   notificationService.initialize(win);
   agentNotificationService.initialize();
@@ -381,6 +386,10 @@ export async function setupWindowServices(
     projectMcpManager: projectMcpManager ?? undefined,
     isDemoMode,
   };
+
+  projectSwitchService = new ProjectSwitchService(handlerDeps);
+  handlerDeps.projectSwitchService = projectSwitchService;
+
   cleanupIpcHandlers = registerIpcHandlers(handlerDeps);
 
   // Wait for pty-host before workspace-host
@@ -484,16 +493,21 @@ export async function setupWindowServices(
     initializeTaskOrchestrator(ptyClient, agentRouter);
     console.log("[MAIN] TaskOrchestrator initialized");
 
-    console.log("[MAIN] Spawning default terminal...");
-    try {
-      ptyClient.spawn(DEFAULT_TERMINAL_ID, {
-        cwd: os.homedir(),
-        cols: 80,
-        rows: 30,
-        projectId: currentProjectId ?? undefined,
-      });
-    } catch (error) {
-      console.error("[MAIN] Failed to spawn default terminal:", error);
+    const pendingCliPath = extractCliPath(process.argv) ?? getPendingCliPath();
+    if (pendingCliPath) {
+      console.log("[MAIN] CLI path pending, skipping default terminal spawn");
+    } else {
+      console.log("[MAIN] Spawning default terminal...");
+      try {
+        ptyClient.spawn(DEFAULT_TERMINAL_ID, {
+          cwd: os.homedir(),
+          cols: 80,
+          rows: 30,
+          projectId: currentProjectId ?? undefined,
+        });
+      } catch (error) {
+        console.error("[MAIN] Failed to spawn default terminal:", error);
+      }
     }
   } else {
     console.warn("[MAIN] PTY service unavailable - skipping terminal setup");
@@ -626,9 +640,12 @@ export async function setupWindowServices(
   if (cliPath) {
     setPendingCliPath(null);
     console.log("[MAIN] Opening CLI path from launch args:", cliPath);
-    handleDirectoryOpen(cliPath, win, cliAvailabilityService ?? undefined).catch((err) =>
-      console.error("[MAIN] Failed to open CLI path:", err)
-    );
+    handleDirectoryOpen(
+      cliPath,
+      win,
+      cliAvailabilityService ?? undefined,
+      projectSwitchService ?? undefined
+    ).catch((err) => console.error("[MAIN] Failed to open CLI path:", err));
   }
 
   // Performance monitors
