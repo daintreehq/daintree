@@ -6,6 +6,7 @@ import { actionService } from "@/services/ActionService";
 import { detectPrefixFromIssue, buildBranchName } from "@/components/Worktree/branchPrefixUtils";
 import { generateBranchSlug } from "@/utils/textParsing";
 import { notify } from "@/lib/notify";
+import { useWorktreeDataStore } from "@/store/worktreeDataStore";
 import { RecipePicker } from "./RecipePicker";
 import type { GitHubIssue } from "@shared/types/github";
 
@@ -52,12 +53,29 @@ export function IssueBulkActionBar({ selectedIssues, onClear }: IssueBulkActionB
     failed: 0,
   });
   const queueRef = useRef<PQueue | null>(null);
+  const runIdRef = useRef(0);
 
   const executeBulkCreate = useCallback(
     async (recipeId: string | null) => {
-      const issues = selectedIssues.filter((i) => i.state === "OPEN");
-      if (issues.length === 0) return;
+      // Filter to open issues without existing worktrees
+      const worktrees = useWorktreeDataStore.getState().worktrees;
+      const issuesWithWorktree = new Set<number>();
+      for (const wt of worktrees.values()) {
+        if (wt.issueNumber) issuesWithWorktree.add(wt.issueNumber);
+      }
+      const issues = selectedIssues.filter(
+        (i) => i.state === "OPEN" && !issuesWithWorktree.has(i.number)
+      );
+      if (issues.length === 0) {
+        notify({
+          type: "info",
+          title: "Nothing to Create",
+          message: "All selected issues already have worktrees or are closed",
+        });
+        return;
+      }
 
+      const currentRunId = ++runIdRef.current;
       dispatchProgress({ type: "START", total: issues.length });
 
       const queue = new PQueue({ concurrency: 4 });
@@ -67,6 +85,9 @@ export function IssueBulkActionBar({ selectedIssues, onClear }: IssueBulkActionB
 
       for (const issue of issues) {
         void queue.add(async () => {
+          // Skip state updates if this run was dismissed
+          if (runIdRef.current !== currentRunId) return;
+
           try {
             const prefix = detectPrefixFromIssue(issue) ?? "feature";
             const slug = generateBranchSlug(issue.title);
@@ -83,6 +104,8 @@ export function IssueBulkActionBar({ selectedIssues, onClear }: IssueBulkActionB
               { source: "user", confirmed: true }
             );
 
+            if (runIdRef.current !== currentRunId) return;
+
             if (result.ok) {
               succeeded++;
               dispatchProgress({ type: "COMPLETED" });
@@ -91,6 +114,7 @@ export function IssueBulkActionBar({ selectedIssues, onClear }: IssueBulkActionB
               dispatchProgress({ type: "FAILED" });
             }
           } catch {
+            if (runIdRef.current !== currentRunId) return;
             failed++;
             dispatchProgress({ type: "FAILED" });
           }
@@ -98,6 +122,7 @@ export function IssueBulkActionBar({ selectedIssues, onClear }: IssueBulkActionB
       }
 
       await queue.onIdle();
+      if (runIdRef.current !== currentRunId) return;
       queueRef.current = null;
       dispatchProgress({ type: "DONE" });
 
@@ -128,6 +153,7 @@ export function IssueBulkActionBar({ selectedIssues, onClear }: IssueBulkActionB
 
   const handleDismiss = useCallback(() => {
     if (progress.phase === "executing") {
+      runIdRef.current++; // Invalidate in-flight tasks
       queueRef.current?.clear();
       queueRef.current = null;
     }
