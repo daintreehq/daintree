@@ -5,6 +5,7 @@ import { resolve } from "path";
 const CARD_PATH = resolve(__dirname, "../ProjectPulseCard.tsx");
 const SUMMARY_PATH = resolve(__dirname, "../PulseSummary.tsx");
 const HEATMAP_PATH = resolve(__dirname, "../PulseHeatmap.tsx");
+const ATTENTION_BAR_PATH = resolve(__dirname, "../AttentionBar.tsx");
 
 describe("ProjectPulseCard — visual contrast (issue #2645)", () => {
   it("card shell uses bg-canopy-sidebar for consistent card styling", async () => {
@@ -79,6 +80,30 @@ describe("PulseSummary — visual contrast (issue #2645)", () => {
     const content = await readFile(SUMMARY_PATH, "utf-8");
     expect(content).toContain("text-status-success/80");
     expect(content).toContain("text-status-error/80");
+  });
+});
+
+describe("AttentionBar — styling and overflow (issue #3381)", () => {
+  it("uses min-w-0 to prevent overflow", async () => {
+    const content = await readFile(ATTENTION_BAR_PATH, "utf-8");
+    expect(content).toContain("min-w-0");
+  });
+
+  it("uses whitespace-nowrap on item labels", async () => {
+    const content = await readFile(ATTENTION_BAR_PATH, "utf-8");
+    expect(content).toContain("whitespace-nowrap");
+  });
+
+  it("returns null when no items exist", async () => {
+    const content = await readFile(ATTENTION_BAR_PATH, "utf-8");
+    expect(content).toContain("return null");
+  });
+
+  it("does not use opacity tokens below the /55 floor", async () => {
+    const content = await readFile(ATTENTION_BAR_PATH, "utf-8");
+    expect(content).not.toContain("text-canopy-text/40");
+    expect(content).not.toContain("text-canopy-text/30");
+    expect(content).not.toContain("text-canopy-text/50");
   });
 });
 

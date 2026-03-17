@@ -6,6 +6,7 @@ import { cn } from "@/lib/utils";
 import { Loader2, AlertCircle, RefreshCw, Activity, GitBranch } from "lucide-react";
 import { PulseHeatmap } from "./PulseHeatmap";
 import { PulseSummary } from "./PulseSummary";
+import { AttentionBar } from "./AttentionBar";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -217,6 +218,7 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
       </div>
 
       <div className="p-4 space-y-4">
+        <AttentionBar />
         <PulseHeatmap cells={pulse.heatmap} rangeDays={pulse.rangeDays} />
 
         <p className="text-xs text-canopy-text/80 italic">{getCoachLine(pulse)}</p>

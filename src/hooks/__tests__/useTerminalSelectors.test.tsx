@@ -15,7 +15,7 @@ vi.mock("@/store/worktreeDataStore", () => ({
   useWorktreeDataStore: useWorktreeDataStoreMock,
 }));
 
-import { useTerminalNotificationCounts } from "../useTerminalSelectors";
+import { useTerminalNotificationCounts, useConflictedWorktrees } from "../useTerminalSelectors";
 
 function setupEmptyWorktrees() {
   useWorktreeDataStoreMock.mockImplementation(
@@ -311,5 +311,87 @@ describe("useTerminalSelectors", () => {
       expect(result.current.waitingCount).toBe(0);
       expect(result.current.failedCount).toBe(0);
     });
+  });
+});
+
+function setupWorktreesWithChanges(
+  worktrees: Array<{
+    id: string;
+    worktreeId?: string;
+    worktreeChanges?: { changes: Array<{ status: string }> } | null;
+  }>
+) {
+  const map = new Map<string, (typeof worktrees)[0]>();
+  for (const wt of worktrees) {
+    map.set(wt.id, wt);
+  }
+  useWorktreeDataStoreMock.mockImplementation(
+    (selector: (state: { worktrees: typeof map }) => unknown) => selector({ worktrees: map })
+  );
+}
+
+describe("useConflictedWorktrees", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("returns empty array when no worktrees exist", () => {
+    setupWorktreesWithChanges([]);
+
+    const { result } = renderHook(() => useConflictedWorktrees());
+    expect(result.current).toEqual([]);
+  });
+
+  it("returns empty array when worktreeChanges is null", () => {
+    setupWorktreesWithChanges([{ id: "wt-1", worktreeChanges: null }]);
+
+    const { result } = renderHook(() => useConflictedWorktrees());
+    expect(result.current).toEqual([]);
+  });
+
+  it("returns empty array when changes have no conflicted files", () => {
+    setupWorktreesWithChanges([
+      {
+        id: "wt-1",
+        worktreeChanges: { changes: [{ status: "modified" }, { status: "added" }] },
+      },
+    ]);
+
+    const { result } = renderHook(() => useConflictedWorktrees());
+    expect(result.current).toEqual([]);
+  });
+
+  it("returns worktree with conflicted files", () => {
+    setupWorktreesWithChanges([
+      {
+        id: "wt-1",
+        worktreeChanges: { changes: [{ status: "conflicted" }] },
+      },
+    ]);
+
+    const { result } = renderHook(() => useConflictedWorktrees());
+    expect(result.current).toHaveLength(1);
+    expect(result.current[0].id).toBe("wt-1");
+  });
+
+  it("returns only conflicted worktrees from a mixed set", () => {
+    setupWorktreesWithChanges([
+      {
+        id: "wt-clean",
+        worktreeChanges: { changes: [{ status: "modified" }] },
+      },
+      {
+        id: "wt-conflict",
+        worktreeChanges: { changes: [{ status: "modified" }, { status: "conflicted" }] },
+      },
+      {
+        id: "wt-empty",
+        worktreeChanges: { changes: [] },
+      },
+    ]);
+
+    const { result } = renderHook(() => useConflictedWorktrees());
+    expect(result.current).toHaveLength(1);
+    expect(result.current[0].id).toBe("wt-conflict");
   });
 });
