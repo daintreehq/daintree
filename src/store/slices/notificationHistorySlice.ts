@@ -43,7 +43,8 @@ const MAX_ENTRIES = 200;
 interface NotificationHistoryState {
   entries: NotificationHistoryEntry[];
   unreadCount: number;
-  addEntry: (entry: AddEntryInput) => void;
+  addEntry: (entry: AddEntryInput) => string;
+  markUnseenAsToast: (id: string) => void;
   dismissEntry: (id: string) => void;
   clearAll: () => void;
   markAllRead: () => void;
@@ -72,7 +73,18 @@ export const useNotificationHistoryStore = create<NotificationHistoryState>((set
       const unreadCount = updated.filter((e) => !e.seenAsToast && e.countable !== false).length;
       return { entries: updated, unreadCount };
     });
+    return newEntry.id;
   },
+  markUnseenAsToast: (id) =>
+    set((state) => {
+      const entry = state.entries.find((e) => e.id === id);
+      if (!entry || !entry.seenAsToast) return state;
+      const entries = state.entries.map((e) => (e.id === id ? { ...e, seenAsToast: false } : e));
+      return {
+        entries,
+        unreadCount: entries.filter((e) => !e.seenAsToast && e.countable !== false).length,
+      };
+    }),
   dismissEntry: (id) =>
     set((state) => {
       const entries = state.entries.filter((e) => e.id !== id);

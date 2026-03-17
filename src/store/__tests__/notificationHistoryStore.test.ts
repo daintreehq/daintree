@@ -283,6 +283,78 @@ describe("notificationHistorySlice", () => {
     });
   });
 
+  describe("addEntry return value", () => {
+    it("returns the id of the newly created entry", () => {
+      const id = getState().addEntry({
+        type: "info",
+        message: "test",
+      });
+      expect(typeof id).toBe("string");
+      expect(id.length).toBeGreaterThan(0);
+      expect(getState().entries[0].id).toBe(id);
+    });
+  });
+
+  describe("markUnseenAsToast", () => {
+    it("sets seenAsToast to false on a seen entry", () => {
+      const id = getState().addEntry({
+        type: "info",
+        message: "seen",
+        seenAsToast: true,
+      });
+      expect(getState().entries[0].seenAsToast).toBe(true);
+      getState().markUnseenAsToast(id);
+      expect(getState().entries[0].seenAsToast).toBe(false);
+    });
+
+    it("increments unreadCount when marking seen entry as unseen", () => {
+      const id = getState().addEntry({
+        type: "info",
+        message: "seen",
+        seenAsToast: true,
+      });
+      expect(getState().unreadCount).toBe(0);
+      getState().markUnseenAsToast(id);
+      expect(getState().unreadCount).toBe(1);
+    });
+
+    it("is a no-op when entry is already unseen", () => {
+      const id = getState().addEntry({
+        type: "info",
+        message: "unseen",
+        seenAsToast: false,
+      });
+      expect(getState().unreadCount).toBe(1);
+      const before = getState().entries[0];
+      getState().markUnseenAsToast(id);
+      const after = getState().entries[0];
+      expect(after).toBe(before);
+      expect(getState().unreadCount).toBe(1);
+    });
+
+    it("is a no-op when id does not exist", () => {
+      addEntry({ message: "test" });
+      const before = getState();
+      getState().markUnseenAsToast("nonexistent-id");
+      const after = getState();
+      expect(after.entries).toBe(before.entries);
+      expect(after.unreadCount).toBe(before.unreadCount);
+    });
+
+    it("does not affect other entries", () => {
+      getState().addEntry({ type: "info", message: "other", seenAsToast: true });
+      const targetId = getState().addEntry({
+        type: "info",
+        message: "target",
+        seenAsToast: true,
+      });
+      getState().markUnseenAsToast(targetId);
+      const entries = getState().entries;
+      expect(entries.find((e) => e.id === targetId)?.seenAsToast).toBe(false);
+      expect(entries.find((e) => e.id !== targetId)?.seenAsToast).toBe(true);
+    });
+  });
+
   describe("dismissEntry", () => {
     it("removes the entry and decrements unreadCount when entry is unread", () => {
       addEntry({ message: "missed" });

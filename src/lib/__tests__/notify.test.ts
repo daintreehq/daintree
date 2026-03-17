@@ -387,6 +387,57 @@ describe("notify()", () => {
     });
   });
 
+  describe("toast cap — displaced notifications become unread in history", () => {
+    it("caps visible toasts at 3 when adding 4 focused high-priority notifications", () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      notify({ type: "info", message: "toast-1", priority: "high" });
+      notify({ type: "info", message: "toast-2", priority: "high" });
+      notify({ type: "info", message: "toast-3", priority: "high" });
+      notify({ type: "info", message: "toast-4", priority: "high" });
+
+      const notifications = useNotificationStore.getState().notifications;
+      const active = notifications.filter((n) => !n.dismissed);
+      expect(active).toHaveLength(3);
+    });
+
+    it("marks displaced toast's history entry as unread", () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      notify({ type: "info", message: "toast-1", priority: "high" });
+
+      const firstEntry = useNotificationHistoryStore.getState().entries[0];
+      expect(firstEntry.seenAsToast).toBe(true);
+
+      notify({ type: "info", message: "toast-2", priority: "high" });
+      notify({ type: "info", message: "toast-3", priority: "high" });
+      notify({ type: "info", message: "toast-4", priority: "high" });
+
+      const updatedEntry = useNotificationHistoryStore
+        .getState()
+        .entries.find((e) => e.id === firstEntry.id);
+      expect(updatedEntry?.seenAsToast).toBe(false);
+    });
+
+    it("increments unreadCount when a toast is displaced", () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      notify({ type: "info", message: "toast-1", priority: "high" });
+      notify({ type: "info", message: "toast-2", priority: "high" });
+      notify({ type: "info", message: "toast-3", priority: "high" });
+      expect(useNotificationHistoryStore.getState().unreadCount).toBe(0);
+
+      notify({ type: "info", message: "toast-4", priority: "high" });
+      expect(useNotificationHistoryStore.getState().unreadCount).toBe(1);
+    });
+
+    it("does not cap grid-bar notifications", () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      for (let i = 0; i < 5; i++) {
+        notify({ type: "info", message: `grid-${i}`, placement: "grid-bar" });
+      }
+      const active = useNotificationStore.getState().notifications.filter((n) => !n.dismissed);
+      expect(active).toHaveLength(5);
+    });
+  });
+
   describe("coalescing — merges rapid toasts with the same key", () => {
     const makeCoalescePayload = (key = "agent:completed", message = "Agent done") => ({
       type: "success" as const,
