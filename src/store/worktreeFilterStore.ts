@@ -275,11 +275,15 @@ export const useWorktreeFilterStore = create<WorktreeFilterStore>()(
       }),
       merge: (persisted, current) => {
         const p = persisted as PersistedState | undefined;
+        const groupByType = p?.groupByType ?? false;
+        const rawOrderBy = p?.orderBy ?? "created";
+        // Normalize invalid combination: manual + groupByType
+        const orderBy = groupByType && rawOrderBy === "manual" ? "created" : rawOrderBy;
         return {
           ...current,
           query: p?.query ?? "",
-          orderBy: p?.orderBy ?? "created",
-          groupByType: p?.groupByType ?? false,
+          orderBy,
+          groupByType,
           statusFilters: new Set(p?.statusFilters ?? []),
           typeFilters: new Set(p?.typeFilters ?? []),
           githubFilters: new Set(p?.githubFilters ?? []),

@@ -665,44 +665,48 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
             ) : (
               <SortableContext items={sortableIds} strategy={verticalListSortingStrategy}>
                 <div className="flex flex-col">
-                  {filteredWorktrees.map((worktree) => (
-                    <SortableWorktreeCard
-                      key={worktree.id}
-                      worktreeId={worktree.id}
-                      dragStartOrder={dragStartOrder}
-                      disabled={isSortDisabled}
-                    >
-                      {({
-                        sortableRef,
-                        isDraggingSort,
-                        dragHandleListeners,
-                        dragHandleActivatorRef,
-                      }) => (
-                        <WorktreeCard
-                          worktree={worktree}
-                          isActive={worktree.id === activeWorktreeId}
-                          isFocused={worktree.id === focusedWorktreeId}
-                          isSingleWorktree={worktrees.length === 1}
-                          onSelect={() => selectWorktree(worktree.id)}
-                          onCopyTree={() => worktreeActions.handleCopyTree(worktree)}
-                          onOpenEditor={() => worktreeActions.handleOpenEditor(worktree)}
-                          onSaveLayout={() => worktreeActions.handleSaveLayout(worktree)}
-                          onLaunchAgent={(type) =>
-                            worktreeActions.handleLaunchAgent(worktree.id, type)
-                          }
-                          agentAvailability={availability}
-                          agentSettings={agentSettings}
-                          homeDir={homeDir}
-                          sortableRef={sortableRef}
-                          dragHandleListeners={isSortDisabled ? undefined : dragHandleListeners}
-                          dragHandleActivatorRef={
-                            isSortDisabled ? undefined : dragHandleActivatorRef
-                          }
-                          isDraggingSort={isDraggingSort}
-                        />
-                      )}
-                    </SortableWorktreeCard>
-                  ))}
+                  {filteredWorktrees.map((worktree) => {
+                    const isPinned = pinnedWorktrees.includes(worktree.id);
+                    const showDragHandle = !isSortDisabled && !isPinned;
+                    return (
+                      <SortableWorktreeCard
+                        key={worktree.id}
+                        worktreeId={worktree.id}
+                        dragStartOrder={dragStartOrder}
+                        disabled={isSortDisabled || isPinned}
+                      >
+                        {({
+                          sortableRef,
+                          isDraggingSort,
+                          dragHandleListeners,
+                          dragHandleActivatorRef,
+                        }) => (
+                          <WorktreeCard
+                            worktree={worktree}
+                            isActive={worktree.id === activeWorktreeId}
+                            isFocused={worktree.id === focusedWorktreeId}
+                            isSingleWorktree={worktrees.length === 1}
+                            onSelect={() => selectWorktree(worktree.id)}
+                            onCopyTree={() => worktreeActions.handleCopyTree(worktree)}
+                            onOpenEditor={() => worktreeActions.handleOpenEditor(worktree)}
+                            onSaveLayout={() => worktreeActions.handleSaveLayout(worktree)}
+                            onLaunchAgent={(type) =>
+                              worktreeActions.handleLaunchAgent(worktree.id, type)
+                            }
+                            agentAvailability={availability}
+                            agentSettings={agentSettings}
+                            homeDir={homeDir}
+                            sortableRef={sortableRef}
+                            dragHandleListeners={showDragHandle ? dragHandleListeners : undefined}
+                            dragHandleActivatorRef={
+                              showDragHandle ? dragHandleActivatorRef : undefined
+                            }
+                            isDraggingSort={isDraggingSort}
+                          />
+                        )}
+                      </SortableWorktreeCard>
+                    );
+                  })}
                 </div>
               </SortableContext>
             )}
