@@ -100,6 +100,11 @@ import { OnboardingFlow } from "./components/Onboarding/OnboardingFlow";
 import { GettingStartedChecklist } from "./components/Onboarding/GettingStartedChecklist";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { DndProvider } from "./components/DragDrop";
+import { SortableContext, verticalListSortingStrategy } from "@dnd-kit/sortable";
+import {
+  SortableWorktreeCard,
+  getWorktreeSortDragId,
+} from "./components/DragDrop/SortableWorktreeCard";
 import {
   useTerminalStore,
   useWorktreeSelectionStore,
@@ -167,6 +172,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     alwaysShowActive,
     alwaysShowWaiting,
     pinnedWorktrees,
+    manualOrder,
   } = useWorktreeFilterStore(
     useShallow((state) => ({
       query: state.query,
@@ -180,6 +186,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
       alwaysShowActive: state.alwaysShowActive,
       alwaysShowWaiting: state.alwaysShowWaiting,
       pinnedWorktrees: state.pinnedWorktrees,
+      manualOrder: state.manualOrder,
     }))
   );
   const clearAllFilters = useWorktreeFilterStore((state) => state.clearAll);
@@ -221,6 +228,8 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     });
   }, [isRefreshing, startRefreshTransition]);
 
+  const setManualOrder = useWorktreeFilterStore((state) => state.setManualOrder);
+
   // Clean up stale pinned and collapsed worktrees
   useEffect(() => {
     const existingIds = new Set(worktrees.map((w) => w.id));
@@ -229,6 +238,16 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     const staleCollapsed = collapsedWorktrees.filter((id) => !existingIds.has(id));
     staleCollapsed.forEach((id) => expandWorktree(id));
   }, [worktrees, pinnedWorktrees, unpinWorktree, collapsedWorktrees, expandWorktree]);
+
+  // Clean up stale manual order entries
+  useEffect(() => {
+    if (manualOrder.length === 0) return;
+    const existingIds = new Set(worktrees.map((w) => w.id));
+    const cleaned = manualOrder.filter((id) => existingIds.has(id));
+    if (cleaned.length !== manualOrder.length) {
+      setManualOrder(cleaned);
+    }
+  }, [worktrees, manualOrder, setManualOrder]);
 
   // Compute derived metadata for each worktree
   const derivedMetaMap = useMemo(() => {
@@ -305,8 +324,8 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
 
     const hasQuery = query.trim().length > 0;
     const sorted = hasQuery
-      ? sortWorktreesByRelevance(filtered, query, orderBy, validPinnedWorktrees)
-      : sortWorktrees(filtered, orderBy, validPinnedWorktrees);
+      ? sortWorktreesByRelevance(filtered, query, orderBy, validPinnedWorktrees, manualOrder)
+      : sortWorktrees(filtered, orderBy, validPinnedWorktrees, manualOrder);
 
     if (isGroupedByType && !hasQuery) {
       return {
@@ -329,6 +348,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     alwaysShowActive,
     alwaysShowWaiting,
     pinnedWorktrees,
+    manualOrder,
     mainWorktree,
     integrationWorktree,
     derivedMetaMap,
@@ -448,6 +468,13 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     setRecipeEditorInitialTerminals(undefined);
   }, []);
 
+  const sortableIds = useMemo(
+    () => filteredWorktrees.map((w) => getWorktreeSortDragId(w.id)),
+    [filteredWorktrees]
+  );
+
+  const dragStartOrder = useMemo(() => filteredWorktrees.map((w) => w.id), [filteredWorktrees]);
+
   if (isLoading && worktrees.length === 0) {
     return (
       <div className="flex flex-col h-full">
@@ -526,6 +553,9 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   const visibleCount = hasFilters
     ? filteredWorktrees.length + (mainMatchesQuery ? 1 : 0) + (integrationMatchesQuery ? 1 : 0)
     : worktrees.length;
+
+  const hasQuery = query.trim().length > 0;
+  const isSortDisabled = isGroupedByType || hasQuery;
 
   const renderWorktreeCard = (worktree: WorktreeState) => (
     <WorktreeCard
@@ -633,7 +663,52 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
                 ))}
               </div>
             ) : (
-              <div className="flex flex-col">{filteredWorktrees.map(renderWorktreeCard)}</div>
+              <SortableContext items={sortableIds} strategy={verticalListSortingStrategy}>
+                <div className="flex flex-col">
+                  {filteredWorktrees.map((worktree) => {
+                    const isPinned = pinnedWorktrees.includes(worktree.id);
+                    const showDragHandle = !isSortDisabled && !isPinned;
+                    return (
+                      <SortableWorktreeCard
+                        key={worktree.id}
+                        worktreeId={worktree.id}
+                        dragStartOrder={dragStartOrder}
+                        disabled={isSortDisabled || isPinned}
+                      >
+                        {({
+                          sortableRef,
+                          isDraggingSort,
+                          dragHandleListeners,
+                          dragHandleActivatorRef,
+                        }) => (
+                          <WorktreeCard
+                            worktree={worktree}
+                            isActive={worktree.id === activeWorktreeId}
+                            isFocused={worktree.id === focusedWorktreeId}
+                            isSingleWorktree={worktrees.length === 1}
+                            onSelect={() => selectWorktree(worktree.id)}
+                            onCopyTree={() => worktreeActions.handleCopyTree(worktree)}
+                            onOpenEditor={() => worktreeActions.handleOpenEditor(worktree)}
+                            onSaveLayout={() => worktreeActions.handleSaveLayout(worktree)}
+                            onLaunchAgent={(type) =>
+                              worktreeActions.handleLaunchAgent(worktree.id, type)
+                            }
+                            agentAvailability={availability}
+                            agentSettings={agentSettings}
+                            homeDir={homeDir}
+                            sortableRef={sortableRef}
+                            dragHandleListeners={showDragHandle ? dragHandleListeners : undefined}
+                            dragHandleActivatorRef={
+                              showDragHandle ? dragHandleActivatorRef : undefined
+                            }
+                            isDraggingSort={isDraggingSort}
+                          />
+                        )}
+                      </SortableWorktreeCard>
+                    );
+                  })}
+                </div>
+              </SortableContext>
             )}
           </div>
         </div>

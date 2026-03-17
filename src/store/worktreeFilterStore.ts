@@ -2,7 +2,7 @@ import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import { createSafeJSONStorage } from "./persistence/safeStorage";
 
-export type OrderBy = "recent" | "created" | "alpha";
+export type OrderBy = "recent" | "created" | "alpha" | "manual";
 
 export type StatusFilter = "active" | "dirty" | "error" | "stale" | "idle";
 export type TypeFilter =
@@ -45,6 +45,7 @@ interface WorktreeFilterState {
   hideMainWorktree: boolean;
   pinnedWorktrees: string[];
   collapsedWorktrees: string[];
+  manualOrder: string[];
 }
 
 interface WorktreeFilterActions {
@@ -66,6 +67,7 @@ interface WorktreeFilterActions {
   expandWorktree: (id: string) => void;
   toggleWorktreeCollapsed: (id: string) => void;
   isWorktreeCollapsed: (id: string) => boolean;
+  setManualOrder: (order: string[]) => void;
   clearAll: () => void;
   getActiveFilterCount: () => number;
   hasActiveFilters: () => boolean;
@@ -87,6 +89,7 @@ interface PersistedState {
   hideMainWorktree: boolean;
   pinnedWorktrees: string[];
   collapsedWorktrees: string[];
+  manualOrder: string[];
 }
 
 export const useWorktreeFilterStore = create<WorktreeFilterStore>()(
@@ -105,10 +108,15 @@ export const useWorktreeFilterStore = create<WorktreeFilterStore>()(
       hideMainWorktree: false,
       pinnedWorktrees: [],
       collapsedWorktrees: [],
+      manualOrder: [],
 
       setQuery: (query) => set({ query }),
       setOrderBy: (orderBy) => set({ orderBy }),
-      setGroupByType: (enabled) => set({ groupByType: enabled }),
+      setGroupByType: (enabled) =>
+        set((state) => ({
+          groupByType: enabled,
+          orderBy: enabled && state.orderBy === "manual" ? "created" : state.orderBy,
+        })),
 
       toggleStatusFilter: (filter) =>
         set((state) => {
@@ -207,6 +215,8 @@ export const useWorktreeFilterStore = create<WorktreeFilterStore>()(
 
       isWorktreeCollapsed: (id) => get().collapsedWorktrees.includes(id),
 
+      setManualOrder: (order) => set({ manualOrder: order }),
+
       clearAll: () =>
         set({
           query: "",
@@ -261,14 +271,19 @@ export const useWorktreeFilterStore = create<WorktreeFilterStore>()(
         hideMainWorktree: state.hideMainWorktree,
         pinnedWorktrees: state.pinnedWorktrees,
         collapsedWorktrees: state.collapsedWorktrees,
+        manualOrder: state.manualOrder,
       }),
       merge: (persisted, current) => {
         const p = persisted as PersistedState | undefined;
+        const groupByType = p?.groupByType ?? false;
+        const rawOrderBy = p?.orderBy ?? "created";
+        // Normalize invalid combination: manual + groupByType
+        const orderBy = groupByType && rawOrderBy === "manual" ? "created" : rawOrderBy;
         return {
           ...current,
           query: p?.query ?? "",
-          orderBy: p?.orderBy ?? "created",
-          groupByType: p?.groupByType ?? false,
+          orderBy,
+          groupByType,
           statusFilters: new Set(p?.statusFilters ?? []),
           typeFilters: new Set(p?.typeFilters ?? []),
           githubFilters: new Set(p?.githubFilters ?? []),
@@ -279,6 +294,7 @@ export const useWorktreeFilterStore = create<WorktreeFilterStore>()(
           hideMainWorktree: p?.hideMainWorktree ?? false,
           pinnedWorktrees: p?.pinnedWorktrees ?? [],
           collapsedWorktrees: p?.collapsedWorktrees ?? [],
+          manualOrder: p?.manualOrder ?? [],
         };
       },
     }

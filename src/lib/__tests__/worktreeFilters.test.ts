@@ -863,6 +863,69 @@ describe("sortWorktrees", () => {
   });
 });
 
+describe("sortWorktrees manual order", () => {
+  it("sorts by manual order", () => {
+    const worktrees = [
+      createMockWorktree({ id: "1", name: "a" }),
+      createMockWorktree({ id: "2", name: "b" }),
+      createMockWorktree({ id: "3", name: "c" }),
+    ];
+    const sorted = sortWorktrees(worktrees, "manual", [], ["3", "1", "2"]);
+    expect(sorted.map((w) => w.id)).toEqual(["3", "1", "2"]);
+  });
+
+  it("appends worktrees not in manualOrder to the end", () => {
+    const worktrees = [
+      createMockWorktree({ id: "1", name: "a" }),
+      createMockWorktree({ id: "2", name: "b" }),
+      createMockWorktree({ id: "3", name: "c" }),
+    ];
+    const sorted = sortWorktrees(worktrees, "manual", [], ["2"]);
+    expect(sorted[0].id).toBe("2");
+    // remaining items sorted alphabetically as tiebreaker
+    expect(sorted.slice(1).map((w) => w.id)).toEqual(["1", "3"]);
+  });
+
+  it("ignores stale IDs in manualOrder", () => {
+    const worktrees = [
+      createMockWorktree({ id: "1", name: "a" }),
+      createMockWorktree({ id: "2", name: "b" }),
+    ];
+    const sorted = sortWorktrees(worktrees, "manual", [], ["99", "2", "1"]);
+    expect(sorted.map((w) => w.id)).toEqual(["2", "1"]);
+  });
+
+  it("respects main worktree precedence in manual mode", () => {
+    const worktrees = [
+      createMockWorktree({ id: "1", name: "feature" }),
+      createMockWorktree({ id: "2", name: "main", isMainWorktree: true }),
+    ];
+    const sorted = sortWorktrees(worktrees, "manual", [], ["1", "2"]);
+    expect(sorted[0].id).toBe("2"); // main always first
+  });
+
+  it("respects pinned worktree precedence in manual mode", () => {
+    const worktrees = [
+      createMockWorktree({ id: "1", name: "a" }),
+      createMockWorktree({ id: "2", name: "b" }),
+      createMockWorktree({ id: "3", name: "c" }),
+    ];
+    const sorted = sortWorktrees(worktrees, "manual", ["3"], ["1", "2", "3"]);
+    expect(sorted[0].id).toBe("3"); // pinned first
+    expect(sorted.slice(1).map((w) => w.id)).toEqual(["1", "2"]); // then manual order
+  });
+
+  it("falls back to name sort with empty manualOrder", () => {
+    const worktrees = [
+      createMockWorktree({ id: "1", name: "charlie" }),
+      createMockWorktree({ id: "2", name: "alpha" }),
+    ];
+    const sorted = sortWorktrees(worktrees, "manual", [], []);
+    // all items have same position (manualOrder.length = 0), tiebreaker is name
+    expect(sorted.map((w) => w.name)).toEqual(["alpha", "charlie"]);
+  });
+});
+
 describe("groupByType", () => {
   it("groups worktrees by type", () => {
     const worktrees = [

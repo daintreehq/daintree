@@ -34,7 +34,10 @@ import {
 import { useShallow } from "zustand/react/shallow";
 import { TerminalDragPreview } from "./TerminalDragPreview";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
+import { arrayMove } from "@dnd-kit/sortable";
 import { parseAccordionDragId } from "./SortableWorktreeTerminal";
+import { isWorktreeSortDragData, parseWorktreeSortDragId } from "./SortableWorktreeCard";
+import { useWorktreeFilterStore } from "@/store/worktreeFilterStore";
 
 // Placeholder ID used when dragging from dock to grid
 export const GRID_PLACEHOLDER_ID = "__grid-placeholder__";
@@ -247,7 +250,14 @@ export function DndProvider({ children }: DndProviderProps) {
     const { active } = event;
     const dragId = active.id as string;
 
+    // Skip terminal-specific logic for worktree-sort drags
+    if (isWorktreeSortDragData(active.data.current as Record<string, unknown> | undefined)) {
+      setActiveId(dragId);
+      return;
+    }
+
     const data = active.data.current as DragData | WorktreeDragData | undefined;
+
     const terminalId = data?.terminal?.id ?? parseAccordionDragId(dragId) ?? dragId;
 
     setActiveId(dragId);
@@ -272,6 +282,11 @@ export function DndProvider({ children }: DndProviderProps) {
     if (!over) {
       setOverContainer(null);
       setPlaceholderIndex(null);
+      return;
+    }
+
+    // Skip all container/placeholder logic for worktree-sort drags
+    if (isWorktreeSortDragData(active.data.current as Record<string, unknown> | undefined)) {
       return;
     }
 
@@ -359,6 +374,53 @@ export function DndProvider({ children }: DndProviderProps) {
   const handleDragEnd = useCallback(
     (event: DragEndEvent) => {
       const { active, over } = event;
+
+      // Handle worktree-sort drags before any terminal logic
+      const activeRawData = active.data.current as Record<string, unknown> | undefined;
+      if (isWorktreeSortDragData(activeRawData)) {
+        setActiveId(null);
+        setActiveData(null);
+
+        if (!over) return;
+
+        const activeWorktreeId = parseWorktreeSortDragId(String(active.id));
+        // over.id may be worktree-sort-{id} or worktree-drop-{id} (same DOM node)
+        const overId = String(over.id);
+        const overWorktreeId =
+          parseWorktreeSortDragId(overId) ??
+          (overId.startsWith("worktree-drop-") ? overId.slice("worktree-drop-".length) : null);
+        if (!activeWorktreeId || !overWorktreeId || activeWorktreeId === overWorktreeId) return;
+
+        const dragOrder = activeRawData.dragStartOrder as string[];
+        const oldIndex = dragOrder.indexOf(activeWorktreeId);
+        const newIndex = dragOrder.indexOf(overWorktreeId);
+        if (oldIndex === -1 || newIndex === -1) return;
+
+        const reorderedSubset = arrayMove(dragOrder, oldIndex, newIndex);
+
+        // Merge reordered subset back into full persisted order
+        // so that worktrees hidden by filters don't lose position
+        const fullOrder = useWorktreeFilterStore.getState().manualOrder;
+        const subsetSet = new Set(reorderedSubset);
+        const merged: string[] = [];
+        let subsetIdx = 0;
+        // Walk through the full order, replacing subset items in their new order
+        for (const id of fullOrder) {
+          if (subsetSet.has(id)) {
+            merged.push(reorderedSubset[subsetIdx++]);
+          } else {
+            merged.push(id);
+          }
+        }
+        // Append any subset items not in the full order (first drag or new items)
+        while (subsetIdx < reorderedSubset.length) {
+          merged.push(reorderedSubset[subsetIdx++]);
+        }
+
+        useWorktreeFilterStore.getState().setManualOrder(merged);
+        useWorktreeFilterStore.getState().setOrderBy("manual");
+        return;
+      }
 
       // Read fresh terminal list from store to avoid stale closures
       const terminals = useTerminalStore.getState().terminals;
@@ -799,10 +861,15 @@ export function DndProvider({ children }: DndProviderProps) {
   );
 
   const handleDragCancel = useCallback(() => {
-    const terminalId =
-      activeData?.terminal?.id ?? (activeId ? (parseAccordionDragId(activeId) ?? activeId) : null);
-    if (terminalId) {
-      terminalInstanceService.lockResize(terminalId, false);
+    // Skip terminal unlock for worktree-sort drags (no lock was acquired)
+    const isWorktreeSort = activeId ? parseWorktreeSortDragId(activeId) !== null : false;
+    if (!isWorktreeSort) {
+      const terminalId =
+        activeData?.terminal?.id ??
+        (activeId ? (parseAccordionDragId(activeId) ?? activeId) : null);
+      if (terminalId) {
+        terminalInstanceService.lockResize(terminalId, false);
+      }
     }
 
     // Clear any pending stabilization timers

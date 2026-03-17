@@ -67,6 +67,7 @@ export function WorktreeOverviewModal({
     alwaysShowActive,
     alwaysShowWaiting,
     pinnedWorktrees,
+    manualOrder,
   } = useWorktreeFilterStore(
     useShallow((state) => ({
       query: state.query,
@@ -80,6 +81,7 @@ export function WorktreeOverviewModal({
       alwaysShowActive: state.alwaysShowActive,
       alwaysShowWaiting: state.alwaysShowWaiting,
       pinnedWorktrees: state.pinnedWorktrees,
+      manualOrder: state.manualOrder,
     }))
   );
   const clearAllFilters = useWorktreeFilterStore((state) => state.clearAll);
@@ -197,7 +199,7 @@ export function WorktreeOverviewModal({
     const validPinnedWorktrees = pinnedWorktrees.filter((id) => existingWorktreeIds.has(id));
 
     // Sort worktrees
-    const sorted = sortWorktrees(filtered, orderBy, validPinnedWorktrees);
+    const sorted = sortWorktrees(filtered, orderBy, validPinnedWorktrees, manualOrder);
 
     // Group if enabled
     if (isGroupedByType) {
@@ -221,6 +223,7 @@ export function WorktreeOverviewModal({
     alwaysShowActive,
     alwaysShowWaiting,
     pinnedWorktrees,
+    manualOrder,
     derivedMetaMap,
     activeWorktreeId,
     hideMainWorktree,

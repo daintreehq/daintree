@@ -205,7 +205,8 @@ export function matchesFilters(
 export function sortWorktrees<T extends Worktree | WorktreeState>(
   worktrees: T[],
   orderBy: OrderBy,
-  pinnedWorktrees: string[] = []
+  pinnedWorktrees: string[] = [],
+  manualOrder: string[] = []
 ): T[] {
   const pinnedSet = new Set(pinnedWorktrees);
 
@@ -229,6 +230,15 @@ export function sortWorktrees<T extends Worktree | WorktreeState>(
 
     // Apply normal sorting to unpinned worktrees
     switch (orderBy) {
+      case "manual": {
+        const aIdx = manualOrder.indexOf(a.id);
+        const bIdx = manualOrder.indexOf(b.id);
+        // Items not in manualOrder go to the end
+        const aPos = aIdx === -1 ? manualOrder.length : aIdx;
+        const bPos = bIdx === -1 ? manualOrder.length : bIdx;
+        if (aPos !== bPos) return aPos - bPos;
+        return a.name.localeCompare(b.name);
+      }
       case "recent": {
         const timeA = Math.max(a.lastActivityTimestamp ?? 0, a.createdAt ?? 0);
         const timeB = Math.max(b.lastActivityTimestamp ?? 0, b.createdAt ?? 0);
@@ -253,9 +263,10 @@ export function sortWorktreesByRelevance<T extends Worktree | WorktreeState>(
   worktrees: T[],
   query: string,
   orderBy: OrderBy,
-  pinnedWorktrees: string[] = []
+  pinnedWorktrees: string[] = [],
+  manualOrder: string[] = []
 ): T[] {
-  const sorted = sortWorktrees(worktrees, orderBy, pinnedWorktrees);
+  const sorted = sortWorktrees(worktrees, orderBy, pinnedWorktrees, manualOrder);
   if (!query.trim()) return sorted;
 
   return [...sorted].sort((a, b) => {
