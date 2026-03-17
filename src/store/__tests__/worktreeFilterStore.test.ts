@@ -15,6 +15,7 @@ function resetWorktreeFilterStore() {
     alwaysShowWaiting: true,
     hideMainWorktree: false,
     pinnedWorktrees: [],
+    collapsedWorktrees: [],
   });
 }
 
@@ -86,5 +87,43 @@ describe("worktreeFilterStore", () => {
     useWorktreeFilterStore.getState().clearAll();
 
     expect(useWorktreeFilterStore.getState().alwaysShowWaiting).toBe(false);
+  });
+
+  it("does not duplicate collapsed worktree ids", () => {
+    useWorktreeFilterStore.getState().collapseWorktree("wt-1");
+    useWorktreeFilterStore.getState().collapseWorktree("wt-1");
+    useWorktreeFilterStore.getState().collapseWorktree("wt-2");
+
+    expect(useWorktreeFilterStore.getState().collapsedWorktrees).toEqual(["wt-1", "wt-2"]);
+  });
+
+  it("toggles collapse state on and off", () => {
+    const store = useWorktreeFilterStore.getState();
+    store.toggleWorktreeCollapsed("wt-1");
+    expect(useWorktreeFilterStore.getState().collapsedWorktrees).toEqual(["wt-1"]);
+
+    useWorktreeFilterStore.getState().toggleWorktreeCollapsed("wt-1");
+    expect(useWorktreeFilterStore.getState().collapsedWorktrees).toEqual([]);
+  });
+
+  it("expands a collapsed worktree", () => {
+    useWorktreeFilterStore.getState().collapseWorktree("wt-1");
+    useWorktreeFilterStore.getState().expandWorktree("wt-1");
+
+    expect(useWorktreeFilterStore.getState().collapsedWorktrees).toEqual([]);
+  });
+
+  it("reports correct isWorktreeCollapsed state", () => {
+    useWorktreeFilterStore.getState().collapseWorktree("wt-1");
+
+    expect(useWorktreeFilterStore.getState().isWorktreeCollapsed("wt-1")).toBe(true);
+    expect(useWorktreeFilterStore.getState().isWorktreeCollapsed("wt-2")).toBe(false);
+  });
+
+  it("does not reset collapsedWorktrees on clearAll", () => {
+    useWorktreeFilterStore.getState().collapseWorktree("wt-1");
+    useWorktreeFilterStore.getState().clearAll();
+
+    expect(useWorktreeFilterStore.getState().collapsedWorktrees).toEqual(["wt-1"]);
   });
 });

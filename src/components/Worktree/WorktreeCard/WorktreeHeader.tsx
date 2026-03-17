@@ -419,7 +419,7 @@ export function WorktreeHeader({
               onClick={onToggleCollapse}
               className="p-1 text-canopy-text/60 hover:text-text-primary hover:bg-overlay-soft rounded transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent"
               aria-expanded={!isCollapsed}
-              aria-controls={contentId}
+              aria-controls={isCollapsed ? undefined : contentId}
               aria-label={isCollapsed ? "Expand card" : "Collapse card"}
             >
               <ChevronRight
