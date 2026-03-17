@@ -70,7 +70,7 @@ import {
   createAutoSize,
 } from "./inputEditorExtensions";
 import { AttachmentTray } from "./AttachmentTray";
-import { getContextWindow, type TrayItem } from "./attachmentTrayUtils";
+import type { TrayItem } from "./attachmentTrayUtils";
 import { AppDialog } from "@/components/ui/AppDialog";
 
 import { useEditorCompartments } from "./hooks/useEditorCompartments";
@@ -283,6 +283,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
                 to: from + token.length,
                 filePath: file.path,
                 fileName: file.name,
+                fileSize: file.size,
               })
             );
           }
@@ -1220,12 +1221,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
               />
             </div>
           </div>
-          <AttachmentTray
-            items={attachments}
-            totalTokens={attachments.reduce((s, a) => s + a.tokenEstimate, 0)}
-            contextWindow={getContextWindow(agentId)}
-            onRemove={removeAttachment}
-          />
+          <AttachmentTray items={attachments} onRemove={removeAttachment} />
         </div>
       </div>
     );

@@ -1,22 +1,19 @@
 import { describe, it, expect } from "vitest";
-import {
-  normalizeChips,
-  buildSummaryLine,
-  getContextWindow,
-  isWarningUsage,
-} from "../attachmentTrayUtils";
+import { normalizeChips } from "../attachmentTrayUtils";
 
 describe("normalizeChips", () => {
   it("returns empty array for empty inputs", () => {
     expect(normalizeChips([], [])).toEqual([]);
   });
 
-  it("normalizes image entries with flat token estimate", () => {
-    const images = [{ from: 0, to: 5, filePath: "/tmp/img.png", thumbnailUrl: "" }];
+  it("normalizes image entries with thumbnailUrl", () => {
+    const images = [
+      { from: 0, to: 5, filePath: "/tmp/img.png", thumbnailUrl: "data:image/png;base64,abc" },
+    ];
     const result = normalizeChips(images, []);
     expect(result).toHaveLength(1);
     expect(result[0].kind).toBe("image");
-    expect(result[0].tokenEstimate).toBe(1000);
+    expect(result[0].thumbnailUrl).toBe("data:image/png;base64,abc");
     expect(result[0].label).toBe("Screenshot");
   });
 
@@ -27,101 +24,39 @@ describe("normalizeChips", () => {
     expect(result[0].label).toBe("Screenshot 14:30");
   });
 
-  it("normalizes file entries with flat token estimate", () => {
-    const files = [{ from: 0, to: 5, filePath: "/tmp/code.ts", fileName: "code.ts" }];
+  it("normalizes file entries with fileSize", () => {
+    const files = [{ from: 0, to: 5, fileName: "code.ts", fileSize: 2048 }];
     const result = normalizeChips([], files);
     expect(result).toHaveLength(1);
     expect(result[0].kind).toBe("file");
-    expect(result[0].tokenEstimate).toBe(500);
+    expect(result[0].fileSize).toBe(2048);
     expect(result[0].label).toBe("code.ts");
+  });
+
+  it("handles file entries without fileSize", () => {
+    const files = [{ from: 0, to: 5, fileName: "code.ts" }];
+    const result = normalizeChips([], files);
+    expect(result).toHaveLength(1);
+    expect(result[0].fileSize).toBeUndefined();
+  });
+
+  it("preserves fileSize of zero", () => {
+    const files = [{ from: 0, to: 5, fileName: "empty.txt", fileSize: 0 }];
+    const result = normalizeChips([], files);
+    expect(result[0].fileSize).toBe(0);
   });
 
   it("combines all chip types", () => {
     const images = [{ from: 0, to: 5, filePath: "/img.png", thumbnailUrl: "" }];
-    const files = [{ from: 10, to: 15, filePath: "/code.ts", fileName: "code.ts" }];
+    const files = [{ from: 10, to: 15, fileName: "code.ts", fileSize: 1234 }];
     const result = normalizeChips(images, files);
     expect(result).toHaveLength(2);
   });
 
   it("sorts items by document position", () => {
     const images = [{ from: 20, to: 25, filePath: "/img.png", thumbnailUrl: "" }];
-    const files = [{ from: 0, to: 5, filePath: "/code.ts", fileName: "code.ts" }];
+    const files = [{ from: 0, to: 5, fileName: "code.ts" }];
     const result = normalizeChips(images, files);
     expect(result.map((r) => r.kind)).toEqual(["file", "image"]);
-  });
-});
-
-describe("buildSummaryLine", () => {
-  it("shows single image correctly", () => {
-    const items = [
-      {
-        id: "img-0-5",
-        kind: "image" as const,
-        label: "Screenshot",
-        tokenEstimate: 1000,
-        from: 0,
-        to: 5,
-      },
-    ];
-    expect(buildSummaryLine(items)).toBe("1 image \u00b7 ~1,000 tokens");
-  });
-
-  it("pluralizes correctly", () => {
-    const items = [
-      { id: "f-0-5", kind: "file" as const, label: "a.ts", tokenEstimate: 500, from: 0, to: 5 },
-      { id: "f-10-15", kind: "file" as const, label: "b.ts", tokenEstimate: 500, from: 10, to: 15 },
-    ];
-    expect(buildSummaryLine(items)).toBe("2 files \u00b7 ~1,000 tokens");
-  });
-
-  it("joins multiple categories with middle dot", () => {
-    const items = [
-      {
-        id: "img-0-5",
-        kind: "image" as const,
-        label: "Screenshot",
-        tokenEstimate: 1000,
-        from: 0,
-        to: 5,
-      },
-      { id: "f-10-15", kind: "file" as const, label: "a.ts", tokenEstimate: 500, from: 10, to: 15 },
-    ];
-    expect(buildSummaryLine(items)).toBe("1 image \u00b7 1 file \u00b7 ~1,500 tokens");
-  });
-});
-
-describe("getContextWindow", () => {
-  it("returns 200000 for claude", () => {
-    expect(getContextWindow("claude")).toBe(200_000);
-  });
-
-  it("returns 1000000 for gemini", () => {
-    expect(getContextWindow("gemini")).toBe(1_000_000);
-  });
-
-  it("returns 128000 for codex", () => {
-    expect(getContextWindow("codex")).toBe(128_000);
-  });
-
-  it("returns fallback for unknown agent", () => {
-    expect(getContextWindow("unknown-agent")).toBe(128_000);
-  });
-
-  it("returns fallback for undefined agent", () => {
-    expect(getContextWindow(undefined)).toBe(128_000);
-  });
-});
-
-describe("isWarningUsage", () => {
-  it("returns true at 80% threshold", () => {
-    expect(isWarningUsage(80_000, 100_000)).toBe(true);
-  });
-
-  it("returns true above 80%", () => {
-    expect(isWarningUsage(90_000, 100_000)).toBe(true);
-  });
-
-  it("returns false below 80%", () => {
-    expect(isWarningUsage(79_000, 100_000)).toBe(false);
   });
 });
