@@ -206,9 +206,6 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
               isOpen &&
                 "bg-[var(--dock-item-bg-active)] text-canopy-text border-[var(--dock-item-border-active)] ring-1 ring-inset ring-canopy-accent/30",
               !isOpen &&
-                blockedState === "waiting" &&
-                "bg-[var(--dock-item-bg-waiting)] border-[var(--dock-item-border-waiting)]",
-              !isOpen &&
                 blockedState === "failed" &&
                 "bg-[var(--dock-item-bg-failed)] border-[var(--dock-item-border-failed)]",
               isDeprioritized && "opacity-50"
