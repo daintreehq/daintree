@@ -85,6 +85,22 @@ export function WorktreeCard({
   const pinWorktree = useWorktreeFilterStore((state) => state.pinWorktree);
   const unpinWorktree = useWorktreeFilterStore((state) => state.unpinWorktree);
 
+  const isCollapsed = useWorktreeFilterStore(
+    useCallback((state) => state.collapsedWorktrees.includes(worktree.id), [worktree.id])
+  );
+  const toggleWorktreeCollapsed = useWorktreeFilterStore((state) => state.toggleWorktreeCollapsed);
+
+  const canCollapse = variant !== "grid";
+  const effectiveIsCollapsed = canCollapse && isCollapsed;
+
+  const handleToggleCollapse = useCallback(
+    (e: React.MouseEvent) => {
+      e.stopPropagation();
+      toggleWorktreeCollapsed(worktree.id);
+    },
+    [toggleWorktreeCollapsed, worktree.id]
+  );
+
   const handleTogglePin = useCallback(() => {
     if (isPinned) {
       unpinWorktree(worktree.id);
@@ -477,6 +493,10 @@ export function WorktreeCard({
           isMuted={isMuted}
           isMainWorktree={isMainWorktree}
           isPinned={isPinned}
+          isCollapsed={effectiveIsCollapsed}
+          canCollapse={canCollapse}
+          onToggleCollapse={handleToggleCollapse}
+          contentId={`worktree-body-${worktree.id}`}
           branchLabel={branchLabel}
           lifecycleStage={lifecycleStage}
           worktreeErrorCount={worktreeErrors.length}
@@ -512,6 +532,8 @@ export function WorktreeCard({
             onRunRecipe: (recipeId) => void handleRunRecipe(recipeId),
             onSaveLayout,
             onTogglePin: handleTogglePin,
+            onToggleCollapse: canCollapse ? () => toggleWorktreeCollapsed(worktree.id) : undefined,
+            isCollapsed: effectiveIsCollapsed,
             onLaunchAgent,
             onMinimizeAll: handleMinimizeAll,
             onMaximizeAll: handleMaximizeAll,
@@ -525,33 +547,37 @@ export function WorktreeCard({
           }}
         />
 
-        <WorktreeDetailsSection
-          worktree={worktree}
-          homeDir={homeDir}
-          isExpanded={isExpanded}
-          hasChanges={hasChanges}
-          computedSubtitle={computedSubtitle}
-          effectiveNote={effectiveNote}
-          effectiveSummary={effectiveSummary}
-          worktreeErrors={worktreeErrors}
-          isFocused={isFocused}
-          onToggleExpand={handleToggleExpand}
-          onPathClick={handlePathClick}
-          onDismissError={dismissError}
-          onRetryError={handleErrorRetry}
-          onOpenReviewHub={() => setShowReviewHub(true)}
-          isLifecycleRunning={isLifecycleRunning}
-          lifecycleLabel={lifecycleLabel}
-        />
+        {!effectiveIsCollapsed && (
+          <div id={`worktree-body-${worktree.id}`}>
+            <WorktreeDetailsSection
+              worktree={worktree}
+              homeDir={homeDir}
+              isExpanded={isExpanded}
+              hasChanges={hasChanges}
+              computedSubtitle={computedSubtitle}
+              effectiveNote={effectiveNote}
+              effectiveSummary={effectiveSummary}
+              worktreeErrors={worktreeErrors}
+              isFocused={isFocused}
+              onToggleExpand={handleToggleExpand}
+              onPathClick={handlePathClick}
+              onDismissError={dismissError}
+              onRetryError={handleErrorRetry}
+              onOpenReviewHub={() => setShowReviewHub(true)}
+              isLifecycleRunning={isLifecycleRunning}
+              lifecycleLabel={lifecycleLabel}
+            />
 
-        <WorktreeTerminalSection
-          worktreeId={worktree.id}
-          isExpanded={isTerminalsExpanded}
-          counts={terminalCounts}
-          terminals={worktreeTerminals}
-          onToggle={handleToggleTerminals}
-          onTerminalSelect={handleTerminalSelect}
-        />
+            <WorktreeTerminalSection
+              worktreeId={worktree.id}
+              isExpanded={isTerminalsExpanded}
+              counts={terminalCounts}
+              terminals={worktreeTerminals}
+              onToggle={handleToggleTerminals}
+              onTerminalSelect={handleTerminalSelect}
+            />
+          </div>
+        )}
 
         <WorktreeDialogs
           worktree={worktree}
