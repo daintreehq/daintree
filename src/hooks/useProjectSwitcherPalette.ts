@@ -1,7 +1,9 @@
 import { useState, useCallback, useMemo, useEffect, useRef } from "react";
 import Fuse, { type IFuseOptions } from "fuse.js";
+import { useShallow } from "zustand/shallow";
 import { useProjectStore } from "@/store/projectStore";
 import { usePaletteStore } from "@/store/paletteStore";
+import { useProjectGroupsStore, type ProjectGroup } from "@/store/projectGroupsStore";
 import { notify } from "@/lib/notify";
 import type { Project, ProjectStats } from "@shared/types";
 import { projectClient, terminalClient } from "@/clients";
@@ -55,6 +57,14 @@ export interface UseProjectSwitcherPaletteReturn {
   confirmRemoveProject: () => Promise<void>;
   isRemovingProject: boolean;
   backgroundWaitingCount: number;
+  groups: ProjectGroup[];
+  createGroup: (name: string) => string;
+  assignProjectToGroup: (projectId: string, groupId: string) => void;
+  removeProjectFromGroup: (projectId: string) => void;
+  renameGroup: (groupId: string, name: string) => void;
+  deleteGroup: (groupId: string) => void;
+  moveGroupUp: (groupId: string) => void;
+  moveGroupDown: (groupId: string) => void;
 }
 
 const FUSE_OPTIONS: IFuseOptions<SearchableProject> = {
@@ -88,6 +98,8 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
   const selectedProjectIdRef = useRef<string | null>(null);
   const lastFetchRef = useRef(0);
   const lastFetchIdsRef = useRef<string>("");
+
+  const groups = useProjectGroupsStore(useShallow((state) => state.groups));
 
   const projects = useProjectStore((state) => state.projects);
   const currentProject = useProjectStore((state) => state.currentProject);
@@ -551,6 +563,34 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
     }
   }, [removeConfirmProject, isRemovingProject, closeActiveProject, removeProject]);
 
+  const createGroup = useCallback((name: string) => {
+    return useProjectGroupsStore.getState().createGroup(name);
+  }, []);
+
+  const assignProjectToGroup = useCallback((projectId: string, groupId: string) => {
+    useProjectGroupsStore.getState().addProjectToGroup(groupId, projectId);
+  }, []);
+
+  const removeProjectFromGroupCb = useCallback((projectId: string) => {
+    useProjectGroupsStore.getState().removeProjectFromAllGroups(projectId);
+  }, []);
+
+  const renameGroupCb = useCallback((groupId: string, name: string) => {
+    useProjectGroupsStore.getState().renameGroup(groupId, name);
+  }, []);
+
+  const deleteGroupCb = useCallback((groupId: string) => {
+    useProjectGroupsStore.getState().deleteGroup(groupId);
+  }, []);
+
+  const moveGroupUpCb = useCallback((groupId: string) => {
+    useProjectGroupsStore.getState().moveGroupUp(groupId);
+  }, []);
+
+  const moveGroupDownCb = useCallback((groupId: string) => {
+    useProjectGroupsStore.getState().moveGroupDown(groupId);
+  }, []);
+
   return {
     isOpen,
     mode,
@@ -579,5 +619,13 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
     confirmRemoveProject,
     isRemovingProject,
     backgroundWaitingCount,
+    groups,
+    createGroup,
+    assignProjectToGroup,
+    removeProjectFromGroup: removeProjectFromGroupCb,
+    renameGroup: renameGroupCb,
+    deleteGroup: deleteGroupCb,
+    moveGroupUp: moveGroupUpCb,
+    moveGroupDown: moveGroupDownCb,
   };
 }

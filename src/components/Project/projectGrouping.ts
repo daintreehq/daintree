@@ -1,5 +1,7 @@
 import type { Project, ProjectStats } from "@shared/types";
 import { isCanopyEnvEnabled } from "@/utils/env";
+import type { ProjectGroup } from "@/store/projectGroupsStore";
+import type { SearchableProject } from "@/hooks/useProjectSwitcherPalette";
 
 export interface GroupedProjects {
   pinned: Project[];
@@ -96,4 +98,51 @@ export function groupProjects(
   }
 
   return groups;
+}
+
+export interface SwitcherSection {
+  key: string;
+  label: string | null;
+  isUserGroup: boolean;
+  items: SearchableProject[];
+}
+
+export function buildSwitcherSections(
+  results: SearchableProject[],
+  groups: ProjectGroup[]
+): SwitcherSection[] {
+  const sortedGroups = [...groups].sort((a, b) => a.order - b.order);
+  const groupedProjectIds = new Set<string>();
+  const sections: SwitcherSection[] = [];
+
+  for (const group of sortedGroups) {
+    const items = group.projectIds
+      .map((pid) => results.find((p) => p.id === pid))
+      .filter((p): p is SearchableProject => p !== undefined);
+    if (items.length === 0) continue;
+    for (const item of items) groupedProjectIds.add(item.id);
+    sections.push({
+      key: group.id,
+      label: group.name,
+      isUserGroup: true,
+      items,
+    });
+  }
+
+  const ungrouped = results.filter((p) => !groupedProjectIds.has(p.id));
+  const pinned = ungrouped.filter((p) => p.isPinned && !p.isActive);
+  const current = ungrouped.filter((p) => p.isActive);
+  const rest = ungrouped.filter((p) => !p.isActive && !p.isPinned);
+
+  if (pinned.length > 0) {
+    sections.push({ key: "pinned", label: "Pinned", isUserGroup: false, items: pinned });
+  }
+  if (current.length > 0) {
+    sections.push({ key: "current", label: null, isUserGroup: false, items: current });
+  }
+  if (rest.length > 0) {
+    sections.push({ key: "other", label: null, isUserGroup: false, items: rest });
+  }
+
+  return sections;
 }
