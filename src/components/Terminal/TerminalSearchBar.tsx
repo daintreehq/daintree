@@ -228,6 +228,7 @@ export function TerminalSearchBar({ terminalId, onClose, className }: TerminalSe
 
       {statusText && (
         <span
+          data-terminal-search-status
           className={cn(
             "text-xs px-1.5",
             searchStatus === "found" ? "text-canopy-text/60" : "text-status-error"

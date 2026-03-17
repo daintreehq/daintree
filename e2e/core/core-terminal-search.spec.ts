@@ -88,7 +88,9 @@ test.describe.serial("Core: Terminal Search & Scrollback", () => {
       await input.fill("SEARCH_SENTINEL_XYZ");
       await window.waitForTimeout(T_SETTLE);
 
-      await expect(panel.locator("text=Found")).toBeVisible({ timeout: T_SHORT });
+      await expect(panel.locator(SEL.terminal.searchStatus)).toHaveText("Found", {
+        timeout: T_SHORT,
+      });
     });
 
     test("typing a non-matching query shows No matches status", async () => {
@@ -99,7 +101,9 @@ test.describe.serial("Core: Terminal Search & Scrollback", () => {
       await input.fill("ZZZNOMATCHZZZ");
       await window.waitForTimeout(T_SETTLE);
 
-      await expect(panel.locator("text=No matches")).toBeVisible({ timeout: T_SHORT });
+      await expect(panel.locator(SEL.terminal.searchStatus)).toHaveText("No matches", {
+        timeout: T_SHORT,
+      });
     });
 
     test("close search via Escape removes search bar", async () => {

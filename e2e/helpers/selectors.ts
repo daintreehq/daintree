@@ -60,6 +60,7 @@ export const SEL = {
     searchNext: '[aria-label="Next match"]',
     searchCaseToggle: '[aria-label="Toggle case sensitivity"]',
     searchRegexToggle: '[aria-label="Toggle regex mode"]',
+    searchStatus: "[data-terminal-search-status]",
   },
   worktree: {
     card: (branch: string) => `[data-worktree-branch="${branch}"]`,
