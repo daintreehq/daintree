@@ -93,6 +93,8 @@ export interface TerminalState {
   agentSessionId?: string;
   /** Process-level flags captured at launch time, persisted for session resume */
   agentLaunchFlags?: string[];
+  /** Model ID selected at launch time for per-panel model selection */
+  agentModelId?: string;
 }
 
 /** Terminal data payload for IPC */

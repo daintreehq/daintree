@@ -163,6 +163,7 @@ export interface HydrationOptions {
     exitBehavior?: import("@shared/types/panel").PanelExitBehavior;
     agentSessionId?: string;
     agentLaunchFlags?: string[];
+    agentModelId?: string;
     restore?: boolean;
   }) => Promise<string>;
   setActiveWorktree: (id: string | null) => void;

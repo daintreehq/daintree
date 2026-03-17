@@ -9,6 +9,8 @@ import {
   isEffectivelyRegisteredAgent,
   isBuiltInAgent,
   isUserDefinedAgent,
+  getAgentModelConfig,
+  getAgentDisplayTitle,
   type AgentConfig,
 } from "../agentRegistry.js";
 import {
@@ -410,6 +412,88 @@ describe("opencode TUI environment", () => {
   it("sets COLORFGBG to bypass termenv OSC 11 background color query", () => {
     const config = getAgentConfig("opencode");
     expect(config?.env?.COLORFGBG).toBe("15;0");
+  });
+});
+
+describe("model configuration", () => {
+  it("claude has models with expected IDs", () => {
+    const config = getAgentConfig("claude");
+    expect(config?.models).toBeDefined();
+    expect(config!.models!.length).toBeGreaterThanOrEqual(3);
+    const modelIds = config!.models!.map((m) => m.id);
+    expect(modelIds).toContain("claude-sonnet-4-6");
+    expect(modelIds).toContain("claude-opus-4-6");
+    expect(modelIds).toContain("claude-haiku-4-5-20251001");
+  });
+
+  it("gemini has models", () => {
+    const config = getAgentConfig("gemini");
+    expect(config?.models).toBeDefined();
+    expect(config!.models!.length).toBeGreaterThanOrEqual(2);
+    const modelIds = config!.models!.map((m) => m.id);
+    expect(modelIds).toContain("gemini-2.5-pro");
+    expect(modelIds).toContain("gemini-2.5-flash");
+  });
+
+  it("codex has models", () => {
+    const config = getAgentConfig("codex");
+    expect(config?.models).toBeDefined();
+    expect(config!.models!.length).toBeGreaterThanOrEqual(1);
+    const modelIds = config!.models!.map((m) => m.id);
+    expect(modelIds).toContain("gpt-5.4");
+  });
+
+  it("each model has id, name, and shortLabel", () => {
+    for (const id of getAgentIds()) {
+      const config = getAgentConfig(id);
+      if (config?.models) {
+        for (const model of config.models) {
+          expect(model.id).toBeTruthy();
+          expect(model.name).toBeTruthy();
+          expect(model.shortLabel).toBeTruthy();
+        }
+      }
+    }
+  });
+
+  it("agents without models have undefined models field", () => {
+    const config = getAgentConfig("cursor");
+    expect(config?.models).toBeUndefined();
+  });
+});
+
+describe("getAgentModelConfig", () => {
+  it("returns model config for valid agent and model ID", () => {
+    const model = getAgentModelConfig("claude", "claude-opus-4-6");
+    expect(model).toBeDefined();
+    expect(model!.name).toBe("Opus 4.6");
+    expect(model!.shortLabel).toBe("Opus");
+  });
+
+  it("returns undefined for invalid model ID", () => {
+    expect(getAgentModelConfig("claude", "nonexistent-model")).toBeUndefined();
+  });
+
+  it("returns undefined for agent without models", () => {
+    expect(getAgentModelConfig("cursor", "some-model")).toBeUndefined();
+  });
+});
+
+describe("getAgentDisplayTitle", () => {
+  it("returns agent name with model shortLabel when modelId matches", () => {
+    expect(getAgentDisplayTitle("claude", "claude-opus-4-6")).toBe("Claude (Opus)");
+  });
+
+  it("returns plain agent name when no modelId provided", () => {
+    expect(getAgentDisplayTitle("claude")).toBe("Claude");
+  });
+
+  it("returns plain agent name when modelId does not match", () => {
+    expect(getAgentDisplayTitle("claude", "nonexistent")).toBe("Claude");
+  });
+
+  it("returns plain agent name for agent without models", () => {
+    expect(getAgentDisplayTitle("cursor", "some-model")).toBe("Cursor");
   });
 });
 

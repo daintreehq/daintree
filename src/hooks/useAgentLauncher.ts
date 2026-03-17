@@ -9,7 +9,7 @@ import { useProjectSettingsStore } from "@/store/projectSettingsStore";
 import { agentSettingsClient, systemClient } from "@/clients";
 import type { AgentSettings, CliAvailability } from "@shared/types";
 import { generateAgentCommand, buildAgentLaunchFlags } from "@shared/types";
-import { getAgentConfig, isRegisteredAgent } from "@/config/agents";
+import { getAgentConfig, isRegisteredAgent, getAgentDisplayTitle } from "@/config/agents";
 
 const CLIPBOARD_DIR_NAME = "canopy-clipboard";
 
@@ -19,6 +19,7 @@ export interface LaunchAgentOptions {
   worktreeId?: string;
   prompt?: string;
   interactive?: boolean;
+  modelId?: string;
 }
 
 export interface UseAgentLauncherReturn {
@@ -141,24 +142,33 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
           initialPrompt: effectivePrompt,
           interactive: launchOptions?.interactive ?? true,
           clipboardDirectory,
+          modelId: launchOptions?.modelId,
         });
 
         // Capture process-level flags for session resume persistence
         if (isAgent) {
-          launchFlags = buildAgentLaunchFlags(entry, agentId);
+          launchFlags = buildAgentLaunchFlags(entry, agentId, {
+            modelId: launchOptions?.modelId,
+          });
         }
       }
+
+      const title =
+        launchOptions?.modelId && isAgent
+          ? getAgentDisplayTitle(agentId, launchOptions.modelId)
+          : (agentConfig?.name ?? "Terminal");
 
       const options: AddTerminalOptions = {
         kind: isAgent ? "agent" : "terminal",
         type: isAgent ? (agentId as any) : "terminal",
         agentId: isAgent ? agentId : undefined,
-        title: agentConfig?.name ?? "Terminal",
+        title,
         cwd,
         worktreeId: targetWorktreeId || undefined,
         command,
         location: launchOptions?.location,
         agentLaunchFlags: launchFlags,
+        agentModelId: launchOptions?.modelId,
       };
 
       try {

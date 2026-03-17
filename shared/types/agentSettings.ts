@@ -172,6 +172,8 @@ export interface GenerateAgentCommandOptions {
   interactive?: boolean;
   /** Absolute path to the clipboard temp directory for --include-directories injection */
   clipboardDirectory?: string;
+  /** Model ID to pass via --model flag (e.g., "claude-opus-4-6") */
+  modelId?: string;
 }
 
 /**
@@ -223,6 +225,11 @@ export function generateAgentCommand(
     if (inlineModeFlag && entry.inlineMode !== false) {
       parts.push(inlineModeFlag);
     }
+  }
+
+  // Add --model flag if a specific model was selected for this launch
+  if (options?.modelId) {
+    parts.push("--model", options.modelId);
   }
 
   // Add flags, escaping non-flag values
@@ -284,7 +291,11 @@ export function generateAgentCommand(
  * Includes: registry default args, inline mode flag, dangerous args, custom flags.
  * Excludes: clipboard directory (dynamic runtime value), initial prompt.
  */
-export function buildAgentLaunchFlags(entry: AgentSettingsEntry, agentId: string): string[] {
+export function buildAgentLaunchFlags(
+  entry: AgentSettingsEntry,
+  agentId: string,
+  options?: { modelId?: string }
+): string[] {
   const agentConfig = getEffectiveAgentConfig(agentId);
   const flags: string[] = [];
 
@@ -297,6 +308,11 @@ export function buildAgentLaunchFlags(entry: AgentSettingsEntry, agentId: string
   const inlineModeFlag = agentConfig?.capabilities?.inlineModeFlag;
   if (inlineModeFlag && entry.inlineMode !== false) {
     flags.push(inlineModeFlag);
+  }
+
+  // Model flag for per-panel model selection
+  if (options?.modelId) {
+    flags.push("--model", options.modelId);
   }
 
   // Dangerous args and custom flags (from generateAgentFlags, excluding clipboard dir)

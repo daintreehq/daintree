@@ -1,5 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { buildResumeCommand, buildAgentLaunchFlags } from "../agentSettings.js";
+import {
+  buildResumeCommand,
+  buildAgentLaunchFlags,
+  generateAgentCommand,
+} from "../agentSettings.js";
 
 describe("buildResumeCommand", () => {
   it("builds claude resume command with --resume flag", () => {
@@ -130,5 +134,54 @@ describe("buildAgentLaunchFlags", () => {
     expect(flags).toContain("--no-alt-screen");
     expect(flags).toContain("--dangerously-bypass-approvals-and-sandbox");
     expect(flags).toContain("--verbose");
+  });
+
+  it("includes --model flag when modelId is provided", () => {
+    const flags = buildAgentLaunchFlags({}, "claude", { modelId: "claude-opus-4-6" });
+    expect(flags).toContain("--model");
+    expect(flags).toContain("claude-opus-4-6");
+    const modelIdx = flags.indexOf("--model");
+    expect(flags[modelIdx + 1]).toBe("claude-opus-4-6");
+  });
+
+  it("does not include --model flag when modelId is not provided", () => {
+    const flags = buildAgentLaunchFlags({}, "claude");
+    expect(flags).not.toContain("--model");
+  });
+
+  it("does not include --model flag when options is undefined", () => {
+    const flags = buildAgentLaunchFlags({}, "claude", undefined);
+    expect(flags).not.toContain("--model");
+  });
+});
+
+describe("generateAgentCommand with modelId", () => {
+  it("includes --model flag in command when modelId is provided", () => {
+    const cmd = generateAgentCommand("claude", {}, "claude", { modelId: "claude-opus-4-6" });
+    expect(cmd).toContain("--model claude-opus-4-6");
+  });
+
+  it("does not include --model flag when modelId is not provided", () => {
+    const cmd = generateAgentCommand("claude", {}, "claude");
+    expect(cmd).not.toContain("--model");
+  });
+
+  it("places --model before user custom flags", () => {
+    const cmd = generateAgentCommand("claude", { customFlags: "--verbose" }, "claude", {
+      modelId: "claude-opus-4-6",
+    });
+    const modelIdx = cmd.indexOf("--model");
+    const verboseIdx = cmd.indexOf("--verbose");
+    expect(modelIdx).toBeLessThan(verboseIdx);
+  });
+
+  it("places --model before initial prompt", () => {
+    const cmd = generateAgentCommand("claude", {}, "claude", {
+      modelId: "claude-sonnet-4-6",
+      initialPrompt: "Fix the bug",
+    });
+    const modelIdx = cmd.indexOf("--model");
+    const promptIdx = cmd.indexOf("Fix the bug");
+    expect(modelIdx).toBeLessThan(promptIdx);
   });
 });

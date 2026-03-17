@@ -177,7 +177,7 @@ export const createRestartActions = (
               baseCommand,
               agentSettings.agents?.[effectiveAgentId] ?? {},
               effectiveAgentId,
-              { clipboardDirectory }
+              { clipboardDirectory, modelId: currentTerminal.agentModelId }
             );
           }
         } catch (error) {

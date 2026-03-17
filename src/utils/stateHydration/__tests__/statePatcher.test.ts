@@ -335,6 +335,53 @@ describe("buildArgsForRespawn", () => {
     );
     expect(result.exitBehavior).toBe("keep");
   });
+
+  it("preserves agentModelId through respawn", () => {
+    const result = buildArgsForRespawn(
+      {
+        id: "t1",
+        kind: "agent" as const,
+        agentId: "claude",
+        cwd: "/p",
+        location: "grid",
+        agentModelId: "claude-opus-4-6",
+      },
+      "agent",
+      "/p",
+      { agents: { claude: {} } },
+      false,
+      undefined
+    );
+    expect(result.agentModelId).toBe("claude-opus-4-6");
+  });
+});
+
+describe("agentModelId propagation", () => {
+  it("buildArgsForBackendTerminal includes agentModelId", () => {
+    const result = buildArgsForBackendTerminal(
+      { id: "t1", cwd: "/p", kind: "agent", agentId: "claude" },
+      {
+        id: "t1",
+        location: "grid",
+        agentModelId: "claude-opus-4-6",
+      },
+      "/p"
+    );
+    expect(result.agentModelId).toBe("claude-opus-4-6");
+  });
+
+  it("buildArgsForReconnectedFallback includes agentModelId", () => {
+    const result = buildArgsForReconnectedFallback(
+      { id: "t1", cwd: "/p" },
+      {
+        id: "t1",
+        location: "grid",
+        agentModelId: "gemini-2.5-pro",
+      },
+      "/p"
+    );
+    expect(result.agentModelId).toBe("gemini-2.5-pro");
+  });
 });
 
 describe("buildArgsForNonPtyRecreation", () => {
