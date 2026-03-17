@@ -44,6 +44,7 @@ interface WorktreeFilterState {
   alwaysShowWaiting: boolean;
   hideMainWorktree: boolean;
   pinnedWorktrees: string[];
+  collapsedWorktrees: string[];
 }
 
 interface WorktreeFilterActions {
@@ -61,6 +62,10 @@ interface WorktreeFilterActions {
   pinWorktree: (id: string) => void;
   unpinWorktree: (id: string) => void;
   isWorktreePinned: (id: string) => boolean;
+  collapseWorktree: (id: string) => void;
+  expandWorktree: (id: string) => void;
+  toggleWorktreeCollapsed: (id: string) => void;
+  isWorktreeCollapsed: (id: string) => boolean;
   clearAll: () => void;
   getActiveFilterCount: () => number;
   hasActiveFilters: () => boolean;
@@ -81,6 +86,7 @@ interface PersistedState {
   alwaysShowWaiting: boolean;
   hideMainWorktree: boolean;
   pinnedWorktrees: string[];
+  collapsedWorktrees: string[];
 }
 
 export const useWorktreeFilterStore = create<WorktreeFilterStore>()(
@@ -98,6 +104,7 @@ export const useWorktreeFilterStore = create<WorktreeFilterStore>()(
       alwaysShowWaiting: true,
       hideMainWorktree: false,
       pinnedWorktrees: [],
+      collapsedWorktrees: [],
 
       setQuery: (query) => set({ query }),
       setOrderBy: (orderBy) => set({ orderBy }),
@@ -177,6 +184,29 @@ export const useWorktreeFilterStore = create<WorktreeFilterStore>()(
 
       isWorktreePinned: (id) => get().pinnedWorktrees.includes(id),
 
+      collapseWorktree: (id) =>
+        set((state) => {
+          if (state.collapsedWorktrees.includes(id)) {
+            return state;
+          }
+          return { collapsedWorktrees: [...state.collapsedWorktrees, id] };
+        }),
+
+      expandWorktree: (id) =>
+        set((state) => ({
+          collapsedWorktrees: state.collapsedWorktrees.filter((wId) => wId !== id),
+        })),
+
+      toggleWorktreeCollapsed: (id) => {
+        if (get().collapsedWorktrees.includes(id)) {
+          get().expandWorktree(id);
+        } else {
+          get().collapseWorktree(id);
+        }
+      },
+
+      isWorktreeCollapsed: (id) => get().collapsedWorktrees.includes(id),
+
       clearAll: () =>
         set({
           query: "",
@@ -230,6 +260,7 @@ export const useWorktreeFilterStore = create<WorktreeFilterStore>()(
         alwaysShowWaiting: state.alwaysShowWaiting,
         hideMainWorktree: state.hideMainWorktree,
         pinnedWorktrees: state.pinnedWorktrees,
+        collapsedWorktrees: state.collapsedWorktrees,
       }),
       merge: (persisted, current) => {
         const p = persisted as PersistedState | undefined;
@@ -247,6 +278,7 @@ export const useWorktreeFilterStore = create<WorktreeFilterStore>()(
           alwaysShowWaiting: p?.alwaysShowWaiting ?? true,
           hideMainWorktree: p?.hideMainWorktree ?? false,
           pinnedWorktrees: p?.pinnedWorktrees ?? [],
+          collapsedWorktrees: p?.collapsedWorktrees ?? [],
         };
       },
     }
