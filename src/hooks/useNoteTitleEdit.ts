@@ -5,7 +5,6 @@ interface UseNoteTitleEditOptions {
   selectedNote: NoteListItem | null;
   noteMetadata: NoteMetadata | null;
   noteContent: string;
-  noteLastModified: number | null;
   refresh: () => void;
   setSelectedNote: (note: NoteListItem | null) => void;
   setNoteMetadata: (metadata: NoteMetadata | null) => void;
@@ -36,7 +35,6 @@ export function useNoteTitleEdit({
   selectedNote,
   noteMetadata,
   noteContent,
-  noteLastModified,
   refresh,
   setSelectedNote,
   setNoteMetadata,

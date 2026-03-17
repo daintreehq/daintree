@@ -39,7 +39,6 @@ describe("useNoteSearch", () => {
   const defaultProps = () => ({
     isOpen: true,
     notes: [makeNote()],
-    isLoading: false,
     refresh: vi.fn(),
   });
 
@@ -64,6 +63,12 @@ describe("useNoteSearch", () => {
 
   it("cancels pending search on rapid query changes", async () => {
     const { result } = renderHook(() => useNoteSearch(defaultProps()));
+
+    // Flush initial search from mount
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(150);
+    });
+    vi.mocked(notesClient.search).mockClear();
 
     await act(async () => {
       result.current.setQuery("ab");
@@ -171,6 +176,7 @@ describe("useNoteSearch", () => {
   });
 
   it("does not search when isOpen is false", async () => {
+    vi.mocked(notesClient.search).mockClear();
     renderHook(() => useNoteSearch({ ...defaultProps(), isOpen: false }));
 
     await act(async () => {
