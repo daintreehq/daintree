@@ -503,33 +503,33 @@ export function WorktreeHeader({
         (hasIssueTitle ||
           (worktree.issueNumber && !hasIssueTitle) ||
           (worktree.prNumber && worktree.prState !== "closed")) && (
-        <div className="flex flex-col gap-0.5 mt-1.5">
-          {worktree.issueNumber && !hasIssueTitle && (
-            <IssueBadge
-              issueNumber={worktree.issueNumber}
-              worktreePath={worktree.path}
-              onOpen={badges.onOpenIssue}
-            />
-          )}
-          {worktree.prNumber && worktree.prState !== "closed" && (
-            <PRBadge
-              prNumber={worktree.prNumber}
-              prState={worktree.prState}
-              isSubordinate={!!worktree.issueNumber}
-              worktreePath={worktree.path}
-              onOpen={badges.onOpenPR}
-            />
-          )}
-          {hasIssueTitle && (
-            <BranchLabel
-              label={branchLabel}
-              isActive={isActive}
-              isMuted={isMuted}
-              isMainWorktree={false}
-            />
-          )}
-        </div>
-      )}
+          <div className="flex flex-col gap-0.5 mt-1.5">
+            {worktree.issueNumber && !hasIssueTitle && (
+              <IssueBadge
+                issueNumber={worktree.issueNumber}
+                worktreePath={worktree.path}
+                onOpen={badges.onOpenIssue}
+              />
+            )}
+            {worktree.prNumber && worktree.prState !== "closed" && (
+              <PRBadge
+                prNumber={worktree.prNumber}
+                prState={worktree.prState}
+                isSubordinate={!!worktree.issueNumber}
+                worktreePath={worktree.path}
+                onOpen={badges.onOpenPR}
+              />
+            )}
+            {hasIssueTitle && (
+              <BranchLabel
+                label={branchLabel}
+                isActive={isActive}
+                isMuted={isMuted}
+                isMainWorktree={false}
+              />
+            )}
+          </div>
+        )}
     </div>
   );
 }

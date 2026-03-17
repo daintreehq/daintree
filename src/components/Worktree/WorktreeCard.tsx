@@ -88,9 +88,7 @@ export function WorktreeCard({
   const isCollapsed = useWorktreeFilterStore(
     useCallback((state) => state.collapsedWorktrees.includes(worktree.id), [worktree.id])
   );
-  const toggleWorktreeCollapsed = useWorktreeFilterStore(
-    (state) => state.toggleWorktreeCollapsed
-  );
+  const toggleWorktreeCollapsed = useWorktreeFilterStore((state) => state.toggleWorktreeCollapsed);
 
   const canCollapse = variant !== "grid";
   const effectiveIsCollapsed = canCollapse && isCollapsed;
