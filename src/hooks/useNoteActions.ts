@@ -119,6 +119,7 @@ export function useNoteActions({
     isOpen,
     initialize,
     setQuery,
+    setSelectedNote,
     setNoteContent,
     setNoteMetadata,
     setNoteLastModified,
@@ -156,7 +157,15 @@ export function useNoteActions({
       setSelectedIndex(idx >= 0 ? idx : 0);
     }
     hasRestoredRef.current = true;
-  }, [isOpen, lastSelectedNoteId, visibleNotes, isLoading, isSearching, setLastSelectedNoteId]);
+  }, [
+    isOpen,
+    lastSelectedNoteId,
+    visibleNotes,
+    isLoading,
+    isSearching,
+    setLastSelectedNoteId,
+    setSelectedNote,
+  ]);
 
   // Clamp selectedIndex
   useEffect(() => {
@@ -208,7 +217,7 @@ export function useNoteActions({
         setLastSelectedNoteId(note.id);
       }
     },
-    [selectedNote, noteContent, deleteIfAutoDeleteable, setLastSelectedNoteId]
+    [selectedNote, noteContent, deleteIfAutoDeleteable, setLastSelectedNoteId, setSelectedNote]
   );
 
   const handleCreateNote = useCallback(
@@ -271,6 +280,7 @@ export function useNoteActions({
       setIsEditingHeaderTitle,
       setHeaderTitleEdit,
       headerTitleInputRef,
+      setSelectedNote,
     ]
   );
 
@@ -294,7 +304,14 @@ export function useNoteActions({
     } finally {
       setDeleteConfirmNote(null);
     }
-  }, [deleteNote, selectedNote, deleteConfirmNote, lastSelectedNoteId, setLastSelectedNoteId]);
+  }, [
+    deleteNote,
+    selectedNote,
+    deleteConfirmNote,
+    lastSelectedNoteId,
+    setLastSelectedNoteId,
+    setSelectedNote,
+  ]);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
@@ -364,6 +381,7 @@ export function useNoteActions({
       handleCreateNote,
       handleOpenAsPanel,
       deleteIfAutoDeleteable,
+      setSelectedNote,
     ]
   );
 
