@@ -2,7 +2,9 @@
 import { render, screen, fireEvent } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 
-const dispatchMock = vi.fn(() => Promise.resolve());
+const { dispatchMock } = vi.hoisted(() => ({
+  dispatchMock: vi.fn(() => Promise.resolve()),
+}));
 
 vi.mock("@/services/ActionService", () => ({
   actionService: {
@@ -46,21 +48,27 @@ describe("GettingStartedChecklist", () => {
   it("renders incomplete steps as buttons", () => {
     render(<GettingStartedChecklist {...defaultProps} checklist={allIncomplete} />);
 
-    const buttons = screen.getAllByRole("button", { name: /open a project|launch an ai agent|create a worktree/i });
+    const buttons = screen.getAllByRole("button", {
+      name: /open a project|launch an ai agent|create a worktree/i,
+    });
     expect(buttons).toHaveLength(3);
   });
 
   it("renders completed steps as non-interactive divs", () => {
     render(<GettingStartedChecklist {...defaultProps} checklist={allComplete} />);
 
-    const stepButtons = screen.queryAllByRole("button", { name: /open a project|launch an ai agent|create a worktree/i });
+    const stepButtons = screen.queryAllByRole("button", {
+      name: /open a project|launch an ai agent|create a worktree/i,
+    });
     expect(stepButtons).toHaveLength(0);
   });
 
   it("renders mixed state correctly — only incomplete steps are buttons", () => {
     render(<GettingStartedChecklist {...defaultProps} checklist={mixedState} />);
 
-    const stepButtons = screen.getAllByRole("button", { name: /launch an ai agent|create a worktree/i });
+    const stepButtons = screen.getAllByRole("button", {
+      name: /launch an ai agent|create a worktree/i,
+    });
     expect(stepButtons).toHaveLength(2);
 
     const completedButton = screen.queryByRole("button", { name: /open a project/i });
@@ -85,7 +93,9 @@ describe("GettingStartedChecklist", () => {
     render(<GettingStartedChecklist {...defaultProps} checklist={allIncomplete} />);
 
     fireEvent.click(screen.getByRole("button", { name: /create a worktree/i }));
-    expect(dispatchMock).toHaveBeenCalledWith("worktree.createDialog.open", undefined, { source: "user" });
+    expect(dispatchMock).toHaveBeenCalledWith("worktree.createDialog.open", undefined, {
+      source: "user",
+    });
   });
 
   it("does not call onDismiss or onToggleCollapse when a step is clicked", () => {
