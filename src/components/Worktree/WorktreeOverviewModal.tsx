@@ -113,6 +113,8 @@ export function WorktreeOverviewModal({
         hasWaitingAgent: worktreeTerminals.some((t) => t.agentState === "waiting"),
         hasFailedAgent: worktreeTerminals.some((t) => t.agentState === "failed"),
         hasCompletedAgent: worktreeTerminals.some((t) => t.agentState === "completed"),
+        hasMergeConflict:
+          worktree.worktreeChanges?.changes.some((c) => c.status === "conflicted") ?? false,
       });
     }
     return map;
@@ -174,6 +176,7 @@ export function WorktreeOverviewModal({
         hasWaitingAgent: false,
         hasFailedAgent: false,
         hasCompletedAgent: false,
+        hasMergeConflict: false,
       };
       const isActive = worktree.id === activeWorktreeId;
       const hasActiveQuery = query.trim().length > 0;

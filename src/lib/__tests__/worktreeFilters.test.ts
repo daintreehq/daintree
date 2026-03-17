@@ -10,6 +10,7 @@ import {
   groupByType,
   hasAnyFilters,
   findIntegrationWorktree,
+  filterTriageWorktrees,
   type DerivedWorktreeMeta,
   type FilterState,
 } from "../worktreeFilters";
@@ -42,6 +43,7 @@ const createEmptyMeta = (): DerivedWorktreeMeta => ({
   hasWaitingAgent: false,
   hasFailedAgent: false,
   hasCompletedAgent: false,
+  hasMergeConflict: false,
 });
 
 describe("getWorktreeType", () => {
@@ -1108,5 +1110,131 @@ describe("findIntegrationWorktree", () => {
     ];
     const result = findIntegrationWorktree(worktrees, "main");
     expect(result).toBeNull();
+  });
+});
+
+describe("filterTriageWorktrees", () => {
+  const buildMetaMap = (entries: [string, Partial<DerivedWorktreeMeta>][]) => {
+    const map = new Map<string, DerivedWorktreeMeta>();
+    for (const [id, overrides] of entries) {
+      map.set(id, { ...createEmptyMeta(), ...overrides });
+    }
+    return map;
+  };
+
+  it("includes worktrees with hasWaitingAgent", () => {
+    const worktrees = [createMockWorktree({ id: "w1", name: "feat-a" })];
+    const metaMap = buildMetaMap([["w1", { hasWaitingAgent: true }]]);
+    const result = filterTriageWorktrees(worktrees, metaMap, undefined, undefined, "");
+    expect(result).toHaveLength(1);
+    expect(result[0].id).toBe("w1");
+  });
+
+  it("includes worktrees with hasFailedAgent", () => {
+    const worktrees = [createMockWorktree({ id: "w1", name: "feat-a" })];
+    const metaMap = buildMetaMap([["w1", { hasFailedAgent: true }]]);
+    const result = filterTriageWorktrees(worktrees, metaMap, undefined, undefined, "");
+    expect(result).toHaveLength(1);
+    expect(result[0].id).toBe("w1");
+  });
+
+  it("includes worktrees with hasErrors", () => {
+    const worktrees = [createMockWorktree({ id: "w1", name: "feat-a" })];
+    const metaMap = buildMetaMap([["w1", { hasErrors: true }]]);
+    const result = filterTriageWorktrees(worktrees, metaMap, undefined, undefined, "");
+    expect(result).toHaveLength(1);
+  });
+
+  it("includes worktrees with hasMergeConflict", () => {
+    const worktrees = [createMockWorktree({ id: "w1", name: "feat-a" })];
+    const metaMap = buildMetaMap([["w1", { hasMergeConflict: true }]]);
+    const result = filterTriageWorktrees(worktrees, metaMap, undefined, undefined, "");
+    expect(result).toHaveLength(1);
+  });
+
+  it("excludes worktrees with no qualifying conditions", () => {
+    const worktrees = [createMockWorktree({ id: "w1", name: "feat-a" })];
+    const metaMap = buildMetaMap([["w1", {}]]);
+    const result = filterTriageWorktrees(worktrees, metaMap, undefined, undefined, "");
+    expect(result).toHaveLength(0);
+  });
+
+  it("excludes worktrees with missing meta", () => {
+    const worktrees = [createMockWorktree({ id: "w1", name: "feat-a" })];
+    const metaMap = new Map<string, DerivedWorktreeMeta>();
+    const result = filterTriageWorktrees(worktrees, metaMap, undefined, undefined, "");
+    expect(result).toHaveLength(0);
+  });
+
+  it("excludes main worktree even when qualifying", () => {
+    const worktrees = [
+      createMockWorktree({ id: "main-id", name: "main", isMainWorktree: true }),
+      createMockWorktree({ id: "w1", name: "feat-a" }),
+    ];
+    const metaMap = buildMetaMap([
+      ["main-id", { hasWaitingAgent: true }],
+      ["w1", { hasErrors: true }],
+    ]);
+    const result = filterTriageWorktrees(worktrees, metaMap, "main-id", undefined, "");
+    expect(result).toHaveLength(1);
+    expect(result[0].id).toBe("w1");
+  });
+
+  it("excludes integration worktree even when qualifying", () => {
+    const worktrees = [
+      createMockWorktree({ id: "dev-id", name: "develop", branch: "develop" }),
+      createMockWorktree({ id: "w1", name: "feat-a" }),
+    ];
+    const metaMap = buildMetaMap([
+      ["dev-id", { hasWaitingAgent: true }],
+      ["w1", { hasErrors: true }],
+    ]);
+    const result = filterTriageWorktrees(worktrees, metaMap, undefined, "dev-id", "");
+    expect(result).toHaveLength(1);
+    expect(result[0].id).toBe("w1");
+  });
+
+  it("filters by text search query", () => {
+    const worktrees = [
+      createMockWorktree({ id: "w1", name: "auth-fix", branch: "bugfix/auth" }),
+      createMockWorktree({ id: "w2", name: "payment-feat", branch: "feature/payment" }),
+    ];
+    const metaMap = buildMetaMap([
+      ["w1", { hasErrors: true }],
+      ["w2", { hasWaitingAgent: true }],
+    ]);
+    const result = filterTriageWorktrees(worktrees, metaMap, undefined, undefined, "auth");
+    expect(result).toHaveLength(1);
+    expect(result[0].id).toBe("w1");
+  });
+
+  it("filters by #number query matching issueNumber", () => {
+    const worktrees = [
+      createMockWorktree({ id: "w1", name: "feat-a", issueNumber: 42 }),
+      createMockWorktree({ id: "w2", name: "feat-b", issueNumber: 99 }),
+    ];
+    const metaMap = buildMetaMap([
+      ["w1", { hasErrors: true }],
+      ["w2", { hasWaitingAgent: true }],
+    ]);
+    const result = filterTriageWorktrees(worktrees, metaMap, undefined, undefined, "#42");
+    expect(result).toHaveLength(1);
+    expect(result[0].id).toBe("w1");
+  });
+
+  it("returns all qualifying worktrees when query is empty", () => {
+    const worktrees = [
+      createMockWorktree({ id: "w1", name: "feat-a" }),
+      createMockWorktree({ id: "w2", name: "feat-b" }),
+      createMockWorktree({ id: "w3", name: "feat-c" }),
+    ];
+    const metaMap = buildMetaMap([
+      ["w1", { hasWaitingAgent: true }],
+      ["w2", {}],
+      ["w3", { hasErrors: true, hasMergeConflict: true }],
+    ]);
+    const result = filterTriageWorktrees(worktrees, metaMap, undefined, undefined, "");
+    expect(result).toHaveLength(2);
+    expect(result.map((w) => w.id)).toEqual(["w1", "w3"]);
   });
 });
