@@ -31,6 +31,7 @@ export interface ActionCallbacks {
       worktreeId?: string;
       prompt?: string;
       interactive?: boolean;
+      modelId?: string;
     }
   ) => Promise<string | null>;
   onInject: (worktreeId: string) => void;

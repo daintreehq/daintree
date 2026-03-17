@@ -259,6 +259,8 @@ interface PtyPanelData extends BasePanelData {
   agentSessionId?: string;
   /** Process-level flags captured at launch time, persisted for session resume */
   agentLaunchFlags?: string[];
+  /** Model ID selected at launch time for per-panel model selection */
+  agentModelId?: string;
   /** Origin that spawned this terminal */
   spawnedBy?: TerminalSpawnSource;
   /** Timestamp when this terminal was created */
@@ -408,6 +410,8 @@ export interface TerminalInstance {
   agentSessionId?: string;
   /** Process-level flags captured at launch time, persisted for session resume */
   agentLaunchFlags?: string[];
+  /** Model ID selected at launch time for per-panel model selection */
+  agentModelId?: string;
   /** Origin that spawned this terminal */
   spawnedBy?: TerminalSpawnSource;
   /** Timestamp when this terminal was created */

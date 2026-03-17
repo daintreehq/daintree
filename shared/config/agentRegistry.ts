@@ -110,6 +110,12 @@ export interface AgentDetectionConfig {
   };
 }
 
+export interface AgentModelConfig {
+  id: string;
+  name: string;
+  shortLabel: string;
+}
+
 export interface AgentConfig {
   id: string;
   name: string;
@@ -118,6 +124,8 @@ export interface AgentConfig {
   args?: string[];
   color: string;
   iconId: string;
+  /** Available models for per-panel model selection at launch time */
+  models?: AgentModelConfig[];
   supportsContextInjection: boolean;
   shortcut?: string | null;
   tooltip?: string;
@@ -267,6 +275,11 @@ export const AGENT_REGISTRY: Record<string, AgentConfig> = {
         "Run 'claude auth login' to authenticate after installing",
       ],
     },
+    models: [
+      { id: "claude-sonnet-4-6", name: "Sonnet 4.6", shortLabel: "Sonnet" },
+      { id: "claude-opus-4-6", name: "Opus 4.6", shortLabel: "Opus" },
+      { id: "claude-haiku-4-5-20251001", name: "Haiku 4.5", shortLabel: "Haiku" },
+    ],
     contextWindow: 200_000,
     capabilities: {
       scrollback: 10000,
@@ -384,6 +397,10 @@ export const AGENT_REGISTRY: Record<string, AgentConfig> = {
         "Run 'gemini auth login' after installing to authenticate",
       ],
     },
+    models: [
+      { id: "gemini-2.5-pro", name: "Gemini 2.5 Pro", shortLabel: "2.5 Pro" },
+      { id: "gemini-2.5-flash", name: "Gemini 2.5 Flash", shortLabel: "2.5 Flash" },
+    ],
     contextWindow: 1_000_000,
     capabilities: {
       scrollback: 10000,
@@ -506,6 +523,10 @@ export const AGENT_REGISTRY: Record<string, AgentConfig> = {
         "Run 'codex auth login' after installing to authenticate",
       ],
     },
+    models: [
+      { id: "gpt-5.4", name: "GPT-5.4", shortLabel: "GPT-5.4" },
+      { id: "o3", name: "o3", shortLabel: "o3" },
+    ],
     contextWindow: 128_000,
     capabilities: {
       scrollback: 10000,
@@ -869,4 +890,20 @@ export function isBuiltInAgent(agentId: string): boolean {
 
 export function isUserDefinedAgent(agentId: string): boolean {
   return agentId in userRegistry && !(agentId in AGENT_REGISTRY);
+}
+
+export function getAgentModelConfig(
+  agentId: string,
+  modelId: string
+): AgentModelConfig | undefined {
+  const config = getEffectiveAgentConfig(agentId);
+  return config?.models?.find((m) => m.id === modelId);
+}
+
+export function getAgentDisplayTitle(agentId: string, modelId?: string): string {
+  const config = getEffectiveAgentConfig(agentId);
+  const baseName = config?.name ?? agentId;
+  if (!modelId) return baseName;
+  const model = config?.models?.find((m) => m.id === modelId);
+  return model ? `${baseName} (${model.shortLabel})` : baseName;
 }

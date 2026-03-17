@@ -5,7 +5,10 @@ import {
   getEffectiveAgentConfig,
   getEffectiveAgentIds,
   isEffectivelyRegisteredAgent,
+  getAgentDisplayTitle,
 } from "../../shared/config/agentRegistry";
+
+export { getAgentDisplayTitle };
 import { resolveAgentIcon } from "./agentIcons";
 
 export interface AgentIconProps {
