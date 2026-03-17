@@ -755,8 +755,7 @@ export class ActivityMonitor {
       if (
         actuallyBusy === null &&
         this.lastWorkingIndicatorTimestamp > 0 &&
-        Date.now() - this.lastWorkingIndicatorTimestamp <
-          this.WORKING_INDICATOR_TTL_MS
+        Date.now() - this.lastWorkingIndicatorTimestamp < this.WORKING_INDICATOR_TTL_MS
       ) {
         this.resetDebounceTimer();
         return;
