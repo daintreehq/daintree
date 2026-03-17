@@ -1067,6 +1067,14 @@ describe("filterTriageWorktrees", () => {
     expect(result[0].id).toBe("w1");
   });
 
+  it("includes worktrees with hasFailedAgent", () => {
+    const worktrees = [createMockWorktree({ id: "w1", name: "feat-a" })];
+    const metaMap = buildMetaMap([["w1", { hasFailedAgent: true }]]);
+    const result = filterTriageWorktrees(worktrees, metaMap, undefined, undefined, "");
+    expect(result).toHaveLength(1);
+    expect(result[0].id).toBe("w1");
+  });
+
   it("includes worktrees with hasErrors", () => {
     const worktrees = [createMockWorktree({ id: "w1", name: "feat-a" })];
     const metaMap = buildMetaMap([["w1", { hasErrors: true }]]);

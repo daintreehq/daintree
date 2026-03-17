@@ -368,7 +368,8 @@ export function filterTriageWorktrees<T extends Worktree | WorktreeState>(
   return nonMain.filter((w) => {
     const meta = derivedMetaMap.get(w.id);
     if (!meta) return false;
-    const qualifies = meta.hasWaitingAgent || meta.hasErrors || meta.hasMergeConflict;
+    const qualifies =
+      meta.hasWaitingAgent || meta.hasFailedAgent || meta.hasErrors || meta.hasMergeConflict;
     if (!qualifies) return false;
     if (query.trim().length > 0) {
       const exactNum = parseExactNumber(query);
