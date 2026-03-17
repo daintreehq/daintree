@@ -22,7 +22,6 @@ import {
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "../../ui/tooltip";
 import {
   AlertCircle,
-  Check,
   ChevronRight,
   CircleDot,
   CornerDownRight,
@@ -31,9 +30,7 @@ import {
   MoreHorizontal,
   House,
   Pin,
-  type LucideIcon,
 } from "lucide-react";
-import type { WorktreeLifecycleStage } from "./hooks/useWorktreeStatus";
 import type { SyntheticListenerMap } from "@dnd-kit/core/dist/hooks/utilities";
 import { useIssueTooltip, usePRTooltip } from "@/hooks/useGitHubTooltip";
 import { IssueTooltipContent, PRTooltipContent, TooltipLoading } from "./GitHubTooltipContent";
@@ -223,7 +220,6 @@ export interface WorktreeHeaderProps {
   onToggleCollapse?: (e: React.MouseEvent) => void;
   contentId?: string;
   branchLabel: string;
-  lifecycleStage: WorktreeLifecycleStage | null;
   worktreeErrorCount: number;
   dragHandleListeners?: SyntheticListenerMap;
   dragHandleActivatorRef?: (node: HTMLElement | null) => void;
@@ -276,53 +272,6 @@ export interface WorktreeHeaderProps {
   };
 }
 
-const LIFECYCLE_CONFIG: Record<
-  WorktreeLifecycleStage,
-  { icon: LucideIcon; className: string; label: string }
-> = {
-  "in-review": {
-    icon: CircleDot,
-    className: "w-2.5 h-2.5 text-canopy-text/65",
-    label: "In review",
-  },
-  merged: {
-    icon: Check,
-    className: "w-2.5 h-2.5 text-canopy-text/35",
-    label: "Merged",
-  },
-  "ready-for-cleanup": {
-    icon: Check,
-    className: "w-2.5 h-2.5 text-canopy-text/40",
-    label: "Ready for cleanup",
-  },
-};
-
-const LifecycleStageIndicator = memo(function LifecycleStageIndicator({
-  stage,
-}: {
-  stage: WorktreeLifecycleStage | null;
-}) {
-  if (!stage) return null;
-
-  const config = LIFECYCLE_CONFIG[stage];
-  const Icon = config.icon;
-
-  return (
-    <TooltipProvider>
-      <Tooltip delayDuration={300}>
-        <TooltipTrigger asChild>
-          <span className="shrink-0 flex items-center justify-center" aria-label={config.label}>
-            <Icon className={config.className} aria-hidden="true" />
-          </span>
-        </TooltipTrigger>
-        <TooltipContent side="top" className="text-xs">
-          {config.label}
-        </TooltipContent>
-      </Tooltip>
-    </TooltipProvider>
-  );
-});
-
 export function WorktreeHeader({
   worktree,
   isActive,
@@ -334,7 +283,6 @@ export function WorktreeHeader({
   onToggleCollapse,
   contentId,
   branchLabel,
-  lifecycleStage,
   worktreeErrorCount,
   dragHandleListeners,
   dragHandleActivatorRef,
@@ -404,7 +352,6 @@ export function WorktreeHeader({
               isMainWorktree={isMainWorktree}
             />
           )}
-          <LifecycleStageIndicator stage={lifecycleStage} />
           {worktree.isDetached && (
             <span className="text-status-warning text-xs font-medium shrink-0">(detached)</span>
           )}

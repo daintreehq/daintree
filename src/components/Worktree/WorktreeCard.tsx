@@ -30,6 +30,7 @@ import { useWorktreeActions } from "./WorktreeCard/hooks/useWorktreeActions";
 import { useWorktreeMenu } from "./WorktreeCard/hooks/useWorktreeMenu";
 import { useWorktreeStatus } from "./WorktreeCard/hooks/useWorktreeStatus";
 import { computeChipState, type ChipState } from "./utils/computeChipState";
+import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "../ui/tooltip";
 
 export interface WorktreeCardProps {
   worktree: WorktreeState;
@@ -482,26 +483,42 @@ export function WorktreeCard({
         />
       )}
       {chipState !== null && (
-        <div
-          className={cn(
-            "absolute w-3 h-3 pointer-events-none z-10",
-            chipState === "error" && "bg-github-closed",
-            chipState === "waiting" && "bg-state-waiting",
-            chipState === "cleanup" && "bg-github-merged",
-            chipState === "complete" && "bg-github-open",
-            variant === "sidebar" ? "top-0 left-[1px]" : "top-0 left-0 rounded-tl-lg"
-          )}
-          style={{ clipPath: "polygon(0 0, 100% 0, 0 100%)" }}
-          role="img"
-          aria-label={
-            {
-              error: "Error: attention needed",
-              waiting: "Agent waiting for input",
-              cleanup: "Ready for cleanup",
-              complete: "Complete: in review",
-            }[chipState]
-          }
-        />
+        <TooltipProvider>
+          <Tooltip delayDuration={400}>
+            <TooltipTrigger asChild>
+              <div
+                className={cn(
+                  "absolute w-3 h-3 z-10 cursor-default",
+                  chipState === "error" && "bg-github-closed",
+                  chipState === "waiting" && "bg-state-waiting",
+                  chipState === "cleanup" && "bg-github-merged",
+                  chipState === "complete" && "bg-github-open",
+                  variant === "sidebar" ? "top-0 left-[1px]" : "top-0 left-0 rounded-tl-lg"
+                )}
+                style={{ clipPath: "polygon(0 0, 100% 0, 0 100%)" }}
+                role="img"
+                aria-label={
+                  {
+                    error: "Error: attention needed",
+                    waiting: "Agent waiting for input",
+                    cleanup: "Ready for cleanup",
+                    complete: "Complete: in review",
+                  }[chipState]
+                }
+              />
+            </TooltipTrigger>
+            <TooltipContent side="right" align="start" className="text-xs">
+              {
+                {
+                  error: "Error: attention needed",
+                  waiting: "Agent waiting for input",
+                  cleanup: "Ready for cleanup",
+                  complete: "Complete: in review",
+                }[chipState]
+              }
+            </TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
       )}
       <div className="px-4 py-5">
         <WorktreeHeader
@@ -515,7 +532,6 @@ export function WorktreeCard({
           onToggleCollapse={handleToggleCollapse}
           contentId={`worktree-body-${worktree.id}`}
           branchLabel={branchLabel}
-          lifecycleStage={lifecycleStage}
           worktreeErrorCount={worktreeErrors.length}
           dragHandleListeners={dragHandleListeners}
           dragHandleActivatorRef={dragHandleActivatorRef}

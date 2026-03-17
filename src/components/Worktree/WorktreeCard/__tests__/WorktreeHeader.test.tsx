@@ -72,7 +72,6 @@ function renderHeader(overrides: Partial<WorktreeHeaderProps> = {}) {
       isMainWorktree={false}
       isPinned={false}
       branchLabel="feature/test"
-      lifecycleStage={null}
       worktreeErrorCount={0}
       badges={{}}
       menu={baseMenu}

@@ -128,7 +128,6 @@ import {
   sortWorktreesByRelevance,
   groupByType,
   findIntegrationWorktree,
-  filterTriageWorktrees,
   scoreWorktree,
   type DerivedWorktreeMeta,
   type FilterState,
@@ -282,18 +281,6 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   const integrationWorktree = useMemo(
     () => findIntegrationWorktree(worktrees, mainWorktree?.id),
     [worktrees, mainWorktree]
-  );
-
-  const triageWorktrees = useMemo(
-    () =>
-      filterTriageWorktrees(
-        worktrees,
-        derivedMetaMap,
-        mainWorktree?.id,
-        integrationWorktree?.id,
-        query
-      ),
-    [worktrees, derivedMetaMap, mainWorktree, integrationWorktree, query]
   );
 
   const { filteredWorktrees, groupedSections } = useMemo(() => {
@@ -654,20 +641,9 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
 
       {/* Non-main worktree list */}
       <div className="relative flex-1 min-h-0">
-        <div ref={scrollContainerRef} className="h-full overflow-y-auto">
+        <div ref={scrollContainerRef} className="h-full overflow-y-auto scrollbar-none">
           <div ref={scrollContentRef}>
-            {triageWorktrees.length > 0 && (
-              <div>
-                <div className="px-4 py-2 text-[10px] font-medium text-canopy-text/50 uppercase tracking-wide">
-                  Needs Attention
-                </div>
-                <div className="flex flex-col">{triageWorktrees.map(renderWorktreeCard)}</div>
-                <div className="border-b border-divider/60" />
-              </div>
-            )}
-            {filteredWorktrees.length === 0 &&
-            triageWorktrees.length === 0 &&
-            hasActiveFilters() ? (
+            {filteredWorktrees.length === 0 && hasActiveFilters() ? (
               <div className="flex flex-col items-center justify-center py-12 px-4 text-center">
                 <FilterX className="w-10 h-10 text-canopy-text/40 mb-3" />
                 <p className="text-sm text-canopy-text/60 mb-3">No worktrees match your filters</p>
