@@ -214,6 +214,120 @@ describe("TerminalAgentStateController", () => {
     });
   });
 
+  describe("onEnterPressed", () => {
+    it("immediately transitions waiting → working", () => {
+      const managed = makeMockManaged({
+        canonicalAgentState: "waiting",
+        agentState: "waiting",
+      });
+      instances.set("t1", managed);
+
+      controller.onEnterPressed("t1");
+      expect(managed.agentState).toBe("working");
+      expect(managed.canonicalAgentState).toBe("waiting");
+    });
+
+    it("immediately transitions directing → working and cancels timer", () => {
+      const managed = makeMockManaged({
+        canonicalAgentState: "waiting",
+        agentState: "waiting",
+      });
+      instances.set("t1", managed);
+
+      controller.onUserInput("t1");
+      expect(managed.agentState).toBe("directing");
+
+      controller.onEnterPressed("t1");
+      expect(managed.agentState).toBe("working");
+
+      vi.advanceTimersByTime(3000);
+      expect(managed.agentState).toBe("working");
+    });
+
+    it("notifies subscribers", () => {
+      const callback = vi.fn();
+      const managed = makeMockManaged({
+        canonicalAgentState: "waiting",
+        agentState: "waiting",
+      });
+      managed.agentStateSubscribers.add(callback);
+      instances.set("t1", managed);
+
+      controller.onEnterPressed("t1");
+      expect(callback).toHaveBeenCalledWith("working");
+    });
+
+    it("no-ops when already working", () => {
+      const callback = vi.fn();
+      const managed = makeMockManaged({
+        canonicalAgentState: "waiting",
+        agentState: "working",
+      });
+      managed.agentStateSubscribers.add(callback);
+      instances.set("t1", managed);
+
+      controller.onEnterPressed("t1");
+      expect(callback).not.toHaveBeenCalled();
+    });
+
+    it("no-ops for non-agent terminals", () => {
+      const managed = makeMockManaged({
+        kind: "terminal",
+        canonicalAgentState: "waiting",
+        agentState: "waiting",
+      });
+      instances.set("t1", managed);
+
+      controller.onEnterPressed("t1");
+      expect(managed.agentState).toBe("waiting");
+    });
+
+    it("no-ops when canonicalAgentState is not waiting", () => {
+      const managed = makeMockManaged({
+        canonicalAgentState: "working",
+        agentState: "working",
+      });
+      instances.set("t1", managed);
+
+      controller.onEnterPressed("t1");
+      expect(managed.agentState).toBe("working");
+    });
+
+    it("no-ops for unknown terminal", () => {
+      controller.onEnterPressed("nonexistent");
+    });
+
+    it("prevents onUserInput from reverting working to directing", () => {
+      const managed = makeMockManaged({
+        canonicalAgentState: "waiting",
+        agentState: "waiting",
+      });
+      instances.set("t1", managed);
+
+      controller.onEnterPressed("t1");
+      expect(managed.agentState).toBe("working");
+
+      controller.onUserInput("t1");
+      expect(managed.agentState).toBe("working");
+    });
+
+    it("does not duplicate notification when setAgentState confirms working", () => {
+      const callback = vi.fn();
+      const managed = makeMockManaged({
+        canonicalAgentState: "waiting",
+        agentState: "waiting",
+      });
+      managed.agentStateSubscribers.add(callback);
+      instances.set("t1", managed);
+
+      controller.onEnterPressed("t1");
+      expect(callback).toHaveBeenCalledTimes(1);
+
+      controller.setAgentState("t1", "working");
+      expect(callback).toHaveBeenCalledTimes(1);
+    });
+  });
+
   describe("destroy", () => {
     it("cancels active directing timer", () => {
       const managed = makeMockManaged({
