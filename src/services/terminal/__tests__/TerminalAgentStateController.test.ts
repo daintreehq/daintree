@@ -3,10 +3,11 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { TerminalAgentStateController } from "../TerminalAgentStateController";
 import type { ManagedTerminal } from "../types";
 
+const mockUpdateAgentState = vi.fn();
 vi.mock("@/store/terminalStore", () => ({
   useTerminalStore: {
     getState: () => ({
-      updateAgentState: vi.fn(),
+      updateAgentState: mockUpdateAgentState,
     }),
   },
 }));
@@ -31,6 +32,7 @@ describe("TerminalAgentStateController", () => {
 
   beforeEach(() => {
     vi.useFakeTimers();
+    mockUpdateAgentState.mockClear();
     instances = new Map();
     controller = new TerminalAgentStateController({
       getInstance: (id) => instances.get(id),
@@ -225,6 +227,8 @@ describe("TerminalAgentStateController", () => {
       controller.onEnterPressed("t1");
       expect(managed.agentState).toBe("working");
       expect(managed.canonicalAgentState).toBe("waiting");
+      expect(mockUpdateAgentState).toHaveBeenCalledWith("t1", "working");
+      expect(mockUpdateAgentState).toHaveBeenCalledTimes(1);
     });
 
     it("immediately transitions directing → working and cancels timer", () => {
@@ -284,13 +288,14 @@ describe("TerminalAgentStateController", () => {
 
     it("no-ops when canonicalAgentState is not waiting", () => {
       const managed = makeMockManaged({
-        canonicalAgentState: "working",
-        agentState: "working",
+        canonicalAgentState: "completed",
+        agentState: "completed",
       });
       instances.set("t1", managed);
 
       controller.onEnterPressed("t1");
-      expect(managed.agentState).toBe("working");
+      expect(managed.agentState).toBe("completed");
+      expect(mockUpdateAgentState).not.toHaveBeenCalled();
     });
 
     it("no-ops for unknown terminal", () => {

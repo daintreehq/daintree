@@ -607,6 +607,7 @@ class TerminalInstanceService {
         if (
           !managed.isInputLocked &&
           domEvent.key === "Enter" &&
+          !domEvent.isComposing &&
           !domEvent.shiftKey &&
           !domEvent.ctrlKey &&
           !domEvent.altKey &&
