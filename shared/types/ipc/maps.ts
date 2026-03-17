@@ -129,6 +129,7 @@ import type {
   DemoTypePayload,
   DemoSetZoomPayload,
   DemoWaitForSelectorPayload,
+  DemoSleepPayload,
   DemoScreenshotResult,
 } from "./demo.js";
 
@@ -1566,6 +1567,10 @@ export interface IpcInvokeMap {
     args: [];
     result: void;
   };
+  "demo:sleep": {
+    args: [payload: DemoSleepPayload];
+    result: void;
+  };
 
   // Project MCP server channels
   "project-mcp:get-statuses": {
@@ -1742,6 +1747,7 @@ export interface IpcEventMap {
   "demo:exec-pause": void;
   "demo:exec-resume": void;
   "demo:exec-wait-for-selector": DemoWaitForSelectorPayload;
+  "demo:exec-sleep": DemoSleepPayload;
 
   // Project MCP server events
   "project-mcp:status-changed": {

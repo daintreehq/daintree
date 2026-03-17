@@ -7,6 +7,7 @@ import type {
   DemoTypePayload,
   DemoSetZoomPayload,
   DemoWaitForSelectorPayload,
+  DemoSleepPayload,
   DemoScreenshotResult,
 } from "../../../shared/types/ipc/demo.js";
 
@@ -94,6 +95,13 @@ export function registerDemoHandlers(deps: HandlerDependencies): () => void {
     await sendCommandAndAwait(CHANNELS.DEMO_EXEC_RESUME);
   };
 
+  const handleSleep = async (
+    _event: Electron.IpcMainInvokeEvent,
+    payload: DemoSleepPayload
+  ): Promise<void> => {
+    await sendCommandAndAwait(CHANNELS.DEMO_EXEC_SLEEP, payload);
+  };
+
   ipcMain.handle(CHANNELS.DEMO_MOVE_TO, handleMoveTo);
   ipcMain.handle(CHANNELS.DEMO_CLICK, handleClick);
   ipcMain.handle(CHANNELS.DEMO_SCREENSHOT, handleScreenshot);
@@ -102,6 +110,7 @@ export function registerDemoHandlers(deps: HandlerDependencies): () => void {
   ipcMain.handle(CHANNELS.DEMO_WAIT_FOR_SELECTOR, handleWaitForSelector);
   ipcMain.handle(CHANNELS.DEMO_PAUSE, handlePause);
   ipcMain.handle(CHANNELS.DEMO_RESUME, handleResume);
+  ipcMain.handle(CHANNELS.DEMO_SLEEP, handleSleep);
 
   return () => {
     ipcMain.removeHandler(CHANNELS.DEMO_MOVE_TO);
@@ -112,5 +121,6 @@ export function registerDemoHandlers(deps: HandlerDependencies): () => void {
     ipcMain.removeHandler(CHANNELS.DEMO_WAIT_FOR_SELECTOR);
     ipcMain.removeHandler(CHANNELS.DEMO_PAUSE);
     ipcMain.removeHandler(CHANNELS.DEMO_RESUME);
+    ipcMain.removeHandler(CHANNELS.DEMO_SLEEP);
   };
 }

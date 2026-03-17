@@ -20,6 +20,10 @@ export interface DemoWaitForSelectorPayload {
   timeoutMs?: number;
 }
 
+export interface DemoSleepPayload {
+  durationMs: number;
+}
+
 export interface DemoScreenshotResult {
   data: Uint8Array;
   width: number;

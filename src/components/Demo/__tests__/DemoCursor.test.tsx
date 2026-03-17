@@ -71,14 +71,15 @@ describe("DemoCursor", () => {
       "demo:exec-wait-for-selector",
       expect.any(Function)
     );
+    expect(demoMock.onExecCommand).toHaveBeenCalledWith("demo:exec-sleep", expect.any(Function));
     expect(demoMock.onExecCommand).toHaveBeenCalledWith("demo:exec-pause", expect.any(Function));
     expect(demoMock.onExecCommand).toHaveBeenCalledWith("demo:exec-resume", expect.any(Function));
   });
 
   it("cleans up listeners on unmount", () => {
     const { unmount } = render(<DemoCursor />);
-    // All 7 onExecCommand calls return cleanup functions
-    expect(demoMock.onExecCommand).toHaveBeenCalledTimes(7);
+    // All 8 onExecCommand calls return cleanup functions
+    expect(demoMock.onExecCommand).toHaveBeenCalledTimes(8);
     unmount();
     // After unmount, listeners should be removed
     expect(listenerMap.get("demo:exec-move-to")?.length ?? 0).toBe(0);
@@ -121,6 +122,79 @@ describe("DemoCursor", () => {
 
     expect(demoMock.sendCommandDone).toHaveBeenCalledWith("req-4", undefined);
     expect(demoMock.sendCommandDone).toHaveBeenCalledWith("req-5", undefined);
+  });
+
+  it("type() inserts characters into native input and sends done", async () => {
+    const input = document.createElement("input");
+    input.id = "native-input";
+    document.body.appendChild(input);
+
+    render(<DemoCursor />);
+    emit("demo:exec-type", {
+      selector: "#native-input",
+      text: "hi",
+      cps: 1000,
+      requestId: "req-type-native",
+    });
+
+    await new Promise((r) => setTimeout(r, 200));
+
+    expect(input.value).toBe("hi");
+    expect(demoMock.sendCommandDone).toHaveBeenCalledWith("req-type-native", undefined);
+
+    document.body.removeChild(input);
+  });
+
+  it("type() dispatches CodeMirror transactions when target is a CM editor", async () => {
+    const { EditorState } = await import("@codemirror/state");
+    const { EditorView } = await import("@codemirror/view");
+
+    const container = document.createElement("div");
+    container.id = "cm-container";
+    document.body.appendChild(container);
+
+    const view = new EditorView({
+      state: EditorState.create({ doc: "" }),
+      parent: container,
+    });
+
+    render(<DemoCursor />);
+    emit("demo:exec-type", {
+      selector: "#cm-container",
+      text: "ab",
+      cps: 1000,
+      requestId: "req-type-cm",
+    });
+
+    await new Promise((r) => setTimeout(r, 200));
+
+    expect(view.state.doc.toString()).toBe("ab");
+    expect(demoMock.sendCommandDone).toHaveBeenCalledWith("req-type-cm", undefined);
+
+    view.destroy();
+    document.body.removeChild(container);
+  });
+
+  it("sleep completes after the specified duration", async () => {
+    vi.useFakeTimers();
+
+    render(<DemoCursor />);
+    let done = false;
+    const original = demoMock.sendCommandDone.getMockImplementation();
+    demoMock.sendCommandDone.mockImplementation((requestId: string, error?: string) => {
+      if (requestId === "req-sleep") done = true;
+      original?.(requestId, error);
+    });
+
+    emit("demo:exec-sleep", { durationMs: 200, requestId: "req-sleep" });
+
+    await vi.advanceTimersByTimeAsync(100);
+    expect(done).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(150);
+    expect(done).toBe(true);
+
+    vi.useRealTimers();
   });
 
   it("waitForSelector resolves immediately when element exists", async () => {

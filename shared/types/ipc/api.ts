@@ -1118,6 +1118,7 @@ export interface ElectronAPI {
     waitForSelector(selector: string, timeoutMs?: number): Promise<void>;
     pause(): Promise<void>;
     resume(): Promise<void>;
+    sleep(durationMs: number): Promise<void>;
     onExecCommand(
       channel: string,
       callback: (payload: Record<string, unknown>) => void

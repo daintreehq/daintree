@@ -43,9 +43,9 @@ describe("registerDemoHandlers", () => {
     cleanup();
   });
 
-  it("registers 8 IPC handlers when isDemoMode is true", () => {
+  it("registers 9 IPC handlers when isDemoMode is true", () => {
     const cleanup = registerDemoHandlers(makeDeps(true));
-    expect(ipcMainMock.handle).toHaveBeenCalledTimes(8);
+    expect(ipcMainMock.handle).toHaveBeenCalledTimes(9);
     cleanup();
   });
 
@@ -60,13 +60,14 @@ describe("registerDemoHandlers", () => {
     expect(channels).toContain("demo:wait-for-selector");
     expect(channels).toContain("demo:pause");
     expect(channels).toContain("demo:resume");
+    expect(channels).toContain("demo:sleep");
     cleanup();
   });
 
-  it("cleanup removes all 8 handlers", () => {
+  it("cleanup removes all 9 handlers", () => {
     const cleanup = registerDemoHandlers(makeDeps(true));
     cleanup();
-    expect(ipcMainMock.removeHandler).toHaveBeenCalledTimes(8);
+    expect(ipcMainMock.removeHandler).toHaveBeenCalledTimes(9);
     expect(ipcMainMock.removeHandler).toHaveBeenCalledWith("demo:move-to");
     expect(ipcMainMock.removeHandler).toHaveBeenCalledWith("demo:click");
     expect(ipcMainMock.removeHandler).toHaveBeenCalledWith("demo:screenshot");
@@ -75,6 +76,7 @@ describe("registerDemoHandlers", () => {
     expect(ipcMainMock.removeHandler).toHaveBeenCalledWith("demo:wait-for-selector");
     expect(ipcMainMock.removeHandler).toHaveBeenCalledWith("demo:pause");
     expect(ipcMainMock.removeHandler).toHaveBeenCalledWith("demo:resume");
+    expect(ipcMainMock.removeHandler).toHaveBeenCalledWith("demo:sleep");
   });
 
   it("screenshot handler returns Uint8Array with PNG magic bytes", async () => {
@@ -114,6 +116,29 @@ describe("registerDemoHandlers", () => {
     expect(deps.mainWindow.webContents.send as ReturnType<typeof vi.fn>).toHaveBeenCalledWith(
       "demo:exec-move-to",
       { x: 25, y: 75, durationMs: 500, requestId: "test-request-id" }
+    );
+  });
+
+  it("sleep handler sends exec-sleep event with requestId and awaits done", async () => {
+    const deps = makeDeps(true);
+    registerDemoHandlers(deps);
+
+    const [, handler] =
+      ipcMainMock.handle.mock.calls.find(([ch]: unknown[]) => ch === "demo:sleep") ?? [];
+
+    ipcMainMock.on.mockImplementation((channel: string, listener: (...args: unknown[]) => void) => {
+      if (channel === "demo:command-done") {
+        setTimeout(() => {
+          listener({}, { requestId: "test-request-id" });
+        }, 10);
+      }
+    });
+
+    const result = await handler({}, { durationMs: 1000 });
+    expect(result).toBeUndefined();
+    expect(deps.mainWindow.webContents.send as ReturnType<typeof vi.fn>).toHaveBeenCalledWith(
+      "demo:exec-sleep",
+      { durationMs: 1000, requestId: "test-request-id" }
     );
   });
 });

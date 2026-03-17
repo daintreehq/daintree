@@ -451,6 +451,8 @@ export const CHANNELS = {
   DEMO_EXEC_PAUSE: "demo:exec-pause",
   DEMO_EXEC_RESUME: "demo:exec-resume",
   DEMO_EXEC_WAIT_FOR_SELECTOR: "demo:exec-wait-for-selector",
+  DEMO_SLEEP: "demo:sleep",
+  DEMO_EXEC_SLEEP: "demo:exec-sleep",
   DEMO_COMMAND_DONE: "demo:command-done",
 
   // Workflow approval channels

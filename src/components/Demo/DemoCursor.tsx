@@ -1,9 +1,12 @@
 import { useEffect, useRef } from "react";
+import { EditorView } from "@codemirror/view";
+import { Transaction } from "@codemirror/state";
 import type {
   DemoMoveToPayload,
   DemoTypePayload,
   DemoSetZoomPayload,
   DemoWaitForSelectorPayload,
+  DemoSleepPayload,
 } from "@shared/types/ipc/demo";
 
 const CURSOR_SVG_PATH = "M2.5 1L17.5 13.5H9.5L14 22L11 23.5L6.5 15L2.5 19.5V1Z";
@@ -32,6 +35,16 @@ export function DemoCursor() {
       return new Promise<void>((resolve) => {
         pauseResolversRef.current.push(resolve);
       });
+    }
+
+    async function pauseAwareDelay(ms: number): Promise<void> {
+      let remaining = ms;
+      while (remaining > 0) {
+        await waitIfPaused();
+        const chunk = Math.min(remaining, 50);
+        await new Promise<void>((resolve) => setTimeout(resolve, chunk));
+        remaining -= chunk;
+      }
     }
 
     cleanups.push(
@@ -121,26 +134,39 @@ export function DemoCursor() {
         const payload = raw as unknown as DemoTypePayload & { requestId: string };
         try {
           await waitIfPaused();
-          const target = document.querySelector(payload.selector) as
-            | HTMLInputElement
-            | HTMLTextAreaElement
-            | null;
+          const target = document.querySelector(payload.selector) as HTMLElement | null;
           if (!target) {
             sendDone(payload.requestId, `Selector not found: ${payload.selector}`);
             return;
           }
 
-          target.focus();
           const cps = payload.cps ?? 12;
           const delay = 1000 / cps;
 
-          for (const char of payload.text) {
-            if (pausedRef.current) await waitIfPaused();
-            target.value += char;
-            target.dispatchEvent(
-              new InputEvent("input", { inputType: "insertText", data: char, bubbles: true })
-            );
-            await new Promise((r) => setTimeout(r, delay));
+          const cmView = EditorView.findFromDOM(target);
+          if (cmView) {
+            cmView.focus();
+            for (const char of payload.text) {
+              await waitIfPaused();
+              const pos = cmView.state.selection.main.head;
+              cmView.dispatch({
+                changes: { from: pos, insert: char },
+                selection: { anchor: pos + char.length },
+                annotations: Transaction.userEvent.of("input"),
+              });
+              await pauseAwareDelay(delay);
+            }
+          } else {
+            const inputTarget = target as HTMLInputElement | HTMLTextAreaElement;
+            inputTarget.focus();
+            for (const char of payload.text) {
+              await waitIfPaused();
+              inputTarget.value += char;
+              inputTarget.dispatchEvent(
+                new InputEvent("input", { inputType: "insertText", data: char, bubbles: true })
+              );
+              await pauseAwareDelay(delay);
+            }
           }
           sendDone(payload.requestId);
         } catch (err) {
@@ -210,6 +236,18 @@ export function DemoCursor() {
             });
             observer.observe(document.body, { subtree: true, childList: true });
           });
+          sendDone(payload.requestId);
+        } catch (err) {
+          sendDone(payload.requestId, String(err));
+        }
+      })
+    );
+
+    cleanups.push(
+      demo.onExecCommand("demo:exec-sleep", async (raw: Record<string, unknown>) => {
+        const payload = raw as unknown as DemoSleepPayload & { requestId: string };
+        try {
+          await pauseAwareDelay(payload.durationMs);
           sendDone(payload.requestId);
         } catch (err) {
           sendDone(payload.requestId, String(err));

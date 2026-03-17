@@ -614,6 +614,8 @@ const CHANNELS = {
   DEMO_EXEC_PAUSE: "demo:exec-pause",
   DEMO_EXEC_RESUME: "demo:exec-resume",
   DEMO_EXEC_WAIT_FOR_SELECTOR: "demo:exec-wait-for-selector",
+  DEMO_SLEEP: "demo:sleep",
+  DEMO_EXEC_SLEEP: "demo:exec-sleep",
   DEMO_COMMAND_DONE: "demo:command-done",
 
   // Workflow approval channels
@@ -2054,6 +2056,7 @@ const api: ElectronAPI = {
             _typedInvoke(CHANNELS.DEMO_WAIT_FOR_SELECTOR, { selector, timeoutMs }),
           pause: () => _typedInvoke(CHANNELS.DEMO_PAUSE),
           resume: () => _typedInvoke(CHANNELS.DEMO_RESUME),
+          sleep: (durationMs: number) => _typedInvoke(CHANNELS.DEMO_SLEEP, { durationMs }),
           onExecCommand: (
             channel: string,
             callback: (payload: Record<string, unknown>) => void
