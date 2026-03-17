@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import os from "os";
 
 const sentryInitMock = vi.hoisted(() => vi.fn());
+const captureEventMock = vi.hoisted(() => vi.fn(() => "mock-event-id"));
 
 const storeMock = vi.hoisted(() => {
   const data: Record<string, unknown> = {
@@ -24,6 +25,7 @@ vi.mock("electron", () => ({
 
 vi.mock("@sentry/electron/main", () => ({
   init: sentryInitMock,
+  captureEvent: captureEventMock,
 }));
 
 import {
@@ -33,6 +35,8 @@ import {
   setTelemetryEnabled,
   hasTelemetryPromptBeenShown,
   markTelemetryPromptShown,
+  trackEvent,
+  _getPreConsentBufferLength,
 } from "../TelemetryService.js";
 
 describe("sanitizePath", () => {
@@ -103,17 +107,17 @@ describe("setTelemetryEnabled", () => {
     storeMock.get.mockReturnValue({ enabled: false, hasSeenPrompt: false });
   });
 
-  it("stores enabled=true", () => {
-    setTelemetryEnabled(true);
+  it("stores enabled=true", async () => {
+    await setTelemetryEnabled(true);
     expect(storeMock.set).toHaveBeenCalledWith("telemetry", {
       enabled: true,
       hasSeenPrompt: false,
     });
   });
 
-  it("stores enabled=false", () => {
+  it("stores enabled=false", async () => {
     storeMock.get.mockReturnValue({ enabled: true, hasSeenPrompt: true });
-    setTelemetryEnabled(false);
+    await setTelemetryEnabled(false);
     expect(storeMock.set).toHaveBeenCalledWith("telemetry", {
       enabled: false,
       hasSeenPrompt: true,
@@ -187,5 +191,113 @@ describe("initializeTelemetry", () => {
     await initializeTelemetry();
     expect(sentryInitMock).not.toHaveBeenCalled();
     process.env.SENTRY_DSN = original;
+  });
+});
+
+describe("trackEvent", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    captureEventMock.mockClear();
+    storeMock.get.mockReturnValue({ enabled: false, hasSeenPrompt: false });
+    // Clear the buffer by disabling telemetry
+    // (preConsentBuffer.length = 0 happens inside setTelemetryEnabled(false))
+  });
+
+  it("buffers events before consent is decided", async () => {
+    storeMock.get.mockReturnValue({ enabled: false, hasSeenPrompt: false });
+    trackEvent("onboarding_step_viewed", { step: "telemetry" });
+    expect(_getPreConsentBufferLength()).toBeGreaterThan(0);
+    expect(captureEventMock).not.toHaveBeenCalled();
+  });
+
+  it("drops events when consent was explicitly denied", async () => {
+    // Clear buffer first
+    await setTelemetryEnabled(false);
+    storeMock.get.mockReturnValue({ enabled: false, hasSeenPrompt: true });
+    const before = _getPreConsentBufferLength();
+    trackEvent("onboarding_step_viewed", { step: "telemetry" });
+    expect(_getPreConsentBufferLength()).toBe(before);
+    expect(captureEventMock).not.toHaveBeenCalled();
+  });
+
+  it("sends directly when telemetry is enabled and Sentry is initialized", async () => {
+    const original = process.env.SENTRY_DSN;
+    process.env.SENTRY_DSN = "https://test@sentry.io/123";
+    storeMock._data.telemetry = { enabled: true, hasSeenPrompt: true };
+    storeMock._data.privacy = { telemetryLevel: "full", logRetentionDays: 30 };
+    storeMock.get.mockImplementation((key: string) => storeMock._data[key]);
+    await initializeTelemetry();
+    captureEventMock.mockClear();
+
+    trackEvent("onboarding_completed", { totalSteps: 3 });
+    expect(captureEventMock).toHaveBeenCalledTimes(1);
+    expect(captureEventMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: "onboarding_completed",
+        tags: { kind: "analytics" },
+      })
+    );
+    process.env.SENTRY_DSN = original;
+  });
+
+  it("does not write buffer contents to the store", () => {
+    storeMock.set.mockClear();
+    storeMock.get.mockReturnValue({ enabled: false, hasSeenPrompt: false });
+    trackEvent("onboarding_step_viewed", { step: "telemetry" });
+    trackEvent("onboarding_step_viewed", { step: "agentSelection" });
+    // store.set should NOT have been called with any buffer data
+    for (const call of storeMock.set.mock.calls) {
+      expect(call[0]).not.toContain("buffer");
+    }
+  });
+});
+
+describe("setTelemetryEnabled with buffer", () => {
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    captureEventMock.mockClear();
+    // Clean buffer
+    await setTelemetryEnabled(false);
+  });
+
+  it("flushes buffered events on consent", async () => {
+    const original = process.env.SENTRY_DSN;
+    process.env.SENTRY_DSN = "https://test@sentry.io/123";
+
+    storeMock.get.mockReturnValue({ enabled: false, hasSeenPrompt: false });
+    trackEvent("onboarding_step_viewed", { step: "telemetry" });
+    trackEvent("onboarding_step_viewed", { step: "agentSelection" });
+
+    // Now enable — this should flush
+    storeMock.get.mockReturnValue({ enabled: true, hasSeenPrompt: true });
+    captureEventMock.mockClear();
+    await setTelemetryEnabled(true);
+
+    expect(captureEventMock).toHaveBeenCalledTimes(2);
+    expect(_getPreConsentBufferLength()).toBe(0);
+
+    process.env.SENTRY_DSN = original;
+  });
+
+  it("discards buffer when consent denied", async () => {
+    storeMock.get.mockReturnValue({ enabled: false, hasSeenPrompt: false });
+    trackEvent("onboarding_step_viewed", { step: "telemetry" });
+    expect(_getPreConsentBufferLength()).toBeGreaterThan(0);
+
+    await setTelemetryEnabled(false);
+    expect(_getPreConsentBufferLength()).toBe(0);
+    expect(captureEventMock).not.toHaveBeenCalled();
+  });
+
+  it("respects buffer cap", async () => {
+    storeMock.get.mockReturnValue({ enabled: false, hasSeenPrompt: false });
+    // Clear buffer
+    await setTelemetryEnabled(false);
+    storeMock.get.mockReturnValue({ enabled: false, hasSeenPrompt: false });
+
+    for (let i = 0; i < 110; i++) {
+      trackEvent("onboarding_step_viewed", { step: "telemetry", i });
+    }
+    expect(_getPreConsentBufferLength()).toBe(100);
   });
 });

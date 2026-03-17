@@ -1,6 +1,7 @@
-import type { TerminalType } from "../../shared/types/domain.js";
+import type { TerminalType } from "../../shared/types/panel.js";
 import type { ProcessTreeCache } from "./ProcessTreeCache.js";
 import { logDebug, logWarn } from "../utils/logger.js";
+import { AGENT_REGISTRY } from "../../shared/config/agentRegistry.js";
 
 interface ChildProcess {
   pid: number;
@@ -17,19 +18,27 @@ interface DetectedProcessCandidate {
   order: number;
 }
 
-const AGENT_CLI_NAMES: Record<string, TerminalType> = {
-  claude: "claude",
-  gemini: "gemini",
-  codex: "codex",
-  opencode: "opencode",
-};
+const AGENT_CLI_NAMES: Record<string, TerminalType> = Object.fromEntries(
+  Object.entries(AGENT_REGISTRY).flatMap(([id, config]) => {
+    const entries: [string, TerminalType][] = [[config.command, id as TerminalType]];
+    if (config.command !== id) {
+      entries.push([id, id as TerminalType]);
+    }
+    return entries;
+  })
+);
 
 const PROCESS_ICON_MAP: Record<string, string> = {
-  // AI agents
-  claude: "claude",
-  gemini: "gemini",
-  codex: "codex",
-  opencode: "opencode",
+  // AI agents (derived from registry)
+  ...Object.fromEntries(
+    Object.entries(AGENT_REGISTRY).flatMap(([id, config]) => {
+      const entries: [string, string][] = [[id, config.iconId]];
+      if (config.command !== id) {
+        entries.push([config.command, config.iconId]);
+      }
+      return entries;
+    })
+  ),
   // Package managers
   npm: "npm",
   npx: "npm",

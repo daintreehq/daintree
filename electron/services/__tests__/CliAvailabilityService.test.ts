@@ -36,10 +36,11 @@ describe("CliAvailabilityService", () => {
         gemini: true,
         codex: true,
         opencode: true,
+        cursor: true,
       });
 
-      // Should have called execFileSync 4 times (once for each CLI)
-      expect(mockedExecFileSync).toHaveBeenCalledTimes(4);
+      // Should have called execFileSync 5 times (once for each CLI)
+      expect(mockedExecFileSync).toHaveBeenCalledTimes(5);
 
       // Verify stdio: "ignore" is passed to avoid hanging on TTY
       expect(mockedExecFileSync).toHaveBeenCalledWith(
@@ -65,6 +66,7 @@ describe("CliAvailabilityService", () => {
         gemini: false,
         codex: false,
         opencode: false,
+        cursor: false,
       });
     });
 
@@ -81,6 +83,7 @@ describe("CliAvailabilityService", () => {
         gemini: false,
         codex: false,
         opencode: false,
+        cursor: false,
       });
     });
 
@@ -170,6 +173,7 @@ describe("CliAvailabilityService", () => {
         gemini: true,
         codex: true,
         opencode: true,
+        cursor: true,
       });
     });
   });
@@ -185,6 +189,7 @@ describe("CliAvailabilityService", () => {
         gemini: true,
         codex: true,
         opencode: true,
+        cursor: true,
       });
 
       // Clear mocks
@@ -205,12 +210,13 @@ describe("CliAvailabilityService", () => {
         gemini: false,
         codex: false,
         opencode: false,
+        cursor: false,
       });
 
       expect(service.getAvailability()).toEqual(refreshed);
 
-      // Should have called execFileSync again (4 times for refresh)
-      expect(mockedExecFileSync).toHaveBeenCalledTimes(4);
+      // Should have called execFileSync again (5 times for refresh)
+      expect(mockedExecFileSync).toHaveBeenCalledTimes(5);
     });
 
     it("works on cold start before initial check", async () => {
@@ -227,6 +233,7 @@ describe("CliAvailabilityService", () => {
         gemini: true,
         codex: true,
         opencode: true,
+        cursor: true,
       });
 
       expect(freshService.getAvailability()).toEqual(result);
@@ -246,12 +253,13 @@ describe("CliAvailabilityService", () => {
 
       await service.checkAvailability();
 
-      // All four CLIs should have been checked
-      expect(executionOrder).toHaveLength(4);
+      // All five CLIs should have been checked
+      expect(executionOrder).toHaveLength(5);
       expect(executionOrder).toContain("claude");
       expect(executionOrder).toContain("gemini");
       expect(executionOrder).toContain("codex");
       expect(executionOrder).toContain("opencode");
+      expect(executionOrder).toContain("cursor-agent");
     });
 
     it("deduplicates concurrent checkAvailability calls", async () => {
@@ -268,9 +276,9 @@ describe("CliAvailabilityService", () => {
       expect(result1).toEqual(result2);
       expect(result2).toEqual(result3);
 
-      // Should only have called execFileSync 4 times total (not 12)
+      // Should only have called execFileSync 5 times total (not 15)
       // because concurrent calls share the same in-flight promise
-      expect(mockedExecFileSync).toHaveBeenCalledTimes(4);
+      expect(mockedExecFileSync).toHaveBeenCalledTimes(5);
     });
 
     it("concurrent refresh calls each trigger a new check", async () => {
@@ -282,9 +290,9 @@ describe("CliAvailabilityService", () => {
       // Both should return the same result (mocked)
       expect(result1).toEqual(result2);
 
-      // Should call execFileSync 8 times total (4 for each refresh)
+      // Should call execFileSync 10 times total (5 for each refresh)
       // Refresh intentionally breaks deduplication to ensure freshness
-      expect(mockedExecFileSync).toHaveBeenCalledTimes(8);
+      expect(mockedExecFileSync).toHaveBeenCalledTimes(10);
     });
 
     it("allows sequential checks after first completes", async () => {
@@ -292,13 +300,13 @@ describe("CliAvailabilityService", () => {
 
       // First check
       await service.checkAvailability();
-      expect(mockedExecFileSync).toHaveBeenCalledTimes(4);
+      expect(mockedExecFileSync).toHaveBeenCalledTimes(5);
 
       vi.clearAllMocks();
 
       // Second check after first completes should trigger new checks
       await service.refresh();
-      expect(mockedExecFileSync).toHaveBeenCalledTimes(4);
+      expect(mockedExecFileSync).toHaveBeenCalledTimes(5);
     });
   });
 

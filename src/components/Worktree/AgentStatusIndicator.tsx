@@ -39,7 +39,7 @@ const STATE_CONFIG: Record<
     icon: "?",
     color: "text-canopy-bg",
     bgColor: "bg-state-waiting",
-    glow: "shadow-[0_0_8px_rgba(251,191,36,0.4)]",
+    glow: "shadow-[0_0_8px_color-mix(in_srgb,var(--color-activity-waiting)_40%,transparent)]",
     pulse: false,
     label: "waiting",
     tooltip: "Agent is waiting for your direction",
@@ -58,6 +58,14 @@ const STATE_CONFIG: Record<
     pulse: false,
     label: "failed",
     tooltip: "Agent ran into an issue",
+  },
+  directing: {
+    icon: "✎",
+    color: "text-status-info",
+    borderColor: "border-status-info",
+    pulse: false,
+    label: "directing",
+    tooltip: "You are typing a prompt for this agent",
   },
 };
 
@@ -99,8 +107,9 @@ export function AgentStatusIndicator({ state, className }: AgentStatusIndicatorP
 }
 
 const STATE_PRIORITY: Record<AgentState, number> = {
-  failed: 6,
-  working: 5,
+  failed: 7,
+  working: 6,
+  directing: 5,
   running: 4,
   completed: 3,
   waiting: 2,

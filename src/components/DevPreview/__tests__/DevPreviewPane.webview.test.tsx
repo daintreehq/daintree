@@ -2,7 +2,7 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 import type { DevPreviewPaneProps } from "../DevPreviewPane";
-import { DevPreviewPane } from "../DevPreviewPane";
+import { DevPreviewPane, _resetScrollCacheForTests } from "../DevPreviewPane";
 
 type MockWebviewElement = HTMLElement & {
   reload: ReturnType<typeof vi.fn>;
@@ -10,6 +10,7 @@ type MockWebviewElement = HTMLElement & {
   setZoomFactor: ReturnType<typeof vi.fn>;
   getURL: ReturnType<typeof vi.fn>;
   isLoading: ReturnType<typeof vi.fn>;
+  executeJavaScript: ReturnType<typeof vi.fn>;
   setMockLoading: (value: boolean) => void;
 };
 
@@ -36,6 +37,7 @@ function decorateWebviewElement(element: HTMLElement): MockWebviewElement {
     return currentUrl;
   });
   webview.isLoading = vi.fn(() => loading);
+  webview.executeJavaScript = vi.fn().mockResolvedValue(0);
   webview.setMockLoading = (value: boolean) => {
     loading = value;
   };
@@ -145,6 +147,26 @@ vi.mock("@/components/DragDrop", () => ({
   useIsDragging: useIsDraggingMock,
 }));
 
+vi.mock("@/hooks/useWebviewDialog", () => ({
+  useWebviewDialog: () => ({ currentDialog: null, handleDialogRespond: vi.fn() }),
+}));
+
+vi.mock("@/hooks/useFindInPage", () => ({
+  useFindInPage: () => ({
+    isOpen: false,
+    query: "",
+    activeMatch: 0,
+    matchCount: 0,
+    inputRef: { current: null },
+    isComposingRef: { current: false },
+    open: vi.fn(),
+    close: vi.fn(),
+    setQuery: vi.fn(),
+    goNext: vi.fn(),
+    goPrev: vi.fn(),
+  }),
+}));
+
 vi.mock("@/components/Browser/BrowserToolbar", () => ({
   BrowserToolbar: () => <div data-testid="browser-toolbar" />,
 }));
@@ -201,6 +223,7 @@ describe("DevPreviewPane webview lifecycle regression", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     vi.clearAllMocks();
+    _resetScrollCacheForTests();
     originalCreateElement = document.createElement.bind(document);
     document.createElement = ((tagName: string, options?: ElementCreationOptions) => {
       const element = originalCreateElement(tagName, options);
@@ -236,10 +259,23 @@ describe("DevPreviewPane webview lifecycle regression", () => {
     };
   });
 
+  it("uses theme-backed preview chrome surfaces", () => {
+    const { container } = render(<DevPreviewPane {...baseProps} />);
+    const themedSurface = container.querySelector(".bg-surface-canvas");
+    expect(themedSurface).toBeTruthy();
+    expect(container.querySelector(".bg-white")).toBeNull();
+  });
+
   afterEach(() => {
     document.createElement = originalCreateElement;
     vi.runOnlyPendingTimers();
     vi.useRealTimers();
+  });
+
+  it("renders webview with allowpopups attribute for target=_blank support", () => {
+    const { container } = render(<DevPreviewPane {...baseProps} />);
+    const webview = getWebviewElement(container);
+    expect(webview.hasAttribute("allowpopups")).toBe(true);
   });
 
   it("recovers ready state from an already-loaded webview and reapplies zoom", async () => {
@@ -456,5 +492,164 @@ describe("DevPreviewPane webview lifecycle regression", () => {
     });
 
     expect(webview.reload).not.toHaveBeenCalled();
+  });
+
+  it("uses configurable load timeout from project settings", () => {
+    const origSettings = useProjectSettingsStoreMock.getMockImplementation();
+    useProjectSettingsStoreMock.mockImplementation(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (selector: (state: any) => unknown) =>
+        selector({
+          projectId: "project-1",
+          settings: {
+            devServerCommand: "npm run dev",
+            devServerLoadTimeout: 60,
+            environmentVariables: {},
+            runCommands: [],
+          },
+          detectedRunners: [],
+          allDetectedRunners: [],
+          isLoading: false,
+          error: null,
+        })
+    );
+
+    const { container } = render(<DevPreviewPane {...baseProps} />);
+    const webview = getWebviewElement(container);
+
+    act(() => {
+      webview.setMockLoading(true);
+      emitWebviewEvent(webview, "did-start-loading");
+    });
+
+    // Should NOT reload at 30s
+    act(() => {
+      vi.advanceTimersByTime(30000);
+    });
+    expect(webview.reload).not.toHaveBeenCalled();
+
+    // Should reload at 60s
+    act(() => {
+      vi.advanceTimersByTime(30000);
+    });
+    expect(webview.reload).toHaveBeenCalledTimes(1);
+
+    if (origSettings) useProjectSettingsStoreMock.mockImplementation(origSettings);
+  });
+
+  it("captures scroll position when status transitions from running", async () => {
+    const { container, rerender } = render(<DevPreviewPane {...baseProps} />);
+    const webview = getWebviewElement(container);
+    webview.executeJavaScript.mockResolvedValue(250);
+
+    // Transition to stopped
+    devServerStateRef.current = {
+      ...devServerStateRef.current,
+      status: "stopped",
+      url: null,
+    };
+    rerender(<DevPreviewPane {...baseProps} />);
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(webview.executeJavaScript).toHaveBeenCalledWith("window.scrollY");
+  });
+
+  it("restores scroll position on dom-ready after remount", async () => {
+    const { container, rerender } = render(<DevPreviewPane {...baseProps} />);
+    const webview = getWebviewElement(container);
+    webview.executeJavaScript.mockResolvedValue(250);
+
+    // Capture scroll by transitioning to stopped
+    devServerStateRef.current = {
+      ...devServerStateRef.current,
+      status: "stopped",
+      url: null,
+    };
+    rerender(<DevPreviewPane {...baseProps} />);
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    // Go back to running (remount webview)
+    devServerStateRef.current = {
+      ...devServerStateRef.current,
+      status: "running",
+      url: "http://localhost:5173/",
+    };
+    rerender(<DevPreviewPane {...baseProps} />);
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    const newWebview = getWebviewElement(container);
+
+    act(() => {
+      emitWebviewEvent(newWebview, "dom-ready");
+    });
+
+    expect(newWebview.executeJavaScript).toHaveBeenCalledWith("window.scrollTo(0, 250)");
+  });
+
+  it("clears scroll cache on hard restart", async () => {
+    const { container, rerender } = render(<DevPreviewPane {...baseProps} />);
+    const webview = getWebviewElement(container);
+    webview.executeJavaScript.mockResolvedValue(100);
+
+    // Capture scroll
+    devServerStateRef.current = {
+      ...devServerStateRef.current,
+      status: "stopped",
+      url: null,
+    };
+    rerender(<DevPreviewPane {...baseProps} />);
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    // Go back to running
+    devServerStateRef.current = {
+      ...devServerStateRef.current,
+      status: "running",
+      url: "http://localhost:5173/",
+    };
+    rerender(<DevPreviewPane {...baseProps} />);
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    // Hard restart clears cache
+    fireEvent.click(screen.getByTestId("hard-restart"));
+
+    // Remount
+    devServerStateRef.current = {
+      ...devServerStateRef.current,
+      status: "running",
+      url: "http://localhost:5173/",
+    };
+    rerender(<DevPreviewPane {...baseProps} />);
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    const newWebview = getWebviewElement(container);
+    newWebview.executeJavaScript.mockClear();
+
+    act(() => {
+      emitWebviewEvent(newWebview, "dom-ready");
+    });
+
+    // Should NOT call scrollTo since cache was cleared
+    const scrollToCalls = newWebview.executeJavaScript.mock.calls.filter(
+      (call: unknown[]) => typeof call[0] === "string" && call[0].includes("scrollTo")
+    );
+    expect(scrollToCalls).toHaveLength(0);
   });
 });

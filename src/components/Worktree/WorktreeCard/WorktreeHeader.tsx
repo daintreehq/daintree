@@ -22,13 +22,16 @@ import {
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "../../ui/tooltip";
 import {
   AlertCircle,
+  Check,
   CircleDot,
   CornerDownRight,
   GitPullRequest,
   MoreHorizontal,
   House,
   Pin,
+  type LucideIcon,
 } from "lucide-react";
+import type { WorktreeLifecycleStage } from "./hooks/useWorktreeStatus";
 import { useIssueTooltip, usePRTooltip } from "@/hooks/useGitHubTooltip";
 import { IssueTooltipContent, PRTooltipContent, TooltipLoading } from "./GitHubTooltipContent";
 
@@ -47,6 +50,8 @@ interface IssueBadgeProps {
   issueTitle?: string;
   worktreePath: string;
   onOpen?: () => void;
+  isHeadline?: boolean;
+  isActive?: boolean;
 }
 
 const IssueBadge = memo(function IssueBadge({
@@ -54,6 +59,8 @@ const IssueBadge = memo(function IssueBadge({
   issueTitle,
   worktreePath,
   onOpen,
+  isHeadline,
+  isActive,
 }: IssueBadgeProps) {
   const [isOpen, setIsOpen] = useState(false);
   const { data, loading, error, fetchTooltip, reset } = useIssueTooltip(worktreePath, issueNumber);
@@ -80,15 +87,30 @@ const IssueBadge = memo(function IssueBadge({
               e.stopPropagation();
               onOpen?.();
             }}
-            className="flex items-center gap-1.5 text-xs text-left cursor-pointer transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent min-w-0"
+            className={cn(
+              "flex items-center gap-1.5 text-left cursor-pointer transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent min-w-0",
+              isHeadline ? "text-[13px]" : "text-xs"
+            )}
             aria-label={
               issueTitle
                 ? `Open issue #${issueNumber}: ${issueTitle}`
                 : `Open issue #${issueNumber} on GitHub`
             }
           >
-            <CircleDot className="w-3 h-3 text-github-open shrink-0" aria-hidden="true" />
-            <span className="truncate text-canopy-text/90 flex-1 min-w-0">
+            <CircleDot
+              className={cn("text-github-open shrink-0", isHeadline ? "w-3.5 h-3.5" : "w-3 h-3")}
+              aria-hidden="true"
+            />
+            <span
+              className={cn(
+                "truncate flex-1 min-w-0",
+                isHeadline
+                  ? isActive
+                    ? "text-text-primary font-medium"
+                    : "text-canopy-text/60 font-medium"
+                  : "text-canopy-text/90"
+              )}
+            >
               {issueTitle || <span className="text-github-open font-mono">#{issueNumber}</span>}
             </span>
           </button>
@@ -112,16 +134,16 @@ const IssueBadge = memo(function IssueBadge({
 interface PRBadgeProps {
   prNumber: number;
   prState?: "open" | "merged" | "closed";
-  worktreePath: string;
   isSubordinate: boolean;
+  worktreePath: string;
   onOpen?: () => void;
 }
 
 const PRBadge = memo(function PRBadge({
   prNumber,
   prState,
-  worktreePath,
   isSubordinate,
+  worktreePath,
   onOpen,
 }: PRBadgeProps) {
   const [isOpen, setIsOpen] = useState(false);
@@ -158,7 +180,7 @@ const PRBadge = memo(function PRBadge({
               e.stopPropagation();
               onOpen?.();
             }}
-            className="flex items-center gap-1 text-xs text-left cursor-pointer transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent"
+            className="flex items-center gap-1 text-xs text-left cursor-pointer transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent min-w-0"
             aria-label={`Open ${prStateLabel} pull request #${prNumber} on GitHub`}
           >
             {isSubordinate && (
@@ -190,9 +212,11 @@ const PRBadge = memo(function PRBadge({
 export interface WorktreeHeaderProps {
   worktree: WorktreeState;
   isActive: boolean;
+  isMuted?: boolean;
   isMainWorktree: boolean;
   isPinned: boolean;
   branchLabel: string;
+  lifecycleStage: WorktreeLifecycleStage | null;
   worktreeErrorCount: number;
 
   badges: {
@@ -240,12 +264,61 @@ export interface WorktreeHeaderProps {
   };
 }
 
+const LIFECYCLE_CONFIG: Record<
+  WorktreeLifecycleStage,
+  { icon: LucideIcon; className: string; label: string }
+> = {
+  "in-review": {
+    icon: CircleDot,
+    className: "w-2.5 h-2.5 text-canopy-text/65",
+    label: "In review",
+  },
+  merged: {
+    icon: Check,
+    className: "w-2.5 h-2.5 text-canopy-text/35",
+    label: "Merged",
+  },
+  "ready-for-cleanup": {
+    icon: Check,
+    className: "w-2.5 h-2.5 text-canopy-text/40",
+    label: "Ready for cleanup",
+  },
+};
+
+const LifecycleStageIndicator = memo(function LifecycleStageIndicator({
+  stage,
+}: {
+  stage: WorktreeLifecycleStage | null;
+}) {
+  if (!stage) return null;
+
+  const config = LIFECYCLE_CONFIG[stage];
+  const Icon = config.icon;
+
+  return (
+    <TooltipProvider>
+      <Tooltip delayDuration={300}>
+        <TooltipTrigger asChild>
+          <span className="shrink-0 flex items-center justify-center" aria-label={config.label}>
+            <Icon className={config.className} aria-hidden="true" />
+          </span>
+        </TooltipTrigger>
+        <TooltipContent side="top" className="text-xs">
+          {config.label}
+        </TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
+  );
+});
+
 export function WorktreeHeader({
   worktree,
   isActive,
+  isMuted,
   isMainWorktree,
   isPinned,
   branchLabel,
+  lifecycleStage,
   worktreeErrorCount,
   badges,
   menu,
@@ -262,21 +335,42 @@ export function WorktreeHeader({
     [menu]
   );
 
+  const hasIssueTitle = !!(worktree.issueNumber && worktree.issueTitle);
+
   return (
-    <div className="space-y-1">
+    <div>
       <div className="flex items-center gap-2 min-h-[22px]">
         <div className="flex items-center gap-2 min-w-0 flex-1">
           {isMainWorktree && (
             <House
               className="w-3.5 h-3.5 text-canopy-text/60 shrink-0"
               fill="currentColor"
+              stroke="var(--color-canopy-sidebar)"
+              strokeWidth={2}
               aria-hidden="true"
             />
           )}
           {isPinned && !isMainWorktree && (
             <Pin className="w-3 h-3 text-canopy-text/40 shrink-0" aria-label="Pinned" />
           )}
-          <BranchLabel label={branchLabel} isActive={isActive} isMainWorktree={isMainWorktree} />
+          {hasIssueTitle ? (
+            <IssueBadge
+              issueNumber={worktree.issueNumber!}
+              issueTitle={worktree.issueTitle}
+              worktreePath={worktree.path}
+              onOpen={badges.onOpenIssue}
+              isHeadline
+              isActive={isActive}
+            />
+          ) : (
+            <BranchLabel
+              label={branchLabel}
+              isActive={isActive}
+              isMuted={isMuted}
+              isMainWorktree={isMainWorktree}
+            />
+          )}
+          <LifecycleStageIndicator stage={lifecycleStage} />
           {worktree.isDetached && (
             <span className="text-status-warning text-xs font-medium shrink-0">(detached)</span>
           )}
@@ -299,11 +393,12 @@ export function WorktreeHeader({
         )}
 
         <div
+          data-testid="worktree-actions-wrapper"
           className={cn(
             "shrink-0 transition-opacity duration-150",
             isActive
               ? "opacity-100"
-              : "opacity-0 group-hover:opacity-100 group-focus-within:opacity-100"
+              : "opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto"
           )}
         >
           <DropdownMenu>
@@ -313,7 +408,7 @@ export function WorktreeHeader({
                   <DropdownMenuTrigger asChild>
                     <button
                       onClick={(e) => e.stopPropagation()}
-                      className="p-1 text-canopy-text/60 hover:text-white hover:bg-white/5 rounded transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent"
+                      className="p-1 text-canopy-text/60 hover:text-text-primary hover:bg-overlay-soft rounded transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent"
                       aria-label="More actions"
                       data-testid="worktree-actions-menu"
                     >
@@ -371,12 +466,14 @@ export function WorktreeHeader({
         </div>
       </div>
 
-      {(worktree.issueNumber || (worktree.prNumber && worktree.prState !== "closed")) && (
-        <div className="flex flex-col gap-0.5">
-          {worktree.issueNumber && (
+      {/* Secondary row: branch label when issue title is headline, issue badge fallback, and/or PR badge */}
+      {(hasIssueTitle ||
+        (worktree.issueNumber && !hasIssueTitle) ||
+        (worktree.prNumber && worktree.prState !== "closed")) && (
+        <div className="flex flex-col gap-0.5 mt-1.5">
+          {worktree.issueNumber && !hasIssueTitle && (
             <IssueBadge
               issueNumber={worktree.issueNumber}
-              issueTitle={worktree.issueTitle}
               worktreePath={worktree.path}
               onOpen={badges.onOpenIssue}
             />
@@ -385,9 +482,17 @@ export function WorktreeHeader({
             <PRBadge
               prNumber={worktree.prNumber}
               prState={worktree.prState}
-              worktreePath={worktree.path}
               isSubordinate={!!worktree.issueNumber}
+              worktreePath={worktree.path}
               onOpen={badges.onOpenPR}
+            />
+          )}
+          {hasIssueTitle && (
+            <BranchLabel
+              label={branchLabel}
+              isActive={isActive}
+              isMuted={isMuted}
+              isMainWorktree={false}
             />
           )}
         </div>

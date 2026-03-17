@@ -1,12 +1,17 @@
-/**
- * App-level hooks for lifecycle and side effect management.
- */
-
 export { useAppHydration } from "./useAppHydration";
-export type { HydrationCallbacks } from "./useAppHydration";
 export { useProjectSwitchRehydration } from "./useProjectSwitchRehydration";
 export { useFirstRunToasts } from "./useFirstRunToasts";
 export { useTerminalStoreBootstrap } from "./useTerminalStoreBootstrap";
 export { useSemanticWorkerLifecycle } from "./useSemanticWorkerLifecycle";
 export { useSystemWakeHandler } from "./useSystemWakeHandler";
 export { useDevServerDiscovery } from "./useDevServerDiscovery";
+export { useAccessibilityAnnouncements } from "./useAccessibilityAnnouncements";
+export { useGettingStartedChecklist } from "./useGettingStartedChecklist";
+export { useUnloadCleanup } from "./useUnloadCleanup";
+export { useHomeDir } from "./useHomeDir";
+export { usePerformanceMonitors } from "./usePerformanceMonitors";
+export { useSettingsDialog } from "./useSettingsDialog";
+export { useWorktreeOverview } from "./useWorktreeOverview";
+export { useAppEventListeners } from "./useAppEventListeners";
+export { useErrorRetry } from "./useErrorRetry";
+export { useActiveWorktreeSync } from "./useActiveWorktreeSync";

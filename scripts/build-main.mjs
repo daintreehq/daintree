@@ -15,9 +15,7 @@ const external = [
   "electron",
   "node-pty", // Native module
   "better-sqlite3", // Native module
-  "esbuild", // Build tool
   "copytree", // Externalize to preserve file structure (config files)
-  "simple-git", // Externalize to avoid dynamic require issues
 ];
 
 const common = {
@@ -29,6 +27,7 @@ const common = {
   external,
   logLevel: "info",
   absWorkingDir: root,
+  pure: isProd ? ["console.log", "console.info", "console.warn", "console.debug"] : [],
   define: {
     "process.env.SENTRY_DSN": JSON.stringify(process.env.SENTRY_DSN || ""),
   },
@@ -95,7 +94,12 @@ async function run() {
   // Config for ESM files (Main, Hosts)
   const esmConfig = {
     ...common,
-    entryPoints: ["electron/main.ts", "electron/pty-host.ts", "electron/workspace-host.ts"],
+    entryPoints: [
+      "electron/bootstrap.ts",
+      "electron/main.ts",
+      "electron/pty-host.ts",
+      "electron/workspace-host.ts",
+    ],
     outdir: "dist-electron/electron",
     format: "esm",
     splitting: true, // Share chunks between main/hosts

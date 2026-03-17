@@ -1,10 +1,5 @@
 import { create, type StateCreator } from "zustand";
-import {
-  persist,
-  subscribeWithSelector,
-  createJSONStorage,
-  type StateStorage,
-} from "zustand/middleware";
+import { persist, subscribeWithSelector } from "zustand/middleware";
 import type { Project, ProjectCloseResult, TerminalSnapshot } from "@shared/types";
 import { projectClient } from "@/clients";
 import { resetAllStoresForProjectSwitch } from "./resetStores";
@@ -24,11 +19,14 @@ import {
   prePopulateProjectSettings,
 } from "./projectSettingsStore";
 import { logErrorWithContext } from "@/utils/errorContext";
+import { useUrlHistoryStore } from "./urlHistoryStore";
 import {
   prepareProjectSwitchRendererCache,
   cancelPreparedProjectSwitchRendererCache,
 } from "@/services/projectSwitchRendererCache";
 import { isSmokeTestTerminalId } from "@shared/utils/smokeTestTerminals";
+import { createSafeJSONStorage } from "./persistence/safeStorage";
+import { terminalInstanceService } from "@/services/TerminalInstanceService";
 
 interface ProjectState {
   projects: Project[];
@@ -69,38 +67,6 @@ interface ProjectState {
   openOnboardingWizard: (projectId: string) => void;
   openCreateFolderDialog: () => void;
   closeCreateFolderDialog: () => void;
-}
-
-const memoryStorage: StateStorage = (() => {
-  const storage = new Map<string, string>();
-  return {
-    getItem: (name) => storage.get(name) ?? null,
-    setItem: (name, value) => {
-      storage.set(name, value);
-    },
-    removeItem: (name) => {
-      storage.delete(name);
-    },
-  };
-})();
-
-function getSafeStorage(): StateStorage {
-  if (typeof localStorage !== "undefined") {
-    const storage = localStorage as unknown as Partial<StateStorage>;
-    const hasStorageApi =
-      typeof storage.getItem === "function" &&
-      typeof storage.setItem === "function" &&
-      typeof storage.removeItem === "function";
-    if (hasStorageApi) {
-      try {
-        storage.getItem!("__test__");
-        return storage as StateStorage;
-      } catch {
-        return memoryStorage;
-      }
-    }
-  }
-  return memoryStorage;
 }
 
 function getProjectOpenErrorMessage(error: unknown): string {
@@ -146,20 +112,18 @@ function evictRendererTerminalInstances(terminalIds: string[]): void {
     return;
   }
 
-  void import("@/services/TerminalInstanceService")
-    .then(({ terminalInstanceService }) => {
-      for (const terminalId of terminalIds) {
-        terminalInstanceService.destroy(terminalId);
-      }
-    })
-    .catch((error) => {
-      logErrorWithContext(error, {
-        operation: "evict_project_switch_terminal_instances",
-        component: "projectStore",
-        errorType: "process",
-        details: { terminalCount: terminalIds.length },
-      });
+  try {
+    for (const terminalId of terminalIds) {
+      terminalInstanceService.destroy(terminalId);
+    }
+  } catch (error) {
+    logErrorWithContext(error, {
+      operation: "evict_project_switch_terminal_instances",
+      component: "projectStore",
+      errorType: "process",
+      details: { terminalCount: terminalIds.length },
     });
+  }
 }
 
 const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
@@ -300,11 +264,13 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
         // Get current terminals from store and save to per-project state
         const currentTerminals = useTerminalStore.getState().terminals;
         const terminalsToSave: TerminalSnapshot[] = currentTerminals
-          .filter((t) => t.location !== "trash" && !isSmokeTestTerminalId(t.id))
+          .filter(
+            (t) =>
+              t.location !== "trash" && t.location !== "background" && !isSmokeTestTerminalId(t.id)
+          )
           .map(terminalToSnapshot);
 
         const terminalSizes: Record<string, { cols: number; rows: number }> = {};
-        const { terminalInstanceService } = await import("@/services/TerminalInstanceService");
         for (const terminal of currentTerminals) {
           const instance = terminalInstanceService.get(terminal.id);
           if (instance) {
@@ -501,6 +467,7 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
       if (get().onboardingProjectId === id) {
         set({ onboardingWizardOpen: false, onboardingProjectId: null });
       }
+      useUrlHistoryStore.getState().removeProjectHistory(id);
       set({ isLoading: false });
     } catch (error) {
       logErrorWithContext(error, {
@@ -628,11 +595,13 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
         // Get current terminals from store and save to per-project state
         const currentTerminals = useTerminalStore.getState().terminals;
         const terminalsToSave: TerminalSnapshot[] = currentTerminals
-          .filter((t) => t.location !== "trash" && !isSmokeTestTerminalId(t.id))
+          .filter(
+            (t) =>
+              t.location !== "trash" && t.location !== "background" && !isSmokeTestTerminalId(t.id)
+          )
           .map(terminalToSnapshot);
 
         const terminalSizes: Record<string, { cols: number; rows: number }> = {};
-        const { terminalInstanceService } = await import("@/services/TerminalInstanceService");
         for (const terminal of currentTerminals) {
           const instance = terminalInstanceService.get(terminal.id);
           if (instance) {
@@ -842,7 +811,7 @@ export const useProjectStore = create<ProjectState>()(
       }),
       {
         name: "project-storage",
-        storage: createJSONStorage(() => getSafeStorage()),
+        storage: createSafeJSONStorage(),
         partialize: (state) => ({
           projects: state.projects,
           currentProject: state.currentProject,

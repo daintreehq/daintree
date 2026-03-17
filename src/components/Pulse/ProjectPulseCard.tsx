@@ -139,7 +139,7 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
             <span className="text-xs">{error}</span>
             <button
               onClick={handleRefresh}
-              className="ml-auto p-1 hover:bg-white/5 rounded transition-colors"
+              className="ml-auto p-1 hover:bg-tint/5 rounded transition-colors"
               aria-label="Retry now"
             >
               <RefreshCw className="w-3 h-3" aria-hidden="true" />
@@ -184,7 +184,7 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <button
-                className="text-xs text-canopy-text/70 hover:text-canopy-text/90 transition-colors px-2 py-1 rounded hover:bg-white/5"
+                className="text-xs text-canopy-text/70 hover:text-canopy-text/90 transition-colors px-2 py-1 rounded hover:bg-tint/5"
                 aria-label="Change time range"
               >
                 {currentRangeLabel}
@@ -208,7 +208,7 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
           <button
             onClick={handleRefresh}
             disabled={isLoading}
-            className="p-1 text-canopy-text/55 hover:text-canopy-text/90 hover:bg-white/5 rounded transition-colors disabled:opacity-50"
+            className="p-1 text-canopy-text/55 hover:text-canopy-text/90 hover:bg-tint/5 rounded transition-colors disabled:opacity-50"
             aria-label="Refresh"
           >
             <RefreshCw className={cn("w-3 h-3", isLoading && "animate-spin")} />

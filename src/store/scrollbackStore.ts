@@ -1,6 +1,5 @@
 import { create } from "zustand";
-
-const DEFAULT_SCROLLBACK_LINES = 5000;
+import { SCROLLBACK_DEFAULT } from "@shared/config/scrollback";
 
 interface ScrollbackState {
   scrollbackLines: number;
@@ -8,6 +7,6 @@ interface ScrollbackState {
 }
 
 export const useScrollbackStore = create<ScrollbackState>()((set) => ({
-  scrollbackLines: DEFAULT_SCROLLBACK_LINES,
+  scrollbackLines: SCROLLBACK_DEFAULT,
   setScrollbackLines: (lines) => set({ scrollbackLines: lines }),
 }));

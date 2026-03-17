@@ -201,6 +201,8 @@ export function CommandPicker({
             <button
               id={`command-${cmd.id}`}
               data-command-id={cmd.id}
+              tabIndex={-1}
+              onPointerDown={(e) => e.preventDefault()}
               role="option"
               aria-selected={isSelected}
               aria-disabled={!cmd.enabled}

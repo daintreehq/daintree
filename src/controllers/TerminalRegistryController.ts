@@ -28,6 +28,7 @@ import { isRegisteredAgent, getAgentConfig } from "@/config/agents";
 import { useScrollbackStore } from "@/store/scrollbackStore";
 import { usePerformanceModeStore } from "@/store/performanceModeStore";
 import { useTerminalFontStore } from "@/store/terminalFontStore";
+import { useTerminalColorSchemeStore } from "@/store/terminalColorSchemeStore";
 import { getScrollbackForType, PERFORMANCE_MODE_SCROLLBACK } from "@/utils/scrollbackConfig";
 import { getXtermOptions } from "@/config/xtermConfig";
 import { TerminalRefreshTier } from "@/types";
@@ -151,11 +152,13 @@ class TerminalRegistryController {
         ? PERFORMANCE_MODE_SCROLLBACK
         : getScrollbackForType(type, scrollbackLines);
 
+      const { getEffectiveTheme } = useTerminalColorSchemeStore.getState();
       const terminalOptions = getXtermOptions({
         fontSize,
         fontFamily,
         scrollback: effectiveScrollback,
         performanceMode,
+        theme: getEffectiveTheme(),
       });
 
       const offscreen = location === "dock";
@@ -333,6 +336,14 @@ class TerminalRegistryController {
 
   onSpawnResult(handler: (id: string, result: SpawnResult) => void) {
     return terminalClient.onSpawnResult(handler);
+  }
+
+  onReduceScrollback(handler: (data: { terminalIds: string[]; targetLines: number }) => void) {
+    return terminalClient.onReduceScrollback(handler);
+  }
+
+  onRestoreScrollback(handler: (data: { terminalIds: string[] }) => void) {
+    return terminalClient.onRestoreScrollback(handler);
   }
 }
 

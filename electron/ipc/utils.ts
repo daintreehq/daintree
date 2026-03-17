@@ -40,6 +40,122 @@ export function checkRateLimit(channel: string, maxCalls: number, windowMs: numb
   rateLimitTimestamps.set(key, timestamps);
 }
 
+interface RateLimitQueueEntry {
+  resolve: () => void;
+  reject: (err: Error) => void;
+}
+
+interface RateLimitState {
+  timestamps: number[];
+  queue: RateLimitQueueEntry[];
+  timer: ReturnType<typeof setTimeout> | null;
+}
+
+const MAX_QUEUE_DEPTH = 50;
+const rateLimitQueues = new Map<string, RateLimitState>();
+
+let restoreQuota = 0;
+let restoreQuotaTimer: ReturnType<typeof setTimeout> | null = null;
+
+export function armRestoreQuota(count: number, ttlMs: number): void {
+  restoreQuota = count;
+  if (restoreQuotaTimer !== null) {
+    clearTimeout(restoreQuotaTimer);
+  }
+  restoreQuotaTimer = setTimeout(() => {
+    restoreQuota = 0;
+    restoreQuotaTimer = null;
+  }, ttlMs);
+}
+
+export function consumeRestoreQuota(): boolean {
+  if (restoreQuota <= 0) return false;
+  restoreQuota--;
+  return true;
+}
+
+function getOrCreateState(key: string): RateLimitState {
+  let state = rateLimitQueues.get(key);
+  if (!state) {
+    state = { timestamps: [], queue: [], timer: null };
+    rateLimitQueues.set(key, state);
+  }
+  return state;
+}
+
+function drainQueue(state: RateLimitState, maxCalls: number, windowMs: number): void {
+  const now = Date.now();
+  state.timestamps = state.timestamps.filter((t) => now - t < windowMs);
+
+  while (state.queue.length > 0 && state.timestamps.length < maxCalls) {
+    state.timestamps.push(Date.now());
+    const entry = state.queue.shift()!;
+    entry.resolve();
+  }
+
+  scheduleDrain(state, maxCalls, windowMs);
+}
+
+function scheduleDrain(state: RateLimitState, maxCalls: number, windowMs: number): void {
+  if (state.timer !== null) return;
+  if (state.queue.length === 0) return;
+  if (state.timestamps.length === 0) return;
+
+  const delay = Math.max(0, state.timestamps[0] + windowMs - Date.now());
+  state.timer = setTimeout(() => {
+    state.timer = null;
+    drainQueue(state, maxCalls, windowMs);
+  }, delay);
+}
+
+export async function waitForRateLimitSlot(
+  key: string,
+  maxCalls: number,
+  windowMs: number
+): Promise<void> {
+  const state = getOrCreateState(key);
+  const now = Date.now();
+  state.timestamps = state.timestamps.filter((t) => now - t < windowMs);
+
+  if (state.timestamps.length < maxCalls && state.queue.length === 0) {
+    state.timestamps.push(now);
+    return;
+  }
+
+  if (state.queue.length >= MAX_QUEUE_DEPTH) {
+    throw new Error("Spawn queue full");
+  }
+
+  return new Promise<void>((resolve, reject) => {
+    state.queue.push({ resolve, reject });
+    scheduleDrain(state, maxCalls, windowMs);
+  });
+}
+
+export function drainRateLimitQueues(): void {
+  for (const [, state] of rateLimitQueues) {
+    if (state.timer !== null) {
+      clearTimeout(state.timer);
+      state.timer = null;
+    }
+    while (state.queue.length > 0) {
+      const entry = state.queue.shift()!;
+      entry.reject(new Error("App is shutting down"));
+    }
+  }
+  rateLimitQueues.clear();
+}
+
+export function _resetRateLimitQueuesForTest(): void {
+  drainRateLimitQueues();
+  rateLimitTimestamps.clear();
+  restoreQuota = 0;
+  if (restoreQuotaTimer !== null) {
+    clearTimeout(restoreQuotaTimer);
+    restoreQuotaTimer = null;
+  }
+}
+
 export function sendToRenderer(
   mainWindow: BrowserWindow,
   channel: string,

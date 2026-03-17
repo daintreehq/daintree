@@ -1,4 +1,4 @@
-import type { AgentId } from "../domain.js";
+import type { AgentId } from "../agent.js";
 import type { TerminalState } from "./terminal.js";
 import type { TerminalConfig } from "./config.js";
 
@@ -78,12 +78,15 @@ export interface AppState {
   panelGridConfig?: import("../config.js").PanelGridConfig;
   /** Most-recently-used ordered list of quick-switcher item IDs ("terminal:<id>" | "worktree:<id>") */
   mruList?: string[];
+  /** Most-recently-used ordered list of action IDs for the action palette */
+  actionMruList?: string[];
 }
 
 /** Result from app hydration */
 export interface HydrateResult {
   appState: AppState;
   terminalConfig: TerminalConfig;
-  project: import("../domain.js").Project | null;
+  project: import("../project.js").Project | null;
   agentSettings: import("../agentSettings.js").AgentSettings;
+  gpuWebGLHardware: boolean;
 }

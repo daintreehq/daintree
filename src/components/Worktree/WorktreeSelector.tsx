@@ -18,13 +18,13 @@ export function WorktreeSelector({
 }: WorktreeSelectorProps) {
   return (
     <div className="flex flex-col gap-1 min-w-0">
-      <span className="text-xs font-medium text-neutral-400 uppercase tracking-wider">{label}</span>
+      <span className="text-xs font-medium text-text-muted uppercase tracking-wider">{label}</span>
       <div className="relative">
-        <GitBranch className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-neutral-400 pointer-events-none" />
+        <GitBranch className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-text-muted pointer-events-none" />
         <select
           value={selectedId ?? ""}
           onChange={(e) => onChange(e.target.value)}
-          className="w-full appearance-none bg-neutral-800 border border-neutral-700 rounded-md pl-8 pr-3 py-2 text-sm text-neutral-100 focus:outline-none focus:border-neutral-500 cursor-pointer"
+          className="w-full appearance-none bg-surface-panel-elevated border border-border-default rounded-md pl-8 pr-3 py-2 text-sm text-text-primary focus:outline-none focus:border-border-default cursor-pointer"
         >
           <option value="" disabled>
             Select worktree…

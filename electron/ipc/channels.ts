@@ -7,6 +7,7 @@ export const CHANNELS = {
   WORKTREE_ACTIVATED: "worktree:activated",
   WORKTREE_CREATE: "worktree:create",
   WORKTREE_LIST_BRANCHES: "worktree:list-branches",
+  WORKTREE_GET_RECENT_BRANCHES: "worktree:get-recent-branches",
   WORKTREE_PR_REFRESH: "worktree:pr-refresh",
   WORKTREE_PR_STATUS: "worktree:pr-status",
   WORKTREE_GET_DEFAULT_PATH: "worktree:get-default-path",
@@ -52,6 +53,9 @@ export const CHANNELS = {
   TERMINAL_BACKEND_CRASHED: "terminal:backend-crashed",
   TERMINAL_BACKEND_READY: "terminal:backend-ready",
   TERMINAL_SEND_KEY: "terminal:send-key",
+  TERMINAL_AGENT_TITLE_STATE: "terminal:agent-title-state",
+  TERMINAL_REDUCE_SCROLLBACK: "terminal:reduce-scrollback",
+  TERMINAL_RESTORE_SCROLLBACK: "terminal:restore-scrollback",
 
   FILES_SEARCH: "files:search",
   FILES_READ: "files:read",
@@ -95,6 +99,7 @@ export const CHANNELS = {
   SYSTEM_SET_AGENT_UPDATE_SETTINGS: "system:set-agent-update-settings",
   SYSTEM_START_AGENT_UPDATE: "system:start-agent-update",
   SYSTEM_HEALTH_CHECK: "system:health-check",
+  SYSTEM_DOWNLOAD_DIAGNOSTICS: "system:download-diagnostics",
 
   PR_DETECTED: "pr:detected",
   PR_CLEARED: "pr:cleared",
@@ -104,6 +109,7 @@ export const CHANNELS = {
   GITHUB_GET_REPO_STATS: "github:get-repo-stats",
   GITHUB_OPEN_ISSUES: "github:open-issues",
   GITHUB_OPEN_PRS: "github:open-prs",
+  GITHUB_OPEN_COMMITS: "github:open-commits",
   GITHUB_OPEN_ISSUE: "github:open-issue",
   GITHUB_OPEN_PR: "github:open-pr",
   GITHUB_CHECK_CLI: "github:check-cli",
@@ -141,7 +147,10 @@ export const CHANNELS = {
 
   ERROR_NOTIFY: "error:notify",
   ERROR_RETRY: "error:retry",
+  ERROR_RETRY_CANCEL: "error:retry-cancel",
+  ERROR_RETRY_PROGRESS: "error:retry-progress",
   ERROR_OPEN_LOGS: "error:open-logs",
+  ERROR_GET_PENDING: "error:get-pending",
 
   EVENT_INSPECTOR_GET_EVENTS: "event-inspector:get-events",
   EVENT_INSPECTOR_GET_FILTERED: "event-inspector:get-filtered",
@@ -190,6 +199,9 @@ export const CHANNELS = {
   PROJECT_CHECK_MISSING: "project:check-missing",
   PROJECT_LOCATE: "project:locate",
 
+  PROJECT_MCP_GET_STATUSES: "project-mcp:get-statuses",
+  PROJECT_MCP_STATUS_CHANGED: "project-mcp:status-changed",
+
   AGENT_SETTINGS_GET: "agent-settings:get",
   AGENT_SETTINGS_SET: "agent-settings:set",
   AGENT_SETTINGS_RESET: "agent-settings:reset",
@@ -224,6 +236,7 @@ export const CHANNELS = {
   GIT_GET_STAGING_STATUS: "git:get-staging-status",
   GIT_COMPARE_WORKTREES: "git:compare-worktrees",
   GIT_GET_USERNAME: "git:get-username",
+  GIT_GET_WORKING_DIFF: "git:get-working-diff",
 
   SIDECAR_CREATE: "sidecar:create",
   SIDECAR_SHOW: "sidecar:show",
@@ -244,6 +257,16 @@ export const CHANNELS = {
   HIBERNATION_UPDATE_CONFIG: "hibernation:update-config",
 
   WEBVIEW_SET_LIFECYCLE_STATE: "webview:set-lifecycle-state",
+  WEBVIEW_REGISTER_PANEL: "webview:register-panel",
+  WEBVIEW_DIALOG_REQUEST: "webview:dialog-request",
+  WEBVIEW_DIALOG_RESPONSE: "webview:dialog-response",
+  WEBVIEW_FIND_SHORTCUT: "webview:find-shortcut",
+  WEBVIEW_START_CONSOLE_CAPTURE: "webview:start-console-capture",
+  WEBVIEW_STOP_CONSOLE_CAPTURE: "webview:stop-console-capture",
+  WEBVIEW_CLEAR_CONSOLE_CAPTURE: "webview:clear-console-capture",
+  WEBVIEW_GET_CONSOLE_PROPERTIES: "webview:get-console-properties",
+  WEBVIEW_CONSOLE_MESSAGE: "webview:console-message",
+  WEBVIEW_CONSOLE_CONTEXT_CLEARED: "webview:console-context-cleared",
 
   SYSTEM_SLEEP_GET_METRICS: "system-sleep:get-metrics",
   SYSTEM_SLEEP_GET_AWAKE_TIME: "system-sleep:get-awake-time",
@@ -279,6 +302,7 @@ export const CHANNELS = {
   NOTIFICATION_SHOW_NATIVE: "notification:show-native",
   NOTIFICATION_WATCH_NAVIGATE: "notification:watch-navigate",
   NOTIFICATION_SYNC_WATCHED: "notification:sync-watched",
+  NOTIFICATION_WAITING_ACKNOWLEDGE: "notification:waiting-acknowledge",
 
   // Auto-update channels
   UPDATE_AVAILABLE: "update:available",
@@ -300,6 +324,16 @@ export const CHANNELS = {
   NOTES_DELETE: "notes:delete",
   NOTES_SEARCH: "notes:search",
   NOTES_UPDATED: "notes:updated",
+
+  // Workflow channels
+  WORKFLOW_LIST: "workflow:list",
+  WORKFLOW_START: "workflow:start",
+  WORKFLOW_CANCEL: "workflow:cancel",
+  WORKFLOW_GET_RUN: "workflow:get-run",
+  WORKFLOW_LIST_RUNS: "workflow:list-runs",
+  WORKFLOW_STARTED: "workflow:started",
+  WORKFLOW_COMPLETED: "workflow:completed",
+  WORKFLOW_FAILED: "workflow:failed",
 
   DEV_PREVIEW_ENSURE: "dev-preview:ensure",
   DEV_PREVIEW_RESTART: "dev-preview:restart",
@@ -334,15 +368,27 @@ export const CHANNELS = {
   CLI_GET_STATUS: "cli:get-status",
 
   CLIPBOARD_SAVE_IMAGE: "clipboard:save-image",
+  CLIPBOARD_THUMBNAIL_FROM_PATH: "clipboard:thumbnail-from-path",
 
   APP_THEME_GET: "app-theme:get",
   APP_THEME_SET_COLOR_SCHEME: "app-theme:set-color-scheme",
   APP_THEME_SET_CUSTOM_SCHEMES: "app-theme:set-custom-schemes",
   APP_THEME_IMPORT: "app-theme:import",
+  APP_THEME_SET_COLOR_VISION_MODE: "app-theme:set-color-vision-mode",
 
   TELEMETRY_GET: "telemetry:get",
   TELEMETRY_SET_ENABLED: "telemetry:set-enabled",
   TELEMETRY_MARK_PROMPT_SHOWN: "telemetry:mark-prompt-shown",
+  TELEMETRY_TRACK: "telemetry:track",
+
+  // Privacy & Data channels
+  PRIVACY_GET_SETTINGS: "privacy:get-settings",
+  PRIVACY_SET_TELEMETRY_LEVEL: "privacy:set-telemetry-level",
+  PRIVACY_SET_LOG_RETENTION: "privacy:set-log-retention",
+  PRIVACY_OPEN_DATA_FOLDER: "privacy:open-data-folder",
+  PRIVACY_CLEAR_CACHE: "privacy:clear-cache",
+  PRIVACY_RESET_ALL_DATA: "privacy:reset-all-data",
+  PRIVACY_GET_DATA_FOLDER_PATH: "privacy:get-data-folder-path",
 
   // MCP Server channels
   MCP_SERVER_GET_STATUS: "mcp-server:get-status",
@@ -360,6 +406,7 @@ export const CHANNELS = {
   VOICE_INPUT_AUDIO_CHUNK: "voice-input:audio-chunk",
   VOICE_INPUT_TRANSCRIPTION_DELTA: "voice-input:transcription-delta",
   VOICE_INPUT_TRANSCRIPTION_COMPLETE: "voice-input:transcription-complete",
+  VOICE_INPUT_CORRECTION_QUEUED: "voice-input:correction-queued",
   VOICE_INPUT_CORRECTION_REPLACE: "voice-input:correction-replace",
   VOICE_INPUT_ERROR: "voice-input:error",
   VOICE_INPUT_STATUS: "voice-input:status",
@@ -371,11 +418,46 @@ export const CHANNELS = {
   VOICE_INPUT_FLUSH_PARAGRAPH: "voice-input:flush-paragraph",
   VOICE_INPUT_PARAGRAPH_BOUNDARY: "voice-input:paragraph-boundary",
 
+  // Onboarding channels
+  ONBOARDING_GET: "onboarding:get",
+  ONBOARDING_MIGRATE: "onboarding:migrate",
+  ONBOARDING_SET_STEP: "onboarding:set-step",
+  ONBOARDING_COMPLETE: "onboarding:complete",
+  ONBOARDING_MARK_TOAST_SEEN: "onboarding:mark-toast-seen",
+  ONBOARDING_MARK_NEWSLETTER_SEEN: "onboarding:mark-newsletter-seen",
+  ONBOARDING_CHECKLIST_GET: "onboarding:checklist-get",
+  ONBOARDING_CHECKLIST_DISMISS: "onboarding:checklist-dismiss",
+  ONBOARDING_CHECKLIST_MARK_ITEM: "onboarding:checklist-mark-item",
+
   // Crash Recovery channels
   CRASH_RECOVERY_GET_PENDING: "crash-recovery:get-pending",
   CRASH_RECOVERY_RESOLVE: "crash-recovery:resolve",
   CRASH_RECOVERY_GET_CONFIG: "crash-recovery:get-config",
   CRASH_RECOVERY_SET_CONFIG: "crash-recovery:set-config",
+
+  // Demo mode channels (dev-only)
+  DEMO_MOVE_TO: "demo:move-to",
+  DEMO_CLICK: "demo:click",
+  DEMO_TYPE: "demo:type",
+  DEMO_SET_ZOOM: "demo:set-zoom",
+  DEMO_SCREENSHOT: "demo:screenshot",
+  DEMO_WAIT_FOR_SELECTOR: "demo:wait-for-selector",
+  DEMO_PAUSE: "demo:pause",
+  DEMO_RESUME: "demo:resume",
+  DEMO_EXEC_MOVE_TO: "demo:exec-move-to",
+  DEMO_EXEC_CLICK: "demo:exec-click",
+  DEMO_EXEC_TYPE: "demo:exec-type",
+  DEMO_EXEC_SET_ZOOM: "demo:exec-set-zoom",
+  DEMO_EXEC_PAUSE: "demo:exec-pause",
+  DEMO_EXEC_RESUME: "demo:exec-resume",
+  DEMO_EXEC_WAIT_FOR_SELECTOR: "demo:exec-wait-for-selector",
+  DEMO_COMMAND_DONE: "demo:command-done",
+
+  // Workflow approval channels
+  WORKFLOW_RESOLVE_APPROVAL: "workflow:resolve-approval",
+  WORKFLOW_LIST_PENDING_APPROVALS: "workflow:list-pending-approvals",
+  WORKFLOW_APPROVAL_REQUESTED: "workflow:approval-requested",
+  WORKFLOW_APPROVAL_CLEARED: "workflow:approval-cleared",
 } as const;
 
 export type ChannelName = (typeof CHANNELS)[keyof typeof CHANNELS];

@@ -221,7 +221,7 @@ const TabButtonComponent = forwardRef<HTMLDivElement, TabButtonProps>(function T
               "border-r border-divider transition-colors",
               "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-[-2px]",
               isActive
-                ? "bg-white/[0.04] text-canopy-text"
+                ? "bg-tint/[0.04] text-canopy-text"
                 : "text-canopy-text/60 hover:text-canopy-text hover:bg-overlay-subtle"
             )}
             data-tab-id={id}
@@ -267,8 +267,7 @@ const TabButtonComponent = forwardRef<HTMLDivElement, TabButtonProps>(function T
                 className={cn(
                   "w-3 h-3 shrink-0",
                   STATE_COLORS[agentState],
-                  agentState === "working" && "animate-spin",
-                  agentState === "waiting" && "animate-breathe",
+                  agentState === "working" && "animate-spin-slow",
                   "motion-reduce:animate-none"
                 )}
                 aria-hidden="true"

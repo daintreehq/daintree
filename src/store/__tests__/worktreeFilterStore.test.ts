@@ -12,6 +12,7 @@ function resetWorktreeFilterStore() {
     sessionFilters: new Set(),
     activityFilters: new Set(),
     alwaysShowActive: true,
+    alwaysShowWaiting: true,
     hideMainWorktree: false,
     pinnedWorktrees: [],
   });
@@ -66,5 +67,24 @@ describe("worktreeFilterStore", () => {
     useWorktreeFilterStore.getState().clearAll();
 
     expect(useWorktreeFilterStore.getState().hideMainWorktree).toBe(false);
+  });
+
+  it("defaults alwaysShowWaiting to true", () => {
+    expect(useWorktreeFilterStore.getState().alwaysShowWaiting).toBe(true);
+  });
+
+  it("toggles alwaysShowWaiting via setter", () => {
+    useWorktreeFilterStore.getState().setAlwaysShowWaiting(false);
+    expect(useWorktreeFilterStore.getState().alwaysShowWaiting).toBe(false);
+
+    useWorktreeFilterStore.getState().setAlwaysShowWaiting(true);
+    expect(useWorktreeFilterStore.getState().alwaysShowWaiting).toBe(true);
+  });
+
+  it("does not reset alwaysShowWaiting on clearAll", () => {
+    useWorktreeFilterStore.getState().setAlwaysShowWaiting(false);
+    useWorktreeFilterStore.getState().clearAll();
+
+    expect(useWorktreeFilterStore.getState().alwaysShowWaiting).toBe(false);
   });
 });

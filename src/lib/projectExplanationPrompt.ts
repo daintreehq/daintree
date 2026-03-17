@@ -1,4 +1,5 @@
 import type { CliAvailability } from "@shared/types";
+import { BUILT_IN_AGENT_IDS, type BuiltInAgentId } from "@shared/config/agentIds";
 
 export const PROJECT_EXPLANATION_PROMPT = `You are an expert software architect analyzing this codebase for someone who needs a high-level overview.
 
@@ -30,29 +31,27 @@ export function getDefaultAgentId(
   defaultSelection: string | undefined,
   availability: CliAvailability,
   selectedAgents?: Set<string>
-): "claude" | "gemini" | "codex" | "opencode" | null {
-  const agentIds = ["claude", "gemini", "codex", "opencode"] as const;
-
+): BuiltInAgentId | null {
   const isUsable = (id: string) =>
     availability[id as keyof CliAvailability] && (!selectedAgents || selectedAgents.has(id));
 
   if (
     defaultAgent &&
-    agentIds.includes(defaultAgent as (typeof agentIds)[number]) &&
+    (BUILT_IN_AGENT_IDS as readonly string[]).includes(defaultAgent) &&
     isUsable(defaultAgent)
   ) {
-    return defaultAgent as "claude" | "gemini" | "codex" | "opencode";
+    return defaultAgent as BuiltInAgentId;
   }
 
   if (
     defaultSelection &&
-    agentIds.includes(defaultSelection as (typeof agentIds)[number]) &&
+    (BUILT_IN_AGENT_IDS as readonly string[]).includes(defaultSelection) &&
     isUsable(defaultSelection)
   ) {
-    return defaultSelection as "claude" | "gemini" | "codex" | "opencode";
+    return defaultSelection as BuiltInAgentId;
   }
 
-  for (const agentId of agentIds) {
+  for (const agentId of BUILT_IN_AGENT_IDS) {
     if (isUsable(agentId)) {
       return agentId;
     }

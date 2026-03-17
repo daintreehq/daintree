@@ -53,7 +53,7 @@ describe("afterPack", () => {
   describe("macOS", () => {
     const unpackedBase = "/build/mac/Canopy.app/Contents/Resources/app.asar.unpacked";
 
-    it("should succeed when node-pty and native binary exist", async () => {
+    it("should succeed when node-pty and better-sqlite3 exist", async () => {
       mockExistsSync.mockReturnValue(true);
 
       await afterPack(createContext("darwin", "/build/mac"));
@@ -61,6 +61,12 @@ describe("afterPack", () => {
       expect(mockExistsSync).toHaveBeenCalledWith(path.join(unpackedBase, "node_modules/node-pty"));
       expect(mockExistsSync).toHaveBeenCalledWith(
         path.join(unpackedBase, "node_modules/node-pty/build/Release/pty.node")
+      );
+      expect(mockExistsSync).toHaveBeenCalledWith(
+        path.join(unpackedBase, "node_modules/better-sqlite3")
+      );
+      expect(mockExistsSync).toHaveBeenCalledWith(
+        path.join(unpackedBase, "node_modules/better-sqlite3/build/Release/better_sqlite3.node")
       );
     });
 
@@ -96,10 +102,36 @@ describe("afterPack", () => {
     });
 
     it("should throw when pty.node binary is missing", async () => {
+      // node-pty dir exists, pty.node missing
       mockExistsSync.mockReturnValueOnce(true).mockReturnValueOnce(false);
 
       await expect(afterPack(createContext("darwin", "/build/mac"))).rejects.toThrow(
         /native binary not found/
+      );
+    });
+
+    it("should throw when better-sqlite3 directory is missing", async () => {
+      // node-pty dir exists, pty.node exists, better-sqlite3 dir missing
+      mockExistsSync
+        .mockReturnValueOnce(true) // node-pty dir
+        .mockReturnValueOnce(true) // pty.node
+        .mockReturnValueOnce(false); // better-sqlite3 dir
+
+      await expect(afterPack(createContext("darwin", "/build/mac"))).rejects.toThrow(
+        /better-sqlite3 not found/
+      );
+    });
+
+    it("should throw when better_sqlite3.node binary is missing", async () => {
+      // node-pty dir exists, pty.node exists, better-sqlite3 dir exists, binary missing
+      mockExistsSync
+        .mockReturnValueOnce(true) // node-pty dir
+        .mockReturnValueOnce(true) // pty.node
+        .mockReturnValueOnce(true) // better-sqlite3 dir
+        .mockReturnValueOnce(false); // better_sqlite3.node
+
+      await expect(afterPack(createContext("darwin", "/build/mac"))).rejects.toThrow(
+        /better-sqlite3 native binary not found/
       );
     });
   });
@@ -113,7 +145,6 @@ describe("afterPack", () => {
       await afterPack(createContext("win32", "/build/win"));
 
       expect(mockExistsSync).toHaveBeenCalledWith(path.join(unpackedBase, "node_modules/node-pty"));
-      // Windows uses ConPTY binaries only (winpty removed in node-pty 1.2.0-beta)
       expect(mockExistsSync).toHaveBeenCalledWith(
         path.join(unpackedBase, "node_modules/node-pty/build/Release/conpty.node")
       );
@@ -125,6 +156,12 @@ describe("afterPack", () => {
       );
       expect(mockExistsSync).toHaveBeenCalledWith(
         path.join(unpackedBase, "node_modules/node-pty/build/Release/conpty/OpenConsole.exe")
+      );
+      expect(mockExistsSync).toHaveBeenCalledWith(
+        path.join(unpackedBase, "node_modules/better-sqlite3")
+      );
+      expect(mockExistsSync).toHaveBeenCalledWith(
+        path.join(unpackedBase, "node_modules/better-sqlite3/build/Release/better_sqlite3.node")
       );
     });
 
@@ -156,10 +193,6 @@ describe("afterPack", () => {
 
     it("should copy conpty binaries from third_party when missing after rebuild", async () => {
       const nodePtyBase = path.join(unpackedBase, "node_modules/node-pty");
-      // node-pty exists, conpty.node exists, conpty_console_list.node exists,
-      // conpty/conpty.dll missing (triggers fallback), conpty/OpenConsole.exe missing,
-      // third_party exists, source dir exists,
-      // then final validation passes
       mockExistsSync
         .mockReturnValueOnce(true) // node-pty dir
         .mockReturnValueOnce(true) // conpty.node
@@ -168,7 +201,9 @@ describe("afterPack", () => {
         .mockReturnValueOnce(true) // third_party/conpty exists
         .mockReturnValueOnce(true) // win10-x64 source dir exists
         .mockReturnValueOnce(true) // final validation: conpty/conpty.dll
-        .mockReturnValueOnce(true); // final validation: conpty/OpenConsole.exe
+        .mockReturnValueOnce(true) // final validation: conpty/OpenConsole.exe
+        .mockReturnValueOnce(true) // better-sqlite3 dir
+        .mockReturnValueOnce(true); // better_sqlite3.node
       mockReaddirSync.mockReturnValue(["1.23.251008001"]);
 
       await afterPack(createContext("win32", "/build/win"));
@@ -180,8 +215,6 @@ describe("afterPack", () => {
     });
 
     it("should throw when conpty.dll missing and third_party unavailable", async () => {
-      // node-pty exists, conpty.node exists, conpty_console_list.node exists,
-      // conpty/conpty.dll missing, third_party/conpty missing
       mockExistsSync
         .mockReturnValueOnce(true) // node-pty dir
         .mockReturnValueOnce(true) // conpty.node
@@ -191,6 +224,39 @@ describe("afterPack", () => {
 
       await expect(afterPack(createContext("win32", "/build/win"))).rejects.toThrow(
         /third_party\/conpty not found/
+      );
+    });
+
+    it("should throw when better-sqlite3 directory is missing on Windows", async () => {
+      mockExistsSync
+        .mockReturnValueOnce(true) // node-pty dir
+        .mockReturnValueOnce(true) // conpty.node
+        .mockReturnValueOnce(true) // conpty_console_list.node
+        .mockReturnValueOnce(true) // conpty/conpty.dll
+        .mockReturnValueOnce(true) // conpty/OpenConsole.exe
+        .mockReturnValueOnce(true) // final: conpty/conpty.dll
+        .mockReturnValueOnce(true) // final: conpty/OpenConsole.exe
+        .mockReturnValueOnce(false); // better-sqlite3 dir missing
+
+      await expect(afterPack(createContext("win32", "/build/win"))).rejects.toThrow(
+        /better-sqlite3 not found/
+      );
+    });
+
+    it("should throw when better_sqlite3.node binary is missing on Windows", async () => {
+      mockExistsSync
+        .mockReturnValueOnce(true) // node-pty dir
+        .mockReturnValueOnce(true) // conpty.node
+        .mockReturnValueOnce(true) // conpty_console_list.node
+        .mockReturnValueOnce(true) // conpty/conpty.dll
+        .mockReturnValueOnce(true) // conpty/OpenConsole.exe
+        .mockReturnValueOnce(true) // final: conpty/conpty.dll
+        .mockReturnValueOnce(true) // final: conpty/OpenConsole.exe
+        .mockReturnValueOnce(true) // better-sqlite3 dir
+        .mockReturnValueOnce(false); // better_sqlite3.node missing
+
+      await expect(afterPack(createContext("win32", "/build/win"))).rejects.toThrow(
+        /better-sqlite3 native binary not found/
       );
     });
   });
@@ -206,6 +272,12 @@ describe("afterPack", () => {
       expect(mockExistsSync).toHaveBeenCalledWith(path.join(unpackedBase, "node_modules/node-pty"));
       expect(mockExistsSync).toHaveBeenCalledWith(
         path.join(unpackedBase, "node_modules/node-pty/build/Release/pty.node")
+      );
+      expect(mockExistsSync).toHaveBeenCalledWith(
+        path.join(unpackedBase, "node_modules/better-sqlite3")
+      );
+      expect(mockExistsSync).toHaveBeenCalledWith(
+        path.join(unpackedBase, "node_modules/better-sqlite3/build/Release/better_sqlite3.node")
       );
     });
 
@@ -232,6 +304,29 @@ describe("afterPack", () => {
 
       await expect(afterPack(createContext("linux", "/build/linux"))).rejects.toThrow(
         /native binary not found/
+      );
+    });
+
+    it("should throw when better-sqlite3 directory is missing on Linux", async () => {
+      mockExistsSync
+        .mockReturnValueOnce(true) // node-pty dir
+        .mockReturnValueOnce(true) // pty.node
+        .mockReturnValueOnce(false); // better-sqlite3 dir
+
+      await expect(afterPack(createContext("linux", "/build/linux"))).rejects.toThrow(
+        /better-sqlite3 not found/
+      );
+    });
+
+    it("should throw when better_sqlite3.node binary is missing on Linux", async () => {
+      mockExistsSync
+        .mockReturnValueOnce(true) // node-pty dir
+        .mockReturnValueOnce(true) // pty.node
+        .mockReturnValueOnce(true) // better-sqlite3 dir
+        .mockReturnValueOnce(false); // better_sqlite3.node
+
+      await expect(afterPack(createContext("linux", "/build/linux"))).rejects.toThrow(
+        /better-sqlite3 native binary not found/
       );
     });
   });

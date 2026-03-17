@@ -12,7 +12,7 @@ export function WelcomeScreen() {
     <div className="flex flex-col items-center justify-center h-full w-full p-8 animate-in fade-in duration-500">
       <div className="max-w-sm w-full flex flex-col items-center text-center">
         <div className="mb-8">
-          <CanopyIcon className="h-20 w-20 text-white/80" />
+          <CanopyIcon className="h-20 w-20 text-tint/80" />
         </div>
 
         <h1 className="text-2xl font-semibold text-canopy-text tracking-tight mb-3">

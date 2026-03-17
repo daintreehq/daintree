@@ -141,7 +141,7 @@ export function IssuePickerDialog({
             onChange={(e) => setSearch(e.target.value)}
             onKeyDown={handleKeyDown}
             placeholder="Search issues by title or number..."
-            className="w-full pl-10 pr-4 py-2 bg-white/5 border border-canopy-border rounded-[var(--radius-md)] text-sm text-canopy-text placeholder:text-canopy-text/40 focus:outline-none focus:border-canopy-accent"
+            className="w-full pl-10 pr-4 py-2 bg-tint/5 border border-canopy-border rounded-[var(--radius-md)] text-sm text-canopy-text placeholder:text-text-muted focus:outline-none focus:border-canopy-accent"
           />
         </div>
 
@@ -154,7 +154,7 @@ export function IssuePickerDialog({
                 "px-3 py-1 text-xs rounded-full transition-colors capitalize",
                 stateFilter === state
                   ? "bg-canopy-accent/20 text-canopy-accent"
-                  : "text-canopy-text/50 hover:text-canopy-text/80 hover:bg-white/5"
+                  : "text-canopy-text/50 hover:text-canopy-text/80 hover:bg-tint/5"
               )}
             >
               {state}
@@ -189,7 +189,7 @@ export function IssuePickerDialog({
                     "w-full text-left px-3 py-2.5 rounded-[var(--radius-md)] transition-colors flex items-start gap-3",
                     index === selectedIndex
                       ? "bg-canopy-accent/10 border border-canopy-accent/30"
-                      : "hover:bg-white/5 border border-transparent",
+                      : "hover:bg-tint/5 border border-transparent",
                     isCurrentlyAttached && "ring-1 ring-status-success/30"
                   )}
                 >

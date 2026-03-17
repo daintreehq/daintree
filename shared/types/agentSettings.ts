@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { AGENT_REGISTRY, getEffectiveAgentConfig } from "../config/agentRegistry.js";
-import { escapeShellArg } from "../utils/shellEscape.js";
+import { escapeShellArg, escapeShellArgOptional } from "../utils/shellEscape.js";
 
 /**
  * Domain weights for agent routing (0-1 scale).
@@ -274,5 +274,73 @@ export function generateAgentCommand(
     }
   }
 
+  return parts.join(" ");
+}
+
+/**
+ * Builds the array of process-level launch flags to persist alongside the session ID.
+ * These flags must be re-supplied on every CLI invocation (they are not embedded in the session).
+ *
+ * Includes: registry default args, inline mode flag, dangerous args, custom flags.
+ * Excludes: clipboard directory (dynamic runtime value), initial prompt.
+ */
+export function buildAgentLaunchFlags(entry: AgentSettingsEntry, agentId: string): string[] {
+  const agentConfig = getEffectiveAgentConfig(agentId);
+  const flags: string[] = [];
+
+  // Registry default args (e.g. fixed CLI flags)
+  if (agentConfig?.args?.length) {
+    flags.push(...agentConfig.args);
+  }
+
+  // Inline mode flag when agent supports it and it's enabled
+  const inlineModeFlag = agentConfig?.capabilities?.inlineModeFlag;
+  if (inlineModeFlag && entry.inlineMode !== false) {
+    flags.push(inlineModeFlag);
+  }
+
+  // Dangerous args and custom flags (from generateAgentFlags, excluding clipboard dir)
+  const settingsFlags = generateAgentFlags(entry, agentId);
+  flags.push(...settingsFlags);
+
+  return flags;
+}
+
+/**
+ * Builds a resume command for an agent using a previously captured session ID.
+ * When launchFlags are provided, they are prepended before the resume args
+ * to restore the original process-level configuration.
+ *
+ * @returns The resume command string, or undefined if the agent has no resume config.
+ */
+export function buildResumeCommand(
+  agentId: string,
+  sessionId: string,
+  launchFlags?: string[]
+): string | undefined {
+  const agentConfig = getEffectiveAgentConfig(agentId);
+  if (!agentConfig?.resume) return undefined;
+
+  const parts = [agentConfig.command];
+
+  // Prepend persisted launch flags (original process-level flags)
+  if (launchFlags?.length) {
+    for (const flag of launchFlags) {
+      if (flag.startsWith("-")) {
+        parts.push(flag);
+      } else {
+        parts.push(escapeShellArg(flag));
+      }
+    }
+  }
+
+  const args = agentConfig.resume.args(sessionId);
+  for (const arg of args) {
+    if (arg.startsWith("-")) {
+      parts.push(arg);
+    } else {
+      parts.push(escapeShellArgOptional(arg));
+    }
+  }
   return parts.join(" ");
 }

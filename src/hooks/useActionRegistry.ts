@@ -29,13 +29,15 @@ export function useActionRegistry(options: ActionCallbacks): void {
     // Create a proxy that reads from the ref, ensuring fresh values on every call
     const callbackProxy: ActionCallbacks = {
       onOpenSettings: () => callbacksRef.current.onOpenSettings(),
-      onOpenSettingsTab: (tab) => callbacksRef.current.onOpenSettingsTab(tab),
+      onOpenSettingsTab: (target) => callbacksRef.current.onOpenSettingsTab(target),
       onToggleSidebar: () => callbacksRef.current.onToggleSidebar(),
       onToggleFocusMode: () => callbacksRef.current.onToggleFocusMode(),
-      onOpenAgentPalette: () => callbacksRef.current.onOpenAgentPalette(),
+      onFocusRegionNext: () => callbacksRef.current.onFocusRegionNext(),
+      onFocusRegionPrev: () => callbacksRef.current.onFocusRegionPrev(),
       onOpenActionPalette: () => callbacksRef.current.onOpenActionPalette(),
       onOpenQuickSwitcher: () => callbacksRef.current.onOpenQuickSwitcher(),
       onOpenWorktreePalette: () => callbacksRef.current.onOpenWorktreePalette(),
+      onOpenQuickCreatePalette: () => callbacksRef.current.onOpenQuickCreatePalette(),
       onToggleWorktreeOverview: () => callbacksRef.current.onToggleWorktreeOverview(),
       onOpenWorktreeOverview: () => callbacksRef.current.onOpenWorktreeOverview(),
       onCloseWorktreeOverview: () => callbacksRef.current.onCloseWorktreeOverview(),

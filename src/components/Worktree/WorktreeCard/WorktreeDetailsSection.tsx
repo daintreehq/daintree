@@ -53,7 +53,7 @@ export function WorktreeDetailsSection({
   return (
     <div
       id={detailsId}
-      className="mt-3 p-3 bg-white/[0.01] rounded-[var(--radius-lg)] border border-white/5"
+      className="mt-3 rounded-[var(--radius-lg)] border border-border-subtle bg-overlay-subtle p-3"
     >
       {isExpanded ? (
         <div className="-m-3">
@@ -61,11 +61,11 @@ export function WorktreeDetailsSection({
             onClick={onToggleExpand}
             aria-expanded={true}
             aria-controls={detailsPanelId}
-            className="w-full px-3 py-2.5 flex items-center justify-between text-left border-b border-white/5 transition-colors bg-overlay-soft hover:bg-white/[0.05] focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-[-2px] rounded-t-[var(--radius-lg)]"
+            className="flex w-full items-center justify-between rounded-t-[var(--radius-lg)] border-b border-border-subtle bg-overlay-soft px-3 py-2.5 text-left transition-colors hover:bg-overlay-medium focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-[-2px]"
             id={`${detailsId}-button`}
           >
-            <span className="text-xs text-canopy-text/50 font-medium">Details</span>
-            <ChevronRight className="w-3 h-3 text-canopy-text/40 rotate-90" />
+            <span className="text-xs font-medium text-text-muted">Details</span>
+            <ChevronRight className="h-3 w-3 rotate-90 text-text-muted" />
           </button>
           <div
             id={detailsPanelId}
@@ -97,7 +97,7 @@ export function WorktreeDetailsSection({
             aria-expanded={false}
             aria-controls={detailsPanelId}
             className={cn(
-              "flex-1 px-3 py-2.5 flex items-center justify-between min-w-0 text-left transition-colors hover:bg-white/5",
+              "flex min-w-0 flex-1 items-center justify-between px-3 py-2.5 text-left transition-colors hover:bg-overlay-soft",
               "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-[-2px]",
               onOpenReviewHub && hasChanges
                 ? "rounded-l-[var(--radius-lg)]"
@@ -107,7 +107,7 @@ export function WorktreeDetailsSection({
           >
             <span className="text-xs truncate min-w-0 flex-1">
               {isLifecycleRunning && lifecycleLabel ? (
-                <span className="flex items-center gap-1.5 text-canopy-text/60">
+                <span className="flex items-center gap-1.5 text-text-secondary">
                   <Loader2 className="w-3 h-3 animate-spin shrink-0" aria-hidden="true" />
                   <span className="truncate">{lifecycleLabel}</span>
                 </span>
@@ -116,7 +116,7 @@ export function WorktreeDetailsSection({
                 worktree.lifecycleStatus?.state !== "success" ? (
                 <span className="text-status-error">{lifecycleLabel}</span>
               ) : hasChanges && worktree.worktreeChanges ? (
-                <span className="flex items-center gap-1.5 text-canopy-text/60">
+                <span className="flex items-center gap-1.5 text-text-secondary">
                   <span>
                     {worktree.worktreeChanges.changedFileCount} file
                     {worktree.worktreeChanges.changedFileCount !== 1 ? "s" : ""}
@@ -131,7 +131,7 @@ export function WorktreeDetailsSection({
                       )}
                       {(worktree.worktreeChanges.insertions ?? 0) > 0 &&
                         (worktree.worktreeChanges.deletions ?? 0) > 0 && (
-                          <span className="text-canopy-text/30">/</span>
+                          <span className="text-text-muted">/</span>
                         )}
                       {(worktree.worktreeChanges.deletions ?? 0) > 0 && (
                         <span className="text-status-error">
@@ -147,7 +147,7 @@ export function WorktreeDetailsSection({
                     computedSubtitle.tone === "error" && "text-status-error",
                     computedSubtitle.tone === "warning" && "text-status-warning",
                     computedSubtitle.tone === "info" && "text-status-info",
-                    computedSubtitle.tone === "muted" && "text-canopy-text/50"
+                    computedSubtitle.tone === "muted" && "text-text-muted"
                   )}
                 >
                   {computedSubtitle.text}
@@ -158,7 +158,7 @@ export function WorktreeDetailsSection({
             <TooltipProvider>
               <Tooltip>
                 <TooltipTrigger asChild>
-                  <div className="flex items-center gap-1.5 text-xs text-canopy-text/40 shrink-0 ml-3">
+                  <div className="ml-3 flex shrink-0 items-center gap-1.5 text-xs text-text-muted">
                     <ActivityLight
                       lastActivityTimestamp={worktree.lastActivityTimestamp}
                       className="w-1.5 h-1.5"
@@ -182,8 +182,8 @@ export function WorktreeDetailsSection({
                   <button
                     onClick={onOpenReviewHub}
                     className={cn(
-                      "px-2 py-1 border-l border-white/5 transition-colors shrink-0",
-                      "text-[var(--color-state-active)]/70 hover:text-[var(--color-state-active)] hover:bg-[var(--color-state-active)]/10",
+                      "shrink-0 border-l border-border-subtle px-2 py-1 transition-colors",
+                      "text-[var(--color-state-active)]/70 hover:bg-[var(--color-state-active)]/10 hover:text-[var(--color-state-active)]",
                       "rounded-r-[var(--radius-lg)]",
                       "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-canopy-accent"
                     )}

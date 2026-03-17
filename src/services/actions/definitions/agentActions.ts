@@ -2,6 +2,8 @@ import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 import { AgentIdSchema, LaunchLocationSchema } from "./schemas";
 import { z } from "zod";
 import { useTerminalStore } from "@/store/terminalStore";
+import { AGENT_REGISTRY } from "@/config/agents";
+import type { ActionId } from "@shared/types/actions";
 
 export function registerAgentActions(actions: ActionRegistry, callbacks: ActionCallbacks): void {
   actions.set("agent.launch", () => ({
@@ -42,72 +44,33 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
 
   actions.set("agent.palette", () => ({
     id: "agent.palette",
-    title: "Open Agent Palette",
-    description: "Open the agent selection palette",
+    title: "Open Quick Switcher",
+    description: "Open the quick switcher to find panels",
     category: "agent",
     kind: "command",
     danger: "safe",
     scope: "renderer",
     run: async () => {
-      callbacks.onOpenAgentPalette();
+      callbacks.onOpenQuickSwitcher();
     },
   }));
 
-  actions.set("agent.claude", () => ({
-    id: "agent.claude",
-    title: "Launch Claude",
-    description: "Launch Claude agent",
-    category: "agent",
-    kind: "command",
-    danger: "safe",
-    scope: "renderer",
-    run: async () => {
-      const terminalId = await callbacks.onLaunchAgent("claude");
-      return { terminalId };
-    },
-  }));
-
-  actions.set("agent.gemini", () => ({
-    id: "agent.gemini",
-    title: "Launch Gemini",
-    description: "Launch Gemini agent",
-    category: "agent",
-    kind: "command",
-    danger: "safe",
-    scope: "renderer",
-    run: async () => {
-      const terminalId = await callbacks.onLaunchAgent("gemini");
-      return { terminalId };
-    },
-  }));
-
-  actions.set("agent.codex", () => ({
-    id: "agent.codex",
-    title: "Launch Codex",
-    description: "Launch Codex agent",
-    category: "agent",
-    kind: "command",
-    danger: "safe",
-    scope: "renderer",
-    run: async () => {
-      const terminalId = await callbacks.onLaunchAgent("codex");
-      return { terminalId };
-    },
-  }));
-
-  actions.set("agent.opencode", () => ({
-    id: "agent.opencode",
-    title: "Launch OpenCode",
-    description: "Launch OpenCode agent",
-    category: "agent",
-    kind: "command",
-    danger: "safe",
-    scope: "renderer",
-    run: async () => {
-      const terminalId = await callbacks.onLaunchAgent("opencode");
-      return { terminalId };
-    },
-  }));
+  for (const [id, config] of Object.entries(AGENT_REGISTRY)) {
+    const actionId = `agent.${id}` as ActionId;
+    actions.set(actionId, () => ({
+      id: actionId,
+      title: `Launch ${config.name}`,
+      description: `Launch ${config.name} agent`,
+      category: "agent",
+      kind: "command",
+      danger: "safe",
+      scope: "renderer",
+      run: async () => {
+        const terminalId = await callbacks.onLaunchAgent(id);
+        return { terminalId };
+      },
+    }));
+  }
 
   actions.set("agent.terminal", () => ({
     id: "agent.terminal",
@@ -204,6 +167,22 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
         if (wt.worktreeId) validWorktreeIds.add(wt.worktreeId);
       }
       state.focusNextAgent(state.isInTrash, validWorktreeIds);
+    },
+  }));
+
+  actions.set("dock.focusNextWaiting", () => ({
+    id: "dock.focusNextWaiting",
+    title: "Focus Next Blocked Dock Agent",
+    description: "Jump to the next waiting or failed agent in the dock (failed before waiting)",
+    category: "agent",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    run: async () => {
+      const state = useTerminalStore.getState();
+      const { useWorktreeSelectionStore } = await import("@/store/worktreeStore");
+      const activeWorktreeId = useWorktreeSelectionStore.getState().activeWorktreeId;
+      state.focusNextBlockedDock(activeWorktreeId ?? undefined, state.getPanelGroup);
     },
   }));
 

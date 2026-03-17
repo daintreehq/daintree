@@ -1,4 +1,4 @@
-import type { BrowserHistory } from "@shared/types/domain";
+import type { BrowserHistory } from "@shared/types/browser";
 
 export const MAX_BROWSER_HISTORY_ENTRIES = 200;
 

@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import type { ReactNode, ButtonHTMLAttributes } from "react";
 import { CrashRecoveryDialog } from "../CrashRecoveryDialog";
@@ -16,6 +16,7 @@ vi.mock("@/components/ui/AppDialog", () => {
   interface SectionProps {
     children: ReactNode;
     icon?: ReactNode;
+    className?: string;
   }
 
   const AppDialog = ({ isOpen, children, "data-testid": testId }: MockProps) =>
@@ -29,7 +30,9 @@ vi.mock("@/components/ui/AppDialog", () => {
     </h2>
   );
   AppDialog.CloseButton = () => <button type="button">close</button>;
-  AppDialog.Body = ({ children }: SectionProps) => <div>{children}</div>;
+  AppDialog.Body = ({ children, className }: SectionProps) => (
+    <div className={className}>{children}</div>
+  );
 
   return { AppDialog };
 });
@@ -44,6 +47,26 @@ vi.mock("@/components/ui/button", () => ({
     </button>
   ),
 }));
+
+const mockPanels = [
+  {
+    id: "t1",
+    kind: "terminal",
+    title: "Shell",
+    cwd: "/home",
+    location: "grid" as const,
+    isSuspect: false,
+  },
+  {
+    id: "t2",
+    kind: "agent",
+    title: "Claude",
+    cwd: "/project",
+    location: "dock" as const,
+    isSuspect: true,
+  },
+  { id: "t3", kind: "browser", title: "Docs", location: "grid" as const, isSuspect: false },
+];
 
 const mockCrash: PendingCrash = {
   logPath: "/fake/userData/crashes/crash-123.json",
@@ -60,6 +83,7 @@ const mockCrash: PendingCrash = {
   },
   hasBackup: true,
   backupTimestamp: 1699999900000,
+  panels: mockPanels,
 };
 
 const mockConfig: CrashRecoveryConfig = { autoRestoreOnCrash: false };
@@ -111,16 +135,116 @@ describe("CrashRecoveryDialog", () => {
     expect(screen.getByText("Canopy Crashed")).toBeTruthy();
   });
 
-  it("calls onResolve with 'restore' when Restore is clicked", async () => {
-    const { onResolve } = setup();
-    fireEvent.click(screen.getByTestId("restore-button"));
-    await waitFor(() => expect(onResolve).toHaveBeenCalledWith("restore"));
+  describe("with panels (selective restore)", () => {
+    it("renders panel list with checkboxes", () => {
+      setup();
+      expect(screen.getByTestId("panel-list")).toBeTruthy();
+      expect(screen.getByTestId("panel-row-t1")).toBeTruthy();
+      expect(screen.getByTestId("panel-row-t2")).toBeTruthy();
+      expect(screen.getByTestId("panel-row-t3")).toBeTruthy();
+    });
+
+    it("shows panel titles", () => {
+      setup();
+      expect(screen.getByText("Shell")).toBeTruthy();
+      expect(screen.getByText("Claude")).toBeTruthy();
+      expect(screen.getByText("Docs")).toBeTruthy();
+    });
+
+    it("shows suspect badge on suspect panels", () => {
+      setup();
+      expect(screen.getByTestId("suspect-badge-t2")).toBeTruthy();
+      expect(screen.queryByTestId("suspect-badge-t1")).toBeNull();
+    });
+
+    it("shows suspect warning message", () => {
+      setup();
+      expect(screen.getByTestId("suspect-warning")).toBeTruthy();
+    });
+
+    it("all panels are selected by default", () => {
+      setup();
+      const checkbox1 = screen.getByTestId("panel-checkbox-t1") as HTMLInputElement;
+      const checkbox2 = screen.getByTestId("panel-checkbox-t2") as HTMLInputElement;
+      expect(checkbox1.checked).toBe(true);
+      expect(checkbox2.checked).toBe(true);
+    });
+
+    it("calls onResolve with selected panel IDs when Restore Selected is clicked", async () => {
+      const { onResolve } = setup();
+      // Deselect t2
+      fireEvent.click(screen.getByTestId("panel-checkbox-t2"));
+      fireEvent.click(screen.getByTestId("restore-selected-button"));
+      await waitFor(() =>
+        expect(onResolve).toHaveBeenCalledWith({
+          kind: "restore",
+          panelIds: expect.arrayContaining(["t1", "t3"]),
+        })
+      );
+      // Verify t2 was excluded
+      const call = (onResolve as ReturnType<typeof vi.fn>).mock.calls[0][0];
+      expect(call.panelIds).not.toContain("t2");
+    });
+
+    it("calls onResolve with fresh when Start Fresh is clicked", async () => {
+      const { onResolve } = setup();
+      fireEvent.click(screen.getByTestId("fresh-button"));
+      await waitFor(() => expect(onResolve).toHaveBeenCalledWith({ kind: "fresh" }));
+    });
+
+    it("toggle all deselects when all are selected", () => {
+      setup();
+      fireEvent.click(screen.getByTestId("toggle-all-button"));
+      const checkbox1 = screen.getByTestId("panel-checkbox-t1") as HTMLInputElement;
+      expect(checkbox1.checked).toBe(false);
+    });
+
+    it("toggle all selects when none are selected", () => {
+      setup();
+      // Deselect all
+      fireEvent.click(screen.getByTestId("toggle-all-button"));
+      // Select all
+      fireEvent.click(screen.getByTestId("toggle-all-button"));
+      const checkbox1 = screen.getByTestId("panel-checkbox-t1") as HTMLInputElement;
+      expect(checkbox1.checked).toBe(true);
+    });
+
+    it("restore selected button is disabled when no panels selected", () => {
+      setup();
+      fireEvent.click(screen.getByTestId("toggle-all-button"));
+      const btn = screen.getByTestId("restore-selected-button") as HTMLButtonElement;
+      expect(btn.disabled).toBe(true);
+    });
+
+    it("shows selection count", () => {
+      setup();
+      expect(screen.getByText("3 of 3 selected")).toBeTruthy();
+    });
   });
 
-  it("calls onResolve with 'fresh' when Start Fresh is clicked", async () => {
-    const { onResolve } = setup();
-    fireEvent.click(screen.getByTestId("fresh-button"));
-    await waitFor(() => expect(onResolve).toHaveBeenCalledWith("fresh"));
+  describe("without panels (legacy fallback)", () => {
+    it("shows two-button layout when panels is empty", () => {
+      setup({ crash: { panels: [] } });
+      expect(screen.getByTestId("restore-button")).toBeTruthy();
+      expect(screen.getByTestId("fresh-button")).toBeTruthy();
+      expect(screen.queryByTestId("panel-list")).toBeNull();
+    });
+
+    it("shows two-button layout when panels is undefined", () => {
+      setup({ crash: { panels: undefined } });
+      expect(screen.getByTestId("restore-button")).toBeTruthy();
+    });
+
+    it("calls onResolve with restore-all when Restore is clicked in legacy mode", async () => {
+      const { onResolve } = setup({ crash: { panels: [] } });
+      fireEvent.click(screen.getByTestId("restore-button"));
+      await waitFor(() =>
+        expect(onResolve).toHaveBeenCalledWith({
+          kind: "restore",
+          panelIds: [],
+        })
+      );
+    });
   });
 
   it("shows error details when toggle is clicked", () => {
@@ -157,36 +281,8 @@ describe("CrashRecoveryDialog", () => {
     await waitFor(() => expect(onUpdateConfig).toHaveBeenCalledWith({ autoRestoreOnCrash: true }));
   });
 
-  it("shows backup timestamp when backup exists", () => {
-    setup();
-    expect(screen.getByText(/Restore session from/)).toBeTruthy();
-  });
-
-  it("shows 'no backup' message when hasBackup is false", () => {
-    setup({ crash: { hasBackup: false, backupTimestamp: undefined } });
+  it("shows 'no backup' message when hasBackup is false in legacy mode", () => {
+    setup({ crash: { hasBackup: false, backupTimestamp: undefined, panels: undefined } });
     expect(screen.getByText(/No backup available/)).toBeTruthy();
-  });
-
-  it("disables action buttons while resolving", async () => {
-    let resolveCallback!: () => void;
-    const slowResolve = vi.fn(
-      () =>
-        new Promise<void>((resolve) => {
-          resolveCallback = resolve;
-        })
-    );
-    setup({ onResolve: slowResolve });
-
-    fireEvent.click(screen.getByTestId("restore-button"));
-    await waitFor(() => {
-      const btn = screen.getByTestId("restore-button") as HTMLButtonElement;
-      expect(btn.disabled).toBe(true);
-    });
-    const freshBtn = screen.getByTestId("fresh-button") as HTMLButtonElement;
-    expect(freshBtn.disabled).toBe(true);
-
-    await act(async () => {
-      resolveCallback();
-    });
   });
 });

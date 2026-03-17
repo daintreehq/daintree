@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
-import type { AgentId } from "../../../shared/types/domain.js";
+import type { AgentId } from "../../../shared/types/agent.js";
 
 const registryMock = vi.hoisted(() => ({
   getEffectiveAgentIds: vi.fn(),

@@ -1,37 +1,6 @@
 import { create } from "zustand";
-import { persist, createJSONStorage, type StateStorage } from "zustand/middleware";
-
-const memoryStorage: StateStorage = (() => {
-  const storage = new Map<string, string>();
-  return {
-    getItem: (name) => storage.get(name) ?? null,
-    setItem: (name, value) => {
-      storage.set(name, value);
-    },
-    removeItem: (name) => {
-      storage.delete(name);
-    },
-  };
-})();
-
-function getSafeStorage(): StateStorage {
-  if (typeof localStorage !== "undefined") {
-    const storage = localStorage as unknown as Partial<StateStorage>;
-    const hasStorageApi =
-      typeof storage.getItem === "function" &&
-      typeof storage.setItem === "function" &&
-      typeof storage.removeItem === "function";
-    if (hasStorageApi) {
-      try {
-        storage.getItem!("__test__");
-        return storage as StateStorage;
-      } catch {
-        return memoryStorage;
-      }
-    }
-  }
-  return memoryStorage;
-}
+import { persist } from "zustand/middleware";
+import { createSafeJSONStorage } from "./persistence/safeStorage";
 
 export type OrderBy = "recent" | "created" | "alpha";
 
@@ -72,6 +41,7 @@ interface WorktreeFilterState {
   sessionFilters: Set<SessionFilter>;
   activityFilters: Set<ActivityFilter>;
   alwaysShowActive: boolean;
+  alwaysShowWaiting: boolean;
   hideMainWorktree: boolean;
   pinnedWorktrees: string[];
 }
@@ -86,6 +56,7 @@ interface WorktreeFilterActions {
   toggleSessionFilter: (filter: SessionFilter) => void;
   toggleActivityFilter: (filter: ActivityFilter) => void;
   setAlwaysShowActive: (enabled: boolean) => void;
+  setAlwaysShowWaiting: (enabled: boolean) => void;
   setHideMainWorktree: (enabled: boolean) => void;
   pinWorktree: (id: string) => void;
   unpinWorktree: (id: string) => void;
@@ -107,6 +78,7 @@ interface PersistedState {
   sessionFilters: SessionFilter[];
   activityFilters: ActivityFilter[];
   alwaysShowActive: boolean;
+  alwaysShowWaiting: boolean;
   hideMainWorktree: boolean;
   pinnedWorktrees: string[];
 }
@@ -123,6 +95,7 @@ export const useWorktreeFilterStore = create<WorktreeFilterStore>()(
       sessionFilters: new Set<SessionFilter>(),
       activityFilters: new Set<ActivityFilter>(),
       alwaysShowActive: true,
+      alwaysShowWaiting: true,
       hideMainWorktree: false,
       pinnedWorktrees: [],
 
@@ -186,6 +159,7 @@ export const useWorktreeFilterStore = create<WorktreeFilterStore>()(
         }),
 
       setAlwaysShowActive: (enabled) => set({ alwaysShowActive: enabled }),
+      setAlwaysShowWaiting: (enabled) => set({ alwaysShowWaiting: enabled }),
       setHideMainWorktree: (enabled) => set({ hideMainWorktree: enabled }),
 
       pinWorktree: (id) =>
@@ -242,7 +216,7 @@ export const useWorktreeFilterStore = create<WorktreeFilterStore>()(
     }),
     {
       name: "canopy-worktree-filters",
-      storage: createJSONStorage(() => getSafeStorage()),
+      storage: createSafeJSONStorage(),
       partialize: (state): PersistedState => ({
         query: state.query,
         orderBy: state.orderBy,
@@ -253,6 +227,7 @@ export const useWorktreeFilterStore = create<WorktreeFilterStore>()(
         sessionFilters: Array.from(state.sessionFilters),
         activityFilters: Array.from(state.activityFilters),
         alwaysShowActive: state.alwaysShowActive,
+        alwaysShowWaiting: state.alwaysShowWaiting,
         hideMainWorktree: state.hideMainWorktree,
         pinnedWorktrees: state.pinnedWorktrees,
       }),
@@ -269,6 +244,7 @@ export const useWorktreeFilterStore = create<WorktreeFilterStore>()(
           sessionFilters: new Set(p?.sessionFilters ?? []),
           activityFilters: new Set(p?.activityFilters ?? []),
           alwaysShowActive: p?.alwaysShowActive ?? true,
+          alwaysShowWaiting: p?.alwaysShowWaiting ?? true,
           hideMainWorktree: p?.hideMainWorktree ?? false,
           pinnedWorktrees: p?.pinnedWorktrees ?? [],
         };

@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { renderHook } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { MORE_AGENTS_PANEL_ID } from "../usePanelPalette";
 
 const {
   getPanelKindIdsMock,
@@ -26,6 +27,7 @@ vi.mock("@/registry/panelComponentRegistry", () => ({
 }));
 
 vi.mock("@shared/config/agentRegistry", () => ({
+  AGENT_REGISTRY: {},
   getEffectiveAgentIds: getEffectiveAgentIdsMock,
   getEffectiveAgentConfig: getEffectiveAgentConfigMock,
 }));
@@ -55,15 +57,15 @@ describe("usePanelPalette", () => {
   beforeEach(() => {
     vi.clearAllMocks();
 
-    getPanelKindIdsMock.mockReturnValue(["terminal"]);
+    getPanelKindIdsMock.mockReturnValue(["browser"]);
     getPanelKindConfigMock.mockImplementation((id: string) =>
-      id === "terminal"
+      id === "browser"
         ? {
-            name: "Terminal",
-            iconId: "terminal",
+            name: "Browser",
+            iconId: "browser",
             color: "#aaa",
             showInPalette: true,
-            shortcut: "Cmd+T",
+            shortcut: "Cmd+B",
           }
         : null
     );
@@ -82,5 +84,55 @@ describe("usePanelPalette", () => {
 
     const claudeEntries = result.current.results.filter((item) => item.id === "agent:claude");
     expect(claudeEntries).toHaveLength(1);
+  });
+
+  it("assigns category 'agent' to agent items", () => {
+    const { result } = renderHook(() => usePanelPalette());
+
+    const claude = result.current.results.find((item) => item.id === "agent:claude");
+    expect(claude?.category).toBe("agent");
+  });
+
+  it("assigns category 'tool' to panel kind items", () => {
+    const { result } = renderHook(() => usePanelPalette());
+
+    const browser = result.current.results.find((item) => item.id === "browser");
+    expect(browser?.category).toBe("tool");
+  });
+
+  it("assigns category 'agent' to the MORE_AGENTS_PANEL_ID entry", () => {
+    const { result } = renderHook(() => usePanelPalette());
+
+    const moreAgents = result.current.results.find((item) => item.id === MORE_AGENTS_PANEL_ID);
+    expect(moreAgents?.category).toBe("agent");
+  });
+
+  it("places agents, then MORE_AGENTS, then tools in exact order", () => {
+    const { result } = renderHook(() => usePanelPalette());
+
+    const ids = result.current.results.map((item) => item.id);
+    expect(ids).toEqual(["agent:claude", MORE_AGENTS_PANEL_ID, "browser"]);
+  });
+
+  it("still includes MORE_AGENTS when all agents are hidden", () => {
+    getEffectiveAgentIdsMock.mockReturnValue([]);
+
+    const { result } = renderHook(() => usePanelPalette());
+
+    const ids = result.current.results.map((item) => item.id);
+    expect(ids).toContain(MORE_AGENTS_PANEL_ID);
+    const moreAgents = result.current.results.find((item) => item.id === MORE_AGENTS_PANEL_ID);
+    expect(moreAgents?.category).toBe("agent");
+  });
+
+  it("works when no tool panel kinds exist", () => {
+    getPanelKindIdsMock.mockReturnValue([]);
+
+    const { result } = renderHook(() => usePanelPalette());
+
+    const tools = result.current.results.filter((item) => item.category === "tool");
+    expect(tools).toHaveLength(0);
+    const agents = result.current.results.filter((item) => item.category === "agent");
+    expect(agents.length).toBeGreaterThan(0);
   });
 });

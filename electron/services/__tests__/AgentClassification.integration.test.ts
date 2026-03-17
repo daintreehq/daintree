@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { randomUUID } from "crypto";
 import { PtyManager } from "../PtyManager.js";
 import { cleanupPtyManager, sleep } from "./helpers/ptyTestUtils.js";
-import type { TerminalType, TerminalKind } from "../../../shared/types/domain.js";
+import type { TerminalType, TerminalKind } from "../../../shared/types/panel.js";
 
 describe("Agent Classification Matrix", () => {
   let manager: PtyManager;

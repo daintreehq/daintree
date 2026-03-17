@@ -1,67 +1,66 @@
 import { create } from "zustand";
+import type { SerializedConsoleRow, CdpConsoleType } from "@shared/types/ipc/webviewConsole";
 
 export type ConsoleLevel = "log" | "info" | "warning" | "error";
 
-// Electron webview console-message event level mapping:
-// 0 = verbose/log, 1 = info, 2 = warning, 3 = error
-const LEVEL_MAP: Record<number, ConsoleLevel> = {
-  0: "log",
-  1: "info",
-  2: "warning",
-  3: "error",
-};
-
-export interface ConsoleMessage {
-  id: number;
-  level: ConsoleLevel;
-  message: string;
-  timestamp: number;
-  line?: number;
-  sourceId?: string;
+export interface ConsoleMessage extends SerializedConsoleRow {
+  isStale: boolean;
 }
 
 // Stable empty array to prevent unnecessary selector rerenders for panes with no messages
 export const EMPTY_MESSAGES: ConsoleMessage[] = [];
 
 const MAX_MESSAGES = 500;
-let _nextId = 0;
 
 interface ConsoleCaptureState {
   messages: Map<string, ConsoleMessage[]>;
-  addMessage(
-    paneId: string,
-    level: number,
-    message: string,
-    line?: number,
-    sourceId?: string
-  ): void;
+  addStructuredMessage(row: SerializedConsoleRow): void;
+  markStale(paneId: string, navigationGeneration: number): void;
   clearMessages(paneId: string): void;
   getMessages(paneId: string): ConsoleMessage[];
   removePane(paneId: string): void;
 }
 
+// Types that should not be rendered as visible rows
+const HIDDEN_TYPES: Set<CdpConsoleType> = new Set(["endGroup"]);
+
 export const useConsoleCaptureStore = create<ConsoleCaptureState>()((set, get) => ({
   messages: new Map(),
 
-  addMessage(paneId, level, message, line, sourceId) {
+  addStructuredMessage(row: SerializedConsoleRow) {
+    if (HIDDEN_TYPES.has(row.cdpType)) return;
+
     const msg: ConsoleMessage = {
-      id: _nextId++,
-      level: LEVEL_MAP[level] ?? "log",
-      message,
-      timestamp: Date.now(),
-      line,
-      sourceId,
+      ...row,
+      isStale: false,
     };
+
     set((state) => {
-      const existing = state.messages.get(paneId) ?? [];
+      const existing = state.messages.get(row.paneId) ?? [];
       const updated = [...existing, msg].slice(-MAX_MESSAGES);
+      const next = new Map(state.messages);
+      next.set(row.paneId, updated);
+      return { messages: next };
+    });
+  },
+
+  markStale(paneId: string, navigationGeneration: number) {
+    set((state) => {
+      const existing = state.messages.get(paneId);
+      if (!existing || existing.length === 0) return state;
+
+      const updated = existing.map((msg) =>
+        msg.navigationGeneration < navigationGeneration && !msg.isStale
+          ? { ...msg, isStale: true }
+          : msg
+      );
       const next = new Map(state.messages);
       next.set(paneId, updated);
       return { messages: next };
     });
   },
 
-  clearMessages(paneId) {
+  clearMessages(paneId: string) {
     set((state) => {
       const next = new Map(state.messages);
       next.set(paneId, []);
@@ -69,11 +68,11 @@ export const useConsoleCaptureStore = create<ConsoleCaptureState>()((set, get) =
     });
   },
 
-  getMessages(paneId) {
+  getMessages(paneId: string) {
     return get().messages.get(paneId) ?? [];
   },
 
-  removePane(paneId) {
+  removePane(paneId: string) {
     set((state) => {
       const next = new Map(state.messages);
       next.delete(paneId);

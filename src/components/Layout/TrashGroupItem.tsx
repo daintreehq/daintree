@@ -72,7 +72,7 @@ export function TrashGroupItem({
   const groupName = `Tab Group (${tabCount} ${tabCount === 1 ? "tab" : "tabs"})`;
 
   return (
-    <div className="rounded-[var(--radius-sm)] bg-transparent hover:bg-white/5 transition-colors">
+    <div className="rounded-[var(--radius-sm)] bg-transparent hover:bg-tint/5 transition-colors">
       <div className="flex items-center gap-2 px-2.5 py-1.5 group">
         <Button
           variant="ghost"
@@ -182,7 +182,7 @@ export function TrashGroupItem({
               return (
                 <div
                   key={terminal.id}
-                  className="flex items-center gap-2 px-2 py-1 text-[11px] rounded hover:bg-white/5 group/panel"
+                  className="flex items-center gap-2 px-2 py-1 text-[11px] rounded hover:bg-tint/5 group/panel"
                 >
                   <TerminalIcon
                     type={terminal.type}

@@ -20,8 +20,8 @@ export function setupTerminalAddons(
   openLink: (url: string, event?: MouseEvent) => void,
   getCwd: () => string
 ): TerminalAddons {
-  // Using default xterm.js DOM renderer - simple and reliable
-  // (no Canvas/WebGL context limits to worry about)
+  // Base addons loaded for all terminals. WebGL is managed separately
+  // by TerminalWebGLManager (attached only to the focused terminal).
 
   const fitAddon = new FitAddon();
   const serializeAddon = new SerializeAddon();

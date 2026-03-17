@@ -1,4 +1,6 @@
 import type { TerminalType } from "@/types";
+import { BUILT_IN_AGENT_IDS } from "@shared/config/agentIds";
+import { AGENT_REGISTRY } from "@/config/agents";
 
 interface ScrollbackPolicy {
   multiplier: number;
@@ -8,15 +10,15 @@ interface ScrollbackPolicy {
 
 export const PERFORMANCE_MODE_SCROLLBACK = 100;
 
-const SCROLLBACK_POLICIES: Record<TerminalType, ScrollbackPolicy> = {
-  // Agent terminals: full base setting (need conversation history)
-  claude: { multiplier: 1.0, maxLines: 10000, minLines: 1000 },
-  gemini: { multiplier: 1.0, maxLines: 10000, minLines: 1000 },
-  codex: { multiplier: 1.0, maxLines: 10000, minLines: 1000 },
-  opencode: { multiplier: 1.0, maxLines: 10000, minLines: 1000 },
+const AGENT_SCROLLBACK_POLICY: ScrollbackPolicy = {
+  multiplier: 1.0,
+  maxLines: 5000,
+  minLines: 500,
+};
 
-  // Standard terminals: limited (ephemeral commands)
+const SCROLLBACK_POLICIES: Record<string, ScrollbackPolicy> = {
   terminal: { multiplier: 0.2, maxLines: 2000, minLines: 200 },
+  ...Object.fromEntries(BUILT_IN_AGENT_IDS.map((id) => [id, AGENT_SCROLLBACK_POLICY])),
 };
 
 /**
@@ -49,7 +51,7 @@ export function estimateMemoryUsage(
   const perType = {} as Record<TerminalType, number>;
   let total = 0;
 
-  const allTypes: TerminalType[] = ["claude", "gemini", "codex", "opencode", "terminal"];
+  const allTypes: TerminalType[] = ["terminal", ...BUILT_IN_AGENT_IDS];
 
   for (const type of allTypes) {
     const count = terminalCounts[type] ?? 0;
@@ -82,13 +84,8 @@ export function getScrollbackSummary(
 ): { limit: number; label: string } {
   const limit = getScrollbackForType(type, baseScrollback);
 
-  const labels: Record<TerminalType, string> = {
-    claude: "Claude",
-    gemini: "Gemini",
-    codex: "Codex",
-    opencode: "OpenCode",
-    terminal: "Terminal",
-  };
+  const agentConfig = AGENT_REGISTRY[type];
+  const label = type === "terminal" ? "Terminal" : (agentConfig?.name ?? type);
 
-  return { limit, label: labels[type] || "Terminal" };
+  return { limit, label };
 }

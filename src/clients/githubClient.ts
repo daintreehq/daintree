@@ -20,12 +20,16 @@ export const githubClient = {
     return window.electron.github.getRepoStats(cwd, bypassCache);
   },
 
-  openIssues: (cwd: string): Promise<void> => {
-    return window.electron.github.openIssues(cwd);
+  openIssues: (cwd: string, query?: string, state?: string): Promise<void> => {
+    return window.electron.github.openIssues(cwd, query, state);
   },
 
-  openPRs: (cwd: string): Promise<void> => {
-    return window.electron.github.openPRs(cwd);
+  openPRs: (cwd: string, query?: string, state?: string): Promise<void> => {
+    return window.electron.github.openPRs(cwd, query, state);
+  },
+
+  openCommits: (cwd: string): Promise<void> => {
+    return window.electron.github.openCommits(cwd);
   },
 
   openIssue: (cwd: string, issueNumber: number): Promise<void> => {

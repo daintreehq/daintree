@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { TerminalRefreshTier } from "../../../../shared/types/domain";
+import { TerminalRefreshTier } from "../../../../shared/types/panel";
 
 const mockTerminalClient = {
   onData: vi.fn(() => vi.fn()),
@@ -24,6 +24,13 @@ vi.mock("@xterm/addon-canvas", () => ({
   CanvasAddon: class {
     dispose() {}
   },
+}));
+
+vi.mock("@xterm/addon-webgl", () => ({
+  WebglAddon: vi.fn().mockImplementation(() => ({
+    dispose: vi.fn(),
+    onContextLoss: vi.fn(() => ({ dispose: vi.fn() })),
+  })),
 }));
 
 vi.mock("../TerminalAddonManager", () => ({

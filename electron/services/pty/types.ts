@@ -1,12 +1,8 @@
 import type * as pty from "node-pty";
 import type { Terminal as HeadlessTerminal } from "@xterm/headless";
 import type { SerializeAddon } from "@xterm/addon-serialize";
-import type {
-  AgentState,
-  TerminalType,
-  TerminalKind,
-  AgentId,
-} from "../../../shared/types/domain.js";
+import type { AgentState, AgentId } from "../../../shared/types/agent.js";
+import type { TerminalType, TerminalKind } from "../../../shared/types/panel.js";
 import type { PtyHostSpawnOptions } from "../../../shared/types/pty-host.js";
 import type { ProcessDetector } from "../ProcessDetector.js";
 
@@ -50,6 +46,8 @@ export interface TerminalPublicState {
   activityTier?: "active" | "background";
   /** Whether this terminal has an active PTY process (false for orphaned terminals that exited) */
   hasPty?: boolean;
+  /** Captured agent session ID from graceful shutdown */
+  agentSessionId?: string;
 }
 
 /**
@@ -62,8 +60,6 @@ export interface TerminalRuntime {
   headlessTerminal?: HeadlessTerminal;
   serializeAddon?: SerializeAddon;
   processDetector?: ProcessDetector;
-  pendingSemanticData: string;
-  semanticFlushTimer: NodeJS.Timeout | null;
   inputWriteQueue: string[];
   inputWriteTimeout: NodeJS.Timeout | null;
   outputBuffer: string;
@@ -88,10 +84,6 @@ export interface TerminalInfo extends TerminalPublicState {
   serializeAddon?: SerializeAddon;
   /** @deprecated Internal to TerminalProcess */
   processDetector?: ProcessDetector;
-  /** @deprecated Internal buffer - use TerminalProcess.getSemanticBuffer() */
-  pendingSemanticData: string;
-  /** @deprecated Internal timer */
-  semanticFlushTimer: NodeJS.Timeout | null;
   /** @deprecated Internal queue - use TerminalProcess.write() */
   inputWriteQueue: string[];
   /** @deprecated Internal timer */
@@ -136,13 +128,20 @@ export const WRITE_MAX_CHUNK_SIZE = 50;
 export const WRITE_INTERVAL_MS = 5;
 
 // Scrollback configuration
+// Headless PTY scrollback is intentionally equal to the renderer default (1000)
+// because headless terminals only need enough buffer for agent state detection,
+// not full user-visible scroll history.
 export const DEFAULT_SCROLLBACK = 1000;
 export const AGENT_SCROLLBACK = 10000;
 
 // Raw output buffer for non-headless terminals (100KB max)
 export const RAW_OUTPUT_BUFFER_MAX_SIZE = 100 * 1024;
 
-export const TRASH_TTL_MS = 120 * 1000;
+export { TRASH_TTL_MS } from "../../../shared/config/trash.js";
+
+// Graceful shutdown configuration
+export const GRACEFUL_SHUTDOWN_TIMEOUT_MS = 2500;
+export const GRACEFUL_SHUTDOWN_BUFFER_SIZE = 8 * 1024;
 
 // IPC Flow Control Configuration
 export const IPC_MAX_QUEUE_BYTES = 8 * 1024 * 1024; // 8MB max per terminal

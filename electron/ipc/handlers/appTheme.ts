@@ -1,15 +1,28 @@
-import { ipcMain, dialog, BrowserWindow } from "electron";
+import { ipcMain, dialog, BrowserWindow, nativeTheme } from "electron";
 import { CHANNELS } from "../channels.js";
 import { store } from "../../store.js";
-import { parseColorSchemeFile } from "../../utils/colorSchemeImporter.js";
-import type { AppThemeConfig } from "../../../shared/types/appTheme.js";
+import { parseAppThemeFile } from "../../utils/appThemeImporter.js";
+import type { AppThemeConfig, ColorVisionMode } from "../../../shared/types/appTheme.js";
 
 function getAppThemeConfig(): AppThemeConfig {
   const config = store.get("appTheme");
-  if (config && typeof config === "object" && !Array.isArray(config)) {
+  const hasStoredScheme =
+    config &&
+    typeof config === "object" &&
+    !Array.isArray(config) &&
+    "colorSchemeId" in config &&
+    typeof config.colorSchemeId === "string" &&
+    config.colorSchemeId;
+
+  if (hasStoredScheme) {
     return config as AppThemeConfig;
   }
-  return { colorSchemeId: "canopy" };
+
+  const defaultSchemeId = nativeTheme.shouldUseDarkColors ? "daintree" : "bondi";
+  return {
+    ...(config && typeof config === "object" && !Array.isArray(config) ? config : {}),
+    colorSchemeId: defaultSchemeId,
+  } as AppThemeConfig;
 }
 
 export function registerAppThemeHandlers(): () => void {
@@ -52,6 +65,24 @@ export function registerAppThemeHandlers(): () => void {
   ipcMain.handle(CHANNELS.APP_THEME_SET_CUSTOM_SCHEMES, handleAppThemeSetCustomSchemes);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.APP_THEME_SET_CUSTOM_SCHEMES));
 
+  const VALID_COLOR_VISION_MODES = ["default", "red-green", "blue-yellow"];
+  const handleAppThemeSetColorVisionMode = async (
+    _event: Electron.IpcMainInvokeEvent,
+    mode: string
+  ) => {
+    if (typeof mode !== "string" || !VALID_COLOR_VISION_MODES.includes(mode)) {
+      console.warn("Invalid color vision mode:", mode);
+      return;
+    }
+    const current = getAppThemeConfig();
+    store.set("appTheme", {
+      ...current,
+      colorVisionMode: mode as ColorVisionMode,
+    } satisfies AppThemeConfig);
+  };
+  ipcMain.handle(CHANNELS.APP_THEME_SET_COLOR_VISION_MODE, handleAppThemeSetColorVisionMode);
+  handlers.push(() => ipcMain.removeHandler(CHANNELS.APP_THEME_SET_COLOR_VISION_MODE));
+
   const handleAppThemeImport = async (event: Electron.IpcMainInvokeEvent) => {
     const win = BrowserWindow.fromWebContents(event.sender) ?? BrowserWindow.getFocusedWindow();
     const dialogOptions = {
@@ -70,7 +101,7 @@ export function registerAppThemeHandlers(): () => void {
       return { ok: false, errors: ["Import cancelled"] };
     }
 
-    return parseColorSchemeFile(result.filePaths[0]);
+    return parseAppThemeFile(result.filePaths[0]);
   };
   ipcMain.handle(CHANNELS.APP_THEME_IMPORT, handleAppThemeImport);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.APP_THEME_IMPORT));

@@ -78,6 +78,7 @@ export function useWorktreeActions({
             worktreeId: worktree.id,
           },
           isTransient: true,
+          correlationId: crypto.randomUUID(),
         });
 
         console.error("Failed to copy context:", message);
@@ -125,6 +126,7 @@ export function useWorktreeActions({
           message: "No active terminals to save in this worktree.",
           source: "Save Layout",
           isTransient: true,
+          correlationId: crypto.randomUUID(),
         });
         return;
       }

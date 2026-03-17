@@ -140,6 +140,7 @@ test.describe.serial("Core: Advanced", () => {
       const newBtn = window.locator('button[aria-label="Create new worktree"]');
       await newBtn.click();
 
+      // Plus button opens the full create dialog directly
       const branchInput = window.locator(SEL.worktree.branchNameInput);
       await expect(branchInput).toBeVisible({ timeout: T_MEDIUM });
       await branchInput.fill("e2e/test-worktree");
@@ -222,7 +223,8 @@ test.describe.serial("Core: Advanced", () => {
       await expect(palette).toBeVisible({ timeout: T_MEDIUM });
 
       const addBtn = window.locator(SEL.projectSwitcher.addButton);
-      await addBtn.click();
+      await expect(addBtn).toBeVisible({ timeout: T_SHORT });
+      await addBtn.click({ force: true });
 
       const heading = window.locator("h2", { hasText: "Set up your project" });
       await expect(heading).toBeVisible({ timeout: T_LONG });

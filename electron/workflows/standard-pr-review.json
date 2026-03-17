@@ -2,81 +2,113 @@
   "id": "standard-pr-review",
   "version": "1.0.0",
   "name": "Standard PR Review",
-  "description": "Lint → Test → Review → Merge workflow for pull request validation",
+  "description": "Open a terminal, run lint and tests, request approval, then refresh and open PRs",
   "nodes": [
     {
-      "id": "lint",
+      "id": "open-terminal",
       "type": "action",
       "config": {
-        "actionId": "terminal.executeCommand",
+        "actionId": "terminal.new"
+      },
+      "onSuccess": ["run-lint"],
+      "onFailure": ["note-terminal-error"]
+    },
+    {
+      "id": "run-lint",
+      "type": "action",
+      "config": {
+        "actionId": "terminal.sendCommand",
         "args": {
+          "terminalId": "{{open-terminal.data.terminalId}}",
           "command": "npm run lint"
         }
       },
-      "onSuccess": ["test"],
-      "onFailure": ["notify-lint-failure"]
+      "dependencies": ["open-terminal"],
+      "onSuccess": ["run-tests"],
+      "onFailure": ["note-lint-failure"]
     },
     {
-      "id": "test",
+      "id": "run-tests",
       "type": "action",
       "config": {
-        "actionId": "terminal.executeCommand",
+        "actionId": "terminal.sendCommand",
         "args": {
+          "terminalId": "{{open-terminal.data.terminalId}}",
           "command": "npm test"
         }
       },
+      "dependencies": ["run-lint"],
       "onSuccess": ["review"],
-      "onFailure": ["notify-test-failure"]
+      "onFailure": ["note-test-failure"]
     },
     {
       "id": "review",
-      "type": "action",
+      "type": "approval",
       "config": {
-        "actionId": "terminal.executeCommand",
-        "args": {
-          "command": "echo 'Code review checkpoint - manual approval required'"
-        }
+        "prompt": "Lint and tests passed. Review the changes and approve to merge, or reject to address review comments."
       },
-      "onSuccess": ["merge"],
-      "onFailure": ["notify-review-failure"]
+      "dependencies": ["run-tests"],
+      "onSuccess": ["refresh-prs"],
+      "onFailure": ["note-review-rejected"]
     },
     {
-      "id": "merge",
+      "id": "refresh-prs",
       "type": "action",
       "config": {
-        "actionId": "terminal.executeCommand",
+        "actionId": "worktree.refreshPullRequests"
+      },
+      "dependencies": ["review"],
+      "onSuccess": ["open-prs"]
+    },
+    {
+      "id": "open-prs",
+      "type": "action",
+      "config": {
+        "actionId": "github.openPRs"
+      },
+      "dependencies": ["refresh-prs"]
+    },
+    {
+      "id": "note-terminal-error",
+      "type": "action",
+      "config": {
+        "actionId": "notes.create",
         "args": {
-          "command": "echo 'Merge step - ready for merge'"
+          "title": "PR Review - Terminal Error",
+          "content": "Failed to open a terminal for the PR review workflow."
         }
       }
     },
     {
-      "id": "notify-lint-failure",
+      "id": "note-lint-failure",
       "type": "action",
       "config": {
-        "actionId": "terminal.executeCommand",
+        "actionId": "notes.create",
         "args": {
-          "command": "echo 'Lint failed - please fix linting errors'"
+          "title": "PR Review - Lint Failed",
+          "content": "Lint errors were detected. Fix linting issues before continuing the review."
         }
       }
     },
     {
-      "id": "notify-test-failure",
+      "id": "note-test-failure",
       "type": "action",
       "config": {
-        "actionId": "terminal.executeCommand",
+        "actionId": "notes.create",
         "args": {
-          "command": "echo 'Tests failed - please fix failing tests'"
+          "title": "PR Review - Tests Failed",
+          "content": "Tests failed during the PR review workflow. Fix failing tests before continuing."
         }
       }
     },
     {
-      "id": "notify-review-failure",
+      "id": "note-review-rejected",
       "type": "action",
       "config": {
-        "actionId": "terminal.executeCommand",
+        "actionId": "notes.create",
         "args": {
-          "command": "echo 'Review rejected - please address review comments'"
+          "title": "PR Review - Review Rejected",
+          "content": "Review was rejected. Address the review comments before retrying."
         }
       }
     }

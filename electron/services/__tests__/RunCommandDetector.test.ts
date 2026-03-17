@@ -113,4 +113,315 @@ describe("RunCommandDetector", () => {
       }),
     ]);
   });
+
+  describe("Justfile detection", () => {
+    it("detects basic recipes", async () => {
+      await fs.writeFile(
+        path.join(tempDir, "justfile"),
+        ["build:", "  echo building", "", "test:", "  echo testing"].join("\n"),
+        "utf-8"
+      );
+
+      const commands = await detector.detect(tempDir);
+      const justCommands = commands.filter((cmd) => cmd.id.startsWith("just-"));
+
+      expect(justCommands).toEqual([
+        expect.objectContaining({ id: "just-build", name: "build", command: "just build" }),
+        expect.objectContaining({ id: "just-test", name: "test", command: "just test" }),
+      ]);
+    });
+
+    it("extracts description from doc comment above recipe", async () => {
+      await fs.writeFile(
+        path.join(tempDir, "Justfile"),
+        ["# Compile the project", "build:", "  echo building"].join("\n"),
+        "utf-8"
+      );
+
+      const commands = await detector.detect(tempDir);
+      const justCommands = commands.filter((cmd) => cmd.id.startsWith("just-"));
+
+      expect(justCommands[0]).toEqual(
+        expect.objectContaining({
+          id: "just-build",
+          description: "Compile the project",
+        })
+      );
+    });
+
+    it("extracts recipe name ignoring parameters", async () => {
+      await fs.writeFile(
+        path.join(tempDir, "justfile"),
+        ["build target:", "  echo {{ target }}"].join("\n"),
+        "utf-8"
+      );
+
+      const commands = await detector.detect(tempDir);
+      const justCommands = commands.filter((cmd) => cmd.id.startsWith("just-"));
+
+      expect(justCommands).toEqual([
+        expect.objectContaining({ id: "just-build", name: "build", command: "just build" }),
+      ]);
+    });
+
+    it("skips doc comment through attribute lines", async () => {
+      await fs.writeFile(
+        path.join(tempDir, "justfile"),
+        ["# Run all tests", "[group('ci')]", "test:", "  echo testing"].join("\n"),
+        "utf-8"
+      );
+
+      const commands = await detector.detect(tempDir);
+      const justCommands = commands.filter((cmd) => cmd.id.startsWith("just-"));
+
+      expect(justCommands[0]).toEqual(
+        expect.objectContaining({ id: "just-test", description: "Run all tests" })
+      );
+    });
+
+    it("skips private recipes prefixed with _", async () => {
+      await fs.writeFile(
+        path.join(tempDir, "justfile"),
+        ["_helper:", "  echo helper", "build:", "  echo build"].join("\n"),
+        "utf-8"
+      );
+
+      const commands = await detector.detect(tempDir);
+      const justCommands = commands.filter((cmd) => cmd.id.startsWith("just-"));
+
+      expect(justCommands.map((cmd) => cmd.id)).toEqual(["just-build"]);
+    });
+
+    it("skips alias, set, import, mod, and export lines", async () => {
+      await fs.writeFile(
+        path.join(tempDir, "justfile"),
+        [
+          "alias b := build",
+          "set shell := ['bash', '-c']",
+          "import 'other.just'",
+          "mod utils",
+          "export FOO := 'bar'",
+          "build:",
+          "  echo build",
+        ].join("\n"),
+        "utf-8"
+      );
+
+      const commands = await detector.detect(tempDir);
+      const justCommands = commands.filter((cmd) => cmd.id.startsWith("just-"));
+
+      expect(justCommands.map((cmd) => cmd.id)).toEqual(["just-build"]);
+    });
+
+    it("skips variable assignment lines with :=", async () => {
+      await fs.writeFile(
+        path.join(tempDir, "justfile"),
+        ["version := '1.0.0'", "build:", "  echo build"].join("\n"),
+        "utf-8"
+      );
+
+      const commands = await detector.detect(tempDir);
+      const justCommands = commands.filter((cmd) => cmd.id.startsWith("just-"));
+
+      expect(justCommands.map((cmd) => cmd.id)).toEqual(["just-build"]);
+    });
+
+    it("returns empty for empty justfile", async () => {
+      await fs.writeFile(path.join(tempDir, "justfile"), "", "utf-8");
+
+      const commands = await detector.detect(tempDir);
+      const justCommands = commands.filter((cmd) => cmd.id.startsWith("just-"));
+
+      expect(justCommands).toEqual([]);
+    });
+  });
+
+  describe("Taskfile detection", () => {
+    it("detects tasks with desc field", async () => {
+      await fs.writeFile(
+        path.join(tempDir, "Taskfile.yml"),
+        [
+          "version: '3'",
+          "tasks:",
+          "  build:",
+          "    desc: Compile the application",
+          "    cmds:",
+          "      - go build .",
+          "  test:",
+          "    desc: Run tests",
+          "    cmds:",
+          "      - go test ./...",
+        ].join("\n"),
+        "utf-8"
+      );
+
+      const commands = await detector.detect(tempDir);
+      const taskCommands = commands.filter((cmd) => cmd.id.startsWith("task-"));
+
+      expect(taskCommands).toEqual([
+        expect.objectContaining({
+          id: "task-build",
+          name: "build",
+          command: "task build",
+          description: "Compile the application",
+        }),
+        expect.objectContaining({
+          id: "task-test",
+          name: "test",
+          command: "task test",
+          description: "Run tests",
+        }),
+      ]);
+    });
+
+    it("excludes tasks without desc field", async () => {
+      await fs.writeFile(
+        path.join(tempDir, "Taskfile.yml"),
+        [
+          "version: '3'",
+          "tasks:",
+          "  build:",
+          "    desc: Compile",
+          "    cmds:",
+          "      - go build .",
+          "  helper:",
+          "    cmds:",
+          "      - echo helper",
+        ].join("\n"),
+        "utf-8"
+      );
+
+      const commands = await detector.detect(tempDir);
+      const taskCommands = commands.filter((cmd) => cmd.id.startsWith("task-"));
+
+      expect(taskCommands.map((cmd) => cmd.id)).toEqual(["task-build"]);
+    });
+
+    it("excludes _-prefixed tasks", async () => {
+      await fs.writeFile(
+        path.join(tempDir, "Taskfile.yml"),
+        [
+          "version: '3'",
+          "tasks:",
+          "  _internal:",
+          "    desc: Internal task",
+          "    cmds:",
+          "      - echo internal",
+          "  build:",
+          "    desc: Build",
+          "    cmds:",
+          "      - go build .",
+        ].join("\n"),
+        "utf-8"
+      );
+
+      const commands = await detector.detect(tempDir);
+      const taskCommands = commands.filter((cmd) => cmd.id.startsWith("task-"));
+
+      expect(taskCommands.map((cmd) => cmd.id)).toEqual(["task-build"]);
+    });
+
+    it("excludes tasks with internal: true", async () => {
+      await fs.writeFile(
+        path.join(tempDir, "Taskfile.yml"),
+        [
+          "version: '3'",
+          "tasks:",
+          "  setup:",
+          "    desc: Setup dependencies",
+          "    internal: true",
+          "    cmds:",
+          "      - npm install",
+          "  build:",
+          "    desc: Build",
+          "    cmds:",
+          "      - npm run build",
+        ].join("\n"),
+        "utf-8"
+      );
+
+      const commands = await detector.detect(tempDir);
+      const taskCommands = commands.filter((cmd) => cmd.id.startsWith("task-"));
+
+      expect(taskCommands.map((cmd) => cmd.id)).toEqual(["task-build"]);
+    });
+
+    it("excludes string shorthand tasks", async () => {
+      await fs.writeFile(
+        path.join(tempDir, "Taskfile.yml"),
+        [
+          "version: '3'",
+          "tasks:",
+          '  quick: "echo hello"',
+          "  build:",
+          "    desc: Build app",
+          "    cmds:",
+          "      - go build .",
+        ].join("\n"),
+        "utf-8"
+      );
+
+      const commands = await detector.detect(tempDir);
+      const taskCommands = commands.filter((cmd) => cmd.id.startsWith("task-"));
+
+      expect(taskCommands.map((cmd) => cmd.id)).toEqual(["task-build"]);
+    });
+
+    it("detects Taskfile.yaml variant", async () => {
+      await fs.writeFile(
+        path.join(tempDir, "Taskfile.yaml"),
+        [
+          "version: '3'",
+          "tasks:",
+          "  lint:",
+          "    desc: Run linter",
+          "    cmds:",
+          "      - golangci-lint run",
+        ].join("\n"),
+        "utf-8"
+      );
+
+      const commands = await detector.detect(tempDir);
+      const taskCommands = commands.filter((cmd) => cmd.id.startsWith("task-"));
+
+      expect(taskCommands).toEqual([
+        expect.objectContaining({
+          id: "task-lint",
+          command: "task lint",
+          description: "Run linter",
+        }),
+      ]);
+    });
+
+    it("returns empty for empty tasks object", async () => {
+      await fs.writeFile(
+        path.join(tempDir, "Taskfile.yml"),
+        ["version: '3'", "tasks: {}"].join("\n"),
+        "utf-8"
+      );
+
+      const commands = await detector.detect(tempDir);
+      const taskCommands = commands.filter((cmd) => cmd.id.startsWith("task-"));
+
+      expect(taskCommands).toEqual([]);
+    });
+
+    it("returns empty for empty file", async () => {
+      await fs.writeFile(path.join(tempDir, "Taskfile.yml"), "", "utf-8");
+
+      const commands = await detector.detect(tempDir);
+      const taskCommands = commands.filter((cmd) => cmd.id.startsWith("task-"));
+
+      expect(taskCommands).toEqual([]);
+    });
+
+    it("returns empty for malformed YAML", async () => {
+      await fs.writeFile(path.join(tempDir, "Taskfile.yml"), "{{invalid yaml: [}", "utf-8");
+
+      const commands = await detector.detect(tempDir);
+      const taskCommands = commands.filter((cmd) => cmd.id.startsWith("task-"));
+
+      expect(taskCommands).toEqual([]);
+    });
+  });
 });

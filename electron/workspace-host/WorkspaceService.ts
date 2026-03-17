@@ -1,15 +1,8 @@
 import PQueue from "p-queue";
-import { mkdir, writeFile, stat, readFile } from "fs/promises";
-import {
-  join as pathJoin,
-  dirname,
-  resolve as pathResolve,
-  isAbsolute,
-  normalize as pathNormalize,
-} from "path";
-import { realpathSync } from "fs";
+import { mkdir, writeFile, stat } from "fs/promises";
+import { join as pathJoin, dirname, resolve as pathResolve, isAbsolute } from "path";
 import { simpleGit, SimpleGit, BranchSummary } from "simple-git";
-import type { Worktree, WorktreeChanges } from "../../shared/types/domain.js";
+import type { Worktree } from "../../shared/types/worktree.js";
 import type {
   WorkspaceHostEvent,
   WorktreeSnapshot,
@@ -18,41 +11,22 @@ import type {
   BranchInfo,
   PRServiceStatus,
 } from "../../shared/types/workspace-host.js";
-import { invalidateGitStatusCache, getWorktreeChangesWithStats } from "../utils/git.js";
+import { invalidateGitStatusCache } from "../utils/git.js";
 import { getGitDir, clearGitDirCache } from "../utils/gitUtils.js";
-import { WorktreeRemovedError } from "../utils/errorTypes.js";
-import { categorizeWorktree } from "../services/worktree/mood.js";
 import { extractIssueNumberSync, extractIssueNumber } from "../services/issueExtractor.js";
-import { AdaptivePollingStrategy, NoteFileReader } from "../services/worktree/index.js";
 import { GitHubAuth } from "../services/github/GitHubAuth.js";
 import { pullRequestService } from "../services/PullRequestService.js";
 import { events } from "../services/events.js";
-import { MonitorState, NOTE_PATH } from "./types.js";
+import { NOTE_PATH } from "./types.js";
 import { WorktreeLifecycleService } from "./WorktreeLifecycleService.js";
-import { ensureSerializable } from "../../shared/utils/serialization.js";
+import { WorktreeMonitor } from "./WorktreeMonitor.js";
+import { WorktreeListService } from "./WorktreeListService.js";
+import { PRIntegrationService } from "./PRIntegrationService.js";
 import { waitForPathExists } from "../utils/fs.js";
-import { GitFileWatcher } from "../utils/gitFileWatcher.js";
 
 // Configuration
 const DEFAULT_ACTIVE_WORKTREE_INTERVAL_MS = 2000;
 const DEFAULT_BACKGROUND_WORKTREE_INTERVAL_MS = 10000;
-const WORKTREE_LIST_CACHE_TTL_MS = 15_000; // 15 seconds (reduced from 60s for faster worktree visibility)
-const GIT_WATCH_SELF_TRIGGER_COOLDOWN_MS = 1000;
-const WATCHER_FALLBACK_POLL_INTERVAL_MS = 30_000; // When watcher active, poll rarely as safety net
-
-interface RawWorktreeRecord {
-  path: string;
-  branch: string;
-  bare: boolean;
-  isMainWorktree: boolean;
-  head?: string;
-  isDetached?: boolean;
-}
-
-interface WorktreeListCacheEntry {
-  expiresAt: number;
-  worktrees: RawWorktreeRecord[];
-}
 
 async function ensureNoteFile(worktreePath: string): Promise<void> {
   const gitDir = getGitDir(worktreePath);
@@ -79,7 +53,7 @@ async function ensureNoteFile(worktreePath: string): Promise<void> {
 }
 
 export class WorkspaceService {
-  private monitors = new Map<string, MonitorState>();
+  private monitors = new Map<string, WorktreeMonitor>();
   private pollQueue = new PQueue({ concurrency: 3 });
   private mainBranch: string = "main";
   private activeWorktreeId: string | null = null;
@@ -94,23 +68,108 @@ export class WorkspaceService {
   private pollingEnabled: boolean = true;
   private projectRootPath: string | null = null;
   private projectScopeId: string | null = null;
-  private prEventUnsubscribers: (() => void)[] = [];
-  private prServiceInitializedForPath: string | null = null;
-  private worktreeListCache = new Map<string, WorktreeListCacheEntry>();
-  private inFlightWorktreeList = new Map<string, Promise<RawWorktreeRecord[]>>();
   private lifecycleService = new WorktreeLifecycleService();
+  private listService = new WorktreeListService();
+  private prService: PRIntegrationService;
 
-  constructor(private readonly sendEvent: (event: WorkspaceHostEvent) => void) {}
+  constructor(private readonly sendEvent: (event: WorkspaceHostEvent) => void) {
+    this.prService = new PRIntegrationService(pullRequestService, events, {
+      onPRDetected: (worktreeId, data) => {
+        const monitor = this.monitors.get(worktreeId);
+        if (!monitor || monitor.projectScopeId !== this.projectScopeId) {
+          return;
+        }
 
-  private canonicalizePath(p: string): string {
-    try {
-      const resolved = pathResolve(p);
-      const real = realpathSync(resolved);
-      return process.platform === "win32" ? real.toLowerCase() : real;
-    } catch {
-      const normalized = pathNormalize(pathResolve(p));
-      return process.platform === "win32" ? normalized.toLowerCase() : normalized;
-    }
+        monitor.setPRInfo({
+          prNumber: data.prNumber,
+          prUrl: data.prUrl,
+          prState: data.prState,
+          prTitle: data.prTitle,
+          issueTitle: data.issueTitle,
+        });
+        if (monitor.hasInitialStatus) {
+          this.emitUpdate(monitor);
+        }
+
+        if (this.projectScopeId) {
+          this.sendEvent({
+            type: "pr-detected",
+            worktreeId,
+            prNumber: data.prNumber,
+            prUrl: data.prUrl,
+            prState: data.prState,
+            prTitle: data.prTitle,
+            issueNumber: data.issueNumber,
+            issueTitle: data.issueTitle,
+            projectScopeId: this.projectScopeId,
+          });
+        }
+      },
+      onPRCleared: (worktreeId) => {
+        const monitor = this.monitors.get(worktreeId);
+        if (!monitor || monitor.projectScopeId !== this.projectScopeId) {
+          return;
+        }
+
+        monitor.clearPRInfo();
+        if (monitor.hasInitialStatus) {
+          this.emitUpdate(monitor);
+        }
+
+        if (this.projectScopeId) {
+          this.sendEvent({
+            type: "pr-cleared",
+            worktreeId,
+            projectScopeId: this.projectScopeId,
+          });
+        }
+      },
+      onIssueDetected: (worktreeId, data) => {
+        const monitor = this.monitors.get(worktreeId);
+        if (!monitor || monitor.projectScopeId !== this.projectScopeId) {
+          return;
+        }
+
+        monitor.setIssueTitle(data.issueTitle);
+        if (monitor.hasInitialStatus) {
+          this.emitUpdate(monitor);
+        }
+
+        if (this.projectScopeId) {
+          this.sendEvent({
+            type: "issue-detected",
+            worktreeId,
+            issueNumber: data.issueNumber,
+            issueTitle: data.issueTitle,
+            projectScopeId: this.projectScopeId,
+          });
+        }
+      },
+      onIssueNotFound: (worktreeId, issueNumber) => {
+        const monitor = this.monitors.get(worktreeId);
+        if (!monitor || monitor.projectScopeId !== this.projectScopeId) {
+          return;
+        }
+        if (monitor.issueNumber !== issueNumber) {
+          return;
+        }
+
+        monitor.setIssueNumber(undefined);
+        monitor.setIssueTitle(undefined);
+        if (monitor.hasInitialStatus) {
+          this.emitUpdate(monitor);
+        }
+
+        if (this.projectScopeId) {
+          this.sendEvent({
+            type: "issue-not-found",
+            worktreeId,
+            issueNumber,
+            projectScopeId: this.projectScopeId,
+          });
+        }
+      },
+    });
   }
 
   async loadProject(
@@ -122,16 +181,15 @@ export class WorkspaceService {
       this.projectRootPath = projectRootPath;
       this.projectScopeId = projectScopeId;
       this.git = simpleGit(projectRootPath);
+      this.listService.setGit(this.git, projectRootPath);
 
-      const rawWorktrees = await this.listWorktreesFromGit();
-      const worktrees = this.mapRawWorktrees(rawWorktrees);
+      const rawWorktrees = await this.listService.list();
+      const worktrees = this.listService.mapToWorktrees(rawWorktrees);
 
-      // Create monitors first (without waiting for git status)
       await this.syncMonitors(worktrees, this.activeWorktreeId, this.mainBranch, undefined, true);
 
       this.sendEvent({ type: "load-project-result", requestId, success: true });
 
-      // Launch expensive post-load tasks in background so project switching isn't blocked.
       void Promise.allSettled([this.initializePRService(), this.refreshAll()]).then((results) => {
         const [prResult, refreshResult] = results;
         if (prResult?.status === "rejected") {
@@ -148,168 +206,6 @@ export class WorkspaceService {
         success: false,
         error: (error as Error).message,
       });
-    }
-  }
-
-  private cloneRawWorktrees(rawWorktrees: RawWorktreeRecord[]): RawWorktreeRecord[] {
-    return rawWorktrees.map((worktree) => ({ ...worktree }));
-  }
-
-  private mapRawWorktrees(rawWorktrees: RawWorktreeRecord[]): Worktree[] {
-    return rawWorktrees.map((wt) => {
-      let name: string;
-      if (wt.isMainWorktree) {
-        name = wt.path.split(/[/\\]/).pop() || "Main";
-      } else if (wt.isDetached) {
-        name = wt.path.split(/[/\\]/).pop() || wt.head?.substring(0, 7) || "Detached";
-      } else if (wt.branch) {
-        name = wt.branch;
-      } else {
-        name = wt.path.split(/[/\\]/).pop() || "Worktree";
-      }
-
-      return {
-        id: wt.path,
-        path: wt.path,
-        name: name,
-        branch: wt.branch || undefined,
-        head: wt.head,
-        isDetached: wt.isDetached,
-        isCurrent: false,
-        isMainWorktree: wt.isMainWorktree,
-        gitDir: getGitDir(wt.path) || undefined,
-      };
-    });
-  }
-
-  private getWorktreeCacheKey(): string | null {
-    return this.projectRootPath ? pathResolve(this.projectRootPath) : null;
-  }
-
-  private getCachedWorktrees(cacheKey: string): RawWorktreeRecord[] | null {
-    const cached = this.worktreeListCache.get(cacheKey);
-    if (!cached) {
-      return null;
-    }
-
-    if (cached.expiresAt <= Date.now()) {
-      this.worktreeListCache.delete(cacheKey);
-      return null;
-    }
-
-    return this.cloneRawWorktrees(cached.worktrees);
-  }
-
-  private setCachedWorktrees(cacheKey: string, worktrees: RawWorktreeRecord[]): void {
-    this.worktreeListCache.set(cacheKey, {
-      expiresAt: Date.now() + WORKTREE_LIST_CACHE_TTL_MS,
-      worktrees: this.cloneRawWorktrees(worktrees),
-    });
-  }
-
-  private invalidateCachedWorktrees(cacheKey?: string): void {
-    if (cacheKey) {
-      this.worktreeListCache.delete(cacheKey);
-      this.inFlightWorktreeList.delete(cacheKey);
-      return;
-    }
-
-    this.worktreeListCache.clear();
-    this.inFlightWorktreeList.clear();
-  }
-
-  private async listWorktreesFromGit(options?: {
-    forceRefresh?: boolean;
-  }): Promise<RawWorktreeRecord[]> {
-    if (!this.git) {
-      throw new Error("Git not initialized");
-    }
-    const git = this.git;
-
-    const cacheKey = this.getWorktreeCacheKey();
-    const forceRefresh = options?.forceRefresh === true;
-    if (cacheKey && !forceRefresh) {
-      const cached = this.getCachedWorktrees(cacheKey);
-      if (cached) {
-        return cached;
-      }
-
-      const inFlight = this.inFlightWorktreeList.get(cacheKey);
-      if (inFlight) {
-        return inFlight;
-      }
-    }
-
-    const fetchPromise = (async () => {
-      const output = await git.raw(["worktree", "list", "--porcelain"]);
-      const worktrees: RawWorktreeRecord[] = [];
-
-      let currentWorktree: Partial<{
-        path: string;
-        branch: string;
-        bare: boolean;
-        head: string;
-        isDetached: boolean;
-      }> = {};
-
-      const pushWorktree = () => {
-        if (currentWorktree.path) {
-          let isMain = false;
-          if (this.projectRootPath) {
-            const canonicalWorktreePath = this.canonicalizePath(currentWorktree.path);
-            const canonicalProjectRoot = this.canonicalizePath(this.projectRootPath);
-            isMain = canonicalWorktreePath === canonicalProjectRoot;
-          }
-
-          worktrees.push({
-            path: currentWorktree.path,
-            branch: currentWorktree.branch || "",
-            bare: currentWorktree.bare || false,
-            isMainWorktree: isMain,
-            head: currentWorktree.isDetached ? currentWorktree.head : undefined,
-            isDetached: currentWorktree.isDetached,
-          });
-        }
-        currentWorktree = {};
-      };
-
-      for (const line of output.split("\n")) {
-        if (line.startsWith("worktree ")) {
-          currentWorktree.path = line.replace("worktree ", "").trim();
-        } else if (line.startsWith("HEAD ")) {
-          currentWorktree.head = line.replace("HEAD ", "").trim();
-        } else if (line.startsWith("branch ")) {
-          currentWorktree.branch = line.replace("branch ", "").replace("refs/heads/", "").trim();
-        } else if (line.startsWith("bare")) {
-          currentWorktree.bare = true;
-        } else if (line.trim() === "detached") {
-          currentWorktree.isDetached = true;
-        } else if (line.trim() === "") {
-          pushWorktree();
-        }
-      }
-
-      pushWorktree();
-
-      return worktrees;
-    })();
-
-    if (cacheKey) {
-      this.inFlightWorktreeList.set(cacheKey, fetchPromise);
-    }
-
-    try {
-      const worktrees = await fetchPromise;
-
-      if (cacheKey && this.inFlightWorktreeList.get(cacheKey) === fetchPromise) {
-        this.setCachedWorktrees(cacheKey, worktrees);
-      }
-
-      return this.cloneRawWorktrees(worktrees);
-    } finally {
-      if (cacheKey && this.inFlightWorktreeList.get(cacheKey) === fetchPromise) {
-        this.inFlightWorktreeList.delete(cacheKey);
-      }
     }
   }
 
@@ -355,12 +251,11 @@ export class WorkspaceService {
           continue;
         }
 
-        // Clear activeWorktreeId if this was the active worktree
         if (this.activeWorktreeId === id) {
           this.activeWorktreeId = null;
         }
 
-        this.stopMonitor(monitor);
+        monitor.stop();
         this.monitors.delete(id);
         clearGitDirCache(monitor.path);
         invalidateGitStatusCache(monitor.path);
@@ -370,8 +265,8 @@ export class WorkspaceService {
             worktreeId: id,
             projectScopeId: this.projectScopeId,
           });
+          events.emit("sys:worktree:remove", { worktreeId: id, timestamp: Date.now() });
         }
-        events.emit("sys:worktree:remove", { worktreeId: id, timestamp: Date.now() });
       }
     }
 
@@ -381,62 +276,49 @@ export class WorkspaceService {
       const isActive = wt.id === activeWorktreeId;
 
       if (existingMonitor) {
-        // Check if branch changed - if so, re-extract issue number
         const branchChanged = existingMonitor.branch !== wt.branch;
         const isCurrentChanged = existingMonitor.isCurrent !== isActive;
         existingMonitor.branch = wt.branch;
         existingMonitor.name = wt.name;
         existingMonitor.isCurrent = isActive;
-        existingMonitor.isMainWorktree = wt.isMainWorktree;
+        existingMonitor.isMainWorktree = wt.isMainWorktree ?? false;
+        existingMonitor.setProjectScopeId(this.projectScopeId);
+
         const interval = isActive ? this.pollIntervalActive : this.pollIntervalBackground;
-        existingMonitor.pollingInterval = interval;
-        existingMonitor.pollingStrategy.setBaseInterval(interval);
-        existingMonitor.pollingStrategy.updateConfig(
-          this.adaptiveBackoff,
-          this.pollIntervalMax,
-          this.circuitBreakerThreshold
-        );
-        existingMonitor.gitWatchEnabled = this.gitWatchEnabled;
-        if (!existingMonitor.gitWatchEnabled && existingMonitor.gitWatcher) {
-          this.stopMonitorWatcher(existingMonitor);
-        } else if (
-          existingMonitor.gitWatchEnabled &&
-          existingMonitor.isRunning &&
-          !existingMonitor.gitWatcher
-        ) {
-          this.startMonitorWatcher(existingMonitor);
+        existingMonitor.updateConfig({
+          basePollingInterval: interval,
+          adaptiveBackoff: this.adaptiveBackoff,
+          pollIntervalMax: this.pollIntervalMax,
+          circuitBreakerThreshold: this.circuitBreakerThreshold,
+          gitWatchEnabled: this.gitWatchEnabled,
+          gitWatchDebounceMs: this.gitWatchDebounceMs,
+        });
+
+        existingMonitor.ensureWatcherState();
+
+        if (branchChanged && existingMonitor.hasWatcher) {
+          existingMonitor.restartWatcherIfRunning();
         }
 
-        // Update watcher if branch changed
-        if (branchChanged && existingMonitor.gitWatcher) {
-          this.updateMonitorWatcher(existingMonitor);
-        }
-
-        // Emit update if isCurrent changed
         if (isCurrentChanged && existingMonitor.hasInitialStatus) {
           this.emitUpdate(existingMonitor);
         }
 
-        // Re-extract issue number when branch changes
         if (branchChanged && wt.branch) {
           const syncIssueNumber = extractIssueNumberSync(wt.branch, wt.name);
           if (syncIssueNumber) {
-            existingMonitor.issueNumber = syncIssueNumber;
+            existingMonitor.setIssueNumber(syncIssueNumber);
           } else {
-            // Clear immediately, then try async extraction
-            existingMonitor.issueNumber = undefined;
+            existingMonitor.setIssueNumber(undefined);
             void this.extractIssueNumberAsync(existingMonitor, wt.branch, wt.name);
           }
-          // Clear stale issue title - will be repopulated by PR service
-          existingMonitor.issueTitle = undefined;
-          // Emit update if initial status has completed
+          existingMonitor.setIssueTitle(undefined);
           if (existingMonitor.hasInitialStatus) {
             this.emitUpdate(existingMonitor);
           }
         } else if (branchChanged && !wt.branch) {
-          // Branch cleared (e.g., detached HEAD) - clear issue number and title
-          existingMonitor.issueNumber = undefined;
-          existingMonitor.issueTitle = undefined;
+          existingMonitor.setIssueNumber(undefined);
+          existingMonitor.setIssueTitle(undefined);
           if (existingMonitor.hasInitialStatus) {
             this.emitUpdate(existingMonitor);
           }
@@ -446,7 +328,6 @@ export class WorkspaceService {
         const issueNumber = wt.branch ? extractIssueNumberSync(wt.branch, wt.name) : null;
         const interval = isActive ? this.pollIntervalActive : this.pollIntervalBackground;
 
-        // Compute createdAt from directory birthtime (macOS/Windows) or ctime (Linux fallback)
         let createdAt: number | undefined;
         try {
           const stats = await stat(wt.path);
@@ -455,59 +336,43 @@ export class WorkspaceService {
           // If stat fails, leave undefined
         }
 
-        const monitor: MonitorState = {
-          id: wt.id,
-          path: wt.path,
-          name: wt.name,
-          branch: wt.branch,
-          isCurrent: isActive,
-          isMainWorktree: Boolean(wt.isMainWorktree),
-          gitDir: wt.gitDir,
-          worktreeId: wt.id,
-          worktreeChanges: null,
-          mood: "stable",
-          modifiedCount: 0,
-          lastActivityTimestamp: null,
-          createdAt,
-          issueNumber: issueNumber ?? undefined,
-          pollingTimer: null,
-          resumeTimer: null,
-          pollingInterval: interval,
-          isRunning: false,
-          isUpdating: false,
-          pollingEnabled: true,
-          hasInitialStatus: false,
-          previousStateHash: "",
-          pollingStrategy: new AdaptivePollingStrategy({ baseInterval: interval }),
-          noteReader: new NoteFileReader(wt.path),
-          gitWatcher: null,
-          gitWatchDebounceTimer: null,
-          gitWatchRefreshPending: false,
-          gitWatchEnabled: this.gitWatchEnabled,
-          lastGitStatusCompletedAt: 0,
-        };
-
-        monitor.pollingStrategy.updateConfig(
-          this.adaptiveBackoff,
-          this.pollIntervalMax,
-          this.circuitBreakerThreshold
+        const monitor = new WorktreeMonitor(
+          { ...wt, isCurrent: isActive },
+          {
+            basePollingInterval: interval,
+            adaptiveBackoff: this.adaptiveBackoff,
+            pollIntervalMax: this.pollIntervalMax,
+            circuitBreakerThreshold: this.circuitBreakerThreshold,
+            gitWatchEnabled: this.gitWatchEnabled,
+            gitWatchDebounceMs: this.gitWatchDebounceMs,
+          },
+          {
+            onUpdate: (snapshot) => {
+              this.handleMonitorUpdate(monitor, snapshot);
+            },
+            onRemoved: (worktreeId) => {
+              this.handleExternalWorktreeRemoval(worktreeId);
+            },
+            onExternalRemoval: (worktreeId) => {
+              this.handleExternalWorktreeRemoval(worktreeId);
+            },
+          },
+          this.mainBranch,
+          this.pollQueue
         );
+
+        monitor.setIssueNumber(issueNumber ?? undefined);
+        monitor.setProjectScopeId(this.projectScopeId);
+        monitor.setCreatedAt(createdAt);
 
         this.monitors.set(wt.id, monitor);
 
         if (skipInitialGitStatus) {
-          // Just mark as running - refreshAll() will do git status later
-          monitor.isRunning = true;
-          monitor.pollingEnabled = true;
-          // Start watcher even when skipping initial git status
-          if (monitor.gitWatchEnabled) {
-            this.startMonitorWatcher(monitor);
-          }
+          monitor.startWithoutGitStatus();
         } else {
-          await this.startMonitor(monitor);
+          await monitor.start();
         }
 
-        // Extract issue number asynchronously if not found synchronously
         if (wt.branch && !issueNumber) {
           void this.extractIssueNumberAsync(monitor, wt.branch, wt.name);
         }
@@ -516,16 +381,14 @@ export class WorkspaceService {
   }
 
   private async extractIssueNumberAsync(
-    monitor: MonitorState,
+    monitor: WorktreeMonitor,
     branchName: string,
     folderName?: string
   ): Promise<void> {
     try {
       const issueNumber = await extractIssueNumber(branchName, folderName);
-      // Guard against race condition: only update if branch hasn't changed
       if (issueNumber && monitor.isRunning && monitor.branch === branchName) {
-        monitor.issueNumber = issueNumber;
-        // Only emit if initial git status has completed to avoid partial snapshots
+        monitor.setIssueNumber(issueNumber);
         if (monitor.hasInitialStatus) {
           this.emitUpdate(monitor);
         }
@@ -535,455 +398,14 @@ export class WorkspaceService {
     }
   }
 
-  private async startMonitor(monitor: MonitorState): Promise<void> {
-    if (monitor.isRunning) {
-      return;
-    }
-
-    monitor.isRunning = true;
-    monitor.pollingEnabled = true;
-
-    if (monitor.gitWatchEnabled && !monitor.gitWatcher) {
-      this.startMonitorWatcher(monitor);
-    }
-
-    await this.updateGitStatus(monitor, true);
-
-    if (monitor.isRunning && this.pollingEnabled) {
-      this.scheduleNextPoll(monitor);
-    }
-  }
-
-  private stopMonitor(monitor: MonitorState): void {
-    monitor.isRunning = false;
-    if (monitor.pollingTimer) {
-      clearTimeout(monitor.pollingTimer);
-      monitor.pollingTimer = null;
-    }
-    if (monitor.resumeTimer) {
-      clearTimeout(monitor.resumeTimer);
-      monitor.resumeTimer = null;
-    }
-    this.stopMonitorWatcher(monitor);
-  }
-
-  private startMonitorWatcher(monitor: MonitorState): void {
-    if (!monitor.isRunning || !monitor.gitWatchEnabled || monitor.gitWatcher) {
-      return;
-    }
-
-    const watcher = new GitFileWatcher({
-      worktreePath: monitor.path,
-      branch: monitor.branch,
-      debounceMs: this.gitWatchDebounceMs,
-      onChange: () => this.handleGitFileChange(monitor),
-      watchWorktree: true,
-      worktreeDebounceMs: 1000,
-    });
-
-    const started = watcher.start();
-    if (started) {
-      monitor.gitWatcher = () => watcher.dispose();
-    } else {
-      watcher.dispose();
-    }
-  }
-
-  private stopMonitorWatcher(monitor: MonitorState): void {
-    if (monitor.gitWatcher) {
-      monitor.gitWatcher();
-      monitor.gitWatcher = null;
-    }
-    if (monitor.gitWatchDebounceTimer) {
-      clearTimeout(monitor.gitWatchDebounceTimer);
-      monitor.gitWatchDebounceTimer = null;
-    }
-    monitor.gitWatchRefreshPending = false;
-  }
-
-  private updateMonitorWatcher(monitor: MonitorState): void {
-    this.stopMonitorWatcher(monitor);
-    if (monitor.isRunning && monitor.gitWatchEnabled) {
-      this.startMonitorWatcher(monitor);
-    }
-  }
-
-  private handleGitFileChange(monitor: MonitorState): void {
-    if (!monitor.isRunning) {
-      return;
-    }
-
-    // Suppress self-triggered watcher events.  git status touches .git/index
-    // (and index.lock), which fires the watcher and creates an infinite loop
-    // if we don't ignore events shortly after our own operations complete.
-    // Still set the pending flag so a real change arriving during the cooldown
-    // window is picked up on the next poll or flush, rather than being lost.
-    if (!monitor.isUpdating) {
-      const msSinceLastStatus = Date.now() - monitor.lastGitStatusCompletedAt;
-      if (msSinceLastStatus < GIT_WATCH_SELF_TRIGGER_COOLDOWN_MS) {
-        monitor.gitWatchRefreshPending = true;
-        return;
-      }
-    }
-
-    monitor.gitWatchRefreshPending = true;
-    invalidateGitStatusCache(monitor.path);
-
-    if (monitor.isUpdating) {
-      if (monitor.gitWatchDebounceTimer) {
-        clearTimeout(monitor.gitWatchDebounceTimer);
-      }
-      monitor.gitWatchDebounceTimer = setTimeout(() => {
-        monitor.gitWatchDebounceTimer = null;
-        this.flushPendingGitWatchRefresh(monitor);
-      }, this.gitWatchDebounceMs);
-      return;
-    }
-
-    this.flushPendingGitWatchRefresh(monitor);
-  }
-
-  private flushPendingGitWatchRefresh(monitor: MonitorState): void {
-    if (!monitor.isRunning || monitor.isUpdating || !monitor.gitWatchRefreshPending) {
-      return;
-    }
-
-    monitor.gitWatchRefreshPending = false;
-    invalidateGitStatusCache(monitor.path);
-    void this.updateGitStatus(monitor, true);
-  }
-
-  private scheduleCircuitBreakerRetry(monitor: MonitorState): void {
-    if (!monitor.isRunning || !monitor.pollingEnabled || !this.pollingEnabled) {
-      return;
-    }
-
-    if (!monitor.pollingStrategy.isCircuitBreakerTripped()) {
-      return;
-    }
-
-    if (monitor.pollingTimer || monitor.resumeTimer) {
-      return;
-    }
-
-    const cooldown = Math.max(
-      this.pollIntervalMax,
-      monitor.pollingStrategy.calculateNextInterval()
-    );
-    const jitter = Math.random() * 2000;
-
-    monitor.resumeTimer = setTimeout(() => {
-      monitor.resumeTimer = null;
-      if (monitor.isRunning && monitor.pollingEnabled && this.pollingEnabled) {
-        void this.poll(monitor, true);
-      }
-    }, cooldown + jitter);
-  }
-
-  private scheduleNextPoll(monitor: MonitorState): void {
-    if (!monitor.isRunning || !monitor.pollingEnabled || !this.pollingEnabled) {
-      return;
-    }
-
-    if (monitor.pollingStrategy.isCircuitBreakerTripped()) {
-      this.scheduleCircuitBreakerRetry(monitor);
-      return;
-    }
-
-    if (monitor.pollingTimer) {
-      return;
-    }
-
-    // When a watcher is active, polling is just a rare safety net.
-    const baseInterval = monitor.gitWatcher
-      ? WATCHER_FALLBACK_POLL_INTERVAL_MS
-      : monitor.pollingStrategy.calculateNextInterval();
-    const jitterRange = Math.min(2000, Math.floor(baseInterval * 0.2));
-    const jitter = jitterRange > 0 ? Math.floor(Math.random() * jitterRange) : 0;
-    const delayMs = baseInterval + jitter;
-
-    monitor.pollingTimer = setTimeout(() => {
-      monitor.pollingTimer = null;
-      void this.poll(monitor);
-    }, delayMs);
-  }
-
-  private async poll(monitor: MonitorState, force: boolean = false): Promise<void> {
-    if (!monitor.isRunning || (!force && monitor.pollingStrategy.isCircuitBreakerTripped())) {
-      return;
-    }
-
-    let tripped = false;
-    const queuedAt = Date.now();
-
-    const executePoll = async (): Promise<void> => {
-      const startTime = Date.now();
-      const queueDelayMs = Math.max(0, startTime - queuedAt);
-
-      try {
-        // When a watcher is active, polling is a rare fallback — don't force refresh.
-        // The watcher's onChange handler calls updateGitStatus with forceRefresh=true.
-        const forceRefresh = monitor.isCurrent && !monitor.gitWatcher;
-        await this.updateGitStatus(monitor, forceRefresh);
-        monitor.pollingStrategy.recordSuccess(Date.now() - startTime, queueDelayMs);
-      } catch (_error) {
-        tripped = monitor.pollingStrategy.recordFailure(Date.now() - startTime, queueDelayMs);
-
-        if (tripped) {
-          monitor.mood = "error";
-          monitor.summary = "⚠️ Polling delayed after consecutive failures";
-          this.emitUpdate(monitor);
-        }
-      }
-    };
-
-    try {
-      await this.pollQueue.add(() => executePoll());
-    } catch {
-      // Queue execution failed
-    }
-
-    if (tripped) {
-      this.scheduleCircuitBreakerRetry(monitor);
-      return;
-    }
-
-    if (monitor.isRunning && monitor.pollingEnabled && this.pollingEnabled) {
-      this.scheduleNextPoll(monitor);
-    }
-  }
-
-  private async updateGitStatus(
-    monitor: MonitorState,
-    forceRefresh: boolean = false
-  ): Promise<void> {
-    if (monitor.isUpdating) {
-      return;
-    }
-
-    monitor.isUpdating = true;
-
-    try {
-      if (forceRefresh) {
-        invalidateGitStatusCache(monitor.path);
-      }
-
-      // Use polling interval as cache TTL to prevent stale data between polls
-      // Subtract 500ms buffer to ensure cache expires before next poll
-      // Guard against non-finite intervals (NaN, Infinity) that would break cache expiry
-      const pollingInterval = monitor.pollingInterval;
-      const cacheTTL =
-        Number.isFinite(pollingInterval) && pollingInterval > 0
-          ? Math.max(500, pollingInterval - 500)
-          : undefined; // Fall back to cache default TTL
-      const newChanges = await getWorktreeChangesWithStats(monitor.path, {
-        forceRefresh,
-        cacheTTL,
-      });
-
-      if (!monitor.isRunning) {
-        return;
-      }
-
-      // Detect branch changes by reading HEAD directly — this is much faster
-      // than waiting for discoverAndSyncWorktrees to re-list worktrees via git.
-      const currentBranch = await this.readCurrentBranch(monitor.path);
-      const branchChanged = currentBranch !== undefined && currentBranch !== monitor.branch;
-      if (branchChanged) {
-        monitor.branch = currentBranch;
-        // Preserve any pending refresh queued while the update was in flight,
-        // since stopMonitorWatcher (called by updateMonitorWatcher) clears it.
-        const hadPendingRefresh = monitor.gitWatchRefreshPending;
-        this.updateMonitorWatcher(monitor);
-        if (hadPendingRefresh) {
-          monitor.gitWatchRefreshPending = true;
-        }
-        // Mirror syncMonitors: re-extract issue number from the new branch name.
-        const syncIssueNumber = extractIssueNumberSync(currentBranch, monitor.name);
-        if (syncIssueNumber) {
-          monitor.issueNumber = syncIssueNumber;
-        } else {
-          monitor.issueNumber = undefined;
-          void this.extractIssueNumberAsync(monitor, currentBranch, monitor.name);
-        }
-        monitor.issueTitle = undefined;
-      }
-
-      const noteData = await monitor.noteReader.read();
-      const currentHash = this.calculateStateHash(newChanges);
-      const stateChanged = currentHash !== monitor.previousStateHash;
-      const noteChanged =
-        noteData?.content !== monitor.aiNote || noteData?.timestamp !== monitor.aiNoteTimestamp;
-
-      if (!stateChanged && !noteChanged && !branchChanged && !forceRefresh) {
-        return;
-      }
-
-      const isInitialLoad = monitor.previousStateHash === "";
-      const isNowClean = newChanges.changedFileCount === 0;
-      const hasPendingChanges = newChanges.changedFileCount > 0;
-      const shouldUpdateTimestamp =
-        (stateChanged && !isInitialLoad) || (isInitialLoad && hasPendingChanges);
-
-      if (shouldUpdateTimestamp) {
-        monitor.lastActivityTimestamp = Date.now();
-      }
-
-      if (isInitialLoad && isNowClean && monitor.lastActivityTimestamp === null) {
-        monitor.lastActivityTimestamp = newChanges.lastCommitTimestampMs ?? null;
-      }
-
-      // Use last commit message as summary
-      if (
-        isNowClean ||
-        isInitialLoad ||
-        (monitor.worktreeChanges && monitor.worktreeChanges.changedFileCount === 0)
-      ) {
-        monitor.summary = await this.fetchLastCommitMessage(monitor);
-      }
-
-      let nextMood = monitor.mood;
-      try {
-        nextMood = await categorizeWorktree(
-          {
-            id: monitor.id,
-            path: monitor.path,
-            name: monitor.name,
-            branch: monitor.branch,
-            isCurrent: monitor.isCurrent,
-          },
-          newChanges || undefined,
-          this.mainBranch
-        );
-      } catch {
-        nextMood = "error";
-      }
-
-      monitor.previousStateHash = currentHash;
-      monitor.worktreeChanges = newChanges;
-      monitor.changes = newChanges.changes;
-      monitor.modifiedCount = newChanges.changedFileCount;
-      monitor.mood = nextMood;
-      monitor.aiNote = noteData?.content;
-      monitor.aiNoteTimestamp = noteData?.timestamp;
-      monitor.hasInitialStatus = true;
-
-      this.emitUpdate(monitor);
-    } catch (error) {
-      if (error instanceof WorktreeRemovedError) {
-        // Worktree was deleted externally - trigger cleanup instead of showing error state
-        this.handleExternalWorktreeRemoval(monitor);
-        return;
-      }
-
-      const errorMessage = (error as Error).message || "";
-      if (errorMessage.includes("index.lock")) {
-        // Git index locked, queue a trailing retry so git-watch updates are not lost.
-        monitor.gitWatchRefreshPending = true;
-        if (!monitor.gitWatchDebounceTimer) {
-          monitor.gitWatchDebounceTimer = setTimeout(() => {
-            monitor.gitWatchDebounceTimer = null;
-            this.flushPendingGitWatchRefresh(monitor);
-          }, this.gitWatchDebounceMs);
-        }
-        return;
-      }
-
-      monitor.mood = "error";
-      this.emitUpdate(monitor);
-      throw error;
-    } finally {
-      monitor.isUpdating = false;
-      monitor.lastGitStatusCompletedAt = Date.now();
-      if (monitor.gitWatchRefreshPending && !monitor.gitWatchDebounceTimer) {
-        this.flushPendingGitWatchRefresh(monitor);
-      }
-    }
-  }
-
-  private calculateStateHash(changes: WorktreeChanges): string {
-    const hashInput = changes.changes
-      .map((c) => `${c.path}:${c.status}:${c.insertions ?? 0}:${c.deletions ?? 0}`)
-      .sort()
-      .join("|");
-    return hashInput;
-  }
-
-  private async fetchLastCommitMessage(monitor: MonitorState): Promise<string> {
-    if (monitor.worktreeChanges?.lastCommitMessage) {
-      const firstLine = monitor.worktreeChanges.lastCommitMessage.split("\n")[0].trim();
-      return `✅ ${firstLine}`;
-    }
-
-    try {
-      const git = simpleGit(monitor.path);
-      const log = await git.log({ maxCount: 1 });
-      const lastCommitMsg = log.latest?.message;
-
-      if (lastCommitMsg) {
-        const firstLine = lastCommitMsg.split("\n")[0].trim();
-        return `✅ ${firstLine}`;
-      }
-      return "🌱 Ready to get started";
-    } catch {
-      return "🌱 Ready to get started";
-    }
-  }
-
-  private async readCurrentBranch(worktreePath: string): Promise<string | undefined> {
-    const gitDir = getGitDir(worktreePath, { cache: true, logErrors: false });
-    if (!gitDir) return undefined;
-
-    try {
-      const headContent = await readFile(pathJoin(gitDir, "HEAD"), "utf-8");
-      const trimmed = headContent.trim();
-      const prefix = "ref: refs/heads/";
-      if (trimmed.startsWith(prefix)) {
-        return trimmed.slice(prefix.length);
-      }
-      return undefined; // detached HEAD
-    } catch {
-      return undefined;
-    }
-  }
-
-  private createSnapshot(monitor: MonitorState): WorktreeSnapshot {
-    const snapshot: WorktreeSnapshot = {
-      id: monitor.id,
-      path: monitor.path,
-      name: monitor.name,
-      branch: monitor.branch,
-      isCurrent: monitor.isCurrent,
-      isMainWorktree: monitor.isMainWorktree,
-      gitDir: monitor.gitDir,
-      summary: monitor.summary,
-      modifiedCount: monitor.modifiedCount,
-      changes: monitor.changes,
-      mood: monitor.mood,
-      lastActivityTimestamp: monitor.lastActivityTimestamp,
-      createdAt: monitor.createdAt,
-      aiNote: monitor.aiNote,
-      aiNoteTimestamp: monitor.aiNoteTimestamp,
-      issueNumber: monitor.issueNumber,
-      prNumber: monitor.prNumber,
-      prUrl: monitor.prUrl,
-      prState: monitor.prState,
-      prTitle: monitor.prTitle,
-      issueTitle: monitor.issueTitle,
-      worktreeChanges: monitor.worktreeChanges,
-      worktreeId: monitor.worktreeId,
-      timestamp: Date.now(),
-      lifecycleStatus: monitor.lifecycleStatus,
-    };
-
-    return ensureSerializable(snapshot) as WorktreeSnapshot;
-  }
-
-  private emitUpdate(monitor: MonitorState): void {
+  private handleMonitorUpdate(monitor: WorktreeMonitor, _snapshot: WorktreeSnapshot): void {
     if (!this.projectScopeId) {
       return;
     }
-    const snapshot = this.createSnapshot(monitor);
+    if (monitor.projectScopeId !== this.projectScopeId) {
+      return;
+    }
+    const snapshot = monitor.getSnapshot();
     this.sendEvent({
       type: "worktree-update",
       worktree: snapshot,
@@ -992,45 +414,63 @@ export class WorkspaceService {
     events.emit("sys:worktree:update", snapshot as any);
   }
 
-  private handleExternalWorktreeRemoval(monitor: MonitorState): void {
-    // Safeguard: Never remove main worktree
+  private emitUpdate(monitor: WorktreeMonitor): void {
+    if (!this.projectScopeId) {
+      return;
+    }
+    if (monitor.projectScopeId !== this.projectScopeId) {
+      return;
+    }
+    const snapshot = monitor.getSnapshot();
+    this.sendEvent({
+      type: "worktree-update",
+      worktree: snapshot,
+      projectScopeId: this.projectScopeId,
+    });
+    events.emit("sys:worktree:update", snapshot as any);
+  }
+
+  private handleExternalWorktreeRemoval(worktreeId: string): void {
+    const monitor = this.monitors.get(worktreeId);
+    if (!monitor) {
+      return;
+    }
+
     if (monitor.isMainWorktree) {
       console.warn("[WorkspaceHost] Blocked removal of main worktree monitor");
-      monitor.mood = "error";
-      monitor.summary = "⚠️ Directory not accessible";
+      monitor.setMood("error");
+      monitor.setSummary("⚠️ Directory not accessible");
       this.emitUpdate(monitor);
       return;
     }
 
-    const worktreeId = monitor.id;
-
-    // Guard against duplicate removal (race with syncMonitors or deleteWorktree)
     if (!this.monitors.has(worktreeId)) {
       return;
     }
 
-    // Clear activeWorktreeId if this was the active worktree
     if (this.activeWorktreeId === worktreeId) {
       this.activeWorktreeId = null;
     }
 
-    // Stop the monitor and remove from map
-    this.stopMonitor(monitor);
+    monitor.stop();
     this.monitors.delete(worktreeId);
 
-    // Clear git caches to prevent stale data if path is reused
     clearGitDirCache(monitor.path);
     invalidateGitStatusCache(monitor.path);
-    const cacheKey = this.getWorktreeCacheKey();
+    const cacheKey = this.listService.getCacheKey();
     if (cacheKey) {
-      this.invalidateCachedWorktrees(cacheKey);
+      this.listService.invalidateCache(cacheKey);
     }
 
-    // Emit removal events for frontend cleanup
     if (this.projectScopeId) {
+      if (monitor.projectScopeId !== this.projectScopeId) {
+        console.warn(
+          `[WorkspaceHost] Scope ID mismatch on removal: monitor=${monitor.projectScopeId}, service=${this.projectScopeId}`
+        );
+      }
       this.sendEvent({ type: "worktree-removed", worktreeId, projectScopeId: this.projectScopeId });
+      events.emit("sys:worktree:remove", { worktreeId, timestamp: Date.now() });
     }
-    events.emit("sys:worktree:remove", { worktreeId, timestamp: Date.now() });
 
     console.log(
       `[WorkspaceHost] Worktree deleted externally, removed monitor: ${monitor.name} (${worktreeId})`
@@ -1040,7 +480,10 @@ export class WorkspaceService {
   getAllStates(requestId: string): void {
     const states: WorktreeSnapshot[] = [];
     for (const monitor of this.monitors.values()) {
-      states.push(this.createSnapshot(monitor));
+      if (this.projectScopeId && monitor.projectScopeId !== this.projectScopeId) {
+        continue;
+      }
+      states.push(monitor.getSnapshot());
     }
     this.sendEvent({ type: "all-states", requestId, states });
   }
@@ -1055,7 +498,7 @@ export class WorkspaceService {
     this.sendEvent({
       type: "monitor",
       requestId,
-      state: this.createSnapshot(monitor),
+      state: monitor.getSnapshot(),
     });
   }
 
@@ -1066,34 +509,16 @@ export class WorkspaceService {
       const isActive = id === worktreeId;
       const wasCurrent = monitor.isCurrent;
       const interval = isActive ? this.pollIntervalActive : this.pollIntervalBackground;
-      const intervalChanged = monitor.pollingInterval !== interval;
 
-      monitor.pollingInterval = interval;
-      monitor.pollingStrategy.setBaseInterval(interval);
+      monitor.updateConfig({ basePollingInterval: interval });
       monitor.isCurrent = isActive;
 
-      if (intervalChanged || wasCurrent !== isActive) {
-        if (monitor.pollingTimer) {
-          clearTimeout(monitor.pollingTimer);
-          monitor.pollingTimer = null;
-        }
-        if (monitor.resumeTimer) {
-          clearTimeout(monitor.resumeTimer);
-          monitor.resumeTimer = null;
-        }
-
-        if (monitor.isRunning && monitor.pollingEnabled && this.pollingEnabled) {
-          this.scheduleNextPoll(monitor);
-        }
+      if (wasCurrent !== isActive) {
+        monitor.reschedulePolling();
       }
 
       if (isActive && monitor.isRunning) {
-        invalidateGitStatusCache(monitor.path);
-        if (monitor.isUpdating) {
-          monitor.gitWatchRefreshPending = true;
-        } else {
-          void this.updateGitStatus(monitor, true);
-        }
+        monitor.triggerRefreshIfUpdating();
       }
 
       if (monitor.hasInitialStatus && wasCurrent !== isActive) {
@@ -1109,15 +534,12 @@ export class WorkspaceService {
       if (worktreeId) {
         const monitor = this.monitors.get(worktreeId);
         if (monitor) {
-          if (monitor.pollingStrategy.isCircuitBreakerTripped()) {
-            monitor.pollingStrategy.reset();
-          }
-          await this.updateGitStatus(monitor, true);
+          await monitor.refresh();
         }
       } else {
-        // Re-discover worktrees to find new/removed ones
         await this.discoverAndSyncWorktrees();
         await this.refreshAll();
+        await pullRequestService.refresh();
       }
       this.sendEvent({ type: "refresh-result", requestId, success: true });
     } catch (error) {
@@ -1135,8 +557,8 @@ export class WorkspaceService {
       return;
     }
 
-    const rawWorktrees = await this.listWorktreesFromGit({ forceRefresh: true });
-    const worktrees = this.mapRawWorktrees(rawWorktrees);
+    const rawWorktrees = await this.listService.list({ forceRefresh: true });
+    const worktrees = this.listService.mapToWorktrees(rawWorktrees);
 
     await this.syncMonitors(worktrees, this.activeWorktreeId, this.mainBranch, undefined, true);
   }
@@ -1144,17 +566,10 @@ export class WorkspaceService {
   private async refreshAll(): Promise<void> {
     const promises = Array.from(this.monitors.values()).map(async (monitor) => {
       try {
-        await this.updateGitStatus(monitor, true);
+        await monitor.updateGitStatus(true);
       } finally {
-        // Schedule polling if not already scheduled and not currently updating
-        // This ensures monitors created with skipInitialGitStatus start polling even if updateGitStatus fails
-        if (
-          monitor.isRunning &&
-          this.pollingEnabled &&
-          !monitor.pollingTimer &&
-          !monitor.isUpdating
-        ) {
-          this.scheduleNextPoll(monitor);
+        if (monitor.isRunning && this.pollingEnabled) {
+          monitor.reschedulePolling();
         }
       }
     });
@@ -1184,11 +599,6 @@ export class WorkspaceService {
         await git.raw(["worktree", "add", "-b", newBranch, path, baseBranch]);
       }
 
-      // Wait for the worktree directory to be accessible before proceeding.
-      // This prevents race conditions where git completes but the filesystem
-      // hasn't flushed the directory creation to disk yet, which can cause
-      // ENOENT errors when spawning terminals with the worktree as cwd.
-      // Normalize to absolute path to avoid cwd mismatch between git and fs.access
       const absolutePath = isAbsolute(path) ? path : pathResolve(rootPath, path);
       await waitForPathExists(absolutePath, {
         timeoutMs: 5000,
@@ -1196,20 +606,16 @@ export class WorkspaceService {
         maxRetryDelayMs: 800,
       });
 
-      await ensureNoteFile(path);
+      await ensureNoteFile(absolutePath);
 
-      // Copy .canopy/ from main repo to the new worktree so gitignored config files
-      // (including lifecycle scripts) are available without manual setup.
       await this.lifecycleService.copyCanopyDir(rootPath, absolutePath);
 
-      // Refresh worktree list
-      this.invalidateCachedWorktrees(pathResolve(rootPath));
-      const updatedWorktrees = await this.listWorktreesFromGit({ forceRefresh: true });
-      const worktreeList = this.mapRawWorktrees(updatedWorktrees);
+      this.listService.invalidateCache(pathResolve(rootPath));
+      const updatedWorktrees = await this.listService.list({ forceRefresh: true });
+      const worktreeList = this.listService.mapToWorktrees(updatedWorktrees);
 
       await this.syncMonitors(worktreeList, this.activeWorktreeId, this.mainBranch);
 
-      // Find the created worktree in the updated list to get the canonical ID
       const createdWorktree = worktreeList.find((wt) => wt.branch === newBranch);
       const canonicalWorktreeId = createdWorktree?.id || path;
 
@@ -1220,8 +626,6 @@ export class WorkspaceService {
         worktreeId: canonicalWorktreeId,
       });
 
-      // Run setup scripts asynchronously after signaling success so the renderer
-      // gets the worktree immediately. Progress is emitted via worktree-update events.
       void this.runLifecycleSetup(canonicalWorktreeId, absolutePath, rootPath);
     } catch (error) {
       this.sendEvent({
@@ -1252,14 +656,14 @@ export class WorkspaceService {
     const worktreeName = monitor.name;
     const env = this.lifecycleService.buildEnv(worktreePath, projectRootPath, worktreeName);
 
-    monitor.lifecycleStatus = {
+    monitor.setLifecycleStatus({
       phase: "setup",
       state: "running",
       commandIndex: 0,
       totalCommands: commands.length,
       currentCommand: commands[0],
       startedAt: Date.now(),
-    };
+    });
     this.emitUpdate(monitor);
 
     const result = await this.lifecycleService.runCommands(commands, {
@@ -1268,14 +672,14 @@ export class WorkspaceService {
       onProgress: (commandIndex, totalCommands, command) => {
         const m = this.monitors.get(worktreeId);
         if (m) {
-          m.lifecycleStatus = {
+          m.setLifecycleStatus({
             phase: "setup",
             state: "running",
             commandIndex,
             totalCommands,
             currentCommand: command,
             startedAt: m.lifecycleStatus?.startedAt ?? Date.now(),
-          };
+          });
           this.emitUpdate(m);
         }
       },
@@ -1283,7 +687,7 @@ export class WorkspaceService {
 
     const finalMonitor = this.monitors.get(worktreeId);
     if (finalMonitor) {
-      finalMonitor.lifecycleStatus = {
+      finalMonitor.setLifecycleStatus({
         phase: "setup",
         state: result.timedOut ? "timed-out" : result.success ? "success" : "failed",
         totalCommands: commands.length,
@@ -1291,7 +695,7 @@ export class WorkspaceService {
         error: result.error,
         startedAt: finalMonitor.lifecycleStatus?.startedAt ?? Date.now(),
         completedAt: Date.now(),
-      };
+      });
       this.emitUpdate(finalMonitor);
     }
 
@@ -1302,7 +706,7 @@ export class WorkspaceService {
 
   private async runLifecycleTeardown(
     worktreeId: string,
-    monitor: MonitorState,
+    monitor: WorktreeMonitor,
     force: boolean
   ): Promise<void> {
     if (!this.projectRootPath) {
@@ -1316,17 +720,16 @@ export class WorkspaceService {
 
     const commands = config.teardown;
     const env = this.lifecycleService.buildEnv(monitor.path, this.projectRootPath, monitor.name);
-    // Give teardown less time on force-delete so it doesn't block deletion for long.
     const timeoutMs = force ? 15_000 : 120_000;
 
-    monitor.lifecycleStatus = {
+    monitor.setLifecycleStatus({
       phase: "teardown",
       state: "running",
       commandIndex: 0,
       totalCommands: commands.length,
       currentCommand: commands[0],
       startedAt: Date.now(),
-    };
+    });
     this.emitUpdate(monitor);
 
     const teardownStartedAt = monitor.lifecycleStatus?.startedAt ?? Date.now();
@@ -1339,14 +742,14 @@ export class WorkspaceService {
         onProgress: (commandIndex, totalCommands, command) => {
           const m = this.monitors.get(worktreeId);
           if (m) {
-            m.lifecycleStatus = {
+            m.setLifecycleStatus({
               phase: "teardown",
               state: "running",
               commandIndex,
               totalCommands,
               currentCommand: command,
               startedAt: m.lifecycleStatus?.startedAt ?? teardownStartedAt,
-            };
+            });
             this.emitUpdate(m);
           }
         },
@@ -1354,7 +757,7 @@ export class WorkspaceService {
 
       const finalMonitor = this.monitors.get(worktreeId);
       if (finalMonitor) {
-        finalMonitor.lifecycleStatus = {
+        finalMonitor.setLifecycleStatus({
           phase: "teardown",
           state: result.timedOut ? "timed-out" : result.success ? "success" : "failed",
           totalCommands: commands.length,
@@ -1362,7 +765,7 @@ export class WorkspaceService {
           error: result.error,
           startedAt: teardownStartedAt,
           completedAt: Date.now(),
-        };
+        });
         this.emitUpdate(finalMonitor);
       }
 
@@ -1375,14 +778,14 @@ export class WorkspaceService {
     } catch (err) {
       const finalMonitor = this.monitors.get(worktreeId);
       if (finalMonitor) {
-        finalMonitor.lifecycleStatus = {
+        finalMonitor.setLifecycleStatus({
           phase: "teardown",
           state: "failed",
           totalCommands: commands.length,
           error: (err as Error).message,
           startedAt: teardownStartedAt,
           completedAt: Date.now(),
-        };
+        });
         this.emitUpdate(finalMonitor);
       }
       console.warn(
@@ -1408,7 +811,7 @@ export class WorkspaceService {
         throw new Error("Cannot delete the main worktree");
       }
 
-      if (!force && (monitor.worktreeChanges?.changedFileCount ?? 0) > 0) {
+      if (!force && (monitor.getWorktreeChanges()?.changedFileCount ?? 0) > 0) {
         throw new Error("Worktree has uncommitted changes. Use force delete to proceed.");
       }
 
@@ -1432,8 +835,6 @@ export class WorkspaceService {
         this.setActiveWorktree(`${requestId}-auto-switch`, mainWorktreeId);
       }
 
-      // Run teardown scripts before removing the worktree. Failures are logged but
-      // never block deletion — the user's intent to delete must be honoured.
       await this.runLifecycleTeardown(worktreeId, monitor, force);
 
       if (this.git) {
@@ -1445,44 +846,46 @@ export class WorkspaceService {
         await this.git.raw(args);
         clearGitDirCache(monitor.path);
 
-        const cacheKey = this.getWorktreeCacheKey();
+        const cacheKey = this.listService.getCacheKey();
         if (cacheKey) {
-          this.invalidateCachedWorktrees(cacheKey);
-        }
-
-        if (branchToDelete) {
-          try {
-            await this.git.raw(["branch", "-d", branchToDelete]);
-            console.log(`[WorkspaceHost] Deleted branch: ${branchToDelete} (safe)`);
-          } catch (branchError) {
-            const errorMsg = (branchError as Error).message || "";
-            if (errorMsg.includes("not found")) {
-              console.log(`[WorkspaceHost] Branch already deleted: ${branchToDelete}`);
-            } else if (errorMsg.includes("not fully merged")) {
-              throw new Error(
-                `Branch '${branchToDelete}' has unmerged changes. Enable force delete to remove it.`
-              );
-            } else if (errorMsg.includes("checked out at") || errorMsg.includes("Cannot delete")) {
-              throw new Error(
-                `Cannot delete branch '${branchToDelete}': ${errorMsg.split("\n")[0]}`
-              );
-            } else {
-              throw new Error(`Failed to delete branch '${branchToDelete}': ${errorMsg}`);
-            }
-          }
+          this.listService.invalidateCache(cacheKey);
         }
       }
 
-      this.stopMonitor(monitor);
+      // Clean up the monitor immediately after worktree removal succeeds,
+      // before attempting branch deletion — so the monitor doesn't linger
+      // if branch deletion fails.
+      monitor.stop();
       this.monitors.delete(worktreeId);
 
-      if (this.projectScopeId) {
+      if (this.projectScopeId && monitor.projectScopeId === this.projectScopeId) {
         this.sendEvent({
           type: "worktree-removed",
           worktreeId,
           projectScopeId: this.projectScopeId,
         });
       }
+
+      if (branchToDelete && this.git) {
+        try {
+          await this.git.raw(["branch", "-d", branchToDelete]);
+          console.log(`[WorkspaceHost] Deleted branch: ${branchToDelete} (safe)`);
+        } catch (branchError) {
+          const errorMsg = (branchError as Error).message || "";
+          if (errorMsg.includes("not found")) {
+            console.log(`[WorkspaceHost] Branch already deleted: ${branchToDelete}`);
+          } else if (errorMsg.includes("not fully merged")) {
+            throw new Error(
+              `Branch '${branchToDelete}' has unmerged changes. Enable force delete to remove it.`
+            );
+          } else if (errorMsg.includes("checked out at") || errorMsg.includes("Cannot delete")) {
+            throw new Error(`Cannot delete branch '${branchToDelete}': ${errorMsg.split("\n")[0]}`);
+          } else {
+            throw new Error(`Failed to delete branch '${branchToDelete}': ${errorMsg}`);
+          }
+        }
+      }
+
       this.sendEvent({ type: "delete-worktree-result", requestId, success: true });
     } catch (error) {
       this.sendEvent({
@@ -1531,6 +934,37 @@ export class WorkspaceService {
     }
   }
 
+  async getRecentBranches(requestId: string, rootPath: string): Promise<void> {
+    try {
+      const git = simpleGit(rootPath);
+      const rawReflog = await git.raw(["reflog", "--format=%gs"]);
+
+      if (!rawReflog?.trim()) {
+        this.sendEvent({ type: "get-recent-branches-result", requestId, branches: [] });
+        return;
+      }
+
+      const seen = new Set<string>();
+      const branches: string[] = [];
+      const checkoutRegex = /^checkout: moving from \S+ to (\S+)$/;
+
+      for (const line of rawReflog.split("\n")) {
+        const m = line.match(checkoutRegex);
+        if (!m) continue;
+        const name = m[1].trim();
+        if (/^[0-9a-f]{40}$/i.test(name)) continue;
+        if (!seen.has(name)) {
+          seen.add(name);
+          branches.push(name);
+        }
+      }
+
+      this.sendEvent({ type: "get-recent-branches-result", requestId, branches });
+    } catch {
+      this.sendEvent({ type: "get-recent-branches-result", requestId, branches: [] });
+    }
+  }
+
   async getFileDiff(
     requestId: string,
     cwd: string,
@@ -1538,7 +972,6 @@ export class WorkspaceService {
     status: string
   ): Promise<void> {
     try {
-      // Validate file path for all statuses (not just untracked/added)
       const { resolve, normalize, sep, isAbsolute } = await import("path");
 
       if (isAbsolute(filePath)) {
@@ -1557,7 +990,6 @@ export class WorkspaceService {
         const absolutePath = resolve(cwd, normalizedPath);
         const buffer = await readFile(absolutePath);
 
-        // Simple binary check
         let isBinary = false;
         const checkLength = Math.min(buffer.length, 8192);
         for (let i = 0; i < checkLength; i++) {
@@ -1616,26 +1048,11 @@ ${lines.map((l) => "+" + l).join("\n")}`;
 
     if (!enabled) {
       for (const monitor of this.monitors.values()) {
-        monitor.pollingEnabled = false;
-        if (monitor.pollingTimer) {
-          clearTimeout(monitor.pollingTimer);
-          monitor.pollingTimer = null;
-        }
+        monitor.pausePolling();
       }
     } else {
       for (const monitor of this.monitors.values()) {
-        monitor.pollingStrategy.reset();
-        monitor.pollingEnabled = true;
-
-        if (monitor.isRunning && !monitor.pollingStrategy.isCircuitBreakerTripped()) {
-          const jitter = Math.random() * 2000;
-          monitor.resumeTimer = setTimeout(() => {
-            monitor.resumeTimer = null;
-            if (monitor.isRunning && monitor.pollingEnabled) {
-              this.scheduleNextPoll(monitor);
-            }
-          }, jitter);
-        }
+        monitor.resumePolling();
       }
     }
   }
@@ -1679,156 +1096,29 @@ ${lines.map((l) => "+" + l).join("\n")}`;
       return Promise.resolve();
     }
 
-    // Skip if already initialized for this project (prevents reset on duplicate loadProject calls)
-    if (this.prServiceInitializedForPath === this.projectRootPath) {
-      return Promise.resolve();
-    }
-
-    this.cleanupPRService();
-
-    pullRequestService.initialize(this.projectRootPath);
-
-    this.prServiceInitializedForPath = this.projectRootPath;
-
-    // Register event handlers BEFORE seeding to avoid race conditions
-    this.prEventUnsubscribers.push(
-      events.on("sys:pr:detected", (data: any) => {
-        const monitor = this.monitors.get(data.worktreeId);
-        if (monitor) {
-          monitor.prNumber = data.prNumber;
-          monitor.prUrl = data.prUrl;
-          monitor.prState = data.prState;
-          monitor.prTitle = data.prTitle;
-          monitor.issueTitle = data.issueTitle;
-          // Only emit if initial git status has completed to avoid partial snapshots
-          if (monitor.hasInitialStatus) {
-            this.emitUpdate(monitor);
-          }
-        }
-
-        if (this.projectScopeId) {
-          this.sendEvent({
-            type: "pr-detected",
-            worktreeId: data.worktreeId,
-            prNumber: data.prNumber,
-            prUrl: data.prUrl,
-            prState: data.prState,
-            prTitle: data.prTitle,
-            issueNumber: data.issueNumber,
-            issueTitle: data.issueTitle,
-            projectScopeId: this.projectScopeId,
-          });
-        }
-      })
-    );
-
-    this.prEventUnsubscribers.push(
-      events.on("sys:issue:detected", (data: any) => {
-        const monitor = this.monitors.get(data.worktreeId);
-        if (monitor) {
-          monitor.issueTitle = data.issueTitle;
-          // Only emit if initial git status has completed to avoid partial snapshots
-          if (monitor.hasInitialStatus) {
-            this.emitUpdate(monitor);
-          }
-        }
-
-        if (this.projectScopeId) {
-          this.sendEvent({
-            type: "issue-detected",
-            worktreeId: data.worktreeId,
-            issueNumber: data.issueNumber,
-            issueTitle: data.issueTitle,
-            projectScopeId: this.projectScopeId,
-          });
-        }
-      })
-    );
-
-    this.prEventUnsubscribers.push(
-      events.on("sys:issue:not-found", (data) => {
-        const monitor = this.monitors.get(data.worktreeId);
-        if (monitor && monitor.issueNumber === data.issueNumber) {
-          monitor.issueNumber = undefined;
-          monitor.issueTitle = undefined;
-          if (monitor.hasInitialStatus) {
-            this.emitUpdate(monitor);
-          }
-        }
-
-        if (this.projectScopeId) {
-          this.sendEvent({
-            type: "issue-not-found",
-            worktreeId: data.worktreeId,
-            issueNumber: data.issueNumber,
-            projectScopeId: this.projectScopeId,
-          });
-        }
-      })
-    );
-
-    this.prEventUnsubscribers.push(
-      events.on("sys:pr:cleared", (data: any) => {
-        const monitor = this.monitors.get(data.worktreeId);
-        if (monitor) {
-          monitor.prNumber = undefined;
-          monitor.prUrl = undefined;
-          monitor.prState = undefined;
-          monitor.prTitle = undefined;
-          // Only emit if initial git status has completed to avoid partial snapshots
-          if (monitor.hasInitialStatus) {
-            this.emitUpdate(monitor);
-          }
-        }
-
-        if (this.projectScopeId) {
-          this.sendEvent({
-            type: "pr-cleared",
-            worktreeId: data.worktreeId,
-            projectScopeId: this.projectScopeId,
-          });
-        }
-      })
-    );
-
-    // Seed PR service with existing monitors as candidates
-    // This is necessary because worktree:update events fire before PR service starts
-    // Now safe to emit since handlers are registered above
-    for (const monitor of this.monitors.values()) {
-      if (monitor.branch && monitor.branch !== "main" && monitor.branch !== "master") {
-        events.emit("sys:worktree:update", {
-          worktreeId: monitor.worktreeId,
+    return this.prService.initialize(this.projectRootPath, () => {
+      const candidates: Array<{ worktreeId: string; branch?: string; issueNumber?: number }> = [];
+      for (const monitor of this.monitors.values()) {
+        candidates.push({
+          worktreeId: monitor.id,
           branch: monitor.branch,
           issueNumber: monitor.issueNumber,
-        } as any);
+        });
       }
-    }
-
-    return pullRequestService.start();
-  }
-
-  private cleanupPRService(): void {
-    pullRequestService.reset();
-    for (const unsubscribe of this.prEventUnsubscribers) {
-      unsubscribe();
-    }
-    this.prEventUnsubscribers = [];
-    this.prServiceInitializedForPath = null;
+      return candidates;
+    });
   }
 
   async onProjectSwitch(requestId: string): Promise<void> {
     this.projectScopeId = null;
 
-    this.cleanupPRService();
+    this.prService.cleanup();
 
     for (const monitor of this.monitors.values()) {
-      this.stopMonitor(monitor);
+      monitor.stop();
     }
     this.monitors.clear();
 
-    // Drop pending queued polls immediately. In-flight tasks will complete in the
-    // background but discard their results: stopMonitor() sets isRunning=false,
-    // and updateGitStatus() guards on that flag before emitting any state update.
     this.pollQueue.clear();
 
     this.activeWorktreeId = null;
@@ -1837,17 +1127,18 @@ ${lines.map((l) => "+" + l).join("\n")}`;
     this.projectRootPath = null;
 
     clearGitDirCache();
-    this.invalidateCachedWorktrees();
+    this.listService.invalidateCache();
+    this.listService.setGit(null, null);
 
     this.sendEvent({ type: "project-switch-result", requestId, success: true });
   }
 
   dispose(): void {
-    this.cleanupPRService();
+    this.prService.cleanup();
     for (const monitor of this.monitors.values()) {
-      this.stopMonitor(monitor);
+      monitor.stop();
     }
     this.monitors.clear();
-    this.invalidateCachedWorktrees();
+    this.listService.invalidateCache();
   }
 }

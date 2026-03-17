@@ -1,18 +1,36 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { TerminalRefreshTier } from "@shared/types/panel";
 
 const {
   appSetStateMock,
   applyRendererPolicyMock,
+  recordMruMock,
+  setFocusedMock,
   logErrorWithContextMock,
   focusStateGetterMock,
   subscribeMock,
 } = vi.hoisted(() => ({
   appSetStateMock: vi.fn().mockResolvedValue(undefined),
   applyRendererPolicyMock: vi.fn(),
+  recordMruMock: vi.fn(),
+  setFocusedMock: vi.fn(),
   logErrorWithContextMock: vi.fn(),
   focusStateGetterMock: vi.fn(() => ({ isFocusMode: false })),
   subscribeMock: vi.fn(() => vi.fn()),
 }));
+
+const terminalStoreState = {
+  terminals: [] as Array<{
+    id: string;
+    worktreeId?: string;
+    location?: "grid" | "dock" | "trash";
+  }>,
+  activeDockTerminalId: null as string | null,
+  focusedId: null as string | null,
+  mruList: [] as string[],
+  recordMru: recordMruMock,
+  setFocused: setFocusedMock,
+};
 
 vi.mock("@/clients", () => ({
   appClient: {
@@ -38,11 +56,7 @@ vi.mock("@/store/focusStore", () => ({
 
 vi.mock("@/store/terminalStore", () => ({
   useTerminalStore: {
-    getState: vi.fn(() => ({
-      terminals: [],
-      activeDockTerminalId: null,
-      focusedId: null,
-    })),
+    getState: vi.fn(() => terminalStoreState),
     subscribe: subscribeMock,
   },
 }));
@@ -58,6 +72,10 @@ describe("worktreeStore", () => {
     vi.clearAllMocks();
     cleanupWorktreeFocusTracking();
     useWorktreeSelectionStore.getState().reset();
+    terminalStoreState.terminals = [];
+    terminalStoreState.activeDockTerminalId = null;
+    terminalStoreState.focusedId = null;
+    terminalStoreState.mruList = [];
     focusStateGetterMock.mockReturnValue({ isFocusMode: false });
   });
 
@@ -195,5 +213,79 @@ describe("worktreeStore", () => {
     await Promise.resolve();
 
     expect(subscribeMock).not.toHaveBeenCalled();
+  });
+
+  it("clears stale pending worktree selection without reapplying renderer policy", async () => {
+    useWorktreeSelectionStore.setState({
+      activeWorktreeId: "wt-b",
+      pendingWorktreeId: "wt-a",
+      _policyGeneration: 4,
+    });
+
+    useWorktreeSelectionStore.getState().applyPendingWorktreeSelection("wt-a");
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(useWorktreeSelectionStore.getState().pendingWorktreeId).toBeNull();
+    expect(applyRendererPolicyMock).not.toHaveBeenCalled();
+  });
+
+  it("applies pending worktree selection only for the still-active worktree", async () => {
+    terminalStoreState.terminals = [
+      { id: "term-a", worktreeId: "wt-a", location: "grid" },
+      { id: "term-b", worktreeId: "wt-b", location: "grid" },
+      { id: "dock-global", location: "dock" },
+    ];
+    useWorktreeSelectionStore.setState({
+      activeWorktreeId: "wt-a",
+      pendingWorktreeId: "wt-a",
+      _policyGeneration: 7,
+    });
+
+    useWorktreeSelectionStore.getState().applyPendingWorktreeSelection("wt-a");
+    await vi.waitFor(() => {
+      expect(applyRendererPolicyMock).toHaveBeenCalledTimes(3);
+    });
+
+    expect(useWorktreeSelectionStore.getState().pendingWorktreeId).toBeNull();
+    expect(applyRendererPolicyMock.mock.calls).toEqual([
+      ["term-a", TerminalRefreshTier.VISIBLE],
+      ["term-b", TerminalRefreshTier.BACKGROUND],
+      ["dock-global", TerminalRefreshTier.BACKGROUND],
+    ]);
+  });
+
+  it("ignores stale renderer policy work from an earlier selection", async () => {
+    terminalStoreState.terminals = [
+      { id: "term-a", worktreeId: "wt-a", location: "grid" },
+      { id: "term-b", worktreeId: "wt-b", location: "grid" },
+    ];
+
+    useWorktreeSelectionStore.getState().selectWorktree("wt-a");
+    useWorktreeSelectionStore.getState().selectWorktree("wt-b");
+    await vi.waitFor(() => {
+      expect(applyRendererPolicyMock).toHaveBeenCalledTimes(2);
+    });
+
+    expect(useWorktreeSelectionStore.getState().activeWorktreeId).toBe("wt-b");
+    expect(applyRendererPolicyMock.mock.calls).toEqual([
+      ["term-a", TerminalRefreshTier.BACKGROUND],
+      ["term-b", TerminalRefreshTier.VISIBLE],
+    ]);
+  });
+
+  it("does not restore stale terminal focus after a newer worktree selection wins", async () => {
+    terminalStoreState.terminals = [
+      { id: "term-a", worktreeId: "wt-a", location: "grid" },
+      { id: "term-b", worktreeId: "wt-b", location: "grid" },
+    ];
+    useWorktreeSelectionStore.getState().trackTerminalFocus("wt-a", "term-a");
+
+    useWorktreeSelectionStore.getState().selectWorktree("wt-a");
+    useWorktreeSelectionStore.getState().selectWorktree("wt-b");
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(setFocusedMock).not.toHaveBeenCalledWith("term-a");
   });
 });

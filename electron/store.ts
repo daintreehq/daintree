@@ -7,6 +7,8 @@ import type {
   AppAgentConfig,
 } from "../shared/types/index.js";
 import type { IssueAssociation } from "../shared/types/ipc/worktree.js";
+import type { AppError } from "../shared/types/ipc/errors.js";
+import type { BuiltInTerminalType } from "../shared/config/agentIds.js";
 import { DEFAULT_AGENT_SETTINGS, DEFAULT_APP_AGENT_CONFIG } from "../shared/types/index.js";
 import type { AppThemeConfig } from "../shared/types/appTheme.js";
 
@@ -48,7 +50,7 @@ export interface StoreSchema {
     terminals: Array<{
       id: string;
       kind?: "terminal" | "agent" | "browser" | "notes" | "dev-preview" | string;
-      type?: "terminal" | "claude" | "gemini" | "codex" | "opencode";
+      type?: BuiltInTerminalType;
       agentId?: string;
       title: string;
       cwd?: string;
@@ -65,6 +67,7 @@ export interface StoreSchema {
       scope?: "worktree" | "project";
       createdAt?: number;
       devCommand?: string;
+      browserConsoleOpen?: boolean;
       devPreviewConsoleOpen?: boolean;
     }>;
     /** @deprecated Recipes are now stored per-project. This field is kept for migration only. */
@@ -73,7 +76,7 @@ export interface StoreSchema {
       name: string;
       worktreeId?: string;
       terminals: Array<{
-        type: "terminal" | "claude" | "gemini" | "codex" | "opencode";
+        type: BuiltInTerminalType;
         title?: string;
         command?: string;
         env?: Record<string, string>;
@@ -84,6 +87,7 @@ export interface StoreSchema {
     }>;
     panelGridConfig?: PanelGridConfig;
     mruList?: string[];
+    actionMruList?: string[];
   };
   userConfig: {
     githubToken?: string;
@@ -98,6 +102,8 @@ export interface StoreSchema {
     failedEnabled: boolean;
     soundEnabled: boolean;
     soundFile: string;
+    waitingEscalationEnabled: boolean;
+    waitingEscalationDelayMs: number;
   };
   userAgentRegistry: UserAgentRegistry;
   agentUpdateSettings: AgentUpdateSettings;
@@ -107,10 +113,14 @@ export interface StoreSchema {
   projectEnv: Record<string, string>;
   appAgentConfig: AppAgentConfig;
   worktreeIssueMap: Record<string, IssueAssociation>;
-  appTheme: AppThemeConfig;
+  appTheme: Partial<AppThemeConfig>;
   telemetry: {
     enabled: boolean;
     hasSeenPrompt: boolean;
+  };
+  privacy: {
+    telemetryLevel: "off" | "errors" | "full";
+    logRetentionDays: 7 | 30 | 90 | 0;
   };
   voiceInput: {
     enabled: boolean;
@@ -128,8 +138,25 @@ export interface StoreSchema {
     port: number | null;
     apiKey: string;
   };
+  pendingErrors: AppError[];
   crashRecovery: {
     autoRestoreOnCrash: boolean;
+  };
+  onboarding: {
+    schemaVersion: number;
+    completed: boolean;
+    currentStep: string | null;
+    firstRunToastSeen: boolean;
+    newsletterPromptSeen: boolean;
+    migratedFromLocalStorage: boolean;
+    checklist: {
+      dismissed: boolean;
+      items: {
+        openedProject: boolean;
+        launchedAgent: boolean;
+        createdWorktree: boolean;
+      };
+    };
   };
 }
 
@@ -144,7 +171,7 @@ const storeOptions = {
       isMaximized: false,
     },
     terminalConfig: {
-      scrollbackLines: 5000,
+      scrollbackLines: 1000,
       performanceMode: false,
       hybridInputEnabled: true,
       hybridInputAutoFocus: true,
@@ -172,6 +199,8 @@ const storeOptions = {
       failedEnabled: false,
       soundEnabled: false,
       soundFile: "chime.wav",
+      waitingEscalationEnabled: true,
+      waitingEscalationDelayMs: 180_000,
     },
     userAgentRegistry: {},
     agentUpdateSettings: {
@@ -185,12 +214,14 @@ const storeOptions = {
     projectEnv: {},
     appAgentConfig: DEFAULT_APP_AGENT_CONFIG,
     worktreeIssueMap: {},
-    appTheme: {
-      colorSchemeId: "canopy",
-    },
+    appTheme: {},
     telemetry: {
       enabled: false,
       hasSeenPrompt: false,
+    },
+    privacy: {
+      telemetryLevel: "off" as const,
+      logRetentionDays: 30 as const,
     },
     voiceInput: {
       enabled: false,
@@ -208,8 +239,25 @@ const storeOptions = {
       port: 45454,
       apiKey: "",
     },
+    pendingErrors: [],
     crashRecovery: {
       autoRestoreOnCrash: false,
+    },
+    onboarding: {
+      schemaVersion: 1,
+      completed: false,
+      currentStep: null,
+      firstRunToastSeen: false,
+      newsletterPromptSeen: false,
+      migratedFromLocalStorage: false,
+      checklist: {
+        dismissed: false,
+        items: {
+          openedProject: false,
+          launchedAgent: false,
+          createdWorktree: false,
+        },
+      },
     },
   },
   cwd: process.env.CANOPY_USER_DATA,

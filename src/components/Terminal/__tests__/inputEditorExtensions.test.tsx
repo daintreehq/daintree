@@ -8,6 +8,7 @@ import {
   computeAutoSize,
   createAutoSize,
   createCustomKeymap,
+  createFileChipField,
   fileDropChipField,
   addFileDropChip,
   createFilePasteHandler,
@@ -15,6 +16,9 @@ import {
   setInterimRange,
   pendingAIField,
   setPendingAIRanges,
+  diffChipField,
+  terminalChipField,
+  selectionChipField,
 } from "../inputEditorExtensions";
 
 describe("computeAutoSize", () => {
@@ -424,19 +428,17 @@ describe("createAutoSize integration", () => {
     const scrollDOM = view.scrollDOM;
     // Track how many times overflowY is actually written to the DOM
     let overflowWriteCount = 0;
-    const originalStyleSetter = Object.getOwnPropertyDescriptor(
-      CSSStyleDeclaration.prototype,
-      "overflowY"
-    );
-    if (originalStyleSetter?.set) {
-      vi.spyOn(scrollDOM.style, "overflowY", "set").mockImplementation(function (
-        this: CSSStyleDeclaration,
-        val: string
-      ) {
+    let currentOverflowY = "";
+    Object.defineProperty(scrollDOM.style, "overflowY", {
+      get() {
+        return currentOverflowY;
+      },
+      set(val: string) {
         overflowWriteCount++;
-        originalStyleSetter.set!.call(this, val);
-      });
-    }
+        currentOverflowY = val;
+      },
+      configurable: true,
+    });
 
     // First dispatch — should write overflowY once ("hidden")
     view.dispatch({ changes: { from: 0, insert: "a" } });
@@ -520,6 +522,10 @@ describe("createCustomKeymap", () => {
             onArrowRight: () => false,
             onTab: () => false,
             onCtrlC: () => false,
+            onStash: () => false,
+            onPopStash: () => false,
+            onExpand: () => false,
+            onHistorySearch: () => false,
           }),
         ],
       }),
@@ -745,6 +751,14 @@ describe("createFilePasteHandler", () => {
   }
 
   it("calls onFilePaste for non-image file items with a path", () => {
+    const originalElectron = window.electron;
+    (window as unknown as Record<string, unknown>).electron = {
+      ...window.electron,
+      webUtils: {
+        getPathForFile: (file: File) => (file as unknown as { _testPath?: string })._testPath ?? "",
+      },
+    };
+
     const onFilePaste = vi.fn();
     const parent = document.createElement("div");
     const view = new EditorView({
@@ -756,7 +770,7 @@ describe("createFilePasteHandler", () => {
     });
 
     const file = new File(["content"], "test.pdf", { type: "application/pdf" });
-    Object.defineProperty(file, "path", { value: "/Users/test/test.pdf" });
+    Object.defineProperty(file, "_testPath", { value: "/Users/test/test.pdf" });
 
     const mockData = makeMockClipboardData([{ kind: "file", type: "application/pdf", file }]);
     const pasteEvent = makePasteEvent(mockData.clipboardData);
@@ -765,10 +779,11 @@ describe("createFilePasteHandler", () => {
 
     expect(onFilePaste).toHaveBeenCalledOnce();
     expect(onFilePaste).toHaveBeenCalledWith(view, [
-      { path: "/Users/test/test.pdf", name: "test.pdf" },
+      { path: "/Users/test/test.pdf", name: "test.pdf", size: 7 },
     ]);
 
     view.destroy();
+    (window as unknown as Record<string, unknown>).electron = originalElectron;
   });
 
   it("does not call onFilePaste for image file items", () => {
@@ -796,6 +811,14 @@ describe("createFilePasteHandler", () => {
   });
 
   it("does not call onFilePaste for files without a path", () => {
+    const originalElectron = window.electron;
+    (window as unknown as Record<string, unknown>).electron = {
+      ...window.electron,
+      webUtils: {
+        getPathForFile: () => "",
+      },
+    };
+
     const onFilePaste = vi.fn();
     const parent = document.createElement("div");
     const view = new EditorView({
@@ -807,7 +830,6 @@ describe("createFilePasteHandler", () => {
     });
 
     const file = new File(["content"], "test.txt", { type: "text/plain" });
-    // No .path property set (non-Electron file)
 
     const mockData = makeMockClipboardData([{ kind: "file", type: "text/plain", file }]);
     const pasteEvent = makePasteEvent(mockData.clipboardData);
@@ -817,6 +839,7 @@ describe("createFilePasteHandler", () => {
     expect(onFilePaste).not.toHaveBeenCalled();
 
     view.destroy();
+    (window as unknown as Record<string, unknown>).electron = originalElectron;
   });
 });
 
@@ -1070,5 +1093,173 @@ describe("voice decoration phase integration", () => {
     expect(view.state.field(interimMarkField).iter().value).toBeNull();
     expect(view.state.field(pendingAIField).iter().value).toBeNull();
     view.destroy();
+  });
+});
+
+describe("diffChipField", () => {
+  it("creates decorations for @diff tokens", () => {
+    const state = EditorState.create({
+      doc: "check @diff please",
+      extensions: [diffChipField],
+    });
+    const chipState = state.field(diffChipField);
+    expect(chipState.tokens).toHaveLength(1);
+    expect(chipState.tokens[0].diffType).toBe("unstaged");
+    expect(chipState.tokens[0].start).toBe(6);
+    expect(chipState.tokens[0].end).toBe(11);
+  });
+
+  it("creates decorations for @diff:staged tokens", () => {
+    const state = EditorState.create({
+      doc: "@diff:staged",
+      extensions: [diffChipField],
+    });
+    const chipState = state.field(diffChipField);
+    expect(chipState.tokens).toHaveLength(1);
+    expect(chipState.tokens[0].diffType).toBe("staged");
+  });
+
+  it("creates decorations for @diff:head tokens", () => {
+    const state = EditorState.create({
+      doc: "@diff:head",
+      extensions: [diffChipField],
+    });
+    const chipState = state.field(diffChipField);
+    expect(chipState.tokens).toHaveLength(1);
+    expect(chipState.tokens[0].diffType).toBe("head");
+  });
+
+  it("finds multiple diff tokens", () => {
+    const state = EditorState.create({
+      doc: "@diff and @diff:staged and @diff:head",
+      extensions: [diffChipField],
+    });
+    const chipState = state.field(diffChipField);
+    expect(chipState.tokens).toHaveLength(3);
+  });
+
+  it("returns empty for text without diff tokens", () => {
+    const state = EditorState.create({
+      doc: "just plain text",
+      extensions: [diffChipField],
+    });
+    const chipState = state.field(diffChipField);
+    expect(chipState.tokens).toHaveLength(0);
+  });
+
+  it("updates when document changes", () => {
+    const state = EditorState.create({
+      doc: "@diff",
+      extensions: [diffChipField],
+    });
+    expect(state.field(diffChipField).tokens).toHaveLength(1);
+
+    const tr = state.update({
+      changes: { from: 0, to: 5, insert: "hello" },
+    });
+    expect(tr.state.field(diffChipField).tokens).toHaveLength(0);
+  });
+});
+
+describe("fileChipField excludes diff tokens", () => {
+  it("does not treat @diff as a file token", () => {
+    const fileChipStateField = createFileChipField();
+    const state = EditorState.create({
+      doc: "@diff @src/file.ts",
+      extensions: [fileChipStateField],
+    });
+    const chipState = state.field(fileChipStateField);
+    expect(chipState.tokens).toHaveLength(1);
+    expect(chipState.tokens[0].path).toBe("src/file.ts");
+  });
+
+  it("does not treat @diff:staged or @diff:head as file tokens", () => {
+    const fileChipStateField = createFileChipField();
+    const state = EditorState.create({
+      doc: "@diff:staged @diff:head @src/App.tsx",
+      extensions: [fileChipStateField],
+    });
+    const chipState = state.field(fileChipStateField);
+    expect(chipState.tokens).toHaveLength(1);
+    expect(chipState.tokens[0].path).toBe("src/App.tsx");
+  });
+
+  it("does not treat @terminal as a file token", () => {
+    const fileChipStateField = createFileChipField();
+    const state = EditorState.create({
+      doc: "@terminal @src/file.ts",
+      extensions: [fileChipStateField],
+    });
+    const chipState = state.field(fileChipStateField);
+    expect(chipState.tokens).toHaveLength(1);
+    expect(chipState.tokens[0].path).toBe("src/file.ts");
+  });
+
+  it("does not treat @selection as a file token", () => {
+    const fileChipStateField = createFileChipField();
+    const state = EditorState.create({
+      doc: "@selection @src/file.ts",
+      extensions: [fileChipStateField],
+    });
+    const chipState = state.field(fileChipStateField);
+    expect(chipState.tokens).toHaveLength(1);
+    expect(chipState.tokens[0].path).toBe("src/file.ts");
+  });
+});
+
+describe("terminalChipField", () => {
+  it("creates decorations for @terminal tokens", () => {
+    const state = EditorState.create({
+      doc: "check @terminal please",
+      extensions: [terminalChipField],
+    });
+    const chipState = state.field(terminalChipField);
+    expect(chipState.tokens).toHaveLength(1);
+    expect(chipState.tokens[0].start).toBe(6);
+    expect(chipState.tokens[0].end).toBe(15);
+  });
+
+  it("returns empty for text without @terminal", () => {
+    const state = EditorState.create({
+      doc: "just plain text",
+      extensions: [terminalChipField],
+    });
+    const chipState = state.field(terminalChipField);
+    expect(chipState.tokens).toHaveLength(0);
+  });
+
+  it("updates when document changes", () => {
+    const state = EditorState.create({
+      doc: "@terminal",
+      extensions: [terminalChipField],
+    });
+    expect(state.field(terminalChipField).tokens).toHaveLength(1);
+
+    const tr = state.update({
+      changes: { from: 0, to: 9, insert: "hello" },
+    });
+    expect(tr.state.field(terminalChipField).tokens).toHaveLength(0);
+  });
+});
+
+describe("selectionChipField", () => {
+  it("creates decorations for @selection tokens", () => {
+    const state = EditorState.create({
+      doc: "check @selection please",
+      extensions: [selectionChipField],
+    });
+    const chipState = state.field(selectionChipField);
+    expect(chipState.tokens).toHaveLength(1);
+    expect(chipState.tokens[0].start).toBe(6);
+    expect(chipState.tokens[0].end).toBe(16);
+  });
+
+  it("returns empty for text without @selection", () => {
+    const state = EditorState.create({
+      doc: "just plain text",
+      extensions: [selectionChipField],
+    });
+    const chipState = state.field(selectionChipField);
+    expect(chipState.tokens).toHaveLength(0);
   });
 });

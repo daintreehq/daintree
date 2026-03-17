@@ -341,6 +341,18 @@ export const EVENT_META: Record<keyof CanopyEventMap, EventMetadata> = {
     requiresTimestamp: true,
     description: "Workflow execution failed",
   },
+  "workflow:approval-requested": {
+    category: "task",
+    requiresContext: false,
+    requiresTimestamp: true,
+    description: "Workflow approval requested from user",
+  },
+  "workflow:approval-cleared": {
+    category: "task",
+    requiresContext: false,
+    requiresTimestamp: true,
+    description: "Workflow approval cleared (resolved, cancelled, or timed out)",
+  },
 };
 
 export function getEventCategory(eventType: keyof CanopyEventMap): EventCategory {
@@ -392,7 +404,8 @@ export type AgentStateChangeTrigger =
   | "ai-classification"
   | "timeout"
   | "exit"
-  | "activity";
+  | "activity"
+  | "title";
 
 /**
  * Base event payload with optional trace correlation ID and event context.
@@ -748,6 +761,7 @@ export type CanopyEventMap = {
     worktreeId?: string;
     result: string;
     artifacts?: string[];
+    data?: Record<string, unknown>;
   }>;
 
   /**
@@ -792,6 +806,25 @@ export type CanopyEventMap = {
     workflowId: string;
     workflowVersion: string;
     error: string;
+    timestamp: number;
+  };
+
+  "workflow:approval-requested": {
+    runId: string;
+    nodeId: string;
+    workflowId: string;
+    workflowName: string;
+    prompt: string;
+    requestedAt: number;
+    timeoutMs?: number;
+    timeoutAt?: number;
+    timestamp: number;
+  };
+
+  "workflow:approval-cleared": {
+    runId: string;
+    nodeId: string;
+    reason: "resolved" | "cancelled" | "timeout";
     timestamp: number;
   };
 };
@@ -862,6 +895,8 @@ export const ALL_EVENT_TYPES: Array<keyof CanopyEventMap> = [
   "workflow:started",
   "workflow:completed",
   "workflow:failed",
+  "workflow:approval-requested",
+  "workflow:approval-cleared",
 ];
 
 export class TypedEventBus {

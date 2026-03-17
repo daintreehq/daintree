@@ -4,6 +4,7 @@ import {
   isRendererPerfCaptureEnabled,
   markRendererPerformance,
   startRendererMemoryMonitor,
+  withRendererSpan,
 } from "../performance";
 
 describe("markRendererPerformance", () => {
@@ -61,6 +62,35 @@ describe("markRendererPerformance", () => {
     expect(isRendererPerfCaptureEnabled()).toBe(true);
     process.env.CANOPY_PERF_CAPTURE = "0";
     expect(isRendererPerfCaptureEnabled()).toBe(false);
+  });
+
+  it("withRendererSpan records start and end marks on success", async () => {
+    window.__CANOPY_PERF_MARKS__ = [];
+
+    const result = await withRendererSpan("test-span", async () => "ok", { key: "val" });
+
+    expect(result).toBe("ok");
+    expect(window.__CANOPY_PERF_MARKS__).toHaveLength(2);
+    expect(window.__CANOPY_PERF_MARKS__![0].mark).toBe("test-span:start");
+    expect(window.__CANOPY_PERF_MARKS__![0].meta).toEqual({ key: "val" });
+    expect(window.__CANOPY_PERF_MARKS__![1].mark).toBe("test-span:end");
+    expect(window.__CANOPY_PERF_MARKS__![1].meta).toEqual(
+      expect.objectContaining({ key: "val", durationMs: expect.any(Number) })
+    );
+  });
+
+  it("withRendererSpan fires end mark even when task rejects", async () => {
+    window.__CANOPY_PERF_MARKS__ = [];
+
+    await expect(
+      withRendererSpan("fail-span", async () => {
+        throw new Error("boom");
+      })
+    ).rejects.toThrow("boom");
+
+    expect(window.__CANOPY_PERF_MARKS__).toHaveLength(2);
+    expect(window.__CANOPY_PERF_MARKS__![0].mark).toBe("fail-span:start");
+    expect(window.__CANOPY_PERF_MARKS__![1].mark).toBe("fail-span:end");
   });
 
   it("starts renderer memory monitor without throwing when memory API is unavailable", () => {

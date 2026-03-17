@@ -1,0 +1,516 @@
+import { useState, useRef, useEffect } from "react";
+import { Image, Upload, X, Rocket, Check, GitBranch, FolderOpen, Copy } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { EmojiPicker } from "@/components/ui/emoji-picker";
+import { getProjectGradient } from "@/lib/colorUtils";
+import { cn } from "@/lib/utils";
+import { validateProjectSvg, sanitizeSvg, svgToDataUrl } from "@/lib/svg";
+import { GITIGNORE_SNIPPET } from "./projectSettingsConstants";
+import type { Project } from "@shared/types/project";
+
+interface GeneralTabProps {
+  currentProject: Project | undefined;
+  name: string;
+  onNameChange: (value: string) => void;
+  emoji: string;
+  onEmojiChange: (value: string) => void;
+  devServerCommand: string;
+  onDevServerCommandChange: (value: string) => void;
+  devServerLoadTimeout: number | undefined;
+  onDevServerLoadTimeoutChange: (value: number | undefined) => void;
+  projectIconSvg: string | undefined;
+  onProjectIconSvgChange: (value: string | undefined) => void;
+  enableInRepoSettings: (projectId: string) => Promise<Project>;
+  disableInRepoSettings: (projectId: string) => Promise<Project>;
+  projectId: string;
+  isOpen: boolean;
+}
+
+export function GeneralTab({
+  currentProject,
+  name,
+  onNameChange,
+  emoji,
+  onEmojiChange,
+  devServerCommand,
+  onDevServerCommandChange,
+  devServerLoadTimeout,
+  onDevServerLoadTimeoutChange,
+  projectIconSvg,
+  onProjectIconSvgChange,
+  enableInRepoSettings,
+  disableInRepoSettings,
+  projectId,
+  isOpen,
+}: GeneralTabProps) {
+  const [isEmojiPickerOpen, setIsEmojiPickerOpen] = useState(false);
+  const [iconError, setIconError] = useState<string | null>(null);
+  const [isDraggingIcon, setIsDraggingIcon] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const [inRepoExpanded, setInRepoExpanded] = useState(false);
+  const [inRepoEnabling, setInRepoEnabling] = useState(false);
+  const [inRepoError, setInRepoError] = useState<string | null>(null);
+  const [gitignoreCopied, setGitignoreCopied] = useState(false);
+  const gitignoreCopyTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  useEffect(() => {
+    if (!isOpen) {
+      setIsEmojiPickerOpen(false);
+      setIconError(null);
+      setIsDraggingIcon(false);
+      setInRepoExpanded(false);
+      setInRepoEnabling(false);
+      setInRepoError(null);
+      setGitignoreCopied(false);
+      if (gitignoreCopyTimeoutRef.current) {
+        clearTimeout(gitignoreCopyTimeoutRef.current);
+        gitignoreCopyTimeoutRef.current = null;
+      }
+    }
+  }, [isOpen]);
+
+  const handleIconFile = async (file: File) => {
+    setIconError(null);
+    if (!file.type.includes("svg")) {
+      setIconError("Please select an SVG file");
+      return;
+    }
+    try {
+      const text = await file.text();
+      const result = validateProjectSvg(text);
+      if (!result.ok) {
+        setIconError(result.error);
+        return;
+      }
+      onProjectIconSvgChange(result.svg);
+    } catch {
+      setIconError("Failed to read file");
+    }
+  };
+
+  const handleIconDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDraggingIcon(false);
+    const file = e.dataTransfer.files[0];
+    if (file) {
+      void handleIconFile(file);
+    }
+  };
+
+  const handleIconDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDraggingIcon(true);
+  };
+
+  const handleIconDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDraggingIcon(false);
+  };
+
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      void handleIconFile(file);
+    }
+    if (fileInputRef.current) {
+      fileInputRef.current.value = "";
+    }
+  };
+
+  const handleRemoveIcon = () => {
+    onProjectIconSvgChange(undefined);
+    setIconError(null);
+  };
+
+  const handleCopyGitignore = async () => {
+    try {
+      await navigator.clipboard.writeText(GITIGNORE_SNIPPET);
+      setGitignoreCopied(true);
+      if (gitignoreCopyTimeoutRef.current) clearTimeout(gitignoreCopyTimeoutRef.current);
+      gitignoreCopyTimeoutRef.current = setTimeout(() => {
+        setGitignoreCopied(false);
+        gitignoreCopyTimeoutRef.current = null;
+      }, 2000);
+    } catch {
+      // clipboard access denied — fail silently
+    }
+  };
+
+  const handleEnableInRepoSettings = async () => {
+    if (!currentProject || inRepoEnabling) return;
+    setInRepoEnabling(true);
+    setInRepoError(null);
+    try {
+      const updated = await enableInRepoSettings(projectId);
+      if (!updated.inRepoSettings) {
+        setInRepoError("In-repo settings could not be enabled. Please try again.");
+      } else {
+        setInRepoExpanded(false);
+      }
+    } catch (err) {
+      setInRepoError(err instanceof Error ? err.message : "Failed to enable in-repo settings");
+    } finally {
+      setInRepoEnabling(false);
+    }
+  };
+
+  const handleDisableInRepoSettings = async () => {
+    if (!currentProject || inRepoEnabling) return;
+    setInRepoEnabling(true);
+    setInRepoError(null);
+    try {
+      await disableInRepoSettings(projectId);
+    } catch (err) {
+      setInRepoError(err instanceof Error ? err.message : "Failed to disable in-repo settings");
+    } finally {
+      setInRepoEnabling(false);
+    }
+  };
+
+  const handleInRepoToggle = () => {
+    if (currentProject?.inRepoSettings) {
+      void handleDisableInRepoSettings();
+    } else {
+      setInRepoExpanded((prev) => !prev);
+      setInRepoError(null);
+    }
+  };
+
+  return (
+    <>
+      {currentProject && (
+        <div className="mb-6 pb-6 border-b border-canopy-border">
+          <h3 className="text-sm font-semibold text-canopy-text/80 mb-2">Project Identity</h3>
+          <p className="text-xs text-canopy-text/60 mb-4">
+            Customize how your project appears in the sidebar and dashboard.
+          </p>
+
+          <div className="flex items-start gap-3 p-3 rounded-[var(--radius-md)] bg-canopy-bg border border-canopy-border">
+            <Popover open={isEmojiPickerOpen} onOpenChange={setIsEmojiPickerOpen}>
+              <PopoverTrigger asChild>
+                <button
+                  type="button"
+                  aria-label="Change project emoji"
+                  className="flex h-14 w-14 items-center justify-center rounded-[var(--radius-xl)] shadow-inner shrink-0 bg-tint/5 hover:bg-tint/10 transition-colors border border-transparent hover:border-canopy-border cursor-pointer group"
+                  style={{
+                    background: getProjectGradient(currentProject.color),
+                  }}
+                >
+                  <span className="text-3xl select-none filter drop-shadow-sm group-hover:scale-110 transition-transform">
+                    {emoji}
+                  </span>
+                </button>
+              </PopoverTrigger>
+              <PopoverContent className="w-auto p-0">
+                <EmojiPicker
+                  onEmojiSelect={({ emoji }) => {
+                    onEmojiChange(emoji);
+                    setIsEmojiPickerOpen(false);
+                  }}
+                />
+              </PopoverContent>
+            </Popover>
+
+            <div className="flex-1 min-w-0 flex flex-col justify-center h-14">
+              <label
+                htmlFor="project-name-input"
+                className="text-xs font-medium text-canopy-text/60 mb-1.5 ml-1"
+              >
+                Project Name
+              </label>
+              <input
+                id="project-name-input"
+                type="text"
+                value={name}
+                onChange={(e) => onNameChange(e.target.value)}
+                className="w-full bg-transparent border border-canopy-border rounded px-3 py-2 text-sm text-canopy-text focus:outline-none focus:border-canopy-accent focus:ring-1 focus:ring-canopy-accent/30 transition-all placeholder:text-text-muted"
+                placeholder="My Awesome Project"
+              />
+            </div>
+          </div>
+        </div>
+      )}
+
+      <div className="mb-6 pb-6 border-b border-canopy-border">
+        <h3 className="text-sm font-semibold text-canopy-text/80 mb-2 flex items-center gap-2">
+          <Rocket className="h-4 w-4" />
+          Dev Server Command
+        </h3>
+        <p className="text-xs text-canopy-text/60 mb-4">
+          Command to start the development server (e.g., npm run dev). When configured, a button
+          will appear in the toolbar to start the dev server.
+        </p>
+
+        <input
+          id="dev-server-command"
+          type="text"
+          value={devServerCommand}
+          onChange={(e) => onDevServerCommandChange(e.target.value)}
+          className="w-full bg-canopy-bg border border-canopy-border rounded px-3 py-2 text-sm text-canopy-text font-mono focus:outline-none focus:border-canopy-accent focus:ring-1 focus:ring-canopy-accent/30 transition-all placeholder:text-text-muted"
+          placeholder="npm run dev"
+          spellCheck={false}
+          autoCapitalize="off"
+          autoComplete="off"
+          aria-label="Dev server command"
+        />
+
+        <div className="mt-3">
+          <label
+            htmlFor="dev-server-load-timeout"
+            className="block text-xs text-canopy-text/60 mb-1"
+          >
+            Load timeout (seconds)
+          </label>
+          <input
+            id="dev-server-load-timeout"
+            type="number"
+            min={1}
+            max={120}
+            value={devServerLoadTimeout ?? ""}
+            onChange={(e) => {
+              const raw = e.target.value;
+              if (raw === "") {
+                onDevServerLoadTimeoutChange(undefined);
+              } else {
+                const num = Math.max(1, Math.min(120, Math.round(Number(raw))));
+                onDevServerLoadTimeoutChange(num);
+              }
+            }}
+            className="w-28 bg-canopy-bg border border-canopy-border rounded px-3 py-2 text-sm text-canopy-text font-mono focus:outline-none focus:border-canopy-accent focus:ring-1 focus:ring-canopy-accent/30 transition-all placeholder:text-text-muted"
+            placeholder="30"
+            aria-label="Dev server load timeout in seconds"
+          />
+        </div>
+      </div>
+
+      <div className="mb-6">
+        <h3 className="text-sm font-semibold text-canopy-text/80 mb-2 flex items-center gap-2">
+          <Image className="h-4 w-4" />
+          Project Icon (SVG)
+        </h3>
+        <p className="text-xs text-canopy-text/60 mb-4">
+          Shown in the grid empty state. SVG only, max 250KB.
+        </p>
+
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="image/svg+xml,.svg"
+          onChange={handleFileSelect}
+          className="hidden"
+          aria-label="Select SVG file"
+        />
+
+        {projectIconSvg ? (
+          <div className="flex items-center gap-4 p-3 rounded-[var(--radius-md)] bg-canopy-bg border border-canopy-border">
+            <div className="h-16 w-16 rounded-[var(--radius-md)] bg-canopy-sidebar flex items-center justify-center overflow-hidden">
+              {(() => {
+                const sanitized = sanitizeSvg(projectIconSvg);
+                if (!sanitized.ok) {
+                  return <Image className="h-8 w-8 text-canopy-text/40" aria-hidden="true" />;
+                }
+                return (
+                  <img
+                    src={svgToDataUrl(sanitized.svg)}
+                    alt="Project icon preview"
+                    className="max-h-14 max-w-14 object-contain"
+                  />
+                );
+              })()}
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className="text-sm text-canopy-text mb-1">Custom icon configured</p>
+              <p className="text-xs text-canopy-text/60">
+                {Math.round(new Blob([projectIconSvg]).size / 1024)}KB
+              </p>
+            </div>
+            <div className="flex gap-2">
+              <Button variant="outline" size="sm" onClick={() => fileInputRef.current?.click()}>
+                <Upload />
+                Replace
+              </Button>
+              <Button variant="ghost" size="sm" onClick={handleRemoveIcon}>
+                <X />
+              </Button>
+            </div>
+          </div>
+        ) : (
+          <div
+            className={cn(
+              "flex flex-col items-center justify-center p-8 rounded-[var(--radius-md)] border-2 border-dashed transition-colors cursor-pointer",
+              isDraggingIcon
+                ? "border-canopy-accent bg-canopy-accent/10"
+                : "border-canopy-border hover:border-canopy-border/80 hover:bg-canopy-bg/50"
+            )}
+            onDrop={handleIconDrop}
+            onDragOver={handleIconDragOver}
+            onDragLeave={handleIconDragLeave}
+            onClick={() => fileInputRef.current?.click()}
+          >
+            <Upload className="h-8 w-8 text-canopy-text/40 mb-3" />
+            <p className="text-sm text-canopy-text/60 text-center mb-1">
+              Drag and drop an SVG file here
+            </p>
+            <p className="text-xs text-canopy-text/40">or click to browse</p>
+          </div>
+        )}
+
+        {iconError && (
+          <div className="mt-2 text-xs text-status-error bg-status-error/10 border border-status-error/20 rounded p-2">
+            {iconError}
+          </div>
+        )}
+      </div>
+
+      {/* In-Repository Settings */}
+      <div className="mt-6">
+        <h3 className="text-sm font-semibold text-canopy-text/80 mb-2 flex items-center gap-2">
+          <GitBranch className="h-4 w-4" />
+          In-Repository Settings
+        </h3>
+        <p className="text-xs text-canopy-text/60 mb-4">
+          Store project name, emoji, and run commands in{" "}
+          <code className="font-mono text-canopy-text/80">.canopy/</code> so your team shares the
+          same configuration.
+        </p>
+
+        {currentProject?.canopyConfigPresent && (
+          <div className="flex items-center gap-2 mb-3 text-xs text-canopy-text/60">
+            <FolderOpen className="h-3.5 w-3.5 text-status-success shrink-0" />
+            <span>
+              Settings loaded from <code className="font-mono text-canopy-text/80">.canopy/</code>
+            </span>
+          </div>
+        )}
+
+        <button
+          type="button"
+          onClick={handleInRepoToggle}
+          disabled={inRepoEnabling}
+          role="switch"
+          aria-checked={currentProject?.inRepoSettings ?? false}
+          aria-label="Store settings in repository"
+          className={cn(
+            "w-full flex items-center justify-between p-4 rounded-[var(--radius-lg)] border transition-all focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-canopy-accent",
+            currentProject?.inRepoSettings
+              ? "bg-canopy-accent/10 border-canopy-accent text-canopy-accent"
+              : "border-canopy-border hover:bg-tint/5 text-canopy-text/70",
+            inRepoEnabling && "opacity-50 cursor-not-allowed"
+          )}
+        >
+          <div className="flex items-center gap-3">
+            <GitBranch
+              className={cn(
+                "w-5 h-5",
+                currentProject?.inRepoSettings ? "text-canopy-accent" : "text-canopy-text/50"
+              )}
+              aria-hidden="true"
+            />
+            <div className="text-left">
+              <div className="text-sm font-medium">Store settings in repository</div>
+              <div className="text-xs opacity-70">
+                Writes to <code className="font-mono">.canopy/project.json</code> and{" "}
+                <code className="font-mono">.canopy/settings.json</code>
+              </div>
+            </div>
+          </div>
+          <div
+            className={cn(
+              "w-11 h-6 rounded-full relative transition-colors",
+              currentProject?.inRepoSettings ? "bg-canopy-accent" : "bg-canopy-border"
+            )}
+            aria-hidden="true"
+          >
+            <div
+              className={cn(
+                "absolute top-1 w-4 h-4 rounded-full bg-white transition-transform",
+                currentProject?.inRepoSettings ? "translate-x-6" : "translate-x-1"
+              )}
+            />
+          </div>
+        </button>
+
+        {inRepoError && (
+          <div
+            className="mt-2 text-xs text-status-error bg-status-error/10 border border-status-error/20 rounded p-2"
+            role="alert"
+          >
+            {inRepoError}
+          </div>
+        )}
+
+        {!currentProject?.inRepoSettings && inRepoExpanded && (
+          <div className="mt-3 rounded-[var(--radius-lg)] border border-canopy-border bg-canopy-bg p-4 space-y-4">
+            <div>
+              <p className="text-xs font-medium text-canopy-text/80 mb-2">
+                The following files will be created:
+              </p>
+              <ul className="space-y-1 text-xs text-canopy-text/60">
+                <li className="flex items-center gap-2">
+                  <span className="font-mono text-canopy-text/80">.canopy/project.json</span>—
+                  project name, emoji, color
+                </li>
+                <li className="flex items-center gap-2">
+                  <span className="font-mono text-canopy-text/80">.canopy/settings.json</span>— run
+                  commands, dev server, context settings
+                </li>
+              </ul>
+              <p className="mt-2 text-xs text-canopy-text/50">
+                Machine-local settings (environment variables, secrets) are never written to these
+                files.
+              </p>
+            </div>
+
+            <div>
+              <div className="flex items-center justify-between mb-1.5">
+                <p className="text-xs font-medium text-canopy-text/80">
+                  Recommended <code className="font-mono">.gitignore</code> guidance
+                </p>
+                <button
+                  type="button"
+                  onClick={() => void handleCopyGitignore()}
+                  className="flex items-center gap-1 px-2 py-1 rounded text-xs text-canopy-text/60 hover:text-canopy-text hover:bg-tint/5 transition-colors"
+                  aria-label="Copy .gitignore snippet"
+                >
+                  {gitignoreCopied ? (
+                    <Check className="h-3.5 w-3.5 text-status-success" />
+                  ) : (
+                    <Copy className="h-3.5 w-3.5" />
+                  )}
+                  {gitignoreCopied ? "Copied!" : "Copy"}
+                </button>
+              </div>
+              <pre className="rounded-[var(--radius-md)] border border-canopy-border bg-canopy-sidebar p-3 text-xs font-mono text-canopy-text/70 overflow-x-auto whitespace-pre">
+                {GITIGNORE_SNIPPET}
+              </pre>
+            </div>
+
+            <div className="flex gap-2 pt-1">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  setInRepoExpanded(false);
+                  setInRepoError(null);
+                }}
+                className="flex-1"
+              >
+                Cancel
+              </Button>
+              <Button
+                size="sm"
+                onClick={() => void handleEnableInRepoSettings()}
+                disabled={inRepoEnabling}
+                className="flex-1"
+              >
+                {inRepoEnabling ? "Enabling..." : "Confirm and enable"}
+              </Button>
+            </div>
+          </div>
+        )}
+      </div>
+    </>
+  );
+}

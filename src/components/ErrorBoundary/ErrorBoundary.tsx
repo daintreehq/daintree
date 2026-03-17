@@ -21,6 +21,7 @@ interface ErrorBoundaryState {
   hasError: boolean;
   error: Error | null;
   errorInfo: React.ErrorInfo | null;
+  incidentId: string | null;
 }
 
 export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
@@ -30,6 +31,7 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
       hasError: false,
       error: null,
       errorInfo: null,
+      incidentId: null,
     };
   }
 
@@ -48,18 +50,27 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
       errorInfo,
     });
 
+    const correlationId = crypto.randomUUID();
+
+    let incidentId: string | null = null;
     try {
-      useErrorStore.getState().addError({
+      incidentId = useErrorStore.getState().addError({
         type: "unknown",
         message: error.message || "Component rendering error",
         details: `${error.stack || ""}\n\nComponent Stack:${componentStack}`,
         source: componentName || "ErrorBoundary",
         context,
         isTransient: false,
+        correlationId,
       });
     } catch (storeError) {
       console.error("Failed to add error to store:", storeError);
     }
+
+    this.setState({
+      errorInfo,
+      incidentId,
+    });
 
     if (onError) {
       try {
@@ -70,9 +81,11 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
     }
 
     logError("React error boundary caught render error", error, {
+      correlationId,
       componentName: componentName || "ErrorBoundary",
       context,
       componentStack,
+      incidentId,
     });
 
     console.error("ErrorBoundary caught error:", error, errorInfo);
@@ -99,16 +112,18 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
       hasError: false,
       error: null,
       errorInfo: null,
+      incidentId: null,
     });
   };
 
   handleReport = (): void => {
-    const { error, errorInfo } = this.state;
+    const { error, errorInfo, incidentId } = this.state;
     const { componentName, context } = this.props;
 
     const issueBody = encodeURIComponent(
       `## Error Report\n\n` +
         `**Component:** ${componentName || "Unknown"}\n` +
+        `**Incident ID:** ${incidentId ?? "unknown"}\n` +
         `**Message:** ${error?.message || "Unknown error"}\n\n` +
         `**Context:**\n` +
         `${context ? JSON.stringify(context, null, 2) : "None"}\n\n` +
@@ -133,7 +148,7 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
   };
 
   render(): ReactNode {
-    const { hasError, error, errorInfo } = this.state;
+    const { hasError, error, errorInfo, incidentId } = this.state;
     const { children, fallback: FallbackComponent, variant, componentName } = this.props;
 
     if (hasError && error) {
@@ -146,7 +161,8 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
           resetError={this.resetError}
           variant={variant}
           componentName={componentName}
-          onReport={variant === "fullscreen" ? this.handleReport : undefined}
+          incidentId={incidentId}
+          onReport={variant !== "component" ? this.handleReport : undefined}
         />
       );
     }

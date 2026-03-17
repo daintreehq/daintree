@@ -3,15 +3,14 @@ import { VoiceCorrectionService } from "../VoiceCorrectionService.js";
 
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY ?? "";
 
-// Note: VoiceCorrectionService has an internal 5 second timeout. If the API
+// Note: VoiceCorrectionService has an internal 7 second timeout. If the API
 // exceeds that, correct() falls back to raw input. Integration tests that assert
 // on corrected content can therefore fail due to API latency rather than a bug.
-// Tests using gpt-5-nano with reasoning_effort: "low" are typically fast (<2s).
 describe("VoiceCorrectionService integration", () => {
   let svc: VoiceCorrectionService;
 
   afterEach(() => {
-    svc?.resetHistory();
+    svc = undefined!;
   });
 
   it.skipIf(!OPENAI_API_KEY)(
@@ -19,24 +18,26 @@ describe("VoiceCorrectionService integration", () => {
     async () => {
       svc = new VoiceCorrectionService();
 
-      const result = await svc.correct("um so we need to like update the racked component", {
-        model: "gpt-4o-mini",
-        apiKey: OPENAI_API_KEY,
-        customDictionary: ["React", "Canopy"],
-      });
+      const result = await svc.correct(
+        { rawText: "um so we need to like update the racked component" },
+        {
+          model: "gpt-4o-mini",
+          apiKey: OPENAI_API_KEY,
+          customDictionary: ["React", "Canopy"],
+        }
+      );
 
-      // Should get something back that's not the raw input
       expect(result).toBeTruthy();
-      expect(result.length).toBeGreaterThan(0);
+      expect(result.confirmedText.length).toBeGreaterThan(0);
 
       // The correction should mention React (phonetic fix for "racked")
-      expect(result.toLowerCase()).toContain("react");
+      expect(result.confirmedText.toLowerCase()).toContain("react");
 
       // Filler words should be removed
-      expect(result.toLowerCase()).not.toMatch(/\bum\b/);
+      expect(result.confirmedText.toLowerCase()).not.toMatch(/\bum\b/);
 
       console.log("Raw:      ", "um so we need to like update the racked component");
-      console.log("Corrected:", result);
+      console.log("Corrected:", result.confirmedText);
     },
     15_000
   );
@@ -47,19 +48,21 @@ describe("VoiceCorrectionService integration", () => {
       svc = new VoiceCorrectionService();
 
       const input = "The server is running on port 3000.";
-      const result = await svc.correct(input, {
-        model: "gpt-4o-mini",
-        apiKey: OPENAI_API_KEY,
-        customDictionary: [],
-      });
+      const result = await svc.correct(
+        { rawText: input },
+        {
+          model: "gpt-4o-mini",
+          apiKey: OPENAI_API_KEY,
+          customDictionary: [],
+        }
+      );
 
       expect(result).toBeTruthy();
-      // Should be very similar to the input (maybe minor punctuation changes)
-      expect(result.toLowerCase()).toContain("server");
-      expect(result.toLowerCase()).toContain("port 3000");
+      expect(result.confirmedText.toLowerCase()).toContain("server");
+      expect(result.confirmedText.toLowerCase()).toContain("port 3000");
 
       console.log("Raw:      ", input);
-      console.log("Corrected:", result);
+      console.log("Corrected:", result.confirmedText);
     },
     15_000
   );
@@ -69,18 +72,20 @@ describe("VoiceCorrectionService integration", () => {
     async () => {
       svc = new VoiceCorrectionService();
 
-      const result = await svc.correct("we need to update the canopy work tree dashboard", {
-        model: "gpt-4o-mini",
-        apiKey: OPENAI_API_KEY,
-        customDictionary: ["Canopy", "Worktree"],
-      });
+      const result = await svc.correct(
+        { rawText: "we need to update the canopy work tree dashboard" },
+        {
+          model: "gpt-4o-mini",
+          apiKey: OPENAI_API_KEY,
+          customDictionary: ["Canopy", "Worktree"],
+        }
+      );
 
       expect(result).toBeTruthy();
-      // Should preserve the dictionary terms with correct casing
-      expect(result).toContain("Canopy");
+      expect(result.confirmedText).toContain("Canopy");
 
       console.log("Raw:      ", "we need to update the canopy work tree dashboard");
-      console.log("Corrected:", result);
+      console.log("Corrected:", result.confirmedText);
     },
     15_000
   );
@@ -91,19 +96,22 @@ describe("VoiceCorrectionService integration", () => {
       svc = new VoiceCorrectionService();
 
       const input = "um so we need to like update the racked component";
-      const result = await svc.correct(input, {
-        model: "gpt-5-mini",
-        apiKey: OPENAI_API_KEY,
-        customDictionary: ["React", "Canopy"],
-      });
+      const result = await svc.correct(
+        { rawText: input },
+        {
+          model: "gpt-5-mini",
+          apiKey: OPENAI_API_KEY,
+          customDictionary: ["React", "Canopy"],
+        }
+      );
 
       console.log("Model:    ", "gpt-5-mini");
       console.log("Raw:      ", input);
-      console.log("Corrected:", result);
+      console.log("Corrected:", result.confirmedText);
 
       expect(result).toBeTruthy();
-      expect(result).toContain("React");
-      expect(result.toLowerCase()).not.toMatch(/\bum\b/);
+      expect(result.confirmedText).toContain("React");
+      expect(result.confirmedText.toLowerCase()).not.toMatch(/\bum\b/);
     },
     15_000
   );
@@ -114,20 +122,25 @@ describe("VoiceCorrectionService integration", () => {
       svc = new VoiceCorrectionService();
 
       const input = "the type script compiler is throwing errors on the racked component";
-      const result = await svc.correct(input, {
-        model: "gpt-5-mini",
-        apiKey: OPENAI_API_KEY,
-        customDictionary: [],
-      });
+      const result = await svc.correct(
+        { rawText: input },
+        {
+          model: "gpt-5-mini",
+          apiKey: OPENAI_API_KEY,
+          customDictionary: [],
+        }
+      );
 
       console.log("Model:    ", "gpt-5-mini");
       console.log("Raw:      ", input);
-      console.log("Corrected:", result);
+      console.log("Corrected:", result.confirmedText);
 
-      expect(result).not.toMatch(/^(here is|here's|the corrected|corrected:|sure[,!])/i);
-      expect(result).not.toMatch(/^["'`]/);
-      expect(result).not.toContain("```");
-      expect(result.toLowerCase()).toContain("typescript");
+      expect(result.confirmedText).not.toMatch(
+        /^(here is|here's|the corrected|corrected:|sure[,!])/i
+      );
+      expect(result.confirmedText).not.toMatch(/^["'`]/);
+      expect(result.confirmedText).not.toContain("```");
+      expect(result.confirmedText.toLowerCase()).toContain("typescript");
     },
     15_000
   );
@@ -138,20 +151,23 @@ describe("VoiceCorrectionService integration", () => {
       svc = new VoiceCorrectionService();
 
       const input = "The TypeScript compiler is throwing errors on the React component.";
-      const result = await svc.correct(input, {
-        model: "gpt-5-mini",
-        apiKey: OPENAI_API_KEY,
-        customDictionary: [],
-      });
+      const result = await svc.correct(
+        { rawText: input },
+        {
+          model: "gpt-5-mini",
+          apiKey: OPENAI_API_KEY,
+          customDictionary: [],
+        }
+      );
 
       console.log("Model:    ", "gpt-5-mini");
       console.log("Raw:      ", input);
-      console.log("Corrected:", result);
+      console.log("Corrected:", result.confirmedText);
 
-      expect(result.toLowerCase()).toContain("typescript");
-      expect(result.toLowerCase()).toContain("react");
-      expect(result.toLowerCase()).toContain("compiler");
-      expect(result).not.toMatch(/^(here is|the corrected)/i);
+      expect(result.confirmedText.toLowerCase()).toContain("typescript");
+      expect(result.confirmedText.toLowerCase()).toContain("react");
+      expect(result.confirmedText.toLowerCase()).toContain("compiler");
+      expect(result.confirmedText).not.toMatch(/^(here is|the corrected)/i);
     },
     15_000
   );
@@ -162,19 +178,22 @@ describe("VoiceCorrectionService integration", () => {
       svc = new VoiceCorrectionService();
 
       const input = "um so we need to like update the racked component";
-      const result = await svc.correct(input, {
-        model: "gpt-5-nano",
-        apiKey: OPENAI_API_KEY,
-        customDictionary: ["React", "Canopy"],
-      });
+      const result = await svc.correct(
+        { rawText: input },
+        {
+          model: "gpt-5-nano",
+          apiKey: OPENAI_API_KEY,
+          customDictionary: ["React", "Canopy"],
+        }
+      );
 
       console.log("Model:    ", "gpt-5-nano");
       console.log("Raw:      ", input);
-      console.log("Corrected:", result);
+      console.log("Corrected:", result.confirmedText);
 
       expect(result).toBeTruthy();
-      expect(result).toContain("React");
-      expect(result.toLowerCase()).not.toMatch(/\bum\b/);
+      expect(result.confirmedText).toContain("React");
+      expect(result.confirmedText.toLowerCase()).not.toMatch(/\bum\b/);
     },
     15_000
   );
@@ -185,24 +204,25 @@ describe("VoiceCorrectionService integration", () => {
       svc = new VoiceCorrectionService();
 
       const input = "the type script compiler is throwing errors on the racked component";
-      const result = await svc.correct(input, {
-        model: "gpt-5-nano",
-        apiKey: OPENAI_API_KEY,
-        customDictionary: [],
-      });
+      const result = await svc.correct(
+        { rawText: input },
+        {
+          model: "gpt-5-nano",
+          apiKey: OPENAI_API_KEY,
+          customDictionary: [],
+        }
+      );
 
       console.log("Model:    ", "gpt-5-nano");
       console.log("Raw:      ", input);
-      console.log("Corrected:", result);
+      console.log("Corrected:", result.confirmedText);
 
-      // Must not start with preamble phrases
-      expect(result).not.toMatch(/^(here is|here's|the corrected|corrected:|sure[,!])/i);
-      // Must not be wrapped in quotes
-      expect(result).not.toMatch(/^["'`]/);
-      // Must not contain markdown code fences
-      expect(result).not.toContain("```");
-      // Content should be present
-      expect(result.toLowerCase()).toContain("typescript");
+      expect(result.confirmedText).not.toMatch(
+        /^(here is|here's|the corrected|corrected:|sure[,!])/i
+      );
+      expect(result.confirmedText).not.toMatch(/^["'`]/);
+      expect(result.confirmedText).not.toContain("```");
+      expect(result.confirmedText.toLowerCase()).toContain("typescript");
     },
     15_000
   );
@@ -213,22 +233,23 @@ describe("VoiceCorrectionService integration", () => {
       svc = new VoiceCorrectionService();
 
       const input = "The TypeScript compiler is throwing errors on the React component.";
-      const result = await svc.correct(input, {
-        model: "gpt-5-nano",
-        apiKey: OPENAI_API_KEY,
-        customDictionary: [],
-      });
+      const result = await svc.correct(
+        { rawText: input },
+        {
+          model: "gpt-5-nano",
+          apiKey: OPENAI_API_KEY,
+          customDictionary: [],
+        }
+      );
 
       console.log("Model:    ", "gpt-5-nano");
       console.log("Raw:      ", input);
-      console.log("Corrected:", result);
+      console.log("Corrected:", result.confirmedText);
 
-      // Already correct input should be returned verbatim or nearly verbatim
-      expect(result.toLowerCase()).toContain("typescript");
-      expect(result.toLowerCase()).toContain("react");
-      expect(result.toLowerCase()).toContain("compiler");
-      // Should not add new content or explanations
-      expect(result).not.toMatch(/^(here is|the corrected)/i);
+      expect(result.confirmedText.toLowerCase()).toContain("typescript");
+      expect(result.confirmedText.toLowerCase()).toContain("react");
+      expect(result.confirmedText.toLowerCase()).toContain("compiler");
+      expect(result.confirmedText).not.toMatch(/^(here is|the corrected)/i);
     },
     15_000
   );
@@ -238,26 +259,27 @@ describe("VoiceCorrectionService integration", () => {
     async () => {
       svc = new VoiceCorrectionService();
 
-      // Simulates a paragraph-level input as planned in #2672
       const input =
         "um so the type script compiler is throwing errors and we need to fix the racked component, also the tail wind styles are broken and the zoo stand store needs updating";
-      const result = await svc.correct(input, {
-        model: "gpt-5-nano",
-        apiKey: OPENAI_API_KEY,
-        customDictionary: [],
-      });
+      const result = await svc.correct(
+        { rawText: input },
+        {
+          model: "gpt-5-nano",
+          apiKey: OPENAI_API_KEY,
+          customDictionary: [],
+        }
+      );
 
       console.log("Model:    ", "gpt-5-nano");
       console.log("Raw:      ", input);
-      console.log("Corrected:", result);
+      console.log("Corrected:", result.confirmedText);
 
       expect(result).toBeTruthy();
-      expect(result).toContain("TypeScript");
-      expect(result).toContain("React");
-      expect(result).toContain("Tailwind");
-      expect(result).toContain("Zustand");
-      // No preamble
-      expect(result).not.toMatch(/^(here is|the corrected)/i);
+      expect(result.confirmedText).toContain("TypeScript");
+      expect(result.confirmedText).toContain("React");
+      expect(result.confirmedText).toContain("Tailwind");
+      expect(result.confirmedText).toContain("Zustand");
+      expect(result.confirmedText).not.toMatch(/^(here is|the corrected)/i);
     },
     20_000
   );

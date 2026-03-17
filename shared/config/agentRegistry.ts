@@ -1,5 +1,5 @@
 import type { AgentRoutingConfig } from "../types/agentSettings.js";
-import { AGENT_BRAND_COLORS } from "../theme/index.js";
+import type { PrerequisiteSpec } from "../types/ipc/system.js";
 
 export interface AgentHelpConfig {
   args: string[];
@@ -99,6 +99,15 @@ export interface AgentDetectionConfig {
    * Confidence level when completion pattern matches (default: 0.90).
    */
   completionConfidence?: number;
+
+  /**
+   * Patterns matched against terminal window title (OSC 0/2) for state detection.
+   * Substrings checked via includes() against the title string.
+   */
+  titleStatePatterns?: {
+    working: string[];
+    waiting: string[];
+  };
 }
 
 export interface AgentConfig {
@@ -164,6 +173,17 @@ export interface AgentConfig {
    */
   routing?: AgentRoutingConfig;
   /**
+   * Graceful shutdown configuration for capturing session IDs.
+   * When present, the PTY host will send the quit command before killing,
+   * then scan output for the session ID pattern.
+   */
+  shutdown?: {
+    /** Command to send to trigger graceful exit (e.g., "/quit") */
+    quitCommand: string;
+    /** Regex pattern string with a capture group for the session ID */
+    sessionIdPattern: string;
+  };
+  /**
    * Environment variables to set for this agent at spawn time.
    *
    * Precedence order (lowest to highest):
@@ -175,15 +195,36 @@ export interface AgentConfig {
    * Note: Agent-specific exclusions (e.g., CI/NONINTERACTIVE for Gemini)
    * are enforced and cannot be overridden by this field.
    */
+  /**
+   * Approximate context window size in tokens for this agent's model.
+   * Used by the attachment tray to warn when context usage is high.
+   */
+  contextWindow?: number;
   env?: Record<string, string>;
+  /**
+   * Resume configuration for restoring a previous agent session.
+   * When present, Canopy can resume a prior session using the stored session ID
+   * instead of starting fresh.
+   */
+  resume?: {
+    /** Returns CLI args for resuming a session (e.g. ["--resume", id] or ["resume", id]) */
+    args: (sessionId: string) => string[];
+  };
+  /**
+   * Prerequisites required for this agent to function.
+   * Merged with baseline prerequisites during health checks.
+   */
+  prerequisites?: PrerequisiteSpec[];
 }
 
 export const AGENT_REGISTRY: Record<string, AgentConfig> = {
+  // NOTE: When adding a new agent here, also add its ID to BUILT_IN_AGENT_IDS in agentIds.ts.
+  // The _registryCheck below will produce a compile error if they get out of sync.
   claude: {
     id: "claude",
     name: "Claude",
     command: "claude",
-    color: AGENT_BRAND_COLORS.claude,
+    color: "#CC785C",
     iconId: "claude",
     supportsContextInjection: true,
     shortcut: "Cmd/Ctrl+Alt+C",
@@ -226,6 +267,7 @@ export const AGENT_REGISTRY: Record<string, AgentConfig> = {
         "Run 'claude auth login' to authenticate after installing",
       ],
     },
+    contextWindow: 200_000,
     capabilities: {
       scrollback: 10000,
       supportsBracketedPaste: true,
@@ -276,15 +318,31 @@ export const AGENT_REGISTRY: Record<string, AgentConfig> = {
       maxConcurrent: 2,
       enabled: true,
     },
+    shutdown: {
+      quitCommand: "/quit",
+      sessionIdPattern: "claude --resume ([\\w-]+)",
+    },
+    resume: {
+      args: (sessionId: string) => ["--resume", sessionId],
+    },
     env: {
       CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
     },
+    prerequisites: [
+      {
+        tool: "claude",
+        label: "Claude CLI",
+        versionArgs: ["--version"],
+        severity: "fatal",
+        installUrl: "https://github.com/anthropics/claude-code",
+      },
+    ],
   },
   gemini: {
     id: "gemini",
     name: "Gemini",
     command: "gemini",
-    color: AGENT_BRAND_COLORS.gemini,
+    color: "#4285F4",
     iconId: "gemini",
     supportsContextInjection: true,
     shortcut: "Cmd/Ctrl+Alt+G",
@@ -326,6 +384,7 @@ export const AGENT_REGISTRY: Record<string, AgentConfig> = {
         "Run 'gemini auth login' after installing to authenticate",
       ],
     },
+    contextWindow: 1_000_000,
     capabilities: {
       scrollback: 10000,
       blockAltScreen: true,
@@ -352,6 +411,10 @@ export const AGENT_REGISTRY: Record<string, AgentConfig> = {
       fallbackConfidence: 0.7,
       promptConfidence: 0.85,
       debounceMs: 2000,
+      titleStatePatterns: {
+        working: ["\u2726"],
+        waiting: ["\u25C7", "\u270B"],
+      },
     },
     routing: {
       capabilities: [
@@ -376,15 +439,31 @@ export const AGENT_REGISTRY: Record<string, AgentConfig> = {
       maxConcurrent: 2,
       enabled: true,
     },
+    shutdown: {
+      quitCommand: "/quit",
+      sessionIdPattern: "gemini --resume ([\\w-]+)",
+    },
+    resume: {
+      args: (sessionId: string) => ["--resume", sessionId],
+    },
     env: {
       GEMINI_CLI_ALT_SCREEN: "false",
     },
+    prerequisites: [
+      {
+        tool: "gemini",
+        label: "Gemini CLI",
+        versionArgs: ["--version"],
+        severity: "fatal",
+        installUrl: "https://ai.google.dev/gemini-api/docs/cli",
+      },
+    ],
   },
   codex: {
     id: "codex",
     name: "Codex",
     command: "codex",
-    color: AGENT_BRAND_COLORS.codex,
+    color: "#10a37f",
     iconId: "codex",
     supportsContextInjection: true,
     shortcut: "Cmd/Ctrl+Alt+X",
@@ -427,6 +506,7 @@ export const AGENT_REGISTRY: Record<string, AgentConfig> = {
         "Run 'codex auth login' after installing to authenticate",
       ],
     },
+    contextWindow: 128_000,
     capabilities: {
       scrollback: 10000,
       blockAltScreen: true,
@@ -481,12 +561,28 @@ export const AGENT_REGISTRY: Record<string, AgentConfig> = {
       maxConcurrent: 2,
       enabled: true,
     },
+    shutdown: {
+      quitCommand: "/quit",
+      sessionIdPattern: "codex resume ([\\w-]+)",
+    },
+    resume: {
+      args: (sessionId: string) => ["resume", sessionId],
+    },
+    prerequisites: [
+      {
+        tool: "codex",
+        label: "Codex CLI",
+        versionArgs: ["--version"],
+        severity: "fatal",
+        installUrl: "https://github.com/openai/codex",
+      },
+    ],
   },
   opencode: {
     id: "opencode",
     name: "OpenCode",
     command: "opencode",
-    color: AGENT_BRAND_COLORS.opencode,
+    color: "#10b981",
     iconId: "opencode",
     supportsContextInjection: true,
     shortcut: "Cmd/Ctrl+Alt+O",
@@ -565,10 +661,13 @@ export const AGENT_REGISTRY: Record<string, AgentConfig> = {
     },
     capabilities: {
       scrollback: 10000,
-      blockAltScreen: true,
+      blockAltScreen: false,
       supportsBracketedPaste: true,
       softNewlineSequence: "\n",
       ignoredInputSequences: ["\n", "\x1b\r"],
+    },
+    env: {
+      COLORFGBG: "15;0",
     },
     detection: {
       primaryPatterns: [
@@ -609,8 +708,122 @@ export const AGENT_REGISTRY: Record<string, AgentConfig> = {
       maxConcurrent: 1,
       enabled: true,
     },
+    shutdown: {
+      quitCommand: "/quit",
+      sessionIdPattern: "opencode -s ([\\w-]+)",
+    },
+    resume: {
+      args: (sessionId: string) => ["-s", sessionId],
+    },
+    prerequisites: [
+      {
+        tool: "opencode",
+        label: "OpenCode CLI",
+        versionArgs: ["--version"],
+        severity: "fatal",
+        installUrl: "https://opencode.ai/docs/",
+      },
+    ],
+  },
+  cursor: {
+    id: "cursor",
+    name: "Cursor",
+    command: "cursor-agent",
+    color: "#3ee6eb",
+    iconId: "cursor",
+    supportsContextInjection: true,
+    shortcut: "Cmd/Ctrl+Alt+U",
+    tooltip: "Cursor's agentic CLI",
+    version: {
+      args: ["-v"],
+    },
+    update: {
+      other: {
+        curl: "curl https://cursor.com/install -fsS | bash",
+      },
+    },
+    install: {
+      docsUrl: "https://cursor.com/features/cursor-agent",
+      byOs: {
+        macos: [
+          {
+            label: "curl",
+            commands: ["curl https://cursor.com/install -fsS | bash"],
+          },
+        ],
+        linux: [
+          {
+            label: "curl",
+            commands: ["curl https://cursor.com/install -fsS | bash"],
+          },
+        ],
+      },
+      troubleshooting: [
+        "Restart Canopy after installation to update PATH",
+        "Verify installation with: cursor-agent -v",
+        "Run 'cursor-agent login' to authenticate after installing",
+      ],
+    },
+    capabilities: {
+      scrollback: 10000,
+      blockMouseReporting: true,
+      resizeStrategy: "settled",
+      supportsBracketedPaste: true,
+      softNewlineSequence: "\x1b\r",
+      ignoredInputSequences: ["\x1b\r"],
+    },
+    detection: {
+      primaryPatterns: [
+        "\u2B22\\s+(Thinking|Reading|Planning|Searching|Running|Executing|Grepping|Editing|Listing)",
+        "esc to stop",
+      ],
+      fallbackPatterns: ["\u2B22\\s+\\w"],
+      bootCompletePatterns: ["Cursor Agent", "Welcome to Cursor Agent"],
+      promptPatterns: ["^\u2192\\s*$", "^\u2192\\s"],
+      promptHintPatterns: ["\u2192\\s+Add a follow-up"],
+      completionPatterns: ["\u2B22\\s+(Thought|Read|Planned)\\s"],
+      completionConfidence: 0.9,
+      scanLineCount: 10,
+      primaryConfidence: 0.95,
+      fallbackConfidence: 0.7,
+      promptConfidence: 0.85,
+      debounceMs: 2000,
+    },
+    routing: {
+      capabilities: ["javascript", "typescript", "python", "react", "node", "general-purpose"],
+      domains: {
+        frontend: 0.8,
+        backend: 0.8,
+        testing: 0.75,
+        refactoring: 0.8,
+        debugging: 0.8,
+        architecture: 0.75,
+      },
+      maxConcurrent: 2,
+      enabled: true,
+    },
+    prerequisites: [
+      {
+        tool: "cursor-agent",
+        label: "Cursor Agent CLI",
+        versionArgs: ["-v"],
+        severity: "fatal",
+        installUrl: "https://cursor.com/install",
+      },
+    ],
   },
 };
+
+import { BUILT_IN_AGENT_IDS } from "./agentIds.js";
+
+// Runtime check: every BuiltInAgentId must have an entry in the registry.
+for (const id of BUILT_IN_AGENT_IDS) {
+  if (!(id in AGENT_REGISTRY)) {
+    throw new Error(
+      `AGENT_REGISTRY is missing entry for built-in agent "${id}". Update AGENT_REGISTRY or BUILT_IN_AGENT_IDS.`
+    );
+  }
+}
 
 export function getAgentIds(): string[] {
   return Object.keys(AGENT_REGISTRY);

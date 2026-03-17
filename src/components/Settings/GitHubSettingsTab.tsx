@@ -189,7 +189,7 @@ export function GitHubSettingsTab() {
               placeholder={
                 githubConfig?.hasToken ? "Enter new token to replace" : "ghp_... or github_pat_..."
               }
-              className="flex-1 bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-canopy-text placeholder:text-canopy-text/40 focus:outline-none focus:border-canopy-accent transition-colors"
+              className="flex-1 bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-canopy-text placeholder:text-text-muted focus:outline-none focus:border-canopy-accent transition-colors"
               disabled={isValidating || isTesting}
             />
             <Button

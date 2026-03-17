@@ -9,15 +9,21 @@ import { useWorktrees } from "@/hooks/useWorktrees";
 import type { MenuItemOption } from "@/types";
 import { actionService } from "@/services/ActionService";
 
-type AgentType = "claude" | "gemini" | "codex" | "opencode";
+import type { BuiltInAgentId } from "@shared/config/agentIds";
+
+type AgentType = BuiltInAgentId;
 
 interface AgentButtonProps {
   type: AgentType;
   availability?: boolean;
-  onOpenSettings: () => void;
+  "data-toolbar-item"?: string;
 }
 
-export function AgentButton({ type, availability, onOpenSettings }: AgentButtonProps) {
+export function AgentButton({
+  type,
+  availability,
+  "data-toolbar-item": dataToolbarItem,
+}: AgentButtonProps) {
   const { showMenu } = useNativeContextMenu();
   const { worktrees } = useWorktrees();
   const displayCombo = useKeybindingDisplay(`agent.${type}`);
@@ -46,7 +52,11 @@ export function AgentButton({ type, availability, onOpenSettings }: AgentButtonP
     if (isAvailable) {
       void actionService.dispatch("agent.launch", { agentId: type }, { source: "user" });
     } else {
-      onOpenSettings();
+      void actionService.dispatch(
+        "app.settings.openTab",
+        { tab: "agents", subtab: type },
+        { source: "user" }
+      );
     }
   };
 
@@ -107,7 +117,11 @@ export function AgentButton({ type, availability, onOpenSettings }: AgentButtonP
     }
 
     if (actionId === "settings:agents") {
-      onOpenSettings();
+      void actionService.dispatch(
+        "app.settings.openTab",
+        { tab: "agents", subtab: type },
+        { source: "context-menu" }
+      );
     }
   };
 
@@ -122,8 +136,9 @@ export function AgentButton({ type, availability, onOpenSettings }: AgentButtonP
               onClick={handleClick}
               onContextMenu={handleContextMenu}
               disabled={isLoading}
+              data-toolbar-item={dataToolbarItem}
               className={cn(
-                "text-canopy-text hover:bg-white/[0.06] transition-colors",
+                "text-canopy-text hover:bg-tint/[0.06] transition-colors",
                 isAvailable && "hover:text-canopy-accent focus-visible:text-canopy-accent",
                 !isAvailable && !isLoading && "opacity-60"
               )}

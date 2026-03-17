@@ -19,6 +19,7 @@ function calculateWorktreeCounts(terminals: TerminalInstance[], worktreeId: stri
     working: 0,
     running: 0,
     waiting: 0,
+    directing: 0,
     completed: 0,
     failed: 0,
   };
@@ -48,6 +49,7 @@ describe("useWorktreeTerminals logic", () => {
       working: 0,
       running: 0,
       waiting: 0,
+      directing: 0,
       completed: 0,
       failed: 0,
     });

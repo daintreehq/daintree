@@ -3,7 +3,7 @@
  * Channel names are inlined to avoid module format conflicts with ESM main process.
  */
 
-import { contextBridge, ipcRenderer } from "electron";
+import { contextBridge, ipcRenderer, webFrame, webUtils } from "electron";
 import { isTrustedRendererUrl } from "../shared/utils/trustedRenderer.js";
 
 import type {
@@ -19,6 +19,7 @@ import type {
   EventRecord,
   EventFilterOptions,
   RetryAction,
+  RetryProgressPayload,
   AppError,
   ElectronAPI,
   CreateWorktreeOptions,
@@ -35,7 +36,10 @@ import type {
   AttachIssuePayload,
   IssueAssociation,
   VoiceInputStatus,
+  ChecklistItemId,
 } from "../shared/types/index.js";
+import type { ColorVisionMode } from "../shared/types/appTheme.js";
+import type { ProjectMcpServerRunState } from "../shared/types/ipc/project.js";
 import type {
   AgentStateChangePayload,
   AgentDetectedPayload,
@@ -60,6 +64,9 @@ import type {
 import type { ShowContextMenuPayload } from "../shared/types/menu.js";
 
 export type { ElectronAPI };
+
+const isDemoMode =
+  !process.argv.some((a) => a.includes("app.asar")) && process.argv.includes("--demo-mode");
 
 // Store MessagePort for direct Renderer ↔ Pty Host communication
 // Note: We cannot return MessagePort via contextBridge (it's not cloneable/transferable via that API).
@@ -136,6 +143,7 @@ const CHANNELS = {
   WORKTREE_ACTIVATED: "worktree:activated",
   WORKTREE_CREATE: "worktree:create",
   WORKTREE_LIST_BRANCHES: "worktree:list-branches",
+  WORKTREE_GET_RECENT_BRANCHES: "worktree:get-recent-branches",
   WORKTREE_PR_REFRESH: "worktree:pr-refresh",
   WORKTREE_PR_STATUS: "worktree:pr-status",
   WORKTREE_GET_DEFAULT_PATH: "worktree:get-default-path",
@@ -182,6 +190,9 @@ const CHANNELS = {
   TERMINAL_BACKEND_CRASHED: "terminal:backend-crashed",
   TERMINAL_BACKEND_READY: "terminal:backend-ready",
   TERMINAL_SEND_KEY: "terminal:send-key",
+  TERMINAL_AGENT_TITLE_STATE: "terminal:agent-title-state",
+  TERMINAL_REDUCE_SCROLLBACK: "terminal:reduce-scrollback",
+  TERMINAL_RESTORE_SCROLLBACK: "terminal:restore-scrollback",
 
   // Files channels
   FILES_SEARCH: "files:search",
@@ -231,6 +242,7 @@ const CHANNELS = {
   SYSTEM_SET_AGENT_UPDATE_SETTINGS: "system:set-agent-update-settings",
   SYSTEM_START_AGENT_UPDATE: "system:start-agent-update",
   SYSTEM_HEALTH_CHECK: "system:health-check",
+  SYSTEM_DOWNLOAD_DIAGNOSTICS: "system:download-diagnostics",
   SYSTEM_WAKE: "system:wake",
 
   // PR detection channels
@@ -243,6 +255,7 @@ const CHANNELS = {
   GITHUB_GET_REPO_STATS: "github:get-repo-stats",
   GITHUB_OPEN_ISSUES: "github:open-issues",
   GITHUB_OPEN_PRS: "github:open-prs",
+  GITHUB_OPEN_COMMITS: "github:open-commits",
   GITHUB_OPEN_ISSUE: "github:open-issue",
   GITHUB_OPEN_PR: "github:open-pr",
   GITHUB_CHECK_CLI: "github:check-cli",
@@ -267,6 +280,16 @@ const CHANNELS = {
   NOTES_DELETE: "notes:delete",
   NOTES_SEARCH: "notes:search",
   NOTES_UPDATED: "notes:updated",
+
+  // Workflow channels
+  WORKFLOW_LIST: "workflow:list",
+  WORKFLOW_START: "workflow:start",
+  WORKFLOW_CANCEL: "workflow:cancel",
+  WORKFLOW_GET_RUN: "workflow:get-run",
+  WORKFLOW_LIST_RUNS: "workflow:list-runs",
+  WORKFLOW_STARTED: "workflow:started",
+  WORKFLOW_COMPLETED: "workflow:completed",
+  WORKFLOW_FAILED: "workflow:failed",
 
   // Dev Preview channels
   DEV_PREVIEW_ENSURE: "dev-preview:ensure",
@@ -300,7 +323,10 @@ const CHANNELS = {
   // Error channels
   ERROR_NOTIFY: "error:notify",
   ERROR_RETRY: "error:retry",
+  ERROR_RETRY_CANCEL: "error:retry-cancel",
+  ERROR_RETRY_PROGRESS: "error:retry-progress",
   ERROR_OPEN_LOGS: "error:open-logs",
+  ERROR_GET_PENDING: "error:get-pending",
 
   // Event Inspector channels
   EVENT_INSPECTOR_GET_EVENTS: "event-inspector:get-events",
@@ -388,6 +414,7 @@ const CHANNELS = {
   GIT_GET_STAGING_STATUS: "git:get-staging-status",
   GIT_COMPARE_WORKTREES: "git:compare-worktrees",
   GIT_GET_USERNAME: "git:get-username",
+  GIT_GET_WORKING_DIFF: "git:get-working-diff",
 
   // Sidecar channels
   SIDECAR_CREATE: "sidecar:create",
@@ -405,8 +432,18 @@ const CHANNELS = {
   SIDECAR_BLUR: "sidecar:blur",
   SIDECAR_NEW_TAB_MENU_ACTION: "sidecar:new-tab-menu-action",
 
-  // Webview throttling channels
+  // Webview channels
   WEBVIEW_SET_LIFECYCLE_STATE: "webview:set-lifecycle-state",
+  WEBVIEW_REGISTER_PANEL: "webview:register-panel",
+  WEBVIEW_DIALOG_REQUEST: "webview:dialog-request",
+  WEBVIEW_DIALOG_RESPONSE: "webview:dialog-response",
+  WEBVIEW_FIND_SHORTCUT: "webview:find-shortcut",
+  WEBVIEW_START_CONSOLE_CAPTURE: "webview:start-console-capture",
+  WEBVIEW_STOP_CONSOLE_CAPTURE: "webview:stop-console-capture",
+  WEBVIEW_CLEAR_CONSOLE_CAPTURE: "webview:clear-console-capture",
+  WEBVIEW_GET_CONSOLE_PROPERTIES: "webview:get-console-properties",
+  WEBVIEW_CONSOLE_MESSAGE: "webview:console-message",
+  WEBVIEW_CONSOLE_CONTEXT_CLEARED: "webview:console-context-cleared",
 
   // Hibernation channels
   HIBERNATION_GET_CONFIG: "hibernation:get-config",
@@ -451,6 +488,7 @@ const CHANNELS = {
   NOTIFICATION_SHOW_WATCH: "notification:show-watch",
   NOTIFICATION_WATCH_NAVIGATE: "notification:watch-navigate",
   NOTIFICATION_SYNC_WATCHED: "notification:sync-watched",
+  NOTIFICATION_WAITING_ACKNOWLEDGE: "notification:waiting-acknowledge",
 
   // Auto-update channels
   UPDATE_AVAILABLE: "update:available",
@@ -488,17 +526,29 @@ const CHANNELS = {
 
   // Clipboard channels
   CLIPBOARD_SAVE_IMAGE: "clipboard:save-image",
+  CLIPBOARD_THUMBNAIL_FROM_PATH: "clipboard:thumbnail-from-path",
 
   // App Theme channels
   APP_THEME_GET: "app-theme:get",
   APP_THEME_SET_COLOR_SCHEME: "app-theme:set-color-scheme",
   APP_THEME_SET_CUSTOM_SCHEMES: "app-theme:set-custom-schemes",
   APP_THEME_IMPORT: "app-theme:import",
+  APP_THEME_SET_COLOR_VISION_MODE: "app-theme:set-color-vision-mode",
 
   // Telemetry channels
   TELEMETRY_GET: "telemetry:get",
   TELEMETRY_SET_ENABLED: "telemetry:set-enabled",
   TELEMETRY_MARK_PROMPT_SHOWN: "telemetry:mark-prompt-shown",
+  TELEMETRY_TRACK: "telemetry:track",
+
+  // Privacy & Data channels
+  PRIVACY_GET_SETTINGS: "privacy:get-settings",
+  PRIVACY_SET_TELEMETRY_LEVEL: "privacy:set-telemetry-level",
+  PRIVACY_SET_LOG_RETENTION: "privacy:set-log-retention",
+  PRIVACY_OPEN_DATA_FOLDER: "privacy:open-data-folder",
+  PRIVACY_CLEAR_CACHE: "privacy:clear-cache",
+  PRIVACY_RESET_ALL_DATA: "privacy:reset-all-data",
+  PRIVACY_GET_DATA_FOLDER_PATH: "privacy:get-data-folder-path",
 
   // Voice Input channels
   VOICE_INPUT_GET_SETTINGS: "voice-input:get-settings",
@@ -508,6 +558,7 @@ const CHANNELS = {
   VOICE_INPUT_AUDIO_CHUNK: "voice-input:audio-chunk",
   VOICE_INPUT_TRANSCRIPTION_DELTA: "voice-input:transcription-delta",
   VOICE_INPUT_TRANSCRIPTION_COMPLETE: "voice-input:transcription-complete",
+  VOICE_INPUT_CORRECTION_QUEUED: "voice-input:correction-queued",
   VOICE_INPUT_CORRECTION_REPLACE: "voice-input:correction-replace",
   VOICE_INPUT_ERROR: "voice-input:error",
   VOICE_INPUT_STATUS: "voice-input:status",
@@ -520,6 +571,9 @@ const CHANNELS = {
   VOICE_INPUT_PARAGRAPH_BOUNDARY: "voice-input:paragraph-boundary",
 
   // MCP Server channels
+  PROJECT_MCP_GET_STATUSES: "project-mcp:get-statuses",
+  PROJECT_MCP_STATUS_CHANGED: "project-mcp:status-changed",
+
   MCP_SERVER_GET_STATUS: "mcp-server:get-status",
   MCP_SERVER_SET_ENABLED: "mcp-server:set-enabled",
   MCP_SERVER_SET_PORT: "mcp-server:set-port",
@@ -532,6 +586,41 @@ const CHANNELS = {
   CRASH_RECOVERY_RESOLVE: "crash-recovery:resolve",
   CRASH_RECOVERY_GET_CONFIG: "crash-recovery:get-config",
   CRASH_RECOVERY_SET_CONFIG: "crash-recovery:set-config",
+
+  // Onboarding channels
+  ONBOARDING_GET: "onboarding:get",
+  ONBOARDING_MIGRATE: "onboarding:migrate",
+  ONBOARDING_SET_STEP: "onboarding:set-step",
+  ONBOARDING_COMPLETE: "onboarding:complete",
+  ONBOARDING_MARK_TOAST_SEEN: "onboarding:mark-toast-seen",
+  ONBOARDING_MARK_NEWSLETTER_SEEN: "onboarding:mark-newsletter-seen",
+  ONBOARDING_CHECKLIST_GET: "onboarding:checklist-get",
+  ONBOARDING_CHECKLIST_DISMISS: "onboarding:checklist-dismiss",
+  ONBOARDING_CHECKLIST_MARK_ITEM: "onboarding:checklist-mark-item",
+
+  // Demo mode channels (dev-only)
+  DEMO_MOVE_TO: "demo:move-to",
+  DEMO_CLICK: "demo:click",
+  DEMO_TYPE: "demo:type",
+  DEMO_SET_ZOOM: "demo:set-zoom",
+  DEMO_SCREENSHOT: "demo:screenshot",
+  DEMO_WAIT_FOR_SELECTOR: "demo:wait-for-selector",
+  DEMO_PAUSE: "demo:pause",
+  DEMO_RESUME: "demo:resume",
+  DEMO_EXEC_MOVE_TO: "demo:exec-move-to",
+  DEMO_EXEC_CLICK: "demo:exec-click",
+  DEMO_EXEC_TYPE: "demo:exec-type",
+  DEMO_EXEC_SET_ZOOM: "demo:exec-set-zoom",
+  DEMO_EXEC_PAUSE: "demo:exec-pause",
+  DEMO_EXEC_RESUME: "demo:exec-resume",
+  DEMO_EXEC_WAIT_FOR_SELECTOR: "demo:exec-wait-for-selector",
+  DEMO_COMMAND_DONE: "demo:command-done",
+
+  // Workflow approval channels
+  WORKFLOW_RESOLVE_APPROVAL: "workflow:resolve-approval",
+  WORKFLOW_LIST_PENDING_APPROVALS: "workflow:list-pending-approvals",
+  WORKFLOW_APPROVAL_REQUESTED: "workflow:approval-requested",
+  WORKFLOW_APPROVAL_CLEARED: "workflow:approval-cleared",
 } as const;
 
 const api: ElectronAPI = {
@@ -551,6 +640,9 @@ const api: ElectronAPI = {
       _typedInvoke(CHANNELS.WORKTREE_CREATE, { rootPath, options }),
 
     listBranches: (rootPath: string) => _typedInvoke(CHANNELS.WORKTREE_LIST_BRANCHES, { rootPath }),
+
+    getRecentBranches: (rootPath: string) =>
+      _typedInvoke(CHANNELS.WORKTREE_GET_RECENT_BRANCHES, { rootPath }),
 
     getDefaultPath: (rootPath: string, branchName: string): Promise<string> =>
       _typedInvoke(CHANNELS.WORKTREE_GET_DEFAULT_PATH, { rootPath, branchName }),
@@ -723,6 +815,9 @@ const api: ElectronAPI = {
 
     sendKey: (id: string, key: string) => ipcRenderer.send(CHANNELS.TERMINAL_SEND_KEY, id, key),
 
+    reportTitleState: (id: string, state: "working" | "waiting") =>
+      ipcRenderer.send(CHANNELS.TERMINAL_AGENT_TITLE_STATE, { id, state }),
+
     onSpawnResult: (callback: (id: string, result: SpawnResultPayload) => void): (() => void) => {
       const handler = (_event: Electron.IpcRendererEvent, id: unknown, result: unknown) => {
         if (typeof id === "string" && typeof result === "object" && result !== null) {
@@ -732,6 +827,13 @@ const api: ElectronAPI = {
       ipcRenderer.on(CHANNELS.TERMINAL_SPAWN_RESULT, handler);
       return () => ipcRenderer.removeListener(CHANNELS.TERMINAL_SPAWN_RESULT, handler);
     },
+
+    onReduceScrollback: (
+      callback: (data: { terminalIds: string[]; targetLines: number }) => void
+    ) => _typedOn(CHANNELS.TERMINAL_REDUCE_SCROLLBACK, callback),
+
+    onRestoreScrollback: (callback: (data: { terminalIds: string[] }) => void) =>
+      _typedOn(CHANNELS.TERMINAL_RESTORE_SCROLLBACK, callback),
   },
 
   // Files API
@@ -838,7 +940,9 @@ const api: ElectronAPI = {
     startAgentUpdate: (payload: { agentId: string; method?: string }) =>
       _typedInvoke(CHANNELS.SYSTEM_START_AGENT_UPDATE, payload),
 
-    healthCheck: () => _typedInvoke(CHANNELS.SYSTEM_HEALTH_CHECK),
+    healthCheck: (agentIds?: string[]) => _typedInvoke(CHANNELS.SYSTEM_HEALTH_CHECK, agentIds),
+
+    downloadDiagnostics: () => _typedInvoke(CHANNELS.SYSTEM_DOWNLOAD_DIAGNOSTICS),
 
     onWake: (callback: (data: { sleepDuration: number; timestamp: number }) => void) => {
       const handler = (
@@ -914,7 +1018,14 @@ const api: ElectronAPI = {
     retry: (errorId: string, action: RetryAction, args?: Record<string, unknown>) =>
       _typedInvoke(CHANNELS.ERROR_RETRY, { errorId, action, args }),
 
+    cancelRetry: (errorId: string) => ipcRenderer.send(CHANNELS.ERROR_RETRY_CANCEL, errorId),
+
+    onRetryProgress: (callback: (payload: RetryProgressPayload) => void) =>
+      _typedOn(CHANNELS.ERROR_RETRY_PROGRESS, callback),
+
     openLogs: () => _typedInvoke(CHANNELS.ERROR_OPEN_LOGS),
+
+    getPending: () => _typedInvoke(CHANNELS.ERROR_GET_PENDING),
   },
 
   // Event Inspector API
@@ -1105,9 +1216,13 @@ const api: ElectronAPI = {
     getRepoStats: (cwd: string, bypassCache?: boolean) =>
       _typedInvoke(CHANNELS.GITHUB_GET_REPO_STATS, cwd, bypassCache),
 
-    openIssues: (cwd: string) => _typedInvoke(CHANNELS.GITHUB_OPEN_ISSUES, cwd),
+    openIssues: (cwd: string, query?: string, state?: string) =>
+      _typedInvoke(CHANNELS.GITHUB_OPEN_ISSUES, cwd, query, state),
 
-    openPRs: (cwd: string) => _typedInvoke(CHANNELS.GITHUB_OPEN_PRS, cwd),
+    openPRs: (cwd: string, query?: string, state?: string) =>
+      _typedInvoke(CHANNELS.GITHUB_OPEN_PRS, cwd, query, state),
+
+    openCommits: (cwd: string) => _typedInvoke(CHANNELS.GITHUB_OPEN_COMMITS, cwd),
 
     openIssue: (cwd: string, issueNumber: number) =>
       _typedInvoke(CHANNELS.GITHUB_OPEN_ISSUE, { cwd, issueNumber }),
@@ -1129,6 +1244,8 @@ const api: ElectronAPI = {
       search?: string;
       state?: "open" | "closed" | "all";
       cursor?: string;
+      bypassCache?: boolean;
+      sortOrder?: "created" | "updated";
     }) => ipcRenderer.invoke(CHANNELS.GITHUB_LIST_ISSUES, options),
 
     listPullRequests: (options: {
@@ -1136,6 +1253,8 @@ const api: ElectronAPI = {
       search?: string;
       state?: "open" | "closed" | "merged" | "all";
       cursor?: string;
+      bypassCache?: boolean;
+      sortOrder?: "created" | "updated";
     }) => ipcRenderer.invoke(CHANNELS.GITHUB_LIST_PRS, options),
 
     assignIssue: (cwd: string, issueNumber: number, username: string): Promise<void> =>
@@ -1185,6 +1304,7 @@ const api: ElectronAPI = {
         scope: "worktree" | "project";
         worktreeId?: string;
         createdAt: number;
+        tags?: string[];
       },
       expectedLastModified?: number
     ) => _typedInvoke(CHANNELS.NOTES_WRITE, notePath, content, metadata, expectedLastModified),
@@ -1202,6 +1322,97 @@ const api: ElectronAPI = {
         action: "created" | "updated" | "deleted";
       }) => void
     ) => _typedOn(CHANNELS.NOTES_UPDATED, callback),
+  },
+
+  // Workflow API
+  workflow: {
+    listWorkflows: () => _typedInvoke(CHANNELS.WORKFLOW_LIST),
+
+    startWorkflow: (workflowId: string) => _typedInvoke(CHANNELS.WORKFLOW_START, workflowId),
+
+    cancelWorkflow: (runId: string) => _typedInvoke(CHANNELS.WORKFLOW_CANCEL, runId),
+
+    getWorkflowRun: (runId: string) => _typedInvoke(CHANNELS.WORKFLOW_GET_RUN, runId),
+
+    listRuns: () => _typedInvoke(CHANNELS.WORKFLOW_LIST_RUNS),
+
+    onStarted: (
+      callback: (data: {
+        runId: string;
+        workflowId: string;
+        workflowVersion: string;
+        timestamp: number;
+      }) => void
+    ) => _typedOn(CHANNELS.WORKFLOW_STARTED, callback),
+
+    onCompleted: (
+      callback: (data: {
+        runId: string;
+        workflowId: string;
+        workflowVersion: string;
+        duration: number;
+        timestamp: number;
+      }) => void
+    ) => _typedOn(CHANNELS.WORKFLOW_COMPLETED, callback),
+
+    onFailed: (
+      callback: (data: {
+        runId: string;
+        workflowId: string;
+        workflowVersion: string;
+        error: string;
+        timestamp: number;
+      }) => void
+    ) => _typedOn(CHANNELS.WORKFLOW_FAILED, callback),
+
+    listPendingApprovals: () => _typedInvoke(CHANNELS.WORKFLOW_LIST_PENDING_APPROVALS),
+
+    resolveApproval: (payload: {
+      runId: string;
+      nodeId: string;
+      approved: boolean;
+      feedback?: string;
+    }) => _typedInvoke(CHANNELS.WORKFLOW_RESOLVE_APPROVAL, payload),
+
+    onApprovalRequested: (
+      callback: (payload: {
+        runId: string;
+        nodeId: string;
+        workflowId: string;
+        workflowName: string;
+        prompt: string;
+        requestedAt: number;
+        timeoutMs?: number;
+        timeoutAt?: number;
+      }) => void
+    ) => {
+      const handler = (
+        _event: Electron.IpcRendererEvent,
+        payload: {
+          runId: string;
+          nodeId: string;
+          workflowId: string;
+          workflowName: string;
+          prompt: string;
+          requestedAt: number;
+          timeoutMs?: number;
+          timeoutAt?: number;
+        }
+      ) => callback(payload);
+      ipcRenderer.on(CHANNELS.WORKFLOW_APPROVAL_REQUESTED, handler);
+      return () => ipcRenderer.removeListener(CHANNELS.WORKFLOW_APPROVAL_REQUESTED, handler);
+    },
+
+    onApprovalCleared: (
+      callback: (payload: { runId: string; nodeId: string; reason: string }) => void
+    ) => {
+      const handler = (
+        _event: Electron.IpcRendererEvent,
+        payload: { runId: string; nodeId: string; reason: string }
+      ) => callback(payload);
+      ipcRenderer.on(CHANNELS.WORKFLOW_APPROVAL_CLEARED, handler);
+      return () => ipcRenderer.removeListener(CHANNELS.WORKFLOW_APPROVAL_CLEARED, handler);
+    },
   },
 
   // Dev Preview API
@@ -1279,6 +1490,9 @@ const api: ElectronAPI = {
       }),
 
     getUsername: (cwd: string) => _typedInvoke(CHANNELS.GIT_GET_USERNAME, cwd),
+
+    getWorkingDiff: (cwd: string, type: "unstaged" | "staged" | "head") =>
+      _typedInvoke(CHANNELS.GIT_GET_WORKING_DIFF, { cwd, type }),
   },
 
   // Terminal Config API
@@ -1353,10 +1567,40 @@ const api: ElectronAPI = {
       _typedOn(CHANNELS.SIDECAR_NEW_TAB_MENU_ACTION, callback),
   },
 
-  // Webview Throttling API
+  // Webview API
   webview: {
     setLifecycleState: (webContentsId: number, frozen: boolean): Promise<void> =>
       ipcRenderer.invoke(CHANNELS.WEBVIEW_SET_LIFECYCLE_STATE, webContentsId, frozen),
+    registerPanel: (webContentsId: number, panelId: string): Promise<void> =>
+      ipcRenderer.invoke(CHANNELS.WEBVIEW_REGISTER_PANEL, { webContentsId, panelId }),
+    respondToDialog: (dialogId: string, confirmed: boolean, response?: string): Promise<void> =>
+      ipcRenderer.invoke(CHANNELS.WEBVIEW_DIALOG_RESPONSE, { dialogId, confirmed, response }),
+    onDialogRequest: (
+      callback: (payload: {
+        dialogId: string;
+        panelId: string;
+        type: "alert" | "confirm" | "prompt";
+        message: string;
+        defaultValue: string;
+      }) => void
+    ): (() => void) => _typedOn(CHANNELS.WEBVIEW_DIALOG_REQUEST, callback),
+    onFindShortcut: (
+      callback: (payload: { panelId: string; shortcut: "find" | "next" | "prev" | "close" }) => void
+    ): (() => void) => _typedOn(CHANNELS.WEBVIEW_FIND_SHORTCUT, callback),
+    startConsoleCapture: (webContentsId: number, paneId: string): Promise<void> =>
+      ipcRenderer.invoke(CHANNELS.WEBVIEW_START_CONSOLE_CAPTURE, webContentsId, paneId),
+    stopConsoleCapture: (webContentsId: number, paneId: string): Promise<void> =>
+      ipcRenderer.invoke(CHANNELS.WEBVIEW_STOP_CONSOLE_CAPTURE, webContentsId, paneId),
+    clearConsoleCapture: (webContentsId: number, paneId: string): Promise<void> =>
+      ipcRenderer.invoke(CHANNELS.WEBVIEW_CLEAR_CONSOLE_CAPTURE, webContentsId, paneId),
+    getConsoleProperties: (webContentsId: number, objectId: string) =>
+      ipcRenderer.invoke(CHANNELS.WEBVIEW_GET_CONSOLE_PROPERTIES, webContentsId, objectId),
+    onConsoleMessage: (
+      callback: (row: import("../shared/types/ipc/webviewConsole.js").SerializedConsoleRow) => void
+    ): (() => void) => _typedOn(CHANNELS.WEBVIEW_CONSOLE_MESSAGE, callback),
+    onConsoleContextCleared: (
+      callback: (payload: { paneId: string; navigationGeneration: number }) => void
+    ): (() => void) => _typedOn(CHANNELS.WEBVIEW_CONSOLE_CONTEXT_CLEARED, callback),
   },
 
   // Hibernation API
@@ -1438,6 +1682,8 @@ const api: ElectronAPI = {
       failedEnabled: boolean;
       soundEnabled: boolean;
       soundFile: string;
+      waitingEscalationEnabled: boolean;
+      waitingEscalationDelayMs: number;
     }> => _typedInvoke(CHANNELS.NOTIFICATION_SETTINGS_GET),
     setSettings: (
       settings: Partial<{
@@ -1446,6 +1692,8 @@ const api: ElectronAPI = {
         failedEnabled: boolean;
         soundEnabled: boolean;
         soundFile: string;
+        waitingEscalationEnabled: boolean;
+        waitingEscalationDelayMs: number;
       }>
     ) => _typedInvoke(CHANNELS.NOTIFICATION_SETTINGS_SET, settings),
     playSound: (soundFile: string) => _typedInvoke(CHANNELS.NOTIFICATION_PLAY_SOUND, soundFile),
@@ -1463,6 +1711,8 @@ const api: ElectronAPI = {
     ) => _typedOn(CHANNELS.NOTIFICATION_WATCH_NAVIGATE, callback),
     syncWatchedPanels: (panelIds: string[]) =>
       ipcRenderer.send(CHANNELS.NOTIFICATION_SYNC_WATCHED, panelIds),
+    acknowledgeWaiting: (terminalId: string) =>
+      ipcRenderer.send(CHANNELS.NOTIFICATION_WAITING_ACKNOWLEDGE, { terminalId }),
   },
 
   // Auto-Update API
@@ -1625,6 +1875,13 @@ const api: ElectronAPI = {
   // Clipboard API
   clipboard: {
     saveImage: () => _typedInvoke(CHANNELS.CLIPBOARD_SAVE_IMAGE),
+    thumbnailFromPath: (filePath: string) =>
+      _typedInvoke(CHANNELS.CLIPBOARD_THUMBNAIL_FROM_PATH, filePath),
+  },
+
+  // Web Utils API
+  webUtils: {
+    getPathForFile: (file: File) => webUtils.getPathForFile(file),
   },
 
   appTheme: {
@@ -1637,12 +1894,46 @@ const api: ElectronAPI = {
       _typedInvoke(CHANNELS.APP_THEME_SET_CUSTOM_SCHEMES, schemesJson),
 
     importTheme: () => _typedInvoke(CHANNELS.APP_THEME_IMPORT),
+
+    setColorVisionMode: (mode: ColorVisionMode) =>
+      _typedInvoke(CHANNELS.APP_THEME_SET_COLOR_VISION_MODE, mode),
   },
 
   telemetry: {
     get: () => _typedInvoke(CHANNELS.TELEMETRY_GET),
     setEnabled: (enabled: boolean) => _typedInvoke(CHANNELS.TELEMETRY_SET_ENABLED, enabled),
     markPromptShown: () => _typedInvoke(CHANNELS.TELEMETRY_MARK_PROMPT_SHOWN),
+    track: (event: string, properties: Record<string, unknown>) =>
+      _typedInvoke(CHANNELS.TELEMETRY_TRACK, event, properties),
+  },
+
+  privacy: {
+    getSettings: () => _typedInvoke(CHANNELS.PRIVACY_GET_SETTINGS),
+    setTelemetryLevel: (level: "off" | "errors" | "full") =>
+      _typedInvoke(CHANNELS.PRIVACY_SET_TELEMETRY_LEVEL, level),
+    setLogRetention: (days: 7 | 30 | 90 | 0) =>
+      _typedInvoke(CHANNELS.PRIVACY_SET_LOG_RETENTION, days),
+    openDataFolder: () => _typedInvoke(CHANNELS.PRIVACY_OPEN_DATA_FOLDER),
+    clearCache: () => _typedInvoke(CHANNELS.PRIVACY_CLEAR_CACHE),
+    resetAllData: () => _typedInvoke(CHANNELS.PRIVACY_RESET_ALL_DATA),
+    getDataFolderPath: () => _typedInvoke(CHANNELS.PRIVACY_GET_DATA_FOLDER_PATH),
+  },
+
+  onboarding: {
+    get: () => _typedInvoke(CHANNELS.ONBOARDING_GET),
+    migrate: (payload: {
+      agentSelectionDismissed: boolean;
+      agentSetupComplete: boolean;
+      firstRunToastSeen: boolean;
+    }) => _typedInvoke(CHANNELS.ONBOARDING_MIGRATE, payload),
+    setStep: (step: string | null) => _typedInvoke(CHANNELS.ONBOARDING_SET_STEP, step),
+    complete: () => _typedInvoke(CHANNELS.ONBOARDING_COMPLETE),
+    markToastSeen: () => _typedInvoke(CHANNELS.ONBOARDING_MARK_TOAST_SEEN),
+    markNewsletterSeen: () => _typedInvoke(CHANNELS.ONBOARDING_MARK_NEWSLETTER_SEEN),
+    getChecklist: () => _typedInvoke(CHANNELS.ONBOARDING_CHECKLIST_GET),
+    dismissChecklist: () => _typedInvoke(CHANNELS.ONBOARDING_CHECKLIST_DISMISS),
+    markChecklistItem: (item: ChecklistItemId) =>
+      _typedInvoke(CHANNELS.ONBOARDING_CHECKLIST_MARK_ITEM, item),
   },
 
   // Voice Input API
@@ -1672,6 +1963,8 @@ const api: ElectronAPI = {
     onTranscriptionComplete: (
       callback: (payload: { text: string; willCorrect: boolean }) => void
     ) => _typedOn(CHANNELS.VOICE_INPUT_TRANSCRIPTION_COMPLETE, callback),
+    onCorrectionQueued: (callback: (payload: { correctionId: string; rawText: string }) => void) =>
+      _typedOn(CHANNELS.VOICE_INPUT_CORRECTION_QUEUED, callback),
     onCorrectionReplace: (
       callback: (payload: { correctionId: string; correctedText: string }) => void
     ) => _typedOn(CHANNELS.VOICE_INPUT_CORRECTION_REPLACE, callback),
@@ -1696,6 +1989,13 @@ const api: ElectronAPI = {
     setApiKey: (apiKey: string) => _typedInvoke(CHANNELS.MCP_SERVER_SET_API_KEY, apiKey),
     generateApiKey: () => _typedInvoke(CHANNELS.MCP_SERVER_GENERATE_API_KEY),
     getConfigSnippet: () => _typedInvoke(CHANNELS.MCP_SERVER_GET_CONFIG_SNIPPET),
+  },
+
+  projectMcp: {
+    getStatuses: (projectId: string) => _typedInvoke(CHANNELS.PROJECT_MCP_GET_STATUSES, projectId),
+    onStatusChanged: (
+      callback: (payload: { projectId: string; servers: ProjectMcpServerRunState[] }) => void
+    ) => _typedOn(CHANNELS.PROJECT_MCP_STATUS_CHANGED, callback),
   },
 
   mcpBridge: {
@@ -1733,11 +2033,44 @@ const api: ElectronAPI = {
 
   crashRecovery: {
     getPending: () => _typedInvoke(CHANNELS.CRASH_RECOVERY_GET_PENDING),
-    resolve: (action: "restore" | "fresh") => _typedInvoke(CHANNELS.CRASH_RECOVERY_RESOLVE, action),
+    resolve: (action: { kind: "restore"; panelIds: string[] } | { kind: "fresh" }) =>
+      _typedInvoke(CHANNELS.CRASH_RECOVERY_RESOLVE, action),
     getConfig: () => _typedInvoke(CHANNELS.CRASH_RECOVERY_GET_CONFIG),
     setConfig: (config: { autoRestoreOnCrash?: boolean }) =>
       _typedInvoke(CHANNELS.CRASH_RECOVERY_SET_CONFIG, config),
   },
+  ...(isDemoMode
+    ? {
+        demo: {
+          moveTo: (x: number, y: number, durationMs: number) =>
+            _typedInvoke(CHANNELS.DEMO_MOVE_TO, { x, y, durationMs }),
+          click: () => _typedInvoke(CHANNELS.DEMO_CLICK),
+          type: (selector: string, text: string, cps?: number) =>
+            _typedInvoke(CHANNELS.DEMO_TYPE, { selector, text, cps }),
+          setZoom: (factor: number, durationMs?: number) =>
+            _typedInvoke(CHANNELS.DEMO_SET_ZOOM, { factor, durationMs }),
+          screenshot: () => _typedInvoke(CHANNELS.DEMO_SCREENSHOT),
+          waitForSelector: (selector: string, timeoutMs?: number) =>
+            _typedInvoke(CHANNELS.DEMO_WAIT_FOR_SELECTOR, { selector, timeoutMs }),
+          pause: () => _typedInvoke(CHANNELS.DEMO_PAUSE),
+          resume: () => _typedInvoke(CHANNELS.DEMO_RESUME),
+          onExecCommand: (
+            channel: string,
+            callback: (payload: Record<string, unknown>) => void
+          ): (() => void) => {
+            const handler = (_event: Electron.IpcRendererEvent, payload: Record<string, unknown>) =>
+              callback(payload);
+            ipcRenderer.on(channel, handler);
+            return () => ipcRenderer.removeListener(channel, handler);
+          },
+          sendCommandDone: (requestId: string, error?: string) => {
+            ipcRenderer.send(CHANNELS.DEMO_COMMAND_DONE, { requestId, error });
+          },
+          getZoomFactor: () => webFrame.getZoomFactor(),
+          setZoomFactor: (factor: number) => webFrame.setZoomFactor(factor),
+        },
+      }
+    : {}),
 };
 
 // Expose the API to the renderer process only for trusted origins in the main frame

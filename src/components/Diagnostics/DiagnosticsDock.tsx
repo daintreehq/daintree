@@ -58,10 +58,11 @@ const TabButton = memo(function TabButton({
 
 interface DiagnosticsDockProps {
   onRetry?: (id: string, action: RetryAction, args?: Record<string, unknown>) => void;
+  onCancelRetry?: (id: string) => void;
   className?: string;
 }
 
-export function DiagnosticsDock({ onRetry, className }: DiagnosticsDockProps) {
+export function DiagnosticsDock({ onRetry, onCancelRetry, className }: DiagnosticsDockProps) {
   const { isOpen, activeTab, height, openDock, closeDock, setActiveTab, setHeight } =
     useDiagnosticsStore();
   const errorCount = useErrorStore((state) => state.errors.filter((e) => !e.dismissed).length);
@@ -228,7 +229,7 @@ export function DiagnosticsDock({ onRetry, className }: DiagnosticsDockProps) {
               <TooltipTrigger asChild>
                 <button
                   onClick={closeDock}
-                  className="p-1.5 hover:bg-white/[0.06] rounded-[var(--radius-md)] transition-colors text-canopy-text/60 hover:text-canopy-text focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent"
+                  className="p-1.5 hover:bg-tint/[0.06] rounded-[var(--radius-md)] transition-colors text-canopy-text/60 hover:text-canopy-text focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent"
                   aria-label="Close diagnostics dock"
                 >
                   <X className="w-4 h-4" />
@@ -248,7 +249,7 @@ export function DiagnosticsDock({ onRetry, className }: DiagnosticsDockProps) {
             aria-labelledby="diagnostics-problems-tab"
             className="h-full"
           >
-            <ProblemsContent onRetry={onRetry} />
+            <ProblemsContent onRetry={onRetry} onCancelRetry={onCancelRetry} />
           </div>
         )}
         {activeTab === "logs" && (

@@ -5,12 +5,24 @@ import { terminalClient } from "@/clients";
 import { TerminalRefreshTier } from "@/types";
 import type { TerminalType } from "@/types";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
-import { useScrollbackStore, usePerformanceModeStore, useTerminalFontStore } from "@/store";
+import {
+  useScrollbackStore,
+  usePerformanceModeStore,
+  useTerminalFontStore,
+  useProjectSettingsStore,
+} from "@/store";
+import {
+  useTerminalColorSchemeStore,
+  selectWrapperBackground,
+  selectEffectiveTheme,
+} from "@/store/terminalColorSchemeStore";
+import { useAppThemeStore } from "@/store/appThemeStore";
 import { getScrollbackForType, PERFORMANCE_MODE_SCROLLBACK } from "@/utils/scrollbackConfig";
 import { getXtermOptions } from "@/config/xtermConfig";
 import { getSoftNewlineSequence } from "../../../shared/utils/terminalInputProtocol.js";
 import { keybindingService } from "@/services/KeybindingService";
 import { actionService } from "@/services/ActionService";
+import { useTerminalFileTransfer } from "./useTerminalFileTransfer";
 
 export interface XtermAdapterProps {
   terminalId: string;
@@ -59,18 +71,26 @@ function XtermAdapterComponent({
   }, []);
 
   const scrollbackLines = useScrollbackStore((state) => state.scrollbackLines);
+  const projectScrollback = useProjectSettingsStore(
+    (state) => state.settings?.terminalSettings?.scrollbackLines
+  );
   const performanceMode = usePerformanceModeStore((state) => state.performanceMode);
   const fontSize = useTerminalFontStore((state) => state.fontSize);
   const fontFamily = useTerminalFontStore((state) => state.fontFamily);
+  // Subscribe to app theme so wrapper background + effective theme re-compute on theme change
+  useAppThemeStore((s) => s.selectedSchemeId);
+  const wrapperBackground = useTerminalColorSchemeStore(selectWrapperBackground);
+  const effectiveTheme = useTerminalColorSchemeStore(selectEffectiveTheme);
 
-  // Calculate effective scrollback: performance mode overrides, otherwise use type-based policy
+  // Calculate effective scrollback: performance mode overrides, then project override, then app default
   const effectiveScrollback = useMemo(() => {
     if (performanceMode) {
       return PERFORMANCE_MODE_SCROLLBACK;
     }
-    // Use scrollbackLines directly (0 means unlimited, handled by getScrollbackForType)
-    return getScrollbackForType(terminalType, scrollbackLines);
-  }, [performanceMode, scrollbackLines, terminalType]);
+    const isAgent = terminalType !== "terminal";
+    const baseScrollback = !isAgent && projectScrollback ? projectScrollback : scrollbackLines;
+    return getScrollbackForType(terminalType, baseScrollback);
+  }, [performanceMode, scrollbackLines, projectScrollback, terminalType]);
 
   // Alt buffer state for TUI applications (OpenCode, vim, htop, etc.)
   // When in alt buffer, we remove padding and let the TUI fill the entire space
@@ -78,6 +98,9 @@ function XtermAdapterComponent({
   const [isAltBuffer, setIsAltBuffer] = useState(() =>
     terminalInstanceService.getAltBufferState(terminalId)
   );
+
+  // Attach image paste and file drag-and-drop handlers to the xterm container
+  useTerminalFileTransfer(containerRef, { terminalId, isInputLocked, onInput });
 
   const hasVisibleBufferContent = useCallback(() => {
     const managed = terminalInstanceService.get(terminalId);
@@ -96,8 +119,9 @@ function XtermAdapterComponent({
         fontFamily,
         scrollback: effectiveScrollback,
         performanceMode,
+        theme: effectiveTheme,
       }),
-    [effectiveScrollback, performanceMode, fontSize, fontFamily]
+    [effectiveScrollback, performanceMode, fontSize, fontFamily, effectiveTheme]
   );
 
   // Push-based resize handler using ResizeObserver dimensions directly
@@ -196,6 +220,23 @@ function XtermAdapterComponent({
         // Don't process modifier-only keypresses
         if (isModifierOnly) {
           return true;
+        }
+
+        // Let Shift+F10 and ContextMenu key bubble to DOM for panel context menu
+        if (
+          event.key === "ContextMenu" ||
+          (event.key === "F10" &&
+            event.shiftKey &&
+            !event.ctrlKey &&
+            !event.metaKey &&
+            !event.altKey)
+        ) {
+          return false;
+        }
+
+        // Intercept F6 for macro-region focus cycling before terminal processing
+        if (event.key === "F6") {
+          return false;
         }
 
         // TUI reliability: keep common readline-style Ctrl+key bindings in the terminal
@@ -422,13 +463,11 @@ function XtermAdapterComponent({
   return (
     <div
       className={cn(
-        // Base container styling
-        "w-full h-full text-white overflow-hidden bg-canopy-bg",
-        // In normal buffer mode: apply padding and rounded corners
-        // In alt buffer mode (TUI apps like OpenCode, vim, htop): remove padding for tight full-screen fit
+        "w-full h-full text-text-primary overflow-hidden",
         !isAltBuffer && "pl-3 pt-3 pb-3 pr-3 rounded-b-[var(--radius-lg)]",
         className
       )}
+      style={{ backgroundColor: wrapperBackground }}
     >
       <div ref={containerRef} className="w-full h-full min-h-0 min-w-0" />
     </div>

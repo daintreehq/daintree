@@ -19,6 +19,7 @@ import { cn } from "@/lib/utils";
 import { detectTerminalTypeFromCommand } from "@/utils/terminalType";
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
 import type { RunCommand } from "@/types";
+import { RunningTaskList } from "./RunningTaskList";
 
 interface QuickRunProps {
   projectId: string;
@@ -36,6 +37,8 @@ type SuggestionItem =
       type: "saved";
       icon?: string;
       description?: string;
+      preferredLocation?: "dock" | "grid";
+      preferredAutoRestart?: boolean;
     }
   | {
       label: string;
@@ -151,6 +154,8 @@ export function QuickRun({ projectId }: QuickRunProps) {
           : item.type === "script"
             ? "Pinned script"
             : "Pinned from history",
+      preferredLocation: runAsDocked ? "dock" : "grid",
+      preferredAutoRestart: autoRestart,
     };
 
     try {
@@ -192,6 +197,8 @@ export function QuickRun({ projectId }: QuickRunProps) {
           type: "saved" as const,
           icon: saved?.icon || r.icon,
           description: saved?.description || r.description,
+          preferredLocation: saved?.preferredLocation,
+          preferredAutoRestart: saved?.preferredAutoRestart,
         };
       });
 
@@ -204,6 +211,8 @@ export function QuickRun({ projectId }: QuickRunProps) {
         type: "saved" as const,
         icon: cmd.icon,
         description: cmd.description,
+        preferredLocation: cmd.preferredLocation,
+        preferredAutoRestart: cmd.preferredAutoRestart,
       }));
 
     const savedOptions = [...savedDetected, ...savedCustom];
@@ -263,13 +272,30 @@ export function QuickRun({ projectId }: QuickRunProps) {
     });
   };
 
-  const handleRun = async (cmd: string) => {
+  const handleRunItem = async (item: SuggestionItem) => {
+    const cmd = item.value;
     if (!cmd.trim()) return;
 
     const activeWorktree = activeWorktreeId ? worktreeMap.get(activeWorktreeId) : null;
     const cwd = activeWorktree?.path;
 
     if (!cwd) return;
+
+    // Apply stored preferences for saved items, fall back to global state
+    const useDock =
+      item.type === "saved" && item.preferredLocation !== undefined
+        ? item.preferredLocation === "dock"
+        : runAsDocked;
+    const useAutoRestart =
+      item.type === "saved" && item.preferredAutoRestart !== undefined
+        ? item.preferredAutoRestart
+        : autoRestart;
+
+    // Update visible toggles to reflect the preferences being used
+    if (item.type === "saved") {
+      if (item.preferredLocation !== undefined) setRunAsDocked(useDock);
+      if (item.preferredAutoRestart !== undefined) setAutoRestart(useAutoRestart);
+    }
 
     saveHistory(cmd);
     setShowSuggestions(false);
@@ -283,20 +309,25 @@ export function QuickRun({ projectId }: QuickRunProps) {
         title: cmd,
         cwd: cwd,
         command: cmd,
-        location: runAsDocked ? "dock" : "grid",
+        location: useDock ? "dock" : "grid",
         worktreeId: activeWorktreeId || undefined,
-        exitBehavior: autoRestart ? "restart" : undefined,
+        exitBehavior: useAutoRestart ? "restart" : undefined,
+        spawnedBy: "quickrun",
       });
     } catch (error) {
       console.error("Failed to spawn terminal:", error);
     }
   };
 
+  const handleRun = async (cmd: string) => {
+    await handleRunItem({ label: cmd, value: cmd, type: "history" });
+  };
+
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter") {
       e.preventDefault();
       if (focusedSuggestionIndex >= 0 && suggestions[focusedSuggestionIndex]) {
-        handleRun(suggestions[focusedSuggestionIndex].value);
+        handleRunItem(suggestions[focusedSuggestionIndex]);
       } else {
         handleRun(input);
       }
@@ -318,13 +349,13 @@ export function QuickRun({ projectId }: QuickRunProps) {
   const isWorktreeValid = activeWorktree != null && activeWorktree.path != null;
 
   return (
-    <div className="border-t border-divider bg-canopy-sidebar/95 shrink-0 flex flex-col min-h-0 text-xs">
+    <div className="flex min-h-0 shrink-0 flex-col border-t border-border-divider bg-surface-sidebar/95 text-xs">
       {/* Header */}
       <button
         onClick={() => setIsExpanded(!isExpanded)}
         className={cn(
-          "w-full flex items-center justify-between px-4 py-2",
-          "text-canopy-text/40 hover:text-canopy-text hover:bg-white/[0.06] transition-colors focus:outline-none font-sans"
+          "flex w-full items-center justify-between px-4 py-2 font-sans",
+          "text-text-muted transition-colors hover:bg-overlay-soft hover:text-text-secondary focus:outline-none"
         )}
         aria-expanded={isExpanded}
         aria-controls="quick-run-panel"
@@ -348,207 +379,218 @@ export function QuickRun({ projectId }: QuickRunProps) {
       {isExpanded && (
         <div id="quick-run-panel" className="px-4 pb-3 pt-1">
           {!isWorktreeValid ? (
-            <div className="text-xs text-gray-500 text-center py-2">
+            <div className="text-xs text-text-muted text-center py-2">
               Select a worktree above to enable Quick Run
             </div>
           ) : (
-            <div
-              className={cn(
-                "relative flex items-center bg-surface border border-canopy-border rounded-[var(--radius-md)]",
-                "focus-within:border-canopy-accent/50 focus-within:ring-1 focus-within:ring-canopy-accent/20 transition-all"
-              )}
-            >
-              {/* Prompt Symbol */}
-              <div className="pl-3 pr-2 select-none text-status-success font-mono font-bold">$</div>
-
-              {/* Input */}
-              <input
-                ref={inputRef}
-                type="text"
-                value={input}
-                onChange={(e) => {
-                  setInput(e.target.value);
-                  setShowSuggestions(true);
-                  setFocusedSuggestionIndex(-1);
-                }}
-                onFocus={() => setShowSuggestions(true)}
-                onBlur={() => setShowSuggestions(false)}
-                onKeyDown={handleKeyDown}
-                placeholder="Execute command..."
-                aria-label="Command input"
+            <>
+              {activeWorktreeId && <RunningTaskList worktreeId={activeWorktreeId} />}
+              <div
                 className={cn(
-                  "flex-1 bg-transparent py-2.5 text-xs text-canopy-text font-mono placeholder:text-white/35",
-                  "focus:outline-none min-w-0"
+                  "relative flex items-center rounded-[var(--radius-md)] border border-border-subtle bg-overlay-soft",
+                  "transition-all focus-within:border-canopy-accent/45 focus-within:ring-1 focus-within:ring-canopy-accent/16"
                 )}
-                autoComplete="off"
-              />
+              >
+                {/* Prompt Symbol */}
+                <div className="select-none pl-3 pr-2 font-mono font-bold text-accent-primary">
+                  $
+                </div>
 
-              {/* Right Side Controls */}
-              <div className="flex items-center pr-1.5 gap-1">
-                {/* Auto-Restart Toggle */}
-                <TooltipProvider>
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <button
-                        onClick={handleToggleAutoRestart}
-                        className={cn(
-                          "p-1.5 rounded-[var(--radius-sm)] transition-all",
-                          autoRestart
-                            ? "bg-canopy-accent/20 text-canopy-accent"
-                            : "text-white/40 hover:text-white/60 hover:bg-white/10"
-                        )}
-                        aria-label={autoRestart ? "Disable auto-restart" : "Enable auto-restart"}
-                        aria-pressed={autoRestart}
-                      >
-                        <RefreshCw className="h-3.5 w-3.5" />
-                      </button>
-                    </TooltipTrigger>
-                    <TooltipContent side="bottom">
-                      {autoRestart ? "Auto-restart: On" : "Auto-restart: Off"}
-                    </TooltipContent>
-                  </Tooltip>
-                </TooltipProvider>
+                {/* Input */}
+                <input
+                  ref={inputRef}
+                  type="text"
+                  value={input}
+                  onChange={(e) => {
+                    setInput(e.target.value);
+                    setShowSuggestions(true);
+                    setFocusedSuggestionIndex(-1);
+                  }}
+                  onFocus={() => setShowSuggestions(true)}
+                  onBlur={() => setShowSuggestions(false)}
+                  onKeyDown={handleKeyDown}
+                  placeholder="Execute command..."
+                  aria-label="Command input"
+                  className={cn(
+                    "flex-1 bg-transparent py-2.5 text-xs font-mono text-canopy-text placeholder:text-text-muted",
+                    "focus:outline-none min-w-0"
+                  )}
+                  autoComplete="off"
+                />
 
-                {/* Location Toggle */}
-                <TooltipProvider>
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <button
-                        onClick={() => setRunAsDocked(!runAsDocked)}
-                        className={cn(
-                          "p-1.5 rounded-[var(--radius-sm)] transition-all",
-                          runAsDocked
-                            ? "bg-canopy-accent/20 text-canopy-accent"
-                            : "text-white/40 hover:text-white/60 hover:bg-white/10"
-                        )}
-                        aria-label={
-                          runAsDocked
-                            ? "Send output to Dock (background task)"
-                            : "Send output to Grid (interactive terminal)"
-                        }
-                      >
-                        {runAsDocked ? (
-                          <PanelBottom className="h-3.5 w-3.5" />
-                        ) : (
-                          <LayoutGrid className="h-3.5 w-3.5" />
-                        )}
-                      </button>
-                    </TooltipTrigger>
-                    <TooltipContent side="bottom">
-                      {runAsDocked
-                        ? "Output: Dock (Background Task)"
-                        : "Output: Grid (Interactive Terminal)"}
-                    </TooltipContent>
-                  </Tooltip>
-                </TooltipProvider>
-
-                {/* Enter Button */}
-                <TooltipProvider>
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <span className="inline-flex">
+                {/* Right Side Controls */}
+                <div className="flex items-center pr-1.5 gap-1">
+                  {/* Auto-Restart Toggle */}
+                  <TooltipProvider>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
                         <button
-                          onClick={() => handleRun(input)}
-                          disabled={!input.trim()}
+                          onClick={handleToggleAutoRestart}
                           className={cn(
                             "p-1.5 rounded-[var(--radius-sm)] transition-all",
-                            input.trim()
-                              ? "text-white hover:bg-white/10"
-                              : "text-white/20 cursor-not-allowed"
+                            autoRestart
+                              ? "bg-canopy-accent/20 text-canopy-accent"
+                              : "text-text-muted hover:bg-overlay-soft hover:text-text-secondary"
                           )}
-                          aria-label="Run command"
+                          aria-label={autoRestart ? "Disable auto-restart" : "Enable auto-restart"}
+                          aria-pressed={autoRestart}
                         >
-                          <CornerDownLeft className="h-3.5 w-3.5" />
+                          <RefreshCw className="h-3.5 w-3.5" />
                         </button>
-                      </span>
-                    </TooltipTrigger>
-                    <TooltipContent side="bottom">Run Command (Enter)</TooltipContent>
-                  </Tooltip>
-                </TooltipProvider>
-              </div>
+                      </TooltipTrigger>
+                      <TooltipContent side="bottom">
+                        {autoRestart ? "Auto-restart: On" : "Auto-restart: Off"}
+                      </TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
 
-              {/* Autocomplete Menu */}
-              {showSuggestions && suggestions.length > 0 && (
-                <div
-                  role="listbox"
-                  onMouseDown={(e) => e.preventDefault()}
-                  className="absolute bottom-full left-0 right-0 mb-1 bg-surface border border-canopy-border rounded-[var(--radius-md)] shadow-2xl overflow-hidden z-50 max-h-64 flex flex-col"
-                >
-                  <div className="text-[11px] font-sans tracking-wider text-white/30 px-3 py-1 bg-black/20 border-b border-white/5 shrink-0">
-                    COMMANDS
-                  </div>
-                  <div className="overflow-y-auto flex-1">
-                    {suggestions.map((item, index) => (
-                      <button
-                        key={`${item.value}-${index}`}
-                        role="option"
-                        aria-selected={index === focusedSuggestionIndex}
-                        className={cn(
-                          "w-full flex items-center gap-3 px-3 py-2 text-left text-xs font-mono transition-colors group",
-                          index === focusedSuggestionIndex
-                            ? "bg-canopy-accent/20 text-canopy-text"
-                            : "text-canopy-text/70 hover:bg-white/5"
-                        )}
-                        onClick={() => {
-                          setInput(item.value);
-                          handleRun(item.value);
-                        }}
-                      >
-                        {item.type === "saved" ? (
-                          <Pin className="h-3 w-3 text-canopy-accent shrink-0 fill-canopy-accent" />
-                        ) : item.type === "history" ? (
-                          <Clock className="h-3 w-3 opacity-40 shrink-0" />
-                        ) : (
-                          <Terminal className="h-3 w-3 opacity-40 shrink-0" />
-                        )}
-                        <div className="flex-1 truncate flex items-center justify-between min-w-0">
-                          <div className="truncate">
-                            <span
-                              className={cn(
-                                "group-hover:text-canopy-text",
-                                index === focusedSuggestionIndex ? "text-canopy-accent" : "",
-                                item.type === "saved" ? "font-semibold text-canopy-text" : ""
-                              )}
-                            >
-                              {item.type === "saved" ? item.label : item.value}
-                            </span>
-                            {item.type === "script" && item.label !== item.value && (
-                              <span className="ml-2 text-[11px] opacity-40 font-sans">
-                                ({item.label})
-                              </span>
+                  {/* Location Toggle */}
+                  <TooltipProvider>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <button
+                          onClick={() => setRunAsDocked(!runAsDocked)}
+                          className={cn(
+                            "p-1.5 rounded-[var(--radius-sm)] transition-all",
+                            runAsDocked
+                              ? "bg-canopy-accent/20 text-canopy-accent"
+                              : "text-text-muted hover:bg-overlay-soft hover:text-text-secondary"
+                          )}
+                          aria-label={
+                            runAsDocked
+                              ? "Send output to Dock (background task)"
+                              : "Send output to Grid (interactive terminal)"
+                          }
+                        >
+                          {runAsDocked ? (
+                            <PanelBottom className="h-3.5 w-3.5" />
+                          ) : (
+                            <LayoutGrid className="h-3.5 w-3.5" />
+                          )}
+                        </button>
+                      </TooltipTrigger>
+                      <TooltipContent side="bottom">
+                        {runAsDocked
+                          ? "Output: Dock (Background Task)"
+                          : "Output: Grid (Interactive Terminal)"}
+                      </TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
+
+                  {/* Enter Button */}
+                  <TooltipProvider>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <span className="inline-flex">
+                          <button
+                            onClick={() => handleRun(input)}
+                            disabled={!input.trim()}
+                            className={cn(
+                              "p-1.5 rounded-[var(--radius-sm)] transition-all",
+                              input.trim()
+                                ? "text-accent-primary hover:bg-accent-soft"
+                                : "cursor-not-allowed text-text-muted/50"
                             )}
-                            {item.type === "saved" && item.label !== item.value && (
-                              <span className="ml-2 text-[11px] opacity-40 font-sans">
-                                {item.value}
+                            aria-label="Run command"
+                          >
+                            <CornerDownLeft className="h-3.5 w-3.5" />
+                          </button>
+                        </span>
+                      </TooltipTrigger>
+                      <TooltipContent side="bottom">Run Command (Enter)</TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
+                </div>
+
+                {/* Autocomplete Menu */}
+                {showSuggestions && suggestions.length > 0 && (
+                  <div
+                    role="listbox"
+                    onMouseDown={(e) => e.preventDefault()}
+                    className="absolute bottom-full left-0 right-0 z-50 mb-1 flex max-h-64 flex-col overflow-hidden rounded-[var(--radius-md)] border border-border-default bg-surface-panel-elevated shadow-2xl"
+                  >
+                    <div className="shrink-0 border-b border-border-subtle bg-overlay-soft px-3 py-1 text-[11px] font-sans tracking-wider text-text-muted">
+                      COMMANDS
+                    </div>
+                    <div className="overflow-y-auto flex-1">
+                      {suggestions.map((item, index) => (
+                        <button
+                          key={`${item.value}-${index}`}
+                          role="option"
+                          aria-selected={index === focusedSuggestionIndex}
+                          className={cn(
+                            "group flex w-full items-center gap-3 px-3 py-2 text-left text-xs font-mono transition-colors",
+                            index === focusedSuggestionIndex
+                              ? "bg-accent-soft text-canopy-text"
+                              : "text-text-secondary hover:bg-overlay-soft"
+                          )}
+                          onClick={() => {
+                            setInput(item.value);
+                            handleRunItem(item);
+                          }}
+                        >
+                          {item.type === "saved" ? (
+                            <Pin className="h-3 w-3 text-canopy-accent shrink-0 fill-canopy-accent" />
+                          ) : item.type === "history" ? (
+                            <Clock className="h-3 w-3 opacity-40 shrink-0" />
+                          ) : (
+                            <Terminal className="h-3 w-3 opacity-40 shrink-0" />
+                          )}
+                          <div className="flex-1 truncate flex items-start justify-between min-w-0">
+                            <div className="truncate">
+                              <span
+                                className={cn(
+                                  "group-hover:text-canopy-text",
+                                  index === focusedSuggestionIndex ? "text-canopy-accent" : "",
+                                  item.type === "saved" ? "font-semibold text-canopy-text" : ""
+                                )}
+                              >
+                                {item.type === "saved" ? item.label : item.value}
                               </span>
+                              {item.type === "script" && item.label !== item.value && (
+                                <span className="ml-2 text-[11px] font-sans text-text-muted">
+                                  ({item.label})
+                                </span>
+                              )}
+                              {item.type === "saved" && item.label !== item.value && (
+                                <span className="ml-2 text-[11px] font-sans text-text-muted">
+                                  {item.value}
+                                </span>
+                              )}
+                              {(item.type === "script" || item.type === "saved") &&
+                                item.description && (
+                                  <span className="mt-0.5 block truncate text-[11px] font-sans text-text-muted">
+                                    {item.description}
+                                  </span>
+                                )}
+                            </div>
+                            {item.type === "saved" ? (
+                              <button
+                                type="button"
+                                onClick={(e) => handleUnpin(e, item)}
+                                className="ml-2 shrink-0 rounded p-1 opacity-0 transition-opacity group-hover:opacity-100 hover:bg-overlay-soft"
+                                aria-label="Unpin this command"
+                              >
+                                <PinOff className="h-3 w-3 text-text-muted hover:text-status-error" />
+                              </button>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={(e) => handlePin(e, item)}
+                                className="ml-2 shrink-0 rounded p-1 opacity-0 transition-opacity group-hover:opacity-100 hover:bg-overlay-soft"
+                                aria-label="Pin this command"
+                              >
+                                <Pin className="h-3 w-3 text-text-muted hover:text-canopy-accent" />
+                              </button>
                             )}
                           </div>
-                          {item.type === "saved" ? (
-                            <button
-                              type="button"
-                              onClick={(e) => handleUnpin(e, item)}
-                              className="opacity-0 group-hover:opacity-100 p-1 hover:bg-white/10 rounded transition-opacity ml-2 shrink-0"
-                              aria-label="Unpin this command"
-                            >
-                              <PinOff className="h-3 w-3 text-canopy-text/40 hover:text-status-error" />
-                            </button>
-                          ) : (
-                            <button
-                              type="button"
-                              onClick={(e) => handlePin(e, item)}
-                              className="opacity-0 group-hover:opacity-100 p-1 hover:bg-white/10 rounded transition-opacity ml-2 shrink-0"
-                              aria-label="Pin this command"
-                            >
-                              <Pin className="h-3 w-3 text-canopy-text/40 hover:text-canopy-accent" />
-                            </button>
-                          )}
-                        </div>
-                      </button>
-                    ))}
+                        </button>
+                      ))}
+                    </div>
                   </div>
-                </div>
-              )}
-            </div>
+                )}
+              </div>
+            </>
           )}
         </div>
       )}

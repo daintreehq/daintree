@@ -59,51 +59,53 @@ function cspTransformPlugin(): Plugin {
   };
 }
 
-function getVendorChunk(id: string): string | undefined {
-  if (!id.includes("node_modules")) return undefined;
-
-  if (id.includes("/node_modules/@xterm/")) {
-    return "vendor-xterm";
-  }
-  if (
-    id.includes("/node_modules/@codemirror/") ||
-    id.includes("/node_modules/@uiw/") ||
-    id.includes("/node_modules/refractor/")
-  ) {
-    return "vendor-editor";
-  }
-  if (id.includes("/node_modules/framer-motion/")) {
-    return "vendor-motion";
-  }
-  if (id.includes("/node_modules/lucide-react/")) {
-    return "vendor-icons";
-  }
-  if (
-    id.includes("/node_modules/@octokit/") ||
-    id.includes("/node_modules/@ai-sdk/") ||
-    id.includes("/node_modules/ai/")
-  ) {
-    return "vendor-ai-github";
-  }
-  if (id.includes("/node_modules/zod/") || id.includes("/node_modules/zod-to-json-schema/")) {
-    return "vendor-zod";
-  }
-
-  return "vendor";
-}
-
-export default defineConfig({
+export default defineConfig(({ mode }) => ({
   envPrefix: ["VITE_", "CANOPY_"],
   plugins: [react(), tailwindcss(), cspTransformPlugin()],
   base: "./",
   build: {
+    target: "chrome144",
+    modulePreload: { polyfill: false },
     outDir: "dist",
     emptyOutDir: true,
     sourcemap: false,
-    rollupOptions: {
+    rolldownOptions: {
+      ...(mode === "production" && {
+        treeshake: {
+          manualPureFunctions: ["console.log", "console.info", "console.warn", "console.debug"],
+        },
+      }),
       output: {
-        manualChunks(id) {
-          return getVendorChunk(id);
+        codeSplitting: {
+          groups: [
+            { name: "vendor-xterm", test: /node_modules[\\/]@xterm[\\/]/, priority: 70 },
+            {
+              name: "vendor-editor",
+              test: /node_modules[\\/](@codemirror[\\/]|@uiw[\\/]|refractor[\\/])/,
+              priority: 60,
+            },
+            {
+              name: "vendor-motion",
+              test: /node_modules[\\/]framer-motion[\\/]/,
+              priority: 50,
+            },
+            {
+              name: "vendor-icons",
+              test: /node_modules[\\/]lucide-react[\\/]/,
+              priority: 40,
+            },
+            {
+              name: "vendor-ai-github",
+              test: /node_modules[\\/](@octokit[\\/]|@ai-sdk[\\/]|ai[\\/])/,
+              priority: 30,
+            },
+            {
+              name: "vendor-zod",
+              test: /node_modules[\\/](zod[\\/]|zod-to-json-schema[\\/])/,
+              priority: 20,
+            },
+            { name: "vendor", test: /node_modules[\\/]/, priority: 10 },
+          ],
         },
       },
     },
@@ -118,5 +120,9 @@ export default defineConfig({
     host: devServerConfig.host,
     port: devServerConfig.port,
     strictPort: true,
+    headers: {
+      "Cross-Origin-Opener-Policy": "same-origin",
+      "Cross-Origin-Embedder-Policy": "credentialless",
+    },
   },
-});
+}));

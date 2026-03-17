@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from "react"
 import { cn } from "@/lib/utils";
 import { ProjectResourceBadge, QuickRun } from "@/components/Project";
 import { useProjectStore } from "@/store/projectStore";
+import { useMacroFocusStore } from "@/store/macroFocusStore";
 import { useNativeContextMenu } from "@/hooks";
 import type { MenuItemOption } from "@/types";
 import { DEFAULT_SIDEBAR_WIDTH } from "./AppLayout";
@@ -21,6 +22,12 @@ export function Sidebar({ width, onResize, children, className }: SidebarProps) 
   const [isResizing, setIsResizing] = useState(false);
   const sidebarRef = useRef<HTMLElement>(null);
   const currentProject = useProjectStore((state) => state.currentProject);
+  const isMacroFocused = useMacroFocusStore((state) => state.focusedRegion === "sidebar");
+
+  useEffect(() => {
+    useMacroFocusStore.getState().setRegionRef("sidebar", sidebarRef.current);
+    return () => useMacroFocusStore.getState().setRegionRef("sidebar", null);
+  }, []);
 
   const startResizing = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
@@ -138,10 +145,14 @@ export function Sidebar({ width, onResize, children, className }: SidebarProps) 
     <>
       <aside
         ref={sidebarRef}
+        tabIndex={-1}
+        aria-label="Sidebar"
+        data-macro-focus={isMacroFocused ? "true" : undefined}
         className={cn(
-          "relative shrink-0 flex flex-col",
+          "relative shrink-0 flex flex-col outline-none",
           "surface-chrome",
           "border-r border-divider",
+          "data-[macro-focus=true]:ring-2 data-[macro-focus=true]:ring-canopy-accent/60 data-[macro-focus=true]:ring-inset",
           className
         )}
         style={{ width }}

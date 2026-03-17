@@ -10,6 +10,7 @@ type MockWebviewElement = HTMLElement & {
   setZoomFactor: ReturnType<typeof vi.fn>;
   getURL: ReturnType<typeof vi.fn>;
   isLoading: ReturnType<typeof vi.fn>;
+  getWebContentsId: ReturnType<typeof vi.fn>;
   setMockLoading: (value: boolean) => void;
 };
 
@@ -36,6 +37,7 @@ function decorateWebviewElement(element: HTMLElement): MockWebviewElement {
     return currentUrl;
   });
   webview.isLoading = vi.fn(() => loading);
+  webview.getWebContentsId = vi.fn(() => 42);
   webview.setMockLoading = (value: boolean) => {
     loading = value;
   };
@@ -43,26 +45,55 @@ function decorateWebviewElement(element: HTMLElement): MockWebviewElement {
   return webview;
 }
 
-const { terminalStoreState, useTerminalStoreMock, useIsDraggingMock, actionDispatchMock } =
-  vi.hoisted(() => {
-    const terminalStoreState = {
-      getTerminal: vi.fn(),
-      setBrowserUrl: vi.fn(),
-      setBrowserHistory: vi.fn(),
-      setBrowserZoom: vi.fn(),
-    };
-    const useTerminalStoreMock = vi.fn((selector: (state: typeof terminalStoreState) => unknown) =>
-      selector(terminalStoreState)
-    );
-    (useTerminalStoreMock as unknown as { getState: () => typeof terminalStoreState }).getState =
-      () => terminalStoreState;
-    const useIsDraggingMock = vi.fn(() => false);
-    const actionDispatchMock = vi.fn();
-    return { terminalStoreState, useTerminalStoreMock, useIsDraggingMock, actionDispatchMock };
-  });
+const {
+  terminalStoreState,
+  useTerminalStoreMock,
+  useProjectStoreMock,
+  useIsDraggingMock,
+  actionDispatchMock,
+  useUrlHistoryStoreMock,
+} = vi.hoisted(() => {
+  const terminalStoreState = {
+    getTerminal: vi.fn(),
+    setBrowserUrl: vi.fn(),
+    setBrowserHistory: vi.fn(),
+    setBrowserZoom: vi.fn(),
+  };
+  const useTerminalStoreMock = vi.fn((selector: (state: typeof terminalStoreState) => unknown) =>
+    selector(terminalStoreState)
+  );
+  (useTerminalStoreMock as unknown as { getState: () => typeof terminalStoreState }).getState =
+    () => terminalStoreState;
+  const projectStoreState = { currentProject: { id: "test-project" } };
+  const useProjectStoreMock = vi.fn((selector: (state: typeof projectStoreState) => unknown) =>
+    selector(projectStoreState)
+  );
+  const useIsDraggingMock = vi.fn(() => false);
+  const actionDispatchMock = vi.fn();
+  const urlHistoryStoreState = {
+    recordVisit: vi.fn(),
+    updateTitle: vi.fn(),
+  };
+  const useUrlHistoryStoreMock = vi.fn(
+    (selector: (state: typeof urlHistoryStoreState) => unknown) => selector(urlHistoryStoreState)
+  );
+  return {
+    terminalStoreState,
+    useTerminalStoreMock,
+    useProjectStoreMock,
+    useIsDraggingMock,
+    actionDispatchMock,
+    useUrlHistoryStoreMock,
+  };
+});
 
 vi.mock("@/store", () => ({
   useTerminalStore: useTerminalStoreMock,
+  useProjectStore: useProjectStoreMock,
+}));
+
+vi.mock("@/store/urlHistoryStore", () => ({
+  useUrlHistoryStore: useUrlHistoryStoreMock,
 }));
 
 vi.mock("@/components/DragDrop", () => ({
@@ -73,6 +104,26 @@ vi.mock("@/services/ActionService", () => ({
   actionService: {
     dispatch: actionDispatchMock,
   },
+}));
+
+vi.mock("@/hooks/useWebviewDialog", () => ({
+  useWebviewDialog: () => ({ currentDialog: null, handleDialogRespond: vi.fn() }),
+}));
+
+vi.mock("@/hooks/useFindInPage", () => ({
+  useFindInPage: () => ({
+    isOpen: false,
+    query: "",
+    activeMatch: 0,
+    matchCount: 0,
+    inputRef: { current: null },
+    isComposingRef: { current: false },
+    open: vi.fn(),
+    close: vi.fn(),
+    setQuery: vi.fn(),
+    goNext: vi.fn(),
+    goPrev: vi.fn(),
+  }),
 }));
 
 vi.mock("@/components/Browser/BrowserToolbar", () => ({
@@ -127,6 +178,26 @@ describe("BrowserPane webview lifecycle regression", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     vi.clearAllMocks();
+
+    // Mock window.electron.webview for CDP console capture
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (globalThis as any).window = globalThis.window ?? {};
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (window as any).electron = {
+      webview: {
+        startConsoleCapture: vi.fn(() => Promise.resolve()),
+        stopConsoleCapture: vi.fn(() => Promise.resolve()),
+        clearConsoleCapture: vi.fn(() => Promise.resolve()),
+        getConsoleProperties: vi.fn(() => Promise.resolve({ properties: [] })),
+        onConsoleMessage: vi.fn(() => vi.fn()),
+        onConsoleContextCleared: vi.fn(() => vi.fn()),
+        setLifecycleState: vi.fn(() => Promise.resolve()),
+        registerPanel: vi.fn(() => Promise.resolve()),
+        respondToDialog: vi.fn(() => Promise.resolve()),
+        onDialogRequest: vi.fn(() => vi.fn()),
+      },
+    };
+
     originalCreateElement = document.createElement.bind(document);
     document.createElement = ((tagName: string, options?: ElementCreationOptions) => {
       const element = originalCreateElement(tagName, options);
@@ -150,6 +221,19 @@ describe("BrowserPane webview lifecycle regression", () => {
     document.createElement = originalCreateElement;
     vi.runOnlyPendingTimers();
     vi.useRealTimers();
+  });
+
+  it("renders webview with allowpopups attribute for target=_blank support", () => {
+    const { container } = render(<BrowserPane {...baseProps} />);
+    const webview = getWebviewElement(container);
+    expect(webview.hasAttribute("allowpopups")).toBe(true);
+  });
+
+  it("uses theme-backed browser chrome surfaces", () => {
+    const { container } = render(<BrowserPane {...baseProps} />);
+    const themedSurface = container.querySelector(".bg-surface-canvas");
+    expect(themedSurface).toBeTruthy();
+    expect(container.querySelector(".bg-white")).toBeNull();
   });
 
   it("recovers ready/loading state from an already-loaded webview", async () => {

@@ -13,6 +13,8 @@ function WorktreeListItem({ worktree, isActive, isSelected, onClick }: WorktreeL
   return (
     <button
       type="button"
+      tabIndex={-1}
+      onPointerDown={(e) => e.preventDefault()}
       id={`worktree-option-${worktree.id}`}
       onClick={onClick}
       className={cn(
@@ -46,6 +48,7 @@ export interface WorktreePaletteProps {
   isOpen: boolean;
   query: string;
   results: WorktreeState[];
+  totalResults: number;
   activeWorktreeId: string | null;
   selectedIndex: number;
   onQueryChange: (query: string) => void;
@@ -60,6 +63,7 @@ export function WorktreePalette({
   isOpen,
   query,
   results,
+  totalResults,
   activeWorktreeId,
   selectedIndex,
   onQueryChange,
@@ -99,6 +103,7 @@ export function WorktreePalette({
       itemIdPrefix="worktree-option"
       emptyMessage="No worktrees available"
       noMatchMessage={`No worktrees match "${query}"`}
+      totalResults={totalResults}
     />
   );
 }

@@ -1,32 +1,12 @@
 import { create } from "zustand";
-import { persist, createJSONStorage, type StateStorage } from "zustand/middleware";
+import { persist } from "zustand/middleware";
+import { createSafeJSONStorage, readLocalStorageItemSafely } from "./persistence/safeStorage";
+import { BUILT_IN_AGENT_IDS, type BuiltInAgentId } from "@shared/config/agentIds";
 
-const memoryStorage: StateStorage = (() => {
-  const storage = new Map<string, string>();
-  return {
-    getItem: (name) => storage.get(name) ?? null,
-    setItem: (name, value) => {
-      storage.set(name, value);
-    },
-    removeItem: (name) => {
-      storage.delete(name);
-    },
-  };
-})();
-
-function getSafeStorage(): StateStorage {
-  if (typeof localStorage !== "undefined") {
-    return localStorage;
-  }
-  return memoryStorage;
-}
-
-export type DefaultAgentId = "claude" | "gemini" | "codex" | "opencode";
-
-const VALID_AGENT_IDS: readonly DefaultAgentId[] = ["claude", "gemini", "codex", "opencode"];
+export type DefaultAgentId = BuiltInAgentId;
 
 function isValidAgentId(value: unknown): value is DefaultAgentId {
-  return typeof value === "string" && (VALID_AGENT_IDS as string[]).includes(value);
+  return typeof value === "string" && (BUILT_IN_AGENT_IDS as readonly string[]).includes(value);
 }
 
 interface AgentPreferences {
@@ -49,7 +29,7 @@ export const useAgentPreferencesStore = create<AgentPreferencesState>()(
     }),
     {
       name: "canopy-agent-preferences",
-      storage: createJSONStorage(() => getSafeStorage()),
+      storage: createSafeJSONStorage(),
       merge: (persistedState, currentState) => {
         const persisted = persistedState as Partial<AgentPreferencesState> | null;
 
@@ -68,16 +48,14 @@ export const useAgentPreferencesStore = create<AgentPreferencesState>()(
         // We access localStorage directly here because getItem on StateStorage can return
         // a Promise in async storage implementations, but localStorage is always synchronous.
         try {
-          if (typeof localStorage !== "undefined") {
-            const oldRaw = localStorage.getItem("canopy-toolbar-preferences");
-            if (oldRaw) {
-              const oldData = JSON.parse(oldRaw) as {
-                state?: { launcher?: { defaultAgent?: unknown } };
-              };
-              const migrated = oldData?.state?.launcher?.defaultAgent;
-              if (isValidAgentId(migrated)) {
-                return { ...currentState, defaultAgent: migrated };
-              }
+          const oldRaw = readLocalStorageItemSafely("canopy-toolbar-preferences");
+          if (oldRaw) {
+            const oldData = JSON.parse(oldRaw) as {
+              state?: { launcher?: { defaultAgent?: unknown } };
+            };
+            const migrated = oldData?.state?.launcher?.defaultAgent;
+            if (isValidAgentId(migrated)) {
+              return { ...currentState, defaultAgent: migrated };
             }
           }
         } catch {

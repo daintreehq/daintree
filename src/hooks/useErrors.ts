@@ -3,6 +3,7 @@ import { useErrorStore, type AppError, type RetryAction } from "@/store";
 import { isElectronAvailable } from "./useElectron";
 import { errorsClient } from "@/clients";
 import { logErrorWithContext } from "@/utils/errorContext";
+import { notify } from "@/lib/notify";
 
 let ipcListenerAttached = false;
 export function useErrors() {
@@ -17,6 +18,8 @@ export function useErrors() {
   const getActiveErrors = useErrorStore((state) => state.getActiveErrors);
   const getWorktreeErrors = useErrorStore((state) => state.getWorktreeErrors);
   const getTerminalErrors = useErrorStore((state) => state.getTerminalErrors);
+  const updateRetryProgress = useErrorStore((state) => state.updateRetryProgress);
+  const clearRetryProgress = useErrorStore((state) => state.clearRetryProgress);
 
   const didAttachListener = useRef(false);
 
@@ -26,7 +29,7 @@ export function useErrors() {
     ipcListenerAttached = true;
     didAttachListener.current = true;
 
-    const unsubscribe = errorsClient.onError((error: AppError) => {
+    const unsubscribeError = errorsClient.onError((error: AppError) => {
       addError({
         type: error.type,
         message: error.message,
@@ -36,16 +39,63 @@ export function useErrors() {
         isTransient: error.isTransient,
         retryAction: error.retryAction,
         retryArgs: error.retryArgs,
+        fromPreviousSession: error.fromPreviousSession,
+        correlationId: error.correlationId,
+        recoveryHint: error.recoveryHint,
+      });
+
+      notify({
+        type: "error",
+        title: error.source,
+        message: error.message,
+        correlationId: error.correlationId,
+        priority: "low",
       });
     });
 
+    const unsubscribeProgress = errorsClient.onRetryProgress((payload) => {
+      updateRetryProgress(payload.id, payload.attempt, payload.maxAttempts);
+    });
+
+    errorsClient
+      .getPending()
+      .then((pending) => {
+        for (const error of pending) {
+          addError({
+            type: error.type,
+            message: error.message,
+            details: error.details,
+            source: error.source,
+            context: error.context,
+            isTransient: error.isTransient,
+            retryAction: error.retryAction,
+            retryArgs: error.retryArgs,
+            fromPreviousSession: error.fromPreviousSession,
+            correlationId: error.correlationId,
+            recoveryHint: error.recoveryHint,
+          });
+
+          notify({
+            type: "error",
+            title: error.source,
+            message: error.message,
+            correlationId: error.correlationId,
+            priority: "low",
+          });
+        }
+      })
+      .catch(() => {
+        // Ignore failures fetching pending errors
+      });
+
     return () => {
       if (didAttachListener.current) {
-        unsubscribe();
+        unsubscribeError();
+        unsubscribeProgress();
         ipcListenerAttached = false;
       }
     };
-  }, [addError]);
+  }, [addError, updateRetryProgress]);
 
   const retry = useCallback(
     async (errorId: string, action: RetryAction, args?: Record<string, unknown>) => {
@@ -60,9 +110,20 @@ export function useErrors() {
           component: "useErrors",
           details: { errorId, action, args },
         });
+      } finally {
+        clearRetryProgress(errorId);
       }
     },
-    [removeError]
+    [removeError, clearRetryProgress]
+  );
+
+  const cancelRetry = useCallback(
+    (errorId: string) => {
+      if (!isElectronAvailable()) return;
+      errorsClient.cancelRetry(errorId);
+      clearRetryProgress(errorId);
+    },
+    [clearRetryProgress]
   );
 
   const openLogs = useCallback(async () => {
@@ -81,6 +142,7 @@ export function useErrors() {
     togglePanel,
     setPanelOpen,
     retry,
+    cancelRetry,
     openLogs,
     getWorktreeErrors,
     getTerminalErrors,

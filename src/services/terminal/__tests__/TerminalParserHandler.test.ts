@@ -92,8 +92,47 @@ describe("TerminalParserHandler", () => {
 
     new TerminalParserHandler(mockManaged);
     expect(escHandlers).toHaveLength(0);
-    // Should have 1 handler for alternate screen buffer exit (?l)
-    expect(csiHandlers).toHaveLength(1);
+    // 1 alt screen exit (?l) + 2 DECRQM blockers (? $ p and $ p)
+    expect(csiHandlers).toHaveLength(3);
+  });
+
+  it("should block DECRQM queries to prevent xterm.js parser crash", () => {
+    mockManaged.kind = "terminal";
+    mockManaged.agentId = undefined;
+
+    new TerminalParserHandler(mockManaged);
+
+    const privateDecrqm = csiHandlers.find(
+      (h) => h.opts.prefix === "?" && h.opts.intermediates === "$" && h.opts.final === "p"
+    );
+    const nonPrivateDecrqm = csiHandlers.find(
+      (h) => !h.opts.prefix && h.opts.intermediates === "$" && h.opts.final === "p"
+    );
+    expect(privateDecrqm).toBeDefined();
+    expect(nonPrivateDecrqm).toBeDefined();
+    // Handlers should consume (return true)
+    expect(privateDecrqm.handler()).toBe(true);
+    expect(nonPrivateDecrqm.handler()).toBe(true);
+  });
+
+  it("should NOT register alt screen blocker for OpenCode agent", () => {
+    mockManaged.agentId = "opencode";
+    mockManaged.type = "opencode";
+
+    new TerminalParserHandler(mockManaged);
+
+    const altScreenBlocker = csiHandlers.find((h) => h.opts.prefix === "?" && h.opts.final === "h");
+    expect(altScreenBlocker).toBeUndefined();
+  });
+
+  it("should register alt screen blocker for Codex agent (blockAltScreen: true)", () => {
+    mockManaged.agentId = "codex";
+    mockManaged.type = "codex";
+
+    new TerminalParserHandler(mockManaged);
+
+    const altScreenBlocker = csiHandlers.find((h) => h.opts.prefix === "?" && h.opts.final === "h");
+    expect(altScreenBlocker).toBeDefined();
   });
 
   it("should dispose handlers correctly", () => {

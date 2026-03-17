@@ -31,3 +31,5 @@ export {
 export { createTerminalMruSlice, type TerminalMruSlice } from "./terminalMruSlice";
 
 export { createWatchedPanelsSlice, type WatchedPanelsSlice } from "./watchedPanelsSlice";
+
+export { createActionMruSlice, type ActionMruSlice } from "./actionMruSlice";

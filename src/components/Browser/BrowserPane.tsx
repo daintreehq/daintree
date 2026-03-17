@@ -1,8 +1,9 @@
 import { useState, useCallback, useRef, useEffect, useMemo } from "react";
 import { useWebviewThrottle } from "@/hooks/useWebviewThrottle";
+import { useWebviewDialog } from "@/hooks/useWebviewDialog";
 import { AlertTriangle, ExternalLink } from "lucide-react";
 import { useTerminalStore } from "@/store";
-import type { BrowserHistory } from "@shared/types/domain";
+import type { BrowserHistory } from "@shared/types/browser";
 import { ContentPanel, type BasePanelProps } from "@/components/Panel";
 import { BrowserToolbar } from "./BrowserToolbar";
 import { ConsolePanel } from "./ConsolePanel";
@@ -14,9 +15,16 @@ import {
   pushBrowserHistory,
 } from "./historyUtils";
 import { actionService } from "@/services/ActionService";
+import { WebviewDialog } from "./WebviewDialog";
+import { FindBar } from "./FindBar";
 import { useIsDragging } from "@/components/DragDrop";
 import { cn } from "@/lib/utils";
 import { useConsoleCaptureStore } from "@/store/consoleCaptureStore";
+import type { SerializedConsoleRow } from "@shared/types/ipc/webviewConsole";
+import { useProjectStore } from "@/store";
+import { useProjectSettingsStore } from "@/store/projectSettingsStore";
+import { useUrlHistoryStore } from "@/store/urlHistoryStore";
+import { useFindInPage } from "@/hooks/useFindInPage";
 
 export interface BrowserPaneProps extends BasePanelProps {
   initialUrl: string;
@@ -59,11 +67,21 @@ export function BrowserPane({
   const setBrowserHistory = useTerminalStore((state) => state.setBrowserHistory);
   const setBrowserZoom = useTerminalStore((state) => state.setBrowserZoom);
   const isDragging = useIsDragging();
-  const addConsoleMessage = useConsoleCaptureStore((state) => state.addMessage);
+  const addStructuredMessage = useConsoleCaptureStore((state) => state.addStructuredMessage);
+  const markStale = useConsoleCaptureStore((state) => state.markStale);
   const clearConsoleMessages = useConsoleCaptureStore((state) => state.clearMessages);
   const removePane = useConsoleCaptureStore((state) => state.removePane);
+  const webContentsIdRef = useRef<number | null>(null);
+  const projectId = useProjectStore((state) => state.currentProject?.id);
+  const devServerLoadTimeout = useProjectSettingsStore(
+    (state) => state.settings?.devServerLoadTimeout
+  );
+  const loadTimeoutMs = Math.min(Math.max(devServerLoadTimeout ?? 30, 1), 120) * 1000;
 
-  const [isConsoleOpen, setIsConsoleOpen] = useState(false);
+  const isConsoleOpen = useTerminalStore(
+    (state) => state.getTerminal(id)?.browserConsoleOpen ?? false
+  );
+  const setBrowserConsoleOpen = useTerminalStore((state) => state.setBrowserConsoleOpen);
 
   // Initialize history from persisted state or initialUrl
   const [history, setHistory] = useState<BrowserHistory>(() => {
@@ -127,6 +145,43 @@ export function BrowserPane({
     return () => removePane(id);
   }, [id, removePane]);
 
+  // CDP console capture: start when webview is ready, subscribe to push events
+  useEffect(() => {
+    if (!webviewElement || !isWebviewReady) return;
+
+    let wcId: number;
+    try {
+      wcId = (webviewElement as unknown as { getWebContentsId(): number }).getWebContentsId();
+    } catch {
+      return;
+    }
+    webContentsIdRef.current = wcId;
+
+    // Subscribe to push events BEFORE starting capture to avoid missing early messages
+    const cleanupMessage = window.electron.webview.onConsoleMessage((row: SerializedConsoleRow) => {
+      if (row.paneId === id) {
+        addStructuredMessage(row);
+      }
+    });
+
+    const cleanupContext = window.electron.webview.onConsoleContextCleared(
+      (payload: { paneId: string; navigationGeneration: number }) => {
+        if (payload.paneId === id) {
+          markStale(id, payload.navigationGeneration);
+        }
+      }
+    );
+
+    void window.electron.webview.startConsoleCapture(wcId, id);
+
+    return () => {
+      void window.electron.webview.stopConsoleCapture(wcId, id);
+      cleanupMessage();
+      cleanupContext();
+      webContentsIdRef.current = null;
+    };
+  }, [webviewElement, isWebviewReady, id, addStructuredMessage, markStale]);
+
   // Set up webview event listeners - reattach whenever webview element changes
   useEffect(() => {
     const webview = webviewElement;
@@ -157,7 +212,7 @@ export function BrowserPane({
         } catch {
           // Webview detached before timeout fired
         }
-      }, 30000);
+      }, loadTimeoutMs);
     };
 
     const handleDidStopLoading = () => {
@@ -188,6 +243,15 @@ export function BrowserPane({
         setHistory((prev) => pushBrowserHistory(prev, newUrl));
         lastSetUrlRef.current = newUrl;
       }
+      if (projectId) {
+        let title: string | undefined;
+        try {
+          title = webview.getTitle();
+        } catch {
+          // webview may not be ready for getTitle
+        }
+        useUrlHistoryStore.getState().recordVisit(projectId, newUrl, title);
+      }
     };
 
     const handleDidNavigateInPage = (event: Electron.DidNavigateInPageEvent) => {
@@ -197,10 +261,27 @@ export function BrowserPane({
         setHistory((prev) => pushBrowserHistory(prev, newUrl));
         lastSetUrlRef.current = newUrl;
       }
+      if (projectId) {
+        let title: string | undefined;
+        try {
+          title = webview.getTitle();
+        } catch {
+          // webview may not be ready for getTitle
+        }
+        useUrlHistoryStore.getState().recordVisit(projectId, newUrl, title);
+      }
     };
 
-    const handleConsoleMessage = (event: Electron.ConsoleMessageEvent) => {
-      addConsoleMessage(id, event.level, event.message, event.line, event.sourceId);
+    const handlePageTitleUpdated = (event: Event) => {
+      const detail = event as Event & { title?: string; explicitSet?: boolean };
+      if (detail.explicitSet === false) return;
+      if (projectId && detail.title) {
+        try {
+          useUrlHistoryStore.getState().updateTitle(projectId, webview.getURL(), detail.title);
+        } catch {
+          // webview may be detached
+        }
+      }
     };
 
     try {
@@ -223,7 +304,7 @@ export function BrowserPane({
     webview.addEventListener("did-fail-load", handleDidFailLoad);
     webview.addEventListener("did-navigate", handleDidNavigate);
     webview.addEventListener("did-navigate-in-page", handleDidNavigateInPage);
-    webview.addEventListener("console-message", handleConsoleMessage);
+    webview.addEventListener("page-title-updated", handlePageTitleUpdated);
 
     return () => {
       webview.removeEventListener("dom-ready", handleDomReady);
@@ -232,9 +313,9 @@ export function BrowserPane({
       webview.removeEventListener("did-fail-load", handleDidFailLoad);
       webview.removeEventListener("did-navigate", handleDidNavigate);
       webview.removeEventListener("did-navigate-in-page", handleDidNavigateInPage);
-      webview.removeEventListener("console-message", handleConsoleMessage);
+      webview.removeEventListener("page-title-updated", handlePageTitleUpdated);
     };
-  }, [webviewElement, hasValidUrl, loadError, zoomFactor, id, addConsoleMessage]);
+  }, [webviewElement, hasValidUrl, loadError, zoomFactor, id, projectId, loadTimeoutMs]);
 
   const handleNavigate = useCallback(
     (url: string) => {
@@ -329,10 +410,14 @@ export function BrowserPane({
   }, [isWebviewReady]);
 
   const handleToggleConsole = useCallback(() => {
-    setIsConsoleOpen((prev) => !prev);
-  }, []);
+    setBrowserConsoleOpen(id, !isConsoleOpen);
+  }, [id, isConsoleOpen, setBrowserConsoleOpen]);
 
   const handleClearConsole = useCallback(() => {
+    const wcId = webContentsIdRef.current;
+    if (wcId != null) {
+      void window.electron.webview.clearConsoleCapture(wcId, id);
+    }
     clearConsoleMessages(id);
   }, [id, clearConsoleMessages]);
 
@@ -473,6 +558,12 @@ export function BrowserPane({
   ]);
 
   useWebviewThrottle(id, location, webviewElement, isWebviewReady);
+  const { currentDialog, handleDialogRespond } = useWebviewDialog(
+    id,
+    webviewElement,
+    isWebviewReady
+  );
+  const findInPage = useFindInPage(id, webviewElement, isWebviewReady, isFocused);
 
   const handleOpenExternal = useCallback(() => {
     if (!hasValidUrl) return;
@@ -487,6 +578,7 @@ export function BrowserPane({
   const browserToolbar = (
     <BrowserToolbar
       terminalId={id}
+      projectId={projectId}
       url={currentUrl}
       canGoBack={canGoBack}
       canGoForward={canGoForward}
@@ -559,7 +651,10 @@ export function BrowserPane({
       onAddTab={onAddTab}
     >
       <div
-        className={cn("relative flex-1 min-h-0 flex flex-col bg-white", isConsoleOpen && "min-h-0")}
+        className={cn(
+          "relative flex-1 min-h-0 flex flex-col bg-surface-canvas",
+          isConsoleOpen && "min-h-0"
+        )}
       >
         {!hasValidUrl ? (
           <div className="absolute inset-0 flex flex-col items-center justify-center bg-canopy-bg text-canopy-text p-6">
@@ -575,7 +670,7 @@ export function BrowserPane({
                     key={example}
                     type="button"
                     onClick={() => handleNavigate(`http://${example}`)}
-                    className="px-3 py-1.5 text-xs font-mono text-canopy-text/50 bg-white/5 hover:bg-white/10 border border-white/10 rounded-md transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-canopy-accent/50"
+                    className="px-3 py-1.5 text-xs font-mono text-canopy-text/50 bg-overlay-soft hover:bg-overlay-medium border border-overlay rounded-md transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-canopy-accent/50"
                   >
                     {example}
                   </button>
@@ -591,7 +686,7 @@ export function BrowserPane({
             <button
               type="button"
               onClick={handleOpenExternal}
-              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md hover:bg-white/5 transition-colors group focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-canopy-accent/50"
+              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md hover:bg-overlay-soft transition-colors group focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-canopy-accent/50"
             >
               <ExternalLink className="h-3.5 w-3.5 text-canopy-text/50 group-hover:text-canopy-text/70 transition-colors" />
               <span className="text-xs text-canopy-text/50 group-hover:text-canopy-text/70 transition-colors">
@@ -608,17 +703,27 @@ export function BrowserPane({
                   <div className="w-8 h-8 border-2 border-status-info border-t-transparent rounded-full animate-spin" />
                 </div>
               )}
+              {findInPage.isOpen && <FindBar find={findInPage} />}
               <webview
                 ref={setWebviewNode}
                 src={currentUrl}
                 partition="persist:browser"
+                // @ts-expect-error React 19 requires "" to emit the attribute; boolean true is silently dropped
+                allowpopups=""
                 className={cn(
                   "w-full h-full border-0",
                   isDragging && "invisible pointer-events-none"
                 )}
               />
+              <WebviewDialog dialog={currentDialog} onRespond={handleDialogRespond} />
             </div>
-            {isConsoleOpen && <ConsolePanel paneId={id} height={200} />}
+            {isConsoleOpen && (
+              <ConsolePanel
+                paneId={id}
+                height={200}
+                webContentsId={webContentsIdRef.current ?? undefined}
+              />
+            )}
           </>
         )}
       </div>

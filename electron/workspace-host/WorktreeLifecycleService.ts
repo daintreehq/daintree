@@ -1,4 +1,4 @@
-import { spawn, type ChildProcess } from "child_process";
+import { spawn, spawnSync, type ChildProcess } from "child_process";
 import { readFile, access, cp } from "fs/promises";
 import { join as pathJoin } from "path";
 import os from "os";
@@ -116,7 +116,7 @@ export class WorktreeLifecycleService {
    * Run an array of shell commands sequentially in a given directory.
    * Each command is spawned with a minimal env + CANOPY_* vars.
    * A shared timeout covers the entire set of commands.
-   * Process group kill is used on timeout to terminate the whole tree.
+   * On Unix, process group kill terminates the whole tree; on Windows, taskkill /T is used.
    */
   async runCommands(commands: string[], options: RunCommandsOptions): Promise<RunCommandsResult> {
     const { cwd, env, onProgress, timeoutMs = DEFAULT_TIMEOUT_MS } = options;
@@ -165,22 +165,31 @@ export class WorktreeLifecycleService {
     timeoutMs: number,
     outputChunks: string[]
   ): Promise<{ success: boolean; timedOut?: boolean; error?: string }> {
+    const isWin = process.platform === "win32";
+
     return new Promise((resolve) => {
       const child: ChildProcess = spawn(command, {
         cwd,
         shell: true,
-        detached: true,
-        env: {
-          PATH: process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin",
-          HOME: process.env.HOME ?? os.homedir(),
-          TERM: "dumb",
-          ...env,
-        },
+        detached: !isWin,
+        env: buildSpawnEnv(env),
       });
 
       let timedOut = false;
 
       const killProcess = () => {
+        if (isWin) {
+          if (child.pid !== undefined) {
+            spawnSync("taskkill", ["/F", "/T", "/PID", child.pid.toString()], {
+              windowsHide: true,
+            });
+          } else {
+            child.kill();
+          }
+          return;
+        }
+
+        // Unix: SIGTERM the process group, escalate to SIGKILL after 5s
         try {
           if (child.pid !== undefined) {
             process.kill(-child.pid, "SIGTERM");
@@ -190,7 +199,6 @@ export class WorktreeLifecycleService {
         } catch {
           // Process may have already exited
         }
-        // Escalate to SIGKILL after 5s if SIGTERM was ignored
         setTimeout(() => {
           try {
             if (child.pid !== undefined) {
@@ -261,6 +269,28 @@ export class WorktreeLifecycleService {
       CANOPY_WORKTREE_NAME: worktreeName,
     };
   }
+}
+
+function buildSpawnEnv(customEnv: Record<string, string>): Record<string, string> {
+  if (process.platform === "win32") {
+    const sysRoot = process.env.SystemRoot ?? process.env.windir ?? "C:\\Windows";
+    return {
+      PATH: process.env.PATH ?? `${sysRoot}\\System32;${sysRoot};${sysRoot}\\System32\\Wbem`,
+      PATHEXT: process.env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD",
+      SystemRoot: sysRoot,
+      USERPROFILE: process.env.USERPROFILE ?? os.homedir(),
+      TEMP: process.env.TEMP ?? os.tmpdir(),
+      TMP: process.env.TMP ?? os.tmpdir(),
+      TERM: "dumb",
+      ...customEnv,
+    };
+  }
+  return {
+    PATH: process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin",
+    HOME: process.env.HOME ?? os.homedir(),
+    TERM: "dumb",
+    ...customEnv,
+  };
 }
 
 function tailOutput(chunks: string[]): string {

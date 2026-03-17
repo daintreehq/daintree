@@ -1,9 +1,12 @@
-import { useState, useCallback, useMemo } from "react";
-import type { IFuseOptions } from "fuse.js";
+import { useCallback, useMemo } from "react";
+import Fuse, { type IFuseOptions } from "fuse.js";
+import { useShallow } from "zustand/react/shallow";
 import { actionService } from "@/services/ActionService";
 import { keybindingService } from "@/services/KeybindingService";
 import { notify } from "@/lib/notify";
 import type { ActionManifestEntry } from "@shared/types/actions";
+import { usePaletteStore } from "@/store/paletteStore";
+import { useActionMruStore } from "@/store/actionMruStore";
 import { useSearchablePalette } from "./useSearchablePalette";
 
 export interface ActionPaletteItem {
@@ -21,6 +24,7 @@ export interface UseActionPaletteReturn {
   isOpen: boolean;
   query: string;
   results: ActionPaletteItem[];
+  totalResults: number;
   selectedIndex: number;
   open: () => void;
   close: () => void;
@@ -44,6 +48,7 @@ const FUSE_OPTIONS: IFuseOptions<ActionPaletteItem> = {
 
 const MAX_RESULTS = 20;
 const DEBOUNCE_MS = 200;
+const MRU_BOOST_FACTOR = 0.05;
 
 function toActionPaletteItem(entry: ActionManifestEntry): ActionPaletteItem {
   const title =
@@ -66,58 +71,74 @@ function toActionPaletteItem(entry: ActionManifestEntry): ActionPaletteItem {
 }
 
 export function useActionPalette(): UseActionPaletteReturn {
-  const [isOpen, setIsOpen] = useState(false);
+  const isActionOpen = usePaletteStore((state) => state.activePaletteId === "action");
+  const actionMruList = useActionMruStore(useShallow((state) => state.actionMruList));
 
   const allActions = useMemo<ActionPaletteItem[]>(() => {
-    if (!isOpen) return [];
+    if (!isActionOpen) return [];
     const entries = actionService.list();
-    return entries
-      .filter((e) => e.kind === "command" && !e.requiresArgs)
-      .map(toActionPaletteItem)
-      .sort((a, b) => {
-        if (a.enabled !== b.enabled) return a.enabled ? -1 : 1;
-        return a.title.localeCompare(b.title);
-      });
-  }, [isOpen]);
+    return entries.filter((e) => e.kind === "command" && !e.requiresArgs).map(toActionPaletteItem);
+  }, [isActionOpen]);
+
+  const fuse = useMemo(() => new Fuse(allActions, FUSE_OPTIONS), [allActions]);
+
+  const filterFn = useCallback(
+    (items: ActionPaletteItem[], query: string): ActionPaletteItem[] => {
+      const mruIndexMap = new Map<string, number>();
+      actionMruList.forEach((id, index) => mruIndexMap.set(id, index));
+      const mruSize = actionMruList.length;
+
+      if (!query.trim()) {
+        return [...items].sort((a, b) => {
+          if (a.enabled !== b.enabled) return a.enabled ? -1 : 1;
+          const aIndex = mruIndexMap.get(a.id) ?? Infinity;
+          const bIndex = mruIndexMap.get(b.id) ?? Infinity;
+          if (aIndex !== bIndex) return aIndex - bIndex;
+          return a.title.localeCompare(b.title);
+        });
+      }
+
+      const fuseResults = fuse.search(query);
+      return fuseResults
+        .map((r) => {
+          const rank = mruIndexMap.get(r.item.id);
+          const boost =
+            rank !== undefined ? (1 - rank / Math.max(mruSize, 1)) * MRU_BOOST_FACTOR : 0;
+          return { item: r.item, boostedScore: (r.score ?? 1) - boost };
+        })
+        .sort((a, b) => {
+          if (a.item.enabled !== b.item.enabled) return a.item.enabled ? -1 : 1;
+          return a.boostedScore - b.boostedScore;
+        })
+        .map((r) => r.item);
+    },
+    [fuse, actionMruList]
+  );
 
   const {
-    isOpen: paletteIsOpen,
+    isOpen,
     query,
     results,
+    totalResults,
     selectedIndex,
-    open: paletteOpen,
-    close: paletteClose,
+    open,
+    close,
+    toggle,
     setQuery,
     selectPrevious,
     selectNext,
   } = useSearchablePalette<ActionPaletteItem>({
     items: allActions,
-    fuseOptions: FUSE_OPTIONS,
+    filterFn,
     maxResults: MAX_RESULTS,
     debounceMs: DEBOUNCE_MS,
+    paletteId: "action",
   });
-
-  const open = useCallback(() => {
-    setIsOpen(true);
-    paletteOpen();
-  }, [paletteOpen]);
-
-  const close = useCallback(() => {
-    setIsOpen(false);
-    paletteClose();
-  }, [paletteClose]);
-
-  const toggle = useCallback(() => {
-    if (paletteIsOpen) {
-      close();
-    } else {
-      open();
-    }
-  }, [paletteIsOpen, open, close]);
 
   const executeAction = useCallback(
     (item: ActionPaletteItem) => {
       if (!item.enabled) return;
+      useActionMruStore.getState().recordActionMru(item.id);
       close();
       void actionService
         .dispatch(
@@ -154,9 +175,10 @@ export function useActionPalette(): UseActionPaletteReturn {
   }, [results, selectedIndex, executeAction]);
 
   return {
-    isOpen: paletteIsOpen,
+    isOpen,
     query,
     results,
+    totalResults,
     selectedIndex,
     open,
     close,

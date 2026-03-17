@@ -5,7 +5,7 @@
  * task mappings, and routing decisions.
  */
 
-import type { TaskState } from "./domain.js";
+import type { TaskState } from "./agent.js";
 import type { TaskResult } from "./task.js";
 import type { WorkflowCondition } from "./workflow.js";
 
@@ -15,11 +15,41 @@ import type { WorkflowCondition } from "./workflow.js";
 export type WorkflowRunStatus = "running" | "completed" | "failed" | "cancelled";
 
 /**
+ * Extended node status — TaskState plus approval-specific state.
+ * Kept separate from TaskState to avoid breaking task queue type checks.
+ */
+export type NodeStatus = TaskState | "awaiting-approval";
+
+/**
+ * Decision recorded when a human resolves an approval node.
+ */
+export interface ApprovalDecision {
+  approved: boolean;
+  feedback?: string;
+  resolvedAt: number;
+  timedOut?: boolean;
+}
+
+/**
+ * DTO for pending approval requests — used in IPC/UI payloads.
+ */
+export interface PendingWorkflowApproval {
+  runId: string;
+  nodeId: string;
+  workflowId: string;
+  workflowName: string;
+  prompt: string;
+  requestedAt: number;
+  timeoutMs?: number;
+  timeoutAt?: number;
+}
+
+/**
  * State of an individual node execution within a workflow run.
  */
 export interface NodeState {
-  /** Current task state */
-  status: TaskState;
+  /** Current node status */
+  status: NodeStatus;
   /** Task ID if the node has been compiled to a task */
   taskId?: string;
   /** When node execution started (ms since epoch) */
@@ -28,6 +58,18 @@ export interface NodeState {
   completedAt?: number;
   /** Result of the task execution */
   result?: TaskResult;
+  /** Approval decision if this is an approval node that has been resolved */
+  approvalDecision?: ApprovalDecision;
+}
+
+/**
+ * State of a loop node execution within a workflow run.
+ * Loop body task entries use composite IDs: "loopNodeId|iterIndex|bodyNodeId".
+ */
+export interface LoopNodeState extends NodeState {
+  currentIteration: number;
+  maxIterations: number;
+  exitedEarly: boolean;
 }
 
 /**

@@ -1,13 +1,23 @@
-import { useState, useEffect, useMemo, useCallback, useRef } from "react";
-import { Search, ExternalLink, RefreshCw, WifiOff, Plus, Settings } from "lucide-react";
+import { useState, useEffect, useMemo, useCallback, useRef, type KeyboardEvent } from "react";
+import { useDebounce } from "@/hooks/useDebounce";
+import { Search, ExternalLink, RefreshCw, WifiOff, Plus, Settings, X, Filter } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
 import { githubClient } from "@/clients/githubClient";
 import { actionService } from "@/services/ActionService";
 import { GitHubListItem } from "./GitHubListItem";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
-import type { GitHubIssue, GitHubPR } from "@shared/types/github";
+import { useWorktreeDataStore } from "@/store/worktreeDataStore";
+import {
+  useGitHubFilterStore,
+  type IssueStateFilter,
+  type PRStateFilter,
+} from "@/store/githubFilterStore";
+import type { GitHubIssue, GitHubPR, GitHubSortOrder } from "@shared/types/github";
 import { parseExactNumber } from "@/lib/parseExactNumber";
+
+type StateFilter = IssueStateFilter | PRStateFilter;
 
 function sanitizeIpcError(message: string): string {
   const cleaned = message.replace(/^Error invoking remote method '[^']+': (?:Error: )?/, "").trim();
@@ -21,22 +31,7 @@ interface GitHubResourceListProps {
   initialCount?: number | null;
 }
 
-type IssueStateFilter = "open" | "closed" | "all";
-type PRStateFilter = "open" | "closed" | "merged" | "all";
-type StateFilter = IssueStateFilter | PRStateFilter;
-
-function useDebounce<T>(value: T, delay: number): T {
-  const [debouncedValue, setDebouncedValue] = useState(value);
-
-  useEffect(() => {
-    const timer = setTimeout(() => setDebouncedValue(value), delay);
-    return () => clearTimeout(timer);
-  }, [value, delay]);
-
-  return debouncedValue;
-}
-
-const ITEM_HEIGHT_PX = 64;
+const ITEM_HEIGHT_PX = 68;
 const MAX_SKELETON_ITEMS = 6;
 
 export function GitHubResourceList({
@@ -45,8 +40,22 @@ export function GitHubResourceList({
   onClose,
   initialCount,
 }: GitHubResourceListProps) {
-  const [searchQuery, setSearchQuery] = useState("");
-  const [filterState, setFilterState] = useState<StateFilter>("open");
+  const searchQuery = useGitHubFilterStore((s) =>
+    type === "issue" ? s.issueSearchQuery : s.prSearchQuery
+  );
+  const setSearchQuery = useGitHubFilterStore((s) =>
+    type === "issue" ? s.setIssueSearchQuery : s.setPrSearchQuery
+  ) as (q: string) => void;
+  const filterState = useGitHubFilterStore((s) => (type === "issue" ? s.issueFilter : s.prFilter));
+  const setFilterState = useGitHubFilterStore((s) =>
+    type === "issue" ? s.setIssueFilter : s.setPrFilter
+  ) as (f: StateFilter) => void;
+  const sortOrder = useGitHubFilterStore((s) =>
+    type === "issue" ? s.issueSortOrder : s.prSortOrder
+  );
+  const setSortOrder = useGitHubFilterStore((s) =>
+    type === "issue" ? s.setIssueSortOrder : s.setPrSortOrder
+  ) as (o: GitHubSortOrder) => void;
   const [data, setData] = useState<(GitHubIssue | GitHubPR)[]>([]);
   const [cursor, setCursor] = useState<string | null>(null);
   const [hasMore, setHasMore] = useState(false);
@@ -55,6 +64,10 @@ export function GitHubResourceList({
   const [error, setError] = useState<string | null>(null);
   const [loadMoreError, setLoadMoreError] = useState<string | null>(null);
   const [exactNumberNotFound, setExactNumberNotFound] = useState<number | null>(null);
+  const [activeIndex, setActiveIndex] = useState(-1);
+  const [sortPopoverOpen, setSortPopoverOpen] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
 
   const debouncedSearch = useDebounce(searchQuery, 300);
 
@@ -107,6 +120,8 @@ export function GitHubResourceList({
           search: debouncedSearch || undefined,
           state: filterState as "open" | "closed" | "merged" | "all",
           cursor: currentCursor || undefined,
+          bypassCache: !append,
+          sortOrder,
         };
 
         const result =
@@ -143,7 +158,7 @@ export function GitHubResourceList({
         }
       }
     },
-    [projectPath, debouncedSearch, filterState, type]
+    [projectPath, debouncedSearch, filterState, type, sortOrder]
   );
 
   useEffect(() => {
@@ -222,17 +237,27 @@ export function GitHubResourceList({
     };
   }, [exactNumber, projectPath, type, filterState]);
 
-  const handleLoadMore = () => {
+  const handleLoadMore = useCallback(() => {
     if (!loadingMore && hasMore) {
       fetchData(cursor, true, undefined);
     }
-  };
+  }, [loadingMore, hasMore, fetchData, cursor]);
 
   const handleOpenInGitHub = () => {
+    const query = searchQuery.trim() || undefined;
+    const state = filterState as string;
     if (type === "issue") {
-      void actionService.dispatch("github.openIssues", { projectPath }, { source: "user" });
+      void actionService.dispatch(
+        "github.openIssues",
+        { projectPath, query, state },
+        { source: "user" }
+      );
     } else {
-      void actionService.dispatch("github.openPRs", { projectPath }, { source: "user" });
+      void actionService.dispatch(
+        "github.openPRs",
+        { projectPath, query, state },
+        { source: "user" }
+      );
     }
     onClose?.();
   };
@@ -245,6 +270,7 @@ export function GitHubResourceList({
 
   const openCreateDialog = useWorktreeSelectionStore((s) => s.openCreateDialog);
   const openCreateDialogForPR = useWorktreeSelectionStore((s) => s.openCreateDialogForPR);
+  const selectWorktree = useWorktreeSelectionStore((s) => s.selectWorktree);
 
   const handleCreateWorktree = useCallback(
     (item: GitHubIssue | GitHubPR) => {
@@ -258,10 +284,119 @@ export function GitHubResourceList({
     [openCreateDialog, openCreateDialogForPR, onClose]
   );
 
+  const handleSwitchToWorktree = useCallback(
+    (worktreeId: string) => {
+      selectWorktree(worktreeId);
+      onClose?.();
+    },
+    [selectWorktree, onClose]
+  );
+
+  const handleClearSearch = useCallback(() => {
+    setSearchQuery("");
+    inputRef.current?.focus();
+  }, [setSearchQuery]);
+
   const handleRetry = () => {
     setCursor(null);
     fetchData(null, false, undefined);
   };
+
+  const listId = `github-${type}-list`;
+  const maxIndex = data.length - 1 + (hasMore ? 1 : 0);
+  const activeItem = activeIndex >= 0 && activeIndex < data.length ? data[activeIndex] : null;
+  const activeItemId = activeItem ? `github-${type}-option-${activeItem.number}` : undefined;
+  const isLoadMoreActive = hasMore && activeIndex === data.length;
+
+  useEffect(() => {
+    setActiveIndex(-1);
+  }, [data]);
+
+  useEffect(() => {
+    if (activeIndex >= 0 && listRef.current) {
+      const activeEl = activeItemId
+        ? document.getElementById(activeItemId)
+        : isLoadMoreActive
+          ? document.getElementById(`github-${type}-load-more`)
+          : null;
+      activeEl?.scrollIntoView({ block: "nearest" });
+    }
+  }, [activeIndex, activeItemId, isLoadMoreActive, type]);
+
+  const handleInputKeyDown = useCallback(
+    (e: KeyboardEvent<HTMLInputElement>) => {
+      switch (e.key) {
+        case "ArrowDown":
+          e.preventDefault();
+          e.stopPropagation();
+          setActiveIndex((prev) => Math.min(prev + 1, maxIndex));
+          break;
+        case "ArrowUp":
+          e.preventDefault();
+          e.stopPropagation();
+          setActiveIndex((prev) => Math.max(prev - 1, -1));
+          break;
+        case "Enter": {
+          e.preventDefault();
+          e.stopPropagation();
+          if (isLoadMoreActive) {
+            handleLoadMore();
+          } else if (activeItem) {
+            if (e.metaKey || e.ctrlKey) {
+              void actionService.dispatch(
+                "system.openExternal",
+                { url: activeItem.url },
+                { source: "user" }
+              );
+            } else {
+              const worktrees = useWorktreeDataStore.getState().worktrees;
+              let matchedWt: { id: string } | undefined;
+              for (const wt of worktrees.values()) {
+                if (
+                  type === "issue"
+                    ? wt.issueNumber === activeItem.number
+                    : wt.prNumber === activeItem.number
+                ) {
+                  matchedWt = wt;
+                  break;
+                }
+              }
+              if (matchedWt) {
+                handleSwitchToWorktree(matchedWt.id);
+              } else if (
+                activeItem.state === "OPEN" &&
+                !(type === "pr" && "isFork" in activeItem && activeItem.isFork)
+              ) {
+                handleCreateWorktree(activeItem);
+              }
+            }
+          }
+          break;
+        }
+        case "Escape":
+          e.preventDefault();
+          if (searchQuery !== "") {
+            setSearchQuery("");
+            e.nativeEvent.stopImmediatePropagation();
+          } else {
+            e.stopPropagation();
+            onClose?.();
+          }
+          break;
+      }
+    },
+    [
+      maxIndex,
+      isLoadMoreActive,
+      activeItem,
+      handleLoadMore,
+      handleSwitchToWorktree,
+      handleCreateWorktree,
+      onClose,
+      type,
+      searchQuery,
+    ]
+  );
 
   const renderSkeleton = (count: number) => {
     const safeCount = Number.isFinite(count) ? Math.floor(count) : MAX_SKELETON_ITEMS;
@@ -274,28 +409,17 @@ export function GitHubResourceList({
           {Array.from({ length: renderCount }).map((_, i) => (
             <div
               key={i}
-              className="p-3 animate-pulse-delayed box-border"
+              className="animate-pulse-delayed box-border"
               style={{ height: `${ITEM_HEIGHT_PX}px` }}
             >
-              <div className="flex items-start gap-3 h-full">
-                <div className="w-4 h-4 rounded-full bg-muted mt-0.5 shrink-0" />
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2">
-                    <div className="h-5 bg-muted rounded w-3/4" />
-                    <div className="h-4 bg-muted rounded w-10 shrink-0" />
-                  </div>
-                  <div className="mt-1 flex items-center gap-1.5">
-                    <div className="h-4 bg-muted rounded w-10" />
-                    <div className="h-4 bg-muted rounded w-12" />
-                    <div className="h-4 bg-muted rounded w-14" />
-                  </div>
-                </div>
-                <div className="flex items-center gap-2 shrink-0">
-                  <div className="flex -space-x-1.5">
-                    <div className="w-5 h-5 rounded-full bg-muted border-2 border-canopy-sidebar" />
-                    <div className="w-5 h-5 rounded-full bg-muted border-2 border-canopy-sidebar" />
-                  </div>
-                </div>
+              <div className="flex items-center gap-2 px-3 pt-2.5">
+                <div className="w-4 h-4 rounded-full bg-muted shrink-0" />
+                <div className="h-4 bg-muted rounded flex-1" />
+                <div className="h-4 bg-muted rounded w-8 shrink-0" />
+              </div>
+              <div className="flex items-center gap-1.5 px-3 mt-1.5 pb-2.5">
+                <div className="h-3 bg-muted rounded w-16" />
+                <div className="h-3 bg-muted rounded w-14" />
               </div>
             </div>
           ))}
@@ -335,22 +459,121 @@ export function GitHubResourceList({
   return (
     <div className="w-[450px] flex flex-col max-h-[500px]">
       <div className="p-3 border-b border-[var(--border-divider)] space-y-3 shrink-0">
-        <div className="relative">
-          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
-          <input
-            type="text"
-            placeholder={`Search ${type === "issue" ? "issues" : "pull requests"}...`}
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            aria-label={`Search ${type === "issue" ? "issues" : "pull requests"}`}
+        <div className="flex items-center gap-2">
+          <div
             className={cn(
-              "w-full h-8 pl-8 pr-3 rounded-[var(--radius-md)] text-sm",
+              "flex items-center gap-1.5 px-2 py-1.5 rounded-[var(--radius-md)] flex-1 min-w-0",
               "bg-overlay-soft border border-[var(--border-overlay)]",
-              "text-canopy-text placeholder:text-muted-foreground",
-              "focus:outline-none focus:ring-1 focus:ring-canopy-accent focus:border-canopy-accent",
-              "transition-colors"
+              "focus-within:border-canopy-accent focus-within:ring-1 focus-within:ring-canopy-accent/20"
             )}
-          />
+          >
+            <Search
+              className="w-3.5 h-3.5 shrink-0 text-canopy-text/40 pointer-events-none"
+              aria-hidden="true"
+            />
+            <input
+              ref={inputRef}
+              type="text"
+              placeholder={`Search ${type === "issue" ? "issues" : "pull requests"}...`}
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              onKeyDown={handleInputKeyDown}
+              autoFocus
+              role="combobox"
+              aria-autocomplete="list"
+              aria-expanded={true}
+              aria-haspopup="listbox"
+              aria-controls={listId}
+              aria-activedescendant={activeItemId}
+              aria-label={`Search ${type === "issue" ? "issues" : "pull requests"}`}
+              className="flex-1 min-w-0 text-sm bg-transparent text-canopy-text placeholder:text-muted-foreground focus:outline-none"
+            />
+            {searchQuery && (
+              <button
+                type="button"
+                onClick={handleClearSearch}
+                aria-label="Clear search"
+                className="flex items-center justify-center w-5 h-5 rounded shrink-0 text-canopy-text/40 hover:text-canopy-text"
+              >
+                <X className="w-3 h-3" />
+              </button>
+            )}
+          </div>
+          <Popover open={sortPopoverOpen} onOpenChange={setSortPopoverOpen}>
+            <PopoverTrigger asChild>
+              <button
+                type="button"
+                aria-label={`Sort ${type === "issue" ? "issues" : "pull requests"}`}
+                aria-haspopup="dialog"
+                className={cn(
+                  "relative flex items-center justify-center w-7 h-7 rounded shrink-0",
+                  "text-canopy-text/60 hover:text-canopy-text hover:bg-tint/[0.06]",
+                  "transition-colors",
+                  sortOrder !== "created" && "text-canopy-accent"
+                )}
+              >
+                <Filter className="w-3.5 h-3.5" />
+                {sortOrder !== "created" && (
+                  <span className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-canopy-accent" />
+                )}
+              </button>
+            </PopoverTrigger>
+            <PopoverContent
+              align="end"
+              sideOffset={8}
+              className="w-48 p-3"
+              onMouseDown={(e: React.MouseEvent) => e.stopPropagation()}
+              onTouchStart={(e: React.TouchEvent) => e.stopPropagation()}
+              onKeyDown={(e: React.KeyboardEvent) => {
+                if (e.key === "Escape") {
+                  e.stopPropagation();
+                  setSortPopoverOpen(false);
+                }
+              }}
+            >
+              <div className="text-[10px] font-medium text-canopy-text/50 uppercase tracking-wide mb-2">
+                Sort by
+              </div>
+              <div className="flex flex-col gap-1" role="radiogroup" aria-label="Sort order">
+                {(
+                  [
+                    { value: "created", label: "Newest" },
+                    { value: "updated", label: "Recently updated" },
+                  ] as const
+                ).map((option) => (
+                  <button
+                    key={option.value}
+                    type="button"
+                    onClick={() => setSortOrder(option.value)}
+                    role="radio"
+                    aria-checked={sortOrder === option.value}
+                    className={cn(
+                      "flex items-center gap-2 px-2 py-1 text-xs rounded",
+                      sortOrder === option.value
+                        ? "bg-canopy-accent/10 text-canopy-accent"
+                        : "text-canopy-text/70 hover:bg-overlay-medium"
+                    )}
+                  >
+                    <div
+                      className={cn(
+                        "w-3 h-3 rounded-full border",
+                        sortOrder === option.value
+                          ? "border-canopy-accent bg-canopy-accent"
+                          : "border-canopy-border"
+                      )}
+                    >
+                      {sortOrder === option.value && (
+                        <div className="w-full h-full flex items-center justify-center">
+                          <div className="w-1.5 h-1.5 bg-white rounded-full" />
+                        </div>
+                      )}
+                    </div>
+                    {option.label}
+                  </button>
+                ))}
+              </div>
+            </PopoverContent>
+          </Popover>
         </div>
 
         <div
@@ -412,13 +635,21 @@ export function GitHubResourceList({
                 )}
               </div>
             )}
-            <div className="divide-y divide-[var(--border-divider)]">
-              {data.map((item) => (
+            <div
+              ref={listRef}
+              id={listId}
+              role="listbox"
+              className="divide-y divide-[var(--border-divider)]"
+            >
+              {data.map((item, index) => (
                 <GitHubListItem
                   key={item.number}
                   item={item}
                   type={type}
                   onCreateWorktree={handleCreateWorktree}
+                  onSwitchToWorktree={handleSwitchToWorktree}
+                  optionId={`github-${type}-option-${item.number}`}
+                  isActive={activeIndex === index}
                 />
               ))}
             </div>
@@ -453,10 +684,14 @@ export function GitHubResourceList({
                   </div>
                 )}
                 <Button
+                  id={`github-${type}-load-more`}
                   variant="ghost"
                   onClick={handleLoadMore}
                   disabled={loadingMore}
-                  className="w-full text-muted-foreground hover:text-canopy-text"
+                  className={cn(
+                    "w-full text-muted-foreground hover:text-canopy-text",
+                    isLoadMoreActive && "ring-1 ring-canopy-accent text-canopy-text"
+                  )}
                 >
                   {loadingMore ? (
                     <>

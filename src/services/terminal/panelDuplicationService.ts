@@ -41,7 +41,7 @@ function buildKindSpecificOptions(panel: TerminalInstance): Partial<AddTerminalO
   const kind = panel.kind ?? "terminal";
 
   if (kind === "browser") {
-    return { browserUrl: panel.browserUrl };
+    return { browserUrl: panel.browserUrl, browserConsoleOpen: panel.browserConsoleOpen };
   }
 
   if (kind === "notes") {

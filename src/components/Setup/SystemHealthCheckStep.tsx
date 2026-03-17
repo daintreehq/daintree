@@ -1,51 +1,46 @@
-import { useEffect, useRef, useState } from "react";
-import { CircleCheck, CircleDashed, CircleX, ExternalLink, RotateCw } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  AlertTriangle,
+  CircleCheck,
+  CircleDashed,
+  CircleX,
+  ExternalLink,
+  RotateCw,
+} from "lucide-react";
 import { systemClient } from "@/clients";
 import type { PrerequisiteCheckResult, SystemHealthCheckResult } from "@shared/types";
 
 interface SystemHealthCheckStepProps {
   onSkip: () => void;
+  agentIds?: readonly string[];
 }
 
-const INSTALL_LINKS: Record<string, { label: string; url: string }> = {
-  git: { label: "Install Git", url: "https://git-scm.com/downloads" },
-  node: { label: "Install Node.js", url: "https://nodejs.org" },
-  npm: {
-    label: "Install npm",
-    url: "https://docs.npmjs.com/downloading-and-installing-node-js-and-npm",
-  },
-};
-
-const TOOL_LABELS: Record<string, string> = {
-  git: "Git",
-  node: "Node.js",
-  npm: "npm",
-};
-
-export function SystemHealthCheckStep({ onSkip }: SystemHealthCheckStepProps) {
+export function SystemHealthCheckStep({ onSkip, agentIds }: SystemHealthCheckStepProps) {
   const [result, setResult] = useState<SystemHealthCheckResult | null>(null);
   const [isChecking, setIsChecking] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const hasRunRef = useRef(false);
 
-  const runCheck = async () => {
+  const runCheck = useCallback(async () => {
     setIsChecking(true);
     setError(null);
     try {
-      const data = await systemClient.healthCheck();
+      const data = await systemClient.healthCheck(agentIds ? [...agentIds] : undefined);
       setResult(data);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Health check failed");
     } finally {
       setIsChecking(false);
     }
-  };
+  }, [agentIds]);
 
   useEffect(() => {
     if (hasRunRef.current) return;
     hasRunRef.current = true;
     void runCheck();
-  }, []);
+  }, [runCheck]);
+
+  const visibleResults = result?.prerequisites.filter((c) => c.severity !== "silent") ?? [];
 
   return (
     <div className="space-y-5">
@@ -58,11 +53,18 @@ export function SystemHealthCheckStep({ onSkip }: SystemHealthCheckStepProps) {
 
       <div className="space-y-2">
         {result
-          ? result.prerequisites.map((check) => <PrerequisiteRow key={check.tool} check={check} />)
-          : ["git", "node", "npm"].map((tool) => (
+          ? visibleResults.map((check) => <PrerequisiteRow key={check.tool} check={check} />)
+          : Array.from({ length: 4 }, (_, i) => (
               <PrerequisiteRow
-                key={tool}
-                check={{ tool, available: false, version: null }}
+                key={i}
+                check={{
+                  tool: "",
+                  label: "",
+                  available: false,
+                  version: null,
+                  severity: "fatal",
+                  meetsMinVersion: true,
+                }}
                 loading={isChecking}
               />
             ))}
@@ -77,8 +79,8 @@ export function SystemHealthCheckStep({ onSkip }: SystemHealthCheckStepProps) {
       {result && !result.allRequired && (
         <div className="px-3 py-2.5 rounded-[var(--radius-md)] border border-status-warning/20 bg-status-warning/5">
           <p className="text-xs text-status-warning">
-            Some required tools are missing. Canopy may not work correctly without them. You can
-            still continue and install them later.
+            Some required tools are missing or outdated. Agents that depend on them may not work
+            correctly. You can still continue and install them later.
           </p>
         </div>
       )}
@@ -112,32 +114,39 @@ function PrerequisiteRow({
   check: PrerequisiteCheckResult;
   loading?: boolean;
 }) {
-  const label = TOOL_LABELS[check.tool] ?? check.tool;
-  const link = INSTALL_LINKS[check.tool];
+  const label = check.label || check.tool;
+  const versionMismatch = check.available && !check.meetsMinVersion && check.minVersion;
 
   return (
     <div className="flex items-center gap-3 px-3 py-2.5 rounded-[var(--radius-md)] border border-canopy-border bg-canopy-bg/30">
-      <StatusIcon available={check.available} loading={loading} />
+      <StatusIcon check={check} loading={loading} />
       <div className="flex-1 min-w-0">
         <div className="text-sm font-medium text-canopy-text">{label}</div>
-        {check.version && <div className="text-[11px] text-canopy-text/40">v{check.version}</div>}
+        {check.version && !versionMismatch && (
+          <div className="text-[11px] text-canopy-text/40">v{check.version}</div>
+        )}
+        {versionMismatch && (
+          <div className="text-[11px] text-status-warning">
+            v{check.version} — requires v{check.minVersion}+
+          </div>
+        )}
       </div>
       {loading ? (
         <span className="text-[11px] text-canopy-text/30">Checking…</span>
-      ) : check.available ? (
+      ) : check.available && check.meetsMinVersion ? (
         <span className="text-[11px] text-status-success font-medium">Found</span>
       ) : (
-        link && (
+        check.installUrl && (
           <a
-            href={link.url}
+            href={check.installUrl}
             className="inline-flex items-center gap-1 text-[11px] text-canopy-accent hover:underline"
             onClick={(e) => {
               e.preventDefault();
-              void systemClient.openExternal(link.url);
+              void systemClient.openExternal(check.installUrl!);
             }}
           >
             <ExternalLink className="w-3 h-3" />
-            {link.label}
+            Install
           </a>
         )
       )}
@@ -145,12 +154,15 @@ function PrerequisiteRow({
   );
 }
 
-function StatusIcon({ available, loading }: { available: boolean; loading: boolean }) {
+function StatusIcon({ check, loading }: { check: PrerequisiteCheckResult; loading: boolean }) {
   if (loading) {
     return <CircleDashed className="w-4 h-4 text-canopy-text/20 animate-pulse shrink-0" />;
   }
-  if (available) {
+  if (check.available && check.meetsMinVersion) {
     return <CircleCheck className="w-4 h-4 text-status-success shrink-0" />;
+  }
+  if (check.severity === "warn") {
+    return <AlertTriangle className="w-4 h-4 text-status-warning shrink-0" />;
   }
   return <CircleX className="w-4 h-4 text-status-error shrink-0" />;
 }

@@ -1,10 +1,3 @@
-export const AGENT_BRAND_COLORS = {
-  claude: "#CC785C",
-  gemini: "#4285F4",
-  codex: "#e4e4e7",
-  opencode: "#10b981",
-} as const;
-
 export const PANEL_KIND_BRAND_COLORS = {
   terminal: "var(--theme-activity-idle)",
   agent: "var(--theme-accent-primary)",

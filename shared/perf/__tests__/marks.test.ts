@@ -18,6 +18,16 @@ describe("PERF_MARKS", () => {
     expect(PERF_MARKS.TERMINAL_DATA_RENDERED).toBe("terminal_data_rendered");
     expect(PERF_MARKS.IPC_REQUEST_START).toBe("ipc_request_start");
     expect(PERF_MARKS.IPC_REQUEST_END).toBe("ipc_request_end");
+
+    expect(PERF_MARKS.PROJECT_SWITCH_CLEANUP).toBe("project_switch_cleanup");
+    expect(PERF_MARKS.PROJECT_SWITCH_LOAD_PROJECT).toBe("project_switch_load_project");
+    expect(PERF_MARKS.HYDRATE_BOOTSTRAP).toBe("hydrate_bootstrap");
+    expect(PERF_MARKS.HYDRATE_APP_CLIENT).toBe("hydrate_app_client");
+    expect(PERF_MARKS.HYDRATE_GET_TERMINALS).toBe("hydrate_get_terminals");
+    expect(PERF_MARKS.HYDRATE_GET_SERIALIZED_STATES).toBe("hydrate_get_serialized_states");
+    expect(PERF_MARKS.HYDRATE_RESTORE_SNAPSHOTS_CRITICAL).toBe(
+      "hydrate_restore_snapshots_critical"
+    );
   });
 
   it("has unique values", () => {

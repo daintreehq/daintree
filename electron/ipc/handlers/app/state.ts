@@ -7,6 +7,9 @@ import {
   TerminalSnapshotSchema,
   filterValidTerminalEntries,
 } from "../../../schemas/ipc.js";
+import { getCrashRecoveryService } from "../../../services/CrashRecoveryService.js";
+
+import { isWebGLHardwareAccelerated } from "../../../utils/gpuDetection.js";
 
 export function registerAppStateHandlers(): () => void {
   const handlers: Array<() => void> = [];
@@ -205,6 +208,17 @@ export function registerAppStateHandlers(): () => void {
       terminalsSource = "global-fallback";
     }
 
+    // Apply one-shot crash recovery panel filter if set
+    // Empty array means "no specific selection" (legacy/no-panels case) — skip filtering
+    const panelFilter = getCrashRecoveryService().consumePanelFilter();
+    if (panelFilter !== null && panelFilter.length > 0) {
+      const filterSet = new Set(panelFilter);
+      terminalsToUse = terminalsToUse.filter((t) => filterSet.has(t.id));
+      console.log(
+        `[AppHydrate] Applied crash recovery panel filter: ${terminalsToUse.length} of ${panelFilter.length} requested panels found`
+      );
+    }
+
     // Terminal processes are discovered from backend via terminalClient.getForProject(),
     // but we preserve saved terminals array for ordering metadata (IDs and locations).
     // The frontend uses this to restore panel order when reconnecting to running terminals.
@@ -222,11 +236,20 @@ export function registerAppStateHandlers(): () => void {
       `[AppHydrate] Project: ${currentProject?.name ?? "none"} - terminals from ${terminalsSource} (${terminalsToUse.length} valid), focusMode: ${focusModeToUse}`
     );
 
+    const gpuStatus = app.getGPUFeatureStatus();
+    const gpuWebGLHardware = isWebGLHardwareAccelerated(gpuStatus.webgl2);
+    if (!gpuWebGLHardware) {
+      console.warn(
+        `[AppHydrate] Software-only WebGL2 detected (status: ${gpuStatus.webgl2}). WebGL terminal renderer will be disabled.`
+      );
+    }
+
     return {
       appState,
       terminalConfig: store.get("terminalConfig"),
       project: currentProject,
       agentSettings: store.get("agentSettings"),
+      gpuWebGLHardware,
     };
   };
   ipcMain.handle(CHANNELS.APP_HYDRATE, handleAppHydrate);
@@ -382,6 +405,24 @@ export function registerAppStateHandlers(): () => void {
           }
         }
         updates.mruList = sanitized;
+      }
+
+      if ("actionMruList" in partialState && Array.isArray(partialState.actionMruList)) {
+        const ACTION_ID_PATTERN = /^[a-zA-Z][a-zA-Z0-9._-]{0,127}$/;
+        const seen = new Set<string>();
+        const sanitized: string[] = [];
+        for (const id of partialState.actionMruList) {
+          if (
+            typeof id === "string" &&
+            ACTION_ID_PATTERN.test(id) &&
+            !seen.has(id) &&
+            sanitized.length < 20
+          ) {
+            seen.add(id);
+            sanitized.push(id);
+          }
+        }
+        updates.actionMruList = sanitized;
       }
 
       store.set("appState", { ...currentState, ...updates });

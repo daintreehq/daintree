@@ -359,7 +359,7 @@ describe("ActivityMonitor", () => {
       monitor.dispose();
     });
 
-    it("should still keep busy for spinner-style flashing output", () => {
+    it("should transition to idle when only spinner-style cosmetic redraws are present (Issue #3189)", () => {
       const onStateChange = vi.fn();
       const monitor = new ActivityMonitor("test-1", 1000, onStateChange, {
         idleDebounceMs: 200,
@@ -369,15 +369,134 @@ describe("ActivityMonitor", () => {
       expect(monitor.getState()).toBe("busy");
       onStateChange.mockClear();
 
-      monitor.onInput("h");
       for (let i = 0; i < 5; i++) {
         monitor.onData("\r⠋ Working (esc to interrupt)");
         vi.advanceTimersByTime(100);
       }
 
+      // Advance past debounce window — spinner redraws should NOT have reset it
+      vi.advanceTimersByTime(200);
+
+      expect(monitor.getState()).toBe("idle");
+
+      monitor.dispose();
+    });
+  });
+
+  describe("Cosmetic redraw filtering (Issue #3189)", () => {
+    it("should not reset debounce for Braille spinner redraws", () => {
+      const onStateChange = vi.fn();
+      const monitor = new ActivityMonitor("test-1", 1000, onStateChange, {
+        idleDebounceMs: 300,
+      });
+
+      monitor.onInput("run\r");
       expect(monitor.getState()).toBe("busy");
-      const idleCalls = onStateChange.mock.calls.filter((call) => call[2] === "idle");
-      expect(idleCalls.length).toBe(0);
+      onStateChange.mockClear();
+
+      // Send Braille spinner frames — these should be filtered as cosmetic
+      for (let i = 0; i < 10; i++) {
+        monitor.onData("\r⠙ Working (esc to interrupt)");
+        vi.advanceTimersByTime(100);
+      }
+
+      // Debounce should have fired (300ms window, not reset by spinners)
+      expect(monitor.getState()).toBe("idle");
+
+      monitor.dispose();
+    });
+
+    it("should not reset debounce for Ink cursor-up redraws", () => {
+      const onStateChange = vi.fn();
+      const monitor = new ActivityMonitor("test-1", 1000, onStateChange, {
+        idleDebounceMs: 300,
+      });
+
+      monitor.onInput("run\r");
+      expect(monitor.getState()).toBe("busy");
+      onStateChange.mockClear();
+
+      // Send Ink-style cursor-up redraw frames (Claude Code / Gemini CLI)
+      for (let i = 0; i < 10; i++) {
+        monitor.onData("\x1b[1A\x1b[2K✽ Deliberating… (esc to interrupt)");
+        vi.advanceTimersByTime(100);
+      }
+
+      // Debounce should have fired
+      expect(monitor.getState()).toBe("idle");
+
+      monitor.dispose();
+    });
+
+    it("should still count non-cosmetic CR rewrites as activity", () => {
+      const onStateChange = vi.fn();
+      const monitor = new ActivityMonitor("test-1", 1000, onStateChange, {
+        idleDebounceMs: 300,
+      });
+
+      monitor.onInput("run\r");
+      expect(monitor.getState()).toBe("busy");
+      onStateChange.mockClear();
+
+      // Send CR-based output that does NOT match any status pattern
+      // (e.g. a build tool writing real content on the same line)
+      for (let i = 0; i < 5; i++) {
+        monitor.onData("\rCompiling module-" + i + ".ts...");
+        vi.advanceTimersByTime(100);
+      }
+
+      // Debounce should have been reset by each real output — still busy
+      expect(monitor.getState()).toBe("busy");
+
+      monitor.dispose();
+    });
+
+    it("should filter Gemini CLI tool-use status lines", () => {
+      const onStateChange = vi.fn();
+      const monitor = new ActivityMonitor("test-1", 1000, onStateChange, {
+        idleDebounceMs: 300,
+      });
+
+      monitor.onInput("run\r");
+      expect(monitor.getState()).toBe("busy");
+      onStateChange.mockClear();
+
+      for (let i = 0; i < 10; i++) {
+        monitor.onData("\r✦ Using ReadFile...");
+        vi.advanceTimersByTime(100);
+      }
+
+      expect(monitor.getState()).toBe("idle");
+
+      monitor.dispose();
+    });
+
+    it("should stay busy when real output follows cosmetic redraws", () => {
+      const onStateChange = vi.fn();
+      const monitor = new ActivityMonitor("test-1", 1000, onStateChange, {
+        idleDebounceMs: 300,
+      });
+
+      monitor.onInput("run\r");
+      expect(monitor.getState()).toBe("busy");
+      onStateChange.mockClear();
+
+      // Send cosmetic spinner frames for 200ms (within debounce window)
+      for (let i = 0; i < 2; i++) {
+        monitor.onData("\r⠙ Working (esc to interrupt)");
+        vi.advanceTimersByTime(100);
+      }
+
+      // Now send real semantic output — this should reset the debounce timer
+      monitor.onData("\nFile created: src/index.ts\n");
+      vi.advanceTimersByTime(200);
+
+      // Should still be busy because the real output reset the debounce
+      expect(monitor.getState()).toBe("busy");
+
+      // After full debounce window with no more output, should go idle
+      vi.advanceTimersByTime(300);
+      expect(monitor.getState()).toBe("idle");
 
       monitor.dispose();
     });

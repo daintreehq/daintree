@@ -5,6 +5,8 @@ const MAIN_WORKTREE_NOTE_TTL_MS = 10 * 60 * 1000; // 10 minutes
 
 export type SpineState = "error" | "dirty" | "current" | "stale" | "idle";
 
+export type WorktreeLifecycleStage = "in-review" | "merged" | "ready-for-cleanup";
+
 export type ComputedSubtitleTone = "error" | "warning" | "info" | "muted";
 
 export interface ComputedSubtitle {
@@ -16,6 +18,7 @@ export interface UseWorktreeStatusResult {
   branchLabel: string;
   hasChanges: boolean;
   isComplete: boolean;
+  lifecycleStage: WorktreeLifecycleStage | null;
   effectiveNote?: string;
   effectiveSummary?: string | null;
   computedSubtitle: ComputedSubtitle;
@@ -105,8 +108,19 @@ export function useWorktreeStatus({
       return { text: firstLineLastCommitMessage, tone: "muted" };
     }
 
+    if (worktree.prTitle?.trim() && worktree.prState !== "closed") {
+      return { text: worktree.prTitle.trim(), tone: "muted" };
+    }
+
     return { text: "No recent activity", tone: "muted" };
-  }, [worktreeErrorCount, hasChanges, worktree.worktreeChanges, firstLineLastCommitMessage]);
+  }, [
+    worktreeErrorCount,
+    hasChanges,
+    worktree.worktreeChanges,
+    firstLineLastCommitMessage,
+    worktree.prTitle,
+    worktree.prState,
+  ]);
 
   const spineState: SpineState = useMemo(() => {
     if (worktreeErrorCount > 0 || worktree.mood === "error") return "error";
@@ -121,6 +135,19 @@ export function useWorktreeStatus({
     !!worktree.prNumber &&
     !hasChanges &&
     worktree.worktreeChanges !== null;
+
+  const lifecycleStage = useMemo((): WorktreeLifecycleStage | null => {
+    if (isMainWorktree) return null;
+    if (worktree.worktreeChanges === null) return null;
+
+    if (worktree.prState === "merged") {
+      return worktree.issueNumber ? "ready-for-cleanup" : "merged";
+    }
+
+    if (worktree.prState === "open") return "in-review";
+
+    return null;
+  }, [isMainWorktree, worktree.worktreeChanges, worktree.prState, worktree.issueNumber]);
 
   const lifecycle = worktree.lifecycleStatus;
   const isLifecycleRunning = lifecycle?.state === "running";
@@ -146,6 +173,7 @@ export function useWorktreeStatus({
     branchLabel,
     hasChanges,
     isComplete,
+    lifecycleStage,
     effectiveNote,
     effectiveSummary,
     computedSubtitle,

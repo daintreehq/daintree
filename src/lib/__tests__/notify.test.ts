@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach, vi, afterEach } from "vitest";
-import { notify } from "../notify";
+import { notify, _resetCoalesceMap } from "../notify";
 import { useNotificationStore } from "../../store/notificationStore";
 import { useNotificationHistoryStore } from "../../store/slices/notificationHistorySlice";
 
@@ -18,6 +18,7 @@ describe("notify()", () => {
   beforeEach(() => {
     useNotificationStore.setState({ notifications: [] });
     useNotificationHistoryStore.setState({ entries: [], unreadCount: 0 });
+    _resetCoalesceMap();
     mockShowNative.mockClear();
   });
 
@@ -88,6 +89,126 @@ describe("notify()", () => {
         correlationId: "panel-abc",
       });
       expect(useNotificationHistoryStore.getState().entries[0].correlationId).toBe("panel-abc");
+    });
+  });
+
+  describe("history actions — forwards serializable descriptors", () => {
+    it("stores actions in history when action has actionId", () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      notify({
+        type: "success",
+        message: "Agent done",
+        priority: "high",
+        action: {
+          label: "Go to terminal",
+          onClick: () => {},
+          actionId: "panel.focus",
+          actionArgs: { panelId: "p1" },
+        },
+      });
+      const entry = useNotificationHistoryStore.getState().entries[0];
+      expect(entry.actions).toHaveLength(1);
+      expect(entry.actions![0]).toEqual({
+        label: "Go to terminal",
+        actionId: "panel.focus",
+        actionArgs: { panelId: "p1" },
+        variant: undefined,
+      });
+    });
+
+    it("does not store actions when action has only onClick (no actionId)", () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      notify({
+        type: "info",
+        message: "No descriptor",
+        priority: "high",
+        action: { label: "Click me", onClick: () => {} },
+      });
+      const entry = useNotificationHistoryStore.getState().entries[0];
+      expect(entry.actions).toBeUndefined();
+    });
+
+    it("filters mixed actions array to only descriptor-backed ones", () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      notify({
+        type: "info",
+        message: "Mixed",
+        priority: "high",
+        actions: [
+          { label: "No ID", onClick: () => {} },
+          {
+            label: "Has ID",
+            onClick: () => {},
+            actionId: "panel.focus",
+            actionArgs: { panelId: "p2" },
+          },
+        ],
+      });
+      const entry = useNotificationHistoryStore.getState().entries[0];
+      expect(entry.actions).toHaveLength(1);
+      expect(entry.actions![0].label).toBe("Has ID");
+    });
+
+    it("forwards actions to history in grid-bar path", () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      notify({
+        type: "info",
+        message: "Grid bar",
+        placement: "grid-bar",
+        action: {
+          label: "Retry",
+          onClick: () => {},
+          actionId: "panel.focus",
+          actionArgs: { panelId: "p3" },
+        },
+      });
+      const entry = useNotificationHistoryStore.getState().entries[0];
+      expect(entry.actions).toHaveLength(1);
+      expect(entry.actions![0].actionId).toBe("panel.focus");
+    });
+
+    it("preserves variant in history action", () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      notify({
+        type: "info",
+        message: "With variant",
+        priority: "high",
+        action: {
+          label: "Secondary",
+          onClick: () => {},
+          actionId: "panel.focus",
+          variant: "secondary",
+        },
+      });
+      const entry = useNotificationHistoryStore.getState().entries[0];
+      expect(entry.actions![0].variant).toBe("secondary");
+    });
+
+    it("combines actions from both action and actions fields", () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      notify({
+        type: "info",
+        message: "Combined",
+        priority: "high",
+        action: {
+          label: "Single",
+          onClick: () => {},
+          actionId: "panel.focus",
+          actionArgs: { panelId: "p1" },
+        },
+        actions: [
+          {
+            label: "Array",
+            onClick: () => {},
+            actionId: "panel.focus",
+            actionArgs: { panelId: "p2" },
+          },
+        ],
+      });
+      const entry = useNotificationHistoryStore.getState().entries[0];
+      expect(entry.actions).toHaveLength(2);
+      expect(entry.actions![0].actionArgs).toEqual({ panelId: "p2" });
+      expect(entry.actions![1].actionArgs).toEqual({ panelId: "p1" });
     });
   });
 
@@ -240,6 +361,13 @@ describe("notify()", () => {
       expect(useNotificationHistoryStore.getState().unreadCount).toBe(0);
     });
 
+    it("does not increment unreadCount when countable is false", () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      notify({ type: "success", message: "Silent success", priority: "low", countable: false });
+      expect(useNotificationHistoryStore.getState().entries).toHaveLength(1);
+      expect(useNotificationHistoryStore.getState().unreadCount).toBe(0);
+    });
+
     it("does not increment unreadCount for grid-bar notifications (shown inline)", () => {
       vi.spyOn(document, "hasFocus").mockReturnValue(false);
       notify({ type: "info", message: "Inline", priority: "low", placement: "grid-bar" });
@@ -256,6 +384,197 @@ describe("notify()", () => {
       notify({ type: "error", message: "Missed 2", priority: "high" });
 
       expect(useNotificationHistoryStore.getState().unreadCount).toBe(3);
+    });
+  });
+
+  describe("toast cap — displaced notifications become unread in history", () => {
+    it("caps visible toasts at 3 when adding 4 focused high-priority notifications", () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      notify({ type: "info", message: "toast-1", priority: "high" });
+      notify({ type: "info", message: "toast-2", priority: "high" });
+      notify({ type: "info", message: "toast-3", priority: "high" });
+      notify({ type: "info", message: "toast-4", priority: "high" });
+
+      const notifications = useNotificationStore.getState().notifications;
+      const active = notifications.filter((n) => !n.dismissed);
+      expect(active).toHaveLength(3);
+    });
+
+    it("marks displaced toast's history entry as unread", () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      notify({ type: "info", message: "toast-1", priority: "high" });
+
+      const firstEntry = useNotificationHistoryStore.getState().entries[0];
+      expect(firstEntry.seenAsToast).toBe(true);
+
+      notify({ type: "info", message: "toast-2", priority: "high" });
+      notify({ type: "info", message: "toast-3", priority: "high" });
+      notify({ type: "info", message: "toast-4", priority: "high" });
+
+      const updatedEntry = useNotificationHistoryStore
+        .getState()
+        .entries.find((e) => e.id === firstEntry.id);
+      expect(updatedEntry?.seenAsToast).toBe(false);
+    });
+
+    it("increments unreadCount when a toast is displaced", () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      notify({ type: "info", message: "toast-1", priority: "high" });
+      notify({ type: "info", message: "toast-2", priority: "high" });
+      notify({ type: "info", message: "toast-3", priority: "high" });
+      expect(useNotificationHistoryStore.getState().unreadCount).toBe(0);
+
+      notify({ type: "info", message: "toast-4", priority: "high" });
+      expect(useNotificationHistoryStore.getState().unreadCount).toBe(1);
+    });
+
+    it("does not cap grid-bar notifications", () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      for (let i = 0; i < 5; i++) {
+        notify({ type: "info", message: `grid-${i}`, placement: "grid-bar" });
+      }
+      const active = useNotificationStore.getState().notifications.filter((n) => !n.dismissed);
+      expect(active).toHaveLength(5);
+    });
+  });
+
+  describe("coalescing — merges rapid toasts with the same key", () => {
+    const makeCoalescePayload = (key = "agent:completed", message = "Agent done") => ({
+      type: "success" as const,
+      message,
+      priority: "high" as const,
+      title: "Agent task completed",
+      duration: 5000,
+      coalesce: {
+        key,
+        windowMs: 15000,
+        buildMessage: (count: number) => `${count} agents finished`,
+        buildTitle: () => "Agent tasks completed",
+        buildAction: (count: number) =>
+          count > 1
+            ? { label: "View all", onClick: () => {} }
+            : { label: "Go to terminal", onClick: () => {} },
+      },
+    });
+
+    it("coalesces two calls with same key into one toast", () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      const id1 = notify(makeCoalescePayload());
+      const id2 = notify(makeCoalescePayload());
+
+      expect(id1).toBe(id2);
+      expect(useNotificationStore.getState().notifications).toHaveLength(1);
+    });
+
+    it("records each event individually in history with distinct messages", () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      notify(makeCoalescePayload("agent:completed", "Agent 1 done"));
+      notify(makeCoalescePayload("agent:completed", "Agent 2 done"));
+
+      const entries = useNotificationHistoryStore.getState().entries;
+      expect(entries).toHaveLength(2);
+      expect(entries[0].message).toBe("Agent 2 done");
+      expect(entries[1].message).toBe("Agent 1 done");
+    });
+
+    it("updates toast message and title on coalesce", () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      notify(makeCoalescePayload());
+      notify(makeCoalescePayload());
+
+      const notification = useNotificationStore.getState().notifications[0];
+      expect(notification.message).toBe("2 agents finished");
+      expect(notification.title).toBe("Agent tasks completed");
+    });
+
+    it("updates action to multi-agent on coalesce", () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      notify(makeCoalescePayload());
+      notify(makeCoalescePayload());
+
+      const notification = useNotificationStore.getState().notifications[0];
+      expect(notification.action?.label).toBe("View all");
+    });
+
+    it("creates fresh toast after coalescing window expires", () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      const realDateNow = Date.now;
+
+      let now = 1000;
+      Date.now = () => now;
+
+      const id1 = notify(makeCoalescePayload());
+
+      now = 17000; // 16s later, past the 15s window
+      const id2 = notify(makeCoalescePayload());
+
+      expect(id1).not.toBe(id2);
+      expect(useNotificationStore.getState().notifications).toHaveLength(2);
+
+      Date.now = realDateNow;
+    });
+
+    it("refreshes window on each coalesced update", () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      const realDateNow = Date.now;
+
+      let now = 1000;
+      Date.now = () => now;
+
+      const id1 = notify(makeCoalescePayload());
+
+      now = 8000; // 7s later, within 15s window
+      const id2 = notify(makeCoalescePayload());
+      expect(id1).toBe(id2);
+
+      now = 14000; // 6s after last update, still within refreshed window
+      const id3 = notify(makeCoalescePayload());
+      expect(id1).toBe(id3);
+
+      expect(useNotificationStore.getState().notifications).toHaveLength(1);
+
+      Date.now = realDateNow;
+    });
+
+    it("does not coalesce across different keys", () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      const id1 = notify(makeCoalescePayload("agent:completed"));
+      const id2 = notify(makeCoalescePayload("agent:failed"));
+
+      expect(id1).not.toBe(id2);
+      expect(useNotificationStore.getState().notifications).toHaveLength(2);
+    });
+
+    it("starts fresh toast when existing toast is dismissed", () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      const id1 = notify(makeCoalescePayload());
+
+      // Dismiss the toast
+      useNotificationStore.getState().dismissNotification(id1);
+
+      const id2 = notify(makeCoalescePayload());
+      expect(id1).not.toBe(id2);
+      expect(useNotificationStore.getState().notifications).toHaveLength(2);
+    });
+
+    it("does not coalesce when no coalesce option is provided", () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      notify({ type: "warning", message: "Waiting 1", priority: "high" });
+      notify({ type: "warning", message: "Waiting 2", priority: "high" });
+
+      expect(useNotificationStore.getState().notifications).toHaveLength(2);
+    });
+
+    it("sets updatedAt on coalesced notification", () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      notify(makeCoalescePayload());
+      const firstUpdatedAt = useNotificationStore.getState().notifications[0].updatedAt;
+
+      notify(makeCoalescePayload());
+      const secondUpdatedAt = useNotificationStore.getState().notifications[0].updatedAt;
+
+      expect(secondUpdatedAt).toBeDefined();
+      expect(secondUpdatedAt).toBeGreaterThanOrEqual(firstUpdatedAt!);
     });
   });
 });

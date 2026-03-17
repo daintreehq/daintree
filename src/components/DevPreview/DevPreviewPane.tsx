@@ -1,9 +1,10 @@
 import { useState, useCallback, useRef, useEffect, useMemo } from "react";
 import { AlertTriangle, RotateCw, ExternalLink, Settings, Wand2 } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { useTerminalStore } from "@/store";
 import { useProjectStore } from "@/store/projectStore";
 import { useProjectSettingsStore } from "@/store/projectSettingsStore";
-import type { BrowserHistory } from "@shared/types/domain";
+import type { BrowserHistory } from "@shared/types/browser";
 import { ContentPanel, type BasePanelProps } from "@/components/Panel";
 import { BrowserToolbar } from "../Browser/BrowserToolbar";
 import { normalizeBrowserUrl } from "../Browser/browserUtils";
@@ -23,6 +24,16 @@ import { useProjectSettings } from "@/hooks/useProjectSettings";
 import { projectClient } from "@/clients";
 import { actionService } from "@/services/ActionService";
 import { useWebviewThrottle } from "@/hooks/useWebviewThrottle";
+import { useWebviewDialog } from "@/hooks/useWebviewDialog";
+import { WebviewDialog } from "../Browser/WebviewDialog";
+import { FindBar } from "../Browser/FindBar";
+import { useFindInPage } from "@/hooks/useFindInPage";
+
+const scrollCache = new Map<string, { url: string; scrollY: number }>();
+
+export function _resetScrollCacheForTests(): void {
+  scrollCache.clear();
+}
 
 export interface DevPreviewPaneProps extends BasePanelProps {
   cwd: string;
@@ -105,30 +116,77 @@ export function DevPreviewPane({
   const allDetectedRunners = useProjectSettingsStore((state) => state.allDetectedRunners);
   const isSettingsLoading = useProjectSettingsStore((state) => state.isLoading);
   const isMountedRef = useRef(true);
+  const prevStatusRef = useRef(status);
+  const loadTimeoutMs =
+    Math.min(Math.max(projectSettings?.devServerLoadTimeout ?? 30, 1), 120) * 1000;
 
   const currentUrl = history.present;
   const canGoBack = history.past.length > 0;
   const canGoForward = history.future.length > 0;
   const isUnconfigured = Boolean(currentProjectId) && !isSettingsLoading && !devCommand;
 
-  const setWebviewNode = useCallback((node: Electron.WebviewTag | null) => {
-    webviewRef.current = node;
-    if (node) {
-      lastSetUrlRef.current = "";
-      failLoadRetryCountRef.current = 0;
-      if (failLoadRetryRef.current) {
-        clearTimeout(failLoadRetryRef.current);
-        failLoadRetryRef.current = null;
+  const setWebviewNode = useCallback(
+    (node: Electron.WebviewTag | null) => {
+      if (!node && webviewRef.current) {
+        try {
+          const prevWebview = webviewRef.current;
+          const currentWebviewUrl = prevWebview.getURL();
+          if (currentWebviewUrl && currentWebviewUrl !== "about:blank") {
+            prevWebview
+              .executeJavaScript("window.scrollY")
+              .then((scrollY: number) => {
+                if (typeof scrollY === "number" && Number.isFinite(scrollY)) {
+                  scrollCache.set(id, { url: currentWebviewUrl, scrollY });
+                }
+              })
+              .catch(() => {});
+          }
+        } catch {
+          // Webview already detached
+        }
       }
-    }
-    setWebviewElement(node);
-  }, []);
+      webviewRef.current = node;
+      if (node) {
+        lastSetUrlRef.current = "";
+        failLoadRetryCountRef.current = 0;
+        if (failLoadRetryRef.current) {
+          clearTimeout(failLoadRetryRef.current);
+          failLoadRetryRef.current = null;
+        }
+      }
+      setWebviewElement(node);
+    },
+    [id]
+  );
 
   useEffect(() => {
     return () => {
       isMountedRef.current = false;
     };
   }, []);
+
+  useEffect(() => {
+    const prevStatus = prevStatusRef.current;
+    prevStatusRef.current = status;
+
+    if (prevStatus === "running" && status !== "running" && webviewElement) {
+      try {
+        const currentWebviewUrl = webviewElement.getURL();
+        if (currentWebviewUrl && currentWebviewUrl !== "about:blank") {
+          webviewElement
+            .executeJavaScript("window.scrollY")
+            .then((scrollY: number) => {
+              if (typeof scrollY === "number" && Number.isFinite(scrollY)) {
+                scrollCache.set(id, { url: currentWebviewUrl, scrollY });
+              }
+            })
+            .catch(() => {});
+        }
+      } catch {
+        // Webview already detached
+      }
+    }
+  }, [status, id, webviewElement]);
 
   useEffect(() => {
     setConsoleTerminalId(terminalId);
@@ -197,6 +255,7 @@ export function DevPreviewPane({
   }, [start]);
 
   const handleHardRestart = useCallback(() => {
+    scrollCache.delete(id);
     if (loadTimeoutRef.current) {
       clearTimeout(loadTimeoutRef.current);
       loadTimeoutRef.current = null;
@@ -265,7 +324,7 @@ export function DevPreviewPane({
         } catch {
           // Webview detached before timeout fired
         }
-      }, 30000);
+      }, loadTimeoutMs);
     };
 
     const handleDidStopLoading = () => {
@@ -379,7 +438,7 @@ export function DevPreviewPane({
         failLoadRetryRef.current = null;
       }
     };
-  }, [webviewElement]);
+  }, [webviewElement, loadTimeoutMs]);
 
   useEffect(() => {
     const webview = webviewElement;
@@ -394,6 +453,18 @@ export function DevPreviewPane({
       if (loadTimeoutRef.current) {
         clearTimeout(loadTimeoutRef.current);
         loadTimeoutRef.current = null;
+      }
+
+      const saved = scrollCache.get(id);
+      if (saved) {
+        try {
+          const loadedUrl = webview.getURL();
+          if (loadedUrl === saved.url && saved.scrollY > 0) {
+            webview.executeJavaScript(`window.scrollTo(0, ${saved.scrollY})`).catch(() => {});
+          }
+        } catch {
+          // Webview not ready
+        }
       }
     };
 
@@ -411,7 +482,7 @@ export function DevPreviewPane({
     return () => {
       webview.removeEventListener("dom-ready", handleDomReady);
     };
-  }, [zoomFactor, webviewElement]);
+  }, [id, zoomFactor, webviewElement]);
 
   useEffect(() => {
     if (isWebviewReady && currentUrl && currentUrl !== lastSetUrlRef.current) {
@@ -443,6 +514,12 @@ export function DevPreviewPane({
   }, []);
 
   useWebviewThrottle(id, location, webviewElement, isWebviewReady);
+  const { currentDialog, handleDialogRespond } = useWebviewDialog(
+    id,
+    webviewElement,
+    isWebviewReady
+  );
+  const findInPage = useFindInPage(id, webviewElement, isWebviewReady, isFocused);
 
   return (
     <ContentPanel
@@ -477,7 +554,7 @@ export function DevPreviewPane({
           onZoomChange={handleZoomChange}
         />
 
-        <div className="relative flex-1 min-h-0 bg-white">
+        <div className="relative flex-1 min-h-0 bg-surface-canvas">
           {isRestarting || status === "starting" || status === "installing" ? (
             <div className="absolute inset-0 flex flex-col items-center justify-center bg-canopy-bg">
               <div className="w-12 h-12 border-2 border-status-info border-t-transparent rounded-full animate-spin mb-4" />
@@ -494,27 +571,25 @@ export function DevPreviewPane({
                 {error.message}
               </p>
               <div className="flex items-center gap-1">
-                <button
-                  type="button"
+                <Button
                   onClick={handleRetry}
-                  className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md hover:bg-white/5 transition-colors group focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-canopy-accent/50"
+                  variant="ghost"
+                  size="sm"
+                  className="gap-1.5 px-2.5 py-1.5 group text-canopy-accent/70 hover:text-canopy-accent"
                 >
-                  <RotateCw className="h-3.5 w-3.5 text-canopy-accent/70 group-hover:text-canopy-accent transition-colors" />
-                  <span className="text-xs text-canopy-accent/70 group-hover:text-canopy-accent transition-colors">
-                    Retry
-                  </span>
-                </button>
+                  <RotateCw className="h-3.5 w-3.5" />
+                  <span className="text-xs">Retry</span>
+                </Button>
                 {currentUrl && (
-                  <button
-                    type="button"
+                  <Button
                     onClick={handleOpenExternal}
-                    className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md hover:bg-white/5 transition-colors group focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-canopy-accent/50"
+                    variant="ghost"
+                    size="sm"
+                    className="gap-1.5 px-2.5 py-1.5 group text-canopy-text/50 hover:text-canopy-text/70"
                   >
-                    <ExternalLink className="h-3.5 w-3.5 text-canopy-text/50 group-hover:text-canopy-text/70 transition-colors" />
-                    <span className="text-xs text-canopy-text/50 group-hover:text-canopy-text/70 transition-colors">
-                      Open External
-                    </span>
-                  </button>
+                    <ExternalLink className="h-3.5 w-3.5" />
+                    <span className="text-xs">Open External</span>
+                  </Button>
                 )}
               </div>
             </div>
@@ -533,30 +608,30 @@ export function DevPreviewPane({
                   </p>
                   <div className="flex flex-col items-center gap-2">
                     {allDetectedRunners && findDevServerCandidate(allDetectedRunners) && (
-                      <button
-                        type="button"
+                      <Button
                         onClick={handleAutoDetect}
                         disabled={isAutoDetecting || isSettingsLoading}
-                        className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md hover:bg-white/5 transition-colors group disabled:opacity-50 disabled:cursor-not-allowed focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-canopy-accent/50"
+                        variant="ghost"
+                        size="sm"
+                        className="gap-1.5 px-2.5 py-1.5 group text-canopy-accent/70 hover:text-canopy-accent"
                       >
-                        <Wand2 className="h-3.5 w-3.5 text-canopy-accent/70 group-hover:text-canopy-accent transition-colors" />
-                        <span className="text-xs text-canopy-accent/70 group-hover:text-canopy-accent transition-colors">
+                        <Wand2 className="h-3.5 w-3.5" />
+                        <span className="text-xs">
                           {isAutoDetecting
                             ? "Detecting..."
                             : `Use \`${findDevServerCandidate(allDetectedRunners)?.command}\``}
                         </span>
-                      </button>
+                      </Button>
                     )}
-                    <button
-                      type="button"
+                    <Button
                       onClick={handleOpenSettings}
-                      className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md hover:bg-white/5 transition-colors group focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-canopy-accent/50"
+                      variant="ghost"
+                      size="sm"
+                      className="gap-1.5 px-2.5 py-1.5 group text-canopy-text/50 hover:text-canopy-text/70"
                     >
-                      <Settings className="h-3.5 w-3.5 text-canopy-text/50 group-hover:text-canopy-text/70 transition-colors" />
-                      <span className="text-xs text-canopy-text/50 group-hover:text-canopy-text/70 transition-colors">
-                        Open Project Settings
-                      </span>
-                    </button>
+                      <Settings className="h-3.5 w-3.5" />
+                      <span className="text-xs">Open Project Settings</span>
+                    </Button>
                   </div>
                 </div>
               ) : (
@@ -573,15 +648,19 @@ export function DevPreviewPane({
           ) : (
             <>
               {isDragging && <div className="absolute inset-0 z-10 bg-transparent" />}
+              {findInPage.isOpen && <FindBar find={findInPage} />}
               <webview
                 ref={setWebviewNode}
                 src={currentUrl}
                 partition={webviewPartition}
+                // @ts-expect-error React 19 requires "" to emit the attribute; boolean true is silently dropped
+                allowpopups=""
                 className={cn(
                   "w-full h-full border-0",
                   isDragging && "invisible pointer-events-none"
                 )}
               />
+              <WebviewDialog dialog={currentDialog} onRespond={handleDialogRespond} />
             </>
           )}
         </div>

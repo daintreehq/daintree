@@ -132,7 +132,7 @@ export function McpServerSettingsTab() {
             ) : status.port ? (
               <div className="space-y-3">
                 <div className="flex items-center gap-2">
-                  <div className="w-2 h-2 rounded-full bg-green-500 shrink-0" />
+                  <div className="w-2 h-2 rounded-full bg-status-success shrink-0" />
                   <span className="text-xs text-canopy-text/60">Running on port {status.port}</span>
                 </div>
 
@@ -146,7 +146,7 @@ export function McpServerSettingsTab() {
                     "flex items-center gap-2 px-3 py-1.5 rounded-[var(--radius-md)] text-xs font-medium transition-colors",
                     "border border-canopy-border hover:bg-overlay-soft",
                     copied
-                      ? "text-green-500 border-green-500/30"
+                      ? "text-status-success border-status-success/30"
                       : "text-canopy-text/70 hover:text-canopy-text"
                   )}
                 >
@@ -199,7 +199,7 @@ export function McpServerSettingsTab() {
               </button>
             </div>
             {status.port && status.configuredPort && status.port !== status.configuredPort && (
-              <p className="text-xs text-amber-400/80 mt-2">
+              <p className="text-xs text-status-warning/80 mt-2">
                 Configured port {status.configuredPort} was in use — bound to {status.port} instead.
               </p>
             )}
@@ -213,7 +213,7 @@ export function McpServerSettingsTab() {
           >
             {status.apiKey ? (
               <div className="space-y-3">
-                <div className="flex items-center gap-1.5 text-xs text-green-500">
+                <div className="flex items-center gap-1.5 text-xs text-status-success">
                   <Key className="w-3 h-3" />
                   API key active — clients must send an Authorization header
                 </div>
@@ -249,7 +249,7 @@ export function McpServerSettingsTab() {
                   </button>
                   <button
                     onClick={handleClearApiKey}
-                    className="px-3 py-2 text-xs font-medium rounded-[var(--radius-md)] border border-canopy-border text-red-400 hover:text-red-300 hover:bg-red-500/10 hover:border-red-500/20 transition-colors"
+                    className="px-3 py-2 text-xs font-medium rounded-[var(--radius-md)] border border-canopy-border text-status-danger hover:text-status-danger hover:bg-status-danger/10 hover:border-status-danger/20 transition-colors"
                   >
                     Remove
                   </button>
@@ -290,9 +290,9 @@ export function McpServerSettingsTab() {
       </SettingsSection>
 
       {error && (
-        <div className="flex items-start gap-2 p-3 rounded-[var(--radius-md)] bg-red-500/10 border border-red-500/20">
-          <AlertCircle className="w-4 h-4 text-red-400 shrink-0 mt-0.5" />
-          <p className="text-xs text-red-400">{error}</p>
+        <div className="flex items-start gap-2 p-3 rounded-[var(--radius-md)] bg-status-danger/10 border border-status-danger/20">
+          <AlertCircle className="w-4 h-4 text-status-danger shrink-0 mt-0.5" />
+          <p className="text-xs text-status-danger">{error}</p>
         </div>
       )}
     </div>

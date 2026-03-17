@@ -29,9 +29,9 @@ import { utilityProcess, UtilityProcess, dialog, app, MessagePortMain } from "el
 import { EventEmitter } from "events";
 import path from "path";
 import os from "os";
+import { spawnSync } from "child_process";
 import { fileURLToPath } from "url";
 import { logInfo, logWarn } from "../utils/logger.js";
-import { SharedRingBuffer } from "../../shared/utils/SharedRingBuffer.js";
 import { RequestResponseBroker } from "./rpc/index.js";
 import { bridgePtyEvent } from "./pty/PtyEventsBridge.js";
 import type {
@@ -46,7 +46,8 @@ import type {
 } from "../../shared/types/pty-host.js";
 import type { TerminalSnapshot } from "./PtyManager.js";
 import type { AgentStateChangeTrigger } from "../types/index.js";
-import type { AgentState, TerminalType, TerminalKind, AgentId } from "../../shared/types/domain.js";
+import type { AgentState, AgentId } from "../../shared/types/agent.js";
+import type { TerminalType, TerminalKind } from "../../shared/types/panel.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -87,9 +88,6 @@ const DEFAULT_CONFIG: Required<PtyClientConfig> = {
   showCrashDialog: true,
   memoryLimitMb: 4096,
 };
-
-/** Default ring buffer size: 10MB for high-throughput terminal output */
-const DEFAULT_RING_BUFFER_SIZE = 10 * 1024 * 1024;
 
 /**
  * Classify crash type based on exit code and signal.
@@ -187,15 +185,6 @@ export class PtyClient extends EventEmitter {
   private readyResolve: (() => void) | null = null;
   private readyReject: ((error: Error) => void) | null = null;
 
-  /** SharedArrayBuffer array for zero-copy terminal I/O (null if unavailable) */
-  private visualBuffers: SharedArrayBuffer[] = [];
-  /** SharedArrayBuffer for semantic analysis (separate from visual buffers) */
-  private analysisBuffer: SharedArrayBuffer | null = null;
-  /** SharedArrayBuffer for global wake signal */
-  private visualSignalBuffer: SharedArrayBuffer | null = null;
-  private sharedBufferEnabled = false;
-  private readonly VISUAL_SHARD_COUNT = 4;
-
   /** Callback to notify renderer when MessagePort needs to be refreshed */
   private onPortRefresh: (() => void) | null = null;
 
@@ -212,24 +201,10 @@ export class PtyClient extends EventEmitter {
       this.readyReject = reject;
     });
 
-    try {
-      const perShardSize = Math.floor(DEFAULT_RING_BUFFER_SIZE / this.VISUAL_SHARD_COUNT);
-      for (let i = 0; i < this.VISUAL_SHARD_COUNT; i++) {
-        this.visualBuffers.push(SharedRingBuffer.create(perShardSize));
-      }
-      this.analysisBuffer = SharedRingBuffer.create(DEFAULT_RING_BUFFER_SIZE);
-      this.visualSignalBuffer = new SharedArrayBuffer(4);
-      this.sharedBufferEnabled = true;
-      console.log(
-        `[PtyClient] SharedArrayBuffer enabled (${this.VISUAL_SHARD_COUNT} visual shards × ${Math.floor(perShardSize / 1024 / 1024)}MB + 10MB analysis)`
-      );
-    } catch (error) {
-      console.warn("[PtyClient] SharedArrayBuffer unavailable, using IPC fallback:", error);
-      this.visualBuffers = [];
-      this.analysisBuffer = null;
-      this.visualSignalBuffer = null;
-      this.sharedBufferEnabled = false;
-    }
+    // SharedArrayBuffer cannot be sent to Electron UtilityProcess via postMessage
+    // ("An object could not be cloned"). This is a Chromium structured clone limitation
+    // that affects all platforms. Use IPC fallback for terminal I/O.
+    console.log("[PtyClient] Using IPC mode (SharedArrayBuffer not supported in UtilityProcess)");
 
     this.startHost();
   }
@@ -353,30 +328,6 @@ export class PtyClient extends EventEmitter {
     this.child.on("message", (msg: PtyHostEvent) => {
       this.handleHostEvent(msg);
     });
-
-    // Send all SharedArrayBuffers to host immediately after spawn
-    if (this.visualBuffers.length > 0 && this.analysisBuffer && this.visualSignalBuffer) {
-      try {
-        this.child.postMessage({
-          type: "init-buffers",
-          visualBuffers: this.visualBuffers,
-          analysisBuffer: this.analysisBuffer,
-          visualSignalBuffer: this.visualSignalBuffer,
-        });
-        console.log(
-          `[PtyClient] SharedArrayBuffers sent to Pty Host (${this.visualBuffers.length} visual shards + analysis + signal)`
-        );
-      } catch (error) {
-        console.warn(
-          "[PtyClient] SharedArrayBuffer transfer failed (using IPC fallback):",
-          error instanceof Error ? error.message : String(error)
-        );
-        this.visualBuffers = [];
-        this.analysisBuffer = null;
-        this.visualSignalBuffer = null;
-        this.sharedBufferEnabled = false;
-      }
-    }
 
     this.child.on("exit", (code) => {
       this.flushHostOutputBuffers();
@@ -665,6 +616,27 @@ export class PtyClient extends EventEmitter {
         this.broker.resolve((event as any).requestId, (event as any).killed ?? 0);
         break;
 
+      case "graceful-kill-result": {
+        const gkEvent = event as {
+          type: "graceful-kill-result";
+          requestId: string;
+          id: string;
+          agentSessionId: string | null;
+        };
+        this.broker.resolve(gkEvent.requestId, gkEvent.agentSessionId ?? null);
+        break;
+      }
+
+      case "graceful-kill-by-project-result": {
+        const gkpEvent = event as {
+          type: "graceful-kill-by-project-result";
+          requestId: string;
+          results: Array<{ id: string; agentSessionId: string | null }>;
+        };
+        this.broker.resolve(gkpEvent.requestId, gkpEvent.results ?? []);
+        break;
+      }
+
       case "project-stats":
         this.broker.resolve(
           (event as any).requestId,
@@ -753,6 +725,17 @@ export class PtyClient extends EventEmitter {
           killed = true;
         } catch {
           // ignore - fall back to direct kill
+        }
+      }
+
+      if (!killed && process.platform === "win32") {
+        const result = spawnSync("taskkill", ["/T", "/F", "/PID", String(pid)], {
+          windowsHide: true,
+          stdio: "ignore",
+          timeout: 3000,
+        });
+        if (result.status === 0 || result.status === 128) {
+          killed = true;
         }
       }
 
@@ -980,6 +963,28 @@ export class PtyClient extends EventEmitter {
     this.send({ type: "project-switch", projectId });
   }
 
+  async gracefulKill(id: string): Promise<string | null> {
+    const requestId = this.broker.generateId(`graceful-kill-${id}`);
+    const promise = this.broker.register<string | null>(requestId, 5000);
+    this.send({ type: "graceful-kill", id, requestId });
+    return promise.catch(() => {
+      this.kill(id, "graceful-kill-timeout");
+      return null;
+    });
+  }
+
+  async gracefulKillByProject(
+    projectId: string
+  ): Promise<Array<{ id: string; agentSessionId: string | null }>> {
+    const requestId = this.broker.generateId(`graceful-kill-by-project-${projectId}`);
+    const promise = this.broker.register<Array<{ id: string; agentSessionId: string | null }>>(
+      requestId,
+      10000
+    );
+    this.send({ type: "graceful-kill-by-project", projectId, requestId });
+    return promise.catch(() => []);
+  }
+
   async killByProject(projectId: string): Promise<number> {
     const requestId = this.broker.generateId(`kill-by-project-${projectId}`);
     const promise = this.broker.register<number>(requestId, 10000);
@@ -1044,7 +1049,7 @@ export class PtyClient extends EventEmitter {
 
   /** Get terminals filtered by agent state */
   async getTerminalsByStateAsync(
-    state: import("../../shared/types/domain.js").AgentState
+    state: import("../../shared/types/agent.js").AgentState
   ): Promise<TerminalInfoResponse[]> {
     const requestId = this.broker.generateId(`terminals-by-state-${state}`);
     const promise = this.broker.register<TerminalInfoResponse[]>(requestId);
@@ -1367,32 +1372,29 @@ export class PtyClient extends EventEmitter {
 
   /**
    * Get the SharedArrayBuffers for zero-copy terminal I/O (visual rendering).
-   * Returns empty array if SharedArrayBuffer is not available.
+   * Always returns empty — SharedArrayBuffer is not supported in Electron UtilityProcess.
    */
   getSharedBuffers(): {
     visualBuffers: SharedArrayBuffer[];
     signalBuffer: SharedArrayBuffer | null;
   } {
-    return {
-      visualBuffers: this.visualBuffers,
-      signalBuffer: this.visualSignalBuffer,
-    };
+    return { visualBuffers: [], signalBuffer: null };
   }
 
   /**
    * Get the SharedArrayBuffer for semantic analysis (Web Worker).
-   * Returns null if SharedArrayBuffer is not available.
+   * Always returns null — SharedArrayBuffer is not supported in Electron UtilityProcess.
    */
   getAnalysisBuffer(): SharedArrayBuffer | null {
-    return this.analysisBuffer;
+    return null;
   }
 
   /**
    * Check if SharedArrayBuffer-based I/O is enabled.
-   * Used internally and by diagnostic/debugging code.
+   * Always false — Electron UtilityProcess does not support SharedArrayBuffer transfer.
    */
   isSharedBufferEnabled(): boolean {
-    return this.sharedBufferEnabled;
+    return false;
   }
 }
 

@@ -33,6 +33,7 @@ import { TerminalRefreshTier as TerminalRefreshTierEnum } from "@/types";
 import { terminalRegistryController } from "@/controllers";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { useTerminalInputStore } from "./terminalInputStore";
+import { useConsoleCaptureStore } from "./consoleCaptureStore";
 import type { CrashType } from "@shared/types/pty-host";
 import { isAgentTerminal } from "@/utils/terminalType";
 import { logInfo, logWarn, logError } from "@/utils/logger";
@@ -103,12 +104,8 @@ export const useTerminalStore = create<PanelGridState>()((set, get, api) => {
       clearTerminalRestartGuard(id);
       get().clearQueue(id);
       get().handleTerminalRemoved(id, remainingTerminals, removedIndex);
-      // Clear draft input for the current project when terminal is removed
-      // Use dynamic import to avoid circular dependency with projectStore
-      void import("./projectStore").then(({ useProjectStore }) => {
-        const projectId = useProjectStore.getState().currentProject?.id;
-        useTerminalInputStore.getState().clearDraftInput(id, projectId);
-      });
+      useTerminalInputStore.getState().clearTerminalState(id);
+      useConsoleCaptureStore.getState().removePane(id);
 
       // Auto-clear watch if panel is removed while watched
       get().unwatchPanel(id);
@@ -426,7 +423,6 @@ export const useTerminalStore = create<PanelGridState>()((set, get, api) => {
     reset: async () => {
       const state = get();
 
-      const { terminalInstanceService } = await import("@/services/TerminalInstanceService");
       for (const terminal of state.terminals) {
         try {
           terminalInstanceService.destroy(terminal.id);
@@ -448,6 +444,7 @@ export const useTerminalStore = create<PanelGridState>()((set, get, api) => {
       set({
         terminals: [],
         trashedTerminals: new Map(),
+        backgroundedTerminals: new Map(),
         tabGroups: new Map(),
         activeTabByGroup: new Map(),
         focusedId: null,
@@ -466,8 +463,6 @@ export const useTerminalStore = create<PanelGridState>()((set, get, api) => {
       const state = get();
 
       flushTerminalPersistence();
-
-      const { terminalInstanceService } = await import("@/services/TerminalInstanceService");
 
       const allTerminalIds = state.terminals.map((t) => t.id);
       terminalInstanceService.suppressResizesDuringProjectSwitch(
@@ -490,6 +485,7 @@ export const useTerminalStore = create<PanelGridState>()((set, get, api) => {
       set({
         terminals: [],
         trashedTerminals: new Map(),
+        backgroundedTerminals: new Map(),
         tabGroups: new Map(),
         activeTabByGroup: new Map(),
         focusedId: null,
@@ -517,6 +513,8 @@ let flowStatusUnsubscribe: (() => void) | null = null;
 let backendCrashedUnsubscribe: (() => void) | null = null;
 let backendReadyUnsubscribe: (() => void) | null = null;
 let spawnResultUnsubscribe: (() => void) | null = null;
+let reduceScrollbackUnsubscribe: (() => void) | null = null;
+let restoreScrollbackUnsubscribe: (() => void) | null = null;
 let recoveryTimer: NodeJS.Timeout | null = null;
 let beforeUnloadHandler: (() => void) | null = null;
 
@@ -601,6 +599,14 @@ export function cleanupTerminalStoreListeners() {
     spawnResultUnsubscribe();
     spawnResultUnsubscribe = null;
   }
+  if (reduceScrollbackUnsubscribe) {
+    reduceScrollbackUnsubscribe();
+    reduceScrollbackUnsubscribe = null;
+  }
+  if (restoreScrollbackUnsubscribe) {
+    restoreScrollbackUnsubscribe();
+    restoreScrollbackUnsubscribe = null;
+  }
   if (recoveryTimer) {
     clearTimeout(recoveryTimer);
     recoveryTimer = null;
@@ -650,6 +656,10 @@ export function setupTerminalStoreListeners() {
       }
 
       terminalInstanceService.setAgentState(terminalId, state);
+
+      if (terminal.agentState === "directing" && state === "waiting") {
+        return;
+      }
 
       useTerminalStore
         .getState()
@@ -742,6 +752,11 @@ export function setupTerminalStoreListeners() {
     if (terminal.isRestarting) {
       return;
     }
+
+    // Store exit code on the terminal before applying exit behavior
+    useTerminalStore.setState((s) => ({
+      terminals: s.terminals.map((t) => (t.id === id ? { ...t, exitCode } : t)),
+    }));
 
     state.setRuntimeStatus(id, "exited");
 
@@ -852,6 +867,22 @@ export function setupTerminalStoreListeners() {
       }
     }
   });
+
+  reduceScrollbackUnsubscribe = terminalRegistryController.onReduceScrollback(
+    ({ terminalIds, targetLines }) => {
+      for (const id of terminalIds) {
+        terminalInstanceService.reduceScrollback(id, targetLines);
+      }
+    }
+  );
+
+  restoreScrollbackUnsubscribe = terminalRegistryController.onRestoreScrollback(
+    ({ terminalIds }) => {
+      for (const id of terminalIds) {
+        terminalInstanceService.restoreScrollback(id);
+      }
+    }
+  );
 
   // Flush pending terminal persistence on window close to prevent data loss
   beforeUnloadHandler = () => {

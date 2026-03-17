@@ -90,7 +90,9 @@ test.describe.serial("Core: Terminal & Panels", () => {
       const { window } = ctx;
 
       const panel = getFirstGridPanel(window);
+      // Click the visible "Move to Dock" button on the panel header
       const minimizeBtn = panel.locator(SEL.panel.minimize).first();
+      await expect(minimizeBtn).toBeVisible({ timeout: T_SHORT });
       await minimizeBtn.click();
 
       await expect(panel).not.toBeVisible({ timeout: T_SHORT });
@@ -166,11 +168,20 @@ test.describe.serial("Core: Terminal & Panels", () => {
       const { window } = ctx;
 
       const panel = getFirstGridPanel(window);
-      const restartBtn = panel.locator(SEL.panel.restart).first();
-      await restartBtn.click({ force: true });
+      // Hover to ensure button is interactable, then open overflow menu
+      const overflowBtn = panel.locator(SEL.panel.overflowMenu).first();
+      await panel.hover();
+      await overflowBtn.click();
 
-      await window.waitForTimeout(T_SETTLE);
-      await restartBtn.click({ force: true });
+      // First click on Restart arms confirmation (menu stays open)
+      const restartBtn = window.locator(SEL.panel.restart).first();
+      await expect(restartBtn).toBeVisible({ timeout: T_SHORT });
+      await restartBtn.click();
+
+      // Second click confirms the restart (text changes to "Confirm Restart")
+      const confirmBtn = window.locator(SEL.panel.restartConfirm).first();
+      await expect(confirmBtn).toBeVisible({ timeout: T_SHORT });
+      await confirmBtn.click();
 
       await expect(panel).toBeVisible({ timeout: T_LONG });
     });
@@ -224,7 +235,8 @@ test.describe.serial("Core: Terminal & Panels", () => {
 
       const panel = getFirstGridPanel(window);
       const minimizeBtn = panel.locator(SEL.panel.minimize).first();
-      await minimizeBtn.click({ force: true });
+      await expect(minimizeBtn).toBeVisible({ timeout: T_SHORT });
+      await minimizeBtn.click();
 
       await expect.poll(() => getGridPanelCount(window), { timeout: T_MEDIUM }).toBe(2);
 
@@ -237,7 +249,8 @@ test.describe.serial("Core: Terminal & Panels", () => {
 
       const panel = getFirstGridPanel(window);
       const minimizeBtn = panel.locator(SEL.panel.minimize).first();
-      await minimizeBtn.click({ force: true });
+      await expect(minimizeBtn).toBeVisible({ timeout: T_SHORT });
+      await minimizeBtn.click();
 
       await expect.poll(() => getGridPanelCount(window), { timeout: T_MEDIUM }).toBe(1);
     });
@@ -262,21 +275,6 @@ test.describe.serial("Core: Terminal & Panels", () => {
       await dockItem.dblclick();
 
       await expect.poll(() => getGridPanelCount(window), { timeout: T_MEDIUM }).toBe(2);
-    });
-
-    test("open dev preview panel", async () => {
-      const { window } = ctx;
-
-      const devBtn = window.locator(SEL.toolbar.openDevPreview);
-      if (!(await devBtn.isVisible().catch(() => false))) {
-        test.skip();
-        return;
-      }
-
-      const before = await getGridPanelCount(window);
-      await devBtn.click();
-
-      await expect.poll(() => getGridPanelCount(window), { timeout: T_LONG }).toBe(before + 1);
     });
 
     test("close all panels leaves empty grid", async () => {
@@ -328,14 +326,14 @@ test.describe.serial("Core: Terminal & Panels", () => {
   test.describe.serial("Context Flow", () => {
     test("Copy Context button is visible when project is active", async () => {
       const { window } = ctx;
-      const btn = window.getByRole("banner").locator(SEL.toolbar.copyContext);
+      const btn = window.getByRole("toolbar").locator(SEL.toolbar.copyContext);
       await expect(btn).toBeVisible({ timeout: T_MEDIUM });
     });
 
     test("Copy Context button transitions through states", async () => {
       const { window } = ctx;
 
-      const btn = window.getByRole("banner").locator(SEL.toolbar.copyContext);
+      const btn = window.getByRole("toolbar").locator(SEL.toolbar.copyContext);
       await btn.click();
 
       await expect(btn).toBeVisible({ timeout: T_LONG });

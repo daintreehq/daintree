@@ -43,3 +43,16 @@ export function getDefaultTitle(kind?: PanelKind, type?: TerminalType, agentId?:
   const effectiveKind = kind ?? (agentId ? "agent" : "terminal");
   return getDefaultPanelTitle(effectiveKind, agentId ?? (type !== "terminal" ? type : undefined));
 }
+
+export function stopDevPreviewByPanelId(panelId: string): void {
+  if (typeof window === "undefined") return;
+  const stopByPanel = window.electron?.devPreview?.stopByPanel;
+  if (!stopByPanel) return;
+
+  void stopByPanel({ panelId }).catch((error) => {
+    console.error(
+      `[TerminalStore] Failed to stop dev preview session for panel ${panelId}:`,
+      error
+    );
+  });
+}

@@ -202,7 +202,7 @@ export function WorktreeFilterPopover({ hideSearchInput = false }: WorktreeFilte
         <button
           className={cn(
             "relative flex items-center justify-center w-5 h-5 rounded",
-            "text-canopy-text/60 hover:text-canopy-text hover:bg-white/[0.06]",
+            "text-canopy-text/60 hover:text-canopy-text hover:bg-tint/[0.06]",
             "transition-colors",
             hasActiveFilters() && "text-canopy-accent"
           )}
@@ -219,6 +219,7 @@ export function WorktreeFilterPopover({ hideSearchInput = false }: WorktreeFilte
         align="start"
         sideOffset={8}
         className="w-72 p-0 max-h-[70vh] overflow-y-auto"
+        data-testid="worktree-filter-popover"
       >
         <div className="flex flex-col">
           {/* Search */}

@@ -127,6 +127,11 @@ describe("getDisplayUrl", () => {
   it("should handle invalid URLs gracefully", () => {
     expect(getDisplayUrl("not a url")).toBe("not a url");
   });
+
+  it("should preserve URL hash fragments", () => {
+    expect(getDisplayUrl("http://localhost:3000/#/dashboard")).toBe("localhost:3000#/dashboard");
+    expect(getDisplayUrl("http://localhost:3000/app#section")).toBe("localhost:3000/app#section");
+  });
 });
 
 describe("extractHostPort", () => {

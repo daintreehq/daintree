@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useCallback } from "react";
 import type { ReactNode } from "react";
 import { cn } from "@/lib/utils";
 
@@ -16,51 +16,77 @@ interface SettingsSubtabBarProps {
 }
 
 export function SettingsSubtabBar({ subtabs, activeId, onChange }: SettingsSubtabBarProps) {
-  const scrollContainerRef = useRef<HTMLDivElement>(null);
-  const activePillRef = useRef<HTMLButtonElement>(null);
+  const handleKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLDivElement>) => {
+      const tabs = Array.from(e.currentTarget.querySelectorAll<HTMLElement>('[role="tab"]'));
+      const focusedIndex = tabs.indexOf(document.activeElement as HTMLElement);
+      if (focusedIndex === -1) return;
 
-  useEffect(() => {
-    if (activePillRef.current && scrollContainerRef.current) {
-      activePillRef.current.scrollIntoView?.({
-        behavior: "smooth",
-        block: "nearest",
-        inline: "center",
-      });
-    }
-  }, [activeId]);
+      let nextIndex: number | null = null;
+
+      switch (e.key) {
+        case "ArrowRight":
+          nextIndex = (focusedIndex + 1) % tabs.length;
+          break;
+        case "ArrowLeft":
+          nextIndex = (focusedIndex - 1 + tabs.length) % tabs.length;
+          break;
+        case "Home":
+          nextIndex = 0;
+          break;
+        case "End":
+          nextIndex = tabs.length - 1;
+          break;
+        default:
+          return;
+      }
+
+      e.preventDefault();
+      tabs[nextIndex].focus();
+      const tabId = tabs[nextIndex].dataset.tab;
+      if (tabId) onChange(tabId);
+    },
+    [onChange]
+  );
 
   if (subtabs.length === 0) return null;
 
   return (
-    <nav
-      ref={scrollContainerRef}
-      aria-label="Subtab navigation"
-      className="flex gap-1.5 p-1.5 bg-canopy-bg rounded-[var(--radius-lg)] border border-canopy-border overflow-x-auto scrollbar-thin mb-6"
-    >
-      {subtabs.map((subtab) => {
-        const isActive = subtab.id === activeId;
-        return (
-          <button
-            key={subtab.id}
-            ref={isActive ? activePillRef : null}
-            aria-current={isActive ? "true" : undefined}
-            onClick={() => onChange(subtab.id)}
-            className={cn(
-              "flex items-center justify-center gap-2 px-3 py-2 rounded-[var(--radius-md)] text-sm font-medium transition-all flex-shrink-0",
-              "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2",
-              isActive
-                ? "bg-canopy-sidebar text-canopy-text shadow-sm"
-                : "text-canopy-text/60 hover:text-canopy-text hover:bg-white/5"
-            )}
-          >
-            {subtab.renderIcon?.(isActive)}
-            <span className="truncate">{subtab.label}</span>
-            {subtab.trailing && (
-              <span className="flex items-center gap-1 shrink-0">{subtab.trailing}</span>
-            )}
-          </button>
-        );
-      })}
-    </nav>
+    <div className="border-b border-canopy-border mb-6">
+      <div
+        role="tablist"
+        aria-label="Subtab navigation"
+        onKeyDown={handleKeyDown}
+        className="flex gap-x-1 -mb-px"
+      >
+        {subtabs.map((subtab) => {
+          const isActive = subtab.id === activeId;
+          return (
+            <button
+              key={subtab.id}
+              role="tab"
+              aria-selected={isActive}
+              tabIndex={isActive ? 0 : -1}
+              data-tab={subtab.id}
+              onClick={() => onChange(subtab.id)}
+              className={cn(
+                "inline-flex items-center gap-2 px-3 pb-2.5 pt-0.5 text-sm font-medium",
+                "border-b-2 transition-colors flex-shrink-0",
+                "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2",
+                isActive
+                  ? "border-canopy-accent text-canopy-text"
+                  : "border-transparent text-canopy-text/60 hover:text-canopy-text hover:border-canopy-border"
+              )}
+            >
+              {subtab.renderIcon?.(isActive)}
+              <span>{subtab.label}</span>
+              {subtab.trailing && (
+                <span className="flex items-center gap-1 shrink-0">{subtab.trailing}</span>
+              )}
+            </button>
+          );
+        })}
+      </div>
+    </div>
   );
 }

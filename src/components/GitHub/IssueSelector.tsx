@@ -1,23 +1,12 @@
 import { useState, useEffect } from "react";
-import { Check, ChevronsUpDown, Search, CircleDot, X, MessageCircle } from "lucide-react";
+import { useDebounce } from "@/hooks/useDebounce";
+import { Check, ChevronsUpDown, Search, CircleDot, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { githubClient } from "@/clients/githubClient";
 import type { GitHubIssue } from "@shared/types/github";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { Avatar } from "@/components/ui/Avatar";
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
-
-function useDebounce<T>(value: T, delay: number): T {
-  const [debouncedValue, setDebouncedValue] = useState(value);
-
-  useEffect(() => {
-    const timer = setTimeout(() => setDebouncedValue(value), delay);
-    return () => clearTimeout(timer);
-  }, [value, delay]);
-
-  return debouncedValue;
-}
 
 interface IssueSelectorProps {
   projectPath: string;
@@ -69,13 +58,18 @@ export function IssueSelector({
     return () => abortController.abort();
   }, [open, debouncedQuery, projectPath]);
 
+  const handleOpenChange = (nextOpen: boolean) => {
+    setOpen(nextOpen);
+    if (!nextOpen) setQuery("");
+  };
+
   const handleClear = (e: React.MouseEvent) => {
     e.stopPropagation();
     onSelect(null);
   };
 
   return (
-    <Popover open={open} onOpenChange={setOpen}>
+    <Popover open={open} onOpenChange={handleOpenChange}>
       <PopoverTrigger asChild>
         <Button
           variant="outline"
@@ -123,7 +117,11 @@ export function IssueSelector({
           </div>
         </Button>
       </PopoverTrigger>
-      <PopoverContent className="w-[400px] p-0" align="start">
+      <PopoverContent
+        className="w-[400px] p-0"
+        align="start"
+        onEscapeKeyDown={(e) => e.stopPropagation()}
+      >
         <div className="flex items-center border-b border-canopy-border px-3">
           <Search className="mr-2 h-4 w-4 opacity-50 shrink-0" />
           <input
@@ -152,7 +150,7 @@ export function IssueSelector({
                 aria-selected={selectedIssue?.number === issue.number}
                 onClick={() => {
                   onSelect(issue);
-                  setOpen(false);
+                  handleOpenChange(false);
                 }}
                 className={cn(
                   "flex items-center gap-2 px-2 py-1.5 text-sm rounded-[var(--radius-sm)] cursor-pointer hover:bg-canopy-border",
@@ -163,33 +161,6 @@ export function IssueSelector({
                 <span className="truncate flex-1 min-w-0">
                   #{issue.number} {issue.title}
                 </span>
-                <span className="text-xs text-muted-foreground shrink-0">
-                  {issue.author.login.length > 20
-                    ? `${issue.author.login.slice(0, 20)}…`
-                    : issue.author.login}
-                </span>
-                <span className="flex items-center gap-0.5 text-xs text-muted-foreground shrink-0">
-                  <MessageCircle className="w-3 h-3" />
-                  {issue.commentCount}
-                </span>
-                {issue.assignees.length > 0 && (
-                  <div className="flex -space-x-1.5 shrink-0">
-                    {issue.assignees.slice(0, 3).map((assignee) => (
-                      <Avatar
-                        key={assignee.login}
-                        src={`${assignee.avatarUrl}${assignee.avatarUrl.includes("?") ? "&" : "?"}s=32`}
-                        alt={assignee.login}
-                        title={assignee.login}
-                        className="w-5 h-5 ring-1 ring-canopy-bg"
-                      />
-                    ))}
-                    {issue.assignees.length > 3 && (
-                      <div className="w-5 h-5 rounded-full bg-canopy-border ring-1 ring-canopy-bg flex items-center justify-center text-[10px] text-canopy-text/70">
-                        +{issue.assignees.length - 3}
-                      </div>
-                    )}
-                  </div>
-                )}
                 {selectedIssue?.number === issue.number && <Check className="h-4 w-4 shrink-0" />}
               </div>
             ))

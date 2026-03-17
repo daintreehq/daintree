@@ -20,6 +20,7 @@ function isTerminalVisible(
 ): boolean {
   if (isInTrash(terminal.id)) return false;
   if (terminal.location === "trash") return false;
+  if (terminal.location === "background") return false;
   if (isTerminalOrphaned(terminal, worktreeIds)) return false;
   return true;
 }
@@ -85,6 +86,12 @@ export interface TerminalFocusSlice {
   // Agent cycling (any state)
   focusNextAgent: (isInTrash: (id: string) => boolean, validWorktreeIds: Set<string>) => void;
   focusPreviousAgent: (isInTrash: (id: string) => boolean, validWorktreeIds: Set<string>) => void;
+
+  // Dock-specific blocked agent cycling (failed > waiting priority)
+  focusNextBlockedDock: (
+    activeWorktreeId: string | undefined,
+    getPanelGroup?: (panelId: string) => { id: string; panelIds: string[] } | undefined
+  ) => void;
 
   handleTerminalRemoved: (
     removedId: string,
@@ -331,6 +338,9 @@ export const createTerminalFocusSlice =
         if (terminal && panelKindHasPty(terminal.kind ?? "terminal")) {
           terminalInstanceService.wake(id);
         }
+        if (terminal?.agentState === "waiting") {
+          window.electron?.notification?.acknowledgeWaiting(id);
+        }
         set({ activeDockTerminalId: id, focusedId: id });
       },
 
@@ -348,6 +358,9 @@ export const createTerminalFocusSlice =
         }
 
         if (terminal.location === "dock") {
+          if (terminal.agentState === "waiting") {
+            window.electron?.notification?.acknowledgeWaiting(id);
+          }
           set({ activeDockTerminalId: id, focusedId: id });
         } else {
           set({ focusedId: id, activeDockTerminalId: null });
@@ -501,6 +514,41 @@ export const createTerminalFocusSlice =
         // Activate and ping the terminal for visual feedback
         activateTerminal(prevTerminal.id);
         pingTerminal(prevTerminal.id);
+      },
+
+      focusNextBlockedDock: (activeWorktreeId, getPanelGroup) => {
+        const terminals = getTerminals();
+        const { activeDockTerminalId, openDockTerminal, setActiveTab, pingTerminal } = get();
+
+        const dockTerminals = terminals.filter(
+          (t) =>
+            t.location === "dock" &&
+            (t.worktreeId ?? undefined) === (activeWorktreeId ?? undefined) &&
+            (t.agentState === "failed" || t.agentState === "waiting")
+        );
+
+        if (dockTerminals.length === 0) return;
+
+        // Sort: failed first, then waiting; preserve original order within each group
+        const sorted = [
+          ...dockTerminals.filter((t) => t.agentState === "failed"),
+          ...dockTerminals.filter((t) => t.agentState === "waiting"),
+        ];
+
+        const currentIndex = sorted.findIndex((t) => t.id === activeDockTerminalId);
+        const nextIndex = (currentIndex + 1) % sorted.length;
+        const nextTerminal = sorted[nextIndex];
+
+        // Activate the correct tab in the group before opening the dock popover
+        if (getPanelGroup) {
+          const group = getPanelGroup(nextTerminal.id);
+          if (group) {
+            setActiveTab(group.id, nextTerminal.id);
+          }
+        }
+
+        openDockTerminal(nextTerminal.id);
+        pingTerminal(nextTerminal.id);
       },
 
       handleTerminalRemoved: (removedId, remainingTerminals, removedIndex) => {

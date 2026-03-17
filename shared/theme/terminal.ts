@@ -1,11 +1,15 @@
 import type { ITheme } from "@xterm/xterm";
 import type { AppColorScheme, AppColorSchemeTokens } from "./types.js";
+import { hexToRgbTriplet } from "./themes.js";
 
-export const TERMINAL_SCROLLBAR_DEFAULTS = {
-  scrollbarSliderBackground: "rgba(82, 82, 91, 0.4)",
-  scrollbarSliderHoverBackground: "rgba(82, 82, 91, 0.6)",
-  scrollbarSliderActiveBackground: "rgba(82, 82, 91, 0.8)",
-} as const;
+export function getTerminalScrollbarDefaults(type: "dark" | "light") {
+  const ch = type === "dark" ? "255, 255, 255" : "0, 0, 0";
+  return {
+    scrollbarSliderBackground: `rgba(${ch}, 0.20)`,
+    scrollbarSliderHoverBackground: `rgba(${ch}, 0.40)`,
+    scrollbarSliderActiveBackground: `rgba(${ch}, 0.50)`,
+  };
+}
 
 export function getTerminalThemeFromAppTokens(tokens: AppColorSchemeTokens): ITheme {
   return {
@@ -31,10 +35,29 @@ export function getTerminalThemeFromAppTokens(tokens: AppColorSchemeTokens): ITh
     brightMagenta: tokens["terminal-bright-magenta"],
     brightCyan: tokens["terminal-bright-cyan"],
     brightWhite: tokens["terminal-bright-white"],
-    ...TERMINAL_SCROLLBAR_DEFAULTS,
+    // Defaults to dark — this function receives bare tokens without type info.
+    // Callers with a full AppColorScheme should use getTerminalThemeFromAppScheme instead.
+    ...getTerminalScrollbarDefaults("dark"),
   };
 }
 
 export function getTerminalThemeFromAppScheme(scheme: AppColorScheme): ITheme {
-  return getTerminalThemeFromAppTokens(scheme.tokens);
+  const idle = scheme.tokens["activity-idle"];
+  const scrollbar = idle.startsWith("#")
+    ? getTerminalScrollbarFromHex(idle)
+    : getTerminalScrollbarDefaults(scheme.type);
+
+  return {
+    ...getTerminalThemeFromAppTokens(scheme.tokens),
+    ...scrollbar,
+  };
+}
+
+function getTerminalScrollbarFromHex(hex: string) {
+  const rgb = hexToRgbTriplet(hex);
+  return {
+    scrollbarSliderBackground: `rgba(${rgb}, 0.4)`,
+    scrollbarSliderHoverBackground: `rgba(${rgb}, 0.6)`,
+    scrollbarSliderActiveBackground: `rgba(${rgb}, 0.8)`,
+  };
 }

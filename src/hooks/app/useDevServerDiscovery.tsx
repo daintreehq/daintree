@@ -65,7 +65,7 @@ export function useDevServerDiscovery() {
       message: (
         <span>
           Found{" "}
-          <code className="rounded border border-white/10 bg-black/20 px-1 py-0.5 font-mono text-[11px]">
+          <code className="rounded border border-tint/10 bg-black/20 px-1 py-0.5 font-mono text-[11px]">
             {devServerCandidate.command}
           </code>{" "}
           in package.json. Enable dev preview server for this project?

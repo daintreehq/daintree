@@ -148,6 +148,15 @@ export function TerminalSearchBar({ terminalId, onClose, className }: TerminalSe
     };
   }, []);
 
+  const statusText =
+    searchTerm && searchStatus !== "idle"
+      ? searchStatus === "found"
+        ? "Found"
+        : searchStatus === "none"
+          ? "No matches"
+          : "Invalid regex"
+      : "";
+
   return (
     <div
       className={cn(
@@ -171,7 +180,7 @@ export function TerminalSearchBar({ terminalId, onClose, className }: TerminalSe
           "w-44 px-2 py-1 text-sm",
           "bg-canopy-bg border border-canopy-border rounded",
           "focus:outline-none focus:ring-1 focus:ring-status-info",
-          "text-canopy-text placeholder:text-canopy-text/40"
+          "text-canopy-text placeholder:text-text-muted"
         )}
       />
 
@@ -217,18 +226,21 @@ export function TerminalSearchBar({ terminalId, onClose, className }: TerminalSe
         </Tooltip>
       </TooltipProvider>
 
-      {searchTerm && searchStatus !== "idle" && (
+      {statusText && (
         <span
+          data-terminal-search-status
           className={cn(
             "text-xs px-1.5",
             searchStatus === "found" ? "text-canopy-text/60" : "text-status-error"
           )}
         >
-          {searchStatus === "found" && "Found"}
-          {searchStatus === "none" && "No matches"}
-          {searchStatus === "invalidRegex" && "Invalid regex"}
+          {statusText}
         </span>
       )}
+
+      <span className="sr-only" role="status" aria-live="polite" aria-atomic="true">
+        {statusText}
+      </span>
 
       <TooltipProvider>
         <Tooltip>

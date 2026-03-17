@@ -862,6 +862,27 @@ port.on("message", async (rawMsg: any) => {
         break;
       }
 
+      case "graceful-kill": {
+        const agentSessionId = await ptyManager.gracefulKill(msg.id);
+        sendEvent({
+          type: "graceful-kill-result",
+          requestId: msg.requestId,
+          id: msg.id,
+          agentSessionId,
+        });
+        break;
+      }
+
+      case "graceful-kill-by-project": {
+        const results = await ptyManager.gracefulKillByProject(msg.projectId);
+        sendEvent({
+          type: "graceful-kill-by-project-result",
+          requestId: msg.requestId,
+          results,
+        });
+        break;
+      }
+
       case "get-project-stats": {
         const stats = ptyManager.getProjectStats(msg.projectId);
         sendEvent({ type: "project-stats", requestId: msg.requestId, stats });
@@ -948,7 +969,8 @@ port.on("message", async (rawMsg: any) => {
             | "heuristic"
             | "ai-classification"
             | "timeout"
-            | "exit",
+            | "exit"
+            | "title",
           msg.confidence,
           msg.spawnedAt
         );

@@ -1,49 +1,53 @@
-/**
- * WorktreeMonitor - Per-worktree state machine for monitoring.
- *
- * Extracted from WorkspaceService to encapsulate per-worktree concerns:
- * - Polling timers and adaptive backoff
- * - Git status comparison and state hashing
- * - Note file reading
- * - Mood categorization
- */
-
+import { readFile } from "fs/promises";
+import { join as pathJoin } from "path";
+import { existsSync } from "fs";
 import { simpleGit } from "simple-git";
+import type PQueue from "p-queue";
+import type { WorktreeChanges, FileChangeDetail } from "../../shared/types/git.js";
 import type {
-  WorktreeChanges,
-  FileChangeDetail,
   Worktree,
   WorktreeMood,
-} from "../../shared/types/domain.js";
+  WorktreeLifecycleStatus,
+} from "../../shared/types/worktree.js";
 import type { WorktreeSnapshot } from "../../shared/types/workspace-host.js";
 import { invalidateGitStatusCache, getWorktreeChangesWithStats } from "../utils/git.js";
+import { getGitDir } from "../utils/gitUtils.js";
 import { WorktreeRemovedError } from "../utils/errorTypes.js";
 import { categorizeWorktree } from "../services/worktree/mood.js";
 import { AdaptivePollingStrategy, NoteFileReader } from "../services/worktree/index.js";
 import { ensureSerializable } from "../../shared/utils/serialization.js";
+import { extractIssueNumberSync, extractIssueNumber } from "../services/issueExtractor.js";
+import { GitFileWatcher } from "../utils/gitFileWatcher.js";
+
+const GIT_WATCH_SELF_TRIGGER_COOLDOWN_MS = 1000;
+const WATCHER_FALLBACK_POLL_INTERVAL_MS = 30_000;
 
 export interface WorktreeMonitorConfig {
   basePollingInterval: number;
   adaptiveBackoff: boolean;
   pollIntervalMax: number;
   circuitBreakerThreshold: number;
+  gitWatchEnabled?: boolean;
+  gitWatchDebounceMs?: number;
 }
 
 export interface WorktreeMonitorCallbacks {
   onUpdate: (snapshot: WorktreeSnapshot) => void;
   onRemoved?: (worktreeId: string) => void;
   onError?: (worktreeId: string, error: Error) => void;
+  onBranchChanged?: (worktreeId: string, newBranch: string) => void;
+  onExternalRemoval?: (worktreeId: string) => void;
 }
 
 export class WorktreeMonitor {
   readonly id: string;
   readonly path: string;
-  readonly isMainWorktree: boolean;
 
   private _name: string;
   private _branch: string | undefined;
   private _gitDir: string | undefined;
   private _isCurrent: boolean;
+  private _isMainWorktree: boolean;
 
   // State
   private worktreeChanges: WorktreeChanges | null = null;
@@ -59,27 +63,45 @@ export class WorktreeMonitor {
   private aiNoteTimestamp: number | undefined;
 
   // Issue/PR state
-  private issueNumber: number | undefined;
+  private _issueNumber: number | undefined;
   private prNumber: number | undefined;
   private prUrl: string | undefined;
   private prState: "open" | "closed" | "merged" | undefined;
+  private prTitle: string | undefined;
+  private issueTitle: string | undefined;
 
   // Polling state
   private pollingTimer: NodeJS.Timeout | null = null;
   private resumeTimer: NodeJS.Timeout | null = null;
-  private isRunning: boolean = false;
-  private isUpdating: boolean = false;
+  private _isRunning: boolean = false;
+  private _isUpdating: boolean = false;
   private pollingEnabled: boolean = true;
+  private _hasInitialStatus: boolean = false;
+
+  // File watcher state
+  private gitWatcher: (() => void) | null = null;
+  private gitWatchDebounceTimer: NodeJS.Timeout | null = null;
+  private gitWatchRefreshPending: boolean = false;
+  private gitWatchEnabled: boolean;
+  private gitWatchDebounceMs: number;
+  private lastGitStatusCompletedAt: number = 0;
+
+  // Extra state
+  private _createdAt: number | undefined;
+  private _lifecycleStatus: WorktreeLifecycleStatus | undefined;
+  private _projectScopeId: string | null = null;
 
   // Components
   private pollingStrategy: AdaptivePollingStrategy;
   private noteReader: NoteFileReader;
+  private pollQueue?: PQueue;
 
   constructor(
     worktree: Worktree,
     private config: WorktreeMonitorConfig,
     private callbacks: WorktreeMonitorCallbacks,
-    private mainBranch: string
+    private mainBranch: string,
+    pollQueue?: PQueue
   ) {
     this.id = worktree.id;
     this.path = worktree.path;
@@ -87,7 +109,10 @@ export class WorktreeMonitor {
     this._branch = worktree.branch;
     this._gitDir = worktree.gitDir;
     this._isCurrent = worktree.isCurrent;
-    this.isMainWorktree = Boolean(worktree.isMainWorktree);
+    this._isMainWorktree = Boolean(worktree.isMainWorktree);
+    this.gitWatchEnabled = config.gitWatchEnabled ?? true;
+    this.gitWatchDebounceMs = config.gitWatchDebounceMs ?? 300;
+    this.pollQueue = pollQueue;
 
     this.pollingStrategy = new AdaptivePollingStrategy({
       baseInterval: config.basePollingInterval,
@@ -125,38 +150,95 @@ export class WorktreeMonitor {
     this._isCurrent = value;
   }
 
-  /**
-   * Set the issue number for this worktree.
-   */
-  setIssueNumber(issueNumber: number | undefined): void {
-    this.issueNumber = issueNumber;
+  get isMainWorktree(): boolean {
+    return this._isMainWorktree;
   }
 
-  /**
-   * Set PR information for this worktree.
-   */
+  set isMainWorktree(value: boolean) {
+    this._isMainWorktree = value;
+  }
+
+  get isRunning(): boolean {
+    return this._isRunning;
+  }
+
+  get hasInitialStatus(): boolean {
+    return this._hasInitialStatus;
+  }
+
+  get issueNumber(): number | undefined {
+    return this._issueNumber;
+  }
+
+  get createdAt(): number | undefined {
+    return this._createdAt;
+  }
+
+  get projectScopeId(): string | null {
+    return this._projectScopeId;
+  }
+
+  get lifecycleStatus(): WorktreeLifecycleStatus | undefined {
+    return this._lifecycleStatus;
+  }
+
+  get hasWatcher(): boolean {
+    return this.gitWatcher !== null;
+  }
+
+  setIssueNumber(issueNumber: number | undefined): void {
+    this._issueNumber = issueNumber;
+  }
+
+  setIssueTitle(title: string | undefined): void {
+    this.issueTitle = title;
+  }
+
+  setPRTitle(title: string | undefined): void {
+    this.prTitle = title;
+  }
+
   setPRInfo(info: {
     prNumber?: number;
     prUrl?: string;
     prState?: "open" | "closed" | "merged";
+    prTitle?: string;
+    issueTitle?: string;
   }): void {
     this.prNumber = info.prNumber;
     this.prUrl = info.prUrl;
     this.prState = info.prState;
+    if (info.prTitle !== undefined) this.prTitle = info.prTitle;
+    if (info.issueTitle !== undefined) this.issueTitle = info.issueTitle;
   }
 
-  /**
-   * Clear PR information for this worktree.
-   */
   clearPRInfo(): void {
     this.prNumber = undefined;
     this.prUrl = undefined;
     this.prState = undefined;
+    this.prTitle = undefined;
   }
 
-  /**
-   * Update polling configuration.
-   */
+  setProjectScopeId(id: string | null): void {
+    this._projectScopeId = id;
+  }
+
+  setCreatedAt(ms: number | undefined): void {
+    this._createdAt = ms;
+  }
+
+  setLifecycleStatus(status: WorktreeLifecycleStatus | undefined): void {
+    this._lifecycleStatus = status;
+  }
+
+  setMood(mood: WorktreeMood): void {
+    this.mood = mood;
+  }
+
+  setSummary(summary: string | undefined): void {
+    this.summary = summary;
+  }
+
   updateConfig(config: Partial<WorktreeMonitorConfig>): void {
     if (config.basePollingInterval !== undefined) {
       this.pollingStrategy.setBaseInterval(config.basePollingInterval);
@@ -166,38 +248,53 @@ export class WorktreeMonitor {
       config.pollIntervalMax ?? this.config.pollIntervalMax,
       config.circuitBreakerThreshold ?? this.config.circuitBreakerThreshold
     );
+    if (config.gitWatchEnabled !== undefined) {
+      this.gitWatchEnabled = config.gitWatchEnabled;
+    }
+    if (config.gitWatchDebounceMs !== undefined) {
+      this.gitWatchDebounceMs = config.gitWatchDebounceMs;
+    }
     this.config = { ...this.config, ...config };
   }
 
-  /**
-   * Start monitoring this worktree.
-   */
   async start(): Promise<void> {
-    if (this.isRunning) {
+    if (this._isRunning) {
       return;
     }
 
-    this.isRunning = true;
+    this._isRunning = true;
     this.pollingEnabled = true;
+
+    if (this.gitWatchEnabled) {
+      this.startWatcher();
+    }
 
     await this.updateGitStatus(true);
 
-    if (this.isRunning && this.pollingEnabled) {
+    if (this._isRunning && this.pollingEnabled) {
       this.scheduleNextPoll();
     }
   }
 
-  /**
-   * Stop monitoring this worktree.
-   */
-  stop(): void {
-    this.isRunning = false;
-    this.clearTimers();
+  startWithoutGitStatus(): void {
+    if (this._isRunning) {
+      return;
+    }
+
+    this._isRunning = true;
+    this.pollingEnabled = true;
+
+    if (this.gitWatchEnabled) {
+      this.startWatcher();
+    }
   }
 
-  /**
-   * Force a refresh of git status.
-   */
+  stop(): void {
+    this._isRunning = false;
+    this.clearTimers();
+    this.stopWatcher();
+  }
+
   async refresh(): Promise<void> {
     if (this.pollingStrategy.isCircuitBreakerTripped()) {
       this.pollingStrategy.reset();
@@ -205,19 +302,13 @@ export class WorktreeMonitor {
     await this.updateGitStatus(true);
   }
 
-  /**
-   * Pause polling (e.g., when app is backgrounded).
-   */
   pausePolling(): void {
     this.pollingEnabled = false;
     this.clearTimers();
   }
 
-  /**
-   * Resume polling after a pause.
-   */
   resumePolling(): void {
-    if (!this.isRunning) return;
+    if (!this._isRunning) return;
 
     this.pollingStrategy.reset();
     this.pollingEnabled = true;
@@ -226,16 +317,13 @@ export class WorktreeMonitor {
       const jitter = Math.random() * 2000;
       this.resumeTimer = setTimeout(() => {
         this.resumeTimer = null;
-        if (this.isRunning && this.pollingEnabled) {
+        if (this._isRunning && this.pollingEnabled) {
           this.scheduleNextPoll();
         }
       }, jitter);
     }
   }
 
-  /**
-   * Get the current snapshot of this worktree.
-   */
   getSnapshot(): WorktreeSnapshot {
     const snapshot: WorktreeSnapshot = {
       id: this.id,
@@ -243,33 +331,165 @@ export class WorktreeMonitor {
       name: this._name,
       branch: this._branch,
       isCurrent: this._isCurrent,
-      isMainWorktree: this.isMainWorktree,
+      isMainWorktree: this._isMainWorktree,
       gitDir: this._gitDir,
       summary: this.summary,
       modifiedCount: this.modifiedCount,
       changes: this.changes,
       mood: this.mood,
       lastActivityTimestamp: this.lastActivityTimestamp,
+      createdAt: this._createdAt,
       aiNote: this.aiNote,
       aiNoteTimestamp: this.aiNoteTimestamp,
-      issueNumber: this.issueNumber,
+      issueNumber: this._issueNumber,
       prNumber: this.prNumber,
       prUrl: this.prUrl,
       prState: this.prState,
+      prTitle: this.prTitle,
+      issueTitle: this.issueTitle,
       worktreeChanges: this.worktreeChanges,
       worktreeId: this.id,
       timestamp: Date.now(),
+      lifecycleStatus: this._lifecycleStatus,
     };
 
     return ensureSerializable(snapshot) as WorktreeSnapshot;
   }
 
-  /**
-   * Check if the circuit breaker is tripped.
-   */
   isCircuitBreakerTripped(): boolean {
     return this.pollingStrategy.isCircuitBreakerTripped();
   }
+
+  resetPollingStrategy(): void {
+    this.pollingStrategy.reset();
+  }
+
+  getWorktreeChanges(): WorktreeChanges | null {
+    return this.worktreeChanges;
+  }
+
+  triggerRefreshIfUpdating(): void {
+    invalidateGitStatusCache(this.path);
+    if (this._isUpdating) {
+      this.gitWatchRefreshPending = true;
+    } else {
+      void this.updateGitStatus(true);
+    }
+  }
+
+  reschedulePolling(): void {
+    if (this.pollingTimer) {
+      clearTimeout(this.pollingTimer);
+      this.pollingTimer = null;
+    }
+    if (this.resumeTimer) {
+      clearTimeout(this.resumeTimer);
+      this.resumeTimer = null;
+    }
+
+    if (this._isRunning && this.pollingEnabled) {
+      this.scheduleNextPoll();
+    }
+  }
+
+  ensureWatcherState(): void {
+    if (!this.gitWatchEnabled && this.gitWatcher) {
+      this.stopWatcher();
+    } else if (this.gitWatchEnabled && this._isRunning && !this.gitWatcher) {
+      this.startWatcher();
+    }
+  }
+
+  restartWatcherIfRunning(): void {
+    if (this.gitWatcher) {
+      this.updateWatcher();
+    }
+  }
+
+  // --- File watcher management ---
+
+  private startWatcher(): void {
+    if (!this._isRunning || !this.gitWatchEnabled || this.gitWatcher) {
+      return;
+    }
+
+    const watcher = new GitFileWatcher({
+      worktreePath: this.path,
+      branch: this._branch,
+      debounceMs: this.gitWatchDebounceMs,
+      onChange: () => this.handleGitFileChange(),
+      watchWorktree: true,
+      worktreeDebounceMs: 1000,
+    });
+
+    const started = watcher.start();
+    if (started) {
+      this.gitWatcher = () => watcher.dispose();
+    } else {
+      watcher.dispose();
+    }
+  }
+
+  private stopWatcher(): void {
+    if (this.gitWatcher) {
+      this.gitWatcher();
+      this.gitWatcher = null;
+    }
+    if (this.gitWatchDebounceTimer) {
+      clearTimeout(this.gitWatchDebounceTimer);
+      this.gitWatchDebounceTimer = null;
+    }
+    this.gitWatchRefreshPending = false;
+  }
+
+  private updateWatcher(): void {
+    this.stopWatcher();
+    if (this._isRunning && this.gitWatchEnabled) {
+      this.startWatcher();
+    }
+  }
+
+  private handleGitFileChange(): void {
+    if (!this._isRunning) {
+      return;
+    }
+
+    if (!this._isUpdating) {
+      const msSinceLastStatus = Date.now() - this.lastGitStatusCompletedAt;
+      if (msSinceLastStatus < GIT_WATCH_SELF_TRIGGER_COOLDOWN_MS) {
+        this.gitWatchRefreshPending = true;
+        return;
+      }
+    }
+
+    this.gitWatchRefreshPending = true;
+    invalidateGitStatusCache(this.path);
+
+    if (this._isUpdating) {
+      if (this.gitWatchDebounceTimer) {
+        clearTimeout(this.gitWatchDebounceTimer);
+      }
+      this.gitWatchDebounceTimer = setTimeout(() => {
+        this.gitWatchDebounceTimer = null;
+        this.flushPendingGitWatchRefresh();
+      }, this.gitWatchDebounceMs);
+      return;
+    }
+
+    this.flushPendingGitWatchRefresh();
+  }
+
+  private flushPendingGitWatchRefresh(): void {
+    if (!this._isRunning || this._isUpdating || !this.gitWatchRefreshPending) {
+      return;
+    }
+
+    this.gitWatchRefreshPending = false;
+    invalidateGitStatusCache(this.path);
+    void this.updateGitStatus(true);
+  }
+
+  // --- Timers ---
 
   private clearTimers(): void {
     if (this.pollingTimer) {
@@ -283,7 +503,7 @@ export class WorktreeMonitor {
   }
 
   private scheduleCircuitBreakerRetry(): void {
-    if (!this.isRunning || !this.pollingEnabled) {
+    if (!this._isRunning || !this.pollingEnabled) {
       return;
     }
 
@@ -303,14 +523,14 @@ export class WorktreeMonitor {
 
     this.resumeTimer = setTimeout(() => {
       this.resumeTimer = null;
-      if (this.isRunning && this.pollingEnabled) {
+      if (this._isRunning && this.pollingEnabled) {
         void this.poll(true);
       }
     }, cooldown + jitter);
   }
 
   private scheduleNextPoll(): void {
-    if (!this.isRunning || !this.pollingEnabled) {
+    if (!this._isRunning || !this.pollingEnabled) {
       return;
     }
 
@@ -323,10 +543,12 @@ export class WorktreeMonitor {
       return;
     }
 
-    const nextInterval = this.pollingStrategy.calculateNextInterval();
-    const jitterRange = Math.min(2000, Math.floor(nextInterval * 0.2));
+    const baseInterval = this.gitWatcher
+      ? WATCHER_FALLBACK_POLL_INTERVAL_MS
+      : this.pollingStrategy.calculateNextInterval();
+    const jitterRange = Math.min(2000, Math.floor(baseInterval * 0.2));
     const jitter = jitterRange > 0 ? Math.floor(Math.random() * jitterRange) : 0;
-    const delayMs = nextInterval + jitter;
+    const delayMs = baseInterval + jitter;
 
     this.pollingTimer = setTimeout(() => {
       this.pollingTimer = null;
@@ -335,59 +557,104 @@ export class WorktreeMonitor {
   }
 
   private async poll(force: boolean = false): Promise<void> {
-    if (!this.isRunning || (!force && this.pollingStrategy.isCircuitBreakerTripped())) {
+    if (!this._isRunning) return;
+
+    if (!force && this.pollingStrategy.isCircuitBreakerTripped()) {
+      if (!existsSync(this.path)) {
+        this.callbacks.onExternalRemoval?.(this.id);
+      }
       return;
     }
 
-    const startTime = Date.now();
+    let tripped = false;
+    const queuedAt = Date.now();
+
+    const executePoll = async (): Promise<void> => {
+      const startTime = Date.now();
+      const queueDelayMs = Math.max(0, startTime - queuedAt);
+
+      try {
+        const forceRefresh = this._isCurrent && !this.gitWatcher;
+        await this.updateGitStatus(forceRefresh);
+        this.pollingStrategy.recordSuccess(Date.now() - startTime, queueDelayMs);
+      } catch (_error) {
+        tripped = this.pollingStrategy.recordFailure(Date.now() - startTime, queueDelayMs);
+
+        if (tripped) {
+          this.mood = "error";
+          this.summary = "⚠️ Polling delayed after consecutive failures";
+          this.emitUpdate();
+        }
+      }
+    };
 
     try {
-      await this.updateGitStatus();
-      this.pollingStrategy.recordSuccess(Date.now() - startTime);
-    } catch (_error) {
-      const tripped = this.pollingStrategy.recordFailure(Date.now() - startTime);
-
-      if (tripped) {
-        this.mood = "error";
-        this.summary = "⚠️ Polling delayed after consecutive failures";
-        this.emitUpdate();
-        this.scheduleCircuitBreakerRetry();
-        return;
+      if (this.pollQueue) {
+        await this.pollQueue.add(() => executePoll());
+      } else {
+        await executePoll();
       }
+    } catch {
+      // Queue execution failed
     }
 
-    if (this.isRunning && !this.pollingStrategy.isCircuitBreakerTripped()) {
+    if (tripped) {
+      this.scheduleCircuitBreakerRetry();
+      return;
+    }
+
+    if (this._isRunning && this.pollingEnabled) {
       this.scheduleNextPoll();
     }
   }
 
-  private async updateGitStatus(forceRefresh: boolean = false): Promise<void> {
-    if (this.isUpdating) {
+  // --- Git status ---
+
+  async updateGitStatus(forceRefresh: boolean = false): Promise<void> {
+    if (this._isUpdating) {
       return;
     }
 
-    this.isUpdating = true;
+    this._isUpdating = true;
 
     try {
       if (forceRefresh) {
         invalidateGitStatusCache(this.path);
       }
 
-      // Use polling interval as cache TTL to prevent stale data between polls
-      // Subtract 500ms buffer to ensure cache expires before next poll
-      // Guard against non-finite intervals (NaN, Infinity) that would break cache expiry
       const pollingInterval = this.config.basePollingInterval;
       const cacheTTL =
         Number.isFinite(pollingInterval) && pollingInterval > 0
           ? Math.max(500, pollingInterval - 500)
-          : undefined; // Fall back to cache default TTL
+          : undefined;
       const newChanges = await getWorktreeChangesWithStats(this.path, {
         forceRefresh,
         cacheTTL,
       });
 
-      if (!this.isRunning) {
+      if (!this._isRunning) {
         return;
+      }
+
+      // Detect branch changes by reading HEAD directly
+      const currentBranch = await this.readCurrentBranch();
+      const branchChanged = currentBranch !== undefined && currentBranch !== this._branch;
+      if (branchChanged) {
+        this._branch = currentBranch;
+        const hadPendingRefresh = this.gitWatchRefreshPending;
+        this.updateWatcher();
+        if (hadPendingRefresh) {
+          this.gitWatchRefreshPending = true;
+        }
+        const syncIssueNumber = extractIssueNumberSync(currentBranch, this._name);
+        if (syncIssueNumber) {
+          this._issueNumber = syncIssueNumber;
+        } else {
+          this._issueNumber = undefined;
+          void this.extractIssueNumberAsync(currentBranch, this._name);
+        }
+        this.issueTitle = undefined;
+        this.callbacks.onBranchChanged?.(this.id, currentBranch);
       }
 
       const noteData = await this.noteReader.read();
@@ -396,7 +663,7 @@ export class WorktreeMonitor {
       const noteChanged =
         noteData?.content !== this.aiNote || noteData?.timestamp !== this.aiNoteTimestamp;
 
-      if (!stateChanged && !noteChanged && !forceRefresh) {
+      if (!stateChanged && !noteChanged && !branchChanged && !forceRefresh) {
         return;
       }
 
@@ -408,6 +675,10 @@ export class WorktreeMonitor {
 
       if (shouldUpdateTimestamp) {
         this.lastActivityTimestamp = Date.now();
+      }
+
+      if (isInitialLoad && isNowClean && this.lastActivityTimestamp === null) {
+        this.lastActivityTimestamp = newChanges.lastCommitTimestampMs ?? null;
       }
 
       if (
@@ -442,18 +713,25 @@ export class WorktreeMonitor {
       this.mood = nextMood;
       this.aiNote = noteData?.content;
       this.aiNoteTimestamp = noteData?.timestamp;
+      this._hasInitialStatus = true;
 
       this.emitUpdate();
     } catch (error) {
       if (error instanceof WorktreeRemovedError) {
-        this.mood = "error";
-        this.summary = "⚠️ Directory not accessible";
-        this.emitUpdate();
+        this.stop();
+        this.callbacks.onRemoved?.(this.id);
         return;
       }
 
       const errorMessage = (error as Error).message || "";
       if (errorMessage.includes("index.lock")) {
+        this.gitWatchRefreshPending = true;
+        if (!this.gitWatchDebounceTimer) {
+          this.gitWatchDebounceTimer = setTimeout(() => {
+            this.gitWatchDebounceTimer = null;
+            this.flushPendingGitWatchRefresh();
+          }, this.gitWatchDebounceMs);
+        }
         return;
       }
 
@@ -461,7 +739,42 @@ export class WorktreeMonitor {
       this.emitUpdate();
       throw error;
     } finally {
-      this.isUpdating = false;
+      this._isUpdating = false;
+      this.lastGitStatusCompletedAt = Date.now();
+      if (this.gitWatchRefreshPending && !this.gitWatchDebounceTimer) {
+        this.flushPendingGitWatchRefresh();
+      }
+    }
+  }
+
+  private async readCurrentBranch(): Promise<string | undefined> {
+    const gitDir = getGitDir(this.path, { cache: true, logErrors: false });
+    if (!gitDir) return undefined;
+
+    try {
+      const headContent = await readFile(pathJoin(gitDir, "HEAD"), "utf-8");
+      const trimmed = headContent.trim();
+      const prefix = "ref: refs/heads/";
+      if (trimmed.startsWith(prefix)) {
+        return trimmed.slice(prefix.length);
+      }
+      return undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  private async extractIssueNumberAsync(branchName: string, folderName?: string): Promise<void> {
+    try {
+      const issueNum = await extractIssueNumber(branchName, folderName);
+      if (issueNum && this._isRunning && this._branch === branchName) {
+        this._issueNumber = issueNum;
+        if (this._hasInitialStatus) {
+          this.emitUpdate();
+        }
+      }
+    } catch {
+      // Silently ignore extraction errors
     }
   }
 
@@ -494,7 +807,7 @@ export class WorktreeMonitor {
     }
   }
 
-  private emitUpdate(): void {
+  emitUpdate(): void {
     this.callbacks.onUpdate(this.getSnapshot());
   }
 }

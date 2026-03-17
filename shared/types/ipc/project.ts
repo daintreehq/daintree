@@ -1,4 +1,4 @@
-import type { Project } from "../domain.js";
+import type { Project } from "../project.js";
 
 /** Payload for project:on-switch event with cancellation token */
 export interface ProjectSwitchPayload {
@@ -17,6 +17,17 @@ export interface ProjectCloseResult {
   /** Number of terminals killed */
   terminalsKilled: number;
   /** Error message if operation failed */
+  error?: string;
+}
+
+/** Status of a per-project MCP server process */
+export type ProjectMcpServerStatus = "starting" | "running" | "stopped" | "error";
+
+/** Runtime state of a per-project MCP server process */
+export interface ProjectMcpServerRunState {
+  name: string;
+  status: ProjectMcpServerStatus;
+  pid?: number;
   error?: string;
 }
 

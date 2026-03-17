@@ -15,13 +15,26 @@ vi.mock("electron", () => ({
 }));
 
 // ── Shared state container for mocks ───────────────────────────────────────
-// Using a mutable shared ref so module resets don't break the reference.
-type MockTranscriptionEvent = { type: string; text?: string; status?: string; message?: string };
+type MockTranscriptionEvent = {
+  type: string;
+  text?: string;
+  status?: string;
+  message?: string;
+  confidence?: {
+    minConfidence: number;
+    wordCount: number;
+    uncertainWords: string[];
+    words: Array<{ word: string; confidence: number }>;
+  };
+};
 
 const shared = vi.hoisted(() => ({
   transcriptionEventCallback: null as ((e: MockTranscriptionEvent) => void) | null,
-  correctionResult: "Corrected paragraph.",
-  correctionCalls: [] as Array<{ text: string; settings: Record<string, unknown> }>,
+  correctionWordResult: "Zustand",
+  correctionWordCalls: [] as Array<{
+    request: Record<string, unknown>;
+    settings: Record<string, unknown>;
+  }>,
   /** Simulated in-flight utterance text returned by commitParagraphBoundary(). */
   inFlightText: "" as string,
   /** Deferred drain promise — resolve externally to control stopGracefully() timing. */
@@ -50,18 +63,39 @@ vi.mock("../../../services/VoiceTranscriptionService.js", () => ({
     this.sendAudioChunk = function () {};
     this.destroy = function () {};
     this.commitParagraphBoundary = function () {
-      return shared.inFlightText ?? "";
+      const text = shared.inFlightText ?? "";
+      return {
+        text,
+        confidence: text
+          ? { minConfidence: 0, wordCount: 0, uncertainWords: [], words: [] }
+          : { minConfidence: 1.0, wordCount: 0, uncertainWords: [], words: [] },
+      };
     };
   },
 }));
 
 vi.mock("../../../services/VoiceCorrectionService.js", () => ({
   VoiceCorrectionService: function VoiceCorrectionService(this: Record<string, unknown>) {
-    this.correct = function (text: string, settings: Record<string, unknown>) {
-      shared.correctionCalls.push({ text, settings });
-      return Promise.resolve(shared.correctionResult);
+    this.correctWord = function (
+      request: Record<string, unknown>,
+      settings: Record<string, unknown>
+    ) {
+      shared.correctionWordCalls.push({ request, settings });
+      return Promise.resolve({
+        action: "replace",
+        correctedText: shared.correctionWordResult,
+        confidence: "high",
+        confirmedText: shared.correctionWordResult,
+      });
     };
-    this.resetHistory = function () {};
+    this.correct = function () {
+      return Promise.resolve({
+        action: "no_change",
+        correctedText: "",
+        confidence: "high",
+        confirmedText: "",
+      });
+    };
   },
 }));
 
@@ -95,6 +129,12 @@ vi.mock("../../../store.js", () => ({
   },
 }));
 
+vi.mock("../../../services/voiceContextKeyterms.js", () => ({
+  assembleKeyterms: vi.fn(({ customDictionary }: { customDictionary: string[] }) =>
+    Promise.resolve(customDictionary)
+  ),
+}));
+
 vi.mock("../../channels.js", () => ({
   CHANNELS: {
     VOICE_INPUT_GET_SETTINGS: "voice-input:get-settings",
@@ -104,6 +144,7 @@ vi.mock("../../channels.js", () => ({
     VOICE_INPUT_AUDIO_CHUNK: "voice-input:audio-chunk",
     VOICE_INPUT_TRANSCRIPTION_DELTA: "voice-input:transcription-delta",
     VOICE_INPUT_TRANSCRIPTION_COMPLETE: "voice-input:transcription-complete",
+    VOICE_INPUT_CORRECTION_QUEUED: "voice-input:correction-queued",
     VOICE_INPUT_CORRECTION_REPLACE: "voice-input:correction-replace",
     VOICE_INPUT_ERROR: "voice-input:error",
     VOICE_INPUT_STATUS: "voice-input:status",
@@ -118,8 +159,6 @@ vi.mock("../../channels.js", () => ({
 }));
 
 // ── Module import (once) ───────────────────────────────────────────────────
-// Import after mocks are registered. No vi.resetModules() — handleStart
-// resets paragraphBuffer itself, so module-level state is sufficient.
 import { registerVoiceInputHandlers } from "../voiceInput.js";
 
 // ── Helpers ────────────────────────────────────────────────────────────────
@@ -160,17 +199,31 @@ function emitTranscriptionEvent(event: MockTranscriptionEvent) {
   shared.transcriptionEventCallback(event);
 }
 
+function makeHighConfidenceWords(text: string): Array<{ word: string; confidence: number }> {
+  return text.split(/\s+/).map((w) => ({ word: w, confidence: 0.95 }));
+}
+
+function makeLowConfidenceWords(
+  uncertain: string[],
+  context: string[] = []
+): Array<{ word: string; confidence: number }> {
+  return [
+    ...uncertain.map((w) => ({ word: w, confidence: 0.6 })),
+    ...context.map((w) => ({ word: w, confidence: 0.95 })),
+  ];
+}
+
 // ── Tests ──────────────────────────────────────────────────────────────────
 
-describe("voiceInput — paragraph buffering", () => {
+describe("voiceInput — streaming word-level correction", () => {
   let win: ReturnType<typeof buildMainWindow>;
   let cleanup: () => void;
 
   beforeEach(async () => {
     vi.clearAllMocks();
     shared.transcriptionEventCallback = null;
-    shared.correctionCalls = [];
-    shared.correctionResult = "Corrected paragraph.";
+    shared.correctionWordCalls = [];
+    shared.correctionWordResult = "Zustand";
     shared.inFlightText = "";
     shared.drainResolve = null;
     shared.useDeferredDrain = false;
@@ -180,7 +233,7 @@ describe("voiceInput — paragraph buffering", () => {
       mainWindow: win as unknown as Electron.BrowserWindow,
     } as Parameters<typeof registerVoiceInputHandlers>[0]);
 
-    // Start a session so the paragraph buffer is initialized.
+    // Start a session so the buffer is initialized.
     const handleStart = getHandler("voice-input:start");
     await (handleStart as (e: unknown) => Promise<unknown>)(fakeEvent);
   });
@@ -189,104 +242,71 @@ describe("voiceInput — paragraph buffering", () => {
     cleanup?.();
   });
 
-  it("flushParagraph returns null when no utterances have been received", () => {
-    const handleFlush = getHandler("voice-input:flush-paragraph");
-    const result = handleFlush(fakeEvent) as { rawText: string | null };
-    expect(result.rawText).toBeNull();
-  });
-
-  it("complete events accumulate utterances without triggering per-utterance correction", () => {
-    emitTranscriptionEvent({ type: "complete", text: "Hello world" });
-    emitTranscriptionEvent({ type: "complete", text: "How are you" });
-
-    // Correction should NOT have been triggered yet
-    expect(shared.correctionCalls).toHaveLength(0);
-
-    // TRANSCRIPTION_COMPLETE events sent to renderer with willCorrect: false
-    const completeMsgs = win.__sent.filter(
-      (m) => m.channel === "voice-input:transcription-complete"
-    );
-    expect(completeMsgs).toHaveLength(2);
-    for (const msg of completeMsgs) {
-      expect((msg.payload as { willCorrect: boolean }).willCorrect).toBe(false);
-    }
-  });
-
-  it("flushParagraph joins accumulated utterances and clears the buffer", () => {
-    emitTranscriptionEvent({ type: "complete", text: "First sentence" });
-    emitTranscriptionEvent({ type: "complete", text: "Second sentence" });
-
-    const handleFlush = getHandler("voice-input:flush-paragraph");
-    const result = handleFlush(fakeEvent) as { rawText: string | null };
-    expect(result.rawText).toBe("First sentence Second sentence");
-
-    // Buffer is now empty — second flush returns null
-    const result2 = handleFlush(fakeEvent) as { rawText: string | null };
-    expect(result2.rawText).toBeNull();
-  });
-
-  it("flushParagraph triggers correction with the joined paragraph text", async () => {
-    emitTranscriptionEvent({ type: "complete", text: "react is great" });
-    emitTranscriptionEvent({ type: "complete", text: "use it everywhere" });
-
-    const handleFlush = getHandler("voice-input:flush-paragraph");
-    handleFlush(fakeEvent);
-
-    await vi.waitFor(() => {
-      expect(shared.correctionCalls).toHaveLength(1);
-      expect(shared.correctionCalls[0].text).toBe("react is great use it everywhere");
-      expect((shared.correctionCalls[0].settings as { model: string }).model).toBe("gpt-5-mini");
+  it("does not fire correction for high-confidence words", () => {
+    emitTranscriptionEvent({
+      type: "complete",
+      text: "Hello world",
+      confidence: {
+        minConfidence: 0.95,
+        wordCount: 2,
+        uncertainWords: [],
+        words: makeHighConfidenceWords("Hello world"),
+      },
     });
+
+    expect(shared.correctionWordCalls).toHaveLength(0);
+    const queuedMsg = win.__sent.find((m) => m.channel === "voice-input:correction-queued");
+    expect(queuedMsg).toBeUndefined();
   });
 
-  it("flushParagraph returns a non-null correctionId when correction is queued", () => {
-    emitTranscriptionEvent({ type: "complete", text: "react is great" });
-
-    const handleFlush = getHandler("voice-input:flush-paragraph");
-    const result = handleFlush(fakeEvent) as {
-      rawText: string | null;
-      correctionId: string | null;
-    };
-    expect(result.rawText).toBe("react is great");
-    expect(result.correctionId).toBeTypeOf("string");
-    expect(result.correctionId).not.toBeNull();
-  });
-
-  it("flushParagraph sends CORRECTION_REPLACE with correctionId and corrected text", async () => {
-    shared.correctionResult = "React is great. Use it everywhere.";
-    emitTranscriptionEvent({ type: "complete", text: "react is great" });
-
-    const handleFlush = getHandler("voice-input:flush-paragraph");
-    const result = handleFlush(fakeEvent) as {
-      rawText: string | null;
-      correctionId: string | null;
-    };
-
-    await vi.waitFor(() => {
-      const msg = win.__sent.find((m) => m.channel === "voice-input:correction-replace");
-      expect(msg).toBeDefined();
-      expect((msg?.payload as { correctionId: string }).correctionId).toBe(result.correctionId);
-      expect((msg?.payload as { correctedText: string }).correctedText).toBe(
-        "React is great. Use it everywhere."
-      );
+  it("fires micro-correction when low-confidence words have enough right-context", () => {
+    // Segment 1: low-confidence words
+    emitTranscriptionEvent({
+      type: "complete",
+      text: "zoo stand",
+      confidence: {
+        minConfidence: 0.6,
+        wordCount: 2,
+        uncertainWords: ["zoo", "stand"],
+        words: makeLowConfidenceWords(["zoo", "stand"]),
+      },
     });
+
+    // No correction yet — need right-context
+    expect(shared.correctionWordCalls).toHaveLength(0);
+
+    // Segment 2: provides right-context (3+ high-confidence words)
+    emitTranscriptionEvent({
+      type: "complete",
+      text: "is a great library",
+      confidence: {
+        minConfidence: 0.95,
+        wordCount: 4,
+        uncertainWords: [],
+        words: makeHighConfidenceWords("is a great library"),
+      },
+    });
+
+    // Now correction should have been fired
+    const queuedMsgs = win.__sent.filter((m) => m.channel === "voice-input:correction-queued");
+    expect(queuedMsgs.length).toBeGreaterThanOrEqual(1);
+    expect(shared.correctionWordCalls).toHaveLength(1);
+    expect(shared.correctionWordCalls[0].request.rawSpan).toBe("zoo stand");
+    expect(shared.correctionWordCalls[0].request.uncertainWords).toEqual(["zoo", "stand"]);
   });
 
-  it("stop flushes the remaining paragraph buffer and returns rawText and correctionId", async () => {
-    emitTranscriptionEvent({ type: "complete", text: "final sentence" });
+  it("stop returns null rawText and null correctionId (no batch correction)", async () => {
+    emitTranscriptionEvent({
+      type: "complete",
+      text: "Hello world",
+      confidence: {
+        minConfidence: 0.95,
+        wordCount: 2,
+        uncertainWords: [],
+        words: makeHighConfidenceWords("Hello world"),
+      },
+    });
 
-    const handleStop = getHandler("voice-input:stop");
-    const result = (await (handleStop as (e: unknown) => Promise<unknown>)(fakeEvent)) as {
-      rawText: string | null;
-      correctionId: string | null;
-    };
-
-    expect(result.rawText).toBe("final sentence");
-    expect(result.correctionId).toBeTypeOf("string");
-    expect(result.correctionId).not.toBeNull();
-  });
-
-  it("stop returns null rawText and null correctionId when buffer is already empty", async () => {
     const handleStop = getHandler("voice-input:stop");
     const result = (await (handleStop as (e: unknown) => Promise<unknown>)(fakeEvent)) as {
       rawText: string | null;
@@ -297,84 +317,189 @@ describe("voiceInput — paragraph buffering", () => {
     expect(result.correctionId).toBeNull();
   });
 
-  it("stop fires correction for the flushed paragraph", async () => {
-    emitTranscriptionEvent({ type: "complete", text: "dictated at stop" });
+  it("stop flushes remaining clusters without enough right-context", async () => {
+    // Low-confidence segment with no right-context
+    emitTranscriptionEvent({
+      type: "complete",
+      text: "zoo stand",
+      confidence: {
+        minConfidence: 0.6,
+        wordCount: 2,
+        uncertainWords: ["zoo", "stand"],
+        words: makeLowConfidenceWords(["zoo", "stand"]),
+      },
+    });
+
+    expect(shared.correctionWordCalls).toHaveLength(0);
 
     const handleStop = getHandler("voice-input:stop");
     await (handleStop as (e: unknown) => Promise<unknown>)(fakeEvent);
 
+    // Stop should flush the pending cluster
     await vi.waitFor(() => {
-      expect(shared.correctionCalls).toHaveLength(1);
-      expect(shared.correctionCalls[0].text).toBe("dictated at stop");
+      expect(shared.correctionWordCalls).toHaveLength(1);
     });
   });
 
-  it("whitespace-only utterances are not added to the paragraph buffer", () => {
-    emitTranscriptionEvent({ type: "complete", text: "   " });
+  it("sends CORRECTION_REPLACE after micro-correction resolves", async () => {
+    shared.correctionWordResult = "Zustand";
 
-    const handleFlush = getHandler("voice-input:flush-paragraph");
-    const result = handleFlush(fakeEvent) as { rawText: string | null };
-    expect(result.rawText).toBeNull();
+    emitTranscriptionEvent({
+      type: "complete",
+      text: "zoo stand",
+      confidence: {
+        minConfidence: 0.6,
+        wordCount: 2,
+        uncertainWords: ["zoo", "stand"],
+        words: makeLowConfidenceWords(["zoo", "stand"]),
+      },
+    });
+
+    emitTranscriptionEvent({
+      type: "complete",
+      text: "is a great library",
+      confidence: {
+        minConfidence: 0.95,
+        wordCount: 4,
+        uncertainWords: [],
+        words: makeHighConfidenceWords("is a great library"),
+      },
+    });
+
+    await vi.waitFor(() => {
+      const replaceMsg = win.__sent.find((m) => m.channel === "voice-input:correction-replace");
+      expect(replaceMsg).toBeDefined();
+      expect((replaceMsg?.payload as { correctedText: string }).correctedText).toBe("Zustand");
+    });
   });
 
-  it("paragraph buffer resets when a new session starts", async () => {
-    emitTranscriptionEvent({ type: "complete", text: "session one" });
+  it("flushParagraph returns null — no batch correction", () => {
+    emitTranscriptionEvent({
+      type: "complete",
+      text: "Hello world",
+      confidence: {
+        minConfidence: 0.95,
+        wordCount: 2,
+        uncertainWords: [],
+        words: makeHighConfidenceWords("Hello world"),
+      },
+    });
 
-    // Start a new session — should reset the buffer
-    const handleStart = getHandler("voice-input:start");
-    await (handleStart as (e: unknown) => Promise<unknown>)(fakeEvent);
-
-    const handleFlush = getHandler("voice-input:flush-paragraph");
-    const result = handleFlush(fakeEvent) as { rawText: string | null };
-    expect(result.rawText).toBeNull();
-  });
-
-  it("paragraph_boundary event flushes buffer and sends PARAGRAPH_BOUNDARY to renderer", async () => {
-    // Accumulate two utterances into the paragraph buffer
-    emitTranscriptionEvent({ type: "complete", text: "first utterance" });
-    emitTranscriptionEvent({ type: "complete", text: "second utterance" });
-
-    // Service emits a paragraph_boundary (as would happen when Deepgram signals a boundary)
-    emitTranscriptionEvent({ type: "paragraph_boundary" });
-
-    // Renderer should have received the paragraph boundary channel message
-    const boundaryMsg = win.__sent.find((m) => m.channel === "voice-input:paragraph-boundary");
-    expect(boundaryMsg).toBeDefined();
-    const payload = boundaryMsg?.payload as { rawText: string | null; correctionId: string | null };
-    expect(payload.rawText).toBe("first utterance second utterance");
-    // correctionId is a UUID string when correction is queued
-    expect(payload.correctionId).toBeTypeOf("string");
-    expect(payload.correctionId).not.toBeNull();
-
-    // Buffer should be empty after the flush — next stop/flush returns null
     const handleFlush = getHandler("voice-input:flush-paragraph");
     const result = handleFlush(fakeEvent) as {
       rawText: string | null;
       correctionId: string | null;
     };
     expect(result.rawText).toBeNull();
+    expect(result.correctionId).toBeNull();
   });
 
-  it("paragraph_boundary event triggers correction for the flushed text", async () => {
-    emitTranscriptionEvent({ type: "complete", text: "auto paragraph text" });
-    emitTranscriptionEvent({ type: "paragraph_boundary" });
-
-    await vi.waitFor(() => {
-      expect(shared.correctionCalls).toHaveLength(1);
-      expect(shared.correctionCalls[0].text).toBe("auto paragraph text");
+  it("paragraph_boundary event does not trigger correction", () => {
+    emitTranscriptionEvent({
+      type: "complete",
+      text: "first utterance",
+      confidence: {
+        minConfidence: 0.95,
+        wordCount: 2,
+        uncertainWords: [],
+        words: makeHighConfidenceWords("first utterance"),
+      },
     });
-  });
 
-  it("paragraph_boundary event with empty buffer sends null rawText and null correctionId", () => {
-    // No complete events before boundary — buffer is empty
     emitTranscriptionEvent({ type: "paragraph_boundary" });
 
     const boundaryMsg = win.__sent.find((m) => m.channel === "voice-input:paragraph-boundary");
-    // flushParagraphBuffer returns { rawText: null, correctionId: null } for an empty buffer
     expect(boundaryMsg).toBeDefined();
     const payload = boundaryMsg?.payload as { rawText: string | null; correctionId: string | null };
     expect(payload.rawText).toBeNull();
     expect(payload.correctionId).toBeNull();
+  });
+
+  it("status events are forwarded to the renderer unchanged", () => {
+    for (const status of ["connecting", "recording", "finishing", "idle", "error"] as const) {
+      emitTranscriptionEvent({ type: "status", status });
+    }
+
+    const statusMsgs = win.__sent.filter((m) => m.channel === "voice-input:status");
+    const statuses = statusMsgs.map((m) => m.payload as string);
+    expect(statuses).toEqual(["connecting", "recording", "finishing", "idle", "error"]);
+  });
+
+  it("session start resets buffer — no stale clusters from previous session", async () => {
+    emitTranscriptionEvent({
+      type: "complete",
+      text: "zoo stand",
+      confidence: {
+        minConfidence: 0.6,
+        wordCount: 2,
+        uncertainWords: ["zoo", "stand"],
+        words: makeLowConfidenceWords(["zoo", "stand"]),
+      },
+    });
+
+    // Start a new session
+    const handleStart = getHandler("voice-input:start");
+    await (handleStart as (e: unknown) => Promise<unknown>)(fakeEvent);
+
+    // Stop immediately — the stale cluster should NOT be flushed
+    const handleStop = getHandler("voice-input:stop");
+    await (handleStop as (e: unknown) => Promise<unknown>)(fakeEvent);
+
+    expect(shared.correctionWordCalls).toHaveLength(0);
+  });
+
+  it("complete event with no confidence words does not trigger correction", () => {
+    emitTranscriptionEvent({
+      type: "complete",
+      text: "Hello world",
+    });
+
+    expect(shared.correctionWordCalls).toHaveLength(0);
+  });
+
+  it("does not fire correction when correction is disabled", async () => {
+    const { store } = await import("../../../store.js");
+    const disabledSettings = {
+      enabled: true,
+      deepgramApiKey: "dg-test-key",
+      correctionApiKey: "",
+      correctionEnabled: false,
+      correctionModel: "gpt-5-mini",
+      customDictionary: [],
+      correctionCustomInstructions: "",
+      language: "en",
+      transcriptionModel: "nova-3",
+      paragraphingStrategy: "spoken-command",
+    };
+    // Use mockReturnValueOnce for each call to store.get during this test.
+    // getVoiceSettings() is called once per complete event.
+    vi.mocked(store.get)
+      .mockReturnValueOnce(disabledSettings)
+      .mockReturnValueOnce(disabledSettings);
+
+    emitTranscriptionEvent({
+      type: "complete",
+      text: "zoo stand",
+      confidence: {
+        minConfidence: 0.6,
+        wordCount: 2,
+        uncertainWords: ["zoo", "stand"],
+        words: makeLowConfidenceWords(["zoo", "stand"]),
+      },
+    });
+
+    emitTranscriptionEvent({
+      type: "complete",
+      text: "is a great library",
+      confidence: {
+        minConfidence: 0.95,
+        wordCount: 4,
+        uncertainWords: [],
+        words: makeHighConfidenceWords("is a great library"),
+      },
+    });
+
+    expect(shared.correctionWordCalls).toHaveLength(0);
   });
 
   it("session start with active project captures project info into correction settings", async () => {
@@ -391,173 +516,111 @@ describe("voiceInput — paragraph buffering", () => {
     const handleStart = getHandler("voice-input:start");
     await (handleStart as (e: unknown) => Promise<unknown>)(fakeEvent);
 
-    emitTranscriptionEvent({ type: "complete", text: "test utterance" });
+    // Fire a low-confidence segment + right-context to trigger a micro-correction
+    emitTranscriptionEvent({
+      type: "complete",
+      text: "zoo stand",
+      confidence: {
+        minConfidence: 0.6,
+        wordCount: 2,
+        uncertainWords: ["zoo", "stand"],
+        words: makeLowConfidenceWords(["zoo", "stand"]),
+      },
+    });
 
-    const handleFlush = getHandler("voice-input:flush-paragraph");
-    handleFlush(fakeEvent);
+    emitTranscriptionEvent({
+      type: "complete",
+      text: "is a great library",
+      confidence: {
+        minConfidence: 0.95,
+        wordCount: 4,
+        uncertainWords: [],
+        words: makeHighConfidenceWords("is a great library"),
+      },
+    });
 
     await vi.waitFor(() => {
-      expect(shared.correctionCalls).toHaveLength(1);
-      expect(shared.correctionCalls[0].settings.projectName).toBe("My Project");
-      expect(shared.correctionCalls[0].settings.projectPath).toBe("/Users/foo/my-project");
+      expect(shared.correctionWordCalls).toHaveLength(1);
+      expect(shared.correctionWordCalls[0].settings.projectName).toBe("My Project");
+      expect(shared.correctionWordCalls[0].settings.projectPath).toBe("/Users/foo/my-project");
     });
   });
 
-  it("status events including finishing are forwarded to the renderer unchanged", () => {
-    for (const status of ["connecting", "recording", "finishing", "idle", "error"] as const) {
-      emitTranscriptionEvent({ type: "status", status });
-    }
-
-    const statusMsgs = win.__sent.filter((m) => m.channel === "voice-input:status");
-    const statuses = statusMsgs.map((m) => m.payload as string);
-
-    expect(statuses).toContain("finishing");
-    expect(statuses).toEqual(["connecting", "recording", "finishing", "idle", "error"]);
-  });
-
-  it("flushParagraph returns null correctionId and does not fire correction when disabled", async () => {
-    // Override the store mock to return correction-disabled settings for this test.
-    const { store } = await import("../../../store.js");
-    vi.mocked(store.get).mockReturnValueOnce({
-      enabled: true,
-      deepgramApiKey: "dg-test-key",
-      correctionApiKey: "",
-      correctionEnabled: false,
-      correctionModel: "gpt-5-mini",
-      customDictionary: [],
-      correctionCustomInstructions: "",
-      language: "en",
-      transcriptionModel: "nova-3",
-      paragraphingStrategy: "spoken-command",
+  it("groups adjacent low-confidence words into a single micro-correction", () => {
+    // Both "zoo" and "stand" are adjacent low-confidence words
+    emitTranscriptionEvent({
+      type: "complete",
+      text: "zoo stand is great",
+      confidence: {
+        minConfidence: 0.6,
+        wordCount: 4,
+        uncertainWords: ["zoo", "stand"],
+        words: [
+          { word: "zoo", confidence: 0.6 },
+          { word: "stand", confidence: 0.65 },
+          { word: "is", confidence: 0.95 },
+          { word: "great", confidence: 0.98 },
+        ],
+      },
     });
 
-    emitTranscriptionEvent({ type: "complete", text: "no correction please" });
-
-    const handleFlush = getHandler("voice-input:flush-paragraph");
-    const result = handleFlush(fakeEvent) as {
-      rawText: string | null;
-      correctionId: string | null;
-    };
-
-    // rawText is still returned so the renderer knows what was flushed
-    expect(result.rawText).toBe("no correction please");
-    // correctionId is null — no correction was queued
-    expect(result.correctionId).toBeNull();
-    // No correction call was fired
-    expect(shared.correctionCalls).toHaveLength(0);
-    // No CORRECTION_REPLACE message was sent to renderer
-    const correctionMsg = win.__sent.find((m) => m.channel === "voice-input:correction-replace");
-    expect(correctionMsg).toBeUndefined();
-  });
-
-  it("flushParagraph captures in-flight utterance text from service before flushing", () => {
-    // Simulate a completed utterance and a partially-spoken one still in flight
-    emitTranscriptionEvent({ type: "complete", text: "First sentence" });
-    // Simulate service having in-flight (delta) text not yet finalized
-    shared.inFlightText = "in flight words";
-
-    const handleFlush = getHandler("voice-input:flush-paragraph");
-    const result = handleFlush(fakeEvent) as {
-      rawText: string | null;
-      correctionId: string | null;
-    };
-
-    // Both the completed utterance and the in-flight text should be in the flush
-    expect(result.rawText).toBe("First sentence in flight words");
-
-    // Buffer is now empty
-    shared.inFlightText = "";
-    const result2 = handleFlush(fakeEvent) as {
-      rawText: string | null;
-      correctionId: string | null;
-    };
-    expect(result2.rawText).toBeNull();
-  });
-
-  it("flushParagraph with only in-flight text (no completed utterances) returns that text", () => {
-    shared.inFlightText = "only delta text";
-
-    const handleFlush = getHandler("voice-input:flush-paragraph");
-    const result = handleFlush(fakeEvent) as {
-      rawText: string | null;
-      correctionId: string | null;
-    };
-
-    expect(result.rawText).toBe("only delta text");
-    shared.inFlightText = "";
-  });
-
-  it("flushParagraph with empty in-flight text still returns null when no completed utterances", () => {
-    shared.inFlightText = "";
-
-    const handleFlush = getHandler("voice-input:flush-paragraph");
-    const result = handleFlush(fakeEvent) as {
-      rawText: string | null;
-      correctionId: string | null;
-    };
-
-    expect(result.rawText).toBeNull();
-  });
-
-  it("in-flight text is included in correction when flushed via Enter", async () => {
-    emitTranscriptionEvent({ type: "complete", text: "first part" });
-    shared.inFlightText = "second part";
-
-    const handleFlush = getHandler("voice-input:flush-paragraph");
-    handleFlush(fakeEvent);
-    shared.inFlightText = "";
-
-    await vi.waitFor(() => {
-      expect(shared.correctionCalls).toHaveLength(1);
-      expect(shared.correctionCalls[0].text).toBe("first part second part");
+    // Need one more word for right-context
+    emitTranscriptionEvent({
+      type: "complete",
+      text: "library",
+      confidence: {
+        minConfidence: 0.95,
+        wordCount: 1,
+        uncertainWords: [],
+        words: [{ word: "library", confidence: 0.95 }],
+      },
     });
+
+    // Should be exactly 1 correction call for the grouped cluster
+    expect(shared.correctionWordCalls).toHaveLength(1);
+    expect(shared.correctionWordCalls[0].request.rawSpan).toBe("zoo stand");
   });
 
-  it("complete event arriving during stopGracefully drain is captured in stop flush rawText", async () => {
-    shared.useDeferredDrain = true;
-
-    emitTranscriptionEvent({ type: "complete", text: "before drain" });
-
-    const handleStop = getHandler("voice-input:stop");
-    const stopPromise = (handleStop as (e: unknown) => Promise<unknown>)(fakeEvent);
-
-    // While stopGracefully is pending (draining), a late complete event fires
-    emitTranscriptionEvent({ type: "complete", text: "late utterance" });
-
-    // Now resolve the drain
-    shared.drainResolve!();
-
-    const result = (await stopPromise) as { rawText: string | null; correctionId: string | null };
-
-    // Both the pre-drain and late utterance should be in the flushed text
-    expect(result.rawText).toBe("before drain late utterance");
-    expect(result.correctionId).toBeTypeOf("string");
-    expect(result.correctionId).not.toBeNull();
-  });
-
-  it("stop correctionId matches the subsequent correction-replace IPC message", async () => {
-    shared.correctionResult = "Corrected final sentence.";
-    emitTranscriptionEvent({ type: "complete", text: "final sentence" });
-
-    const handleStop = getHandler("voice-input:stop");
-    const result = (await (handleStop as (e: unknown) => Promise<unknown>)(fakeEvent)) as {
-      rawText: string | null;
-      correctionId: string | null;
-    };
-
-    expect(result.correctionId).toBeTypeOf("string");
-    expect(result.correctionId).not.toBeNull();
-
-    // Wait for the async correction to send CORRECTION_REPLACE to the renderer
-    await vi.waitFor(() => {
-      const correctionMsg = win.__sent.find((m) => m.channel === "voice-input:correction-replace");
-      expect(correctionMsg).toBeDefined();
-      expect((correctionMsg?.payload as { correctionId: string }).correctionId).toBe(
-        result.correctionId
-      );
-      expect((correctionMsg?.payload as { correctedText: string }).correctedText).toBe(
-        "Corrected final sentence."
-      );
+  it("includes left and right context in the micro-correction request", () => {
+    // First segment: high-confidence context
+    emitTranscriptionEvent({
+      type: "complete",
+      text: "I love",
+      confidence: {
+        minConfidence: 0.95,
+        wordCount: 2,
+        uncertainWords: [],
+        words: makeHighConfidenceWords("I love"),
+      },
     });
+
+    // Second segment: low-confidence word
+    emitTranscriptionEvent({
+      type: "complete",
+      text: "racked",
+      confidence: {
+        minConfidence: 0.65,
+        wordCount: 1,
+        uncertainWords: ["racked"],
+        words: [{ word: "racked", confidence: 0.65 }],
+      },
+    });
+
+    // Third segment: right-context
+    emitTranscriptionEvent({
+      type: "complete",
+      text: "is a great framework",
+      confidence: {
+        minConfidence: 0.95,
+        wordCount: 4,
+        uncertainWords: [],
+        words: makeHighConfidenceWords("is a great framework"),
+      },
+    });
+
+    expect(shared.correctionWordCalls).toHaveLength(1);
+    expect(shared.correctionWordCalls[0].request.leftContext).toBe("I love");
+    expect(shared.correctionWordCalls[0].request.rawSpan).toBe("racked");
+    expect(shared.correctionWordCalls[0].request.rightContext).toBe("is a great");
   });
 });

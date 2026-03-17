@@ -118,6 +118,19 @@ export function registerWorktreeActions(actions: ActionRegistry, callbacks: Acti
     },
   }));
 
+  actions.set("worktree.quickCreate", () => ({
+    id: "worktree.quickCreate",
+    title: "Quick Create Worktree",
+    description: "Open recipe picker for quick worktree creation",
+    category: "worktree",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    run: async () => {
+      useWorktreeSelectionStore.getState().openQuickCreate();
+    },
+  }));
+
   actions.set("worktree.createDialog.open", () => ({
     id: "worktree.createDialog.open",
     title: "New Worktree",

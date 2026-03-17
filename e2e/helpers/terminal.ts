@@ -3,6 +3,24 @@ import { expect } from "@playwright/test";
 import { SEL } from "./selectors";
 
 export async function getTerminalText(panelLocator: Locator): Promise<string> {
+  const page = panelLocator.page();
+  const panelId = await panelLocator.evaluate((el) => {
+    const panel = el.closest("[data-panel-id]");
+    return panel?.getAttribute("data-panel-id") ?? "";
+  });
+
+  if (!panelId) return "";
+
+  // Try buffer API first (works with all renderers including WebGL)
+  const bufferText = await page.evaluate((id) => {
+    const reader = (window as unknown as Record<string, unknown>).__canopyReadTerminalBuffer;
+    if (typeof reader === "function") return reader(id) as string;
+    return null;
+  }, panelId);
+
+  if (bufferText !== null) return bufferText;
+
+  // Fallback: read DOM text (only works with DOM renderer)
   return panelLocator.locator(SEL.terminal.xtermRows).innerText();
 }
 

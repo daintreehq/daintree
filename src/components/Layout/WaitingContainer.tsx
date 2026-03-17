@@ -1,9 +1,9 @@
-import { AlertCircle } from "lucide-react";
 import { useWaitingTerminals } from "@/hooks/useTerminalSelectors";
+import { STATE_ICONS } from "@/components/Worktree/terminalStateConfig";
 import { StatusContainer, type StatusContainerConfig } from "./StatusContainer";
 
 const waitingConfig: StatusContainerConfig = {
-  icon: AlertCircle,
+  icon: STATE_ICONS.waiting,
   iconColor: "text-status-warning",
   badgeColor: "bg-status-warning",
   badgeTextColor: "text-canopy-bg",

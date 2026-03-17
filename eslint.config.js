@@ -1,6 +1,5 @@
 import js from "@eslint/js";
 import tseslint from "typescript-eslint";
-import react from "eslint-plugin-react";
 import reactHooks from "eslint-plugin-react-hooks";
 import prettier from "eslint-config-prettier";
 
@@ -11,11 +10,18 @@ export default tseslint.config(
   // TypeScript recommended rules
   ...tseslint.configs.recommended,
 
-  // React configuration
+  // Downgrade new ESLint 10 recommended rules to warnings (ratcheted)
+  {
+    rules: {
+      "no-useless-assignment": "warn",
+      "preserve-caught-error": "warn",
+    },
+  },
+
+  // React Hooks configuration
   {
     files: ["**/*.{tsx,jsx,ts}"],
     plugins: {
-      react,
       "react-hooks": reactHooks,
     },
     languageOptions: {
@@ -25,18 +31,7 @@ export default tseslint.config(
         },
       },
     },
-    settings: {
-      react: {
-        version: "detect",
-      },
-    },
     rules: {
-      // React rules
-      "react/react-in-jsx-scope": "off", // Not needed in React 17+
-      "react/prop-types": "off", // Using TypeScript for prop validation
-      "react/jsx-uses-react": "off",
-      "react/jsx-uses-vars": "error",
-
       // React Hooks rules
       "react-hooks/rules-of-hooks": "error",
       "react-hooks/exhaustive-deps": "warn",

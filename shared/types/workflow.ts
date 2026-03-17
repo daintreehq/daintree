@@ -42,17 +42,16 @@ export const WorkflowConditionSchema = z.discriminatedUnion("type", [
 export type WorkflowCondition = z.infer<typeof WorkflowConditionSchema>;
 
 /**
- * Node type - currently only 'action' is supported.
- * Future types could include 'command' for shell commands or 'recipe' for terminal recipes.
+ * Node type - 'action' for task execution, 'loop' for bounded retry sub-graphs.
  */
-export const WorkflowNodeTypeSchema = z.enum(["action"]);
+export const WorkflowNodeTypeSchema = z.enum(["action", "approval", "loop"]);
 export type WorkflowNodeType = z.infer<typeof WorkflowNodeTypeSchema>;
 
 /**
  * Configuration for an action node.
  */
 export const WorkflowActionConfigSchema = z.object({
-  /** Action ID from ActionService (e.g., "terminal.executeCommand") */
+  /** Action ID from ActionService (e.g., "terminal.sendCommand") */
   actionId: z.string().min(1),
   /** Arguments to pass to the action */
   args: z.record(z.string(), z.unknown()).optional(),
@@ -60,26 +59,111 @@ export const WorkflowActionConfigSchema = z.object({
 export type WorkflowActionConfig = z.infer<typeof WorkflowActionConfigSchema>;
 
 /**
- * A node in the workflow graph.
- * Nodes represent individual steps with dependencies and routing.
+ * Configuration for an approval node.
  */
-export const WorkflowNodeSchema = z.object({
-  /** Unique identifier within the workflow */
-  id: z.string().min(1),
-  /** Node type - determines what config is expected */
-  type: WorkflowNodeTypeSchema,
-  /** Configuration for this node (varies by type) */
-  config: WorkflowActionConfigSchema,
-  /** Node IDs this node depends on (must complete before this runs) */
-  dependencies: z.array(z.string()).optional(),
-  /** Node IDs to run on successful completion */
-  onSuccess: z.array(z.string()).optional(),
-  /** Node IDs to run on failure */
-  onFailure: z.array(z.string()).optional(),
-  /** Declarative conditions for advanced routing */
-  conditions: z.array(WorkflowConditionSchema).optional(),
+export const WorkflowApprovalConfigSchema = z.object({
+  /** Prompt to display to the user when requesting approval */
+  prompt: z.string().min(1),
+  /** Optional timeout in milliseconds — auto-rejects if exceeded */
+  timeoutMs: z.number().positive().optional(),
 });
-export type WorkflowNode = z.infer<typeof WorkflowNodeSchema>;
+export type WorkflowApprovalConfig = z.infer<typeof WorkflowApprovalConfigSchema>;
+
+/**
+ * Configuration for a loop node.
+ */
+export const WorkflowLoopConfigSchema = z.object({
+  /** Maximum number of iterations (1-20) */
+  maxIterations: z.number().int().min(1).max(20),
+  /** Optional exit condition — loop exits early when this evaluates to true */
+  exitCondition: WorkflowConditionSchema.optional(),
+});
+export type WorkflowLoopConfig = z.infer<typeof WorkflowLoopConfigSchema>;
+
+/** Shared fields for all node types */
+const WorkflowNodeBaseFields = {
+  id: z.string().min(1),
+  label: z.string().optional(),
+  dependencies: z.array(z.string()).optional(),
+  onSuccess: z.array(z.string()).optional(),
+  onFailure: z.array(z.string()).optional(),
+  conditions: z.array(WorkflowConditionSchema).optional(),
+};
+
+/**
+ * Action node schema.
+ */
+export const WorkflowActionNodeSchema = z.object({
+  ...WorkflowNodeBaseFields,
+  type: z.literal("action"),
+  config: WorkflowActionConfigSchema,
+});
+
+/**
+ * Approval node schema.
+ */
+export const WorkflowApprovalNodeSchema = z.object({
+  ...WorkflowNodeBaseFields,
+  type: z.literal("approval"),
+  config: WorkflowApprovalConfigSchema,
+});
+
+/**
+ * Manual TypeScript types — z.infer<> cannot handle recursive schemas.
+ */
+export interface ActionNode {
+  id: string;
+  label?: string;
+  type: "action";
+  config: WorkflowActionConfig;
+  dependencies?: string[];
+  onSuccess?: string[];
+  onFailure?: string[];
+  conditions?: WorkflowCondition[];
+}
+
+export interface ApprovalNode {
+  id: string;
+  label?: string;
+  type: "approval";
+  config: WorkflowApprovalConfig;
+  dependencies?: string[];
+  onSuccess?: string[];
+  onFailure?: string[];
+  conditions?: WorkflowCondition[];
+}
+
+export interface LoopNode {
+  id: string;
+  label?: string;
+  type: "loop";
+  config: WorkflowLoopConfig;
+  body: WorkflowNode[];
+  dependencies?: string[];
+  onSuccess?: string[];
+  onFailure?: string[];
+  conditions?: WorkflowCondition[];
+}
+
+export type WorkflowNode = ActionNode | ApprovalNode | LoopNode;
+
+/**
+ * Loop node schema — uses z.lazy() for recursive body reference.
+ */
+export const WorkflowLoopNodeSchema = z.object({
+  ...WorkflowNodeBaseFields,
+  type: z.literal("loop"),
+  config: WorkflowLoopConfigSchema,
+  body: z.lazy(() => z.array(WorkflowNodeSchema).min(1, "Loop body must have at least one node")),
+});
+
+/**
+ * Recursive workflow node schema (discriminated union of action + approval + loop).
+ * Typed as z.ZodType<WorkflowNode> to break TypeScript's infinite instantiation on recursive schemas.
+ */
+export const WorkflowNodeSchema: z.ZodType<WorkflowNode> = z.lazy(() =>
+  z.union([WorkflowActionNodeSchema, WorkflowApprovalNodeSchema, WorkflowLoopNodeSchema])
+);
 
 /**
  * Complete workflow definition.
@@ -116,7 +200,7 @@ export interface WorkflowValidationResult {
  */
 export interface WorkflowValidationError {
   /** Error type */
-  type: "schema" | "cycle" | "reference" | "duplicate";
+  type: "schema" | "cycle" | "reference" | "duplicate" | "loop";
   /** Human-readable error message */
   message: string;
   /** Path to the error (e.g., "nodes[0].id") */

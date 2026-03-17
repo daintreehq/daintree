@@ -32,6 +32,12 @@ function validateNoteMetadata(metadata: unknown): NoteMetadata {
   if (typeof m.createdAt !== "number") {
     throw new Error("Invalid metadata: createdAt must be a number");
   }
+  if (
+    m.tags !== undefined &&
+    (!Array.isArray(m.tags) || !m.tags.every((t: unknown) => typeof t === "string"))
+  ) {
+    throw new Error("Invalid metadata: tags must be an array of strings if provided");
+  }
 
   return {
     id: m.id,
@@ -39,6 +45,7 @@ function validateNoteMetadata(metadata: unknown): NoteMetadata {
     scope: m.scope,
     worktreeId: m.worktreeId as string | undefined,
     createdAt: m.createdAt,
+    ...(m.tags !== undefined && { tags: m.tags as string[] }),
   };
 }
 

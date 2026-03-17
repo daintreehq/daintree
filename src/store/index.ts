@@ -60,6 +60,9 @@ export { useSidecarStore } from "./sidecarStore";
 
 export { useUIStore } from "./uiStore";
 
+export { usePaletteStore } from "./paletteStore";
+export type { PaletteId } from "./paletteStore";
+
 export { useGitHubConfigStore, cleanupGitHubConfigStore } from "./githubConfigStore";
 
 export {
@@ -83,6 +86,8 @@ export { useVoiceRecordingStore } from "./voiceRecordingStore";
 export { useDockStore } from "./dockStore";
 
 export { useTwoPaneSplitStore } from "./twoPaneSplitStore";
-export type { TwoPaneSplitConfig } from "./twoPaneSplitStore";
+export type { TwoPaneSplitConfig, WorktreeRatioEntry } from "./twoPaneSplitStore";
 
 export { useAppAgentStore, cleanupAppAgentStore } from "./appAgentStore";
+
+export { useActionMruStore } from "./actionMruStore";

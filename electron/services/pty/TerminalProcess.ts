@@ -1,11 +1,10 @@
-import * as pty from "node-pty";
+import type * as pty from "node-pty";
 import type { Terminal as HeadlessTerminalType } from "@xterm/headless";
 import headless from "@xterm/headless";
 const { Terminal: HeadlessTerminal } = headless;
 import serialize, { type SerializeAddon as SerializeAddonType } from "@xterm/addon-serialize";
 const { SerializeAddon } = serialize;
-import type { TerminalType } from "../../../shared/types/domain.js";
-import { getEffectiveAgentConfig } from "../../../shared/config/agentRegistry.js";
+import { AGENT_REGISTRY, getEffectiveAgentConfig } from "../../../shared/config/agentRegistry.js";
 import { ProcessDetector, type DetectionResult } from "../ProcessDetector.js";
 import type { ProcessTreeCache } from "../ProcessTreeCache.js";
 import { ActivityMonitor } from "../ActivityMonitor.js";
@@ -17,12 +16,11 @@ import {
   type TerminalPublicState,
   type TerminalSnapshot,
   OUTPUT_BUFFER_SIZE,
-  SEMANTIC_BUFFER_MAX_LINES,
-  SEMANTIC_BUFFER_MAX_LINE_LENGTH,
-  SEMANTIC_FLUSH_INTERVAL_MS,
   DEFAULT_SCROLLBACK,
   AGENT_SCROLLBACK,
   WRITE_INTERVAL_MS,
+  GRACEFUL_SHUTDOWN_TIMEOUT_MS,
+  GRACEFUL_SHUTDOWN_BUFFER_SIZE,
 } from "./types.js";
 import { getTerminalSerializerService } from "./TerminalSerializerService.js";
 import { events } from "../events.js";
@@ -48,6 +46,7 @@ import {
   OUTPUT_SETTLE_MAX_WAIT_MS,
   OUTPUT_SETTLE_POLL_INTERVAL_MS,
 } from "./terminalInput.js";
+import type { IMarker } from "@xterm/headless";
 import {
   TERMINAL_SESSION_PERSISTENCE_ENABLED,
   SESSION_SNAPSHOT_MAX_BYTES,
@@ -57,21 +56,14 @@ import {
   persistSessionSnapshotAsync,
 } from "./terminalSessionPersistence.js";
 import {
-  buildPatternConfig,
-  buildBootCompletePatterns,
-  buildPromptPatterns,
-  buildPromptHintPatterns,
-  buildCompletionPatterns,
   createProcessStateValidator,
+  buildActivityMonitorOptions,
 } from "./terminalActivityPatterns.js";
 import { TerminalForensicsBuffer } from "./TerminalForensicsBuffer.js";
-import {
-  getDefaultShell,
-  getDefaultShellArgs,
-  buildNonInteractiveEnv,
-  AGENT_ENV_EXCLUSIONS,
-} from "./terminalShell.js";
-import { filterEnvironment, injectCanopyMetadata } from "./EnvironmentFilter.js";
+import { SemanticBufferManager } from "./SemanticBufferManager.js";
+import { stripAnsiCodes } from "../../../shared/utils/artifactParser.js";
+import { getDefaultShell, getDefaultShellArgs } from "./terminalShell.js";
+import { buildTerminalEnv, acquirePtyProcess } from "./terminalSpawn.js";
 
 type CursorBuffer = {
   cursorY?: number;
@@ -104,8 +96,7 @@ export class TerminalProcess {
   private lastWriteErrorLogTime = 0;
   private suppressedWriteErrorCount = 0;
 
-  private pendingSemanticData = "";
-  private semanticFlushTimer: NodeJS.Timeout | null = null;
+  private semanticBufferManager!: SemanticBufferManager;
 
   private inputWriteQueue: string[] = [];
   private inputWriteTimeout: NodeJS.Timeout | null = null;
@@ -120,13 +111,19 @@ export class TerminalProcess {
   private readonly isAgentTerminal: boolean;
   private forensicsBuffer = new TerminalForensicsBuffer();
   private _activityTier: "active" | "background" = "active";
+  private _restoreBannerStart: IMarker | null = null;
+  private _restoreBannerEnd: IMarker | null = null;
 
   private restoreSessionIfPresent(headlessTerminal: HeadlessTerminalType): void {
     if (!TERMINAL_SESSION_PERSISTENCE_ENABLED) return;
     if (this.isAgentTerminal) return;
     if (this.options.restore === false) return;
 
-    restoreSessionFromFile(headlessTerminal, this.id);
+    const result = restoreSessionFromFile(headlessTerminal, this.id);
+    if (result.restored) {
+      this._restoreBannerStart = result.bannerStartMarker;
+      this._restoreBannerEnd = result.bannerEndMarker;
+    }
   }
 
   private scheduleSessionPersist(): void {
@@ -153,7 +150,10 @@ export class TerminalProcess {
     this.sessionPersistInFlight = true;
     try {
       this.sessionPersistDirty = false;
-      const state = await this.getSerializedStateAsync();
+      const state =
+        this._restoreBannerStart || this._restoreBannerEnd
+          ? this._serializeForPersistence()
+          : await this.getSerializedStateAsync();
       if (!state) return;
       if (Buffer.byteLength(state, "utf8") > SESSION_SNAPSHOT_MAX_BYTES) {
         return;
@@ -244,113 +244,17 @@ export class TerminalProcess {
       ? (options.agentId ?? (options.type !== "terminal" ? options.type : id))
       : undefined;
 
-    const baseEnv = process.env as Record<string, string | undefined>;
-
-    // Filter sensitive credentials from the inherited process environment only.
-    // options.env contains intentional overrides (e.g. project settings env vars
-    // resolved from secure storage) and is merged in after filtering so those
-    // intentional values are not inadvertently stripped.
-    const filteredBaseEnv = filterEnvironment(baseEnv);
-    const intentionalEnv = options.env
-      ? (Object.fromEntries(
-          Object.entries(options.env).filter(([, v]) => v !== undefined)
-        ) as Record<string, string>)
-      : {};
-    const mergedEnv = injectCanopyMetadata(
-      { ...filteredBaseEnv, ...intentionalEnv },
-      {
-        paneId: id,
-        cwd: options.cwd,
-        projectId: options.projectId,
-        worktreeId: options.worktreeId,
-      }
+    const env = buildTerminalEnv(options, id, shell, this.isAgentTerminal, agentId);
+    const ptyProcess = acquirePtyProcess(
+      id,
+      options,
+      env,
+      shell,
+      args,
+      this.isAgentTerminal,
+      deps.ptyPool,
+      (error, context) => this.logWriteError(error, context)
     );
-
-    // For agent terminals, use non-interactive environment to suppress prompts
-    // (oh-my-zsh updates, Homebrew notifications, etc.)
-    // Pass agentId for agent-specific exclusions (e.g., Gemini CLI is sensitive to CI=1)
-    // Then merge agent-specific env vars from the agent registry config,
-    // filtering out any excluded vars to prevent bypassing agent-specific safeguards
-    const agentConfig = agentId ? getEffectiveAgentConfig(agentId) : undefined;
-    const agentEnv = agentConfig?.env ?? {};
-    const normalizedAgentId = agentId?.toLowerCase();
-    const exclusions = new Set(
-      normalizedAgentId ? (AGENT_ENV_EXCLUSIONS[normalizedAgentId] ?? []) : []
-    );
-    const filteredAgentEnv = Object.fromEntries(
-      Object.entries(agentEnv).filter(([key]) => !exclusions.has(key) && !key.startsWith("CANOPY_"))
-    ) as Record<string, string>;
-    const env: Record<string, string> = this.isAgentTerminal
-      ? { ...buildNonInteractiveEnv(mergedEnv, shell, agentId), ...filteredAgentEnv }
-      : mergedEnv;
-
-    const canUsePool =
-      deps.ptyPool &&
-      !this.isAgentTerminal &&
-      !options.shell &&
-      !options.env &&
-      !options.args &&
-      options.kind !== "dev-preview";
-    let pooledPty = canUsePool ? deps.ptyPool!.acquire() : null;
-
-    let ptyProcess: pty.IPty;
-
-    if (pooledPty) {
-      try {
-        pooledPty.resize(options.cols, options.rows);
-      } catch (resizeError) {
-        console.warn(
-          `[TerminalProcess] Failed to resize pooled PTY for ${id}, falling back to spawn:`,
-          resizeError
-        );
-        try {
-          pooledPty.kill();
-        } catch {
-          // Process may already be dead
-        }
-        pooledPty = null;
-      }
-    }
-
-    if (pooledPty) {
-      ptyProcess = pooledPty;
-
-      if (process.platform === "win32") {
-        const shellLower = shell.toLowerCase();
-        try {
-          if (shellLower.includes("powershell") || shellLower.includes("pwsh")) {
-            ptyProcess.write(`Set-Location "${options.cwd.replace(/"/g, '""')}"\r`);
-          } else {
-            ptyProcess.write(`cd /d "${options.cwd.replace(/"/g, '\\"')}"\r`);
-          }
-        } catch (error) {
-          this.logWriteError(error, { operation: "write(cwd)" });
-        }
-      } else {
-        try {
-          ptyProcess.write(`cd "${options.cwd.replace(/"/g, '\\"')}"\r`);
-        } catch (error) {
-          this.logWriteError(error, { operation: "write(cwd)" });
-        }
-      }
-
-      if (process.env.CANOPY_VERBOSE) {
-        console.log(`[TerminalProcess] Acquired terminal ${id} from pool (instant spawn)`);
-      }
-    } else {
-      try {
-        ptyProcess = pty.spawn(shell, args, {
-          name: "xterm-256color",
-          cols: options.cols,
-          rows: options.rows,
-          cwd: options.cwd,
-          env,
-        });
-      } catch (error) {
-        console.error(`Failed to spawn terminal ${id}:`, error);
-        throw error;
-      }
-    }
 
     this._scrollback = this.isAgentTerminal ? AGENT_SCROLLBACK : DEFAULT_SCROLLBACK;
 
@@ -383,8 +287,6 @@ export class TerminalProcess {
       lastOutputTime: spawnedAt,
       lastCheckTime: spawnedAt,
       semanticBuffer: [],
-      pendingSemanticData: "",
-      semanticFlushTimer: null,
       inputWriteQueue: [],
       inputWriteTimeout: null,
       headlessTerminal,
@@ -402,6 +304,7 @@ export class TerminalProcess {
     // Ratatui's input parser (Codex, OpenCode) and Ink's state (Claude Code).
     // The frontend xterm.js is the sole query responder for agent terminals.
 
+    this.semanticBufferManager = new SemanticBufferManager(this.terminalInfo);
     this.setupPtyHandlers(ptyProcess);
 
     const ptyPid = ptyProcess.pid;
@@ -434,7 +337,17 @@ export class TerminalProcess {
           }
           deps.agentStateService.handleActivityState(this.terminalInfo, state, metadata);
         },
-        { ...this.getActivityMonitorOptions(), processStateValidator }
+        {
+          ...buildActivityMonitorOptions(
+            this.terminalInfo.agentId ??
+              (this.terminalInfo.type !== "terminal" ? this.terminalInfo.type : undefined),
+            {
+              getVisibleLines: (n) => this.getLastNLines(n),
+              getCursorLine: () => this.getCursorLine(),
+            }
+          ),
+          processStateValidator,
+        }
       );
       this.activityMonitor.startPolling();
     }
@@ -783,6 +696,76 @@ export class TerminalProcess {
     }
   }
 
+  async gracefulShutdown(): Promise<string | null> {
+    const terminal = this.terminalInfo;
+
+    if (terminal.isExited || terminal.wasKilled) {
+      return null;
+    }
+
+    const agentConfig = terminal.agentId ? getEffectiveAgentConfig(terminal.agentId) : undefined;
+
+    if (!agentConfig?.shutdown) {
+      return null;
+    }
+
+    const { quitCommand, sessionIdPattern } = agentConfig.shutdown;
+    const pattern = new RegExp(sessionIdPattern);
+
+    let shutdownBuffer = "";
+    let resolved = false;
+
+    return new Promise<string | null>((resolve) => {
+      const finish = (sessionId: string | null) => {
+        if (resolved) return;
+        resolved = true;
+        clearTimeout(timer);
+
+        if (sessionId) {
+          terminal.agentSessionId = sessionId;
+        }
+
+        this.kill("graceful-shutdown");
+        resolve(sessionId);
+      };
+
+      const timer = setTimeout(() => finish(null), GRACEFUL_SHUTDOWN_TIMEOUT_MS);
+
+      const origOnData = terminal.ptyProcess.onData((data: string) => {
+        if (resolved) return;
+
+        shutdownBuffer += data;
+        if (shutdownBuffer.length > GRACEFUL_SHUTDOWN_BUFFER_SIZE) {
+          shutdownBuffer = shutdownBuffer.slice(-GRACEFUL_SHUTDOWN_BUFFER_SIZE);
+        }
+
+        const stripped = stripAnsiCodes(shutdownBuffer);
+        const match = pattern.exec(stripped);
+        if (match?.[1]) {
+          origOnData.dispose();
+          finish(match[1]);
+        }
+      });
+
+      const origOnExit = terminal.ptyProcess.onExit(() => {
+        origOnExit.dispose();
+        origOnData.dispose();
+
+        const stripped = stripAnsiCodes(shutdownBuffer);
+        const match = pattern.exec(stripped);
+        finish(match?.[1] ?? null);
+      });
+
+      try {
+        terminal.ptyProcess.write(quitCommand + "\r");
+      } catch {
+        origOnData.dispose();
+        origOnExit.dispose();
+        finish(null);
+      }
+    });
+  }
+
   kill(reason?: string): void {
     const terminal = this.terminalInfo;
 
@@ -797,13 +780,27 @@ export class TerminalProcess {
       this.activityMonitor = null;
     }
 
-    this.flushPendingSemanticData();
+    this.semanticBufferManager.flush();
 
     if (this.inputWriteTimeout) {
       clearTimeout(this.inputWriteTimeout);
       this.inputWriteTimeout = null;
     }
     this.inputWriteQueue = [];
+
+    // Flush session snapshot synchronously before marking as killed.
+    // Once wasKilled is set, all persistence paths are blocked, and
+    // disposeHeadless() destroys the buffer — so this is the last chance.
+    if (TERMINAL_SESSION_PERSISTENCE_ENABLED && !this.isAgentTerminal) {
+      try {
+        const state = this.getSerializedState();
+        if (state && Buffer.byteLength(state, "utf8") <= SESSION_SNAPSHOT_MAX_BYTES) {
+          persistSessionSnapshotSync(this.id, state);
+        }
+      } catch {
+        // best-effort only
+      }
+    }
 
     terminal.wasKilled = true;
     this.clearSessionPersistTimer();
@@ -905,6 +902,37 @@ export class TerminalProcess {
     }
   }
 
+  private _serializeForPersistence(): string | null {
+    const addon = this.terminalInfo.serializeAddon;
+    const terminal = this.terminalInfo.headlessTerminal;
+    if (!addon || !terminal) return null;
+
+    const startMarker = this._restoreBannerStart;
+    const endMarker = this._restoreBannerEnd;
+
+    if (!startMarker || !endMarker || startMarker.line < 0 || endMarker.line < 0) {
+      return addon.serialize();
+    }
+
+    try {
+      const bufLen = terminal.buffer.active.length;
+      const bannerStart = startMarker.line;
+      const bannerEnd = endMarker.line;
+
+      const beforePart =
+        bannerStart > 0 ? addon.serialize({ range: { start: 0, end: bannerStart - 1 } }) : "";
+      const afterPart =
+        bannerEnd < bufLen - 1
+          ? addon.serialize({ range: { start: bannerEnd, end: bufLen - 1 } })
+          : "";
+
+      if (beforePart && afterPart) return beforePart + "\r\n" + afterPart;
+      return beforePart || afterPart || addon.serialize();
+    } catch {
+      return addon.serialize();
+    }
+  }
+
   markChecked(): void {
     this.terminalInfo.lastCheckTime = Date.now();
   }
@@ -987,7 +1015,14 @@ export class TerminalProcess {
           this.deps.agentStateService.handleActivityState(this.terminalInfo, state, metadata);
         },
         {
-          ...this.getActivityMonitorOptions(),
+          ...buildActivityMonitorOptions(
+            this.terminalInfo.agentId ??
+              (this.terminalInfo.type !== "terminal" ? this.terminalInfo.type : undefined),
+            {
+              getVisibleLines: (n) => this.getLastNLines(n),
+              getCursorLine: () => this.getCursorLine(),
+            }
+          ),
           processStateValidator,
           initialState,
           skipInitialStateEmit: preserveState,
@@ -995,50 +1030,6 @@ export class TerminalProcess {
       );
       this.activityMonitor.startPolling();
     }
-  }
-
-  private getActivityMonitorOptions(): import("../ActivityMonitor.js").ActivityMonitorOptions {
-    const effectiveAgentId =
-      this.terminalInfo.agentId ??
-      (this.terminalInfo.type !== "terminal" ? this.terminalInfo.type : undefined);
-    const agentConfig = effectiveAgentId ? getEffectiveAgentConfig(effectiveAgentId) : undefined;
-    const ignoredInputSequences = agentConfig?.capabilities?.ignoredInputSequences ?? ["\x1b\r"];
-
-    const detection = effectiveAgentId
-      ? getEffectiveAgentConfig(effectiveAgentId)?.detection
-      : undefined;
-    const patternConfig = buildPatternConfig(detection, effectiveAgentId);
-    const bootCompletePatterns = buildBootCompletePatterns(detection, effectiveAgentId);
-    const promptPatterns = buildPromptPatterns(detection, effectiveAgentId);
-    const promptHintPatterns = buildPromptHintPatterns(detection, effectiveAgentId);
-    const completionPatterns = buildCompletionPatterns(detection, effectiveAgentId);
-
-    const outputActivityDetection = {
-      enabled: true,
-      windowMs: 1000,
-      minFrames: 2,
-      minBytes: 32,
-    };
-
-    const getVisibleLines = effectiveAgentId ? (n: number) => this.getLastNLines(n) : undefined;
-    const getCursorLine = effectiveAgentId ? () => this.getCursorLine() : undefined;
-
-    return {
-      ignoredInputSequences,
-      agentId: effectiveAgentId,
-      outputActivityDetection,
-      getVisibleLines,
-      getCursorLine,
-      patternConfig,
-      bootCompletePatterns,
-      promptPatterns,
-      promptHintPatterns,
-      completionPatterns,
-      completionConfidence: detection?.completionConfidence,
-      promptScanLineCount: detection?.promptScanLineCount,
-      promptConfidence: detection?.promptConfidence,
-      idleDebounceMs: effectiveAgentId ? (detection?.debounceMs ?? 2000) : undefined,
-    };
   }
 
   stopActivityMonitor(): void {
@@ -1070,10 +1061,7 @@ export class TerminalProcess {
     this.stopProcessDetector();
     this.stopActivityMonitor();
 
-    if (this.semanticFlushTimer) {
-      clearTimeout(this.semanticFlushTimer);
-      this.semanticFlushTimer = null;
-    }
+    this.semanticBufferManager.dispose();
 
     if (
       TERMINAL_SESSION_PERSISTENCE_ENABLED &&
@@ -1081,7 +1069,7 @@ export class TerminalProcess {
       !this.terminalInfo.wasKilled
     ) {
       try {
-        const state = this.getSerializedState();
+        const state = this._serializeForPersistence() ?? this.getSerializedState();
         if (state && Buffer.byteLength(state, "utf8") <= SESSION_SNAPSHOT_MAX_BYTES) {
           persistSessionSnapshotSync(this.id, state);
           this.sessionPersistDirty = false;
@@ -1125,12 +1113,29 @@ export class TerminalProcess {
         this.ensureHeadlessResponder();
       }
 
+      // Respond to OSC 10/11 (foreground/background color queries) for agent terminals.
+      // xterm.js does not respond to these OSC queries, so there is no double-response
+      // risk with the frontend. Without this, termenv (used by Bubble Tea / OpenCode)
+      // blocks for 5 seconds PER query waiting for responses that never come.
+      if (this.isAgentTerminal && data.includes("\x1b]1")) {
+        try {
+          if (data.includes("\x1b]10;?")) {
+            terminal.ptyProcess.write("\x1b]10;rgb:cccc/cccc/cccc\x1b\\");
+          }
+          if (data.includes("\x1b]11;?")) {
+            terminal.ptyProcess.write("\x1b]11;rgb:0000/0000/0000\x1b\\");
+          }
+        } catch (error) {
+          this.logWriteError(error, { operation: "write(osc-color-response)" });
+        }
+      }
+
       terminal.headlessTerminal?.write(data);
       this.scheduleSessionPersist();
 
       this.emitData(data);
       this.forensicsBuffer.capture(data);
-      this.debouncedSemanticUpdate(data);
+      this.semanticBufferManager.onData(data);
 
       if (this.isAgentTerminal) {
         terminal.outputBuffer += data;
@@ -1158,7 +1163,7 @@ export class TerminalProcess {
 
       this.stopProcessDetector();
       this.stopActivityMonitor();
-      this.flushPendingSemanticData();
+      this.semanticBufferManager.flush();
 
       if (this.inputWriteTimeout) {
         clearTimeout(this.inputWriteTimeout);
@@ -1238,14 +1243,9 @@ export class TerminalProcess {
         terminal.type = result.agentType;
 
         if (!terminal.title || terminal.title === previousType || terminal.title === "Terminal") {
-          const agentNames: Record<TerminalType, string> = {
-            claude: "Claude",
-            gemini: "Gemini",
-            codex: "Codex",
-            opencode: "OpenCode",
-            terminal: "Terminal",
-          };
-          terminal.title = agentNames[result.agentType];
+          const config = AGENT_REGISTRY[result.agentType];
+          terminal.title =
+            config?.name ?? (result.agentType === "terminal" ? "Terminal" : result.agentType);
         }
 
         this.lastDetectedProcessIconId = result.processIconId;
@@ -1297,7 +1297,7 @@ export class TerminalProcess {
     }
 
     if (!terminal.agentId) {
-      const lastCommand = result.currentCommand || this.getLastCommand();
+      const lastCommand = result.currentCommand || this.semanticBufferManager.getLastCommand();
 
       const { headline, status, type } = this.headlineGenerator.generate({
         terminalId: this.id,
@@ -1340,79 +1340,6 @@ export class TerminalProcess {
           events.emit("agent:state-changed", validated.data);
         }
       }
-    }
-  }
-
-  private getLastCommand(): string | undefined {
-    const buffer = this.terminalInfo.semanticBuffer;
-    if (buffer.length === 0) return undefined;
-
-    for (let i = buffer.length - 1; i >= 0 && i >= buffer.length - 10; i--) {
-      let line = buffer[i].trim();
-
-      if (line.length === 0) continue;
-
-      line = line.replace(/^[^@]*@[^:]*:[^\s]*\s*[$>%#]\s*/, "");
-      line = line.replace(/^~?[^\s]*[$>%#]\s*/, "");
-      line = line.replace(/^[$>%#]\s*/, "");
-
-      if (line.length > 0) {
-        return line;
-      }
-    }
-    return undefined;
-  }
-
-  private debouncedSemanticUpdate(data: string): void {
-    this.pendingSemanticData += data;
-
-    if (this.semanticFlushTimer) {
-      return;
-    }
-
-    this.semanticFlushTimer = setTimeout(() => {
-      if (this.pendingSemanticData) {
-        this.updateSemanticBuffer(this.pendingSemanticData);
-        this.pendingSemanticData = "";
-      }
-      this.semanticFlushTimer = null;
-    }, SEMANTIC_FLUSH_INTERVAL_MS);
-  }
-
-  private updateSemanticBuffer(chunk: string): void {
-    const terminal = this.terminalInfo;
-    const normalized = chunk.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
-    const lines = normalized.split("\n");
-
-    if (terminal.semanticBuffer.length > 0 && lines.length > 0 && !normalized.startsWith("\n")) {
-      terminal.semanticBuffer[terminal.semanticBuffer.length - 1] += lines[0];
-      lines.shift();
-    }
-
-    const processedLines = lines
-      .filter((line) => line.length > 0 || terminal.semanticBuffer.length > 0)
-      .map((line) => {
-        if (line.length > SEMANTIC_BUFFER_MAX_LINE_LENGTH) {
-          return line.substring(0, SEMANTIC_BUFFER_MAX_LINE_LENGTH) + "... [truncated]";
-        }
-        return line;
-      });
-
-    terminal.semanticBuffer.push(...processedLines);
-
-    if (terminal.semanticBuffer.length > SEMANTIC_BUFFER_MAX_LINES) {
-      terminal.semanticBuffer = terminal.semanticBuffer.slice(-SEMANTIC_BUFFER_MAX_LINES);
-    }
-  }
-
-  private flushPendingSemanticData(): void {
-    if (this.semanticFlushTimer) {
-      clearTimeout(this.semanticFlushTimer);
-      this.semanticFlushTimer = null;
-    }
-    if (this.pendingSemanticData) {
-      this.updateSemanticBuffer(this.pendingSemanticData);
-      this.pendingSemanticData = "";
     }
   }
 

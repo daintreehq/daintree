@@ -11,13 +11,8 @@
  * All types are serializable (no functions, no circular refs) for IPC transport.
  */
 
-import type {
-  Worktree,
-  WorktreeChanges,
-  FileChangeDetail,
-  WorktreeMood,
-  WorktreeLifecycleStatus,
-} from "./domain.js";
+import type { FileChangeDetail, WorktreeChanges } from "./git.js";
+import type { Worktree, WorktreeMood, WorktreeLifecycleStatus } from "./worktree.js";
 import type {
   CopyTreeOptions,
   CopyTreeProgress,
@@ -149,6 +144,7 @@ export type WorkspaceHostRequest =
     }
   // Branch operations
   | { type: "list-branches"; requestId: string; rootPath: string }
+  | { type: "get-recent-branches"; requestId: string; rootPath: string }
   // Git operations
   | {
       type: "get-file-diff";
@@ -232,6 +228,7 @@ export type WorkspaceHostEvent =
   | { type: "delete-worktree-result"; requestId: string; success: boolean; error?: string }
   // Branch operation responses
   | { type: "list-branches-result"; requestId: string; branches: BranchInfo[]; error?: string }
+  | { type: "get-recent-branches-result"; requestId: string; branches: string[]; error?: string }
   // Git operation responses
   | { type: "get-file-diff-result"; requestId: string; diff: string; error?: string }
   // Spontaneous updates (no requestId - these are pushed events)

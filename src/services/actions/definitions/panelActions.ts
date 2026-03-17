@@ -5,6 +5,7 @@ import { getAIAgentInfo } from "@/lib/aiAgentDetection";
 import { useDiagnosticsStore } from "@/store/diagnosticsStore";
 import { useSidecarStore } from "@/store/sidecarStore";
 import { useTerminalStore } from "@/store/terminalStore";
+import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 
 export function registerPanelActions(actions: ActionRegistry, callbacks: ActionCallbacks): void {
   // Query action: list all panels with metadata
@@ -19,13 +20,13 @@ export function registerPanelActions(actions: ActionRegistry, callbacks: ActionC
     argsSchema: z
       .object({
         worktreeId: z.string().optional(),
-        location: z.enum(["grid", "dock", "trash"]).optional(),
+        location: z.enum(["grid", "dock", "trash", "background"]).optional(),
       })
       .optional(),
     run: async (args: unknown) => {
       const { worktreeId, location } = (args ?? {}) as {
         worktreeId?: string;
-        location?: "grid" | "dock" | "trash";
+        location?: "grid" | "dock" | "trash" | "background";
       };
       const state = useTerminalStore.getState();
       let panels = state.terminals;
@@ -37,7 +38,7 @@ export function registerPanelActions(actions: ActionRegistry, callbacks: ActionC
       if (location) {
         panels = panels.filter((p) => p.location === location);
       } else {
-        panels = panels.filter((p) => p.location !== "trash");
+        panels = panels.filter((p) => p.location !== "trash" && p.location !== "background");
       }
 
       const sidecarState = useSidecarStore.getState();
@@ -64,6 +65,36 @@ export function registerPanelActions(actions: ActionRegistry, callbacks: ActionC
         focusedPanelId: state.focusedId ?? null,
         maximizedPanelId: state.maximizedId ?? null,
       };
+    },
+  }));
+
+  actions.set("panel.focus", () => ({
+    id: "panel.focus",
+    title: "Focus Panel",
+    description: "Focus a specific panel by ID, optionally switching to its worktree first",
+    category: "panel",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    argsSchema: z.object({
+      panelId: z.string(),
+      worktreeId: z.string().optional(),
+    }),
+    run: async (args: unknown) => {
+      const { panelId, worktreeId } = args as { panelId: string; worktreeId?: string };
+      const terminalState = useTerminalStore.getState();
+      const panel = terminalState.terminals.find((t) => t.id === panelId && t.location !== "trash");
+      // Auto-restore backgrounded panels when focused via action
+      if (panel?.location === "background") {
+        terminalState.restoreBackgroundTerminal(panelId);
+      }
+      if (!panel) {
+        throw new Error("Terminal panel no longer exists");
+      }
+      if (worktreeId) {
+        useWorktreeSelectionStore.getState().setActiveWorktree(worktreeId);
+      }
+      terminalState.activateTerminal(panelId);
     },
   }));
 
@@ -110,6 +141,10 @@ export function registerPanelActions(actions: ActionRegistry, callbacks: ActionC
   const activateSidecarTab = async (tabId: string): Promise<void> => {
     const state = useSidecarStore.getState();
     const tab = state.tabs.find((t) => t.id === tabId);
+    if (!tab) {
+      return;
+    }
+
     state.setActiveTab(tabId);
 
     if (!tab?.url) {

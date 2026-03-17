@@ -1,66 +1,34 @@
 import { useState, useEffect, useRef, useMemo } from "react";
-import {
-  Terminal,
-  Key,
-  FolderX,
-  Plus,
-  Trash2,
-  ChevronUp,
-  ChevronDown,
-  Eye,
-  EyeOff,
-  Image,
-  Upload,
-  X,
-  BookOpen,
-  Edit3,
-  Download,
-  FileDown,
-  Play,
-  AlertTriangle,
-  Rocket,
-  Check,
-  Settings,
-  FileCode,
-  Zap,
-  Command,
-  CookingPot,
-  Lock,
-  ShieldAlert,
-  GitBranch,
-  Copy,
-  FolderOpen,
-} from "lucide-react";
+import { Bot, X, Settings, FileCode, Zap, Command, CookingPot, Server, Bell } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { EmojiPicker } from "@/components/ui/emoji-picker";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { useProjectSettings } from "@/hooks";
 import { useProjectStore } from "@/store/projectStore";
-import { useRecipeStore } from "@/store/recipeStore";
 import { useWorktrees } from "@/hooks/useWorktrees";
-import type {
-  RunCommand,
-  TerminalRecipe,
-  CopyTreeSettings,
-  CopyTreeTestConfigResult,
-} from "@/types";
-import { copyTreeClient } from "@/clients/copyTreeClient";
-import { getProjectGradient } from "@/lib/colorUtils";
+import type { RunCommand, CopyTreeSettings } from "@/types";
+import type { ProjectTerminalSettings, ProjectMcpServerConfig } from "@shared/types/project";
+import type { ProjectMcpServerRunState } from "@shared/types/ipc/project";
+import { SCROLLBACK_MIN, SCROLLBACK_MAX } from "@shared/config/scrollback";
 import { cn } from "@/lib/utils";
-import { validateProjectSvg, sanitizeSvg, svgToDataUrl } from "@/lib/svg";
-import { RecipeEditor } from "@/components/TerminalRecipe/RecipeEditor";
-import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
-import { LiveTimeAgo } from "@/components/Worktree/LiveTimeAgo";
 import { CommandOverridesTab } from "@/components/Settings/CommandOverridesTab";
+import { McpServersTab } from "./McpServersTab";
+import { ProjectNotificationsTab } from "./ProjectNotificationsTab";
+import { GeneralTab } from "./GeneralTab";
+import { ContextTab } from "./ContextTab";
+import { AutomationTab } from "./AutomationTab";
+import { RecipesTab } from "./RecipesTab";
+import { AgentTab } from "./AgentTab";
 import type { CommandOverride } from "@shared/types/commands";
+import type { NotificationSettings } from "@shared/types/ipc/api";
 import {
   createProjectSettingsSnapshot,
   areSnapshotsEqual,
   type ProjectSettingsSnapshot,
+  type EnvVar,
 } from "./projectSettingsDirty";
-import { isSensitiveEnvKey } from "@shared/utils/envVars";
-import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
+import { validatePathPattern } from "@shared/utils/pathPattern";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { useRecipeStore } from "@/store/recipeStore";
 
 interface ProjectSettingsDialogProps {
   projectId: string;
@@ -68,29 +36,17 @@ interface ProjectSettingsDialogProps {
   onClose: () => void;
 }
 
-interface EnvVar {
-  id: string;
-  key: string;
-  value: string;
-}
+type ProjectSettingsTab =
+  | "general"
+  | "context"
+  | "automation"
+  | "recipes"
+  | "commands"
+  | "agent"
+  | "mcp"
+  | "notifications";
 
-type ProjectSettingsTab = "general" | "context" | "automation" | "recipes" | "commands";
-
-function formatBytes(bytes: number): string {
-  if (bytes === 0) return "0 B";
-  const k = 1024;
-  const sizes = ["B", "KB", "MB", "GB"];
-  const i = Math.floor(Math.log(bytes) / Math.log(k));
-  return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + " " + sizes[i];
-}
-
-function parsePositiveInt(value: string): number | undefined {
-  if (!value) return undefined;
-  const num = Number(value);
-  if (!Number.isFinite(num) || num <= 0) return undefined;
-  return Math.floor(num);
-}
-export const GITIGNORE_SNIPPET = `# Canopy in-repo settings — safe to commit\n.canopy/project.json\n.canopy/settings.json\n\n# Canopy machine-local settings — do not commit\n.canopy/*.local.json`;
+export { GITIGNORE_SNIPPET } from "./projectSettingsConstants";
 
 export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSettingsDialogProps) {
   const { settings, saveSettings, isLoading, error } = useProjectSettings(projectId);
@@ -103,56 +59,53 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
   const [saveError, setSaveError] = useState<string | null>(null);
   const [name, setName] = useState(currentProject?.name || "");
   const [emoji, setEmoji] = useState(currentProject?.emoji || "🌲");
-  const [isEmojiPickerOpen, setIsEmojiPickerOpen] = useState(false);
 
   const [runCommands, setRunCommands] = useState<RunCommand[]>([]);
   const [environmentVariables, setEnvironmentVariables] = useState<EnvVar[]>([]);
   const [excludedPaths, setExcludedPaths] = useState<string[]>([]);
   const [isInitialized, setIsInitialized] = useState(false);
-  const [visibleEnvVars, setVisibleEnvVars] = useState<Set<string>>(new Set());
   const [projectIconSvg, setProjectIconSvg] = useState<string | undefined>(undefined);
-  const [iconError, setIconError] = useState<string | null>(null);
-  const [isDraggingIcon, setIsDraggingIcon] = useState(false);
   const [defaultWorktreeRecipeId, setDefaultWorktreeRecipeId] = useState<string | undefined>(
     undefined
   );
   const [devServerCommand, setDevServerCommand] = useState<string>("");
+  const [devServerLoadTimeout, setDevServerLoadTimeout] = useState<number | undefined>(undefined);
   const [commandOverrides, setCommandOverrides] = useState<CommandOverride[]>([]);
   const [copyTreeSettings, setCopyTreeSettings] = useState<CopyTreeSettings>({});
-  const [testConfigResult, setTestConfigResult] = useState<CopyTreeTestConfigResult | null>(null);
-  const [isTestingConfig, setIsTestingConfig] = useState(false);
   const [branchPrefixMode, setBranchPrefixMode] = useState<"none" | "username" | "custom">("none");
   const [branchPrefixCustom, setBranchPrefixCustom] = useState<string>("");
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [agentInstructions, setAgentInstructions] = useState<string>("");
+  const [worktreePathPattern, setWorktreePathPattern] = useState<string>("");
+  const [terminalShell, setTerminalShell] = useState<string>("");
+  const [terminalShellArgs, setTerminalShellArgs] = useState<string>("");
+  const [terminalDefaultCwd, setTerminalDefaultCwd] = useState<string>("");
+  const [terminalScrollback, setTerminalScrollback] = useState<string>("");
+  const [mcpServers, setMcpServers] = useState<Record<string, ProjectMcpServerConfig>>({});
+  const [mcpRunStates, setMcpRunStates] = useState<ProjectMcpServerRunState[]>([]);
+  const [notificationOverrides, setNotificationOverrides] = useState<Partial<NotificationSettings>>(
+    {}
+  );
   const initialSnapshotRef = useRef<ProjectSettingsSnapshot | null>(null);
   const [showUnsavedChangesDialog, setShowUnsavedChangesDialog] = useState(false);
 
-  const [inRepoExpanded, setInRepoExpanded] = useState(false);
-  const [inRepoEnabling, setInRepoEnabling] = useState(false);
-  const [inRepoError, setInRepoError] = useState<string | null>(null);
-  const [gitignoreCopied, setGitignoreCopied] = useState(false);
-  const gitignoreCopyTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-
-  const {
-    recipes,
-    loadRecipes,
-    deleteRecipe,
-    exportRecipe,
-    importRecipe,
-    isLoading: recipesLoading,
-  } = useRecipeStore();
+  const { recipes, isLoading: recipesLoading } = useRecipeStore();
   const { worktreeMap, worktrees } = useWorktrees();
-  const [isRecipeEditorOpen, setIsRecipeEditorOpen] = useState(false);
-  const [editingRecipe, setEditingRecipe] = useState<TerminalRecipe | undefined>(undefined);
-  const [recipeToDelete, setRecipeToDelete] = useState<string | null>(null);
-  const [deleteError, setDeleteError] = useState<string | null>(null);
-  const [importJson, setImportJson] = useState("");
-  const [importError, setImportError] = useState<string | null>(null);
-  const [showImportDialog, setShowImportDialog] = useState(false);
-  const [exportError, setExportError] = useState<string | null>(null);
-  const [exportFeedback, setExportFeedback] = useState<string | null>(null);
-  const exportTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-  const hasLoadedRecipes = useRef(false);
+
+  const currentTerminalSettings = useMemo((): ProjectTerminalSettings | undefined => {
+    const result: ProjectTerminalSettings = {};
+    if (terminalShell.trim()) result.shell = terminalShell.trim();
+    if (terminalShellArgs.trim()) {
+      result.shellArgs = terminalShellArgs.trim().split(/\s+/);
+    }
+    if (terminalDefaultCwd.trim()) result.defaultWorkingDirectory = terminalDefaultCwd.trim();
+    if (terminalScrollback.trim()) {
+      const num = Number(terminalScrollback);
+      if (Number.isFinite(num) && num >= SCROLLBACK_MIN && num <= SCROLLBACK_MAX) {
+        result.scrollbackLines = Math.trunc(num);
+      }
+    }
+    return Object.keys(result).length > 0 ? result : undefined;
+  }, [terminalShell, terminalShellArgs, terminalDefaultCwd, terminalScrollback]);
 
   const currentSnapshot = useMemo(() => {
     if (!currentProject) return null;
@@ -168,12 +121,19 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
       commandOverrides,
       copyTreeSettings,
       branchPrefixMode,
-      branchPrefixCustom
+      branchPrefixCustom,
+      devServerLoadTimeout,
+      agentInstructions,
+      worktreePathPattern,
+      currentTerminalSettings,
+      mcpServers,
+      notificationOverrides
     );
   }, [
     name,
     emoji,
     devServerCommand,
+    devServerLoadTimeout,
     projectIconSvg,
     excludedPaths,
     environmentVariables,
@@ -183,78 +143,18 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
     copyTreeSettings,
     branchPrefixMode,
     branchPrefixCustom,
+    agentInstructions,
+    worktreePathPattern,
     currentProject,
+    currentTerminalSettings,
+    mcpServers,
+    notificationOverrides,
   ]);
 
   const isDirty = useMemo(() => {
     if (!initialSnapshotRef.current || !currentSnapshot) return false;
     return !areSnapshotsEqual(initialSnapshotRef.current, currentSnapshot);
   }, [currentSnapshot]);
-
-  const toggleEnvVarVisibility = (id: string) => {
-    setVisibleEnvVars((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) {
-        next.delete(id);
-      } else {
-        next.add(id);
-      }
-      return next;
-    });
-  };
-
-  const handleIconFile = async (file: File) => {
-    setIconError(null);
-    if (!file.type.includes("svg")) {
-      setIconError("Please select an SVG file");
-      return;
-    }
-    try {
-      const text = await file.text();
-      const result = validateProjectSvg(text);
-      if (!result.ok) {
-        setIconError(result.error);
-        return;
-      }
-      setProjectIconSvg(result.svg);
-    } catch {
-      setIconError("Failed to read file");
-    }
-  };
-
-  const handleIconDrop = (e: React.DragEvent) => {
-    e.preventDefault();
-    setIsDraggingIcon(false);
-    const file = e.dataTransfer.files[0];
-    if (file) {
-      void handleIconFile(file);
-    }
-  };
-
-  const handleIconDragOver = (e: React.DragEvent) => {
-    e.preventDefault();
-    setIsDraggingIcon(true);
-  };
-
-  const handleIconDragLeave = (e: React.DragEvent) => {
-    e.preventDefault();
-    setIsDraggingIcon(false);
-  };
-
-  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) {
-      void handleIconFile(file);
-    }
-    if (fileInputRef.current) {
-      fileInputRef.current.value = "";
-    }
-  };
-
-  const handleRemoveIcon = () => {
-    setProjectIconSvg(undefined);
-    setIconError(null);
-  };
 
   useEffect(() => {
     if (isOpen && !isLoading && settings && currentProject && !isInitialized) {
@@ -269,10 +169,16 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
       const initialProjectIconSvg = settings.projectIconSvg;
       const initialDefaultWorktreeRecipeId = settings.defaultWorktreeRecipeId;
       const initialDevServerCommand = settings.devServerCommand || "";
+      const initialDevServerLoadTimeout = settings.devServerLoadTimeout;
       const initialCommandOverrides = settings.commandOverrides || [];
       const initialCopyTreeSettings = settings.copyTreeSettings || {};
       const initialBranchPrefixMode = settings.branchPrefixMode ?? "none";
       const initialBranchPrefixCustom = settings.branchPrefixCustom ?? "";
+      const initialAgentInstructions = settings.agentInstructions ?? "";
+      const initialWorktreePathPattern = settings.worktreePathPattern ?? "";
+      const initialTerminalSettings = settings.terminalSettings;
+      const initialMcpServers = settings.mcpServers ?? {};
+      const initialNotificationOverrides = settings.notificationOverrides ?? {};
 
       setName(currentProject.name);
       setEmoji(currentProject.emoji || "🌲");
@@ -282,10 +188,23 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
       setProjectIconSvg(initialProjectIconSvg);
       setDefaultWorktreeRecipeId(initialDefaultWorktreeRecipeId);
       setDevServerCommand(initialDevServerCommand);
+      setDevServerLoadTimeout(initialDevServerLoadTimeout);
       setCommandOverrides(initialCommandOverrides);
       setCopyTreeSettings(initialCopyTreeSettings);
       setBranchPrefixMode(initialBranchPrefixMode);
       setBranchPrefixCustom(initialBranchPrefixCustom);
+      setAgentInstructions(initialAgentInstructions);
+      setWorktreePathPattern(initialWorktreePathPattern);
+      setTerminalShell(initialTerminalSettings?.shell ?? "");
+      setTerminalShellArgs(initialTerminalSettings?.shellArgs?.join(" ") ?? "");
+      setTerminalDefaultCwd(initialTerminalSettings?.defaultWorkingDirectory ?? "");
+      setTerminalScrollback(
+        initialTerminalSettings?.scrollbackLines !== undefined
+          ? String(initialTerminalSettings.scrollbackLines)
+          : ""
+      );
+      setMcpServers(initialMcpServers);
+      setNotificationOverrides(initialNotificationOverrides);
 
       initialSnapshotRef.current = createProjectSettingsSnapshot(
         currentProject.name,
@@ -299,141 +218,65 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
         initialCommandOverrides,
         initialCopyTreeSettings,
         initialBranchPrefixMode,
-        initialBranchPrefixCustom
+        initialBranchPrefixCustom,
+        initialDevServerLoadTimeout,
+        initialAgentInstructions,
+        initialWorktreePathPattern,
+        initialTerminalSettings,
+        initialMcpServers,
+        initialNotificationOverrides
       );
 
       setIsInitialized(true);
     }
     if (!isOpen) {
       setIsInitialized(false);
-      setVisibleEnvVars(new Set());
       setEnvironmentVariables([]);
       setProjectIconSvg(undefined);
-      setIconError(null);
       setDefaultWorktreeRecipeId(undefined);
       setDevServerCommand("");
+      setDevServerLoadTimeout(undefined);
       setCommandOverrides([]);
       setCopyTreeSettings({});
-      setTestConfigResult(null);
-      setIsTestingConfig(false);
       setSaveError(null);
       setBranchPrefixMode("none");
       setBranchPrefixCustom("");
-      hasLoadedRecipes.current = false;
+      setAgentInstructions("");
+      setWorktreePathPattern("");
+      setTerminalShell("");
+      setTerminalShellArgs("");
+      setTerminalDefaultCwd("");
+      setTerminalScrollback("");
+      setMcpServers({});
+      setMcpRunStates([]);
+      setNotificationOverrides({});
       setActiveTab("general");
       initialSnapshotRef.current = null;
       setShowUnsavedChangesDialog(false);
     }
   }, [settings, isOpen, isInitialized, currentProject, isLoading]);
 
-  // Reset initialization when projectId changes while dialog is open
   useEffect(() => {
     if (isOpen) {
       setIsInitialized(false);
-      hasLoadedRecipes.current = false;
     }
   }, [projectId, isOpen]);
 
   useEffect(() => {
-    if (!isOpen) {
-      setIsEmojiPickerOpen(false);
-      setIsRecipeEditorOpen(false);
-      setEditingRecipe(undefined);
-      setRecipeToDelete(null);
-      setDeleteError(null);
-      setShowImportDialog(false);
-      setImportJson("");
-      setImportError(null);
-      setExportError(null);
-      setExportFeedback(null);
-      if (exportTimeoutRef.current) {
-        clearTimeout(exportTimeoutRef.current);
-        exportTimeoutRef.current = null;
+    if (!isOpen || !projectId) return;
+
+    window.electron.projectMcp
+      .getStatuses(projectId)
+      .then(setMcpRunStates)
+      .catch(() => {});
+
+    const cleanup = window.electron.projectMcp.onStatusChanged((payload) => {
+      if (payload.projectId === projectId) {
+        setMcpRunStates(payload.servers as ProjectMcpServerRunState[]);
       }
-      setInRepoExpanded(false);
-      setInRepoEnabling(false);
-      setInRepoError(null);
-      setGitignoreCopied(false);
-      if (gitignoreCopyTimeoutRef.current) {
-        clearTimeout(gitignoreCopyTimeoutRef.current);
-        gitignoreCopyTimeoutRef.current = null;
-      }
-    }
-  }, [isOpen]);
-
-  useEffect(() => {
-    if (isOpen && !hasLoadedRecipes.current && !recipesLoading && projectId) {
-      hasLoadedRecipes.current = true;
-      loadRecipes(projectId).catch((err) => {
-        console.error("Failed to load recipes:", err);
-      });
-    }
-  }, [isOpen, recipesLoading, loadRecipes, projectId]);
-
-  useEffect(() => {
-    return () => {
-      if (exportTimeoutRef.current) {
-        clearTimeout(exportTimeoutRef.current);
-      }
-      if (gitignoreCopyTimeoutRef.current) {
-        clearTimeout(gitignoreCopyTimeoutRef.current);
-      }
-    };
-  }, []);
-
-  const handleCopyGitignore = async () => {
-    try {
-      await navigator.clipboard.writeText(GITIGNORE_SNIPPET);
-      setGitignoreCopied(true);
-      if (gitignoreCopyTimeoutRef.current) clearTimeout(gitignoreCopyTimeoutRef.current);
-      gitignoreCopyTimeoutRef.current = setTimeout(() => {
-        setGitignoreCopied(false);
-        gitignoreCopyTimeoutRef.current = null;
-      }, 2000);
-    } catch {
-      // clipboard access denied — fail silently
-    }
-  };
-
-  const handleEnableInRepoSettings = async () => {
-    if (!currentProject || inRepoEnabling) return;
-    setInRepoEnabling(true);
-    setInRepoError(null);
-    try {
-      const updated = await enableInRepoSettings(projectId);
-      if (!updated.inRepoSettings) {
-        setInRepoError("In-repo settings could not be enabled. Please try again.");
-      } else {
-        setInRepoExpanded(false);
-      }
-    } catch (err) {
-      setInRepoError(err instanceof Error ? err.message : "Failed to enable in-repo settings");
-    } finally {
-      setInRepoEnabling(false);
-    }
-  };
-
-  const handleDisableInRepoSettings = async () => {
-    if (!currentProject || inRepoEnabling) return;
-    setInRepoEnabling(true);
-    setInRepoError(null);
-    try {
-      await disableInRepoSettings(projectId);
-    } catch (err) {
-      setInRepoError(err instanceof Error ? err.message : "Failed to disable in-repo settings");
-    } finally {
-      setInRepoEnabling(false);
-    }
-  };
-
-  const handleInRepoToggle = () => {
-    if (currentProject?.inRepoSettings) {
-      void handleDisableInRepoSettings();
-    } else {
-      setInRepoExpanded((prev) => !prev);
-      setInRepoError(null);
-    }
-  };
+    });
+    return cleanup;
+  }, [isOpen, projectId]);
 
   const requestClose = (options?: { bypassDirty?: boolean }) => {
     if (options?.bypassDirty || !isDirty) {
@@ -487,7 +330,6 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
         });
       }
 
-      // Sanitize copyTreeSettings - remove empty arrays and undefined values
       const sanitizedCopyTreeSettings: CopyTreeSettings = {};
       if (copyTreeSettings.maxContextSize !== undefined) {
         sanitizedCopyTreeSettings.maxContextSize = copyTreeSettings.maxContextSize;
@@ -522,6 +364,15 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
       const sanitizedBranchPrefixCustom = branchPrefixCustom.trim();
       const effectivePrefixMode =
         branchPrefixMode === "custom" && !sanitizedBranchPrefixCustom ? "none" : branchPrefixMode;
+      const sanitizedWorktreePathPattern = worktreePathPattern.trim() || undefined;
+      if (sanitizedWorktreePathPattern) {
+        const patternValidation = validatePathPattern(sanitizedWorktreePathPattern);
+        if (!patternValidation.valid) {
+          setSaveError(`Invalid worktree path pattern: ${patternValidation.error}`);
+          setIsSaving(false);
+          return;
+        }
+      }
 
       await saveSettings({
         ...settings,
@@ -531,11 +382,18 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
         projectIconSvg: projectIconSvg,
         defaultWorktreeRecipeId: defaultWorktreeRecipeId,
         devServerCommand: devServerCommand.trim() || undefined,
+        devServerLoadTimeout: devServerLoadTimeout,
         commandOverrides: commandOverrides.length > 0 ? commandOverrides : undefined,
         copyTreeSettings: hasCopyTreeSettings ? sanitizedCopyTreeSettings : undefined,
         branchPrefixMode: effectivePrefixMode !== "none" ? effectivePrefixMode : undefined,
         branchPrefixCustom:
           effectivePrefixMode === "custom" ? sanitizedBranchPrefixCustom : undefined,
+        agentInstructions: agentInstructions.trim() || undefined,
+        worktreePathPattern: sanitizedWorktreePathPattern,
+        terminalSettings: currentTerminalSettings,
+        mcpServers: Object.keys(mcpServers).length > 0 ? mcpServers : undefined,
+        notificationOverrides:
+          Object.keys(notificationOverrides).length > 0 ? notificationOverrides : undefined,
         insecureEnvironmentVariables: undefined,
         unresolvedSecureEnvironmentVariables: undefined,
       });
@@ -550,6 +408,8 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
         id: cmd.id || "",
         name: cmd.name,
         command: cmd.command,
+        preferredLocation: cmd.preferredLocation,
+        preferredAutoRestart: cmd.preferredAutoRestart,
       }));
 
       initialSnapshotRef.current = createProjectSettingsSnapshot(
@@ -564,7 +424,13 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
         commandOverrides.length > 0 ? commandOverrides : [],
         hasCopyTreeSettings ? sanitizedCopyTreeSettings : {},
         branchPrefixMode,
-        sanitizedBranchPrefixCustom
+        sanitizedBranchPrefixCustom,
+        devServerLoadTimeout,
+        agentInstructions,
+        worktreePathPattern.trim(),
+        currentTerminalSettings,
+        mcpServers,
+        notificationOverrides
       );
 
       requestClose({ bypassDirty: true });
@@ -576,156 +442,15 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
     }
   };
 
-  const handleTestConfig = async () => {
-    // Find the main worktree (or any worktree) to test against
-    const mainWorktree = worktrees.find((wt) => wt.isMainWorktree) || worktrees[0];
-    if (!mainWorktree) {
-      setTestConfigResult({
-        includedFiles: 0,
-        includedSize: 0,
-        excluded: { byTruncation: 0, bySize: 0, byPattern: 0 },
-        error: "No worktree available to test configuration",
-      });
-      return;
-    }
-
-    setIsTestingConfig(true);
-    setTestConfigResult(null);
-
-    try {
-      // Build the test options from current state (not saved settings)
-      const testOptions: import("@/types").CopyTreeOptions = {};
-
-      // Apply excludedPaths
-      if (excludedPaths.length > 0) {
-        const sanitizedPaths = excludedPaths.map((p) => p.trim()).filter(Boolean);
-        if (sanitizedPaths.length > 0) {
-          testOptions.exclude = sanitizedPaths;
-        }
-      }
-
-      // Apply copyTreeSettings
-      if (copyTreeSettings.maxContextSize !== undefined) {
-        testOptions.maxTotalSize = copyTreeSettings.maxContextSize;
-      }
-      if (copyTreeSettings.maxFileSize !== undefined) {
-        testOptions.maxFileSize = copyTreeSettings.maxFileSize;
-      }
-      if (copyTreeSettings.charLimit !== undefined) {
-        testOptions.charLimit = copyTreeSettings.charLimit;
-      }
-      if (copyTreeSettings.strategy === "modified") {
-        testOptions.sort = "modified";
-      }
-      if (copyTreeSettings.alwaysInclude && copyTreeSettings.alwaysInclude.length > 0) {
-        const sanitized = copyTreeSettings.alwaysInclude.map((p) => p.trim()).filter(Boolean);
-        if (sanitized.length > 0) {
-          testOptions.always = sanitized;
-        }
-      }
-      if (copyTreeSettings.alwaysExclude && copyTreeSettings.alwaysExclude.length > 0) {
-        const sanitized = copyTreeSettings.alwaysExclude.map((p) => p.trim()).filter(Boolean);
-        if (sanitized.length > 0) {
-          testOptions.exclude = [...(testOptions.exclude || []), ...sanitized];
-        }
-      }
-
-      const result = await copyTreeClient.testConfig(mainWorktree.id, testOptions);
-      setTestConfigResult(result);
-    } catch (error) {
-      console.error("Failed to test config:", error);
-      setTestConfigResult({
-        includedFiles: 0,
-        includedSize: 0,
-        excluded: { byTruncation: 0, bySize: 0, byPattern: 0 },
-        error: error instanceof Error ? error.message : "Failed to test configuration",
-      });
-    } finally {
-      setIsTestingConfig(false);
-    }
-  };
-
-  const handleEditRecipe = (recipe: TerminalRecipe) => {
-    setEditingRecipe(recipe);
-    setIsRecipeEditorOpen(true);
-  };
-
-  const handleAddRecipe = () => {
-    setEditingRecipe(undefined);
-    setIsRecipeEditorOpen(true);
-  };
-
-  const handleRecipeEditorClose = () => {
-    setIsRecipeEditorOpen(false);
-    setEditingRecipe(undefined);
-  };
-
-  const handleDeleteRecipe = async (recipeId: string) => {
-    setDeleteError(null);
-    try {
-      await deleteRecipe(recipeId);
-      if (recipeId === defaultWorktreeRecipeId) {
-        setDefaultWorktreeRecipeId(undefined);
-      }
-      setRecipeToDelete(null);
-    } catch (err) {
-      console.error("Failed to delete recipe:", err);
-      setDeleteError(err instanceof Error ? err.message : "Failed to delete recipe");
-    }
-  };
-
-  const handleExportRecipe = async (recipeId: string) => {
-    setExportError(null);
-    const json = exportRecipe(recipeId);
-    if (json) {
-      try {
-        await navigator.clipboard.writeText(json);
-        setExportFeedback(recipeId);
-        setExportError(null);
-        if (exportTimeoutRef.current) {
-          clearTimeout(exportTimeoutRef.current);
-        }
-        exportTimeoutRef.current = setTimeout(() => {
-          setExportFeedback(null);
-          exportTimeoutRef.current = null;
-        }, 2000);
-      } catch (err) {
-        console.error("Failed to copy to clipboard:", err);
-        setExportError(err instanceof Error ? err.message : "Failed to copy to clipboard");
-      }
-    }
-  };
-
-  const handleImportRecipe = async () => {
-    setImportError(null);
-    if (!projectId) {
-      setImportError("No project selected");
-      return;
-    }
-    try {
-      await importRecipe(projectId, importJson);
-      setShowImportDialog(false);
-      setImportJson("");
-    } catch (err) {
-      setImportError(err instanceof Error ? err.message : "Failed to import recipe");
-    }
-  };
-
-  const getRecipeScope = (recipe: TerminalRecipe): string => {
-    if (!recipe.worktreeId) return "Project-wide";
-    const worktree = worktreeMap.get(recipe.worktreeId);
-    if (worktree) {
-      return `Worktree: ${worktree.branch || worktree.name}`;
-    }
-    return `Worktree: ${recipe.worktreeId}`;
-  };
-
   const tabTitles: Record<ProjectSettingsTab, string> = {
     general: "General",
     context: "Context",
     automation: "Automation",
     recipes: "Recipes",
     commands: "Commands",
+    agent: "Agent",
+    mcp: "MCP Servers",
+    notifications: "Notifications",
   };
 
   return (
@@ -776,6 +501,27 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
             >
               Commands
             </NavButton>
+            <NavButton
+              active={activeTab === "agent"}
+              onClick={() => setActiveTab("agent")}
+              icon={<Bot className="w-4 h-4" />}
+            >
+              Agent
+            </NavButton>
+            <NavButton
+              active={activeTab === "mcp"}
+              onClick={() => setActiveTab("mcp")}
+              icon={<Server className="w-4 h-4" />}
+            >
+              MCP Servers
+            </NavButton>
+            <NavButton
+              active={activeTab === "notifications"}
+              onClick={() => setActiveTab("notifications")}
+              icon={<Bell className="w-4 h-4" />}
+            >
+              Notifications
+            </NavButton>
           </div>
 
           <div className="flex-1 flex flex-col min-w-0">
@@ -816,1353 +562,77 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
                 <>
                   {/* General Tab */}
                   <div className={activeTab === "general" ? "" : "hidden"}>
-                    {currentProject && (
-                      <div className="mb-6 pb-6 border-b border-canopy-border">
-                        <h3 className="text-sm font-semibold text-canopy-text/80 mb-2">
-                          Project Identity
-                        </h3>
-                        <p className="text-xs text-canopy-text/60 mb-4">
-                          Customize how your project appears in the sidebar and dashboard.
-                        </p>
-
-                        <div className="flex items-start gap-3 p-3 rounded-[var(--radius-md)] bg-canopy-bg border border-canopy-border">
-                          <Popover open={isEmojiPickerOpen} onOpenChange={setIsEmojiPickerOpen}>
-                            <PopoverTrigger asChild>
-                              <button
-                                type="button"
-                                aria-label="Change project emoji"
-                                className="flex h-14 w-14 items-center justify-center rounded-[var(--radius-xl)] shadow-inner shrink-0 bg-white/5 hover:bg-white/10 transition-colors border border-transparent hover:border-canopy-border cursor-pointer group"
-                                style={{
-                                  background: getProjectGradient(currentProject.color),
-                                }}
-                              >
-                                <span className="text-3xl select-none filter drop-shadow-sm group-hover:scale-110 transition-transform">
-                                  {emoji}
-                                </span>
-                              </button>
-                            </PopoverTrigger>
-                            <PopoverContent className="w-auto p-0">
-                              <EmojiPicker
-                                onEmojiSelect={({ emoji }) => {
-                                  setEmoji(emoji);
-                                  setIsEmojiPickerOpen(false);
-                                }}
-                              />
-                            </PopoverContent>
-                          </Popover>
-
-                          <div className="flex-1 min-w-0 flex flex-col justify-center h-14">
-                            <label
-                              htmlFor="project-name-input"
-                              className="text-xs font-medium text-canopy-text/60 mb-1.5 ml-1"
-                            >
-                              Project Name
-                            </label>
-                            <input
-                              id="project-name-input"
-                              type="text"
-                              value={name}
-                              onChange={(e) => setName(e.target.value)}
-                              className="w-full bg-transparent border border-canopy-border rounded px-3 py-2 text-sm text-canopy-text focus:outline-none focus:border-canopy-accent focus:ring-1 focus:ring-canopy-accent/30 transition-all placeholder:text-canopy-text/40"
-                              placeholder="My Awesome Project"
-                            />
-                          </div>
-                        </div>
-                      </div>
-                    )}
-
-                    <div className="mb-6 pb-6 border-b border-canopy-border">
-                      <h3 className="text-sm font-semibold text-canopy-text/80 mb-2 flex items-center gap-2">
-                        <Rocket className="h-4 w-4" />
-                        Dev Server Command
-                      </h3>
-                      <p className="text-xs text-canopy-text/60 mb-4">
-                        Command to start the development server (e.g., npm run dev). When
-                        configured, a button will appear in the toolbar to start the dev server.
-                      </p>
-
-                      <input
-                        id="dev-server-command"
-                        type="text"
-                        value={devServerCommand}
-                        onChange={(e) => setDevServerCommand(e.target.value)}
-                        className="w-full bg-canopy-bg border border-canopy-border rounded px-3 py-2 text-sm text-canopy-text font-mono focus:outline-none focus:border-canopy-accent focus:ring-1 focus:ring-canopy-accent/30 transition-all placeholder:text-canopy-text/40"
-                        placeholder="npm run dev"
-                        spellCheck={false}
-                        autoCapitalize="off"
-                        autoComplete="off"
-                        aria-label="Dev server command"
-                      />
-                    </div>
-
-                    <div className="mb-6">
-                      <h3 className="text-sm font-semibold text-canopy-text/80 mb-2 flex items-center gap-2">
-                        <Image className="h-4 w-4" />
-                        Project Icon (SVG)
-                      </h3>
-                      <p className="text-xs text-canopy-text/60 mb-4">
-                        Shown in the grid empty state. SVG only, max 250KB.
-                      </p>
-
-                      <input
-                        ref={fileInputRef}
-                        type="file"
-                        accept="image/svg+xml,.svg"
-                        onChange={handleFileSelect}
-                        className="hidden"
-                        aria-label="Select SVG file"
-                      />
-
-                      {projectIconSvg ? (
-                        <div className="flex items-center gap-4 p-3 rounded-[var(--radius-md)] bg-canopy-bg border border-canopy-border">
-                          <div className="h-16 w-16 rounded-[var(--radius-md)] bg-canopy-sidebar flex items-center justify-center overflow-hidden">
-                            {(() => {
-                              const sanitized = sanitizeSvg(projectIconSvg);
-                              if (!sanitized.ok) {
-                                return (
-                                  <Image
-                                    className="h-8 w-8 text-canopy-text/40"
-                                    aria-hidden="true"
-                                  />
-                                );
-                              }
-                              return (
-                                <img
-                                  src={svgToDataUrl(sanitized.svg)}
-                                  alt="Project icon preview"
-                                  className="max-h-14 max-w-14 object-contain"
-                                />
-                              );
-                            })()}
-                          </div>
-                          <div className="flex-1 min-w-0">
-                            <p className="text-sm text-canopy-text mb-1">Custom icon configured</p>
-                            <p className="text-xs text-canopy-text/60">
-                              {Math.round(new Blob([projectIconSvg]).size / 1024)}KB
-                            </p>
-                          </div>
-                          <div className="flex gap-2">
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              onClick={() => fileInputRef.current?.click()}
-                            >
-                              <Upload />
-                              Replace
-                            </Button>
-                            <Button variant="ghost" size="sm" onClick={handleRemoveIcon}>
-                              <X />
-                            </Button>
-                          </div>
-                        </div>
-                      ) : (
-                        <div
-                          className={cn(
-                            "flex flex-col items-center justify-center p-8 rounded-[var(--radius-md)] border-2 border-dashed transition-colors cursor-pointer",
-                            isDraggingIcon
-                              ? "border-canopy-accent bg-canopy-accent/10"
-                              : "border-canopy-border hover:border-canopy-border/80 hover:bg-canopy-bg/50"
-                          )}
-                          onDrop={handleIconDrop}
-                          onDragOver={handleIconDragOver}
-                          onDragLeave={handleIconDragLeave}
-                          onClick={() => fileInputRef.current?.click()}
-                        >
-                          <Upload className="h-8 w-8 text-canopy-text/40 mb-3" />
-                          <p className="text-sm text-canopy-text/60 text-center mb-1">
-                            Drag and drop an SVG file here
-                          </p>
-                          <p className="text-xs text-canopy-text/40">or click to browse</p>
-                        </div>
-                      )}
-
-                      {iconError && (
-                        <div className="mt-2 text-xs text-status-error bg-status-error/10 border border-status-error/20 rounded p-2">
-                          {iconError}
-                        </div>
-                      )}
-                    </div>
-
-                    {/* In-Repository Settings */}
-                    <div className="mt-6">
-                      <h3 className="text-sm font-semibold text-canopy-text/80 mb-2 flex items-center gap-2">
-                        <GitBranch className="h-4 w-4" />
-                        In-Repository Settings
-                      </h3>
-                      <p className="text-xs text-canopy-text/60 mb-4">
-                        Store project name, emoji, and run commands in{" "}
-                        <code className="font-mono text-canopy-text/80">.canopy/</code> so your team
-                        shares the same configuration.
-                      </p>
-
-                      {currentProject?.canopyConfigPresent && (
-                        <div className="flex items-center gap-2 mb-3 text-xs text-canopy-text/60">
-                          <FolderOpen className="h-3.5 w-3.5 text-status-success shrink-0" />
-                          <span>
-                            Settings loaded from{" "}
-                            <code className="font-mono text-canopy-text/80">.canopy/</code>
-                          </span>
-                        </div>
-                      )}
-
-                      <button
-                        type="button"
-                        onClick={handleInRepoToggle}
-                        disabled={inRepoEnabling}
-                        role="switch"
-                        aria-checked={currentProject?.inRepoSettings ?? false}
-                        aria-label="Store settings in repository"
-                        className={cn(
-                          "w-full flex items-center justify-between p-4 rounded-[var(--radius-lg)] border transition-all focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-canopy-accent",
-                          currentProject?.inRepoSettings
-                            ? "bg-canopy-accent/10 border-canopy-accent text-canopy-accent"
-                            : "border-canopy-border hover:bg-white/5 text-canopy-text/70",
-                          inRepoEnabling && "opacity-50 cursor-not-allowed"
-                        )}
-                      >
-                        <div className="flex items-center gap-3">
-                          <GitBranch
-                            className={cn(
-                              "w-5 h-5",
-                              currentProject?.inRepoSettings
-                                ? "text-canopy-accent"
-                                : "text-canopy-text/50"
-                            )}
-                            aria-hidden="true"
-                          />
-                          <div className="text-left">
-                            <div className="text-sm font-medium">Store settings in repository</div>
-                            <div className="text-xs opacity-70">
-                              Writes to <code className="font-mono">.canopy/project.json</code> and{" "}
-                              <code className="font-mono">.canopy/settings.json</code>
-                            </div>
-                          </div>
-                        </div>
-                        <div
-                          className={cn(
-                            "w-11 h-6 rounded-full relative transition-colors",
-                            currentProject?.inRepoSettings ? "bg-canopy-accent" : "bg-canopy-border"
-                          )}
-                          aria-hidden="true"
-                        >
-                          <div
-                            className={cn(
-                              "absolute top-1 w-4 h-4 rounded-full bg-white transition-transform",
-                              currentProject?.inRepoSettings ? "translate-x-6" : "translate-x-1"
-                            )}
-                          />
-                        </div>
-                      </button>
-
-                      {inRepoError && (
-                        <div
-                          className="mt-2 text-xs text-status-error bg-status-error/10 border border-status-error/20 rounded p-2"
-                          role="alert"
-                        >
-                          {inRepoError}
-                        </div>
-                      )}
-
-                      {!currentProject?.inRepoSettings && inRepoExpanded && (
-                        <div className="mt-3 rounded-[var(--radius-lg)] border border-canopy-border bg-canopy-bg p-4 space-y-4">
-                          <div>
-                            <p className="text-xs font-medium text-canopy-text/80 mb-2">
-                              The following files will be created:
-                            </p>
-                            <ul className="space-y-1 text-xs text-canopy-text/60">
-                              <li className="flex items-center gap-2">
-                                <span className="font-mono text-canopy-text/80">
-                                  .canopy/project.json
-                                </span>
-                                — project name, emoji, color
-                              </li>
-                              <li className="flex items-center gap-2">
-                                <span className="font-mono text-canopy-text/80">
-                                  .canopy/settings.json
-                                </span>
-                                — run commands, dev server, context settings
-                              </li>
-                            </ul>
-                            <p className="mt-2 text-xs text-canopy-text/50">
-                              Machine-local settings (environment variables, secrets) are never
-                              written to these files.
-                            </p>
-                          </div>
-
-                          <div>
-                            <div className="flex items-center justify-between mb-1.5">
-                              <p className="text-xs font-medium text-canopy-text/80">
-                                Recommended <code className="font-mono">.gitignore</code> guidance
-                              </p>
-                              <button
-                                type="button"
-                                onClick={() => void handleCopyGitignore()}
-                                className="flex items-center gap-1 px-2 py-1 rounded text-xs text-canopy-text/60 hover:text-canopy-text hover:bg-white/5 transition-colors"
-                                aria-label="Copy .gitignore snippet"
-                              >
-                                {gitignoreCopied ? (
-                                  <Check className="h-3.5 w-3.5 text-status-success" />
-                                ) : (
-                                  <Copy className="h-3.5 w-3.5" />
-                                )}
-                                {gitignoreCopied ? "Copied!" : "Copy"}
-                              </button>
-                            </div>
-                            <pre className="rounded-[var(--radius-md)] border border-canopy-border bg-canopy-sidebar p-3 text-xs font-mono text-canopy-text/70 overflow-x-auto whitespace-pre">
-                              {GITIGNORE_SNIPPET}
-                            </pre>
-                          </div>
-
-                          <div className="flex gap-2 pt-1">
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              onClick={() => {
-                                setInRepoExpanded(false);
-                                setInRepoError(null);
-                              }}
-                              className="flex-1"
-                            >
-                              Cancel
-                            </Button>
-                            <Button
-                              size="sm"
-                              onClick={() => void handleEnableInRepoSettings()}
-                              disabled={inRepoEnabling}
-                              className="flex-1"
-                            >
-                              {inRepoEnabling ? "Enabling..." : "Confirm and enable"}
-                            </Button>
-                          </div>
-                        </div>
-                      )}
-                    </div>
+                    <GeneralTab
+                      currentProject={currentProject}
+                      name={name}
+                      onNameChange={setName}
+                      emoji={emoji}
+                      onEmojiChange={setEmoji}
+                      devServerCommand={devServerCommand}
+                      onDevServerCommandChange={setDevServerCommand}
+                      devServerLoadTimeout={devServerLoadTimeout}
+                      onDevServerLoadTimeoutChange={setDevServerLoadTimeout}
+                      projectIconSvg={projectIconSvg}
+                      onProjectIconSvgChange={setProjectIconSvg}
+                      enableInRepoSettings={enableInRepoSettings}
+                      disableInRepoSettings={disableInRepoSettings}
+                      projectId={projectId}
+                      isOpen={isOpen}
+                    />
                   </div>
 
                   {/* Context Tab */}
                   <div className={activeTab === "context" ? "" : "hidden"}>
-                    <div className="mb-6 pb-6 border-b border-canopy-border">
-                      <h3 className="text-sm font-semibold text-canopy-text/80 mb-2 flex items-center gap-2">
-                        <FolderX className="h-4 w-4" />
-                        Excluded Paths
-                      </h3>
-                      <p className="text-xs text-canopy-text/60 mb-4">
-                        Glob patterns to exclude from monitoring and context injection (e.g.,
-                        node_modules/**, dist/**, .git/**).
-                      </p>
-
-                      <div className="space-y-2">
-                        {excludedPaths.length === 0 ? (
-                          <div className="text-sm text-canopy-text/60 text-center py-8 border border-dashed border-canopy-border rounded-[var(--radius-md)]">
-                            No excluded paths configured yet
-                          </div>
-                        ) : (
-                          excludedPaths.map((path, index) => (
-                            <div
-                              key={index}
-                              className="flex items-center gap-2 p-2 rounded-[var(--radius-md)] bg-canopy-bg border border-canopy-border"
-                            >
-                              <input
-                                type="text"
-                                value={path}
-                                onChange={(e) => {
-                                  setExcludedPaths((prev) => {
-                                    const updated = [...prev];
-                                    updated[index] = e.target.value;
-                                    return updated;
-                                  });
-                                  setTestConfigResult(null);
-                                }}
-                                className="flex-1 bg-transparent border border-canopy-border rounded px-2 py-1 text-sm text-canopy-text font-mono focus:outline-none focus:border-canopy-accent focus:ring-1 focus:ring-canopy-accent/30"
-                                placeholder="node_modules/**"
-                                aria-label="Excluded path glob pattern"
-                              />
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setExcludedPaths((prev) => prev.filter((_, i) => i !== index));
-                                  setTestConfigResult(null);
-                                }}
-                                className="p-1 rounded hover:bg-status-error/15 transition-colors"
-                                aria-label="Delete excluded path"
-                              >
-                                <Trash2 className="h-4 w-4 text-status-error" />
-                              </button>
-                            </div>
-                          ))
-                        )}
-                        <Button
-                          variant="outline"
-                          onClick={() => {
-                            setExcludedPaths((prev) => [...prev, ""]);
-                            setTestConfigResult(null);
-                          }}
-                          className="w-full"
-                        >
-                          <Plus />
-                          Add Path Pattern
-                        </Button>
-                      </div>
-                    </div>
-
-                    {/* CopyTree Settings */}
-                    <div className="mb-6 pb-6 border-b border-canopy-border">
-                      <h3 className="text-sm font-semibold text-canopy-text/80 mb-2 flex items-center gap-2">
-                        <FileCode className="h-4 w-4" />
-                        Context Generation Settings
-                      </h3>
-                      <p className="text-xs text-canopy-text/60 mb-4">
-                        Configure how CopyTree generates context for AI agents. These settings apply
-                        when injecting context into terminals or copying to clipboard.
-                      </p>
-
-                      <div className="space-y-4">
-                        {/* Size Limits */}
-                        <div className="grid grid-cols-2 gap-4">
-                          <div>
-                            <label className="block text-xs text-canopy-text/60 mb-1">
-                              Max Context Size (bytes)
-                            </label>
-                            <input
-                              type="number"
-                              value={copyTreeSettings.maxContextSize ?? ""}
-                              onChange={(e) => {
-                                const value = parsePositiveInt(e.target.value);
-                                setCopyTreeSettings((prev) => ({
-                                  ...prev,
-                                  maxContextSize: value,
-                                }));
-                                setTestConfigResult(null);
-                              }}
-                              min={1}
-                              placeholder="Default (unlimited)"
-                              className="w-full bg-canopy-sidebar border border-canopy-border rounded px-2 py-1 text-sm text-canopy-text font-mono focus:outline-none focus:border-canopy-accent focus:ring-1 focus:ring-canopy-accent/30"
-                            />
-                            <p className="text-xs text-canopy-text/40 mt-1">
-                              Total size limit for all files
-                            </p>
-                          </div>
-                          <div>
-                            <label className="block text-xs text-canopy-text/60 mb-1">
-                              Max File Size (bytes)
-                            </label>
-                            <input
-                              type="number"
-                              value={copyTreeSettings.maxFileSize ?? ""}
-                              onChange={(e) => {
-                                const value = parsePositiveInt(e.target.value);
-                                setCopyTreeSettings((prev) => ({
-                                  ...prev,
-                                  maxFileSize: value,
-                                }));
-                                setTestConfigResult(null);
-                              }}
-                              min={1}
-                              placeholder="Default (50KB)"
-                              className="w-full bg-canopy-sidebar border border-canopy-border rounded px-2 py-1 text-sm text-canopy-text font-mono focus:outline-none focus:border-canopy-accent focus:ring-1 focus:ring-canopy-accent/30"
-                            />
-                            <p className="text-xs text-canopy-text/40 mt-1">
-                              Skip files larger than this
-                            </p>
-                          </div>
-                        </div>
-
-                        {/* Truncation Strategy */}
-                        <div className="grid grid-cols-2 gap-4">
-                          <div>
-                            <label className="block text-xs text-canopy-text/60 mb-1">
-                              Char Limit (per file)
-                            </label>
-                            <input
-                              type="number"
-                              value={copyTreeSettings.charLimit ?? ""}
-                              onChange={(e) => {
-                                const value = parsePositiveInt(e.target.value);
-                                setCopyTreeSettings((prev) => ({
-                                  ...prev,
-                                  charLimit: value,
-                                }));
-                                setTestConfigResult(null);
-                              }}
-                              min={1}
-                              placeholder="Default (no truncation)"
-                              className="w-full bg-canopy-sidebar border border-canopy-border rounded px-2 py-1 text-sm text-canopy-text font-mono focus:outline-none focus:border-canopy-accent focus:ring-1 focus:ring-canopy-accent/30"
-                            />
-                            <p className="text-xs text-canopy-text/40 mt-1">
-                              Truncate each file to this many characters
-                            </p>
-                          </div>
-                          <div>
-                            <label className="block text-xs text-canopy-text/60 mb-1">
-                              File Priority Strategy
-                            </label>
-                            <select
-                              value={copyTreeSettings.strategy ?? ""}
-                              onChange={(e) => {
-                                const value = e.target.value as "modified" | "all" | undefined;
-                                setCopyTreeSettings((prev) => ({
-                                  ...prev,
-                                  strategy: value || undefined,
-                                }));
-                                setTestConfigResult(null);
-                              }}
-                              className="w-full bg-canopy-sidebar border border-canopy-border rounded px-2 py-1 text-sm text-canopy-text focus:outline-none focus:border-canopy-accent focus:ring-1 focus:ring-canopy-accent/30"
-                            >
-                              <option value="">Default (all files)</option>
-                              <option value="all">Include all files</option>
-                              <option value="modified">Recently modified first</option>
-                            </select>
-                            <p className="text-xs text-canopy-text/40 mt-1">
-                              Which files to prioritize when truncating
-                            </p>
-                          </div>
-                        </div>
-
-                        {/* Always Include Patterns */}
-                        <div>
-                          <label className="block text-xs text-canopy-text/60 mb-1">
-                            Always Include (glob patterns)
-                          </label>
-                          <p className="text-xs text-canopy-text/40 mb-2">
-                            Files matching these patterns will always be included, even if they
-                            would otherwise be excluded.
-                          </p>
-                          <div className="space-y-2">
-                            {(copyTreeSettings.alwaysInclude || []).map((pattern, index) => (
-                              <div
-                                key={index}
-                                className="flex items-center gap-2 p-2 rounded-[var(--radius-md)] bg-canopy-bg border border-canopy-border"
-                              >
-                                <input
-                                  type="text"
-                                  value={pattern}
-                                  onChange={(e) => {
-                                    setCopyTreeSettings((prev) => {
-                                      const updated = [...(prev.alwaysInclude || [])];
-                                      updated[index] = e.target.value;
-                                      return { ...prev, alwaysInclude: updated };
-                                    });
-                                    setTestConfigResult(null);
-                                  }}
-                                  className="flex-1 bg-transparent border border-canopy-border rounded px-2 py-1 text-sm text-canopy-text font-mono focus:outline-none focus:border-canopy-accent focus:ring-1 focus:ring-canopy-accent/30"
-                                  placeholder="**/*.md"
-                                  aria-label="Always include pattern"
-                                />
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setCopyTreeSettings((prev) => ({
-                                      ...prev,
-                                      alwaysInclude: (prev.alwaysInclude || []).filter(
-                                        (_, i) => i !== index
-                                      ),
-                                    }));
-                                    setTestConfigResult(null);
-                                  }}
-                                  className="p-1 rounded hover:bg-status-error/15 transition-colors"
-                                  aria-label="Delete pattern"
-                                >
-                                  <Trash2 className="h-4 w-4 text-status-error" />
-                                </button>
-                              </div>
-                            ))}
-                            <Button
-                              variant="outline"
-                              onClick={() => {
-                                setCopyTreeSettings((prev) => ({
-                                  ...prev,
-                                  alwaysInclude: [...(prev.alwaysInclude || []), ""],
-                                }));
-                                setTestConfigResult(null);
-                              }}
-                              className="w-full"
-                            >
-                              <Plus />
-                              Add Include Pattern
-                            </Button>
-                          </div>
-                        </div>
-
-                        {/* Always Exclude Patterns */}
-                        <div>
-                          <label className="block text-xs text-canopy-text/60 mb-1">
-                            Always Exclude (glob patterns)
-                          </label>
-                          <p className="text-xs text-canopy-text/40 mb-2">
-                            Additional exclusion patterns beyond the default excluded paths above.
-                          </p>
-                          <div className="space-y-2">
-                            {(copyTreeSettings.alwaysExclude || []).map((pattern, index) => (
-                              <div
-                                key={index}
-                                className="flex items-center gap-2 p-2 rounded-[var(--radius-md)] bg-canopy-bg border border-canopy-border"
-                              >
-                                <input
-                                  type="text"
-                                  value={pattern}
-                                  onChange={(e) => {
-                                    setCopyTreeSettings((prev) => {
-                                      const updated = [...(prev.alwaysExclude || [])];
-                                      updated[index] = e.target.value;
-                                      return { ...prev, alwaysExclude: updated };
-                                    });
-                                    setTestConfigResult(null);
-                                  }}
-                                  className="flex-1 bg-transparent border border-canopy-border rounded px-2 py-1 text-sm text-canopy-text font-mono focus:outline-none focus:border-canopy-accent focus:ring-1 focus:ring-canopy-accent/30"
-                                  placeholder="**/*.lock"
-                                  aria-label="Always exclude pattern"
-                                />
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setCopyTreeSettings((prev) => ({
-                                      ...prev,
-                                      alwaysExclude: (prev.alwaysExclude || []).filter(
-                                        (_, i) => i !== index
-                                      ),
-                                    }));
-                                    setTestConfigResult(null);
-                                  }}
-                                  className="p-1 rounded hover:bg-status-error/15 transition-colors"
-                                  aria-label="Delete pattern"
-                                >
-                                  <Trash2 className="h-4 w-4 text-status-error" />
-                                </button>
-                              </div>
-                            ))}
-                            <Button
-                              variant="outline"
-                              onClick={() => {
-                                setCopyTreeSettings((prev) => ({
-                                  ...prev,
-                                  alwaysExclude: [...(prev.alwaysExclude || []), ""],
-                                }));
-                                setTestConfigResult(null);
-                              }}
-                              className="w-full"
-                            >
-                              <Plus />
-                              Add Exclude Pattern
-                            </Button>
-                          </div>
-                        </div>
-
-                        {/* Test Configuration */}
-                        <div className="mt-6 pt-4 border-t border-canopy-border">
-                          <div className="flex items-center justify-between">
-                            <div>
-                              <h4 className="text-sm font-medium text-canopy-text/80">
-                                Test Configuration
-                              </h4>
-                              <p className="text-xs text-canopy-text/40">
-                                Preview what files would be included with current settings
-                              </p>
-                            </div>
-                            <Button
-                              variant="outline"
-                              onClick={handleTestConfig}
-                              disabled={isTestingConfig || worktrees.length === 0}
-                            >
-                              {isTestingConfig ? (
-                                <>
-                                  <Settings className="h-4 w-4 animate-spin" />
-                                  Testing...
-                                </>
-                              ) : (
-                                <>
-                                  <Play className="h-4 w-4" />
-                                  Test Config
-                                </>
-                              )}
-                            </Button>
-                          </div>
-
-                          {testConfigResult && (
-                            <div
-                              className={cn(
-                                "mt-4 p-4 rounded-[var(--radius-md)] border",
-                                testConfigResult.error
-                                  ? "bg-status-error/5 border-status-error/15"
-                                  : "bg-canopy-bg border-canopy-border"
-                              )}
-                            >
-                              {testConfigResult.error ? (
-                                <div className="flex items-start gap-2">
-                                  <AlertTriangle className="h-4 w-4 text-status-error mt-0.5 shrink-0" />
-                                  <p className="text-sm text-status-error">
-                                    {testConfigResult.error}
-                                  </p>
-                                </div>
-                              ) : (
-                                <div className="space-y-3">
-                                  <div className="flex items-center gap-2">
-                                    <Check className="h-4 w-4 text-status-success" />
-                                    <span className="text-sm font-medium text-canopy-text">
-                                      {testConfigResult.includedFiles} files would be included
-                                    </span>
-                                    <span className="text-xs text-canopy-text/60">
-                                      ({formatBytes(testConfigResult.includedSize)})
-                                    </span>
-                                  </div>
-                                  <div className="text-xs text-canopy-text/60 space-y-1">
-                                    <p>
-                                      Excluded by pattern:{" "}
-                                      <span className="font-mono">
-                                        {testConfigResult.excluded.byPattern}
-                                      </span>
-                                    </p>
-                                    <p>
-                                      Excluded by size:{" "}
-                                      <span className="font-mono">
-                                        {testConfigResult.excluded.bySize}
-                                      </span>
-                                    </p>
-                                    <p>
-                                      Excluded by truncation:{" "}
-                                      <span className="font-mono">
-                                        {testConfigResult.excluded.byTruncation}
-                                      </span>
-                                    </p>
-                                  </div>
-                                </div>
-                              )}
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="mb-6">
-                      <h3 className="text-sm font-semibold text-canopy-text/80 mb-2 flex items-center gap-2">
-                        <Key className="h-4 w-4" />
-                        Environment Variables
-                      </h3>
-                      <p className="text-xs text-canopy-text/60 mb-4">
-                        Project-specific environment variables. Variable names containing KEY,
-                        SECRET, TOKEN, or PASSWORD are stored securely using OS encryption{" "}
-                        <Lock className="inline h-3 w-3" />.
-                      </p>
-
-                      {settings?.insecureEnvironmentVariables &&
-                        settings.insecureEnvironmentVariables.length > 0 && (
-                          <div className="mb-4 p-3 bg-status-warning/10 border border-status-warning/20 rounded-[var(--radius-md)] flex items-start gap-2">
-                            <ShieldAlert className="h-4 w-4 text-status-warning mt-0.5 flex-shrink-0" />
-                            <div className="flex-1 text-xs">
-                              <p className="text-status-warning font-semibold mb-1">
-                                Insecure sensitive variables detected
-                              </p>
-                              <p className="text-status-warning/80 mb-2">
-                                The following variables contain sensitive keywords but are stored in
-                                plaintext:{" "}
-                                <span className="font-mono">
-                                  {settings.insecureEnvironmentVariables.join(", ")}
-                                </span>
-                              </p>
-                              <p className="text-status-warning/80">
-                                Click Save to automatically move them to secure storage.
-                              </p>
-                            </div>
-                          </div>
-                        )}
-
-                      <div className="space-y-2">
-                        {environmentVariables.length === 0 ? (
-                          <div className="text-sm text-canopy-text/60 text-center py-8 border border-dashed border-canopy-border rounded-[var(--radius-md)]">
-                            No environment variables configured yet
-                          </div>
-                        ) : (
-                          environmentVariables.map((envVar, index) => {
-                            const isSensitive = isSensitiveEnvKey(envVar.key);
-                            const isInsecure = settings?.insecureEnvironmentVariables?.includes(
-                              envVar.key
-                            );
-                            const isSecured = isSensitive && !isInsecure;
-                            const isVisible = visibleEnvVars.has(envVar.id);
-                            const shouldMask = isSensitive && !isVisible;
-                            return (
-                              <div
-                                key={envVar.id}
-                                className="flex items-center gap-2 p-2 rounded-[var(--radius-md)] bg-canopy-bg border border-canopy-border"
-                              >
-                                {isSecured && (
-                                  <Lock
-                                    className="h-3.5 w-3.5 text-status-success/60 flex-shrink-0"
-                                    aria-label="Stored securely"
-                                  />
-                                )}
-                                {isInsecure && (
-                                  <ShieldAlert
-                                    className="h-3.5 w-3.5 text-status-warning/60 flex-shrink-0"
-                                    aria-label="Stored in plaintext"
-                                  />
-                                )}
-                                <input
-                                  type="text"
-                                  value={envVar.key}
-                                  onChange={(e) => {
-                                    const nextKey = e.target.value;
-                                    const wasSensitive = isSensitiveEnvKey(envVar.key);
-                                    const nowSensitive = isSensitiveEnvKey(nextKey);
-                                    setEnvironmentVariables((prev) => {
-                                      const updated = [...prev];
-                                      updated[index] = { ...envVar, key: nextKey };
-                                      return updated;
-                                    });
-                                    if (!wasSensitive && nowSensitive) {
-                                      setVisibleEnvVars((prev) => {
-                                        const next = new Set(prev);
-                                        next.delete(envVar.id);
-                                        return next;
-                                      });
-                                    }
-                                  }}
-                                  spellCheck={false}
-                                  autoCapitalize="none"
-                                  className="flex-1 bg-transparent border border-canopy-border rounded px-2 py-1 text-sm text-canopy-text font-mono focus:outline-none focus:border-canopy-accent focus:ring-1 focus:ring-canopy-accent/30"
-                                  placeholder="VARIABLE_NAME"
-                                  aria-label="Environment variable name"
-                                />
-                                <span className="text-canopy-text/60">=</span>
-                                <div className="flex-1 relative">
-                                  <input
-                                    type={shouldMask ? "password" : "text"}
-                                    value={envVar.value}
-                                    onChange={(e) => {
-                                      setEnvironmentVariables((prev) => {
-                                        const updated = [...prev];
-                                        updated[index] = { ...envVar, value: e.target.value };
-                                        return updated;
-                                      });
-                                    }}
-                                    spellCheck={false}
-                                    autoCapitalize="none"
-                                    autoComplete={isSensitive ? "new-password" : "off"}
-                                    className={cn(
-                                      "w-full bg-canopy-sidebar border border-canopy-border rounded px-2 py-1 text-sm text-canopy-text font-mono focus:outline-none focus:border-canopy-accent focus:ring-1 focus:ring-canopy-accent/30",
-                                      isSensitive && "pr-8"
-                                    )}
-                                    placeholder="value"
-                                    aria-label="Environment variable value"
-                                  />
-                                  {isSensitive && (
-                                    <button
-                                      type="button"
-                                      onClick={() => toggleEnvVarVisibility(envVar.id)}
-                                      className="absolute right-1.5 top-1/2 -translate-y-1/2 p-0.5 rounded hover:bg-canopy-border/50 transition-colors"
-                                      aria-pressed={isVisible}
-                                      aria-label={`${isVisible ? "Hide" : "Show"} value${envVar.key ? ` for ${envVar.key}` : ""}`}
-                                    >
-                                      {isVisible ? (
-                                        <EyeOff className="h-4 w-4 text-canopy-text/60" />
-                                      ) : (
-                                        <Eye className="h-4 w-4 text-canopy-text/60" />
-                                      )}
-                                    </button>
-                                  )}
-                                </div>
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setEnvironmentVariables((prev) =>
-                                      prev.filter((_, i) => i !== index)
-                                    );
-                                    setVisibleEnvVars((prev) => {
-                                      const next = new Set(prev);
-                                      next.delete(envVar.id);
-                                      return next;
-                                    });
-                                  }}
-                                  className="p-1 rounded hover:bg-status-error/15 transition-colors"
-                                  aria-label="Delete environment variable"
-                                >
-                                  <Trash2 className="h-4 w-4 text-status-error" />
-                                </button>
-                              </div>
-                            );
-                          })
-                        )}
-                        <Button
-                          variant="outline"
-                          onClick={() => {
-                            setEnvironmentVariables((prev) => [
-                              ...prev,
-                              {
-                                id: `env-${Date.now()}-${Math.random()}`,
-                                key: "",
-                                value: "",
-                              },
-                            ]);
-                          }}
-                          className="w-full"
-                        >
-                          <Plus />
-                          Add Variable
-                        </Button>
-                      </div>
-                    </div>
+                    <ContextTab
+                      excludedPaths={excludedPaths}
+                      onExcludedPathsChange={setExcludedPaths}
+                      copyTreeSettings={copyTreeSettings}
+                      onCopyTreeSettingsChange={setCopyTreeSettings}
+                      environmentVariables={environmentVariables}
+                      onEnvironmentVariablesChange={setEnvironmentVariables}
+                      worktrees={worktrees}
+                      settings={settings}
+                      isOpen={isOpen}
+                    />
                   </div>
 
                   {/* Automation Tab */}
                   <div className={activeTab === "automation" ? "" : "hidden"}>
-                    <div className="mb-6 pb-6 border-b border-canopy-border">
-                      <h3 className="text-sm font-semibold text-canopy-text/80 mb-2 flex items-center gap-2">
-                        <Terminal className="h-4 w-4" />
-                        Run Commands
-                      </h3>
-                      <p className="text-xs text-canopy-text/60 mb-4">
-                        Quick access to common project tasks (build, test, deploy).
-                      </p>
-
-                      <div className="space-y-3">
-                        {runCommands.length === 0 ? (
-                          <div className="text-sm text-canopy-text/60 text-center py-8 border border-dashed border-canopy-border rounded-[var(--radius-md)]">
-                            No run commands configured yet
-                          </div>
-                        ) : (
-                          runCommands.map((cmd, index) => (
-                            <div
-                              key={cmd.id}
-                              className="p-3 rounded-[var(--radius-md)] bg-canopy-bg border border-canopy-border"
-                            >
-                              <div className="flex items-start gap-3">
-                                <div className="flex-1 min-w-0">
-                                  <div className="flex items-center gap-2 mb-1">
-                                    <input
-                                      type="text"
-                                      value={cmd.name}
-                                      onChange={(e) => {
-                                        setRunCommands((prev) => {
-                                          const updated = [...prev];
-                                          updated[index] = { ...cmd, name: e.target.value };
-                                          return updated;
-                                        });
-                                      }}
-                                      className="flex-1 bg-transparent border border-canopy-border rounded px-2 py-1 text-sm text-canopy-text focus:outline-none focus:border-canopy-accent focus:ring-1 focus:ring-canopy-accent/30"
-                                      placeholder="Command name"
-                                      aria-label="Run command name"
-                                    />
-                                    {cmd.icon && <span className="text-lg">{cmd.icon}</span>}
-                                  </div>
-                                  <input
-                                    type="text"
-                                    value={cmd.command}
-                                    onChange={(e) => {
-                                      setRunCommands((prev) => {
-                                        const updated = [...prev];
-                                        updated[index] = { ...cmd, command: e.target.value };
-                                        return updated;
-                                      });
-                                    }}
-                                    className="w-full bg-canopy-sidebar border border-canopy-border rounded px-2 py-1 text-xs text-canopy-text font-mono focus:outline-none focus:border-canopy-accent focus:ring-1 focus:ring-canopy-accent/30"
-                                    placeholder="npm run build"
-                                    aria-label="Run command"
-                                  />
-                                  {cmd.description && (
-                                    <p className="text-xs text-canopy-text/60 mt-1">
-                                      {cmd.description}
-                                    </p>
-                                  )}
-                                </div>
-                                <div className="flex flex-col gap-1">
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      if (index > 0) {
-                                        setRunCommands((prev) => {
-                                          const updated = [...prev];
-                                          [updated[index - 1], updated[index]] = [
-                                            updated[index],
-                                            updated[index - 1],
-                                          ];
-                                          return updated;
-                                        });
-                                      }
-                                    }}
-                                    disabled={index === 0}
-                                    className="p-1 rounded hover:bg-canopy-border/50 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
-                                    aria-label="Move run command up"
-                                  >
-                                    <ChevronUp className="h-4 w-4" />
-                                  </button>
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      if (index < runCommands.length - 1) {
-                                        setRunCommands((prev) => {
-                                          const updated = [...prev];
-                                          [updated[index], updated[index + 1]] = [
-                                            updated[index + 1],
-                                            updated[index],
-                                          ];
-                                          return updated;
-                                        });
-                                      }
-                                    }}
-                                    disabled={index === runCommands.length - 1}
-                                    className="p-1 rounded hover:bg-canopy-border/50 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
-                                    aria-label="Move run command down"
-                                  >
-                                    <ChevronDown className="h-4 w-4" />
-                                  </button>
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      setRunCommands((prev) => prev.filter((_, i) => i !== index));
-                                    }}
-                                    className="p-1 rounded hover:bg-status-error/15 transition-colors"
-                                    aria-label="Delete run command"
-                                  >
-                                    <Trash2 className="h-4 w-4 text-status-error" />
-                                  </button>
-                                </div>
-                              </div>
-                            </div>
-                          ))
-                        )}
-                        <Button
-                          variant="outline"
-                          onClick={() => {
-                            setRunCommands((prev) => [
-                              ...prev,
-                              {
-                                id: `cmd-${Date.now()}`,
-                                name: "",
-                                command: "",
-                              },
-                            ]);
-                          }}
-                          className="w-full"
-                        >
-                          <Plus />
-                          Add Command
-                        </Button>
-                      </div>
-                    </div>
-
-                    <div className="mb-6 pb-6 border-b border-canopy-border">
-                      <h3 className="text-sm font-semibold text-canopy-text/80 mb-2 flex items-center gap-2">
-                        <Play className="h-4 w-4" />
-                        Default Worktree Recipe
-                      </h3>
-                      <p className="text-xs text-canopy-text/60 mb-4">
-                        Automatically run a recipe when creating new worktrees.
-                      </p>
-
-                      {(() => {
-                        const globalRecipes = recipes.filter((r) => !r.worktreeId);
-                        const selectedRecipe = globalRecipes.find(
-                          (r) => r.id === defaultWorktreeRecipeId
-                        );
-                        const recipeNotFound =
-                          defaultWorktreeRecipeId && !selectedRecipe && !recipesLoading;
-
-                        return (
-                          <div className="space-y-3">
-                            {recipesLoading ? (
-                              <div className="text-sm text-canopy-text/60 text-center py-4 border border-dashed border-canopy-border rounded-[var(--radius-md)]">
-                                Loading recipes...
-                              </div>
-                            ) : globalRecipes.length === 0 ? (
-                              <div className="text-sm text-canopy-text/60 text-center py-4 border border-dashed border-canopy-border rounded-[var(--radius-md)]">
-                                No global recipes available.{" "}
-                                <button
-                                  onClick={() => setActiveTab("recipes")}
-                                  className="text-canopy-accent hover:underline"
-                                >
-                                  Create a recipe
-                                </button>
-                              </div>
-                            ) : (
-                              <>
-                                <select
-                                  value={defaultWorktreeRecipeId || ""}
-                                  onChange={(e) =>
-                                    setDefaultWorktreeRecipeId(e.target.value || undefined)
-                                  }
-                                  className="w-full px-3 py-2 bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] text-sm text-canopy-text focus:outline-none focus:ring-2 focus:ring-canopy-accent"
-                                >
-                                  <option value="">No default recipe</option>
-                                  {globalRecipes.map((recipe) => (
-                                    <option key={recipe.id} value={recipe.id}>
-                                      {recipe.name} ({recipe.terminals.length} terminal
-                                      {recipe.terminals.length !== 1 ? "s" : ""})
-                                    </option>
-                                  ))}
-                                </select>
-
-                                {selectedRecipe && (
-                                  <div className="p-3 rounded-[var(--radius-md)] bg-canopy-bg/50 border border-canopy-border">
-                                    <div className="flex items-center gap-2 mb-1">
-                                      <span className="text-sm font-medium text-canopy-text">
-                                        {selectedRecipe.name}
-                                      </span>
-                                      <span className="text-xs text-canopy-text/60 bg-canopy-sidebar px-2 py-0.5 rounded">
-                                        {selectedRecipe.terminals.length} terminal
-                                        {selectedRecipe.terminals.length !== 1 ? "s" : ""}
-                                      </span>
-                                    </div>
-                                    <p className="text-xs text-canopy-text/60">
-                                      Will run automatically when creating new worktrees
-                                    </p>
-                                  </div>
-                                )}
-
-                                {recipeNotFound && (
-                                  <div className="flex items-start gap-2 p-3 rounded-[var(--radius-md)] bg-status-warning/10 border border-status-warning/20">
-                                    <AlertTriangle className="h-4 w-4 text-status-warning mt-0.5 shrink-0" />
-                                    <div>
-                                      <p className="text-sm text-status-warning">
-                                        Selected recipe no longer exists
-                                      </p>
-                                      <p className="text-xs text-canopy-text/60 mt-1">
-                                        The previously selected recipe was deleted. Please select a
-                                        new default or clear the selection.
-                                      </p>
-                                    </div>
-                                  </div>
-                                )}
-                              </>
-                            )}
-                          </div>
-                        );
-                      })()}
-                    </div>
-
-                    <div className="pt-2">
-                      <h3 className="text-sm font-semibold text-canopy-text/80 mb-2 flex items-center gap-2">
-                        <GitBranch className="h-4 w-4" />
-                        Branch Prefix
-                      </h3>
-                      <p className="text-xs text-canopy-text/60 mb-4">
-                        Automatically prefix new branch names when creating worktrees.
-                      </p>
-
-                      <div className="space-y-2">
-                        {(
-                          [
-                            { value: "none", label: "None", description: "No prefix added" },
-                            {
-                              value: "username",
-                              label: "Username",
-                              description: "Prefix with your git user.name (e.g. alice/)",
-                            },
-                            {
-                              value: "custom",
-                              label: "Custom",
-                              description: "Use a custom prefix string",
-                            },
-                          ] as const
-                        ).map(({ value, label, description }) => (
-                          <label
-                            key={value}
-                            className="flex items-start gap-3 p-2.5 rounded-[var(--radius-md)] border border-canopy-border cursor-pointer hover:bg-canopy-border/30 transition-colors"
-                          >
-                            <input
-                              type="radio"
-                              name="branchPrefixMode"
-                              value={value}
-                              checked={branchPrefixMode === value}
-                              onChange={() => setBranchPrefixMode(value)}
-                              className="mt-0.5 accent-canopy-accent"
-                            />
-                            <div>
-                              <span className="text-sm font-medium text-canopy-text">{label}</span>
-                              <p className="text-xs text-canopy-text/50">{description}</p>
-                            </div>
-                          </label>
-                        ))}
-                      </div>
-
-                      {branchPrefixMode === "custom" && (
-                        <div className="mt-3">
-                          <input
-                            type="text"
-                            value={branchPrefixCustom}
-                            onChange={(e) => setBranchPrefixCustom(e.target.value)}
-                            placeholder="e.g. feature/ or myteam/"
-                            className="w-full px-3 py-2 bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] text-sm text-canopy-text font-mono focus:outline-none focus:ring-2 focus:ring-canopy-accent"
-                          />
-                        </div>
-                      )}
-
-                      {branchPrefixMode !== "none" && (
-                        <div className="mt-3 p-3 rounded-[var(--radius-md)] bg-canopy-bg/50 border border-canopy-border">
-                          <span className="block text-xs font-medium text-canopy-text/70 mb-1">
-                            Preview:
-                          </span>
-                          <code className="text-xs text-canopy-accent">
-                            {branchPrefixMode === "username"
-                              ? "alice/fix-bug"
-                              : branchPrefixCustom.trim()
-                                ? `${branchPrefixCustom.trim()}fix-bug`
-                                : "fix-bug"}
-                          </code>
-                          {branchPrefixMode === "username" && (
-                            <p className="text-xs text-canopy-text/40 mt-1">
-                              Username is read from git config user.name at worktree creation time.
-                            </p>
-                          )}
-                        </div>
-                      )}
-                    </div>
+                    <AutomationTab
+                      currentProject={currentProject}
+                      runCommands={runCommands}
+                      onRunCommandsChange={setRunCommands}
+                      defaultWorktreeRecipeId={defaultWorktreeRecipeId}
+                      onDefaultWorktreeRecipeIdChange={setDefaultWorktreeRecipeId}
+                      branchPrefixMode={branchPrefixMode}
+                      onBranchPrefixModeChange={setBranchPrefixMode}
+                      branchPrefixCustom={branchPrefixCustom}
+                      onBranchPrefixCustomChange={setBranchPrefixCustom}
+                      worktreePathPattern={worktreePathPattern}
+                      onWorktreePathPatternChange={setWorktreePathPattern}
+                      terminalShell={terminalShell}
+                      onTerminalShellChange={setTerminalShell}
+                      terminalShellArgs={terminalShellArgs}
+                      onTerminalShellArgsChange={setTerminalShellArgs}
+                      terminalDefaultCwd={terminalDefaultCwd}
+                      onTerminalDefaultCwdChange={setTerminalDefaultCwd}
+                      terminalScrollback={terminalScrollback}
+                      onTerminalScrollbackChange={setTerminalScrollback}
+                      recipes={recipes}
+                      recipesLoading={recipesLoading}
+                      onNavigateToRecipes={() => setActiveTab("recipes")}
+                    />
                   </div>
 
                   {/* Recipes Tab */}
                   <div className={activeTab === "recipes" ? "" : "hidden"}>
-                    <div className="mb-6">
-                      <h3 className="text-sm font-semibold text-canopy-text/80 mb-2 flex items-center gap-2">
-                        <BookOpen className="h-4 w-4" />
-                        Terminal Recipes
-                      </h3>
-                      <p className="text-xs text-canopy-text/60 mb-4">
-                        Manage saved terminal configurations. Recipes can spawn multiple terminals
-                        with predefined commands and settings.
-                      </p>
-
-                      <div className="space-y-2">
-                        {recipesLoading ? (
-                          <div className="text-sm text-canopy-text/60 text-center py-8 border border-dashed border-canopy-border rounded-[var(--radius-md)]">
-                            Loading recipes...
-                          </div>
-                        ) : recipes.length === 0 ? (
-                          <div className="text-sm text-canopy-text/60 text-center py-8 border border-dashed border-canopy-border rounded-[var(--radius-md)]">
-                            No recipes configured yet
-                          </div>
-                        ) : (
-                          <div className="border border-canopy-border rounded-[var(--radius-md)] divide-y divide-canopy-border">
-                            {recipes.map((recipe) => {
-                              const exported = exportFeedback === recipe.id;
-                              return (
-                                <div
-                                  key={recipe.id}
-                                  className="p-3 hover:bg-muted/50 transition-colors group cursor-default"
-                                >
-                                  <div className="flex items-start gap-3">
-                                    <div className="flex-1 min-w-0">
-                                      <div className="flex items-center gap-2">
-                                        <TooltipProvider>
-                                          <Tooltip>
-                                            <TooltipTrigger asChild>
-                                              <span className="text-sm font-medium text-foreground truncate">
-                                                {recipe.name}
-                                              </span>
-                                            </TooltipTrigger>
-                                            <TooltipContent side="bottom">
-                                              {recipe.name}
-                                            </TooltipContent>
-                                          </Tooltip>
-                                        </TooltipProvider>
-                                        <span className="text-[11px] text-muted-foreground bg-muted px-1.5 py-0.5 rounded font-medium shrink-0">
-                                          {getRecipeScope(recipe)}
-                                        </span>
-                                        <span className="text-[11px] text-muted-foreground bg-muted px-1.5 py-0.5 rounded font-medium shrink-0">
-                                          {recipe.terminals.length} terminal
-                                          {recipe.terminals.length !== 1 ? "s" : ""}
-                                        </span>
-                                        {recipe.showInEmptyState && (
-                                          <span className="text-[11px] text-status-info bg-status-info/10 px-1.5 py-0.5 rounded font-medium shrink-0">
-                                            Empty State
-                                          </span>
-                                        )}
-                                      </div>
-                                      <div className="text-xs text-muted-foreground mt-1">
-                                        {recipe.lastUsedAt ? (
-                                          <span>
-                                            Last used <LiveTimeAgo timestamp={recipe.lastUsedAt} />
-                                          </span>
-                                        ) : (
-                                          <span>Never used</span>
-                                        )}
-                                      </div>
-                                    </div>
-                                    <div className="flex items-center gap-1 shrink-0 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity">
-                                      <TooltipProvider>
-                                        <Tooltip>
-                                          <TooltipTrigger asChild>
-                                            <Button
-                                              variant="ghost"
-                                              size="sm"
-                                              onClick={() => handleEditRecipe(recipe)}
-                                              className="h-7 px-2"
-                                              aria-label={`Edit recipe ${recipe.name}`}
-                                            >
-                                              <Edit3 />
-                                            </Button>
-                                          </TooltipTrigger>
-                                          <TooltipContent side="bottom">Edit recipe</TooltipContent>
-                                        </Tooltip>
-                                      </TooltipProvider>
-                                      <TooltipProvider>
-                                        <Tooltip>
-                                          <TooltipTrigger asChild>
-                                            <Button
-                                              variant="ghost"
-                                              size="sm"
-                                              onClick={() => handleExportRecipe(recipe.id)}
-                                              className="h-7 px-2"
-                                              aria-label={
-                                                exported
-                                                  ? `Recipe ${recipe.name} exported to clipboard`
-                                                  : `Export recipe ${recipe.name} to clipboard`
-                                              }
-                                            >
-                                              {exported ? (
-                                                <Check className="text-status-success" />
-                                              ) : (
-                                                <Download />
-                                              )}
-                                            </Button>
-                                          </TooltipTrigger>
-                                          <TooltipContent side="bottom">
-                                            {exported ? "Exported" : "Export recipe to clipboard"}
-                                          </TooltipContent>
-                                        </Tooltip>
-                                      </TooltipProvider>
-                                      <TooltipProvider>
-                                        <Tooltip>
-                                          <TooltipTrigger asChild>
-                                            <Button
-                                              variant="ghost"
-                                              size="sm"
-                                              onClick={() => setRecipeToDelete(recipe.id)}
-                                              className="h-7 px-2"
-                                              aria-label={`Delete recipe ${recipe.name}`}
-                                            >
-                                              <Trash2 className="text-status-error" />
-                                            </Button>
-                                          </TooltipTrigger>
-                                          <TooltipContent side="bottom">
-                                            Delete recipe
-                                          </TooltipContent>
-                                        </Tooltip>
-                                      </TooltipProvider>
-                                    </div>
-                                  </div>
-                                </div>
-                              );
-                            })}
-                          </div>
-                        )}
-                        {exportError && (
-                          <div
-                            className="text-sm text-status-error bg-status-error/10 border border-status-error/20 rounded p-3"
-                            role="alert"
-                          >
-                            {exportError}
-                          </div>
-                        )}
-                        <div className="flex gap-2">
-                          <Button variant="outline" onClick={handleAddRecipe} className="flex-1">
-                            <Plus />
-                            Add Recipe
-                          </Button>
-                          <Button variant="outline" onClick={() => setShowImportDialog(true)}>
-                            <FileDown />
-                            Import Recipe
-                          </Button>
-                        </div>
-                      </div>
-                    </div>
+                    <RecipesTab
+                      projectId={projectId}
+                      defaultWorktreeRecipeId={defaultWorktreeRecipeId}
+                      onDefaultWorktreeRecipeIdChange={setDefaultWorktreeRecipeId}
+                      worktreeMap={worktreeMap}
+                      isOpen={isOpen}
+                    />
                   </div>
 
                   {/* Commands Tab */}
@@ -2171,6 +641,31 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
                       projectId={projectId}
                       overrides={commandOverrides}
                       onChange={setCommandOverrides}
+                    />
+                  </div>
+
+                  {/* Agent Tab */}
+                  <div className={activeTab === "agent" ? "" : "hidden"}>
+                    <AgentTab
+                      agentInstructions={agentInstructions}
+                      onAgentInstructionsChange={setAgentInstructions}
+                    />
+                  </div>
+
+                  {/* MCP Servers Tab */}
+                  <div className={activeTab === "mcp" ? "" : "hidden"}>
+                    <McpServersTab
+                      servers={mcpServers}
+                      onChange={setMcpServers}
+                      runStates={mcpRunStates}
+                    />
+                  </div>
+
+                  {/* Notifications Tab */}
+                  <div className={activeTab === "notifications" ? "" : "hidden"}>
+                    <ProjectNotificationsTab
+                      overrides={notificationOverrides}
+                      onChange={setNotificationOverrides}
                     />
                   </div>
                 </>
@@ -2187,82 +682,6 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
             </div>
           </div>
         </div>
-      </AppDialog>
-
-      <RecipeEditor
-        recipe={editingRecipe}
-        worktreeId={undefined}
-        isOpen={isRecipeEditorOpen}
-        onClose={handleRecipeEditorClose}
-      />
-
-      <ConfirmDialog
-        isOpen={recipeToDelete !== null}
-        title="Delete Recipe"
-        description={
-          deleteError
-            ? `Error: ${deleteError}`
-            : "Are you sure you want to delete this recipe? This action cannot be undone."
-        }
-        confirmLabel={deleteError ? "Retry" : "Delete"}
-        onConfirm={() => {
-          if (recipeToDelete) {
-            void handleDeleteRecipe(recipeToDelete);
-          }
-        }}
-        onClose={() => {
-          setRecipeToDelete(null);
-          setDeleteError(null);
-        }}
-      />
-
-      <AppDialog
-        isOpen={showImportDialog}
-        onClose={() => {
-          setShowImportDialog(false);
-          setImportJson("");
-          setImportError(null);
-        }}
-        size="md"
-      >
-        <AppDialog.Header>
-          <AppDialog.Title>Import Recipe</AppDialog.Title>
-          <AppDialog.CloseButton />
-        </AppDialog.Header>
-
-        <AppDialog.Body>
-          <p className="text-sm text-canopy-text/60 mb-4">
-            Paste the JSON configuration for the recipe you want to import.
-          </p>
-          <textarea
-            value={importJson}
-            onChange={(e) => setImportJson(e.target.value)}
-            placeholder='{"name": "My Recipe", "terminals": [...]}'
-            className="w-full h-64 px-3 py-2 bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] text-sm text-canopy-text font-mono focus:outline-none focus:ring-2 focus:ring-canopy-accent resize-none"
-            spellCheck={false}
-          />
-          {importError && (
-            <div className="mt-3 text-sm text-status-error bg-status-error/10 border border-status-error/20 rounded p-3">
-              {importError}
-            </div>
-          )}
-        </AppDialog.Body>
-
-        <AppDialog.Footer>
-          <Button
-            variant="ghost"
-            onClick={() => {
-              setShowImportDialog(false);
-              setImportJson("");
-              setImportError(null);
-            }}
-          >
-            Cancel
-          </Button>
-          <Button onClick={handleImportRecipe} disabled={!importJson.trim()}>
-            Import
-          </Button>
-        </AppDialog.Footer>
       </AppDialog>
 
       <ConfirmDialog

@@ -11,6 +11,7 @@ type ActionPaletteProps = Pick<
   | "isOpen"
   | "query"
   | "results"
+  | "totalResults"
   | "selectedIndex"
   | "close"
   | "setQuery"
@@ -24,6 +25,7 @@ export function ActionPalette({
   isOpen,
   query,
   results,
+  totalResults,
   selectedIndex,
   close,
   setQuery,
@@ -68,6 +70,7 @@ export function ActionPalette({
       itemIdPrefix="action-option"
       emptyMessage="No actions available"
       noMatchMessage={`No actions match "${query}"`}
+      totalResults={totalResults}
     />
   );
 }

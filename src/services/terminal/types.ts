@@ -67,6 +67,13 @@ export interface ManagedTerminal {
   // Typing burst timer
   inputBurstTimer?: number;
 
+  // Directing state: renderer-only ephemeral state for user typing into waiting agent
+  canonicalAgentState?: AgentState;
+
+  // Title-based state detection hysteresis (per-terminal)
+  titleReportTimer?: number;
+  pendingTitleState?: "working" | "waiting";
+
   // Input lock state (read-only monitor mode)
   isInputLocked?: boolean;
 

@@ -5,11 +5,11 @@ import {
   Trash2,
   Bug,
   AlertTriangle,
-  Shield,
   ShieldCheck,
   CircleCheck,
   CircleX,
   RotateCw,
+  Download,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { appClient, systemClient } from "@/clients";
@@ -17,7 +17,6 @@ import type { AppState, SystemHealthCheckResult } from "@shared/types";
 import { actionService } from "@/services/ActionService";
 import { SettingsSection } from "./SettingsSection";
 import { SettingsSwitchCard } from "./SettingsSwitchCard";
-import { SettingsCheckbox } from "./SettingsCheckbox";
 
 function SystemHealthSection() {
   const [result, setResult] = useState<SystemHealthCheckResult | null>(null);
@@ -85,22 +84,51 @@ function SystemHealthSection() {
   );
 }
 
+function DownloadDiagnosticsSection() {
+  const [isDownloading, setIsDownloading] = useState(false);
+  const [downloadError, setDownloadError] = useState<string | null>(null);
+
+  const handleDownload = useCallback(async () => {
+    setIsDownloading(true);
+    setDownloadError(null);
+    try {
+      await systemClient.downloadDiagnostics();
+    } catch (err) {
+      setDownloadError(err instanceof Error ? err.message : "Failed to download diagnostics");
+    } finally {
+      setIsDownloading(false);
+    }
+  }, []);
+
+  return (
+    <SettingsSection
+      icon={Download}
+      title="Download Diagnostics"
+      description="Export a detailed snapshot of your system environment, app state, and recent logs for troubleshooting."
+    >
+      <Button
+        variant="outline"
+        size="sm"
+        onClick={() => void handleDownload()}
+        disabled={isDownloading}
+        className="text-canopy-text border-canopy-border hover:bg-canopy-border hover:text-canopy-text mb-3"
+      >
+        <Download className={cn("w-4 h-4", isDownloading && "animate-spin")} />
+        {isDownloading ? "Collecting..." : "Download Diagnostics"}
+      </Button>
+      {downloadError && <p className="text-xs text-status-error mb-3">{downloadError}</p>}
+    </SettingsSection>
+  );
+}
+
 export function TroubleshootingTab() {
   const [developerMode, setDeveloperMode] = useState(false);
   const [autoOpenDiagnostics, setAutoOpenDiagnostics] = useState(false);
   const [focusEventsTab, setFocusEventsTab] = useState(false);
   const [verboseLogging, setVerboseLogging] = useState(false);
   const [verboseLoggingPending, setVerboseLoggingPending] = useState(false);
-  const [telemetryEnabled, setTelemetryEnabled] = useState(false);
-  const [telemetryPending, setTelemetryPending] = useState(false);
 
   useEffect(() => {
-    if (window.electron?.telemetry) {
-      window.electron.telemetry.get().then(({ enabled }) => {
-        setTelemetryEnabled(enabled);
-      });
-    }
-
     appClient.getState().then((appState) => {
       if (appState?.developerMode) {
         setDeveloperMode(appState.developerMode.enabled);
@@ -120,21 +148,6 @@ export function TroubleshootingTab() {
         console.error("Failed to get verbose logging state:", error);
       });
   }, []);
-
-  const handleToggleTelemetry = useCallback(async () => {
-    if (telemetryPending || !window.electron?.telemetry) return;
-    const newState = !telemetryEnabled;
-    setTelemetryPending(true);
-    setTelemetryEnabled(newState);
-    try {
-      await window.electron.telemetry.setEnabled(newState);
-    } catch (err) {
-      console.error("Failed to set telemetry:", err);
-      setTelemetryEnabled(!newState);
-    } finally {
-      setTelemetryPending(false);
-    }
-  }, [telemetryEnabled, telemetryPending]);
 
   const saveDeveloperModeSettings = useCallback(
     async (settings: NonNullable<AppState["developerMode"]>) => {
@@ -186,41 +199,37 @@ export function TroubleshootingTab() {
     }
   }, [developerMode, autoOpenDiagnostics, focusEventsTab, saveDeveloperModeSettings]);
 
-  const handleToggleAutoOpenDiagnostics = useCallback(
-    (checked: boolean) => {
-      setAutoOpenDiagnostics(checked);
-      if (!checked) {
-        setFocusEventsTab(false);
-        saveDeveloperModeSettings({
-          enabled: developerMode,
-          showStateDebug: false,
-          autoOpenDiagnostics: false,
-          focusEventsTab: false,
-        });
-      } else {
-        saveDeveloperModeSettings({
-          enabled: developerMode,
-          showStateDebug: false,
-          autoOpenDiagnostics: true,
-          focusEventsTab,
-        });
-      }
-    },
-    [developerMode, focusEventsTab, saveDeveloperModeSettings]
-  );
-
-  const handleToggleFocusEventsTab = useCallback(
-    (checked: boolean) => {
-      setFocusEventsTab(checked);
+  const handleToggleAutoOpenDiagnostics = useCallback(() => {
+    const newValue = !autoOpenDiagnostics;
+    setAutoOpenDiagnostics(newValue);
+    if (!newValue) {
+      setFocusEventsTab(false);
       saveDeveloperModeSettings({
         enabled: developerMode,
         showStateDebug: false,
-        autoOpenDiagnostics,
-        focusEventsTab: checked,
+        autoOpenDiagnostics: false,
+        focusEventsTab: false,
       });
-    },
-    [developerMode, autoOpenDiagnostics, saveDeveloperModeSettings]
-  );
+    } else {
+      saveDeveloperModeSettings({
+        enabled: developerMode,
+        showStateDebug: false,
+        autoOpenDiagnostics: true,
+        focusEventsTab,
+      });
+    }
+  }, [developerMode, autoOpenDiagnostics, focusEventsTab, saveDeveloperModeSettings]);
+
+  const handleToggleFocusEventsTab = useCallback(() => {
+    const newValue = !focusEventsTab;
+    setFocusEventsTab(newValue);
+    saveDeveloperModeSettings({
+      enabled: developerMode,
+      showStateDebug: false,
+      autoOpenDiagnostics,
+      focusEventsTab: newValue,
+    });
+  }, [developerMode, autoOpenDiagnostics, focusEventsTab, saveDeveloperModeSettings]);
 
   const handleToggleVerboseLogging = useCallback(async () => {
     if (verboseLoggingPending) return;
@@ -263,6 +272,8 @@ export function TroubleshootingTab() {
 
   return (
     <div className="space-y-6">
+      <DownloadDiagnosticsSection />
+
       <SystemHealthSection />
 
       <SettingsSection
@@ -295,22 +306,6 @@ export function TroubleshootingTab() {
       </SettingsSection>
 
       <SettingsSection
-        icon={Shield}
-        title="Crash Reporting"
-        description="Automatically send crash reports and error details to help improve Canopy. No personal data, file contents, or credentials are collected."
-      >
-        <SettingsSwitchCard
-          icon={Shield}
-          title="Enable Crash Reporting"
-          subtitle="Collects: error messages, stack traces, app version, OS. Changes apply on next app restart."
-          isEnabled={telemetryEnabled}
-          onChange={handleToggleTelemetry}
-          ariaLabel="Enable crash reporting"
-          disabled={telemetryPending}
-        />
-      </SettingsSection>
-
-      <SettingsSection
         icon={Bug}
         title="Developer Mode"
         description="Enable enhanced debugging features for development and troubleshooting."
@@ -324,28 +319,25 @@ export function TroubleshootingTab() {
           ariaLabel="Developer Mode Toggle"
         />
 
-        <div
-          className={cn(
-            "ml-4 space-y-3 border-l-2 border-canopy-border pl-4 transition-opacity",
-            !developerMode && "opacity-50"
-          )}
-        >
-          <SettingsCheckbox
-            id="auto-open-diagnostics"
-            label="Auto-Open Diagnostics Dock"
-            description="Automatically open diagnostics panel on app startup"
-            checked={autoOpenDiagnostics}
+        <div className="ml-4 space-y-3 border-l-2 border-canopy-border pl-4">
+          <SettingsSwitchCard
+            variant="compact"
+            title="Auto-Open Diagnostics Dock"
+            subtitle="Automatically open diagnostics panel on app startup"
+            isEnabled={autoOpenDiagnostics}
             onChange={handleToggleAutoOpenDiagnostics}
+            ariaLabel="Auto-open diagnostics dock"
             disabled={!developerMode}
           />
 
-          <div className={cn("ml-4", !autoOpenDiagnostics && "opacity-50")}>
-            <SettingsCheckbox
-              id="focus-events-tab"
-              label="Focus Events Tab"
-              description="Default to Events tab when diagnostics opens"
-              checked={focusEventsTab}
+          <div className="ml-4">
+            <SettingsSwitchCard
+              variant="compact"
+              title="Focus Events Tab"
+              subtitle="Default to Events tab when diagnostics opens"
+              isEnabled={focusEventsTab}
               onChange={handleToggleFocusEventsTab}
+              ariaLabel="Focus events tab"
               disabled={!developerMode || !autoOpenDiagnostics}
             />
           </div>

@@ -9,13 +9,13 @@ export class TerminalOffscreenManager {
     const container = document.createElement("div");
     container.className = "terminal-offscreen-container";
     container.style.cssText = [
+      "content-visibility: hidden",
       "position: fixed",
       "left: -20000px",
       "top: 0",
       "width: 2000px",
       "height: 2000px",
       "overflow: hidden",
-      "opacity: 0",
       "pointer-events: none",
     ].join(";");
     document.body.appendChild(container);

@@ -19,29 +19,9 @@ export function registerBuiltInPanelComponents(): void {
   if (registered) return;
   registered = true;
 
-  // Terminal panel - plain terminal sessions
-  registerPanelComponent("terminal", {
-    component: TerminalPane,
-  });
-
-  // Agent panel - AI agent sessions (Claude, Gemini, etc.)
-  // Uses same component as terminal, distinguished by agentId prop
-  registerPanelComponent("agent", {
-    component: TerminalPane,
-  });
-
-  // Browser panel - localhost iframe browser
-  registerPanelComponent("browser", {
-    component: BrowserPane,
-  });
-
-  // Notes panel - Markdown note editor
-  registerPanelComponent("notes", {
-    component: NotesPane,
-  });
-
-  // Dev Preview panel - auto-starts dev server and shows iframe
-  registerPanelComponent("dev-preview", {
-    component: DevPreviewPane,
-  });
+  registerPanelComponent("terminal", { component: TerminalPane }, { allowOverride: true });
+  registerPanelComponent("agent", { component: TerminalPane }, { allowOverride: true });
+  registerPanelComponent("browser", { component: BrowserPane }, { allowOverride: true });
+  registerPanelComponent("notes", { component: NotesPane }, { allowOverride: true });
+  registerPanelComponent("dev-preview", { component: DevPreviewPane }, { allowOverride: true });
 }

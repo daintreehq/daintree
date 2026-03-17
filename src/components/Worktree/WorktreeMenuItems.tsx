@@ -217,11 +217,7 @@ export function WorktreeMenuItems({
             Close All (Trash)
             <C.Shortcut>({counts.active})</C.Shortcut>
           </C.Item>
-          <C.Item
-            onSelect={onEndAll}
-            disabled={!hasSessions}
-            className="text-status-error focus:text-status-error"
-          >
+          <C.Item onSelect={onEndAll} disabled={!hasSessions} destructive>
             <X className="w-3.5 h-3.5 mr-2" />
             End All (Kill)
             <C.Shortcut>({counts.all})</C.Shortcut>
@@ -351,7 +347,7 @@ export function WorktreeMenuItems({
       {onDeleteWorktree && (
         <>
           <C.Separator />
-          <C.Item onSelect={onDeleteWorktree} className="text-status-error focus:text-status-error">
+          <C.Item onSelect={onDeleteWorktree} destructive>
             <Trash2 className="w-3.5 h-3.5 mr-2" />
             Delete Worktree...
           </C.Item>

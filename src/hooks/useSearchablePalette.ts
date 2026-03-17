@@ -1,5 +1,6 @@
 import { useState, useCallback, useMemo, useEffect, useRef } from "react";
 import Fuse, { type IFuseOptions } from "fuse.js";
+import { usePaletteStore, type PaletteId } from "@/store/paletteStore";
 
 export interface UseSearchablePaletteOptions<T> {
   items: T[];
@@ -11,12 +12,15 @@ export interface UseSearchablePaletteOptions<T> {
   canNavigate?: (item: T) => boolean;
   /** Reset selected index when results change. Default: true */
   resetOnResultsChange?: boolean;
+  /** Palette ID for mutual exclusion. When set, isOpen is derived from the palette store. */
+  paletteId?: PaletteId;
 }
 
 export interface UseSearchablePaletteReturn<T> {
   isOpen: boolean;
   query: string;
   results: T[];
+  totalResults: number;
   selectedIndex: number;
   open: () => void;
   close: () => void;
@@ -41,9 +45,15 @@ export function useSearchablePalette<T>(
     debounceMs = DEFAULT_DEBOUNCE_MS,
     canNavigate,
     resetOnResultsChange = true,
+    paletteId,
   } = options;
 
-  const [isOpen, setIsOpen] = useState(false);
+  const storeIsOpen = usePaletteStore(
+    (state) => paletteId != null && state.activePaletteId === paletteId
+  );
+  const [localIsOpen, setLocalIsOpen] = useState(false);
+  const isOpen = paletteId != null ? storeIsOpen : localIsOpen;
+
   const [query, setQuery] = useState("");
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [debouncedQuery, setDebouncedQuery] = useState("");
@@ -71,7 +81,7 @@ export function useSearchablePalette<T>(
     return new Fuse(items, fuseOptions);
   }, [items, fuseOptions]);
 
-  const results = useMemo<T[]>(() => {
+  const { results, totalResults } = useMemo(() => {
     let filtered: T[];
 
     if (filterFn) {
@@ -85,7 +95,7 @@ export function useSearchablePalette<T>(
       filtered = items;
     }
 
-    return filtered.slice(0, maxResults);
+    return { results: filtered.slice(0, maxResults), totalResults: filtered.length };
   }, [debouncedQuery, items, fuse, filterFn, maxResults]);
 
   const findNavigable = useCallback(
@@ -122,18 +132,26 @@ export function useSearchablePalette<T>(
   }, [results, resetOnResultsChange, canNavigate, findNavigable]);
 
   const open = useCallback(() => {
-    setIsOpen(true);
+    if (paletteId != null) {
+      usePaletteStore.getState().openPalette(paletteId);
+    } else {
+      setLocalIsOpen(true);
+    }
     setQuery("");
     setDebouncedQuery("");
     setSelectedIndex(0);
-  }, []);
+  }, [paletteId]);
 
   const close = useCallback(() => {
-    setIsOpen(false);
+    if (paletteId != null) {
+      usePaletteStore.getState().closePalette(paletteId);
+    } else {
+      setLocalIsOpen(false);
+    }
     setQuery("");
     setSelectedIndex(0);
     setDebouncedQuery("");
-  }, []);
+  }, [paletteId]);
 
   const toggle = useCallback(() => {
     if (isOpen) {
@@ -163,6 +181,7 @@ export function useSearchablePalette<T>(
     isOpen,
     query,
     results,
+    totalResults,
     selectedIndex,
     open,
     close,

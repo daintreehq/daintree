@@ -53,6 +53,7 @@ export function useWorktreeTerminals(worktreeId: string): UseWorktreeTerminalsRe
       working: 0,
       running: 0,
       waiting: 0,
+      directing: 0,
       completed: 0,
       failed: 0,
     };

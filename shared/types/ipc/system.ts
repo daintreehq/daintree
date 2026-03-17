@@ -1,4 +1,4 @@
-import type { AgentId } from "../domain.js";
+import type { AgentId } from "../agent.js";
 
 /** Open external URL payload */
 export interface SystemOpenExternalPayload {
@@ -69,21 +69,52 @@ export interface StartAgentUpdateResult {
   command: string;
 }
 
+/** Severity level for a prerequisite check */
+export type PrerequisiteSeverity = "fatal" | "warn" | "silent";
+
+/** Declarative specification for a single prerequisite tool */
+export interface PrerequisiteSpec {
+  /** Binary/tool name used for PATH lookup (e.g. "git", "gh", "claude") */
+  tool: string;
+  /** Human-readable display name (e.g. "Git", "GitHub CLI") */
+  label: string;
+  /** Binary to execute for PATH lookup (defaults to tool if omitted) */
+  command?: string;
+  /** Arguments to retrieve version (e.g. ["--version"]) */
+  versionArgs: string[];
+  /** How critical this prerequisite is */
+  severity: PrerequisiteSeverity;
+  /** Minimum semver version required (e.g. "18.0.0") */
+  minVersion?: string;
+  /** URL for installation instructions */
+  installUrl?: string;
+}
+
 /** Result of checking a single system prerequisite */
 export interface PrerequisiteCheckResult {
   /** Tool name (e.g. "git", "node", "npm") */
   tool: string;
+  /** Human-readable display name */
+  label: string;
   /** Whether the tool was found in PATH */
   available: boolean;
   /** Detected version string (e.g. "2.43.0"), null if not available */
   version: string | null;
+  /** Severity level from the spec */
+  severity: PrerequisiteSeverity;
+  /** Whether the installed version meets the minimum requirement */
+  meetsMinVersion: boolean;
+  /** Minimum version required (for UI display), undefined if none */
+  minVersion?: string;
+  /** Installation URL (for UI display), undefined if none */
+  installUrl?: string;
 }
 
 /** Full system health check result */
 export interface SystemHealthCheckResult {
   /** Results for each checked prerequisite */
   prerequisites: PrerequisiteCheckResult[];
-  /** True when all required prerequisites are available */
+  /** True when all fatal prerequisites are available and meet minimum version */
   allRequired: boolean;
 }
 

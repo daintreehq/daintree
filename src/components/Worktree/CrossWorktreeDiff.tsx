@@ -26,7 +26,7 @@ function statusLabel(status: string): { label: string; className: string } {
     case "C":
       return { label: "C", className: "text-github-merged" };
     default:
-      return { label: status, className: "text-neutral-400" };
+      return { label: status, className: "text-text-muted" };
   }
 }
 
@@ -169,15 +169,15 @@ export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossW
     >
       <div
         ref={modalRef}
-        className="flex flex-col bg-neutral-900 border border-neutral-700 rounded-xl shadow-2xl w-[90vw] max-w-6xl h-[80vh] max-h-[800px] overflow-hidden"
+        className="flex flex-col bg-surface-panel border border-border-default rounded-xl shadow-2xl w-[90vw] max-w-6xl h-[80vh] max-h-[800px] overflow-hidden"
       >
         {/* Header */}
-        <div className="flex items-center gap-3 px-4 py-3 border-b border-neutral-800 shrink-0">
-          <GitCompare className="w-4 h-4 text-neutral-400" />
-          <h2 className="text-sm font-semibold text-neutral-100 flex-1">Compare Worktrees</h2>
+        <div className="flex items-center gap-3 px-4 py-3 border-b border-border-subtle shrink-0">
+          <GitCompare className="w-4 h-4 text-text-muted" />
+          <h2 className="text-sm font-semibold text-text-primary flex-1">Compare Worktrees</h2>
           <button
             onClick={onClose}
-            className="p-1 rounded text-neutral-400 hover:text-neutral-100 hover:bg-neutral-800 transition-colors"
+            className="p-1 rounded text-text-muted hover:text-text-primary hover:bg-surface-panel-elevated transition-colors"
             aria-label="Close"
           >
             <X className="w-4 h-4" />
@@ -185,7 +185,7 @@ export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossW
         </div>
 
         {/* Selectors */}
-        <div className="flex items-end gap-4 px-4 py-3 border-b border-neutral-800 bg-neutral-900/50 shrink-0">
+        <div className="flex items-end gap-4 px-4 py-3 border-b border-border-subtle bg-surface-panel/50 shrink-0">
           <div className="flex-1 min-w-0">
             <WorktreeSelector
               label="Left (base)"
@@ -195,7 +195,7 @@ export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossW
               onChange={setLeftId}
             />
           </div>
-          <div className="text-neutral-500 text-xs pb-2">vs</div>
+          <div className="text-text-muted text-xs pb-2">vs</div>
           <div className="flex-1 min-w-0">
             <WorktreeSelector
               label="Right (compare)"
@@ -210,15 +210,15 @@ export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossW
         {/* Body */}
         <div className="flex flex-1 overflow-hidden">
           {/* File list sidebar */}
-          <div className="w-64 shrink-0 border-r border-neutral-800 flex flex-col overflow-hidden">
-            <div className="px-3 py-2 text-xs text-neutral-500 border-b border-neutral-800 shrink-0">
+          <div className="w-64 shrink-0 border-r border-border-subtle flex flex-col overflow-hidden">
+            <div className="px-3 py-2 text-xs text-text-muted border-b border-border-subtle shrink-0">
               {result
                 ? `${result.files.length} file${result.files.length === 1 ? "" : "s"} changed`
                 : "Files"}
             </div>
             <div className="flex-1 overflow-y-auto">
               {loading && (
-                <div className="flex items-center justify-center gap-2 p-6 text-neutral-500 text-sm">
+                <div className="flex items-center justify-center gap-2 p-6 text-text-muted text-sm">
                   <Loader2 className="w-4 h-4 animate-spin" />
                   Comparing…
                 </div>
@@ -230,10 +230,10 @@ export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossW
                 </div>
               )}
               {!loading && !error && !result && (
-                <div className="p-4 text-neutral-500 text-xs">Select two worktrees to compare</div>
+                <div className="p-4 text-text-muted text-xs">Select two worktrees to compare</div>
               )}
               {result?.files.length === 0 && (
-                <div className="p-4 text-neutral-500 text-xs">
+                <div className="p-4 text-text-muted text-xs">
                   No differences between these branches
                 </div>
               )}
@@ -245,8 +245,8 @@ export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossW
                     key={`${file.status}:${file.path}`}
                     onClick={() => void fetchFileDiff(file)}
                     className={cn(
-                      "w-full flex items-center gap-2 px-3 py-1.5 text-left text-xs hover:bg-neutral-800 transition-colors",
-                      isSelected && "bg-neutral-800"
+                      "w-full flex items-center gap-2 px-3 py-1.5 text-left text-xs hover:bg-surface-panel-elevated transition-colors",
+                      isSelected && "bg-surface-panel-elevated"
                     )}
                   >
                     <span
@@ -254,8 +254,8 @@ export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossW
                     >
                       {label}
                     </span>
-                    <FileIcon className="w-3 h-3 shrink-0 text-neutral-500" />
-                    <span className="text-neutral-300 truncate min-w-0" title={file.path}>
+                    <FileIcon className="w-3 h-3 shrink-0 text-text-muted" />
+                    <span className="text-text-secondary truncate min-w-0" title={file.path}>
                       {file.path.split("/").pop()}
                     </span>
                   </button>
@@ -265,14 +265,14 @@ export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossW
           </div>
 
           {/* Diff panel */}
-          <div className="flex-1 overflow-auto bg-neutral-950">
+          <div className="flex-1 overflow-auto bg-surface-canvas">
             {!selectedFile && (
-              <div className="flex items-center justify-center h-full text-neutral-500 text-sm">
+              <div className="flex items-center justify-center h-full text-text-muted text-sm">
                 {result ? "Select a file to view its diff" : ""}
               </div>
             )}
             {selectedFile && fileDiffLoading && (
-              <div className="flex items-center justify-center gap-2 h-full text-neutral-500 text-sm">
+              <div className="flex items-center justify-center gap-2 h-full text-text-muted text-sm">
                 <Loader2 className="w-4 h-4 animate-spin" />
                 Loading diff…
               </div>

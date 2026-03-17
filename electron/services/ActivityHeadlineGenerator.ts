@@ -1,5 +1,6 @@
 import type { TerminalActivityStatus, TerminalTaskType } from "../../shared/types/terminal.js";
-import type { AgentState, TerminalType } from "../../shared/types/domain.js";
+import type { AgentState } from "../../shared/types/agent.js";
+import type { TerminalType } from "../../shared/types/panel.js";
 
 export interface ActivityContext {
   terminalId: string;

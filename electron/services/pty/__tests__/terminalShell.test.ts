@@ -250,7 +250,27 @@ describe("terminalShell", () => {
         expect(result.FORCE_COLOR).toBe("3");
       });
 
-      it("should set CI for non-gemini agents", () => {
+      it("should exclude CI and NONINTERACTIVE for opencode agent", () => {
+        const result = buildNonInteractiveEnv({}, "/bin/zsh", "opencode");
+
+        expect("CI" in result).toBe(false);
+        expect("NONINTERACTIVE" in result).toBe(false);
+
+        expect(result.DISABLE_AUTO_UPDATE).toBe("true");
+        expect(result.HOMEBREW_NO_AUTO_UPDATE).toBe("1");
+        expect(result.FORCE_COLOR).toBe("3");
+      });
+
+      it("should exclude base env CI and NONINTERACTIVE for opencode even if explicitly set", () => {
+        const baseEnv = { CI: "1", NONINTERACTIVE: "1", OTHER_VAR: "preserved" };
+        const result = buildNonInteractiveEnv(baseEnv, "/bin/zsh", "opencode");
+
+        expect("CI" in result).toBe(false);
+        expect("NONINTERACTIVE" in result).toBe(false);
+        expect(result.OTHER_VAR).toBe("preserved");
+      });
+
+      it("should set CI for non-excluded agents", () => {
         const claudeResult = buildNonInteractiveEnv({}, "/bin/zsh", "claude");
         expect(claudeResult.CI).toBe("1");
         expect(claudeResult.NONINTERACTIVE).toBe("1");

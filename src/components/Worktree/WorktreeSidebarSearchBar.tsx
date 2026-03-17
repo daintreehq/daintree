@@ -89,13 +89,13 @@ export function WorktreeSidebarSearchBar({ inputRef }: WorktreeSidebarSearchBarP
       <div
         role="search"
         className={cn(
-          "flex items-center gap-1.5 px-2 py-1.5 rounded",
+          "flex items-center gap-1.5 px-2 py-1.5 rounded-[var(--radius-md)]",
           "bg-canopy-bg border border-canopy-border",
-          "focus-within:border-canopy-accent/50"
+          "focus-within:border-canopy-accent focus-within:ring-1 focus-within:ring-canopy-accent/20"
         )}
       >
         <Search
-          className="w-3.5 h-3.5 shrink-0 text-canopy-text/30 pointer-events-none"
+          className="w-3.5 h-3.5 shrink-0 text-canopy-text/40 pointer-events-none"
           aria-hidden="true"
         />
         <input

@@ -7,6 +7,9 @@ interface FixtureRepoOptions {
   name?: string;
   withFeatureBranch?: boolean;
   withMultipleFiles?: boolean;
+  withImageFile?: boolean;
+  withUncommittedChanges?: boolean;
+  withSpreadCommits?: boolean;
 }
 
 function git(cmd: string, cwd: string) {
@@ -14,7 +17,14 @@ function git(cmd: string, cwd: string) {
 }
 
 export function createFixtureRepo(options: FixtureRepoOptions = {}): string {
-  const { name = "test-project", withFeatureBranch = false, withMultipleFiles = false } = options;
+  const {
+    name = "test-project",
+    withFeatureBranch = false,
+    withMultipleFiles = false,
+    withImageFile = false,
+    withUncommittedChanges = false,
+    withSpreadCommits = false,
+  } = options;
 
   const dir = mkdtempSync(path.join(tmpdir(), `canopy-e2e-${name}-`));
 
@@ -40,15 +50,52 @@ export function createFixtureRepo(options: FixtureRepoOptions = {}): string {
     );
   }
 
+  if (withImageFile) {
+    mkdirSync(path.join(dir, "assets"), { recursive: true });
+    // 1x1 red PNG pixel (minimal valid PNG)
+    const pngBuffer = Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg==",
+      "base64"
+    );
+    writeFileSync(path.join(dir, "assets", "logo.png"), pngBuffer);
+  }
+
   git("add -A", dir);
   git('commit -m "initial commit"', dir);
 
+  if (withSpreadCommits) {
+    const daysAgo = [50, 30, 10];
+    for (const d of daysAgo) {
+      const date = new Date(Date.now() - d * 86_400_000);
+      date.setUTCHours(12, 0, 0, 0);
+      const dateStr = date.toISOString();
+      writeFileSync(path.join(dir, `file-${d}.md`), `# File ${d}\n`);
+      execSync("git add -A", { cwd: dir, stdio: "ignore" });
+      execSync(`git commit -m "commit ${d} days ago"`, {
+        cwd: dir,
+        stdio: "ignore",
+        env: { ...process.env, GIT_AUTHOR_DATE: dateStr, GIT_COMMITTER_DATE: dateStr },
+      });
+    }
+  }
+
   if (withFeatureBranch) {
-    git("checkout -b feature/test-branch", dir);
-    writeFileSync(path.join(dir, "CHANGELOG.md"), "# Changelog\n\n- Feature branch\n");
-    git("add -A", dir);
-    git('commit -m "add changelog"', dir);
-    git("checkout main", dir);
+    git("branch feature/test-branch", dir);
+    const worktreeDir = path.join(
+      dir,
+      "..",
+      path.basename(dir) + "-worktrees",
+      "feature-test-branch"
+    );
+    mkdirSync(path.dirname(worktreeDir), { recursive: true });
+    git(`worktree add ${JSON.stringify(worktreeDir)} feature/test-branch`, dir);
+    writeFileSync(path.join(worktreeDir, "CHANGELOG.md"), "# Changelog\n\n- Feature branch\n");
+    git("add -A", worktreeDir);
+    git('commit -m "add changelog"', worktreeDir);
+  }
+
+  if (withUncommittedChanges) {
+    writeFileSync(path.join(dir, "uncommitted.txt"), "This file is not committed.\n");
   }
 
   return dir;

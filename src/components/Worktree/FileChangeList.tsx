@@ -186,7 +186,7 @@ export function FileChangeList({
         <Tooltip>
           <TooltipTrigger asChild>
             <div
-              className="group flex items-center text-xs font-mono hover:bg-white/5 rounded px-1.5 py-0.5 -mx-1.5 cursor-pointer transition-colors"
+              className="group flex items-center text-xs font-mono hover:bg-tint/5 rounded px-1.5 py-0.5 -mx-1.5 cursor-pointer transition-colors"
               onClick={() => handleFileClick(change)}
             >
               <span className={cn("w-4 font-bold shrink-0", config.color)}>{config.label}</span>
@@ -221,7 +221,7 @@ export function FileChangeList({
   if (groupByFolder && groupedChanges.length > 0) {
     return (
       <>
-        <div className="space-y-3 w-full">
+        <div className="space-y-3 w-full max-h-64 overflow-y-auto overscroll-contain">
           {groupedChanges.map((group) => (
             <div key={group.dir}>
               <div className="flex items-center gap-1.5 text-[11px] text-canopy-text/40 mb-1">
@@ -260,7 +260,7 @@ export function FileChangeList({
 
   return (
     <>
-      <div className="flex flex-col gap-0.5 w-full">
+      <div className="flex flex-col gap-0.5 w-full max-h-64 overflow-y-auto overscroll-contain">
         {visibleChanges.map((change) => renderFileItem(change, true))}
 
         {remainingCount > 0 && (

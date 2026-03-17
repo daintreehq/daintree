@@ -12,6 +12,7 @@ function addEntry(
     title: string;
     message: string;
     correlationId: string;
+    countable: boolean;
   }> = {}
 ) {
   getState().addEntry({
@@ -19,6 +20,7 @@ function addEntry(
     message: overrides.message ?? "Test notification",
     title: overrides.title,
     correlationId: overrides.correlationId,
+    countable: overrides.countable,
   });
 }
 
@@ -51,22 +53,22 @@ describe("notificationHistorySlice", () => {
     expect(getState().unreadCount).toBe(3);
   });
 
-  it("respects 50-entry cap (oldest evicted)", () => {
-    for (let i = 0; i < 55; i++) {
+  it("respects 200-entry cap (oldest evicted)", () => {
+    for (let i = 0; i < 205; i++) {
       addEntry({ message: `msg-${i}` });
     }
     const { entries } = getState();
-    expect(entries).toHaveLength(50);
-    expect(entries[0].message).toBe("msg-54");
-    expect(entries[49].message).toBe("msg-5");
+    expect(entries).toHaveLength(200);
+    expect(entries[0].message).toBe("msg-204");
+    expect(entries[199].message).toBe("msg-5");
   });
 
-  it("unreadCount never exceeds 50 even with overflow", () => {
-    for (let i = 0; i < 100; i++) {
+  it("unreadCount never exceeds 200 even with overflow", () => {
+    for (let i = 0; i < 250; i++) {
       addEntry({ message: `msg-${i}` });
     }
-    expect(getState().unreadCount).toBe(50);
-    expect(getState().entries).toHaveLength(50);
+    expect(getState().unreadCount).toBe(200);
+    expect(getState().entries).toHaveLength(200);
   });
 
   it("markAllRead resets unread count but keeps entries", () => {
@@ -105,6 +107,41 @@ describe("notificationHistorySlice", () => {
     expect(results.every((e: { correlationId?: string }) => e.correlationId === "panel-1")).toBe(
       true
     );
+  });
+
+  describe("history actions", () => {
+    it("stores actions on the entry when provided", () => {
+      getState().addEntry({
+        type: "success",
+        message: "Agent done",
+        actions: [
+          { label: "Go to terminal", actionId: "panel.focus", actionArgs: { panelId: "p1" } },
+        ],
+      });
+      const entry = getState().entries[0];
+      expect(entry.actions).toHaveLength(1);
+      expect(entry.actions![0].label).toBe("Go to terminal");
+      expect(entry.actions![0].actionId).toBe("panel.focus");
+      expect(entry.actions![0].actionArgs).toEqual({ panelId: "p1" });
+    });
+
+    it("works with no actions (backward compat)", () => {
+      addEntry({ message: "No actions" });
+      const entry = getState().entries[0];
+      expect(entry.actions).toBeUndefined();
+    });
+
+    it("stores multiple actions", () => {
+      getState().addEntry({
+        type: "info",
+        message: "Multi-action",
+        actions: [
+          { label: "Action 1", actionId: "panel.focus", actionArgs: { panelId: "p1" } },
+          { label: "Action 2", actionId: "panel.focus", variant: "secondary" },
+        ],
+      });
+      expect(getState().entries[0].actions).toHaveLength(2);
+    });
   });
 
   describe("seenAsToast and badge count", () => {
@@ -151,13 +188,212 @@ describe("notificationHistorySlice", () => {
     });
 
     it("unreadCount stays accurate when overflow evicts an unseen entry", () => {
-      for (let i = 0; i < 50; i++) {
+      for (let i = 0; i < 200; i++) {
         addEntry({ message: `missed-${i}` });
       }
-      expect(getState().unreadCount).toBe(50);
+      expect(getState().unreadCount).toBe(200);
       getState().addEntry({ type: "success", message: "seen", seenAsToast: true });
-      expect(getState().entries).toHaveLength(50);
-      expect(getState().unreadCount).toBe(49);
+      expect(getState().entries).toHaveLength(200);
+      expect(getState().unreadCount).toBe(199);
+    });
+
+    it("defaults countable to true on new entries", () => {
+      addEntry({ message: "test" });
+      expect(getState().entries[0].countable).toBe(true);
+    });
+
+    it("does not increment unreadCount when countable is false", () => {
+      addEntry({ message: "uncountable", countable: false });
+      expect(getState().entries).toHaveLength(1);
+      expect(getState().unreadCount).toBe(0);
+    });
+
+    it("correctly counts mixed countable and non-countable entries", () => {
+      addEntry({ message: "countable 1" });
+      addEntry({ message: "uncountable", countable: false });
+      addEntry({ message: "countable 2" });
+      expect(getState().entries).toHaveLength(3);
+      expect(getState().unreadCount).toBe(2);
+    });
+
+    it("dismissing a non-countable entry does not change unreadCount", () => {
+      addEntry({ message: "countable" });
+      addEntry({ message: "uncountable", countable: false });
+      expect(getState().unreadCount).toBe(1);
+      const uncountableId = getState().entries[0].id;
+      getState().dismissEntry(uncountableId);
+      expect(getState().entries).toHaveLength(1);
+      expect(getState().unreadCount).toBe(1);
+    });
+  });
+
+  describe("markSummarized", () => {
+    it("defaults summarized to false on new entries", () => {
+      addEntry({ message: "test" });
+      expect(getState().entries[0].summarized).toBe(false);
+    });
+
+    it("marks only targeted entries as summarized", () => {
+      addEntry({ message: "a" });
+      addEntry({ message: "b" });
+      addEntry({ message: "c" });
+      const entries = getState().entries;
+      getState().markSummarized([entries[0].id, entries[2].id]);
+      const updated = getState().entries;
+      expect(updated[0].summarized).toBe(true);
+      expect(updated[1].summarized).toBe(false);
+      expect(updated[2].summarized).toBe(true);
+    });
+
+    it("does not change unreadCount", () => {
+      addEntry({ message: "missed" });
+      addEntry({ message: "missed 2" });
+      expect(getState().unreadCount).toBe(2);
+      const ids = getState().entries.map((e) => e.id);
+      getState().markSummarized(ids);
+      expect(getState().unreadCount).toBe(2);
+    });
+
+    it("is independent from markAllRead", () => {
+      addEntry({ message: "test" });
+      const id = getState().entries[0].id;
+      getState().markSummarized([id]);
+      expect(getState().entries[0].summarized).toBe(true);
+      expect(getState().entries[0].seenAsToast).toBe(false);
+      getState().markAllRead();
+      expect(getState().entries[0].summarized).toBe(true);
+      expect(getState().entries[0].seenAsToast).toBe(true);
+    });
+
+    it("does not mutate already-summarized entries", () => {
+      addEntry({ message: "test" });
+      const id = getState().entries[0].id;
+      getState().markSummarized([id]);
+      const before = getState().entries[0];
+      getState().markSummarized([id]);
+      const after = getState().entries[0];
+      expect(after).toBe(before);
+    });
+
+    it("new entries after markSummarized default to summarized=false", () => {
+      addEntry({ message: "old" });
+      getState().markSummarized([getState().entries[0].id]);
+      addEntry({ message: "new" });
+      expect(getState().entries[0].summarized).toBe(false);
+    });
+  });
+
+  describe("addEntry return value", () => {
+    it("returns the id of the newly created entry", () => {
+      const id = getState().addEntry({
+        type: "info",
+        message: "test",
+      });
+      expect(typeof id).toBe("string");
+      expect(id.length).toBeGreaterThan(0);
+      expect(getState().entries[0].id).toBe(id);
+    });
+  });
+
+  describe("markUnseenAsToast", () => {
+    it("sets seenAsToast to false on a seen entry", () => {
+      const id = getState().addEntry({
+        type: "info",
+        message: "seen",
+        seenAsToast: true,
+      });
+      expect(getState().entries[0].seenAsToast).toBe(true);
+      getState().markUnseenAsToast(id);
+      expect(getState().entries[0].seenAsToast).toBe(false);
+    });
+
+    it("increments unreadCount when marking seen entry as unseen", () => {
+      const id = getState().addEntry({
+        type: "info",
+        message: "seen",
+        seenAsToast: true,
+      });
+      expect(getState().unreadCount).toBe(0);
+      getState().markUnseenAsToast(id);
+      expect(getState().unreadCount).toBe(1);
+    });
+
+    it("is a no-op when entry is already unseen", () => {
+      const id = getState().addEntry({
+        type: "info",
+        message: "unseen",
+        seenAsToast: false,
+      });
+      expect(getState().unreadCount).toBe(1);
+      const before = getState().entries[0];
+      getState().markUnseenAsToast(id);
+      const after = getState().entries[0];
+      expect(after).toBe(before);
+      expect(getState().unreadCount).toBe(1);
+    });
+
+    it("is a no-op when id does not exist", () => {
+      addEntry({ message: "test" });
+      const before = getState();
+      getState().markUnseenAsToast("nonexistent-id");
+      const after = getState();
+      expect(after.entries).toBe(before.entries);
+      expect(after.unreadCount).toBe(before.unreadCount);
+    });
+
+    it("does not affect other entries", () => {
+      getState().addEntry({ type: "info", message: "other", seenAsToast: true });
+      const targetId = getState().addEntry({
+        type: "info",
+        message: "target",
+        seenAsToast: true,
+      });
+      getState().markUnseenAsToast(targetId);
+      const entries = getState().entries;
+      expect(entries.find((e) => e.id === targetId)?.seenAsToast).toBe(false);
+      expect(entries.find((e) => e.id !== targetId)?.seenAsToast).toBe(true);
+    });
+  });
+
+  describe("dismissEntry", () => {
+    it("removes the entry and decrements unreadCount when entry is unread", () => {
+      addEntry({ message: "missed" });
+      const id = getState().entries[0].id;
+      expect(getState().unreadCount).toBe(1);
+      getState().dismissEntry(id);
+      expect(getState().entries).toHaveLength(0);
+      expect(getState().unreadCount).toBe(0);
+    });
+
+    it("removes the entry without changing unreadCount when entry is read", () => {
+      getState().addEntry({ type: "info", message: "seen", seenAsToast: true });
+      addEntry({ message: "missed" });
+      expect(getState().unreadCount).toBe(1);
+      const seenId = getState().entries[1].id;
+      getState().dismissEntry(seenId);
+      expect(getState().entries).toHaveLength(1);
+      expect(getState().entries[0].message).toBe("missed");
+      expect(getState().unreadCount).toBe(1);
+    });
+
+    it("is a no-op when id does not exist", () => {
+      addEntry({ message: "test" });
+      getState().dismissEntry("nonexistent-id");
+      expect(getState().entries).toHaveLength(1);
+      expect(getState().unreadCount).toBe(1);
+    });
+
+    it("works correctly with markAllRead", () => {
+      addEntry({ message: "missed 1" });
+      addEntry({ message: "missed 2" });
+      const id = getState().entries[0].id;
+      getState().dismissEntry(id);
+      expect(getState().unreadCount).toBe(1);
+      expect(getState().entries[0].message).toBe("missed 1");
+      getState().markAllRead();
+      expect(getState().unreadCount).toBe(0);
+      expect(getState().entries).toHaveLength(1);
+      expect(getState().entries[0].message).toBe("missed 1");
     });
   });
 });

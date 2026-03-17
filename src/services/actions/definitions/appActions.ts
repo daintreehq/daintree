@@ -1,5 +1,6 @@
 import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
-import { SettingsTabSchema } from "./schemas";
+import type { SettingsNavTarget } from "@/components/Settings";
+import { SettingsNavTargetSchema } from "./schemas";
 import { z } from "zod";
 import { appClient } from "@/clients";
 
@@ -25,10 +26,9 @@ export function registerAppActions(actions: ActionRegistry, callbacks: ActionCal
     kind: "command",
     danger: "safe",
     scope: "renderer",
-    argsSchema: z.object({ tab: SettingsTabSchema }),
+    argsSchema: SettingsNavTargetSchema,
     run: async (args: unknown) => {
-      const { tab } = args as { tab: string };
-      callbacks.onOpenSettingsTab(tab);
+      callbacks.onOpenSettingsTab(args as SettingsNavTarget);
     },
   }));
 

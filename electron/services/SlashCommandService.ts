@@ -249,6 +249,148 @@ function getClaudeCommandSearchPaths(projectPath?: string): Array<{
   });
 }
 
+async function readSkillFrontmatter(
+  filePath: string
+): Promise<{ description: string | null; userInvocable: boolean }> {
+  let handle: FileHandle | null = null;
+  try {
+    handle = await fs.open(filePath, "r");
+    const buffer = Buffer.alloc(FRONTMATTER_MAX_BYTES);
+    const { bytesRead } = await handle.read(buffer, 0, FRONTMATTER_MAX_BYTES, 0);
+    const text = buffer.subarray(0, bytesRead).toString("utf8");
+
+    const normalized = text.startsWith("\uFEFF") ? text.slice(1) : text;
+    if (!normalized.startsWith("---")) return { description: null, userInvocable: true };
+
+    const endIndex = normalized.indexOf("\n---", 3);
+    if (endIndex === -1) return { description: null, userInvocable: true };
+
+    const frontmatter = normalized.slice(3, endIndex);
+
+    const descMatch = frontmatter.match(/^description:\s*(.+)$/m);
+    const description = descMatch ? stripWrappingQuotes(descMatch[1] ?? "") : null;
+
+    const invocableMatch = frontmatter.match(/^user-invocable:\s*(.+)$/m);
+    let userInvocable = true;
+    if (invocableMatch) {
+      const val = stripWrappingQuotes(invocableMatch[1] ?? "").toLowerCase();
+      if (val === "false" || val === "no") userInvocable = false;
+    }
+
+    return { description, userInvocable };
+  } catch {
+    return { description: null, userInvocable: true };
+  } finally {
+    await handle?.close().catch(() => {});
+  }
+}
+
+async function scanSkillDirectory(
+  dirPath: string,
+  scope: SlashCommand["scope"],
+  agentId: SlashCommand["agentId"]
+): Promise<SlashCommand[]> {
+  try {
+    const stats = await fs.stat(dirPath);
+    if (!stats.isDirectory()) return [];
+  } catch {
+    return [];
+  }
+
+  let entries: Array<import("fs").Dirent> = [];
+  try {
+    entries = await fs.readdir(dirPath, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+
+  const results: SlashCommand[] = [];
+
+  await Promise.all(
+    entries.map(async (entry) => {
+      if (entry.name.startsWith(".")) return;
+      if (!entry.isDirectory()) return;
+
+      const skillFile = path.join(dirPath, entry.name, "SKILL.md");
+      try {
+        const stat = await fs.stat(skillFile);
+        if (!stat.isFile()) return;
+      } catch {
+        return;
+      }
+
+      const { description, userInvocable } = await readSkillFrontmatter(skillFile);
+      if (!userInvocable) return;
+
+      const name = entry.name;
+      results.push({
+        id: `${scope}:skill:${name}`,
+        label: `/${name}`,
+        description: description ?? "Skill",
+        scope,
+        agentId,
+        sourcePath: skillFile,
+        kind: "skill",
+      });
+    })
+  );
+
+  return results;
+}
+
+function getClaudeSkillSearchPaths(projectPath?: string): Array<{
+  dirPath: string;
+  scope: SlashCommand["scope"];
+}> {
+  const dirs: Array<{ dirPath: string; scope: SlashCommand["scope"] }> = [];
+
+  if (projectPath) {
+    dirs.push({ dirPath: path.join(projectPath, ".claude", "skills"), scope: "project" });
+  }
+
+  const home = os.homedir();
+  dirs.push({ dirPath: path.join(home, ".claude", "skills"), scope: "user" });
+
+  const xdgConfigHome = process.env.XDG_CONFIG_HOME;
+  if (xdgConfigHome) {
+    dirs.push({ dirPath: path.join(xdgConfigHome, "claude", "skills"), scope: "user" });
+  } else {
+    dirs.push({ dirPath: path.join(home, ".config", "claude", "skills"), scope: "user" });
+  }
+
+  if (process.platform === "darwin") {
+    dirs.push({
+      dirPath: path.join(home, "Library", "Application Support", "Claude", "skills"),
+      scope: "global",
+    });
+    dirs.push({
+      dirPath: path.join("/", "Library", "Application Support", "Claude", "skills"),
+      scope: "global",
+    });
+  }
+
+  if (process.platform === "win32") {
+    const programData = process.env.ProgramData ?? "C:\\ProgramData";
+    dirs.push({ dirPath: path.join(programData, "Claude", "skills"), scope: "global" });
+  }
+
+  if (process.platform === "linux") {
+    dirs.push({ dirPath: path.join("/", "etc", "claude", "skills"), scope: "global" });
+    dirs.push({
+      dirPath: path.join("/", "usr", "local", "share", "claude", "skills"),
+      scope: "global",
+    });
+  }
+
+  const seen = new Set<string>();
+  return dirs.filter(({ dirPath }) => {
+    const key = path.resolve(dirPath);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 function getGeminiCommandSearchPaths(projectPath?: string): Array<{
   dirPath: string;
   scope: SlashCommand["scope"];
@@ -440,13 +582,26 @@ export class SlashCommandService {
     if (agentId === "claude") {
       for (const cmd of CLAUDE_BUILTIN_SLASH_COMMANDS) mergedByLabel.set(cmd.label, cmd);
 
-      const searchPaths = getClaudeCommandSearchPaths(effectiveProjectPath);
-      const scanned = await Promise.all(
-        searchPaths.map(({ dirPath, scope }) => scanCommandDirectory(dirPath, scope, "claude"))
-      );
+      const commandPaths = getClaudeCommandSearchPaths(effectiveProjectPath);
+      const skillPaths = getClaudeSkillSearchPaths(effectiveProjectPath);
+
+      const [scannedCommands, scannedSkills] = await Promise.all([
+        Promise.all(
+          commandPaths.map(({ dirPath, scope }) => scanCommandDirectory(dirPath, scope, "claude"))
+        ),
+        Promise.all(
+          skillPaths.map(({ dirPath, scope }) => scanSkillDirectory(dirPath, scope, "claude"))
+        ),
+      ]);
 
       for (const scope of priority) {
-        for (const list of scanned) {
+        for (const list of scannedCommands) {
+          for (const cmd of list) {
+            if (cmd.scope !== scope) continue;
+            mergedByLabel.set(cmd.label, cmd);
+          }
+        }
+        for (const list of scannedSkills) {
           for (const cmd of list) {
             if (cmd.scope !== scope) continue;
             mergedByLabel.set(cmd.label, cmd);

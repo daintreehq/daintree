@@ -1,6 +1,7 @@
 import { notify } from "@/lib/notify";
 import { useTerminalStore } from "@/store/terminalStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
+import { useUIStore } from "@/store/uiStore";
 
 export function fireWatchNotification(
   panelId: string,
@@ -10,24 +11,60 @@ export function fireWatchNotification(
 ): void {
   const label = panelTitle || panelId;
   const isWaiting = agentState === "waiting";
-  const title = isWaiting ? "Agent waiting for input" : "Agent task completed";
-  const message = isWaiting ? `${label} is waiting for your input` : `${label} finished its task`;
+
+  if (isWaiting) {
+    notify({
+      type: "warning",
+      priority: "high",
+      title: "Agent waiting for input",
+      message: `${label} is waiting for your input`,
+      duration: 12000,
+      correlationId: panelId,
+      action: {
+        label: "Go to terminal",
+        onClick: () => {
+          if (worktreeId) {
+            useWorktreeSelectionStore.getState().setActiveWorktree(worktreeId);
+          }
+          useTerminalStore.getState().setFocused(panelId, true);
+        },
+        actionId: "panel.focus",
+        actionArgs: { panelId, ...(worktreeId ? { worktreeId } : {}) },
+      },
+    });
+    return;
+  }
+
+  const navigateToPanel = (targetPanelId: string, targetWorktreeId?: string) => {
+    if (targetWorktreeId) {
+      useWorktreeSelectionStore.getState().setActiveWorktree(targetWorktreeId);
+    }
+    useTerminalStore.getState().setFocused(targetPanelId, true);
+  };
 
   notify({
-    type: isWaiting ? "warning" : "success",
+    type: "success",
     priority: "high",
-    title,
-    message,
-    duration: 12000,
+    title: "Agent task completed",
+    message: `${label} finished its task`,
+    duration: 5000,
     correlationId: panelId,
     action: {
       label: "Go to terminal",
-      onClick: () => {
-        if (worktreeId) {
-          useWorktreeSelectionStore.getState().setActiveWorktree(worktreeId);
-        }
-        useTerminalStore.getState().setFocused(panelId, true);
-      },
+      onClick: () => navigateToPanel(panelId, worktreeId),
+      actionId: "panel.focus",
+      actionArgs: { panelId, ...(worktreeId ? { worktreeId } : {}) },
+    },
+    coalesce: {
+      key: "agent:completed",
+      windowMs: 15000,
+      buildTitle: () => "Agent tasks completed",
+      buildMessage: (count) => `${count} agents finished their tasks`,
+      buildInboxMessage: (count) => `${count} agents finished their tasks`,
+      buildAction: () => ({
+        label: "View all",
+        onClick: () => useUIStore.getState().openNotificationCenter(),
+      }),
     },
   });
 }

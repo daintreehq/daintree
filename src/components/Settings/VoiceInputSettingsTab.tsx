@@ -460,7 +460,7 @@ function ApiKeyRow({
               }
             }}
             placeholder={value ? "Enter new key to replace" : placeholder}
-            className="w-full bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] px-3 py-1.5 pr-8 font-mono text-sm text-canopy-text placeholder:text-canopy-text/40 focus:outline-none focus:border-canopy-accent transition-colors"
+            className="w-full bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] px-3 py-1.5 pr-8 font-mono text-sm text-canopy-text placeholder:text-text-muted focus:outline-none focus:border-canopy-accent transition-colors"
             autoComplete="new-password"
             spellCheck={false}
             disabled={validation === "testing"}
@@ -721,7 +721,7 @@ function DictionarySection({
             }
           }}
           placeholder="Add term…"
-          className="flex-1 bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-canopy-text placeholder:text-canopy-text/40 focus:outline-none focus:border-canopy-accent transition-colors"
+          className="flex-1 bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-canopy-text placeholder:text-text-muted focus:outline-none focus:border-canopy-accent transition-colors"
         />
         <Button
           onClick={onAdd}
@@ -780,7 +780,7 @@ function CustomInstructionsRow({
         onChange={(e) => onChange(e.target.value)}
         rows={3}
         placeholder='e.g., "Always capitalize ProductName as one word"'
-        className="w-full bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] px-3 py-2 text-xs font-mono text-canopy-text placeholder:text-canopy-text/30 focus:outline-none focus:border-canopy-accent transition-colors resize-y"
+        className="w-full bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] px-3 py-2 text-xs font-mono text-canopy-text placeholder:text-text-muted focus:outline-none focus:border-canopy-accent transition-colors resize-y"
         spellCheck={false}
       />
       <p className="text-xs text-canopy-text/40">

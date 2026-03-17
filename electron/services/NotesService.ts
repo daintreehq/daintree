@@ -3,6 +3,7 @@ import path from "node:path";
 import { resilientWriteFile, resilientRename, resilientUnlink } from "../utils/fs.js";
 import matter from "gray-matter";
 import { nanoid } from "nanoid";
+import { normalizeTags } from "../../shared/utils/noteTags.js";
 
 export interface NoteMetadata {
   id: string;
@@ -10,6 +11,7 @@ export interface NoteMetadata {
   scope: "worktree" | "project";
   worktreeId?: string;
   createdAt: number;
+  tags?: string[];
 }
 
 export interface NoteContent {
@@ -28,6 +30,7 @@ export interface NoteListItem {
   createdAt: number;
   modifiedAt: number;
   preview: string;
+  tags: string[];
 }
 
 export interface SearchResult {
@@ -140,12 +143,15 @@ export class NotesService {
       return null;
     }
 
+    const tags = normalizeTags((data as Record<string, unknown>).tags);
+
     return {
       id: candidate.id,
       title: candidate.title,
       scope,
       ...(candidate.worktreeId !== undefined && { worktreeId: candidate.worktreeId }),
       createdAt: candidate.createdAt,
+      ...(tags.length > 0 && { tags }),
     };
   }
 
@@ -200,9 +206,14 @@ export class NotesService {
         fs.stat(absolutePath),
       ]);
       const { data, content } = matter(fileContent);
+      const rawMetadata = data as NoteMetadata;
+      const tags = normalizeTags((data as Record<string, unknown>).tags);
 
       return {
-        metadata: data as NoteMetadata,
+        metadata: {
+          ...rawMetadata,
+          ...(tags.length > 0 ? { tags } : { tags: undefined }),
+        },
         content: content.replace(/^\n/, ""),
         path: notePath,
         lastModified: stats.mtimeMs,
@@ -241,9 +252,15 @@ export class NotesService {
       }
     }
 
-    // Filter out undefined values to prevent YAML serialization errors
+    // Normalize tags at write time
+    const normalizedTags = normalizeTags(metadata.tags);
+
+    // Filter out undefined values and empty tags to prevent YAML serialization errors
     const cleanMetadata = Object.fromEntries(
-      Object.entries(metadata).filter(([, v]) => v !== undefined)
+      Object.entries({
+        ...metadata,
+        tags: normalizedTags.length > 0 ? normalizedTags : undefined,
+      }).filter(([, v]) => v !== undefined)
     );
 
     const fileContent = matter.stringify(content, cleanMetadata);
@@ -292,6 +309,7 @@ export class NotesService {
             createdAt: metadata.createdAt,
             modifiedAt: stats.mtimeMs,
             preview: this.extractPreview(content),
+            tags: metadata.tags ?? [],
           });
         } catch (error) {
           console.error(`[NotesService] Failed to read note ${file}:`, error);
@@ -339,11 +357,14 @@ export class NotesService {
             continue;
           }
 
-          // Search in title and content
+          const tags = metadata.tags ?? [];
+
+          // Search in title, content, and tags
           const titleMatch = metadata.title.toLowerCase().includes(lowerQuery);
           const contentMatch = content.toLowerCase().includes(lowerQuery);
+          const tagMatch = tags.some((t) => t.includes(lowerQuery));
 
-          if (titleMatch || contentMatch) {
+          if (titleMatch || contentMatch || tagMatch) {
             matchingNotes.push({
               id: metadata.id,
               title: metadata.title,
@@ -353,6 +374,7 @@ export class NotesService {
               createdAt: metadata.createdAt,
               modifiedAt: stats.mtimeMs,
               preview: this.extractPreview(content),
+              tags,
             });
           }
         } catch (error) {

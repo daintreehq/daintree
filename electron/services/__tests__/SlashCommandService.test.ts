@@ -13,6 +13,25 @@ async function writeFile(filePath: string, contents: string): Promise<void> {
   await fs.writeFile(filePath, contents, "utf8");
 }
 
+function overrideHome(dir: string): Record<string, string | undefined> {
+  const prev: Record<string, string | undefined> = {
+    HOME: process.env.HOME,
+    USERPROFILE: process.env.USERPROFILE,
+    XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME,
+  };
+  process.env.HOME = dir;
+  process.env.USERPROFILE = dir;
+  delete process.env.XDG_CONFIG_HOME;
+  return prev;
+}
+
+function restoreHome(prev: Record<string, string | undefined>): void {
+  for (const [key, val] of Object.entries(prev)) {
+    if (val !== undefined) process.env[key] = val;
+    else delete process.env[key];
+  }
+}
+
 describe("SlashCommandService", () => {
   it("includes /add-dir in Claude built-ins", async () => {
     const homeRoot = await makeTempDir();
@@ -278,6 +297,236 @@ Create an issue.
       expect(cmd?.description).toBe("Create a GitHub issue");
     } finally {
       await fs.rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("discovers project skills from .claude/skills/", async () => {
+    const homeRoot = await makeTempDir();
+    const root = await makeTempDir();
+    const service = new SlashCommandService();
+    const prev = overrideHome(homeRoot);
+
+    try {
+      await fs.mkdir(path.join(root, ".git"));
+
+      await writeFile(
+        path.join(root, ".claude", "skills", "commit", "SKILL.md"),
+        `---
+description: "Create a conventional commit"
+---
+
+Commit instructions here.
+`
+      );
+
+      const commands = await service.list("claude", root);
+      const skill = commands.find((c) => c.label === "/commit" && c.kind === "skill");
+
+      expect(skill).toBeDefined();
+      expect(skill?.scope).toBe("project");
+      expect(skill?.description).toBe("Create a conventional commit");
+      expect(skill?.kind).toBe("skill");
+    } finally {
+      restoreHome(prev);
+      await fs.rm(homeRoot, { recursive: true, force: true });
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("discovers user skills from ~/.claude/skills/", async () => {
+    const homeRoot = await makeTempDir();
+    const projectRoot = await makeTempDir();
+    const service = new SlashCommandService();
+    const prev = overrideHome(homeRoot);
+
+    try {
+      await fs.mkdir(path.join(projectRoot, ".git"));
+
+      await writeFile(
+        path.join(homeRoot, ".claude", "skills", "research", "SKILL.md"),
+        `---
+description: "Deep research skill"
+---
+
+Research things.
+`
+      );
+
+      const commands = await service.list("claude", projectRoot);
+      const skill = commands.find((c) => c.label === "/research" && c.kind === "skill");
+
+      expect(skill).toBeDefined();
+      expect(skill?.scope).toBe("user");
+      expect(skill?.description).toBe("Deep research skill");
+    } finally {
+      restoreHome(prev);
+      await fs.rm(homeRoot, { recursive: true, force: true });
+      await fs.rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("skill wins over same-scope command with the same label", async () => {
+    const homeRoot = await makeTempDir();
+    const root = await makeTempDir();
+    const service = new SlashCommandService();
+    const prev = overrideHome(homeRoot);
+
+    try {
+      await fs.mkdir(path.join(root, ".git"));
+
+      await writeFile(
+        path.join(root, ".claude", "commands", "deploy.md"),
+        `---
+description: "Deploy command"
+---
+
+Deploy via command.
+`
+      );
+
+      await writeFile(
+        path.join(root, ".claude", "skills", "deploy", "SKILL.md"),
+        `---
+description: "Deploy skill"
+---
+
+Deploy via skill.
+`
+      );
+
+      const commands = await service.list("claude", root);
+      const deploy = commands.find((c) => c.label === "/deploy");
+
+      expect(deploy).toBeDefined();
+      expect(deploy?.scope).toBe("project");
+      expect(deploy?.kind).toBe("skill");
+      expect(deploy?.description).toBe("Deploy skill");
+    } finally {
+      restoreHome(prev);
+      await fs.rm(homeRoot, { recursive: true, force: true });
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("excludes skills with user-invocable: false", async () => {
+    const homeRoot = await makeTempDir();
+    const root = await makeTempDir();
+    const service = new SlashCommandService();
+    const prev = overrideHome(homeRoot);
+
+    try {
+      await fs.mkdir(path.join(root, ".git"));
+
+      await writeFile(
+        path.join(root, ".claude", "skills", "internal", "SKILL.md"),
+        `---
+description: "Internal only skill"
+user-invocable: false
+---
+
+Not for users.
+`
+      );
+
+      const commands = await service.list("claude", root);
+      const internal = commands.find((c) => c.label === "/internal");
+
+      expect(internal).toBeUndefined();
+    } finally {
+      restoreHome(prev);
+      await fs.rm(homeRoot, { recursive: true, force: true });
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("handles missing skills directory gracefully", async () => {
+    const root = await makeTempDir();
+    const service = new SlashCommandService();
+    const prev = overrideHome(root);
+
+    try {
+      await fs.mkdir(path.join(root, ".git"));
+
+      const commands = await service.list("claude", root);
+      expect(commands.length).toBeGreaterThan(0);
+      const skills = commands.filter((c) => c.kind === "skill");
+      expect(skills).toHaveLength(0);
+    } finally {
+      restoreHome(prev);
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not recurse into nested skill subdirectories", async () => {
+    const homeRoot = await makeTempDir();
+    const root = await makeTempDir();
+    const service = new SlashCommandService();
+    const prev = overrideHome(homeRoot);
+
+    try {
+      await fs.mkdir(path.join(root, ".git"));
+
+      await writeFile(
+        path.join(root, ".claude", "skills", "deploy", "SKILL.md"),
+        `---
+description: "Deploy skill"
+---
+
+Deploy.
+`
+      );
+
+      await writeFile(
+        path.join(root, ".claude", "skills", "git", "work-issue", "SKILL.md"),
+        `---
+description: "Should not appear"
+---
+
+Nested.
+`
+      );
+
+      const commands = await service.list("claude", root);
+      const deploy = commands.find((c) => c.label === "/deploy" && c.kind === "skill");
+      const nested = commands.find((c) => c.label === "/work-issue" && c.kind === "skill");
+      const nestedAlt = commands.find((c) => c.label === "/git:work-issue" && c.kind === "skill");
+
+      expect(deploy).toBeDefined();
+      expect(nested).toBeUndefined();
+      expect(nestedAlt).toBeUndefined();
+    } finally {
+      restoreHome(prev);
+      await fs.rm(homeRoot, { recursive: true, force: true });
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("falls back to 'Skill' description when frontmatter is missing", async () => {
+    const homeRoot = await makeTempDir();
+    const root = await makeTempDir();
+    const service = new SlashCommandService();
+    const prev = overrideHome(homeRoot);
+
+    try {
+      await fs.mkdir(path.join(root, ".git"));
+
+      await writeFile(
+        path.join(root, ".claude", "skills", "simple", "SKILL.md"),
+        `# Simple Skill
+
+Just some instructions without frontmatter.
+`
+      );
+
+      const commands = await service.list("claude", root);
+      const skill = commands.find((c) => c.label === "/simple" && c.kind === "skill");
+
+      expect(skill).toBeDefined();
+      expect(skill?.description).toBe("Skill");
+    } finally {
+      restoreHome(prev);
+      await fs.rm(homeRoot, { recursive: true, force: true });
+      await fs.rm(root, { recursive: true, force: true });
     }
   });
 

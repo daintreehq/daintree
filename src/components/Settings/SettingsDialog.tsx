@@ -1,4 +1,12 @@
-import { useState, useEffect, useDeferredValue, useMemo, useRef, useCallback } from "react";
+import {
+  useState,
+  useEffect,
+  useDeferredValue,
+  useMemo,
+  useRef,
+  useCallback,
+  type KeyboardEvent as ReactKeyboardEvent,
+} from "react";
 import {
   useSidecarStore,
   usePerformanceModeStore,
@@ -27,8 +35,11 @@ import {
   Image,
   Search,
   ChevronRight,
+  KeyRound,
+  Shield,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useVerticalScrollShadows } from "@/hooks/useVerticalScrollShadows";
 import { appClient } from "@/clients";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { AgentSettings } from "./AgentSettings";
@@ -46,8 +57,16 @@ import { EditorIntegrationTab } from "./EditorIntegrationTab";
 import { ImageViewerTab } from "./ImageViewerTab";
 import { VoiceInputSettingsTab } from "./VoiceInputSettingsTab";
 import { McpServerSettingsTab } from "./McpServerSettingsTab";
+import { EnvironmentSettingsTab } from "./EnvironmentSettingsTab";
+import { PrivacyDataTab } from "./PrivacyDataTab";
 import { SETTINGS_SEARCH_INDEX } from "./settingsSearchIndex";
-import { filterSettings, countMatchesPerTab, HighlightText } from "./settingsSearchUtils";
+import {
+  filterSettings,
+  countMatchesPerTab,
+  HighlightText,
+  parseQuery,
+} from "./settingsSearchUtils";
+import { SCROLLBACK_DEFAULT } from "@shared/config/scrollback";
 
 export interface SettingsNavTarget {
   tab: SettingsTab;
@@ -59,6 +78,8 @@ interface SettingsDialogProps {
   isOpen: boolean;
   onClose: () => void;
   defaultTab?: SettingsTab;
+  defaultSubtab?: string;
+  defaultSectionId?: string;
   onSettingsChange?: () => void;
 }
 
@@ -77,12 +98,16 @@ export type SettingsTab =
   | "imageViewer"
   | "voice"
   | "mcp"
+  | "environment"
+  | "privacy"
   | "troubleshooting";
 
 export function SettingsDialog({
   isOpen,
   onClose,
   defaultTab,
+  defaultSubtab,
+  defaultSectionId,
   onSettingsChange,
 }: SettingsDialogProps) {
   const [activeTab, setActiveTab] = useState<SettingsTab>(defaultTab ?? "general");
@@ -101,11 +126,18 @@ export function SettingsDialog({
   const [appVersion, setAppVersion] = useState<string>("Loading...");
 
   useEffect(() => {
-    if (isOpen && defaultTab && defaultTab !== activeTab) {
-      setActiveTab(defaultTab);
+    if (isOpen && defaultTab) {
+      if (defaultTab !== activeTab) {
+        setActiveTab(defaultTab);
+      }
+      if (defaultSubtab !== undefined) {
+        setActiveSubtabs((prev) => ({ ...prev, [defaultTab]: defaultSubtab }));
+      }
+      setScrollToSection(defaultSectionId ?? null);
+      setSearchQuery("");
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isOpen, defaultTab]);
+  }, [isOpen, defaultTab, defaultSubtab, defaultSectionId]);
 
   useEffect(() => {
     if (isOpen) {
@@ -149,10 +181,57 @@ export function SettingsDialog({
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [isOpen]);
 
+  // Modified-from-default tracking
+  const performanceMode = usePerformanceModeStore((s) => s.performanceMode);
+  const scrollbackLines = useScrollbackStore((s) => s.scrollbackLines);
+  const layoutConfig = useLayoutConfigStore((s) => s.layoutConfig);
+  const hybridInputEnabled = useTerminalInputStore((s) => s.hybridInputEnabled);
+  const hybridInputAutoFocus = useTerminalInputStore((s) => s.hybridInputAutoFocus);
+  const twoPaneSplitConfig = useTwoPaneSplitStore((s) => s.config);
+  const showProjectPulse = usePreferencesStore((s) => s.showProjectPulse);
+  const showDeveloperTools = usePreferencesStore((s) => s.showDeveloperTools);
+
+  const modifiedTabs = useMemo(() => {
+    const tabs = new Set<SettingsTab>();
+
+    // General defaults: showProjectPulse=true, showDeveloperTools=false
+    if (!showProjectPulse || showDeveloperTools) tabs.add("general");
+
+    // Terminal defaults: performanceMode=false, scrollback=SCROLLBACK_DEFAULT, strategy=automatic,
+    // hybridInput=true, hybridAutoFocus=true, twoPaneSplit.enabled=true, preferPreview=false, ratio=0.5
+    if (
+      performanceMode ||
+      scrollbackLines !== SCROLLBACK_DEFAULT ||
+      layoutConfig.strategy !== "automatic" ||
+      !hybridInputEnabled ||
+      !hybridInputAutoFocus ||
+      !twoPaneSplitConfig.enabled ||
+      twoPaneSplitConfig.preferPreview ||
+      Math.round(twoPaneSplitConfig.defaultRatio * 100) !== 50
+    ) {
+      tabs.add("terminal");
+    }
+
+    return tabs;
+  }, [
+    showProjectPulse,
+    showDeveloperTools,
+    performanceMode,
+    scrollbackLines,
+    layoutConfig.strategy,
+    hybridInputEnabled,
+    hybridInputAutoFocus,
+    twoPaneSplitConfig.enabled,
+    twoPaneSplitConfig.preferPreview,
+    twoPaneSplitConfig.defaultRatio,
+  ]);
+
   const searchResults = useMemo(
-    () => filterSettings(SETTINGS_SEARCH_INDEX, deferredQuery),
-    [deferredQuery]
+    () => filterSettings(SETTINGS_SEARCH_INDEX, deferredQuery, { modifiedTabs }),
+    [deferredQuery, modifiedTabs]
   );
+
+  const cleanSearchQuery = useMemo(() => parseQuery(deferredQuery).cleanQuery, [deferredQuery]);
 
   const matchCounts = useMemo(() => countMatchesPerTab(searchResults), [searchResults]);
 
@@ -181,6 +260,7 @@ export function SettingsDialog({
       if (searchQuery) {
         e.stopPropagation();
         setSearchQuery("");
+      } else {
         searchInputRef.current?.blur();
       }
     } else if (isSearching && searchResults.length > 0) {
@@ -218,57 +298,50 @@ export function SettingsDialog({
     };
   }, [scrollToSection, activeTab, isSearching]);
 
-  // Modified-from-default tracking
-  const performanceMode = usePerformanceModeStore((s) => s.performanceMode);
-  const scrollbackLines = useScrollbackStore((s) => s.scrollbackLines);
-  const layoutConfig = useLayoutConfigStore((s) => s.layoutConfig);
-  const hybridInputEnabled = useTerminalInputStore((s) => s.hybridInputEnabled);
-  const hybridInputAutoFocus = useTerminalInputStore((s) => s.hybridInputAutoFocus);
-  const twoPaneSplitConfig = useTwoPaneSplitStore((s) => s.config);
-  const showProjectPulse = usePreferencesStore((s) => s.showProjectPulse);
-  const showDeveloperTools = usePreferencesStore((s) => s.showDeveloperTools);
-
-  const modifiedTabs = useMemo(() => {
-    const tabs = new Set<SettingsTab>();
-
-    // General defaults: showProjectPulse=true, showDeveloperTools=false
-    if (!showProjectPulse || showDeveloperTools) tabs.add("general");
-
-    // Terminal defaults: performanceMode=false, scrollback=5000, strategy=automatic,
-    // hybridInput=true, hybridAutoFocus=true, twoPaneSplit.enabled=true, preferPreview=false, ratio=0.5
-    if (
-      performanceMode ||
-      scrollbackLines !== 5000 ||
-      layoutConfig.strategy !== "automatic" ||
-      !hybridInputEnabled ||
-      !hybridInputAutoFocus ||
-      !twoPaneSplitConfig.enabled ||
-      twoPaneSplitConfig.preferPreview ||
-      Math.round(twoPaneSplitConfig.defaultRatio * 100) !== 50
-    ) {
-      tabs.add("terminal");
-    }
-
-    return tabs;
-  }, [
-    showProjectPulse,
-    showDeveloperTools,
-    performanceMode,
-    scrollbackLines,
-    layoutConfig.strategy,
-    hybridInputEnabled,
-    hybridInputAutoFocus,
-    twoPaneSplitConfig.enabled,
-    twoPaneSplitConfig.preferPreview,
-    twoPaneSplitConfig.defaultRatio,
-  ]);
-
   const handleNavSelect = useCallback((tab: SettingsTab) => {
     setActiveTab(tab);
     setSearchQuery("");
     setScrollToSection(null);
-    // Subtab memory is preserved per-tab — activeSubtabs retains the last selected subtab
   }, []);
+
+  const tablistRef = useRef<HTMLDivElement>(null);
+  const { canScrollUp, canScrollDown } = useVerticalScrollShadows(tablistRef);
+
+  const handleTablistKeyDown = useCallback(
+    (e: ReactKeyboardEvent<HTMLDivElement>) => {
+      const container = tablistRef.current;
+      if (!container) return;
+
+      const tabs = Array.from(container.querySelectorAll<HTMLElement>('[role="tab"]'));
+      const focusedIndex = tabs.indexOf(document.activeElement as HTMLElement);
+      if (focusedIndex === -1) return;
+
+      let nextIndex: number | null = null;
+
+      switch (e.key) {
+        case "ArrowDown":
+          nextIndex = (focusedIndex + 1) % tabs.length;
+          break;
+        case "ArrowUp":
+          nextIndex = (focusedIndex - 1 + tabs.length) % tabs.length;
+          break;
+        case "Home":
+          nextIndex = 0;
+          break;
+        case "End":
+          nextIndex = tabs.length - 1;
+          break;
+        default:
+          return;
+      }
+
+      e.preventDefault();
+      tabs[nextIndex].focus();
+      const tabId = tabs[nextIndex].dataset.tab as SettingsTab | undefined;
+      if (tabId) handleNavSelect(tabId);
+    },
+    [handleNavSelect]
+  );
 
   const tabTitles: Record<SettingsTab, string> = {
     general: "General",
@@ -285,6 +358,8 @@ export function SettingsDialog({
     imageViewer: "Image Viewer",
     voice: "Voice Input",
     mcp: "MCP Server",
+    environment: "Environment Variables",
+    privacy: "Privacy & Data",
     troubleshooting: "Troubleshooting",
   };
 
@@ -303,6 +378,8 @@ export function SettingsDialog({
     imageViewer: <Image className="w-5 h-5 text-canopy-text/60" />,
     voice: <Mic className="w-5 h-5 text-canopy-text/60" />,
     mcp: <Plug className="w-5 h-5 text-canopy-text/60" />,
+    environment: <KeyRound className="w-5 h-5 text-canopy-text/60" />,
+    privacy: <Shield className="w-5 h-5 text-canopy-text/60" />,
     troubleshooting: <LifeBuoy className="w-5 h-5 text-canopy-text/60" />,
   };
 
@@ -318,8 +395,17 @@ export function SettingsDialog({
         <div className="w-48 border-r border-canopy-border bg-canopy-bg/50 p-3 flex flex-col shrink-0">
           <h2 className="text-sm font-semibold text-canopy-text mb-2 px-2">Settings</h2>
 
-          <div className="relative mb-2">
-            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-canopy-text/40 pointer-events-none" />
+          <div
+            className={cn(
+              "flex items-center gap-1.5 px-2 py-1.5 mb-2 rounded-[var(--radius-md)]",
+              "bg-canopy-bg border border-canopy-border",
+              "focus-within:border-canopy-accent focus-within:ring-1 focus-within:ring-canopy-accent/20"
+            )}
+          >
+            <Search
+              className="w-3.5 h-3.5 shrink-0 text-canopy-text/40 pointer-events-none"
+              aria-hidden="true"
+            />
             <input
               ref={searchInputRef}
               type="text"
@@ -328,20 +414,17 @@ export function SettingsDialog({
               onChange={(e) => setSearchQuery(e.target.value)}
               onKeyDown={handleSearchKeyDown}
               aria-label="Search settings"
-              className={cn(
-                "w-full pl-7 pr-6 py-1.5 text-xs rounded-[var(--radius-md)] border transition-colors",
-                "bg-canopy-bg border-canopy-border text-canopy-text placeholder:text-canopy-text/40",
-                "focus:outline-none focus:border-canopy-accent"
-              )}
+              className="flex-1 min-w-0 text-xs bg-transparent text-canopy-text placeholder:text-text-muted focus:outline-none"
             />
             {searchQuery && (
               <button
+                type="button"
                 onClick={() => {
                   setSearchQuery("");
                   searchInputRef.current?.focus();
                 }}
                 aria-label="Clear search"
-                className="absolute right-2 top-1/2 -translate-y-1/2 text-canopy-text/40 hover:text-canopy-text transition-colors"
+                className="flex items-center justify-center w-5 h-5 rounded shrink-0 text-canopy-text/40 hover:text-canopy-text"
               >
                 <X className="w-3 h-3" />
               </button>
@@ -356,159 +439,198 @@ export function SettingsDialog({
             </p>
           )}
 
-          <nav className="flex-1 overflow-y-auto space-y-3" aria-label="Settings sections">
-            <NavGroup label="General">
-              <NavItem
-                tab="general"
-                icon={<Settings2 className="w-4 h-4" />}
-                label="General"
-                activeTab={activeTab}
-                isSearching={isSearching}
-                matchCount={matchCounts.general}
-                modified={modifiedTabs.has("general")}
-                onSelect={handleNavSelect}
+          <div className="relative flex-1 min-h-0 overflow-hidden">
+            {canScrollUp && (
+              <div
+                aria-hidden="true"
+                className="pointer-events-none absolute inset-x-0 top-0 h-8 bg-gradient-to-b from-canopy-bg to-transparent z-10"
               />
-              <NavItem
-                tab="terminalAppearance"
-                icon={<Terminal className="w-4 h-4" />}
-                label="Appearance"
-                activeTab={activeTab}
-                isSearching={isSearching}
-                matchCount={matchCounts.terminalAppearance}
-                onSelect={handleNavSelect}
-              />
-              <NavItem
-                tab="keyboard"
-                icon={<Keyboard className="w-4 h-4" />}
-                label="Keyboard"
-                activeTab={activeTab}
-                isSearching={isSearching}
-                matchCount={matchCounts.keyboard}
-                onSelect={handleNavSelect}
-              />
-              <NavItem
-                tab="notifications"
-                icon={<Bell className="w-4 h-4" />}
-                label="Notifications"
-                activeTab={activeTab}
-                isSearching={isSearching}
-                matchCount={matchCounts.notifications}
-                onSelect={handleNavSelect}
-              />
-            </NavGroup>
+            )}
+            <div
+              ref={tablistRef}
+              role="tablist"
+              aria-orientation="vertical"
+              aria-label="Settings sections"
+              onKeyDown={handleTablistKeyDown}
+              className="h-full overflow-y-auto space-y-3"
+            >
+              <NavGroup label="General">
+                <NavItem
+                  tab="general"
+                  icon={<Settings2 className="w-4 h-4" />}
+                  label="General"
+                  activeTab={activeTab}
+                  isSearching={isSearching}
+                  matchCount={matchCounts.general}
+                  modified={modifiedTabs.has("general")}
+                  onSelect={handleNavSelect}
+                />
+                <NavItem
+                  tab="terminalAppearance"
+                  icon={<Terminal className="w-4 h-4" />}
+                  label="Appearance"
+                  activeTab={activeTab}
+                  isSearching={isSearching}
+                  matchCount={matchCounts.terminalAppearance}
+                  onSelect={handleNavSelect}
+                />
+                <NavItem
+                  tab="keyboard"
+                  icon={<Keyboard className="w-4 h-4" />}
+                  label="Keyboard"
+                  activeTab={activeTab}
+                  isSearching={isSearching}
+                  matchCount={matchCounts.keyboard}
+                  onSelect={handleNavSelect}
+                />
+                <NavItem
+                  tab="notifications"
+                  icon={<Bell className="w-4 h-4" />}
+                  label="Notifications"
+                  activeTab={activeTab}
+                  isSearching={isSearching}
+                  matchCount={matchCounts.notifications}
+                  onSelect={handleNavSelect}
+                />
+                <NavItem
+                  tab="privacy"
+                  icon={<Shield className="w-4 h-4" />}
+                  label="Privacy & Data"
+                  activeTab={activeTab}
+                  isSearching={isSearching}
+                  matchCount={matchCounts.privacy}
+                  onSelect={handleNavSelect}
+                />
+              </NavGroup>
 
-            <NavGroup label="Terminal">
-              <NavItem
-                tab="terminal"
-                icon={<LayoutGrid className="w-4 h-4" />}
-                label="Panel Grid"
-                activeTab={activeTab}
-                isSearching={isSearching}
-                matchCount={matchCounts.terminal}
-                modified={modifiedTabs.has("terminal")}
-                onSelect={handleNavSelect}
-              />
-              <NavItem
-                tab="worktree"
-                icon={<GitBranch className="w-4 h-4" />}
-                label="Worktree"
-                activeTab={activeTab}
-                isSearching={isSearching}
-                matchCount={matchCounts.worktree}
-                onSelect={handleNavSelect}
-              />
-              <NavItem
-                tab="toolbar"
-                icon={<SettingsIcon className="w-4 h-4" />}
-                label="Toolbar"
-                activeTab={activeTab}
-                isSearching={isSearching}
-                matchCount={matchCounts.toolbar}
-                onSelect={handleNavSelect}
-              />
-            </NavGroup>
+              <NavGroup label="Terminal">
+                <NavItem
+                  tab="terminal"
+                  icon={<LayoutGrid className="w-4 h-4" />}
+                  label="Panel Grid"
+                  activeTab={activeTab}
+                  isSearching={isSearching}
+                  matchCount={matchCounts.terminal}
+                  modified={modifiedTabs.has("terminal")}
+                  onSelect={handleNavSelect}
+                />
+                <NavItem
+                  tab="worktree"
+                  icon={<GitBranch className="w-4 h-4" />}
+                  label="Worktree"
+                  activeTab={activeTab}
+                  isSearching={isSearching}
+                  matchCount={matchCounts.worktree}
+                  onSelect={handleNavSelect}
+                />
+                <NavItem
+                  tab="toolbar"
+                  icon={<SettingsIcon className="w-4 h-4" />}
+                  label="Toolbar"
+                  activeTab={activeTab}
+                  isSearching={isSearching}
+                  matchCount={matchCounts.toolbar}
+                  onSelect={handleNavSelect}
+                />
+                <NavItem
+                  tab="environment"
+                  icon={<KeyRound className="w-4 h-4" />}
+                  label="Environment"
+                  activeTab={activeTab}
+                  isSearching={isSearching}
+                  matchCount={matchCounts.environment}
+                  onSelect={handleNavSelect}
+                />
+              </NavGroup>
 
-            <NavGroup label="Integrations">
-              <NavItem
-                tab="agents"
-                icon={<Waypoints className="w-4 h-4" />}
-                label="CLI Agents"
-                activeTab={activeTab}
-                isSearching={isSearching}
-                matchCount={matchCounts.agents}
-                onSelect={handleNavSelect}
-              />
-              <NavItem
-                tab="github"
-                icon={<Github className="w-4 h-4" />}
-                label="GitHub"
-                activeTab={activeTab}
-                isSearching={isSearching}
-                matchCount={matchCounts.github}
-                onSelect={handleNavSelect}
-              />
-              <NavItem
-                tab="editor"
-                icon={<Code className="w-4 h-4" />}
-                label="Editor"
-                activeTab={activeTab}
-                isSearching={isSearching}
-                matchCount={matchCounts.editor}
-                onSelect={handleNavSelect}
-              />
-              <NavItem
-                tab="imageViewer"
-                icon={<Image className="w-4 h-4" />}
-                label="Image Viewer"
-                activeTab={activeTab}
-                isSearching={isSearching}
-                matchCount={matchCounts.imageViewer}
-                onSelect={handleNavSelect}
-              />
-              <NavItem
-                tab="sidecar"
-                icon={<PanelRight className="w-4 h-4" />}
-                label="Sidecar"
-                activeTab={activeTab}
-                isSearching={isSearching}
-                matchCount={matchCounts.sidecar}
-                onSelect={handleNavSelect}
-              />
-              <NavItem
-                tab="mcp"
-                icon={<Plug className="w-4 h-4" />}
-                label="MCP Server"
-                activeTab={activeTab}
-                isSearching={isSearching}
-                matchCount={matchCounts.mcp}
-                onSelect={handleNavSelect}
-              />
-            </NavGroup>
+              <NavGroup label="Integrations">
+                <NavItem
+                  tab="agents"
+                  icon={<Waypoints className="w-4 h-4" />}
+                  label="CLI Agents"
+                  activeTab={activeTab}
+                  isSearching={isSearching}
+                  matchCount={matchCounts.agents}
+                  onSelect={handleNavSelect}
+                />
+                <NavItem
+                  tab="github"
+                  icon={<Github className="w-4 h-4" />}
+                  label="GitHub"
+                  activeTab={activeTab}
+                  isSearching={isSearching}
+                  matchCount={matchCounts.github}
+                  onSelect={handleNavSelect}
+                />
+                <NavItem
+                  tab="editor"
+                  icon={<Code className="w-4 h-4" />}
+                  label="Editor"
+                  activeTab={activeTab}
+                  isSearching={isSearching}
+                  matchCount={matchCounts.editor}
+                  onSelect={handleNavSelect}
+                />
+                <NavItem
+                  tab="imageViewer"
+                  icon={<Image className="w-4 h-4" />}
+                  label="Image Viewer"
+                  activeTab={activeTab}
+                  isSearching={isSearching}
+                  matchCount={matchCounts.imageViewer}
+                  onSelect={handleNavSelect}
+                />
+                <NavItem
+                  tab="sidecar"
+                  icon={<PanelRight className="w-4 h-4" />}
+                  label="Sidecar"
+                  activeTab={activeTab}
+                  isSearching={isSearching}
+                  matchCount={matchCounts.sidecar}
+                  onSelect={handleNavSelect}
+                />
+                <NavItem
+                  tab="mcp"
+                  icon={<Plug className="w-4 h-4" />}
+                  label="MCP Server"
+                  activeTab={activeTab}
+                  isSearching={isSearching}
+                  matchCount={matchCounts.mcp}
+                  onSelect={handleNavSelect}
+                />
+              </NavGroup>
 
-            <NavGroup label="Input">
-              <NavItem
-                tab="voice"
-                icon={<Mic className="w-4 h-4" />}
-                label="Voice Input"
-                activeTab={activeTab}
-                isSearching={isSearching}
-                matchCount={matchCounts.voice}
-                onSelect={handleNavSelect}
-              />
-            </NavGroup>
+              <NavGroup label="Input">
+                <NavItem
+                  tab="voice"
+                  icon={<Mic className="w-4 h-4" />}
+                  label="Voice Input"
+                  activeTab={activeTab}
+                  isSearching={isSearching}
+                  matchCount={matchCounts.voice}
+                  onSelect={handleNavSelect}
+                />
+              </NavGroup>
 
-            <NavGroup label="Support">
-              <NavItem
-                tab="troubleshooting"
-                icon={<LifeBuoy className="w-4 h-4" />}
-                label="Troubleshooting"
-                activeTab={activeTab}
-                isSearching={isSearching}
-                matchCount={matchCounts.troubleshooting}
-                onSelect={handleNavSelect}
+              <NavGroup label="Support">
+                <NavItem
+                  tab="troubleshooting"
+                  icon={<LifeBuoy className="w-4 h-4" />}
+                  label="Troubleshooting"
+                  activeTab={activeTab}
+                  isSearching={isSearching}
+                  matchCount={matchCounts.troubleshooting}
+                  onSelect={handleNavSelect}
+                />
+              </NavGroup>
+            </div>
+            {canScrollDown && (
+              <div
+                aria-hidden="true"
+                className="pointer-events-none absolute inset-x-0 bottom-0 h-8 bg-gradient-to-t from-canopy-bg to-transparent z-10"
               />
-            </NavGroup>
-          </nav>
+            )}
+          </div>
 
           <div className="pt-2 mt-2 border-t border-canopy-border px-2">
             <span className="text-[10px] text-canopy-text/30 font-mono">{appVersion}</span>
@@ -541,38 +663,92 @@ export function SettingsDialog({
 
           <div className="p-6 overflow-y-auto flex-1">
             {isSearching ? (
-              <SearchResults
-                results={searchResults}
-                query={deferredQuery}
-                onResultClick={handleResultClick}
-                activeIndex={activeResultIndex}
-              />
+              <div role="region" aria-label="Search results">
+                <SearchResults
+                  results={searchResults}
+                  query={deferredQuery}
+                  cleanQuery={cleanSearchQuery}
+                  onResultClick={handleResultClick}
+                  activeIndex={activeResultIndex}
+                />
+              </div>
             ) : (
               <>
-                <div className={activeTab === "general" ? "" : "hidden"}>
+                <div
+                  role="tabpanel"
+                  id="settings-panel-general"
+                  aria-labelledby="settings-tab-general"
+                  tabIndex={0}
+                  className={activeTab === "general" ? "" : "hidden"}
+                >
                   <GeneralTab
                     appVersion={appVersion}
-                    onNavigateToAgents={() => setActiveTab("agents")}
+                    onNavigateToAgents={(agentId?: string) => {
+                      setActiveTab("agents");
+                      if (agentId) {
+                        setActiveSubtabs((prev) => ({ ...prev, agents: agentId }));
+                      }
+                    }}
+                    activeSubtab={activeSubtabs["general"] ?? null}
+                    onSubtabChange={(id) => setActiveSubtabs((prev) => ({ ...prev, general: id }))}
                   />
                 </div>
 
-                <div className={activeTab === "keyboard" ? "" : "hidden"}>
+                <div
+                  role="tabpanel"
+                  id="settings-panel-keyboard"
+                  aria-labelledby="settings-tab-keyboard"
+                  tabIndex={0}
+                  className={activeTab === "keyboard" ? "" : "hidden"}
+                >
                   <KeyboardShortcutsTab />
                 </div>
 
-                <div className={activeTab === "terminal" ? "" : "hidden"}>
-                  <TerminalSettingsTab />
+                <div
+                  role="tabpanel"
+                  id="settings-panel-terminal"
+                  aria-labelledby="settings-tab-terminal"
+                  tabIndex={0}
+                  className={activeTab === "terminal" ? "" : "hidden"}
+                >
+                  <TerminalSettingsTab
+                    activeSubtab={activeSubtabs["terminal"] ?? null}
+                    onSubtabChange={(id) => setActiveSubtabs((prev) => ({ ...prev, terminal: id }))}
+                  />
                 </div>
 
-                <div className={activeTab === "terminalAppearance" ? "" : "hidden"}>
-                  <TerminalAppearanceTab />
+                <div
+                  role="tabpanel"
+                  id="settings-panel-terminalAppearance"
+                  aria-labelledby="settings-tab-terminalAppearance"
+                  tabIndex={0}
+                  className={activeTab === "terminalAppearance" ? "" : "hidden"}
+                >
+                  <TerminalAppearanceTab
+                    activeSubtab={activeSubtabs["terminalAppearance"] ?? null}
+                    onSubtabChange={(id) =>
+                      setActiveSubtabs((prev) => ({ ...prev, terminalAppearance: id }))
+                    }
+                  />
                 </div>
 
-                <div className={activeTab === "worktree" ? "" : "hidden"}>
+                <div
+                  role="tabpanel"
+                  id="settings-panel-worktree"
+                  aria-labelledby="settings-tab-worktree"
+                  tabIndex={0}
+                  className={activeTab === "worktree" ? "" : "hidden"}
+                >
                   <WorktreeSettingsTab />
                 </div>
 
-                <div className={activeTab === "agents" ? "" : "hidden"}>
+                <div
+                  role="tabpanel"
+                  id="settings-panel-agents"
+                  aria-labelledby="settings-tab-agents"
+                  tabIndex={0}
+                  className={activeTab === "agents" ? "" : "hidden"}
+                >
                   <AgentSettings
                     activeSubtab={activeSubtabs["agents"] ?? null}
                     onSubtabChange={(id) => setActiveSubtabs((prev) => ({ ...prev, agents: id }))}
@@ -580,39 +756,116 @@ export function SettingsDialog({
                   />
                 </div>
 
-                <div className={activeTab === "github" ? "" : "hidden"}>
+                <div
+                  role="tabpanel"
+                  id="settings-panel-github"
+                  aria-labelledby="settings-tab-github"
+                  tabIndex={0}
+                  className={activeTab === "github" ? "" : "hidden"}
+                >
                   <GitHubSettingsTab />
                 </div>
 
-                <div className={activeTab === "sidecar" ? "" : "hidden"}>
+                <div
+                  role="tabpanel"
+                  id="settings-panel-sidecar"
+                  aria-labelledby="settings-tab-sidecar"
+                  tabIndex={0}
+                  className={activeTab === "sidecar" ? "" : "hidden"}
+                >
                   <SidecarSettingsTab />
                 </div>
 
-                <div className={activeTab === "toolbar" ? "" : "hidden"}>
+                <div
+                  role="tabpanel"
+                  id="settings-panel-toolbar"
+                  aria-labelledby="settings-tab-toolbar"
+                  tabIndex={0}
+                  className={activeTab === "toolbar" ? "" : "hidden"}
+                >
                   <ToolbarSettingsTab />
                 </div>
 
-                <div className={activeTab === "notifications" ? "" : "hidden"}>
+                <div
+                  role="tabpanel"
+                  id="settings-panel-notifications"
+                  aria-labelledby="settings-tab-notifications"
+                  tabIndex={0}
+                  className={activeTab === "notifications" ? "" : "hidden"}
+                >
                   <NotificationSettingsTab />
                 </div>
 
-                <div className={activeTab === "editor" ? "" : "hidden"}>
+                <div
+                  role="tabpanel"
+                  id="settings-panel-editor"
+                  aria-labelledby="settings-tab-editor"
+                  tabIndex={0}
+                  className={activeTab === "editor" ? "" : "hidden"}
+                >
                   <EditorIntegrationTab />
                 </div>
 
-                <div className={activeTab === "imageViewer" ? "" : "hidden"}>
+                <div
+                  role="tabpanel"
+                  id="settings-panel-imageViewer"
+                  aria-labelledby="settings-tab-imageViewer"
+                  tabIndex={0}
+                  className={activeTab === "imageViewer" ? "" : "hidden"}
+                >
                   <ImageViewerTab />
                 </div>
 
-                <div className={activeTab === "voice" ? "" : "hidden"}>
+                <div
+                  role="tabpanel"
+                  id="settings-panel-voice"
+                  aria-labelledby="settings-tab-voice"
+                  tabIndex={0}
+                  className={activeTab === "voice" ? "" : "hidden"}
+                >
                   <VoiceInputSettingsTab />
                 </div>
 
-                <div className={activeTab === "mcp" ? "" : "hidden"}>
+                <div
+                  role="tabpanel"
+                  id="settings-panel-mcp"
+                  aria-labelledby="settings-tab-mcp"
+                  tabIndex={0}
+                  className={activeTab === "mcp" ? "" : "hidden"}
+                >
                   <McpServerSettingsTab />
                 </div>
 
-                <div className={activeTab === "troubleshooting" ? "" : "hidden"}>
+                <div
+                  role="tabpanel"
+                  id="settings-panel-environment"
+                  aria-labelledby="settings-tab-environment"
+                  tabIndex={0}
+                  className={activeTab === "environment" ? "" : "hidden"}
+                >
+                  <EnvironmentSettingsTab />
+                </div>
+
+                <div
+                  role="tabpanel"
+                  id="settings-panel-privacy"
+                  aria-labelledby="settings-tab-privacy"
+                  tabIndex={0}
+                  className={activeTab === "privacy" ? "" : "hidden"}
+                >
+                  <PrivacyDataTab
+                    activeSubtab={activeSubtabs["privacy"] ?? null}
+                    onSubtabChange={(id) => setActiveSubtabs((prev) => ({ ...prev, privacy: id }))}
+                  />
+                </div>
+
+                <div
+                  role="tabpanel"
+                  id="settings-panel-troubleshooting"
+                  aria-labelledby="settings-tab-troubleshooting"
+                  tabIndex={0}
+                  className={activeTab === "troubleshooting" ? "" : "hidden"}
+                >
                   <TroubleshootingTab />
                 </div>
               </>
@@ -626,11 +879,16 @@ export function SettingsDialog({
 
 function NavGroup({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <div>
-      <span className="text-[10px] font-medium uppercase tracking-wider text-canopy-text/30 px-3 mb-1 block select-none">
+    <div role="none">
+      <span
+        className="text-[10px] font-medium uppercase tracking-wider text-canopy-text/30 px-3 mb-1 block select-none"
+        aria-hidden="true"
+      >
         {label}
       </span>
-      <div className="space-y-0.5">{children}</div>
+      <div role="none" className="space-y-0.5">
+        {children}
+      </div>
     </div>
   );
 }
@@ -657,8 +915,15 @@ function NavItem({
   onSelect,
 }: NavItemProps) {
   const active = activeTab === tab && !isSearching;
+  const selected = activeTab === tab;
   return (
     <button
+      role="tab"
+      id={`settings-tab-${tab}`}
+      aria-selected={selected}
+      aria-controls={`settings-panel-${tab}`}
+      tabIndex={selected ? 0 : -1}
+      data-tab={tab}
       onClick={() => onSelect(tab)}
       className={cn(
         "relative text-left px-3 py-1.5 rounded-[var(--radius-md)] text-sm transition-colors flex items-center gap-2 w-full",
@@ -697,11 +962,18 @@ function MatchBadge({ count }: { count: number }) {
 interface SearchResultsProps {
   results: ReturnType<typeof filterSettings>;
   query: string;
+  cleanQuery: string;
   onResultClick: (target: SettingsNavTarget) => void;
   activeIndex?: number;
 }
 
-function SearchResults({ results, query, onResultClick, activeIndex = -1 }: SearchResultsProps) {
+function SearchResults({
+  results,
+  query,
+  cleanQuery,
+  onResultClick,
+  activeIndex = -1,
+}: SearchResultsProps) {
   const activeRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
@@ -715,7 +987,11 @@ function SearchResults({ results, query, onResultClick, activeIndex = -1 }: Sear
         <p className="text-sm text-canopy-text/50">
           No results for <span className="font-medium text-canopy-text/70">"{query}"</span>
         </p>
-        <p className="text-xs text-canopy-text/40 mt-1">Try different keywords or check spelling</p>
+        <p className="text-xs text-canopy-text/40 mt-1">
+          {cleanQuery
+            ? "Try different keywords or check spelling"
+            : "No settings have been modified from their defaults"}
+        </p>
       </div>
     );
   }

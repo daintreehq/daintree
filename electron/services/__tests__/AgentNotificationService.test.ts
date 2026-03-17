@@ -1,12 +1,18 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { AgentState } from "../../../shared/types/domain.js";
+import type { AgentState } from "../../../shared/types/agent.js";
 
 const storeMock = vi.hoisted(() => ({
   get: vi.fn(),
 }));
 
+const projectStoreMock = vi.hoisted(() => ({
+  getEffectiveNotificationSettings: vi.fn(),
+  getCurrentProjectId: vi.fn(() => null),
+}));
+
 const notificationServiceMock = vi.hoisted(() => ({
   showWatchNotification: vi.fn(),
+  showNativeNotification: vi.fn(),
   isWindowFocused: vi.fn(() => false),
 }));
 
@@ -14,6 +20,10 @@ const playSoundMock = vi.hoisted(() => vi.fn(() => ({ cancel: vi.fn() })));
 
 vi.mock("../../store.js", () => ({
   store: storeMock,
+}));
+
+vi.mock("../ProjectStore.js", () => ({
+  projectStore: projectStoreMock,
 }));
 
 vi.mock("../NotificationService.js", () => ({
@@ -30,6 +40,44 @@ vi.mock("fs", () => ({
 
 import { events } from "../events.js";
 import { agentNotificationService } from "../AgentNotificationService.js";
+
+const DEFAULT_NOTIFICATION_SETTINGS = {
+  completedEnabled: false,
+  waitingEnabled: false,
+  failedEnabled: false,
+  soundEnabled: false,
+  soundFile: "chime.wav",
+  waitingEscalationEnabled: true,
+  waitingEscalationDelayMs: 180_000,
+};
+
+const DEFAULT_APP_STATE = {
+  activeWorktreeId: "wt-1",
+  terminals: [
+    {
+      id: "term-1",
+      kind: "agent",
+      agentId: "agent-1",
+      title: "Claude Agent",
+      location: "dock",
+      worktreeId: "wt-1",
+    },
+  ],
+};
+
+function mockStore(
+  notifOverrides: Partial<typeof DEFAULT_NOTIFICATION_SETTINGS> = {},
+  appStateOverrides: Partial<typeof DEFAULT_APP_STATE> = {}
+) {
+  const notifSettings = { ...DEFAULT_NOTIFICATION_SETTINGS, ...notifOverrides };
+  const appState = { ...DEFAULT_APP_STATE, ...appStateOverrides };
+  storeMock.get.mockImplementation((key: string) => {
+    if (key === "notificationSettings") return notifSettings;
+    if (key === "appState") return appState;
+    return undefined;
+  });
+  projectStoreMock.getEffectiveNotificationSettings.mockReturnValue(notifSettings);
+}
 
 function makePayload(state: AgentState, previousState: AgentState = "working") {
   return {
@@ -60,13 +108,7 @@ describe("AgentNotificationService", () => {
   });
 
   it("does not fire any notifications when all settings are disabled (default)", () => {
-    storeMock.get.mockReturnValue({
-      completedEnabled: false,
-      waitingEnabled: false,
-      failedEnabled: false,
-      soundEnabled: false,
-      soundFile: "chime.wav",
-    });
+    mockStore();
 
     events.emit("agent:state-changed", makePayload("completed"));
     vi.advanceTimersByTime(5000);
@@ -82,13 +124,7 @@ describe("AgentNotificationService", () => {
   });
 
   it("does not fire notifications for unwatched terminals", () => {
-    storeMock.get.mockReturnValue({
-      completedEnabled: true,
-      waitingEnabled: true,
-      failedEnabled: true,
-      soundEnabled: false,
-      soundFile: "chime.wav",
-    });
+    mockStore({ completedEnabled: true, waitingEnabled: true, failedEnabled: true });
 
     // Clear watched set — no terminals are watched
     agentNotificationService.syncWatchedPanels([]);
@@ -107,13 +143,7 @@ describe("AgentNotificationService", () => {
   });
 
   it("does not fire notifications when terminalId is absent in payload", () => {
-    storeMock.get.mockReturnValue({
-      completedEnabled: true,
-      waitingEnabled: true,
-      failedEnabled: true,
-      soundEnabled: false,
-      soundFile: "chime.wav",
-    });
+    mockStore({ completedEnabled: true, waitingEnabled: true, failedEnabled: true });
 
     // Payload without terminalId — cannot check watched membership
     const payloadNoId = {
@@ -134,13 +164,7 @@ describe("AgentNotificationService", () => {
   });
 
   it("fires a notification when completed is enabled", () => {
-    storeMock.get.mockReturnValue({
-      completedEnabled: true,
-      waitingEnabled: false,
-      failedEnabled: false,
-      soundEnabled: false,
-      soundFile: "chime.wav",
-    });
+    mockStore({ completedEnabled: true });
 
     events.emit("agent:state-changed", makePayload("completed"));
     vi.advanceTimersByTime(5000);
@@ -155,13 +179,7 @@ describe("AgentNotificationService", () => {
   });
 
   it("fires a notification when waiting is enabled", () => {
-    storeMock.get.mockReturnValue({
-      completedEnabled: false,
-      waitingEnabled: true,
-      failedEnabled: false,
-      soundEnabled: false,
-      soundFile: "chime.wav",
-    });
+    mockStore({ waitingEnabled: true });
 
     events.emit("agent:state-changed", makePayload("waiting"));
 
@@ -175,13 +193,7 @@ describe("AgentNotificationService", () => {
   });
 
   it("fires a notification when failed is enabled", () => {
-    storeMock.get.mockReturnValue({
-      completedEnabled: false,
-      waitingEnabled: false,
-      failedEnabled: true,
-      soundEnabled: false,
-      soundFile: "chime.wav",
-    });
+    mockStore({ failedEnabled: true });
 
     events.emit("agent:state-changed", makePayload("failed"));
     vi.advanceTimersByTime(1000);
@@ -196,12 +208,11 @@ describe("AgentNotificationService", () => {
   });
 
   it("does not fire notifications for same-state transitions", () => {
-    storeMock.get.mockReturnValue({
+    mockStore({
       completedEnabled: true,
       waitingEnabled: true,
       failedEnabled: true,
       soundEnabled: true,
-      soundFile: "chime.wav",
     });
 
     events.emit("agent:state-changed", makePayload("completed", "completed"));
@@ -211,13 +222,7 @@ describe("AgentNotificationService", () => {
   });
 
   it("plays sound when soundEnabled is true and a notification type is enabled", () => {
-    storeMock.get.mockReturnValue({
-      completedEnabled: false,
-      waitingEnabled: true,
-      failedEnabled: false,
-      soundEnabled: true,
-      soundFile: "chime.wav",
-    });
+    mockStore({ waitingEnabled: true, soundEnabled: true });
 
     events.emit("agent:state-changed", makePayload("waiting"));
 
@@ -225,13 +230,7 @@ describe("AgentNotificationService", () => {
   });
 
   it("does not play sound when soundEnabled is false", () => {
-    storeMock.get.mockReturnValue({
-      completedEnabled: false,
-      waitingEnabled: true,
-      failedEnabled: false,
-      soundEnabled: false,
-      soundFile: "chime.wav",
-    });
+    mockStore({ waitingEnabled: true });
 
     events.emit("agent:state-changed", makePayload("waiting"));
 
@@ -239,13 +238,7 @@ describe("AgentNotificationService", () => {
   });
 
   it("fires only waiting notification when only waitingEnabled is true (mixed sequence)", () => {
-    storeMock.get.mockReturnValue({
-      completedEnabled: false,
-      waitingEnabled: true,
-      failedEnabled: false,
-      soundEnabled: false,
-      soundFile: "chime.wav",
-    });
+    mockStore({ waitingEnabled: true });
 
     events.emit("agent:state-changed", makePayload("completed"));
     vi.advanceTimersByTime(5000);
@@ -268,24 +261,12 @@ describe("AgentNotificationService", () => {
 
   it("does not fire stale completion notification after completedEnabled is disabled", () => {
     // Start with completedEnabled=true so the timer is scheduled
-    storeMock.get.mockReturnValue({
-      completedEnabled: true,
-      waitingEnabled: false,
-      failedEnabled: false,
-      soundEnabled: false,
-      soundFile: "chime.wav",
-    });
+    mockStore({ completedEnabled: true });
 
     events.emit("agent:state-changed", makePayload("completed"));
 
     // Before debounce fires, disable all notifications
-    storeMock.get.mockReturnValue({
-      completedEnabled: false,
-      waitingEnabled: false,
-      failedEnabled: false,
-      soundEnabled: false,
-      soundFile: "chime.wav",
-    });
+    mockStore();
 
     // Advance past the 2000ms completion debounce
     vi.advanceTimersByTime(3000);
@@ -294,13 +275,7 @@ describe("AgentNotificationService", () => {
   });
 
   it("fires completion notification for watched terminal even after one-shot unwatch", () => {
-    storeMock.get.mockReturnValue({
-      completedEnabled: true,
-      waitingEnabled: false,
-      failedEnabled: false,
-      soundEnabled: false,
-      soundFile: "chime.wav",
-    });
+    mockStore({ completedEnabled: true });
 
     // Agent state changes — watched status is snapshotted here
     events.emit("agent:state-changed", makePayload("completed"));
@@ -319,5 +294,217 @@ describe("AgentNotificationService", () => {
       "notification:watch-navigate",
       true
     );
+  });
+
+  describe("waiting escalation", () => {
+    it("fires native notification after escalation delay for docked waiting agent", () => {
+      mockStore({ waitingEnabled: true });
+
+      events.emit("agent:state-changed", makePayload("waiting"));
+      vi.advanceTimersByTime(180_000);
+
+      expect(notificationServiceMock.showNativeNotification).toHaveBeenCalledWith(
+        "Agent still waiting",
+        expect.stringContaining("has been waiting")
+      );
+    });
+
+    it("does not fire escalation before delay elapses", () => {
+      mockStore({ waitingEnabled: true });
+
+      events.emit("agent:state-changed", makePayload("waiting"));
+      vi.advanceTimersByTime(179_999);
+
+      expect(notificationServiceMock.showNativeNotification).not.toHaveBeenCalled();
+    });
+
+    it("cancels escalation when agent leaves waiting state", () => {
+      mockStore({ waitingEnabled: true });
+
+      events.emit("agent:state-changed", makePayload("waiting"));
+      vi.advanceTimersByTime(60_000);
+
+      // Agent goes back to working
+      events.emit("agent:state-changed", makePayload("working", "waiting"));
+      vi.advanceTimersByTime(180_000);
+
+      expect(notificationServiceMock.showNativeNotification).not.toHaveBeenCalled();
+    });
+
+    it("cancels escalation on acknowledgeWaiting", () => {
+      mockStore({ waitingEnabled: true });
+
+      events.emit("agent:state-changed", makePayload("waiting"));
+      vi.advanceTimersByTime(60_000);
+
+      agentNotificationService.acknowledgeWaiting("term-1");
+      vi.advanceTimersByTime(180_000);
+
+      expect(notificationServiceMock.showNativeNotification).not.toHaveBeenCalled();
+    });
+
+    it("does not fire escalation when waitingEscalationEnabled is false", () => {
+      mockStore({ waitingEnabled: true, waitingEscalationEnabled: false });
+
+      events.emit("agent:state-changed", makePayload("waiting"));
+      vi.advanceTimersByTime(300_000);
+
+      expect(notificationServiceMock.showNativeNotification).not.toHaveBeenCalled();
+    });
+
+    it("does not fire escalation when waitingEnabled is false", () => {
+      mockStore({ waitingEscalationEnabled: true });
+
+      events.emit("agent:state-changed", makePayload("waiting"));
+      vi.advanceTimersByTime(300_000);
+
+      expect(notificationServiceMock.showNativeNotification).not.toHaveBeenCalled();
+    });
+
+    it("does not fire escalation for grid (non-dock) terminals", () => {
+      mockStore(
+        { waitingEnabled: true },
+        {
+          terminals: [
+            {
+              id: "term-1",
+              kind: "agent",
+              agentId: "agent-1",
+              title: "Claude Agent",
+              location: "grid",
+              worktreeId: "wt-1",
+            },
+          ],
+        }
+      );
+
+      events.emit("agent:state-changed", makePayload("waiting"));
+      vi.advanceTimersByTime(300_000);
+
+      expect(notificationServiceMock.showNativeNotification).not.toHaveBeenCalled();
+    });
+
+    it("uses terminal title in escalation notification", () => {
+      mockStore(
+        { waitingEnabled: true },
+        {
+          terminals: [
+            {
+              id: "term-1",
+              kind: "agent",
+              agentId: "agent-1",
+              title: "My Custom Agent",
+              location: "dock",
+              worktreeId: "wt-1",
+            },
+          ],
+        }
+      );
+
+      events.emit("agent:state-changed", makePayload("waiting"));
+      vi.advanceTimersByTime(180_000);
+
+      expect(notificationServiceMock.showNativeNotification).toHaveBeenCalledWith(
+        "Agent still waiting",
+        "My Custom Agent has been waiting for input"
+      );
+    });
+
+    it("fires only once per waiting session", () => {
+      mockStore({ waitingEnabled: true });
+
+      events.emit("agent:state-changed", makePayload("waiting"));
+      vi.advanceTimersByTime(180_000);
+
+      expect(notificationServiceMock.showNativeNotification).toHaveBeenCalledTimes(1);
+
+      // Additional time passes — no second notification
+      vi.advanceTimersByTime(180_000);
+      expect(notificationServiceMock.showNativeNotification).toHaveBeenCalledTimes(1);
+    });
+
+    it("fires fresh escalation on re-entering waiting state", () => {
+      mockStore({ waitingEnabled: true });
+
+      events.emit("agent:state-changed", makePayload("waiting"));
+      vi.advanceTimersByTime(180_000);
+      expect(notificationServiceMock.showNativeNotification).toHaveBeenCalledTimes(1);
+
+      // Agent leaves waiting, then re-enters
+      events.emit("agent:state-changed", makePayload("working", "waiting"));
+      events.emit("agent:state-changed", makePayload("waiting", "working"));
+      vi.advanceTimersByTime(180_000);
+
+      expect(notificationServiceMock.showNativeNotification).toHaveBeenCalledTimes(2);
+    });
+
+    it("does not fire if settings changed to disabled before timer fires", () => {
+      mockStore({ waitingEnabled: true });
+
+      events.emit("agent:state-changed", makePayload("waiting"));
+      vi.advanceTimersByTime(60_000);
+
+      // User disables escalation mid-wait
+      mockStore({ waitingEnabled: true, waitingEscalationEnabled: false });
+      vi.advanceTimersByTime(180_000);
+
+      expect(notificationServiceMock.showNativeNotification).not.toHaveBeenCalled();
+    });
+
+    it("dispose clears escalation timers", () => {
+      mockStore({ waitingEnabled: true });
+
+      events.emit("agent:state-changed", makePayload("waiting"));
+      agentNotificationService.dispose();
+      vi.advanceTimersByTime(300_000);
+
+      expect(notificationServiceMock.showNativeNotification).not.toHaveBeenCalled();
+    });
+
+    it("does not fire if terminal moved from dock to grid before timer fires", () => {
+      mockStore({ waitingEnabled: true });
+
+      events.emit("agent:state-changed", makePayload("waiting"));
+      vi.advanceTimersByTime(60_000);
+
+      // Terminal moved to grid mid-wait
+      mockStore(
+        { waitingEnabled: true },
+        {
+          terminals: [
+            {
+              id: "term-1",
+              kind: "agent",
+              agentId: "agent-1",
+              title: "Claude Agent",
+              location: "grid",
+              worktreeId: "wt-1",
+            },
+          ],
+        }
+      );
+      vi.advanceTimersByTime(180_000);
+
+      expect(notificationServiceMock.showNativeNotification).not.toHaveBeenCalled();
+    });
+
+    it("resets timer from zero on rapid waiting-working-waiting toggle", () => {
+      mockStore({ waitingEnabled: true });
+
+      events.emit("agent:state-changed", makePayload("waiting"));
+      vi.advanceTimersByTime(120_000); // 2min into first wait
+
+      // Leave and re-enter waiting
+      events.emit("agent:state-changed", makePayload("working", "waiting"));
+      events.emit("agent:state-changed", makePayload("waiting", "working"));
+
+      // 120_000ms from re-entry — should NOT fire yet (threshold is 180_000)
+      vi.advanceTimersByTime(120_000);
+      expect(notificationServiceMock.showNativeNotification).not.toHaveBeenCalled();
+
+      // 60_000ms more — now 180_000 from re-entry, should fire
+      vi.advanceTimersByTime(60_000);
+      expect(notificationServiceMock.showNativeNotification).toHaveBeenCalledTimes(1);
+    });
   });
 });

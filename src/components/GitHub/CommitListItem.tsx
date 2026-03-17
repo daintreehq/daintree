@@ -1,27 +1,19 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useMemo } from "react";
 import type { MouseEvent } from "react";
-import { GitCommitHorizontal, Copy, Check } from "lucide-react";
+import { GitCommitHorizontal, Check } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { formatTimeAgo } from "@/utils/timeAgo";
 import type { GitCommit } from "@shared/types/github";
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
+import { parseConventionalCommit } from "./commitListUtils";
 
 interface CommitListItemProps {
   commit: GitCommit;
+  optionId?: string;
+  isActive?: boolean;
 }
 
-function formatTimeAgo(dateString: string): string {
-  const date = new Date(dateString);
-  const now = new Date();
-  const seconds = Math.floor((now.getTime() - date.getTime()) / 1000);
-
-  if (seconds < 60) return "just now";
-  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
-  if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
-  if (seconds < 2592000) return `${Math.floor(seconds / 86400)}d ago`;
-  return date.toLocaleDateString();
-}
-
-export function CommitListItem({ commit }: CommitListItemProps) {
+export function CommitListItem({ commit, optionId, isActive }: CommitListItemProps) {
   const [copied, setCopied] = useState(false);
   const timeoutRef = useRef<number | undefined>(undefined);
 
@@ -32,6 +24,8 @@ export function CommitListItem({ commit }: CommitListItemProps) {
       }
     };
   }, []);
+
+  const parsed = useMemo(() => parseConventionalCommit(commit.message), [commit.message]);
 
   const handleCopyHash = async (e: MouseEvent<HTMLButtonElement>) => {
     e.stopPropagation();
@@ -53,27 +47,54 @@ export function CommitListItem({ commit }: CommitListItemProps) {
     }
   };
 
+  const renderMessage = () => {
+    if (!parsed) {
+      return (
+        <span className="flex-1 min-w-0 text-sm font-medium text-foreground truncate">
+          {commit.message}
+        </span>
+      );
+    }
+
+    const typeColor = parsed.breaking ? "text-status-danger font-bold" : "text-muted-foreground";
+
+    return (
+      <span className="flex-1 min-w-0 text-sm font-medium truncate">
+        <span className={typeColor}>{parsed.type}</span>
+        {parsed.scope && <span className="text-muted-foreground">({parsed.scope})</span>}
+        {parsed.breaking && !parsed.type.endsWith("!") && (
+          <span className="text-status-danger font-bold">!</span>
+        )}
+        <span className="text-foreground">: {parsed.description}</span>
+      </span>
+    );
+  };
+
   return (
-    <div className="p-3 hover:bg-muted/50 transition-colors group cursor-default">
-      <div className="flex items-start gap-3">
-        <div className="mt-0.5 shrink-0 text-muted-foreground">
-          <GitCommitHorizontal className="h-4 w-4" />
-        </div>
+    <div
+      id={optionId}
+      role="option"
+      aria-selected={isActive}
+      className={cn(
+        "hover:bg-muted/50 transition-colors group cursor-default",
+        isActive && "bg-muted/50"
+      )}
+    >
+      <div className="flex items-start gap-2 px-3 py-2.5">
+        <span className="shrink-0 mt-0.5 text-muted-foreground">
+          <GitCommitHorizontal className="size-4" />
+        </span>
 
         <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2">
+          {/* Title row: message + trailing #hash copy */}
+          <div className="flex items-center gap-1.5 min-w-0">
             <TooltipProvider>
               <Tooltip>
-                <TooltipTrigger asChild>
-                  <span className="text-sm font-medium text-foreground truncate">
-                    {commit.message}
-                  </span>
-                </TooltipTrigger>
+                <TooltipTrigger asChild>{renderMessage()}</TooltipTrigger>
                 <TooltipContent side="bottom">{commit.message}</TooltipContent>
               </Tooltip>
             </TooltipProvider>
-          </div>
-          <div className="text-xs text-muted-foreground mt-1 flex items-center gap-1.5">
+
             <TooltipProvider>
               <Tooltip>
                 <TooltipTrigger asChild>
@@ -81,15 +102,12 @@ export function CommitListItem({ commit }: CommitListItemProps) {
                     type="button"
                     onClick={handleCopyHash}
                     className={cn(
-                      "font-mono hover:text-foreground transition-colors flex items-center gap-1",
+                      "shrink-0 text-xs text-muted-foreground hover:text-foreground transition-colors flex items-center gap-0.5 font-mono focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded px-1",
                       copied && "text-status-success"
                     )}
+                    aria-label={`Copy hash ${commit.shortHash}`}
                   >
-                    {copied ? (
-                      <Check className="h-3 w-3" />
-                    ) : (
-                      <Copy className="h-3 w-3 opacity-0 group-hover:opacity-100 transition-opacity" />
-                    )}
+                    {copied ? <Check className="w-3 h-3 text-status-success" /> : <span>#</span>}
                     <span>{commit.shortHash}</span>
                   </button>
                 </TooltipTrigger>
@@ -98,7 +116,10 @@ export function CommitListItem({ commit }: CommitListItemProps) {
                 </TooltipContent>
               </Tooltip>
             </TooltipProvider>
-            <span>&middot;</span>
+          </div>
+
+          {/* Metadata row: author · time */}
+          <div className="flex items-center gap-1.5 mt-0.5 text-xs text-muted-foreground">
             <TooltipProvider>
               <Tooltip>
                 <TooltipTrigger asChild>
@@ -114,7 +135,10 @@ export function CommitListItem({ commit }: CommitListItemProps) {
                   <span>{formatTimeAgo(commit.date)}</span>
                 </TooltipTrigger>
                 <TooltipContent side="bottom">
-                  {new Date(commit.date).toLocaleString()}
+                  {(() => {
+                    const d = new Date(commit.date);
+                    return isNaN(d.getTime()) ? "Unknown" : d.toLocaleString();
+                  })()}
                 </TooltipContent>
               </Tooltip>
             </TooltipProvider>

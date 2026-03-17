@@ -14,10 +14,7 @@ import { actionService } from "@/services/ActionService";
 import { getEffectiveAgentIds } from "@shared/config/agentRegistry";
 
 interface UseNewTerminalPaletteProps {
-  launchAgent: (
-    type: "claude" | "gemini" | "codex" | "opencode" | "terminal",
-    options?: LaunchAgentOptions
-  ) => Promise<string | null>;
+  launchAgent: (type: string, options?: LaunchAgentOptions) => Promise<string | null>;
   worktreeMap: Map<string, WorktreeState>;
 }
 
@@ -72,6 +69,7 @@ export function useNewTerminalPalette({
     items: options,
     filterFn: filterLaunchOptions,
     maxResults: 20,
+    paletteId: "new-terminal",
   });
 
   const handleSelect = useCallback(

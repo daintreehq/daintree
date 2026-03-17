@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useMemo } from "react";
-import { X, Maximize2, FilterX, House } from "lucide-react";
+import { X, LayoutGrid, FilterX, House } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useShallow } from "zustand/react/shallow";
 import { WorktreeCard } from "./WorktreeCard";
@@ -65,6 +65,7 @@ export function WorktreeOverviewModal({
     sessionFilters,
     activityFilters,
     alwaysShowActive,
+    alwaysShowWaiting,
     pinnedWorktrees,
   } = useWorktreeFilterStore(
     useShallow((state) => ({
@@ -77,6 +78,7 @@ export function WorktreeOverviewModal({
       sessionFilters: state.sessionFilters,
       activityFilters: state.activityFilters,
       alwaysShowActive: state.alwaysShowActive,
+      alwaysShowWaiting: state.alwaysShowWaiting,
       pinnedWorktrees: state.pinnedWorktrees,
     }))
   );
@@ -172,14 +174,18 @@ export function WorktreeOverviewModal({
         hasCompletedAgent: false,
       };
       const isActive = worktree.id === activeWorktreeId;
+      const hasActiveQuery = query.trim().length > 0;
 
       // hideMainWorktree always takes precedence for the main worktree (user's explicit intent)
       if (hideMainWorktree && worktree.isMainWorktree) {
         return false;
       }
 
-      // Always show active worktree if setting is enabled
-      if (alwaysShowActive && isActive) {
+      if (alwaysShowActive && isActive && !hasActiveQuery) {
+        return true;
+      }
+
+      if (alwaysShowWaiting && derived.hasWaitingAgent && !hasActiveQuery) {
         return true;
       }
 
@@ -213,6 +219,7 @@ export function WorktreeOverviewModal({
     sessionFilters,
     activityFilters,
     alwaysShowActive,
+    alwaysShowWaiting,
     pinnedWorktrees,
     derivedMetaMap,
     activeWorktreeId,
@@ -289,7 +296,7 @@ export function WorktreeOverviewModal({
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-divider shrink-0">
           <div className="flex items-center gap-3">
-            <Maximize2 className="w-5 h-5 text-canopy-text/60" />
+            <LayoutGrid className="w-5 h-5 text-canopy-text/60" />
             <h2
               id="worktree-overview-title"
               className="text-canopy-text font-semibold text-base tracking-wide"
@@ -346,8 +353,8 @@ export function WorktreeOverviewModal({
                         "flex items-center gap-1.5 px-2 py-1 rounded-full text-xs transition-colors",
                         "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-canopy-accent",
                         hideMainWorktree
-                          ? "bg-white/[0.06] text-canopy-text/40 hover:text-canopy-text/60"
-                          : "bg-white/[0.10] text-canopy-text/70 hover:text-canopy-text/90"
+                          ? "bg-tint/[0.06] text-canopy-text/40 hover:text-canopy-text/60"
+                          : "bg-tint/[0.10] text-canopy-text/70 hover:text-canopy-text/90"
                       )}
                     >
                       <House
@@ -384,7 +391,7 @@ export function WorktreeOverviewModal({
                       className={cn(
                         "flex items-center gap-1.5 px-2 py-1.5 rounded text-xs",
                         "text-canopy-text/60 hover:text-canopy-text",
-                        "hover:bg-white/[0.06]",
+                        "hover:bg-tint/[0.06]",
                         "transition-colors",
                         "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-canopy-accent"
                       )}
@@ -405,7 +412,7 @@ export function WorktreeOverviewModal({
               className={cn(
                 "p-2 rounded-lg transition-colors",
                 "text-canopy-text/60 hover:text-canopy-text",
-                "hover:bg-white/[0.06]",
+                "hover:bg-tint/[0.06]",
                 "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-canopy-accent"
               )}
               aria-label="Close overview"
@@ -545,7 +552,7 @@ export function WorktreeOverviewModal({
         <div className="px-6 py-3 border-t border-divider shrink-0">
           <div className="flex items-center justify-center gap-4 text-xs text-canopy-text/40">
             <span>
-              <kbd className="px-1.5 py-0.5 bg-white/[0.06] rounded text-[10px]">Esc</kbd> to close
+              <kbd className="px-1.5 py-0.5 bg-tint/[0.06] rounded text-[10px]">Esc</kbd> to close
             </span>
             <span>Click a worktree to switch</span>
           </div>

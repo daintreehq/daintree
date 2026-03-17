@@ -18,6 +18,7 @@ export interface AppContext {
 export interface LaunchOptions {
   env?: Record<string, string>;
   userDataDir?: string;
+  waitForSelector?: string;
 }
 
 function cleanupWindowsElectronProcesses(): void {
@@ -71,9 +72,10 @@ export async function launchApp(options: LaunchOptions = {}): Promise<AppContext
         ...process.env,
         ...options.env,
         NODE_ENV: "production",
+        CANOPY_E2E_SKIP_FIRST_RUN_DIALOGS: "1",
+        CANOPY_DISABLE_WEBGL: "1",
         ...(isWindowsCI
           ? {
-              CANOPY_E2E_SKIP_FIRST_RUN_DIALOGS: "1",
               CANOPY_E2E_DEFER_RENDERER_LOAD: "1",
             }
           : {}),
@@ -95,9 +97,8 @@ export async function launchApp(options: LaunchOptions = {}): Promise<AppContext
 
       await window.waitForLoadState("domcontentloaded");
 
-      await window
-        .locator('[aria-label="Open settings"]')
-        .waitFor({ state: "visible", timeout: launchTimeout });
+      const readySelector = options.waitForSelector ?? '[aria-label="Open settings"]';
+      await window.locator(readySelector).waitFor({ state: "visible", timeout: launchTimeout });
 
       return { app, window, userDataDir };
     } catch (error) {
@@ -142,6 +143,23 @@ export async function closeApp(app: ElectronApplication): Promise<void> {
       // Already dead
     }
   }
+}
+
+export async function waitForProcessExit(pid: number, timeoutMs = 15_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      process.kill(pid, 0);
+    } catch (err: unknown) {
+      if ((err as NodeJS.ErrnoException).code === "EPERM") {
+        await wait(100);
+        continue;
+      }
+      return;
+    }
+    await wait(100);
+  }
+  throw new Error(`Process ${pid} did not exit within ${timeoutMs}ms`);
 }
 
 export async function mockOpenDialog(

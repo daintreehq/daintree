@@ -5,6 +5,7 @@ import { projectClient, agentSettingsClient, systemClient } from "@/clients";
 import { getAgentConfig } from "@/config/agents";
 import { generateAgentCommand } from "@shared/types";
 import { replaceRecipeVariables, type RecipeContext } from "@/utils/recipeVariables";
+import { BUILT_IN_AGENT_IDS } from "@shared/config/agentIds";
 
 function isAgentRecipeType(type: RecipeTerminalType): boolean {
   return type !== "terminal" && type !== "dev-preview";
@@ -55,7 +56,8 @@ interface RecipeState {
     name: string,
     worktreeId: string | undefined,
     terminals: RecipeTerminal[],
-    showInEmptyState?: boolean
+    showInEmptyState?: boolean,
+    autoAssign?: "always" | "never" | "prompt"
   ) => Promise<void>;
   updateRecipe: (
     id: string,
@@ -113,7 +115,14 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
     }
   },
 
-  createRecipe: async (projectId, name, worktreeId, terminals, showInEmptyState = false) => {
+  createRecipe: async (
+    projectId,
+    name,
+    worktreeId,
+    terminals,
+    showInEmptyState = false,
+    autoAssign
+  ) => {
     if (terminals.length === 0) {
       throw new Error("Recipe must contain at least one terminal");
     }
@@ -129,6 +138,7 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
       terminals: terminals.map(sanitizeRecipeTerminal),
       createdAt: Date.now(),
       showInEmptyState,
+      autoAssign,
     };
 
     const newRecipes = [...get().recipes, newRecipe];
@@ -333,7 +343,7 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
       throw new Error(`Recipe cannot exceed ${MAX_TERMINALS_PER_RECIPE} terminals`);
     }
 
-    const ALLOWED_TYPES = ["terminal", "claude", "gemini", "codex", "opencode", "dev-preview"];
+    const ALLOWED_TYPES = ["terminal", ...BUILT_IN_AGENT_IDS, "dev-preview"];
     const ALLOWED_EXIT_BEHAVIORS = ["keep", "trash", "remove"];
     const sanitizedTerminals = recipe.terminals
       .filter((terminal) => {

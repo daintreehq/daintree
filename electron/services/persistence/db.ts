@@ -82,6 +82,13 @@ export function openDb(dbPath: string): { sqlite: Database.Database; db: AppDb }
   sqlite.pragma("journal_mode = WAL");
   sqlite.pragma("busy_timeout = 3000");
   sqlite.exec(CREATE_TABLES_SQL);
+
+  // Migrate: add pinned column to projects table if it doesn't exist
+  const cols = sqlite.pragma("table_info(projects)") as { name: string }[];
+  if (!cols.some((c) => c.name === "pinned")) {
+    sqlite.prepare("ALTER TABLE projects ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0").run();
+  }
+
   const db = drizzle(sqlite, { schema });
   return { sqlite, db };
 }

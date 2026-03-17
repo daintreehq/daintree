@@ -4,12 +4,7 @@ import { Button } from "@/components/ui/button";
 import { useAgentSettingsStore } from "@/store";
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
 import { AGENT_REGISTRY, AGENT_IDS } from "@/config/agents";
-import { isCanopyEnvEnabled } from "@/utils/env";
 import { Waypoints, Loader2 } from "lucide-react";
-
-const SKIP_FIRST_RUN_DIALOGS = isCanopyEnvEnabled("CANOPY_E2E_SKIP_FIRST_RUN_DIALOGS");
-
-const DISMISSAL_KEY = "canopy:agent-selection-dismissed";
 
 const AGENT_DESCRIPTIONS: Record<string, string> = {
   claude: "Deep refactoring, architecture, and complex reasoning",
@@ -60,7 +55,6 @@ export function AgentSelectionStep({ isOpen, onContinue, onSkip }: AgentSelectio
       for (const [agentId, selected] of Object.entries(selections)) {
         await setAgentSelected(agentId, selected);
       }
-      markAgentSelectionDismissed();
       const uninstalledSelected = selectedAgentIds.filter((id) => availability[id] !== true);
       onContinue(uninstalledSelected);
     } finally {
@@ -69,7 +63,6 @@ export function AgentSelectionStep({ isOpen, onContinue, onSkip }: AgentSelectio
   }, [selections, selectedAgentIds, availability, setAgentSelected, onContinue]);
 
   const handleSkip = useCallback(() => {
-    markAgentSelectionDismissed();
     onSkip();
   }, [onSkip]);
 
@@ -167,27 +160,4 @@ export function AgentSelectionStep({ isOpen, onContinue, onSkip }: AgentSelectio
       </AppDialog.Footer>
     </AppDialog>
   );
-}
-
-export function shouldShowAgentSelection(): boolean {
-  if (SKIP_FIRST_RUN_DIALOGS) return false;
-  const { settings, isInitialized } = useAgentSettingsStore.getState();
-  if (!isInitialized || !settings?.agents) return false;
-  try {
-    if (localStorage.getItem(DISMISSAL_KEY)) return false;
-  } catch {
-    return false;
-  }
-  const hasSelections = Object.values(settings.agents).some(
-    (entry) => entry.selected !== undefined
-  );
-  return !hasSelections;
-}
-
-function markAgentSelectionDismissed(): void {
-  try {
-    localStorage.setItem(DISMISSAL_KEY, "true");
-  } catch {
-    // silently fail
-  }
 }

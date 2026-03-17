@@ -28,6 +28,7 @@ import { WorktreeTerminalSection } from "./WorktreeCard/WorktreeTerminalSection"
 import { useWorktreeActions } from "./WorktreeCard/hooks/useWorktreeActions";
 import { useWorktreeMenu } from "./WorktreeCard/hooks/useWorktreeMenu";
 import { useWorktreeStatus } from "./WorktreeCard/hooks/useWorktreeStatus";
+import { computeChipState, type ChipState } from "./utils/computeChipState";
 
 export interface WorktreeCardProps {
   worktree: WorktreeState;
@@ -133,6 +134,7 @@ export function WorktreeCard({
     branchLabel,
     hasChanges,
     isComplete,
+    lifecycleStage,
     effectiveNote,
     effectiveSummary,
     computedSubtitle,
@@ -340,6 +342,25 @@ export function WorktreeCard({
 
   const isIdleCard = spineState === "idle";
   const isStaleCard = spineState === "stale";
+  const isWaitingCard = terminalCounts.byState.waiting > 0;
+
+  const chipState = useMemo(
+    (): ChipState =>
+      computeChipState({
+        worktreeErrorCount: worktreeErrors.length,
+        failedTerminalCount: terminalCounts.byState.failed,
+        waitingTerminalCount: terminalCounts.byState.waiting,
+        lifecycleStage,
+        isComplete,
+      }),
+    [
+      worktreeErrors.length,
+      terminalCounts.byState.failed,
+      terminalCounts.byState.waiting,
+      lifecycleStage,
+      isComplete,
+    ]
+  );
 
   const { setNodeRef, isOver } = useDroppable({
     id: `worktree-drop-${worktree.id}`,
@@ -349,6 +370,9 @@ export function WorktreeCard({
     },
     disabled: isActive,
   });
+
+  const isMuted =
+    (isIdleCard || isStaleCard) && !isWaitingCard && !isActive && !isFocused && !isOver;
 
   const { handleContextMenu } = useWorktreeMenu({
     worktree,
@@ -381,26 +405,23 @@ export function WorktreeCard({
       ref={isActive ? undefined : setNodeRef}
       className={cn(
         "group relative transition-all duration-200",
-        variant === "sidebar" && "border-b border-divider",
-        variant === "grid" && "rounded-lg border border-divider bg-canopy-sidebar/50",
+        variant === "sidebar" && "border-b border-border-subtle",
+        variant === "grid" && "rounded-lg border border-divider bg-overlay-subtle",
         isActive
-          ? "bg-overlay-soft shadow-[inset_0_1px_0_0_rgba(255,255,255,0.05)]"
+          ? variant === "sidebar"
+            ? "bg-overlay-medium shadow-[inset_0_1px_0_0_var(--color-overlay-soft)]"
+            : "bg-overlay-medium shadow-[inset_0_1px_0_0_var(--color-overlay-soft)]"
           : "hover:bg-overlay-subtle",
         variant === "sidebar" && !isActive && "bg-transparent",
         isActive &&
           !isSingleWorktree &&
           variant === "sidebar" &&
-          "before:absolute before:right-0 before:top-2 before:bottom-2 before:w-[2px] before:rounded-l before:bg-[var(--color-state-active)] before:content-[''] before:z-10 motion-safe:before:animate-in motion-safe:before:fade-in motion-safe:before:duration-200",
+          "before:absolute before:left-0 before:top-2 before:bottom-2 before:w-[2px] before:rounded-r before:bg-[var(--color-state-active)] before:content-[''] before:z-10 motion-safe:before:animate-in motion-safe:before:fade-in motion-safe:before:duration-200",
         variant === "grid" && isActive && "border-[var(--color-state-active)]/70 shadow-md",
         variant === "grid" &&
           !isActive &&
           "hover:border-canopy-accent/50 hover:shadow-lg hover:shadow-canopy-accent/5",
         isFocused && !isActive && "bg-overlay-subtle",
-        (isIdleCard || isStaleCard) &&
-          !isActive &&
-          !isFocused &&
-          !isOver &&
-          "opacity-70 hover:opacity-100",
         isOver &&
           !isActive &&
           "ring-2 ring-canopy-accent bg-canopy-accent/10 border-canopy-accent/50 transition-all duration-200",
@@ -417,7 +438,7 @@ export function WorktreeCard({
       tabIndex={0}
       role="button"
       data-worktree-branch={branchLabel}
-      aria-label={`Worktree: ${branchLabel}${isActive ? " (selected)" : ""}${worktree.isCurrent ? " (current)" : ""}, Status: ${spineState}${worktreeErrors.length > 0 ? `, ${worktreeErrors.length} error${worktreeErrors.length !== 1 ? "s" : ""}` : ""}${hasChanges ? ", has uncommitted changes" : ""}`}
+      aria-label={`Worktree: ${worktree.issueTitle ?? branchLabel}${worktree.issueTitle ? ` (${branchLabel})` : ""}${isActive ? " (selected)" : ""}${worktree.isCurrent ? " (current)" : ""}, Status: ${spineState}${worktreeErrors.length > 0 ? `, ${worktreeErrors.length} error${worktreeErrors.length !== 1 ? "s" : ""}` : ""}${hasChanges ? ", has uncommitted changes" : ""}`}
     >
       {isOver && !isActive && (
         <div
@@ -427,24 +448,37 @@ export function WorktreeCard({
           )}
         />
       )}
-      {isComplete && (
+      {chipState !== null && (
         <div
           className={cn(
-            "absolute w-3 h-3 bg-github-open pointer-events-none z-10",
+            "absolute w-3 h-3 pointer-events-none z-10",
+            chipState === "error" && "bg-github-closed",
+            chipState === "waiting" && "bg-state-waiting",
+            chipState === "cleanup" && "bg-github-merged",
+            chipState === "complete" && "bg-github-open",
             variant === "sidebar" ? "top-0 left-[1px]" : "top-0 left-0 rounded-tl-lg"
           )}
           style={{ clipPath: "polygon(0 0, 100% 0, 0 100%)" }}
           role="img"
-          aria-label="Completed: Issue linked, PR opened, all changes committed"
+          aria-label={
+            {
+              error: "Error: attention needed",
+              waiting: "Agent waiting for input",
+              cleanup: "Ready for cleanup",
+              complete: "Complete: in review",
+            }[chipState]
+          }
         />
       )}
       <div className="px-4 py-5">
         <WorktreeHeader
           worktree={worktree}
           isActive={isActive}
+          isMuted={isMuted}
           isMainWorktree={isMainWorktree}
           isPinned={isPinned}
           branchLabel={branchLabel}
+          lifecycleStage={lifecycleStage}
           worktreeErrorCount={worktreeErrors.length}
           badges={{
             onOpenIssue: worktree.issueNumber ? handleOpenIssueExternal : undefined,

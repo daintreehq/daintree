@@ -56,6 +56,32 @@ export function registerNavigationActions(
     },
   }));
 
+  actions.set("nav.focusRegion.next", () => ({
+    id: "nav.focusRegion.next",
+    title: "Focus Next Region",
+    description: "Cycle focus to the next major UI region",
+    category: "navigation",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    run: async () => {
+      callbacks.onFocusRegionNext();
+    },
+  }));
+
+  actions.set("nav.focusRegion.prev", () => ({
+    id: "nav.focusRegion.prev",
+    title: "Focus Previous Region",
+    description: "Cycle focus to the previous major UI region",
+    category: "navigation",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    run: async () => {
+      callbacks.onFocusRegionPrev();
+    },
+  }));
+
   actions.set("find.inFocusedPanel", () => ({
     id: "find.inFocusedPanel",
     title: "Find in Focused Panel",

@@ -3,13 +3,13 @@ import { useShallow } from "zustand/react/shallow";
 import { SortableContext, rectSortingStrategy } from "@dnd-kit/sortable";
 import { useDroppable } from "@dnd-kit/core";
 import { cn } from "@/lib/utils";
+import { useMacroFocusStore } from "@/store/macroFocusStore";
 import {
   useTerminalStore,
   useLayoutConfigStore,
   useWorktreeSelectionStore,
   usePreferencesStore,
   useTwoPaneSplitStore,
-  useSidecarStore,
   type TerminalInstance,
 } from "@/store";
 import { useProjectStore } from "@/store/projectStore";
@@ -231,7 +231,7 @@ function EmptyState({
                 // Defense-in-depth: sanitize SVG at render time
                 const sanitized = sanitizeSvg(projectIconSvg);
                 if (!sanitized.ok) {
-                  return <CanopyIcon className="h-28 w-28 text-white/80" />;
+                  return <CanopyIcon className="h-28 w-28 text-tint/80" />;
                 }
                 return (
                   <img
@@ -242,7 +242,7 @@ function EmptyState({
                 );
               })()
             ) : (
-              <CanopyIcon className="h-28 w-28 text-white/80" />
+              <CanopyIcon className="h-28 w-28 text-tint/80" />
             )}
             {hasActiveWorktree && (
               <button
@@ -341,7 +341,7 @@ function EmptyState({
                   type="button"
                   onClick={handleExplainProject}
                   disabled={!defaultCwd}
-                  className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md hover:bg-white/5 transition-colors group disabled:opacity-50 disabled:cursor-not-allowed focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-canopy-accent/50"
+                  className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md hover:bg-tint/5 transition-colors group disabled:opacity-50 disabled:cursor-not-allowed focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-canopy-accent/50"
                 >
                   <BookOpen className="h-3.5 w-3.5 text-canopy-text/50 group-hover:text-canopy-text/70 transition-colors" />
                   <span className="text-xs text-canopy-text/50 group-hover:text-canopy-text/70 transition-colors">
@@ -358,7 +358,7 @@ function EmptyState({
                   onClick={handleWhatsNext}
                   disabled={!defaultCwd || isLaunchingWhatsNext}
                   aria-busy={isLaunchingWhatsNext}
-                  className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md hover:bg-white/5 transition-colors group disabled:opacity-50 disabled:cursor-not-allowed focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-canopy-accent/50"
+                  className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md hover:bg-tint/5 transition-colors group disabled:opacity-50 disabled:cursor-not-allowed focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-canopy-accent/50"
                 >
                   <Sparkles
                     className={cn(
@@ -378,7 +378,7 @@ function EmptyState({
                 <button
                   type="button"
                   onClick={handleOpenHelp}
-                  className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md hover:bg-white/5 transition-colors group focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-canopy-accent/50"
+                  className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md hover:bg-tint/5 transition-colors group focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-canopy-accent/50"
                 >
                   <div className="w-0 h-0 border-t-[2.5px] border-t-transparent border-l-[5px] border-l-canopy-text/50 border-b-[2.5px] border-b-transparent group-hover:border-l-canopy-text/70 transition-colors" />
                   <span className="text-xs text-canopy-text/50 group-hover:text-canopy-text/70 transition-colors">
@@ -393,7 +393,7 @@ function EmptyState({
             <button
               type="button"
               onClick={handleOpenHelp}
-              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md hover:bg-white/5 transition-colors group focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-canopy-accent/50"
+              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md hover:bg-tint/5 transition-colors group focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-canopy-accent/50"
             >
               <div className="w-0 h-0 border-t-[2.5px] border-t-transparent border-l-[5px] border-l-canopy-text/50 border-b-[2.5px] border-b-transparent group-hover:border-l-canopy-text/70 transition-colors" />
               <span className="text-xs text-canopy-text/50 group-hover:text-canopy-text/70 transition-colors">
@@ -462,10 +462,6 @@ export function ContentGrid({ className, defaultCwd, agentAvailability }: Conten
 
   // Two-pane split mode settings
   const twoPaneSplitEnabled = useTwoPaneSplitStore((state) => state.config.enabled);
-
-  // Sidecar state - used to trigger terminal re-fit when sidecar visibility changes
-  const sidecarOpen = useSidecarStore((state) => state.isOpen);
-  const sidecarLayoutMode = useSidecarStore((state) => state.layoutMode);
 
   // Grid terminals filtered by location and active worktree
   const gridTerminals = useMemo(
@@ -569,6 +565,49 @@ export function ContentGrid({ className, defaultCwd, agentAvailability }: Conten
   // Use tab groups count for grid layout (each group takes one cell)
   const gridItemCount = tabGroups.length + (showPlaceholder ? 1 : 0);
 
+  const gridRegionRef = useCallback((node: HTMLDivElement | null) => {
+    useMacroFocusStore.getState().setRegionRef("grid", node);
+  }, []);
+  const isMacroFocused = useMacroFocusStore((state) => state.focusedRegion === "grid");
+
+  const handleGridRegionKeyDown = useCallback(
+    (e: React.KeyboardEvent) => {
+      if (!isMacroFocused) return;
+
+      // Arrow keys navigate between grid cells
+      const directionMap: Record<string, string> = {
+        ArrowUp: "terminal.focusUp",
+        ArrowDown: "terminal.focusDown",
+        ArrowLeft: "terminal.focusLeft",
+        ArrowRight: "terminal.focusRight",
+      };
+      const action = directionMap[e.key];
+      if (action) {
+        e.preventDefault();
+        e.stopPropagation();
+        void actionService.dispatch(
+          action as Parameters<typeof actionService.dispatch>[0],
+          undefined,
+          { source: "keybinding" }
+        );
+        return;
+      }
+
+      // Enter activates the focused terminal
+      if (e.key === "Enter" && focusedId) {
+        e.preventDefault();
+        e.stopPropagation();
+        const instance = terminalInstanceService.get(focusedId);
+        if (instance) {
+          instance.terminal.focus();
+          useMacroFocusStore.getState().clearFocus();
+        }
+        return;
+      }
+    },
+    [isMacroFocused, focusedId]
+  );
+
   const combinedGridRef = useCallback(
     (node: HTMLDivElement | null) => {
       setNodeRef(node);
@@ -641,7 +680,7 @@ export function ContentGrid({ className, defaultCwd, agentAvailability }: Conten
       if (!target) return;
       if (target.closest(".terminal-pane")) return;
 
-      const canLaunch = (agentId: "claude" | "gemini" | "codex" | "opencode" | "terminal") => {
+      const canLaunch = (agentId: string) => {
         if (agentId === "terminal") return true;
         if (!agentAvailability) return true;
         return agentAvailability[agentId] === true;
@@ -656,7 +695,7 @@ export function ContentGrid({ className, defaultCwd, agentAvailability }: Conten
           return {
             id: `new:${id}`,
             label: `New ${config?.name ?? id}`,
-            enabled: canLaunch(id as "claude" | "gemini" | "codex" | "opencode" | "terminal"),
+            enabled: canLaunch(id),
           };
         });
 
@@ -775,7 +814,7 @@ export function ContentGrid({ className, defaultCwd, agentAvailability }: Conten
       clearTimeout(timeoutId);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- gridTerminals intentionally excluded to prevent redundant fit cycles on worktree switch
-  }, [gridCols, terminalIds, sidecarOpen, sidecarLayoutMode]);
+  }, [gridCols, terminalIds]);
 
   // Show "grid full" overlay when trying to drag from dock to a full grid
   const showGridFullOverlay = sourceContainer === "dock" && isGridFull;
@@ -881,7 +920,19 @@ export function ContentGrid({ className, defaultCwd, agentAvailability }: Conten
         const effectiveFocusedId = maximizedGroupFocusTarget ?? focusedId;
 
         return (
-          <div className={cn("h-full flex flex-col bg-canopy-bg", className)}>
+          <div
+            ref={gridRegionRef}
+            role="region"
+            tabIndex={-1}
+            aria-label="Terminal grid"
+            data-macro-focus={isMacroFocused ? "true" : undefined}
+            onKeyDown={handleGridRegionKeyDown}
+            className={cn(
+              "h-full flex flex-col bg-canopy-bg outline-none",
+              "data-[macro-focus=true]:ring-2 data-[macro-focus=true]:ring-canopy-accent/60 data-[macro-focus=true]:ring-inset",
+              className
+            )}
+          >
             <GridNotificationBar className="mx-1 mt-1 shrink-0" />
             <div className="relative min-h-0 flex-1">
               <GridTabGroup
@@ -902,7 +953,19 @@ export function ContentGrid({ className, defaultCwd, agentAvailability }: Conten
       const terminal = gridTerminals.find((t: TerminalInstance) => t.id === maximizedId);
       if (terminal) {
         return (
-          <div className={cn("h-full flex flex-col bg-canopy-bg", className)}>
+          <div
+            ref={gridRegionRef}
+            role="region"
+            tabIndex={-1}
+            aria-label="Terminal grid"
+            data-macro-focus={isMacroFocused ? "true" : undefined}
+            onKeyDown={handleGridRegionKeyDown}
+            className={cn(
+              "h-full flex flex-col bg-canopy-bg outline-none",
+              "data-[macro-focus=true]:ring-2 data-[macro-focus=true]:ring-canopy-accent/60 data-[macro-focus=true]:ring-inset",
+              className
+            )}
+          >
             <GridNotificationBar className="mx-1 mt-1 shrink-0" />
             <div className="relative min-h-0 flex-1">
               <GridPanel
@@ -923,7 +986,20 @@ export function ContentGrid({ className, defaultCwd, agentAvailability }: Conten
 
   if (useTwoPaneSplitMode && twoPaneTerminals) {
     return (
-      <div key="split-mode" className={cn("h-full flex flex-col", className)}>
+      <div
+        key="split-mode"
+        ref={gridRegionRef}
+        role="region"
+        tabIndex={-1}
+        aria-label="Terminal grid"
+        data-macro-focus={isMacroFocused ? "true" : undefined}
+        onKeyDown={handleGridRegionKeyDown}
+        className={cn(
+          "h-full flex flex-col outline-none",
+          "data-[macro-focus=true]:ring-2 data-[macro-focus=true]:ring-canopy-accent/60 data-[macro-focus=true]:ring-inset",
+          className
+        )}
+      >
         <GridNotificationBar className="mx-1 mt-1 shrink-0" />
         <TerminalCountWarning className="mx-1 mt-1 shrink-0" />
         <div
@@ -949,7 +1025,20 @@ export function ContentGrid({ className, defaultCwd, agentAvailability }: Conten
   }
 
   return (
-    <div key="grid-mode" className={cn("h-full flex flex-col", className)}>
+    <div
+      key="grid-mode"
+      ref={gridRegionRef}
+      role="region"
+      tabIndex={-1}
+      aria-label="Terminal grid"
+      data-macro-focus={isMacroFocused ? "true" : undefined}
+      onKeyDown={handleGridRegionKeyDown}
+      className={cn(
+        "h-full flex flex-col outline-none",
+        "data-[macro-focus=true]:ring-2 data-[macro-focus=true]:ring-canopy-accent/60 data-[macro-focus=true]:ring-inset",
+        className
+      )}
+    >
       <GridNotificationBar className="mx-1 mt-1 shrink-0" />
       <TerminalCountWarning className="mx-1 mt-1 shrink-0" />
       <div className="relative flex-1 min-h-0">

@@ -7,13 +7,8 @@
  * All types are serializable (no functions, no circular refs) for IPC transport.
  */
 
-import type {
-  AgentState,
-  AgentId,
-  TerminalType,
-  TerminalKind,
-  TerminalFlowStatus,
-} from "./domain.js";
+import type { AgentState, AgentId } from "./agent.js";
+import type { TerminalType, TerminalKind, TerminalFlowStatus } from "./panel.js";
 
 export type { TerminalFlowStatus };
 
@@ -89,7 +84,9 @@ export type PtyHostRequest =
   | { type: "get-available-terminals"; requestId: string }
   | { type: "get-terminals-by-state"; state: AgentState; requestId: string }
   | { type: "get-all-terminals"; requestId: string }
-  | { type: "set-ipc-data-mirror"; id: string; enabled: boolean };
+  | { type: "set-ipc-data-mirror"; id: string; enabled: boolean }
+  | { type: "graceful-kill"; id: string; requestId: string }
+  | { type: "graceful-kill-by-project"; projectId: string; requestId: string };
 
 /**
  * Terminal snapshot data sent from Host → Main for state queries.
@@ -197,6 +194,17 @@ export type PtyHostEvent =
   | {
       type: "terminal-reliability-metric";
       payload: TerminalReliabilityMetricPayload;
+    }
+  | {
+      type: "graceful-kill-result";
+      requestId: string;
+      id: string;
+      agentSessionId: string | null;
+    }
+  | {
+      type: "graceful-kill-by-project-result";
+      requestId: string;
+      results: Array<{ id: string; agentSessionId: string | null }>;
     };
 
 /** Terminal info sent from Host → Main for getTerminal queries */

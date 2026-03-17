@@ -26,6 +26,10 @@ vi.mock("@/store/voiceRecordingStore", () => {
     completeSegment: vi.fn(),
     resolvePendingCorrection: vi.fn(),
     addPendingCorrection: vi.fn(),
+    updateAICorrectionSpan: vi.fn(),
+    rebasePendingCorrections: vi.fn(),
+    rebaseAICorrectionSpans: vi.fn(),
+    clearAICorrectionSpans: vi.fn(),
     setDraftLengthAtSegmentStart: vi.fn(),
   };
   const getState = () => ({ ...state, ...fns });
@@ -85,6 +89,7 @@ function buildElectronStub() {
     voiceInput: {
       onTranscriptionDelta: vi.fn(() => () => {}),
       onTranscriptionComplete: vi.fn(() => () => {}),
+      onCorrectionQueued: vi.fn(() => () => {}),
       onCorrectionReplace: vi.fn(() => () => {}),
       onParagraphBoundary: vi.fn(() => () => {}),
       onError: vi.fn(() => () => {}),

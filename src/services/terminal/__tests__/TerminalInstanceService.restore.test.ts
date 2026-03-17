@@ -8,6 +8,13 @@ vi.mock("@xterm/addon-canvas", () => ({
   },
 }));
 
+vi.mock("@xterm/addon-webgl", () => ({
+  WebglAddon: vi.fn().mockImplementation(() => ({
+    dispose: vi.fn(),
+    onContextLoss: vi.fn(() => ({ dispose: vi.fn() })),
+  })),
+}));
+
 vi.mock("@/clients", () => ({
   terminalClient: {
     onData: vi.fn(() => vi.fn()),
@@ -104,6 +111,7 @@ describe("TerminalInstanceService - Incremental Restore", () => {
         }
       }),
       scrollToBottom: vi.fn(),
+      scrollToLine: vi.fn(),
       open: vi.fn(),
       dispose: vi.fn(),
       refresh: vi.fn(),
@@ -383,6 +391,266 @@ describe("TerminalInstanceService - Incremental Restore", () => {
     await restorePromise;
 
     expect(terminal.isSerializedRestoreInProgress).toBe(false);
+
+    terminalInstanceService.destroy(id);
+  });
+
+  it("should not auto-scroll to bottom after synchronous restore", async () => {
+    const id = "test-terminal-no-scroll-sync";
+    const smallState = "x".repeat(1000);
+
+    const terminal = terminalInstanceService.getOrCreate(
+      id,
+      "terminal",
+      {},
+      () => 3 as any,
+      undefined
+    );
+
+    terminal.terminal = mockTerminal;
+    terminal.latestWasAtBottom = true;
+
+    terminalInstanceService.restoreFromSerialized(id, smallState);
+
+    await flushMicrotasks();
+
+    expect(mockTerminal.scrollToBottom).not.toHaveBeenCalled();
+
+    terminalInstanceService.destroy(id);
+  });
+
+  it("should not auto-scroll to bottom after incremental restore", async () => {
+    const id = "test-terminal-no-scroll-incr";
+    const largeState = "x".repeat(INCREMENTAL_RESTORE_CONFIG.indicatorThresholdBytes + 1000);
+
+    const terminal = terminalInstanceService.getOrCreate(
+      id,
+      "terminal",
+      {},
+      () => 3 as any,
+      undefined
+    );
+
+    terminal.terminal = mockTerminal;
+    terminal.latestWasAtBottom = true;
+
+    const restorePromise = (terminalInstanceService as any).restoreFromSerializedIncremental(
+      id,
+      largeState
+    );
+
+    await flushMicrotasks();
+
+    for (let i = 0; i < 20; i++) {
+      flushIdleCallbacks();
+      await flushMicrotasks();
+    }
+
+    await restorePromise;
+
+    expect(mockTerminal.scrollToBottom).not.toHaveBeenCalled();
+
+    terminalInstanceService.destroy(id);
+  });
+
+  it("sync restore preserves scroll when user is scrolled back", async () => {
+    const id = "test-scroll-sync-preserve";
+    const smallState = "x".repeat(1000);
+
+    const terminal = terminalInstanceService.getOrCreate(
+      id,
+      "terminal",
+      {},
+      () => 3 as any,
+      undefined
+    );
+
+    terminal.terminal = mockTerminal;
+    terminal.isUserScrolledBack = true;
+    mockTerminal.buffer.active.baseY = 200;
+    mockTerminal.buffer.active.viewportY = 150;
+
+    // reset clears buffer state; write repopulates it
+    const origReset = mockTerminal.reset;
+    mockTerminal.reset = vi.fn(() => {
+      origReset();
+      mockTerminal.buffer.active.baseY = 0;
+      mockTerminal.buffer.active.viewportY = 0;
+    });
+
+    const origWrite = mockTerminal.write;
+    mockTerminal.write = vi.fn((data: string, callback?: () => void) => {
+      mockTerminal.buffer.active.baseY = 300;
+      mockTerminal.buffer.active.viewportY = 300;
+      origWrite(data, callback);
+    });
+
+    terminalInstanceService.restoreFromSerialized(id, smallState);
+    await flushMicrotasks();
+
+    // offset was 200 - 150 = 50, new baseY = 300, so scrollToLine(250)
+    expect(mockTerminal.scrollToLine).toHaveBeenCalledTimes(1);
+    expect(mockTerminal.scrollToLine).toHaveBeenCalledWith(250);
+    expect(mockTerminal.scrollToBottom).not.toHaveBeenCalled();
+
+    terminalInstanceService.destroy(id);
+  });
+
+  it("sync restore does not scroll when user is at bottom", async () => {
+    const id = "test-scroll-sync-at-bottom";
+    const smallState = "x".repeat(1000);
+
+    const terminal = terminalInstanceService.getOrCreate(
+      id,
+      "terminal",
+      {},
+      () => 3 as any,
+      undefined
+    );
+
+    terminal.terminal = mockTerminal;
+    terminal.isUserScrolledBack = false;
+    mockTerminal.buffer.active.baseY = 200;
+    mockTerminal.buffer.active.viewportY = 200;
+
+    terminalInstanceService.restoreFromSerialized(id, smallState);
+    await flushMicrotasks();
+
+    expect(mockTerminal.scrollToLine).not.toHaveBeenCalled();
+
+    terminalInstanceService.destroy(id);
+  });
+
+  it("incremental restore preserves scroll when user is scrolled back", async () => {
+    const id = "test-scroll-incr-preserve";
+    const largeState = "x".repeat(INCREMENTAL_RESTORE_CONFIG.indicatorThresholdBytes + 1000);
+
+    const terminal = terminalInstanceService.getOrCreate(
+      id,
+      "terminal",
+      {},
+      () => 3 as any,
+      undefined
+    );
+
+    terminal.terminal = mockTerminal;
+    terminal.isUserScrolledBack = true;
+    mockTerminal.buffer.active.baseY = 200;
+    mockTerminal.buffer.active.viewportY = 150;
+
+    // After reset+writes, simulate buffer repopulated
+    const origReset = mockTerminal.reset;
+    mockTerminal.reset = vi.fn(() => {
+      origReset();
+      mockTerminal.buffer.active.baseY = 0;
+      mockTerminal.buffer.active.viewportY = 0;
+    });
+
+    const origWrite = mockTerminal.write;
+    mockTerminal.write = vi.fn((data: string, callback?: () => void) => {
+      mockTerminal.buffer.active.baseY = 300;
+      mockTerminal.buffer.active.viewportY = 300;
+      origWrite(data, callback);
+    });
+
+    const restorePromise = (terminalInstanceService as any).restoreFromSerializedIncremental(
+      id,
+      largeState
+    );
+
+    await flushMicrotasks();
+
+    for (let i = 0; i < 20; i++) {
+      flushIdleCallbacks();
+      await flushMicrotasks();
+    }
+
+    await restorePromise;
+
+    // offset was 200 - 150 = 50, new baseY = 300, so scrollToLine(250)
+    expect(mockTerminal.scrollToLine).toHaveBeenCalledTimes(1);
+    expect(mockTerminal.scrollToLine).toHaveBeenCalledWith(250);
+    expect(mockTerminal.scrollToBottom).not.toHaveBeenCalled();
+
+    terminalInstanceService.destroy(id);
+  });
+
+  it("sync restore clamps scroll to 0 when offset exceeds new baseY", async () => {
+    const id = "test-scroll-sync-clamp";
+    const smallState = "x".repeat(1000);
+
+    const terminal = terminalInstanceService.getOrCreate(
+      id,
+      "terminal",
+      {},
+      () => 3 as any,
+      undefined
+    );
+
+    terminal.terminal = mockTerminal;
+    terminal.isUserScrolledBack = true;
+    mockTerminal.buffer.active.baseY = 200;
+    mockTerminal.buffer.active.viewportY = 100;
+
+    const origWrite = mockTerminal.write;
+    mockTerminal.write = vi.fn((data: string, callback?: () => void) => {
+      mockTerminal.buffer.active.baseY = 50;
+      mockTerminal.buffer.active.viewportY = 50;
+      origWrite(data, callback);
+    });
+
+    terminalInstanceService.restoreFromSerialized(id, smallState);
+    await flushMicrotasks();
+
+    // offset was 200 - 100 = 100, new baseY = 50, so Math.max(0, 50 - 100) = 0
+    expect(mockTerminal.scrollToLine).toHaveBeenCalledTimes(1);
+    expect(mockTerminal.scrollToLine).toHaveBeenCalledWith(0);
+
+    terminalInstanceService.destroy(id);
+  });
+
+  it("incremental restore clamps scroll to 0 when offset exceeds new baseY", async () => {
+    const id = "test-scroll-incr-clamp";
+    const largeState = "x".repeat(INCREMENTAL_RESTORE_CONFIG.indicatorThresholdBytes + 1000);
+
+    const terminal = terminalInstanceService.getOrCreate(
+      id,
+      "terminal",
+      {},
+      () => 3 as any,
+      undefined
+    );
+
+    terminal.terminal = mockTerminal;
+    terminal.isUserScrolledBack = true;
+    mockTerminal.buffer.active.baseY = 200;
+    mockTerminal.buffer.active.viewportY = 100;
+
+    // After writes, simulate shorter buffer
+    const origWrite = mockTerminal.write;
+    mockTerminal.write = vi.fn((data: string, callback?: () => void) => {
+      mockTerminal.buffer.active.baseY = 50;
+      mockTerminal.buffer.active.viewportY = 50;
+      origWrite(data, callback);
+    });
+
+    const restorePromise = (terminalInstanceService as any).restoreFromSerializedIncremental(
+      id,
+      largeState
+    );
+
+    await flushMicrotasks();
+
+    for (let i = 0; i < 20; i++) {
+      flushIdleCallbacks();
+      await flushMicrotasks();
+    }
+
+    await restorePromise;
+
+    // offset was 200 - 100 = 100, new baseY = 50, so Math.max(0, 50 - 100) = 0
+    expect(mockTerminal.scrollToLine).toHaveBeenCalledTimes(1);
+    expect(mockTerminal.scrollToLine).toHaveBeenCalledWith(0);
 
     terminalInstanceService.destroy(id);
   });

@@ -1,14 +1,14 @@
+import type { StagingStatus } from "../git.js";
+import type { AgentId } from "../agent.js";
+import type { TabGroup } from "../panel.js";
+import type { WorktreeState } from "../worktree.js";
 import type {
-  WorktreeState,
   Project,
   ProjectSettings,
   RunCommand,
-  AgentId,
   TerminalRecipe,
   TerminalSnapshot,
-  TabGroup,
-  StagingStatus,
-} from "../domain.js";
+} from "../project.js";
 import type { GitInitOptions, GitInitProgressEvent, GitInitResult } from "./gitInit.js";
 import type { AgentSettings } from "../agentSettings.js";
 import type { UserAgentRegistry, UserAgentConfig } from "../userAgentRegistry.js";
@@ -73,9 +73,14 @@ import type {
 } from "./system.js";
 import type { AppState, HydrateResult } from "./app.js";
 import type { LogEntry, LogFilterOptions } from "./logs.js";
-import type { RetryAction, AppError } from "./errors.js";
+import type { RetryAction, AppError, RetryProgressPayload } from "./errors.js";
 import type { EventRecord, EventFilterOptions } from "./events.js";
-import type { ProjectCloseResult, ProjectStats, ProjectSwitchPayload } from "./project.js";
+import type {
+  ProjectCloseResult,
+  ProjectStats,
+  ProjectSwitchPayload,
+  ProjectMcpServerRunState,
+} from "./project.js";
 import type {
   RepositoryStats,
   GitHubCliStatus,
@@ -119,6 +124,36 @@ import type { SpawnResult, TerminalStatusPayload } from "../pty-host.js";
 import type { HibernationConfig } from "./hibernation.js";
 import type { AgentRegistry, AgentMetadata } from "./agentCapabilities.js";
 import type { AppThemeConfig } from "../appTheme.js";
+import type {
+  DemoMoveToPayload,
+  DemoTypePayload,
+  DemoSetZoomPayload,
+  DemoWaitForSelectorPayload,
+  DemoScreenshotResult,
+} from "./demo.js";
+
+export type ChecklistItemId = "openedProject" | "launchedAgent" | "createdWorktree";
+
+export interface ChecklistItems {
+  openedProject: boolean;
+  launchedAgent: boolean;
+  createdWorktree: boolean;
+}
+
+export interface ChecklistState {
+  dismissed: boolean;
+  items: ChecklistItems;
+}
+
+export interface OnboardingState {
+  schemaVersion: number;
+  completed: boolean;
+  currentStep: string | null;
+  firstRunToastSeen: boolean;
+  newsletterPromptSeen: boolean;
+  migratedFromLocalStorage: boolean;
+  checklist: ChecklistState;
+}
 
 // IPC Contract Maps
 
@@ -152,6 +187,10 @@ export interface IpcInvokeMap {
   "worktree:list-branches": {
     args: [payload: { rootPath: string }];
     result: BranchInfo[];
+  };
+  "worktree:get-recent-branches": {
+    args: [payload: { rootPath: string }];
+    result: string[];
   };
   "worktree:get-default-path": {
     args: [payload: { rootPath: string; branchName: string }];
@@ -393,8 +432,12 @@ export interface IpcInvokeMap {
     result: StartAgentUpdateResult;
   };
   "system:health-check": {
-    args: [];
+    args: [agentIds?: string[]];
     result: SystemHealthCheckResult;
+  };
+  "system:download-diagnostics": {
+    args: [];
+    result: boolean;
   };
 
   // App state channels
@@ -505,6 +548,10 @@ export interface IpcInvokeMap {
   "error:open-logs": {
     args: [];
     result: void;
+  };
+  "error:get-pending": {
+    args: [];
+    result: AppError[];
   };
 
   // Event inspector channels
@@ -691,10 +738,14 @@ export interface IpcInvokeMap {
     result: RepositoryStats;
   };
   "github:open-issues": {
-    args: [cwd: string];
+    args: [cwd: string, query?: string, state?: string];
     result: void;
   };
   "github:open-prs": {
+    args: [cwd: string, query?: string, state?: string];
+    result: void;
+  };
+  "github:open-commits": {
     args: [cwd: string];
     result: void;
   };
@@ -901,6 +952,10 @@ export interface IpcInvokeMap {
     args: [cwd: string];
     result: string | null;
   };
+  "git:get-working-diff": {
+    args: [payload: { cwd: string; type: "unstaged" | "staged" | "head" }];
+    result: string;
+  };
 
   // Sidecar channels
   "sidecar:create": {
@@ -1024,6 +1079,7 @@ export interface IpcInvokeMap {
         scope: "worktree" | "project";
         worktreeId?: string;
         createdAt: number;
+        tags?: string[];
       };
       content: string;
       path: string;
@@ -1039,6 +1095,7 @@ export interface IpcInvokeMap {
         scope: "worktree" | "project";
         worktreeId?: string;
         createdAt: number;
+        tags?: string[];
       };
       content: string;
       path: string;
@@ -1055,6 +1112,7 @@ export interface IpcInvokeMap {
         scope: "worktree" | "project";
         worktreeId?: string;
         createdAt: number;
+        tags?: string[];
       },
       expectedLastModified?: number,
     ];
@@ -1076,6 +1134,7 @@ export interface IpcInvokeMap {
       createdAt: number;
       modifiedAt: number;
       preview: string;
+      tags: string[];
     }[];
   };
   "notes:delete": {
@@ -1094,9 +1153,42 @@ export interface IpcInvokeMap {
         createdAt: number;
         modifiedAt: number;
         preview: string;
+        tags: string[];
       }[];
       query: string;
     };
+  };
+
+  // Workflow channels
+  "workflow:list": {
+    args: [];
+    result: import("../workflow.js").WorkflowSummary[];
+  };
+  "workflow:start": {
+    args: [workflowId: string];
+    result: string;
+  };
+  "workflow:cancel": {
+    args: [runId: string];
+    result: void;
+  };
+  "workflow:get-run": {
+    args: [runId: string];
+    result: import("./api.js").WorkflowRunIpc | null;
+  };
+  "workflow:list-runs": {
+    args: [];
+    result: import("./api.js").WorkflowRunIpc[];
+  };
+
+  // Workflow approval channels
+  "workflow:list-pending-approvals": {
+    args: [];
+    result: import("../workflowRun.js").PendingWorkflowApproval[];
+  };
+  "workflow:resolve-approval": {
+    args: [payload: { runId: string; nodeId: string; approved: boolean; feedback?: string }];
+    result: void;
   };
 
   // Dev Preview channels
@@ -1164,6 +1256,10 @@ export interface IpcInvokeMap {
     args: [];
     result: { ok: true; filePath: string; thumbnailDataUrl: string } | { ok: false; error: string };
   };
+  "clipboard:thumbnail-from-path": {
+    args: [filePath: string];
+    result: { ok: true; filePath: string; thumbnailDataUrl: string } | { ok: false; error: string };
+  };
 
   // Notification settings channels
   "notification:settings-get": {
@@ -1174,6 +1270,8 @@ export interface IpcInvokeMap {
       failedEnabled: boolean;
       soundEnabled: boolean;
       soundFile: string;
+      waitingEscalationEnabled: boolean;
+      waitingEscalationDelayMs: number;
     };
   };
   "notification:settings-set": {
@@ -1184,6 +1282,8 @@ export interface IpcInvokeMap {
         failedEnabled: boolean;
         soundEnabled: boolean;
         soundFile: string;
+        waitingEscalationEnabled: boolean;
+        waitingEscalationDelayMs: number;
       }>,
     ];
     result: void;
@@ -1208,17 +1308,11 @@ export interface IpcInvokeMap {
   };
   "app-theme:import": {
     args: [];
-    result:
-      | {
-          ok: true;
-          scheme: {
-            id: string;
-            name: string;
-            type: "dark" | "light";
-            colors: Record<string, string>;
-          };
-        }
-      | { ok: false; errors: string[] };
+    result: import("../appTheme.js").AppThemeImportResult;
+  };
+  "app-theme:set-color-vision-mode": {
+    args: [mode: import("../appTheme.js").ColorVisionMode];
+    result: void;
   };
   "telemetry:get": {
     args: [];
@@ -1230,6 +1324,88 @@ export interface IpcInvokeMap {
   };
   "telemetry:mark-prompt-shown": {
     args: [];
+    result: void;
+  };
+  "telemetry:track": {
+    args: [event: string, properties: Record<string, unknown>];
+    result: void;
+  };
+
+  // Privacy & Data
+  "privacy:get-settings": {
+    args: [];
+    result: {
+      telemetryLevel: "off" | "errors" | "full";
+      logRetentionDays: 0 | 7 | 30 | 90;
+      dataFolderPath: string;
+    };
+  };
+  "privacy:set-telemetry-level": {
+    args: [level: "off" | "errors" | "full"];
+    result: void;
+  };
+  "privacy:set-log-retention": {
+    args: [days: 0 | 7 | 30 | 90];
+    result: void;
+  };
+  "privacy:open-data-folder": {
+    args: [];
+    result: void;
+  };
+  "privacy:clear-cache": {
+    args: [];
+    result: void;
+  };
+  "privacy:reset-all-data": {
+    args: [];
+    result: void;
+  };
+  "privacy:get-data-folder-path": {
+    args: [];
+    result: string;
+  };
+
+  // Onboarding
+  "onboarding:get": {
+    args: [];
+    result: OnboardingState;
+  };
+  "onboarding:migrate": {
+    args: [
+      payload: {
+        agentSelectionDismissed: boolean;
+        agentSetupComplete: boolean;
+        firstRunToastSeen: boolean;
+      },
+    ];
+    result: OnboardingState;
+  };
+  "onboarding:set-step": {
+    args: [step: string | null];
+    result: void;
+  };
+  "onboarding:complete": {
+    args: [];
+    result: void;
+  };
+  "onboarding:mark-toast-seen": {
+    args: [];
+    result: void;
+  };
+  "onboarding:mark-newsletter-seen": {
+    args: [];
+    result: void;
+  };
+  "onboarding:checklist-get": {
+    args: [];
+    result: ChecklistState;
+  };
+  "onboarding:checklist-dismiss": {
+    args: [];
+    result: void;
+  };
+  "onboarding:checklist-mark-item": {
+    args: [item: ChecklistItemId];
     result: void;
   };
 
@@ -1338,6 +1514,64 @@ export interface IpcInvokeMap {
     args: [];
     result: string;
   };
+
+  // Webview console capture
+  "webview:start-console-capture": {
+    args: [webContentsId: number, paneId: string];
+    result: void;
+  };
+  "webview:stop-console-capture": {
+    args: [webContentsId: number, paneId: string];
+    result: void;
+  };
+  "webview:clear-console-capture": {
+    args: [webContentsId: number, paneId: string];
+    result: void;
+  };
+  "webview:get-console-properties": {
+    args: [webContentsId: number, objectId: string];
+    result: import("./webviewConsole.js").CdpGetPropertiesResult;
+  };
+
+  // Demo mode channels (dev-only, gated by --demo-mode flag)
+  "demo:move-to": {
+    args: [payload: DemoMoveToPayload];
+    result: void;
+  };
+  "demo:click": {
+    args: [];
+    result: void;
+  };
+  "demo:type": {
+    args: [payload: DemoTypePayload];
+    result: void;
+  };
+  "demo:set-zoom": {
+    args: [payload: DemoSetZoomPayload];
+    result: void;
+  };
+  "demo:screenshot": {
+    args: [];
+    result: DemoScreenshotResult;
+  };
+  "demo:wait-for-selector": {
+    args: [payload: DemoWaitForSelectorPayload];
+    result: void;
+  };
+  "demo:pause": {
+    args: [];
+    result: void;
+  };
+  "demo:resume": {
+    args: [];
+    result: void;
+  };
+
+  // Project MCP server channels
+  "project-mcp:get-statuses": {
+    args: [projectId: string];
+    result: ProjectMcpServerRunState[];
+  };
 }
 
 /**
@@ -1365,6 +1599,8 @@ export interface IpcEventMap {
     timestamp: number;
   };
   "terminal:backend-ready": void;
+  "terminal:reduce-scrollback": { terminalIds: string[]; targetLines: number };
+  "terminal:restore-scrollback": { terminalIds: string[] };
 
   // Agent events
   "agent:state-changed": AgentStateChangePayload;
@@ -1393,6 +1629,7 @@ export interface IpcEventMap {
 
   // Error events
   "error:notify": AppError;
+  "error:retry-progress": RetryProgressPayload;
 
   // Log events
   "logs:entry": LogEntry;
@@ -1443,13 +1680,74 @@ export interface IpcEventMap {
     action: "created" | "updated" | "deleted";
   };
 
+  // Workflow events
+  "workflow:started": import("./api.js").WorkflowStartedPayload;
+  "workflow:completed": import("./api.js").WorkflowCompletedPayload;
+  "workflow:failed": import("./api.js").WorkflowFailedPayload;
+  "workflow:approval-requested": {
+    runId: string;
+    nodeId: string;
+    workflowId: string;
+    workflowName: string;
+    prompt: string;
+    requestedAt: number;
+    timeoutMs?: number;
+    timeoutAt?: number;
+    timestamp: number;
+  };
+  "workflow:approval-cleared": {
+    runId: string;
+    nodeId: string;
+    reason: string;
+    timestamp: number;
+  };
+
+  // Webview console events
+  "webview:console-message": import("./webviewConsole.js").SerializedConsoleRow;
+  "webview:console-context-cleared": { paneId: string; navigationGeneration: number };
+
+  // Webview dialog events
+  "webview:dialog-request": {
+    dialogId: string;
+    panelId: string;
+    type: "alert" | "confirm" | "prompt";
+    message: string;
+    defaultValue: string;
+  };
+
+  // Webview find-in-page shortcut forwarded from guest
+  "webview:find-shortcut": {
+    panelId: string;
+    shortcut: "find" | "next" | "prev" | "close";
+  };
+
   // Voice input events
   "voice-input:transcription-delta": string;
   "voice-input:transcription-complete": { text: string; willCorrect: boolean };
+  "voice-input:correction-queued": {
+    correctionId: string;
+    rawText: string;
+    reason: string;
+  };
   "voice-input:correction-replace": { correctionId: string; correctedText: string };
   "voice-input:paragraph-boundary": { rawText: string | null; correctionId: string | null };
   "voice-input:error": string;
   "voice-input:status": "idle" | "connecting" | "recording" | "error";
+
+  // Demo mode events (main → renderer command forwarding)
+  "demo:exec-move-to": DemoMoveToPayload;
+  "demo:exec-click": void;
+  "demo:exec-type": DemoTypePayload;
+  "demo:exec-set-zoom": DemoSetZoomPayload;
+  "demo:exec-pause": void;
+  "demo:exec-resume": void;
+  "demo:exec-wait-for-selector": DemoWaitForSelectorPayload;
+
+  // Project MCP server events
+  "project-mcp:status-changed": {
+    projectId: string;
+    servers: ProjectMcpServerRunState[];
+  };
 }
 
 export type IpcInvokeArgs<K extends keyof IpcInvokeMap> = IpcInvokeMap[K]["args"];

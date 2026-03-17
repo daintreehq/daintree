@@ -79,6 +79,7 @@ export type ActionId =
   | "window.close"
   | "github.openIssues"
   | "github.openPRs"
+  | "github.openCommits"
   | "github.openIssue"
   | "github.openPR"
   | "github.getRepoStats"
@@ -144,10 +145,12 @@ export type ActionId =
   | "recipe.list"
   | "recipe.editor.open"
   | "recipe.editor.openFromLayout"
+  | "panel.focus"
   | "panel.focusIndex"
   | "worktree.switchIndex"
   | "agent.launch"
   | "app.settings.openTab"
+  | "worktree.quickCreate"
   | "worktree.createDialog.open"
   | "worktree.select"
   | "worktree.copyTree"
@@ -233,7 +236,9 @@ export type ActionId =
   | "notes.delete"
   | "notes.reveal"
   | "devServer.start"
-  | "worktree.compareDiff";
+  | "worktree.compareDiff"
+  | "terminal.stashInput"
+  | "terminal.popStash";
 
 export interface ActionContext {
   projectId?: string;
@@ -249,7 +254,6 @@ export interface ActionContext {
   focusedTerminalKind?: string;
   focusedTerminalType?: string;
   focusedTerminalTitle?: string;
-  isTerminalPaletteOpen?: boolean;
   isSettingsOpen?: boolean;
 }
 

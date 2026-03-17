@@ -2,12 +2,7 @@ import { Terminal } from "@xterm/xterm";
 import { terminalClient } from "@/clients";
 import { TerminalRefreshTier, TerminalType } from "@/types";
 import type { AgentState } from "@/types";
-import {
-  ManagedTerminal,
-  RefreshTierProvider,
-  AgentStateCallback,
-  INCREMENTAL_RESTORE_CONFIG,
-} from "./types";
+import { ManagedTerminal, RefreshTierProvider, AgentStateCallback } from "./types";
 import { setupTerminalAddons } from "./TerminalAddonManager";
 import { TerminalOutputIngestService } from "./TerminalOutputIngestService";
 import { TerminalParserHandler } from "./TerminalParserHandler";
@@ -16,11 +11,34 @@ import { TerminalOffscreenManager } from "./TerminalOffscreenManager";
 import { TerminalLinkHandler } from "./TerminalLinkHandler";
 import { TerminalResizeController } from "./TerminalResizeController";
 import { TerminalRendererPolicy } from "./TerminalRendererPolicy";
+import { TerminalWebGLManager } from "./TerminalWebGLManager";
 import { TerminalWakeManager } from "./TerminalWakeManager";
+import { TerminalAgentStateController } from "./TerminalAgentStateController";
+import { TerminalRestoreController } from "./TerminalRestoreController";
+import { reduceScrollback, restoreScrollback } from "./TerminalScrollbackController";
 import { getEffectiveAgentConfig } from "@shared/config/agentRegistry";
 import { logDebug, logWarn, logError } from "@/utils/logger";
 import { PERF_MARKS } from "@shared/perf/marks";
 import { markRendererPerformance } from "@/utils/performance";
+import { SCROLLBACK_BACKGROUND } from "@shared/config/scrollback";
+
+// eslint-disable-next-line no-control-regex
+const URXVT_MOUSE_RE = /^\x1b\[\d+;\d+;\d+M/;
+
+export function isNonKeyboardInput(data: string): boolean {
+  if (data.startsWith("\x1b[M")) return true;
+  if (data.startsWith("\x1b[<")) return true;
+  if (data === "\x1b[I" || data === "\x1b[O") return true;
+  if (URXVT_MOUSE_RE.test(data)) return true;
+  return false;
+}
+
+function canAutoInitializeTerminalIngest(): boolean {
+  return (
+    typeof window !== "undefined" &&
+    typeof window.electron?.terminal?.getSharedBuffers === "function"
+  );
+}
 
 class TerminalInstanceService {
   private instances = new Map<string, ManagedTerminal>();
@@ -38,31 +56,67 @@ class TerminalInstanceService {
   >();
   private offscreenManager = new TerminalOffscreenManager();
   private linkHandler = new TerminalLinkHandler();
+  private cachedSelections = new Map<string, string>();
   private resizeController: TerminalResizeController;
   private rendererPolicy: TerminalRendererPolicy;
+  private webGLManager = new TerminalWebGLManager();
   private wakeManager: TerminalWakeManager;
+  private agentStateController: TerminalAgentStateController;
+  private restoreController: TerminalRestoreController;
 
   constructor() {
-    this.dataBuffer.initialize();
+    if (canAutoInitializeTerminalIngest()) {
+      void this.dataBuffer.initialize();
+    }
 
     this.resizeController = new TerminalResizeController({
       getInstance: (id) => this.instances.get(id),
       dataBuffer: this.dataBuffer,
     });
 
+    this.agentStateController = new TerminalAgentStateController({
+      getInstance: (id) => this.instances.get(id),
+    });
+
+    this.restoreController = new TerminalRestoreController({
+      getInstance: (id) => this.instances.get(id),
+      writeData: (id, data) => this.writeToTerminal(id, data),
+    });
+
     this.wakeManager = new TerminalWakeManager({
       getInstance: (id) => this.instances.get(id),
       hasInstance: (id) => this.instances.has(id),
-      restoreFromSerialized: (id, state) => this.restoreFromSerialized(id, state),
+      restoreFromSerialized: (id, state) => this.restoreController.restoreFromSerialized(id, state),
       restoreFromSerializedIncremental: (id, state) =>
-        this.restoreFromSerializedIncremental(id, state),
+        this.restoreController.restoreFromSerializedIncremental(id, state),
     });
 
     this.rendererPolicy = new TerminalRendererPolicy({
       getInstance: (id) => this.instances.get(id),
       wakeAndRestore: (id) => this.wakeManager.wakeAndRestore(id),
       onPostWake: (id) => this.handlePostWake(id),
+      onTierApplied: (id, tier, managed) => {
+        if (tier === TerminalRefreshTier.BACKGROUND) {
+          reduceScrollback(managed, SCROLLBACK_BACKGROUND);
+        } else {
+          restoreScrollback(managed);
+        }
+
+        if (
+          tier === TerminalRefreshTier.FOCUSED ||
+          tier === TerminalRefreshTier.BURST ||
+          tier === TerminalRefreshTier.VISIBLE
+        ) {
+          this.webGLManager.ensureContext(id, managed);
+        } else {
+          this.webGLManager.releaseContext(id);
+        }
+      },
     });
+  }
+
+  setGPUHardwareAvailable(available: boolean): void {
+    this.webGLManager.setHardwareAvailable(available);
   }
 
   notifyUserInput(id: string): void {
@@ -84,6 +138,12 @@ class TerminalInstanceService {
       current.inputBurstTimer = undefined;
       this.rendererPolicy.applyRendererPolicy(id, current.getRefreshTier());
     }, 1000);
+
+    this.agentStateController.onUserInput(id);
+  }
+
+  clearDirectingState(id: string): void {
+    this.agentStateController.clearDirectingState(id);
   }
 
   prewarmTerminal(
@@ -224,10 +284,6 @@ class TerminalInstanceService {
           const current = this.instances.get(id);
           if (current && current.isVisible) {
             current.terminal.refresh(0, current.terminal.rows - 1);
-
-            if (!current.isAltBuffer && current.latestWasAtBottom) {
-              this.scrollToBottom(id);
-            }
           }
         });
       }
@@ -441,15 +497,99 @@ class TerminalInstanceService {
 
       if (isAtBottom) {
         this.unseenTracker.clearUnseen(id, false);
+        if (managed.lastAppliedTier === TerminalRefreshTier.BACKGROUND) {
+          reduceScrollback(managed, SCROLLBACK_BACKGROUND);
+        }
       } else {
         this.unseenTracker.updateScrollState(id, true);
       }
     });
     listeners.push(() => scrollDisposable.dispose());
 
+    const selectionDisposable = terminal.onSelectionChange(() => {
+      const sel = terminal.getSelection();
+      if (sel) {
+        this.cachedSelections.set(id, sel);
+      } else if (managed.lastAppliedTier === TerminalRefreshTier.BACKGROUND) {
+        reduceScrollback(managed, SCROLLBACK_BACKGROUND);
+      }
+    });
+    listeners.push(() => selectionDisposable.dispose());
+
+    if (agentId) {
+      const agentConfig = getEffectiveAgentConfig(agentId);
+      const titlePatterns = agentConfig?.detection?.titleStatePatterns;
+      if (titlePatterns) {
+        let lastReportedTitleState: "working" | "waiting" | undefined;
+
+        const titleDisposable = terminal.onTitleChange((title: string) => {
+          let matched: "working" | "waiting" | undefined;
+          for (const pattern of titlePatterns.working) {
+            if (title.includes(pattern)) {
+              matched = "working";
+              break;
+            }
+          }
+          if (!matched) {
+            for (const pattern of titlePatterns.waiting) {
+              if (title.includes(pattern)) {
+                matched = "waiting";
+                break;
+              }
+            }
+          }
+          if (!matched) {
+            if (managed.titleReportTimer !== undefined) {
+              clearTimeout(managed.titleReportTimer);
+              managed.titleReportTimer = undefined;
+              managed.pendingTitleState = undefined;
+            }
+            return;
+          }
+
+          if (matched === "working") {
+            if (managed.titleReportTimer !== undefined) {
+              clearTimeout(managed.titleReportTimer);
+              managed.titleReportTimer = undefined;
+              managed.pendingTitleState = undefined;
+            }
+            if (lastReportedTitleState !== "working") {
+              lastReportedTitleState = "working";
+              window.electron.terminal.reportTitleState(id, "working");
+            }
+          } else {
+            managed.pendingTitleState = "waiting";
+            if (managed.titleReportTimer !== undefined) {
+              clearTimeout(managed.titleReportTimer);
+            }
+            managed.titleReportTimer = window.setTimeout(() => {
+              managed.titleReportTimer = undefined;
+              if (managed.pendingTitleState === "waiting") {
+                managed.pendingTitleState = undefined;
+                if (lastReportedTitleState !== "waiting") {
+                  lastReportedTitleState = "waiting";
+                  window.electron.terminal.reportTitleState(id, "waiting");
+                }
+              }
+            }, 250);
+          }
+        });
+        listeners.push(() => {
+          titleDisposable.dispose();
+          if (managed.titleReportTimer !== undefined) {
+            clearTimeout(managed.titleReportTimer);
+            managed.titleReportTimer = undefined;
+            managed.pendingTitleState = undefined;
+          }
+        });
+      }
+    }
+
     const inputDisposable = terminal.onData((data) => {
       if (!managed.isInputLocked) {
-        this.onUserInput(id);
+        if (!isNonKeyboardInput(data)) {
+          this.onUserInput(id);
+        }
         terminalClient.write(id, data);
         if (onInput) {
           onInput(data);
@@ -470,6 +610,10 @@ class TerminalInstanceService {
 
   get(id: string): ManagedTerminal | null {
     return this.instances.get(id) ?? null;
+  }
+
+  getCachedSelection(id: string): string {
+    return this.cachedSelections.get(id) ?? "";
   }
 
   waitForInstance(id: string, options: { timeoutMs?: number } = {}): Promise<void> {
@@ -543,6 +687,13 @@ class TerminalInstanceService {
       managed.terminal.open(managed.hostElement);
       managed.isOpened = true;
       logDebug(`[TIS.attach] Opened terminal ${id}`);
+      if (
+        managed.lastAppliedTier === TerminalRefreshTier.FOCUSED ||
+        managed.lastAppliedTier === TerminalRefreshTier.BURST ||
+        managed.lastAppliedTier === TerminalRefreshTier.VISIBLE
+      ) {
+        this.webGLManager.ensureContext(id, managed);
+      }
     }
     managed.lastAttachAt = Date.now();
     managed.isDetached = false;
@@ -638,6 +789,7 @@ class TerminalInstanceService {
         }
       }
     }
+    managed.terminal.blur();
     managed.lastDetachAt = Date.now();
     managed.isDetached = true;
   }
@@ -661,6 +813,7 @@ class TerminalInstanceService {
       }
     }
 
+    managed.terminal.blur();
     managed.lastDetachAt = Date.now();
   }
 
@@ -709,21 +862,7 @@ class TerminalInstanceService {
   }
 
   setAgentState(id: string, state: AgentState): void {
-    const managed = this.instances.get(id);
-    if (!managed) return;
-
-    const previousState = managed.agentState;
-    if (previousState === state) return;
-
-    managed.agentState = state;
-
-    for (const callback of managed.agentStateSubscribers) {
-      try {
-        callback(state);
-      } catch (err) {
-        logError("Agent state callback error", err);
-      }
-    }
+    this.agentStateController.setAgentState(id, state);
   }
 
   private handlePostWake(id: string): void {
@@ -769,6 +908,10 @@ class TerminalInstanceService {
     // the resize path, sending redundant PTY resize events that cause Ink-based
     // TUIs (Gemini CLI) to detect idle re-render loops.
     this.resizeController.clearResizeJob(managed);
+
+    if (!isAltBuffer && managed.lastAppliedTier === TerminalRefreshTier.BACKGROUND) {
+      reduceScrollback(managed, SCROLLBACK_BACKGROUND);
+    }
   }
 
   addAltBufferListener(id: string, callback: (isAltBuffer: boolean) => void): () => void {
@@ -939,6 +1082,18 @@ class TerminalInstanceService {
     this.rendererPolicy.initializeBackendTier(id, tier);
   }
 
+  reduceScrollback(id: string, targetLines: number): void {
+    const managed = this.instances.get(id);
+    if (!managed) return;
+    reduceScrollback(managed, targetLines);
+  }
+
+  restoreScrollback(id: string): void {
+    const managed = this.instances.get(id);
+    if (!managed) return;
+    restoreScrollback(managed);
+  }
+
   addExitListener(id: string, cb: (exitCode: number) => void): () => void {
     const managed = this.instances.get(id);
     if (!managed) return () => {};
@@ -958,6 +1113,9 @@ class TerminalInstanceService {
       }
       this.readinessWaiters.delete(id);
     }
+
+    this.agentStateController.destroy(id);
+    this.restoreController.destroy(id);
 
     this.instances.delete(id);
 
@@ -984,14 +1142,15 @@ class TerminalInstanceService {
       clearTimeout(managed.inputBurstTimer);
       managed.inputBurstTimer = undefined;
     }
+    if (managed.titleReportTimer !== undefined) {
+      clearTimeout(managed.titleReportTimer);
+      managed.titleReportTimer = undefined;
+      managed.pendingTitleState = undefined;
+    }
     if (managed.resizeSuppressionTimer !== undefined) {
       clearTimeout(managed.resizeSuppressionTimer);
       managed.resizeSuppressionTimer = undefined;
     }
-
-    managed.restoreGeneration++;
-    managed.isSerializedRestoreInProgress = false;
-    managed.deferredOutput = [];
 
     managed.exitSubscribers.clear();
     managed.agentStateSubscribers.clear();
@@ -1005,6 +1164,7 @@ class TerminalInstanceService {
       logWarn("Error disposing file links", { error });
     }
 
+    this.webGLManager.onTerminalDestroyed(id);
     managed.terminal.dispose();
 
     if (managed.hostElement.parentElement) {
@@ -1014,6 +1174,7 @@ class TerminalInstanceService {
     this.offscreenManager.removeOffscreenSlot(id);
     this.suppressedExitUntil.delete(id);
     this.cwdProviders.delete(id);
+    this.cachedSelections.delete(id);
     this.wakeManager.clearWakeState(id);
     this.rendererPolicy.clearTierState(id);
   }
@@ -1023,182 +1184,26 @@ class TerminalInstanceService {
     this.instances.forEach((_, id) => this.destroy(id));
     this.offscreenManager.dispose();
     this.wakeManager.dispose();
+    this.webGLManager.dispose();
     this.rendererPolicy.dispose();
+    this.agentStateController.dispose();
+    this.restoreController.dispose();
   }
 
   async restoreFetchedState(id: string, serializedState: string | null): Promise<boolean> {
-    if (!serializedState) {
-      logWarn(`No serialized state for terminal ${id}`);
-      return false;
-    }
-
-    if (serializedState.length > INCREMENTAL_RESTORE_CONFIG.indicatorThresholdBytes) {
-      return await this.restoreFromSerializedIncremental(id, serializedState);
-    }
-
-    return this.restoreFromSerialized(id, serializedState);
+    return this.restoreController.restoreFetchedState(id, serializedState);
   }
 
   async fetchAndRestore(id: string): Promise<boolean> {
-    try {
-      const serializedState = await terminalClient.getSerializedState(id);
-      return await this.restoreFetchedState(id, serializedState);
-    } catch (error) {
-      logError(`Failed to fetch state for terminal ${id}`, error);
-      return false;
-    }
+    return this.restoreController.fetchAndRestore(id);
   }
 
   restoreFromSerialized(id: string, serializedState: string): boolean {
-    const managed = this.instances.get(id);
-    if (!managed) {
-      logWarn(`Cannot restore: terminal ${id} not found`);
-      return false;
-    }
-
-    try {
-      if (serializedState.length > INCREMENTAL_RESTORE_CONFIG.indicatorThresholdBytes) {
-        void this.restoreFromSerializedIncremental(id, serializedState);
-        return true;
-      }
-
-      const shouldAutoScroll = managed.latestWasAtBottom;
-      managed.isSerializedRestoreInProgress = true;
-
-      managed.terminal.reset();
-      managed.terminal.write(serializedState, () => {
-        const current = this.instances.get(id);
-        if (current !== managed) return;
-
-        current.isSerializedRestoreInProgress = false;
-
-        const deferred = current.deferredOutput;
-        current.deferredOutput = [];
-        for (const data of deferred) {
-          this.writeToTerminal(id, data);
-        }
-
-        if (shouldAutoScroll && !current.isAltBuffer) {
-          this.scrollToBottom(id);
-
-          requestAnimationFrame(() => {
-            requestAnimationFrame(() => {
-              const latest = this.instances.get(id);
-              if (latest && latest.isVisible && !latest.isAltBuffer && shouldAutoScroll) {
-                this.scrollToBottom(id);
-              }
-            });
-          });
-        }
-      });
-      return true;
-    } catch (error) {
-      managed.isSerializedRestoreInProgress = false;
-      logError(`Failed to restore terminal ${id}`, error);
-      return false;
-    }
+    return this.restoreController.restoreFromSerialized(id, serializedState);
   }
 
-  private async restoreFromSerializedIncremental(
-    id: string,
-    serializedState: string
-  ): Promise<boolean> {
-    const managed = this.instances.get(id);
-    if (!managed) {
-      logWarn(`Cannot restore: terminal ${id} not found`);
-      return false;
-    }
-
-    const restoreGeneration = ++managed.restoreGeneration;
-    const shouldAutoScroll = managed.latestWasAtBottom;
-    managed.isSerializedRestoreInProgress = true;
-
-    const task = async (): Promise<boolean> => {
-      try {
-        if (this.instances.get(id) !== managed || managed.restoreGeneration !== restoreGeneration) {
-          return false;
-        }
-
-        managed.terminal.reset();
-
-        let offset = 0;
-        const total = serializedState.length;
-
-        while (offset < total) {
-          if (
-            this.instances.get(id) !== managed ||
-            managed.restoreGeneration !== restoreGeneration
-          ) {
-            return false;
-          }
-
-          const chunkSize = Math.min(INCREMENTAL_RESTORE_CONFIG.chunkBytes, total - offset);
-          const chunk = serializedState.substring(offset, offset + chunkSize);
-          offset += chunkSize;
-
-          await Promise.race([
-            new Promise<void>((resolve, reject) => {
-              try {
-                managed.terminal.write(chunk, () => resolve());
-              } catch (err) {
-                reject(err);
-              }
-            }),
-            new Promise<void>((_, reject) =>
-              setTimeout(() => reject(new Error("Write timeout")), 5000)
-            ),
-          ]);
-
-          if (offset < total) {
-            await this.yieldToUI();
-          }
-        }
-
-        return true;
-      } catch (error) {
-        logError(`Incremental restore failed for ${id}`, error);
-        return false;
-      } finally {
-        if (this.instances.get(id) === managed && managed.restoreGeneration === restoreGeneration) {
-          managed.isSerializedRestoreInProgress = false;
-
-          const deferredData = managed.deferredOutput;
-          managed.deferredOutput = [];
-
-          for (const data of deferredData) {
-            this.writeToTerminal(id, data);
-          }
-
-          if (shouldAutoScroll && !managed.isAltBuffer) {
-            this.scrollToBottom(id);
-
-            requestAnimationFrame(() => {
-              requestAnimationFrame(() => {
-                const latest = this.instances.get(id);
-                if (latest && latest.isVisible && !latest.isAltBuffer && shouldAutoScroll) {
-                  this.scrollToBottom(id);
-                }
-              });
-            });
-          }
-        }
-      }
-    };
-
-    const writePromise = managed.writeChain.then(task).catch((err) => {
-      logError(`Write chain error for ${id}`, err);
-      return false;
-    });
-
-    managed.writeChain = writePromise.then(() => {});
-
-    return writePromise;
-  }
-
-  private yieldToUI(): Promise<void> {
-    return new Promise((resolve) => {
-      requestIdleCallback(() => resolve(), { timeout: INCREMENTAL_RESTORE_CONFIG.timeBudgetMs });
-    });
+  restoreFromSerializedIncremental(id: string, serializedState: string): Promise<boolean> {
+    return this.restoreController.restoreFromSerializedIncremental(id, serializedState);
   }
 
   setInputLocked(id: string, locked: boolean): void {
@@ -1211,3 +1216,22 @@ class TerminalInstanceService {
 }
 
 export const terminalInstanceService = new TerminalInstanceService();
+
+// Expose terminal buffer reader for E2E tests (WebGL renderer has no DOM text).
+// Registered unconditionally but gated at call time — the function is harmless
+// in production and avoids import-time env var timing issues.
+if (typeof window !== "undefined") {
+  (window as unknown as Record<string, unknown>).__canopyReadTerminalBuffer = (
+    panelId: string
+  ): string => {
+    const managed = terminalInstanceService["instances"].get(panelId);
+    if (!managed) return "";
+    const buf = managed.terminal.buffer.active;
+    const lines: string[] = [];
+    for (let i = 0; i < buf.length; i++) {
+      const line = buf.getLine(i);
+      if (line) lines.push(line.translateToString(true));
+    }
+    return lines.join("\n");
+  };
+}

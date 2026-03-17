@@ -14,6 +14,7 @@ const mockVoiceState = vi.hoisted(() => ({
     {
       projectId?: string;
       pendingCorrections: Array<{ id: string; segmentStart: number; rawText: string }>;
+      sessionDraftStart?: number;
       activeParagraphStart: number;
     }
   >,
@@ -24,6 +25,7 @@ const mockVoiceFns = vi.hoisted(() => ({
   addPendingCorrection: vi.fn(),
   resolvePendingCorrection: vi.fn(),
   rebasePendingCorrections: vi.fn(),
+  clearAICorrectionSpans: vi.fn(),
   setError: vi.fn(),
   announce: vi.fn(),
   setStatus: vi.fn(),
@@ -102,6 +104,7 @@ vi.mock("@/lib/voiceInputSettingsEvents", () => ({
 // ── Helpers ────────────────────────────────────────────────────────────────
 
 type CorrectionReplaceCallback = (payload: { correctionId: string; correctedText: string }) => void;
+type CorrectionQueuedCallback = (payload: { correctionId: string; rawText: string }) => void;
 
 type ParagraphBoundaryCallback = (payload: {
   rawText: string | null;
@@ -110,11 +113,16 @@ type ParagraphBoundaryCallback = (payload: {
 
 function buildElectronStub() {
   let correctionReplaceCallback: CorrectionReplaceCallback | null = null;
+  let correctionQueuedCallback: CorrectionQueuedCallback | null = null;
   let paragraphBoundaryCallback: ParagraphBoundaryCallback | null = null;
 
   const voiceInput = {
     onTranscriptionDelta: vi.fn(() => () => {}),
     onTranscriptionComplete: vi.fn(() => () => {}),
+    onCorrectionQueued: vi.fn((cb: CorrectionQueuedCallback) => {
+      correctionQueuedCallback = cb;
+      return () => {};
+    }),
     onCorrectionReplace: vi.fn((cb: CorrectionReplaceCallback) => {
       correctionReplaceCallback = cb;
       return () => {};
@@ -142,6 +150,9 @@ function buildElectronStub() {
   return {
     voiceInput,
     emit: {
+      correctionQueued: (payload: { correctionId: string; rawText: string }) => {
+        correctionQueuedCallback!(payload);
+      },
       correctionReplace: (payload: { correctionId: string; correctedText: string }) => {
         correctionReplaceCallback!(payload);
       },
@@ -308,6 +319,35 @@ describe("VoiceRecordingService — correction matching (stable ID)", () => {
     expect(mockVoiceFns.resolvePendingCorrection).toHaveBeenCalledWith(PANEL, "uuid-abc");
   });
 
+  it("applies correction when rawText shifted slightly but remains uniquely identifiable", async () => {
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+
+    const PANEL = "panel-1";
+    mockVoiceState.panelBuffers[PANEL] = {
+      pendingCorrections: [{ id: "uuid-abc", segmentStart: 0, rawText: "voice dictated text" }],
+      activeParagraphStart: 0,
+    };
+    // The raw text has shifted right after a small prefix edit, but the content is unchanged.
+    mockDraftStore.drafts[PANEL] = "> voice dictated text";
+
+    voiceRecordingService.initialize();
+
+    electron.emit.correctionReplace({
+      correctionId: "uuid-abc",
+      correctedText: "Voice dictated text.",
+    });
+
+    const inputStore = (
+      await import("@/store/terminalInputStore")
+    ).useTerminalInputStore.getState();
+    expect(inputStore.setDraftInput).toHaveBeenCalledWith(
+      PANEL,
+      "> Voice dictated text.",
+      undefined
+    );
+    expect(mockVoiceFns.resolvePendingCorrection).toHaveBeenCalledWith(PANEL, "uuid-abc");
+  });
+
   it("skips draft update when correctedText equals rawText (no change)", async () => {
     const { voiceRecordingService } = await import("../VoiceRecordingService");
 
@@ -373,7 +413,33 @@ describe("VoiceRecordingService — correction matching (stable ID)", () => {
     expect(mockVoiceFns.rebasePendingCorrections).not.toHaveBeenCalled();
   });
 
-  it("onParagraphBoundary registers pending correction using correctionId from main process", async () => {
+  it("onCorrectionQueued registers the latest stabilized chunk using its trailing draft position", async () => {
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+
+    const PANEL = "panel-1";
+    mockVoiceState.activeTarget = { panelId: PANEL };
+    mockVoiceState.panelBuffers[PANEL] = {
+      pendingCorrections: [],
+      activeParagraphStart: 0,
+    };
+    mockDraftStore.drafts[PANEL] = "first sentence second sentence";
+
+    voiceRecordingService.initialize();
+
+    electron.emit.correctionQueued({
+      correctionId: "uuid-queued",
+      rawText: "second sentence",
+    });
+
+    expect(mockVoiceFns.addPendingCorrection).toHaveBeenCalledWith(
+      PANEL,
+      "uuid-queued",
+      15,
+      "second sentence"
+    );
+  });
+
+  it("onParagraphBoundary no longer registers pending correction directly", async () => {
     const { voiceRecordingService } = await import("../VoiceRecordingService");
 
     const PANEL = "panel-1";
@@ -390,15 +456,10 @@ describe("VoiceRecordingService — correction matching (stable ID)", () => {
       correctionId: "uuid-para-1",
     });
 
-    expect(mockVoiceFns.addPendingCorrection).toHaveBeenCalledWith(
-      PANEL,
-      "uuid-para-1",
-      5,
-      "dictated text"
-    );
+    expect(mockVoiceFns.addPendingCorrection).not.toHaveBeenCalled();
   });
 
-  it("onParagraphBoundary does not register pending correction when correctionId is null", async () => {
+  it("onParagraphBoundary with null correctionId still does not register pending correction", async () => {
     const { voiceRecordingService } = await import("../VoiceRecordingService");
 
     const PANEL = "panel-1";
@@ -412,6 +473,30 @@ describe("VoiceRecordingService — correction matching (stable ID)", () => {
 
     // correctionId null → correction was not queued (e.g., correction disabled)
     electron.emit.paragraphBoundary({ rawText: "some text", correctionId: null });
+
+    expect(mockVoiceFns.addPendingCorrection).not.toHaveBeenCalled();
+  });
+
+  it("stop() does not register a pending correction (streaming handles corrections)", async () => {
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+
+    const PANEL = "panel-1";
+    mockVoiceState.activeTarget = { panelId: PANEL };
+    mockVoiceState.panelBuffers[PANEL] = {
+      pendingCorrections: [],
+      sessionDraftStart: 0,
+      activeParagraphStart: -1,
+    };
+    mockDraftStore.drafts[PANEL] = "short phrase";
+    // Streaming architecture: stop always returns null
+    electron.voiceInput.stop.mockResolvedValue({
+      rawText: null,
+      correctionId: null,
+    });
+
+    voiceRecordingService.initialize();
+
+    await voiceRecordingService.stop("Dictation stopped.");
 
     expect(mockVoiceFns.addPendingCorrection).not.toHaveBeenCalled();
   });

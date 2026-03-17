@@ -107,7 +107,7 @@ function BuilderTextField({
         aria-invalid={error ? "true" : undefined}
         className={cn(
           "w-full px-3 py-2 text-sm rounded-[var(--radius-md)]",
-          "bg-canopy-bg border text-canopy-text placeholder:text-canopy-text/40",
+          "bg-canopy-bg border text-canopy-text placeholder:text-text-muted",
           "focus:outline-none focus:ring-1",
           error
             ? "border-status-error focus:border-status-error focus:ring-status-error"
@@ -159,7 +159,7 @@ function BuilderTextareaField({
         aria-invalid={error ? "true" : undefined}
         className={cn(
           "w-full px-3 py-2 text-sm rounded-[var(--radius-md)] resize-y min-h-[100px]",
-          "bg-canopy-bg border text-canopy-text placeholder:text-canopy-text/40",
+          "bg-canopy-bg border text-canopy-text placeholder:text-text-muted",
           "focus:outline-none focus:ring-1",
           error
             ? "border-status-error focus:border-status-error focus:ring-status-error"

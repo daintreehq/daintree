@@ -14,13 +14,13 @@ import { ProjectSwitcherPalette } from "./ProjectSwitcherPalette";
 const renderIcon = (emoji: string, color?: string, sizeClass = "h-9 w-9 text-lg") => (
   <div
     className={cn(
-      "flex items-center justify-center rounded-[var(--radius-xl)] shadow-[inset_0_1px_2px_rgba(0,0,0,0.3)] shrink-0 transition-all duration-200",
+      "flex items-center justify-center rounded-[var(--radius-xl)] shadow-[inset_0_1px_2px_rgba(0,0,0,0.18)] shrink-0 transition-all duration-200",
       sizeClass
     )}
     style={{
       background: color
         ? `linear-gradient(to bottom, rgba(0,0,0,0.1), rgba(0,0,0,0.2)), ${getProjectGradient(color)}`
-        : "linear-gradient(to bottom, rgba(0,0,0,0.1), rgba(0,0,0,0.2)), var(--color-canopy-sidebar)",
+        : "linear-gradient(to bottom, rgba(0,0,0,0.08), rgba(0,0,0,0.16)), var(--color-surface-panel)",
     }}
   >
     <span className="leading-none select-none filter drop-shadow-sm">{emoji}</span>
@@ -72,6 +72,13 @@ export function ProjectSwitcher() {
     [projectSwitcher]
   );
 
+  const handleTogglePinProject = useCallback(
+    (projectId: string) => {
+      void projectSwitcher.togglePinProject(projectId);
+    },
+    [projectSwitcher]
+  );
+
   const stopDialog = (
     <ConfirmDialog
       isOpen={projectSwitcher.stopConfirmProjectId != null}
@@ -110,6 +117,7 @@ export function ProjectSwitcher() {
             onStopProject={handleStopProject}
             onCloseProject={handleCloseProject}
             onLocateProject={handleLocateProject}
+            onTogglePinProject={handleTogglePinProject}
             removeConfirmProject={projectSwitcher.removeConfirmProject}
             onRemoveConfirmClose={() => projectSwitcher.setRemoveConfirmProject(null)}
             onConfirmRemove={projectSwitcher.confirmRemoveProject}
@@ -176,11 +184,11 @@ export function ProjectSwitcher() {
               <Button
                 variant="ghost"
                 className={cn(
-                  "w-full justify-between h-12 px-2.5",
+                  "relative w-full justify-between h-12 px-2.5",
                   "rounded-[var(--radius-lg)]",
-                  "border border-white/[0.06]",
-                  "bg-overlay-subtle shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]",
-                  "hover:bg-overlay-medium transition-colors",
+                  "border border-border-subtle",
+                  "bg-surface-panel-elevated shadow-[inset_0_1px_0_var(--color-overlay-soft)]",
+                  "hover:bg-surface-panel-elevated transition-colors",
                   "active:scale-100"
                 )}
                 disabled={isLoading}
@@ -197,12 +205,19 @@ export function ProjectSwitcher() {
                     <span className="truncate font-semibold text-canopy-text text-sm leading-none">
                       {currentProject.name}
                     </span>
-                    <span className="truncate text-xs text-muted-foreground/60 font-mono">
+                    <span className="truncate font-mono text-xs text-text-secondary">
                       {currentProject.path.split(/[/\\]/).pop()}
                     </span>
                   </div>
                 </div>
-                <ChevronsUpDown className="shrink-0 text-muted-foreground/40 group-hover:text-muted-foreground/70 transition-colors" />
+                <ChevronsUpDown className="shrink-0 text-text-muted transition-colors group-hover:text-text-secondary" />
+                {projectSwitcher.backgroundWaitingCount > 0 && (
+                  <span
+                    role="status"
+                    aria-label={`${projectSwitcher.backgroundWaitingCount} background project${projectSwitcher.backgroundWaitingCount === 1 ? "" : "s"} waiting`}
+                    className="absolute top-1 right-1 h-2 w-2 rounded-full bg-state-waiting ring-2 ring-[var(--color-surface-panel-elevated)]"
+                  />
+                )}
               </Button>
             </TooltipTrigger>
             <TooltipContent side="right">

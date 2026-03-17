@@ -49,63 +49,91 @@ describe("appColorSchemes rebrand — semantic color separation", () => {
     );
   });
 
-  describe("semantic alias invariants — canopy scheme", () => {
+  describe("semantic alias invariants — daintree scheme", () => {
     it("status-warning is pollen amber (#C59A4E)", () => {
-      expect(getScheme("canopy").tokens["status-warning"]).toBe("#C59A4E");
+      expect(getScheme("daintree").tokens["status-warning"]).toBe("#C59A4E");
     });
 
     it("status-danger is clay coral (#C8746C)", () => {
-      expect(getScheme("canopy").tokens["status-danger"]).toBe("#C8746C");
+      expect(getScheme("daintree").tokens["status-danger"]).toBe("#C8746C");
     });
 
     it("status-info is river slate (#7B8C96)", () => {
-      expect(getScheme("canopy").tokens["status-info"]).toBe("#7B8C96");
+      expect(getScheme("daintree").tokens["status-info"]).toBe("#7B8C96");
     });
 
     it("activity-working is green, not accent-primary", () => {
-      const tokens = getScheme("canopy").tokens;
+      const tokens = getScheme("daintree").tokens;
       expect(tokens["activity-working"]).not.toBe(tokens["accent-primary"]);
       expect(tokens["activity-working"]).toBe("#22c55e");
     });
 
     it("activity-active is green, not accent-primary", () => {
-      const tokens = getScheme("canopy").tokens;
+      const tokens = getScheme("daintree").tokens;
       expect(tokens["activity-active"]).not.toBe(tokens["accent-primary"]);
       expect(tokens["activity-active"]).toBe("#22c55e");
     });
 
     it("activity-active matches activity-working (same green family)", () => {
-      const tokens = getScheme("canopy").tokens;
+      const tokens = getScheme("daintree").tokens;
       expect(tokens["activity-active"]).toBe(tokens["activity-working"]);
     });
 
     it("activity-working differs from status-success (in-progress vs completed)", () => {
-      const tokens = getScheme("canopy").tokens;
+      const tokens = getScheme("daintree").tokens;
       expect(tokens["activity-working"]).not.toBe(tokens["status-success"]);
     });
   });
 
-  describe("semantic alias invariants — canopy-slate scheme", () => {
-    it("activity-working is green, not accent-primary", () => {
-      const tokens = getScheme("canopy-slate").tokens;
-      expect(tokens["activity-working"]).not.toBe(tokens["accent-primary"]);
-      expect(tokens["activity-working"]).toBe("#22c55e");
+  describe("semantic alias invariants — redwoods scheme", () => {
+    it("surface-canvas is old-bark brown (#1A1210)", () => {
+      expect(getScheme("redwoods").tokens["surface-canvas"]).toBe("#1A1210");
+    });
+
+    it("syntax-string is sorrel green (#8CC255)", () => {
+      expect(getScheme("redwoods").tokens["syntax-string"]).toBe("#8CC255");
+    });
+
+    it("accent-primary is forest green (#4D9E6A)", () => {
+      expect(getScheme("redwoods").tokens["accent-primary"]).toBe("#4D9E6A");
     });
 
     it("activity-active is green, not accent-primary", () => {
-      const tokens = getScheme("canopy-slate").tokens;
+      const tokens = getScheme("redwoods").tokens;
       expect(tokens["activity-active"]).not.toBe(tokens["accent-primary"]);
       expect(tokens["activity-active"]).toBe("#22c55e");
     });
 
     it("activity-active matches activity-working (same green family)", () => {
-      const tokens = getScheme("canopy-slate").tokens;
+      const tokens = getScheme("redwoods").tokens;
       expect(tokens["activity-active"]).toBe(tokens["activity-working"]);
     });
 
     it("activity-working differs from status-success (in-progress vs completed)", () => {
-      const tokens = getScheme("canopy-slate").tokens;
+      const tokens = getScheme("redwoods").tokens;
       expect(tokens["activity-working"]).not.toBe(tokens["status-success"]);
+    });
+  });
+
+  describe("semantic alias invariants — serengeti scheme", () => {
+    it("activity-working is green, not accent-primary", () => {
+      const tokens = getScheme("serengeti").tokens;
+      expect(tokens["activity-working"]).not.toBe(tokens["accent-primary"]);
+      expect(tokens["activity-working"]).toBe("#1D9B5E");
+    });
+
+    it("activity-active matches activity-working (same green family)", () => {
+      const tokens = getScheme("serengeti").tokens;
+      expect(tokens["activity-active"]).toBe(tokens["activity-working"]);
+    });
+
+    it("activity-working differs from status-success (in-progress vs completed)", () => {
+      const tokens = getScheme("serengeti").tokens;
+      expect(tokens["activity-working"]).not.toBe(tokens["status-success"]);
+    });
+
+    it("accent-primary is brand eucalyptus green", () => {
+      expect(getScheme("serengeti").tokens["accent-primary"]).toBe("#3F9366");
     });
   });
 

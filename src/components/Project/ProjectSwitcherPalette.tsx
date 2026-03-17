@@ -1,10 +1,12 @@
-import { useMemo, useEffect, useRef, useCallback } from "react";
+import { useMemo, useEffect, useLayoutEffect, useRef, useCallback } from "react";
 import { createPortal } from "react-dom";
 import {
   AlertTriangle,
   Circle,
   FolderOpen,
   FolderPlus,
+  Pin,
+  PinOff,
   Plus,
   Settings2,
   Square,
@@ -19,6 +21,7 @@ import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { ProjectActionRow } from "./ProjectActionRow";
 import { useKeybindingDisplay } from "@/hooks/useKeybinding";
 import { useOverlayState } from "@/hooks";
+import { usePaletteStore } from "@/store/paletteStore";
 import type { ProjectSwitcherMode, SearchableProject } from "@/hooks/useProjectSwitcherPalette";
 import { useUIStore } from "@/store/uiStore";
 
@@ -38,6 +41,7 @@ export interface ProjectSwitcherPaletteProps {
   onStopProject?: (projectId: string) => void;
   onCloseProject?: (projectId: string) => void;
   onLocateProject?: (projectId: string) => void;
+  onTogglePinProject?: (projectId: string) => void;
   onOpenProjectSettings?: () => void;
   dropdownAlign?: "start" | "center" | "end";
   children?: React.ReactNode;
@@ -55,6 +59,7 @@ interface ProjectListItemProps {
   onStopProject?: (projectId: string) => void;
   onCloseProject?: (projectId: string) => void;
   onLocateProject?: (projectId: string) => void;
+  onTogglePinProject?: (projectId: string) => void;
 }
 
 function ProjectListItem({
@@ -65,6 +70,7 @@ function ProjectListItem({
   onStopProject,
   onCloseProject,
   onLocateProject,
+  onTogglePinProject,
 }: ProjectListItemProps) {
   const showStop = project.processCount > 0 && !project.isMissing;
 
@@ -77,15 +83,20 @@ function ProjectListItem({
       className={cn(
         "group relative w-full flex items-center gap-3 px-3 py-2 rounded-[var(--radius-md)] text-left transition-colors border border-transparent",
         project.isActive
-          ? cn("text-canopy-text", index === selectedIndex && "bg-white/[0.04]")
+          ? cn(
+              "text-canopy-text",
+              index === selectedIndex && "bg-overlay-soft border-border-subtle"
+            )
           : project.isMissing
             ? cn(
                 "text-canopy-text/50",
-                index === selectedIndex ? "bg-white/[0.04]" : "hover:bg-overlay-subtle"
+                index === selectedIndex
+                  ? "bg-overlay-soft border-border-subtle"
+                  : "hover:bg-overlay-soft"
               )
             : index === selectedIndex
-              ? "bg-white/[0.04] text-canopy-text cursor-pointer"
-              : "text-canopy-text/70 hover:bg-overlay-subtle hover:text-canopy-text cursor-pointer"
+              ? "bg-overlay-soft border-border-subtle text-canopy-text cursor-pointer"
+              : "text-canopy-text/70 hover:bg-overlay-soft hover:text-canopy-text cursor-pointer"
       )}
       onClick={() => !project.isActive && !project.isMissing && onSelect(project)}
     >
@@ -145,6 +156,50 @@ function ProjectListItem({
               />
             )}
 
+            {onTogglePinProject && (
+              <div
+                className={cn(
+                  "flex items-center transition-opacity",
+                  project.isPinned
+                    ? "opacity-60"
+                    : index === selectedIndex
+                      ? "opacity-100"
+                      : "opacity-0 group-hover:opacity-100"
+                )}
+              >
+                <TooltipProvider>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onTogglePinProject(project.id);
+                        }}
+                        className={cn(
+                          "p-0.5 rounded transition-colors cursor-pointer",
+                          project.isPinned
+                            ? "text-canopy-accent/70 hover:text-canopy-accent"
+                            : "text-canopy-text/50 hover:bg-tint/[0.06] hover:text-canopy-text/80",
+                          "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent"
+                        )}
+                        aria-label={project.isPinned ? "Unpin project" : "Pin project"}
+                      >
+                        {project.isPinned ? (
+                          <PinOff className="w-3.5 h-3.5" aria-hidden="true" />
+                        ) : (
+                          <Pin className="w-3.5 h-3.5" aria-hidden="true" />
+                        )}
+                      </button>
+                    </TooltipTrigger>
+                    <TooltipContent side="bottom">
+                      {project.isPinned ? "Unpin" : "Pin"}
+                    </TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
+              </div>
+            )}
+
             {project.isMissing ? (
               <div
                 className={cn(
@@ -164,7 +219,7 @@ function ProjectListItem({
                           }}
                           className={cn(
                             "p-0.5 rounded transition-colors cursor-pointer",
-                            "text-canopy-text/50 hover:bg-white/[0.06] hover:text-canopy-text/80",
+                            "text-canopy-text/50 hover:bg-tint/[0.06] hover:text-canopy-text/80",
                             "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent"
                           )}
                           aria-label="Locate project folder"
@@ -188,7 +243,7 @@ function ProjectListItem({
                           }}
                           className={cn(
                             "p-0.5 rounded transition-colors cursor-pointer",
-                            "text-canopy-text/50 hover:bg-white/[0.06] hover:text-canopy-text/80",
+                            "text-canopy-text/50 hover:bg-tint/[0.06] hover:text-canopy-text/80",
                             "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent"
                           )}
                           aria-label="Remove project"
@@ -245,7 +300,7 @@ function ProjectListItem({
                             }}
                             className={cn(
                               "p-0.5 rounded transition-colors cursor-pointer",
-                              "text-canopy-text/50 hover:bg-white/[0.06] hover:text-canopy-text/80",
+                              "text-canopy-text/50 hover:bg-tint/[0.06] hover:text-canopy-text/80",
                               "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent"
                             )}
                             aria-label="Close project"
@@ -287,6 +342,7 @@ interface ProjectListContentProps {
   onStopProject?: (projectId: string) => void;
   onCloseProject?: (projectId: string) => void;
   onLocateProject?: (projectId: string) => void;
+  onTogglePinProject?: (projectId: string) => void;
 }
 
 function ProjectListContent({
@@ -298,14 +354,20 @@ function ProjectListContent({
   onStopProject,
   onCloseProject,
   onLocateProject,
+  onTogglePinProject,
 }: ProjectListContentProps) {
   const isSearching = query.trim().length > 0;
 
   const sections = useMemo(() => {
     if (isSearching || results.length === 0) return null;
+    const pinned = results.filter((p) => p.isPinned && !p.isActive);
     const current = results.filter((p) => p.isActive);
-    const previous = results.filter((p) => !p.isActive);
-    return [current, previous].filter((s) => s.length > 0);
+    const rest = results.filter((p) => !p.isActive && !p.isPinned);
+    return [
+      { key: "pinned", label: "Pinned", items: pinned },
+      { key: "current", label: null, items: current },
+      { key: "other", label: null, items: rest },
+    ].filter((s) => s.items.length > 0);
   }, [results, isSearching]);
 
   const renderItem = (project: SearchableProject) => {
@@ -320,6 +382,7 @@ function ProjectListContent({
           onStopProject={onStopProject}
           onCloseProject={onCloseProject}
           onLocateProject={onLocateProject}
+          onTogglePinProject={onTogglePinProject}
         />
       </div>
     );
@@ -336,11 +399,11 @@ function ProjectListContent({
           </div>
         ) : sections ? (
           sections.map((section, sectionIdx) => {
-            const isActiveSection = section[0]?.isActive;
+            const isActiveSection = section.items[0]?.isActive;
             const isLast = sectionIdx === sections.length - 1;
             return (
-              <div key={sectionIdx}>
-                {sectionIdx > 0 && <div className="h-[3px] bg-white/[0.08]" />}
+              <div key={section.key}>
+                {sectionIdx > 0 && <div className="h-[3px] bg-tint/[0.08]" />}
                 <div
                   className={cn(
                     "px-2 py-1.5",
@@ -349,7 +412,12 @@ function ProjectListContent({
                     isActiveSection && "bg-overlay-subtle"
                   )}
                 >
-                  {section.map(renderItem)}
+                  {section.label && (
+                    <div className="px-3 py-1 text-[10px] font-medium tracking-wider uppercase text-canopy-text/40 select-none">
+                      {section.label}
+                    </div>
+                  )}
+                  {section.items.map(renderItem)}
                 </div>
               </div>
             );
@@ -366,6 +434,7 @@ function ProjectListContent({
                   onStopProject={onStopProject}
                   onCloseProject={onCloseProject}
                   onLocateProject={onLocateProject}
+                  onTogglePinProject={onTogglePinProject}
                 />
               </div>
             ))}
@@ -428,6 +497,7 @@ interface ProjectPaletteInnerProps {
   onStopProject?: (projectId: string) => void;
   onCloseProject?: (projectId: string) => void;
   onLocateProject?: (projectId: string) => void;
+  onTogglePinProject?: (projectId: string) => void;
 }
 
 function ProjectPaletteInner({
@@ -447,6 +517,7 @@ function ProjectPaletteInner({
   onStopProject,
   onCloseProject,
   onLocateProject,
+  onTogglePinProject,
 }: ProjectPaletteInnerProps) {
   const projectSwitcherShortcut = useKeybindingDisplay("project.switcherPalette");
 
@@ -547,12 +618,13 @@ function ProjectPaletteInner({
           onStopProject={onStopProject}
           onCloseProject={onCloseProject}
           onLocateProject={onLocateProject}
+          onTogglePinProject={onTogglePinProject}
         />
       </AppPaletteDialog.Body>
 
       {(onOpenProjectSettings || onAddProject || onCreateFolder) && (
         <>
-          <div className="h-[3px] bg-white/[0.08]" />
+          <div className="h-[3px] bg-tint/[0.08]" />
           <div className="px-2 pt-1 pb-2">
             {onOpenProjectSettings && (
               <button
@@ -560,7 +632,7 @@ function ProjectPaletteInner({
                 onClick={() => onOpenProjectSettings()}
                 className="w-full flex items-center gap-3 px-3 py-2 rounded-[var(--radius-md)] text-left transition-colors hover:bg-overlay-subtle"
               >
-                <div className="flex h-8 w-8 items-center justify-center rounded-[var(--radius-lg)] bg-white/[0.04] text-muted-foreground">
+                <div className="flex h-8 w-8 items-center justify-center rounded-[var(--radius-lg)] bg-tint/[0.04] text-muted-foreground">
                   <Settings2 className="h-4 w-4" />
                 </div>
                 <span className="font-medium text-sm text-muted-foreground">
@@ -615,12 +687,14 @@ function ModalContent({
   const dialogRef = useRef<HTMLDivElement>(null);
   const previousFocusRef = useRef<HTMLElement | null>(null);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (isOpen) {
       previousFocusRef.current = document.activeElement as HTMLElement;
       requestAnimationFrame(() => inputRef.current?.focus());
     } else if (previousFocusRef.current) {
-      previousFocusRef.current.focus();
+      if (!usePaletteStore.getState().activePaletteId) {
+        previousFocusRef.current.focus();
+      }
       previousFocusRef.current = null;
     }
   }, [isOpen]);
@@ -681,6 +755,7 @@ function ModalContent({
           onStopProject={innerProps.onStopProject}
           onCloseProject={innerProps.onCloseProject}
           onLocateProject={innerProps.onLocateProject}
+          onTogglePinProject={innerProps.onTogglePinProject}
         />
       </div>
     </div>,
@@ -752,6 +827,7 @@ function DropdownContent({
           onStopProject={innerProps.onStopProject}
           onCloseProject={innerProps.onCloseProject}
           onLocateProject={innerProps.onLocateProject}
+          onTogglePinProject={innerProps.onTogglePinProject}
         />
       </PopoverContent>
     </Popover>
@@ -774,6 +850,7 @@ export function ProjectSwitcherPalette({
   onStopProject,
   onCloseProject,
   onLocateProject,
+  onTogglePinProject,
   onOpenProjectSettings,
   dropdownAlign,
   children,
@@ -805,6 +882,7 @@ export function ProjectSwitcherPalette({
         onStopProject={onStopProject}
         onCloseProject={onCloseProject}
         onLocateProject={onLocateProject}
+        onTogglePinProject={onTogglePinProject}
         onOpenProjectSettings={onOpenProjectSettings}
         dropdownAlign={dropdownAlign}
       >
@@ -826,6 +904,7 @@ export function ProjectSwitcherPalette({
         onStopProject={onStopProject}
         onCloseProject={onCloseProject}
         onLocateProject={onLocateProject}
+        onTogglePinProject={onTogglePinProject}
         onOpenProjectSettings={onOpenProjectSettings}
       />
     );

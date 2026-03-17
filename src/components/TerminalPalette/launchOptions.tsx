@@ -1,7 +1,9 @@
 import { Terminal, Globe, Settings } from "lucide-react";
-import { ClaudeIcon, GeminiIcon, CodexIcon, OpenCodeIcon } from "@/components/icons";
 import { getBrandColorHex } from "@/lib/colorUtils";
 import type { TerminalType, TerminalKind } from "@/types";
+import { AGENT_REGISTRY } from "@/config/agents";
+import { BUILT_IN_AGENT_IDS } from "@shared/config/agentIds";
+import { resolveAgentIcon } from "@/config/agentIcons";
 
 export interface LaunchOption {
   id: string;
@@ -13,35 +15,20 @@ export interface LaunchOption {
 }
 
 export function getLaunchOptions(): LaunchOption[] {
+  const agentOptions: LaunchOption[] = BUILT_IN_AGENT_IDS.map((id) => {
+    const config = AGENT_REGISTRY[id];
+    const Icon = resolveAgentIcon(config?.iconId ?? id);
+    return {
+      id,
+      type: id as TerminalType,
+      label: config?.name ?? id,
+      description: config?.tooltip ?? "",
+      icon: <Icon className="w-4 h-4" brandColor={getBrandColorHex(id)} />,
+    };
+  });
+
   return [
-    {
-      id: "claude",
-      type: "claude",
-      label: "Claude Code",
-      description: "Deep, focused refactoring and architecture tasks.",
-      icon: <ClaudeIcon className="w-4 h-4" brandColor={getBrandColorHex("claude")} />,
-    },
-    {
-      id: "gemini",
-      type: "gemini",
-      label: "Gemini CLI",
-      description: "Fast exploration and quick coding questions.",
-      icon: <GeminiIcon className="w-4 h-4" brandColor={getBrandColorHex("gemini")} />,
-    },
-    {
-      id: "codex",
-      type: "codex",
-      label: "Codex CLI",
-      description: "OpenAI-powered methodical execution.",
-      icon: <CodexIcon className="w-4 h-4" brandColor={getBrandColorHex("codex")} />,
-    },
-    {
-      id: "opencode",
-      type: "opencode",
-      label: "OpenCode",
-      description: "Provider-agnostic open source agent.",
-      icon: <OpenCodeIcon className="w-4 h-4" brandColor={getBrandColorHex("opencode")} />,
-    },
+    ...agentOptions,
     {
       id: "terminal",
       type: "terminal",

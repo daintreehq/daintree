@@ -1,6 +1,7 @@
 import { useEffect, useRef, useCallback } from "react";
 import { cn } from "@/lib/utils";
 import { AppPaletteDialog } from "@/components/ui/AppPaletteDialog";
+import { PaletteOverflowNotice } from "@/components/ui/PaletteOverflowNotice";
 import type { PanelKindOption } from "@/hooks/usePanelPalette";
 import { PanelKindIcon } from "./PanelKindIcon";
 
@@ -8,6 +9,7 @@ interface PanelPaletteProps {
   isOpen: boolean;
   query: string;
   results: PanelKindOption[];
+  totalResults?: number;
   selectedIndex: number;
   onQueryChange: (q: string) => void;
   onSelectPrevious: () => void;
@@ -17,10 +19,16 @@ interface PanelPaletteProps {
   onClose: () => void;
 }
 
+const SECTION_LABELS: Record<PanelKindOption["category"], string> = {
+  agent: "AI Agents",
+  tool: "Tools",
+};
+
 export function PanelPalette({
   isOpen,
   query,
   results,
+  totalResults,
   selectedIndex,
   onQueryChange,
   onSelectPrevious,
@@ -30,7 +38,7 @@ export function PanelPalette({
   onClose,
 }: PanelPaletteProps) {
   const inputRef = useRef<HTMLInputElement>(null);
-  const listRef = useRef<HTMLDivElement>(null);
+  const itemsRef = useRef(new Map<string, HTMLElement>());
 
   useEffect(() => {
     if (isOpen) {
@@ -39,11 +47,11 @@ export function PanelPalette({
   }, [isOpen]);
 
   useEffect(() => {
-    if (listRef.current && selectedIndex >= 0) {
-      const selectedItem = listRef.current.children[selectedIndex] as HTMLElement;
-      selectedItem?.scrollIntoView({ block: "nearest" });
+    if (selectedIndex >= 0 && results[selectedIndex]) {
+      const node = itemsRef.current.get(results[selectedIndex].id);
+      node?.scrollIntoView({ block: "nearest" });
     }
-  }, [selectedIndex]);
+  }, [selectedIndex, results]);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
@@ -77,6 +85,80 @@ export function PanelPalette({
     [onSelectPrevious, onSelectNext, onConfirm, onClose]
   );
 
+  const isSearching = query.trim().length > 0;
+
+  const renderOption = (kind: PanelKindOption, index: number) => (
+    <button
+      key={kind.id}
+      id={`panel-option-${kind.id}`}
+      tabIndex={-1}
+      onPointerDown={(e) => e.preventDefault()}
+      role="option"
+      aria-selected={index === selectedIndex}
+      ref={(el) => {
+        if (el) itemsRef.current.set(kind.id, el);
+        else itemsRef.current.delete(kind.id);
+      }}
+      className={cn(
+        "relative w-full flex items-center gap-3 px-3 py-2 rounded-[var(--radius-md)] text-left transition-colors border",
+        index === selectedIndex
+          ? "bg-overlay-soft border-overlay text-canopy-text before:absolute before:left-0 before:top-2 before:bottom-2 before:w-[2px] before:rounded-r before:bg-canopy-accent before:content-['']"
+          : "border-transparent text-canopy-text/70 hover:bg-overlay-subtle hover:text-canopy-text"
+      )}
+      onClick={() => onSelect(kind)}
+    >
+      <div className="shrink-0">
+        <PanelKindIcon iconId={kind.iconId} color={kind.color} size={16} />
+      </div>
+      <div className="flex-1 min-w-0">
+        <div className="text-sm font-medium text-canopy-text">{kind.name}</div>
+        {kind.description && (
+          <div className="text-xs text-canopy-text/50 truncate">{kind.description}</div>
+        )}
+      </div>
+    </button>
+  );
+
+  const renderSectionedList = () => {
+    const agents = results.filter((r) => r.category === "agent");
+    const tools = results.filter((r) => r.category === "tool");
+    const elements: React.ReactNode[] = [];
+
+    if (agents.length > 0) {
+      elements.push(
+        <div
+          key="header-agent"
+          className="px-3 pt-3 pb-1 text-xs font-semibold uppercase tracking-wider text-canopy-text/40 select-none"
+          aria-hidden="true"
+        >
+          {SECTION_LABELS.agent}
+        </div>
+      );
+      agents.forEach((kind) => {
+        const index = results.indexOf(kind);
+        elements.push(renderOption(kind, index));
+      });
+    }
+
+    if (tools.length > 0) {
+      elements.push(
+        <div
+          key="header-tool"
+          className="px-3 pt-3 pb-1 text-xs font-semibold uppercase tracking-wider text-canopy-text/40 select-none"
+          aria-hidden="true"
+        >
+          {SECTION_LABELS.tool}
+        </div>
+      );
+      tools.forEach((kind) => {
+        const index = results.indexOf(kind);
+        elements.push(renderOption(kind, index));
+      });
+    }
+
+    return elements;
+  };
+
   return (
     <AppPaletteDialog isOpen={isOpen} onClose={onClose} ariaLabel="Panel palette">
       <AppPaletteDialog.Header label="New Panel" keyHint="⌘⇧P">
@@ -100,39 +182,20 @@ export function PanelPalette({
       </AppPaletteDialog.Header>
 
       <AppPaletteDialog.Body>
-        <div ref={listRef} id="panel-list" role="listbox" aria-label="Panel types">
+        <div id="panel-list" role="listbox" aria-label="Panel types">
           {results.length === 0 ? (
             <div className="px-3 py-8 text-center text-canopy-text/50 text-sm">
               No panel types match "{query}"
             </div>
+          ) : isSearching ? (
+            results.map((kind, index) => renderOption(kind, index))
           ) : (
-            results.map((kind, index) => (
-              <button
-                key={kind.id}
-                id={`panel-option-${kind.id}`}
-                role="option"
-                aria-selected={index === selectedIndex}
-                className={cn(
-                  "relative w-full flex items-center gap-3 px-3 py-2 rounded-[var(--radius-md)] text-left transition-colors border",
-                  index === selectedIndex
-                    ? "bg-overlay-soft border-overlay text-canopy-text before:absolute before:left-0 before:top-2 before:bottom-2 before:w-[2px] before:rounded-r before:bg-canopy-accent before:content-['']"
-                    : "border-transparent text-canopy-text/70 hover:bg-overlay-subtle hover:text-canopy-text"
-                )}
-                onClick={() => onSelect(kind)}
-              >
-                <div className="shrink-0">
-                  <PanelKindIcon iconId={kind.iconId} color={kind.color} size={16} />
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div className="text-sm font-medium text-canopy-text">{kind.name}</div>
-                  {kind.description && (
-                    <div className="text-xs text-canopy-text/50 truncate">{kind.description}</div>
-                  )}
-                </div>
-              </button>
-            ))
+            renderSectionedList()
           )}
         </div>
+        {totalResults != null && (
+          <PaletteOverflowNotice shown={results.length} total={totalResults} />
+        )}
       </AppPaletteDialog.Body>
 
       <AppPaletteDialog.Footer>

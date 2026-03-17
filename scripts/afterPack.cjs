@@ -111,5 +111,24 @@ exports.default = async function afterPack(context) {
     }
   }
 
+  const betterSqlitePath = path.join(unpackedPath, "node_modules/better-sqlite3");
+
+  if (!fs.existsSync(betterSqlitePath)) {
+    throw new Error(
+      `[afterPack] CRITICAL: better-sqlite3 not found at ${betterSqlitePath}. ` +
+        "Database functionality will not work. Check asarUnpack configuration."
+    );
+  }
+
+  const betterSqliteNative = path.join(betterSqlitePath, "build/Release/better_sqlite3.node");
+  if (!fs.existsSync(betterSqliteNative)) {
+    throw new Error(
+      `[afterPack] CRITICAL: better-sqlite3 native binary not found at ${betterSqliteNative}. ` +
+        'Run "npm run rebuild" to build the native module.'
+    );
+  }
+
+  console.log(`[afterPack] better-sqlite3 verified: ${betterSqliteNative}`);
+
   console.log("[afterPack] Complete - native modules validated");
 };

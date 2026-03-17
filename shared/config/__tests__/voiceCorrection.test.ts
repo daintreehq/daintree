@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { buildCorrectionSystemPrompt, CORE_CORRECTION_PROMPT } from "../voiceCorrection.js";
+import {
+  buildCorrectionSystemPrompt,
+  buildMicroCorrectionSystemPrompt,
+  CORE_CORRECTION_PROMPT,
+  MICRO_CORRECTION_PROMPT,
+} from "../voiceCorrection.js";
 
 describe("CORE_CORRECTION_PROMPT", () => {
   it("uses XML delimiters around the technical terms dictionary", () => {
@@ -14,13 +19,19 @@ describe("CORE_CORRECTION_PROMPT", () => {
     expect(CORE_CORRECTION_PROMPT).toContain(": Next.js");
   });
 
-  it("uses neutral segment wording for paragraph-level input compatibility", () => {
-    expect(CORE_CORRECTION_PROMPT).toContain("TEXT SEGMENT");
-    expect(CORE_CORRECTION_PROMPT).toContain("text segment");
+  it("uses target wording for whole-passage cleanup", () => {
+    expect(CORE_CORRECTION_PROMPT).toContain("CURRENT TARGET");
+    expect(CORE_CORRECTION_PROMPT).toContain("<target>");
+    expect(CORE_CORRECTION_PROMPT).toContain("full dictated passage");
   });
 
   it("includes an explicit idempotency instruction", () => {
     expect(CORE_CORRECTION_PROMPT).toMatch(/return it character-for-character/i);
+  });
+
+  it("allows paragraph cleanup without rewriting the passage", () => {
+    expect(CORE_CORRECTION_PROMPT).toContain("Add natural paragraph breaks");
+    expect(CORE_CORRECTION_PROMPT).toContain("do not turn it into polished prose");
   });
 
   it("includes all expected technical term mappings", () => {
@@ -43,30 +54,31 @@ describe("CORE_CORRECTION_PROMPT", () => {
 describe("buildCorrectionSystemPrompt", () => {
   it("guardrail uses positive then negative output framing", () => {
     const prompt = buildCorrectionSystemPrompt({});
-    expect(prompt).toContain("plain text only");
-    expect(prompt).toMatch(/no preamble|no quotes|no markdown|no explanations/);
+    expect(prompt).toContain("JSON object");
+    expect(prompt).toMatch(/no_change|replace|Do not add explanation/i);
   });
 
-  it("guardrail requires immediate output (no preamble instruction)", () => {
+  it("guardrail explicitly defines the no_change and replace contract", () => {
     const prompt = buildCorrectionSystemPrompt({});
-    expect(prompt).toMatch(/begin immediately with/i);
+    expect(prompt).toContain('"no_change"');
+    expect(prompt).toContain('"replace"');
   });
 
   it("guardrail is always the last section of the prompt", () => {
     const prompt = buildCorrectionSystemPrompt({
       customInstructions: "Always use British spelling.",
     });
-    const guardrailIdx = prompt.lastIndexOf("Begin immediately");
+    const guardrailIdx = prompt.lastIndexOf("Return a JSON object");
     const lastCharIdx = prompt.length - 1;
-    // The guardrail must appear in the final ~200 characters of the prompt
-    expect(guardrailIdx).toBeGreaterThan(lastCharIdx - 200);
+    // The guardrail must appear near the end of the prompt, after the dynamic sections.
+    expect(guardrailIdx).toBeGreaterThan(lastCharIdx - 320);
   });
 
   it("places custom instructions before the guardrail", () => {
     const instructions = "Always use British spelling.";
     const prompt = buildCorrectionSystemPrompt({ customInstructions: instructions });
     const instructionsIdx = prompt.indexOf(instructions);
-    const guardrailIdx = prompt.indexOf("Begin immediately");
+    const guardrailIdx = prompt.indexOf("Return a JSON object");
     expect(instructionsIdx).toBeGreaterThan(-1);
     expect(guardrailIdx).toBeGreaterThan(instructionsIdx);
   });
@@ -127,5 +139,75 @@ describe("buildCorrectionSystemPrompt", () => {
       projectPath: "/Users/dev/my-app-repo",
     });
     expect(prompt).toContain("my-app-repo");
+  });
+});
+
+describe("MICRO_CORRECTION_PROMPT", () => {
+  it("is a word-level correction engine", () => {
+    expect(MICRO_CORRECTION_PROMPT).toContain("word-level correction engine");
+  });
+
+  it("references uncertain tags", () => {
+    expect(MICRO_CORRECTION_PROMPT).toContain("<uncertain>");
+  });
+
+  it("includes technical terms dictionary", () => {
+    expect(MICRO_CORRECTION_PROMPT).toContain("<terms>");
+    expect(MICRO_CORRECTION_PROMPT).toContain("Zustand");
+    expect(MICRO_CORRECTION_PROMPT).toContain("React");
+  });
+
+  it("describes adjacent word merging", () => {
+    expect(MICRO_CORRECTION_PROMPT).toContain("zoo stand");
+    expect(MICRO_CORRECTION_PROMPT).toContain("Zustand");
+  });
+});
+
+describe("buildMicroCorrectionSystemPrompt", () => {
+  it("includes the micro-correction core prompt", () => {
+    const prompt = buildMicroCorrectionSystemPrompt({});
+    expect(prompt).toContain("word-level correction engine");
+  });
+
+  it("includes guardrail at the end", () => {
+    const prompt = buildMicroCorrectionSystemPrompt({});
+    expect(prompt).toContain("no_change");
+    expect(prompt).toContain("replace");
+    expect(prompt).toContain("JSON object");
+  });
+
+  it("includes project name when provided", () => {
+    const prompt = buildMicroCorrectionSystemPrompt({ projectName: "Canopy" });
+    expect(prompt).toContain("Canopy");
+    expect(prompt).toContain("CURRENT PROJECT");
+  });
+
+  it("includes custom dictionary as required terms", () => {
+    const prompt = buildMicroCorrectionSystemPrompt({
+      customDictionary: ["Canopy", "Worktree"],
+    });
+    expect(prompt).toContain("Canopy");
+    expect(prompt).toContain("Worktree");
+    expect(prompt).toContain("REQUIRED TERMS");
+  });
+
+  it("omits project section when no project context provided", () => {
+    const prompt = buildMicroCorrectionSystemPrompt({});
+    expect(prompt).not.toContain("CURRENT PROJECT");
+  });
+
+  it("does not include custom instructions (micro prompt is leaner)", () => {
+    const prompt = buildMicroCorrectionSystemPrompt({
+      customInstructions: "Always use British spelling.",
+    });
+    expect(prompt).not.toContain("CUSTOM CONTEXT");
+  });
+
+  it("guardrail is the last section", () => {
+    const prompt = buildMicroCorrectionSystemPrompt({
+      customDictionary: ["Test"],
+    });
+    const guardrailIdx = prompt.lastIndexOf("Return a JSON object");
+    expect(guardrailIdx).toBeGreaterThan(prompt.length - 300);
   });
 });

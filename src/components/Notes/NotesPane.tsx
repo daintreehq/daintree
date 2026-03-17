@@ -1,5 +1,14 @@
 import { useState, useCallback, useEffect, useRef, useMemo } from "react";
-import { Copy, Check, AlertCircle, AlertTriangle, RefreshCw, Send } from "lucide-react";
+import {
+  Copy,
+  Check,
+  AlertCircle,
+  AlertTriangle,
+  RefreshCw,
+  PenLine,
+  Columns2,
+  Eye,
+} from "lucide-react";
 import CodeMirror from "@uiw/react-codemirror";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { languages } from "@codemirror/language-data";
@@ -8,12 +17,8 @@ import { ContentPanel, type BasePanelProps } from "@/components/Panel";
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
 import { notesClient, type NoteMetadata } from "@/clients/notesClient";
 import { canopyTheme } from "./editorTheme";
-import { useTerminalStore } from "@/store/terminalStore";
-import { useNativeContextMenu } from "@/hooks/useNativeContextMenu";
-import { notify } from "@/lib/notify";
-import { getAgentIds, getAgentConfig } from "@/config/agents";
-import type { MenuItemOption } from "@shared/types";
-import { findTargetAgentTerminal, sendToAgent, getEditorSelection } from "@/lib/agentSend";
+import { MarkdownPreview } from "./MarkdownPreview";
+import { MarkdownToolbar } from "./MarkdownToolbar";
 
 export interface NotesPaneProps extends BasePanelProps {
   notePath: string;
@@ -48,7 +53,8 @@ export function NotesPane({
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [hasConflict, setHasConflict] = useState(false);
-  const [sent, setSent] = useState(false);
+  const [viewMode, setViewMode] = useState<"edit" | "split" | "preview">("edit");
+  const [editorMountKey, setEditorMountKey] = useState(0);
 
   const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const lastSavedContentRef = useRef<string>("");
@@ -56,17 +62,8 @@ export function NotesPane({
   const saveVersionRef = useRef(0);
   const contentRef = useRef<string>("");
   const editorViewRef = useRef<EditorView | null>(null);
-  const sentTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-
-  const terminals = useTerminalStore((state) => state.terminals);
-  const focusedId = useTerminalStore((state) => state.focusedId);
-  const queueCommand = useTerminalStore((state) => state.queueCommand);
-  const { showMenu } = useNativeContextMenu();
-
-  // Extract worktree ID from the notes panel props (panels inherit worktree from their location)
-  const worktreeId = useTerminalStore(
-    (state) => state.terminals.find((t) => t.id === id)?.worktreeId
-  );
+  const previewRef = useRef<HTMLDivElement>(null);
+  const isSyncingRef = useRef(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -204,11 +201,44 @@ export function NotesPane({
       if (saveTimeoutRef.current) {
         clearTimeout(saveTimeoutRef.current);
       }
-      if (sentTimeoutRef.current) {
-        clearTimeout(sentTimeoutRef.current);
-      }
     };
   }, []);
+
+  useEffect(() => {
+    if (viewMode !== "split") return;
+    const scrollDOM = editorViewRef.current?.scrollDOM;
+    const previewEl = previewRef.current;
+    if (!scrollDOM || !previewEl) return;
+
+    const onEditorScroll = () => {
+      if (isSyncingRef.current) return;
+      isSyncingRef.current = true;
+      const max = scrollDOM.scrollHeight - scrollDOM.clientHeight;
+      const ratio = max > 0 ? scrollDOM.scrollTop / max : 0;
+      previewEl.scrollTop = ratio * (previewEl.scrollHeight - previewEl.clientHeight);
+      requestAnimationFrame(() => {
+        isSyncingRef.current = false;
+      });
+    };
+
+    const onPreviewScroll = () => {
+      if (isSyncingRef.current) return;
+      isSyncingRef.current = true;
+      const max = previewEl.scrollHeight - previewEl.clientHeight;
+      const ratio = max > 0 ? previewEl.scrollTop / max : 0;
+      scrollDOM.scrollTop = ratio * (scrollDOM.scrollHeight - scrollDOM.clientHeight);
+      requestAnimationFrame(() => {
+        isSyncingRef.current = false;
+      });
+    };
+
+    scrollDOM.addEventListener("scroll", onEditorScroll);
+    previewEl.addEventListener("scroll", onPreviewScroll);
+    return () => {
+      scrollDOM.removeEventListener("scroll", onEditorScroll);
+      previewEl.removeEventListener("scroll", onPreviewScroll);
+    };
+  }, [viewMode, editorMountKey]);
 
   const handleCopyPath = useCallback(async () => {
     const addressablePath = `@.canopy/notes/${notePath}`;
@@ -223,169 +253,32 @@ export function NotesPane({
     }
   }, [notePath]);
 
-  const handleSendToAgent = useCallback(
-    async (agentId: string, useSelection: boolean) => {
-      const agentConfig = getAgentConfig(agentId);
-      if (!agentConfig) return;
-
-      // Get content (selection or full note)
-      const contentToSend = useSelection
-        ? getEditorSelection(editorViewRef.current, contentRef.current)
-        : contentRef.current;
-
-      if (!contentToSend.trim()) {
-        notify({
-          type: "warning",
-          message: "No content to send",
-          duration: 3000,
-        });
-        return;
-      }
-
-      // Find target terminal for this agent
-      const targetTerminal = findTargetAgentTerminal(terminals, focusedId, worktreeId, agentId);
-
-      if (!targetTerminal) {
-        notify({
-          type: "warning",
-          message: `No ${agentConfig.name} session found`,
-          duration: 3000,
-        });
-        return;
-      }
-
-      // Send to the agent
-      const result = await sendToAgent(targetTerminal.id, contentToSend, queueCommand);
-
-      if (result.success) {
-        setSent(true);
-        if (sentTimeoutRef.current) {
-          clearTimeout(sentTimeoutRef.current);
-        }
-        sentTimeoutRef.current = setTimeout(() => {
-          if (isMountedRef.current) setSent(false);
-        }, 2000);
-      } else {
-        notify({
-          type: "error",
-          message: result.error || "Failed to send",
-          duration: 3000,
-        });
-      }
-    },
-    [terminals, focusedId, worktreeId, queueCommand]
-  );
-
-  const buildSendMenu = useCallback((useSelection: boolean): MenuItemOption[] => {
-    const agentIds = getAgentIds();
-    return agentIds.map((agentId) => {
-      const config = getAgentConfig(agentId);
-      return {
-        id: `send-to:${agentId}:${useSelection ? "selection" : "note"}`,
-        label: config?.name || agentId,
-      };
-    });
-  }, []);
-
-  const handleSendMenuClick = useCallback(
-    async (event: React.MouseEvent) => {
-      event.preventDefault();
-      event.stopPropagation();
-
-      const hasSelection = editorViewRef.current?.state.selection.ranges.some(
-        (range: any) => !range.empty
-      );
-
-      const menu: MenuItemOption[] = [
-        {
-          id: "send-selection",
-          label: "Send Selection to...",
-          enabled: hasSelection,
-          submenu: buildSendMenu(true),
-        },
-        {
-          id: "send-note",
-          label: "Send Note to...",
-          submenu: buildSendMenu(false),
-        },
-        { type: "separator" },
-        {
-          id: "copy-path",
-          label: "Copy @path",
-        },
-      ];
-
-      const selectedId = await showMenu(event, menu);
-      if (!selectedId) return;
-
-      if (selectedId === "copy-path") {
-        handleCopyPath();
-        return;
-      }
-
-      if (selectedId.startsWith("send-to:")) {
-        const parts = selectedId.split(":");
-        const agentId = parts[1];
-        const useSelection = parts[2] === "selection";
-        handleSendToAgent(agentId, useSelection);
-      }
-    },
-    [buildSendMenu, showMenu, handleCopyPath, handleSendToAgent]
-  );
-
-  const handleEditorContextMenu = useCallback(
-    async (event: React.MouseEvent) => {
-      const hasSelection = editorViewRef.current?.state.selection.ranges.some(
-        (range: any) => !range.empty
-      );
-
-      const menu: MenuItemOption[] = [
-        {
-          id: "send-selection",
-          label: "Send Selection to...",
-          enabled: hasSelection,
-          submenu: buildSendMenu(true),
-        },
-        {
-          id: "send-note",
-          label: "Send Note to...",
-          submenu: buildSendMenu(false),
-        },
-      ];
-
-      const selectedId = await showMenu(event, menu);
-      if (!selectedId || !selectedId.startsWith("send-to:")) return;
-
-      const parts = selectedId.split(":");
-      const agentId = parts[1];
-      const useSelection = parts[2] === "selection";
-      handleSendToAgent(agentId, useSelection);
-    },
-    [buildSendMenu, showMenu, handleSendToAgent]
-  );
-
   const headerActions = useMemo(
     () => (
       <div className="flex items-center gap-1">
-        <TooltipProvider>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <button
-                onClick={handleSendMenuClick}
-                className="flex items-center gap-1.5 px-2 py-1 text-xs rounded-[var(--radius-sm)] hover:bg-canopy-text/10 text-canopy-text/60 hover:text-canopy-text transition-colors"
-                aria-label="Send to agent"
-              >
-                {sent ? (
-                  <Check className="w-3 h-3 text-status-success" />
-                ) : (
-                  <Send className="w-3 h-3" />
-                )}
-                <span>Send to...</span>
-              </button>
-            </TooltipTrigger>
-            <TooltipContent side="bottom">Send to agent</TooltipContent>
-          </Tooltip>
-        </TooltipProvider>
+        <div className="flex items-center rounded-[var(--radius-sm)] border border-canopy-border/50 overflow-hidden mr-1">
+          {(
+            [
+              { mode: "edit" as const, icon: PenLine, label: "Edit" },
+              { mode: "split" as const, icon: Columns2, label: "Split" },
+              { mode: "preview" as const, icon: Eye, label: "Preview" },
+            ] as const
+          ).map(({ mode, icon: Icon, label }) => (
+            <button
+              key={mode}
+              onClick={() => setViewMode(mode)}
+              className={`px-1.5 py-1 text-xs transition-colors ${
+                viewMode === mode
+                  ? "bg-canopy-text/10 text-canopy-text"
+                  : "text-canopy-text/40 hover:text-canopy-text/70 hover:bg-canopy-text/5"
+              }`}
+              aria-label={label}
+              aria-pressed={viewMode === mode}
+            >
+              <Icon className="w-3 h-3" />
+            </button>
+          ))}
+        </div>
         <TooltipProvider>
           <Tooltip>
             <TooltipTrigger asChild>
@@ -407,7 +300,7 @@ export function NotesPane({
         </TooltipProvider>
       </div>
     ),
-    [handleCopyPath, copied, handleSendMenuClick, sent]
+    [handleCopyPath, copied, viewMode]
   );
 
   const extensions = useMemo(
@@ -462,30 +355,63 @@ export function NotesPane({
             </div>
           )}
 
-          <div
-            className="flex-1 overflow-hidden bg-canopy-bg text-[13px] font-mono [&_.cm-editor]:h-full [&_.cm-scroller]:p-2 [&_.cm-placeholder]:text-canopy-text/30 [&_.cm-placeholder]:italic"
-            onContextMenu={handleEditorContextMenu}
-          >
-            <CodeMirror
-              value={content}
-              height="100%"
-              theme={canopyTheme}
-              extensions={extensions}
-              onChange={handleContentChange}
-              onCreateEditor={(view) => {
-                editorViewRef.current = view;
-              }}
-              readOnly={hasConflict}
-              basicSetup={{
-                lineNumbers: false,
-                foldGutter: false,
-                highlightActiveLine: false,
-                highlightActiveLineGutter: false,
-              }}
-              className="h-full"
-              placeholder="Start writing your notes..."
-            />
-          </div>
+          {viewMode === "preview" ? (
+            <MarkdownPreview content={content} className="flex-1" />
+          ) : viewMode === "split" ? (
+            <div className="flex flex-1 min-h-0 overflow-hidden">
+              <div className="flex-1 flex flex-col min-h-0 border-r border-canopy-border">
+                {!hasConflict && <MarkdownToolbar editorViewRef={editorViewRef} />}
+                <div className="flex-1 overflow-hidden bg-canopy-bg text-[13px] font-mono [&_.cm-editor]:h-full [&_.cm-scroller]:p-2 [&_.cm-placeholder]:text-canopy-text/30 [&_.cm-placeholder]:italic">
+                  <CodeMirror
+                    value={content}
+                    height="100%"
+                    theme={canopyTheme}
+                    extensions={extensions}
+                    onChange={handleContentChange}
+                    onCreateEditor={(view) => {
+                      editorViewRef.current = view;
+                      setEditorMountKey((k) => k + 1);
+                    }}
+                    readOnly={hasConflict}
+                    basicSetup={{
+                      lineNumbers: false,
+                      foldGutter: false,
+                      highlightActiveLine: false,
+                      highlightActiveLineGutter: false,
+                    }}
+                    className="h-full"
+                    placeholder="Start writing your notes..."
+                  />
+                </div>
+              </div>
+              <MarkdownPreview ref={previewRef} content={content} className="flex-1" />
+            </div>
+          ) : (
+            <div className="flex-1 flex flex-col min-h-0">
+              {!hasConflict && <MarkdownToolbar editorViewRef={editorViewRef} />}
+              <div className="flex-1 overflow-hidden bg-canopy-bg text-[13px] font-mono [&_.cm-editor]:h-full [&_.cm-scroller]:p-2 [&_.cm-placeholder]:text-canopy-text/30 [&_.cm-placeholder]:italic">
+                <CodeMirror
+                  value={content}
+                  height="100%"
+                  theme={canopyTheme}
+                  extensions={extensions}
+                  onChange={handleContentChange}
+                  onCreateEditor={(view) => {
+                    editorViewRef.current = view;
+                  }}
+                  readOnly={hasConflict}
+                  basicSetup={{
+                    lineNumbers: false,
+                    foldGutter: false,
+                    highlightActiveLine: false,
+                    highlightActiveLineGutter: false,
+                  }}
+                  className="h-full"
+                  placeholder="Start writing your notes..."
+                />
+              </div>
+            </div>
+          )}
         </div>
       )}
     </ContentPanel>

@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
-import { AlertTriangle, Loader2 } from "lucide-react";
+import { AlertTriangle, Loader2, Settings } from "lucide-react";
 import type {
   TerminalType,
   TerminalRestartError,
@@ -11,7 +11,8 @@ import { cn } from "@/lib/utils";
 import { XtermAdapter } from "./XtermAdapter";
 import { ArtifactOverlay } from "./ArtifactOverlay";
 import { TerminalSearchBar } from "./TerminalSearchBar";
-import { TerminalRestartBanner } from "./TerminalRestartBanner";
+import { TerminalRestartStatusBanner } from "./TerminalRestartStatusBanner";
+import { getRestartBannerVariant } from "./restartStatus";
 import { TerminalErrorBanner } from "./TerminalErrorBanner";
 import { SpawnErrorBanner } from "./SpawnErrorBanner";
 import { ReconnectErrorBanner } from "./ReconnectErrorBanner";
@@ -26,16 +27,18 @@ import {
   useTerminalInputStore,
 } from "@/store";
 import { useTerminalLogic } from "@/hooks/useTerminalLogic";
-import type { AgentState } from "@/types";
+import { errorsClient } from "@/clients";
+import type { AgentState, LegacyAgentType } from "@/types";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { actionService } from "@/services/ActionService";
 import { InputTracker } from "@/services/clearCommandDetection";
-import { getAgentConfig } from "@/config/agents";
+import { getAgentConfig, isRegisteredAgent } from "@/config/agents";
 import { terminalClient } from "@/clients";
 import { HybridInputBar, type HybridInputBarHandle } from "./HybridInputBar";
 import { getTerminalFocusTarget } from "./terminalFocus";
 import { registerPanelFocusHandler } from "./terminalFocusRegistry";
 import { getCanopyCommand, isEscapedCommand, unescapeCommand } from "./canopySlashCommands";
+import { DropdownMenuItem } from "@/components/ui/dropdown-menu";
 
 export type { TerminalType };
 
@@ -181,12 +184,13 @@ function TerminalPaneComponent({
   const isBackendRecovering = backendStatus === "recovering";
   const hybridInputEnabled = useTerminalInputStore((state) => state.hybridInputEnabled);
   const hybridInputAutoFocus = useTerminalInputStore((state) => state.hybridInputAutoFocus);
-  const effectiveAgentId =
-    agentId === "claude" || agentId === "gemini" || agentId === "codex" || agentId === "opencode"
+  const effectiveAgentId = (
+    agentId && isRegisteredAgent(agentId)
       ? agentId
-      : type === "claude" || type === "gemini" || type === "codex" || type === "opencode"
+      : type && isRegisteredAgent(type)
         ? type
-        : undefined;
+        : undefined
+  ) as LegacyAgentType | undefined;
   const isAgentTerminal = effectiveAgentId !== undefined;
   const showHybridInputBar = isAgentTerminal && hybridInputEnabled;
 
@@ -206,6 +210,15 @@ function TerminalPaneComponent({
   );
   const dismissError = useErrorStore((state) => state.dismissError);
   const removeError = useErrorStore((state) => state.removeError);
+  const clearRetryProgress = useErrorStore((state) => state.clearRetryProgress);
+
+  const handleCancelRetry = useCallback(
+    (errorId: string) => {
+      errorsClient.cancelRetry(errorId);
+      clearRetryProgress(errorId);
+    },
+    [clearRetryProgress]
+  );
 
   const { isExited, exitCode, handleExit, handleErrorRetry } = useTerminalLogic({
     id,
@@ -542,6 +555,26 @@ function TerminalPaneComponent({
   // Determine panel kind based on agent
   const kind = effectiveAgentId ? "agent" : "terminal";
 
+  const agentHeaderActions = useMemo(() => {
+    if (!effectiveAgentId) return undefined;
+    const agentConfig = getAgentConfig(effectiveAgentId);
+    const agentName = agentConfig?.name ?? effectiveAgentId;
+    return (
+      <DropdownMenuItem
+        onSelect={() =>
+          void actionService.dispatch(
+            "app.settings.openTab",
+            { tab: "agents", subtab: effectiveAgentId },
+            { source: "user" }
+          )
+        }
+      >
+        <Settings className="w-3 h-3 mr-2" />
+        {agentName} Settings
+      </DropdownMenuItem>
+    );
+  }, [effectiveAgentId]);
+
   return (
     <ContentPanel
       ref={containerRef}
@@ -561,6 +594,7 @@ function TerminalPaneComponent({
       onTitleChange={onTitleChange}
       onMinimize={onMinimize}
       onRestore={onRestore}
+      headerActions={agentHeaderActions}
       onRestart={handleRestart}
       isExited={isExited}
       exitCode={exitCode}
@@ -609,6 +643,7 @@ function TerminalPaneComponent({
               error={error}
               onDismiss={dismissError}
               onRetry={handleErrorRetry}
+              onCancelRetry={handleCancelRetry}
               compact
             />
           ))}
@@ -650,27 +685,19 @@ function TerminalPaneComponent({
         />
       )}
 
-      {isExited &&
-        exitCode !== null &&
-        exitCode !== 0 &&
-        exitCode !== 130 &&
-        !dismissedRestartPrompt &&
-        !restartError &&
-        !isRestarting &&
-        exitBehavior !== "restart" && (
-          <TerminalRestartBanner
-            exitCode={exitCode}
-            onRestart={handleRestart}
-            onDismiss={() => setDismissedRestartPrompt(true)}
-          />
-        )}
-
-      {isAutoRestarting && (
-        <div className="flex items-center gap-2 px-3 py-1.5 text-xs text-canopy-text/60 bg-canopy-accent/5 border-b border-canopy-border shrink-0">
-          <Loader2 className="h-3 w-3 animate-spin text-canopy-accent" />
-          <span>Auto-restarting…</span>
-        </div>
-      )}
+      <TerminalRestartStatusBanner
+        variant={getRestartBannerVariant({
+          isExited,
+          exitCode,
+          dismissedRestartPrompt,
+          restartError,
+          isRestarting,
+          isAutoRestarting,
+          exitBehavior,
+        })}
+        onRestart={handleRestart}
+        onDismiss={() => setDismissedRestartPrompt(true)}
+      />
 
       <div className="flex-1 min-h-0 bg-canopy-bg flex flex-col">
         <div className="flex-1 relative min-h-0">
@@ -784,6 +811,7 @@ function TerminalPaneComponent({
             cwd={cwd}
             agentId={effectiveAgentId}
             agentHasLifecycleEvent={stateChangeTrigger !== undefined}
+            agentState={agentState}
             restartKey={restartKey}
             onActivate={handleClick}
             onSend={({ trackerData, text }) => {

@@ -41,9 +41,9 @@ describe("ProjectPulseCard — visual contrast (issue #2645)", () => {
     expect(content).toContain("text-canopy-text/80");
   });
 
-  it("button hover uses white overlay pattern, not surface token", async () => {
+  it("button hover uses tint overlay pattern, not surface token", async () => {
     const content = await readFile(CARD_PATH, "utf-8");
-    expect(content).toContain("hover:bg-white/5");
+    expect(content).toContain("hover:bg-tint/5");
     expect(content).not.toContain("hover:bg-surface-highlight");
   });
 

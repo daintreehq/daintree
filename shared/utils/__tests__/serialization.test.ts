@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { ensureSerializable, validateSerializable } from "../serialization.js";
-import type { WorktreeChanges, FileChangeDetail } from "../../types/domain.js";
+import type { WorktreeChanges, FileChangeDetail } from "../../types/git.js";
 
 describe("ensureSerializable", () => {
   it("preserves plain objects", () => {

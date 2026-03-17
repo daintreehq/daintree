@@ -117,6 +117,10 @@ export class AgentStateService {
       return false;
     }
 
+    if (previousState === "failed" && newState !== "failed") {
+      terminal.error = undefined;
+    }
+
     terminal.agentState = newState;
     terminal.lastStateChange = getStateChangeTimestamp();
 
@@ -277,7 +281,9 @@ export class AgentStateService {
 
     const event: AgentEvent =
       activity === "busy"
-        ? { type: "busy" }
+        ? metadata?.trigger === "input"
+          ? { type: "input" }
+          : { type: "busy" }
         : activity === "completed"
           ? { type: "completion" }
           : { type: "prompt" };

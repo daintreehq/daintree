@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { AGENT_IDS, getAgentConfig } from "@/config/agents";
 import type { MenuItemOption } from "@shared/types";
+import { extractUrlAtPoint } from "../TerminalContextMenu";
 
 describe("TerminalContextMenu - Convert To Submenu", () => {
   describe("Agent configuration", () => {
@@ -186,5 +187,96 @@ describe("TerminalContextMenu - Convert To Submenu", () => {
         expect(submenu.length).toBeGreaterThan(0);
       }
     });
+  });
+});
+
+describe("extractUrlAtPoint", () => {
+  function makeMockTerminal(opts: {
+    text: string;
+    cols?: number;
+    rows?: number;
+    rect?: { left: number; top: number; width: number; height: number };
+    elementNull?: boolean;
+    viewportY?: number;
+  }) {
+    const cols = opts.cols ?? 80;
+    const rows = opts.rows ?? 24;
+    const rect = opts.rect ?? { left: 0, top: 0, width: 800, height: 480, right: 800, bottom: 480 };
+    return {
+      element: opts.elementNull
+        ? undefined
+        : {
+            getBoundingClientRect: () => ({
+              ...rect,
+              right: rect.left + rect.width,
+              bottom: rect.top + rect.height,
+            }),
+          },
+      cols,
+      rows,
+      buffer: {
+        active: {
+          viewportY: opts.viewportY ?? 0,
+          getLine: () => ({
+            translateToString: () => opts.text,
+          }),
+        },
+      },
+    } as never;
+  }
+
+  it("returns URL when click lands on a URL in the line", () => {
+    const text = "Visit https://example.com for more info";
+    const terminal = makeMockTerminal({
+      text,
+      cols: 80,
+      rows: 24,
+      rect: { left: 0, top: 0, width: 800, height: 480 },
+    });
+    // "https://example.com" starts at index 6, length 19
+    // col 6 = clientX = (6/80)*800 + some offset to land in the cell
+    const clientX = (6.5 / 80) * 800;
+    const clientY = (0.5 / 24) * 480;
+    expect(extractUrlAtPoint(terminal, clientX, clientY)).toBe("https://example.com");
+  });
+
+  it("returns null when click is outside the URL", () => {
+    const text = "Visit https://example.com for more info";
+    const terminal = makeMockTerminal({ text });
+    const clientX = (0.5 / 80) * 800;
+    const clientY = (0.5 / 24) * 480;
+    expect(extractUrlAtPoint(terminal, clientX, clientY)).toBeNull();
+  });
+
+  it("strips trailing punctuation from matched URL", () => {
+    const text = "See https://example.com/path.";
+    const terminal = makeMockTerminal({ text });
+    // URL starts at index 4, "https://example.com/path." -> stripped to "https://example.com/path"
+    const clientX = (10.5 / 80) * 800;
+    const clientY = (0.5 / 24) * 480;
+    expect(extractUrlAtPoint(terminal, clientX, clientY)).toBe("https://example.com/path");
+  });
+
+  it("returns null when no URL on line", () => {
+    const text = "just some plain text here";
+    const terminal = makeMockTerminal({ text });
+    const clientX = (5.5 / 80) * 800;
+    const clientY = (0.5 / 24) * 480;
+    expect(extractUrlAtPoint(terminal, clientX, clientY)).toBeNull();
+  });
+
+  it("returns null when terminal.element is null/undefined", () => {
+    const terminal = makeMockTerminal({ text: "https://example.com", elementNull: true });
+    expect(extractUrlAtPoint(terminal, 100, 100)).toBeNull();
+  });
+
+  it("returns null when click is outside terminal element bounds", () => {
+    const text = "https://example.com";
+    const terminal = makeMockTerminal({
+      text,
+      rect: { left: 100, top: 100, width: 800, height: 480 },
+    });
+    // Click at (50, 50) which is outside the rect starting at (100, 100)
+    expect(extractUrlAtPoint(terminal, 50, 50)).toBeNull();
   });
 });

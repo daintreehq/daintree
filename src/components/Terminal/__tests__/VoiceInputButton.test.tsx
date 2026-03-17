@@ -4,12 +4,6 @@ import { render } from "@testing-library/react";
 import { VoiceInputButton } from "../VoiceInputButton";
 import { useVoiceRecordingStore } from "@/store/voiceRecordingStore";
 
-vi.mock("@/services/ActionService", () => ({
-  actionService: {
-    dispatch: vi.fn(),
-  },
-}));
-
 function createVoiceInputApi() {
   return {
     getSettings: vi.fn(),
@@ -55,14 +49,26 @@ describe("VoiceInputButton", () => {
     );
 
     expect(container.innerHTML).toContain("lucide-mic");
-    expect(container.innerHTML).not.toContain("lucide-mic-off");
   });
 
-  it("shows the disabled mic icon when voice input is not configured", () => {
+  it("renders nothing when voice input is not configured", () => {
     const { container } = render(
       <VoiceInputButton panelId="panel-1" projectId="project-1" projectName="Canopy" />
     );
 
-    expect(container.innerHTML).toContain("lucide-mic-off");
+    expect(container.innerHTML).toBe("");
+  });
+
+  it("still renders when not configured but actively recording on this panel", () => {
+    useVoiceRecordingStore.setState({
+      isConfigured: false,
+      status: "recording",
+      activeTarget: { panelId: "panel-1" } as never,
+    });
+    const { container } = render(
+      <VoiceInputButton panelId="panel-1" projectId="project-1" projectName="Canopy" />
+    );
+
+    expect(container.innerHTML).not.toBe("");
   });
 });

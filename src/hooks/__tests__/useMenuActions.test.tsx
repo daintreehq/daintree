@@ -43,7 +43,7 @@ describe("useMenuActions", () => {
       useMenuActions({
         onOpenSettings: vi.fn(),
         onToggleSidebar: vi.fn(),
-        onOpenAgentPalette: vi.fn(),
+
         onLaunchAgent: vi.fn(),
         defaultCwd: "/tmp",
       })
@@ -75,7 +75,7 @@ describe("useMenuActions", () => {
       useMenuActions({
         onOpenSettings: vi.fn(),
         onToggleSidebar: vi.fn(),
-        onOpenAgentPalette: vi.fn(),
+
         onLaunchAgent: vi.fn(),
         defaultCwd: "/tmp",
       })
@@ -104,7 +104,7 @@ describe("useMenuActions", () => {
       useMenuActions({
         onOpenSettings: vi.fn(),
         onToggleSidebar: vi.fn(),
-        onOpenAgentPalette: vi.fn(),
+
         onLaunchAgent: vi.fn(),
         defaultCwd: "/tmp",
       })
@@ -135,7 +135,7 @@ describe("useMenuActions", () => {
       useMenuActions({
         onOpenSettings: vi.fn(),
         onToggleSidebar: vi.fn(),
-        onOpenAgentPalette: vi.fn(),
+
         onLaunchAgent: vi.fn(),
         defaultCwd: "/tmp",
       })

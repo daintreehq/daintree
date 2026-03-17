@@ -37,6 +37,9 @@ export interface AppDialogProps {
 
 export type { DialogSize, DialogVariant, DialogZIndex };
 
+const TABBABLE_SELECTOR =
+  'a[href], area[href], input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), button:not([disabled]), audio[controls], video[controls], [contenteditable]:not([contenteditable="false"]), [tabindex]:not([tabindex^="-"])';
+
 const sizeClasses: Record<DialogSize, string> = {
   sm: "max-w-md",
   md: "max-w-xl",
@@ -63,6 +66,7 @@ export function AppDialog({
   const previousActiveElement = useRef<HTMLElement | null>(null);
   const backdropPointerRef = useRef<number | null>(null);
   const closeInFlightRef = useRef(false);
+  const dialogRef = useRef<HTMLDivElement>(null);
   const titleId = useId();
   const descriptionId = useId();
 
@@ -88,6 +92,14 @@ export function AppDialog({
   useEffect(() => {
     if (isOpen) {
       previousActiveElement.current = document.activeElement as HTMLElement;
+      requestAnimationFrame(() => {
+        const first = dialogRef.current?.querySelector<HTMLElement>(TABBABLE_SELECTOR);
+        if (first) {
+          first.focus();
+        } else {
+          dialogRef.current?.focus();
+        }
+      });
     } else {
       restoreFocus();
     }
@@ -121,6 +133,37 @@ export function AppDialog({
     (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         handleClose();
+        return;
+      }
+
+      if (e.key === "Tab" && dialogRef.current) {
+        // Don't interfere if another modal (e.g., a nested dialog portal) has focus
+        const activeEl = document.activeElement;
+        if (activeEl) {
+          const closestModal = activeEl.closest('[aria-modal="true"]');
+          if (closestModal && !closestModal.contains(dialogRef.current)) return;
+        }
+
+        const focusable = Array.from(
+          dialogRef.current.querySelectorAll<HTMLElement>(TABBABLE_SELECTOR)
+        );
+
+        if (focusable.length === 0) {
+          e.preventDefault();
+          dialogRef.current.focus();
+          return;
+        }
+
+        const first = focusable[0];
+        const last = focusable[focusable.length - 1];
+
+        if (e.shiftKey && document.activeElement === first) {
+          e.preventDefault();
+          last.focus();
+        } else if (!e.shiftKey && document.activeElement === last) {
+          e.preventDefault();
+          first.focus();
+        }
       }
     },
     [handleClose]
@@ -177,6 +220,8 @@ export function AppDialog({
         data-testid={dataTestId}
       >
         <div
+          ref={dialogRef}
+          tabIndex={-1}
           className={cn(
             "bg-canopy-sidebar border border-[var(--border-overlay)] border-t-overlay-strong rounded-[var(--radius-xl)] shadow-modal mx-4 flex flex-col",
             maxHeight,
@@ -187,6 +232,7 @@ export function AppDialog({
             isVisible
               ? "opacity-100 translate-y-0 scale-100"
               : "opacity-0 translate-y-1 scale-[0.98]",
+            "outline-none",
             className
           )}
           onClick={(e) => e.stopPropagation()}

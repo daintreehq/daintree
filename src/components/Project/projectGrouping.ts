@@ -2,6 +2,7 @@ import type { Project, ProjectStats } from "@shared/types";
 import { isCanopyEnvEnabled } from "@/utils/env";
 
 export interface GroupedProjects {
+  pinned: Project[];
   active: Project[];
   background: Project[];
   recent: Project[];
@@ -15,6 +16,7 @@ export function groupProjects(
   const isVerbose = isCanopyEnvEnabled("CANOPY_VERBOSE");
 
   const groups: GroupedProjects = {
+    pinned: [],
     active: [],
     background: [],
     recent: [],
@@ -30,6 +32,7 @@ export function groupProjects(
         name: p.name,
         status: p.status,
         id: p.id.slice(0, 8),
+        pinned: p.pinned,
       })),
     });
   }
@@ -43,6 +46,9 @@ export function groupProjects(
 
     if (isActive) {
       groups.active.push(project);
+    } else if (project.pinned) {
+      // Pinned non-active projects go to the pinned section
+      groups.pinned.push(project);
     } else {
       const stats = projectStats.get(project.id);
       const hasProcesses = stats && stats.processCount > 0;
@@ -67,6 +73,9 @@ export function groupProjects(
     }
   }
 
+  // Sort pinned projects by lastOpened (most recent first)
+  groups.pinned.sort((a, b) => b.lastOpened - a.lastOpened);
+
   // Sort background projects by process count (most active first)
   groups.background.sort((a, b) => {
     const statsA = projectStats.get(a.id);
@@ -79,6 +88,7 @@ export function groupProjects(
 
   if (isVerbose) {
     console.log("[ProjectSwitcher] Grouping result:", {
+      pinned: groups.pinned.map((p) => p.name),
       active: groups.active.map((p) => p.name),
       background: groups.background.map((p) => p.name),
       recent: groups.recent.map((p) => p.name),

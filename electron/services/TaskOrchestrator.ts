@@ -13,7 +13,7 @@ import { events } from "./events.js";
 import { taskQueueService, TaskQueueService } from "./TaskQueueService.js";
 import { AgentRouter, getAgentRouter } from "./AgentRouter.js";
 import type { PtyClient } from "./PtyClient.js";
-import type { AgentState } from "../../shared/types/domain.js";
+import type { AgentState } from "../../shared/types/agent.js";
 import type { CanopyEventMap } from "./events.js";
 import type { TaskRoutingHints } from "../../shared/types/task.js";
 

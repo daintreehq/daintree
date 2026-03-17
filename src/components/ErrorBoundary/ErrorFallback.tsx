@@ -1,5 +1,6 @@
 import { cn } from "@/lib/utils";
 import { actionService } from "@/services/ActionService";
+import { TriangleAlert } from "lucide-react";
 
 export interface ErrorFallbackProps {
   error: Error;
@@ -7,6 +8,7 @@ export interface ErrorFallbackProps {
   resetError: () => void;
   variant?: "fullscreen" | "section" | "component";
   componentName?: string;
+  incidentId?: string | null;
   onReport?: () => void;
 }
 
@@ -19,19 +21,19 @@ const VARIANT_STYLES = {
 
 const VARIANT_SIZES = {
   fullscreen: {
-    icon: "text-6xl",
+    icon: "size-16",
     title: "text-2xl",
     message: "text-base",
     button: "px-6 py-3 text-base",
   },
   section: {
-    icon: "text-4xl",
+    icon: "size-9",
     title: "text-xl",
     message: "text-sm",
     button: "px-4 py-2 text-sm",
   },
   component: {
-    icon: "text-2xl",
+    icon: "size-6",
     title: "text-base",
     message: "text-xs",
     button: "px-3 py-1.5 text-xs",
@@ -44,6 +46,7 @@ export function ErrorFallback({
   resetError,
   variant = "component",
   componentName,
+  incidentId,
   onReport,
 }: ErrorFallbackProps) {
   const sizes = VARIANT_SIZES[variant];
@@ -55,7 +58,7 @@ export function ErrorFallback({
   return (
     <div className={cn(VARIANT_STYLES[variant])}>
       <div className="flex flex-col items-center gap-4 max-w-2xl">
-        <div className={cn("text-status-error", sizes.icon)}>⚠️</div>
+        <TriangleAlert className={cn("text-status-error", sizes.icon)} />
 
         <div className="text-center space-y-2">
           <h2 className={cn("font-semibold text-status-error", sizes.title)}>
@@ -64,12 +67,22 @@ export function ErrorFallback({
             {variant === "component" && `${componentName || "Component"} Error`}
           </h2>
 
-          <p className={cn("text-canopy-text/80", sizes.message)}>{error.message}</p>
+          <p className={cn("text-canopy-text/80", sizes.message)}>
+            {import.meta.env.DEV
+              ? error.message
+              : "Something went wrong. Please try again or contact support."}
+          </p>
 
           {variant === "fullscreen" && (
             <p className={cn("text-canopy-text/60", sizes.message)}>
               The application encountered an unexpected error. You can try restarting or check the
               logs for more details.
+            </p>
+          )}
+
+          {!import.meta.env.DEV && incidentId && variant !== "component" && (
+            <p className={cn("text-canopy-text/50 font-mono", sizes.message)}>
+              Error ID: {incidentId.slice(-7)}
             </p>
           )}
         </div>
@@ -86,7 +99,7 @@ export function ErrorFallback({
             {variant === "fullscreen" ? "Restart Application" : "Try Again"}
           </button>
 
-          {variant === "fullscreen" && onReport && (
+          {variant !== "component" && onReport && (
             <button
               type="button"
               onClick={onReport}
@@ -111,7 +124,7 @@ export function ErrorFallback({
           </button>
         </div>
 
-        {errorInfo?.componentStack && variant !== "component" && (
+        {import.meta.env.DEV && errorInfo?.componentStack && variant !== "component" && (
           <details className="w-full mt-4">
             <summary className="cursor-pointer text-xs text-canopy-text/60 hover:text-canopy-text/80">
               Technical Details

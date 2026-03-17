@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import path from "path";
 
 /** Normalize a path to forward slashes for cross-platform mock matching */
@@ -12,6 +12,7 @@ vi.mock("fs/promises", () => ({
 
 vi.mock("child_process", () => ({
   spawn: vi.fn(),
+  spawnSync: vi.fn(),
 }));
 
 describe("WorktreeLifecycleService", () => {
@@ -20,6 +21,7 @@ describe("WorktreeLifecycleService", () => {
   let mockReadFile: ReturnType<typeof vi.fn>;
   let mockCp: ReturnType<typeof vi.fn>;
   let mockSpawn: ReturnType<typeof vi.fn>;
+  let mockSpawnSync: ReturnType<typeof vi.fn>;
 
   beforeEach(async () => {
     vi.clearAllMocks();
@@ -31,6 +33,9 @@ describe("WorktreeLifecycleService", () => {
 
     const childProcessModule = await import("child_process");
     mockSpawn = vi.mocked(childProcessModule.spawn);
+    mockSpawnSync = vi.mocked(
+      (childProcessModule as unknown as { spawnSync: ReturnType<typeof vi.fn> }).spawnSync
+    );
 
     const { WorktreeLifecycleService } = await import("../WorktreeLifecycleService.js");
     service = new WorktreeLifecycleService("/home/testuser");
@@ -311,7 +316,7 @@ describe("WorktreeLifecycleService", () => {
       expect(result.error).toContain("ENOENT");
     });
 
-    it("injects PATH and HOME along with CANOPY_* env vars", async () => {
+    it.skipIf(process.platform === "win32")("injects PATH and HOME on Unix", async () => {
       const child = makeFakeProcess(0);
       mockSpawn.mockReturnValue(child);
 
@@ -333,7 +338,29 @@ describe("WorktreeLifecycleService", () => {
       );
     });
 
-    it("uses detached: true for process group management", async () => {
+    it.runIf(process.platform === "win32")("injects PATH and USERPROFILE on Windows", async () => {
+      const child = makeFakeProcess(0);
+      mockSpawn.mockReturnValue(child);
+
+      await service.runCommands(["echo test"], {
+        cwd: "/test",
+        env: { CANOPY_WORKTREE_PATH: "/wt" },
+        onProgress: vi.fn(),
+      });
+
+      expect(mockSpawn).toHaveBeenCalledWith(
+        "echo test",
+        expect.objectContaining({
+          env: expect.objectContaining({
+            CANOPY_WORKTREE_PATH: "/wt",
+            PATH: expect.any(String),
+            USERPROFILE: expect.any(String),
+          }),
+        })
+      );
+    });
+
+    it("uses detached conditionally based on platform", async () => {
       mockSpawn.mockReturnValue(makeFakeProcess(0));
 
       await service.runCommands(["echo test"], {
@@ -342,10 +369,153 @@ describe("WorktreeLifecycleService", () => {
         onProgress: vi.fn(),
       });
 
+      const expectedDetached = process.platform !== "win32";
       expect(mockSpawn).toHaveBeenCalledWith(
         "echo test",
-        expect.objectContaining({ detached: true, shell: true })
+        expect.objectContaining({ detached: expectedDetached, shell: true })
       );
+    });
+
+    describe("platform-specific process killing", () => {
+      const originalPlatform = process.platform;
+      let processKillSpy: ReturnType<typeof vi.spyOn> | undefined;
+
+      afterEach(() => {
+        processKillSpy?.mockRestore();
+        processKillSpy = undefined;
+        Object.defineProperty(process, "platform", { value: originalPlatform });
+        vi.useRealTimers();
+      });
+
+      it("uses taskkill on Windows for timeout kill", async () => {
+        Object.defineProperty(process, "platform", { value: "win32" });
+        vi.useFakeTimers();
+
+        const listeners: Record<string, ((...args: unknown[]) => void)[]> = {};
+        const child = {
+          pid: 12345,
+          stdout: { on: vi.fn() },
+          stderr: { on: vi.fn() },
+          on: vi.fn((event: string, cb: (...args: unknown[]) => void) => {
+            listeners[event] ??= [];
+            listeners[event].push(cb);
+          }),
+          kill: vi.fn(),
+        };
+        mockSpawn.mockReturnValue(child);
+
+        const resultPromise = service.runCommands(["slow-cmd"], {
+          cwd: "/test",
+          env: {},
+          timeoutMs: 1000,
+          onProgress: vi.fn(),
+        });
+
+        // Advance past the timeout
+        vi.advanceTimersByTime(1001);
+
+        expect(mockSpawnSync).toHaveBeenCalledWith("taskkill", ["/F", "/T", "/PID", "12345"], {
+          windowsHide: true,
+        });
+
+        // Emit close to resolve the promise
+        listeners["close"]?.forEach((cb) => cb(1));
+        const result = await resultPromise;
+        expect(result.timedOut).toBe(true);
+      });
+
+      it("uses process group kill on Unix for timeout kill", async () => {
+        Object.defineProperty(process, "platform", { value: "darwin" });
+        vi.useFakeTimers();
+
+        processKillSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+
+        const listeners: Record<string, ((...args: unknown[]) => void)[]> = {};
+        const child = {
+          pid: 12345,
+          stdout: { on: vi.fn() },
+          stderr: { on: vi.fn() },
+          on: vi.fn((event: string, cb: (...args: unknown[]) => void) => {
+            listeners[event] ??= [];
+            listeners[event].push(cb);
+          }),
+          kill: vi.fn(),
+        };
+        mockSpawn.mockReturnValue(child);
+
+        const resultPromise = service.runCommands(["slow-cmd"], {
+          cwd: "/test",
+          env: {},
+          timeoutMs: 1000,
+          onProgress: vi.fn(),
+        });
+
+        // Advance past the timeout
+        vi.advanceTimersByTime(1001);
+
+        expect(processKillSpy).toHaveBeenCalledWith(-12345, "SIGTERM");
+        expect(mockSpawnSync).not.toHaveBeenCalled();
+
+        // Advance 5s for SIGKILL escalation
+        vi.advanceTimersByTime(5000);
+        expect(processKillSpy).toHaveBeenCalledWith(-12345, "SIGKILL");
+
+        // Emit close to resolve the promise
+        listeners["close"]?.forEach((cb) => cb(null));
+        await resultPromise;
+      });
+
+      it("injects USERPROFILE and PATHEXT on Windows", async () => {
+        Object.defineProperty(process, "platform", { value: "win32" });
+
+        const child = makeFakeProcess(0);
+        mockSpawn.mockReturnValue(child);
+
+        await service.runCommands(["echo test"], {
+          cwd: "/test",
+          env: { CANOPY_WORKTREE_PATH: "/wt" },
+          onProgress: vi.fn(),
+        });
+
+        const spawnEnv = mockSpawn.mock.calls[0][1].env;
+        expect(spawnEnv).toHaveProperty("USERPROFILE");
+        expect(spawnEnv).toHaveProperty("PATHEXT");
+        expect(spawnEnv).toHaveProperty("SystemRoot");
+        expect(spawnEnv).not.toHaveProperty("HOME");
+      });
+
+      it("falls back to child.kill() on Windows when pid is undefined", async () => {
+        Object.defineProperty(process, "platform", { value: "win32" });
+        vi.useFakeTimers();
+
+        const listeners: Record<string, ((...args: unknown[]) => void)[]> = {};
+        const child = {
+          pid: undefined,
+          stdout: { on: vi.fn() },
+          stderr: { on: vi.fn() },
+          on: vi.fn((event: string, cb: (...args: unknown[]) => void) => {
+            listeners[event] ??= [];
+            listeners[event].push(cb);
+          }),
+          kill: vi.fn(),
+        };
+        mockSpawn.mockReturnValue(child);
+
+        const resultPromise = service.runCommands(["slow-cmd"], {
+          cwd: "/test",
+          env: {},
+          timeoutMs: 1000,
+          onProgress: vi.fn(),
+        });
+
+        vi.advanceTimersByTime(1001);
+
+        expect(mockSpawnSync).not.toHaveBeenCalled();
+        expect(child.kill).toHaveBeenCalled();
+
+        listeners["close"]?.forEach((cb) => cb(1));
+        await resultPromise;
+      });
     });
   });
 });

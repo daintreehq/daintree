@@ -2,6 +2,8 @@
  * Tests for WorkflowLoader - Workflow validation and loading.
  */
 
+import path from "path";
+import fs from "fs/promises";
 import { describe, it, expect, beforeEach } from "vitest";
 import { WorkflowLoader } from "../WorkflowLoader.js";
 import type { WorkflowDefinition } from "../../../shared/types/workflow.js";
@@ -260,6 +262,62 @@ describe("WorkflowLoader", () => {
         version: "1.0.0",
         name: "Bad Config",
         nodes: [{ id: "step1", type: "action", config: {} }],
+      });
+
+      expect(result.valid).toBe(false);
+    });
+
+    it("validates an approval node with prompt", () => {
+      const result = loader.validate({
+        id: "approval-workflow",
+        version: "1.0.0",
+        name: "Approval Workflow",
+        nodes: [
+          {
+            id: "approve",
+            type: "approval",
+            config: { prompt: "Do you approve?" },
+          },
+        ],
+      });
+
+      expect(result.valid).toBe(true);
+    });
+
+    it("validates an approval node with timeoutMs", () => {
+      const result = loader.validate({
+        id: "approval-timeout",
+        version: "1.0.0",
+        name: "Approval Timeout",
+        nodes: [
+          {
+            id: "approve",
+            type: "approval",
+            config: { prompt: "Quick approval?", timeoutMs: 30000 },
+          },
+        ],
+      });
+
+      expect(result.valid).toBe(true);
+    });
+
+    it("rejects approval node without prompt", () => {
+      const result = loader.validate({
+        id: "no-prompt",
+        version: "1.0.0",
+        name: "No Prompt",
+        nodes: [{ id: "approve", type: "approval", config: {} }],
+      });
+
+      expect(result.valid).toBe(false);
+    });
+
+    it("rejects approval node with empty prompt", () => {
+      const result = loader.validate({
+        id: "empty-prompt",
+        version: "1.0.0",
+        name: "Empty Prompt",
+        nodes: [{ id: "approve", type: "approval", config: { prompt: "" } }],
       });
 
       expect(result.valid).toBe(false);
@@ -538,10 +596,44 @@ describe("WorkflowLoader", () => {
     });
 
     it("detects cycle mixing dependencies and routing edges", () => {
+      // step1 → step2 (onSuccess), step2 → step3 (dep reversed), step3 → step1 (onSuccess)
       const result = loader.validate({
         id: "mixed-cycle",
         version: "1.0.0",
         name: "Mixed Cycle",
+        nodes: [
+          {
+            id: "step1",
+            type: "action",
+            config: { actionId: "s1" },
+            onSuccess: ["step2"],
+          },
+          {
+            id: "step2",
+            type: "action",
+            config: { actionId: "s2" },
+          },
+          {
+            id: "step3",
+            type: "action",
+            config: { actionId: "s3" },
+            dependencies: ["step2"],
+            onSuccess: ["step1"],
+          },
+        ],
+      });
+
+      expect(result.valid).toBe(false);
+      expect(result.errors?.some((e) => e.type === "cycle")).toBe(true);
+    });
+
+    it("allows redundant dependency with onSuccess (not a cycle)", () => {
+      // step1 depends on step2, AND step2 succeeds → step1
+      // Both edges go step2 → step1, which is redundant but not cyclic
+      const result = loader.validate({
+        id: "redundant-edges",
+        version: "1.0.0",
+        name: "Redundant Edges",
         nodes: [
           {
             id: "step1",
@@ -558,8 +650,7 @@ describe("WorkflowLoader", () => {
         ],
       });
 
-      expect(result.valid).toBe(false);
-      expect(result.errors?.some((e) => e.type === "cycle")).toBe(true);
+      expect(result.valid).toBe(true);
     });
   });
 
@@ -591,6 +682,370 @@ describe("WorkflowLoader", () => {
       });
 
       expect(result.valid).toBe(true);
+    });
+  });
+
+  describe("loop node validation", () => {
+    it("validates a well-formed loop node", () => {
+      const result = loader.validate({
+        id: "loop-workflow",
+        version: "1.0.0",
+        name: "Loop Workflow",
+        nodes: [
+          {
+            id: "my-loop",
+            type: "loop",
+            config: { maxIterations: 3 },
+            body: [
+              { id: "generate", type: "action", config: { actionId: "ai.generate" } },
+              {
+                id: "test",
+                type: "action",
+                config: { actionId: "test.run" },
+                dependencies: ["generate"],
+              },
+            ],
+          },
+        ],
+      });
+
+      expect(result.valid).toBe(true);
+    });
+
+    it("validates a loop with exit condition", () => {
+      const result = loader.validate({
+        id: "loop-exit",
+        version: "1.0.0",
+        name: "Loop Exit",
+        nodes: [
+          {
+            id: "retry-loop",
+            type: "loop",
+            config: {
+              maxIterations: 5,
+              exitCondition: { type: "result", path: "data.passed", op: "==", value: true },
+            },
+            body: [{ id: "run-test", type: "action", config: { actionId: "test.run" } }],
+          },
+        ],
+      });
+
+      expect(result.valid).toBe(true);
+    });
+
+    it("rejects loop with maxIterations = 0", () => {
+      const result = loader.validate({
+        id: "bad-loop",
+        version: "1.0.0",
+        name: "Bad Loop",
+        nodes: [
+          {
+            id: "my-loop",
+            type: "loop",
+            config: { maxIterations: 0 },
+            body: [{ id: "step", type: "action", config: { actionId: "test" } }],
+          },
+        ],
+      });
+
+      expect(result.valid).toBe(false);
+    });
+
+    it("rejects loop with maxIterations = 21", () => {
+      const result = loader.validate({
+        id: "bad-loop",
+        version: "1.0.0",
+        name: "Bad Loop",
+        nodes: [
+          {
+            id: "my-loop",
+            type: "loop",
+            config: { maxIterations: 21 },
+            body: [{ id: "step", type: "action", config: { actionId: "test" } }],
+          },
+        ],
+      });
+
+      expect(result.valid).toBe(false);
+    });
+
+    it("rejects loop with no body", () => {
+      const result = loader.validate({
+        id: "no-body",
+        version: "1.0.0",
+        name: "No Body",
+        nodes: [
+          {
+            id: "my-loop",
+            type: "loop",
+            config: { maxIterations: 3 },
+            body: [],
+          },
+        ],
+      });
+
+      expect(result.valid).toBe(false);
+    });
+
+    it("rejects nested loops", () => {
+      const result = loader.validate({
+        id: "nested-loop",
+        version: "1.0.0",
+        name: "Nested Loop",
+        nodes: [
+          {
+            id: "outer-loop",
+            type: "loop",
+            config: { maxIterations: 3 },
+            body: [
+              {
+                id: "inner-loop",
+                type: "loop",
+                config: { maxIterations: 2 },
+                body: [{ id: "step", type: "action", config: { actionId: "test" } }],
+              },
+            ],
+          },
+        ],
+      });
+
+      expect(result.valid).toBe(false);
+      expect(result.errors?.some((e) => e.type === "loop")).toBe(true);
+      expect(
+        result.errors?.some((e) => e.message.includes("Nested loop nodes are not supported"))
+      ).toBe(true);
+    });
+
+    it("rejects pipe character in node IDs", () => {
+      const result = loader.validate({
+        id: "pipe-id",
+        version: "1.0.0",
+        name: "Pipe ID",
+        nodes: [{ id: "step|1", type: "action", config: { actionId: "test" } }],
+      });
+
+      expect(result.valid).toBe(false);
+      expect(result.errors?.some((e) => e.message.includes("must not contain '|'"))).toBe(true);
+    });
+
+    it("rejects pipe character in loop body node IDs", () => {
+      const result = loader.validate({
+        id: "pipe-body",
+        version: "1.0.0",
+        name: "Pipe Body",
+        nodes: [
+          {
+            id: "my-loop",
+            type: "loop",
+            config: { maxIterations: 3 },
+            body: [{ id: "body|node", type: "action", config: { actionId: "test" } }],
+          },
+        ],
+      });
+
+      expect(result.valid).toBe(false);
+      expect(result.errors?.some((e) => e.message.includes("must not contain '|'"))).toBe(true);
+    });
+
+    it("rejects body node referencing outer node", () => {
+      const result = loader.validate({
+        id: "bad-body-ref",
+        version: "1.0.0",
+        name: "Bad Body Ref",
+        nodes: [
+          { id: "outer-step", type: "action", config: { actionId: "test" } },
+          {
+            id: "my-loop",
+            type: "loop",
+            config: { maxIterations: 3 },
+            body: [
+              {
+                id: "body-step",
+                type: "action",
+                config: { actionId: "test" },
+                dependencies: ["outer-step"],
+              },
+            ],
+          },
+        ],
+      });
+
+      expect(result.valid).toBe(false);
+      expect(result.errors?.some((e) => e.type === "reference")).toBe(true);
+    });
+
+    it("rejects body node referencing non-existent body node", () => {
+      const result = loader.validate({
+        id: "bad-body-ref",
+        version: "1.0.0",
+        name: "Bad Body Ref",
+        nodes: [
+          {
+            id: "my-loop",
+            type: "loop",
+            config: { maxIterations: 3 },
+            body: [
+              {
+                id: "body-step",
+                type: "action",
+                config: { actionId: "test" },
+                dependencies: ["non-existent"],
+              },
+            ],
+          },
+        ],
+      });
+
+      expect(result.valid).toBe(false);
+      expect(result.errors?.some((e) => e.type === "reference")).toBe(true);
+    });
+
+    it("rejects cycle in loop body", () => {
+      const result = loader.validate({
+        id: "body-cycle",
+        version: "1.0.0",
+        name: "Body Cycle",
+        nodes: [
+          {
+            id: "my-loop",
+            type: "loop",
+            config: { maxIterations: 3 },
+            body: [
+              {
+                id: "a",
+                type: "action",
+                config: { actionId: "test" },
+                dependencies: ["b"],
+              },
+              {
+                id: "b",
+                type: "action",
+                config: { actionId: "test" },
+                dependencies: ["a"],
+              },
+            ],
+          },
+        ],
+      });
+
+      expect(result.valid).toBe(false);
+      expect(result.errors?.some((e) => e.type === "cycle")).toBe(true);
+    });
+
+    it("accepts valid loop body DAG", () => {
+      const result = loader.validate({
+        id: "valid-body",
+        version: "1.0.0",
+        name: "Valid Body",
+        nodes: [
+          {
+            id: "my-loop",
+            type: "loop",
+            config: { maxIterations: 5 },
+            body: [
+              { id: "generate", type: "action", config: { actionId: "ai.generate" } },
+              {
+                id: "test",
+                type: "action",
+                config: { actionId: "test.run" },
+                dependencies: ["generate"],
+              },
+              {
+                id: "fix",
+                type: "action",
+                config: { actionId: "ai.fix" },
+                dependencies: ["test"],
+              },
+            ],
+          },
+        ],
+      });
+
+      expect(result.valid).toBe(true);
+    });
+
+    it("rejects body node ID that conflicts with outer node ID", () => {
+      const result = loader.validate({
+        id: "id-conflict",
+        version: "1.0.0",
+        name: "ID Conflict",
+        nodes: [
+          { id: "shared-id", type: "action", config: { actionId: "test" } },
+          {
+            id: "my-loop",
+            type: "loop",
+            config: { maxIterations: 3 },
+            body: [{ id: "shared-id", type: "action", config: { actionId: "test2" } }],
+          },
+        ],
+      });
+
+      expect(result.valid).toBe(false);
+      expect(result.errors?.some((e) => e.type === "duplicate")).toBe(true);
+      expect(result.errors?.some((e) => e.message.includes("conflicts with outer node ID"))).toBe(
+        true
+      );
+    });
+
+    it("outer DAG with loop node validates correctly", () => {
+      const result = loader.validate({
+        id: "outer-dag",
+        version: "1.0.0",
+        name: "Outer DAG",
+        nodes: [
+          { id: "setup", type: "action", config: { actionId: "setup.action" } },
+          {
+            id: "retry-loop",
+            type: "loop",
+            config: { maxIterations: 3 },
+            dependencies: ["setup"],
+            onSuccess: ["report"],
+            body: [
+              { id: "generate", type: "action", config: { actionId: "ai.generate" } },
+              {
+                id: "test",
+                type: "action",
+                config: { actionId: "test.run" },
+                dependencies: ["generate"],
+              },
+            ],
+          },
+          {
+            id: "report",
+            type: "action",
+            config: { actionId: "report.action" },
+            dependencies: ["retry-loop"],
+          },
+        ],
+      });
+
+      expect(result.valid).toBe(true);
+    });
+
+    it("still rejects cycle in outer DAG with loop node", () => {
+      const result = loader.validate({
+        id: "outer-cycle",
+        version: "1.0.0",
+        name: "Outer Cycle",
+        nodes: [
+          {
+            id: "step1",
+            type: "action",
+            config: { actionId: "test" },
+            dependencies: ["my-loop"],
+          },
+          {
+            id: "my-loop",
+            type: "loop",
+            config: { maxIterations: 3 },
+            dependencies: ["step1"],
+            body: [{ id: "body-step", type: "action", config: { actionId: "test" } }],
+          },
+        ],
+      });
+
+      expect(result.valid).toBe(false);
+      expect(result.errors?.some((e) => e.type === "cycle")).toBe(true);
     });
   });
 
@@ -679,5 +1134,96 @@ describe("WorkflowLoader", () => {
       const found = await loader.getWorkflow("workflow1");
       expect(found).toBeNull();
     });
+  });
+});
+
+describe("built-in workflows from disk", () => {
+  const WORKFLOWS_DIR = path.resolve(process.cwd(), "electron/workflows");
+  let loader: WorkflowLoader;
+  let jsonFiles: string[];
+
+  beforeEach(async () => {
+    loader = new WorkflowLoader();
+    const files = await fs.readdir(WORKFLOWS_DIR);
+    jsonFiles = files.filter((f) => f.endsWith(".json"));
+  });
+
+  it("finds at least 3 built-in workflow files", () => {
+    expect(jsonFiles.length).toBeGreaterThanOrEqual(3);
+  });
+
+  it("each built-in workflow passes loadFromFile validation", async () => {
+    for (const file of jsonFiles) {
+      const filePath = path.join(WORKFLOWS_DIR, file);
+      const loaded = await loader.loadFromFile(filePath, "built-in");
+      expect(loaded, `${file} should load successfully`).not.toBeNull();
+      expect(loaded!.source).toBe("built-in");
+    }
+  });
+
+  it("each built-in workflow has unique id matching filename", async () => {
+    const ids = new Set<string>();
+    for (const file of jsonFiles) {
+      const filePath = path.join(WORKFLOWS_DIR, file);
+      const loaded = await loader.loadFromFile(filePath, "built-in");
+      const expectedId = file.replace(".json", "");
+      expect(loaded!.definition.id, `${file} id should match filename`).toBe(expectedId);
+      expect(
+        ids.has(loaded!.definition.id),
+        `duplicate workflow id: ${loaded!.definition.id}`
+      ).toBe(false);
+      ids.add(loaded!.definition.id);
+    }
+  });
+
+  it("no built-in workflow uses non-existent terminal.executeCommand", async () => {
+    for (const file of jsonFiles) {
+      const filePath = path.join(WORKFLOWS_DIR, file);
+      const loaded = await loader.loadFromFile(filePath, "built-in");
+      for (const node of loaded!.definition.nodes) {
+        if (node.type !== "action") continue;
+        const config = node.config as { actionId: string };
+        expect(
+          config.actionId,
+          `${file}: node "${node.id}" uses removed action "terminal.executeCommand"`
+        ).not.toBe("terminal.executeCommand");
+      }
+    }
+  });
+
+  it("each built-in workflow uses only known action IDs", async () => {
+    const knownActionIds = new Set([
+      "terminal.new",
+      "terminal.sendCommand",
+      "terminal.close",
+      "terminal.list",
+      "notes.create",
+      "notes.list",
+      "notes.openPalette",
+      "worktree.list",
+      "worktree.getCurrent",
+      "worktree.refresh",
+      "worktree.refreshPullRequests",
+      "github.openPRs",
+      "github.openIssues",
+      "github.openCommits",
+      "git.stageAll",
+      "git.commit",
+      "git.push",
+      "git.getStagingStatus",
+    ]);
+
+    for (const file of jsonFiles) {
+      const filePath = path.join(WORKFLOWS_DIR, file);
+      const loaded = await loader.loadFromFile(filePath, "built-in");
+      for (const node of loaded!.definition.nodes) {
+        if (node.type !== "action") continue;
+        const config = node.config as { actionId: string };
+        expect(
+          knownActionIds.has(config.actionId),
+          `${file}: node "${node.id}" uses unknown actionId "${config.actionId}"`
+        ).toBe(true);
+      }
+    }
   });
 });

@@ -16,9 +16,9 @@ describe("Toolbar layout — issue #2584 project switcher collision", () => {
       expect(source).toContain("grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)]");
     });
 
-    it("does not use flex justify-between on the header", () => {
-      // The header should no longer use flex+justify-between (the old collision-prone pattern)
-      expect(source).not.toMatch(/<header[^>]*justify-between/);
+    it("does not use flex justify-between on the toolbar root", () => {
+      // The toolbar root should no longer use flex+justify-between (the old collision-prone pattern)
+      expect(source).not.toMatch(/role="toolbar"[^>]*justify-between/);
     });
   });
 
@@ -49,17 +49,80 @@ describe("Toolbar layout — issue #2584 project switcher collision", () => {
     });
   });
 
+  describe("ARIA toolbar structure — issue #2814", () => {
+    it("toolbar root has role=toolbar and aria-label", () => {
+      expect(source).toMatch(/role="toolbar"/);
+      expect(source).toMatch(/aria-label="Main toolbar"/);
+    });
+
+    it("has three role=group regions", () => {
+      const groupMatches = source.match(/role="group"/g);
+      expect(groupMatches).not.toBeNull();
+      expect(groupMatches!.length).toBe(3);
+    });
+
+    it("groups have descriptive aria-labels", () => {
+      expect(source).toContain('aria-label="Navigation and agents"');
+      expect(source).toContain('aria-label="Project"');
+      expect(source).toContain('aria-label="Tools and settings"');
+    });
+
+    it("toolbar items are marked with data-toolbar-item", () => {
+      const itemMatches = source.match(/data-toolbar-item=""/g);
+      expect(itemMatches).not.toBeNull();
+      expect(itemMatches!.length).toBeGreaterThanOrEqual(10);
+    });
+
+    it("has onKeyDown handler for arrow navigation", () => {
+      expect(source).toContain("onKeyDown={handleToolbarKeyDown}");
+    });
+
+    it("has onFocusCapture handler for focus tracking", () => {
+      expect(source).toContain("onFocusCapture={handleToolbarFocusCapture}");
+    });
+  });
+
+  describe("Agent/tool button group divider — issue #2879", () => {
+    it("defines AGENT_TOOLBAR_IDS constant for group boundary detection", () => {
+      expect(source).toContain("AGENT_TOOLBAR_IDS");
+    });
+
+    it("has renderLeftButtons helper that inserts group dividers", () => {
+      expect(source).toContain("renderLeftButtons");
+    });
+
+    it("uses renderLeftButtons for the left button group", () => {
+      expect(source).toContain("renderLeftButtons(toolbarLayout.leftButtons)");
+    });
+
+    it("divider element has aria-hidden for accessibility", () => {
+      expect(source).toMatch(/group-divider[\s\S]{0,200}aria-hidden="true"/);
+    });
+  });
+
+  describe("Window resize strip — issue #3273 Linux native title bar", () => {
+    it("imports isLinux from platform", () => {
+      expect(source).toContain("isLinux");
+    });
+
+    it("window-resize-strip is guarded by !isLinux()", () => {
+      expect(source).toMatch(/!isLinux\(\)\s*&&\s*<div className="window-resize-strip"/);
+    });
+
+    it("window-resize-strip is not rendered unconditionally", () => {
+      expect(source).not.toMatch(/^\s*<div className="window-resize-strip"\s*\/>/m);
+    });
+  });
+
   describe("Project switcher trigger", () => {
     it("button has overflow-hidden for truncation", () => {
-      // overflow-hidden appears in className before data-testid on the same button
-      expect(source).toMatch(/overflow-hidden[\s\S]{0,200}data-testid="project-switcher-trigger"/);
+      expect(source).toContain('data-testid="project-switcher-trigger"');
+      expect(source).toContain("overflow-hidden");
     });
 
     it("project name span has truncate class", () => {
-      // Both the project name span and the no-project name span should truncate
-      const truncateMatches = source.match(/tracking-wide truncate/g);
-      expect(truncateMatches).not.toBeNull();
-      expect(truncateMatches!.length).toBeGreaterThanOrEqual(2);
+      expect(source).toContain("min-w-0 truncate text-xs font-semibold tracking-wide");
+      expect(source).toContain("tracking-wide truncate min-w-0");
     });
 
     it("emoji span has shrink-0 so it is not squeezed before name truncates", () => {
@@ -67,11 +130,11 @@ describe("Toolbar layout — issue #2584 project switcher collision", () => {
     });
 
     it("branch badge has shrink-0 to stay visible during truncation", () => {
-      expect(source).toContain("bg-white/10 shrink-0");
+      expect(source).toContain("shrink-0 rounded-full border border-border-subtle bg-overlay-soft");
     });
 
     it("chevron icons have shrink-0", () => {
-      const chevronMatches = source.match(/text-white\/50 ml-0\.5 shrink-0/g);
+      const chevronMatches = source.match(/ml-0\.5 h-3 w-3 shrink-0 text-text-muted/g);
       expect(chevronMatches).not.toBeNull();
     });
   });

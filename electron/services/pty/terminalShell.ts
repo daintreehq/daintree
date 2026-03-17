@@ -61,10 +61,15 @@ export function getDefaultShellArgs(shell: string, _options?: ShellArgsOptions):
  * `is-in-ci` to detect CI environments. When CI=1 is set, ink enters non-interactive
  * mode and the CLI fails to display its input prompt.
  * See: https://github.com/google-gemini/gemini-cli/issues/1563
+ *
+ * OpenCode: Uses Bubble Tea (Go TUI) with `termenv` for terminal detection.
+ * When CI=1 is set, termenv degrades to ASCII mode and skips OSC queries,
+ * making the TUI invisible.
  */
 export const AGENT_ENV_EXCLUSIONS: Record<string, string[]> = {
   claude: ["CLAUDECODE"],
   gemini: ["CI", "NONINTERACTIVE"],
+  opencode: ["CI", "NONINTERACTIVE"],
 };
 
 /**

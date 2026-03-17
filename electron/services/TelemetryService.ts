@@ -56,6 +56,16 @@ function sanitizeEvent(event: SentryEvent): SentryEvent | null {
 }
 
 let initialized = false;
+let captureEventFn: ((event: SentryEvent) => string) | null = null;
+
+interface BufferedEvent {
+  event: string;
+  properties: Record<string, unknown>;
+  timestamp: number;
+}
+
+const preConsentBuffer: BufferedEvent[] = [];
+const BUFFER_MAX = 100;
 
 export async function initializeTelemetry(): Promise<void> {
   const { enabled } = store.get("telemetry") ?? { enabled: false, hasSeenPrompt: false };
@@ -67,8 +77,8 @@ export async function initializeTelemetry(): Promise<void> {
   if (initialized) return;
 
   try {
-    const { init } = await import("@sentry/electron/main");
-    init({
+    const sentry = await import("@sentry/electron/main");
+    sentry.init({
       dsn,
       release: app.getVersion(),
       environment: app.isPackaged ? "production" : "development",
@@ -83,6 +93,7 @@ export async function initializeTelemetry(): Promise<void> {
         },
       },
     });
+    captureEventFn = sentry.captureEvent;
     initialized = true;
   } catch (err) {
     console.warn("[Telemetry] Failed to initialize Sentry:", err);
@@ -93,9 +104,95 @@ export function isTelemetryEnabled(): boolean {
   return store.get("telemetry")?.enabled ?? false;
 }
 
-export function setTelemetryEnabled(enabled: boolean): void {
+export type TelemetryLevel = "off" | "errors" | "full";
+
+export function getTelemetryLevel(): TelemetryLevel {
+  const privacy = store.get("privacy");
+  if (privacy?.telemetryLevel) return privacy.telemetryLevel;
+
+  // Migrate from legacy boolean
+  const enabled = store.get("telemetry")?.enabled ?? false;
+  const level: TelemetryLevel = enabled ? "errors" : "off";
+  store.set("privacy", { ...privacy, telemetryLevel: level });
+  return level;
+}
+
+export async function setTelemetryLevel(level: TelemetryLevel): Promise<void> {
+  const privacy = store.get("privacy") ?? {
+    telemetryLevel: "off" as const,
+    logRetentionDays: 30 as const,
+  };
+  store.set("privacy", { ...privacy, telemetryLevel: level });
+
+  // Keep legacy telemetry.enabled in sync
+  const enabled = level !== "off";
+  const telemetry = store.get("telemetry") ?? { enabled: false, hasSeenPrompt: false };
+  store.set("telemetry", { ...telemetry, enabled });
+
+  if (enabled) {
+    await initializeTelemetry();
+    flushPreConsentBuffer();
+  } else {
+    preConsentBuffer.length = 0;
+  }
+}
+
+export async function setTelemetryEnabled(enabled: boolean): Promise<void> {
   const current = store.get("telemetry") ?? { enabled: false, hasSeenPrompt: false };
   store.set("telemetry", { ...current, enabled });
+
+  // Keep privacy.telemetryLevel in sync
+  const privacy = store.get("privacy") ?? {
+    telemetryLevel: "off" as const,
+    logRetentionDays: 30 as const,
+  };
+  store.set("privacy", { ...privacy, telemetryLevel: enabled ? "errors" : "off" });
+
+  if (enabled) {
+    await initializeTelemetry();
+    flushPreConsentBuffer();
+  } else {
+    preConsentBuffer.length = 0;
+  }
+}
+
+function flushPreConsentBuffer(): void {
+  if (!captureEventFn) return;
+  const events = preConsentBuffer.splice(0);
+  for (const { event, properties, timestamp } of events) {
+    captureEventFn({
+      message: event,
+      level: "info" as unknown as undefined,
+      extra: { ...properties, timestamp },
+      tags: { kind: "analytics" },
+    } as SentryEvent);
+  }
+}
+
+export function trackEvent(event: string, properties: Record<string, unknown> = {}): void {
+  const telemetry = store.get("telemetry");
+  const hasSeenPrompt = telemetry?.hasSeenPrompt ?? false;
+  const level = getTelemetryLevel();
+
+  // Only send analytics events at "full" level; "errors" only permits crash reports via Sentry
+  if (level === "full" && captureEventFn) {
+    captureEventFn({
+      message: event,
+      level: "info" as unknown as undefined,
+      extra: { ...properties, timestamp: Date.now() },
+      tags: { kind: "analytics" },
+    } as SentryEvent);
+    return;
+  }
+
+  if (!hasSeenPrompt) {
+    if (preConsentBuffer.length < BUFFER_MAX) {
+      preConsentBuffer.push({ event, properties, timestamp: Date.now() });
+    }
+    return;
+  }
+
+  // Consent decided but disabled — drop the event
 }
 
 export function hasTelemetryPromptBeenShown(): boolean {
@@ -105,4 +202,8 @@ export function hasTelemetryPromptBeenShown(): boolean {
 export function markTelemetryPromptShown(): void {
   const current = store.get("telemetry") ?? { enabled: false, hasSeenPrompt: false };
   store.set("telemetry", { ...current, hasSeenPrompt: true });
+}
+
+export function _getPreConsentBufferLength(): number {
+  return preConsentBuffer.length;
 }

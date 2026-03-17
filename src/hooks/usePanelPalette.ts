@@ -15,6 +15,7 @@ export interface PanelKindOption {
   iconId: string;
   color: string;
   description?: string;
+  category: "agent" | "tool";
 }
 
 export type UsePanelPaletteReturn = UseSearchablePaletteReturn<PanelKindOption> & {
@@ -22,12 +23,11 @@ export type UsePanelPaletteReturn = UseSearchablePaletteReturn<PanelKindOption> 
   confirmSelection: () => PanelKindOption | null;
 };
 
-const AGENT_LAUNCH_ACTIONS: Record<string, KeyAction> = {
-  claude: "agent.claude",
-  gemini: "agent.gemini",
-  codex: "agent.codex",
-  opencode: "agent.opencode",
-};
+import { BUILT_IN_AGENT_IDS } from "@shared/config/agentIds";
+
+const AGENT_LAUNCH_ACTIONS: Record<string, KeyAction> = Object.fromEntries(
+  BUILT_IN_AGENT_IDS.map((id) => [id, `agent.${id}` as KeyAction])
+);
 
 function filterPanelKinds(items: PanelKindOption[], query: string): PanelKindOption[] {
   if (!query.trim()) return items;
@@ -70,6 +70,7 @@ export function usePanelPalette(): UsePanelPaletteReturn {
           iconId: config.iconId,
           color: config.color,
           description: config.shortcut,
+          category: "tool" as const,
         };
       });
 
@@ -94,34 +95,44 @@ export function usePanelPalette(): UsePanelPaletteReturn {
           iconId: agentConfig.iconId,
           color: agentConfig.color,
           description: displayCombo || agentConfig.shortcut || agentConfig.tooltip,
+          category: "agent" as const,
         };
       })
       .filter((agent): agent is PanelKindOption => agent !== null);
 
-    const dedupedById = new Map<string, PanelKindOption>();
-    for (const option of [...panelKinds, ...agentKinds]) {
-      if (!dedupedById.has(option.id)) {
-        dedupedById.set(option.id, option);
+    const agentDedup = new Map<string, PanelKindOption>();
+    for (const option of agentKinds) {
+      if (!agentDedup.has(option.id)) {
+        agentDedup.set(option.id, option);
       }
     }
 
-    const result = Array.from(dedupedById.values());
+    const toolDedup = new Map<string, PanelKindOption>();
+    for (const option of panelKinds) {
+      if (!toolDedup.has(option.id)) {
+        toolDedup.set(option.id, option);
+      }
+    }
 
-    result.push({
-      id: MORE_AGENTS_PANEL_ID,
-      name: "More agents...",
-      iconId: "settings",
-      color: "var(--color-canopy-text)",
-      description: "Configure which agents appear in this menu",
-    });
-
-    return result;
+    return [
+      ...agentDedup.values(),
+      {
+        id: MORE_AGENTS_PANEL_ID,
+        name: "More agents...",
+        iconId: "settings",
+        color: "var(--color-canopy-text)",
+        description: "Configure which agents appear in this menu",
+        category: "agent" as const,
+      },
+      ...toolDedup.values(),
+    ];
   }, [userRegistry, keybindingVersion, agentSettings]);
 
   const { results, selectedIndex, close, ...paletteRest } = useSearchablePalette<PanelKindOption>({
     items: availableKinds,
     filterFn: filterPanelKinds,
     maxResults: 20,
+    paletteId: "panel",
   });
 
   const handleSelect = useCallback(

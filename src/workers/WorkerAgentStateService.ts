@@ -3,7 +3,7 @@
  * Replaces EventEmitter with return values for postMessage pattern.
  */
 
-import type { AgentState, AgentStateChangeTrigger } from "../../shared/types/domain.js";
+import type { AgentState, AgentStateChangeTrigger } from "../../shared/types/agent.js";
 import type { WorkerTerminalState } from "../../shared/types/worker-messages.js";
 
 /** Event types for agent state transitions */
@@ -59,7 +59,12 @@ function nextAgentState(current: AgentState, event: AgentEvent): AgentState {
       break;
 
     case "input":
-      if (current === "waiting" || current === "idle") {
+      if (
+        current === "waiting" ||
+        current === "idle" ||
+        current === "completed" ||
+        current === "failed"
+      ) {
         return "working";
       }
       break;

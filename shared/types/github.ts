@@ -50,6 +50,8 @@ export interface GitHubIssue {
   linkedPR?: LinkedPRInfo;
 }
 
+export type GitHubPRCIStatus = "SUCCESS" | "FAILURE" | "ERROR" | "PENDING" | "EXPECTED";
+
 /** GitHub pull request representation */
 export interface GitHubPR {
   /** PR number */
@@ -72,6 +74,8 @@ export interface GitHubPR {
   headRefName?: string;
   /** Whether this PR originates from a fork repository */
   isFork?: boolean;
+  /** CI status rollup from the latest commit */
+  ciStatus?: GitHubPRCIStatus;
 }
 
 /** Issue tooltip data (subset of full issue for hover display) */
@@ -152,6 +156,8 @@ export interface GitCommitListResponse {
 
 // List Options and Response Types
 
+export type GitHubSortOrder = "created" | "updated";
+
 /** GitHub list options */
 export interface GitHubListOptions {
   /** Working directory to determine repository */
@@ -162,6 +168,10 @@ export interface GitHubListOptions {
   state?: "open" | "closed" | "merged" | "all";
   /** Pagination cursor */
   cursor?: string;
+  /** Skip the in-memory list cache and fetch fresh data */
+  bypassCache?: boolean;
+  /** Sort order field */
+  sortOrder?: GitHubSortOrder;
 }
 
 /** Paginated response for GitHub lists */

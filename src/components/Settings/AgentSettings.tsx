@@ -13,21 +13,16 @@ import {
   getAgentSettingsEntry,
   DEFAULT_DANGEROUS_ARGS,
 } from "@shared/types";
-import {
-  RotateCcw,
-  ExternalLink,
-  RefreshCw,
-  Copy,
-  Check,
-  PackagePlus,
-  Settings2,
-} from "lucide-react";
-import { SettingsSubtabBar } from "./SettingsSubtabBar";
+import { RotateCcw, ExternalLink, RefreshCw, Copy, Check, PackagePlus } from "lucide-react";
+import { AgentSelectorDropdown } from "./AgentSelectorDropdown";
+import { SettingsSwitchCard } from "./SettingsSwitchCard";
 import { actionService } from "@/services/ActionService";
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
 import { AgentHelpOutput } from "./AgentHelpOutput";
 import { getInstallBlocksForCurrentOS } from "@/lib/agentInstall";
 import type { DefaultAgentId } from "@/store/agentPreferencesStore";
+
+const GENERAL_SUBTAB_ID = "general";
 
 interface AgentSettingsProps {
   activeSubtab: string | null;
@@ -124,9 +119,6 @@ export function AgentSettings({
   const agentIds = useMemo(() => getAgentIds(), []);
   const effectiveSettings = settings ?? DEFAULT_AGENT_SETTINGS;
 
-  // The General subtab is a reserved id that cannot conflict with agent ids.
-  const GENERAL_SUBTAB_ID = "general";
-
   // Derive active subtab: "general" or one of the agent ids.
   // Unknown subtab ids (not "general", not an agent) fall back to General to avoid blank screens.
   const isGeneralActive =
@@ -215,50 +207,10 @@ export function AgentSettings({
           </Button>
         </div>
 
-        {/* Subtab bar: General + per-agent tabs */}
-        <SettingsSubtabBar
-          subtabs={[
-            {
-              id: GENERAL_SUBTAB_ID,
-              label: "General",
-              renderIcon: (isActive: boolean) => (
-                <Settings2
-                  size={16}
-                  className={cn(isActive ? "text-canopy-text" : "text-canopy-text/60")}
-                />
-              ),
-            },
-            ...agentOptions.map((agent) => {
-              const hasIndicators = !agent.selected || agent.dangerousEnabled;
-              return {
-                id: agent.id,
-                label: agent.name,
-                renderIcon: (isActive: boolean) =>
-                  agent.Icon ? (
-                    <agent.Icon
-                      size={18}
-                      brandColor={isActive ? agent.color : undefined}
-                      className={cn(!isActive && "opacity-60")}
-                    />
-                  ) : null,
-                trailing: hasIndicators ? (
-                  <>
-                    {!agent.selected && (
-                      <span
-                        className="w-1.5 h-1.5 rounded-full bg-canopy-text/30"
-                        title="Not in workflow"
-                      />
-                    )}
-                    {agent.dangerousEnabled && (
-                      <span className="w-1.5 h-1.5 rounded-full bg-status-error" />
-                    )}
-                  </>
-                ) : undefined,
-              };
-            }),
-          ]}
-          activeId={isGeneralActive ? GENERAL_SUBTAB_ID : (activeAgentId ?? GENERAL_SUBTAB_ID)}
-          onChange={onSubtabChange}
+        <AgentSelectorDropdown
+          agentOptions={agentOptions}
+          activeSubtab={isGeneralActive ? GENERAL_SUBTAB_ID : (activeAgentId ?? GENERAL_SUBTAB_ID)}
+          onSubtabChange={onSubtabChange}
         />
 
         {/* General subtab content */}
@@ -300,7 +252,7 @@ export function AgentSettings({
         )}
 
         {/* Agent Configuration Card */}
-        {!isGeneralActive && activeAgent && (
+        {!isGeneralActive && activeAgent && agentOptions.some((a) => a.id === activeAgent.id) && (
           <div className="rounded-[var(--radius-lg)] border border-canopy-border bg-surface p-4 space-y-4">
             {/* Header with agent info */}
             <div className="flex items-center justify-between pb-3 border-b border-canopy-border">
@@ -358,63 +310,40 @@ export function AgentSettings({
             </div>
 
             {/* Enable Agent Toggle */}
-            <div id="agents-enable" className="flex items-center justify-between">
-              <div>
-                <div className="text-sm font-medium text-canopy-text">Enable agent</div>
-                <div className="text-xs text-canopy-text/50">
-                  When disabled, this agent is hidden everywhere and treated as if it is not
-                  installed
-                </div>
-              </div>
-              <button
-                role="switch"
-                aria-checked={activeEntry.selected !== false}
-                aria-label={`Enable ${activeAgent.name}`}
-                onClick={async () => {
+            <div id="agents-enable">
+              <SettingsSwitchCard
+                variant="compact"
+                title="Enable agent"
+                subtitle="When disabled, this agent is hidden everywhere and treated as if it is not installed"
+                isEnabled={activeEntry.selected !== false}
+                onChange={() => {
                   const current = activeEntry.selected !== false;
-                  await setAgentSelected(activeAgent.id, !current);
-                  onSettingsChange?.();
+                  void (async () => {
+                    await setAgentSelected(activeAgent.id, !current);
+                    onSettingsChange?.();
+                  })();
                 }}
-                className={cn(
-                  "relative w-11 h-6 rounded-full transition-colors shrink-0",
-                  activeEntry.selected !== false ? "bg-canopy-accent" : "bg-canopy-border"
-                )}
-              >
-                <span
-                  className={cn(
-                    "absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full transition-transform",
-                    activeEntry.selected !== false && "translate-x-5"
-                  )}
-                />
-              </button>
+                ariaLabel={`Enable ${activeAgent.name}`}
+              />
             </div>
 
             {/* Dangerous Mode Toggle */}
             <div id="agents-skip-permissions" className="space-y-2">
-              <div className="flex items-center justify-between">
-                <div>
-                  <div className="text-sm font-medium text-canopy-text">Skip Permissions</div>
-                  <div className="text-xs text-canopy-text/50">Auto-approve all actions</div>
-                </div>
-                <button
-                  onClick={async () => {
-                    const current = activeEntry.dangerousEnabled ?? false;
+              <SettingsSwitchCard
+                variant="compact"
+                title="Skip Permissions"
+                subtitle="Auto-approve all actions"
+                isEnabled={activeEntry.dangerousEnabled ?? false}
+                onChange={() => {
+                  const current = activeEntry.dangerousEnabled ?? false;
+                  void (async () => {
                     await updateAgent(activeAgent.id, { dangerousEnabled: !current });
                     onSettingsChange?.();
-                  }}
-                  className={cn(
-                    "relative w-11 h-6 rounded-full transition-colors",
-                    activeEntry.dangerousEnabled ? "bg-status-error" : "bg-canopy-border"
-                  )}
-                >
-                  <span
-                    className={cn(
-                      "absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full transition-transform",
-                      activeEntry.dangerousEnabled && "translate-x-5"
-                    )}
-                  />
-                </button>
-              </div>
+                  })();
+                }}
+                ariaLabel={`Skip permissions for ${activeAgent.name}`}
+                colorScheme="danger"
+              />
 
               {activeEntry.dangerousEnabled && defaultDangerousArg && (
                 <div className="flex items-center gap-2 px-3 py-2 rounded-[var(--radius-md)] bg-status-error/10 border border-status-error/20">
@@ -431,68 +360,41 @@ export function AgentSettings({
               if (!inlineModeFlag) return null;
               const inlineMode = activeEntry.inlineMode ?? true;
               return (
-                <div id="agents-inline-mode" className="flex items-center justify-between">
-                  <div>
-                    <div className="text-sm font-medium text-canopy-text">Inline Mode</div>
-                    <div className="text-xs text-canopy-text/50">
-                      Disable fullscreen TUI for better resize handling and scrollback
-                    </div>
-                  </div>
-                  <button
-                    onClick={async () => {
-                      await updateAgent(activeAgent.id, { inlineMode: !inlineMode });
-                      onSettingsChange?.();
+                <div id="agents-inline-mode">
+                  <SettingsSwitchCard
+                    variant="compact"
+                    title="Inline Mode"
+                    subtitle="Disable fullscreen TUI for better resize handling and scrollback"
+                    isEnabled={inlineMode}
+                    onChange={() => {
+                      void (async () => {
+                        await updateAgent(activeAgent.id, { inlineMode: !inlineMode });
+                        onSettingsChange?.();
+                      })();
                     }}
-                    className={cn(
-                      "relative w-11 h-6 rounded-full transition-colors",
-                      inlineMode ? "bg-canopy-accent" : "bg-canopy-border"
-                    )}
-                  >
-                    <span
-                      className={cn(
-                        "absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full transition-transform",
-                        inlineMode && "translate-x-5"
-                      )}
-                    />
-                  </button>
+                    ariaLabel={`Inline mode for ${activeAgent.name}`}
+                  />
                 </div>
               );
             })()}
 
             {/* Share Clipboard Directory Toggle - Gemini only */}
             {activeAgent.id === "gemini" && (
-              <div id="agents-clipboard" className="flex items-center justify-between">
-                <div>
-                  <div className="text-sm font-medium text-canopy-text">
-                    Share Clipboard Directory
-                  </div>
-                  <div className="text-xs text-canopy-text/50">
-                    Allow Gemini to read pasted clipboard images via --include-directories
-                  </div>
-                </div>
-                <button
-                  role="switch"
-                  aria-checked={activeEntry.shareClipboardDirectory !== false}
-                  aria-label="Share clipboard directory with Gemini"
-                  onClick={async () => {
+              <div id="agents-clipboard">
+                <SettingsSwitchCard
+                  variant="compact"
+                  title="Share Clipboard Directory"
+                  subtitle="Allow Gemini to read pasted clipboard images via --include-directories"
+                  isEnabled={activeEntry.shareClipboardDirectory !== false}
+                  onChange={() => {
                     const current = activeEntry.shareClipboardDirectory !== false;
-                    await updateAgent(activeAgent.id, { shareClipboardDirectory: !current });
-                    onSettingsChange?.();
+                    void (async () => {
+                      await updateAgent(activeAgent.id, { shareClipboardDirectory: !current });
+                      onSettingsChange?.();
+                    })();
                   }}
-                  className={cn(
-                    "relative w-11 h-6 rounded-full transition-colors shrink-0",
-                    activeEntry.shareClipboardDirectory !== false
-                      ? "bg-canopy-accent"
-                      : "bg-canopy-border"
-                  )}
-                >
-                  <span
-                    className={cn(
-                      "absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full transition-transform",
-                      activeEntry.shareClipboardDirectory !== false && "translate-x-5"
-                    )}
-                  />
-                </button>
+                  ariaLabel="Share clipboard directory with Gemini"
+                />
               </div>
             )}
 
@@ -500,7 +402,7 @@ export function AgentSettings({
             <div id="agents-custom-args" className="space-y-2 pt-2 border-t border-canopy-border">
               <label className="text-sm font-medium text-canopy-text">Custom Arguments</label>
               <input
-                className="w-full rounded-[var(--radius-md)] border border-canopy-border bg-canopy-bg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-canopy-accent/50 placeholder:text-canopy-text/30"
+                className="w-full rounded-[var(--radius-md)] border border-canopy-border bg-canopy-bg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-canopy-accent/50 placeholder:text-text-muted"
                 value={activeEntry.customFlags ?? ""}
                 onChange={(e) => updateAgent(activeAgent.id, { customFlags: e.target.value })}
                 placeholder="--verbose --max-tokens=4096"
@@ -609,7 +511,7 @@ export function AgentSettings({
                                       <TooltipTrigger asChild>
                                         <button
                                           onClick={() => void handleCopyCommand(command)}
-                                          className="shrink-0 p-1 hover:bg-white/5 rounded transition-colors"
+                                          className="shrink-0 p-1 hover:bg-tint/5 rounded transition-colors"
                                           aria-label="Copy command"
                                         >
                                           {copiedCommand === command ? (

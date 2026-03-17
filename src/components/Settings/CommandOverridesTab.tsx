@@ -280,7 +280,7 @@ export function CommandOverridesTab({ projectId, overrides, onChange }: CommandO
             placeholder="Search commands..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            className="w-full pl-9 pr-3 py-2 bg-canopy-bg border border-canopy-border rounded text-sm text-canopy-text placeholder:text-canopy-text/40 focus:outline-none focus:border-canopy-accent"
+            className="w-full pl-9 pr-3 py-2 bg-canopy-bg border border-canopy-border rounded text-sm text-canopy-text placeholder:text-text-muted focus:outline-none focus:border-canopy-accent"
             aria-label="Search commands"
           />
         </div>

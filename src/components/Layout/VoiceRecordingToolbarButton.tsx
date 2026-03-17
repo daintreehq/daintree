@@ -12,7 +12,11 @@ function formatDuration(seconds: number): string {
   return `${minutes}:${remainder.toString().padStart(2, "0")}`;
 }
 
-export function VoiceRecordingToolbarButton() {
+export function VoiceRecordingToolbarButton({
+  "data-toolbar-item": dataToolbarItem,
+}: {
+  "data-toolbar-item"?: string;
+}) {
   const activeTarget = useVoiceRecordingStore((state) => state.activeTarget);
   const status = useVoiceRecordingStore((state) => state.status);
   const elapsedSeconds = useVoiceRecordingStore((state) => state.elapsedSeconds);
@@ -53,16 +57,17 @@ export function VoiceRecordingToolbarButton() {
           <Button
             variant="ghost"
             size="icon"
+            data-toolbar-item={dataToolbarItem}
             onClick={() => {
               void voiceRecordingService.focusActiveTarget();
             }}
             className={cn(
               "relative transition-colors mr-0.5",
               isRecording
-                ? "text-canopy-text hover:bg-white/[0.06]"
+                ? "text-canopy-text hover:bg-tint/[0.06]"
                 : status === "connecting"
-                  ? "text-canopy-text/60 hover:bg-white/[0.06]"
-                  : "text-canopy-accent hover:bg-white/[0.06] hover:text-canopy-accent"
+                  ? "text-canopy-text/60 hover:bg-tint/[0.06]"
+                  : "text-canopy-accent hover:bg-tint/[0.06] hover:text-canopy-accent"
             )}
             aria-label={tooltipTitle}
           >

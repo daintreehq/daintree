@@ -4,6 +4,9 @@
  * These types define the keyboard shortcut system used throughout the application.
  */
 
+import type { AgentKeyAction } from "../config/agentIds.js";
+import { BUILT_IN_AGENT_KEY_ACTIONS } from "../config/agentIds.js";
+
 /**
  * Semantic actions that can be triggered by keyboard shortcuts.
  * Actions are namespaced by category for organization.
@@ -26,6 +29,8 @@ export type KeyAction =
   | "nav.primary"
   | "nav.toggleSidebar"
   | "nav.quickSwitcher"
+  | "nav.focusRegion.next"
+  | "nav.focusRegion.prev"
 
   // File operations
   | "file.open"
@@ -37,6 +42,9 @@ export type KeyAction =
   | "ui.escape"
 
   // Git/Worktree actions
+  | "git.commit"
+  | "git.push"
+  | "git.stageAll"
   | "git.toggle"
   | "worktree.next"
   | "worktree.previous"
@@ -54,6 +62,14 @@ export type KeyAction =
   | "worktree.openEditor"
   | "worktree.openPalette"
   | "worktree.overview"
+  | "worktree.sessions.minimizeAll"
+  | "worktree.sessions.maximizeAll"
+  | "worktree.sessions.restartAll"
+  | "worktree.sessions.endAll"
+  | "worktree.sessions.closeCompleted"
+  | "worktree.sessions.closeFailed"
+  | "worktree.sessions.trashAll"
+  | "worktree.sessions.resetRenderers"
 
   // Tab navigation actions
   | "tab.next"
@@ -88,20 +104,27 @@ export type KeyAction =
   | "terminal.focusIndex9"
   | "terminal.moveLeft"
   | "terminal.moveRight"
+  | "terminal.moveUp"
+  | "terminal.moveDown"
+  | "terminal.moveToDock"
+  | "terminal.moveToGrid"
   | "terminal.watch"
+  | "terminal.duplicate"
+  | "terminal.background"
+  | "terminal.contextMenu"
+  | "terminal.stashInput"
+  | "terminal.popStash"
 
   // Agent spawning
   | "agent.palette"
-  | "agent.claude"
-  | "agent.gemini"
-  | "agent.codex"
-  | "agent.opencode"
+  | AgentKeyAction
   | "agent.terminal"
   | "agent.focusNextWaiting"
   | "agent.focusNextWorking"
   | "agent.focusNextFailed"
   | "agent.focusNextAgent"
   | "agent.focusPreviousAgent"
+  | "dock.focusNextWaiting"
 
   // Find/Search
   | "find.inFocusedPanel"
@@ -166,11 +189,16 @@ export const KEY_ACTION_VALUES: ReadonlySet<string> = new Set<string>([
   "nav.primary",
   "nav.toggleSidebar",
   "nav.quickSwitcher",
+  "nav.focusRegion.next",
+  "nav.focusRegion.prev",
   "file.open",
   "file.copyPath",
   "file.copyTree",
   "ui.refresh",
   "ui.escape",
+  "git.commit",
+  "git.push",
+  "git.stageAll",
   "git.toggle",
   "worktree.next",
   "worktree.previous",
@@ -196,6 +224,14 @@ export const KEY_ACTION_VALUES: ReadonlySet<string> = new Set<string>([
   "worktree.openEditor",
   "worktree.openPalette",
   "worktree.overview",
+  "worktree.sessions.minimizeAll",
+  "worktree.sessions.maximizeAll",
+  "worktree.sessions.restartAll",
+  "worktree.sessions.endAll",
+  "worktree.sessions.closeCompleted",
+  "worktree.sessions.closeFailed",
+  "worktree.sessions.trashAll",
+  "worktree.sessions.resetRenderers",
   "tab.next",
   "tab.previous",
   "terminal.close",
@@ -226,18 +262,24 @@ export const KEY_ACTION_VALUES: ReadonlySet<string> = new Set<string>([
   "terminal.focusIndex9",
   "terminal.moveLeft",
   "terminal.moveRight",
+  "terminal.moveUp",
+  "terminal.moveDown",
+  "terminal.moveToDock",
+  "terminal.moveToGrid",
   "terminal.watch",
+  "terminal.duplicate",
+  "terminal.contextMenu",
+  "terminal.stashInput",
+  "terminal.popStash",
   "agent.palette",
-  "agent.claude",
-  "agent.gemini",
-  "agent.codex",
-  "agent.opencode",
+  ...BUILT_IN_AGENT_KEY_ACTIONS,
   "agent.terminal",
   "agent.focusNextWaiting",
   "agent.focusNextWorking",
   "agent.focusNextFailed",
   "agent.focusNextAgent",
   "agent.focusPreviousAgent",
+  "dock.focusNextWaiting",
   "find.inFocusedPanel",
   "window.zoomIn",
   "window.zoomOut",

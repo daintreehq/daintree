@@ -203,7 +203,7 @@ async function runSmokeTerminalChecks(smokeClient: PtyClient): Promise<void> {
       process.platform === "win32" ? `echo ${token} && cd\r\n` : `echo ${token} && pwd\n`;
     const terminalId = `smoke-test-terminal-${i}`;
     await runSmokeTerminalRoundTrip(smokeClient, terminalId, command, token, cwd);
-    console.log("[SMOKE] CHECK: Terminal roundtrip %d — OK", i + 1);
+    console.error("[SMOKE] CHECK: Terminal roundtrip %d — OK", i + 1);
   }
 }
 
@@ -308,7 +308,7 @@ async function runSmokeProjectPersistenceChecks(window: BrowserWindow): Promise<
       try {
         await projectStore.removeProject(createdProjectId);
       } catch (error) {
-        console.warn("[SMOKE] Failed to remove smoke project during cleanup:", error);
+        console.error("[SMOKE] Failed to remove smoke project during cleanup:", error);
       }
     }
     await rm(tempRoot, { recursive: true, force: true });
@@ -331,7 +331,7 @@ export async function runSmokeFunctionalChecks(
 
   try {
     await runSmokeRendererChecks(mainWindow);
-    console.log("[SMOKE] CHECK: Renderer + IPC bridge — OK");
+    console.error("[SMOKE] CHECK: Renderer + IPC bridge — OK");
   } catch (error) {
     allPassed = false;
     logSmokeFailure("renderer + IPC bridge", error);
@@ -339,9 +339,9 @@ export async function runSmokeFunctionalChecks(
 
   if (allPassed) {
     try {
-      console.log("[SMOKE] Running terminal stress checks (%d rounds)...", SMOKE_TERMINAL_ROUNDS);
+      console.error("[SMOKE] Running terminal stress checks (%d rounds)...", SMOKE_TERMINAL_ROUNDS);
       await runSmokeTerminalChecks(smokeClient);
-      console.log("[SMOKE] CHECK: Terminal stress rounds — OK");
+      console.error("[SMOKE] CHECK: Terminal stress rounds — OK");
     } catch (error) {
       allPassed = false;
       logSmokeFailure("terminal stress rounds", error);
@@ -350,7 +350,7 @@ export async function runSmokeFunctionalChecks(
 
   if (allPassed) {
     try {
-      console.log(
+      console.error(
         "[SMOKE] Running project persistence stress (%d iterations)...",
         SMOKE_PERSISTENCE_ITERATIONS
       );
@@ -359,7 +359,7 @@ export async function runSmokeFunctionalChecks(
         SMOKE_PROJECT_TIMEOUT_MS * 2,
         "[SMOKE] Project persistence stress timed out"
       );
-      console.log("[SMOKE] CHECK: Project persistence stress — OK");
+      console.error("[SMOKE] CHECK: Project persistence stress — OK");
     } catch (error) {
       allPassed = false;
       logSmokeFailure("project persistence stress", error);
@@ -372,7 +372,7 @@ export async function runSmokeFunctionalChecks(
   }
 
   if (allPassed) {
-    console.log(
+    console.error(
       "[SMOKE] All checks passed — holding for %ds stability soak...",
       SMOKE_STABILITY_SOAK_MS / 1000
     );
@@ -392,7 +392,7 @@ export async function runSmokeFunctionalChecks(
           throw new Error(`unexpected document.readyState: ${String(readyState)}`);
         }
       }
-      console.log("[SMOKE] Stability soak complete — no crashes detected");
+      console.error("[SMOKE] Stability soak complete — no crashes detected");
     } catch (error) {
       allPassed = false;
       logSmokeFailure("stability soak", error);

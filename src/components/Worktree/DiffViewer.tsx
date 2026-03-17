@@ -46,7 +46,7 @@ export function DiffViewer({ diff, filePath, viewType = "split", rootPath }: Dif
 
   if (!diff || diff === "NO_CHANGES") {
     return (
-      <div className="flex items-center justify-center p-8 text-neutral-500">
+      <div className="flex items-center justify-center p-8 text-text-muted">
         No changes detected
       </div>
     );
@@ -54,7 +54,7 @@ export function DiffViewer({ diff, filePath, viewType = "split", rootPath }: Dif
 
   if (diff === "BINARY_FILE") {
     return (
-      <div className="flex items-center justify-center p-8 text-neutral-500">
+      <div className="flex items-center justify-center p-8 text-text-muted">
         Binary file - cannot display diff
       </div>
     );
@@ -62,7 +62,7 @@ export function DiffViewer({ diff, filePath, viewType = "split", rootPath }: Dif
 
   if (diff === "FILE_TOO_LARGE") {
     return (
-      <div className="flex items-center justify-center p-8 text-neutral-500">
+      <div className="flex items-center justify-center p-8 text-text-muted">
         File too large to display diff ({">"} 1MB)
       </div>
     );
@@ -70,7 +70,7 @@ export function DiffViewer({ diff, filePath, viewType = "split", rootPath }: Dif
 
   if (files.length === 0) {
     return (
-      <div className="flex items-center justify-center p-8 text-neutral-500">
+      <div className="flex items-center justify-center p-8 text-text-muted">
         Unable to parse diff
       </div>
     );
@@ -103,6 +103,18 @@ interface FileDiffProps {
 function FileDiff({ file, viewType, language, rootPath }: FileDiffProps) {
   const tokens = useTokens(file.hunks ?? [], language);
   const diffType: DiffType = file.type as DiffType;
+
+  const { additions, deletions } = useMemo(() => {
+    let adds = 0;
+    let dels = 0;
+    for (const hunk of file.hunks ?? []) {
+      for (const change of hunk.changes) {
+        if (change.type === "insert") adds++;
+        else if (change.type === "delete") dels++;
+      }
+    }
+    return { additions: adds, deletions: dels };
+  }, [file.hunks]);
 
   const fileTyped = file as ReturnType<typeof parseDiff>[0] & {
     newPath?: string;
@@ -138,16 +150,24 @@ function FileDiff({ file, viewType, language, rootPath }: FileDiffProps) {
       {relPath && (
         <div className="flex items-center justify-between px-3 py-1.5 bg-canopy-sidebar border-b border-canopy-border text-xs text-canopy-text/60 font-mono">
           <span className="truncate">{relPath}</span>
-          {absolutePath && (
-            <button
-              onClick={handleOpenInEditor}
-              title={`Open in editor${firstHunkLine ? ` at line ${firstHunkLine}` : ""}`}
-              className="ml-2 shrink-0 flex items-center gap-1 px-2 py-0.5 rounded hover:bg-white/5 hover:text-canopy-text transition-colors"
-            >
-              <ExternalLink className="w-3 h-3" />
-              Open
-            </button>
-          )}
+          <div className="flex items-center gap-2 shrink-0">
+            {(additions > 0 || deletions > 0) && (
+              <span className="flex items-center gap-1">
+                {additions > 0 && <span className="text-status-success">+{additions}</span>}
+                {deletions > 0 && <span className="text-status-danger">-{deletions}</span>}
+              </span>
+            )}
+            {absolutePath && (
+              <button
+                onClick={handleOpenInEditor}
+                title={`Open in editor${firstHunkLine ? ` at line ${firstHunkLine}` : ""}`}
+                className="ml-2 shrink-0 flex items-center gap-1 px-2 py-0.5 rounded hover:bg-tint/5 hover:text-canopy-text transition-colors"
+              >
+                <ExternalLink className="w-3 h-3" />
+                Open
+              </button>
+            )}
+          </div>
         </div>
       )}
       <Diff

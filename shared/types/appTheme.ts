@@ -1,1 +1,8 @@
-export type { AppColorScheme, AppColorSchemeTokens, AppThemeConfig } from "../theme/index.js";
+export type {
+  AppColorScheme,
+  AppThemeImportResult,
+  AppColorSchemeTokens,
+  AppThemeConfig,
+  AppThemeValidationWarning,
+  ColorVisionMode,
+} from "../theme/index.js";

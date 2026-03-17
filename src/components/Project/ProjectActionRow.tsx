@@ -49,7 +49,7 @@ export function ProjectActionRow({
             className={cn(
               "w-3.5 h-3.5",
               STATE_COLORS[state],
-              state === "working" && "animate-spin motion-reduce:animate-none"
+              state === "working" && "animate-spin-slow motion-reduce:animate-none"
             )}
             aria-hidden="true"
           />

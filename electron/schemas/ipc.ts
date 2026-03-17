@@ -5,6 +5,7 @@
 import { z } from "zod";
 import { TerminalTypeSchema } from "./agent.js";
 import { panelKindHasPty } from "../../shared/config/panelKindRegistry.js";
+import { BUILT_IN_AGENT_IDS } from "../../shared/config/agentIds.js";
 
 // ============================================================================
 // Terminal Entry Validation Schemas
@@ -19,7 +20,7 @@ export const AppStateTerminalLocationSchema = z.enum(["grid", "dock"]);
 /**
  * Schema for terminal location in project state - includes all locations.
  */
-export const TerminalLocationSchema = z.enum(["grid", "dock", "trash"]);
+export const TerminalLocationSchema = z.enum(["grid", "dock", "trash", "background"]);
 
 /**
  * Schema for panel/terminal kind - distinguishes built-in panel types.
@@ -69,6 +70,7 @@ export const AppStateTerminalEntrySchema = z
       })
       .optional(),
     devServerTerminalId: z.string().optional(),
+    browserConsoleOpen: z.boolean().optional(),
     devPreviewConsoleOpen: z.boolean().optional(),
   })
   .passthrough()
@@ -103,7 +105,7 @@ export const AppStateTerminalEntrySchema = z
 
 /**
  * Schema for terminal snapshots in ProjectState.terminals (per-project state).
- * Matches the TerminalSnapshot interface from shared/types/domain.ts.
+ * Matches the TerminalSnapshot interface from shared/types/project.ts.
  * Uses passthrough() to preserve unknown fields for forward compatibility with extensions.
  *
  * PTY-backed panels (terminal, agent, dev-preview) require `type` and `cwd`.
@@ -135,7 +137,9 @@ export const TerminalSnapshotSchema = z
       })
       .optional(),
     devServerTerminalId: z.string().optional(),
+    browserConsoleOpen: z.boolean().optional(),
     devPreviewConsoleOpen: z.boolean().optional(),
+    agentSessionId: z.string().optional(),
   })
   .passthrough()
   .refine(
@@ -257,7 +261,7 @@ export const FileSearchPayloadSchema = z.object({
 });
 
 export const SlashCommandListRequestSchema = z.object({
-  agentId: z.enum(["claude", "gemini", "codex", "opencode"]),
+  agentId: z.enum(BUILT_IN_AGENT_IDS),
   projectPath: z.string().optional(),
 });
 

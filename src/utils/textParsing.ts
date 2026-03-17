@@ -3,6 +3,7 @@ import { removeStopwords, eng } from "stopword";
 export interface TextSegment {
   type: "text" | "link";
   content: string;
+  start: number;
 }
 
 const URL_REGEX = /(https?:\/\/[^\s]+)/g;
@@ -15,14 +16,18 @@ export function parseNoteWithLinks(text: string): TextSegment[] {
 
   while ((match = regex.exec(text)) !== null) {
     if (match.index > lastIndex) {
-      segments.push({ type: "text", content: text.slice(lastIndex, match.index) });
+      segments.push({
+        type: "text",
+        content: text.slice(lastIndex, match.index),
+        start: lastIndex,
+      });
     }
-    segments.push({ type: "link", content: match[1] });
+    segments.push({ type: "link", content: match[1], start: match.index });
     lastIndex = match.index + match[0].length;
   }
 
   if (lastIndex < text.length) {
-    segments.push({ type: "text", content: text.slice(lastIndex) });
+    segments.push({ type: "text", content: text.slice(lastIndex), start: lastIndex });
   }
 
   return segments;

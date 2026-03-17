@@ -61,7 +61,7 @@ export function DevPreviewToolbar({
   const showSpinner = isRestarting || status === "starting" || status === "installing";
 
   const buttonClass =
-    "p-1.5 rounded hover:bg-white/10 disabled:opacity-30 disabled:cursor-not-allowed transition-colors";
+    "p-1.5 rounded hover:bg-overlay-medium disabled:opacity-30 disabled:cursor-not-allowed transition-colors";
 
   const handleOpenExternal = () => {
     if (url && onOpenExternal) {

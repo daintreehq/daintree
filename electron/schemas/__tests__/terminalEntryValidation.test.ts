@@ -40,7 +40,7 @@ describe("Terminal Entry Validation Schemas", () => {
     });
 
     it("accepts all valid terminal types", () => {
-      const types = ["terminal", "claude", "gemini", "codex", "opencode"];
+      const types = ["terminal", "claude", "gemini", "codex", "opencode", "cursor"];
 
       for (const type of types) {
         const entry = {

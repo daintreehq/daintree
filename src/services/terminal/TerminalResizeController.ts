@@ -11,22 +11,49 @@ const IDLE_CALLBACK_TIMEOUT_MS = 1000;
 const RESIZE_LOCK_TTL_MS = 5000;
 const SETTLED_RESIZE_DELAY_MS = 500;
 
+/** Narrow structural type for the private xterm.js internals we access. */
+interface XtermCoreRenderDimensions {
+  _renderService?: {
+    dimensions?: {
+      css?: {
+        cell?: { width?: number; height?: number };
+      };
+    };
+  };
+}
+
+/**
+ * Returns the CSS pixel dimensions of a single terminal cell.
+ *
+ * xterm.js 6.0 does not expose a public API for per-cell pixel dimensions.
+ * The official @xterm/addon-fit (0.11) accesses the same private path
+ * (`_core._renderService.dimensions`) — see its proposeDimensions() source.
+ * Upstream tracking: xtermjs/xterm.js#702 (closed; no public API in 6.0).
+ *
+ * This helper uses a narrow structural type instead of `any` and rejects
+ * non-finite, zero, or negative values. Returns `null` on any failure so
+ * callers can fall back to fitAddon.fit().
+ * Replace with a public API when one is available in our xterm version.
+ */
 export function getXtermCellDimensions(
   terminal: Terminal
 ): { width: number; height: number } | null {
   try {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const core = (terminal as any)._core;
+    const core = (terminal as Terminal & { _core?: XtermCoreRenderDimensions })._core;
     const dimensions = core?._renderService?.dimensions?.css?.cell;
     if (
       dimensions &&
       typeof dimensions.width === "number" &&
-      typeof dimensions.height === "number"
+      typeof dimensions.height === "number" &&
+      Number.isFinite(dimensions.width) &&
+      Number.isFinite(dimensions.height) &&
+      dimensions.width > 0 &&
+      dimensions.height > 0
     ) {
       return { width: dimensions.width, height: dimensions.height };
     }
   } catch {
-    // Fall through to null
+    // Fall through to null — terminal may not be fully initialized
   }
   return null;
 }

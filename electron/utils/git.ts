@@ -109,7 +109,7 @@ export async function listCommits(options: ListCommitsOptions): Promise<ListComm
 
     const logOptions: string[] = [
       "log",
-      "--format=%H|%h|%s|%b|%an|%ae|%aI|END",
+      "--format=%H%x00%h%x00%s%x00%b%x00%an%x00%ae%x00%aI%x00END",
       `--skip=${skip}`,
       `-n`,
       `${limit + 1}`,
@@ -126,10 +126,10 @@ export async function listCommits(options: ListCommitsOptions): Promise<ListComm
     const output = await git.raw(logOptions);
 
     const commits: CommitInfo[] = [];
-    const entries = output.split("|END").filter((entry) => entry.trim());
+    const entries = output.split("\x00END").filter((entry) => entry.trim());
 
     for (const entry of entries.slice(0, limit)) {
-      const parts = entry.trim().split("|");
+      const parts = entry.trim().split("\x00");
       if (parts.length >= 7) {
         const [hash, shortHash, message, body, authorName, authorEmail, date] = parts;
         commits.push({
@@ -433,7 +433,8 @@ export async function getWorktreeChangesWithStats(
     if (
       errorMessage.includes("ENOENT") ||
       errorMessage.includes("no such file or directory") ||
-      errorMessage.includes("Unable to read current working directory")
+      errorMessage.includes("Unable to read current working directory") ||
+      errorMessage.includes("not a git repository")
     ) {
       throw new WorktreeRemovedError(cwd, error instanceof Error ? error : undefined);
     }

@@ -1,27 +1,36 @@
 import { create } from "zustand";
 import { BUILT_IN_APP_SCHEMES, DEFAULT_APP_SCHEME_ID } from "@/config/appColorSchemes";
 import { resolveAppTheme, type AppColorScheme } from "@shared/theme";
-import { applyAppThemeToRoot } from "@/theme/applyAppTheme";
+import type { ColorVisionMode } from "@shared/types";
+import { applyAppThemeToRoot, applyColorVisionMode } from "@/theme/applyAppTheme";
 
 interface AppThemeState {
   selectedSchemeId: string;
   customSchemes: AppColorScheme[];
+  colorVisionMode: ColorVisionMode;
   setSelectedSchemeId: (id: string) => void;
   addCustomScheme: (scheme: AppColorScheme) => void;
   removeCustomScheme: (id: string) => void;
   injectTheme: (scheme: AppColorScheme) => void;
+  setColorVisionMode: (mode: ColorVisionMode) => void;
 }
 
 function injectSchemeToDOM(scheme: AppColorScheme): void {
   applyAppThemeToRoot(document.documentElement, scheme);
+  // Reapply CVD overrides after theme injection so they aren't overwritten
+  const { colorVisionMode } = useAppThemeStore.getState();
+  if (colorVisionMode !== "default") {
+    applyColorVisionMode(document.documentElement, colorVisionMode);
+  }
 }
 
-export const useAppThemeStore = create<AppThemeState>()((set, get) => ({
+export const useAppThemeStore = create<AppThemeState>()((set) => ({
   selectedSchemeId: DEFAULT_APP_SCHEME_ID,
   customSchemes: [],
+  colorVisionMode: "default" as ColorVisionMode,
 
   setSelectedSchemeId: (id) => {
-    const { customSchemes } = get();
+    const { customSchemes } = useAppThemeStore.getState();
     const scheme = resolveAppTheme(id, customSchemes);
     set({ selectedSchemeId: scheme.id });
     injectSchemeToDOM(scheme);
@@ -33,7 +42,7 @@ export const useAppThemeStore = create<AppThemeState>()((set, get) => ({
     })),
 
   removeCustomScheme: (id) => {
-    const { selectedSchemeId } = get();
+    const { selectedSchemeId } = useAppThemeStore.getState();
     const needsFallback = selectedSchemeId === id;
     set((state) => ({
       customSchemes: state.customSchemes.filter((s) => s.id !== id),
@@ -47,6 +56,11 @@ export const useAppThemeStore = create<AppThemeState>()((set, get) => ({
 
   injectTheme: (scheme) => {
     injectSchemeToDOM(scheme);
+  },
+
+  setColorVisionMode: (mode) => {
+    set({ colorVisionMode: mode });
+    applyColorVisionMode(document.documentElement, mode);
   },
 }));
 

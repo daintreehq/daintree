@@ -39,7 +39,7 @@ const STATUS_CONFIG: Record<GitStatus, { label: string; bg: string; text: string
   },
   ignored: {
     label: "I",
-    bg: "bg-white/[0.06]",
+    bg: "bg-tint/[0.06]",
     text: "text-canopy-text/40",
   },
   conflicted: {
@@ -96,7 +96,7 @@ export function FileStageRow({ file, isStaged, onToggle, onFileClick }: FileStag
       className={cn(
         "group flex items-center text-xs rounded px-1.5 py-1.5 cursor-pointer transition-colors",
         "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-canopy-accent",
-        isStaged ? "bg-status-success/[0.06] hover:bg-status-success/[0.10]" : "hover:bg-white/5"
+        isStaged ? "bg-status-success/[0.06] hover:bg-status-success/[0.10]" : "hover:bg-tint/5"
       )}
       onClick={handleClick}
       onKeyDown={handleKeyDown}
@@ -108,7 +108,7 @@ export function FileStageRow({ file, isStaged, onToggle, onFileClick }: FileStag
               onClick={handleToggle}
               className={cn(
                 "w-5 h-5 flex items-center justify-center rounded shrink-0 mr-2 transition-colors",
-                "hover:bg-white/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent"
+                "hover:bg-tint/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent"
               )}
               aria-label={isStaged ? `Unstage ${file.path}` : `Stage ${file.path}`}
             >

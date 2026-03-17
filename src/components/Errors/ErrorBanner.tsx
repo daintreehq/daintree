@@ -1,12 +1,23 @@
 import { useState, useCallback } from "react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
+import {
+  FolderOpen,
+  Globe,
+  HardDrive,
+  Lightbulb,
+  Settings,
+  TriangleAlert,
+  XCircle,
+  type LucideIcon,
+} from "lucide-react";
 import type { AppError, RetryAction } from "@/store/errorStore";
 
 export interface ErrorBannerProps {
   error: AppError;
   onDismiss: (id: string) => void;
   onRetry?: (id: string, action: RetryAction, args?: Record<string, unknown>) => void;
+  onCancelRetry?: (id: string) => void;
   className?: string;
   compact?: boolean;
 }
@@ -20,35 +31,35 @@ const ERROR_TYPE_LABELS: Record<string, string> = {
   unknown: "Error",
 };
 
-const ERROR_TYPE_ICONS: Record<string, string> = {
-  git: "📂",
-  process: "⚙️",
-  filesystem: "📁",
-  network: "🌐",
-  config: "⚠️",
-  unknown: "❌",
+const ERROR_TYPE_ICONS: Record<string, LucideIcon> = {
+  git: FolderOpen,
+  process: Settings,
+  filesystem: HardDrive,
+  network: Globe,
+  config: TriangleAlert,
+  unknown: XCircle,
 };
 
 export function ErrorBanner({
   error,
   onDismiss,
   onRetry,
+  onCancelRetry,
   className,
   compact = false,
 }: ErrorBannerProps) {
   const [isExpanded, setIsExpanded] = useState(false);
-  const [isRetrying, setIsRetrying] = useState(false);
+
+  const isRetrying = !!error.retryProgress;
 
   const handleRetry = useCallback(async () => {
     if (!error.retryAction || !onRetry) return;
-
-    setIsRetrying(true);
-    try {
-      await onRetry(error.id, error.retryAction, error.retryArgs);
-    } finally {
-      setIsRetrying(false);
-    }
+    await onRetry(error.id, error.retryAction, error.retryArgs);
   }, [error.id, error.retryAction, error.retryArgs, onRetry]);
+
+  const handleCancel = useCallback(() => {
+    onCancelRetry?.(error.id);
+  }, [error.id, onCancelRetry]);
 
   const handleDismiss = useCallback(() => {
     onDismiss(error.id);
@@ -59,8 +70,12 @@ export function ErrorBanner({
   }, []);
 
   const typeLabel = ERROR_TYPE_LABELS[error.type] || "Error";
-  const typeIcon = ERROR_TYPE_ICONS[error.type] || "❌";
+  const TypeIcon = ERROR_TYPE_ICONS[error.type] ?? XCircle;
   const canRetry = error.isTransient && error.retryAction && onRetry;
+
+  const retryLabel = error.retryProgress
+    ? `Retrying ${error.retryProgress.attempt}/${error.retryProgress.maxAttempts}...`
+    : "Retry";
 
   if (compact) {
     return (
@@ -70,17 +85,29 @@ export function ErrorBanner({
           className
         )}
       >
-        <span className="shrink-0">{typeIcon}</span>
+        <TypeIcon className="w-4 h-4 shrink-0 text-status-error" />
         <span className="text-status-error truncate flex-1">{error.message}</span>
-        {canRetry && (
+        {error.recoveryHint && (
+          <span className="text-status-error/70 text-xs shrink-0 truncate max-w-[40%]">
+            {error.recoveryHint}
+          </span>
+        )}
+        {isRetrying && onCancelRetry && (
+          <>
+            <span className="text-status-warning text-[10px] shrink-0">{retryLabel}</span>
+            <Button variant="ghost-danger" size="xs" onClick={handleCancel}>
+              Cancel
+            </Button>
+          </>
+        )}
+        {!isRetrying && canRetry && (
           <Button
             variant="outline"
             size="xs"
             onClick={handleRetry}
-            disabled={isRetrying}
             className="border-status-success/50 text-status-success hover:text-status-success/80"
           >
-            {isRetrying ? "..." : "Retry"}
+            Retry
           </Button>
         )}
         <Button
@@ -104,13 +131,24 @@ export function ErrorBanner({
       role="alert"
     >
       <div className="flex items-center gap-2 px-3 py-2 bg-[color-mix(in_oklab,var(--color-status-error)_12%,transparent)]">
-        <span className="shrink-0 text-lg">{typeIcon}</span>
+        <TypeIcon className="w-5 h-5 shrink-0 text-status-error" />
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
             <span className="text-xs text-status-error font-medium">{typeLabel}</span>
             {error.source && <span className="text-xs text-status-error/80">• {error.source}</span>}
           </div>
           <p className="text-sm text-status-error truncate">{error.message}</p>
+          {error.recoveryHint && (
+            <p className="flex items-center gap-1 text-xs text-status-error/70 mt-0.5">
+              <Lightbulb className="w-3 h-3 shrink-0" />
+              {error.recoveryHint}
+            </p>
+          )}
+          {error.correlationId && (
+            <span className="font-mono text-[10px] text-status-error/40">
+              Ref: {error.correlationId.split("-")[0]}
+            </span>
+          )}
         </div>
         <div className="flex items-center gap-1 shrink-0">
           {error.details && (
@@ -124,15 +162,22 @@ export function ErrorBanner({
               {isExpanded ? "Hide" : "Details"}
             </Button>
           )}
-          {canRetry && (
+          {isRetrying && onCancelRetry && (
+            <>
+              <span className="text-status-warning text-[10px]">{retryLabel}</span>
+              <Button variant="ghost-danger" size="xs" onClick={handleCancel}>
+                Cancel
+              </Button>
+            </>
+          )}
+          {!isRetrying && canRetry && (
             <Button
               variant="outline"
               size="xs"
               onClick={handleRetry}
-              disabled={isRetrying}
               className="border-status-success/50 text-status-success hover:text-status-success/80 hover:bg-status-success/10"
             >
-              {isRetrying ? "Retrying..." : "Retry"}
+              Retry
             </Button>
           )}
           <Button

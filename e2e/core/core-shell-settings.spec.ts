@@ -56,7 +56,7 @@ test.describe.serial("Core: Shell & Settings", () => {
       await expect(sidebar).toBeVisible({ timeout: T_SHORT });
     });
 
-    test("settings opens, navigates tabs, closes via Escape", async () => {
+    test("settings opens, navigates all tabs, closes via Escape", async () => {
       const { window } = ctx;
 
       await window.locator(SEL.toolbar.openSettings).click();
@@ -67,12 +67,22 @@ test.describe.serial("Core: Shell & Settings", () => {
       const defaultTab = window.locator("h3", { hasText: "General" });
       await expect(defaultTab).toBeVisible({ timeout: T_SHORT });
 
+      // Full tab list including v0.3.0 additions: Notifications, Worktree,
+      // Toolbar, Editor, Image Viewer, MCP Server, Voice Input
       const tabs = [
         { nav: "Keyboard", title: "Keyboard Shortcuts" },
+        { nav: "Notifications", title: "Notifications" },
         { nav: "Panel Grid", title: "Panel Grid" },
+        { nav: "Worktree", title: "Worktree Paths" },
+        { nav: "Toolbar", title: "Toolbar Customization" },
         { nav: "Appearance", title: "Appearance" },
         { nav: "CLI Agents", title: "CLI Agents" },
         { nav: "GitHub", title: "GitHub Integration" },
+        { nav: "Editor", title: "Editor Integration" },
+        { nav: "Image Viewer", title: "Image Viewer" },
+        { nav: "Sidecar", title: "Sidecar Links" },
+        { nav: "MCP Server", title: "MCP Server" },
+        { nav: "Voice Input", title: "Voice Input" },
         { nav: "Troubleshooting", title: "Troubleshooting" },
       ];
 
@@ -94,17 +104,17 @@ test.describe.serial("Core: Shell & Settings", () => {
       await openAndOnboardProject(ctx.app, ctx.window, fixtureDir, "Shell Settings Test");
     });
 
-    test("Cmd+T opens a new terminal", async () => {
+    test("Cmd+Alt+T opens a new terminal", async () => {
       const { window } = ctx;
       const before = await getGridPanelCount(window);
-      await window.keyboard.press(`${mod}+t`);
+      await window.keyboard.press(`${mod}+Alt+t`);
       await expect.poll(() => getGridPanelCount(window), { timeout: T_LONG }).toBe(before + 1);
     });
 
-    test("Cmd+T opens a second terminal", async () => {
+    test("Cmd+Alt+T opens a second terminal", async () => {
       const { window } = ctx;
       const before = await getGridPanelCount(window);
-      await window.keyboard.press(`${mod}+t`);
+      await window.keyboard.press(`${mod}+Alt+t`);
       await expect.poll(() => getGridPanelCount(window), { timeout: T_LONG }).toBe(before + 1);
     });
 
@@ -181,6 +191,11 @@ test.describe.serial("Core: Shell & Settings", () => {
       const generalTab = window.locator(`${SEL.settings.navSidebar} button:has-text("General")`);
       await generalTab.click();
 
+      const displaySubtab = window.locator(
+        '#settings-panel-general button[role="tab"]:has-text("Display")'
+      );
+      await displaySubtab.click();
+
       const toggle = window.locator(SEL.settings.projectPulseToggle);
       await expect(toggle).toBeVisible({ timeout: T_MEDIUM });
       await expect(toggle).toHaveAttribute("aria-checked", "true", { timeout: T_MEDIUM });
@@ -214,6 +229,11 @@ test.describe.serial("Core: Shell & Settings", () => {
       );
       await appearanceTab.click();
 
+      const terminalSubtab = window.locator(
+        '#settings-panel-terminalAppearance button[role="tab"]:has-text("Terminal")'
+      );
+      await terminalSubtab.click();
+
       const fontSelect = window.locator(SEL.settings.fontFamilySelect);
       await expect(fontSelect).toBeVisible({ timeout: T_MEDIUM });
       await expect(fontSelect).toHaveValue("jetbrains", { timeout: T_MEDIUM });
@@ -234,6 +254,10 @@ test.describe.serial("Core: Shell & Settings", () => {
 
       const generalTab = window.locator(`${SEL.settings.navSidebar} button:has-text("General")`);
       await generalTab.click();
+      const displaySubtab = window.locator(
+        '#settings-panel-general button[role="tab"]:has-text("Display")'
+      );
+      await displaySubtab.click();
       const pulseToggle = window.locator(SEL.settings.projectPulseToggle);
       await expect(pulseToggle).toHaveAttribute("aria-checked", "false", { timeout: T_MEDIUM });
 
@@ -249,6 +273,10 @@ test.describe.serial("Core: Shell & Settings", () => {
         `${SEL.settings.navSidebar} button:has-text("Appearance")`
       );
       await appearanceTab.click();
+      const terminalSubtab = window.locator(
+        '#settings-panel-terminalAppearance button[role="tab"]:has-text("Terminal")'
+      );
+      await terminalSubtab.click();
       const fontSelect = window.locator(SEL.settings.fontFamilySelect);
       await expect(fontSelect).toHaveValue("system", { timeout: T_MEDIUM });
 

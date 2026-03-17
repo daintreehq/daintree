@@ -30,9 +30,15 @@ import { STATE_ICONS, STATE_COLORS } from "@/components/Worktree/terminalStateCo
 import { TerminalRefreshTier } from "@/types";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { useDockPanelPortal } from "./DockPanelOffscreenContainer";
+import {
+  useDockBlockedState,
+  getGroupBlockedAgentState,
+  isGroupDeprioritized,
+} from "./useDockBlockedState";
 import { SortableTabButton } from "@/components/Panel/SortableTabButton";
 import type { TabGroup } from "@/types";
 import { buildPanelDuplicateOptions } from "@/services/terminal/panelDuplicationService";
+import { handleDockInteractOutside } from "./dockPopoverGuard";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 
 interface DockedTabGroupProps {
@@ -337,6 +343,10 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
     openDockTerminal,
   ]);
 
+  const groupBlockedState = getGroupBlockedAgentState(panels);
+  const blockedState = useDockBlockedState(groupBlockedState);
+  const isDeprioritized = !isOpen && isGroupDeprioritized(panels);
+
   if (!activePanel || panels.length === 0) {
     return null;
   }
@@ -364,7 +374,14 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
               "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2",
               "cursor-grab active:cursor-grabbing",
               isOpen &&
-                "bg-[var(--dock-item-bg-active)] text-canopy-text border-[var(--dock-item-border-active)] ring-1 ring-inset ring-canopy-accent/30"
+                "bg-[var(--dock-item-bg-active)] text-canopy-text border-[var(--dock-item-border-active)] ring-1 ring-inset ring-canopy-accent/30",
+              !isOpen &&
+                blockedState === "waiting" &&
+                "bg-[var(--dock-item-bg-waiting)] border-[var(--dock-item-border-waiting)]",
+              !isOpen &&
+                blockedState === "failed" &&
+                "bg-[var(--dock-item-bg-failed)] border-[var(--dock-item-border-failed)]",
+              isDeprioritized && "opacity-50"
             )}
             onClick={(e) => {
               e.preventDefault();
@@ -383,12 +400,7 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
             }}
             aria-label={`${activePanel.title} (${panels.length} tabs) - Click to preview, double-click to move to grid, drag to reorder`}
           >
-            <div
-              className={cn(
-                "flex items-center justify-center transition-opacity shrink-0",
-                isOpen || isActive ? "opacity-100" : "opacity-70"
-              )}
-            >
+            <div className="flex items-center justify-center shrink-0">
               <TerminalIcon
                 type={activePanel.type}
                 kind={activePanel.kind}
@@ -429,8 +441,7 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
                       <StateIcon
                         className={cn(
                           "w-3.5 h-3.5",
-                          agentState === "working" && "animate-spin",
-                          agentState === "waiting" && "animate-breathe",
+                          agentState === "working" && "animate-spin-slow",
                           "motion-reduce:animate-none"
                         )}
                         aria-hidden="true"
@@ -451,7 +462,7 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
         align="start"
         sideOffset={10}
         collisionPadding={collisionPadding}
-        onEscapeKeyDown={(e) => e.preventDefault()}
+        onInteractOutside={(e) => handleDockInteractOutside(e, portalContainer)}
         onOpenAutoFocus={(event) => {
           event.preventDefault();
           const focusTarget = getTerminalFocusTarget({

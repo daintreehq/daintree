@@ -375,6 +375,7 @@ export function useContextInjection(targetTerminalId?: string): UseContextInject
             terminalId: activeTerminal,
           },
           isTransient: true,
+          correlationId: crypto.randomUUID(),
         });
 
         currentErrorIdRef.current = errorId;

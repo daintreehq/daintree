@@ -1,6 +1,8 @@
+import { randomUUID } from "node:crypto";
+import { setTimeout as sleep } from "node:timers/promises";
 import { ipcMain, BrowserWindow, shell } from "electron";
 import { CHANNELS } from "./channels.js";
-import { getLogFilePath } from "../utils/logger.js";
+import { getLogFilePath, logError as logErrorUtil } from "../utils/logger.js";
 import {
   GitError,
   ProcessError,
@@ -10,36 +12,32 @@ import {
   getErrorDetails,
   isTransientError,
 } from "../utils/errorTypes.js";
+import { store } from "../store.js";
 import type { PtyClient } from "../services/PtyClient.js";
 import type { WorkspaceClient } from "../services/WorkspaceClient.js";
-
-type ErrorType = "git" | "process" | "filesystem" | "network" | "config" | "unknown";
-
-type RetryAction = "terminal" | "git" | "worktree";
-
-interface AppError {
-  id: string;
-  timestamp: number;
-  type: ErrorType;
-  message: string;
-  details?: string;
-  source?: string;
-  context?: {
-    worktreeId?: string;
-    terminalId?: string;
-    filePath?: string;
-    command?: string;
-  };
-  isTransient: boolean;
-  dismissed: boolean;
-  retryAction?: RetryAction;
-  retryArgs?: Record<string, unknown>;
-}
+import type { AppError, ErrorType, RetryAction } from "../../shared/types/ipc/errors.js";
 
 interface RetryPayload {
   errorId: string;
   action: RetryAction;
   args?: Record<string, unknown>;
+}
+
+const MAX_PENDING_ERRORS = 50;
+
+const MAX_RETRY_ATTEMPTS: Record<RetryAction, number> = {
+  terminal: 3,
+  git: 3,
+  worktree: 5,
+};
+
+const BACKOFF_BASE_MS = 500;
+const BACKOFF_CAP_MS = 10_000;
+const BACKOFF_FLOOR_MS = 100;
+
+function computeRetryDelay(attempt: number): number {
+  const exponentialCeil = Math.min(BACKOFF_CAP_MS, BACKOFF_BASE_MS * Math.pow(2, attempt));
+  return Math.floor(Math.random() * (exponentialCeil - BACKOFF_FLOOR_MS + 1) + BACKOFF_FLOOR_MS);
 }
 
 function isRetryAction(value: unknown): value is RetryAction {
@@ -95,6 +93,70 @@ function getErrorType(error: unknown): ErrorType {
   return "unknown";
 }
 
+function isSpawnSyscall(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const syscall = (error as NodeJS.ErrnoException).syscall;
+  if (syscall?.startsWith("spawn")) return true;
+  if (error instanceof Error && error.message.includes("posix_spawnp")) return true;
+  return false;
+}
+
+function getRecoveryHint(error: unknown): string | undefined {
+  if (error instanceof ProcessError) {
+    return "The terminal process could not start.";
+  }
+
+  if (error instanceof GitError) {
+    const msg = error.message + (error.cause ? ` ${error.cause.message}` : "");
+    if (msg.includes("not a git repository")) {
+      return "Run 'git init' or open a folder containing a git repo.";
+    }
+    if (msg.includes("Authentication failed") || msg.includes("authentication")) {
+      return "Check your Git credentials or SSH key configuration.";
+    }
+    return undefined;
+  }
+
+  if (error instanceof ConfigError) {
+    return "The configuration file may be corrupted — check the logs.";
+  }
+
+  if (!error || typeof error !== "object") return undefined;
+
+  const code = (error as NodeJS.ErrnoException).code;
+  const spawn = isSpawnSyscall(error);
+
+  if (!code && spawn) {
+    return "Install the tool or add it to your PATH.";
+  }
+
+  switch (code) {
+    case "EACCES":
+    case "EPERM":
+      return spawn
+        ? "The file exists but is not executable — check permissions."
+        : "Check file permissions or run with elevated privileges.";
+    case "ENOENT":
+      return spawn
+        ? "Install the tool or add it to your PATH."
+        : "Verify the file path is correct and the file exists.";
+    case "ENOTFOUND":
+      return "Check your internet connection and DNS settings.";
+    case "ECONNREFUSED":
+      return "Ensure the target server or service is running.";
+    case "ETIMEDOUT":
+      return "Check your network connection and try again.";
+    case "ECONNRESET":
+      return "The connection was reset — try again in a moment.";
+    case "EBUSY":
+      return "Close other applications using this file and retry.";
+    case "EAGAIN":
+      return "System is temporarily busy — wait a moment and retry.";
+  }
+
+  return undefined;
+}
+
 function generateErrorId(): string {
   return `error-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 }
@@ -109,6 +171,7 @@ function createAppError(
   } = {}
 ): AppError {
   const details = getErrorDetails(error);
+  const correlationId = randomUUID();
 
   return {
     id: generateErrorId(),
@@ -122,13 +185,26 @@ function createAppError(
     dismissed: false,
     retryAction: options.retryAction,
     retryArgs: options.retryArgs,
+    correlationId,
+    recoveryHint: getRecoveryHint(error),
   };
+}
+
+function isCriticalErrorType(type: ErrorType): boolean {
+  return type === "config" || type === "filesystem";
+}
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof Error && error.name === "AbortError";
 }
 
 class ErrorService {
   private mainWindow: BrowserWindow | null = null;
   private worktreeService: WorkspaceClient | null = null;
   private ptyClient: PtyClient | null = null;
+  private pendingQueue: AppError[] = [];
+  private isFlushing = false;
+  private activeRetries = new Map<string, AbortController>();
 
   initialize(
     mainWindow: BrowserWindow,
@@ -140,31 +216,112 @@ class ErrorService {
     this.ptyClient = ptyClient;
   }
 
-  sendError(error: AppError) {
-    if (!this.mainWindow || this.mainWindow.isDestroyed()) {
-      return;
-    }
-
+  private canSendToRenderer(): boolean {
+    if (!this.mainWindow || this.mainWindow.isDestroyed()) return false;
     const webContents = this.mainWindow.webContents;
-    if (!webContents || typeof webContents.send !== "function") {
-      return;
+    if (!webContents || typeof webContents.send !== "function") return false;
+    if (typeof webContents.isDestroyed === "function" && webContents.isDestroyed()) return false;
+    return true;
+  }
+
+  private bufferError(error: AppError): void {
+    this.pendingQueue.push(error);
+    if (this.pendingQueue.length > MAX_PENDING_ERRORS) {
+      this.pendingQueue.shift();
     }
-    if (typeof webContents.isDestroyed === "function" && webContents.isDestroyed()) {
+
+    if (isCriticalErrorType(error.type) && !error.isTransient) {
+      this.persistError(error);
+    }
+  }
+
+  private persistError(error: AppError): void {
+    try {
+      const existing = (store.get("pendingErrors") as AppError[] | undefined) ?? [];
+      const updated = [...existing, error].slice(-MAX_PENDING_ERRORS);
+      store.set("pendingErrors", updated);
+    } catch {
+      // Don't let persistence failure block error handling
+    }
+  }
+
+  private clearPersistedErrors(): void {
+    try {
+      store.set("pendingErrors", []);
+    } catch {
+      // Ignore persistence errors
+    }
+  }
+
+  sendError(error: AppError) {
+    if (!this.canSendToRenderer()) {
+      this.bufferError(error);
       return;
     }
 
-    webContents.send(CHANNELS.ERROR_NOTIFY, error);
+    this.mainWindow!.webContents.send(CHANNELS.ERROR_NOTIFY, error);
   }
 
   notifyError(error: unknown, options: Parameters<typeof createAppError>[1] = {}) {
     const appError = createAppError(error, options);
+    logErrorUtil(`[${appError.correlationId}] ${appError.message}`, error, {
+      correlationId: appError.correlationId,
+      type: appError.type,
+      source: appError.source,
+      context: appError.context,
+    });
     this.sendError(appError);
     return appError;
   }
 
-  async handleRetry(payload: RetryPayload): Promise<void> {
-    const { action, args } = payload;
+  flushPendingErrors(): void {
+    if (this.isFlushing || this.pendingQueue.length === 0) return;
+    if (!this.canSendToRenderer()) return;
 
+    this.isFlushing = true;
+    try {
+      const errors = this.pendingQueue.splice(0);
+      const webContents = this.mainWindow!.webContents;
+      for (const error of errors) {
+        try {
+          webContents.send(CHANNELS.ERROR_NOTIFY, error);
+        } catch {
+          // Window may have been destroyed mid-flush; re-buffer remaining
+        }
+      }
+      this.clearPersistedErrors();
+    } finally {
+      this.isFlushing = false;
+    }
+  }
+
+  getPendingPersistedErrors(): AppError[] {
+    try {
+      const persisted = (store.get("pendingErrors") as AppError[] | undefined) ?? [];
+      this.clearPersistedErrors();
+      return persisted.map((e) => ({ ...e, fromPreviousSession: true }));
+    } catch {
+      return [];
+    }
+  }
+
+  private sendRetryProgress(errorId: string, attempt: number, maxAttempts: number): void {
+    if (!this.canSendToRenderer()) return;
+    this.mainWindow!.webContents.send(CHANNELS.ERROR_RETRY_PROGRESS, {
+      id: errorId,
+      attempt,
+      maxAttempts,
+    });
+  }
+
+  cancelRetry(errorId: string): void {
+    const controller = this.activeRetries.get(errorId);
+    if (controller) {
+      controller.abort();
+    }
+  }
+
+  private async executeAction(action: RetryAction, args?: Record<string, unknown>): Promise<void> {
     switch (action) {
       case "terminal":
         if (this.ptyClient && typeof args?.id === "string" && typeof args?.cwd === "string") {
@@ -190,6 +347,45 @@ class ErrorService {
     }
   }
 
+  async handleRetry(payload: RetryPayload): Promise<void> {
+    const { errorId, action, args } = payload;
+    const maxAttempts = MAX_RETRY_ATTEMPTS[action];
+    const existing = this.activeRetries.get(errorId);
+    if (existing) {
+      existing.abort();
+    }
+
+    const controller = new AbortController();
+    const { signal } = controller;
+
+    this.activeRetries.set(errorId, controller);
+
+    try {
+      for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        signal.throwIfAborted();
+
+        this.sendRetryProgress(errorId, attempt, maxAttempts);
+
+        try {
+          await this.executeAction(action, args);
+          return;
+        } catch (error) {
+          if (isAbortError(error)) throw error;
+          signal.throwIfAborted();
+
+          if (!isTransientError(error) || attempt === maxAttempts) {
+            throw error;
+          }
+
+          const delay = computeRetryDelay(attempt);
+          await sleep(delay, undefined, { signal });
+        }
+      }
+    } finally {
+      this.activeRetries.delete(errorId);
+    }
+  }
+
   async openLogs(): Promise<void> {
     const logPath = getLogFilePath();
     const { dirname } = await import("path");
@@ -211,6 +407,10 @@ class ErrorService {
 
 const errorService = new ErrorService();
 
+export function flushPendingErrors(): void {
+  errorService.flushPendingErrors();
+}
+
 export function registerErrorHandlers(
   mainWindow: BrowserWindow,
   worktreeService: WorkspaceClient | null,
@@ -230,6 +430,9 @@ export function registerErrorHandlers(
       argsForError = parsedPayload.args;
       await errorService.handleRetry(parsedPayload);
     } catch (error) {
+      if (isAbortError(error)) {
+        throw error;
+      }
       errorService.notifyError(error, {
         source: `retry-${actionForError ?? "unknown"}`,
         retryAction: actionForError,
@@ -241,11 +444,27 @@ export function registerErrorHandlers(
   ipcMain.handle(CHANNELS.ERROR_RETRY, handleRetry);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.ERROR_RETRY));
 
+  const handleRetryCancelListener = (_event: Electron.IpcMainEvent, errorId: unknown) => {
+    if (typeof errorId === "string") {
+      errorService.cancelRetry(errorId);
+    }
+  };
+  ipcMain.on(CHANNELS.ERROR_RETRY_CANCEL, handleRetryCancelListener);
+  handlers.push(() =>
+    ipcMain.removeListener(CHANNELS.ERROR_RETRY_CANCEL, handleRetryCancelListener)
+  );
+
   const handleOpenLogs = async () => {
     await errorService.openLogs();
   };
   ipcMain.handle(CHANNELS.ERROR_OPEN_LOGS, handleOpenLogs);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.ERROR_OPEN_LOGS));
+
+  const handleGetPending = () => {
+    return errorService.getPendingPersistedErrors();
+  };
+  ipcMain.handle(CHANNELS.ERROR_GET_PENDING, handleGetPending);
+  handlers.push(() => ipcMain.removeHandler(CHANNELS.ERROR_GET_PENDING));
 
   return () => {
     handlers.forEach((cleanup) => cleanup());

@@ -2,15 +2,13 @@ import { useEffect } from "react";
 import { isElectronAvailable } from "./useElectron";
 import { actionService } from "@/services/ActionService";
 import type { ActionId } from "@shared/types/actions";
+import type { SettingsNavTarget } from "@/components/Settings";
 
 export interface UseMenuActionsOptions {
   onOpenSettings: () => void;
-  onOpenSettingsTab?: (tab: string) => void;
+  onOpenSettingsTab?: (target: SettingsNavTarget) => void;
   onToggleSidebar: () => void;
-  onOpenAgentPalette: () => void;
-  onLaunchAgent: (
-    agentId: "claude" | "gemini" | "codex" | "opencode" | "terminal" | "browser"
-  ) => void;
+  onLaunchAgent: (agentId: string) => void;
   defaultCwd: string;
   activeWorktreeId?: string;
 }
@@ -75,7 +73,13 @@ export function useMenuActions(options: UseMenuActionsOptions): void {
           return;
         }
 
+        if (action === "show-getting-started") {
+          window.dispatchEvent(new CustomEvent("canopy:show-getting-started"));
+          return;
+        }
+
         const menuToActionMap: Record<string, ActionId> = {
+          "duplicate-panel": "terminal.duplicate",
           "new-terminal": "terminal.new",
           "new-worktree": "worktree.createDialog.open",
           "open-settings": "app.settings",

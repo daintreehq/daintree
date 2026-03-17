@@ -15,7 +15,6 @@ import {
   isElectronAvailable,
   useAgentLauncher,
   useWorktrees,
-  useTerminalPalette,
   useNewTerminalPalette,
   usePanelPalette,
   useProjectSwitcherPalette,
@@ -29,14 +28,19 @@ import {
   useWatchedPanelNotifications,
   useWorktreeActions,
   useMenuActions,
+  useErrors,
+  useReEntrySummary,
 } from "./hooks";
 import { useActionRegistry } from "./hooks/useActionRegistry";
 import { useUpdateListener } from "./hooks/useUpdateListener";
+import { useWorkflowListener } from "./hooks/useWorkflowListener";
 import { useActionPalette } from "./hooks/useActionPalette";
 import { useQuickSwitcher } from "./hooks/useQuickSwitcher";
 import { useWorktreePalette } from "./hooks/useWorktreePalette";
+import { useQuickCreatePalette } from "./hooks/useQuickCreatePalette";
 import { useDoubleShift } from "./hooks/useDoubleShift";
 import { useMcpBridge } from "./hooks/useMcpBridge";
+import { useFileDropGuard } from "./hooks/useFileDropGuard";
 import { createTooltipWithShortcut } from "./lib/platform";
 import { useCrashRecoveryGate } from "./hooks/app/useCrashRecoveryGate";
 import { CrashRecoveryDialog } from "./components/Recovery/CrashRecoveryDialog";
@@ -48,7 +52,16 @@ import {
   useSemanticWorkerLifecycle,
   useSystemWakeHandler,
   useDevServerDiscovery,
-  type HydrationCallbacks,
+  useAccessibilityAnnouncements,
+  useGettingStartedChecklist,
+  useUnloadCleanup,
+  useHomeDir,
+  usePerformanceMonitors,
+  useSettingsDialog,
+  useWorktreeOverview,
+  useAppEventListeners,
+  useErrorRetry,
+  useActiveWorktreeSync,
 } from "./hooks/app";
 import { AppLayout } from "./components/Layout";
 import { ContentGrid } from "./components/Terminal";
@@ -58,22 +71,18 @@ import {
   WorktreePalette,
   WorktreeSidebarSearchBar,
   WorktreeOverviewModal,
+  QuickCreatePalette,
 } from "./components/Worktree";
 import { CrossWorktreeDiff } from "./components/Worktree/CrossWorktreeDiff";
 import { NewWorktreeDialog } from "./components/Worktree/NewWorktreeDialog";
 import { TerminalInfoDialogHost } from "./components/Terminal/TerminalInfoDialogHost";
 import { FileViewerModalHost } from "./components/FileViewer/FileViewerModalHost";
-import { TerminalPalette, NewTerminalPalette } from "./components/TerminalPalette";
+import { NewTerminalPalette } from "./components/TerminalPalette";
 import { PanelPalette } from "./components/PanelPalette/PanelPalette";
 import { MORE_AGENTS_PANEL_ID } from "./hooks/usePanelPalette";
 import { GitInitDialog, ProjectOnboardingWizard, WelcomeScreen } from "./components/Project";
 import { VoiceRecordingAnnouncer } from "./components/Terminal/VoiceRecordingAnnouncer";
-import {
-  AgentSetupWizard,
-  AgentSelectionStep,
-  shouldShowAgentSetupWizard,
-  shouldShowAgentSelection,
-} from "./components/Setup";
+import { AccessibilityAnnouncer } from "./components/Accessibility/AccessibilityAnnouncer";
 import { CreateProjectFolderDialog } from "./components/Project/CreateProjectFolderDialog";
 import { ProjectSwitcherPalette } from "./components/Project/ProjectSwitcherPalette";
 import { ActionPalette } from "./components/ActionPalette";
@@ -81,11 +90,14 @@ import { QuickSwitcher } from "./components/QuickSwitcher";
 import { ConfirmDialog } from "./components/ui/ConfirmDialog";
 import { RecipeEditor } from "./components/TerminalRecipe/RecipeEditor";
 import { NotesPalette } from "./components/Notes";
-import { SettingsDialog, type SettingsTab } from "./components/Settings";
+import { WorkflowSection } from "./components/Workflow";
+import { SettingsDialog } from "./components/Settings";
 import { ShortcutReferenceDialog } from "./components/KeyboardShortcuts";
 import { Toaster } from "./components/ui/toaster";
+import { ReEntrySummary } from "./components/ui/ReEntrySummary";
 import { UpdateNotification } from "./components/UpdateNotification";
-import { TelemetryConsent } from "./components/Onboarding/TelemetryConsent";
+import { OnboardingFlow } from "./components/Onboarding/OnboardingFlow";
+import { GettingStartedChecklist } from "./components/Onboarding/GettingStartedChecklist";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { DndProvider } from "./components/DragDrop";
 import {
@@ -93,17 +105,13 @@ import {
   useWorktreeSelectionStore,
   useProjectStore,
   useErrorStore,
-  useDiagnosticsStore,
-  useFocusStore,
-  useAgentSettingsStore,
-  cleanupWorktreeDataStore,
   useAgentPreferencesStore,
-  type RetryAction,
+  usePaletteStore,
 } from "./store";
 import { useShallow } from "zustand/react/shallow";
-import { useRecipeStore } from "./store/recipeStore";
+import { useMacroFocusStore } from "./store/macroFocusStore";
 import type { RecipeTerminal } from "./types";
-import { errorsClient, systemClient, worktreeClient } from "@/clients";
+import { systemClient } from "@/clients";
 import { registerBuiltInPanelComponents } from "./registry";
 
 // Register built-in panel components before any renders
@@ -112,14 +120,15 @@ import { useWorktreeFilterStore } from "./store/worktreeFilterStore";
 import {
   matchesFilters,
   sortWorktrees,
+  sortWorktreesByRelevance,
   groupByType,
   findIntegrationWorktree,
+  scoreWorktree,
   type DerivedWorktreeMeta,
   type FilterState,
 } from "./lib/worktreeFilters";
+import { parseExactNumber } from "./lib/parseExactNumber";
 import type { WorktreeState, PanelKind } from "./types";
-import { startRendererMemoryMonitor } from "./utils/performance";
-import { startLongTaskMonitor } from "./utils/longTaskMonitor";
 import { actionService } from "./services/ActionService";
 import { voiceRecordingService } from "./services/VoiceRecordingService";
 import { useRenderProfiler } from "./utils/renderProfiler";
@@ -134,23 +143,16 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   const currentProject = useProjectStore((state) => state.currentProject);
   useProjectSettings();
   const { launchAgent, availability, agentSettings } = useAgentLauncher();
-  const {
-    activeWorktreeId,
-    focusedWorktreeId,
-    selectWorktree,
-    createDialog,
-    openCreateDialog,
-    closeCreateDialog,
-  } = useWorktreeSelectionStore(
-    useShallow((state) => ({
-      activeWorktreeId: state.activeWorktreeId,
-      focusedWorktreeId: state.focusedWorktreeId,
-      selectWorktree: state.selectWorktree,
-      createDialog: state.createDialog,
-      openCreateDialog: state.openCreateDialog,
-      closeCreateDialog: state.closeCreateDialog,
-    }))
-  );
+  const { activeWorktreeId, focusedWorktreeId, selectWorktree, createDialog, closeCreateDialog } =
+    useWorktreeSelectionStore(
+      useShallow((state) => ({
+        activeWorktreeId: state.activeWorktreeId,
+        focusedWorktreeId: state.focusedWorktreeId,
+        selectWorktree: state.selectWorktree,
+        createDialog: state.createDialog,
+        closeCreateDialog: state.closeCreateDialog,
+      }))
+    );
 
   // Filter/sort state - destructured for stable memoization
   const {
@@ -163,6 +165,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     sessionFilters,
     activityFilters,
     alwaysShowActive,
+    alwaysShowWaiting,
     pinnedWorktrees,
   } = useWorktreeFilterStore(
     useShallow((state) => ({
@@ -175,6 +178,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
       sessionFilters: state.sessionFilters,
       activityFilters: state.activityFilters,
       alwaysShowActive: state.alwaysShowActive,
+      alwaysShowWaiting: state.alwaysShowWaiting,
       pinnedWorktrees: state.pinnedWorktrees,
     }))
   );
@@ -279,8 +283,13 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
         hasCompletedAgent: false,
       };
       const isActive = worktree.id === activeWorktreeId;
+      const hasActiveQuery = query.trim().length > 0;
 
-      if (alwaysShowActive && isActive) {
+      if (alwaysShowActive && isActive && !hasActiveQuery) {
+        return true;
+      }
+
+      if (alwaysShowWaiting && derived.hasWaitingAgent && !hasActiveQuery) {
         return true;
       }
 
@@ -290,9 +299,12 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     const existingWorktreeIds = new Set(worktrees.map((w) => w.id));
     const validPinnedWorktrees = pinnedWorktrees.filter((id) => existingWorktreeIds.has(id));
 
-    const sorted = sortWorktrees(filtered, orderBy, validPinnedWorktrees);
+    const hasQuery = query.trim().length > 0;
+    const sorted = hasQuery
+      ? sortWorktreesByRelevance(filtered, query, orderBy, validPinnedWorktrees)
+      : sortWorktrees(filtered, orderBy, validPinnedWorktrees);
 
-    if (isGroupedByType) {
+    if (isGroupedByType && !hasQuery) {
       return {
         filteredWorktrees: sorted,
         groupedSections: groupByType(sorted, orderBy, validPinnedWorktrees),
@@ -311,6 +323,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     sessionFilters,
     activityFilters,
     alwaysShowActive,
+    alwaysShowWaiting,
     pinnedWorktrees,
     mainWorktree,
     integrationWorktree,
@@ -452,7 +465,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
           <div className="text-[var(--color-status-error)] text-sm mb-2">{error}</div>
           <button
             onClick={refresh}
-            className="text-xs px-2 py-1 border border-divider rounded hover:bg-white/[0.06] text-canopy-text"
+            className="text-xs px-2 py-1 border border-divider rounded hover:bg-tint/[0.06] text-canopy-text"
           >
             Retry
           </button>
@@ -475,7 +488,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
 
           <p className="text-sm text-canopy-text/60 mb-4 max-w-xs">
             Open a Git repository with worktrees to get started. Use{" "}
-            <kbd className="px-1.5 py-0.5 bg-white/[0.06] rounded text-xs">
+            <kbd className="px-1.5 py-0.5 bg-tint/[0.06] rounded text-xs">
               File → Open Directory
             </kbd>
           </p>
@@ -495,6 +508,20 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
 
   const rootPath = currentProject?.path ?? "";
   const hasNonMainWorktrees = worktrees.length > 1;
+  const hasFilters = hasActiveFilters();
+  const worktreeMatchesQuery = (w: WorktreeState) => {
+    if (!query) return true;
+    const exactNum = parseExactNumber(query);
+    if (exactNum !== null) {
+      return w.issueNumber === exactNum || w.prNumber === exactNum;
+    }
+    return scoreWorktree(w, query) > 0;
+  };
+  const mainMatchesQuery = mainWorktree && worktreeMatchesQuery(mainWorktree);
+  const integrationMatchesQuery = integrationWorktree && worktreeMatchesQuery(integrationWorktree);
+  const visibleCount = hasFilters
+    ? filteredWorktrees.length + (mainMatchesQuery ? 1 : 0) + (integrationMatchesQuery ? 1 : 0)
+    : worktrees.length;
 
   const renderWorktreeCard = (worktree: WorktreeState) => (
     <WorktreeCard
@@ -518,13 +545,20 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     <div className="flex flex-col h-full">
       {/* Header Section */}
       <div className="group/header flex items-center justify-between px-4 py-2 border-b border-divider bg-transparent shrink-0">
-        <h2 className="text-canopy-text font-semibold text-sm tracking-wide">Worktrees</h2>
+        <div className="flex items-baseline gap-1.5">
+          <h2 className="text-canopy-text font-semibold text-sm tracking-wide">Worktrees</h2>
+          <span className="text-canopy-text/50 text-xs">
+            {hasFilters && visibleCount !== worktrees.length
+              ? `(${visibleCount} of ${worktrees.length})`
+              : `(${worktrees.length})`}
+          </span>
+        </div>
         <div className="flex items-center gap-1">
           <div className="invisible group-hover/header:visible group-focus-within/header:visible flex items-center gap-1">
             <button
               onClick={onOpenOverview}
-              className="p-1 text-canopy-text/40 hover:text-canopy-text hover:bg-white/[0.06] rounded transition-colors"
-              title={createTooltipWithShortcut("Toggle worktrees overview", "Cmd+Shift+O")}
+              className="p-1 text-canopy-text/40 hover:text-canopy-text hover:bg-tint/[0.06] rounded transition-colors"
+              title={createTooltipWithShortcut("Open worktrees overview", "Cmd+Shift+O")}
               aria-label="Open worktrees overview"
             >
               <LayoutGrid className="w-3.5 h-3.5" />
@@ -532,7 +566,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
             <button
               onClick={handleRefreshAll}
               disabled={isRefreshing}
-              className="p-1 text-canopy-text/40 hover:text-canopy-text hover:bg-white/[0.06] rounded transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+              className="p-1 text-canopy-text/40 hover:text-canopy-text hover:bg-tint/[0.06] rounded transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
               title="Refresh sidebar"
               aria-label="Refresh sidebar"
             >
@@ -540,9 +574,13 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
             </button>
           </div>
           <button
-            onClick={() => openCreateDialog()}
-            className="p-1 text-canopy-text/40 hover:text-canopy-text hover:bg-white/[0.06] rounded transition-colors"
-            title={createTooltipWithShortcut("Create new worktree", "Cmd+Shift+N")}
+            onClick={() =>
+              actionService.dispatch("worktree.createDialog.open", undefined, {
+                source: "user",
+              })
+            }
+            className="p-1 text-canopy-text/40 hover:text-canopy-text hover:bg-tint/[0.06] rounded transition-colors"
+            title="Create new worktree"
             aria-label="Create new worktree"
           >
             <Plus className="w-3.5 h-3.5" />
@@ -553,11 +591,11 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
       {/* Inline search bar — only when there are non-main worktrees */}
       {hasNonMainWorktrees && <WorktreeSidebarSearchBar inputRef={searchInputRef} />}
 
-      {/* Main worktree — always visible */}
-      {mainWorktree && <div className="shrink-0">{renderWorktreeCard(mainWorktree)}</div>}
+      {/* Main worktree — visible unless excluded by text search */}
+      {mainMatchesQuery && <div className="shrink-0">{renderWorktreeCard(mainWorktree)}</div>}
 
-      {/* Integration branch (develop/trunk/next) — pinned below main */}
-      {integrationWorktree && (
+      {/* Integration branch (develop/trunk/next) — pinned below main, subject to text search */}
+      {integrationMatchesQuery && (
         <div className="shrink-0">{renderWorktreeCard(integrationWorktree)}</div>
       )}
 
@@ -599,6 +637,8 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
         <ScrollIndicator direction="below" count={hiddenBelow} onClick={scrollToBottom} />
       </div>
 
+      <WorkflowSection />
+
       <RecipeEditor
         worktreeId={recipeEditorWorktreeId}
         initialTerminals={recipeEditorInitialTerminals}
@@ -614,6 +654,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
           onWorktreeCreated={refresh}
           initialIssue={createDialog.initialIssue}
           initialPR={createDialog.initialPR}
+          initialRecipeId={createDialog.initialRecipeId}
         />
       )}
     </div>
@@ -621,6 +662,9 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
 }
 
 function App() {
+  useErrors();
+  useUnloadCleanup();
+
   const { crossDiffDialog, closeCrossWorktreeDiff } = useWorktreeSelectionStore(
     useShallow((state) => ({
       crossDiffDialog: state.crossDiffDialog,
@@ -628,69 +672,28 @@ function App() {
     }))
   );
 
-  const { focusedId, addTerminal, setReconnectError, hydrateTabGroups, hydrateMru } =
-    useTerminalStore(
-      useShallow((state) => ({
-        focusedId: state.focusedId,
-        addTerminal: state.addTerminal,
-        setReconnectError: state.setReconnectError,
-        hydrateTabGroups: state.hydrateTabGroups,
-        hydrateMru: state.hydrateMru,
-      }))
-    );
+  const { focusedId, addTerminal } = useTerminalStore(
+    useShallow((state) => ({
+      focusedId: state.focusedId,
+      addTerminal: state.addTerminal,
+    }))
+  );
 
-  useEffect(() => {
-    const handleBeforeUnload = () => {
-      cleanupWorktreeDataStore();
-    };
+  const { launchAgent, availability, agentSettings, refreshSettings } = useAgentLauncher();
 
-    window.addEventListener("beforeunload", handleBeforeUnload);
-
-    return () => {
-      window.removeEventListener("beforeunload", handleBeforeUnload);
-      cleanupWorktreeDataStore();
-    };
-  }, []);
-  const { launchAgent, availability, agentSettings, refreshSettings, isCheckingAvailability } =
-    useAgentLauncher();
-  const [isAgentSetupOpen, setIsAgentSetupOpen] = useState(false);
-  const agentSetupCheckedRef = useRef(false);
-
-  // Agent selection step state for first-run onboarding
-  const [agentSelectionOpen, setAgentSelectionOpen] = useState(false);
-  const [onboardingSetupOpen, setOnboardingSetupOpen] = useState(false);
-  const [onboardingSetupAgentIds, setOnboardingSetupAgentIds] = useState<string[]>([]);
-
-  useEffect(() => {
-    if (agentSetupCheckedRef.current || isCheckingAvailability) return;
-    agentSetupCheckedRef.current = true;
-    if (shouldShowAgentSetupWizard(availability)) {
-      setIsAgentSetupOpen(true);
-    }
-  }, [isCheckingAvailability, availability]);
-
-  useEffect(() => {
-    const handleOpenWizard = () => setIsAgentSetupOpen(true);
-    window.addEventListener("canopy:open-agent-setup-wizard", handleOpenWizard);
-    return () => window.removeEventListener("canopy:open-agent-setup-wizard", handleOpenWizard);
-  }, []);
-
-  const loadRecipes = useRecipeStore((state) => state.loadRecipes);
   useTerminalConfig();
   useAppThemeConfig();
   useWindowNotifications();
   useWatchedPanelNotifications();
+  const reEntrySummary = useReEntrySummary();
   useUpdateListener();
+  useWorkflowListener();
   useMcpBridge();
-  const [homeDir, setHomeDir] = useState<string | undefined>(undefined);
-  useEffect(() => {
-    systemClient.getHomeDir().then(setHomeDir).catch(console.error);
-  }, []);
+  const { homeDir } = useHomeDir();
 
   // Grid navigation hook for directional terminal switching
   const { findNearest, findByIndex, findDockByIndex, getCurrentLocation } = useGridNavigation();
 
-  const terminalPalette = useTerminalPalette();
   const { worktrees, worktreeMap } = useWorktrees();
   const newTerminalPalette = useNewTerminalPalette({ launchAgent, worktreeMap });
   const panelPalette = usePanelPalette();
@@ -707,158 +710,43 @@ function App() {
   const onboardingProjectId = useProjectStore((state) => state.onboardingProjectId);
   const closeOnboardingWizard = useProjectStore((state) => state.closeOnboardingWizard);
 
-  const agentSettingsInitialized = useAgentSettingsStore((state) => state.isInitialized);
-
-  // Intercept onboarding to show agent selection on first run.
-  // Depends on agentSettingsInitialized so it re-evaluates once settings load.
-  useEffect(() => {
-    if (!onboardingWizardOpen || !onboardingProjectId) return;
-    if (shouldShowAgentSelection()) {
-      setAgentSelectionOpen(true);
-    }
-  }, [onboardingWizardOpen, onboardingProjectId, agentSettingsInitialized]);
-
-  // Reset local flow state whenever onboarding closes to avoid stale state on next project.
-  useEffect(() => {
-    if (!onboardingWizardOpen && !onboardingProjectId) {
-      setAgentSelectionOpen(false);
-      setOnboardingSetupOpen(false);
-      setOnboardingSetupAgentIds([]);
-    }
-  }, [onboardingWizardOpen, onboardingProjectId]);
-
-  const handleAgentSelectionContinue = useCallback(
-    (uninstalledIds: string[]) => {
-      setAgentSelectionOpen(false);
-      void refreshSettings();
-      if (uninstalledIds.length > 0) {
-        setOnboardingSetupAgentIds(uninstalledIds);
-        setOnboardingSetupOpen(true);
-      }
-    },
-    [refreshSettings]
-  );
-
-  const handleAgentSelectionSkip = useCallback(() => {
-    setAgentSelectionOpen(false);
-  }, []);
-
-  const handleOnboardingSetupClose = useCallback(() => {
-    setOnboardingSetupOpen(false);
-    setOnboardingSetupAgentIds([]);
-  }, []);
-
   const createFolderDialogOpen = useProjectStore((state) => state.createFolderDialogOpen);
   const closeCreateFolderDialog = useProjectStore((state) => state.closeCreateFolderDialog);
   const openCreateFolderDialog = useProjectStore((state) => state.openCreateFolderDialog);
-  const { setActiveWorktree, selectWorktree, activeWorktreeId, focusedWorktreeId } =
-    useWorktreeSelectionStore(
-      useShallow((state) => ({
-        setActiveWorktree: state.setActiveWorktree,
-        selectWorktree: state.selectWorktree,
-        activeWorktreeId: state.activeWorktreeId,
-        focusedWorktreeId: state.focusedWorktreeId,
-      }))
-    );
-  const lastSyncedActiveRef = useRef<{ projectId: string | null; worktreeId: string | null }>({
-    projectId: null,
-    worktreeId: null,
-  });
-  const activeWorktree = useMemo(
-    () => worktrees.find((w) => w.id === activeWorktreeId) ?? null,
-    [worktrees, activeWorktreeId]
+  const { selectWorktree, activeWorktreeId, focusedWorktreeId } = useWorktreeSelectionStore(
+    useShallow((state) => ({
+      selectWorktree: state.selectWorktree,
+      activeWorktreeId: state.activeWorktreeId,
+      focusedWorktreeId: state.focusedWorktreeId,
+    }))
   );
-  useEffect(() => {
-    if (worktrees.length === 0) return;
 
-    const worktreeExists = activeWorktreeId && worktrees.some((w) => w.id === activeWorktreeId);
-    if (!worktreeExists) {
-      const mainWorktree = worktrees.find((w) => w.isMainWorktree) ?? worktrees[0];
-      selectWorktree(mainWorktree.id);
-    }
-  }, [worktrees, activeWorktreeId, selectWorktree]);
-  useEffect(() => {
-    const projectId = currentProject?.id ?? null;
-    const selectedWorktreeId = activeWorktreeId ?? null;
-
-    if (!projectId || !selectedWorktreeId) {
-      lastSyncedActiveRef.current = { projectId, worktreeId: null };
-      return;
-    }
-
-    const worktreeExists = worktrees.some((w) => w.id === selectedWorktreeId);
-    if (!worktreeExists) {
-      return;
-    }
-
-    if (
-      lastSyncedActiveRef.current.projectId === projectId &&
-      lastSyncedActiveRef.current.worktreeId === selectedWorktreeId
-    ) {
-      return;
-    }
-
-    lastSyncedActiveRef.current = { projectId, worktreeId: selectedWorktreeId };
-    worktreeClient.setActive(selectedWorktreeId).catch(() => {
-      if (
-        lastSyncedActiveRef.current.projectId === projectId &&
-        lastSyncedActiveRef.current.worktreeId === selectedWorktreeId
-      ) {
-        lastSyncedActiveRef.current = { projectId, worktreeId: null };
-      }
-    });
-  }, [activeWorktreeId, currentProject?.id, worktrees]);
-  const defaultTerminalCwd = useMemo(
-    () => activeWorktree?.path ?? currentProject?.path ?? "",
-    [activeWorktree, currentProject]
-  );
+  const { activeWorktree, defaultTerminalCwd } = useActiveWorktreeSync();
 
   const worktreePalette = useWorktreePalette({ worktrees });
+  const quickCreatePalette = useQuickCreatePalette();
 
-  const openDiagnosticsDock = useDiagnosticsStore((state) => state.openDock);
-  const removeError = useErrorStore((state) => state.removeError);
-  const setFocusMode = useFocusStore((state) => state.setFocusMode);
-
-  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
-  const [settingsTab, setSettingsTab] = useState<SettingsTab>("general");
+  const {
+    isSettingsOpen,
+    settingsTab,
+    settingsSubtab,
+    settingsSectionId,
+    handleSettings,
+    handleOpenSettingsTab,
+    setIsSettingsOpen,
+  } = useSettingsDialog();
   const [isShortcutsOpen, setIsShortcutsOpen] = useState(false);
-  const [isNotesPaletteOpen, setIsNotesPaletteOpen] = useState(false);
-  const [isWorktreeOverviewOpen, setIsWorktreeOverviewOpen] = useState(false);
+  const isNotesPaletteOpen = usePaletteStore((state) => state.activePaletteId === "notes");
+  const {
+    isWorktreeOverviewOpen,
+    toggleWorktreeOverview,
+    openWorktreeOverview,
+    closeWorktreeOverview,
+  } = useWorktreeOverview();
   const onLayoutRender = useRenderProfiler("app-layout", { sampleRate: 0.15 });
   const onContentGridRender = useRenderProfiler("content-grid", { sampleRate: 0.15 });
 
-  useEffect(() => {
-    const stopMonitor = startRendererMemoryMonitor();
-    const stopLongTaskMonitor = startLongTaskMonitor();
-    return () => {
-      stopMonitor();
-      stopLongTaskMonitor();
-    };
-  }, []);
-
-  // Hydration callbacks for state restoration
-  const hydrationCallbacks: HydrationCallbacks = useMemo(
-    () => ({
-      addTerminal,
-      setActiveWorktree,
-      loadRecipes,
-      openDiagnosticsDock,
-      setFocusMode,
-      setReconnectError,
-      hydrateTabGroups,
-      hydrateMru,
-    }),
-    [
-      addTerminal,
-      setActiveWorktree,
-      loadRecipes,
-      openDiagnosticsDock,
-      setFocusMode,
-      setReconnectError,
-      hydrateTabGroups,
-      hydrateMru,
-    ]
-  );
+  usePerformanceMonitors();
 
   // Crash recovery gate — must resolve before hydration runs
   const {
@@ -870,21 +758,17 @@ function App() {
   const crashResolved = crashState.status !== "loading" && crashState.status !== "pending";
 
   // App lifecycle hooks
-  const { isStateLoaded } = useAppHydration(hydrationCallbacks, crashResolved);
-  useProjectSwitchRehydration(hydrationCallbacks);
+  const { isStateLoaded } = useAppHydration(crashResolved);
+  useProjectSwitchRehydration();
   useFirstRunToasts(isStateLoaded);
+  const gettingStarted = useGettingStartedChecklist(isStateLoaded);
 
   const handleLaunchAgent = useCallback(
-    async (type: "claude" | "gemini" | "codex" | "opencode" | "terminal" | "browser") => {
+    async (type: string) => {
       await launchAgent(type);
     },
     [launchAgent]
   );
-
-  const handleSettings = useCallback(() => {
-    setSettingsTab("general");
-    setIsSettingsOpen(true);
-  }, []);
 
   const handleWizardFinish = useCallback(() => {
     const defaultAgent = useAgentPreferencesStore.getState().defaultAgent;
@@ -902,86 +786,15 @@ function App() {
     }
   }, [launchAgent, activeWorktreeId, availability, agentSettings]);
 
-  const handleOpenAgentSettings = useCallback(() => {
-    setSettingsTab("agents");
-    setIsSettingsOpen(true);
-  }, []);
-
-  const handleOpenSettingsTab = useCallback((tab: string) => {
-    const allowedTabs: SettingsTab[] = [
-      "general",
-      "keyboard",
-      "terminal",
-      "terminalAppearance",
-      "worktree",
-      "agents",
-      "github",
-      "sidecar",
-      "toolbar",
-      "troubleshooting",
-    ];
-    if (!allowedTabs.includes(tab as SettingsTab)) {
-      setSettingsTab("general");
-      setIsSettingsOpen(true);
-      return;
-    }
-    setSettingsTab(tab as SettingsTab);
-    setIsSettingsOpen(true);
-  }, []);
-
-  useEffect(() => {
-    const handleOpenSettingsTabEvent = (event: Event) => {
-      const customEvent = event as CustomEvent<unknown>;
-      const tab = typeof customEvent.detail === "string" ? customEvent.detail : "";
-      handleOpenSettingsTab(tab);
-    };
-
-    window.addEventListener("canopy:open-settings-tab", handleOpenSettingsTabEvent);
-    return () => window.removeEventListener("canopy:open-settings-tab", handleOpenSettingsTabEvent);
-  }, [handleOpenSettingsTab]);
-
-  const openNotesPalette = useCallback(() => {
-    setIsNotesPaletteOpen(true);
-  }, []);
-
   const closeNotesPalette = useCallback(() => {
-    setIsNotesPaletteOpen(false);
-  }, []);
-
-  const toggleWorktreeOverview = useCallback(() => {
-    setIsWorktreeOverviewOpen((prev) => !prev);
-  }, []);
-
-  const openWorktreeOverview = useCallback(() => {
-    setIsWorktreeOverviewOpen(true);
-  }, []);
-
-  const closeWorktreeOverview = useCallback(() => {
-    setIsWorktreeOverviewOpen(false);
+    usePaletteStore.getState().closePalette("notes");
   }, []);
 
   const overviewWorktreeActions = useWorktreeActions({ launchAgent });
 
-  useEffect(() => {
-    const handleOpenNotesPalette = () => {
-      openNotesPalette();
-    };
+  useAppEventListeners();
 
-    window.addEventListener("canopy:open-notes-palette", handleOpenNotesPalette);
-    return () => window.removeEventListener("canopy:open-notes-palette", handleOpenNotesPalette);
-  }, [openNotesPalette]);
-
-  const handleErrorRetry = useCallback(
-    async (errorId: string, action: RetryAction, args?: Record<string, unknown>) => {
-      try {
-        await errorsClient.retry(errorId, action, args);
-        removeError(errorId);
-      } catch (error) {
-        console.error("Error retry failed:", error);
-      }
-    },
-    [removeError]
-  );
+  const { handleErrorRetry, handleCancelRetry } = useErrorRetry();
 
   const electronAvailable = isElectronAvailable();
   const { inject } = useContextInjection();
@@ -995,10 +808,12 @@ function App() {
     onOpenSettingsTab: handleOpenSettingsTab,
     onToggleSidebar: handleToggleSidebar,
     onToggleFocusMode: handleToggleSidebar,
+    onFocusRegionNext: () => useMacroFocusStore.getState().cycleNext(),
+    onFocusRegionPrev: () => useMacroFocusStore.getState().cyclePrev(),
     onOpenActionPalette: actionPalette.open,
     onOpenQuickSwitcher: quickSwitcher.open,
-    onOpenAgentPalette: terminalPalette.open,
     onOpenWorktreePalette: worktreePalette.open,
+    onOpenQuickCreatePalette: quickCreatePalette.open,
     onToggleWorktreeOverview: toggleWorktreeOverview,
     onOpenWorktreeOverview: openWorktreeOverview,
     onCloseWorktreeOverview: closeWorktreeOverview,
@@ -1020,7 +835,6 @@ function App() {
     onOpenSettings: handleSettings,
     onOpenSettingsTab: handleOpenSettingsTab,
     onToggleSidebar: handleToggleSidebar,
-    onOpenAgentPalette: terminalPalette.open,
     onLaunchAgent: handleLaunchAgent,
     defaultCwd: defaultTerminalCwd,
     activeWorktreeId: activeWorktree?.id,
@@ -1035,10 +849,13 @@ function App() {
   useSemanticWorkerLifecycle();
   useSystemWakeHandler();
   useDevServerDiscovery();
+  useAccessibilityAnnouncements();
 
   useEffect(() => {
     voiceRecordingService.initialize();
   }, []);
+
+  useFileDropGuard();
 
   if (!isElectronAvailable()) {
     return (
@@ -1071,6 +888,7 @@ function App() {
     <ErrorBoundary variant="fullscreen" componentName="App">
       <DndProvider>
         <VoiceRecordingAnnouncer />
+        <AccessibilityAnnouncer />
         <Profiler id="app-layout" onRender={onLayoutRender}>
           <AppLayout
             sidebarContent={
@@ -1081,8 +899,8 @@ function App() {
             }
             onLaunchAgent={handleLaunchAgent}
             onSettings={handleSettings}
-            onOpenAgentSettings={handleOpenAgentSettings}
             onRetry={handleErrorRetry}
+            onCancelRetry={handleCancelRetry}
             agentAvailability={availability}
             agentSettings={agentSettings}
             isHydrated={isStateLoaded}
@@ -1104,21 +922,11 @@ function App() {
         </Profiler>
       </DndProvider>
 
-      <TerminalPalette
-        isOpen={terminalPalette.isOpen}
-        query={terminalPalette.query}
-        results={terminalPalette.results}
-        selectedIndex={terminalPalette.selectedIndex}
-        onQueryChange={terminalPalette.setQuery}
-        onSelectPrevious={terminalPalette.selectPrevious}
-        onSelectNext={terminalPalette.selectNext}
-        onSelect={terminalPalette.selectTerminal}
-        onClose={terminalPalette.close}
-      />
       <QuickSwitcher
         isOpen={quickSwitcher.isOpen}
         query={quickSwitcher.query}
         results={quickSwitcher.results}
+        totalResults={quickSwitcher.totalResults}
         selectedIndex={quickSwitcher.selectedIndex}
         close={quickSwitcher.close}
         setQuery={quickSwitcher.setQuery}
@@ -1131,6 +939,7 @@ function App() {
         isOpen={newTerminalPalette.isOpen}
         query={newTerminalPalette.query}
         results={newTerminalPalette.results}
+        totalResults={newTerminalPalette.totalResults}
         selectedIndex={newTerminalPalette.selectedIndex}
         onQueryChange={newTerminalPalette.setQuery}
         onSelectPrevious={newTerminalPalette.selectPrevious}
@@ -1143,6 +952,7 @@ function App() {
         isOpen={worktreePalette.isOpen}
         query={worktreePalette.query}
         results={worktreePalette.results}
+        totalResults={worktreePalette.totalResults}
         activeWorktreeId={worktreePalette.activeWorktreeId}
         selectedIndex={worktreePalette.selectedIndex}
         onQueryChange={worktreePalette.setQuery}
@@ -1152,10 +962,12 @@ function App() {
         onConfirm={worktreePalette.confirmSelection}
         onClose={worktreePalette.close}
       />
+      <QuickCreatePalette palette={quickCreatePalette} />
       <PanelPalette
         isOpen={panelPalette.isOpen}
         query={panelPalette.query}
         results={panelPalette.results}
+        totalResults={panelPalette.totalResults}
         selectedIndex={panelPalette.selectedIndex}
         onQueryChange={panelPalette.setQuery}
         onSelectPrevious={panelPalette.selectPrevious}
@@ -1214,6 +1026,7 @@ function App() {
         }}
         onStopProject={(projectId) => projectSwitcherPalette.stopProject(projectId)}
         onCloseProject={(projectId) => projectSwitcherPalette.removeProject(projectId)}
+        onTogglePinProject={(projectId) => projectSwitcherPalette.togglePinProject(projectId)}
         onOpenProjectSettings={() => {
           projectSwitcherPalette.close();
           void actionService.dispatch("project.settings.open", undefined, { source: "user" });
@@ -1244,6 +1057,7 @@ function App() {
         isOpen={actionPalette.isOpen}
         query={actionPalette.query}
         results={actionPalette.results}
+        totalResults={actionPalette.totalResults}
         selectedIndex={actionPalette.selectedIndex}
         close={actionPalette.close}
         setQuery={actionPalette.setQuery}
@@ -1279,6 +1093,8 @@ function App() {
         isOpen={isSettingsOpen}
         onClose={() => setIsSettingsOpen(false)}
         defaultTab={settingsTab}
+        defaultSubtab={settingsSubtab}
+        defaultSectionId={settingsSectionId}
         onSettingsChange={refreshSettings}
       />
 
@@ -1297,36 +1113,13 @@ function App() {
       )}
 
       {onboardingProjectId && (
-        <AgentSelectionStep
-          isOpen={agentSelectionOpen}
-          onContinue={handleAgentSelectionContinue}
-          onSkip={handleAgentSelectionSkip}
-        />
-      )}
-
-      {onboardingProjectId && (
         <ProjectOnboardingWizard
-          isOpen={onboardingWizardOpen && !agentSelectionOpen && !onboardingSetupOpen}
+          isOpen={onboardingWizardOpen}
           projectId={onboardingProjectId}
           onClose={closeOnboardingWizard}
           onFinish={handleWizardFinish}
         />
       )}
-
-      {onboardingSetupOpen && (
-        <AgentSetupWizard
-          isOpen={onboardingSetupOpen}
-          onClose={handleOnboardingSetupClose}
-          initialAvailability={availability}
-          agentIds={onboardingSetupAgentIds}
-        />
-      )}
-
-      <AgentSetupWizard
-        isOpen={isAgentSetupOpen && !onboardingWizardOpen}
-        onClose={() => setIsAgentSetupOpen(false)}
-        initialAvailability={availability}
-      />
 
       <CreateProjectFolderDialog
         isOpen={createFolderDialogOpen}
@@ -1336,8 +1129,21 @@ function App() {
       <PanelTransitionOverlay />
 
       <Toaster />
+      <ReEntrySummary state={reEntrySummary} />
       <UpdateNotification />
-      <TelemetryConsent />
+      <OnboardingFlow
+        availability={availability}
+        onRefreshSettings={refreshSettings}
+        onComplete={gettingStarted.notifyOnboardingComplete}
+      />
+      {gettingStarted.visible && gettingStarted.checklist && (
+        <GettingStartedChecklist
+          checklist={gettingStarted.checklist}
+          collapsed={gettingStarted.collapsed}
+          onDismiss={gettingStarted.dismiss}
+          onToggleCollapse={gettingStarted.toggleCollapse}
+        />
+      )}
     </ErrorBoundary>
   );
 }

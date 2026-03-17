@@ -8,7 +8,7 @@
  */
 
 import { events } from "./events.js";
-import type { AgentState } from "../../shared/types/domain.js";
+import type { AgentState } from "../../shared/types/agent.js";
 
 export interface AgentAvailabilityInfo {
   agentId: string;

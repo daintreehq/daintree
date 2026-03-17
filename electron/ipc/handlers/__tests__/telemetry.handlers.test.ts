@@ -9,9 +9,10 @@ vi.mock("electron", () => ({ ipcMain: ipcMainMock }));
 
 const telemetryServiceMock = vi.hoisted(() => ({
   isTelemetryEnabled: vi.fn(() => false),
-  setTelemetryEnabled: vi.fn(),
+  setTelemetryEnabled: vi.fn(() => Promise.resolve()),
   hasTelemetryPromptBeenShown: vi.fn(() => false),
   markTelemetryPromptShown: vi.fn(),
+  trackEvent: vi.fn(),
 }));
 
 vi.mock("../../../services/TelemetryService.js", () => telemetryServiceMock);
@@ -23,9 +24,9 @@ describe("registerTelemetryHandlers", () => {
     vi.clearAllMocks();
   });
 
-  it("registers all three IPC handlers", () => {
+  it("registers all four IPC handlers", () => {
     const cleanup = registerTelemetryHandlers();
-    expect(ipcMainMock.handle).toHaveBeenCalledTimes(3);
+    expect(ipcMainMock.handle).toHaveBeenCalledTimes(4);
     cleanup();
   });
 
@@ -35,7 +36,8 @@ describe("registerTelemetryHandlers", () => {
     expect(ipcMainMock.removeHandler).toHaveBeenCalledWith("telemetry:get");
     expect(ipcMainMock.removeHandler).toHaveBeenCalledWith("telemetry:set-enabled");
     expect(ipcMainMock.removeHandler).toHaveBeenCalledWith("telemetry:mark-prompt-shown");
-    expect(ipcMainMock.removeHandler).toHaveBeenCalledTimes(3);
+    expect(ipcMainMock.removeHandler).toHaveBeenCalledWith("telemetry:track");
+    expect(ipcMainMock.removeHandler).toHaveBeenCalledTimes(4);
   });
 
   it("TELEMETRY_GET handler returns enabled and hasSeenPrompt", async () => {
@@ -104,5 +106,47 @@ describe("registerTelemetryHandlers", () => {
 
     await handler();
     expect(telemetryServiceMock.markTelemetryPromptShown).toHaveBeenCalled();
+  });
+
+  it("TELEMETRY_TRACK handler dispatches valid event to service", async () => {
+    registerTelemetryHandlers();
+
+    const [, handler] =
+      ipcMainMock.handle.mock.calls.find(([ch]) => ch.includes("telemetry:track")) ?? [];
+
+    await handler(null, "onboarding_step_viewed", { step: "telemetry" });
+    expect(telemetryServiceMock.trackEvent).toHaveBeenCalledWith("onboarding_step_viewed", {
+      step: "telemetry",
+    });
+  });
+
+  it("TELEMETRY_TRACK handler rejects unknown event names", async () => {
+    registerTelemetryHandlers();
+
+    const [, handler] =
+      ipcMainMock.handle.mock.calls.find(([ch]) => ch.includes("telemetry:track")) ?? [];
+
+    await handler(null, "malicious_event", { data: "bad" });
+    expect(telemetryServiceMock.trackEvent).not.toHaveBeenCalled();
+  });
+
+  it("TELEMETRY_TRACK handler rejects non-object properties", async () => {
+    registerTelemetryHandlers();
+
+    const [, handler] =
+      ipcMainMock.handle.mock.calls.find(([ch]) => ch.includes("telemetry:track")) ?? [];
+
+    await handler(null, "onboarding_step_viewed", "not-an-object");
+    expect(telemetryServiceMock.trackEvent).not.toHaveBeenCalled();
+  });
+
+  it("TELEMETRY_TRACK handler rejects array properties", async () => {
+    registerTelemetryHandlers();
+
+    const [, handler] =
+      ipcMainMock.handle.mock.calls.find(([ch]) => ch.includes("telemetry:track")) ?? [];
+
+    await handler(null, "onboarding_step_viewed", [1, 2, 3]);
+    expect(telemetryServiceMock.trackEvent).not.toHaveBeenCalled();
   });
 });

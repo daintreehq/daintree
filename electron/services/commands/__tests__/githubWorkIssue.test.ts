@@ -10,9 +10,9 @@ const {
   listBranchesMock,
   findAvailableBranchNameMock,
   findAvailablePathMock,
-  storeGetMock,
   generateWorktreePathMock,
   validatePathPatternMock,
+  resolveWorktreePatternMock,
 } = vi.hoisted(() => ({
   hasGitHubTokenMock: vi.fn(),
   getRepoContextMock: vi.fn(),
@@ -23,9 +23,9 @@ const {
   listBranchesMock: vi.fn(),
   findAvailableBranchNameMock: vi.fn(),
   findAvailablePathMock: vi.fn(),
-  storeGetMock: vi.fn(),
   generateWorktreePathMock: vi.fn(),
   validatePathPatternMock: vi.fn(),
+  resolveWorktreePatternMock: vi.fn(),
 }));
 
 vi.mock("../../GitHubService.js", () => ({
@@ -52,16 +52,14 @@ vi.mock("../../GitService.js", () => ({
   },
 }));
 
-vi.mock("../../../store.js", () => ({
-  store: {
-    get: storeGetMock,
-  },
-}));
-
 vi.mock("../../../../shared/utils/pathPattern.js", () => ({
   DEFAULT_WORKTREE_PATH_PATTERN: "{repo}/{branch}",
   generateWorktreePath: generateWorktreePathMock,
   validatePathPattern: validatePathPatternMock,
+}));
+
+vi.mock("../../../utils/worktreePattern.js", () => ({
+  resolveWorktreePattern: resolveWorktreePatternMock,
 }));
 
 import { githubWorkIssueCommand } from "../githubWorkIssue.js";
@@ -88,8 +86,8 @@ describe("githubWorkIssueCommand", () => {
     listBranchesMock.mockResolvedValue([{ name: "main", remote: false }]);
     findAvailableBranchNameMock.mockImplementation(async (name: string) => name);
     findAvailablePathMock.mockImplementation((worktreePath: string) => worktreePath);
-    storeGetMock.mockReturnValue(undefined);
     validatePathPatternMock.mockReturnValue({ valid: true });
+    resolveWorktreePatternMock.mockResolvedValue("{repo}/{branch}");
     generateWorktreePathMock.mockImplementation((_root: string, branchName: string) => {
       return `/tmp/${branchName}`;
     });

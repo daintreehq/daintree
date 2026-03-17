@@ -1,7 +1,13 @@
 import { useCallback } from "react";
 import { cn } from "@/lib/utils";
-import { BUILT_IN_SCHEMES, type TerminalColorScheme } from "@/config/terminalColorSchemes";
+import {
+  BUILT_IN_SCHEMES,
+  DEFAULT_SCHEME_ID,
+  getMappedTerminalScheme,
+  type TerminalColorScheme,
+} from "@/config/terminalColorSchemes";
 import { useTerminalColorSchemeStore } from "@/store/terminalColorSchemeStore";
+import { useAppThemeStore } from "@/store/appThemeStore";
 import { terminalConfigClient } from "@/clients/terminalConfigClient";
 
 function SchemePreview({ scheme }: { scheme: TerminalColorScheme }) {
@@ -45,11 +51,22 @@ async function persistCustomSchemes() {
   await terminalConfigClient.setCustomSchemes(JSON.stringify(customSchemes));
 }
 
+function resolveSchemeForPreview(
+  scheme: TerminalColorScheme,
+  appThemeId: string
+): TerminalColorScheme {
+  if (scheme.id !== DEFAULT_SCHEME_ID) return scheme;
+  const mapped = getMappedTerminalScheme(appThemeId);
+  if (!mapped) return scheme;
+  return { ...scheme, type: mapped.type, colors: mapped.colors };
+}
+
 export function ColorSchemePicker() {
   const selectedSchemeId = useTerminalColorSchemeStore((s) => s.selectedSchemeId);
   const customSchemes = useTerminalColorSchemeStore((s) => s.customSchemes);
   const setSelectedSchemeId = useTerminalColorSchemeStore((s) => s.setSelectedSchemeId);
   const addCustomScheme = useTerminalColorSchemeStore((s) => s.addCustomScheme);
+  const appThemeId = useAppThemeStore((s) => s.selectedSchemeId);
 
   const allSchemes = [...BUILT_IN_SCHEMES, ...customSchemes];
 
@@ -87,26 +104,29 @@ export function ColorSchemePicker() {
   return (
     <div className="space-y-3">
       <div className="grid grid-cols-2 gap-2">
-        {allSchemes.map((scheme) => (
-          <button
-            key={scheme.id}
-            onClick={() => handleSelect(scheme.id)}
-            className={cn(
-              "flex flex-col gap-1.5 p-2 rounded-[var(--radius-md)] border transition-colors text-left",
-              selectedSchemeId === scheme.id
-                ? "border-canopy-accent bg-canopy-accent/10"
-                : "border-canopy-border bg-canopy-bg hover:border-canopy-text/30"
-            )}
-          >
-            <SchemePreview scheme={scheme} />
-            <div className="flex items-center gap-1.5">
-              <span className="text-xs text-canopy-text truncate">{scheme.name}</span>
-              {scheme.type === "light" && (
-                <span className="text-[10px] text-canopy-text/50 shrink-0">light</span>
+        {allSchemes.map((scheme) => {
+          const resolved = resolveSchemeForPreview(scheme, appThemeId);
+          return (
+            <button
+              key={scheme.id}
+              onClick={() => handleSelect(scheme.id)}
+              className={cn(
+                "flex flex-col gap-1.5 p-2 rounded-[var(--radius-md)] border transition-colors text-left",
+                selectedSchemeId === scheme.id
+                  ? "border-canopy-accent bg-canopy-accent/10"
+                  : "border-canopy-border bg-canopy-bg hover:border-canopy-text/30"
               )}
-            </div>
-          </button>
-        ))}
+            >
+              <SchemePreview scheme={resolved} />
+              <div className="flex items-center gap-1.5">
+                <span className="text-xs text-canopy-text truncate">{scheme.name}</span>
+                {resolved.type === "light" && (
+                  <span className="text-[10px] text-canopy-text/50 shrink-0">light</span>
+                )}
+              </div>
+            </button>
+          );
+        })}
       </div>
       <button
         onClick={handleImport}

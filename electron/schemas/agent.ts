@@ -1,6 +1,7 @@
 import { z } from "zod";
+import { BUILT_IN_TERMINAL_TYPES } from "../../shared/config/agentIds.js";
 
-export const TerminalTypeSchema = z.enum(["terminal", "claude", "gemini", "codex", "opencode"]);
+export const TerminalTypeSchema = z.enum(BUILT_IN_TERMINAL_TYPES);
 
 export const AgentStateSchema = z.enum([
   "idle",
@@ -30,6 +31,7 @@ export const AgentStateChangeTriggerSchema = z.enum([
   "timeout",
   "exit",
   "activity",
+  "title",
 ]);
 
 export const AgentSpawnedSchema = EventContextSchema.extend({

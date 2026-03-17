@@ -177,20 +177,22 @@ export function DockPanelOffscreenContainer({ children }: DockPanelOffscreenCont
 
       {/* Hidden container for dock panels - keeps them mounted */}
       {/* IMPORTANT: Size must be large enough for xterm to initialize (MIN_CONTAINER_SIZE = 50px) */}
-      {/* Do NOT use visibility:hidden - it can cause xterm rendering issues */}
+      {/* content-visibility:hidden skips render work while preserving layout geometry */}
       <div
         ref={offscreenContainerRef}
         className="dock-panel-offscreen-container"
-        style={{
-          position: "fixed",
-          left: "-20000px",
-          top: 0,
-          width: "800px",
-          height: "600px",
-          overflow: "hidden",
-          opacity: 0,
-          pointerEvents: "none",
-        }}
+        style={
+          {
+            contentVisibility: "hidden",
+            position: "fixed",
+            left: "-20000px",
+            top: 0,
+            width: "800px",
+            height: "600px",
+            overflow: "hidden",
+            pointerEvents: "none",
+          } as React.CSSProperties
+        }
         aria-hidden="true"
       />
 

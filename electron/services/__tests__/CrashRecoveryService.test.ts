@@ -11,6 +11,7 @@ const storeMock = vi.hoisted(() => ({
 const appMock = vi.hoisted(() => ({
   getPath: vi.fn(() => "/fake/userData"),
   getVersion: vi.fn(() => "1.0.0"),
+  isPackaged: false as boolean,
 }));
 
 vi.mock("../../store.js", () => ({
@@ -36,6 +37,7 @@ describe("CrashRecoveryService", () => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "crash-recovery-test-"));
     userData = tmpDir;
     appMock.getPath.mockReturnValue(userData);
+    appMock.isPackaged = false;
     storeMock.get.mockReturnValue({ autoRestoreOnCrash: false });
     storeMock.set.mockImplementation(() => {});
     vi.spyOn(console, "log").mockImplementation(() => {});
@@ -58,6 +60,7 @@ describe("CrashRecoveryService", () => {
       const marker = JSON.parse(fs.readFileSync(markerPath, "utf8"));
       expect(typeof marker.sessionStartMs).toBe("number");
       expect(marker.appVersion).toBe("1.0.0");
+      expect(marker.isPackaged).toBe(false);
     });
 
     it("returns null pending crash when no marker exists", () => {
@@ -122,6 +125,119 @@ describe("CrashRecoveryService", () => {
       svc.initialize();
 
       expect(svc.getPendingCrash()).toBeNull();
+    });
+
+    it("silently discards orphaned dev-mode marker in dev session", () => {
+      const markerPath = path.join(userData, "running.lock");
+      fs.writeFileSync(
+        markerPath,
+        JSON.stringify({
+          sessionStartMs: Date.now() - 5000,
+          appVersion: "1.0.0",
+          platform: "win32",
+          isPackaged: false,
+        })
+      );
+
+      appMock.isPackaged = false;
+      const svc = makeService();
+      svc.initialize();
+
+      expect(svc.getPendingCrash()).toBeNull();
+    });
+
+    it("surfaces dev-mode marker with crashLogPath as a genuine crash", () => {
+      const crashDir = path.join(userData, "crashes");
+      fs.mkdirSync(crashDir, { recursive: true });
+      const crashLogPath = path.join(crashDir, "crash-dev-123.json");
+      fs.writeFileSync(
+        crashLogPath,
+        JSON.stringify({
+          id: "dev-123",
+          timestamp: Date.now(),
+          appVersion: "1.0.0",
+          platform: "win32",
+          osVersion: "10.0",
+          arch: "x64",
+          errorMessage: "real dev crash",
+        })
+      );
+
+      const markerPath = path.join(userData, "running.lock");
+      fs.writeFileSync(
+        markerPath,
+        JSON.stringify({
+          sessionStartMs: Date.now() - 5000,
+          appVersion: "1.0.0",
+          platform: "win32",
+          isPackaged: false,
+          crashLogPath,
+        })
+      );
+
+      appMock.isPackaged = false;
+      const svc = makeService();
+      svc.initialize();
+
+      const pending = svc.getPendingCrash();
+      expect(pending).not.toBeNull();
+      expect(pending!.entry.errorMessage).toBe("real dev crash");
+    });
+
+    it("surfaces dev-mode marker when current session is packaged", () => {
+      const markerPath = path.join(userData, "running.lock");
+      fs.writeFileSync(
+        markerPath,
+        JSON.stringify({
+          sessionStartMs: Date.now() - 5000,
+          appVersion: "1.0.0",
+          platform: "win32",
+          isPackaged: false,
+        })
+      );
+
+      appMock.isPackaged = true;
+      const svc = makeService();
+      svc.initialize();
+
+      expect(svc.getPendingCrash()).not.toBeNull();
+    });
+
+    it("surfaces legacy marker without isPackaged field in dev session", () => {
+      const markerPath = path.join(userData, "running.lock");
+      fs.writeFileSync(
+        markerPath,
+        JSON.stringify({
+          sessionStartMs: Date.now() - 5000,
+          appVersion: "1.0.0",
+          platform: "darwin",
+        })
+      );
+
+      appMock.isPackaged = false;
+      const svc = makeService();
+      svc.initialize();
+
+      expect(svc.getPendingCrash()).not.toBeNull();
+    });
+
+    it("surfaces packaged marker in dev session", () => {
+      const markerPath = path.join(userData, "running.lock");
+      fs.writeFileSync(
+        markerPath,
+        JSON.stringify({
+          sessionStartMs: Date.now() - 5000,
+          appVersion: "1.0.0",
+          platform: "darwin",
+          isPackaged: true,
+        })
+      );
+
+      appMock.isPackaged = false;
+      const svc = makeService();
+      svc.initialize();
+
+      expect(svc.getPendingCrash()).not.toBeNull();
     });
   });
 
@@ -233,6 +349,41 @@ describe("CrashRecoveryService", () => {
       expect(storeMock.set).toHaveBeenCalledWith("windowState", snapshot.windowState);
     });
 
+    it("restoreBackup filters terminals when panelIds is provided", () => {
+      const backupDir = path.join(userData, "backups");
+      fs.mkdirSync(backupDir, { recursive: true });
+      const snapshot = {
+        capturedAt: Date.now(),
+        appState: {
+          sidebarWidth: 999,
+          terminals: [
+            { id: "t1", kind: "terminal", title: "T1" },
+            { id: "t2", kind: "agent", title: "T2" },
+            { id: "t3", kind: "browser", title: "T3" },
+          ],
+        },
+        windowState: { width: 1400, height: 900, isMaximized: false },
+      };
+      fs.writeFileSync(path.join(backupDir, "session-state.json"), JSON.stringify(snapshot));
+
+      storeMock.get.mockReturnValue({ autoRestoreOnCrash: false });
+
+      const svc = makeService();
+      svc.initialize();
+      const result = svc.restoreBackup(["t1", "t3"]);
+
+      expect(result).toBe(true);
+      expect(storeMock.set).toHaveBeenCalledWith(
+        "appState",
+        expect.objectContaining({
+          terminals: [
+            { id: "t1", kind: "terminal", title: "T1" },
+            { id: "t3", kind: "browser", title: "T3" },
+          ],
+        })
+      );
+    });
+
     it("restoreBackup never writes to projects store", () => {
       const backupDir = path.join(userData, "backups");
       fs.mkdirSync(backupDir, { recursive: true });
@@ -312,6 +463,165 @@ describe("CrashRecoveryService", () => {
 
       expect(result).toBe(true);
       expect(storeMock.set).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("panel summaries", () => {
+    it("populates panels from backup when crash is detected", () => {
+      // Set up backup with terminals
+      const backupDir = path.join(userData, "backups");
+      fs.mkdirSync(backupDir, { recursive: true });
+      const terminals = [
+        { id: "t1", kind: "terminal", title: "Shell", cwd: "/home", location: "grid" },
+        { id: "t2", kind: "agent", title: "Claude", location: "dock", worktreeId: "w1" },
+      ];
+      fs.writeFileSync(
+        path.join(backupDir, "session-state.json"),
+        JSON.stringify({ capturedAt: Date.now(), appState: { terminals } })
+      );
+
+      // Set up crash marker
+      const markerPath = path.join(userData, "running.lock");
+      fs.writeFileSync(
+        markerPath,
+        JSON.stringify({
+          sessionStartMs: Date.now() - 5000,
+          appVersion: "1.0.0",
+          platform: "darwin",
+        })
+      );
+
+      storeMock.get.mockReturnValue({ autoRestoreOnCrash: false });
+
+      const svc = makeService();
+      svc.initialize();
+
+      const pending = svc.getPendingCrash();
+      expect(pending).not.toBeNull();
+      expect(pending!.panels).toBeDefined();
+      expect(pending!.panels!.length).toBe(2);
+      expect(pending!.panels![0]).toMatchObject({ id: "t1", kind: "terminal", title: "Shell" });
+      expect(pending!.panels![1]).toMatchObject({ id: "t2", kind: "agent", location: "dock" });
+    });
+
+    it("marks panels as suspect when created near crash time", () => {
+      const crashTime = Date.now();
+      const backupDir = path.join(userData, "backups");
+      fs.mkdirSync(backupDir, { recursive: true });
+      const terminals = [
+        {
+          id: "t1",
+          kind: "terminal",
+          title: "Old",
+          location: "grid",
+          createdAt: crashTime - 120_000,
+        },
+        {
+          id: "t2",
+          kind: "terminal",
+          title: "New",
+          location: "grid",
+          createdAt: crashTime - 5_000,
+        },
+      ];
+      fs.writeFileSync(
+        path.join(backupDir, "session-state.json"),
+        JSON.stringify({ capturedAt: Date.now(), appState: { terminals } })
+      );
+
+      const markerPath = path.join(userData, "running.lock");
+      fs.writeFileSync(
+        markerPath,
+        JSON.stringify({
+          sessionStartMs: Date.now() - 5000,
+          appVersion: "1.0.0",
+          platform: "darwin",
+        })
+      );
+
+      storeMock.get.mockReturnValue({ autoRestoreOnCrash: false });
+
+      const svc = makeService();
+      svc.initialize();
+
+      const pending = svc.getPendingCrash();
+      expect(pending!.panels![0].isSuspect).toBe(false);
+      expect(pending!.panels![1].isSuspect).toBe(true);
+    });
+
+    it("returns undefined panels when no backup exists", () => {
+      const markerPath = path.join(userData, "running.lock");
+      fs.writeFileSync(
+        markerPath,
+        JSON.stringify({
+          sessionStartMs: Date.now() - 5000,
+          appVersion: "1.0.0",
+          platform: "darwin",
+        })
+      );
+
+      storeMock.get.mockReturnValue({ autoRestoreOnCrash: false });
+
+      const svc = makeService();
+      svc.initialize();
+
+      const pending = svc.getPendingCrash();
+      expect(pending).not.toBeNull();
+      expect(pending!.panels).toBeUndefined();
+    });
+  });
+
+  describe("panel filter", () => {
+    it("setPanelFilter and consumePanelFilter work as one-shot", () => {
+      const svc = makeService();
+      expect(svc.consumePanelFilter()).toBeNull();
+
+      svc.setPanelFilter(["t1", "t2"]);
+      expect(svc.consumePanelFilter()).toEqual(["t1", "t2"]);
+      expect(svc.consumePanelFilter()).toBeNull();
+    });
+  });
+
+  describe("scheduleBackup", () => {
+    it("debounces backup calls", () => {
+      vi.useFakeTimers();
+      storeMock.get.mockImplementation((key: string) => {
+        if (key === "appState") return { sidebarWidth: 400, terminals: [] };
+        if (key === "windowState") return { width: 1200, height: 800, isMaximized: false };
+        return { autoRestoreOnCrash: false };
+      });
+
+      const svc = makeService();
+      svc.initialize();
+
+      const spy = vi.spyOn(svc, "takeBackup");
+      svc.scheduleBackup();
+      svc.scheduleBackup();
+      svc.scheduleBackup();
+
+      expect(spy).not.toHaveBeenCalled();
+
+      vi.advanceTimersByTime(1500);
+      expect(spy).toHaveBeenCalledTimes(1);
+
+      vi.useRealTimers();
+    });
+
+    it("stopBackupTimer cancels pending debounce", () => {
+      vi.useFakeTimers();
+      storeMock.get.mockReturnValue({ autoRestoreOnCrash: false });
+
+      const svc = makeService();
+      svc.initialize();
+
+      const spy = vi.spyOn(svc, "takeBackup");
+      svc.scheduleBackup();
+      svc.stopBackupTimer();
+
+      vi.advanceTimersByTime(2000);
+      expect(spy).not.toHaveBeenCalled();
+
+      vi.useRealTimers();
     });
   });
 

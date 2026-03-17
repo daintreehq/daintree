@@ -5,6 +5,7 @@ import { GitHubStatsCache } from "./GitHubStatsCache.js";
 import type {
   GitHubIssue,
   GitHubPR,
+  GitHubPRCIStatus,
   GitHubUser,
   GitHubListOptions,
   GitHubListResponse,
@@ -640,15 +641,21 @@ export function clearGitHubCaches(): void {
   prTooltipCache.clear();
 }
 
+export function clearPRCaches(): void {
+  prListCache.clear();
+  prTooltipCache.clear();
+}
+
 function buildListCacheKey(
   type: "issue" | "pr",
   owner: string,
   repo: string,
   state: string,
   search: string,
+  sortOrder: string,
   cursor: string
 ): string {
-  return `${type}:${owner}/${repo}:${state}:${search}:${cursor}`;
+  return `${type}:${owner}/${repo}:${state}:${search}:${sortOrder}:${cursor}`;
 }
 
 function mapIssueStates(state?: string): string[] {
@@ -789,6 +796,13 @@ function parsePRNode(node: Record<string, unknown>): GitHubPR {
   const baseName = baseRepo?.nameWithOwner;
   const isFork = headName && baseName ? headName !== baseName : undefined;
 
+  const commitsData = node.commits as
+    | { nodes?: Array<{ commit?: { statusCheckRollup?: { state?: string } | null } | null }> }
+    | undefined;
+  const ciStatus = commitsData?.nodes?.[0]?.commit?.statusCheckRollup?.state as
+    | GitHubPRCIStatus
+    | undefined;
+
   return {
     number: node.number as number,
     title: node.title as string,
@@ -803,6 +817,7 @@ function parsePRNode(node: Record<string, unknown>): GitHubPR {
     reviewCount: reviewsData?.totalCount,
     headRefName: (node.headRefName as string) || undefined,
     isFork: isFork ?? undefined,
+    ciStatus,
   };
 }
 
@@ -814,6 +829,12 @@ export async function listIssues(
     throw new Error("GitHub token not configured. Set it in Settings.");
   }
 
+  const resolvedSortOrder = options.sortOrder ?? "created";
+  const orderBy = {
+    field: resolvedSortOrder === "updated" ? "UPDATED_AT" : "CREATED_AT",
+    direction: "DESC",
+  };
+
   return withRepoContextRetry(options.cwd, async (context) => {
     const cacheKey = buildListCacheKey(
       "issue",
@@ -821,10 +842,11 @@ export async function listIssues(
       context.repo,
       options.state ?? "open",
       options.search ?? "",
+      resolvedSortOrder,
       options.cursor ?? ""
     );
 
-    if (!options.search) {
+    if (!options.search && !options.bypassCache) {
       const cached = issueListCache.get(cacheKey);
       if (cached) return cached;
     }
@@ -864,6 +886,7 @@ export async function listIssues(
           states,
           cursor: options.cursor,
           limit: 20,
+          orderBy,
         })) as GraphQlQueryResponseData;
 
         const issues = response?.repository?.issues;
@@ -918,6 +941,12 @@ export async function listPullRequests(
     throw new Error("GitHub token not configured. Set it in Settings.");
   }
 
+  const resolvedSortOrder = options.sortOrder ?? "created";
+  const orderBy = {
+    field: resolvedSortOrder === "updated" ? "UPDATED_AT" : "CREATED_AT",
+    direction: "DESC",
+  };
+
   return withRepoContextRetry(options.cwd, async (context) => {
     const cacheKey = buildListCacheKey(
       "pr",
@@ -925,10 +954,11 @@ export async function listPullRequests(
       context.repo,
       options.state ?? "open",
       options.search ?? "",
+      resolvedSortOrder,
       options.cursor ?? ""
     );
 
-    if (!options.search) {
+    if (!options.search && !options.bypassCache) {
       const cached = prListCache.get(cacheKey);
       if (cached) return cached;
     }
@@ -971,6 +1001,7 @@ export async function listPullRequests(
           states,
           cursor: options.cursor,
           limit: 20,
+          orderBy,
         })) as GraphQlQueryResponseData;
 
         const pullRequests = response?.repository?.pullRequests;

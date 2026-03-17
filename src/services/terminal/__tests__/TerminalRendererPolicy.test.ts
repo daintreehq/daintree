@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { TerminalRefreshTier } from "../../../../shared/types/domain";
+import { TerminalRefreshTier } from "../../../../shared/types/panel";
 import type { ManagedTerminal } from "../types";
 import type { RendererPolicyDeps } from "../TerminalRendererPolicy";
 
@@ -203,7 +203,7 @@ describe("TerminalRendererPolicy", () => {
       expect(onPostWake).not.toHaveBeenCalled();
     });
 
-    it("preserves scroll-to-bottom behavior for non-alt terminals", async () => {
+    it("does not auto-scroll to bottom for non-alt terminals after wake", async () => {
       mockManagedTerminal.isAltBuffer = false;
       mockManagedTerminal.needsWake = true;
       mockManagedTerminal.lastAppliedTier = TerminalRefreshTier.BACKGROUND;
@@ -212,6 +212,7 @@ describe("TerminalRendererPolicy", () => {
 
       const terminal = mockManagedTerminal.terminal as unknown as {
         scrollToBottom: ReturnType<typeof vi.fn>;
+        refresh: ReturnType<typeof vi.fn>;
       };
 
       const { TerminalRendererPolicy } = await import("../TerminalRendererPolicy");
@@ -221,8 +222,43 @@ describe("TerminalRendererPolicy", () => {
       policy.applyRendererPolicy("test-id", TerminalRefreshTier.FOCUSED);
 
       await vi.waitFor(() => {
-        expect(terminal.scrollToBottom).toHaveBeenCalledTimes(1);
+        expect(mockDeps.wakeAndRestore).toHaveBeenCalled();
       });
+
+      expect(terminal.scrollToBottom).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("onTierApplied callback", () => {
+    it("fires immediately on upgrade to FOCUSED", async () => {
+      const onTierApplied = vi.fn();
+      mockDeps.onTierApplied = onTierApplied;
+      mockManagedTerminal.lastAppliedTier = TerminalRefreshTier.VISIBLE;
+
+      const { TerminalRendererPolicy } = await import("../TerminalRendererPolicy");
+      policy = new TerminalRendererPolicy(mockDeps);
+
+      policy.applyRendererPolicy("test-id", TerminalRefreshTier.FOCUSED);
+
+      expect(onTierApplied).toHaveBeenCalledWith(
+        "test-id",
+        TerminalRefreshTier.FOCUSED,
+        mockManagedTerminal
+      );
+    });
+
+    it("does not fire for no-op tier changes", async () => {
+      const onTierApplied = vi.fn();
+      mockDeps.onTierApplied = onTierApplied;
+      mockManagedTerminal.lastAppliedTier = TerminalRefreshTier.FOCUSED;
+
+      const { TerminalRendererPolicy } = await import("../TerminalRendererPolicy");
+      policy = new TerminalRendererPolicy(mockDeps);
+
+      // Same tier — should be a no-op, callback should not fire
+      policy.applyRendererPolicy("test-id", TerminalRefreshTier.FOCUSED);
+
+      expect(onTierApplied).not.toHaveBeenCalled();
     });
   });
 

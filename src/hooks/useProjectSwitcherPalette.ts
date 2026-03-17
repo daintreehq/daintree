@@ -1,6 +1,7 @@
 import { useState, useCallback, useMemo, useEffect, useRef } from "react";
 import Fuse, { type IFuseOptions } from "fuse.js";
 import { useProjectStore } from "@/store/projectStore";
+import { usePaletteStore } from "@/store/paletteStore";
 import { notify } from "@/lib/notify";
 import type { Project, ProjectStats } from "@shared/types";
 import { projectClient, terminalClient } from "@/clients";
@@ -20,6 +21,7 @@ export interface SearchableProject {
   isActive: boolean;
   isBackground: boolean;
   isMissing: boolean;
+  isPinned: boolean;
   activeAgentCount: number;
   waitingAgentCount: number;
   processCount: number;
@@ -43,6 +45,7 @@ export interface UseProjectSwitcherPaletteReturn {
   stopProject: (projectId: string) => Promise<void>;
   removeProject: (projectId: string) => Promise<void>;
   locateProject: (projectId: string) => Promise<void>;
+  togglePinProject: (projectId: string) => Promise<void>;
   stopConfirmProjectId: string | null;
   setStopConfirmProjectId: (projectId: string | null) => void;
   confirmStopProject: () => Promise<void>;
@@ -51,6 +54,7 @@ export interface UseProjectSwitcherPaletteReturn {
   setRemoveConfirmProject: (project: SearchableProject | null) => void;
   confirmRemoveProject: () => Promise<void>;
   isRemovingProject: boolean;
+  backgroundWaitingCount: number;
 }
 
 const FUSE_OPTIONS: IFuseOptions<SearchableProject> = {
@@ -66,8 +70,10 @@ const MAX_RESULTS = 15;
 const DEBOUNCE_MS = 150;
 
 export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
-  const [isOpen, setIsOpen] = useState(false);
+  const modalIsOpen = usePaletteStore((state) => state.activePaletteId === "project-switcher");
+  const [dropdownIsOpen, setDropdownIsOpen] = useState(false);
   const [mode, setMode] = useState<ProjectSwitcherMode>("modal");
+  const isOpen = mode === "modal" ? modalIsOpen : dropdownIsOpen;
   const [query, setQuery] = useState("");
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [debouncedQuery, setDebouncedQuery] = useState("");
@@ -212,6 +218,17 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
     }
   }, [isOpen, projects, fetchStats]);
 
+  useEffect(() => {
+    if (isOpen) return;
+    if (projects.length <= 1) return;
+
+    const id = setInterval(() => {
+      void fetchStats();
+    }, 10_000);
+
+    return () => clearInterval(id);
+  }, [isOpen, projects.length, fetchStats]);
+
   const searchableProjects = useMemo<SearchableProject[]>(() => {
     return projects.map((p) => {
       const stats = projectStats.get(p.id);
@@ -232,12 +249,21 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
         isActive,
         isBackground,
         isMissing,
+        isPinned: p.pinned ?? false,
         activeAgentCount: counts?.activeAgentCount ?? 0,
         waitingAgentCount: counts?.waitingAgentCount ?? 0,
         processCount: stats?.processCount ?? 0,
       };
     });
   }, [projects, projectStats, terminalCounts, currentProject?.id]);
+
+  const backgroundWaitingCount = useMemo(
+    () =>
+      searchableProjects
+        .filter((p) => !p.isActive && p.isBackground && p.waitingAgentCount > 0)
+        .reduce((sum, p) => sum + p.waitingAgentCount, 0),
+    [searchableProjects]
+  );
 
   const sortedProjects = useMemo<SearchableProject[]>(() => {
     return [...searchableProjects].sort((a, b) => {
@@ -254,7 +280,20 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
 
   const results = useMemo<SearchableProject[]>(() => {
     if (!debouncedQuery.trim()) {
-      return sortedProjects.slice(0, MAX_RESULTS);
+      // Ensure pinned projects are always visible when browsing
+      const pinned = sortedProjects.filter((p) => p.isPinned);
+      const rest = sortedProjects.filter((p) => !p.isPinned);
+      const combined = [...pinned, ...rest];
+      // Deduplicate while preserving order (pinned first, then rest by recency)
+      const seen = new Set<string>();
+      const deduped: SearchableProject[] = [];
+      for (const p of combined) {
+        if (!seen.has(p.id)) {
+          seen.add(p.id);
+          deduped.push(p);
+        }
+      }
+      return deduped.slice(0, MAX_RESULTS);
     }
 
     const fuseResults = fuse.search(debouncedQuery);
@@ -304,7 +343,11 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
   const open = useCallback(
     (nextMode: ProjectSwitcherMode = "modal") => {
       setMode(nextMode);
-      setIsOpen(true);
+      if (nextMode === "modal") {
+        usePaletteStore.getState().openPalette("project-switcher");
+      } else {
+        setDropdownIsOpen(true);
+      }
       setQuery("");
       setSelectedIndex(sortedProjects.length >= 2 ? 1 : 0);
       setDebouncedQuery("");
@@ -313,15 +356,20 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
   );
 
   const close = useCallback(() => {
-    setIsOpen(false);
+    if (mode === "modal") {
+      usePaletteStore.getState().closePalette("project-switcher");
+    } else {
+      setDropdownIsOpen(false);
+    }
     setQuery("");
     setSelectedIndex(0);
     setDebouncedQuery("");
-  }, []);
+  }, [mode]);
 
   const toggle = useCallback(
     (nextMode: ProjectSwitcherMode = "modal") => {
-      if (isOpen) {
+      const currentlyOpen = nextMode === "modal" ? modalIsOpen : dropdownIsOpen;
+      if (currentlyOpen) {
         setSelectedIndex((prev) => {
           if (results.length <= 1) return prev;
           const next = prev + 1;
@@ -335,7 +383,7 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
         open(nextMode);
       }
     },
-    [isOpen, open, results]
+    [modalIsOpen, dropdownIsOpen, open, results]
   );
 
   const selectPrevious = useCallback(() => {
@@ -399,6 +447,25 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
       await locateProjectFn(projectId);
     },
     [locateProjectFn]
+  );
+
+  const togglePinProject = useCallback(
+    async (projectId: string) => {
+      const project = searchableProjects.find((p) => p.id === projectId);
+      if (!project) return;
+      try {
+        await projectClient.update(projectId, { pinned: !project.isPinned });
+        await loadProjects();
+      } catch (error) {
+        notify({
+          type: "error",
+          title: "Failed to update project",
+          message: error instanceof Error ? error.message : "Unknown error",
+          duration: 5000,
+        });
+      }
+    },
+    [searchableProjects, loadProjects]
   );
 
   const stopProject = useCallback(
@@ -502,6 +569,7 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
     stopProject,
     removeProject: removeProjectFromList,
     locateProject,
+    togglePinProject,
     stopConfirmProjectId,
     setStopConfirmProjectId,
     confirmStopProject,
@@ -510,5 +578,6 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
     setRemoveConfirmProject,
     confirmRemoveProject,
     isRemovingProject,
+    backgroundWaitingCount,
   };
 }

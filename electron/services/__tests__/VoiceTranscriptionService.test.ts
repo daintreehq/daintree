@@ -85,9 +85,14 @@ const BASE_SETTINGS: VoiceInputSettings = {
   paragraphingStrategy: "spoken-command",
 };
 
-function makeTranscriptEvent(transcript: string, isFinal: boolean, speechFinal: boolean): unknown {
+function makeTranscriptEvent(
+  transcript: string,
+  isFinal: boolean,
+  speechFinal: boolean,
+  words: Array<{ word: string; confidence: number }> = []
+): unknown {
   return {
-    channel: { alternatives: [{ transcript }] },
+    channel: { alternatives: [{ transcript, words }] },
     is_final: isFinal,
     speech_final: speechFinal,
   };
@@ -492,7 +497,7 @@ describe("VoiceTranscriptionService", () => {
         makeTranscriptEvent("First paragraph.\n\nSecond paragraph.", true, true)
       );
 
-      expect(events).toEqual([
+      expect(events).toMatchObject([
         { type: "complete", text: "First paragraph." },
         { type: "paragraph_boundary" },
         { type: "complete", text: "Second paragraph." },
@@ -536,7 +541,7 @@ describe("VoiceTranscriptionService", () => {
         makeTranscriptEvent("\n\nOnly one paragraph.\n\n", true, true)
       );
 
-      expect(events).toEqual([{ type: "complete", text: "Only one paragraph." }]);
+      expect(events).toMatchObject([{ type: "complete", text: "Only one paragraph." }]);
     });
 
     it("collapses repeated \\n\\n delimiters to a single boundary", async () => {
@@ -556,7 +561,7 @@ describe("VoiceTranscriptionService", () => {
         makeTranscriptEvent("First.\n\n\n\nSecond.", true, true)
       );
 
-      expect(events).toEqual([
+      expect(events).toMatchObject([
         { type: "complete", text: "First." },
         { type: "paragraph_boundary" },
         { type: "complete", text: "Second." },
@@ -605,7 +610,7 @@ describe("VoiceTranscriptionService", () => {
       // UtteranceEnd flushes the accumulated segments
       conn.emit(deepgramMock.LiveTranscriptionEvents.UtteranceEnd);
 
-      expect(events).toEqual([
+      expect(events).toMatchObject([
         { type: "complete", text: "Part one." },
         { type: "paragraph_boundary" },
         { type: "complete", text: "Part two." },
@@ -820,7 +825,7 @@ describe("VoiceTranscriptionService", () => {
         (e) => e.type === "complete" || e.type === "paragraph_boundary"
       );
       expect(relevant).toHaveLength(2);
-      expect(relevant[0]).toEqual({ type: "complete", text: "Para one text." });
+      expect(relevant[0]).toMatchObject({ type: "complete", text: "Para one text." });
       expect(relevant[1]).toEqual({ type: "paragraph_boundary" });
     });
 
@@ -915,7 +920,7 @@ describe("VoiceTranscriptionService", () => {
 
     it("returns empty string when no utterance is in flight", async () => {
       const { service } = await startService();
-      expect(service.commitParagraphBoundary()).toBe("");
+      expect(service.commitParagraphBoundary().text).toBe("");
     });
 
     it("returns accumulated delta text (liveText) and clears utterance state", async () => {
@@ -927,10 +932,12 @@ describe("VoiceTranscriptionService", () => {
         makeTranscriptEvent("how are", false, false)
       );
 
-      expect(service.commitParagraphBoundary()).toBe("how are");
+      const result = service.commitParagraphBoundary();
+      expect(result.text).toBe("how are");
+      expect(result.confidence.minConfidence).toBe(0);
 
       // Subsequent call returns empty — utterance state was cleared
-      expect(service.commitParagraphBoundary()).toBe("");
+      expect(service.commitParagraphBoundary().text).toBe("");
     });
 
     it("returns is_final accumulated text (which is_final also stores in liveText)", async () => {
@@ -942,7 +949,7 @@ describe("VoiceTranscriptionService", () => {
         deepgramMock.LiveTranscriptionEvents.Transcript,
         makeTranscriptEvent("hello world", true, false)
       );
-      expect(service.commitParagraphBoundary()).toBe("hello world");
+      expect(service.commitParagraphBoundary().text).toBe("hello world");
     });
 
     it("late speech_final after commitParagraphBoundary does not emit complete", async () => {
@@ -1067,13 +1074,13 @@ describe("VoiceTranscriptionService", () => {
         makeTranscriptEvent("first", false, false)
       );
 
-      const text1 = service.commitParagraphBoundary();
+      const result1 = service.commitParagraphBoundary();
       // Second call finds no in-flight text — returns "" and does NOT clear the
       // first call's suppression flag (only armed when non-empty text was captured).
-      const text2 = service.commitParagraphBoundary();
+      const result2 = service.commitParagraphBoundary();
 
-      expect(text1).toBe("first");
-      expect(text2).toBe("");
+      expect(result1.text).toBe("first");
+      expect(result2.text).toBe("");
 
       events.length = 0;
 
@@ -1132,7 +1139,7 @@ describe("VoiceTranscriptionService", () => {
       });
 
       // Only transcript text is used — paragraphs field is ignored
-      expect(events).toEqual([{ type: "complete", text: "Hello world" }]);
+      expect(events).toMatchObject([{ type: "complete", text: "Hello world" }]);
     });
 
     it("non-prefix interim revision produces correct final text without spurious events", async () => {
@@ -1239,6 +1246,157 @@ describe("VoiceTranscriptionService", () => {
       await stopPromise;
 
       expect(statuses).toEqual(["connecting", "recording", "finishing", "idle"]);
+    });
+  });
+
+  describe("word-level confidence propagation", () => {
+    async function startService() {
+      const service = new VoiceTranscriptionService();
+      const events: Array<{ type: string; text?: string; confidence?: unknown }> = [];
+      service.onEvent((e) => events.push(e));
+
+      const p = service.start(BASE_SETTINGS);
+      const conn = deepgramMock.instances.at(-1)!;
+      conn.emit(deepgramMock.LiveTranscriptionEvents.Open);
+      await p;
+
+      return { service, events, conn };
+    }
+
+    it("includes confidence on complete events when words are provided", async () => {
+      const { conn, events } = await startService();
+
+      conn.emit(
+        deepgramMock.LiveTranscriptionEvents.Transcript,
+        makeTranscriptEvent("Hello world", true, true, [
+          { word: "hello", confidence: 0.99 },
+          { word: "world", confidence: 0.95 },
+        ])
+      );
+
+      const complete = events.find((e) => e.type === "complete");
+      expect(complete).toBeDefined();
+      expect(complete!.confidence).toEqual({
+        minConfidence: 0.95,
+        wordCount: 2,
+        uncertainWords: [],
+        words: [
+          { word: "hello", confidence: 0.99 },
+          { word: "world", confidence: 0.95 },
+        ],
+      });
+    });
+
+    it("marks words below tag threshold as uncertain", async () => {
+      const { conn, events } = await startService();
+
+      conn.emit(
+        deepgramMock.LiveTranscriptionEvents.Transcript,
+        makeTranscriptEvent("racked native", true, true, [
+          { word: "racked", confidence: 0.65 },
+          { word: "native", confidence: 0.92 },
+        ])
+      );
+
+      const complete = events.find((e) => e.type === "complete");
+      expect(complete!.confidence).toEqual({
+        minConfidence: 0.65,
+        wordCount: 2,
+        uncertainWords: ["racked"],
+        words: [
+          { word: "racked", confidence: 0.65 },
+          { word: "native", confidence: 0.92 },
+        ],
+      });
+    });
+
+    it("merges confidence across multiple is_final segments", async () => {
+      const { conn, events } = await startService();
+
+      conn.emit(
+        deepgramMock.LiveTranscriptionEvents.Transcript,
+        makeTranscriptEvent("Hello", true, false, [{ word: "hello", confidence: 0.99 }])
+      );
+      conn.emit(
+        deepgramMock.LiveTranscriptionEvents.Transcript,
+        makeTranscriptEvent("world", true, true, [{ word: "world", confidence: 0.75 }])
+      );
+
+      const complete = events.find((e) => e.type === "complete");
+      expect(complete!.confidence).toEqual({
+        minConfidence: 0.75,
+        wordCount: 2,
+        uncertainWords: ["world"],
+        words: [
+          { word: "hello", confidence: 0.99 },
+          { word: "world", confidence: 0.75 },
+        ],
+      });
+    });
+
+    it("returns default confidence when words array is empty", async () => {
+      const { conn, events } = await startService();
+
+      conn.emit(
+        deepgramMock.LiveTranscriptionEvents.Transcript,
+        makeTranscriptEvent("Hello world", true, true)
+      );
+
+      const complete = events.find((e) => e.type === "complete");
+      expect(complete!.confidence).toEqual({
+        minConfidence: 1.0,
+        wordCount: 0,
+        uncertainWords: [],
+        words: [],
+      });
+    });
+
+    it("resets confidence accumulator after speech_final", async () => {
+      const { conn, events } = await startService();
+
+      conn.emit(
+        deepgramMock.LiveTranscriptionEvents.Transcript,
+        makeTranscriptEvent("first", true, true, [{ word: "first", confidence: 0.5 }])
+      );
+      conn.emit(
+        deepgramMock.LiveTranscriptionEvents.Transcript,
+        makeTranscriptEvent("second", true, true, [{ word: "second", confidence: 0.99 }])
+      );
+
+      const completes = events.filter((e) => e.type === "complete");
+      expect(completes[0].confidence).toMatchObject({ minConfidence: 0.5 });
+      expect(completes[1].confidence).toMatchObject({ minConfidence: 0.99 });
+    });
+
+    it("commitParagraphBoundary returns conservative confidence (minConfidence=0)", async () => {
+      const { service, conn } = await startService();
+
+      conn.emit(
+        deepgramMock.LiveTranscriptionEvents.Transcript,
+        makeTranscriptEvent("in flight", false, false)
+      );
+
+      const result = service.commitParagraphBoundary();
+      expect(result.text).toBe("in flight");
+      expect(result.confidence.minConfidence).toBe(0);
+    });
+
+    it("includes confidence on complete events emitted via UtteranceEnd flush", async () => {
+      const { conn, events } = await startService();
+
+      conn.emit(
+        deepgramMock.LiveTranscriptionEvents.Transcript,
+        makeTranscriptEvent("Hello", true, false, [{ word: "hello", confidence: 0.88 }])
+      );
+      conn.emit(deepgramMock.LiveTranscriptionEvents.UtteranceEnd);
+
+      const complete = events.find((e) => e.type === "complete");
+      expect(complete!.confidence).toEqual({
+        minConfidence: 0.88,
+        wordCount: 1,
+        uncertainWords: [],
+        words: [{ word: "hello", confidence: 0.88 }],
+      });
     });
   });
 });

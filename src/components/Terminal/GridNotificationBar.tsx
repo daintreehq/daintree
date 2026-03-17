@@ -106,7 +106,7 @@ export function GridNotificationBar({ className }: GridNotificationBarProps) {
                 "h-7 rounded-[var(--radius-sm)] px-3 text-xs font-medium transition-colors",
                 "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-canopy-accent/60",
                 action.variant === "secondary"
-                  ? "border border-white/15 bg-white/5 text-canopy-text/80 hover:bg-white/10 hover:text-canopy-text"
+                  ? "border border-tint/15 bg-tint/5 text-canopy-text/80 hover:bg-tint/10 hover:text-canopy-text"
                   : "border border-canopy-accent/40 bg-canopy-accent/15 text-canopy-accent hover:bg-canopy-accent/25"
               )}
             >
@@ -120,7 +120,7 @@ export function GridNotificationBar({ className }: GridNotificationBarProps) {
         <button
           type="button"
           onClick={() => removeNotification(notification.id)}
-          className="h-7 shrink-0 rounded-[var(--radius-sm)] border border-white/10 bg-white/5 px-2 text-xs text-canopy-text/60 transition-colors hover:bg-white/10 hover:text-canopy-text/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-canopy-accent/60"
+          className="h-7 shrink-0 rounded-[var(--radius-sm)] border border-tint/10 bg-tint/5 px-2 text-xs text-canopy-text/60 transition-colors hover:bg-tint/10 hover:text-canopy-text/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-canopy-accent/60"
         >
           Dismiss
         </button>

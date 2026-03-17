@@ -21,12 +21,8 @@ import { hasGitHubToken, getRepoContext, getIssueUrl } from "../GitHubService.js
 import { GitHubAuth, GET_ISSUE_QUERY } from "../github/index.js";
 import { getWorkspaceClient } from "../WorkspaceClient.js";
 import { GitService } from "../GitService.js";
-import { store } from "../../store.js";
-import {
-  generateWorktreePath,
-  DEFAULT_WORKTREE_PATH_PATTERN,
-  validatePathPattern,
-} from "../../../shared/utils/pathPattern.js";
+import { generateWorktreePath, validatePathPattern } from "../../../shared/utils/pathPattern.js";
+import { resolveWorktreePattern } from "../../utils/worktreePattern.js";
 
 /** Arguments for the github:work-issue command */
 export interface GitHubWorkIssueArgs {
@@ -420,12 +416,8 @@ export const githubWorkIssueCommand: CanopyCommand<GitHubWorkIssueArgs, GitHubWo
       };
     }
 
-    // Generate worktree path using configured pattern (from rootPath)
-    const configPattern = store.get("worktreeConfig.pathPattern");
-    const pattern =
-      typeof configPattern === "string" && configPattern.trim()
-        ? configPattern
-        : DEFAULT_WORKTREE_PATH_PATTERN;
+    // Generate worktree path using configured pattern (project-level → global → default)
+    const pattern = await resolveWorktreePattern(rootPath);
 
     const validation = validatePathPattern(pattern);
     if (!validation.valid) {

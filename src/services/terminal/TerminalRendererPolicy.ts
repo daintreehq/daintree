@@ -7,6 +7,7 @@ export interface RendererPolicyDeps {
   getInstance: (id: string) => ManagedTerminal | undefined;
   wakeAndRestore: (id: string) => Promise<boolean>;
   onPostWake?: (id: string) => void;
+  onTierApplied?: (id: string, tier: TerminalRefreshTier, managed: ManagedTerminal) => void;
 }
 
 export class TerminalRendererPolicy {
@@ -111,8 +112,6 @@ export class TerminalRendererPolicy {
 
             if (ok && current.isAltBuffer) {
               this.deps.onPostWake?.(id);
-            } else if (ok && current.latestWasAtBottom && current.isVisible) {
-              current.terminal.scrollToBottom();
             }
           })
           .catch(() => {
@@ -131,6 +130,8 @@ export class TerminalRendererPolicy {
         managed.terminal.refresh(0, managed.terminal.rows - 1);
       }
     }
+
+    this.deps.onTierApplied?.(id, tier, managed);
   }
 
   clearTierState(id: string): void {

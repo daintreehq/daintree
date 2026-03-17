@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
-import { Search, RotateCcw, AlertTriangle } from "lucide-react";
+import { Search, X, RotateCcw, AlertTriangle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
   keybindingService,
@@ -280,6 +280,7 @@ function ShortcutRow({ binding, isEditing, onEdit, onSave, onCancel, onReset }: 
 
 export function KeyboardShortcutsTab() {
   const [searchQuery, setSearchQuery] = useState("");
+  const searchInputRef = useRef<HTMLInputElement>(null);
   const [editingActionId, setEditingActionId] = useState<string | null>(null);
   const [bindings, setBindings] = useState<ShortcutBinding[]>([]);
   const [, setUpdateKey] = useState(0);
@@ -389,18 +390,59 @@ export function KeyboardShortcutsTab() {
 
   const hasOverrides = bindings.some((b) => b.isOverridden);
 
+  const handleSearchKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLInputElement>) => {
+      if (e.key === "Escape") {
+        if (searchQuery !== "") {
+          e.stopPropagation();
+          setSearchQuery("");
+        } else {
+          searchInputRef.current?.blur();
+        }
+      }
+    },
+    [searchQuery]
+  );
+
+  const handleClearSearch = useCallback(() => {
+    setSearchQuery("");
+    searchInputRef.current?.focus();
+  }, []);
+
   return (
     <div className="space-y-4">
       <div className="flex items-center gap-3">
-        <div className="relative flex-1">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-canopy-text/60" />
+        <div
+          className={cn(
+            "flex items-center gap-1.5 px-2 py-1.5 flex-1 min-w-0 rounded-[var(--radius-md)]",
+            "bg-canopy-bg border border-canopy-border",
+            "focus-within:border-canopy-accent focus-within:ring-1 focus-within:ring-canopy-accent/20"
+          )}
+        >
+          <Search
+            className="w-3.5 h-3.5 shrink-0 text-canopy-text/40 pointer-events-none"
+            aria-hidden="true"
+          />
           <input
+            ref={searchInputRef}
             type="text"
             placeholder="Search shortcuts..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            className="w-full pl-9 pr-3 py-2 bg-canopy-bg border border-canopy-border rounded text-sm text-canopy-text placeholder:text-canopy-text/40 focus:outline-none focus:border-canopy-accent"
+            onKeyDown={handleSearchKeyDown}
+            aria-label="Search shortcuts"
+            className="flex-1 min-w-0 text-xs bg-transparent text-canopy-text placeholder:text-text-muted focus:outline-none"
           />
+          {searchQuery && (
+            <button
+              type="button"
+              onClick={handleClearSearch}
+              aria-label="Clear search"
+              className="flex items-center justify-center w-5 h-5 rounded shrink-0 text-canopy-text/40 hover:text-canopy-text"
+            >
+              <X className="w-3 h-3" />
+            </button>
+          )}
         </div>
         <KeybindingProfileActions onImportComplete={loadBindings} />
         <button

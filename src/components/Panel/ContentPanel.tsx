@@ -4,6 +4,7 @@ import { PanelHeader } from "./PanelHeader";
 import { useIsDragging } from "@/components/DragDrop";
 import { TitleEditingProvider, useTitleEditing } from "./TitleEditingContext";
 import { TerminalHeaderContent } from "@/components/Terminal/TerminalHeaderContent";
+import { TerminalContextMenu } from "@/components/Terminal/TerminalContextMenu";
 import type { PanelKind, TerminalType, AgentState } from "@/types";
 import type { ActivityState } from "@/components/Terminal/TerminalPane";
 import type { TabInfo } from "./TabButton";
@@ -221,73 +222,75 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
   );
 
   return (
-    <div
-      ref={ref}
-      data-panel-id={id}
-      data-panel-location={location}
-      className={cn(
-        "flex flex-col h-full overflow-hidden group",
-        location === "grid" && !isMaximized && "bg-surface",
-        (location === "dock" || isMaximized) && "bg-canopy-bg",
-        location === "grid" && !isMaximized && "rounded border shadow-md",
-        location === "grid" &&
-          !isMaximized &&
-          (isFocused && showGridAttention
-            ? "terminal-selected"
-            : "border-overlay hover:border-white/[0.08]"),
-        location === "grid" && isMaximized && "border-0 rounded-none z-[var(--z-maximized)]",
-        isTrashing && "terminal-trashing",
-        className
-      )}
-      onClick={handleClick}
-      onKeyDown={onKeyDown}
-      tabIndex={tabIndex}
-      role={role}
-      aria-label={ariaLabel}
-    >
-      <PanelHeader
-        isDragging={isDragging}
-        id={id}
-        title={title}
-        kind={kind}
-        type={type}
-        agentId={agentId}
-        detectedProcessId={detectedProcessId}
-        isFocused={isFocused}
-        isMaximized={isMaximized}
-        location={location}
-        isEditingTitle={titleEditing.isEditingTitle}
-        editingValue={titleEditing.editingValue}
-        titleInputRef={titleInputRef}
-        onEditingValueChange={titleEditing.setEditingValue}
-        onTitleDoubleClick={handleTitleDoubleClick}
-        onTitleKeyDown={handleTitleKeyDown}
-        onTitleInputKeyDown={handleTitleInputKeyDown}
-        onTitleSave={handleTitleSave}
-        onClose={onClose}
-        onFocus={onFocus}
-        onToggleMaximize={onToggleMaximize}
-        onTitleChange={onTitleChange}
-        onMinimize={onMinimize}
-        onRestore={onRestore}
-        onRestart={onRestart}
-        isPinged={isPinged}
-        wasJustSelected={wasJustSelected}
-        headerContent={resolvedHeaderContent}
-        headerActions={headerActions}
-        tabs={tabs}
-        groupId={groupId}
-        onTabClick={onTabClick}
-        onTabClose={onTabClose}
-        onTabRename={onTabRename}
-        onAddTab={onAddTab}
-        onTabReorder={onTabReorder}
-      />
+    <TerminalContextMenu terminalId={id} forceLocation={location}>
+      <div
+        ref={ref}
+        data-panel-id={id}
+        data-panel-location={location}
+        className={cn(
+          "flex flex-col h-full overflow-hidden group",
+          location === "grid" && !isMaximized && "bg-surface",
+          (location === "dock" || isMaximized) && "bg-canopy-bg",
+          location === "grid" && !isMaximized && "rounded border shadow-md",
+          location === "grid" &&
+            !isMaximized &&
+            (isFocused && showGridAttention
+              ? "terminal-selected"
+              : "border-overlay hover:border-tint/[0.08]"),
+          location === "grid" && isMaximized && "border-0 rounded-none z-[var(--z-maximized)]",
+          isTrashing && "terminal-trashing",
+          className
+        )}
+        onClick={handleClick}
+        onKeyDown={onKeyDown}
+        tabIndex={tabIndex}
+        role={role}
+        aria-label={ariaLabel}
+      >
+        <PanelHeader
+          isDragging={isDragging}
+          id={id}
+          title={title}
+          kind={kind}
+          type={type}
+          agentId={agentId}
+          detectedProcessId={detectedProcessId}
+          isFocused={isFocused}
+          isMaximized={isMaximized}
+          location={location}
+          isEditingTitle={titleEditing.isEditingTitle}
+          editingValue={titleEditing.editingValue}
+          titleInputRef={titleInputRef}
+          onEditingValueChange={titleEditing.setEditingValue}
+          onTitleDoubleClick={handleTitleDoubleClick}
+          onTitleKeyDown={handleTitleKeyDown}
+          onTitleInputKeyDown={handleTitleInputKeyDown}
+          onTitleSave={handleTitleSave}
+          onClose={onClose}
+          onFocus={onFocus}
+          onToggleMaximize={onToggleMaximize}
+          onTitleChange={onTitleChange}
+          onMinimize={onMinimize}
+          onRestore={onRestore}
+          onRestart={onRestart}
+          isPinged={isPinged}
+          wasJustSelected={wasJustSelected}
+          headerContent={resolvedHeaderContent}
+          headerActions={headerActions}
+          tabs={tabs}
+          groupId={groupId}
+          onTabClick={onTabClick}
+          onTabClose={onTabClose}
+          onTabRename={onTabRename}
+          onAddTab={onAddTab}
+          onTabReorder={onTabReorder}
+        />
 
-      {toolbar}
+        {toolbar}
 
-      <div className="flex-1 min-h-0 relative flex flex-col">{children}</div>
-    </div>
+        <div className="flex-1 min-h-0 relative flex flex-col">{children}</div>
+      </div>
+    </TerminalContextMenu>
   );
 });
 

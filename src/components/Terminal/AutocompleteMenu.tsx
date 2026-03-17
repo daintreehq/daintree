@@ -35,7 +35,7 @@ export const AutocompleteMenu = forwardRef<HTMLDivElement, AutocompleteMenuProps
       <div
         ref={ref}
         className={cn(
-          "absolute bottom-full mb-0 w-[420px] max-w-[calc(100vw-16px)] overflow-hidden rounded-md border border-white/10 bg-surface shadow-2xl",
+          "absolute bottom-full mb-0 w-[420px] max-w-[calc(100vw-16px)] overflow-hidden rounded-md border border-tint/10 bg-surface shadow-2xl",
           "z-50"
         )}
         style={style}
@@ -43,7 +43,7 @@ export const AutocompleteMenu = forwardRef<HTMLDivElement, AutocompleteMenuProps
         aria-label={ariaLabel ?? title ?? "Autocomplete"}
       >
         {title && (
-          <div className="border-b border-white/5 px-2 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-canopy-text/40">
+          <div className="border-b border-tint/5 px-2 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-canopy-text/40">
             {title}
           </div>
         )}
@@ -69,7 +69,7 @@ export const AutocompleteMenu = forwardRef<HTMLDivElement, AutocompleteMenuProps
                         "flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left transition-colors",
                         idx === selectedIndex
                           ? "bg-canopy-accent/20 text-canopy-text"
-                          : "text-canopy-text/70 hover:bg-white/[0.05] hover:text-canopy-text"
+                          : "text-canopy-text/70 hover:bg-tint/[0.05] hover:text-canopy-text"
                       )}
                       onMouseDown={(e) => e.preventDefault()}
                       onClick={() => onSelect(item)}

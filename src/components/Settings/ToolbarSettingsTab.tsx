@@ -34,10 +34,10 @@ import {
 } from "lucide-react";
 import { ClaudeIcon, GeminiIcon, CodexIcon, OpenCodeIcon } from "@/components/icons";
 import { useToolbarPreferencesStore } from "@/store";
-import type { ToolbarButtonId } from "@/../../shared/types/domain";
+import type { ToolbarButtonId } from "@/../../shared/types/toolbar";
 import { cn } from "@/lib/utils";
 import { SettingsSection } from "./SettingsSection";
-import { SettingsCheckbox } from "./SettingsCheckbox";
+import { SettingsSwitchCard } from "./SettingsSwitchCard";
 
 type ButtonMetadata = { label: string; icon: React.ReactNode; description: string };
 
@@ -81,6 +81,11 @@ const BUTTON_METADATA: Partial<Record<ToolbarButtonId, ButtonMetadata>> = {
     label: "Dev Server",
     icon: <Monitor className="h-4 w-4" />,
     description: "Start development server",
+  },
+  "panel-palette": {
+    label: "Panel Palette",
+    icon: <LayoutGrid className="h-4 w-4" />,
+    description: "Open the panel launcher palette",
   },
   "voice-recording": {
     label: "Voice Recording",
@@ -295,12 +300,13 @@ export function ToolbarSettingsTab() {
         description="Configure defaults for the panel launcher palette."
       >
         <div className="space-y-4">
-          <SettingsCheckbox
-            id="always-show-dev-server"
-            label="Always show dev server in launcher"
-            description="Show dev server option even if no command is configured in project settings"
-            checked={launcher.alwaysShowDevServer}
-            onChange={(v) => setAlwaysShowDevServer(v)}
+          <SettingsSwitchCard
+            variant="compact"
+            title="Always show dev server in launcher"
+            subtitle="Show dev server option even if no command is configured in project settings"
+            isEnabled={launcher.alwaysShowDevServer}
+            onChange={() => setAlwaysShowDevServer(!launcher.alwaysShowDevServer)}
+            ariaLabel="Always show dev server in launcher"
           />
 
           <div className="space-y-2">
@@ -335,7 +341,7 @@ export function ToolbarSettingsTab() {
           onClick={reset}
           className={cn(
             "flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-[var(--radius-md)] border border-canopy-border",
-            "text-canopy-text/60 hover:text-canopy-text hover:bg-white/5 transition-colors"
+            "text-canopy-text/60 hover:text-canopy-text hover:bg-tint/5 transition-colors"
           )}
         >
           <RotateCcw className="w-3.5 h-3.5" />

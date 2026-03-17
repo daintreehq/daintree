@@ -1,6 +1,9 @@
-import type { AgentDetectionConfig } from "../../../shared/config/agentRegistry.js";
+import {
+  getEffectiveAgentConfig,
+  type AgentDetectionConfig,
+} from "../../../shared/config/agentRegistry.js";
 import type { PatternDetectionConfig } from "./AgentPatternDetector.js";
-import type { ProcessStateValidator } from "../ActivityMonitor.js";
+import type { ActivityMonitorOptions, ProcessStateValidator } from "../ActivityMonitor.js";
 import type { ProcessTreeCache } from "../ProcessTreeCache.js";
 
 export function buildPatternConfig(
@@ -129,24 +132,54 @@ export function createProcessStateValidator(
         return !shellHelperProcesses.has(name) && !shellProcesses.has(name);
       });
 
-      if (significantChildren.length > 0) {
-        if (process.platform === "win32") {
-          for (const child of children) {
-            const grandchildren = processTreeCache.getChildren(child.pid);
-            const significantGrandchildren = grandchildren.filter((gc) => {
-              const basename = gc.comm.split("/").pop()?.toLowerCase() || gc.comm.toLowerCase();
-              const name = basename.replace(/\.exe$/, "");
-              return !shellHelperProcesses.has(name) && !shellProcesses.has(name);
-            });
-            if (significantGrandchildren.length > 0) {
-              return true;
-            }
-          }
-        }
-        return false;
-      }
-
-      return false;
+      return significantChildren.length > 0;
     },
+  };
+}
+
+export function buildActivityMonitorOptions(
+  effectiveAgentId: string | undefined,
+  deps: {
+    getVisibleLines?: (n: number) => string[];
+    getCursorLine?: () => string | null;
+  }
+): ActivityMonitorOptions {
+  const agentConfig = effectiveAgentId ? getEffectiveAgentConfig(effectiveAgentId) : undefined;
+  const ignoredInputSequences = agentConfig?.capabilities?.ignoredInputSequences ?? ["\x1b\r"];
+
+  const detection = effectiveAgentId
+    ? getEffectiveAgentConfig(effectiveAgentId)?.detection
+    : undefined;
+  const patternConfig = buildPatternConfig(detection, effectiveAgentId);
+  const bootCompletePatterns = buildBootCompletePatterns(detection, effectiveAgentId);
+  const promptPatterns = buildPromptPatterns(detection, effectiveAgentId);
+  const promptHintPatterns = buildPromptHintPatterns(detection, effectiveAgentId);
+  const completionPatterns = buildCompletionPatterns(detection, effectiveAgentId);
+
+  const outputActivityDetection = {
+    enabled: true,
+    windowMs: 1000,
+    minFrames: 2,
+    minBytes: 32,
+  };
+
+  const getVisibleLines = effectiveAgentId ? deps.getVisibleLines : undefined;
+  const getCursorLine = effectiveAgentId ? deps.getCursorLine : undefined;
+
+  return {
+    ignoredInputSequences,
+    agentId: effectiveAgentId,
+    outputActivityDetection,
+    getVisibleLines,
+    getCursorLine,
+    patternConfig,
+    bootCompletePatterns,
+    promptPatterns,
+    promptHintPatterns,
+    completionPatterns,
+    completionConfidence: detection?.completionConfidence,
+    promptScanLineCount: detection?.promptScanLineCount,
+    promptConfidence: detection?.promptConfidence,
+    idleDebounceMs: effectiveAgentId ? (detection?.debounceMs ?? 2000) : undefined,
   };
 }

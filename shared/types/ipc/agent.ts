@@ -1,4 +1,4 @@
-import type { AgentId } from "../domain.js";
+import type { AgentId } from "../agent.js";
 
 /** An artifact extracted from an agent session */
 export interface Artifact {
@@ -24,7 +24,8 @@ export type AgentStateChangeTrigger =
   | "ai-classification"
   | "timeout"
   | "exit"
-  | "activity";
+  | "activity"
+  | "title";
 
 /** Agent state */
 export type AgentState = "idle" | "working" | "running" | "waiting" | "completed" | "failed";

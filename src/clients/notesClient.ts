@@ -4,6 +4,7 @@ export interface NoteMetadata {
   scope: "worktree" | "project";
   worktreeId?: string;
   createdAt: number;
+  tags?: string[];
 }
 
 export interface NoteContent {
@@ -22,6 +23,7 @@ export interface NoteListItem {
   createdAt: number;
   modifiedAt: number;
   preview: string;
+  tags: string[];
 }
 
 export interface SearchResult {

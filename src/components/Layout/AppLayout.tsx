@@ -6,8 +6,12 @@ import { DiagnosticsDock } from "../Diagnostics";
 import { ErrorBoundary } from "../ErrorBoundary";
 import { SidecarDock, SidecarVisibilityController } from "../Sidecar";
 import { ProjectSettingsDialog, ProjectSwitchOverlay } from "@/components/Project";
+import { ChordIndicator } from "./ChordIndicator";
+import { DemoCursor } from "../Demo";
+import { ApprovalQueue } from "../Workflow/ApprovalQueue";
 import { useDiagnosticsStore, useDockStore, type PanelState } from "@/store";
 import { useProjectStore } from "@/store/projectStore";
+import { useMacroFocusStore } from "@/store/macroFocusStore";
 import type { RetryAction } from "@/store";
 import { appClient } from "@/clients";
 import type { CliAvailability, AgentSettings } from "@shared/types";
@@ -17,12 +21,10 @@ import type { UseProjectSwitcherPaletteReturn } from "@/hooks";
 interface AppLayoutProps {
   children?: ReactNode;
   sidebarContent?: ReactNode;
-  onLaunchAgent?: (
-    type: "claude" | "gemini" | "codex" | "opencode" | "terminal" | "browser"
-  ) => void;
+  onLaunchAgent?: (type: string) => void;
   onSettings?: () => void;
-  onOpenAgentSettings?: () => void;
   onRetry?: (id: string, action: RetryAction, args?: Record<string, unknown>) => void;
+  onCancelRetry?: (id: string) => void;
   agentAvailability?: CliAvailability;
   agentSettings?: AgentSettings | null;
   isHydrated?: boolean;
@@ -38,8 +40,8 @@ export function AppLayout({
   sidebarContent,
   onLaunchAgent,
   onSettings,
-  onOpenAgentSettings,
   onRetry,
+  onCancelRetry,
   agentAvailability,
   agentSettings,
   isHydrated = true,
@@ -236,14 +238,21 @@ export function AppLayout({
     return () => window.removeEventListener("canopy:reset-sidebar-width", handleResetSidebarWidth);
   }, []);
 
+  // Sync macro focus region visibility from layout state
   useEffect(() => {
-    const handleResize = () => {
-      layout.updateSidecarLayoutMode(window.innerWidth, layout.isFocusMode ? 0 : sidebarWidth);
-    };
-    window.addEventListener("resize", handleResize);
-    handleResize();
-    return () => window.removeEventListener("resize", handleResize);
-  }, [sidebarWidth, layout.updateSidecarLayoutMode, layout.isFocusMode, layout.sidecarWidth]);
+    useMacroFocusStore.getState().setVisibility("sidebar", !layout.isFocusMode);
+  }, [layout.isFocusMode]);
+
+  useEffect(() => {
+    useMacroFocusStore.getState().setVisibility("sidecar", layout.sidecarOpen);
+  }, [layout.sidecarOpen]);
+
+  // Clear macro focus on mouse interaction
+  useEffect(() => {
+    const handleMouseDown = () => useMacroFocusStore.getState().clearFocus();
+    window.addEventListener("mousedown", handleMouseDown, { capture: true });
+    return () => window.removeEventListener("mousedown", handleMouseDown, { capture: true });
+  }, []);
 
   useEffect(() => {
     if (!layout.sidecarOpen) {
@@ -257,7 +266,7 @@ export function AppLayout({
   }, []);
 
   const handleLaunchAgent = useCallback(
-    (type: "claude" | "gemini" | "codex" | "opencode" | "terminal" | "browser") => {
+    (type: string) => {
       onLaunchAgent?.(type);
     },
     [onLaunchAgent]
@@ -294,7 +303,6 @@ export function AppLayout({
       <Toolbar
         onLaunchAgent={handleLaunchAgent}
         onSettings={handleSettings}
-        onOpenAgentSettings={onOpenAgentSettings}
         errorCount={layout.errorCount}
         onToggleProblems={handleToggleProblems}
         isFocusMode={layout.isFocusMode}
@@ -332,8 +340,7 @@ export function AppLayout({
               <div className="flex-1 overflow-hidden min-h-0">{children}</div>
               {/* Terminal Dock Region - manages dock visibility and overlays */}
               <TerminalDockRegion />
-              {/* Overlay mode - sidecar floats over content */}
-              {layout.sidecarOpen && layout.sidecarLayoutMode === "overlay" && (
+              {layout.sidecarOpen && (
                 <ErrorBoundary variant="section" componentName="SidecarDock">
                   <div className="absolute right-0 top-0 bottom-0 z-50 shadow-2xl border-l border-canopy-border">
                     <SidecarDock />
@@ -342,18 +349,10 @@ export function AppLayout({
               )}
             </main>
           </ErrorBoundary>
-          {/* Push mode - sidecar is part of flex layout */}
-          {layout.sidecarOpen && layout.sidecarLayoutMode === "push" && (
-            <ErrorBoundary variant="section" componentName="SidecarDock">
-              <div className="border-l border-canopy-border flex-shrink-0">
-                <SidecarDock />
-              </div>
-            </ErrorBoundary>
-          )}
         </div>
         {/* Unified diagnostics dock replaces LogsPanel, EventInspectorPanel, and ProblemsPanel */}
         <ErrorBoundary variant="section" componentName="DiagnosticsDock">
-          <DiagnosticsDock onRetry={onRetry} />
+          <DiagnosticsDock onRetry={onRetry} onCancelRetry={onCancelRetry} />
         </ErrorBoundary>
       </div>
 
@@ -369,6 +368,9 @@ export function AppLayout({
         isSwitching={isProjectSwitching}
         projectName={switchingToProjectName ?? undefined}
       />
+      <ChordIndicator />
+      <ApprovalQueue />
+      {window.electron?.demo && <DemoCursor />}
     </div>
   );
 }

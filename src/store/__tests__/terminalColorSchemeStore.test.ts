@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { useTerminalColorSchemeStore } from "../terminalColorSchemeStore";
+import { useTerminalColorSchemeStore, selectWrapperBackground } from "../terminalColorSchemeStore";
+import { useAppThemeStore } from "../appThemeStore";
 import { DEFAULT_SCHEME_ID } from "@/config/terminalColorSchemes";
 import type { TerminalColorScheme } from "@/config/terminalColorSchemes";
 
@@ -40,6 +41,11 @@ describe("terminalColorSchemeStore", () => {
       selectedSchemeId: DEFAULT_SCHEME_ID,
       customSchemes: [],
     });
+    useAppThemeStore.setState({
+      selectedSchemeId: "daintree",
+      customSchemes: [],
+      colorVisionMode: "default",
+    });
   });
 
   it("defaults to canopy scheme", () => {
@@ -52,19 +58,45 @@ describe("terminalColorSchemeStore", () => {
     expect(useTerminalColorSchemeStore.getState().selectedSchemeId).toBe("dracula");
   });
 
-  it("getEffectiveTheme returns canopy theme for default", () => {
+  it("getEffectiveTheme returns daintree theme for default daintree", () => {
     const theme = useTerminalColorSchemeStore.getState().getEffectiveTheme();
     expect(theme.background).toBe("#19191a");
     expect(theme.cursor).toBe("#3F9366");
-    expect(theme.selectionBackground).toBe("#1a2c22");
-    expect(theme.green).toBe("#10b981");
   });
 
-  it("getEffectiveTheme returns correct theme after switching", () => {
+  it("getEffectiveTheme returns fiordland theme for fiordland app theme", () => {
+    useAppThemeStore.setState({ selectedSchemeId: "fiordland" });
+    const theme = useTerminalColorSchemeStore.getState().getEffectiveTheme();
+    expect(theme.background).toBe("#070D12");
+    expect(theme.foreground).toBe("#B5C7D6");
+  });
+
+  it("getEffectiveTheme returns Highlands theme for highlands app theme", () => {
+    useAppThemeStore.setState({ selectedSchemeId: "highlands" });
+    const theme = useTerminalColorSchemeStore.getState().getEffectiveTheme();
+    expect(theme.background).toBe("#1A1614");
+    expect(theme.foreground).toBe("#C9D1D9");
+  });
+
+  it("getEffectiveTheme returns solarized-light for bondi app theme", () => {
+    useAppThemeStore.setState({ selectedSchemeId: "bondi" });
+    const theme = useTerminalColorSchemeStore.getState().getEffectiveTheme();
+    expect(theme.background).toBe("#fdf6e3");
+    expect(theme.foreground).toBe("#657b83");
+  });
+
+  it("getEffectiveTheme returns correct theme after switching to non-canopy scheme", () => {
     useTerminalColorSchemeStore.getState().setSelectedSchemeId("dracula");
     const theme = useTerminalColorSchemeStore.getState().getEffectiveTheme();
     expect(theme.background).toBe("#282a36");
     expect(theme.foreground).toBe("#f8f8f2");
+  });
+
+  it("explicit scheme is not affected by app theme change", () => {
+    useTerminalColorSchemeStore.getState().setSelectedSchemeId("dracula");
+    useAppThemeStore.setState({ selectedSchemeId: "bondi" });
+    const theme = useTerminalColorSchemeStore.getState().getEffectiveTheme();
+    expect(theme.background).toBe("#282a36");
   });
 
   it("addCustomScheme adds and deduplicates", () => {
@@ -97,9 +129,90 @@ describe("terminalColorSchemeStore", () => {
     expect(theme.red).toBe("#ff0000");
   });
 
-  it("getEffectiveTheme adds scrollbar defaults for non-canopy schemes", () => {
+  it("getEffectiveTheme adds dark scrollbar defaults for dark schemes", () => {
     useTerminalColorSchemeStore.getState().setSelectedSchemeId("dracula");
     const theme = useTerminalColorSchemeStore.getState().getEffectiveTheme();
-    expect(theme.scrollbarSliderBackground).toBe("rgba(82, 82, 91, 0.4)");
+    expect(theme.scrollbarSliderBackground).toBe("rgba(255, 255, 255, 0.20)");
+  });
+
+  it("getEffectiveTheme adds light scrollbar defaults for light schemes", () => {
+    useTerminalColorSchemeStore.getState().setSelectedSchemeId("solarized-light");
+    const theme = useTerminalColorSchemeStore.getState().getEffectiveTheme();
+    expect(theme.scrollbarSliderBackground).toBe("rgba(0, 0, 0, 0.20)");
+  });
+
+  it("getEffectiveTheme falls back to CSS for unmapped custom app theme", () => {
+    useAppThemeStore.setState({ selectedSchemeId: "custom-unknown-theme" });
+    const theme = useTerminalColorSchemeStore.getState().getEffectiveTheme();
+    expect(theme).toBeDefined();
+    expect(theme.background).toBeDefined();
+  });
+
+  it("getEffectiveTheme adds light scrollbar defaults for light mapped scheme", () => {
+    useAppThemeStore.setState({ selectedSchemeId: "bondi" });
+    const theme = useTerminalColorSchemeStore.getState().getEffectiveTheme();
+    expect(theme.scrollbarSliderBackground).toBe("rgba(0, 0, 0, 0.20)");
+  });
+
+  describe("selectWrapperBackground", () => {
+    it("returns mapped scheme background for default canopy scheme", () => {
+      const bg = selectWrapperBackground(useTerminalColorSchemeStore.getState());
+      expect(bg).toBe("#19191a");
+    });
+
+    it("returns mapped scheme background when app theme changes", () => {
+      useAppThemeStore.setState({ selectedSchemeId: "fiordland" });
+      const bg = selectWrapperBackground(useTerminalColorSchemeStore.getState());
+      expect(bg).toBe("#070D12");
+    });
+
+    it("returns hex color for built-in non-default scheme", () => {
+      useTerminalColorSchemeStore.getState().setSelectedSchemeId("dracula");
+      const bg = selectWrapperBackground(useTerminalColorSchemeStore.getState());
+      expect(bg).toBe("#282a36");
+    });
+
+    it("returns hex color for custom scheme", () => {
+      useTerminalColorSchemeStore.getState().addCustomScheme(CUSTOM_SCHEME);
+      useTerminalColorSchemeStore.getState().setSelectedSchemeId("custom-test");
+      const bg = selectWrapperBackground(useTerminalColorSchemeStore.getState());
+      expect(bg).toBe("#111111");
+    });
+
+    it("returns updated color when custom scheme is replaced", () => {
+      const store = useTerminalColorSchemeStore.getState();
+      store.addCustomScheme(CUSTOM_SCHEME);
+      store.setSelectedSchemeId("custom-test");
+      store.addCustomScheme({
+        ...CUSTOM_SCHEME,
+        colors: { ...CUSTOM_SCHEME.colors, background: "#222222" },
+      });
+      const bg = selectWrapperBackground(useTerminalColorSchemeStore.getState());
+      expect(bg).toBe("#222222");
+    });
+
+    it("falls back to CSS variable for unmapped custom app theme", () => {
+      useAppThemeStore.setState({ selectedSchemeId: "custom-unknown-theme" });
+      const bg = selectWrapperBackground(useTerminalColorSchemeStore.getState());
+      expect(bg).toBe("var(--theme-surface-canvas)");
+    });
+
+    it("falls back to CSS variable for unknown scheme id", () => {
+      useTerminalColorSchemeStore.setState({ selectedSchemeId: "nonexistent" });
+      const bg = selectWrapperBackground(useTerminalColorSchemeStore.getState());
+      expect(bg).toBe("var(--theme-surface-canvas)");
+    });
+
+    it("falls back to CSS variable when custom scheme has no background", () => {
+      const noBackground: TerminalColorScheme = {
+        ...CUSTOM_SCHEME,
+        id: "no-bg",
+        colors: { ...CUSTOM_SCHEME.colors, background: undefined },
+      };
+      useTerminalColorSchemeStore.getState().addCustomScheme(noBackground);
+      useTerminalColorSchemeStore.getState().setSelectedSchemeId("no-bg");
+      const bg = selectWrapperBackground(useTerminalColorSchemeStore.getState());
+      expect(bg).toBe("var(--theme-surface-canvas)");
+    });
   });
 });

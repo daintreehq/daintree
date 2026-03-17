@@ -107,7 +107,7 @@ describe("ConsoleDrawer", () => {
       const { container } = render(
         <ConsoleDrawer terminalId={mockTerminalId} defaultOpen={false} />
       );
-      const innerContainer = container.querySelector(".h-\\[300px\\].bg-black");
+      const innerContainer = container.querySelector(".h-\\[300px\\].bg-surface-canvas");
       expect(innerContainer).toBeTruthy();
       expect(innerContainer?.className).toContain("h-[300px]");
     });
@@ -178,6 +178,20 @@ describe("ConsoleDrawer", () => {
         />
       );
       expect(screen.getByRole("button", { name: "Hard restart dev preview" })).toBeTruthy();
+    });
+
+    it("renders restart button as icon-only with no visible text", () => {
+      render(
+        <ConsoleDrawer
+          terminalId={mockTerminalId}
+          defaultOpen={false}
+          onHardRestart={vi.fn()}
+          status="running"
+        />
+      );
+      const restartButton = screen.getByRole("button", { name: "Hard restart dev preview" });
+      expect(restartButton.textContent).toBe("");
+      expect(restartButton.querySelector("svg")).toBeTruthy();
     });
 
     it("calls onHardRestart when restart button is clicked", () => {

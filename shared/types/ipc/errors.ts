@@ -4,6 +4,13 @@ export type ErrorType = "git" | "process" | "filesystem" | "network" | "config" 
 /** Action that can be retried after an error */
 export type RetryAction = "terminal" | "git" | "worktree";
 
+/** Payload sent from main to renderer to report retry progress */
+export interface RetryProgressPayload {
+  id: string;
+  attempt: number;
+  maxAttempts: number;
+}
+
 /** Application error for UI display */
 export interface AppError {
   /** Unique identifier */
@@ -33,4 +40,12 @@ export interface AppError {
   retryAction?: RetryAction;
   /** Arguments for retry action */
   retryArgs?: Record<string, unknown>;
+  /** Whether this error originated from a previous session (crash recovery) */
+  fromPreviousSession?: boolean;
+  /** Correlation ID linking this error across main process logs, error store, and notification history */
+  correlationId?: string;
+  /** Human-readable recovery suggestion based on error classification */
+  recoveryHint?: string;
+  /** Retry progress state (set during active retry loop) */
+  retryProgress?: { attempt: number; maxAttempts: number };
 }

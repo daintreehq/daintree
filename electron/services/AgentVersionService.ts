@@ -6,7 +6,7 @@ import {
   getEffectiveAgentIds,
 } from "../../shared/config/agentRegistry.js";
 import type { AgentVersionInfo } from "../../shared/types/ipc/system.js";
-import type { AgentId } from "../../shared/types/domain.js";
+import type { AgentId } from "../../shared/types/agent.js";
 import { CliAvailabilityService } from "./CliAvailabilityService.js";
 
 const execFileAsync = promisify(execFile);

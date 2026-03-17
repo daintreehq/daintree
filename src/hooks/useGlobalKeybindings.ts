@@ -1,6 +1,8 @@
-import { useEffect } from "react";
+import { useEffect, useSyncExternalStore } from "react";
 import { keybindingService, normalizeKeyForBinding } from "../services/KeybindingService";
 import { actionService } from "../services/ActionService";
+import { openPanelContextMenu } from "../lib/panelContextMenu";
+import { useTerminalStore } from "../store";
 
 /**
  * Global keybinding handler that provides:
@@ -34,17 +36,44 @@ export function useGlobalKeybindings(enabled: boolean = true): void {
       // Don't process modifier-only keypresses
       if (isModifierOnly) return;
 
-      // For editable contexts without modifiers, let native behavior happen
-      // Exception: allow chord completion even without modifiers
-      const hasModifier = e.metaKey || e.ctrlKey;
-      const pendingChord = keybindingService.getPendingChord();
+      // Handle Shift+F10 and ContextMenu key for panel context menus.
+      // Must be checked before the editable/terminal bailouts below.
+      // Respects user overrides — if the binding is disabled, fall through.
+      if (
+        e.key === "ContextMenu" ||
+        (e.key === "F10" && e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey)
+      ) {
+        const effectiveCombo = keybindingService.getEffectiveCombo("terminal.contextMenu");
+        if (effectiveCombo !== undefined) {
+          e.preventDefault();
+          e.stopPropagation();
+          const focusedId = useTerminalStore.getState().focusedId;
+          if (focusedId) {
+            openPanelContextMenu(focusedId);
+          }
+          return;
+        }
+      }
 
-      if (isEditable && !hasModifier && !pendingChord) {
+      // Escape cancels any pending chord — consume the event to prevent xterm leakage
+      const pendingChord = keybindingService.getPendingChord();
+      if (e.key === "Escape" && pendingChord) {
+        e.preventDefault();
+        e.stopPropagation();
+        keybindingService.clearPendingChord();
         return;
       }
 
-      // Let xterm handle its own keys except for global shortcuts with modifiers or chord completion
-      if (isInTerminal && !hasModifier && !pendingChord) {
+      // For editable contexts without modifiers, let native behavior happen
+      // Exception: allow chord completion even without modifiers, and F6 for region cycling
+      const hasModifier = e.metaKey || e.ctrlKey;
+
+      if (isEditable && !hasModifier && !pendingChord && e.key !== "F6") {
+        return;
+      }
+
+      // Let xterm handle its own keys except for global shortcuts with modifiers, chord completion, or F6
+      if (isInTerminal && !hasModifier && !pendingChord && e.key !== "F6") {
         return;
       }
 
@@ -78,16 +107,26 @@ export function useGlobalKeybindings(enabled: boolean = true): void {
       }
     };
 
+    const handleBlur = () => keybindingService.clearPendingChord();
+    const handleVisibilityChange = () => {
+      if (document.hidden) keybindingService.clearPendingChord();
+    };
+
     // Use capture phase to intercept before other handlers
     window.addEventListener("keydown", handler, { capture: true });
-    return () => window.removeEventListener("keydown", handler, { capture: true });
+    window.addEventListener("blur", handleBlur);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => {
+      window.removeEventListener("keydown", handler, { capture: true });
+      window.removeEventListener("blur", handleBlur);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
   }, [enabled]);
 }
 
-/**
- * Hook to display the current pending chord state.
- * Useful for showing a chord indicator in the UI.
- */
+const subscribeToPendingChord = (callback: () => void) => keybindingService.subscribe(callback);
+const getPendingChordSnapshot = () => keybindingService.getPendingChord();
+
 export function usePendingChord(): string | null {
-  return keybindingService.getPendingChord();
+  return useSyncExternalStore(subscribeToPendingChord, getPendingChordSnapshot);
 }

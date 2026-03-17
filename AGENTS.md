@@ -127,6 +127,12 @@ npm run fix          # Auto-fix lint/format
 npm run rebuild      # Rebuild native modules (node-pty)
 ```
 
+### CI Testing Strategy
+
+PRs run typecheck, lint, format, and unit tests only — no E2E. Full E2E suites run nightly and as release gates. Tagged releases wait for E2E to pass before publishing.
+
+Theme docs: `docs/architecture/theme-system.md`
+
 ## Adding New Features
 
 **New action:** Add ID to `shared/types/actions.ts` → create definition in `src/services/actions/definitions/*.ts` → auto-registered via `useActionRegistry`.

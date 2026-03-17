@@ -46,13 +46,10 @@ e2e/
 │   ├── terminal.ts      # getTerminalText(), waitForTerminalText(), runTerminalCommand()
 │   └── panels.ts        # getFirstGridPanel(), getGridPanelCount(), getDockPanelCount()
 ├── core/
-│   ├── app-shell.core.spec.ts           # Launch, toolbar, sidebar, settings
-│   ├── project-onboarding.core.spec.ts  # Open folder, onboarding wizard
-│   ├── terminal-panel-lifecycle.core.spec.ts  # Terminal open/run/maximize/minimize/close
-│   ├── context-flow.core.spec.ts        # Copy Context button and clipboard
-│   ├── browser-sidecar-notes.core.spec.ts     # Browser panel, sidecar, notes
-│   ├── worktree-lifecycle.core.spec.ts  # Create/switch/delete worktrees
-│   └── project-switch-isolation.core.spec.ts  # Multi-project panel isolation
+│   ├── core-terminal-panels.spec.ts     # Onboarding, terminal lifecycle, grid/dock, context flow
+│   ├── core-shell-settings.spec.ts      # App shell, keyboard shortcuts, settings persistence
+│   ├── core-advanced.spec.ts            # Browser, sidecar, notes, worktree lifecycle, project switch
+│   └── core-v030-features.spec.ts       # Sidebar search, settings subtabs/search, review hub, layout
 └── online/
     └── claude-online.spec.ts            # Full Claude agent interaction flow
 ```

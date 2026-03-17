@@ -69,12 +69,14 @@ vi.mock("@/utils/terminalType", () => ({
   isAgentTerminal: vi.fn(() => true),
 }));
 
+import { usePaletteStore } from "@/store/paletteStore";
 import { useProjectSwitcherPalette } from "../useProjectSwitcherPalette";
 
 describe("useProjectSwitcherPalette", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     projectState.currentProject = null;
+    usePaletteStore.setState({ activePaletteId: null });
   });
 
   it("tolerates malformed terminal lists when fetching project stats", async () => {

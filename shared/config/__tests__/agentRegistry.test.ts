@@ -29,6 +29,16 @@ describe("agentRegistry", () => {
       expect(ids).toContain("gemini");
       expect(ids).toContain("codex");
       expect(ids).toContain("opencode");
+      expect(ids).toContain("cursor");
+    });
+
+    it("each built-in agent has a non-empty color", () => {
+      const ids = getAgentIds();
+      for (const id of ids) {
+        const config = getAgentConfig(id);
+        expect(config?.color).toBeTruthy();
+        expect(config?.color).toMatch(/^#[0-9a-fA-F]{6}$/);
+      }
     });
 
     it("returns agent config for built-in agents", () => {
@@ -45,6 +55,58 @@ describe("agentRegistry", () => {
     it("correctly identifies registered agents", () => {
       expect(isRegisteredAgent("claude")).toBe(true);
       expect(isRegisteredAgent("nonexistent")).toBe(false);
+    });
+  });
+
+  describe("contextWindow", () => {
+    it("claude has 200k context window", () => {
+      expect(getAgentConfig("claude")?.contextWindow).toBe(200_000);
+    });
+
+    it("gemini has 1M context window", () => {
+      expect(getAgentConfig("gemini")?.contextWindow).toBe(1_000_000);
+    });
+
+    it("codex has 128k context window", () => {
+      expect(getAgentConfig("codex")?.contextWindow).toBe(128_000);
+    });
+
+    it("agents without contextWindow return undefined", () => {
+      expect(getAgentConfig("cursor")?.contextWindow).toBeUndefined();
+    });
+  });
+
+  describe("prerequisites", () => {
+    it("all built-in agents have prerequisites", () => {
+      const ids = getAgentIds();
+      for (const id of ids) {
+        const config = getAgentConfig(id);
+        expect(config?.prerequisites).toBeDefined();
+        expect(config?.prerequisites?.length).toBeGreaterThan(0);
+      }
+    });
+
+    it("each prerequisite has required fields", () => {
+      const ids = getAgentIds();
+      for (const id of ids) {
+        const config = getAgentConfig(id);
+        for (const prereq of config?.prerequisites ?? []) {
+          expect(prereq.tool).toBeTruthy();
+          expect(prereq.label).toBeTruthy();
+          expect(prereq.severity).toMatch(/^(fatal|warn|silent)$/);
+          expect(prereq.versionArgs).toBeDefined();
+        }
+      }
+    });
+
+    it("each agent declares its own CLI as a fatal prerequisite", () => {
+      const ids = getAgentIds();
+      for (const id of ids) {
+        const config = getAgentConfig(id);
+        const cliPrereq = config?.prerequisites?.find((p) => p.tool === config.command);
+        expect(cliPrereq).toBeDefined();
+        expect(cliPrereq?.severity).toBe("fatal");
+      }
     });
   });
 
@@ -341,6 +403,104 @@ describe("AgentDomainWeightsSchema", () => {
 
     const result = AgentDomainWeightsSchema.safeParse(emptyWeights);
     expect(result.success).toBe(true);
+  });
+});
+
+describe("opencode TUI environment", () => {
+  it("sets COLORFGBG to bypass termenv OSC 11 background color query", () => {
+    const config = getAgentConfig("opencode");
+    expect(config?.env?.COLORFGBG).toBe("15;0");
+  });
+});
+
+describe("blockAltScreen capabilities", () => {
+  it("opencode allows alt screen for Bubble Tea TUI", () => {
+    const config = getAgentConfig("opencode");
+    expect(config?.capabilities?.blockAltScreen).toBe(false);
+  });
+
+  it("codex blocks alt screen (uses inline mode)", () => {
+    const config = getAgentConfig("codex");
+    expect(config?.capabilities?.blockAltScreen).toBe(true);
+  });
+
+  it("claude does not explicitly set blockAltScreen (defaults to false)", () => {
+    const config = getAgentConfig("claude");
+    expect(config?.capabilities?.blockAltScreen).toBeUndefined();
+  });
+
+  it("gemini blocks alt screen", () => {
+    const config = getAgentConfig("gemini");
+    expect(config?.capabilities?.blockAltScreen).toBe(true);
+  });
+});
+
+describe("resume configuration", () => {
+  it("all built-in agents with shutdown config also have resume config", () => {
+    const ids = getAgentIds();
+    for (const id of ids) {
+      const config = getAgentConfig(id);
+      if (config?.shutdown) {
+        expect(config.resume).toBeDefined();
+        expect(typeof config.resume?.args).toBe("function");
+      }
+    }
+  });
+
+  it("claude produces --resume flag args", () => {
+    const config = getAgentConfig("claude");
+    expect(config?.resume?.args("abc-123")).toEqual(["--resume", "abc-123"]);
+  });
+
+  it("gemini produces --resume flag args", () => {
+    const config = getAgentConfig("gemini");
+    expect(config?.resume?.args("abc-123")).toEqual(["--resume", "abc-123"]);
+  });
+
+  it("codex produces resume subcommand args (no leading dash)", () => {
+    const config = getAgentConfig("codex");
+    const args = config?.resume?.args("abc-123");
+    expect(args).toEqual(["resume", "abc-123"]);
+    expect(args?.[0]).not.toMatch(/^-/);
+  });
+
+  it("opencode produces -s flag args", () => {
+    const config = getAgentConfig("opencode");
+    expect(config?.resume?.args("ses_abc")).toEqual(["-s", "ses_abc"]);
+  });
+});
+
+describe("titleStatePatterns", () => {
+  it("gemini has titleStatePatterns with working and waiting arrays", () => {
+    const config = getAgentConfig("gemini");
+    expect(config?.detection?.titleStatePatterns).toBeDefined();
+    expect(config!.detection!.titleStatePatterns!.working).toEqual(["\u2726"]);
+    expect(config!.detection!.titleStatePatterns!.waiting).toEqual(["\u25C7", "\u270B"]);
+  });
+
+  it("non-gemini agents do not have titleStatePatterns", () => {
+    const claude = getAgentConfig("claude");
+    expect(claude?.detection?.titleStatePatterns).toBeUndefined();
+
+    const codex = getAgentConfig("codex");
+    expect(codex?.detection?.titleStatePatterns).toBeUndefined();
+  });
+
+  it("user registry merge does not remove built-in titleStatePatterns", () => {
+    setUserRegistry({
+      gemini: {
+        id: "gemini",
+        name: "Gemini Custom",
+        command: "gemini",
+        args: [],
+        iconId: "gemini",
+        color: "green",
+        supportsContextInjection: false,
+      } as AgentConfig,
+    });
+    const effective = getEffectiveAgentConfig("gemini");
+    expect(effective?.detection?.titleStatePatterns).toBeDefined();
+    expect(effective!.detection!.titleStatePatterns!.working).toEqual(["\u2726"]);
   });
 });
 

@@ -1,4 +1,4 @@
-import { useRef, useState, useEffect, useMemo, useCallback } from "react";
+import { useRef, useState, useEffect, useLayoutEffect, useMemo, useCallback } from "react";
 import type React from "react";
 import { Button } from "@/components/ui/button";
 import { FixedDropdown } from "@/components/ui/fixed-dropdown";
@@ -21,9 +21,10 @@ import {
   StickyNote,
   Monitor,
   Bell,
+  LayoutGrid,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { isMac, createTooltipWithShortcut } from "@/lib/platform";
+import { isMac, isLinux, createTooltipWithShortcut } from "@/lib/platform";
 import { getProjectGradient } from "@/lib/colorUtils";
 import { GitHubResourceList, CommitList } from "@/components/GitHub";
 import { AgentButton } from "./AgentButton";
@@ -38,12 +39,13 @@ import {
   useSidecarStore,
   usePreferencesStore,
   useToolbarPreferencesStore,
-  useCliAvailabilityStore,
   useVoiceRecordingStore,
+  usePaletteStore,
 } from "@/store";
-import type { ToolbarButtonId } from "@/../../shared/types/domain";
+import type { ToolbarButtonId } from "@/../../shared/types/toolbar";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useWorktreeDataStore } from "@/store/worktreeDataStore";
+import { useGitHubFilterStore } from "@/store/githubFilterStore";
 import { useRepositoryStats } from "@/hooks/useRepositoryStats";
 import { useNativeContextMenu } from "@/hooks";
 import type { CliAvailability, AgentSettings } from "@shared/types";
@@ -54,13 +56,19 @@ import { ProjectSwitcherPalette } from "@/components/Project/ProjectSwitcherPale
 import { NotificationCenter } from "@/components/Notifications/NotificationCenter";
 import { useNotificationHistoryStore } from "@/store/slices/notificationHistorySlice";
 import { VoiceRecordingToolbarButton } from "./VoiceRecordingToolbarButton";
+import { useUIStore } from "@/store/uiStore";
+import { useShallow } from "zustand/react/shallow";
+
+import { BUILT_IN_AGENT_IDS } from "@shared/config/agentIds";
+
+const AGENT_TOOLBAR_IDS = new Set<ToolbarButtonId>([
+  "agent-setup",
+  ...(BUILT_IN_AGENT_IDS as unknown as ToolbarButtonId[]),
+]);
 
 interface ToolbarProps {
-  onLaunchAgent: (
-    type: "claude" | "gemini" | "codex" | "opencode" | "terminal" | "browser"
-  ) => void;
+  onLaunchAgent: (type: string) => void;
   onSettings: () => void;
-  onOpenAgentSettings?: () => void;
   errorCount?: number;
   onToggleProblems?: () => void;
   isFocusMode?: boolean;
@@ -73,7 +81,6 @@ interface ToolbarProps {
 export function Toolbar({
   onLaunchAgent,
   onSettings,
-  onOpenAgentSettings,
   errorCount = 0,
   onToggleProblems,
   isFocusMode = false,
@@ -123,6 +130,8 @@ export function Toolbar({
   const [issuesOpen, setIssuesOpen] = useState(false);
   const [prsOpen, setPrsOpen] = useState(false);
   const [commitsOpen, setCommitsOpen] = useState(false);
+  const setIssueSearchQuery = useGitHubFilterStore((s) => s.setIssueSearchQuery);
+  const setPrSearchQuery = useGitHubFilterStore((s) => s.setPrSearchQuery);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [treeCopied, setTreeCopied] = useState(false);
   const [isCopyingTree, setIsCopyingTree] = useState(false);
@@ -131,7 +140,13 @@ export function Toolbar({
   const prsButtonRef = useRef<HTMLButtonElement>(null);
   const commitsButtonRef = useRef<HTMLButtonElement>(null);
   const treeCopyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const [notificationCenterOpen, setNotificationCenterOpen] = useState(false);
+  const { notificationCenterOpen, toggleNotificationCenter, closeNotificationCenter } = useUIStore(
+    useShallow((s) => ({
+      notificationCenterOpen: s.notificationCenterOpen,
+      toggleNotificationCenter: s.toggleNotificationCenter,
+      closeNotificationCenter: s.closeNotificationCenter,
+    }))
+  );
   const notificationCenterButtonRef = useRef<HTMLButtonElement>(null);
   const notificationUnreadCount = useNotificationHistoryStore((s) => s.unreadCount);
   const hasActiveVoiceRecording = useVoiceRecordingStore(
@@ -143,10 +158,27 @@ export function Toolbar({
   );
   const [statsJustUpdated, setStatsJustUpdated] = useState(false);
   const prevLastUpdatedRef = useRef<number | null>(null);
+  const toolbarRef = useRef<HTMLDivElement>(null);
+  const activeToolbarIndexRef = useRef<number>(0);
 
   const { handleCopyTree } = useWorktreeActions();
   const terminalShortcut = useKeybindingDisplay("agent.terminal");
   const browserShortcut = useKeybindingDisplay("agent.browser");
+  const panelPaletteShortcut = useKeybindingDisplay("panel.palette");
+  const sidebarShortcut = useKeybindingDisplay("nav.toggleSidebar");
+  const diagnosticsShortcut = useKeybindingDisplay("panel.toggleDiagnostics");
+  const sidecarShortcut = useKeybindingDisplay("panel.toggleSidecar");
+  const notesShortcut = useKeybindingDisplay("notes.openPalette");
+  const settingsShortcut = useKeybindingDisplay("app.settings");
+  const panelPaletteOpen = usePaletteStore((state) => state.activePaletteId === "panel");
+
+  const handleTogglePanelPalette = useCallback(() => {
+    if (usePaletteStore.getState().activePaletteId === "panel") {
+      usePaletteStore.getState().closePalette("panel");
+    } else {
+      void actionService.dispatch("panel.palette", undefined, { source: "user" });
+    }
+  }, []);
 
   const handleOpenProjectSettings = useCallback(() => {
     projectSwitcher.close();
@@ -249,16 +281,16 @@ export function Toolbar({
     }
   };
 
-  const openAgentSettings = onOpenAgentSettings ?? onSettings;
-
   const handleSettingsContextMenu = async (event: React.MouseEvent) => {
     const template: MenuItemOption[] = [
       { id: "settings:general", label: "General" },
       { id: "settings:agents", label: "Agents" },
       { id: "settings:terminal", label: "Terminal" },
       { id: "settings:keyboard", label: "Keyboard" },
+      { id: "settings:notifications", label: "Notifications" },
       { id: "settings:sidecar", label: "Sidecar" },
       { type: "separator" },
+      { id: "settings:toolbar", label: "Customize Toolbar…" },
       { id: "settings:troubleshooting", label: "Troubleshooting" },
     ];
 
@@ -269,12 +301,82 @@ export function Toolbar({
     void actionService.dispatch("app.settings.openTab", { tab }, { source: "context-menu" });
   };
 
-  const cliInitialized = useCliAvailabilityStore((state) => state.isInitialized);
-  const hasAnyInstalledAgent = useMemo(() => {
-    if (!cliInitialized) return true;
-    if (!agentAvailability) return false;
-    return Object.values(agentAvailability).some((v) => v === true);
-  }, [agentAvailability, cliInitialized]);
+  const getToolbarItems = useCallback(
+    () =>
+      toolbarRef.current
+        ? Array.from(
+            toolbarRef.current.querySelectorAll<HTMLElement>("[data-toolbar-item]:not(:disabled)")
+          )
+        : [],
+    []
+  );
+
+  const syncToolbarTabStops = useCallback((items: HTMLElement[], activeIdx: number) => {
+    for (const el of items) el.tabIndex = -1;
+    if (items[activeIdx]) items[activeIdx].tabIndex = 0;
+  }, []);
+
+  useLayoutEffect(() => {
+    const items = getToolbarItems();
+    if (items.length === 0) return;
+    const clamped = Math.min(activeToolbarIndexRef.current, items.length - 1);
+    activeToolbarIndexRef.current = clamped;
+    syncToolbarTabStops(items, clamped);
+  });
+
+  const handleToolbarFocusCapture = useCallback(
+    (e: React.FocusEvent<HTMLElement>) => {
+      const target = e.target as HTMLElement;
+      const items = getToolbarItems();
+      const idx = items.indexOf(target);
+      if (idx !== -1) {
+        activeToolbarIndexRef.current = idx;
+        syncToolbarTabStops(items, idx);
+      }
+    },
+    [getToolbarItems, syncToolbarTabStops]
+  );
+
+  const handleToolbarKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLElement>) => {
+      if (e.metaKey || e.altKey || e.ctrlKey) return;
+
+      const items = getToolbarItems();
+      if (items.length === 0) return;
+
+      const currentIdx = activeToolbarIndexRef.current;
+      let newIdx: number | null = null;
+
+      switch (e.key) {
+        case "ArrowRight":
+          newIdx = (currentIdx + 1) % items.length;
+          break;
+        case "ArrowLeft":
+          newIdx = (currentIdx - 1 + items.length) % items.length;
+          break;
+        case "Home":
+          newIdx = 0;
+          break;
+        case "End":
+          newIdx = items.length - 1;
+          break;
+      }
+
+      if (newIdx !== null) {
+        e.preventDefault();
+        activeToolbarIndexRef.current = newIdx;
+        syncToolbarTabStops(items, newIdx);
+        items[newIdx].focus();
+      }
+    },
+    [getToolbarItems, syncToolbarTabStops]
+  );
+
+  const hasAnySelectedAgent = useMemo(() => {
+    if (!agentSettings) return true;
+    const agents = agentSettings.agents ?? {};
+    return BUILT_IN_AGENT_IDS.some((id) => agents[id]?.selected !== false);
+  }, [agentSettings]);
 
   const buttonRegistry = useMemo<
     Record<ToolbarButtonId, { render: () => React.ReactNode; isAvailable: boolean }>
@@ -288,8 +390,9 @@ export function Toolbar({
                 <Button
                   variant="ghost"
                   size="icon"
+                  data-toolbar-item=""
                   onClick={onToggleFocusMode}
-                  className="text-canopy-text hover:bg-white/[0.06] hover:text-canopy-accent transition-colors"
+                  className="text-canopy-text hover:bg-overlay-medium hover:text-canopy-accent transition-colors"
                   aria-label="Toggle Sidebar"
                   aria-pressed={!isFocusMode}
                 >
@@ -297,7 +400,10 @@ export function Toolbar({
                 </Button>
               </TooltipTrigger>
               <TooltipContent side="bottom">
-                {createTooltipWithShortcut(isFocusMode ? "Show Sidebar" : "Hide Sidebar", "Cmd+B")}
+                {createTooltipWithShortcut(
+                  isFocusMode ? "Show Sidebar" : "Hide Sidebar",
+                  sidebarShortcut
+                )}
               </TooltipContent>
             </Tooltip>
           </TooltipProvider>
@@ -305,8 +411,8 @@ export function Toolbar({
         isAvailable: true,
       },
       "agent-setup": {
-        render: () => <AgentSetupButton key="agent-setup" />,
-        isAvailable: !hasAnyInstalledAgent,
+        render: () => <AgentSetupButton key="agent-setup" data-toolbar-item="" />,
+        isAvailable: !hasAnySelectedAgent,
       },
       claude: {
         render: () => (
@@ -314,10 +420,10 @@ export function Toolbar({
             key="claude"
             type="claude"
             availability={agentAvailability?.claude}
-            onOpenSettings={openAgentSettings}
+            data-toolbar-item=""
           />
         ),
-        isAvailable: agentSettings?.agents?.claude?.selected ?? true,
+        isAvailable: !agentSettings || agentSettings.agents?.claude?.selected !== false,
       },
       gemini: {
         render: () => (
@@ -325,10 +431,10 @@ export function Toolbar({
             key="gemini"
             type="gemini"
             availability={agentAvailability?.gemini}
-            onOpenSettings={openAgentSettings}
+            data-toolbar-item=""
           />
         ),
-        isAvailable: agentSettings?.agents?.gemini?.selected ?? true,
+        isAvailable: !agentSettings || agentSettings.agents?.gemini?.selected !== false,
       },
       codex: {
         render: () => (
@@ -336,10 +442,10 @@ export function Toolbar({
             key="codex"
             type="codex"
             availability={agentAvailability?.codex}
-            onOpenSettings={openAgentSettings}
+            data-toolbar-item=""
           />
         ),
-        isAvailable: agentSettings?.agents?.codex?.selected ?? true,
+        isAvailable: !agentSettings || agentSettings.agents?.codex?.selected !== false,
       },
       opencode: {
         render: () => (
@@ -347,10 +453,21 @@ export function Toolbar({
             key="opencode"
             type="opencode"
             availability={agentAvailability?.opencode}
-            onOpenSettings={openAgentSettings}
+            data-toolbar-item=""
           />
         ),
-        isAvailable: agentSettings?.agents?.opencode?.selected ?? true,
+        isAvailable: !agentSettings || agentSettings.agents?.opencode?.selected !== false,
+      },
+      cursor: {
+        render: () => (
+          <AgentButton
+            key="cursor"
+            type="cursor"
+            availability={agentAvailability?.cursor}
+            data-toolbar-item=""
+          />
+        ),
+        isAvailable: !agentSettings || agentSettings.agents?.cursor?.selected !== false,
       },
       terminal: {
         render: () => (
@@ -360,15 +477,16 @@ export function Toolbar({
                 <Button
                   variant="ghost"
                   size="icon"
+                  data-toolbar-item=""
                   onClick={() => onLaunchAgent("terminal")}
-                  className="text-canopy-text hover:bg-white/[0.06] transition-colors hover:text-canopy-accent focus-visible:text-canopy-accent"
+                  className="text-canopy-text hover:bg-overlay-medium transition-colors hover:text-canopy-accent focus-visible:text-canopy-accent"
                   aria-label="Open Terminal"
                 >
                   <Terminal />
                 </Button>
               </TooltipTrigger>
               <TooltipContent side="bottom">
-                {terminalShortcut ? `Open Terminal (${terminalShortcut})` : "Open Terminal"}
+                {createTooltipWithShortcut("Open Terminal", terminalShortcut)}
               </TooltipContent>
             </Tooltip>
           </TooltipProvider>
@@ -383,15 +501,16 @@ export function Toolbar({
                 <Button
                   variant="ghost"
                   size="icon"
+                  data-toolbar-item=""
                   onClick={() => onLaunchAgent("browser")}
-                  className="text-canopy-text hover:bg-white/[0.06] transition-colors hover:text-canopy-accent focus-visible:text-canopy-accent"
+                  className="text-canopy-text hover:bg-overlay-medium transition-colors hover:text-canopy-accent focus-visible:text-canopy-accent"
                   aria-label="Open Browser"
                 >
                   <Globe />
                 </Button>
               </TooltipTrigger>
               <TooltipContent side="bottom">
-                {browserShortcut ? `Open Browser (${browserShortcut})` : "Open Browser"}
+                {createTooltipWithShortcut("Open Browser", browserShortcut)}
               </TooltipContent>
             </Tooltip>
           </TooltipProvider>
@@ -407,11 +526,12 @@ export function Toolbar({
                   <Button
                     variant="ghost"
                     size="icon"
+                    data-toolbar-item=""
                     onClick={() => {
                       void actionService.dispatch("devServer.start", undefined, { source: "user" });
                     }}
                     disabled={!currentProject}
-                    className="text-canopy-text hover:bg-white/[0.06] transition-colors hover:text-canopy-accent focus-visible:text-canopy-accent"
+                    className="text-canopy-text hover:bg-overlay-medium transition-colors hover:text-canopy-accent focus-visible:text-canopy-accent"
                     aria-label={
                       !currentProject
                         ? "Open a project to use Dev Preview"
@@ -436,8 +556,33 @@ export function Toolbar({
         ),
         isAvailable: true,
       },
+      "panel-palette": {
+        render: () => (
+          <TooltipProvider key="panel-palette">
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  data-toolbar-item=""
+                  onClick={handleTogglePanelPalette}
+                  className="text-canopy-text hover:bg-overlay-medium hover:text-canopy-accent transition-colors"
+                  aria-label={panelPaletteOpen ? "Close panel palette" : "Open panel palette"}
+                  aria-pressed={panelPaletteOpen}
+                >
+                  <LayoutGrid />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">
+                {createTooltipWithShortcut("Panel Palette", panelPaletteShortcut)}
+              </TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
+        ),
+        isAvailable: true,
+      },
       "voice-recording": {
-        render: () => <VoiceRecordingToolbarButton key="voice-recording" />,
+        render: () => <VoiceRecordingToolbarButton key="voice-recording" data-toolbar-item="" />,
         isAvailable: hasActiveVoiceRecording,
       },
       "github-stats": {
@@ -453,20 +598,22 @@ export function Toolbar({
                     <Button
                       ref={issuesButtonRef}
                       variant="ghost"
+                      data-toolbar-item=""
                       onClick={() => {
                         setPrsOpen(false);
+                        setPrSearchQuery("");
                         setCommitsOpen(false);
                         const willOpen = !issuesOpen;
                         setIssuesOpen(willOpen);
-                        if (willOpen) {
-                          refreshStats({ force: true });
-                        }
+                        if (!willOpen) setIssueSearchQuery("");
+                        if (willOpen) refreshStats({ force: true });
                       }}
                       className={cn(
-                        "text-canopy-text hover:bg-overlay-medium hover:text-white h-full px-3 gap-2 rounded-none rounded-l-[var(--radius-md)]",
+                        "text-canopy-text hover:bg-overlay-medium hover:text-text-primary h-full px-3 gap-2 rounded-none rounded-l-[var(--radius-md)]",
                         stats?.issueCount === 0 && "opacity-50",
                         isStale && "opacity-60",
-                        issuesOpen && "bg-white/[0.04] ring-1 ring-github-open/20 text-white"
+                        issuesOpen &&
+                          "bg-overlay-medium ring-1 ring-github-open/20 text-text-primary"
                       )}
                       aria-label={`${stats?.issueCount ?? "\u2014"} open issues${isStale ? " (cached)" : ""}`}
                     >
@@ -485,14 +632,24 @@ export function Toolbar({
               </TooltipProvider>
               <FixedDropdown
                 open={issuesOpen}
-                onOpenChange={setIssuesOpen}
+                onOpenChange={(open) => {
+                  setIssuesOpen(open);
+                  if (!open) {
+                    setIssueSearchQuery("");
+                    issuesButtonRef.current?.focus();
+                  }
+                }}
                 anchorRef={issuesButtonRef}
                 className="p-0 w-[450px]"
               >
                 <GitHubResourceList
                   type="issue"
                   projectPath={currentProject.path}
-                  onClose={() => setIssuesOpen(false)}
+                  onClose={() => {
+                    setIssuesOpen(false);
+                    setIssueSearchQuery("");
+                    issuesButtonRef.current?.focus();
+                  }}
                   initialCount={stats?.issueCount}
                 />
               </FixedDropdown>
@@ -502,20 +659,22 @@ export function Toolbar({
                     <Button
                       ref={prsButtonRef}
                       variant="ghost"
+                      data-toolbar-item=""
                       onClick={() => {
                         setIssuesOpen(false);
+                        setIssueSearchQuery("");
                         setCommitsOpen(false);
                         const willOpen = !prsOpen;
                         setPrsOpen(willOpen);
-                        if (willOpen) {
-                          refreshStats({ force: true });
-                        }
+                        if (!willOpen) setPrSearchQuery("");
+                        if (willOpen) refreshStats({ force: true });
                       }}
                       className={cn(
-                        "text-canopy-text hover:bg-overlay-medium hover:text-white h-full px-3 gap-2 rounded-none",
+                        "text-canopy-text hover:bg-overlay-medium hover:text-text-primary h-full px-3 gap-2 rounded-none",
                         stats?.prCount === 0 && "opacity-50",
                         isStale && "opacity-60",
-                        prsOpen && "bg-white/[0.04] ring-1 ring-github-merged/20 text-white"
+                        prsOpen &&
+                          "bg-overlay-medium ring-1 ring-github-merged/20 text-text-primary"
                       )}
                       aria-label={`${stats?.prCount ?? "\u2014"} open pull requests${isStale ? " (cached)" : ""}`}
                     >
@@ -534,14 +693,24 @@ export function Toolbar({
               </TooltipProvider>
               <FixedDropdown
                 open={prsOpen}
-                onOpenChange={setPrsOpen}
+                onOpenChange={(open) => {
+                  setPrsOpen(open);
+                  if (!open) {
+                    setPrSearchQuery("");
+                    prsButtonRef.current?.focus();
+                  }
+                }}
                 anchorRef={prsButtonRef}
                 className="p-0 w-[450px]"
               >
                 <GitHubResourceList
                   type="pr"
                   projectPath={currentProject.path}
-                  onClose={() => setPrsOpen(false)}
+                  onClose={() => {
+                    setPrsOpen(false);
+                    setPrSearchQuery("");
+                    prsButtonRef.current?.focus();
+                  }}
                   initialCount={stats?.prCount}
                 />
               </FixedDropdown>
@@ -551,15 +720,19 @@ export function Toolbar({
                     <Button
                       ref={commitsButtonRef}
                       variant="ghost"
+                      data-toolbar-item=""
                       onClick={() => {
                         setIssuesOpen(false);
+                        setIssueSearchQuery("");
                         setPrsOpen(false);
+                        setPrSearchQuery("");
                         setCommitsOpen(!commitsOpen);
                       }}
                       className={cn(
-                        "text-canopy-text hover:bg-overlay-medium hover:text-white h-full px-3 gap-2 rounded-none rounded-r-[var(--radius-md)]",
+                        "text-canopy-text hover:bg-overlay-medium hover:text-text-primary h-full px-3 gap-2 rounded-none rounded-r-[var(--radius-md)]",
                         stats?.commitCount === 0 && "opacity-50",
-                        commitsOpen && "bg-white/[0.04] ring-1 ring-white/20 text-white"
+                        commitsOpen &&
+                          "bg-overlay-medium ring-1 ring-border-strong text-text-primary"
                       )}
                       aria-label={`${stats?.commitCount ?? "\u2014"} commits`}
                     >
@@ -574,13 +747,19 @@ export function Toolbar({
               </TooltipProvider>
               <FixedDropdown
                 open={commitsOpen}
-                onOpenChange={setCommitsOpen}
+                onOpenChange={(open) => {
+                  setCommitsOpen(open);
+                  if (!open) commitsButtonRef.current?.focus();
+                }}
                 anchorRef={commitsButtonRef}
                 className="p-0 w-[450px]"
               >
                 <CommitList
                   projectPath={currentProject.path}
-                  onClose={() => setCommitsOpen(false)}
+                  onClose={() => {
+                    setCommitsOpen(false);
+                    commitsButtonRef.current?.focus();
+                  }}
                   initialCount={stats?.commitCount}
                 />
               </FixedDropdown>
@@ -603,8 +782,9 @@ export function Toolbar({
                     ref={notificationCenterButtonRef}
                     variant="ghost"
                     size="icon"
-                    onClick={() => setNotificationCenterOpen((prev) => !prev)}
-                    className="text-canopy-text hover:bg-white/[0.06] hover:text-canopy-accent transition-colors"
+                    data-toolbar-item=""
+                    onClick={toggleNotificationCenter}
+                    className="text-canopy-text hover:bg-overlay-medium hover:text-canopy-accent transition-colors"
                     aria-label={
                       notificationUnreadCount > 0
                         ? `Notifications — ${notificationUnreadCount} unread`
@@ -626,14 +806,13 @@ export function Toolbar({
             </TooltipProvider>
             <FixedDropdown
               open={notificationCenterOpen}
-              onOpenChange={setNotificationCenterOpen}
+              onOpenChange={(open) => {
+                if (!open) closeNotificationCenter();
+              }}
               anchorRef={notificationCenterButtonRef}
               className="p-0"
             >
-              <NotificationCenter
-                open={notificationCenterOpen}
-                onClose={() => setNotificationCenterOpen(false)}
-              />
+              <NotificationCenter open={notificationCenterOpen} onClose={closeNotificationCenter} />
             </FixedDropdown>
           </div>
         ),
@@ -647,14 +826,17 @@ export function Toolbar({
                 <Button
                   variant="ghost"
                   size="icon"
+                  data-toolbar-item=""
                   onClick={() => actionService.dispatch("notes.create", {}, { source: "user" })}
-                  className="text-canopy-text hover:bg-white/[0.06] hover:text-canopy-accent transition-colors"
+                  className="text-canopy-text hover:bg-overlay-medium hover:text-canopy-accent transition-colors"
                   aria-label="Open notes palette"
                 >
                   <StickyNote />
                 </Button>
               </TooltipTrigger>
-              <TooltipContent side="bottom">Notes</TooltipContent>
+              <TooltipContent side="bottom">
+                {createTooltipWithShortcut("Notes", notesShortcut)}
+              </TooltipContent>
             </Tooltip>
           </TooltipProvider>
         ),
@@ -668,13 +850,14 @@ export function Toolbar({
                 <Button
                   variant="ghost"
                   size="icon"
+                  data-toolbar-item=""
                   onClick={handleCopyTreeClick}
                   disabled={isCopyingTree || !activeWorktree}
                   className={cn(
                     "transition-colors",
                     treeCopied
                       ? "text-status-success bg-status-success/10"
-                      : "text-canopy-text hover:bg-white/[0.06] hover:text-canopy-accent",
+                      : "text-canopy-text hover:bg-overlay-medium hover:text-canopy-accent",
                     isCopyingTree && "cursor-wait opacity-70",
                     !activeWorktree && "opacity-50"
                   )}
@@ -715,15 +898,18 @@ export function Toolbar({
                 <Button
                   variant="ghost"
                   size="icon"
+                  data-toolbar-item=""
                   onClick={onSettings}
                   onContextMenu={handleSettingsContextMenu}
-                  className="text-canopy-text hover:bg-white/[0.06] hover:text-canopy-accent transition-colors"
+                  className="text-canopy-text hover:bg-overlay-medium hover:text-canopy-accent transition-colors"
                   aria-label="Open settings"
                 >
                   <SlidersHorizontal />
                 </Button>
               </TooltipTrigger>
-              <TooltipContent side="bottom">Open Settings</TooltipContent>
+              <TooltipContent side="bottom">
+                {createTooltipWithShortcut("Open Settings", settingsShortcut)}
+              </TooltipContent>
             </Tooltip>
           </TooltipProvider>
         ),
@@ -737,9 +923,10 @@ export function Toolbar({
                 <Button
                   variant="ghost"
                   size="icon"
+                  data-toolbar-item=""
                   onClick={onToggleProblems}
                   className={cn(
-                    "text-canopy-text hover:bg-white/[0.06] hover:text-canopy-accent relative transition-colors",
+                    "text-canopy-text hover:bg-overlay-medium hover:text-canopy-accent relative transition-colors",
                     errorCount > 0 && "text-status-error"
                   )}
                   aria-label={`Problems: ${errorCount} error${errorCount !== 1 ? "s" : ""}`}
@@ -751,7 +938,7 @@ export function Toolbar({
                 </Button>
               </TooltipTrigger>
               <TooltipContent side="bottom">
-                {createTooltipWithShortcut("Show Problems Panel", "Ctrl+Shift+M")}
+                {createTooltipWithShortcut("Show Problems Panel", diagnosticsShortcut)}
               </TooltipContent>
             </Tooltip>
           </TooltipProvider>
@@ -766,9 +953,10 @@ export function Toolbar({
                 <Button
                   variant="ghost"
                   size="icon"
+                  data-toolbar-item=""
                   onClick={toggleSidecar}
                   className={cn(
-                    "text-canopy-text hover:bg-white/[0.06] hover:text-canopy-accent transition-colors"
+                    "text-canopy-text hover:bg-overlay-medium hover:text-canopy-accent transition-colors"
                   )}
                   aria-label={sidecarOpen ? "Close context sidecar" : "Open context sidecar"}
                   aria-pressed={sidecarOpen}
@@ -781,7 +969,10 @@ export function Toolbar({
                 </Button>
               </TooltipTrigger>
               <TooltipContent side="bottom">
-                {sidecarOpen ? "Close Context Sidecar" : "Open Context Sidecar"}
+                {createTooltipWithShortcut(
+                  sidecarOpen ? "Close Context Sidecar" : "Open Context Sidecar",
+                  sidecarShortcut
+                )}
               </TooltipContent>
             </Tooltip>
           </TooltipProvider>
@@ -794,12 +985,19 @@ export function Toolbar({
       onToggleFocusMode,
       agentAvailability,
       agentSettings,
-      hasAnyInstalledAgent,
-      openAgentSettings,
+      hasAnySelectedAgent,
       onLaunchAgent,
       terminalShortcut,
       browserShortcut,
+      sidebarShortcut,
+      diagnosticsShortcut,
+      sidecarShortcut,
+      notesShortcut,
+      settingsShortcut,
       devServerCommand,
+      panelPaletteOpen,
+      panelPaletteShortcut,
+      handleTogglePanelPalette,
       hasActiveVoiceRecording,
       stats,
       currentProject,
@@ -826,6 +1024,8 @@ export function Toolbar({
       sidecarOpen,
       getTimeSinceUpdate,
       notificationCenterOpen,
+      toggleNotificationCenter,
+      closeNotificationCenter,
       notificationUnreadCount,
     ]
   );
@@ -836,6 +1036,27 @@ export function Toolbar({
       .map((id) => buttonRegistry[id].render());
   };
 
+  const renderLeftButtons = (buttonIds: ToolbarButtonId[]) => {
+    const visible = buttonIds.filter((id) => buttonRegistry[id]?.isAvailable);
+    const elements: React.ReactNode[] = [];
+    for (let i = 0; i < visible.length; i++) {
+      elements.push(buttonRegistry[visible[i]].render());
+      if (
+        i < visible.length - 1 &&
+        AGENT_TOOLBAR_IDS.has(visible[i]) !== AGENT_TOOLBAR_IDS.has(visible[i + 1])
+      ) {
+        elements.push(
+          <div
+            key={`group-divider-${i}`}
+            className="w-px h-5 bg-border-divider mx-1"
+            aria-hidden="true"
+          />
+        );
+      }
+    }
+    return elements;
+  };
+
   const isDropdownOpen = projectSwitcher.isOpen && projectSwitcher.mode === "dropdown";
   const handleDropdownClose = useCallback(() => {
     if (projectSwitcher.mode !== "dropdown") return;
@@ -844,11 +1065,22 @@ export function Toolbar({
 
   return (
     <>
-      <header className="relative grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] h-12 items-center px-4 pt-1 shrink-0 app-drag-region surface-chrome border-b border-divider">
-        <div className="window-resize-strip" />
+      <div
+        ref={toolbarRef}
+        role="toolbar"
+        aria-label="Main toolbar"
+        onKeyDown={handleToolbarKeyDown}
+        onFocusCapture={handleToolbarFocusCapture}
+        className="relative grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] h-12 items-center px-4 pt-1 shrink-0 app-drag-region surface-chrome border-b border-divider"
+      >
+        {!isLinux() && <div className="window-resize-strip" />}
 
         {/* LEFT GROUP */}
-        <div className="flex items-center gap-1.5 app-no-drag z-20 justify-self-start">
+        <div
+          role="group"
+          aria-label="Navigation and agents"
+          className="flex items-center gap-1.5 app-no-drag z-20 justify-self-start"
+        >
           {isMac() && (
             <div
               className={cn(
@@ -859,15 +1091,19 @@ export function Toolbar({
           )}
           {buttonRegistry["sidebar-toggle"].render()}
 
-          <div className="w-px h-5 bg-white/[0.08] mx-1" />
+          <div className="w-px h-5 bg-border-divider mx-1" />
 
           <div className="flex items-center gap-0.5">
-            {renderButtons(toolbarLayout.leftButtons)}
+            {renderLeftButtons(toolbarLayout.leftButtons)}
           </div>
         </div>
 
         {/* CENTER GROUP - Grid-centered, shrinks gracefully on narrow windows */}
-        <div className="flex items-center justify-center min-w-0 max-w-full pointer-events-none justify-self-center">
+        <div
+          role="group"
+          aria-label="Project"
+          className="flex items-center justify-center min-w-0 max-w-full pointer-events-none justify-self-center"
+        >
           <ProjectSwitcherPalette
             mode="dropdown"
             isOpen={isDropdownOpen}
@@ -882,6 +1118,7 @@ export function Toolbar({
             onAddProject={projectSwitcher.addProject}
             onStopProject={handleStopProject}
             onCloseProject={handleCloseProject}
+            onTogglePinProject={(projectId) => projectSwitcher.togglePinProject(projectId)}
             onOpenProjectSettings={currentProject ? handleOpenProjectSettings : undefined}
             dropdownAlign="center"
             removeConfirmProject={projectSwitcher.removeConfirmProject}
@@ -890,15 +1127,16 @@ export function Toolbar({
             isRemovingProject={projectSwitcher.isRemovingProject}
           >
             <button
+              data-toolbar-item=""
               className={cn(
-                "flex items-center justify-center gap-2 px-3 h-9 rounded-[var(--radius-md)] select-none border border-white/10 shadow-[inset_0_1px_0_rgba(255,255,255,0.06)] app-no-drag pointer-events-auto outline-none min-w-0 max-w-full overflow-hidden",
-                "opacity-80 hover:opacity-100 transition-opacity cursor-pointer"
+                "app-no-drag pointer-events-auto flex h-9 min-w-0 max-w-full items-center justify-center gap-2 overflow-hidden rounded-[var(--radius-md)] border border-border-subtle px-3 shadow-[inset_0_1px_0_var(--color-overlay-strong)] outline-none",
+                "cursor-pointer transition-colors hover:border-border-default hover:shadow-[inset_0_1px_0_var(--color-overlay-emphasis)]"
               )}
               data-testid="project-switcher-trigger"
               style={{
                 background: currentProject
-                  ? getProjectGradient(currentProject.color)
-                  : "linear-gradient(135deg, rgba(255,255,255,0.05), rgba(255,255,255,0.02))",
+                  ? `linear-gradient(180deg, color-mix(in oklab, var(--color-overlay-soft) 70%, transparent), color-mix(in oklab, var(--color-overlay-medium) 75%, transparent)), ${getProjectGradient(currentProject.color)}`
+                  : "linear-gradient(135deg, var(--color-surface-panel-elevated), var(--color-surface-panel))",
               }}
               onClick={() => projectSwitcher.open("dropdown")}
             >
@@ -907,18 +1145,18 @@ export function Toolbar({
                   <span className="text-base leading-none shrink-0" aria-label="Project emoji">
                     {currentProject.emoji}
                   </span>
-                  <span className="text-xs font-medium text-white/90 tracking-wide truncate min-w-0">
+                  <span className="min-w-0 truncate text-xs font-semibold tracking-wide text-canopy-text [text-shadow:0_1px_0_rgba(255,255,255,0.18)]">
                     {currentProject.name}
                   </span>
                   {branchName && (
                     <span
-                      className="font-mono text-[10px] tabular-nums text-white/70 px-1.5 py-0.5 rounded-full bg-white/10 shrink-0"
+                      className="shrink-0 rounded-full border border-border-subtle bg-overlay-soft px-1.5 py-0.5 font-mono text-[10px] tabular-nums text-text-secondary"
                       aria-label={`Current branch ${branchName}`}
                     >
                       {branchName}
                     </span>
                   )}
-                  <ChevronsUpDown className="h-3 w-3 text-white/50 ml-0.5 shrink-0" />
+                  <ChevronsUpDown className="ml-0.5 h-3 w-3 shrink-0 text-text-muted" />
                 </>
               ) : (
                 <>
@@ -928,7 +1166,7 @@ export function Toolbar({
                   <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-canopy-accent/20 text-canopy-accent shrink-0">
                     Beta
                   </span>
-                  <ChevronsUpDown className="h-3 w-3 text-canopy-text/50 ml-0.5 shrink-0" />
+                  <ChevronsUpDown className="ml-0.5 h-3 w-3 shrink-0 text-text-muted" />
                 </>
               )}
             </button>
@@ -936,16 +1174,20 @@ export function Toolbar({
         </div>
 
         {/* RIGHT GROUP */}
-        <div className="flex items-center gap-1.5 app-no-drag z-20 justify-self-end">
+        <div
+          role="group"
+          aria-label="Tools and settings"
+          className="flex items-center gap-1.5 app-no-drag z-20 justify-self-end"
+        >
           <div className="flex items-center gap-0.5">
             {renderButtons(toolbarLayout.rightButtons)}
           </div>
 
-          <div className="w-px h-5 bg-white/[0.08] mx-1" />
+          <div className="w-px h-5 bg-border-divider mx-1" />
 
           {buttonRegistry["sidecar-toggle"].render()}
         </div>
-      </header>
+      </div>
     </>
   );
 }

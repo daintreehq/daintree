@@ -114,7 +114,7 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
     id: "files.search",
     title: "Search Files",
     description:
-      "Search for files by name in a directory. Requires cwd (use project_getCurrent to get the project path).",
+      "Search for files by name in a directory. Requires cwd (use project.getCurrent to get the project path).",
     category: "files",
     kind: "query",
     danger: "safe",

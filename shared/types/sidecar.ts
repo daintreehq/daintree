@@ -1,7 +1,3 @@
-export type SidecarLayoutMode = "push" | "overlay";
-
-export type SidecarLayoutModePreference = "auto" | "push" | "overlay";
-
 export type SidecarLinkType = "system" | "user";
 
 export interface SidecarLink {
@@ -122,4 +118,3 @@ export const DEFAULT_SIDECAR_TABS: SidecarTab[] = [];
 export const SIDECAR_MIN_WIDTH = 480;
 export const SIDECAR_MAX_WIDTH = 1200;
 export const SIDECAR_DEFAULT_WIDTH = 480;
-export const MIN_GRID_WIDTH = 400;

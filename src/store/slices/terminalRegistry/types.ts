@@ -13,6 +13,7 @@ import type {
   TabGroup,
   TabGroupLocation,
   BrowserHistory,
+  TerminalSpawnSource,
 } from "@/types";
 import type { PanelKind } from "@/types";
 
@@ -64,12 +65,22 @@ export interface AddTerminalOptions {
   devServerError?: { type: string; message: string };
   /** Terminal ID associated with dev server for dev-preview panels (kind === 'dev-preview') */
   devServerTerminalId?: string;
+  /** Whether the browser console drawer is open (kind === 'browser') */
+  browserConsoleOpen?: boolean;
   /** Whether the dev-preview console drawer is open (kind === 'dev-preview') */
   devPreviewConsoleOpen?: boolean;
   /** Environment variables to set for this terminal */
   env?: Record<string, string>;
   /** Behavior when terminal exits: "keep" preserves for review, "trash" sends to trash, "remove" deletes completely */
   exitBehavior?: PanelExitBehavior;
+  /** Captured agent session ID from graceful shutdown (used for session resume) */
+  agentSessionId?: string;
+  /** Process-level flags captured at launch time, persisted for session resume */
+  agentLaunchFlags?: string[];
+  /** Origin that spawned this terminal */
+  spawnedBy?: TerminalSpawnSource;
+  /** Bypass rate limiter during session restore (consumes main-process quota) */
+  restore?: boolean;
   // Note: Tab membership is now managed via createTabGroup/addPanelToGroup, not on terminals
 }
 
@@ -90,9 +101,15 @@ export interface TrashedTerminal {
   groupMetadata?: TrashedTerminalGroupMetadata;
 }
 
+export interface BackgroundedTerminal {
+  id: string;
+  originalLocation: "dock" | "grid";
+}
+
 export interface TerminalRegistrySlice {
   terminals: TerminalInstance[];
   trashedTerminals: Map<string, TrashedTerminal>;
+  backgroundedTerminals: Map<string, BackgroundedTerminal>;
   /** Explicit tab group storage - single source of truth for tab membership and order */
   tabGroups: Map<string, TabGroup>;
 
@@ -133,6 +150,10 @@ export interface TerminalRegistrySlice {
   markAsRestored: (id: string) => void;
   isInTrash: (id: string) => boolean;
 
+  backgroundTerminal: (id: string) => void;
+  restoreBackgroundTerminal: (id: string, targetWorktreeId?: string) => void;
+  isInBackground: (id: string) => boolean;
+
   reorderTerminals: (
     fromIndex: number,
     toIndex: number,
@@ -158,6 +179,7 @@ export interface TerminalRegistrySlice {
   setBrowserUrl: (id: string, url: string) => void;
   setBrowserHistory: (id: string, history: BrowserHistory) => void;
   setBrowserZoom: (id: string, zoom: number) => void;
+  setBrowserConsoleOpen: (id: string, isOpen: boolean) => void;
   setDevPreviewConsoleOpen: (id: string, isOpen: boolean) => void;
   setDevServerState: (
     id: string,

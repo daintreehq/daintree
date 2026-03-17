@@ -5,6 +5,7 @@ import os from "node:os";
 import type {
   CrashLogEntry,
   CrashRecoveryConfig,
+  PanelSummary,
   PendingCrash,
 } from "../../shared/types/ipc/crashRecovery.js";
 import { store } from "../store.js";
@@ -15,6 +16,8 @@ const CRASHES_DIR = "crashes";
 const BACKUP_DIR = "backups";
 const BACKUP_FILENAME = "session-state.json";
 const BACKUP_INTERVAL_MS = 60_000;
+const DEBOUNCE_BACKUP_MS = 1_500;
+const SUSPECT_WINDOW_MS = 30_000;
 
 export class CrashRecoveryService {
   private userData: string;
@@ -24,7 +27,9 @@ export class CrashRecoveryService {
   private sessionStartMs: number;
   private pendingCrash: PendingCrash | null = null;
   private backupTimer: ReturnType<typeof setInterval> | null = null;
+  private debounceTimer: ReturnType<typeof setTimeout> | null = null;
   private crashRecorded = false;
+  private pendingPanelFilter: string[] | null = null;
 
   constructor() {
     this.userData = app.getPath("userData");
@@ -90,6 +95,20 @@ export class CrashRecoveryService {
       clearInterval(this.backupTimer);
       this.backupTimer = null;
     }
+    if (this.debounceTimer) {
+      clearTimeout(this.debounceTimer);
+      this.debounceTimer = null;
+    }
+  }
+
+  scheduleBackup(): void {
+    if (this.debounceTimer) {
+      clearTimeout(this.debounceTimer);
+    }
+    this.debounceTimer = setTimeout(() => {
+      this.debounceTimer = null;
+      this.takeBackup();
+    }, DEBOUNCE_BACKUP_MS);
   }
 
   takeBackup(): void {
@@ -104,18 +123,42 @@ export class CrashRecoveryService {
     }
   }
 
-  restoreBackup(): boolean {
+  restoreBackup(panelIds?: string[]): boolean {
     try {
       if (!fs.existsSync(this.backupPath)) return false;
       const raw = fs.readFileSync(this.backupPath, "utf8");
       const snapshot = JSON.parse(raw) as SessionSnapshot;
+
+      if (panelIds !== undefined && panelIds.length > 0 && snapshot.appState) {
+        const appState = snapshot.appState as Record<string, unknown>;
+        if (Array.isArray(appState.terminals)) {
+          const idSet = new Set(panelIds);
+          appState.terminals = (appState.terminals as Array<{ id: string }>).filter((t) =>
+            idSet.has(t.id)
+          );
+        }
+      }
+
       this.applySessionSnapshot(snapshot);
-      console.log("[CrashRecovery] Session restored from backup");
+      console.log(
+        "[CrashRecovery] Session restored from backup" +
+          (panelIds && panelIds.length > 0 ? ` (${panelIds.length} panels selected)` : "")
+      );
       return true;
     } catch (err) {
       console.error("[CrashRecovery] Failed to restore backup:", err);
       return false;
     }
+  }
+
+  setPanelFilter(panelIds: string[]): void {
+    this.pendingPanelFilter = panelIds;
+  }
+
+  consumePanelFilter(): string[] | null {
+    const filter = this.pendingPanelFilter;
+    this.pendingPanelFilter = null;
+    return filter;
   }
 
   resetToFresh(): void {
@@ -155,22 +198,58 @@ export class CrashRecoveryService {
         return null;
       }
 
+      if (!app.isPackaged && marker.isPackaged === false && !marker.crashLogPath) {
+        console.log("[CrashRecovery] Orphaned dev-mode marker — discarding (not a crash)");
+        this.deleteMarker();
+        return null;
+      }
+
       this.deleteMarker();
 
       const logPath = marker.crashLogPath ?? null;
       const entry = logPath ? this.readCrashLog(logPath) : this.buildCrashEntryFromMarker(marker);
       const backupInfo = this.readBackupInfo();
+      const panels = backupInfo.exists ? this.extractPanelSummaries(entry.timestamp) : undefined;
 
       return {
         logPath: logPath ?? path.join(this.crashesDir, `crash-${entry.id}.json`),
         entry,
         hasBackup: backupInfo.exists,
         backupTimestamp: backupInfo.timestamp,
+        panels,
       };
     } catch (err) {
       console.error("[CrashRecovery] Failed to consume marker:", err);
       this.deleteMarker();
       return null;
+    }
+  }
+
+  private extractPanelSummaries(crashTimestamp: number): PanelSummary[] {
+    try {
+      if (!fs.existsSync(this.backupPath)) return [];
+      const raw = fs.readFileSync(this.backupPath, "utf8");
+      const snapshot = JSON.parse(raw) as SessionSnapshot;
+      if (!snapshot.appState) return [];
+
+      const appState = snapshot.appState as Record<string, unknown>;
+      const terminals = appState.terminals;
+      if (!Array.isArray(terminals)) return [];
+
+      return terminals.map((t: Record<string, unknown>) => ({
+        id: String(t.id ?? ""),
+        kind: String(t.kind ?? "terminal"),
+        title: String(t.title ?? ""),
+        cwd: t.cwd ? String(t.cwd) : undefined,
+        worktreeId: t.worktreeId ? String(t.worktreeId) : undefined,
+        location: (t.location === "dock" ? "dock" : "grid") as "grid" | "dock",
+        isSuspect:
+          typeof t.createdAt === "number"
+            ? Math.abs(crashTimestamp - t.createdAt) < SUSPECT_WINDOW_MS
+            : false,
+      }));
+    } catch {
+      return [];
     }
   }
 
@@ -180,6 +259,7 @@ export class CrashRecoveryService {
         sessionStartMs: this.sessionStartMs,
         appVersion: app.getVersion(),
         platform: process.platform,
+        isPackaged: app.isPackaged,
         crashLogPath: crashEntry
           ? path.join(this.crashesDir, `crash-${crashEntry.id}.json`)
           : undefined,
@@ -324,6 +404,7 @@ interface MarkerFile {
   appVersion: string;
   platform: string;
   crashLogPath?: string;
+  isPackaged?: boolean;
 }
 
 interface SessionSnapshot {

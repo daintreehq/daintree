@@ -1,5 +1,7 @@
+import type { AgentState } from "../../shared/types/agent.js";
 import { store } from "../store.js";
 import { projectStore } from "./ProjectStore.js";
+import { logInfo, logError } from "../utils/logger.js";
 
 export interface HibernationConfig {
   enabled: boolean;
@@ -10,6 +12,14 @@ const DEFAULT_CONFIG: HibernationConfig = {
   enabled: false,
   inactiveThresholdHours: 24,
 };
+
+const MEMORY_PRESSURE_INACTIVE_MS = 30 * 60 * 1000;
+const ACTIVE_AGENT_STATES: ReadonlySet<AgentState> = new Set([
+  "working",
+  "running",
+  "waiting",
+  "directing",
+]);
 
 /**
  * HibernationService - Auto-hibernates inactive projects to free resources.
@@ -140,17 +150,58 @@ export class HibernationService {
       );
 
       try {
-        // Kill terminals (synchronous)
-        const terminalsKilled = ptyManager.killByProject(project.id);
-
-        // Clear persisted state
-        await projectStore.clearProjectState(project.id);
+        // Gracefully kill terminals (allows agents to print session IDs before dying).
+        // Project state (state.json) is preserved so terminal IDs remain valid
+        // for matching .restore snapshot files on re-open.
+        const results = await ptyManager.gracefulKillByProject(project.id);
+        const terminalsKilled = results.length;
 
         console.log(
           `[HibernationService] Hibernated "${project.name}": ${terminalsKilled} terminals killed`
         );
       } catch (error) {
         console.error(`[HibernationService] Failed to hibernate project "${project.name}":`, error);
+      }
+    }
+  }
+
+  async hibernateUnderMemoryPressure(): Promise<void> {
+    const currentProjectId = projectStore.getCurrentProjectId();
+    const projects = projectStore.getAllProjects();
+    const now = Date.now();
+
+    const { getPtyManager } = await import("./PtyManager.js");
+    const ptyManager = getPtyManager();
+    const allTerminals = ptyManager.getAll();
+
+    for (const project of projects) {
+      if (project.id === currentProjectId) continue;
+
+      const inactiveDuration = now - (project.lastOpened || 0);
+      if (inactiveDuration < MEMORY_PRESSURE_INACTIVE_MS) continue;
+
+      const projectTerminals = allTerminals.filter((t) => t.projectId === project.id);
+      if (projectTerminals.length === 0) continue;
+
+      const hasActiveAgent = projectTerminals.some(
+        (t) => t.agentState && ACTIVE_AGENT_STATES.has(t.agentState)
+      );
+      if (hasActiveAgent) continue;
+
+      logInfo("memory-pressure-hibernate-project", {
+        project: project.name,
+        projectId: project.id,
+        inactiveMinutes: Math.floor(inactiveDuration / 60000),
+        terminalCount: projectTerminals.length,
+      });
+
+      try {
+        await ptyManager.gracefulKillByProject(project.id);
+      } catch (error) {
+        logError("memory-pressure-hibernate-failed", error, {
+          project: project.name,
+          projectId: project.id,
+        });
       }
     }
   }

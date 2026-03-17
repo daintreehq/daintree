@@ -10,7 +10,7 @@ import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import type { TerminalInstance } from "@/store/terminalStore";
 import type { TerminalLocation } from "@shared/types";
-import type { LucideIcon } from "lucide-react";
+import type { ComponentType } from "react";
 
 function getLocationIcon(location: TerminalLocation | undefined) {
   if (location === "dock") return <PanelBottom className="w-3 h-3" />;
@@ -18,7 +18,7 @@ function getLocationIcon(location: TerminalLocation | undefined) {
 }
 
 export interface StatusContainerConfig {
-  icon: LucideIcon;
+  icon: ComponentType<{ className?: string }>;
   iconColor: string;
   badgeColor: string;
   badgeTextColor: string;
@@ -125,7 +125,7 @@ export function StatusContainer({ config, compact = false }: StatusContainerProp
                   pingTerminal(terminal.id);
                   setIsOpen(false);
                 }}
-                className="flex items-center justify-between gap-2.5 w-full px-2.5 py-1.5 rounded-[var(--radius-sm)] transition-colors group text-left outline-none hover:bg-white/5 focus:bg-white/5"
+                className="flex items-center justify-between gap-2.5 w-full px-2.5 py-1.5 rounded-[var(--radius-sm)] transition-colors group text-left outline-none hover:bg-tint/5 focus:bg-tint/5"
               >
                 <div className="flex items-center gap-2 min-w-0 flex-1">
                   <div className="shrink-0 opacity-60 group-hover:opacity-100 transition-opacity">

@@ -25,6 +25,12 @@ npm run package      # Distribute
 npm run rebuild      # Rebuild native modules
 ```
 
+### CI Testing Strategy
+
+- **PRs:** Run typecheck, lint, format, and unit tests only (no E2E). Fast feedback loop.
+- **Nightly:** Full E2E core and online test suites run on schedule.
+- **Releases:** Full E2E core and online suites gate the release publish.
+
 ## Architecture
 
 - **Main (`electron/`):** Handles node-pty, git operations, services, and IPC.
@@ -218,5 +224,6 @@ src/
 ## Documentation
 
 - `docs/development.md` — Architecture, IPC patterns, debugging
+- `docs/architecture/theme-system.md` — App theme tokens, normalization, import flow
 - `docs/e2e-testing.md` — Playwright E2E testing setup and patterns
 - `docs/feature-curation.md` — Feature evaluation criteria

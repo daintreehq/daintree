@@ -73,6 +73,125 @@ describe("errorStore", () => {
     expect(state.errors.some((entry) => entry.message === "error-54")).toBe(true);
   });
 
+  it("preserves correlationId through addError", () => {
+    const id = useErrorStore.getState().addError({
+      type: "git",
+      message: "push rejected",
+      source: "git",
+      isTransient: false,
+      correlationId: "test-corr-1234",
+    });
+
+    const error = useErrorStore.getState().errors.find((e) => e.id === id);
+    expect(error?.correlationId).toBe("test-corr-1234");
+  });
+
+  it("preserves original correlationId on deduplicated errors", () => {
+    vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
+    useErrorStore.getState().addError({
+      type: "git",
+      message: "push rejected",
+      source: "git",
+      isTransient: false,
+      correlationId: "original-corr-id",
+    });
+
+    vi.setSystemTime(new Date("2026-01-01T00:00:00.200Z"));
+    useErrorStore.getState().addError({
+      type: "git",
+      message: "push rejected",
+      source: "git",
+      isTransient: false,
+      correlationId: "new-corr-id",
+    });
+
+    const state = useErrorStore.getState();
+    expect(state.errors).toHaveLength(1);
+    expect(state.errors[0]?.correlationId).toBe("original-corr-id");
+  });
+
+  it("preserves recoveryHint through addError", () => {
+    const id = useErrorStore.getState().addError({
+      type: "filesystem",
+      message: "EACCES: permission denied",
+      source: "fs",
+      isTransient: false,
+      recoveryHint: "Check file permissions or run with elevated privileges.",
+    });
+
+    const error = useErrorStore.getState().errors.find((e) => e.id === id);
+    expect(error?.recoveryHint).toBe("Check file permissions or run with elevated privileges.");
+  });
+
+  it("does not include recoveryHint in dedup comparison", () => {
+    vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
+    useErrorStore.getState().addError({
+      type: "network",
+      message: "Timeout",
+      source: "fetcher",
+      isTransient: true,
+      recoveryHint: "Check your network connection and try again.",
+    });
+
+    vi.setSystemTime(new Date("2026-01-01T00:00:00.200Z"));
+    useErrorStore.getState().addError({
+      type: "network",
+      message: "Timeout",
+      source: "fetcher",
+      isTransient: true,
+      recoveryHint: "Different hint text.",
+    });
+
+    const state = useErrorStore.getState();
+    expect(state.errors).toHaveLength(1);
+    expect(state.errors[0]?.recoveryHint).toBe("Check your network connection and try again.");
+  });
+
+  describe("retryProgress", () => {
+    it("updateRetryProgress sets progress on matching error", () => {
+      const id = useErrorStore.getState().addError({
+        type: "process",
+        message: "spawn failed",
+        source: "pty",
+        isTransient: true,
+      });
+
+      useErrorStore.getState().updateRetryProgress(id, 2, 3);
+
+      const error = useErrorStore.getState().errors.find((e) => e.id === id);
+      expect(error?.retryProgress).toEqual({ attempt: 2, maxAttempts: 3 });
+    });
+
+    it("clearRetryProgress removes progress from matching error", () => {
+      const id = useErrorStore.getState().addError({
+        type: "process",
+        message: "spawn failed",
+        source: "pty",
+        isTransient: true,
+      });
+
+      useErrorStore.getState().updateRetryProgress(id, 1, 3);
+      useErrorStore.getState().clearRetryProgress(id);
+
+      const error = useErrorStore.getState().errors.find((e) => e.id === id);
+      expect(error?.retryProgress).toBeUndefined();
+    });
+
+    it("clearAll removes all retryProgress", () => {
+      const id = useErrorStore.getState().addError({
+        type: "process",
+        message: "spawn failed",
+        source: "pty",
+        isTransient: true,
+      });
+
+      useErrorStore.getState().updateRetryProgress(id, 1, 3);
+      useErrorStore.getState().clearAll();
+
+      expect(useErrorStore.getState().errors).toEqual([]);
+    });
+  });
+
   it("clearAll fully clears error panel state", () => {
     useErrorStore.getState().setPanelOpen(true);
     useErrorStore.getState().addError({

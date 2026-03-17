@@ -1,4 +1,4 @@
-import { clipboard, ipcMain } from "electron";
+import { clipboard, ipcMain, nativeImage } from "electron";
 import { CHANNELS } from "../channels.js";
 import * as path from "node:path";
 import type { Dirent } from "node:fs";
@@ -87,9 +87,36 @@ export function registerClipboardHandlers(): () => void {
     }
   };
 
+  const handleThumbnailFromPath = async (
+    _event: Electron.IpcMainInvokeEvent,
+    filePath: string
+  ): Promise<
+    { ok: true; filePath: string; thumbnailDataUrl: string } | { ok: false; error: string }
+  > => {
+    try {
+      const image = nativeImage.createFromPath(filePath);
+      if (image.isEmpty()) {
+        return { ok: false, error: "Unsupported image format or file not found" };
+      }
+
+      const size = image.getSize();
+      const thumbHeight = 40;
+      const thumbWidth = Math.max(1, Math.round((size.width / size.height) * thumbHeight));
+      const thumbnail = image.resize({ width: thumbWidth, height: thumbHeight });
+      const thumbnailDataUrl = `data:image/png;base64,${thumbnail.toPNG().toString("base64")}`;
+
+      return { ok: true, filePath, thumbnailDataUrl };
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      return { ok: false, error: message };
+    }
+  };
+
   ipcMain.handle(CHANNELS.CLIPBOARD_SAVE_IMAGE, handleSaveImage);
+  ipcMain.handle(CHANNELS.CLIPBOARD_THUMBNAIL_FROM_PATH, handleThumbnailFromPath);
 
   return () => {
     ipcMain.removeHandler(CHANNELS.CLIPBOARD_SAVE_IMAGE);
+    ipcMain.removeHandler(CHANNELS.CLIPBOARD_THUMBNAIL_FROM_PATH);
   };
 }

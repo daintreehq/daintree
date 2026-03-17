@@ -11,8 +11,6 @@ export type { UseContextInjectionReturn, InjectionStatus } from "./useContextInj
 
 export { useErrors } from "./useErrors";
 
-export { useTerminalPalette } from "./useTerminalPalette";
-export type { SearchableTerminal, UseTerminalPaletteReturn } from "./useTerminalPalette";
 export { useQuickSwitcher } from "./useQuickSwitcher";
 export type { QuickSwitcherItem, UseQuickSwitcherReturn } from "./useQuickSwitcher";
 export { useNewTerminalPalette } from "./useNewTerminalPalette";
@@ -51,6 +49,9 @@ export type { LayoutState } from "./useLayoutState";
 export { useWindowNotifications } from "./useWindowNotifications";
 export { useWatchedPanelNotifications } from "./useWatchedPanelNotifications";
 
+export { useReEntrySummary } from "./useReEntrySummary";
+export type { ReEntrySummaryState, ReEntryCounts } from "./useReEntrySummary";
+
 export { useWorktreeActions } from "./useWorktreeActions";
 export type { UseWorktreeActionsOptions, WorktreeActions } from "./useWorktreeActions";
 
@@ -61,6 +62,9 @@ export { useNativeContextMenu } from "./useNativeContextMenu";
 
 export { useHorizontalScrollControls } from "./useHorizontalScrollControls";
 export type { UseHorizontalScrollControlsReturn } from "./useHorizontalScrollControls";
+
+export { useVerticalScrollShadows } from "./useVerticalScrollShadows";
+export type { UseVerticalScrollShadowsReturn } from "./useVerticalScrollShadows";
 
 export { useDockRenderState } from "./useDockRenderState";
 
@@ -82,3 +86,18 @@ export type { UsePanelHandlersConfig, PanelHandlers } from "./usePanelHandlers";
 
 export { useUnsavedChanges } from "./useUnsavedChanges";
 export type { UseUnsavedChangesOptions } from "./useUnsavedChanges";
+
+export { useDebounce } from "./useDebounce";
+
+export { useNoteSearch } from "./useNoteSearch";
+export type { SortOrder, UseNoteSearchReturn } from "./useNoteSearch";
+export { SORT_LABELS } from "./useNoteSearch";
+
+export { useNoteEditor } from "./useNoteEditor";
+export type { UseNoteEditorReturn } from "./useNoteEditor";
+
+export { useNoteTitleEdit } from "./useNoteTitleEdit";
+export type { UseNoteTitleEditReturn } from "./useNoteTitleEdit";
+
+export { useNoteActions } from "./useNoteActions";
+export type { UseNoteActionsReturn } from "./useNoteActions";

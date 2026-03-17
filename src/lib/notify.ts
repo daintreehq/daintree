@@ -6,7 +6,19 @@ import {
   type NotificationAction,
   type NotificationPlacement,
 } from "@/store/notificationStore";
-import { useNotificationHistoryStore } from "@/store/slices/notificationHistorySlice";
+import {
+  useNotificationHistoryStore,
+  type NotificationHistoryAction,
+} from "@/store/slices/notificationHistorySlice";
+
+export interface CoalesceOptions {
+  key: string;
+  windowMs?: number;
+  buildMessage: (count: number) => string | ReactNode;
+  buildTitle?: (count: number) => string | undefined;
+  buildInboxMessage?: (count: number) => string | undefined;
+  buildAction?: (count: number) => NotificationAction | undefined;
+}
 
 export interface NotifyPayload {
   type: NotificationType;
@@ -28,6 +40,22 @@ export interface NotifyPayload {
   priority?: NotificationPriority;
   /** Groups related notifications into a thread in the notification center */
   correlationId?: string;
+  /** When set, rapidly fired notifications with the same key coalesce into a single updating toast */
+  coalesce?: CoalesceOptions;
+  /** When false, the history entry exists but does not increment the unread badge. Defaults to true. */
+  countable?: boolean;
+}
+
+interface CoalesceEntry {
+  id: string;
+  expiresAt: number;
+  count: number;
+}
+
+const _activeCoalesced = new Map<string, CoalesceEntry>();
+
+export function _resetCoalesceMap(): void {
+  _activeCoalesced.clear();
 }
 
 /**
@@ -54,19 +82,35 @@ export function notify(payload: NotifyPayload): string {
 
   const historyMessage = inboxMessage ?? (typeof message === "string" ? message : undefined);
 
+  const allActions = [...(payload.actions ?? []), ...(payload.action ? [payload.action] : [])];
+  const historyActions: NotificationHistoryAction[] = allActions
+    .filter(
+      (a): a is NotificationAction & { actionId: NonNullable<NotificationAction["actionId"]> } =>
+        !!a.actionId
+    )
+    .map((a) => ({
+      label: a.label,
+      actionId: a.actionId,
+      actionArgs: a.actionArgs,
+      variant: a.variant,
+    }));
+
   if (placement === "grid-bar") {
-    if (historyMessage) {
-      useNotificationHistoryStore.getState().addEntry({
-        type,
-        title,
-        message: historyMessage,
-        correlationId,
-        seenAsToast: true,
-      });
-    }
+    const entryId = historyMessage
+      ? useNotificationHistoryStore.getState().addEntry({
+          type,
+          title,
+          message: historyMessage,
+          correlationId,
+          seenAsToast: true,
+          countable: payload.countable,
+          actions: historyActions.length > 0 ? historyActions : undefined,
+        })
+      : undefined;
     return useNotificationStore.getState().addNotification({
       ...payload,
       priority,
+      historyEntryId: entryId,
     });
   }
 
@@ -75,15 +119,17 @@ export function notify(payload: NotifyPayload): string {
   const shouldToast = priority === "watch" || (priority === "high" && isFocused);
   const shouldNative = priority === "watch";
 
-  if (historyMessage) {
-    useNotificationHistoryStore.getState().addEntry({
-      type,
-      title,
-      message: historyMessage,
-      correlationId,
-      seenAsToast: shouldToast,
-    });
-  }
+  const historyEntryId = historyMessage
+    ? useNotificationHistoryStore.getState().addEntry({
+        type,
+        title,
+        message: historyMessage,
+        correlationId,
+        seenAsToast: shouldToast,
+        countable: payload.countable,
+        actions: historyActions.length > 0 ? historyActions : undefined,
+      })
+    : undefined;
 
   if (shouldNative && historyMessage && typeof window !== "undefined") {
     window.electron?.notification?.showNative?.({
@@ -92,10 +138,51 @@ export function notify(payload: NotifyPayload): string {
     });
   }
 
+  if (shouldToast && payload.coalesce) {
+    const { coalesce } = payload;
+    const windowMs = coalesce.windowMs ?? 2000;
+    const now = Date.now();
+    const existing = _activeCoalesced.get(coalesce.key);
+
+    if (existing && existing.expiresAt > now) {
+      const notification = useNotificationStore
+        .getState()
+        .notifications.find((n) => n.id === existing.id && !n.dismissed);
+
+      if (notification) {
+        existing.count += 1;
+        existing.expiresAt = now + windowMs;
+        const count = existing.count;
+
+        useNotificationStore.getState().updateNotification(existing.id, {
+          message: coalesce.buildMessage(count),
+          title: coalesce.buildTitle?.(count) ?? title,
+          inboxMessage: coalesce.buildInboxMessage?.(count),
+          action: coalesce.buildAction?.(count) ?? payload.action,
+        });
+
+        return existing.id;
+      }
+    }
+
+    const id = useNotificationStore.getState().addNotification({
+      ...payload,
+      priority,
+      historyEntryId,
+    });
+    _activeCoalesced.set(coalesce.key, {
+      id,
+      expiresAt: now + windowMs,
+      count: 1,
+    });
+    return id;
+  }
+
   if (shouldToast) {
     return useNotificationStore.getState().addNotification({
       ...payload,
       priority,
+      historyEntryId,
     });
   }
 

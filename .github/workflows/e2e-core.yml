@@ -1,8 +1,6 @@
 name: E2E Core Tests
 
 on:
-  pull_request:
-    branches: [main, develop]
   schedule:
     - cron: "0 3 * * *"
   workflow_dispatch:
@@ -44,10 +42,7 @@ jobs:
         run: |
           PLATFORM="${{ inputs.platform || 'all' }}"
 
-          # PRs run on Linux, macOS, and Windows
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            echo 'matrix={"include":[{"os":"macos-14","name":"macOS"},{"os":"ubuntu-22.04","name":"Linux"},{"os":"windows-latest","name":"Windows"}]}' >> "$GITHUB_OUTPUT"
-          elif [ "$PLATFORM" = "macos" ]; then
+          if [ "$PLATFORM" = "macos" ]; then
             echo 'matrix={"include":[{"os":"macos-14","name":"macOS"}]}' >> "$GITHUB_OUTPUT"
           elif [ "$PLATFORM" = "linux" ]; then
             echo 'matrix={"include":[{"os":"ubuntu-22.04","name":"Linux"}]}' >> "$GITHUB_OUTPUT"
@@ -88,10 +83,10 @@ jobs:
           Set-Service -Name "DiagTrack" -StartupType Disabled -ErrorAction SilentlyContinue
 
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm

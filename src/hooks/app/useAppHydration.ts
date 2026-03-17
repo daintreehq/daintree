@@ -1,36 +1,24 @@
-/**
- * useAppHydration - Handles initial app state hydration.
- *
- * Extracts hydration logic from App.tsx:
- * - Restores terminal state
- * - Restores active worktree
- * - Loads recipes
- */
-
 import { useEffect, useRef, useState } from "react";
-import { hydrateAppState } from "../../utils/stateHydration";
+import { hydrateAppState, type HydrationOptions } from "../../utils/stateHydration";
 import { isElectronAvailable } from "../useElectron";
-import type { TerminalReconnectError, TabGroup } from "@/types";
+import { useTerminalStore } from "@/store";
+import { useWorktreeSelectionStore } from "@/store/worktreeStore";
+import { useRecipeStore } from "@/store/recipeStore";
+import { useDiagnosticsStore, useFocusStore, useActionMruStore } from "@/store";
 
-type DiagnosticsTab = "problems" | "logs" | "events";
-
-export interface HydrationCallbacks {
-  addTerminal: (options: any) => Promise<string>;
-  setActiveWorktree: (id: string | null) => void;
-  loadRecipes: (projectId: string) => Promise<void>;
-  openDiagnosticsDock: (tab?: DiagnosticsTab) => void;
-  setFocusMode?: (
-    focusMode: boolean,
-    focusPanelState?: { sidebarWidth: number; diagnosticsOpen: boolean }
-  ) => void;
-  setReconnectError?: (id: string, error: TerminalReconnectError) => void;
-  hydrateTabGroups?: (tabGroups: TabGroup[], options?: { skipPersist?: boolean }) => void;
-  hydrateMru?: (list: string[]) => void;
-}
-
-export function useAppHydration(callbacks: HydrationCallbacks, enabled = true) {
+export function useAppHydration(enabled = true) {
   const [isStateLoaded, setIsStateLoaded] = useState(false);
   const hasRestoredState = useRef(false);
+
+  const addTerminal = useTerminalStore((s) => s.addTerminal);
+  const setReconnectError = useTerminalStore((s) => s.setReconnectError);
+  const hydrateTabGroups = useTerminalStore((s) => s.hydrateTabGroups);
+  const hydrateMru = useTerminalStore((s) => s.hydrateMru);
+  const setActiveWorktree = useWorktreeSelectionStore((s) => s.setActiveWorktree);
+  const loadRecipes = useRecipeStore((s) => s.loadRecipes);
+  const openDiagnosticsDock = useDiagnosticsStore((s) => s.openDock);
+  const setFocusMode = useFocusStore((s) => s.setFocusMode);
+  const hydrateActionMru = useActionMruStore((s) => s.hydrateActionMru);
 
   useEffect(() => {
     if (!isElectronAvailable() || hasRestoredState.current || !enabled) {
@@ -41,7 +29,17 @@ export function useAppHydration(callbacks: HydrationCallbacks, enabled = true) {
 
     const restoreState = async () => {
       try {
-        await hydrateAppState(callbacks);
+        await hydrateAppState({
+          addTerminal: addTerminal as HydrationOptions["addTerminal"],
+          setActiveWorktree,
+          loadRecipes,
+          openDiagnosticsDock,
+          setFocusMode,
+          setReconnectError,
+          hydrateTabGroups,
+          hydrateMru,
+          hydrateActionMru,
+        });
       } catch (error) {
         console.error("Failed to restore app state:", error);
       } finally {
@@ -52,14 +50,15 @@ export function useAppHydration(callbacks: HydrationCallbacks, enabled = true) {
     restoreState();
   }, [
     enabled,
-    callbacks.addTerminal,
-    callbacks.setActiveWorktree,
-    callbacks.loadRecipes,
-    callbacks.openDiagnosticsDock,
-    callbacks.setFocusMode,
-    callbacks.setReconnectError,
-    callbacks.hydrateTabGroups,
-    callbacks.hydrateMru,
+    addTerminal,
+    setActiveWorktree,
+    loadRecipes,
+    openDiagnosticsDock,
+    setFocusMode,
+    setReconnectError,
+    hydrateTabGroups,
+    hydrateMru,
+    hydrateActionMru,
   ]);
 
   return { isStateLoaded };

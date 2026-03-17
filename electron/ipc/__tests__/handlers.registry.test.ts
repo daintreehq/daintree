@@ -7,7 +7,13 @@ const registerMocks = vi.hoisted(() => ({
   registerCopyTreeHandlers: vi.fn(),
   registerAiHandlers: vi.fn(),
   registerSlashCommandHandlers: vi.fn(),
-  registerProjectHandlers: vi.fn(),
+  registerSystemShellHandlers: vi.fn(),
+  registerEditorConfigHandlers: vi.fn(),
+  registerAgentCliHandlers: vi.fn(),
+  registerProjectCrudHandlers: vi.fn(),
+  registerProjectRecipesHandlers: vi.fn(),
+  registerTerminalLayoutHandlers: vi.fn(),
+  registerProjectInRepoSettingsHandlers: vi.fn(),
   registerGithubHandlers: vi.fn(),
   registerAppHandlers: vi.fn(),
   registerSidecarHandlers: vi.fn(),
@@ -28,9 +34,14 @@ const registerMocks = vi.hoisted(() => ({
   registerClipboardHandlers: vi.fn(),
   registerGitWriteHandlers: vi.fn(),
   registerTelemetryHandlers: vi.fn(),
+  registerPrivacyHandlers: vi.fn(),
+  registerOnboardingHandlers: vi.fn(),
   registerVoiceInputHandlers: vi.fn(),
   registerMcpServerHandlers: vi.fn(),
   registerWebviewHandlers: vi.fn(),
+  registerDiagnosticsHandlers: vi.fn(),
+  registerWorkflowHandlers: vi.fn(),
+  registerDemoHandlers: vi.fn(),
 }));
 
 vi.mock("../handlers/worktree.js", () => ({
@@ -51,8 +62,26 @@ vi.mock("../handlers/ai.js", () => ({
 vi.mock("../handlers/slashCommands.js", () => ({
   registerSlashCommandHandlers: registerMocks.registerSlashCommandHandlers,
 }));
-vi.mock("../handlers/project.js", () => ({
-  registerProjectHandlers: registerMocks.registerProjectHandlers,
+vi.mock("../handlers/systemShell.js", () => ({
+  registerSystemShellHandlers: registerMocks.registerSystemShellHandlers,
+}));
+vi.mock("../handlers/editorConfig.js", () => ({
+  registerEditorConfigHandlers: registerMocks.registerEditorConfigHandlers,
+}));
+vi.mock("../handlers/agentCli.js", () => ({
+  registerAgentCliHandlers: registerMocks.registerAgentCliHandlers,
+}));
+vi.mock("../handlers/projectCrud.js", () => ({
+  registerProjectCrudHandlers: registerMocks.registerProjectCrudHandlers,
+}));
+vi.mock("../handlers/projectRecipes.js", () => ({
+  registerProjectRecipesHandlers: registerMocks.registerProjectRecipesHandlers,
+}));
+vi.mock("../handlers/terminalLayout.js", () => ({
+  registerTerminalLayoutHandlers: registerMocks.registerTerminalLayoutHandlers,
+}));
+vi.mock("../handlers/projectInRepoSettings.js", () => ({
+  registerProjectInRepoSettingsHandlers: registerMocks.registerProjectInRepoSettingsHandlers,
 }));
 vi.mock("../handlers/github.js", () => ({
   registerGithubHandlers: registerMocks.registerGithubHandlers,
@@ -114,6 +143,12 @@ vi.mock("../handlers/git-write.js", () => ({
 vi.mock("../handlers/telemetry.js", () => ({
   registerTelemetryHandlers: registerMocks.registerTelemetryHandlers,
 }));
+vi.mock("../handlers/privacy.js", () => ({
+  registerPrivacyHandlers: registerMocks.registerPrivacyHandlers,
+}));
+vi.mock("../handlers/onboarding.js", () => ({
+  registerOnboardingHandlers: registerMocks.registerOnboardingHandlers,
+}));
 vi.mock("../handlers/voiceInput.js", () => ({
   registerVoiceInputHandlers: registerMocks.registerVoiceInputHandlers,
 }));
@@ -122,6 +157,15 @@ vi.mock("../handlers/mcpServer.js", () => ({
 }));
 vi.mock("../handlers/webview.js", () => ({
   registerWebviewHandlers: registerMocks.registerWebviewHandlers,
+}));
+vi.mock("../handlers/diagnostics.js", () => ({
+  registerDiagnosticsHandlers: registerMocks.registerDiagnosticsHandlers,
+}));
+vi.mock("../handlers/workflow.js", () => ({
+  registerWorkflowHandlers: registerMocks.registerWorkflowHandlers,
+}));
+vi.mock("../handlers/demo.js", () => ({
+  registerDemoHandlers: registerMocks.registerDemoHandlers,
 }));
 vi.mock("../../services/events.js", () => ({
   events: { emit: vi.fn(), on: vi.fn(), off: vi.fn() },
