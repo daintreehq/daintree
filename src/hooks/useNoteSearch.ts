@@ -13,7 +13,6 @@ export const SORT_LABELS: Record<SortOrder, string> = {
 interface UseNoteSearchOptions {
   isOpen: boolean;
   notes: NoteListItem[];
-  isLoading: boolean;
   refresh: () => void;
 }
 
@@ -33,7 +32,6 @@ export interface UseNoteSearchReturn {
 export function useNoteSearch({
   isOpen,
   notes,
-  isLoading,
   refresh,
 }: UseNoteSearchOptions): UseNoteSearchReturn {
   const [query, setQuery] = useState("");
@@ -116,11 +114,6 @@ export function useNoteSearch({
       }
     };
   }, [isOpen, query, notes]);
-
-  const resetSearch = useCallback(() => {
-    setQuery("");
-    setSelectedTag(null);
-  }, []);
 
   return {
     query,

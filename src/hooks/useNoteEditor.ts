@@ -1,14 +1,11 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { notesClient, type NoteListItem, type NoteMetadata } from "@/clients/notesClient";
 import { normalizeTag } from "../../shared/utils/noteTags";
-import type { EditorView } from "@codemirror/view";
 
 interface UseNoteEditorOptions {
   selectedNote: NoteListItem | null;
-  editorViewRef: React.MutableRefObject<EditorView | null>;
   refresh: () => void;
   setLastSelectedNoteId: (id: string | null) => void;
-  lastSelectedNoteId: string | null;
 }
 
 export interface UseNoteEditorReturn {
@@ -32,10 +29,8 @@ export interface UseNoteEditorReturn {
 
 export function useNoteEditor({
   selectedNote,
-  editorViewRef,
   refresh,
   setLastSelectedNoteId,
-  lastSelectedNoteId,
 }: UseNoteEditorOptions): UseNoteEditorReturn {
   const [noteContent, setNoteContent] = useState("");
   const [noteMetadata, setNoteMetadata] = useState<NoteMetadata | null>(null);
@@ -82,7 +77,8 @@ export function useNoteEditor({
 
   // Load note content when selected
   useEffect(() => {
-    if (!selectedNote) {
+    const note = latestSelectedNoteRef.current;
+    if (!note) {
       setNoteContent("");
       setNoteMetadata(null);
       setNoteLastModified(null);
@@ -95,7 +91,7 @@ export function useNoteEditor({
     setHasConflict(false);
 
     notesClient
-      .read(selectedNote.path)
+      .read(note.path)
       .then((content) => {
         if (cancelled) return;
         setNoteContent(content.content);
@@ -112,7 +108,7 @@ export function useNoteEditor({
     return () => {
       cancelled = true;
     };
-  }, [selectedNote]);
+  }, [selectedNote?.id]);
 
   const handleContentChange = useCallback(
     (value: string) => {
@@ -152,11 +148,12 @@ export function useNoteEditor({
   );
 
   const handleReloadNote = useCallback(async () => {
-    if (!selectedNote) return;
+    const note = latestSelectedNoteRef.current;
+    if (!note) return;
     setHasConflict(false);
     setIsLoadingContent(true);
     try {
-      const content = await notesClient.read(selectedNote.path);
+      const content = await notesClient.read(note.path);
       setNoteContent(content.content);
       setNoteMetadata(content.metadata);
       setNoteLastModified(content.lastModified);
@@ -165,7 +162,7 @@ export function useNoteEditor({
     } finally {
       setIsLoadingContent(false);
     }
-  }, [selectedNote]);
+  }, []);
 
   const handleAddTag = useCallback(
     async (tag: string) => {

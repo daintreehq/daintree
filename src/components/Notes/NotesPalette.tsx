@@ -75,21 +75,18 @@ export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
   const { addTerminal } = useTerminalStore();
   const { activeWorktreeId } = useWorktreeSelectionStore();
 
-  const search = useNoteSearch({ isOpen, notes, isLoading, refresh });
+  const search = useNoteSearch({ isOpen, notes, refresh });
 
   const editor = useNoteEditor({
     selectedNote,
-    editorViewRef,
     refresh,
     setLastSelectedNoteId,
-    lastSelectedNoteId,
   });
 
   const titleEdit = useNoteTitleEdit({
     selectedNote,
     noteMetadata: editor.noteMetadata,
     noteContent: editor.noteContent,
-    noteLastModified: editor.noteLastModified,
     refresh,
     setSelectedNote,
     setNoteMetadata: editor.setNoteMetadata,
