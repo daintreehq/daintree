@@ -190,6 +190,11 @@ describe("DemoCursor", () => {
     await new Promise((r) => setTimeout(r, 10));
 
     expect(events).toEqual(["mousedown", "mouseup", "click"]);
+    // Verify elementFromPoint was called with cursor position (initialized to viewport center)
+    expect(document.elementFromPoint).toHaveBeenCalledWith(
+      window.innerWidth / 2,
+      window.innerHeight / 2
+    );
     expect(demoMock.sendCommandDone).toHaveBeenCalledWith("req-click-1", undefined);
 
     document.elementFromPoint = origElementFromPoint;

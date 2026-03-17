@@ -153,7 +153,8 @@ export function DemoCursor() {
           const elements = document.querySelectorAll(payload.selector);
           let target: Element | null = null;
           for (const el of elements) {
-            if ((el as HTMLElement).checkVisibility?.()) {
+            const htmlEl = el as HTMLElement;
+            if (htmlEl.checkVisibility ? htmlEl.checkVisibility() : htmlEl.offsetParent !== null) {
               target = el;
               break;
             }
