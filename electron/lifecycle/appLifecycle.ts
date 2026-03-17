@@ -2,6 +2,7 @@ import { app, BrowserWindow } from "electron";
 import type { CliAvailabilityService } from "../services/CliAvailabilityService.js";
 import { handleDirectoryOpen } from "../menu.js";
 import { getCrashRecoveryService } from "../services/CrashRecoveryService.js";
+import { setSignalShutdown } from "./signalShutdownState.js";
 
 let pendingCliPath: string | null = null;
 
@@ -35,19 +36,21 @@ export function registerAppLifecycleHandlers(opts: AppLifecycleOptions): void {
   // Initialize crash recovery only in the winning instance
   getCrashRecoveryService();
 
-  // Best-effort cleanup for dev-mode signal delivery (macOS/Linux SIGTERM/SIGINT,
-  // Windows Ctrl+C). On Windows, nodemon uses `taskkill /F` (TerminateProcess) which
-  // bypasses all Node.js shutdown hooks — that case is handled by CrashRecoveryService
-  // discarding orphaned dev-mode markers on next startup.
-  if (!app.isPackaged) {
-    const devSignalHandler = () => {
-      getCrashRecoveryService().cleanupOnExit();
-      setTimeout(() => process.exit(0), 3000).unref();
-      app.quit();
-    };
-    process.on("SIGTERM", devSignalHandler);
-    process.on("SIGINT", devSignalHandler);
-  }
+  // Graceful shutdown on OS signals (macOS/Linux SIGTERM/SIGINT, Windows Ctrl+C).
+  // Triggers `before-quit` via `app.quit()` so the shutdown handler runs the full
+  // cleanup chain. A hard timeout ensures the process exits even if cleanup stalls.
+  // On Windows, `taskkill /F` (TerminateProcess) bypasses all Node.js shutdown hooks —
+  // that case is handled by CrashRecoveryService on next startup.
+  let signalHandled = false;
+  const signalHandler = () => {
+    if (signalHandled) return;
+    signalHandled = true;
+    setSignalShutdown();
+    setTimeout(() => process.exit(0), 5000).unref();
+    app.quit();
+  };
+  process.on("SIGTERM", signalHandler);
+  process.on("SIGINT", signalHandler);
 
   app.on("second-instance", (_event, commandLine, _workingDirectory) => {
     console.log("[MAIN] Second instance detected, focusing main window");
