@@ -122,6 +122,14 @@ export function ProjectSwitcher() {
             onRemoveConfirmClose={() => projectSwitcher.setRemoveConfirmProject(null)}
             onConfirmRemove={projectSwitcher.confirmRemoveProject}
             isRemovingProject={projectSwitcher.isRemovingProject}
+            groups={projectSwitcher.groups}
+            onCreateGroup={projectSwitcher.createGroup}
+            onAssignProjectToGroup={projectSwitcher.assignProjectToGroup}
+            onRemoveProjectFromGroup={projectSwitcher.removeProjectFromGroup}
+            onRenameGroup={projectSwitcher.renameGroup}
+            onDeleteGroup={projectSwitcher.deleteGroup}
+            onMoveGroupUp={projectSwitcher.moveGroupUp}
+            onMoveGroupDown={projectSwitcher.moveGroupDown}
           >
             <Button
               variant="outline"
@@ -177,6 +185,14 @@ export function ProjectSwitcher() {
         onRemoveConfirmClose={() => projectSwitcher.setRemoveConfirmProject(null)}
         onConfirmRemove={projectSwitcher.confirmRemoveProject}
         isRemovingProject={projectSwitcher.isRemovingProject}
+        groups={projectSwitcher.groups}
+        onCreateGroup={projectSwitcher.createGroup}
+        onAssignProjectToGroup={projectSwitcher.assignProjectToGroup}
+        onRemoveProjectFromGroup={projectSwitcher.removeProjectFromGroup}
+        onRenameGroup={projectSwitcher.renameGroup}
+        onDeleteGroup={projectSwitcher.deleteGroup}
+        onMoveGroupUp={projectSwitcher.moveGroupUp}
+        onMoveGroupDown={projectSwitcher.moveGroupDown}
       >
         <TooltipProvider>
           <Tooltip>
