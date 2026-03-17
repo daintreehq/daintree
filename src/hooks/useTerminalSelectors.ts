@@ -1,6 +1,7 @@
 import { useShallow } from "zustand/react/shallow";
 import { useTerminalStore, type TerminalInstance } from "@/store/terminalStore";
 import { useWorktreeDataStore } from "@/store/worktreeDataStore";
+import type { WorktreeState } from "@shared/types";
 
 function isTerminalOrphaned(terminal: TerminalInstance, worktreeIds: Set<string>): boolean {
   const worktreeId = typeof terminal.worktreeId === "string" ? terminal.worktreeId.trim() : "";
@@ -131,6 +132,16 @@ export function useBackgroundedTerminals(): TerminalInstance[] {
     useShallow((state) =>
       state.terminals.filter(
         (t) => t.location === "background" && !isTerminalOrphaned(t, worktreeIds)
+      )
+    )
+  );
+}
+
+export function useConflictedWorktrees(): WorktreeState[] {
+  return useWorktreeDataStore(
+    useShallow((state) =>
+      Array.from(state.worktrees.values()).filter(
+        (w) => w.worktreeChanges?.changes.some((c) => c.status === "conflicted") ?? false
       )
     )
   );
