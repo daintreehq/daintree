@@ -54,6 +54,8 @@ export function terminalToSnapshot(t: TerminalInstance): TerminalSnapshot {
       ...(t.agentSessionId && { agentSessionId: t.agentSessionId }),
       ...(t.agentLaunchFlags?.length && { agentLaunchFlags: t.agentLaunchFlags }),
       ...(t.agentModelId && { agentModelId: t.agentModelId }),
+      ...(t.agentState && { agentState: t.agentState }),
+      ...(t.lastStateChange !== undefined && { lastStateChange: t.lastStateChange }),
     };
   } else if (t.kind === "notes") {
     return {

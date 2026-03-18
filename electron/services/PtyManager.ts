@@ -163,6 +163,13 @@ export class PtyManager extends EventEmitter {
   }
 
   /**
+   * Flush an event-driven session snapshot for an agent terminal.
+   */
+  flushAgentSnapshot(terminalId: string): void {
+    this.registry.get(terminalId)?.flushEventDrivenSnapshot();
+  }
+
+  /**
    * Set the PTY pool for terminal reuse.
    */
   setPtyPool(pool: PtyPool): void {

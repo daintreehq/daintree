@@ -157,6 +157,7 @@ describe("TerminalPersistence", () => {
         location: "grid",
         command: "  claude --model sonnet-4  ",
         agentState: "working",
+        lastStateChange: 1700000000000,
         activityHeadline: "Processing",
       });
 
@@ -174,6 +175,8 @@ describe("TerminalPersistence", () => {
           worktreeId: "wt-1",
           location: "grid",
           command: "claude --model sonnet-4",
+          agentState: "working",
+          lastStateChange: 1700000000000,
         },
       ]);
     });
