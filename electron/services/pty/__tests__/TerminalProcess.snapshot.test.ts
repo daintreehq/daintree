@@ -106,6 +106,17 @@ describe("TerminalProcess.flushEventDrivenSnapshot", () => {
     expect(persistAsyncMock).not.toHaveBeenCalled();
   });
 
+  it("does not flush when serialized state exceeds max bytes", () => {
+    const terminal = createTerminal();
+    // SESSION_SNAPSHOT_MAX_BYTES is 5MB; create a string larger than that
+    const oversized = "x".repeat(6 * 1024 * 1024);
+    vi.spyOn(terminal, "getSerializedState").mockReturnValue(oversized);
+
+    terminal.flushEventDrivenSnapshot();
+
+    expect(persistAsyncMock).not.toHaveBeenCalled();
+  });
+
   it("does not flush when terminal is killed", () => {
     const terminal = createTerminal();
     vi.spyOn(terminal, "getSerializedState").mockReturnValue("data");
