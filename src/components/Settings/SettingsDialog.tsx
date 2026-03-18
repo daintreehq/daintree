@@ -333,7 +333,7 @@ export function SettingsDialog({
     if (!scrollToSection || isSearching) return;
     let highlightTimer: ReturnType<typeof setTimeout>;
     let attempt = 0;
-    const maxAttempts = 10;
+    const maxAttempts = 20;
     const tryScroll = () => {
       const el = document.getElementById(scrollToSection);
       if (el) {
