@@ -69,6 +69,8 @@ export interface StoreSchema {
       devCommand?: string;
       browserConsoleOpen?: boolean;
       devPreviewConsoleOpen?: boolean;
+      agentState?: string;
+      lastStateChange?: number;
     }>;
     /** @deprecated Recipes are now stored per-project. This field is kept for migration only. */
     recipes?: Array<{

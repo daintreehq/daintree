@@ -247,6 +247,8 @@ export class CrashRecoveryService {
           typeof t.createdAt === "number"
             ? Math.abs(crashTimestamp - t.createdAt) < SUSPECT_WINDOW_MS
             : false,
+        agentState: typeof t.agentState === "string" ? t.agentState : undefined,
+        lastStateChange: typeof t.lastStateChange === "number" ? t.lastStateChange : undefined,
       }));
     } catch {
       return [];

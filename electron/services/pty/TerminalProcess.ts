@@ -72,6 +72,7 @@ type CursorBuffer = {
 };
 
 const TERMINAL_DISABLE_URL_STYLING: boolean = process.env.CANOPY_DISABLE_URL_STYLING === "1";
+const EVENT_DRIVEN_SNAPSHOT_THROTTLE_MS = 2000;
 
 export interface TerminalProcessCallbacks {
   emitData: (id: string, data: string | Uint8Array) => void;
@@ -106,6 +107,7 @@ export class TerminalProcess {
   private sessionPersistTimer: NodeJS.Timeout | null = null;
   private sessionPersistDirty = false;
   private sessionPersistInFlight = false;
+  private lastEventDrivenFlushAt = 0;
 
   private readonly terminalInfo: TerminalInfo;
   private readonly isAgentTerminal: boolean;
@@ -175,6 +177,23 @@ export class TerminalProcess {
       clearTimeout(this.sessionPersistTimer);
       this.sessionPersistTimer = null;
     }
+  }
+
+  flushEventDrivenSnapshot(): void {
+    if (!TERMINAL_SESSION_PERSISTENCE_ENABLED) return;
+    if (this.terminalInfo.wasKilled) return;
+
+    const now = performance.now();
+    if (now - this.lastEventDrivenFlushAt < EVENT_DRIVEN_SNAPSHOT_THROTTLE_MS) return;
+    this.lastEventDrivenFlushAt = now;
+
+    const state = this.getSerializedState();
+    if (!state) return;
+    if (Buffer.byteLength(state, "utf8") > SESSION_SNAPSHOT_MAX_BYTES) return;
+
+    persistSessionSnapshotAsync(this.id, state).catch((error) => {
+      console.warn(`[TerminalProcess] Event-driven snapshot failed for ${this.id}:`, error);
+    });
   }
 
   private logWriteError(error: unknown, context: { operation: string; traceId?: string }): void {

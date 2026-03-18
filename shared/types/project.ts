@@ -1,4 +1,4 @@
-import type { AgentId } from "./agent.js";
+import type { AgentId, AgentState } from "./agent.js";
 import type { BrowserHistory } from "./browser.js";
 import type {
   TerminalKind,
@@ -101,6 +101,10 @@ export interface TerminalSnapshot {
   agentLaunchFlags?: string[];
   /** Model ID selected at launch time for per-panel model selection */
   agentModelId?: string;
+  /** Last known agent state for crash recovery display */
+  agentState?: AgentState;
+  /** Timestamp of last agent state change */
+  lastStateChange?: number;
   // Note: Tab membership is now stored in ProjectState.tabGroups, not on terminals
 }
 

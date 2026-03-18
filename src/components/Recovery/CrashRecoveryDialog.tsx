@@ -399,6 +399,11 @@ function PanelRow({
         {panel.cwd && <div className="text-xs text-canopy-text/40 truncate">{panel.cwd}</div>}
       </div>
       <div className="flex items-center gap-1.5 shrink-0">
+        {panel.agentState && (
+          <span className="text-xs text-canopy-text/50" data-testid={`agent-state-${panel.id}`}>
+            {panel.agentState}
+          </span>
+        )}
         <span className="text-xs text-canopy-text/40">{panel.location}</span>
         {panel.isSuspect && (
           <span
