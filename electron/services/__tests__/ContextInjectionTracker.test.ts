@@ -77,13 +77,14 @@ describe("ContextInjectionTracker", () => {
   });
 
   describe("cleanupTerminal", () => {
-    it("removes terminal tracking state", () => {
+    it("removes terminal tracking state including cancelled marker", () => {
       tracker.beginInjection("t1", "inj1");
       tracker.markCancelled("inj1");
 
       tracker.cleanupTerminal("t1");
 
       expect(tracker.isTerminalInjecting("t1")).toBe(false);
+      expect(tracker.isCancelled("inj1")).toBe(false);
       expect(tracker.getActiveCount()).toBe(0);
     });
 

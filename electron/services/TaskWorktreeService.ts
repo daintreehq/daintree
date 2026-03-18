@@ -4,7 +4,7 @@ export class TaskWorktreeService {
   private taskWorktreeMap = new Map<string, Map<string, Set<string>>>();
   private gitServiceCache = new Map<string, GitService>();
 
-  getProjectTaskMap(projectId: string): Map<string, Set<string>> {
+  private getProjectTaskMap(projectId: string): Map<string, Set<string>> {
     if (!this.taskWorktreeMap.has(projectId)) {
       this.taskWorktreeMap.set(projectId, new Map());
     }
@@ -46,7 +46,6 @@ export class TaskWorktreeService {
   }
 
   onProjectSwitch(): void {
-    this.taskWorktreeMap.clear();
     this.gitServiceCache.clear();
   }
 }

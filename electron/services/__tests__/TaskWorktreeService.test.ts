@@ -68,14 +68,23 @@ describe("TaskWorktreeService", () => {
     });
   });
 
+  describe("idempotency", () => {
+    it("duplicate add does not create duplicate worktree IDs", () => {
+      service.addTaskWorktreeMapping("proj1", "task1", "wt1");
+      service.addTaskWorktreeMapping("proj1", "task1", "wt1");
+
+      expect(service.getWorktreeIdsForTask("proj1", "task1")).toEqual(["wt1"]);
+    });
+  });
+
   describe("onProjectSwitch", () => {
-    it("clears all state", () => {
+    it("clears git cache but preserves task mappings", () => {
       service.addTaskWorktreeMapping("proj1", "task1", "wt1");
       const cached = service.getGitService("/path/a");
 
       service.onProjectSwitch();
 
-      expect(service.getWorktreeIdsForTask("proj1", "task1")).toEqual([]);
+      expect(service.getWorktreeIdsForTask("proj1", "task1")).toEqual(["wt1"]);
       expect(service.getGitService("/path/a")).not.toBe(cached);
     });
   });
