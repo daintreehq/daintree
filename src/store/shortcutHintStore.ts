@@ -13,7 +13,7 @@ export interface ShortcutHintState {
 export interface ShortcutHintActions {
   hydrateCounts(counts: Record<string, number>): void;
   recordPointer(x: number, y: number): void;
-  show(actionId: string, displayCombo: string): void;
+  show(actionId: string, displayCombo: string): boolean;
   hide(): void;
   incrementCount(actionId: string): void;
 }
@@ -34,13 +34,14 @@ export const shortcutHintStore = createStore<ShortcutHintStore>((set, get) => ({
     set({ pointer: { x, y, ts: Date.now() } });
   },
 
-  show(actionId: string, displayCombo: string) {
+  show(actionId: string, displayCombo: string): boolean {
     const { pointer, counts } = get();
-    if (!pointer) return;
-    if (Date.now() - pointer.ts > POINTER_STALE_MS) return;
-    if ((counts[actionId] ?? 0) >= MAX_HINT_COUNT) return;
+    if (!pointer) return false;
+    if (Date.now() - pointer.ts > POINTER_STALE_MS) return false;
+    if ((counts[actionId] ?? 0) >= MAX_HINT_COUNT) return false;
 
     set({ activeHint: { actionId, displayCombo, x: pointer.x, y: pointer.y } });
+    return true;
   },
 
   hide() {
@@ -51,10 +52,6 @@ export const shortcutHintStore = createStore<ShortcutHintStore>((set, get) => ({
     const { counts } = get();
     const updated = { ...counts, [actionId]: (counts[actionId] ?? 0) + 1 };
     set({ counts: updated });
-    try {
-      window.electron?.shortcutHints?.incrementCount(actionId);
-    } catch {
-      // fire-and-forget
-    }
+    window.electron?.shortcutHints?.incrementCount(actionId)?.catch(() => {});
   },
 }));

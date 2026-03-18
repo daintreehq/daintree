@@ -16,6 +16,11 @@ export function ShortcutHint() {
   const activeHint = useStore(shortcutHintStore, (s) => s.activeHint);
   const hide = useStore(shortcutHintStore, (s) => s.hide);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastHintRef = useRef(activeHint);
+
+  if (activeHint) {
+    lastHintRef.current = activeHint;
+  }
 
   const isOpen = activeHint !== null;
 
@@ -40,16 +45,21 @@ export function ShortcutHint() {
     };
   }, [activeHint, hide]);
 
-  if (!shouldRender || !activeHint) return null;
+  const hint = lastHintRef.current;
+  if (!shouldRender || !hint) return null;
 
   const vw = window.innerWidth;
   const vh = window.innerHeight;
-  let x = activeHint.x + OFFSET_X;
-  let y = activeHint.y + OFFSET_Y;
+  let x = hint.x + OFFSET_X;
+  let y = hint.y + OFFSET_Y;
+  let above = true;
 
   if (x + TOOLTIP_WIDTH_ESTIMATE > vw) x = vw - TOOLTIP_WIDTH_ESTIMATE - 8;
   if (x < 8) x = 8;
-  if (y - TOOLTIP_HEIGHT_ESTIMATE < 0) y = activeHint.y + 20;
+  if (y - TOOLTIP_HEIGHT_ESTIMATE < 0) {
+    y = hint.y + 20;
+    above = false;
+  }
   if (y > vh - TOOLTIP_HEIGHT_ESTIMATE) y = vh - TOOLTIP_HEIGHT_ESTIMATE - 8;
 
   return createPortal(
@@ -60,7 +70,7 @@ export function ShortcutHint() {
         "motion-reduce:transition-none motion-reduce:duration-0",
         isVisible ? "opacity-100" : "opacity-0"
       )}
-      style={{ left: x, top: y, transform: "translateY(-100%)" }}
+      style={{ left: x, top: y, transform: above ? "translateY(-100%)" : undefined }}
       role="status"
       aria-live="polite"
     >
@@ -75,7 +85,7 @@ export function ShortcutHint() {
         )}
       >
         <span>Tip:</span>
-        <Kbd>{activeHint.displayCombo}</Kbd>
+        <Kbd>{hint.displayCombo}</Kbd>
       </div>
     </div>,
     document.body

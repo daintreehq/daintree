@@ -353,15 +353,28 @@ describe("ActionService", () => {
       });
     });
 
-    it("emits hint for user source with keybinding", async () => {
+    it("emits hint and increments count for user source with keybinding", async () => {
       mockGetEffectiveCombo.mockReturnValue("Cmd+K");
       mockGetDisplayCombo.mockReturnValue("⌘K");
+      mockShow.mockReturnValue(true);
 
       service.register(makeAction("test.action"));
       await service.dispatch("test.action" as ActionId, undefined, { source: "user" });
 
       expect(mockShow).toHaveBeenCalledWith("test.action", "⌘K");
       expect(mockIncrementCount).toHaveBeenCalledWith("test.action");
+    });
+
+    it("does not increment count when show returns false", async () => {
+      mockGetEffectiveCombo.mockReturnValue("Cmd+K");
+      mockGetDisplayCombo.mockReturnValue("⌘K");
+      mockShow.mockReturnValue(false);
+
+      service.register(makeAction("test.action"));
+      await service.dispatch("test.action" as ActionId, undefined, { source: "user" });
+
+      expect(mockShow).toHaveBeenCalled();
+      expect(mockIncrementCount).not.toHaveBeenCalled();
     });
 
     it("does not emit hint for keybinding source", async () => {
@@ -371,6 +384,7 @@ describe("ActionService", () => {
       await service.dispatch("test.action" as ActionId, undefined, { source: "keybinding" });
 
       expect(mockShow).not.toHaveBeenCalled();
+      expect(mockIncrementCount).not.toHaveBeenCalled();
     });
 
     it("does not emit hint for menu source", async () => {
@@ -380,6 +394,27 @@ describe("ActionService", () => {
       await service.dispatch("test.action" as ActionId, undefined, { source: "menu" });
 
       expect(mockShow).not.toHaveBeenCalled();
+      expect(mockIncrementCount).not.toHaveBeenCalled();
+    });
+
+    it("does not emit hint for context-menu source", async () => {
+      mockGetEffectiveCombo.mockReturnValue("Cmd+K");
+
+      service.register(makeAction("test.action"));
+      await service.dispatch("test.action" as ActionId, undefined, { source: "context-menu" });
+
+      expect(mockShow).not.toHaveBeenCalled();
+      expect(mockIncrementCount).not.toHaveBeenCalled();
+    });
+
+    it("does not emit hint for agent source", async () => {
+      mockGetEffectiveCombo.mockReturnValue("Cmd+K");
+
+      service.register(makeAction("test.action"));
+      await service.dispatch("test.action" as ActionId, undefined, { source: "agent" });
+
+      expect(mockShow).not.toHaveBeenCalled();
+      expect(mockIncrementCount).not.toHaveBeenCalled();
     });
 
     it("does not emit hint when action has no keybinding", async () => {
@@ -389,6 +424,7 @@ describe("ActionService", () => {
       await service.dispatch("test.action" as ActionId, undefined, { source: "user" });
 
       expect(mockShow).not.toHaveBeenCalled();
+      expect(mockIncrementCount).not.toHaveBeenCalled();
     });
 
     it("does not emit hint when store is not hydrated", async () => {
@@ -404,6 +440,7 @@ describe("ActionService", () => {
       await service.dispatch("test.action" as ActionId, undefined, { source: "user" });
 
       expect(mockShow).not.toHaveBeenCalled();
+      expect(mockIncrementCount).not.toHaveBeenCalled();
     });
 
     it("does not emit hint when action execution fails", async () => {
@@ -417,6 +454,7 @@ describe("ActionService", () => {
       await service.dispatch("test.fail" as ActionId, undefined, { source: "user" });
 
       expect(mockShow).not.toHaveBeenCalled();
+      expect(mockIncrementCount).not.toHaveBeenCalled();
     });
   });
 });
