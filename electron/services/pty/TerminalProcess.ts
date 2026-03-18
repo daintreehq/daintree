@@ -107,7 +107,7 @@ export class TerminalProcess {
   private sessionPersistTimer: NodeJS.Timeout | null = null;
   private sessionPersistDirty = false;
   private sessionPersistInFlight = false;
-  private lastEventDrivenFlushAt = 0;
+  private lastEventDrivenFlushAt = -Infinity;
 
   private readonly terminalInfo: TerminalInfo;
   private readonly isAgentTerminal: boolean;

@@ -7,6 +7,7 @@ type SpawnFn = (file: string, args: string[], options: Record<string, unknown>) 
 let spawnMock: ReturnType<typeof vi.fn<SpawnFn>>;
 
 const persistAsyncMock = vi.hoisted(() => vi.fn(() => Promise.resolve()));
+const persistSyncMock = vi.hoisted(() => vi.fn());
 
 vi.mock("node-pty", () => {
   return {
@@ -19,7 +20,7 @@ vi.mock("../terminalSessionPersistence.js", async (importOriginal) => {
   return {
     ...orig,
     TERMINAL_SESSION_PERSISTENCE_ENABLED: true,
-    persistSessionSnapshotSync: vi.fn(),
+    persistSessionSnapshotSync: persistSyncMock,
     persistSessionSnapshotAsync: persistAsyncMock,
   };
 });
@@ -72,6 +73,7 @@ describe("TerminalProcess.flushEventDrivenSnapshot", () => {
     spawnMock = vi.fn<SpawnFn>(() => createMockPty());
     persistAsyncMock.mockReset();
     persistAsyncMock.mockReturnValue(Promise.resolve());
+    persistSyncMock.mockReset();
   });
 
   it("calls persistSessionSnapshotAsync for agent terminals", () => {
