@@ -31,7 +31,7 @@ vi.mock("electron", () => ({
 const mockDialogService = vi.hoisted(() => ({
   registerPanel: vi.fn(),
   resolveDialog: vi.fn(),
-  getPanelId: vi.fn(() => "test-panel"),
+  getPanelId: vi.fn<(id: number) => string | undefined>(() => "test-panel"),
 }));
 
 vi.mock("../../../services/WebviewDialogService.js", () => ({
