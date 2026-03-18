@@ -86,6 +86,7 @@ export function setupBrowserWindow(dirname: string): CreateWindowResult {
       sandbox: true,
       webviewTag: true,
       navigateOnDragDrop: false,
+      v8CacheOptions: "code",
     },
     ...(process.platform === "darwin"
       ? {
