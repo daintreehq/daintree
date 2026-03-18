@@ -39,6 +39,7 @@ import { SortableTabButton } from "@/components/Panel/SortableTabButton";
 import type { TabGroup } from "@/types";
 import { buildPanelDuplicateOptions } from "@/services/terminal/panelDuplicationService";
 import { handleDockInteractOutside } from "./dockPopoverGuard";
+import { usePreferencesStore } from "@/store";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 
 interface DockedTabGroupProps {
@@ -346,6 +347,7 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
   const groupBlockedState = getGroupBlockedAgentState(panels);
   const blockedState = useDockBlockedState(groupBlockedState);
   const isDeprioritized = !isOpen && isGroupDeprioritized(panels);
+  const showDockAgentHighlights = usePreferencesStore((s) => s.showDockAgentHighlights);
 
   if (!activePanel || panels.length === 0) {
     return null;
@@ -379,6 +381,7 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
                 blockedState === "failed" &&
                 "bg-[var(--dock-item-bg-failed)] border-[var(--dock-item-border-failed)]",
               !isOpen &&
+                showDockAgentHighlights &&
                 blockedState === "waiting" &&
                 "bg-[var(--dock-item-bg-waiting)] border-[var(--dock-item-border-waiting)]",
               isDeprioritized && "opacity-50"

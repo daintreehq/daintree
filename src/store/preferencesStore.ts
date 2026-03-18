@@ -7,6 +7,10 @@ interface PreferencesState {
   setShowProjectPulse: (show: boolean) => void;
   showDeveloperTools: boolean;
   setShowDeveloperTools: (show: boolean) => void;
+  showGridAgentHighlights: boolean;
+  setShowGridAgentHighlights: (show: boolean) => void;
+  showDockAgentHighlights: boolean;
+  setShowDockAgentHighlights: (show: boolean) => void;
   assignWorktreeToSelf: boolean;
   setAssignWorktreeToSelf: (value: boolean) => void;
   lastSelectedWorktreeRecipeIdByProject: Record<string, string | null | undefined>;
@@ -23,6 +27,10 @@ export const usePreferencesStore = create<PreferencesState>()(
       setShowProjectPulse: (show) => set({ showProjectPulse: show }),
       showDeveloperTools: false,
       setShowDeveloperTools: (show) => set({ showDeveloperTools: show }),
+      showGridAgentHighlights: false,
+      setShowGridAgentHighlights: (show) => set({ showGridAgentHighlights: show }),
+      showDockAgentHighlights: false,
+      setShowDockAgentHighlights: (show) => set({ showDockAgentHighlights: show }),
       assignWorktreeToSelf: false,
       setAssignWorktreeToSelf: (value) => set({ assignWorktreeToSelf: value }),
       lastSelectedWorktreeRecipeIdByProject: {},
@@ -37,7 +45,7 @@ export const usePreferencesStore = create<PreferencesState>()(
     {
       name: "canopy-preferences",
       storage: createSafeJSONStorage(),
-      version: 1,
+      version: 2,
       migrate: (persisted, version) => {
         if (version === 0 || version === undefined) {
           if (persisted && typeof persisted === "object") {
@@ -46,6 +54,13 @@ export const usePreferencesStore = create<PreferencesState>()(
             state.lastSelectedWorktreeRecipeIdByProject = {};
           } else {
             return { lastSelectedWorktreeRecipeIdByProject: {} } as PreferencesState;
+          }
+        }
+        if (version < 2) {
+          if (persisted && typeof persisted === "object") {
+            const state = persisted as Record<string, unknown>;
+            state.showGridAgentHighlights ??= false;
+            state.showDockAgentHighlights ??= false;
           }
         }
         return persisted as PreferencesState;

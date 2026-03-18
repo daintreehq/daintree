@@ -82,7 +82,12 @@ describe("General tab search index subtab metadata", () => {
   });
 
   it("display entries map to display subtab", () => {
-    const displayIds = ["general-project-pulse", "general-developer-tools"];
+    const displayIds = [
+      "general-project-pulse",
+      "general-developer-tools",
+      "general-grid-agent-highlights",
+      "general-dock-agent-highlights",
+    ];
     for (const id of displayIds) {
       const entry = SETTINGS_SEARCH_INDEX.find((e) => e.id === id);
       expect(entry?.subtab).toBe("display");
