@@ -435,7 +435,7 @@ function TerminalPaneComponent({
 
       const focusTarget = getTerminalFocusTarget({
         isAgentTerminal,
-        isInputDisabled: isBackendDisconnected || isBackendRecovering,
+        isInputDisabled: isBackendDisconnected || isBackendRecovering || isInputLocked,
         hybridInputEnabled,
         hybridInputAutoFocus,
       });
@@ -469,6 +469,7 @@ function TerminalPaneComponent({
       hybridInputAutoFocus,
       isBackendDisconnected,
       isBackendRecovering,
+      isInputLocked,
       isFocused,
       setFocused,
     ]
