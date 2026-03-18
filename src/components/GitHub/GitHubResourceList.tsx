@@ -632,24 +632,28 @@ export function GitHubResourceList({
           </Popover>
         </div>
 
-        {type === "issue" && searchQuery.trim() !== "" && data.length > 0 && !loading && (
-          <button
-            type="button"
-            onClick={() => {
-              const allSelected = data.every((item) => selection.selectedIds.has(item.number));
-              if (allSelected) {
-                selection.clear();
-              } else {
-                selection.selectAll(data.map((item) => item.number));
-              }
-            }}
-            className="text-xs text-canopy-text/50 hover:text-canopy-text transition-colors px-1 py-0.5 rounded self-start"
-          >
-            {data.every((item) => selection.selectedIds.has(item.number))
-              ? "Deselect all"
-              : `Select all (${data.length})`}
-          </button>
-        )}
+        {type === "issue" &&
+          searchQuery.trim() !== "" &&
+          data.length > 0 &&
+          !loading &&
+          (() => {
+            const allSelected = data.every((item) => selection.selectedIds.has(item.number));
+            return (
+              <button
+                type="button"
+                onClick={() => {
+                  if (allSelected) {
+                    selection.clear();
+                  } else {
+                    selection.selectAll(data.map((item) => item.number));
+                  }
+                }}
+                className="text-xs text-canopy-text/50 hover:text-canopy-text focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-canopy-accent transition-colors px-1 py-0.5 rounded self-start"
+              >
+                {allSelected ? "Deselect all" : `Select all (${data.length})`}
+              </button>
+            );
+          })()}
 
         <div
           className="flex p-0.5 bg-overlay-soft border border-[var(--border-divider)] rounded-[var(--radius-md)]"
