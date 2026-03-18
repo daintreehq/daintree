@@ -80,9 +80,11 @@ describe("PlanFileViewer", () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByTestId("code-viewer")).toBeDefined();
+      const viewer = screen.getByTestId("code-viewer");
+      expect(viewer).toBeDefined();
+      expect(viewer.textContent).toContain("# My Plan");
+      expect(viewer.textContent).toContain("- step 1");
     });
-    expect(screen.getByText("# My Plan\n- step 1")).toBeDefined();
   });
 
   it("shows error state when read fails", async () => {
