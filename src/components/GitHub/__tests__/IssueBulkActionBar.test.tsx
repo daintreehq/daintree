@@ -84,6 +84,8 @@ describe("IssueBulkActionBar", () => {
     expect(classes).not.toContain("border-t");
     expect(classes).not.toContain("backdrop-blur-md");
     expect(classes).not.toContain("bg-surface-panel-elevated/95");
+    expect(classes).not.toContain("shadow-lg");
+    expect(classes).not.toContain("ring-border-subtle");
   });
 
   it("shows 'selected' label next to count badge", () => {
