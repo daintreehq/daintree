@@ -5,14 +5,19 @@ const ipcMainMock = vi.hoisted(() => ({
   removeHandler: vi.fn(),
 }));
 
+const browserWindowFromWebContentsMock = vi.hoisted(() => vi.fn());
+
 vi.mock("electron", () => ({
   ipcMain: ipcMainMock,
-  BrowserWindow: class {},
+  BrowserWindow: Object.assign(class {}, {
+    fromWebContents: browserWindowFromWebContentsMock,
+  }),
 }));
 
 import {
   sendToRenderer,
   typedHandle,
+  typedHandleWithContext,
   typedSend,
   checkRateLimit,
   waitForRateLimitSlot,
@@ -115,6 +120,51 @@ describe("ipc utils", () => {
 
     cleanup();
     expect(ipcMainMock.removeHandler).toHaveBeenCalledWith("project:get:all");
+  });
+
+  it("typedHandleWithContext passes IpcContext with webContentsId and senderWindow", async () => {
+    const mockWindow = { id: 1 };
+    browserWindowFromWebContentsMock.mockReturnValue(mockWindow);
+
+    const handler = vi.fn(async (ctx: unknown, input: string) => ({
+      ok: input === "value",
+    }));
+    const cleanup = typedHandleWithContext("project:get:all" as never, handler as never);
+
+    const [[channel, registered]] = ipcMainMock.handle.mock.calls as [
+      [string, (...args: unknown[]) => Promise<unknown>],
+    ];
+    expect(channel).toBe("project:get:all");
+
+    const mockEvent = { sender: { id: 42 } };
+    const result = await registered(mockEvent, "value");
+    expect(result).toEqual({ ok: true });
+
+    expect(handler).toHaveBeenCalledOnce();
+    const ctx = handler.mock.calls[0][0] as { webContentsId: number; senderWindow: unknown };
+    expect(ctx.webContentsId).toBe(42);
+    expect(ctx.senderWindow).toBe(mockWindow);
+    expect(ctx.event).toBe(mockEvent);
+
+    cleanup();
+    expect(ipcMainMock.removeHandler).toHaveBeenCalledWith("project:get:all");
+  });
+
+  it("typedHandleWithContext sets senderWindow to null when fromWebContents returns null", async () => {
+    browserWindowFromWebContentsMock.mockReturnValue(null);
+
+    const handler = vi.fn(async () => "ok");
+    typedHandleWithContext("project:get:all" as never, handler as never);
+
+    const [[, registered]] = ipcMainMock.handle.mock.calls as [
+      [string, (...args: unknown[]) => Promise<unknown>],
+    ];
+
+    await registered({ sender: { id: 99 } });
+
+    const ctx = handler.mock.calls[0][0] as { webContentsId: number; senderWindow: unknown };
+    expect(ctx.webContentsId).toBe(99);
+    expect(ctx.senderWindow).toBeNull();
   });
 });
 
