@@ -62,6 +62,8 @@ export function worktreeCardPropsAreEqual(
       a.isDetached !== b.isDetached ||
       a.lifecycleStatus !== b.lifecycleStatus ||
       a.taskId !== b.taskId ||
+      a.hasPlanFile !== b.hasPlanFile ||
+      a.planFilePath !== b.planFilePath ||
       a.worktreeChanges !== b.worktreeChanges
     ) {
       return false;
