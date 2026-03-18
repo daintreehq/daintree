@@ -47,7 +47,10 @@ export function PulseSummary({ pulse, compact = false }: PulseSummaryProps) {
 
   if (compact) {
     return (
-      <div className="flex items-center gap-3 text-xs text-canopy-text/75" data-testid="pulse-summary">
+      <div
+        className="flex items-center gap-3 text-xs text-canopy-text/75"
+        data-testid="pulse-summary"
+      >
         <Stat
           icon={<GitCommit className="w-3 h-3" />}
           value={pulse.commitsInRange}
