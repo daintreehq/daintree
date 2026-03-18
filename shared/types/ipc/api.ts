@@ -105,6 +105,7 @@ import type { ProjectCloseResult, ProjectStats } from "./project.js";
 import type { GitInitOptions, GitInitProgressEvent, GitInitResult } from "./gitInit.js";
 import type {
   RepositoryStats,
+  ProjectHealthData,
   GitHubCliStatus,
   GitHubTokenConfig,
   GitHubTokenValidation,
@@ -495,6 +496,7 @@ export interface ElectronAPI {
   };
   github: {
     getRepoStats(cwd: string, bypassCache?: boolean): Promise<RepositoryStats>;
+    getProjectHealth(cwd: string, bypassCache?: boolean): Promise<ProjectHealthData>;
     openIssues(cwd: string, query?: string, state?: string): Promise<void>;
     openPRs(cwd: string, query?: string, state?: string): Promise<void>;
     openCommits(cwd: string): Promise<void>;

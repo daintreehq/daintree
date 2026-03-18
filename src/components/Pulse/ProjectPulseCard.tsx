@@ -1,11 +1,28 @@
 import { useEffect, useCallback } from "react";
 import { useShallow } from "zustand/react/shallow";
-import type { PulseRangeDays, ProjectPulse } from "@shared/types";
+import type { PulseRangeDays, ProjectPulse, ProjectHealthData } from "@shared/types";
 import { usePulseStore, useProjectStore } from "@/store";
 import { cn } from "@/lib/utils";
-import { Loader2, AlertCircle, RefreshCw, Activity, GitBranch } from "lucide-react";
+import {
+  Loader2,
+  AlertCircle,
+  RefreshCw,
+  Activity,
+  GitBranch,
+  CheckCircle2,
+  XCircle,
+  Clock,
+  CircleMinus,
+  Tag,
+  ShieldAlert,
+  GitPullRequest,
+  CircleDot,
+  GitMerge,
+} from "lucide-react";
 import { PulseHeatmap } from "./PulseHeatmap";
 import { PulseSummary } from "./PulseSummary";
+import { useProjectHealth } from "@/hooks/useProjectHealth";
+import { systemClient } from "@/clients/systemClient";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -45,10 +62,125 @@ function getCoachLine(pulse: ProjectPulse): string {
   return "Make a tiny win: ship one small change today.";
 }
 
+function CIStatusIcon({ status }: { status: ProjectHealthData["ciStatus"] }) {
+  switch (status) {
+    case "success":
+      return <CheckCircle2 className="w-3.5 h-3.5 text-status-success" />;
+    case "failure":
+    case "error":
+      return <XCircle className="w-3.5 h-3.5 text-status-error" />;
+    case "pending":
+    case "expected":
+      return <Clock className="w-3.5 h-3.5 text-status-warning" />;
+    default:
+      return <CircleMinus className="w-3.5 h-3.5 text-canopy-text/40" />;
+  }
+}
+
+function ciStatusLabel(status: ProjectHealthData["ciStatus"]): string {
+  switch (status) {
+    case "success":
+      return "passing";
+    case "failure":
+      return "failing";
+    case "error":
+      return "error";
+    case "pending":
+    case "expected":
+      return "pending";
+    default:
+      return "no CI";
+  }
+}
+
+function relativeTime(dateStr: string): string {
+  const diff = Date.now() - new Date(dateStr).getTime();
+  const days = Math.floor(diff / (1000 * 60 * 60 * 24));
+  if (days === 0) return "today";
+  if (days === 1) return "1d ago";
+  if (days < 30) return `${days}d ago`;
+  const months = Math.floor(days / 30);
+  if (months === 1) return "1mo ago";
+  return `${months}mo ago`;
+}
+
+interface HealthChipProps {
+  icon: React.ReactNode;
+  label: string;
+  onClick?: () => void;
+  className?: string;
+}
+
+function HealthChip({ icon, label, onClick, className }: HealthChipProps) {
+  const Wrapper = onClick ? "button" : "span";
+  return (
+    <Wrapper
+      className={cn(
+        "flex items-center gap-1 text-xs text-canopy-text/75 px-1.5 py-0.5 rounded",
+        onClick && "hover:bg-tint/5 hover:text-canopy-text/90 transition-colors cursor-pointer",
+        className
+      )}
+      onClick={onClick}
+    >
+      {icon}
+      <span className="font-mono">{label}</span>
+    </Wrapper>
+  );
+}
+
+function HealthSignals({ health }: { health: ProjectHealthData }) {
+  const openUrl = (path: string) => {
+    const url = path.startsWith("http") ? path : `${health.repoUrl}${path}`;
+    systemClient.openExternal(url);
+  };
+
+  return (
+    <div className="flex items-center gap-2 flex-wrap">
+      <HealthChip
+        icon={<CIStatusIcon status={health.ciStatus} />}
+        label={ciStatusLabel(health.ciStatus)}
+        onClick={health.ciStatus !== "none" ? () => openUrl("/actions") : undefined}
+      />
+      <HealthChip
+        icon={<CircleDot className="w-3.5 h-3.5 text-status-info" />}
+        label={String(health.issueCount)}
+        onClick={() => openUrl("/issues")}
+      />
+      <HealthChip
+        icon={<GitPullRequest className="w-3.5 h-3.5 text-status-info" />}
+        label={String(health.prCount)}
+        onClick={() => openUrl("/pulls")}
+      />
+      {health.latestRelease && (
+        <HealthChip
+          icon={<Tag className="w-3.5 h-3.5 text-canopy-accent" />}
+          label={`${health.latestRelease.tagName}${health.latestRelease.publishedAt ? ` (${relativeTime(health.latestRelease.publishedAt)})` : ""}`}
+          onClick={() => openUrl(health.latestRelease!.url)}
+        />
+      )}
+      {health.securityAlerts.visible && health.securityAlerts.count > 0 && (
+        <HealthChip
+          icon={<ShieldAlert className="w-3.5 h-3.5 text-status-warning" />}
+          label={`${health.securityAlerts.count} alert${health.securityAlerts.count !== 1 ? "s" : ""}`}
+          onClick={() => openUrl("/security/dependabot")}
+        />
+      )}
+      {health.mergeVelocity.recentMergedCount > 0 && (
+        <HealthChip
+          icon={<GitMerge className="w-3.5 h-3.5 text-purple-400" />}
+          label={`${health.mergeVelocity.recentMergedCount} merged`}
+          onClick={() => openUrl("/pulls?q=is%3Apr+is%3Amerged+sort%3Aupdated-desc")}
+        />
+      )}
+    </div>
+  );
+}
+
 const MAX_RETRIES = 3;
 
 export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProps) {
   const projectName = useProjectStore((s) => s.currentProject?.name);
+  const { health, refresh: refreshHealth } = useProjectHealth();
   const { pulse, isLoading, error, rangeDays, retryCount, fetchPulse, setRangeDays } =
     usePulseStore(
       useShallow((state) => ({
@@ -72,7 +204,8 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
 
   const handleRefresh = useCallback(() => {
     fetchPulse(worktreeId, true);
-  }, [worktreeId, fetchPulse]);
+    void refreshHealth({ force: true });
+  }, [worktreeId, fetchPulse, refreshHealth]);
 
   const handleRangeChange = useCallback(
     (days: PulseRangeDays) => {
@@ -220,6 +353,12 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
         <PulseHeatmap cells={pulse.heatmap} rangeDays={pulse.rangeDays} />
 
         <p className="text-xs text-canopy-text/80 italic">{getCoachLine(pulse)}</p>
+
+        {health && !health.error && health.repoUrl && (
+          <div className="border-t border-canopy-border pt-3">
+            <HealthSignals health={health} />
+          </div>
+        )}
 
         <div className="border-t border-canopy-border pt-3">
           <PulseSummary pulse={pulse} />

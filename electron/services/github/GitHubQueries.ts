@@ -9,6 +9,37 @@ export const REPO_STATS_QUERY = `
   }
 `;
 
+export const PROJECT_HEALTH_QUERY = `
+  query GetProjectHealth($owner: String!, $repo: String!) {
+    repository(owner: $owner, name: $repo) {
+      issues(states: OPEN) { totalCount }
+      pullRequests(states: OPEN) { totalCount }
+      defaultBranchRef {
+        target {
+          ... on Commit {
+            statusCheckRollup {
+              state
+            }
+          }
+        }
+      }
+      latestRelease {
+        tagName
+        publishedAt
+        url
+      }
+      vulnerabilityAlerts(first: 1) {
+        totalCount
+      }
+      recentMergedPRs: pullRequests(first: 10, states: MERGED, orderBy: {field: UPDATED_AT, direction: DESC}) {
+        nodes {
+          mergedAt
+        }
+      }
+    }
+  }
+`;
+
 export const LIST_ISSUES_QUERY = `
   query GetIssues($owner: String!, $repo: String!, $states: [IssueState!], $cursor: String, $limit: Int = 20, $orderBy: IssueOrder) {
     repository(owner: $owner, name: $repo) {

@@ -139,6 +139,7 @@ export type {
   ProjectMcpServerStatus,
   // GitHub IPC types
   RepositoryStats,
+  ProjectHealthData,
   GitHubCliStatus,
   GitHubTokenConfig,
   GitHubTokenValidation,

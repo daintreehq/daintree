@@ -16,6 +16,30 @@ export interface RepositoryStats {
   lastUpdated?: number;
 }
 
+/** Project health data from GitHub API */
+export interface ProjectHealthData {
+  ciStatus: "success" | "failure" | "error" | "pending" | "expected" | "none";
+  issueCount: number;
+  prCount: number;
+  latestRelease: {
+    tagName: string;
+    publishedAt: string | null;
+    url: string;
+  } | null;
+  securityAlerts: {
+    visible: boolean;
+    count: number;
+  };
+  mergeVelocity: {
+    recentMergedCount: number;
+    recentMergedDates: string[];
+  };
+  repoUrl: string;
+  loading: boolean;
+  error?: string;
+  lastUpdated?: number;
+}
+
 /** GitHub CLI availability check result */
 export interface GitHubCliStatus {
   /** Whether gh CLI is available */

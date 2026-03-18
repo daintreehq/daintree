@@ -255,6 +255,7 @@ const CHANNELS = {
 
   // GitHub channels
   GITHUB_GET_REPO_STATS: "github:get-repo-stats",
+  GITHUB_GET_PROJECT_HEALTH: "github:get-project-health",
   GITHUB_OPEN_ISSUES: "github:open-issues",
   GITHUB_OPEN_PRS: "github:open-prs",
   GITHUB_OPEN_COMMITS: "github:open-commits",
@@ -1226,6 +1227,9 @@ const api: ElectronAPI = {
   github: {
     getRepoStats: (cwd: string, bypassCache?: boolean) =>
       _typedInvoke(CHANNELS.GITHUB_GET_REPO_STATS, cwd, bypassCache),
+
+    getProjectHealth: (cwd: string, bypassCache?: boolean) =>
+      _typedInvoke(CHANNELS.GITHUB_GET_PROJECT_HEALTH, cwd, bypassCache),
 
     openIssues: (cwd: string, query?: string, state?: string) =>
       _typedInvoke(CHANNELS.GITHUB_OPEN_ISSUES, cwd, query, state),
