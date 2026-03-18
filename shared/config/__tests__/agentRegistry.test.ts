@@ -589,10 +589,6 @@ describe("titleStatePatterns", () => {
 });
 
 describe("gemini metadata", () => {
-  beforeEach(() => {
-    setUserRegistry({});
-  });
-
   it("has correct npm package name", () => {
     const config = getAgentConfig("gemini");
     expect(config?.version?.npmPackage).toBe("@google/gemini-cli");
