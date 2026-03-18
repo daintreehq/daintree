@@ -15,7 +15,14 @@ import {
   Activity,
   Plus,
   Bell,
+  BellOff,
+  CopyPlus,
   Ellipsis,
+  Info,
+  Lock,
+  Pencil,
+  Trash2,
+  Unlock,
 } from "lucide-react";
 import {
   DndContext,
@@ -47,7 +54,10 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { TabButton, type TabInfo } from "./TabButton";
 import { SortableTabButton } from "./SortableTabButton";
-import { panelKindCanRestart } from "@shared/config/panelKindRegistry";
+import { useShallow } from "zustand/react/shallow";
+import { panelKindCanRestart, panelKindHasPty } from "@shared/config/panelKindRegistry";
+import { actionService } from "@/services/ActionService";
+import { fireWatchNotification } from "@/lib/watchNotification";
 
 export interface PanelHeaderProps {
   id: string;
@@ -185,14 +195,21 @@ function PanelHeaderComponent({
 
   // Watch state — only relevant for agent panels
   const isWatched = useTerminalStore((state) => state.watchedPanels.has(id));
+  const watchPanel = useTerminalStore((state) => state.watchPanel);
   const unwatchPanel = useTerminalStore((state) => state.unwatchPanel);
   const showWatchButton = !!agentId;
+
+  // Terminal record for overflow menu actions (single shallow selector, matching TerminalContextMenu pattern)
+  const terminal = useTerminalStore(
+    useShallow((state) => state.terminals.find((t) => t.id === id))
+  );
+  const isInputLocked = terminal?.isInputLocked ?? false;
+  const hasPty = panelKindHasPty(kind);
 
   // Whether the overflow "..." menu has any items to show
   const showMoveToDock = !!onMinimize && !isMaximized && location !== "dock";
   const showCollapseToDock = !!onMinimize && location === "dock";
-  const showCancelWatch = showWatchButton && isWatched;
-  const hasOverflowItems = (canRestart && !!onRestart) || showCancelWatch || !!headerActions;
+  const hasOverflowItems = true;
 
   // Restart handler for Radix DropdownMenu onSelect
   const handleRestartSelect = useCallback(
@@ -244,6 +261,21 @@ function PanelHeaderComponent({
     },
     [id, armedRestartId, onRestart]
   );
+
+  const handleWatchToggle = useCallback(() => {
+    if (isWatched) {
+      unwatchPanel(id);
+    } else if (terminal?.agentState === "completed" || terminal?.agentState === "waiting") {
+      fireWatchNotification(
+        id,
+        terminal.title ?? id,
+        terminal.agentState,
+        terminal.worktreeId ?? undefined
+      );
+    } else {
+      watchPanel(id);
+    }
+  }, [id, isWatched, unwatchPanel, watchPanel, terminal]);
 
   // In dock, show shortened title without command summary for space efficiency
   const displayTitle = location === "dock" ? getBaseTitle(title) : title;
@@ -666,7 +698,7 @@ function PanelHeaderComponent({
       )}
 
       <div className="flex items-center gap-1">
-        {/* Overflow menu — contains Restart, Cancel Watch, and headerActions */}
+        {/* Overflow menu — panel management actions */}
         {hasOverflowItems && (
           <TooltipProvider>
             <DropdownMenu
@@ -690,6 +722,7 @@ function PanelHeaderComponent({
                 <TooltipContent side="bottom">More panel actions</TooltipContent>
               </Tooltip>
               <DropdownMenuContent align="end" className="min-w-[160px]">
+                {/* Session group */}
                 {canRestart && onRestart && (
                   <DropdownMenuItem
                     onSelect={handleRestartSelect}
@@ -709,16 +742,95 @@ function PanelHeaderComponent({
                       : "Restart Session"}
                   </DropdownMenuItem>
                 )}
-                {showCancelWatch && (
-                  <DropdownMenuItem onSelect={() => unwatchPanel(id)}>
-                    <Bell className="w-3 h-3 mr-2" aria-hidden="true" />
-                    Cancel Watch
+
+                {/* Management group */}
+                {canRestart && onRestart && <DropdownMenuSeparator />}
+                <DropdownMenuItem
+                  onSelect={() =>
+                    void actionService.dispatch(
+                      "terminal.rename",
+                      { terminalId: id },
+                      { source: "menu" }
+                    )
+                  }
+                >
+                  <Pencil className="w-3 h-3 mr-2" aria-hidden="true" />
+                  Rename
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  onSelect={() =>
+                    void actionService.dispatch(
+                      "terminal.duplicate",
+                      { terminalId: id },
+                      { source: "menu" }
+                    )
+                  }
+                >
+                  <CopyPlus className="w-3 h-3 mr-2" aria-hidden="true" />
+                  Duplicate
+                </DropdownMenuItem>
+                {hasPty && (
+                  <DropdownMenuItem
+                    onSelect={() =>
+                      void actionService.dispatch(
+                        "terminal.toggleInputLock",
+                        { terminalId: id },
+                        { source: "menu" }
+                      )
+                    }
+                  >
+                    {isInputLocked ? (
+                      <Unlock className="w-3 h-3 mr-2" aria-hidden="true" />
+                    ) : (
+                      <Lock className="w-3 h-3 mr-2" aria-hidden="true" />
+                    )}
+                    {isInputLocked ? "Unlock Input" : "Lock Input"}
                   </DropdownMenuItem>
                 )}
-                {headerActions && ((canRestart && !!onRestart) || showCancelWatch) && (
-                  <DropdownMenuSeparator />
+                {showWatchButton && (
+                  <DropdownMenuItem onSelect={handleWatchToggle}>
+                    {isWatched ? (
+                      <BellOff className="w-3 h-3 mr-2" aria-hidden="true" />
+                    ) : (
+                      <Bell className="w-3 h-3 mr-2" aria-hidden="true" />
+                    )}
+                    {isWatched ? "Cancel Watch" : "Watch"}
+                  </DropdownMenuItem>
                 )}
+                {hasPty && (
+                  <DropdownMenuItem
+                    onSelect={() =>
+                      void actionService.dispatch(
+                        "terminal.viewInfo",
+                        { terminalId: id },
+                        { source: "menu" }
+                      )
+                    }
+                  >
+                    <Info className="w-3 h-3 mr-2" aria-hidden="true" />
+                    View Terminal Info
+                  </DropdownMenuItem>
+                )}
+
+                {/* Header actions slot */}
+                {headerActions && <DropdownMenuSeparator />}
                 {headerActions}
+
+                {/* Destructive group */}
+                <DropdownMenuSeparator />
+                <DropdownMenuItem
+                  destructive
+                  onSelect={() =>
+                    void actionService.dispatch(
+                      "terminal.trash",
+                      { terminalId: id },
+                      { source: "menu" }
+                    )
+                  }
+                >
+                  <Trash2 className="w-3 h-3 mr-2" aria-hidden="true" />
+                  Trash
+                </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
           </TooltipProvider>
