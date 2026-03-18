@@ -3,6 +3,7 @@ import type { ProjectPulse } from "@shared/types";
 import {
   GitCommit,
   Calendar,
+  Flame,
   GitBranch,
   ArrowUp,
   ArrowDown,
@@ -41,16 +42,14 @@ function Stat({ icon, value, label, highlight, className }: StatProps) {
 }
 
 export function PulseSummary({ pulse, compact = false }: PulseSummaryProps) {
+  const hasStreak = (pulse.currentStreakDays ?? 0) > 1;
   const hasDelta =
     pulse.deltaToMain && (pulse.deltaToMain.ahead > 0 || pulse.deltaToMain.behind > 0);
   const hasUncommitted = pulse.uncommitted && pulse.uncommitted.changedFiles > 0;
 
   if (compact) {
     return (
-      <div
-        className="flex items-center gap-3 text-xs text-canopy-text/75"
-        data-testid="pulse-summary"
-      >
+      <div className="flex items-center gap-3 text-xs text-canopy-text/75">
         <Stat
           icon={<GitCommit className="w-3 h-3" />}
           value={pulse.commitsInRange}
@@ -61,6 +60,14 @@ export function PulseSummary({ pulse, compact = false }: PulseSummaryProps) {
           value={`${pulse.activeDays}/${pulse.projectAgeDays}`}
           label="days"
         />
+        {hasStreak && (
+          <Stat
+            icon={<Flame className="w-3 h-3 text-status-warning" />}
+            value={pulse.currentStreakDays!}
+            label="streak"
+            highlight
+          />
+        )}
         {hasUncommitted && (
           <Stat
             icon={<FilePenLine className="w-3 h-3 text-status-info" />}
@@ -73,7 +80,7 @@ export function PulseSummary({ pulse, compact = false }: PulseSummaryProps) {
   }
 
   return (
-    <div className="space-y-2" data-testid="pulse-summary">
+    <div className="space-y-2">
       <div className="flex items-center gap-4 flex-wrap">
         <Stat
           icon={<GitCommit className="w-3.5 h-3.5" />}
@@ -86,6 +93,14 @@ export function PulseSummary({ pulse, compact = false }: PulseSummaryProps) {
           value={`${pulse.activeDays}/${pulse.projectAgeDays}`}
           label="active days"
         />
+        {hasStreak && (
+          <Stat
+            icon={<Flame className="w-3.5 h-3.5 text-status-warning" />}
+            value={pulse.currentStreakDays!}
+            label="day streak"
+            highlight
+          />
+        )}
         {hasUncommitted && (
           <Stat
             icon={<FilePenLine className="w-3.5 h-3.5 text-status-info" />}

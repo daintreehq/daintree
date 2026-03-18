@@ -4,6 +4,7 @@ import { resolve } from "path";
 
 const CARD_PATH = resolve(__dirname, "../ProjectPulseCard.tsx");
 const SUMMARY_PATH = resolve(__dirname, "../PulseSummary.tsx");
+const HEATMAP_PATH = resolve(__dirname, "../PulseHeatmap.tsx");
 
 describe("ProjectPulseCard — visual contrast (issue #2645)", () => {
   it("card shell uses bg-canopy-sidebar for consistent card styling", async () => {
@@ -33,6 +34,11 @@ describe("ProjectPulseCard — visual contrast (issue #2645)", () => {
     const content = await readFile(CARD_PATH, "utf-8");
     expect(content).not.toContain("text-canopy-text/50");
     expect(content).not.toContain("text-canopy-text/60");
+  });
+
+  it("coaching line uses at least /80 opacity", async () => {
+    const content = await readFile(CARD_PATH, "utf-8");
+    expect(content).toContain("text-canopy-text/80");
   });
 
   it("button hover uses tint overlay pattern, not surface token", async () => {
@@ -73,5 +79,19 @@ describe("PulseSummary — visual contrast (issue #2645)", () => {
     const content = await readFile(SUMMARY_PATH, "utf-8");
     expect(content).toContain("text-status-success/80");
     expect(content).toContain("text-status-error/80");
+  });
+});
+
+describe("PulseHeatmap — contrast on elevated card (issue #2645)", () => {
+  it("BEFORE_PROJECT_COLOR uses text-tone neutral mix (not raw canvas bg)", async () => {
+    const content = await readFile(HEATMAP_PATH, "utf-8");
+    // bg-canopy-bg (#19191a) has only 1.24:1 against elevated card #2b2b2c
+    expect(content).not.toContain('"bg-canopy-bg"');
+  });
+
+  it("MISSED_DAY_COLOR uses at least 30% error mix for visibility on elevated card", async () => {
+    const content = await readFile(HEATMAP_PATH, "utf-8");
+    // 20% was too close to card bg; 32% provides better separation
+    expect(content).toContain("status-error)_32%");
   });
 });
