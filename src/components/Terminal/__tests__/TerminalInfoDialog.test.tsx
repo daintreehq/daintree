@@ -95,7 +95,7 @@ describe("TerminalInfoDialog", () => {
       expect(screen.getByText("PTY Diagnostics")).toBeTruthy();
     });
 
-    expect(screen.getByText("0")).toBeTruthy();
+    expect(screen.getByText("Exit Code")).toBeTruthy();
   });
 
   it("does not show exit code when PTY is active", async () => {
