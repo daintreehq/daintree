@@ -9,7 +9,7 @@ export interface ErrorContext {
   details?: Record<string, unknown>;
 }
 
-function getErrorMessage(error: unknown): string {
+export function getErrorMessage(error: unknown): string {
   if (error instanceof Error) return error.message;
   if (typeof error === "string") return error;
   if (typeof error === "object" && error !== null && "message" in error) {
@@ -18,7 +18,7 @@ function getErrorMessage(error: unknown): string {
   return String(error);
 }
 
-function classifyError(error: unknown): ErrorCategory {
+export function classifyError(error: unknown): ErrorCategory {
   const message = getErrorMessage(error).toLowerCase();
 
   if (

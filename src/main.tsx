@@ -9,6 +9,9 @@ import App from "./App";
 import { applyDefaultAppTheme } from "./theme/applyAppTheme";
 import { ensureTerminalFontLoaded } from "./config/terminalFont";
 import { initStoreOrchestrator } from "./store/rendererStoreOrchestrator";
+import { registerRendererGlobalErrorHandlers } from "./utils/rendererGlobalErrorHandlers";
+
+const cleanupGlobalErrorHandlers = registerRendererGlobalErrorHandlers();
 
 applyDefaultAppTheme(document.documentElement);
 
@@ -16,6 +19,7 @@ const cleanupOrchestrator = initStoreOrchestrator();
 
 if (import.meta.hot) {
   import.meta.hot.dispose(() => {
+    cleanupGlobalErrorHandlers();
     cleanupOrchestrator();
   });
 }
