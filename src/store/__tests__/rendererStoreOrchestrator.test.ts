@@ -64,7 +64,6 @@ describe("rendererStoreOrchestrator", () => {
       focusedId: null,
       maximizedId: null,
       commandQueue: [],
-      activeTabByGroup: new Map(),
     });
     useWorktreeSelectionStore.getState().reset();
     useConsoleCaptureStore.setState({ messages: new Map() });

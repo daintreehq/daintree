@@ -52,7 +52,6 @@ describe("trashTerminal group cleanup", () => {
       focusedId: null,
       maximizedId: null,
       commandQueue: [],
-      activeTabByGroup: new Map(),
     });
   });
 

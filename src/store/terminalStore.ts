@@ -106,10 +106,6 @@ export const useTerminalStore = create<PanelGridState>()((set, get, api) => {
 
       // Auto-clear watch if panel is removed while watched
       get().unwatchPanel(id);
-
-      // Clean up stale tab group mappings
-      const validPanelIds = new Set(remainingTerminals.map((t) => t.id));
-      get().cleanupStaleTabs(validPanelIds);
     },
   })(set, get, api);
 
@@ -273,10 +269,10 @@ export const useTerminalStore = create<PanelGridState>()((set, get, api) => {
           : groupPanelIds[0];
       set({ focusedId: focusId, activeDockTerminalId: null });
 
-      // Seed activeTabByGroup for dock groups to preserve active tab state
+      // Sync the registry's active tab for restored groups
       const group = get().getPanelGroup(focusId);
       if (group) {
-        focusSlice.setActiveTab(group.id, focusId);
+        get().setActiveTab(group.id, focusId);
       }
     },
 
@@ -317,53 +313,6 @@ export const useTerminalStore = create<PanelGridState>()((set, get, api) => {
       }
     },
 
-    // Override setActiveTab to update both activeTabByGroup (focus slice) and TabGroup.activeTabId (registry)
-    // This ensures the active tab selection is persisted and survives restart
-    setActiveTab: (groupId: string, panelId: string) => {
-      // First validate that this is a real group with the panel as a member
-      const group = get().tabGroups.get(groupId);
-      const isValidGroupMember = group && group.panelIds.includes(panelId);
-
-      // Only update focus map if panel is in the group (prevents split-brain state)
-      if (isValidGroupMember) {
-        focusSlice.setActiveTab(groupId, panelId);
-      } else {
-        // For virtual groups (no explicit TabGroup), still update focus map for UI
-        if (!group) {
-          focusSlice.setActiveTab(groupId, panelId);
-        }
-        // If group exists but panel not in it, skip focus update to maintain consistency
-        return;
-      }
-
-      // Also update the TabGroup.activeTabId in the registry for persistence
-      set((state) => {
-        const currentGroup = state.tabGroups.get(groupId);
-        if (!currentGroup) {
-          // Not an explicit tab group (virtual single-panel group)
-          return state;
-        }
-
-        // Only update if the panel is actually in this group
-        if (!currentGroup.panelIds.includes(panelId)) {
-          return state;
-        }
-
-        // Update the group's activeTabId
-        const newTabGroups = new Map(state.tabGroups);
-        newTabGroups.set(groupId, { ...currentGroup, activeTabId: panelId });
-
-        // Persist synchronously from latest state to avoid race conditions
-        // Use get() to ensure we persist the most recent tabGroups, not a stale snapshot
-        import("./slices/terminalRegistry/persistence").then(({ saveTabGroups }) => {
-          saveTabGroups(get().tabGroups);
-        });
-
-        return { tabGroups: newTabGroups };
-      });
-    },
-
-    // Override focusNext/focusPrevious to sync activeTabByGroup when landing on a docked tab group panel
     focusNext: () => {
       focusSlice.focusNext();
       const focusedId = get().focusedId;
@@ -386,26 +335,6 @@ export const useTerminalStore = create<PanelGridState>()((set, get, api) => {
           if (group) get().setActiveTab(group.id, focusedId);
         }
       }
-    },
-
-    // Override hydrateTabGroups to also seed activeTabByGroup from persisted TabGroup.activeTabId
-    // This ensures the active tab state is restored after restart
-    hydrateTabGroups: (tabGroups, options) => {
-      // First, call the registry's hydrateTabGroups to sanitize and store the groups
-      // Forward options to respect skipPersist flag during error recovery
-      registrySlice.hydrateTabGroups(tabGroups, options);
-
-      // Then seed activeTabByGroup from the hydrated TabGroup.activeTabId values
-      const hydratedGroups = get().tabGroups;
-      const newActiveTabByGroup = new Map<string, string>();
-      for (const [groupId, group] of hydratedGroups) {
-        if (group.activeTabId) {
-          newActiveTabByGroup.set(groupId, group.activeTabId);
-        }
-      }
-
-      // Update the focus slice's activeTabByGroup map
-      set({ activeTabByGroup: newActiveTabByGroup });
     },
 
     reset: async () => {
@@ -435,7 +364,6 @@ export const useTerminalStore = create<PanelGridState>()((set, get, api) => {
         trashedTerminals: new Map(),
         backgroundedTerminals: new Map(),
         tabGroups: new Map(),
-        activeTabByGroup: new Map(),
         focusedId: null,
         maximizedId: null,
         activeDockTerminalId: null,
@@ -476,7 +404,6 @@ export const useTerminalStore = create<PanelGridState>()((set, get, api) => {
         trashedTerminals: new Map(),
         backgroundedTerminals: new Map(),
         tabGroups: new Map(),
-        activeTabByGroup: new Map(),
         focusedId: null,
         maximizedId: null,
         activeDockTerminalId: null,

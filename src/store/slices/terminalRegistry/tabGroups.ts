@@ -27,6 +27,8 @@ export const createTabGroupActions = (
   | "moveTabGroupToLocation"
   | "moveTabGroupToWorktree"
   | "reorderTabGroups"
+  | "setActiveTab"
+  | "getActiveTabId"
   | "hydrateTabGroups"
   | "setTabGroupInfo"
 > => ({
@@ -579,6 +581,42 @@ export const createTabGroupActions = (
       saveTerminals(newTerminals);
       return { terminals: newTerminals };
     });
+  },
+
+  setActiveTab: (groupId, panelId) => {
+    set((state) => {
+      const group = state.tabGroups.get(groupId);
+      if (!group) {
+        return state;
+      }
+      if (!group.panelIds.includes(panelId)) {
+        return state;
+      }
+      if (group.activeTabId === panelId) {
+        return state;
+      }
+      const newTabGroups = new Map(state.tabGroups);
+      newTabGroups.set(groupId, { ...group, activeTabId: panelId });
+      saveTabGroups(newTabGroups);
+      return { tabGroups: newTabGroups };
+    });
+  },
+
+  getActiveTabId: (groupId) => {
+    const group = get().tabGroups.get(groupId);
+    if (group) {
+      return group.activeTabId || null;
+    }
+    const terminal = get().terminals.find((t) => t.id === groupId);
+    if (terminal && terminal.location !== "trash") {
+      for (const g of get().tabGroups.values()) {
+        if (g.panelIds.includes(groupId)) {
+          return null;
+        }
+      }
+      return groupId;
+    }
+    return null;
   },
 
   hydrateTabGroups: (tabGroups, options) => {

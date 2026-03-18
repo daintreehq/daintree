@@ -1,8 +1,8 @@
 /**
- * Tests for unified active tab tracking (#1857)
+ * Tests for unified active tab tracking (#3605)
  *
- * Issue: activeTabByGroup (focus slice) and TabGroup.activeTabId (registry) were out of sync.
- * Solution: setActiveTab updates both, and hydrateTabGroups seeds activeTabByGroup from TabGroup.
+ * Issue: activeTabByGroup (focus slice) duplicated TabGroup.activeTabId (registry).
+ * Solution: Eliminated activeTabByGroup — TabGroup.activeTabId is the single source of truth.
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
@@ -56,7 +56,6 @@ describe("unified active tab tracking", () => {
       focusedId: null,
       maximizedId: null,
       commandQueue: [],
-      activeTabByGroup: new Map(),
     });
   });
 
@@ -66,7 +65,7 @@ describe("unified active tab tracking", () => {
   });
 
   describe("setActiveTab", () => {
-    it("should update both activeTabByGroup and TabGroup.activeTabId", async () => {
+    it("should update TabGroup.activeTabId (single source of truth)", async () => {
       const group: TabGroup = {
         id: "group-1",
         panelIds: ["term-1", "term-2", "term-3"],
@@ -105,7 +104,6 @@ describe("unified active tab tracking", () => {
           },
         ],
         tabGroups: new Map([["group-1", group]]),
-        activeTabByGroup: new Map([["group-1", "term-1"]]),
       });
 
       const { setActiveTab } = useTerminalStore.getState();
@@ -113,15 +111,12 @@ describe("unified active tab tracking", () => {
 
       const state = useTerminalStore.getState();
 
-      // Check activeTabByGroup (focus slice)
-      expect(state.activeTabByGroup.get("group-1")).toBe("term-2");
-
-      // Check TabGroup.activeTabId (registry - persisted)
+      // TabGroup.activeTabId is the single source of truth
       const updatedGroup = state.tabGroups.get("group-1");
       expect(updatedGroup?.activeTabId).toBe("term-2");
     });
 
-    it("should handle virtual groups (single panel, no explicit TabGroup)", () => {
+    it("should be a no-op for virtual groups (single panel, no explicit TabGroup)", () => {
       useTerminalStore.setState({
         terminals: [
           {
@@ -135,23 +130,18 @@ describe("unified active tab tracking", () => {
           },
         ],
         tabGroups: new Map(),
-        activeTabByGroup: new Map(),
       });
 
       const { setActiveTab } = useTerminalStore.getState();
-      // Virtual group uses panel ID as group ID
       setActiveTab("term-1", "term-1");
 
       const state = useTerminalStore.getState();
 
-      // activeTabByGroup should still be updated for virtual groups
-      expect(state.activeTabByGroup.get("term-1")).toBe("term-1");
-
-      // No explicit TabGroup exists
+      // No explicit TabGroup should be created
       expect(state.tabGroups.size).toBe(0);
     });
 
-    it("should not update either state if panel is not in the group", async () => {
+    it("should not update if panel is not in the group", async () => {
       const group: TabGroup = {
         id: "group-1",
         panelIds: ["term-1", "term-2"],
@@ -190,26 +180,89 @@ describe("unified active tab tracking", () => {
           },
         ],
         tabGroups: new Map([["group-1", group]]),
-        activeTabByGroup: new Map([["group-1", "term-1"]]),
       });
 
       const { setActiveTab } = useTerminalStore.getState();
-      // term-3 is not in group-1 - should be ignored to prevent split-brain
       setActiveTab("group-1", "term-3");
 
       const state = useTerminalStore.getState();
 
-      // activeTabByGroup should NOT be updated (prevents split-brain state)
-      expect(state.activeTabByGroup.get("group-1")).toBe("term-1");
-
-      // TabGroup.activeTabId also unchanged
+      // TabGroup.activeTabId unchanged
       const updatedGroup = state.tabGroups.get("group-1");
       expect(updatedGroup?.activeTabId).toBe("term-1");
     });
   });
 
+  describe("getActiveTabId", () => {
+    it("should return activeTabId for explicit groups", () => {
+      const group: TabGroup = {
+        id: "group-1",
+        panelIds: ["term-1", "term-2"],
+        activeTabId: "term-2",
+        location: "grid",
+      };
+
+      useTerminalStore.setState({
+        terminals: [
+          {
+            id: "term-1",
+            type: "terminal",
+            title: "Shell 1",
+            cwd: "/test",
+            cols: 80,
+            rows: 24,
+            location: "grid",
+          },
+          {
+            id: "term-2",
+            type: "terminal",
+            title: "Shell 2",
+            cwd: "/test",
+            cols: 80,
+            rows: 24,
+            location: "grid",
+          },
+        ],
+        tabGroups: new Map([["group-1", group]]),
+      });
+
+      const { getActiveTabId } = useTerminalStore.getState();
+      expect(getActiveTabId("group-1")).toBe("term-2");
+    });
+
+    it("should return panelId for virtual groups (ungrouped standalone panels)", () => {
+      useTerminalStore.setState({
+        terminals: [
+          {
+            id: "term-1",
+            type: "terminal",
+            title: "Shell 1",
+            cwd: "/test",
+            cols: 80,
+            rows: 24,
+            location: "grid",
+          },
+        ],
+        tabGroups: new Map(),
+      });
+
+      const { getActiveTabId } = useTerminalStore.getState();
+      expect(getActiveTabId("term-1")).toBe("term-1");
+    });
+
+    it("should return null for non-existent groups", () => {
+      useTerminalStore.setState({
+        terminals: [],
+        tabGroups: new Map(),
+      });
+
+      const { getActiveTabId } = useTerminalStore.getState();
+      expect(getActiveTabId("nonexistent")).toBeNull();
+    });
+  });
+
   describe("hydrateTabGroups", () => {
-    it("should seed activeTabByGroup from TabGroup.activeTabId", () => {
+    it("should restore activeTabId from persisted TabGroup state", () => {
       useTerminalStore.setState({
         terminals: [
           {
@@ -250,20 +303,19 @@ describe("unified active tab tracking", () => {
           },
         ],
         tabGroups: new Map(),
-        activeTabByGroup: new Map(), // Start empty
       });
 
       const tabGroupsToHydrate: TabGroup[] = [
         {
           id: "group-grid",
           panelIds: ["term-1", "term-2"],
-          activeTabId: "term-2", // Second tab is active
+          activeTabId: "term-2",
           location: "grid",
         },
         {
           id: "group-dock",
           panelIds: ["term-3", "term-4"],
-          activeTabId: "term-4", // Second tab is active
+          activeTabId: "term-4",
           location: "dock",
         },
       ];
@@ -273,64 +325,13 @@ describe("unified active tab tracking", () => {
 
       const state = useTerminalStore.getState();
 
-      // activeTabByGroup should be seeded from TabGroup.activeTabId
-      expect(state.activeTabByGroup.get("group-grid")).toBe("term-2");
-      expect(state.activeTabByGroup.get("group-dock")).toBe("term-4");
-
-      // TabGroups should be hydrated
+      // TabGroups should be hydrated with correct activeTabId
       expect(state.tabGroups.get("group-grid")?.activeTabId).toBe("term-2");
       expect(state.tabGroups.get("group-dock")?.activeTabId).toBe("term-4");
-    });
 
-    it("should clear stale activeTabByGroup entries on hydration", () => {
-      useTerminalStore.setState({
-        terminals: [
-          {
-            id: "term-1",
-            type: "terminal",
-            title: "Shell 1",
-            cwd: "/test",
-            cols: 80,
-            rows: 24,
-            location: "grid",
-          },
-          {
-            id: "term-2",
-            type: "terminal",
-            title: "Shell 2",
-            cwd: "/test",
-            cols: 80,
-            rows: 24,
-            location: "grid",
-          },
-        ],
-        tabGroups: new Map(),
-        // Stale entry from previous session
-        activeTabByGroup: new Map([
-          ["old-group", "old-term"],
-          ["group-1", "term-1"],
-        ]),
-      });
-
-      const tabGroupsToHydrate: TabGroup[] = [
-        {
-          id: "group-1",
-          panelIds: ["term-1", "term-2"],
-          activeTabId: "term-2",
-          location: "grid",
-        },
-      ];
-
-      const { hydrateTabGroups } = useTerminalStore.getState();
-      hydrateTabGroups(tabGroupsToHydrate);
-
-      const state = useTerminalStore.getState();
-
-      // Old stale entry should be cleared
-      expect(state.activeTabByGroup.has("old-group")).toBe(false);
-
-      // New entry from hydration should be present
-      expect(state.activeTabByGroup.get("group-1")).toBe("term-2");
+      // getActiveTabId should read from registry
+      expect(state.getActiveTabId("group-grid")).toBe("term-2");
+      expect(state.getActiveTabId("group-dock")).toBe("term-4");
     });
 
     it("should handle empty tab groups array", () => {
@@ -357,16 +358,12 @@ describe("unified active tab tracking", () => {
             },
           ],
         ]),
-        activeTabByGroup: new Map([["old-group", "term-1"]]),
       });
 
       const { hydrateTabGroups } = useTerminalStore.getState();
       hydrateTabGroups([]);
 
       const state = useTerminalStore.getState();
-
-      // All entries should be cleared
-      expect(state.activeTabByGroup.size).toBe(0);
       expect(state.tabGroups.size).toBe(0);
     });
   });
@@ -406,7 +403,6 @@ describe("unified active tab tracking", () => {
             },
           ],
         ]),
-        activeTabByGroup: new Map([["group-1", "term-1"]]),
       });
 
       // Step 2: User switches to tab 2
@@ -440,17 +436,23 @@ describe("unified active tab tracking", () => {
           },
         ],
         tabGroups: new Map(),
-        activeTabByGroup: new Map(), // Empty after restart
       });
 
       // Step 5: Hydrate from "persisted" state
       const { hydrateTabGroups: hydrateAfterRestart } = useTerminalStore.getState();
       hydrateAfterRestart([persistedGroup!]);
 
-      // Step 6: Verify active tab is restored
+      // Step 6: Verify active tab is restored from single source of truth
       const finalState = useTerminalStore.getState();
-      expect(finalState.activeTabByGroup.get("group-1")).toBe("term-2");
       expect(finalState.tabGroups.get("group-1")?.activeTabId).toBe("term-2");
+      expect(finalState.getActiveTabId("group-1")).toBe("term-2");
+    });
+  });
+
+  describe("no duplicate state", () => {
+    it("should not have activeTabByGroup property on the store", () => {
+      const state = useTerminalStore.getState();
+      expect("activeTabByGroup" in state).toBe(false);
     });
   });
 });
