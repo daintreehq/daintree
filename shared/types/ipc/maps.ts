@@ -913,6 +913,17 @@ export interface IpcInvokeMap {
       | { ok: false; errors: string[] };
   };
 
+  "terminal-config:set-screen-reader-mode": {
+    args: [mode: "auto" | "on" | "off"];
+    result: void;
+  };
+
+  // Accessibility channels
+  "accessibility:get-enabled": {
+    args: [];
+    result: boolean;
+  };
+
   // Git channels
   "git:get-file-diff": {
     args: [payload: GitGetFileDiffPayload];
@@ -1806,6 +1817,9 @@ export interface IpcEventMap {
   "demo:exec-wait-for-selector": DemoWaitForSelectorPayload;
   "demo:exec-sleep": DemoSleepPayload;
   "demo:encode:progress": DemoEncodeProgressEvent;
+
+  // Accessibility events
+  "accessibility:support-changed": { enabled: boolean };
 
   // Project MCP server events
   "project-mcp:status-changed": {

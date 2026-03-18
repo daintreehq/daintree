@@ -10,6 +10,7 @@ import {
   usePerformanceModeStore,
   useTerminalFontStore,
   useProjectSettingsStore,
+  useScreenReaderStore,
 } from "@/store";
 import {
   useTerminalColorSchemeStore,
@@ -83,6 +84,8 @@ function XtermAdapterComponent({
   const wrapperBackground = useTerminalColorSchemeStore(selectWrapperBackground);
   const effectiveTheme = useTerminalColorSchemeStore(selectEffectiveTheme);
 
+  const screenReaderEnabled = useScreenReaderStore((s) => s.resolvedScreenReaderEnabled());
+
   // Calculate effective scrollback: performance mode overrides, then project override, then app default
   const effectiveScrollback = useMemo(() => {
     if (performanceMode) {
@@ -121,8 +124,16 @@ function XtermAdapterComponent({
         scrollback: effectiveScrollback,
         performanceMode,
         theme: effectiveTheme,
+        screenReaderMode: screenReaderEnabled,
       }),
-    [effectiveScrollback, performanceMode, fontSize, fontFamily, effectiveTheme]
+    [
+      effectiveScrollback,
+      performanceMode,
+      fontSize,
+      fontFamily,
+      effectiveTheme,
+      screenReaderEnabled,
+    ]
   );
 
   // Push-based resize handler using ResizeObserver dimensions directly
@@ -488,7 +499,11 @@ function XtermAdapterComponent({
       )}
       style={{ backgroundColor: wrapperBackground }}
     >
-      <div ref={containerRef} className="w-full h-full min-h-0 min-w-0" />
+      <div
+        ref={containerRef}
+        className="w-full h-full min-h-0 min-w-0"
+        aria-label="Terminal output"
+      />
     </div>
   );
 }

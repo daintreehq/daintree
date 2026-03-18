@@ -403,6 +403,10 @@ const CHANNELS = {
   TERMINAL_CONFIG_SET_COLOR_SCHEME: "terminal-config:set-color-scheme",
   TERMINAL_CONFIG_SET_CUSTOM_SCHEMES: "terminal-config:set-custom-schemes",
   TERMINAL_CONFIG_IMPORT_COLOR_SCHEME: "terminal-config:import-color-scheme",
+  TERMINAL_CONFIG_SET_SCREEN_READER_MODE: "terminal-config:set-screen-reader-mode",
+
+  ACCESSIBILITY_GET_ENABLED: "accessibility:get-enabled",
+  ACCESSIBILITY_SUPPORT_CHANGED: "accessibility:support-changed",
 
   // Git channels
   GIT_GET_FILE_DIFF: "git:get-file-diff",
@@ -1552,6 +1556,17 @@ const api: ElectronAPI = {
       _typedInvoke(CHANNELS.TERMINAL_CONFIG_SET_CUSTOM_SCHEMES, schemesJson),
 
     importColorScheme: () => _typedInvoke(CHANNELS.TERMINAL_CONFIG_IMPORT_COLOR_SCHEME),
+
+    setScreenReaderMode: (mode: "auto" | "on" | "off") =>
+      _typedInvoke(CHANNELS.TERMINAL_CONFIG_SET_SCREEN_READER_MODE, mode),
+  },
+
+  // Accessibility API
+  accessibility: {
+    getEnabled: () => _typedInvoke(CHANNELS.ACCESSIBILITY_GET_ENABLED),
+
+    onSupportChanged: (callback: (data: { enabled: boolean }) => void) =>
+      _typedOn(CHANNELS.ACCESSIBILITY_SUPPORT_CHANGED, callback),
   },
 
   // Sidecar API

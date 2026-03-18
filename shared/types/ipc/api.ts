@@ -697,6 +697,11 @@ export interface ElectronAPI {
         }
       | { ok: false; errors: string[] }
     >;
+    setScreenReaderMode(mode: "auto" | "on" | "off"): Promise<void>;
+  };
+  accessibility: {
+    getEnabled(): Promise<boolean>;
+    onSupportChanged(callback: (data: { enabled: boolean }) => void): () => void;
   };
   sidecar: {
     create(payload: import("../sidecar.js").SidecarCreatePayload): Promise<void>;
