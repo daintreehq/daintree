@@ -2,6 +2,7 @@ import { Terminal } from "@xterm/xterm";
 import { terminalClient } from "@/clients";
 import { TerminalRefreshTier } from "@/types";
 import { getEffectiveAgentConfig } from "@shared/config/agentRegistry";
+import { logError } from "@/utils/logger";
 import type { ManagedTerminal } from "./types";
 import type { TerminalOutputIngestService } from "./TerminalOutputIngestService";
 
@@ -343,7 +344,10 @@ export class TerminalResizeController {
           },
           { priority: "background", signal: controller.signal }
         )
-        .catch(() => {});
+        .catch((e: unknown) => {
+          if (e instanceof Error && e.name === "AbortError") return;
+          logError(`[TerminalResizeController] scheduleIdleResize failed for ${id}`, e);
+        });
     } else {
       const timerId = setTimeout(() => {
         const current = this.deps.getInstance(id);
