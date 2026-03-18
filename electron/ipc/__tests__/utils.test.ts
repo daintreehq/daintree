@@ -126,8 +126,8 @@ describe("ipc utils", () => {
     const mockWindow = { id: 1 };
     browserWindowFromWebContentsMock.mockReturnValue(mockWindow);
 
-    const handler = vi.fn(async (ctx: unknown, input: string) => ({
-      ok: input === "value",
+    const handler = vi.fn(async (_ctx: unknown, _input: string) => ({
+      ok: _input === "value",
     }));
     const cleanup = typedHandleWithContext("project:get:all" as never, handler as never);
 
@@ -141,7 +141,11 @@ describe("ipc utils", () => {
     expect(result).toEqual({ ok: true });
 
     expect(handler).toHaveBeenCalledOnce();
-    const ctx = handler.mock.calls[0][0] as { webContentsId: number; senderWindow: unknown };
+    const ctx = handler.mock.calls[0][0] as {
+      webContentsId: number;
+      senderWindow: unknown;
+      event: unknown;
+    };
     expect(ctx.webContentsId).toBe(42);
     expect(ctx.senderWindow).toBe(mockWindow);
     expect(ctx.event).toBe(mockEvent);
@@ -153,7 +157,7 @@ describe("ipc utils", () => {
   it("typedHandleWithContext sets senderWindow to null when fromWebContents returns null", async () => {
     browserWindowFromWebContentsMock.mockReturnValue(null);
 
-    const handler = vi.fn(async () => "ok");
+    const handler = vi.fn(async (_ctx: unknown) => "ok");
     typedHandleWithContext("project:get:all" as never, handler as never);
 
     const [[, registered]] = ipcMainMock.handle.mock.calls as [
