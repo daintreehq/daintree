@@ -67,7 +67,7 @@ describe("IssueBulkActionBar", () => {
     expect(createBtn).toBeTruthy();
   });
 
-  it("renders as floating elevated bar with glassmorphic styling", () => {
+  it("renders as floating elevated bar with solid styling", () => {
     const issues = [makeIssue(1)];
     render(<IssueBulkActionBar selectedIssues={issues} onClear={vi.fn()} />);
 
@@ -75,14 +75,17 @@ describe("IssueBulkActionBar", () => {
     const classes = toolbar.className;
 
     expect(classes).toContain("rounded-xl");
-    expect(classes).toContain("backdrop-blur-md");
-    expect(classes).toContain("shadow-lg");
+    expect(classes).toContain("shadow-xl");
     expect(classes).toContain("mx-2");
     expect(classes).toContain("mb-2");
-    expect(classes).toContain("bg-surface-panel-elevated/95");
-    expect(classes).toContain("ring-border-subtle");
+    expect(classes).toContain("bg-surface-panel-elevated");
+    expect(classes).toContain("ring-border-default");
 
     expect(classes).not.toContain("border-t");
+    expect(classes).not.toContain("backdrop-blur-md");
+    expect(classes).not.toContain("bg-surface-panel-elevated/95");
+    expect(classes).not.toContain("shadow-lg");
+    expect(classes).not.toContain("ring-border-subtle");
   });
 
   it("shows 'selected' label next to count badge", () => {
