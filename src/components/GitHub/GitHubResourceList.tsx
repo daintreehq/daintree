@@ -18,6 +18,7 @@ import {
 } from "@/store/githubFilterStore";
 import type { GitHubIssue, GitHubPR, GitHubSortOrder } from "@shared/types/github";
 import { parseNumberQuery, MULTI_FETCH_CAP } from "@/lib/parseNumberQuery";
+import { GitHubResourceListSkeleton, MAX_SKELETON_ITEMS } from "./GitHubDropdownSkeletons";
 
 type StateFilter = IssueStateFilter | PRStateFilter;
 
@@ -32,9 +33,6 @@ interface GitHubResourceListProps {
   onClose?: () => void;
   initialCount?: number | null;
 }
-
-const ITEM_HEIGHT_PX = 68;
-const MAX_SKELETON_ITEMS = 6;
 
 export function GitHubResourceList({
   type,
@@ -486,36 +484,6 @@ export function GitHubResourceList({
     ]
   );
 
-  const renderSkeleton = (count: number) => {
-    const safeCount = Number.isFinite(count) ? Math.floor(count) : MAX_SKELETON_ITEMS;
-    const renderCount = Math.min(Math.max(1, safeCount), MAX_SKELETON_ITEMS);
-
-    return (
-      <div role="status" aria-live="polite" aria-busy="true" aria-label="Loading GitHub results">
-        <span className="sr-only">Loading GitHub results</span>
-        <div aria-hidden="true" className="divide-y divide-[var(--border-divider)]">
-          {Array.from({ length: renderCount }).map((_, i) => (
-            <div
-              key={i}
-              className="animate-pulse-delayed box-border"
-              style={{ height: `${ITEM_HEIGHT_PX}px` }}
-            >
-              <div className="flex items-center gap-2 px-3 pt-2.5">
-                <div className="w-4 h-4 rounded-full bg-muted shrink-0" />
-                <div className="h-4 bg-muted rounded flex-1" />
-                <div className="h-4 bg-muted rounded w-8 shrink-0" />
-              </div>
-              <div className="flex items-center gap-1.5 px-3 mt-1.5 pb-2.5">
-                <div className="h-3 bg-muted rounded w-16" />
-                <div className="h-3 bg-muted rounded w-14" />
-              </div>
-            </div>
-          ))}
-        </div>
-      </div>
-    );
-  };
-
   const isTokenError = error?.includes("GitHub token not configured") ?? false;
 
   const handleOpenGitHubSettings = () => {
@@ -699,7 +667,9 @@ export function GitHubResourceList({
 
       <div className="overflow-y-auto flex-1 min-h-0">
         {loading && !data.length ? (
-          renderSkeleton(initialCount && initialCount > 0 ? initialCount : MAX_SKELETON_ITEMS)
+          <GitHubResourceListSkeleton
+            count={initialCount && initialCount > 0 ? initialCount : MAX_SKELETON_ITEMS}
+          />
         ) : data.length > 0 ? (
           <>
             {error && (

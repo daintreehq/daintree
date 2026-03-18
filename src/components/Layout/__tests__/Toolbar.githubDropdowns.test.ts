@@ -82,6 +82,54 @@ describe("Toolbar GitHub dropdown search clearing — issue #3251", () => {
   });
 });
 
+describe("Toolbar Suspense skeleton fallbacks — issue #3593", () => {
+  let source: string;
+
+  beforeEach(async () => {
+    source = await fs.readFile(TOOLBAR_PATH, "utf-8");
+  });
+
+  it("imports skeleton components synchronously (not lazy)", () => {
+    expect(source).toContain("GitHubResourceListSkeleton");
+    expect(source).toContain("CommitListSkeleton");
+    expect(source).not.toMatch(/lazy\(\s*\(\)\s*=>\s*import.*GitHubDropdownSkeletons/);
+  });
+
+  it("uses GitHubResourceListSkeleton with immediate in issues Suspense fallback", () => {
+    const issuesSuspense = source.slice(
+      source.indexOf('type="issue"') - 300,
+      source.indexOf('type="issue"')
+    );
+    expect(issuesSuspense).toContain("GitHubResourceListSkeleton");
+    expect(issuesSuspense).toContain("immediate");
+  });
+
+  it("uses GitHubResourceListSkeleton with immediate in PRs Suspense fallback", () => {
+    const prsSuspense = source.slice(
+      source.indexOf('type="pr"') - 300,
+      source.indexOf('type="pr"')
+    );
+    expect(prsSuspense).toContain("GitHubResourceListSkeleton");
+    expect(prsSuspense).toContain("immediate");
+  });
+
+  it("uses CommitListSkeleton with immediate in commits Suspense fallback", () => {
+    // Find the LazyCommitList usage inside the JSX (not the lazy() declaration at top)
+    const firstLazy = source.indexOf("LazyCommitList");
+    const jsxLazy = source.indexOf("LazyCommitList", firstLazy + 1);
+    const commitsSuspense = source.slice(jsxLazy - 300, jsxLazy);
+    expect(commitsSuspense).toContain("CommitListSkeleton");
+    expect(commitsSuspense).toContain("immediate");
+  });
+
+  it("does not use Loader2 in any Suspense fallback", () => {
+    const suspenseBlocks = source.match(/fallback=\{[\s\S]*?\}\s*>/g) ?? [];
+    for (const block of suspenseBlocks) {
+      expect(block).not.toContain("Loader2");
+    }
+  });
+});
+
 describe("Toolbar persistThroughChildOverlays — issue #3556", () => {
   let source: string;
 

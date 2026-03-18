@@ -6,6 +6,7 @@ import { cn } from "@/lib/utils";
 import { CommitListItem } from "./CommitListItem";
 import type { GitCommit, GitCommitListResponse } from "@shared/types/github";
 import { actionService } from "@/services/ActionService";
+import { CommitListSkeleton } from "./GitHubDropdownSkeletons";
 
 interface CommitListProps {
   projectPath: string;
@@ -13,8 +14,6 @@ interface CommitListProps {
   initialCount?: number;
 }
 
-const ITEM_HEIGHT_PX = 64;
-const MAX_SKELETON_ITEMS = 6;
 const PAGE_SIZE = 30;
 
 export function CommitList({ projectPath, onClose, initialCount }: CommitListProps) {
@@ -168,38 +167,6 @@ export function CommitList({ projectPath, onClose, initialCount }: CommitListPro
     [maxCursor, isLoadMoreActive, activeCommit, handleLoadMore, onClose]
   );
 
-  const renderSkeleton = (count: number) => {
-    const safeCount = Number.isFinite(count) ? Math.floor(count) : MAX_SKELETON_ITEMS;
-    const renderCount = Math.min(Math.max(1, safeCount), MAX_SKELETON_ITEMS);
-
-    return (
-      <div role="status" aria-live="polite" aria-busy="true" aria-label="Loading commits">
-        <span className="sr-only">Loading commits</span>
-        <div aria-hidden="true" className="divide-y divide-[var(--border-divider)]">
-          {Array.from({ length: renderCount }).map((_, i) => (
-            <div
-              key={i}
-              className="px-3 py-2.5 animate-pulse-delayed box-border"
-              style={{ height: `${ITEM_HEIGHT_PX}px` }}
-            >
-              <div className="flex items-start gap-2 h-full">
-                <div className="w-4 h-4 rounded-full bg-muted mt-0.5 shrink-0" />
-                <div className="flex-1 min-w-0">
-                  <div className="h-5 bg-muted rounded w-3/4" />
-                  <div className="mt-0.5 flex items-center gap-1.5">
-                    <div className="h-4 bg-muted rounded w-16" />
-                    <div className="h-4 bg-muted rounded w-20" />
-                    <div className="h-4 bg-muted rounded w-12" />
-                  </div>
-                </div>
-              </div>
-            </div>
-          ))}
-        </div>
-      </div>
-    );
-  };
-
   const renderError = () => (
     <div className="px-3 py-2 border-b border-[var(--border-divider)] flex items-center gap-2 text-muted-foreground bg-overlay-soft">
       <AlertCircle className="h-3.5 w-3.5 shrink-0 text-status-error" />
@@ -264,7 +231,7 @@ export function CommitList({ projectPath, onClose, initialCount }: CommitListPro
           initialCount === 0 ? (
             renderEmpty()
           ) : (
-            renderSkeleton(Math.min(initialCount ?? MAX_SKELETON_ITEMS, MAX_SKELETON_ITEMS))
+            <CommitListSkeleton count={initialCount} />
           )
         ) : data.length > 0 ? (
           <>
