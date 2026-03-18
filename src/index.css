@@ -1729,6 +1729,11 @@ body[data-performance-mode="true"] [class*="backdrop-blur"] {
     animation: settings-pulse 1.5s ease-out;
     border-radius: var(--radius-md);
   }
+
+  [data-dragging="true"] webview,
+  [data-dragging="true"] iframe {
+    pointer-events: none !important;
+  }
 }
 
 @utility contain-layout {
