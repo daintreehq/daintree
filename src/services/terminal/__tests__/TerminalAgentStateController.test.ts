@@ -302,6 +302,27 @@ describe("TerminalAgentStateController", () => {
       vi.advanceTimersByTime(1);
       expect(managed.agentState).toBe("waiting");
     });
+
+    it("empty data always uses phase 1 timeout even when count is already in phase 2", () => {
+      const managed = makeMockManaged({
+        canonicalAgentState: "waiting",
+        agentState: "waiting",
+      });
+      instances.set("t1", managed);
+
+      // Establish phase 2 with 5 chars
+      controller.onUserInput("t1", "hello");
+      expect(managed.agentState).toBe("directing");
+
+      // A legacy notifyUserInput(id) call (data="") should reset debounce to phase 1
+      controller.onUserInput("t1", "");
+
+      vi.advanceTimersByTime(1499);
+      expect(managed.agentState).toBe("directing");
+
+      vi.advanceTimersByTime(1);
+      expect(managed.agentState).toBe("waiting");
+    });
   });
 
   describe("clearDirectingState", () => {

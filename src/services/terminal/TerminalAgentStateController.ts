@@ -51,12 +51,19 @@ export class TerminalAgentStateController {
 
       const count = this.compositionCounts.get(id) ?? 0;
       let newCount: number;
-      if (data === "\x7f") {
+      let debounceCount: number;
+      if (data === "") {
+        newCount = count;
+        debounceCount = 0;
+      } else if (data === "\x7f") {
         newCount = Math.max(0, count - 1);
+        debounceCount = newCount;
       } else if (data === "\x15") {
         newCount = 0;
+        debounceCount = 0;
       } else {
         newCount = count + data.length;
+        debounceCount = newCount;
       }
       this.compositionCounts.set(id, newCount);
 
@@ -74,7 +81,7 @@ export class TerminalAgentStateController {
         id,
         window.setTimeout(() => {
           this.clearDirectingState(id);
-        }, this.getDebounceMs(newCount))
+        }, this.getDebounceMs(debounceCount))
       );
     }
   }
