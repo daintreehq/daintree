@@ -26,6 +26,15 @@ if (!app.isPackaged && !hasExplicitUserDataDir) {
   app.setPath("userData", path.join(app.getPath("appData"), `${app.name}-dev`));
 }
 
+// GPU crash fallback: disable hardware acceleration before app.whenReady()
+// This flag is written by GpuCrashMonitorService after repeated GPU crashes.
+const gpuFlagPath = path.join(app.getPath("userData"), "gpu-disabled.flag");
+export const gpuHardwareAccelerationDisabled = fs.existsSync(gpuFlagPath);
+if (gpuHardwareAccelerationDisabled) {
+  app.disableHardwareAcceleration();
+  console.log("[GPU] Hardware acceleration disabled by crash fallback flag");
+}
+
 // Handle --reset-data: wipe userData before Chromium acquires file locks
 if (process.argv.includes("--reset-data")) {
   const userDataPath = app.getPath("userData");

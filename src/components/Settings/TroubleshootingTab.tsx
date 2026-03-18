@@ -10,6 +10,7 @@ import {
   CircleX,
   RotateCw,
   Download,
+  Monitor,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { appClient, systemClient } from "@/clients";
@@ -117,6 +118,45 @@ function DownloadDiagnosticsSection() {
         {isDownloading ? "Collecting..." : "Download Diagnostics"}
       </Button>
       {downloadError && <p className="text-xs text-status-error mb-3">{downloadError}</p>}
+    </SettingsSection>
+  );
+}
+
+function HardwareAccelerationSection() {
+  const [disabled, setDisabled] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    window.electron.gpu.getStatus().then((status) => {
+      setDisabled(status.hardwareAccelerationDisabled);
+    });
+  }, []);
+
+  const handleToggle = useCallback(() => {
+    if (disabled === null) return;
+    const newEnabled = disabled; // if currently disabled, we're enabling
+    void window.electron.gpu.setHardwareAcceleration(newEnabled);
+  }, [disabled]);
+
+  if (disabled === null) return null;
+
+  return (
+    <SettingsSection
+      icon={Monitor}
+      title="Hardware Acceleration"
+      description="GPU hardware acceleration improves rendering performance. Disable if you experience blank panels or repeated GPU crashes."
+    >
+      <SettingsSwitchCard
+        icon={Monitor}
+        title={disabled ? "Hardware Acceleration Disabled" : "Hardware Acceleration Enabled"}
+        subtitle={
+          disabled
+            ? "GPU was disabled due to repeated crashes. Re-enable to restore full performance. App will restart."
+            : "Disable if you experience blank panels or rendering issues. App will restart."
+        }
+        isEnabled={!disabled}
+        onChange={handleToggle}
+        ariaLabel="Hardware Acceleration Toggle"
+      />
     </SettingsSection>
   );
 }
@@ -272,6 +312,8 @@ export function TroubleshootingTab() {
 
   return (
     <div className="space-y-6">
+      <HardwareAccelerationSection />
+
       <DownloadDiagnosticsSection />
 
       <SystemHealthSection />
