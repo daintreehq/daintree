@@ -6,16 +6,17 @@ import type {
 import { PERF_MARKS } from "@shared/perf/marks";
 import { markRendererPerformance } from "@/utils/performance";
 
-const IPC_STANDARD_FLUSH_DELAY_MS = 8;
-const IPC_INK_REDRAW_FLUSH_DELAY_MS = 25;
+const RENDERER_HIGH_WATERMARK_BYTES = 128 * 1024;
+const RENDERER_LOW_WATERMARK_BYTES = 32 * 1024;
 const IPC_LOOKBACK_CHARS = 32;
 const INK_ERASE_LINE_PATTERN = "\x1b[2K\x1b[1A";
 
-type IpcBufferEntry = {
+type TerminalIngestQueue = {
   chunks: Array<string | Uint8Array>;
+  queuedBytes: number;
+  inFlightBytes: number;
   recentChars: string;
-  timeoutId: number | null;
-  flushAt: number;
+  drainScheduled: boolean;
 };
 
 export class TerminalOutputIngestService {
@@ -24,7 +25,7 @@ export class TerminalOutputIngestService {
   private pollingActive = false;
   private initializePromise: Promise<void> | null = null;
   private perfSampleCounter = 0;
-  private ipcBuffers = new Map<string, IpcBufferEntry>();
+  private queues = new Map<string, TerminalIngestQueue>();
 
   constructor(private readonly writeToTerminal: (id: string, data: string | Uint8Array) => void) {}
 
@@ -49,7 +50,7 @@ export class TerminalOutputIngestService {
           if (message.type === "OUTPUT_BATCH") {
             for (const batch of message.batches) {
               this.markTerminalDataReceived(batch.id, batch.data);
-              this.writeToTerminal(batch.id, batch.data);
+              this.enqueueChunk(batch.id, batch.data);
             }
           }
         };
@@ -101,12 +102,27 @@ export class TerminalOutputIngestService {
   public bufferData(id: string, data: string | Uint8Array): void {
     if (this.pollingActive) return;
     this.markTerminalDataReceived(id, data);
-    this.bufferIpcData(id, data);
+    this.enqueueChunk(id, data);
+  }
+
+  public notifyWriteComplete(id: string, bytes: number): void {
+    const queue = this.queues.get(id);
+    if (!queue) return;
+    queue.inFlightBytes = Math.max(0, queue.inFlightBytes - bytes);
+    if (queue.inFlightBytes <= RENDERER_LOW_WATERMARK_BYTES && queue.chunks.length > 0) {
+      this.tryDrain(id, queue);
+    }
+  }
+
+  public notifyParsed(id: string): void {
+    const queue = this.queues.get(id);
+    if (!queue || queue.chunks.length === 0 || queue.drainScheduled) return;
+    this.tryDrain(id, queue);
   }
 
   public resetForTerminal(id: string): void {
     if (!this.pollingActive || !this.worker) {
-      this.clearIpcBuffer(id);
+      this.clearQueue(id);
       return;
     }
     const message: WorkerInboundMessage = {
@@ -118,7 +134,7 @@ export class TerminalOutputIngestService {
 
   public flushForTerminal(id: string): void {
     if (!this.pollingActive || !this.worker) {
-      this.flushIpcBuffer(id);
+      this.forceDrain(id);
       return;
     }
     const message: WorkerInboundMessage = {
@@ -129,8 +145,8 @@ export class TerminalOutputIngestService {
   }
 
   public stopPolling(): void {
-    for (const id of this.ipcBuffers.keys()) {
-      this.flushIpcBuffer(id);
+    for (const id of this.queues.keys()) {
+      this.forceDrain(id);
     }
     this.pollingActive = false;
     this.sabAvailable = false;
@@ -156,73 +172,103 @@ export class TerminalOutputIngestService {
     });
   }
 
-  private bufferIpcData(id: string, data: string | Uint8Array): void {
-    const now = Date.now();
-    const entry = this.ipcBuffers.get(id) ?? {
-      chunks: [],
-      recentChars: "",
-      timeoutId: null,
-      flushAt: 0,
-    };
+  private getOrCreateQueue(id: string): TerminalIngestQueue {
+    let queue = this.queues.get(id);
+    if (!queue) {
+      queue = {
+        chunks: [],
+        queuedBytes: 0,
+        inFlightBytes: 0,
+        recentChars: "",
+        drainScheduled: false,
+      };
+      this.queues.set(id, queue);
+    }
+    return queue;
+  }
+
+  private chunkByteSize(data: string | Uint8Array): number {
+    return typeof data === "string" ? data.length * 3 : data.byteLength;
+  }
+
+  private enqueueChunk(id: string, data: string | Uint8Array): void {
+    const queue = this.getOrCreateQueue(id);
+    const bytes = this.chunkByteSize(data);
+    queue.chunks.push(data);
+    queue.queuedBytes += bytes;
+
     const stringData = typeof data === "string" ? data : "";
-    const scanWindow = entry.recentChars + stringData;
-    const containsInkErase = scanWindow.includes(INK_ERASE_LINE_PATTERN);
-    const combinedRecent = scanWindow.slice(-IPC_LOOKBACK_CHARS);
-    const delayMs = containsInkErase ? IPC_INK_REDRAW_FLUSH_DELAY_MS : IPC_STANDARD_FLUSH_DELAY_MS;
-    const targetFlushAt = now + delayMs;
+    if (stringData) {
+      const scanWindow = queue.recentChars + stringData;
+      const containsInkErase = scanWindow.includes(INK_ERASE_LINE_PATTERN);
+      queue.recentChars = scanWindow.slice(-IPC_LOOKBACK_CHARS);
 
-    entry.recentChars = combinedRecent;
-    entry.chunks.push(data);
-
-    if (entry.timeoutId === null) {
-      entry.flushAt = targetFlushAt;
-      entry.timeoutId = globalThis.setTimeout(
-        () => this.flushIpcBuffer(id),
-        Math.max(0, entry.flushAt - Date.now())
-      ) as unknown as number;
-    } else if (targetFlushAt > entry.flushAt) {
-      globalThis.clearTimeout(entry.timeoutId);
-      entry.flushAt = targetFlushAt;
-      entry.timeoutId = globalThis.setTimeout(
-        () => this.flushIpcBuffer(id),
-        Math.max(0, entry.flushAt - Date.now())
-      ) as unknown as number;
+      if (containsInkErase && !queue.drainScheduled) {
+        queue.drainScheduled = true;
+        globalThis.setTimeout(() => {
+          queue.drainScheduled = false;
+          this.tryDrain(id, queue);
+        }, 0);
+        return;
+      }
     }
 
-    this.ipcBuffers.set(id, entry);
+    if (!queue.drainScheduled) {
+      this.tryDrain(id, queue);
+    }
   }
 
-  private clearIpcBuffer(id: string): void {
-    const entry = this.ipcBuffers.get(id);
-    if (!entry) return;
-    if (entry.timeoutId !== null) {
-      globalThis.clearTimeout(entry.timeoutId);
+  private tryDrain(id: string, queue: TerminalIngestQueue): void {
+    while (queue.chunks.length > 0 && queue.inFlightBytes < RENDERER_HIGH_WATERMARK_BYTES) {
+      const batch = this.coalesceBatch(queue);
+      const batchBytes = this.chunkByteSize(batch);
+      queue.inFlightBytes += batchBytes;
+      this.writeToTerminal(id, batch);
     }
-    this.ipcBuffers.delete(id);
   }
 
-  private flushIpcBuffer(id: string): void {
-    const entry = this.ipcBuffers.get(id);
-    if (!entry) return;
-    if (entry.timeoutId !== null) {
-      globalThis.clearTimeout(entry.timeoutId);
-    }
-    this.ipcBuffers.delete(id);
-
-    if (entry.chunks.length === 0) return;
-    if (entry.chunks.length === 1) {
-      this.writeToTerminal(id, entry.chunks[0]);
-      return;
+  private coalesceBatch(queue: TerminalIngestQueue): string | Uint8Array {
+    if (queue.chunks.length === 1) {
+      const chunk = queue.chunks[0];
+      queue.chunks.length = 0;
+      queue.queuedBytes = 0;
+      return chunk;
     }
 
-    const allStrings = entry.chunks.every((chunk) => typeof chunk === "string");
+    const allStrings = queue.chunks.every((c) => typeof c === "string");
     if (allStrings) {
-      this.writeToTerminal(id, (entry.chunks as string[]).join(""));
-      return;
+      const merged = (queue.chunks as string[]).join("");
+      queue.chunks.length = 0;
+      queue.queuedBytes = 0;
+      return merged;
     }
 
-    for (const chunk of entry.chunks) {
-      this.writeToTerminal(id, chunk);
+    const chunk = queue.chunks.shift()!;
+    queue.queuedBytes -= this.chunkByteSize(chunk);
+    return chunk;
+  }
+
+  private clearQueue(id: string): void {
+    this.queues.delete(id);
+  }
+
+  private forceDrain(id: string): void {
+    const queue = this.queues.get(id);
+    if (!queue || queue.chunks.length === 0) return;
+
+    if (queue.chunks.length === 1) {
+      this.writeToTerminal(id, queue.chunks[0]);
+    } else {
+      const allStrings = queue.chunks.every((c) => typeof c === "string");
+      if (allStrings) {
+        this.writeToTerminal(id, (queue.chunks as string[]).join(""));
+      } else {
+        for (const chunk of queue.chunks) {
+          this.writeToTerminal(id, chunk);
+        }
+      }
     }
+
+    this.queues.delete(id);
   }
 }
