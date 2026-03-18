@@ -81,3 +81,25 @@ describe("Toolbar GitHub dropdown search clearing — issue #3251", () => {
     expect(commitsButton).toContain('setPrSearchQuery("")');
   });
 });
+
+describe("Toolbar persistThroughChildOverlays — issue #3556", () => {
+  let source: string;
+
+  beforeEach(async () => {
+    source = await fs.readFile(TOOLBAR_PATH, "utf-8");
+  });
+
+  it("issues FixedDropdown has persistThroughChildOverlays", () => {
+    const issuesDropdownStart = source.indexOf('type="issue"');
+    const preceding = source.slice(Math.max(0, issuesDropdownStart - 500), issuesDropdownStart);
+    expect(preceding).toContain("persistThroughChildOverlays");
+  });
+
+  it("PRs FixedDropdown does NOT have persistThroughChildOverlays", () => {
+    const prDropdownStart = source.indexOf('type="pr"');
+    const preceding = source.slice(Math.max(0, prDropdownStart - 500), prDropdownStart);
+    const lastFixedDropdown = preceding.lastIndexOf("<FixedDropdown");
+    const prDropdownBlock = preceding.slice(lastFixedDropdown);
+    expect(prDropdownBlock).not.toContain("persistThroughChildOverlays");
+  });
+});

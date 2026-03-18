@@ -708,6 +708,7 @@ export function Toolbar({
                 }}
                 anchorRef={issuesButtonRef}
                 className="p-0 w-[450px]"
+                persistThroughChildOverlays
               >
                 <GitHubResourceList
                   type="issue"
