@@ -1,8 +1,11 @@
 import v8 from "node:v8";
 import type { PtyHostEvent } from "../../shared/types/pty-host.js";
+import { FdMonitor } from "./FdMonitor.js";
+import { metricsEnabled } from "./metrics.js";
 
 export interface ResourceGovernorDeps {
   getTerminals: () => Array<{ ptyProcess: { pause: () => void; resume: () => void } }>;
+  getTerminalPids: () => Array<{ id: string; pid: number | undefined }>;
   incrementPauseCount: (count: number) => void;
   sendEvent: (event: PtyHostEvent) => void;
 }
@@ -15,12 +18,24 @@ export class ResourceGovernor {
   private isThrottling = false;
   private checkInterval: NodeJS.Timeout | null = null;
   private throttleStartTime = 0;
+  private readonly fdMonitor: FdMonitor;
+  private readonly killedPids = new Map<number, number>();
+  private readonly ORPHAN_GRACE_MS = 4000;
 
-  constructor(private readonly deps: ResourceGovernorDeps) {}
+  constructor(private readonly deps: ResourceGovernorDeps) {
+    this.fdMonitor = new FdMonitor();
+  }
 
   start(): void {
     this.checkInterval = setInterval(() => this.checkResources(), this.CHECK_INTERVAL_MS);
     console.log("[ResourceGovernor] Started monitoring memory usage");
+    if (this.fdMonitor.supported) {
+      console.log("[ResourceGovernor] FD monitoring enabled");
+    }
+  }
+
+  trackKilledPid(pid: number): void {
+    this.killedPids.set(pid, Date.now());
   }
 
   private checkResources(): void {
@@ -40,6 +55,62 @@ export class ResourceGovernor {
       if (shouldForceResume || belowThreshold) {
         this.disengageThrottle(heapUsedMb, utilizationPercent, shouldForceResume);
       }
+    }
+
+    this.checkFdUsage();
+  }
+
+  private checkFdUsage(): void {
+    if (!this.fdMonitor.supported) return;
+
+    const now = Date.now();
+
+    // Collect orphan candidates: PIDs killed long enough ago to have exited
+    const orphanCandidates: number[] = [];
+    for (const [pid, killedAt] of this.killedPids) {
+      if (now - killedAt > this.ORPHAN_GRACE_MS) {
+        orphanCandidates.push(pid);
+        this.killedPids.delete(pid);
+      }
+    }
+
+    const terminals = this.deps.getTerminalPids();
+    const activePids = new Set(terminals.map((t) => t.pid).filter((p): p is number => p !== undefined));
+
+    const result = this.fdMonitor.checkForLeaks(terminals.length, orphanCandidates);
+
+    if (metricsEnabled()) {
+      console.log(
+        `[ResourceGovernor] FDs: ${result.totalFds} total, ` +
+          `~${result.estimatedTerminalFds} terminal-related, ` +
+          `${result.activeTerminals} active terminals` +
+          (result.ptmxLimit != null ? `, ptmx limit: ${result.ptmxLimit}` : "")
+      );
+    }
+
+    // Log orphaned PIDs (killed but still alive after grace period)
+    if (result.orphanedPids.length > 0) {
+      console.warn(
+        `[ResourceGovernor] Orphaned PTY PIDs detected (killed but still alive): ${result.orphanedPids.join(", ")}`
+      );
+    }
+
+    if (result.isWarning) {
+      console.warn(
+        `[ResourceGovernor] FD leak warning: ${result.totalFds} open FDs ` +
+          `(baseline: ${result.baselineFds}, ~${result.estimatedTerminalFds} terminal-related) ` +
+          `with only ${result.activeTerminals} active terminals`
+      );
+
+      this.deps.sendEvent({
+        type: "fd-leak-warning",
+        fdCount: result.totalFds,
+        activeTerminals: result.activeTerminals,
+        estimatedLeaked: result.estimatedTerminalFds - result.activeTerminals,
+        orphanedPids: result.orphanedPids,
+        ptmxLimit: result.ptmxLimit,
+        timestamp: now,
+      });
     }
   }
 
@@ -109,6 +180,7 @@ export class ResourceGovernor {
       clearInterval(this.checkInterval);
       this.checkInterval = null;
     }
+    this.killedPids.clear();
     console.log("[ResourceGovernor] Disposed");
   }
 }

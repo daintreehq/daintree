@@ -11,6 +11,7 @@ export {
   BACKPRESSURE_SAFETY_TIMEOUT_MS,
 } from "./backpressure.js";
 export { IpcQueueManager, type IpcQueueDeps } from "./ipcQueue.js";
+export { FdMonitor, isProcessAlive, type FdCheckResult } from "./FdMonitor.js";
 export { metricsEnabled } from "./metrics.js";
 export { parseSpawnError } from "./spawnErrors.js";
 export { toHostSnapshot, type SnapshotProvider } from "./snapshots.js";

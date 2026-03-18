@@ -836,10 +836,25 @@ export class TerminalProcess {
 
     this.disposeHeadless();
 
+    const ptyPid = terminal.ptyProcess.pid;
     try {
       terminal.ptyProcess.kill();
     } catch {
       // Process may already be dead
+    }
+
+    if (ptyPid !== undefined) {
+      const killCheckTimeout = setTimeout(() => {
+        try {
+          process.kill(ptyPid, 0);
+          console.warn(
+            `[TerminalProcess] PTY process ${ptyPid} for terminal ${this.id} still alive 2s after kill`
+          );
+        } catch {
+          // Process is dead — expected
+        }
+      }, 2000);
+      killCheckTimeout.unref();
     }
   }
 
