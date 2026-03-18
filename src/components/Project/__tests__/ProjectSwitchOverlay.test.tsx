@@ -2,8 +2,7 @@
  * @vitest-environment jsdom
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, act } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
+import { render, screen, act, fireEvent } from "@testing-library/react";
 import type { ButtonHTMLAttributes, ReactNode } from "react";
 
 const finishProjectSwitchMock = vi.fn();
@@ -69,15 +68,14 @@ describe("ProjectSwitchOverlay cancel button", () => {
     expect(cancelButton.parentElement?.className).not.toContain("pointer-events-none");
   });
 
-  it("calls finishProjectSwitch when cancel is clicked", async () => {
-    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+  it("calls finishProjectSwitch when cancel is clicked", () => {
     render(<ProjectSwitchOverlay isSwitching={true} projectName="Test" />);
 
     act(() => {
       vi.advanceTimersByTime(CANCEL_BUTTON_DELAY_MS);
     });
 
-    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     expect(finishProjectSwitchMock).toHaveBeenCalledTimes(1);
   });
 
