@@ -1,9 +1,7 @@
 import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
+import type { ActionContext } from "@shared/types/actions";
 import { projectClient } from "@/clients";
 import { useTerminalStore } from "@/store/terminalStore";
-import { useProjectStore } from "@/store/projectStore";
-import { useWorktreeSelectionStore } from "@/store/worktreeStore";
-import { useWorktreeDataStore } from "@/store/worktreeDataStore";
 
 export function registerDevServerActions(
   actions: ActionRegistry,
@@ -34,26 +32,21 @@ export function registerDevServerActions(
     kind: "command",
     danger: "safe",
     scope: "renderer",
-    run: async () => {
-      const currentProject = useProjectStore.getState().currentProject;
-      if (!currentProject) {
+    run: async (_args: unknown, ctx: ActionContext) => {
+      if (!ctx.projectId) {
         throw new Error("No project is currently open");
       }
 
-      const settings = await projectClient.getSettings(currentProject.id);
+      const settings = await projectClient.getSettings(ctx.projectId);
       const devServerCommand = settings?.devServerCommand?.trim();
 
-      const activeWorktreeId = useWorktreeSelectionStore.getState().activeWorktreeId;
-      const activeWorktree = activeWorktreeId
-        ? useWorktreeDataStore.getState().worktrees.get(activeWorktreeId)
-        : null;
-      const cwd = activeWorktree?.path ?? currentProject.path;
+      const cwd = ctx.activeWorktreePath ?? ctx.projectPath;
 
       await useTerminalStore.getState().addTerminal({
         kind: "dev-preview",
         title: "Dev Server",
         cwd,
-        worktreeId: activeWorktreeId ?? undefined,
+        worktreeId: ctx.activeWorktreeId,
         location: "grid",
         devCommand: devServerCommand || undefined,
       });

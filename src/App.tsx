@@ -1089,6 +1089,7 @@ function App() {
     getActiveWorktreeId: () => activeWorktree?.id,
     getWorktrees: () => worktrees,
     getFocusedId: () => focusedId,
+    getIsSettingsOpen: () => isSettingsOpen,
     getGridNavigation: () => ({ findNearest, findByIndex, findDockByIndex, getCurrentLocation }),
   });
 

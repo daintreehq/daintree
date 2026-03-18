@@ -24,6 +24,7 @@ function createCallbacks() {
     getActiveWorktreeId: () => undefined,
     getWorktrees: () => [],
     getFocusedId: () => null,
+    getIsSettingsOpen: () => false,
     getGridNavigation: () => ({
       findNearest: () => null,
       findByIndex: () => null,
