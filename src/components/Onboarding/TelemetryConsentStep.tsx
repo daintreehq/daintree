@@ -33,16 +33,21 @@ export const TelemetryConsentStep = forwardRef<HTMLHeadingElement, TelemetryCons
               or personal data are ever collected.
             </p>
             <div className="flex gap-2">
-              <Button size="sm" onClick={() => void onDismiss(true)} className="flex-1">
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => void onDismiss(true)}
+                className="flex-1"
+              >
                 Enable
               </Button>
               <Button
                 size="sm"
                 variant="outline"
                 onClick={() => void onDismiss(false)}
-                className="flex-1 text-canopy-text border-canopy-border hover:bg-canopy-border hover:text-canopy-text"
+                className="flex-1"
               >
-                No thanks
+                Disable
               </Button>
             </div>
           </div>
