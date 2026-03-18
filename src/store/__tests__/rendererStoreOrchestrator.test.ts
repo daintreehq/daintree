@@ -226,6 +226,194 @@ describe("rendererStoreOrchestrator", () => {
     );
   });
 
+  it("records terminal MRU on focus change", () => {
+    const recordMruSpy = vi.spyOn(useTerminalStore.getState(), "recordMru");
+
+    useTerminalStore.setState({
+      terminals: [
+        {
+          id: "term-1",
+          type: "terminal",
+          title: "T1",
+          cwd: "/test",
+          cols: 80,
+          rows: 24,
+          location: "grid",
+          worktreeId: "wt-1",
+        },
+      ],
+    });
+
+    useTerminalStore.setState({ focusedId: "term-1" });
+
+    expect(recordMruSpy).toHaveBeenCalledWith("terminal:term-1");
+  });
+
+  it("does not fire side effects when focusedId is set to the same value", () => {
+    useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-1" });
+    useTerminalStore.setState({
+      terminals: [
+        {
+          id: "term-1",
+          type: "terminal",
+          title: "T1",
+          cwd: "/test",
+          cols: 80,
+          rows: 24,
+          location: "grid",
+          worktreeId: "wt-1",
+        },
+      ],
+      focusedId: "term-1",
+    });
+
+    const trackSpy = vi.spyOn(useWorktreeSelectionStore.getState(), "trackTerminalFocus");
+
+    // Set focusedId to the same value — should not fire
+    useTerminalStore.setState({ focusedId: "term-1" });
+
+    expect(trackSpy).not.toHaveBeenCalled();
+  });
+
+  it("handles rapid A→B focus changes correctly", () => {
+    useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-1" });
+    useTerminalStore.setState({
+      terminals: [
+        {
+          id: "term-1",
+          type: "terminal",
+          title: "T1",
+          cwd: "/test",
+          cols: 80,
+          rows: 24,
+          location: "grid",
+          worktreeId: "wt-1",
+        },
+        {
+          id: "term-2",
+          type: "terminal",
+          title: "T2",
+          cwd: "/test",
+          cols: 80,
+          rows: 24,
+          location: "grid",
+          worktreeId: "wt-2",
+        },
+      ],
+    });
+
+    useTerminalStore.setState({ focusedId: "term-1" });
+    useTerminalStore.setState({ focusedId: "term-2" });
+
+    expect(useWorktreeSelectionStore.getState().activeWorktreeId).toBe("wt-2");
+    expect(useWorktreeSelectionStore.getState().lastFocusedTerminalByWorktree.get("wt-2")).toBe(
+      "term-2"
+    );
+  });
+
+  it("does not switch worktree when terminal has no worktreeId", () => {
+    useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-1" });
+    useTerminalStore.setState({
+      terminals: [
+        {
+          id: "term-1",
+          type: "terminal",
+          title: "T1",
+          cwd: "/test",
+          cols: 80,
+          rows: 24,
+          location: "grid",
+        },
+      ],
+    });
+
+    useTerminalStore.setState({ focusedId: "term-1" });
+
+    expect(useWorktreeSelectionStore.getState().activeWorktreeId).toBe("wt-1");
+  });
+
+  it("cleans up multiple terminals removed in one batch", () => {
+    useTerminalStore.setState({
+      terminals: [
+        {
+          id: "t-1",
+          type: "terminal",
+          kind: "browser",
+          title: "B1",
+          cwd: "/test",
+          cols: 80,
+          rows: 24,
+          location: "grid",
+        },
+        {
+          id: "t-2",
+          type: "terminal",
+          kind: "browser",
+          title: "B2",
+          cwd: "/test",
+          cols: 80,
+          rows: 24,
+          location: "grid",
+        },
+      ],
+    });
+
+    useConsoleCaptureStore.getState().addStructuredMessage({
+      id: 1,
+      paneId: "t-1",
+      level: "log",
+      cdpType: "log",
+      args: [{ type: "primitive", kind: "string", value: "a" }],
+      summaryText: "a",
+      groupDepth: 0,
+      timestamp: Date.now(),
+      navigationGeneration: 0,
+    });
+    useConsoleCaptureStore.getState().addStructuredMessage({
+      id: 2,
+      paneId: "t-2",
+      level: "log",
+      cdpType: "log",
+      args: [{ type: "primitive", kind: "string", value: "b" }],
+      summaryText: "b",
+      groupDepth: 0,
+      timestamp: Date.now(),
+      navigationGeneration: 0,
+    });
+
+    // Remove both terminals at once
+    useTerminalStore.setState({ terminals: [] });
+
+    expect(useConsoleCaptureStore.getState().messages.has("t-1")).toBe(false);
+    expect(useConsoleCaptureStore.getState().messages.has("t-2")).toBe(false);
+  });
+
+  it("does not clear worktree focus tracking when removed terminal is not last-focused", () => {
+    useWorktreeSelectionStore.getState().trackTerminalFocus("wt-1", "term-other");
+
+    useTerminalStore.setState({
+      terminals: [
+        {
+          id: "term-1",
+          type: "terminal",
+          title: "T1",
+          cwd: "/test",
+          cols: 80,
+          rows: 24,
+          location: "grid",
+          worktreeId: "wt-1",
+        },
+      ],
+    });
+
+    useTerminalStore.getState().removeTerminal("term-1");
+
+    // term-other is still tracked as last-focused for wt-1
+    expect(useWorktreeSelectionStore.getState().lastFocusedTerminalByWorktree.get("wt-1")).toBe(
+      "term-other"
+    );
+  });
+
   it("cleanup function prevents further reactions", () => {
     destroyStoreOrchestrator();
 
