@@ -814,7 +814,7 @@ export const DEFAULT_KEYBINDINGS: KeybindingConfig[] = [
     combo: "Cmd+K Cmd+M",
     scope: "global",
     priority: 0,
-    description: "Minimize all sessions in active worktree",
+    description: "Dock all sessions in active worktree",
     category: "Worktree Sessions",
   },
   {

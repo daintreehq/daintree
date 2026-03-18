@@ -69,8 +69,8 @@ export function useWorktreeMenu({
 
     const sessionsSubmenu: MenuItemOption[] = [
       {
-        id: "sessions:minimize-all",
-        label: `Minimize All (${counts.grid})`,
+        id: "sessions:dock-all",
+        label: `Dock All (${counts.grid})`,
         enabled: counts.grid > 0,
       },
       {
@@ -261,7 +261,7 @@ export function useWorktreeMenu({
       }
 
       switch (actionId) {
-        case "sessions:minimize-all":
+        case "sessions:dock-all":
           void actionService.dispatch(
             "worktree.sessions.minimizeAll",
             { worktreeId: worktree.id },
