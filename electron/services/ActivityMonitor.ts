@@ -78,6 +78,7 @@ export interface ActivityStateMetadata {
 
 export class ActivityMonitor {
   private state: "busy" | "idle" = "idle";
+  private isDisposed = false;
   private debounceTimer: NodeJS.Timeout | null = null;
   private readonly IDLE_DEBOUNCE_MS: number;
   private readonly PROMPT_DEBOUNCE_MS = 500;
@@ -204,6 +205,7 @@ export class ActivityMonitor {
   }
 
   onInput(data: string): void {
+    if (this.isDisposed) return;
     const now = Date.now();
     const result = this.inputTracker.process(data, now);
 
@@ -228,6 +230,7 @@ export class ActivityMonitor {
   }
 
   onData(data?: string): void {
+    if (this.isDisposed) return;
     const now = Date.now();
     const timeSinceLastData = now - this.lastDataTimestamp;
 
@@ -360,6 +363,8 @@ export class ActivityMonitor {
   }
 
   dispose(): void {
+    if (this.isDisposed) return;
+    this.isDisposed = true;
     this.stopPolling();
     if (this.debounceTimer) {
       clearTimeout(this.debounceTimer);
@@ -387,6 +392,7 @@ export class ActivityMonitor {
   }
 
   notifySubmission(): void {
+    if (this.isDisposed) return;
     this.becomeBusy({ trigger: "input" });
   }
 
@@ -404,6 +410,7 @@ export class ActivityMonitor {
   }
 
   startPolling(): void {
+    if (this.isDisposed) return;
     if (!this.getVisibleLines || this.pollingInterval) return;
 
     this.bootDetector.pollingStartTime = Date.now();
@@ -425,6 +432,7 @@ export class ActivityMonitor {
   }
 
   private runPollingCycle(): void {
+    if (this.isDisposed) return;
     if (!this.getVisibleLines) return;
 
     const now = Date.now();
@@ -652,6 +660,7 @@ export class ActivityMonitor {
   }
 
   setPollingInterval(intervalMs: number): void {
+    if (this.isDisposed) return;
     if (this.POLLING_INTERVAL_MS === intervalMs) {
       return;
     }
@@ -671,6 +680,7 @@ export class ActivityMonitor {
 
   private transitionToCompleted(confidence: number): void {
     this.completionTimer.emit(() => {
+      if (this.isDisposed) return;
       // Guard: ignore stale timer if a new busy cycle started or completion was reset
       if (!this.completionTimer.emitted || this.state !== "busy") {
         return;
@@ -723,6 +733,7 @@ export class ActivityMonitor {
   }
 
   private becomeBusy(metadata: ActivityStateMetadata, now: number = Date.now()): void {
+    if (this.isDisposed) return;
     this.inputTracker.clearPendingInput();
     if (metadata.trigger === "input") {
       this.lastActivityTimestamp = now;
@@ -759,11 +770,18 @@ export class ActivityMonitor {
   }
 
   private resetDebounceTimer(): void {
+    if (this.isDisposed) return;
+
     if (this.debounceTimer) {
       clearTimeout(this.debounceTimer);
     }
 
     this.debounceTimer = setTimeout(() => {
+      if (this.isDisposed) {
+        this.debounceTimer = null;
+        return;
+      }
+
       if (this.getVisibleLines) {
         this.debounceTimer = null;
         return;
@@ -778,19 +796,29 @@ export class ActivityMonitor {
         return;
       }
 
-      if (this.lastPatternResult?.isWorking) {
-        this.resetDebounceTimer();
+      // Check process liveness first — if the terminal is dead, don't reschedule
+      // based on stale pattern state
+      const actuallyBusy = this.hasActiveChildrenSafe();
+      if (actuallyBusy === false) {
+        this.state = "idle";
+        this.patternBuf.clear();
+        this.onStateChange(this.terminalId, this.spawnedAt, "idle");
+        this.debounceTimer = null;
         return;
       }
 
-      const actuallyBusy = this.hasActiveChildrenSafe();
       if (actuallyBusy) {
         this.resetDebounceTimer();
         return;
       }
 
+      // actuallyBusy === null (no validator) — fall through to pattern/TTL checks
+      if (this.lastPatternResult?.isWorking) {
+        this.resetDebounceTimer();
+        return;
+      }
+
       if (
-        actuallyBusy === null &&
         this.lastWorkingIndicatorTimestamp > 0 &&
         Date.now() - this.lastWorkingIndicatorTimestamp < this.WORKING_INDICATOR_TTL_MS
       ) {
