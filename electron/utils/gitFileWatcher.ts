@@ -220,7 +220,6 @@ export class GitFileWatcher {
           error: errno.message,
         });
       }
-      this.onWatcherFailed?.();
     }
   }
 

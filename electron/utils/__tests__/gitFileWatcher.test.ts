@@ -231,17 +231,20 @@ describe("GitFileWatcher", () => {
     expect(gitWatcher.start()).toBe(true);
     expect(worktreeCallback).toBeDefined();
 
-    // Fire events continuously every 200ms — debounce never settles
-    for (let i = 0; i < 15; i++) {
-      worktreeCallback?.("change", `src/file${i}.ts`);
-      await vi.advanceTimersByTimeAsync(200);
-    }
+    // Fire first event to start both debounce and max-wait timers
+    worktreeCallback?.("change", "src/file0.ts");
 
-    // Max-wait should have fired at ~2000ms, so at least 1 call
-    expect(onChange).toHaveBeenCalled();
-    // The trailing debounce might fire too after activity stops
-    const callCount = onChange.mock.calls.length;
-    expect(callCount).toBeGreaterThanOrEqual(1);
+    // Keep firing events every 200ms — debounce (500ms) keeps resetting
+    // At 1800ms total, no call should have fired yet (max-wait is 2000ms)
+    for (let i = 1; i <= 9; i++) {
+      await vi.advanceTimersByTimeAsync(200);
+      worktreeCallback?.("change", `src/file${i}.ts`);
+    }
+    expect(onChange).not.toHaveBeenCalled();
+
+    // Advance to the 2000ms mark — max-wait ceiling fires
+    await vi.advanceTimersByTimeAsync(200);
+    expect(onChange).toHaveBeenCalledTimes(1);
   });
 
   it("max-wait timer is cleared when trailing debounce fires", async () => {
