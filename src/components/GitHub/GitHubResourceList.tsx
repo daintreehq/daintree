@@ -299,7 +299,6 @@ export function GitHubResourceList({
     return () => {
       abortController.abort();
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [numberQuery, projectPath, type, filterState, retryKey]);
 
   const handleLoadMore = useCallback(() => {
