@@ -79,10 +79,10 @@ export class ActivityMonitor {
   private state: "busy" | "idle" = "idle";
   private debounceTimer: NodeJS.Timeout | null = null;
   private readonly IDLE_DEBOUNCE_MS: number;
-  private readonly PROMPT_DEBOUNCE_MS = 200;
+  private readonly PROMPT_DEBOUNCE_MS = 500;
   private readonly PROMPT_QUIET_MS = 200;
   private readonly PROMPT_HISTORY_FALLBACK_MS = 3000;
-  private readonly WORKING_HOLD_MS = 200;
+  private readonly WORKING_HOLD_MS = 2000;
   private readonly SPINNER_ACTIVE_MS = 1500;
   private readonly COMPLETION_HOLD_MS = 500;
   private readonly WORKING_INDICATOR_TTL_MS = 5000;
@@ -160,7 +160,7 @@ export class ActivityMonitor {
     this.highOutputDetector = new HighOutputDetector(options?.highOutputThreshold);
 
     this.workingSignalDebouncer = new WorkingSignalDebouncer(
-      options?.workingRecoveryDelayMs ?? 1500
+      options?.workingRecoveryDelayMs ?? 300
     );
 
     this.lineRewriteDetector = new LineRewriteDetector(options?.lineRewriteDetection);
@@ -597,12 +597,13 @@ export class ActivityMonitor {
 
     // Prompt fast-path: when the prompt is stable and no working signals are active,
     // exit busy immediately rather than waiting the full IDLE_DEBOUNCE_MS. This keeps
-    // the idle transition snappy (~200ms after prompt appears) even when IDLE_DEBOUNCE_MS
+    // the idle transition snappy after the prompt appears, even when IDLE_DEBOUNCE_MS
     // has been raised to cover LLM API call silence gaps.
-    // Require at least 1 second of quiet to avoid premature idle when a high-output burst
-    // window just expired (output between chunks can be as short as 100ms, so 1s is a
-    // conservative floor that still fires well within the 6000ms debounce).
-    const PROMPT_FAST_PATH_MIN_QUIET_MS = 1000;
+    // Require at least 3 seconds of quiet to avoid premature idle during inter-tool-call
+    // gaps (Claude bursts with 1-3s pauses, Codex has 3-5s gaps). This prevents the
+    // working↔waiting jitter that occurs when brief output pauses trigger idle transitions
+    // that immediately flip back to working (Issue #3606).
+    const PROMPT_FAST_PATH_MIN_QUIET_MS = 3000;
     if (
       this.state === "busy" &&
       !this.completionTimer.emitted &&
