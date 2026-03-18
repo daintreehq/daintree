@@ -1,7 +1,6 @@
 import type { StateCreator } from "zustand";
 import type { TerminalInstance } from "./terminalRegistrySlice";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
-import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
 import { isAgentTerminal } from "@/utils/terminalType";
 
@@ -110,7 +109,8 @@ export interface TerminalFocusSlice {
 
 export const createTerminalFocusSlice =
   (
-    getTerminals: () => TerminalInstance[]
+    getTerminals: () => TerminalInstance[],
+    getActiveWorktreeId: () => string | null
   ): StateCreator<TerminalFocusSlice, [], [], TerminalFocusSlice> =>
   (set, get) => {
     let pingTimeout: ReturnType<typeof setTimeout> | null = null;
@@ -153,7 +153,7 @@ export const createTerminalFocusSlice =
 
       toggleMaximize: (id, currentGridCols, currentGridItemCount, getPanelGroup) =>
         set((state) => {
-          const activeWorktreeId = useWorktreeSelectionStore.getState().activeWorktreeId;
+          const activeWorktreeId = getActiveWorktreeId();
 
           // Check if we're unmaximizing
           // Unmaximize if:
@@ -267,7 +267,7 @@ export const createTerminalFocusSlice =
 
       focusNext: () => {
         const terminals = getTerminals();
-        const activeWorktreeId = useWorktreeSelectionStore.getState().activeWorktreeId;
+        const activeWorktreeId = getActiveWorktreeId();
         const worktreeMatch = (t: TerminalInstance) =>
           (t.worktreeId ?? undefined) === (activeWorktreeId ?? undefined);
 
@@ -286,7 +286,7 @@ export const createTerminalFocusSlice =
 
       focusPrevious: () => {
         const terminals = getTerminals();
-        const activeWorktreeId = useWorktreeSelectionStore.getState().activeWorktreeId;
+        const activeWorktreeId = getActiveWorktreeId();
         const worktreeMatch = (t: TerminalInstance) =>
           (t.worktreeId ?? undefined) === (activeWorktreeId ?? undefined);
 
@@ -385,12 +385,6 @@ export const createTerminalFocusSlice =
         const nextIndex = (currentIndex + 1) % waitingTerminals.length;
         const nextTerminal = waitingTerminals[nextIndex];
 
-        const worktreeStore = useWorktreeSelectionStore.getState();
-        if (nextTerminal.worktreeId && nextTerminal.worktreeId !== worktreeStore.activeWorktreeId) {
-          worktreeStore.trackTerminalFocus(nextTerminal.worktreeId, nextTerminal.id);
-          worktreeStore.selectWorktree(nextTerminal.worktreeId);
-        }
-
         // Activate and ping the terminal for visual feedback
         activateTerminal(nextTerminal.id);
         pingTerminal(nextTerminal.id);
@@ -414,12 +408,6 @@ export const createTerminalFocusSlice =
         const nextIndex = (currentIndex + 1) % failedTerminals.length;
         const nextTerminal = failedTerminals[nextIndex];
 
-        const worktreeStore = useWorktreeSelectionStore.getState();
-        if (nextTerminal.worktreeId && nextTerminal.worktreeId !== worktreeStore.activeWorktreeId) {
-          worktreeStore.trackTerminalFocus(nextTerminal.worktreeId, nextTerminal.id);
-          worktreeStore.selectWorktree(nextTerminal.worktreeId);
-        }
-
         // Activate and ping the terminal for visual feedback
         activateTerminal(nextTerminal.id);
         pingTerminal(nextTerminal.id);
@@ -442,12 +430,6 @@ export const createTerminalFocusSlice =
         // Calculate next index with wrap-around
         const nextIndex = (currentIndex + 1) % workingTerminals.length;
         const nextTerminal = workingTerminals[nextIndex];
-
-        const worktreeStore = useWorktreeSelectionStore.getState();
-        if (nextTerminal.worktreeId && nextTerminal.worktreeId !== worktreeStore.activeWorktreeId) {
-          worktreeStore.trackTerminalFocus(nextTerminal.worktreeId, nextTerminal.id);
-          worktreeStore.selectWorktree(nextTerminal.worktreeId);
-        }
 
         // Activate and ping the terminal for visual feedback
         activateTerminal(nextTerminal.id);
@@ -474,12 +456,6 @@ export const createTerminalFocusSlice =
         const nextIndex = (currentIndex + 1) % agentTerminals.length;
         const nextTerminal = agentTerminals[nextIndex];
 
-        const worktreeStore = useWorktreeSelectionStore.getState();
-        if (nextTerminal.worktreeId && nextTerminal.worktreeId !== worktreeStore.activeWorktreeId) {
-          worktreeStore.trackTerminalFocus(nextTerminal.worktreeId, nextTerminal.id);
-          worktreeStore.selectWorktree(nextTerminal.worktreeId);
-        }
-
         // Activate and ping the terminal for visual feedback
         activateTerminal(nextTerminal.id);
         pingTerminal(nextTerminal.id);
@@ -504,12 +480,6 @@ export const createTerminalFocusSlice =
         // Calculate previous index with wrap-around
         const prevIndex = currentIndex <= 0 ? agentTerminals.length - 1 : currentIndex - 1;
         const prevTerminal = agentTerminals[prevIndex];
-
-        const worktreeStore = useWorktreeSelectionStore.getState();
-        if (prevTerminal.worktreeId && prevTerminal.worktreeId !== worktreeStore.activeWorktreeId) {
-          worktreeStore.trackTerminalFocus(prevTerminal.worktreeId, prevTerminal.id);
-          worktreeStore.selectWorktree(prevTerminal.worktreeId);
-        }
 
         // Activate and ping the terminal for visual feedback
         activateTerminal(prevTerminal.id);
@@ -566,7 +536,7 @@ export const createTerminalFocusSlice =
           }
 
           if (state.focusedId === removedId) {
-            const activeWorktreeId = useWorktreeSelectionStore.getState().activeWorktreeId;
+            const activeWorktreeId = getActiveWorktreeId();
             const gridTerminals = remainingTerminals.filter(
               (t) =>
                 (t.location === "grid" || !t.location) &&

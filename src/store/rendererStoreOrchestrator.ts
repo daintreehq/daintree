@@ -1,0 +1,79 @@
+import { useTerminalStore } from "./terminalStore";
+import {
+  useWorktreeSelectionStore,
+  isMruRecordingSuppressed,
+  persistMruList,
+} from "./worktreeStore";
+import { useTerminalInputStore } from "./terminalInputStore";
+import { useConsoleCaptureStore } from "./consoleCaptureStore";
+
+let cleanupFn: (() => void) | null = null;
+
+export function initStoreOrchestrator(): () => void {
+  if (cleanupFn) return cleanupFn;
+
+  const unsubscribers: Array<() => void> = [];
+
+  // 1. Focus-to-worktree reaction: when focusedId changes, track focus,
+  //    switch worktree if needed, and record terminal MRU.
+  const unsubFocus = useTerminalStore.subscribe((state, prevState) => {
+    if (state.focusedId === prevState.focusedId) return;
+
+    const focusedId = state.focusedId;
+    if (!focusedId) return;
+
+    const terminal = state.terminals.find((t) => t.id === focusedId);
+    if (terminal?.worktreeId) {
+      const worktreeState = useWorktreeSelectionStore.getState();
+      worktreeState.trackTerminalFocus(terminal.worktreeId, focusedId);
+
+      if (terminal.worktreeId !== worktreeState.activeWorktreeId) {
+        worktreeState.selectWorktree(terminal.worktreeId);
+      }
+    }
+
+    if (!isMruRecordingSuppressed()) {
+      state.recordMru(`terminal:${focusedId}`);
+      persistMruList(useTerminalStore.getState().mruList);
+    }
+  });
+  unsubscribers.push(unsubFocus);
+
+  // 2. Terminal-removal cleanup: when terminals are removed, clean up
+  //    input store, console capture store, and worktree focus tracking.
+  let prevTerminals = useTerminalStore.getState().terminals;
+
+  const unsubRemoval = useTerminalStore.subscribe((state) => {
+    const currentTerminals = state.terminals;
+    if (currentTerminals === prevTerminals) return;
+
+    const currentIds = new Set(currentTerminals.map((t) => t.id));
+    const removedTerminals = prevTerminals.filter((t) => !currentIds.has(t.id));
+    prevTerminals = currentTerminals;
+
+    for (const removed of removedTerminals) {
+      useTerminalInputStore.getState().clearTerminalState(removed.id);
+      useConsoleCaptureStore.getState().removePane(removed.id);
+
+      if (removed.worktreeId) {
+        const worktreeState = useWorktreeSelectionStore.getState();
+        const lastFocused = worktreeState.lastFocusedTerminalByWorktree.get(removed.worktreeId);
+        if (lastFocused === removed.id) {
+          worktreeState.clearWorktreeFocusTracking(removed.worktreeId);
+        }
+      }
+    }
+  });
+  unsubscribers.push(unsubRemoval);
+
+  cleanupFn = () => {
+    for (const unsub of unsubscribers) unsub();
+    cleanupFn = null;
+  };
+
+  return cleanupFn;
+}
+
+export function destroyStoreOrchestrator(): void {
+  cleanupFn?.();
+}

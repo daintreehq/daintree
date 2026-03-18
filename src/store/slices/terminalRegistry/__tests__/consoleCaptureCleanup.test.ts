@@ -48,11 +48,14 @@ vi.mock("../../../persistence/terminalPersistence", () => ({
 
 const { useTerminalStore } = await import("../../../terminalStore");
 const { useConsoleCaptureStore } = await import("../../../consoleCaptureStore");
+const { initStoreOrchestrator, destroyStoreOrchestrator } =
+  await import("../../../rendererStoreOrchestrator");
 
 describe("removeTerminal consoleCaptureStore cleanup", () => {
   beforeEach(async () => {
     vi.useFakeTimers();
     vi.clearAllMocks();
+    initStoreOrchestrator();
     await useTerminalStore.getState().reset();
     useTerminalStore.setState({
       terminals: [],
@@ -68,6 +71,7 @@ describe("removeTerminal consoleCaptureStore cleanup", () => {
   });
 
   afterEach(() => {
+    destroyStoreOrchestrator();
     vi.clearAllTimers();
     vi.useRealTimers();
   });

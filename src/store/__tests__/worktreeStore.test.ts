@@ -61,16 +61,11 @@ vi.mock("@/store/terminalStore", () => ({
   },
 }));
 
-import {
-  cleanupWorktreeFocusTracking,
-  setupWorktreeFocusTracking,
-  useWorktreeSelectionStore,
-} from "../worktreeStore";
+import { useWorktreeSelectionStore } from "../worktreeStore";
 
 describe("worktreeStore", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    cleanupWorktreeFocusTracking();
     useWorktreeSelectionStore.getState().reset();
     terminalStoreState.terminals = [];
     terminalStoreState.activeDockTerminalId = null;
@@ -204,15 +199,6 @@ describe("worktreeStore", () => {
         writable: true,
       });
     }
-  });
-
-  it("cancels pending focus-tracking setup when cleanup runs before async import resolves", async () => {
-    const cleanup = setupWorktreeFocusTracking();
-    cleanup();
-    await Promise.resolve();
-    await Promise.resolve();
-
-    expect(subscribeMock).not.toHaveBeenCalled();
   });
 
   it("clears stale pending worktree selection without reapplying renderer policy", async () => {

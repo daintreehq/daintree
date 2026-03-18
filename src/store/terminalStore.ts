@@ -32,8 +32,7 @@ import type {
 import { TerminalRefreshTier as TerminalRefreshTierEnum } from "@/types";
 import { terminalRegistryController } from "@/controllers";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
-import { useTerminalInputStore } from "./terminalInputStore";
-import { useConsoleCaptureStore } from "./consoleCaptureStore";
+import { useWorktreeSelectionStore } from "./worktreeStore";
 import type { CrashType } from "@shared/types/pty-host";
 import { isAgentTerminal } from "@/utils/terminalType";
 import { logInfo, logWarn, logError } from "@/utils/logger";
@@ -100,12 +99,10 @@ export const useTerminalStore = create<PanelGridState>()((set, get, api) => {
   const getTerminal = (id: string) => get().terminals.find((t) => t.id === id);
 
   const registrySlice = createTerminalRegistrySlice({
-    onTerminalRemoved: (id, removedIndex, remainingTerminals, removedTerminal) => {
+    onTerminalRemoved: (id, removedIndex, remainingTerminals, _removedTerminal) => {
       clearTerminalRestartGuard(id);
       get().clearQueue(id);
       get().handleTerminalRemoved(id, remainingTerminals, removedIndex);
-      useTerminalInputStore.getState().clearTerminalState(id);
-      useConsoleCaptureStore.getState().removePane(id);
 
       // Auto-clear watch if panel is removed while watched
       get().unwatchPanel(id);
@@ -113,21 +110,11 @@ export const useTerminalStore = create<PanelGridState>()((set, get, api) => {
       // Clean up stale tab group mappings
       const validPanelIds = new Set(remainingTerminals.map((t) => t.id));
       get().cleanupStaleTabs(validPanelIds);
-
-      // Clean up worktree focus tracking if this was the last focused terminal
-      if (removedTerminal?.worktreeId) {
-        void import("@/store/worktreeStore").then(({ useWorktreeSelectionStore }) => {
-          const store = useWorktreeSelectionStore.getState();
-          const lastFocused = store.lastFocusedTerminalByWorktree.get(removedTerminal.worktreeId!);
-          if (lastFocused === id) {
-            store.clearWorktreeFocusTracking(removedTerminal.worktreeId!);
-          }
-        });
-      }
     },
   })(set, get, api);
 
-  const focusSlice = createTerminalFocusSlice(getTerminals)(set, get, api);
+  const getActiveWorktreeId = () => useWorktreeSelectionStore.getState().activeWorktreeId;
+  const focusSlice = createTerminalFocusSlice(getTerminals, getActiveWorktreeId)(set, get, api);
   const commandQueueSlice = createTerminalCommandQueueSlice(getTerminal)(set, get, api);
   const mruSlice = createTerminalMruSlice(set, get, api);
   const watchedPanelsSlice = createWatchedPanelsSlice()(set, get, api);
@@ -139,7 +126,8 @@ export const useTerminalStore = create<PanelGridState>()((set, get, api) => {
     (id) => get().moveTerminalToDock(id),
     (id) => get().moveTerminalToGrid(id),
     () => get().focusedId,
-    (id) => set({ focusedId: id })
+    (id) => set({ focusedId: id }),
+    getActiveWorktreeId
   )(set, get, api);
 
   return {
@@ -439,7 +427,8 @@ export const useTerminalStore = create<PanelGridState>()((set, get, api) => {
 
       await Promise.all(killPromises);
 
-      useTerminalInputStore.getState().clearAllDraftInputs();
+      const { useTerminalInputStore: inputStore } = await import("./terminalInputStore");
+      inputStore.getState().clearAllDraftInputs();
 
       set({
         terminals: [],

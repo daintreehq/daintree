@@ -8,15 +8,7 @@ vi.mock("@/services/TerminalInstanceService", () => ({
   },
 }));
 
-vi.mock("@/store/worktreeStore", () => ({
-  useWorktreeSelectionStore: {
-    getState: vi.fn(() => ({
-      activeWorktreeId: "worktree-1",
-      trackTerminalFocus: vi.fn(),
-      selectWorktree: vi.fn(),
-    })),
-  },
-}));
+const mockGetActiveWorktreeId = vi.fn(() => "worktree-1" as string | null);
 
 describe("TerminalFocusSlice - Layout Snapshot", () => {
   const mockTerminals: TerminalInstance[] = [
@@ -63,7 +55,11 @@ describe("TerminalFocusSlice - Layout Snapshot", () => {
       state = { ...currentState, ...updates };
     });
     getState = vi.fn(() => state);
-    state = createTerminalFocusSlice(getTerminals)(setState, getState, {} as never);
+    state = createTerminalFocusSlice(getTerminals, mockGetActiveWorktreeId)(
+      setState,
+      getState,
+      {} as never
+    );
   });
 
   it("should capture layout snapshot when maximizing", () => {
@@ -203,7 +199,11 @@ describe("TerminalFocusSlice - Tab Group Maximize", () => {
       state = { ...currentState, ...updates };
     });
     getState = vi.fn(() => state);
-    state = createTerminalFocusSlice(getTerminals)(setState, getState, {} as never);
+    state = createTerminalFocusSlice(getTerminals, mockGetActiveWorktreeId)(
+      setState,
+      getState,
+      {} as never
+    );
   });
 
   it("should maximize entire group when panel is in a group with multiple panels", () => {
@@ -386,7 +386,11 @@ describe("TerminalFocusSlice - focusNextBlockedDock", () => {
       state = { ...currentState, ...updates };
     });
     getState = vi.fn(() => state);
-    state = createTerminalFocusSlice(getTerminals)(setState, getState, {} as never);
+    state = createTerminalFocusSlice(getTerminals, mockGetActiveWorktreeId)(
+      setState,
+      getState,
+      {} as never
+    );
   });
 
   it("should be a no-op when no dock terminals are blocked", () => {
