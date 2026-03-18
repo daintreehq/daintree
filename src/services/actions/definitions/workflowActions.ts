@@ -11,7 +11,7 @@ export function registerWorkflowActions(actions: ActionRegistry): void {
     id: "worktree.createWithRecipe",
     title: "Create Worktree with Recipe",
     description:
-      "Create a new worktree and optionally run a recipe. Handles branch name collision, path generation, worktree activation, and recipe execution in one atomic operation.",
+      "Create a new worktree and optionally run a recipe. Handles branch name collision, path generation, and recipe execution in one atomic operation.",
     category: "worktree",
     kind: "command",
     danger: "safe",
