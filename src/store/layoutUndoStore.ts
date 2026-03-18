@@ -46,7 +46,7 @@ function captureCurrentLayout(): LayoutSnapshot {
   };
 }
 
-function applySnapshot(snapshot: LayoutSnapshot): void {
+function applySnapshot(snapshot: LayoutSnapshot): boolean {
   const state = useTerminalStore.getState();
   const currentTerminals = state.terminals;
 
@@ -56,7 +56,7 @@ function applySnapshot(snapshot: LayoutSnapshot): void {
   // Check all snapshot terminals still exist
   for (const id of snapshotIds) {
     if (!currentById.has(id)) {
-      return;
+      return false;
     }
   }
 
@@ -88,6 +88,8 @@ function applySnapshot(snapshot: LayoutSnapshot): void {
     maximizedId: snapshot.maximizedId,
     activeDockTerminalId: snapshot.activeDockTerminalId,
   });
+
+  return true;
 }
 
 export const useLayoutUndoStore = create<LayoutUndoState>()((set, get) => ({
@@ -119,6 +121,8 @@ export const useLayoutUndoStore = create<LayoutUndoState>()((set, get) => ({
     const snapshot = undoStack[undoStack.length - 1];
     const currentLayout = captureCurrentLayout();
 
+    if (!applySnapshot(snapshot)) return;
+
     set((state) => {
       const newUndoStack = state.undoStack.slice(0, -1);
       return {
@@ -128,8 +132,6 @@ export const useLayoutUndoStore = create<LayoutUndoState>()((set, get) => ({
         canRedo: true,
       };
     });
-
-    applySnapshot(snapshot);
   },
 
   redo: () => {
@@ -138,6 +140,8 @@ export const useLayoutUndoStore = create<LayoutUndoState>()((set, get) => ({
 
     const snapshot = redoStack[redoStack.length - 1];
     const currentLayout = captureCurrentLayout();
+
+    if (!applySnapshot(snapshot)) return;
 
     set((state) => {
       const newRedoStack = state.redoStack.slice(0, -1);
@@ -148,8 +152,6 @@ export const useLayoutUndoStore = create<LayoutUndoState>()((set, get) => ({
         canRedo: newRedoStack.length > 0,
       };
     });
-
-    applySnapshot(snapshot);
   },
 
   clearHistory: () => {

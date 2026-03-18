@@ -170,7 +170,7 @@ describe("layoutUndoStore", () => {
     expect(useLayoutUndoStore.getState().undoStack).toHaveLength(10);
   });
 
-  it("skips snapshot when terminals have been removed", () => {
+  it("skips snapshot when terminals have been removed and preserves history state", () => {
     const t1 = makeTerminal({ id: "t1", location: "grid" });
     const t2 = makeTerminal({ id: "t2", location: "grid" });
     seedTerminals([t1, t2]);
@@ -185,8 +185,16 @@ describe("layoutUndoStore", () => {
 
     // Undo should not apply since t2 is missing
     useLayoutUndoStore.getState().undo();
+
     // Layout should remain unchanged (t1 in dock)
     expect(useTerminalStore.getState().terminals[0].location).toBe("dock");
+
+    // History should be unmodified — undo entry preserved, no redo created
+    const undoState = useLayoutUndoStore.getState();
+    expect(undoState.undoStack).toHaveLength(1);
+    expect(undoState.redoStack).toHaveLength(0);
+    expect(undoState.canUndo).toBe(true);
+    expect(undoState.canRedo).toBe(false);
   });
 
   it("clearHistory empties both stacks", () => {
@@ -305,5 +313,140 @@ describe("layoutUndoStore", () => {
     const snapshot = useLayoutUndoStore.getState().undoStack[0];
     expect(snapshot.terminals).toHaveLength(1);
     expect(snapshot.terminals[0].id).toBe("t1");
+  });
+
+  it("undo restores all snapshot fields including worktreeId, maximizedId, and activeDockTerminalId", () => {
+    const t1 = makeTerminal({ id: "t1", location: "grid", worktreeId: "w1" });
+    const t2 = makeTerminal({ id: "t2", location: "dock", worktreeId: "w1" });
+
+    const tabGroups = new Map();
+    tabGroups.set("g1", {
+      id: "g1",
+      location: "grid",
+      worktreeId: "w1",
+      activeTabId: "t1",
+      panelIds: ["t1"],
+    });
+
+    useTerminalStore.setState({
+      terminals: [t1, t2],
+      tabGroups,
+      focusedId: "t1",
+      maximizedId: "t1",
+      activeDockTerminalId: "t2",
+    });
+
+    useLayoutUndoStore.getState().pushLayoutSnapshot();
+
+    // Mutate everything
+    useTerminalStore.setState({
+      terminals: [
+        { ...t1, location: "dock", worktreeId: "w2" },
+        { ...t2, location: "grid", worktreeId: "w2" },
+      ],
+      tabGroups: new Map(),
+      focusedId: "t2",
+      maximizedId: null,
+      activeDockTerminalId: null,
+    });
+
+    useLayoutUndoStore.getState().undo();
+
+    const state = useTerminalStore.getState();
+    expect(state.terminals[0].location).toBe("grid");
+    expect(state.terminals[0].worktreeId).toBe("w1");
+    expect(state.terminals[1].location).toBe("dock");
+    expect(state.terminals[1].worktreeId).toBe("w1");
+    expect(state.focusedId).toBe("t1");
+    expect(state.maximizedId).toBe("t1");
+    expect(state.activeDockTerminalId).toBe("t2");
+    expect(state.tabGroups.size).toBe(1);
+    expect(state.tabGroups.get("g1")?.panelIds).toEqual(["t1"]);
+  });
+
+  it("multi-step undo/redo traverses history correctly", () => {
+    const t1 = makeTerminal({ id: "t1", location: "grid" });
+    seedTerminals([t1]);
+
+    // State A: grid
+    useLayoutUndoStore.getState().pushLayoutSnapshot();
+    useTerminalStore.setState({ terminals: [{ ...t1, location: "dock" }] });
+
+    // State B: dock
+    useLayoutUndoStore.getState().pushLayoutSnapshot();
+    useTerminalStore.setState({ terminals: [{ ...t1, location: "grid", worktreeId: "w2" }] });
+
+    // State C: grid+w2
+    expect(useLayoutUndoStore.getState().undoStack).toHaveLength(2);
+
+    // Undo C→B
+    useLayoutUndoStore.getState().undo();
+    expect(useTerminalStore.getState().terminals[0].location).toBe("dock");
+
+    // Undo B→A
+    useLayoutUndoStore.getState().undo();
+    expect(useTerminalStore.getState().terminals[0].location).toBe("grid");
+    expect(useTerminalStore.getState().terminals[0].worktreeId).toBeUndefined();
+
+    // Redo A→B
+    useLayoutUndoStore.getState().redo();
+    expect(useTerminalStore.getState().terminals[0].location).toBe("dock");
+
+    // Redo B→C
+    useLayoutUndoStore.getState().redo();
+    expect(useTerminalStore.getState().terminals[0].location).toBe("grid");
+    expect(useTerminalStore.getState().terminals[0].worktreeId).toBe("w2");
+
+    expect(useLayoutUndoStore.getState().canRedo).toBe(false);
+    expect(useLayoutUndoStore.getState().canUndo).toBe(true);
+  });
+
+  it("undo preserves non-layout terminal fields", () => {
+    const t1 = makeTerminal({
+      id: "t1",
+      location: "grid",
+      title: "My Terminal",
+      pid: 12345,
+      agentState: "working",
+    });
+    seedTerminals([t1]);
+
+    useLayoutUndoStore.getState().pushLayoutSnapshot();
+
+    // Mutate layout only
+    useTerminalStore.setState({
+      terminals: [{ ...t1, location: "dock" }],
+    });
+
+    useLayoutUndoStore.getState().undo();
+
+    const restored = useTerminalStore.getState().terminals[0];
+    expect(restored.location).toBe("grid");
+    expect(restored.title).toBe("My Terminal");
+    expect(restored.pid).toBe(12345);
+    expect(restored.agentState).toBe("working");
+  });
+
+  it("appends terminals added after snapshot during undo", () => {
+    const t1 = makeTerminal({ id: "t1", location: "grid" });
+    seedTerminals([t1]);
+
+    useLayoutUndoStore.getState().pushLayoutSnapshot();
+
+    // Add a new terminal and move t1
+    const t2 = makeTerminal({ id: "t2", location: "dock" });
+    useTerminalStore.setState({
+      terminals: [{ ...t1, location: "dock" }, t2],
+    });
+
+    useLayoutUndoStore.getState().undo();
+
+    const terminals = useTerminalStore.getState().terminals;
+    // t1 should be restored to grid, t2 appended at end
+    expect(terminals).toHaveLength(2);
+    expect(terminals[0].id).toBe("t1");
+    expect(terminals[0].location).toBe("grid");
+    expect(terminals[1].id).toBe("t2");
+    expect(terminals[1].location).toBe("dock");
   });
 });
