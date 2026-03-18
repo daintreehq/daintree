@@ -476,6 +476,30 @@ describe("DevPreviewPane webview lifecycle regression", () => {
     expect(webview.loadURL).not.toHaveBeenCalled();
   });
 
+  it("renders drag protection overlay and hides webview when isDragging is true", () => {
+    useIsDraggingMock.mockReturnValue(true);
+    const { container } = render(<DevPreviewPane {...baseProps} />);
+
+    const overlay = container.querySelector(".z-10.bg-transparent");
+    expect(overlay).not.toBeNull();
+
+    const webview = container.querySelector("webview");
+    expect(webview?.className).toContain("invisible");
+    expect(webview?.className).toContain("pointer-events-none");
+  });
+
+  it("does not render drag protection overlay when isDragging is false", () => {
+    useIsDraggingMock.mockReturnValue(false);
+    const { container } = render(<DevPreviewPane {...baseProps} />);
+
+    const overlay = container.querySelector(".z-10.bg-transparent");
+    expect(overlay).toBeNull();
+
+    const webview = container.querySelector("webview");
+    expect(webview?.className).not.toContain("invisible");
+    expect(webview?.className).not.toContain("pointer-events-none");
+  });
+
   it("cleans pending timeout on unmount", () => {
     const { container, unmount } = render(<DevPreviewPane {...baseProps} />);
     const webview = getWebviewElement(container);
