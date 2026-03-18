@@ -113,7 +113,7 @@ export const SEL = {
     palette: '[data-testid="notes-palette"]',
   },
   pulse: {
-    heatmap: '[role="img"][aria-label*="Activity over"]',
+    summary: '[data-testid="pulse-summary"]',
     rangeTrigger: '[aria-label="Change time range"]',
     refreshButton: '[aria-label="Refresh"]',
   },
