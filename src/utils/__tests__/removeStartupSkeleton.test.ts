@@ -54,18 +54,30 @@ describe("removeStartupSkeleton", () => {
     expect(document.getElementById("startup-skeleton")).toBeNull();
   });
 
-  it("returns no-op cleanup if element is absent", () => {
+  it("returns no-op cleanup and schedules no RAFs if element is absent", () => {
     const cleanup = removeStartupSkeleton();
     expect(cleanup).toBeTypeOf("function");
+    expect(rafCallbacks.size).toBe(0);
     cleanup(); // should not throw
   });
 
-  it("cleanup cancels pending removal", () => {
+  it("cleanup before first RAF cancels removal", () => {
     addSkeleton();
     const cleanup = removeStartupSkeleton();
 
     cleanup();
     flushRaf();
+    flushRaf();
+
+    expect(document.getElementById("startup-skeleton")).not.toBeNull();
+  });
+
+  it("cleanup after first RAF cancels inner removal", () => {
+    addSkeleton();
+    const cleanup = removeStartupSkeleton();
+
+    flushRaf(); // outer RAF runs, inner is now scheduled
+    cleanup(); // cancel the inner RAF
     flushRaf();
 
     expect(document.getElementById("startup-skeleton")).not.toBeNull();
