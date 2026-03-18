@@ -142,7 +142,7 @@ export class ActivityMonitor {
     ) => void,
     options?: ActivityMonitorOptions
   ) {
-    this.IDLE_DEBOUNCE_MS = options?.idleDebounceMs ?? 2500;
+    this.IDLE_DEBOUNCE_MS = options?.idleDebounceMs ?? 6000;
     this.POLLING_MAX_BOOT_MS = options?.pollingMaxBootMs ?? 15000;
 
     this.processStateValidator = options?.processStateValidator;
@@ -153,7 +153,7 @@ export class ActivityMonitor {
       inputConfirmMs: options?.inputConfirmMs,
     });
 
-    this.patternBuf = new PatternBuffer(options?.patternBufferSize ?? 2000);
+    this.patternBuf = new PatternBuffer(options?.patternBufferSize ?? 10000);
 
     this.outputVolumeDetector = new OutputVolumeDetector(options?.outputActivityDetection);
 
@@ -246,18 +246,11 @@ export class ActivityMonitor {
       this.revalidateStateAfterWake();
     }
 
-    if (data && !isLikelyUserEcho && !isCosmeticRedraw) {
-      const spinnerTriggered = this.lineRewriteDetector.update(data, now);
-      if (spinnerTriggered) {
-        if (
-          !this.isResizeSuppressed(now) &&
-          (this.state === "busy" ||
-            this.inputTracker.pendingInputUntil > 0 ||
-            !this.inputTracker.isRecentUserInput(now))
-        ) {
-          this.becomeBusy({ trigger: "output" }, now);
-        }
-      }
+    if (data && !isLikelyUserEcho && isCosmeticRedraw) {
+      // Spinner/status-line rewrite — latch lastSpinnerDetectedAt for polling's isSpinnerActive()
+      // check, but do not call becomeBusy() here. Entry into working state requires pattern
+      // detection or sustained output, not cosmetic line rewrites alone.
+      this.lineRewriteDetector.update(data, now);
     }
 
     // For polling-enabled terminals: check raw stream for patterns FIRST
@@ -600,6 +593,28 @@ export class ActivityMonitor {
         this.transitionToCompleted(completionResult.confidence);
         return;
       }
+    }
+
+    // Prompt fast-path: when the prompt is stable and no working signals are active,
+    // exit busy immediately rather than waiting the full IDLE_DEBOUNCE_MS. This keeps
+    // the idle transition snappy (~200ms after prompt appears) even when IDLE_DEBOUNCE_MS
+    // has been raised to cover LLM API call silence gaps.
+    // Require at least 1 second of quiet to avoid premature idle when a high-output burst
+    // window just expired (output between chunks can be as short as 100ms, so 1s is a
+    // conservative floor that still fires well within the 6000ms debounce).
+    const PROMPT_FAST_PATH_MIN_QUIET_MS = 1000;
+    if (
+      this.state === "busy" &&
+      !this.completionTimer.emitted &&
+      shouldPreferPrompt &&
+      quietForMs >= PROMPT_FAST_PATH_MIN_QUIET_MS &&
+      now >= this.workingHoldUntil &&
+      !(this.inputTracker.pendingInputUntil > 0 && now < this.inputTracker.pendingInputUntil)
+    ) {
+      this.state = "idle";
+      this.patternBuf.clear();
+      this.onStateChange(this.terminalId, this.spawnedAt, "idle");
+      return;
     }
 
     if (
