@@ -1,5 +1,6 @@
 import { BrowserWindow, ipcMain } from "electron";
 import type { IpcInvokeMap, IpcEventMap } from "../types/index.js";
+import type { IpcContext } from "./types.js";
 import { performance } from "node:perf_hooks";
 import { PERF_MARKS } from "../../shared/perf/marks.js";
 import {
@@ -208,6 +209,61 @@ export function typedHandle<K extends keyof IpcInvokeMap>(
 
     try {
       responsePayload = await handler(...(args as IpcInvokeMap[K]["args"]));
+      return responsePayload;
+    } catch (error) {
+      errored = true;
+      throw error;
+    } finally {
+      const durationMs = performance.now() - startedAt;
+      markPerformance(PERF_MARKS.IPC_REQUEST_END, {
+        channel: channel as string,
+        traceId,
+        durationMs,
+        ok: !errored,
+      });
+      sampleIpcTiming(channel as string, durationMs, {
+        traceId,
+        requestPayload: args,
+        responsePayload,
+        errored,
+      });
+    }
+  });
+  return () => ipcMain.removeHandler(channel as string);
+}
+
+export function typedHandleWithContext<K extends keyof IpcInvokeMap>(
+  channel: K,
+  handler: (
+    ctx: IpcContext,
+    ...args: IpcInvokeMap[K]["args"]
+  ) => Promise<IpcInvokeMap[K]["result"]> | IpcInvokeMap[K]["result"]
+): () => void {
+  const captureEnabled = isPerformanceCaptureEnabled();
+  let requestCounter = 0;
+
+  ipcMain.handle(channel as string, async (event, ...args) => {
+    const webContentsId = event.sender.id;
+    const senderWindow = BrowserWindow.fromWebContents(event.sender);
+    const ctx: IpcContext = { event, webContentsId, senderWindow };
+
+    if (!captureEnabled) {
+      return await handler(ctx, ...(args as IpcInvokeMap[K]["args"]));
+    }
+
+    const traceId = `${String(channel)}-${Date.now().toString(36)}-${(++requestCounter).toString(36)}`;
+    const startedAt = performance.now();
+    markPerformance(PERF_MARKS.IPC_REQUEST_START, {
+      channel: channel as string,
+      traceId,
+      argCount: args.length,
+    });
+
+    let responsePayload: IpcInvokeMap[K]["result"] | undefined;
+    let errored = false;
+
+    try {
+      responsePayload = await handler(ctx, ...(args as IpcInvokeMap[K]["args"]));
       return responsePayload;
     } catch (error) {
       errored = true;

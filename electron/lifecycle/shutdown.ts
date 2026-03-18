@@ -34,6 +34,7 @@ export interface ShutdownDeps {
   getStopAppMetricsMonitor: () => (() => void) | null;
   setStopAppMetricsMonitor: (v: (() => void) | null) => void;
   getMainWindow: () => Electron.BrowserWindow | null;
+  windowRegistry?: import("../window/WindowRegistry.js").WindowRegistry;
 }
 
 let isQuitting = false;

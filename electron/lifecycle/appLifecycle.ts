@@ -1,6 +1,7 @@
 import { app, BrowserWindow } from "electron";
 import type { CliAvailabilityService } from "../services/CliAvailabilityService.js";
 import type { ProjectSwitchService } from "../services/ProjectSwitchService.js";
+import type { WindowRegistry } from "../window/WindowRegistry.js";
 import { handleDirectoryOpen } from "../menu.js";
 import { getCrashRecoveryService } from "../services/CrashRecoveryService.js";
 import { setSignalShutdown } from "./signalShutdownState.js";
@@ -32,6 +33,7 @@ export interface AppLifecycleOptions {
   getMainWindow: () => BrowserWindow | null;
   getCliAvailabilityService: () => CliAvailabilityService | null;
   getProjectSwitchService: () => ProjectSwitchService | null;
+  windowRegistry?: WindowRegistry;
 }
 
 export function registerAppLifecycleHandlers(opts: AppLifecycleOptions): void {
@@ -56,7 +58,7 @@ export function registerAppLifecycleHandlers(opts: AppLifecycleOptions): void {
 
   app.on("second-instance", (_event, commandLine, _workingDirectory) => {
     console.log("[MAIN] Second instance detected, focusing main window");
-    const mainWindow = opts.getMainWindow();
+    const mainWindow = opts.windowRegistry?.getPrimary()?.browserWindow ?? opts.getMainWindow();
     if (mainWindow) {
       if (mainWindow.isMinimized()) mainWindow.restore();
       mainWindow.focus();
@@ -85,7 +87,10 @@ export function registerAppLifecycleHandlers(opts: AppLifecycleOptions): void {
   });
 
   app.on("activate", () => {
-    if (BrowserWindow.getAllWindows().length === 0) {
+    const hasWindows = opts.windowRegistry
+      ? opts.windowRegistry.size > 0
+      : BrowserWindow.getAllWindows().length > 0;
+    if (!hasWindows) {
       opts.onCreateWindow();
     }
   });
