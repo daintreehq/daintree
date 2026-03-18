@@ -11,6 +11,7 @@ interface FixedDropdownProps {
   children: React.ReactNode;
   className?: string;
   sideOffset?: number;
+  persistThroughChildOverlays?: boolean;
 }
 
 export function FixedDropdown({
@@ -20,6 +21,7 @@ export function FixedDropdown({
   children,
   className,
   sideOffset = 8,
+  persistThroughChildOverlays = false,
 }: FixedDropdownProps) {
   const [mounted, setMounted] = useState(false);
   const [position, setPosition] = useState<{ top: number; right: string } | null>(null);
@@ -53,13 +55,17 @@ export function FixedDropdown({
 
   useEffect(() => {
     if (!open) return;
+    const childOverlayActive = persistThroughChildOverlays && overlayCount > 0;
+
     const handlePointerDown = (event: MouseEvent | TouchEvent) => {
+      if (childOverlayActive) return;
       const target = event.target as Node | null;
       if (contentRef.current?.contains(target) || anchorRef.current?.contains(target)) return;
       onOpenChange(false);
     };
 
     const handleKeyDown = (event: KeyboardEvent) => {
+      if (childOverlayActive) return;
       if (event.key === "Escape") onOpenChange(false);
     };
 
@@ -71,14 +77,19 @@ export function FixedDropdown({
       document.removeEventListener("touchstart", handlePointerDown);
       document.removeEventListener("keydown", handleKeyDown);
     };
-  }, [open, onOpenChange, anchorRef]);
+  }, [open, onOpenChange, anchorRef, persistThroughChildOverlays, overlayCount]);
 
   useEffect(() => {
-    if (open && overlayCount > prevOverlayCountRef.current && overlayCount > 0) {
+    if (
+      !persistThroughChildOverlays &&
+      open &&
+      overlayCount > prevOverlayCountRef.current &&
+      overlayCount > 0
+    ) {
       onOpenChange(false);
     }
     prevOverlayCountRef.current = overlayCount;
-  }, [open, overlayCount, onOpenChange]);
+  }, [open, overlayCount, onOpenChange, persistThroughChildOverlays]);
 
   if (!shouldRender || !mounted || !position) return null;
 
