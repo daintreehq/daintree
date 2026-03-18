@@ -20,6 +20,11 @@ interface QuickCreateState {
   pr: GitHubPR | null;
 }
 
+interface BulkCreateDialogState {
+  isOpen: boolean;
+  selectedIssues: GitHubIssue[];
+}
+
 interface CrossDiffDialogState {
   isOpen: boolean;
   initialWorktreeId: string | null;
@@ -32,6 +37,7 @@ interface WorktreeSelectionState {
   expandedWorktrees: Set<string>;
   expandedTerminals: Set<string>;
   createDialog: CreateDialogState;
+  bulkCreateDialog: BulkCreateDialogState;
   quickCreate: QuickCreateState;
   crossDiffDialog: CrossDiffDialogState;
   _policyGeneration: number;
@@ -53,6 +59,8 @@ interface WorktreeSelectionState {
   ) => void;
   openCreateDialogForPR: (pr: GitHubPR) => void;
   closeCreateDialog: () => void;
+  openBulkCreateDialog: (selectedIssues: GitHubIssue[]) => void;
+  closeBulkCreateDialog: () => void;
   openQuickCreate: (context?: { issue?: GitHubIssue | null; pr?: GitHubPR | null }) => void;
   closeQuickCreate: () => void;
   openCrossWorktreeDiff: (initialWorktreeId?: string | null) => void;
@@ -216,6 +224,7 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
   expandedWorktrees: new Set<string>(),
   expandedTerminals: new Set<string>(),
   createDialog: { isOpen: false, initialIssue: null, initialPR: null, initialRecipeId: null },
+  bulkCreateDialog: { isOpen: false, selectedIssues: [] },
   quickCreate: { isOpen: false, issue: null, pr: null },
   crossDiffDialog: { isOpen: false, initialWorktreeId: null },
   _policyGeneration: 0,
@@ -420,6 +429,15 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
       createDialog: { isOpen: false, initialIssue: null, initialPR: null, initialRecipeId: null },
     }),
 
+  openBulkCreateDialog: (selectedIssues) => {
+    if (useFocusStore.getState().isFocusMode && typeof window !== "undefined") {
+      window.dispatchEvent(new Event("canopy:toggle-focus-mode"));
+    }
+    set({ bulkCreateDialog: { isOpen: true, selectedIssues } });
+  },
+
+  closeBulkCreateDialog: () => set({ bulkCreateDialog: { isOpen: false, selectedIssues: [] } }),
+
   openQuickCreate: (context) => {
     if (useFocusStore.getState().isFocusMode && typeof window !== "undefined") {
       window.dispatchEvent(new Event("canopy:toggle-focus-mode"));
@@ -463,6 +481,7 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
       expandedWorktrees: new Set<string>(),
       expandedTerminals: new Set<string>(),
       createDialog: { isOpen: false, initialIssue: null, initialPR: null, initialRecipeId: null },
+      bulkCreateDialog: { isOpen: false, selectedIssues: [] },
       quickCreate: { isOpen: false, issue: null, pr: null },
       crossDiffDialog: { isOpen: false, initialWorktreeId: null },
       lastFocusedTerminalByWorktree: new Map<string, string>(),

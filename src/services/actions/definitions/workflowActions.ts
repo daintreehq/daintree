@@ -35,10 +35,11 @@ export function registerWorkflowActions(actions: ActionRegistry): void {
         .boolean()
         .optional()
         .describe("Use an existing branch instead of creating a new one"),
-      issueNumber: z
-        .number()
+      issueNumber: z.number().optional().describe("GitHub issue number to link with the worktree"),
+      assignToSelf: z
+        .boolean()
         .optional()
-        .describe("GitHub issue number to auto-assign to the current user after creation"),
+        .describe("Explicitly assign the linked issue to the current user (default: false)"),
     }),
     resultSchema: z.object({
       worktreeId: z.string(),
@@ -48,15 +49,23 @@ export function registerWorkflowActions(actions: ActionRegistry): void {
       assignedToSelf: z.boolean(),
     }),
     run: async (args: unknown) => {
-      const { branchName, baseBranch, recipeId, fromRemote, useExistingBranch, issueNumber } =
-        args as {
-          branchName: string;
-          baseBranch?: string;
-          recipeId?: string;
-          fromRemote?: boolean;
-          useExistingBranch?: boolean;
-          issueNumber?: number;
-        };
+      const {
+        branchName,
+        baseBranch,
+        recipeId,
+        fromRemote,
+        useExistingBranch,
+        issueNumber,
+        assignToSelf,
+      } = args as {
+        branchName: string;
+        baseBranch?: string;
+        recipeId?: string;
+        fromRemote?: boolean;
+        useExistingBranch?: boolean;
+        issueNumber?: number;
+        assignToSelf?: boolean;
+      };
 
       const currentProject = useProjectStore.getState().currentProject;
       if (!currentProject) {
@@ -131,9 +140,9 @@ export function registerWorkflowActions(actions: ActionRegistry): void {
         recipeLaunched = true;
       }
 
-      // Auto-assign GitHub issue if requested
+      // Auto-assign GitHub issue if explicitly requested
       let assignedToSelf = false;
-      if (issueNumber) {
+      if (issueNumber && assignToSelf) {
         const username = useGitHubConfigStore.getState().config?.username;
         if (username) {
           try {

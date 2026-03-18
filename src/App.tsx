@@ -78,6 +78,7 @@ import {
 } from "./components/Worktree";
 import { CrossWorktreeDiff } from "./components/Worktree/CrossWorktreeDiff";
 import { NewWorktreeDialog } from "./components/Worktree/NewWorktreeDialog";
+import { BulkCreateWorktreeDialog } from "./components/GitHub/BulkCreateWorktreeDialog";
 import { TerminalInfoDialogHost } from "./components/Terminal/TerminalInfoDialogHost";
 import { FileViewerModalHost } from "./components/FileViewer/FileViewerModalHost";
 import { NewTerminalPalette } from "./components/TerminalPalette";
@@ -329,16 +330,25 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   const currentProject = useProjectStore((state) => state.currentProject);
   useProjectSettings();
   const { launchAgent, availability, agentSettings } = useAgentLauncher();
-  const { activeWorktreeId, focusedWorktreeId, selectWorktree, createDialog, closeCreateDialog } =
-    useWorktreeSelectionStore(
-      useShallow((state) => ({
-        activeWorktreeId: state.activeWorktreeId,
-        focusedWorktreeId: state.focusedWorktreeId,
-        selectWorktree: state.selectWorktree,
-        createDialog: state.createDialog,
-        closeCreateDialog: state.closeCreateDialog,
-      }))
-    );
+  const {
+    activeWorktreeId,
+    focusedWorktreeId,
+    selectWorktree,
+    createDialog,
+    closeCreateDialog,
+    bulkCreateDialog,
+    closeBulkCreateDialog,
+  } = useWorktreeSelectionStore(
+    useShallow((state) => ({
+      activeWorktreeId: state.activeWorktreeId,
+      focusedWorktreeId: state.focusedWorktreeId,
+      selectWorktree: state.selectWorktree,
+      createDialog: state.createDialog,
+      closeCreateDialog: state.closeCreateDialog,
+      bulkCreateDialog: state.bulkCreateDialog,
+      closeBulkCreateDialog: state.closeBulkCreateDialog,
+    }))
+  );
 
   // Filter/sort state - destructured for stable memoization
   const {
@@ -895,6 +905,13 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
           initialRecipeId={createDialog.initialRecipeId}
         />
       )}
+
+      <BulkCreateWorktreeDialog
+        isOpen={bulkCreateDialog.isOpen}
+        onClose={closeBulkCreateDialog}
+        selectedIssues={bulkCreateDialog.selectedIssues}
+        onComplete={closeBulkCreateDialog}
+      />
     </div>
   );
 }

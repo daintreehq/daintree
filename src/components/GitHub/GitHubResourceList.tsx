@@ -871,6 +871,7 @@ export function GitHubResourceList({
             .map((id) => issueCacheRef.current.get(id))
             .filter((issue): issue is GitHubIssue => issue !== undefined)}
           onClear={selection.clear}
+          onCloseDropdown={onClose}
         />
       )}
     </div>
