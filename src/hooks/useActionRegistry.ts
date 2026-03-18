@@ -85,8 +85,7 @@ export function useActionRegistry(options: ActionCallbacks): void {
         activeWorktreePath: activeWorktree?.path,
         activeWorktreeBranch: activeWorktree?.branch,
         activeWorktreeIsMain: activeWorktree?.isMainWorktree,
-        focusedWorktreeId:
-          useWorktreeSelectionStore.getState().focusedWorktreeId ?? undefined,
+        focusedWorktreeId: useWorktreeSelectionStore.getState().focusedWorktreeId ?? undefined,
         focusedTerminalId: focusedId ?? undefined,
         focusedTerminalKind: focusedTerminal?.kind,
         focusedTerminalType: focusedTerminal?.type,
