@@ -99,7 +99,7 @@ export const useTerminalStore = create<PanelGridState>()((set, get, api) => {
   const getTerminal = (id: string) => get().terminals.find((t) => t.id === id);
 
   const registrySlice = createTerminalRegistrySlice({
-    onTerminalRemoved: (id, removedIndex, remainingTerminals, removedTerminal) => {
+    onTerminalRemoved: (id, removedIndex, remainingTerminals, _removedTerminal) => {
       clearTerminalRestartGuard(id);
       get().clearQueue(id);
       get().handleTerminalRemoved(id, remainingTerminals, removedIndex);
