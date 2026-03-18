@@ -53,7 +53,7 @@ export function parseNumberQuery(query: string): NumberQuery | null {
         numbers.push(num);
       }
     }
-    if (numbers.length < 2) return null;
+    if (numbers.length === 1) return { kind: "single", number: numbers[0] };
     return { kind: "multi", numbers };
   }
 

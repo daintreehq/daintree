@@ -65,9 +65,16 @@ describe("parseNumberQuery", () => {
       expect(parseNumberQuery("123, 124,")).toBeNull();
     });
 
-    it("should reject single number with comma syntax", () => {
-      // A single number shouldn't match as multi — it should be single
-      expect(parseNumberQuery("123")).toEqual({ kind: "single", number: 123 });
+    it("should treat all-duplicate comma list as single", () => {
+      expect(parseNumberQuery("123, 123")).toEqual({ kind: "single", number: 123 });
+      expect(parseNumberQuery("#123,#123")).toEqual({ kind: "single", number: 123 });
+    });
+
+    it("should handle spaces around commas", () => {
+      expect(parseNumberQuery("123 , 124")).toEqual({
+        kind: "multi",
+        numbers: [123, 124],
+      });
     });
   });
 
@@ -105,6 +112,15 @@ describe("parseNumberQuery", () => {
         kind: "range",
         from: 1,
         to: MULTI_FETCH_CAP,
+        truncated: true,
+      });
+    });
+
+    it("should truncate with shifted start (from > 1)", () => {
+      expect(parseNumberQuery("100..125")).toEqual({
+        kind: "range",
+        from: 100,
+        to: 100 + MULTI_FETCH_CAP - 1,
         truncated: true,
       });
     });
@@ -173,6 +189,15 @@ describe("parseNumberQuery", () => {
 
     it("should return null for mixed text and numbers", () => {
       expect(parseNumberQuery("issue 123")).toBeNull();
+    });
+
+    it("should reject double-hash range syntax", () => {
+      expect(parseNumberQuery("#123..#125")).toBeNull();
+    });
+
+    it("should reject spaced range and open-ended syntax", () => {
+      expect(parseNumberQuery("123 .. 125")).toBeNull();
+      expect(parseNumberQuery("123 +")).toBeNull();
     });
   });
 });
