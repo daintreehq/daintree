@@ -509,9 +509,6 @@ code.hljs {
   --dock-item-border-active: rgba(var(--theme-accent-rgb), 0.32);
   --dock-item-bg-failed: color-mix(in oklab, var(--color-status-error) 8%, transparent);
   --dock-item-border-failed: color-mix(in oklab, var(--color-status-error) 40%, transparent);
-  --dock-item-bg-waiting: color-mix(in oklab, var(--color-activity-waiting) 8%, transparent);
-  --dock-item-border-waiting: color-mix(in oklab, var(--color-activity-waiting) 45%, transparent);
-
   --animation-duration: 150ms;
   --transition-duration: 150ms;
   --terminal-animation-duration: 150ms;
