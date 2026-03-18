@@ -221,6 +221,8 @@ export function registerWebviewHandlers(deps: HandlerDependencies): () => void {
       throw new Error("Invalid arguments: webContentsId must be number, frozen must be boolean");
     }
 
+    if (!getWebviewDialogService().getPanelId(webContentsId)) return;
+
     const wc = webContents.fromId(webContentsId);
     if (!wc || wc.isDestroyed()) return;
 
@@ -251,6 +253,8 @@ export function registerWebviewHandlers(deps: HandlerDependencies): () => void {
     if (typeof webContentsId !== "number" || typeof paneId !== "string") {
       throw new Error("Invalid arguments: webContentsId must be number, paneId must be string");
     }
+
+    if (!getWebviewDialogService().getPanelId(webContentsId)) return;
 
     const wc = webContents.fromId(webContentsId);
     if (!wc || wc.isDestroyed()) return;
@@ -384,6 +388,8 @@ export function registerWebviewHandlers(deps: HandlerDependencies): () => void {
   ): Promise<void> => {
     if (typeof webContentsId !== "number" || typeof paneId !== "string") return;
 
+    if (!getWebviewDialogService().getPanelId(webContentsId)) return;
+
     const session = sessions.get(webContentsId);
     if (!session) return;
 
@@ -416,6 +422,8 @@ export function registerWebviewHandlers(deps: HandlerDependencies): () => void {
   ): Promise<void> => {
     if (typeof webContentsId !== "number" || typeof paneId !== "string") return;
 
+    if (!getWebviewDialogService().getPanelId(webContentsId)) return;
+
     const session = sessions.get(webContentsId);
     if (!session) return;
 
@@ -434,6 +442,10 @@ export function registerWebviewHandlers(deps: HandlerDependencies): () => void {
   ): Promise<{ properties: CdpPropertyDescriptor[] }> => {
     if (typeof webContentsId !== "number" || typeof objectId !== "string") {
       throw new Error("Invalid arguments");
+    }
+
+    if (!getWebviewDialogService().getPanelId(webContentsId)) {
+      return { properties: [] };
     }
 
     const wc = webContents.fromId(webContentsId);

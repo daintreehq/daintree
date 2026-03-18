@@ -172,7 +172,10 @@ export function BrowserPane({
       }
     );
 
-    void window.electron.webview.startConsoleCapture(wcId, id);
+    void (async () => {
+      await window.electron.webview.registerPanel(wcId, id);
+      await window.electron.webview.startConsoleCapture(wcId, id);
+    })();
 
     return () => {
       void window.electron.webview.stopConsoleCapture(wcId, id);

@@ -28,11 +28,14 @@ vi.mock("electron", () => ({
   webContents: webContentsMock,
 }));
 
+const mockDialogService = vi.hoisted(() => ({
+  registerPanel: vi.fn(),
+  resolveDialog: vi.fn(),
+  getPanelId: vi.fn(() => "test-panel"),
+}));
+
 vi.mock("../../../services/WebviewDialogService.js", () => ({
-  getWebviewDialogService: () => ({
-    registerPanel: vi.fn(),
-    resolveDialog: vi.fn(),
-  }),
+  getWebviewDialogService: () => mockDialogService,
 }));
 
 const mainWindowMock = vi.hoisted(() => ({
@@ -325,6 +328,49 @@ describe("registerWebviewHandlers", () => {
       expect(calls[0][1].groupDepth).toBe(0); // startGroup header at depth 0
       expect(calls[1][1].groupDepth).toBe(1); // child at depth 1
       expect(calls[2][1].groupDepth).toBe(0); // after endGroup, back to depth 0
+    });
+  });
+
+  describe("ownership validation", () => {
+    it("handleSetLifecycleState returns early for unregistered webContentsId", async () => {
+      mockDialogService.getPanelId.mockReturnValue(undefined);
+      cleanup = registerWebviewHandlers(deps);
+      const handler = getHandler("webview:set-lifecycle-state");
+      await expect(handler(null, 42, true)).resolves.toBeUndefined();
+      expect(debuggerMock.attach).not.toHaveBeenCalled();
+      expect(debuggerMock.sendCommand).not.toHaveBeenCalled();
+    });
+
+    it("handleStartConsoleCapture returns early for unregistered webContentsId", async () => {
+      mockDialogService.getPanelId.mockReturnValue(undefined);
+      cleanup = registerWebviewHandlers(deps);
+      const handler = getHandler("webview:start-console-capture");
+      await expect(handler(null, 42, "pane-1")).resolves.toBeUndefined();
+      expect(debuggerMock.attach).not.toHaveBeenCalled();
+      expect(debuggerMock.sendCommand).not.toHaveBeenCalled();
+    });
+
+    it("handleStopConsoleCapture returns early for unregistered webContentsId", async () => {
+      mockDialogService.getPanelId.mockReturnValue(undefined);
+      cleanup = registerWebviewHandlers(deps);
+      const handler = getHandler("webview:stop-console-capture");
+      await expect(handler(null, 42, "pane-1")).resolves.toBeUndefined();
+    });
+
+    it("handleClearConsoleCapture returns early for unregistered webContentsId", async () => {
+      mockDialogService.getPanelId.mockReturnValue(undefined);
+      cleanup = registerWebviewHandlers(deps);
+      const handler = getHandler("webview:clear-console-capture");
+      await expect(handler(null, 42, "pane-1")).resolves.toBeUndefined();
+    });
+
+    it("handleGetConsoleProperties returns empty for unregistered webContentsId", async () => {
+      mockDialogService.getPanelId.mockReturnValue(undefined);
+      cleanup = registerWebviewHandlers(deps);
+      const handler = getHandler("webview:get-console-properties");
+      const result = await handler(null, 42, "obj-123");
+      expect(result).toEqual({ properties: [] });
+      expect(debuggerMock.sendCommand).not.toHaveBeenCalled();
     });
   });
 });
