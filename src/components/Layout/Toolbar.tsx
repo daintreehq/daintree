@@ -44,6 +44,10 @@ const LazyGitHubResourceList = lazy(() =>
 const LazyCommitList = lazy(() =>
   import("@/components/GitHub/CommitList").then((m) => ({ default: m.CommitList }))
 );
+import {
+  GitHubResourceListSkeleton,
+  CommitListSkeleton,
+} from "@/components/GitHub/GitHubDropdownSkeletons";
 import { AgentButton } from "./AgentButton";
 import { AgentSetupButton } from "./AgentSetupButton";
 import { GitHubStatusIndicator, type GitHubStatusIndicatorStatus } from "./GitHubStatusIndicator";
@@ -727,11 +731,7 @@ export function Toolbar({
                 persistThroughChildOverlays
               >
                 <Suspense
-                  fallback={
-                    <div className="flex justify-center p-4">
-                      <Loader2 className="h-4 w-4 animate-spin text-canopy-text/40" />
-                    </div>
-                  }
+                  fallback={<GitHubResourceListSkeleton count={stats?.issueCount} immediate />}
                 >
                   <LazyGitHubResourceList
                     type="issue"
@@ -796,11 +796,7 @@ export function Toolbar({
                 className="p-0 w-[450px]"
               >
                 <Suspense
-                  fallback={
-                    <div className="flex justify-center p-4">
-                      <Loader2 className="h-4 w-4 animate-spin text-canopy-text/40" />
-                    </div>
-                  }
+                  fallback={<GitHubResourceListSkeleton count={stats?.prCount} immediate />}
                 >
                   <LazyGitHubResourceList
                     type="pr"
@@ -854,13 +850,7 @@ export function Toolbar({
                 anchorRef={commitsButtonRef}
                 className="p-0 w-[450px]"
               >
-                <Suspense
-                  fallback={
-                    <div className="flex justify-center p-4">
-                      <Loader2 className="h-4 w-4 animate-spin text-canopy-text/40" />
-                    </div>
-                  }
-                >
+                <Suspense fallback={<CommitListSkeleton count={stats?.commitCount} immediate />}>
                   <LazyCommitList
                     projectPath={currentProject.path}
                     onClose={() => {
