@@ -12,8 +12,6 @@ import {
   type AtTerminalContext,
   type AtSelectionContext,
 } from "../hybridInputParsing";
-import { imageChipField, fileDropChipField } from "../inputEditorExtensions";
-import { normalizeChips, type TrayItem } from "../attachmentTrayUtils";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 
 interface LatestRefShape {
@@ -33,7 +31,6 @@ interface UseContextDetectionParams {
   setDiffContext: Dispatch<SetStateAction<AtDiffContext | null>>;
   setTerminalContext: Dispatch<SetStateAction<AtTerminalContext | null>>;
   setSelectionContext: Dispatch<SetStateAction<AtSelectionContext | null>>;
-  setAttachments: Dispatch<SetStateAction<TrayItem[]>>;
 }
 
 export function useContextDetection({
@@ -46,7 +43,6 @@ export function useContextDetection({
   setDiffContext,
   setTerminalContext,
   setSelectionContext,
-  setAttachments,
 }: UseContextDetectionParams) {
   const lastSlashContextRef = useRef<SlashCommandContext | null>(null);
   const lastAtContextRef = useRef<AtFileContext | null>(null);
@@ -226,21 +222,6 @@ export function useContextDetection({
             setSlashContext(null);
           }
         }
-
-        const imgs = update.state.field(imageChipField, false) ?? [];
-        const files = update.state.field(fileDropChipField, false) ?? [];
-        const next = normalizeChips(imgs, files);
-        setAttachments((prev) => {
-          if (prev.length === 0 && next.length === 0) return prev;
-          if (
-            prev.length === next.length &&
-            prev.every(
-              (p, i) => p.id === next[i].id && p.from === next[i].from && p.to === next[i].to
-            )
-          )
-            return prev;
-          return next;
-        });
       }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     []

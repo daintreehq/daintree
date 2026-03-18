@@ -1,7 +1,7 @@
 import { EditorView, Decoration, WidgetType, hoverTooltip } from "@codemirror/view";
 import type { Extension } from "@codemirror/state";
 import { StateField, StateEffect } from "@codemirror/state";
-import { formatChipLabel } from "./base";
+import { formatChipLabel, removeChipRange } from "./base";
 
 interface ImageChipEntry {
   from: number;
@@ -22,7 +22,7 @@ class ImageChipWidget extends WidgetType {
     return this.filePath === other.filePath;
   }
 
-  toDOM() {
+  toDOM(view: EditorView) {
     const span = document.createElement("span");
     span.className = "cm-image-chip";
     span.setAttribute("role", "img");
@@ -39,11 +39,26 @@ class ImageChipWidget extends WidgetType {
     label.textContent = formatChipLabel(this.filePath);
     span.appendChild(label);
 
+    const removeBtn = document.createElement("button");
+    removeBtn.className = "cm-chip-remove";
+    removeBtn.setAttribute("aria-label", "Remove image");
+    removeBtn.textContent = "\u00d7";
+    removeBtn.addEventListener("mousedown", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const entry = view.state
+        .field(imageChipField, false)
+        ?.find((en) => en.filePath === this.filePath);
+      if (entry) removeChipRange(view, entry.from, entry.to);
+    });
+    span.appendChild(removeBtn);
+
     return span;
   }
 
-  ignoreEvent() {
-    return false;
+  ignoreEvent(event: Event) {
+    const target = event.target as HTMLElement;
+    return !!target.closest?.(".cm-chip-remove");
   }
 }
 

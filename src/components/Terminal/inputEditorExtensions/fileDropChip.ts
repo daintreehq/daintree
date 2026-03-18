@@ -1,6 +1,7 @@
 import { EditorView, Decoration, WidgetType, hoverTooltip } from "@codemirror/view";
 import type { Extension } from "@codemirror/state";
 import { StateField, StateEffect } from "@codemirror/state";
+import { formatFileSize, removeChipRange } from "./base";
 
 interface FileDropChipEntry {
   from: number;
@@ -15,16 +16,17 @@ const FILE_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height
 class FileDropChipWidget extends WidgetType {
   constructor(
     readonly filePath: string,
-    readonly fileName: string
+    readonly fileName: string,
+    readonly fileSize?: number
   ) {
     super();
   }
 
   eq(other: FileDropChipWidget) {
-    return this.filePath === other.filePath;
+    return this.filePath === other.filePath && this.fileSize === other.fileSize;
   }
 
-  toDOM() {
+  toDOM(view: EditorView) {
     const span = document.createElement("span");
     span.className = "cm-file-drop-chip";
     span.setAttribute("role", "img");
@@ -41,11 +43,26 @@ class FileDropChipWidget extends WidgetType {
     label.textContent = this.fileName;
     span.appendChild(label);
 
+    const removeBtn = document.createElement("button");
+    removeBtn.className = "cm-chip-remove";
+    removeBtn.setAttribute("aria-label", "Remove file");
+    removeBtn.textContent = "\u00d7";
+    removeBtn.addEventListener("mousedown", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const entry = view.state
+        .field(fileDropChipField, false)
+        ?.find((en) => en.filePath === this.filePath);
+      if (entry) removeChipRange(view, entry.from, entry.to);
+    });
+    span.appendChild(removeBtn);
+
     return span;
   }
 
-  ignoreEvent() {
-    return false;
+  ignoreEvent(event: Event) {
+    const target = event.target as HTMLElement;
+    return !!target.closest?.(".cm-chip-remove");
   }
 }
 
@@ -81,10 +98,9 @@ export const fileDropChipField = StateField.define<FileDropChipEntry[]>({
     EditorView.decorations.from(f, (entries) => {
       if (entries.length === 0) return Decoration.none;
       const ranges = entries.map((e) =>
-        Decoration.replace({ widget: new FileDropChipWidget(e.filePath, e.fileName) }).range(
-          e.from,
-          e.to
-        )
+        Decoration.replace({
+          widget: new FileDropChipWidget(e.filePath, e.fileName, e.fileSize),
+        }).range(e.from, e.to)
       );
       return Decoration.set(ranges, true);
     }),
@@ -123,6 +139,14 @@ export function createFileDropChipTooltip() {
           "font-size: 10px; color: var(--theme-text-secondary); word-break: break-all; max-width: 300px; font-family: var(--font-mono, monospace);";
         pathEl.textContent = entry.filePath;
         dom.appendChild(pathEl);
+
+        if (entry.fileSize != null) {
+          const sizeEl = document.createElement("p");
+          sizeEl.style.cssText =
+            "font-size: 10px; color: var(--theme-text-muted); margin-top: 2px;";
+          sizeEl.textContent = formatFileSize(entry.fileSize);
+          dom.appendChild(sizeEl);
+        }
 
         return { dom };
       },
