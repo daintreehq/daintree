@@ -5,12 +5,12 @@ const mockReaddirSync = vi.fn();
 const mockExecFileSync = vi.fn();
 
 vi.mock("node:fs", () => ({
-  default: { readdirSync: (...args: any[]) => mockReaddirSync(...args) },
-  readdirSync: (...args: any[]) => mockReaddirSync(...args),
+  default: { readdirSync: (...args: unknown[]) => mockReaddirSync(...args) },
+  readdirSync: (...args: unknown[]) => mockReaddirSync(...args),
 }));
 
 vi.mock("node:child_process", () => ({
-  execFileSync: (...args: any[]) => mockExecFileSync(...args),
+  execFileSync: (...args: unknown[]) => mockExecFileSync(...args),
 }));
 
 import { FdMonitor, isProcessAlive } from "../FdMonitor.js";

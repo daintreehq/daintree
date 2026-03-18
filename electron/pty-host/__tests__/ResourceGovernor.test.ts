@@ -1,8 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 // Shared mock state that tests can reconfigure
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-let mockCheckForLeaks: any;
+let mockCheckForLeaks: ReturnType<typeof vi.fn<(...args: unknown[]) => unknown>>;
 let mockFdMonitorSupported: boolean;
 
 vi.mock("../FdMonitor.js", () => {
@@ -12,7 +11,7 @@ vi.mock("../FdMonitor.js", () => {
         return mockFdMonitorSupported;
       }
       getFdCount = vi.fn().mockReturnValue(10);
-      checkForLeaks = (...args: any[]) => mockCheckForLeaks(...args);
+      checkForLeaks = (...args: unknown[]) => mockCheckForLeaks(...args);
     },
     isProcessAlive: vi.fn(),
   };
@@ -127,7 +126,9 @@ describe("ResourceGovernor", () => {
     vi.advanceTimersByTime(2000);
 
     const calls = (deps.sendEvent as ReturnType<typeof vi.fn>).mock.calls;
-    const fdWarnings = calls.filter((c: any[]) => c[0]?.type === "fd-leak-warning");
+    const fdWarnings = calls.filter(
+      (c: unknown[]) => (c[0] as Record<string, unknown>)?.type === "fd-leak-warning"
+    );
     expect(fdWarnings).toHaveLength(0);
 
     governor.dispose();

@@ -45,14 +45,10 @@ export class FdMonitor {
     }
   }
 
-  checkForLeaks(
-    activeTerminalCount: number,
-    knownPids: number[]
-  ): FdCheckResult {
+  checkForLeaks(activeTerminalCount: number, knownPids: number[]): FdCheckResult {
     const totalFds = this.getFdCount();
     const estimatedTerminalFds = Math.max(0, totalFds - this.baselineFds);
-    const threshold =
-      activeTerminalCount * WARNING_MULTIPLIER + SAFETY_MARGIN + this.baselineFds;
+    const threshold = activeTerminalCount * WARNING_MULTIPLIER + SAFETY_MARGIN + this.baselineFds;
     const isWarning = this.isSupported && totalFds > threshold;
     const orphanedPids = this.findOrphanedPids(knownPids);
 
@@ -100,7 +96,7 @@ export function isProcessAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
     return true;
-  } catch (e: any) {
-    return e.code === "EPERM";
+  } catch (e: unknown) {
+    return e instanceof Error && (e as NodeJS.ErrnoException).code === "EPERM";
   }
 }
