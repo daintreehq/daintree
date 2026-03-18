@@ -75,8 +75,6 @@ export class ResourceGovernor {
     }
 
     const terminals = this.deps.getTerminalPids();
-    const activePids = new Set(terminals.map((t) => t.pid).filter((p): p is number => p !== undefined));
-
     const result = this.fdMonitor.checkForLeaks(terminals.length, orphanCandidates);
 
     if (metricsEnabled()) {
@@ -106,7 +104,7 @@ export class ResourceGovernor {
         type: "fd-leak-warning",
         fdCount: result.totalFds,
         activeTerminals: result.activeTerminals,
-        estimatedLeaked: result.estimatedTerminalFds - result.activeTerminals,
+        estimatedLeaked: Math.max(0, result.estimatedTerminalFds - result.activeTerminals),
         orphanedPids: result.orphanedPids,
         ptmxLimit: result.ptmxLimit,
         timestamp: now,
