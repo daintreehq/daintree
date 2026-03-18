@@ -45,7 +45,6 @@ export function usePromptHistoryPalette({ terminalId, projectId }: UsePromptHist
     items,
     fuseOptions: FUSE_OPTIONS,
     maxResults: MAX_RESULTS,
-    debounceMs: 150,
     paletteId: "prompt-history",
   });
 

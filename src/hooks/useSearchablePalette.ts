@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo, useEffect, useRef } from "react";
+import { useState, useCallback, useMemo, useEffect, useDeferredValue } from "react";
 import Fuse, { type IFuseOptions } from "fuse.js";
 import { usePaletteStore, type PaletteId } from "@/store/paletteStore";
 
@@ -7,7 +7,6 @@ export interface UseSearchablePaletteOptions<T> {
   fuseOptions?: IFuseOptions<T>;
   filterFn?: (items: T[], query: string) => T[];
   maxResults?: number;
-  debounceMs?: number;
   /** Return false to skip item during keyboard navigation (e.g. disabled items) */
   canNavigate?: (item: T) => boolean;
   /** Reset selected index when results change. Default: true */
@@ -22,6 +21,7 @@ export interface UseSearchablePaletteReturn<T> {
   results: T[];
   totalResults: number;
   selectedIndex: number;
+  isStale: boolean;
   open: () => void;
   close: () => void;
   toggle: () => void;
@@ -32,7 +32,6 @@ export interface UseSearchablePaletteReturn<T> {
 }
 
 const DEFAULT_MAX_RESULTS = 20;
-const DEFAULT_DEBOUNCE_MS = 200;
 
 export function useSearchablePalette<T>(
   options: UseSearchablePaletteOptions<T>
@@ -42,7 +41,6 @@ export function useSearchablePalette<T>(
     fuseOptions,
     filterFn,
     maxResults = DEFAULT_MAX_RESULTS,
-    debounceMs = DEFAULT_DEBOUNCE_MS,
     canNavigate,
     resetOnResultsChange = true,
     paletteId,
@@ -56,25 +54,7 @@ export function useSearchablePalette<T>(
 
   const [query, setQuery] = useState("");
   const [selectedIndex, setSelectedIndex] = useState(0);
-  const [debouncedQuery, setDebouncedQuery] = useState("");
-
-  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  useEffect(() => {
-    if (debounceRef.current) {
-      clearTimeout(debounceRef.current);
-    }
-
-    debounceRef.current = setTimeout(() => {
-      setDebouncedQuery(query);
-    }, debounceMs);
-
-    return () => {
-      if (debounceRef.current) {
-        clearTimeout(debounceRef.current);
-      }
-    };
-  }, [query, debounceMs]);
+  const deferredQuery = useDeferredValue(query);
 
   const fuse = useMemo(() => {
     if (!fuseOptions) return null;
@@ -85,18 +65,18 @@ export function useSearchablePalette<T>(
     let filtered: T[];
 
     if (filterFn) {
-      filtered = filterFn(items, debouncedQuery);
-    } else if (!debouncedQuery.trim()) {
+      filtered = filterFn(items, deferredQuery);
+    } else if (!deferredQuery.trim()) {
       filtered = items;
     } else if (fuse) {
-      const fuseResults = fuse.search(debouncedQuery);
+      const fuseResults = fuse.search(deferredQuery);
       filtered = fuseResults.map((r) => r.item);
     } else {
       filtered = items;
     }
 
     return { results: filtered.slice(0, maxResults), totalResults: filtered.length };
-  }, [debouncedQuery, items, fuse, filterFn, maxResults]);
+  }, [deferredQuery, items, fuse, filterFn, maxResults]);
 
   const findNavigable = useCallback(
     (startIndex: number, direction: 1 | -1): number => {
@@ -138,7 +118,6 @@ export function useSearchablePalette<T>(
       setLocalIsOpen(true);
     }
     setQuery("");
-    setDebouncedQuery("");
     setSelectedIndex(0);
   }, [paletteId]);
 
@@ -150,7 +129,6 @@ export function useSearchablePalette<T>(
     }
     setQuery("");
     setSelectedIndex(0);
-    setDebouncedQuery("");
   }, [paletteId]);
 
   const toggle = useCallback(() => {
@@ -177,12 +155,15 @@ export function useSearchablePalette<T>(
     });
   }, [results.length, canNavigate, findNavigable]);
 
+  const isStale = query !== deferredQuery;
+
   return {
     isOpen,
     query,
     results,
     totalResults,
     selectedIndex,
+    isStale,
     open,
     close,
     toggle,
