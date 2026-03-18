@@ -59,6 +59,7 @@ export function worktreeCardPropsAreEqual(
       a.prTitle !== b.prTitle ||
       a.issueNumber !== b.issueNumber ||
       a.issueTitle !== b.issueTitle ||
+      a.isDetached !== b.isDetached ||
       a.lifecycleStatus !== b.lifecycleStatus ||
       a.taskId !== b.taskId ||
       a.worktreeChanges !== b.worktreeChanges

@@ -154,18 +154,26 @@ describe("worktreeDataStore.refresh", () => {
       expect(useWorktreeDataStore.getState().isInitialized).toBe(true);
     });
 
-    const refBefore = useWorktreeDataStore.getState().worktrees.get("feature-stable");
-    expect(refBefore).toBeDefined();
+    const mainBefore = useWorktreeDataStore.getState().worktrees.get("main");
+    const featureBefore = useWorktreeDataStore.getState().worktrees.get("feature-stable");
+    expect(mainBefore).toBeDefined();
+    expect(featureBefore).toBeDefined();
 
-    // Refresh with identical data for feature-stable; only main changes.
+    // Refresh: main changes its modifiedCount; feature-stable data is identical.
     const mainChanged = { ...main, modifiedCount: 1 };
     const featureUnchanged = { ...feature };
     getAllMock.mockResolvedValueOnce([mainChanged, featureUnchanged]);
 
     await useWorktreeDataStore.getState().refresh();
 
-    const refAfter = useWorktreeDataStore.getState().worktrees.get("feature-stable");
-    expect(refAfter).toBe(refBefore);
+    // B (feature-stable) should keep the same reference — nothing changed.
+    const featureAfter = useWorktreeDataStore.getState().worktrees.get("feature-stable");
+    expect(featureAfter).toBe(featureBefore);
+
+    // A (main) should have a new reference — modifiedCount changed.
+    const mainAfter = useWorktreeDataStore.getState().worktrees.get("main");
+    expect(mainAfter).not.toBe(mainBefore);
+    expect(mainAfter?.modifiedCount).toBe(1);
   });
 
   it("rejects stale onUpdate events arriving after a project switch (listenerGeneration guard)", async () => {
