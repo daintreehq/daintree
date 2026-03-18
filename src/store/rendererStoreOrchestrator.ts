@@ -6,6 +6,7 @@ import {
 } from "./worktreeStore";
 import { useTerminalInputStore } from "./terminalInputStore";
 import { useConsoleCaptureStore } from "./consoleCaptureStore";
+import { useLayoutUndoStore } from "./layoutUndoStore";
 
 let cleanupFn: (() => void) | null = null;
 
@@ -87,6 +88,19 @@ export function initStoreOrchestrator(): () => void {
     }
   });
   unsubscribers.push(unsubRemoval);
+
+  // 3. Layout undo history invalidation: when terminal set changes (add/remove),
+  //    clear the undo stack since snapshots reference a different terminal universe.
+  let prevIdSet = new Set(useTerminalStore.getState().terminals.map((t) => t.id));
+
+  const unsubLayoutUndo = useTerminalStore.subscribe((state) => {
+    const currentIds = new Set(state.terminals.map((t) => t.id));
+    if (currentIds.size !== prevIdSet.size || [...currentIds].some((id) => !prevIdSet.has(id))) {
+      useLayoutUndoStore.getState().clearHistory();
+    }
+    prevIdSet = currentIds;
+  });
+  unsubscribers.push(unsubLayoutUndo);
 
   cleanupFn = () => {
     for (const unsub of unsubscribers) unsub();

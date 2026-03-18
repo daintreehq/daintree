@@ -2,6 +2,7 @@ import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 import { TerminalTypeSchema } from "./schemas";
 import { z } from "zod";
 import { useTerminalStore } from "@/store/terminalStore";
+import { useLayoutUndoStore } from "@/store/layoutUndoStore";
 import { buildPanelDuplicateOptions } from "@/services/terminal/panelDuplicationService";
 export function registerTerminalSpawnActions(
   actions: ActionRegistry,
@@ -100,6 +101,7 @@ export function registerTerminalSpawnActions(
           return;
         }
 
+        useLayoutUndoStore.getState().pushLayoutSnapshot();
         state.setFocused(null);
         state.moveTerminalToWorktree(targetId, worktreeId);
       }

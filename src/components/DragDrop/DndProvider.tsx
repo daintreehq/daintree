@@ -40,6 +40,7 @@ import { parseAccordionDragId } from "./SortableWorktreeTerminal";
 import { isWorktreeSortDragData, parseWorktreeSortDragId } from "./SortableWorktreeCard";
 import { useWorktreeFilterStore } from "@/store/worktreeFilterStore";
 import { useWorktreeDataStore } from "@/store/worktreeDataStore";
+import { useLayoutUndoStore } from "@/store/layoutUndoStore";
 import type { WorktreeState } from "@shared/types";
 
 // Placeholder ID used when dragging from dock to grid
@@ -497,6 +498,9 @@ export function DndProvider({ children }: DndProviderProps) {
       }
 
       if (!over || !activeData || !draggedId) return;
+
+      // Capture layout state before any mutations for undo support
+      useLayoutUndoStore.getState().pushLayoutSnapshot();
 
       const overId = over.id as string;
 

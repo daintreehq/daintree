@@ -4,6 +4,7 @@ import { appClient } from "@/clients";
 import { computeGridColumns } from "@/lib/terminalLayout";
 import { useLayoutConfigStore } from "@/store/layoutConfigStore";
 import { useTerminalStore } from "@/store/terminalStore";
+import { useLayoutUndoStore } from "@/store/layoutUndoStore";
 export function registerTerminalLayoutActions(
   actions: ActionRegistry,
   callbacks: ActionCallbacks
@@ -26,6 +27,8 @@ export function registerTerminalLayoutActions(
         if (!terminal) {
           return;
         }
+
+        useLayoutUndoStore.getState().pushLayoutSnapshot();
 
         state.moveTerminalToDock(targetId);
 
@@ -51,6 +54,7 @@ export function registerTerminalLayoutActions(
       const state = useTerminalStore.getState();
       const targetId = terminalId ?? state.focusedId;
       if (targetId) {
+        useLayoutUndoStore.getState().pushLayoutSnapshot();
         state.moveTerminalToGrid(targetId);
       }
     },
@@ -106,6 +110,7 @@ export function registerTerminalLayoutActions(
       const state = useTerminalStore.getState();
       const { focusedId, terminals, reorderTerminals } = state;
       if (!focusedId) return;
+      useLayoutUndoStore.getState().pushLayoutSnapshot();
       const activeWorktreeId = callbacks.getActiveWorktreeId();
       const gridTerminals = terminals.filter(
         (t) =>
@@ -131,6 +136,7 @@ export function registerTerminalLayoutActions(
       const state = useTerminalStore.getState();
       const { focusedId, terminals, reorderTerminals } = state;
       if (!focusedId) return;
+      useLayoutUndoStore.getState().pushLayoutSnapshot();
       const activeWorktreeId = callbacks.getActiveWorktreeId();
       const gridTerminals = terminals.filter(
         (t) =>
@@ -156,6 +162,7 @@ export function registerTerminalLayoutActions(
       const state = useTerminalStore.getState();
       const { focusedId, terminals, reorderTerminals } = state;
       if (!focusedId) return;
+      useLayoutUndoStore.getState().pushLayoutSnapshot();
       const terminal = terminals.find((t) => t.id === focusedId);
       if (!terminal || terminal.location === "dock") return;
       const activeWorktreeId = callbacks.getActiveWorktreeId();
@@ -191,6 +198,7 @@ export function registerTerminalLayoutActions(
       const state = useTerminalStore.getState();
       const { focusedId, terminals, reorderTerminals } = state;
       if (!focusedId) return;
+      useLayoutUndoStore.getState().pushLayoutSnapshot();
       const terminal = terminals.find((t) => t.id === focusedId);
       if (!terminal || terminal.location === "dock") return;
       const activeWorktreeId = callbacks.getActiveWorktreeId();
@@ -226,6 +234,7 @@ export function registerTerminalLayoutActions(
       const state = useTerminalStore.getState();
       const focusedId = state.focusedId;
       if (!focusedId) return;
+      useLayoutUndoStore.getState().pushLayoutSnapshot();
       const terminal = state.terminals.find((t) => t.id === focusedId);
       if (!terminal) return;
       if (terminal.location === "dock") {
@@ -246,6 +255,7 @@ export function registerTerminalLayoutActions(
     danger: "safe",
     scope: "renderer",
     run: async () => {
+      useLayoutUndoStore.getState().pushLayoutSnapshot();
       const state = useTerminalStore.getState();
       const activeWorktreeId = callbacks.getActiveWorktreeId();
       const activeTerminals = state.terminals.filter(
@@ -258,6 +268,34 @@ export function registerTerminalLayoutActions(
       } else {
         state.bulkMoveToDock();
       }
+    },
+  }));
+
+  actions.set("layout.undo", () => ({
+    id: "layout.undo",
+    title: "Undo Layout Change",
+    description: "Undo the last panel layout change (drag-and-drop, move, reorder)",
+    category: "terminal",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    isEnabled: () => useLayoutUndoStore.getState().canUndo,
+    run: async () => {
+      useLayoutUndoStore.getState().undo();
+    },
+  }));
+
+  actions.set("layout.redo", () => ({
+    id: "layout.redo",
+    title: "Redo Layout Change",
+    description: "Redo the last undone panel layout change",
+    category: "terminal",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    isEnabled: () => useLayoutUndoStore.getState().canRedo,
+    run: async () => {
+      useLayoutUndoStore.getState().redo();
     },
   }));
 
