@@ -63,6 +63,7 @@ const mocks = vi.hoisted(() => ({
     setFontFamily: vi.fn(),
     setHybridInputEnabled: vi.fn(),
     setHybridInputAutoFocus: vi.fn(),
+    setScreenReaderMode: vi.fn(),
   },
   worktreeConfigClient: {
     get: vi.fn(),
@@ -193,6 +194,7 @@ const { useScrollbackStore } = await import("@/store/scrollbackStore");
 const { useTerminalFontStore } = await import("@/store/terminalFontStore");
 const { useTerminalInputStore } = await import("@/store/terminalInputStore");
 const { usePerformanceModeStore } = await import("@/store/performanceModeStore");
+const { useScreenReaderStore } = await import("@/store/screenReaderStore");
 
 function createCallbacks(overrides: Partial<ActionCallbacks> = {}): ActionCallbacks {
   return {
@@ -302,6 +304,7 @@ beforeEach(() => {
     hybridInputEnabled: true,
     hybridInputAutoFocus: true,
   });
+  useScreenReaderStore.setState({ screenReaderMode: "auto", osAccessibilityEnabled: false });
 });
 
 describe("project action hardening", () => {
@@ -630,6 +633,15 @@ describe("preferences action hardening", () => {
       initial: true,
       expected: false,
       clientMock: mocks.terminalConfigClient.setHybridInputAutoFocus,
+    },
+    {
+      actionId: "terminalConfig.setScreenReaderMode" as const,
+      successArgs: { mode: "on" },
+      failureArgs: { mode: "off" },
+      read: () => useScreenReaderStore.getState().screenReaderMode,
+      initial: "auto",
+      expected: "on",
+      clientMock: mocks.terminalConfigClient.setScreenReaderMode,
     },
   ])("$actionId rolls state forward on success and back on failure", async (testCase) => {
     testCase.clientMock.mockResolvedValueOnce(undefined);
