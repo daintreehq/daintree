@@ -422,8 +422,18 @@ describe("TerminalResizeController", () => {
       } as unknown as ResizeControllerDeps["dataBuffer"];
     }
 
+    function attachCellDims(
+      managed: ReturnType<typeof createManagedTerminal>,
+      cell: { width: number; height: number } = { width: 10, height: 20 }
+    ) {
+      Object.assign(managed.terminal, {
+        _core: { _renderService: { dimensions: { css: { cell } } } },
+      });
+    }
+
     it("scheduleIdleResize stores an AbortController on managed.resizeJob", () => {
       const managed = createManagedTerminal();
+      attachCellDims(managed);
       managed.isFocused = false;
       managed.isVisible = false;
       managed.terminal.buffer.active.length = 300;
@@ -444,6 +454,7 @@ describe("TerminalResizeController", () => {
 
     it("clearResizeJob aborts the AbortController", () => {
       const managed = createManagedTerminal();
+      attachCellDims(managed);
       managed.isFocused = false;
       managed.isVisible = false;
       managed.terminal.buffer.active.length = 300;
@@ -467,6 +478,7 @@ describe("TerminalResizeController", () => {
 
     it("flushResize applies resize when resizeJob is pending", async () => {
       const managed = createManagedTerminal();
+      attachCellDims(managed);
       managed.isFocused = false;
       managed.isVisible = false;
       managed.terminal.buffer.active.length = 300;
@@ -491,6 +503,7 @@ describe("TerminalResizeController", () => {
 
     it("flushResize applies resize when resizeDebounceTimer is pending", () => {
       const managed = createManagedTerminal();
+      attachCellDims(managed);
       managed.isFocused = false;
       managed.isVisible = true;
       managed.terminal.buffer.active.length = 300;
@@ -514,6 +527,7 @@ describe("TerminalResizeController", () => {
 
     it("debounceResize stores timer in resizeDebounceTimer, not resizeJob", () => {
       const managed = createManagedTerminal();
+      attachCellDims(managed);
       managed.isFocused = false;
       managed.isVisible = true;
       managed.terminal.buffer.active.length = 300;
@@ -533,6 +547,7 @@ describe("TerminalResizeController", () => {
       (global as any).scheduler = undefined;
 
       const managed = createManagedTerminal();
+      attachCellDims(managed);
       managed.isFocused = false;
       managed.isVisible = false;
       managed.terminal.buffer.active.length = 300;
@@ -550,6 +565,7 @@ describe("TerminalResizeController", () => {
 
     it("postTask callback applies resize and clears resizeJob", async () => {
       const managed = createManagedTerminal();
+      attachCellDims(managed);
       managed.isFocused = false;
       managed.isVisible = false;
       managed.terminal.buffer.active.length = 300;

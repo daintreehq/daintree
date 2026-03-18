@@ -5,6 +5,8 @@ vi.mock("@/utils/logger", () => ({
   logWarn: vi.fn(),
 }));
 
+const globalAny = global as Record<string, unknown>;
+
 describe("scheduleDeferredSnapshotRestore", () => {
   let postTaskCallbacks: Array<() => void>;
 
@@ -31,10 +33,10 @@ describe("scheduleDeferredSnapshotRestore", () => {
 
     scheduleDeferredSnapshotRestore(runRestore);
 
-    expect((global as any).scheduler.postTask).toHaveBeenCalledWith(
-      expect.any(Function),
-      { priority: "background" }
-    );
+    const schedulerMock = globalAny["scheduler"] as { postTask: ReturnType<typeof vi.fn> };
+    expect(schedulerMock.postTask).toHaveBeenCalledWith(expect.any(Function), {
+      priority: "background",
+    });
     expect(runRestore).not.toHaveBeenCalled();
 
     postTaskCallbacks.forEach((cb) => cb());
@@ -42,14 +44,14 @@ describe("scheduleDeferredSnapshotRestore", () => {
   });
 
   it("falls back to setTimeout when scheduler is unavailable", () => {
-    (global as any).scheduler = undefined;
+    globalAny["scheduler"] = undefined;
 
     const timeouts: Array<() => void> = [];
     const origSetTimeout = global.setTimeout;
     global.setTimeout = vi.fn((cb: () => void) => {
       timeouts.push(cb);
-      return 0 as any;
-    }) as any;
+      return 0 as unknown as ReturnType<typeof setTimeout>;
+    }) as unknown as typeof setTimeout;
 
     const runRestore = vi.fn().mockResolvedValue(undefined);
 
