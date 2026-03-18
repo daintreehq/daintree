@@ -106,6 +106,12 @@ export interface Worktree {
 
   /** Current or last completed lifecycle script status */
   lifecycleStatus?: WorktreeLifecycleStatus;
+
+  /** Whether a plan file (TODO.md, PLAN.md, etc.) exists in the worktree root */
+  hasPlanFile?: boolean;
+
+  /** Relative path to the detected plan file (e.g. "TODO.md") */
+  planFilePath?: string;
 }
 
 /** Runtime worktree state (internal to WorktreeService) */

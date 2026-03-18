@@ -21,6 +21,7 @@ import { GitFileWatcher } from "../utils/gitFileWatcher.js";
 
 const GIT_WATCH_SELF_TRIGGER_COOLDOWN_MS = 1000;
 const WATCHER_FALLBACK_POLL_INTERVAL_MS = 30_000;
+const PLAN_FILE_CANDIDATES = ["TODO.md", "PLAN.md", "plan.md", "TASKS.md"] as const;
 
 export interface WorktreeMonitorConfig {
   basePollingInterval: number;
@@ -61,6 +62,10 @@ export class WorktreeMonitor {
   // Note state
   private aiNote: string | undefined;
   private aiNoteTimestamp: number | undefined;
+
+  // Plan file state
+  private hasPlanFile: boolean = false;
+  private planFilePath: string | undefined;
 
   // Issue/PR state
   private _issueNumber: number | undefined;
@@ -351,6 +356,8 @@ export class WorktreeMonitor {
       worktreeId: this.id,
       timestamp: Date.now(),
       lifecycleStatus: this._lifecycleStatus,
+      hasPlanFile: this.hasPlanFile || undefined,
+      planFilePath: this.planFilePath,
     };
 
     return ensureSerializable(snapshot) as WorktreeSnapshot;
@@ -658,12 +665,21 @@ export class WorktreeMonitor {
       }
 
       const noteData = await this.noteReader.read();
+
+      const detectedPlanFile = PLAN_FILE_CANDIDATES.find((candidate) =>
+        existsSync(pathJoin(this.path, candidate))
+      );
+      const nextHasPlanFile = detectedPlanFile !== undefined;
+      const nextPlanFilePath = detectedPlanFile;
+
       const currentHash = this.calculateStateHash(newChanges);
       const stateChanged = currentHash !== this.previousStateHash;
       const noteChanged =
         noteData?.content !== this.aiNote || noteData?.timestamp !== this.aiNoteTimestamp;
+      const planChanged =
+        nextHasPlanFile !== this.hasPlanFile || nextPlanFilePath !== this.planFilePath;
 
-      if (!stateChanged && !noteChanged && !branchChanged && !forceRefresh) {
+      if (!stateChanged && !noteChanged && !branchChanged && !planChanged && !forceRefresh) {
         return;
       }
 
@@ -713,6 +729,8 @@ export class WorktreeMonitor {
       this.mood = nextMood;
       this.aiNote = noteData?.content;
       this.aiNoteTimestamp = noteData?.timestamp;
+      this.hasPlanFile = nextHasPlanFile;
+      this.planFilePath = nextPlanFilePath;
       this._hasInitialStatus = true;
 
       this.emitUpdate();

@@ -4,6 +4,7 @@ import {
   CircleDot,
   Code,
   Copy,
+  FileText,
   Folder,
   GitCommitHorizontal,
   GitCompare,
@@ -73,6 +74,7 @@ export interface WorktreeMenuItemsProps {
   onOpenPRSidecar?: () => void;
   onOpenPRExternal?: () => void;
   onAttachIssue?: () => void;
+  onViewPlan?: () => void;
   onOpenReviewHub?: () => void;
   onCompareDiff?: () => void;
   onRunRecipe: (recipeId: string) => void;
@@ -110,6 +112,7 @@ export function WorktreeMenuItems({
   onOpenPRSidecar,
   onOpenPRExternal,
   onAttachIssue,
+  onViewPlan,
   onOpenReviewHub,
   onCompareDiff,
   onRunRecipe,
@@ -238,6 +241,13 @@ export function WorktreeMenuItems({
         <C.Item onSelect={onAttachIssue}>
           <Link className="w-3.5 h-3.5 mr-2" />
           {worktree.issueNumber ? "Change Issue..." : "Attach to Issue..."}
+        </C.Item>
+      )}
+
+      {onViewPlan && (
+        <C.Item onSelect={onViewPlan}>
+          <FileText className="w-3.5 h-3.5 mr-2" />
+          View Plan
         </C.Item>
       )}
 

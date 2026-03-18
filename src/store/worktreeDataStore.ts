@@ -178,7 +178,9 @@ export const useWorktreeDataStore = create<WorktreeDataStore>()((set, get) => ({
               existing.issueNumber === merged.issueNumber &&
               existing.issueTitle === merged.issueTitle &&
               existing.worktreeChanges === merged.worktreeChanges &&
-              existing.lifecycleStatus === merged.lifecycleStatus
+              existing.lifecycleStatus === merged.lifecycleStatus &&
+              existing.hasPlanFile === merged.hasPlanFile &&
+              existing.planFilePath === merged.planFilePath
             ) {
               return prev;
             }

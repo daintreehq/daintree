@@ -4,6 +4,7 @@ import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { WorktreeDeleteDialog } from "../WorktreeDeleteDialog";
 import { IssuePickerDialog } from "../IssuePickerDialog";
 import { ReviewHub } from "../ReviewHub/ReviewHub";
+import { PlanFileViewer } from "@/components/FileViewer/PlanFileViewer";
 import type { ConfirmDialogState } from "./hooks/useWorktreeActions";
 
 export interface WorktreeDialogsProps {
@@ -18,6 +19,8 @@ export interface WorktreeDialogsProps {
   onDetachIssue: () => void;
   showReviewHub: boolean;
   onCloseReviewHub: () => void;
+  showPlanViewer: boolean;
+  onClosePlanViewer: () => void;
 }
 
 export function WorktreeDialogs({
@@ -32,6 +35,8 @@ export function WorktreeDialogs({
   onDetachIssue,
   showReviewHub,
   onCloseReviewHub,
+  showPlanViewer,
+  onClosePlanViewer,
 }: WorktreeDialogsProps) {
   return (
     <>
@@ -59,6 +64,13 @@ export function WorktreeDialogs({
       />
 
       <ReviewHub isOpen={showReviewHub} worktreePath={worktree.path} onClose={onCloseReviewHub} />
+
+      <PlanFileViewer
+        isOpen={showPlanViewer}
+        filePath={worktree.planFilePath}
+        rootPath={worktree.path}
+        onClose={onClosePlanViewer}
+      />
     </>
   );
 }
