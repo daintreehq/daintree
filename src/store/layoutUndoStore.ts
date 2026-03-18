@@ -61,17 +61,18 @@ function applySnapshot(snapshot: LayoutSnapshot): void {
   }
 
   // Rebuild the terminals array preserving non-layout fields
-  const restoredTerminals: TerminalInstance[] = snapshot.terminals
-    .map((entry) => {
-      const current = currentById.get(entry.id);
-      if (!current) return null;
-      return {
-        ...current,
-        location: entry.location,
-        worktreeId: entry.worktreeId,
-      };
-    })
-    .filter((t): t is TerminalInstance => t !== null);
+  const restoredTerminals: TerminalInstance[] = [];
+  for (const entry of snapshot.terminals) {
+    const current = currentById.get(entry.id);
+    if (!current) continue;
+    const restored: TerminalInstance = { ...current, location: entry.location };
+    if (entry.worktreeId !== undefined) {
+      restored.worktreeId = entry.worktreeId;
+    } else {
+      delete restored.worktreeId;
+    }
+    restoredTerminals.push(restored);
+  }
 
   // Append any terminals not in the snapshot (added after snapshot was taken)
   for (const t of currentTerminals) {
