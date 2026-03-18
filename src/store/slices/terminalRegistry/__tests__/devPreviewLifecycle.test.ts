@@ -70,7 +70,6 @@ describe("dev-preview lifecycle integration", () => {
       focusedId: null,
       maximizedId: null,
       commandQueue: [],
-      activeTabByGroup: new Map(),
     });
   });
 

@@ -386,11 +386,15 @@ describe("TerminalFocusSlice - focusNextBlockedDock", () => {
       state = { ...currentState, ...updates };
     });
     getState = vi.fn(() => state);
-    state = createTerminalFocusSlice(getTerminals, mockGetActiveWorktreeId)(
+    const focusSlice = createTerminalFocusSlice(getTerminals, mockGetActiveWorktreeId)(
       setState,
       getState,
       {} as never
     );
+    // Add setActiveTab stub — in the real store this comes from the registry slice
+    state = { ...focusSlice, setActiveTab: vi.fn() } as TerminalFocusSlice & {
+      setActiveTab: ReturnType<typeof vi.fn>;
+    };
   });
 
   it("should be a no-op when no dock terminals are blocked", () => {
@@ -456,12 +460,14 @@ describe("TerminalFocusSlice - focusNextBlockedDock", () => {
   it("should call setActiveTab for grouped panels", () => {
     terminals = [makeDockTerminal("d1", "failed")];
     const mockGetPanelGroup = vi.fn(() => ({ id: "group-1", panelIds: ["d1", "d-other"] }));
-    const setActiveTabSpy = vi.spyOn(state, "setActiveTab");
 
     state.focusNextBlockedDock("worktree-1", mockGetPanelGroup);
 
     expect(mockGetPanelGroup).toHaveBeenCalledWith("d1");
-    expect(setActiveTabSpy).toHaveBeenCalledWith("group-1", "d1");
+    // setActiveTab is now on the registry slice, accessed via composed store
+    expect(
+      (state as TerminalFocusSlice & { setActiveTab: ReturnType<typeof vi.fn> }).setActiveTab
+    ).toHaveBeenCalledWith("group-1", "d1");
     expect(state.activeDockTerminalId).toBe("d1");
   });
 });

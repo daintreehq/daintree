@@ -228,6 +228,10 @@ export interface TerminalRegistrySlice {
     location: TabGroupLocation,
     worktreeId?: string | null
   ) => void;
+  /** Set the active tab for a tab group (single source of truth) */
+  setActiveTab: (groupId: string, panelId: string) => void;
+  /** Get the active tab ID for a tab group, returns null if not found */
+  getActiveTabId: (groupId: string) => string | null;
   /** Hydrate tab groups from persisted state, sanitizing invalid data */
   hydrateTabGroups: (tabGroups: TabGroup[], options?: { skipPersist?: boolean }) => void;
   /** @deprecated Use createTabGroup/addPanelToGroup instead */
