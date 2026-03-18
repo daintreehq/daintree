@@ -203,4 +203,67 @@ describe("WorkspaceClient resilience", () => {
     expect(result).toHaveLength(1);
     expect(result[0].id).toBe("valid-worktree");
   });
+
+  describe("setActiveWorktree echo suppression", () => {
+    let mockWindow: {
+      isDestroyed: ReturnType<typeof vi.fn>;
+      webContents: { isDestroyed: ReturnType<typeof vi.fn>; send: ReturnType<typeof vi.fn> };
+    };
+
+    beforeEach(() => {
+      mockWindow = {
+        isDestroyed: vi.fn(() => false),
+        webContents: { isDestroyed: vi.fn(() => false), send: vi.fn() },
+      };
+      getAllWindowsMock.mockReturnValue([mockWindow]);
+
+      // Make the host "ready" so requests go through
+      child.emit("message", { type: "ready" });
+    });
+
+    function resolveSetActive() {
+      const lastCall = child.postMessage.mock.calls.at(-1)!;
+      const requestId = (lastCall[0] as { requestId: string }).requestId;
+      child.emit("message", { type: "set-active-ack", requestId });
+    }
+
+    it("emits WORKTREE_ACTIVATED by default (backend-initiated)", async () => {
+      const clientPrivate = client as never as { currentProjectScopeId: string | null };
+      clientPrivate.currentProjectScopeId = "scope-a";
+
+      const promise = client.setActiveWorktree("wt-1");
+      resolveSetActive();
+      await promise;
+
+      expect(mockWindow.webContents.send).toHaveBeenCalledWith("worktree:activated", {
+        worktreeId: "wt-1",
+      });
+    });
+
+    it("does NOT emit WORKTREE_ACTIVATED when silent: true (renderer-initiated)", async () => {
+      const clientPrivate = client as never as { currentProjectScopeId: string | null };
+      clientPrivate.currentProjectScopeId = "scope-a";
+
+      const promise = client.setActiveWorktree("wt-1", { silent: true });
+      resolveSetActive();
+      await promise;
+
+      expect(mockWindow.webContents.send).not.toHaveBeenCalled();
+    });
+
+    it("does NOT emit WORKTREE_ACTIVATED when project scope changed mid-flight", async () => {
+      const clientPrivate = client as never as { currentProjectScopeId: string | null };
+      clientPrivate.currentProjectScopeId = "scope-a";
+
+      const promise = client.setActiveWorktree("wt-1");
+
+      // Simulate scope change before response arrives
+      clientPrivate.currentProjectScopeId = "scope-b";
+
+      resolveSetActive();
+      await promise;
+
+      expect(mockWindow.webContents.send).not.toHaveBeenCalled();
+    });
+  });
 });

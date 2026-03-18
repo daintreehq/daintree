@@ -681,7 +681,7 @@ export class WorkspaceClient extends EventEmitter {
     return result.state;
   }
 
-  async setActiveWorktree(worktreeId: string): Promise<void> {
+  async setActiveWorktree(worktreeId: string, options?: { silent?: boolean }): Promise<void> {
     const requestId = this.generateRequestId();
     const scopeAtStart = this.currentProjectScopeId;
 
@@ -691,8 +691,10 @@ export class WorkspaceClient extends EventEmitter {
       worktreeId,
     });
 
-    // Only notify the renderer if the project hasn't changed since we started the call.
-    if (scopeAtStart !== null && scopeAtStart === this.currentProjectScopeId) {
+    // Only notify the renderer if the project hasn't changed since we started the call
+    // and the caller hasn't opted out (renderer-initiated activations pass silent: true
+    // to avoid an echo loop where the renderer re-selects the worktree it just activated).
+    if (!options?.silent && scopeAtStart !== null && scopeAtStart === this.currentProjectScopeId) {
       this.sendToRenderer(CHANNELS.WORKTREE_ACTIVATED, { worktreeId });
     }
   }

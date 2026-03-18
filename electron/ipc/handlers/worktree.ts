@@ -108,7 +108,7 @@ export function registerWorktreeHandlers(deps: HandlerDependencies): () => void 
     if (!deps.worktreeService) {
       return;
     }
-    await deps.worktreeService.setActiveWorktree(payload.worktreeId);
+    await deps.worktreeService.setActiveWorktree(payload.worktreeId, { silent: true });
   };
   ipcMain.handle(CHANNELS.WORKTREE_SET_ACTIVE, handleWorktreeSetActive);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.WORKTREE_SET_ACTIVE));
