@@ -74,6 +74,73 @@ function isSnapshotValidForProject(snapshot: ProjectSnapshot, projectPath: strin
   return true;
 }
 
+function worktreeChangesEqual(
+  a: WorktreeState["worktreeChanges"],
+  b: WorktreeState["worktreeChanges"]
+): boolean {
+  if (a === b) return true;
+  if (a == null || b == null) return false;
+  // lastUpdated is set by the backend whenever git status is recomputed.
+  // If it matches, the full changes snapshot (including the file list) is
+  // identical, so we can skip the expensive array comparison.
+  if (a.lastUpdated !== undefined && a.lastUpdated === b.lastUpdated) return true;
+  return (
+    a.changedFileCount === b.changedFileCount &&
+    a.changes.length === b.changes.length &&
+    a.totalInsertions === b.totalInsertions &&
+    a.totalDeletions === b.totalDeletions &&
+    a.latestFileMtime === b.latestFileMtime &&
+    a.lastCommitMessage === b.lastCommitMessage &&
+    a.lastCommitTimestampMs === b.lastCommitTimestampMs
+  );
+}
+
+function lifecycleStatusEqual(
+  a: WorktreeState["lifecycleStatus"],
+  b: WorktreeState["lifecycleStatus"]
+): boolean {
+  if (a === b) return true;
+  if (a == null || b == null) return false;
+  return (
+    a.phase === b.phase &&
+    a.state === b.state &&
+    a.currentCommand === b.currentCommand &&
+    a.commandIndex === b.commandIndex &&
+    a.totalCommands === b.totalCommands &&
+    a.startedAt === b.startedAt &&
+    a.completedAt === b.completedAt &&
+    a.error === b.error
+  );
+}
+
+function worktreeStatesEqual(a: WorktreeState, b: WorktreeState): boolean {
+  return (
+    a.branch === b.branch &&
+    a.path === b.path &&
+    a.name === b.name &&
+    a.isCurrent === b.isCurrent &&
+    a.isMainWorktree === b.isMainWorktree &&
+    a.isDetached === b.isDetached &&
+    a.modifiedCount === b.modifiedCount &&
+    a.summary === b.summary &&
+    a.mood === b.mood &&
+    a.aiNote === b.aiNote &&
+    a.aiNoteTimestamp === b.aiNoteTimestamp &&
+    a.lastActivityTimestamp === b.lastActivityTimestamp &&
+    a.prNumber === b.prNumber &&
+    a.prUrl === b.prUrl &&
+    a.prState === b.prState &&
+    a.prTitle === b.prTitle &&
+    a.issueNumber === b.issueNumber &&
+    a.issueTitle === b.issueTitle &&
+    a.taskId === b.taskId &&
+    a.hasPlanFile === b.hasPlanFile &&
+    a.planFilePath === b.planFilePath &&
+    worktreeChangesEqual(a.worktreeChanges, b.worktreeChanges) &&
+    lifecycleStatusEqual(a.lifecycleStatus, b.lifecycleStatus)
+  );
+}
+
 function mergeFetchedWorktrees(
   fetchedStates: WorktreeState[],
   existingWorktrees: Map<string, WorktreeState>,
@@ -87,7 +154,7 @@ function mergeFetchedWorktrees(
     if (!fetched) continue;
 
     const branchChanged = fetched.branch !== existing.branch;
-    map.set(id, {
+    const merged = {
       ...fetched,
       prNumber: branchChanged ? fetched.prNumber : (fetched.prNumber ?? existing.prNumber),
       prUrl: branchChanged ? fetched.prUrl : (fetched.prUrl ?? existing.prUrl),
@@ -97,7 +164,12 @@ function mergeFetchedWorktrees(
         ? fetched.issueNumber
         : (fetched.issueNumber ?? existing.issueNumber),
       issueTitle: branchChanged ? fetched.issueTitle : (fetched.issueTitle ?? existing.issueTitle),
-    });
+    };
+
+    // Preserve the existing object reference when nothing has changed so that
+    // React.memo comparisons on WorktreeCard can bail out without a field-by-field
+    // check on every poll cycle.
+    map.set(id, worktreeStatesEqual(existing, merged) ? existing : merged);
   }
 
   // Persisted manual issue associations should override discovered metadata.
@@ -106,11 +178,12 @@ function mergeFetchedWorktrees(
       const worktree = map.get(id);
       if (!worktree) continue;
 
-      map.set(id, {
+      const withAssoc = {
         ...worktree,
         issueNumber: assoc.issueNumber,
         issueTitle: assoc.issueTitle,
-      });
+      };
+      map.set(id, worktreeStatesEqual(worktree, withAssoc) ? worktree : withAssoc);
     }
   }
 
@@ -159,29 +232,7 @@ export const useWorktreeDataStore = create<WorktreeDataStore>()((set, get) => ({
                 : (state.issueTitle ?? existing.issueTitle),
             };
 
-            if (
-              existing.branch === merged.branch &&
-              existing.path === merged.path &&
-              existing.name === merged.name &&
-              existing.isCurrent === merged.isCurrent &&
-              existing.isMainWorktree === merged.isMainWorktree &&
-              existing.modifiedCount === merged.modifiedCount &&
-              existing.summary === merged.summary &&
-              existing.mood === merged.mood &&
-              existing.aiNote === merged.aiNote &&
-              existing.aiNoteTimestamp === merged.aiNoteTimestamp &&
-              existing.lastActivityTimestamp === merged.lastActivityTimestamp &&
-              existing.prNumber === merged.prNumber &&
-              existing.prUrl === merged.prUrl &&
-              existing.prState === merged.prState &&
-              existing.prTitle === merged.prTitle &&
-              existing.issueNumber === merged.issueNumber &&
-              existing.issueTitle === merged.issueTitle &&
-              existing.worktreeChanges === merged.worktreeChanges &&
-              existing.lifecycleStatus === merged.lifecycleStatus &&
-              existing.hasPlanFile === merged.hasPlanFile &&
-              existing.planFilePath === merged.planFilePath
-            ) {
+            if (worktreeStatesEqual(existing, merged)) {
               return prev;
             }
           } else {

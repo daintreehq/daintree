@@ -1,4 +1,4 @@
-import { useCallback } from "react";
+import { useCallback, useMemo } from "react";
 import type { WorktreeState, RecipeTerminal } from "@/types";
 import { useErrorStore, type AppError } from "@/store";
 import { useRecipeStore } from "@/store/recipeStore";
@@ -143,12 +143,22 @@ export function useWorktreeActions({
     [launchAgent]
   );
 
-  return {
-    handleCopyTree,
-    handleOpenEditor,
-    handleOpenIssue,
-    handleOpenPR,
-    handleSaveLayout,
-    handleLaunchAgent,
-  };
+  return useMemo(
+    () => ({
+      handleCopyTree,
+      handleOpenEditor,
+      handleOpenIssue,
+      handleOpenPR,
+      handleSaveLayout,
+      handleLaunchAgent,
+    }),
+    [
+      handleCopyTree,
+      handleOpenEditor,
+      handleOpenIssue,
+      handleOpenPR,
+      handleSaveLayout,
+      handleLaunchAgent,
+    ]
+  );
 }

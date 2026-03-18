@@ -1,4 +1,4 @@
-import {
+import React, {
   Profiler,
   Suspense,
   lazy,
@@ -142,6 +142,181 @@ import type { WorktreeState, PanelKind } from "./types";
 import { actionService } from "./services/ActionService";
 import { voiceRecordingService } from "./services/VoiceRecordingService";
 import { useRenderProfiler } from "./utils/renderProfiler";
+import { useWorktreeDataStore } from "./store/worktreeDataStore";
+import type { WorktreeActions } from "./hooks/useWorktreeActions";
+import type { UseAgentLauncherReturn } from "./hooks/useAgentLauncher";
+
+interface SidebarWorktreeRowProps {
+  worktreeId: string;
+  activeWorktreeId: string | null;
+  focusedWorktreeId: string | null;
+  totalWorktreeCount: number;
+  selectWorktree: (id: string) => void;
+  worktreeActions: WorktreeActions;
+  availability: UseAgentLauncherReturn["availability"];
+  agentSettings: UseAgentLauncherReturn["agentSettings"];
+  homeDir: string | undefined;
+  dragStartOrder: string[];
+  isSortDisabled: boolean;
+  isPinned: boolean;
+}
+
+const SidebarWorktreeRow = React.memo(function SidebarWorktreeRow({
+  worktreeId,
+  activeWorktreeId,
+  focusedWorktreeId,
+  totalWorktreeCount,
+  selectWorktree,
+  worktreeActions,
+  availability,
+  agentSettings,
+  homeDir,
+  dragStartOrder,
+  isSortDisabled,
+  isPinned,
+}: SidebarWorktreeRowProps) {
+  const worktree = useWorktreeDataStore((state) => state.worktrees.get(worktreeId));
+
+  const onSelect = useCallback(() => selectWorktree(worktreeId), [selectWorktree, worktreeId]);
+  const onCopyTree = useCallback(
+    () => worktree && worktreeActions.handleCopyTree(worktree),
+    [worktree, worktreeActions]
+  );
+  const onOpenEditor = useCallback(
+    () => worktree && worktreeActions.handleOpenEditor(worktree),
+    [worktree, worktreeActions]
+  );
+  const onSaveLayout = useCallback(
+    () => worktree && worktreeActions.handleSaveLayout(worktree),
+    [worktree, worktreeActions]
+  );
+  const onLaunchAgent = useCallback(
+    (agentId: string) => worktreeActions.handleLaunchAgent(worktreeId, agentId),
+    [worktreeActions, worktreeId]
+  );
+
+  if (!worktree) return null;
+
+  const showDragHandle = !isSortDisabled && !isPinned;
+  const isActive = worktreeId === activeWorktreeId;
+  const isFocused = worktreeId === focusedWorktreeId;
+  const isSingleWorktree = totalWorktreeCount === 1;
+
+  if (showDragHandle) {
+    return (
+      <SortableWorktreeCard
+        worktreeId={worktreeId}
+        dragStartOrder={dragStartOrder}
+        disabled={isSortDisabled || isPinned}
+      >
+        {({ isDraggingSort, dragHandleListeners, dragHandleActivatorRef }) => (
+          <WorktreeCard
+            worktree={worktree}
+            isActive={isActive}
+            isFocused={isFocused}
+            isSingleWorktree={isSingleWorktree}
+            onSelect={onSelect}
+            onCopyTree={onCopyTree}
+            onOpenEditor={onOpenEditor}
+            onSaveLayout={onSaveLayout}
+            onLaunchAgent={onLaunchAgent}
+            agentAvailability={availability}
+            agentSettings={agentSettings}
+            homeDir={homeDir}
+            dragHandleListeners={dragHandleListeners}
+            dragHandleActivatorRef={dragHandleActivatorRef}
+            isDraggingSort={isDraggingSort}
+          />
+        )}
+      </SortableWorktreeCard>
+    );
+  }
+
+  return (
+    <SortableWorktreeCard worktreeId={worktreeId} dragStartOrder={dragStartOrder} disabled={true}>
+      {({ isDraggingSort }) => (
+        <WorktreeCard
+          worktree={worktree}
+          isActive={isActive}
+          isFocused={isFocused}
+          isSingleWorktree={isSingleWorktree}
+          onSelect={onSelect}
+          onCopyTree={onCopyTree}
+          onOpenEditor={onOpenEditor}
+          onSaveLayout={onSaveLayout}
+          onLaunchAgent={onLaunchAgent}
+          agentAvailability={availability}
+          agentSettings={agentSettings}
+          homeDir={homeDir}
+          isDraggingSort={isDraggingSort}
+        />
+      )}
+    </SortableWorktreeCard>
+  );
+});
+
+interface StaticWorktreeRowProps {
+  worktreeId: string;
+  activeWorktreeId: string | null;
+  focusedWorktreeId: string | null;
+  totalWorktreeCount: number;
+  selectWorktree: (id: string) => void;
+  worktreeActions: WorktreeActions;
+  availability: UseAgentLauncherReturn["availability"];
+  agentSettings: UseAgentLauncherReturn["agentSettings"];
+  homeDir: string | undefined;
+}
+
+const StaticWorktreeRow = React.memo(function StaticWorktreeRow({
+  worktreeId,
+  activeWorktreeId,
+  focusedWorktreeId,
+  totalWorktreeCount,
+  selectWorktree,
+  worktreeActions,
+  availability,
+  agentSettings,
+  homeDir,
+}: StaticWorktreeRowProps) {
+  const worktree = useWorktreeDataStore((state) => state.worktrees.get(worktreeId));
+
+  const onSelect = useCallback(() => selectWorktree(worktreeId), [selectWorktree, worktreeId]);
+  const onCopyTree = useCallback(
+    () => worktree && worktreeActions.handleCopyTree(worktree),
+    [worktree, worktreeActions]
+  );
+  const onOpenEditor = useCallback(
+    () => worktree && worktreeActions.handleOpenEditor(worktree),
+    [worktree, worktreeActions]
+  );
+  const onSaveLayout = useCallback(
+    () => worktree && worktreeActions.handleSaveLayout(worktree),
+    [worktree, worktreeActions]
+  );
+  const onLaunchAgent = useCallback(
+    (agentId: string) => worktreeActions.handleLaunchAgent(worktreeId, agentId),
+    [worktreeActions, worktreeId]
+  );
+
+  if (!worktree) return null;
+
+  return (
+    <WorktreeCard
+      worktree={worktree}
+      isActive={worktreeId === activeWorktreeId}
+      isFocused={worktreeId === focusedWorktreeId}
+      isSingleWorktree={totalWorktreeCount === 1}
+      onSelect={onSelect}
+      onCopyTree={onCopyTree}
+      onOpenEditor={onOpenEditor}
+      onSaveLayout={onSaveLayout}
+      onLaunchAgent={onLaunchAgent}
+      agentAvailability={availability}
+      agentSettings={agentSettings}
+      homeDir={homeDir}
+    />
+  );
+});
 
 interface SidebarContentProps {
   onOpenOverview: () => void;
@@ -567,18 +742,15 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   const isSortDisabled = isGroupedByType || hasQuery;
 
   const renderWorktreeCard = (worktree: WorktreeState) => (
-    <WorktreeCard
+    <StaticWorktreeRow
       key={worktree.id}
-      worktree={worktree}
-      isActive={worktree.id === activeWorktreeId}
-      isFocused={worktree.id === focusedWorktreeId}
-      isSingleWorktree={deferredWorktrees.length === 1}
-      onSelect={() => selectWorktree(worktree.id)}
-      onCopyTree={() => worktreeActions.handleCopyTree(worktree)}
-      onOpenEditor={() => worktreeActions.handleOpenEditor(worktree)}
-      onSaveLayout={() => worktreeActions.handleSaveLayout(worktree)}
-      onLaunchAgent={(type) => worktreeActions.handleLaunchAgent(worktree.id, type)}
-      agentAvailability={availability}
+      worktreeId={worktree.id}
+      activeWorktreeId={activeWorktreeId}
+      focusedWorktreeId={focusedWorktreeId}
+      totalWorktreeCount={deferredWorktrees.length}
+      selectWorktree={selectWorktree}
+      worktreeActions={worktreeActions}
+      availability={availability}
       agentSettings={agentSettings}
       homeDir={homeDir}
     />
@@ -676,38 +848,22 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
                 <div className="flex flex-col">
                   {filteredWorktrees.map((worktree) => {
                     const isPinned = pinnedWorktrees.includes(worktree.id);
-                    const showDragHandle = !isSortDisabled && !isPinned;
                     return (
-                      <SortableWorktreeCard
+                      <SidebarWorktreeRow
                         key={worktree.id}
                         worktreeId={worktree.id}
+                        activeWorktreeId={activeWorktreeId}
+                        focusedWorktreeId={focusedWorktreeId}
+                        totalWorktreeCount={deferredWorktrees.length}
+                        selectWorktree={selectWorktree}
+                        worktreeActions={worktreeActions}
+                        availability={availability}
+                        agentSettings={agentSettings}
+                        homeDir={homeDir}
                         dragStartOrder={dragStartOrder}
-                        disabled={isSortDisabled || isPinned}
-                      >
-                        {({ isDraggingSort, dragHandleListeners, dragHandleActivatorRef }) => (
-                          <WorktreeCard
-                            worktree={worktree}
-                            isActive={worktree.id === activeWorktreeId}
-                            isFocused={worktree.id === focusedWorktreeId}
-                            isSingleWorktree={deferredWorktrees.length === 1}
-                            onSelect={() => selectWorktree(worktree.id)}
-                            onCopyTree={() => worktreeActions.handleCopyTree(worktree)}
-                            onOpenEditor={() => worktreeActions.handleOpenEditor(worktree)}
-                            onSaveLayout={() => worktreeActions.handleSaveLayout(worktree)}
-                            onLaunchAgent={(type) =>
-                              worktreeActions.handleLaunchAgent(worktree.id, type)
-                            }
-                            agentAvailability={availability}
-                            agentSettings={agentSettings}
-                            homeDir={homeDir}
-                            dragHandleListeners={showDragHandle ? dragHandleListeners : undefined}
-                            dragHandleActivatorRef={
-                              showDragHandle ? dragHandleActivatorRef : undefined
-                            }
-                            isDraggingSort={isDraggingSort}
-                          />
-                        )}
-                      </SortableWorktreeCard>
+                        isSortDisabled={isSortDisabled}
+                        isPinned={isPinned}
+                      />
                     );
                   })}
                 </div>

@@ -1,3 +1,4 @@
+import React from "react";
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { cn } from "@/lib/utils";
@@ -40,7 +41,26 @@ interface SortableWorktreeCardProps {
   }) => React.ReactNode;
 }
 
-export function SortableWorktreeCard({
+function sortableWorktreeCardPropsAreEqual(
+  prev: SortableWorktreeCardProps,
+  next: SortableWorktreeCardProps
+): boolean {
+  if (
+    prev.worktreeId !== next.worktreeId ||
+    prev.disabled !== next.disabled ||
+    prev.children !== next.children
+  ) {
+    return false;
+  }
+  if (prev.dragStartOrder === next.dragStartOrder) return true;
+  if (prev.dragStartOrder.length !== next.dragStartOrder.length) return false;
+  for (let i = 0; i < prev.dragStartOrder.length; i++) {
+    if (prev.dragStartOrder[i] !== next.dragStartOrder[i]) return false;
+  }
+  return true;
+}
+
+export const SortableWorktreeCard = React.memo(function SortableWorktreeCard({
   worktreeId,
   dragStartOrder,
   disabled,
@@ -89,4 +109,4 @@ export function SortableWorktreeCard({
       })}
     </div>
   );
-}
+}, sortableWorktreeCardPropsAreEqual);

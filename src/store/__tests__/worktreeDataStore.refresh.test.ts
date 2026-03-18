@@ -139,6 +139,43 @@ describe("worktreeDataStore.refresh", () => {
     expect(useWorktreeDataStore.getState().worktrees.get("feature-new")).toBeDefined();
   });
 
+  it("preserves object reference for unchanged worktrees across a refresh cycle", async () => {
+    const main = createMockWorktree("main", { isMainWorktree: true, branch: "main" });
+    const feature = createMockWorktree("feature-stable", {
+      modifiedCount: 3,
+      mood: "active",
+    });
+
+    getAllMock.mockResolvedValueOnce([main, feature]);
+    refreshMock.mockResolvedValue(undefined);
+
+    useWorktreeDataStore.getState().initialize();
+    await vi.waitFor(() => {
+      expect(useWorktreeDataStore.getState().isInitialized).toBe(true);
+    });
+
+    const mainBefore = useWorktreeDataStore.getState().worktrees.get("main");
+    const featureBefore = useWorktreeDataStore.getState().worktrees.get("feature-stable");
+    expect(mainBefore).toBeDefined();
+    expect(featureBefore).toBeDefined();
+
+    // Refresh: main changes its modifiedCount; feature-stable data is identical.
+    const mainChanged = { ...main, modifiedCount: 1 };
+    const featureUnchanged = { ...feature };
+    getAllMock.mockResolvedValueOnce([mainChanged, featureUnchanged]);
+
+    await useWorktreeDataStore.getState().refresh();
+
+    // B (feature-stable) should keep the same reference — nothing changed.
+    const featureAfter = useWorktreeDataStore.getState().worktrees.get("feature-stable");
+    expect(featureAfter).toBe(featureBefore);
+
+    // A (main) should have a new reference — modifiedCount changed.
+    const mainAfter = useWorktreeDataStore.getState().worktrees.get("main");
+    expect(mainAfter).not.toBe(mainBefore);
+    expect(mainAfter?.modifiedCount).toBe(1);
+  });
+
   it("rejects stale onUpdate events arriving after a project switch (listenerGeneration guard)", async () => {
     const main = createMockWorktree("main", { isMainWorktree: true, branch: "main" });
     const foreignWorktree = createMockWorktree("foreign-wt");

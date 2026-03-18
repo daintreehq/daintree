@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useMemo } from "react";
+import React, { useCallback, useEffect, useRef, useMemo } from "react";
 import { X, LayoutGrid, FilterX, House } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useShallow } from "zustand/react/shallow";
@@ -9,6 +9,7 @@ import type { UseAgentLauncherReturn } from "@/hooks/useAgentLauncher";
 import { useWorktreeFilterStore } from "@/store/worktreeFilterStore";
 import { useTerminalStore } from "@/store/terminalStore";
 import { useErrorStore } from "@/store/errorStore";
+import { useWorktreeDataStore } from "@/store/worktreeDataStore";
 import {
   matchesFilters,
   sortWorktrees,
@@ -19,6 +20,85 @@ import {
 } from "@/lib/worktreeFilters";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
+
+interface OverviewWorktreeCardProps {
+  worktreeId: string;
+  activeWorktreeId: string | null;
+  focusedWorktreeId: string | null;
+  totalWorktreeCount: number;
+  variant?: "sidebar" | "grid";
+  onSelectWorktree: (worktreeId: string) => void;
+  onCopyTree: (worktree: WorktreeState) => Promise<string | undefined> | void;
+  onOpenEditor: (worktree: WorktreeState) => void;
+  onSaveLayout?: (worktree: WorktreeState) => void;
+  onLaunchAgent?: (worktreeId: string, agentId: string) => void;
+  agentAvailability?: UseAgentLauncherReturn["availability"];
+  agentSettings?: UseAgentLauncherReturn["agentSettings"];
+  homeDir?: string;
+  onClose: () => void;
+}
+
+const OverviewWorktreeCard = React.memo(function OverviewWorktreeCard({
+  worktreeId,
+  activeWorktreeId,
+  focusedWorktreeId,
+  totalWorktreeCount,
+  variant,
+  onSelectWorktree,
+  onCopyTree,
+  onOpenEditor,
+  onSaveLayout,
+  onLaunchAgent,
+  agentAvailability,
+  agentSettings,
+  homeDir,
+  onClose,
+}: OverviewWorktreeCardProps) {
+  const worktree = useWorktreeDataStore((state) => state.worktrees.get(worktreeId));
+
+  const handleSelect = useCallback(() => {
+    onSelectWorktree(worktreeId);
+    onClose();
+  }, [onSelectWorktree, onClose, worktreeId]);
+
+  const handleCopyTree = useCallback(
+    () => worktree && onCopyTree(worktree),
+    [worktree, onCopyTree]
+  );
+  const handleOpenEditor = useCallback(
+    () => worktree && onOpenEditor(worktree),
+    [worktree, onOpenEditor]
+  );
+  const handleSaveLayout = useCallback(
+    () => worktree && onSaveLayout?.(worktree),
+    [worktree, onSaveLayout]
+  );
+  const handleLaunchAgent = useCallback(
+    (agentId: string) => onLaunchAgent?.(worktreeId, agentId),
+    [onLaunchAgent, worktreeId]
+  );
+
+  if (!worktree) return null;
+
+  return (
+    <WorktreeCard
+      variant={variant}
+      worktree={worktree}
+      isActive={worktreeId === activeWorktreeId}
+      isFocused={worktreeId === focusedWorktreeId}
+      isSingleWorktree={totalWorktreeCount === 1}
+      onSelect={handleSelect}
+      onCopyTree={handleCopyTree}
+      onOpenEditor={handleOpenEditor}
+      onSaveLayout={onSaveLayout ? handleSaveLayout : undefined}
+      onLaunchAgent={onLaunchAgent ? handleLaunchAgent : undefined}
+      agentAvailability={agentAvailability}
+      agentSettings={agentSettings}
+      homeDir={homeDir}
+      onAfterTerminalSelect={onClose}
+    />
+  );
+});
 
 export interface WorktreeOverviewModalProps {
   isOpen: boolean;
@@ -264,14 +344,6 @@ export function WorktreeOverviewModal({
     [onClose]
   );
 
-  const handleWorktreeSelect = useCallback(
-    (worktreeId: string) => {
-      onSelectWorktree(worktreeId);
-      onClose();
-    },
-    [onSelectWorktree, onClose]
-  );
-
   if (!isOpen) return null;
 
   return (
@@ -483,24 +555,20 @@ export function WorktreeOverviewModal({
                             "border-[var(--color-state-active)]/70 shadow-md"
                         )}
                       >
-                        <WorktreeCard
-                          worktree={worktree}
-                          isActive={worktree.id === activeWorktreeId}
-                          isFocused={worktree.id === focusedWorktreeId}
-                          isSingleWorktree={worktrees.length === 1}
-                          onSelect={() => handleWorktreeSelect(worktree.id)}
-                          onCopyTree={() => onCopyTree(worktree)}
-                          onOpenEditor={() => onOpenEditor(worktree)}
-                          onSaveLayout={onSaveLayout ? () => onSaveLayout(worktree) : undefined}
-                          onLaunchAgent={
-                            onLaunchAgent
-                              ? (agentId) => onLaunchAgent(worktree.id, agentId)
-                              : undefined
-                          }
+                        <OverviewWorktreeCard
+                          worktreeId={worktree.id}
+                          activeWorktreeId={activeWorktreeId}
+                          focusedWorktreeId={focusedWorktreeId}
+                          totalWorktreeCount={worktrees.length}
+                          onSelectWorktree={onSelectWorktree}
+                          onCopyTree={onCopyTree}
+                          onOpenEditor={onOpenEditor}
+                          onSaveLayout={onSaveLayout}
+                          onLaunchAgent={onLaunchAgent}
                           agentAvailability={agentAvailability}
                           agentSettings={agentSettings}
                           homeDir={homeDir}
-                          onAfterTerminalSelect={onClose}
+                          onClose={onClose}
                         />
                       </div>
                     ))}
@@ -530,23 +598,21 @@ export function WorktreeOverviewModal({
                       "border-[var(--color-state-active)]/70 shadow-md"
                   )}
                 >
-                  <WorktreeCard
+                  <OverviewWorktreeCard
                     variant="grid"
-                    worktree={worktree}
-                    isActive={worktree.id === activeWorktreeId}
-                    isFocused={worktree.id === focusedWorktreeId}
-                    isSingleWorktree={worktrees.length === 1}
-                    onSelect={() => handleWorktreeSelect(worktree.id)}
-                    onCopyTree={() => onCopyTree(worktree)}
-                    onOpenEditor={() => onOpenEditor(worktree)}
-                    onSaveLayout={onSaveLayout ? () => onSaveLayout(worktree) : undefined}
-                    onLaunchAgent={
-                      onLaunchAgent ? (agentId) => onLaunchAgent(worktree.id, agentId) : undefined
-                    }
+                    worktreeId={worktree.id}
+                    activeWorktreeId={activeWorktreeId}
+                    focusedWorktreeId={focusedWorktreeId}
+                    totalWorktreeCount={worktrees.length}
+                    onSelectWorktree={onSelectWorktree}
+                    onCopyTree={onCopyTree}
+                    onOpenEditor={onOpenEditor}
+                    onSaveLayout={onSaveLayout}
+                    onLaunchAgent={onLaunchAgent}
                     agentAvailability={agentAvailability}
                     agentSettings={agentSettings}
                     homeDir={homeDir}
-                    onAfterTerminalSelect={onClose}
+                    onClose={onClose}
                   />
                 </div>
               ))}
