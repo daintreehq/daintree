@@ -5,7 +5,6 @@ import { getAIAgentInfo } from "@/lib/aiAgentDetection";
 import { useDiagnosticsStore } from "@/store/diagnosticsStore";
 import { useSidecarStore } from "@/store/sidecarStore";
 import { useTerminalStore } from "@/store/terminalStore";
-import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 
 export function registerPanelActions(actions: ActionRegistry, callbacks: ActionCallbacks): void {
   // Query action: list all panels with metadata
@@ -71,28 +70,20 @@ export function registerPanelActions(actions: ActionRegistry, callbacks: ActionC
   actions.set("panel.focus", () => ({
     id: "panel.focus",
     title: "Focus Panel",
-    description: "Focus a specific panel by ID, optionally switching to its worktree first",
+    description: "Focus a specific panel by ID",
     category: "panel",
     kind: "command",
     danger: "safe",
     scope: "renderer",
     argsSchema: z.object({
       panelId: z.string(),
-      worktreeId: z.string().optional(),
     }),
     run: async (args: unknown) => {
-      const { panelId, worktreeId } = args as { panelId: string; worktreeId?: string };
+      const { panelId } = args as { panelId: string };
       const terminalState = useTerminalStore.getState();
       const panel = terminalState.terminals.find((t) => t.id === panelId && t.location !== "trash");
-      // Auto-restore backgrounded panels when focused via action
-      if (panel?.location === "background") {
-        terminalState.restoreBackgroundTerminal(panelId);
-      }
       if (!panel) {
         throw new Error("Terminal panel no longer exists");
-      }
-      if (worktreeId) {
-        useWorktreeSelectionStore.getState().setActiveWorktree(worktreeId);
       }
       terminalState.activateTerminal(panelId);
     },

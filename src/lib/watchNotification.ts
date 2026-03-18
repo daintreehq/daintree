@@ -1,6 +1,5 @@
 import { notify } from "@/lib/notify";
 import { useTerminalStore } from "@/store/terminalStore";
-import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useUIStore } from "@/store/uiStore";
 
 export function fireWatchNotification(
@@ -23,24 +22,14 @@ export function fireWatchNotification(
       action: {
         label: "Go to terminal",
         onClick: () => {
-          if (worktreeId) {
-            useWorktreeSelectionStore.getState().setActiveWorktree(worktreeId);
-          }
           useTerminalStore.getState().setFocused(panelId, true);
         },
         actionId: "panel.focus",
-        actionArgs: { panelId, ...(worktreeId ? { worktreeId } : {}) },
+        actionArgs: { panelId },
       },
     });
     return;
   }
-
-  const navigateToPanel = (targetPanelId: string, targetWorktreeId?: string) => {
-    if (targetWorktreeId) {
-      useWorktreeSelectionStore.getState().setActiveWorktree(targetWorktreeId);
-    }
-    useTerminalStore.getState().setFocused(targetPanelId, true);
-  };
 
   notify({
     type: "success",
@@ -51,9 +40,11 @@ export function fireWatchNotification(
     correlationId: panelId,
     action: {
       label: "Go to terminal",
-      onClick: () => navigateToPanel(panelId, worktreeId),
+      onClick: () => {
+        useTerminalStore.getState().setFocused(panelId, true);
+      },
       actionId: "panel.focus",
-      actionArgs: { panelId, ...(worktreeId ? { worktreeId } : {}) },
+      actionArgs: { panelId },
     },
     coalesce: {
       key: "agent:completed",

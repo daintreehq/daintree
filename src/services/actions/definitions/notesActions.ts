@@ -1,6 +1,5 @@
 import { z } from "zod";
 import { notesClient } from "@/clients/notesClient";
-import { useTerminalStore } from "@/store";
 import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 
 export function registerNotesActions(actions: ActionRegistry, _callbacks: ActionCallbacks): void {
@@ -92,10 +91,6 @@ export function registerNotesActions(actions: ActionRegistry, _callbacks: Action
 
   const deleteArgsSchema = z.object({
     notePath: z.string().describe("Path to the note file (from notes.list)"),
-    panelId: z
-      .string()
-      .optional()
-      .describe("Panel ID to close (optional — if omitted, finds the panel by notePath)"),
     noteTitle: z.string().optional().describe("Note title for confirmation prompt"),
   });
   type DeleteArgs = z.infer<typeof deleteArgsSchema>;
@@ -103,14 +98,14 @@ export function registerNotesActions(actions: ActionRegistry, _callbacks: Action
   actions.set("notes.delete", () => ({
     id: "notes.delete",
     title: "Delete Note",
-    description: "Delete a note file and close its panel if open",
+    description: "Delete a note file",
     category: "notes",
     kind: "command",
     danger: "confirm",
     scope: "renderer",
     argsSchema: deleteArgsSchema,
     run: async (args: unknown) => {
-      const { notePath, panelId, noteTitle } = args as DeleteArgs;
+      const { notePath, noteTitle } = args as DeleteArgs;
 
       const displayTitle = noteTitle || "this note";
       const confirmed = window.confirm(
@@ -132,15 +127,6 @@ export function registerNotesActions(actions: ActionRegistry, _callbacks: Action
         }
       }
 
-      // Close the panel if we have or can find its ID
-      const targetPanelId =
-        panelId ??
-        useTerminalStore
-          .getState()
-          .terminals.find((t) => t.kind === "notes" && t.notePath === notePath)?.id;
-      if (targetPanelId) {
-        useTerminalStore.getState().removeTerminal(targetPanelId);
-      }
       return { success: true };
     },
   }));

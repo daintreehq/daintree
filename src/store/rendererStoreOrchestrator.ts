@@ -39,7 +39,22 @@ export function initStoreOrchestrator(): () => void {
   });
   unsubscribers.push(unsubFocus);
 
-  // 2. Terminal-removal cleanup: when terminals are removed, clean up
+  // 2. Background-restore reaction: when a backgrounded panel becomes
+  //    focused, automatically restore it to the grid.
+  const unsubBackgroundRestore = useTerminalStore.subscribe((state, prevState) => {
+    if (state.focusedId === prevState.focusedId) return;
+
+    const focusedId = state.focusedId;
+    if (!focusedId) return;
+
+    const panel = state.terminals.find((t) => t.id === focusedId);
+    if (panel?.location !== "background") return;
+
+    state.restoreBackgroundTerminal(focusedId);
+  });
+  unsubscribers.push(unsubBackgroundRestore);
+
+  // 3. Terminal-removal cleanup: when terminals are removed, clean up
   //    input store, console capture store, and worktree focus tracking.
   let prevTerminals = useTerminalStore.getState().terminals;
 
