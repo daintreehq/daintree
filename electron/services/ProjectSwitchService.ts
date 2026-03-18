@@ -4,6 +4,8 @@ import type { HandlerDependencies } from "../ipc/types.js";
 import { projectStore, DEFAULT_PROJECT_EMOJI } from "./ProjectStore.js";
 import { logBuffer } from "./LogBuffer.js";
 import { taskQueueService } from "./TaskQueueService.js";
+import { taskWorktreeService } from "./TaskWorktreeService.js";
+import { contextInjectionTracker } from "./ContextInjectionTracker.js";
 import { CHANNELS } from "../ipc/channels.js";
 import { sendToRenderer } from "../ipc/utils.js";
 import { randomUUID } from "crypto";
@@ -183,6 +185,8 @@ export class ProjectSwitchService {
       previousProjectId && this.deps.projectMcpManager
         ? safeCall(() => this.deps.projectMcpManager!.stopForProject(previousProjectId!))
         : Promise.resolve(),
+      safeCall(() => taskWorktreeService.onProjectSwitch()),
+      safeCall(() => contextInjectionTracker.onProjectSwitch()),
     ]);
 
     cleanupResults.forEach((result, index) => {
@@ -193,6 +197,8 @@ export class ProjectSwitchService {
           "EventBuffer",
           "TaskQueueService",
           "ProjectMcpManager",
+          "TaskWorktreeService",
+          "ContextInjectionTracker",
         ];
         console.error(`[ProjectSwitch] ${serviceNames[index]} cleanup failed:`, result.reason);
       }
