@@ -42,6 +42,14 @@ vi.mock("../TaskQueueService.js", () => ({
   taskQueueService: taskQueueServiceMock,
 }));
 
+vi.mock("../TaskWorktreeService.js", () => ({
+  taskWorktreeService: { onProjectSwitch: vi.fn() },
+}));
+
+vi.mock("../ContextInjectionTracker.js", () => ({
+  contextInjectionTracker: { onProjectSwitch: vi.fn() },
+}));
+
 vi.mock("../../ipc/utils.js", () => ({
   sendToRenderer: sendToRendererMock,
 }));
