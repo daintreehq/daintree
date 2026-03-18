@@ -256,7 +256,7 @@ function HealthSectionSkeleton() {
 function NoRemoteHint() {
   return (
     <div className="border-t border-canopy-border pt-3">
-      <div className="flex items-center gap-2 text-xs text-canopy-text/50">
+      <div className="flex items-center gap-2 text-xs text-canopy-text/75">
         <Github className="w-3.5 h-3.5" />
         <span>Connect a GitHub remote for CI status, issues, and PRs</span>
       </div>
