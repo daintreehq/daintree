@@ -549,6 +549,52 @@ describe("CrashRecoveryService", () => {
       expect(pending!.panels![1].isSuspect).toBe(true);
     });
 
+    it("includes agent state in panel summaries", () => {
+      const backupDir = path.join(userData, "backups");
+      fs.mkdirSync(backupDir, { recursive: true });
+      const terminals = [
+        {
+          id: "t1",
+          kind: "terminal",
+          title: "Shell",
+          location: "grid",
+        },
+        {
+          id: "t2",
+          kind: "agent",
+          title: "Claude",
+          location: "dock",
+          agentState: "working",
+          lastStateChange: 1700000000000,
+        },
+      ];
+      fs.writeFileSync(
+        path.join(backupDir, "session-state.json"),
+        JSON.stringify({ capturedAt: Date.now(), appState: { terminals } })
+      );
+
+      const markerPath = path.join(userData, "running.lock");
+      fs.writeFileSync(
+        markerPath,
+        JSON.stringify({
+          sessionStartMs: Date.now() - 5000,
+          appVersion: "1.0.0",
+          platform: "darwin",
+        })
+      );
+
+      storeMock.get.mockReturnValue({ autoRestoreOnCrash: false });
+
+      const svc = makeService();
+      svc.initialize();
+
+      const pending = svc.getPendingCrash();
+      expect(pending!.panels![0].agentState).toBeUndefined();
+      expect(pending!.panels![0].lastStateChange).toBeUndefined();
+      expect(pending!.panels![1].agentState).toBe("working");
+      expect(pending!.panels![1].lastStateChange).toBe(1700000000000);
+    });
+
     it("returns undefined panels when no backup exists", () => {
       const markerPath = path.join(userData, "running.lock");
       fs.writeFileSync(

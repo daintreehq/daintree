@@ -351,6 +351,10 @@ events.on("agent:state-changed", (payload) => {
       confidence: payload.confidence,
       worktreeId: payload.worktreeId,
     });
+
+    if (payload.state === "waiting" || payload.state === "completed") {
+      ptyManager.flushAgentSnapshot(payload.terminalId);
+    }
   }
 });
 

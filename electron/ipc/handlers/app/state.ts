@@ -119,7 +119,7 @@ export function registerAppStateHandlers(): () => void {
               ...t,
               kind,
               cwd: t.cwd || currentProject?.path || "",
-            };
+            } as import("../../../../shared/types/project.js").TerminalSnapshot;
           });
 
           // Normalize legacy focusPanelState (may have logsOpen/eventInspectorOpen instead of diagnosticsOpen)

@@ -18,6 +18,8 @@ export interface PanelSummary {
   worktreeId?: string;
   location: "grid" | "dock";
   isSuspect: boolean;
+  agentState?: string;
+  lastStateChange?: number;
 }
 
 export interface PendingCrash {
