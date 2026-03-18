@@ -15,10 +15,7 @@ const targetRect: TransitionRect = { x: 50, y: 500, width: 80, height: 40 };
 describe("PanelTransitionOverlay", () => {
   beforeEach(() => {
     vi.useFakeTimers();
-    vi.stubGlobal(
-      "matchMedia",
-      vi.fn().mockReturnValue({ matches: false }),
-    );
+    vi.stubGlobal("matchMedia", vi.fn().mockReturnValue({ matches: false }));
     document.body.removeAttribute("data-performance-mode");
 
     vi.spyOn(performance, "now").mockReturnValue(1000);
@@ -37,9 +34,7 @@ describe("PanelTransitionOverlay", () => {
 
   it("applies minimize duration and easing to ghost element", () => {
     const onComplete = vi.fn();
-    const { container } = render(
-      <PanelTransitionOverlay onTransitionComplete={onComplete} />,
-    );
+    const { container } = render(<PanelTransitionOverlay onTransitionComplete={onComplete} />);
 
     act(() => {
       triggerPanelTransition("panel-1", "minimize", sourceRect, targetRect);
@@ -48,16 +43,12 @@ describe("PanelTransitionOverlay", () => {
     const ghost = container.querySelector("[class*='absolute']") as HTMLElement;
     expect(ghost).not.toBeNull();
     expect(ghost.style.transitionDuration).toBe("120ms");
-    expect(ghost.style.transitionTimingFunction).toBe(
-      "cubic-bezier(0.3, 0, 0.8, 0.15)",
-    );
+    expect(ghost.style.transitionTimingFunction).toBe("cubic-bezier(0.3, 0, 0.8, 0.15)");
   });
 
   it("applies restore duration and easing to ghost element", () => {
     const onComplete = vi.fn();
-    const { container } = render(
-      <PanelTransitionOverlay onTransitionComplete={onComplete} />,
-    );
+    const { container } = render(<PanelTransitionOverlay onTransitionComplete={onComplete} />);
 
     act(() => {
       triggerPanelTransition("panel-1", "restore", sourceRect, targetRect);
@@ -66,9 +57,7 @@ describe("PanelTransitionOverlay", () => {
     const ghost = container.querySelector("[class*='absolute']") as HTMLElement;
     expect(ghost).not.toBeNull();
     expect(ghost.style.transitionDuration).toBe("200ms");
-    expect(ghost.style.transitionTimingFunction).toBe(
-      "cubic-bezier(0.16, 1, 0.3, 1)",
-    );
+    expect(ghost.style.transitionTimingFunction).toBe("cubic-bezier(0.16, 1, 0.3, 1)");
   });
 
   it("calls onTransitionComplete after minimize duration (120ms)", () => {
