@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { act, renderHook } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { usePaletteStore } from "@/store/paletteStore";
 import { useSearchablePalette } from "../useSearchablePalette";
 
@@ -12,12 +12,7 @@ interface PaletteItem {
 
 describe("useSearchablePalette", () => {
   beforeEach(() => {
-    vi.useFakeTimers();
     usePaletteStore.setState({ activePaletteId: null });
-  });
-
-  afterEach(() => {
-    vi.useRealTimers();
   });
 
   it("keeps selection on first navigable item when opening palette", () => {
@@ -29,7 +24,6 @@ describe("useSearchablePalette", () => {
     const { result } = renderHook(() =>
       useSearchablePalette<PaletteItem>({
         items,
-        debounceMs: 0,
         canNavigate: (item) => !item.disabled,
       })
     );
@@ -50,12 +44,28 @@ describe("useSearchablePalette", () => {
     const { result } = renderHook(() =>
       useSearchablePalette<PaletteItem>({
         items,
-        debounceMs: 0,
         canNavigate: (item) => !item.disabled,
       })
     );
 
     expect(result.current.selectedIndex).toBe(-1);
+  });
+
+  it("exposes isStale as false when query matches deferred value", () => {
+    const items: PaletteItem[] = [{ id: "a", name: "Alpha" }];
+
+    const { result } = renderHook(() =>
+      useSearchablePalette<PaletteItem>({ items })
+    );
+
+    expect(result.current.isStale).toBe(false);
+
+    act(() => {
+      result.current.setQuery("test");
+    });
+
+    // In test environment, useDeferredValue resolves synchronously within act()
+    expect(result.current.isStale).toBe(false);
   });
 
   describe("totalResults", () => {
@@ -68,7 +78,6 @@ describe("useSearchablePalette", () => {
       const { result } = renderHook(() =>
         useSearchablePalette<PaletteItem>({
           items,
-          debounceMs: 0,
           maxResults: 20,
         })
       );
@@ -86,7 +95,6 @@ describe("useSearchablePalette", () => {
       const { result } = renderHook(() =>
         useSearchablePalette<PaletteItem>({
           items,
-          debounceMs: 0,
           maxResults: 20,
         })
       );
@@ -110,7 +118,6 @@ describe("useSearchablePalette", () => {
       const { result } = renderHook(() =>
         useSearchablePalette<PaletteItem>({
           items,
-          debounceMs: 0,
           maxResults: 20,
           filterFn: (allItems, query) => {
             if (!query) return allItems;
@@ -123,9 +130,6 @@ describe("useSearchablePalette", () => {
 
       act(() => {
         result.current.setQuery("Beta");
-      });
-      act(() => {
-        vi.runAllTimers();
       });
 
       expect(result.current.results).toHaveLength(5);
@@ -141,7 +145,6 @@ describe("useSearchablePalette", () => {
       const { result } = renderHook(() =>
         useSearchablePalette<PaletteItem>({
           items,
-          debounceMs: 0,
           maxResults: 10,
           fuseOptions: {
             keys: ["name"],
@@ -157,9 +160,6 @@ describe("useSearchablePalette", () => {
       // Query that matches all items via fuse
       act(() => {
         result.current.setQuery("Searchable");
-      });
-      act(() => {
-        vi.runAllTimers();
       });
 
       expect(result.current.totalResults).toBeGreaterThan(0);

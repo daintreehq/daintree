@@ -47,7 +47,6 @@ const FUSE_OPTIONS: IFuseOptions<ActionPaletteItem> = {
 };
 
 const MAX_RESULTS = 20;
-const DEBOUNCE_MS = 200;
 const MRU_BOOST_FACTOR = 0.05;
 
 function toActionPaletteItem(entry: ActionManifestEntry): ActionPaletteItem {
@@ -131,7 +130,6 @@ export function useActionPalette(): UseActionPaletteReturn {
     items: allActions,
     filterFn,
     maxResults: MAX_RESULTS,
-    debounceMs: DEBOUNCE_MS,
     paletteId: "action",
   });
 

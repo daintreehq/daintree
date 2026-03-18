@@ -48,7 +48,6 @@ const FUSE_OPTIONS: IFuseOptions<QuickSwitcherItem> = {
 };
 
 const MAX_RESULTS = 20;
-const DEBOUNCE_MS = 150;
 const MRU_BOOST_FACTOR = 0.05;
 
 export function useQuickSwitcher(): UseQuickSwitcherReturn {
@@ -160,7 +159,6 @@ export function useQuickSwitcher(): UseQuickSwitcherReturn {
     items,
     filterFn,
     maxResults: MAX_RESULTS,
-    debounceMs: DEBOUNCE_MS,
     paletteId: "quick-switcher",
   });
 
