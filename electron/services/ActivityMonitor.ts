@@ -68,10 +68,11 @@ export interface ActivityMonitorOptions {
   pollingIntervalMs?: number;
   workingRecoveryDelayMs?: number;
   pollingMaxBootMs?: number;
+  maxWorkingSilenceMs?: number;
 }
 
 export interface ActivityStateMetadata {
-  trigger: "input" | "output" | "pattern";
+  trigger: "input" | "output" | "pattern" | "timeout";
   patternConfidence?: number;
 }
 
@@ -86,6 +87,7 @@ export class ActivityMonitor {
   private readonly SPINNER_ACTIVE_MS = 1500;
   private readonly COMPLETION_HOLD_MS = 500;
   private readonly WORKING_INDICATOR_TTL_MS = 5000;
+  private readonly MAX_WORKING_SILENCE_MS: number;
   private workingHoldUntil = 0;
 
   // Subsystem instances
@@ -144,6 +146,7 @@ export class ActivityMonitor {
   ) {
     this.IDLE_DEBOUNCE_MS = options?.idleDebounceMs ?? 6000;
     this.POLLING_MAX_BOOT_MS = options?.pollingMaxBootMs ?? 15000;
+    this.MAX_WORKING_SILENCE_MS = options?.maxWorkingSilenceMs ?? 180000;
 
     this.processStateValidator = options?.processStateValidator;
 
@@ -482,6 +485,14 @@ export class ActivityMonitor {
       }
     }
 
+    // Safety timeout: if no PTY output for MAX_WORKING_SILENCE_MS, force idle
+    if (this.isWorkingSilenceTimeout(now)) {
+      this.state = "idle";
+      this.patternBuf.clear();
+      this.onStateChange(this.terminalId, this.spawnedAt, "idle", { trigger: "timeout" });
+      return;
+    }
+
     const hasRecentOutputActivity =
       this.lastOutputActivityAt > 0 &&
       now - this.lastOutputActivityAt <= this.outputVolumeDetector.windowMs;
@@ -716,6 +727,7 @@ export class ActivityMonitor {
     if (metadata.trigger === "input") {
       this.lastActivityTimestamp = now;
     }
+    this.lastDataTimestamp = now;
     this.recordWorkingSignal(now);
     this.resetDebounceTimer();
 
@@ -757,6 +769,15 @@ export class ActivityMonitor {
         return;
       }
 
+      // Safety timeout: if no PTY output for MAX_WORKING_SILENCE_MS, force idle
+      if (this.isWorkingSilenceTimeout(Date.now())) {
+        this.state = "idle";
+        this.patternBuf.clear();
+        this.onStateChange(this.terminalId, this.spawnedAt, "idle", { trigger: "timeout" });
+        this.debounceTimer = null;
+        return;
+      }
+
       if (this.lastPatternResult?.isWorking) {
         this.resetDebounceTimer();
         return;
@@ -787,6 +808,14 @@ export class ActivityMonitor {
       this.onStateChange(this.terminalId, this.spawnedAt, "idle");
       this.debounceTimer = null;
     }, this.IDLE_DEBOUNCE_MS);
+  }
+
+  private isWorkingSilenceTimeout(now: number): boolean {
+    return (
+      this.state === "busy" &&
+      this.bootDetector.hasExitedBootState &&
+      now - this.lastDataTimestamp >= this.MAX_WORKING_SILENCE_MS
+    );
   }
 
   private hasActiveChildrenSafe(): boolean | null {
