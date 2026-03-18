@@ -75,6 +75,8 @@ export interface TerminalPaneProps {
   spawnError?: SpawnError;
   gridPanelCount?: number;
   detectedProcessId?: string;
+  // Group-level ambient state: highest-urgency state across all tabs, for container border styling
+  ambientAgentState?: AgentState;
   // Tab support
   tabs?: import("@/components/Panel/TabButton").TabInfo[];
   onTabClick?: (tabId: string) => void;
@@ -110,6 +112,7 @@ function TerminalPaneComponent({
   spawnError,
   gridPanelCount,
   detectedProcessId,
+  ambientAgentState,
   tabs,
   onTabClick,
   onTabClose,
@@ -616,6 +619,7 @@ function TerminalPaneComponent({
       flowStatus={flowStatus}
       isPinged={isPinged}
       wasJustSelected={wasJustSelected}
+      ambientAgentState={ambientAgentState}
       tabs={tabs}
       onTabClick={onTabClick}
       onTabClose={onTabClose}

@@ -208,6 +208,9 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
               !isOpen &&
                 blockedState === "failed" &&
                 "bg-[var(--dock-item-bg-failed)] border-[var(--dock-item-border-failed)]",
+              !isOpen &&
+                blockedState === "waiting" &&
+                "bg-[var(--dock-item-bg-waiting)] border-[var(--dock-item-border-waiting)]",
               isDeprioritized && "opacity-50"
             )}
             onClick={(e) => {
