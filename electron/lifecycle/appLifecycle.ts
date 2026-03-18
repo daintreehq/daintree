@@ -58,8 +58,7 @@ export function registerAppLifecycleHandlers(opts: AppLifecycleOptions): void {
 
   app.on("second-instance", (_event, commandLine, _workingDirectory) => {
     console.log("[MAIN] Second instance detected, focusing main window");
-    const mainWindow =
-      opts.windowRegistry?.getPrimary()?.browserWindow ?? opts.getMainWindow();
+    const mainWindow = opts.windowRegistry?.getPrimary()?.browserWindow ?? opts.getMainWindow();
     if (mainWindow) {
       if (mainWindow.isMinimized()) mainWindow.restore();
       mainWindow.focus();
