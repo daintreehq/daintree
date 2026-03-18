@@ -1,21 +1,20 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
-// Mock FdMonitor before importing ResourceGovernor
+// Shared mock state that tests can reconfigure
+let mockCheckForLeaks: ReturnType<typeof vi.fn>;
+let mockFdMonitorSupported: boolean;
+
 vi.mock("../FdMonitor.js", () => {
-  const FdMonitor = vi.fn().mockImplementation(() => ({
-    supported: true,
-    getFdCount: vi.fn().mockReturnValue(10),
-    checkForLeaks: vi.fn().mockReturnValue({
-      totalFds: 10,
-      baselineFds: 5,
-      estimatedTerminalFds: 5,
-      activeTerminals: 2,
-      isWarning: false,
-      orphanedPids: [],
-      ptmxLimit: 511,
-    }),
-  }));
-  return { FdMonitor, isProcessAlive: vi.fn() };
+  return {
+    FdMonitor: class {
+      get supported() {
+        return mockFdMonitorSupported;
+      }
+      getFdCount = vi.fn().mockReturnValue(10);
+      checkForLeaks = (...args: any[]) => mockCheckForLeaks(...args);
+    },
+    isProcessAlive: vi.fn(),
+  };
 });
 
 vi.mock("../metrics.js", () => ({
@@ -31,7 +30,6 @@ vi.mock("node:v8", () => ({
 }));
 
 import { ResourceGovernor, type ResourceGovernorDeps } from "../ResourceGovernor.js";
-import { FdMonitor } from "../FdMonitor.js";
 
 function createMockDeps(overrides?: Partial<ResourceGovernorDeps>): ResourceGovernorDeps {
   return {
@@ -43,9 +41,21 @@ function createMockDeps(overrides?: Partial<ResourceGovernorDeps>): ResourceGove
   };
 }
 
+const defaultLeakResult = {
+  totalFds: 10,
+  baselineFds: 5,
+  estimatedTerminalFds: 5,
+  activeTerminals: 2,
+  isWarning: false,
+  orphanedPids: [] as number[],
+  ptmxLimit: 511,
+};
+
 describe("ResourceGovernor", () => {
   beforeEach(() => {
     vi.useFakeTimers();
+    mockFdMonitorSupported = true;
+    mockCheckForLeaks = vi.fn().mockReturnValue({ ...defaultLeakResult });
   });
 
   afterEach(() => {
@@ -67,26 +77,21 @@ describe("ResourceGovernor", () => {
 
     vi.advanceTimersByTime(2000);
     expect(deps.getTerminalPids).toHaveBeenCalled();
+    expect(mockCheckForLeaks).toHaveBeenCalled();
 
     governor.dispose();
   });
 
   it("emits fd-leak-warning when FD monitor reports warning", () => {
-    const mockFdMonitor = {
-      supported: true,
-      getFdCount: vi.fn().mockReturnValue(10),
-      checkForLeaks: vi.fn().mockReturnValue({
-        totalFds: 50,
-        baselineFds: 5,
-        estimatedTerminalFds: 45,
-        activeTerminals: 2,
-        isWarning: true,
-        orphanedPids: [1234],
-        ptmxLimit: 511,
-      }),
-    };
-
-    (FdMonitor as unknown as ReturnType<typeof vi.fn>).mockImplementation(() => mockFdMonitor);
+    mockCheckForLeaks.mockReturnValue({
+      totalFds: 50,
+      baselineFds: 5,
+      estimatedTerminalFds: 45,
+      activeTerminals: 2,
+      isWarning: true,
+      orphanedPids: [1234],
+      ptmxLimit: 511,
+    });
 
     const deps = createMockDeps({
       getTerminalPids: vi.fn().mockReturnValue([
@@ -127,39 +132,35 @@ describe("ResourceGovernor", () => {
     governor.dispose();
   });
 
+  it("skips FD monitoring on unsupported platforms", () => {
+    mockFdMonitorSupported = false;
+
+    const deps = createMockDeps();
+    const governor = new ResourceGovernor(deps);
+    governor.start();
+
+    vi.advanceTimersByTime(2000);
+
+    expect(mockCheckForLeaks).not.toHaveBeenCalled();
+
+    governor.dispose();
+  });
+
   describe("trackKilledPid", () => {
     it("tracks killed PIDs and passes them to FdMonitor after grace period", () => {
-      const mockCheckForLeaks = vi.fn().mockReturnValue({
-        totalFds: 10,
-        baselineFds: 5,
-        estimatedTerminalFds: 5,
-        activeTerminals: 0,
-        isWarning: false,
-        orphanedPids: [],
-        ptmxLimit: 511,
-      });
-
-      const mockFdMonitor = {
-        supported: true,
-        getFdCount: vi.fn().mockReturnValue(10),
-        checkForLeaks: mockCheckForLeaks,
-      };
-
-      (FdMonitor as unknown as ReturnType<typeof vi.fn>).mockImplementation(() => mockFdMonitor);
-
       const deps = createMockDeps();
       const governor = new ResourceGovernor(deps);
       governor.start();
 
       governor.trackKilledPid(5678);
 
-      // First tick — grace period not elapsed yet
+      // First tick — grace period not elapsed yet (only 2s, need 4s)
       vi.advanceTimersByTime(2000);
-      expect(mockCheckForLeaks).toHaveBeenCalledWith(0, []);
+      expect(mockCheckForLeaks).toHaveBeenLastCalledWith(0, []);
 
-      // After grace period (4s total)
+      // After grace period (6s total from start, 4s from trackKilledPid)
       vi.advanceTimersByTime(4000);
-      expect(mockCheckForLeaks).toHaveBeenCalledWith(0, [5678]);
+      expect(mockCheckForLeaks).toHaveBeenLastCalledWith(0, [5678]);
 
       governor.dispose();
     });
