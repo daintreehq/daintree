@@ -223,6 +223,21 @@ describe("getGroupAmbientAgentState", () => {
     const panels = [{ agentState: undefined }, { agentState: undefined }];
     expect(getGroupAmbientAgentState(panels)).toBe(undefined);
   });
+
+  it("ignores directing state (not in working tier)", () => {
+    const panels = [{ agentState: "directing" as const }, { agentState: "idle" as const }];
+    expect(getGroupAmbientAgentState(panels)).toBe(undefined);
+  });
+
+  it("returns 'failed' for running + failed mix (failed outranks working tier)", () => {
+    const panels = [{ agentState: "running" as const }, { agentState: "failed" as const }];
+    expect(getGroupAmbientAgentState(panels)).toBe("failed");
+  });
+
+  it("returns 'working' for completed + working mix", () => {
+    const panels = [{ agentState: "completed" as const }, { agentState: "working" as const }];
+    expect(getGroupAmbientAgentState(panels)).toBe("working");
+  });
 });
 
 describe("isGroupDeprioritized", () => {

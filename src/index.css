@@ -1053,11 +1053,6 @@ body,
     will-change: auto;
   }
 
-  .panel-state-working {
-    animation: none;
-    border-color: color-mix(in oklab, var(--color-activity-working) 35%, transparent);
-  }
-
   /* Disable focus ring transitions for reduced motion */
   *:focus-visible {
     transition: none !important;
@@ -1150,6 +1145,13 @@ body,
   }
   50% {
     border-color: color-mix(in oklab, var(--color-activity-working) 55%, transparent);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .panel-state-working {
+    animation: none;
+    border-color: color-mix(in oklab, var(--color-activity-working) 35%, transparent);
   }
 }
 
