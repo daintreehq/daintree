@@ -2,44 +2,18 @@
  * @vitest-environment jsdom
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, fireEvent, act, cleanup, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent, cleanup } from "@testing-library/react";
 import { IssueBulkActionBar } from "../IssueBulkActionBar";
 import type { GitHubIssue } from "@shared/types/github";
-import type { ActionDispatchResult } from "@shared/types/actions";
 
-vi.mock("@/services/ActionService", () => ({
-  actionService: { dispatch: vi.fn().mockResolvedValue({ ok: true }) },
-}));
+const mockOpenBulkCreateDialog = vi.fn();
 
-vi.mock("@/lib/notify", () => ({
-  notify: vi.fn(),
-}));
-
-vi.mock("@/store/worktreeDataStore", () => ({
-  useWorktreeDataStore: Object.assign(
-    vi.fn((selector: (s: { worktrees: Map<string, unknown> }) => unknown) =>
-      selector({ worktrees: new Map() })
-    ),
-    { getState: () => ({ worktrees: new Map() }) }
+vi.mock("@/store/worktreeStore", () => ({
+  useWorktreeSelectionStore: vi.fn((selector: (s: Record<string, unknown>) => unknown) =>
+    selector({
+      openBulkCreateDialog: mockOpenBulkCreateDialog,
+    })
   ),
-}));
-
-vi.mock("@/components/Worktree/branchPrefixUtils", () => ({
-  detectPrefixFromIssue: () => "feature",
-  buildBranchName: (_prefix: string, slug: string) => `feature/${slug}`,
-}));
-
-vi.mock("@/utils/textParsing", () => ({
-  generateBranchSlug: (title: string) => title.toLowerCase().replace(/\s+/g, "-"),
-}));
-
-let capturedRecipePickerProps: { isOpen: boolean; onSelect: (id: string | null) => void } | null =
-  null;
-vi.mock("../RecipePicker", () => ({
-  RecipePicker: (props: { isOpen: boolean; onSelect: (id: string | null) => void }) => {
-    capturedRecipePickerProps = props;
-    return null;
-  },
 }));
 
 const makeIssue = (n: number): GitHubIssue => ({
@@ -55,7 +29,6 @@ const makeIssue = (n: number): GitHubIssue => ({
 
 beforeEach(() => {
   vi.clearAllMocks();
-  capturedRecipePickerProps = null;
 });
 
 afterEach(() => {
@@ -63,7 +36,7 @@ afterEach(() => {
 });
 
 describe("IssueBulkActionBar", () => {
-  it("returns null when no issues selected and idle", () => {
+  it("returns null when no issues selected", () => {
     const { container } = render(<IssueBulkActionBar selectedIssues={[]} onClear={vi.fn()} />);
     expect(container.innerHTML).toBe("");
   });
@@ -91,10 +64,15 @@ describe("IssueBulkActionBar", () => {
     expect(classes).not.toContain("rounded-full");
     expect(classes).not.toContain("backdrop-blur");
     expect(classes).not.toContain("bg-black");
-    expect(classes).not.toContain("animate-pill-enter");
 
     expect(classes).toContain("border-t");
     expect(classes).toContain("shrink-0");
+  });
+
+  it("shows 'selected' label next to count badge", () => {
+    render(<IssueBulkActionBar selectedIssues={[makeIssue(1), makeIssue(2)]} onClear={vi.fn()} />);
+    expect(screen.getByText("selected")).toBeTruthy();
+    expect(screen.getByText("2")).toBeTruthy();
   });
 
   it("calls onClear when dismiss button is clicked", () => {
@@ -110,49 +88,20 @@ describe("IssueBulkActionBar", () => {
     expect(screen.getByLabelText("Clear selection")).toBeTruthy();
   });
 
-  it("clicking Create Worktrees opens the recipe picker", () => {
-    render(<IssueBulkActionBar selectedIssues={[makeIssue(1)]} onClear={vi.fn()} />);
-
-    fireEvent.click(screen.getByRole("button", { name: /Create Worktrees/i }));
-    expect(capturedRecipePickerProps?.isOpen).toBe(true);
-  });
-
-  it("shows executing state with spinner and progress text", async () => {
-    const { actionService } = await import("@/services/ActionService");
-    let resolveDispatch!: (v: ActionDispatchResult) => void;
-    vi.mocked(actionService.dispatch).mockImplementation(
-      () =>
-        new Promise((resolve) => {
-          resolveDispatch = resolve;
-        })
+  it("opens bulk create dialog via store and closes dropdown when Create Worktrees is clicked", () => {
+    const onCloseDropdown = vi.fn();
+    const issues = [makeIssue(1), makeIssue(2)];
+    render(
+      <IssueBulkActionBar
+        selectedIssues={issues}
+        onClear={vi.fn()}
+        onCloseDropdown={onCloseDropdown}
+      />
     );
 
-    render(<IssueBulkActionBar selectedIssues={[makeIssue(1)]} onClear={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: /Create Worktrees/i }));
 
-    await act(async () => {
-      capturedRecipePickerProps?.onSelect(null);
-    });
-
-    expect(screen.getByText(/Creating 0\/1/)).toBeTruthy();
-
-    await act(async () => {
-      resolveDispatch!({ ok: true, result: undefined });
-    });
-  });
-
-  it("shows done state with created count after execution completes", async () => {
-    const { actionService } = await import("@/services/ActionService");
-    vi.mocked(actionService.dispatch).mockResolvedValue({ ok: true } as never);
-
-    render(<IssueBulkActionBar selectedIssues={[makeIssue(1)]} onClear={vi.fn()} />);
-
-    await act(async () => {
-      capturedRecipePickerProps?.onSelect(null);
-    });
-
-    await waitFor(() => {
-      expect(screen.getByText("1 created")).toBeTruthy();
-    });
-    expect(screen.getByLabelText("Dismiss")).toBeTruthy();
+    expect(mockOpenBulkCreateDialog).toHaveBeenCalledWith(issues);
+    expect(onCloseDropdown).toHaveBeenCalled();
   });
 });
