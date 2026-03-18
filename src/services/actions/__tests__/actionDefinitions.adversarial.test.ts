@@ -248,6 +248,7 @@ function createCallbacks(overrides: Partial<ActionCallbacks> = {}): ActionCallba
     getActiveWorktreeId: () => undefined,
     getWorktrees: () => [],
     getFocusedId: () => null,
+    getIsSettingsOpen: vi.fn(() => false),
     getGridNavigation: () => ({
       findNearest: () => null,
       findByIndex: () => null,

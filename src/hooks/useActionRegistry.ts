@@ -7,6 +7,8 @@ import {
 import type { ActionContext } from "@shared/types/actions";
 import { useTerminalStore } from "@/store/terminalStore";
 import { useProjectStore } from "@/store/projectStore";
+import { useWorktreeDataStore } from "@/store/worktreeDataStore";
+import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 
 export type { ActionCallbacks };
 
@@ -50,6 +52,7 @@ export function useActionRegistry(options: ActionCallbacks): void {
       getActiveWorktreeId: () => callbacksRef.current.getActiveWorktreeId(),
       getWorktrees: () => callbacksRef.current.getWorktrees(),
       getFocusedId: () => callbacksRef.current.getFocusedId(),
+      getIsSettingsOpen: () => callbacksRef.current.getIsSettingsOpen(),
       getGridNavigation: () => callbacksRef.current.getGridNavigation(),
     };
 
@@ -68,15 +71,26 @@ export function useActionRegistry(options: ActionCallbacks): void {
         ? terminalState.terminals.find((t) => t.id === focusedId)
         : null;
 
+      const activeWorktreeId = callbacksRef.current.getActiveWorktreeId() ?? undefined;
+      const activeWorktree = activeWorktreeId
+        ? useWorktreeDataStore.getState().worktrees.get(activeWorktreeId)
+        : undefined;
+
       return {
         projectId: project?.id,
         projectName: project?.name,
         projectPath: project?.path,
-        activeWorktreeId: callbacksRef.current.getActiveWorktreeId() ?? undefined,
+        activeWorktreeId,
+        activeWorktreeName: activeWorktree?.name,
+        activeWorktreePath: activeWorktree?.path,
+        activeWorktreeBranch: activeWorktree?.branch,
+        activeWorktreeIsMain: activeWorktree?.isMainWorktree,
+        focusedWorktreeId: useWorktreeSelectionStore.getState().focusedWorktreeId ?? undefined,
         focusedTerminalId: focusedId ?? undefined,
         focusedTerminalKind: focusedTerminal?.kind,
         focusedTerminalType: focusedTerminal?.type,
         focusedTerminalTitle: focusedTerminal?.title,
+        isSettingsOpen: callbacksRef.current.getIsSettingsOpen(),
       };
     });
 

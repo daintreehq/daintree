@@ -39,6 +39,7 @@ export interface ActionCallbacks {
   getActiveWorktreeId: () => string | undefined;
   getWorktrees: () => Worktree[];
   getFocusedId: () => string | null;
+  getIsSettingsOpen: () => boolean;
   getGridNavigation: () => {
     findNearest: (currentId: string, direction: NavigationDirection) => string | null;
     findByIndex: (index: number) => string | null;

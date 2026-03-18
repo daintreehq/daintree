@@ -70,6 +70,7 @@ async function createRegistry() {
     getActiveWorktreeId: () => undefined,
     getWorktrees: () => [],
     getFocusedId: () => null,
+    getIsSettingsOpen: () => false,
     getGridNavigation: () => ({
       findNearest: () => null,
       findByIndex: () => null,

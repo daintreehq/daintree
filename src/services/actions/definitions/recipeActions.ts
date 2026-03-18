@@ -1,7 +1,6 @@
 import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 import { z } from "zod";
 import type { ActionContext } from "@shared/types/actions";
-import { useProjectStore } from "@/store/projectStore";
 import { useRecipeStore } from "@/store/recipeStore";
 import { useWorktreeDataStore } from "@/store/worktreeDataStore";
 
@@ -53,8 +52,7 @@ export function registerRecipeActions(actions: ActionRegistry, _callbacks: Actio
       const worktree = targetWorktreeId
         ? useWorktreeDataStore.getState().worktrees.get(targetWorktreeId)
         : null;
-      const worktreePath =
-        worktree?.path ?? useProjectStore.getState().currentProject?.path ?? undefined;
+      const worktreePath = worktree?.path ?? ctx.projectPath;
 
       if (!worktreePath) {
         throw new Error("No worktree or project path available to run recipe");
