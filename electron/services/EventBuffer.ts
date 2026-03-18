@@ -265,7 +265,6 @@ export class EventBuffer {
   }
 
   onProjectSwitch(): void {
-    console.log("Handling project switch in EventBuffer - clearing events");
     this.clear();
   }
 
@@ -299,6 +298,6 @@ export class EventBuffer {
   }
 
   private generateId(): string {
-    return `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    return `${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
   }
 }

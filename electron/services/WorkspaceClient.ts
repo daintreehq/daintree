@@ -599,7 +599,7 @@ export class WorkspaceClient extends EventEmitter {
   }
 
   private generateRequestId(): string {
-    return `req-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    return `req-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
   }
 
   private sendToRenderer(channel: string, ...args: unknown[]): void {

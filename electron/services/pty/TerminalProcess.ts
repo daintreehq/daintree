@@ -113,6 +113,7 @@ export class TerminalProcess {
   private _activityTier: "active" | "background" = "active";
   private _restoreBannerStart: IMarker | null = null;
   private _restoreBannerEnd: IMarker | null = null;
+  private readonly textDecoder = new TextDecoder();
 
   private restoreSessionIfPresent(headlessTerminal: HeadlessTerminalType): void {
     if (!TERMINAL_SESSION_PERSISTENCE_ENABLED) return;
@@ -1206,7 +1207,7 @@ export class TerminalProcess {
   }
 
   private emitData(data: string | Uint8Array): void {
-    const text = typeof data === "string" ? data : new TextDecoder().decode(data);
+    const text = typeof data === "string" ? data : this.textDecoder.decode(data);
     this.emitDataDirect(text);
   }
 
