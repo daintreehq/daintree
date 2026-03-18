@@ -1,6 +1,7 @@
 import {
   Profiler,
   useCallback,
+  useDeferredValue,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -144,6 +145,7 @@ interface SidebarContentProps {
 
 function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   const { worktrees, isLoading, error, refresh } = useWorktrees();
+  const deferredWorktrees = useDeferredValue(worktrees);
   const [isRefreshing, startRefreshTransition] = useTransition();
   const currentProject = useProjectStore((state) => state.currentProject);
   useProjectSettings();
@@ -252,7 +254,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   // Compute derived metadata for each worktree
   const derivedMetaMap = useMemo(() => {
     const map = new Map<string, DerivedWorktreeMeta>();
-    for (const worktree of worktrees) {
+    for (const worktree of deferredWorktrees) {
       const worktreeTerminals = terminals.filter(
         (t) => t.worktreeId === worktree.id && t.location !== "trash"
       );
@@ -270,17 +272,17 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
       });
     }
     return map;
-  }, [worktrees, terminals, getWorktreeErrors]);
+  }, [deferredWorktrees, terminals, getWorktreeErrors]);
 
   // Apply filters and sorting
   const mainWorktree = useMemo(
-    () => worktrees.find((w) => w.isMainWorktree) ?? worktrees[0] ?? null,
-    [worktrees]
+    () => deferredWorktrees.find((w) => w.isMainWorktree) ?? deferredWorktrees[0] ?? null,
+    [deferredWorktrees]
   );
 
   const integrationWorktree = useMemo(
-    () => findIntegrationWorktree(worktrees, mainWorktree?.id),
-    [worktrees, mainWorktree]
+    () => findIntegrationWorktree(deferredWorktrees, mainWorktree?.id),
+    [deferredWorktrees, mainWorktree]
   );
 
   const { filteredWorktrees, groupedSections } = useMemo(() => {
@@ -294,7 +296,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     };
 
     // Filter non-main worktrees only (exclude main and integration by ID)
-    const nonMain = worktrees.filter(
+    const nonMain = deferredWorktrees.filter(
       (w) => w.id !== mainWorktree?.id && w.id !== integrationWorktree?.id
     );
     const filtered = nonMain.filter((worktree) => {
@@ -322,7 +324,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
       return matchesFilters(worktree, filters, derived, isActive);
     });
 
-    const existingWorktreeIds = new Set(worktrees.map((w) => w.id));
+    const existingWorktreeIds = new Set(deferredWorktrees.map((w) => w.id));
     const validPinnedWorktrees = pinnedWorktrees.filter((id) => existingWorktreeIds.has(id));
 
     const hasQuery = query.trim().length > 0;
@@ -339,7 +341,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
 
     return { filteredWorktrees: sorted, groupedSections: null };
   }, [
-    worktrees,
+    deferredWorktrees,
     query,
     orderBy,
     isGroupedByType,
