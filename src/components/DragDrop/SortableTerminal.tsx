@@ -51,7 +51,7 @@ export function SortableTerminal({
       style={style}
       data-terminal-id={terminal.id}
       className={cn(
-        "h-full contain-layout-paint",
+        "h-full contain-layout",
         isDragging && "opacity-40 ring-2 ring-canopy-accent/50 rounded"
       )}
       {...attributes}
