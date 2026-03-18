@@ -6,6 +6,20 @@ import { render, screen, fireEvent, cleanup } from "@testing-library/react";
 import { IssueBulkActionBar } from "../IssueBulkActionBar";
 import type { GitHubIssue } from "@shared/types/github";
 
+vi.mock("framer-motion", () => ({
+  AnimatePresence: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  motion: {
+    div: ({
+      children,
+      initial: _initial,
+      animate: _animate,
+      exit: _exit,
+      transition: _transition,
+      ...props
+    }: Record<string, unknown>) => <div {...props}>{children as React.ReactNode}</div>,
+  },
+}));
+
 const mockOpenBulkCreateDialog = vi.fn();
 
 vi.mock("@/store/worktreeStore", () => ({
@@ -36,9 +50,9 @@ afterEach(() => {
 });
 
 describe("IssueBulkActionBar", () => {
-  it("returns null when no issues selected", () => {
-    const { container } = render(<IssueBulkActionBar selectedIssues={[]} onClear={vi.fn()} />);
-    expect(container.innerHTML).toBe("");
+  it("renders no toolbar when no issues selected", () => {
+    render(<IssueBulkActionBar selectedIssues={[]} onClear={vi.fn()} />);
+    expect(screen.queryByRole("toolbar")).toBeNull();
   });
 
   it("renders toolbar with count badge and Create Worktrees button when issues selected", () => {
@@ -53,20 +67,20 @@ describe("IssueBulkActionBar", () => {
     expect(createBtn).toBeTruthy();
   });
 
-  it("renders as inline footer row, not a floating pill", () => {
+  it("renders as floating elevated bar with glassmorphic styling", () => {
     const issues = [makeIssue(1)];
     render(<IssueBulkActionBar selectedIssues={issues} onClear={vi.fn()} />);
 
     const toolbar = screen.getByRole("toolbar");
     const classes = toolbar.className;
 
-    expect(classes).not.toContain("absolute");
-    expect(classes).not.toContain("rounded-full");
-    expect(classes).not.toContain("backdrop-blur");
-    expect(classes).not.toContain("bg-black");
+    expect(classes).toContain("rounded-xl");
+    expect(classes).toContain("backdrop-blur-md");
+    expect(classes).toContain("shadow-lg");
+    expect(classes).toContain("mx-2");
+    expect(classes).toContain("mb-2");
 
-    expect(classes).toContain("border-t");
-    expect(classes).toContain("shrink-0");
+    expect(classes).not.toContain("border-t");
   });
 
   it("shows 'selected' label next to count badge", () => {
@@ -103,5 +117,16 @@ describe("IssueBulkActionBar", () => {
 
     expect(mockOpenBulkCreateDialog).toHaveBeenCalledWith(issues);
     expect(onCloseDropdown).toHaveBeenCalled();
+  });
+
+  it("hides toolbar when selection is cleared", () => {
+    const issues = [makeIssue(1)];
+    const { rerender } = render(<IssueBulkActionBar selectedIssues={issues} onClear={vi.fn()} />);
+
+    expect(screen.getByRole("toolbar")).toBeTruthy();
+
+    rerender(<IssueBulkActionBar selectedIssues={[]} onClear={vi.fn()} />);
+
+    expect(screen.queryByRole("toolbar")).toBeNull();
   });
 });
