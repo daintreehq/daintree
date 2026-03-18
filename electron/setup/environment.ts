@@ -36,7 +36,9 @@ if (gpuHardwareAccelerationDisabled) {
 }
 
 // Handle --reset-data: wipe userData before Chromium acquires file locks
-if (process.argv.includes("--reset-data")) {
+const shouldResetData =
+  process.argv.includes("--reset-data") || process.env.CANOPY_RESET_DATA === "1";
+if (shouldResetData) {
   const userDataPath = app.getPath("userData");
   if (fs.existsSync(userDataPath)) {
     for (const entry of fs.readdirSync(userDataPath)) {
