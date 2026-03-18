@@ -12,6 +12,7 @@ import { keybindingService } from "@/services/KeybindingService";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { usePerformanceModeStore } from "@/store/performanceModeStore";
 import { usePreferencesStore } from "@/store/preferencesStore";
+import { useScreenReaderStore } from "@/store/screenReaderStore";
 import { useScrollbackStore } from "@/store/scrollbackStore";
 import { useTerminalFontStore } from "@/store/terminalFontStore";
 import { useTerminalInputStore } from "@/store/terminalInputStore";
@@ -495,6 +496,30 @@ export function registerPreferencesActions(
         await terminalConfigClient.setHybridInputAutoFocus(enabled);
       } catch (error) {
         state.setHybridInputAutoFocus(previous);
+        throw error;
+      }
+    },
+  }));
+
+  actions.set("terminalConfig.setScreenReaderMode", () => ({
+    id: "terminalConfig.setScreenReaderMode",
+    title: "Set Screen Reader Mode",
+    description: "Set screen reader mode for terminals (auto, on, or off)",
+    category: "settings",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    argsSchema: z.object({ mode: z.enum(["auto", "on", "off"]) }),
+    run: async (args: unknown) => {
+      const { mode } = args as { mode: "auto" | "on" | "off" };
+      const state = useScreenReaderStore.getState();
+      const previous = state.screenReaderMode;
+      state.setScreenReaderMode(mode);
+
+      try {
+        await terminalConfigClient.setScreenReaderMode(mode);
+      } catch (error) {
+        state.setScreenReaderMode(previous);
         throw error;
       }
     },

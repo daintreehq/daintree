@@ -16,6 +16,7 @@ import { usePerformanceModeStore } from "@/store/performanceModeStore";
 import { useTerminalFontStore } from "@/store/terminalFontStore";
 import { getScrollbackForType, PERFORMANCE_MODE_SCROLLBACK } from "@/utils/scrollbackConfig";
 import { getXtermOptions } from "@/config/xtermConfig";
+import { useScreenReaderStore } from "@/store/screenReaderStore";
 import { useTerminalColorSchemeStore } from "@/store/terminalColorSchemeStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useLayoutConfigStore } from "@/store/layoutConfigStore";
@@ -299,12 +300,14 @@ export const createCorePanelActions = (
           : getScrollbackForType(legacyType, projectScrollback ?? scrollbackLines);
 
         const { getEffectiveTheme } = useTerminalColorSchemeStore.getState();
+        const screenReaderMode = useScreenReaderStore.getState().resolvedScreenReaderEnabled();
         const terminalOptions = getXtermOptions({
           fontSize,
           fontFamily,
           scrollback: effectiveScrollback,
           performanceMode,
           theme: getEffectiveTheme(),
+          screenReaderMode,
         });
 
         // Prewarm ALL terminal types to ensure managed instance exists.

@@ -152,6 +152,23 @@ export function registerTerminalConfigHandlers(): () => void {
   ipcMain.handle(CHANNELS.TERMINAL_CONFIG_SET_CUSTOM_SCHEMES, handleTerminalConfigSetCustomSchemes);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.TERMINAL_CONFIG_SET_CUSTOM_SCHEMES));
 
+  const handleTerminalConfigSetScreenReaderMode = async (
+    _event: Electron.IpcMainInvokeEvent,
+    mode: string
+  ) => {
+    if (mode !== "auto" && mode !== "on" && mode !== "off") {
+      console.warn("Invalid screen reader mode:", mode);
+      return;
+    }
+    const currentConfig = getTerminalConfigObject();
+    store.set("terminalConfig", { ...currentConfig, screenReaderMode: mode });
+  };
+  ipcMain.handle(
+    CHANNELS.TERMINAL_CONFIG_SET_SCREEN_READER_MODE,
+    handleTerminalConfigSetScreenReaderMode
+  );
+  handlers.push(() => ipcMain.removeHandler(CHANNELS.TERMINAL_CONFIG_SET_SCREEN_READER_MODE));
+
   const handleTerminalConfigImportColorScheme = async (event: Electron.IpcMainInvokeEvent) => {
     const win = BrowserWindow.fromWebContents(event.sender) ?? BrowserWindow.getFocusedWindow();
     const dialogOptions = {

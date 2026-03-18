@@ -26,6 +26,7 @@ export interface StoreSchema {
     performanceMode: boolean;
     hybridInputEnabled?: boolean;
     hybridInputAutoFocus?: boolean;
+    screenReaderMode?: "auto" | "on" | "off";
   };
   hibernation: {
     enabled: boolean;
@@ -179,6 +180,7 @@ const storeOptions = {
       performanceMode: false,
       hybridInputEnabled: true,
       hybridInputAutoFocus: true,
+      screenReaderMode: "auto" as const,
     },
     hibernation: {
       enabled: false,

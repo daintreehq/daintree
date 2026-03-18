@@ -1,6 +1,6 @@
 import { useEffect } from "react";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
-import { useTerminalFontStore } from "@/store";
+import { useTerminalFontStore, useScreenReaderStore } from "@/store";
 import { useTerminalColorSchemeStore } from "@/store/terminalColorSchemeStore";
 import { useAppThemeStore } from "@/store/appThemeStore";
 import { terminalConfigClient } from "@/clients/terminalConfigClient";
@@ -58,6 +58,32 @@ export function useTerminalConfig() {
     };
   }, [setFontSize, setFontFamily, setSelectedSchemeId, addCustomScheme]);
 
+  const screenReaderEnabled = useScreenReaderStore((s) => s.resolvedScreenReaderEnabled());
+
+  useEffect(() => {
+    let cancelled = false;
+
+    window.electron.accessibility
+      .getEnabled()
+      .then((enabled) => {
+        if (!cancelled) {
+          useScreenReaderStore.getState().setOsAccessibilityEnabled(enabled);
+        }
+      })
+      .catch(() => {});
+
+    const cleanup = window.electron.accessibility.onSupportChanged(({ enabled }) => {
+      if (!cancelled) {
+        useScreenReaderStore.getState().setOsAccessibilityEnabled(enabled);
+      }
+    });
+
+    return () => {
+      cancelled = true;
+      cleanup();
+    };
+  }, []);
+
   const colorVisionMode = useAppThemeStore((state) => state.colorVisionMode);
   const appThemeId = useAppThemeStore((state) => state.selectedSchemeId);
 
@@ -67,9 +93,19 @@ export function useTerminalConfig() {
       theme,
       fontSize,
       fontFamily,
+      screenReaderMode: screenReaderEnabled,
     });
     // customSchemes in deps ensures re-run when a custom scheme is added/changed
     // colorVisionMode in deps ensures terminal ANSI colors update when CVD mode changes
     // appThemeId in deps ensures terminal updates when app theme changes while "canopy" is selected
-  }, [selectedSchemeId, customSchemes, fontSize, fontFamily, colorVisionMode, appThemeId]);
+    // screenReaderEnabled in deps ensures terminals update when screen reader mode changes
+  }, [
+    selectedSchemeId,
+    customSchemes,
+    fontSize,
+    fontFamily,
+    colorVisionMode,
+    appThemeId,
+    screenReaderEnabled,
+  ]);
 }
