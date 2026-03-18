@@ -1,3 +1,4 @@
+import React from "react";
 import { cn } from "@/lib/utils";
 import type { ActionPaletteItem as ActionPaletteItemType } from "@/hooks/useActionPalette";
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
@@ -9,7 +10,11 @@ interface ActionPaletteItemProps {
   onSelect: (item: ActionPaletteItemType) => void;
 }
 
-export function ActionPaletteItem({ item, isSelected, onSelect }: ActionPaletteItemProps) {
+export const ActionPaletteItem = React.memo(function ActionPaletteItem({
+  item,
+  isSelected,
+  onSelect,
+}: ActionPaletteItemProps) {
   const categoryColor = ACTION_CATEGORY_COLORS[item.category] ?? ACTION_CATEGORY_DEFAULT_COLOR;
 
   const buttonContent = (
@@ -67,4 +72,4 @@ export function ActionPaletteItem({ item, isSelected, onSelect }: ActionPaletteI
   }
 
   return buttonContent;
-}
+});

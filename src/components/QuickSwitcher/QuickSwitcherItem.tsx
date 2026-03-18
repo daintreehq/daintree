@@ -1,3 +1,4 @@
+import React from "react";
 import { cn } from "@/lib/utils";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import { getBrandColorHex } from "@/lib/colorUtils";
@@ -8,10 +9,14 @@ import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/comp
 export interface QuickSwitcherItemProps {
   item: QuickSwitcherItemData;
   isSelected: boolean;
-  onClick: () => void;
+  onSelect: (item: QuickSwitcherItemData) => void;
 }
 
-export function QuickSwitcherItem({ item, isSelected, onClick }: QuickSwitcherItemProps) {
+export const QuickSwitcherItem = React.memo(function QuickSwitcherItem({
+  item,
+  isSelected,
+  onSelect,
+}: QuickSwitcherItemProps) {
   return (
     <button
       id={`qs-option-${item.id}`}
@@ -26,7 +31,7 @@ export function QuickSwitcherItem({ item, isSelected, onClick }: QuickSwitcherIt
           ? "bg-overlay-soft border-overlay text-canopy-text before:absolute before:left-0 before:top-2 before:bottom-2 before:w-[2px] before:rounded-r before:bg-canopy-accent before:content-['']"
           : "border-transparent text-canopy-text/70 hover:bg-overlay-subtle hover:text-canopy-text"
       )}
-      onClick={onClick}
+      onClick={() => onSelect(item)}
       aria-selected={isSelected}
       aria-label={item.title}
       role="option"
@@ -72,4 +77,4 @@ export function QuickSwitcherItem({ item, isSelected, onClick }: QuickSwitcherIt
       </div>
     </button>
   );
-}
+});
