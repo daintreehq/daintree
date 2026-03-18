@@ -180,7 +180,7 @@ const MAX_RETRIES = 3;
 
 export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProps) {
   const projectName = useProjectStore((s) => s.currentProject?.name);
-  const { health } = useProjectHealth();
+  const { health, refresh: refreshHealth } = useProjectHealth();
   const { pulse, isLoading, error, rangeDays, retryCount, fetchPulse, setRangeDays } =
     usePulseStore(
       useShallow((state) => ({
@@ -204,7 +204,8 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
 
   const handleRefresh = useCallback(() => {
     fetchPulse(worktreeId, true);
-  }, [worktreeId, fetchPulse]);
+    void refreshHealth({ force: true });
+  }, [worktreeId, fetchPulse, refreshHealth]);
 
   const handleRangeChange = useCallback(
     (days: PulseRangeDays) => {

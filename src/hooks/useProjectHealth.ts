@@ -29,16 +29,22 @@ export function useProjectHealth(): UseProjectHealthReturn {
     pending: false,
     force: false,
   });
+  const activeFetchIdRef = useRef(0);
+  const invalidatedFetchIdRef = useRef<number | null>(null);
+  const projectPathRef = useRef<string | null>(null);
 
   const fetchHealth = useCallback(async (force = false) => {
     if (inFlightRef.current) {
       queuedFetchRef.current.pending = true;
       queuedFetchRef.current.force = queuedFetchRef.current.force || force;
+      invalidatedFetchIdRef.current = activeFetchIdRef.current;
       return;
     }
 
     try {
       inFlightRef.current = true;
+      activeFetchIdRef.current += 1;
+      const fetchId = activeFetchIdRef.current;
 
       const project = await projectClient.getCurrent();
       if (!project) {
@@ -47,6 +53,7 @@ export function useProjectHealth(): UseProjectHealthReturn {
           setError(null);
           setLastUpdated(null);
           lastErrorRef.current = null;
+          projectPathRef.current = null;
         }
         return;
       }
@@ -56,6 +63,16 @@ export function useProjectHealth(): UseProjectHealthReturn {
       const result = await githubClient.getProjectHealth(project.path, force);
 
       if (mountedRef.current) {
+        if (invalidatedFetchIdRef.current === fetchId) {
+          return;
+        }
+
+        if (projectPathRef.current !== null && projectPathRef.current !== project.path) {
+          return;
+        }
+
+        projectPathRef.current = project.path;
+
         setHealth(result);
         setLastUpdated(result.lastUpdated ?? null);
 
@@ -152,6 +169,7 @@ export function useProjectHealth(): UseProjectHealthReturn {
     return () => {
       mountedRef.current = false;
       queuedFetchRef.current = { pending: false, force: false };
+      invalidatedFetchIdRef.current = null;
       if (pollTimerRef.current) {
         clearTimeout(pollTimerRef.current);
       }
@@ -183,6 +201,8 @@ export function useProjectHealth(): UseProjectHealthReturn {
         clearTimeout(pollTimerRef.current);
         pollTimerRef.current = null;
       }
+
+      projectPathRef.current = null;
 
       setHealth(null);
       setLastUpdated(null);

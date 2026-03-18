@@ -341,7 +341,7 @@ function parseProjectHealthResponse(
         }
       : null,
     securityAlerts: {
-      visible: vulnerabilityAlerts !== null,
+      visible: vulnerabilityAlerts != null,
       count: vulnerabilityAlerts?.totalCount ?? 0,
     },
     mergeVelocity: {
