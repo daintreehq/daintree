@@ -153,8 +153,8 @@ export class EventBuffer {
       }
     }
 
-    while (this.buffer.length > this.maxSize) {
-      this.buffer.shift();
+    if (this.buffer.length > this.maxSize) {
+      this.buffer = this.buffer.slice(-this.maxSize);
     }
   }
 
