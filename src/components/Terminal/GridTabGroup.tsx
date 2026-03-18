@@ -5,6 +5,7 @@ import type { TabGroup } from "@/types";
 import type { TabInfo } from "@/components/Panel/TabButton";
 import { buildPanelDuplicateOptions } from "@/services/terminal/panelDuplicationService";
 import { focusPanelInput } from "./terminalFocusRegistry";
+import { getGroupAmbientAgentState } from "@/components/Layout/useDockBlockedState";
 
 export interface GridTabGroupProps {
   group: TabGroup;
@@ -79,6 +80,10 @@ export function GridTabGroup({
 
   // Check if this group is currently focused
   const isGroupFocused = panels.some((p) => p.id === focusedId);
+
+  // Compute highest-urgency agent state across all tabs so the group container
+  // reflects blocked/working state even when the blocking tab is not active.
+  const groupAmbientState = getGroupAmbientAgentState(panels);
 
   // Restore focus to the hybrid input bar when switching tabs within a focused group.
   // The existing TerminalPane focus effect uses double-rAF which races with
@@ -183,6 +188,7 @@ export function GridTabGroup({
       isMaximized={isMaximized}
       gridPanelCount={gridPanelCount}
       gridCols={gridCols}
+      ambientAgentState={groupAmbientState}
       tabs={tabs}
       groupId={group.id}
       onTabClick={handleTabClick}

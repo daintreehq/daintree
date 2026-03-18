@@ -7,6 +7,7 @@ import type { TabInfo } from "@/components/Panel/TabButton";
 import { usePanelLifecycle } from "@/hooks/usePanelLifecycle";
 import { usePanelHandlers } from "@/hooks/usePanelHandlers";
 import { buildPanelProps } from "@/utils/panelProps";
+import type { AgentState } from "@/types";
 
 export interface GridPanelProps {
   terminal: TerminalInstance;
@@ -14,6 +15,8 @@ export interface GridPanelProps {
   isMaximized?: boolean;
   gridPanelCount?: number;
   gridCols?: number;
+  // Group-level ambient agent state (highest urgency across all tabs in a tab group)
+  ambientAgentState?: AgentState;
   // Tab support
   tabs?: TabInfo[];
   groupId?: string;
@@ -30,6 +33,7 @@ export function GridPanel({
   isMaximized = false,
   gridPanelCount,
   gridCols,
+  ambientAgentState,
   tabs,
   groupId,
   onTabClick,
@@ -95,6 +99,7 @@ export function GridPanel({
           location: "grid" as const,
           isMaximized,
           gridPanelCount,
+          ambientAgentState,
           onFocus: handleFocus,
           onClose: handleClose,
           onToggleMaximize: handleToggleMaximize,
@@ -115,6 +120,7 @@ export function GridPanel({
       isMaximized,
       lifecycle.isTrashing,
       gridPanelCount,
+      ambientAgentState,
       handleFocus,
       handleClose,
       handleToggleMaximize,
@@ -140,6 +146,7 @@ export function GridPanel({
         isFocused={isFocused}
         isMaximized={isMaximized}
         location="grid"
+        ambientAgentState={ambientAgentState}
         onFocus={handleFocus}
         onClose={handleClose}
         onToggleMaximize={handleToggleMaximize}

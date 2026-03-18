@@ -64,6 +64,25 @@ export function getGroupBlockedAgentState(
   return undefined;
 }
 
+export function getGroupAmbientAgentState(
+  panels: ReadonlyArray<{ agentState?: AgentState }>
+): AgentState | undefined {
+  let hasWaiting = false;
+  let hasFailed = false;
+  let hasWorking = false;
+
+  for (const panel of panels) {
+    if (panel.agentState === "waiting") hasWaiting = true;
+    else if (panel.agentState === "failed") hasFailed = true;
+    else if (panel.agentState === "working" || panel.agentState === "running") hasWorking = true;
+  }
+
+  if (hasWaiting) return "waiting";
+  if (hasFailed) return "failed";
+  if (hasWorking) return "working";
+  return undefined;
+}
+
 export function isGroupDeprioritized(panels: ReadonlyArray<{ agentState?: AgentState }>): boolean {
   if (panels.length === 0) return false;
   return panels.every(

@@ -4,6 +4,7 @@ import { renderHook, act } from "@testing-library/react";
 import {
   useDockBlockedState,
   getGroupBlockedAgentState,
+  getGroupAmbientAgentState,
   isGroupDeprioritized,
 } from "../useDockBlockedState";
 import type { AgentState } from "shared/types/agent";
@@ -175,6 +176,52 @@ describe("getGroupBlockedAgentState", () => {
 
   it("returns undefined for empty panels", () => {
     expect(getGroupBlockedAgentState([])).toBe(undefined);
+  });
+});
+
+describe("getGroupAmbientAgentState", () => {
+  it("returns undefined when all panels are idle or completed", () => {
+    const panels = [{ agentState: "idle" as const }, { agentState: "completed" as const }];
+    expect(getGroupAmbientAgentState(panels)).toBe(undefined);
+  });
+
+  it("returns 'waiting' when any panel is waiting (highest priority)", () => {
+    const panels = [{ agentState: "working" as const }, { agentState: "waiting" as const }];
+    expect(getGroupAmbientAgentState(panels)).toBe("waiting");
+  });
+
+  it("returns 'waiting' when waiting outranks failed", () => {
+    const panels = [{ agentState: "waiting" as const }, { agentState: "failed" as const }];
+    expect(getGroupAmbientAgentState(panels)).toBe("waiting");
+  });
+
+  it("returns 'failed' when failed and no waiting", () => {
+    const panels = [{ agentState: "working" as const }, { agentState: "failed" as const }];
+    expect(getGroupAmbientAgentState(panels)).toBe("failed");
+  });
+
+  it("returns 'working' when any panel is working and none blocked", () => {
+    const panels = [{ agentState: "idle" as const }, { agentState: "working" as const }];
+    expect(getGroupAmbientAgentState(panels)).toBe("working");
+  });
+
+  it("returns 'working' for running state (treated as working tier)", () => {
+    const panels = [{ agentState: "idle" as const }, { agentState: "running" as const }];
+    expect(getGroupAmbientAgentState(panels)).toBe("working");
+  });
+
+  it("returns 'waiting' when waiting outranks working", () => {
+    const panels = [{ agentState: "waiting" as const }, { agentState: "working" as const }];
+    expect(getGroupAmbientAgentState(panels)).toBe("waiting");
+  });
+
+  it("returns undefined for empty panels", () => {
+    expect(getGroupAmbientAgentState([])).toBe(undefined);
+  });
+
+  it("returns undefined for undefined agentState panels", () => {
+    const panels = [{ agentState: undefined }, { agentState: undefined }];
+    expect(getGroupAmbientAgentState(panels)).toBe(undefined);
   });
 });
 
