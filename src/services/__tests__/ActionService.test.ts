@@ -1,28 +1,30 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { z } from "zod";
 
-const mockShow = vi.fn();
-const mockIncrementCount = vi.fn();
-const mockGetState = vi.fn(() => ({
-  hydrated: true,
-  counts: {},
-  show: mockShow,
-  incrementCount: mockIncrementCount,
-}));
+const hintMocks = vi.hoisted(() => {
+  const mockShow = vi.fn();
+  const mockIncrementCount = vi.fn();
+  const mockGetState = vi.fn(() => ({
+    hydrated: true,
+    counts: {} as Record<string, number>,
+    show: mockShow,
+    incrementCount: mockIncrementCount,
+  }));
+  const mockGetEffectiveCombo = vi.fn((_actionId: string): string | null => null);
+  const mockGetDisplayCombo = vi.fn((_actionId: string): string => "");
+  return { mockShow, mockIncrementCount, mockGetState, mockGetEffectiveCombo, mockGetDisplayCombo };
+});
 
 vi.mock("../../store/shortcutHintStore", () => ({
   shortcutHintStore: {
-    getState: mockGetState,
+    getState: hintMocks.mockGetState,
   },
 }));
 
-const mockGetEffectiveCombo = vi.fn(() => null);
-const mockGetDisplayCombo = vi.fn(() => "");
-
 vi.mock("../KeybindingService", () => ({
   keybindingService: {
-    getEffectiveCombo: (...args: unknown[]) => mockGetEffectiveCombo(...args),
-    getDisplayCombo: (...args: unknown[]) => mockGetDisplayCombo(...args),
+    getEffectiveCombo: hintMocks.mockGetEffectiveCombo,
+    getDisplayCombo: hintMocks.mockGetDisplayCombo,
   },
 }));
 
@@ -319,6 +321,14 @@ describe("ActionService", () => {
   });
 
   describe("shortcut hints", () => {
+    const {
+      mockShow,
+      mockIncrementCount,
+      mockGetState,
+      mockGetEffectiveCombo,
+      mockGetDisplayCombo,
+    } = hintMocks;
+
     const makeAction = (id: string): ActionDefinition => ({
       id: id as ActionId,
       title: "Test",
@@ -333,8 +343,8 @@ describe("ActionService", () => {
     beforeEach(() => {
       mockShow.mockClear();
       mockIncrementCount.mockClear();
-      mockGetEffectiveCombo.mockReset();
-      mockGetDisplayCombo.mockReset();
+      mockGetEffectiveCombo.mockReset().mockReturnValue(null);
+      mockGetDisplayCombo.mockReset().mockReturnValue("");
       mockGetState.mockReturnValue({
         hydrated: true,
         counts: {},
