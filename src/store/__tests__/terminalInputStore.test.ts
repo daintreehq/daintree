@@ -201,12 +201,14 @@ describe("terminalInputStore", () => {
     });
 
     it("should clear commandHistory, historyIndex, and tempDraft", () => {
-      useTerminalInputStore.getState().addToHistory("term-1", "echo hello");
-      useTerminalInputStore.getState().navigateHistory("term-1", "up", "current-input");
+      useTerminalInputStore.getState().addToHistory("term-1", "echo hello", "project-a");
+      useTerminalInputStore
+        .getState()
+        .navigateHistory("term-1", "up", "current-input", "project-a");
 
       expect(useTerminalInputStore.getState().commandHistory.size).toBe(1);
-      expect(useTerminalInputStore.getState().historyIndex.has("term-1")).toBe(true);
-      expect(useTerminalInputStore.getState().tempDraft.has("term-1")).toBe(true);
+      expect(useTerminalInputStore.getState().historyIndex.has("project-a:term-1")).toBe(true);
+      expect(useTerminalInputStore.getState().tempDraft.has("project-a:term-1")).toBe(true);
 
       useTerminalInputStore.getState().clearAllDraftInputs();
 
@@ -341,16 +343,16 @@ describe("terminalInputStore", () => {
       store.setDraftInput("term-1", "draft", "project-a");
       store.setPendingDraft("term-1", "pending", "project-a");
       store.stashEditorState("term-1", makeState("stashed"), "project-a");
-      store.addToHistory("term-1", "echo hello");
-      store.navigateHistory("term-1", "up", "current");
+      store.addToHistory("term-1", "echo hello", "project-a");
+      store.navigateHistory("term-1", "up", "current", "project-a");
 
       const before = useTerminalInputStore.getState();
       expect(before.draftInputs.size).toBe(1);
       expect(before.pendingDrafts.size).toBe(1);
       expect(before.stashedEditorStates.size).toBe(1);
-      expect(before.commandHistory.has("term-1")).toBe(true);
-      expect(before.historyIndex.has("term-1")).toBe(true);
-      expect(before.tempDraft.has("term-1")).toBe(true);
+      expect(before.commandHistory.has("project-a:term-1")).toBe(true);
+      expect(before.historyIndex.has("project-a:term-1")).toBe(true);
+      expect(before.tempDraft.has("project-a:term-1")).toBe(true);
 
       useTerminalInputStore.getState().clearTerminalState("term-1");
 
@@ -358,9 +360,9 @@ describe("terminalInputStore", () => {
       expect(after.draftInputs.size).toBe(0);
       expect(after.pendingDrafts.size).toBe(0);
       expect(after.stashedEditorStates.size).toBe(0);
-      expect(after.commandHistory.has("term-1")).toBe(false);
-      expect(after.historyIndex.has("term-1")).toBe(false);
-      expect(after.tempDraft.has("term-1")).toBe(false);
+      expect(after.commandHistory.has("project-a:term-1")).toBe(false);
+      expect(after.historyIndex.has("project-a:term-1")).toBe(false);
+      expect(after.tempDraft.has("project-a:term-1")).toBe(false);
     });
 
     it("should clear cross-project composite keys for the terminal", () => {
@@ -393,20 +395,20 @@ describe("terminalInputStore", () => {
       store.setPendingDraft("term-2", "p2", "project-a");
       store.stashEditorState("term-1", makeState("s1"), "project-a");
       store.stashEditorState("term-2", makeState("s2"), "project-a");
-      store.addToHistory("term-1", "cmd-1");
-      store.addToHistory("term-2", "cmd-2");
-      store.navigateHistory("term-1", "up", "");
-      store.navigateHistory("term-2", "up", "");
+      store.addToHistory("term-1", "cmd-1", "project-a");
+      store.addToHistory("term-2", "cmd-2", "project-a");
+      store.navigateHistory("term-1", "up", "", "project-a");
+      store.navigateHistory("term-2", "up", "", "project-a");
 
       useTerminalInputStore.getState().clearTerminalState("term-1");
 
       const after = useTerminalInputStore.getState();
       expect(after.getDraftInput("term-2", "project-a")).toBe("draft-2");
-      expect(after.commandHistory.get("term-2")).toEqual(["cmd-2"]);
+      expect(after.commandHistory.get("project-a:term-2")).toEqual(["cmd-2"]);
       expect(after.pendingDrafts.size).toBe(1);
       expect(after.hasStashedEditorState("term-2", "project-a")).toBe(true);
-      expect(after.historyIndex.has("term-2")).toBe(true);
-      expect(after.tempDraft.has("term-2")).toBe(true);
+      expect(after.historyIndex.has("project-a:term-2")).toBe(true);
+      expect(after.tempDraft.has("project-a:term-2")).toBe(true);
     });
 
     it("should not delete entries for terminal IDs that are substrings (term-1 vs term-10)", () => {
@@ -414,22 +416,22 @@ describe("terminalInputStore", () => {
 
       store.setDraftInput("term-1", "draft-1", "project-a");
       store.setDraftInput("term-10", "draft-10", "project-a");
-      store.addToHistory("term-1", "cmd-1");
-      store.addToHistory("term-10", "cmd-10");
+      store.addToHistory("term-1", "cmd-1", "project-a");
+      store.addToHistory("term-10", "cmd-10", "project-a");
 
       useTerminalInputStore.getState().clearTerminalState("term-1");
 
       const after = useTerminalInputStore.getState();
       expect(after.getDraftInput("term-10", "project-a")).toBe("draft-10");
-      expect(after.commandHistory.get("term-10")).toEqual(["cmd-10"]);
+      expect(after.commandHistory.get("project-a:term-10")).toEqual(["cmd-10"]);
       expect(after.getDraftInput("term-1", "project-a")).toBe("");
-      expect(after.commandHistory.has("term-1")).toBe(false);
+      expect(after.commandHistory.has("project-a:term-1")).toBe(false);
     });
 
     it("should be a no-op for a nonexistent terminal in a populated store", () => {
       const store = useTerminalInputStore.getState();
       store.setDraftInput("term-2", "draft", "project-a");
-      store.addToHistory("term-2", "cmd");
+      store.addToHistory("term-2", "cmd", "project-a");
 
       const before = useTerminalInputStore.getState();
       useTerminalInputStore.getState().clearTerminalState("nonexistent");
@@ -451,6 +453,181 @@ describe("terminalInputStore", () => {
       expect(after.draftInputs.size).toBe(0);
       expect(after.pendingDrafts.size).toBe(0);
       expect(after.stashedEditorStates.size).toBe(0);
+    });
+
+    it("should clear composite-keyed history entries across all projects", () => {
+      const store = useTerminalInputStore.getState();
+
+      store.addToHistory("term-1", "cmd-a", "project-a");
+      store.addToHistory("term-1", "cmd-b", "project-b");
+      store.navigateHistory("term-1", "up", "", "project-a");
+
+      expect(useTerminalInputStore.getState().commandHistory.size).toBe(2);
+
+      useTerminalInputStore.getState().clearTerminalState("term-1");
+
+      const after = useTerminalInputStore.getState();
+      expect(after.commandHistory.size).toBe(0);
+      expect(after.historyIndex.size).toBe(0);
+      expect(after.tempDraft.size).toBe(0);
+    });
+  });
+
+  describe("project-scoped command history", () => {
+    it("should isolate history by project for the same terminal", () => {
+      const store = useTerminalInputStore.getState();
+
+      store.addToHistory("term-1", "echo project-a", "project-a");
+      store.addToHistory("term-1", "echo project-b", "project-b");
+
+      expect(store.getHistoryLength("term-1", "project-a")).toBe(1);
+      expect(store.getHistoryLength("term-1", "project-b")).toBe(1);
+      expect(useTerminalInputStore.getState().commandHistory.get("project-a:term-1")).toEqual([
+        "echo project-a",
+      ]);
+      expect(useTerminalInputStore.getState().commandHistory.get("project-b:term-1")).toEqual([
+        "echo project-b",
+      ]);
+    });
+
+    it("should navigate history within project scope", () => {
+      const store = useTerminalInputStore.getState();
+
+      store.addToHistory("term-1", "cmd-a1", "project-a");
+      store.addToHistory("term-1", "cmd-a2", "project-a");
+      store.addToHistory("term-1", "cmd-b1", "project-b");
+
+      const resultA = store.navigateHistory("term-1", "up", "current", "project-a");
+      expect(resultA).toBe("cmd-a2");
+
+      const resultB = useTerminalInputStore
+        .getState()
+        .navigateHistory("term-1", "up", "current", "project-b");
+      expect(resultB).toBe("cmd-b1");
+    });
+
+    it("should work without projectId (backward compatibility)", () => {
+      const store = useTerminalInputStore.getState();
+
+      store.addToHistory("term-1", "bare-cmd");
+      expect(store.getHistoryLength("term-1")).toBe(1);
+      expect(useTerminalInputStore.getState().commandHistory.get("term-1")).toEqual(["bare-cmd"]);
+
+      const result = useTerminalInputStore.getState().navigateHistory("term-1", "up", "current");
+      expect(result).toBe("bare-cmd");
+    });
+  });
+
+  describe("resetForProjectSwitch", () => {
+    function makeState(doc: string) {
+      return EditorState.create({ doc });
+    }
+
+    it("should remove all entries for the departing project", () => {
+      const store = useTerminalInputStore.getState();
+
+      store.setDraftInput("term-1", "draft-a", "project-a");
+      store.setPendingDraft("term-1", "pending-a", "project-a");
+      store.stashEditorState("term-1", makeState("stash-a"), "project-a");
+      store.addToHistory("term-1", "cmd-a", "project-a");
+      store.navigateHistory("term-1", "up", "", "project-a");
+
+      useTerminalInputStore.getState().resetForProjectSwitch("project-a");
+
+      const after = useTerminalInputStore.getState();
+      expect(after.draftInputs.size).toBe(0);
+      expect(after.pendingDrafts.size).toBe(0);
+      expect(after.stashedEditorStates.size).toBe(0);
+      expect(after.commandHistory.size).toBe(0);
+      expect(after.historyIndex.size).toBe(0);
+      expect(after.tempDraft.size).toBe(0);
+    });
+
+    it("should preserve entries from other projects", () => {
+      const store = useTerminalInputStore.getState();
+
+      store.setDraftInput("term-1", "draft-a", "project-a");
+      store.setDraftInput("term-1", "draft-b", "project-b");
+      store.addToHistory("term-1", "cmd-a", "project-a");
+      store.addToHistory("term-1", "cmd-b", "project-b");
+
+      useTerminalInputStore.getState().resetForProjectSwitch("project-a");
+
+      const after = useTerminalInputStore.getState();
+      expect(after.getDraftInput("term-1", "project-a")).toBe("");
+      expect(after.getDraftInput("term-1", "project-b")).toBe("draft-b");
+      expect(after.commandHistory.has("project-a:term-1")).toBe(false);
+      expect(after.commandHistory.get("project-b:term-1")).toEqual(["cmd-b"]);
+    });
+
+    it("should respect preserveTerminalIds including navigation state", () => {
+      const store = useTerminalInputStore.getState();
+
+      store.setDraftInput("term-keep", "draft-keep", "project-a");
+      store.setDraftInput("term-remove", "draft-remove", "project-a");
+      store.addToHistory("term-keep", "cmd-keep", "project-a");
+      store.addToHistory("term-remove", "cmd-remove", "project-a");
+      store.navigateHistory("term-keep", "up", "current-keep", "project-a");
+      store.navigateHistory("term-remove", "up", "current-remove", "project-a");
+
+      useTerminalInputStore.getState().resetForProjectSwitch("project-a", new Set(["term-keep"]));
+
+      const after = useTerminalInputStore.getState();
+      expect(after.getDraftInput("term-keep", "project-a")).toBe("draft-keep");
+      expect(after.getDraftInput("term-remove", "project-a")).toBe("");
+      expect(after.commandHistory.has("project-a:term-keep")).toBe(true);
+      expect(after.commandHistory.has("project-a:term-remove")).toBe(false);
+      expect(after.historyIndex.has("project-a:term-keep")).toBe(true);
+      expect(after.historyIndex.has("project-a:term-remove")).toBe(false);
+      expect(after.tempDraft.has("project-a:term-keep")).toBe(true);
+      expect(after.tempDraft.has("project-a:term-remove")).toBe(false);
+    });
+
+    it("should clear stale historyIndex and tempDraft from departing project", () => {
+      const store = useTerminalInputStore.getState();
+
+      store.addToHistory("term-1", "cmd-a1", "project-a");
+      store.addToHistory("term-1", "cmd-a2", "project-a");
+      store.navigateHistory("term-1", "up", "draft-a", "project-a");
+
+      expect(useTerminalInputStore.getState().historyIndex.has("project-a:term-1")).toBe(true);
+      expect(useTerminalInputStore.getState().tempDraft.has("project-a:term-1")).toBe(true);
+
+      useTerminalInputStore.getState().resetForProjectSwitch("project-a");
+
+      const after = useTerminalInputStore.getState();
+      expect(after.commandHistory.size).toBe(0);
+      expect(after.historyIndex.size).toBe(0);
+      expect(after.tempDraft.size).toBe(0);
+
+      after.addToHistory("term-1", "cmd-b1", "project-b");
+      const result = useTerminalInputStore
+        .getState()
+        .navigateHistory("term-1", "up", "fresh", "project-b");
+      expect(result).toBe("cmd-b1");
+    });
+
+    it("should not affect bare-key entries (no project prefix)", () => {
+      const store = useTerminalInputStore.getState();
+      store.addToHistory("term-1", "bare-cmd");
+      store.setDraftInput("term-1", "bare-draft");
+
+      useTerminalInputStore.getState().resetForProjectSwitch("project-a");
+
+      const after = useTerminalInputStore.getState();
+      expect(after.getHistoryLength("term-1")).toBe(1);
+      expect(after.getDraftInput("term-1")).toBe("bare-draft");
+    });
+
+    it("should be a no-op when no matching entries exist", () => {
+      const store = useTerminalInputStore.getState();
+      store.setDraftInput("term-1", "draft", "project-b");
+
+      const before = useTerminalInputStore.getState();
+      useTerminalInputStore.getState().resetForProjectSwitch("project-a");
+      const after = useTerminalInputStore.getState();
+
+      expect(after).toBe(before);
     });
   });
 });

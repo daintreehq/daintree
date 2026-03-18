@@ -11,8 +11,10 @@ import { cleanupNotesStore } from "./notesStore";
 import { useRecipeStore } from "./recipeStore";
 import { resetGitHubFilterStore } from "./githubFilterStore";
 import { useWorkflowStore } from "./workflowStore";
+import { useTerminalInputStore } from "./terminalInputStore";
 interface ProjectSwitchResetOptions {
   preserveTerminalIds?: Set<string>;
+  outgoingProjectId?: string | null;
 }
 
 export async function resetAllStoresForProjectSwitch(
@@ -39,4 +41,9 @@ export async function resetAllStoresForProjectSwitch(
   cleanupNotesStore();
   resetGitHubFilterStore();
   useWorkflowStore.getState().reset();
+  if (options.outgoingProjectId) {
+    useTerminalInputStore
+      .getState()
+      .resetForProjectSwitch(options.outgoingProjectId, options.preserveTerminalIds);
+  }
 }

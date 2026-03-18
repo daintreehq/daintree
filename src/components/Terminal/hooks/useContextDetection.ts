@@ -19,7 +19,8 @@ import { terminalInstanceService } from "@/services/TerminalInstanceService";
 interface LatestRefShape {
   isInHistoryMode: boolean;
   terminalId: string;
-  resetHistoryIndex: (terminalId: string) => void;
+  projectId?: string;
+  resetHistoryIndex: (terminalId: string, projectId?: string) => void;
 }
 
 interface UseContextDetectionParams {
@@ -68,7 +69,7 @@ export function useContextDetection({
           } else {
             const latest = latestRef.current;
             if (latest?.isInHistoryMode) {
-              latest.resetHistoryIndex(latest.terminalId);
+              latest.resetHistoryIndex(latest.terminalId, latest.projectId);
             }
 
             const isUserChange = update.transactions.some(

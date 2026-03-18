@@ -118,13 +118,14 @@ interface LatestState {
   selectionContext: AtSelectionContext | null;
   onSend: HybridInputBarProps["onSend"];
   onSendKey?: HybridInputBarProps["onSendKey"];
-  addToHistory: (terminalId: string, command: string) => void;
-  resetHistoryIndex: (terminalId: string) => void;
+  addToHistory: (terminalId: string, command: string, projectId?: string) => void;
+  resetHistoryIndex: (terminalId: string, projectId?: string) => void;
   clearDraftInput: (terminalId: string, projectId?: string) => void;
   navigateHistory: (
     terminalId: string,
     direction: "up" | "down",
-    currentInput: string
+    currentInput: string,
+    projectId?: string
   ) => string | null;
   isVoiceActiveForPanel: boolean;
   isExpanded: boolean;
@@ -153,12 +154,13 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     const addToHistory = useTerminalInputStore((s) => s.addToHistory);
     const navigateHistory = useTerminalInputStore((s) => s.navigateHistory);
     const resetHistoryIndex = useTerminalInputStore((s) => s.resetHistoryIndex);
-    const isInHistoryMode = useTerminalInputStore(
-      (s) => (s.historyIndex.get(terminalId) ?? -1) !== -1
-    );
+    const projectId = useProjectStore((s) => s.currentProject?.id);
+    const isInHistoryMode = useTerminalInputStore((s) => {
+      const key = projectId ? `${projectId}:${terminalId}` : terminalId;
+      return (s.historyIndex.get(key) ?? -1) !== -1;
+    });
     const stashEditorState = useTerminalInputStore((s) => s.stashEditorState);
     const popStashedEditorState = useTerminalInputStore((s) => s.popStashedEditorState);
-    const projectId = useProjectStore((s) => s.currentProject?.id);
     const isFocusedTerminal = useTerminalStore((s) => s.focusedId === terminalId);
     const hasStash = useTerminalInputStore((s) => {
       const key = projectId ? `${projectId}:${terminalId}` : terminalId;
@@ -622,7 +624,12 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         if (!latest) return false;
         const view = editorViewRef.current;
         const currentValue = view?.state.doc.toString() ?? latest.value;
-        const result = latest.navigateHistory(latest.terminalId, direction, currentValue);
+        const result = latest.navigateHistory(
+          latest.terminalId,
+          direction,
+          currentValue,
+          latest.projectId
+        );
         if (result !== null) {
           applyEditorValue(result, {
             selection: EditorSelection.create([EditorSelection.cursor(result.length)]),

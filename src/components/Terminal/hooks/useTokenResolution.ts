@@ -26,8 +26,8 @@ interface LatestRefShape {
   disabled: boolean;
   value: string;
   onSend: (payload: { data: string; trackerData: string; text: string }) => void;
-  addToHistory: (terminalId: string, command: string) => void;
-  resetHistoryIndex: (terminalId: string) => void;
+  addToHistory: (terminalId: string, command: string, projectId?: string) => void;
+  resetHistoryIndex: (terminalId: string, projectId?: string) => void;
   clearDraftInput: (terminalId: string, projectId?: string) => void;
 }
 
@@ -169,8 +169,8 @@ export function useTokenResolution({
 
       const payload = buildTerminalSendPayload(resolvedText);
       latest.onSend({ data: payload.data, trackerData: payload.trackerData, text: resolvedText });
-      latest.addToHistory(latest.terminalId, text);
-      latest.resetHistoryIndex(latest.terminalId);
+      latest.addToHistory(latest.terminalId, text, latest.projectId);
+      latest.resetHistoryIndex(latest.terminalId, latest.projectId);
       if (latest.projectId) {
         useCommandHistoryStore.getState().recordPrompt(latest.projectId, text, agentId ?? null);
       }
