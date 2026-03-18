@@ -1731,6 +1731,6 @@ body[data-performance-mode="true"] [class*="backdrop-blur"] {
   }
 }
 
-@utility contain-layout-paint {
-  contain: layout paint;
+@utility contain-layout {
+  contain: layout;
 }

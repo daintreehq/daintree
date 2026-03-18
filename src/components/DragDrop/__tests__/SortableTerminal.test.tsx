@@ -38,7 +38,7 @@ const terminal: TerminalInstance = {
 };
 
 describe("SortableTerminal", () => {
-  it("always renders contain-layout-paint on the wrapper", () => {
+  it("always renders contain-layout on the wrapper", () => {
     mockIsDragging = false;
     const { container } = render(
       <SortableTerminal terminal={terminal} sourceLocation="grid" sourceIndex={0}>
@@ -46,10 +46,10 @@ describe("SortableTerminal", () => {
       </SortableTerminal>
     );
     const wrapper = container.firstChild as HTMLElement;
-    expect(wrapper.className).toContain("contain-layout-paint");
+    expect(wrapper.className).toContain("contain-layout");
   });
 
-  it("includes contain-layout-paint alongside drag-state classes when dragging", () => {
+  it("includes contain-layout alongside drag-state classes when dragging", () => {
     mockIsDragging = true;
     const { container } = render(
       <SortableTerminal terminal={terminal} sourceLocation="grid" sourceIndex={0}>
@@ -57,7 +57,7 @@ describe("SortableTerminal", () => {
       </SortableTerminal>
     );
     const wrapper = container.firstChild as HTMLElement;
-    expect(wrapper.className).toContain("contain-layout-paint");
+    expect(wrapper.className).toContain("contain-layout");
     expect(wrapper.className).toContain("opacity-40");
   });
 
