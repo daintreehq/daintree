@@ -112,6 +112,32 @@ export const inputTheme = EditorView.theme(
       width: "14px",
       flexShrink: "0",
     },
+    ".cm-chip-remove": {
+      display: "inline-flex",
+      alignItems: "center",
+      justifyContent: "center",
+      width: "14px",
+      height: "14px",
+      marginLeft: "2px",
+      borderRadius: "2px",
+      color: "var(--theme-text-muted)",
+      cursor: "pointer",
+      flexShrink: "0",
+      opacity: "0",
+      transition: "opacity 100ms ease-out",
+      lineHeight: "1",
+      fontSize: "12px",
+      border: "none",
+      background: "transparent",
+      padding: "0",
+    },
+    ".cm-image-chip:hover .cm-chip-remove, .cm-file-drop-chip:hover .cm-chip-remove": {
+      opacity: "1",
+    },
+    ".cm-chip-remove:hover": {
+      color: "var(--theme-text-primary)",
+      background: "color-mix(in oklab, var(--theme-text-primary) 10%, transparent)",
+    },
     ".cm-diff-chip": {
       display: "inline-flex",
       alignItems: "center",
@@ -444,6 +470,19 @@ export function createPlainPasteKeymap(): Extension {
       },
     ])
   );
+}
+
+export function formatFileSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+export function removeChipRange(view: EditorView, from: number, to: number): void {
+  const doc = view.state.doc.toString();
+  const deleteTo = to < doc.length && doc[to] === " " ? to + 1 : to;
+  view.dispatch({ changes: { from, to: deleteTo, insert: "" } });
+  view.focus();
 }
 
 export function formatChipLabel(filePath: string): string {

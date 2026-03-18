@@ -69,8 +69,6 @@ import {
   createSelectionChipTooltip,
   createAutoSize,
 } from "./inputEditorExtensions";
-import { AttachmentTray } from "./AttachmentTray";
-import type { TrayItem } from "./attachmentTrayUtils";
 import { AppDialog } from "@/components/ui/AppDialog";
 
 import { useEditorCompartments } from "./hooks/useEditorCompartments";
@@ -194,7 +192,6 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     const [selectedIndex, setSelectedIndex] = useState(0);
     const lastQueryRef = useRef<string>("");
     const [menuLeftPx, setMenuLeftPx] = useState<number>(0);
-    const [attachments, setAttachments] = useState<TrayItem[]>([]);
     const [initializationState, setInitializationState] = useState<"initializing" | "initialized">(
       "initializing"
     );
@@ -813,15 +810,6 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       [focusEditor, focusEditorWithCursorAtEnd]
     );
 
-    const removeAttachment = useCallback((item: TrayItem) => {
-      const view = editorViewRef.current;
-      if (!view) return;
-      const doc = view.state.doc.toString();
-      const deleteTo = item.to < doc.length && doc[item.to] === " " ? item.to + 1 : item.to;
-      view.dispatch({ changes: { from: item.from, to: deleteTo, insert: "" } });
-      view.focus();
-    }, []);
-
     const { editorUpdateListener } = useContextDetection({
       latestRef,
       lastEmittedValueRef,
@@ -832,7 +820,6 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       setDiffContext,
       setTerminalContext,
       setSelectionContext,
-      setAttachments,
     });
 
     const { keymapExtension, handleStash, handlePopStash } = useEditorKeymap({
@@ -1228,7 +1215,6 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
               />
             </div>
           </div>
-          <AttachmentTray items={attachments} onRemove={removeAttachment} />
         </div>
       </div>
     );
