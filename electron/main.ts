@@ -14,7 +14,8 @@ import {
 } from "./setup/protocols.js";
 import { registerAppLifecycleHandlers } from "./lifecycle/appLifecycle.js";
 import { registerShutdownHandler } from "./lifecycle/shutdown.js";
-import { setMainWindow, getMainWindow } from "./window/windowRef.js";
+import { setMainWindow, getMainWindow, setWindowRegistry } from "./window/windowRef.js";
+import { WindowRegistry } from "./window/WindowRegistry.js";
 import { setupBrowserWindow } from "./window/createWindow.js";
 import {
   setupWindowServices,
@@ -114,6 +115,9 @@ if (!gotTheLock) {
   initializeCrashRecoveryService();
   initializeGpuCrashMonitor();
 
+  const windowRegistry = new WindowRegistry();
+  setWindowRegistry(windowRegistry);
+
   async function createWindow(): Promise<void> {
     const currentWindow = getMainWindow();
     if (currentWindow && !currentWindow.isDestroyed()) {
@@ -128,11 +132,13 @@ if (!gotTheLock) {
     const { win, loadRenderer, smokeTestTimer, smokeRendererUnresponsive } =
       setupBrowserWindow(__dirname);
     setMainWindow(win);
+    windowRegistry.register(win);
 
     await setupWindowServices(win, {
       loadRenderer,
       smokeTestTimer,
       smokeRendererUnresponsive,
+      windowRegistry,
     });
 
     setupPowerMonitor({
@@ -150,6 +156,7 @@ if (!gotTheLock) {
     getMainWindow,
     getCliAvailabilityService: getCliAvailabilityServiceRef,
     getProjectSwitchService: getProjectSwitchServiceRef,
+    windowRegistry,
   });
 
   registerShutdownHandler({
