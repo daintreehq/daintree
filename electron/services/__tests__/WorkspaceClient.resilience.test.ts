@@ -215,7 +215,7 @@ describe("WorkspaceClient resilience", () => {
         isDestroyed: vi.fn(() => false),
         webContents: { isDestroyed: vi.fn(() => false), send: vi.fn() },
       };
-      getAllWindowsMock.mockReturnValue([mockWindow]);
+      getAllWindowsMock.mockReturnValue([mockWindow] as unknown[]);
 
       // Make the host "ready" so requests go through
       child.emit("message", { type: "ready" });
@@ -224,7 +224,7 @@ describe("WorkspaceClient resilience", () => {
     function resolveSetActive() {
       const lastCall = child.postMessage.mock.calls.at(-1)!;
       const requestId = (lastCall[0] as { requestId: string }).requestId;
-      child.emit("message", { type: "set-active-ack", requestId });
+      child.emit("message", { type: "set-active-result", requestId });
     }
 
     it("emits WORKTREE_ACTIVATED by default (backend-initiated)", async () => {
