@@ -960,6 +960,12 @@ body,
   will-change: opacity;
 }
 
+.animate-pulse-immediate {
+  opacity: 1;
+  animation: pulse-delayed 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+  will-change: opacity;
+}
+
 /* Agent status working state - pulsing gradient animation */
 @keyframes status-pulse {
   0%,
@@ -1043,6 +1049,7 @@ body,
   .animate-breathe,
   .animate-spin-slow,
   .animate-pulse-delayed,
+  .animate-pulse-immediate,
   .status-working,
   .animate-badge-bump,
   .animate-activity-blip,
@@ -1673,7 +1680,8 @@ body[data-performance-mode="true"] *::after {
 }
 
 /* Ensure delayed skeletons don't stay invisible when animations are disabled */
-body[data-performance-mode="true"] .animate-pulse-delayed {
+body[data-performance-mode="true"] .animate-pulse-delayed,
+body[data-performance-mode="true"] .animate-pulse-immediate {
   opacity: 1 !important;
 }
 
