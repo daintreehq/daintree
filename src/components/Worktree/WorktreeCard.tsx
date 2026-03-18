@@ -475,6 +475,7 @@ export function WorktreeCard({
         "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2"
       )}
       onClick={onSelect}
+      onDoubleClick={handleDoubleClick}
       onContextMenu={handleContextMenu}
       onKeyDown={(e) => {
         if ((e.key === "Enter" || e.key === " ") && e.target === e.currentTarget) {
