@@ -212,6 +212,24 @@ describe("TerminalAgentStateController", () => {
       controller.clearDirectingState("t1");
       expect(managed.agentState).toBe("working");
     });
+
+    it("immediately reverts directing to waiting without advancing timers (Escape cancel)", () => {
+      const callback = vi.fn();
+      const managed = makeMockManaged({
+        canonicalAgentState: "waiting",
+        agentState: "waiting",
+      });
+      managed.agentStateSubscribers.add(callback);
+      instances.set("t1", managed);
+
+      controller.onUserInput("t1");
+      expect(managed.agentState).toBe("directing");
+      callback.mockClear();
+
+      controller.clearDirectingState("t1");
+      expect(managed.agentState).toBe("waiting");
+      expect(callback).toHaveBeenCalledWith("waiting");
+    });
   });
 
   describe("destroy", () => {
