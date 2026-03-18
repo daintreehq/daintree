@@ -588,6 +588,49 @@ describe("titleStatePatterns", () => {
   });
 });
 
+describe("gemini metadata", () => {
+  it("has correct npm package name", () => {
+    const config = getAgentConfig("gemini");
+    expect(config?.version?.npmPackage).toBe("@google/gemini-cli");
+  });
+
+  it("has correct GitHub repo", () => {
+    const config = getAgentConfig("gemini");
+    expect(config?.version?.githubRepo).toBe("google-gemini/gemini-cli");
+  });
+
+  it("has correct release notes URL", () => {
+    const config = getAgentConfig("gemini");
+    expect(config?.version?.releaseNotesUrl).toBe(
+      "https://github.com/google-gemini/gemini-cli/releases"
+    );
+  });
+
+  it("has correct npm update command", () => {
+    const config = getAgentConfig("gemini");
+    expect(config?.update?.npm).toBe("npm install -g @google/gemini-cli@latest");
+  });
+
+  it("has correct install docs URL", () => {
+    const config = getAgentConfig("gemini");
+    expect(config?.install?.docsUrl).toBe("https://github.com/google-gemini/gemini-cli#readme");
+  });
+
+  it("has correct install commands for all platforms", () => {
+    const config = getAgentConfig("gemini");
+    for (const os of ["macos", "windows", "linux"] as const) {
+      const commands = config?.install?.byOs?.[os]?.[0]?.commands;
+      expect(commands).toContain("npm install -g @google/gemini-cli");
+    }
+  });
+
+  it("has correct prerequisite install URL", () => {
+    const config = getAgentConfig("gemini");
+    const prereq = config?.prerequisites?.find((p) => p.tool === "gemini");
+    expect(prereq?.installUrl).toBe("https://github.com/google-gemini/gemini-cli#readme");
+  });
+});
+
 describe("DEFAULT_ROUTING_CONFIG", () => {
   it("has empty capabilities", () => {
     expect(DEFAULT_ROUTING_CONFIG.capabilities).toEqual([]);
