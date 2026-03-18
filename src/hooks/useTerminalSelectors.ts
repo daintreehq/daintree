@@ -33,8 +33,7 @@ function buildWorktreeIds(worktrees: Map<string, WorktreeState>): Set<string> {
 }
 
 function useWorktreeIds(): Set<string> {
-  const worktrees = useWorktreeDataStore((state) => state.worktrees);
-  return useMemo(() => buildWorktreeIds(worktrees), [worktrees]);
+  return useWorktreeDataStore(useShallow((state) => buildWorktreeIds(state.worktrees)));
 }
 
 export function useTerminalNotificationCounts(blurTime?: number | null): {
