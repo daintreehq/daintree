@@ -197,6 +197,18 @@ export interface TerminalInfoPayload {
   analysisEnabled?: boolean;
   /** Resize strategy: "default" (immediate) or "settled" (batched for TUI agents) */
   resizeStrategy?: "default" | "settled";
+  /** PTY process PID */
+  ptyPid?: number;
+  /** PTY column count */
+  ptyCols?: number;
+  /** PTY row count */
+  ptyRows?: number;
+  /** Current foreground process name */
+  ptyForegroundProcess?: string;
+  /** TTY device path (e.g., /dev/ttys004) */
+  ptyTty?: string;
+  /** Exit code when terminal has exited */
+  exitCode?: number;
 }
 
 import type { TerminalActivityPayload } from "../terminal.js";

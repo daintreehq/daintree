@@ -444,6 +444,7 @@ export class TerminalProcess {
       restartCount: t.restartCount,
       activityTier: this._activityTier,
       hasPty,
+      exitCode: t.exitCode,
     };
   }
 
@@ -1198,6 +1199,7 @@ export class TerminalProcess {
       }
 
       if (this.shouldPreserveOnExit(exitCode ?? 0)) {
+        terminal.exitCode = exitCode ?? 0;
         terminal.isExited = true;
         return;
       }
