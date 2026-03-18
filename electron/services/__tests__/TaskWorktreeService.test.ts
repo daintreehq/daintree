@@ -1,7 +1,9 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 
 vi.mock("../GitService.js", () => ({
-  GitService: vi.fn().mockImplementation((p: string) => ({ path: p })),
+  GitService: vi.fn().mockImplementation(function (this: Record<string, unknown>, p: string) {
+    this.path = p;
+  }),
 }));
 
 import { TaskWorktreeService } from "../TaskWorktreeService.js";
