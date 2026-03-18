@@ -24,7 +24,7 @@ import {
 } from "./types.js";
 import { getTerminalSerializerService } from "./TerminalSerializerService.js";
 import { events } from "../events.js";
-import { AgentSpawnedSchema, AgentStateChangedSchema } from "../../schemas/agent.js";
+import { AgentSpawnedSchema } from "../../schemas/agent.js";
 import type { PtyPool } from "../PtyPool.js";
 import { installHeadlessResponder } from "./headlessResponder.js";
 import { styleUrls } from "./UrlStyler.js";
@@ -1338,30 +1338,6 @@ export class TerminalProcess {
         worktreeId: this.options.worktreeId,
         lastCommand,
       });
-
-      const newState = result.isBusy ? "running" : "idle";
-
-      if (terminal.agentState !== newState) {
-        const previousState = terminal.agentState || "idle";
-        terminal.agentState = newState;
-        terminal.lastStateChange = Date.now();
-
-        const stateChangePayload = {
-          agentId: this.terminalInfo.agentId,
-          terminalId: this.id,
-          state: newState,
-          previousState,
-          timestamp: terminal.lastStateChange,
-          trigger: "activity" as const,
-          confidence: 1.0,
-          worktreeId: this.options.worktreeId,
-        };
-
-        const validated = AgentStateChangedSchema.safeParse(stateChangePayload);
-        if (validated.success) {
-          events.emit("agent:state-changed", validated.data);
-        }
-      }
     }
   }
 
