@@ -543,7 +543,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   }
 
   const rootPath = currentProject?.path ?? "";
-  const hasNonMainWorktrees = worktrees.length > 1;
+  const hasNonMainWorktrees = deferredWorktrees.length > 1;
   const hasFilters = hasActiveFilters();
   const worktreeMatchesQuery = (w: WorktreeState) => {
     if (!query) return true;
@@ -557,7 +557,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   const integrationMatchesQuery = integrationWorktree && worktreeMatchesQuery(integrationWorktree);
   const visibleCount = hasFilters
     ? filteredWorktrees.length + (mainMatchesQuery ? 1 : 0) + (integrationMatchesQuery ? 1 : 0)
-    : worktrees.length;
+    : deferredWorktrees.length;
 
   const hasQuery = query.trim().length > 0;
   const isSortDisabled = isGroupedByType || hasQuery;
@@ -568,7 +568,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
       worktree={worktree}
       isActive={worktree.id === activeWorktreeId}
       isFocused={worktree.id === focusedWorktreeId}
-      isSingleWorktree={worktrees.length === 1}
+      isSingleWorktree={deferredWorktrees.length === 1}
       onSelect={() => selectWorktree(worktree.id)}
       onCopyTree={() => worktreeActions.handleCopyTree(worktree)}
       onOpenEditor={() => worktreeActions.handleOpenEditor(worktree)}
@@ -587,9 +587,9 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
         <div className="flex items-baseline gap-1.5">
           <h2 className="text-canopy-text font-semibold text-sm tracking-wide">Worktrees</h2>
           <span className="text-canopy-text/50 text-xs">
-            {hasFilters && visibleCount !== worktrees.length
-              ? `(${visibleCount} of ${worktrees.length})`
-              : `(${worktrees.length})`}
+            {hasFilters && visibleCount !== deferredWorktrees.length
+              ? `(${visibleCount} of ${deferredWorktrees.length})`
+              : `(${deferredWorktrees.length})`}
           </span>
         </div>
         <div className="flex items-center gap-1">
@@ -685,7 +685,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
                             worktree={worktree}
                             isActive={worktree.id === activeWorktreeId}
                             isFocused={worktree.id === focusedWorktreeId}
-                            isSingleWorktree={worktrees.length === 1}
+                            isSingleWorktree={deferredWorktrees.length === 1}
                             onSelect={() => selectWorktree(worktree.id)}
                             onCopyTree={() => worktreeActions.handleCopyTree(worktree)}
                             onOpenEditor={() => worktreeActions.handleOpenEditor(worktree)}
