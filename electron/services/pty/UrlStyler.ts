@@ -3,7 +3,7 @@
  *
  * Links in xterm.js terminals need explicit hyperlink sequences to be both
  * visually styled and clickable. OSC 8 is the standard terminal hyperlink
- * escape sequence, supported natively by xterm.js without requiring WebLinksAddon.
+ * escape sequence, supported natively by xterm.js.
  *
  * OSC 8 Format: \x1b]8;;URI\x07DISPLAY_TEXT\x1b]8;;\x07
  */
@@ -35,7 +35,7 @@ const ESCAPE_REGEX = /\x1b[\[\]]/;
  * Wrap a URL with OSC 8 hyperlink sequence and ANSI styling.
  *
  * Creates a native terminal hyperlink that is:
- * - Clickable without WebLinksAddon
+ * - Clickable in xterm.js via the native linkHandler
  * - Styled with blue color and underline
  */
 function wrapUrl(url: string): string {

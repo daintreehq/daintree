@@ -40,7 +40,6 @@ vi.mock("../TerminalAddonManager", () => ({
   setupTerminalAddons: vi.fn(() => ({
     fitAddon: { fit: vi.fn() },
     serializeAddon: { serialize: vi.fn() },
-    webLinksAddon: {},
     imageAddon: {},
     searchAddon: {},
   })),
