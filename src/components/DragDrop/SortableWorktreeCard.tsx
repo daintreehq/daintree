@@ -34,8 +34,6 @@ interface SortableWorktreeCardProps {
   dragStartOrder: string[];
   disabled?: boolean;
   children: (props: {
-    sortableRef: (node: HTMLElement | null) => void;
-    sortableStyle: React.CSSProperties;
     isDraggingSort: boolean;
     dragHandleListeners: SyntheticListenerMap | undefined;
     dragHandleActivatorRef: (node: HTMLElement | null) => void;
@@ -77,15 +75,14 @@ export function SortableWorktreeCard({
 
   return (
     <div
+      ref={setNodeRef}
       style={style}
-      className={cn(isDragging && "opacity-40")}
+      className={cn(isDragging && "opacity-40 ring-2 ring-canopy-accent/50 rounded-sm")}
       role="listitem"
       aria-roledescription="sortable worktree"
       {...filteredAttributes}
     >
       {children({
-        sortableRef: setNodeRef,
-        sortableStyle: style,
         isDraggingSort: isDragging,
         dragHandleListeners: listeners,
         dragHandleActivatorRef: setActivatorNodeRef,

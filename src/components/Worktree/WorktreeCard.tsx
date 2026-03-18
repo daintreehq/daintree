@@ -6,6 +6,8 @@ import type { GitHubIssue } from "@shared/types/github";
 import { useWorktreeTerminals } from "../../hooks/useWorktreeTerminals";
 import { useDroppable } from "@dnd-kit/core";
 import type { SyntheticListenerMap } from "@dnd-kit/core/dist/hooks/utilities";
+import { useIsWorktreeSortDragging } from "../DragDrop/DndProvider";
+import { GripVertical } from "lucide-react";
 import {
   useErrorStore,
   useTerminalStore,
@@ -47,7 +49,6 @@ export interface WorktreeCardProps {
   homeDir?: string;
   variant?: "sidebar" | "grid";
   onAfterTerminalSelect?: () => void;
-  sortableRef?: (node: HTMLElement | null) => void;
   dragHandleListeners?: SyntheticListenerMap;
   dragHandleActivatorRef?: (node: HTMLElement | null) => void;
   isDraggingSort?: boolean;
@@ -68,7 +69,6 @@ export function WorktreeCard({
   homeDir,
   variant = "sidebar",
   onAfterTerminalSelect,
-  sortableRef,
   dragHandleListeners,
   dragHandleActivatorRef,
   isDraggingSort,
@@ -109,6 +109,18 @@ export function WorktreeCard({
       toggleWorktreeCollapsed(worktree.id);
     },
     [toggleWorktreeCollapsed, worktree.id]
+  );
+
+  const handleDoubleClick = useCallback(
+    (e: React.MouseEvent) => {
+      if (!canCollapse) return;
+      // Don't toggle when double-clicking interactive elements
+      const target = e.target as HTMLElement;
+      if (target.closest("button, a, [role='menuitem'], input, textarea, select")) return;
+      e.stopPropagation();
+      toggleWorktreeCollapsed(worktree.id);
+    },
+    [canCollapse, toggleWorktreeCollapsed, worktree.id]
   );
 
   const handleTogglePin = useCallback(() => {
@@ -366,6 +378,8 @@ export function WorktreeCard({
     [launchAgents]
   );
 
+  const isWorktreeSortDragging = useIsWorktreeSortDragging();
+
   const isIdleCard = spineState === "idle";
   const isStaleCard = spineState === "stale";
   const isWaitingCard = terminalCounts.byState.waiting > 0;
@@ -397,12 +411,11 @@ export function WorktreeCard({
     disabled: isActive,
   });
 
-  const mergedRef = useCallback(
+  const droppableRef = useCallback(
     (node: HTMLElement | null) => {
       if (!isActive) setNodeRef(node);
-      sortableRef?.(node);
     },
-    [isActive, setNodeRef, sortableRef]
+    [isActive, setNodeRef]
   );
 
   const isMuted =
@@ -436,7 +449,7 @@ export function WorktreeCard({
 
   const cardContent = (
     <div
-      ref={mergedRef}
+      ref={droppableRef}
       className={cn(
         "group relative transition-all duration-200",
         variant === "sidebar" && "border-b border-border-subtle",
@@ -520,114 +533,132 @@ export function WorktreeCard({
           </Tooltip>
         </TooltipProvider>
       )}
-      <div className="px-4 py-5">
-        <WorktreeHeader
-          worktree={worktree}
-          isActive={isActive}
-          isMuted={isMuted}
-          isMainWorktree={isMainWorktree}
-          isPinned={isPinned}
-          isCollapsed={effectiveIsCollapsed}
-          canCollapse={canCollapse}
-          onToggleCollapse={handleToggleCollapse}
-          contentId={`worktree-body-${worktree.id}`}
-          branchLabel={branchLabel}
-          worktreeErrorCount={worktreeErrors.length}
-          dragHandleListeners={dragHandleListeners}
-          dragHandleActivatorRef={dragHandleActivatorRef}
-          isDraggingSort={isDraggingSort}
-          badges={{
-            onOpenIssue: worktree.issueNumber ? handleOpenIssueExternal : undefined,
-            onOpenPR: worktree.prNumber ? handleOpenPRExternal : undefined,
-          }}
-          menu={{
-            launchAgents,
-            recipes,
-            runningRecipeId,
-            isRestartValidating,
-            counts: {
-              grid: gridCount,
-              dock: dockCount,
-              active: totalTerminalCount,
-              completed: completedCount,
-              failed: failedCount,
-              all: allTerminalCount,
-            },
-            onCopyContextFull: handleCopyContextFull,
-            onCopyContextModified: handleCopyContextModified,
-            onOpenEditor,
-            onRevealInFinder: handlePathClick,
-            onOpenIssueSidecar: worktree.issueNumber ? handleOpenIssueSidecar : undefined,
-            onOpenIssueExternal: worktree.issueNumber ? handleOpenIssueExternal : undefined,
-            onOpenPRSidecar: worktree.prUrl ? handleOpenPRSidecar : undefined,
-            onOpenPRExternal: worktree.prUrl ? handleOpenPRExternal : undefined,
-            onAttachIssue: () => setShowIssuePicker(true),
-            onOpenReviewHub: () => setShowReviewHub(true),
-            onCompareDiff: () =>
-              useWorktreeSelectionStore.getState().openCrossWorktreeDiff(worktree.id),
-            onRunRecipe: (recipeId) => void handleRunRecipe(recipeId),
-            onSaveLayout,
-            onTogglePin: handleTogglePin,
-            onToggleCollapse: canCollapse ? () => toggleWorktreeCollapsed(worktree.id) : undefined,
-            isCollapsed: effectiveIsCollapsed,
-            onLaunchAgent,
-            onMinimizeAll: handleMinimizeAll,
-            onMaximizeAll: handleMaximizeAll,
-            onRestartAll: () => void handleRestartAll(),
-            onResetRenderers: handleResetRenderers,
-            onCloseCompleted: handleCloseCompleted,
-            onCloseFailed: handleCloseFailed,
-            onCloseAll: handleCloseAll,
-            onEndAll: handleEndAll,
-            onDeleteWorktree: !isMainWorktree ? () => setShowDeleteDialog(true) : undefined,
-          }}
-        />
-
-        {!effectiveIsCollapsed && (
-          <div id={`worktree-body-${worktree.id}`}>
-            <WorktreeDetailsSection
-              worktree={worktree}
-              homeDir={homeDir}
-              isExpanded={isExpanded}
-              hasChanges={hasChanges}
-              computedSubtitle={computedSubtitle}
-              effectiveNote={effectiveNote}
-              effectiveSummary={effectiveSummary}
-              worktreeErrors={worktreeErrors}
-              isFocused={isFocused}
-              onToggleExpand={handleToggleExpand}
-              onPathClick={handlePathClick}
-              onDismissError={dismissError}
-              onRetryError={handleErrorRetry}
-              onOpenReviewHub={() => setShowReviewHub(true)}
-              isLifecycleRunning={isLifecycleRunning}
-              lifecycleLabel={lifecycleLabel}
-            />
-
-            <WorktreeTerminalSection
-              worktreeId={worktree.id}
-              isExpanded={isTerminalsExpanded}
-              counts={terminalCounts}
-              terminals={worktreeTerminals}
-              onToggle={handleToggleTerminals}
-              onTerminalSelect={handleTerminalSelect}
-            />
+      <div className="flex">
+        {dragHandleListeners && (
+          <div
+            ref={dragHandleActivatorRef}
+            className={cn(
+              "shrink-0 w-4 flex items-center justify-center cursor-grab active:cursor-grabbing touch-none select-none transition-colors",
+              isDraggingSort
+                ? "bg-canopy-accent/20 text-canopy-accent"
+                : isWorktreeSortDragging
+                  ? "text-canopy-text/30 hover:text-canopy-text/50 hover:bg-overlay-soft"
+                  : "text-transparent hover:text-canopy-text/30 hover:bg-overlay-soft"
+            )}
+            aria-label="Drag to reorder"
+            {...dragHandleListeners}
+          >
+            <GripVertical className="w-3 h-3" />
           </div>
         )}
+        <div className={cn("flex-1 min-w-0 py-5", dragHandleListeners ? "pl-1 pr-4" : "px-4")}>
+          <WorktreeHeader
+            worktree={worktree}
+            isActive={isActive}
+            isMuted={isMuted}
+            isMainWorktree={isMainWorktree}
+            isPinned={isPinned}
+            isCollapsed={effectiveIsCollapsed}
+            canCollapse={canCollapse}
+            onToggleCollapse={handleToggleCollapse}
+            contentId={`worktree-body-${worktree.id}`}
+            branchLabel={branchLabel}
+            worktreeErrorCount={worktreeErrors.length}
+            badges={{
+              onOpenIssue: worktree.issueNumber ? handleOpenIssueExternal : undefined,
+              onOpenPR: worktree.prNumber ? handleOpenPRExternal : undefined,
+            }}
+            menu={{
+              launchAgents,
+              recipes,
+              runningRecipeId,
+              isRestartValidating,
+              counts: {
+                grid: gridCount,
+                dock: dockCount,
+                active: totalTerminalCount,
+                completed: completedCount,
+                failed: failedCount,
+                all: allTerminalCount,
+              },
+              onCopyContextFull: handleCopyContextFull,
+              onCopyContextModified: handleCopyContextModified,
+              onOpenEditor,
+              onRevealInFinder: handlePathClick,
+              onOpenIssueSidecar: worktree.issueNumber ? handleOpenIssueSidecar : undefined,
+              onOpenIssueExternal: worktree.issueNumber ? handleOpenIssueExternal : undefined,
+              onOpenPRSidecar: worktree.prUrl ? handleOpenPRSidecar : undefined,
+              onOpenPRExternal: worktree.prUrl ? handleOpenPRExternal : undefined,
+              onAttachIssue: () => setShowIssuePicker(true),
+              onOpenReviewHub: () => setShowReviewHub(true),
+              onCompareDiff: () =>
+                useWorktreeSelectionStore.getState().openCrossWorktreeDiff(worktree.id),
+              onRunRecipe: (recipeId) => void handleRunRecipe(recipeId),
+              onSaveLayout,
+              onTogglePin: handleTogglePin,
+              onToggleCollapse: canCollapse
+                ? () => toggleWorktreeCollapsed(worktree.id)
+                : undefined,
+              isCollapsed: effectiveIsCollapsed,
+              onLaunchAgent,
+              onMinimizeAll: handleMinimizeAll,
+              onMaximizeAll: handleMaximizeAll,
+              onRestartAll: () => void handleRestartAll(),
+              onResetRenderers: handleResetRenderers,
+              onCloseCompleted: handleCloseCompleted,
+              onCloseFailed: handleCloseFailed,
+              onCloseAll: handleCloseAll,
+              onEndAll: handleEndAll,
+              onDeleteWorktree: !isMainWorktree ? () => setShowDeleteDialog(true) : undefined,
+            }}
+          />
 
-        <WorktreeDialogs
-          worktree={worktree}
-          confirmDialog={confirmDialog}
-          onCloseConfirm={closeConfirmDialog}
-          showDeleteDialog={showDeleteDialog}
-          onCloseDeleteDialog={() => setShowDeleteDialog(false)}
-          showIssuePicker={showIssuePicker}
-          onCloseIssuePicker={() => setShowIssuePicker(false)}
-          onAttachIssue={(issue) => void handleAttachIssue(issue)}
-          onDetachIssue={() => void handleDetachIssue()}
-          showReviewHub={showReviewHub}
-          onCloseReviewHub={() => setShowReviewHub(false)}
-        />
+          {!effectiveIsCollapsed && (
+            <div id={`worktree-body-${worktree.id}`}>
+              <WorktreeDetailsSection
+                worktree={worktree}
+                homeDir={homeDir}
+                isExpanded={isExpanded}
+                hasChanges={hasChanges}
+                computedSubtitle={computedSubtitle}
+                effectiveNote={effectiveNote}
+                effectiveSummary={effectiveSummary}
+                worktreeErrors={worktreeErrors}
+                isFocused={isFocused}
+                onToggleExpand={handleToggleExpand}
+                onPathClick={handlePathClick}
+                onDismissError={dismissError}
+                onRetryError={handleErrorRetry}
+                onOpenReviewHub={() => setShowReviewHub(true)}
+                isLifecycleRunning={isLifecycleRunning}
+                lifecycleLabel={lifecycleLabel}
+              />
+
+              <WorktreeTerminalSection
+                worktreeId={worktree.id}
+                isExpanded={isTerminalsExpanded}
+                counts={terminalCounts}
+                terminals={worktreeTerminals}
+                onToggle={handleToggleTerminals}
+                onTerminalSelect={handleTerminalSelect}
+              />
+            </div>
+          )}
+
+          <WorktreeDialogs
+            worktree={worktree}
+            confirmDialog={confirmDialog}
+            onCloseConfirm={closeConfirmDialog}
+            showDeleteDialog={showDeleteDialog}
+            onCloseDeleteDialog={() => setShowDeleteDialog(false)}
+            showIssuePicker={showIssuePicker}
+            onCloseIssuePicker={() => setShowIssuePicker(false)}
+            onAttachIssue={(issue) => void handleAttachIssue(issue)}
+            onDetachIssue={() => void handleDetachIssue()}
+            showReviewHub={showReviewHub}
+            onCloseReviewHub={() => setShowReviewHub(false)}
+          />
+        </div>
       </div>
     </div>
   );

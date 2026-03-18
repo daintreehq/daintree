@@ -678,12 +678,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
                         dragStartOrder={dragStartOrder}
                         disabled={isSortDisabled || isPinned}
                       >
-                        {({
-                          sortableRef,
-                          isDraggingSort,
-                          dragHandleListeners,
-                          dragHandleActivatorRef,
-                        }) => (
+                        {({ isDraggingSort, dragHandleListeners, dragHandleActivatorRef }) => (
                           <WorktreeCard
                             worktree={worktree}
                             isActive={worktree.id === activeWorktreeId}
@@ -699,7 +694,6 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
                             agentAvailability={availability}
                             agentSettings={agentSettings}
                             homeDir={homeDir}
-                            sortableRef={sortableRef}
                             dragHandleListeners={showDragHandle ? dragHandleListeners : undefined}
                             dragHandleActivatorRef={
                               showDragHandle ? dragHandleActivatorRef : undefined

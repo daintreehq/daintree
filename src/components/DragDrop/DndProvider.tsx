@@ -33,11 +33,14 @@ import {
 } from "@/store";
 import { useShallow } from "zustand/react/shallow";
 import { TerminalDragPreview } from "./TerminalDragPreview";
+import { WorktreeDragPreview } from "./WorktreeDragPreview";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { arrayMove } from "@dnd-kit/sortable";
 import { parseAccordionDragId } from "./SortableWorktreeTerminal";
 import { isWorktreeSortDragData, parseWorktreeSortDragId } from "./SortableWorktreeCard";
 import { useWorktreeFilterStore } from "@/store/worktreeFilterStore";
+import { useWorktreeDataStore } from "@/store/worktreeDataStore";
+import type { WorktreeState } from "@shared/types";
 
 // Placeholder ID used when dragging from dock to grid
 export const GRID_PLACEHOLDER_ID = "__grid-placeholder__";
@@ -48,6 +51,7 @@ interface DndPlaceholderContextValue {
   sourceContainer: "grid" | "dock" | null;
   activeTerminal: TerminalInstance | null;
   isDragging: boolean;
+  isWorktreeSortDragging: boolean;
   /** If dragging a tab group, the group ID */
   activeGroupId: string | null;
   /** If dragging a tab group, the panel IDs in the group */
@@ -59,6 +63,7 @@ const DndPlaceholderContext = createContext<DndPlaceholderContextValue>({
   sourceContainer: null,
   activeTerminal: null,
   isDragging: false,
+  isWorktreeSortDragging: false,
   activeGroupId: null,
   activeGroupPanelIds: null,
 });
@@ -69,6 +74,10 @@ export function useDndPlaceholder() {
 
 export function useIsDragging() {
   return useContext(DndPlaceholderContext).isDragging;
+}
+
+export function useIsWorktreeSortDragging() {
+  return useContext(DndPlaceholderContext).isWorktreeSortDragging;
 }
 
 // Minimum distance (px) pointer must move before drag starts
@@ -147,9 +156,11 @@ function getEventCoordinates(event: Event): { x: number; y: number } {
 // Inner component that uses useDndMonitor to track cursor position (must be inside DndContext)
 function DragOverlayWithCursorTracking({
   activeTerminal,
+  activeWorktree,
   groupTabCount,
 }: {
   activeTerminal: TerminalInstance | null;
+  activeWorktree: WorktreeState | null;
   groupTabCount?: number;
 }) {
   const pointerStartRef = useRef<{ x: number; y: number } | null>(null);
@@ -193,11 +204,15 @@ function DragOverlayWithCursorTracking({
     };
   }, []);
 
+  const overlayContent = activeTerminal ? (
+    <TerminalDragPreview terminal={activeTerminal} groupTabCount={groupTabCount} />
+  ) : activeWorktree ? (
+    <WorktreeDragPreview worktree={activeWorktree} />
+  ) : null;
+
   return (
     <DragOverlay dropAnimation={null} modifiers={[cursorOverlayModifier]}>
-      {activeTerminal ? (
-        <TerminalDragPreview terminal={activeTerminal} groupTabCount={groupTabCount} />
-      ) : null}
+      {overlayContent}
     </DragOverlay>
   );
 }
@@ -206,6 +221,8 @@ export function DndProvider({ children }: DndProviderProps) {
   const [activeId, setActiveId] = useState<string | null>(null);
   const [activeData, setActiveData] = useState<DragData | WorktreeDragData | null>(null);
   const [overContainer, setOverContainer] = useState<"grid" | "dock" | null>(null);
+  const [isWorktreeSortActive, setIsWorktreeSortActive] = useState(false);
+  const [activeSortWorktree, setActiveSortWorktree] = useState<WorktreeState | null>(null);
 
   // Ref to track overContainer for stable collision detection (avoids infinite loops)
   const overContainerRef = useRef<"grid" | "dock" | null>(null);
@@ -253,6 +270,12 @@ export function DndProvider({ children }: DndProviderProps) {
     // Skip terminal-specific logic for worktree-sort drags
     if (isWorktreeSortDragData(active.data.current as Record<string, unknown> | undefined)) {
       setActiveId(dragId);
+      setIsWorktreeSortActive(true);
+      const worktreeId = parseWorktreeSortDragId(dragId);
+      if (worktreeId) {
+        const wt = useWorktreeDataStore.getState().getWorktree(worktreeId);
+        setActiveSortWorktree(wt ?? null);
+      }
       return;
     }
 
@@ -380,6 +403,8 @@ export function DndProvider({ children }: DndProviderProps) {
       if (isWorktreeSortDragData(activeRawData)) {
         setActiveId(null);
         setActiveData(null);
+        setIsWorktreeSortActive(false);
+        setActiveSortWorktree(null);
 
         if (!over) return;
 
@@ -884,6 +909,8 @@ export function DndProvider({ children }: DndProviderProps) {
     setActiveData(null);
     setOverContainer(null);
     setPlaceholderIndex(null);
+    setIsWorktreeSortActive(false);
+    setActiveSortWorktree(null);
     // No explicit refresh needed - terminals return to original state (no layout change)
   }, [activeId, activeData]);
 
@@ -914,6 +941,7 @@ export function DndProvider({ children }: DndProviderProps) {
       sourceContainer: activeData?.sourceLocation ?? null,
       activeTerminal,
       isDragging: activeId !== null,
+      isWorktreeSortDragging: isWorktreeSortActive,
       activeGroupId: activeData?.groupId ?? null,
       activeGroupPanelIds: activeData?.groupPanelIds ?? null,
     }),
@@ -924,6 +952,7 @@ export function DndProvider({ children }: DndProviderProps) {
       activeData?.groupPanelIds,
       activeTerminal,
       activeId,
+      isWorktreeSortActive,
     ]
   );
 
@@ -952,6 +981,7 @@ export function DndProvider({ children }: DndProviderProps) {
       </DndPlaceholderContext.Provider>
       <DragOverlayWithCursorTracking
         activeTerminal={activeTerminal}
+        activeWorktree={activeSortWorktree}
         groupTabCount={activeData?.groupPanelIds?.length}
       />
     </DndContext>

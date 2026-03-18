@@ -26,12 +26,10 @@ import {
   CircleDot,
   CornerDownRight,
   GitPullRequest,
-  GripVertical,
   MoreHorizontal,
   House,
   Pin,
 } from "lucide-react";
-import type { SyntheticListenerMap } from "@dnd-kit/core/dist/hooks/utilities";
 import { useIssueTooltip, usePRTooltip } from "@/hooks/useGitHubTooltip";
 import { IssueTooltipContent, PRTooltipContent, TooltipLoading } from "./GitHubTooltipContent";
 
@@ -221,10 +219,6 @@ export interface WorktreeHeaderProps {
   contentId?: string;
   branchLabel: string;
   worktreeErrorCount: number;
-  dragHandleListeners?: SyntheticListenerMap;
-  dragHandleActivatorRef?: (node: HTMLElement | null) => void;
-  isDraggingSort?: boolean;
-
   badges: {
     onOpenIssue?: () => void;
     onOpenPR?: () => void;
@@ -284,9 +278,6 @@ export function WorktreeHeader({
   contentId,
   branchLabel,
   worktreeErrorCount,
-  dragHandleListeners,
-  dragHandleActivatorRef,
-  isDraggingSort,
   badges,
   menu,
 }: WorktreeHeaderProps) {
@@ -307,21 +298,6 @@ export function WorktreeHeader({
   return (
     <div>
       <div className="flex items-center gap-2 min-h-[22px]">
-        {dragHandleListeners && !isDraggingSort && (
-          <button
-            type="button"
-            ref={dragHandleActivatorRef}
-            className={cn(
-              "shrink-0 cursor-grab active:cursor-grabbing touch-none",
-              "text-canopy-text/0 group-hover:text-canopy-text/40 hover:!text-canopy-text/70 transition-colors",
-              "-ml-2 p-0.5 rounded"
-            )}
-            aria-label="Drag to reorder"
-            {...dragHandleListeners}
-          >
-            <GripVertical className="w-3.5 h-3.5" />
-          </button>
-        )}
         <div className="flex items-center gap-2 min-w-0 flex-1">
           {isMainWorktree && (
             <House

@@ -4,6 +4,7 @@ export {
   type WorktreeDragData,
   useDndPlaceholder,
   useIsDragging,
+  useIsWorktreeSortDragging,
   GRID_PLACEHOLDER_ID,
 } from "./DndProvider";
 export { SortableTerminal } from "./SortableTerminal";
