@@ -649,7 +649,7 @@ export async function setupWindowServices(
   }
 
   // Performance monitors
-  if (process.env.CANOPY_PERF_CAPTURE === "1" && !stopEventLoopLagMonitor) {
+  if (!stopEventLoopLagMonitor) {
     stopEventLoopLagMonitor = startEventLoopLagMonitor();
   }
   if (process.env.CANOPY_PERF_CAPTURE === "1" && !stopProcessMemoryMonitor) {

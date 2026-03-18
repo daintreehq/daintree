@@ -14,7 +14,7 @@ declare global {
   }
 }
 
-const RENDERER_T0 = typeof performance !== "undefined" ? performance.now() : Date.now();
+export const RENDERER_T0 = typeof performance !== "undefined" ? performance.now() : Date.now();
 
 export function isRendererPerfCaptureEnabled(): boolean {
   return isCanopyEnvEnabled("CANOPY_PERF_CAPTURE");

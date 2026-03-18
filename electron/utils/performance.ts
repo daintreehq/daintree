@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import type { PerfMarkName } from "../../shared/perf/marks.js";
+import { logWarn } from "./logger.js";
 
 interface MarkPayload {
   mark: PerfMarkName | string;
@@ -114,12 +115,12 @@ export function sampleIpcTiming(channel: string, durationMs: number, meta?: IpcS
   });
 }
 
-export function startEventLoopLagMonitor(intervalMs = 1000, thresholdMs = 100): () => void {
-  if (!CAPTURE_ENABLED) {
-    return () => {};
-  }
+const STARTUP_SUPPRESSION_MS = 5_000;
+const WARN_RATE_LIMIT_MS = 10_000;
 
+export function startEventLoopLagMonitor(intervalMs = 1000, thresholdMs = 100): () => void {
   let expected = performance.now() + intervalMs;
+  let lastWarnTime = -Infinity;
 
   const timer = setInterval(() => {
     const now = performance.now();
@@ -127,10 +128,15 @@ export function startEventLoopLagMonitor(intervalMs = 1000, thresholdMs = 100): 
     expected = now + intervalMs;
 
     if (lagMs >= thresholdMs) {
-      markPerformance("event_loop_lag", {
-        lagMs,
-        intervalMs,
-      });
+      const elapsed = now - APP_BOOT_T0;
+      if (elapsed > STARTUP_SUPPRESSION_MS && now - lastWarnTime >= WARN_RATE_LIMIT_MS) {
+        lastWarnTime = now;
+        logWarn("Event loop lag detected", { lagMs: Math.round(lagMs), intervalMs });
+      }
+
+      if (CAPTURE_ENABLED) {
+        markPerformance("event_loop_lag", { lagMs, intervalMs });
+      }
     }
   }, intervalMs);
 
