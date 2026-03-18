@@ -811,11 +811,11 @@ export class ActivityMonitor {
   }
 
   private isWorkingSilenceTimeout(now: number): boolean {
-    return (
-      this.state === "busy" &&
-      this.bootDetector.hasExitedBootState &&
-      now - this.lastDataTimestamp >= this.MAX_WORKING_SILENCE_MS
-    );
+    if (this.state !== "busy") return false;
+    if (now - this.lastDataTimestamp < this.MAX_WORKING_SILENCE_MS) return false;
+    // Non-polling terminals have no boot phase; polling terminals must exit boot first
+    if (this.getVisibleLines && !this.bootDetector.hasExitedBootState) return false;
+    return true;
   }
 
   private hasActiveChildrenSafe(): boolean | null {

@@ -2625,7 +2625,7 @@ describe("ActivityMonitor", () => {
 
       expect(monitor.getState()).toBe("idle");
       const timeoutCall = onStateChange.mock.calls.find(
-        (c: unknown[]) => c[2] === "idle" && c[3]?.trigger === "timeout"
+        (c: unknown[]) => c[2] === "idle" && (c[3] as Record<string, unknown>)?.trigger === "timeout"
       );
       expect(timeoutCall).toBeDefined();
 
@@ -2652,7 +2652,7 @@ describe("ActivityMonitor", () => {
 
       expect(monitor.getState()).toBe("idle");
       const timeoutCall = onStateChange.mock.calls.find(
-        (c: unknown[]) => c[2] === "idle" && c[3]?.trigger === "timeout"
+        (c: unknown[]) => c[2] === "idle" && (c[3] as Record<string, unknown>)?.trigger === "timeout"
       );
       expect(timeoutCall).toBeDefined();
 
@@ -2711,23 +2711,19 @@ describe("ActivityMonitor", () => {
 
     it("should reset silence clock on new busy cycle", () => {
       const onStateChange = vi.fn();
-      const getVisibleLines = vi.fn(() => ["$ "]);
       const monitor = new ActivityMonitor("test-1", 1000, onStateChange, {
-        getVisibleLines,
-        pollingIntervalMs: 100,
         maxWorkingSilenceMs: 5000,
-        bootCompletePatterns: [/ready/],
-        promptPatterns: [/\$ $/],
-        idleDebounceMs: 1000,
+        idleDebounceMs: 2000,
+        processStateValidator: { hasActiveChildren: () => true },
       });
 
-      monitor.startPolling();
-      monitor.onData("ready");
-      vi.advanceTimersByTime(100);
+      // Make busy via input
+      monitor.onInput("hello\r");
       expect(monitor.getState()).toBe("busy");
 
-      // Advance close to timeout
+      // Advance close to timeout (4500ms)
       vi.advanceTimersByTime(4500);
+      expect(monitor.getState()).toBe("busy");
 
       // Start a new busy cycle via input — this resets lastDataTimestamp
       monitor.onInput("make build\r");
