@@ -147,11 +147,11 @@ class TerminalInstanceService {
     this.webGLManager.setHardwareAvailable(available);
   }
 
-  notifyUserInput(id: string): void {
-    this.onUserInput(id);
+  notifyUserInput(id: string, data = ""): void {
+    this.onUserInput(id, data);
   }
 
-  private onUserInput(id: string): void {
+  private onUserInput(id: string, data: string): void {
     const managed = this.instances.get(id);
     if (!managed) return;
 
@@ -167,7 +167,7 @@ class TerminalInstanceService {
       this.rendererPolicy.applyRendererPolicy(id, current.getRefreshTier());
     }, 1000);
 
-    this.agentStateController.onUserInput(id);
+    this.agentStateController.onUserInput(id, data);
   }
 
   private onEnterPressed(id: string): void {
@@ -624,7 +624,7 @@ class TerminalInstanceService {
             this.agentStateController.clearDirectingState(id);
           }
         } else {
-          this.onUserInput(id);
+          this.onUserInput(id, data);
         }
         terminalClient.write(id, data);
         if (onInput) {
