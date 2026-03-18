@@ -3,7 +3,6 @@ import { z } from "zod";
 import { worktreeClient, githubClient } from "@/clients";
 import { useProjectStore } from "@/store/projectStore";
 import { useRecipeStore } from "@/store/recipeStore";
-import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useWorktreeDataStore } from "@/store/worktreeDataStore";
 import { useGitHubConfigStore } from "@/store/githubConfigStore";
 
@@ -12,7 +11,7 @@ export function registerWorkflowActions(actions: ActionRegistry): void {
     id: "worktree.createWithRecipe",
     title: "Create Worktree with Recipe",
     description:
-      "Create a new worktree and optionally run a recipe. Handles branch name collision, path generation, worktree activation, and recipe execution in one atomic operation.",
+      "Create a new worktree and optionally run a recipe. Handles branch name collision, path generation, and recipe execution in one atomic operation.",
     category: "worktree",
     kind: "command",
     danger: "safe",
@@ -123,11 +122,6 @@ export function registerWorkflowActions(actions: ActionRegistry): void {
       if (!worktreeId) {
         throw new Error("Failed to create worktree: no worktreeId returned from backend");
       }
-
-      // Mark as pending before selecting so the data store can re-apply terminal policy
-      // once worktree data arrives from the workspace host polling cycle.
-      useWorktreeSelectionStore.getState().setPendingWorktree(worktreeId);
-      useWorktreeSelectionStore.getState().selectWorktree(worktreeId);
 
       // Run recipe if specified (already validated above)
       let recipeLaunched = false;
