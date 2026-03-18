@@ -53,6 +53,21 @@ vi.mock("@/utils/env", () => ({
   isCanopyEnvEnabled: () => false,
 }));
 
+vi.mock("../ThemeSelectionStep", () => ({
+  ThemeSelectionStep: vi.fn(
+    ({ onContinue, onSkip }: { onContinue: () => void; onSkip: () => void }) => (
+      <div data-testid="theme-selection-step">
+        <button data-testid="theme-continue" onClick={onContinue}>
+          Continue
+        </button>
+        <button data-testid="theme-skip" onClick={onSkip}>
+          Skip
+        </button>
+      </div>
+    )
+  ),
+}));
+
 vi.mock("../NewsletterStep", () => ({
   NewsletterStep: vi.fn(({ onDismiss }: { onDismiss: (subscribed: boolean) => void }) => (
     <div data-testid="newsletter-step">
@@ -114,7 +129,7 @@ describe("OnboardingFlow progress indicator", () => {
     onboardingMock.get.mockResolvedValue({ ...defaultOnboardingState });
   });
 
-  it("renders progress indicator with 4 dots on first step", async () => {
+  it("renders progress indicator with 5 dots on first step", async () => {
     const { baseElement } = await act(async () => {
       return render(<OnboardingFlow {...defaultProps} />);
     });
@@ -130,7 +145,7 @@ describe("OnboardingFlow progress indicator", () => {
       '[data-testid="onboarding-progress"]'
     )!;
     const dots = indicator.querySelectorAll('[data-testid^="progress-dot-"]');
-    expect(dots).toHaveLength(4);
+    expect(dots).toHaveLength(5);
     expect(dots[0]?.getAttribute("aria-current")).toBe("step");
     expect(dots[1]?.getAttribute("aria-current")).toBeNull();
   });
@@ -144,9 +159,9 @@ describe("OnboardingFlow progress indicator", () => {
       expect(trackMock).toHaveBeenCalledWith("onboarding_step_viewed", expect.any(Object));
     });
 
-    // Advance to telemetry step
+    // Advance from theme selection to newsletter
     await act(async () => {
-      getByTestId("newsletter-dismiss").click();
+      getByTestId("theme-continue").click();
     });
 
     await vi.waitFor(() => {
@@ -168,7 +183,10 @@ describe("OnboardingFlow progress indicator", () => {
       expect(trackMock).toHaveBeenCalled();
     });
 
-    // Complete the flow: newsletter → telemetry → skip agent selection
+    // Complete the flow: theme → newsletter → telemetry → skip agent selection
+    await act(async () => {
+      getByTestId("theme-continue").click();
+    });
     await act(async () => {
       getByTestId("newsletter-dismiss").click();
     });
@@ -207,7 +225,7 @@ describe("OnboardingFlow progress indicator", () => {
     const srText = baseElement.ownerDocument
       .querySelector('[data-testid="onboarding-progress"]')!
       .querySelector(".sr-only");
-    expect(srText?.textContent).toBe("Step 1 of 4");
+    expect(srText?.textContent).toBe("Step 1 of 5");
   });
 });
 
@@ -230,7 +248,7 @@ describe("OnboardingFlow telemetry tracking", () => {
     // Wait for hydration and step_viewed event
     await vi.waitFor(() => {
       expect(trackMock).toHaveBeenCalledWith("onboarding_step_viewed", {
-        step: "newsletter",
+        step: "themeSelection",
         stepIndex: 0,
       });
     });
@@ -244,6 +262,11 @@ describe("OnboardingFlow telemetry tracking", () => {
     // Wait for hydration
     await vi.waitFor(() => {
       expect(trackMock).toHaveBeenCalledWith("onboarding_step_viewed", expect.any(Object));
+    });
+
+    // Advance through theme selection
+    await act(async () => {
+      getByTestId("theme-continue").click();
     });
 
     // Dismiss newsletter to advance to telemetry
@@ -260,7 +283,7 @@ describe("OnboardingFlow telemetry tracking", () => {
     await vi.waitFor(() => {
       expect(trackMock).toHaveBeenCalledWith("onboarding_step_viewed", {
         step: "agentSelection",
-        stepIndex: 2,
+        stepIndex: 3,
       });
     });
 
@@ -286,6 +309,11 @@ describe("OnboardingFlow telemetry tracking", () => {
       expect(trackMock).toHaveBeenCalled();
     });
 
+    // Continue from theme selection
+    await act(async () => {
+      getByTestId("theme-continue").click();
+    });
+
     // Dismiss newsletter
     await act(async () => {
       getByTestId("newsletter-dismiss").click();
@@ -309,7 +337,7 @@ describe("OnboardingFlow telemetry tracking", () => {
     await vi.waitFor(() => {
       expect(trackMock).toHaveBeenCalledWith(
         "onboarding_completed",
-        expect.objectContaining({ totalSteps: 4 })
+        expect.objectContaining({ totalSteps: 5 })
       );
     });
   });
@@ -328,7 +356,7 @@ describe("OnboardingFlow telemetry tracking", () => {
     unmount();
 
     expect(trackMock).toHaveBeenCalledWith("onboarding_abandoned", {
-      lastStep: "newsletter",
+      lastStep: "themeSelection",
       lastStepIndex: 0,
     });
   });
@@ -341,6 +369,11 @@ describe("OnboardingFlow telemetry tracking", () => {
     // Wait for hydration
     await vi.waitFor(() => {
       expect(trackMock).toHaveBeenCalled();
+    });
+
+    // Continue from theme selection
+    await act(async () => {
+      getByTestId("theme-continue").click();
     });
 
     // Dismiss newsletter
