@@ -17,6 +17,7 @@ vi.mock("electron", () => ({
     setPath: vi.fn(),
     commandLine: { appendSwitch: vi.fn() },
     enableSandbox: vi.fn(),
+    disableHardwareAcceleration: vi.fn(),
     on: vi.fn(),
   },
 }));
@@ -42,7 +43,9 @@ const originalPlatform = process.platform;
 const originalArgv = [...process.argv];
 
 function getCandidatePaths(): string[] {
-  return fsMock.existsSync.mock.calls.map((c) => c[0]);
+  return fsMock.existsSync.mock.calls
+    .map((c) => c[0])
+    .filter((p) => !p.includes("gpu-disabled.flag"));
 }
 
 describe("Windows Git PATH discovery", () => {

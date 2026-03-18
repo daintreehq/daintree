@@ -544,6 +544,10 @@ const CHANNELS = {
   TELEMETRY_MARK_PROMPT_SHOWN: "telemetry:mark-prompt-shown",
   TELEMETRY_TRACK: "telemetry:track",
 
+  // GPU channels
+  GPU_GET_STATUS: "gpu:get-status",
+  GPU_SET_HARDWARE_ACCELERATION: "gpu:set-hardware-acceleration",
+
   // Privacy & Data channels
   PRIVACY_GET_SETTINGS: "privacy:get-settings",
   PRIVACY_SET_TELEMETRY_LEVEL: "privacy:set-telemetry-level",
@@ -1929,6 +1933,12 @@ const api: ElectronAPI = {
     markPromptShown: () => _typedInvoke(CHANNELS.TELEMETRY_MARK_PROMPT_SHOWN),
     track: (event: string, properties: Record<string, unknown>) =>
       _typedInvoke(CHANNELS.TELEMETRY_TRACK, event, properties),
+  },
+
+  gpu: {
+    getStatus: () => _typedInvoke(CHANNELS.GPU_GET_STATUS),
+    setHardwareAcceleration: (enabled: boolean) =>
+      _typedInvoke(CHANNELS.GPU_SET_HARDWARE_ACCELERATION, enabled),
   },
 
   privacy: {
