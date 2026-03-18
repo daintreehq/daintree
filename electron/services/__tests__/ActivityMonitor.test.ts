@@ -350,7 +350,8 @@ describe("ActivityMonitor", () => {
         vi.advanceTimersByTime(120);
       }
 
-      vi.advanceTimersByTime(500);
+      // Wait for working hold (2000ms from startPolling) to expire + idle debounce
+      vi.advanceTimersByTime(2000);
 
       expect(monitor.getState()).toBe("idle");
       const busyCalls = onStateChange.mock.calls.filter((call) => call[2] === "busy");
@@ -1142,17 +1143,19 @@ describe("ActivityMonitor", () => {
   describe("Agent state jitter prevention (Issue #3606)", () => {
     it("should not jitter between busy and idle during multi-step agent work with inter-tool-call gaps", () => {
       const onStateChange = vi.fn();
-      let visibleLines = ["Working... (esc to interrupt)"];
+      let visibleLines: string[] = ["Working... (esc to interrupt)"];
       const monitor = new ActivityMonitor("test-1", 1000, onStateChange, {
         getVisibleLines: () => visibleLines,
         getCursorLine: () => visibleLines[visibleLines.length - 1],
-        initialState: "busy",
-        skipInitialStateEmit: true,
         idleDebounceMs: 6000,
         pollingIntervalMs: 50,
+        pollingMaxBootMs: 0,
       });
 
       monitor.startPolling();
+      // Boot immediately exits, enters busy via working pattern + output
+      monitor.onData("Working on tool call...\n");
+      vi.advanceTimersByTime(100);
       expect(monitor.getState()).toBe("busy");
       onStateChange.mockClear();
 
@@ -1160,23 +1163,25 @@ describe("ActivityMonitor", () => {
       visibleLines = ["> "];
       vi.advanceTimersByTime(1500);
 
-      // Should still be busy — 1.5s gap must not trigger idle
+      // Should still be busy — 1.5s gap is within 2000ms working hold
       expect(monitor.getState()).toBe("busy");
       const idleCalls = onStateChange.mock.calls.filter((call) => call[2] === "idle");
       expect(idleCalls.length).toBe(0);
 
-      // Agent resumes work
+      // Agent resumes work — output refreshes lastActivityTimestamp, pattern refreshes hold
       visibleLines = ["Running tool... (esc to interrupt)"];
+      monitor.onData("Running next tool...\n");
       vi.advanceTimersByTime(500);
 
-      // Should remain busy
+      // Should remain busy and hold window is now extended
       expect(monitor.getState()).toBe("busy");
 
-      // Another inter-tool-call gap of 2.5s
+      // Another inter-tool-call gap of 2.4s
       visibleLines = ["> "];
-      vi.advanceTimersByTime(2500);
+      vi.advanceTimersByTime(2400);
 
-      // Should still be busy — within working hold window (refreshed by working signal)
+      // Should still be busy — hold was refreshed by working signal, and
+      // prompt fast-path needs 3000ms quiet (last data was ~1600ms ago, < 3000ms)
       expect(monitor.getState()).toBe("busy");
       const idleCalls2 = onStateChange.mock.calls.filter((call) => call[2] === "idle");
       expect(idleCalls2.length).toBe(0);
@@ -1186,18 +1191,19 @@ describe("ActivityMonitor", () => {
 
     it("should recover quickly from idle to busy when agent resumes", () => {
       const onStateChange = vi.fn();
-      let visibleLines = ["> "];
+      let visibleLines: string[] = ["> "];
       const monitor = new ActivityMonitor("test-1", 1000, onStateChange, {
         getVisibleLines: () => visibleLines,
         getCursorLine: () => visibleLines[visibleLines.length - 1],
-        initialState: "idle",
-        skipInitialStateEmit: true,
         idleDebounceMs: 6000,
         pollingIntervalMs: 50,
         workingRecoveryDelayMs: 300,
+        pollingMaxBootMs: 0,
       });
 
       monitor.startPolling();
+      // Boot immediately exits (pollingMaxBootMs: 0), then idle after working hold expires
+      vi.advanceTimersByTime(3200);
       expect(monitor.getState()).toBe("idle");
       onStateChange.mockClear();
 
