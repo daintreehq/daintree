@@ -163,6 +163,13 @@ Terminal Classification:
   Analysis Enabled: ${info.analysisEnabled ? "Yes" : "No"}
   Resize Strategy: ${info.resizeStrategy || "default"}
 
+PTY Diagnostics:
+  Dimensions: ${info.ptyCols != null && info.ptyRows != null ? `${info.ptyCols} × ${info.ptyRows}` : "N/A"}
+  Shell PID: ${info.ptyPid ?? "N/A"}
+  TTY Device: ${info.ptyTty ?? "N/A"}
+  Foreground Process: ${info.ptyForegroundProcess ?? "N/A"}
+  Exit Code: ${info.exitCode != null ? info.exitCode : "N/A"}
+
 Runtime Statistics:
   Running Time: ${formatDuration(Date.now() - info.spawnedAt)}
   Spawned At: ${formatTimestamp(info.spawnedAt)}
@@ -233,6 +240,16 @@ Performance & Diagnostics:
               <InfoRow label="PTY Active" value={info.hasPty ? "Yes" : "No"} />
               <InfoRow label="Analysis Enabled" value={info.analysisEnabled ? "Yes" : "No"} />
               <InfoRow label="Resize Strategy" value={info.resizeStrategy || "default"} />
+            </InfoSection>
+
+            <InfoSection title="PTY Diagnostics">
+              {info.ptyCols != null && info.ptyRows != null && (
+                <InfoRow label="Dimensions" value={`${info.ptyCols} × ${info.ptyRows}`} />
+              )}
+              <InfoRow label="Shell PID" value={info.ptyPid} mono />
+              {info.ptyTty != null && <InfoRow label="TTY Device" value={info.ptyTty} mono />}
+              <InfoRow label="Foreground Process" value={info.ptyForegroundProcess} />
+              {info.exitCode != null && <InfoRow label="Exit Code" value={info.exitCode} mono />}
             </InfoSection>
 
             <InfoSection title="Runtime Statistics">

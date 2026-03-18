@@ -48,6 +48,8 @@ export interface TerminalPublicState {
   hasPty?: boolean;
   /** Captured agent session ID from graceful shutdown */
   agentSessionId?: string;
+  /** Exit code from the PTY process (set on clean exit) */
+  exitCode?: number;
 }
 
 /**

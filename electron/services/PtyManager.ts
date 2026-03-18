@@ -1,4 +1,6 @@
 import { EventEmitter } from "events";
+import { execSync } from "child_process";
+import fs from "fs";
 import { events } from "./events.js";
 import type { AgentEvent } from "./AgentStateMachine.js";
 import type { AgentStateChangeTrigger } from "../schemas/agent.js";
@@ -373,6 +375,23 @@ export class PtyManager extends EventEmitter {
     return terminal.getSerializedStateAsync();
   }
 
+  private resolveTtyPath(pid: number): string | undefined {
+    try {
+      if (process.platform === "win32") return undefined;
+      if (process.platform === "linux") {
+        return fs.readlinkSync(`/proc/${pid}/fd/0`);
+      }
+      // macOS
+      const tty = execSync(`ps -p ${pid} -o tty=`, { timeout: 500 })
+        .toString()
+        .trim();
+      if (!tty || tty === "??" || tty === "?") return undefined;
+      return `/dev/${tty}`;
+    } catch {
+      return undefined;
+    }
+  }
+
   /**
    * Get terminal information for diagnostic display.
    */
@@ -382,6 +401,8 @@ export class PtyManager extends EventEmitter {
       return null;
     }
     const terminalInfo = terminal.getInfo();
+    const hasPty = !terminalInfo.wasKilled && !terminalInfo.isExited;
+    const ptyProcess = hasPty ? terminalInfo.ptyProcess : undefined;
 
     return {
       id: terminalInfo.id,
@@ -402,11 +423,17 @@ export class PtyManager extends EventEmitter {
       outputBufferSize: terminalInfo.outputBuffer.length,
       semanticBufferLines: terminalInfo.semanticBuffer.length,
       restartCount: terminalInfo.restartCount,
-      hasPty: !terminalInfo.wasKilled && !terminalInfo.isExited,
+      hasPty,
       isAgentTerminal: terminal.getIsAgentTerminal(),
       detectedAgentType: terminalInfo.detectedAgentType,
       analysisEnabled: terminalInfo.analysisEnabled,
       resizeStrategy: terminal.getResizeStrategy(),
+      ptyPid: ptyProcess?.pid,
+      ptyCols: ptyProcess?.cols,
+      ptyRows: ptyProcess?.rows,
+      ptyForegroundProcess: ptyProcess?.process,
+      ptyTty: ptyProcess ? this.resolveTtyPath(ptyProcess.pid) : undefined,
+      exitCode: terminalInfo.exitCode,
     };
   }
 
