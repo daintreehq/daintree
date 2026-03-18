@@ -205,7 +205,7 @@ export interface AgentConfig {
    */
   /**
    * Approximate context window size in tokens for this agent's model.
-   * Used by the attachment tray to warn when context usage is high.
+   * Used to warn when context usage is high.
    */
   contextWindow?: number;
   env?: Record<string, string>;
