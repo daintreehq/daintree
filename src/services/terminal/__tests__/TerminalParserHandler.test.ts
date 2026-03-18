@@ -101,6 +101,9 @@ describe("TerminalParserHandler", () => {
     expect(escHandlers).toHaveLength(0);
     // 1 alt screen exit (?l) + 2 DECRQM blockers (? $ p and $ p)
     expect(csiHandlers).toHaveLength(3);
+    // OSC 52 clipboard block applies unconditionally to all terminal kinds
+    expect(oscHandlers).toHaveLength(1);
+    expect(oscHandlers[0].ident).toBe(52);
   });
 
   it("should block DECRQM queries to prevent xterm.js parser crash", () => {
