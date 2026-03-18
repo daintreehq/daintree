@@ -5,8 +5,7 @@ import { useUIStore } from "@/store/uiStore";
 export function fireWatchNotification(
   panelId: string,
   panelTitle: string,
-  agentState: string,
-  worktreeId?: string
+  agentState: string
 ): void {
   const label = panelTitle || panelId;
   const isWaiting = agentState === "waiting";
