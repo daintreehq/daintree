@@ -94,8 +94,8 @@ function getEventHandlers(
   eventName: string
 ): ((...args: unknown[]) => void)[] {
   return (contents.on as ReturnType<typeof vi.fn>).mock.calls
-    .filter(([name]: [string]) => name === eventName)
-    .map(([, handler]: [string, (...args: unknown[]) => void]) => handler);
+    .filter((call) => call[0] === eventName)
+    .map((call) => call[1] as (...args: unknown[]) => void);
 }
 
 describe("setupWebviewCSP — webview guest navigation restriction", () => {
