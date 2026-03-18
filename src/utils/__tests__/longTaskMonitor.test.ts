@@ -26,8 +26,9 @@ const mockMarkRendererPerformance = vi.fn();
 
 vi.mock("../performance", () => ({
   RENDERER_T0: 0,
-  isRendererPerfCaptureEnabled: (...args: unknown[]) => mockIsRendererPerfCaptureEnabled(...args),
-  markRendererPerformance: (...args: unknown[]) => mockMarkRendererPerformance(...args),
+  isRendererPerfCaptureEnabled: () => mockIsRendererPerfCaptureEnabled(),
+  markRendererPerformance: (mark: string, meta?: Record<string, unknown>) =>
+    mockMarkRendererPerformance(mark, meta),
 }));
 
 import { logWarn } from "../logger";
