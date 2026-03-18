@@ -1198,7 +1198,7 @@ function App() {
         initialWorktreeId={crossDiffDialog.initialWorktreeId}
       />
 
-      {hasOpenedSettings && (
+      {(isSettingsOpen || hasOpenedSettings) && (
         <Suspense fallback={null}>
           <LazySettingsDialog
             isOpen={isSettingsOpen}
