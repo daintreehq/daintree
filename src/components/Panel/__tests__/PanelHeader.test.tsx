@@ -135,7 +135,7 @@ describe("PanelHeader", () => {
       const restoreTooltip = tooltips.find(
         (el) =>
           el.textContent?.includes("Restore to Grid") &&
-          el.textContent?.includes("double-click header"),
+          el.textContent?.includes("double-click header")
       );
       expect(restoreTooltip).toBeDefined();
     });
@@ -147,8 +147,7 @@ describe("PanelHeader", () => {
       const tooltips = screen.getAllByTestId("tooltip-content");
       const maximizeTooltip = tooltips.find(
         (el) =>
-          el.textContent?.includes("Maximize") &&
-          el.textContent?.includes("double-click header"),
+          el.textContent?.includes("Maximize") && el.textContent?.includes("double-click header")
       );
       expect(maximizeTooltip).toBeDefined();
     });
@@ -156,16 +155,12 @@ describe("PanelHeader", () => {
 
   describe("Restore Grid View tooltip", () => {
     it("includes double-click header hint when maximized", () => {
-      render(
-        <PanelHeader
-          {...makeProps({ onToggleMaximize: vi.fn(), isMaximized: true })}
-        />,
-      );
+      render(<PanelHeader {...makeProps({ onToggleMaximize: vi.fn(), isMaximized: true })} />);
       const tooltips = screen.getAllByTestId("tooltip-content");
       const restoreTooltip = tooltips.find(
         (el) =>
           el.textContent?.includes("Restore Grid View") &&
-          el.textContent?.includes("double-click header"),
+          el.textContent?.includes("double-click header")
       );
       expect(restoreTooltip).toBeDefined();
     });
