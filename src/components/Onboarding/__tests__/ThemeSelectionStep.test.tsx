@@ -3,7 +3,7 @@ import { render, screen, fireEvent } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 
 const mockSetSelectedSchemeId = vi.fn();
-const mockSetColorScheme = vi.fn(() => Promise.resolve());
+const mockSetColorScheme = vi.fn((_id: string) => Promise.resolve());
 
 vi.mock("@/store/appThemeStore", () => ({
   useAppThemeStore: (selector: (s: Record<string, unknown>) => unknown) =>
