@@ -184,7 +184,7 @@ describe("TerminalProcess.kill — process tree cleanup", () => {
     expect(mockPty.kill).toHaveBeenCalled();
 
     // SIGTERM calls should come before SIGKILL timer fires
-    const sigTermCalls = processKillSpy.mock.calls.filter((c) => c[1] === "SIGTERM");
+    const sigTermCalls = processKillSpy.mock.calls.filter((c: unknown[]) => c[1] === "SIGTERM");
     expect(sigTermCalls).toHaveLength(2);
   });
 
@@ -196,14 +196,14 @@ describe("TerminalProcess.kill — process tree cleanup", () => {
     terminal.kill("test");
 
     // No SIGKILL yet
-    const sigkillBefore = processKillSpy.mock.calls.filter((c) => c[1] === "SIGKILL");
+    const sigkillBefore = processKillSpy.mock.calls.filter((c: unknown[]) => c[1] === "SIGKILL");
     expect(sigkillBefore).toHaveLength(0);
 
     // Advance timer
     vi.advanceTimersByTime(500);
 
     // Now SIGKILL should have been sent to descendant + shell
-    const sigkillAfter = processKillSpy.mock.calls.filter((c) => c[1] === "SIGKILL");
+    const sigkillAfter = processKillSpy.mock.calls.filter((c: unknown[]) => c[1] === "SIGKILL");
     expect(sigkillAfter).toHaveLength(2); // pid 456 + pid 123 (shell)
   });
 
@@ -215,7 +215,7 @@ describe("TerminalProcess.kill — process tree cleanup", () => {
     terminal.dispose();
 
     // SIGKILL should be sent synchronously without waiting for timer
-    const sigkillCalls = processKillSpy.mock.calls.filter((c) => c[1] === "SIGKILL");
+    const sigkillCalls = processKillSpy.mock.calls.filter((c: unknown[]) => c[1] === "SIGKILL");
     expect(sigkillCalls).toHaveLength(2); // pid 456 + pid 123
   });
 
@@ -244,12 +244,12 @@ describe("TerminalProcess.kill — process tree cleanup", () => {
     expect(mockPty.kill).toHaveBeenCalled();
 
     // No SIGTERM calls to descendants (no cache to query)
-    const sigTermCalls = processKillSpy.mock.calls.filter((c) => c[1] === "SIGTERM");
+    const sigTermCalls = processKillSpy.mock.calls.filter((c: unknown[]) => c[1] === "SIGTERM");
     expect(sigTermCalls).toHaveLength(0);
 
     // SIGKILL sweep should still fire for shell pid after 500ms
     vi.advanceTimersByTime(500);
-    const sigkillCalls = processKillSpy.mock.calls.filter((c) => c[1] === "SIGKILL");
+    const sigkillCalls = processKillSpy.mock.calls.filter((c: unknown[]) => c[1] === "SIGKILL");
     expect(sigkillCalls).toHaveLength(1); // Just the shell pid 123
   });
 
@@ -266,13 +266,13 @@ describe("TerminalProcess.kill — process tree cleanup", () => {
     // dispose() should clear that timer and do immediate SIGKILL
     terminal.dispose();
 
-    const sigkillCalls = processKillSpy.mock.calls.filter((c) => c[1] === "SIGKILL");
+    const sigkillCalls = processKillSpy.mock.calls.filter((c: unknown[]) => c[1] === "SIGKILL");
     expect(sigkillCalls.length).toBeGreaterThan(0);
 
     // Advancing timer should NOT cause a second SIGKILL sweep
     processKillSpy.mockClear();
     vi.advanceTimersByTime(500);
-    const lateSigkills = processKillSpy.mock.calls.filter((c) => c[1] === "SIGKILL");
+    const lateSigkills = processKillSpy.mock.calls.filter((c: unknown[]) => c[1] === "SIGKILL");
     expect(lateSigkills).toHaveLength(0);
   });
 
