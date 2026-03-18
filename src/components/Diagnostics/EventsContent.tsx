@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from "react";
+import { useDeferredValue, useEffect, useMemo } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { cn } from "@/lib/utils";
 import { useEventStore } from "@/store/eventStore";
@@ -62,6 +62,7 @@ export function EventsContent({ className }: EventsContentProps) {
 
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const filteredEvents = useMemo(() => getFilteredEvents(), [events, filters, getFilteredEvents]);
+  const deferredFilteredEvents = useDeferredValue(filteredEvents);
   const selectedEvent = selectedEventId
     ? events.find((e) => e.id === selectedEventId) || null
     : null;
@@ -77,7 +78,7 @@ export function EventsContent({ className }: EventsContentProps) {
       <div className="flex-1 flex min-h-0">
         <div className="w-1/2 border-r overflow-hidden">
           <EventTimeline
-            events={filteredEvents}
+            events={deferredFilteredEvents}
             selectedId={selectedEventId}
             onSelectEvent={setSelectedEvent}
             autoScroll={autoScroll}
