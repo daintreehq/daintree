@@ -2620,8 +2620,12 @@ describe("ActivityMonitor", () => {
       expect(monitor.getState()).toBe("busy");
       onStateChange.mockClear();
 
-      // Advance past the silence timeout with no onData calls
-      vi.advanceTimersByTime(5100);
+      // Just before threshold — should still be busy
+      vi.advanceTimersByTime(4900);
+      expect(monitor.getState()).toBe("busy");
+
+      // Cross the threshold
+      vi.advanceTimersByTime(200);
 
       expect(monitor.getState()).toBe("idle");
       const timeoutCall = onStateChange.mock.calls.find(
