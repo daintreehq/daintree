@@ -18,11 +18,11 @@ interface UseGridNavigationOptions {
 export function useGridNavigation(options: UseGridNavigationOptions = {}) {
   const { containerSelector = "#terminal-grid" } = options;
 
-  const { terminals, focusedId, activeTabByGroup, getTabGroups } = useTerminalStore(
+  const { terminals, focusedId, tabGroups, getTabGroups } = useTerminalStore(
     useShallow((state) => ({
       terminals: state.terminals,
       focusedId: state.focusedId,
-      activeTabByGroup: state.activeTabByGroup,
+      tabGroups: state.tabGroups,
       getTabGroups: state.getTabGroups,
     }))
   );
@@ -200,11 +200,12 @@ export function useGridNavigation(options: UseGridNavigationOptions = {}) {
   const groupRowMajor = useMemo(() => {
     const orderedGroups = getTabGroups("grid", activeWorktreeId ?? undefined);
     return orderedGroups.flatMap((group) => {
-      const activeId = activeTabByGroup.get(group.id) ?? group.activeTabId;
-      const resolvedId = group.panelIds.includes(activeId) ? activeId : group.panelIds[0];
+      const resolvedId = group.panelIds.includes(group.activeTabId)
+        ? group.activeTabId
+        : group.panelIds[0];
       return resolvedId ? [resolvedId] : [];
     });
-  }, [getTabGroups, activeWorktreeId, activeTabByGroup]);
+  }, [getTabGroups, activeWorktreeId, tabGroups]);
 
   const findByIndex = useCallback(
     (index: number): string | null => {

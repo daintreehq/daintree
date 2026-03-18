@@ -40,9 +40,6 @@ export interface TerminalFocusSlice {
   activeDockTerminalId: string | null;
   pingedId: string | null;
   preMaximizeLayout: PreMaximizeLayoutSnapshot | null;
-  /** Tracks which panel is active in each tab group (groupId -> panelId) */
-  activeTabByGroup: Map<string, string>;
-
   setFocused: (id: string | null, shouldPing?: boolean) => void;
   pingTerminal: (id: string) => void;
   toggleMaximize: (
@@ -97,14 +94,6 @@ export interface TerminalFocusSlice {
     terminals: TerminalInstance[],
     removedIndex: number
   ) => void;
-
-  // Tab group active tab tracking
-  /** Set the active tab for a tab group */
-  setActiveTab: (groupId: string, panelId: string) => void;
-  /** Get the active tab ID for a tab group, returns null if group not tracked */
-  getActiveTabId: (groupId: string) => string | null;
-  /** Clean up stale entries when panels are removed (called internally) */
-  cleanupStaleTabs: (validPanelIds: Set<string>) => void;
 }
 
 export const createTerminalFocusSlice =
@@ -122,8 +111,6 @@ export const createTerminalFocusSlice =
       activeDockTerminalId: null,
       pingedId: null,
       preMaximizeLayout: null,
-      activeTabByGroup: new Map(),
-
       setFocused: (id, shouldPing = false) => {
         set({ focusedId: id });
         if (id) {
@@ -488,7 +475,10 @@ export const createTerminalFocusSlice =
 
       focusNextBlockedDock: (activeWorktreeId, getPanelGroup) => {
         const terminals = getTerminals();
-        const { activeDockTerminalId, openDockTerminal, setActiveTab, pingTerminal } = get();
+        const { activeDockTerminalId, openDockTerminal, pingTerminal } = get();
+        // setActiveTab lives on TerminalRegistrySlice; accessed via composed store at runtime
+        const setActiveTab = (get() as unknown as { setActiveTab: (g: string, p: string) => void })
+          .setActiveTab;
 
         const dockTerminals = terminals.filter(
           (t) =>
@@ -577,35 +567,6 @@ export const createTerminalFocusSlice =
           }
 
           return Object.keys(updates).length > 0 ? updates : state;
-        });
-      },
-
-      setActiveTab: (groupId, panelId) => {
-        set((state) => {
-          const newMap = new Map(state.activeTabByGroup);
-          newMap.set(groupId, panelId);
-          return { activeTabByGroup: newMap };
-        });
-      },
-
-      getActiveTabId: (groupId) => {
-        return get().activeTabByGroup.get(groupId) ?? null;
-      },
-
-      cleanupStaleTabs: (validPanelIds) => {
-        set((state) => {
-          const newMap = new Map<string, string>();
-          let changed = false;
-
-          for (const [groupId, panelId] of state.activeTabByGroup) {
-            if (validPanelIds.has(panelId)) {
-              newMap.set(groupId, panelId);
-            } else {
-              changed = true;
-            }
-          }
-
-          return changed ? { activeTabByGroup: newMap } : state;
         });
       },
     };

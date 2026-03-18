@@ -1,6 +1,6 @@
 /**
  * Tests for resetWithoutKilling behavior
- * Issue #1861: Ensure tabGroups and activeTabByGroup are cleared on project switch
+ * Issue #1861: Ensure tabGroups are cleared on project switch
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
@@ -59,7 +59,6 @@ describe("resetWithoutKilling", () => {
       focusedId: null,
       maximizedId: null,
       commandQueue: [],
-      activeTabByGroup: new Map(),
     });
     vi.clearAllMocks();
   });
@@ -135,53 +134,6 @@ describe("resetWithoutKilling", () => {
 
     const state = useTerminalStore.getState();
     expect(state.tabGroups.size).toBe(0);
-  });
-
-  it("should clear activeTabByGroup", async () => {
-    useTerminalStore.setState({
-      terminals: [
-        {
-          id: "term-1",
-          type: "terminal",
-          title: "Shell 1",
-          cwd: "/test",
-          cols: 80,
-          rows: 24,
-          location: "grid",
-        },
-        {
-          id: "term-2",
-          type: "terminal",
-          title: "Shell 2",
-          cwd: "/test",
-          cols: 80,
-          rows: 24,
-          location: "grid",
-        },
-      ],
-      tabGroups: new Map([
-        [
-          "group-1",
-          {
-            id: "group-1",
-            panelIds: ["term-1", "term-2"],
-            activeTabId: "term-2",
-            location: "grid",
-          },
-        ],
-      ]),
-      activeTabByGroup: new Map([
-        ["group-1", "term-2"],
-        ["group-2", "term-4"],
-      ]),
-    });
-
-    expect(useTerminalStore.getState().activeTabByGroup.size).toBe(2);
-
-    await useTerminalStore.getState().resetWithoutKilling();
-
-    const state = useTerminalStore.getState();
-    expect(state.activeTabByGroup.size).toBe(0);
   });
 
   it("should clear terminals array", async () => {
@@ -487,7 +439,6 @@ describe("resetWithoutKilling", () => {
         },
       ],
       tabGroups: new Map([["group-1", group]]),
-      activeTabByGroup: new Map([["group-1", "term-2"]]),
       trashedTerminals: new Map([
         [
           "term-4",
@@ -520,7 +471,6 @@ describe("resetWithoutKilling", () => {
     // All state should be reset
     expect(state.terminals).toEqual([]);
     expect(state.tabGroups.size).toBe(0);
-    expect(state.activeTabByGroup.size).toBe(0);
     expect(state.trashedTerminals.size).toBe(0);
     expect(state.focusedId).toBeNull();
     expect(state.maximizedId).toBeNull();

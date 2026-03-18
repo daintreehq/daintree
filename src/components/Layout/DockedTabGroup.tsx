@@ -63,9 +63,9 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
   const addTerminal = useTerminalStore((s) => s.addTerminal);
   const addPanelToGroup = useTerminalStore((s) => s.addPanelToGroup);
 
-  // Subscribe to stored active tab for this group
+  // Subscribe to registry's active tab for this group
   const storedActiveTabId = useTerminalStore(
-    (state) => state.activeTabByGroup.get(group.id) ?? null
+    (state) => state.tabGroups.get(group.id)?.activeTabId ?? null
   );
 
   // Reconcile active tab

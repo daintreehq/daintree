@@ -72,7 +72,6 @@ describe("updateActivity early-exit (#2701)", () => {
       focusedId: null,
       maximizedId: null,
       commandQueue: [],
-      activeTabByGroup: new Map(),
     });
   });
 
