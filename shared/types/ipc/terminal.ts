@@ -10,6 +10,8 @@ export interface TerminalSpawnOptions {
   kind?: TerminalKind;
   /** Agent ID when kind is 'agent' */
   agentId?: AgentId;
+  /** Project ID to associate with the terminal (captured at action time to avoid race conditions) */
+  projectId?: string;
   /** Working directory for the terminal */
   cwd?: string;
   /** Shell executable to use (defaults to user's shell) */

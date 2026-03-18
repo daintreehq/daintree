@@ -57,10 +57,21 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
 
     const id = validatedOptions.id || crypto.randomUUID();
 
-    // Snapshot current project ONCE to avoid race conditions during async filesystem checks
-    const currentProject = projectStore.getCurrentProject();
-    const projectId = currentProject?.id;
-    const projectPath = currentProject?.path;
+    // Prefer explicit projectId from renderer (captured at action time) over global state.
+    // Falls back to global state for backward compatibility (e.g., agent/workflow spawns).
+    let resolvedProject = validatedOptions.projectId
+      ? projectStore.getProjectById(validatedOptions.projectId)
+      : null;
+    if (!resolvedProject) {
+      if (validatedOptions.projectId) {
+        console.warn(
+          `[TerminalSpawn] Explicit projectId ${validatedOptions.projectId.slice(0, 8)} not found, falling back to current project`
+        );
+      }
+      resolvedProject = projectStore.getCurrentProject();
+    }
+    const projectId = resolvedProject?.id;
+    const projectPath = resolvedProject?.path;
 
     // Fetch project-level terminal overrides for non-agent terminals
     let projectShell: string | undefined;
@@ -115,7 +126,7 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
     if (process.env.CANOPY_VERBOSE) {
       console.log(`[TerminalSpawn] Spawning terminal ${id.slice(0, 8)}:`, {
         projectId: projectId?.slice(0, 8) ?? "undefined",
-        projectName: currentProject?.name ?? "none",
+        projectName: resolvedProject?.name ?? "none",
         kind,
         type,
       });

@@ -235,6 +235,7 @@ export const TerminalSpawnOptionsSchema = z.object({
   id: z.string().optional(),
   kind: PanelKindSchema.optional(),
   agentId: z.string().optional(),
+  projectId: z.string().optional(),
   cwd: z.string().optional(),
   shell: z.string().optional(),
   cols: z.number().int().positive().max(500),

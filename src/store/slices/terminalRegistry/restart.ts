@@ -12,6 +12,7 @@ import { useLayoutConfigStore } from "@/store/layoutConfigStore";
 import { saveTerminals } from "./persistence";
 import { optimizeForDock } from "./layout";
 import { deriveRuntimeStatus, getDefaultTitle } from "./helpers";
+import { useProjectStore } from "@/store/projectStore";
 
 type Set = TerminalRegistryStoreApi["setState"];
 type Get = TerminalRegistryStoreApi["getState"];
@@ -250,12 +251,14 @@ export const createRestartActions = (
 
       await terminalInstanceService.waitForInstance(id, { timeoutMs: 5000 });
 
+      // Capture project ID synchronously before async work (issue #3690)
+      const capturedProjectId = useProjectStore.getState().currentProject?.id;
+
       // Fetch project environment variables for restart
       let restartEnv: Record<string, string> | undefined;
       try {
-        const currentProject = await projectClient.getCurrent();
-        if (currentProject?.id) {
-          const projectSettings = await projectClient.getSettings(currentProject.id);
+        if (capturedProjectId) {
+          const projectSettings = await projectClient.getSettings(capturedProjectId);
           if (
             projectSettings?.environmentVariables &&
             Object.keys(projectSettings.environmentVariables).length > 0
@@ -269,6 +272,7 @@ export const createRestartActions = (
 
       await terminalClient.spawn({
         id,
+        projectId: capturedProjectId,
         cwd: currentTerminal.cwd,
         cols: spawnCols,
         rows: spawnRows,
@@ -609,12 +613,14 @@ export const createRestartActions = (
 
       await new Promise((resolve) => setTimeout(resolve, 50));
 
+      // Capture project ID synchronously before async work (issue #3690)
+      const capturedProjectId = useProjectStore.getState().currentProject?.id;
+
       // Fetch project environment variables for conversion
       let convertEnv: Record<string, string> | undefined;
       try {
-        const currentProject = await projectClient.getCurrent();
-        if (currentProject?.id) {
-          const projectSettings = await projectClient.getSettings(currentProject.id);
+        if (capturedProjectId) {
+          const projectSettings = await projectClient.getSettings(capturedProjectId);
           if (
             projectSettings?.environmentVariables &&
             Object.keys(projectSettings.environmentVariables).length > 0
@@ -628,6 +634,7 @@ export const createRestartActions = (
 
       await terminalClient.spawn({
         id,
+        projectId: capturedProjectId,
         cwd: terminal.cwd,
         cols: spawnCols,
         rows: spawnRows,

@@ -18,6 +18,7 @@ import { getScrollbackForType, PERFORMANCE_MODE_SCROLLBACK } from "@/utils/scrol
 import { getXtermOptions } from "@/config/xtermConfig";
 import { useScreenReaderStore } from "@/store/screenReaderStore";
 import { useTerminalColorSchemeStore } from "@/store/terminalColorSchemeStore";
+import { useProjectStore } from "@/store/projectStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useLayoutConfigStore } from "@/store/layoutConfigStore";
 import { saveTerminals, saveTabGroups } from "./persistence";
@@ -235,13 +236,16 @@ export const createCorePanelActions = (
     const shouldBackground = location === "dock" || (location === "grid" && !isInActiveWorktree);
     const runtimeStatus: TerminalRuntimeStatus = shouldBackground ? "background" : "running";
 
+    // Capture project ID synchronously before any async work to avoid race conditions
+    // if the user switches projects during async operations (issue #3690)
+    const capturedProjectId = useProjectStore.getState().currentProject?.id;
+
     // Fetch project environment variables and merge with spawn options
     // Precedence: spawn-time env > project env (spawn-time overrides project)
     let mergedEnv: Record<string, string> | undefined = options.env;
     try {
-      const currentProject = await projectClient.getCurrent();
-      if (currentProject?.id) {
-        const projectSettings = await projectClient.getSettings(currentProject.id);
+      if (capturedProjectId) {
+        const projectSettings = await projectClient.getSettings(capturedProjectId);
         if (
           projectSettings?.environmentVariables &&
           Object.keys(projectSettings.environmentVariables).length > 0
@@ -267,6 +271,7 @@ export const createCorePanelActions = (
         const commandToExecute = options.skipCommandExecution ? undefined : options.command;
         id = await terminalClient.spawn({
           id: options.requestedId,
+          projectId: capturedProjectId,
           cwd: options.cwd,
           shell: options.shell,
           cols: 80,
