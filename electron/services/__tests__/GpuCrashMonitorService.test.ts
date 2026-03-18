@@ -144,6 +144,47 @@ describe("GpuCrashMonitorService", () => {
       emitGpuCrash();
       emitGpuCrash();
       expect(appMock.relaunch).not.toHaveBeenCalled();
+      expect(appMock.exit).not.toHaveBeenCalled();
+      expect(storeMock.set).not.toHaveBeenCalled();
+    });
+
+    it("counts oom, launch-failed, and abnormal-exit as crashes", async () => {
+      await loadAndInit();
+      emitGpuCrash("oom");
+      emitGpuCrash("launch-failed");
+      emitGpuCrash("abnormal-exit");
+      expect(appMock.relaunch).toHaveBeenCalledTimes(1);
+      expect(appMock.exit).toHaveBeenCalledWith(0);
+    });
+
+    it("persists store state on relaunch", async () => {
+      await loadAndInit();
+      emitGpuCrash();
+      emitGpuCrash();
+      emitGpuCrash();
+      expect(storeMock.set).toHaveBeenCalledWith("gpu", {
+        hardwareAccelerationDisabled: true,
+      });
+    });
+
+    it("only relaunches once even with additional crashes after threshold", async () => {
+      await loadAndInit();
+      emitGpuCrash();
+      emitGpuCrash();
+      emitGpuCrash();
+      emitGpuCrash();
+      emitGpuCrash();
+      expect(appMock.relaunch).toHaveBeenCalledTimes(1);
+      expect(appMock.exit).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not register duplicate listeners on double initialize", async () => {
+      vi.resetModules();
+      const mod = await import("../GpuCrashMonitorService.js");
+      mod.initializeGpuCrashMonitor();
+      mod.initializeGpuCrashMonitor();
+      const listenerCount = (appListeners["child-process-gone"] ?? []).length;
+      expect(listenerCount).toBe(1);
     });
   });
 });

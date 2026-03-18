@@ -23,8 +23,13 @@ export function clearGpuDisabledFlag(userDataPath: string): void {
 
 class GpuCrashMonitorService {
   private crashCount = 0;
+  private initialized = false;
+  private relaunching = false;
 
   initialize(): void {
+    if (this.initialized) return;
+    this.initialized = true;
+
     const alreadyDisabled = isGpuDisabledByFlag(app.getPath("userData"));
 
     app.on("child-process-gone", (_event, details) => {
@@ -36,13 +41,18 @@ class GpuCrashMonitorService {
         `[GPU] GPU process crash #${this.crashCount}: reason=${details.reason}, exitCode=${details.exitCode}`
       );
 
-      if (this.crashCount >= GPU_CRASH_THRESHOLD && !alreadyDisabled) {
+      if (this.crashCount >= GPU_CRASH_THRESHOLD && !alreadyDisabled && !this.relaunching) {
+        this.relaunching = true;
         console.error(
           `[GPU] ${GPU_CRASH_THRESHOLD} GPU crashes detected — writing disable flag and relaunching`
         );
-        const userDataPath = app.getPath("userData");
-        writeGpuDisabledFlag(userDataPath);
-        store.set("gpu", { hardwareAccelerationDisabled: true });
+        try {
+          const userDataPath = app.getPath("userData");
+          writeGpuDisabledFlag(userDataPath);
+          store.set("gpu", { hardwareAccelerationDisabled: true });
+        } catch (err) {
+          console.error("[GPU] Failed to write disable flag:", err);
+        }
         app.relaunch();
         app.exit(0);
       }
