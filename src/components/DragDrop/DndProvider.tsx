@@ -968,6 +968,17 @@ export function DndProvider({ children }: DndProviderProps) {
   );
 
   useEffect(() => {
+    if (activeId !== null) {
+      document.documentElement.dataset.dragging = "true";
+    } else {
+      delete document.documentElement.dataset.dragging;
+    }
+    return () => {
+      delete document.documentElement.dataset.dragging;
+    };
+  }, [activeId]);
+
+  useEffect(() => {
     return () => {
       if (stabilizationTimerRef.current) {
         clearTimeout(stabilizationTimerRef.current);
