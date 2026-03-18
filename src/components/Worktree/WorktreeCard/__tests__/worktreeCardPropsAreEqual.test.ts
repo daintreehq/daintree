@@ -2,10 +2,23 @@ import { describe, it, expect, vi } from "vitest";
 import type { WorktreeCardProps } from "../../WorktreeCard";
 
 vi.mock("zustand/react/shallow", () => ({ useShallow: (fn: unknown) => fn }));
-vi.mock("@/clients", () => ({
-  errorsClient: { retry: vi.fn() },
-  worktreeClient: { attachIssue: vi.fn(), detachIssue: vi.fn() },
-}));
+vi.mock("@/clients", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/clients")>();
+  return {
+    ...actual,
+    errorsClient: { retry: vi.fn() },
+    worktreeClient: {
+      attachIssue: vi.fn(),
+      detachIssue: vi.fn(),
+      getAll: vi.fn().mockResolvedValue([]),
+      refresh: vi.fn(),
+      getAllIssueAssociations: vi.fn().mockResolvedValue({}),
+      onUpdate: vi.fn(() => () => {}),
+      onRemove: vi.fn(() => () => {}),
+      onActivated: vi.fn(() => () => {}),
+    },
+  };
+});
 vi.mock("@/services/ActionService", () => ({ actionService: { dispatch: vi.fn() } }));
 
 const { worktreeCardPropsAreEqual } = await import("../../WorktreeCard");
