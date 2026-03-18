@@ -35,6 +35,7 @@ import { registerGitWriteHandlers } from "./handlers/git-write.js";
 import { registerTelemetryHandlers } from "./handlers/telemetry.js";
 import { registerPrivacyHandlers } from "./handlers/privacy.js";
 import { registerOnboardingHandlers } from "./handlers/onboarding.js";
+import { registerShortcutHintsHandlers } from "./handlers/shortcutHints.js";
 import { registerVoiceInputHandlers } from "./handlers/voiceInput.js";
 import { registerMcpServerHandlers } from "./handlers/mcpServer.js";
 import { registerWebviewHandlers } from "./handlers/webview.js";
@@ -106,6 +107,7 @@ export function registerIpcHandlers(deps: HandlerDependencies): () => void {
     register(() => registerTelemetryHandlers());
     register(() => registerPrivacyHandlers());
     register(() => registerOnboardingHandlers());
+    register(() => registerShortcutHintsHandlers());
     register(() => registerVoiceInputHandlers(deps));
     register(() => registerMcpServerHandlers());
     register(() => registerWebviewHandlers(deps));

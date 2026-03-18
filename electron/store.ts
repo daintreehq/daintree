@@ -161,6 +161,7 @@ export interface StoreSchema {
       };
     };
   };
+  shortcutHintCounts: Record<string, number>;
 }
 
 const storeOptions = {
@@ -265,6 +266,7 @@ const storeOptions = {
         },
       },
     },
+    shortcutHintCounts: {},
   },
   cwd: process.env.CANOPY_USER_DATA,
 };

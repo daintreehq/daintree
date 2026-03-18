@@ -972,6 +972,10 @@ export interface ElectronAPI {
     dismissChecklist(): Promise<void>;
     markChecklistItem(item: ChecklistItemId): Promise<void>;
   };
+  shortcutHints: {
+    getCounts(): Promise<Record<string, number>>;
+    incrementCount(actionId: string): Promise<void>;
+  };
   voiceInput: {
     getSettings(): Promise<VoiceInputSettings>;
     setSettings(settings: Partial<VoiceInputSettings>): Promise<void>;

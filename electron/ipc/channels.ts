@@ -433,6 +433,10 @@ export const CHANNELS = {
   ONBOARDING_CHECKLIST_DISMISS: "onboarding:checklist-dismiss",
   ONBOARDING_CHECKLIST_MARK_ITEM: "onboarding:checklist-mark-item",
 
+  // Shortcut Hints channels
+  SHORTCUT_HINTS_GET_COUNTS: "shortcut-hints:get-counts",
+  SHORTCUT_HINTS_INCREMENT_COUNT: "shortcut-hints:increment-count",
+
   // GPU channels
   GPU_GET_STATUS: "gpu:get-status",
   GPU_SET_HARDWARE_ACCELERATION: "gpu:set-hardware-acceleration",

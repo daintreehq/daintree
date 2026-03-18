@@ -605,6 +605,10 @@ const CHANNELS = {
   ONBOARDING_CHECKLIST_DISMISS: "onboarding:checklist-dismiss",
   ONBOARDING_CHECKLIST_MARK_ITEM: "onboarding:checklist-mark-item",
 
+  // Shortcut Hints channels
+  SHORTCUT_HINTS_GET_COUNTS: "shortcut-hints:get-counts",
+  SHORTCUT_HINTS_INCREMENT_COUNT: "shortcut-hints:increment-count",
+
   // Demo mode channels (dev-only)
   DEMO_MOVE_TO: "demo:move-to",
   DEMO_MOVE_TO_SELECTOR: "demo:move-to-selector",
@@ -1968,6 +1972,12 @@ const api: ElectronAPI = {
     dismissChecklist: () => _typedInvoke(CHANNELS.ONBOARDING_CHECKLIST_DISMISS),
     markChecklistItem: (item: ChecklistItemId) =>
       _typedInvoke(CHANNELS.ONBOARDING_CHECKLIST_MARK_ITEM, item),
+  },
+
+  shortcutHints: {
+    getCounts: () => _typedInvoke(CHANNELS.SHORTCUT_HINTS_GET_COUNTS),
+    incrementCount: (actionId: string) =>
+      _typedInvoke(CHANNELS.SHORTCUT_HINTS_INCREMENT_COUNT, actionId),
   },
 
   // Voice Input API

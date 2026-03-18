@@ -1443,6 +1443,16 @@ export interface IpcInvokeMap {
     result: void;
   };
 
+  // Shortcut Hints
+  "shortcut-hints:get-counts": {
+    args: [];
+    result: Record<string, number>;
+  };
+  "shortcut-hints:increment-count": {
+    args: [actionId: string];
+    result: void;
+  };
+
   // Voice input
   "voice-input:get-settings": {
     args: [];

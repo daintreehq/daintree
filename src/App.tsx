@@ -51,7 +51,7 @@ import { CrashRecoveryDialog } from "./components/Recovery/CrashRecoveryDialog";
 import {
   useAppHydration,
   useProjectSwitchRehydration,
-  useFirstRunToasts,
+  useShortcutHints,
   useTerminalStoreBootstrap,
   useSemanticWorkerLifecycle,
   useSystemWakeHandler,
@@ -101,6 +101,7 @@ const LazySettingsDialog = lazy(() =>
 );
 import { ShortcutReferenceDialog } from "./components/KeyboardShortcuts";
 import { Toaster } from "./components/ui/toaster";
+import { ShortcutHint } from "./components/ui/ShortcutHint";
 import { ReEntrySummary } from "./components/ui/ReEntrySummary";
 import { UpdateNotification } from "./components/UpdateNotification";
 import { OnboardingFlow } from "./components/Onboarding/OnboardingFlow";
@@ -1021,7 +1022,7 @@ function App() {
   // App lifecycle hooks
   const { isStateLoaded } = useAppHydration(crashResolved);
   useProjectSwitchRehydration();
-  useFirstRunToasts(isStateLoaded);
+  useShortcutHints(isStateLoaded);
   const gettingStarted = useGettingStartedChecklist(isStateLoaded);
 
   const handleLaunchAgent = useCallback(
@@ -1420,6 +1421,7 @@ function App() {
       <PanelTransitionOverlay />
 
       <Toaster />
+      <ShortcutHint />
       <ReEntrySummary state={reEntrySummary} />
       <UpdateNotification />
       <OnboardingFlow

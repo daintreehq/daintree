@@ -1,5 +1,33 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { z } from "zod";
+
+const hintMocks = vi.hoisted(() => {
+  const mockShow = vi.fn();
+  const mockIncrementCount = vi.fn();
+  const mockGetState = vi.fn(() => ({
+    hydrated: true,
+    counts: {} as Record<string, number>,
+    show: mockShow,
+    incrementCount: mockIncrementCount,
+  }));
+  const mockGetEffectiveCombo = vi.fn((_actionId: string): string | null => null);
+  const mockGetDisplayCombo = vi.fn((_actionId: string): string => "");
+  return { mockShow, mockIncrementCount, mockGetState, mockGetEffectiveCombo, mockGetDisplayCombo };
+});
+
+vi.mock("../../store/shortcutHintStore", () => ({
+  shortcutHintStore: {
+    getState: hintMocks.mockGetState,
+  },
+}));
+
+vi.mock("../KeybindingService", () => ({
+  keybindingService: {
+    getEffectiveCombo: hintMocks.mockGetEffectiveCombo,
+    getDisplayCombo: hintMocks.mockGetDisplayCombo,
+  },
+}));
+
 import { ActionService } from "../ActionService";
 import type { ActionDefinition, ActionId } from "@shared/types/actions";
 
@@ -289,6 +317,144 @@ describe("ActionService", () => {
       expect(entry).not.toBeNull();
       expect(entry?.id).toBe("actions.list");
       expect(entry?.title).toBe("Test Action");
+    });
+  });
+
+  describe("shortcut hints", () => {
+    const {
+      mockShow,
+      mockIncrementCount,
+      mockGetState,
+      mockGetEffectiveCombo,
+      mockGetDisplayCombo,
+    } = hintMocks;
+
+    const makeAction = (id: string): ActionDefinition => ({
+      id: id as ActionId,
+      title: "Test",
+      description: "Test action",
+      category: "test",
+      kind: "command",
+      danger: "safe",
+      scope: "renderer",
+      run: vi.fn().mockResolvedValue(undefined),
+    });
+
+    beforeEach(() => {
+      mockShow.mockClear();
+      mockIncrementCount.mockClear();
+      mockGetEffectiveCombo.mockReset().mockReturnValue(null);
+      mockGetDisplayCombo.mockReset().mockReturnValue("");
+      mockGetState.mockReturnValue({
+        hydrated: true,
+        counts: {},
+        show: mockShow,
+        incrementCount: mockIncrementCount,
+      });
+    });
+
+    it("emits hint and increments count for user source with keybinding", async () => {
+      mockGetEffectiveCombo.mockReturnValue("Cmd+K");
+      mockGetDisplayCombo.mockReturnValue("⌘K");
+      mockShow.mockReturnValue(true);
+
+      service.register(makeAction("test.action"));
+      await service.dispatch("test.action" as ActionId, undefined, { source: "user" });
+
+      expect(mockShow).toHaveBeenCalledWith("test.action", "⌘K");
+      expect(mockIncrementCount).toHaveBeenCalledWith("test.action");
+    });
+
+    it("does not increment count when show returns false", async () => {
+      mockGetEffectiveCombo.mockReturnValue("Cmd+K");
+      mockGetDisplayCombo.mockReturnValue("⌘K");
+      mockShow.mockReturnValue(false);
+
+      service.register(makeAction("test.action"));
+      await service.dispatch("test.action" as ActionId, undefined, { source: "user" });
+
+      expect(mockShow).toHaveBeenCalled();
+      expect(mockIncrementCount).not.toHaveBeenCalled();
+    });
+
+    it("does not emit hint for keybinding source", async () => {
+      mockGetEffectiveCombo.mockReturnValue("Cmd+K");
+
+      service.register(makeAction("test.action"));
+      await service.dispatch("test.action" as ActionId, undefined, { source: "keybinding" });
+
+      expect(mockShow).not.toHaveBeenCalled();
+      expect(mockIncrementCount).not.toHaveBeenCalled();
+    });
+
+    it("does not emit hint for menu source", async () => {
+      mockGetEffectiveCombo.mockReturnValue("Cmd+K");
+
+      service.register(makeAction("test.action"));
+      await service.dispatch("test.action" as ActionId, undefined, { source: "menu" });
+
+      expect(mockShow).not.toHaveBeenCalled();
+      expect(mockIncrementCount).not.toHaveBeenCalled();
+    });
+
+    it("does not emit hint for context-menu source", async () => {
+      mockGetEffectiveCombo.mockReturnValue("Cmd+K");
+
+      service.register(makeAction("test.action"));
+      await service.dispatch("test.action" as ActionId, undefined, { source: "context-menu" });
+
+      expect(mockShow).not.toHaveBeenCalled();
+      expect(mockIncrementCount).not.toHaveBeenCalled();
+    });
+
+    it("does not emit hint for agent source", async () => {
+      mockGetEffectiveCombo.mockReturnValue("Cmd+K");
+
+      service.register(makeAction("test.action"));
+      await service.dispatch("test.action" as ActionId, undefined, { source: "agent" });
+
+      expect(mockShow).not.toHaveBeenCalled();
+      expect(mockIncrementCount).not.toHaveBeenCalled();
+    });
+
+    it("does not emit hint when action has no keybinding", async () => {
+      mockGetEffectiveCombo.mockReturnValue(null);
+
+      service.register(makeAction("test.action"));
+      await service.dispatch("test.action" as ActionId, undefined, { source: "user" });
+
+      expect(mockShow).not.toHaveBeenCalled();
+      expect(mockIncrementCount).not.toHaveBeenCalled();
+    });
+
+    it("does not emit hint when store is not hydrated", async () => {
+      mockGetEffectiveCombo.mockReturnValue("Cmd+K");
+      mockGetState.mockReturnValue({
+        hydrated: false,
+        counts: {},
+        show: mockShow,
+        incrementCount: mockIncrementCount,
+      });
+
+      service.register(makeAction("test.action"));
+      await service.dispatch("test.action" as ActionId, undefined, { source: "user" });
+
+      expect(mockShow).not.toHaveBeenCalled();
+      expect(mockIncrementCount).not.toHaveBeenCalled();
+    });
+
+    it("does not emit hint when action execution fails", async () => {
+      mockGetEffectiveCombo.mockReturnValue("Cmd+K");
+
+      const failAction: ActionDefinition = {
+        ...makeAction("test.fail"),
+        run: vi.fn().mockRejectedValue(new Error("fail")),
+      };
+      service.register(failAction);
+      await service.dispatch("test.fail" as ActionId, undefined, { source: "user" });
+
+      expect(mockShow).not.toHaveBeenCalled();
+      expect(mockIncrementCount).not.toHaveBeenCalled();
     });
   });
 });

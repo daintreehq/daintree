@@ -10,6 +10,8 @@ import type {
   ActionError,
 } from "../../shared/types/actions.js";
 import { logWarn } from "@/utils/logger";
+import { keybindingService } from "./KeybindingService";
+import { shortcutHintStore } from "../store/shortcutHintStore";
 
 /** Fields that should be redacted from event payloads to prevent secret leakage */
 const SENSITIVE_ARG_FIELDS = new Set(["token", "password", "secret", "key", "auth", "credential"]);
@@ -127,6 +129,7 @@ export class ActionService {
 
     try {
       const result = await definition.run(validatedArgs, context);
+      this.emitShortcutHint(actionId, source);
       return { ok: true, result: result as Result };
     } catch (err) {
       const error: ActionError = {
@@ -233,6 +236,25 @@ export class ActionService {
       }
     }
     return result;
+  }
+
+  private emitShortcutHint(actionId: ActionId, source: ActionSource): void {
+    if (source !== "user") return;
+    try {
+      const combo = keybindingService.getEffectiveCombo(actionId);
+      if (!combo) return;
+
+      const state = shortcutHintStore.getState();
+      if (!state.hydrated) return;
+
+      const displayCombo = keybindingService.getDisplayCombo(actionId);
+      const shown = state.show(actionId, displayCombo);
+      if (shown) {
+        state.incrementCount(actionId);
+      }
+    } catch {
+      // never break dispatch flow
+    }
   }
 
   private async emitActionDispatchedEvent(payload: {
