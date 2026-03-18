@@ -106,6 +106,19 @@ describe("rendererGlobalErrorHandlers", () => {
 
       expect(useErrorStore.getState().errors).toHaveLength(0);
     });
+
+    it("ignores AbortError rejections (plain object with name)", () => {
+      const reason = { name: "AbortError", message: "operation aborted" };
+      const event = new PromiseRejectionEvent("unhandledrejection", {
+        reason,
+        promise: Promise.reject(reason),
+      });
+      event.promise.catch(() => {});
+
+      window.dispatchEvent(event);
+
+      expect(useErrorStore.getState().errors).toHaveLength(0);
+    });
   });
 
   describe("error", () => {
@@ -127,6 +140,21 @@ describe("rendererGlobalErrorHandlers", () => {
       expect(errors[0]?.source).toBe("Renderer Error");
       expect(errors[0]?.details).toContain("http://localhost:5173/src/App.tsx:42:10");
       expect(errors[0]?.context?.filePath).toBe("http://localhost:5173/src/App.tsx");
+    });
+
+    it("handles error event with message but no error object", () => {
+      const event = new ErrorEvent("error", {
+        message: "Script error.",
+      });
+
+      window.dispatchEvent(event);
+
+      const errors = useErrorStore.getState().errors;
+      expect(errors).toHaveLength(1);
+      expect(errors[0]?.message).toBe("Script error.");
+      expect(errors[0]?.source).toBe("Renderer Error");
+      expect(errors[0]?.context?.filePath).toBeUndefined();
+      expect(errors[0]?.details).toBeUndefined();
     });
 
     it("ignores error events with no error and no message", () => {
@@ -151,6 +179,8 @@ describe("rendererGlobalErrorHandlers", () => {
 
       window.dispatchEvent(event);
 
+      // Assert via logError call count — store dedup could mask double-firing
+      expect(mockedLogError).toHaveBeenCalledTimes(1);
       expect(useErrorStore.getState().errors).toHaveLength(1);
       cleanup2();
     });
@@ -159,13 +189,17 @@ describe("rendererGlobalErrorHandlers", () => {
       cleanup();
 
       const error = new Error("after cleanup");
-      const event = new PromiseRejectionEvent("unhandledrejection", {
+      const rejectionEvent = new PromiseRejectionEvent("unhandledrejection", {
         reason: error,
         promise: Promise.reject(error),
       });
-      event.promise.catch(() => {});
+      rejectionEvent.promise.catch(() => {});
+      window.dispatchEvent(rejectionEvent);
 
-      window.dispatchEvent(event);
+      const errorEvent = new ErrorEvent("error", {
+        message: "Script error after cleanup",
+      });
+      window.dispatchEvent(errorEvent);
 
       expect(useErrorStore.getState().errors).toHaveLength(0);
 
@@ -174,7 +208,7 @@ describe("rendererGlobalErrorHandlers", () => {
     });
   });
 
-  describe("re-entrancy protection", () => {
+  describe("error resilience", () => {
     it("falls back to console.error if logError throws", () => {
       const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
       mockedLogError.mockImplementation(() => {
