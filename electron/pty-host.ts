@@ -111,8 +111,7 @@ const ipcQueueManager = new IpcQueueManager({
 
 const resourceGovernor = new ResourceGovernor({
   getTerminals: () => ptyManager.getAll(),
-  getTerminalPids: () =>
-    ptyManager.getAll().map((t) => ({ id: t.id, pid: t.ptyProcess.pid })),
+  getTerminalPids: () => ptyManager.getAll().map((t) => ({ id: t.id, pid: t.ptyProcess.pid })),
   incrementPauseCount: (count) => {
     backpressureManager.stats.pauseCount += count;
   },
