@@ -42,8 +42,9 @@ export interface ManagedTerminal {
   lastAppliedTier?: TerminalRefreshTier; // The tier currently in effect
   pendingTier?: TerminalRefreshTier; // Target tier for scheduled downgrade
   tierChangeTimer?: number;
-  // Resize debouncing state
-  resizeJob?: number;
+  // Resize scheduling state
+  resizeJob?: AbortController;
+  resizeDebounceTimer?: number;
   latestCols: number;
   latestRows: number;
   latestWasAtBottom: boolean;
