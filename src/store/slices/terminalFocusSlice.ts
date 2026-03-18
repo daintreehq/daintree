@@ -475,7 +475,10 @@ export const createTerminalFocusSlice =
 
       focusNextBlockedDock: (activeWorktreeId, getPanelGroup) => {
         const terminals = getTerminals();
-        const { activeDockTerminalId, openDockTerminal, setActiveTab, pingTerminal } = get();
+        const { activeDockTerminalId, openDockTerminal, pingTerminal } = get();
+        // setActiveTab lives on TerminalRegistrySlice; accessed via composed store at runtime
+        const setActiveTab = (get() as unknown as { setActiveTab: (g: string, p: string) => void })
+          .setActiveTab;
 
         const dockTerminals = terminals.filter(
           (t) =>
