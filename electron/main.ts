@@ -55,6 +55,7 @@ protocol.registerSchemesAsPrivileged([
       secure: true,
       supportFetchAPI: true,
       corsEnabled: true,
+      codeCache: true,
     },
   },
   {
