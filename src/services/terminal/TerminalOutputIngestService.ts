@@ -121,10 +121,8 @@ export class TerminalOutputIngestService {
   }
 
   public resetForTerminal(id: string): void {
-    if (!this.pollingActive || !this.worker) {
-      this.clearQueue(id);
-      return;
-    }
+    this.clearQueue(id);
+    if (!this.pollingActive || !this.worker) return;
     const message: WorkerInboundMessage = {
       type: "RESET_TERMINAL",
       id,
@@ -133,10 +131,8 @@ export class TerminalOutputIngestService {
   }
 
   public flushForTerminal(id: string): void {
-    if (!this.pollingActive || !this.worker) {
-      this.forceDrain(id);
-      return;
-    }
+    this.forceDrain(id);
+    if (!this.pollingActive || !this.worker) return;
     const message: WorkerInboundMessage = {
       type: "FLUSH_TERMINAL",
       id,
@@ -188,7 +184,7 @@ export class TerminalOutputIngestService {
   }
 
   private chunkByteSize(data: string | Uint8Array): number {
-    return typeof data === "string" ? data.length * 3 : data.byteLength;
+    return typeof data === "string" ? data.length : data.byteLength;
   }
 
   private enqueueChunk(id: string, data: string | Uint8Array): void {
@@ -206,6 +202,7 @@ export class TerminalOutputIngestService {
       if (containsInkErase && !queue.drainScheduled) {
         queue.drainScheduled = true;
         globalThis.setTimeout(() => {
+          if (this.queues.get(id) !== queue) return;
           queue.drainScheduled = false;
           this.tryDrain(id, queue);
         }, 0);
