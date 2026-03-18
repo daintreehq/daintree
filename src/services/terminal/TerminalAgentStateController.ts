@@ -44,6 +44,8 @@ export class TerminalAgentStateController {
     if (!managed) return;
 
     if (managed.kind === "agent" && managed.canonicalAgentState === "waiting") {
+      if (managed.agentState === "working") return;
+
       if (managed.agentState !== "directing") {
         managed.agentState = "directing";
         this.notifySubscribers(managed, "directing");
@@ -61,6 +63,23 @@ export class TerminalAgentStateController {
         }, DIRECTING_DEBOUNCE_MS)
       );
     }
+  }
+
+  onEnterPressed(id: string): void {
+    const managed = this.deps.getInstance(id);
+    if (!managed) return;
+    if (managed.kind !== "agent" || managed.canonicalAgentState !== "waiting") return;
+    if (managed.agentState === "working") return;
+
+    const timer = this.directingTimers.get(id);
+    if (timer !== undefined) {
+      clearTimeout(timer);
+      this.directingTimers.delete(id);
+    }
+
+    managed.agentState = "working";
+    this.notifySubscribers(managed, "working");
+    useTerminalStore.getState().updateAgentState(id, "working");
   }
 
   clearDirectingState(id: string): void {

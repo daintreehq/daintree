@@ -170,6 +170,10 @@ class TerminalInstanceService {
     this.agentStateController.onUserInput(id);
   }
 
+  private onEnterPressed(id: string): void {
+    this.agentStateController.onEnterPressed(id);
+  }
+
   clearDirectingState(id: string): void {
     this.agentStateController.clearDirectingState(id);
   }
@@ -629,6 +633,23 @@ class TerminalInstanceService {
       }
     });
     listeners.push(() => inputDisposable.dispose());
+
+    if (kind === "agent") {
+      const keyDisposable = terminal.onKey(({ domEvent }) => {
+        if (
+          !managed.isInputLocked &&
+          domEvent.key === "Enter" &&
+          !domEvent.isComposing &&
+          !domEvent.shiftKey &&
+          !domEvent.ctrlKey &&
+          !domEvent.altKey &&
+          !domEvent.metaKey
+        ) {
+          this.onEnterPressed(id);
+        }
+      });
+      listeners.push(() => keyDisposable.dispose());
+    }
 
     this.instances.set(id, managed);
 
