@@ -1170,7 +1170,7 @@ function App() {
           >
             <Profiler id="content-grid" onRender={onContentGridRender}>
               {currentProject === null ? (
-                <WelcomeScreen />
+                <WelcomeScreen gettingStarted={gettingStarted} />
               ) : (
                 <ContentGrid
                   key={currentProject.id}
@@ -1427,7 +1427,7 @@ function App() {
         onRefreshSettings={refreshSettings}
         onComplete={gettingStarted.notifyOnboardingComplete}
       />
-      {gettingStarted.visible && gettingStarted.checklist && (
+      {currentProject !== null && gettingStarted.visible && gettingStarted.checklist && (
         <GettingStartedChecklist
           checklist={gettingStarted.checklist}
           collapsed={gettingStarted.collapsed}

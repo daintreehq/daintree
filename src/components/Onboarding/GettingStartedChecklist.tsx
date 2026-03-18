@@ -1,10 +1,10 @@
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
-import { Check, ChevronDown, ChevronUp, X, FolderOpen, Bot, GitBranch } from "lucide-react";
+import { Check, ChevronDown, ChevronUp, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { actionService } from "@/services/ActionService";
-import type { ActionId } from "@shared/types/actions";
 import type { ChecklistState } from "@shared/types/ipc/maps";
+import { CHECKLIST_ITEMS } from "./checklistItems";
 
 interface GettingStartedChecklistProps {
   checklist: ChecklistState;
@@ -12,32 +12,6 @@ interface GettingStartedChecklistProps {
   onDismiss: () => void;
   onToggleCollapse: () => void;
 }
-
-const CHECKLIST_ITEMS: {
-  id: "openedProject" | "launchedAgent" | "createdWorktree";
-  label: string;
-  icon: typeof FolderOpen;
-  actionId: ActionId;
-}[] = [
-  {
-    id: "openedProject",
-    label: "Open a project",
-    icon: FolderOpen,
-    actionId: "project.openDialog",
-  },
-  {
-    id: "launchedAgent",
-    label: "Launch an AI agent",
-    icon: Bot,
-    actionId: "panel.palette",
-  },
-  {
-    id: "createdWorktree",
-    label: "Create a worktree",
-    icon: GitBranch,
-    actionId: "worktree.createDialog.open",
-  },
-];
 
 export function GettingStartedChecklist({
   checklist,
