@@ -261,6 +261,7 @@ export interface SetupWindowServicesOptions {
   loadRenderer: (reason: string) => void;
   smokeTestTimer: ReturnType<typeof setTimeout> | undefined;
   smokeRendererUnresponsive: () => boolean;
+  windowRegistry?: import("./WindowRegistry.js").WindowRegistry;
 }
 
 export async function setupWindowServices(
@@ -385,6 +386,7 @@ export async function setupWindowServices(
     agentUpdateHandler,
     projectMcpManager: projectMcpManager ?? undefined,
     isDemoMode,
+    windowRegistry: opts.windowRegistry,
   };
 
   projectSwitchService = new ProjectSwitchService(handlerDeps);

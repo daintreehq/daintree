@@ -9,6 +9,13 @@ import type { AgentVersionService } from "../services/AgentVersionService.js";
 import type { AgentUpdateHandler } from "../services/AgentUpdateHandler.js";
 import type { ProjectMcpManager } from "../services/ProjectMcpManager.js";
 import type { ProjectSwitchService } from "../services/ProjectSwitchService.js";
+import type { WindowRegistry } from "../window/WindowRegistry.js";
+
+export interface IpcContext {
+  event: Electron.IpcMainInvokeEvent;
+  webContentsId: number;
+  senderWindow: BrowserWindow | null;
+}
 
 export interface HandlerDependencies {
   mainWindow: BrowserWindow;
@@ -23,4 +30,5 @@ export interface HandlerDependencies {
   projectMcpManager?: ProjectMcpManager;
   projectSwitchService?: ProjectSwitchService;
   isDemoMode?: boolean;
+  windowRegistry?: WindowRegistry;
 }
