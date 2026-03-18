@@ -150,4 +150,77 @@ describe("FixedDropdown overlay-count dismiss behavior", () => {
 
     expect(onOpenChange).toHaveBeenCalledWith(false);
   });
+
+  it("stays suppressed through multiple overlay transitions (1→2→1)", () => {
+    mockOverlayCount = 1;
+    const { rerender } = render(
+      <FixedDropdown
+        open={true}
+        onOpenChange={onOpenChange}
+        anchorRef={anchorRef}
+        persistThroughChildOverlays
+      >
+        <div>Content</div>
+      </FixedDropdown>
+    );
+
+    mockOverlayCount = 2;
+    rerender(
+      <FixedDropdown
+        open={true}
+        onOpenChange={onOpenChange}
+        anchorRef={anchorRef}
+        persistThroughChildOverlays
+      >
+        <div>Content</div>
+      </FixedDropdown>
+    );
+
+    expect(onOpenChange).not.toHaveBeenCalled();
+
+    mockOverlayCount = 1;
+    rerender(
+      <FixedDropdown
+        open={true}
+        onOpenChange={onOpenChange}
+        anchorRef={anchorRef}
+        persistThroughChildOverlays
+      >
+        <div>Content</div>
+      </FixedDropdown>
+    );
+
+    act(() => {
+      document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    });
+
+    expect(onOpenChange).not.toHaveBeenCalled();
+  });
+
+  it("can be explicitly closed by parent while child overlay is active", () => {
+    mockOverlayCount = 1;
+    const { rerender } = render(
+      <FixedDropdown
+        open={true}
+        onOpenChange={onOpenChange}
+        anchorRef={anchorRef}
+        persistThroughChildOverlays
+      >
+        <div>Content</div>
+      </FixedDropdown>
+    );
+
+    rerender(
+      <FixedDropdown
+        open={false}
+        onOpenChange={onOpenChange}
+        anchorRef={anchorRef}
+        persistThroughChildOverlays
+      >
+        <div>Content</div>
+      </FixedDropdown>
+    );
+
+    expect(document.querySelector("[class*='fixed']")).toBeNull();
+  });
 });
