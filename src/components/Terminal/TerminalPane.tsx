@@ -35,7 +35,7 @@ import { InputTracker } from "@/services/clearCommandDetection";
 import { getAgentConfig, isRegisteredAgent } from "@/config/agents";
 import { terminalClient } from "@/clients";
 import { HybridInputBar, type HybridInputBarHandle } from "./HybridInputBar";
-import { getTerminalFocusTarget } from "./terminalFocus";
+import { getTerminalFocusTarget, shouldSuppressUnfocusedClick } from "./terminalFocus";
 import { registerPanelFocusHandler } from "./terminalFocusRegistry";
 import { getCanopyCommand, isEscapedCommand, unescapeCommand } from "./canopySlashCommands";
 import { DropdownMenuItem } from "@/components/ui/dropdown-menu";
@@ -433,34 +433,43 @@ function TerminalPaneComponent({
       const xtermElement = target?.closest(".xterm");
       if (!xtermElement) return;
 
-      if (xtermElement.classList.contains("xterm-cursor-pointer")) {
-        return;
-      }
-
       const focusTarget = getTerminalFocusTarget({
         isAgentTerminal,
-        isInputDisabled: isBackendDisconnected || isBackendRecovering,
+        isInputDisabled: isBackendDisconnected || isBackendRecovering || isInputLocked,
         hybridInputEnabled,
         hybridInputAutoFocus,
       });
 
-      if (focusTarget !== "hybridInput") return;
-      if (isFocused) return;
+      const suppressTarget = shouldSuppressUnfocusedClick({
+        location,
+        isFocused,
+        isCursorPointer: xtermElement.classList.contains("xterm-cursor-pointer"),
+        focusTarget,
+      });
+
+      if (!suppressTarget) return;
 
       e.preventDefault();
       e.stopPropagation();
 
       setFocused(id);
       terminalInstanceService.boostRefreshRate(id);
-      requestAnimationFrame(() => inputBarRef.current?.focusWithCursorAtEnd());
+
+      if (suppressTarget === "hybridInput") {
+        requestAnimationFrame(() => inputBarRef.current?.focusWithCursorAtEnd());
+      } else {
+        requestAnimationFrame(() => terminalInstanceService.focus(id));
+      }
     },
     [
       id,
+      location,
       isAgentTerminal,
       hybridInputEnabled,
       hybridInputAutoFocus,
       isBackendDisconnected,
       isBackendRecovering,
+      isInputLocked,
       isFocused,
       setFocused,
     ]
