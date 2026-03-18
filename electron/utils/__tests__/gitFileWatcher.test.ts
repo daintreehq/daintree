@@ -169,7 +169,7 @@ describe("GitFileWatcher", () => {
     let worktreeCallback: ((eventType: string, filename: string | null) => void) | undefined;
 
     vi.mocked(watch).mockImplementation(((
-      path: string,
+      _path: string,
       opts: Record<string, unknown>,
       cb?: (eventType: string, filename: string | null) => void
     ) => {
@@ -207,7 +207,7 @@ describe("GitFileWatcher", () => {
     let worktreeCallback: ((eventType: string, filename: string | null) => void) | undefined;
 
     vi.mocked(watch).mockImplementation(((
-      path: string,
+      _path: string,
       opts: Record<string, unknown>,
       cb?: (eventType: string, filename: string | null) => void
     ) => {
@@ -249,7 +249,7 @@ describe("GitFileWatcher", () => {
     let worktreeCallback: ((eventType: string, filename: string | null) => void) | undefined;
 
     vi.mocked(watch).mockImplementation(((
-      path: string,
+      _path: string,
       opts: Record<string, unknown>,
       cb?: (eventType: string, filename: string | null) => void
     ) => {
