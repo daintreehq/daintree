@@ -21,41 +21,29 @@ vi.mock("../logger", () => ({
   logWarn: vi.fn(),
 }));
 
-vi.mock("../performance", async (importOriginal) => {
-  const original = await importOriginal<typeof import("../performance")>();
-  return {
-    ...original,
-    RENDERER_T0: 0,
-    isRendererPerfCaptureEnabled: vi.fn(() => false),
-    markRendererPerformance: vi.fn(),
-  };
-});
+const mockIsRendererPerfCaptureEnabled = vi.fn(() => false);
+const mockMarkRendererPerformance = vi.fn();
+
+vi.mock("../performance", () => ({
+  RENDERER_T0: 0,
+  isRendererPerfCaptureEnabled: (...args: unknown[]) => mockIsRendererPerfCaptureEnabled(...args),
+  markRendererPerformance: (...args: unknown[]) => mockMarkRendererPerformance(...args),
+}));
+
+import { logWarn } from "../logger";
+import { startLongTaskMonitor } from "../longTaskMonitor";
 
 describe("startLongTaskMonitor", () => {
-  let logWarn: ReturnType<typeof vi.fn>;
-  let markRendererPerformance: ReturnType<typeof vi.fn>;
-  let isRendererPerfCaptureEnabled: ReturnType<typeof vi.fn>;
-  let startLongTaskMonitor: typeof import("../longTaskMonitor").startLongTaskMonitor;
   let mockNow: number;
 
-  beforeEach(async () => {
+  beforeEach(() => {
     mockNow = 0;
     vi.spyOn(performance, "now").mockImplementation(() => mockNow);
     observerCallback = null;
     observerDisconnected = false;
-
-    const loggerMod = await import("../logger");
-    logWarn = loggerMod.logWarn as ReturnType<typeof vi.fn>;
-    logWarn.mockClear();
-
-    const perfMod = await import("../performance");
-    markRendererPerformance = perfMod.markRendererPerformance as ReturnType<typeof vi.fn>;
-    markRendererPerformance.mockClear();
-    isRendererPerfCaptureEnabled = perfMod.isRendererPerfCaptureEnabled as ReturnType<typeof vi.fn>;
-    isRendererPerfCaptureEnabled.mockReturnValue(false);
-
-    const monitorMod = await import("../longTaskMonitor");
-    startLongTaskMonitor = monitorMod.startLongTaskMonitor;
+    vi.mocked(logWarn).mockClear();
+    mockIsRendererPerfCaptureEnabled.mockClear().mockReturnValue(false);
+    mockMarkRendererPerformance.mockClear();
   });
 
   afterEach(() => {
@@ -117,12 +105,12 @@ describe("startLongTaskMonitor", () => {
   });
 
   it("still calls markRendererPerformance when capture is enabled", () => {
-    isRendererPerfCaptureEnabled.mockReturnValue(true);
+    mockIsRendererPerfCaptureEnabled.mockReturnValue(true);
     mockNow = 6000;
     startLongTaskMonitor(100);
     emitLongTask(150);
 
-    expect(markRendererPerformance).toHaveBeenCalledWith("renderer_long_task", {
+    expect(mockMarkRendererPerformance).toHaveBeenCalledWith("renderer_long_task", {
       name: "self",
       startTimeMs: 6000,
       durationMs: 150,
@@ -133,6 +121,6 @@ describe("startLongTaskMonitor", () => {
     mockNow = 6000;
     startLongTaskMonitor(100);
     emitLongTask(150);
-    expect(markRendererPerformance).not.toHaveBeenCalled();
+    expect(mockMarkRendererPerformance).not.toHaveBeenCalled();
   });
 });

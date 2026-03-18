@@ -14,7 +14,7 @@ export function startLongTaskMonitor(thresholdMs = 100): () => void {
   }
 
   let observer: PerformanceObserver | null = null;
-  let lastWarnTime = 0;
+  let lastWarnTime = -Infinity;
 
   try {
     observer = new PerformanceObserver((list) => {

@@ -120,7 +120,7 @@ const WARN_RATE_LIMIT_MS = 10_000;
 
 export function startEventLoopLagMonitor(intervalMs = 1000, thresholdMs = 100): () => void {
   let expected = performance.now() + intervalMs;
-  let lastWarnTime = 0;
+  let lastWarnTime = -Infinity;
 
   const timer = setInterval(() => {
     const now = performance.now();

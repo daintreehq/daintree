@@ -1,5 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+const state = vi.hoisted(() => ({ now: 0 }));
+
+vi.mock("node:perf_hooks", () => ({
+  performance: {
+    now: () => state.now,
+  },
+}));
+
 vi.mock("../logger.js", () => ({
   logWarn: vi.fn(),
 }));
@@ -11,66 +19,57 @@ vi.mock("node:fs", () => ({
   },
 }));
 
+import { logWarn } from "../logger.js";
+import { startEventLoopLagMonitor } from "../performance.js";
+
 describe("startEventLoopLagMonitor", () => {
-  let logWarn: ReturnType<typeof vi.fn>;
-  let startEventLoopLagMonitor: typeof import("../performance.js").startEventLoopLagMonitor;
-  let mockNow: number;
+  let stopFn: (() => void) | null = null;
 
-  beforeEach(async () => {
+  beforeEach(() => {
     vi.useFakeTimers();
-    mockNow = 0;
-    vi.spyOn(performance, "now").mockImplementation(() => mockNow);
-
-    vi.resetModules();
-
-    const loggerMod = await import("../logger.js");
-    logWarn = loggerMod.logWarn as ReturnType<typeof vi.fn>;
-
-    const perfMod = await import("../performance.js");
-    startEventLoopLagMonitor = perfMod.startEventLoopLagMonitor;
+    state.now = 0;
+    vi.mocked(logWarn).mockClear();
   });
 
   afterEach(() => {
+    stopFn?.();
+    stopFn = null;
     vi.useRealTimers();
-    vi.restoreAllMocks();
   });
 
   it("returns a cleanup function", () => {
-    const stop = startEventLoopLagMonitor(1000, 100);
-    expect(typeof stop).toBe("function");
-    stop();
+    stopFn = startEventLoopLagMonitor(1000, 100);
+    expect(typeof stopFn).toBe("function");
   });
 
   it("does not warn when lag is below threshold", () => {
-    mockNow = 6000;
-    startEventLoopLagMonitor(1000, 100);
+    state.now = 0;
+    stopFn = startEventLoopLagMonitor(1000, 100);
 
-    // Advance by exactly 1000ms (no lag)
-    mockNow = 7000;
+    state.now = 1000;
     vi.advanceTimersByTime(1000);
 
     expect(logWarn).not.toHaveBeenCalled();
   });
 
   it("suppresses warnings during first 5 seconds", () => {
-    mockNow = 0;
-    startEventLoopLagMonitor(1000, 100);
+    state.now = 0;
+    stopFn = startEventLoopLagMonitor(1000, 100);
 
-    // Simulate lag at 2s (within suppression window)
-    mockNow = 2200;
+    state.now = 1200;
     vi.advanceTimersByTime(1000);
 
     expect(logWarn).not.toHaveBeenCalled();
   });
 
   it("warns after suppression window when lag exceeds threshold", () => {
-    mockNow = 0;
-    startEventLoopLagMonitor(1000, 100);
+    state.now = 0;
+    stopFn = startEventLoopLagMonitor(1000, 100);
 
-    // Advance past suppression window with lag
-    mockNow = 6200;
+    state.now = 6000;
     vi.advanceTimersByTime(1000);
 
+    expect(logWarn).toHaveBeenCalledTimes(1);
     expect(logWarn).toHaveBeenCalledWith("Event loop lag detected", {
       lagMs: expect.any(Number),
       intervalMs: 1000,
@@ -78,31 +77,32 @@ describe("startEventLoopLagMonitor", () => {
   });
 
   it("rate-limits warnings to one per 10 seconds", () => {
-    mockNow = 0;
-    startEventLoopLagMonitor(1000, 100);
+    state.now = 0;
+    stopFn = startEventLoopLagMonitor(1000, 100);
 
-    // First lag event at 6s — should warn
-    mockNow = 6200;
+    // Tick 1: lag at 6s → warns
+    state.now = 6000;
     vi.advanceTimersByTime(1000);
     expect(logWarn).toHaveBeenCalledTimes(1);
 
-    // Second lag event at 7s — rate-limited
-    mockNow = 7200;
+    // Tick 2: lag at 7.2s → rate-limited
+    state.now = 7200;
     vi.advanceTimersByTime(1000);
     expect(logWarn).toHaveBeenCalledTimes(1);
 
-    // Third lag event at 17s — past rate limit
-    mockNow = 17200;
-    vi.advanceTimersByTime(10000);
+    // Tick 3: lag at 17.5s → warns (>10s since last)
+    state.now = 17500;
+    vi.advanceTimersByTime(1000);
     expect(logWarn).toHaveBeenCalledTimes(2);
   });
 
   it("cleanup clears the interval", () => {
-    mockNow = 0;
-    const stop = startEventLoopLagMonitor(1000, 100);
-    stop();
+    state.now = 0;
+    stopFn = startEventLoopLagMonitor(1000, 100);
+    stopFn();
+    stopFn = null;
 
-    mockNow = 6200;
+    state.now = 6200;
     vi.advanceTimersByTime(1000);
 
     expect(logWarn).not.toHaveBeenCalled();
