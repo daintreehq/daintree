@@ -102,6 +102,48 @@ describe("usePlanFileContent", () => {
     expect(result.current.content).toBeNull();
   });
 
+  it("transitions to error when a later poll returns NOT_FOUND (plan file deleted)", async () => {
+    mockRead
+      .mockResolvedValueOnce({ ok: true, content: "# Plan" })
+      .mockResolvedValueOnce({ ok: false, code: "NOT_FOUND" });
+
+    const { result } = renderHook(() => usePlanFileContent(true, "TODO.md", "/project", 2000));
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(result.current.status).toBe("loaded");
+
+    await act(async () => {
+      vi.advanceTimersByTime(2000);
+      await Promise.resolve();
+    });
+
+    expect(result.current.status).toBe("error");
+    expect(result.current.errorCode).toBe("NOT_FOUND");
+    expect(result.current.content).toBeNull();
+  });
+
+  it("stops polling after interval is cleared on unmount", async () => {
+    mockRead.mockResolvedValue({ ok: true, content: "content" });
+
+    const { unmount } = renderHook(() => usePlanFileContent(true, "TODO.md", "/project", 2000));
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+    const callCountAfterMount = mockRead.mock.calls.length;
+
+    unmount();
+
+    await act(async () => {
+      vi.advanceTimersByTime(10000);
+      await Promise.resolve();
+    });
+
+    expect(mockRead.mock.calls.length).toBe(callCountAfterMount);
+  });
+
   it("uses absolute path directly when filePath is already absolute", async () => {
     mockRead.mockResolvedValue({ ok: true, content: "content" });
 

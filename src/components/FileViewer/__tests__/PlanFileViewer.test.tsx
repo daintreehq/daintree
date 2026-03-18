@@ -87,8 +87,8 @@ describe("PlanFileViewer", () => {
     });
   });
 
-  it("shows error state when read fails", async () => {
-    mockRead.mockResolvedValue({ ok: false, code: "NOT_FOUND" });
+  it("shows generic error state when read fails with non-NOT_FOUND code", async () => {
+    mockRead.mockResolvedValue({ ok: false, code: "FILE_TOO_LARGE" });
 
     render(
       <PlanFileViewer isOpen={true} filePath="TODO.md" rootPath="/project" onClose={() => {}} />
@@ -97,6 +97,19 @@ describe("PlanFileViewer", () => {
     await waitFor(() => {
       expect(screen.getByText(/Plan file could not be read/)).toBeDefined();
     });
+  });
+
+  it("shows empty state (not error) when NOT_FOUND is returned — plan file was deleted", async () => {
+    mockRead.mockResolvedValue({ ok: false, code: "NOT_FOUND" });
+
+    render(
+      <PlanFileViewer isOpen={true} filePath="TODO.md" rootPath="/project" onClose={() => {}} />
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText(/No plan file found in this worktree/)).toBeDefined();
+    });
+    expect(screen.queryByText(/Plan file could not be read/)).toBeNull();
   });
 
   it("shows the filename in the dialog title", async () => {

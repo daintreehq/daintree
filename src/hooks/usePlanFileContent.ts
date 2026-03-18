@@ -33,6 +33,7 @@ export function usePlanFileContent(
 
   useEffect(() => {
     if (!isOpen || !filePath) {
+      requestRef.current++; // invalidate any in-flight request
       setStatus("idle");
       setContent(null);
       setErrorCode(null);

@@ -11,9 +11,10 @@ interface PlanFileViewerProps {
 }
 
 export function PlanFileViewer({ isOpen, filePath, rootPath, onClose }: PlanFileViewerProps) {
-  const { status, content } = usePlanFileContent(isOpen, filePath, rootPath);
+  const { status, content, errorCode } = usePlanFileContent(isOpen, filePath, rootPath);
 
   const fileName = filePath ?? "Plan";
+  const isGone = status === "error" && errorCode === "NOT_FOUND";
 
   return (
     <AppDialog isOpen={isOpen} onClose={onClose} size="4xl" maxHeight="max-h-[85vh]">
@@ -26,7 +27,7 @@ export function PlanFileViewer({ isOpen, filePath, rootPath, onClose }: PlanFile
       </AppDialog.Header>
 
       <AppDialog.BodyScroll className="p-0">
-        {!filePath && (
+        {(!filePath || isGone) && (
           <div className="flex flex-col items-center justify-center h-48 gap-2 text-center px-6">
             <FileText className="w-8 h-8 text-muted-foreground/40" />
             <p className="text-sm text-muted-foreground">No plan file found in this worktree.</p>
@@ -38,7 +39,7 @@ export function PlanFileViewer({ isOpen, filePath, rootPath, onClose }: PlanFile
           </div>
         )}
 
-        {filePath && status === "loading" && (
+        {filePath && !isGone && status === "loading" && (
           <div className="flex items-center justify-center h-48">
             <div className="flex items-center gap-3 text-muted-foreground">
               <svg className="w-5 h-5 animate-spin" viewBox="0 0 24 24">
@@ -62,7 +63,7 @@ export function PlanFileViewer({ isOpen, filePath, rootPath, onClose }: PlanFile
           </div>
         )}
 
-        {filePath && status === "error" && (
+        {filePath && !isGone && status === "error" && (
           <div className="flex flex-col items-center justify-center h-48 gap-2">
             <p className="text-sm text-muted-foreground">Plan file could not be read.</p>
           </div>
