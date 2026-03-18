@@ -3,9 +3,9 @@
 // DndProvider sets this attribute when a drag is active so that global CSS can
 // apply pointer-events: none to all webview/iframe elements, preventing OOPIF
 // event theft during drag operations.
-import { act, render, renderHook } from "@testing-library/react";
+import { act, render } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
-import { useState, useEffect } from "react";
+import { useEffect } from "react";
 
 // Mirrors the exact useEffect added to DndProvider.tsx.
 // This isolated test verifies the attribute contract without needing to mount
