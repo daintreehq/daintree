@@ -2625,7 +2625,8 @@ describe("ActivityMonitor", () => {
 
       expect(monitor.getState()).toBe("idle");
       const timeoutCall = onStateChange.mock.calls.find(
-        (c: unknown[]) => c[2] === "idle" && (c[3] as Record<string, unknown>)?.trigger === "timeout"
+        (c: unknown[]) =>
+          c[2] === "idle" && (c[3] as Record<string, unknown>)?.trigger === "timeout"
       );
       expect(timeoutCall).toBeDefined();
 
@@ -2652,7 +2653,8 @@ describe("ActivityMonitor", () => {
 
       expect(monitor.getState()).toBe("idle");
       const timeoutCall = onStateChange.mock.calls.find(
-        (c: unknown[]) => c[2] === "idle" && (c[3] as Record<string, unknown>)?.trigger === "timeout"
+        (c: unknown[]) =>
+          c[2] === "idle" && (c[3] as Record<string, unknown>)?.trigger === "timeout"
       );
       expect(timeoutCall).toBeDefined();
 
