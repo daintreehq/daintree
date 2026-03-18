@@ -51,6 +51,13 @@ export function initStoreOrchestrator(): () => void {
     if (panel?.location !== "background") return;
 
     state.restoreBackgroundTerminal(focusedId);
+
+    // If the panel was restored to dock, fix activeDockTerminalId since
+    // activateTerminal() saw "background" and cleared it.
+    const restored = useTerminalStore.getState().terminals.find((t) => t.id === focusedId);
+    if (restored?.location === "dock") {
+      useTerminalStore.setState({ activeDockTerminalId: focusedId });
+    }
   });
   unsubscribers.push(unsubBackgroundRestore);
 

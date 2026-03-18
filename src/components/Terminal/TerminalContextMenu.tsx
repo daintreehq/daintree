@@ -346,7 +346,7 @@ export function TerminalContextMenu({
                 },
                 { source: "context-menu" }
               );
-              if (result && typeof result === "object" && "success" in result) {
+              if (result.ok) {
                 useTerminalStore.getState().removeTerminal(terminalId);
               }
             })();

@@ -436,6 +436,30 @@ describe("rendererStoreOrchestrator", () => {
     expect(restoreSpy).toHaveBeenCalledWith("bg-1");
   });
 
+  it("sets activeDockTerminalId when restoring a background panel to dock", () => {
+    useTerminalStore.setState({
+      terminals: [
+        {
+          id: "dock-bg-1",
+          type: "terminal",
+          title: "Dock BG",
+          cwd: "/test",
+          cols: 80,
+          rows: 24,
+          location: "background",
+          worktreeId: "wt-1",
+        },
+      ],
+      backgroundedTerminals: new Map([
+        ["dock-bg-1", { originalLocation: "dock", timestamp: Date.now() }],
+      ]),
+    });
+
+    useTerminalStore.setState({ focusedId: "dock-bg-1" });
+
+    expect(useTerminalStore.getState().activeDockTerminalId).toBe("dock-bg-1");
+  });
+
   it("does not restore non-background panel when focused", () => {
     useTerminalStore.setState({
       terminals: [
