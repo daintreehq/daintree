@@ -131,9 +131,11 @@ export function GitHubResourceList({
       }
 
       try {
+        const searchOverride =
+          numberQuery?.kind === "open-ended" ? `number:>=${numberQuery.from}` : undefined;
         const options = {
           cwd: projectPath,
-          search: debouncedSearch || undefined,
+          search: searchOverride || debouncedSearch || undefined,
           state: filterState as "open" | "closed" | "merged" | "all",
           cursor: currentCursor || undefined,
           bypassCache: !append,
@@ -174,7 +176,7 @@ export function GitHubResourceList({
         }
       }
     },
-    [projectPath, debouncedSearch, filterState, type, sortOrder]
+    [projectPath, debouncedSearch, filterState, type, sortOrder, numberQuery]
   );
 
   useEffect(() => {
@@ -204,6 +206,8 @@ export function GitHubResourceList({
 
     setLoading(true);
     setError(null);
+    setLoadMoreError(null);
+    setLoadingMore(false);
     setExactNumberNotFound(null);
     setData([]);
     setCursor(null);
