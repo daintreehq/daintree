@@ -1,4 +1,7 @@
 import {
+  Suspense,
+  lazy,
+  startTransition,
   useState,
   useEffect,
   useDeferredValue,
@@ -42,23 +45,55 @@ import { cn } from "@/lib/utils";
 import { useVerticalScrollShadows } from "@/hooks/useVerticalScrollShadows";
 import { appClient } from "@/clients";
 import { AppDialog } from "@/components/ui/AppDialog";
-import { AgentSettings } from "./AgentSettings";
 import { GeneralTab } from "./GeneralTab";
-import { TerminalSettingsTab } from "./TerminalSettingsTab";
-import { TerminalAppearanceTab } from "./TerminalAppearanceTab";
-import { GitHubSettingsTab } from "./GitHubSettingsTab";
-import { TroubleshootingTab } from "./TroubleshootingTab";
-import { NotificationSettingsTab } from "./NotificationSettingsTab";
-import { SidecarSettingsTab } from "./SidecarSettingsTab";
-import { KeyboardShortcutsTab } from "./KeyboardShortcutsTab";
-import { WorktreeSettingsTab } from "./WorktreeSettingsTab";
-import { ToolbarSettingsTab } from "./ToolbarSettingsTab";
-import { EditorIntegrationTab } from "./EditorIntegrationTab";
-import { ImageViewerTab } from "./ImageViewerTab";
-import { VoiceInputSettingsTab } from "./VoiceInputSettingsTab";
-import { McpServerSettingsTab } from "./McpServerSettingsTab";
-import { EnvironmentSettingsTab } from "./EnvironmentSettingsTab";
-import { PrivacyDataTab } from "./PrivacyDataTab";
+const LazyAgentSettings = lazy(() =>
+  import("./AgentSettings").then((m) => ({ default: m.AgentSettings }))
+);
+const LazyTerminalSettingsTab = lazy(() =>
+  import("./TerminalSettingsTab").then((m) => ({ default: m.TerminalSettingsTab }))
+);
+const LazyTerminalAppearanceTab = lazy(() =>
+  import("./TerminalAppearanceTab").then((m) => ({ default: m.TerminalAppearanceTab }))
+);
+const LazyGitHubSettingsTab = lazy(() =>
+  import("./GitHubSettingsTab").then((m) => ({ default: m.GitHubSettingsTab }))
+);
+const LazyTroubleshootingTab = lazy(() =>
+  import("./TroubleshootingTab").then((m) => ({ default: m.TroubleshootingTab }))
+);
+const LazyNotificationSettingsTab = lazy(() =>
+  import("./NotificationSettingsTab").then((m) => ({ default: m.NotificationSettingsTab }))
+);
+const LazySidecarSettingsTab = lazy(() =>
+  import("./SidecarSettingsTab").then((m) => ({ default: m.SidecarSettingsTab }))
+);
+const LazyKeyboardShortcutsTab = lazy(() =>
+  import("./KeyboardShortcutsTab").then((m) => ({ default: m.KeyboardShortcutsTab }))
+);
+const LazyWorktreeSettingsTab = lazy(() =>
+  import("./WorktreeSettingsTab").then((m) => ({ default: m.WorktreeSettingsTab }))
+);
+const LazyToolbarSettingsTab = lazy(() =>
+  import("./ToolbarSettingsTab").then((m) => ({ default: m.ToolbarSettingsTab }))
+);
+const LazyEditorIntegrationTab = lazy(() =>
+  import("./EditorIntegrationTab").then((m) => ({ default: m.EditorIntegrationTab }))
+);
+const LazyImageViewerTab = lazy(() =>
+  import("./ImageViewerTab").then((m) => ({ default: m.ImageViewerTab }))
+);
+const LazyVoiceInputSettingsTab = lazy(() =>
+  import("./VoiceInputSettingsTab").then((m) => ({ default: m.VoiceInputSettingsTab }))
+);
+const LazyMcpServerSettingsTab = lazy(() =>
+  import("./McpServerSettingsTab").then((m) => ({ default: m.McpServerSettingsTab }))
+);
+const LazyEnvironmentSettingsTab = lazy(() =>
+  import("./EnvironmentSettingsTab").then((m) => ({ default: m.EnvironmentSettingsTab }))
+);
+const LazyPrivacyDataTab = lazy(() =>
+  import("./PrivacyDataTab").then((m) => ({ default: m.PrivacyDataTab }))
+);
 import { SETTINGS_SEARCH_INDEX } from "./settingsSearchIndex";
 import {
   filterSettings,
@@ -111,6 +146,17 @@ export function SettingsDialog({
   onSettingsChange,
 }: SettingsDialogProps) {
   const [activeTab, setActiveTab] = useState<SettingsTab>(defaultTab ?? "general");
+  const [visitedTabs, setVisitedTabs] = useState<Set<SettingsTab>>(
+    () => new Set<SettingsTab>([defaultTab ?? "general"])
+  );
+  const markTabVisited = useCallback((tab: SettingsTab) => {
+    setVisitedTabs((prev) => {
+      if (prev.has(tab)) return prev;
+      const next = new Set(prev);
+      next.add(tab);
+      return next;
+    });
+  }, []);
   const [activeSubtabs, setActiveSubtabs] = useState<Partial<Record<SettingsTab, string>>>({});
   const [searchQuery, setSearchQuery] = useState("");
   const deferredQuery = useDeferredValue(searchQuery);
@@ -127,6 +173,7 @@ export function SettingsDialog({
 
   useEffect(() => {
     if (isOpen && defaultTab) {
+      markTabVisited(defaultTab);
       if (defaultTab !== activeTab) {
         setActiveTab(defaultTab);
       }
@@ -240,13 +287,14 @@ export function SettingsDialog({
   const isSearching = searchQuery.trim().length > 0;
 
   const handleResultClick = ({ tab, subtab, sectionId }: SettingsNavTarget) => {
-    setActiveTab(tab);
+    markTabVisited(tab);
     setSearchQuery("");
     setScrollToSection(sectionId ?? null);
     if (subtab !== undefined) {
       setActiveSubtabs((prev) => ({ ...prev, [tab]: subtab }));
     }
     searchInputRef.current?.blur();
+    startTransition(() => setActiveTab(tab));
   };
 
   const [activeResultIndex, setActiveResultIndex] = useState(-1);
@@ -284,25 +332,38 @@ export function SettingsDialog({
   useEffect(() => {
     if (!scrollToSection || isSearching) return;
     let highlightTimer: ReturnType<typeof setTimeout>;
-    const timer = setTimeout(() => {
+    let attempt = 0;
+    const maxAttempts = 10;
+    const tryScroll = () => {
       const el = document.getElementById(scrollToSection);
       if (el) {
         el.scrollIntoView({ behavior: "smooth", block: "start" });
         el.classList.add("settings-highlight");
         highlightTimer = setTimeout(() => el.classList.remove("settings-highlight"), 1500);
+        return;
       }
-    }, 100);
+      attempt++;
+      if (attempt < maxAttempts) {
+        timers.push(setTimeout(tryScroll, 100));
+      }
+    };
+    const timers: ReturnType<typeof setTimeout>[] = [];
+    timers.push(setTimeout(tryScroll, 100));
     return () => {
-      clearTimeout(timer);
+      timers.forEach(clearTimeout);
       clearTimeout(highlightTimer);
     };
   }, [scrollToSection, activeTab, isSearching]);
 
-  const handleNavSelect = useCallback((tab: SettingsTab) => {
-    setActiveTab(tab);
-    setSearchQuery("");
-    setScrollToSection(null);
-  }, []);
+  const handleNavSelect = useCallback(
+    (tab: SettingsTab) => {
+      markTabVisited(tab);
+      setSearchQuery("");
+      setScrollToSection(null);
+      startTransition(() => setActiveTab(tab));
+    },
+    [markTabVisited]
+  );
 
   const tablistRef = useRef<HTMLDivElement>(null);
   const { canScrollUp, canScrollDown } = useVerticalScrollShadows(tablistRef);
@@ -684,10 +745,11 @@ export function SettingsDialog({
                   <GeneralTab
                     appVersion={appVersion}
                     onNavigateToAgents={(agentId?: string) => {
-                      setActiveTab("agents");
+                      markTabVisited("agents");
                       if (agentId) {
                         setActiveSubtabs((prev) => ({ ...prev, agents: agentId }));
                       }
+                      startTransition(() => setActiveTab("agents"));
                     }}
                     activeSubtab={activeSubtabs["general"] ?? null}
                     onSubtabChange={(id) => setActiveSubtabs((prev) => ({ ...prev, general: id }))}
@@ -701,7 +763,11 @@ export function SettingsDialog({
                   tabIndex={0}
                   className={activeTab === "keyboard" ? "" : "hidden"}
                 >
-                  <KeyboardShortcutsTab />
+                  {visitedTabs.has("keyboard") && (
+                    <Suspense fallback={null}>
+                      <LazyKeyboardShortcutsTab />
+                    </Suspense>
+                  )}
                 </div>
 
                 <div
@@ -711,10 +777,16 @@ export function SettingsDialog({
                   tabIndex={0}
                   className={activeTab === "terminal" ? "" : "hidden"}
                 >
-                  <TerminalSettingsTab
-                    activeSubtab={activeSubtabs["terminal"] ?? null}
-                    onSubtabChange={(id) => setActiveSubtabs((prev) => ({ ...prev, terminal: id }))}
-                  />
+                  {visitedTabs.has("terminal") && (
+                    <Suspense fallback={null}>
+                      <LazyTerminalSettingsTab
+                        activeSubtab={activeSubtabs["terminal"] ?? null}
+                        onSubtabChange={(id) =>
+                          setActiveSubtabs((prev) => ({ ...prev, terminal: id }))
+                        }
+                      />
+                    </Suspense>
+                  )}
                 </div>
 
                 <div
@@ -724,12 +796,16 @@ export function SettingsDialog({
                   tabIndex={0}
                   className={activeTab === "terminalAppearance" ? "" : "hidden"}
                 >
-                  <TerminalAppearanceTab
-                    activeSubtab={activeSubtabs["terminalAppearance"] ?? null}
-                    onSubtabChange={(id) =>
-                      setActiveSubtabs((prev) => ({ ...prev, terminalAppearance: id }))
-                    }
-                  />
+                  {visitedTabs.has("terminalAppearance") && (
+                    <Suspense fallback={null}>
+                      <LazyTerminalAppearanceTab
+                        activeSubtab={activeSubtabs["terminalAppearance"] ?? null}
+                        onSubtabChange={(id) =>
+                          setActiveSubtabs((prev) => ({ ...prev, terminalAppearance: id }))
+                        }
+                      />
+                    </Suspense>
+                  )}
                 </div>
 
                 <div
@@ -739,7 +815,11 @@ export function SettingsDialog({
                   tabIndex={0}
                   className={activeTab === "worktree" ? "" : "hidden"}
                 >
-                  <WorktreeSettingsTab />
+                  {visitedTabs.has("worktree") && (
+                    <Suspense fallback={null}>
+                      <LazyWorktreeSettingsTab />
+                    </Suspense>
+                  )}
                 </div>
 
                 <div
@@ -749,11 +829,17 @@ export function SettingsDialog({
                   tabIndex={0}
                   className={activeTab === "agents" ? "" : "hidden"}
                 >
-                  <AgentSettings
-                    activeSubtab={activeSubtabs["agents"] ?? null}
-                    onSubtabChange={(id) => setActiveSubtabs((prev) => ({ ...prev, agents: id }))}
-                    onSettingsChange={onSettingsChange}
-                  />
+                  {visitedTabs.has("agents") && (
+                    <Suspense fallback={null}>
+                      <LazyAgentSettings
+                        activeSubtab={activeSubtabs["agents"] ?? null}
+                        onSubtabChange={(id) =>
+                          setActiveSubtabs((prev) => ({ ...prev, agents: id }))
+                        }
+                        onSettingsChange={onSettingsChange}
+                      />
+                    </Suspense>
+                  )}
                 </div>
 
                 <div
@@ -763,7 +849,11 @@ export function SettingsDialog({
                   tabIndex={0}
                   className={activeTab === "github" ? "" : "hidden"}
                 >
-                  <GitHubSettingsTab />
+                  {visitedTabs.has("github") && (
+                    <Suspense fallback={null}>
+                      <LazyGitHubSettingsTab />
+                    </Suspense>
+                  )}
                 </div>
 
                 <div
@@ -773,7 +863,11 @@ export function SettingsDialog({
                   tabIndex={0}
                   className={activeTab === "sidecar" ? "" : "hidden"}
                 >
-                  <SidecarSettingsTab />
+                  {visitedTabs.has("sidecar") && (
+                    <Suspense fallback={null}>
+                      <LazySidecarSettingsTab />
+                    </Suspense>
+                  )}
                 </div>
 
                 <div
@@ -783,7 +877,11 @@ export function SettingsDialog({
                   tabIndex={0}
                   className={activeTab === "toolbar" ? "" : "hidden"}
                 >
-                  <ToolbarSettingsTab />
+                  {visitedTabs.has("toolbar") && (
+                    <Suspense fallback={null}>
+                      <LazyToolbarSettingsTab />
+                    </Suspense>
+                  )}
                 </div>
 
                 <div
@@ -793,7 +891,11 @@ export function SettingsDialog({
                   tabIndex={0}
                   className={activeTab === "notifications" ? "" : "hidden"}
                 >
-                  <NotificationSettingsTab />
+                  {visitedTabs.has("notifications") && (
+                    <Suspense fallback={null}>
+                      <LazyNotificationSettingsTab />
+                    </Suspense>
+                  )}
                 </div>
 
                 <div
@@ -803,7 +905,11 @@ export function SettingsDialog({
                   tabIndex={0}
                   className={activeTab === "editor" ? "" : "hidden"}
                 >
-                  <EditorIntegrationTab />
+                  {visitedTabs.has("editor") && (
+                    <Suspense fallback={null}>
+                      <LazyEditorIntegrationTab />
+                    </Suspense>
+                  )}
                 </div>
 
                 <div
@@ -813,7 +919,11 @@ export function SettingsDialog({
                   tabIndex={0}
                   className={activeTab === "imageViewer" ? "" : "hidden"}
                 >
-                  <ImageViewerTab />
+                  {visitedTabs.has("imageViewer") && (
+                    <Suspense fallback={null}>
+                      <LazyImageViewerTab />
+                    </Suspense>
+                  )}
                 </div>
 
                 <div
@@ -823,7 +933,11 @@ export function SettingsDialog({
                   tabIndex={0}
                   className={activeTab === "voice" ? "" : "hidden"}
                 >
-                  <VoiceInputSettingsTab />
+                  {visitedTabs.has("voice") && (
+                    <Suspense fallback={null}>
+                      <LazyVoiceInputSettingsTab />
+                    </Suspense>
+                  )}
                 </div>
 
                 <div
@@ -833,7 +947,11 @@ export function SettingsDialog({
                   tabIndex={0}
                   className={activeTab === "mcp" ? "" : "hidden"}
                 >
-                  <McpServerSettingsTab />
+                  {visitedTabs.has("mcp") && (
+                    <Suspense fallback={null}>
+                      <LazyMcpServerSettingsTab />
+                    </Suspense>
+                  )}
                 </div>
 
                 <div
@@ -843,7 +961,11 @@ export function SettingsDialog({
                   tabIndex={0}
                   className={activeTab === "environment" ? "" : "hidden"}
                 >
-                  <EnvironmentSettingsTab />
+                  {visitedTabs.has("environment") && (
+                    <Suspense fallback={null}>
+                      <LazyEnvironmentSettingsTab />
+                    </Suspense>
+                  )}
                 </div>
 
                 <div
@@ -853,10 +975,16 @@ export function SettingsDialog({
                   tabIndex={0}
                   className={activeTab === "privacy" ? "" : "hidden"}
                 >
-                  <PrivacyDataTab
-                    activeSubtab={activeSubtabs["privacy"] ?? null}
-                    onSubtabChange={(id) => setActiveSubtabs((prev) => ({ ...prev, privacy: id }))}
-                  />
+                  {visitedTabs.has("privacy") && (
+                    <Suspense fallback={null}>
+                      <LazyPrivacyDataTab
+                        activeSubtab={activeSubtabs["privacy"] ?? null}
+                        onSubtabChange={(id) =>
+                          setActiveSubtabs((prev) => ({ ...prev, privacy: id }))
+                        }
+                      />
+                    </Suspense>
+                  )}
                 </div>
 
                 <div
@@ -866,7 +994,11 @@ export function SettingsDialog({
                   tabIndex={0}
                   className={activeTab === "troubleshooting" ? "" : "hidden"}
                 >
-                  <TroubleshootingTab />
+                  {visitedTabs.has("troubleshooting") && (
+                    <Suspense fallback={null}>
+                      <LazyTroubleshootingTab />
+                    </Suspense>
+                  )}
                 </div>
               </>
             )}

@@ -1,7 +1,11 @@
-import { useEffect, useState } from "react";
-import { FileViewerModal } from "./FileViewerModal";
+import { Suspense, lazy, useEffect, useState } from "react";
+import { Loader2 } from "lucide-react";
 import { useProjectStore } from "@/store";
 import { useBranchForPath } from "@/hooks/useBranchForPath";
+
+const LazyFileViewerModal = lazy(() =>
+  import("./FileViewerModal").then((m) => ({ default: m.FileViewerModal }))
+);
 
 interface FileViewState {
   path: string;
@@ -39,14 +43,22 @@ export function FileViewerModalHost() {
   if (!fileView) return null;
 
   return (
-    <FileViewerModal
-      isOpen={true}
-      filePath={fileView.path}
-      rootPath={effectiveRootPath}
-      branch={branch}
-      initialLine={fileView.line}
-      initialCol={fileView.col}
-      onClose={() => setFileView(null)}
-    />
+    <Suspense
+      fallback={
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+          <Loader2 className="h-6 w-6 animate-spin text-white" />
+        </div>
+      }
+    >
+      <LazyFileViewerModal
+        isOpen={true}
+        filePath={fileView.path}
+        rootPath={effectiveRootPath}
+        branch={branch}
+        initialLine={fileView.line}
+        initialCol={fileView.col}
+        onClose={() => setFileView(null)}
+      />
+    </Suspense>
   );
 }

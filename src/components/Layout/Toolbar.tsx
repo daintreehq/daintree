@@ -1,4 +1,13 @@
-import { useRef, useState, useEffect, useLayoutEffect, useMemo, useCallback } from "react";
+import {
+  Suspense,
+  lazy,
+  useRef,
+  useState,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useCallback,
+} from "react";
 import type React from "react";
 import { Button } from "@/components/ui/button";
 import { FixedDropdown } from "@/components/ui/fixed-dropdown";
@@ -27,7 +36,14 @@ import {
 import { cn } from "@/lib/utils";
 import { isMac, isLinux, createTooltipWithShortcut } from "@/lib/platform";
 import { getProjectGradient } from "@/lib/colorUtils";
-import { GitHubResourceList, CommitList } from "@/components/GitHub";
+const LazyGitHubResourceList = lazy(() =>
+  import("@/components/GitHub/GitHubResourceList").then((m) => ({
+    default: m.GitHubResourceList,
+  }))
+);
+const LazyCommitList = lazy(() =>
+  import("@/components/GitHub/CommitList").then((m) => ({ default: m.CommitList }))
+);
 import { AgentButton } from "./AgentButton";
 import { AgentSetupButton } from "./AgentSetupButton";
 import { GitHubStatusIndicator, type GitHubStatusIndicatorStatus } from "./GitHubStatusIndicator";
@@ -710,16 +726,24 @@ export function Toolbar({
                 className="p-0 w-[450px]"
                 persistThroughChildOverlays
               >
-                <GitHubResourceList
-                  type="issue"
-                  projectPath={currentProject.path}
-                  onClose={() => {
-                    setIssuesOpen(false);
-                    setIssueSearchQuery("");
-                    issuesButtonRef.current?.focus();
-                  }}
-                  initialCount={stats?.issueCount}
-                />
+                <Suspense
+                  fallback={
+                    <div className="flex justify-center p-4">
+                      <Loader2 className="h-4 w-4 animate-spin text-canopy-text/40" />
+                    </div>
+                  }
+                >
+                  <LazyGitHubResourceList
+                    type="issue"
+                    projectPath={currentProject.path}
+                    onClose={() => {
+                      setIssuesOpen(false);
+                      setIssueSearchQuery("");
+                      issuesButtonRef.current?.focus();
+                    }}
+                    initialCount={stats?.issueCount}
+                  />
+                </Suspense>
               </FixedDropdown>
               <TooltipProvider>
                 <Tooltip>
@@ -771,16 +795,24 @@ export function Toolbar({
                 anchorRef={prsButtonRef}
                 className="p-0 w-[450px]"
               >
-                <GitHubResourceList
-                  type="pr"
-                  projectPath={currentProject.path}
-                  onClose={() => {
-                    setPrsOpen(false);
-                    setPrSearchQuery("");
-                    prsButtonRef.current?.focus();
-                  }}
-                  initialCount={stats?.prCount}
-                />
+                <Suspense
+                  fallback={
+                    <div className="flex justify-center p-4">
+                      <Loader2 className="h-4 w-4 animate-spin text-canopy-text/40" />
+                    </div>
+                  }
+                >
+                  <LazyGitHubResourceList
+                    type="pr"
+                    projectPath={currentProject.path}
+                    onClose={() => {
+                      setPrsOpen(false);
+                      setPrSearchQuery("");
+                      prsButtonRef.current?.focus();
+                    }}
+                    initialCount={stats?.prCount}
+                  />
+                </Suspense>
               </FixedDropdown>
               <TooltipProvider>
                 <Tooltip>
@@ -822,14 +854,22 @@ export function Toolbar({
                 anchorRef={commitsButtonRef}
                 className="p-0 w-[450px]"
               >
-                <CommitList
-                  projectPath={currentProject.path}
-                  onClose={() => {
-                    setCommitsOpen(false);
-                    commitsButtonRef.current?.focus();
-                  }}
-                  initialCount={stats?.commitCount}
-                />
+                <Suspense
+                  fallback={
+                    <div className="flex justify-center p-4">
+                      <Loader2 className="h-4 w-4 animate-spin text-canopy-text/40" />
+                    </div>
+                  }
+                >
+                  <LazyCommitList
+                    projectPath={currentProject.path}
+                    onClose={() => {
+                      setCommitsOpen(false);
+                      commitsButtonRef.current?.focus();
+                    }}
+                    initialCount={stats?.commitCount}
+                  />
+                </Suspense>
               </FixedDropdown>
               <GitHubStatusIndicator
                 status={getGitHubIndicatorStatus()}
