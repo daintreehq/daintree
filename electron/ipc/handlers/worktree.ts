@@ -65,6 +65,16 @@ function getWorktreeIdsForTask(projectId: string, taskId: string): string[] {
 export function registerWorktreeHandlers(deps: HandlerDependencies): () => void {
   const handlers: Array<() => void> = [];
 
+  const gitServiceCache = new Map<string, GitService>();
+  function getGitService(path: string): GitService {
+    let service = gitServiceCache.get(path);
+    if (!service) {
+      service = new GitService(path);
+      gitServiceCache.set(path, service);
+    }
+    return service;
+  }
+
   const handleWorktreeGetAll = async () => {
     if (!deps.worktreeService) {
       return [];
@@ -188,7 +198,7 @@ export function registerWorktreeHandlers(deps: HandlerDependencies): () => void 
     const initialPath = generateWorktreePath(rootPath, branchName, pattern);
 
     // Auto-resolve path conflicts by finding an available path
-    const gitService = new GitService(rootPath);
+    const gitService = getGitService(rootPath);
     return gitService.findAvailablePath(initialPath);
   };
   ipcMain.handle(CHANNELS.WORKTREE_GET_DEFAULT_PATH, handleWorktreeGetDefaultPath);
@@ -212,7 +222,7 @@ export function registerWorktreeHandlers(deps: HandlerDependencies): () => void 
       throw new Error("Invalid branchName: must be a non-empty string");
     }
 
-    const gitService = new GitService(rootPath);
+    const gitService = getGitService(rootPath);
     return gitService.findAvailableBranchName(branchName);
   };
   ipcMain.handle(CHANNELS.WORKTREE_GET_AVAILABLE_BRANCH, handleWorktreeGetAvailableBranch);
@@ -295,7 +305,7 @@ export function registerWorktreeHandlers(deps: HandlerDependencies): () => void 
       throw new Error("Invalid useMergeBase");
     }
 
-    const gitService = new GitService(cwd);
+    const gitService = getGitService(cwd);
     return gitService.compareWorktrees(branch1, branch2, filePath, useMergeBase);
   };
   ipcMain.handle(CHANNELS.GIT_COMPARE_WORKTREES, handleGitCompareWorktrees);
@@ -462,7 +472,7 @@ export function registerWorktreeHandlers(deps: HandlerDependencies): () => void 
     const effectiveBaseBranch = baseBranch || mainWorktree?.branch || "main";
 
     // Generate collision-safe branch name: task-{taskId} with suffix if needed
-    const gitService = new GitService(rootPath);
+    const gitService = getGitService(rootPath);
     const baseBranchName = `task-${taskId}`;
     const availableBranchName = await gitService.findAvailableBranchName(baseBranchName);
 
@@ -865,5 +875,8 @@ export function registerWorktreeHandlers(deps: HandlerDependencies): () => void 
   );
   handlers.push(() => ipcMain.removeHandler(CHANNELS.WORKTREE_GET_ALL_ISSUE_ASSOCIATIONS));
 
-  return () => handlers.forEach((cleanup) => cleanup());
+  return () => {
+    handlers.forEach((cleanup) => cleanup());
+    gitServiceCache.clear();
+  };
 }
