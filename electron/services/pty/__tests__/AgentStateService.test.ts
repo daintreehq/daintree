@@ -155,6 +155,28 @@ describe("AgentStateService", () => {
     expect(terminal.error).toBe("some error");
   });
 
+  it("handleActivityState with timeout trigger transitions working to waiting", () => {
+    const service = new AgentStateService();
+    const terminal = createTerminal({ agentState: "working" });
+    const stateChanges: Array<{ trigger: string; confidence: number; state: string }> = [];
+
+    events.on("agent:state-changed", (payload) => {
+      stateChanges.push({
+        trigger: payload.trigger,
+        confidence: payload.confidence,
+        state: payload.state,
+      });
+    });
+
+    service.handleActivityState(terminal, "idle", { trigger: "timeout" });
+
+    expect(terminal.agentState).toBe("waiting");
+    expect(stateChanges).toHaveLength(1);
+    expect(stateChanges[0]?.trigger).toBe("timeout");
+    expect(stateChanges[0]?.confidence).toBe(0.6);
+    expect(stateChanges[0]?.state).toBe("waiting");
+  });
+
   it("emits completed event with non-negative duration", () => {
     const service = new AgentStateService();
     const terminal = createTerminal({ spawnedAt: Date.now() + 10_000, agentState: "working" });

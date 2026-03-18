@@ -273,7 +273,7 @@ export class AgentStateService {
   handleActivityState(
     terminal: TerminalInfo,
     activity: "busy" | "idle" | "completed",
-    metadata?: { trigger: "input" | "output" | "pattern"; patternConfidence?: number }
+    metadata?: { trigger: "input" | "output" | "pattern" | "timeout"; patternConfidence?: number }
   ): void {
     if (!terminal.agentId) {
       return;
@@ -288,7 +288,9 @@ export class AgentStateService {
           ? { type: "completion" }
           : { type: "prompt" };
 
-    if (metadata?.trigger === "pattern") {
+    if (metadata?.trigger === "timeout") {
+      this.updateAgentState(terminal, event, "timeout", 0.6);
+    } else if (metadata?.trigger === "pattern") {
       const confidence = metadata.patternConfidence ?? 0.9;
       this.updateAgentState(terminal, event, "heuristic", confidence);
     } else if (metadata?.trigger === "output") {

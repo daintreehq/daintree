@@ -2598,4 +2598,151 @@ describe("ActivityMonitor", () => {
       monitor.dispose();
     });
   });
+
+  describe("Working silence timeout", () => {
+    it("should transition polling terminal to idle after silence exceeds maxWorkingSilenceMs", () => {
+      const onStateChange = vi.fn();
+      const getVisibleLines = vi.fn(() => ["some content"]);
+      const monitor = new ActivityMonitor("test-1", 1000, onStateChange, {
+        getVisibleLines,
+        pollingIntervalMs: 100,
+        maxWorkingSilenceMs: 5000,
+        bootCompletePatterns: [/ready/],
+      });
+
+      monitor.startPolling();
+
+      // Boot: emit data with boot pattern to exit boot state
+      monitor.onData("ready");
+      vi.advanceTimersByTime(100);
+
+      // Now in busy state, post-boot
+      expect(monitor.getState()).toBe("busy");
+      onStateChange.mockClear();
+
+      // Just before threshold — should still be busy (100 + 4800 = 4900 < 5000)
+      vi.advanceTimersByTime(4800);
+      expect(monitor.getState()).toBe("busy");
+
+      // Cross the threshold (4900 + 200 = 5100 > 5000)
+      vi.advanceTimersByTime(200);
+
+      expect(monitor.getState()).toBe("idle");
+      const timeoutCall = onStateChange.mock.calls.find(
+        (c: unknown[]) =>
+          c[2] === "idle" && (c[3] as Record<string, unknown>)?.trigger === "timeout"
+      );
+      expect(timeoutCall).toBeDefined();
+
+      monitor.dispose();
+    });
+
+    it("should transition non-polling terminal to idle after silence exceeds maxWorkingSilenceMs", () => {
+      const onStateChange = vi.fn();
+      const monitor = new ActivityMonitor("test-1", 1000, onStateChange, {
+        maxWorkingSilenceMs: 5000,
+        idleDebounceMs: 2000,
+        processStateValidator: { hasActiveChildren: () => true },
+      });
+
+      // Make busy via input
+      monitor.onInput("hello\r");
+      expect(monitor.getState()).toBe("busy");
+      onStateChange.mockClear();
+
+      // The debounce timer fires at 2000ms but reschedules (hasActiveChildren=true).
+      // Keep advancing: each debounce cycle reschedules at 2000ms intervals.
+      // After 5000ms of silence, the timeout check in resetDebounceTimer fires.
+      vi.advanceTimersByTime(6000);
+
+      expect(monitor.getState()).toBe("idle");
+      const timeoutCall = onStateChange.mock.calls.find(
+        (c: unknown[]) =>
+          c[2] === "idle" && (c[3] as Record<string, unknown>)?.trigger === "timeout"
+      );
+      expect(timeoutCall).toBeDefined();
+
+      monitor.dispose();
+    });
+
+    it("should not timeout when periodic output resets the silence clock", () => {
+      const onStateChange = vi.fn();
+      const getVisibleLines = vi.fn(() => ["some content"]);
+      const monitor = new ActivityMonitor("test-1", 1000, onStateChange, {
+        getVisibleLines,
+        pollingIntervalMs: 100,
+        maxWorkingSilenceMs: 5000,
+        bootCompletePatterns: [/ready/],
+      });
+
+      monitor.startPolling();
+      monitor.onData("ready");
+      vi.advanceTimersByTime(100);
+      expect(monitor.getState()).toBe("busy");
+
+      // Send data every 2 seconds for 12 seconds total (well past 5s threshold)
+      for (let i = 0; i < 6; i++) {
+        vi.advanceTimersByTime(2000);
+        monitor.onData("output chunk");
+      }
+
+      // Should still be busy — periodic output prevents timeout
+      expect(monitor.getState()).toBe("busy");
+
+      monitor.dispose();
+    });
+
+    it("should not timeout during boot phase", () => {
+      const onStateChange = vi.fn();
+      const getVisibleLines = vi.fn(() => ["loading..."]);
+      const monitor = new ActivityMonitor("test-1", 1000, onStateChange, {
+        getVisibleLines,
+        pollingIntervalMs: 100,
+        maxWorkingSilenceMs: 5000,
+        bootCompletePatterns: [/ready/],
+        pollingMaxBootMs: 60000,
+      });
+
+      monitor.startPolling();
+      expect(monitor.getState()).toBe("busy");
+
+      // Advance past silence timeout but don't trigger boot completion
+      vi.advanceTimersByTime(10000);
+
+      // Should still be busy — boot phase exempts from silence timeout
+      expect(monitor.getState()).toBe("busy");
+
+      monitor.dispose();
+    });
+
+    it("should reset silence clock on new busy cycle", () => {
+      const onStateChange = vi.fn();
+      const monitor = new ActivityMonitor("test-1", 1000, onStateChange, {
+        maxWorkingSilenceMs: 5000,
+        idleDebounceMs: 2000,
+        processStateValidator: { hasActiveChildren: () => true },
+      });
+
+      // Make busy via input
+      monitor.onInput("hello\r");
+      expect(monitor.getState()).toBe("busy");
+
+      // Advance close to timeout (4500ms)
+      vi.advanceTimersByTime(4500);
+      expect(monitor.getState()).toBe("busy");
+
+      // Start a new busy cycle via input — this resets lastDataTimestamp
+      monitor.onInput("make build\r");
+      expect(monitor.getState()).toBe("busy");
+      onStateChange.mockClear();
+
+      // Advance another 4500ms — would have timed out under the old timestamp
+      vi.advanceTimersByTime(4500);
+
+      // Should still be busy — the new busy cycle reset the clock
+      expect(monitor.getState()).toBe("busy");
+
+      monitor.dispose();
+    });
+  });
 });
