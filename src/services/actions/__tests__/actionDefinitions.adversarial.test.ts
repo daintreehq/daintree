@@ -630,9 +630,7 @@ describe("panel action hardening", () => {
   });
 
   it("throws for focus requests targeting trashed or missing panels", async () => {
-    const setActiveWorktree = vi.fn();
     const activateTerminal = vi.fn();
-    useWorktreeSelectionStore.setState({ setActiveWorktree } as never);
     useTerminalStore.setState({
       terminals: [createTerminal({ id: "trashed", location: "trash" })],
       activateTerminal,
@@ -641,14 +639,13 @@ describe("panel action hardening", () => {
     const actions = buildRegistry(registerPanelActions);
     const focusPanel = actions.get("panel.focus")!();
 
-    await expect(
-      focusPanel.run({ panelId: "trashed", worktreeId: "wt-2" }, {} as never)
-    ).rejects.toThrow("Terminal panel no longer exists");
+    await expect(focusPanel.run({ panelId: "trashed" }, {} as never)).rejects.toThrow(
+      "Terminal panel no longer exists"
+    );
     await expect(focusPanel.run({ panelId: "missing" }, {} as never)).rejects.toThrow(
       "Terminal panel no longer exists"
     );
 
-    expect(setActiveWorktree).not.toHaveBeenCalled();
     expect(activateTerminal).not.toHaveBeenCalled();
   });
 });

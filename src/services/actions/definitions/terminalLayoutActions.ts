@@ -27,12 +27,6 @@ export function registerTerminalLayoutActions(
           return;
         }
 
-        // Check if moving a group that contains the maximized panel
-        const group = state.getPanelGroup(targetId);
-        if (group && state.maximizedId && group.panelIds.includes(state.maximizedId)) {
-          // Clear maximize state before moving to dock
-          state.setMaximizedId(null);
-        }
         state.moveTerminalToDock(targetId);
 
         const moved = useTerminalStore.getState().terminals.find((t) => t.id === targetId);
@@ -237,10 +231,6 @@ export function registerTerminalLayoutActions(
       if (terminal.location === "dock") {
         state.moveTerminalToGrid(focusedId);
       } else {
-        const group = state.getPanelGroup(focusedId);
-        if (group && state.maximizedId && group.panelIds.includes(state.maximizedId)) {
-          state.setMaximizedId(null);
-        }
         state.moveTerminalToDock(focusedId);
         state.openDockTerminal(focusedId);
       }

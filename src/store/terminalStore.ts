@@ -158,8 +158,13 @@ export const useTerminalStore = create<PanelGridState>()((set, get, api) => {
         updates.focusedId = gridTerminals[0]?.id ?? null;
       }
 
-      if (state.maximizedId === id) {
-        updates.maximizedId = null;
+      if (state.maximizedId) {
+        const group = registrySlice.getPanelGroup(id);
+        if (state.maximizedId === id || (group && group.panelIds.includes(state.maximizedId))) {
+          updates.maximizedId = null;
+          updates.maximizeTarget = null;
+          updates.preMaximizeLayout = null;
+        }
       }
 
       if (Object.keys(updates).length > 0) {

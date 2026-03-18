@@ -342,15 +342,19 @@ export function TerminalContextMenu({
           break;
         case "delete-note":
           if (terminal.notePath) {
-            void actionService.dispatch(
-              "notes.delete",
-              {
-                notePath: terminal.notePath,
-                panelId: terminalId,
-                noteTitle: terminal.title,
-              },
-              { source: "context-menu" }
-            );
+            void (async () => {
+              const result = await actionService.dispatch(
+                "notes.delete",
+                {
+                  notePath: terminal.notePath,
+                  noteTitle: terminal.title,
+                },
+                { source: "context-menu" }
+              );
+              if (result && typeof result === "object" && "success" in result) {
+                useTerminalStore.getState().removeTerminal(terminalId);
+              }
+            })();
           }
           break;
         case "reveal-in-palette":
