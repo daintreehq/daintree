@@ -38,19 +38,32 @@
       }
       @media (prefers-color-scheme: light) {
         #startup-skeleton {
-          background: #f6f4ef;
+          background: var(--theme-surface-canvas, #f6f4ef);
         }
         .skeleton-toolbar {
-          background: #ebe7de;
-          border-bottom-color: #d8d2c6;
+          background: var(--theme-surface-sidebar, #ebe7de);
+          border-bottom-color: var(--theme-border-default, #d8d2c6);
         }
         .skeleton-sidebar {
-          background: #ebe7de;
-          border-right-color: #d8d2c6;
+          background: var(--theme-surface-sidebar, #ebe7de);
+          border-right-color: var(--theme-border-default, #d8d2c6);
         }
         .skeleton-main {
-          background: #f6f4ef;
+          background: var(--theme-surface-canvas, #f6f4ef);
         }
+      }
+      @keyframes skeleton-safety-fade {
+        0%,
+        99% {
+          opacity: 1;
+        }
+        100% {
+          opacity: 0;
+          pointer-events: none;
+        }
+      }
+      #startup-skeleton {
+        animation: skeleton-safety-fade 10s forwards;
       }
     </style>
   </head>
