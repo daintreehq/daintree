@@ -230,6 +230,9 @@ class TerminalInstanceService {
 
     if (managed.isSerializedRestoreInProgress) {
       managed.deferredOutput.push(data);
+      const deferredBytes =
+        typeof data === "string" ? this.textEncoder.encode(data).length : data.byteLength;
+      this.dataBuffer.notifyWriteComplete(id, deferredBytes);
       return;
     }
 

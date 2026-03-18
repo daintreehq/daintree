@@ -27,6 +27,10 @@ class MockWorker {
   }
 }
 
+// HIGH_WATERMARK = 128 * 1024 = 131072 bytes
+// LOW_WATERMARK  =  32 * 1024 =  32768 bytes
+// chunkByteSize for strings = data.length
+
 describe("TerminalOutputIngestService", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -99,52 +103,44 @@ describe("TerminalOutputIngestService", () => {
     expect(writeToTerminal).toHaveBeenCalledWith("term-1", "hello");
   });
 
-  it("coalesces multiple string chunks into a single write", () => {
+  it("buffers when inFlightBytes exceed high watermark and drains on acknowledgment", () => {
     const writeToTerminal = vi.fn();
     const service = new TerminalOutputIngestService(writeToTerminal);
 
+    // 140,000 chars > 131,072 (HIGH_WATERMARK)
+    const largeData = "x".repeat(140_000);
+    service.bufferData("term-1", largeData);
+    expect(writeToTerminal).toHaveBeenCalledTimes(1);
+
+    // Second write should be buffered (inFlightBytes = 140,000 > HIGH_WATERMARK)
+    service.bufferData("term-1", "buffered");
+    expect(writeToTerminal).toHaveBeenCalledTimes(1);
+
+    // Acknowledge enough bytes to drop below LOW_WATERMARK (32,768)
+    service.notifyWriteComplete("term-1", 140_000);
+    expect(writeToTerminal).toHaveBeenCalledTimes(2);
+    expect(writeToTerminal).toHaveBeenCalledWith("term-1", "buffered");
+  });
+
+  it("coalesces queued string chunks into a single write on drain", () => {
+    const writeToTerminal = vi.fn();
+    const service = new TerminalOutputIngestService(writeToTerminal);
+
+    // Exceed watermark with first write
+    const largeData = "x".repeat(140_000);
+    service.bufferData("term-1", largeData);
+    expect(writeToTerminal).toHaveBeenCalledTimes(1);
+
+    // Queue multiple small chunks while above watermark
     service.bufferData("term-1", "a");
     service.bufferData("term-1", "b");
     service.bufferData("term-1", "c");
-
-    // First write goes immediately, then subsequent data arrives before acknowledgment
-    // so they coalesce on the next drain
-    expect(writeToTerminal).toHaveBeenCalledWith("term-1", "a");
-  });
-
-  it("buffers when inFlightBytes exceed high watermark", () => {
-    const writeToTerminal = vi.fn();
-    const service = new TerminalOutputIngestService(writeToTerminal);
-
-    // Write a large chunk that exceeds the high watermark (128KB)
-    const largeData = "x".repeat(50_000);
-    service.bufferData("term-1", largeData);
     expect(writeToTerminal).toHaveBeenCalledTimes(1);
 
-    // Write more data — still under watermark (50k * 3 = 150KB > 128KB for strings)
-    // so subsequent writes should be buffered
-    service.bufferData("term-1", "buffered");
-    expect(writeToTerminal).toHaveBeenCalledTimes(1);
-  });
-
-  it("drains buffered data when notifyWriteComplete reduces inFlightBytes below low watermark", () => {
-    const writeToTerminal = vi.fn();
-    const service = new TerminalOutputIngestService(writeToTerminal);
-
-    // Write a large chunk that exceeds high watermark after byte estimation
-    const largeData = "x".repeat(50_000);
-    service.bufferData("term-1", largeData);
-    expect(writeToTerminal).toHaveBeenCalledTimes(1);
-
-    // Buffer more data while above watermark
-    service.bufferData("term-1", "queued");
-    expect(writeToTerminal).toHaveBeenCalledTimes(1);
-
-    // Acknowledge enough bytes to drop below low watermark
-    service.notifyWriteComplete("term-1", 200_000);
-
+    // Acknowledge to trigger drain — queued chunks should coalesce
+    service.notifyWriteComplete("term-1", 140_000);
     expect(writeToTerminal).toHaveBeenCalledTimes(2);
-    expect(writeToTerminal).toHaveBeenCalledWith("term-1", "queued");
+    expect(writeToTerminal).toHaveBeenCalledWith("term-1", "abc");
   });
 
   it("defers drain via setTimeout for ink erase-line sequences", () => {
@@ -156,12 +152,11 @@ describe("TerminalOutputIngestService", () => {
     expect(writeToTerminal).toHaveBeenCalledTimes(1);
     expect(writeToTerminal).toHaveBeenCalledWith("term-1", "\x1b[2K");
 
-    // Acknowledge previous write so we're back under watermark
+    // Acknowledge previous write
     service.notifyWriteComplete("term-1", 100);
 
-    // Now send the second half that completes the ink pattern
+    // Second half completes the ink pattern — drain deferred via setTimeout(0)
     service.bufferData("term-1", "\x1b[1Acontent");
-    // Ink pattern detected — drain deferred via setTimeout(0)
     expect(writeToTerminal).toHaveBeenCalledTimes(1);
 
     vi.advanceTimersByTime(0);
@@ -171,12 +166,12 @@ describe("TerminalOutputIngestService", () => {
     vi.useRealTimers();
   });
 
-  it("notifyParsed triggers drain of residual buffered data", () => {
+  it("notifyParsed triggers drain when buffered data exists and under high watermark", () => {
     const writeToTerminal = vi.fn();
     const service = new TerminalOutputIngestService(writeToTerminal);
 
-    // Write a large chunk to exceed watermark
-    const largeData = "x".repeat(50_000);
+    // Exceed watermark
+    const largeData = "x".repeat(140_000);
     service.bufferData("term-1", largeData);
     expect(writeToTerminal).toHaveBeenCalledTimes(1);
 
@@ -184,30 +179,29 @@ describe("TerminalOutputIngestService", () => {
     service.bufferData("term-1", "residual");
     expect(writeToTerminal).toHaveBeenCalledTimes(1);
 
-    // Partially acknowledge — not enough to drop below low watermark
-    service.notifyWriteComplete("term-1", 50_000);
+    // Partially acknowledge — drops inFlightBytes to 40,000 (above LOW but below HIGH)
+    service.notifyWriteComplete("term-1", 100_000);
+    // notifyWriteComplete should NOT drain because 40,000 > LOW_WATERMARK (32,768)
+    expect(writeToTerminal).toHaveBeenCalledTimes(1);
 
-    // notifyParsed should attempt drain since there's buffered data
-    // and inFlightBytes may now be below high watermark
+    // notifyParsed should drain because inFlightBytes (40,000) < HIGH_WATERMARK
     service.notifyParsed("term-1");
     expect(writeToTerminal).toHaveBeenCalledTimes(2);
+    expect(writeToTerminal).toHaveBeenCalledWith("term-1", "residual");
   });
 
   it("flushForTerminal writes pending buffer immediately regardless of watermark", () => {
     const writeToTerminal = vi.fn();
     const service = new TerminalOutputIngestService(writeToTerminal);
 
-    // Write a large chunk to exceed watermark
-    const largeData = "x".repeat(50_000);
+    // Exceed watermark, then buffer more
+    const largeData = "x".repeat(140_000);
     service.bufferData("term-1", largeData);
     service.bufferData("term-1", "a");
     service.bufferData("term-1", "b");
-
     expect(writeToTerminal).toHaveBeenCalledTimes(1);
 
     service.flushForTerminal("term-1");
-
-    // Force drain should write all buffered data
     expect(writeToTerminal).toHaveBeenCalledWith("term-1", "ab");
   });
 
@@ -215,8 +209,7 @@ describe("TerminalOutputIngestService", () => {
     const writeToTerminal = vi.fn();
     const service = new TerminalOutputIngestService(writeToTerminal);
 
-    // Write a large chunk and buffer more data
-    const largeData = "x".repeat(50_000);
+    const largeData = "x".repeat(140_000);
     service.bufferData("term-1", largeData);
     service.bufferData("term-1", "pending");
     expect(writeToTerminal).toHaveBeenCalledTimes(1);
@@ -237,6 +230,23 @@ describe("TerminalOutputIngestService", () => {
 
     expect(writeToTerminal).toHaveBeenCalledTimes(1);
     expect(writeToTerminal).toHaveBeenCalledWith("term-1", data);
+  });
+
+  it("isolates queues per terminal", () => {
+    const writeToTerminal = vi.fn();
+    const service = new TerminalOutputIngestService(writeToTerminal);
+
+    // Exceed watermark on term-1
+    const largeData = "x".repeat(140_000);
+    service.bufferData("term-1", largeData);
+    service.bufferData("term-1", "buffered-1");
+
+    // term-2 should still write immediately (separate queue)
+    service.bufferData("term-2", "hello-2");
+
+    expect(writeToTerminal).toHaveBeenCalledTimes(2);
+    expect(writeToTerminal).toHaveBeenCalledWith("term-1", largeData);
+    expect(writeToTerminal).toHaveBeenCalledWith("term-2", "hello-2");
   });
 
   it("routes worker SAB batches through watermark logic", async () => {
@@ -263,5 +273,26 @@ describe("TerminalOutputIngestService", () => {
 
     expect(writeToTerminal).toHaveBeenCalledTimes(1);
     expect(writeToTerminal).toHaveBeenCalledWith("term-1", "worker-data");
+  });
+
+  it("notifyWriteComplete is a no-op for unknown terminals", () => {
+    const writeToTerminal = vi.fn();
+    const service = new TerminalOutputIngestService(writeToTerminal);
+
+    // Should not throw
+    service.notifyWriteComplete("unknown", 1000);
+    expect(writeToTerminal).not.toHaveBeenCalled();
+  });
+
+  it("notifyParsed is a no-op when no buffered data exists", () => {
+    const writeToTerminal = vi.fn();
+    const service = new TerminalOutputIngestService(writeToTerminal);
+
+    service.bufferData("term-1", "hello");
+    expect(writeToTerminal).toHaveBeenCalledTimes(1);
+
+    // No buffered data — notifyParsed should be a no-op
+    service.notifyParsed("term-1");
+    expect(writeToTerminal).toHaveBeenCalledTimes(1);
   });
 });
