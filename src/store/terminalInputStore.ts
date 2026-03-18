@@ -56,6 +56,37 @@ function deleteTerminalKeys<V>(map: Map<string, V>, terminalId: string): Map<str
   return next;
 }
 
+function deleteProjectKeys<V>(
+  map: Map<string, V>,
+  projectId: string,
+  preserveTerminalIds?: Set<string>
+): Map<string, V> {
+  const prefix = `${projectId}:`;
+  let changed = false;
+  for (const key of map.keys()) {
+    if (key.startsWith(prefix)) {
+      if (preserveTerminalIds) {
+        const terminalId = key.slice(prefix.length);
+        if (preserveTerminalIds.has(terminalId)) continue;
+      }
+      changed = true;
+      break;
+    }
+  }
+  if (!changed) return map;
+  const next = new Map(map);
+  for (const key of [...next.keys()]) {
+    if (key.startsWith(prefix)) {
+      if (preserveTerminalIds) {
+        const terminalId = key.slice(prefix.length);
+        if (preserveTerminalIds.has(terminalId)) continue;
+      }
+      next.delete(key);
+    }
+  }
+  return next;
+}
+
 export interface TerminalInputState {
   hybridInputEnabled: boolean;
   hybridInputAutoFocus: boolean;
@@ -83,15 +114,17 @@ export interface TerminalInputState {
   stashEditorState: (terminalId: string, state: EditorState, projectId?: string) => void;
   popStashedEditorState: (terminalId: string, projectId?: string) => EditorState | undefined;
   hasStashedEditorState: (terminalId: string, projectId?: string) => boolean;
-  addToHistory: (terminalId: string, command: string) => void;
+  addToHistory: (terminalId: string, command: string, projectId?: string) => void;
   navigateHistory: (
     terminalId: string,
     direction: "up" | "down",
-    currentInput: string
+    currentInput: string,
+    projectId?: string
   ) => string | null;
-  resetHistoryIndex: (terminalId: string) => void;
-  getHistoryLength: (terminalId: string) => number;
+  resetHistoryIndex: (terminalId: string, projectId?: string) => void;
+  getHistoryLength: (terminalId: string, projectId?: string) => number;
   clearTerminalState: (terminalId: string) => void;
+  resetForProjectSwitch: (projectId: string, preserveTerminalIds?: Set<string>) => void;
 }
 
 export const useTerminalInputStore = create<TerminalInputState>()((set, get) => ({
@@ -208,13 +241,14 @@ export const useTerminalInputStore = create<TerminalInputState>()((set, get) => 
       return { pendingDrafts: newPendingDrafts };
     }),
 
-  addToHistory: (terminalId, command) =>
+  addToHistory: (terminalId, command, projectId) =>
     set((state) => {
       const trimmed = command.trim();
       if (trimmed === "") return state;
 
+      const key = makeDraftKey(terminalId, projectId);
       const newHistory = new Map(state.commandHistory);
-      const existing = newHistory.get(terminalId) ?? [];
+      const existing = newHistory.get(key) ?? [];
 
       const lastCommand = existing[existing.length - 1];
       if (lastCommand === trimmed) {
@@ -223,13 +257,13 @@ export const useTerminalInputStore = create<TerminalInputState>()((set, get) => 
 
       const filtered = existing.filter((cmd) => cmd !== trimmed);
       const updated = [...filtered, trimmed].slice(-MAX_HISTORY_SIZE);
-      newHistory.set(terminalId, updated);
+      newHistory.set(key, updated);
 
       const newIndex = new Map(state.historyIndex);
-      newIndex.delete(terminalId);
+      newIndex.delete(key);
 
       const newTempDraft = new Map(state.tempDraft);
-      newTempDraft.delete(terminalId);
+      newTempDraft.delete(key);
 
       return {
         commandHistory: newHistory,
@@ -238,12 +272,13 @@ export const useTerminalInputStore = create<TerminalInputState>()((set, get) => 
       };
     }),
 
-  navigateHistory: (terminalId, direction, currentInput) => {
+  navigateHistory: (terminalId, direction, currentInput, projectId) => {
     const state = get();
-    const history = state.commandHistory.get(terminalId) ?? [];
+    const key = makeDraftKey(terminalId, projectId);
+    const history = state.commandHistory.get(key) ?? [];
     if (history.length === 0) return null;
 
-    const currentIndex = state.historyIndex.get(terminalId) ?? -1;
+    const currentIndex = state.historyIndex.get(key) ?? -1;
     let newIndex: number;
 
     if (direction === "up") {
@@ -251,16 +286,16 @@ export const useTerminalInputStore = create<TerminalInputState>()((set, get) => 
         newIndex = history.length - 1;
         set((s) => {
           const newTempDraft = new Map(s.tempDraft);
-          newTempDraft.set(terminalId, currentInput);
+          newTempDraft.set(key, currentInput);
           const newHistoryIndex = new Map(s.historyIndex);
-          newHistoryIndex.set(terminalId, newIndex);
+          newHistoryIndex.set(key, newIndex);
           return { tempDraft: newTempDraft, historyIndex: newHistoryIndex };
         });
       } else if (currentIndex > 0) {
         newIndex = currentIndex - 1;
         set((s) => {
           const newHistoryIndex = new Map(s.historyIndex);
-          newHistoryIndex.set(terminalId, newIndex);
+          newHistoryIndex.set(key, newIndex);
           return { historyIndex: newHistoryIndex };
         });
       } else {
@@ -273,16 +308,16 @@ export const useTerminalInputStore = create<TerminalInputState>()((set, get) => 
         newIndex = currentIndex + 1;
         set((s) => {
           const newHistoryIndex = new Map(s.historyIndex);
-          newHistoryIndex.set(terminalId, newIndex);
+          newHistoryIndex.set(key, newIndex);
           return { historyIndex: newHistoryIndex };
         });
       } else {
-        const draft = state.tempDraft.get(terminalId) ?? "";
+        const draft = state.tempDraft.get(key) ?? "";
         set((s) => {
           const newHistoryIndex = new Map(s.historyIndex);
-          newHistoryIndex.delete(terminalId);
+          newHistoryIndex.delete(key);
           const newTempDraft = new Map(s.tempDraft);
-          newTempDraft.delete(terminalId);
+          newTempDraft.delete(key);
           return { historyIndex: newHistoryIndex, tempDraft: newTempDraft };
         });
         return draft;
@@ -292,17 +327,19 @@ export const useTerminalInputStore = create<TerminalInputState>()((set, get) => 
     return history[newIndex] ?? null;
   },
 
-  resetHistoryIndex: (terminalId) =>
+  resetHistoryIndex: (terminalId, projectId) =>
     set((state) => {
+      const key = makeDraftKey(terminalId, projectId);
       const newIndex = new Map(state.historyIndex);
-      newIndex.delete(terminalId);
+      newIndex.delete(key);
       const newTempDraft = new Map(state.tempDraft);
-      newTempDraft.delete(terminalId);
+      newTempDraft.delete(key);
       return { historyIndex: newIndex, tempDraft: newTempDraft };
     }),
 
-  getHistoryLength: (terminalId) => {
-    const history = get().commandHistory.get(terminalId);
+  getHistoryLength: (terminalId, projectId) => {
+    const key = makeDraftKey(terminalId, projectId);
+    const history = get().commandHistory.get(key);
     return history?.length ?? 0;
   },
 
@@ -311,30 +348,64 @@ export const useTerminalInputStore = create<TerminalInputState>()((set, get) => 
       const newDraftInputs = deleteTerminalKeys(state.draftInputs, terminalId);
       const newPendingDrafts = deleteTerminalKeys(state.pendingDrafts, terminalId);
       const newStashed = deleteTerminalKeys(state.stashedEditorStates, terminalId);
+      const newHistory = deleteTerminalKeys(state.commandHistory, terminalId);
+      const newIndex = deleteTerminalKeys(state.historyIndex, terminalId);
+      const newTempDraft = deleteTerminalKeys(state.tempDraft, terminalId);
 
-      const newHistory = new Map(state.commandHistory);
-      const hadHistory = newHistory.delete(terminalId);
-
-      const newIndex = new Map(state.historyIndex);
-      const hadIndex = newIndex.delete(terminalId);
-
-      const newTempDraft = new Map(state.tempDraft);
-      const hadTemp = newTempDraft.delete(terminalId);
-
-      const compositeChanged =
+      const changed =
         newDraftInputs !== state.draftInputs ||
         newPendingDrafts !== state.pendingDrafts ||
-        newStashed !== state.stashedEditorStates;
+        newStashed !== state.stashedEditorStates ||
+        newHistory !== state.commandHistory ||
+        newIndex !== state.historyIndex ||
+        newTempDraft !== state.tempDraft;
 
-      if (!compositeChanged && !hadHistory && !hadIndex && !hadTemp) return state;
+      if (!changed) return state;
 
       return {
         draftInputs: newDraftInputs,
         pendingDrafts: newPendingDrafts,
         stashedEditorStates: newStashed,
-        commandHistory: hadHistory ? newHistory : state.commandHistory,
-        historyIndex: hadIndex ? newIndex : state.historyIndex,
-        tempDraft: hadTemp ? newTempDraft : state.tempDraft,
+        commandHistory: newHistory,
+        historyIndex: newIndex,
+        tempDraft: newTempDraft,
+      };
+    }),
+
+  resetForProjectSwitch: (projectId, preserveTerminalIds) =>
+    set((state) => {
+      const newDraftInputs = deleteProjectKeys(state.draftInputs, projectId, preserveTerminalIds);
+      const newPendingDrafts = deleteProjectKeys(
+        state.pendingDrafts,
+        projectId,
+        preserveTerminalIds
+      );
+      const newStashed = deleteProjectKeys(
+        state.stashedEditorStates,
+        projectId,
+        preserveTerminalIds
+      );
+      const newHistory = deleteProjectKeys(state.commandHistory, projectId, preserveTerminalIds);
+      const newIndex = deleteProjectKeys(state.historyIndex, projectId, preserveTerminalIds);
+      const newTempDraft = deleteProjectKeys(state.tempDraft, projectId, preserveTerminalIds);
+
+      const changed =
+        newDraftInputs !== state.draftInputs ||
+        newPendingDrafts !== state.pendingDrafts ||
+        newStashed !== state.stashedEditorStates ||
+        newHistory !== state.commandHistory ||
+        newIndex !== state.historyIndex ||
+        newTempDraft !== state.tempDraft;
+
+      if (!changed) return state;
+
+      return {
+        draftInputs: newDraftInputs,
+        pendingDrafts: newPendingDrafts,
+        stashedEditorStates: newStashed,
+        commandHistory: newHistory,
+        historyIndex: newIndex,
+        tempDraft: newTempDraft,
       };
     }),
 }));

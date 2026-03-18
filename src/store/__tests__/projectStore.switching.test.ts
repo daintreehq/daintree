@@ -309,7 +309,10 @@ describe("projectStore switching races", () => {
         { id: "term-dock", worktreeId: undefined },
       ],
     });
-    expect(resetAllStoresForProjectSwitchMock).toHaveBeenCalledWith({ preserveTerminalIds });
+    expect(resetAllStoresForProjectSwitchMock).toHaveBeenCalledWith({
+      preserveTerminalIds,
+      outgoingProjectId: "project-a",
+    });
     expect(destroyTerminalInstanceMock.mock.calls).toEqual([["term-evict-a"], ["term-evict-b"]]);
   });
 

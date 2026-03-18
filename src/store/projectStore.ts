@@ -326,6 +326,7 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
       console.log("[ProjectSwitch] Resetting renderer stores...");
       await resetAllStoresForProjectSwitch({
         preserveTerminalIds,
+        outgoingProjectId: oldProjectId,
       });
 
       // Pre-populate stores from cached snapshots for an instant UI.
@@ -544,7 +545,10 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
         `[ProjectStore] Closed active project ${projectId}, transitioning to no-project state`
       );
 
-      await resetAllStoresForProjectSwitch({ preserveTerminalIds: new Set() });
+      await resetAllStoresForProjectSwitch({
+        preserveTerminalIds: new Set(),
+        outgoingProjectId: projectId,
+      });
       set({ currentProject: null });
       await get().loadProjects();
 
@@ -650,6 +654,7 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
       console.log("[ProjectStore] Resetting renderer stores...");
       await resetAllStoresForProjectSwitch({
         preserveTerminalIds,
+        outgoingProjectId: oldProjectId,
       });
 
       // Pre-populate stores from cached snapshots for an instant UI.
