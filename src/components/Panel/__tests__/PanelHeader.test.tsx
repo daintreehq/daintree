@@ -23,6 +23,10 @@ vi.mock("@/components/DragDrop/DragHandleContext", () => ({
   useDragHandle: () => null,
 }));
 
+vi.mock("zustand/react/shallow", () => ({
+  useShallow: (fn: (...args: unknown[]) => unknown) => fn,
+}));
+
 const mockWatchPanel = vi.fn();
 const mockUnwatchPanel = vi.fn();
 
@@ -147,6 +151,9 @@ describe("PanelHeader", () => {
   });
 
   describe("overflow menu items", () => {
+    const findMenuButton = (menu: HTMLElement, label: string) =>
+      Array.from(menu.querySelectorAll("button")).find((btn) => btn.textContent?.trim() === label);
+
     it("always renders the overflow button (Rename/Duplicate/Trash always available)", () => {
       render(<PanelHeader {...makeProps()} />);
       expect(screen.getByLabelText("More panel actions")).toBeDefined();
@@ -155,30 +162,31 @@ describe("PanelHeader", () => {
     it("renders Rename and Duplicate for all panel kinds", () => {
       render(<PanelHeader {...makeProps({ kind: "browser" })} />);
       const menu = screen.getByTestId("overflow-menu");
-      expect(menu.textContent).toContain("Rename");
-      expect(menu.textContent).toContain("Duplicate");
+      expect(findMenuButton(menu, "Rename")).toBeDefined();
+      expect(findMenuButton(menu, "Duplicate")).toBeDefined();
     });
 
     it("renders Lock Input and View Terminal Info for PTY panels", () => {
       mockHasPty = true;
       render(<PanelHeader {...makeProps({ kind: "terminal" })} />);
       const menu = screen.getByTestId("overflow-menu");
-      expect(menu.textContent).toContain("Lock Input");
-      expect(menu.textContent).toContain("View Terminal Info");
+      expect(findMenuButton(menu, "Lock Input")).toBeDefined();
+      expect(findMenuButton(menu, "View Terminal Info")).toBeDefined();
     });
 
     it("does not render Lock Input or View Terminal Info for non-PTY panels", () => {
       mockHasPty = false;
       render(<PanelHeader {...makeProps({ kind: "browser" })} />);
       const menu = screen.getByTestId("overflow-menu");
-      expect(menu.textContent).not.toContain("Lock Input");
-      expect(menu.textContent).not.toContain("View Terminal Info");
+      expect(findMenuButton(menu, "Lock Input")).toBeUndefined();
+      expect(findMenuButton(menu, "View Terminal Info")).toBeUndefined();
     });
 
-    it("renders Watch for agent panels", () => {
+    it("renders Watch for unwatched agent panels", () => {
       render(<PanelHeader {...makeProps({ agentId: "claude" })} />);
       const menu = screen.getByTestId("overflow-menu");
-      expect(menu.textContent).toContain("Watch");
+      expect(findMenuButton(menu, "Watch")).toBeDefined();
+      expect(findMenuButton(menu, "Cancel Watch")).toBeUndefined();
     });
 
     it("renders Cancel Watch when agent panel is watched", () => {
@@ -188,21 +196,21 @@ describe("PanelHeader", () => {
       };
       render(<PanelHeader {...makeProps({ agentId: "claude" })} />);
       const menu = screen.getByTestId("overflow-menu");
-      expect(menu.textContent).toContain("Cancel Watch");
+      expect(findMenuButton(menu, "Cancel Watch")).toBeDefined();
+      expect(findMenuButton(menu, "Watch")).toBeUndefined();
     });
 
     it("does not render Watch for non-agent panels", () => {
       render(<PanelHeader {...makeProps({ kind: "terminal" })} />);
       const menu = screen.getByTestId("overflow-menu");
-      expect(menu.textContent).not.toContain("Watch");
+      expect(findMenuButton(menu, "Watch")).toBeUndefined();
+      expect(findMenuButton(menu, "Cancel Watch")).toBeUndefined();
     });
 
     it("renders Trash with destructive styling", () => {
       render(<PanelHeader {...makeProps()} />);
       const menu = screen.getByTestId("overflow-menu");
-      const trashButton = Array.from(menu.querySelectorAll("button")).find((btn) =>
-        btn.textContent?.includes("Trash")
-      );
+      const trashButton = findMenuButton(menu, "Trash");
       expect(trashButton).toBeDefined();
       expect(trashButton?.getAttribute("data-destructive")).toBe("true");
     });
@@ -210,12 +218,44 @@ describe("PanelHeader", () => {
     it("dispatches terminal.rename when clicking Rename", () => {
       render(<PanelHeader {...makeProps()} />);
       const menu = screen.getByTestId("overflow-menu");
-      const renameButton = Array.from(menu.querySelectorAll("button")).find((btn) =>
-        btn.textContent?.includes("Rename")
-      );
-      renameButton?.click();
+      findMenuButton(menu, "Rename")?.click();
       expect(mockDispatch).toHaveBeenCalledWith(
         "terminal.rename",
+        { terminalId: "test-panel" },
+        { source: "menu" }
+      );
+    });
+
+    it("dispatches terminal.duplicate when clicking Duplicate", () => {
+      render(<PanelHeader {...makeProps()} />);
+      const menu = screen.getByTestId("overflow-menu");
+      findMenuButton(menu, "Duplicate")?.click();
+      expect(mockDispatch).toHaveBeenCalledWith(
+        "terminal.duplicate",
+        { terminalId: "test-panel" },
+        { source: "menu" }
+      );
+    });
+
+    it("dispatches terminal.toggleInputLock when clicking Lock Input", () => {
+      mockHasPty = true;
+      render(<PanelHeader {...makeProps({ kind: "terminal" })} />);
+      const menu = screen.getByTestId("overflow-menu");
+      findMenuButton(menu, "Lock Input")?.click();
+      expect(mockDispatch).toHaveBeenCalledWith(
+        "terminal.toggleInputLock",
+        { terminalId: "test-panel" },
+        { source: "menu" }
+      );
+    });
+
+    it("dispatches terminal.viewInfo when clicking View Terminal Info", () => {
+      mockHasPty = true;
+      render(<PanelHeader {...makeProps({ kind: "terminal" })} />);
+      const menu = screen.getByTestId("overflow-menu");
+      findMenuButton(menu, "View Terminal Info")?.click();
+      expect(mockDispatch).toHaveBeenCalledWith(
+        "terminal.viewInfo",
         { terminalId: "test-panel" },
         { source: "menu" }
       );
@@ -224,15 +264,30 @@ describe("PanelHeader", () => {
     it("dispatches terminal.trash when clicking Trash", () => {
       render(<PanelHeader {...makeProps()} />);
       const menu = screen.getByTestId("overflow-menu");
-      const trashButton = Array.from(menu.querySelectorAll("button")).find((btn) =>
-        btn.textContent?.includes("Trash")
-      );
-      trashButton?.click();
+      findMenuButton(menu, "Trash")?.click();
       expect(mockDispatch).toHaveBeenCalledWith(
         "terminal.trash",
         { terminalId: "test-panel" },
         { source: "menu" }
       );
+    });
+
+    it("calls watchPanel when clicking Watch on unwatched agent panel", () => {
+      render(<PanelHeader {...makeProps({ agentId: "claude" })} />);
+      const menu = screen.getByTestId("overflow-menu");
+      findMenuButton(menu, "Watch")?.click();
+      expect(mockWatchPanel).toHaveBeenCalledWith("test-panel");
+    });
+
+    it("calls unwatchPanel when clicking Cancel Watch on watched agent panel", () => {
+      mockStoreState = {
+        ...mockStoreState,
+        watchedPanels: new Set(["test-panel"]),
+      };
+      render(<PanelHeader {...makeProps({ agentId: "claude" })} />);
+      const menu = screen.getByTestId("overflow-menu");
+      findMenuButton(menu, "Cancel Watch")?.click();
+      expect(mockUnwatchPanel).toHaveBeenCalledWith("test-panel");
     });
 
     it("shows Unlock Input when terminal is input locked", () => {
@@ -243,7 +298,18 @@ describe("PanelHeader", () => {
       };
       render(<PanelHeader {...makeProps({ kind: "terminal" })} />);
       const menu = screen.getByTestId("overflow-menu");
-      expect(menu.textContent).toContain("Unlock Input");
+      expect(findMenuButton(menu, "Unlock Input")).toBeDefined();
+      expect(findMenuButton(menu, "Lock Input")).toBeUndefined();
+    });
+
+    it("renders headerActions slot in the menu", () => {
+      render(
+        <PanelHeader
+          {...makeProps({ headerActions: <div data-testid="custom-action">Agent Settings</div> })}
+        />
+      );
+      const menu = screen.getByTestId("overflow-menu");
+      expect(menu.querySelector("[data-testid='custom-action']")).toBeDefined();
     });
   });
 

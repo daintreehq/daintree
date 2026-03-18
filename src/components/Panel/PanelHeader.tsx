@@ -54,6 +54,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { TabButton, type TabInfo } from "./TabButton";
 import { SortableTabButton } from "./SortableTabButton";
+import { useShallow } from "zustand/react/shallow";
 import { panelKindCanRestart, panelKindHasPty } from "@shared/config/panelKindRegistry";
 import { actionService } from "@/services/ActionService";
 import { fireWatchNotification } from "@/lib/watchNotification";
@@ -198,19 +199,11 @@ function PanelHeaderComponent({
   const unwatchPanel = useTerminalStore((state) => state.unwatchPanel);
   const showWatchButton = !!agentId;
 
-  // Terminal record for overflow menu actions
-  const isInputLocked = useTerminalStore(
-    (state) => state.terminals.find((t) => t.id === id)?.isInputLocked ?? false
+  // Terminal record for overflow menu actions (single shallow selector, matching TerminalContextMenu pattern)
+  const terminal = useTerminalStore(
+    useShallow((state) => state.terminals.find((t) => t.id === id))
   );
-  const terminalAgentState = useTerminalStore(
-    (state) => state.terminals.find((t) => t.id === id)?.agentState
-  );
-  const terminalTitle = useTerminalStore(
-    (state) => state.terminals.find((t) => t.id === id)?.title
-  );
-  const terminalWorktreeId = useTerminalStore(
-    (state) => state.terminals.find((t) => t.id === id)?.worktreeId
-  );
+  const isInputLocked = terminal?.isInputLocked ?? false;
   const hasPty = panelKindHasPty(kind);
 
   // Whether the overflow "..." menu has any items to show
@@ -272,25 +265,17 @@ function PanelHeaderComponent({
   const handleWatchToggle = useCallback(() => {
     if (isWatched) {
       unwatchPanel(id);
-    } else if (terminalAgentState === "completed" || terminalAgentState === "waiting") {
+    } else if (terminal?.agentState === "completed" || terminal?.agentState === "waiting") {
       fireWatchNotification(
         id,
-        terminalTitle ?? id,
-        terminalAgentState,
-        terminalWorktreeId ?? undefined
+        terminal.title ?? id,
+        terminal.agentState,
+        terminal.worktreeId ?? undefined
       );
     } else {
       watchPanel(id);
     }
-  }, [
-    id,
-    isWatched,
-    unwatchPanel,
-    watchPanel,
-    terminalAgentState,
-    terminalTitle,
-    terminalWorktreeId,
-  ]);
+  }, [id, isWatched, unwatchPanel, watchPanel, terminal]);
 
   // In dock, show shortened title without command summary for space efficiency
   const displayTitle = location === "dock" ? getBaseTitle(title) : title;
