@@ -382,9 +382,7 @@ export class PtyManager extends EventEmitter {
         return fs.readlinkSync(`/proc/${pid}/fd/0`);
       }
       // macOS
-      const tty = execSync(`ps -p ${pid} -o tty=`, { timeout: 500 })
-        .toString()
-        .trim();
+      const tty = execSync(`ps -p ${pid} -o tty=`, { timeout: 500 }).toString().trim();
       if (!tty || tty === "??" || tty === "?") return undefined;
       return `/dev/${tty}`;
     } catch {

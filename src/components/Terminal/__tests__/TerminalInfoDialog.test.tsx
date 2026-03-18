@@ -1,6 +1,5 @@
 // @vitest-environment jsdom
-import { render, screen, waitFor } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
+import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { TerminalInfoDialog } from "../TerminalInfoDialog";
 import type { TerminalInfoPayload } from "@/types/electron";
@@ -81,7 +80,13 @@ describe("TerminalInfoDialog", () => {
   });
 
   it("shows exit code when terminal has exited", async () => {
-    const payload = makePayload({ hasPty: false, exitCode: 0, ptyPid: undefined, ptyCols: undefined, ptyRows: undefined });
+    const payload = makePayload({
+      hasPty: false,
+      exitCode: 0,
+      ptyPid: undefined,
+      ptyCols: undefined,
+      ptyRows: undefined,
+    });
     dispatchMock.mockResolvedValue({ ok: true, result: payload });
 
     render(<TerminalInfoDialog isOpen={true} onClose={vi.fn()} terminalId="test-id" />);
@@ -153,8 +158,7 @@ describe("TerminalInfoDialog", () => {
       expect(screen.getByText("Copy to Clipboard")).toBeTruthy();
     });
 
-    const user = userEvent.setup();
-    await user.click(screen.getByText("Copy to Clipboard"));
+    fireEvent.click(screen.getByText("Copy to Clipboard"));
 
     expect(writeTextMock).toHaveBeenCalledOnce();
     const clipboardText = writeTextMock.mock.calls[0][0] as string;
