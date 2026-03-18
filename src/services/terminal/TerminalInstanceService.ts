@@ -418,9 +418,7 @@ class TerminalInstanceService {
 
     const terminal = new Terminal(terminalOptions);
     this.cwdProviders.set(id, getCwd ?? (() => ""));
-    const addons = setupTerminalAddons(terminal, openLink, () =>
-      (this.cwdProviders.get(id) ?? (() => ""))()
-    );
+    const addons = setupTerminalAddons(terminal, () => (this.cwdProviders.get(id) ?? (() => ""))());
 
     const hostElement = document.createElement("div");
     hostElement.style.width = "100%";
