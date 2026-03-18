@@ -1,5 +1,10 @@
 import { useEffect, useState, useCallback, useRef } from "react";
 import { createPortal } from "react-dom";
+import {
+  getPanelTransitionDuration,
+  PANEL_MINIMIZE_EASING,
+  PANEL_RESTORE_EASING,
+} from "@/lib/animationUtils";
 
 export type TransitionDirection = "minimize" | "restore";
 
@@ -22,8 +27,6 @@ interface TransitionState {
 interface PanelTransitionOverlayProps {
   onTransitionComplete?: (id: string) => void;
 }
-
-const ANIMATION_DURATION = 180; // ms - faster to minimize distortion visibility
 
 // Singleton event system for triggering transitions
 type TransitionListener = (transition: TransitionState) => void;
@@ -128,6 +131,10 @@ function TransitionGhost({ transition, onComplete }: TransitionGhostProps) {
   const { sourceRect, targetRect } = transition;
   const elementRef = useRef<HTMLDivElement>(null);
 
+  const duration = getPanelTransitionDuration(transition.direction);
+  const timingFunction =
+    transition.direction === "minimize" ? PANEL_MINIMIZE_EASING : PANEL_RESTORE_EASING;
+
   useEffect(() => {
     const element = elementRef.current;
     if (!element) return;
@@ -153,21 +160,19 @@ function TransitionGhost({ transition, onComplete }: TransitionGhostProps) {
       element.style.opacity = "0";
     });
 
-    const timer = setTimeout(onComplete, ANIMATION_DURATION);
+    const timer = setTimeout(onComplete, duration);
     return () => clearTimeout(timer);
-  }, [sourceRect, targetRect, onComplete]);
+  }, [sourceRect, targetRect, onComplete, duration]);
 
   return (
     <div
       ref={elementRef}
       className="absolute border-2 border-canopy-accent/50 bg-canopy-accent/10"
       style={{
-        transitionDuration: `${ANIMATION_DURATION}ms`,
+        transitionDuration: `${duration}ms`,
         transitionProperty: "left, top, width, height, opacity",
-        // Use expo ease-out for snappy, natural feel
-        transitionTimingFunction: "cubic-bezier(0.16, 1, 0.3, 1)",
+        transitionTimingFunction: timingFunction,
         willChange: "left, top, width, height, opacity",
-        // Use a consistent border-radius that doesn't scale
         borderRadius: "6px",
       }}
     />
