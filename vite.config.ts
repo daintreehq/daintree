@@ -1,5 +1,6 @@
 import { defineConfig, type Plugin } from "vite";
-import react from "@vitejs/plugin-react";
+import react, { reactCompilerPreset } from "@vitejs/plugin-react";
+import babel from "@rolldown/plugin-babel";
 import tailwindcss from "@tailwindcss/vite";
 import path from "path";
 import {
@@ -61,7 +62,14 @@ function cspTransformPlugin(): Plugin {
 
 export default defineConfig(({ mode }) => ({
   envPrefix: ["VITE_", "CANOPY_"],
-  plugins: [react(), tailwindcss(), cspTransformPlugin()],
+  plugins: [
+    react(),
+    babel({
+      presets: [reactCompilerPreset({ compilationMode: "annotation" })],
+    }),
+    tailwindcss(),
+    cspTransformPlugin(),
+  ],
   base: "./",
   build: {
     target: "chrome144",

@@ -1,6 +1,7 @@
 import js from "@eslint/js";
 import tseslint from "typescript-eslint";
 import reactHooks from "eslint-plugin-react-hooks";
+import reactCompiler from "eslint-plugin-react-compiler";
 import prettier from "eslint-config-prettier";
 
 export default tseslint.config(
@@ -99,6 +100,17 @@ export default tseslint.config(
           ],
         },
       ],
+    },
+  },
+
+  // React Compiler — surface bailout patterns
+  {
+    files: ["**/*.{tsx,jsx,ts}"],
+    plugins: {
+      "react-compiler": reactCompiler,
+    },
+    rules: {
+      "react-compiler/react-compiler": "warn",
     },
   },
 
