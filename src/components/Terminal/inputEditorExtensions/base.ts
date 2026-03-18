@@ -124,6 +124,7 @@ export const inputTheme = EditorView.theme(
       cursor: "pointer",
       flexShrink: "0",
       opacity: "0",
+      pointerEvents: "none",
       transition: "opacity 100ms ease-out",
       lineHeight: "1",
       fontSize: "12px",
@@ -133,6 +134,7 @@ export const inputTheme = EditorView.theme(
     },
     ".cm-image-chip:hover .cm-chip-remove, .cm-file-drop-chip:hover .cm-chip-remove": {
       opacity: "1",
+      pointerEvents: "auto",
     },
     ".cm-chip-remove:hover": {
       color: "var(--theme-text-primary)",
