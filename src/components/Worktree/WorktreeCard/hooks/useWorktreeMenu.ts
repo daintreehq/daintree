@@ -18,6 +18,7 @@ export function useWorktreeMenu({
   onEndAll,
   onShowDeleteDialog,
   onShowIssuePicker,
+  onShowPlanViewer,
   onShowReviewHub,
   onShowCompareDiff,
 }: {
@@ -41,6 +42,7 @@ export function useWorktreeMenu({
   onEndAll: () => void;
   onShowDeleteDialog: () => void;
   onShowIssuePicker?: () => void;
+  onShowPlanViewer?: () => void;
   onShowReviewHub?: () => void;
   onShowCompareDiff?: () => void;
 }): {
@@ -120,6 +122,10 @@ export function useWorktreeMenu({
         id: "worktree:attach-issue",
         label: worktree.issueNumber ? "Change Issue..." : "Attach to Issue...",
         enabled: Boolean(onShowIssuePicker),
+      },
+      {
+        id: "worktree:view-plan",
+        label: "View Plan",
       },
       {
         id: "worktree:review-hub",
@@ -365,6 +371,9 @@ export function useWorktreeMenu({
         case "worktree:attach-issue":
           onShowIssuePicker?.();
           break;
+        case "worktree:view-plan":
+          onShowPlanViewer?.();
+          break;
         case "worktree:review-hub":
           onShowReviewHub?.();
           break;
@@ -383,6 +392,7 @@ export function useWorktreeMenu({
       onRestartAll,
       onShowDeleteDialog,
       onShowIssuePicker,
+      onShowPlanViewer,
       onShowReviewHub,
       onShowCompareDiff,
       showMenu,

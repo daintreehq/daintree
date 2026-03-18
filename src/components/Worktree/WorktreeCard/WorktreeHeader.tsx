@@ -25,6 +25,7 @@ import {
   ChevronRight,
   CircleDot,
   CornerDownRight,
+  FileText,
   GitPullRequest,
   MoreHorizontal,
   House,
@@ -222,6 +223,7 @@ export interface WorktreeHeaderProps {
   badges: {
     onOpenIssue?: () => void;
     onOpenPR?: () => void;
+    onOpenPlan?: () => void;
   };
 
   menu: {
@@ -260,6 +262,7 @@ export interface WorktreeHeaderProps {
     onCloseAll: () => void;
     onEndAll: () => void;
     onAttachIssue?: () => void;
+    onViewPlan?: () => void;
     onOpenReviewHub?: () => void;
     onCompareDiff?: () => void;
     onDeleteWorktree?: () => void;
@@ -294,6 +297,7 @@ export function WorktreeHeader({
   );
 
   const hasIssueTitle = !!(worktree.issueNumber && worktree.issueTitle);
+  const hasPlanFile = Boolean(worktree.hasPlanFile);
 
   return (
     <div>
@@ -422,6 +426,7 @@ export function WorktreeHeader({
                 onOpenPRSidecar={menu.onOpenPRSidecar}
                 onOpenPRExternal={menu.onOpenPRExternal}
                 onAttachIssue={menu.onAttachIssue}
+                onViewPlan={menu.onViewPlan}
                 onOpenReviewHub={menu.onOpenReviewHub}
                 onCompareDiff={menu.onCompareDiff}
                 onRunRecipe={menu.onRunRecipe}
@@ -444,11 +449,12 @@ export function WorktreeHeader({
         </div>
       </div>
 
-      {/* Secondary row: branch label when issue title is headline, issue badge fallback, and/or PR badge */}
+      {/* Secondary row: branch label when issue title is headline, issue badge fallback, PR badge, and/or plan badge */}
       {!isCollapsed &&
         (hasIssueTitle ||
           (worktree.issueNumber && !hasIssueTitle) ||
-          (worktree.prNumber && worktree.prState !== "closed")) && (
+          (worktree.prNumber && worktree.prState !== "closed") ||
+          hasPlanFile) && (
           <div className="flex flex-col gap-0.5 mt-1.5">
             {worktree.issueNumber && !hasIssueTitle && (
               <IssueBadge
@@ -473,6 +479,20 @@ export function WorktreeHeader({
                 isMuted={isMuted}
                 isMainWorktree={false}
               />
+            )}
+            {hasPlanFile && badges.onOpenPlan && (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  badges.onOpenPlan?.();
+                }}
+                className="flex items-center gap-1 text-xs text-left cursor-pointer transition-colors text-canopy-text/70 hover:text-canopy-text focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent"
+                aria-label="View agent plan file"
+              >
+                <FileText className="w-3 h-3 shrink-0 text-canopy-accent/70" aria-hidden="true" />
+                <span className="font-mono">{worktree.planFilePath ?? "Plan"}</span>
+              </button>
             )}
           </div>
         )}

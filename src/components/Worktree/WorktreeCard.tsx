@@ -255,6 +255,7 @@ export function WorktreeCard({
 
   const [showIssuePicker, setShowIssuePicker] = useState(false);
   const [showReviewHub, setShowReviewHub] = useState(false);
+  const [showPlanViewer, setShowPlanViewer] = useState(false);
 
   const handleAttachIssue = useCallback(
     async (issue: GitHubIssue) => {
@@ -442,6 +443,7 @@ export function WorktreeCard({
     onEndAll: handleEndAll,
     onShowDeleteDialog: () => setShowDeleteDialog(true),
     onShowIssuePicker: () => setShowIssuePicker(true),
+    onShowPlanViewer: () => setShowPlanViewer(true),
     onShowReviewHub: () => setShowReviewHub(true),
     onShowCompareDiff: () =>
       useWorktreeSelectionStore.getState().openCrossWorktreeDiff(worktree.id),
@@ -568,6 +570,7 @@ export function WorktreeCard({
             badges={{
               onOpenIssue: worktree.issueNumber ? handleOpenIssueExternal : undefined,
               onOpenPR: worktree.prNumber ? handleOpenPRExternal : undefined,
+              onOpenPlan: worktree.hasPlanFile ? () => setShowPlanViewer(true) : undefined,
             }}
             menu={{
               launchAgents,
@@ -591,6 +594,7 @@ export function WorktreeCard({
               onOpenPRSidecar: worktree.prUrl ? handleOpenPRSidecar : undefined,
               onOpenPRExternal: worktree.prUrl ? handleOpenPRExternal : undefined,
               onAttachIssue: () => setShowIssuePicker(true),
+              onViewPlan: () => setShowPlanViewer(true),
               onOpenReviewHub: () => setShowReviewHub(true),
               onCompareDiff: () =>
                 useWorktreeSelectionStore.getState().openCrossWorktreeDiff(worktree.id),
@@ -658,6 +662,8 @@ export function WorktreeCard({
             onDetachIssue={() => void handleDetachIssue()}
             showReviewHub={showReviewHub}
             onCloseReviewHub={() => setShowReviewHub(false)}
+            showPlanViewer={showPlanViewer}
+            onClosePlanViewer={() => setShowPlanViewer(false)}
           />
         </div>
       </div>
