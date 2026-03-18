@@ -3,8 +3,7 @@ import { logWarn } from "@/utils/logger";
 export const RESTORE_SPAWN_BATCH_SIZE = 3;
 export const RESTORE_SPAWN_BATCH_DELAY_MS = 100;
 
-const DEFERRED_RESTORE_IDLE_TIMEOUT_MS = 1200;
-const DEFERRED_RESTORE_FALLBACK_DELAY_MS = 32;
+const DEFERRED_RESTORE_FALLBACK_DELAY_MS = 0;
 
 export interface TerminalRestoreTask {
   terminalId: string;
@@ -54,10 +53,8 @@ export function scheduleDeferredSnapshotRestore(runRestore: () => Promise<void>)
     });
   };
 
-  if (typeof window !== "undefined" && typeof window.requestIdleCallback === "function") {
-    window.requestIdleCallback(() => execute(), {
-      timeout: DEFERRED_RESTORE_IDLE_TIMEOUT_MS,
-    });
+  if (typeof scheduler !== "undefined" && typeof scheduler.postTask === "function") {
+    void scheduler.postTask(execute, { priority: "background" });
     return;
   }
 

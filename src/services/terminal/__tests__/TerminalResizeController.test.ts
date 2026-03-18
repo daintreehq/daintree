@@ -77,14 +77,48 @@ function createManagedTerminal() {
 }
 
 describe("TerminalResizeController", () => {
+  let postTaskCallbacks: Array<() => void>;
+
   beforeEach(() => {
     vi.useFakeTimers();
     vi.clearAllMocks();
+    postTaskCallbacks = [];
+
+    vi.stubGlobal("scheduler", {
+      postTask: vi.fn((cb: () => unknown, opts?: { signal?: AbortSignal }) => {
+        return new Promise<unknown>((resolve, reject) => {
+          if (opts?.signal?.aborted) {
+            reject(new DOMException("Aborted", "AbortError"));
+            return;
+          }
+          postTaskCallbacks.push(() => {
+            if (opts?.signal?.aborted) {
+              reject(new DOMException("Aborted", "AbortError"));
+              return;
+            }
+            try {
+              resolve(cb());
+            } catch (e) {
+              reject(e);
+            }
+          });
+        });
+      }),
+    });
   });
 
   afterEach(() => {
     vi.useRealTimers();
+    vi.unstubAllGlobals();
+    postTaskCallbacks = [];
   });
+
+  const flushPostTasks = async () => {
+    const callbacks = [...postTaskCallbacks];
+    postTaskCallbacks = [];
+    callbacks.forEach((cb) => cb());
+    await new Promise<void>((resolve) => queueMicrotask(resolve));
+  };
 
   it("skips resize in background tier when terminal is unfocused", () => {
     const managed = createManagedTerminal();
@@ -385,6 +419,209 @@ describe("TerminalResizeController", () => {
           })
         )
       ).toBeNull();
+    });
+  });
+
+  describe("scheduleIdleResize and clearResizeJob", () => {
+    function mockDataBuffer(): ResizeControllerDeps["dataBuffer"] {
+      return {
+        flushForTerminal: vi.fn(),
+        resetForTerminal: vi.fn(),
+      } as unknown as ResizeControllerDeps["dataBuffer"];
+    }
+
+    function attachCellDims(
+      managed: ReturnType<typeof createManagedTerminal>,
+      cell: { width: number; height: number } = { width: 10, height: 20 }
+    ) {
+      Object.assign(managed.terminal, {
+        _core: { _renderService: { dimensions: { css: { cell } } } },
+      });
+    }
+
+    it("scheduleIdleResize stores an AbortController on managed.resizeJob", () => {
+      const managed = createManagedTerminal();
+      attachCellDims(managed);
+      managed.isFocused = false;
+      managed.isVisible = false;
+      managed.terminal.buffer.active.length = 300;
+
+      const controller = new TerminalResizeController({
+        getInstance: vi.fn(() => managed),
+        dataBuffer: mockDataBuffer(),
+      });
+
+      controller.resize("term-1", 1200, 900);
+
+      expect(managed.resizeJob).toBeInstanceOf(AbortController);
+      expect((global as any).scheduler.postTask).toHaveBeenCalledWith(
+        expect.any(Function),
+        expect.objectContaining({ priority: "background" })
+      );
+    });
+
+    it("clearResizeJob aborts the AbortController and prevents the task from running", async () => {
+      const managed = createManagedTerminal();
+      attachCellDims(managed);
+      managed.isFocused = false;
+      managed.isVisible = false;
+      managed.terminal.buffer.active.length = 300;
+
+      const dataBuffer = mockDataBuffer();
+      const controller = new TerminalResizeController({
+        getInstance: vi.fn(() => managed),
+        dataBuffer,
+      });
+
+      controller.resize("term-1", 1200, 900);
+
+      const abortController = managed.resizeJob as AbortController;
+      expect(abortController).toBeInstanceOf(AbortController);
+      expect(abortController.signal.aborted).toBe(false);
+
+      controller.clearResizeJob(managed);
+
+      expect(abortController.signal.aborted).toBe(true);
+      expect(managed.resizeJob).toBeUndefined();
+
+      // Task in queue should not run since signal is aborted
+      await flushPostTasks();
+      expect(dataBuffer.flushForTerminal).not.toHaveBeenCalled();
+      expect(managed.terminal.resize).not.toHaveBeenCalled();
+    });
+
+    it("flushResize applies resize when resizeJob is pending", async () => {
+      const managed = createManagedTerminal();
+      attachCellDims(managed);
+      managed.isFocused = false;
+      managed.isVisible = false;
+      managed.terminal.buffer.active.length = 300;
+      managed.latestCols = 100;
+      managed.latestRows = 30;
+
+      const dataBuffer = mockDataBuffer();
+      const controller = new TerminalResizeController({
+        getInstance: vi.fn(() => managed),
+        dataBuffer,
+      });
+
+      controller.resize("term-1", 1200, 900);
+      expect(managed.resizeJob).toBeInstanceOf(AbortController);
+
+      controller.flushResize("term-1");
+
+      expect(managed.resizeJob).toBeUndefined();
+      expect(dataBuffer.flushForTerminal).toHaveBeenCalled();
+      expect(dataBuffer.resetForTerminal).toHaveBeenCalled();
+    });
+
+    it("flushResize applies resize when resizeDebounceTimer is pending", () => {
+      const managed = createManagedTerminal();
+      attachCellDims(managed);
+      managed.isFocused = false;
+      managed.isVisible = true;
+      managed.terminal.buffer.active.length = 300;
+      managed.latestCols = 100;
+      managed.latestRows = 30;
+
+      const dataBuffer = mockDataBuffer();
+      const controller = new TerminalResizeController({
+        getInstance: vi.fn(() => managed),
+        dataBuffer,
+      });
+
+      controller.resize("term-1", 1200, 900);
+      expect(managed.resizeDebounceTimer).toBeDefined();
+
+      controller.flushResize("term-1");
+
+      expect(managed.resizeDebounceTimer).toBeUndefined();
+      expect(dataBuffer.flushForTerminal).toHaveBeenCalled();
+    });
+
+    it("debounceResize stores timer in resizeDebounceTimer, not resizeJob", () => {
+      const managed = createManagedTerminal();
+      attachCellDims(managed);
+      managed.isFocused = false;
+      managed.isVisible = true;
+      managed.terminal.buffer.active.length = 300;
+
+      const controller = new TerminalResizeController({
+        getInstance: vi.fn(() => managed),
+        dataBuffer: mockDataBuffer(),
+      });
+
+      controller.resize("term-1", 1200, 900);
+
+      expect(managed.resizeJob).toBeUndefined();
+      expect(managed.resizeDebounceTimer).toBeDefined();
+    });
+
+    it("scheduleIdleResize falls back to setTimeout when scheduler is unavailable", () => {
+      (global as any).scheduler = undefined;
+
+      const managed = createManagedTerminal();
+      attachCellDims(managed);
+      managed.isFocused = false;
+      managed.isVisible = false;
+      managed.terminal.buffer.active.length = 300;
+
+      const controller = new TerminalResizeController({
+        getInstance: vi.fn(() => managed),
+        dataBuffer: mockDataBuffer(),
+      });
+
+      controller.resize("term-1", 1200, 900);
+
+      expect(managed.resizeJob).toBeUndefined();
+      expect(managed.resizeDebounceTimer).toBeDefined();
+    });
+
+    it("scheduleIdleResize does not queue a second timer when fallback timer already pending", () => {
+      (global as any).scheduler = undefined;
+
+      const managed = createManagedTerminal();
+      attachCellDims(managed);
+      managed.isFocused = false;
+      managed.isVisible = false;
+      managed.terminal.buffer.active.length = 300;
+
+      const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+
+      const controller = new TerminalResizeController({
+        getInstance: vi.fn(() => managed),
+        dataBuffer: mockDataBuffer(),
+      });
+
+      controller.resize("term-1", 1200, 900);
+      const firstTimerCount = setTimeoutSpy.mock.calls.length;
+
+      // Second resize while timer pending — should not queue another timer
+      controller.resize("term-1", 1300, 950);
+      expect(setTimeoutSpy.mock.calls.length).toBe(firstTimerCount);
+    });
+
+    it("postTask callback applies resize and clears resizeJob", async () => {
+      const managed = createManagedTerminal();
+      attachCellDims(managed); // width:10, height:20 → 1200/10=120 cols, 900/20=45 rows
+      managed.isFocused = false;
+      managed.isVisible = false;
+      managed.terminal.buffer.active.length = 300;
+
+      const dataBuffer = mockDataBuffer();
+      const controller = new TerminalResizeController({
+        getInstance: vi.fn(() => managed),
+        dataBuffer,
+      });
+
+      controller.resize("term-1", 1200, 900);
+      expect(managed.resizeJob).toBeInstanceOf(AbortController);
+
+      await flushPostTasks();
+
+      expect(managed.resizeJob).toBeUndefined();
+      expect(dataBuffer.flushForTerminal).toHaveBeenCalledWith("term-1");
+      expect(managed.terminal.resize).toHaveBeenCalledWith(120, 45);
     });
   });
 

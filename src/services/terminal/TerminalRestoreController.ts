@@ -191,12 +191,9 @@ export class TerminalRestoreController {
   }
 
   private yieldToUI(): Promise<void> {
-    return new Promise((resolve) => {
-      if (typeof requestIdleCallback === "function") {
-        requestIdleCallback(() => resolve(), { timeout: INCREMENTAL_RESTORE_CONFIG.timeBudgetMs });
-      } else {
-        setTimeout(() => resolve(), INCREMENTAL_RESTORE_CONFIG.timeBudgetMs);
-      }
-    });
+    if (typeof scheduler !== "undefined" && typeof scheduler.postTask === "function") {
+      return scheduler.postTask(() => {}, { priority: "background" });
+    }
+    return new Promise((resolve) => setTimeout(resolve, INCREMENTAL_RESTORE_CONFIG.timeBudgetMs));
   }
 }

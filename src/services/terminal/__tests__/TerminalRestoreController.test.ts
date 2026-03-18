@@ -21,25 +21,27 @@ describe("TerminalRestoreController", () => {
   let mockTerminal: Record<string, any>;
   let writeCallbacks: Map<number, () => void>;
   let writeCallId: number;
-  let idleCallbacks: Map<number, () => void>;
-  let idleCallbackId: number;
+  let postTaskCallbacks: Array<() => void>;
 
   beforeEach(() => {
     vi.useFakeTimers();
 
     writeCallbacks = new Map();
     writeCallId = 0;
-    idleCallbacks = new Map();
-    idleCallbackId = 0;
+    postTaskCallbacks = [];
 
-    global.requestIdleCallback = vi.fn((callback: IdleRequestCallback) => {
-      const id = ++idleCallbackId;
-      idleCallbacks.set(id, callback as unknown as () => void);
-      return id;
-    });
-
-    global.cancelIdleCallback = vi.fn((id: number) => {
-      idleCallbacks.delete(id);
+    vi.stubGlobal("scheduler", {
+      postTask: vi.fn((cb: () => unknown) => {
+        return new Promise<unknown>((resolve, reject) => {
+          postTaskCallbacks.push(() => {
+            try {
+              resolve(cb());
+            } catch (e) {
+              reject(e);
+            }
+          });
+        });
+      }),
     });
 
     mockTerminal = {
@@ -78,8 +80,9 @@ describe("TerminalRestoreController", () => {
     controller.dispose();
     vi.clearAllTimers();
     vi.useRealTimers();
+    vi.unstubAllGlobals();
     writeCallbacks.clear();
-    idleCallbacks.clear();
+    postTaskCallbacks = [];
   });
 
   function makeManagedTerminal(overrides: Partial<ManagedTerminal> = {}): ManagedTerminal {
@@ -99,10 +102,11 @@ describe("TerminalRestoreController", () => {
     await new Promise<void>((resolve) => queueMicrotask(resolve));
   };
 
-  const flushIdleCallbacks = () => {
-    const callbacks = Array.from(idleCallbacks.values());
-    idleCallbacks.clear();
+  const flushPostTasks = async () => {
+    const callbacks = [...postTaskCallbacks];
+    postTaskCallbacks = [];
     callbacks.forEach((cb) => cb());
+    await flushMicrotasks();
   };
 
   describe("restoreFromSerialized", () => {
@@ -179,11 +183,10 @@ describe("TerminalRestoreController", () => {
       await flushMicrotasks();
 
       expect(mockTerminal.reset).toHaveBeenCalledTimes(1);
-      expect(global.requestIdleCallback).toHaveBeenCalled();
+      expect((global as any).scheduler.postTask).toHaveBeenCalled();
 
       for (let i = 0; i < 10; i++) {
-        flushIdleCallbacks();
-        await flushMicrotasks();
+        await flushPostTasks();
       }
 
       await restorePromise;
@@ -206,8 +209,7 @@ describe("TerminalRestoreController", () => {
       expect(managed.isSerializedRestoreInProgress).toBe(true);
 
       for (let i = 0; i < 10; i++) {
-        flushIdleCallbacks();
-        await flushMicrotasks();
+        await flushPostTasks();
       }
       await promise;
 
@@ -226,7 +228,7 @@ describe("TerminalRestoreController", () => {
 
       controller.destroy("t1");
 
-      flushIdleCallbacks();
+      await flushPostTasks();
       await flushMicrotasks();
       await promise;
 
@@ -244,12 +246,34 @@ describe("TerminalRestoreController", () => {
       await flushMicrotasks();
 
       for (let i = 0; i < 10; i++) {
-        flushIdleCallbacks();
-        await flushMicrotasks();
+        await flushPostTasks();
       }
       await promise;
 
       expect(writeDataSpy).toHaveBeenCalledWith("t1", "deferred-data");
+    });
+
+    it("falls back to setTimeout when scheduler is unavailable", async () => {
+      (global as any).scheduler = undefined;
+
+      const managed = makeManagedTerminal();
+      instances.set("t1", managed);
+      const data = "x".repeat(INCREMENTAL_RESTORE_CONFIG.chunkBytes * 2);
+
+      const promise = controller.restoreFromSerializedIncremental("t1", data);
+      await flushMicrotasks();
+
+      vi.advanceTimersByTime(INCREMENTAL_RESTORE_CONFIG.timeBudgetMs + 1);
+      await flushMicrotasks();
+      vi.advanceTimersByTime(INCREMENTAL_RESTORE_CONFIG.timeBudgetMs + 1);
+      await flushMicrotasks();
+
+      await promise;
+
+      const totalWritten = mockTerminal.write.mock.calls
+        .map((call: [string, ...unknown[]]) => call[0].length)
+        .reduce((sum: number, len: number) => sum + len, 0);
+      expect(totalWritten).toBe(data.length);
     });
   });
 

@@ -65,8 +65,7 @@ describe("TerminalInstanceService - Incremental Restore", () => {
   let mockTerminal: any;
   let writeCallbacks: Map<number, () => void>;
   let writeCallId: number;
-  let idleCallbacks: Map<number, () => void>;
-  let idleCallbackId: number;
+  let postTaskCallbacks: Array<() => void>;
   let timeouts: Map<number, () => void>;
   let timeoutId: number;
 
@@ -74,20 +73,23 @@ describe("TerminalInstanceService - Incremental Restore", () => {
     vi.useFakeTimers();
     writeCallbacks = new Map();
     writeCallId = 0;
-    idleCallbacks = new Map();
-    idleCallbackId = 0;
+    postTaskCallbacks = [];
     timeouts = new Map();
     timeoutId = 0;
 
-    global.requestIdleCallback = vi.fn((callback: () => void) => {
-      const id = ++idleCallbackId;
-      idleCallbacks.set(id, callback);
-      return id;
-    }) as any;
-
-    global.cancelIdleCallback = vi.fn((id: number) => {
-      idleCallbacks.delete(id);
-    }) as any;
+    vi.stubGlobal("scheduler", {
+      postTask: vi.fn((cb: () => unknown) => {
+        return new Promise<unknown>((resolve, reject) => {
+          postTaskCallbacks.push(() => {
+            try {
+              resolve(cb());
+            } catch (e) {
+              reject(e);
+            }
+          });
+        });
+      }),
+    });
 
     global.setTimeout = vi.fn((callback: () => void, _ms: number) => {
       const id = ++timeoutId;
@@ -135,8 +137,9 @@ describe("TerminalInstanceService - Incremental Restore", () => {
   afterEach(() => {
     vi.clearAllTimers();
     vi.useRealTimers();
+    vi.unstubAllGlobals();
     writeCallbacks.clear();
-    idleCallbacks.clear();
+    postTaskCallbacks = [];
     timeouts.clear();
   });
 
@@ -145,10 +148,11 @@ describe("TerminalInstanceService - Incremental Restore", () => {
     await new Promise<void>((resolve) => queueMicrotask(resolve));
   };
 
-  const flushIdleCallbacks = () => {
-    const callbacks = Array.from(idleCallbacks.values());
-    idleCallbacks.clear();
+  const flushPostTasks = async () => {
+    const callbacks = [...postTaskCallbacks];
+    postTaskCallbacks = [];
     callbacks.forEach((cb) => cb());
+    await flushMicrotasks();
   };
 
   it("should use synchronous restore for small serialized state", async () => {
@@ -200,8 +204,7 @@ describe("TerminalInstanceService - Incremental Restore", () => {
     expect(mockTerminal.write).toHaveBeenCalled();
 
     for (let i = 0; i < 20; i++) {
-      flushIdleCallbacks();
-      await flushMicrotasks();
+      await flushPostTasks();
     }
 
     await restorePromise;
@@ -238,13 +241,10 @@ describe("TerminalInstanceService - Incremental Restore", () => {
 
     await flushMicrotasks();
 
-    expect(global.requestIdleCallback).toHaveBeenCalled();
+    expect((global as any).scheduler.postTask).toHaveBeenCalled();
 
-    flushIdleCallbacks();
-    await flushMicrotasks();
-
-    flushIdleCallbacks();
-    await flushMicrotasks();
+    await flushPostTasks();
+    await flushPostTasks();
 
     await restorePromise;
 
@@ -276,7 +276,7 @@ describe("TerminalInstanceService - Incremental Restore", () => {
 
     terminalInstanceService.destroy(id);
 
-    flushIdleCallbacks();
+    await flushPostTasks();
     await flushMicrotasks();
 
     await restorePromise;
@@ -308,8 +308,7 @@ describe("TerminalInstanceService - Incremental Restore", () => {
     await flushMicrotasks();
 
     for (let i = 0; i < 10; i++) {
-      flushIdleCallbacks();
-      await flushMicrotasks();
+      await flushPostTasks();
     }
 
     await Promise.all([restore1, restore2]);
@@ -346,10 +345,8 @@ describe("TerminalInstanceService - Incremental Restore", () => {
     );
 
     await flushMicrotasks();
-    flushIdleCallbacks();
-    await flushMicrotasks();
-    flushIdleCallbacks();
-    await flushMicrotasks();
+    await flushPostTasks();
+    await flushPostTasks();
 
     await restorePromise;
 
@@ -383,10 +380,8 @@ describe("TerminalInstanceService - Incremental Restore", () => {
 
     expect(terminal.isSerializedRestoreInProgress).toBe(true);
 
-    flushIdleCallbacks();
-    await flushMicrotasks();
-    flushIdleCallbacks();
-    await flushMicrotasks();
+    await flushPostTasks();
+    await flushPostTasks();
 
     await restorePromise;
 
@@ -442,8 +437,7 @@ describe("TerminalInstanceService - Incremental Restore", () => {
     await flushMicrotasks();
 
     for (let i = 0; i < 20; i++) {
-      flushIdleCallbacks();
-      await flushMicrotasks();
+      await flushPostTasks();
     }
 
     await restorePromise;
@@ -561,8 +555,7 @@ describe("TerminalInstanceService - Incremental Restore", () => {
     await flushMicrotasks();
 
     for (let i = 0; i < 20; i++) {
-      flushIdleCallbacks();
-      await flushMicrotasks();
+      await flushPostTasks();
     }
 
     await restorePromise;
@@ -642,8 +635,7 @@ describe("TerminalInstanceService - Incremental Restore", () => {
     await flushMicrotasks();
 
     for (let i = 0; i < 20; i++) {
-      flushIdleCallbacks();
-      await flushMicrotasks();
+      await flushPostTasks();
     }
 
     await restorePromise;
@@ -655,11 +647,11 @@ describe("TerminalInstanceService - Incremental Restore", () => {
     terminalInstanceService.destroy(id);
   });
 
-  it("should fallback to setTimeout when requestIdleCallback is unavailable", async () => {
+  it("should fallback to setTimeout when scheduler is unavailable", async () => {
     const id = "test-terminal-8";
     const largeState = "x".repeat(INCREMENTAL_RESTORE_CONFIG.chunkBytes * 2);
 
-    (global as any).requestIdleCallback = undefined;
+    (global as any).scheduler = undefined;
 
     const terminal = terminalInstanceService.getOrCreate(
       id,
@@ -688,11 +680,5 @@ describe("TerminalInstanceService - Incremental Restore", () => {
     await restorePromise;
 
     terminalInstanceService.destroy(id);
-
-    global.requestIdleCallback = vi.fn((callback: () => void) => {
-      const id = ++idleCallbackId;
-      idleCallbacks.set(id, callback);
-      return id;
-    }) as any;
   });
 });
