@@ -28,7 +28,7 @@ export interface UseWorktreeActionsResult {
 
   handleCloseCompleted: () => void;
   handleCloseFailed: () => void;
-  handleMinimizeAll: () => void;
+  handleDockAll: () => void;
   handleMaximizeAll: () => void;
   handleCloseAll: () => void;
   handleEndAll: () => void;
@@ -110,7 +110,7 @@ export function useWorktreeActions({
     );
   }, [worktree.id]);
 
-  const handleMinimizeAll = useCallback(() => {
+  const handleDockAll = useCallback(() => {
     void actionService.dispatch(
       "worktree.sessions.minimizeAll",
       { worktreeId: worktree.id },
@@ -206,7 +206,7 @@ export function useWorktreeActions({
     handleRunRecipe,
     handleCloseCompleted,
     handleCloseFailed,
-    handleMinimizeAll,
+    handleDockAll,
     handleMaximizeAll,
     handleCloseAll,
     handleEndAll,

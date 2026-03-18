@@ -13,7 +13,6 @@ import {
   Layers,
   Link,
   Maximize2,
-  Minimize2,
   PanelTopClose,
   PanelTopOpen,
   Pin,
@@ -26,6 +25,7 @@ import {
   Trash2,
   X,
 } from "lucide-react";
+import { DockToBottomIcon } from "@/components/icons";
 
 type MenuComponent = React.ElementType;
 type LaunchAgentIcon = React.ComponentType<{ className?: string }>;
@@ -82,7 +82,7 @@ export interface WorktreeMenuItemsProps {
   onTogglePin?: () => void;
   onToggleCollapse?: () => void;
   isCollapsed?: boolean;
-  onMinimizeAll: () => void;
+  onDockAll: () => void;
   onMaximizeAll: () => void;
   onRestartAll: () => void;
   onResetRenderers: () => void;
@@ -120,7 +120,7 @@ export function WorktreeMenuItems({
   onTogglePin,
   onToggleCollapse,
   isCollapsed,
-  onMinimizeAll,
+  onDockAll,
   onMaximizeAll,
   onRestartAll,
   onResetRenderers,
@@ -182,9 +182,9 @@ export function WorktreeMenuItems({
           Sessions
         </C.SubTrigger>
         <C.SubContent>
-          <C.Item onSelect={onMinimizeAll} disabled={counts.grid === 0}>
-            <Minimize2 className="w-3.5 h-3.5 mr-2" />
-            Minimize All
+          <C.Item onSelect={onDockAll} disabled={counts.grid === 0}>
+            <DockToBottomIcon className="w-3.5 h-3.5 mr-2" />
+            Dock All
             <C.Shortcut>({counts.grid})</C.Shortcut>
           </C.Item>
           <C.Item onSelect={onMaximizeAll} disabled={counts.dock === 0}>

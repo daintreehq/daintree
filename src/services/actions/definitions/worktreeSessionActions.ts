@@ -10,7 +10,7 @@ export function registerWorktreeSessionActions(
 ): void {
   actions.set("worktree.sessions.minimizeAll", () => ({
     id: "worktree.sessions.minimizeAll",
-    title: "Minimize All Sessions",
+    title: "Dock All Sessions",
     description: "Move all grid sessions for a worktree to the dock",
     category: "worktree",
     kind: "command",

@@ -54,7 +54,7 @@ const baseMenu: WorktreeHeaderProps["menu"] = {
   onOpenEditor: noop,
   onRevealInFinder: noop,
   onRunRecipe: noop,
-  onMinimizeAll: noop,
+  onDockAll: noop,
   onMaximizeAll: noop,
   onRestartAll: noop,
   onResetRenderers: noop,

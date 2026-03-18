@@ -253,7 +253,7 @@ export interface WorktreeHeaderProps {
     onToggleCollapse?: () => void;
     isCollapsed?: boolean;
     onLaunchAgent?: (agentId: string) => void;
-    onMinimizeAll: () => void;
+    onDockAll: () => void;
     onMaximizeAll: () => void;
     onRestartAll: () => void;
     onResetRenderers: () => void;
@@ -434,7 +434,7 @@ export function WorktreeHeader({
                 onTogglePin={menu.onTogglePin}
                 onToggleCollapse={menu.onToggleCollapse}
                 isCollapsed={menu.isCollapsed}
-                onMinimizeAll={menu.onMinimizeAll}
+                onDockAll={menu.onDockAll}
                 onMaximizeAll={menu.onMaximizeAll}
                 onRestartAll={menu.onRestartAll}
                 onResetRenderers={menu.onResetRenderers}
