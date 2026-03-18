@@ -869,6 +869,25 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
 
   // Troubleshooting
   {
+    id: "troubleshooting-gpu-acceleration",
+    tab: "troubleshooting",
+    tabLabel: "Troubleshooting",
+    section: "Hardware Acceleration",
+    title: "Hardware Acceleration",
+    description:
+      "Disable GPU hardware acceleration if you experience blank panels or rendering issues",
+    keywords: [
+      "gpu",
+      "hardware",
+      "acceleration",
+      "blank",
+      "white",
+      "crash",
+      "rendering",
+      "graphics",
+    ],
+  },
+  {
     id: "troubleshooting-health",
     tab: "troubleshooting",
     tabLabel: "Troubleshooting",

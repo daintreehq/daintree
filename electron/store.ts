@@ -139,6 +139,9 @@ export interface StoreSchema {
     apiKey: string;
   };
   pendingErrors: AppError[];
+  gpu: {
+    hardwareAccelerationDisabled: boolean;
+  };
   crashRecovery: {
     autoRestoreOnCrash: boolean;
   };
@@ -240,6 +243,9 @@ const storeOptions = {
       apiKey: "",
     },
     pendingErrors: [],
+    gpu: {
+      hardwareAccelerationDisabled: false,
+    },
     crashRecovery: {
       autoRestoreOnCrash: false,
     },

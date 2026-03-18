@@ -145,6 +145,13 @@ async function collectGpu() {
   const result: Record<string, unknown> = {};
 
   try {
+    const { isGpuDisabledByFlag } = await import("./GpuCrashMonitorService.js");
+    result.hardwareAccelerationDisabled = isGpuDisabledByFlag(app.getPath("userData"));
+  } catch {
+    result.hardwareAccelerationDisabled = "unknown";
+  }
+
+  try {
     result.featureStatus = app.getGPUFeatureStatus();
   } catch {
     result.featureStatus = { error: "Failed to get GPU feature status" };

@@ -432,6 +432,10 @@ export const CHANNELS = {
   ONBOARDING_CHECKLIST_DISMISS: "onboarding:checklist-dismiss",
   ONBOARDING_CHECKLIST_MARK_ITEM: "onboarding:checklist-mark-item",
 
+  // GPU channels
+  GPU_GET_STATUS: "gpu:get-status",
+  GPU_SET_HARDWARE_ACCELERATION: "gpu:set-hardware-acceleration",
+
   // Crash Recovery channels
   CRASH_RECOVERY_GET_PENDING: "crash-recovery:get-pending",
   CRASH_RECOVERY_RESOLVE: "crash-recovery:resolve",

@@ -938,6 +938,10 @@ export interface ElectronAPI {
     markPromptShown(): Promise<void>;
     track(event: string, properties: Record<string, unknown>): Promise<void>;
   };
+  gpu: {
+    getStatus(): Promise<{ hardwareAccelerationDisabled: boolean }>;
+    setHardwareAcceleration(enabled: boolean): Promise<void>;
+  };
   privacy: {
     getSettings(): Promise<{
       telemetryLevel: "off" | "errors" | "full";

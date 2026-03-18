@@ -42,6 +42,7 @@ import { pruneOldLogs, initializeLogger } from "./utils/logger.js";
 import { registerCommands } from "./services/commands/index.js";
 import { initializeTelemetry } from "./services/TelemetryService.js";
 import { initializeCrashRecoveryService } from "./services/CrashRecoveryService.js";
+import { initializeGpuCrashMonitor } from "./services/GpuCrashMonitorService.js";
 
 // CRITICAL: Run IPC sender validation before any handlers are registered
 enforceIpcSenderValidation();
@@ -110,6 +111,7 @@ if (!gotTheLock) {
   app.quit();
 } else {
   initializeCrashRecoveryService();
+  initializeGpuCrashMonitor();
 
   async function createWindow(): Promise<void> {
     const currentWindow = getMainWindow();

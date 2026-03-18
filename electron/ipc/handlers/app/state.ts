@@ -10,6 +10,7 @@ import {
 import { getCrashRecoveryService } from "../../../services/CrashRecoveryService.js";
 
 import { isWebGLHardwareAccelerated } from "../../../utils/gpuDetection.js";
+import { isGpuDisabledByFlag } from "../../../services/GpuCrashMonitorService.js";
 
 export function registerAppStateHandlers(): () => void {
   const handlers: Array<() => void> = [];
@@ -250,6 +251,7 @@ export function registerAppStateHandlers(): () => void {
       project: currentProject,
       agentSettings: store.get("agentSettings"),
       gpuWebGLHardware,
+      gpuHardwareAccelerationDisabled: isGpuDisabledByFlag(app.getPath("userData")),
     };
   };
   ipcMain.handle(CHANNELS.APP_HYDRATE, handleAppHydrate);

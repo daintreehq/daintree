@@ -89,4 +89,5 @@ export interface HydrateResult {
   project: import("../project.js").Project | null;
   agentSettings: import("../agentSettings.js").AgentSettings;
   gpuWebGLHardware: boolean;
+  gpuHardwareAccelerationDisabled: boolean;
 }
