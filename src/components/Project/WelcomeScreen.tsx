@@ -74,7 +74,6 @@ export function WelcomeScreen({ gettingStarted }: WelcomeScreenProps) {
             {showChecklist && (
               <InlineChecklist
                 checklist={checklist}
-                completedCount={completedCount}
                 progressDone={progressDone}
                 progressTotal={progressTotal}
               />
@@ -85,7 +84,6 @@ export function WelcomeScreen({ gettingStarted }: WelcomeScreenProps) {
             {showChecklist && (
               <InlineChecklist
                 checklist={checklist}
-                completedCount={completedCount}
                 progressDone={progressDone}
                 progressTotal={progressTotal}
               />
@@ -220,12 +218,10 @@ function RecentProjects({
 
 function InlineChecklist({
   checklist,
-  completedCount,
   progressDone,
   progressTotal,
 }: {
   checklist: NonNullable<GettingStartedChecklistState["checklist"]>;
-  completedCount: number;
   progressDone: number;
   progressTotal: number;
 }) {

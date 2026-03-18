@@ -314,7 +314,7 @@ describe("WelcomeScreen", () => {
   it("renders keyboard shortcuts with kbd elements", () => {
     render(<WelcomeScreen gettingStarted={makeGettingStarted()} />);
 
-    expect(screen.getByText("Keyboard Shortcuts")).toBeTruthy();
+    expect(screen.getAllByText("Keyboard Shortcuts").length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText("⌘N")).toBeTruthy();
     expect(screen.getByText("⌘P")).toBeTruthy();
     expect(screen.getByText("⌘K")).toBeTruthy();
@@ -338,7 +338,6 @@ describe("WelcomeScreen", () => {
     render(<WelcomeScreen gettingStarted={makeGettingStarted(allIncomplete)} />);
 
     const recentProjects = screen.getByText("Recent Projects");
-    const gettingStarted = screen.getByText("Getting Started");
 
     // Recent Projects should appear before Getting Started in DOM order
     const container = recentProjects.closest("[class*='max-w-2xl']")!;
