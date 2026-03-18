@@ -249,3 +249,48 @@ describe("WorktreeHeader issue title headline", () => {
     expect(screen.getByText("Some issue")).toBeDefined();
   });
 });
+
+describe("WorktreeHeader plan file badge", () => {
+  it("renders plan badge when hasPlanFile is true and onOpenPlan is provided", () => {
+    const onOpenPlan = vi.fn();
+    renderHeader({
+      worktree: { ...baseWorktree, hasPlanFile: true, planFilePath: "TODO.md" },
+      badges: { onOpenPlan },
+    });
+
+    const planButton = screen.getByRole("button", { name: /View agent plan file/ });
+    expect(planButton).toBeDefined();
+    expect(screen.getByText("TODO.md")).toBeDefined();
+  });
+
+  it("does not render plan badge when hasPlanFile is false", () => {
+    const onOpenPlan = vi.fn();
+    renderHeader({
+      worktree: { ...baseWorktree, hasPlanFile: false },
+      badges: { onOpenPlan },
+    });
+
+    expect(screen.queryByRole("button", { name: /View agent plan file/ })).toBeNull();
+  });
+
+  it("does not render plan badge when hasPlanFile is true but onOpenPlan is not provided", () => {
+    renderHeader({
+      worktree: { ...baseWorktree, hasPlanFile: true, planFilePath: "PLAN.md" },
+      badges: {},
+    });
+
+    expect(screen.queryByRole("button", { name: /View agent plan file/ })).toBeNull();
+  });
+
+  it("calls onOpenPlan when plan badge is clicked", async () => {
+    const onOpenPlan = vi.fn();
+    renderHeader({
+      worktree: { ...baseWorktree, hasPlanFile: true, planFilePath: "TASKS.md" },
+      badges: { onOpenPlan },
+    });
+
+    const planButton = screen.getByRole("button", { name: /View agent plan file/ });
+    planButton.click();
+    expect(onOpenPlan).toHaveBeenCalledOnce();
+  });
+});
