@@ -17,6 +17,7 @@ import type {
 import {
   GitHubAuth,
   REPO_STATS_QUERY,
+  PROJECT_HEALTH_QUERY,
   LIST_ISSUES_QUERY,
   LIST_PRS_QUERY,
   SEARCH_QUERY,
@@ -33,6 +34,9 @@ import type {
   PRCheckResult,
   PRCheckCandidate,
   BatchPRCheckResult,
+  CIStatus,
+  ProjectHealth,
+  ProjectHealthResult,
 } from "./github/index.js";
 
 export type { GitHubTokenConfig, GitHubTokenValidation } from "./github/index.js";
@@ -44,6 +48,9 @@ export type {
   PRCheckResult,
   PRCheckCandidate,
   BatchPRCheckResult,
+  CIStatus,
+  ProjectHealth,
+  ProjectHealthResult,
 };
 
 // Caches
@@ -51,6 +58,7 @@ const repoContextCache = new Cache<string, RepoContext>({ defaultTTL: 300000 });
 const repoStatsCache = new Cache<string, RepoStats>({ defaultTTL: 60000 });
 const issueListCache = new Cache<string, GitHubListResponse<GitHubIssue>>({ defaultTTL: 60000 });
 const prListCache = new Cache<string, GitHubListResponse<GitHubPR>>({ defaultTTL: 60000 });
+const projectHealthCache = new Cache<string, ProjectHealth>({ defaultTTL: 60000 });
 const issueTooltipCache = new Cache<string, IssueTooltipData>({ defaultTTL: 300000 }); // 5 min TTL
 const prTooltipCache = new Cache<string, PRTooltipData>({ defaultTTL: 300000 }); // 5 min TTL
 
@@ -272,6 +280,142 @@ export async function getRepoStats(
       };
     }
     return { stats: null, error: parseGitHubError(error) };
+  }
+}
+
+function parseCIStatus(statusCheckRollup: { state?: string } | null | undefined): CIStatus {
+  if (!statusCheckRollup) return "none";
+  const state = statusCheckRollup.state?.toUpperCase();
+  switch (state) {
+    case "SUCCESS":
+      return "success";
+    case "FAILURE":
+      return "failure";
+    case "ERROR":
+      return "error";
+    case "PENDING":
+      return "pending";
+    case "EXPECTED":
+      return "expected";
+    default:
+      return "none";
+  }
+}
+
+function parseProjectHealthResponse(
+  repository: Record<string, unknown>,
+  repoUrl: string
+): ProjectHealth {
+  const defaultBranchRef = repository.defaultBranchRef as {
+    target?: { statusCheckRollup?: { state?: string } | null };
+  } | null;
+  const statusCheckRollup = defaultBranchRef?.target?.statusCheckRollup ?? null;
+
+  const latestRelease = repository.latestRelease as {
+    tagName: string;
+    publishedAt: string | null;
+    url: string;
+  } | null;
+
+  const vulnerabilityAlerts = repository.vulnerabilityAlerts as {
+    totalCount: number;
+  } | null;
+
+  const recentMergedPRs = repository.recentMergedPRs as {
+    nodes?: Array<{ mergedAt?: string }>;
+  } | null;
+
+  const mergedDates = (recentMergedPRs?.nodes ?? [])
+    .map((n) => n.mergedAt)
+    .filter((d): d is string => !!d);
+
+  return {
+    ciStatus: parseCIStatus(statusCheckRollup),
+    issueCount: (repository.issues as { totalCount?: number })?.totalCount ?? 0,
+    prCount: (repository.pullRequests as { totalCount?: number })?.totalCount ?? 0,
+    latestRelease: latestRelease
+      ? {
+          tagName: latestRelease.tagName,
+          publishedAt: latestRelease.publishedAt,
+          url: latestRelease.url,
+        }
+      : null,
+    securityAlerts: {
+      visible: vulnerabilityAlerts !== null,
+      count: vulnerabilityAlerts?.totalCount ?? 0,
+    },
+    mergeVelocity: {
+      recentMergedCount: mergedDates.length,
+      recentMergedDates: mergedDates,
+    },
+    repoUrl,
+    lastUpdated: Date.now(),
+  };
+}
+
+export async function getProjectHealth(
+  cwd: string,
+  bypassCache = false
+): Promise<ProjectHealthResult> {
+  const context = await getRepoContext(cwd);
+  if (!context) {
+    return { health: null, error: "Not a GitHub repository" };
+  }
+
+  const cacheKey = `${context.owner}/${context.repo}`;
+  const repoUrl = `https://github.com/${context.owner}/${context.repo}`;
+
+  const client = GitHubAuth.createClient();
+  if (!client) {
+    return { health: null, error: "GitHub token not configured. Set it in Settings." };
+  }
+
+  if (!bypassCache) {
+    const cached = projectHealthCache.get(cacheKey);
+    if (cached) {
+      return { health: cached };
+    }
+  }
+
+  try {
+    const result = (await client(PROJECT_HEALTH_QUERY, {
+      owner: context.owner,
+      repo: context.repo,
+    })) as GraphQlQueryResponseData;
+
+    const repository = result?.repository;
+    if (!repository) {
+      return { health: null, error: "Repository not found" };
+    }
+
+    const health = parseProjectHealthResponse(repository as Record<string, unknown>, repoUrl);
+    projectHealthCache.set(cacheKey, health);
+    return { health };
+  } catch (error: unknown) {
+    // @octokit/graphql throws GraphqlResponseError on partial failures
+    // (e.g., vulnerabilityAlerts FORBIDDEN). Extract partial data if available.
+    if (error instanceof Error && "data" in error && (error as { data?: unknown }).data) {
+      const partialData = (error as { data: { repository?: Record<string, unknown> } }).data;
+      const repository = partialData?.repository;
+      if (repository) {
+        const health = parseProjectHealthResponse(repository, repoUrl);
+        projectHealthCache.set(cacheKey, health);
+        return { health };
+      }
+    }
+
+    if (isRepoNotFoundError(error)) {
+      repoContextCache.invalidate(cwd);
+      const freshContext = await getRepoContext(cwd);
+      if (
+        freshContext &&
+        (freshContext.owner !== context.owner || freshContext.repo !== context.repo)
+      ) {
+        return getProjectHealth(cwd, bypassCache);
+      }
+    }
+
+    return { health: null, error: parseGitHubError(error) };
   }
 }
 
@@ -635,6 +779,7 @@ function parseGitHubError(error: unknown): string {
 export function clearGitHubCaches(): void {
   repoContextCache.clear();
   repoStatsCache.clear();
+  projectHealthCache.clear();
   issueListCache.clear();
   prListCache.clear();
   issueTooltipCache.clear();

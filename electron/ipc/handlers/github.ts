@@ -3,6 +3,7 @@ import { CHANNELS } from "../channels.js";
 import type { HandlerDependencies } from "../types.js";
 import type {
   RepositoryStats,
+  ProjectHealthData,
   GitHubCliStatus,
   GitHubTokenConfig,
   GitHubTokenValidation,
@@ -102,6 +103,75 @@ export function registerGithubHandlers(_deps: HandlerDependencies): () => void {
   };
   ipcMain.handle(CHANNELS.GITHUB_GET_REPO_STATS, handleGitHubGetRepoStats);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.GITHUB_GET_REPO_STATS));
+
+  const handleGitHubGetProjectHealth = async (
+    _event: Electron.IpcMainInvokeEvent,
+    cwd: string,
+    bypassCache = false
+  ): Promise<ProjectHealthData> => {
+    if (typeof cwd !== "string" || !cwd) {
+      throw new Error("Invalid working directory");
+    }
+
+    const fs = await import("fs/promises");
+    const pathModule = await import("path");
+    const { getProjectHealth } = await import("../../services/GitHubService.js");
+
+    try {
+      const resolved = pathModule.resolve(cwd);
+      const stat = await fs.stat(resolved);
+      if (!stat.isDirectory()) {
+        return {
+          ciStatus: "none",
+          issueCount: 0,
+          prCount: 0,
+          latestRelease: null,
+          securityAlerts: { visible: false, count: 0 },
+          mergeVelocity: { recentMergedCount: 0, recentMergedDates: [] },
+          repoUrl: "",
+          loading: false,
+          error: "Path is not a directory",
+        };
+      }
+
+      const result = await getProjectHealth(resolved, bypassCache);
+
+      if (result.health) {
+        return {
+          ...result.health,
+          loading: false,
+          error: result.error,
+        };
+      }
+
+      return {
+        ciStatus: "none",
+        issueCount: 0,
+        prCount: 0,
+        latestRelease: null,
+        securityAlerts: { visible: false, count: 0 },
+        mergeVelocity: { recentMergedCount: 0, recentMergedDates: [] },
+        repoUrl: "",
+        loading: false,
+        error: result.error,
+      };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return {
+        ciStatus: "none",
+        issueCount: 0,
+        prCount: 0,
+        latestRelease: null,
+        securityAlerts: { visible: false, count: 0 },
+        mergeVelocity: { recentMergedCount: 0, recentMergedDates: [] },
+        repoUrl: "",
+        loading: false,
+        error: message,
+      };
+    }
+  };
+  ipcMain.handle(CHANNELS.GITHUB_GET_PROJECT_HEALTH, handleGitHubGetProjectHealth);
+  handlers.push(() => ipcMain.removeHandler(CHANNELS.GITHUB_GET_PROJECT_HEALTH));
 
   const handleGitHubOpenIssues = async (
     _event: Electron.IpcMainInvokeEvent,

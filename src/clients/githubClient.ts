@@ -1,5 +1,6 @@
 import type {
   RepositoryStats,
+  ProjectHealthData,
   GitHubCliStatus,
   GitHubTokenConfig,
   GitHubTokenValidation,
@@ -18,6 +19,10 @@ import type {
 export const githubClient = {
   getRepoStats: (cwd: string, bypassCache = false): Promise<RepositoryStats> => {
     return window.electron.github.getRepoStats(cwd, bypassCache);
+  },
+
+  getProjectHealth: (cwd: string, bypassCache = false): Promise<ProjectHealthData> => {
+    return window.electron.github.getProjectHealth(cwd, bypassCache);
   },
 
   openIssues: (cwd: string, query?: string, state?: string): Promise<void> => {

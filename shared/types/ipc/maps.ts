@@ -83,6 +83,7 @@ import type {
 } from "./project.js";
 import type {
   RepositoryStats,
+  ProjectHealthData,
   GitHubCliStatus,
   GitHubTokenConfig,
   GitHubTokenValidation,
@@ -749,6 +750,10 @@ export interface IpcInvokeMap {
   "github:get-repo-stats": {
     args: [cwd: string, bypassCache?: boolean];
     result: RepositoryStats;
+  };
+  "github:get-project-health": {
+    args: [cwd: string, bypassCache?: boolean];
+    result: ProjectHealthData;
   };
   "github:open-issues": {
     args: [cwd: string, query?: string, state?: string];

@@ -1227,6 +1227,9 @@ const api: ElectronAPI = {
     getRepoStats: (cwd: string, bypassCache?: boolean) =>
       _typedInvoke(CHANNELS.GITHUB_GET_REPO_STATS, cwd, bypassCache),
 
+    getProjectHealth: (cwd: string, bypassCache?: boolean) =>
+      _typedInvoke(CHANNELS.GITHUB_GET_PROJECT_HEALTH, cwd, bypassCache),
+
     openIssues: (cwd: string, query?: string, state?: string) =>
       _typedInvoke(CHANNELS.GITHUB_OPEN_ISSUES, cwd, query, state),
 

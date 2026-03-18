@@ -107,6 +107,7 @@ export const CHANNELS = {
   ISSUE_NOT_FOUND: "issue:not-found",
 
   GITHUB_GET_REPO_STATS: "github:get-repo-stats",
+  GITHUB_GET_PROJECT_HEALTH: "github:get-project-health",
   GITHUB_OPEN_ISSUES: "github:open-issues",
   GITHUB_OPEN_PRS: "github:open-prs",
   GITHUB_OPEN_COMMITS: "github:open-commits",
