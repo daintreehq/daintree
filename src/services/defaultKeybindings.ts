@@ -116,6 +116,22 @@ export const DEFAULT_KEYBINDINGS: KeybindingConfig[] = [
     category: "Terminal",
   },
   {
+    actionId: "layout.undo",
+    combo: "Cmd+Alt+Z",
+    scope: "global",
+    priority: 0,
+    description: "Undo last layout change",
+    category: "Layout",
+  },
+  {
+    actionId: "layout.redo",
+    combo: "Cmd+Alt+Shift+Z",
+    scope: "global",
+    priority: 0,
+    description: "Redo last layout change",
+    category: "Layout",
+  },
+  {
     actionId: "terminal.toggleDock",
     combo: "Cmd+Alt+M",
     scope: "global",

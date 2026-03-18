@@ -166,6 +166,10 @@ export type KeyAction =
   // Voice input
   | "voiceInput.toggle"
 
+  // Layout undo/redo
+  | "layout.undo"
+  | "layout.redo"
+
   // System actions
   | "app.quit"
   | "app.forceQuit"
@@ -302,6 +306,8 @@ export const KEY_ACTION_VALUES: ReadonlySet<string> = new Set<string>([
   "help.shortcutsAlt",
   "app.settings",
   "voiceInput.toggle",
+  "layout.undo",
+  "layout.redo",
   "app.quit",
   "app.forceQuit",
   "modal.close",
