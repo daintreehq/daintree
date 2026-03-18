@@ -74,6 +74,42 @@ function isSnapshotValidForProject(snapshot: ProjectSnapshot, projectPath: strin
   return true;
 }
 
+function worktreeChangesEqual(
+  a: WorktreeState["worktreeChanges"],
+  b: WorktreeState["worktreeChanges"]
+): boolean {
+  if (a === b) return true;
+  if (a == null || b == null) return false;
+  return (
+    a.changedFileCount === b.changedFileCount &&
+    a.changes.length === b.changes.length &&
+    a.totalInsertions === b.totalInsertions &&
+    a.totalDeletions === b.totalDeletions &&
+    a.latestFileMtime === b.latestFileMtime &&
+    a.lastUpdated === b.lastUpdated &&
+    a.lastCommitMessage === b.lastCommitMessage &&
+    a.lastCommitTimestampMs === b.lastCommitTimestampMs
+  );
+}
+
+function lifecycleStatusEqual(
+  a: WorktreeState["lifecycleStatus"],
+  b: WorktreeState["lifecycleStatus"]
+): boolean {
+  if (a === b) return true;
+  if (a == null || b == null) return false;
+  return (
+    a.phase === b.phase &&
+    a.state === b.state &&
+    a.currentCommand === b.currentCommand &&
+    a.commandIndex === b.commandIndex &&
+    a.totalCommands === b.totalCommands &&
+    a.startedAt === b.startedAt &&
+    a.completedAt === b.completedAt &&
+    a.error === b.error
+  );
+}
+
 function worktreeStatesEqual(a: WorktreeState, b: WorktreeState): boolean {
   return (
     a.branch === b.branch &&
@@ -81,6 +117,7 @@ function worktreeStatesEqual(a: WorktreeState, b: WorktreeState): boolean {
     a.name === b.name &&
     a.isCurrent === b.isCurrent &&
     a.isMainWorktree === b.isMainWorktree &&
+    a.isDetached === b.isDetached &&
     a.modifiedCount === b.modifiedCount &&
     a.summary === b.summary &&
     a.mood === b.mood &&
@@ -93,9 +130,9 @@ function worktreeStatesEqual(a: WorktreeState, b: WorktreeState): boolean {
     a.prTitle === b.prTitle &&
     a.issueNumber === b.issueNumber &&
     a.issueTitle === b.issueTitle &&
-    a.worktreeChanges === b.worktreeChanges &&
-    a.lifecycleStatus === b.lifecycleStatus &&
-    a.taskId === b.taskId
+    a.taskId === b.taskId &&
+    worktreeChangesEqual(a.worktreeChanges, b.worktreeChanges) &&
+    lifecycleStatusEqual(a.lifecycleStatus, b.lifecycleStatus)
   );
 }
 

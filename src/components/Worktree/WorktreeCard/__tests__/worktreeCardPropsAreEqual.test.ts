@@ -172,4 +172,60 @@ describe("worktreeCardPropsAreEqual", () => {
       )
     ).toBe(false);
   });
+
+  it("returns false when worktree isDetached changes", () => {
+    const prev = baseProps({ worktree: { ...baseWorktree, isDetached: false } });
+    const next = baseProps({ worktree: { ...baseWorktree, isDetached: true } });
+    expect(worktreeCardPropsAreEqual(prev, next)).toBe(false);
+  });
+
+  it("returns false when worktree mood changes", () => {
+    const prev = baseProps({ worktree: { ...baseWorktree, mood: "stable" as const } });
+    const next = baseProps({ worktree: { ...baseWorktree, mood: "active" as const } });
+    expect(worktreeCardPropsAreEqual(prev, next)).toBe(false);
+  });
+
+  it("returns false when worktree lastActivityTimestamp changes", () => {
+    const prev = baseProps({ worktree: { ...baseWorktree, lastActivityTimestamp: 1000 } });
+    const next = baseProps({ worktree: { ...baseWorktree, lastActivityTimestamp: 2000 } });
+    expect(worktreeCardPropsAreEqual(prev, next)).toBe(false);
+  });
+
+  it("returns false when isSingleWorktree changes", () => {
+    expect(
+      worktreeCardPropsAreEqual(
+        baseProps({ isSingleWorktree: false }),
+        baseProps({ isSingleWorktree: true })
+      )
+    ).toBe(false);
+  });
+
+  it("returns false when homeDir changes", () => {
+    expect(
+      worktreeCardPropsAreEqual(
+        baseProps({ homeDir: "/Users/a" }),
+        baseProps({ homeDir: "/Users/b" })
+      )
+    ).toBe(false);
+  });
+
+  it("returns false when onLaunchAgent changes reference", () => {
+    expect(
+      worktreeCardPropsAreEqual(
+        baseProps({ onLaunchAgent: () => {} }),
+        baseProps({ onLaunchAgent: () => {} })
+      )
+    ).toBe(false);
+  });
+
+  it("returns false when worktree lifecycleStatus changes reference", () => {
+    const status = {
+      phase: "setup" as const,
+      state: "running" as const,
+      startedAt: 1000,
+    };
+    const prev = baseProps({ worktree: { ...baseWorktree, lifecycleStatus: status } });
+    const next = baseProps({ worktree: { ...baseWorktree, lifecycleStatus: { ...status } } });
+    expect(worktreeCardPropsAreEqual(prev, next)).toBe(false);
+  });
 });
