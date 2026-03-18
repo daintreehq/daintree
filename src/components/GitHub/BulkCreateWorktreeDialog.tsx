@@ -606,7 +606,7 @@ export function BulkCreateWorktreeDialog({
               {/* Numeric progress */}
               <div className="flex items-center justify-center gap-1.5 text-sm text-canopy-text/70">
                 <span>
-                  {processedCount} of {progress.total} created
+                  {progress.completed} of {progress.total} created
                 </span>
                 {progress.failed > 0 && (
                   <span className="text-status-warning">&middot; {progress.failed} failed</span>
