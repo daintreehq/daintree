@@ -22,6 +22,7 @@ import { useGitHubConfigStore } from "@/store/githubConfigStore";
 import { useRecipeStore } from "@/store/recipeStore";
 import { useProjectStore } from "@/store/projectStore";
 import { useWorktreeDataStore } from "@/store/worktreeDataStore";
+import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useRecipePicker } from "@/components/Worktree/hooks/useRecipePicker";
 import { useNewWorktreeProjectSettings } from "@/components/Worktree/hooks/useNewWorktreeProjectSettings";
 import type { GitHubIssue } from "@shared/types/github";
@@ -202,6 +203,7 @@ export function BulkCreateWorktreeDialog({
     queueRef.current = queue;
     let succeeded = 0;
     let failed = 0;
+    let lastSuccessfulWorktreeId: string | null = null;
 
     for (const item of toCreate) {
       void queue.add(async () => {
@@ -222,6 +224,8 @@ export function BulkCreateWorktreeDialog({
           if (runIdRef.current !== currentRunId) return;
 
           if (result.ok) {
+            const { worktreeId } = result.result as { worktreeId: string };
+            lastSuccessfulWorktreeId = worktreeId;
             succeeded++;
             dispatchProgress({ type: "COMPLETED" });
           } else {
@@ -239,6 +243,12 @@ export function BulkCreateWorktreeDialog({
     await queue.onIdle();
     if (runIdRef.current !== currentRunId) return;
     queueRef.current = null;
+
+    if (lastSuccessfulWorktreeId) {
+      useWorktreeSelectionStore.getState().setPendingWorktree(lastSuccessfulWorktreeId);
+      useWorktreeSelectionStore.getState().selectWorktree(lastSuccessfulWorktreeId);
+    }
+
     dispatchProgress({ type: "DONE" });
 
     if (failed === 0) {

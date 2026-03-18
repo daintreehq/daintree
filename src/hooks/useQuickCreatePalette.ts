@@ -147,6 +147,9 @@ export function useQuickCreatePalette(): UseQuickCreatePaletteReturn {
               assignedToSelf: boolean;
             };
 
+            useWorktreeSelectionStore.getState().setPendingWorktree(createdWorktreeId);
+            useWorktreeSelectionStore.getState().selectWorktree(createdWorktreeId);
+
             const assignMsg =
               wasAssigned && issueNumber ? ` · assigned #${issueNumber} to you` : "";
 

@@ -3,7 +3,6 @@ import { z } from "zod";
 import { worktreeClient, githubClient } from "@/clients";
 import { useProjectStore } from "@/store/projectStore";
 import { useRecipeStore } from "@/store/recipeStore";
-import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useWorktreeDataStore } from "@/store/worktreeDataStore";
 import { useGitHubConfigStore } from "@/store/githubConfigStore";
 
@@ -123,11 +122,6 @@ export function registerWorkflowActions(actions: ActionRegistry): void {
       if (!worktreeId) {
         throw new Error("Failed to create worktree: no worktreeId returned from backend");
       }
-
-      // Mark as pending before selecting so the data store can re-apply terminal policy
-      // once worktree data arrives from the workspace host polling cycle.
-      useWorktreeSelectionStore.getState().setPendingWorktree(worktreeId);
-      useWorktreeSelectionStore.getState().selectWorktree(worktreeId);
 
       // Run recipe if specified (already validated above)
       let recipeLaunched = false;
