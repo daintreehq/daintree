@@ -53,7 +53,13 @@ type ProgressAction =
 function progressReducer(state: ProgressState, action: ProgressAction): ProgressState {
   switch (action.type) {
     case "START":
-      return { phase: "executing", total: action.total, completed: 0, failed: 0, currentItem: null };
+      return {
+        phase: "executing",
+        total: action.total,
+        completed: 0,
+        failed: 0,
+        currentItem: null,
+      };
     case "ITEM_STARTED":
       return { ...state, currentItem: { issueNumber: action.issueNumber, title: action.title } };
     case "COMPLETED":
@@ -213,7 +219,11 @@ export function BulkCreateWorktreeDialog({
     for (const item of toCreate) {
       void queue.add(async () => {
         if (runIdRef.current !== currentRunId) return;
-        dispatchProgress({ type: "ITEM_STARTED", issueNumber: item.issue.number, title: item.issue.title });
+        dispatchProgress({
+          type: "ITEM_STARTED",
+          issueNumber: item.issue.number,
+          title: item.issue.title,
+        });
 
         try {
           const result = await actionService.dispatch(
@@ -599,9 +609,7 @@ export function BulkCreateWorktreeDialog({
                   {processedCount} of {progress.total} created
                 </span>
                 {progress.failed > 0 && (
-                  <span className="text-status-warning">
-                    &middot; {progress.failed} failed
-                  </span>
+                  <span className="text-status-warning">&middot; {progress.failed} failed</span>
                 )}
               </div>
             </div>
