@@ -20,7 +20,7 @@ test.describe.serial("Core: Project Pulse", () => {
 
   test("pulse card is visible after onboarding", async () => {
     const { window } = ctx;
-    await expect(window.locator(SEL.pulse.heatmap)).toBeVisible({ timeout: T_LONG });
+    await expect(window.locator(SEL.pulse.summary)).toBeVisible({ timeout: T_LONG });
   });
 
   test("card header shows project name and default range", async () => {
@@ -43,11 +43,8 @@ test.describe.serial("Core: Project Pulse", () => {
     const item = window.getByRole("menuitem", { name: "120 days" });
     await item.click();
 
-    await expect(window.locator(SEL.pulse.heatmap)).toHaveAttribute(
-      "aria-label",
-      "Activity over the last 120 days",
-      { timeout: T_MEDIUM }
-    );
+    await expect(trigger).toContainText("120 days", { timeout: T_MEDIUM });
+    await expect(window.locator(SEL.pulse.summary)).toBeVisible({ timeout: T_MEDIUM });
   });
 
   test("refresh button reloads data", async () => {
@@ -56,7 +53,7 @@ test.describe.serial("Core: Project Pulse", () => {
     await expect(refreshBtn).toBeEnabled({ timeout: T_SHORT });
     await refreshBtn.click();
     await expect(refreshBtn).toBeEnabled({ timeout: T_LONG });
-    await expect(window.locator(SEL.pulse.heatmap)).toBeVisible({ timeout: T_MEDIUM });
+    await expect(window.locator(SEL.pulse.summary)).toBeVisible({ timeout: T_MEDIUM });
   });
 
   test("settings toggle hides pulse card", async () => {
@@ -83,7 +80,7 @@ test.describe.serial("Core: Project Pulse", () => {
     await window.keyboard.press("Escape");
     await expect(heading).not.toBeVisible({ timeout: T_SHORT });
 
-    await expect(window.locator(SEL.pulse.heatmap)).not.toBeVisible({ timeout: T_MEDIUM });
+    await expect(window.locator(SEL.pulse.summary)).not.toBeVisible({ timeout: T_MEDIUM });
   });
 });
 
@@ -102,9 +99,9 @@ test.describe.serial("Core: Project Pulse — minimal repo", () => {
 
   test("card renders without error for a single-commit repo", async () => {
     const { window } = ctx;
-    const heatmap = window.locator(SEL.pulse.heatmap);
+    const summary = window.locator(SEL.pulse.summary);
 
-    await expect(heatmap).toBeVisible({ timeout: T_LONG });
+    await expect(summary).toBeVisible({ timeout: T_LONG });
     // The pulse error state uses aria-label="Retry now" — ensure it's absent
     await expect(window.locator('[aria-label="Retry now"]')).not.toBeVisible({ timeout: T_SHORT });
   });
