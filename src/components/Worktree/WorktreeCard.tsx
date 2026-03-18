@@ -1,5 +1,4 @@
-import { useCallback, useMemo, useState } from "react";
-import type React from "react";
+import React, { useCallback, useMemo, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import type { WorktreeState } from "../../types";
 import type { GitHubIssue } from "@shared/types/github";
@@ -34,6 +33,71 @@ import { useWorktreeStatus } from "./WorktreeCard/hooks/useWorktreeStatus";
 import { computeChipState, type ChipState } from "./utils/computeChipState";
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "../ui/tooltip";
 
+export function worktreeCardPropsAreEqual(
+  prev: WorktreeCardProps,
+  next: WorktreeCardProps
+): boolean {
+  if (prev.worktree !== next.worktree) {
+    const a = prev.worktree;
+    const b = next.worktree;
+    if (
+      a.id !== b.id ||
+      a.branch !== b.branch ||
+      a.path !== b.path ||
+      a.name !== b.name ||
+      a.isCurrent !== b.isCurrent ||
+      a.isMainWorktree !== b.isMainWorktree ||
+      a.modifiedCount !== b.modifiedCount ||
+      a.summary !== b.summary ||
+      a.mood !== b.mood ||
+      a.aiNote !== b.aiNote ||
+      a.aiNoteTimestamp !== b.aiNoteTimestamp ||
+      a.lastActivityTimestamp !== b.lastActivityTimestamp ||
+      a.prNumber !== b.prNumber ||
+      a.prUrl !== b.prUrl ||
+      a.prState !== b.prState ||
+      a.prTitle !== b.prTitle ||
+      a.issueNumber !== b.issueNumber ||
+      a.issueTitle !== b.issueTitle ||
+      a.lifecycleStatus !== b.lifecycleStatus ||
+      a.taskId !== b.taskId ||
+      a.worktreeChanges !== b.worktreeChanges
+    ) {
+      return false;
+    }
+  }
+
+  if (prev.agentAvailability !== next.agentAvailability) {
+    const a = prev.agentAvailability;
+    const b = next.agentAvailability;
+    if (a == null || b == null) return a === b;
+    const aKeys = Object.keys(a);
+    const bKeys = Object.keys(b);
+    if (aKeys.length !== bKeys.length) return false;
+    for (const k of aKeys) {
+      if (a[k as keyof typeof a] !== b[k as keyof typeof b]) return false;
+    }
+  }
+
+  return (
+    prev.isActive === next.isActive &&
+    prev.isFocused === next.isFocused &&
+    prev.isSingleWorktree === next.isSingleWorktree &&
+    prev.homeDir === next.homeDir &&
+    prev.variant === next.variant &&
+    prev.isDraggingSort === next.isDraggingSort &&
+    prev.dragHandleListeners === next.dragHandleListeners &&
+    prev.dragHandleActivatorRef === next.dragHandleActivatorRef &&
+    prev.agentSettings === next.agentSettings &&
+    prev.onSelect === next.onSelect &&
+    prev.onCopyTree === next.onCopyTree &&
+    prev.onOpenEditor === next.onOpenEditor &&
+    prev.onSaveLayout === next.onSaveLayout &&
+    prev.onLaunchAgent === next.onLaunchAgent &&
+    prev.onAfterTerminalSelect === next.onAfterTerminalSelect
+  );
+}
+
 export interface WorktreeCardProps {
   worktree: WorktreeState;
   isActive: boolean;
@@ -54,7 +118,7 @@ export interface WorktreeCardProps {
   isDraggingSort?: boolean;
 }
 
-export function WorktreeCard({
+export const WorktreeCard = React.memo(function WorktreeCard({
   worktree,
   isActive,
   isFocused,
@@ -671,4 +735,4 @@ export function WorktreeCard({
   );
 
   return cardContent;
-}
+}, worktreeCardPropsAreEqual);
