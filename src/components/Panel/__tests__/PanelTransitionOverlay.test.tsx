@@ -60,7 +60,7 @@ describe("PanelTransitionOverlay", () => {
     expect(ghost.style.transitionTimingFunction).toBe("cubic-bezier(0.16, 1, 0.3, 1)");
   });
 
-  it("calls onTransitionComplete after minimize duration (120ms)", () => {
+  it("calls onTransitionComplete at exactly minimize duration (120ms)", () => {
     const onComplete = vi.fn();
     render(<PanelTransitionOverlay onTransitionComplete={onComplete} />);
 
@@ -68,15 +68,18 @@ describe("PanelTransitionOverlay", () => {
       triggerPanelTransition("panel-1", "minimize", sourceRect, targetRect);
     });
 
+    act(() => {
+      vi.advanceTimersByTime(119);
+    });
     expect(onComplete).not.toHaveBeenCalled();
 
     act(() => {
-      vi.advanceTimersByTime(120);
+      vi.advanceTimersByTime(1);
     });
     expect(onComplete).toHaveBeenCalledWith("panel-1");
   });
 
-  it("calls onTransitionComplete after restore duration (200ms)", () => {
+  it("calls onTransitionComplete at exactly restore duration (200ms)", () => {
     const onComplete = vi.fn();
     render(<PanelTransitionOverlay onTransitionComplete={onComplete} />);
 
@@ -85,12 +88,12 @@ describe("PanelTransitionOverlay", () => {
     });
 
     act(() => {
-      vi.advanceTimersByTime(120);
+      vi.advanceTimersByTime(199);
     });
     expect(onComplete).not.toHaveBeenCalled();
 
     act(() => {
-      vi.advanceTimersByTime(80);
+      vi.advanceTimersByTime(1);
     });
     expect(onComplete).toHaveBeenCalledWith("panel-1");
   });
