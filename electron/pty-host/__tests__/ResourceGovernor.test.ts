@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 // Shared mock state that tests can reconfigure
-let mockCheckForLeaks: ReturnType<typeof vi.fn>;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let mockCheckForLeaks: any;
 let mockFdMonitorSupported: boolean;
 
 vi.mock("../FdMonitor.js", () => {
