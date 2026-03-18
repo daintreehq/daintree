@@ -28,11 +28,17 @@ vi.mock("../../utils/gitUtils.js", () => ({
   clearGitDirCache: vi.fn(),
 }));
 
+let mockWatcherStartResult = false;
+let capturedOnWatcherFailed: (() => void) | undefined;
+
 vi.mock("../../utils/gitFileWatcher.js", () => {
   return {
     GitFileWatcher: class {
+      constructor(opts: { onWatcherFailed?: () => void }) {
+        capturedOnWatcherFailed = opts.onWatcherFailed;
+      }
       start() {
-        return false;
+        return mockWatcherStartResult;
       }
       dispose() {}
     },
@@ -92,6 +98,8 @@ describe("WorktreeMonitor", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     vi.clearAllMocks();
+    mockWatcherStartResult = false;
+    capturedOnWatcherFailed = undefined;
   });
 
   afterEach(() => {
@@ -229,5 +237,132 @@ describe("WorktreeMonitor", () => {
     expect(monitor.isMainWorktree).toBe(false);
     monitor.isMainWorktree = true;
     expect(monitor.isMainWorktree).toBe(true);
+  });
+
+  describe("watcher retry", () => {
+    const WATCH_CONFIG: WorktreeMonitorConfig = {
+      ...TEST_CONFIG,
+      gitWatchEnabled: true,
+    };
+
+    it("watcher start success reports hasWatcher true", async () => {
+      mockWatcherStartResult = true;
+      mockGetWorktreeChangesWithStats.mockResolvedValue({
+        worktreeId: "/test/worktree",
+        rootPath: "/test",
+        changes: [],
+        changedFileCount: 0,
+        lastUpdated: Date.now(),
+      });
+
+      const callbacks = makeCallbacks();
+      const monitor = new WorktreeMonitor(TEST_WORKTREE, WATCH_CONFIG, callbacks, "main");
+      await monitor.start();
+
+      expect(monitor.hasWatcher).toBe(true);
+      monitor.stop();
+    });
+
+    it("watcher start failure schedules retry", async () => {
+      mockWatcherStartResult = false;
+      mockGetWorktreeChangesWithStats.mockResolvedValue({
+        worktreeId: "/test/worktree",
+        rootPath: "/test",
+        changes: [],
+        changedFileCount: 0,
+        lastUpdated: Date.now(),
+      });
+
+      const callbacks = makeCallbacks();
+      const monitor = new WorktreeMonitor(TEST_WORKTREE, WATCH_CONFIG, callbacks, "main");
+      await monitor.start();
+
+      expect(monitor.hasWatcher).toBe(false);
+
+      // After retry interval, watcher should attempt again
+      mockWatcherStartResult = true;
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(monitor.hasWatcher).toBe(true);
+
+      monitor.stop();
+    });
+
+    it("retry timer is cleared on stop()", async () => {
+      mockWatcherStartResult = false;
+      mockGetWorktreeChangesWithStats.mockResolvedValue({
+        worktreeId: "/test/worktree",
+        rootPath: "/test",
+        changes: [],
+        changedFileCount: 0,
+        lastUpdated: Date.now(),
+      });
+
+      const callbacks = makeCallbacks();
+      const monitor = new WorktreeMonitor(TEST_WORKTREE, WATCH_CONFIG, callbacks, "main");
+      await monitor.start();
+
+      monitor.stop();
+
+      // After retry interval, watcher should NOT have started
+      mockWatcherStartResult = true;
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(monitor.hasWatcher).toBe(false);
+    });
+
+    it("max retries exhausted leaves monitor without watcher", async () => {
+      mockWatcherStartResult = false;
+      mockGetWorktreeChangesWithStats.mockResolvedValue({
+        worktreeId: "/test/worktree",
+        rootPath: "/test",
+        changes: [],
+        changedFileCount: 0,
+        lastUpdated: Date.now(),
+      });
+
+      const callbacks = makeCallbacks();
+      const monitor = new WorktreeMonitor(TEST_WORKTREE, WATCH_CONFIG, callbacks, "main");
+      await monitor.start();
+
+      // Exhaust all 5 retries
+      for (let i = 0; i < 5; i++) {
+        await vi.advanceTimersByTimeAsync(30_000);
+      }
+
+      expect(monitor.hasWatcher).toBe(false);
+
+      // One more interval should NOT trigger another retry
+      mockWatcherStartResult = true;
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(monitor.hasWatcher).toBe(false);
+
+      monitor.stop();
+    });
+
+    it("runtime watcher failure triggers retry", async () => {
+      mockWatcherStartResult = true;
+      mockGetWorktreeChangesWithStats.mockResolvedValue({
+        worktreeId: "/test/worktree",
+        rootPath: "/test",
+        changes: [],
+        changedFileCount: 0,
+        lastUpdated: Date.now(),
+      });
+
+      const callbacks = makeCallbacks();
+      const monitor = new WorktreeMonitor(TEST_WORKTREE, WATCH_CONFIG, callbacks, "main");
+      await monitor.start();
+
+      expect(monitor.hasWatcher).toBe(true);
+
+      // Simulate runtime watcher failure
+      capturedOnWatcherFailed?.();
+      expect(monitor.hasWatcher).toBe(false);
+
+      // After retry interval, watcher should restart
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(monitor.hasWatcher).toBe(true);
+
+      monitor.stop();
+    });
   });
 });

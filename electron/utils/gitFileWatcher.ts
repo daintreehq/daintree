@@ -19,6 +19,10 @@ export interface GitFileWatcherOptions {
   watchWorktree?: boolean;
   /** Debounce for working tree events. Defaults to debounceMs if not set. */
   worktreeDebounceMs?: number;
+  /** Max wait ceiling for worktree debounce — forces a flush during sustained bursts. */
+  worktreeMaxWaitMs?: number;
+  /** Called when the recursive worktree watcher fails at runtime (error or startup). */
+  onWatcherFailed?: () => void;
 }
 
 export class GitFileWatcher {
@@ -26,11 +30,14 @@ export class GitFileWatcher {
   private readonly watchedFilesByDirectory = new Map<string, Set<string>>();
   private debounceTimer: NodeJS.Timeout | null = null;
   private worktreeDebounceTimer: NodeJS.Timeout | null = null;
+  private worktreeMaxWaitTimer: NodeJS.Timeout | null = null;
   private disposed = false;
   private readonly worktreePath: string;
   private readonly debounceMs: number;
   private readonly worktreeDebounceMs: number;
+  private readonly worktreeMaxWaitMs: number | undefined;
   private readonly onChange: () => void;
+  private readonly onWatcherFailed: (() => void) | undefined;
   private readonly watchWorktree: boolean;
   private currentBranch?: string;
 
@@ -38,7 +45,9 @@ export class GitFileWatcher {
     this.worktreePath = options.worktreePath;
     this.debounceMs = options.debounceMs;
     this.worktreeDebounceMs = options.worktreeDebounceMs ?? options.debounceMs;
+    this.worktreeMaxWaitMs = options.worktreeMaxWaitMs;
     this.onChange = options.onChange;
+    this.onWatcherFailed = options.onWatcherFailed;
     this.currentBranch = options.branch;
     this.watchWorktree = options.watchWorktree ?? false;
   }
@@ -102,6 +111,10 @@ export class GitFileWatcher {
     if (this.worktreeDebounceTimer) {
       clearTimeout(this.worktreeDebounceTimer);
       this.worktreeDebounceTimer = null;
+    }
+    if (this.worktreeMaxWaitTimer) {
+      clearTimeout(this.worktreeMaxWaitTimer);
+      this.worktreeMaxWaitTimer = null;
     }
 
     for (const watcher of this.watchers) {
@@ -182,6 +195,7 @@ export class GitFileWatcher {
           } catch {
             // Ignore close errors on already-broken watcher
           }
+          this.onWatcherFailed?.();
         } else {
           logWarn("Worktree recursive watcher error", {
             path: this.worktreePath,
@@ -299,8 +313,26 @@ export class GitFileWatcher {
       clearTimeout(this.worktreeDebounceTimer);
     }
 
+    // Start max-wait ceiling on first event in a burst
+    if (this.worktreeMaxWaitMs != null && !this.worktreeMaxWaitTimer) {
+      this.worktreeMaxWaitTimer = setTimeout(() => {
+        this.worktreeMaxWaitTimer = null;
+        if (this.worktreeDebounceTimer) {
+          clearTimeout(this.worktreeDebounceTimer);
+          this.worktreeDebounceTimer = null;
+        }
+        if (!this.disposed) {
+          this.onChange();
+        }
+      }, this.worktreeMaxWaitMs);
+    }
+
     this.worktreeDebounceTimer = setTimeout(() => {
       this.worktreeDebounceTimer = null;
+      if (this.worktreeMaxWaitTimer) {
+        clearTimeout(this.worktreeMaxWaitTimer);
+        this.worktreeMaxWaitTimer = null;
+      }
       if (!this.disposed) {
         this.onChange();
       }
