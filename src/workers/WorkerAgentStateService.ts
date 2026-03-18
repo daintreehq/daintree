@@ -43,7 +43,7 @@ function nextAgentState(current: AgentState, event: AgentEvent): AgentState {
       break;
 
     case "busy":
-      if (current === "waiting" || current === "idle") {
+      if (current === "waiting" || current === "idle" || current === "completed") {
         return "working";
       }
       break;
@@ -53,7 +53,7 @@ function nextAgentState(current: AgentState, event: AgentEvent): AgentState {
       break;
 
     case "prompt":
-      if (current === "working") {
+      if (current === "working" || current === "completed") {
         return "waiting";
       }
       break;
@@ -71,6 +71,9 @@ function nextAgentState(current: AgentState, event: AgentEvent): AgentState {
 
     case "exit":
       if (current === "working" || current === "waiting") {
+        return event.code === 0 ? "completed" : "failed";
+      }
+      if (current === "completed") {
         return event.code === 0 ? "completed" : "failed";
       }
       break;
