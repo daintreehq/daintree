@@ -131,8 +131,11 @@ export class HibernationService {
       // Never hibernate the active project
       if (project.id === currentProjectId) continue;
 
+      // Skip projects with missing/invalid lastOpened to avoid treating them as infinitely inactive
+      if (!project.lastOpened) continue;
+
       // Check if project has been inactive long enough
-      const inactiveDuration = now - (project.lastOpened || 0);
+      const inactiveDuration = now - project.lastOpened;
       if (inactiveDuration < thresholdMs) continue;
 
       // Check if project has running terminals
@@ -177,7 +180,9 @@ export class HibernationService {
     for (const project of projects) {
       if (project.id === currentProjectId) continue;
 
-      const inactiveDuration = now - (project.lastOpened || 0);
+      if (!project.lastOpened) continue;
+
+      const inactiveDuration = now - project.lastOpened;
       if (inactiveDuration < MEMORY_PRESSURE_INACTIVE_MS) continue;
 
       const projectTerminals = allTerminals.filter((t) => t.projectId === project.id);
