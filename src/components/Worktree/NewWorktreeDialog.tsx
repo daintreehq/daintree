@@ -30,6 +30,7 @@ import { systemClient } from "@/clients/systemClient";
 import { useRecipeStore } from "@/store/recipeStore";
 import { mapCreationError, type WorktreeCreationError } from "./worktreeCreationErrors";
 import { useProjectStore } from "@/store/projectStore";
+import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 
 import { useNewWorktreeProjectSettings } from "./hooks/useNewWorktreeProjectSettings";
 import { useBranchInput } from "./hooks/useBranchInput";
@@ -459,6 +460,10 @@ export function NewWorktreeDialog({
         if (!result.ok) {
           throw new Error(result.error.message);
         }
+
+        const worktreeId = result.result as string;
+        useWorktreeSelectionStore.getState().setPendingWorktree(worktreeId);
+        useWorktreeSelectionStore.getState().selectWorktree(worktreeId);
 
         if (selectedIssue && assignWorktreeToSelf && currentUser) {
           try {
