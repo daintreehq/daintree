@@ -86,9 +86,10 @@ function testPermissionRequest(
   permission: string,
   url = "http://localhost:3000"
 ): boolean {
-  let result = false;
-  handler(mockWebContents, permission, (granted) => (result = granted), { requestingUrl: url });
-  return result;
+  const callback = vi.fn<(granted: boolean) => void>();
+  handler(mockWebContents, permission, callback, { requestingUrl: url });
+  expect(callback).toHaveBeenCalledTimes(1);
+  return callback.mock.calls[0][0];
 }
 
 describe("setupPermissionLockdown", () => {
@@ -257,6 +258,32 @@ describe("setupPermissionLockdown", () => {
       expect(testPermissionRequest(handler, "media")).toBe(false);
     });
 
+    it("locks down dynamically created browser partitions", () => {
+      setupPermissionLockdown();
+      const dynamicBrowserSession = createMockSession();
+      Object.defineProperty(dynamicBrowserSession, "partition", {
+        value: "persist:browser",
+      });
+
+      sessionCreatedListeners[0](dynamicBrowserSession);
+
+      expect(dynamicBrowserSession.setPermissionRequestHandler).toHaveBeenCalledTimes(1);
+      expect(dynamicBrowserSession.setPermissionCheckHandler).toHaveBeenCalledTimes(1);
+
+      const handler = getRequestHandler(dynamicBrowserSession);
+      expect(testPermissionRequest(handler, "clipboard-read")).toBe(false);
+    });
+
+    it("handles sessions with missing partition property", () => {
+      setupPermissionLockdown();
+      const noPartitionSession = createMockSession();
+
+      sessionCreatedListeners[0](noPartitionSession);
+
+      expect(noPartitionSession.setPermissionRequestHandler).not.toHaveBeenCalled();
+      expect(noPartitionSession.setPermissionCheckHandler).not.toHaveBeenCalled();
+    });
+
     it("does not lock down unknown partitions", () => {
       setupPermissionLockdown();
       const unknownSession = createMockSession();
@@ -316,12 +343,23 @@ describe("setupPermissionLockdown", () => {
       warnSpy.mockRestore();
     });
 
-    it("does not log when permission is granted", () => {
+    it("does not log when request permission is granted", () => {
       const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
       setupPermissionLockdown();
 
       const handler = getRequestHandler(defaultSession);
       testPermissionRequest(handler, "clipboard-read", "app://canopy");
+
+      expect(warnSpy).not.toHaveBeenCalled();
+      warnSpy.mockRestore();
+    });
+
+    it("does not log when check permission is granted", () => {
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      setupPermissionLockdown();
+
+      const handler = getCheckHandler(defaultSession);
+      handler(mockWebContents, "clipboard-read", "app://canopy", {});
 
       expect(warnSpy).not.toHaveBeenCalled();
       warnSpy.mockRestore();
