@@ -77,7 +77,7 @@ export function SortableWorktreeCard({
     <div
       ref={setNodeRef}
       style={style}
-      className={cn(isDragging && "opacity-40 ring-2 ring-canopy-accent/50 rounded-sm")}
+      className={cn(isDragging && "opacity-40")}
       role="listitem"
       aria-roledescription="sortable worktree"
       {...filteredAttributes}

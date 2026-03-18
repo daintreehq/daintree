@@ -1,7 +1,6 @@
 import { useState, useRef, useCallback, useReducer } from "react";
 import PQueue from "p-queue";
 import { X, GitBranch, Loader2 } from "lucide-react";
-import { cn } from "@/lib/utils";
 import { actionService } from "@/services/ActionService";
 import { detectPrefixFromIssue, buildBranchName } from "@/components/Worktree/branchPrefixUtils";
 import { generateBranchSlug } from "@/utils/textParsing";
@@ -168,65 +167,55 @@ export function IssueBulkActionBar({ selectedIssues, onClear }: IssueBulkActionB
   const processedCount = progress.completed + progress.failed;
 
   return (
-    <>
-      <div
-        role="toolbar"
-        aria-label="Bulk actions"
-        className={cn(
-          "absolute bottom-3 left-1/2 -translate-x-1/2 z-50",
-          "animate-pill-enter",
-          "flex items-center gap-2 px-3 py-2 rounded-full",
-          "bg-black/70 backdrop-blur-xl",
-          "shadow-lg border border-white/10",
-          "text-white text-sm"
-        )}
+    <div
+      role="toolbar"
+      aria-label="Bulk actions"
+      className="border-t border-[var(--border-divider)] p-3 flex items-center gap-2 shrink-0 text-sm"
+    >
+      {isExecuting ? (
+        <>
+          <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />
+          <span className="text-canopy-text">
+            Creating {processedCount}/{progress.total}...
+          </span>
+        </>
+      ) : isDone ? (
+        <>
+          <GitBranch className="w-4 h-4 text-muted-foreground" />
+          <span className="text-canopy-text">
+            {progress.completed} created
+            {progress.failed > 0 && `, ${progress.failed} failed`}
+          </span>
+        </>
+      ) : (
+        <>
+          <span className="flex items-center justify-center min-w-[20px] h-5 px-1.5 rounded-full bg-canopy-accent text-white text-xs font-medium">
+            {selectedIssues.length}
+          </span>
+          <button
+            type="button"
+            onClick={() => setShowRecipePicker(true)}
+            className="flex items-center gap-1.5 px-2.5 py-1 rounded bg-canopy-accent hover:bg-canopy-accent/90 text-white text-xs font-medium transition-colors"
+          >
+            <GitBranch className="w-3.5 h-3.5" />
+            Create Worktrees
+          </button>
+        </>
+      )}
+      <div className="w-px h-4 bg-[var(--border-divider)]" />
+      <button
+        type="button"
+        onClick={handleDismiss}
+        aria-label={isDone ? "Dismiss" : "Clear selection"}
+        className="flex items-center justify-center w-5 h-5 rounded hover:bg-tint/[0.06] transition-colors text-canopy-text/60"
       >
-        {isExecuting ? (
-          <>
-            <Loader2 className="w-4 h-4 animate-spin" />
-            <span>
-              Creating {processedCount}/{progress.total}...
-            </span>
-          </>
-        ) : isDone ? (
-          <>
-            <GitBranch className="w-4 h-4" />
-            <span>
-              {progress.completed} created
-              {progress.failed > 0 && `, ${progress.failed} failed`}
-            </span>
-          </>
-        ) : (
-          <>
-            <span className="flex items-center justify-center min-w-[20px] h-5 px-1.5 rounded-full bg-canopy-accent text-white text-xs font-medium">
-              {selectedIssues.length}
-            </span>
-            <button
-              type="button"
-              onClick={() => setShowRecipePicker(true)}
-              className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-canopy-accent hover:bg-canopy-accent/90 text-white text-xs font-medium transition-colors"
-            >
-              <GitBranch className="w-3.5 h-3.5" />
-              Create Worktrees
-            </button>
-          </>
-        )}
-        <div className="w-px h-4 bg-white/20" />
-        <button
-          type="button"
-          onClick={handleDismiss}
-          aria-label={isDone ? "Dismiss" : "Clear selection"}
-          className="flex items-center justify-center w-5 h-5 rounded-full hover:bg-white/20 transition-colors"
-        >
-          <X className="w-3.5 h-3.5" />
-        </button>
-      </div>
-
+        <X className="w-3.5 h-3.5" />
+      </button>
       <RecipePicker
         isOpen={showRecipePicker}
         onClose={() => setShowRecipePicker(false)}
         onSelect={handleRecipeSelect}
       />
-    </>
+    </div>
   );
 }

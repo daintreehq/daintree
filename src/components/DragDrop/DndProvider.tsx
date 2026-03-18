@@ -87,6 +87,9 @@ const DRAG_ACTIVATION_DISTANCE = 8;
 // Cursor offset from top of preview (positions cursor in title bar area)
 const TITLE_BAR_CURSOR_OFFSET = 12;
 
+// Horizontal offset from cursor to left edge of worktree drag preview
+const WORKTREE_CURSOR_LEFT_OFFSET = 8;
+
 interface DndProviderProps {
   children: React.ReactNode;
 }
@@ -204,14 +207,31 @@ function DragOverlayWithCursorTracking({
     };
   }, []);
 
+  // Modifier that positions overlay to the RIGHT of cursor (cursor at middle-left)
+  const worktreeCursorModifier: Modifier = useCallback(({ transform, overlayNodeRect }) => {
+    const cursor = pointerPositionRef.current;
+    if (!transform || !overlayNodeRect || !cursor) return transform;
+
+    return {
+      ...transform,
+      x: cursor.x - overlayNodeRect.left + WORKTREE_CURSOR_LEFT_OFFSET,
+      y: cursor.y - overlayNodeRect.top - overlayNodeRect.height / 2,
+    };
+  }, []);
+
   const overlayContent = activeTerminal ? (
     <TerminalDragPreview terminal={activeTerminal} groupTabCount={groupTabCount} />
   ) : activeWorktree ? (
     <WorktreeDragPreview worktree={activeWorktree} />
   ) : null;
 
+  const activeModifiers = useMemo(
+    () => [activeWorktree ? worktreeCursorModifier : cursorOverlayModifier],
+    [activeWorktree, worktreeCursorModifier, cursorOverlayModifier]
+  );
+
   return (
-    <DragOverlay dropAnimation={null} modifiers={[cursorOverlayModifier]}>
+    <DragOverlay dropAnimation={null} modifiers={activeModifiers}>
       {overlayContent}
     </DragOverlay>
   );
@@ -229,6 +249,12 @@ export function DndProvider({ children }: DndProviderProps) {
   useEffect(() => {
     overContainerRef.current = overContainer;
   }, [overContainer]);
+
+  // Ref to track worktree sort state for stable collision detection
+  const isWorktreeSortActiveRef = useRef(false);
+  useEffect(() => {
+    isWorktreeSortActiveRef.current = isWorktreeSortActive;
+  }, [isWorktreeSortActive]);
 
   // Placeholder state for cross-container drags (dock -> grid)
   const [placeholderIndex, setPlaceholderIndex] = useState<number | null>(null);
@@ -895,9 +921,14 @@ export function DndProvider({ children }: DndProviderProps) {
   }, [activeId, activeData]);
 
   // Use rectIntersection as default (stable when cursor outside containers),
-  // closestCenter only for dock (better for 1D horizontal reordering)
+  // closestCenter for dock (1D horizontal) and worktree sort (1D vertical)
   const collisionDetection: CollisionDetection = useCallback(
     (args) => {
+      // For worktree sort drags, use closestCenter (best for 1D vertical lists)
+      if (isWorktreeSortActiveRef.current) {
+        return closestCenter(args);
+      }
+
       // First check if we're directly over any droppable
       const pointerCollisions = pointerWithin(args);
       if (pointerCollisions.length > 0) {

@@ -408,7 +408,7 @@ export function WorktreeCard({
       type: "worktree",
       worktreeId: worktree.id,
     },
-    disabled: isActive,
+    disabled: isActive || isWorktreeSortDragging,
   });
 
   const droppableRef = useCallback(
