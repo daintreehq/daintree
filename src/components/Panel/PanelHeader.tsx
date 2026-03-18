@@ -30,7 +30,7 @@ import { SortableContext, horizontalListSortingStrategy, arrayMove } from "@dnd-
 import { restrictToHorizontalAxis, restrictToParentElement } from "@dnd-kit/modifiers";
 import type { PanelKind, TerminalType } from "@/types";
 import { cn, getBaseTitle } from "@/lib/utils";
-import { createTooltipWithShortcut, formatShortcutForTooltip } from "@/lib/platform";
+import { formatShortcutForTooltip } from "@/lib/platform";
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
 import { getBrandColorHex } from "@/lib/colorUtils";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
@@ -787,7 +787,7 @@ function PanelHeaderComponent({
                   <Maximize2 className="w-3 h-3" aria-hidden="true" />
                 </button>
               </TooltipTrigger>
-              <TooltipContent side="bottom">Restore to Grid</TooltipContent>
+              <TooltipContent side="bottom">Restore to Grid · double-click header</TooltipContent>
             </Tooltip>
           </TooltipProvider>
         ) : onToggleMaximize && isMaximized ? (
@@ -809,7 +809,7 @@ function PanelHeaderComponent({
                 </button>
               </TooltipTrigger>
               <TooltipContent side="bottom">
-                {createTooltipWithShortcut("Restore Grid View", "Ctrl+Shift+F")}
+                {`Restore Grid View (${formatShortcutForTooltip("Ctrl+Shift+F")} · double-click header)`}
               </TooltipContent>
             </Tooltip>
           </TooltipProvider>
@@ -832,7 +832,7 @@ function PanelHeaderComponent({
                   </button>
                 </TooltipTrigger>
                 <TooltipContent side="bottom">
-                  {createTooltipWithShortcut("Maximize", "Ctrl+Shift+F")}
+                  {`Maximize (${formatShortcutForTooltip("Ctrl+Shift+F")} · double-click header)`}
                 </TooltipContent>
               </Tooltip>
             </TooltipProvider>
