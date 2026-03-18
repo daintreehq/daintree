@@ -1,5 +1,7 @@
 import {
   Profiler,
+  Suspense,
+  lazy,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -91,7 +93,9 @@ import { ConfirmDialog } from "./components/ui/ConfirmDialog";
 import { RecipeEditor } from "./components/TerminalRecipe/RecipeEditor";
 import { NotesPalette } from "./components/Notes";
 import { WorkflowSection } from "./components/Workflow";
-import { SettingsDialog } from "./components/Settings";
+const LazySettingsDialog = lazy(() =>
+  import("./components/Settings/SettingsDialog").then((m) => ({ default: m.SettingsDialog }))
+);
 import { ShortcutReferenceDialog } from "./components/KeyboardShortcuts";
 import { Toaster } from "./components/ui/toaster";
 import { ReEntrySummary } from "./components/ui/ReEntrySummary";
@@ -811,6 +815,10 @@ function App() {
     handleOpenSettingsTab,
     setIsSettingsOpen,
   } = useSettingsDialog();
+  const [hasOpenedSettings, setHasOpenedSettings] = useState(false);
+  useEffect(() => {
+    if (isSettingsOpen) setHasOpenedSettings(true);
+  }, [isSettingsOpen]);
   const [isShortcutsOpen, setIsShortcutsOpen] = useState(false);
   const isNotesPaletteOpen = usePaletteStore((state) => state.activePaletteId === "notes");
   const {
@@ -1190,14 +1198,18 @@ function App() {
         initialWorktreeId={crossDiffDialog.initialWorktreeId}
       />
 
-      <SettingsDialog
-        isOpen={isSettingsOpen}
-        onClose={() => setIsSettingsOpen(false)}
-        defaultTab={settingsTab}
-        defaultSubtab={settingsSubtab}
-        defaultSectionId={settingsSectionId}
-        onSettingsChange={refreshSettings}
-      />
+      {hasOpenedSettings && (
+        <Suspense fallback={null}>
+          <LazySettingsDialog
+            isOpen={isSettingsOpen}
+            onClose={() => setIsSettingsOpen(false)}
+            defaultTab={settingsTab}
+            defaultSubtab={settingsSubtab}
+            defaultSectionId={settingsSectionId}
+            onSettingsChange={refreshSettings}
+          />
+        </Suspense>
+      )}
 
       <ShortcutReferenceDialog isOpen={isShortcutsOpen} onClose={() => setIsShortcutsOpen(false)} />
 
