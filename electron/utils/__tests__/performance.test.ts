@@ -71,7 +71,7 @@ describe("startEventLoopLagMonitor", () => {
 
     expect(logWarn).toHaveBeenCalledTimes(1);
     expect(logWarn).toHaveBeenCalledWith("Event loop lag detected", {
-      lagMs: expect.any(Number),
+      lagMs: 5000,
       intervalMs: 1000,
     });
   });
