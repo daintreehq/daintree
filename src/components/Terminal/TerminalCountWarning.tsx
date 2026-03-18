@@ -35,12 +35,15 @@ function dismissWarning(): void {
 export function TerminalCountWarning({ className, onOpenBulkActions }: TerminalCountWarningProps) {
   const { activeCount, completedCount } = useTerminalStore(
     useShallow((state) => {
-      const activeTerminals = state.terminals.filter((t) => t.location !== "trash");
-      const completedTerminals = activeTerminals.filter((t) => t.agentState === "completed");
-      return {
-        activeCount: activeTerminals.length,
-        completedCount: completedTerminals.length,
-      };
+      let active = 0;
+      let completed = 0;
+      for (const t of state.terminals) {
+        if (t.location !== "trash") {
+          active++;
+          if (t.agentState === "completed") completed++;
+        }
+      }
+      return { activeCount: active, completedCount: completed };
     })
   );
 

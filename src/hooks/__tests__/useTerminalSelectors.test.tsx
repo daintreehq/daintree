@@ -15,7 +15,17 @@ vi.mock("@/store/worktreeDataStore", () => ({
   useWorktreeDataStore: useWorktreeDataStoreMock,
 }));
 
-import { useTerminalNotificationCounts, useConflictedWorktrees } from "../useTerminalSelectors";
+import {
+  useTerminalNotificationCounts,
+  useConflictedWorktrees,
+  useWaitingTerminals,
+  useFailedTerminals,
+  useBackgroundedTerminals,
+  useWaitingTerminalIds,
+  useFailedTerminalIds,
+} from "../useTerminalSelectors";
+
+const isInTrashFn = () => false;
 
 function setupEmptyWorktrees() {
   useWorktreeDataStoreMock.mockImplementation(
@@ -33,17 +43,45 @@ function setupTerminals(
     lastStateChange?: number;
   }>
 ) {
+  const state = {
+    terminals,
+    isInTrash: isInTrashFn,
+  };
   useTerminalStoreMock.mockImplementation(
     (
       selector: (state: {
         terminals: typeof terminals;
         isInTrash: (id: string) => boolean;
       }) => unknown
-    ) =>
-      selector({
-        terminals,
-        isInTrash: () => false,
-      })
+    ) => selector(state)
+  );
+}
+
+function setupBoth(
+  terminals: Array<{
+    id: string;
+    worktreeId?: string;
+    agentState?: string;
+    location?: string;
+    lastStateChange?: number;
+  }>,
+  worktrees?: Map<string, { worktreeId?: string }>
+) {
+  const wtMap = worktrees ?? new Map();
+  useWorktreeDataStoreMock.mockImplementation(
+    (selector: (state: { worktrees: typeof wtMap }) => unknown) => selector({ worktrees: wtMap })
+  );
+  const state = {
+    terminals,
+    isInTrash: isInTrashFn,
+  };
+  useTerminalStoreMock.mockImplementation(
+    (
+      selector: (state: {
+        terminals: typeof terminals;
+        isInTrash: (id: string) => boolean;
+      }) => unknown
+    ) => selector(state)
   );
 }
 
@@ -311,6 +349,130 @@ describe("useTerminalSelectors", () => {
       expect(result.current.waitingCount).toBe(0);
       expect(result.current.failedCount).toBe(0);
     });
+  });
+});
+
+describe("useWaitingTerminals", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("returns empty array when no terminals exist", () => {
+    setupBoth([]);
+    const { result } = renderHook(() => useWaitingTerminals());
+    expect(result.current).toEqual([]);
+  });
+
+  it("returns only waiting visible terminals", () => {
+    setupBoth([
+      { id: "t1", agentState: "waiting", location: "grid" },
+      { id: "t2", agentState: "working", location: "grid" },
+      { id: "t3", agentState: "waiting", location: "trash" },
+      { id: "t4", agentState: "waiting", location: "background" },
+    ]);
+
+    const { result } = renderHook(() => useWaitingTerminals());
+    expect(result.current).toHaveLength(1);
+    expect(result.current[0].id).toBe("t1");
+  });
+
+  it("excludes orphaned terminals when worktree IDs are known", () => {
+    const worktrees = new Map([["wt-1", { worktreeId: "wt-1" }]]);
+    setupBoth(
+      [
+        { id: "t1", agentState: "waiting", location: "grid", worktreeId: "wt-1" },
+        { id: "t2", agentState: "waiting", location: "grid", worktreeId: "wt-unknown" },
+      ],
+      worktrees
+    );
+
+    const { result } = renderHook(() => useWaitingTerminals());
+    expect(result.current).toHaveLength(1);
+    expect(result.current[0].id).toBe("t1");
+  });
+});
+
+describe("useWaitingTerminalIds", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("returns IDs of waiting terminals", () => {
+    setupBoth([
+      { id: "t1", agentState: "waiting", location: "grid" },
+      { id: "t2", agentState: "working", location: "grid" },
+    ]);
+
+    const { result } = renderHook(() => useWaitingTerminalIds());
+    expect(result.current).toEqual(["t1"]);
+  });
+});
+
+describe("useFailedTerminals", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("returns only failed visible terminals", () => {
+    setupBoth([
+      { id: "t1", agentState: "failed", location: "grid" },
+      { id: "t2", agentState: "waiting", location: "grid" },
+      { id: "t3", agentState: "failed", location: "trash" },
+    ]);
+
+    const { result } = renderHook(() => useFailedTerminals());
+    expect(result.current).toHaveLength(1);
+    expect(result.current[0].id).toBe("t1");
+  });
+});
+
+describe("useFailedTerminalIds", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("returns IDs of failed terminals", () => {
+    setupBoth([
+      { id: "t1", agentState: "failed", location: "grid" },
+      { id: "t2", agentState: "failed", location: "grid" },
+      { id: "t3", agentState: "working", location: "grid" },
+    ]);
+
+    const { result } = renderHook(() => useFailedTerminalIds());
+    expect(result.current).toEqual(["t1", "t2"]);
+  });
+});
+
+describe("useBackgroundedTerminals", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("returns only background terminals that are not orphaned", () => {
+    setupBoth([
+      { id: "t1", location: "background" },
+      { id: "t2", location: "grid" },
+      { id: "t3", location: "background", worktreeId: "wt-1" },
+    ]);
+
+    const { result } = renderHook(() => useBackgroundedTerminals());
+    expect(result.current).toHaveLength(2);
+    expect(result.current.map((t) => t.id)).toEqual(["t1", "t3"]);
+  });
+
+  it("excludes orphaned background terminals when worktrees are known", () => {
+    const worktrees = new Map([["wt-1", { worktreeId: "wt-1" }]]);
+    setupBoth(
+      [
+        { id: "t1", location: "background", worktreeId: "wt-1" },
+        { id: "t2", location: "background", worktreeId: "wt-gone" },
+      ],
+      worktrees
+    );
+
+    const { result } = renderHook(() => useBackgroundedTerminals());
+    expect(result.current).toHaveLength(1);
+    expect(result.current[0].id).toBe("t1");
   });
 });
 

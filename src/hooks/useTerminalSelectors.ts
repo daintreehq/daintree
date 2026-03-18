@@ -1,3 +1,4 @@
+import { useMemo } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { useTerminalStore, type TerminalInstance } from "@/store/terminalStore";
 import { useWorktreeDataStore } from "@/store/worktreeDataStore";
@@ -22,20 +23,25 @@ function isTerminalVisible(
   return true;
 }
 
+function buildWorktreeIds(worktrees: Map<string, WorktreeState>): Set<string> {
+  const ids = new Set<string>();
+  for (const [id, wt] of worktrees) {
+    ids.add(id);
+    if (wt.worktreeId) ids.add(wt.worktreeId);
+  }
+  return ids;
+}
+
+function useWorktreeIds(): Set<string> {
+  const worktrees = useWorktreeDataStore((state) => state.worktrees);
+  return useMemo(() => buildWorktreeIds(worktrees), [worktrees]);
+}
+
 export function useTerminalNotificationCounts(blurTime?: number | null): {
   waitingCount: number;
   failedCount: number;
 } {
-  const worktreeIds = useWorktreeDataStore(
-    useShallow((state) => {
-      const ids = new Set<string>();
-      for (const [id, wt] of state.worktrees) {
-        ids.add(id);
-        if (wt.worktreeId) ids.add(wt.worktreeId);
-      }
-      return ids;
-    })
-  );
+  const worktreeIds = useWorktreeIds();
 
   return useTerminalStore(
     useShallow((state) => {
@@ -67,83 +73,63 @@ export function useTerminalNotificationCounts(blurTime?: number | null): {
 }
 
 export function useWaitingTerminals(): TerminalInstance[] {
-  const worktreeIds = useWorktreeDataStore(
-    useShallow((state) => {
-      const ids = new Set<string>();
-      for (const [id, wt] of state.worktrees) {
-        ids.add(id);
-        if (wt.worktreeId) ids.add(wt.worktreeId);
-      }
-      return ids;
-    })
-  );
+  const worktreeIds = useWorktreeIds();
+  const terminals = useTerminalStore((state) => state.terminals);
+  const isInTrash = useTerminalStore((state) => state.isInTrash);
 
-  return useTerminalStore(
-    useShallow((state) =>
-      state.terminals.filter(
-        (t) => t.agentState === "waiting" && isTerminalVisible(t, state.isInTrash, worktreeIds)
-      )
-    )
+  return useMemo(
+    () =>
+      terminals.filter(
+        (t) => t.agentState === "waiting" && isTerminalVisible(t, isInTrash, worktreeIds)
+      ),
+    [terminals, isInTrash, worktreeIds]
   );
 }
 
 export function useWaitingTerminalIds(): string[] {
-  return useWaitingTerminals().map((t) => t.id);
+  const waiting = useWaitingTerminals();
+  return useMemo(() => waiting.map((t) => t.id), [waiting]);
 }
 
 export function useFailedTerminals(): TerminalInstance[] {
-  const worktreeIds = useWorktreeDataStore(
-    useShallow((state) => {
-      const ids = new Set<string>();
-      for (const [id, wt] of state.worktrees) {
-        ids.add(id);
-        if (wt.worktreeId) ids.add(wt.worktreeId);
-      }
-      return ids;
-    })
-  );
+  const worktreeIds = useWorktreeIds();
+  const terminals = useTerminalStore((state) => state.terminals);
+  const isInTrash = useTerminalStore((state) => state.isInTrash);
 
-  return useTerminalStore(
-    useShallow((state) =>
-      state.terminals.filter(
-        (t) => t.agentState === "failed" && isTerminalVisible(t, state.isInTrash, worktreeIds)
-      )
-    )
+  return useMemo(
+    () =>
+      terminals.filter(
+        (t) => t.agentState === "failed" && isTerminalVisible(t, isInTrash, worktreeIds)
+      ),
+    [terminals, isInTrash, worktreeIds]
   );
 }
 
 export function useFailedTerminalIds(): string[] {
-  return useFailedTerminals().map((t) => t.id);
+  const failed = useFailedTerminals();
+  return useMemo(() => failed.map((t) => t.id), [failed]);
 }
 
 export function useBackgroundedTerminals(): TerminalInstance[] {
-  const worktreeIds = useWorktreeDataStore(
-    useShallow((state) => {
-      const ids = new Set<string>();
-      for (const [id, wt] of state.worktrees) {
-        ids.add(id);
-        if (wt.worktreeId) ids.add(wt.worktreeId);
-      }
-      return ids;
-    })
-  );
+  const worktreeIds = useWorktreeIds();
+  const terminals = useTerminalStore((state) => state.terminals);
 
-  return useTerminalStore(
-    useShallow((state) =>
-      state.terminals.filter(
-        (t) => t.location === "background" && !isTerminalOrphaned(t, worktreeIds)
-      )
-    )
+  return useMemo(
+    () =>
+      terminals.filter((t) => t.location === "background" && !isTerminalOrphaned(t, worktreeIds)),
+    [terminals, worktreeIds]
   );
 }
 
 export function useConflictedWorktrees(): WorktreeState[] {
-  return useWorktreeDataStore(
-    useShallow((state) =>
-      Array.from(state.worktrees.values()).filter(
+  const worktrees = useWorktreeDataStore((state) => state.worktrees);
+
+  return useMemo(
+    () =>
+      Array.from(worktrees.values()).filter(
         (w) => w.worktreeChanges?.changes.some((c) => c.status === "conflicted") ?? false
-      )
-    )
+      ),
+    [worktrees]
   );
 }
 
