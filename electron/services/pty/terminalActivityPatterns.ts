@@ -180,6 +180,6 @@ export function buildActivityMonitorOptions(
     completionConfidence: detection?.completionConfidence,
     promptScanLineCount: detection?.promptScanLineCount,
     promptConfidence: detection?.promptConfidence,
-    idleDebounceMs: effectiveAgentId ? (detection?.debounceMs ?? 2000) : undefined,
+    idleDebounceMs: effectiveAgentId ? (detection?.debounceMs ?? 6000) : undefined,
   };
 }

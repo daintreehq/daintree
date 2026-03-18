@@ -83,7 +83,7 @@ export class ActivityMonitor {
   private readonly PROMPT_QUIET_MS = 200;
   private readonly PROMPT_HISTORY_FALLBACK_MS = 3000;
   private readonly WORKING_HOLD_MS = 200;
-  private readonly SPINNER_ACTIVE_MS = 3000;
+  private readonly SPINNER_ACTIVE_MS = 1500;
   private readonly COMPLETION_HOLD_MS = 500;
   private readonly WORKING_INDICATOR_TTL_MS = 5000;
   private workingHoldUntil = 0;
