@@ -821,8 +821,8 @@ describe("ActivityMonitor", () => {
       monitor.onInput("\r");
       expect(onStateChange).toHaveBeenCalledTimes(1);
 
-      // Debounce is 2500ms
-      vi.advanceTimersByTime(2500);
+      // Default debounce is 6000ms
+      vi.advanceTimersByTime(6000);
 
       expect(onStateChange).toHaveBeenCalledTimes(2);
       expect(onStateChange).toHaveBeenNthCalledWith(2, "test-1", 1000, "idle");
@@ -832,7 +832,9 @@ describe("ActivityMonitor", () => {
 
     it("should reset debounce timer on continued output while busy", () => {
       const onStateChange = vi.fn();
-      const monitor = new ActivityMonitor("test-1", 1000, onStateChange);
+      const monitor = new ActivityMonitor("test-1", 1000, onStateChange, {
+        idleDebounceMs: 2500,
+      });
 
       monitor.onInput("\r");
       expect(onStateChange).toHaveBeenCalledTimes(1);
@@ -894,6 +896,8 @@ describe("ActivityMonitor", () => {
         patternConfig: {
           primaryPatterns: [/esc to interrupt/i],
         },
+        patternBufferSize: 2000,
+        idleDebounceMs: 2500,
       });
 
       // Go busy via input
@@ -934,12 +938,41 @@ describe("ActivityMonitor", () => {
 
       monitor.dispose();
     });
+
+    it("should not transition to idle mid-stream with default 10k pattern buffer (Issue #3550)", () => {
+      const onStateChange = vi.fn();
+      const monitor = new ActivityMonitor("test-1", 1000, onStateChange, {
+        patternConfig: {
+          primaryPatterns: [/esc to interrupt/i],
+        },
+        idleDebounceMs: 2500,
+      });
+
+      // Go busy via input
+      monitor.onInput("\r");
+      expect(onStateChange).toHaveBeenCalledTimes(1);
+
+      // Send data containing the working indicator
+      monitor.onData("\nesc to interrupt\n");
+      vi.advanceTimersByTime(100);
+
+      // Send a large data burst (>2000 chars) that would have evicted the working indicator
+      // from the old 2000-char buffer but NOT from the new 10000-char buffer
+      monitor.onData("x".repeat(5000));
+
+      // Pattern should still be found in the enlarged buffer
+      expect(monitor.getLastPatternResult()?.isWorking).toBe(true);
+
+      monitor.dispose();
+    });
   });
 
   describe("Mixed input and output activity", () => {
     it("should maintain busy state with mixed input and output", () => {
       const onStateChange = vi.fn();
-      const monitor = new ActivityMonitor("test-1", 1000, onStateChange);
+      const monitor = new ActivityMonitor("test-1", 1000, onStateChange, {
+        idleDebounceMs: 2500,
+      });
 
       monitor.onInput("\r");
       expect(onStateChange).toHaveBeenCalledWith("test-1", 1000, "busy", { trigger: "input" });
@@ -968,6 +1001,7 @@ describe("ActivityMonitor", () => {
       const onStateChange = vi.fn();
       const monitor = new ActivityMonitor("test-1", 1000, onStateChange, {
         outputActivityDetection: { enabled: true, minFrames: 1, minBytes: 1 },
+        idleDebounceMs: 2500,
       });
 
       monitor.onInput("\r");
@@ -993,6 +1027,7 @@ describe("ActivityMonitor", () => {
       const onStateChange = vi.fn();
       const monitor = new ActivityMonitor("test-1", 1000, onStateChange, {
         outputActivityDetection: { enabled: true, minFrames: 1, minBytes: 1 },
+        idleDebounceMs: 2500,
       });
 
       monitor.onInput("\r");
@@ -1009,6 +1044,96 @@ describe("ActivityMonitor", () => {
       expect(onStateChange).toHaveBeenLastCalledWith("test-1", 1000, "busy", {
         trigger: "input",
       });
+
+      monitor.dispose();
+    });
+  });
+
+  describe("Hysteresis — false entry prevention (Issue #3550)", () => {
+    it("should NOT enter working from plain carriage-return burst without spinner content", () => {
+      const onStateChange = vi.fn();
+      const monitor = new ActivityMonitor("test-1", 1000, onStateChange);
+
+      // Simulate a shell prompt redraw: bare \r without matching STATUS_LINE_PATTERNS
+      monitor.onData("\r> ");
+      vi.advanceTimersByTime(50);
+      monitor.onData("\r> ");
+      vi.advanceTimersByTime(50);
+      monitor.onData("\r> ");
+
+      // Plain prompt redraws must not trigger busy
+      expect(monitor.getState()).toBe("idle");
+      expect(onStateChange).not.toHaveBeenCalled();
+
+      monitor.dispose();
+    });
+
+    it("should NOT enter working from ANSI cursor-up escape sequences without spinner content", () => {
+      const onStateChange = vi.fn();
+      const monitor = new ActivityMonitor("test-1", 1000, onStateChange);
+
+      // Simulate terminal reflow with cursor movement but no spinner patterns
+      monitor.onData("\x1b[2K\r$ ");
+      vi.advanceTimersByTime(50);
+      monitor.onData("\x1b[2K\r$ ");
+
+      expect(monitor.getState()).toBe("idle");
+      expect(onStateChange).not.toHaveBeenCalled();
+
+      monitor.dispose();
+    });
+
+    it("should stay busy for 5+ seconds during LLM API silence gap (Issue #3550)", () => {
+      const onStateChange = vi.fn();
+      const monitor = new ActivityMonitor("test-1", 1000, onStateChange);
+
+      // Enter busy via input
+      monitor.onInput("\r");
+      expect(monitor.getState()).toBe("busy");
+      onStateChange.mockClear();
+
+      // Simulate 5 seconds of complete silence (LLM API call in progress)
+      vi.advanceTimersByTime(5000);
+
+      // Should still be busy — 5s gap must not transition to idle
+      expect(monitor.getState()).toBe("busy");
+      expect(onStateChange).not.toHaveBeenCalled();
+
+      // After 6000ms (default debounce) it may go idle
+      vi.advanceTimersByTime(1100);
+      expect(onStateChange).toHaveBeenCalledWith("test-1", 1000, "idle");
+
+      monitor.dispose();
+    });
+
+    it("should transition idle quickly via prompt fast-path in polling mode after working (Issue #3550)", () => {
+      const onStateChange = vi.fn();
+      let visibleLines = ["Working... (esc to interrupt)"];
+      const monitor = new ActivityMonitor("test-1", 1000, onStateChange, {
+        getVisibleLines: () => visibleLines,
+        getCursorLine: () => visibleLines[visibleLines.length - 1],
+        initialState: "busy",
+        skipInitialStateEmit: true,
+        idleDebounceMs: 6000,
+        pollingIntervalMs: 50,
+      });
+
+      monitor.startPolling();
+      expect(monitor.getState()).toBe("busy");
+      onStateChange.mockClear();
+
+      // Agent finishes — prompt appears
+      visibleLines = ["> "];
+      vi.advanceTimersByTime(100); // Boot detection
+
+      // The prompt fast-path requires at least 1000ms of quiet output before firing,
+      // to avoid misfiring during inter-chunk gaps in high-output bursts.
+      // Wait 1100ms to exceed the minimum quiet threshold.
+      vi.advanceTimersByTime(1100);
+
+      // Should have gone idle via prompt fast-path, well before the 6000ms debounce
+      expect(monitor.getState()).toBe("idle");
+      expect(onStateChange).toHaveBeenCalledWith("test-1", 1000, "idle");
 
       monitor.dispose();
     });
@@ -1052,6 +1177,7 @@ describe("ActivityMonitor", () => {
       };
       const monitor = new ActivityMonitor("test-1", 1000, onStateChange, {
         processStateValidator,
+        idleDebounceMs: 2500,
       });
 
       monitor.onInput("\r");
@@ -1078,6 +1204,7 @@ describe("ActivityMonitor", () => {
       };
       const monitor = new ActivityMonitor("test-1", 1000, onStateChange, {
         processStateValidator,
+        idleDebounceMs: 2500,
       });
 
       monitor.onInput("\r");
@@ -1094,7 +1221,9 @@ describe("ActivityMonitor", () => {
 
     it("should work without processStateValidator (backwards compatible)", () => {
       const onStateChange = vi.fn();
-      const monitor = new ActivityMonitor("test-1", 1000, onStateChange);
+      const monitor = new ActivityMonitor("test-1", 1000, onStateChange, {
+        idleDebounceMs: 2500,
+      });
 
       monitor.onInput("\r");
       // Debounce is 2500ms
@@ -1237,6 +1366,7 @@ describe("ActivityMonitor", () => {
           windowMs: 500,
           bytesPerSecond: 2048,
         },
+        idleDebounceMs: 2500,
       });
 
       // Enter busy state
@@ -1287,6 +1417,7 @@ describe("ActivityMonitor", () => {
       const onStateChange = vi.fn();
       const monitor = new ActivityMonitor("test-1", 1000, onStateChange, {
         highOutputThreshold: { enabled: false },
+        idleDebounceMs: 2500,
       });
 
       // Enter busy state
@@ -1350,6 +1481,7 @@ describe("ActivityMonitor", () => {
           recoveryEnabled: true,
           recoveryDelayMs: 400, // Use shorter delay for testing
         },
+        idleDebounceMs: 2500,
       });
 
       // Enter busy state
@@ -1394,6 +1526,7 @@ describe("ActivityMonitor", () => {
           recoveryEnabled: false, // Disabled
           recoveryDelayMs: 500,
         },
+        idleDebounceMs: 2500,
       });
 
       // Enter busy state then go idle
@@ -1425,6 +1558,7 @@ describe("ActivityMonitor", () => {
           recoveryEnabled: true,
           recoveryDelayMs: 500, // Requires 500ms sustained
         },
+        idleDebounceMs: 2500,
       });
 
       // Enter busy state then go idle
@@ -1459,6 +1593,7 @@ describe("ActivityMonitor", () => {
           recoveryEnabled: true,
           recoveryDelayMs: 200, // Shorter than window for easier testing
         },
+        idleDebounceMs: 2500,
       });
 
       // Enter busy state then go idle
@@ -1540,6 +1675,7 @@ describe("ActivityMonitor", () => {
       const onStateChange = vi.fn();
       const monitor = new ActivityMonitor("test-1", 1000, onStateChange, {
         outputActivityDetection: { enabled: true, minFrames: 1, minBytes: 1 },
+        idleDebounceMs: 2500,
       });
 
       // Enter busy, then go idle
@@ -1564,6 +1700,7 @@ describe("ActivityMonitor", () => {
       const onStateChange = vi.fn();
       const monitor = new ActivityMonitor("test-1", 1000, onStateChange, {
         outputActivityDetection: { enabled: true, minFrames: 1, minBytes: 1 },
+        idleDebounceMs: 2500,
       });
 
       // Enter busy, then go idle
@@ -1669,6 +1806,7 @@ describe("ActivityMonitor", () => {
       const onStateChange = vi.fn();
       const monitor = new ActivityMonitor("test-1", 1000, onStateChange, {
         outputActivityDetection: { enabled: true, minFrames: 1, minBytes: 1 },
+        idleDebounceMs: 2500,
       });
 
       // Enter busy, then go idle
@@ -1701,6 +1839,7 @@ describe("ActivityMonitor", () => {
         getVisibleLines: () => visibleLines,
         getCursorLine: () => visibleLines[visibleLines.length - 1],
         workingRecoveryDelayMs: 1500,
+        idleDebounceMs: 2500,
       });
 
       monitor.startPolling();
@@ -1725,6 +1864,7 @@ describe("ActivityMonitor", () => {
         getVisibleLines: () => visibleLines,
         getCursorLine: () => visibleLines[visibleLines.length - 1],
         workingRecoveryDelayMs: 1500,
+        idleDebounceMs: 2500,
       });
 
       monitor.startPolling();
@@ -1757,6 +1897,7 @@ describe("ActivityMonitor", () => {
         getVisibleLines: () => visibleLines,
         getCursorLine: () => visibleLines[visibleLines.length - 1],
         workingRecoveryDelayMs: 1500,
+        idleDebounceMs: 2500,
       });
 
       monitor.startPolling();
@@ -1809,6 +1950,7 @@ describe("ActivityMonitor", () => {
         getVisibleLines: () => visibleLines,
         getCursorLine: () => visibleLines[visibleLines.length - 1],
         workingRecoveryDelayMs: 1500,
+        idleDebounceMs: 2500,
       });
 
       monitor.startPolling();
@@ -1852,6 +1994,7 @@ describe("ActivityMonitor", () => {
         getVisibleLines: () => visibleLines,
         getCursorLine: () => visibleLines[visibleLines.length - 1],
         workingRecoveryDelayMs: 2000, // Custom 2 second delay
+        idleDebounceMs: 2500,
       });
 
       monitor.startPolling();

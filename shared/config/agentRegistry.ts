@@ -68,7 +68,7 @@ export interface AgentDetectionConfig {
   promptScanLineCount?: number;
 
   /**
-   * Activity debounce period in ms (default: 1500).
+   * Activity debounce period in ms (default: 6000).
    * Time to wait after last activity before transitioning to idle.
    */
   debounceMs?: number;
@@ -305,7 +305,7 @@ export const AGENT_REGISTRY: Record<string, AgentConfig> = {
       primaryConfidence: 0.95,
       fallbackConfidence: 0.75,
       promptConfidence: 0.85,
-      debounceMs: 2000,
+      debounceMs: 6000,
     },
     routing: {
       capabilities: [
@@ -427,7 +427,7 @@ export const AGENT_REGISTRY: Record<string, AgentConfig> = {
       primaryConfidence: 0.95,
       fallbackConfidence: 0.7,
       promptConfidence: 0.85,
-      debounceMs: 2000,
+      debounceMs: 6000,
       titleStatePatterns: {
         working: ["\u2726"],
         waiting: ["\u25C7", "\u270B"],
@@ -558,7 +558,7 @@ export const AGENT_REGISTRY: Record<string, AgentConfig> = {
       primaryConfidence: 0.95,
       fallbackConfidence: 0.75,
       promptConfidence: 0.85,
-      debounceMs: 2000,
+      debounceMs: 6000,
     },
     routing: {
       capabilities: [
@@ -706,7 +706,7 @@ export const AGENT_REGISTRY: Record<string, AgentConfig> = {
       primaryConfidence: 0.95,
       fallbackConfidence: 0.7,
       promptConfidence: 0.85,
-      debounceMs: 2000,
+      debounceMs: 6000,
     },
     routing: {
       capabilities: [
@@ -808,7 +808,7 @@ export const AGENT_REGISTRY: Record<string, AgentConfig> = {
       primaryConfidence: 0.95,
       fallbackConfidence: 0.7,
       promptConfidence: 0.85,
-      debounceMs: 2000,
+      debounceMs: 6000,
     },
     routing: {
       capabilities: ["javascript", "typescript", "python", "react", "node", "general-purpose"],
