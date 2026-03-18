@@ -4,6 +4,7 @@ import { NewsletterStep } from "./NewsletterStep";
 import { TelemetryConsentStep } from "./TelemetryConsentStep";
 import { AgentSelectionStep } from "@/components/Setup/AgentSelectionStep";
 import { AgentSetupWizard } from "@/components/Setup/AgentSetupWizard";
+import { ThemeSelectionStep } from "./ThemeSelectionStep";
 import { OnboardingProgressIndicator } from "./OnboardingProgressIndicator";
 import type { OnboardingState } from "@shared/types";
 import type { CliAvailability } from "@shared/types";
@@ -16,8 +17,19 @@ const LEGACY_KEYS = {
   firstRunToast: "canopy:first-run-toast",
 } as const;
 
-type OnboardingStep = "newsletter" | "telemetry" | "agentSelection" | "agentSetup";
-const STEP_ORDER: OnboardingStep[] = ["newsletter", "telemetry", "agentSelection", "agentSetup"];
+type OnboardingStep =
+  | "themeSelection"
+  | "newsletter"
+  | "telemetry"
+  | "agentSelection"
+  | "agentSetup";
+const STEP_ORDER: OnboardingStep[] = [
+  "themeSelection",
+  "newsletter",
+  "telemetry",
+  "agentSelection",
+  "agentSetup",
+];
 
 interface OnboardingFlowProps {
   availability: CliAvailability;
@@ -164,6 +176,16 @@ export function OnboardingFlow({
     [onComplete]
   );
 
+  // Theme selection handlers
+  const handleThemeSelectionContinue = useCallback(async () => {
+    await advanceStep("themeSelection");
+  }, [advanceStep]);
+
+  const handleThemeSelectionSkip = useCallback(async () => {
+    trackOnboarding("onboarding_step_skipped", { step: "themeSelection" });
+    await advanceStep("themeSelection");
+  }, [advanceStep]);
+
   // Newsletter step handler
   const handleNewsletterDismiss = useCallback(
     async (_subscribed: boolean) => {
@@ -243,6 +265,14 @@ export function OnboardingFlow({
   return (
     <>
       <OnboardingProgressIndicator currentIndex={currentStepIndex} total={STEP_ORDER.length} />
+
+      {currentStep === "themeSelection" && (
+        <ThemeSelectionStep
+          isOpen
+          onContinue={handleThemeSelectionContinue}
+          onSkip={handleThemeSelectionSkip}
+        />
+      )}
 
       {currentStep === "newsletter" && (
         <NewsletterStep ref={headingRef} onDismiss={handleNewsletterDismiss} />
