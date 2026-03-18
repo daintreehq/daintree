@@ -69,7 +69,6 @@ export function useWatchedPanelNotifications(): void {
           const capturedPanelId = panelId;
           const capturedTitle = terminal.title ?? panelId;
           const capturedState = currentState;
-          const capturedWorktreeId = terminal.worktreeId ?? undefined;
 
           enqueueNotification(() => {
             // Guard: skip if panel has since been removed or trashed
@@ -77,12 +76,7 @@ export function useWatchedPanelNotifications(): void {
             const liveTerminal = liveTerminals.find((t) => t.id === capturedPanelId);
             if (!liveTerminal || liveTerminal.location === "trash") return;
 
-            fireWatchNotification(
-              capturedPanelId,
-              capturedTitle,
-              capturedState,
-              capturedWorktreeId
-            );
+            fireWatchNotification(capturedPanelId, capturedTitle, capturedState);
           });
 
           // One-shot: auto-clear the watch after notification fires

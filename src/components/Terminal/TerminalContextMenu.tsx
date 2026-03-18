@@ -275,12 +275,7 @@ export function TerminalContextMenu({
           if (isWatched) {
             unwatchPanel(terminalId);
           } else if (terminal.agentState === "completed" || terminal.agentState === "waiting") {
-            fireWatchNotification(
-              terminalId,
-              terminal.title ?? terminalId,
-              terminal.agentState,
-              terminal.worktreeId ?? undefined
-            );
+            fireWatchNotification(terminalId, terminal.title ?? terminalId, terminal.agentState);
           } else {
             watchPanel(terminalId);
           }

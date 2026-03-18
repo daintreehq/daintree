@@ -324,12 +324,7 @@ export function registerTerminalLifecycleActions(
         // Fire immediately if agent is already in a terminal attention state
         if (terminal?.agentState === "completed" || terminal?.agentState === "waiting") {
           const { fireWatchNotification } = await import("@/lib/watchNotification");
-          fireWatchNotification(
-            targetId,
-            terminal.title ?? targetId,
-            terminal.agentState,
-            terminal.worktreeId ?? undefined
-          );
+          fireWatchNotification(targetId, terminal.title ?? targetId, terminal.agentState);
         } else {
           state.watchPanel(targetId);
         }

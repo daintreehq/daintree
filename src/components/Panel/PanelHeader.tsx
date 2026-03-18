@@ -266,12 +266,7 @@ function PanelHeaderComponent({
     if (isWatched) {
       unwatchPanel(id);
     } else if (terminal?.agentState === "completed" || terminal?.agentState === "waiting") {
-      fireWatchNotification(
-        id,
-        terminal.title ?? id,
-        terminal.agentState,
-        terminal.worktreeId ?? undefined
-      );
+      fireWatchNotification(id, terminal.title ?? id, terminal.agentState);
     } else {
       watchPanel(id);
     }
