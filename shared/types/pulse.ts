@@ -38,7 +38,6 @@ export interface ProjectPulse {
   commitsInRange: number;
   activeDays: number;
   projectAgeDays: number;
-  currentStreakDays?: number;
   recentCommits: CommitItem[];
   uncommitted?: {
     changedFiles: number;

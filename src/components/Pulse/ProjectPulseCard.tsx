@@ -1,12 +1,10 @@
 import { useEffect, useCallback } from "react";
 import { useShallow } from "zustand/react/shallow";
-import type { PulseRangeDays, ProjectPulse } from "@shared/types";
+import type { PulseRangeDays } from "@shared/types";
 import { usePulseStore, useProjectStore } from "@/store";
 import { cn } from "@/lib/utils";
 import { Loader2, AlertCircle, RefreshCw, Activity, GitBranch } from "lucide-react";
-import { PulseHeatmap } from "./PulseHeatmap";
 import { PulseSummary } from "./PulseSummary";
-import { AttentionBar } from "./AttentionBar";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -24,27 +22,6 @@ const RANGE_OPTIONS: { value: PulseRangeDays; label: string }[] = [
   { value: 120, label: "120 days" },
   { value: 180, label: "180 days" },
 ];
-
-function getCoachLine(pulse: ProjectPulse): string {
-  const sortedCells = [...pulse.heatmap]
-    .filter((cell) => !isNaN(new Date(cell.date).getTime()))
-    .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
-
-  const today = sortedCells.find((c) => c.isToday) ?? sortedCells.at(-1);
-
-  const last7Days = sortedCells.slice(-7).filter((c) => c.count > 0).length;
-
-  if (today && today.count > 0) {
-    return "Nice — progress logged today.";
-  }
-  if (pulse.currentStreakDays && pulse.currentStreakDays > 0) {
-    return "One small commit today keeps your streak going.";
-  }
-  if (last7Days > 0) {
-    return `Momentum's building: ${last7Days} active day${last7Days !== 1 ? "s" : ""} this week.`;
-  }
-  return "Make a tiny win: ship one small change today.";
-}
 
 const MAX_RETRIES = 3;
 
@@ -217,15 +194,8 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
         </div>
       </div>
 
-      <div className="p-4 space-y-4">
-        <AttentionBar />
-        <PulseHeatmap cells={pulse.heatmap} rangeDays={pulse.rangeDays} />
-
-        <p className="text-xs text-canopy-text/80 italic">{getCoachLine(pulse)}</p>
-
-        <div className="border-t border-canopy-border pt-3">
-          <PulseSummary pulse={pulse} />
-        </div>
+      <div className="p-4">
+        <PulseSummary pulse={pulse} />
       </div>
     </div>
   );
