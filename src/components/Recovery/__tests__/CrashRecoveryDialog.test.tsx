@@ -64,6 +64,7 @@ const mockPanels = [
     cwd: "/project",
     location: "dock" as const,
     isSuspect: true,
+    agentState: "working",
   },
   { id: "t3", kind: "browser", title: "Docs", location: "grid" as const, isSuspect: false },
 ];
@@ -155,6 +156,14 @@ describe("CrashRecoveryDialog", () => {
       setup();
       expect(screen.getByTestId("suspect-badge-t2")).toBeTruthy();
       expect(screen.queryByTestId("suspect-badge-t1")).toBeNull();
+    });
+
+    it("shows agent state for agent panels and not for non-agent panels", () => {
+      setup();
+      expect(screen.getByTestId("agent-state-t2")).toBeTruthy();
+      expect(screen.getByTestId("agent-state-t2").textContent).toBe("working");
+      expect(screen.queryByTestId("agent-state-t1")).toBeNull();
+      expect(screen.queryByTestId("agent-state-t3")).toBeNull();
     });
 
     it("shows suspect warning message", () => {

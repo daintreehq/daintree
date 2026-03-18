@@ -174,6 +174,7 @@ describe("TerminalPersistence", () => {
           worktreeId: "wt-1",
           location: "grid",
           command: "claude --model sonnet-4",
+          agentState: "working",
         },
       ]);
     });
