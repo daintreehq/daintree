@@ -79,6 +79,8 @@ describe("IssueBulkActionBar", () => {
     expect(classes).toContain("shadow-lg");
     expect(classes).toContain("mx-2");
     expect(classes).toContain("mb-2");
+    expect(classes).toContain("bg-surface-panel-elevated/95");
+    expect(classes).toContain("ring-border-subtle");
 
     expect(classes).not.toContain("border-t");
   });
