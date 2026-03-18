@@ -40,4 +40,8 @@ export const terminalConfigClient = {
   importColorScheme: () => {
     return window.electron.terminalConfig.importColorScheme();
   },
+
+  setScreenReaderMode: (mode: "auto" | "on" | "off"): Promise<void> => {
+    return window.electron.terminalConfig.setScreenReaderMode(mode);
+  },
 } as const;

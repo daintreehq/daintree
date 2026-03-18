@@ -42,6 +42,7 @@ export type ActionId =
   | "terminalConfig.setFontFamily"
   | "terminalConfig.setHybridInputEnabled"
   | "terminalConfig.setHybridInputAutoFocus"
+  | "terminalConfig.setScreenReaderMode"
   | "worktreeConfig.get"
   | "worktreeConfig.setPattern"
   | "files.search"

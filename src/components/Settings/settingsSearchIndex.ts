@@ -372,6 +372,28 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
     keywords: ["grid", "layout", "columns", "rows", "panels", "arrangement", "strategy"],
   },
 
+  {
+    id: "terminal-screen-reader",
+    tab: "terminal",
+    tabLabel: "Panel Grid",
+    subtab: "accessibility",
+    subtabLabel: "Accessibility",
+    section: "Screen Reader Mode",
+    title: "Screen Reader Mode",
+    description:
+      "Enable screen reader support for terminal output. Auto mode follows OS accessibility state.",
+    keywords: [
+      "screen reader",
+      "accessibility",
+      "a11y",
+      "voiceover",
+      "jaws",
+      "nvda",
+      "screenReaderMode",
+      "assistive",
+    ],
+  },
+
   // Appearance
   {
     id: "appearance-theme",

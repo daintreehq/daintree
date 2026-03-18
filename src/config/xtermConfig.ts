@@ -24,6 +24,7 @@ export interface TerminalAppearanceConfig {
   performanceMode: boolean;
   scrollback: number;
   theme?: ITheme;
+  screenReaderMode?: boolean;
 }
 
 /**
@@ -64,6 +65,7 @@ export function getXtermOptions(config: TerminalAppearanceConfig): ITerminalOpti
     fontFamily: config.fontFamily || DEFAULT_TERMINAL_FONT_FAMILY,
     theme,
     scrollback: config.scrollback,
+    screenReaderMode: config.screenReaderMode ?? false,
     // Performance mode disables smooth scrolling
     smoothScrollDuration: 0,
   };

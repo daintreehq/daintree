@@ -40,6 +40,7 @@ import { registerMcpServerHandlers } from "./handlers/mcpServer.js";
 import { registerWebviewHandlers } from "./handlers/webview.js";
 import { registerDiagnosticsHandlers } from "./handlers/diagnostics.js";
 import { registerWorkflowHandlers } from "./handlers/workflow.js";
+import { registerAccessibilityHandlers } from "./handlers/accessibility.js";
 import { registerDemoHandlers } from "./handlers/demo.js";
 import { events } from "../services/events.js";
 import { typedHandle, typedSend, sendToRenderer } from "./utils.js";
@@ -111,6 +112,7 @@ export function registerIpcHandlers(deps: HandlerDependencies): () => void {
     register(() => registerWebviewHandlers(deps));
     register(() => registerDiagnosticsHandlers(deps));
     register(() => registerWorkflowHandlers(deps));
+    register(() => registerAccessibilityHandlers());
     register(() => registerDemoHandlers(deps));
   } catch (error) {
     runCleanups(cleanupFunctions);

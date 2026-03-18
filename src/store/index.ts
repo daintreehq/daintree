@@ -91,3 +91,6 @@ export type { TwoPaneSplitConfig, WorktreeRatioEntry } from "./twoPaneSplitStore
 export { useAppAgentStore, cleanupAppAgentStore } from "./appAgentStore";
 
 export { useActionMruStore } from "./actionMruStore";
+
+export { useScreenReaderStore } from "./screenReaderStore";
+export type { ScreenReaderMode } from "./screenReaderStore";

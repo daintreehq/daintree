@@ -11,6 +11,7 @@ import {
   SplitSquareHorizontal,
   Monitor,
   RotateCcw,
+  Ear,
 } from "lucide-react";
 import { useState, useMemo } from "react";
 import { cn } from "@/lib/utils";
@@ -22,9 +23,11 @@ import {
   useLayoutConfigStore,
   usePerformanceModeStore,
   useScrollbackStore,
+  useScreenReaderStore,
   useTerminalInputStore,
   useTwoPaneSplitStore,
 } from "@/store";
+import type { ScreenReaderMode } from "@/store";
 import type { PanelLayoutStrategy, TerminalType } from "@/types";
 import {
   getScrollbackForType,
@@ -80,6 +83,7 @@ const TERMINAL_SUBTABS: SettingsSubtabItem[] = [
   { id: "input", label: "Input" },
   { id: "layout", label: "Layout" },
   { id: "scrollback", label: "Scrollback" },
+  { id: "accessibility", label: "Accessibility" },
 ];
 
 const TERMINAL_SUBTAB_IDS = TERMINAL_SUBTABS.map((s) => s.id);
@@ -98,6 +102,8 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
 
   const hybridInputEnabled = useTerminalInputStore((state) => state.hybridInputEnabled);
   const hybridInputAutoFocus = useTerminalInputStore((state) => state.hybridInputAutoFocus);
+
+  const screenReaderMode = useScreenReaderStore((state) => state.screenReaderMode);
 
   const twoPaneSplitConfig = useTwoPaneSplitStore((state) => state.config);
   const setTwoPaneSplitEnabled = useTwoPaneSplitStore((state) => state.setEnabled);
@@ -205,6 +211,21 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
       }
     } catch (error) {
       console.error("Failed to persist hybrid input focus setting:", error);
+    }
+  };
+
+  const handleScreenReaderModeChange = async (mode: ScreenReaderMode) => {
+    try {
+      const result = await actionService.dispatch(
+        "terminalConfig.setScreenReaderMode",
+        { mode },
+        { source: "user" }
+      );
+      if (!result.ok) {
+        throw new Error(result.error.message);
+      }
+    } catch (error) {
+      console.error("Failed to persist screen reader mode:", error);
     }
   };
 
@@ -558,6 +579,47 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
               </div>
             </div>
           )}
+        </SettingsSection>
+      )}
+
+      {effectiveSubtab === "accessibility" && (
+        <SettingsSection
+          icon={Ear}
+          title="Screen Reader Mode"
+          id="terminal-screen-reader"
+          description="Enable screen reader support so assistive technology can read terminal output. When set to Auto, screen reader mode activates only when the OS reports an active screen reader."
+        >
+          <div className="grid grid-cols-3 gap-2" role="radiogroup" aria-label="Screen reader mode">
+            {(
+              [
+                { value: "auto", label: "Auto", description: "Follow OS" },
+                { value: "on", label: "On", description: "Always enabled" },
+                { value: "off", label: "Off", description: "Disabled" },
+              ] as const
+            ).map(({ value, label, description }) => (
+              <button
+                key={value}
+                onClick={() => handleScreenReaderModeChange(value)}
+                role="radio"
+                aria-checked={screenReaderMode === value}
+                aria-label={`${label} - ${description}`}
+                className={cn(
+                  "flex flex-col items-center justify-center p-3 rounded-[var(--radius-md)] border transition-all",
+                  screenReaderMode === value
+                    ? "bg-canopy-accent/10 border-canopy-accent text-canopy-accent"
+                    : "border-canopy-border hover:bg-tint/5 text-canopy-text/70"
+                )}
+              >
+                <span className="text-xs font-medium">{label}</span>
+                <span className="text-[11px] mt-0.5 opacity-60">{description}</span>
+              </button>
+            ))}
+          </div>
+
+          <p className="text-xs text-canopy-text/50 leading-relaxed">
+            Screen reader mode adds an accessible DOM overlay to each terminal, which has a
+            performance cost. For best results, only enable when using a screen reader.
+          </p>
         </SettingsSection>
       )}
     </div>

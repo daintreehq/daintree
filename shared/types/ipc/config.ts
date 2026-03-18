@@ -20,4 +20,6 @@ export interface TerminalConfig {
   colorSchemeId?: string;
   /** Custom imported color schemes (serialized) */
   customSchemes?: string;
+  /** Screen reader mode: 'auto' (follow OS), 'on', or 'off' (default: 'auto') */
+  screenReaderMode?: "auto" | "on" | "off";
 }

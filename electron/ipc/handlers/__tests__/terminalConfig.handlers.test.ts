@@ -58,6 +58,7 @@ describe("terminalConfig handlers", () => {
         fontFamily: "JetBrains Mono",
         hybridInputEnabled: true,
         hybridInputAutoFocus: false,
+        screenReaderMode: "auto",
       },
     };
   });
@@ -75,6 +76,7 @@ describe("terminalConfig handlers", () => {
     expect(registeredChannels).toContain(CHANNELS.TERMINAL_CONFIG_SET_FONT_FAMILY);
     expect(registeredChannels).toContain(CHANNELS.TERMINAL_CONFIG_SET_HYBRID_INPUT_ENABLED);
     expect(registeredChannels).toContain(CHANNELS.TERMINAL_CONFIG_SET_HYBRID_INPUT_AUTO_FOCUS);
+    expect(registeredChannels).toContain(CHANNELS.TERMINAL_CONFIG_SET_SCREEN_READER_MODE);
 
     cleanup();
     const removedChannels = (
@@ -160,6 +162,27 @@ describe("terminalConfig handlers", () => {
       hybridInputEnabled: false,
       hybridInputAutoFocus: true,
     });
+  });
+
+  it("setScreenReaderMode accepts valid values and rejects invalid", async () => {
+    registerTerminalConfigHandlers();
+    const handler = getHandler(CHANNELS.TERMINAL_CONFIG_SET_SCREEN_READER_MODE);
+
+    await handler({}, "on");
+    expect(storeState.data.terminalConfig).toMatchObject({ screenReaderMode: "on" });
+
+    await handler({}, "off");
+    expect(storeState.data.terminalConfig).toMatchObject({ screenReaderMode: "off" });
+
+    await handler({}, "auto");
+    expect(storeState.data.terminalConfig).toMatchObject({ screenReaderMode: "auto" });
+
+    // Invalid values should be ignored
+    await handler({}, "invalid");
+    expect(storeState.data.terminalConfig).toMatchObject({ screenReaderMode: "auto" });
+
+    await handler({}, true);
+    expect(storeState.data.terminalConfig).toMatchObject({ screenReaderMode: "auto" });
   });
 
   it("normalizes malformed terminalConfig shape before writes", async () => {

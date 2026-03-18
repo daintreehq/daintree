@@ -1,5 +1,10 @@
 import { terminalConfigClient } from "@/clients/terminalConfigClient";
-import { useScrollbackStore, usePerformanceModeStore, useTerminalInputStore } from "@/store";
+import {
+  useScrollbackStore,
+  usePerformanceModeStore,
+  useTerminalInputStore,
+  useScreenReaderStore,
+} from "@/store";
 import { normalizeScrollbackLines } from "@shared/config/scrollback";
 import { logWarn } from "@/utils/logger";
 
@@ -8,6 +13,7 @@ interface TerminalConfig {
   performanceMode?: boolean;
   hybridInputEnabled?: boolean;
   hybridInputAutoFocus?: boolean;
+  screenReaderMode?: "auto" | "on" | "off";
 }
 
 export function normalizeAndApplyScrollback(
@@ -40,6 +46,13 @@ export function normalizeAndApplyScrollback(
       useTerminalInputStore
         .getState()
         .setHybridInputAutoFocus(terminalConfig.hybridInputAutoFocus ?? true);
+      if (
+        terminalConfig.screenReaderMode === "auto" ||
+        terminalConfig.screenReaderMode === "on" ||
+        terminalConfig.screenReaderMode === "off"
+      ) {
+        useScreenReaderStore.getState().setScreenReaderMode(terminalConfig.screenReaderMode);
+      }
     }
   } catch (error) {
     logWarn("Failed to hydrate terminal config", { error });
