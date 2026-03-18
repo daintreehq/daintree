@@ -17,6 +17,7 @@ vi.mock("electron", () => ({
     setPath: vi.fn(),
     commandLine: { appendSwitch: vi.fn() },
     enableSandbox: vi.fn(),
+    disableHardwareAcceleration: vi.fn(),
     on: vi.fn(),
   },
 }));

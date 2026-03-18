@@ -1350,6 +1350,16 @@ export interface IpcInvokeMap {
     result: void;
   };
 
+  // GPU
+  "gpu:get-status": {
+    args: [];
+    result: { hardwareAccelerationDisabled: boolean };
+  };
+  "gpu:set-hardware-acceleration": {
+    args: [enabled: boolean];
+    result: void;
+  };
+
   // Privacy & Data
   "privacy:get-settings": {
     args: [];
