@@ -399,6 +399,10 @@ export class NotesService {
     await resilientUnlink(absolutePath);
   }
 
+  getProjectPath(): string {
+    return this.projectPath;
+  }
+
   setProjectPath(projectPath: string): void {
     this.projectPath = projectPath;
   }

@@ -57,7 +57,7 @@ function getNotesService(): NotesService {
     throw new Error("No active project");
   }
 
-  if (!notesService || notesService["projectPath"] !== currentProject.path) {
+  if (!notesService || notesService.getProjectPath() !== currentProject.path) {
     notesService = new NotesService(currentProject.path);
   }
 

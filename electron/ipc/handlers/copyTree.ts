@@ -39,6 +39,7 @@ import {
 } from "../../schemas/ipc.js";
 import type { CopyTreeCancelPayload, ProjectSettings } from "../../types/index.js";
 import { projectStore } from "../../services/ProjectStore.js";
+import { contextInjectionTracker } from "../../services/ContextInjectionTracker.js";
 
 function getStringField(payload: unknown, key: string): string | undefined {
   if (!payload || typeof payload !== "object") {
@@ -147,10 +148,6 @@ async function getCurrentProjectSettings(): Promise<
 export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void {
   const { mainWindow } = deps;
   const handlers: Array<() => void> = [];
-
-  const injectionsInProgress = new Set<string>();
-  const cancelledInjections = new Set<string>();
-  const activeInjectionIds = new Map<string, string>(); // terminalId -> injectionId mapping
 
   const handleCopyTreeGenerate = async (
     _event: Electron.IpcMainInvokeEvent,
@@ -355,7 +352,7 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
     const validated = parseResult.data;
     const injectionId = validated.injectionId || traceId;
 
-    if (injectionsInProgress.has(validated.terminalId)) {
+    if (contextInjectionTracker.isTerminalInjecting(validated.terminalId)) {
       return {
         content: "",
         fileCount: 0,
@@ -371,8 +368,7 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
       };
     }
 
-    injectionsInProgress.add(validated.terminalId);
-    activeInjectionIds.set(validated.terminalId, injectionId);
+    contextInjectionTracker.beginInjection(validated.terminalId, injectionId);
 
     try {
       const states = await deps.worktreeService.getAllStatesAsync();
@@ -416,9 +412,8 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
       const content = result.content;
 
       for (let i = 0; i < content.length; i += CHUNK_SIZE) {
-        if (cancelledInjections.has(injectionId)) {
+        if (contextInjectionTracker.isCancelled(injectionId)) {
           console.log(`[${traceId}] CopyTree inject cancelled by user`);
-          cancelledInjections.delete(injectionId);
           return {
             content: "",
             fileCount: 0,
@@ -444,9 +439,7 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
       console.log(`[${traceId}] CopyTree inject completed successfully`);
       return result;
     } finally {
-      injectionsInProgress.delete(validated.terminalId);
-      activeInjectionIds.delete(validated.terminalId);
-      cancelledInjections.delete(injectionId);
+      contextInjectionTracker.finishInjection(validated.terminalId, injectionId);
     }
   };
   ipcMain.handle(CHANNELS.COPYTREE_INJECT, handleCopyTreeInject);
@@ -471,10 +464,8 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
     const validated = parseResult.success ? parseResult.data : {};
 
     if (validated.injectionId) {
-      // Only mark for cancellation if this injectionId is actually active
-      const isActive = Array.from(activeInjectionIds.values()).includes(validated.injectionId);
-      if (isActive) {
-        cancelledInjections.add(validated.injectionId);
+      const wasActive = contextInjectionTracker.markCancelled(validated.injectionId);
+      if (wasActive) {
         console.log(`[cancel] Marked injection ${validated.injectionId} for cancellation`);
       } else {
         console.log(
@@ -482,16 +473,11 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
         );
       }
     } else {
-      // Cancel all active injections and call legacy cancelAllContext
-      Array.from(activeInjectionIds.values()).forEach((id) => {
-        cancelledInjections.add(id);
-      });
+      const count = contextInjectionTracker.markAllCancelled();
       if (deps.worktreeService) {
         deps.worktreeService.cancelAllContext();
       }
-      console.log(
-        `[cancel] Marked all ${activeInjectionIds.size} active injections for cancellation`
-      );
+      console.log(`[cancel] Marked all ${count} active injections for cancellation`);
     }
   };
   ipcMain.handle(CHANNELS.COPYTREE_CANCEL, handleCopyTreeCancel);

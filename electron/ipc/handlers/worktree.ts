@@ -13,67 +13,15 @@ import type {
 } from "../../../shared/types/ipc/worktree.js";
 import type { WorktreeState } from "../../../shared/types/worktree.js";
 import { generateWorktreePath, validatePathPattern } from "../../../shared/utils/pathPattern.js";
-import { GitService } from "../../services/GitService.js";
 import { projectStore } from "../../services/ProjectStore.js";
 import { logDebug, logError } from "../../utils/logger.js";
 import { fileSearchService } from "../../services/FileSearchService.js";
 import { checkRateLimit } from "../utils.js";
 import { resolveWorktreePattern } from "../../utils/worktreePattern.js";
-
-// In-memory map to track taskId -> worktreeIds for orchestration
-// Scoped by projectId to avoid cross-project collisions
-// This is stored in-process since taskId is transient orchestration metadata
-const taskWorktreeMap = new Map<string, Map<string, Set<string>>>();
-
-function getProjectTaskMap(projectId: string): Map<string, Set<string>> {
-  if (!taskWorktreeMap.has(projectId)) {
-    taskWorktreeMap.set(projectId, new Map());
-  }
-  return taskWorktreeMap.get(projectId)!;
-}
-
-function addTaskWorktreeMapping(projectId: string, taskId: string, worktreeId: string): void {
-  const projectMap = getProjectTaskMap(projectId);
-  if (!projectMap.has(taskId)) {
-    projectMap.set(taskId, new Set());
-  }
-  projectMap.get(taskId)!.add(worktreeId);
-}
-
-function removeTaskWorktreeMapping(projectId: string, taskId: string, worktreeId: string): void {
-  const projectMap = getProjectTaskMap(projectId);
-  const worktrees = projectMap.get(taskId);
-  if (worktrees) {
-    worktrees.delete(worktreeId);
-    if (worktrees.size === 0) {
-      projectMap.delete(taskId);
-    }
-  }
-}
-
-function getWorktreeIdsForTask(projectId: string, taskId: string): string[] {
-  const projectMap = getProjectTaskMap(projectId);
-  const worktrees = projectMap.get(taskId);
-  return worktrees ? Array.from(worktrees) : [];
-}
-
-// Commented out for now - will be needed when implementing project switch cleanup
-// function clearProjectMappings(projectId: string): void {
-//   taskWorktreeMap.delete(projectId);
-// }
+import { taskWorktreeService } from "../../services/TaskWorktreeService.js";
 
 export function registerWorktreeHandlers(deps: HandlerDependencies): () => void {
   const handlers: Array<() => void> = [];
-
-  const gitServiceCache = new Map<string, GitService>();
-  function getGitService(path: string): GitService {
-    let service = gitServiceCache.get(path);
-    if (!service) {
-      service = new GitService(path);
-      gitServiceCache.set(path, service);
-    }
-    return service;
-  }
 
   const handleWorktreeGetAll = async () => {
     if (!deps.worktreeService) {
@@ -198,7 +146,7 @@ export function registerWorktreeHandlers(deps: HandlerDependencies): () => void 
     const initialPath = generateWorktreePath(rootPath, branchName, pattern);
 
     // Auto-resolve path conflicts by finding an available path
-    const gitService = getGitService(rootPath);
+    const gitService = taskWorktreeService.getGitService(rootPath);
     return gitService.findAvailablePath(initialPath);
   };
   ipcMain.handle(CHANNELS.WORKTREE_GET_DEFAULT_PATH, handleWorktreeGetDefaultPath);
@@ -222,7 +170,7 @@ export function registerWorktreeHandlers(deps: HandlerDependencies): () => void 
       throw new Error("Invalid branchName: must be a non-empty string");
     }
 
-    const gitService = getGitService(rootPath);
+    const gitService = taskWorktreeService.getGitService(rootPath);
     return gitService.findAvailableBranchName(branchName);
   };
   ipcMain.handle(CHANNELS.WORKTREE_GET_AVAILABLE_BRANCH, handleWorktreeGetAvailableBranch);
@@ -305,7 +253,7 @@ export function registerWorktreeHandlers(deps: HandlerDependencies): () => void 
       throw new Error("Invalid useMergeBase");
     }
 
-    const gitService = getGitService(cwd);
+    const gitService = taskWorktreeService.getGitService(cwd);
     return gitService.compareWorktrees(branch1, branch2, filePath, useMergeBase);
   };
   ipcMain.handle(CHANNELS.GIT_COMPARE_WORKTREES, handleGitCompareWorktrees);
@@ -472,7 +420,7 @@ export function registerWorktreeHandlers(deps: HandlerDependencies): () => void 
     const effectiveBaseBranch = baseBranch || mainWorktree?.branch || "main";
 
     // Generate collision-safe branch name: task-{taskId} with suffix if needed
-    const gitService = getGitService(rootPath);
+    const gitService = taskWorktreeService.getGitService(rootPath);
     const baseBranchName = `task-${taskId}`;
     const availableBranchName = await gitService.findAvailableBranchName(baseBranchName);
 
@@ -507,7 +455,7 @@ export function registerWorktreeHandlers(deps: HandlerDependencies): () => void 
       }
 
       // Store the taskId mapping
-      addTaskWorktreeMapping(project.id, taskId, worktreeId);
+      taskWorktreeService.addTaskWorktreeMapping(project.id, taskId, worktreeId);
 
       logDebug("Worktree created for task", {
         worktreeId,
@@ -631,7 +579,7 @@ export function registerWorktreeHandlers(deps: HandlerDependencies): () => void 
       throw new Error("No active project found");
     }
 
-    const worktreeIds = getWorktreeIdsForTask(currentProjectId, taskId);
+    const worktreeIds = taskWorktreeService.getWorktreeIdsForTask(currentProjectId, taskId);
     const results: WorktreeState[] = [];
 
     for (const worktreeId of worktreeIds) {
@@ -691,7 +639,7 @@ export function registerWorktreeHandlers(deps: HandlerDependencies): () => void 
       throw new Error("No active project found");
     }
 
-    const worktreeIds = getWorktreeIdsForTask(currentProjectId, taskId);
+    const worktreeIds = taskWorktreeService.getWorktreeIdsForTask(currentProjectId, taskId);
 
     if (worktreeIds.length === 0) {
       // No worktrees to clean up, return silently (idempotent)
@@ -733,7 +681,7 @@ export function registerWorktreeHandlers(deps: HandlerDependencies): () => void 
             taskId,
             projectId: currentProjectId,
           });
-          removeTaskWorktreeMapping(currentProjectId, taskId, worktreeId);
+          taskWorktreeService.removeTaskWorktreeMapping(currentProjectId, taskId, worktreeId);
           continue;
         }
 
@@ -747,7 +695,7 @@ export function registerWorktreeHandlers(deps: HandlerDependencies): () => void 
         }
 
         // Remove from tracking after successful deletion
-        removeTaskWorktreeMapping(currentProjectId, taskId, worktreeId);
+        taskWorktreeService.removeTaskWorktreeMapping(currentProjectId, taskId, worktreeId);
       } catch (error) {
         const errorMessage = error instanceof Error ? error.message : String(error);
 
@@ -758,7 +706,7 @@ export function registerWorktreeHandlers(deps: HandlerDependencies): () => void 
             taskId,
             projectId: currentProjectId,
           });
-          removeTaskWorktreeMapping(currentProjectId, taskId, worktreeId);
+          taskWorktreeService.removeTaskWorktreeMapping(currentProjectId, taskId, worktreeId);
         } else {
           logError(
             "Failed to cleanup worktree",
@@ -877,6 +825,5 @@ export function registerWorktreeHandlers(deps: HandlerDependencies): () => void 
 
   return () => {
     handlers.forEach((cleanup) => cleanup());
-    gitServiceCache.clear();
   };
 }
