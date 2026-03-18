@@ -565,12 +565,10 @@ describe("TerminalResizeController", () => {
 
     it("postTask callback applies resize and clears resizeJob", async () => {
       const managed = createManagedTerminal();
-      attachCellDims(managed);
+      attachCellDims(managed); // width:10, height:20 → 1200/10=120 cols, 900/20=45 rows
       managed.isFocused = false;
       managed.isVisible = false;
       managed.terminal.buffer.active.length = 300;
-      managed.latestCols = 100;
-      managed.latestRows = 30;
 
       const dataBuffer = mockDataBuffer();
       const controller = new TerminalResizeController({
@@ -585,7 +583,7 @@ describe("TerminalResizeController", () => {
 
       expect(managed.resizeJob).toBeUndefined();
       expect(dataBuffer.flushForTerminal).toHaveBeenCalledWith("term-1");
-      expect(managed.terminal.resize).toHaveBeenCalledWith(100, 30);
+      expect(managed.terminal.resize).toHaveBeenCalledWith(120, 45);
     });
   });
 

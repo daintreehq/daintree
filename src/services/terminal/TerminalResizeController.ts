@@ -347,7 +347,7 @@ export class TerminalResizeController {
           if (e instanceof Error && e.name !== "AbortError") throw e;
         });
     } else {
-      const timerId = window.setTimeout(() => {
+      const timerId = setTimeout(() => {
         const current = this.deps.getInstance(id);
         if (current) {
           current.resizeDebounceTimer = undefined;
@@ -364,7 +364,7 @@ export class TerminalResizeController {
   private debounceResize(id: string, managed: ManagedTerminal, cols: number, rows: number): void {
     this.clearResizeJob(managed);
 
-    const timeoutId = window.setTimeout(() => {
+    const timeoutId = setTimeout(() => {
       const current = this.deps.getInstance(id);
       if (current) {
         current.resizeDebounceTimer = undefined;
