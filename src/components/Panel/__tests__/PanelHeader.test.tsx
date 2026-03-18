@@ -127,12 +127,41 @@ describe("PanelHeader", () => {
   });
 
   describe("Restore to Grid casing", () => {
-    it("renders with Title Case 'Restore to Grid'", () => {
+    it("renders with Title Case 'Restore to Grid' and double-click hint", () => {
       render(<PanelHeader {...makeProps({ location: "dock", onRestore: vi.fn() })} />);
       const btn = screen.getByLabelText("Restore to Grid");
       expect(btn).toBeDefined();
       const tooltips = screen.getAllByTestId("tooltip-content");
-      const restoreTooltip = tooltips.find((el) => el.textContent === "Restore to Grid");
+      const restoreTooltip = tooltips.find(
+        (el) =>
+          el.textContent?.includes("Restore to Grid") &&
+          el.textContent?.includes("double-click header")
+      );
+      expect(restoreTooltip).toBeDefined();
+    });
+  });
+
+  describe("Maximize tooltip", () => {
+    it("includes double-click header hint", () => {
+      render(<PanelHeader {...makeProps({ onToggleMaximize: vi.fn() })} />);
+      const tooltips = screen.getAllByTestId("tooltip-content");
+      const maximizeTooltip = tooltips.find(
+        (el) =>
+          el.textContent?.includes("Maximize") && el.textContent?.includes("double-click header")
+      );
+      expect(maximizeTooltip).toBeDefined();
+    });
+  });
+
+  describe("Restore Grid View tooltip", () => {
+    it("includes double-click header hint when maximized", () => {
+      render(<PanelHeader {...makeProps({ onToggleMaximize: vi.fn(), isMaximized: true })} />);
+      const tooltips = screen.getAllByTestId("tooltip-content");
+      const restoreTooltip = tooltips.find(
+        (el) =>
+          el.textContent?.includes("Restore Grid View") &&
+          el.textContent?.includes("double-click header")
+      );
       expect(restoreTooltip).toBeDefined();
     });
   });
