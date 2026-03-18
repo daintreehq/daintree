@@ -140,6 +140,7 @@ export const WorktreeCard = React.memo(function WorktreeCard({
   dragHandleActivatorRef,
   isDraggingSort,
 }: WorktreeCardProps) {
+  "use memo";
   const isExpanded = useWorktreeSelectionStore(
     useCallback((state) => state.expandedWorktrees.has(worktree.id), [worktree.id])
   );

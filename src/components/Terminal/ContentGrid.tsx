@@ -408,6 +408,7 @@ function EmptyState({
 }
 
 export function ContentGrid({ className, defaultCwd, agentAvailability }: ContentGridProps) {
+  "use memo";
   const { showMenu } = useNativeContextMenu();
   const {
     terminals,

@@ -119,6 +119,7 @@ function TerminalPaneComponent({
   onTabRename,
   onAddTab,
 }: TerminalPaneProps) {
+  "use memo";
   const containerRef = useRef<HTMLDivElement>(null);
   const prevFocusedRef = useRef(isFocused);
   const justFocusedUntilRef = useRef<number>(0);
