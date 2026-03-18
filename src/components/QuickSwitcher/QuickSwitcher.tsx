@@ -58,7 +58,7 @@ export function QuickSwitcher({
           key={item.id}
           item={item}
           isSelected={isSelected}
-          onClick={() => handleSelect(item)}
+          onSelect={handleSelect}
         />
       )}
       label="Quick switch"
