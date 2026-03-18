@@ -34,8 +34,9 @@ describe("removeStartupSkeleton", () => {
   }
 
   function flushRaf() {
-    for (const [id, cb] of rafCallbacks) {
-      rafCallbacks.delete(id);
+    const entries = [...rafCallbacks];
+    rafCallbacks.clear();
+    for (const [, cb] of entries) {
       cb(performance.now());
     }
   }
