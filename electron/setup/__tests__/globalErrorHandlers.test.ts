@@ -28,7 +28,7 @@ const windowMock = vi.hoisted(() => ({
   webContents: webContentsMock,
 }));
 
-const getMainWindowMock = vi.hoisted(() => vi.fn(() => windowMock));
+const getMainWindowMock = vi.hoisted(() => vi.fn((): typeof windowMock | null => windowMock));
 
 vi.mock("electron", () => ({
   app: appMock,
@@ -54,7 +54,10 @@ vi.mock("../../store.js", () => ({
   store: storeMock,
 }));
 
-import { registerGlobalErrorHandlers } from "../globalErrorHandlers.js";
+import {
+  registerGlobalErrorHandlers,
+  _resetHandlingFatalForTesting,
+} from "../globalErrorHandlers.js";
 
 describe("globalErrorHandlers", () => {
   let uncaughtHandler: (error: Error) => void;
@@ -66,6 +69,13 @@ describe("globalErrorHandlers", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    _resetHandlingFatalForTesting();
+
+    // Reset mock return values
+    getMainWindowMock.mockReturnValue(windowMock);
+    windowMock.isDestroyed.mockReturnValue(false);
+    webContentsMock.isDestroyed.mockReturnValue(false);
+    storeMock.get.mockReturnValue([]);
 
     // Save existing listeners
     originalListeners.uncaughtException = process.listeners(

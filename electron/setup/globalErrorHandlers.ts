@@ -8,6 +8,11 @@ import type { AppError } from "../../shared/types/ipc/errors.js";
 
 let handlingFatal = false;
 
+/** @internal Reset re-entrancy guard for testing only. */
+export function _resetHandlingFatalForTesting(): void {
+  handlingFatal = false;
+}
+
 function buildFatalAppError(kind: string, error: unknown): AppError {
   const message = error instanceof Error ? error.message : String(error ?? "Unknown error");
   const id = `fatal-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
