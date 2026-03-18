@@ -139,6 +139,35 @@ describe("worktreeDataStore.refresh", () => {
     expect(useWorktreeDataStore.getState().worktrees.get("feature-new")).toBeDefined();
   });
 
+  it("preserves object reference for unchanged worktrees across a refresh cycle", async () => {
+    const main = createMockWorktree("main", { isMainWorktree: true, branch: "main" });
+    const feature = createMockWorktree("feature-stable", {
+      modifiedCount: 3,
+      mood: "active",
+    });
+
+    getAllMock.mockResolvedValueOnce([main, feature]);
+    refreshMock.mockResolvedValue(undefined);
+
+    useWorktreeDataStore.getState().initialize();
+    await vi.waitFor(() => {
+      expect(useWorktreeDataStore.getState().isInitialized).toBe(true);
+    });
+
+    const refBefore = useWorktreeDataStore.getState().worktrees.get("feature-stable");
+    expect(refBefore).toBeDefined();
+
+    // Refresh with identical data for feature-stable; only main changes.
+    const mainChanged = { ...main, modifiedCount: 1 };
+    const featureUnchanged = { ...feature };
+    getAllMock.mockResolvedValueOnce([mainChanged, featureUnchanged]);
+
+    await useWorktreeDataStore.getState().refresh();
+
+    const refAfter = useWorktreeDataStore.getState().worktrees.get("feature-stable");
+    expect(refAfter).toBe(refBefore);
+  });
+
   it("rejects stale onUpdate events arriving after a project switch (listenerGeneration guard)", async () => {
     const main = createMockWorktree("main", { isMainWorktree: true, branch: "main" });
     const foreignWorktree = createMockWorktree("foreign-wt");

@@ -74,6 +74,31 @@ function isSnapshotValidForProject(snapshot: ProjectSnapshot, projectPath: strin
   return true;
 }
 
+function worktreeStatesEqual(a: WorktreeState, b: WorktreeState): boolean {
+  return (
+    a.branch === b.branch &&
+    a.path === b.path &&
+    a.name === b.name &&
+    a.isCurrent === b.isCurrent &&
+    a.isMainWorktree === b.isMainWorktree &&
+    a.modifiedCount === b.modifiedCount &&
+    a.summary === b.summary &&
+    a.mood === b.mood &&
+    a.aiNote === b.aiNote &&
+    a.aiNoteTimestamp === b.aiNoteTimestamp &&
+    a.lastActivityTimestamp === b.lastActivityTimestamp &&
+    a.prNumber === b.prNumber &&
+    a.prUrl === b.prUrl &&
+    a.prState === b.prState &&
+    a.prTitle === b.prTitle &&
+    a.issueNumber === b.issueNumber &&
+    a.issueTitle === b.issueTitle &&
+    a.worktreeChanges === b.worktreeChanges &&
+    a.lifecycleStatus === b.lifecycleStatus &&
+    a.taskId === b.taskId
+  );
+}
+
 function mergeFetchedWorktrees(
   fetchedStates: WorktreeState[],
   existingWorktrees: Map<string, WorktreeState>,
@@ -87,7 +112,7 @@ function mergeFetchedWorktrees(
     if (!fetched) continue;
 
     const branchChanged = fetched.branch !== existing.branch;
-    map.set(id, {
+    const merged = {
       ...fetched,
       prNumber: branchChanged ? fetched.prNumber : (fetched.prNumber ?? existing.prNumber),
       prUrl: branchChanged ? fetched.prUrl : (fetched.prUrl ?? existing.prUrl),
@@ -97,7 +122,12 @@ function mergeFetchedWorktrees(
         ? fetched.issueNumber
         : (fetched.issueNumber ?? existing.issueNumber),
       issueTitle: branchChanged ? fetched.issueTitle : (fetched.issueTitle ?? existing.issueTitle),
-    });
+    };
+
+    // Preserve the existing object reference when nothing has changed so that
+    // React.memo comparisons on WorktreeCard can bail out without a field-by-field
+    // check on every poll cycle.
+    map.set(id, worktreeStatesEqual(existing, merged) ? existing : merged);
   }
 
   // Persisted manual issue associations should override discovered metadata.
@@ -106,11 +136,12 @@ function mergeFetchedWorktrees(
       const worktree = map.get(id);
       if (!worktree) continue;
 
-      map.set(id, {
+      const withAssoc = {
         ...worktree,
         issueNumber: assoc.issueNumber,
         issueTitle: assoc.issueTitle,
-      });
+      };
+      map.set(id, worktreeStatesEqual(worktree, withAssoc) ? worktree : withAssoc);
     }
   }
 
