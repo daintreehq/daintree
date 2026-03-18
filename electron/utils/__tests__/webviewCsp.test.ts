@@ -65,10 +65,16 @@ describe("webviewCsp", () => {
       const csp = getLocalhostDevCSP();
 
       expect(csp).toContain("default-src 'self' http://localhost:* http://127.0.0.1:*");
-      expect(csp).toContain("script-src 'self' 'unsafe-inline' 'unsafe-eval'");
+      expect(csp).toContain("script-src 'self' 'unsafe-inline'");
       expect(csp).toContain("connect-src 'self' ws://localhost:* ws://127.0.0.1:*");
       expect(csp).toContain("object-src 'none'");
       expect(csp).toContain("base-uri 'self'");
+    });
+
+    it("does not include unsafe-eval in script-src", () => {
+      const csp = getLocalhostDevCSP();
+
+      expect(csp).not.toContain("'unsafe-eval'");
     });
 
     it("includes secure localhost support (https and wss)", () => {

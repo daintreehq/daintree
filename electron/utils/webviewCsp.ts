@@ -31,11 +31,17 @@ export function classifyPartition(partition: string): WebviewPartitionType {
  * Returns the CSP policy string for localhost-based dev server webviews.
  * Used for browser panels and dev preview panels that load localhost content.
  * Includes https: and wss: for secure localhost dev servers.
+ *
+ * 'unsafe-inline' is kept in script-src and style-src because dev servers
+ * (Vite, Next.js, webpack) inject inline scripts and <style> tags for HMR.
+ * 'unsafe-eval' is intentionally omitted — Vite 6 does not require it, and
+ * the CSP is applied at the session level before the framework is known, so
+ * we default to the stricter policy.
  */
 export function getLocalhostDevCSP(): string {
   return [
     "default-src 'self' http://localhost:* http://127.0.0.1:* https://localhost:* https://127.0.0.1:*",
-    "script-src 'self' 'unsafe-inline' 'unsafe-eval' http://localhost:* http://127.0.0.1:* https://localhost:* https://127.0.0.1:*",
+    "script-src 'self' 'unsafe-inline' http://localhost:* http://127.0.0.1:* https://localhost:* https://127.0.0.1:*",
     "style-src 'self' 'unsafe-inline' http://localhost:* http://127.0.0.1:* https://localhost:* https://127.0.0.1:*",
     "connect-src 'self' ws://localhost:* ws://127.0.0.1:* wss://localhost:* wss://127.0.0.1:* http://localhost:* http://127.0.0.1:* https://localhost:* https://127.0.0.1:*",
     "img-src 'self' data: blob: https: http://localhost:* http://127.0.0.1:* https://localhost:* https://127.0.0.1:*",
