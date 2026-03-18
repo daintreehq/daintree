@@ -50,6 +50,36 @@ export function registerPreferencesActions(
     },
   }));
 
+  actions.set("preferences.showGridAgentHighlights.set", () => ({
+    id: "preferences.showGridAgentHighlights.set",
+    title: "Set Grid Agent Highlights Visibility",
+    description: "Show or hide agent state borders on grid panels",
+    category: "preferences",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    argsSchema: z.object({ show: z.boolean() }),
+    run: async (args: unknown) => {
+      const { show } = args as { show: boolean };
+      usePreferencesStore.getState().setShowGridAgentHighlights(show);
+    },
+  }));
+
+  actions.set("preferences.showDockAgentHighlights.set", () => ({
+    id: "preferences.showDockAgentHighlights.set",
+    title: "Set Dock Agent Highlights Visibility",
+    description: "Show or hide agent state borders on dock items",
+    category: "preferences",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    argsSchema: z.object({ show: z.boolean() }),
+    run: async (args: unknown) => {
+      const { show } = args as { show: boolean };
+      usePreferencesStore.getState().setShowDockAgentHighlights(show);
+    },
+  }));
+
   actions.set("window.toggleFullscreen", () => ({
     id: "window.toggleFullscreen",
     title: "Toggle Fullscreen",

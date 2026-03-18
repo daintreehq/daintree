@@ -249,6 +249,28 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
     description: "Show problems panel button in the toolbar",
     keywords: ["developer", "debug", "problems", "panel", "toolbar"],
   },
+  {
+    id: "general-grid-agent-highlights",
+    tab: "general",
+    tabLabel: "General",
+    subtab: "display",
+    subtabLabel: "Display",
+    section: "Display",
+    title: "Grid Panel Agent Highlights",
+    description: "Show waiting and working state borders on grid panels",
+    keywords: ["agent", "highlight", "border", "waiting", "working", "grid", "panel", "state"],
+  },
+  {
+    id: "general-dock-agent-highlights",
+    tab: "general",
+    tabLabel: "General",
+    subtab: "display",
+    subtabLabel: "Display",
+    section: "Display",
+    title: "Dock Item Agent Highlights",
+    description: "Show waiting state borders on dock items",
+    keywords: ["agent", "highlight", "border", "waiting", "dock", "item", "state"],
+  },
 
   // Keyboard Shortcuts
   {

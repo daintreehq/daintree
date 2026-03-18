@@ -9,6 +9,7 @@ import type { PanelKind, TerminalType, AgentState } from "@/types";
 import type { ActivityState } from "@/components/Terminal/TerminalPane";
 import type { TabInfo } from "./TabButton";
 import { useDockBlockedState } from "@/components/Layout/useDockBlockedState";
+import { usePreferencesStore } from "@/store";
 
 /**
  * Base props for all panel types.
@@ -141,6 +142,7 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
   }, [titleEditing.isEditingTitle]);
 
   const showGridAttention = location === "grid" && !isMaximized && (gridPanelCount ?? 2) > 1;
+  const showGridAgentHighlights = usePreferencesStore((s) => s.showGridAgentHighlights);
 
   // Determine effective agent state for container border styling.
   // ambientAgentState takes priority so tab groups can surface highest-urgency
@@ -251,11 +253,11 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
             !isMaximized &&
             (isFocused && showGridAttention
               ? "terminal-selected"
-              : showGridAttention && blockedState === "waiting"
+              : showGridAttention && showGridAgentHighlights && blockedState === "waiting"
                 ? "panel-state-waiting"
                 : showGridAttention && blockedState === "failed"
                   ? "panel-state-failed"
-                  : showGridAttention && isWorkingState
+                  : showGridAttention && showGridAgentHighlights && isWorkingState
                     ? "panel-state-working"
                     : "border-overlay hover:border-tint/[0.08]"),
           location === "grid" && isMaximized && "border-0 rounded-none z-[var(--z-maximized)]",

@@ -503,6 +503,8 @@ describe("preferences action hardening", () => {
     expectRegistryToMatchIds(actions, [
       "preferences.showProjectPulse.set",
       "preferences.showDeveloperTools.set",
+      "preferences.showGridAgentHighlights.set",
+      "preferences.showDockAgentHighlights.set",
       "window.toggleFullscreen",
       "window.reload",
       "window.forceReload",
@@ -560,6 +562,16 @@ describe("preferences action hardening", () => {
 
     expect(usePreferencesStore.getState().showProjectPulse).toBe(false);
     expect(usePreferencesStore.getState().showDeveloperTools).toBe(true);
+
+    await expect(
+      service.dispatch("preferences.showGridAgentHighlights.set", { show: true })
+    ).resolves.toEqual({ ok: true, result: undefined });
+    await expect(
+      service.dispatch("preferences.showDockAgentHighlights.set", { show: true })
+    ).resolves.toEqual({ ok: true, result: undefined });
+
+    expect(usePreferencesStore.getState().showGridAgentHighlights).toBe(true);
+    expect(usePreferencesStore.getState().showDockAgentHighlights).toBe(true);
   });
 
   it.each([

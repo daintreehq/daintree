@@ -237,12 +237,20 @@ export function SettingsDialog({
   const twoPaneSplitConfig = useTwoPaneSplitStore((s) => s.config);
   const showProjectPulse = usePreferencesStore((s) => s.showProjectPulse);
   const showDeveloperTools = usePreferencesStore((s) => s.showDeveloperTools);
+  const showGridAgentHighlights = usePreferencesStore((s) => s.showGridAgentHighlights);
+  const showDockAgentHighlights = usePreferencesStore((s) => s.showDockAgentHighlights);
 
   const modifiedTabs = useMemo(() => {
     const tabs = new Set<SettingsTab>();
 
-    // General defaults: showProjectPulse=true, showDeveloperTools=false
-    if (!showProjectPulse || showDeveloperTools) tabs.add("general");
+    // General defaults: showProjectPulse=true, showDeveloperTools=false, showGridAgentHighlights=false, showDockAgentHighlights=false
+    if (
+      !showProjectPulse ||
+      showDeveloperTools ||
+      showGridAgentHighlights ||
+      showDockAgentHighlights
+    )
+      tabs.add("general");
 
     // Terminal defaults: performanceMode=false, scrollback=SCROLLBACK_DEFAULT, strategy=automatic,
     // hybridInput=true, hybridAutoFocus=true, twoPaneSplit.enabled=true, preferPreview=false, ratio=0.5
@@ -263,6 +271,8 @@ export function SettingsDialog({
   }, [
     showProjectPulse,
     showDeveloperTools,
+    showGridAgentHighlights,
+    showDockAgentHighlights,
     performanceMode,
     scrollbackLines,
     layoutConfig.strategy,

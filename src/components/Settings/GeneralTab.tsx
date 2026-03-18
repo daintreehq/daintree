@@ -7,6 +7,8 @@ import {
   AlertCircle,
   Activity,
   Wrench,
+  LayoutGrid,
+  PanelBottom,
   Keyboard,
   Info,
   ExternalLink,
@@ -102,6 +104,8 @@ export function GeneralTab({
 
   const showProjectPulse = usePreferencesStore((s) => s.showProjectPulse);
   const showDeveloperTools = usePreferencesStore((s) => s.showDeveloperTools);
+  const showGridAgentHighlights = usePreferencesStore((s) => s.showGridAgentHighlights);
+  const showDockAgentHighlights = usePreferencesStore((s) => s.showDockAgentHighlights);
 
   useEffect(() => {
     return () => {
@@ -510,6 +514,56 @@ export function GeneralTab({
               onReset={() =>
                 void actionService.dispatch(
                   "preferences.showDeveloperTools.set",
+                  { show: false },
+                  { source: "user" }
+                )
+              }
+            />
+          </div>
+
+          <div id="general-grid-agent-highlights">
+            <SettingsSwitchCard
+              icon={LayoutGrid}
+              title="Grid Panel Agent Highlights"
+              subtitle="Show waiting and working state borders on grid panels. Failed state borders are always visible."
+              isEnabled={showGridAgentHighlights}
+              onChange={() =>
+                void actionService.dispatch(
+                  "preferences.showGridAgentHighlights.set",
+                  { show: !showGridAgentHighlights },
+                  { source: "user" }
+                )
+              }
+              ariaLabel="Grid Panel Agent Highlights Toggle"
+              isModified={showGridAgentHighlights}
+              onReset={() =>
+                void actionService.dispatch(
+                  "preferences.showGridAgentHighlights.set",
+                  { show: false },
+                  { source: "user" }
+                )
+              }
+            />
+          </div>
+
+          <div id="general-dock-agent-highlights">
+            <SettingsSwitchCard
+              icon={PanelBottom}
+              title="Dock Item Agent Highlights"
+              subtitle="Show waiting state borders on dock items. Failed state borders are always visible."
+              isEnabled={showDockAgentHighlights}
+              onChange={() =>
+                void actionService.dispatch(
+                  "preferences.showDockAgentHighlights.set",
+                  { show: !showDockAgentHighlights },
+                  { source: "user" }
+                )
+              }
+              ariaLabel="Dock Item Agent Highlights Toggle"
+              isModified={showDockAgentHighlights}
+              onReset={() =>
+                void actionService.dispatch(
+                  "preferences.showDockAgentHighlights.set",
                   { show: false },
                   { source: "user" }
                 )

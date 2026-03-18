@@ -20,6 +20,7 @@ import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { useDockPanelPortal } from "./DockPanelOffscreenContainer";
 import { useDockBlockedState } from "./useDockBlockedState";
 import { handleDockInteractOutside } from "./dockPopoverGuard";
+import { usePreferencesStore } from "@/store";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 
 interface DockedTerminalItemProps {
@@ -184,6 +185,7 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
   const brandColor = getBrandColorHex(terminal.agentId ?? terminal.type);
   const agentState = terminal.agentState;
   const blockedState = useDockBlockedState(terminal.agentState);
+  const showDockAgentHighlights = usePreferencesStore((s) => s.showDockAgentHighlights);
   // Use shortened title without command summary for dock items
   const displayTitle = getBaseTitle(terminal.title);
   // Only show icon for non-idle, non-completed states (reduce noise)
@@ -209,6 +211,7 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
                 blockedState === "failed" &&
                 "bg-[var(--dock-item-bg-failed)] border-[var(--dock-item-border-failed)]",
               !isOpen &&
+                showDockAgentHighlights &&
                 blockedState === "waiting" &&
                 "bg-[var(--dock-item-bg-waiting)] border-[var(--dock-item-border-waiting)]",
               isDeprioritized && "opacity-50"

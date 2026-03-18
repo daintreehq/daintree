@@ -69,6 +69,8 @@ export type ActionId =
   | "git.getStagingStatus"
   | "preferences.showProjectPulse.set"
   | "preferences.showDeveloperTools.set"
+  | "preferences.showGridAgentHighlights.set"
+  | "preferences.showDockAgentHighlights.set"
   | "window.toggleFullscreen"
   | "window.reload"
   | "window.forceReload"
