@@ -362,32 +362,32 @@ export const AGENT_REGISTRY: Record<string, AgentConfig> = {
     tooltip: "quick exploration",
     version: {
       args: ["--version"],
-      githubRepo: "google/generative-ai-cli",
-      npmPackage: "@google/generative-ai-cli",
-      releaseNotesUrl: "https://github.com/google/generative-ai-cli/releases",
+      githubRepo: "google-gemini/gemini-cli",
+      npmPackage: "@google/gemini-cli",
+      releaseNotesUrl: "https://github.com/google-gemini/gemini-cli/releases",
     },
     update: {
-      npm: "npm install -g @google/generative-ai-cli@latest",
+      npm: "npm install -g @google/gemini-cli@latest",
     },
     install: {
-      docsUrl: "https://ai.google.dev/gemini-api/docs/cli",
+      docsUrl: "https://github.com/google-gemini/gemini-cli#readme",
       byOs: {
         macos: [
           {
             label: "npm",
-            commands: ["npm install -g @google/generative-ai-cli"],
+            commands: ["npm install -g @google/gemini-cli"],
           },
         ],
         windows: [
           {
             label: "npm",
-            commands: ["npm install -g @google/generative-ai-cli"],
+            commands: ["npm install -g @google/gemini-cli"],
           },
         ],
         linux: [
           {
             label: "npm",
-            commands: ["npm install -g @google/generative-ai-cli"],
+            commands: ["npm install -g @google/gemini-cli"],
           },
         ],
       },
@@ -472,7 +472,7 @@ export const AGENT_REGISTRY: Record<string, AgentConfig> = {
         label: "Gemini CLI",
         versionArgs: ["--version"],
         severity: "fatal",
-        installUrl: "https://ai.google.dev/gemini-api/docs/cli",
+        installUrl: "https://github.com/google-gemini/gemini-cli#readme",
       },
     ],
   },
