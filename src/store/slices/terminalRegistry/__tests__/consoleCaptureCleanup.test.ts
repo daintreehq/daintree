@@ -65,7 +65,6 @@ describe("removeTerminal consoleCaptureStore cleanup", () => {
       focusedId: null,
       maximizedId: null,
       commandQueue: [],
-      activeTabByGroup: new Map(),
     });
     useConsoleCaptureStore.setState({ messages: new Map() });
   });

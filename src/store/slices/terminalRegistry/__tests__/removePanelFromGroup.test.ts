@@ -66,7 +66,6 @@ describe("removePanelFromGroup", () => {
       focusedId: null,
       maximizedId: null,
       commandQueue: [],
-      activeTabByGroup: new Map(),
     });
   });
 

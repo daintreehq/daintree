@@ -33,9 +33,9 @@ export function GridTabGroup({
   const reorderPanelsInGroup = useTerminalStore((state) => state.reorderPanelsInGroup);
   const updateTitle = useTerminalStore((state) => state.updateTitle);
 
-  // Subscribe to activeTabByGroup for reactive updates
+  // Subscribe to registry's active tab for reactive updates
   const storedActiveTabId = useTerminalStore(
-    (state) => state.activeTabByGroup.get(group.id) ?? null
+    (state) => state.tabGroups.get(group.id)?.activeTabId ?? null
   );
 
   // Reconcile active tab - ensure it's valid and in this group

@@ -59,7 +59,6 @@ describe("updateAgentState store action (#3217)", () => {
       focusedId: null,
       maximizedId: null,
       commandQueue: [],
-      activeTabByGroup: new Map(),
     });
   });
 

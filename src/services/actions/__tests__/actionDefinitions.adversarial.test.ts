@@ -291,7 +291,6 @@ beforeEach(() => {
     terminals: [],
     trashedTerminals: new Map(),
     tabGroups: new Map(),
-    activeTabByGroup: new Map(),
     focusedId: null,
     maximizedId: null,
     activeDockTerminalId: null,
