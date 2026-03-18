@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import { useTerminalStore } from "./terminalStore";
-import type { TabGroup } from "@shared/types";
+import type { TabGroup, TerminalInstance } from "@shared/types";
 
 const MAX_UNDO_HISTORY = 10;
 
@@ -61,7 +61,7 @@ function applySnapshot(snapshot: LayoutSnapshot): void {
   }
 
   // Rebuild the terminals array preserving non-layout fields
-  const restoredTerminals = snapshot.terminals
+  const restoredTerminals: TerminalInstance[] = snapshot.terminals
     .map((entry) => {
       const current = currentById.get(entry.id);
       if (!current) return null;
@@ -71,7 +71,7 @@ function applySnapshot(snapshot: LayoutSnapshot): void {
         worktreeId: entry.worktreeId,
       };
     })
-    .filter((t): t is NonNullable<typeof t> => t !== null);
+    .filter((t): t is TerminalInstance => t !== null);
 
   // Append any terminals not in the snapshot (added after snapshot was taken)
   for (const t of currentTerminals) {
