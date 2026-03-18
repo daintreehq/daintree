@@ -50,7 +50,10 @@ export function SortableTerminal({
       ref={setNodeRef}
       style={style}
       data-terminal-id={terminal.id}
-      className={cn("h-full contain-layout-paint", isDragging && "opacity-40 ring-2 ring-canopy-accent/50 rounded")}
+      className={cn(
+        "h-full contain-layout-paint",
+        isDragging && "opacity-40 ring-2 ring-canopy-accent/50 rounded"
+      )}
       {...attributes}
       aria-roledescription="sortable item"
     >
