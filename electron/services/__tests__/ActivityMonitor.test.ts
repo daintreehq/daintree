@@ -2620,11 +2620,11 @@ describe("ActivityMonitor", () => {
       expect(monitor.getState()).toBe("busy");
       onStateChange.mockClear();
 
-      // Just before threshold — should still be busy
-      vi.advanceTimersByTime(4900);
+      // Just before threshold — should still be busy (100 + 4800 = 4900 < 5000)
+      vi.advanceTimersByTime(4800);
       expect(monitor.getState()).toBe("busy");
 
-      // Cross the threshold
+      // Cross the threshold (4900 + 200 = 5100 > 5000)
       vi.advanceTimersByTime(200);
 
       expect(monitor.getState()).toBe("idle");
