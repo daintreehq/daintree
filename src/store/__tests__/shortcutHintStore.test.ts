@@ -40,12 +40,13 @@ describe("shortcutHintStore", () => {
     expect(state.pointer!.ts).toBeGreaterThan(0);
   });
 
-  it("shows hint when pointer is fresh and count below threshold", () => {
+  it("shows hint and returns true when pointer is fresh and count below threshold", () => {
     const s = shortcutHintStore.getState();
     s.hydrateCounts({});
     s.recordPointer(100, 200);
-    s.show("nav.quickSwitcher", "⌘K");
+    const result = s.show("nav.quickSwitcher", "⌘K");
 
+    expect(result).toBe(true);
     const state = shortcutHintStore.getState();
     expect(state.activeHint).toEqual({
       actionId: "nav.quickSwitcher",
@@ -55,32 +56,34 @@ describe("shortcutHintStore", () => {
     });
   });
 
-  it("does not show hint when count is at threshold", () => {
+  it("returns false and does not show hint when count is at threshold", () => {
     const s = shortcutHintStore.getState();
     s.hydrateCounts({ "nav.quickSwitcher": 3 });
     s.recordPointer(100, 200);
-    s.show("nav.quickSwitcher", "⌘K");
+    const result = s.show("nav.quickSwitcher", "⌘K");
 
+    expect(result).toBe(false);
     expect(shortcutHintStore.getState().activeHint).toBeNull();
   });
 
-  it("does not show hint when pointer is stale", () => {
+  it("returns false when pointer is stale", () => {
     const s = shortcutHintStore.getState();
     s.hydrateCounts({});
-    // Set pointer with old timestamp
     shortcutHintStore.setState({
       pointer: { x: 100, y: 200, ts: Date.now() - 3000 },
     });
-    s.show("nav.quickSwitcher", "⌘K");
+    const result = s.show("nav.quickSwitcher", "⌘K");
 
+    expect(result).toBe(false);
     expect(shortcutHintStore.getState().activeHint).toBeNull();
   });
 
-  it("does not show hint when no pointer recorded", () => {
+  it("returns false when no pointer recorded", () => {
     const s = shortcutHintStore.getState();
     s.hydrateCounts({});
-    s.show("nav.quickSwitcher", "⌘K");
+    const result = s.show("nav.quickSwitcher", "⌘K");
 
+    expect(result).toBe(false);
     expect(shortcutHintStore.getState().activeHint).toBeNull();
   });
 

@@ -248,8 +248,10 @@ export class ActionService {
       if (!state.hydrated) return;
 
       const displayCombo = keybindingService.getDisplayCombo(actionId);
-      state.show(actionId, displayCombo);
-      state.incrementCount(actionId);
+      const shown = state.show(actionId, displayCombo);
+      if (shown) {
+        state.incrementCount(actionId);
+      }
     } catch {
       // never break dispatch flow
     }
