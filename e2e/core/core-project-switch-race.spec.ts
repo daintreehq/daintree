@@ -78,6 +78,9 @@ test.describe.serial("Core: Project Switch Race Conditions", () => {
 
     await completeOnboarding(ctx.window, PROJECT_B_NAME);
 
+    // Wait for onboarding transition to settle before switching
+    await ctx.window.waitForTimeout(2000);
+
     // Switch back to Project A as the starting baseline
     await switchToProject(ctx.window, PROJECT_A_NAME);
   });
