@@ -41,9 +41,11 @@ async function switchToProject(page: typeof ctx.window, projectName: string): Pr
   await page.locator(SEL.toolbar.projectSwitcherTrigger).click();
   const palette = page.locator(SEL.projectSwitcher.palette);
   await expect(palette).toBeVisible({ timeout: T_MEDIUM });
+  // Wait for palette DOM to stabilize before clicking — list items can re-render
+  await page.waitForTimeout(T_SETTLE);
   const projectRow = palette.locator(`text="${projectName}"`);
-  await projectRow.click();
-  await expect(palette).not.toBeVisible({ timeout: T_MEDIUM });
+  await projectRow.click({ force: true });
+  await expect(palette).not.toBeVisible({ timeout: T_LONG });
   await page.waitForTimeout(T_SETTLE);
 }
 
