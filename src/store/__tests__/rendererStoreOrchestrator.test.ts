@@ -43,11 +43,27 @@ vi.mock("../../persistence/terminalPersistence", () => ({
   },
 }));
 
+vi.mock("@/services/SemanticAnalysisService", () => ({
+  semanticAnalysisService: {
+    unregisterTerminal: vi.fn(),
+  },
+}));
+
+vi.mock("../terminalInputStore", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../terminalInputStore")>();
+  return {
+    ...actual,
+    unregisterInputController: vi.fn(),
+  };
+});
+
 const { useTerminalStore } = await import("../terminalStore");
 const { useWorktreeSelectionStore } = await import("../worktreeStore");
 const { useTerminalInputStore } = await import("../terminalInputStore");
 const { useConsoleCaptureStore } = await import("../consoleCaptureStore");
 const { useVoiceRecordingStore } = await import("../voiceRecordingStore");
+const { unregisterInputController } = await import("../terminalInputStore");
+const { semanticAnalysisService } = await import("@/services/SemanticAnalysisService");
 const { initStoreOrchestrator, destroyStoreOrchestrator } =
   await import("../rendererStoreOrchestrator");
 
@@ -531,6 +547,80 @@ describe("rendererStoreOrchestrator", () => {
     useTerminalStore.getState().removeTerminal("term-no-voice");
 
     expect(useVoiceRecordingStore.getState().panelBuffers).toEqual({});
+  });
+
+  it("calls unregisterInputController when terminal is removed", () => {
+    useTerminalStore.setState({
+      terminals: [
+        {
+          id: "term-1",
+          type: "terminal",
+          title: "T1",
+          cwd: "/test",
+          cols: 80,
+          rows: 24,
+          location: "grid",
+        },
+      ],
+    });
+
+    useTerminalStore.getState().removeTerminal("term-1");
+
+    expect(unregisterInputController).toHaveBeenCalledWith("term-1");
+  });
+
+  it("calls semanticAnalysisService.unregisterTerminal when terminal is removed", () => {
+    useTerminalStore.setState({
+      terminals: [
+        {
+          id: "term-1",
+          type: "terminal",
+          title: "T1",
+          cwd: "/test",
+          cols: 80,
+          rows: 24,
+          location: "grid",
+        },
+      ],
+    });
+
+    useTerminalStore.getState().removeTerminal("term-1");
+
+    expect(semanticAnalysisService.unregisterTerminal).toHaveBeenCalledWith("term-1");
+  });
+
+  it("calls both new cleanup hooks for each terminal in batch removal", () => {
+    useTerminalStore.setState({
+      terminals: [
+        {
+          id: "t-a",
+          type: "terminal",
+          title: "A",
+          cwd: "/test",
+          cols: 80,
+          rows: 24,
+          location: "grid",
+        },
+        {
+          id: "t-b",
+          type: "terminal",
+          title: "B",
+          cwd: "/test",
+          cols: 80,
+          rows: 24,
+          location: "grid",
+        },
+      ],
+    });
+
+    useTerminalStore.setState({ terminals: [] });
+
+    expect(unregisterInputController).toHaveBeenCalledTimes(2);
+    expect(unregisterInputController).toHaveBeenCalledWith("t-a");
+    expect(unregisterInputController).toHaveBeenCalledWith("t-b");
+    expect(semanticAnalysisService.unregisterTerminal).toHaveBeenCalledTimes(2);
+    expect(semanticAnalysisService.unregisterTerminal).toHaveBeenCalledWith("t-a");
+    expect(semanticAnalysisService.unregisterTerminal).toHaveBeenCalledWith("t-b");
   });
 
   it("cleanup function prevents further reactions", () => {
