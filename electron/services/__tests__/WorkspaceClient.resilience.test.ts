@@ -213,9 +213,13 @@ describe("WorkspaceClient resilience", () => {
       const p1 = client.loadProject("/project-a");
       const p2 = client.loadProject("/project-b");
 
-      // Resolve both in order
+      // Capture the scope IDs sent in each request
       const call1 = child.postMessage.mock.calls.at(-2)!;
       const call2 = child.postMessage.mock.calls.at(-1)!;
+      const scopeA = (call1[0] as { projectScopeId: string }).projectScopeId;
+      const scopeB = (call2[0] as { projectScopeId: string }).projectScopeId;
+
+      // Resolve first call (stale), then second call (current)
       child.emit("message", {
         type: "load-project-result",
         requestId: (call1[0] as { requestId: string }).requestId,
@@ -231,8 +235,12 @@ describe("WorkspaceClient resilience", () => {
       const clientPrivate = client as never as {
         currentRootPath: string | null;
         currentProjectScopeId: string | null;
+        loadProjectGeneration: number;
       };
       expect(clientPrivate.currentRootPath).toBe("/project-b");
+      expect(clientPrivate.currentProjectScopeId).toBe(scopeB);
+      expect(clientPrivate.currentProjectScopeId).not.toBe(scopeA);
+      expect(clientPrivate.loadProjectGeneration).toBe(2);
     });
 
     it("restart auto-reload is skipped when superseded by user loadProject", async () => {
