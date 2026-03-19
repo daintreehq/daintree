@@ -23,11 +23,20 @@ describe("renderBootstrapError", () => {
     expect(rootEl.querySelector("p")?.textContent).toBe("Init failed");
   });
 
-  it("renders a Reload button", () => {
+  it("renders a Reload button that triggers page reload", () => {
+    const reloadMock = vi.fn();
+    Object.defineProperty(window, "location", {
+      value: { reload: reloadMock },
+      writable: true,
+      configurable: true,
+    });
+
     renderBootstrapError(rootEl, new Error("Init failed"));
 
     const btn = rootEl.querySelector("button");
     expect(btn?.textContent).toBe("Reload");
+    btn?.click();
+    expect(reloadMock).toHaveBeenCalledOnce();
   });
 
   it("renders stack trace in dev mode", () => {

@@ -46,6 +46,8 @@ bootstrap().catch((error: unknown) => {
     // IPC may not be available
   }
 
+  document.getElementById("startup-skeleton")?.remove();
+
   const rootEl = document.getElementById("root");
   if (rootEl) {
     renderBootstrapError(rootEl, error);
