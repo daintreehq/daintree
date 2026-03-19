@@ -914,6 +914,11 @@ class TerminalInstanceService {
     const managed = this.instances.get(id);
     if (!managed) return;
 
+    if (managed.isAltBuffer) {
+      managed.terminal.scrollToBottom();
+      return;
+    }
+
     const marker = managed.lastActivityMarker;
     if (!marker || marker.isDisposed || marker.line < 0) {
       managed.terminal.scrollToBottom();

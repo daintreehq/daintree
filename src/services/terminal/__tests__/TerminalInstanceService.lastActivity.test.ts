@@ -182,6 +182,29 @@ describe("TerminalInstanceService - scrollToLastActivity", () => {
     expect(managed.terminal.scrollToLine).not.toHaveBeenCalled();
   });
 
+  it("scrolls to marker when viewport is exactly 2 lines away (boundary)", () => {
+    const marker = makeMockMarker({ line: 100 });
+    const managed = makeMockManaged({ lastActivityMarker: marker });
+    managed.terminal.buffer.active.viewportY = 102;
+    service.instances.set("t1", managed);
+
+    service.scrollToLastActivity("t1");
+
+    expect(managed.terminal.scrollToLine).toHaveBeenCalledWith(100);
+    expect(managed.terminal.scrollToBottom).not.toHaveBeenCalled();
+  });
+
+  it("falls back to scrollToBottom when in alt buffer mode", () => {
+    const marker = makeMockMarker({ line: 100 });
+    const managed = makeMockManaged({ lastActivityMarker: marker, isAltBuffer: true });
+    service.instances.set("t1", managed);
+
+    service.scrollToLastActivity("t1");
+
+    expect(managed.terminal.scrollToBottom).toHaveBeenCalled();
+    expect(managed.terminal.scrollToLine).not.toHaveBeenCalled();
+  });
+
   it("no-ops for unknown terminal ID", () => {
     service.scrollToLastActivity("nonexistent");
     // Should not throw
@@ -201,7 +224,7 @@ describe("TerminalInstanceService - lastActivityMarker write tracking", () => {
     service.instances.clear();
   });
 
-  it("disposes previous marker before creating new one", () => {
+  it("disposes previous marker and replaces it with a new one", () => {
     const oldMarker = makeMockMarker();
     const newMarker = makeMockMarker({ line: 200 });
 
@@ -218,6 +241,10 @@ describe("TerminalInstanceService - lastActivityMarker write tracking", () => {
     );
 
     expect(oldMarker.dispose).toHaveBeenCalled();
+    expect(managed.terminal.registerMarker).toHaveBeenCalledWith(0);
+    expect((managed as unknown as { lastActivityMarker: MockMarker }).lastActivityMarker).toBe(
+      newMarker
+    );
   });
 
   it("does not update marker when in alt buffer mode", () => {
