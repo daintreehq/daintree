@@ -52,7 +52,9 @@ export function gridTabGroupPropsAreEqual(
     }
   }
 
-  // Panels: compare length, then element-by-element on render-relevant fields
+  // Panels: compare length, then element-by-element on all render-relevant fields.
+  // Must include the full set that GridPanel/buildPanelProps uses, not just tab-label
+  // fields, because the active panel is passed as `terminal` to GridPanel.
   const prevPanels = prev.panels;
   const nextPanels = next.panels;
   if (prevPanels !== nextPanels) {
@@ -64,11 +66,31 @@ export function gridTabGroupPropsAreEqual(
         if (
           a.id !== b.id ||
           a.title !== b.title ||
+          a.worktreeId !== b.worktreeId ||
+          a.kind !== b.kind ||
           a.type !== b.type ||
           a.agentId !== b.agentId ||
+          a.cwd !== b.cwd ||
+          a.agentState !== b.agentState ||
+          a.activityHeadline !== b.activityHeadline ||
+          a.activityStatus !== b.activityStatus ||
+          a.activityType !== b.activityType ||
+          a.lastCommand !== b.lastCommand ||
+          a.flowStatus !== b.flowStatus ||
+          a.restartKey !== b.restartKey ||
+          a.restartError !== b.restartError ||
+          a.reconnectError !== b.reconnectError ||
+          a.spawnError !== b.spawnError ||
           a.detectedProcessId !== b.detectedProcessId ||
-          a.kind !== b.kind ||
-          a.agentState !== b.agentState
+          a.browserUrl !== b.browserUrl ||
+          a.notePath !== b.notePath ||
+          a.noteId !== b.noteId ||
+          a.scope !== b.scope ||
+          a.createdAt !== b.createdAt ||
+          a.isRestarting !== b.isRestarting ||
+          a.error !== b.error ||
+          a.runtimeStatus !== b.runtimeStatus ||
+          a.isInputLocked !== b.isInputLocked
         ) {
           return false;
         }

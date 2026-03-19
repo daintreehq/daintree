@@ -132,4 +132,45 @@ describe("gridTabGroupPropsAreEqual", () => {
     const next = baseProps({ group });
     expect(gridTabGroupPropsAreEqual(prev, next)).toBe(true);
   });
+
+  it("returns false when panel cwd changes", () => {
+    const prev = baseProps({ panels: [basePanel, basePanel2] });
+    const next = baseProps({
+      panels: [{ ...basePanel, cwd: "/new/path" } as TerminalInstance, basePanel2],
+    });
+    expect(gridTabGroupPropsAreEqual(prev, next)).toBe(false);
+  });
+
+  it("returns false when panel activityHeadline changes", () => {
+    const prev = baseProps({ panels: [basePanel, basePanel2] });
+    const next = baseProps({
+      panels: [{ ...basePanel, activityHeadline: "Running tests" } as TerminalInstance, basePanel2],
+    });
+    expect(gridTabGroupPropsAreEqual(prev, next)).toBe(false);
+  });
+
+  it("returns false when panel error changes", () => {
+    const prev = baseProps({ panels: [basePanel, basePanel2] });
+    const next = baseProps({
+      panels: [{ ...basePanel, error: "Something failed" } as TerminalInstance, basePanel2],
+    });
+    expect(gridTabGroupPropsAreEqual(prev, next)).toBe(false);
+  });
+
+  it("returns false when panel browserUrl changes", () => {
+    const prev = baseProps({ panels: [basePanel, basePanel2] });
+    const next = baseProps({
+      panels: [
+        { ...basePanel, browserUrl: "http://localhost:8080" } as TerminalInstance,
+        basePanel2,
+      ],
+    });
+    expect(gridTabGroupPropsAreEqual(prev, next)).toBe(false);
+  });
+
+  it("returns false when group.worktreeId changes", () => {
+    const prev = baseProps({ group: { ...baseGroup, worktreeId: "wt-1" } });
+    const next = baseProps({ group: { ...baseGroup, worktreeId: "wt-2" } });
+    expect(gridTabGroupPropsAreEqual(prev, next)).toBe(false);
+  });
 });

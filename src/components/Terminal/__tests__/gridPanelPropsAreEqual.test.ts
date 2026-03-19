@@ -160,4 +160,34 @@ describe("gridPanelPropsAreEqual", () => {
     const next = baseProps({ tabs });
     expect(gridPanelPropsAreEqual(prev, next)).toBe(true);
   });
+
+  it("returns false when terminal.kind changes", () => {
+    const prev = baseProps({ terminal: { ...baseTerminal, kind: "terminal" } as TerminalInstance });
+    const next = baseProps({ terminal: { ...baseTerminal, kind: "agent" } as TerminalInstance });
+    expect(gridPanelPropsAreEqual(prev, next)).toBe(false);
+  });
+
+  it("returns false when terminal.cwd changes", () => {
+    const prev = baseProps({ terminal: { ...baseTerminal } as TerminalInstance });
+    const next = baseProps({
+      terminal: { ...baseTerminal, cwd: "/new/path" } as TerminalInstance,
+    });
+    expect(gridPanelPropsAreEqual(prev, next)).toBe(false);
+  });
+
+  it("returns false when terminal.runtimeStatus changes", () => {
+    const prev = baseProps({ terminal: { ...baseTerminal } as TerminalInstance });
+    const next = baseProps({
+      terminal: { ...baseTerminal, runtimeStatus: "exited" } as TerminalInstance,
+    });
+    expect(gridPanelPropsAreEqual(prev, next)).toBe(false);
+  });
+
+  it("returns false when terminal.detectedProcessId changes", () => {
+    const prev = baseProps({ terminal: { ...baseTerminal } as TerminalInstance });
+    const next = baseProps({
+      terminal: { ...baseTerminal, detectedProcessId: "node" } as TerminalInstance,
+    });
+    expect(gridPanelPropsAreEqual(prev, next)).toBe(false);
+  });
 });
