@@ -476,6 +476,19 @@ ${lines.map((l) => "+" + l).join("\n")}`;
         throw wtError;
       }
 
+      if (errorMessage.includes("not a git repository")) {
+        const cause = error instanceof Error ? error : new Error(String(error));
+        const gitError = new GitError(
+          `Git operation failed: ${context}`,
+          { rootPath: this.rootPath },
+          cause
+        );
+        logWarn(`Git operation failed: not a git repository (${context})`, {
+          rootPath: this.rootPath,
+        });
+        throw gitError;
+      }
+
       const cause = error instanceof Error ? error : new Error(String(error));
       const gitError = new GitError(
         `Git operation failed: ${context}`,
