@@ -12,6 +12,8 @@ import type {
 declare global {
   interface Window {
     electron: ElectronAPI;
+    __CANOPY_E2E_FAULT__?: { renderError?: boolean };
+    __CANOPY_E2E_ERROR_STORE__?: () => Array<{ id: string; source?: string; message: string }>;
   }
 }
 
