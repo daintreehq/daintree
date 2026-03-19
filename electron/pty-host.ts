@@ -264,6 +264,17 @@ ptyManager.on("data", (id: string, data: string | Uint8Array) => {
     }
   }
 
+  // Direct MessagePort output: send data directly to renderer, bypassing main process
+  if (!visualWritten && !isBackgrounded && !isSuspended && rendererPort) {
+    try {
+      rendererPort.postMessage({ type: "data", id, data: toStringForIpc(data) });
+      visualWritten = true;
+    } catch {
+      rendererPort = null;
+      rendererPortMessageHandler = null;
+    }
+  }
+
   // IPC Data Mirror: Always send data via IPC for terminals that need main-process
   // monitoring (e.g., UrlDetector for dev preview URL detection), even when SAB write succeeded.
   // Skip mirroring for suspended/backgrounded terminals to respect backpressure semantics.
@@ -631,6 +642,14 @@ port.on("message", async (rawMsg: any) => {
           };
 
           receivedPort.on("message", rendererPortMessageHandler);
+
+          receivedPort.on("close", () => {
+            if (rendererPort === receivedPort) {
+              rendererPort = null;
+              rendererPortMessageHandler = null;
+              console.log("[PtyHost] MessagePort closed, falling back to IPC");
+            }
+          });
 
           console.log("[PtyHost] MessagePort listener installed");
         } else {
