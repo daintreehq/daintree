@@ -696,11 +696,18 @@ export const AGENT_REGISTRY: Record<string, AgentConfig> = {
     },
     detection: {
       primaryPatterns: [
-        "[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]\\s+[^\\n]{2,80}\\s*\\(.*esc",
-        "esc\\s*(again\\s+)?interrupt",
-        "Press again to interrupt",
+        "[⣾⣽⣻⢿⡿⣟⣯⣷]\\s+[^\\n]{2,80}\\s*\\(.*esc",
+        "[·•●]\\s+(Generating|Building tool call|Waiting for tool response)",
+        "press\\s+esc\\s+(again\\s+)?to\\s+(interrupt|exit\\s+cancel)",
+        "esc\\s*(again\\s+)?to\\s+(interrupt|cancel)",
       ],
-      fallbackPatterns: ["[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]\\s+\\w", "working[…\\.]+", "generating"],
+      fallbackPatterns: [
+        "[⣾⣽⣻⢿⡿⣟⣯⣷]\\s+\\w",
+        "working[…\\.]+",
+        "generating",
+        "waiting for tool response",
+        "building tool call",
+      ],
       bootCompletePatterns: ["Ask anything", "Build\\s+OpenCode"],
       promptPatterns: ["^\\s*[›❯>]\\s*", "Ask anything"],
       promptHintPatterns: ["Ask anything"],
@@ -799,14 +806,16 @@ export const AGENT_REGISTRY: Record<string, AgentConfig> = {
     },
     detection: {
       primaryPatterns: [
-        "\u2B22\\s+(Thinking|Reading|Planning|Searching|Running|Executing|Grepping|Editing|Listing)",
+        "\u2B22\\s*(Thinking|Reading|Planning|Searching|Running|Executing|Grepping|Editing|Listing)",
         "esc to stop",
       ],
-      fallbackPatterns: ["\u2B22\\s+\\w"],
+      fallbackPatterns: ["\u2B22\\s*\\w"],
       bootCompletePatterns: ["Cursor Agent", "Welcome to Cursor Agent"],
       promptPatterns: ["^\u2192\\s*$", "^\u2192\\s"],
       promptHintPatterns: ["\u2192\\s+Add a follow-up"],
-      completionPatterns: ["\u2B22\\s+(Thought|Read|Planned)\\s"],
+      completionPatterns: [
+        "\u2B22\\s*(Thought|Read|Planned|Searched|Ran|Edited|Grepped|Listed)(?=[^a-zA-Z]|$)",
+      ],
       completionConfidence: 0.9,
       scanLineCount: 10,
       primaryConfidence: 0.95,
