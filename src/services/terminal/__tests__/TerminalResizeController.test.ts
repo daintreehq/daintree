@@ -206,7 +206,7 @@ describe("TerminalResizeController", () => {
       dataBuffer: {
         flushForTerminal: vi.fn(),
         resetForTerminal: vi.fn(),
-      } as any,
+      } as unknown as ResizeControllerDeps["dataBuffer"],
     });
 
     const result = controller.fit("term-1");
@@ -228,7 +228,7 @@ describe("TerminalResizeController", () => {
       dataBuffer: {
         flushForTerminal: vi.fn(),
         resetForTerminal: vi.fn(),
-      } as any,
+      } as unknown as ResizeControllerDeps["dataBuffer"],
     });
 
     const result = controller.fit("term-1");
@@ -245,7 +245,7 @@ describe("TerminalResizeController", () => {
       dataBuffer: {
         flushForTerminal: vi.fn(),
         resetForTerminal: vi.fn(),
-      } as any,
+      } as unknown as ResizeControllerDeps["dataBuffer"],
     });
 
     const result = controller.fit("term-1");
