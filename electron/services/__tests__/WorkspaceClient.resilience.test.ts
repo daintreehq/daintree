@@ -204,6 +204,171 @@ describe("WorkspaceClient resilience", () => {
     expect(result[0].id).toBe("valid-worktree");
   });
 
+  describe("loadProject race serialization", () => {
+    beforeEach(() => {
+      child.emit("message", { type: "ready" });
+    });
+
+    it("second loadProject supersedes the first (latest wins)", async () => {
+      const p1 = client.loadProject("/project-a");
+      const p2 = client.loadProject("/project-b");
+
+      // Capture the scope IDs sent in each request
+      const call1 = child.postMessage.mock.calls.at(-2)!;
+      const call2 = child.postMessage.mock.calls.at(-1)!;
+      const scopeA = (call1[0] as { projectScopeId: string }).projectScopeId;
+      const scopeB = (call2[0] as { projectScopeId: string }).projectScopeId;
+
+      // Resolve first call (stale), then second call (current)
+      child.emit("message", {
+        type: "load-project-result",
+        requestId: (call1[0] as { requestId: string }).requestId,
+      });
+      child.emit("message", {
+        type: "load-project-result",
+        requestId: (call2[0] as { requestId: string }).requestId,
+      });
+
+      await p1;
+      await p2;
+
+      const clientPrivate = client as never as {
+        currentRootPath: string | null;
+        currentProjectScopeId: string | null;
+        loadProjectGeneration: number;
+      };
+      expect(clientPrivate.currentRootPath).toBe("/project-b");
+      expect(clientPrivate.currentProjectScopeId).toBe(scopeB);
+      expect(clientPrivate.currentProjectScopeId).not.toBe(scopeA);
+      expect(clientPrivate.loadProjectGeneration).toBe(2);
+    });
+
+    it("restart auto-reload is skipped when superseded by user loadProject", async () => {
+      // Give restartClient its own dedicated mock to avoid cross-contamination
+      const dedicatedChild = new MockUtilityProcess();
+      forkMock.mockReturnValue(dedicatedChild);
+
+      const restartClient = new WorkspaceClient({
+        maxRestartAttempts: 1,
+        showCrashDialog: false,
+        healthCheckIntervalMs: 1000,
+      });
+
+      // Make it ready and load a project
+      dedicatedChild.emit("message", { type: "ready" });
+      const loadCall = restartClient.loadProject("/original-project");
+      const origCall = dedicatedChild.postMessage.mock.calls.at(-1)!;
+      dedicatedChild.emit("message", {
+        type: "load-project-result",
+        requestId: (origCall[0] as { requestId: string }).requestId,
+      });
+      await loadCall;
+
+      // Simulate host crash
+      const restartChild2 = new MockUtilityProcess();
+      forkMock.mockReturnValue(restartChild2);
+      dedicatedChild.emit("exit", 1);
+
+      // User switches project before the restart timer fires
+      // We need to advance past the delay first, but the user call happens
+      // after the restart timer captures the generation but before waitForReady resolves
+
+      // Advance timer to trigger restart
+      vi.advanceTimersByTime(2001);
+
+      // The restart path has captured generationAtRestart and is waiting for ready.
+      // Now user switches project before the new host is ready.
+      const userLoad = restartClient.loadProject("/user-project");
+      const userCall = restartChild2.postMessage.mock.calls.at(-1)!;
+
+      // Make the restarted host ready — this resolves waitForReady in the restart path
+      restartChild2.emit("message", { type: "ready" });
+
+      // Resolve the user's loadProject
+      restartChild2.emit("message", {
+        type: "load-project-result",
+        requestId: (userCall[0] as { requestId: string }).requestId,
+      });
+      await userLoad;
+
+      // Flush microtasks so the restart path .then() runs
+      await Promise.resolve();
+      await Promise.resolve();
+
+      const clientPrivate = restartClient as never as {
+        currentRootPath: string | null;
+      };
+      // The restart path should have been skipped — user's project wins
+      expect(clientPrivate.currentRootPath).toBe("/user-project");
+
+      // The restart path should NOT have issued another loadProject call
+      // (only the original load + user load = 2 loadProject calls total)
+      const loadProjectCalls = [
+        ...dedicatedChild.postMessage.mock.calls,
+        ...restartChild2.postMessage.mock.calls,
+      ].filter(([msg]) => (msg as { type: string }).type === "load-project");
+      expect(loadProjectCalls).toHaveLength(2);
+
+      restartClient.dispose();
+    });
+
+    it("restart auto-reload proceeds when not superseded", async () => {
+      // Give restartClient its own dedicated mock to avoid cross-contamination
+      const dedicatedChild = new MockUtilityProcess();
+      forkMock.mockReturnValue(dedicatedChild);
+
+      const restartClient = new WorkspaceClient({
+        maxRestartAttempts: 1,
+        showCrashDialog: false,
+        healthCheckIntervalMs: 1000,
+      });
+
+      // Make it ready and load a project
+      dedicatedChild.emit("message", { type: "ready" });
+      const loadCall = restartClient.loadProject("/my-project");
+      const origCall = dedicatedChild.postMessage.mock.calls.at(-1)!;
+      dedicatedChild.emit("message", {
+        type: "load-project-result",
+        requestId: (origCall[0] as { requestId: string }).requestId,
+      });
+      await loadCall;
+
+      // Simulate host crash
+      const restartChild2 = new MockUtilityProcess();
+      forkMock.mockReturnValue(restartChild2);
+      dedicatedChild.emit("exit", 1);
+
+      // Advance timer to trigger restart
+      vi.advanceTimersByTime(2001);
+
+      // Make the restarted host ready
+      restartChild2.emit("message", { type: "ready" });
+
+      // Flush microtasks for the .then() chain
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+
+      // The restart path should have issued a loadProject call
+      const reloadCall = restartChild2.postMessage.mock.calls.find(
+        ([msg]) => (msg as { type: string }).type === "load-project"
+      );
+      expect(reloadCall).toBeDefined();
+      expect((reloadCall![0] as { rootPath: string }).rootPath).toBe("/my-project");
+
+      // Resolve the reload
+      restartChild2.emit("message", {
+        type: "load-project-result",
+        requestId: (reloadCall![0] as { requestId: string }).requestId,
+      });
+
+      await Promise.resolve();
+
+      restartClient.dispose();
+    });
+  });
+
   describe("setActiveWorktree echo suppression", () => {
     let mockWindow: {
       isDestroyed: ReturnType<typeof vi.fn>;
