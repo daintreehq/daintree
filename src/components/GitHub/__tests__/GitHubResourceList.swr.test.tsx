@@ -44,9 +44,7 @@ vi.mock("@/store/worktreeStore", () => ({
 
 vi.mock("@/store/worktreeDataStore", () => ({
   useWorktreeDataStore: Object.assign(
-    vi.fn((sel: (s: Record<string, unknown>) => unknown) =>
-      sel({ worktrees: new Map() })
-    ),
+    vi.fn((sel: (s: Record<string, unknown>) => unknown) => sel({ worktrees: new Map() })),
     { getState: () => ({ worktrees: new Map() }) }
   ),
 }));

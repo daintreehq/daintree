@@ -46,7 +46,18 @@ describe("githubResourceCache", () => {
 
     it("round-trips a cache entry", () => {
       const entry = {
-        items: [{ number: 1, title: "Test", url: "", state: "OPEN" as const, updatedAt: "", author: { login: "u", avatarUrl: "" }, assignees: [], commentCount: 0 }],
+        items: [
+          {
+            number: 1,
+            title: "Test",
+            url: "",
+            state: "OPEN" as const,
+            updatedAt: "",
+            author: { login: "u", avatarUrl: "" },
+            assignees: [],
+            commentCount: 0,
+          },
+        ],
         endCursor: "cursor1",
         hasNextPage: true,
         timestamp: Date.now(),

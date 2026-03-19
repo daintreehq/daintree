@@ -1,6 +1,16 @@
 import { useState, useEffect, useMemo, useCallback, useRef, type KeyboardEvent } from "react";
 import { useDebounce } from "@/hooks/useDebounce";
-import { Search, ExternalLink, RefreshCw, WifiOff, Plus, Settings, X, Filter, Loader2 } from "lucide-react";
+import {
+  Search,
+  ExternalLink,
+  RefreshCw,
+  WifiOff,
+  Plus,
+  Settings,
+  X,
+  Filter,
+  Loader2,
+} from "lucide-react";
 import {
   buildCacheKey,
   getCache,
@@ -69,12 +79,8 @@ export function GitHubResourceList({
   );
   const cachedEntry = useMemo(() => getCache(cacheKey), [cacheKey]);
 
-  const [data, setData] = useState<(GitHubIssue | GitHubPR)[]>(
-    () => cachedEntry?.items ?? []
-  );
-  const [cursor, setCursor] = useState<string | null>(
-    () => cachedEntry?.endCursor ?? null
-  );
+  const [data, setData] = useState<(GitHubIssue | GitHubPR)[]>(() => cachedEntry?.items ?? []);
+  const [cursor, setCursor] = useState<string | null>(() => cachedEntry?.endCursor ?? null);
   const [hasMore, setHasMore] = useState(() => cachedEntry?.hasNextPage ?? false);
   const [loading, setLoading] = useState(false);
   const [isRevalidating, setIsRevalidating] = useState(false);
