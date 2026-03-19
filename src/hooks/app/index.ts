@@ -15,3 +15,4 @@ export { useWorktreeOverview } from "./useWorktreeOverview";
 export { useAppEventListeners } from "./useAppEventListeners";
 export { useErrorRetry } from "./useErrorRetry";
 export { useActiveWorktreeSync } from "./useActiveWorktreeSync";
+export { useDeferredNewsletterPrompt } from "./useDeferredNewsletterPrompt";

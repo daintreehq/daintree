@@ -68,16 +68,6 @@ vi.mock("../ThemeSelectionStep", () => ({
   ),
 }));
 
-vi.mock("../NewsletterStep", () => ({
-  NewsletterStep: vi.fn(({ onDismiss }: { onDismiss: (subscribed: boolean) => void }) => (
-    <div data-testid="newsletter-step">
-      <button data-testid="newsletter-dismiss" onClick={() => onDismiss(false)}>
-        Dismiss
-      </button>
-    </div>
-  )),
-}));
-
 vi.mock("../TelemetryConsentStep", () => ({
   TelemetryConsentStep: vi.fn(({ onDismiss }: { onDismiss: (enabled: boolean) => void }) => (
     <div data-testid="telemetry-step">
@@ -129,7 +119,7 @@ describe("OnboardingFlow progress indicator", () => {
     onboardingMock.get.mockResolvedValue({ ...defaultOnboardingState });
   });
 
-  it("renders progress indicator with 5 dots on first step", async () => {
+  it("renders progress indicator with 4 dots on first step", async () => {
     const { baseElement } = await act(async () => {
       return render(<OnboardingFlow {...defaultProps} />);
     });
@@ -145,7 +135,7 @@ describe("OnboardingFlow progress indicator", () => {
       '[data-testid="onboarding-progress"]'
     )!;
     const dots = indicator.querySelectorAll('[data-testid^="progress-dot-"]');
-    expect(dots).toHaveLength(5);
+    expect(dots).toHaveLength(4);
     expect(dots[0]?.getAttribute("aria-current")).toBe("step");
     expect(dots[1]?.getAttribute("aria-current")).toBeNull();
   });
@@ -159,7 +149,7 @@ describe("OnboardingFlow progress indicator", () => {
       expect(trackMock).toHaveBeenCalledWith("onboarding_step_viewed", expect.any(Object));
     });
 
-    // Advance from theme selection to newsletter
+    // Advance from theme selection to telemetry
     await act(async () => {
       getByTestId("theme-continue").click();
     });
@@ -183,12 +173,9 @@ describe("OnboardingFlow progress indicator", () => {
       expect(trackMock).toHaveBeenCalled();
     });
 
-    // Complete the flow: theme → newsletter → telemetry → skip agent selection
+    // Complete the flow: theme → telemetry → skip agent selection
     await act(async () => {
       getByTestId("theme-continue").click();
-    });
-    await act(async () => {
-      getByTestId("newsletter-dismiss").click();
     });
     await act(async () => {
       getByTestId("accept").click();
@@ -225,7 +212,7 @@ describe("OnboardingFlow progress indicator", () => {
     const srText = baseElement.ownerDocument
       .querySelector('[data-testid="onboarding-progress"]')!
       .querySelector(".sr-only");
-    expect(srText?.textContent).toBe("Step 1 of 5");
+    expect(srText?.textContent).toBe("Step 1 of 4");
   });
 });
 
@@ -289,11 +276,6 @@ describe("OnboardingFlow telemetry tracking", () => {
       getByTestId("theme-continue").click();
     });
 
-    // Dismiss newsletter to advance to telemetry
-    await act(async () => {
-      getByTestId("newsletter-dismiss").click();
-    });
-
     // Accept telemetry to advance to agent selection
     await act(async () => {
       getByTestId("accept").click();
@@ -303,7 +285,7 @@ describe("OnboardingFlow telemetry tracking", () => {
     await vi.waitFor(() => {
       expect(trackMock).toHaveBeenCalledWith("onboarding_step_viewed", {
         step: "agentSelection",
-        stepIndex: 3,
+        stepIndex: 2,
       });
     });
 
@@ -334,11 +316,6 @@ describe("OnboardingFlow telemetry tracking", () => {
       getByTestId("theme-continue").click();
     });
 
-    // Dismiss newsletter
-    await act(async () => {
-      getByTestId("newsletter-dismiss").click();
-    });
-
     // Accept telemetry
     await act(async () => {
       getByTestId("accept").click();
@@ -357,7 +334,7 @@ describe("OnboardingFlow telemetry tracking", () => {
     await vi.waitFor(() => {
       expect(trackMock).toHaveBeenCalledWith(
         "onboarding_completed",
-        expect.objectContaining({ totalSteps: 5 })
+        expect.objectContaining({ totalSteps: 4 })
       );
     });
   });
@@ -394,11 +371,6 @@ describe("OnboardingFlow telemetry tracking", () => {
     // Continue from theme selection
     await act(async () => {
       getByTestId("theme-continue").click();
-    });
-
-    // Dismiss newsletter
-    await act(async () => {
-      getByTestId("newsletter-dismiss").click();
     });
 
     // Accept telemetry

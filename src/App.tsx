@@ -58,6 +58,7 @@ import {
   useDevServerDiscovery,
   useAccessibilityAnnouncements,
   useGettingStartedChecklist,
+  useDeferredNewsletterPrompt,
   useUnloadCleanup,
   useHomeDir,
   usePerformanceMonitors,
@@ -105,6 +106,7 @@ import { ShortcutHint } from "./components/ui/ShortcutHint";
 import { ReEntrySummary } from "./components/ui/ReEntrySummary";
 import { UpdateNotification } from "./components/UpdateNotification";
 import { OnboardingFlow } from "./components/Onboarding/OnboardingFlow";
+import { NewsletterStep } from "./components/Onboarding/NewsletterStep";
 import { GettingStartedChecklist } from "./components/Onboarding/GettingStartedChecklist";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { DndProvider } from "./components/DragDrop";
@@ -1024,6 +1026,7 @@ function App() {
   useProjectSwitchRehydration();
   useShortcutHints(isStateLoaded);
   const gettingStarted = useGettingStartedChecklist(isStateLoaded);
+  const deferredNewsletter = useDeferredNewsletterPrompt(isStateLoaded);
 
   const handleLaunchAgent = useCallback(
     async (type: string) => {
@@ -1437,6 +1440,7 @@ function App() {
           onToggleCollapse={gettingStarted.toggleCollapse}
         />
       )}
+      {deferredNewsletter.visible && <NewsletterStep onDismiss={deferredNewsletter.dismiss} />}
     </ErrorBoundary>
   );
 }
