@@ -66,8 +66,8 @@ describe("faultRegistry (env enabled)", () => {
     await expect(applyInvokeFault("ch")).rejects.toThrow("injected");
     try {
       await applyInvokeFault("ch");
-    } catch (err: any) {
-      expect(err.code).toBe("E2E");
+    } catch (err: unknown) {
+      expect((err as NodeJS.ErrnoException).code).toBe("E2E");
     }
   });
 

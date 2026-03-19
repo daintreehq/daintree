@@ -11,7 +11,7 @@ export async function injectFault(
   code?: string
 ): Promise<void> {
   await app.evaluate(
-    ({}, { channel, message, code }) => {
+    (_modules, { channel, message, code }) => {
       const registry = globalThis.__canopyFaultRegistry;
       if (!registry)
         throw new Error("Fault mode not enabled — launch with CANOPY_E2E_FAULT_MODE=1");
@@ -31,7 +31,7 @@ export async function injectDelay(
   delayMs: number
 ): Promise<void> {
   await app.evaluate(
-    ({}, { channel, delayMs }) => {
+    (_modules, { channel, delayMs }) => {
       const registry = globalThis.__canopyFaultRegistry;
       if (!registry)
         throw new Error("Fault mode not enabled — launch with CANOPY_E2E_FAULT_MODE=1");
@@ -43,7 +43,7 @@ export async function injectDelay(
 
 /** Clear the fault for a single IPC channel. */
 export async function clearFault(app: ElectronApplication, channel: string): Promise<void> {
-  await app.evaluate(({}, ch) => {
+  await app.evaluate((_modules, ch) => {
     const registry = globalThis.__canopyFaultRegistry;
     if (registry) delete registry[ch];
   }, channel);

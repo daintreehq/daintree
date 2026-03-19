@@ -12,7 +12,6 @@ export interface FaultDelayConfig {
 export type FaultConfig = FaultErrorConfig | FaultDelayConfig;
 
 declare global {
-  // eslint-disable-next-line no-var -- must be var for globalThis augmentation
   var __canopyFaultRegistry: Record<string, FaultConfig> | undefined;
 }
 
