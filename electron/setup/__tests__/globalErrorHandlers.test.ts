@@ -133,7 +133,7 @@ describe("globalErrorHandlers", () => {
       expect(crashRecoveryMock.recordCrash).toHaveBeenCalledWith(error);
     });
 
-    it("persists error to pendingErrors store", () => {
+    it("persists error to pendingErrors store with full payload", () => {
       const error = new Error("test crash");
       uncaughtHandler(error);
 
@@ -142,10 +142,24 @@ describe("globalErrorHandlers", () => {
         expect.arrayContaining([
           expect.objectContaining({
             type: "unknown",
+            message: expect.stringContaining("test crash"),
             source: "main-process",
+            isTransient: false,
+            dismissed: false,
             fromPreviousSession: true,
+            recoveryHint: "The application encountered a fatal error and will restart.",
           }),
         ])
+      );
+    });
+
+    it("persists error when store.get returns undefined", () => {
+      storeMock.get.mockReturnValue(undefined);
+      uncaughtHandler(new Error("crash"));
+
+      expect(storeMock.set).toHaveBeenCalledWith(
+        "pendingErrors",
+        expect.arrayContaining([expect.objectContaining({ fromPreviousSession: true })])
       );
     });
 
@@ -200,6 +214,38 @@ describe("globalErrorHandlers", () => {
       expect(() => uncaughtHandler(new Error("crash"))).not.toThrow();
       expect(appMock.exit).toHaveBeenCalledWith(1);
     });
+
+    it("does not send IPC when webContents is destroyed", () => {
+      webContentsMock.isDestroyed.mockReturnValue(true);
+      uncaughtHandler(new Error("crash"));
+
+      expect(webContentsMock.send).not.toHaveBeenCalled();
+      expect(appMock.exit).toHaveBeenCalledWith(1);
+    });
+
+    it("re-entrant call skips full handler and exits immediately", () => {
+      uncaughtHandler(new Error("first crash"));
+      vi.clearAllMocks();
+
+      // Second call should hit the re-entrancy guard
+      uncaughtHandler(new Error("second crash"));
+
+      expect(emergencyLogMock.emergencyLogMainFatal).not.toHaveBeenCalled();
+      expect(crashRecoveryMock.recordCrash).not.toHaveBeenCalled();
+      expect(storeMock.set).not.toHaveBeenCalled();
+      expect(appMock.relaunch).not.toHaveBeenCalled();
+      expect(appMock.exit).toHaveBeenCalledWith(1);
+    });
+
+    it("builds AppError with correct message from Error", () => {
+      uncaughtHandler(new Error("specific error message"));
+
+      const sentPayload = webContentsMock.send.mock.calls[0]?.[1];
+      expect(sentPayload.message).toContain("specific error message");
+      expect(sentPayload.message).toContain("UNCAUGHT_EXCEPTION");
+      expect(sentPayload.details).toBeDefined();
+      expect(sentPayload.id).toMatch(/^fatal-/);
+    });
   });
 
   describe("unhandledRejection", () => {
@@ -213,23 +259,25 @@ describe("globalErrorHandlers", () => {
       );
     });
 
-    it("sends error notification to renderer", () => {
+    it("sends error notification to renderer with correct payload", () => {
       rejectionHandler(new Error("rejected"));
 
-      expect(webContentsMock.send).toHaveBeenCalledWith(
-        "error:notify",
-        expect.objectContaining({
-          type: "unknown",
-          source: "main-process",
-        })
-      );
+      const sentPayload = webContentsMock.send.mock.calls[0]?.[1];
+      expect(sentPayload.type).toBe("unknown");
+      expect(sentPayload.source).toBe("main-process");
+      expect(sentPayload.message).toContain("rejected");
+      expect(sentPayload.recoveryHint).toContain("degraded state");
+      expect(sentPayload.isTransient).toBe(false);
+      expect(sentPayload.dismissed).toBe(false);
     });
 
-    it("does NOT call app.exit or app.relaunch", () => {
+    it("does NOT call app.exit, app.relaunch, recordCrash, or persist errors", () => {
       rejectionHandler(new Error("rejected"));
 
       expect(appMock.exit).not.toHaveBeenCalled();
       expect(appMock.relaunch).not.toHaveBeenCalled();
+      expect(crashRecoveryMock.recordCrash).not.toHaveBeenCalled();
+      expect(storeMock.set).not.toHaveBeenCalled();
     });
 
     it("handles non-Error rejection reasons", () => {
@@ -238,6 +286,19 @@ describe("globalErrorHandlers", () => {
       expect(emergencyLogMock.emergencyLogMainFatal).toHaveBeenCalledWith(
         "UNHANDLED_REJECTION",
         "string reason"
+      );
+    });
+
+    it("handles null and undefined rejection reasons", () => {
+      expect(() => rejectionHandler(null)).not.toThrow();
+      expect(() => {
+        _resetHandlingFatalForTesting();
+        rejectionHandler(undefined);
+      }).not.toThrow();
+
+      expect(emergencyLogMock.emergencyLogMainFatal).toHaveBeenCalledWith(
+        "UNHANDLED_REJECTION",
+        null
       );
     });
 

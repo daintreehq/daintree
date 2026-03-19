@@ -46,9 +46,9 @@ function notifyRenderer(appError: AppError): void {
 
 function persistPendingError(appError: AppError): void {
   try {
-    const pending = store.get("pendingErrors") ?? [];
-    pending.push({ ...appError, fromPreviousSession: true });
-    store.set("pendingErrors", pending);
+    const existing = store.get("pendingErrors");
+    const pending = Array.isArray(existing) ? existing : [];
+    store.set("pendingErrors", [...pending, { ...appError, fromPreviousSession: true }]);
   } catch {
     // best-effort only
   }
