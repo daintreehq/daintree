@@ -57,6 +57,7 @@ const FUSE_OPTIONS: IFuseOptions<SendToAgentItem> = {
 function sendSelectionToTarget(targetId: string): void {
   const text = pendingState.selection;
   if (!text) return;
+  if (targetId === pendingState.sourceId) return;
 
   const managed = terminalInstanceService.get(targetId);
   if (managed) {
@@ -78,6 +79,7 @@ const MAX_RESULTS = 20;
 
 export function useSendToAgentPalette() {
   const terminals = useTerminalStore(useShallow((state) => state.terminals));
+  const isOpen = usePaletteStore((state) => state.activePaletteId === "send-to-agent");
 
   const items = useMemo<SendToAgentItem[]>(() => {
     const sourceId = pendingState.sourceId;
@@ -105,7 +107,9 @@ export function useSendToAgentPalette() {
     }
 
     return result;
-  }, [terminals]);
+    // isOpen included so items recompute when palette opens (pendingState.sourceId changes)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [terminals, isOpen]);
 
   const fuse = useMemo(() => new Fuse(items, FUSE_OPTIONS), [items]);
 
