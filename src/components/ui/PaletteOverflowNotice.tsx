@@ -9,7 +9,7 @@ export function PaletteOverflowNotice({ shown, total }: PaletteOverflowNoticePro
   return (
     <div
       aria-hidden="true"
-      className="px-3 py-2 text-xs text-canopy-text/40 text-center border-t border-canopy-border/30"
+      className="px-3 py-2 text-xs tabular-nums text-canopy-text/40 text-center border-t border-canopy-border/30"
     >
       Showing {shown} of {total} — refine your search to see more
     </div>

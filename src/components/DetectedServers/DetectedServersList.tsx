@@ -24,7 +24,7 @@ export function DetectedServersList({ servers, onOpen, onClose }: DetectedServer
   return (
     <div className="flex flex-col">
       <div className="flex items-center justify-between px-3 py-2 border-b border-divider">
-        <span className="text-xs font-medium text-text-secondary">
+        <span className="text-xs font-medium tabular-nums text-text-secondary">
           {servers.length} detected {servers.length === 1 ? "server" : "servers"}
         </span>
       </div>

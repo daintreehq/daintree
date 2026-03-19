@@ -105,7 +105,9 @@ export function CommitPanel({
             isOverLimit ? "text-status-warning" : "text-canopy-text/30"
           )}
         >
-          {subjectLine.length}/{MAX_SUBJECT_LENGTH}
+          <span className="tabular-nums">
+            {subjectLine.length}/{MAX_SUBJECT_LENGTH}
+          </span>
         </div>
       </div>
 
@@ -138,7 +140,7 @@ export function CommitPanel({
               ) : (
                 <GitCommit className="w-3.5 h-3.5 mr-1.5" />
               )}
-              Commit ({stagedCount})
+              Commit (<span className="tabular-nums">{stagedCount}</span>)
             </Button>
           </>
         ) : (
@@ -154,7 +156,7 @@ export function CommitPanel({
             ) : (
               <GitCommit className="w-3.5 h-3.5 mr-1.5" />
             )}
-            Commit ({stagedCount})
+            Commit (<span className="tabular-nums">{stagedCount}</span>)
           </Button>
         )}
       </div>

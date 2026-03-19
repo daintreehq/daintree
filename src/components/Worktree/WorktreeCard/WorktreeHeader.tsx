@@ -333,7 +333,7 @@ export function WorktreeHeader({
         {worktreeErrorCount > 0 && (
           <Tooltip>
             <TooltipTrigger asChild>
-              <span className="flex items-center gap-0.5 text-status-error text-xs font-mono shrink-0">
+              <span className="flex items-center gap-0.5 text-status-error text-xs font-mono tabular-nums shrink-0">
                 <AlertCircle className="w-3 h-3" />
                 <span>{worktreeErrorCount}</span>
               </span>

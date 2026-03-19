@@ -77,7 +77,7 @@ export function StatusContainer({ config, compact = false }: StatusContainerProp
             {compact && count > 0 && (
               <span
                 className={cn(
-                  "absolute -top-1.5 -right-1.5 z-10 flex items-center justify-center min-w-[14px] h-[14px] px-0.5 rounded-full text-[10px] font-bold shadow-sm",
+                  "absolute -top-1.5 -right-1.5 z-10 flex items-center justify-center min-w-[14px] h-[14px] px-0.5 rounded-full text-[10px] font-bold tabular-nums shadow-sm",
                   config.badgeColor,
                   config.badgeTextColor
                 )}
@@ -87,7 +87,7 @@ export function StatusContainer({ config, compact = false }: StatusContainerProp
             )}
           </span>
           {!compact && (
-            <span className="font-medium">
+            <span className="font-medium tabular-nums">
               {config.buttonLabel} ({count})
             </span>
           )}

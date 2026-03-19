@@ -678,9 +678,9 @@ function PanelHeaderComponent({
         >
           <div className="flex items-center gap-1.5 text-[11px] uppercase tracking-wider font-semibold max-w-[300px]">
             <Grid2X2 className="w-3 h-3 shrink-0" aria-hidden="true" />
-            <span className="truncate">{activeCount} Background</span>
+            <span className="truncate tabular-nums">{activeCount} Background</span>
             {workingCount > 0 && (
-              <span className="flex items-center gap-1 text-state-working ml-1">
+              <span className="flex items-center gap-1 text-state-working tabular-nums ml-1">
                 <Activity
                   className="w-3 h-3 animate-pulse motion-reduce:animate-none"
                   aria-hidden="true"

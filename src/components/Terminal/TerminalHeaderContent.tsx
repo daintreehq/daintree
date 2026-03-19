@@ -128,7 +128,7 @@ function TerminalHeaderContentComponent({
                 {startedAt != null && <ElapsedTime startedAt={startedAt} />}
               </span>
               {isExited && exitCode != null && (
-                <span className="text-status-error">Exit code: {exitCode}</span>
+                <span className="text-status-error tabular-nums">Exit code: {exitCode}</span>
               )}
               <span>
                 State: {agentState}

@@ -332,7 +332,7 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
           )}
         >
           <span className="font-mono">{"{ }"}</span>
-          <span>
+          <span className="tabular-nums">
             {artifacts.length} artifact{artifacts.length !== 1 ? "s" : ""}
           </span>
         </button>
@@ -347,7 +347,7 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
             <div className="flex items-center justify-between px-4 py-3">
               <div className="flex items-center gap-2">
                 <span className="font-mono text-status-info">{"{ }"}</span>
-                <span className="text-sm font-medium text-canopy-text">
+                <span className="text-sm font-medium tabular-nums text-canopy-text">
                   {artifacts.length} Artifact{artifacts.length !== 1 ? "s" : ""}
                 </span>
               </div>
@@ -457,7 +457,7 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
                   </TooltipProvider>
                 )}
                 {bulkProgress && (
-                  <span className="text-xs text-canopy-text/60 ml-auto">
+                  <span className="text-xs tabular-nums text-canopy-text/60 ml-auto">
                     {bulkProgress.action === "copy" && "Copying…"}
                     {bulkProgress.action === "save" &&
                       `Saving ${bulkProgress.current}/${bulkProgress.total}…`}
