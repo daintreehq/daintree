@@ -82,7 +82,7 @@ export class ProjectSwitchService {
         throw new Error(`Project not found after update: ${projectId}`);
       }
 
-      await Promise.all([
+      const [, worktreeLoadError] = await Promise.all([
         cleanupPromise,
         withPerformanceSpan(
           PERF_MARKS.PROJECT_SWITCH_LOAD_PROJECT,
@@ -98,6 +98,7 @@ export class ProjectSwitchService {
       sendToRenderer(this.deps.mainWindow, CHANNELS.PROJECT_ON_SWITCH, {
         project: updatedProject,
         switchId,
+        ...(worktreeLoadError ? { worktreeLoadError } : {}),
       });
 
       console.log("[ProjectSwitch] Project switch complete, switchId:", switchId);
@@ -205,17 +206,19 @@ export class ProjectSwitchService {
     });
   }
 
-  private async loadNewProject(project: Project): Promise<void> {
+  private async loadNewProject(project: Project): Promise<string | undefined> {
     if (!this.deps.worktreeService) {
-      return;
+      return undefined;
     }
 
     try {
       console.log("[ProjectSwitch] Loading worktrees for new project...");
       await this.deps.worktreeService.loadProject(project.path);
       console.log("[ProjectSwitch] Worktrees loaded successfully");
+      return undefined;
     } catch (err) {
       console.error("Failed to load worktrees for project:", err);
+      return err instanceof Error ? err.message : "Failed to load worktrees";
     }
   }
 

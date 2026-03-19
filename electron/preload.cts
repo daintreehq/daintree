@@ -1110,8 +1110,13 @@ const api: ElectronAPI = {
 
     openDialog: () => _unwrappingInvoke(CHANNELS.PROJECT_OPEN_DIALOG),
 
-    onSwitch: (callback: (payload: { project: Project; switchId: string }) => void) =>
-      _typedOn(CHANNELS.PROJECT_ON_SWITCH, callback),
+    onSwitch: (
+      callback: (payload: {
+        project: Project;
+        switchId: string;
+        worktreeLoadError?: string;
+      }) => void
+    ) => _typedOn(CHANNELS.PROJECT_ON_SWITCH, callback),
 
     getSettings: (projectId: string) => _unwrappingInvoke(CHANNELS.PROJECT_GET_SETTINGS, projectId),
 

@@ -52,7 +52,9 @@ export const projectClient = {
     return window.electron.project.openDialog();
   },
 
-  onSwitch: (callback: (payload: { project: Project; switchId: string }) => void): (() => void) => {
+  onSwitch: (
+    callback: (payload: { project: Project; switchId: string; worktreeLoadError?: string }) => void
+  ): (() => void) => {
     return window.electron.project.onSwitch(callback);
   },
 
