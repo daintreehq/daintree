@@ -2,7 +2,7 @@ import { useMemo } from "react";
 import { cn } from "../../lib/utils";
 import { middleTruncate } from "../../utils/textParsing";
 import { BRANCH_PREFIX_MAP, DEFAULT_BRANCH_TYPE } from "@shared/config/branchPrefixes";
-import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   BookOpen,
   Bug,
@@ -81,41 +81,39 @@ export function BranchLabel({
   const Icon = typeId ? (BRANCH_TYPE_ICONS[typeId] ?? GitBranch) : null;
 
   return (
-    <TooltipProvider>
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <span className={cn("flex items-center gap-1.5 min-w-0 cursor-default", className)}>
-            {Icon && displayName && (
-              <span className="shrink-0 flex items-center" aria-label={displayName}>
-                <Icon
-                  className={cn(
-                    "w-3.5 h-3.5 transition-colors duration-200",
-                    isMuted ? "text-canopy-text/30" : "text-canopy-text/50"
-                  )}
-                  strokeWidth={2.5}
-                  aria-hidden="true"
-                />
-              </span>
-            )}
-            <span
-              className={cn(
-                "truncate font-mono transition-colors duration-200",
-                isMainWorktree ? "text-[13px] font-bold tracking-wide" : "text-[11px] font-medium",
-                isActive
-                  ? "text-canopy-text/95"
-                  : isMuted
-                    ? "text-canopy-text/40"
-                    : "text-canopy-text/60"
-              )}
-            >
-              {rest}
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span className={cn("flex items-center gap-1.5 min-w-0 cursor-default", className)}>
+          {Icon && displayName && (
+            <span className="shrink-0 flex items-center" aria-label={displayName}>
+              <Icon
+                className={cn(
+                  "w-3.5 h-3.5 transition-colors duration-200",
+                  isMuted ? "text-canopy-text/30" : "text-canopy-text/50"
+                )}
+                strokeWidth={2.5}
+                aria-hidden="true"
+              />
             </span>
+          )}
+          <span
+            className={cn(
+              "truncate font-mono transition-colors duration-200",
+              isMainWorktree ? "text-[13px] font-bold tracking-wide" : "text-[11px] font-medium",
+              isActive
+                ? "text-canopy-text/95"
+                : isMuted
+                  ? "text-canopy-text/40"
+                  : "text-canopy-text/60"
+            )}
+          >
+            {rest}
           </span>
-        </TooltipTrigger>
-        <TooltipContent side="bottom">
-          {displayName ? `${displayName}: ${label}` : label}
-        </TooltipContent>
-      </Tooltip>
-    </TooltipProvider>
+        </span>
+      </TooltipTrigger>
+      <TooltipContent side="bottom">
+        {displayName ? `${displayName}: ${label}` : label}
+      </TooltipContent>
+    </Tooltip>
   );
 }

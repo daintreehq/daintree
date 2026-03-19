@@ -1,6 +1,6 @@
 import { cn } from "../../lib/utils";
 import type { AgentState } from "@/types";
-import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
 interface AgentStatusIndicatorProps {
   state: AgentState | null | undefined;
@@ -80,29 +80,27 @@ export function AgentStatusIndicator({ state, className }: AgentStatusIndicatorP
   }
 
   return (
-    <TooltipProvider>
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <span
-            className={cn(
-              "inline-flex items-center justify-center w-5 h-5 text-xs font-bold rounded-full",
-              config.color,
-              config.bgColor,
-              config.borderColor && "border",
-              config.borderColor,
-              config.glow,
-              config.pulse && "animate-agent-pulse",
-              className
-            )}
-            role="status"
-            aria-label={`Agent status: ${config.label}`}
-          >
-            {config.icon}
-          </span>
-        </TooltipTrigger>
-        <TooltipContent side="bottom">{config.tooltip}</TooltipContent>
-      </Tooltip>
-    </TooltipProvider>
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span
+          className={cn(
+            "inline-flex items-center justify-center w-5 h-5 text-xs font-bold rounded-full",
+            config.color,
+            config.bgColor,
+            config.borderColor && "border",
+            config.borderColor,
+            config.glow,
+            config.pulse && "animate-agent-pulse",
+            className
+          )}
+          role="status"
+          aria-label={`Agent status: ${config.label}`}
+        >
+          {config.icon}
+        </span>
+      </TooltipTrigger>
+      <TooltipContent side="bottom">{config.tooltip}</TooltipContent>
+    </Tooltip>
   );
 }
 
