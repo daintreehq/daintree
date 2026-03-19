@@ -23,3 +23,5 @@ export { GridPanel } from "./GridPanel";
 export type { GridPanelProps } from "./GridPanel";
 export { DockedPanel } from "./DockedPanel";
 export type { DockedPanelProps } from "./DockedPanel";
+export { TerminalScrollIndicator } from "./TerminalScrollIndicator";
+export type { TerminalScrollIndicatorProps } from "./TerminalScrollIndicator";
