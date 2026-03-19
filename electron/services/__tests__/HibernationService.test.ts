@@ -134,6 +134,50 @@ describe("HibernationService", () => {
     expect(projectStoreMock.clearProjectState).not.toHaveBeenCalled();
   });
 
+  it.each([0, null, undefined, NaN])(
+    "skips projects with falsy lastOpened (%s) in checkAndHibernate",
+    async (falsyValue) => {
+      ptyManagerMock.getProjectStats.mockReturnValue({ terminalCount: 2 });
+      ptyManagerMock.gracefulKillByProject.mockResolvedValue([{ id: "t1" }]);
+
+      const validOldProject = {
+        id: "proj-valid-1",
+        name: "Valid Old 1",
+        lastOpened: Date.now() - 25 * 60 * 60 * 1000,
+      };
+      const falsyProject = {
+        id: "proj-falsy",
+        name: "Falsy Project",
+        lastOpened: falsyValue as unknown as number,
+      };
+      const validOldProject2 = {
+        id: "proj-valid-2",
+        name: "Valid Old 2",
+        lastOpened: Date.now() - 26 * 60 * 60 * 1000,
+      };
+
+      (storeMock.get as Mock).mockReturnValue({
+        enabled: true,
+        inactiveThresholdHours: 24,
+      });
+
+      projectStoreMock.getCurrentProjectId.mockReturnValue("active-proj");
+      projectStoreMock.getAllProjects.mockReturnValue([
+        validOldProject,
+        falsyProject,
+        validOldProject2,
+      ]);
+
+      const service = new HibernationService();
+      await (service as unknown as { checkAndHibernate(): Promise<void> }).checkAndHibernate();
+
+      expect(ptyManagerMock.gracefulKillByProject).toHaveBeenCalledWith("proj-valid-1");
+      expect(ptyManagerMock.gracefulKillByProject).toHaveBeenCalledWith("proj-valid-2");
+      expect(ptyManagerMock.gracefulKillByProject).not.toHaveBeenCalledWith("proj-falsy");
+      expect(ptyManagerMock.gracefulKillByProject).toHaveBeenCalledTimes(2);
+    }
+  );
+
   it("clears pending initial check when stopped before timeout", () => {
     (storeMock.get as Mock).mockReturnValue({
       enabled: true,
@@ -246,6 +290,45 @@ describe("HibernationService", () => {
 
       expect(ptyManagerMock.gracefulKillByProject).toHaveBeenCalledWith("proj-1");
     });
+
+    it.each([0, null, undefined, NaN])(
+      "skips projects with falsy lastOpened (%s)",
+      async (falsyValue) => {
+        const validTerminal = makeTerminal({
+          id: "t1",
+          projectId: "proj-valid-1",
+          agentState: "idle",
+        });
+        const falsyTerminal = makeTerminal({
+          id: "t2",
+          projectId: "proj-falsy",
+          agentState: "idle",
+        });
+        const validTerminal2 = makeTerminal({
+          id: "t3",
+          projectId: "proj-valid-2",
+          agentState: "idle",
+        });
+        ptyManagerMock.getAll.mockReturnValue([validTerminal, falsyTerminal, validTerminal2]);
+        ptyManagerMock.gracefulKillByProject.mockResolvedValue([{ id: "t1" }]);
+
+        (storeMock.get as Mock).mockReturnValue({ enabled: true, inactiveThresholdHours: 24 });
+        projectStoreMock.getCurrentProjectId.mockReturnValue("other-proj");
+        projectStoreMock.getAllProjects.mockReturnValue([
+          { id: "proj-valid-1", name: "Valid Old 1", lastOpened: Date.now() - THIRTY_ONE_MINUTES },
+          { id: "proj-falsy", name: "Falsy Project", lastOpened: falsyValue as unknown as number },
+          { id: "proj-valid-2", name: "Valid Old 2", lastOpened: Date.now() - THIRTY_ONE_MINUTES },
+        ]);
+
+        const service = new HibernationService();
+        await service.hibernateUnderMemoryPressure();
+
+        expect(ptyManagerMock.gracefulKillByProject).toHaveBeenCalledWith("proj-valid-1");
+        expect(ptyManagerMock.gracefulKillByProject).toHaveBeenCalledWith("proj-valid-2");
+        expect(ptyManagerMock.gracefulKillByProject).not.toHaveBeenCalledWith("proj-falsy");
+        expect(ptyManagerMock.gracefulKillByProject).toHaveBeenCalledTimes(2);
+      }
+    );
 
     it("skips projects with no terminals", async () => {
       ptyManagerMock.getAll.mockReturnValue([]);
