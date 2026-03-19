@@ -12,7 +12,6 @@ import { useLayoutConfigStore } from "@/store/layoutConfigStore";
 import { saveTerminals } from "./persistence";
 import { optimizeForDock } from "./layout";
 import { deriveRuntimeStatus, getDefaultTitle } from "./helpers";
-import { useProjectStore } from "@/store/projectStore";
 
 type Set = TerminalRegistryStoreApi["setState"];
 type Get = TerminalRegistryStoreApi["getState"];
@@ -251,7 +250,9 @@ export const createRestartActions = (
 
       await terminalInstanceService.waitForInstance(id, { timeoutMs: 5000 });
 
-      // Capture project ID synchronously before async work (issue #3690)
+      // Capture project ID synchronously before async work (issue #3690).
+      // Lazy import to avoid circular dependency.
+      const { useProjectStore } = await import("@/store/projectStore");
       const capturedProjectId = useProjectStore.getState().currentProject?.id;
 
       // Fetch project environment variables for restart
@@ -613,8 +614,10 @@ export const createRestartActions = (
 
       await new Promise((resolve) => setTimeout(resolve, 50));
 
-      // Capture project ID synchronously before async work (issue #3690)
-      const capturedProjectId = useProjectStore.getState().currentProject?.id;
+      // Capture project ID synchronously before async work (issue #3690).
+      // Lazy import to avoid circular dependency.
+      const { useProjectStore: projectStore } = await import("@/store/projectStore");
+      const capturedProjectId = projectStore.getState().currentProject?.id;
 
       // Fetch project environment variables for conversion
       let convertEnv: Record<string, string> | undefined;

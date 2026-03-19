@@ -18,7 +18,6 @@ import { getScrollbackForType, PERFORMANCE_MODE_SCROLLBACK } from "@/utils/scrol
 import { getXtermOptions } from "@/config/xtermConfig";
 import { useScreenReaderStore } from "@/store/screenReaderStore";
 import { useTerminalColorSchemeStore } from "@/store/terminalColorSchemeStore";
-import { useProjectStore } from "@/store/projectStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useLayoutConfigStore } from "@/store/layoutConfigStore";
 import { saveTerminals, saveTabGroups } from "./persistence";
@@ -237,7 +236,9 @@ export const createCorePanelActions = (
     const runtimeStatus: TerminalRuntimeStatus = shouldBackground ? "background" : "running";
 
     // Capture project ID synchronously before any async work to avoid race conditions
-    // if the user switches projects during async operations (issue #3690)
+    // if the user switches projects during async operations (issue #3690).
+    // Lazy import to avoid circular dependency (core -> projectStore -> terminalPersistence -> core).
+    const { useProjectStore } = await import("@/store/projectStore");
     const capturedProjectId = useProjectStore.getState().currentProject?.id;
 
     // Fetch project environment variables and merge with spawn options

@@ -14,7 +14,7 @@ const mockGetCurrentProject = vi.fn();
 const mockGetProjectById = vi.fn();
 const mockGetProjectSettings = vi.fn();
 
-vi.mock("../../../services/ProjectStore.js", () => ({
+vi.mock("../../../../services/ProjectStore.js", () => ({
   projectStore: {
     getCurrentProject: mockGetCurrentProject,
     getProjectById: mockGetProjectById,
