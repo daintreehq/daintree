@@ -107,16 +107,18 @@ test.describe.serial("Core: Project Switch Race Conditions", () => {
     // Query backend for all terminals
     const terminals = await getAllTerminals(window);
 
-    // Filter to non-trashed terminals with a projectId
-    const assignedTerminals = terminals.filter((t: TerminalInfo) => !t.isTrashed && t.projectId);
-
-    // All terminals should belong to Project A — none should have leaked to Project B
-    for (const t of assignedTerminals) {
-      expect(t.projectId).toBe(projectA.id);
-    }
+    // Filter to non-trashed terminals
+    const activeTerminals = terminals.filter((t: TerminalInfo) => !t.isTrashed);
 
     // Verify we have at least 2 terminals (the original + the delayed one)
-    expect(assignedTerminals.length).toBeGreaterThanOrEqual(2);
+    expect(activeTerminals.length).toBeGreaterThanOrEqual(2);
+
+    // Every terminal must have a defined projectId (undefined = orphaned)
+    // and should belong to Project A — none should have leaked to Project B
+    for (const t of activeTerminals) {
+      expect(t.projectId).toBeDefined();
+      expect(t.projectId).toBe(projectA.id);
+    }
   });
 
   test("panel grid is clean after switching — no cross-project panels", async () => {
@@ -168,11 +170,11 @@ test.describe.serial("Core: Project Switch Race Conditions", () => {
     // Should have exactly baseline + 1 (the one we spawned), not more
     expect(activeTerminals.length).toBe(baselineCount + 1);
 
-    // Every active terminal with a projectId should have the correct project assignment
+    // Every active terminal must have a defined projectId (undefined = orphaned)
+    // and should belong to Project A
     for (const t of activeTerminals) {
-      if (t.projectId) {
-        expect(t.projectId).toBe(projectA.id);
-      }
+      expect(t.projectId).toBeDefined();
+      expect(t.projectId).toBe(projectA.id);
     }
   });
 });
