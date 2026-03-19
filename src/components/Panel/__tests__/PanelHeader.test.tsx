@@ -17,6 +17,7 @@ vi.mock("@/hooks", () => ({
     canScrollRight: false,
     scrollBy: vi.fn(),
   }),
+  useKeybindingDisplay: () => "",
 }));
 
 vi.mock("@/components/DragDrop/DragHandleContext", () => ({

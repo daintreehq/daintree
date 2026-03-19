@@ -19,10 +19,11 @@ import {
 import { CSS } from "@dnd-kit/utilities";
 import type { SidecarTab, SidecarLink } from "@shared/types";
 import { cn } from "@/lib/utils";
+import { createTooltipWithShortcut } from "@/lib/platform";
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
 import { useSidecarStore } from "@/store/sidecarStore";
 import { SidecarIcon } from "./SidecarIcon";
-import { useNativeContextMenu } from "@/hooks";
+import { useNativeContextMenu, useKeybindingDisplay } from "@/hooks";
 import type { MenuItemOption } from "@/types";
 
 const noopTabAction = (_tabId: string) => {};
@@ -234,6 +235,8 @@ export function SidecarToolbar({
   enabledLinks,
 }: SidecarToolbarProps) {
   const reorderTabs = useSidecarStore((s) => s.reorderTabs);
+  const closeSidecarShortcut = useKeybindingDisplay("panel.toggleSidecar");
+  const newTabShortcut = useKeybindingDisplay("sidecar.newTab");
 
   const duplicateTab = onDuplicateTab ?? noopTabAction;
   const closeOthers = onCloseOthers ?? noopTabAction;
@@ -350,7 +353,9 @@ export function SidecarToolbar({
                   <X className="w-4 h-4" />
                 </button>
               </TooltipTrigger>
-              <TooltipContent side="bottom">Close sidecar</TooltipContent>
+              <TooltipContent side="bottom">
+                {createTooltipWithShortcut("Close sidecar", closeSidecarShortcut)}
+              </TooltipContent>
             </Tooltip>
           </TooltipProvider>
         </div>
@@ -420,7 +425,9 @@ export function SidecarToolbar({
                       <Plus className="w-4 h-4" />
                     </button>
                   </TooltipTrigger>
-                  <TooltipContent side="bottom">New Tab</TooltipContent>
+                  <TooltipContent side="bottom">
+                    {createTooltipWithShortcut("New Tab", newTabShortcut)}
+                  </TooltipContent>
                 </Tooltip>
               </TooltipProvider>
             </div>
