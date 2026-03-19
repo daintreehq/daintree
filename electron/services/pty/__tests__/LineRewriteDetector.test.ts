@@ -99,6 +99,14 @@ describe("isStatusLineRewrite", () => {
   it("returns true for new Claude spinner char ✳", () => {
     expect(isStatusLineRewrite("\r✳ Cogitating…")).toBe(true);
   });
+
+  it("returns true for reduced-motion spinner ●", () => {
+    expect(isStatusLineRewrite("\r● Processing…")).toBe(true);
+  });
+
+  it("returns true for ASCII asterisk spinner", () => {
+    expect(isStatusLineRewrite("\r* Working…")).toBe(true);
+  });
 });
 
 describe("LineRewriteDetector", () => {

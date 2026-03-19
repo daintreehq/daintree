@@ -110,6 +110,15 @@ describe("AgentPatternDetector", () => {
       expect(starResult.isWorking).toBe(false);
     });
 
+    it("should detect fallback-only with new v2.1.79 spinner char (no esc to interrupt)", () => {
+      const output = "✢ Analyzing…";
+      const result = detector.detect(output);
+
+      expect(result.isWorking).toBe(true);
+      expect(result.matchTier).toBe("fallback");
+      expect(result.confidence).toBe(0.75);
+    });
+
     it("should not match on idle Claude output", () => {
       const output = "User prompt completed.\n\nWhat would you like me to help you with?";
       const result = detector.detect(output);
