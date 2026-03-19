@@ -104,7 +104,9 @@ vi.mock("@/components/ui/button", () => ({
     "data-testid"?: string;
   }) => {
     const { variant: _v, ...htmlProps } = props as Record<string, unknown>;
-    return <button {...(htmlProps as React.ButtonHTMLAttributes<HTMLButtonElement>)}>{children}</button>;
+    return (
+      <button {...(htmlProps as React.ButtonHTMLAttributes<HTMLButtonElement>)}>{children}</button>
+    );
   },
 }));
 
@@ -158,7 +160,7 @@ describe("BulkCreateWorktreeDialog", () => {
   });
 
   it("shows per-item status during execution", async () => {
-    let resolvers: Array<(value: unknown) => void> = [];
+    const resolvers: Array<(value: unknown) => void> = [];
     mockDispatch.mockImplementation(
       () =>
         new Promise((resolve) => {
@@ -199,7 +201,7 @@ describe("BulkCreateWorktreeDialog", () => {
   });
 
   it("displays error messages for failed items", async () => {
-    let resolvers: Array<(value: unknown) => void> = [];
+    const resolvers: Array<(value: unknown) => void> = [];
     mockDispatch.mockImplementation(
       () =>
         new Promise((resolve) => {
@@ -231,7 +233,7 @@ describe("BulkCreateWorktreeDialog", () => {
   });
 
   it("shows Retry Failed button when there are failures", async () => {
-    let resolvers: Array<(value: unknown) => void> = [];
+    const resolvers: Array<(value: unknown) => void> = [];
     mockDispatch.mockImplementation(
       () =>
         new Promise((resolve) => {
@@ -260,7 +262,7 @@ describe("BulkCreateWorktreeDialog", () => {
   });
 
   it("does not show Retry Failed button when all succeed", async () => {
-    let resolvers: Array<(value: unknown) => void> = [];
+    const resolvers: Array<(value: unknown) => void> = [];
     mockDispatch.mockImplementation(
       () =>
         new Promise((resolve) => {
