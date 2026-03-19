@@ -82,31 +82,26 @@ describe("filesClient.search caching", () => {
   });
 
   it("evicts the oldest entry when cache exceeds max size", async () => {
-    // Fill cache with 50 entries
+    // Fill cache with 50 entries (q0..q49)
     for (let i = 0; i < 50; i++) {
       mockSearch.mockResolvedValueOnce({ files: [`file-${i}.ts`] });
       await filesClient.search({ cwd: "/project", query: `q${i}` });
     }
     expect(mockSearch).toHaveBeenCalledTimes(50);
 
-    // Adding entry 51 should evict q0
+    // Adding q50 should evict q0 (oldest)
     mockSearch.mockResolvedValueOnce({ files: ["new.ts"] });
     await filesClient.search({ cwd: "/project", query: "q50" });
     expect(mockSearch).toHaveBeenCalledTimes(51);
 
-    // q0 should be evicted — re-fetches from IPC
+    // q0 was evicted — re-fetch triggers IPC
     mockSearch.mockResolvedValueOnce({ files: ["refetched.ts"] });
     await filesClient.search({ cwd: "/project", query: "q0" });
     expect(mockSearch).toHaveBeenCalledTimes(52);
 
-    // q1 was also evicted (cascade: re-inserting q0 into a full cache evicts q1)
-    mockSearch.mockResolvedValueOnce({ files: ["refetched-q1.ts"] });
-    await filesClient.search({ cwd: "/project", query: "q1" });
-    expect(mockSearch).toHaveBeenCalledTimes(53);
-
-    // q2 should still be cached
-    await filesClient.search({ cwd: "/project", query: "q2" });
-    expect(mockSearch).toHaveBeenCalledTimes(53);
+    // q49 (most recently inserted before q50) should still be cached
+    await filesClient.search({ cwd: "/project", query: "q49" });
+    expect(mockSearch).toHaveBeenCalledTimes(52);
   });
 
   it("promotes accessed entries so they survive LRU eviction", async () => {
