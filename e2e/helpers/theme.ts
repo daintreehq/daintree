@@ -38,9 +38,9 @@ export async function setAppTheme(page: Page, schemeId: string): Promise<void> {
 
 export async function getThemeChromeMetrics(
   page: Page,
-  options: { branch?: string; projectName: string }
+  options: { worktreeCardSelector?: string; projectName: string }
 ): Promise<ThemeChromeMetrics> {
-  const branch = options.branch ?? "main";
+  const worktreeCardSelector = options.worktreeCardSelector ?? SEL.worktree.mainCard;
   return page.evaluate(
     (selectors) => {
       type Rgba = { r: number; g: number; b: number; a: number };
@@ -240,7 +240,7 @@ export async function getThemeChromeMetrics(
     {
       projectTrigger: SEL.toolbar.projectSwitcherTrigger,
       quickRunInput: '[aria-label="Command input"]',
-      worktreeCard: SEL.worktree.card(branch),
+      worktreeCard: worktreeCardSelector,
       projectName: options.projectName,
       sidebar: 'aside[aria-label="Sidebar"]',
       gridPanel: SEL.panel.gridPanel,

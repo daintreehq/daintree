@@ -556,6 +556,7 @@ export const WorktreeCard = React.memo(function WorktreeCard({
       tabIndex={0}
       role="button"
       data-worktree-branch={branchLabel}
+      data-worktree-is-main={isMainWorktree ? "true" : undefined}
       aria-label={`Worktree: ${worktree.issueTitle ?? branchLabel}${worktree.issueTitle ? ` (${branchLabel})` : ""}${isActive ? " (selected)" : ""}${worktree.isCurrent ? " (current)" : ""}, Status: ${spineState}${worktreeErrors.length > 0 ? `, ${worktreeErrors.length} error${worktreeErrors.length !== 1 ? "s" : ""}` : ""}${hasChanges ? ", has uncommitted changes" : ""}`}
     >
       {isOver && !isActive && (

@@ -7,7 +7,6 @@ import { SEL } from "../helpers/selectors";
 import { T_SHORT, T_MEDIUM, T_LONG, T_SETTLE } from "../helpers/timeouts";
 
 let ctx: AppContext;
-const MAIN = "main";
 const FEATURE = "feature/test-branch";
 
 test.describe.serial("Core: Worktree Cards", () => {
@@ -32,7 +31,7 @@ test.describe.serial("Core: Worktree Cards", () => {
     test("fixture shows main and feature worktree cards", async () => {
       const { window } = ctx;
 
-      const mainCard = window.locator(SEL.worktree.card(MAIN));
+      const mainCard = window.locator(SEL.worktree.mainCard);
       const featureCard = window.locator(SEL.worktree.card(FEATURE));
 
       await expect(mainCard).toBeVisible({ timeout: T_LONG });
@@ -42,7 +41,7 @@ test.describe.serial("Core: Worktree Cards", () => {
     test("main card is selected by default", async () => {
       const { window } = ctx;
 
-      const mainCard = window.locator(SEL.worktree.card(MAIN));
+      const mainCard = window.locator(SEL.worktree.mainCard);
       const featureCard = window.locator(SEL.worktree.card(FEATURE));
 
       await expect
@@ -59,7 +58,7 @@ test.describe.serial("Core: Worktree Cards", () => {
     test("main worktree shows uncommitted changes, feature does not", async () => {
       const { window } = ctx;
 
-      const mainCard = window.locator(SEL.worktree.card(MAIN));
+      const mainCard = window.locator(SEL.worktree.mainCard);
       const featureCard = window.locator(SEL.worktree.card(FEATURE));
 
       await expect
@@ -76,7 +75,7 @@ test.describe.serial("Core: Worktree Cards", () => {
     test("clicking feature card switches selection", async () => {
       const { window } = ctx;
 
-      const mainCard = window.locator(SEL.worktree.card(MAIN));
+      const mainCard = window.locator(SEL.worktree.mainCard);
       const featureCard = window.locator(SEL.worktree.card(FEATURE));
 
       // Click the top of the card to avoid hitting interactive child elements
@@ -100,7 +99,7 @@ test.describe.serial("Core: Worktree Cards", () => {
     test("clicking main card restores selection", async () => {
       const { window } = ctx;
 
-      const mainCard = window.locator(SEL.worktree.card(MAIN));
+      const mainCard = window.locator(SEL.worktree.mainCard);
       const featureCard = window.locator(SEL.worktree.card(FEATURE));
 
       await mainCard.click({ position: { x: 10, y: 10 } });
@@ -218,7 +217,7 @@ test.describe.serial("Core: Worktree Cards", () => {
         .toBeGreaterThanOrEqual(1);
 
       // Switch to main — should have 0 panels
-      const mainCard = window.locator(SEL.worktree.card(MAIN));
+      const mainCard = window.locator(SEL.worktree.mainCard);
       await mainCard.click({ position: { x: 10, y: 10 } });
       await expect
         .poll(() => mainCard.getAttribute("aria-label"), { timeout: T_LONG })

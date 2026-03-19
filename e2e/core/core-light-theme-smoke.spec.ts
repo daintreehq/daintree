@@ -26,7 +26,7 @@ test.describe.serial("Core: Light Theme Smoke", () => {
 
     await expect(ctx.window.locator(SEL.toolbar.projectSwitcherTrigger)).toBeVisible();
     await expect(ctx.window.getByLabel("Command input")).toBeVisible();
-    await expect(ctx.window.locator(SEL.worktree.card("main"))).toBeVisible();
+    await expect(ctx.window.locator(SEL.worktree.mainCard)).toBeVisible();
   });
 
   test.afterAll(async () => {
