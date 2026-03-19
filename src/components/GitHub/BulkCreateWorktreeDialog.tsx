@@ -396,9 +396,7 @@ export function BulkCreateWorktreeDialog({
     }
     if (failedIssueNumbers.size === 0) return;
 
-    const toRetry = planned.filter(
-      (p) => !p.skipped && failedIssueNumbers.has(p.issue.number)
-    );
+    const toRetry = planned.filter((p) => !p.skipped && failedIssueNumbers.has(p.issue.number));
 
     dispatchProgress({ type: "RETRY_FAILED" });
     await runBatch(toRetry);
@@ -705,15 +703,12 @@ export function BulkCreateWorktreeDialog({
                           <span className="text-canopy-text/50 text-xs font-mono shrink-0">
                             #{item.issue.number}
                           </span>
-                          <span className="text-canopy-text truncate">
-                            {item.issue.title}
-                          </span>
-                          {itemStatus?.status === "in-progress" &&
-                            itemStatus.attempt > 1 && (
-                              <span className="text-[10px] px-1.5 py-0.5 rounded bg-canopy-accent/10 text-canopy-accent shrink-0">
-                                retry {itemStatus.attempt - 1}
-                              </span>
-                            )}
+                          <span className="text-canopy-text truncate">{item.issue.title}</span>
+                          {itemStatus?.status === "in-progress" && itemStatus.attempt > 1 && (
+                            <span className="text-[10px] px-1.5 py-0.5 rounded bg-canopy-accent/10 text-canopy-accent shrink-0">
+                              retry {itemStatus.attempt - 1}
+                            </span>
+                          )}
                         </div>
                         {itemStatus?.status === "failed" && (
                           <p className="text-xs text-status-warning mt-0.5 break-words">
@@ -741,9 +736,7 @@ export function BulkCreateWorktreeDialog({
                   {succeededCount} of {progress.items.size} created
                 </span>
                 {failedCount > 0 && (
-                  <span className="text-status-warning">
-                    &middot; {failedCount} failed
-                  </span>
+                  <span className="text-status-warning">&middot; {failedCount} failed</span>
                 )}
               </div>
             </div>
