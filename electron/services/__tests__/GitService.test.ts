@@ -12,12 +12,22 @@ const gitClientMock = vi.hoisted(() => ({
 }));
 
 const createHardenedGitMock = vi.hoisted(() => vi.fn());
+const logWarnMock = vi.hoisted(() => vi.fn());
+const logErrorMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../../utils/hardenedGit.js", () => ({
   createHardenedGit: createHardenedGitMock,
 }));
 
+vi.mock("../../utils/logger.js", () => ({
+  logDebug: vi.fn(),
+  logInfo: vi.fn(),
+  logWarn: logWarnMock,
+  logError: logErrorMock,
+}));
+
 import { GitService } from "../GitService.js";
+import { GitError, WorktreeRemovedError } from "../../utils/errorTypes.js";
 
 describe("GitService", () => {
   let tempDir: string;
@@ -167,5 +177,19 @@ describe("GitService", () => {
         expect.arrayContaining(["main...feature/test", "--", "src/app.ts"])
       );
     });
+  });
+
+  it("logs at warn level (not error) when path is not a git repository", async () => {
+    gitClientMock.revparse.mockRejectedValue(
+      new Error("fatal: not a git repository (or any of the parent directories): .git\n")
+    );
+
+    const service = new GitService(tempDir);
+
+    const error = await service.getRepositoryRoot().catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(GitError);
+    expect(error).not.toBeInstanceOf(WorktreeRemovedError);
+    expect(logWarnMock).toHaveBeenCalled();
+    expect(logErrorMock).not.toHaveBeenCalled();
   });
 });
