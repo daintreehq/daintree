@@ -5,29 +5,58 @@ import "@fontsource/jetbrains-mono/500.css";
 import "@fontsource/jetbrains-mono/600.css";
 import "@fontsource/jetbrains-mono/700.css";
 import "./index.css";
-import App from "./App";
 import { applyDefaultAppTheme } from "./theme/applyAppTheme";
 import { ensureTerminalFontLoaded } from "./config/terminalFont";
 import { initStoreOrchestrator } from "./store/rendererStoreOrchestrator";
 import { registerRendererGlobalErrorHandlers } from "./utils/rendererGlobalErrorHandlers";
+import { renderBootstrapError } from "./utils/renderBootstrapError";
 
-const cleanupGlobalErrorHandlers = registerRendererGlobalErrorHandlers();
+let cleanupGlobalErrorHandlers: (() => void) | undefined;
+let cleanupOrchestrator: (() => void) | undefined;
 
-applyDefaultAppTheme(document.documentElement);
+async function bootstrap() {
+  cleanupGlobalErrorHandlers = registerRendererGlobalErrorHandlers();
 
-const cleanupOrchestrator = initStoreOrchestrator();
+  applyDefaultAppTheme(document.documentElement);
 
-if (import.meta.hot) {
-  import.meta.hot.dispose(() => {
-    cleanupGlobalErrorHandlers();
-    cleanupOrchestrator();
-  });
-}
+  cleanupOrchestrator = initStoreOrchestrator();
 
-ensureTerminalFontLoaded().then(() => {
-  createRoot(document.getElementById("root")!).render(
+  await ensureTerminalFontLoaded();
+
+  const { default: App } = await import("./App");
+
+  const rootEl = document.getElementById("root")!;
+  createRoot(rootEl).render(
     <StrictMode>
       <App />
     </StrictMode>
   );
+}
+
+bootstrap().catch((error: unknown) => {
+  console.error("Bootstrap failed:", error);
+
+  try {
+    const errObj =
+      error instanceof Error
+        ? { name: error.name, message: error.message, stack: error.stack }
+        : { message: String(error) };
+    window.electron?.logs?.write("error", `Bootstrap failed: ${JSON.stringify(errObj)}`);
+  } catch {
+    // IPC may not be available
+  }
+
+  document.getElementById("startup-skeleton")?.remove();
+
+  const rootEl = document.getElementById("root");
+  if (rootEl) {
+    renderBootstrapError(rootEl, error);
+  }
 });
+
+if (import.meta.hot) {
+  import.meta.hot.dispose(() => {
+    cleanupGlobalErrorHandlers?.();
+    cleanupOrchestrator?.();
+  });
+}
