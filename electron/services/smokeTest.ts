@@ -74,7 +74,17 @@ async function runSmokeRendererChecks(window: BrowserWindow): Promise<void> {
   const script = `(async () => {
     const root = document.getElementById("root");
     const hasRoot = Boolean(root);
-    const rootChildCount = root ? root.childElementCount : 0;
+
+    // React bootstrap is async (font loading + dynamic import), so poll until mounted
+    let rootChildCount = root ? root.childElementCount : 0;
+    if (hasRoot && rootChildCount === 0) {
+      const deadline = Date.now() + 15000;
+      while (rootChildCount === 0 && Date.now() < deadline) {
+        await new Promise(r => setTimeout(r, 200));
+        rootChildCount = root.childElementCount;
+      }
+    }
+
     const hasElectronApi = typeof window.electron === "object" && window.electron !== null;
     const appVersion = hasElectronApi ? await window.electron.app.getVersion() : null;
     const homeDir = hasElectronApi ? await window.electron.system.getHomeDir() : null;
