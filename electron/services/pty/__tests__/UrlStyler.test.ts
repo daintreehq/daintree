@@ -129,29 +129,31 @@ describe("UrlStyler", () => {
     });
 
     describe("preserving existing escape sequences", () => {
-      it("does not modify text with existing ANSI codes", () => {
+      it("wraps URLs in text with existing ANSI color codes", () => {
         const input = "\x1b[31mError:\x1b[0m https://example.com";
         const output = styleUrls(input);
 
-        expect(output).toBe(input);
+        expect(output).toContain(OSC_START);
+        expect(output).toContain("https://example.com");
       });
 
-      it("preserves colorized ls output", () => {
+      it("preserves colorized ls output without URLs", () => {
         const input = "\x1b[34mdir/\x1b[0m \x1b[32mfile.txt\x1b[0m";
         const output = styleUrls(input);
 
         expect(output).toBe(input);
       });
 
-      it("preserves ANSI codes even when URL present", () => {
+      it("wraps URLs in text with ANSI bold codes", () => {
         const input = "\x1b[1mBold\x1b[0m text with https://example.com";
         const output = styleUrls(input);
 
-        expect(output).toBe(input);
+        expect(output).toContain(OSC_START);
+        expect(output).toContain("https://example.com");
       });
 
-      it("does not modify text with existing OSC sequences", () => {
-        const input = "\x1b]0;Window Title\x07 https://example.com";
+      it("does not double-wrap text with existing OSC 8 hyperlinks", () => {
+        const input = `${OSC_START}https://example.com${BEL}https://example.com${OSC_END}`;
         const output = styleUrls(input);
 
         expect(output).toBe(input);

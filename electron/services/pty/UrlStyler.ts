@@ -27,9 +27,9 @@ const ANSI = {
 // eslint-disable-next-line no-useless-escape
 const URL_REGEX = /https?:\/\/[^\s<>"{}|\\^`\[\]]+/g;
 
-// Pattern to detect existing ANSI/OSC escape sequences
-// eslint-disable-next-line no-control-regex, no-useless-escape
-const ESCAPE_REGEX = /\x1b[\[\]]/;
+// Pattern to detect existing OSC 8 hyperlink sequences (avoid double-wrapping)
+// eslint-disable-next-line no-control-regex
+const OSC8_REGEX = /\x1b\]8;;/;
 
 /**
  * Wrap a URL with OSC 8 hyperlink sequence and ANSI styling.
@@ -63,9 +63,8 @@ export function styleUrls(text: string): string {
     return text;
   }
 
-  // Skip if text already contains escape sequences
-  // This preserves styling from applications like `ls --color`
-  if (ESCAPE_REGEX.test(text)) {
+  // Skip if text already contains OSC 8 hyperlinks (avoid double-wrapping)
+  if (OSC8_REGEX.test(text)) {
     return text;
   }
 
