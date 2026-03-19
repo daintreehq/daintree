@@ -160,7 +160,7 @@ describe("TerminalRendererPolicy", () => {
       });
     });
 
-    it("does not call onPostWake for non-alt-screen terminals", async () => {
+    it("calls onPostWake for non-alt-screen terminals after successful wake", async () => {
       const onPostWake = vi.fn();
       mockDeps.onPostWake = onPostWake;
       mockManagedTerminal.isAltBuffer = false;
@@ -176,10 +176,8 @@ describe("TerminalRendererPolicy", () => {
       policy.applyRendererPolicy("test-id", TerminalRefreshTier.FOCUSED);
 
       await vi.waitFor(() => {
-        expect(mockDeps.wakeAndRestore).toHaveBeenCalled();
+        expect(onPostWake).toHaveBeenCalledWith("test-id");
       });
-
-      expect(onPostWake).not.toHaveBeenCalled();
     });
 
     it("does not call onPostWake when wake fails", async () => {
