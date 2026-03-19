@@ -16,6 +16,7 @@ import { useTerminalInputStore } from "./terminalInputStore";
 import { useVoiceRecordingStore } from "./voiceRecordingStore";
 import { useLayoutUndoStore } from "./layoutUndoStore";
 import { invalidateBrandingCache } from "../hooks/useProjectBranding";
+import { slashCommandsClient } from "@/clients";
 interface ProjectSwitchResetOptions {
   preserveTerminalIds?: Set<string>;
   outgoingProjectId?: string | null;
@@ -30,6 +31,7 @@ export async function resetAllStoresForProjectSwitch(
     preserveTerminalIds: options.preserveTerminalIds,
   });
 
+  slashCommandsClient.clearCache();
   useWorktreeSelectionStore.getState().reset();
   cleanupWorktreeDataStore();
   // Note: projectSettingsStore is NOT cleaned up here to avoid triggering
