@@ -42,6 +42,25 @@ const SS3_NAV_RE = /^\x1bO[ABCDHFPQRS]$/;
 // eslint-disable-next-line no-control-regex
 const TILDE_NAV_RE = /^\x1b\[(2|3|5|6|15|17|18|19|20|21|23|24)(;\d+)?~$/;
 
+const DEC_2026_BEGIN = "\x1b[?2026h";
+const DEC_2026_END = "\x1b[?2026l";
+const DEC_2026_BEGIN_BYTES = new Uint8Array([0x1b, 0x5b, 0x3f, 0x32, 0x30, 0x32, 0x36, 0x68]);
+const DEC_2026_END_BYTES = new Uint8Array([0x1b, 0x5b, 0x3f, 0x32, 0x30, 0x32, 0x36, 0x6c]);
+
+export function wrapWithSyncOutput(data: string): string;
+export function wrapWithSyncOutput(data: Uint8Array): Uint8Array;
+export function wrapWithSyncOutput(data: string | Uint8Array): string | Uint8Array;
+export function wrapWithSyncOutput(data: string | Uint8Array): string | Uint8Array {
+  if (typeof data === "string") {
+    return DEC_2026_BEGIN + data + DEC_2026_END;
+  }
+  const wrapped = new Uint8Array(data.byteLength + 16);
+  wrapped.set(DEC_2026_BEGIN_BYTES, 0);
+  wrapped.set(data, 8);
+  wrapped.set(DEC_2026_END_BYTES, data.byteLength + 8);
+  return wrapped;
+}
+
 export function isNonKeyboardInput(data: string): boolean {
   // Mouse sequences
   if (data.startsWith("\x1b[M")) return true;
@@ -301,7 +320,8 @@ class TerminalInstanceService {
         ? performance.now()
         : Date.now()
       : 0;
-    terminal.write(data, () => {
+    const wrappedData = wrapWithSyncOutput(data);
+    terminal.write(wrappedData, () => {
       if (this.instances.get(id) !== managed) return;
 
       managed.pendingWrites = Math.max(0, (managed.pendingWrites ?? 1) - 1);
