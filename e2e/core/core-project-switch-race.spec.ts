@@ -38,15 +38,26 @@ async function getCurrentProject(page: typeof ctx.window): Promise<ProjectInfo> 
 }
 
 async function switchToProject(page: typeof ctx.window, projectName: string): Promise<void> {
-  await page.locator(SEL.toolbar.projectSwitcherTrigger).click();
-  const palette = page.locator(SEL.projectSwitcher.palette);
-  await expect(palette).toBeVisible({ timeout: T_MEDIUM });
-  // Wait for palette DOM to stabilize before clicking — list items can re-render
-  await page.waitForTimeout(T_SETTLE);
-  const projectRow = palette.locator(`text="${projectName}"`);
-  await projectRow.click({ force: true });
-  await expect(palette).not.toBeVisible({ timeout: T_LONG });
-  await page.waitForTimeout(T_SETTLE);
+  // Retry the entire open-palette → click-row sequence — the palette re-renders
+  // its list items asynchronously which can detach DOM nodes mid-click.
+  const maxAttempts = 3;
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    await page.locator(SEL.toolbar.projectSwitcherTrigger).click();
+    const palette = page.locator(SEL.projectSwitcher.palette);
+    await expect(palette).toBeVisible({ timeout: T_MEDIUM });
+    await page.waitForTimeout(T_SETTLE);
+    try {
+      await palette.locator(`text="${projectName}"`).click({ timeout: T_MEDIUM });
+      await expect(palette).not.toBeVisible({ timeout: T_LONG });
+      await page.waitForTimeout(T_SETTLE);
+      return;
+    } catch {
+      // Close palette if still open and retry
+      await page.keyboard.press("Escape");
+      await page.waitForTimeout(T_SETTLE);
+    }
+  }
+  throw new Error(`Failed to switch to project "${projectName}" after ${maxAttempts} attempts`);
 }
 
 test.describe.serial("Core: Project Switch Race Conditions", () => {
