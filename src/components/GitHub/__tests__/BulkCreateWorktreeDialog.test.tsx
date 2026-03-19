@@ -2,8 +2,7 @@
  * @vitest-environment jsdom
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, cleanup, within, act } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
+import { render, screen, cleanup, act } from "@testing-library/react";
 import type { GitHubIssue } from "@shared/types/github";
 
 const mockDispatch = vi.fn();
