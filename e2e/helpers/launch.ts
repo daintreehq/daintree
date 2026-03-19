@@ -150,11 +150,17 @@ function forceKillProcessTree(pid: number | undefined): void {
     if (process.platform === "win32") {
       execSync(`taskkill /F /PID ${pid} /T 2>nul`, { stdio: "ignore" });
     } else {
-      // Kill entire process group (negative PID) to catch child processes
+      // Kill all child processes by parent PID first, then the parent itself.
+      // pkill -P covers children that aren't in the same process group.
+      try {
+        execSync(`pkill -9 -P ${pid}`, { stdio: "ignore" });
+      } catch {
+        // No children or pkill not available
+      }
       try {
         process.kill(-pid, "SIGKILL");
       } catch {
-        // Process group kill failed — fall back to single process
+        // Process group kill failed
       }
       try {
         process.kill(pid, "SIGKILL");

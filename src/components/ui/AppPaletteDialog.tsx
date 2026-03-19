@@ -136,7 +136,9 @@ AppPaletteDialog.Body = function AppPaletteBody({
   maxHeight = "max-h-[50vh]",
 }: AppPaletteBodyProps) {
   return (
-    <div className={cn("overflow-y-auto p-2 space-y-1", maxHeight, className)}>{children}</div>
+    <div tabIndex={0} className={cn("overflow-y-auto p-2 space-y-1", maxHeight, className)}>
+      {children}
+    </div>
   );
 };
 
