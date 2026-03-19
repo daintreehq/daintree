@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any -- window.electron is untyped in Playwright evaluate() */
 import { test, expect } from "@playwright/test";
 import { launchApp, closeApp, type AppContext } from "../helpers/launch";
 import {
@@ -9,7 +10,6 @@ import {
   getListenerCount,
   getMemoryUsage,
 } from "../helpers/ipcFaults";
-import { T_MEDIUM } from "../helpers/timeouts";
 
 let ctx: AppContext;
 
