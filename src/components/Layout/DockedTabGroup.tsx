@@ -418,7 +418,9 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
             </span>
 
             {/* Tab count indicator */}
-            <span className="text-[10px] text-canopy-text/40 shrink-0">({panels.length})</span>
+            <span className="text-[10px] text-canopy-text/40 tabular-nums shrink-0">
+              ({panels.length})
+            </span>
 
             {isActive && commandText && (
               <>

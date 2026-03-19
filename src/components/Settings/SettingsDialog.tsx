@@ -1142,7 +1142,8 @@ function SearchResults({
     <div className="space-y-1">
       <div className="flex items-center justify-between mb-3">
         <p className="text-xs text-canopy-text/40">
-          {results.length} result{results.length === 1 ? "" : "s"}
+          <span className="tabular-nums">{results.length}</span> result
+          {results.length === 1 ? "" : "s"}
         </p>
         <p className="text-[10px] text-canopy-text/30">
           <kbd className="px-1 py-0.5 rounded bg-canopy-bg border border-canopy-border font-mono">

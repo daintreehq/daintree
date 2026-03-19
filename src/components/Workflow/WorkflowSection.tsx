@@ -37,7 +37,7 @@ export function WorkflowSection() {
           Workflows
         </span>
         {activeRuns.length > 0 && (
-          <span className="ml-auto text-[10px] text-status-info font-medium">
+          <span className="ml-auto text-[10px] tabular-nums text-status-info font-medium">
             {activeRuns.length} active
           </span>
         )}

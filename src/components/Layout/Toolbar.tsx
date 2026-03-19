@@ -611,7 +611,7 @@ export function Toolbar({
                         aria-label={`${detectedServers.length} detected dev servers`}
                       >
                         <Signal className="h-4 w-4" />
-                        <span className="absolute -top-0.5 -right-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-canopy-accent text-[10px] font-bold text-accent-foreground">
+                        <span className="absolute -top-0.5 -right-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-canopy-accent text-[10px] font-bold tabular-nums text-accent-foreground">
                           {detectedServers.length}
                         </span>
                       </Button>
@@ -897,7 +897,7 @@ export function Toolbar({
                   >
                     <Bell />
                     {notificationUnreadCount > 0 && (
-                      <span className="absolute top-1 right-1 min-w-[14px] h-[14px] flex items-center justify-center rounded-full bg-canopy-accent text-[9px] font-bold text-canopy-bg px-0.5 leading-none">
+                      <span className="absolute top-1 right-1 min-w-[14px] h-[14px] flex items-center justify-center rounded-full bg-canopy-accent text-[9px] font-bold tabular-nums text-canopy-bg px-0.5 leading-none">
                         {notificationUnreadCount > 99 ? "99+" : notificationUnreadCount}
                       </span>
                     )}

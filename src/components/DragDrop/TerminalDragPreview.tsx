@@ -46,6 +46,7 @@ export function TerminalDragPreview({ terminal, groupTabCount }: TerminalDragPre
             alignItems: "center",
             gap: 3,
             boxShadow: "0 2px 8px rgba(0, 0, 0, 0.4)",
+            fontVariantNumeric: "tabular-nums",
             zIndex: 10,
           }}
         >

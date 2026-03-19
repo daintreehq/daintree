@@ -41,7 +41,9 @@ export function RunCard({ run, onCancel }: RunCardProps) {
           <span className={cn("text-[10px]", statusConfig.color)}>{statusConfig.label}</span>
         </div>
         <div className="flex items-center gap-1 shrink-0">
-          <span className="text-[10px] text-text-muted">{formatTimeAgo(run.startedAt)}</span>
+          <span className="text-[10px] tabular-nums text-text-muted">
+            {formatTimeAgo(run.startedAt)}
+          </span>
           {run.status === "running" && onCancel && (
             <button
               onClick={() => onCancel(run.runId)}

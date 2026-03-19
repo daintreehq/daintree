@@ -171,7 +171,7 @@ export function CrashRecoveryDialog({
                 >
                   {allSelected ? "Deselect all" : "Select all"}
                 </button>
-                <span className="text-xs text-canopy-text/50">
+                <span className="text-xs tabular-nums text-canopy-text/50">
                   {selectedCount} of {panels.length} selected
                 </span>
               </div>
@@ -195,8 +195,9 @@ export function CrashRecoveryDialog({
                 className="text-xs text-status-warning/90 bg-status-warning/10 rounded px-2 py-1.5"
                 data-testid="suspect-warning"
               >
-                {suspectCount} panel{suspectCount > 1 ? "s were" : " was"} created shortly before
-                the crash and may be related.
+                <span className="tabular-nums">{suspectCount}</span> panel
+                {suspectCount > 1 ? "s were" : " was"} created shortly before the crash and may be
+                related.
               </p>
             )}
 
@@ -207,7 +208,7 @@ export function CrashRecoveryDialog({
                 className="flex-1"
                 data-testid="restore-selected-button"
               >
-                Restore selected ({selectedCount})
+                Restore selected (<span className="tabular-nums">{selectedCount}</span>)
               </Button>
               <Button
                 variant="ghost"

@@ -54,7 +54,9 @@ export function NotificationCenterEntry({
         )}
         <p className="text-xs text-canopy-text/70 leading-snug break-words">{entry.message}</p>
         {threadCount && threadCount > 1 && (
-          <p className="text-[10px] text-canopy-text/40 mt-0.5">{threadCount} events</p>
+          <p className="text-[10px] tabular-nums text-canopy-text/40 mt-0.5">
+            {threadCount} events
+          </p>
         )}
         {entry.actions && entry.actions.length > 0 && (
           <div className="flex flex-wrap gap-1.5 mt-1.5">

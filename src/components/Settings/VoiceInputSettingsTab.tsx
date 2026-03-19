@@ -703,7 +703,7 @@ function DictionarySection({
       <label className="text-sm text-canopy-text/70 flex items-center gap-2">
         <BookText className="w-3.5 h-3.5 text-canopy-text/50" aria-hidden="true" />
         Custom Dictionary
-        <span className="text-xs text-canopy-text/30">
+        <span className="text-xs tabular-nums text-canopy-text/30">
           {words.length > 0 && `${words.length}/100`}
         </span>
       </label>

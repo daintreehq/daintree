@@ -54,12 +54,12 @@ export function BackgroundContainer({ compact = false }: BackgroundContainerProp
           <span className="relative">
             <Eclipse className="w-3.5 h-3.5 text-canopy-text/50" aria-hidden="true" />
             {compact && count > 0 && (
-              <span className="absolute -top-1.5 -right-1.5 z-10 flex items-center justify-center min-w-[14px] h-[14px] px-0.5 rounded-full text-[10px] font-bold shadow-sm bg-canopy-text/20 text-canopy-text">
+              <span className="absolute -top-1.5 -right-1.5 z-10 flex items-center justify-center min-w-[14px] h-[14px] px-0.5 rounded-full text-[10px] font-bold tabular-nums shadow-sm bg-canopy-text/20 text-canopy-text">
                 {count > 9 ? "9+" : count}
               </span>
             )}
           </span>
-          {!compact && <span className="font-medium">Background ({count})</span>}
+          {!compact && <span className="font-medium tabular-nums">Background ({count})</span>}
         </Button>
       </PopoverTrigger>
 
