@@ -14,7 +14,7 @@ const emergencyLogMock = vi.hoisted(() => ({
 }));
 
 const storeMock = vi.hoisted(() => ({
-  get: vi.fn(() => []),
+  get: vi.fn((): unknown[] | undefined => []),
   set: vi.fn(),
 }));
 
