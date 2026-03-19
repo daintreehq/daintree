@@ -50,6 +50,7 @@ export function getLocalhostDevCSP(): string {
     "worker-src 'self' blob:",
     "object-src 'none'",
     "base-uri 'self'",
+    "form-action 'self' http://localhost:* http://127.0.0.1:* https://localhost:* https://127.0.0.1:*",
   ].join("; ");
 }
 

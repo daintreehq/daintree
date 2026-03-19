@@ -114,6 +114,38 @@ describe("webviewCsp", () => {
 
       expect(csp).toMatch(/img-src[^;]*https:/);
     });
+
+    it("includes form-action directive restricting form submissions to localhost", () => {
+      const csp = getLocalhostDevCSP();
+      const directives = Object.fromEntries(
+        csp.split("; ").map((d) => {
+          const [name, ...rest] = d.split(" ");
+          return [name, rest.join(" ")];
+        })
+      );
+
+      expect(directives["form-action"]).toBeDefined();
+      expect(directives["form-action"]).toContain("'self'");
+      expect(directives["form-action"]).toContain("http://localhost:*");
+      expect(directives["form-action"]).toContain("http://127.0.0.1:*");
+      expect(directives["form-action"]).toContain("https://localhost:*");
+      expect(directives["form-action"]).toContain("https://127.0.0.1:*");
+    });
+
+    it("does not allow external origins in form-action", () => {
+      const csp = getLocalhostDevCSP();
+      const directives = Object.fromEntries(
+        csp.split("; ").map((d) => {
+          const [name, ...rest] = d.split(" ");
+          return [name, rest.join(" ")];
+        })
+      );
+
+      expect(directives["form-action"]).not.toMatch(/(?:^|\s)https:(?:\s|$)/);
+      expect(directives["form-action"]).not.toMatch(/(?:^|\s)http:(?:\s|$)/);
+      expect(directives["form-action"]).not.toMatch(/(?:^|\s)\*(?:\s|$)/);
+      expect(directives["form-action"]).not.toContain("http://example.com");
+    });
   });
 
   describe("mergeCspHeaders", () => {
