@@ -13,6 +13,7 @@ export function useDeferredNewsletterPrompt(isStateLoaded: boolean): DeferredNew
   const [visible, setVisible] = useState(false);
   const eligibleRef = useRef(false);
   const firedRef = useRef(false);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const dismiss = useCallback((subscribed: boolean) => {
     void subscribed;
@@ -36,18 +37,23 @@ export function useDeferredNewsletterPrompt(isStateLoaded: boolean): DeferredNew
           const hasAgent = useTerminalStore.getState().terminals.some((t) => t.kind === "agent");
           if (hasAgent && !firedRef.current) {
             firedRef.current = true;
-            setTimeout(() => setVisible(true), PROMPT_DELAY_MS);
+            timerRef.current = setTimeout(() => setVisible(true), PROMPT_DELAY_MS);
           }
         }
       })
       .catch(console.error);
+
+    return () => {
+      if (timerRef.current !== null) {
+        clearTimeout(timerRef.current);
+        timerRef.current = null;
+      }
+    };
   }, [isStateLoaded]);
 
   // Subscribe to terminal store for agent launch detection
   useEffect(() => {
     if (!isElectronAvailable() || !isStateLoaded) return;
-
-    let timer: ReturnType<typeof setTimeout> | null = null;
 
     const unsubscribe = useTerminalStore.subscribe((state) => {
       if (!eligibleRef.current || firedRef.current) return;
@@ -55,13 +61,16 @@ export function useDeferredNewsletterPrompt(isStateLoaded: boolean): DeferredNew
       if (hasAgent) {
         firedRef.current = true;
         unsubscribe();
-        timer = setTimeout(() => setVisible(true), PROMPT_DELAY_MS);
+        timerRef.current = setTimeout(() => setVisible(true), PROMPT_DELAY_MS);
       }
     });
 
     return () => {
       unsubscribe();
-      if (timer !== null) clearTimeout(timer);
+      if (timerRef.current !== null) {
+        clearTimeout(timerRef.current);
+        timerRef.current = null;
+      }
     };
   }, [isStateLoaded]);
 

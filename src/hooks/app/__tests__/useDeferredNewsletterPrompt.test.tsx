@@ -179,6 +179,30 @@ describe("useDeferredNewsletterPrompt", () => {
     expect(onboardingMock.markNewsletterSeen).toHaveBeenCalledOnce();
   });
 
+  it("cleans up timer on unmount during delay", async () => {
+    const { result, unmount } = renderHook(() => useDeferredNewsletterPrompt(true));
+
+    await act(async () => {
+      await vi.runAllTimersAsync();
+    });
+
+    // Trigger agent detection
+    storeState = { terminals: [{ kind: "agent" }] };
+    act(() => {
+      storeSubscribers.forEach((fn) => fn(storeState));
+    });
+
+    // Unmount before delay elapses
+    unmount();
+
+    // Advance past the delay — should not throw or update state
+    await act(async () => {
+      vi.advanceTimersByTime(3000);
+    });
+
+    expect(result.current.visible).toBe(false);
+  });
+
   it("does not show when isStateLoaded is false", async () => {
     const { result } = renderHook(() => useDeferredNewsletterPrompt(false));
 
