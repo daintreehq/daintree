@@ -433,7 +433,7 @@ describe("WorktreeHeader hover:underline on badges", () => {
 
 describe("WorktreeHeader icon button hit targets", () => {
   it("collapse button has p-1.5 for WCAG 24px minimum", () => {
-    const { container } = renderHeader({
+    renderHeader({
       canCollapse: true,
       onToggleCollapse: noop,
     });
