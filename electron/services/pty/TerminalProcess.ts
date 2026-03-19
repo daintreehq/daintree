@@ -1,3 +1,4 @@
+import { spawnSync } from "child_process";
 import type * as pty from "node-pty";
 import type { Terminal as HeadlessTerminalType } from "@xterm/headless";
 import headless from "@xterm/headless";
@@ -101,6 +102,7 @@ export class TerminalProcess {
 
   private inputWriteQueue: string[] = [];
   private inputWriteTimeout: NodeJS.Timeout | null = null;
+  private killTreeTimer: NodeJS.Timeout | null = null;
 
   private _scrollback: number;
   private headlessResponderDisposable: { dispose: () => void } | null = null;
@@ -787,6 +789,88 @@ export class TerminalProcess {
     });
   }
 
+  /**
+   * Kill the entire process tree rooted at the PTY shell.
+   * Sends SIGTERM to all descendants bottom-up (leaves first), then kills the shell.
+   * @param immediate If true, SIGKILL is sent synchronously (for process.on("exit") context
+   *   where timers don't fire). If false, SIGKILL escalation fires after 500ms.
+   */
+  private killProcessTree(immediate: boolean): void {
+    // Clear any pending escalation timer from a prior kill() call
+    if (this.killTreeTimer) {
+      clearTimeout(this.killTreeTimer);
+      this.killTreeTimer = null;
+    }
+
+    const shellPid = this.terminalInfo.ptyProcess.pid;
+
+    if (shellPid === undefined || shellPid <= 0) {
+      try {
+        this.terminalInfo.ptyProcess.kill();
+      } catch {
+        // Process may already be dead
+      }
+      return;
+    }
+
+    // Windows: use taskkill /T /F which handles the entire tree atomically
+    if (process.platform === "win32") {
+      try {
+        spawnSync("taskkill", ["/T", "/F", "/PID", String(shellPid)], {
+          windowsHide: true,
+          stdio: "ignore",
+          timeout: 3000,
+        });
+      } catch {
+        // taskkill may fail if process already exited
+      }
+      try {
+        this.terminalInfo.ptyProcess.kill();
+      } catch {
+        // Process may already be dead
+      }
+      return;
+    }
+
+    // Unix: SIGTERM descendants bottom-up, then kill the shell
+    const descendants = this.deps.processTreeCache?.getDescendantPids(shellPid) ?? [];
+
+    for (const pid of descendants) {
+      try {
+        process.kill(pid, "SIGTERM");
+      } catch {
+        // ESRCH: process already exited
+      }
+    }
+
+    try {
+      this.terminalInfo.ptyProcess.kill();
+    } catch {
+      // Process may already be dead
+    }
+
+    // SIGKILL escalation for any survivors
+    const allPids = [...descendants, shellPid];
+    const sigkillSweep = (): void => {
+      for (const pid of allPids) {
+        try {
+          process.kill(pid, "SIGKILL");
+        } catch {
+          // ESRCH: process already exited
+        }
+      }
+    };
+
+    if (immediate) {
+      sigkillSweep();
+    } else {
+      this.killTreeTimer = setTimeout(() => {
+        this.killTreeTimer = null;
+        sigkillSweep();
+      }, 500);
+    }
+  }
+
   kill(reason?: string): void {
     const terminal = this.terminalInfo;
 
@@ -836,26 +920,7 @@ export class TerminalProcess {
 
     this.disposeHeadless();
 
-    const ptyPid = terminal.ptyProcess.pid;
-    try {
-      terminal.ptyProcess.kill();
-    } catch {
-      // Process may already be dead
-    }
-
-    if (ptyPid !== undefined) {
-      const killCheckTimeout = setTimeout(() => {
-        try {
-          process.kill(ptyPid, 0);
-          console.warn(
-            `[TerminalProcess] PTY process ${ptyPid} for terminal ${this.id} still alive 2s after kill`
-          );
-        } catch {
-          // Process is dead — expected
-        }
-      }, 2000);
-      killCheckTimeout.unref();
-    }
+    this.killProcessTree(false);
   }
 
   checkFlooding(): { flooded: boolean; resumed: boolean } {
@@ -1124,11 +1189,7 @@ export class TerminalProcess {
 
     this.disposeHeadless();
 
-    try {
-      this.terminalInfo.ptyProcess.kill();
-    } catch {
-      // Ignore kill errors - process may already be dead
-    }
+    this.killProcessTree(true);
   }
 
   private setupPtyHandlers(ptyProcess: pty.IPty): void {
@@ -1206,6 +1267,11 @@ export class TerminalProcess {
         this.inputWriteTimeout = null;
       }
       this.inputWriteQueue = [];
+
+      if (this.killTreeTimer) {
+        clearTimeout(this.killTreeTimer);
+        this.killTreeTimer = null;
+      }
 
       this.callbacks.onExit(this.id, exitCode ?? 0);
       this.forensicsBuffer.logForensics(

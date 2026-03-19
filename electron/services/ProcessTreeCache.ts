@@ -288,6 +288,36 @@ export class ProcessTreeCache {
     return childPids ? [...childPids] : [];
   }
 
+  /**
+   * Get all descendant PIDs of a process in bottom-up (post-order) order.
+   * Deepest descendants come first so callers can kill leaves before parents,
+   * preventing OS reparenting to PID 1 which would break the tree snapshot.
+   * The root PID itself is NOT included in the result.
+   */
+  getDescendantPids(rootPid: number): number[] {
+    const result: number[] = [];
+    const visited = new Set<number>();
+
+    const visit = (pid: number): void => {
+      if (visited.has(pid)) return;
+      visited.add(pid);
+
+      const children = this.childrenMap.get(pid);
+      if (children) {
+        for (const child of children) {
+          visit(child);
+        }
+      }
+
+      if (pid !== rootPid) {
+        result.push(pid);
+      }
+    };
+
+    visit(rootPid);
+    return result;
+  }
+
   getProcess(pid: number): ProcessInfo | undefined {
     return this.cache.get(pid);
   }

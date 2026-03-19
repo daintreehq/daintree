@@ -66,6 +66,51 @@ describe("ProcessTreeCache", () => {
 
     expect(processTree.hasActiveDescendants(1, 2.0)).toBe(false);
   });
+
+  it("returns descendant pids in post-order (deepest first)", () => {
+    const processTree = createSeededCache();
+    // Tree: 1 -> [2, 3], 2 -> [4]
+    // Post-order: 4 (leaf), 2, 3
+    const descendants = processTree.getDescendantPids(1);
+    expect(descendants).toEqual([4, 2, 3]);
+  });
+
+  it("returns empty array for pid with no children", () => {
+    const processTree = createSeededCache();
+    expect(processTree.getDescendantPids(4)).toEqual([]);
+  });
+
+  it("returns only direct children for flat structure", () => {
+    const processTree = createSeededCache();
+    // PID 1 has children [2, 3], PID 2 has child [4]
+    // Asking for descendants of PID 3 (no children)
+    expect(processTree.getDescendantPids(3)).toEqual([]);
+  });
+
+  it("returns immediate children when no grandchildren exist", () => {
+    const processTree = createSeededCache();
+    // PID 2 has child [4], no further nesting
+    expect(processTree.getDescendantPids(2)).toEqual([4]);
+  });
+
+  it("does not include root pid in descendants", () => {
+    const processTree = createSeededCache();
+    const descendants = processTree.getDescendantPids(1);
+    expect(descendants).not.toContain(1);
+  });
+
+  it("does not mutate childrenMap when getting descendants", () => {
+    const processTree = createSeededCache();
+    processTree.getDescendantPids(1);
+    processTree.getDescendantPids(1);
+    expect(processTree.getChildPids(1)).toEqual([2, 3]);
+    expect(processTree.getChildPids(2)).toEqual([4]);
+  });
+
+  it("returns empty array for unknown pid", () => {
+    const processTree = createSeededCache();
+    expect(processTree.getDescendantPids(999)).toEqual([]);
+  });
 });
 
 describe("Windows CPU delta computation", () => {
