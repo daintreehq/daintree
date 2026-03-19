@@ -121,6 +121,9 @@ test.describe.serial("Core: Accessibility", () => {
         await window
           .locator(SEL.actionPalette.dialog)
           .waitFor({ state: "visible", timeout: T_MEDIUM });
+        await window
+          .locator(SEL.actionPalette.searchInput)
+          .waitFor({ state: "visible", timeout: T_SHORT });
 
         const results = await buildAxeScanner(window).analyze();
         expect(results.violations, formatViolations(results.violations)).toEqual([]);
@@ -138,6 +141,9 @@ test.describe.serial("Core: Accessibility", () => {
         await window
           .locator(SEL.quickSwitcher.dialog)
           .waitFor({ state: "visible", timeout: T_MEDIUM });
+        await window
+          .locator(SEL.quickSwitcher.searchInput)
+          .waitFor({ state: "visible", timeout: T_SHORT });
 
         const results = await buildAxeScanner(window).analyze();
         expect(results.violations, formatViolations(results.violations)).toEqual([]);
