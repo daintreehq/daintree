@@ -297,11 +297,7 @@ describe("GitHubListItem", () => {
 
   it("scopes checkbox hover to icon area via named group", () => {
     const { container } = render(
-      <GitHubListItem
-        item={baseIssue}
-        type="issue"
-        onToggleSelect={vi.fn()}
-      />
+      <GitHubListItem item={baseIssue} type="issue" onToggleSelect={vi.fn()} />
     );
     const iconWrapper = container.querySelector(".group\\/icon");
     expect(iconWrapper).not.toBeNull();
@@ -319,12 +315,7 @@ describe("GitHubListItem", () => {
 
   it("shows checkbox unconditionally when selection is active", () => {
     const { container } = render(
-      <GitHubListItem
-        item={baseIssue}
-        type="issue"
-        isSelectionActive
-        onToggleSelect={vi.fn()}
-      />
+      <GitHubListItem item={baseIssue} type="issue" isSelectionActive onToggleSelect={vi.fn()} />
     );
     const iconWrapper = container.querySelector(".group\\/icon");
     expect(iconWrapper).not.toBeNull();
