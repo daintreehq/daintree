@@ -7,14 +7,24 @@ vi.mock("electron", () => ({
   app: { getPath: vi.fn(() => "/fake/userData") },
 }));
 
+const MOCK_START_TIME =
+  process.platform === "win32"
+    ? "CreationDate=20260101000000.000000+000\n"
+    : "Thu Jan  1 00:00:00 2026\n";
+
+const MOCK_START_TIME_PARSED =
+  process.platform === "win32" ? "20260101000000.000000+000" : "Thu Jan  1 00:00:00 2026";
+
 vi.mock("node:child_process", () => ({
-  execFileSync: vi.fn(() => Buffer.from("Thu Jan  1 00:00:00 2026\n")),
+  execFileSync: vi.fn(() => Buffer.from(MOCK_START_TIME)),
+  spawnSync: vi.fn(() => ({ status: 0 })),
 }));
 
 import { TrashedPidTracker } from "../TrashedPidTracker.js";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 
 const mockedExecFileSync = vi.mocked(execFileSync);
+const mockedSpawnSync = vi.mocked(spawnSync);
 
 describe("TrashedPidTracker", () => {
   let tmpDir: string;
@@ -51,7 +61,7 @@ describe("TrashedPidTracker", () => {
       expect(entries).toHaveLength(1);
       expect(entries[0].terminalId).toBe("term-1");
       expect(entries[0].pid).toBe(12345);
-      expect(entries[0].startTime).toBe("Thu Jan  1 00:00:00 2026");
+      expect(entries[0].startTime).toBe(MOCK_START_TIME_PARSED);
     });
 
     it("skips undefined or invalid PIDs", () => {
@@ -125,7 +135,7 @@ describe("TrashedPidTracker", () => {
         {
           terminalId: "term-1",
           pid: 9999,
-          startTime: "Thu Jan  1 00:00:00 2026",
+          startTime: MOCK_START_TIME_PARSED,
           trashedAt: Date.now(),
         },
       ]);
@@ -134,7 +144,15 @@ describe("TrashedPidTracker", () => {
 
       tracker.cleanupOrphans();
 
-      expect(killSpy).toHaveBeenCalledWith(-9999, "SIGKILL");
+      if (process.platform === "win32") {
+        expect(mockedSpawnSync).toHaveBeenCalledWith(
+          "taskkill",
+          ["/T", "/F", "/PID", "9999"],
+          expect.objectContaining({ windowsHide: true })
+        );
+      } else {
+        expect(killSpy).toHaveBeenCalledWith(-9999, "SIGKILL");
+      }
       expect(fs.existsSync(path.join(tmpDir, "trashed-pids.json"))).toBe(false);
     });
 
@@ -180,7 +198,7 @@ describe("TrashedPidTracker", () => {
         {
           terminalId: "term-1",
           pid: process.pid,
-          startTime: "Thu Jan  1 00:00:00 2026",
+          startTime: MOCK_START_TIME_PARSED,
           trashedAt: Date.now(),
         },
       ]);
@@ -197,7 +215,7 @@ describe("TrashedPidTracker", () => {
         {
           terminalId: "term-1",
           pid: 9999,
-          startTime: "Thu Jan  1 00:00:00 2026",
+          startTime: MOCK_START_TIME_PARSED,
           trashedAt: Date.now(),
         },
         { bad: "entry" },
@@ -209,7 +227,11 @@ describe("TrashedPidTracker", () => {
 
       tracker.cleanupOrphans();
 
-      expect(killSpy).toHaveBeenCalledTimes(1);
+      if (process.platform === "win32") {
+        expect(mockedSpawnSync).toHaveBeenCalledTimes(1);
+      } else {
+        expect(killSpy).toHaveBeenCalledTimes(1);
+      }
     });
   });
 });
