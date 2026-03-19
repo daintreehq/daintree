@@ -8,7 +8,7 @@ import { LiveTimeAgo } from "../LiveTimeAgo";
 import { WorktreeDetails } from "../WorktreeDetails";
 import { ChevronRight, GitCommitHorizontal, Loader2 } from "lucide-react";
 import type { ComputedSubtitle } from "./hooks/useWorktreeStatus";
-import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
 export interface WorktreeDetailsSectionProps {
   worktree: WorktreeState;
@@ -155,46 +155,42 @@ export function WorktreeDetailsSection({
               )}
             </span>
 
-            <TooltipProvider>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <div className="ml-3 flex shrink-0 items-center gap-1.5 text-xs text-text-muted">
-                    <ActivityLight
-                      lastActivityTimestamp={worktree.lastActivityTimestamp}
-                      className="w-1.5 h-1.5"
-                    />
-                    <LiveTimeAgo timestamp={worktree.lastActivityTimestamp} />
-                  </div>
-                </TooltipTrigger>
-                <TooltipContent side="bottom">
-                  {worktree.lastActivityTimestamp
-                    ? `Last activity: ${new Date(worktree.lastActivityTimestamp).toLocaleString()}`
-                    : "No recent activity recorded"}
-                </TooltipContent>
-              </Tooltip>
-            </TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <div className="ml-3 flex shrink-0 items-center gap-1.5 text-xs text-text-muted">
+                  <ActivityLight
+                    lastActivityTimestamp={worktree.lastActivityTimestamp}
+                    className="w-1.5 h-1.5"
+                  />
+                  <LiveTimeAgo timestamp={worktree.lastActivityTimestamp} />
+                </div>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">
+                {worktree.lastActivityTimestamp
+                  ? `Last activity: ${new Date(worktree.lastActivityTimestamp).toLocaleString()}`
+                  : "No recent activity recorded"}
+              </TooltipContent>
+            </Tooltip>
           </button>
 
           {onOpenReviewHub && hasChanges && (
-            <TooltipProvider>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <button
-                    onClick={onOpenReviewHub}
-                    className={cn(
-                      "shrink-0 border-l border-border-subtle px-2 py-1 transition-colors",
-                      "text-[var(--color-state-active)]/70 hover:bg-[var(--color-state-active)]/10 hover:text-[var(--color-state-active)]",
-                      "rounded-r-[var(--radius-lg)]",
-                      "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-canopy-accent"
-                    )}
-                    aria-label="Open Review & Commit"
-                  >
-                    <GitCommitHorizontal className="w-3.5 h-3.5" />
-                  </button>
-                </TooltipTrigger>
-                <TooltipContent side="bottom">Review & Commit</TooltipContent>
-              </Tooltip>
-            </TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  onClick={onOpenReviewHub}
+                  className={cn(
+                    "shrink-0 border-l border-border-subtle px-2 py-1 transition-colors",
+                    "text-[var(--color-state-active)]/70 hover:bg-[var(--color-state-active)]/10 hover:text-[var(--color-state-active)]",
+                    "rounded-r-[var(--radius-lg)]",
+                    "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-canopy-accent"
+                  )}
+                  aria-label="Open Review & Commit"
+                >
+                  <GitCommitHorizontal className="w-3.5 h-3.5" />
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">Review & Commit</TooltipContent>
+            </Tooltip>
           )}
         </div>
       )}

@@ -6,6 +6,7 @@ import { render, screen, fireEvent } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { WorktreeHeader, type WorktreeHeaderProps } from "../WorktreeHeader";
 import type { WorktreeState } from "@shared/types";
+import { TooltipProvider } from "@/components/ui/tooltip";
 
 vi.mock("react-dom", async () => {
   const actual = await vi.importActual<typeof import("react-dom")>("react-dom");
@@ -66,17 +67,19 @@ const baseMenu: WorktreeHeaderProps["menu"] = {
 
 function renderHeader(overrides: Partial<WorktreeHeaderProps> = {}) {
   return render(
-    <WorktreeHeader
-      worktree={baseWorktree}
-      isActive={false}
-      isMainWorktree={false}
-      isPinned={false}
-      branchLabel="feature/test"
-      worktreeErrorCount={0}
-      badges={{}}
-      menu={baseMenu}
-      {...overrides}
-    />
+    <TooltipProvider>
+      <WorktreeHeader
+        worktree={baseWorktree}
+        isActive={false}
+        isMainWorktree={false}
+        isPinned={false}
+        branchLabel="feature/test"
+        worktreeErrorCount={0}
+        badges={{}}
+        menu={baseMenu}
+        {...overrides}
+      />
+    </TooltipProvider>
   );
 }
 

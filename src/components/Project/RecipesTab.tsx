@@ -163,7 +163,7 @@ export function RecipesTab({
   };
 
   return (
-    <>
+    <TooltipProvider delayDuration={400} skipDelayDuration={300}>
       <div className="mb-6">
         <h3 className="text-sm font-semibold text-canopy-text/80 mb-2 flex items-center gap-2">
           <BookOpen className="h-4 w-4" />
@@ -195,16 +195,14 @@ export function RecipesTab({
                     <div className="flex items-start gap-3">
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2">
-                          <TooltipProvider>
-                            <Tooltip>
-                              <TooltipTrigger asChild>
-                                <span className="text-sm font-medium text-foreground truncate">
-                                  {recipe.name}
-                                </span>
-                              </TooltipTrigger>
-                              <TooltipContent side="bottom">{recipe.name}</TooltipContent>
-                            </Tooltip>
-                          </TooltipProvider>
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <span className="text-sm font-medium text-foreground truncate">
+                                {recipe.name}
+                              </span>
+                            </TooltipTrigger>
+                            <TooltipContent side="bottom">{recipe.name}</TooltipContent>
+                          </Tooltip>
                           <span className="text-[11px] text-muted-foreground bg-muted px-1.5 py-0.5 rounded font-medium shrink-0">
                             {getRecipeScope(recipe)}
                           </span>
@@ -229,64 +227,54 @@ export function RecipesTab({
                         </div>
                       </div>
                       <div className="flex items-center gap-1 shrink-0 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity">
-                        <TooltipProvider>
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                onClick={() => handleEditRecipe(recipe)}
-                                className="h-7 px-2"
-                                aria-label={`Edit recipe ${recipe.name}`}
-                              >
-                                <Edit3 />
-                              </Button>
-                            </TooltipTrigger>
-                            <TooltipContent side="bottom">Edit recipe</TooltipContent>
-                          </Tooltip>
-                        </TooltipProvider>
-                        <TooltipProvider>
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                onClick={() => handleExportRecipe(recipe.id)}
-                                className="h-7 px-2"
-                                aria-label={
-                                  exported
-                                    ? `Recipe ${recipe.name} exported to clipboard`
-                                    : `Export recipe ${recipe.name} to clipboard`
-                                }
-                              >
-                                {exported ? (
-                                  <Check className="text-status-success" />
-                                ) : (
-                                  <Download />
-                                )}
-                              </Button>
-                            </TooltipTrigger>
-                            <TooltipContent side="bottom">
-                              {exported ? "Exported" : "Export recipe to clipboard"}
-                            </TooltipContent>
-                          </Tooltip>
-                        </TooltipProvider>
-                        <TooltipProvider>
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                onClick={() => setRecipeToDelete(recipe.id)}
-                                className="h-7 px-2"
-                                aria-label={`Delete recipe ${recipe.name}`}
-                              >
-                                <Trash2 className="text-status-error" />
-                              </Button>
-                            </TooltipTrigger>
-                            <TooltipContent side="bottom">Delete recipe</TooltipContent>
-                          </Tooltip>
-                        </TooltipProvider>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => handleEditRecipe(recipe)}
+                              className="h-7 px-2"
+                              aria-label={`Edit recipe ${recipe.name}`}
+                            >
+                              <Edit3 />
+                            </Button>
+                          </TooltipTrigger>
+                          <TooltipContent side="bottom">Edit recipe</TooltipContent>
+                        </Tooltip>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => handleExportRecipe(recipe.id)}
+                              className="h-7 px-2"
+                              aria-label={
+                                exported
+                                  ? `Recipe ${recipe.name} exported to clipboard`
+                                  : `Export recipe ${recipe.name} to clipboard`
+                              }
+                            >
+                              {exported ? <Check className="text-status-success" /> : <Download />}
+                            </Button>
+                          </TooltipTrigger>
+                          <TooltipContent side="bottom">
+                            {exported ? "Exported" : "Export recipe to clipboard"}
+                          </TooltipContent>
+                        </Tooltip>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => setRecipeToDelete(recipe.id)}
+                              className="h-7 px-2"
+                              aria-label={`Delete recipe ${recipe.name}`}
+                            >
+                              <Trash2 className="text-status-error" />
+                            </Button>
+                          </TooltipTrigger>
+                          <TooltipContent side="bottom">Delete recipe</TooltipContent>
+                        </Tooltip>
                       </div>
                     </div>
                   </div>
@@ -390,6 +378,6 @@ export function RecipesTab({
           </Button>
         </AppDialog.Footer>
       </AppDialog>
-    </>
+    </TooltipProvider>
   );
 }
