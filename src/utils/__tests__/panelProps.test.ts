@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { buildPanelProps } from "../panelProps";
 import type { TerminalInstance } from "@/store";
+import type { ActivityState } from "@/components/Terminal/TerminalPane";
 
 const noop = () => {};
 
@@ -85,7 +86,7 @@ describe("buildPanelProps activity stabilization", () => {
       makeTerminal({ id, activityHeadline: "Test", activityStatus: "success" })
     ).activity;
     expect(a).not.toBe(b);
-    expect(b!.status).toBe("success");
+    expect((b as ActivityState).status).toBe("success");
   });
 
   it("returns a new reference when type changes", () => {
@@ -97,7 +98,7 @@ describe("buildPanelProps activity stabilization", () => {
       makeTerminal({ id, activityHeadline: "Test", activityType: "background" })
     ).activity;
     expect(a).not.toBe(b);
-    expect(b!.type).toBe("background");
+    expect((b as ActivityState).type).toBe("background");
   });
 
   it("returns null when activityHeadline is falsy", () => {
