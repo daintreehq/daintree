@@ -1,3 +1,5 @@
+import { readdir, stat } from "fs/promises";
+import path from "path";
 import type { AgentState } from "../../shared/types/agent.js";
 import { store } from "../store.js";
 import { projectStore } from "./ProjectStore.js";
@@ -14,6 +16,14 @@ const DEFAULT_CONFIG: HibernationConfig = {
 };
 
 const MEMORY_PRESSURE_INACTIVE_MS = 30 * 60 * 1000;
+const GIT_SENTINEL_NAMES = new Set([
+  "index.lock",
+  "MERGE_HEAD",
+  "REBASE_HEAD",
+  "CHERRY_PICK_HEAD",
+  "rebase-merge",
+  "rebase-apply",
+]);
 const ACTIVE_AGENT_STATES: ReadonlySet<AgentState> = new Set([
   "working",
   "running",
@@ -65,6 +75,53 @@ export class HibernationService {
         DEFAULT_CONFIG.inactiveThresholdHours
       ),
     };
+  }
+
+  private async hasActiveGitOperation(
+    projectPath: string,
+    staleThresholdMs: number
+  ): Promise<boolean> {
+    const mainGitDir = path.join(projectPath, ".git");
+    const gitDirs = [mainGitDir];
+
+    try {
+      const worktreeEntries = await readdir(path.join(mainGitDir, "worktrees"), {
+        withFileTypes: true,
+      });
+      for (const entry of worktreeEntries) {
+        if (entry.isDirectory()) {
+          gitDirs.push(path.join(mainGitDir, "worktrees", entry.name));
+        }
+      }
+    } catch {
+      // No linked worktrees or .git/worktrees doesn't exist
+    }
+
+    for (const gitDir of gitDirs) {
+      try {
+        const entries = await readdir(gitDir);
+        const sentinels = entries.filter((e) => GIT_SENTINEL_NAMES.has(e));
+
+        for (const sentinel of sentinels) {
+          if (sentinel === "index.lock") {
+            try {
+              const lockStat = await stat(path.join(gitDir, sentinel));
+              if (Date.now() - lockStat.mtimeMs < staleThresholdMs) {
+                return true;
+              }
+            } catch {
+              // Lock disappeared between readdir and stat — not active
+            }
+          } else {
+            return true;
+          }
+        }
+      } catch {
+        // gitdir doesn't exist or isn't readable — skip
+      }
+    }
+
+    return false;
   }
 
   start(): void {
@@ -126,6 +183,7 @@ export class HibernationService {
     const { getPtyManager } = await import("./PtyManager.js");
 
     const ptyManager = getPtyManager();
+    const allTerminals = ptyManager.getAll();
 
     for (const project of projects) {
       // Never hibernate the active project
@@ -139,17 +197,34 @@ export class HibernationService {
       if (inactiveDuration < thresholdMs) continue;
 
       // Check if project has running terminals
-      const ptyStats = ptyManager.getProjectStats(project.id);
-      const processCount = ptyStats.terminalCount;
+      const projectTerminals = allTerminals.filter((t) => t.projectId === project.id);
+      if (projectTerminals.length === 0) continue;
 
-      if (processCount === 0) {
-        continue; // No processes to hibernate
+      // Skip projects with active AI agents
+      const hasActiveAgent = projectTerminals.some(
+        (t) => t.agentState && ACTIVE_AGENT_STATES.has(t.agentState)
+      );
+      if (hasActiveAgent) {
+        logInfo("scheduled-hibernate-skip-active-agent", {
+          project: project.name,
+          projectId: project.id,
+        });
+        continue;
+      }
+
+      // Skip projects with in-progress git operations
+      if (await this.hasActiveGitOperation(project.path, thresholdMs)) {
+        logInfo("scheduled-hibernate-skip-git-operation", {
+          project: project.name,
+          projectId: project.id,
+        });
+        continue;
       }
 
       const hoursInactive = Math.floor(inactiveDuration / 3600000);
       console.log(
         `[HibernationService] Auto-hibernating project "${project.name}" ` +
-          `(inactive for ${hoursInactive} hours, ${processCount} processes)`
+          `(inactive for ${hoursInactive} hours, ${projectTerminals.length} processes)`
       );
 
       try {
@@ -192,6 +267,14 @@ export class HibernationService {
         (t) => t.agentState && ACTIVE_AGENT_STATES.has(t.agentState)
       );
       if (hasActiveAgent) continue;
+
+      if (await this.hasActiveGitOperation(project.path, MEMORY_PRESSURE_INACTIVE_MS)) {
+        logInfo("memory-pressure-hibernate-skip-git-operation", {
+          project: project.name,
+          projectId: project.id,
+        });
+        continue;
+      }
 
       logInfo("memory-pressure-hibernate-project", {
         project: project.name,
