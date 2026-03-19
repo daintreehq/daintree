@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { renderHook, act } from "@testing-library/react";
 import { useNoteSearch, resetNoteSearchCacheForTests } from "../useNoteSearch";
 import { notesClient } from "@/clients/notesClient";
-import type { NoteListItem } from "@/clients/notesClient";
+import type { NoteListItem, NoteUpdatedPayload } from "@/clients/notesClient";
 
 vi.mock("@/clients/notesClient", () => ({
   notesClient: {
@@ -308,7 +308,7 @@ describe("useNoteSearch", () => {
   });
 
   it("cache is cleared on notesClient.onUpdated()", async () => {
-    let onUpdatedCallback: (() => void) | null = null;
+    let onUpdatedCallback: ((payload: NoteUpdatedPayload) => void) | null = null;
     vi.mocked(notesClient.onUpdated).mockImplementation((cb) => {
       onUpdatedCallback = cb;
       return vi.fn();
@@ -331,7 +331,7 @@ describe("useNoteSearch", () => {
 
     // Trigger onUpdated — should clear cache
     act(() => {
-      onUpdatedCallback?.();
+      onUpdatedCallback?.({ notePath: "/notes/n1.md", title: "Test Note" });
     });
 
     // Close and re-open
