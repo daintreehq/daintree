@@ -176,16 +176,17 @@ describe("TerminalProcess.kill — process tree cleanup", () => {
     const terminal = createTerminal(undefined, { processTreeCache: mockCache });
     terminal.kill("test");
 
-    // Descendants should receive SIGTERM in order (bottom-up)
-    expect(processKillSpy).toHaveBeenCalledWith(456, "SIGTERM");
-    expect(processKillSpy).toHaveBeenCalledWith(789, "SIGTERM");
+    // Cache should be queried with the shell PID
+    expect(mockCache.getDescendantPids).toHaveBeenCalledWith(123);
+
+    // SIGTERM calls should be in bottom-up order: 456 first, then 789
+    const sigTermCalls = processKillSpy.mock.calls.filter((c: unknown[]) => c[1] === "SIGTERM");
+    expect(sigTermCalls).toHaveLength(2);
+    expect(sigTermCalls[0]).toEqual([456, "SIGTERM"]);
+    expect(sigTermCalls[1]).toEqual([789, "SIGTERM"]);
 
     // Shell PTY should also be killed
     expect(mockPty.kill).toHaveBeenCalled();
-
-    // SIGTERM calls should come before SIGKILL timer fires
-    const sigTermCalls = processKillSpy.mock.calls.filter((c: unknown[]) => c[1] === "SIGTERM");
-    expect(sigTermCalls).toHaveLength(2);
   });
 
   it("escalates to SIGKILL after 500ms on kill()", () => {

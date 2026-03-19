@@ -864,7 +864,10 @@ export class TerminalProcess {
     if (immediate) {
       sigkillSweep();
     } else {
-      this.killTreeTimer = setTimeout(sigkillSweep, 500);
+      this.killTreeTimer = setTimeout(() => {
+        this.killTreeTimer = null;
+        sigkillSweep();
+      }, 500);
     }
   }
 
@@ -1264,6 +1267,11 @@ export class TerminalProcess {
         this.inputWriteTimeout = null;
       }
       this.inputWriteQueue = [];
+
+      if (this.killTreeTimer) {
+        clearTimeout(this.killTreeTimer);
+        this.killTreeTimer = null;
+      }
 
       this.callbacks.onExit(this.id, exitCode ?? 0);
       this.forensicsBuffer.logForensics(
