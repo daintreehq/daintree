@@ -731,7 +731,9 @@ export function Toolbar({
                 persistThroughChildOverlays
               >
                 <Suspense
-                  fallback={<GitHubResourceListSkeleton count={stats?.issueCount} immediate />}
+                  fallback={
+                    <GitHubResourceListSkeleton count={stats?.issueCount} immediate type="issue" />
+                  }
                 >
                   <LazyGitHubResourceList
                     type="issue"
@@ -796,7 +798,9 @@ export function Toolbar({
                 className="p-0 w-[450px]"
               >
                 <Suspense
-                  fallback={<GitHubResourceListSkeleton count={stats?.prCount} immediate />}
+                  fallback={
+                    <GitHubResourceListSkeleton count={stats?.prCount} immediate type="pr" />
+                  }
                 >
                   <LazyGitHubResourceList
                     type="pr"
