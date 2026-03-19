@@ -2,7 +2,7 @@ import { useEffect, useRef, useCallback, useId, createContext, useContext } from
 import { createPortal } from "react-dom";
 import { useShallow } from "zustand/react/shallow";
 import { cn } from "@/lib/utils";
-import { useOverlayState } from "@/hooks";
+import { useOverlayState, useEscapeStack } from "@/hooks";
 import { useSidecarStore } from "@/store";
 import { useAnimatedPresence } from "@/hooks/useAnimatedPresence";
 import {
@@ -137,45 +137,39 @@ export function AppDialog({
     }
   }, [dismissible, onBeforeClose, onClose]);
 
-  const handleKeyDown = useCallback(
-    (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        handleClose();
+  useEscapeStack(isOpen, handleClose);
+
+  const handleKeyDown = useCallback((e: KeyboardEvent) => {
+    if (e.key === "Tab" && dialogRef.current) {
+      // Don't interfere if another modal (e.g., a nested dialog portal) has focus
+      const activeEl = document.activeElement;
+      if (activeEl) {
+        const closestModal = activeEl.closest('[aria-modal="true"]');
+        if (closestModal && !closestModal.contains(dialogRef.current)) return;
+      }
+
+      const focusable = Array.from(
+        dialogRef.current.querySelectorAll<HTMLElement>(TABBABLE_SELECTOR)
+      );
+
+      if (focusable.length === 0) {
+        e.preventDefault();
+        dialogRef.current.focus();
         return;
       }
 
-      if (e.key === "Tab" && dialogRef.current) {
-        // Don't interfere if another modal (e.g., a nested dialog portal) has focus
-        const activeEl = document.activeElement;
-        if (activeEl) {
-          const closestModal = activeEl.closest('[aria-modal="true"]');
-          if (closestModal && !closestModal.contains(dialogRef.current)) return;
-        }
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
 
-        const focusable = Array.from(
-          dialogRef.current.querySelectorAll<HTMLElement>(TABBABLE_SELECTOR)
-        );
-
-        if (focusable.length === 0) {
-          e.preventDefault();
-          dialogRef.current.focus();
-          return;
-        }
-
-        const first = focusable[0];
-        const last = focusable[focusable.length - 1];
-
-        if (e.shiftKey && document.activeElement === first) {
-          e.preventDefault();
-          last.focus();
-        } else if (!e.shiftKey && document.activeElement === last) {
-          e.preventDefault();
-          first.focus();
-        }
+      if (e.shiftKey && document.activeElement === first) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault();
+        first.focus();
       }
-    },
-    [handleClose]
-  );
+    }
+  }, []);
 
   useEffect(() => {
     if (!isOpen) return;

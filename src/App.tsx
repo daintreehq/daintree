@@ -24,6 +24,7 @@ import {
   useTerminalConfig,
   useAppThemeConfig,
   useGlobalKeybindings,
+  useGlobalEscapeDispatcher,
   useContextInjection,
   useProjectSettings,
   useGridNavigation,
@@ -1143,6 +1144,7 @@ function App() {
   // Global keybinding handler - provides chord support and priority resolution
   // All keybindings dispatch through ActionService via this centralized handler
   useGlobalKeybindings(electronAvailable);
+  useGlobalEscapeDispatcher();
 
   // App lifecycle hooks
   useTerminalStoreBootstrap();

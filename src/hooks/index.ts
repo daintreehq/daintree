@@ -44,6 +44,9 @@ export { useWaitingTerminalIds, useBackgroundPanelStats } from "./useTerminalSel
 
 export { useOverlayState } from "./useOverlayState";
 
+export { useEscapeStack } from "./useEscapeStack";
+export { useGlobalEscapeDispatcher } from "./useGlobalEscapeDispatcher";
+
 export { useGridNavigation } from "./useGridNavigation";
 export type { NavigationDirection } from "./useGridNavigation";
 
