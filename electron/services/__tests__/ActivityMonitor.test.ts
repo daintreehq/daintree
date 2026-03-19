@@ -1294,6 +1294,135 @@ describe("ActivityMonitor", () => {
       // State is preserved, only timers are cleared
       expect(monitor.getState()).toBe("busy");
     });
+
+    it("should stop recursive debounce chain after dispose", () => {
+      const onStateChange = vi.fn();
+      const processStateValidator = {
+        hasActiveChildren: vi.fn().mockReturnValue(true),
+      };
+      const monitor = new ActivityMonitor("test-1", 1000, onStateChange, {
+        processStateValidator,
+        idleDebounceMs: 1000,
+      });
+
+      // Enter busy → starts debounce chain
+      monitor.onInput("\r");
+      expect(monitor.getState()).toBe("busy");
+
+      // First debounce fires — hasActiveChildren returns true so it reschedules
+      vi.advanceTimersByTime(1000);
+      expect(processStateValidator.hasActiveChildren).toHaveBeenCalled();
+      expect(monitor.getState()).toBe("busy");
+
+      // Dispose mid-chain
+      monitor.dispose();
+      const callCountAfterDispose = onStateChange.mock.calls.length;
+      const validatorCallsAfterDispose = processStateValidator.hasActiveChildren.mock.calls.length;
+
+      // Advance well past multiple debounce cycles — no further state changes
+      // AND no further validator calls (proves the timer chain actually stopped)
+      vi.advanceTimersByTime(10000);
+      expect(onStateChange.mock.calls.length).toBe(callCountAfterDispose);
+      expect(processStateValidator.hasActiveChildren.mock.calls.length).toBe(
+        validatorCallsAfterDispose
+      );
+    });
+
+    it("should ignore onData and onInput calls after dispose", () => {
+      const onStateChange = vi.fn();
+      const monitor = new ActivityMonitor("test-1", 1000, onStateChange, {
+        outputActivityDetection: { enabled: true, minFrames: 1, minBytes: 1, windowMs: 500 },
+      });
+
+      monitor.dispose();
+
+      // These should be no-ops after disposal — onInput triggers busy,
+      // onData with volume detection triggers busy, notifySubmission triggers busy
+      monitor.onInput("\r");
+      monitor.onData("x".repeat(100));
+      monitor.notifySubmission();
+
+      vi.advanceTimersByTime(10000);
+
+      // No state changes should have occurred
+      expect(onStateChange).not.toHaveBeenCalled();
+    });
+
+    it("should stop polling cycle effects after dispose", () => {
+      const onStateChange = vi.fn();
+      const getVisibleLines = vi.fn(() => ["$ "]);
+      const monitor = new ActivityMonitor("test-1", 1000, onStateChange, {
+        getVisibleLines,
+        pollingIntervalMs: 50,
+      });
+
+      monitor.startPolling();
+
+      // Let a few polling cycles run
+      vi.advanceTimersByTime(150);
+      const callsBeforeDispose = getVisibleLines.mock.calls.length;
+      expect(callsBeforeDispose).toBeGreaterThan(0);
+
+      monitor.dispose();
+
+      // Advance timers — no more getVisibleLines calls
+      vi.advanceTimersByTime(500);
+      expect(getVisibleLines.mock.calls.length).toBe(callsBeforeDispose);
+    });
+
+    it("should transition to idle when process has no active children even with stale working pattern", () => {
+      const onStateChange = vi.fn();
+      const processStateValidator = {
+        hasActiveChildren: vi.fn().mockReturnValue(true),
+      };
+      const monitor = new ActivityMonitor("test-1", 1000, onStateChange, {
+        processStateValidator,
+        idleDebounceMs: 1000,
+        patternConfig: {
+          primaryPatterns: [/working/i],
+          scanLineCount: 10,
+        },
+      });
+
+      // Enter busy
+      monitor.onInput("\r");
+      expect(monitor.getState()).toBe("busy");
+
+      // Feed working pattern data to set lastPatternResult.isWorking = true
+      // Uses a custom pattern config so we can control exactly what matches
+      monitor.onData("Working on task...\n");
+
+      // Confirm pattern was detected
+      const patternResult = monitor.getLastPatternResult();
+      expect(patternResult?.isWorking).toBe(true);
+
+      // First debounce fires — process active, reschedules
+      vi.advanceTimersByTime(1000);
+      expect(monitor.getState()).toBe("busy");
+
+      // Now terminal dies — process has no active children
+      processStateValidator.hasActiveChildren.mockReturnValue(false);
+
+      // Next debounce fires — liveness check outranks stale pattern
+      vi.advanceTimersByTime(1000);
+      expect(monitor.getState()).toBe("idle");
+
+      monitor.dispose();
+    });
+
+    it("should make dispose idempotent", () => {
+      const onStateChange = vi.fn();
+      const monitor = new ActivityMonitor("test-1", 1000, onStateChange);
+
+      monitor.onInput("\r");
+
+      // Multiple dispose calls should not throw
+      monitor.dispose();
+      monitor.dispose();
+      monitor.dispose();
+
+      expect(monitor.getState()).toBe("busy");
+    });
   });
 
   describe("Process state validation", () => {
