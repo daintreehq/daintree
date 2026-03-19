@@ -6,6 +6,7 @@ import { Suspense, lazy } from "react";
 import { Loader2 } from "lucide-react";
 import { registerPanelComponent } from "./panelComponentRegistry";
 import { TerminalPane } from "@/components/Terminal/TerminalPane";
+import { ErrorBoundary } from "@/components/ErrorBoundary";
 
 const LazyBrowserPane = lazy(() =>
   import("@/components/Browser/BrowserPane").then((m) => ({ default: m.BrowserPane }))
@@ -28,27 +29,33 @@ function PanelLoadingFallback() {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function BrowserPaneWrapper(props: any) {
   return (
-    <Suspense fallback={<PanelLoadingFallback />}>
-      <LazyBrowserPane {...props} />
-    </Suspense>
+    <ErrorBoundary variant="component" componentName="BrowserPane">
+      <Suspense fallback={<PanelLoadingFallback />}>
+        <LazyBrowserPane {...props} />
+      </Suspense>
+    </ErrorBoundary>
   );
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function NotesPaneWrapper(props: any) {
   return (
-    <Suspense fallback={<PanelLoadingFallback />}>
-      <LazyNotesPane {...props} />
-    </Suspense>
+    <ErrorBoundary variant="component" componentName="NotesPane">
+      <Suspense fallback={<PanelLoadingFallback />}>
+        <LazyNotesPane {...props} />
+      </Suspense>
+    </ErrorBoundary>
   );
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function DevPreviewPaneWrapper(props: any) {
   return (
-    <Suspense fallback={<PanelLoadingFallback />}>
-      <LazyDevPreviewPane {...props} />
-    </Suspense>
+    <ErrorBoundary variant="component" componentName="DevPreviewPane">
+      <Suspense fallback={<PanelLoadingFallback />}>
+        <LazyDevPreviewPane {...props} />
+      </Suspense>
+    </ErrorBoundary>
   );
 }
 
