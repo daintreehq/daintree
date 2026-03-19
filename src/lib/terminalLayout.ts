@@ -21,6 +21,9 @@ export const MIN_TERMINAL_HEIGHT_PX = 200;
  */
 export const ABSOLUTE_MAX_GRID_TERMINALS = 16;
 
+export const GRID_TRANSITION_DURATION_MS = 200;
+export const GRID_FIT_DELAY_MS = GRID_TRANSITION_DURATION_MS + 50;
+
 /**
  * Calculate the maximum number of panels that can fit in the grid
  * while maintaining readable dimensions.
