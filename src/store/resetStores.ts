@@ -15,6 +15,7 @@ import { useWorkflowStore } from "./workflowStore";
 import { useTerminalInputStore } from "./terminalInputStore";
 import { useVoiceRecordingStore } from "./voiceRecordingStore";
 import { useLayoutUndoStore } from "./layoutUndoStore";
+import { invalidateBrandingCache } from "../hooks/useProjectBranding";
 interface ProjectSwitchResetOptions {
   preserveTerminalIds?: Set<string>;
   outgoingProjectId?: string | null;
@@ -47,6 +48,7 @@ export async function resetAllStoresForProjectSwitch(
   useWorkflowStore.getState().reset();
   useLayoutUndoStore.getState().clearHistory();
   useVoiceRecordingStore.setState({ panelBuffers: {} });
+  invalidateBrandingCache();
   if (options.outgoingProjectId) {
     useTerminalInputStore
       .getState()
