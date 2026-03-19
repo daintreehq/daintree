@@ -181,7 +181,7 @@ export function DiagnosticsDock({ onRetry, onCancelRetry, className }: Diagnosti
     >
       <div
         className={cn(
-          "group h-2 cursor-ns-resize transition-colors flex items-center justify-center",
+          "group h-3 cursor-ns-resize transition-colors flex items-center justify-center",
           "hover:bg-overlay-soft focus-visible:outline-none focus-visible:bg-overlay-medium focus-visible:ring-1 focus-visible:ring-canopy-accent/50",
           isResizing && "bg-canopy-accent/20"
         )}
@@ -197,7 +197,7 @@ export function DiagnosticsDock({ onRetry, onCancelRetry, className }: Diagnosti
       >
         <div
           className={cn(
-            "w-10 h-0.5 rounded-full transition-colors",
+            "w-10 h-px rounded-full transition-all duration-150 delay-100 group-hover:h-0.5",
             "bg-canopy-text/15",
             "group-hover:bg-canopy-text/30 group-focus-visible:bg-canopy-accent",
             isResizing && "bg-canopy-accent"
