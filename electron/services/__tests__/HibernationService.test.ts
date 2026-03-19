@@ -592,7 +592,7 @@ describe("HibernationService", () => {
     it("detects sentinel in linked worktree", async () => {
       setupScheduledProject();
       fsMock.readdir.mockImplementation(async (dirPath: string) => {
-        const dir = String(dirPath);
+        const dir = String(dirPath).replace(/\\/g, "/");
         if (dir.endsWith(".git/worktrees")) {
           return [{ name: "feature-branch", isDirectory: () => true }];
         }
@@ -623,7 +623,7 @@ describe("HibernationService", () => {
       // Actually, test fail-closed: readdir on .git/worktrees throws ENOENT (fine),
       // but then readdir on .git itself throws EACCES
       fsMock.readdir.mockImplementation(async (dirPath: string) => {
-        const dir = String(dirPath);
+        const dir = String(dirPath).replace(/\\/g, "/");
         if (dir.endsWith(".git/worktrees")) {
           throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
         }
@@ -663,7 +663,7 @@ describe("HibernationService", () => {
       ptyManagerMock.gracefulKillByProject.mockResolvedValue([{ id: "t2" }]);
 
       fsMock.readdir.mockImplementation(async (dirPath: string) => {
-        const dir = String(dirPath);
+        const dir = String(dirPath).replace(/\\/g, "/");
         if (dir === "/projects/proj-1/.git") return ["MERGE_HEAD", "HEAD"];
         if (dir === "/projects/proj-2/.git") return ["HEAD", "config"];
         throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
