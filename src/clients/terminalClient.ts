@@ -292,4 +292,8 @@ export const terminalClient = {
   onRestoreScrollback: (callback: (data: { terminalIds: string[] }) => void): (() => void) => {
     return window.electron.terminal.onRestoreScrollback(callback);
   },
+
+  restartService: (): Promise<void> => {
+    return window.electron.terminal.restartService();
+  },
 } as const;

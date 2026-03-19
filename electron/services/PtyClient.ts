@@ -1299,6 +1299,29 @@ export class PtyClient extends EventEmitter {
   // Note: Project switching is now handled via onProjectSwitch(projectId) which
   // preserves the host and active terminals while changing filtering/backgrounding.
 
+  manualRestart(): void {
+    if (this.isDisposed) {
+      console.warn("[PtyClient] Cannot manual restart - already disposed");
+      return;
+    }
+
+    if (this.child !== null) {
+      console.warn("[PtyClient] Cannot manual restart - host process already exists");
+      return;
+    }
+
+    if (this.restartTimer) {
+      clearTimeout(this.restartTimer);
+      this.restartTimer = null;
+    }
+
+    this.restartAttempts = 0;
+    this.needsRespawn = true;
+
+    console.log("[PtyClient] Manual restart initiated");
+    this.startHost();
+  }
+
   dispose(): void {
     if (this.isDisposed) return;
     this.isDisposed = true;

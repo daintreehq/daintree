@@ -195,6 +195,7 @@ const CHANNELS = {
   TERMINAL_AGENT_TITLE_STATE: "terminal:agent-title-state",
   TERMINAL_REDUCE_SCROLLBACK: "terminal:reduce-scrollback",
   TERMINAL_RESTORE_SCROLLBACK: "terminal:restore-scrollback",
+  TERMINAL_RESTART_SERVICE: "terminal:restart-service",
 
   // Files channels
   FILES_SEARCH: "files:search",
@@ -859,6 +860,8 @@ const api: ElectronAPI = {
 
     onRestoreScrollback: (callback: (data: { terminalIds: string[] }) => void) =>
       _typedOn(CHANNELS.TERMINAL_RESTORE_SCROLLBACK, callback),
+
+    restartService: (): Promise<void> => _typedInvoke(CHANNELS.TERMINAL_RESTART_SERVICE),
   },
 
   // Files API
