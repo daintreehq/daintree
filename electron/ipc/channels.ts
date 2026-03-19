@@ -436,6 +436,7 @@ export const CHANNELS = {
   ONBOARDING_CHECKLIST_GET: "onboarding:checklist-get",
   ONBOARDING_CHECKLIST_DISMISS: "onboarding:checklist-dismiss",
   ONBOARDING_CHECKLIST_MARK_ITEM: "onboarding:checklist-mark-item",
+  ONBOARDING_CHECKLIST_MARK_CELEBRATION_SHOWN: "onboarding:checklist-mark-celebration-shown",
 
   // Shortcut Hints channels
   SHORTCUT_HINTS_GET_COUNTS: "shortcut-hints:get-counts",
