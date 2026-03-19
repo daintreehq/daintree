@@ -33,11 +33,10 @@ describe("Toolbar GitHub dropdown search clearing — issue #3251", () => {
   });
 
   it("clears issue search query in onClose callback", () => {
-    // The issues GitHubResourceList onClose should clear the search
-    const issuesOnClose = source.slice(
-      source.indexOf('type="issue"'),
-      source.indexOf('type="issue"') + 300
-    );
+    // Find the LazyGitHubResourceList occurrence (second type="issue"), not the skeleton (first)
+    const firstIssueIdx = source.indexOf('type="issue"');
+    const lazyIssueIdx = source.indexOf('type="issue"', firstIssueIdx + 1);
+    const issuesOnClose = source.slice(lazyIssueIdx, lazyIssueIdx + 300);
     expect(issuesOnClose).toContain('setIssueSearchQuery("")');
   });
 
