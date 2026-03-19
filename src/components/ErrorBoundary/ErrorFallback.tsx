@@ -56,12 +56,19 @@ export function ErrorFallback({
   };
 
   return (
-    <div className={cn(VARIANT_STYLES[variant])}>
+    <div
+      className={cn(VARIANT_STYLES[variant])}
+      data-testid="error-fallback"
+      data-variant={variant}
+    >
       <div className="flex flex-col items-center gap-4 max-w-2xl">
         <TriangleAlert className={cn("text-status-error", sizes.icon)} />
 
         <div className="text-center space-y-2">
-          <h2 className={cn("font-semibold text-status-error", sizes.title)}>
+          <h2
+            className={cn("font-semibold text-status-error", sizes.title)}
+            data-testid="error-fallback-title"
+          >
             {variant === "fullscreen" && "Application Error"}
             {variant === "section" && "Section Error"}
             {variant === "component" && `${componentName || "Component"} Error`}
@@ -91,6 +98,7 @@ export function ErrorFallback({
           <button
             type="button"
             onClick={resetError}
+            data-testid="error-fallback-restart"
             className={cn(
               "bg-status-error hover:bg-[color-mix(in_oklab,var(--color-status-error)_85%,transparent)] text-canopy-bg rounded transition-colors",
               sizes.button
@@ -103,6 +111,7 @@ export function ErrorFallback({
             <button
               type="button"
               onClick={onReport}
+              data-testid="error-fallback-report"
               className={cn(
                 "bg-canopy-border hover:bg-canopy-border/80 text-canopy-text rounded transition-colors",
                 sizes.button
@@ -115,6 +124,7 @@ export function ErrorFallback({
           <button
             type="button"
             onClick={handleOpenLogs}
+            data-testid="error-fallback-logs"
             className={cn(
               "bg-canopy-border hover:bg-canopy-border/80 text-canopy-text rounded transition-colors",
               sizes.button
