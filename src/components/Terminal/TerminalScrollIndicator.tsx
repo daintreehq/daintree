@@ -17,6 +17,7 @@ export function TerminalScrollIndicator({ terminalId }: TerminalScrollIndicatorP
   const handleClick = (e: React.MouseEvent) => {
     e.stopPropagation();
     terminalInstanceService.resumeAutoScroll(terminalId);
+    requestAnimationFrame(() => terminalInstanceService.focus(terminalId));
   };
 
   return (

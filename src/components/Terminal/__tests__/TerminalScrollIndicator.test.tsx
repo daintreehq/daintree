@@ -21,6 +21,7 @@ vi.mock("@/hooks/useAnimatedPresence", () => ({
 vi.mock("@/services/TerminalInstanceService", () => ({
   terminalInstanceService: {
     resumeAutoScroll: vi.fn(),
+    focus: vi.fn(),
   },
 }));
 
@@ -56,6 +57,24 @@ describe("TerminalScrollIndicator", () => {
     mockHasUnseenOutput = true;
     render(<TerminalScrollIndicator terminalId="t1" />);
     expect(screen.getByLabelText("Scroll to latest output")).toBeTruthy();
+  });
+
+  it("restores terminal focus after clicking pill", () => {
+    const rafCallbacks: FrameRequestCallback[] = [];
+    const rafSpy = vi.spyOn(window, "requestAnimationFrame").mockImplementation((cb) => {
+      rafCallbacks.push(cb);
+      return 0;
+    });
+
+    mockHasUnseenOutput = true;
+    render(<TerminalScrollIndicator terminalId="t1" />);
+    fireEvent.click(screen.getByRole("button"));
+
+    expect(rafCallbacks.length).toBeGreaterThan(0);
+    rafCallbacks[rafCallbacks.length - 1](0);
+    expect(terminalInstanceService.focus).toHaveBeenCalledWith("t1");
+
+    rafSpy.mockRestore();
   });
 
   it("uses pointer-events-none on container and pointer-events-auto on button", () => {
