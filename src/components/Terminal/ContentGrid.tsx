@@ -456,7 +456,9 @@ export function ContentGrid({ className, defaultCwd, agentAvailability }: Conten
   const activeWorktree = activeWorktreeId ? worktreeMap.get(activeWorktreeId) : null;
   const hasActiveWorktree = activeWorktreeId != null && activeWorktree != null;
   const activeWorktreeName = activeWorktree
-    ? activeWorktree.branch?.trim() || activeWorktree.name?.trim() || "Unknown Worktree"
+    ? activeWorktree.isMainWorktree
+      ? activeWorktree.name?.trim() || "Unknown Worktree"
+      : activeWorktree.branch?.trim() || activeWorktree.name?.trim() || "Unknown Worktree"
     : null;
 
   const isInTrash = useTerminalStore((state) => state.isInTrash);

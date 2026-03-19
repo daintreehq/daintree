@@ -1213,7 +1213,11 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
                 projectId={currentProject?.id}
                 projectName={currentProject?.name}
                 worktreeId={panelWorktreeId}
-                worktreeLabel={panelWorktree?.branch || panelWorktree?.name}
+                worktreeLabel={
+                  panelWorktree?.isMainWorktree
+                    ? panelWorktree?.name
+                    : panelWorktree?.branch || panelWorktree?.name
+                }
                 disabled={disabled}
               />
             </div>
