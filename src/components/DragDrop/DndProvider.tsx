@@ -18,12 +18,14 @@ import {
   closestCenter,
   rectIntersection,
   pointerWithin,
+  MeasuringStrategy,
   type DragStartEvent,
   type DragEndEvent,
   type DragOverEvent,
   type CollisionDetection,
   type Modifier,
   type Announcements,
+  type MeasuringConfiguration,
 } from "@dnd-kit/core";
 import {
   useTerminalStore,
@@ -113,6 +115,13 @@ export interface WorktreeDragData extends DragData {
 function getDragLabel(data: DragData | WorktreeDragData | undefined): string {
   return data?.terminal?.title ?? "panel";
 }
+
+const MEASURING_CONFIG: MeasuringConfiguration = {
+  droppable: {
+    strategy: MeasuringStrategy.Always,
+    frequency: 150,
+  },
+};
 
 const dragAnnouncements: Announcements = {
   onDragStart({ active }) {
@@ -1000,6 +1009,7 @@ export function DndProvider({ children }: DndProviderProps) {
       onDragEnd={handleDragEnd}
       onDragCancel={handleDragCancel}
       collisionDetection={collisionDetection}
+      measuring={MEASURING_CONFIG}
       accessibility={{ announcements: dragAnnouncements }}
     >
       <DndPlaceholderContext.Provider value={placeholderContextValue}>
