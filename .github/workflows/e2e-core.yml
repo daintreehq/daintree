@@ -14,12 +14,20 @@ on:
           - macos
           - linux
           - windows
+      test_file:
+        description: "Single test file to run (e.g. e2e/core/core-terminal-panels.spec.ts). Leave empty to run all."
+        type: string
+        default: ""
   workflow_call:
     inputs:
       platform:
         description: "Platform to test on"
         type: string
         default: "all"
+      test_file:
+        description: "Single test file to run. Leave empty to run all."
+        type: string
+        default: ""
 
 permissions:
   contents: read
@@ -131,13 +139,23 @@ jobs:
           New-Item -ItemType Directory -Force -Path "$env:USERPROFILE\.claude" | Out-Null
           '{"hasCompletedOnboarding": true}' | Set-Content "$env:USERPROFILE\.claude.json"
 
+      - name: Resolve test command
+        id: test-cmd
+        shell: bash
+        run: |
+          if [ -n "${{ inputs.test_file }}" ]; then
+            echo "args=--project=core ${{ inputs.test_file }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "args=--project=core" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Run core e2e tests (macOS)
         if: runner.os == 'macOS'
-        run: npm run test:e2e:core
+        run: npx playwright test ${{ steps.test-cmd.outputs.args }}
 
       - name: Run core e2e tests (Linux)
         if: runner.os == 'Linux'
-        run: xvfb-run --auto-servernum npm run test:e2e:core
+        run: xvfb-run --auto-servernum npx playwright test ${{ steps.test-cmd.outputs.args }}
 
       - name: Verify native modules (Windows)
         if: runner.os == 'Windows'
@@ -149,7 +167,7 @@ jobs:
         if: runner.os == 'Windows'
         env:
           ELECTRON_ENABLE_LOGGING: "1"
-        run: npm run test:e2e:core
+        run: npx playwright test ${{ steps.test-cmd.outputs.args }}
 
       - name: Upload test results
         if: always()
