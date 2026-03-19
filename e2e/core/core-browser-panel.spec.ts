@@ -205,20 +205,27 @@ test.describe.serial("Core: Browser Panel", () => {
       await window.waitForTimeout(T_SETTLE);
       await expect(addressBar1).toHaveValue(/page-a/, { timeout: T_LONG });
 
-      // Open second browser panel — click outside first to release address bar focus,
-      // then wait for the button and click it (Windows CI can miss clicks on focused inputs)
-      await window
-        .locator(SEL.panel.gridPanel)
-        .first()
-        .click({ position: { x: 5, y: 5 } });
+      // Open second browser panel — Tab away from address bar to release focus,
+      // then click the toolbar button. Retry once if the panel doesn't appear
+      // (Windows CI can swallow the first click after an input blur).
+      await window.keyboard.press("Tab");
       await window.waitForTimeout(T_SETTLE);
+
       const openBrowserBtn = window.locator(SEL.toolbar.openBrowser);
-      await openBrowserBtn.waitFor({ state: "visible", timeout: T_SHORT });
       await openBrowserBtn.click();
 
       const browserPanels = window.locator(SEL.panel.gridPanel).filter({
         has: window.locator(SEL.browser.addressBar),
       });
+
+      // Retry click once if the second panel didn't appear within a short window
+      try {
+        await expect
+          .poll(() => browserPanels.count(), { timeout: 10_000 })
+          .toBeGreaterThanOrEqual(2);
+      } catch {
+        await openBrowserBtn.click({ force: true });
+      }
       await expect.poll(() => browserPanels.count(), { timeout: T_LONG }).toBeGreaterThanOrEqual(2);
 
       const panel2 = browserPanels.nth(1);
