@@ -81,6 +81,7 @@ export class WorkspaceClient extends EventEmitter {
   private currentRootPath: string | null = null;
   private currentProjectScopeId: string | null = null;
   private lastScopeMismatchWarnAt = 0;
+  private loadProjectGeneration = 0;
 
   constructor(config: WorkspaceClientConfig = {}) {
     super();
@@ -221,8 +222,12 @@ export class WorkspaceClient extends EventEmitter {
           if (this.currentRootPath) {
             const rootPath = this.currentRootPath;
             const preservedScopeId = this.currentProjectScopeId ?? undefined;
+            const generationAtRestart = this.loadProjectGeneration;
             void this.waitForReady()
-              .then(() => this.loadProject(rootPath, preservedScopeId))
+              .then(() => {
+                if (generationAtRestart !== this.loadProjectGeneration) return;
+                return this.loadProject(rootPath, preservedScopeId);
+              })
               .catch((err) => {
                 console.error(
                   "[WorkspaceClient] Failed to reload project after host restart:",
@@ -620,6 +625,8 @@ export class WorkspaceClient extends EventEmitter {
   // Public API - matches WorktreeService interface
 
   async loadProject(rootPath: string, scopeId?: string): Promise<void> {
+    const generation = ++this.loadProjectGeneration;
+
     this.currentRootPath = rootPath;
     this.currentProjectScopeId = scopeId ?? crypto.randomUUID();
     const requestId = this.generateRequestId();
@@ -630,6 +637,10 @@ export class WorkspaceClient extends EventEmitter {
       rootPath,
       projectScopeId: this.currentProjectScopeId,
     });
+
+    if (generation !== this.loadProjectGeneration) {
+      return;
+    }
   }
 
   async sync(
