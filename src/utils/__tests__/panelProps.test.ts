@@ -40,14 +40,20 @@ function build(terminal: TerminalInstance) {
 
 describe("buildPanelProps activity stabilization", () => {
   it("returns the same activity reference when fields are unchanged", () => {
-    const terminal = makeTerminal({
+    const terminalA = makeTerminal({
       id: "stable-1",
       activityHeadline: "Running tests",
       activityStatus: "working",
       activityType: "interactive",
     });
-    const a = build(terminal).activity;
-    const b = build(terminal).activity;
+    const terminalB = makeTerminal({
+      id: "stable-1",
+      activityHeadline: "Running tests",
+      activityStatus: "working",
+      activityType: "interactive",
+    });
+    const a = build(terminalA).activity;
+    const b = build(terminalB).activity;
     expect(a).toBe(b);
   });
 
@@ -126,6 +132,17 @@ describe("buildPanelProps activity stabilization", () => {
     const b = build(termB).activity;
     expect(a).not.toBe(b);
     expect(a).toEqual(b);
+  });
+
+  it("interleaved updates do not disturb other terminal caches", () => {
+    const a1 = build(
+      makeTerminal({ id: "ilv-a", activityHeadline: "Build", activityStatus: "working" })
+    ).activity;
+    build(makeTerminal({ id: "ilv-b", activityHeadline: "Test", activityStatus: "success" }));
+    const a2 = build(
+      makeTerminal({ id: "ilv-a", activityHeadline: "Build", activityStatus: "working" })
+    ).activity;
+    expect(a1).toBe(a2);
   });
 
   it("transitions from object to null", () => {
