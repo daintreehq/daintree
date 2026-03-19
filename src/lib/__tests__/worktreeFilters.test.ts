@@ -5,6 +5,7 @@ import {
   scoreWorktree,
   computeStatus,
   matchesFilters,
+  matchesQuickStateFilter,
   sortWorktrees,
   sortWorktreesByRelevance,
   groupByType,
@@ -13,6 +14,7 @@ import {
   filterTriageWorktrees,
   type DerivedWorktreeMeta,
   type FilterState,
+  type QuickStateFilter,
 } from "../worktreeFilters";
 import type { Worktree } from "@shared/types/worktree";
 
@@ -44,6 +46,7 @@ const createEmptyMeta = (): DerivedWorktreeMeta => ({
   hasFailedAgent: false,
   hasCompletedAgent: false,
   hasMergeConflict: false,
+  chipState: null,
 });
 
 describe("getWorktreeType", () => {
@@ -1236,5 +1239,64 @@ describe("filterTriageWorktrees", () => {
     const result = filterTriageWorktrees(worktrees, metaMap, undefined, undefined, "");
     expect(result).toHaveLength(2);
     expect(result.map((w) => w.id)).toEqual(["w1", "w3"]);
+  });
+});
+
+describe("matchesQuickStateFilter", () => {
+  it('"all" matches everything', () => {
+    expect(matchesQuickStateFilter("all", createEmptyMeta())).toBe(true);
+  });
+
+  it('"working" matches when hasWorkingAgent and chipState is null', () => {
+    const meta = { ...createEmptyMeta(), hasWorkingAgent: true, chipState: null as const };
+    expect(matchesQuickStateFilter("working", meta)).toBe(true);
+  });
+
+  it('"working" matches when hasRunningAgent and chipState is null', () => {
+    const meta = { ...createEmptyMeta(), hasRunningAgent: true, chipState: null as const };
+    expect(matchesQuickStateFilter("working", meta)).toBe(true);
+  });
+
+  it('"working" does NOT match when chipState overrides to "waiting"', () => {
+    const meta = { ...createEmptyMeta(), hasWorkingAgent: true, chipState: "waiting" as const };
+    expect(matchesQuickStateFilter("working", meta)).toBe(false);
+  });
+
+  it('"working" does NOT match when chipState is "complete"', () => {
+    const meta = { ...createEmptyMeta(), hasWorkingAgent: true, chipState: "complete" as const };
+    expect(matchesQuickStateFilter("working", meta)).toBe(false);
+  });
+
+  it('"working" does NOT match when no active agents', () => {
+    expect(matchesQuickStateFilter("working", createEmptyMeta())).toBe(false);
+  });
+
+  it('"waiting" matches when chipState is "waiting"', () => {
+    const meta = { ...createEmptyMeta(), chipState: "waiting" as const };
+    expect(matchesQuickStateFilter("waiting", meta)).toBe(true);
+  });
+
+  it('"waiting" does NOT match when hasWaitingAgent but chipState is "error"', () => {
+    const meta = { ...createEmptyMeta(), hasWaitingAgent: true, chipState: "error" as const };
+    expect(matchesQuickStateFilter("waiting", meta)).toBe(false);
+  });
+
+  it('"finished" matches chipState "complete"', () => {
+    const meta = { ...createEmptyMeta(), chipState: "complete" as const };
+    expect(matchesQuickStateFilter("finished", meta)).toBe(true);
+  });
+
+  it('"finished" matches chipState "cleanup"', () => {
+    const meta = { ...createEmptyMeta(), chipState: "cleanup" as const };
+    expect(matchesQuickStateFilter("finished", meta)).toBe(true);
+  });
+
+  it('"finished" does NOT match chipState null', () => {
+    expect(matchesQuickStateFilter("finished", createEmptyMeta())).toBe(false);
+  });
+
+  it('"finished" does NOT match chipState "error"', () => {
+    const meta = { ...createEmptyMeta(), chipState: "error" as const };
+    expect(matchesQuickStateFilter("finished", meta)).toBe(false);
   });
 });

@@ -9,6 +9,7 @@ import type {
   SessionFilter,
   ActivityFilter,
 } from "@/store/worktreeFilterStore";
+import type { ChipState } from "@/components/Worktree/utils/computeChipState";
 
 export interface DerivedWorktreeMeta {
   hasErrors: boolean;
@@ -19,6 +20,25 @@ export interface DerivedWorktreeMeta {
   hasFailedAgent: boolean;
   hasCompletedAgent: boolean;
   hasMergeConflict: boolean;
+  chipState: ChipState;
+}
+
+export type QuickStateFilter = "all" | "working" | "waiting" | "finished";
+
+export function matchesQuickStateFilter(
+  filter: QuickStateFilter,
+  meta: DerivedWorktreeMeta
+): boolean {
+  switch (filter) {
+    case "all":
+      return true;
+    case "working":
+      return (meta.hasWorkingAgent || meta.hasRunningAgent) && meta.chipState === null;
+    case "waiting":
+      return meta.chipState === "waiting";
+    case "finished":
+      return meta.chipState === "complete" || meta.chipState === "cleanup";
+  }
 }
 
 export type WorktreeTypeId =

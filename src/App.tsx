@@ -79,6 +79,7 @@ import {
   WorktreeSidebarSearchBar,
   WorktreeOverviewModal,
   QuickCreatePalette,
+  QuickStateFilterBar,
 } from "./components/Worktree";
 import { CrossWorktreeDiff } from "./components/Worktree/CrossWorktreeDiff";
 import { NewWorktreeDialog } from "./components/Worktree/NewWorktreeDialog";
@@ -140,6 +141,7 @@ registerBuiltInPanelComponents();
 import { useWorktreeFilterStore } from "./store/worktreeFilterStore";
 import {
   matchesFilters,
+  matchesQuickStateFilter,
   sortWorktrees,
   sortWorktreesByRelevance,
   groupByType,
@@ -147,7 +149,9 @@ import {
   scoreWorktree,
   type DerivedWorktreeMeta,
   type FilterState,
+  type QuickStateFilter,
 } from "./lib/worktreeFilters";
+import { computeChipState } from "./components/Worktree/utils/computeChipState";
 import { parseExactNumber } from "./lib/parseExactNumber";
 import type { WorktreeState, PanelKind } from "./types";
 import { actionService } from "./services/ActionService";
@@ -432,6 +436,8 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   const [hiddenAbove, setHiddenAbove] = useState(0);
   const [hiddenBelow, setHiddenBelow] = useState(0);
 
+  const [quickStateFilter, setQuickStateFilter] = useState<QuickStateFilter>("all");
+
   const [isRecipeEditorOpen, setIsRecipeEditorOpen] = useState(false);
   const [recipeEditorWorktreeId, setRecipeEditorWorktreeId] = useState<string | undefined>(
     undefined
@@ -482,16 +488,47 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
         (t) => t.worktreeId === worktree.id && t.location !== "trash"
       );
       const errors = getWorktreeErrors(worktree.id);
+      const failedTerminalCount = worktreeTerminals.filter((t) => t.agentState === "failed").length;
+      const waitingTerminalCount = worktreeTerminals.filter(
+        (t) => t.agentState === "waiting"
+      ).length;
+
+      // chipState logic mirrors useWorktreeStatus.ts — keep in sync
+      const hasChanges = (worktree.worktreeChanges?.changedFileCount ?? 0) > 0;
+      const isComplete =
+        !!worktree.issueNumber &&
+        !!worktree.prNumber &&
+        !hasChanges &&
+        worktree.worktreeChanges !== null;
+
+      let lifecycleStage: "in-review" | "merged" | "ready-for-cleanup" | null = null;
+      if (!worktree.isMainWorktree && worktree.worktreeChanges !== null) {
+        if (worktree.prState === "merged") {
+          lifecycleStage = worktree.issueNumber ? "ready-for-cleanup" : "merged";
+        } else if (worktree.prState === "open") {
+          lifecycleStage = "in-review";
+        }
+      }
+
+      const chipState = computeChipState({
+        worktreeErrorCount: errors.length,
+        failedTerminalCount,
+        waitingTerminalCount,
+        lifecycleStage,
+        isComplete,
+      });
+
       map.set(worktree.id, {
         hasErrors: errors.length > 0,
         terminalCount: worktreeTerminals.length,
         hasWorkingAgent: worktreeTerminals.some((t) => t.agentState === "working"),
         hasRunningAgent: worktreeTerminals.some((t) => t.agentState === "running"),
         hasWaitingAgent: worktreeTerminals.some((t) => t.agentState === "waiting"),
-        hasFailedAgent: worktreeTerminals.some((t) => t.agentState === "failed"),
+        hasFailedAgent: failedTerminalCount > 0,
         hasCompletedAgent: worktreeTerminals.some((t) => t.agentState === "completed"),
         hasMergeConflict:
           worktree.worktreeChanges?.changes.some((c) => c.status === "conflicted") ?? false,
+        chipState,
       });
     }
     return map;
@@ -532,6 +569,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
         hasFailedAgent: false,
         hasCompletedAgent: false,
         hasMergeConflict: false,
+        chipState: null,
       };
       const isActive = worktree.id === activeWorktreeId;
       const hasActiveQuery = query.trim().length > 0;
@@ -542,6 +580,10 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
 
       if (alwaysShowWaiting && derived.hasWaitingAgent && !hasActiveQuery) {
         return true;
+      }
+
+      if (quickStateFilter !== "all" && !matchesQuickStateFilter(quickStateFilter, derived)) {
+        return false;
       }
 
       return matchesFilters(worktree, filters, derived, isActive);
@@ -581,6 +623,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     integrationWorktree,
     derivedMetaMap,
     activeWorktreeId,
+    quickStateFilter,
   ]);
 
   const updateScrollIndicators = useCallback(() => {
@@ -767,7 +810,8 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
 
   const rootPath = currentProject?.path ?? "";
   const hasNonMainWorktrees = deferredWorktrees.length > 1;
-  const hasFilters = hasActiveFilters();
+  const hasQuickFilter = quickStateFilter !== "all";
+  const hasFilters = hasActiveFilters() || hasQuickFilter;
   const worktreeMatchesQuery = (w: WorktreeState) => {
     if (!query) return true;
     const exactNum = parseExactNumber(query);
@@ -866,14 +910,20 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
         <div className="relative flex-1 min-h-0">
           <div ref={scrollContainerRef} className="h-full overflow-y-auto scrollbar-none">
             <div ref={scrollContentRef}>
-              {filteredWorktrees.length === 0 && hasActiveFilters() ? (
+              {hasNonMainWorktrees && (
+                <QuickStateFilterBar value={quickStateFilter} onChange={setQuickStateFilter} />
+              )}
+              {filteredWorktrees.length === 0 && hasFilters ? (
                 <div className="flex flex-col items-center justify-center py-12 px-4 text-center">
                   <FilterX className="w-10 h-10 text-canopy-text/40 mb-3" />
                   <p className="text-sm text-canopy-text/60 mb-3">
                     No worktrees match your filters
                   </p>
                   <button
-                    onClick={clearAllFilters}
+                    onClick={() => {
+                      clearAllFilters();
+                      setQuickStateFilter("all");
+                    }}
                     className="text-xs px-3 py-1.5 text-canopy-accent hover:bg-canopy-accent/10 rounded transition-colors"
                   >
                     Clear filters
