@@ -97,8 +97,12 @@ export class TerminalResizeController {
     if (!managed) return null;
     if (this.isResizeLocked(id)) return null;
 
+    if (!managed.hostElement.checkVisibility()) {
+      return null;
+    }
+
     const rect = managed.hostElement.getBoundingClientRect();
-    if (rect.left < -10000 || rect.width < 50 || rect.height < 50) {
+    if (rect.width < 50 || rect.height < 50) {
       return null;
     }
 
