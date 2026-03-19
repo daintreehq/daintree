@@ -189,6 +189,7 @@ function ProjectListItem({
                     <TooltipTrigger asChild>
                       <button
                         type="button"
+                        tabIndex={-1}
                         onClick={(e) => {
                           e.stopPropagation();
                           onTogglePinProject(project.id);
@@ -230,6 +231,7 @@ function ProjectListItem({
                       <TooltipTrigger asChild>
                         <button
                           type="button"
+                          tabIndex={-1}
                           onClick={(e) => {
                             e.stopPropagation();
                             onLocateProject(project.id);
@@ -254,6 +256,7 @@ function ProjectListItem({
                       <TooltipTrigger asChild>
                         <button
                           type="button"
+                          tabIndex={-1}
                           onClick={(e) => {
                             e.stopPropagation();
                             onCloseProject(project.id);
@@ -287,6 +290,7 @@ function ProjectListItem({
                         <TooltipTrigger asChild>
                           <button
                             type="button"
+                            tabIndex={-1}
                             onClick={(e) => {
                               e.stopPropagation();
                               onStopProject(project.id);
@@ -311,6 +315,7 @@ function ProjectListItem({
                         <TooltipTrigger asChild>
                           <button
                             type="button"
+                            tabIndex={-1}
                             onClick={(e) => {
                               e.stopPropagation();
                               onCloseProject(project.id);
@@ -846,6 +851,12 @@ const PROJECT_FOOTER = (
     </span>
     <span>
       <kbd className="px-1.5 py-0.5 rounded-[var(--radius-sm)] bg-canopy-border text-canopy-text/60">
+        Tab
+      </kbd>
+      <span className="ml-1.5">to buttons</span>
+    </span>
+    <span>
+      <kbd className="px-1.5 py-0.5 rounded-[var(--radius-sm)] bg-canopy-border text-canopy-text/60">
         Enter
       </kbd>
       <span className="ml-1.5">to switch</span>
@@ -960,15 +971,6 @@ function ProjectPaletteInner({
           e.preventDefault();
           e.stopPropagation();
           onClose();
-          break;
-        case "Tab":
-          e.preventDefault();
-          e.stopPropagation();
-          if (e.shiftKey) {
-            onSelectPrevious();
-          } else {
-            onSelectNext();
-          }
           break;
         case "Backspace":
           if (
@@ -1116,6 +1118,22 @@ function ModalContent({
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         onClose();
+        return;
+      }
+      if (e.key === "Tab" && dialogRef.current) {
+        const focusableElements = dialogRef.current.querySelectorAll<HTMLElement>(
+          'input, button, [tabindex]:not([tabindex="-1"])'
+        );
+        const firstEl = focusableElements[0];
+        const lastEl = focusableElements[focusableElements.length - 1];
+
+        if (e.shiftKey && document.activeElement === firstEl) {
+          e.preventDefault();
+          lastEl?.focus();
+        } else if (!e.shiftKey && document.activeElement === lastEl) {
+          e.preventDefault();
+          firstEl?.focus();
+        }
       }
     };
     window.addEventListener("keydown", handleKeyDown);
