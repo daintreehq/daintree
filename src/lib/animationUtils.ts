@@ -17,6 +17,25 @@ export function getUiAnimationDuration(): number {
   return reducedMotion || performanceMode ? 0 : UI_ANIMATION_DURATION;
 }
 
+export const UI_ENTER_DURATION = 200;
+export const UI_EXIT_DURATION = 120;
+
+export const UI_ENTER_EASING =
+  "linear(0, 0.007, 0.029 2.2%, 0.118 4.7%, 0.625 14.4%, 0.826 19%, 0.902 24%, 0.962 29.8%, 0.984 33.3%, 1.004 37.8%, 1.01 42.4%, 1.011 52.2%, 1.001)";
+export const UI_EXIT_EASING = "cubic-bezier(0.2, 0, 0.7, 0)";
+
+export function getUiTransitionDuration(direction: "enter" | "exit"): number {
+  if (typeof window === "undefined")
+    return direction === "enter" ? UI_ENTER_DURATION : UI_EXIT_DURATION;
+
+  const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const performanceMode = document.body.dataset.performanceMode === "true";
+
+  if (reducedMotion || performanceMode) return 0;
+
+  return direction === "enter" ? UI_ENTER_DURATION : UI_EXIT_DURATION;
+}
+
 export const PANEL_MINIMIZE_DURATION = 120;
 export const PANEL_RESTORE_DURATION = 200;
 

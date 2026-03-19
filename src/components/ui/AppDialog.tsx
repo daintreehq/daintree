@@ -5,6 +5,12 @@ import { cn } from "@/lib/utils";
 import { useOverlayState } from "@/hooks";
 import { useSidecarStore } from "@/store";
 import { useAnimatedPresence } from "@/hooks/useAnimatedPresence";
+import {
+  UI_ENTER_DURATION,
+  UI_EXIT_DURATION,
+  UI_ENTER_EASING,
+  UI_EXIT_EASING,
+} from "@/lib/animationUtils";
 import { X, Loader2 } from "lucide-react";
 import { Button } from "./button";
 
@@ -84,6 +90,7 @@ export function AppDialog({
 
   const { isVisible, shouldRender } = useAnimatedPresence({
     isOpen,
+    animationDuration: UI_EXIT_DURATION,
     onAnimateOut: restoreFocus,
   });
 
@@ -205,11 +212,14 @@ export function AppDialog({
         className={cn(
           "fixed inset-0 flex items-center justify-center bg-scrim-medium backdrop-blur-md backdrop-saturate-[1.25]",
           zIndex === "nested" ? "z-[var(--z-nested-dialog)]" : "z-[var(--z-modal)]",
-          "transition-opacity duration-150",
+          "transition-opacity",
           "motion-reduce:transition-none motion-reduce:duration-0",
           isVisible ? "opacity-100" : "opacity-0"
         )}
-        style={{ right: sidecarOffset }}
+        style={{
+          right: sidecarOffset,
+          transitionDuration: isVisible ? `${UI_ENTER_DURATION}ms` : `${UI_EXIT_DURATION}ms`,
+        }}
         onPointerDown={handleBackdropPointerDown}
         onPointerUp={handleBackdropPointerUp}
         onPointerCancel={resetBackdropPointer}
@@ -227,7 +237,7 @@ export function AppDialog({
             maxHeight,
             sizeClasses[size],
             "w-full",
-            "transition-all duration-150",
+            "transition-[opacity,transform]",
             "motion-reduce:transition-none motion-reduce:duration-0 motion-reduce:transform-none",
             isVisible
               ? "opacity-100 translate-y-0 scale-100"
@@ -235,6 +245,10 @@ export function AppDialog({
             "outline-none",
             className
           )}
+          style={{
+            transitionDuration: isVisible ? `${UI_ENTER_DURATION}ms` : `${UI_EXIT_DURATION}ms`,
+            transitionTimingFunction: isVisible ? UI_ENTER_EASING : UI_EXIT_EASING,
+          }}
           onClick={(e) => e.stopPropagation()}
         >
           {children}

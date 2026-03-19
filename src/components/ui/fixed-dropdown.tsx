@@ -2,6 +2,12 @@ import React, { useState, useLayoutEffect, useEffect, useCallback, useRef } from
 import { createPortal } from "react-dom";
 import { cn } from "@/lib/utils";
 import { useAnimatedPresence } from "@/hooks/useAnimatedPresence";
+import {
+  UI_ENTER_DURATION,
+  UI_EXIT_DURATION,
+  UI_ENTER_EASING,
+  UI_EXIT_EASING,
+} from "@/lib/animationUtils";
 import { useUIStore } from "@/store/uiStore";
 
 interface FixedDropdownProps {
@@ -26,7 +32,10 @@ export function FixedDropdown({
   const [mounted, setMounted] = useState(false);
   const [position, setPosition] = useState<{ top: number; right: string } | null>(null);
   const contentRef = useRef<HTMLDivElement>(null);
-  const { isVisible, shouldRender } = useAnimatedPresence({ isOpen: open });
+  const { isVisible, shouldRender } = useAnimatedPresence({
+    isOpen: open,
+    animationDuration: UI_EXIT_DURATION,
+  });
   const overlayCount = useUIStore((state) => state.overlayCount);
   const prevOverlayCountRef = useRef<number>(overlayCount);
 
@@ -99,14 +108,19 @@ export function FixedDropdown({
         ref={contentRef}
         className={cn(
           "absolute pointer-events-auto overflow-hidden rounded-[var(--radius-lg)] surface-overlay shadow-overlay text-canopy-text",
-          "transition-[opacity,transform] duration-150",
+          "transition-[opacity,transform]",
           "motion-reduce:transition-none motion-reduce:duration-0 motion-reduce:transform-none",
           isVisible
             ? "opacity-100 translate-y-0 scale-100"
             : "opacity-0 -translate-y-0.5 scale-[0.99]",
           className
         )}
-        style={{ top: position.top, right: position.right }}
+        style={{
+          top: position.top,
+          right: position.right,
+          transitionDuration: isVisible ? `${UI_ENTER_DURATION}ms` : `${UI_EXIT_DURATION}ms`,
+          transitionTimingFunction: isVisible ? UI_ENTER_EASING : UI_EXIT_EASING,
+        }}
       >
         {children}
       </div>

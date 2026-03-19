@@ -2,7 +2,14 @@ import { useCallback, useEffect, useLayoutEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 import { cn } from "@/lib/utils";
 import { useOverlayState } from "@/hooks";
+import { useAnimatedPresence } from "@/hooks/useAnimatedPresence";
 import { usePaletteStore } from "@/store/paletteStore";
+import {
+  UI_ENTER_DURATION,
+  UI_EXIT_DURATION,
+  UI_ENTER_EASING,
+  UI_EXIT_EASING,
+} from "@/lib/animationUtils";
 
 export interface AppPaletteDialogProps {
   isOpen: boolean;
@@ -19,9 +26,25 @@ export function AppPaletteDialog({
   ariaLabel,
   className,
 }: AppPaletteDialogProps) {
-  useOverlayState(isOpen);
   const dialogRef = useRef<HTMLDivElement>(null);
   const previousFocusRef = useRef<HTMLElement | null>(null);
+
+  const restoreFocus = useCallback(() => {
+    if (previousFocusRef.current) {
+      if (!usePaletteStore.getState().activePaletteId) {
+        previousFocusRef.current.focus();
+      }
+      previousFocusRef.current = null;
+    }
+  }, []);
+
+  const { isVisible, shouldRender } = useAnimatedPresence({
+    isOpen,
+    animationDuration: UI_EXIT_DURATION,
+    onAnimateOut: restoreFocus,
+  });
+
+  useOverlayState(isOpen || shouldRender);
 
   useLayoutEffect(() => {
     if (isOpen) {
@@ -30,11 +53,6 @@ export function AppPaletteDialog({
         'input, button, [tabindex]:not([tabindex="-1"])'
       );
       firstFocusable?.focus();
-    } else if (previousFocusRef.current) {
-      if (!usePaletteStore.getState().activePaletteId) {
-        previousFocusRef.current.focus();
-      }
-      previousFocusRef.current = null;
     }
   }, [isOpen]);
 
@@ -74,11 +92,19 @@ export function AppPaletteDialog({
     [onClose]
   );
 
-  if (!isOpen) return null;
+  if (!shouldRender) return null;
 
   return createPortal(
     <div
-      className="fixed inset-0 z-[var(--z-modal)] flex items-start justify-center pt-[15vh] bg-black/40 backdrop-blur-sm backdrop-saturate-[1.25]"
+      className={cn(
+        "fixed inset-0 z-[var(--z-modal)] flex items-start justify-center pt-[15vh] bg-black/40 backdrop-blur-sm backdrop-saturate-[1.25]",
+        "transition-opacity",
+        "motion-reduce:transition-none motion-reduce:duration-0",
+        isVisible ? "opacity-100" : "opacity-0"
+      )}
+      style={{
+        transitionDuration: isVisible ? `${UI_ENTER_DURATION}ms` : `${UI_EXIT_DURATION}ms`,
+      }}
       onClick={handleBackdropClick}
       role="dialog"
       aria-modal="true"
@@ -88,9 +114,17 @@ export function AppPaletteDialog({
         ref={dialogRef}
         className={cn(
           "w-full max-w-xl mx-4 bg-canopy-bg border border-[var(--border-overlay)] rounded-[var(--radius-xl)] shadow-modal overflow-hidden",
-          "animate-in fade-in slide-in-from-top-4 duration-150",
+          "transition-[opacity,transform]",
+          "motion-reduce:transition-none motion-reduce:duration-0 motion-reduce:transform-none",
+          isVisible
+            ? "opacity-100 translate-y-0 scale-100"
+            : "opacity-0 -translate-y-3 scale-[0.97]",
           className
         )}
+        style={{
+          transitionDuration: isVisible ? `${UI_ENTER_DURATION}ms` : `${UI_EXIT_DURATION}ms`,
+          transitionTimingFunction: isVisible ? UI_ENTER_EASING : UI_EXIT_EASING,
+        }}
         onClick={(e) => e.stopPropagation()}
       >
         {children}
