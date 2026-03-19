@@ -1,7 +1,8 @@
 // Environment setup must run first (GC exposure, userData, flags, sandbox)
 import "./setup/environment.js";
 
-import { app, protocol } from "electron";
+import { app, crashReporter, protocol } from "electron";
+import { registerGlobalErrorHandlers } from "./setup/globalErrorHandlers.js";
 import path from "path";
 import { fileURLToPath } from "url";
 import { PERF_MARKS } from "../shared/perf/marks.js";
@@ -96,13 +97,8 @@ const __dirname = path.dirname(__filename);
 
 void initializeTelemetry();
 
-process.on("uncaughtException", (error) => {
-  console.error("[FATAL] Uncaught Exception:", error);
-});
-
-process.on("unhandledRejection", (reason, promise) => {
-  console.error("[FATAL] Unhandled Promise Rejection at:", promise, "reason:", reason);
-});
+crashReporter.start({ uploadToServer: false });
+registerGlobalErrorHandlers();
 
 const distPath = path.join(__dirname, "../../dist");
 
