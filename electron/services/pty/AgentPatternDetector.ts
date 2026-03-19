@@ -91,16 +91,16 @@ export function stripAnsi(text: string): string {
 export const AGENT_PATTERN_CONFIGS: Record<string, PatternDetectionConfig> = {
   claude: {
     primaryPatterns: [
-      // Full format with interrupt hint (short descriptions)
-      /[✽✻✼✾⟡◇◆●○]\s+[^()\n]{2,80}\s*\(esc to interrupt/i,
+      // Full format with interrupt hint (superset: v2.1.79 chars + legacy)
+      /[·*✢✳✶✻✽●✼✾⟡◇◆○]\s+[^()\n]{2,80}\s*\(esc to interrupt/i,
       // Simple: just "esc to interrupt" at end of line (handles long/wrapped text)
       /esc to interrupt[^)\n]*\)?$/im,
       // Time + escape hint structure: (15s · esc to interrupt)
       /\(\d+s\s*[·•]\s*esc to interrupt/i,
     ],
     fallbackPatterns: [
-      // Minimal format (just spinner + activity word, no parens)
-      /[✽✻✼✾⟡◇◆●○]\s+(thinking|deliberating|working|reading|writing|searching|executing)/i,
+      // Structural: distinctive spinner + any verb + Unicode ellipsis (verb-agnostic)
+      /[✢✳✶✻✽●]\s+\w+…/i,
     ],
     scanLineCount: 10,
     primaryConfidence: 0.95,
@@ -150,10 +150,10 @@ export const AGENT_PATTERN_CONFIGS: Record<string, PatternDetectionConfig> = {
  */
 export const UNIVERSAL_PATTERN_CONFIG: PatternDetectionConfig = {
   primaryPatterns: [
-    // Full format patterns (short descriptions)
-    /[✽✻✼✾⟡◇◆●○•·⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]\s+[^()\n]{2,80}\s*\(esc to interrupt/i,
-    /[✽✻✼✾⟡◇◆●○•·⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]\s+[^()\n]{2,80}\s*\(esc to cancel/i,
-    /[✽✻✼✾⟡◇◆●○•·⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]\s+[^()\n]{2,80}\s*\(escape to interrupt/i,
+    // Full format patterns (superset: v2.1.79 Claude chars + legacy + Gemini + Codex)
+    /[·*✢✳✶✻✽●✼✾⟡◇◆○•⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]\s+[^()\n]{2,80}\s*\(esc to interrupt/i,
+    /[·*✢✳✶✻✽●✼✾⟡◇◆○•⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]\s+[^()\n]{2,80}\s*\(esc to cancel/i,
+    /[·*✢✳✶✻✽●✼✾⟡◇◆○•⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]\s+[^()\n]{2,80}\s*\(escape to interrupt/i,
     // Simple: escape hints at end of line (handles long/wrapped text)
     /esc to interrupt[^)\n]*\)?$/im,
     /esc to cancel[^)\n]*\)?$/im,
@@ -164,7 +164,7 @@ export const UNIVERSAL_PATTERN_CONFIG: PatternDetectionConfig = {
   ],
   fallbackPatterns: [
     // Common spinner characters followed by activity
-    /[✽✻✼✾⟡◇◆●○•·⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]\s+(thinking|working|loading|processing|running)/i,
+    /[✢✳✶✻✽●•⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]\s+(thinking|working|loading|processing|running)/i,
   ],
   scanLineCount: 10,
   primaryConfidence: 0.9,

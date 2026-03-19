@@ -83,6 +83,22 @@ describe("isStatusLineRewrite", () => {
   it("returns true for ANSI erase with status content", () => {
     expect(isStatusLineRewrite("\x1b[2K⠋ Working on task")).toBe(true);
   });
+
+  it("returns true for new Claude spinner char ✢", () => {
+    expect(isStatusLineRewrite("\r✢ Thinking…")).toBe(true);
+  });
+
+  it("returns true for new Claude spinner char ✶", () => {
+    expect(isStatusLineRewrite("\r✶ Working…")).toBe(true);
+  });
+
+  it("returns true for Claude middle dot spinner", () => {
+    expect(isStatusLineRewrite("\r· Deliberating…")).toBe(true);
+  });
+
+  it("returns true for new Claude spinner char ✳", () => {
+    expect(isStatusLineRewrite("\r✳ Cogitating…")).toBe(true);
+  });
 });
 
 describe("LineRewriteDetector", () => {
