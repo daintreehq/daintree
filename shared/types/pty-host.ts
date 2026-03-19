@@ -205,6 +205,15 @@ export type PtyHostEvent =
       type: "graceful-kill-by-project-result";
       requestId: string;
       results: Array<{ id: string; agentSessionId: string | null }>;
+    }
+  | {
+      type: "fd-leak-warning";
+      fdCount: number;
+      activeTerminals: number;
+      estimatedLeaked: number;
+      orphanedPids: number[];
+      ptmxLimit: number | null;
+      timestamp: number;
     };
 
 /** Terminal info sent from Host → Main for getTerminal queries */
