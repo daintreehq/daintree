@@ -120,7 +120,7 @@ describe("gridPanelPropsAreEqual", () => {
 
   it("returns false when ambientAgentState changes", () => {
     const prev = baseProps({ ambientAgentState: undefined });
-    const next = baseProps({ ambientAgentState: "blocked" });
+    const next = baseProps({ ambientAgentState: "waiting" });
     expect(gridPanelPropsAreEqual(prev, next)).toBe(false);
   });
 
