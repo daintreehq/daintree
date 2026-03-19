@@ -45,9 +45,11 @@ vi.mock("../TerminalAddonManager", () => ({
     imageAddon: { dispose: vi.fn() },
     searchAddon: {},
     fileLinksDisposable: { dispose: vi.fn() },
+    webLinksAddon: { dispose: vi.fn() },
   })),
   createImageAddon: vi.fn(() => ({ dispose: vi.fn() })),
   createFileLinksAddon: vi.fn(() => ({ dispose: vi.fn() })),
+  createWebLinksAddon: vi.fn(() => ({ dispose: vi.fn() })),
 }));
 
 type TierTestService = {
@@ -86,6 +88,7 @@ function makeMockManaged(overrides: Record<string, unknown> = {}) {
     imageAddon: { dispose: vi.fn() } as { dispose: ReturnType<typeof vi.fn> } | null,
     searchAddon: {},
     fileLinksDisposable: { dispose: vi.fn() } as { dispose: ReturnType<typeof vi.fn> } | null,
+    webLinksAddon: { dispose: vi.fn() } as { dispose: ReturnType<typeof vi.fn> } | null,
     hostElement: document.createElement("div"),
     isOpened: true,
     isVisible: true,
@@ -153,6 +156,7 @@ describe("TerminalInstanceService - Activity Tier", () => {
       const managed = makeMockManaged({ lastAppliedTier: TerminalRefreshTier.FOCUSED });
       const imageDispose = managed.imageAddon!.dispose;
       const fileLinksDispose = managed.fileLinksDisposable!.dispose;
+      const webLinksDispose = managed.webLinksAddon!.dispose;
       service.instances.set("t1", managed as unknown as Record<string, unknown>);
 
       service.applyRendererPolicy("t1", TerminalRefreshTier.BACKGROUND);
@@ -161,17 +165,21 @@ describe("TerminalInstanceService - Activity Tier", () => {
 
       expect(imageDispose).toHaveBeenCalled();
       expect(fileLinksDispose).toHaveBeenCalled();
+      expect(webLinksDispose).toHaveBeenCalled();
       expect(managed.imageAddon).toBeNull();
       expect(managed.fileLinksDisposable).toBeNull();
+      expect(managed.webLinksAddon).toBeNull();
     });
 
     it("should recreate addons when transitioning from BACKGROUND to VISIBLE", async () => {
-      const { createImageAddon, createFileLinksAddon } = await import("../TerminalAddonManager");
+      const { createImageAddon, createFileLinksAddon, createWebLinksAddon } =
+        await import("../TerminalAddonManager");
 
       const managed = makeMockManaged({
         lastAppliedTier: TerminalRefreshTier.BACKGROUND,
         imageAddon: null,
         fileLinksDisposable: null,
+        webLinksAddon: null,
       });
       service.instances.set("t1", managed as unknown as Record<string, unknown>);
 
@@ -180,17 +188,21 @@ describe("TerminalInstanceService - Activity Tier", () => {
 
       expect(createImageAddon).toHaveBeenCalled();
       expect(createFileLinksAddon).toHaveBeenCalled();
+      expect(createWebLinksAddon).toHaveBeenCalled();
       expect(managed.imageAddon).not.toBeNull();
       expect(managed.fileLinksDisposable).not.toBeNull();
+      expect(managed.webLinksAddon).not.toBeNull();
     });
 
     it("should recreate addons when transitioning from BACKGROUND to FOCUSED", async () => {
-      const { createImageAddon, createFileLinksAddon } = await import("../TerminalAddonManager");
+      const { createImageAddon, createFileLinksAddon, createWebLinksAddon } =
+        await import("../TerminalAddonManager");
 
       const managed = makeMockManaged({
         lastAppliedTier: TerminalRefreshTier.BACKGROUND,
         imageAddon: null,
         fileLinksDisposable: null,
+        webLinksAddon: null,
       });
       service.instances.set("t1", managed as unknown as Record<string, unknown>);
 
@@ -198,6 +210,7 @@ describe("TerminalInstanceService - Activity Tier", () => {
 
       expect(createImageAddon).toHaveBeenCalled();
       expect(createFileLinksAddon).toHaveBeenCalled();
+      expect(createWebLinksAddon).toHaveBeenCalled();
     });
 
     it("should not dispose already-null addons", () => {
@@ -205,6 +218,7 @@ describe("TerminalInstanceService - Activity Tier", () => {
         lastAppliedTier: TerminalRefreshTier.FOCUSED,
         imageAddon: null,
         fileLinksDisposable: null,
+        webLinksAddon: null,
       });
       service.instances.set("t1", managed as unknown as Record<string, unknown>);
 
@@ -214,18 +228,22 @@ describe("TerminalInstanceService - Activity Tier", () => {
       // Should not throw — null addons are handled gracefully
       expect(managed.imageAddon).toBeNull();
       expect(managed.fileLinksDisposable).toBeNull();
+      expect(managed.webLinksAddon).toBeNull();
     });
 
     it("should not recreate addons that already exist on upgrade", async () => {
-      const { createImageAddon, createFileLinksAddon } = await import("../TerminalAddonManager");
+      const { createImageAddon, createFileLinksAddon, createWebLinksAddon } =
+        await import("../TerminalAddonManager");
       vi.mocked(createImageAddon).mockClear();
       vi.mocked(createFileLinksAddon).mockClear();
+      vi.mocked(createWebLinksAddon).mockClear();
 
       const managed = makeMockManaged({
         lastAppliedTier: TerminalRefreshTier.BACKGROUND,
         // Addons already exist (shouldn't happen normally but tests guard condition)
         imageAddon: { dispose: vi.fn() },
         fileLinksDisposable: { dispose: vi.fn() },
+        webLinksAddon: { dispose: vi.fn() },
       });
       service.instances.set("t1", managed as unknown as Record<string, unknown>);
 
@@ -233,6 +251,7 @@ describe("TerminalInstanceService - Activity Tier", () => {
 
       expect(createImageAddon).not.toHaveBeenCalled();
       expect(createFileLinksAddon).not.toHaveBeenCalled();
+      expect(createWebLinksAddon).not.toHaveBeenCalled();
     });
 
     it("should null addons and set lastAppliedTier for terminals created at BACKGROUND tier", () => {
@@ -240,11 +259,13 @@ describe("TerminalInstanceService - Activity Tier", () => {
       const m = managed as unknown as {
         imageAddon: unknown;
         fileLinksDisposable: unknown;
+        webLinksAddon: unknown;
         lastAppliedTier: TerminalRefreshTier;
       };
 
       expect(m.imageAddon).toBeNull();
       expect(m.fileLinksDisposable).toBeNull();
+      expect(m.webLinksAddon).toBeNull();
       expect(m.lastAppliedTier).toBe(TerminalRefreshTier.BACKGROUND);
     });
 
@@ -253,6 +274,7 @@ describe("TerminalInstanceService - Activity Tier", () => {
         lastAppliedTier: TerminalRefreshTier.BACKGROUND,
         imageAddon: null,
         fileLinksDisposable: null,
+        webLinksAddon: null,
       });
       service.instances.set("t1", managed as unknown as Record<string, unknown>);
 

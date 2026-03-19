@@ -7,6 +7,7 @@ import {
   setupTerminalAddons,
   createImageAddon,
   createFileLinksAddon,
+  createWebLinksAddon,
 } from "./TerminalAddonManager";
 import { TerminalOutputIngestService } from "./TerminalOutputIngestService";
 import { TerminalParserHandler } from "./TerminalParserHandler";
@@ -147,6 +148,14 @@ class TerminalInstanceService {
             }
             managed.fileLinksDisposable = null;
           }
+          if (managed.webLinksAddon) {
+            try {
+              managed.webLinksAddon.dispose();
+            } catch {
+              /* ignore */
+            }
+            managed.webLinksAddon = null;
+          }
         } else {
           restoreScrollback(managed);
 
@@ -164,6 +173,15 @@ class TerminalInstanceService {
               );
             } catch (err) {
               logWarn("Failed to recreate FileLinksAddon", { id, error: err });
+            }
+          }
+          if (!managed.webLinksAddon) {
+            try {
+              managed.webLinksAddon = createWebLinksAddon(managed.terminal, (event, uri) =>
+                this.linkHandler.openLink(uri, id, event)
+              );
+            } catch (err) {
+              logWarn("Failed to recreate WebLinksAddon", { id, error: err });
             }
           }
         }
@@ -465,7 +483,11 @@ class TerminalInstanceService {
 
     const terminal = new Terminal(terminalOptions);
     this.cwdProviders.set(id, getCwd ?? (() => ""));
-    const addons = setupTerminalAddons(terminal, () => (this.cwdProviders.get(id) ?? (() => ""))());
+    const addons = setupTerminalAddons(
+      terminal,
+      () => (this.cwdProviders.get(id) ?? (() => ""))(),
+      (event, uri) => openLink(uri, event)
+    );
 
     const hostElement = document.createElement("div");
     hostElement.style.width = "100%";
@@ -724,6 +746,12 @@ class TerminalInstanceService {
         /* ignore */
       }
       managed.fileLinksDisposable = null;
+      try {
+        managed.webLinksAddon?.dispose();
+      } catch {
+        /* ignore */
+      }
+      managed.webLinksAddon = null;
     }
 
     this.notifyReadinessWaiters(id);
@@ -1310,6 +1338,11 @@ class TerminalInstanceService {
       managed.fileLinksDisposable?.dispose();
     } catch (error) {
       logWarn("Error disposing file links", { error });
+    }
+    try {
+      managed.webLinksAddon?.dispose();
+    } catch (error) {
+      logWarn("Error disposing web links addon", { error });
     }
     try {
       managed.imageAddon?.dispose();
