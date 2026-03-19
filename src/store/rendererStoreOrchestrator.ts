@@ -4,7 +4,8 @@ import {
   isMruRecordingSuppressed,
   persistMruList,
 } from "./worktreeStore";
-import { useTerminalInputStore } from "./terminalInputStore";
+import { useTerminalInputStore, unregisterInputController } from "./terminalInputStore";
+import { semanticAnalysisService } from "@/services/SemanticAnalysisService";
 import { useConsoleCaptureStore } from "./consoleCaptureStore";
 import { useVoiceRecordingStore } from "./voiceRecordingStore";
 import { useLayoutUndoStore } from "./layoutUndoStore";
@@ -79,6 +80,8 @@ export function initStoreOrchestrator(): () => void {
       useTerminalInputStore.getState().clearTerminalState(removed.id);
       useConsoleCaptureStore.getState().removePane(removed.id);
       useVoiceRecordingStore.getState().clearPanelBuffer(removed.id);
+      unregisterInputController(removed.id);
+      semanticAnalysisService.unregisterTerminal(removed.id);
 
       if (removed.worktreeId) {
         const worktreeState = useWorktreeSelectionStore.getState();
