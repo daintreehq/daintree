@@ -14,7 +14,7 @@ vi.mock("react-dom", async () => {
 });
 
 vi.mock("@/store/worktreeDataStore", () => ({
-  useWorktreeDataStore: vi.fn((selector: (s: { worktrees: Map<string, any> }) => unknown) =>
+  useWorktreeDataStore: vi.fn((selector: (s: { worktrees: Map<string, unknown> }) => unknown) =>
     selector({ worktrees: new Map() })
   ),
 }));
@@ -293,6 +293,42 @@ describe("GitHubListItem", () => {
       (el.getAttribute("class") ?? "").includes("bg-canopy-accent")
     );
     expect(checked).not.toBeUndefined();
+  });
+
+  it("scopes checkbox hover to icon area via named group", () => {
+    const { container } = render(
+      <GitHubListItem item={baseIssue} type="issue" onToggleSelect={vi.fn()} />
+    );
+    const iconWrapper = container.querySelector(".group\\/icon");
+    expect(iconWrapper).not.toBeNull();
+
+    const children = iconWrapper!.querySelectorAll(":scope > span");
+    const stateIcon = children[0];
+    const checkbox = children[1];
+
+    expect(stateIcon?.className).toContain("group-hover/icon:hidden");
+    expect(stateIcon?.className).not.toContain("group-hover:hidden");
+
+    expect(checkbox?.className).toContain("group-hover/icon:flex");
+    expect(checkbox?.className).not.toContain("group-hover:flex");
+  });
+
+  it("shows checkbox unconditionally when selection is active", () => {
+    const { container } = render(
+      <GitHubListItem item={baseIssue} type="issue" isSelectionActive onToggleSelect={vi.fn()} />
+    );
+    const iconWrapper = container.querySelector(".group\\/icon");
+    expect(iconWrapper).not.toBeNull();
+
+    const children = iconWrapper!.querySelectorAll(":scope > span");
+    const stateIcon = children[0];
+    const checkbox = children[1];
+
+    expect(stateIcon?.className).toContain("hidden");
+    expect(stateIcon?.className).not.toContain("group-hover/icon:hidden");
+
+    expect(checkbox?.className).toContain("flex");
+    expect(checkbox?.className).not.toContain("group-hover/icon:flex");
   });
 
   it("calls onToggleSelect when clicking title during active selection", () => {
