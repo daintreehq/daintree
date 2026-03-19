@@ -209,12 +209,6 @@ describe("WorkspaceClient resilience", () => {
       child.emit("message", { type: "ready" });
     });
 
-    function resolveLoadProject() {
-      const lastCall = child.postMessage.mock.calls.at(-1)!;
-      const requestId = (lastCall[0] as { requestId: string }).requestId;
-      child.emit("message", { type: "load-project-result", requestId });
-    }
-
     it("second loadProject supersedes the first (latest wins)", async () => {
       const p1 = client.loadProject("/project-a");
       const p2 = client.loadProject("/project-b");
@@ -290,7 +284,8 @@ describe("WorkspaceClient resilience", () => {
       await userLoad;
 
       // Flush microtasks so the restart path .then() runs
-      await vi.runAllTimersAsync();
+      await Promise.resolve();
+      await Promise.resolve();
 
       const clientPrivate = restartClient as never as {
         currentRootPath: string | null;
@@ -307,7 +302,6 @@ describe("WorkspaceClient resilience", () => {
       expect(loadProjectCalls).toHaveLength(2);
 
       restartClient.dispose();
-      vi.runOnlyPendingTimers();
     });
 
     it("restart auto-reload proceeds when not superseded", async () => {
@@ -341,7 +335,8 @@ describe("WorkspaceClient resilience", () => {
       restartChild2.emit("message", { type: "ready" });
 
       // Flush microtasks for the .then() chain
-      await vi.runAllTimersAsync();
+      await Promise.resolve();
+      await Promise.resolve();
 
       // The restart path should have issued a loadProject call
       const reloadCall = restartChild2.postMessage.mock.calls.find(
@@ -356,10 +351,9 @@ describe("WorkspaceClient resilience", () => {
         requestId: (reloadCall![0] as { requestId: string }).requestId,
       });
 
-      await vi.runAllTimersAsync();
+      await Promise.resolve();
 
       restartClient.dispose();
-      vi.runOnlyPendingTimers();
     });
   });
 
