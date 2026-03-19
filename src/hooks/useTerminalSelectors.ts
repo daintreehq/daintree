@@ -23,13 +23,39 @@ function isTerminalVisible(
   return true;
 }
 
+let _cachedWorktrees: Map<string, WorktreeState> | null = null;
+let _cachedIds: Set<string> | null = null;
+
 function buildWorktreeIds(worktrees: Map<string, WorktreeState>): Set<string> {
+  if (worktrees === _cachedWorktrees && _cachedIds) return _cachedIds;
+
+  if (_cachedIds && worktrees.size === _cachedIds.size) {
+    let keysMatch = true;
+    for (const id of worktrees.keys()) {
+      if (!_cachedIds.has(id)) {
+        keysMatch = false;
+        break;
+      }
+    }
+    if (keysMatch) {
+      _cachedWorktrees = worktrees;
+      return _cachedIds;
+    }
+  }
+
   const ids = new Set<string>();
   for (const [id, wt] of worktrees) {
     ids.add(id);
     if (wt.worktreeId) ids.add(wt.worktreeId);
   }
+  _cachedWorktrees = worktrees;
+  _cachedIds = ids;
   return ids;
+}
+
+export function _resetWorktreeIdCacheForTests(): void {
+  _cachedWorktrees = null;
+  _cachedIds = null;
 }
 
 function useWorktreeIds(): Set<string> {
