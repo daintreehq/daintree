@@ -91,8 +91,9 @@ export function ProjectSwitchOverlay({ isSwitching, projectName }: ProjectSwitch
             "transition-opacity duration-150",
             showCancel ? "opacity-100" : "opacity-0 pointer-events-none"
           )}
+          aria-hidden={!showCancel}
         >
-          <Button variant="ghost" size="sm" onClick={handleCancel}>
+          <Button variant="ghost" size="sm" onClick={handleCancel} tabIndex={showCancel ? 0 : -1}>
             Cancel
           </Button>
         </div>

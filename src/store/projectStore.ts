@@ -410,6 +410,7 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
             message,
             duration: 6000,
           });
+          clearSwitchSafetyTimeout();
           set({
             error: message,
             currentProject: currentProject,
@@ -431,6 +432,7 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
     } catch (error) {
       // This catch handles errors from the synchronous setup phase
       // (store resets, snapshot, terminal persistence, etc.)
+      clearSwitchSafetyTimeout();
       cancelPreparedProjectSwitchRendererCache(oldProjectId);
       logErrorWithContext(error, {
         operation: "switch_project_setup",
@@ -721,6 +723,7 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
         })
         .catch((error) => {
           if (switchEpoch !== capturedEpoch) return; // Stale — user switched again
+          clearSwitchSafetyTimeout();
           cancelPreparedProjectSwitchRendererCache(oldProjectId);
           logErrorWithContext(error, {
             operation: "reopen_project",
@@ -750,6 +753,7 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
 
       // Note: State re-hydration is triggered by PROJECT_ON_SWITCH IPC event
     } catch (error) {
+      clearSwitchSafetyTimeout();
       cancelPreparedProjectSwitchRendererCache(oldProjectId);
       logErrorWithContext(error, {
         operation: "reopen_project_setup",
