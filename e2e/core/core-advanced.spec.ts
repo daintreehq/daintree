@@ -88,22 +88,6 @@ test.describe.serial("Core: Advanced", () => {
       });
     });
 
-    test("sidecar toggle opens and closes", async () => {
-      const { window } = ctx;
-
-      const sidecarBtn = window.locator(SEL.toolbar.sidecarToggle);
-      if (!(await sidecarBtn.isVisible().catch(() => false))) {
-        test.skip();
-        return;
-      }
-
-      await sidecarBtn.click();
-      await window.waitForTimeout(T_SETTLE);
-
-      await sidecarBtn.click();
-      await window.waitForTimeout(T_SETTLE);
-    });
-
     test("notes palette opens and shows editor", async () => {
       const { window } = ctx;
 

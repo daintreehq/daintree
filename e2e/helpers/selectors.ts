@@ -8,7 +8,12 @@ export const SEL = {
     copyContext: '[aria-label="Copy Context"]',
     notesButton: '[aria-label="Notes"]',
     projectSwitcherTrigger: '[data-testid="project-switcher-trigger"]',
-    sidecarToggle: '[aria-label="Toggle Sidecar"]',
+    sidecarToggle: '[aria-label*="context sidecar"]',
+  },
+  sidecar: {
+    region: '[role="region"][aria-label="Sidecar"]',
+    resizeHandle: '[aria-label="Resize sidecar panel"]',
+    launchpadHeading: 'h2:has-text("New Chat")',
   },
   sidebar: {
     resizeHandle: '[aria-label="Resize sidebar"]',
