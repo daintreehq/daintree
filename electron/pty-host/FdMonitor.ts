@@ -20,16 +20,21 @@ export class FdMonitor {
   private readonly fdPath: string | null;
   private readonly isSupported: boolean;
 
-  constructor() {
+  constructor(fdPathOverride?: string) {
     const platform = process.platform;
-    this.isSupported = platform === "darwin" || platform === "linux";
 
-    if (platform === "darwin") {
+    if (fdPathOverride) {
+      this.fdPath = fdPathOverride;
+      this.isSupported = true;
+    } else if (platform === "darwin") {
       this.fdPath = "/dev/fd";
+      this.isSupported = true;
     } else if (platform === "linux") {
       this.fdPath = "/proc/self/fd";
+      this.isSupported = true;
     } else {
       this.fdPath = null;
+      this.isSupported = false;
     }
 
     this.baselineFds = this.getFdCount();
