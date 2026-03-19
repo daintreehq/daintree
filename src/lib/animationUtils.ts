@@ -2,14 +2,16 @@ export const TERMINAL_ANIMATION_DURATION = 150;
 export const UI_ANIMATION_DURATION = 150;
 
 export function getTerminalAnimationDuration(): number {
-  if (typeof window === "undefined") return TERMINAL_ANIMATION_DURATION;
+  if (typeof window === "undefined" || typeof window.matchMedia !== "function")
+    return TERMINAL_ANIMATION_DURATION;
 
   const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
   return reducedMotion ? 0 : TERMINAL_ANIMATION_DURATION;
 }
 
 export function getUiAnimationDuration(): number {
-  if (typeof window === "undefined") return UI_ANIMATION_DURATION;
+  if (typeof window === "undefined" || typeof window.matchMedia !== "function")
+    return UI_ANIMATION_DURATION;
 
   const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
   const performanceMode = document.body.dataset.performanceMode === "true";
@@ -25,7 +27,7 @@ export const UI_ENTER_EASING =
 export const UI_EXIT_EASING = "cubic-bezier(0.2, 0, 0.7, 0)";
 
 export function getUiTransitionDuration(direction: "enter" | "exit"): number {
-  if (typeof window === "undefined")
+  if (typeof window === "undefined" || typeof window.matchMedia !== "function")
     return direction === "enter" ? UI_ENTER_DURATION : UI_EXIT_DURATION;
 
   const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -43,7 +45,7 @@ export const PANEL_MINIMIZE_EASING = "cubic-bezier(0.3, 0, 0.8, 0.15)";
 export const PANEL_RESTORE_EASING = "cubic-bezier(0.16, 1, 0.3, 1)";
 
 export function getPanelTransitionDuration(direction: "minimize" | "restore"): number {
-  if (typeof window === "undefined")
+  if (typeof window === "undefined" || typeof window.matchMedia !== "function")
     return direction === "minimize" ? PANEL_MINIMIZE_DURATION : PANEL_RESTORE_DURATION;
 
   const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
