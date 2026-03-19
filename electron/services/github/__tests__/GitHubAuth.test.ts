@@ -48,4 +48,32 @@ describe("GitHubAuth", () => {
     expect(result.valid).toBe(false);
     expect(result.error).toBe("Cannot reach GitHub. Check your internet connection.");
   });
+
+  it("maps timeout errors to a clear network error", async () => {
+    const timeoutError = new DOMException("The operation timed out.", "TimeoutError");
+    (globalThis as unknown as { fetch: Mock }).fetch = vi.fn().mockRejectedValue(timeoutError);
+
+    const result = await GitHubAuth.validate("ghp_validtoken012345678901234567890123456789");
+
+    expect(result.valid).toBe(false);
+    expect(result.error).toBe("Cannot reach GitHub. Check your internet connection.");
+  });
+
+  it("passes AbortSignal.timeout to fetch during validation", async () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ login: "user", avatar_url: "" }),
+      headers: new Headers({ "x-oauth-scopes": "repo" }),
+    });
+    (globalThis as unknown as { fetch: Mock }).fetch = mockFetch;
+
+    await GitHubAuth.validate("ghp_validtoken012345678901234567890123456789");
+
+    expect(mockFetch).toHaveBeenCalledWith(
+      "https://api.github.com/user",
+      expect.objectContaining({
+        signal: expect.any(AbortSignal),
+      })
+    );
+  });
 });

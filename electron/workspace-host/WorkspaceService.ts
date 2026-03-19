@@ -1,7 +1,8 @@
 import PQueue from "p-queue";
 import { mkdir, writeFile, stat } from "fs/promises";
 import { join as pathJoin, dirname, resolve as pathResolve, isAbsolute } from "path";
-import { simpleGit, SimpleGit, BranchSummary } from "simple-git";
+import { SimpleGit, BranchSummary } from "simple-git";
+import { createHardenedGit } from "../utils/hardenedGit.js";
 import type { Worktree } from "../../shared/types/worktree.js";
 import type {
   WorkspaceHostEvent,
@@ -180,7 +181,7 @@ export class WorkspaceService {
     try {
       this.projectRootPath = projectRootPath;
       this.projectScopeId = projectScopeId;
-      this.git = simpleGit(projectRootPath);
+      this.git = createHardenedGit(projectRootPath);
       this.listService.setGit(this.git, projectRootPath);
 
       const rawWorktrees = await this.listService.list();
@@ -582,7 +583,7 @@ export class WorkspaceService {
     options: CreateWorktreeOptions
   ): Promise<void> {
     try {
-      const git = simpleGit(rootPath);
+      const git = createHardenedGit(rootPath);
       const {
         baseBranch,
         newBranch,
@@ -899,7 +900,7 @@ export class WorkspaceService {
 
   async listBranches(requestId: string, rootPath: string): Promise<void> {
     try {
-      const git = simpleGit(rootPath);
+      const git = createHardenedGit(rootPath);
       const summary: BranchSummary = await git.branch(["-a"]);
       const branches: BranchInfo[] = [];
 
@@ -936,7 +937,7 @@ export class WorkspaceService {
 
   async getRecentBranches(requestId: string, rootPath: string): Promise<void> {
     try {
-      const git = simpleGit(rootPath);
+      const git = createHardenedGit(rootPath);
       const rawReflog = await git.raw(["reflog", "--format=%gs"]);
 
       if (!rawReflog?.trim()) {
@@ -983,7 +984,7 @@ export class WorkspaceService {
         throw new Error("Path traversal detected");
       }
 
-      const git = simpleGit(cwd);
+      const git = createHardenedGit(cwd);
 
       if (status === "untracked" || status === "added") {
         const { readFile } = await import("fs/promises");

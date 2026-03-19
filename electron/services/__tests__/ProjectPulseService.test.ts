@@ -37,8 +37,8 @@ describe("ProjectPulseService", () => {
       return "";
     });
 
-    vi.doMock("simple-git", () => ({
-      simpleGit: () => createGitStub(raw),
+    vi.doMock("../../utils/hardenedGit.js", () => ({
+      createHardenedGit: () => createGitStub(raw),
     }));
 
     const { ProjectPulseService } = await import("../ProjectPulseService.js");
@@ -78,8 +78,8 @@ describe("ProjectPulseService", () => {
       return "";
     });
 
-    vi.doMock("simple-git", () => ({
-      simpleGit: () => createGitStub(raw),
+    vi.doMock("../../utils/hardenedGit.js", () => ({
+      createHardenedGit: () => createGitStub(raw),
     }));
 
     const { ProjectPulseService } = await import("../ProjectPulseService.js");
@@ -156,8 +156,8 @@ describe("ProjectPulseService", () => {
       return "";
     });
 
-    vi.doMock("simple-git", () => ({
-      simpleGit: () => createGitStub(raw),
+    vi.doMock("../../utils/hardenedGit.js", () => ({
+      createHardenedGit: () => createGitStub(raw),
     }));
 
     const { ProjectPulseService } = await import("../ProjectPulseService.js");
@@ -201,8 +201,8 @@ describe("ProjectPulseService", () => {
       return "";
     });
 
-    vi.doMock("simple-git", () => ({
-      simpleGit: () => createGitStub(raw),
+    vi.doMock("../../utils/hardenedGit.js", () => ({
+      createHardenedGit: () => createGitStub(raw),
     }));
 
     const { ProjectPulseService } = await import("../ProjectPulseService.js");
@@ -243,8 +243,8 @@ describe("ProjectPulseService", () => {
       return "";
     });
 
-    vi.doMock("simple-git", () => ({
-      simpleGit: () => createGitStub(raw),
+    vi.doMock("../../utils/hardenedGit.js", () => ({
+      createHardenedGit: () => createGitStub(raw),
     }));
 
     const { ProjectPulseService } = await import("../ProjectPulseService.js");
@@ -286,8 +286,8 @@ describe("ProjectPulseService", () => {
       return "";
     });
 
-    vi.doMock("simple-git", () => ({
-      simpleGit: () => createGitStub(raw),
+    vi.doMock("../../utils/hardenedGit.js", () => ({
+      createHardenedGit: () => createGitStub(raw),
     }));
 
     const { ProjectPulseService } = await import("../ProjectPulseService.js");
@@ -324,8 +324,8 @@ describe("ProjectPulseService", () => {
       return "";
     });
 
-    vi.doMock("simple-git", () => ({
-      simpleGit: () => createGitStub(raw),
+    vi.doMock("../../utils/hardenedGit.js", () => ({
+      createHardenedGit: () => createGitStub(raw),
     }));
 
     const { ProjectPulseService } = await import("../ProjectPulseService.js");
@@ -369,8 +369,8 @@ describe("ProjectPulseService", () => {
       return "";
     });
 
-    vi.doMock("simple-git", () => ({
-      simpleGit: () => createGitStub(raw),
+    vi.doMock("../../utils/hardenedGit.js", () => ({
+      createHardenedGit: () => createGitStub(raw),
     }));
 
     const { ProjectPulseService } = await import("../ProjectPulseService.js");
@@ -398,8 +398,8 @@ describe("ProjectPulseService", () => {
       return "";
     });
 
-    vi.doMock("simple-git", () => ({
-      simpleGit: () => createGitStub(raw),
+    vi.doMock("../../utils/hardenedGit.js", () => ({
+      createHardenedGit: () => createGitStub(raw),
     }));
 
     const { ProjectPulseService } = await import("../ProjectPulseService.js");
@@ -434,8 +434,8 @@ describe("ProjectPulseService", () => {
       return "";
     });
 
-    vi.doMock("simple-git", () => ({
-      simpleGit: () => createGitStub(raw),
+    vi.doMock("../../utils/hardenedGit.js", () => ({
+      createHardenedGit: () => createGitStub(raw),
     }));
 
     const { ProjectPulseService } = await import("../ProjectPulseService.js");
@@ -464,8 +464,8 @@ describe("ProjectPulseService", () => {
       return "";
     });
 
-    vi.doMock("simple-git", () => ({
-      simpleGit: () => createGitStub(raw),
+    vi.doMock("../../utils/hardenedGit.js", () => ({
+      createHardenedGit: () => createGitStub(raw),
     }));
 
     const { ProjectPulseService } = await import("../ProjectPulseService.js");

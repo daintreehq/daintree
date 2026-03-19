@@ -27,10 +27,13 @@ export function validateCwd(cwd: unknown): asserts cwd is string {
   }
 }
 
+export const GIT_BLOCK_TIMEOUT_MS = 30_000;
+
 export function createHardenedGit(cwd: string): SimpleGit {
   return simpleGit({
     baseDir: cwd,
     config: [...HARDENED_GIT_CONFIG],
+    timeout: { block: GIT_BLOCK_TIMEOUT_MS },
     unsafe: {
       allowUnsafeProtocolOverride: true,
       allowUnsafeSshCommand: true,

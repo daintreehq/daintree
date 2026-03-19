@@ -1,5 +1,8 @@
 import { graphql } from "@octokit/graphql";
 
+export const GITHUB_API_TIMEOUT_MS = 15_000;
+export const GITHUB_AUTH_TIMEOUT_MS = 10_000;
+
 export interface GitHubTokenConfig {
   hasToken: boolean;
   scopes?: string[];
@@ -198,6 +201,7 @@ export class GitHubAuth {
           Authorization: `token ${token}`,
           Accept: "application/vnd.github.v3+json",
         },
+        signal: AbortSignal.timeout(GITHUB_AUTH_TIMEOUT_MS),
       });
 
       if (!response.ok) {
@@ -222,14 +226,17 @@ export class GitHubAuth {
       };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
+      const isTimeout = error instanceof Error && error.name === "TimeoutError";
       if (
+        isTimeout ||
         message.includes("ENOTFOUND") ||
         message.includes("ETIMEDOUT") ||
         message.includes("ECONNREFUSED") ||
         message.includes("ECONNRESET") ||
         message.includes("EAI_AGAIN") ||
         message.includes("network") ||
-        message.includes("fetch failed")
+        message.includes("fetch failed") ||
+        message.includes("timed out")
       ) {
         return {
           valid: false,

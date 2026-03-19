@@ -5,6 +5,14 @@ import { WorktreeRemovedError } from "../../utils/errorTypes.js";
 const mockGetWorktreeChangesWithStats = vi.fn();
 const mockInvalidateGitStatusCache = vi.fn();
 
+vi.mock("../../utils/hardenedGit.js", () => ({
+  createHardenedGit: vi.fn(() => ({
+    raw: vi.fn(),
+    log: vi.fn().mockResolvedValue({ latest: null }),
+  })),
+  validateCwd: vi.fn(),
+}));
+
 vi.mock("../../utils/git.js", () => ({
   getWorktreeChangesWithStats: (...args: unknown[]) => mockGetWorktreeChangesWithStats(...args),
   invalidateGitStatusCache: (...args: unknown[]) => mockInvalidateGitStatusCache(...args),

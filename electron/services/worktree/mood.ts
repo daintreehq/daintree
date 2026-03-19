@@ -1,4 +1,4 @@
-import { simpleGit } from "simple-git";
+import { createHardenedGit } from "../../utils/hardenedGit.js";
 import type { Worktree, WorktreeChanges, WorktreeMood } from "../../types/index.js";
 import { logWarn } from "../../utils/logger.js";
 
@@ -9,7 +9,7 @@ const MS_PER_DAY = 1000 * 60 * 60 * 24;
  */
 export async function getLastCommitAgeInDays(worktreePath: string): Promise<number | null> {
   try {
-    const git = simpleGit(worktreePath);
+    const git = createHardenedGit(worktreePath);
     const log = await git.log({ maxCount: 1 });
     const lastDate = log.latest?.date;
     if (!lastDate) return null;
