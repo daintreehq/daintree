@@ -55,7 +55,11 @@ vi.mock("../TerminalAddonManager", () => ({
 interface PostWakeInstance {
   latestCols: number;
   latestRows: number;
-  hostElement: { getBoundingClientRect: () => DOMRect; isConnected: boolean };
+  hostElement: {
+    getBoundingClientRect: () => DOMRect;
+    isConnected: boolean;
+    checkVisibility: ReturnType<typeof vi.fn>;
+  };
   fitAddon: { fit: ReturnType<typeof vi.fn> };
   terminal: { cols: number; rows: number };
   agentId?: string;
@@ -74,6 +78,7 @@ function makeInstance(overrides: Partial<PostWakeInstance> = {}): PostWakeInstan
       getBoundingClientRect: () =>
         ({ left: 0, top: 0, width: 800, height: 600, right: 800, bottom: 600 }) as DOMRect,
       isConnected: true,
+      checkVisibility: vi.fn(() => true),
     },
     fitAddon: { fit: vi.fn() },
     terminal: { cols: 120, rows: 30 },
@@ -137,13 +142,14 @@ describe("TerminalInstanceService post-wake handling", () => {
         getBoundingClientRect: () =>
           ({ left: 0, top: 0, width: 0, height: 0, right: 0, bottom: 0 }) as DOMRect,
         isConnected: true,
+        checkVisibility: vi.fn(() => false),
       },
     });
     service.instances.set(id, instance);
 
     service.handlePostWake(id);
 
-    // fit() was NOT called on the addon (getBoundingClientRect returned zero dims)
+    // fit() was NOT called on the addon (checkVisibility returned false)
     expect(instance.fitAddon.fit).not.toHaveBeenCalled();
 
     // Fallback: forceImmediateResize sends PTY resize with cached dims
@@ -162,6 +168,7 @@ describe("TerminalInstanceService post-wake handling", () => {
         getBoundingClientRect: () =>
           ({ left: 0, top: 0, width: 0, height: 0, right: 0, bottom: 0 }) as DOMRect,
         isConnected: true,
+        checkVisibility: vi.fn(() => false),
       },
     });
     service.instances.set(id, instance);
