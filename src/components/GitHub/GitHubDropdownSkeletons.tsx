@@ -129,6 +129,33 @@ export function GitHubResourceListSkeleton({
   );
 }
 
+export function GitHubResourceRowsSkeleton({ count, immediate }: SkeletonProps) {
+  const renderCount = normalizeCount(count);
+  const pulseClass = immediate ? "animate-pulse-immediate" : "animate-pulse-delayed";
+
+  return (
+    <div aria-hidden="true" className="divide-y divide-[var(--border-divider)]">
+      {Array.from({ length: renderCount }).map((_, i) => (
+        <div
+          key={i}
+          className={`${pulseClass} box-border`}
+          style={{ height: `${RESOURCE_ITEM_HEIGHT_PX}px` }}
+        >
+          <div className="flex items-center gap-2 px-3 pt-2.5">
+            <div className="w-4 h-4 rounded-full bg-muted shrink-0" />
+            <div className="h-4 bg-muted rounded flex-1" />
+            <div className="h-4 bg-muted rounded w-8 shrink-0" />
+          </div>
+          <div className="flex items-center gap-1.5 px-3 mt-1.5 pb-2.5">
+            <div className="h-3 bg-muted rounded w-16" />
+            <div className="h-3 bg-muted rounded w-14" />
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export function CommitListSkeleton({ count, immediate }: SkeletonProps) {
   const renderCount = normalizeCount(count);
   const pulseClass = immediate ? "animate-pulse-immediate" : "animate-pulse-delayed";

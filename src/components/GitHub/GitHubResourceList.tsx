@@ -18,7 +18,7 @@ import {
 } from "@/store/githubFilterStore";
 import type { GitHubIssue, GitHubPR, GitHubSortOrder } from "@shared/types/github";
 import { parseNumberQuery, MULTI_FETCH_CAP } from "@/lib/parseNumberQuery";
-import { GitHubResourceListSkeleton, MAX_SKELETON_ITEMS } from "./GitHubDropdownSkeletons";
+import { GitHubResourceRowsSkeleton, MAX_SKELETON_ITEMS } from "./GitHubDropdownSkeletons";
 
 type StateFilter = IssueStateFilter | PRStateFilter;
 
@@ -699,7 +699,7 @@ export function GitHubResourceList({
 
       <div className="overflow-y-auto flex-1 min-h-0">
         {loading && !data.length ? (
-          <GitHubResourceListSkeleton
+          <GitHubResourceRowsSkeleton
             count={initialCount && initialCount > 0 ? initialCount : MAX_SKELETON_ITEMS}
           />
         ) : data.length > 0 ? (
