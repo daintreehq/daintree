@@ -311,6 +311,10 @@ export interface IpcInvokeMap {
     args: [id: string];
     result: { success: boolean; error?: string };
   };
+  "terminal:restart-service": {
+    args: [];
+    result: void;
+  };
 
   // Files channels
   "files:search": {

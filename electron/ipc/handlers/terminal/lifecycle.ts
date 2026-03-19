@@ -248,5 +248,11 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
   ipcMain.handle(CHANNELS.TERMINAL_RESTORE, handleTerminalRestore);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.TERMINAL_RESTORE));
 
+  const handleTerminalRestartService = async () => {
+    ptyClient.manualRestart();
+  };
+  ipcMain.handle(CHANNELS.TERMINAL_RESTART_SERVICE, handleTerminalRestartService);
+  handlers.push(() => ipcMain.removeHandler(CHANNELS.TERMINAL_RESTART_SERVICE));
+
   return () => handlers.forEach((cleanup) => cleanup());
 }

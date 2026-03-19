@@ -858,6 +858,8 @@ const api: ElectronAPI = {
 
     onRestoreScrollback: (callback: (data: { terminalIds: string[] }) => void) =>
       _typedOn(CHANNELS.TERMINAL_RESTORE_SCROLLBACK, callback),
+
+    restartService: (): Promise<void> => _typedInvoke(CHANNELS.TERMINAL_RESTART_SERVICE),
   },
 
   // Files API

@@ -259,6 +259,7 @@ export interface ElectronAPI {
       callback: (data: { terminalIds: string[]; targetLines: number }) => void
     ): () => void;
     onRestoreScrollback(callback: (data: { terminalIds: string[] }) => void): () => void;
+    restartService(): Promise<void>;
   };
   files: {
     search(payload: FileSearchPayload): Promise<FileSearchResult>;
