@@ -397,14 +397,6 @@ export function GitHubResourceList({
 
   const handleInputKeyDown = useCallback(
     (e: KeyboardEvent<HTMLInputElement>) => {
-      // Cmd/Ctrl+A: select all issues
-      if (type === "issue" && (e.metaKey || e.ctrlKey) && e.key === "a") {
-        e.preventDefault();
-        e.stopPropagation();
-        selection.selectAll(data.map((item) => item.number));
-        return;
-      }
-
       switch (e.key) {
         case "ArrowDown":
           e.preventDefault();
@@ -480,7 +472,6 @@ export function GitHubResourceList({
       searchQuery,
       setSearchQuery,
       selection,
-      data,
     ]
   );
 
