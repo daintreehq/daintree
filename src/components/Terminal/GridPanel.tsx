@@ -1,4 +1,4 @@
-import { useCallback, useMemo } from "react";
+import React, { useCallback, useMemo } from "react";
 import { useTerminalStore, type TerminalInstance } from "@/store";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { getPanelComponent, type PanelComponentProps } from "@/registry";
@@ -27,7 +27,92 @@ export interface GridPanelProps {
   onTabReorder?: (newOrder: string[]) => void;
 }
 
-export function GridPanel({
+/**
+ * Custom comparator for GridPanel's React.memo wrapper.
+ *
+ * Skips callback props (onTabClick, onTabClose, onTabRename, onAddTab,
+ * onTabReorder) because ContentGrid passes inline closures that change every
+ * render. Compares terminal fields used by buildPanelProps and ErrorBoundary
+ * resetKeys — if buildPanelProps gains new terminal fields, update this list.
+ */
+export function gridPanelPropsAreEqual(prev: GridPanelProps, next: GridPanelProps): boolean {
+  // Scalar props
+  if (
+    prev.isFocused !== next.isFocused ||
+    prev.isMaximized !== next.isMaximized ||
+    prev.gridPanelCount !== next.gridPanelCount ||
+    prev.gridCols !== next.gridCols ||
+    prev.ambientAgentState !== next.ambientAgentState ||
+    prev.groupId !== next.groupId
+  ) {
+    return false;
+  }
+
+  // Terminal: fast-path reference check, then field-level comparison
+  if (prev.terminal !== next.terminal) {
+    const a = prev.terminal;
+    const b = next.terminal;
+    if (
+      a.id !== b.id ||
+      a.title !== b.title ||
+      a.worktreeId !== b.worktreeId ||
+      a.kind !== b.kind ||
+      a.type !== b.type ||
+      a.agentId !== b.agentId ||
+      a.cwd !== b.cwd ||
+      a.agentState !== b.agentState ||
+      a.activityHeadline !== b.activityHeadline ||
+      a.activityStatus !== b.activityStatus ||
+      a.activityType !== b.activityType ||
+      a.lastCommand !== b.lastCommand ||
+      a.flowStatus !== b.flowStatus ||
+      a.restartKey !== b.restartKey ||
+      a.restartError !== b.restartError ||
+      a.reconnectError !== b.reconnectError ||
+      a.spawnError !== b.spawnError ||
+      a.detectedProcessId !== b.detectedProcessId ||
+      a.browserUrl !== b.browserUrl ||
+      a.notePath !== b.notePath ||
+      a.noteId !== b.noteId ||
+      a.scope !== b.scope ||
+      a.createdAt !== b.createdAt ||
+      a.isRestarting !== b.isRestarting ||
+      a.error !== b.error ||
+      a.runtimeStatus !== b.runtimeStatus ||
+      a.isInputLocked !== b.isInputLocked
+    ) {
+      return false;
+    }
+  }
+
+  // Tabs: compare by length and element fields
+  const prevTabs = prev.tabs;
+  const nextTabs = next.tabs;
+  if (prevTabs !== nextTabs) {
+    if (prevTabs == null || nextTabs == null) return false;
+    if (prevTabs.length !== nextTabs.length) return false;
+    for (let i = 0; i < prevTabs.length; i++) {
+      const pt = prevTabs[i];
+      const nt = nextTabs[i];
+      if (
+        pt.id !== nt.id ||
+        pt.title !== nt.title ||
+        pt.type !== nt.type ||
+        pt.agentId !== nt.agentId ||
+        pt.detectedProcessId !== nt.detectedProcessId ||
+        pt.kind !== nt.kind ||
+        pt.agentState !== nt.agentState ||
+        pt.isActive !== nt.isActive
+      ) {
+        return false;
+      }
+    }
+  }
+
+  return true;
+}
+
+export const GridPanel = React.memo(function GridPanel({
   terminal,
   isFocused,
   isMaximized = false,
@@ -188,4 +273,4 @@ export function GridPanel({
       <PanelComponent {...panelProps} />
     </ErrorBoundary>
   );
-}
+}, gridPanelPropsAreEqual);
