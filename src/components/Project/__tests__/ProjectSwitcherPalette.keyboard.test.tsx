@@ -1,8 +1,22 @@
 /**
  * @vitest-environment jsdom
  */
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach, beforeAll, afterAll } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
+
+const originalScrollIntoView = Element.prototype.scrollIntoView;
+beforeAll(() => {
+  Object.defineProperty(Element.prototype, "scrollIntoView", {
+    value: vi.fn(),
+    configurable: true,
+  });
+});
+afterAll(() => {
+  Object.defineProperty(Element.prototype, "scrollIntoView", {
+    value: originalScrollIntoView,
+    configurable: true,
+  });
+});
 
 vi.mock("@/lib/utils", () => ({
   cn: (...args: unknown[]) => args.filter(Boolean).join(" "),
@@ -85,7 +99,8 @@ function makeProject(overrides: Partial<SearchableProject> = {}): SearchableProj
     name: "Test Project",
     path: "/tmp/test",
     emoji: "🚀",
-    color: null,
+    lastOpened: 0,
+    status: "closed",
     isActive: false,
     isBackground: false,
     isMissing: false,
@@ -164,11 +179,11 @@ describe("ProjectSwitcherPalette keyboard navigation", () => {
     );
     const pinButtons = screen.getAllByLabelText(/pin project/i);
     for (const btn of pinButtons) {
-      expect(btn).toHaveAttribute("tabindex", "-1");
+      expect(btn.getAttribute("tabindex")).toBe("-1");
     }
     const closeButtons = screen.getAllByLabelText("Close project");
     for (const btn of closeButtons) {
-      expect(btn).toHaveAttribute("tabindex", "-1");
+      expect(btn.getAttribute("tabindex")).toBe("-1");
     }
   });
 
