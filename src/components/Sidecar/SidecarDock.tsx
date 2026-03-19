@@ -479,7 +479,7 @@ export function SidecarDock() {
         aria-valuemax={SIDECAR_MAX_WIDTH}
         tabIndex={0}
         className={cn(
-          "group absolute -left-0.5 top-0 bottom-0 w-1.5 cursor-ew-resize flex items-center justify-center z-50",
+          "group absolute -left-1.5 top-0 bottom-0 w-3 cursor-col-resize flex items-center justify-center z-50",
           "hover:bg-overlay-soft transition-colors focus:outline-none focus:bg-tint/[0.04] focus:ring-1 focus:ring-canopy-accent/50",
           isResizing && "bg-canopy-accent/20"
         )}
@@ -488,7 +488,7 @@ export function SidecarDock() {
       >
         <div
           className={cn(
-            "w-px h-8 rounded-full transition-colors",
+            "w-px h-8 rounded-full transition-all duration-150 delay-100 group-hover:w-0.5",
             "bg-canopy-text/20",
             "group-hover:bg-canopy-text/35 group-focus:bg-canopy-accent",
             isResizing && "bg-canopy-accent"
