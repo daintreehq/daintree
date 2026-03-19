@@ -122,6 +122,14 @@ vi.mock("@/lib/utils", () => ({
 
 import { BulkCreateWorktreeDialog } from "../BulkCreateWorktreeDialog";
 
+async function advanceTimersGradually(totalMs: number, stepMs = 100) {
+  for (let elapsed = 0; elapsed < totalMs; elapsed += stepMs) {
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(stepMs);
+    });
+  }
+}
+
 const makeIssue = (n: number, title?: string): GitHubIssue => ({
   number: n,
   title: title ?? `Issue ${n}`,
@@ -159,6 +167,49 @@ describe("BulkCreateWorktreeDialog", () => {
     expect(screen.getByTestId("bulk-create-confirm-button")).toBeTruthy();
   });
 
+  it("throttles task starts with inter-operation delay", async () => {
+    const resolvers: Array<(value: unknown) => void> = [];
+    mockDispatch.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolvers.push(resolve);
+        })
+    );
+
+    render(<BulkCreateWorktreeDialog {...defaultProps} />);
+
+    await act(async () => {
+      screen.getByTestId("bulk-create-confirm-button").click();
+    });
+
+    // First task starts immediately
+    expect(mockDispatch).toHaveBeenCalledTimes(1);
+
+    // Advance 300ms — second task starts (intervalCap:1 per 300ms)
+    await advanceTimersGradually(400);
+    expect(mockDispatch).toHaveBeenCalledTimes(2);
+
+    // Third task can't start yet — concurrency:2 is full (both tasks pending)
+    // Resolve task 1 to free a concurrency slot
+    await act(async () => {
+      resolvers[0]?.({ ok: true, result: { worktreeId: "wt-1" } });
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    // Advance past next interval — third task starts
+    await advanceTimersGradually(400);
+    expect(mockDispatch).toHaveBeenCalledTimes(3);
+
+    // Resolve remaining and verify completion
+    await act(async () => {
+      resolvers[1]?.({ ok: true, result: { worktreeId: "wt-2" } });
+      resolvers[2]?.({ ok: true, result: { worktreeId: "wt-3" } });
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    expect(screen.getByText(/3 of 3 created/)).toBeTruthy();
+  });
+
   it("shows per-item status during execution", async () => {
     const resolvers: Array<(value: unknown) => void> = [];
     mockDispatch.mockImplementation(
@@ -179,7 +230,10 @@ describe("BulkCreateWorktreeDialog", () => {
     expect(screen.getByText("#2")).toBeTruthy();
     expect(screen.getByText("#3")).toBeTruthy();
 
-    // Resolve first item successfully
+    // Advance to start task 2 (task 1 started immediately)
+    await advanceTimersGradually(400);
+
+    // Resolve first item successfully — frees a concurrency slot for task 3
     await act(async () => {
       resolvers[0]?.({ ok: true, result: { worktreeId: "wt-1" } });
       await vi.advanceTimersByTimeAsync(0);
@@ -187,6 +241,9 @@ describe("BulkCreateWorktreeDialog", () => {
 
     // Check "1 of 3 created" text
     expect(screen.getByText(/1 of 3 created/)).toBeTruthy();
+
+    // Advance to start task 3 (needs concurrency slot + interval)
+    await advanceTimersGradually(400);
 
     // Resolve remaining items
     await act(async () => {
@@ -215,8 +272,15 @@ describe("BulkCreateWorktreeDialog", () => {
       screen.getByTestId("bulk-create-confirm-button").click();
     });
 
+    // Advance to start task 2, then resolve task 1 to free concurrency for task 3
+    await advanceTimersGradually(400);
     await act(async () => {
       resolvers[0]?.({ ok: true, result: { worktreeId: "wt-1" } });
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    await advanceTimersGradually(400);
+
+    await act(async () => {
       resolvers[1]?.({
         ok: false,
         error: { code: "EXECUTION_ERROR", message: "Branch already exists" },
@@ -247,8 +311,15 @@ describe("BulkCreateWorktreeDialog", () => {
       screen.getByTestId("bulk-create-confirm-button").click();
     });
 
+    // Advance to start task 2, resolve task 1 to free concurrency for task 3
+    await advanceTimersGradually(400);
     await act(async () => {
       resolvers[0]?.({ ok: true, result: { worktreeId: "wt-1" } });
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    await advanceTimersGradually(400);
+
+    await act(async () => {
       resolvers[1]?.({
         ok: false,
         error: { code: "EXECUTION_ERROR", message: "Some error" },
@@ -276,8 +347,15 @@ describe("BulkCreateWorktreeDialog", () => {
       screen.getByTestId("bulk-create-confirm-button").click();
     });
 
+    // Advance to start task 2, resolve task 1 to free concurrency for task 3
+    await advanceTimersGradually(400);
     await act(async () => {
       resolvers[0]?.({ ok: true, result: { worktreeId: "wt-1" } });
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    await advanceTimersGradually(400);
+
+    await act(async () => {
       resolvers[1]?.({ ok: true, result: { worktreeId: "wt-2" } });
       resolvers[2]?.({ ok: true, result: { worktreeId: "wt-3" } });
       await vi.advanceTimersByTimeAsync(0);
@@ -302,9 +380,16 @@ describe("BulkCreateWorktreeDialog", () => {
       screen.getByTestId("bulk-create-confirm-button").click();
     });
 
-    // Fail item 2, succeed the rest
+    // Advance to start task 2, resolve task 1 to free concurrency for task 3
+    await advanceTimersGradually(400);
     await act(async () => {
       resolvers[0]?.({ ok: true, result: { worktreeId: "wt-1" } });
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    await advanceTimersGradually(400);
+
+    // Fail item 2, succeed item 3
+    await act(async () => {
       resolvers[1]?.({
         ok: false,
         error: { code: "EXECUTION_ERROR", message: "Temp error" },
@@ -447,15 +532,14 @@ describe("BulkCreateWorktreeDialog", () => {
       screen.getByTestId("bulk-create-confirm-button").click();
     });
 
-    // Resolve first item
+    // Only item 1 has started (throttled queue), resolve it
     await act(async () => {
       resolvers[0]?.({ ok: true, result: { worktreeId: "wt-1" } });
       await vi.advanceTimersByTimeAsync(0);
     });
 
-    // Close the dialog (cancel) while items 2 and 3 are still pending
+    // Close the dialog (cancel) before throttled items 2 and 3 start
     await act(async () => {
-      // Find cancel button in executing state
       const buttons = screen.getAllByRole("button");
       const cancelBtn = buttons.find((b) => b.textContent === "Cancel");
       cancelBtn?.click();
@@ -463,12 +547,12 @@ describe("BulkCreateWorktreeDialog", () => {
     });
 
     expect(onClose).toHaveBeenCalled();
+    // Only 1 dispatch should have fired (items 2 and 3 were cleared from queue)
+    expect(mockDispatch).toHaveBeenCalledTimes(1);
 
-    // Resolve remaining items — should be no-ops due to runIdRef invalidation
+    // Advance timers — no more tasks should start
     await act(async () => {
-      resolvers[1]?.({ ok: true, result: { worktreeId: "wt-2" } });
-      resolvers[2]?.({ ok: true, result: { worktreeId: "wt-3" } });
-      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(1000);
     });
 
     // Dialog should not show done state (it was closed/reset)

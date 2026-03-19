@@ -104,6 +104,9 @@ function progressReducer(state: ProgressState, action: ProgressAction): Progress
 
 const MAX_AUTO_RETRIES = 2;
 const RETRY_DELAYS = [1000, 2000];
+const QUEUE_CONCURRENCY = 2;
+const QUEUE_INTERVAL_CAP = 1;
+const QUEUE_INTERVAL_MS = 300;
 
 const TRANSIENT_ERROR_RE =
   /\.lock['"]?:.*(?:File exists|exists)|Another git process|Resource temporarily unavailable|cannot lock ref|could not lock config file/i;
@@ -253,7 +256,12 @@ export function BulkCreateWorktreeDialog({
   const runBatch = useCallback(
     async (toCreate: PlannedWorktree[]) => {
       const currentRunId = ++runIdRef.current;
-      const queue = new PQueue({ concurrency: 4 });
+      const queue = new PQueue({
+        concurrency: QUEUE_CONCURRENCY,
+        intervalCap: QUEUE_INTERVAL_CAP,
+        interval: QUEUE_INTERVAL_MS,
+        strict: true,
+      });
       queueRef.current = queue;
       let succeeded = 0;
       let failed = 0;
