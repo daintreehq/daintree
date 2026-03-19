@@ -187,6 +187,20 @@ function mergeFetchedWorktrees(
     }
   }
 
+  // Preserve the Map container reference when no entries actually changed.
+  // This prevents Zustand selectors like (state) => state.worktrees from
+  // triggering re-renders on every poll cycle when nothing is different.
+  if (map.size === existingWorktrees.size) {
+    let allIdentical = true;
+    for (const [id, wt] of map) {
+      if (existingWorktrees.get(id) !== wt) {
+        allIdentical = false;
+        break;
+      }
+    }
+    if (allIdentical) return existingWorktrees;
+  }
+
   return map;
 }
 

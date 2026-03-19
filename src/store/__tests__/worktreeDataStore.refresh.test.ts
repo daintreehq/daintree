@@ -176,6 +176,106 @@ describe("worktreeDataStore.refresh", () => {
     expect(mainAfter?.modifiedCount).toBe(1);
   });
 
+  it("preserves Map identity when refresh returns identical data", async () => {
+    const main = createMockWorktree("main", { isMainWorktree: true, branch: "main" });
+    const feature = createMockWorktree("feature-stable", { modifiedCount: 3 });
+
+    getAllMock.mockResolvedValueOnce([main, feature]);
+    refreshMock.mockResolvedValue(undefined);
+
+    useWorktreeDataStore.getState().initialize();
+    await vi.waitFor(() => {
+      expect(useWorktreeDataStore.getState().isInitialized).toBe(true);
+    });
+
+    const mapBefore = useWorktreeDataStore.getState().worktrees;
+
+    // Refresh with value-equal but new object spreads — no actual data change.
+    getAllMock.mockResolvedValueOnce([{ ...main }, { ...feature }]);
+
+    await useWorktreeDataStore.getState().refresh();
+
+    const mapAfter = useWorktreeDataStore.getState().worktrees;
+    expect(mapAfter).toBe(mapBefore);
+  });
+
+  it("returns new Map identity when a worktree changes", async () => {
+    const main = createMockWorktree("main", { isMainWorktree: true, branch: "main" });
+    const feature = createMockWorktree("feature-changing", { modifiedCount: 0 });
+
+    getAllMock.mockResolvedValueOnce([main, feature]);
+    refreshMock.mockResolvedValue(undefined);
+
+    useWorktreeDataStore.getState().initialize();
+    await vi.waitFor(() => {
+      expect(useWorktreeDataStore.getState().isInitialized).toBe(true);
+    });
+
+    const mapBefore = useWorktreeDataStore.getState().worktrees;
+    const mainBefore = mapBefore.get("main");
+
+    // feature-changing gets a new modifiedCount.
+    getAllMock.mockResolvedValueOnce([{ ...main }, { ...feature, modifiedCount: 5 }]);
+
+    await useWorktreeDataStore.getState().refresh();
+
+    const mapAfter = useWorktreeDataStore.getState().worktrees;
+    expect(mapAfter).not.toBe(mapBefore);
+    // Unchanged entry should still preserve its individual reference.
+    expect(mapAfter.get("main")).toBe(mainBefore);
+    // Changed entry should have a new reference.
+    expect(mapAfter.get("feature-changing")).not.toBe(mapBefore.get("feature-changing"));
+  });
+
+  it("returns new Map identity when a worktree is added", async () => {
+    const main = createMockWorktree("main", { isMainWorktree: true, branch: "main" });
+
+    getAllMock.mockResolvedValueOnce([main]);
+    refreshMock.mockResolvedValue(undefined);
+
+    useWorktreeDataStore.getState().initialize();
+    await vi.waitFor(() => {
+      expect(useWorktreeDataStore.getState().isInitialized).toBe(true);
+    });
+
+    const mapBefore = useWorktreeDataStore.getState().worktrees;
+
+    // A new worktree appears.
+    const added = createMockWorktree("feature-new");
+    getAllMock.mockResolvedValueOnce([{ ...main }, added]);
+
+    await useWorktreeDataStore.getState().refresh();
+
+    const mapAfter = useWorktreeDataStore.getState().worktrees;
+    expect(mapAfter).not.toBe(mapBefore);
+    expect(mapAfter.size).toBe(2);
+  });
+
+  it("returns new Map identity when a worktree is removed", async () => {
+    const main = createMockWorktree("main", { isMainWorktree: true, branch: "main" });
+    const feature = createMockWorktree("feature-gone");
+
+    getAllMock.mockResolvedValueOnce([main, feature]);
+    refreshMock.mockResolvedValue(undefined);
+
+    useWorktreeDataStore.getState().initialize();
+    await vi.waitFor(() => {
+      expect(useWorktreeDataStore.getState().isInitialized).toBe(true);
+    });
+
+    const mapBefore = useWorktreeDataStore.getState().worktrees;
+    expect(mapBefore.size).toBe(2);
+
+    // feature-gone disappears.
+    getAllMock.mockResolvedValueOnce([{ ...main }]);
+
+    await useWorktreeDataStore.getState().refresh();
+
+    const mapAfter = useWorktreeDataStore.getState().worktrees;
+    expect(mapAfter).not.toBe(mapBefore);
+    expect(mapAfter.size).toBe(1);
+  });
+
   it("rejects stale onUpdate events arriving after a project switch (listenerGeneration guard)", async () => {
     const main = createMockWorktree("main", { isMainWorktree: true, branch: "main" });
     const foreignWorktree = createMockWorktree("foreign-wt");
