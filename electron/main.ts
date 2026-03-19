@@ -45,6 +45,7 @@ import { registerCommands } from "./services/commands/index.js";
 import { initializeTelemetry } from "./services/TelemetryService.js";
 import { initializeCrashRecoveryService } from "./services/CrashRecoveryService.js";
 import { initializeGpuCrashMonitor } from "./services/GpuCrashMonitorService.js";
+import { initializeTrashedPidCleanup } from "./services/TrashedPidTracker.js";
 
 // CRITICAL: Run IPC sender validation before any handlers are registered
 enforceIpcSenderValidation();
@@ -108,6 +109,7 @@ if (!gotTheLock) {
   app.quit();
 } else {
   initializeCrashRecoveryService();
+  initializeTrashedPidCleanup();
   initializeGpuCrashMonitor();
 
   const windowRegistry = new WindowRegistry();
