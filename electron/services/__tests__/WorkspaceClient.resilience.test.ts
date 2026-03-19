@@ -204,6 +204,165 @@ describe("WorkspaceClient resilience", () => {
     expect(result[0].id).toBe("valid-worktree");
   });
 
+  describe("loadProject race serialization", () => {
+    beforeEach(() => {
+      child.emit("message", { type: "ready" });
+    });
+
+    function resolveLoadProject() {
+      const lastCall = child.postMessage.mock.calls.at(-1)!;
+      const requestId = (lastCall[0] as { requestId: string }).requestId;
+      child.emit("message", { type: "load-project-result", requestId });
+    }
+
+    it("second loadProject supersedes the first (latest wins)", async () => {
+      const p1 = client.loadProject("/project-a");
+      const p2 = client.loadProject("/project-b");
+
+      // Resolve both in order
+      const call1 = child.postMessage.mock.calls.at(-2)!;
+      const call2 = child.postMessage.mock.calls.at(-1)!;
+      child.emit("message", {
+        type: "load-project-result",
+        requestId: (call1[0] as { requestId: string }).requestId,
+      });
+      child.emit("message", {
+        type: "load-project-result",
+        requestId: (call2[0] as { requestId: string }).requestId,
+      });
+
+      await p1;
+      await p2;
+
+      const clientPrivate = client as never as {
+        currentRootPath: string | null;
+        currentProjectScopeId: string | null;
+      };
+      expect(clientPrivate.currentRootPath).toBe("/project-b");
+    });
+
+    it("restart auto-reload is skipped when superseded by user loadProject", async () => {
+      // Create a client that allows restarts
+      const restartClient = new WorkspaceClient({
+        maxRestartAttempts: 1,
+        showCrashDialog: false,
+        healthCheckIntervalMs: 1000,
+      });
+      const restartChild = forkMock.mock.results.at(-1)!.value as MockUtilityProcess;
+
+      // Make it ready and load a project
+      restartChild.emit("message", { type: "ready" });
+      const loadCall = restartClient.loadProject("/original-project");
+      const origCall = restartChild.postMessage.mock.calls.at(-1)!;
+      restartChild.emit("message", {
+        type: "load-project-result",
+        requestId: (origCall[0] as { requestId: string }).requestId,
+      });
+      await loadCall;
+
+      // Simulate host crash
+      restartChild.emit("exit", 1);
+
+      // A new child is created for the restart
+      const restartChild2 = new MockUtilityProcess();
+      forkMock.mockReturnValue(restartChild2);
+
+      // User switches project before the restart timer fires
+      // We need to advance past the delay first, but the user call happens
+      // after the restart timer captures the generation but before waitForReady resolves
+
+      // Advance timer to trigger restart
+      vi.advanceTimersByTime(2001);
+
+      // The restart path has captured generationAtRestart and is waiting for ready.
+      // Now user switches project before the new host is ready.
+      const userLoad = restartClient.loadProject("/user-project");
+      const userCall = restartChild2.postMessage.mock.calls.at(-1)!;
+
+      // Make the restarted host ready — this resolves waitForReady in the restart path
+      restartChild2.emit("message", { type: "ready" });
+
+      // Resolve the user's loadProject
+      restartChild2.emit("message", {
+        type: "load-project-result",
+        requestId: (userCall[0] as { requestId: string }).requestId,
+      });
+      await userLoad;
+
+      // Flush microtasks so the restart path .then() runs
+      await vi.runAllTimersAsync();
+
+      const clientPrivate = restartClient as never as {
+        currentRootPath: string | null;
+      };
+      // The restart path should have been skipped — user's project wins
+      expect(clientPrivate.currentRootPath).toBe("/user-project");
+
+      // The restart path should NOT have issued another loadProject call
+      // (only the original load + user load = 2 loadProject calls total)
+      const loadProjectCalls = [
+        ...restartChild.postMessage.mock.calls,
+        ...restartChild2.postMessage.mock.calls,
+      ].filter(([msg]) => (msg as { type: string }).type === "load-project");
+      expect(loadProjectCalls).toHaveLength(2);
+
+      restartClient.dispose();
+      vi.runOnlyPendingTimers();
+    });
+
+    it("restart auto-reload proceeds when not superseded", async () => {
+      const restartClient = new WorkspaceClient({
+        maxRestartAttempts: 1,
+        showCrashDialog: false,
+        healthCheckIntervalMs: 1000,
+      });
+      const restartChild = forkMock.mock.results.at(-1)!.value as MockUtilityProcess;
+
+      // Make it ready and load a project
+      restartChild.emit("message", { type: "ready" });
+      const loadCall = restartClient.loadProject("/my-project");
+      const origCall = restartChild.postMessage.mock.calls.at(-1)!;
+      restartChild.emit("message", {
+        type: "load-project-result",
+        requestId: (origCall[0] as { requestId: string }).requestId,
+      });
+      await loadCall;
+
+      // Simulate host crash
+      restartChild.emit("exit", 1);
+
+      const restartChild2 = new MockUtilityProcess();
+      forkMock.mockReturnValue(restartChild2);
+
+      // Advance timer to trigger restart
+      vi.advanceTimersByTime(2001);
+
+      // Make the restarted host ready
+      restartChild2.emit("message", { type: "ready" });
+
+      // Flush microtasks for the .then() chain
+      await vi.runAllTimersAsync();
+
+      // The restart path should have issued a loadProject call
+      const reloadCall = restartChild2.postMessage.mock.calls.find(
+        ([msg]) => (msg as { type: string }).type === "load-project"
+      );
+      expect(reloadCall).toBeDefined();
+      expect((reloadCall![0] as { rootPath: string }).rootPath).toBe("/my-project");
+
+      // Resolve the reload
+      restartChild2.emit("message", {
+        type: "load-project-result",
+        requestId: (reloadCall![0] as { requestId: string }).requestId,
+      });
+
+      await vi.runAllTimersAsync();
+
+      restartClient.dispose();
+      vi.runOnlyPendingTimers();
+    });
+  });
+
   describe("setActiveWorktree echo suppression", () => {
     let mockWindow: {
       isDestroyed: ReturnType<typeof vi.fn>;
