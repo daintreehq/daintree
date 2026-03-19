@@ -6,6 +6,7 @@ const mockGetWorktreeChangesWithStats = vi.fn();
 const mockInvalidateGitStatusCache = vi.fn();
 
 vi.mock("../../utils/git.js", () => ({
+  createGit: vi.fn(() => ({ raw: vi.fn(), log: vi.fn().mockResolvedValue({ latest: null }) })),
   getWorktreeChangesWithStats: (...args: unknown[]) => mockGetWorktreeChangesWithStats(...args),
   invalidateGitStatusCache: (...args: unknown[]) => mockInvalidateGitStatusCache(...args),
 }));
