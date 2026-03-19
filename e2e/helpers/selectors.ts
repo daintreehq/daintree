@@ -221,4 +221,11 @@ export const SEL = {
     list: "#command-list",
     options: '#command-list [role="option"]',
   },
+  errorBoundary: {
+    fallback: '[data-testid="error-fallback"]',
+    title: '[data-testid="error-fallback-title"]',
+    restartButton: '[data-testid="error-fallback-restart"]',
+    reportButton: '[data-testid="error-fallback-report"]',
+    logsButton: '[data-testid="error-fallback-logs"]',
+  },
 } as const;
