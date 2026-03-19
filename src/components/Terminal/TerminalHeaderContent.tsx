@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useState, useEffect } from "react";
 import { Pause, Lock } from "lucide-react";
 import type { TerminalType, AgentState, PanelKind } from "@/types";
 import { cn } from "@/lib/utils";
@@ -6,6 +6,18 @@ import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/comp
 import { STATE_ICONS, STATE_COLORS } from "@/components/Worktree/terminalStateConfig";
 import type { ActivityState } from "./TerminalPane";
 import { useTerminalStore } from "@/store";
+import { formatElapsedDuration } from "@/utils/formatElapsedDuration";
+
+function ElapsedTime({ startedAt }: { startedAt: number }) {
+  const [now, setNow] = useState(() => Date.now());
+
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 30_000);
+    return () => clearInterval(id);
+  }, []);
+
+  return <> · {formatElapsedDuration(now - startedAt)}</>;
+}
 
 export interface TerminalHeaderContentProps {
   id: string;
@@ -34,6 +46,9 @@ function TerminalHeaderContentComponent({
 }: TerminalHeaderContentProps) {
   const isInputLocked = useTerminalStore(
     (state) => state.terminals.find((t) => t.id === id)?.isInputLocked ?? false
+  );
+  const startedAt = useTerminalStore(
+    (state) => state.terminals.find((t) => t.id === id)?.startedAt
   );
 
   // Show command pill only for plain terminals (not agent terminals)
@@ -86,7 +101,10 @@ function TerminalHeaderContentComponent({
               />
             </div>
           </TooltipTrigger>
-          <TooltipContent side="bottom">{tooltip}</TooltipContent>
+          <TooltipContent side="bottom">
+            {tooltip}
+            {startedAt != null && <ElapsedTime startedAt={startedAt} />}
+          </TooltipContent>
         </Tooltip>
       </TooltipProvider>
     );
