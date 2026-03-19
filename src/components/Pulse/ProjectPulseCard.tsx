@@ -129,11 +129,22 @@ function HealthChip({ icon, label, onClick, className }: HealthChipProps) {
   );
 }
 
-function HealthSignals({ health }: { health: ProjectHealthData }) {
+function HealthSignals({
+  health,
+  rangeDays,
+}: {
+  health: ProjectHealthData;
+  rangeDays: PulseRangeDays;
+}) {
   const openUrl = (path: string) => {
     const url = path.startsWith("http") ? path : `${health.repoUrl}${path}`;
     systemClient.openExternal(url);
   };
+
+  const cutoff = Date.now() - rangeDays * 24 * 60 * 60 * 1000;
+  const mergedInRange = health.mergeVelocity.recentMergedDates.filter(
+    (d) => new Date(d).getTime() >= cutoff
+  ).length;
 
   return (
     <div className="flex items-center gap-2 flex-wrap">
@@ -166,10 +177,10 @@ function HealthSignals({ health }: { health: ProjectHealthData }) {
           onClick={() => openUrl("/security/dependabot")}
         />
       )}
-      {health.mergeVelocity.recentMergedCount > 0 && (
+      {mergedInRange > 0 && (
         <HealthChip
           icon={<GitMerge className="w-3.5 h-3.5 text-purple-400" />}
-          label={`${health.mergeVelocity.recentMergedCount} merged`}
+          label={`${mergedInRange} merged (${rangeDays}d)`}
           onClick={() => openUrl("/pulls?q=is%3Apr+is%3Amerged+sort%3Aupdated-desc")}
         />
       )}
@@ -426,7 +437,7 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
 
         {health && !health.error && health.repoUrl ? (
           <div className="border-t border-canopy-border pt-3">
-            <HealthSignals health={health} />
+            <HealthSignals health={health} rangeDays={rangeDays} />
           </div>
         ) : healthLoading ? (
           <HealthSectionSkeleton />
