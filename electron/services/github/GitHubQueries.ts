@@ -31,7 +31,7 @@ export const PROJECT_HEALTH_QUERY = `
       vulnerabilityAlerts(first: 1) {
         totalCount
       }
-      recentMergedPRs: pullRequests(first: 10, states: MERGED, orderBy: {field: UPDATED_AT, direction: DESC}) {
+      recentMergedPRs: pullRequests(first: 100, states: MERGED, orderBy: {field: UPDATED_AT, direction: DESC}) {
         nodes {
           mergedAt
         }
