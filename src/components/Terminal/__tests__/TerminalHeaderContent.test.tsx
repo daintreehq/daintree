@@ -1,7 +1,12 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, act } from "@testing-library/react";
 import { TerminalHeaderContent } from "../TerminalHeaderContent";
+
+vi.mock("react-dom", async () => {
+  const actual = await vi.importActual<typeof import("react-dom")>("react-dom");
+  return { ...actual, createPortal: (children: React.ReactNode) => children };
+});
 
 vi.mock("@/lib/utils", () => ({
   cn: (...args: unknown[]) => args.filter(Boolean).join(" "),
@@ -16,56 +21,132 @@ vi.mock("@/components/ui/tooltip", () => ({
   ),
 }));
 
-const { MockIcon } = vi.hoisted(() => {
-  const MockIcon = ({ className }: { className?: string }) => (
-    <svg data-testid="state-icon" className={className} />
-  );
-  return { MockIcon };
-});
-
 vi.mock("@/components/Worktree/terminalStateConfig", () => ({
   STATE_ICONS: {
-    working: MockIcon,
-    running: MockIcon,
-    waiting: MockIcon,
-    directing: MockIcon,
-    error: MockIcon,
+    working: (props: React.SVGProps<SVGSVGElement>) => <svg data-testid="state-icon" {...props} />,
+    waiting: (props: React.SVGProps<SVGSVGElement>) => <svg data-testid="state-icon" {...props} />,
+    failed: (props: React.SVGProps<SVGSVGElement>) => <svg data-testid="state-icon" {...props} />,
+    running: (props: React.SVGProps<SVGSVGElement>) => <svg data-testid="state-icon" {...props} />,
+    directing: (props: React.SVGProps<SVGSVGElement>) => (
+      <svg data-testid="state-icon" {...props} />
+    ),
   },
   STATE_COLORS: {
     working: "text-working",
-    running: "text-running",
     waiting: "text-waiting",
+    failed: "text-failed",
+    running: "text-running",
     directing: "text-directing",
-    error: "text-error",
   },
 }));
 
-let mockStoreState: Record<string, unknown> = {
-  terminals: [],
-};
+let mockTerminal: Record<string, unknown> = {};
 
 vi.mock("@/store", () => ({
-  useTerminalStore: (selector: (s: Record<string, unknown>) => unknown) => selector(mockStoreState),
+  useTerminalStore: (selector: (s: Record<string, unknown>) => unknown) =>
+    selector({ terminals: [mockTerminal] }),
 }));
+
+beforeEach(() => {
+  mockTerminal = { id: "t1" };
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date("2026-03-19T12:00:00Z"));
+});
 
 afterEach(() => {
   vi.useRealTimers();
-  mockStoreState = { terminals: [] };
 });
 
-describe("TerminalHeaderContent", () => {
-  it("shows elapsed time in tooltip when startedAt is present", () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2024-01-15T14:30:00Z"));
+describe("TerminalHeaderContent — agent state chip tooltip", () => {
+  it("shows headline, state, trigger, confidence, and relative time", () => {
+    mockTerminal = {
+      id: "t1",
+      stateChangeTrigger: "output",
+      stateChangeConfidence: 0.85,
+      lastStateChange: new Date("2026-03-19T11:55:00Z").getTime(),
+    };
 
-    mockStoreState = {
-      terminals: [
-        {
-          id: "t1",
-          isInputLocked: false,
-          startedAt: new Date("2024-01-15T12:16:00Z").getTime(),
-        },
-      ],
+    render(
+      <TerminalHeaderContent
+        id="t1"
+        agentState="working"
+        activity={{ headline: "Installing deps", status: "working", type: "background" }}
+      />
+    );
+
+    const tooltips = screen.getAllByTestId("tooltip-content");
+    const agentTooltip = tooltips.find((el) => el.textContent?.includes("Installing deps"));
+    expect(agentTooltip).toBeTruthy();
+    expect(agentTooltip!.textContent).toContain("State: working");
+    expect(agentTooltip!.textContent).toContain("Output");
+    expect(agentTooltip!.textContent).toContain("(85%)");
+    expect(agentTooltip!.textContent).toContain("Since: 5m ago");
+  });
+
+  it("shows AI classification trigger label", () => {
+    mockTerminal = {
+      id: "t1",
+      stateChangeTrigger: "ai-classification",
+      stateChangeConfidence: 0.95,
+    };
+
+    render(<TerminalHeaderContent id="t1" agentState="waiting" />);
+
+    const tooltips = screen.getAllByTestId("tooltip-content");
+    const agentTooltip = tooltips.find((el) => el.textContent?.includes("Agent waiting"));
+    expect(agentTooltip).toBeTruthy();
+    expect(agentTooltip!.textContent).toContain("AI classification");
+    expect(agentTooltip!.textContent).toContain("(95%)");
+  });
+
+  it("shows exit code when exited", () => {
+    mockTerminal = { id: "t1" };
+
+    render(<TerminalHeaderContent id="t1" agentState="failed" isExited={true} exitCode={1} />);
+
+    const tooltips = screen.getAllByTestId("tooltip-content");
+    const agentTooltip = tooltips.find((el) => el.textContent?.includes("Agent failed"));
+    expect(agentTooltip).toBeTruthy();
+    expect(agentTooltip!.textContent).toContain("Exit code: 1");
+  });
+
+  it("omits missing fields gracefully", () => {
+    mockTerminal = { id: "t1" };
+
+    render(<TerminalHeaderContent id="t1" agentState="working" />);
+
+    const tooltips = screen.getAllByTestId("tooltip-content");
+    const agentTooltip = tooltips.find((el) => el.textContent?.includes("Agent working"));
+    expect(agentTooltip).toBeTruthy();
+    const text = agentTooltip!.textContent!;
+    expect(text).toContain("State: working");
+    expect(text).not.toContain("undefined");
+    expect(text).not.toContain("·");
+    expect(text).not.toContain("Since:");
+    expect(text).not.toContain("Exit code:");
+    expect(text).not.toContain("%");
+  });
+
+  it("hides confidence when exactly 1.0", () => {
+    mockTerminal = {
+      id: "t1",
+      stateChangeTrigger: "output",
+      stateChangeConfidence: 1.0,
+    };
+
+    render(<TerminalHeaderContent id="t1" agentState="working" />);
+
+    const tooltips = screen.getAllByTestId("tooltip-content");
+    const agentTooltip = tooltips.find((el) => el.textContent?.includes("Agent working"));
+    expect(agentTooltip).toBeTruthy();
+    expect(agentTooltip!.textContent).not.toContain("%");
+  });
+
+  it("shows elapsed time when startedAt is present", () => {
+    mockTerminal = {
+      id: "t1",
+      isInputLocked: false,
+      startedAt: new Date("2026-03-19T09:46:00Z").getTime(),
     };
 
     render(
@@ -77,16 +158,15 @@ describe("TerminalHeaderContent", () => {
       />
     );
 
-    const tooltipContent = screen.getByTestId("tooltip-content");
-    expect(tooltipContent.textContent).toContain("Installing deps");
-    expect(tooltipContent.textContent).toContain("·");
-    expect(tooltipContent.textContent).toContain("2h 14m");
+    const tooltips = screen.getAllByTestId("tooltip-content");
+    const agentTooltip = tooltips.find((el) => el.textContent?.includes("Installing deps"));
+    expect(agentTooltip).toBeTruthy();
+    expect(agentTooltip!.textContent).toContain("·");
+    expect(agentTooltip!.textContent).toContain("2h 14m");
   });
 
   it("omits elapsed time when startedAt is undefined", () => {
-    mockStoreState = {
-      terminals: [{ id: "t1", isInputLocked: false }],
-    };
+    mockTerminal = { id: "t1", isInputLocked: false };
 
     render(
       <TerminalHeaderContent
@@ -97,71 +177,59 @@ describe("TerminalHeaderContent", () => {
       />
     );
 
-    const tooltipContent = screen.getByTestId("tooltip-content");
-    expect(tooltipContent.textContent).toBe("Building project");
-    expect(tooltipContent.textContent).not.toContain("·");
-  });
-
-  it("renders no chip for idle state", () => {
-    mockStoreState = {
-      terminals: [{ id: "t1", isInputLocked: false, startedAt: Date.now() }],
-    };
-
-    render(<TerminalHeaderContent id="t1" kind="agent" agentState="idle" />);
-
-    expect(screen.queryByRole("status", { name: /agent state/i })).toBeNull();
-  });
-
-  it("renders no chip for completed state", () => {
-    mockStoreState = {
-      terminals: [{ id: "t1", isInputLocked: false, startedAt: Date.now() }],
-    };
-
-    render(<TerminalHeaderContent id="t1" kind="agent" agentState="completed" />);
-
-    expect(screen.queryByRole("status", { name: /agent state/i })).toBeNull();
+    const tooltips = screen.getAllByTestId("tooltip-content");
+    const agentTooltip = tooltips.find((el) => el.textContent?.includes("Building project"));
+    expect(agentTooltip).toBeTruthy();
+    expect(agentTooltip!.textContent).not.toContain("· ");
   });
 
   it("updates elapsed time after timer interval", () => {
-    vi.useFakeTimers();
-    const base = new Date("2024-01-15T12:00:00Z").getTime();
-    vi.setSystemTime(base + 45_000);
+    const base = new Date("2026-03-19T11:59:15Z").getTime();
 
-    mockStoreState = {
-      terminals: [{ id: "t1", isInputLocked: false, startedAt: base }],
+    mockTerminal = {
+      id: "t1",
+      isInputLocked: false,
+      startedAt: base,
     };
 
     render(<TerminalHeaderContent id="t1" kind="agent" agentState="working" />);
 
-    const tooltipContent = screen.getByTestId("tooltip-content");
-    expect(tooltipContent.textContent).toContain("45s");
+    const tooltips = screen.getAllByTestId("tooltip-content");
+    const agentTooltip = tooltips.find((el) => el.textContent?.includes("Agent working"));
+    expect(agentTooltip).toBeTruthy();
+    expect(agentTooltip!.textContent).toContain("45s");
 
     act(() => {
       vi.advanceTimersByTime(30_000);
     });
 
-    expect(tooltipContent.textContent).toContain("1m");
-    expect(tooltipContent.textContent).not.toContain("45s");
+    expect(agentTooltip!.textContent).toContain("1m");
+    expect(agentTooltip!.textContent).not.toContain("45s");
   });
 
-  it("falls back to agent state text when no activity headline", () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2024-01-15T12:01:00Z"));
+  it("renders no chip when idle", () => {
+    mockTerminal = { id: "t1" };
 
-    mockStoreState = {
-      terminals: [
-        {
-          id: "t1",
-          isInputLocked: false,
-          startedAt: new Date("2024-01-15T12:00:00Z").getTime(),
-        },
-      ],
-    };
+    render(<TerminalHeaderContent id="t1" agentState="idle" />);
 
-    render(<TerminalHeaderContent id="t1" kind="agent" agentState="working" />);
+    expect(screen.queryByRole("status", { name: /agent state/i })).toBeNull();
+  });
 
-    const tooltipContent = screen.getByTestId("tooltip-content");
-    expect(tooltipContent.textContent).toContain("Agent working");
-    expect(tooltipContent.textContent).toContain("· 1m");
+  it("renders no chip when completed", () => {
+    mockTerminal = { id: "t1" };
+
+    render(<TerminalHeaderContent id="t1" agentState="completed" />);
+
+    expect(screen.queryByRole("status", { name: /agent state/i })).toBeNull();
+  });
+
+  it("falls back to Agent {state} when no headline", () => {
+    mockTerminal = { id: "t1" };
+
+    render(<TerminalHeaderContent id="t1" agentState="directing" />);
+
+    const tooltips = screen.getAllByTestId("tooltip-content");
+    const agentTooltip = tooltips.find((el) => el.textContent?.includes("Agent directing"));
+    expect(agentTooltip).toBeTruthy();
   });
 });
