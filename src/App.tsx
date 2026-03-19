@@ -108,6 +108,7 @@ import { UpdateNotification } from "./components/UpdateNotification";
 import { OnboardingFlow } from "./components/Onboarding/OnboardingFlow";
 import { NewsletterStep } from "./components/Onboarding/NewsletterStep";
 import { GettingStartedChecklist } from "./components/Onboarding/GettingStartedChecklist";
+import { CelebrationConfetti } from "./components/Onboarding/CelebrationConfetti";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { DndProvider } from "./components/DragDrop";
 import { SortableContext, verticalListSortingStrategy } from "@dnd-kit/sortable";
@@ -1440,6 +1441,7 @@ function App() {
           onToggleCollapse={gettingStarted.toggleCollapse}
         />
       )}
+      {gettingStarted.showCelebration && <CelebrationConfetti />}
       {deferredNewsletter.visible && <NewsletterStep onDismiss={deferredNewsletter.dismiss} />}
     </ErrorBoundary>
   );

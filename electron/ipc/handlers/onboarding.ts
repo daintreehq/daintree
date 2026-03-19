@@ -8,6 +8,7 @@ type ChecklistState = OnboardingState["checklist"];
 
 const DEFAULT_CHECKLIST: ChecklistState = {
   dismissed: false,
+  celebrationShown: false,
   items: { openedProject: false, launchedAgent: false, createdWorktree: false },
 };
 
@@ -30,6 +31,7 @@ function getOnboardingState(): OnboardingState {
       migratedFromLocalStorage: true,
       checklist: {
         dismissed: true,
+        celebrationShown: true,
         items: { openedProject: true, launchedAgent: true, createdWorktree: true },
       },
     };
@@ -46,7 +48,15 @@ function getOnboardingState(): OnboardingState {
       checklist: DEFAULT_CHECKLIST,
     };
   }
-  return { ...raw, checklist: raw.checklist ?? DEFAULT_CHECKLIST };
+  const checklist = raw.checklist ?? DEFAULT_CHECKLIST;
+  return {
+    ...raw,
+    checklist: {
+      ...DEFAULT_CHECKLIST,
+      ...checklist,
+      items: { ...DEFAULT_CHECKLIST.items, ...checklist.items },
+    },
+  };
 }
 
 function getChecklistState(): ChecklistState {
@@ -79,6 +89,7 @@ export function registerOnboardingHandlers(): () => void {
       checklist: allPreviouslyComplete
         ? {
             dismissed: true,
+            celebrationShown: true,
             items: { openedProject: true, launchedAgent: true, createdWorktree: true },
           }
         : state.checklist,
@@ -136,6 +147,15 @@ export function registerOnboardingHandlers(): () => void {
     });
   });
   cleanups.push(() => ipcMain.removeHandler(CHANNELS.ONBOARDING_CHECKLIST_DISMISS));
+
+  ipcMain.handle(CHANNELS.ONBOARDING_CHECKLIST_MARK_CELEBRATION_SHOWN, () => {
+    const state = getOnboardingState();
+    store.set("onboarding", {
+      ...state,
+      checklist: { ...state.checklist, celebrationShown: true },
+    });
+  });
+  cleanups.push(() => ipcMain.removeHandler(CHANNELS.ONBOARDING_CHECKLIST_MARK_CELEBRATION_SHOWN));
 
   ipcMain.handle(CHANNELS.ONBOARDING_CHECKLIST_MARK_ITEM, (_event, item: unknown) => {
     const validItems = ["openedProject", "launchedAgent", "createdWorktree"];

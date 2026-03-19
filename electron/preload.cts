@@ -1987,6 +1987,8 @@ const api: ElectronAPI = {
     dismissChecklist: () => _typedInvoke(CHANNELS.ONBOARDING_CHECKLIST_DISMISS),
     markChecklistItem: (item: ChecklistItemId) =>
       _typedInvoke(CHANNELS.ONBOARDING_CHECKLIST_MARK_ITEM, item),
+    markChecklistCelebrationShown: () =>
+      _typedInvoke(CHANNELS.ONBOARDING_CHECKLIST_MARK_CELEBRATION_SHOWN),
   },
 
   shortcutHints: {

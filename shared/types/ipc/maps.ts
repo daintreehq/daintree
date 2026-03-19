@@ -156,6 +156,7 @@ export interface ChecklistItems {
 
 export interface ChecklistState {
   dismissed: boolean;
+  celebrationShown: boolean;
   items: ChecklistItems;
 }
 
