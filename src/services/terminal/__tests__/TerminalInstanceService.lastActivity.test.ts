@@ -83,6 +83,7 @@ type LastActivityTestService = {
   instances: Map<string, unknown>;
   scrollToLastActivity: (id: string) => void;
   scrollToBottom: (id: string) => void;
+  writeToTerminal: (id: string, data: string | Uint8Array) => void;
 };
 
 function makeMockMarker(overrides: Partial<MockMarker> = {}): MockMarker {
@@ -210,8 +211,11 @@ describe("TerminalInstanceService - lastActivityMarker write tracking", () => {
     managed.terminal.registerMarker = vi.fn(() => newMarker);
     service.instances.set("t1", managed);
 
-    // Simulate a write callback by calling write
-    managed.terminal.write("test", () => {});
+    // Use the service's writeToTerminal to trigger the marker-update callback
+    (service as unknown as { writeToTerminal: (id: string, data: string) => void }).writeToTerminal(
+      "t1",
+      "test"
+    );
 
     expect(oldMarker.dispose).toHaveBeenCalled();
   });
@@ -224,7 +228,10 @@ describe("TerminalInstanceService - lastActivityMarker write tracking", () => {
     });
     service.instances.set("t1", managed);
 
-    managed.terminal.write("test", () => {});
+    (service as unknown as { writeToTerminal: (id: string, data: string) => void }).writeToTerminal(
+      "t1",
+      "test"
+    );
 
     expect(marker.dispose).not.toHaveBeenCalled();
     expect(managed.terminal.registerMarker).not.toHaveBeenCalled();
