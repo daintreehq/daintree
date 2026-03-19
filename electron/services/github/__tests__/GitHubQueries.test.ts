@@ -31,6 +31,10 @@ describe("PROJECT_HEALTH_QUERY", () => {
     expect(PROJECT_HEALTH_QUERY).toContain("mergedAt");
   });
 
+  it("fetches up to 100 merged PRs to cover longer time ranges", () => {
+    expect(PROJECT_HEALTH_QUERY).toContain("first: 100");
+  });
+
   it("does NOT use MERGED_AT as orderBy (not a valid PullRequestOrderField)", () => {
     expect(PROJECT_HEALTH_QUERY).not.toContain("MERGED_AT");
     expect(PROJECT_HEALTH_QUERY).toContain("UPDATED_AT");
