@@ -497,7 +497,7 @@ function XtermAdapterComponent({
         !isAltBuffer && "pl-3 pt-3 pb-3 pr-3 rounded-b-[var(--radius-lg)]",
         className
       )}
-      style={{ backgroundColor: wrapperBackground }}
+      style={{ backgroundColor: wrapperBackground, contain: "strict" }}
     >
       <div
         ref={containerRef}

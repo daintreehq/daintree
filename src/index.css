@@ -1856,7 +1856,3 @@ body[data-performance-mode="true"] [class*="backdrop-blur"] {
     pointer-events: none !important;
   }
 }
-
-@utility contain-layout {
-  contain: layout;
-}
