@@ -31,7 +31,7 @@ import { useWorktreeActions } from "./WorktreeCard/hooks/useWorktreeActions";
 import { useWorktreeMenu } from "./WorktreeCard/hooks/useWorktreeMenu";
 import { useWorktreeStatus } from "./WorktreeCard/hooks/useWorktreeStatus";
 import { computeChipState, type ChipState } from "./utils/computeChipState";
-import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "../ui/tooltip";
+import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 
 export function worktreeCardPropsAreEqual(
   prev: WorktreeCardProps,
@@ -567,32 +567,20 @@ export const WorktreeCard = React.memo(function WorktreeCard({
         />
       )}
       {chipState !== null && (
-        <TooltipProvider>
-          <Tooltip delayDuration={400}>
-            <TooltipTrigger asChild>
-              <div
-                className={cn(
-                  "absolute w-3 h-3 z-10 cursor-default",
-                  chipState === "error" && "bg-github-closed",
-                  chipState === "waiting" && "bg-state-waiting",
-                  chipState === "cleanup" && "bg-github-merged",
-                  chipState === "complete" && "bg-github-open",
-                  variant === "sidebar" ? "top-0 left-[1px]" : "top-0 left-0 rounded-tl-lg"
-                )}
-                style={{ clipPath: "polygon(0 0, 100% 0, 0 100%)" }}
-                role="img"
-                aria-label={
-                  {
-                    error: "Error: attention needed",
-                    waiting: "Agent waiting for input",
-                    cleanup: "Ready for cleanup",
-                    complete: "Complete: in review",
-                  }[chipState]
-                }
-              />
-            </TooltipTrigger>
-            <TooltipContent side="right" align="start" className="text-xs">
-              {
+        <Tooltip delayDuration={400}>
+          <TooltipTrigger asChild>
+            <div
+              className={cn(
+                "absolute w-3 h-3 z-10 cursor-default",
+                chipState === "error" && "bg-github-closed",
+                chipState === "waiting" && "bg-state-waiting",
+                chipState === "cleanup" && "bg-github-merged",
+                chipState === "complete" && "bg-github-open",
+                variant === "sidebar" ? "top-0 left-[1px]" : "top-0 left-0 rounded-tl-lg"
+              )}
+              style={{ clipPath: "polygon(0 0, 100% 0, 0 100%)" }}
+              role="img"
+              aria-label={
                 {
                   error: "Error: attention needed",
                   waiting: "Agent waiting for input",
@@ -600,9 +588,19 @@ export const WorktreeCard = React.memo(function WorktreeCard({
                   complete: "Complete: in review",
                 }[chipState]
               }
-            </TooltipContent>
-          </Tooltip>
-        </TooltipProvider>
+            />
+          </TooltipTrigger>
+          <TooltipContent side="right" align="start" className="text-xs">
+            {
+              {
+                error: "Error: attention needed",
+                waiting: "Agent waiting for input",
+                cleanup: "Ready for cleanup",
+                complete: "Complete: in review",
+              }[chipState]
+            }
+          </TooltipContent>
+        </Tooltip>
       )}
       <div className="flex">
         {dragHandleListeners && (

@@ -19,7 +19,7 @@ import {
   DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "../../ui/dropdown-menu";
-import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "../../ui/tooltip";
+import { Tooltip, TooltipContent, TooltipTrigger } from "../../ui/tooltip";
 import {
   AlertCircle,
   ChevronRight,
@@ -77,55 +77,53 @@ const IssueBadge = memo(function IssueBadge({
   );
 
   return (
-    <TooltipProvider>
-      <Tooltip open={isOpen} onOpenChange={handleOpenChange} delayDuration={300}>
-        <TooltipTrigger asChild>
-          <button
-            type="button"
-            onClick={() => {
-              onOpen?.();
-            }}
-            className={cn(
-              "flex items-center gap-1.5 text-left cursor-pointer transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent min-w-0",
-              isHeadline ? "text-[13px]" : "text-xs"
-            )}
-            aria-label={
-              issueTitle
-                ? `Open issue #${issueNumber}: ${issueTitle}`
-                : `Open issue #${issueNumber} on GitHub`
-            }
-          >
-            <CircleDot
-              className={cn("text-github-open shrink-0", isHeadline ? "w-3.5 h-3.5" : "w-3 h-3")}
-              aria-hidden="true"
-            />
-            <span
-              className={cn(
-                "truncate flex-1 min-w-0 hover:underline",
-                isHeadline
-                  ? isActive
-                    ? "text-text-primary font-medium"
-                    : "text-canopy-text/60 font-medium"
-                  : "text-canopy-text/90"
-              )}
-            >
-              {issueTitle || <span className="text-github-open font-mono">#{issueNumber}</span>}
-            </span>
-          </button>
-        </TooltipTrigger>
-        <TooltipContent side="right" align="start" className="p-3">
-          {loading ? (
-            <TooltipLoading type="issue" />
-          ) : data ? (
-            <IssueTooltipContent data={data} />
-          ) : error ? (
-            <span className="text-xs text-canopy-text/70">Failed to load issue details</span>
-          ) : (
-            <span className="text-xs text-canopy-text/70">Issue #{issueNumber}</span>
+    <Tooltip open={isOpen} onOpenChange={handleOpenChange} delayDuration={300}>
+      <TooltipTrigger asChild>
+        <button
+          type="button"
+          onClick={() => {
+            onOpen?.();
+          }}
+          className={cn(
+            "flex items-center gap-1.5 text-left cursor-pointer transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent min-w-0",
+            isHeadline ? "text-[13px]" : "text-xs"
           )}
-        </TooltipContent>
-      </Tooltip>
-    </TooltipProvider>
+          aria-label={
+            issueTitle
+              ? `Open issue #${issueNumber}: ${issueTitle}`
+              : `Open issue #${issueNumber} on GitHub`
+          }
+        >
+          <CircleDot
+            className={cn("text-github-open shrink-0", isHeadline ? "w-3.5 h-3.5" : "w-3 h-3")}
+            aria-hidden="true"
+          />
+          <span
+            className={cn(
+              "truncate flex-1 min-w-0 hover:underline",
+              isHeadline
+                ? isActive
+                  ? "text-text-primary font-medium"
+                  : "text-canopy-text/60 font-medium"
+                : "text-canopy-text/90"
+            )}
+          >
+            {issueTitle || <span className="text-github-open font-mono">#{issueNumber}</span>}
+          </span>
+        </button>
+      </TooltipTrigger>
+      <TooltipContent side="right" align="start" className="p-3">
+        {loading ? (
+          <TooltipLoading type="issue" />
+        ) : data ? (
+          <IssueTooltipContent data={data} />
+        ) : error ? (
+          <span className="text-xs text-canopy-text/70">Failed to load issue details</span>
+        ) : (
+          <span className="text-xs text-canopy-text/70">Issue #{issueNumber}</span>
+        )}
+      </TooltipContent>
+    </Tooltip>
   );
 });
 
@@ -169,40 +167,35 @@ const PRBadge = memo(function PRBadge({
   const prStateLabel = prState === "merged" ? "merged" : prState === "closed" ? "closed" : "open";
 
   return (
-    <TooltipProvider>
-      <Tooltip open={isOpen} onOpenChange={handleOpenChange} delayDuration={300}>
-        <TooltipTrigger asChild>
-          <button
-            type="button"
-            onClick={() => {
-              onOpen?.();
-            }}
-            className="flex items-center gap-1 text-xs text-left cursor-pointer transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent min-w-0"
-            aria-label={`Open ${prStateLabel} pull request #${prNumber} on GitHub`}
-          >
-            {isSubordinate && (
-              <CornerDownRight
-                className="w-3 h-3 text-canopy-text/30 shrink-0"
-                aria-hidden="true"
-              />
-            )}
-            <GitPullRequest className={cn("w-3 h-3 shrink-0", prStateColor)} aria-hidden="true" />
-            <span className={cn("font-mono hover:underline", prStateColor)}>#{prNumber}</span>
-          </button>
-        </TooltipTrigger>
-        <TooltipContent side="right" align="start" className="p-3">
-          {loading ? (
-            <TooltipLoading type="pr" />
-          ) : data ? (
-            <PRTooltipContent data={data} />
-          ) : error ? (
-            <span className="text-xs text-canopy-text/70">Failed to load PR details</span>
-          ) : (
-            <span className="text-xs text-canopy-text/70">PR #{prNumber}</span>
+    <Tooltip open={isOpen} onOpenChange={handleOpenChange} delayDuration={300}>
+      <TooltipTrigger asChild>
+        <button
+          type="button"
+          onClick={() => {
+            onOpen?.();
+          }}
+          className="flex items-center gap-1 text-xs text-left cursor-pointer transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent min-w-0"
+          aria-label={`Open ${prStateLabel} pull request #${prNumber} on GitHub`}
+        >
+          {isSubordinate && (
+            <CornerDownRight className="w-3 h-3 text-canopy-text/30 shrink-0" aria-hidden="true" />
           )}
-        </TooltipContent>
-      </Tooltip>
-    </TooltipProvider>
+          <GitPullRequest className={cn("w-3 h-3 shrink-0", prStateColor)} aria-hidden="true" />
+          <span className={cn("font-mono hover:underline", prStateColor)}>#{prNumber}</span>
+        </button>
+      </TooltipTrigger>
+      <TooltipContent side="right" align="start" className="p-3">
+        {loading ? (
+          <TooltipLoading type="pr" />
+        ) : data ? (
+          <PRTooltipContent data={data} />
+        ) : error ? (
+          <span className="text-xs text-canopy-text/70">Failed to load PR details</span>
+        ) : (
+          <span className="text-xs text-canopy-text/70">PR #{prNumber}</span>
+        )}
+      </TooltipContent>
+    </Tooltip>
   );
 });
 
@@ -338,19 +331,17 @@ export function WorktreeHeader({
         </div>
 
         {worktreeErrorCount > 0 && (
-          <TooltipProvider>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <span className="flex items-center gap-0.5 text-status-error text-xs font-mono shrink-0">
-                  <AlertCircle className="w-3 h-3" />
-                  <span>{worktreeErrorCount}</span>
-                </span>
-              </TooltipTrigger>
-              <TooltipContent side="top" className="text-xs">
-                {worktreeErrorCount} error{worktreeErrorCount !== 1 ? "s" : ""}
-              </TooltipContent>
-            </Tooltip>
-          </TooltipProvider>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span className="flex items-center gap-0.5 text-status-error text-xs font-mono shrink-0">
+                <AlertCircle className="w-3 h-3" />
+                <span>{worktreeErrorCount}</span>
+              </span>
+            </TooltipTrigger>
+            <TooltipContent side="top" className="text-xs">
+              {worktreeErrorCount} error{worktreeErrorCount !== 1 ? "s" : ""}
+            </TooltipContent>
+          </Tooltip>
         )}
 
         <div
@@ -382,23 +373,21 @@ export function WorktreeHeader({
             </button>
           )}
           <DropdownMenu>
-            <TooltipProvider>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <DropdownMenuTrigger asChild>
-                    <button
-                      onClick={(e) => e.stopPropagation()}
-                      className="p-1.5 text-canopy-text/60 hover:text-text-primary hover:bg-overlay-soft rounded transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent"
-                      aria-label="More actions"
-                      data-testid="worktree-actions-menu"
-                    >
-                      <MoreHorizontal className="w-3.5 h-3.5" />
-                    </button>
-                  </DropdownMenuTrigger>
-                </TooltipTrigger>
-                <TooltipContent side="top">More actions</TooltipContent>
-              </Tooltip>
-            </TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <DropdownMenuTrigger asChild>
+                  <button
+                    onClick={(e) => e.stopPropagation()}
+                    className="p-1.5 text-canopy-text/60 hover:text-text-primary hover:bg-overlay-soft rounded transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent"
+                    aria-label="More actions"
+                    data-testid="worktree-actions-menu"
+                  >
+                    <MoreHorizontal className="w-3.5 h-3.5" />
+                  </button>
+                </DropdownMenuTrigger>
+              </TooltipTrigger>
+              <TooltipContent side="top">More actions</TooltipContent>
+            </Tooltip>
             <DropdownMenuContent
               align="end"
               side="bottom"

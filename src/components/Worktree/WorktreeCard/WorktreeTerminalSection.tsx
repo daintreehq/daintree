@@ -7,7 +7,7 @@ import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import { cn } from "@/lib/utils";
 import type { WorktreeTerminalCounts } from "@/hooks/useWorktreeTerminals";
 import { STATE_COLORS, STATE_ICONS, STATE_LABELS, STATE_PRIORITY } from "../terminalStateConfig";
-import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "../../ui/tooltip";
+import { Tooltip, TooltipContent, TooltipTrigger } from "../../ui/tooltip";
 import { ChevronRight, GripVertical, LayoutGrid, PanelBottom, SquareTerminal } from "lucide-react";
 import {
   SortableWorktreeTerminal,
@@ -151,16 +151,14 @@ export function WorktreeTerminalSection({
                           {term.type === "terminal" &&
                             term.agentState === "running" &&
                             term.lastCommand && (
-                              <TooltipProvider>
-                                <Tooltip>
-                                  <TooltipTrigger asChild>
-                                    <span className="truncate text-[11px] font-mono text-text-muted">
-                                      {term.lastCommand}
-                                    </span>
-                                  </TooltipTrigger>
-                                  <TooltipContent side="bottom">{term.lastCommand}</TooltipContent>
-                                </Tooltip>
-                              </TooltipProvider>
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <span className="truncate text-[11px] font-mono text-text-muted">
+                                    {term.lastCommand}
+                                  </span>
+                                </TooltipTrigger>
+                                <TooltipContent side="bottom">{term.lastCommand}</TooltipContent>
+                              </Tooltip>
                             )}
                         </div>
                       </button>
@@ -183,22 +181,20 @@ export function WorktreeTerminalSection({
                             );
                           })()}
 
-                        <TooltipProvider>
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <div className="text-text-muted transition-colors group-hover:text-text-secondary">
-                                {term.location === "dock" ? (
-                                  <PanelBottom className="w-3 h-3" />
-                                ) : (
-                                  <LayoutGrid className="w-3 h-3" />
-                                )}
-                              </div>
-                            </TooltipTrigger>
-                            <TooltipContent side="bottom">
-                              {term.location === "dock" ? "Docked" : "On Grid"}
-                            </TooltipContent>
-                          </Tooltip>
-                        </TooltipProvider>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <div className="text-text-muted transition-colors group-hover:text-text-secondary">
+                              {term.location === "dock" ? (
+                                <PanelBottom className="w-3 h-3" />
+                              ) : (
+                                <LayoutGrid className="w-3 h-3" />
+                              )}
+                            </div>
+                          </TooltipTrigger>
+                          <TooltipContent side="bottom">
+                            {term.location === "dock" ? "Docked" : "On Grid"}
+                          </TooltipContent>
+                        </Tooltip>
 
                         <button
                           type="button"
@@ -233,9 +229,7 @@ export function WorktreeTerminalSection({
           </div>
 
           {topTerminalState && (
-            <TooltipProvider>
-              <StateIcon state={topTerminalState.state} count={topTerminalState.count} />
-            </TooltipProvider>
+            <StateIcon state={topTerminalState.state} count={topTerminalState.count} />
           )}
         </button>
       )}

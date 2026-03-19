@@ -46,6 +46,7 @@ import { useMcpBridge } from "./hooks/useMcpBridge";
 import { useFileDropGuard } from "./hooks/useFileDropGuard";
 import { removeStartupSkeleton } from "./utils/removeStartupSkeleton";
 import { createTooltipWithShortcut } from "./lib/platform";
+import { TooltipProvider } from "./components/ui/tooltip";
 import { useCrashRecoveryGate } from "./hooks/app/useCrashRecoveryGate";
 import { CrashRecoveryDialog } from "./components/Recovery/CrashRecoveryDialog";
 import {
@@ -799,152 +800,156 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   );
 
   return (
-    <div className="flex flex-col h-full">
-      {/* Header Section */}
-      <div className="group/header flex items-center justify-between px-4 py-2 border-b border-divider bg-transparent shrink-0">
-        <div className="flex items-baseline gap-1.5">
-          <h2 className="text-canopy-text font-semibold text-sm tracking-wide">Worktrees</h2>
-          <span className="text-canopy-text/50 text-xs">
-            {hasFilters && visibleCount !== deferredWorktrees.length
-              ? `(${visibleCount} of ${deferredWorktrees.length})`
-              : `(${deferredWorktrees.length})`}
-          </span>
-        </div>
-        <div className="flex items-center gap-1">
-          <div className="invisible group-hover/header:visible group-focus-within/header:visible flex items-center gap-1">
+    <TooltipProvider delayDuration={400} skipDelayDuration={300}>
+      <div className="flex flex-col h-full">
+        {/* Header Section */}
+        <div className="group/header flex items-center justify-between px-4 py-2 border-b border-divider bg-transparent shrink-0">
+          <div className="flex items-baseline gap-1.5">
+            <h2 className="text-canopy-text font-semibold text-sm tracking-wide">Worktrees</h2>
+            <span className="text-canopy-text/50 text-xs">
+              {hasFilters && visibleCount !== deferredWorktrees.length
+                ? `(${visibleCount} of ${deferredWorktrees.length})`
+                : `(${deferredWorktrees.length})`}
+            </span>
+          </div>
+          <div className="flex items-center gap-1">
+            <div className="invisible group-hover/header:visible group-focus-within/header:visible flex items-center gap-1">
+              <button
+                onClick={onOpenOverview}
+                className="p-1 text-canopy-text/40 hover:text-canopy-text hover:bg-tint/[0.06] rounded transition-colors"
+                title={createTooltipWithShortcut("Open worktrees overview", "Cmd+Shift+O")}
+                aria-label="Open worktrees overview"
+              >
+                <LayoutGrid className="w-3.5 h-3.5" />
+              </button>
+              <button
+                onClick={handleRefreshAll}
+                disabled={isRefreshing}
+                className="p-1 text-canopy-text/40 hover:text-canopy-text hover:bg-tint/[0.06] rounded transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                title="Refresh sidebar"
+                aria-label="Refresh sidebar"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${isRefreshing ? "animate-spin" : ""}`} />
+              </button>
+            </div>
             <button
-              onClick={onOpenOverview}
+              onClick={() =>
+                actionService.dispatch("worktree.createDialog.open", undefined, {
+                  source: "user",
+                })
+              }
               className="p-1 text-canopy-text/40 hover:text-canopy-text hover:bg-tint/[0.06] rounded transition-colors"
-              title={createTooltipWithShortcut("Open worktrees overview", "Cmd+Shift+O")}
-              aria-label="Open worktrees overview"
+              title="Create new worktree"
+              aria-label="Create new worktree"
             >
-              <LayoutGrid className="w-3.5 h-3.5" />
-            </button>
-            <button
-              onClick={handleRefreshAll}
-              disabled={isRefreshing}
-              className="p-1 text-canopy-text/40 hover:text-canopy-text hover:bg-tint/[0.06] rounded transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-              title="Refresh sidebar"
-              aria-label="Refresh sidebar"
-            >
-              <RefreshCw className={`w-3.5 h-3.5 ${isRefreshing ? "animate-spin" : ""}`} />
+              <Plus className="w-3.5 h-3.5" />
             </button>
           </div>
-          <button
-            onClick={() =>
-              actionService.dispatch("worktree.createDialog.open", undefined, {
-                source: "user",
-              })
-            }
-            className="p-1 text-canopy-text/40 hover:text-canopy-text hover:bg-tint/[0.06] rounded transition-colors"
-            title="Create new worktree"
-            aria-label="Create new worktree"
-          >
-            <Plus className="w-3.5 h-3.5" />
-          </button>
         </div>
-      </div>
 
-      {/* Inline search bar — only when there are non-main worktrees */}
-      {hasNonMainWorktrees && <WorktreeSidebarSearchBar inputRef={searchInputRef} />}
+        {/* Inline search bar — only when there are non-main worktrees */}
+        {hasNonMainWorktrees && <WorktreeSidebarSearchBar inputRef={searchInputRef} />}
 
-      {/* Main worktree — visible unless excluded by text search */}
-      {mainMatchesQuery && <div className="shrink-0">{renderWorktreeCard(mainWorktree)}</div>}
+        {/* Main worktree — visible unless excluded by text search */}
+        {mainMatchesQuery && <div className="shrink-0">{renderWorktreeCard(mainWorktree)}</div>}
 
-      {/* Integration branch (develop/trunk/next) — pinned below main, subject to text search */}
-      {integrationMatchesQuery && (
-        <div className="shrink-0">{renderWorktreeCard(integrationWorktree)}</div>
-      )}
+        {/* Integration branch (develop/trunk/next) — pinned below main, subject to text search */}
+        {integrationMatchesQuery && (
+          <div className="shrink-0">{renderWorktreeCard(integrationWorktree)}</div>
+        )}
 
-      {/* Strong divider between pinned worktrees and scrollable list */}
-      {hasNonMainWorktrees && <div className="shrink-0 border-b-2 border-divider/60" />}
+        {/* Strong divider between pinned worktrees and scrollable list */}
+        {hasNonMainWorktrees && <div className="shrink-0 border-b-2 border-divider/60" />}
 
-      {/* Non-main worktree list */}
-      <div className="relative flex-1 min-h-0">
-        <div ref={scrollContainerRef} className="h-full overflow-y-auto scrollbar-none">
-          <div ref={scrollContentRef}>
-            {filteredWorktrees.length === 0 && hasActiveFilters() ? (
-              <div className="flex flex-col items-center justify-center py-12 px-4 text-center">
-                <FilterX className="w-10 h-10 text-canopy-text/40 mb-3" />
-                <p className="text-sm text-canopy-text/60 mb-3">No worktrees match your filters</p>
-                <button
-                  onClick={clearAllFilters}
-                  className="text-xs px-3 py-1.5 text-canopy-accent hover:bg-canopy-accent/10 rounded transition-colors"
-                >
-                  Clear filters
-                </button>
-              </div>
-            ) : groupedSections ? (
-              <div className="flex flex-col">
-                {groupedSections.map((section) => (
-                  <div key={section.type}>
-                    <div className="sticky top-0 z-10 px-4 py-2 text-[10px] font-medium text-canopy-text/50 uppercase tracking-wide bg-canopy-sidebar border-b border-divider">
-                      {section.displayName} ({section.worktrees.length})
-                    </div>
-                    {section.worktrees.map(renderWorktreeCard)}
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <SortableContext items={sortableIds} strategy={verticalListSortingStrategy}>
-                <div className="flex flex-col">
-                  {filteredWorktrees.map((worktree) => {
-                    const isPinned = pinnedWorktrees.includes(worktree.id);
-                    return (
-                      <SidebarWorktreeRow
-                        key={worktree.id}
-                        worktreeId={worktree.id}
-                        activeWorktreeId={activeWorktreeId}
-                        focusedWorktreeId={focusedWorktreeId}
-                        totalWorktreeCount={deferredWorktrees.length}
-                        selectWorktree={selectWorktree}
-                        worktreeActions={worktreeActions}
-                        availability={availability}
-                        agentSettings={agentSettings}
-                        homeDir={homeDir}
-                        dragStartOrder={dragStartOrder}
-                        isSortDisabled={isSortDisabled}
-                        isPinned={isPinned}
-                      />
-                    );
-                  })}
+        {/* Non-main worktree list */}
+        <div className="relative flex-1 min-h-0">
+          <div ref={scrollContainerRef} className="h-full overflow-y-auto scrollbar-none">
+            <div ref={scrollContentRef}>
+              {filteredWorktrees.length === 0 && hasActiveFilters() ? (
+                <div className="flex flex-col items-center justify-center py-12 px-4 text-center">
+                  <FilterX className="w-10 h-10 text-canopy-text/40 mb-3" />
+                  <p className="text-sm text-canopy-text/60 mb-3">
+                    No worktrees match your filters
+                  </p>
+                  <button
+                    onClick={clearAllFilters}
+                    className="text-xs px-3 py-1.5 text-canopy-accent hover:bg-canopy-accent/10 rounded transition-colors"
+                  >
+                    Clear filters
+                  </button>
                 </div>
-              </SortableContext>
-            )}
+              ) : groupedSections ? (
+                <div className="flex flex-col">
+                  {groupedSections.map((section) => (
+                    <div key={section.type}>
+                      <div className="sticky top-0 z-10 px-4 py-2 text-[10px] font-medium text-canopy-text/50 uppercase tracking-wide bg-canopy-sidebar border-b border-divider">
+                        {section.displayName} ({section.worktrees.length})
+                      </div>
+                      {section.worktrees.map(renderWorktreeCard)}
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <SortableContext items={sortableIds} strategy={verticalListSortingStrategy}>
+                  <div className="flex flex-col">
+                    {filteredWorktrees.map((worktree) => {
+                      const isPinned = pinnedWorktrees.includes(worktree.id);
+                      return (
+                        <SidebarWorktreeRow
+                          key={worktree.id}
+                          worktreeId={worktree.id}
+                          activeWorktreeId={activeWorktreeId}
+                          focusedWorktreeId={focusedWorktreeId}
+                          totalWorktreeCount={deferredWorktrees.length}
+                          selectWorktree={selectWorktree}
+                          worktreeActions={worktreeActions}
+                          availability={availability}
+                          agentSettings={agentSettings}
+                          homeDir={homeDir}
+                          dragStartOrder={dragStartOrder}
+                          isSortDisabled={isSortDisabled}
+                          isPinned={isPinned}
+                        />
+                      );
+                    })}
+                  </div>
+                </SortableContext>
+              )}
+            </div>
           </div>
+          <ScrollIndicator direction="above" count={hiddenAbove} onClick={scrollToTop} />
+          <ScrollIndicator direction="below" count={hiddenBelow} onClick={scrollToBottom} />
         </div>
-        <ScrollIndicator direction="above" count={hiddenAbove} onClick={scrollToTop} />
-        <ScrollIndicator direction="below" count={hiddenBelow} onClick={scrollToBottom} />
-      </div>
 
-      <WorkflowSection />
+        <WorkflowSection />
 
-      <RecipeEditor
-        worktreeId={recipeEditorWorktreeId}
-        initialTerminals={recipeEditorInitialTerminals}
-        isOpen={isRecipeEditorOpen}
-        onClose={handleCloseRecipeEditor}
-      />
-
-      {rootPath && (
-        <NewWorktreeDialog
-          isOpen={createDialog.isOpen}
-          onClose={closeCreateDialog}
-          rootPath={rootPath}
-          onWorktreeCreated={refresh}
-          initialIssue={createDialog.initialIssue}
-          initialPR={createDialog.initialPR}
-          initialRecipeId={createDialog.initialRecipeId}
+        <RecipeEditor
+          worktreeId={recipeEditorWorktreeId}
+          initialTerminals={recipeEditorInitialTerminals}
+          isOpen={isRecipeEditorOpen}
+          onClose={handleCloseRecipeEditor}
         />
-      )}
 
-      <BulkCreateWorktreeDialog
-        isOpen={bulkCreateDialog.isOpen}
-        onClose={closeBulkCreateDialog}
-        selectedIssues={bulkCreateDialog.selectedIssues}
-        onComplete={closeBulkCreateDialog}
-      />
-    </div>
+        {rootPath && (
+          <NewWorktreeDialog
+            isOpen={createDialog.isOpen}
+            onClose={closeCreateDialog}
+            rootPath={rootPath}
+            onWorktreeCreated={refresh}
+            initialIssue={createDialog.initialIssue}
+            initialPR={createDialog.initialPR}
+            initialRecipeId={createDialog.initialRecipeId}
+          />
+        )}
+
+        <BulkCreateWorktreeDialog
+          isOpen={bulkCreateDialog.isOpen}
+          onClose={closeBulkCreateDialog}
+          selectedIssues={bulkCreateDialog.selectedIssues}
+          onComplete={closeBulkCreateDialog}
+        />
+      </div>
+    </TooltipProvider>
   );
 }
 
