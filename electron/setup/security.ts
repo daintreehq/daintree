@@ -2,6 +2,18 @@ import { app, ipcMain, session } from "electron";
 import type { IpcMainInvokeEvent } from "electron";
 import { isTrustedRendererUrl } from "../../shared/utils/trustedRenderer.js";
 import { classifyPartition } from "../utils/webviewCsp.js";
+import {
+  wrapSuccess,
+  wrapError,
+  serializeError,
+} from "../../shared/utils/ipcErrorSerialization.js";
+
+function sanitizePaths(msg: string): string {
+  return msg
+    .replace(/\/(?:Users|home|tmp|private|var)\/[^\s:]+/gi, "<path>")
+    .replace(/[A-Z]:[/\\](?:Users|Program Files|Windows|ProgramData)[^\s:]*/gi, "<path>")
+    .replace(/\\\\(?:[^\s\\]+)\\(?:[^\s:]+)/g, "<path>");
+}
 
 // Wrap ipcMain.handle globally to enforce sender validation on ALL IPC handlers
 // This must run before any handlers are registered
@@ -16,24 +28,28 @@ export function enforceIpcSenderValidation(): void {
     return originalHandle(channel, async (event, ...args) => {
       const senderUrl = event.senderFrame?.url;
       if (!senderUrl || !isTrustedRendererUrl(senderUrl)) {
-        throw new Error(
-          `IPC call from untrusted origin rejected: channel=${channel}, url=${senderUrl || "unknown"}`
+        return wrapError(
+          new Error(
+            `IPC call from untrusted origin rejected: channel=${channel}, url=${senderUrl || "unknown"}`
+          )
         );
       }
       try {
-        return await listener(event, ...args);
+        const result = await listener(event, ...args);
+        return wrapSuccess(result);
       } catch (error) {
         if (app.isPackaged) {
           console.error(`[IPC] Error on channel ${channel}:`, error);
-          const msg = (error instanceof Error ? error.message : String(error))
-            .replace(/\/(?:Users|home|tmp|private|var)\/[^\s:]+/gi, "<path>")
-            .replace(/[A-Z]:[/\\](?:Users|Program Files|Windows|ProgramData)[^\s:]*/gi, "<path>")
-            .replace(/\\\\(?:[^\s\\]+)\\(?:[^\s:]+)/g, "<path>");
-          const safe = new Error(msg);
-          safe.stack = undefined;
-          throw safe;
+          const serialized = serializeError(error);
+          serialized.message = sanitizePaths(serialized.message);
+          serialized.stack = undefined;
+          serialized.path = undefined;
+          serialized.context = undefined;
+          serialized.cause = undefined;
+          serialized.properties = undefined;
+          return { __canopyIpcEnvelope: true as const, ok: false as const, error: serialized };
         }
-        throw error;
+        return wrapError(error);
       }
     });
   } as typeof ipcMain.handle;
@@ -46,24 +62,28 @@ export function enforceIpcSenderValidation(): void {
       return originalHandleOnce(channel, async (event, ...args) => {
         const senderUrl = event.senderFrame?.url;
         if (!senderUrl || !isTrustedRendererUrl(senderUrl)) {
-          throw new Error(
-            `IPC call from untrusted origin rejected: channel=${channel}, url=${senderUrl || "unknown"}`
+          return wrapError(
+            new Error(
+              `IPC call from untrusted origin rejected: channel=${channel}, url=${senderUrl || "unknown"}`
+            )
           );
         }
         try {
-          return await listener(event, ...args);
+          const result = await listener(event, ...args);
+          return wrapSuccess(result);
         } catch (error) {
           if (app.isPackaged) {
             console.error(`[IPC] Error on channel ${channel}:`, error);
-            const msg = (error instanceof Error ? error.message : String(error))
-              .replace(/\/(?:Users|home|tmp|private|var)\/[^\s:]+/gi, "<path>")
-              .replace(/[A-Z]:[/\\](?:Users|Program Files|Windows|ProgramData)[^\s:]*/gi, "<path>")
-              .replace(/\\\\(?:[^\s\\]+)\\(?:[^\s:]+)/g, "<path>");
-            const safe = new Error(msg);
-            safe.stack = undefined;
-            throw safe;
+            const serialized = serializeError(error);
+            serialized.message = sanitizePaths(serialized.message);
+            serialized.stack = undefined;
+            serialized.path = undefined;
+            serialized.context = undefined;
+            serialized.cause = undefined;
+            serialized.properties = undefined;
+            return { __canopyIpcEnvelope: true as const, ok: false as const, error: serialized };
           }
-          throw error;
+          return wrapError(error);
         }
       });
     } as typeof ipcMain.handleOnce;
