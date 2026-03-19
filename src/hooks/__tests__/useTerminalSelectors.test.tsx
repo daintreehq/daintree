@@ -23,6 +23,7 @@ import {
   useBackgroundedTerminals,
   useWaitingTerminalIds,
   useFailedTerminalIds,
+  _resetWorktreeIdCacheForTests,
 } from "../useTerminalSelectors";
 
 const isInTrashFn = () => false;
@@ -88,6 +89,7 @@ function setupBoth(
 describe("useTerminalSelectors", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    _resetWorktreeIdCacheForTests();
   });
 
   it("does not hide waiting terminals when worktree IDs are temporarily unavailable", () => {
@@ -355,6 +357,7 @@ describe("useTerminalSelectors", () => {
 describe("useWaitingTerminals", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    _resetWorktreeIdCacheForTests();
   });
 
   it("returns empty array when no terminals exist", () => {
@@ -395,6 +398,7 @@ describe("useWaitingTerminals", () => {
 describe("useWaitingTerminalIds", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    _resetWorktreeIdCacheForTests();
   });
 
   it("returns IDs of waiting terminals", () => {
@@ -411,6 +415,7 @@ describe("useWaitingTerminalIds", () => {
 describe("useFailedTerminals", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    _resetWorktreeIdCacheForTests();
   });
 
   it("returns only failed visible terminals", () => {
@@ -429,6 +434,7 @@ describe("useFailedTerminals", () => {
 describe("useFailedTerminalIds", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    _resetWorktreeIdCacheForTests();
   });
 
   it("returns IDs of failed terminals", () => {
@@ -446,6 +452,7 @@ describe("useFailedTerminalIds", () => {
 describe("useBackgroundedTerminals", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    _resetWorktreeIdCacheForTests();
   });
 
   it("returns only background terminals that are not orphaned", () => {
@@ -495,6 +502,7 @@ function setupWorktreesWithChanges(
 describe("useConflictedWorktrees", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    _resetWorktreeIdCacheForTests();
   });
 
   it("returns empty array when no worktrees exist", () => {
@@ -555,5 +563,112 @@ describe("useConflictedWorktrees", () => {
     const { result } = renderHook(() => useConflictedWorktrees());
     expect(result.current).toHaveLength(1);
     expect(result.current[0].id).toBe("wt-conflict");
+  });
+});
+
+describe("buildWorktreeIds memoization", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    _resetWorktreeIdCacheForTests();
+  });
+
+  it("returns correct IDs when Map reference changes but keys stay the same", () => {
+    const map1 = new Map([["wt-1", { worktreeId: "wt-1" }]]);
+    setupBoth(
+      [
+        { id: "t1", agentState: "waiting", location: "grid", worktreeId: "wt-1" },
+        { id: "t2", agentState: "waiting", location: "grid", worktreeId: "wt-unknown" },
+      ],
+      map1 as Map<string, { worktreeId?: string }>
+    );
+    const { result: r1 } = renderHook(() => useWaitingTerminals());
+    expect(r1.current).toHaveLength(1);
+    expect(r1.current[0].id).toBe("t1");
+
+    const map2 = new Map([["wt-1", { worktreeId: "wt-1", status: "changed" }]]);
+    setupBoth(
+      [
+        { id: "t1", agentState: "waiting", location: "grid", worktreeId: "wt-1" },
+        { id: "t2", agentState: "waiting", location: "grid", worktreeId: "wt-unknown" },
+      ],
+      map2 as Map<string, { worktreeId?: string }>
+    );
+    const { result: r2 } = renderHook(() => useWaitingTerminals());
+    expect(r2.current).toHaveLength(1);
+    expect(r2.current[0].id).toBe("t1");
+  });
+
+  it("detects when a worktree is added", () => {
+    const map1 = new Map([["wt-1", { worktreeId: "wt-1" }]]);
+    setupBoth(
+      [
+        { id: "t1", agentState: "waiting", location: "grid", worktreeId: "wt-1" },
+        { id: "t2", agentState: "waiting", location: "grid", worktreeId: "wt-2" },
+      ],
+      map1 as Map<string, { worktreeId?: string }>
+    );
+    const { result: r1 } = renderHook(() => useWaitingTerminals());
+    expect(r1.current).toHaveLength(1);
+    expect(r1.current[0].id).toBe("t1");
+
+    const map2 = new Map([
+      ["wt-1", { worktreeId: "wt-1" }],
+      ["wt-2", { worktreeId: "wt-2" }],
+    ]);
+    setupBoth(
+      [
+        { id: "t1", agentState: "waiting", location: "grid", worktreeId: "wt-1" },
+        { id: "t2", agentState: "waiting", location: "grid", worktreeId: "wt-2" },
+      ],
+      map2 as Map<string, { worktreeId?: string }>
+    );
+    const { result: r2 } = renderHook(() => useWaitingTerminals());
+    expect(r2.current).toHaveLength(2);
+  });
+
+  it("detects when a worktree is removed", () => {
+    const map1 = new Map([
+      ["wt-1", { worktreeId: "wt-1" }],
+      ["wt-2", { worktreeId: "wt-2" }],
+    ]);
+    setupBoth(
+      [
+        { id: "t1", agentState: "waiting", location: "grid", worktreeId: "wt-1" },
+        { id: "t2", agentState: "waiting", location: "grid", worktreeId: "wt-2" },
+      ],
+      map1 as Map<string, { worktreeId?: string }>
+    );
+    const { result: r1 } = renderHook(() => useWaitingTerminals());
+    expect(r1.current).toHaveLength(2);
+
+    const map2 = new Map([["wt-1", { worktreeId: "wt-1" }]]);
+    setupBoth(
+      [
+        { id: "t1", agentState: "waiting", location: "grid", worktreeId: "wt-1" },
+        { id: "t2", agentState: "waiting", location: "grid", worktreeId: "wt-2" },
+      ],
+      map2 as Map<string, { worktreeId?: string }>
+    );
+    const { result: r2 } = renderHook(() => useWaitingTerminals());
+    expect(r2.current).toHaveLength(1);
+    expect(r2.current[0].id).toBe("t1");
+  });
+
+  it("handles transition from empty to populated worktrees", () => {
+    setupBoth([{ id: "t1", agentState: "waiting", location: "grid", worktreeId: "wt-1" }]);
+    const { result: r1 } = renderHook(() => useWaitingTerminals());
+    expect(r1.current).toHaveLength(1);
+
+    const map = new Map([["wt-1", { worktreeId: "wt-1" }]]);
+    setupBoth(
+      [
+        { id: "t1", agentState: "waiting", location: "grid", worktreeId: "wt-1" },
+        { id: "t2", agentState: "waiting", location: "grid", worktreeId: "wt-unknown" },
+      ],
+      map as Map<string, { worktreeId?: string }>
+    );
+    const { result: r2 } = renderHook(() => useWaitingTerminals());
+    expect(r2.current).toHaveLength(1);
+    expect(r2.current[0].id).toBe("t1");
   });
 });
