@@ -62,6 +62,7 @@ export const SEL = {
     searchCaseToggle: '[aria-label="Toggle case sensitivity"]',
     searchRegexToggle: '[aria-label="Toggle regex mode"]',
     searchStatus: "[data-terminal-search-status]",
+    scrollIndicator: '[aria-label="Scroll to latest output"]',
   },
   worktree: {
     card: (branch: string) => `[data-worktree-branch="${branch}"]`,
