@@ -137,7 +137,7 @@ export function ReEntrySummary({ state }: { state: ReEntrySummaryState }) {
               )}
             >
               <line.icon className="h-3.5 w-3.5 shrink-0" />
-              <span>{line.text}</span>
+              <span className="tabular-nums">{line.text}</span>
             </li>
           ))}
         </ul>

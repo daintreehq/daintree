@@ -60,7 +60,7 @@ export function GettingStartedChecklist({
             <h4 className="font-medium leading-tight tracking-tight text-xs font-mono text-canopy-accent">
               Getting Started
             </h4>
-            <span className="text-[10px] text-canopy-text/50 font-mono">
+            <span className="text-[10px] text-canopy-text/50 font-mono tabular-nums">
               {completedCount}/{totalCount}
             </span>
             {collapsed ? (

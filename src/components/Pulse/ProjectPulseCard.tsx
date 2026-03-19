@@ -124,7 +124,7 @@ function HealthChip({ icon, label, onClick, className }: HealthChipProps) {
       onClick={onClick}
     >
       {icon}
-      <span className="font-mono">{label}</span>
+      <span className="font-mono tabular-nums">{label}</span>
     </Wrapper>
   );
 }

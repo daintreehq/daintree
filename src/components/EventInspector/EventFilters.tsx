@@ -246,7 +246,12 @@ export function EventFilters({ events, filters, onFiltersChange, className }: Ev
                 >
                   <span>{config.label}</span>
                   {count > 0 && (
-                    <span className={cn("text-[11px]", isActive ? "opacity-80" : "opacity-60")}>
+                    <span
+                      className={cn(
+                        "text-[11px] tabular-nums",
+                        isActive ? "opacity-80" : "opacity-60"
+                      )}
+                    >
                       {count}
                     </span>
                   )}
@@ -266,7 +271,7 @@ export function EventFilters({ events, filters, onFiltersChange, className }: Ev
             <Filter className="w-3.5 h-3.5" />
             <span>Event Types</span>
             {activeFilterCount > 0 && (
-              <span className="px-1.5 py-0.5 text-xs bg-primary text-primary-foreground rounded">
+              <span className="px-1.5 py-0.5 text-xs tabular-nums bg-primary text-primary-foreground rounded">
                 {activeFilterCount}
               </span>
             )}

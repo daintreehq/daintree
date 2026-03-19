@@ -382,7 +382,7 @@ export function WorktreeOverviewModal({
               >
                 Worktrees Overview
               </h2>
-              <span className="text-canopy-text/50 text-sm">
+              <span className="text-canopy-text/50 text-sm tabular-nums">
                 ({filteredWorktrees.length}
                 {filteredWorktrees.length !== worktrees.length && ` of ${worktrees.length}`})
               </span>
@@ -396,19 +396,19 @@ export function WorktreeOverviewModal({
                   aria-label="Agent activity statistics"
                 >
                   {aggregateStats.workingCount > 0 && (
-                    <span className="flex items-center gap-1 text-xs text-[var(--color-state-working)]">
+                    <span className="flex items-center gap-1 text-xs tabular-nums text-[var(--color-state-working)]">
                       <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-state-working)] motion-safe:animate-pulse" />
                       {aggregateStats.workingCount} working
                     </span>
                   )}
                   {aggregateStats.waitingCount > 0 && (
-                    <span className="flex items-center gap-1 text-xs text-status-warning">
+                    <span className="flex items-center gap-1 text-xs tabular-nums text-status-warning">
                       <span className="w-1.5 h-1.5 rounded-full bg-status-warning" />
                       {aggregateStats.waitingCount} waiting
                     </span>
                   )}
                   {aggregateStats.failedCount > 0 && (
-                    <span className="flex items-center gap-1 text-xs text-status-error">
+                    <span className="flex items-center gap-1 text-xs tabular-nums text-status-error">
                       <span className="w-1.5 h-1.5 rounded-full bg-status-error" />
                       {aggregateStats.failedCount} failed
                     </span>

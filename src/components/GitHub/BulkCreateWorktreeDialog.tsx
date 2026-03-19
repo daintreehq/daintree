@@ -739,7 +739,7 @@ export function BulkCreateWorktreeDialog({
                   }}
                 />
               </div>
-              <div className="flex items-center justify-center gap-1.5 text-sm text-canopy-text/70">
+              <div className="flex items-center justify-center gap-1.5 text-sm tabular-nums text-canopy-text/70">
                 <span>
                   {succeededCount} of {progress.items.size} created
                 </span>

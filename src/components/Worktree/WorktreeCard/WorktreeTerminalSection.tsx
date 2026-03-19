@@ -39,7 +39,7 @@ function StateIcon({ state, count }: StateIconProps) {
             )}
             aria-hidden
           />
-          <span className="font-mono">{count}</span>
+          <span className="font-mono tabular-nums">{count}</span>
         </span>
       </TooltipTrigger>
       <TooltipContent side="top" className="text-xs">

@@ -275,10 +275,10 @@ export function ConsolePanel({ paneId, height = 200, webContentsId }: ConsolePan
             >
               {label}
               {filter === "error" && errorCount > 0 && (
-                <span className="ml-1 text-status-error">{errorCount}</span>
+                <span className="ml-1 tabular-nums text-status-error">{errorCount}</span>
               )}
               {filter === "warning" && warnCount > 0 && (
-                <span className="ml-1 text-status-warning">{warnCount}</span>
+                <span className="ml-1 tabular-nums text-status-warning">{warnCount}</span>
               )}
             </button>
           ))}

@@ -437,7 +437,7 @@ export function CommandBuilder({
         <div className="flex items-center gap-3">
           <AppDialog.Title>{command.label}</AppDialog.Title>
           {hasMultipleSteps && (
-            <span className="text-sm text-canopy-text/50">
+            <span className="text-sm tabular-nums text-canopy-text/50">
               Step {currentStepIndex + 1} of {steps.length}
             </span>
           )}
