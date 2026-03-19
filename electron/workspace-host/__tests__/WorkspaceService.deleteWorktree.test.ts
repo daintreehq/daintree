@@ -20,6 +20,7 @@ vi.mock("../../utils/fs.js", () => ({
 }));
 
 vi.mock("../../utils/git.js", () => ({
+  createGit: vi.fn(() => mockSimpleGit),
   invalidateGitStatusCache: vi.fn(),
   getWorktreeChangesWithStats: vi.fn().mockResolvedValue({
     head: "abc123",
