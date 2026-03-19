@@ -24,8 +24,8 @@ export const useGitHubFilterStore = create<GitHubFilterState>()((set) => ({
   prFilter: "open",
   issueSearchQuery: "",
   prSearchQuery: "",
-  issueSortOrder: "created",
-  prSortOrder: "created",
+  issueSortOrder: "updated",
+  prSortOrder: "updated",
   setIssueFilter: (filter) => set({ issueFilter: filter }),
   setPrFilter: (filter) => set({ prFilter: filter }),
   setIssueSearchQuery: (query) => set({ issueSearchQuery: query }),
@@ -40,7 +40,7 @@ export function resetGitHubFilterStore() {
     prFilter: "open",
     issueSearchQuery: "",
     prSearchQuery: "",
-    issueSortOrder: "created",
-    prSortOrder: "created",
+    issueSortOrder: "updated",
+    prSortOrder: "updated",
   });
 }
