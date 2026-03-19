@@ -41,7 +41,7 @@ describe("voiceRecordingStore — clearPanelBuffer", () => {
 describe("voiceRecordingStore — project switch reset", () => {
   beforeEach(reset);
 
-  it("clears panelBuffers and session state while preserving config", () => {
+  it("clears panelBuffers while preserving session and config state", () => {
     useVoiceRecordingStore.setState({
       isConfigured: true,
       correctionEnabled: true,
@@ -49,21 +49,17 @@ describe("voiceRecordingStore — project switch reset", () => {
     useVoiceRecordingStore.getState().beginSession(TARGET);
     useVoiceRecordingStore.getState().appendDelta("dictated text");
 
-    useVoiceRecordingStore.setState({
-      panelBuffers: {},
-      activeTarget: null,
-      status: "idle",
-      errorMessage: null,
-      elapsedSeconds: 0,
-      audioLevel: 0,
-    });
+    // Simulate resetAllStoresForProjectSwitch — only panelBuffers is cleared
+    useVoiceRecordingStore.setState({ panelBuffers: {} });
 
     const state = useVoiceRecordingStore.getState();
     expect(state.panelBuffers).toEqual({});
-    expect(state.activeTarget).toBeNull();
-    expect(state.status).toBe("idle");
     expect(state.isConfigured).toBe(true);
     expect(state.correctionEnabled).toBe(true);
+    // activeTarget and status are intentionally NOT cleared — the
+    // VoiceRecordingService owns the session lifecycle and clearing
+    // them here would orphan audio resources.
+    expect(state.activeTarget).toEqual(TARGET);
   });
 });
 

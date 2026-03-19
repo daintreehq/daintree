@@ -44,14 +44,7 @@ export async function resetAllStoresForProjectSwitch(
   resetGitHubFilterStore();
   useWorkflowStore.getState().reset();
   useLayoutUndoStore.getState().clearHistory();
-  useVoiceRecordingStore.setState({
-    panelBuffers: {},
-    activeTarget: null,
-    status: "idle",
-    errorMessage: null,
-    elapsedSeconds: 0,
-    audioLevel: 0,
-  });
+  useVoiceRecordingStore.setState({ panelBuffers: {} });
   if (options.outgoingProjectId) {
     useTerminalInputStore
       .getState()
