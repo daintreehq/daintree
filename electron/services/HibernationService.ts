@@ -21,6 +21,7 @@ const GIT_SENTINEL_NAMES = new Set([
   "MERGE_HEAD",
   "REBASE_HEAD",
   "CHERRY_PICK_HEAD",
+  "REVERT_HEAD",
   "rebase-merge",
   "rebase-apply",
 ]);

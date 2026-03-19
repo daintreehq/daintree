@@ -462,7 +462,7 @@ describe("HibernationService", () => {
       ptyManagerMock.gracefulKillByProject.mockResolvedValue([{ id: "t1" }]);
     }
 
-    it.each(["MERGE_HEAD", "REBASE_HEAD", "CHERRY_PICK_HEAD", "rebase-merge", "rebase-apply"])(
+    it.each(["MERGE_HEAD", "REBASE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "rebase-merge", "rebase-apply"])(
       "scheduled hibernation skips project with %s sentinel",
       async (sentinel) => {
         setupScheduledProject();
@@ -551,7 +551,7 @@ describe("HibernationService", () => {
       expect(ptyManagerMock.gracefulKillByProject).toHaveBeenCalledWith("proj-1");
     });
 
-    it("skips project when readdir throws non-ENOENT error (fail-closed)", async () => {
+    it("proceeds when gitdir is unreadable (EACCES)", async () => {
       setupScheduledProject();
       // The main .git readdir should work but with a sentinel
       // Actually, test fail-closed: readdir on .git/worktrees throws ENOENT (fine),
@@ -570,6 +570,48 @@ describe("HibernationService", () => {
 
       // fail-closed: readdir error on .git means we skip that gitdir and check next
       // Since all gitdirs failed without finding sentinels, we proceed with hibernation
+      expect(ptyManagerMock.gracefulKillByProject).toHaveBeenCalledWith("proj-1");
+    });
+
+    it("continues to next project after skipping one with git operation", async () => {
+      (storeMock.get as Mock).mockReturnValue({ enabled: true, inactiveThresholdHours: 24 });
+      projectStoreMock.getCurrentProjectId.mockReturnValue("active-proj");
+      projectStoreMock.getAllProjects.mockReturnValue([
+        { id: "proj-1", name: "Merging", path: "/projects/proj-1", lastOpened: Date.now() - TWENTY_FIVE_HOURS },
+        { id: "proj-2", name: "Idle", path: "/projects/proj-2", lastOpened: Date.now() - TWENTY_FIVE_HOURS },
+      ]);
+      ptyManagerMock.getAll.mockReturnValue([
+        { id: "t1", projectId: "proj-1", agentState: "idle" },
+        { id: "t2", projectId: "proj-2", agentState: "idle" },
+      ]);
+      ptyManagerMock.gracefulKillByProject.mockResolvedValue([{ id: "t2" }]);
+
+      fsMock.readdir.mockImplementation(async (dirPath: string) => {
+        const dir = String(dirPath);
+        if (dir === "/projects/proj-1/.git") return ["MERGE_HEAD", "HEAD"];
+        if (dir === "/projects/proj-2/.git") return ["HEAD", "config"];
+        throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+      });
+
+      const service = new HibernationService();
+      await (service as unknown as { checkAndHibernate(): Promise<void> }).checkAndHibernate();
+
+      expect(ptyManagerMock.gracefulKillByProject).not.toHaveBeenCalledWith("proj-1");
+      expect(ptyManagerMock.gracefulKillByProject).toHaveBeenCalledWith("proj-2");
+    });
+
+    it("memory pressure uses 30min threshold for stale index.lock", async () => {
+      setupMemoryPressureProject();
+      fsMock.readdir.mockImplementation(async (dirPath: string) => {
+        if (String(dirPath).endsWith(".git")) return ["index.lock", "HEAD"];
+        throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+      });
+      // Lock is 31 minutes old — older than MEMORY_PRESSURE_INACTIVE_MS (30 min), so stale
+      fsMock.stat.mockResolvedValue({ mtimeMs: Date.now() - THIRTY_ONE_MINUTES - 1000 });
+
+      const service = new HibernationService();
+      await service.hibernateUnderMemoryPressure();
+
       expect(ptyManagerMock.gracefulKillByProject).toHaveBeenCalledWith("proj-1");
     });
 
