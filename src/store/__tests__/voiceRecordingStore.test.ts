@@ -18,6 +18,51 @@ function reset() {
   });
 }
 
+describe("voiceRecordingStore — clearPanelBuffer", () => {
+  beforeEach(reset);
+
+  it("removes the buffer entry for the given panelId", () => {
+    useVoiceRecordingStore.getState().beginSession(TARGET);
+    useVoiceRecordingStore.getState().appendDelta("test");
+    expect(useVoiceRecordingStore.getState().panelBuffers[PANEL_ID]).toBeDefined();
+
+    useVoiceRecordingStore.getState().clearPanelBuffer(PANEL_ID);
+
+    expect(useVoiceRecordingStore.getState().panelBuffers[PANEL_ID]).toBeUndefined();
+  });
+
+  it("is a no-op for panelIds that have no buffer", () => {
+    const before = useVoiceRecordingStore.getState().panelBuffers;
+    useVoiceRecordingStore.getState().clearPanelBuffer("nonexistent");
+    expect(useVoiceRecordingStore.getState().panelBuffers).toBe(before);
+  });
+});
+
+describe("voiceRecordingStore — project switch reset", () => {
+  beforeEach(reset);
+
+  it("clears panelBuffers while preserving session and config state", () => {
+    useVoiceRecordingStore.setState({
+      isConfigured: true,
+      correctionEnabled: true,
+    });
+    useVoiceRecordingStore.getState().beginSession(TARGET);
+    useVoiceRecordingStore.getState().appendDelta("dictated text");
+
+    // Simulate resetAllStoresForProjectSwitch — only panelBuffers is cleared
+    useVoiceRecordingStore.setState({ panelBuffers: {} });
+
+    const state = useVoiceRecordingStore.getState();
+    expect(state.panelBuffers).toEqual({});
+    expect(state.isConfigured).toBe(true);
+    expect(state.correctionEnabled).toBe(true);
+    // activeTarget and status are intentionally NOT cleared — the
+    // VoiceRecordingService owns the session lifecycle and clearing
+    // them here would orphan audio resources.
+    expect(state.activeTarget).toEqual(TARGET);
+  });
+});
+
 describe("voiceRecordingStore — transcript phase transitions", () => {
   beforeEach(reset);
 

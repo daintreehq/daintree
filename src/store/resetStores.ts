@@ -13,6 +13,7 @@ import { useRecipeStore } from "./recipeStore";
 import { resetGitHubFilterStore } from "./githubFilterStore";
 import { useWorkflowStore } from "./workflowStore";
 import { useTerminalInputStore } from "./terminalInputStore";
+import { useVoiceRecordingStore } from "./voiceRecordingStore";
 import { useLayoutUndoStore } from "./layoutUndoStore";
 interface ProjectSwitchResetOptions {
   preserveTerminalIds?: Set<string>;
@@ -45,6 +46,7 @@ export async function resetAllStoresForProjectSwitch(
   resetGitHubFilterStore();
   useWorkflowStore.getState().reset();
   useLayoutUndoStore.getState().clearHistory();
+  useVoiceRecordingStore.setState({ panelBuffers: {} });
   if (options.outgoingProjectId) {
     useTerminalInputStore
       .getState()

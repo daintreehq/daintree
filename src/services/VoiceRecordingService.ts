@@ -383,8 +383,11 @@ class VoiceRecordingService {
         );
 
         if (!panel) {
+          const panelId = activeTarget.panelId;
           void this.stop("Dictation stopped because its panel was closed.", {
             preserveLiveText: true,
+          }).then(() => {
+            useVoiceRecordingStore.getState().clearPanelBuffer(panelId);
           });
         }
       })
