@@ -236,30 +236,30 @@ describe("WorkspaceClient resilience", () => {
     });
 
     it("restart auto-reload is skipped when superseded by user loadProject", async () => {
-      // Create a client that allows restarts
+      // Give restartClient its own dedicated mock to avoid cross-contamination
+      const dedicatedChild = new MockUtilityProcess();
+      forkMock.mockReturnValue(dedicatedChild);
+
       const restartClient = new WorkspaceClient({
         maxRestartAttempts: 1,
         showCrashDialog: false,
         healthCheckIntervalMs: 1000,
       });
-      const restartChild = forkMock.mock.results.at(-1)!.value as MockUtilityProcess;
 
       // Make it ready and load a project
-      restartChild.emit("message", { type: "ready" });
+      dedicatedChild.emit("message", { type: "ready" });
       const loadCall = restartClient.loadProject("/original-project");
-      const origCall = restartChild.postMessage.mock.calls.at(-1)!;
-      restartChild.emit("message", {
+      const origCall = dedicatedChild.postMessage.mock.calls.at(-1)!;
+      dedicatedChild.emit("message", {
         type: "load-project-result",
         requestId: (origCall[0] as { requestId: string }).requestId,
       });
       await loadCall;
 
       // Simulate host crash
-      restartChild.emit("exit", 1);
-
-      // A new child is created for the restart
       const restartChild2 = new MockUtilityProcess();
       forkMock.mockReturnValue(restartChild2);
+      dedicatedChild.emit("exit", 1);
 
       // User switches project before the restart timer fires
       // We need to advance past the delay first, but the user call happens
@@ -296,7 +296,7 @@ describe("WorkspaceClient resilience", () => {
       // The restart path should NOT have issued another loadProject call
       // (only the original load + user load = 2 loadProject calls total)
       const loadProjectCalls = [
-        ...restartChild.postMessage.mock.calls,
+        ...dedicatedChild.postMessage.mock.calls,
         ...restartChild2.postMessage.mock.calls,
       ].filter(([msg]) => (msg as { type: string }).type === "load-project");
       expect(loadProjectCalls).toHaveLength(2);
@@ -305,28 +305,30 @@ describe("WorkspaceClient resilience", () => {
     });
 
     it("restart auto-reload proceeds when not superseded", async () => {
+      // Give restartClient its own dedicated mock to avoid cross-contamination
+      const dedicatedChild = new MockUtilityProcess();
+      forkMock.mockReturnValue(dedicatedChild);
+
       const restartClient = new WorkspaceClient({
         maxRestartAttempts: 1,
         showCrashDialog: false,
         healthCheckIntervalMs: 1000,
       });
-      const restartChild = forkMock.mock.results.at(-1)!.value as MockUtilityProcess;
 
       // Make it ready and load a project
-      restartChild.emit("message", { type: "ready" });
+      dedicatedChild.emit("message", { type: "ready" });
       const loadCall = restartClient.loadProject("/my-project");
-      const origCall = restartChild.postMessage.mock.calls.at(-1)!;
-      restartChild.emit("message", {
+      const origCall = dedicatedChild.postMessage.mock.calls.at(-1)!;
+      dedicatedChild.emit("message", {
         type: "load-project-result",
         requestId: (origCall[0] as { requestId: string }).requestId,
       });
       await loadCall;
 
       // Simulate host crash
-      restartChild.emit("exit", 1);
-
       const restartChild2 = new MockUtilityProcess();
       forkMock.mockReturnValue(restartChild2);
+      dedicatedChild.emit("exit", 1);
 
       // Advance timer to trigger restart
       vi.advanceTimersByTime(2001);
@@ -335,6 +337,8 @@ describe("WorkspaceClient resilience", () => {
       restartChild2.emit("message", { type: "ready" });
 
       // Flush microtasks for the .then() chain
+      await Promise.resolve();
+      await Promise.resolve();
       await Promise.resolve();
       await Promise.resolve();
 
