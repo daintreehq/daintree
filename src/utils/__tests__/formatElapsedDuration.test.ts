@@ -10,6 +10,12 @@ describe("formatElapsedDuration", () => {
     expect(formatElapsedDuration(-5000)).toBe("0s");
   });
 
+  it("returns '0s' for non-finite values", () => {
+    expect(formatElapsedDuration(NaN)).toBe("0s");
+    expect(formatElapsedDuration(Infinity)).toBe("0s");
+    expect(formatElapsedDuration(-Infinity)).toBe("0s");
+  });
+
   it("returns seconds for sub-minute durations", () => {
     expect(formatElapsedDuration(1000)).toBe("1s");
     expect(formatElapsedDuration(45_000)).toBe("45s");
