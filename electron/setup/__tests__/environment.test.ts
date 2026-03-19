@@ -56,6 +56,30 @@ function getCandidatePaths(): string[] {
     .filter((p) => !p.includes("gpu-disabled.flag"));
 }
 
+describe("V8 flag setup", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    vi.resetAllMocks();
+    Object.defineProperty(process, "platform", { value: "darwin", writable: true });
+    process.argv = ["electron", "main.js"];
+  });
+
+  afterEach(() => {
+    Object.defineProperty(process, "platform", { value: originalPlatform, writable: true });
+    process.argv = originalArgv;
+  });
+
+  it("sets --optimize_for_size V8 flag for compact code generation", async () => {
+    fsMock.existsSync.mockReturnValue(false);
+
+    await import("../environment.js");
+
+    const nodeV8 = (await import("node:v8")).default;
+    expect(nodeV8.setFlagsFromString).toHaveBeenCalledWith("--expose_gc");
+    expect(nodeV8.setFlagsFromString).toHaveBeenCalledWith("--optimize_for_size");
+  });
+});
+
 describe("Windows Git PATH discovery", () => {
   beforeEach(() => {
     vi.resetModules();

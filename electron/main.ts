@@ -71,8 +71,8 @@ protocol.registerSchemesAsPrivileged([
   },
 ]);
 
-// Increase V8 heap size for renderer processes to handle large clipboard data
-app.commandLine.appendSwitch("js-flags", "--max-old-space-size=4096");
+// V8 tuning for renderer processes: heap size limit and compact code preference
+app.commandLine.appendSwitch("js-flags", "--max-old-space-size=4096 --optimize-for-size");
 
 // Keep the renderer process at full priority and prevent AudioContext suspension
 app.commandLine.appendSwitch("disable-renderer-backgrounding");
