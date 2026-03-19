@@ -4,6 +4,7 @@ import { SearchablePalette } from "@/components/ui/SearchablePalette";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import { getBrandColorHex } from "@/lib/colorUtils";
 import { Lock } from "lucide-react";
+import { useKeybindingDisplay } from "@/hooks/useKeybinding";
 import type { SendToAgentItem } from "@/hooks/useSendToAgentPalette";
 
 export interface SendToAgentPaletteProps {
@@ -95,6 +96,8 @@ export function SendToAgentPalette({
     [selectItem]
   );
 
+  const newTerminalShortcut = useKeybindingDisplay("terminal.new");
+
   return (
     <SearchablePalette<SendToAgentItem>
       isOpen={isOpen}
@@ -125,6 +128,21 @@ export function SendToAgentPalette({
       emptyMessage="No other terminals available"
       noMatchMessage={`No terminals match "${query}"`}
       totalResults={totalResults}
+      emptyContent={
+        <p className="mt-2 text-xs text-canopy-text/40">
+          {newTerminalShortcut ? (
+            <>
+              Press{" "}
+              <kbd className="px-1.5 py-0.5 rounded-[var(--radius-sm)] bg-canopy-border text-canopy-text/60">
+                {newTerminalShortcut}
+              </kbd>{" "}
+              to create a new terminal.
+            </>
+          ) : (
+            "Create another terminal to send selections."
+          )}
+        </p>
+      }
     />
   );
 }

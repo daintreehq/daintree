@@ -232,7 +232,7 @@ AppPaletteDialog.Empty = function AppPaletteEmpty({
   return (
     <div className="px-3 py-8 text-center text-canopy-text/50 text-sm">
       {query.trim() ? <>{noMatchMessage || `No items match "${query}"`}</> : <>{emptyMessage}</>}
-      {children}
+      {!query.trim() && children}
     </div>
   );
 };
