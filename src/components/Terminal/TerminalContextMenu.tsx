@@ -15,7 +15,6 @@ import { formatWithBracketedPaste } from "@shared/utils/terminalInputProtocol";
 import { fireWatchNotification } from "@/lib/watchNotification";
 import {
   ArrowDownFromLine,
-  ArrowDownToLine,
   Bell,
   BellOff,
   Bot,
@@ -43,6 +42,7 @@ import {
   Trash2,
   Unlock,
 } from "lucide-react";
+import { DockToBottomIcon } from "@/components/icons";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -409,7 +409,7 @@ export function TerminalContextMenu({
         onSelect={() => handleAction(currentLocation === "grid" ? "move-to-dock" : "move-to-grid")}
       >
         {currentLocation === "grid" ? (
-          <ArrowDownToLine className={ICON_CLASS} aria-hidden="true" />
+          <DockToBottomIcon className={ICON_CLASS} />
         ) : (
           <LayoutGrid className={ICON_CLASS} aria-hidden="true" />
         )}
