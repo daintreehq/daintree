@@ -21,9 +21,8 @@ export interface SendToAgentItem {
   isInputLocked?: boolean;
 }
 
-// Module-level state for the opener function
-let pendingSourceId: string | null = null;
-let pendingSelection: string = "";
+// Module-level state for the opener function (object to avoid react-compiler reassignment warning)
+const pendingState = { sourceId: null as string | null, selection: "" };
 
 export function openSendToAgentPalette(sourceTerminalId: string): boolean {
   const selection = terminalInstanceService.getCachedSelection(sourceTerminalId);
@@ -40,8 +39,8 @@ export function openSendToAgentPalette(sourceTerminalId: string): boolean {
   );
   if (!hasTargets) return false;
 
-  pendingSourceId = sourceTerminalId;
-  pendingSelection = selection;
+  pendingState.sourceId = sourceTerminalId;
+  pendingState.selection = selection;
   usePaletteStore.getState().openPalette("send-to-agent");
   return true;
 }
@@ -61,7 +60,7 @@ export function useSendToAgentPalette() {
   const terminals = useTerminalStore(useShallow((state) => state.terminals));
 
   const items = useMemo<SendToAgentItem[]>(() => {
-    const sourceId = pendingSourceId;
+    const sourceId = pendingState.sourceId;
     const result: SendToAgentItem[] = [];
 
     for (const t of terminals) {
@@ -110,7 +109,7 @@ export function useSendToAgentPalette() {
 
   const selectItem = useCallback(
     (item: SendToAgentItem) => {
-      const text = pendingSelection;
+      const text = pendingState.selection;
       if (!text) {
         palette.close();
         return;
@@ -129,8 +128,8 @@ export function useSendToAgentPalette() {
       }
 
       palette.close();
-      pendingSourceId = null;
-      pendingSelection = "";
+      pendingState.sourceId = null;
+      pendingState.selection = "";
     },
     [palette]
   );
