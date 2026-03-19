@@ -139,6 +139,11 @@ export function PromptHistoryPalette({ onOpenRef, ...props }: PromptHistoryPalet
       itemIdPrefix="prompt-history-option"
       emptyMessage="No history yet"
       noMatchMessage="No prompts match your search"
+      emptyContent={
+        <p className="mt-2 text-xs text-canopy-text/40">
+          History appears here as you send prompts to agents.
+        </p>
+      }
       footer={footer}
     />
   );

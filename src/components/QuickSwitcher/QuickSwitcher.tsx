@@ -1,6 +1,7 @@
 import { useCallback } from "react";
 import { SearchablePalette } from "@/components/ui/SearchablePalette";
 import { QuickSwitcherItem } from "./QuickSwitcherItem";
+import { useKeybindingDisplay } from "@/hooks/useKeybinding";
 import type {
   QuickSwitcherItem as QuickSwitcherItemData,
   UseQuickSwitcherReturn,
@@ -41,6 +42,8 @@ export function QuickSwitcher({
     [selectItem]
   );
 
+  const newTerminalShortcut = useKeybindingDisplay("terminal.new");
+
   return (
     <SearchablePalette<QuickSwitcherItemData>
       isOpen={isOpen}
@@ -71,6 +74,21 @@ export function QuickSwitcher({
       emptyMessage="No items available"
       noMatchMessage={`No items match "${query}"`}
       totalResults={totalResults}
+      emptyContent={
+        <p className="mt-2 text-xs text-canopy-text/40">
+          {newTerminalShortcut ? (
+            <>
+              Press{" "}
+              <kbd className="px-1.5 py-0.5 rounded-[var(--radius-sm)] bg-canopy-border text-canopy-text/60">
+                {newTerminalShortcut}
+              </kbd>{" "}
+              to create a terminal.
+            </>
+          ) : (
+            "Create a terminal to get started."
+          )}
+        </p>
+      }
     />
   );
 }

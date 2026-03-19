@@ -242,6 +242,11 @@ export function CommandPicker({
       itemIdPrefix="command"
       emptyMessage="No commands available"
       noMatchMessage={`No commands match "${query}"`}
+      emptyContent={
+        <p className="mt-2 text-xs text-canopy-text/40">
+          Commands are context-dependent and may vary by project.
+        </p>
+      }
     />
   );
 }
