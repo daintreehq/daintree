@@ -25,19 +25,17 @@ describe("PROJECT_HEALTH_QUERY", () => {
     expect(PROJECT_HEALTH_QUERY).toContain("totalCount");
   });
 
-  it("uses alias for merged PRs to avoid conflict with open PR count", () => {
-    expect(PROJECT_HEALTH_QUERY).toContain("recentMergedPRs: pullRequests");
-    expect(PROJECT_HEALTH_QUERY).toContain("states: MERGED");
-    expect(PROJECT_HEALTH_QUERY).toContain("mergedAt");
+  it("uses search API for accurate merged PR counts per range", () => {
+    expect(PROJECT_HEALTH_QUERY).toContain("mergedPRs60: search");
+    expect(PROJECT_HEALTH_QUERY).toContain("mergedPRs120: search");
+    expect(PROJECT_HEALTH_QUERY).toContain("mergedPRs180: search");
+    expect(PROJECT_HEALTH_QUERY).toContain("issueCount");
   });
 
-  it("fetches up to 100 merged PRs to cover longer time ranges", () => {
-    expect(PROJECT_HEALTH_QUERY).toContain("first: 100");
-  });
-
-  it("does NOT use MERGED_AT as orderBy (not a valid PullRequestOrderField)", () => {
-    expect(PROJECT_HEALTH_QUERY).not.toContain("MERGED_AT");
-    expect(PROJECT_HEALTH_QUERY).toContain("UPDATED_AT");
+  it("accepts merged search query variables for each range", () => {
+    expect(PROJECT_HEALTH_QUERY).toContain("$merged60: String!");
+    expect(PROJECT_HEALTH_QUERY).toContain("$merged120: String!");
+    expect(PROJECT_HEALTH_QUERY).toContain("$merged180: String!");
   });
 
   it("fetches open issue and PR counts", () => {

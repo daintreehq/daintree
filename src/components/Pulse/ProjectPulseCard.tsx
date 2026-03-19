@@ -141,10 +141,7 @@ function HealthSignals({
     systemClient.openExternal(url);
   };
 
-  const cutoff = Date.now() - rangeDays * 24 * 60 * 60 * 1000;
-  const mergedInRange = health.mergeVelocity.recentMergedDates.filter(
-    (d) => new Date(d).getTime() >= cutoff
-  ).length;
+  const mergedInRange = health.mergeVelocity.mergedCounts[rangeDays] ?? 0;
 
   return (
     <div className="flex items-center gap-2 flex-wrap">
