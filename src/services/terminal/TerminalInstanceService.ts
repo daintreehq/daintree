@@ -158,9 +158,10 @@ class TerminalInstanceService {
             }
           }
           if (!managed.fileLinksDisposable) {
-            const getCwd = this.cwdProviders.get(id) ?? (() => "");
             try {
-              managed.fileLinksDisposable = createFileLinksAddon(managed.terminal, () => getCwd());
+              managed.fileLinksDisposable = createFileLinksAddon(managed.terminal, () =>
+                (this.cwdProviders.get(id) ?? (() => ""))()
+              );
             } catch (err) {
               logWarn("Failed to recreate FileLinksAddon", { id, error: err });
             }
@@ -702,8 +703,10 @@ class TerminalInstanceService {
 
     // For terminals starting at BACKGROUND tier, dispose tier-managed addons
     // immediately. The first applyRendererPolicy call is a no-op when initial
-    // tier matches, so onTierApplied won't fire to dispose them.
+    // tier matches, so onTierApplied won't fire to dispose them. We also set
+    // lastAppliedTier so that a later promotion is seen as an upgrade.
     if (initialTier === TerminalRefreshTier.BACKGROUND) {
+      managed.lastAppliedTier = TerminalRefreshTier.BACKGROUND;
       try {
         managed.imageAddon?.dispose();
       } catch {

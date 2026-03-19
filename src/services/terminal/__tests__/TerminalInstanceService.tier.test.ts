@@ -235,6 +235,19 @@ describe("TerminalInstanceService - Activity Tier", () => {
       expect(createFileLinksAddon).not.toHaveBeenCalled();
     });
 
+    it("should null addons and set lastAppliedTier for terminals created at BACKGROUND tier", () => {
+      const managed = service.prewarmTerminal("t-bg", "terminal", {});
+      const m = managed as unknown as {
+        imageAddon: unknown;
+        fileLinksDisposable: unknown;
+        lastAppliedTier: TerminalRefreshTier;
+      };
+
+      expect(m.imageAddon).toBeNull();
+      expect(m.fileLinksDisposable).toBeNull();
+      expect(m.lastAppliedTier).toBe(TerminalRefreshTier.BACKGROUND);
+    });
+
     it("should handle destroy on background-tier terminal with null addons", () => {
       const managed = makeMockManaged({
         lastAppliedTier: TerminalRefreshTier.BACKGROUND,
