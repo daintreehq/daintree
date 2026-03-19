@@ -16,6 +16,7 @@ import type {
 
 import {
   GitHubAuth,
+  GITHUB_API_TIMEOUT_MS,
   REPO_STATS_QUERY,
   PROJECT_HEALTH_QUERY,
   LIST_ISSUES_QUERY,
@@ -227,6 +228,7 @@ export async function getRepoStats(
     const result = (await client(REPO_STATS_QUERY, {
       owner: context.owner,
       repo: context.repo,
+      request: { signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS) },
     })) as GraphQlQueryResponseData;
 
     const repository = result?.repository;
@@ -381,6 +383,7 @@ export async function getProjectHealth(
     const result = (await client(PROJECT_HEALTH_QUERY, {
       owner: context.owner,
       repo: context.repo,
+      request: { signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS) },
     })) as GraphQlQueryResponseData;
 
     const repository = result?.repository;
@@ -565,7 +568,9 @@ export async function batchCheckLinkedPRs(
 
   try {
     const query = buildBatchPRQuery(context.owner, context.repo, candidates);
-    const response = (await client(query)) as Record<string, unknown>;
+    const response = (await client(query, {
+      request: { signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS) },
+    })) as Record<string, unknown>;
 
     const results = parseBatchPRResponse(response, candidates);
     return { results };
@@ -579,7 +584,9 @@ export async function batchCheckLinkedPRs(
       ) {
         try {
           const retryQuery = buildBatchPRQuery(freshContext.owner, freshContext.repo, candidates);
-          const retryResponse = (await client(retryQuery)) as Record<string, unknown>;
+          const retryResponse = (await client(retryQuery, {
+            request: { signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS) },
+          })) as Record<string, unknown>;
           return { results: parseBatchPRResponse(retryResponse, candidates) };
         } catch (retryError) {
           return { results: new Map(), error: parseGitHubError(retryError) };
@@ -630,6 +637,7 @@ export async function assignIssue(
           "Content-Type": "application/json",
         },
         body: JSON.stringify({ assignees: [username] }),
+        signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS),
       });
 
       if (!response.ok) {
@@ -740,6 +748,7 @@ function updateIssueAssigneeInCache(
 
 function parseGitHubError(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
+  const isTimeout = error instanceof Error && error.name === "TimeoutError";
 
   if (message.includes("rate limit") || message.includes("API rate limit")) {
     return "GitHub rate limit exceeded. Try again in a few minutes.";
@@ -758,13 +767,15 @@ function parseGitHubError(error: unknown): string {
   }
 
   if (
+    isTimeout ||
     message.includes("ENOTFOUND") ||
     message.includes("ETIMEDOUT") ||
     message.includes("ECONNREFUSED") ||
     message.includes("ECONNRESET") ||
     message.includes("EAI_AGAIN") ||
     message.includes("network") ||
-    message.includes("fetch failed")
+    message.includes("fetch failed") ||
+    message.includes("timed out")
   ) {
     return "Cannot reach GitHub. Check your internet connection.";
   }
@@ -1012,6 +1023,7 @@ export async function listIssues(
           type: "ISSUE",
           cursor: options.cursor,
           limit: 20,
+          request: { signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS) },
         })) as GraphQlQueryResponseData;
 
         const search = response?.search;
@@ -1034,6 +1046,7 @@ export async function listIssues(
           cursor: options.cursor,
           limit: 20,
           orderBy,
+          request: { signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS) },
         })) as GraphQlQueryResponseData;
 
         const issues = response?.repository?.issues;
@@ -1127,6 +1140,7 @@ export async function listPullRequests(
           type: "ISSUE",
           cursor: options.cursor,
           limit: 20,
+          request: { signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS) },
         })) as GraphQlQueryResponseData;
 
         const search = response?.search;
@@ -1149,6 +1163,7 @@ export async function listPullRequests(
           cursor: options.cursor,
           limit: 20,
           orderBy,
+          request: { signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS) },
         })) as GraphQlQueryResponseData;
 
         const pullRequests = response?.repository?.pullRequests;
@@ -1223,6 +1238,7 @@ export async function getIssueTooltip(
         owner: context.owner,
         repo: context.repo,
         number: issueNumber,
+        request: { signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS) },
       })) as GraphQlQueryResponseData;
 
       const issue = response?.repository?.issue;
@@ -1282,6 +1298,7 @@ export async function getPRTooltip(cwd: string, prNumber: number): Promise<PRToo
         owner: context.owner,
         repo: context.repo,
         number: prNumber,
+        request: { signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS) },
       })) as GraphQlQueryResponseData;
 
       const pr = response?.repository?.pullRequest;
@@ -1346,6 +1363,7 @@ export async function getIssueByNumber(
         owner: context.owner,
         repo: context.repo,
         number: issueNumber,
+        request: { signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS) },
       })) as GraphQlQueryResponseData;
 
       const issue = response?.repository?.issue;
@@ -1379,6 +1397,7 @@ export async function getPRByNumber(cwd: string, prNumber: number): Promise<GitH
         owner: context.owner,
         repo: context.repo,
         number: prNumber,
+        request: { signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS) },
       })) as GraphQlQueryResponseData;
 
       const pr = response?.repository?.pullRequest;

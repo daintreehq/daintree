@@ -1,6 +1,6 @@
 import * as fs from "fs/promises";
 import * as path from "path";
-import { simpleGit } from "simple-git";
+import { createGit } from "../utils/git.js";
 import type { FileTreeNode } from "../../shared/types/ipc.js";
 
 export class FileTreeService {
@@ -52,7 +52,7 @@ export class FileTreeService {
       const ignoredPaths = new Set<string>();
 
       try {
-        const git = simpleGit(resolvedBasePath);
+        const git = createGit(resolvedBasePath);
         if (pathsToCheck.length > 0) {
           const ignored = await git.checkIgnore(pathsToCheck);
           ignored.forEach((p) => ignoredPaths.add(toGitPath(p)));

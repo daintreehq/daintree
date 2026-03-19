@@ -1,5 +1,6 @@
 import type { CanopyCommand, CommandResult } from "../../../shared/types/commands.js";
 import { getGitHubToken, getRepoContext, clearGitHubCaches } from "../GitHubService.js";
+import { GITHUB_API_TIMEOUT_MS } from "../github/index.js";
 
 interface CreateIssueArgs {
   title?: string;
@@ -187,6 +188,7 @@ export const githubCreateIssueCommand: CanopyCommand<CreateIssueArgs, CreateIssu
           "Content-Type": "application/json",
         },
         body: JSON.stringify(requestBody),
+        signal: AbortSignal.timeout(GITHUB_API_TIMEOUT_MS),
       });
 
       if (!response.ok) {

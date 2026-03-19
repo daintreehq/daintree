@@ -1,4 +1,5 @@
-import { simpleGit, SimpleGit } from "simple-git";
+import type { SimpleGit } from "simple-git";
+import { createGit } from "../utils/git.js";
 import { existsSync } from "fs";
 import { logDebug, logError } from "../utils/logger.js";
 import type {
@@ -143,7 +144,7 @@ export class ProjectPulseService {
       throw new Error(`Worktree path does not exist: ${worktreePath}`);
     }
 
-    const git = simpleGit(worktreePath);
+    const git = createGit(worktreePath);
     const startTime = Date.now();
 
     const isRepo = await git.checkIsRepo();

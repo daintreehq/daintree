@@ -1,7 +1,7 @@
 import { readFile } from "fs/promises";
 import { join as pathJoin } from "path";
 import { existsSync } from "fs";
-import { simpleGit } from "simple-git";
+import { createGit } from "../utils/git.js";
 import type PQueue from "p-queue";
 import type { WorktreeChanges, FileChangeDetail } from "../../shared/types/git.js";
 import type {
@@ -855,7 +855,7 @@ export class WorktreeMonitor {
     }
 
     try {
-      const git = simpleGit(this.path);
+      const git = createGit(this.path);
       const log = await git.log({ maxCount: 1 });
       const lastCommitMsg = log.latest?.message;
 

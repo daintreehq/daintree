@@ -1,6 +1,6 @@
 import * as fs from "fs/promises";
 import * as path from "path";
-import { simpleGit } from "simple-git";
+import { createGit } from "../utils/git.js";
 import { Cache } from "../utils/cache.js";
 import type { Dirent } from "fs";
 
@@ -138,7 +138,7 @@ async function loadFilesFromDisk(cwd: string): Promise<string[]> {
 }
 
 async function loadGitFiles(cwd: string): Promise<string[]> {
-  const git = simpleGit(cwd);
+  const git = createGit(cwd);
   const isRepo = await git.checkIsRepo();
   if (!isRepo) {
     return [];
@@ -154,7 +154,7 @@ async function loadGitFiles(cwd: string): Promise<string[]> {
     args.push("--", pathspec);
   }
 
-  const output = await simpleGit(gitRoot).raw(args);
+  const output = await createGit(gitRoot).raw(args);
   const prefix = pathspec ? `${pathspec.replace(/\/$/, "")}/` : "";
 
   const files = output
