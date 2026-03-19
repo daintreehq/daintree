@@ -82,8 +82,7 @@ const IssueBadge = memo(function IssueBadge({
         <TooltipTrigger asChild>
           <button
             type="button"
-            onClick={(e) => {
-              e.stopPropagation();
+            onClick={() => {
               onOpen?.();
             }}
             className={cn(
@@ -102,7 +101,7 @@ const IssueBadge = memo(function IssueBadge({
             />
             <span
               className={cn(
-                "truncate flex-1 min-w-0",
+                "truncate flex-1 min-w-0 hover:underline",
                 isHeadline
                   ? isActive
                     ? "text-text-primary font-medium"
@@ -175,8 +174,7 @@ const PRBadge = memo(function PRBadge({
         <TooltipTrigger asChild>
           <button
             type="button"
-            onClick={(e) => {
-              e.stopPropagation();
+            onClick={() => {
               onOpen?.();
             }}
             className="flex items-center gap-1 text-xs text-left cursor-pointer transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent min-w-0"
@@ -189,7 +187,7 @@ const PRBadge = memo(function PRBadge({
               />
             )}
             <GitPullRequest className={cn("w-3 h-3 shrink-0", prStateColor)} aria-hidden="true" />
-            <span className={cn("font-mono", prStateColor)}>#{prNumber}</span>
+            <span className={cn("font-mono hover:underline", prStateColor)}>#{prNumber}</span>
           </button>
         </TooltipTrigger>
         <TooltipContent side="right" align="start" className="p-3">
@@ -304,10 +302,16 @@ export function WorktreeHeader({
       <div className="flex items-center gap-2 min-h-[22px]">
         <div className="flex items-center gap-2 min-w-0 flex-1">
           {isMainWorktree && (
-            <Sprout className="w-3.5 h-3.5 text-canopy-text/60 shrink-0" aria-hidden="true" />
+            <Sprout
+              className="w-3.5 h-3.5 text-canopy-text/60 shrink-0 pointer-events-none"
+              aria-hidden="true"
+            />
           )}
           {isPinned && !isMainWorktree && (
-            <Pin className="w-3 h-3 text-canopy-text/40 shrink-0" aria-label="Pinned" />
+            <Pin
+              className="w-3 h-3 text-canopy-text/40 shrink-0 pointer-events-none"
+              aria-label="Pinned"
+            />
           )}
           {hasIssueTitle ? (
             <IssueBadge
@@ -327,7 +331,9 @@ export function WorktreeHeader({
             />
           )}
           {worktree.isDetached && (
-            <span className="text-status-warning text-xs font-medium shrink-0">(detached)</span>
+            <span className="text-status-warning text-xs font-medium shrink-0 pointer-events-none">
+              (detached)
+            </span>
           )}
         </div>
 
@@ -361,7 +367,7 @@ export function WorktreeHeader({
           {canCollapse && (
             <button
               onClick={onToggleCollapse}
-              className="p-1 text-canopy-text/60 hover:text-text-primary hover:bg-overlay-soft rounded transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent"
+              className="p-1.5 text-canopy-text/60 hover:text-text-primary hover:bg-overlay-soft rounded transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent"
               aria-expanded={!isCollapsed}
               aria-controls={isCollapsed ? undefined : contentId}
               aria-label={isCollapsed ? "Expand card" : "Collapse card"}
@@ -382,7 +388,7 @@ export function WorktreeHeader({
                   <DropdownMenuTrigger asChild>
                     <button
                       onClick={(e) => e.stopPropagation()}
-                      className="p-1 text-canopy-text/60 hover:text-text-primary hover:bg-overlay-soft rounded transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent"
+                      className="p-1.5 text-canopy-text/60 hover:text-text-primary hover:bg-overlay-soft rounded transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent"
                       aria-label="More actions"
                       data-testid="worktree-actions-menu"
                     >
@@ -477,15 +483,14 @@ export function WorktreeHeader({
             {hasPlanFile && badges.onOpenPlan && (
               <button
                 type="button"
-                onClick={(e) => {
-                  e.stopPropagation();
+                onClick={() => {
                   badges.onOpenPlan?.();
                 }}
                 className="flex items-center gap-1 text-xs text-left cursor-pointer transition-colors text-canopy-text/70 hover:text-canopy-text focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent"
                 aria-label="View agent plan file"
               >
                 <FileText className="w-3 h-3 shrink-0 text-canopy-accent/70" aria-hidden="true" />
-                <span className="font-mono">{worktree.planFilePath ?? "Plan"}</span>
+                <span className="font-mono hover:underline">{worktree.planFilePath ?? "Plan"}</span>
               </button>
             )}
           </div>

@@ -2,7 +2,7 @@
  * @vitest-environment jsdom
  */
 import { describe, it, expect, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, fireEvent } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { WorktreeHeader, type WorktreeHeaderProps } from "../WorktreeHeader";
 import type { WorktreeState } from "@shared/types";
@@ -292,5 +292,158 @@ describe("WorktreeHeader plan file badge", () => {
     const planButton = screen.getByRole("button", { name: /View agent plan file/ });
     planButton.click();
     expect(onOpenPlan).toHaveBeenCalledOnce();
+  });
+});
+
+describe("WorktreeHeader click bubbling", () => {
+  function renderHeaderInWrapper(overrides: Partial<WorktreeHeaderProps> = {}) {
+    const onParentClick = vi.fn();
+    const result = render(
+      <div onClick={onParentClick} data-testid="parent-wrapper">
+        <WorktreeHeader
+          worktree={baseWorktree}
+          isActive={false}
+          isMainWorktree={false}
+          isPinned={false}
+          branchLabel="feature/test"
+          worktreeErrorCount={0}
+          badges={{}}
+          menu={baseMenu}
+          {...overrides}
+        />
+      </div>
+    );
+    return { ...result, onParentClick };
+  }
+
+  it("issue badge click bubbles to parent (card selection)", () => {
+    const onOpenIssue = vi.fn();
+    const { onParentClick } = renderHeaderInWrapper({
+      worktree: { ...baseWorktree, issueNumber: 42, issueTitle: "Test issue" },
+      badges: { onOpenIssue },
+    });
+
+    const issueButton = screen.getByRole("button", { name: /Open issue #42/ });
+    fireEvent.click(issueButton);
+    expect(onOpenIssue).toHaveBeenCalledOnce();
+    expect(onParentClick).toHaveBeenCalledOnce();
+  });
+
+  it("PR badge click bubbles to parent (card selection)", () => {
+    const onOpenPR = vi.fn();
+    const { onParentClick } = renderHeaderInWrapper({
+      worktree: { ...baseWorktree, prNumber: 101, prState: "open" },
+      badges: { onOpenPR },
+    });
+
+    const prButton = screen.getByRole("button", { name: /pull request #101/ });
+    fireEvent.click(prButton);
+    expect(onOpenPR).toHaveBeenCalledOnce();
+    expect(onParentClick).toHaveBeenCalledOnce();
+  });
+
+  it("plan badge click bubbles to parent (card selection)", () => {
+    const onOpenPlan = vi.fn();
+    const { onParentClick } = renderHeaderInWrapper({
+      worktree: { ...baseWorktree, hasPlanFile: true, planFilePath: "TODO.md" },
+      badges: { onOpenPlan },
+    });
+
+    const planButton = screen.getByRole("button", { name: /View agent plan file/ });
+    fireEvent.click(planButton);
+    expect(onOpenPlan).toHaveBeenCalledOnce();
+    expect(onParentClick).toHaveBeenCalledOnce();
+  });
+
+  it("more actions button click does NOT bubble to parent", () => {
+    const { onParentClick } = renderHeaderInWrapper();
+
+    const menuButton = screen.getByTestId("worktree-actions-menu");
+    fireEvent.click(menuButton);
+    expect(onParentClick).not.toHaveBeenCalled();
+  });
+
+  it("collapse button click does NOT bubble to parent", () => {
+    const onToggleCollapse = vi.fn((e: React.MouseEvent) => e.stopPropagation());
+    const { onParentClick } = renderHeaderInWrapper({
+      canCollapse: true,
+      onToggleCollapse,
+    });
+
+    const collapseButton = screen.getByRole("button", { name: /Collapse card/ });
+    fireEvent.click(collapseButton);
+    expect(onToggleCollapse).toHaveBeenCalledOnce();
+    expect(onParentClick).not.toHaveBeenCalled();
+  });
+});
+
+describe("WorktreeHeader decorative elements", () => {
+  it("Sprout icon has pointer-events-none when isMainWorktree", () => {
+    const { container } = renderHeader({ isMainWorktree: true });
+    const sprout = container.querySelector('svg[aria-hidden="true"]');
+    expect(sprout).toBeDefined();
+    expect(sprout!.getAttribute("class")).toContain("pointer-events-none");
+  });
+
+  it("Pin icon has pointer-events-none when isPinned", () => {
+    const { container } = renderHeader({ isPinned: true });
+    const pin = container.querySelector('svg[aria-label="Pinned"]');
+    expect(pin).toBeDefined();
+    expect(pin!.getAttribute("class")).toContain("pointer-events-none");
+  });
+
+  it("(detached) span has pointer-events-none", () => {
+    renderHeader({
+      worktree: { ...baseWorktree, isDetached: true },
+    });
+    const detached = screen.getByText("(detached)");
+    expect(detached.className).toContain("pointer-events-none");
+  });
+});
+
+describe("WorktreeHeader hover:underline on badges", () => {
+  it("issue badge text span has hover:underline", () => {
+    const { container } = renderHeader({
+      worktree: { ...baseWorktree, issueNumber: 42, issueTitle: "Test issue" },
+      badges: { onOpenIssue: noop },
+    });
+    const textSpan = container.querySelector('button[aria-label*="Open issue"] .truncate');
+    expect(textSpan).toBeDefined();
+    expect(textSpan!.className).toContain("hover:underline");
+  });
+
+  it("PR badge number span has hover:underline", () => {
+    renderHeader({
+      worktree: { ...baseWorktree, prNumber: 101, prState: "open" },
+      badges: { onOpenPR: noop },
+    });
+    const prSpan = screen.getByText("#101");
+    expect(prSpan.className).toContain("hover:underline");
+  });
+
+  it("plan badge text span has hover:underline", () => {
+    renderHeader({
+      worktree: { ...baseWorktree, hasPlanFile: true, planFilePath: "TODO.md" },
+      badges: { onOpenPlan: noop },
+    });
+    const planSpan = screen.getByText("TODO.md");
+    expect(planSpan.className).toContain("hover:underline");
+  });
+});
+
+describe("WorktreeHeader icon button hit targets", () => {
+  it("collapse button has p-1.5 for WCAG 24px minimum", () => {
+    const { container } = renderHeader({
+      canCollapse: true,
+      onToggleCollapse: noop,
+    });
+    const collapseButton = screen.getByRole("button", { name: /Collapse card/ });
+    expect(collapseButton.className).toContain("p-1.5");
+  });
+
+  it("more actions button has p-1.5 for WCAG 24px minimum", () => {
+    renderHeader();
+    const menuButton = screen.getByTestId("worktree-actions-menu");
+    expect(menuButton.className).toContain("p-1.5");
   });
 });
