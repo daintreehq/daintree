@@ -139,7 +139,7 @@ export function LogFilters({
             onClick={() => setIsSourcesOpen(!isSourcesOpen)}
             aria-expanded={isSourcesOpen}
           >
-            Sources {filters.sources?.length ? `(${filters.sources.length})` : ""}
+            Sources {filters.sources?.length ? <span className="tabular-nums">({filters.sources.length})</span> : ""}
           </Button>
           {isSourcesOpen && (
             <div

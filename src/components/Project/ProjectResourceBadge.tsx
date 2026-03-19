@@ -76,11 +76,11 @@ export function ProjectResourceBadge() {
     <div className="px-4 py-2 border-t border-divider surface-chrome flex items-center justify-between shrink-0">
       <div className="flex items-center gap-2 min-w-0">
         <span className="inline-flex h-2 w-2 rounded-full bg-status-success/60 shrink-0" />
-        <span className="text-[10px] text-canopy-text/40 font-medium truncate">
+        <span className="text-[10px] tabular-nums text-canopy-text/40 font-medium truncate">
           {stats.runningProjects} project{stats.runningProjects !== 1 ? "s" : ""} active
         </span>
       </div>
-      <div className="text-[10px] text-canopy-text/30 font-mono tracking-tight shrink-0">
+      <div className="text-[10px] text-canopy-text/30 font-mono tabular-nums tracking-tight shrink-0">
         {stats.totalProcesses} proc · {stats.totalMemoryMB}MB
       </div>
     </div>
