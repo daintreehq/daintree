@@ -52,6 +52,7 @@ export const SEL = {
   terminal: {
     xtermRows: ".xterm-screen",
     xtermViewport: ".xterm-viewport",
+    xtermHelperTextarea: ".xterm-helper-textarea",
     cmEditor: ".cm-content",
     titleButton: '[aria-label*="title"]',
     searchInput: "[data-terminal-search-input]",

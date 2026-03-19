@@ -3,6 +3,7 @@ import { launchApp, closeApp, type AppContext } from "../helpers/launch";
 import { createFixtureRepo } from "../helpers/fixtures";
 import { openProject, dismissTelemetryConsent } from "../helpers/project";
 import { waitForTerminalText, runTerminalCommand } from "../helpers/terminal";
+import { expectTerminalFocused } from "../helpers/focus";
 import { getFirstGridPanel } from "../helpers/panels";
 import { SEL } from "../helpers/selectors";
 import { T_SHORT, T_MEDIUM, T_LONG, T_SETTLE } from "../helpers/timeouts";
@@ -75,6 +76,7 @@ test.describe.serial("Core: Terminal Search & Scrollback", () => {
 
       await panel.locator(SEL.terminal.xtermRows).click();
       await window.waitForTimeout(T_SETTLE);
+      await expectTerminalFocused(panel);
       await window.evaluate(() => window.dispatchEvent(new CustomEvent("canopy:find-in-panel")));
 
       await expect(panel.locator(SEL.terminal.searchInput)).toBeVisible({ timeout: T_MEDIUM });
