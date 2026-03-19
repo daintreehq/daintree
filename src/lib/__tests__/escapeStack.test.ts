@@ -94,6 +94,18 @@ describe("escapeStack", () => {
     expect(dispatchEscape()).toBe(false);
   });
 
+  it("survives a throwing handler and still returns true", () => {
+    const throwing = () => {
+      throw new Error("boom");
+    };
+    registerEscape(throwing);
+
+    const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    expect(dispatchEscape()).toBe(true);
+    expect(consoleSpy).toHaveBeenCalled();
+    consoleSpy.mockRestore();
+  });
+
   it("unregister middle entry preserves order of remaining", () => {
     const first = vi.fn();
     const second = vi.fn();

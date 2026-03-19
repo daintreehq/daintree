@@ -153,4 +153,27 @@ describe("useEscapeStack + useGlobalEscapeDispatcher", () => {
     expect(second).toHaveBeenCalledOnce();
     expect(first).not.toHaveBeenCalled();
   });
+
+  it("does not dispatch when event.defaultPrevented is true", () => {
+    const handler = vi.fn();
+
+    render(
+      <>
+        <Dispatcher />
+        <Layer enabled={true} onEscape={handler} />
+      </>
+    );
+
+    act(() => {
+      const event = new KeyboardEvent("keydown", {
+        key: "Escape",
+        bubbles: true,
+        cancelable: true,
+      });
+      event.preventDefault();
+      window.dispatchEvent(event);
+    });
+
+    expect(handler).not.toHaveBeenCalled();
+  });
 });
