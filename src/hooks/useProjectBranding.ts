@@ -33,13 +33,19 @@ function fetchBranding(projectId: string): void {
   const promise = projectClient
     .getSettings(projectId)
     .then((data) => {
-      brandingCache.set(projectId, data.projectIconSvg);
+      if (pendingFetches.get(projectId) === promise) {
+        brandingCache.set(projectId, data.projectIconSvg);
+      }
     })
     .catch(() => {
-      brandingCache.set(projectId, undefined);
+      if (pendingFetches.get(projectId) === promise) {
+        brandingCache.set(projectId, undefined);
+      }
     })
     .finally(() => {
-      pendingFetches.delete(projectId);
+      if (pendingFetches.get(projectId) === promise) {
+        pendingFetches.delete(projectId);
+      }
       notify();
     });
 
@@ -60,6 +66,7 @@ export function invalidateBrandingCache(projectId?: string): void {
 
 export function updateBrandingCache(projectId: string, svg: string | undefined): void {
   brandingCache.set(projectId, svg);
+  pendingFetches.delete(projectId);
   notify();
 }
 

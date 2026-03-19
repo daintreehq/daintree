@@ -225,4 +225,62 @@ describe("useProjectBranding", () => {
     expect(result.current.isLoading).toBe(false);
     expect(getSettingsMock).not.toHaveBeenCalled();
   });
+
+  it("stale fetch does not overwrite write-through value", async () => {
+    let resolveSettings: (v: { projectIconSvg?: string }) => void;
+    getSettingsMock.mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveSettings = resolve;
+      })
+    );
+
+    const { result } = renderHook(() => useProjectBranding("project-1"));
+    expect(result.current.isLoading).toBe(true);
+
+    // Write-through while fetch is in-flight
+    act(() => {
+      updateBrandingCache("project-1", "<svg>write-through</svg>");
+    });
+
+    expect(result.current.projectIconSvg).toBe("<svg>write-through</svg>");
+    expect(result.current.isLoading).toBe(false);
+
+    // Stale fetch resolves — should NOT overwrite
+    await act(async () => {
+      resolveSettings!({ projectIconSvg: "<svg>stale</svg>" });
+    });
+
+    expect(result.current.projectIconSvg).toBe("<svg>write-through</svg>");
+  });
+
+  it("stale fetch does not corrupt cache after invalidation + new fetch", async () => {
+    let resolveFirst: (v: { projectIconSvg?: string }) => void;
+    getSettingsMock.mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveFirst = resolve;
+      })
+    );
+
+    const { result } = renderHook(() => useProjectBranding("project-1"));
+    expect(result.current.isLoading).toBe(true);
+
+    // Invalidate while first fetch is in-flight, triggering a new fetch
+    getSettingsMock.mockResolvedValueOnce({ projectIconSvg: "<svg>fresh</svg>" });
+
+    act(() => {
+      invalidateBrandingCache("project-1");
+    });
+
+    // Wait for the second (fresh) fetch to complete
+    await waitFor(() => {
+      expect(result.current.projectIconSvg).toBe("<svg>fresh</svg>");
+    });
+
+    // Now the stale first fetch resolves — should NOT corrupt cache
+    await act(async () => {
+      resolveFirst!({ projectIconSvg: "<svg>stale</svg>" });
+    });
+
+    expect(result.current.projectIconSvg).toBe("<svg>fresh</svg>");
+  });
 });
