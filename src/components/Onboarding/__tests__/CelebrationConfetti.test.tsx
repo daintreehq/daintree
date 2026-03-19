@@ -17,40 +17,37 @@ vi.mock("framer-motion", () => {
 
 import { CelebrationConfetti } from "../CelebrationConfetti";
 
-describe("CelebrationConfetti", () => {
-  let matchMediaSpy: ReturnType<typeof vi.spyOn>;
+function stubMatchMedia(matches: boolean) {
+  vi.stubGlobal(
+    "matchMedia",
+    vi.fn((query: string) => ({
+      matches,
+      media: query,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    }))
+  );
+}
 
+describe("CelebrationConfetti", () => {
   beforeEach(() => {
-    matchMediaSpy = vi.spyOn(window, "matchMedia").mockImplementation(
-      (query: string) =>
-        ({
-          matches: false,
-          media: query,
-          addEventListener: vi.fn(),
-          removeEventListener: vi.fn(),
-        }) as unknown as MediaQueryList
-    );
+    stubMatchMedia(false);
   });
 
   it("renders particles when reduced motion is not active", () => {
-    const { container } = render(<CelebrationConfetti />);
+    render(<CelebrationConfetti />);
     const particles = document.body.querySelectorAll("[class*='rounded-full']");
     expect(particles.length).toBeGreaterThanOrEqual(6);
     expect(particles.length).toBeLessThanOrEqual(8);
   });
 
   it("renders nothing when prefers-reduced-motion is active", () => {
-    matchMediaSpy.mockImplementation(
-      (query: string) =>
-        ({
-          matches: true,
-          media: query,
-          addEventListener: vi.fn(),
-          removeEventListener: vi.fn(),
-        }) as unknown as MediaQueryList
-    );
+    stubMatchMedia(true);
 
-    const { container } = render(<CelebrationConfetti />);
+    render(<CelebrationConfetti />);
     const particles = document.body.querySelectorAll("[class*='rounded-full']");
     expect(particles.length).toBe(0);
   });
