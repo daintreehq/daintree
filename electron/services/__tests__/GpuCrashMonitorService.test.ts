@@ -153,11 +153,10 @@ describe("GpuCrashMonitorService", () => {
     it("logs non-GPU crash with full process details", async () => {
       await loadAndInit();
       emitChildProcessGone("Utility", "oom", 137, "canopy-workspace-host");
-      expect(console.warn).toHaveBeenCalledWith(expect.stringContaining("[ChildProcess]"));
-      expect(console.warn).toHaveBeenCalledWith(expect.stringContaining("reason=oom"));
-      expect(console.warn).toHaveBeenCalledWith(expect.stringContaining("exitCode=137"));
       expect(console.warn).toHaveBeenCalledWith(
-        expect.stringContaining("name=canopy-workspace-host")
+        expect.stringContaining(
+          "type=Utility, reason=oom, exitCode=137, name=canopy-workspace-host"
+        )
       );
     });
 
