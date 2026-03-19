@@ -8,6 +8,13 @@ import {
   serializeError,
 } from "../../shared/utils/ipcErrorSerialization.js";
 
+function sanitizePaths(msg: string): string {
+  return msg
+    .replace(/\/(?:Users|home|tmp|private|var)\/[^\s:]+/gi, "<path>")
+    .replace(/[A-Z]:[/\\](?:Users|Program Files|Windows|ProgramData)[^\s:]*/gi, "<path>")
+    .replace(/\\\\(?:[^\s\\]+)\\(?:[^\s:]+)/g, "<path>");
+}
+
 // Wrap ipcMain.handle globally to enforce sender validation on ALL IPC handlers
 // This must run before any handlers are registered
 export function enforceIpcSenderValidation(): void {
@@ -34,11 +41,12 @@ export function enforceIpcSenderValidation(): void {
         if (app.isPackaged) {
           console.error(`[IPC] Error on channel ${channel}:`, error);
           const serialized = serializeError(error);
-          serialized.message = serialized.message
-            .replace(/\/(?:Users|home|tmp|private|var)\/[^\s:]+/gi, "<path>")
-            .replace(/[A-Z]:[/\\](?:Users|Program Files|Windows|ProgramData)[^\s:]*/gi, "<path>")
-            .replace(/\\\\(?:[^\s\\]+)\\(?:[^\s:]+)/g, "<path>");
+          serialized.message = sanitizePaths(serialized.message);
           serialized.stack = undefined;
+          serialized.path = undefined;
+          serialized.context = undefined;
+          serialized.cause = undefined;
+          serialized.properties = undefined;
           return { __canopyIpcEnvelope: true as const, ok: false as const, error: serialized };
         }
         return wrapError(error);
@@ -67,11 +75,12 @@ export function enforceIpcSenderValidation(): void {
           if (app.isPackaged) {
             console.error(`[IPC] Error on channel ${channel}:`, error);
             const serialized = serializeError(error);
-            serialized.message = serialized.message
-              .replace(/\/(?:Users|home|tmp|private|var)\/[^\s:]+/gi, "<path>")
-              .replace(/[A-Z]:[/\\](?:Users|Program Files|Windows|ProgramData)[^\s:]*/gi, "<path>")
-              .replace(/\\\\(?:[^\s\\]+)\\(?:[^\s:]+)/g, "<path>");
+            serialized.message = sanitizePaths(serialized.message);
             serialized.stack = undefined;
+            serialized.path = undefined;
+            serialized.context = undefined;
+            serialized.cause = undefined;
+            serialized.properties = undefined;
             return { __canopyIpcEnvelope: true as const, ok: false as const, error: serialized };
           }
           return wrapError(error);
