@@ -157,6 +157,7 @@ export interface StoreSchema {
     migratedFromLocalStorage: boolean;
     checklist: {
       dismissed: boolean;
+      celebrationShown: boolean;
       items: {
         openedProject: boolean;
         launchedAgent: boolean;
@@ -263,6 +264,7 @@ const storeOptions = {
       migratedFromLocalStorage: false,
       checklist: {
         dismissed: false,
+        celebrationShown: false,
         items: {
           openedProject: false,
           launchedAgent: false,

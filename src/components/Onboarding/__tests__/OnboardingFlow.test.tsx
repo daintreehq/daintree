@@ -14,6 +14,7 @@ const defaultOnboardingState: OnboardingState = {
   newsletterPromptSeen: false,
   checklist: {
     dismissed: false,
+    celebrationShown: false,
     items: { openedProject: false, launchedAgent: false, createdWorktree: false },
   },
 };

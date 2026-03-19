@@ -976,6 +976,7 @@ export interface ElectronAPI {
     getChecklist(): Promise<ChecklistState>;
     dismissChecklist(): Promise<void>;
     markChecklistItem(item: ChecklistItemId): Promise<void>;
+    markChecklistCelebrationShown(): Promise<void>;
   };
   shortcutHints: {
     getCounts(): Promise<Record<string, number>>;

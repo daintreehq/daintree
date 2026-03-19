@@ -156,6 +156,7 @@ export interface ChecklistItems {
 
 export interface ChecklistState {
   dismissed: boolean;
+  celebrationShown: boolean;
   items: ChecklistItems;
 }
 
@@ -1451,6 +1452,10 @@ export interface IpcInvokeMap {
   };
   "onboarding:checklist-mark-item": {
     args: [item: ChecklistItemId];
+    result: void;
+  };
+  "onboarding:checklist-mark-celebration-shown": {
+    args: [];
     result: void;
   };
 

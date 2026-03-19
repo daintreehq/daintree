@@ -21,16 +21,19 @@ import type { ChecklistState } from "@shared/types/ipc/maps";
 
 const allIncomplete: ChecklistState = {
   dismissed: false,
+  celebrationShown: false,
   items: { openedProject: false, launchedAgent: false, createdWorktree: false },
 };
 
 const allComplete: ChecklistState = {
   dismissed: false,
+  celebrationShown: false,
   items: { openedProject: true, launchedAgent: true, createdWorktree: true },
 };
 
 const mixedState: ChecklistState = {
   dismissed: false,
+  celebrationShown: false,
   items: { openedProject: true, launchedAgent: false, createdWorktree: false },
 };
 

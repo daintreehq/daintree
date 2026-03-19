@@ -3,12 +3,14 @@ import { isElectronAvailable } from "../useElectron";
 import { useProjectStore } from "@/store/projectStore";
 import { useTerminalStore } from "@/store/terminalStore";
 import { useWorktreeDataStore } from "@/store/worktreeDataStore";
+import { notify } from "@/lib/notify";
 import type { ChecklistState, ChecklistItemId } from "@shared/types/ipc/maps";
 
 export interface GettingStartedChecklistState {
   visible: boolean;
   collapsed: boolean;
   checklist: ChecklistState | null;
+  showCelebration: boolean;
   dismiss: () => void;
   toggleCollapse: () => void;
   notifyOnboardingComplete: () => void;
@@ -75,12 +77,15 @@ export function useGettingStartedChecklist(isStateLoaded: boolean): GettingStart
   const [onboardingCompleted, setOnboardingCompleted] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
   const [forceShow, setForceShow] = useState(false);
+  const [showCelebration, setShowCelebration] = useState(false);
   const checklistRef = useRef(checklist);
   checklistRef.current = checklist;
 
   const markItem = useCallback((item: ChecklistItemId) => {
     if (!isElectronAvailable()) return;
     void window.electron.onboarding.markChecklistItem(item);
+    let shouldCelebrate = false;
+    let shouldDismiss = false;
     setChecklist((prev) => {
       if (!prev) return prev;
       if (prev.items[item]) return prev;
@@ -90,11 +95,25 @@ export function useGettingStartedChecklist(isStateLoaded: boolean): GettingStart
       };
       const allDone = Object.values(updated.items).every(Boolean);
       if (allDone) {
-        void window.electron.onboarding.dismissChecklist();
-        return { ...updated, dismissed: true };
+        shouldCelebrate = !prev.celebrationShown;
+        shouldDismiss = true;
+        return { ...updated, dismissed: true, celebrationShown: true };
       }
       return updated;
     });
+    if (shouldDismiss) {
+      void window.electron.onboarding.dismissChecklist();
+    }
+    if (shouldCelebrate) {
+      notify({
+        type: "success",
+        title: "Checklist complete!",
+        message: "You're all set! Open the Action Palette (Cmd+K) to explore shortcuts.",
+        duration: 5000,
+      });
+      setShowCelebration(true);
+      void window.electron.onboarding.markChecklistCelebrationShown();
+    }
   }, []);
 
   const dismiss = useCallback(() => {
@@ -162,6 +181,13 @@ export function useGettingStartedChecklist(isStateLoaded: boolean): GettingStart
       .catch(console.error);
   }, [markItem]);
 
+  // Auto-clear celebration after animation completes
+  useEffect(() => {
+    if (!showCelebration) return;
+    const timer = setTimeout(() => setShowCelebration(false), 1500);
+    return () => clearTimeout(timer);
+  }, [showCelebration]);
+
   const allDone = checklist ? Object.values(checklist.items).every(Boolean) : false;
   const visible =
     checklist !== null && (forceShow || (onboardingCompleted && !checklist.dismissed && !allDone));
@@ -170,6 +196,7 @@ export function useGettingStartedChecklist(isStateLoaded: boolean): GettingStart
     visible,
     collapsed,
     checklist,
+    showCelebration,
     dismiss,
     toggleCollapse,
     notifyOnboardingComplete,

@@ -13,6 +13,7 @@ const onboardingMock = {
       newsletterPromptSeen: false,
       checklist: {
         dismissed: false,
+        celebrationShown: false,
         items: { openedProject: false, launchedAgent: false, createdWorktree: false },
       },
     })
@@ -70,6 +71,7 @@ describe("useDeferredNewsletterPrompt", () => {
       newsletterPromptSeen: false,
       checklist: {
         dismissed: false,
+        celebrationShown: false,
         items: { openedProject: false, launchedAgent: false, createdWorktree: false },
       },
     });
@@ -104,6 +106,7 @@ describe("useDeferredNewsletterPrompt", () => {
       newsletterPromptSeen: true,
       checklist: {
         dismissed: false,
+        celebrationShown: false,
         items: { openedProject: false, launchedAgent: false, createdWorktree: false },
       },
     });
