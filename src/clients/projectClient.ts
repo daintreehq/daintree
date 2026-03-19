@@ -14,6 +14,27 @@ import type {
   GitInitProgressEvent,
 } from "@shared/types/ipc/gitInit";
 
+let inflight: Promise<Project | null> | null = null;
+let cachedResult: Project | null = null;
+let hasCachedValue = false;
+let cacheVersion = 0;
+let subscribed = false;
+
+export function invalidateCurrentCache(): void {
+  hasCachedValue = false;
+  cachedResult = null;
+  inflight = null;
+  cacheVersion++;
+}
+
+function ensureSubscribed(): void {
+  if (subscribed) return;
+  subscribed = true;
+  window.electron.project.onSwitch(() => {
+    invalidateCurrentCache();
+  });
+}
+
 /**
  * @example
  * ```typescript
@@ -29,7 +50,27 @@ export const projectClient = {
   },
 
   getCurrent: (): Promise<Project | null> => {
-    return window.electron.project.getCurrent();
+    ensureSubscribed();
+    if (hasCachedValue) return Promise.resolve(cachedResult);
+    if (inflight) return inflight;
+
+    const version = cacheVersion;
+    const promise = window.electron.project
+      .getCurrent()
+      .then((result) => {
+        if (cacheVersion === version) {
+          cachedResult = result;
+          hasCachedValue = true;
+        }
+        return result;
+      })
+      .finally(() => {
+        if (inflight === promise) {
+          inflight = null;
+        }
+      });
+    inflight = promise;
+    return inflight;
   },
 
   add: (path: string): Promise<Project> => {
@@ -45,6 +86,7 @@ export const projectClient = {
   },
 
   switch: (projectId: string): Promise<Project> => {
+    invalidateCurrentCache();
     return window.electron.project.switch(projectId);
   },
 
@@ -76,6 +118,7 @@ export const projectClient = {
   },
 
   reopen: (projectId: string): Promise<Project> => {
+    invalidateCurrentCache();
     return window.electron.project.reopen(projectId);
   },
 
