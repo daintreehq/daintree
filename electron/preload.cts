@@ -2202,5 +2202,5 @@ if (window.top === window && isTrustedRendererUrl(window.location.href)) {
 // Not exposed through window.electron — this is an internal optimization.
 ipcRenderer.on(CHANNELS.WINDOW_RECLAIM_MEMORY, () => {
   webFrame.clearCache();
-  (globalThis as Record<string, unknown>).gc?.();
+  (globalThis as unknown as { gc?: () => void }).gc?.();
 });

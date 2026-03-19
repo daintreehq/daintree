@@ -53,7 +53,7 @@ function createMockWindow() {
 }
 
 describe("reclaimMemory — minimize debounce", () => {
-  const mockSendToRenderer = sendToRenderer as ReturnType<typeof vi.fn>;
+  const mockSendToRenderer = vi.mocked(sendToRenderer);
 
   beforeEach(() => {
     vi.useFakeTimers();
@@ -158,7 +158,7 @@ function createReclaimHelper(win: ReturnType<typeof createMockWindow>) {
       reclaimTimer = setTimeout(() => {
         reclaimTimer = null;
         if (!win.isDestroyed() && win.isMinimized()) {
-          (sendToRenderer as ReturnType<typeof vi.fn>)(win, CHANNELS.WINDOW_RECLAIM_MEMORY, {
+          vi.mocked(sendToRenderer)(win as never, CHANNELS.WINDOW_RECLAIM_MEMORY, {
             reason: "minimize",
           });
         }
