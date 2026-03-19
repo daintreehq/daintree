@@ -100,6 +100,14 @@ export const DEFAULT_KEYBINDINGS: KeybindingConfig[] = [
     category: "Terminal",
   },
   {
+    actionId: "terminal.scrollToLastActivity",
+    combo: "Cmd+Alt+L",
+    scope: "global",
+    priority: 0,
+    description: "Scroll to last activity",
+    category: "Terminal",
+  },
+  {
     actionId: "terminal.stashInput",
     combo: "Cmd+Shift+S",
     scope: "global",

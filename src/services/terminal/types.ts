@@ -1,4 +1,4 @@
-import { Terminal, IDisposable } from "@xterm/xterm";
+import { Terminal, IDisposable, IMarker } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { SerializeAddon } from "@xterm/addon-serialize";
 import { ImageAddon } from "@xterm/addon-image";
@@ -47,6 +47,9 @@ export interface ManagedTerminal {
   latestRows: number;
   latestWasAtBottom: boolean;
   isUserScrolledBack: boolean;
+
+  // Last activity marker for scroll-to-last-activity
+  lastActivityMarker?: IMarker;
 
   // Project-switch resize suppression
   resizeSuppressionTimer?: number;

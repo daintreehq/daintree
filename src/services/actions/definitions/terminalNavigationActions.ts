@@ -167,6 +167,23 @@ export function registerTerminalNavigationActions(
     },
   }));
 
+  actions.set("terminal.scrollToLastActivity", () => ({
+    id: "terminal.scrollToLastActivity",
+    title: "Scroll to Last Activity",
+    description: "Scroll the focused terminal to where the agent last produced output",
+    category: "terminal",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    run: async () => {
+      const focusedId = useTerminalStore.getState().focusedId;
+      if (!focusedId) return;
+      const { terminalInstanceService } =
+        await import("@/services/terminal/TerminalInstanceService");
+      terminalInstanceService.scrollToLastActivity(focusedId);
+    },
+  }));
+
   // Tab navigation within tabbed panels
   const navigateTab = (direction: "next" | "previous") => {
     const state = useTerminalStore.getState();
