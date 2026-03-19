@@ -3,6 +3,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import { SerializeAddon } from "@xterm/addon-serialize";
 import { ImageAddon } from "@xterm/addon-image";
 import { SearchAddon } from "@xterm/addon-search";
+import { WebLinksAddon } from "@xterm/addon-web-links";
 import { TerminalRefreshTier, TerminalType, TerminalKind, AgentState } from "@/types";
 
 export type RefreshTierProvider = () => TerminalRefreshTier;
@@ -21,6 +22,7 @@ export interface ManagedTerminal {
   imageAddon: ImageAddon | null;
   searchAddon: SearchAddon;
   fileLinksDisposable: IDisposable | null;
+  webLinksAddon: WebLinksAddon | null;
   hostElement: HTMLDivElement;
   isOpened: boolean;
   listeners: Array<() => void>;

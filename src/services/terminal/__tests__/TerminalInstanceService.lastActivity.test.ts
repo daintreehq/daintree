@@ -38,7 +38,9 @@ vi.mock("../TerminalAddonManager", () => ({
     imageAddon: {},
     searchAddon: {},
     fileLinksDisposable: { dispose: vi.fn() },
+    webLinksAddon: { dispose: vi.fn() },
   })),
+  createWebLinksAddon: vi.fn(() => ({ dispose: vi.fn() })),
 }));
 
 const mockScrollbackStore = { scrollbackLines: 5000 };
