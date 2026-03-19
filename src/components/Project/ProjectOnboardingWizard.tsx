@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import {
-  Terminal,
+  SquareTerminal,
   Rocket,
   Plus,
   Trash2,
@@ -207,7 +207,7 @@ export function ProjectOnboardingWizard({
                 {/* Run Commands */}
                 <div>
                   <h3 className="text-sm font-semibold text-canopy-text/80 mb-1 flex items-center gap-2">
-                    <Terminal className="h-4 w-4" />
+                    <SquareTerminal className="h-4 w-4" />
                     Run Commands
                   </h3>
                   <p className="text-xs text-canopy-text/60 mb-3">

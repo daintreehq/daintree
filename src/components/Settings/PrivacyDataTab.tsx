@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
-import { Radio, FolderOpen, Trash2, Clock, HardDrive, AlertTriangle } from "lucide-react";
+import { Signal, FolderOpen, Trash2, Clock, HardDrive, AlertTriangle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { SettingsSection } from "./SettingsSection";
@@ -125,7 +125,7 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
 
       {currentSubtab === "telemetry" && (
         <SettingsSection
-          icon={Radio}
+          icon={Signal}
           title="Telemetry & Diagnostics"
           description="Control what data Canopy collects. No personal data, file contents, or credentials are ever collected."
         >

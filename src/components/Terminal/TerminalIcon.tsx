@@ -1,4 +1,4 @@
-import { Terminal, Globe, StickyNote, Monitor } from "lucide-react";
+import { SquareTerminal, Globe, Leaf, Monitor } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { TerminalType, TerminalKind } from "@/types";
 import type { ComponentType } from "react";
@@ -78,9 +78,7 @@ export function TerminalIcon({
 
   // Notes panes get a sticky note icon
   if (kind === "notes") {
-    return (
-      <StickyNote {...finalProps} className={cn(finalProps.className, "text-status-warning")} />
-    );
+    return <Leaf {...finalProps} className={cn(finalProps.className, "text-status-warning")} />;
   }
 
   // Dev preview panes get a monitor icon
@@ -113,5 +111,5 @@ export function TerminalIcon({
   }
 
   // Fallback to generic terminal icon
-  return <Terminal {...finalProps} />;
+  return <SquareTerminal {...finalProps} />;
 }

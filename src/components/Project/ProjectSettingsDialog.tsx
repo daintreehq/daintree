@@ -1,5 +1,15 @@
 import { useState, useEffect, useRef, useMemo } from "react";
-import { Bot, X, Settings, FileCode, Zap, Command, CookingPot, Server, Bell } from "lucide-react";
+import {
+  Sprout,
+  X,
+  Settings,
+  FileCode,
+  Zap,
+  Command,
+  CookingPot,
+  Server,
+  Bell,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { useProjectSettings } from "@/hooks";
@@ -504,7 +514,7 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
             <NavButton
               active={activeTab === "agent"}
               onClick={() => setActiveTab("agent")}
-              icon={<Bot className="w-4 h-4" />}
+              icon={<Sprout className="w-4 h-4" />}
             >
               Agent
             </NavButton>

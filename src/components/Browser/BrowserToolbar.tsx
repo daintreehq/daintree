@@ -10,7 +10,7 @@ import {
   ZoomIn,
   ZoomOut,
   Camera,
-  Terminal,
+  SquareTerminal,
   Code,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -491,7 +491,7 @@ export function BrowserToolbar({
                 aria-label="Toggle console"
                 aria-pressed={isConsoleOpen}
               >
-                <Terminal className="w-4 h-4" />
+                <SquareTerminal className="w-4 h-4" />
               </button>
             </TooltipTrigger>
             <TooltipContent side="bottom">

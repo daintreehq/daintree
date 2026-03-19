@@ -21,7 +21,7 @@ import {
   RefreshCw,
   RotateCcw,
   Save,
-  Terminal,
+  SquareTerminal,
   Trash2,
   X,
 } from "lucide-react";
@@ -142,7 +142,7 @@ export function WorktreeMenuItems({
       {/* Launch submenu */}
       <C.Sub>
         <C.SubTrigger>
-          <Terminal className="w-3.5 h-3.5 mr-2" />
+          <SquareTerminal className="w-3.5 h-3.5 mr-2" />
           Launch
         </C.SubTrigger>
         <C.SubContent>
@@ -157,7 +157,7 @@ export function WorktreeMenuItems({
                 {Icon ? (
                   <Icon className="w-3.5 h-3.5 mr-2" />
                 ) : (
-                  <Terminal className="w-3.5 h-3.5 mr-2" />
+                  <SquareTerminal className="w-3.5 h-3.5 mr-2" />
                 )}
                 {agent.name}
               </C.Item>
@@ -165,7 +165,7 @@ export function WorktreeMenuItems({
           })}
           {launchAgents.length > 0 && <C.Separator />}
           <C.Item onSelect={() => onLaunchAgent?.("terminal")} disabled={!onLaunchAgent}>
-            <Terminal className="w-3.5 h-3.5 mr-2" />
+            <SquareTerminal className="w-3.5 h-3.5 mr-2" />
             Open Terminal
           </C.Item>
           <C.Item onSelect={() => onLaunchAgent?.("browser")} disabled={!onLaunchAgent}>

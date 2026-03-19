@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { useAgentSettingsStore } from "@/store";
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
 import { AGENT_REGISTRY, AGENT_IDS } from "@/config/agents";
-import { Waypoints, Loader2 } from "lucide-react";
+import { TreeDeciduous, Loader2 } from "lucide-react";
 
 const AGENT_DESCRIPTIONS: Record<string, string> = {
   claude: "Deep refactoring, architecture, and complex reasoning",
@@ -75,7 +75,7 @@ export function AgentSelectionStep({ isOpen, onContinue, onSkip }: AgentSelectio
   return (
     <AppDialog isOpen={isOpen} onClose={handleSkip} size="md" dismissible={!isSaving}>
       <AppDialog.Header>
-        <AppDialog.Title icon={<Waypoints className="w-5 h-5 text-canopy-accent" />}>
+        <AppDialog.Title icon={<TreeDeciduous className="w-5 h-5 text-canopy-accent" />}>
           Choose your AI agents
         </AppDialog.Title>
         <AppDialog.CloseButton />

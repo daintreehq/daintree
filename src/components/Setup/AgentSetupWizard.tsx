@@ -9,14 +9,7 @@ import { BUILT_IN_AGENT_IDS } from "@shared/config/agentIds";
 import { cliAvailabilityClient } from "@/clients";
 import { isCanopyEnvEnabled } from "@/utils/env";
 import type { CliAvailability } from "@shared/types";
-import {
-  Sparkles,
-  ChevronLeft,
-  ChevronRight,
-  ArrowRight,
-  SkipForward,
-  PackagePlus,
-} from "lucide-react";
+import { Sparkles, ChevronLeft, ChevronRight, ArrowRight, SkipForward, Sprout } from "lucide-react";
 
 const AGENT_ORDER = BUILT_IN_AGENT_IDS;
 const POLL_INTERVAL = 3000;
@@ -151,7 +144,7 @@ export function AgentSetupWizard({
   return (
     <AppDialog isOpen={isOpen} onClose={handleFinish} size="lg" dismissible={true}>
       <AppDialog.Header>
-        <AppDialog.Title icon={<PackagePlus className="w-5 h-5 text-canopy-accent" />}>
+        <AppDialog.Title icon={<Sprout className="w-5 h-5 text-canopy-accent" />}>
           Agent Setup
         </AppDialog.Title>
         <div className="flex items-center gap-3">

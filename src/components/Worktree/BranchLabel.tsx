@@ -11,7 +11,7 @@ import {
   GitBranch,
   Infinity as InfinityIcon,
   Layers,
-  Lightbulb,
+  Sparkle,
   Package,
   Palette,
   Rocket,
@@ -21,7 +21,7 @@ import {
 } from "lucide-react";
 
 const BRANCH_TYPE_ICONS: Record<string, LucideIcon> = {
-  feature: Lightbulb,
+  feature: Sparkle,
   bugfix: Bug,
   chore: Wrench,
   docs: BookOpen,

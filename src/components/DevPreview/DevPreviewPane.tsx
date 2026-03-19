@@ -1,5 +1,5 @@
 import { useState, useCallback, useRef, useEffect, useMemo } from "react";
-import { AlertTriangle, RotateCw, ExternalLink, Settings, Wand2 } from "lucide-react";
+import { AlertTriangle, RotateCw, ExternalLink, Settings, WandSparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useTerminalStore } from "@/store";
 import { useProjectStore } from "@/store/projectStore";
@@ -615,7 +615,7 @@ export function DevPreviewPane({
                         size="sm"
                         className="gap-1.5 px-2.5 py-1.5 group text-canopy-accent/70 hover:text-canopy-accent"
                       >
-                        <Wand2 className="h-3.5 w-3.5" />
+                        <WandSparkles className="h-3.5 w-3.5" />
                         <span className="text-xs">
                           {isAutoDetecting
                             ? "Detecting..."

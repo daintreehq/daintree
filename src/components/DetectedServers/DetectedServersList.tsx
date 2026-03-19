@@ -1,4 +1,4 @@
-import { ExternalLink, Radio } from "lucide-react";
+import { ExternalLink, Signal } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { DetectedDevServer } from "@shared/types/ipc/globalDevServers";
 
@@ -12,7 +12,7 @@ export function DetectedServersList({ servers, onOpen, onClose }: DetectedServer
   if (servers.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center py-8 px-4 text-text-muted">
-        <Radio className="h-8 w-8 mb-2 opacity-40" />
+        <Signal className="h-8 w-8 mb-2 opacity-40" />
         <p className="text-sm font-medium">No dev servers detected</p>
         <p className="text-xs mt-1 text-center">
           Start a dev server in any terminal and it will appear here

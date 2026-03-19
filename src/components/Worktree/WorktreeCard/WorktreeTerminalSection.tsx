@@ -8,7 +8,7 @@ import { cn } from "@/lib/utils";
 import type { WorktreeTerminalCounts } from "@/hooks/useWorktreeTerminals";
 import { STATE_COLORS, STATE_ICONS, STATE_LABELS, STATE_PRIORITY } from "../terminalStateConfig";
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "../../ui/tooltip";
-import { ChevronRight, GripVertical, LayoutGrid, PanelBottom, Terminal } from "lucide-react";
+import { ChevronRight, GripVertical, LayoutGrid, PanelBottom, SquareTerminal } from "lucide-react";
 import {
   SortableWorktreeTerminal,
   getAccordionDragId,
@@ -102,7 +102,7 @@ export function WorktreeTerminalSection({
             id={`${terminalsId}-button`}
           >
             <span className="flex items-center gap-1.5 text-[11px] font-medium text-text-muted">
-              <Terminal className="w-3 h-3" />
+              <SquareTerminal className="w-3 h-3" />
               <span>Active Sessions ({counts.total})</span>
             </span>
             <ChevronRight className="h-3 w-3 rotate-90 text-text-muted" />
@@ -225,7 +225,7 @@ export function WorktreeTerminalSection({
           id={`${terminalsId}-button`}
         >
           <div className="flex items-center gap-1.5 text-[11px] text-text-secondary">
-            <Terminal className="w-3 h-3" />
+            <SquareTerminal className="w-3 h-3" />
             <span className="inline-flex items-center gap-1">
               <span className="font-mono tabular-nums">{counts.total}</span>
               <span className="font-sans">active</span>
