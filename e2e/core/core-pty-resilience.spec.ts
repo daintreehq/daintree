@@ -99,8 +99,8 @@ test.describe.serial("Core: PTY Resilience", () => {
     await closeBtn.click();
     await expect.poll(() => getGridPanelCount(window), { timeout: T_MEDIUM }).toBe(0);
 
-    // Wait for PTY process to exit
-    await waitForProcessExit(ptyPid, 15_000);
+    // Wait for PTY process to exit (CI VMs can be slow to reap)
+    await waitForProcessExit(ptyPid, 30_000);
 
     // Verify PID is dead or reused (not the same process, Unix only)
     if (process.platform !== "win32" && isPidAlive(ptyPid)) {

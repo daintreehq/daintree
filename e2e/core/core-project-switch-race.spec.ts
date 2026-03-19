@@ -124,19 +124,25 @@ test.describe.serial("Core: Project Switch Race Conditions", () => {
   test("panel grid is clean after switching — no cross-project panels", async () => {
     const { window } = ctx;
 
-    // We're in Project B after the previous test's switch
-    // Project B should have 0 grid panels (no terminals were spawned in B)
-    await expect.poll(() => getGridPanelCount(window), { timeout: T_MEDIUM }).toBe(0);
+    // Switch to Project A and ensure it has at least one terminal
+    await switchToProject(window, PROJECT_A_NAME);
+    const countA = await getGridPanelCount(window);
+    if (countA === 0) {
+      await window.locator(SEL.toolbar.openTerminal).click();
+      await expect
+        .poll(() => getGridPanelCount(window), { timeout: T_LONG })
+        .toBeGreaterThanOrEqual(1);
+    }
 
-    // Switch to Project A — its panels should be visible
+    // Switch to Project B — grid should be empty (no terminals spawned in B)
+    await switchToProject(window, PROJECT_B_NAME);
+    await expect.poll(() => getGridPanelCount(window), { timeout: T_LONG }).toBe(0);
+
+    // Switch back to Project A — its panels should reappear
     await switchToProject(window, PROJECT_A_NAME);
     await expect
       .poll(() => getGridPanelCount(window), { timeout: T_LONG })
       .toBeGreaterThanOrEqual(1);
-
-    // Switch back to Project B — grid should be empty again
-    await switchToProject(window, PROJECT_B_NAME);
-    await expect.poll(() => getGridPanelCount(window), { timeout: T_MEDIUM }).toBe(0);
   });
 
   test("no orphaned terminals after rapid switching", async () => {

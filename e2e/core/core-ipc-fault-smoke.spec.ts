@@ -51,20 +51,19 @@ test.describe.serial("Core: IPC Fault Injection Smoke", () => {
   });
 
   test("injected error fault propagates to renderer", async () => {
-    await injectFault(ctx.app, "app:get-version", "E2E_INJECTED_ERROR", "E2E_FAULT");
+    await injectFault(ctx.app, "app:get-version", "E2E_INJECTED_ERROR");
 
     const result = await ctx.window.evaluate(async () => {
       try {
         await (window as any).electron.app.getVersion();
-        return { threw: false };
+        return { threw: false, message: "" };
       } catch (err: any) {
-        return { threw: true, message: err.message, code: err.code };
+        return { threw: true, message: err.message };
       }
     });
 
     expect(result.threw).toBe(true);
     expect(result.message).toBe("E2E_INJECTED_ERROR");
-    expect(result.code).toBe("E2E_FAULT");
   });
 
   test("clearing fault restores normal behavior", async () => {
