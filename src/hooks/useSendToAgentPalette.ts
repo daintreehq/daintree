@@ -54,6 +54,26 @@ const FUSE_OPTIONS: IFuseOptions<SendToAgentItem> = {
   includeScore: true,
 };
 
+function sendSelectionToTarget(targetId: string): void {
+  const text = pendingState.selection;
+  if (!text) return;
+
+  const managed = terminalInstanceService.get(targetId);
+  if (managed) {
+    if (managed.terminal.modes.bracketedPasteMode) {
+      terminalClient.write(targetId, formatWithBracketedPaste(text));
+    } else {
+      terminalClient.write(targetId, text.replace(/\r?\n/g, "\r"));
+    }
+    terminalInstanceService.notifyUserInput(targetId);
+  } else {
+    terminalClient.write(targetId, formatWithBracketedPaste(text));
+  }
+
+  pendingState.sourceId = null;
+  pendingState.selection = "";
+}
+
 const MAX_RESULTS = 20;
 
 export function useSendToAgentPalette() {
@@ -109,27 +129,8 @@ export function useSendToAgentPalette() {
 
   const selectItem = useCallback(
     (item: SendToAgentItem) => {
-      const text = pendingState.selection;
-      if (!text) {
-        palette.close();
-        return;
-      }
-
-      const managed = terminalInstanceService.get(item.id);
-      if (managed) {
-        if (managed.terminal.modes.bracketedPasteMode) {
-          terminalClient.write(item.id, formatWithBracketedPaste(text));
-        } else {
-          terminalClient.write(item.id, text.replace(/\r?\n/g, "\r"));
-        }
-        terminalInstanceService.notifyUserInput(item.id);
-      } else {
-        terminalClient.write(item.id, formatWithBracketedPaste(text));
-      }
-
+      sendSelectionToTarget(item.id);
       palette.close();
-      pendingState.sourceId = null;
-      pendingState.selection = "";
     },
     [palette]
   );
