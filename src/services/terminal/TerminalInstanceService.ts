@@ -343,6 +343,11 @@ class TerminalInstanceService {
           bytes: sampledBytes,
         });
       }
+
+      if (!managed.isAltBuffer) {
+        managed.lastActivityMarker?.dispose();
+        managed.lastActivityMarker = terminal.registerMarker(0);
+      }
     });
   }
 
@@ -983,6 +988,30 @@ class TerminalInstanceService {
     }
   }
 
+  scrollToLastActivity(id: string): void {
+    const managed = this.instances.get(id);
+    if (!managed) return;
+
+    if (managed.isAltBuffer) {
+      managed.terminal.scrollToBottom();
+      return;
+    }
+
+    const marker = managed.lastActivityMarker;
+    if (!marker || marker.isDisposed || marker.line < 0) {
+      managed.terminal.scrollToBottom();
+      return;
+    }
+
+    const viewportY = managed.terminal.buffer.active.viewportY;
+    if (Math.abs(viewportY - marker.line) < 2) {
+      managed.terminal.scrollToBottom();
+      return;
+    }
+
+    managed.terminal.scrollToLine(marker.line);
+  }
+
   subscribeUnseenOutput(id: string, listener: () => void): () => void {
     return this.unseenTracker.subscribe(id, listener);
   }
@@ -1290,6 +1319,7 @@ class TerminalInstanceService {
       managed.resizeSuppressionTimer = undefined;
     }
 
+    managed.lastActivityMarker?.dispose();
     managed.exitSubscribers.clear();
     managed.agentStateSubscribers.clear();
     managed.altBufferListeners.clear();

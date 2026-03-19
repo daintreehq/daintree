@@ -114,6 +114,7 @@ export type KeyAction =
   | "terminal.contextMenu"
   | "terminal.stashInput"
   | "terminal.popStash"
+  | "terminal.scrollToLastActivity"
 
   // Agent spawning
   | "agent.palette"
@@ -275,6 +276,7 @@ export const KEY_ACTION_VALUES: ReadonlySet<string> = new Set<string>([
   "terminal.contextMenu",
   "terminal.stashInput",
   "terminal.popStash",
+  "terminal.scrollToLastActivity",
   "agent.palette",
   ...BUILT_IN_AGENT_KEY_ACTIONS,
   "agent.terminal",
