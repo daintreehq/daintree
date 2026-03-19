@@ -3,7 +3,11 @@ import { terminalClient } from "@/clients";
 import { TerminalRefreshTier, TerminalType } from "@/types";
 import type { AgentState } from "@/types";
 import { ManagedTerminal, RefreshTierProvider, AgentStateCallback } from "./types";
-import { setupTerminalAddons } from "./TerminalAddonManager";
+import {
+  setupTerminalAddons,
+  createImageAddon,
+  createFileLinksAddon,
+} from "./TerminalAddonManager";
 import { TerminalOutputIngestService } from "./TerminalOutputIngestService";
 import { TerminalParserHandler } from "./TerminalParserHandler";
 import { TerminalUnseenOutputTracker, UnseenOutputSnapshot } from "./TerminalUnseenOutputTracker";
@@ -126,8 +130,41 @@ class TerminalInstanceService {
       onTierApplied: (id, tier, managed) => {
         if (tier === TerminalRefreshTier.BACKGROUND) {
           reduceScrollback(managed, SCROLLBACK_BACKGROUND);
+
+          if (managed.imageAddon) {
+            try {
+              managed.imageAddon.dispose();
+            } catch {
+              /* ignore */
+            }
+            managed.imageAddon = null;
+          }
+          if (managed.fileLinksDisposable) {
+            try {
+              managed.fileLinksDisposable.dispose();
+            } catch {
+              /* ignore */
+            }
+            managed.fileLinksDisposable = null;
+          }
         } else {
           restoreScrollback(managed);
+
+          if (!managed.imageAddon) {
+            try {
+              managed.imageAddon = createImageAddon(managed.terminal);
+            } catch (err) {
+              logWarn("Failed to recreate ImageAddon", { id, error: err });
+            }
+          }
+          if (!managed.fileLinksDisposable) {
+            const getCwd = this.cwdProviders.get(id) ?? (() => "");
+            try {
+              managed.fileLinksDisposable = createFileLinksAddon(managed.terminal, () => getCwd());
+            } catch (err) {
+              logWarn("Failed to recreate FileLinksAddon", { id, error: err });
+            }
+          }
         }
 
         if (
@@ -662,6 +699,24 @@ class TerminalInstanceService {
 
     const initialTier = getRefreshTier ? getRefreshTier() : TerminalRefreshTier.FOCUSED;
     this.rendererPolicy.applyRendererPolicy(id, initialTier);
+
+    // For terminals starting at BACKGROUND tier, dispose tier-managed addons
+    // immediately. The first applyRendererPolicy call is a no-op when initial
+    // tier matches, so onTierApplied won't fire to dispose them.
+    if (initialTier === TerminalRefreshTier.BACKGROUND) {
+      try {
+        managed.imageAddon?.dispose();
+      } catch {
+        /* ignore */
+      }
+      managed.imageAddon = null;
+      try {
+        managed.fileLinksDisposable?.dispose();
+      } catch {
+        /* ignore */
+      }
+      managed.fileLinksDisposable = null;
+    }
 
     this.notifyReadinessWaiters(id);
 
@@ -1222,6 +1277,11 @@ class TerminalInstanceService {
       managed.fileLinksDisposable?.dispose();
     } catch (error) {
       logWarn("Error disposing file links", { error });
+    }
+    try {
+      managed.imageAddon?.dispose();
+    } catch (error) {
+      logWarn("Error disposing image addon", { error });
     }
 
     this.webGLManager.onTerminalDestroyed(id);

@@ -18,9 +18,9 @@ export interface ManagedTerminal {
   agentStateSubscribers: Set<AgentStateCallback>;
   fitAddon: FitAddon;
   serializeAddon: SerializeAddon;
-  imageAddon: ImageAddon;
+  imageAddon: ImageAddon | null;
   searchAddon: SearchAddon;
-  fileLinksDisposable: IDisposable;
+  fileLinksDisposable: IDisposable | null;
   hostElement: HTMLDivElement;
   isOpened: boolean;
   listeners: Array<() => void>;

@@ -8,9 +8,9 @@ import { FileLinksAddon } from "./FileLinksAddon";
 export interface TerminalAddons {
   fitAddon: FitAddon;
   serializeAddon: SerializeAddon;
-  imageAddon: ImageAddon;
+  imageAddon: ImageAddon | null;
   searchAddon: SearchAddon;
-  fileLinksDisposable: IDisposable;
+  fileLinksDisposable: IDisposable | null;
 }
 
 export function setupTerminalAddons(terminal: Terminal, getCwd: () => string): TerminalAddons {
@@ -38,4 +38,15 @@ export function setupTerminalAddons(terminal: Terminal, getCwd: () => string): T
     searchAddon,
     fileLinksDisposable,
   };
+}
+
+export function createImageAddon(terminal: Terminal): ImageAddon {
+  const addon = new ImageAddon();
+  terminal.loadAddon(addon);
+  return addon;
+}
+
+export function createFileLinksAddon(terminal: Terminal, getCwd: () => string): IDisposable {
+  const addon = new FileLinksAddon(terminal, getCwd);
+  return terminal.registerLinkProvider(addon);
 }
