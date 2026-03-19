@@ -126,6 +126,26 @@ describe("PtyManager.spawn — PTY cleanup on constructor failure", () => {
         type: "terminal",
       })
     ).toThrow(constructorError);
+
+    expect(mockPty.kill).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not attempt kill when acquirePtyProcess itself throws", () => {
+    vi.mocked(acquirePtyProcess).mockImplementation(() => {
+      throw new Error("spawn ENOENT");
+    });
+
+    expect(() =>
+      manager.spawn("t1", {
+        cwd: "/tmp",
+        cols: 80,
+        rows: 24,
+        kind: "terminal",
+        type: "terminal",
+      })
+    ).toThrow("spawn ENOENT");
+
+    expect(manager.hasTerminal("t1")).toBe(false);
   });
 
   it("registers terminal normally when constructor succeeds", () => {
