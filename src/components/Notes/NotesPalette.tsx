@@ -21,7 +21,7 @@ import {
   ExternalLink,
   X,
   AlertTriangle,
-  StickyNote,
+  Leaf,
   ChevronDown,
   PenLine,
   Eye,
@@ -568,7 +568,7 @@ export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
                   </>
                 ) : (
                   <div className="flex-1 flex flex-col items-center justify-center text-canopy-text/30">
-                    <StickyNote size={32} className="mb-3" />
+                    <Leaf size={32} className="mb-3" />
                     <p className="text-sm">Select a note to view</p>
                     <p className="text-xs mt-2">
                       or press{" "}

@@ -17,15 +17,15 @@ import {
 import { CSS } from "@dnd-kit/utilities";
 import {
   GripVertical,
-  Terminal,
+  SquareTerminal,
   Globe,
   Monitor,
   AlertTriangle,
-  StickyNote,
+  Leaf,
   Copy,
   Settings,
   AlertCircle,
-  PackagePlus,
+  Sprout,
   Bell,
   Mic,
   LayoutGrid,
@@ -44,7 +44,7 @@ type ButtonMetadata = { label: string; icon: React.ReactNode; description: strin
 const BUTTON_METADATA: Partial<Record<ToolbarButtonId, ButtonMetadata>> = {
   "agent-setup": {
     label: "Agent Setup",
-    icon: <PackagePlus className="h-4 w-4" />,
+    icon: <Sprout className="h-4 w-4" />,
     description: "Shown only when no agents are enabled in Agent Settings",
   },
   claude: {
@@ -69,7 +69,7 @@ const BUTTON_METADATA: Partial<Record<ToolbarButtonId, ButtonMetadata>> = {
   },
   terminal: {
     label: "Terminal",
-    icon: <Terminal className="h-4 w-4" />,
+    icon: <SquareTerminal className="h-4 w-4" />,
     description: "Open new terminal",
   },
   browser: {
@@ -104,7 +104,7 @@ const BUTTON_METADATA: Partial<Record<ToolbarButtonId, ButtonMetadata>> = {
   },
   notes: {
     label: "Notes",
-    icon: <StickyNote className="h-4 w-4" />,
+    icon: <Leaf className="h-4 w-4" />,
     description: "Open notes palette",
   },
   "copy-tree": {

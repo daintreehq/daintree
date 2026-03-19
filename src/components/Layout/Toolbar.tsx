@@ -13,7 +13,7 @@ import { Button } from "@/components/ui/button";
 import { FixedDropdown } from "@/components/ui/fixed-dropdown";
 import {
   SlidersHorizontal,
-  Terminal,
+  SquareTerminal,
   AlertCircle,
   GitCommit,
   GitPullRequest,
@@ -27,11 +27,11 @@ import {
   Loader2,
   ChevronsUpDown,
   Globe,
-  StickyNote,
+  Leaf,
   Monitor,
   Bell,
   LayoutGrid,
-  Radio,
+  Signal,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { isMac, isLinux, createTooltipWithShortcut } from "@/lib/platform";
@@ -522,7 +522,7 @@ export function Toolbar({
                   className="text-canopy-text hover:bg-overlay-medium transition-colors hover:text-canopy-accent focus-visible:text-canopy-accent"
                   aria-label="Open Terminal"
                 >
-                  <Terminal />
+                  <SquareTerminal />
                 </Button>
               </TooltipTrigger>
               <TooltipContent side="bottom">
@@ -610,7 +610,7 @@ export function Toolbar({
                         className="relative text-canopy-text hover:bg-overlay-medium transition-colors hover:text-canopy-accent focus-visible:text-canopy-accent h-8 w-8"
                         aria-label={`${detectedServers.length} detected dev servers`}
                       >
-                        <Radio className="h-4 w-4" />
+                        <Signal className="h-4 w-4" />
                         <span className="absolute -top-0.5 -right-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-canopy-accent text-[10px] font-bold text-accent-foreground">
                           {detectedServers.length}
                         </span>
@@ -933,7 +933,7 @@ export function Toolbar({
                   className="text-canopy-text hover:bg-overlay-medium hover:text-canopy-accent transition-colors"
                   aria-label="Open notes palette"
                 >
-                  <StickyNote />
+                  <Leaf />
                 </Button>
               </TooltipTrigger>
               <TooltipContent side="bottom">

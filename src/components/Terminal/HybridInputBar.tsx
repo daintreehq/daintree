@@ -38,7 +38,7 @@ import { useCommandStore } from "@/store/commandStore";
 import { useProjectStore } from "@/store/projectStore";
 import { useTerminalStore, useVoiceRecordingStore, useWorktreeDataStore } from "@/store";
 import { VoiceInputButton } from "./VoiceInputButton";
-import { Archive, Terminal as TerminalIcon, X } from "lucide-react";
+import { Archive, SquareTerminal as TerminalIcon, X } from "lucide-react";
 import { registerInputController, unregisterInputController } from "@/store/terminalInputStore";
 import type { CommandContext, CommandResult } from "@shared/types/commands";
 import { isEnterLikeLineBreakInputEvent } from "./hybridInputEvents";

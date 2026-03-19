@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useMemo } from "react";
-import { X, LayoutGrid, FilterX, House } from "lucide-react";
+import { X, LayoutGrid, FilterX, TreePine } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useShallow } from "zustand/react/shallow";
 import { WorktreeCard } from "./WorktreeCard";
@@ -435,7 +435,7 @@ export function WorktreeOverviewModal({
                           : "bg-tint/[0.10] text-canopy-text/70 hover:text-canopy-text/90"
                       )}
                     >
-                      <House
+                      <TreePine
                         className={cn(
                           "w-3 h-3 transition-colors",
                           hideMainWorktree ? "text-canopy-text/30" : "text-canopy-text/50"

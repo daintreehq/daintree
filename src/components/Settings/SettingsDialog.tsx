@@ -21,14 +21,14 @@ import {
 } from "@/store";
 import {
   X,
-  Waypoints,
+  TreeDeciduous,
   Code,
   Github,
   LayoutGrid,
   PanelRight,
   Keyboard,
   GitBranch,
-  Terminal,
+  SquareTerminal,
   Settings as SettingsIcon,
   Settings2,
   LifeBuoy,
@@ -438,9 +438,9 @@ export function SettingsDialog({
     general: <Settings2 className="w-5 h-5 text-canopy-text/60" />,
     keyboard: <Keyboard className="w-5 h-5 text-canopy-text/60" />,
     terminal: <LayoutGrid className="w-5 h-5 text-canopy-text/60" />,
-    terminalAppearance: <Terminal className="w-5 h-5 text-canopy-text/60" />,
+    terminalAppearance: <SquareTerminal className="w-5 h-5 text-canopy-text/60" />,
     worktree: <GitBranch className="w-5 h-5 text-canopy-text/60" />,
-    agents: <Waypoints className="w-5 h-5 text-canopy-text/60" />,
+    agents: <TreeDeciduous className="w-5 h-5 text-canopy-text/60" />,
     github: <Github className="w-5 h-5 text-canopy-text/60" />,
     sidecar: <PanelRight className="w-5 h-5 text-canopy-text/60" />,
     toolbar: <SettingsIcon className="w-5 h-5 text-canopy-text/60" />,
@@ -538,7 +538,7 @@ export function SettingsDialog({
                 />
                 <NavItem
                   tab="terminalAppearance"
-                  icon={<Terminal className="w-4 h-4" />}
+                  icon={<SquareTerminal className="w-4 h-4" />}
                   label="Appearance"
                   activeTab={activeTab}
                   isSearching={isSearching}
@@ -617,7 +617,7 @@ export function SettingsDialog({
               <NavGroup label="Integrations">
                 <NavItem
                   tab="agents"
-                  icon={<Waypoints className="w-4 h-4" />}
+                  icon={<TreeDeciduous className="w-4 h-4" />}
                   label="CLI Agents"
                   activeTab={activeTab}
                   isSearching={isSearching}

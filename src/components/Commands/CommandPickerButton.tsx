@@ -1,7 +1,7 @@
 import { forwardRef } from "react";
 import { cn } from "@/lib/utils";
 import { createTooltipWithShortcut } from "@/lib/platform";
-import { Terminal } from "lucide-react";
+import { SquareTerminal } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
 
 interface CommandPickerButtonProps {
@@ -32,7 +32,7 @@ export const CommandPickerButton = forwardRef<HTMLButtonElement, CommandPickerBu
               )}
               aria-label="Open command picker"
             >
-              <Terminal className="h-3.5 w-3.5" />
+              <SquareTerminal className="h-3.5 w-3.5" />
             </button>
           </TooltipTrigger>
           <TooltipContent side="bottom">

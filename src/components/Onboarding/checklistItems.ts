@@ -1,4 +1,4 @@
-import { FolderOpen, Bot, GitBranch } from "lucide-react";
+import { FolderOpen, Sprout, GitBranch } from "lucide-react";
 import type { ActionId } from "@shared/types/actions";
 import type { ChecklistItemId } from "@shared/types/ipc/maps";
 
@@ -19,7 +19,7 @@ export const CHECKLIST_ITEMS: ChecklistItemDef[] = [
   {
     id: "launchedAgent",
     label: "Launch an AI agent",
-    icon: Bot,
+    icon: Sprout,
     actionId: "panel.palette",
   },
   {

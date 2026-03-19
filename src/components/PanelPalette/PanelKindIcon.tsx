@@ -1,11 +1,11 @@
-import { Terminal, Globe, FileText, GitBranch, Monitor, LucideIcon } from "lucide-react";
+import { SquareTerminal, Globe, FileText, GitBranch, Monitor, LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { CanopyIcon } from "@/components/icons";
 import { getAgentConfig } from "@/config/agents";
 import type { ComponentType } from "react";
 
 const ICON_MAP: Record<string, LucideIcon | ComponentType<Record<string, unknown>>> = {
-  terminal: Terminal,
+  terminal: SquareTerminal,
   globe: Globe,
   "file-text": FileText,
   "git-branch": GitBranch,
@@ -34,7 +34,7 @@ export function PanelKindIcon({ iconId, color, size = 16, className }: PanelKind
     );
   }
 
-  const Icon = ICON_MAP[iconId] ?? Terminal;
+  const Icon = ICON_MAP[iconId] ?? SquareTerminal;
   return (
     <Icon
       style={color ? { color } : undefined}

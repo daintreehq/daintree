@@ -1,4 +1,4 @@
-import { Terminal, Globe, Settings } from "lucide-react";
+import { SquareTerminal, Globe, Settings } from "lucide-react";
 import { getBrandColorHex } from "@/lib/colorUtils";
 import type { TerminalType, TerminalKind } from "@/types";
 import { AGENT_REGISTRY } from "@/config/agents";
@@ -34,7 +34,7 @@ export function getLaunchOptions(): LaunchOption[] {
       type: "terminal",
       label: "Terminal",
       description: "Standard system shell (zsh/bash/powershell).",
-      icon: <Terminal className="w-4 h-4" />,
+      icon: <SquareTerminal className="w-4 h-4" />,
     },
     {
       id: "browser",

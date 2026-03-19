@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { EyeOff } from "lucide-react";
+import { Eclipse } from "lucide-react";
 import { useShallow } from "zustand/react/shallow";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Button } from "@/components/ui/button";
@@ -52,7 +52,7 @@ export function BackgroundContainer({ compact = false }: BackgroundContainerProp
           aria-label={`Background: ${count} panel${count === 1 ? "" : "s"}`}
         >
           <span className="relative">
-            <EyeOff className="w-3.5 h-3.5 text-canopy-text/50" aria-hidden="true" />
+            <Eclipse className="w-3.5 h-3.5 text-canopy-text/50" aria-hidden="true" />
             {compact && count > 0 && (
               <span className="absolute -top-1.5 -right-1.5 z-10 flex items-center justify-center min-w-[14px] h-[14px] px-0.5 rounded-full text-[10px] font-bold shadow-sm bg-canopy-text/20 text-canopy-text">
                 {count > 9 ? "9+" : count}

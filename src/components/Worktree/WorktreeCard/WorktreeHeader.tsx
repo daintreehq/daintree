@@ -28,7 +28,7 @@ import {
   FileText,
   GitPullRequest,
   MoreHorizontal,
-  House,
+  TreePine,
   Pin,
 } from "lucide-react";
 import { useIssueTooltip, usePRTooltip } from "@/hooks/useGitHubTooltip";
@@ -304,7 +304,7 @@ export function WorktreeHeader({
       <div className="flex items-center gap-2 min-h-[22px]">
         <div className="flex items-center gap-2 min-w-0 flex-1">
           {isMainWorktree && (
-            <House
+            <TreePine
               className="w-3.5 h-3.5 text-canopy-text/60 shrink-0"
               fill="currentColor"
               stroke="var(--color-canopy-sidebar)"

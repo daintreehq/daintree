@@ -1,5 +1,5 @@
 import {
-  Terminal,
+  SquareTerminal,
   Plus,
   Trash2,
   ChevronUp,
@@ -72,7 +72,7 @@ export function AutomationTab({
     <>
       <div className="mb-6 pb-6 border-b border-canopy-border">
         <h3 className="text-sm font-semibold text-canopy-text/80 mb-2 flex items-center gap-2">
-          <Terminal className="h-4 w-4" />
+          <SquareTerminal className="h-4 w-4" />
           Run Commands
         </h3>
         <p className="text-xs text-canopy-text/60 mb-4">
@@ -456,7 +456,7 @@ export function AutomationTab({
 
       <div className="mt-6 pt-6 border-t border-canopy-border">
         <h3 className="text-sm font-semibold text-canopy-text/80 mb-2 flex items-center gap-2">
-          <Terminal className="h-4 w-4" />
+          <SquareTerminal className="h-4 w-4" />
           Terminal Defaults
         </h3>
         <p className="text-xs text-canopy-text/60 mb-4">

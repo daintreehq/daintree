@@ -1,6 +1,6 @@
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
-import { PackagePlus } from "lucide-react";
+import { Sprout } from "lucide-react";
 
 export function AgentSetupButton({
   "data-toolbar-item": dataToolbarItem,
@@ -21,7 +21,7 @@ export function AgentSetupButton({
             className="text-canopy-text hover:bg-tint/[0.06] hover:text-canopy-accent focus-visible:text-canopy-accent transition-colors"
             aria-label="Install AI Agents"
           >
-            <PackagePlus className="text-canopy-accent" />
+            <Sprout className="text-canopy-accent" />
           </Button>
         </TooltipTrigger>
         <TooltipContent side="bottom">Install AI Agents</TooltipContent>

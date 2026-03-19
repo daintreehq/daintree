@@ -17,7 +17,7 @@ import {
   ArrowDownFromLine,
   Bell,
   BellOff,
-  Bot,
+  Sprout,
   Clipboard,
   Copy,
   CopyPlus,
@@ -596,7 +596,7 @@ export function TerminalContextMenu({
             disabled={isCurrent}
             onSelect={() => handleAction(`convert-to:${agentId}`)}
           >
-            <Bot className={ICON_CLASS} aria-hidden="true" />
+            <Sprout className={ICON_CLASS} aria-hidden="true" />
             {config.name}
           </ContextMenuItem>
         );

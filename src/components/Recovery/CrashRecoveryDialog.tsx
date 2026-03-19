@@ -5,11 +5,11 @@ import {
   ChevronRight,
   ExternalLink,
   FileText,
-  Terminal,
+  SquareTerminal,
   Globe,
-  StickyNote,
+  Leaf,
   Monitor,
-  Bot,
+  Sprout,
 } from "lucide-react";
 import { AppDialog } from "../ui/AppDialog";
 import { Button } from "../ui/button";
@@ -32,15 +32,15 @@ interface CrashRecoveryDialogProps {
 function getPanelIcon(kind: string) {
   switch (kind) {
     case "agent":
-      return <Bot className="h-3.5 w-3.5" />;
+      return <Sprout className="h-3.5 w-3.5" />;
     case "browser":
       return <Globe className="h-3.5 w-3.5" />;
     case "notes":
-      return <StickyNote className="h-3.5 w-3.5" />;
+      return <Leaf className="h-3.5 w-3.5" />;
     case "dev-preview":
       return <Monitor className="h-3.5 w-3.5" />;
     default:
-      return <Terminal className="h-3.5 w-3.5" />;
+      return <SquareTerminal className="h-3.5 w-3.5" />;
   }
 }
 
