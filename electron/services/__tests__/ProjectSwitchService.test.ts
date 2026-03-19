@@ -261,6 +261,38 @@ describe("ProjectSwitchService", () => {
     await expect(switchPromise).resolves.toMatchObject({ id: "project-new" });
   });
 
+  it("includes worktreeLoadError in switch payload when loadProject fails", async () => {
+    const { service } = createService({
+      worktreeService: {
+        onProjectSwitch: vi.fn(() => undefined),
+        loadProject: vi.fn(async () => {
+          throw new Error("Not a git repository");
+        }),
+      },
+    });
+
+    await service.switchProject("project-new");
+
+    expect(sendToRendererMock).toHaveBeenCalledWith(
+      expect.anything(),
+      CHANNELS.PROJECT_ON_SWITCH,
+      expect.objectContaining({
+        project: expect.objectContaining({ id: "project-new" }),
+        switchId: "switch-id-1",
+        worktreeLoadError: "Not a git repository",
+      })
+    );
+  });
+
+  it("does not include worktreeLoadError when loadProject succeeds", async () => {
+    const { service } = createService();
+
+    await service.switchProject("project-new");
+
+    const payload = sendToRendererMock.mock.calls[0][2];
+    expect(payload).not.toHaveProperty("worktreeLoadError");
+  });
+
   it("preserves original switch error when rollback throws", async () => {
     const originalError = new Error("setCurrent failed");
     projectStoreMock.setCurrentProject.mockRejectedValue(originalError);

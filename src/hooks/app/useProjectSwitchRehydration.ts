@@ -17,10 +17,16 @@ import {
   finalizeProjectSwitchRendererCache,
   isTerminalWarmInProjectSwitchCache,
 } from "@/services/projectSwitchRendererCache";
+import {
+  forceReinitializeWorktreeDataStore,
+  setWorktreeLoadError,
+  useWorktreeDataStore,
+} from "@/store/worktreeDataStore";
 
 interface ProjectSwitchedEventDetail {
   switchId: string;
   projectId: string;
+  worktreeLoadError?: string;
 }
 
 export function useProjectSwitchRehydration() {
@@ -57,12 +63,22 @@ export function useProjectSwitchRehydration() {
       const customEvent = event as CustomEvent<ProjectSwitchedEventDetail>;
       const switchId = customEvent.detail?.switchId;
       const projectId = customEvent.detail?.projectId;
+      const worktreeLoadError = customEvent.detail?.worktreeLoadError;
 
       if (!switchId || !projectId) {
         console.error(
           "[useProjectSwitchRehydration] Missing switch metadata in project-switched event, skipping hydration"
         );
         return;
+      }
+
+      if (worktreeLoadError) {
+        setWorktreeLoadError(projectId, worktreeLoadError);
+      } else {
+        const storeState = useWorktreeDataStore.getState();
+        if (!(storeState.projectId === projectId && storeState.isInitialized)) {
+          forceReinitializeWorktreeDataStore(projectId);
+        }
       }
 
       currentSwitchIdRef.current = switchId;
@@ -126,13 +142,13 @@ export function useProjectSwitchRehydration() {
     window.addEventListener("project-switched", handleProjectSwitch);
 
     const cleanup = projectClient.onSwitch((payload) => {
-      const { project, switchId } = payload;
+      const { project, switchId, worktreeLoadError } = payload;
       console.log(
         `[useProjectSwitchRehydration] Received PROJECT_ON_SWITCH from main process (project: ${project.name}, switchId: ${switchId}), re-hydrating...`
       );
       window.dispatchEvent(
         new CustomEvent<ProjectSwitchedEventDetail>("project-switched", {
-          detail: { switchId, projectId: project.id },
+          detail: { switchId, projectId: project.id, worktreeLoadError },
         })
       );
     });

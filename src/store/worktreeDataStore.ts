@@ -624,6 +624,23 @@ export function prePopulateWorktreeSnapshot(projectId: string, projectPath?: str
   }
 }
 
+export function setWorktreeLoadError(projectId: string, error: string) {
+  storeGeneration++;
+  targetProjectId = projectId;
+  isSwitching = false;
+  cleanupListeners?.();
+  cleanupListeners = null;
+  initPromise = null;
+  usePulseStore.getState().invalidateAll();
+  useWorktreeDataStore.setState({
+    worktrees: new Map(),
+    projectId,
+    isLoading: false,
+    error,
+    isInitialized: true,
+  });
+}
+
 export function forceReinitializeWorktreeDataStore(projectId?: string) {
   // Called after backend project switch is complete to load fresh worktrees.
   // If prePopulateWorktreeSnapshot() was called first, the store already has

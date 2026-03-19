@@ -6,6 +6,8 @@ export interface ProjectSwitchPayload {
   project: Project;
   /** Unique identifier for this switch operation */
   switchId: string;
+  /** If the workspace host failed to load worktrees (e.g. non-git directory) */
+  worktreeLoadError?: string;
 }
 
 /** Result from project:close operation */
