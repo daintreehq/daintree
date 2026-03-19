@@ -1,5 +1,41 @@
 import type { TerminalInstance } from "@/store";
 import type { PanelComponentProps } from "@/registry";
+import type { ActivityState } from "@/components/Terminal/TerminalPane";
+
+const activityCache = new Map<string, ActivityState>();
+
+function getStableActivity(
+  id: string,
+  headline: string | undefined,
+  status: string | undefined,
+  type: string | undefined
+): ActivityState | null {
+  if (!headline) {
+    activityCache.delete(id);
+    return null;
+  }
+
+  const resolvedStatus = (status ?? "working") as ActivityState["status"];
+  const resolvedType = (type ?? "interactive") as ActivityState["type"];
+
+  const cached = activityCache.get(id);
+  if (
+    cached &&
+    cached.headline === headline &&
+    cached.status === resolvedStatus &&
+    cached.type === resolvedType
+  ) {
+    return cached;
+  }
+
+  const entry: ActivityState = {
+    headline,
+    status: resolvedStatus,
+    type: resolvedType,
+  };
+  activityCache.set(id, entry);
+  return entry;
+}
 
 export interface BuildPanelPropsConfig {
   terminal: TerminalInstance;
@@ -31,13 +67,12 @@ export function buildPanelProps({
     agentId: terminal.agentId,
     cwd: terminal.cwd,
     agentState: terminal.agentState,
-    activity: terminal.activityHeadline
-      ? {
-          headline: terminal.activityHeadline,
-          status: terminal.activityStatus ?? "working",
-          type: terminal.activityType ?? "interactive",
-        }
-      : null,
+    activity: getStableActivity(
+      terminal.id,
+      terminal.activityHeadline,
+      terminal.activityStatus,
+      terminal.activityType
+    ),
     lastCommand: terminal.lastCommand,
     flowStatus: terminal.flowStatus,
     restartKey: terminal.restartKey,
