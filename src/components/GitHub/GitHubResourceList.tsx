@@ -638,20 +638,38 @@ export function GitHubResourceList({
           !loading &&
           (() => {
             const allSelected = data.every((item) => selection.selectedIds.has(item.number));
+            const unassigned = data.filter((item) => (item as GitHubIssue).assignees.length === 0);
             return (
-              <button
-                type="button"
-                onClick={() => {
-                  if (allSelected) {
-                    selection.clear();
-                  } else {
-                    selection.selectAll(data.map((item) => item.number));
-                  }
-                }}
-                className="text-xs text-canopy-text/50 hover:text-canopy-text focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-canopy-accent transition-colors px-1 py-0.5 rounded self-start"
+              <div
+                className="flex items-center gap-1.5"
+                role="group"
+                aria-label="Selection actions"
               >
-                {allSelected ? "Deselect all" : `Select all (${data.length})`}
-              </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (allSelected) {
+                      selection.clear();
+                    } else {
+                      selection.selectAll(data.map((item) => item.number));
+                    }
+                  }}
+                  className="text-xs text-canopy-text/50 hover:text-canopy-text focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-canopy-accent transition-colors px-1 py-0.5 rounded"
+                >
+                  {allSelected ? "Deselect all" : `Select all (${data.length})`}
+                </button>
+                {unassigned.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      selection.selectAll(unassigned.map((item) => item.number));
+                    }}
+                    className="text-xs text-canopy-text/50 hover:text-canopy-text focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-canopy-accent transition-colors px-1 py-0.5 rounded"
+                  >
+                    {`Select unassigned (${unassigned.length})`}
+                  </button>
+                )}
+              </div>
             );
           })()}
 
