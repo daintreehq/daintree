@@ -16,9 +16,12 @@ vi.mock("@/components/ui/tooltip", () => ({
   ),
 }));
 
-const MockIcon = ({ className }: { className?: string }) => (
-  <svg data-testid="state-icon" className={className} />
-);
+const { MockIcon } = vi.hoisted(() => {
+  const MockIcon = ({ className }: { className?: string }) => (
+    <svg data-testid="state-icon" className={className} />
+  );
+  return { MockIcon };
+});
 
 vi.mock("@/components/Worktree/terminalStateConfig", () => ({
   STATE_ICONS: {
@@ -27,14 +30,14 @@ vi.mock("@/components/Worktree/terminalStateConfig", () => ({
     waiting: MockIcon,
     directing: MockIcon,
     error: MockIcon,
-  } as Record<string, typeof MockIcon>,
+  },
   STATE_COLORS: {
     working: "text-working",
     running: "text-running",
     waiting: "text-waiting",
     directing: "text-directing",
     error: "text-error",
-  } as Record<string, string>,
+  },
 }));
 
 let mockStoreState: Record<string, unknown> = {
@@ -70,7 +73,7 @@ describe("TerminalHeaderContent", () => {
         id="t1"
         kind="agent"
         agentState="working"
-        activity={{ headline: "Installing deps" }}
+        activity={{ headline: "Installing deps", status: "working", type: "background" }}
       />
     );
 
@@ -90,7 +93,7 @@ describe("TerminalHeaderContent", () => {
         id="t1"
         kind="agent"
         agentState="working"
-        activity={{ headline: "Building project" }}
+        activity={{ headline: "Building project", status: "working", type: "background" }}
       />
     );
 
