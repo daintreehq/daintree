@@ -6,7 +6,7 @@ import { openAndOnboardProject, completeOnboarding } from "../helpers/project";
 import { injectDelay, clearAllFaults } from "../helpers/ipcFaults";
 import { getGridPanelCount } from "../helpers/panels";
 import { SEL } from "../helpers/selectors";
-import { T_SHORT, T_MEDIUM, T_LONG, T_SETTLE } from "../helpers/timeouts";
+import { T_MEDIUM, T_LONG, T_SETTLE } from "../helpers/timeouts";
 
 let ctx: AppContext;
 const PROJECT_A_NAME = "Race Project A";
