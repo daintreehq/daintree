@@ -35,11 +35,11 @@ export const filesClient = {
     }
 
     return window.electron.files.search(payload).then((result) => {
-      searchCache.set(key, { value: result, expiresAt: Date.now() + CACHE_TTL_MS });
-      if (searchCache.size > CACHE_MAX_SIZE) {
+      if (searchCache.size >= CACHE_MAX_SIZE) {
         const oldest = searchCache.keys().next().value;
         if (oldest !== undefined) searchCache.delete(oldest);
       }
+      searchCache.set(key, { value: result, expiresAt: Date.now() + CACHE_TTL_MS });
       return result;
     });
   },
