@@ -1317,21 +1317,29 @@ describe("ActivityMonitor", () => {
       // Dispose mid-chain
       monitor.dispose();
       const callCountAfterDispose = onStateChange.mock.calls.length;
+      const validatorCallsAfterDispose = processStateValidator.hasActiveChildren.mock.calls.length;
 
       // Advance well past multiple debounce cycles — no further state changes
+      // AND no further validator calls (proves the timer chain actually stopped)
       vi.advanceTimersByTime(10000);
       expect(onStateChange.mock.calls.length).toBe(callCountAfterDispose);
+      expect(processStateValidator.hasActiveChildren.mock.calls.length).toBe(
+        validatorCallsAfterDispose
+      );
     });
 
     it("should ignore onData and onInput calls after dispose", () => {
       const onStateChange = vi.fn();
-      const monitor = new ActivityMonitor("test-1", 1000, onStateChange);
+      const monitor = new ActivityMonitor("test-1", 1000, onStateChange, {
+        outputActivityDetection: { enabled: true, minFrames: 1, minBytes: 1, windowMs: 500 },
+      });
 
       monitor.dispose();
 
-      // These should be no-ops after disposal
+      // These should be no-ops after disposal — onInput triggers busy,
+      // onData with volume detection triggers busy, notifySubmission triggers busy
       monitor.onInput("\r");
-      monitor.onData("some output");
+      monitor.onData("x".repeat(100));
       monitor.notifySubmission();
 
       vi.advanceTimersByTime(10000);
@@ -1370,7 +1378,10 @@ describe("ActivityMonitor", () => {
       const monitor = new ActivityMonitor("test-1", 1000, onStateChange, {
         processStateValidator,
         idleDebounceMs: 1000,
-        agentId: "claude",
+        patternConfig: {
+          primaryPatterns: [/working/i],
+          scanLineCount: 10,
+        },
       });
 
       // Enter busy
@@ -1378,7 +1389,12 @@ describe("ActivityMonitor", () => {
       expect(monitor.getState()).toBe("busy");
 
       // Feed working pattern data to set lastPatternResult.isWorking = true
-      monitor.onData("⏳ Generating...\r\n");
+      // Uses a custom pattern config so we can control exactly what matches
+      monitor.onData("Working on task...\n");
+
+      // Confirm pattern was detected
+      const patternResult = monitor.getLastPatternResult();
+      expect(patternResult?.isWorking).toBe(true);
 
       // First debounce fires — process active, reschedules
       vi.advanceTimersByTime(1000);
