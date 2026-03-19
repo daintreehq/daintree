@@ -17,6 +17,7 @@ import {
   TerminalSnapshot,
   type PtyManagerEvents,
 } from "./pty/index.js";
+import { computeSpawnContext, acquirePtyProcess } from "./pty/terminalSpawn.js";
 import { disposeTerminalSerializerService } from "./pty/TerminalSerializerService.js";
 import { deleteSessionFile } from "./pty/terminalSessionPersistence.js";
 
@@ -190,29 +191,59 @@ export class PtyManager extends EventEmitter {
     }
     logInfo(`Spawning terminal ${id} (kind: ${options.kind}, type: ${options.type})`);
 
-    const terminalProcess = new TerminalProcess(
+    const spawnContext = computeSpawnContext(id, options);
+    const ptyProcess = acquirePtyProcess(
       id,
       options,
-      {
-        emitData: (termId, data) => this.emitData(termId, data),
-        onExit: (termId, exitCode) => {
-          // Guard against stale exit events from previous terminal with same ID
-          if (this.registry.get(termId) !== terminalProcess) {
-            return;
-          }
-          this.emit("exit", termId, exitCode);
-          if (!terminalProcess.shouldPreserveOnExit(exitCode)) {
-            this.registry.delete(termId);
-          }
-        },
-      },
-      {
-        agentStateService: this.agentStateService,
-        ptyPool: this.ptyPool,
-        sabModeEnabled: this.sabModeEnabled,
-        processTreeCache: this.processTreeCache,
+      spawnContext.env,
+      spawnContext.shell,
+      spawnContext.args,
+      spawnContext.isAgentTerminal,
+      this.ptyPool,
+      (error, context) => {
+        console.error(
+          `[PtyManager] PTY ${context.operation} failed for ${id} during pool acquisition`,
+          error
+        );
       }
     );
+
+    let terminalProcess: TerminalProcess;
+    try {
+      terminalProcess = new TerminalProcess(
+        id,
+        options,
+        {
+          emitData: (termId, data) => this.emitData(termId, data),
+          onExit: (termId, exitCode) => {
+            // Guard against stale exit events from previous terminal with same ID
+            if (this.registry.get(termId) !== terminalProcess) {
+              return;
+            }
+            this.emit("exit", termId, exitCode);
+            if (!terminalProcess.shouldPreserveOnExit(exitCode)) {
+              this.registry.delete(termId);
+            }
+          },
+        },
+        {
+          agentStateService: this.agentStateService,
+          ptyPool: this.ptyPool,
+          sabModeEnabled: this.sabModeEnabled,
+          processTreeCache: this.processTreeCache,
+        },
+        spawnContext,
+        ptyProcess
+      );
+    } catch (error) {
+      logError(`TerminalProcess constructor failed for ${id}, killing orphaned PTY`, error);
+      try {
+        ptyProcess.kill();
+      } catch {
+        // Process may already be dead
+      }
+      throw error;
+    }
 
     this.registry.add(id, terminalProcess);
   }

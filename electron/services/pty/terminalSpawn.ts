@@ -1,9 +1,39 @@
 import * as pty from "node-pty";
 import { getEffectiveAgentConfig } from "../../../shared/config/agentRegistry.js";
 import { filterEnvironment, injectCanopyMetadata } from "./EnvironmentFilter.js";
-import { buildNonInteractiveEnv, AGENT_ENV_EXCLUSIONS } from "./terminalShell.js";
+import {
+  buildNonInteractiveEnv,
+  AGENT_ENV_EXCLUSIONS,
+  getDefaultShell,
+  getDefaultShellArgs,
+} from "./terminalShell.js";
 import type { PtySpawnOptions } from "./types.js";
 import type { PtyPool } from "../PtyPool.js";
+
+export interface SpawnContext {
+  shell: string;
+  args: string[];
+  isAgentTerminal: boolean;
+  agentId: string | undefined;
+  env: Record<string, string>;
+}
+
+export function computeSpawnContext(id: string, options: PtySpawnOptions): SpawnContext {
+  const shell = options.shell || getDefaultShell();
+  const args = options.args || getDefaultShellArgs(shell);
+
+  const isAgentByKind = options.kind === "agent";
+  const isAgentByAgentId = !!options.agentId;
+  const isAgentByType = !!(options.type && options.type !== "terminal");
+  const isAgentTerminal = isAgentByKind || isAgentByAgentId || isAgentByType;
+  const agentId = isAgentTerminal
+    ? (options.agentId ?? (options.type !== "terminal" ? options.type : id))
+    : undefined;
+
+  const env = buildTerminalEnv(options, id, shell, isAgentTerminal, agentId);
+
+  return { shell, args, isAgentTerminal, agentId, env };
+}
 
 export function buildTerminalEnv(
   options: PtySpawnOptions,

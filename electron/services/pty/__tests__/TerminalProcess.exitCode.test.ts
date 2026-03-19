@@ -1,16 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { IPty } from "node-pty";
 import { TerminalProcess } from "../TerminalProcess.js";
+import type { SpawnContext } from "../terminalSpawn.js";
 
-type SpawnFn = (file: string, args: string[], options: Record<string, unknown>) => IPty;
-
-let spawnMock: ReturnType<typeof vi.fn<SpawnFn>>;
 let exitHandler: ((e: { exitCode: number; signal?: number }) => void) | null = null;
 
 vi.mock("node-pty", () => {
-  return {
-    spawn: (...args: Parameters<SpawnFn>) => spawnMock(...args),
-  };
+  return { spawn: vi.fn() };
 });
 
 vi.mock("../terminalSessionPersistence.js", async (importOriginal) => {
@@ -43,19 +39,37 @@ function createMockPty(): IPty {
   return pty as IPty;
 }
 
+function defaultSpawnContext(overrides?: Partial<SpawnContext>): SpawnContext {
+  return {
+    shell: "/bin/zsh",
+    args: ["-l"],
+    isAgentTerminal: false,
+    agentId: undefined,
+    env: {},
+    ...overrides,
+  };
+}
+
 type TerminalProcessOptions = ConstructorParameters<typeof TerminalProcess>[1];
 
 function createTerminal(options?: Partial<TerminalProcessOptions>): TerminalProcess {
+  const merged = {
+    cwd: process.cwd(),
+    cols: 80,
+    rows: 24,
+    kind: "terminal" as const,
+    type: "terminal" as const,
+    ...options,
+  };
+  const isAgent =
+    merged.kind === "agent" || !!merged.agentId || (!!merged.type && merged.type !== "terminal");
+  const ctx = defaultSpawnContext({
+    isAgentTerminal: isAgent,
+    agentId: isAgent ? ((merged as any).agentId ?? merged.type) : undefined,
+  });
   return new TerminalProcess(
     "t-exit",
-    {
-      cwd: process.cwd(),
-      cols: 80,
-      rows: 24,
-      kind: "terminal",
-      type: "terminal",
-      ...options,
-    },
+    merged,
     { emitData: () => {}, onExit: () => {} },
     {
       agentStateService: {
@@ -66,14 +80,15 @@ function createTerminal(options?: Partial<TerminalProcessOptions>): TerminalProc
       } as unknown as ConstructorParameters<typeof TerminalProcess>[3]["agentStateService"],
       ptyPool: null,
       processTreeCache: null,
-    }
+    },
+    ctx,
+    createMockPty()
   );
 }
 
 describe("TerminalProcess exit code persistence", () => {
   beforeEach(() => {
     exitHandler = null;
-    spawnMock = vi.fn<SpawnFn>(() => createMockPty());
   });
 
   it("stores exitCode on clean exit for agent terminals", () => {

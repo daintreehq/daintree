@@ -63,8 +63,7 @@ import {
 import { TerminalForensicsBuffer } from "./TerminalForensicsBuffer.js";
 import { SemanticBufferManager } from "./SemanticBufferManager.js";
 import { stripAnsiCodes } from "../../../shared/utils/artifactParser.js";
-import { getDefaultShell, getDefaultShellArgs } from "./terminalShell.js";
-import { buildTerminalEnv, acquirePtyProcess } from "./terminalSpawn.js";
+import type { SpawnContext } from "./terminalSpawn.js";
 
 type CursorBuffer = {
   cursorY?: number;
@@ -252,31 +251,14 @@ export class TerminalProcess {
     public readonly id: string,
     private options: PtySpawnOptions,
     private callbacks: TerminalProcessCallbacks,
-    private deps: TerminalProcessDependencies
+    private deps: TerminalProcessDependencies,
+    spawnContext: SpawnContext,
+    ptyProcess: pty.IPty
   ) {
-    const shell = options.shell || getDefaultShell();
-    const args = options.args || getDefaultShellArgs(shell);
+    const { shell, isAgentTerminal, agentId } = spawnContext;
     const spawnedAt = Date.now();
 
-    const isAgentByKind = options.kind === "agent";
-    const isAgentByAgentId = !!options.agentId;
-    const isAgentByType = !!(options.type && options.type !== "terminal");
-    this.isAgentTerminal = isAgentByKind || isAgentByAgentId || isAgentByType;
-    const agentId = this.isAgentTerminal
-      ? (options.agentId ?? (options.type !== "terminal" ? options.type : id))
-      : undefined;
-
-    const env = buildTerminalEnv(options, id, shell, this.isAgentTerminal, agentId);
-    const ptyProcess = acquirePtyProcess(
-      id,
-      options,
-      env,
-      shell,
-      args,
-      this.isAgentTerminal,
-      deps.ptyPool,
-      (error, context) => this.logWriteError(error, context)
-    );
+    this.isAgentTerminal = isAgentTerminal;
 
     this._scrollback = this.isAgentTerminal ? AGENT_SCROLLBACK : DEFAULT_SCROLLBACK;
 
