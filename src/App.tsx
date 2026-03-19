@@ -109,6 +109,7 @@ import { OnboardingFlow } from "./components/Onboarding/OnboardingFlow";
 import { NewsletterStep } from "./components/Onboarding/NewsletterStep";
 import { GettingStartedChecklist } from "./components/Onboarding/GettingStartedChecklist";
 import { ErrorBoundary } from "./components/ErrorBoundary";
+import { WorktreeCardErrorFallback } from "./components/Worktree/WorktreeCardErrorFallback";
 import { DndProvider } from "./components/DragDrop";
 import { SortableContext, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import {
@@ -215,6 +216,46 @@ const SidebarWorktreeRow = React.memo(function SidebarWorktreeRow({
         disabled={isSortDisabled || isPinned}
       >
         {({ isDraggingSort, dragHandleListeners, dragHandleActivatorRef }) => (
+          <ErrorBoundary
+            variant="component"
+            componentName="WorktreeCard"
+            fallback={WorktreeCardErrorFallback}
+            resetKeys={[worktreeId]}
+            context={{ worktreeId }}
+          >
+            <WorktreeCard
+              worktree={worktree}
+              isActive={isActive}
+              isFocused={isFocused}
+              isSingleWorktree={isSingleWorktree}
+              onSelect={onSelect}
+              onCopyTree={onCopyTree}
+              onOpenEditor={onOpenEditor}
+              onSaveLayout={onSaveLayout}
+              onLaunchAgent={onLaunchAgent}
+              agentAvailability={availability}
+              agentSettings={agentSettings}
+              homeDir={homeDir}
+              dragHandleListeners={dragHandleListeners}
+              dragHandleActivatorRef={dragHandleActivatorRef}
+              isDraggingSort={isDraggingSort}
+            />
+          </ErrorBoundary>
+        )}
+      </SortableWorktreeCard>
+    );
+  }
+
+  return (
+    <SortableWorktreeCard worktreeId={worktreeId} dragStartOrder={dragStartOrder} disabled={true}>
+      {({ isDraggingSort }) => (
+        <ErrorBoundary
+          variant="component"
+          componentName="WorktreeCard"
+          fallback={WorktreeCardErrorFallback}
+          resetKeys={[worktreeId]}
+          context={{ worktreeId }}
+        >
           <WorktreeCard
             worktree={worktree}
             isActive={isActive}
@@ -228,33 +269,9 @@ const SidebarWorktreeRow = React.memo(function SidebarWorktreeRow({
             agentAvailability={availability}
             agentSettings={agentSettings}
             homeDir={homeDir}
-            dragHandleListeners={dragHandleListeners}
-            dragHandleActivatorRef={dragHandleActivatorRef}
             isDraggingSort={isDraggingSort}
           />
-        )}
-      </SortableWorktreeCard>
-    );
-  }
-
-  return (
-    <SortableWorktreeCard worktreeId={worktreeId} dragStartOrder={dragStartOrder} disabled={true}>
-      {({ isDraggingSort }) => (
-        <WorktreeCard
-          worktree={worktree}
-          isActive={isActive}
-          isFocused={isFocused}
-          isSingleWorktree={isSingleWorktree}
-          onSelect={onSelect}
-          onCopyTree={onCopyTree}
-          onOpenEditor={onOpenEditor}
-          onSaveLayout={onSaveLayout}
-          onLaunchAgent={onLaunchAgent}
-          agentAvailability={availability}
-          agentSettings={agentSettings}
-          homeDir={homeDir}
-          isDraggingSort={isDraggingSort}
-        />
+        </ErrorBoundary>
       )}
     </SortableWorktreeCard>
   );
@@ -306,20 +323,28 @@ const StaticWorktreeRow = React.memo(function StaticWorktreeRow({
   if (!worktree) return null;
 
   return (
-    <WorktreeCard
-      worktree={worktree}
-      isActive={worktreeId === activeWorktreeId}
-      isFocused={worktreeId === focusedWorktreeId}
-      isSingleWorktree={totalWorktreeCount === 1}
-      onSelect={onSelect}
-      onCopyTree={onCopyTree}
-      onOpenEditor={onOpenEditor}
-      onSaveLayout={onSaveLayout}
-      onLaunchAgent={onLaunchAgent}
-      agentAvailability={availability}
-      agentSettings={agentSettings}
-      homeDir={homeDir}
-    />
+    <ErrorBoundary
+      variant="component"
+      componentName="WorktreeCard"
+      fallback={WorktreeCardErrorFallback}
+      resetKeys={[worktreeId]}
+      context={{ worktreeId }}
+    >
+      <WorktreeCard
+        worktree={worktree}
+        isActive={worktreeId === activeWorktreeId}
+        isFocused={worktreeId === focusedWorktreeId}
+        isSingleWorktree={totalWorktreeCount === 1}
+        onSelect={onSelect}
+        onCopyTree={onCopyTree}
+        onOpenEditor={onOpenEditor}
+        onSaveLayout={onSaveLayout}
+        onLaunchAgent={onLaunchAgent}
+        agentAvailability={availability}
+        agentSettings={agentSettings}
+        homeDir={homeDir}
+      />
+    </ErrorBoundary>
   );
 });
 
