@@ -157,7 +157,7 @@ export function RecipesTab({
     if (!recipe.worktreeId) return "Project-wide";
     const worktree = worktreeMap.get(recipe.worktreeId);
     if (worktree) {
-      return `Worktree: ${worktree.branch || worktree.name}`;
+      return `Worktree: ${worktree.isMainWorktree ? worktree.name : worktree.branch || worktree.name}`;
     }
     return `Worktree: ${recipe.worktreeId}`;
   };

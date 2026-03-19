@@ -136,7 +136,7 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
           <p className="text-sm text-canopy-text/80">
             Are you sure you want to delete{" "}
             <span className="font-mono font-medium text-canopy-text">
-              {worktree.branch || worktree.name}
+              {worktree.isMainWorktree ? worktree.name : worktree.branch || worktree.name}
             </span>
             ?
           </p>

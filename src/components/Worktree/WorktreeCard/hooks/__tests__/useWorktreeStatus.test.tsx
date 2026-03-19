@@ -170,6 +170,31 @@ describe("useWorktreeStatus — lifecycleStage", () => {
   });
 });
 
+describe("useWorktreeStatus — branchLabel", () => {
+  function getBranchLabel(overrides: Partial<WorktreeState> = {}): string {
+    const { result } = renderHook(() =>
+      useWorktreeStatus({ worktree: makeWorktree(overrides), worktreeErrorCount: 0 })
+    );
+    return result.current.branchLabel;
+  }
+
+  it("returns directory name for main worktree even when branch is set", () => {
+    expect(getBranchLabel({ isMainWorktree: true, name: "canopy", branch: "main" })).toBe("canopy");
+  });
+
+  it("returns branch name for non-main worktree", () => {
+    expect(getBranchLabel({ isMainWorktree: false, name: "canopy", branch: "feature/test" })).toBe(
+      "feature/test"
+    );
+  });
+
+  it("falls back to name when branch is undefined for non-main worktree", () => {
+    expect(getBranchLabel({ isMainWorktree: false, name: "canopy", branch: undefined })).toBe(
+      "canopy"
+    );
+  });
+});
+
 describe("useWorktreeStatus — computedSubtitle", () => {
   function getSubtitle(overrides: Partial<WorktreeState> = {}, worktreeErrorCount = 0) {
     const { result } = renderHook(() =>

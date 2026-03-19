@@ -71,7 +71,7 @@ export function useWorktreeStatus({
     return trimmed;
   }, [worktree.aiNote, isMainWorktree, worktree.aiNoteTimestamp, now]);
 
-  const branchLabel = worktree.branch ?? worktree.name;
+  const branchLabel = isMainWorktree ? worktree.name : (worktree.branch ?? worktree.name);
   const hasChanges = (worktree.worktreeChanges?.changedFileCount ?? 0) > 0;
 
   const rawLastCommitMessage = worktree.worktreeChanges?.lastCommitMessage;

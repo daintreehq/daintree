@@ -31,7 +31,8 @@ export function WorktreeSelector({
           </option>
           {worktrees.map((wt) => (
             <option key={wt.id} value={wt.id} disabled={wt.id === disabledId}>
-              {wt.branch || wt.name} {wt.isMainWorktree ? "(main)" : ""}
+              {wt.isMainWorktree ? wt.name : wt.branch || wt.name}{" "}
+              {wt.isMainWorktree ? "(main)" : ""}
             </option>
           ))}
         </select>

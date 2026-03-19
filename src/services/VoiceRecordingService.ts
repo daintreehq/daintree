@@ -781,7 +781,7 @@ class VoiceRecordingService {
       projectId: currentProject?.id,
       projectName: currentProject?.name,
       worktreeId: panel.worktreeId,
-      worktreeLabel: worktree?.branch || worktree?.name,
+      worktreeLabel: worktree?.isMainWorktree ? worktree?.name : worktree?.branch || worktree?.name,
     };
   }
 

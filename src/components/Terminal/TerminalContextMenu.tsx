@@ -390,7 +390,8 @@ export function TerminalContextMenu({
           <ContextMenuSubContent>
             {worktrees.map((wt) => {
               const isCurrent = wt.id === terminal.worktreeId;
-              const label = (wt.branch || wt.name).trim() || "Untitled worktree";
+              const label =
+                (wt.isMainWorktree ? wt.name : wt.branch || wt.name).trim() || "Untitled worktree";
               return (
                 <ContextMenuItem
                   key={wt.id}

@@ -63,8 +63,8 @@ export function AgentButton({
   const handleContextMenu = async (event: React.MouseEvent) => {
     const worktreeItems: MenuItemOption[] = worktrees.map((wt) => ({
       id: `launch:worktree:${wt.id}`,
-      label: wt.branch?.trim() || wt.name,
-      sublabel: wt.branch?.trim() ? wt.name : undefined,
+      label: wt.isMainWorktree ? wt.name : wt.branch?.trim() || wt.name,
+      sublabel: wt.isMainWorktree ? undefined : wt.branch?.trim() ? wt.name : undefined,
       submenu: [
         { id: `launch:worktree:${wt.id}:grid`, label: "Grid" },
         { id: `launch:worktree:${wt.id}:dock`, label: "Dock" },

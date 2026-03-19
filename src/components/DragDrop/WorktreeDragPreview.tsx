@@ -6,7 +6,7 @@ interface WorktreeDragPreviewProps {
 }
 
 export function WorktreeDragPreview({ worktree }: WorktreeDragPreviewProps) {
-  const branchLabel = worktree.branch ?? worktree.name;
+  const branchLabel = worktree.isMainWorktree ? worktree.name : (worktree.branch ?? worktree.name);
   const hasIssueTitle = !!(worktree.issueNumber && worktree.issueTitle);
 
   return (
