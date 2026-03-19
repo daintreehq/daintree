@@ -31,6 +31,7 @@ vi.mock("@/store/voiceRecordingStore", () => {
     rebaseAICorrectionSpans: vi.fn(),
     clearAICorrectionSpans: vi.fn(),
     setDraftLengthAtSegmentStart: vi.fn(),
+    clearPanelBuffer: vi.fn(),
   };
   const getState = () => ({ ...state, ...fns });
   const subscribe = vi.fn(() => () => {});
