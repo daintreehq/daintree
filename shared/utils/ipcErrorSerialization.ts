@@ -72,7 +72,7 @@ export function deserializeError(serialized: SerializedError): Error {
   if (serialized.path !== undefined) (error as NodeJS.ErrnoException).path = serialized.path;
 
   if (serialized.context !== undefined) {
-    (error as Record<string, unknown>).context = serialized.context;
+    (error as unknown as Record<string, unknown>).context = serialized.context;
   }
 
   if (serialized.cause !== undefined) {
@@ -81,7 +81,7 @@ export function deserializeError(serialized: SerializedError): Error {
 
   if (serialized.properties !== undefined) {
     for (const [key, val] of Object.entries(serialized.properties)) {
-      (error as Record<string, unknown>)[key] = val;
+      (error as unknown as Record<string, unknown>)[key] = val;
     }
   }
 
