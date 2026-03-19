@@ -321,6 +321,9 @@ describe("BulkCreateWorktreeDialog", () => {
 
     // Should have dispatched again for only item 2
     expect(mockDispatch).toHaveBeenCalledTimes(4); // 3 initial + 1 retry
+    // Verify the retry call was for issue #2
+    const retryCall = mockDispatch.mock.calls[3]!;
+    expect(retryCall[1]).toMatchObject({ issueNumber: 2 });
 
     // Resolve the retry successfully
     await act(async () => {
@@ -426,5 +429,49 @@ describe("BulkCreateWorktreeDialog", () => {
 
     expect(screen.getByText("Network connection lost")).toBeTruthy();
     expect(screen.getByText(/1 failed/)).toBeTruthy();
+  });
+
+  it("stops processing items when dialog is closed during execution", async () => {
+    const resolvers: Array<(value: unknown) => void> = [];
+    mockDispatch.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolvers.push(resolve);
+        })
+    );
+
+    const onClose = vi.fn();
+    render(<BulkCreateWorktreeDialog {...defaultProps} onClose={onClose} />);
+
+    await act(async () => {
+      screen.getByTestId("bulk-create-confirm-button").click();
+    });
+
+    // Resolve first item
+    await act(async () => {
+      resolvers[0]?.({ ok: true, result: { worktreeId: "wt-1" } });
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    // Close the dialog (cancel) while items 2 and 3 are still pending
+    await act(async () => {
+      // Find cancel button in executing state
+      const buttons = screen.getAllByRole("button");
+      const cancelBtn = buttons.find((b) => b.textContent === "Cancel");
+      cancelBtn?.click();
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    expect(onClose).toHaveBeenCalled();
+
+    // Resolve remaining items — should be no-ops due to runIdRef invalidation
+    await act(async () => {
+      resolvers[1]?.({ ok: true, result: { worktreeId: "wt-2" } });
+      resolvers[2]?.({ ok: true, result: { worktreeId: "wt-3" } });
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    // Dialog should not show done state (it was closed/reset)
+    expect(screen.queryByTestId("bulk-create-done-button")).toBeNull();
   });
 });

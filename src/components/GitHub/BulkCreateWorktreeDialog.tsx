@@ -106,7 +106,7 @@ const MAX_AUTO_RETRIES = 2;
 const RETRY_DELAYS = [1000, 2000];
 
 const TRANSIENT_ERROR_RE =
-  /\.lock['"]?:.*(?:File exists|exists)|Another git process|Resource temporarily unavailable/i;
+  /\.lock['"]?:.*(?:File exists|exists)|Another git process|Resource temporarily unavailable|cannot lock ref|could not lock config file/i;
 
 function isTransientError(message: string, code?: string): boolean {
   if (code === "VALIDATION_ERROR" || code === "NOT_FOUND") return false;
