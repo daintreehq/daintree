@@ -18,6 +18,11 @@ afterAll(() => {
   });
 });
 
+vi.mock("react-dom", async () => {
+  const actual = await vi.importActual<typeof import("react-dom")>("react-dom");
+  return { ...actual, createPortal: (children: React.ReactNode) => children };
+});
+
 vi.mock("@/lib/utils", () => ({
   cn: (...args: unknown[]) => args.filter(Boolean).join(" "),
 }));
@@ -137,7 +142,7 @@ describe("ProjectSwitcherPalette keyboard navigation", () => {
   });
 
   afterEach(() => {
-    document.body.innerHTML = "";
+    vi.restoreAllMocks();
   });
 
   it("does not call onSelectNext when Tab is pressed on the input", () => {
