@@ -644,3 +644,137 @@ describe("DEFAULT_ROUTING_CONFIG", () => {
     expect(DEFAULT_ROUTING_CONFIG.maxConcurrent).toBe(1);
   });
 });
+
+describe("cursor detection patterns", () => {
+  function compileAgentPatterns(agentId: string, key: string): RegExp[] {
+    const config = getAgentConfig(agentId);
+    const patterns = config?.detection?.[key as keyof typeof config.detection] as
+      | string[]
+      | undefined;
+    return (patterns ?? []).map((p: string) => new RegExp(p, "im"));
+  }
+
+  describe("primaryPatterns", () => {
+    it.each([
+      "⬢Thinking about the code",
+      "⬢ Reading files",
+      "⬢Searching codebase",
+      "⬢ Planning approach",
+      "⬢Running tests",
+      "⬢Executing command",
+      "⬢Grepping for pattern",
+      "⬢Editing file.ts",
+      "⬢ Listing files",
+    ])("matches working output: %s", (line) => {
+      const patterns = compileAgentPatterns("cursor", "primaryPatterns");
+      expect(patterns.some((p) => p.test(line))).toBe(true);
+    });
+
+    it("matches 'esc to stop' hint", () => {
+      const patterns = compileAgentPatterns("cursor", "primaryPatterns");
+      expect(patterns.some((p) => p.test("esc to stop"))).toBe(true);
+    });
+  });
+
+  describe("completionPatterns", () => {
+    it.each([
+      "⬢Thought3s",
+      "⬢ Thought 3s",
+      "⬢Read 2 files, 1 directory1s",
+      "⬢ Read App.tsx 1s",
+      "⬢Planned approach2s",
+      "⬢Searched codebase",
+      "⬢Ran tests",
+      "⬢Edited foo.ts",
+      "⬢Grepped src",
+      "⬢Listed files",
+    ])("matches completion output: %s", (line) => {
+      const patterns = compileAgentPatterns("cursor", "completionPatterns");
+      expect(patterns.some((p) => p.test(line))).toBe(true);
+    });
+
+    it("does not match present-tense verbs", () => {
+      const patterns = compileAgentPatterns("cursor", "completionPatterns");
+      expect(patterns.some((p) => p.test("⬢Thinking about code"))).toBe(false);
+      expect(patterns.some((p) => p.test("⬢Reading files"))).toBe(false);
+    });
+  });
+
+  describe("fallbackPatterns", () => {
+    it("matches hexagon with zero whitespace", () => {
+      const patterns = compileAgentPatterns("cursor", "fallbackPatterns");
+      expect(patterns.some((p) => p.test("⬢Processing"))).toBe(true);
+    });
+
+    it("matches hexagon with whitespace", () => {
+      const patterns = compileAgentPatterns("cursor", "fallbackPatterns");
+      expect(patterns.some((p) => p.test("⬢ Processing"))).toBe(true);
+    });
+  });
+});
+
+describe("opencode detection patterns", () => {
+  function compileAgentPatterns(agentId: string, key: string): RegExp[] {
+    const config = getAgentConfig(agentId);
+    const patterns = config?.detection?.[key as keyof typeof config.detection] as
+      | string[]
+      | undefined;
+    return (patterns ?? []).map((p: string) => new RegExp(p, "im"));
+  }
+
+  describe("primaryPatterns", () => {
+    it.each([
+      "⣾ Processing files (esc to cancel)",
+      "⣽ Reading files (press esc to cancel)",
+      "⢿ Analyzing code (esc)",
+    ])("matches Dot spinner with esc hint: %s", (line) => {
+      const patterns = compileAgentPatterns("opencode", "primaryPatterns");
+      expect(patterns.some((p) => p.test(line))).toBe(true);
+    });
+
+    it.each(["● Generating", "• Building tool call", "· Waiting for tool response"])(
+      "matches Pulse spinner with task string: %s",
+      (line) => {
+        const patterns = compileAgentPatterns("opencode", "primaryPatterns");
+        expect(patterns.some((p) => p.test(line))).toBe(true);
+      }
+    );
+
+    it("does not match Pulse spinner with generic text", () => {
+      const patterns = compileAgentPatterns("opencode", "primaryPatterns");
+      expect(patterns.some((p) => p.test("· some random text"))).toBe(false);
+      expect(patterns.some((p) => p.test("• loading resources"))).toBe(false);
+    });
+
+    it.each(["press esc to exit cancel", "Press Esc again to interrupt", "press esc to cancel"])(
+      "matches interrupt/cancel hint: %s",
+      (line) => {
+        const patterns = compileAgentPatterns("opencode", "primaryPatterns");
+        expect(patterns.some((p) => p.test(line))).toBe(true);
+      }
+    );
+
+    it("does not match old Gemini braille spinners in spinner patterns", () => {
+      const config = getAgentConfig("opencode");
+      const spinnerPatterns = (config?.detection?.primaryPatterns ?? [])
+        .filter((p: string) => p.startsWith("["))
+        .map((p: string) => new RegExp(p, "im"));
+      expect(spinnerPatterns.some((p) => p.test("⠋ Processing files (esc to cancel)"))).toBe(false);
+    });
+  });
+
+  describe("fallbackPatterns", () => {
+    it.each(["⣾ working", "⣷ processing", "Generating...", "waiting for tool response"])(
+      "matches fallback output: %s",
+      (line) => {
+        const patterns = compileAgentPatterns("opencode", "fallbackPatterns");
+        expect(patterns.some((p) => p.test(line))).toBe(true);
+      }
+    );
+
+    it("does not match old Gemini braille spinners", () => {
+      const patterns = compileAgentPatterns("opencode", "fallbackPatterns");
+      expect(patterns.some((p) => p.test("⠋ working"))).toBe(false);
+    });
+  });
+});
