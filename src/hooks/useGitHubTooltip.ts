@@ -1,5 +1,6 @@
 import { useState, useCallback, useRef, useEffect } from "react";
 import type { IssueTooltipData, PRTooltipData } from "@shared/types/github";
+import { TtlCache } from "@/utils/ttlCache";
 
 type TooltipState<T> = {
   data: T | null;
@@ -7,8 +8,11 @@ type TooltipState<T> = {
   error: boolean;
 };
 
-const issueCache = new Map<string, IssueTooltipData>();
-const prCache = new Map<string, PRTooltipData>();
+const TOOLTIP_CACHE_MAX = 100;
+const TOOLTIP_CACHE_TTL = 300_000; // 5 minutes, matching backend TTL
+
+const issueCache = new TtlCache<string, IssueTooltipData>(TOOLTIP_CACHE_MAX, TOOLTIP_CACHE_TTL);
+const prCache = new TtlCache<string, PRTooltipData>(TOOLTIP_CACHE_MAX, TOOLTIP_CACHE_TTL);
 
 export function useIssueTooltip(cwd: string | undefined, issueNumber: number | undefined) {
   const [state, setState] = useState<TooltipState<IssueTooltipData>>({
