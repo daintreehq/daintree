@@ -185,12 +185,12 @@ export function DockPanelOffscreenContainer({ children }: DockPanelOffscreenCont
           {
             contentVisibility: "hidden",
             position: "fixed",
-            left: "-20000px",
+            left: 0,
             top: 0,
             width: "800px",
             height: "600px",
             overflow: "hidden",
-            pointerEvents: "none",
+            zIndex: -1,
           } as React.CSSProperties
         }
         aria-hidden="true"

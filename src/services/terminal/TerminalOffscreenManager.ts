@@ -11,12 +11,12 @@ export class TerminalOffscreenManager {
     container.style.cssText = [
       "content-visibility: hidden",
       "position: fixed",
-      "left: -20000px",
+      "left: 0",
       "top: 0",
       "width: 2000px",
       "height: 2000px",
       "overflow: hidden",
-      "pointer-events: none",
+      "z-index: -1",
     ].join(";");
     document.body.appendChild(container);
 

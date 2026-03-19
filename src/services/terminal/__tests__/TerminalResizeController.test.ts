@@ -58,6 +58,7 @@ function createManagedTerminal() {
     },
     hostElement: {
       style: { width: "100%" },
+      checkVisibility: vi.fn(() => true),
       getBoundingClientRect: vi.fn(() => ({ left: 0, width: 1000, height: 700 })),
       querySelector: vi.fn(() => null),
     } as unknown as HTMLDivElement,
@@ -194,6 +195,64 @@ describe("TerminalResizeController", () => {
     expect(result).toBeNull();
     expect(managed.fitAddon.fit).not.toHaveBeenCalled();
     expect(resizeMock).not.toHaveBeenCalled();
+  });
+
+  it("fit() returns null without calling getBoundingClientRect when checkVisibility returns false", () => {
+    const managed = createManagedTerminal();
+    (managed.hostElement.checkVisibility as ReturnType<typeof vi.fn>).mockReturnValue(false);
+
+    const controller = new TerminalResizeController({
+      getInstance: vi.fn(() => managed),
+      dataBuffer: {
+        flushForTerminal: vi.fn(),
+        resetForTerminal: vi.fn(),
+      } as unknown as ResizeControllerDeps["dataBuffer"],
+    });
+
+    const result = controller.fit("term-1");
+    expect(result).toBeNull();
+    expect(managed.hostElement.getBoundingClientRect).not.toHaveBeenCalled();
+    expect(managed.fitAddon.fit).not.toHaveBeenCalled();
+  });
+
+  it("fit() returns null when visible but dimensions are too small", () => {
+    const managed = createManagedTerminal();
+    (managed.hostElement.getBoundingClientRect as ReturnType<typeof vi.fn>).mockReturnValue({
+      left: 0,
+      width: 40,
+      height: 30,
+    });
+
+    const controller = new TerminalResizeController({
+      getInstance: vi.fn(() => managed),
+      dataBuffer: {
+        flushForTerminal: vi.fn(),
+        resetForTerminal: vi.fn(),
+      } as unknown as ResizeControllerDeps["dataBuffer"],
+    });
+
+    const result = controller.fit("term-1");
+    expect(result).toBeNull();
+    expect(managed.hostElement.checkVisibility).toHaveBeenCalled();
+    expect(managed.fitAddon.fit).not.toHaveBeenCalled();
+  });
+
+  it("fit() succeeds when visible and dimensions are adequate", () => {
+    const managed = createManagedTerminal();
+
+    const controller = new TerminalResizeController({
+      getInstance: vi.fn(() => managed),
+      dataBuffer: {
+        flushForTerminal: vi.fn(),
+        resetForTerminal: vi.fn(),
+      } as unknown as ResizeControllerDeps["dataBuffer"],
+    });
+
+    const result = controller.fit("term-1");
+    expect(result).not.toBeNull();
+    expect(managed.hostElement.checkVisibility).toHaveBeenCalled();
+    expect(managed.fitAddon.fit).toHaveBeenCalled();
+    expect(resizeMock).toHaveBeenCalledWith("term-1", managed.terminal.cols, managed.terminal.rows);
   });
 
   it("settled strategy batches rapid resizes into a single PTY resize", () => {
