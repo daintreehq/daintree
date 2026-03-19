@@ -37,13 +37,17 @@ import { SortableContext, horizontalListSortingStrategy, arrayMove } from "@dnd-
 import { restrictToHorizontalAxis, restrictToParentElement } from "@dnd-kit/modifiers";
 import type { PanelKind, TerminalType } from "@/types";
 import { cn, getBaseTitle } from "@/lib/utils";
-import { formatShortcutForTooltip } from "@/lib/platform";
+import { formatShortcutForTooltip, createTooltipWithShortcut } from "@/lib/platform";
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
 import { getBrandColorHex } from "@/lib/colorUtils";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import { DockToBottomIcon } from "@/components/icons";
 import { useDragHandle } from "@/components/DragDrop/DragHandleContext";
-import { useBackgroundPanelStats, useHorizontalScrollControls } from "@/hooks";
+import {
+  useBackgroundPanelStats,
+  useHorizontalScrollControls,
+  useKeybindingDisplay,
+} from "@/hooks";
 import { useTerminalStore } from "@/store/terminalStore";
 import {
   DropdownMenu,
@@ -198,6 +202,13 @@ function PanelHeaderComponent({
   const watchPanel = useTerminalStore((state) => state.watchPanel);
   const unwatchPanel = useTerminalStore((state) => state.unwatchPanel);
   const showWatchButton = !!agentId;
+
+  const duplicateShortcut = useKeybindingDisplay("terminal.duplicate");
+  const moveToDockShortcut = useKeybindingDisplay("terminal.moveToDock");
+  const toggleDockShortcut = useKeybindingDisplay("terminal.toggleDock");
+  const moveToGridShortcut = useKeybindingDisplay("terminal.moveToGrid");
+  const maximizeShortcut = useKeybindingDisplay("terminal.maximize");
+  const closeShortcut = useKeybindingDisplay("terminal.close");
 
   // Terminal record for overflow menu actions (single shallow selector, matching TerminalContextMenu pattern)
   const terminal = useTerminalStore(
@@ -491,7 +502,12 @@ function PanelHeaderComponent({
                               <Plus className="w-3 h-3" aria-hidden="true" />
                             </button>
                           </TooltipTrigger>
-                          <TooltipContent side="bottom">Duplicate panel as new tab</TooltipContent>
+                          <TooltipContent side="bottom">
+                            {createTooltipWithShortcut(
+                              "Duplicate panel as new tab",
+                              duplicateShortcut
+                            )}
+                          </TooltipContent>
                         </Tooltip>
                       </TooltipProvider>
                     )}
@@ -559,7 +575,9 @@ function PanelHeaderComponent({
                           <Plus className="w-3 h-3" aria-hidden="true" />
                         </button>
                       </TooltipTrigger>
-                      <TooltipContent side="bottom">Duplicate panel as new tab</TooltipContent>
+                      <TooltipContent side="bottom">
+                        {createTooltipWithShortcut("Duplicate panel as new tab", duplicateShortcut)}
+                      </TooltipContent>
                     </Tooltip>
                   </TooltipProvider>
                 )}
@@ -662,7 +680,9 @@ function PanelHeaderComponent({
                     <Plus className="w-3.5 h-3.5" aria-hidden="true" />
                   </button>
                 </TooltipTrigger>
-                <TooltipContent side="bottom">Duplicate panel as new tab</TooltipContent>
+                <TooltipContent side="bottom">
+                  {createTooltipWithShortcut("Duplicate panel as new tab", duplicateShortcut)}
+                </TooltipContent>
               </Tooltip>
             </TooltipProvider>
           )}
@@ -849,7 +869,9 @@ function PanelHeaderComponent({
                   <DockToBottomIcon className="w-3 h-3" aria-hidden="true" />
                 </button>
               </TooltipTrigger>
-              <TooltipContent side="bottom">Move to Dock</TooltipContent>
+              <TooltipContent side="bottom">
+                {createTooltipWithShortcut("Move to Dock", moveToDockShortcut)}
+              </TooltipContent>
             </Tooltip>
           </TooltipProvider>
         )}
@@ -872,7 +894,9 @@ function PanelHeaderComponent({
                   <DockToBottomIcon className="w-3 h-3" aria-hidden="true" />
                 </button>
               </TooltipTrigger>
-              <TooltipContent side="bottom">Collapse to Dock</TooltipContent>
+              <TooltipContent side="bottom">
+                {createTooltipWithShortcut("Collapse to Dock", toggleDockShortcut)}
+              </TooltipContent>
             </Tooltip>
           </TooltipProvider>
         )}
@@ -894,7 +918,10 @@ function PanelHeaderComponent({
                   <Maximize2 className="w-3 h-3" aria-hidden="true" />
                 </button>
               </TooltipTrigger>
-              <TooltipContent side="bottom">Restore to Grid · double-click header</TooltipContent>
+              <TooltipContent side="bottom">
+                {createTooltipWithShortcut("Restore to Grid", moveToGridShortcut) +
+                  " · double-click header"}
+              </TooltipContent>
             </Tooltip>
           </TooltipProvider>
         ) : onToggleMaximize && isMaximized ? (
@@ -916,7 +943,8 @@ function PanelHeaderComponent({
                 </button>
               </TooltipTrigger>
               <TooltipContent side="bottom">
-                {`Restore Grid View (${formatShortcutForTooltip("Ctrl+Shift+F")} · double-click header)`}
+                {createTooltipWithShortcut("Restore Grid View", maximizeShortcut) +
+                  " · double-click header"}
               </TooltipContent>
             </Tooltip>
           </TooltipProvider>
@@ -939,7 +967,8 @@ function PanelHeaderComponent({
                   </button>
                 </TooltipTrigger>
                 <TooltipContent side="bottom">
-                  {`Maximize (${formatShortcutForTooltip("Ctrl+Shift+F")} · double-click header)`}
+                  {createTooltipWithShortcut("Maximize", maximizeShortcut) +
+                    " · double-click header"}
                 </TooltipContent>
               </Tooltip>
             </TooltipProvider>
@@ -973,7 +1002,9 @@ function PanelHeaderComponent({
               </button>
             </TooltipTrigger>
             <TooltipContent side="bottom">
-              {formatShortcutForTooltip("Close Session (Alt+Click to force close)")}
+              {createTooltipWithShortcut("Close Session", closeShortcut) +
+                " · " +
+                formatShortcutForTooltip("Alt+Click to force close")}
             </TooltipContent>
           </Tooltip>
         </TooltipProvider>
