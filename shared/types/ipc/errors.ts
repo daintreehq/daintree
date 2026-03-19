@@ -1,3 +1,39 @@
+/** Serialized error that survives Electron's structured clone algorithm */
+export interface SerializedError {
+  name: string;
+  message: string;
+  stack?: string;
+  code?: string;
+  errno?: number;
+  syscall?: string;
+  path?: string;
+  context?: Record<string, unknown>;
+  cause?: SerializedError;
+  properties?: Record<string, unknown>;
+}
+
+export interface IpcSuccessEnvelope<T = unknown> {
+  __canopyIpcEnvelope: true;
+  ok: true;
+  data: T;
+}
+
+export interface IpcErrorEnvelope {
+  __canopyIpcEnvelope: true;
+  ok: false;
+  error: SerializedError;
+}
+
+export type IpcEnvelope<T = unknown> = IpcSuccessEnvelope<T> | IpcErrorEnvelope;
+
+export function isIpcEnvelope(value: unknown): value is IpcEnvelope {
+  return (
+    value !== null &&
+    typeof value === "object" &&
+    (value as Record<string, unknown>).__canopyIpcEnvelope === true
+  );
+}
+
 /** Error type */
 export type ErrorType = "git" | "process" | "filesystem" | "network" | "config" | "unknown";
 

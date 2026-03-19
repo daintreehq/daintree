@@ -5,6 +5,8 @@
 
 import { contextBridge, ipcRenderer, webFrame, webUtils } from "electron";
 import { isTrustedRendererUrl } from "../shared/utils/trustedRenderer.js";
+import { isIpcEnvelope } from "../shared/types/ipc/errors.js";
+import { deserializeError } from "../shared/utils/ipcErrorSerialization.js";
 
 import type {
   WorktreeState,
@@ -118,11 +120,20 @@ ipcRenderer.on("terminal-port", (event, payload: { token: string }) => {
   }
 });
 
+async function _unwrappingInvoke(channel: string, ...args: unknown[]): Promise<unknown> {
+  const response = await ipcRenderer.invoke(channel, ...args);
+  if (isIpcEnvelope(response)) {
+    if (!response.ok) throw deserializeError(response.error);
+    return response.data;
+  }
+  return response;
+}
+
 function _typedInvoke<K extends Extract<keyof IpcInvokeMap, string>>(
   channel: K,
   ...args: IpcInvokeMap[K]["args"]
 ): Promise<IpcInvokeMap[K]["result"]> {
-  return ipcRenderer.invoke(channel, ...args);
+  return _unwrappingInvoke(channel, ...args) as Promise<IpcInvokeMap[K]["result"]>;
 }
 
 function _typedOn<K extends Extract<keyof IpcEventMap, string>>(
@@ -781,19 +792,19 @@ const api: ElectronAPI = {
       ipcRenderer.send(CHANNELS.TERMINAL_ACKNOWLEDGE_DATA, { id, length }),
 
     getForProject: (projectId: string) =>
-      ipcRenderer.invoke(CHANNELS.TERMINAL_GET_FOR_PROJECT, projectId),
+      _unwrappingInvoke(CHANNELS.TERMINAL_GET_FOR_PROJECT, projectId),
 
-    getAvailableTerminals: () => ipcRenderer.invoke(CHANNELS.TERMINAL_GET_AVAILABLE),
+    getAvailableTerminals: () => _unwrappingInvoke(CHANNELS.TERMINAL_GET_AVAILABLE),
 
     getTerminalsByState: (state: string) =>
-      ipcRenderer.invoke(CHANNELS.TERMINAL_GET_BY_STATE, state),
+      _unwrappingInvoke(CHANNELS.TERMINAL_GET_BY_STATE, state),
 
-    getAllTerminals: () => ipcRenderer.invoke(CHANNELS.TERMINAL_GET_ALL),
+    getAllTerminals: () => _unwrappingInvoke(CHANNELS.TERMINAL_GET_ALL),
 
-    reconnect: (terminalId: string) => ipcRenderer.invoke(CHANNELS.TERMINAL_RECONNECT, terminalId),
+    reconnect: (terminalId: string) => _unwrappingInvoke(CHANNELS.TERMINAL_RECONNECT, terminalId),
 
     replayHistory: (terminalId: string, maxLines?: number) =>
-      ipcRenderer.invoke(CHANNELS.TERMINAL_REPLAY_HISTORY, { terminalId, maxLines }),
+      _unwrappingInvoke(CHANNELS.TERMINAL_REPLAY_HISTORY, { terminalId, maxLines }),
 
     getSerializedState: (terminalId: string) =>
       _typedInvoke(CHANNELS.TERMINAL_GET_SERIALIZED_STATE, terminalId),
@@ -806,13 +817,13 @@ const api: ElectronAPI = {
     getSharedBuffers: (): Promise<{
       visualBuffers: SharedArrayBuffer[];
       signalBuffer: SharedArrayBuffer | null;
-    }> => ipcRenderer.invoke(CHANNELS.TERMINAL_GET_SHARED_BUFFERS),
+    }> => _unwrappingInvoke(CHANNELS.TERMINAL_GET_SHARED_BUFFERS),
 
     getAnalysisBuffer: (): Promise<SharedArrayBuffer | null> =>
-      ipcRenderer.invoke(CHANNELS.TERMINAL_GET_ANALYSIS_BUFFER),
+      _unwrappingInvoke(CHANNELS.TERMINAL_GET_ANALYSIS_BUFFER),
 
     forceResume: (id: string): Promise<{ success: boolean; error?: string }> =>
-      ipcRenderer.invoke(CHANNELS.TERMINAL_FORCE_RESUME, id),
+      _unwrappingInvoke(CHANNELS.TERMINAL_FORCE_RESUME, id),
 
     onStatus: (callback: (data: TerminalStatusPayload) => void) =>
       _typedOn(CHANNELS.TERMINAL_STATUS, callback),
@@ -1106,17 +1117,16 @@ const api: ElectronAPI = {
     detectRunners: (projectId: string) => _typedInvoke(CHANNELS.PROJECT_DETECT_RUNNERS, projectId),
 
     close: (projectId: string, options?: { killTerminals?: boolean }) =>
-      ipcRenderer.invoke(CHANNELS.PROJECT_CLOSE, projectId, options),
+      _unwrappingInvoke(CHANNELS.PROJECT_CLOSE, projectId, options),
 
-    reopen: (projectId: string) => ipcRenderer.invoke(CHANNELS.PROJECT_REOPEN, projectId),
+    reopen: (projectId: string) => _unwrappingInvoke(CHANNELS.PROJECT_REOPEN, projectId),
 
-    getStats: (projectId: string) => ipcRenderer.invoke(CHANNELS.PROJECT_GET_STATS, projectId),
+    getStats: (projectId: string) => _unwrappingInvoke(CHANNELS.PROJECT_GET_STATS, projectId),
 
     createFolder: (parentPath: string, folderName: string): Promise<string> =>
       _typedInvoke(CHANNELS.PROJECT_CREATE_FOLDER, { parentPath, folderName }),
 
-    initGit: (directoryPath: string) =>
-      ipcRenderer.invoke(CHANNELS.PROJECT_INIT_GIT, directoryPath),
+    initGit: (directoryPath: string) => _unwrappingInvoke(CHANNELS.PROJECT_INIT_GIT, directoryPath),
 
     initGitGuided: (options: import("../shared/types/ipc/gitInit.js").GitInitOptions) =>
       _typedInvoke(CHANNELS.PROJECT_INIT_GIT_GUIDED, options),
@@ -1277,7 +1287,7 @@ const api: ElectronAPI = {
       cursor?: string;
       bypassCache?: boolean;
       sortOrder?: "created" | "updated";
-    }) => ipcRenderer.invoke(CHANNELS.GITHUB_LIST_ISSUES, options),
+    }) => _unwrappingInvoke(CHANNELS.GITHUB_LIST_ISSUES, options),
 
     listPullRequests: (options: {
       cwd: string;
@@ -1286,25 +1296,25 @@ const api: ElectronAPI = {
       cursor?: string;
       bypassCache?: boolean;
       sortOrder?: "created" | "updated";
-    }) => ipcRenderer.invoke(CHANNELS.GITHUB_LIST_PRS, options),
+    }) => _unwrappingInvoke(CHANNELS.GITHUB_LIST_PRS, options),
 
     assignIssue: (cwd: string, issueNumber: number, username: string): Promise<void> =>
-      ipcRenderer.invoke(CHANNELS.GITHUB_ASSIGN_ISSUE, { cwd, issueNumber, username }),
+      _unwrappingInvoke(CHANNELS.GITHUB_ASSIGN_ISSUE, { cwd, issueNumber, username }),
 
     getIssueTooltip: (cwd: string, issueNumber: number) =>
-      ipcRenderer.invoke(CHANNELS.GITHUB_GET_ISSUE_TOOLTIP, { cwd, issueNumber }),
+      _unwrappingInvoke(CHANNELS.GITHUB_GET_ISSUE_TOOLTIP, { cwd, issueNumber }),
 
     getPRTooltip: (cwd: string, prNumber: number) =>
-      ipcRenderer.invoke(CHANNELS.GITHUB_GET_PR_TOOLTIP, { cwd, prNumber }),
+      _unwrappingInvoke(CHANNELS.GITHUB_GET_PR_TOOLTIP, { cwd, prNumber }),
 
     getIssueUrl: (cwd: string, issueNumber: number): Promise<string | null> =>
       _typedInvoke(CHANNELS.GITHUB_GET_ISSUE_URL, { cwd, issueNumber }),
 
     getIssueByNumber: (cwd: string, issueNumber: number) =>
-      ipcRenderer.invoke(CHANNELS.GITHUB_GET_ISSUE_BY_NUMBER, { cwd, issueNumber }),
+      _unwrappingInvoke(CHANNELS.GITHUB_GET_ISSUE_BY_NUMBER, { cwd, issueNumber }),
 
     getPRByNumber: (cwd: string, prNumber: number) =>
-      ipcRenderer.invoke(CHANNELS.GITHUB_GET_PR_BY_NUMBER, { cwd, prNumber }),
+      _unwrappingInvoke(CHANNELS.GITHUB_GET_PR_BY_NUMBER, { cwd, prNumber }),
 
     onPRDetected: (callback: (data: PRDetectedPayload) => void) =>
       _typedOn(CHANNELS.PR_DETECTED, callback),
@@ -1487,7 +1497,7 @@ const api: ElectronAPI = {
       includeDelta?: boolean;
       includeRecentCommits?: boolean;
       forceRefresh?: boolean;
-    }) => ipcRenderer.invoke(CHANNELS.GIT_GET_PROJECT_PULSE, options),
+    }) => _unwrappingInvoke(CHANNELS.GIT_GET_PROJECT_PULSE, options),
 
     listCommits: (options: {
       cwd: string;
@@ -1495,7 +1505,7 @@ const api: ElectronAPI = {
       branch?: string;
       skip?: number;
       limit?: number;
-    }) => ipcRenderer.invoke(CHANNELS.GIT_LIST_COMMITS, options),
+    }) => _unwrappingInvoke(CHANNELS.GIT_LIST_COMMITS, options),
 
     stageFile: (cwd: string, filePath: string) =>
       _typedInvoke(CHANNELS.GIT_STAGE_FILE, { cwd, filePath }),
@@ -1580,29 +1590,29 @@ const api: ElectronAPI = {
   // Sidecar API
   sidecar: {
     create: (payload: { tabId: string; url: string }) =>
-      ipcRenderer.invoke(CHANNELS.SIDECAR_CREATE, payload),
+      _unwrappingInvoke(CHANNELS.SIDECAR_CREATE, payload),
 
     show: (payload: {
       tabId: string;
       bounds: { x: number; y: number; width: number; height: number };
-    }) => ipcRenderer.invoke(CHANNELS.SIDECAR_SHOW, payload),
+    }) => _unwrappingInvoke(CHANNELS.SIDECAR_SHOW, payload),
 
-    hide: () => ipcRenderer.invoke(CHANNELS.SIDECAR_HIDE),
+    hide: () => _unwrappingInvoke(CHANNELS.SIDECAR_HIDE),
 
     resize: (bounds: { x: number; y: number; width: number; height: number }) =>
-      ipcRenderer.invoke(CHANNELS.SIDECAR_RESIZE, bounds),
+      _unwrappingInvoke(CHANNELS.SIDECAR_RESIZE, bounds),
 
     closeTab: (payload: { tabId: string }) =>
-      ipcRenderer.invoke(CHANNELS.SIDECAR_CLOSE_TAB, payload),
+      _unwrappingInvoke(CHANNELS.SIDECAR_CLOSE_TAB, payload),
 
     navigate: (payload: { tabId: string; url: string }) =>
-      ipcRenderer.invoke(CHANNELS.SIDECAR_NAVIGATE, payload),
+      _unwrappingInvoke(CHANNELS.SIDECAR_NAVIGATE, payload),
 
-    goBack: (tabId: string) => ipcRenderer.invoke(CHANNELS.SIDECAR_GO_BACK, tabId),
+    goBack: (tabId: string) => _unwrappingInvoke(CHANNELS.SIDECAR_GO_BACK, tabId),
 
-    goForward: (tabId: string) => ipcRenderer.invoke(CHANNELS.SIDECAR_GO_FORWARD, tabId),
+    goForward: (tabId: string) => _unwrappingInvoke(CHANNELS.SIDECAR_GO_FORWARD, tabId),
 
-    reload: (tabId: string) => ipcRenderer.invoke(CHANNELS.SIDECAR_RELOAD, tabId),
+    reload: (tabId: string) => _unwrappingInvoke(CHANNELS.SIDECAR_RELOAD, tabId),
 
     showNewTabMenu: (payload: SidecarShowNewTabMenuPayload) =>
       _typedInvoke(CHANNELS.SIDECAR_SHOW_NEW_TAB_MENU, payload),
@@ -1621,11 +1631,11 @@ const api: ElectronAPI = {
   // Webview API
   webview: {
     setLifecycleState: (webContentsId: number, frozen: boolean): Promise<void> =>
-      ipcRenderer.invoke(CHANNELS.WEBVIEW_SET_LIFECYCLE_STATE, webContentsId, frozen),
+      _unwrappingInvoke(CHANNELS.WEBVIEW_SET_LIFECYCLE_STATE, webContentsId, frozen),
     registerPanel: (webContentsId: number, panelId: string): Promise<void> =>
-      ipcRenderer.invoke(CHANNELS.WEBVIEW_REGISTER_PANEL, { webContentsId, panelId }),
+      _unwrappingInvoke(CHANNELS.WEBVIEW_REGISTER_PANEL, { webContentsId, panelId }),
     respondToDialog: (dialogId: string, confirmed: boolean, response?: string): Promise<void> =>
-      ipcRenderer.invoke(CHANNELS.WEBVIEW_DIALOG_RESPONSE, { dialogId, confirmed, response }),
+      _unwrappingInvoke(CHANNELS.WEBVIEW_DIALOG_RESPONSE, { dialogId, confirmed, response }),
     onDialogRequest: (
       callback: (payload: {
         dialogId: string;
@@ -1639,13 +1649,13 @@ const api: ElectronAPI = {
       callback: (payload: { panelId: string; shortcut: "find" | "next" | "prev" | "close" }) => void
     ): (() => void) => _typedOn(CHANNELS.WEBVIEW_FIND_SHORTCUT, callback),
     startConsoleCapture: (webContentsId: number, paneId: string): Promise<void> =>
-      ipcRenderer.invoke(CHANNELS.WEBVIEW_START_CONSOLE_CAPTURE, webContentsId, paneId),
+      _unwrappingInvoke(CHANNELS.WEBVIEW_START_CONSOLE_CAPTURE, webContentsId, paneId),
     stopConsoleCapture: (webContentsId: number, paneId: string): Promise<void> =>
-      ipcRenderer.invoke(CHANNELS.WEBVIEW_STOP_CONSOLE_CAPTURE, webContentsId, paneId),
+      _unwrappingInvoke(CHANNELS.WEBVIEW_STOP_CONSOLE_CAPTURE, webContentsId, paneId),
     clearConsoleCapture: (webContentsId: number, paneId: string): Promise<void> =>
-      ipcRenderer.invoke(CHANNELS.WEBVIEW_CLEAR_CONSOLE_CAPTURE, webContentsId, paneId),
+      _unwrappingInvoke(CHANNELS.WEBVIEW_CLEAR_CONSOLE_CAPTURE, webContentsId, paneId),
     getConsoleProperties: (webContentsId: number, objectId: string) =>
-      ipcRenderer.invoke(CHANNELS.WEBVIEW_GET_CONSOLE_PROPERTIES, webContentsId, objectId),
+      _unwrappingInvoke(CHANNELS.WEBVIEW_GET_CONSOLE_PROPERTIES, webContentsId, objectId),
     onConsoleMessage: (
       callback: (row: import("../shared/types/ipc/webviewConsole.js").SerializedConsoleRow) => void
     ): (() => void) => _typedOn(CHANNELS.WEBVIEW_CONSOLE_MESSAGE, callback),
@@ -1657,12 +1667,12 @@ const api: ElectronAPI = {
   // Hibernation API
   hibernation: {
     getConfig: (): Promise<{ enabled: boolean; inactiveThresholdHours: number }> =>
-      ipcRenderer.invoke(CHANNELS.HIBERNATION_GET_CONFIG),
+      _unwrappingInvoke(CHANNELS.HIBERNATION_GET_CONFIG),
 
     updateConfig: (
       config: Partial<{ enabled: boolean; inactiveThresholdHours: number }>
     ): Promise<{ enabled: boolean; inactiveThresholdHours: number }> =>
-      ipcRenderer.invoke(CHANNELS.HIBERNATION_UPDATE_CONFIG, config),
+      _unwrappingInvoke(CHANNELS.HIBERNATION_UPDATE_CONFIG, config),
   },
 
   // System Sleep API
@@ -1800,7 +1810,7 @@ const api: ElectronAPI = {
       projectId?: string;
       cwd?: string;
       agentId?: string;
-    }) => ipcRenderer.invoke(CHANNELS.COMMANDS_LIST, context),
+    }) => _unwrappingInvoke(CHANNELS.COMMANDS_LIST, context),
 
     get: (payload: {
       commandId: string;
@@ -1811,7 +1821,7 @@ const api: ElectronAPI = {
         cwd?: string;
         agentId?: string;
       };
-    }) => ipcRenderer.invoke(CHANNELS.COMMANDS_GET, payload),
+    }) => _unwrappingInvoke(CHANNELS.COMMANDS_GET, payload),
 
     execute: (payload: {
       commandId: string;
@@ -1823,23 +1833,23 @@ const api: ElectronAPI = {
         agentId?: string;
       };
       args?: Record<string, unknown>;
-    }) => ipcRenderer.invoke(CHANNELS.COMMANDS_EXECUTE, payload),
+    }) => _unwrappingInvoke(CHANNELS.COMMANDS_EXECUTE, payload),
 
-    getBuilder: (commandId: string) => ipcRenderer.invoke(CHANNELS.COMMANDS_GET_BUILDER, commandId),
+    getBuilder: (commandId: string) => _unwrappingInvoke(CHANNELS.COMMANDS_GET_BUILDER, commandId),
   },
 
   // App Agent API - Configuration and API key management
   appAgent: {
-    getConfig: () => ipcRenderer.invoke(CHANNELS.APP_AGENT_GET_CONFIG),
+    getConfig: () => _unwrappingInvoke(CHANNELS.APP_AGENT_GET_CONFIG),
 
     setConfig: (config: { provider?: string; model?: string; apiKey?: string; baseUrl?: string }) =>
-      ipcRenderer.invoke(CHANNELS.APP_AGENT_SET_CONFIG, config),
+      _unwrappingInvoke(CHANNELS.APP_AGENT_SET_CONFIG, config),
 
-    hasApiKey: () => ipcRenderer.invoke(CHANNELS.APP_AGENT_HAS_API_KEY),
+    hasApiKey: () => _unwrappingInvoke(CHANNELS.APP_AGENT_HAS_API_KEY),
 
-    testApiKey: (apiKey: string) => ipcRenderer.invoke(CHANNELS.APP_AGENT_TEST_API_KEY, apiKey),
+    testApiKey: (apiKey: string) => _unwrappingInvoke(CHANNELS.APP_AGENT_TEST_API_KEY, apiKey),
 
-    testModel: (model: string) => ipcRenderer.invoke(CHANNELS.APP_AGENT_TEST_MODEL, model),
+    testModel: (model: string) => _unwrappingInvoke(CHANNELS.APP_AGENT_TEST_MODEL, model),
 
     // Listen for action dispatch requests from main process
     onDispatchActionRequest: (
