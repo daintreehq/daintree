@@ -5,6 +5,9 @@ vi.mock("electron", () => ({
     handle: vi.fn(),
     removeHandler: vi.fn(),
   },
+  app: {
+    getPath: vi.fn(() => "/tmp/test"),
+  },
 }));
 
 const mockGetCurrentProject = vi.fn();
