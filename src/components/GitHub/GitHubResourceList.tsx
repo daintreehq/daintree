@@ -1,6 +1,13 @@
 import { useState, useEffect, useMemo, useCallback, useRef, type KeyboardEvent } from "react";
 import { useDebounce } from "@/hooks/useDebounce";
-import { Search, ExternalLink, RefreshCw, WifiOff, Plus, Settings, X, Filter } from "lucide-react";
+import { Search, ExternalLink, RefreshCw, WifiOff, Plus, Settings, X, Filter, Loader2 } from "lucide-react";
+import {
+  buildCacheKey,
+  getCache,
+  setCache,
+  nextGeneration,
+  getGeneration,
+} from "@/lib/githubResourceCache";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
@@ -56,10 +63,21 @@ export function GitHubResourceList({
   const setSortOrder = useGitHubFilterStore((s) =>
     type === "issue" ? s.setIssueSortOrder : s.setPrSortOrder
   ) as (o: GitHubSortOrder) => void;
-  const [data, setData] = useState<(GitHubIssue | GitHubPR)[]>([]);
-  const [cursor, setCursor] = useState<string | null>(null);
-  const [hasMore, setHasMore] = useState(false);
+  const cacheKey = useMemo(
+    () => buildCacheKey(projectPath, type, filterState as string, sortOrder),
+    [projectPath, type, filterState, sortOrder]
+  );
+  const cachedEntry = useMemo(() => getCache(cacheKey), [cacheKey]);
+
+  const [data, setData] = useState<(GitHubIssue | GitHubPR)[]>(
+    () => cachedEntry?.items ?? []
+  );
+  const [cursor, setCursor] = useState<string | null>(
+    () => cachedEntry?.endCursor ?? null
+  );
+  const [hasMore, setHasMore] = useState(() => cachedEntry?.hasNextPage ?? false);
   const [loading, setLoading] = useState(false);
+  const [isRevalidating, setIsRevalidating] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loadMoreError, setLoadMoreError] = useState<string | null>(null);
@@ -68,6 +86,7 @@ export function GitHubResourceList({
   const [sortPopoverOpen, setSortPopoverOpen] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
+  const mountedRef = useRef(false);
 
   const selection = useIssueSelection();
   const issueCacheRef = useRef<Map<number, GitHubIssue>>(new Map());
@@ -110,9 +129,12 @@ export function GitHubResourceList({
     async (
       currentCursor: string | null | undefined,
       append: boolean = false,
-      abortSignal?: AbortSignal
+      abortSignal?: AbortSignal,
+      options?: { revalidating?: boolean; generation?: number; cacheKey?: string }
     ) => {
       if (!projectPath) return;
+
+      const isRevalidate = options?.revalidating ?? false;
 
       if (append) {
         loadMoreAbortRef.current?.abort();
@@ -122,7 +144,7 @@ export function GitHubResourceList({
 
         setLoadingMore(true);
         setLoadMoreError(null);
-      } else {
+      } else if (!isRevalidate) {
         setLoading(true);
         setError(null);
         setLoadMoreError(null);
@@ -131,7 +153,7 @@ export function GitHubResourceList({
       try {
         const searchOverride =
           numberQuery?.kind === "open-ended" ? `number:>=${numberQuery.from}` : undefined;
-        const options = {
+        const fetchOptions = {
           cwd: projectPath,
           search: searchOverride || debouncedSearch || undefined,
           state: filterState as "open" | "closed" | "merged" | "all",
@@ -143,14 +165,19 @@ export function GitHubResourceList({
         const result =
           type === "issue"
             ? await githubClient.listIssues(
-                options as Parameters<typeof githubClient.listIssues>[0]
+                fetchOptions as Parameters<typeof githubClient.listIssues>[0]
               )
             : await githubClient.listPullRequests(
-                options as Parameters<typeof githubClient.listPullRequests>[0]
+                fetchOptions as Parameters<typeof githubClient.listPullRequests>[0]
               );
 
         // Check if aborted before updating state
         if (abortSignal?.aborted) return;
+
+        // Generation guard: discard stale responses
+        if (options?.generation != null && options.cacheKey != null) {
+          if (getGeneration(options.cacheKey) !== options.generation) return;
+        }
 
         if (append) {
           setData((prev) => [...prev, ...result.items]);
@@ -159,6 +186,16 @@ export function GitHubResourceList({
         }
         setCursor(result.pageInfo.endCursor);
         setHasMore(result.pageInfo.hasNextPage);
+
+        // Write first-page results to cache
+        if (!append && options?.cacheKey) {
+          setCache(options.cacheKey, {
+            items: result.items,
+            endCursor: result.pageInfo.endCursor,
+            hasNextPage: result.pageInfo.hasNextPage,
+            timestamp: Date.now(),
+          });
+        }
       } catch (err) {
         if (abortSignal?.aborted) return;
         const message = err instanceof Error ? err.message : "Failed to fetch data";
@@ -171,6 +208,7 @@ export function GitHubResourceList({
         if (!abortSignal?.aborted) {
           setLoading(false);
           setLoadingMore(false);
+          setIsRevalidating(false);
         }
       }
     },
@@ -183,14 +221,37 @@ export function GitHubResourceList({
     }
 
     const abortController = new AbortController();
+    const gen = nextGeneration(cacheKey);
 
+    if (!mountedRef.current) {
+      // First mount: check if we have cached data (SWR path)
+      mountedRef.current = true;
+      const cached = getCache(cacheKey);
+      if (cached) {
+        // Data already hydrated via useState initializer — background revalidate
+        setIsRevalidating(true);
+        setError(null);
+        fetchData(null, false, abortController.signal, {
+          revalidating: true,
+          generation: gen,
+          cacheKey,
+        });
+        return () => abortController.abort();
+      }
+    }
+
+    // Cache miss or filter/sort changed while mounted: fresh fetch with skeleton
     setCursor(null);
     setHasMore(false);
     setExactNumberNotFound(null);
-    fetchData(null, false, abortController.signal);
+    setData([]);
+    fetchData(null, false, abortController.signal, {
+      generation: gen,
+      cacheKey,
+    });
 
     return () => abortController.abort();
-  }, [debouncedSearch, filterState, projectPath, type, fetchData, numberQuery]);
+  }, [debouncedSearch, filterState, projectPath, type, fetchData, numberQuery, cacheKey]);
 
   useEffect(() => {
     if (numberQuery === null) {
@@ -370,7 +431,8 @@ export function GitHubResourceList({
       setRetryKey((k) => k + 1);
     } else {
       setCursor(null);
-      fetchData(null, false, undefined);
+      const gen = nextGeneration(cacheKey);
+      fetchData(null, false, undefined, { generation: gen, cacheKey });
     }
   };
 
@@ -535,6 +597,12 @@ export function GitHubResourceList({
               aria-label={`Search ${type === "issue" ? "issues" : "pull requests"}`}
               className="flex-1 min-w-0 text-sm bg-transparent text-canopy-text placeholder:text-muted-foreground focus:outline-none"
             />
+            {isRevalidating && (
+              <Loader2
+                className="w-3 h-3 shrink-0 animate-spin text-canopy-text/40"
+                aria-label="Refreshing"
+              />
+            )}
             {searchQuery && (
               <button
                 type="button"
