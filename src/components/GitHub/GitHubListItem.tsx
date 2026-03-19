@@ -9,6 +9,7 @@ import {
   MoreHorizontal,
   ExternalLink,
   Check,
+  X,
   MessageSquare,
 } from "lucide-react";
 import { Avatar } from "@/components/ui/Avatar";
@@ -60,18 +61,22 @@ function isPR(item: GitHubIssue | GitHubPR): item is GitHubPR {
   return "isDraft" in item;
 }
 
-function getCIStatusInfo(status: GitHubPRCIStatus): { color: string; tooltip: string } {
+function getCIStatusInfo(status: GitHubPRCIStatus): {
+  icon: typeof Check | null;
+  color: string;
+  tooltip: string;
+} {
   switch (status) {
     case "SUCCESS":
-      return { color: "bg-status-success", tooltip: "All checks passed" };
+      return { icon: Check, color: "text-status-success", tooltip: "All checks passed" };
     case "PENDING":
     case "EXPECTED":
-      return { color: "bg-status-warning", tooltip: "Checks pending" };
+      return { icon: null, color: "bg-status-warning", tooltip: "Checks pending" };
     case "FAILURE":
     case "ERROR":
-      return { color: "bg-status-error", tooltip: "Checks failing" };
+      return { icon: X, color: "text-status-error", tooltip: "Checks failing" };
     default:
-      return { color: "bg-muted-foreground", tooltip: "Check status unknown" };
+      return { icon: null, color: "bg-muted-foreground", tooltip: "Check status unknown" };
   }
 }
 
@@ -204,24 +209,28 @@ export function GitHubListItem({
               {item.title}
             </button>
 
-            {isItemPR && item.state === "OPEN" && item.ciStatus && (
-              <TooltipProvider>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <span
-                      className={cn(
-                        "shrink-0 w-2 h-2 rounded-full",
-                        getCIStatusInfo(item.ciStatus).color
-                      )}
-                      aria-label={getCIStatusInfo(item.ciStatus).tooltip}
-                    />
-                  </TooltipTrigger>
-                  <TooltipContent side="bottom">
-                    {getCIStatusInfo(item.ciStatus).tooltip}
-                  </TooltipContent>
-                </Tooltip>
-              </TooltipProvider>
-            )}
+            {isItemPR &&
+              item.state === "OPEN" &&
+              item.ciStatus &&
+              (() => {
+                const ciInfo = getCIStatusInfo(item.ciStatus);
+                return (
+                  <TooltipProvider>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <span className="shrink-0" aria-label={ciInfo.tooltip}>
+                          {ciInfo.icon ? (
+                            <ciInfo.icon className={cn("w-3 h-3", ciInfo.color)} />
+                          ) : (
+                            <span className={cn("block w-2 h-2 rounded-full", ciInfo.color)} />
+                          )}
+                        </span>
+                      </TooltipTrigger>
+                      <TooltipContent side="bottom">{ciInfo.tooltip}</TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
+                );
+              })()}
 
             <TooltipProvider>
               <Tooltip>

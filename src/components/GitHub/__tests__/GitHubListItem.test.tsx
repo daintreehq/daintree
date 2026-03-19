@@ -180,10 +180,46 @@ describe("GitHubListItem", () => {
     expect(btn.className).toContain("opacity-0");
   });
 
-  it("renders CI status dot for open PRs with ciStatus", () => {
+  it("renders CI status check icon for successful PRs", () => {
     const prWithCI: GitHubPR = { ...basePR, ciStatus: "SUCCESS" };
     render(<GitHubListItem item={prWithCI} type="pr" />);
-    expect(screen.getByLabelText("All checks passed")).toBeTruthy();
+    const indicator = screen.getByLabelText("All checks passed");
+    expect(indicator.querySelector("svg")).not.toBeNull();
+    expect(indicator.querySelector(".text-status-success")).not.toBeNull();
+    expect(indicator.querySelector(".rounded-full")).toBeNull();
+  });
+
+  it("renders CI status X icon for failing PRs", () => {
+    const prWithCI: GitHubPR = { ...basePR, ciStatus: "FAILURE" };
+    render(<GitHubListItem item={prWithCI} type="pr" />);
+    const indicator = screen.getByLabelText("Checks failing");
+    expect(indicator.querySelector("svg")).not.toBeNull();
+    expect(indicator.querySelector(".text-status-error")).not.toBeNull();
+    expect(indicator.querySelector(".rounded-full")).toBeNull();
+  });
+
+  it("renders CI status X icon for error PRs", () => {
+    const prWithCI: GitHubPR = { ...basePR, ciStatus: "ERROR" };
+    render(<GitHubListItem item={prWithCI} type="pr" />);
+    const indicator = screen.getByLabelText("Checks failing");
+    expect(indicator.querySelector("svg")).not.toBeNull();
+    expect(indicator.querySelector(".text-status-error")).not.toBeNull();
+  });
+
+  it("renders CI status dot for pending PRs", () => {
+    const prWithCI: GitHubPR = { ...basePR, ciStatus: "PENDING" };
+    render(<GitHubListItem item={prWithCI} type="pr" />);
+    const indicator = screen.getByLabelText("Checks pending");
+    expect(indicator.querySelector("svg")).toBeNull();
+    expect(indicator.querySelector(".bg-status-warning")).not.toBeNull();
+  });
+
+  it("renders CI status dot for expected PRs", () => {
+    const prWithCI: GitHubPR = { ...basePR, ciStatus: "EXPECTED" };
+    render(<GitHubListItem item={prWithCI} type="pr" />);
+    const indicator = screen.getByLabelText("Checks pending");
+    expect(indicator.querySelector("svg")).toBeNull();
+    expect(indicator.querySelector(".bg-status-warning")).not.toBeNull();
   });
 
   it("renders linked PR icon button for issues", () => {
