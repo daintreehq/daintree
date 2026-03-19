@@ -1,4 +1,4 @@
-import { mkdtempSync, writeFileSync, mkdirSync } from "fs";
+import { mkdtempSync, writeFileSync, mkdirSync, rmSync, existsSync } from "fs";
 import { tmpdir } from "os";
 import path from "path";
 import { execSync } from "child_process";
@@ -108,4 +108,36 @@ export function createFixtureRepos(count: number): string[] {
     repos.push(createFixtureRepo({ name }));
   }
   return repos;
+}
+
+export interface MultiProjectFixture {
+  rootDir: string;
+  repoA: string;
+  repoB: string;
+  cleanup: () => void;
+}
+
+export function createMultiProjectFixture(
+  optsA?: FixtureRepoOptions,
+  optsB?: FixtureRepoOptions
+): MultiProjectFixture {
+  const rootDir = mkdtempSync(path.join(tmpdir(), "canopy-e2e-multi-"));
+  const repoA = createFixtureRepo({ name: "project-A", ...optsA });
+  const repoB = createFixtureRepo({ name: "project-B", ...optsB });
+
+  const cleanup = () => {
+    for (const repoDir of [repoA, repoB]) {
+      const worktreeSibling = path.join(
+        path.dirname(repoDir),
+        path.basename(repoDir) + "-worktrees"
+      );
+      if (existsSync(worktreeSibling)) {
+        rmSync(worktreeSibling, { recursive: true, force: true });
+      }
+      rmSync(repoDir, { recursive: true, force: true });
+    }
+    rmSync(rootDir, { recursive: true, force: true });
+  };
+
+  return { rootDir, repoA, repoB, cleanup };
 }

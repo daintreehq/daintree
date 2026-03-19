@@ -1,7 +1,8 @@
 import { test, expect } from "@playwright/test";
-import { launchApp, closeApp, mockOpenDialog, type AppContext } from "../helpers/launch";
+import { launchApp, closeApp, type AppContext } from "../helpers/launch";
 import { createFixtureRepo } from "../helpers/fixtures";
 import { openAndOnboardProject } from "../helpers/project";
+import { addAndSwitchToProject, selectExistingProject } from "../helpers/workflows";
 import { SEL } from "../helpers/selectors";
 import { T_SHORT, T_MEDIUM, T_LONG, T_SETTLE } from "../helpers/timeouts";
 
@@ -23,25 +24,10 @@ test.describe.serial("Core: Project Management Advanced", () => {
     await openAndOnboardProject(ctx.app, ctx.window, primaryRepo, PRIMARY_NAME);
 
     // Add secondary project
-    await mockOpenDialog(ctx.app, secondaryRepo);
-    await ctx.window.locator(SEL.toolbar.projectSwitcherTrigger).click();
-    const palette = ctx.window.locator(SEL.projectSwitcher.palette);
-    await expect(palette).toBeVisible({ timeout: T_MEDIUM });
-    await ctx.window.locator(SEL.projectSwitcher.addButton).click({ force: true });
-
-    const heading = ctx.window.locator("h2", { hasText: "Set up your project" });
-    await expect(heading).toBeVisible({ timeout: T_LONG });
-    const nameInput = ctx.window.getByRole("textbox", { name: "Project Name" });
-    await nameInput.fill(SECONDARY_NAME);
-    await ctx.window.getByRole("button", { name: "Finish" }).click();
-    await expect(heading).not.toBeVisible({ timeout: T_MEDIUM });
+    await addAndSwitchToProject(ctx.app, ctx.window, secondaryRepo, SECONDARY_NAME);
 
     // Switch back to primary project
-    await ctx.window.locator(SEL.toolbar.projectSwitcherTrigger).click();
-    await expect(palette).toBeVisible({ timeout: T_MEDIUM });
-    const primaryRow = palette.locator(`text="${PRIMARY_NAME}"`);
-    await primaryRow.click();
-    await expect(palette).not.toBeVisible({ timeout: T_MEDIUM });
+    await selectExistingProject(ctx.window, PRIMARY_NAME);
 
     // Verify primary project is active by checking sidebar has worktree cards
     await expect(ctx.window.locator("[data-worktree-branch]").first()).toBeVisible({

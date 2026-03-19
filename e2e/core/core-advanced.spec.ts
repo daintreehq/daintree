@@ -1,9 +1,14 @@
 import { test, expect } from "@playwright/test";
 import { createServer, type Server } from "http";
-import { launchApp, closeApp, mockOpenDialog, type AppContext } from "../helpers/launch";
+import { launchApp, closeApp, type AppContext } from "../helpers/launch";
 import { createFixtureRepo } from "../helpers/fixtures";
 import { openAndOnboardProject } from "../helpers/project";
 import { getGridPanelCount } from "../helpers/panels";
+import {
+  addAndSwitchToProject,
+  selectExistingProject,
+  spawnTerminalAndVerify,
+} from "../helpers/workflows";
 import { SEL } from "../helpers/selectors";
 import { T_SHORT, T_MEDIUM, T_LONG, T_SETTLE } from "../helpers/timeouts";
 
@@ -204,9 +209,7 @@ test.describe.serial("Core: Advanced", () => {
     test("open a terminal for the active project", async () => {
       const { window } = ctx;
 
-      await window.locator(SEL.toolbar.openTerminal).click();
-      const panel = window.locator(SEL.panel.gridPanel).first();
-      await expect(panel).toBeVisible({ timeout: T_LONG });
+      await spawnTerminalAndVerify(window);
 
       const count = await getGridPanelCount(window);
       expect(count).toBe(1);
@@ -215,23 +218,7 @@ test.describe.serial("Core: Advanced", () => {
     test("switch to new project via project switcher", async () => {
       const { app, window } = ctx;
 
-      await mockOpenDialog(app, switchRepo);
-
-      await window.locator(SEL.toolbar.projectSwitcherTrigger).click();
-
-      const palette = window.locator(SEL.projectSwitcher.palette);
-      await expect(palette).toBeVisible({ timeout: T_MEDIUM });
-
-      const addBtn = window.locator(SEL.projectSwitcher.addButton);
-      await expect(addBtn).toBeVisible({ timeout: T_SHORT });
-      await addBtn.click({ force: true });
-
-      const heading = window.locator("h2", { hasText: "Set up your project" });
-      await expect(heading).toBeVisible({ timeout: T_LONG });
-      const nameInput = window.getByRole("textbox", { name: "Project Name" });
-      await nameInput.fill("Switch Project B");
-      await window.getByRole("button", { name: "Finish" }).click();
-      await expect(heading).not.toBeVisible({ timeout: T_MEDIUM });
+      await addAndSwitchToProject(app, window, switchRepo, "Switch Project B");
     });
 
     test("new project has 0 panels (isolation verified)", async () => {
@@ -242,13 +229,7 @@ test.describe.serial("Core: Advanced", () => {
     test("switch back to original project restores 1 panel", async () => {
       const { window } = ctx;
 
-      await window.locator(SEL.toolbar.projectSwitcherTrigger).click();
-
-      const palette = window.locator(SEL.projectSwitcher.palette);
-      await expect(palette).toBeVisible({ timeout: T_MEDIUM });
-
-      const projectA = palette.locator(`text="${PROJECT_NAME}"`);
-      await projectA.click();
+      await selectExistingProject(window, PROJECT_NAME);
 
       await expect.poll(() => getGridPanelCount(window), { timeout: T_LONG }).toBe(1);
     });
