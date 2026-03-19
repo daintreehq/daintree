@@ -186,7 +186,7 @@ describe("GitService", () => {
 
     const service = new GitService(tempDir);
 
-    const error = await service.getRepositoryRoot().catch((e: unknown) => e);
+    const error = await service.getRepositoryRoot(tempDir).catch((e: unknown) => e);
     expect(error).toBeInstanceOf(GitError);
     expect(error).not.toBeInstanceOf(WorktreeRemovedError);
     expect(logWarnMock).toHaveBeenCalled();
