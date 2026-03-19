@@ -11,6 +11,7 @@ import { cn } from "@/lib/utils";
 import { XtermAdapter } from "./XtermAdapter";
 import { ArtifactOverlay } from "./ArtifactOverlay";
 import { TerminalSearchBar } from "./TerminalSearchBar";
+import { TerminalScrollIndicator } from "./TerminalScrollIndicator";
 import { TerminalRestartStatusBanner } from "./TerminalRestartStatusBanner";
 import { getRestartBannerVariant } from "./restartStatus";
 import { TerminalErrorBanner } from "./TerminalErrorBanner";
@@ -758,6 +759,8 @@ function TerminalPaneComponent({
               />
             )}
           </div>
+
+          <TerminalScrollIndicator terminalId={id} />
 
           {/* Backend Disconnect Overlay */}
           {(isBackendDisconnected || isBackendRecovering) && (
