@@ -159,6 +159,53 @@ describe("BulkCreateWorktreeDialog", () => {
     expect(screen.getByTestId("bulk-create-confirm-button")).toBeTruthy();
   });
 
+  it("throttles task starts with inter-operation delay", async () => {
+    const resolvers: Array<(value: unknown) => void> = [];
+    mockDispatch.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolvers.push(resolve);
+        })
+    );
+
+    render(<BulkCreateWorktreeDialog {...defaultProps} />);
+
+    await act(async () => {
+      screen.getByTestId("bulk-create-confirm-button").click();
+    });
+
+    // First task starts immediately
+    expect(mockDispatch).toHaveBeenCalledTimes(1);
+
+    // At 299ms, still only 1 task started
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(299);
+    });
+    expect(mockDispatch).toHaveBeenCalledTimes(1);
+
+    // At 300ms, second task starts
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1);
+    });
+    expect(mockDispatch).toHaveBeenCalledTimes(2);
+
+    // At 600ms, third task starts
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(300);
+    });
+    expect(mockDispatch).toHaveBeenCalledTimes(3);
+
+    // Resolve all and verify completion
+    await act(async () => {
+      resolvers[0]?.({ ok: true, result: { worktreeId: "wt-1" } });
+      resolvers[1]?.({ ok: true, result: { worktreeId: "wt-2" } });
+      resolvers[2]?.({ ok: true, result: { worktreeId: "wt-3" } });
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    expect(screen.getByText(/3 of 3 created/)).toBeTruthy();
+  });
+
   it("shows per-item status during execution", async () => {
     const resolvers: Array<(value: unknown) => void> = [];
     mockDispatch.mockImplementation(
@@ -172,6 +219,11 @@ describe("BulkCreateWorktreeDialog", () => {
 
     await act(async () => {
       screen.getByTestId("bulk-create-confirm-button").click();
+    });
+
+    // Advance past throttle intervals so all 3 tasks start (300ms apart)
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(700);
     });
 
     // Items should show in the executing view
@@ -215,6 +267,11 @@ describe("BulkCreateWorktreeDialog", () => {
       screen.getByTestId("bulk-create-confirm-button").click();
     });
 
+    // Advance past throttle intervals so all 3 tasks start
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(700);
+    });
+
     await act(async () => {
       resolvers[0]?.({ ok: true, result: { worktreeId: "wt-1" } });
       resolvers[1]?.({
@@ -247,6 +304,11 @@ describe("BulkCreateWorktreeDialog", () => {
       screen.getByTestId("bulk-create-confirm-button").click();
     });
 
+    // Advance past throttle intervals so all 3 tasks start
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(700);
+    });
+
     await act(async () => {
       resolvers[0]?.({ ok: true, result: { worktreeId: "wt-1" } });
       resolvers[1]?.({
@@ -276,6 +338,11 @@ describe("BulkCreateWorktreeDialog", () => {
       screen.getByTestId("bulk-create-confirm-button").click();
     });
 
+    // Advance past throttle intervals so all 3 tasks start
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(700);
+    });
+
     await act(async () => {
       resolvers[0]?.({ ok: true, result: { worktreeId: "wt-1" } });
       resolvers[1]?.({ ok: true, result: { worktreeId: "wt-2" } });
@@ -300,6 +367,11 @@ describe("BulkCreateWorktreeDialog", () => {
 
     await act(async () => {
       screen.getByTestId("bulk-create-confirm-button").click();
+    });
+
+    // Advance past throttle intervals so all 3 tasks start
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(700);
     });
 
     // Fail item 2, succeed the rest
@@ -447,15 +519,14 @@ describe("BulkCreateWorktreeDialog", () => {
       screen.getByTestId("bulk-create-confirm-button").click();
     });
 
-    // Resolve first item
+    // Only item 1 has started (throttled queue), resolve it
     await act(async () => {
       resolvers[0]?.({ ok: true, result: { worktreeId: "wt-1" } });
       await vi.advanceTimersByTimeAsync(0);
     });
 
-    // Close the dialog (cancel) while items 2 and 3 are still pending
+    // Close the dialog (cancel) before throttled items 2 and 3 start
     await act(async () => {
-      // Find cancel button in executing state
       const buttons = screen.getAllByRole("button");
       const cancelBtn = buttons.find((b) => b.textContent === "Cancel");
       cancelBtn?.click();
@@ -463,12 +534,12 @@ describe("BulkCreateWorktreeDialog", () => {
     });
 
     expect(onClose).toHaveBeenCalled();
+    // Only 1 dispatch should have fired (items 2 and 3 were cleared from queue)
+    expect(mockDispatch).toHaveBeenCalledTimes(1);
 
-    // Resolve remaining items — should be no-ops due to runIdRef invalidation
+    // Advance timers — no more tasks should start
     await act(async () => {
-      resolvers[1]?.({ ok: true, result: { worktreeId: "wt-2" } });
-      resolvers[2]?.({ ok: true, result: { worktreeId: "wt-3" } });
-      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(700);
     });
 
     // Dialog should not show done state (it was closed/reset)
