@@ -1,7 +1,9 @@
 // @vitest-environment jsdom
 import { render, act } from "@testing-library/react";
-import { describe, expect, it, vi, beforeEach } from "vitest";
+import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { FixedDropdown } from "../fixed-dropdown";
+import { _resetForTests } from "@/lib/escapeStack";
+import { useGlobalEscapeDispatcher } from "@/hooks/useGlobalEscapeDispatcher";
 
 let mockOverlayCount = 0;
 
@@ -17,6 +19,11 @@ vi.mock("@/hooks/useAnimatedPresence", () => ({
   }),
 }));
 
+function Dispatcher() {
+  useGlobalEscapeDispatcher();
+  return null;
+}
+
 function createAnchor() {
   const el = document.createElement("button");
   el.getBoundingClientRect = () =>
@@ -25,15 +32,26 @@ function createAnchor() {
   return { current: el };
 }
 
+function pressEscape() {
+  act(() => {
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+  });
+}
+
 describe("FixedDropdown overlay-count dismiss behavior", () => {
   let onOpenChange: ReturnType<typeof vi.fn<(open: boolean) => void>>;
   let anchorRef: React.RefObject<HTMLElement | null>;
 
   beforeEach(() => {
+    _resetForTests();
     mockOverlayCount = 0;
     onOpenChange = vi.fn();
     anchorRef = createAnchor();
     vi.stubGlobal("matchMedia", vi.fn().mockReturnValue({ matches: false }));
+  });
+
+  afterEach(() => {
+    _resetForTests();
   });
 
   it("closes when overlayCount increases (default behavior)", () => {
@@ -83,19 +101,20 @@ describe("FixedDropdown overlay-count dismiss behavior", () => {
   it("suppresses Escape dismiss while child overlay is active", () => {
     mockOverlayCount = 1;
     render(
-      <FixedDropdown
-        open={true}
-        onOpenChange={onOpenChange}
-        anchorRef={anchorRef}
-        persistThroughChildOverlays
-      >
-        <div>Content</div>
-      </FixedDropdown>
+      <>
+        <Dispatcher />
+        <FixedDropdown
+          open={true}
+          onOpenChange={onOpenChange}
+          anchorRef={anchorRef}
+          persistThroughChildOverlays
+        >
+          <div>Content</div>
+        </FixedDropdown>
+      </>
     );
 
-    act(() => {
-      document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
-    });
+    pressEscape();
 
     expect(onOpenChange).not.toHaveBeenCalled();
   });
@@ -123,31 +142,35 @@ describe("FixedDropdown overlay-count dismiss behavior", () => {
   it("resumes Escape dismiss after child overlay closes", () => {
     mockOverlayCount = 1;
     const { rerender } = render(
-      <FixedDropdown
-        open={true}
-        onOpenChange={onOpenChange}
-        anchorRef={anchorRef}
-        persistThroughChildOverlays
-      >
-        <div>Content</div>
-      </FixedDropdown>
+      <>
+        <Dispatcher />
+        <FixedDropdown
+          open={true}
+          onOpenChange={onOpenChange}
+          anchorRef={anchorRef}
+          persistThroughChildOverlays
+        >
+          <div>Content</div>
+        </FixedDropdown>
+      </>
     );
 
     mockOverlayCount = 0;
     rerender(
-      <FixedDropdown
-        open={true}
-        onOpenChange={onOpenChange}
-        anchorRef={anchorRef}
-        persistThroughChildOverlays
-      >
-        <div>Content</div>
-      </FixedDropdown>
+      <>
+        <Dispatcher />
+        <FixedDropdown
+          open={true}
+          onOpenChange={onOpenChange}
+          anchorRef={anchorRef}
+          persistThroughChildOverlays
+        >
+          <div>Content</div>
+        </FixedDropdown>
+      </>
     );
 
-    act(() => {
-      document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
-    });
+    pressEscape();
 
     expect(onOpenChange).toHaveBeenCalledWith(false);
   });
@@ -155,45 +178,52 @@ describe("FixedDropdown overlay-count dismiss behavior", () => {
   it("stays suppressed through multiple overlay transitions (1→2→1)", () => {
     mockOverlayCount = 1;
     const { rerender } = render(
-      <FixedDropdown
-        open={true}
-        onOpenChange={onOpenChange}
-        anchorRef={anchorRef}
-        persistThroughChildOverlays
-      >
-        <div>Content</div>
-      </FixedDropdown>
+      <>
+        <Dispatcher />
+        <FixedDropdown
+          open={true}
+          onOpenChange={onOpenChange}
+          anchorRef={anchorRef}
+          persistThroughChildOverlays
+        >
+          <div>Content</div>
+        </FixedDropdown>
+      </>
     );
 
     mockOverlayCount = 2;
     rerender(
-      <FixedDropdown
-        open={true}
-        onOpenChange={onOpenChange}
-        anchorRef={anchorRef}
-        persistThroughChildOverlays
-      >
-        <div>Content</div>
-      </FixedDropdown>
+      <>
+        <Dispatcher />
+        <FixedDropdown
+          open={true}
+          onOpenChange={onOpenChange}
+          anchorRef={anchorRef}
+          persistThroughChildOverlays
+        >
+          <div>Content</div>
+        </FixedDropdown>
+      </>
     );
 
     expect(onOpenChange).not.toHaveBeenCalled();
 
     mockOverlayCount = 1;
     rerender(
-      <FixedDropdown
-        open={true}
-        onOpenChange={onOpenChange}
-        anchorRef={anchorRef}
-        persistThroughChildOverlays
-      >
-        <div>Content</div>
-      </FixedDropdown>
+      <>
+        <Dispatcher />
+        <FixedDropdown
+          open={true}
+          onOpenChange={onOpenChange}
+          anchorRef={anchorRef}
+          persistThroughChildOverlays
+        >
+          <div>Content</div>
+        </FixedDropdown>
+      </>
     );
 
-    act(() => {
-      document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
-    });
+    pressEscape();
 
     expect(onOpenChange).not.toHaveBeenCalled();
   });

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useCallback } from "react";
 import { AppPaletteDialog } from "@/components/ui/AppPaletteDialog";
 import { PaletteOverflowNotice } from "@/components/ui/PaletteOverflowNotice";
+import { useEscapeStack } from "@/hooks";
 
 export interface SearchablePaletteProps<T> {
   isOpen: boolean;
@@ -107,6 +108,14 @@ export function SearchablePalette<T>({
     }
   }, [selectedIndex, results]);
 
+  useEscapeStack(isOpen, () => {
+    if (query !== "") {
+      onQueryChange("");
+    } else {
+      onClose();
+    }
+  });
+
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
       if (onKeyDown) {
@@ -130,16 +139,6 @@ export function SearchablePalette<T>({
           e.stopPropagation();
           onConfirm();
           break;
-        case "Escape":
-          e.preventDefault();
-          if (query !== "") {
-            onQueryChange("");
-            e.nativeEvent.stopImmediatePropagation();
-          } else {
-            e.stopPropagation();
-            onClose();
-          }
-          break;
         case "Tab":
           e.preventDefault();
           e.stopPropagation();
@@ -151,7 +150,7 @@ export function SearchablePalette<T>({
           break;
       }
     },
-    [onKeyDown, onSelectPrevious, onSelectNext, onConfirm, onClose, query, onQueryChange]
+    [onKeyDown, onSelectPrevious, onSelectNext, onConfirm]
   );
 
   const activeDescendant =

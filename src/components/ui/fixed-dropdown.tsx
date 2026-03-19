@@ -9,6 +9,7 @@ import {
   UI_EXIT_EASING,
   getUiTransitionDuration,
 } from "@/lib/animationUtils";
+import { useEscapeStack } from "@/hooks/useEscapeStack";
 import { useUIStore } from "@/store/uiStore";
 
 interface FixedDropdownProps {
@@ -63,29 +64,24 @@ export function FixedDropdown({
     };
   }, [open, updatePosition]);
 
+  const childOverlayActive = persistThroughChildOverlays && overlayCount > 0;
+  useEscapeStack(open && !childOverlayActive, () => onOpenChange(false));
+
   useEffect(() => {
     if (!open) return;
-    const childOverlayActive = persistThroughChildOverlays && overlayCount > 0;
 
     const handlePointerDown = (event: MouseEvent | TouchEvent) => {
-      if (childOverlayActive) return;
+      if (persistThroughChildOverlays && overlayCount > 0) return;
       const target = event.target as Node | null;
       if (contentRef.current?.contains(target) || anchorRef.current?.contains(target)) return;
       onOpenChange(false);
     };
 
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (childOverlayActive) return;
-      if (event.key === "Escape") onOpenChange(false);
-    };
-
     document.addEventListener("mousedown", handlePointerDown);
     document.addEventListener("touchstart", handlePointerDown);
-    document.addEventListener("keydown", handleKeyDown);
     return () => {
       document.removeEventListener("mousedown", handlePointerDown);
       document.removeEventListener("touchstart", handlePointerDown);
-      document.removeEventListener("keydown", handleKeyDown);
     };
   }, [open, onOpenChange, anchorRef, persistThroughChildOverlays, overlayCount]);
 

@@ -1,7 +1,9 @@
 // @vitest-environment jsdom
 import { render, screen, act } from "@testing-library/react";
-import { describe, expect, it, vi, beforeEach } from "vitest";
+import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { AppDialog } from "../AppDialog";
+import { _resetForTests } from "@/lib/escapeStack";
+import { useGlobalEscapeDispatcher } from "@/hooks/useGlobalEscapeDispatcher";
 
 vi.mock("zustand/react/shallow", () => ({
   useShallow: (fn: unknown) => fn,
@@ -11,9 +13,13 @@ vi.mock("@/store", () => ({
   useSidecarStore: () => ({ isOpen: false, width: 0 }),
 }));
 
-vi.mock("@/hooks", () => ({
-  useOverlayState: () => {},
-}));
+vi.mock("@/hooks", async (importOriginal) => {
+  const actual = (await importOriginal()) as Record<string, unknown>;
+  return {
+    ...actual,
+    useOverlayState: () => {},
+  };
+});
 
 vi.mock("@/hooks/useAnimatedPresence", () => ({
   useAnimatedPresence: ({ isOpen }: { isOpen: boolean }) => ({
@@ -21,6 +27,11 @@ vi.mock("@/hooks/useAnimatedPresence", () => ({
     shouldRender: isOpen,
   }),
 }));
+
+function Dispatcher() {
+  useGlobalEscapeDispatcher();
+  return null;
+}
 
 function renderDialog({
   isOpen = true,
@@ -32,15 +43,18 @@ function renderDialog({
   children?: React.ReactNode;
 } = {}) {
   return render(
-    <AppDialog isOpen={isOpen} onClose={onClose} data-testid="test-dialog">
-      {children ?? (
-        <AppDialog.Body>
-          <button type="button">First</button>
-          <input type="text" placeholder="Middle" />
-          <button type="button">Last</button>
-        </AppDialog.Body>
-      )}
-    </AppDialog>
+    <>
+      <Dispatcher />
+      <AppDialog isOpen={isOpen} onClose={onClose} data-testid="test-dialog">
+        {children ?? (
+          <AppDialog.Body>
+            <button type="button">First</button>
+            <input type="text" placeholder="Middle" />
+            <button type="button">Last</button>
+          </AppDialog.Body>
+        )}
+      </AppDialog>
+    </>
   );
 }
 
@@ -63,8 +77,13 @@ function pressEscape() {
 
 describe("AppDialog focus trapping", () => {
   beforeEach(() => {
+    _resetForTests();
     vi.useFakeTimers({ shouldAdvanceTime: true });
     vi.stubGlobal("matchMedia", vi.fn().mockReturnValue({ matches: false }));
+  });
+
+  afterEach(() => {
+    _resetForTests();
   });
 
   it("auto-focuses the first focusable element on open", async () => {
@@ -140,20 +159,26 @@ describe("AppDialog focus trapping", () => {
     outerButton.focus();
 
     const { rerender } = render(
-      <AppDialog isOpen={true} onClose={() => {}} data-testid="test-dialog">
-        <AppDialog.Body>
-          <button type="button">Inner</button>
-        </AppDialog.Body>
-      </AppDialog>
+      <>
+        <Dispatcher />
+        <AppDialog isOpen={true} onClose={() => {}} data-testid="test-dialog">
+          <AppDialog.Body>
+            <button type="button">Inner</button>
+          </AppDialog.Body>
+        </AppDialog>
+      </>
     );
     await act(() => vi.runAllTimersAsync());
 
     rerender(
-      <AppDialog isOpen={false} onClose={() => {}} data-testid="test-dialog">
-        <AppDialog.Body>
-          <button type="button">Inner</button>
-        </AppDialog.Body>
-      </AppDialog>
+      <>
+        <Dispatcher />
+        <AppDialog isOpen={false} onClose={() => {}} data-testid="test-dialog">
+          <AppDialog.Body>
+            <button type="button">Inner</button>
+          </AppDialog.Body>
+        </AppDialog>
+      </>
     );
 
     expect(document.activeElement).toBe(outerButton);

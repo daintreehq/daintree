@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 import { cn } from "@/lib/utils";
-import { useOverlayState } from "@/hooks";
+import { useOverlayState, useEscapeStack } from "@/hooks";
 import { useAnimatedPresence } from "@/hooks/useAnimatedPresence";
 import { usePaletteStore } from "@/store/paletteStore";
 import {
@@ -27,6 +27,7 @@ export function AppPaletteDialog({
   ariaLabel,
   className,
 }: AppPaletteDialogProps) {
+  useEscapeStack(isOpen, onClose);
   const dialogRef = useRef<HTMLDivElement>(null);
   const previousFocusRef = useRef<HTMLElement | null>(null);
 
@@ -62,10 +63,6 @@ export function AppPaletteDialog({
   useEffect(() => {
     if (!isOpen) return;
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        onClose();
-        return;
-      }
       if (e.key === "Tab" && dialogRef.current) {
         const focusableElements = dialogRef.current.querySelectorAll<HTMLElement>(
           'input, button, [tabindex]:not([tabindex="-1"])'
@@ -84,7 +81,7 @@ export function AppPaletteDialog({
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [isOpen, onClose]);
+  }, [isOpen]);
 
   const handleBackdropClick = useCallback(
     (e: React.MouseEvent) => {
