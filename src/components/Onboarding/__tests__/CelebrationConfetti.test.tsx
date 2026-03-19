@@ -1,19 +1,17 @@
 // @vitest-environment jsdom
+import React from "react";
 import { render } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 
-vi.mock("framer-motion", () => {
-  const React = require("react");
-  return {
-    AnimatePresence: ({ children }: { children: React.ReactNode }) => <>{children}</>,
-    motion: {
-      div: React.forwardRef((props: Record<string, unknown>, ref: React.Ref<HTMLDivElement>) => {
-        const { initial, animate, exit, transition, ...rest } = props;
-        return <div ref={ref} {...rest} />;
-      }),
-    },
-  };
-});
+vi.mock("framer-motion", () => ({
+  AnimatePresence: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  motion: {
+    div: React.forwardRef((props: Record<string, unknown>, ref: React.Ref<HTMLDivElement>) => {
+      const { initial, animate, exit, transition, ...rest } = props;
+      return <div ref={ref} {...rest} />;
+    }),
+  },
+}));
 
 import { CelebrationConfetti } from "../CelebrationConfetti";
 

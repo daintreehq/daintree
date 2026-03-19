@@ -1454,6 +1454,10 @@ export interface IpcInvokeMap {
     args: [item: ChecklistItemId];
     result: void;
   };
+  "onboarding:checklist-mark-celebration-shown": {
+    args: [];
+    result: void;
+  };
 
   // Shortcut Hints
   "shortcut-hints:get-counts": {
