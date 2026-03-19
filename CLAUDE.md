@@ -27,8 +27,8 @@ npm run rebuild      # Rebuild native modules
 
 ### CI Testing Strategy
 
-- **PRs:** Run typecheck, lint, format, and unit tests only (no E2E). Fast feedback loop.
-- **Nightly:** Full E2E core and online test suites run on schedule.
+- **PRs / pushes:** Typecheck, lint, format, and unit tests on **Ubuntu only** (no E2E). `ci-ok` gate job is the sole required status check.
+- **Nightly (2 AM UTC):** Full cross-platform CI on all 3 OSes: check + test + build + smoke + E2E core + E2E online. Auto-creates GitHub issue on failure (`nightly-failure` label).
 - **Releases:** Full E2E core and online suites gate the release publish.
 
 ## Architecture

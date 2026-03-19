@@ -1,8 +1,6 @@
 name: E2E Online Tests
 
 on:
-  schedule:
-    - cron: "30 3 * * *"
   workflow_dispatch:
     inputs:
       platform:

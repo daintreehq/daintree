@@ -1,0 +1,245 @@
+name: Nightly
+
+on:
+  schedule:
+    # https://crontab.guru/#0_2_*_*_*
+    - cron: "0 2 * * *"
+  workflow_dispatch:
+    inputs:
+      platform:
+        description: "Platform to test"
+        type: choice
+        options:
+          - all
+          - macos
+          - linux
+          - windows
+        default: all
+
+permissions:
+  contents: read
+  issues: write
+
+env:
+  NODE_VERSION: "22"
+
+jobs:
+  matrix-setup:
+    runs-on: ubuntu-22.04
+    outputs:
+      matrix: ${{ steps.set.outputs.matrix }}
+    steps:
+      - id: set
+        run: |
+          PLATFORM="${{ inputs.platform || 'all' }}"
+
+          if [ "$PLATFORM" = "macos" ]; then
+            echo 'matrix={"include":[{"os":"macos-14","name":"macOS"}]}' >> "$GITHUB_OUTPUT"
+          elif [ "$PLATFORM" = "linux" ]; then
+            echo 'matrix={"include":[{"os":"ubuntu-22.04","name":"Linux"}]}' >> "$GITHUB_OUTPUT"
+          elif [ "$PLATFORM" = "windows" ]; then
+            echo 'matrix={"include":[{"os":"windows-latest","name":"Windows"}]}' >> "$GITHUB_OUTPUT"
+          else
+            echo 'matrix={"include":[{"os":"ubuntu-22.04","name":"Linux"},{"os":"macos-14","name":"macOS"},{"os":"windows-latest","name":"Windows"}]}' >> "$GITHUB_OUTPUT"
+          fi
+
+  check:
+    needs: matrix-setup
+    runs-on: ${{ matrix.os }}
+    name: Check (${{ matrix.name }})
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.matrix-setup.outputs.matrix) }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install Linux dependencies
+        if: matrix.os == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libarchive-tools
+
+      - name: Install dependencies (Windows)
+        if: matrix.os == 'windows-latest'
+        run: npm ci
+        env:
+          npm_config_msvs_version: "2022"
+
+      - name: Install dependencies
+        if: matrix.os != 'windows-latest'
+        run: npm ci
+
+      - name: Check (typecheck + lint + format)
+        run: npm run check
+
+  test:
+    needs: matrix-setup
+    runs-on: ${{ matrix.os }}
+    name: Test (${{ matrix.name }})
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.matrix-setup.outputs.matrix) }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install Linux dependencies
+        if: matrix.os == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libarchive-tools
+
+      - name: Install dependencies (Windows)
+        if: matrix.os == 'windows-latest'
+        run: npm ci
+        env:
+          npm_config_msvs_version: "2022"
+
+      - name: Install dependencies
+        if: matrix.os != 'windows-latest'
+        run: npm ci
+
+      - name: Test
+        run: npm run test
+
+  build:
+    needs: [matrix-setup, check, test]
+    runs-on: ${{ matrix.os }}
+    name: Build (${{ matrix.name }})
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.matrix-setup.outputs.matrix) }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install Linux dependencies
+        if: matrix.os == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libarchive-tools
+
+      - name: Install dependencies (Windows)
+        if: matrix.os == 'windows-latest'
+        run: npm ci
+        env:
+          npm_config_msvs_version: "2022"
+
+      - name: Install dependencies
+        if: matrix.os != 'windows-latest'
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Smoke test (Linux)
+        if: matrix.os == 'ubuntu-22.04'
+        run: xvfb-run --auto-servernum npm run test:smoke
+        env:
+          NODE_ENV: production
+          ELECTRON_ENABLE_LOGGING: "1"
+          SMOKE_RUNS: "1"
+          SMOKE_TIMEOUT_MS: "210000"
+        timeout-minutes: 6
+
+      - name: Smoke test (macOS)
+        if: matrix.os == 'macos-14'
+        run: npm run test:smoke
+        env:
+          NODE_ENV: production
+          ELECTRON_ENABLE_LOGGING: "1"
+          SMOKE_RUNS: "1"
+          SMOKE_TIMEOUT_MS: "210000"
+        timeout-minutes: 6
+
+      - name: Smoke test (Windows)
+        if: matrix.os == 'windows-latest'
+        run: npm run test:smoke
+        env:
+          NODE_ENV: production
+          ELECTRON_ENABLE_LOGGING: "1"
+          ELECTRON_ENABLE_STACK_DUMPING: "1"
+          SMOKE_RUNS: "3"
+          SMOKE_TIMEOUT_MS: "210000"
+        timeout-minutes: 12
+
+  # E2E suites run in parallel with build (both gate on check + test)
+  e2e-core:
+    needs: [check, test]
+    uses: ./.github/workflows/e2e-core.yml
+
+  e2e-online:
+    needs: [check, test]
+    uses: ./.github/workflows/e2e-online.yml
+    secrets: inherit
+
+  notify:
+    if: failure() && github.event_name == 'schedule'
+    needs: [check, test, build, e2e-core, e2e-online]
+    runs-on: ubuntu-22.04
+    permissions:
+      issues: write
+
+    steps:
+      - name: Create or update failure issue
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const title = `[Nightly] Tests failed on ${new Date().toISOString().split('T')[0]}`;
+            const label = 'nightly-failure';
+            const body = [
+              `The nightly test suite failed.`,
+              ``,
+              `**Run:** ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
+              `**Date:** ${new Date().toISOString()}`,
+            ].join('\n');
+
+            const { data: issues } = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              labels: label,
+              state: 'open',
+              per_page: 1,
+            });
+
+            if (issues.length > 0) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issues[0].number,
+                body: body,
+              });
+            } else {
+              await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title,
+                body,
+                labels: [label],
+              });
+            }

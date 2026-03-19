@@ -11,6 +11,8 @@ export default defineConfig({
   test: {
     globals: true,
     environment: "node",
+    minWorkers: 7,
+    maxConcurrency: 10,
     include: [
       "electron/**/*.{test,spec}.{js,ts}",
       "src/**/*.{test,spec}.{js,ts,jsx,tsx}",
