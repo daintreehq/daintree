@@ -1,12 +1,14 @@
 import React, { useState, useEffect } from "react";
 import { Pause, Lock } from "lucide-react";
-import type { TerminalType, AgentState, PanelKind } from "@/types";
+import type { TerminalType, AgentState, PanelKind, AgentStateChangeTrigger } from "@/types";
 import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
 import { STATE_ICONS, STATE_COLORS } from "@/components/Worktree/terminalStateConfig";
 import type { ActivityState } from "./TerminalPane";
 import { useTerminalStore } from "@/store";
+import { useShallow } from "zustand/react/shallow";
 import { formatElapsedDuration } from "@/utils/formatElapsedDuration";
+import { formatTimeAgo } from "@/utils/timeAgo";
 
 function ElapsedTime({ startedAt }: { startedAt: number }) {
   const [now, setNow] = useState(() => Date.now());
@@ -18,6 +20,17 @@ function ElapsedTime({ startedAt }: { startedAt: number }) {
 
   return <> · {formatElapsedDuration(now - startedAt)}</>;
 }
+
+const TRIGGER_LABELS: Record<AgentStateChangeTrigger, string> = {
+  input: "Input",
+  output: "Output",
+  heuristic: "Heuristic",
+  "ai-classification": "AI classification",
+  timeout: "Timeout",
+  exit: "Exit",
+  activity: "Activity",
+  title: "Title",
+};
 
 export interface TerminalHeaderContentProps {
   id: string;
@@ -44,12 +57,19 @@ function TerminalHeaderContentComponent({
   queueCount = 0,
   flowStatus,
 }: TerminalHeaderContentProps) {
-  const isInputLocked = useTerminalStore(
-    (state) => state.terminals.find((t) => t.id === id)?.isInputLocked ?? false
-  );
-  const startedAt = useTerminalStore(
-    (state) => state.terminals.find((t) => t.id === id)?.startedAt
-  );
+  const { isInputLocked, startedAt, lastStateChange, stateChangeTrigger, stateChangeConfidence } =
+    useTerminalStore(
+      useShallow((state) => {
+        const t = state.terminals.find((t) => t.id === id);
+        return {
+          isInputLocked: t?.isInputLocked ?? false,
+          startedAt: t?.startedAt,
+          lastStateChange: t?.lastStateChange,
+          stateChangeTrigger: t?.stateChangeTrigger,
+          stateChangeConfidence: t?.stateChangeConfidence,
+        };
+      })
+    );
 
   // Show command pill only for plain terminals (not agent terminals)
   // Use kind to distinguish - agent panels have kind="agent"
@@ -75,8 +95,8 @@ function TerminalHeaderContentComponent({
               ? "bg-[color-mix(in_oklab,var(--color-status-info)_15%,transparent)] border-status-info/40"
               : "bg-[color-mix(in_oklab,var(--color-status-error)_15%,transparent)] border-status-error/40";
 
-    // Build tooltip - show activity headline or just the agent state
-    const tooltip = activity?.headline?.trim() || `Agent ${agentState}`;
+    const headline = activity?.headline?.trim() || `Agent ${agentState}`;
+    const showConfidence = stateChangeConfidence != null && stateChangeConfidence < 1;
 
     return (
       <TooltipProvider>
@@ -101,9 +121,24 @@ function TerminalHeaderContentComponent({
               />
             </div>
           </TooltipTrigger>
-          <TooltipContent side="bottom">
-            {tooltip}
-            {startedAt != null && <ElapsedTime startedAt={startedAt} />}
+          <TooltipContent side="bottom" className="max-w-xs">
+            <div className="flex flex-col gap-0.5">
+              <span className="font-medium">
+                {headline}
+                {startedAt != null && <ElapsedTime startedAt={startedAt} />}
+              </span>
+              {isExited && exitCode != null && (
+                <span className="text-status-error">Exit code: {exitCode}</span>
+              )}
+              <span>
+                State: {agentState}
+                {stateChangeTrigger && <> · {TRIGGER_LABELS[stateChangeTrigger]}</>}
+                {showConfidence && <> ({Math.round(stateChangeConfidence * 100)}%)</>}
+              </span>
+              {lastStateChange != null && lastStateChange > 0 && (
+                <span className="text-canopy-text/60">Since: {formatTimeAgo(lastStateChange)}</span>
+              )}
+            </div>
           </TooltipContent>
         </Tooltip>
       </TooltipProvider>
