@@ -60,7 +60,7 @@ describe("AgentPatternDetector", () => {
     });
 
     it("should detect minimal Claude pattern (fallback)", () => {
-      const output = "✽ thinking";
+      const output = "✽ Thinking…";
       const result = detector.detect(output);
 
       expect(result.isWorking).toBe(true);
@@ -68,20 +68,55 @@ describe("AgentPatternDetector", () => {
       expect(result.confidence).toBe(0.75);
     });
 
-    it("should detect Claude deliberating pattern", () => {
-      const output = "✽ deliberating";
+    it("should detect Claude deliberating pattern (fallback)", () => {
+      const output = "✻ Deliberating…";
       const result = detector.detect(output);
 
       expect(result.isWorking).toBe(true);
       expect(result.matchTier).toBe("fallback");
     });
 
-    it("should detect Claude searching pattern", () => {
-      const output = "○ searching for files...";
+    it("should detect custom spinnerVerb (fallback)", () => {
+      const output = "✶ Cogitating…";
       const result = detector.detect(output);
 
       expect(result.isWorking).toBe(true);
       expect(result.matchTier).toBe("fallback");
+    });
+
+    it("should detect new v2.1.79 spinner chars with primary pattern", () => {
+      const chars = ["·", "*", "✢", "✳", "✶"];
+      for (const char of chars) {
+        const output = `${char} Working… (esc to interrupt · 5s)`;
+        const result = detector.detect(output);
+        expect(result.isWorking).toBe(true);
+        expect(result.matchTier).toBe("primary");
+      }
+    });
+
+    it("should detect reduced-motion spinner (primary)", () => {
+      const output = "● Processing… (esc to interrupt · 10s)";
+      const result = detector.detect(output);
+
+      expect(result.isWorking).toBe(true);
+      expect(result.matchTier).toBe("primary");
+    });
+
+    it("should not match middle dot or asterisk in fallback (false positive prevention)", () => {
+      const dotResult = detector.detect("· some text…");
+      expect(dotResult.isWorking).toBe(false);
+
+      const starResult = detector.detect("* some text…");
+      expect(starResult.isWorking).toBe(false);
+    });
+
+    it("should detect fallback-only with new v2.1.79 spinner char (no esc to interrupt)", () => {
+      const output = "✢ Analyzing…";
+      const result = detector.detect(output);
+
+      expect(result.isWorking).toBe(true);
+      expect(result.matchTier).toBe("fallback");
+      expect(result.confidence).toBe(0.75);
     });
 
     it("should not match on idle Claude output", () => {
@@ -102,7 +137,7 @@ describe("AgentPatternDetector", () => {
 
     it("should detect pattern in last N lines only", () => {
       // Pattern in first line, followed by many other lines
-      const lines = ["✽ thinking", ...Array(20).fill("Regular output line")];
+      const lines = ["✽ Thinking…", ...Array(20).fill("Regular output line")];
       const output = lines.join("\n");
       const result = detector.detect(output);
 
@@ -245,7 +280,7 @@ describe("AgentPatternDetector", () => {
     });
 
     it("should strip ANSI from individual lines", () => {
-      const lines = ["\x1b[32m✽ thinking\x1b[0m"];
+      const lines = ["\x1b[32m✽ Thinking…\x1b[0m"];
       const result = detector.detectFromLines(lines);
 
       expect(result.isWorking).toBe(true);
@@ -497,7 +532,7 @@ wraps to the next line where the escape hint appears: esc to interrupt)`;
     });
 
     it("should handle very long output", () => {
-      const longOutput = "x".repeat(100000) + "\n✽ thinking";
+      const longOutput = "x".repeat(100000) + "\n✽ Thinking…";
       const result = detector.detect(longOutput);
 
       // Should still detect pattern in last lines
@@ -510,7 +545,7 @@ wraps to the next line where the escape hint appears: esc to interrupt)`;
     });
 
     it("should handle mixed unicode characters", () => {
-      const output = "🚀 ✽ thinking about 日本語";
+      const output = "🚀 ✽ Thinking… about 日本語";
       const result = detector.detect(output);
 
       expect(result.isWorking).toBe(true);

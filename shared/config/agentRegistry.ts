@@ -289,17 +289,21 @@ export const AGENT_REGISTRY: Record<string, AgentConfig> = {
     },
     detection: {
       primaryPatterns: [
-        "[✽✻✼✾⟡◇◆●○]\\s+[^()\\n]{2,80}\\s*\\(esc to interrupt",
+        "[·*✢✳✶✻✽●✼✾⟡◇◆○]\\s+[^()\\n]{2,80}\\s*\\(esc to interrupt",
         "esc to interrupt[^)\\n]*\\)?$",
         "\\(\\d+s\\s*[·•]\\s*esc to interrupt",
       ],
-      fallbackPatterns: [
-        "[✽✻✼✾⟡◇◆●○]\\s+(thinking|deliberating|working|reading|writing|searching|executing)",
-      ],
+      fallbackPatterns: ["[✢✳✶✻✽●]\\s+\\w+…"],
       bootCompletePatterns: ["claude\\s+code\\s+v?\\d"],
       promptPatterns: ["^\\s*>\\s*", "^\\s*❯\\s*"],
       promptHintPatterns: ["bypass permissions", "^\\s*>\\s+Try\\b"],
-      completionPatterns: ["\\$\\d+\\.\\d+\\s*·\\s*\\d+\\s*tokens", "Task\\s+completed"],
+      completionPatterns: [
+        "[✢✳✶✻✽●]\\s+\\w+\\s+for\\s+\\d",
+        "Total cost:\\s+\\$\\d",
+        "Total duration",
+        "\\$\\d+\\.\\d+\\s*·\\s*\\d+\\s*tokens",
+        "Task\\s+completed",
+      ],
       completionConfidence: 0.9,
       scanLineCount: 10,
       primaryConfidence: 0.95,

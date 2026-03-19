@@ -8,7 +8,7 @@ const STATUS_LINE_PATTERNS: RegExp[] = [
   /⏱️?\s*\d+[smh]/,
   /[\u2800-\u28FF]/,
   /esc to interrupt/i,
-  /[✽✻✦]\s/,
+  /[✽✻✦✢✳✶·●*]\s/,
   /\b(?:working|thinking|deliberating|responding|running)\b.*[([]/i,
 ];
 
