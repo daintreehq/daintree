@@ -176,6 +176,17 @@ describe("PtyClient Handshake Protocol", () => {
       );
     });
 
+    it("should start pty-host with --expose-gc in execArgv", () => {
+      createClient();
+      expect(forkMock).toHaveBeenCalledWith(
+        expect.any(String),
+        [],
+        expect.objectContaining({
+          execArgv: expect.arrayContaining(["--expose-gc"]),
+        })
+      );
+    });
+
     it("should forward stdout/stderr lines into the main log buffer", () => {
       createClient();
 
