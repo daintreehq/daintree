@@ -1044,9 +1044,14 @@ class TerminalInstanceService {
     const managed = this.instances.get(id);
     if (!managed) return;
 
-    // For settled-strategy agents, send a single PTY resize.
-    // For default agents, xterm v6 handles rendering recovery
-    // after wake without needing a row bounce hack.
+    // Re-measure container dimensions after wake so latestCols/latestRows
+    // reflect the current window size rather than pre-hibernation cache.
+    // fit() already guards against offscreen/small terminals (returns null).
+    const fitResult = this.resizeController.fit(id);
+    if (fitResult) return;
+
+    // Fallback: fit() returned null (terminal offscreen or container too small).
+    // Use cached dimensions to ensure PTY still gets a resize signal.
     if (this.getResizeStrategyForTerminal(managed) === "settled") {
       const cols = managed.latestCols;
       const rows = managed.latestRows;

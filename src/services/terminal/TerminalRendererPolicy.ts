@@ -110,7 +110,7 @@ export class TerminalRendererPolicy {
 
             current.terminal.refresh(0, current.terminal.rows - 1);
 
-            if (ok && current.isAltBuffer) {
+            if (ok) {
               this.deps.onPostWake?.(id);
             }
           })

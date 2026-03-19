@@ -52,12 +52,36 @@ vi.mock("../TerminalAddonManager", () => ({
   createWebLinksAddon: vi.fn(() => ({ dispose: vi.fn() })),
 }));
 
-describe("TerminalInstanceService post-wake handling", () => {
-  type PostWakeTestService = {
-    instances: Map<string, { latestCols: number; latestRows: number }>;
-    handlePostWake: (id: string) => void;
-  };
+interface PostWakeInstance {
+  latestCols: number;
+  latestRows: number;
+  hostElement: { getBoundingClientRect: () => DOMRect; isConnected: boolean };
+  fitAddon: { fit: ReturnType<typeof vi.fn> };
+  terminal: { cols: number; rows: number };
+  agentId?: string;
+}
 
+type PostWakeTestService = {
+  instances: Map<string, PostWakeInstance>;
+  handlePostWake: (id: string) => void;
+};
+
+function makeInstance(overrides: Partial<PostWakeInstance> = {}): PostWakeInstance {
+  return {
+    latestCols: 80,
+    latestRows: 24,
+    hostElement: {
+      getBoundingClientRect: () =>
+        ({ left: 0, top: 0, width: 800, height: 600, right: 800, bottom: 600 }) as DOMRect,
+      isConnected: true,
+    },
+    fitAddon: { fit: vi.fn() },
+    terminal: { cols: 120, rows: 30 },
+    ...overrides,
+  };
+}
+
+describe("TerminalInstanceService post-wake handling", () => {
   let service: PostWakeTestService | undefined;
 
   beforeEach(async () => {
@@ -81,28 +105,66 @@ describe("TerminalInstanceService post-wake handling", () => {
     }
   });
 
-  it("performs a single immediate resize without bounce", () => {
+  it("calls fit() first and returns early when fit succeeds", () => {
     const id = "term-post-wake";
     if (!service) throw new Error("Service not initialized");
-    service.instances.set(id, { latestCols: 80, latestRows: 24 });
+
+    const instance = makeInstance({ terminal: { cols: 120, rows: 30 } });
+    service.instances.set(id, instance);
 
     service.handlePostWake(id);
 
-    // xterm v6 handles rendering recovery without needing a row bounce.
-    // Only the immediate forceImmediateResize should fire (which calls fit,
-    // not terminalClient.resize directly).
-    expect(mockTerminalClient.resize).toHaveBeenCalledTimes(1);
-    expect(mockTerminalClient.resize).toHaveBeenNthCalledWith(1, id, 80, 24);
+    // fit() was called on the addon
+    expect(instance.fitAddon.fit).toHaveBeenCalledTimes(1);
 
-    // No delayed bounce timers
-    vi.advanceTimersByTime(200);
+    // fit() succeeded so sendPtyResize was called with the terminal's current dimensions
     expect(mockTerminalClient.resize).toHaveBeenCalledTimes(1);
+    expect(mockTerminalClient.resize).toHaveBeenCalledWith(id, 120, 30);
+
+    // No delayed timers
+    vi.advanceTimersByTime(600);
+    expect(mockTerminalClient.resize).toHaveBeenCalledTimes(1);
+  });
+
+  it("falls back to forceImmediateResize when fit() returns null (offscreen)", () => {
+    const id = "term-post-wake-offscreen";
+    if (!service) throw new Error("Service not initialized");
+
+    const instance = makeInstance({
+      latestCols: 80,
+      latestRows: 24,
+      hostElement: {
+        getBoundingClientRect: () =>
+          ({ left: 0, top: 0, width: 0, height: 0, right: 0, bottom: 0 }) as DOMRect,
+        isConnected: true,
+      },
+    });
+    service.instances.set(id, instance);
+
+    service.handlePostWake(id);
+
+    // fit() was NOT called on the addon (getBoundingClientRect returned zero dims)
+    expect(instance.fitAddon.fit).not.toHaveBeenCalled();
+
+    // Fallback: forceImmediateResize sends PTY resize with cached dims
+    expect(mockTerminalClient.resize).toHaveBeenCalledTimes(1);
+    expect(mockTerminalClient.resize).toHaveBeenCalledWith(id, 80, 24);
   });
 
   it("skips post-wake resize path when latest dimensions are invalid", () => {
     const id = "term-post-wake-invalid";
     if (!service) throw new Error("Service not initialized");
-    service.instances.set(id, { latestCols: 0, latestRows: 24 });
+
+    const instance = makeInstance({
+      latestCols: 0,
+      latestRows: 24,
+      hostElement: {
+        getBoundingClientRect: () =>
+          ({ left: 0, top: 0, width: 0, height: 0, right: 0, bottom: 0 }) as DOMRect,
+        isConnected: true,
+      },
+    });
+    service.instances.set(id, instance);
 
     service.handlePostWake(id);
     vi.advanceTimersByTime(200);
