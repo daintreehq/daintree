@@ -472,7 +472,6 @@ export function GitHubResourceList({
       searchQuery,
       setSearchQuery,
       selection,
-      data,
     ]
   );
 
