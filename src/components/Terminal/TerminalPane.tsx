@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
-import { AlertTriangle, Loader2, Settings } from "lucide-react";
+import { AlertTriangle, Loader2, RefreshCw, Settings } from "lucide-react";
 import type {
   TerminalType,
   TerminalRestartError,
@@ -128,6 +128,7 @@ function TerminalPaneComponent({
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [isUpdateCwdOpen, setIsUpdateCwdOpen] = useState(false);
   const [isAutoRestarting, setIsAutoRestarting] = useState(false);
+  const [isRestartingService, setIsRestartingService] = useState(false);
   const autoRestartTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const autoRestartAttemptRef = useRef(0);
   const processStartTimeRef = useRef<number>(0);
@@ -186,6 +187,18 @@ function TerminalPaneComponent({
 
   const isBackendDisconnected = backendStatus === "disconnected";
   const isBackendRecovering = backendStatus === "recovering";
+
+  useEffect(() => {
+    if (backendStatus !== "disconnected") {
+      setIsRestartingService(false);
+    }
+  }, [backendStatus]);
+
+  useEffect(() => {
+    if (!isRestartingService) return;
+    const timeout = setTimeout(() => setIsRestartingService(false), 15_000);
+    return () => clearTimeout(timeout);
+  }, [isRestartingService]);
   const hybridInputEnabled = useTerminalInputStore((state) => state.hybridInputEnabled);
   const hybridInputAutoFocus = useTerminalInputStore((state) => state.hybridInputAutoFocus);
   const effectiveAgentId = (
@@ -803,14 +816,33 @@ function TerminalPaneComponent({
                     </p>
                   )}
 
-                  <button
-                    onClick={() =>
-                      void actionService.dispatch("ui.refresh", undefined, { source: "user" })
-                    }
-                    className="px-4 py-2 bg-status-error/20 hover:bg-status-error/30 text-status-error rounded-lg border border-status-error/30 transition-colors"
-                  >
-                    Restart Application
-                  </button>
+                  <div className="flex flex-col gap-2 w-full">
+                    <button
+                      onClick={() => {
+                        setIsRestartingService(true);
+                        terminalClient.restartService().catch(() => {
+                          setIsRestartingService(false);
+                        });
+                      }}
+                      disabled={isRestartingService}
+                      className="px-4 py-2 bg-canopy-accent/20 hover:bg-canopy-accent/30 text-canopy-accent rounded-lg border border-canopy-accent/30 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                    >
+                      {isRestartingService ? (
+                        <Loader2 className="w-4 h-4 animate-spin motion-reduce:animate-none" />
+                      ) : (
+                        <RefreshCw className="w-4 h-4" />
+                      )}
+                      {isRestartingService ? "Restarting..." : "Restart Terminal Service"}
+                    </button>
+                    <button
+                      onClick={() =>
+                        void actionService.dispatch("ui.refresh", undefined, { source: "user" })
+                      }
+                      className="px-4 py-2 bg-status-error/10 hover:bg-status-error/20 text-canopy-text/60 rounded-lg border border-canopy-border transition-colors text-sm"
+                    >
+                      Restart Application
+                    </button>
+                  </div>
                 </div>
               )}
             </div>

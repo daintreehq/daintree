@@ -243,7 +243,8 @@ export type ActionId =
   | "devServer.openDetected"
   | "worktree.compareDiff"
   | "terminal.stashInput"
-  | "terminal.popStash";
+  | "terminal.popStash"
+  | "terminal.restartService";
 
 export interface ActionContext {
   projectId?: string;
