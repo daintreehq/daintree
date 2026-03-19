@@ -153,7 +153,7 @@ describe("TerminalProcess.kill — session persistence", () => {
   });
 });
 
-describe("TerminalProcess.kill — process tree cleanup", () => {
+describe.skipIf(process.platform === "win32")("TerminalProcess.kill — process tree cleanup", () => {
   let processKillSpy: ReturnType<typeof vi.spyOn>;
 
   beforeEach(() => {
