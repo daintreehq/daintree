@@ -67,7 +67,7 @@ describe("IssueBulkActionBar", () => {
     expect(createBtn).toBeTruthy();
   });
 
-  it("renders as floating elevated bar with solid styling", () => {
+  it("renders as floating bar with depth styling", () => {
     const issues = [makeIssue(1)];
     render(<IssueBulkActionBar selectedIssues={issues} onClear={vi.fn()} />);
 
@@ -78,12 +78,14 @@ describe("IssueBulkActionBar", () => {
     expect(classes).toContain("shadow-xl");
     expect(classes).toContain("mx-2");
     expect(classes).toContain("mb-2");
-    expect(classes).toContain("bg-surface-panel-elevated");
+    expect(classes).toContain("bg-surface-panel");
+    expect(classes).not.toContain("bg-surface-panel-elevated");
     expect(classes).toContain("ring-border-default");
+    expect(classes).toContain("shadow-black/20");
+    expect(classes).toContain("inset-shadow-[0_1px_0_var(--color-overlay-soft)]");
 
     expect(classes).not.toContain("border-t");
     expect(classes).not.toContain("backdrop-blur-md");
-    expect(classes).not.toContain("bg-surface-panel-elevated/95");
     expect(classes).not.toContain("shadow-lg");
     expect(classes).not.toContain("ring-border-subtle");
   });
