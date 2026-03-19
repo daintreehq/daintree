@@ -6,6 +6,7 @@ import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/comp
 import { STATE_ICONS, STATE_COLORS } from "@/components/Worktree/terminalStateConfig";
 import type { ActivityState } from "./TerminalPane";
 import { useTerminalStore } from "@/store";
+import { useShallow } from "zustand/react/shallow";
 import { formatElapsedDuration } from "@/utils/formatElapsedDuration";
 import { formatTimeAgo } from "@/utils/timeAgo";
 
@@ -57,16 +58,18 @@ function TerminalHeaderContentComponent({
   flowStatus,
 }: TerminalHeaderContentProps) {
   const { isInputLocked, startedAt, lastStateChange, stateChangeTrigger, stateChangeConfidence } =
-    useTerminalStore((state) => {
-      const t = state.terminals.find((t) => t.id === id);
-      return {
-        isInputLocked: t?.isInputLocked ?? false,
-        startedAt: t?.startedAt,
-        lastStateChange: t?.lastStateChange,
-        stateChangeTrigger: t?.stateChangeTrigger,
-        stateChangeConfidence: t?.stateChangeConfidence,
-      };
-    });
+    useTerminalStore(
+      useShallow((state) => {
+        const t = state.terminals.find((t) => t.id === id);
+        return {
+          isInputLocked: t?.isInputLocked ?? false,
+          startedAt: t?.startedAt,
+          lastStateChange: t?.lastStateChange,
+          stateChangeTrigger: t?.stateChangeTrigger,
+          stateChangeConfidence: t?.stateChangeConfidence,
+        };
+      })
+    );
 
   // Show command pill only for plain terminals (not agent terminals)
   // Use kind to distinguish - agent panels have kind="agent"

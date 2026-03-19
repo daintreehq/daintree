@@ -42,6 +42,10 @@ vi.mock("@/components/Worktree/terminalStateConfig", () => ({
 
 let mockTerminal: Record<string, unknown> = {};
 
+vi.mock("zustand/react/shallow", () => ({
+  useShallow: (fn: (...args: unknown[]) => unknown) => fn,
+}));
+
 vi.mock("@/store", () => ({
   useTerminalStore: (selector: (s: Record<string, unknown>) => unknown) =>
     selector({ terminals: [mockTerminal] }),
@@ -231,5 +235,31 @@ describe("TerminalHeaderContent — agent state chip tooltip", () => {
     const tooltips = screen.getAllByTestId("tooltip-content");
     const agentTooltip = tooltips.find((el) => el.textContent?.includes("Agent directing"));
     expect(agentTooltip).toBeTruthy();
+  });
+
+  it("shows exit code 0 correctly", () => {
+    mockTerminal = { id: "t1" };
+
+    render(<TerminalHeaderContent id="t1" agentState="failed" isExited={true} exitCode={0} />);
+
+    const tooltips = screen.getAllByTestId("tooltip-content");
+    const agentTooltip = tooltips.find((el) => el.textContent?.includes("Agent failed"));
+    expect(agentTooltip).toBeTruthy();
+    expect(agentTooltip!.textContent).toContain("Exit code: 0");
+  });
+
+  it("shows 0% confidence when stateChangeConfidence is 0", () => {
+    mockTerminal = {
+      id: "t1",
+      stateChangeTrigger: "heuristic",
+      stateChangeConfidence: 0,
+    };
+
+    render(<TerminalHeaderContent id="t1" agentState="working" />);
+
+    const tooltips = screen.getAllByTestId("tooltip-content");
+    const agentTooltip = tooltips.find((el) => el.textContent?.includes("Agent working"));
+    expect(agentTooltip).toBeTruthy();
+    expect(agentTooltip!.textContent).toContain("(0%)");
   });
 });
