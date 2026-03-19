@@ -2,9 +2,10 @@ import { test, expect } from "@playwright/test";
 import { launchApp, closeApp, waitForProcessExit, type AppContext } from "../helpers/launch";
 import { createFixtureRepo } from "../helpers/fixtures";
 import { openAndOnboardProject } from "../helpers/project";
+import { getTerminalText, waitForTerminalText, runTerminalCommand } from "../helpers/terminal";
 import { getFirstGridPanel, getGridPanelCount } from "../helpers/panels";
 import { SEL } from "../helpers/selectors";
-import { T_LONG, T_MEDIUM } from "../helpers/timeouts";
+import { T_LONG, T_MEDIUM, T_SETTLE } from "../helpers/timeouts";
 import {
   getPtyPid,
   isPidAlive,
@@ -138,5 +139,85 @@ test.describe.serial("Core: PTY Resilience", () => {
     const growthMB = (memFinal.heapUsed - memBaseline.heapUsed) / (1024 * 1024);
     // 3 cycles should not leak more than 50MB
     expect(growthMB).toBeLessThan(50);
+  });
+
+  test("PTY crash mid-output: spawn terminal and start flood", async () => {
+    const { window } = ctx;
+
+    await window.locator(SEL.toolbar.openTerminal).click();
+    const floodPanel = getFirstGridPanel(window);
+    await expect(floodPanel).toBeVisible({ timeout: T_LONG });
+
+    // Wait for the shell to be ready
+    await waitForTerminalText(floodPanel, "pty-resilience", T_LONG);
+
+    // Capture the shell PID
+    await runTerminalCommand(window, floodPanel, "echo CANOPY_PID_$$");
+    await waitForTerminalText(floodPanel, "CANOPY_PID_", T_LONG);
+
+    const text = await getTerminalText(floodPanel);
+    const pidMatch = text.match(/CANOPY_PID_(\d+)/);
+    expect(pidMatch).toBeTruthy();
+    const capturedPid = Number(pidMatch![1]);
+    expect(capturedPid).toBeGreaterThan(0);
+
+    // Start a slow flood
+    await window.waitForTimeout(T_SETTLE);
+    await runTerminalCommand(
+      window,
+      floodPanel,
+      "while true; do echo FLOOD_LINE_$(date +%s); sleep 0.05; done"
+    );
+    await waitForTerminalText(floodPanel, "FLOOD_LINE_", T_LONG);
+
+    // Kill the shell process with SIGKILL
+    await ctx.app.evaluate((_, pid) => {
+      try {
+        process.kill(pid, "SIGKILL");
+      } catch {
+        // ESRCH — already dead
+      }
+    }, capturedPid);
+
+    // node-pty reports exitCode=null for signal deaths, normalized to 0 by TerminalProcess.
+    // Exit code 0 → panel auto-trashed. Non-zero → panel preserved with exit banner.
+    // Wait for either outcome: panel trashed (grid empty) or exit banner visible.
+    await expect
+      .poll(
+        async () => {
+          const count = await getGridPanelCount(window);
+          if (count === 0) return "trashed";
+          const panelText = await getTerminalText(floodPanel);
+          if (panelText.includes("Process exited")) return "preserved";
+          return "pending";
+        },
+        { timeout: T_LONG, intervals: [500] }
+      )
+      .toMatch(/trashed|preserved/);
+
+    // Verify the toolbar is still interactive (app is responsive)
+    await expect(window.locator(SEL.toolbar.openTerminal)).toBeEnabled();
+    await expect(window.locator(SEL.toolbar.openSettings)).toBeVisible();
+  });
+
+  test("PTY crash mid-output: open new terminal after crash", async () => {
+    const { window } = ctx;
+
+    const countBefore = await getGridPanelCount(window);
+    await window.locator(SEL.toolbar.openTerminal).click();
+
+    // Wait for the new terminal to appear
+    await expect
+      .poll(() => getGridPanelCount(window), { timeout: T_LONG })
+      .toBeGreaterThan(countBefore);
+
+    // Get the newest panel (last in grid — the crashed panel may still be first)
+    const newPanel = window.locator(SEL.panel.gridPanel).last();
+    await expect(newPanel).toBeVisible({ timeout: T_MEDIUM });
+
+    await waitForTerminalText(newPanel, "pty-resilience", T_LONG);
+
+    await runTerminalCommand(window, newPanel, 'echo "POST_CRASH_OK"');
+    await waitForTerminalText(newPanel, "POST_CRASH_OK", T_LONG);
   });
 });
