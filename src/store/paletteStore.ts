@@ -9,7 +9,8 @@ export type PaletteId =
   | "notes"
   | "project-switcher"
   | "quick-create"
-  | "prompt-history";
+  | "prompt-history"
+  | "send-to-agent";
 
 interface PaletteState {
   activePaletteId: PaletteId | null;

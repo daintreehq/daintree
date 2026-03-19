@@ -38,6 +38,7 @@ import {
   Repeat2,
   RotateCcw,
   Search,
+  Send,
   SquareTerminal,
   Trash2,
   Unlock,
@@ -626,6 +627,20 @@ export function TerminalContextMenu({
               <Clipboard className={ICON_CLASS} aria-hidden="true" />
               Paste
               <ContextMenuShortcut>{isMac ? `${modifierKey}V` : "Ctrl+⇧V"}</ContextMenuShortcut>
+            </ContextMenuItem>
+            <ContextMenuItem
+              disabled={!hasSelection}
+              onSelect={() =>
+                void actionService.dispatch(
+                  "terminal.sendToAgent",
+                  { terminalId },
+                  { source: "context-menu" }
+                )
+              }
+            >
+              <Send className={ICON_CLASS} aria-hidden="true" />
+              Send to Agent
+              <ContextMenuShortcut>{isMac ? "⌘⇧E" : "Ctrl+⇧E"}</ContextMenuShortcut>
             </ContextMenuItem>
             {hoveredUrl && (
               <>

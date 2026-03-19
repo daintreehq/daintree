@@ -333,6 +333,14 @@ export const DEFAULT_KEYBINDINGS: KeybindingConfig[] = [
     description: "Inject context into focused terminal",
     category: "Terminal",
   },
+  {
+    actionId: "terminal.sendToAgent",
+    combo: "Cmd+Shift+E",
+    scope: "global",
+    priority: 0,
+    description: "Send selection to another terminal",
+    category: "Terminal",
+  },
   // Directional terminal navigation (Ghostty-style: Cmd+Option+Arrow)
   {
     actionId: "terminal.focusUp",

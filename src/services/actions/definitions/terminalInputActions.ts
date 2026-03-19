@@ -3,6 +3,7 @@ import { z } from "zod";
 import type { ActionId } from "@shared/types/actions";
 import { openPanelContextMenu } from "@/lib/panelContextMenu";
 import { useTerminalStore } from "@/store/terminalStore";
+import { panelKindHasPty } from "@shared/config/panelKindRegistry";
 export function registerTerminalInputActions(
   actions: ActionRegistry,
   callbacks: ActionCallbacks
@@ -71,6 +72,30 @@ export function registerTerminalInputActions(
       const state = useTerminalStore.getState();
       const targetId = state.focusedId;
       if (targetId) triggerPopStash(targetId);
+    },
+  }));
+
+  actions.set("terminal.sendToAgent", () => ({
+    id: "terminal.sendToAgent" as ActionId,
+    title: "Send to Agent",
+    description: "Send terminal selection to another agent or terminal panel",
+    category: "terminal",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    argsSchema: z.object({ terminalId: z.string().optional() }),
+    run: async (args: unknown) => {
+      const { terminalId } = (args ?? {}) as { terminalId?: string };
+      const state = useTerminalStore.getState();
+      const sourceId = terminalId ?? state.focusedId;
+      if (!sourceId) return;
+
+      const terminal = state.terminals.find((t) => t.id === sourceId);
+      if (!terminal) return;
+      if (terminal.kind && !panelKindHasPty(terminal.kind)) return;
+
+      const { openSendToAgentPalette } = await import("@/hooks/useSendToAgentPalette");
+      openSendToAgentPalette(sourceId);
     },
   }));
 }

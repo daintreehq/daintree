@@ -93,6 +93,8 @@ import { CreateProjectFolderDialog } from "./components/Project/CreateProjectFol
 import { ProjectSwitcherPalette } from "./components/Project/ProjectSwitcherPalette";
 import { ActionPalette } from "./components/ActionPalette";
 import { QuickSwitcher } from "./components/QuickSwitcher";
+import { SendToAgentPalette } from "./components/Terminal/SendToAgentPalette";
+import { useSendToAgentPalette } from "./hooks/useSendToAgentPalette";
 import { ConfirmDialog } from "./components/ui/ConfirmDialog";
 import { RecipeEditor } from "./components/TerminalRecipe/RecipeEditor";
 import { NotesPalette } from "./components/Notes";
@@ -986,6 +988,7 @@ function App() {
   const projectSwitcherPalette = useProjectSwitcherPalette();
   const actionPalette = useActionPalette();
   const quickSwitcher = useQuickSwitcher();
+  const sendToAgentPalette = useSendToAgentPalette();
   useDoubleShift(actionPalette.toggle);
   const currentProject = useProjectStore((state) => state.currentProject);
   const gitInitDialogOpen = useProjectStore((state) => state.gitInitDialogOpen);
@@ -1226,6 +1229,19 @@ function App() {
         selectNext={quickSwitcher.selectNext}
         selectItem={quickSwitcher.selectItem}
         confirmSelection={quickSwitcher.confirmSelection}
+      />
+      <SendToAgentPalette
+        isOpen={sendToAgentPalette.isOpen}
+        query={sendToAgentPalette.query}
+        results={sendToAgentPalette.results}
+        totalResults={sendToAgentPalette.totalResults}
+        selectedIndex={sendToAgentPalette.selectedIndex}
+        close={sendToAgentPalette.close}
+        setQuery={sendToAgentPalette.setQuery}
+        selectPrevious={sendToAgentPalette.selectPrevious}
+        selectNext={sendToAgentPalette.selectNext}
+        selectItem={sendToAgentPalette.selectItem}
+        confirmSelection={sendToAgentPalette.confirmSelection}
       />
       <NewTerminalPalette
         isOpen={newTerminalPalette.isOpen}
