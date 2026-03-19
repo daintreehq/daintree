@@ -38,6 +38,13 @@ function activatePort(port: MessagePort): void {
   messagePort = port;
   messagePortConnected = true;
   installPortDataHandler(port);
+  port.addEventListener("close", () => {
+    if (messagePort === port) {
+      messagePort = null;
+      messagePortConnected = false;
+      console.log("[TerminalClient] MessagePort closed, falling back to IPC");
+    }
+  });
   port.start();
 }
 
