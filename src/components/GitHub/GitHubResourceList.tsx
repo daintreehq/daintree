@@ -556,11 +556,11 @@ export function GitHubResourceList({
                   "relative flex items-center justify-center w-7 h-7 rounded shrink-0",
                   "text-canopy-text/60 hover:text-canopy-text hover:bg-tint/[0.06]",
                   "transition-colors",
-                  sortOrder !== "created" && "text-canopy-accent"
+                  sortOrder !== "updated" && "text-canopy-accent"
                 )}
               >
                 <Filter className="w-3.5 h-3.5" />
-                {sortOrder !== "created" && (
+                {sortOrder !== "updated" && (
                   <span className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-canopy-accent" />
                 )}
               </button>
