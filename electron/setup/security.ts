@@ -7,6 +7,7 @@ import {
   wrapError,
   serializeError,
 } from "../../shared/utils/ipcErrorSerialization.js";
+import { FAULT_MODE_ENABLED, applyInvokeFault, initFaultRegistry } from "../ipc/faultRegistry.js";
 
 function sanitizePaths(msg: string): string {
   return msg
@@ -18,6 +19,8 @@ function sanitizePaths(msg: string): string {
 // Wrap ipcMain.handle globally to enforce sender validation on ALL IPC handlers
 // This must run before any handlers are registered
 export function enforceIpcSenderValidation(): void {
+  if (FAULT_MODE_ENABLED) initFaultRegistry();
+
   const originalHandle = ipcMain.handle.bind(ipcMain);
   const originalHandleOnce = ipcMain.handleOnce?.bind(ipcMain);
 
@@ -35,6 +38,7 @@ export function enforceIpcSenderValidation(): void {
         );
       }
       try {
+        if (FAULT_MODE_ENABLED) await applyInvokeFault(channel);
         const result = await listener(event, ...args);
         return wrapSuccess(result);
       } catch (error) {
@@ -69,6 +73,7 @@ export function enforceIpcSenderValidation(): void {
           );
         }
         try {
+          if (FAULT_MODE_ENABLED) await applyInvokeFault(channel);
           const result = await listener(event, ...args);
           return wrapSuccess(result);
         } catch (error) {
