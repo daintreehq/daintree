@@ -38,25 +38,29 @@ async function getCurrentProject(page: typeof ctx.window): Promise<ProjectInfo> 
 }
 
 async function switchToProject(page: typeof ctx.window, projectName: string): Promise<void> {
+  // Skip if already on the target project
+  const current = await getCurrentProject(page);
+  if (current.name === projectName) return;
+
   await page.locator(SEL.toolbar.projectSwitcherTrigger).click();
   const palette = page.locator(SEL.projectSwitcher.palette);
   await expect(palette).toBeVisible({ timeout: T_MEDIUM });
-  // Use evaluate to find and click — immune to DOM detachment race
   await page.waitForTimeout(T_SETTLE);
+
+  // Use evaluate to click — immune to DOM detachment from React re-renders
   await page.evaluate((name) => {
     const el = document.querySelector('[data-testid="project-switcher-palette"]');
     if (!el) throw new Error("Palette not in DOM");
-    const spans = el.querySelectorAll("span");
-    for (const span of spans) {
-      if (span.textContent?.trim() === name) {
-        span
-          .closest("button, [role=option], [role=menuitem], li, div[class*=cursor]")
-          ?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    const options = el.querySelectorAll('[role="option"]');
+    for (const opt of options) {
+      if (opt.textContent?.includes(name)) {
+        (opt as HTMLElement).click();
         return;
       }
     }
     throw new Error(`Project "${name}" not found in palette`);
   }, projectName);
+
   await expect(palette).not.toBeVisible({ timeout: T_LONG });
   await page.waitForTimeout(T_SETTLE);
 }
