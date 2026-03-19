@@ -43,6 +43,7 @@ vi.mock("@/clients/appClient", () => ({
 
 import { useLayoutUndoStore } from "../layoutUndoStore";
 import { useTerminalStore } from "../terminalStore";
+import { useLayoutConfigStore } from "../layoutConfigStore";
 import type { TerminalInstance } from "@shared/types";
 
 function makeTerminal(overrides: Partial<TerminalInstance> = {}): TerminalInstance {
@@ -79,6 +80,7 @@ describe("layoutUndoStore", () => {
       maximizedId: null,
       activeDockTerminalId: null,
     });
+    useLayoutConfigStore.setState({ gridDimensions: null });
   });
 
   it("pushLayoutSnapshot captures current terminal layout", () => {
@@ -448,5 +450,189 @@ describe("layoutUndoStore", () => {
     expect(terminals[0].location).toBe("grid");
     expect(terminals[1].id).toBe("t2");
     expect(terminals[1].location).toBe("dock");
+  });
+
+  describe("grid capacity clamping", () => {
+    it("undo clamps grid panels to current capacity", () => {
+      // Set up 6 grid terminals in one worktree
+      const terminals = Array.from({ length: 6 }, (_, i) =>
+        makeTerminal({ id: `t${i}`, location: "grid", worktreeId: "w1" })
+      );
+      seedTerminals(terminals);
+      useLayoutUndoStore.getState().pushLayoutSnapshot();
+
+      // Move all to dock (simulating a layout change)
+      useTerminalStore.setState({
+        terminals: terminals.map((t) => ({ ...t, location: "dock" })),
+      });
+
+      // Shrink grid: 800x400 gives capacity of 2 (2 cols × 2 rows)
+      useLayoutConfigStore.setState({ gridDimensions: { width: 800, height: 400 } });
+
+      useLayoutUndoStore.getState().undo();
+
+      const state = useTerminalStore.getState();
+      const gridCount = state.terminals.filter((t) => t.location === "grid").length;
+      const dockCount = state.terminals.filter((t) => t.location === "dock").length;
+
+      // Capacity at 800x400: cols=2, rows=1 → capacity=2
+      expect(gridCount).toBe(2);
+      expect(dockCount).toBe(4);
+
+      // First 2 terminals stay in grid, last 4 overflow to dock
+      expect(state.terminals[0].location).toBe("grid");
+      expect(state.terminals[1].location).toBe("grid");
+      expect(state.terminals[2].location).toBe("dock");
+    });
+
+    it("undo respects per-worktree capacity", () => {
+      // w1 has 4 grid panels, w2 has 2 grid panels
+      const w1Terminals = Array.from({ length: 4 }, (_, i) =>
+        makeTerminal({ id: `w1-t${i}`, location: "grid", worktreeId: "w1" })
+      );
+      const w2Terminals = Array.from({ length: 2 }, (_, i) =>
+        makeTerminal({ id: `w2-t${i}`, location: "grid", worktreeId: "w2" })
+      );
+      seedTerminals([...w1Terminals, ...w2Terminals]);
+      useLayoutUndoStore.getState().pushLayoutSnapshot();
+
+      // Move all to dock
+      useTerminalStore.setState({
+        terminals: [...w1Terminals, ...w2Terminals].map((t) => ({ ...t, location: "dock" })),
+      });
+
+      // Capacity = 2 per worktree
+      useLayoutConfigStore.setState({ gridDimensions: { width: 800, height: 400 } });
+
+      useLayoutUndoStore.getState().undo();
+
+      const state = useTerminalStore.getState();
+      const w1Grid = state.terminals.filter((t) => t.worktreeId === "w1" && t.location === "grid");
+      const w1Dock = state.terminals.filter((t) => t.worktreeId === "w1" && t.location === "dock");
+      const w2Grid = state.terminals.filter((t) => t.worktreeId === "w2" && t.location === "grid");
+
+      expect(w1Grid).toHaveLength(2);
+      expect(w1Dock).toHaveLength(2);
+      expect(w2Grid).toHaveLength(2); // w2 fits within capacity
+    });
+
+    it("undo clamps tab groups as whole units", () => {
+      // 3 ungrouped panels + 1 tab group with 2 panels = 4 slots total
+      const t1 = makeTerminal({ id: "t1", location: "grid", worktreeId: "w1" });
+      const t2 = makeTerminal({ id: "t2", location: "grid", worktreeId: "w1" });
+      const t3 = makeTerminal({ id: "t3", location: "grid", worktreeId: "w1" });
+      const tg1 = makeTerminal({ id: "tg1", location: "grid", worktreeId: "w1" });
+      const tg2 = makeTerminal({ id: "tg2", location: "grid", worktreeId: "w1" });
+
+      const tabGroups = new Map();
+      tabGroups.set("g1", {
+        id: "g1",
+        location: "grid",
+        worktreeId: "w1",
+        activeTabId: "tg1",
+        panelIds: ["tg1", "tg2"],
+      });
+
+      useTerminalStore.setState({
+        terminals: [t1, t2, t3, tg1, tg2],
+        tabGroups,
+        focusedId: "t1",
+        maximizedId: null,
+        activeDockTerminalId: null,
+      });
+
+      useLayoutUndoStore.getState().pushLayoutSnapshot();
+
+      // Move all to dock
+      useTerminalStore.setState({
+        terminals: [t1, t2, t3, tg1, tg2].map((t) => ({ ...t, location: "dock" })),
+        tabGroups: new Map(),
+      });
+
+      // Capacity = 2 → only 2 of 4 slots fit
+      useLayoutConfigStore.setState({ gridDimensions: { width: 800, height: 400 } });
+
+      useLayoutUndoStore.getState().undo();
+
+      const state = useTerminalStore.getState();
+
+      // First 2 slots are t1 and t2 (ungrouped). t3 and g1 overflow.
+      expect(state.terminals.find((t) => t.id === "t1")?.location).toBe("grid");
+      expect(state.terminals.find((t) => t.id === "t2")?.location).toBe("grid");
+      expect(state.terminals.find((t) => t.id === "t3")?.location).toBe("dock");
+      // Both panels in the tab group should be docked together
+      expect(state.terminals.find((t) => t.id === "tg1")?.location).toBe("dock");
+      expect(state.terminals.find((t) => t.id === "tg2")?.location).toBe("dock");
+      // Tab group location should be updated to dock
+      expect(state.tabGroups.get("g1")?.location).toBe("dock");
+    });
+
+    it("undo with no capacity exceeded works normally", () => {
+      const t1 = makeTerminal({ id: "t1", location: "grid", worktreeId: "w1" });
+      const t2 = makeTerminal({ id: "t2", location: "grid", worktreeId: "w1" });
+      seedTerminals([t1, t2]);
+      useLayoutUndoStore.getState().pushLayoutSnapshot();
+
+      useTerminalStore.setState({
+        terminals: [
+          { ...t1, location: "dock" },
+          { ...t2, location: "dock" },
+        ],
+      });
+
+      // Large grid: capacity >> 2
+      useLayoutConfigStore.setState({ gridDimensions: { width: 2000, height: 1200 } });
+
+      useLayoutUndoStore.getState().undo();
+
+      const state = useTerminalStore.getState();
+      expect(state.terminals[0].location).toBe("grid");
+      expect(state.terminals[1].location).toBe("grid");
+    });
+
+    it("undo with null gridDimensions uses absolute max", () => {
+      // null dimensions → ABSOLUTE_MAX_GRID_TERMINALS (16)
+      const terminals = Array.from({ length: 10 }, (_, i) =>
+        makeTerminal({ id: `t${i}`, location: "grid", worktreeId: "w1" })
+      );
+      seedTerminals(terminals);
+      useLayoutUndoStore.getState().pushLayoutSnapshot();
+
+      useTerminalStore.setState({
+        terminals: terminals.map((t) => ({ ...t, location: "dock" })),
+      });
+
+      // gridDimensions is null (default)
+      useLayoutUndoStore.getState().undo();
+
+      const state = useTerminalStore.getState();
+      const gridCount = state.terminals.filter((t) => t.location === "grid").length;
+      expect(gridCount).toBe(10); // All fit within capacity 16
+    });
+
+    it("post-snapshot grid terminals are clamped during undo", () => {
+      // Snapshot with t1 in grid
+      const t1 = makeTerminal({ id: "t1", location: "grid", worktreeId: "w1" });
+      seedTerminals([t1]);
+      useLayoutUndoStore.getState().pushLayoutSnapshot();
+
+      // After snapshot, add t2 and t3 to grid
+      const t2 = makeTerminal({ id: "t2", location: "grid", worktreeId: "w1" });
+      const t3 = makeTerminal({ id: "t3", location: "grid", worktreeId: "w1" });
+      useTerminalStore.setState({
+        terminals: [{ ...t1, location: "dock" }, t2, t3],
+      });
+
+      // Capacity = 2 → snapshot has t1 in grid, post-snapshot has t2+t3 in grid = 3 slots
+      useLayoutConfigStore.setState({ gridDimensions: { width: 800, height: 400 } });
+
+      useLayoutUndoStore.getState().undo();
+
+      const state = useTerminalStore.getState();
+      // t1 (from snapshot) gets priority, t2 is second, t3 overflows
+      expect(state.terminals.find((t) => t.id === "t1")?.location).toBe("grid");
+      expect(state.terminals.find((t) => t.id === "t2")?.location).toBe("grid");
+      expect(state.terminals.find((t) => t.id === "t3")?.location).toBe("dock");
+    });
   });
 });

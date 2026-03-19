@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { useTerminalStore } from "./terminalStore";
+import { useLayoutConfigStore } from "./layoutConfigStore";
 import type { TabGroup, TerminalInstance } from "@shared/types";
 
 const MAX_UNDO_HISTORY = 10;
@@ -46,6 +47,83 @@ function captureCurrentLayout(): LayoutSnapshot {
   };
 }
 
+function clampToGridCapacity(
+  entries: TerminalLayoutEntry[],
+  tabGroups: Map<string, TabGroup>
+): { entries: TerminalLayoutEntry[]; tabGroups: Map<string, TabGroup> } {
+  const maxCapacity = useLayoutConfigStore.getState().getMaxGridCapacity();
+
+  // Build set of panel IDs that belong to grid tab groups, keyed by worktreeId
+  const gridGroupsByWorktree = new Map<string | null, TabGroup[]>();
+  const panelsInGridGroups = new Set<string>();
+  for (const group of tabGroups.values()) {
+    if (group.location !== "grid") continue;
+    const wKey = group.worktreeId ?? null;
+    if (!gridGroupsByWorktree.has(wKey)) gridGroupsByWorktree.set(wKey, []);
+    gridGroupsByWorktree.get(wKey)!.push(group);
+    for (const pid of group.panelIds) panelsInGridGroups.add(pid);
+  }
+
+  // Build ordered slot list per worktree: each slot is either a group or an ungrouped terminal
+  // Slots are ordered by first appearance in the entries array
+  type Slot = { type: "group"; group: TabGroup } | { type: "panel"; id: string };
+  const slotsByWorktree = new Map<string | null, Slot[]>();
+  const seenGroups = new Set<string>();
+
+  for (const entry of entries) {
+    if (entry.location !== "grid") continue;
+    const wKey = entry.worktreeId ?? null;
+    if (!slotsByWorktree.has(wKey)) slotsByWorktree.set(wKey, []);
+    const slots = slotsByWorktree.get(wKey)!;
+
+    if (panelsInGridGroups.has(entry.id)) {
+      // Find which group this panel belongs to
+      const groups = gridGroupsByWorktree.get(wKey) ?? [];
+      const group = groups.find((g) => g.panelIds.includes(entry.id));
+      if (group && !seenGroups.has(group.id)) {
+        seenGroups.add(group.id);
+        slots.push({ type: "group", group });
+      }
+    } else {
+      slots.push({ type: "panel", id: entry.id });
+    }
+  }
+
+  // Determine which panel IDs need to be docked (overflow from end)
+  const dockIds = new Set<string>();
+  const dockGroupIds = new Set<string>();
+  for (const [, slots] of slotsByWorktree) {
+    if (slots.length <= maxCapacity) continue;
+    const overflow = slots.slice(maxCapacity);
+    for (const slot of overflow) {
+      if (slot.type === "group") {
+        dockGroupIds.add(slot.group.id);
+        for (const pid of slot.group.panelIds) dockIds.add(pid);
+      } else {
+        dockIds.add(slot.id);
+      }
+    }
+  }
+
+  if (dockIds.size === 0) return { entries, tabGroups };
+
+  // Clone entries with overflowed panels moved to dock
+  const clampedEntries = entries.map((e) =>
+    dockIds.has(e.id) ? { ...e, location: "dock" as const } : e
+  );
+
+  // Clone tabGroups with overflowed groups moved to dock
+  const clampedGroups = new Map(tabGroups);
+  for (const groupId of dockGroupIds) {
+    const group = clampedGroups.get(groupId);
+    if (group) {
+      clampedGroups.set(groupId, { ...group, location: "dock" });
+    }
+  }
+
+  return { entries: clampedEntries, tabGroups: clampedGroups };
+}
+
 function applySnapshot(snapshot: LayoutSnapshot): boolean {
   const state = useTerminalStore.getState();
   const currentTerminals = state.terminals;
@@ -60,9 +138,25 @@ function applySnapshot(snapshot: LayoutSnapshot): boolean {
     }
   }
 
+  // Build combined entry list: snapshot entries first, then post-snapshot terminals.
+  // Post-snapshot terminals go at the end so they're overflowed first by capacity clamping.
+  const postSnapshotEntries: TerminalLayoutEntry[] = [];
+  for (const t of currentTerminals) {
+    if (!snapshotIds.has(t.id) && t.location !== "trash") {
+      postSnapshotEntries.push({ id: t.id, location: t.location, worktreeId: t.worktreeId });
+    }
+  }
+  const allEntries = [...snapshot.terminals, ...postSnapshotEntries];
+
+  // Clamp grid panels to current capacity, overflowing excess to dock
+  const { entries: clampedEntries, tabGroups: clampedTabGroups } = clampToGridCapacity(
+    allEntries,
+    snapshot.tabGroups
+  );
+
   // Rebuild the terminals array preserving non-layout fields
   const restoredTerminals: TerminalInstance[] = [];
-  for (const entry of snapshot.terminals) {
+  for (const entry of clampedEntries) {
     const current = currentById.get(entry.id);
     if (!current) continue;
     const restored: TerminalInstance = { ...current, location: entry.location };
@@ -74,16 +168,9 @@ function applySnapshot(snapshot: LayoutSnapshot): boolean {
     restoredTerminals.push(restored);
   }
 
-  // Append any terminals not in the snapshot (added after snapshot was taken)
-  for (const t of currentTerminals) {
-    if (!snapshotIds.has(t.id)) {
-      restoredTerminals.push(t);
-    }
-  }
-
   useTerminalStore.setState({
     terminals: restoredTerminals,
-    tabGroups: structuredClone(snapshot.tabGroups),
+    tabGroups: structuredClone(clampedTabGroups),
     focusedId: snapshot.focusedId,
     maximizedId: snapshot.maximizedId,
     activeDockTerminalId: snapshot.activeDockTerminalId,

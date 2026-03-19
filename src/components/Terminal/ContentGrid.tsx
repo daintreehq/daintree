@@ -34,7 +34,12 @@ import { ProjectPulseCard } from "@/components/Pulse";
 import { Kbd } from "@/components/ui/Kbd";
 import { svgToDataUrl, sanitizeSvg } from "@/lib/svg";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
-import { computeGridColumns, MIN_TERMINAL_HEIGHT_PX } from "@/lib/terminalLayout";
+import {
+  computeGridColumns,
+  MIN_TERMINAL_HEIGHT_PX,
+  GRID_TRANSITION_DURATION_MS,
+  GRID_FIT_DELAY_MS,
+} from "@/lib/terminalLayout";
 import { useWorktrees } from "@/hooks/useWorktrees";
 import { useNativeContextMenu, useProjectBranding } from "@/hooks";
 import { actionService } from "@/services/ActionService";
@@ -810,7 +815,7 @@ export function ContentGrid({ className, defaultCwd, agentAvailability }: Conten
         requestAnimationFrame(processNext);
       };
       processNext();
-    }, 150);
+    }, GRID_FIT_DELAY_MS);
 
     return () => {
       cancelled = true;
@@ -1059,7 +1064,9 @@ export function ContentGrid({ className, defaultCwd, agentAvailability }: Conten
               gridAutoRows: `minmax(${MIN_TERMINAL_HEIGHT_PX}px, 1fr)`,
               gap: "4px",
               backgroundColor: "var(--color-grid-bg)",
-              transition: isProjectSwitching ? "none" : "grid-template-columns 200ms ease-out",
+              transition: isProjectSwitching
+                ? "none"
+                : `grid-template-columns ${GRID_TRANSITION_DURATION_MS}ms ease-out`,
               overflowY: "auto",
             }}
             role="grid"
