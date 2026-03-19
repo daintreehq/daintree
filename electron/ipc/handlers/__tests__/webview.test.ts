@@ -346,6 +346,7 @@ describe("registerWebviewHandlers", () => {
       cleanup = registerWebviewHandlers(deps);
       const handler = getHandler("webview:start-console-capture");
       await expect(handler(null, 42, "pane-1")).resolves.toBeUndefined();
+      expect(webContentsMock.fromId).not.toHaveBeenCalled();
       expect(debuggerMock.attach).not.toHaveBeenCalled();
       expect(debuggerMock.sendCommand).not.toHaveBeenCalled();
     });
@@ -355,6 +356,7 @@ describe("registerWebviewHandlers", () => {
       cleanup = registerWebviewHandlers(deps);
       const handler = getHandler("webview:stop-console-capture");
       await expect(handler(null, 42, "pane-1")).resolves.toBeUndefined();
+      expect(webContentsMock.fromId).not.toHaveBeenCalled();
     });
 
     it("handleClearConsoleCapture returns early for unregistered webContentsId", async () => {
@@ -362,6 +364,7 @@ describe("registerWebviewHandlers", () => {
       cleanup = registerWebviewHandlers(deps);
       const handler = getHandler("webview:clear-console-capture");
       await expect(handler(null, 42, "pane-1")).resolves.toBeUndefined();
+      expect(webContentsMock.fromId).not.toHaveBeenCalled();
     });
 
     it("handleGetConsoleProperties returns empty for unregistered webContentsId", async () => {
