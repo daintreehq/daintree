@@ -289,30 +289,30 @@ test.describe.serial("Core: Accessibility", () => {
             timeout: T_SHORT,
           });
 
-          // Tab should stay within the dialog (SearchablePalette intercepts Tab)
-          for (let i = 0; i < 5; i++) {
-            await window.keyboard.press("Tab");
-          }
-          const insideAfterTab = await window.evaluate((sel) => {
-            const dialog = document.querySelector(sel);
-            return dialog?.contains(document.activeElement) ?? false;
-          }, SEL.actionPalette.dialog);
-          expect(insideAfterTab, "Focus escaped Action Palette after Tab presses").toBe(true);
+          try {
+            for (let i = 0; i < 5; i++) {
+              await window.keyboard.press("Tab");
+            }
+            const insideAfterTab = await window.evaluate((sel) => {
+              const dialog = document.querySelector(sel);
+              return dialog?.contains(document.activeElement) ?? false;
+            }, SEL.actionPalette.dialog);
+            expect(insideAfterTab, "Focus escaped Action Palette after Tab presses").toBe(true);
 
-          // Shift+Tab should also stay within the dialog
-          for (let i = 0; i < 5; i++) {
-            await window.keyboard.press("Shift+Tab");
+            for (let i = 0; i < 5; i++) {
+              await window.keyboard.press("Shift+Tab");
+            }
+            const insideAfterShiftTab = await window.evaluate((sel) => {
+              const dialog = document.querySelector(sel);
+              return dialog?.contains(document.activeElement) ?? false;
+            }, SEL.actionPalette.dialog);
+            expect(insideAfterShiftTab, "Focus escaped Action Palette after Shift+Tab").toBe(true);
+          } finally {
+            await window.keyboard.press("Escape");
+            await expect(window.locator(SEL.actionPalette.dialog)).not.toBeVisible({
+              timeout: T_SHORT,
+            });
           }
-          const insideAfterShiftTab = await window.evaluate((sel) => {
-            const dialog = document.querySelector(sel);
-            return dialog?.contains(document.activeElement) ?? false;
-          }, SEL.actionPalette.dialog);
-          expect(insideAfterShiftTab, "Focus escaped Action Palette after Shift+Tab").toBe(true);
-
-          await window.keyboard.press("Escape");
-          await expect(window.locator(SEL.actionPalette.dialog)).not.toBeVisible({
-            timeout: T_SHORT,
-          });
         });
 
         test("Quick Switcher traps focus correctly", async () => {
@@ -326,28 +326,30 @@ test.describe.serial("Core: Accessibility", () => {
             timeout: T_SHORT,
           });
 
-          for (let i = 0; i < 5; i++) {
-            await window.keyboard.press("Tab");
-          }
-          const insideAfterTab = await window.evaluate((sel) => {
-            const dialog = document.querySelector(sel);
-            return dialog?.contains(document.activeElement) ?? false;
-          }, SEL.quickSwitcher.dialog);
-          expect(insideAfterTab, "Focus escaped Quick Switcher after Tab presses").toBe(true);
+          try {
+            for (let i = 0; i < 5; i++) {
+              await window.keyboard.press("Tab");
+            }
+            const insideAfterTab = await window.evaluate((sel) => {
+              const dialog = document.querySelector(sel);
+              return dialog?.contains(document.activeElement) ?? false;
+            }, SEL.quickSwitcher.dialog);
+            expect(insideAfterTab, "Focus escaped Quick Switcher after Tab presses").toBe(true);
 
-          for (let i = 0; i < 5; i++) {
-            await window.keyboard.press("Shift+Tab");
+            for (let i = 0; i < 5; i++) {
+              await window.keyboard.press("Shift+Tab");
+            }
+            const insideAfterShiftTab = await window.evaluate((sel) => {
+              const dialog = document.querySelector(sel);
+              return dialog?.contains(document.activeElement) ?? false;
+            }, SEL.quickSwitcher.dialog);
+            expect(insideAfterShiftTab, "Focus escaped Quick Switcher after Shift+Tab").toBe(true);
+          } finally {
+            await window.keyboard.press("Escape");
+            await expect(window.locator(SEL.quickSwitcher.dialog)).not.toBeVisible({
+              timeout: T_SHORT,
+            });
           }
-          const insideAfterShiftTab = await window.evaluate((sel) => {
-            const dialog = document.querySelector(sel);
-            return dialog?.contains(document.activeElement) ?? false;
-          }, SEL.quickSwitcher.dialog);
-          expect(insideAfterShiftTab, "Focus escaped Quick Switcher after Shift+Tab").toBe(true);
-
-          await window.keyboard.press("Escape");
-          await expect(window.locator(SEL.quickSwitcher.dialog)).not.toBeVisible({
-            timeout: T_SHORT,
-          });
         });
 
         test("Settings dialog traps focus correctly", async () => {
@@ -359,30 +361,30 @@ test.describe.serial("Core: Accessibility", () => {
             timeout: T_SHORT,
           });
 
-          // Tab multiple times — focus should stay within the settings dialog
-          for (let i = 0; i < 10; i++) {
-            await window.keyboard.press("Tab");
-          }
-          const insideAfterTab = await window.evaluate(() => {
-            const dialog = document.querySelector('[aria-modal="true"]');
-            return dialog?.contains(document.activeElement) ?? false;
-          });
-          expect(insideAfterTab, "Focus escaped Settings dialog after Tab presses").toBe(true);
+          try {
+            for (let i = 0; i < 10; i++) {
+              await window.keyboard.press("Tab");
+            }
+            const insideAfterTab = await window.evaluate(() => {
+              const dialog = document.querySelector('[aria-modal="true"]');
+              return dialog?.contains(document.activeElement) ?? false;
+            });
+            expect(insideAfterTab, "Focus escaped Settings dialog after Tab presses").toBe(true);
 
-          // Shift+Tab should also stay within
-          for (let i = 0; i < 10; i++) {
-            await window.keyboard.press("Shift+Tab");
+            for (let i = 0; i < 10; i++) {
+              await window.keyboard.press("Shift+Tab");
+            }
+            const insideAfterShiftTab = await window.evaluate(() => {
+              const dialog = document.querySelector('[aria-modal="true"]');
+              return dialog?.contains(document.activeElement) ?? false;
+            });
+            expect(insideAfterShiftTab, "Focus escaped Settings dialog after Shift+Tab").toBe(true);
+          } finally {
+            await window.keyboard.press("Escape");
+            await expect(window.locator(SEL.settings.heading)).not.toBeVisible({
+              timeout: T_SHORT,
+            });
           }
-          const insideAfterShiftTab = await window.evaluate(() => {
-            const dialog = document.querySelector('[aria-modal="true"]');
-            return dialog?.contains(document.activeElement) ?? false;
-          });
-          expect(insideAfterShiftTab, "Focus escaped Settings dialog after Shift+Tab").toBe(true);
-
-          await window.keyboard.press("Escape");
-          await expect(window.locator(SEL.settings.heading)).not.toBeVisible({
-            timeout: T_SHORT,
-          });
         });
 
         test("focused interactive elements have visible focus indicators", async () => {
