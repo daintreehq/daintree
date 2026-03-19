@@ -38,26 +38,27 @@ async function getCurrentProject(page: typeof ctx.window): Promise<ProjectInfo> 
 }
 
 async function switchToProject(page: typeof ctx.window, projectName: string): Promise<void> {
-  // Retry the entire open-palette → click-row sequence — the palette re-renders
-  // its list items asynchronously which can detach DOM nodes mid-click.
-  const maxAttempts = 3;
-  for (let attempt = 0; attempt < maxAttempts; attempt++) {
-    await page.locator(SEL.toolbar.projectSwitcherTrigger).click();
-    const palette = page.locator(SEL.projectSwitcher.palette);
-    await expect(palette).toBeVisible({ timeout: T_MEDIUM });
-    await page.waitForTimeout(T_SETTLE);
-    try {
-      await palette.locator(`text="${projectName}"`).click({ timeout: T_MEDIUM });
-      await expect(palette).not.toBeVisible({ timeout: T_LONG });
-      await page.waitForTimeout(T_SETTLE);
-      return;
-    } catch {
-      // Close palette if still open and retry
-      await page.keyboard.press("Escape");
-      await page.waitForTimeout(T_SETTLE);
+  await page.locator(SEL.toolbar.projectSwitcherTrigger).click();
+  const palette = page.locator(SEL.projectSwitcher.palette);
+  await expect(palette).toBeVisible({ timeout: T_MEDIUM });
+  // Use evaluate to find and click — immune to DOM detachment race
+  await page.waitForTimeout(T_SETTLE);
+  await page.evaluate((name) => {
+    const el = document.querySelector('[data-testid="project-switcher-palette"]');
+    if (!el) throw new Error("Palette not in DOM");
+    const spans = el.querySelectorAll("span");
+    for (const span of spans) {
+      if (span.textContent?.trim() === name) {
+        span
+          .closest("button, [role=option], [role=menuitem], li, div[class*=cursor]")
+          ?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+        return;
+      }
     }
-  }
-  throw new Error(`Failed to switch to project "${projectName}" after ${maxAttempts} attempts`);
+    throw new Error(`Project "${name}" not found in palette`);
+  }, projectName);
+  await expect(palette).not.toBeVisible({ timeout: T_LONG });
+  await page.waitForTimeout(T_SETTLE);
 }
 
 test.describe.serial("Core: Project Switch Race Conditions", () => {
