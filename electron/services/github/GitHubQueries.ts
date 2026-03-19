@@ -10,7 +10,7 @@ export const REPO_STATS_QUERY = `
 `;
 
 export const PROJECT_HEALTH_QUERY = `
-  query GetProjectHealth($owner: String!, $repo: String!) {
+  query GetProjectHealth($owner: String!, $repo: String!, $merged60: String!, $merged120: String!, $merged180: String!) {
     repository(owner: $owner, name: $repo) {
       issues(states: OPEN) { totalCount }
       pullRequests(states: OPEN) { totalCount }
@@ -31,11 +31,15 @@ export const PROJECT_HEALTH_QUERY = `
       vulnerabilityAlerts(first: 1) {
         totalCount
       }
-      recentMergedPRs: pullRequests(first: 100, states: MERGED, orderBy: {field: UPDATED_AT, direction: DESC}) {
-        nodes {
-          mergedAt
-        }
-      }
+    }
+    mergedPRs60: search(query: $merged60, type: ISSUE, first: 1) {
+      issueCount
+    }
+    mergedPRs120: search(query: $merged120, type: ISSUE, first: 1) {
+      issueCount
+    }
+    mergedPRs180: search(query: $merged180, type: ISSUE, first: 1) {
+      issueCount
     }
   }
 `;

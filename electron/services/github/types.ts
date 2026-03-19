@@ -57,8 +57,7 @@ export interface ProjectHealth {
     count: number;
   };
   mergeVelocity: {
-    recentMergedCount: number;
-    recentMergedDates: string[];
+    mergedCounts: Record<60 | 120 | 180, number>;
   };
   repoUrl: string;
   lastUpdated?: number;
