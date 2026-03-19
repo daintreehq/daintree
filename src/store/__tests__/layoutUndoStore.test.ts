@@ -609,5 +609,30 @@ describe("layoutUndoStore", () => {
       const gridCount = state.terminals.filter((t) => t.location === "grid").length;
       expect(gridCount).toBe(10); // All fit within capacity 16
     });
+
+    it("post-snapshot grid terminals are clamped during undo", () => {
+      // Snapshot with t1 in grid
+      const t1 = makeTerminal({ id: "t1", location: "grid", worktreeId: "w1" });
+      seedTerminals([t1]);
+      useLayoutUndoStore.getState().pushLayoutSnapshot();
+
+      // After snapshot, add t2 and t3 to grid
+      const t2 = makeTerminal({ id: "t2", location: "grid", worktreeId: "w1" });
+      const t3 = makeTerminal({ id: "t3", location: "grid", worktreeId: "w1" });
+      useTerminalStore.setState({
+        terminals: [{ ...t1, location: "dock" }, t2, t3],
+      });
+
+      // Capacity = 2 → snapshot has t1 in grid, post-snapshot has t2+t3 in grid = 3 slots
+      useLayoutConfigStore.setState({ gridDimensions: { width: 800, height: 400 } });
+
+      useLayoutUndoStore.getState().undo();
+
+      const state = useTerminalStore.getState();
+      // t1 (from snapshot) gets priority, t2 is second, t3 overflows
+      expect(state.terminals.find((t) => t.id === "t1")?.location).toBe("grid");
+      expect(state.terminals.find((t) => t.id === "t2")?.location).toBe("grid");
+      expect(state.terminals.find((t) => t.id === "t3")?.location).toBe("dock");
+    });
   });
 });

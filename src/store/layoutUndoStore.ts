@@ -138,9 +138,19 @@ function applySnapshot(snapshot: LayoutSnapshot): boolean {
     }
   }
 
+  // Build combined entry list: snapshot entries first, then post-snapshot terminals.
+  // Post-snapshot terminals go at the end so they're overflowed first by capacity clamping.
+  const postSnapshotEntries: TerminalLayoutEntry[] = [];
+  for (const t of currentTerminals) {
+    if (!snapshotIds.has(t.id) && t.location !== "trash") {
+      postSnapshotEntries.push({ id: t.id, location: t.location, worktreeId: t.worktreeId });
+    }
+  }
+  const allEntries = [...snapshot.terminals, ...postSnapshotEntries];
+
   // Clamp grid panels to current capacity, overflowing excess to dock
   const { entries: clampedEntries, tabGroups: clampedTabGroups } = clampToGridCapacity(
-    snapshot.terminals,
+    allEntries,
     snapshot.tabGroups
   );
 
@@ -156,13 +166,6 @@ function applySnapshot(snapshot: LayoutSnapshot): boolean {
       delete restored.worktreeId;
     }
     restoredTerminals.push(restored);
-  }
-
-  // Append any terminals not in the snapshot (added after snapshot was taken)
-  for (const t of currentTerminals) {
-    if (!snapshotIds.has(t.id)) {
-      restoredTerminals.push(t);
-    }
   }
 
   useTerminalStore.setState({
