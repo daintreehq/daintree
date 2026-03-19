@@ -3,6 +3,8 @@ import { createPortal } from "react-dom";
 import { Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAnimatedPresence } from "@/hooks/useAnimatedPresence";
+import { Button } from "@/components/ui/button";
+import { useProjectStore } from "@/store/projectStore";
 
 export interface ProjectSwitchOverlayProps {
   isSwitching: boolean;
@@ -10,9 +12,24 @@ export interface ProjectSwitchOverlayProps {
 }
 
 const MIN_DISPLAY_DURATION = 200;
+export const CANCEL_BUTTON_DELAY_MS = 5_000;
 
 export function ProjectSwitchOverlay({ isSwitching, projectName }: ProjectSwitchOverlayProps) {
   const [cachedProjectName, setCachedProjectName] = useState<string | undefined>(undefined);
+  const [showCancel, setShowCancel] = useState(false);
+
+  useEffect(() => {
+    if (!isSwitching) {
+      setShowCancel(false);
+      return;
+    }
+    const timer = setTimeout(() => setShowCancel(true), CANCEL_BUTTON_DELAY_MS);
+    return () => clearTimeout(timer);
+  }, [isSwitching]);
+
+  const handleCancel = useCallback(() => {
+    useProjectStore.getState().finishProjectSwitch();
+  }, []);
 
   const clearCachedName = useCallback(() => {
     setCachedProjectName(undefined);
@@ -68,6 +85,17 @@ export function ProjectSwitchOverlay({ isSwitching, projectName }: ProjectSwitch
           ) : (
             <p className="text-sm font-medium text-canopy-text">Switching projects</p>
           )}
+        </div>
+        <div
+          className={cn(
+            "transition-opacity duration-150",
+            showCancel ? "opacity-100" : "opacity-0 pointer-events-none"
+          )}
+          aria-hidden={!showCancel}
+        >
+          <Button variant="ghost" size="sm" onClick={handleCancel} tabIndex={showCancel ? 0 : -1}>
+            Cancel
+          </Button>
         </div>
       </div>
     </div>,

@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -162,7 +162,7 @@ vi.mock("@/lib/notify", () => ({
   notify: notifyMock,
 }));
 
-const { useProjectStore } = await import("../projectStore");
+const { useProjectStore, SWITCH_SAFETY_TIMEOUT_MS } = await import("../projectStore");
 
 describe("projectStore switching races", () => {
   const projectA = {
@@ -363,6 +363,128 @@ describe("projectStore switching races", () => {
         type: "error",
         title: "Failed to switch project",
         message: "switch failed",
+      })
+    );
+  });
+});
+
+describe("projectStore safety timeout", () => {
+  const projectA = {
+    id: "project-a",
+    name: "Project A",
+    path: "/project-a",
+    emoji: "folder",
+    lastOpened: Date.now() - 2_000,
+  };
+  const projectB = {
+    id: "project-b",
+    name: "Project B",
+    path: "/project-b",
+    emoji: "folder",
+    lastOpened: Date.now() - 1_000,
+  };
+  const projectC = {
+    id: "project-c",
+    name: "Project C",
+    path: "/project-c",
+    emoji: "folder",
+    lastOpened: Date.now(),
+  };
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.clearAllMocks();
+
+    useProjectStore.setState({
+      projects: [projectA, projectB, projectC],
+      currentProject: projectA,
+      isLoading: false,
+      isSwitching: false,
+      switchingToProjectName: null,
+      error: null,
+    });
+
+    terminalState.terminals = [];
+    worktreeSelectionState.activeWorktreeId = "wt-active";
+
+    terminalPersistenceMock.whenIdle.mockResolvedValue(undefined);
+    projectClientMock.setTerminals.mockResolvedValue(undefined);
+    projectClientMock.setTerminalSizes.mockResolvedValue(undefined);
+    projectClientMock.getAll.mockResolvedValue([projectA, projectB, projectC]);
+    prepareProjectSwitchRendererCacheMock.mockReturnValue({
+      preserveTerminalIds: new Set<string>(),
+      evictTerminalIds: [],
+    });
+    getTerminalInstanceMock.mockReturnValue(null);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("auto-clears isSwitching after 30s when switchProject IPC never resolves", async () => {
+    projectClientMock.switch.mockReturnValue(new Promise(() => {}));
+
+    await useProjectStore.getState().switchProject("project-b");
+    expect(useProjectStore.getState().isSwitching).toBe(true);
+
+    vi.advanceTimersByTime(SWITCH_SAFETY_TIMEOUT_MS - 1);
+    expect(useProjectStore.getState().isSwitching).toBe(true);
+
+    vi.advanceTimersByTime(1);
+    expect(useProjectStore.getState().isSwitching).toBe(false);
+    expect(useProjectStore.getState().switchingToProjectName).toBeNull();
+  });
+
+  it("auto-clears isSwitching after 30s when reopenProject IPC never resolves", async () => {
+    projectClientMock.reopen.mockReturnValue(new Promise(() => {}));
+
+    await useProjectStore.getState().reopenProject("project-b");
+    expect(useProjectStore.getState().isSwitching).toBe(true);
+
+    vi.advanceTimersByTime(SWITCH_SAFETY_TIMEOUT_MS);
+    expect(useProjectStore.getState().isSwitching).toBe(false);
+    expect(useProjectStore.getState().switchingToProjectName).toBeNull();
+  });
+
+  it("does not fire timeout when finishProjectSwitch is called before 30s", async () => {
+    projectClientMock.switch.mockReturnValue(new Promise(() => {}));
+
+    await useProjectStore.getState().switchProject("project-b");
+    expect(useProjectStore.getState().isSwitching).toBe(true);
+
+    useProjectStore.getState().finishProjectSwitch();
+    expect(useProjectStore.getState().isSwitching).toBe(false);
+
+    notifyMock.mockClear();
+    vi.advanceTimersByTime(SWITCH_SAFETY_TIMEOUT_MS);
+    expect(notifyMock).not.toHaveBeenCalled();
+  });
+
+  it("invalidates older timeout when a newer switch starts", async () => {
+    projectClientMock.switch.mockReturnValue(new Promise(() => {}));
+
+    await useProjectStore.getState().switchProject("project-b");
+    vi.advanceTimersByTime(20_000);
+
+    await useProjectStore.getState().switchProject("project-c");
+    vi.advanceTimersByTime(15_000);
+    expect(useProjectStore.getState().isSwitching).toBe(true);
+
+    vi.advanceTimersByTime(15_000);
+    expect(useProjectStore.getState().isSwitching).toBe(false);
+  });
+
+  it("fires a warning notification on timeout", async () => {
+    projectClientMock.switch.mockReturnValue(new Promise(() => {}));
+
+    await useProjectStore.getState().switchProject("project-b");
+    vi.advanceTimersByTime(SWITCH_SAFETY_TIMEOUT_MS);
+
+    expect(notifyMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "warning",
+        title: "Project switch timed out",
       })
     );
   });
