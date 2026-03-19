@@ -66,13 +66,7 @@ function makeTerminal(overrides: Partial<TerminalInstance> = {}): TerminalInstan
 
 const baseCounts: WorktreeTerminalSectionProps["counts"] = {
   total: 2,
-  grid: 1,
-  dock: 1,
-  active: 2,
-  completed: 0,
-  failed: 0,
-  all: 2,
-  byState: { idle: 2, working: 0, waiting: 0, completed: 0, error: 0 },
+  byState: { idle: 2, working: 0, running: 0, waiting: 0, directing: 0, completed: 0, failed: 0 },
 };
 
 function renderSection(overrides: Partial<WorktreeTerminalSectionProps> = {}) {
@@ -117,7 +111,7 @@ describe("WorktreeTerminalSection summary icon", () => {
       terminals: [makeTerminal({ agentId: "claude" }), makeTerminal({ agentId: "gemini" })],
     });
     expect(screen.queryByTestId("agent-icon")).toBeNull();
-    expect(container.querySelector("svg.lucide-square-terminal")).toBeDefined();
+    expect(container.querySelector("svg.lucide-square-terminal")).toBeTruthy();
   });
 
   it("falls back to SquareTerminal when no terminals have agentId", () => {
@@ -125,7 +119,7 @@ describe("WorktreeTerminalSection summary icon", () => {
       terminals: [makeTerminal({ type: "terminal" }), makeTerminal({ type: "terminal" })],
     });
     expect(screen.queryByTestId("agent-icon")).toBeNull();
-    expect(container.querySelector("svg.lucide-square-terminal")).toBeDefined();
+    expect(container.querySelector("svg.lucide-square-terminal")).toBeTruthy();
   });
 
   it("falls back to SquareTerminal when some terminals have agentId and some don't", () => {
