@@ -82,11 +82,11 @@ export function useSendToAgentPalette() {
   const isOpen = usePaletteStore((state) => state.activePaletteId === "send-to-agent");
 
   const items = useMemo<SendToAgentItem[]>(() => {
-    const sourceId = pendingState.sourceId;
+    const sourceId = isOpen ? pendingState.sourceId : null;
     const result: SendToAgentItem[] = [];
 
     for (const t of terminals) {
-      if (t.id === sourceId) continue;
+      if (sourceId && t.id === sourceId) continue;
       if (t.location === "trash" || t.location === "background") continue;
       if (t.kind && !panelKindHasPty(t.kind)) continue;
       if (t.hasPty === false) continue;
@@ -107,8 +107,6 @@ export function useSendToAgentPalette() {
     }
 
     return result;
-    // isOpen included so items recompute when palette opens (pendingState.sourceId changes)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [terminals, isOpen]);
 
   const fuse = useMemo(() => new Fuse(items, FUSE_OPTIONS), [items]);
