@@ -124,23 +124,24 @@ describe("TerminalHeaderContent", () => {
 
   it("updates elapsed time after timer interval", () => {
     vi.useFakeTimers();
-    vi.setSystemTime(new Date("2024-01-15T12:05:00Z"));
+    const base = new Date("2024-01-15T12:00:00Z").getTime();
+    vi.setSystemTime(base + 45_000);
 
-    const startedAt = new Date("2024-01-15T12:00:00Z").getTime();
     mockStoreState = {
-      terminals: [{ id: "t1", isInputLocked: false, startedAt }],
+      terminals: [{ id: "t1", isInputLocked: false, startedAt: base }],
     };
 
     render(<TerminalHeaderContent id="t1" kind="agent" agentState="working" />);
 
     const tooltipContent = screen.getByTestId("tooltip-content");
-    expect(tooltipContent.textContent).toContain("5m");
+    expect(tooltipContent.textContent).toContain("45s");
 
     act(() => {
       vi.advanceTimersByTime(30_000);
     });
 
-    expect(tooltipContent.textContent).toContain("5m");
+    expect(tooltipContent.textContent).toContain("1m");
+    expect(tooltipContent.textContent).not.toContain("45s");
   });
 
   it("falls back to agent state text when no activity headline", () => {
