@@ -20,7 +20,7 @@ const DEV_CSP = [
   `style-src 'self' ${devServerOrigins.join(" ")} 'unsafe-inline'`,
   "font-src 'self' data:",
   `connect-src 'self' ${devServerOrigins.join(" ")} ${devServerWebSocketOrigins.join(" ")}`,
-  `img-src 'self' ${devServerOrigins.join(" ")} https://avatars.githubusercontent.com data:`,
+  `img-src 'self' ${devServerOrigins.join(" ")} https://avatars.githubusercontent.com canopy-file: data:`,
   "frame-src 'self' https://www.youtube.com http://localhost:* http://127.0.0.1:* https://localhost:* https://127.0.0.1:*",
 ].join("; ");
 
@@ -30,7 +30,7 @@ const PROD_CSP = [
   "style-src 'self' 'unsafe-inline'",
   "font-src 'self' data:",
   "connect-src 'self'",
-  "img-src 'self' https://avatars.githubusercontent.com data: blob:",
+  "img-src 'self' https://avatars.githubusercontent.com canopy-file: data: blob:",
   "frame-src 'self' https://www.youtube.com http://localhost:* http://127.0.0.1:* https://localhost:* https://127.0.0.1:*",
   "worker-src 'self' blob:",
   "object-src 'none'",
