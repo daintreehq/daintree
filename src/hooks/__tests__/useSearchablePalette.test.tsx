@@ -54,9 +54,7 @@ describe("useSearchablePalette", () => {
   it("exposes isStale as false when query matches deferred value", () => {
     const items: PaletteItem[] = [{ id: "a", name: "Alpha" }];
 
-    const { result } = renderHook(() =>
-      useSearchablePalette<PaletteItem>({ items })
-    );
+    const { result } = renderHook(() => useSearchablePalette<PaletteItem>({ items }));
 
     expect(result.current.isStale).toBe(false);
 
