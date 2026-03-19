@@ -32,6 +32,7 @@ import os from "os";
 import { spawnSync } from "child_process";
 import { fileURLToPath } from "url";
 import { logInfo, logWarn } from "../utils/logger.js";
+import { getTrashedPidTracker } from "./TrashedPidTracker.js";
 import { RequestResponseBroker } from "./rpc/index.js";
 import { bridgePtyEvent } from "./pty/PtyEventsBridge.js";
 import type {
@@ -481,6 +482,7 @@ export class PtyClient extends EventEmitter {
         break;
 
       case "exit": {
+        getTrashedPidTracker().removeTrashed(event.id);
         const killCount = this.pendingKillCount.get(event.id) ?? 0;
         if (killCount > 0) {
           // Exit from a kill() call — a new spawn() may have already
@@ -879,6 +881,7 @@ export class PtyClient extends EventEmitter {
   }
 
   kill(id: string, reason?: string): void {
+    getTrashedPidTracker().removeTrashed(id);
     this.pendingKillCount.set(id, (this.pendingKillCount.get(id) ?? 0) + 1);
     this.pendingSpawns.delete(id);
     this.send({ type: "kill", id, reason });
@@ -890,12 +893,13 @@ export class PtyClient extends EventEmitter {
   }
 
   trash(id: string): void {
+    getTrashedPidTracker().persistTrashed(id, this.terminalPids.get(id));
     this.send({ type: "trash", id });
   }
 
   /** Restore terminal from trash. Returns true if terminal was tracked. */
   restore(id: string): boolean {
-    // Optimistically return true if we know about this terminal
+    getTrashedPidTracker().removeTrashed(id);
     const wasTracked = this.pendingSpawns.has(id);
     this.send({ type: "restore", id });
     return wasTracked;
@@ -1301,6 +1305,7 @@ export class PtyClient extends EventEmitter {
     this.shouldResyncProjectContext = false;
     this.needsRespawn = false;
 
+    getTrashedPidTracker().clearAll();
     console.log("[PtyClient] Disposing...");
 
     if (this.healthCheckInterval) {
