@@ -6,6 +6,7 @@ import type { TerminalInstance } from "@/store/terminalStore";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import { cn } from "@/lib/utils";
 import type { WorktreeTerminalCounts } from "@/hooks/useWorktreeTerminals";
+import { getAgentConfig, isRegisteredAgent } from "@/config/agents";
 import { STATE_COLORS, STATE_ICONS, STATE_LABELS, STATE_PRIORITY } from "../terminalStateConfig";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../../ui/tooltip";
 import { ChevronRight, GripVertical, LayoutGrid, PanelBottom, SquareTerminal } from "lucide-react";
@@ -81,6 +82,19 @@ export function WorktreeTerminalSection({
     return null;
   }, [counts.byState]);
 
+  const SummaryIcon = useMemo(() => {
+    if (terminals.length === 0) return null;
+    let commonId: string | null = null;
+    for (const t of terminals) {
+      const effectiveId = t.agentId ?? (t.type && isRegisteredAgent(t.type) ? t.type : undefined);
+      if (!effectiveId) return null;
+      if (commonId === null) commonId = effectiveId;
+      else if (effectiveId !== commonId) return null;
+    }
+    if (!commonId) return null;
+    return getAgentConfig(commonId)?.icon ?? null;
+  }, [terminals]);
+
   const orderedWorktreeTerminals = terminals;
 
   if (!showMetaFooter) {
@@ -102,7 +116,11 @@ export function WorktreeTerminalSection({
             id={`${terminalsId}-button`}
           >
             <span className="flex items-center gap-1.5 text-[11px] font-medium text-text-muted">
-              <SquareTerminal className="w-3 h-3" />
+              {SummaryIcon ? (
+                <SummaryIcon className="w-3 h-3" />
+              ) : (
+                <SquareTerminal className="w-3 h-3" />
+              )}
               <span>Active Sessions ({counts.total})</span>
             </span>
             <ChevronRight className="h-3 w-3 rotate-90 text-text-muted" />
@@ -221,7 +239,11 @@ export function WorktreeTerminalSection({
           id={`${terminalsId}-button`}
         >
           <div className="flex items-center gap-1.5 text-[11px] text-text-secondary">
-            <SquareTerminal className="w-3 h-3" />
+            {SummaryIcon ? (
+              <SummaryIcon className="w-3 h-3" />
+            ) : (
+              <SquareTerminal className="w-3 h-3" />
+            )}
             <span className="inline-flex items-center gap-1">
               <span className="font-mono tabular-nums">{counts.total}</span>
               <span className="font-sans">active</span>
