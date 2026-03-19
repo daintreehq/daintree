@@ -9,11 +9,37 @@ import type {
   TerminalStatusPayload,
   SpawnResult,
 } from "@shared/types";
+import type { PtyHostToRendererMessage } from "@shared/types/pty-host";
 
 let messagePort: MessagePort | null = null;
 let expectedToken: string | null = null;
 let pendingPort: MessagePort | null = null;
 let pendingToken: string | null = null;
+let messagePortConnected = false;
+
+const dataCallbacks = new Map<string, Set<(data: string | Uint8Array) => void>>();
+
+function installPortDataHandler(port: MessagePort): void {
+  port.addEventListener("message", (event: MessageEvent) => {
+    const msg = event.data as PtyHostToRendererMessage;
+    if (msg?.type === "data" && typeof msg.id === "string") {
+      const cbs = dataCallbacks.get(msg.id);
+      if (cbs) {
+        for (const cb of cbs) {
+          cb(msg.data);
+        }
+      }
+    }
+  });
+}
+
+function activatePort(port: MessagePort): void {
+  if (messagePort) messagePort.close();
+  messagePort = port;
+  messagePortConnected = true;
+  installPortDataHandler(port);
+  port.start();
+}
 
 if (typeof window !== "undefined") {
   window.addEventListener("message", (event) => {
@@ -36,9 +62,7 @@ if (typeof window !== "undefined") {
       expectedToken = event.data.token;
 
       if (pendingPort && pendingToken === expectedToken) {
-        if (messagePort) messagePort.close();
-        messagePort = pendingPort;
-        messagePort.start();
+        activatePort(pendingPort);
         pendingPort = null;
         pendingToken = null;
         expectedToken = null;
@@ -67,12 +91,7 @@ if (typeof window !== "undefined") {
         return;
       }
 
-      if (messagePort) {
-        messagePort.close();
-      }
-
-      messagePort = event.ports[0];
-      messagePort.start();
+      activatePort(event.ports[0]);
       expectedToken = null;
       console.log("[TerminalClient] MessagePort acquired via postMessage");
     }
@@ -91,6 +110,7 @@ export const terminalClient = {
       } catch (error) {
         console.warn("[TerminalClient] MessagePort write failed, clearing port:", error);
         messagePort = null;
+        messagePortConnected = false;
         window.electron.terminal.write(id, data);
       }
     } else {
@@ -121,6 +141,7 @@ export const terminalClient = {
       } catch (error) {
         console.warn("[TerminalClient] MessagePort resize failed, clearing port:", error);
         messagePort = null;
+        messagePortConnected = false;
         window.electron.terminal.resize(id, cols, rows);
       }
     } else {
@@ -141,7 +162,28 @@ export const terminalClient = {
   },
 
   onData: (id: string, callback: (data: string | Uint8Array) => void): (() => void) => {
-    return window.electron.terminal.onData(id, callback);
+    // Register in per-terminal callback set for MessagePort data dispatch
+    let cbs = dataCallbacks.get(id);
+    if (!cbs) {
+      cbs = new Set();
+      dataCallbacks.set(id, cbs);
+    }
+    cbs.add(callback);
+
+    // IPC fallback: skip dispatch when MessagePort is delivering data
+    const ipcCleanup = window.electron.terminal.onData(id, (data: string | Uint8Array) => {
+      if (messagePortConnected) return;
+      callback(data);
+    });
+
+    return () => {
+      const set = dataCallbacks.get(id);
+      if (set) {
+        set.delete(callback);
+        if (set.size === 0) dataCallbacks.delete(id);
+      }
+      ipcCleanup();
+    };
   },
 
   onExit: (callback: (id: string, exitCode: number) => void): (() => void) => {
