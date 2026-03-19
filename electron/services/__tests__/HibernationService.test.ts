@@ -7,8 +7,9 @@ const storeMock = vi.hoisted(() => ({
 
 const projectStoreMock = vi.hoisted(() => ({
   getCurrentProjectId: vi.fn<() => string | null>(() => null),
-  getAllProjects:
-    vi.fn<() => Array<{ id: string; name: string; path: string; lastOpened: number }>>(() => []),
+  getAllProjects: vi.fn<
+    () => Array<{ id: string; name: string; path: string; lastOpened: number }>
+  >(() => []),
   clearProjectState: vi.fn(async () => {}),
 }));
 
@@ -245,7 +246,12 @@ describe("HibernationService", () => {
 
       projectStoreMock.getCurrentProjectId.mockReturnValue("other-proj");
       projectStoreMock.getAllProjects.mockReturnValue([
-        { id: "proj-1", name: "Old", path: "/projects/proj-1", lastOpened: Date.now() - THIRTY_ONE_MINUTES },
+        {
+          id: "proj-1",
+          name: "Old",
+          path: "/projects/proj-1",
+          lastOpened: Date.now() - THIRTY_ONE_MINUTES,
+        },
       ]);
 
       const service = new HibernationService();
@@ -260,7 +266,12 @@ describe("HibernationService", () => {
       (storeMock.get as Mock).mockReturnValue({ enabled: true, inactiveThresholdHours: 24 });
       projectStoreMock.getCurrentProjectId.mockReturnValue("active-proj");
       projectStoreMock.getAllProjects.mockReturnValue([
-        { id: "active-proj", name: "Active", path: "/projects/active-proj", lastOpened: Date.now() - THIRTY_ONE_MINUTES },
+        {
+          id: "active-proj",
+          name: "Active",
+          path: "/projects/active-proj",
+          lastOpened: Date.now() - THIRTY_ONE_MINUTES,
+        },
       ]);
 
       const service = new HibernationService();
@@ -275,7 +286,12 @@ describe("HibernationService", () => {
       (storeMock.get as Mock).mockReturnValue({ enabled: true, inactiveThresholdHours: 24 });
       projectStoreMock.getCurrentProjectId.mockReturnValue("other-proj");
       projectStoreMock.getAllProjects.mockReturnValue([
-        { id: "proj-1", name: "Recent", path: "/projects/proj-1", lastOpened: Date.now() - TWENTY_MINUTES },
+        {
+          id: "proj-1",
+          name: "Recent",
+          path: "/projects/proj-1",
+          lastOpened: Date.now() - TWENTY_MINUTES,
+        },
       ]);
 
       const service = new HibernationService();
@@ -292,7 +308,12 @@ describe("HibernationService", () => {
         (storeMock.get as Mock).mockReturnValue({ enabled: true, inactiveThresholdHours: 24 });
         projectStoreMock.getCurrentProjectId.mockReturnValue("other-proj");
         projectStoreMock.getAllProjects.mockReturnValue([
-          { id: "proj-1", name: "Busy", path: "/projects/proj-1", lastOpened: Date.now() - THIRTY_ONE_MINUTES },
+          {
+            id: "proj-1",
+            name: "Busy",
+            path: "/projects/proj-1",
+            lastOpened: Date.now() - THIRTY_ONE_MINUTES,
+          },
         ]);
 
         const service = new HibernationService();
@@ -309,7 +330,12 @@ describe("HibernationService", () => {
       (storeMock.get as Mock).mockReturnValue({ enabled: true, inactiveThresholdHours: 24 });
       projectStoreMock.getCurrentProjectId.mockReturnValue("other-proj");
       projectStoreMock.getAllProjects.mockReturnValue([
-        { id: "proj-1", name: "Old", path: "/projects/proj-1", lastOpened: Date.now() - THIRTY_ONE_MINUTES },
+        {
+          id: "proj-1",
+          name: "Old",
+          path: "/projects/proj-1",
+          lastOpened: Date.now() - THIRTY_ONE_MINUTES,
+        },
       ]);
 
       const service = new HibernationService();
@@ -342,9 +368,24 @@ describe("HibernationService", () => {
         (storeMock.get as Mock).mockReturnValue({ enabled: true, inactiveThresholdHours: 24 });
         projectStoreMock.getCurrentProjectId.mockReturnValue("other-proj");
         projectStoreMock.getAllProjects.mockReturnValue([
-          { id: "proj-valid-1", name: "Valid Old 1", path: "/projects/proj-valid-1", lastOpened: Date.now() - THIRTY_ONE_MINUTES },
-          { id: "proj-falsy", name: "Falsy Project", path: "/projects/proj-falsy", lastOpened: falsyValue as unknown as number },
-          { id: "proj-valid-2", name: "Valid Old 2", path: "/projects/proj-valid-2", lastOpened: Date.now() - THIRTY_ONE_MINUTES },
+          {
+            id: "proj-valid-1",
+            name: "Valid Old 1",
+            path: "/projects/proj-valid-1",
+            lastOpened: Date.now() - THIRTY_ONE_MINUTES,
+          },
+          {
+            id: "proj-falsy",
+            name: "Falsy Project",
+            path: "/projects/proj-falsy",
+            lastOpened: falsyValue as unknown as number,
+          },
+          {
+            id: "proj-valid-2",
+            name: "Valid Old 2",
+            path: "/projects/proj-valid-2",
+            lastOpened: Date.now() - THIRTY_ONE_MINUTES,
+          },
         ]);
 
         const service = new HibernationService();
@@ -363,7 +404,12 @@ describe("HibernationService", () => {
       (storeMock.get as Mock).mockReturnValue({ enabled: true, inactiveThresholdHours: 24 });
       projectStoreMock.getCurrentProjectId.mockReturnValue("other-proj");
       projectStoreMock.getAllProjects.mockReturnValue([
-        { id: "proj-1", name: "Empty", path: "/projects/proj-1", lastOpened: Date.now() - THIRTY_ONE_MINUTES },
+        {
+          id: "proj-1",
+          name: "Empty",
+          path: "/projects/proj-1",
+          lastOpened: Date.now() - THIRTY_ONE_MINUTES,
+        },
       ]);
 
       const service = new HibernationService();
@@ -384,7 +430,12 @@ describe("HibernationService", () => {
       (storeMock.get as Mock).mockReturnValue({ enabled: true, inactiveThresholdHours: 24 });
       projectStoreMock.getCurrentProjectId.mockReturnValue("other-proj");
       projectStoreMock.getAllProjects.mockReturnValue([
-        { id: "proj-1", name: "Merging", path: "/projects/proj-1", lastOpened: Date.now() - THIRTY_ONE_MINUTES },
+        {
+          id: "proj-1",
+          name: "Merging",
+          path: "/projects/proj-1",
+          lastOpened: Date.now() - THIRTY_ONE_MINUTES,
+        },
       ]);
 
       const service = new HibernationService();
@@ -401,7 +452,12 @@ describe("HibernationService", () => {
       (storeMock.get as Mock).mockReturnValue({ enabled: true, inactiveThresholdHours: 24 });
       projectStoreMock.getCurrentProjectId.mockReturnValue("active-proj");
       projectStoreMock.getAllProjects.mockReturnValue([
-        { id: "proj-1", name: "Old", path: "/projects/proj-1", lastOpened: Date.now() - TWENTY_FIVE_HOURS },
+        {
+          id: "proj-1",
+          name: "Old",
+          path: "/projects/proj-1",
+          lastOpened: Date.now() - TWENTY_FIVE_HOURS,
+        },
       ]);
     }
 
@@ -409,9 +465,7 @@ describe("HibernationService", () => {
       "skips projects with %s agent in scheduled hibernation",
       async (agentState) => {
         setupScheduledTest();
-        ptyManagerMock.getAll.mockReturnValue([
-          { id: "t1", projectId: "proj-1", agentState },
-        ]);
+        ptyManagerMock.getAll.mockReturnValue([{ id: "t1", projectId: "proj-1", agentState }]);
 
         const service = new HibernationService();
         await (service as unknown as { checkAndHibernate(): Promise<void> }).checkAndHibernate();
@@ -442,7 +496,12 @@ describe("HibernationService", () => {
       (storeMock.get as Mock).mockReturnValue({ enabled: true, inactiveThresholdHours: 24 });
       projectStoreMock.getCurrentProjectId.mockReturnValue("active-proj");
       projectStoreMock.getAllProjects.mockReturnValue([
-        { id: "proj-1", name: "Old", path: "/projects/proj-1", lastOpened: Date.now() - TWENTY_FIVE_HOURS },
+        {
+          id: "proj-1",
+          name: "Old",
+          path: "/projects/proj-1",
+          lastOpened: Date.now() - TWENTY_FIVE_HOURS,
+        },
       ]);
       ptyManagerMock.getAll.mockReturnValue([
         { id: "t1", projectId: "proj-1", agentState: "idle" },
@@ -454,7 +513,12 @@ describe("HibernationService", () => {
       (storeMock.get as Mock).mockReturnValue({ enabled: false, inactiveThresholdHours: 24 });
       projectStoreMock.getCurrentProjectId.mockReturnValue("active-proj");
       projectStoreMock.getAllProjects.mockReturnValue([
-        { id: "proj-1", name: "Old", path: "/projects/proj-1", lastOpened: Date.now() - THIRTY_ONE_MINUTES },
+        {
+          id: "proj-1",
+          name: "Old",
+          path: "/projects/proj-1",
+          lastOpened: Date.now() - THIRTY_ONE_MINUTES,
+        },
       ]);
       ptyManagerMock.getAll.mockReturnValue([
         { id: "t1", projectId: "proj-1", agentState: "idle" },
@@ -462,21 +526,25 @@ describe("HibernationService", () => {
       ptyManagerMock.gracefulKillByProject.mockResolvedValue([{ id: "t1" }]);
     }
 
-    it.each(["MERGE_HEAD", "REBASE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "rebase-merge", "rebase-apply"])(
-      "scheduled hibernation skips project with %s sentinel",
-      async (sentinel) => {
-        setupScheduledProject();
-        fsMock.readdir.mockImplementation(async (dirPath: string) => {
-          if (String(dirPath).endsWith(".git")) return [sentinel, "HEAD", "config"];
-          throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
-        });
+    it.each([
+      "MERGE_HEAD",
+      "REBASE_HEAD",
+      "CHERRY_PICK_HEAD",
+      "REVERT_HEAD",
+      "rebase-merge",
+      "rebase-apply",
+    ])("scheduled hibernation skips project with %s sentinel", async (sentinel) => {
+      setupScheduledProject();
+      fsMock.readdir.mockImplementation(async (dirPath: string) => {
+        if (String(dirPath).endsWith(".git")) return [sentinel, "HEAD", "config"];
+        throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+      });
 
-        const service = new HibernationService();
-        await (service as unknown as { checkAndHibernate(): Promise<void> }).checkAndHibernate();
+      const service = new HibernationService();
+      await (service as unknown as { checkAndHibernate(): Promise<void> }).checkAndHibernate();
 
-        expect(ptyManagerMock.gracefulKillByProject).not.toHaveBeenCalled();
-      }
-    );
+      expect(ptyManagerMock.gracefulKillByProject).not.toHaveBeenCalled();
+    });
 
     it("scheduled hibernation skips project with fresh index.lock", async () => {
       setupScheduledProject();
@@ -523,12 +591,10 @@ describe("HibernationService", () => {
 
     it("detects sentinel in linked worktree", async () => {
       setupScheduledProject();
-      fsMock.readdir.mockImplementation(async (dirPath: string, options?: unknown) => {
+      fsMock.readdir.mockImplementation(async (dirPath: string) => {
         const dir = String(dirPath);
         if (dir.endsWith(".git/worktrees")) {
-          return [
-            { name: "feature-branch", isDirectory: () => true },
-          ];
+          return [{ name: "feature-branch", isDirectory: () => true }];
         }
         if (dir.endsWith(".git")) return ["HEAD", "config"];
         if (dir.includes("worktrees/feature-branch")) return ["MERGE_HEAD", "HEAD"];
@@ -577,8 +643,18 @@ describe("HibernationService", () => {
       (storeMock.get as Mock).mockReturnValue({ enabled: true, inactiveThresholdHours: 24 });
       projectStoreMock.getCurrentProjectId.mockReturnValue("active-proj");
       projectStoreMock.getAllProjects.mockReturnValue([
-        { id: "proj-1", name: "Merging", path: "/projects/proj-1", lastOpened: Date.now() - TWENTY_FIVE_HOURS },
-        { id: "proj-2", name: "Idle", path: "/projects/proj-2", lastOpened: Date.now() - TWENTY_FIVE_HOURS },
+        {
+          id: "proj-1",
+          name: "Merging",
+          path: "/projects/proj-1",
+          lastOpened: Date.now() - TWENTY_FIVE_HOURS,
+        },
+        {
+          id: "proj-2",
+          name: "Idle",
+          path: "/projects/proj-2",
+          lastOpened: Date.now() - TWENTY_FIVE_HOURS,
+        },
       ]);
       ptyManagerMock.getAll.mockReturnValue([
         { id: "t1", projectId: "proj-1", agentState: "idle" },
