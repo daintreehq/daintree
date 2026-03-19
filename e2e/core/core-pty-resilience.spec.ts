@@ -179,7 +179,9 @@ test.describe.serial("Core: PTY Resilience", () => {
       }
     }, capturedPid);
 
-    // Wait for panel to be trashed or show exit banner
+    // node-pty reports exitCode=null for signal deaths, normalized to 0 by TerminalProcess.
+    // Exit code 0 → panel auto-trashed. Non-zero → panel preserved with exit banner.
+    // Wait for either outcome: panel trashed (grid empty) or exit banner visible.
     await expect
       .poll(
         async () => {
@@ -204,10 +206,12 @@ test.describe.serial("Core: PTY Resilience", () => {
     const countBefore = await getGridPanelCount(window);
     await window.locator(SEL.toolbar.openTerminal).click();
 
+    // Wait for the new terminal to appear
     await expect
       .poll(() => getGridPanelCount(window), { timeout: T_LONG })
       .toBeGreaterThan(countBefore);
 
+    // Get the newest panel (last in grid — the crashed panel may still be first)
     const newPanel = window.locator(SEL.panel.gridPanel).last();
     await expect(newPanel).toBeVisible({ timeout: T_MEDIUM });
 
