@@ -8,6 +8,7 @@ import {
   UserPlus,
   Play,
   ChevronsUpDown,
+  RotateCcw,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { AppDialog } from "@/components/ui/AppDialog";
@@ -34,43 +35,92 @@ interface BulkCreateWorktreeDialogProps {
   onComplete: () => void;
 }
 
+type ItemStatus =
+  | { status: "pending" }
+  | { status: "in-progress"; attempt: number }
+  | { status: "succeeded" }
+  | { status: "failed"; error: string; attempts: number };
+
 interface ProgressState {
   phase: "idle" | "executing" | "done";
   total: number;
-  completed: number;
-  failed: number;
-  currentItem: { issueNumber: number; title: string } | null;
+  items: Map<number, ItemStatus>;
 }
 
 type ProgressAction =
-  | { type: "START"; total: number }
-  | { type: "ITEM_STARTED"; issueNumber: number; title: string }
-  | { type: "COMPLETED" }
-  | { type: "FAILED" }
+  | { type: "START"; issueNumbers: number[] }
+  | { type: "ITEM_IN_PROGRESS"; issueNumber: number; attempt: number }
+  | { type: "ITEM_SUCCEEDED"; issueNumber: number }
+  | { type: "ITEM_FAILED"; issueNumber: number; error: string; attempts: number }
   | { type: "DONE" }
+  | { type: "RETRY_FAILED" }
   | { type: "RESET" };
 
 function progressReducer(state: ProgressState, action: ProgressAction): ProgressState {
   switch (action.type) {
-    case "START":
-      return {
-        phase: "executing",
-        total: action.total,
-        completed: 0,
-        failed: 0,
-        currentItem: null,
-      };
-    case "ITEM_STARTED":
-      return { ...state, currentItem: { issueNumber: action.issueNumber, title: action.title } };
-    case "COMPLETED":
-      return { ...state, completed: state.completed + 1 };
-    case "FAILED":
-      return { ...state, failed: state.failed + 1 };
+    case "START": {
+      const items = new Map<number, ItemStatus>();
+      for (const n of action.issueNumbers) {
+        items.set(n, { status: "pending" });
+      }
+      return { phase: "executing", total: action.issueNumbers.length, items };
+    }
+    case "ITEM_IN_PROGRESS": {
+      const items = new Map(state.items);
+      items.set(action.issueNumber, { status: "in-progress", attempt: action.attempt });
+      return { ...state, items };
+    }
+    case "ITEM_SUCCEEDED": {
+      const items = new Map(state.items);
+      items.set(action.issueNumber, { status: "succeeded" });
+      return { ...state, items };
+    }
+    case "ITEM_FAILED": {
+      const items = new Map(state.items);
+      items.set(action.issueNumber, {
+        status: "failed",
+        error: action.error,
+        attempts: action.attempts,
+      });
+      return { ...state, items };
+    }
     case "DONE":
-      return { ...state, phase: "done", currentItem: null };
+      return { ...state, phase: "done" };
+    case "RETRY_FAILED": {
+      const items = new Map(state.items);
+      let retryCount = 0;
+      for (const [key, val] of items) {
+        if (val.status === "failed") {
+          items.set(key, { status: "pending" });
+          retryCount++;
+        }
+      }
+      return { ...state, phase: "executing", total: retryCount, items };
+    }
     case "RESET":
-      return { phase: "idle", total: 0, completed: 0, failed: 0, currentItem: null };
+      return { phase: "idle", total: 0, items: new Map() };
   }
+}
+
+const MAX_AUTO_RETRIES = 2;
+const RETRY_DELAYS = [1000, 2000];
+
+const TRANSIENT_ERROR_RE =
+  /\.lock['"]?:.*(?:File exists|exists)|Another git process|Resource temporarily unavailable|cannot lock ref|could not lock config file/i;
+
+function isTransientError(message: string, code?: string): boolean {
+  if (code === "VALIDATION_ERROR" || code === "NOT_FOUND") return false;
+  return TRANSIENT_ERROR_RE.test(message);
+}
+
+function normalizeError(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  if (typeof error === "string") return error;
+  return String(error);
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 interface PlannedWorktree {
@@ -123,9 +173,7 @@ export function BulkCreateWorktreeDialog({
   const [progress, dispatchProgress] = useReducer(progressReducer, {
     phase: "idle",
     total: 0,
-    completed: 0,
-    failed: 0,
-    currentItem: null,
+    items: new Map(),
   });
   const queueRef = useRef<PQueue | null>(null);
   const runIdRef = useRef(0);
@@ -189,7 +237,127 @@ export function BulkCreateWorktreeDialog({
 
   const isExecuting = progress.phase === "executing";
   const isDone = progress.phase === "done";
-  const processedCount = progress.completed + progress.failed;
+
+  const { succeededCount, failedCount } = useMemo(() => {
+    let succeeded = 0;
+    let failed = 0;
+    for (const item of progress.items.values()) {
+      if (item.status === "succeeded") succeeded++;
+      else if (item.status === "failed") failed++;
+    }
+    return { succeededCount: succeeded, failedCount: failed };
+  }, [progress.items]);
+
+  const processedCount = succeededCount + failedCount;
+
+  const runBatch = useCallback(
+    async (toCreate: PlannedWorktree[]) => {
+      const currentRunId = ++runIdRef.current;
+      const queue = new PQueue({ concurrency: 4 });
+      queueRef.current = queue;
+      let succeeded = 0;
+      let failed = 0;
+      let lastSuccessfulWorktreeId: string | null = null;
+
+      for (const item of toCreate) {
+        void queue.add(async () => {
+          if (runIdRef.current !== currentRunId) return;
+
+          for (let attempt = 1; attempt <= MAX_AUTO_RETRIES + 1; attempt++) {
+            if (runIdRef.current !== currentRunId) return;
+            dispatchProgress({
+              type: "ITEM_IN_PROGRESS",
+              issueNumber: item.issue.number,
+              attempt,
+            });
+
+            try {
+              const result = await actionService.dispatch(
+                "worktree.createWithRecipe",
+                {
+                  branchName: item.branchName,
+                  recipeId: selectedRecipeId ?? undefined,
+                  issueNumber: item.issue.number,
+                  assignToSelf: assignWorktreeToSelf,
+                },
+                { source: "user", confirmed: true }
+              );
+
+              if (runIdRef.current !== currentRunId) return;
+
+              if (result.ok) {
+                const { worktreeId } = result.result as { worktreeId: string };
+                lastSuccessfulWorktreeId = worktreeId;
+                succeeded++;
+                dispatchProgress({ type: "ITEM_SUCCEEDED", issueNumber: item.issue.number });
+                return;
+              }
+
+              const errorMsg = result.error.message;
+              const errorCode = result.error.code;
+
+              if (attempt <= MAX_AUTO_RETRIES && isTransientError(errorMsg, errorCode)) {
+                await delay(RETRY_DELAYS[attempt - 1]!);
+                continue;
+              }
+
+              failed++;
+              dispatchProgress({
+                type: "ITEM_FAILED",
+                issueNumber: item.issue.number,
+                error: errorMsg,
+                attempts: attempt,
+              });
+              return;
+            } catch (err) {
+              if (runIdRef.current !== currentRunId) return;
+              const errorMsg = normalizeError(err);
+
+              if (attempt <= MAX_AUTO_RETRIES && isTransientError(errorMsg)) {
+                await delay(RETRY_DELAYS[attempt - 1]!);
+                continue;
+              }
+
+              failed++;
+              dispatchProgress({
+                type: "ITEM_FAILED",
+                issueNumber: item.issue.number,
+                error: errorMsg,
+                attempts: attempt,
+              });
+              return;
+            }
+          }
+        });
+      }
+
+      await queue.onIdle();
+      if (runIdRef.current !== currentRunId) return;
+      queueRef.current = null;
+
+      if (lastSuccessfulWorktreeId) {
+        useWorktreeSelectionStore.getState().setPendingWorktree(lastSuccessfulWorktreeId);
+        useWorktreeSelectionStore.getState().selectWorktree(lastSuccessfulWorktreeId);
+      }
+
+      dispatchProgress({ type: "DONE" });
+
+      if (failed === 0) {
+        notify({
+          type: "success",
+          title: "Bulk Create Complete",
+          message: `Created ${succeeded} worktree${succeeded !== 1 ? "s" : ""}`,
+        });
+      } else {
+        notify({
+          type: "error",
+          title: "Bulk Create Partial Failure",
+          message: `${succeeded} created, ${failed} failed`,
+        });
+      }
+    },
+    [selectedRecipeId, assignWorktreeToSelf]
+  );
 
   const handleCreate = useCallback(async () => {
     const toCreate = planned.filter((p) => !p.skipped);
@@ -207,87 +375,32 @@ export function BulkCreateWorktreeDialog({
       setLastSelectedWorktreeRecipeIdByProject(projectId, selectedRecipeId);
     }
 
-    const currentRunId = ++runIdRef.current;
-    dispatchProgress({ type: "START", total: toCreate.length });
-
-    const queue = new PQueue({ concurrency: 4 });
-    queueRef.current = queue;
-    let succeeded = 0;
-    let failed = 0;
-    let lastSuccessfulWorktreeId: string | null = null;
-
-    for (const item of toCreate) {
-      void queue.add(async () => {
-        if (runIdRef.current !== currentRunId) return;
-        dispatchProgress({
-          type: "ITEM_STARTED",
-          issueNumber: item.issue.number,
-          title: item.issue.title,
-        });
-
-        try {
-          const result = await actionService.dispatch(
-            "worktree.createWithRecipe",
-            {
-              branchName: item.branchName,
-              recipeId: selectedRecipeId ?? undefined,
-              issueNumber: item.issue.number,
-              assignToSelf: assignWorktreeToSelf,
-            },
-            { source: "user", confirmed: true }
-          );
-
-          if (runIdRef.current !== currentRunId) return;
-
-          if (result.ok) {
-            const { worktreeId } = result.result as { worktreeId: string };
-            lastSuccessfulWorktreeId = worktreeId;
-            succeeded++;
-            dispatchProgress({ type: "COMPLETED" });
-          } else {
-            failed++;
-            dispatchProgress({ type: "FAILED" });
-          }
-        } catch {
-          if (runIdRef.current !== currentRunId) return;
-          failed++;
-          dispatchProgress({ type: "FAILED" });
-        }
-      });
-    }
-
-    await queue.onIdle();
-    if (runIdRef.current !== currentRunId) return;
-    queueRef.current = null;
-
-    if (lastSuccessfulWorktreeId) {
-      useWorktreeSelectionStore.getState().setPendingWorktree(lastSuccessfulWorktreeId);
-      useWorktreeSelectionStore.getState().selectWorktree(lastSuccessfulWorktreeId);
-    }
-
-    dispatchProgress({ type: "DONE" });
-
-    if (failed === 0) {
-      notify({
-        type: "success",
-        title: "Bulk Create Complete",
-        message: `Created ${succeeded} worktree${succeeded !== 1 ? "s" : ""}`,
-      });
-    } else {
-      notify({
-        type: "error",
-        title: "Bulk Create Partial Failure",
-        message: `${succeeded} created, ${failed} failed`,
-      });
-    }
+    dispatchProgress({
+      type: "START",
+      issueNumbers: toCreate.map((p) => p.issue.number),
+    });
+    await runBatch(toCreate);
   }, [
     planned,
     selectedRecipeId,
-    assignWorktreeToSelf,
     projectId,
     recipeSelectionTouchedRef,
     setLastSelectedWorktreeRecipeIdByProject,
+    runBatch,
   ]);
+
+  const handleRetryFailed = useCallback(async () => {
+    const failedIssueNumbers = new Set<number>();
+    for (const [issueNumber, item] of progress.items) {
+      if (item.status === "failed") failedIssueNumbers.add(issueNumber);
+    }
+    if (failedIssueNumbers.size === 0) return;
+
+    const toRetry = planned.filter((p) => !p.skipped && failedIssueNumbers.has(p.issue.number));
+
+    dispatchProgress({ type: "RETRY_FAILED" });
+    await runBatch(toRetry);
+  }, [progress.items, planned, runBatch]);
 
   const handleClose = useCallback(() => {
     if (isExecuting) {
@@ -348,7 +461,7 @@ export function BulkCreateWorktreeDialog({
             isExecuting ? (
               <Loader2 className="w-5 h-5 text-canopy-accent animate-spin" />
             ) : isDone ? (
-              progress.failed > 0 ? (
+              failedCount > 0 ? (
                 <AlertTriangle className="w-5 h-5 text-status-warning" />
               ) : (
                 <Check className="w-5 h-5 text-status-success" />
@@ -562,54 +675,68 @@ export function BulkCreateWorktreeDialog({
             </div>
           </div>
         ) : (
-          <div className="flex flex-col items-center justify-center py-8 space-y-6">
-            {/* Current item indicator */}
-            {isExecuting && progress.currentItem && (
-              <div className="flex items-center gap-2.5 text-sm text-canopy-text max-w-full px-4">
-                <Loader2 className="w-4 h-4 animate-spin text-canopy-accent shrink-0" />
-                <span className="text-canopy-text/50 font-mono shrink-0">
-                  #{progress.currentItem.issueNumber}
-                </span>
-                <span className="truncate">{progress.currentItem.title}</span>
-              </div>
-            )}
+          <div className="space-y-4">
+            {/* Per-item status list */}
+            <div className="max-h-[300px] overflow-y-auto rounded-[var(--radius-md)] border border-canopy-border divide-y divide-canopy-border">
+              {planned
+                .filter((p) => !p.skipped)
+                .map((item) => {
+                  const itemStatus = progress.items.get(item.issue.number);
+                  return (
+                    <div
+                      key={item.issue.number}
+                      className="px-3 py-2 flex items-start gap-3 text-sm"
+                    >
+                      <div className="mt-0.5 shrink-0">
+                        {itemStatus?.status === "in-progress" ? (
+                          <Loader2 className="w-4 h-4 animate-spin text-canopy-accent" />
+                        ) : itemStatus?.status === "succeeded" ? (
+                          <Check className="w-4 h-4 text-status-success" />
+                        ) : itemStatus?.status === "failed" ? (
+                          <AlertTriangle className="w-4 h-4 text-status-warning" />
+                        ) : (
+                          <div className="w-4 h-4 rounded-full border border-canopy-border" />
+                        )}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 min-w-0">
+                          <span className="text-canopy-text/50 text-xs font-mono shrink-0">
+                            #{item.issue.number}
+                          </span>
+                          <span className="text-canopy-text truncate">{item.issue.title}</span>
+                          {itemStatus?.status === "in-progress" && itemStatus.attempt > 1 && (
+                            <span className="text-[10px] px-1.5 py-0.5 rounded bg-canopy-accent/10 text-canopy-accent shrink-0">
+                              retry {itemStatus.attempt - 1}
+                            </span>
+                          )}
+                        </div>
+                        {itemStatus?.status === "failed" && (
+                          <p className="text-xs text-status-warning mt-0.5 break-words">
+                            {itemStatus.error}
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+            </div>
 
-            {/* Done summary icon */}
-            {isDone && (
-              <div
-                className={cn(
-                  "flex items-center justify-center w-12 h-12 rounded-full",
-                  progress.failed > 0
-                    ? "bg-status-warning/10 text-status-warning"
-                    : "bg-status-success/10 text-status-success"
-                )}
-              >
-                {progress.failed > 0 ? (
-                  <AlertTriangle className="w-6 h-6" />
-                ) : (
-                  <Check className="w-6 h-6" />
-                )}
-              </div>
-            )}
-
-            {/* Progress bar */}
-            <div className="w-full max-w-xs space-y-2">
+            {/* Progress bar + summary */}
+            <div className="space-y-2">
               <div className="h-2 rounded-full bg-overlay-soft overflow-hidden">
                 <div
                   className="h-full rounded-full bg-canopy-accent transition-all duration-300"
                   style={{
-                    width: `${progress.total > 0 ? (processedCount / progress.total) * 100 : 0}%`,
+                    width: `${progress.items.size > 0 ? (processedCount / progress.items.size) * 100 : 0}%`,
                   }}
                 />
               </div>
-
-              {/* Numeric progress */}
               <div className="flex items-center justify-center gap-1.5 text-sm text-canopy-text/70">
                 <span>
-                  {progress.completed} of {progress.total} created
+                  {succeededCount} of {progress.items.size} created
                 </span>
-                {progress.failed > 0 && (
-                  <span className="text-status-warning">&middot; {progress.failed} failed</span>
+                {failedCount > 0 && (
+                  <span className="text-status-warning">&middot; {failedCount} failed</span>
                 )}
               </div>
             </div>
@@ -619,10 +746,22 @@ export function BulkCreateWorktreeDialog({
 
       <AppDialog.Footer>
         {isDone ? (
-          <Button onClick={handleDone} data-testid="bulk-create-done-button">
-            <Check />
-            Done
-          </Button>
+          <>
+            {failedCount > 0 && (
+              <Button
+                variant="ghost"
+                onClick={handleRetryFailed}
+                data-testid="bulk-create-retry-button"
+              >
+                <RotateCcw />
+                Retry Failed
+              </Button>
+            )}
+            <Button onClick={handleDone} data-testid="bulk-create-done-button">
+              <Check />
+              Done
+            </Button>
+          </>
         ) : isExecuting ? (
           <Button variant="ghost" onClick={handleClose}>
             Cancel
