@@ -99,9 +99,14 @@ describe("filesClient.search caching", () => {
     await filesClient.search({ cwd: "/project", query: "q0" });
     expect(mockSearch).toHaveBeenCalledTimes(52);
 
-    // q1 should still be cached
+    // q1 was also evicted (cascade: re-inserting q0 into a full cache evicts q1)
+    mockSearch.mockResolvedValueOnce({ files: ["refetched-q1.ts"] });
     await filesClient.search({ cwd: "/project", query: "q1" });
-    expect(mockSearch).toHaveBeenCalledTimes(52);
+    expect(mockSearch).toHaveBeenCalledTimes(53);
+
+    // q2 should still be cached
+    await filesClient.search({ cwd: "/project", query: "q2" });
+    expect(mockSearch).toHaveBeenCalledTimes(53);
   });
 
   it("promotes accessed entries so they survive LRU eviction", async () => {
