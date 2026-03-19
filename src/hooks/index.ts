@@ -34,7 +34,11 @@ export { keybindingService } from "../services/KeybindingService";
 export type { KeyScope, KeybindingConfig } from "../services/KeybindingService";
 
 export { useProjectSettings } from "./useProjectSettings";
-export { useProjectBranding } from "./useProjectBranding";
+export {
+  useProjectBranding,
+  invalidateBrandingCache,
+  updateBrandingCache,
+} from "./useProjectBranding";
 
 export { useWaitingTerminalIds, useBackgroundPanelStats } from "./useTerminalSelectors";
 

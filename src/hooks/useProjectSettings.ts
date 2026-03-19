@@ -3,6 +3,7 @@ import type { ProjectSettings, RunCommand } from "../types";
 import { useProjectStore } from "../store/projectStore";
 import { useProjectSettingsStore } from "../store/projectSettingsStore";
 import { projectClient } from "@/clients";
+import { updateBrandingCache } from "./useProjectBranding";
 
 interface UseProjectSettingsReturn {
   settings: ProjectSettings | null;
@@ -115,6 +116,9 @@ export function useProjectSettings(projectId?: string): UseProjectSettingsReturn
         if (latestTargetIdRef.current !== targetId) {
           return;
         }
+
+        // Write-through: update branding cache so subscribers see the new icon immediately
+        updateBrandingCache(targetId, newSettings.projectIconSvg);
 
         // Update global store if saving to current project
         if (useGlobalStore) {
