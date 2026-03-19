@@ -58,17 +58,41 @@ export function buildPromptPatterns(
   return promptPatterns.length ? promptPatterns : undefined;
 }
 
+/**
+ * Universal approval prompt patterns appended as fallback for all agent terminals.
+ * These cover tool-approval prompts from Claude Code, Gemini CLI, Codex CLI,
+ * OpenCode, and Cursor Agent. Case-insensitive via compilePatterns().
+ */
+export const UNIVERSAL_APPROVAL_HINT_PATTERNS: string[] = [
+  "allow\\s+once",
+  "allow\\s+always",
+  "approve\\s+once",
+  "approve\\s+this\\s+session",
+  "allow\\s+permission",
+  "deny\\s+permission",
+  "suggest\\s+changes",
+  "don['\u2019]t\\s+ask\\s+again",
+  "trust\\s+this\\s+directory",
+  "\\[y[/\\\\]n\\]",
+  "\\(y[/\\\\]n\\)",
+  "proceed\\?\\s*\\[y",
+];
+
 export function buildPromptHintPatterns(
   detection: AgentDetectionConfig | undefined,
   agentId: string | undefined
 ): RegExp[] | undefined {
-  if (!detection?.promptHintPatterns || detection.promptHintPatterns.length === 0) {
-    return undefined;
-  }
+  const agentPatterns =
+    detection?.promptHintPatterns && detection.promptHintPatterns.length > 0
+      ? compilePatterns(detection.promptHintPatterns, agentId, "prompt hint")
+      : [];
 
-  const promptHintPatterns = compilePatterns(detection.promptHintPatterns, agentId, "prompt hint");
+  const universalPatterns = agentId
+    ? compilePatterns(UNIVERSAL_APPROVAL_HINT_PATTERNS, agentId, "universal approval hint")
+    : [];
 
-  return promptHintPatterns.length ? promptHintPatterns : undefined;
+  const merged = [...agentPatterns, ...universalPatterns];
+  return merged.length > 0 ? merged : undefined;
 }
 
 export function buildCompletionPatterns(

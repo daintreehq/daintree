@@ -705,6 +705,31 @@ describe("ActivityMonitor", () => {
       monitor.dispose();
     });
 
+    it("should detect universal approval prompt and transition to idle", () => {
+      const onStateChange = vi.fn();
+      const monitor = new ActivityMonitor("test-1", 1000, onStateChange, {
+        getVisibleLines: () => [
+          "Canopy wants to run: rm -rf /tmp",
+          "Approve Once",
+          "Approve This Session",
+          "Reject",
+        ],
+        getCursorLine: () => "",
+        promptHintPatterns: [/approve\s+once/i, /approve\s+this\s+session/i],
+        initialState: "busy",
+        skipInitialStateEmit: true,
+        idleDebounceMs: 2000,
+      });
+
+      monitor.startPolling();
+
+      vi.advanceTimersByTime(2200);
+
+      expect(onStateChange).toHaveBeenCalledWith("test-1", 1000, "idle");
+
+      monitor.dispose();
+    });
+
     it("should transition to idle after sustained quiet without prompt", () => {
       const onStateChange = vi.fn();
       const monitor = new ActivityMonitor("test-1", 1000, onStateChange, {
