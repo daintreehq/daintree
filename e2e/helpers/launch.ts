@@ -126,6 +126,11 @@ export async function launchApp(options: LaunchOptions = {}): Promise<AppContext
 
 export async function closeApp(app: ElectronApplication): Promise<void> {
   const pid = app.process().pid;
+
+  // Collect all descendant PIDs BEFORE closing — once the parent dies,
+  // children get reparented to PID 1 and we can no longer find them via ppid.
+  const descendantPids = pid ? getDescendantPids(pid) : [];
+
   try {
     await Promise.race([
       app.close(),
@@ -136,11 +141,36 @@ export async function closeApp(app: ElectronApplication): Promise<void> {
     forceKillProcessTree(pid);
   }
 
-  // Ensure all child processes (PTY host, workspace host) are cleaned up
-  // even after a successful close — lingering children block worker teardown.
-  if (pid) {
-    await wait(500);
-    forceKillProcessTree(pid);
+  // Kill any lingering descendant processes (PTY host, workspace host, shells).
+  // These may have been reparented to PID 1 after the main process exited.
+  for (const childPid of descendantPids) {
+    try {
+      process.kill(childPid, "SIGKILL");
+    } catch {
+      // Already dead
+    }
+  }
+}
+
+function getDescendantPids(pid: number): number[] {
+  if (process.platform === "win32") return [];
+  try {
+    const result = execSync(`pgrep -P ${pid}`, {
+      encoding: "utf8",
+      stdio: ["pipe", "pipe", "ignore"],
+    });
+    const children = result
+      .trim()
+      .split("\n")
+      .map(Number)
+      .filter((n) => n > 0);
+    const all = [...children];
+    for (const child of children) {
+      all.push(...getDescendantPids(child));
+    }
+    return all;
+  } catch {
+    return [];
   }
 }
 
@@ -150,8 +180,6 @@ function forceKillProcessTree(pid: number | undefined): void {
     if (process.platform === "win32") {
       execSync(`taskkill /F /PID ${pid} /T 2>nul`, { stdio: "ignore" });
     } else {
-      // Kill all child processes by parent PID first, then the parent itself.
-      // pkill -P covers children that aren't in the same process group.
       try {
         execSync(`pkill -9 -P ${pid}`, { stdio: "ignore" });
       } catch {
