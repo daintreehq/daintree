@@ -302,19 +302,21 @@ describe("WorktreeHeader click bubbling", () => {
   function renderHeaderInWrapper(overrides: Partial<WorktreeHeaderProps> = {}) {
     const onParentClick = vi.fn();
     const result = render(
-      <div onClick={onParentClick} data-testid="parent-wrapper">
-        <WorktreeHeader
-          worktree={baseWorktree}
-          isActive={false}
-          isMainWorktree={false}
-          isPinned={false}
-          branchLabel="feature/test"
-          worktreeErrorCount={0}
-          badges={{}}
-          menu={baseMenu}
-          {...overrides}
-        />
-      </div>
+      <TooltipProvider>
+        <div onClick={onParentClick} data-testid="parent-wrapper">
+          <WorktreeHeader
+            worktree={baseWorktree}
+            isActive={false}
+            isMainWorktree={false}
+            isPinned={false}
+            branchLabel="feature/test"
+            worktreeErrorCount={0}
+            badges={{}}
+            menu={baseMenu}
+            {...overrides}
+          />
+        </div>
+      </TooltipProvider>
     );
     return { ...result, onParentClick };
   }
