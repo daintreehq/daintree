@@ -65,7 +65,6 @@ protocol.registerSchemesAsPrivileged([
     scheme: "canopy-file",
     privileges: {
       secure: true,
-      bypassCSP: true,
       supportFetchAPI: true,
     },
   },
