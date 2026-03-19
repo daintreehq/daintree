@@ -1,16 +1,6 @@
 import { useState, useEffect, useMemo, useCallback, useRef, type KeyboardEvent } from "react";
 import { useDebounce } from "@/hooks/useDebounce";
-import {
-  Search,
-  ExternalLink,
-  RefreshCw,
-  WifiOff,
-  Plus,
-  Settings,
-  X,
-  Filter,
-  Loader2,
-} from "lucide-react";
+import { Search, ExternalLink, RefreshCw, WifiOff, Plus, Settings, X, Filter } from "lucide-react";
 import {
   buildCacheKey,
   getCache,
@@ -83,7 +73,6 @@ export function GitHubResourceList({
   const [cursor, setCursor] = useState<string | null>(() => cachedEntry?.endCursor ?? null);
   const [hasMore, setHasMore] = useState(() => cachedEntry?.hasNextPage ?? false);
   const [loading, setLoading] = useState(false);
-  const [isRevalidating, setIsRevalidating] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loadMoreError, setLoadMoreError] = useState<string | null>(null);
@@ -214,7 +203,6 @@ export function GitHubResourceList({
         if (!abortSignal?.aborted) {
           setLoading(false);
           setLoadingMore(false);
-          setIsRevalidating(false);
         }
       }
     },
@@ -236,7 +224,6 @@ export function GitHubResourceList({
       const cached = getCache(cacheKey);
       if (cached) {
         // Data already hydrated via useState initializer — background revalidate
-        setIsRevalidating(true);
         setError(null);
         fetchData(null, false, abortController.signal, {
           revalidating: true,
@@ -604,12 +591,6 @@ export function GitHubResourceList({
               aria-label={`Search ${type === "issue" ? "issues" : "pull requests"}`}
               className="flex-1 min-w-0 text-sm bg-transparent text-canopy-text placeholder:text-muted-foreground focus:outline-none"
             />
-            {isRevalidating && (
-              <Loader2
-                className="w-3 h-3 shrink-0 animate-spin text-canopy-text/40"
-                aria-label="Refreshing"
-              />
-            )}
             {searchQuery && (
               <button
                 type="button"
