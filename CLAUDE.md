@@ -30,6 +30,7 @@ npm run rebuild      # Rebuild native modules
 - **PRs / pushes:** Typecheck, lint, format, and unit tests on **Ubuntu only** (no E2E). `ci-ok` gate job is the sole required status check.
 - **Nightly (2 AM UTC):** Full cross-platform CI on all 3 OSes: check + test + build + smoke + E2E core + E2E online. Auto-creates GitHub issue on failure (`nightly-failure` label).
 - **Releases:** Full E2E core and online suites gate the release publish.
+- **Single-file E2E:** `gh workflow run "E2E Core Tests" --ref develop -f platform=linux -f test_file=e2e/core/core-foo.spec.ts` — use this when fixing a specific flaky test instead of re-running the full suite.
 
 ## Architecture
 
