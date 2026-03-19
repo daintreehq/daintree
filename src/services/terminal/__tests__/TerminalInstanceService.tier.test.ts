@@ -1,4 +1,5 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+// @vitest-environment jsdom
+import { afterEach, describe, it, expect, vi, beforeEach } from "vitest";
 import { TerminalRefreshTier } from "../../../../shared/types/panel";
 
 const mockTerminalClient = {
@@ -17,6 +18,10 @@ vi.mock("@/clients", () => ({
   },
   appClient: {
     getHydrationState: vi.fn(),
+  },
+  projectClient: {
+    getTerminals: vi.fn().mockResolvedValue([]),
+    setTerminals: vi.fn().mockResolvedValue(undefined),
   },
 }));
 
@@ -37,82 +42,227 @@ vi.mock("../TerminalAddonManager", () => ({
   setupTerminalAddons: vi.fn(() => ({
     fitAddon: { fit: vi.fn() },
     serializeAddon: { serialize: vi.fn() },
-    imageAddon: {},
+    imageAddon: { dispose: vi.fn() },
     searchAddon: {},
+    fileLinksDisposable: { dispose: vi.fn() },
   })),
+  createImageAddon: vi.fn(() => ({ dispose: vi.fn() })),
+  createFileLinksAddon: vi.fn(() => ({ dispose: vi.fn() })),
 }));
 
+type TierTestService = {
+  instances: Map<string, Record<string, unknown>>;
+  applyRendererPolicy: (id: string, tier: TerminalRefreshTier) => void;
+  prewarmTerminal: (
+    id: string,
+    type: string,
+    options: Record<string, unknown>,
+    params?: Record<string, unknown>
+  ) => Record<string, unknown>;
+  destroy: (id: string) => void;
+};
+
+function makeMockManaged(overrides: Record<string, unknown> = {}) {
+  return {
+    terminal: {
+      options: { scrollback: 5000 },
+      rows: 24,
+      cols: 80,
+      buffer: {
+        active: { length: 100, type: "normal", baseY: 0, viewportY: 0 },
+        onBufferChange: vi.fn(() => ({ dispose: vi.fn() })),
+      },
+      refresh: vi.fn(),
+      loadAddon: vi.fn(),
+      registerLinkProvider: vi.fn(() => ({ dispose: vi.fn() })),
+      hasSelection: vi.fn(() => false),
+      dispose: vi.fn(),
+      write: vi.fn(),
+    },
+    type: "terminal",
+    kind: "terminal",
+    fitAddon: { fit: vi.fn() },
+    serializeAddon: { serialize: vi.fn() },
+    imageAddon: { dispose: vi.fn() } as { dispose: ReturnType<typeof vi.fn> } | null,
+    searchAddon: {},
+    fileLinksDisposable: { dispose: vi.fn() } as { dispose: ReturnType<typeof vi.fn> } | null,
+    hostElement: document.createElement("div"),
+    isOpened: true,
+    isVisible: true,
+    isFocused: false,
+    isUserScrolledBack: false,
+    isAltBuffer: false,
+    lastActiveTime: Date.now(),
+    lastWidth: 0,
+    lastHeight: 0,
+    lastAppliedTier: TerminalRefreshTier.FOCUSED as TerminalRefreshTier | undefined,
+    pendingTier: undefined as TerminalRefreshTier | undefined,
+    tierChangeTimer: undefined as number | undefined,
+    getRefreshTier: () => TerminalRefreshTier.FOCUSED,
+    needsWake: false,
+    agentStateSubscribers: new Set(),
+    altBufferListeners: new Set(),
+    listeners: [],
+    exitSubscribers: new Set(),
+    latestCols: 80,
+    latestRows: 24,
+    latestWasAtBottom: true,
+    keyHandlerInstalled: false,
+    lastAttachAt: 0,
+    lastDetachAt: 0,
+    writeChain: Promise.resolve(),
+    restoreGeneration: 0,
+    isSerializedRestoreInProgress: false,
+    deferredOutput: [],
+    ...overrides,
+  };
+}
+
 describe("TerminalInstanceService - Activity Tier", () => {
-  beforeEach(() => {
+  let service: TierTestService;
+
+  beforeEach(async () => {
+    vi.useFakeTimers();
     vi.clearAllMocks();
+
+    ({ terminalInstanceService: service } =
+      (await import("../TerminalInstanceService")) as unknown as {
+        terminalInstanceService: TierTestService;
+      });
+    service.instances.clear();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   describe("Tier Mapping", () => {
     it("should map TerminalRefreshTier.BACKGROUND to backend background tier", () => {
-      // BACKGROUND tier (1000ms) should map to "background" in backend
       expect(TerminalRefreshTier.BACKGROUND).toBe(1000);
-
-      // When applyRendererPolicy is called with BACKGROUND tier,
-      // it should call setActivityTier with "background"
-      // This is tested indirectly through the applyWorktreeTerminalPolicy flow
     });
 
     it("should map active refresh tiers to backend active tier", () => {
-      // BURST, FOCUSED, VISIBLE should all map to "active" in backend
       expect(TerminalRefreshTier.BURST).toBe(16);
       expect(TerminalRefreshTier.FOCUSED).toBe(100);
       expect(TerminalRefreshTier.VISIBLE).toBe(200);
     });
   });
 
-  describe("Backend Communication", () => {
-    it("should call setActivityTier when tier changes", () => {
-      // Verify that setActivityTier is available on the mock
-      expect(mockTerminalClient.setActivityTier).toBeDefined();
+  describe("Addon Lifecycle on Tier Transitions", () => {
+    it("should dispose addons when transitioning to BACKGROUND", () => {
+      const managed = makeMockManaged({ lastAppliedTier: TerminalRefreshTier.FOCUSED });
+      const imageDispose = managed.imageAddon!.dispose;
+      const fileLinksDispose = managed.fileLinksDisposable!.dispose;
+      service.instances.set("t1", managed as unknown as Record<string, unknown>);
 
-      // When TerminalInstanceService calls setActivityTier,
-      // it should propagate to the backend via IPC
-      mockTerminalClient.setActivityTier("test-id", "background");
-      expect(mockTerminalClient.setActivityTier).toHaveBeenCalledWith("test-id", "background");
+      service.applyRendererPolicy("t1", TerminalRefreshTier.BACKGROUND);
+      // Downgrade has 500ms hysteresis
+      vi.advanceTimersByTime(600);
+
+      expect(imageDispose).toHaveBeenCalled();
+      expect(fileLinksDispose).toHaveBeenCalled();
+      expect(managed.imageAddon).toBeNull();
+      expect(managed.fileLinksDisposable).toBeNull();
     });
 
-    it("should call wake when terminal needs resync", () => {
-      // Verify wake is available
-      expect(mockTerminalClient.wake).toBeDefined();
+    it("should recreate addons when transitioning from BACKGROUND to VISIBLE", async () => {
+      const { createImageAddon, createFileLinksAddon } = await import("../TerminalAddonManager");
 
-      // When a backgrounded terminal becomes visible, wake should be called
-      mockTerminalClient.wake("test-id");
-      expect(mockTerminalClient.wake).toHaveBeenCalledWith("test-id");
+      const managed = makeMockManaged({
+        lastAppliedTier: TerminalRefreshTier.BACKGROUND,
+        imageAddon: null,
+        fileLinksDisposable: null,
+      });
+      service.instances.set("t1", managed as unknown as Record<string, unknown>);
+
+      // Upgrade from BACKGROUND to VISIBLE is immediate (no hysteresis)
+      service.applyRendererPolicy("t1", TerminalRefreshTier.VISIBLE);
+
+      expect(createImageAddon).toHaveBeenCalled();
+      expect(createFileLinksAddon).toHaveBeenCalled();
+      expect(managed.imageAddon).not.toBeNull();
+      expect(managed.fileLinksDisposable).not.toBeNull();
     });
-  });
 
-  describe("NeedsWake Flag", () => {
-    it("should track needsWake state for backgrounded terminals", () => {
-      // The needsWake flag is set when a terminal is backgrounded
-      // and cleared when wake completes or terminal becomes active
-      // This ensures wake is only called when necessary
+    it("should recreate addons when transitioning from BACKGROUND to FOCUSED", async () => {
+      const { createImageAddon, createFileLinksAddon } = await import("../TerminalAddonManager");
 
-      // This is an internal implementation detail of TerminalInstanceService
-      // The test documents the expected behavior:
-      // 1. Terminal backgrounded → needsWake = true
-      // 2. Terminal made visible → wake() called
-      // 3. Wake completes → needsWake = false
-      expect(true).toBe(true); // Placeholder for behavior documentation
+      const managed = makeMockManaged({
+        lastAppliedTier: TerminalRefreshTier.BACKGROUND,
+        imageAddon: null,
+        fileLinksDisposable: null,
+      });
+      service.instances.set("t1", managed as unknown as Record<string, unknown>);
+
+      service.applyRendererPolicy("t1", TerminalRefreshTier.FOCUSED);
+
+      expect(createImageAddon).toHaveBeenCalled();
+      expect(createFileLinksAddon).toHaveBeenCalled();
+    });
+
+    it("should not dispose already-null addons", () => {
+      const managed = makeMockManaged({
+        lastAppliedTier: TerminalRefreshTier.FOCUSED,
+        imageAddon: null,
+        fileLinksDisposable: null,
+      });
+      service.instances.set("t1", managed as unknown as Record<string, unknown>);
+
+      service.applyRendererPolicy("t1", TerminalRefreshTier.BACKGROUND);
+      vi.advanceTimersByTime(600);
+
+      // Should not throw — null addons are handled gracefully
+      expect(managed.imageAddon).toBeNull();
+      expect(managed.fileLinksDisposable).toBeNull();
+    });
+
+    it("should not recreate addons that already exist on upgrade", async () => {
+      const { createImageAddon, createFileLinksAddon } = await import("../TerminalAddonManager");
+      vi.mocked(createImageAddon).mockClear();
+      vi.mocked(createFileLinksAddon).mockClear();
+
+      const managed = makeMockManaged({
+        lastAppliedTier: TerminalRefreshTier.BACKGROUND,
+        // Addons already exist (shouldn't happen normally but tests guard condition)
+        imageAddon: { dispose: vi.fn() },
+        fileLinksDisposable: { dispose: vi.fn() },
+      });
+      service.instances.set("t1", managed as unknown as Record<string, unknown>);
+
+      service.applyRendererPolicy("t1", TerminalRefreshTier.VISIBLE);
+
+      expect(createImageAddon).not.toHaveBeenCalled();
+      expect(createFileLinksAddon).not.toHaveBeenCalled();
+    });
+
+    it("should null addons and set lastAppliedTier for terminals created at BACKGROUND tier", () => {
+      const managed = service.prewarmTerminal("t-bg", "terminal", {});
+      const m = managed as unknown as {
+        imageAddon: unknown;
+        fileLinksDisposable: unknown;
+        lastAppliedTier: TerminalRefreshTier;
+      };
+
+      expect(m.imageAddon).toBeNull();
+      expect(m.fileLinksDisposable).toBeNull();
+      expect(m.lastAppliedTier).toBe(TerminalRefreshTier.BACKGROUND);
+    });
+
+    it("should handle destroy on background-tier terminal with null addons", () => {
+      const managed = makeMockManaged({
+        lastAppliedTier: TerminalRefreshTier.BACKGROUND,
+        imageAddon: null,
+        fileLinksDisposable: null,
+      });
+      service.instances.set("t1", managed as unknown as Record<string, unknown>);
+
+      // Should not throw
+      expect(() => service.destroy("t1")).not.toThrow();
     });
   });
 
   describe("initializeBackendTier", () => {
     it("should be documented as part of the hydration flow", () => {
-      // The initializeBackendTier method on TerminalInstanceService delegates
-      // to TerminalRendererPolicy.initializeBackendTier, which:
-      // 1. Sets the lastBackendTier map to the provided tier value
-      // 2. If tier is "background", sets needsWake=true on the managed terminal
-      //
-      // This enables the following hydration behavior:
-      // - Backend terminals report their actual activityTier in terminal info
-      // - stateHydration.ts calls initializeBackendTier after reconnection
-      // - Frontend tier state matches backend, enabling proper wake behavior
-      //
       // Unit tests for the actual logic are in TerminalRendererPolicy.test.ts
       expect(true).toBe(true);
     });
