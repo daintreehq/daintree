@@ -282,6 +282,17 @@ export class ActionService {
 
 export const actionService = new ActionService();
 
+// Expose dispatch function for E2E tests (WebGL renderer has no DOM-level action API).
+// Registered unconditionally but gated at call time — the function is harmless
+// in production and avoids import-time env var timing issues.
+if (typeof window !== "undefined") {
+  (window as unknown as Record<string, unknown>).__canopyDispatchAction = (
+    actionId: string,
+    args?: unknown,
+    options?: { source?: string; confirmed?: boolean }
+  ) => actionService.dispatch(actionId as ActionId, args, options as ActionDispatchOptions);
+}
+
 export function getActionContext(): ActionContext {
   return actionService.getContext();
 }
