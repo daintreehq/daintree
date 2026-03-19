@@ -639,7 +639,7 @@ export function BulkCreateWorktreeDialog({
               <label className="block text-sm font-medium text-canopy-text">
                 Worktrees to create
               </label>
-              <div className="rounded-[var(--radius-md)] border border-canopy-border overflow-hidden divide-y divide-canopy-border">
+              <div className="max-h-[300px] overflow-y-auto rounded-[var(--radius-md)] border border-canopy-border divide-y divide-canopy-border">
                 {planned.map((item) => (
                   <div
                     key={item.issue.number}
