@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { Plus, Trash2, Globe, Check, X, Search, PanelRight, Link, Maximize2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
@@ -61,6 +61,8 @@ export function SidecarSettingsTab() {
   const [showCustomUrlInput, setShowCustomUrlInput] = useState(false);
   const [customDefaultUrl, setCustomDefaultUrl] = useState("");
   const [customUrlError, setCustomUrlError] = useState("");
+  const customUrlErrorId = useId();
+  const addLinkErrorId = useId();
 
   const clampWidth = (v: number) => Math.min(SIDECAR_MAX_WIDTH, Math.max(SIDECAR_MIN_WIDTH, v));
 
@@ -359,7 +361,8 @@ export function SidecarSettingsTab() {
                   if (e.key === "Enter") handleCustomUrlSave();
                   if (e.key === "Escape") handleCustomUrlCancel();
                 }}
-                aria-invalid={!!customUrlError}
+                aria-invalid={!!customUrlError || undefined}
+                aria-describedby={customUrlError ? customUrlErrorId : undefined}
                 autoFocus
               />
               <button
@@ -382,7 +385,7 @@ export function SidecarSettingsTab() {
           )}
 
           {customUrlError && (
-            <p role="alert" className="text-xs text-status-error">
+            <p id={customUrlErrorId} role="alert" className="text-xs text-status-error">
               {customUrlError}
             </p>
           )}
@@ -435,6 +438,8 @@ export function SidecarSettingsTab() {
               onKeyDown={(e) => {
                 if (e.key === "Enter") handleAddLink();
               }}
+              aria-invalid={!!urlError || undefined}
+              aria-describedby={urlError ? addLinkErrorId : undefined}
             />
             <button
               onClick={handleAddLink}
@@ -445,7 +450,11 @@ export function SidecarSettingsTab() {
               Add
             </button>
           </div>
-          {urlError && <p className="text-xs text-status-error">{urlError}</p>}
+          {urlError && (
+            <p id={addLinkErrorId} role="alert" className="text-xs text-status-error">
+              {urlError}
+            </p>
+          )}
         </div>
       </SettingsSection>
 

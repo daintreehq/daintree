@@ -15,11 +15,20 @@ function buildAxeScanner(page: import("@playwright/test").Page) {
     .setLegacyMode(true) // Required for Electron — default mode uses Target.createTarget which Electron doesn't support
     .withTags(["wcag2a", "wcag2aa"])
     .disableRules([
+      // aria-command-name: Radix UI renders div[role="button"] without accessible names
+      // on internal menu primitives. Third-party issue, not fixable without upstream changes.
       "aria-command-name",
+      // color-contrast: Dark theme color ratios are intentional design choices. xterm.js
+      // canvas content also triggers false positives. Fires across the entire app, so
+      // .exclude() on individual selectors is impractical.
       "color-contrast",
+      // aria-required-children: xterm.js terminal grid uses ARIA roles that don't satisfy
+      // required-children constraints. Third-party DOM structure, not fixable.
       "aria-required-children",
+      // nested-interactive: xterm.js nests interactive elements within its DOM tree.
+      // Third-party DOM structure, not fixable.
       "nested-interactive",
-    ]); // Third-party Radix UI div[role="button"], theme contrast ratios, terminal grid role children, and nested interactive controls are pre-existing issues
+    ]);
 }
 
 function formatViolations(violations: import("axe-core").Result[]): string {
@@ -103,6 +112,40 @@ test.describe.serial("Core: Accessibility", () => {
 
         await window.keyboard.press(`${mod}+w`);
         await expect.poll(() => getGridPanelCount(window), { timeout: T_MEDIUM }).toBe(before);
+      });
+
+      test("action palette passes WCAG 2.0 AA audit", async () => {
+        const { window } = ctx;
+
+        await window.keyboard.press(`${mod}+Shift+P`);
+        await window
+          .locator(SEL.actionPalette.dialog)
+          .waitFor({ state: "visible", timeout: T_MEDIUM });
+
+        const results = await buildAxeScanner(window).analyze();
+        expect(results.violations, formatViolations(results.violations)).toEqual([]);
+
+        await window.keyboard.press("Escape");
+        await expect(window.locator(SEL.actionPalette.dialog)).not.toBeVisible({
+          timeout: T_SHORT,
+        });
+      });
+
+      test("quick switcher passes WCAG 2.0 AA audit", async () => {
+        const { window } = ctx;
+
+        await window.keyboard.press(`${mod}+P`);
+        await window
+          .locator(SEL.quickSwitcher.dialog)
+          .waitFor({ state: "visible", timeout: T_MEDIUM });
+
+        const results = await buildAxeScanner(window).analyze();
+        expect(results.violations, formatViolations(results.violations)).toEqual([]);
+
+        await window.keyboard.press("Escape");
+        await expect(window.locator(SEL.quickSwitcher.dialog)).not.toBeVisible({
+          timeout: T_SHORT,
+        });
       });
     });
   });

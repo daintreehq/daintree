@@ -1711,6 +1711,86 @@ body[data-performance-mode="true"] [class*="backdrop-blur"] {
   backdrop-filter: none !important;
 }
 
+/* Windows High Contrast / forced-colors support
+   In forced-colors mode the UA overrides color, background-color, border-color,
+   outline-color and removes box-shadow entirely. We ensure critical UI boundaries
+   remain visible by using CSS system color keywords. */
+@media (forced-colors: active) {
+  *:focus-visible {
+    outline: 2px solid Highlight;
+    outline-offset: 2px;
+  }
+
+  .xterm {
+    forced-color-adjust: none;
+  }
+
+  .terminal-selected {
+    outline: 2px solid Highlight;
+    outline-offset: -2px;
+    border-color: Highlight;
+  }
+
+  .terminal-focused {
+    outline: 2px solid Highlight;
+    outline-offset: -2px;
+    border-color: Highlight;
+  }
+
+  .panel-state-waiting {
+    border-color: Highlight;
+    outline: 2px solid Highlight;
+    outline-offset: -2px;
+  }
+
+  .panel-state-failed {
+    border-color: LinkText;
+    outline: 2px solid LinkText;
+    outline-offset: -2px;
+  }
+
+  .panel-state-working {
+    border-color: Highlight;
+    animation: none;
+  }
+
+  .terminal-pane {
+    border-color: ButtonText;
+  }
+
+  button,
+  [role="button"],
+  [type="button"],
+  [type="submit"],
+  [type="reset"] {
+    border: 1px solid ButtonText;
+  }
+
+  input,
+  select,
+  textarea {
+    border: 1px solid FieldText;
+  }
+}
+
+/* Increased contrast mode — heavier borders for visibility */
+@media (prefers-contrast: more) {
+  .terminal-selected,
+  .terminal-focused {
+    border-width: 2px;
+  }
+
+  .panel-state-waiting,
+  .panel-state-failed,
+  .panel-state-working {
+    border-width: 2px;
+  }
+
+  *:focus-visible {
+    outline-width: 3px;
+  }
+}
+
 @layer utilities {
   .surface-overlay {
     background-color: var(--color-surface-sidebar);

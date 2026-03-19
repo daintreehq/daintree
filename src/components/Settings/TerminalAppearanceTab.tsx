@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useState } from "react";
 import { Palette, Type, CaseSensitive, Eye } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useTerminalFontStore } from "@/store";
@@ -49,6 +49,7 @@ export function TerminalAppearanceTab({
   const fontSize = useTerminalFontStore((state) => state.fontSize);
   const fontFamily = useTerminalFontStore((state) => state.fontFamily);
 
+  const fontSizeErrorId = useId();
   const [fontSizeInput, setFontSizeInput] = useState<string>(String(fontSize));
   const [fontSizeError, setFontSizeError] = useState<string | null>(null);
 
@@ -180,13 +181,19 @@ export function TerminalAppearanceTab({
                   onBlur={handleFontSizeBlur}
                   className="bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-canopy-text w-24 focus:border-canopy-accent focus:outline-none transition-colors"
                   aria-label="Terminal font size"
+                  aria-invalid={fontSizeError != null || undefined}
+                  aria-describedby={fontSizeError ? fontSizeErrorId : undefined}
                 />
                 <span className="text-sm text-canopy-text/50">px</span>
                 <span className="text-xs text-canopy-text/40 ml-auto">
                   Current: <span className="font-mono">{fontSize}px</span>
                 </span>
               </div>
-              {fontSizeError && <p className="text-xs text-status-error">{fontSizeError}</p>}
+              {fontSizeError && (
+                <p id={fontSizeErrorId} role="alert" className="text-xs text-status-error">
+                  {fontSizeError}
+                </p>
+              )}
             </SettingsSection>
 
             <SettingsSection
