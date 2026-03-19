@@ -20,6 +20,9 @@ const {
   getMock,
   panelKindUsesTerminalUiMock,
   isTerminalWarmInProjectSwitchCacheMock,
+  forceReinitializeWorktreeDataStoreMock,
+  setWorktreeLoadErrorMock,
+  worktreeDataStoreState,
   terminalState,
   worktreeSelectionState,
   storeMocks,
@@ -33,6 +36,12 @@ const {
   getMock: vi.fn(),
   panelKindUsesTerminalUiMock: vi.fn(),
   isTerminalWarmInProjectSwitchCacheMock: vi.fn(),
+  forceReinitializeWorktreeDataStoreMock: vi.fn(),
+  setWorktreeLoadErrorMock: vi.fn(),
+  worktreeDataStoreState: {
+    projectId: null as string | null,
+    isInitialized: false,
+  },
   terminalState: {
     terminals: [] as Array<{
       id: string;
@@ -124,6 +133,12 @@ vi.mock("@/services/projectSwitchRendererCache", () => ({
   isTerminalWarmInProjectSwitchCache: isTerminalWarmInProjectSwitchCacheMock,
 }));
 
+vi.mock("@/store/worktreeDataStore", () => ({
+  forceReinitializeWorktreeDataStore: forceReinitializeWorktreeDataStoreMock,
+  setWorktreeLoadError: setWorktreeLoadErrorMock,
+  useWorktreeDataStore: { getState: () => worktreeDataStoreState },
+}));
+
 import { useProjectSwitchRehydration } from "../useProjectSwitchRehydration";
 
 describe("useProjectSwitchRehydration", () => {
@@ -146,6 +161,8 @@ describe("useProjectSwitchRehydration", () => {
     terminalState.terminals = [];
     terminalState.activeDockTerminalId = null;
     worktreeSelectionState.activeWorktreeId = null;
+    worktreeDataStoreState.projectId = null;
+    worktreeDataStoreState.isInitialized = false;
   });
 
   it("ignores stale earlier hydration completions after a newer switch wins", async () => {
@@ -304,5 +321,64 @@ describe("useProjectSwitchRehydration", () => {
     expect(hydrateAppStateMock).not.toHaveBeenCalled();
     expect(finalizeProjectSwitchRendererCacheMock).not.toHaveBeenCalled();
     expect(finishProjectSwitchMock).not.toHaveBeenCalled();
+  });
+
+  it("calls forceReinitializeWorktreeDataStore when store projectId does not match", async () => {
+    hydrateAppStateMock.mockResolvedValue(undefined);
+    worktreeDataStoreState.projectId = "project-old";
+    worktreeDataStoreState.isInitialized = true;
+
+    renderHook(() => useProjectSwitchRehydration());
+
+    onSwitchHandler?.({
+      switchId: "switch-reinit",
+      project: { id: "project-new", name: "Project New" },
+    });
+
+    await vi.waitFor(() => {
+      expect(finishProjectSwitchMock).toHaveBeenCalledTimes(1);
+    });
+
+    expect(forceReinitializeWorktreeDataStoreMock).toHaveBeenCalledWith("project-new");
+    expect(setWorktreeLoadErrorMock).not.toHaveBeenCalled();
+  });
+
+  it("skips reinit when store already initialized for the target project", async () => {
+    hydrateAppStateMock.mockResolvedValue(undefined);
+    worktreeDataStoreState.projectId = "project-same";
+    worktreeDataStoreState.isInitialized = true;
+
+    renderHook(() => useProjectSwitchRehydration());
+
+    onSwitchHandler?.({
+      switchId: "switch-same",
+      project: { id: "project-same", name: "Project Same" },
+    });
+
+    await vi.waitFor(() => {
+      expect(finishProjectSwitchMock).toHaveBeenCalledTimes(1);
+    });
+
+    expect(forceReinitializeWorktreeDataStoreMock).not.toHaveBeenCalled();
+    expect(setWorktreeLoadErrorMock).not.toHaveBeenCalled();
+  });
+
+  it("calls setWorktreeLoadError when worktreeLoadError is present in switch payload", async () => {
+    hydrateAppStateMock.mockResolvedValue(undefined);
+
+    renderHook(() => useProjectSwitchRehydration());
+
+    onSwitchHandler?.({
+      switchId: "switch-error",
+      project: { id: "project-nogit", name: "Non-Git Dir" },
+      worktreeLoadError: "Not a git repository",
+    } as never);
+
+    await vi.waitFor(() => {
+      expect(finishProjectSwitchMock).toHaveBeenCalledTimes(1);
+    });
+
+    expect(setWorktreeLoadErrorMock).toHaveBeenCalledWith("project-nogit", "Not a git repository");
+    expect(forceReinitializeWorktreeDataStoreMock).not.toHaveBeenCalled();
   });
 });
