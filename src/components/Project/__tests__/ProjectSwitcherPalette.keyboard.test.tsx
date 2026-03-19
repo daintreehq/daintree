@@ -227,10 +227,13 @@ describe("ProjectSwitcherPalette keyboard navigation", () => {
     expect(document.activeElement).toBe(focusable[focusable.length - 1]);
   });
 
-  it("displays Tab hint in footer", () => {
+  it("displays condensed footer with keyboard shortcut help", () => {
     render(<ProjectSwitcherPalette {...defaultProps} />);
     const footer = screen.getByTestId("palette-footer");
+    expect(footer.textContent).toContain("Switch");
+    expect(screen.getByLabelText("Keyboard shortcuts")).toBeTruthy();
     expect(footer.textContent).toContain("Tab");
-    expect(footer.textContent).toContain("to buttons");
+    expect(footer.textContent).toContain("to navigate");
+    expect(footer.textContent).toContain("to close");
   });
 });

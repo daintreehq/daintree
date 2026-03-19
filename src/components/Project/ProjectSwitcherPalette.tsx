@@ -7,6 +7,7 @@ import {
   ChevronRight,
   ChevronUp,
   Circle,
+  CircleHelp,
   FolderOpen,
   FolderPlus,
   Layers,
@@ -166,13 +167,6 @@ function ProjectListItem({
           )}
 
           <div className="ml-auto flex items-center gap-1.5 shrink-0">
-            {!project.isMissing && (
-              <ProjectActionRow
-                activeAgentCount={project.activeAgentCount}
-                waitingAgentCount={project.waitingAgentCount}
-              />
-            )}
-
             {onTogglePinProject && (
               <div
                 className={cn(
@@ -336,6 +330,13 @@ function ProjectListItem({
                   )}
                 </div>
               )
+            )}
+
+            {!project.isMissing && (
+              <ProjectActionRow
+                activeAgentCount={project.activeAgentCount}
+                waitingAgentCount={project.waitingAgentCount}
+              />
             )}
           </div>
         </div>
@@ -838,43 +839,61 @@ function ProjectListContent({
   );
 }
 
-const PROJECT_FOOTER = (
-  <>
-    <span>
-      <kbd className="px-1.5 py-0.5 rounded-[var(--radius-sm)] bg-canopy-border text-canopy-text/60">
-        ↑
-      </kbd>
-      <kbd className="px-1.5 py-0.5 rounded-[var(--radius-sm)] bg-canopy-border text-canopy-text/60 ml-1">
-        ↓
-      </kbd>
-      <span className="ml-1.5">to navigate</span>
-    </span>
-    <span>
-      <kbd className="px-1.5 py-0.5 rounded-[var(--radius-sm)] bg-canopy-border text-canopy-text/60">
-        Tab
-      </kbd>
-      <span className="ml-1.5">to buttons</span>
-    </span>
-    <span>
-      <kbd className="px-1.5 py-0.5 rounded-[var(--radius-sm)] bg-canopy-border text-canopy-text/60">
-        Enter
-      </kbd>
-      <span className="ml-1.5">to switch</span>
-    </span>
-    <span>
-      <kbd className="px-1.5 py-0.5 rounded-[var(--radius-sm)] bg-canopy-border text-canopy-text/60">
-        ⌘⌫
-      </kbd>
-      <span className="ml-1.5">to remove</span>
-    </span>
-    <span>
-      <kbd className="px-1.5 py-0.5 rounded-[var(--radius-sm)] bg-canopy-border text-canopy-text/60">
-        Esc
-      </kbd>
-      <span className="ml-1.5">to close</span>
-    </span>
-  </>
-);
+const KBD_CLASS = "px-1.5 py-0.5 rounded-[var(--radius-sm)] bg-canopy-border text-canopy-text/60";
+
+function ProjectSwitcherFooter() {
+  const [helpOpen, setHelpOpen] = useState(false);
+
+  return (
+    <div className="w-full flex items-center justify-between">
+      <span>
+        <kbd className={KBD_CLASS}>↵</kbd>
+        <span className="ml-1.5">Switch</span>
+      </span>
+      <Popover open={helpOpen} onOpenChange={setHelpOpen}>
+        <PopoverTrigger asChild>
+          <button
+            type="button"
+            className="p-0.5 rounded transition-colors text-canopy-text/40 hover:text-canopy-text/60 cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent"
+            aria-label="Keyboard shortcuts"
+          >
+            <CircleHelp className="w-3.5 h-3.5" />
+          </button>
+        </PopoverTrigger>
+        <PopoverContent
+          side="top"
+          align="end"
+          className="w-auto p-3"
+          onOpenAutoFocus={(e) => e.preventDefault()}
+        >
+          <div className="flex flex-col gap-1.5 text-xs text-canopy-text/60">
+            <span>
+              <kbd className={KBD_CLASS}>↑</kbd>
+              <kbd className={cn(KBD_CLASS, "ml-1")}>↓</kbd>
+              <span className="ml-1.5">to navigate</span>
+            </span>
+            <span>
+              <kbd className={KBD_CLASS}>Tab</kbd>
+              <span className="ml-1.5">to buttons</span>
+            </span>
+            <span>
+              <kbd className={KBD_CLASS}>↵</kbd>
+              <span className="ml-1.5">to switch</span>
+            </span>
+            <span>
+              <kbd className={KBD_CLASS}>⌘⌫</kbd>
+              <span className="ml-1.5">to remove</span>
+            </span>
+            <span>
+              <kbd className={KBD_CLASS}>Esc</kbd>
+              <span className="ml-1.5">to close</span>
+            </span>
+          </div>
+        </PopoverContent>
+      </Popover>
+    </div>
+  );
+}
 
 const PALETTE_WIDTH = "w-[484px] max-w-[calc(100vw-2rem)]";
 const PALETTE_MAX_HEIGHT = "max-h-[60vh]";
@@ -1085,7 +1104,9 @@ function ProjectPaletteInner({
         </>
       )}
 
-      <AppPaletteDialog.Footer>{PROJECT_FOOTER}</AppPaletteDialog.Footer>
+      <AppPaletteDialog.Footer>
+        <ProjectSwitcherFooter />
+      </AppPaletteDialog.Footer>
     </>
   );
 }
