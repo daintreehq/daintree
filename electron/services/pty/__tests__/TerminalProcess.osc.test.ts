@@ -1,18 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { IPty } from "node-pty";
 import { TerminalProcess } from "../TerminalProcess.js";
+import type { SpawnContext } from "../terminalSpawn.js";
 import type { TerminalType } from "../../../../shared/types/panel.js";
 
-type SpawnFn = (file: string, args: string[], options: any) => IPty;
-
-let spawnMock: ReturnType<typeof vi.fn<SpawnFn>>;
 let ptyWriteMock: ReturnType<typeof vi.fn<(data: string) => void>>;
 let ptyOnDataCallback: ((data: string) => void) | null = null;
 
 vi.mock("node-pty", () => {
-  return {
-    spawn: (...args: Parameters<SpawnFn>) => spawnMock(...args),
-  };
+  return { spawn: vi.fn() };
 });
 
 function createMockPty(): IPty {
@@ -36,12 +32,24 @@ function createMockPty(): IPty {
   return pty as IPty;
 }
 
+function defaultSpawnContext(overrides?: Partial<SpawnContext>): SpawnContext {
+  return {
+    shell: "/bin/zsh",
+    args: ["-l"],
+    isAgentTerminal: false,
+    agentId: undefined,
+    env: {},
+    ...overrides,
+  };
+}
+
 type TerminalProcessOptions = ConstructorParameters<typeof TerminalProcess>[1];
 
 function createAgentTerminal(
   agentId: TerminalType,
   options?: Partial<TerminalProcessOptions>
 ): TerminalProcess {
+  const ctx = defaultSpawnContext({ isAgentTerminal: true, agentId });
   return new TerminalProcess(
     "t1",
     {
@@ -60,11 +68,14 @@ function createAgentTerminal(
       } as any,
       ptyPool: null,
       processTreeCache: null,
-    }
+    },
+    ctx,
+    createMockPty()
   );
 }
 
 function createPlainTerminal(): TerminalProcess {
+  const ctx = defaultSpawnContext();
   return new TerminalProcess(
     "t1",
     {
@@ -81,7 +92,9 @@ function createPlainTerminal(): TerminalProcess {
       } as any,
       ptyPool: null,
       processTreeCache: null,
-    }
+    },
+    ctx,
+    createMockPty()
   );
 }
 
@@ -89,7 +102,6 @@ describe("TerminalProcess OSC color query responder", () => {
   beforeEach(() => {
     ptyWriteMock = vi.fn<(data: string) => void>();
     ptyOnDataCallback = null;
-    spawnMock = vi.fn<SpawnFn>(() => createMockPty());
   });
 
   it("responds to OSC 11 (background color query) for agent terminals", () => {
