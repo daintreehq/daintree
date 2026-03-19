@@ -18,6 +18,55 @@ function reset() {
   });
 }
 
+describe("voiceRecordingStore — clearPanelBuffer", () => {
+  beforeEach(reset);
+
+  it("removes the buffer entry for the given panelId", () => {
+    useVoiceRecordingStore.getState().beginSession(TARGET);
+    useVoiceRecordingStore.getState().appendDelta("test");
+    expect(useVoiceRecordingStore.getState().panelBuffers[PANEL_ID]).toBeDefined();
+
+    useVoiceRecordingStore.getState().clearPanelBuffer(PANEL_ID);
+
+    expect(useVoiceRecordingStore.getState().panelBuffers[PANEL_ID]).toBeUndefined();
+  });
+
+  it("is a no-op for panelIds that have no buffer", () => {
+    const before = useVoiceRecordingStore.getState().panelBuffers;
+    useVoiceRecordingStore.getState().clearPanelBuffer("nonexistent");
+    expect(useVoiceRecordingStore.getState().panelBuffers).toBe(before);
+  });
+});
+
+describe("voiceRecordingStore — project switch reset", () => {
+  beforeEach(reset);
+
+  it("clears panelBuffers and session state while preserving config", () => {
+    useVoiceRecordingStore.setState({
+      isConfigured: true,
+      correctionEnabled: true,
+    });
+    useVoiceRecordingStore.getState().beginSession(TARGET);
+    useVoiceRecordingStore.getState().appendDelta("dictated text");
+
+    useVoiceRecordingStore.setState({
+      panelBuffers: {},
+      activeTarget: null,
+      status: "idle",
+      errorMessage: null,
+      elapsedSeconds: 0,
+      audioLevel: 0,
+    });
+
+    const state = useVoiceRecordingStore.getState();
+    expect(state.panelBuffers).toEqual({});
+    expect(state.activeTarget).toBeNull();
+    expect(state.status).toBe("idle");
+    expect(state.isConfigured).toBe(true);
+    expect(state.correctionEnabled).toBe(true);
+  });
+});
+
 describe("voiceRecordingStore — transcript phase transitions", () => {
   beforeEach(reset);
 

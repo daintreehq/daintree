@@ -6,6 +6,7 @@ import {
 } from "./worktreeStore";
 import { useTerminalInputStore } from "./terminalInputStore";
 import { useConsoleCaptureStore } from "./consoleCaptureStore";
+import { useVoiceRecordingStore } from "./voiceRecordingStore";
 import { useLayoutUndoStore } from "./layoutUndoStore";
 
 let cleanupFn: (() => void) | null = null;
@@ -77,6 +78,7 @@ export function initStoreOrchestrator(): () => void {
     for (const removed of removedTerminals) {
       useTerminalInputStore.getState().clearTerminalState(removed.id);
       useConsoleCaptureStore.getState().removePane(removed.id);
+      useVoiceRecordingStore.getState().clearPanelBuffer(removed.id);
 
       if (removed.worktreeId) {
         const worktreeState = useWorktreeSelectionStore.getState();

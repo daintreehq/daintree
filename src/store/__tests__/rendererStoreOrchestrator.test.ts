@@ -47,6 +47,7 @@ const { useTerminalStore } = await import("../terminalStore");
 const { useWorktreeSelectionStore } = await import("../worktreeStore");
 const { useTerminalInputStore } = await import("../terminalInputStore");
 const { useConsoleCaptureStore } = await import("../consoleCaptureStore");
+const { useVoiceRecordingStore } = await import("../voiceRecordingStore");
 const { initStoreOrchestrator, destroyStoreOrchestrator } =
   await import("../rendererStoreOrchestrator");
 
@@ -67,6 +68,7 @@ describe("rendererStoreOrchestrator", () => {
     });
     useWorktreeSelectionStore.getState().reset();
     useConsoleCaptureStore.setState({ messages: new Map() });
+    useVoiceRecordingStore.setState({ panelBuffers: {} });
   });
 
   afterEach(() => {
@@ -481,6 +483,54 @@ describe("rendererStoreOrchestrator", () => {
     useTerminalStore.setState({ focusedId: "grid-1" });
 
     expect(restoreSpy).not.toHaveBeenCalled();
+  });
+
+  it("cleans up voice recording store buffer when terminal is removed", () => {
+    const panelId = "term-voice-1";
+
+    useTerminalStore.setState({
+      terminals: [
+        {
+          id: panelId,
+          type: "terminal",
+          title: "T1",
+          cwd: "/test",
+          cols: 80,
+          rows: 24,
+          location: "grid",
+        },
+      ],
+    });
+
+    useVoiceRecordingStore.getState().beginSession({ panelId });
+    useVoiceRecordingStore.getState().appendDelta("test transcript");
+    expect(useVoiceRecordingStore.getState().panelBuffers[panelId]).toBeDefined();
+
+    useTerminalStore.getState().removeTerminal(panelId);
+
+    expect(useVoiceRecordingStore.getState().panelBuffers[panelId]).toBeUndefined();
+  });
+
+  it("does not error when removing terminal without voice buffer", () => {
+    useTerminalStore.setState({
+      terminals: [
+        {
+          id: "term-no-voice",
+          type: "terminal",
+          title: "T1",
+          cwd: "/test",
+          cols: 80,
+          rows: 24,
+          location: "grid",
+        },
+      ],
+    });
+
+    expect(useVoiceRecordingStore.getState().panelBuffers["term-no-voice"]).toBeUndefined();
+
+    useTerminalStore.getState().removeTerminal("term-no-voice");
+
+    expect(useVoiceRecordingStore.getState().panelBuffers).toEqual({});
   });
 
   it("cleanup function prevents further reactions", () => {
