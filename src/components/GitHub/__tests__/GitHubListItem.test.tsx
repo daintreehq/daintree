@@ -14,7 +14,7 @@ vi.mock("react-dom", async () => {
 });
 
 vi.mock("@/store/worktreeDataStore", () => ({
-  useWorktreeDataStore: vi.fn((selector: (s: { worktrees: Map<string, any> }) => unknown) =>
+  useWorktreeDataStore: vi.fn((selector: (s: { worktrees: Map<string, unknown> }) => unknown) =>
     selector({ worktrees: new Map() })
   ),
 }));
