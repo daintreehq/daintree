@@ -615,8 +615,10 @@ describe("rendererStoreOrchestrator", () => {
 
     useTerminalStore.setState({ terminals: [] });
 
+    expect(unregisterInputController).toHaveBeenCalledTimes(2);
     expect(unregisterInputController).toHaveBeenCalledWith("t-a");
     expect(unregisterInputController).toHaveBeenCalledWith("t-b");
+    expect(semanticAnalysisService.unregisterTerminal).toHaveBeenCalledTimes(2);
     expect(semanticAnalysisService.unregisterTerminal).toHaveBeenCalledWith("t-a");
     expect(semanticAnalysisService.unregisterTerminal).toHaveBeenCalledWith("t-b");
   });
