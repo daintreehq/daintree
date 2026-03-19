@@ -173,7 +173,7 @@ export function Sidebar({ width, onResize, children, className }: SidebarProps) 
           aria-valuemax={600}
           tabIndex={0}
           className={cn(
-            "group absolute top-0 -right-0.5 w-1.5 h-full cursor-col-resize flex items-center justify-center z-50",
+            "group absolute top-0 -right-1.5 w-3 h-full cursor-col-resize flex items-center justify-center z-50",
             "hover:bg-overlay-soft transition-colors focus-visible:outline-none focus-visible:bg-overlay-medium focus-visible:ring-1 focus-visible:ring-canopy-accent/50",
             isResizing && "bg-canopy-accent/20"
           )}
@@ -183,7 +183,7 @@ export function Sidebar({ width, onResize, children, className }: SidebarProps) 
         >
           <div
             className={cn(
-              "w-px h-8 rounded-full transition-colors",
+              "w-px h-8 rounded-full transition-all duration-150 delay-100 group-hover:w-0.5",
               "bg-canopy-text/20",
               "group-hover:bg-canopy-text/35 group-focus-visible:bg-canopy-accent",
               isResizing && "bg-canopy-accent"

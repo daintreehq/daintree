@@ -12,7 +12,7 @@ interface TwoPaneSplitDividerProps {
   maxRatio?: number;
 }
 
-const DIVIDER_WIDTH_PX = 6;
+const DIVIDER_WIDTH_PX = 12;
 const KEYBOARD_STEP = 0.02;
 
 export function TwoPaneSplitDivider({
@@ -188,7 +188,7 @@ export function TwoPaneSplitDivider({
     >
       <div
         className={cn(
-          "w-px h-16 rounded-full transition-colors",
+          "w-px h-16 rounded-full transition-all duration-150 delay-100 group-hover:w-0.5",
           "bg-canopy-text/20",
           "group-hover:bg-canopy-text/35 group-focus-visible:bg-canopy-accent",
           isDragging && "bg-canopy-accent"
