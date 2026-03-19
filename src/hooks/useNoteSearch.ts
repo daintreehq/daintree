@@ -3,6 +3,20 @@ import { notesClient, type NoteListItem } from "@/clients/notesClient";
 
 export type SortOrder = "modified-desc" | "created-desc" | "created-asc" | "title-asc";
 
+interface SearchCacheEntry {
+  notes: NoteListItem[];
+  timestamp: number;
+}
+
+const searchCache = new Map<string, SearchCacheEntry>();
+const MAX_CACHE_ENTRIES = 20;
+
+export function resetNoteSearchCache(): void {
+  searchCache.clear();
+}
+
+export const resetNoteSearchCacheForTests = resetNoteSearchCache;
+
 export const SORT_LABELS: Record<SortOrder, string> = {
   "modified-desc": "Modified (newest)",
   "created-desc": "Created (newest)",
@@ -35,13 +49,16 @@ export function useNoteSearch({
   refresh,
 }: UseNoteSearchOptions): UseNoteSearchReturn {
   const [query, setQuery] = useState("");
-  const [searchResults, setSearchResults] = useState<NoteListItem[]>([]);
-  const [isSearching, setIsSearching] = useState(false);
+  const [searchResults, setSearchResults] = useState<NoteListItem[]>(
+    () => searchCache.get("")?.notes ?? []
+  );
+  const [isSearching, setIsSearching] = useState(() => !searchCache.has(""));
   const [sortOrder, setSortOrder] = useState<SortOrder>(
     () => (sessionStorage.getItem("notes-sort-order") as SortOrder) || "modified-desc"
   );
   const [selectedTag, setSelectedTag] = useState<string | null>(null);
   const searchTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const searchSeqRef = useRef(0);
 
   const availableTags = useMemo(
     () => [...new Set(searchResults.flatMap((n) => n.tags ?? []))].sort(),
@@ -82,6 +99,7 @@ export function useNoteSearch({
   useEffect(() => {
     if (!isOpen) return;
     const unsubscribe = notesClient.onUpdated(() => {
+      searchCache.clear();
       refresh();
     });
     return unsubscribe;
@@ -95,16 +113,42 @@ export function useNoteSearch({
       clearTimeout(searchTimeoutRef.current);
     }
 
-    searchTimeoutRef.current = setTimeout(async () => {
+    const cached = searchCache.get(query);
+
+    // Show cached results immediately without loading flash
+    if (cached) {
+      setSearchResults(cached.notes);
+      setIsSearching(false);
+    } else {
       setIsSearching(true);
+    }
+
+    // Always revalidate in the background
+    const seq = ++searchSeqRef.current;
+    searchTimeoutRef.current = setTimeout(async () => {
       try {
         const result = await notesClient.search(query);
+        if (searchSeqRef.current !== seq) return;
+        // Enforce cache size cap
+        if (searchCache.size >= MAX_CACHE_ENTRIES) {
+          let oldestKey: string | undefined;
+          let oldestTime = Infinity;
+          for (const [key, entry] of searchCache) {
+            if (entry.timestamp < oldestTime) {
+              oldestTime = entry.timestamp;
+              oldestKey = key;
+            }
+          }
+          if (oldestKey !== undefined) searchCache.delete(oldestKey);
+        }
+        searchCache.set(query, { notes: result.notes, timestamp: Date.now() });
         setSearchResults(result.notes);
       } catch (e) {
+        if (searchSeqRef.current !== seq) return;
         console.error("Search failed:", e);
-        setSearchResults(notes);
+        if (!cached) setSearchResults(notes);
       } finally {
-        setIsSearching(false);
+        if (searchSeqRef.current === seq) setIsSearching(false);
       }
     }, 150);
 
@@ -127,4 +171,8 @@ export function useNoteSearch({
     selectedTag,
     setSelectedTag: useCallback((tag: string | null) => setSelectedTag(tag), []),
   };
+}
+
+if (import.meta.hot) {
+  import.meta.hot.dispose(() => searchCache.clear());
 }

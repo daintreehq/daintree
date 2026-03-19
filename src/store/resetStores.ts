@@ -8,6 +8,7 @@ import { useDiagnosticsStore } from "./diagnosticsStore";
 import { useErrorStore } from "./errorStore";
 import { useNotificationStore } from "./notificationStore";
 import { cleanupNotesStore } from "./notesStore";
+import { resetNoteSearchCache } from "@/hooks/useNoteSearch";
 import { useRecipeStore } from "./recipeStore";
 import { resetGitHubFilterStore } from "./githubFilterStore";
 import { useWorkflowStore } from "./workflowStore";
@@ -40,6 +41,7 @@ export async function resetAllStoresForProjectSwitch(
   useErrorStore.getState().reset();
   useNotificationStore.getState().reset();
   cleanupNotesStore();
+  resetNoteSearchCache();
   resetGitHubFilterStore();
   useWorkflowStore.getState().reset();
   useLayoutUndoStore.getState().clearHistory();
