@@ -115,7 +115,9 @@ test.describe.serial("Core: Race Conditions from Concurrent IPC", () => {
     await window.evaluate(async (id: string) => {
       try {
         await (window as any).electron.terminal.kill(id);
-      } catch {}
+      } catch {
+        // terminal may already be dead
+      }
     }, terminalId);
   });
 
@@ -164,7 +166,9 @@ test.describe.serial("Core: Race Conditions from Concurrent IPC", () => {
       await window.evaluate(async (id: string) => {
         try {
           await (window as any).electron.terminal.kill(id);
-        } catch {}
+        } catch {
+          // terminal may already be dead
+        }
       }, terminalId);
     }
   });
@@ -231,7 +235,9 @@ test.describe.serial("Core: Race Conditions from Concurrent IPC", () => {
     await window.evaluate(async (id: string) => {
       try {
         await (window as any).electron.terminal.kill(id);
-      } catch {}
+      } catch {
+        // terminal may already be dead
+      }
     }, terminalId);
   });
 
