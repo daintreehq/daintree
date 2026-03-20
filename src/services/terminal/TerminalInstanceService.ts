@@ -1427,4 +1427,13 @@ if (typeof window !== "undefined") {
     }
     return lines.join("\n");
   };
+
+  (window as unknown as Record<string, unknown>).__canopySelectTerminalAll = (
+    panelId: string
+  ): boolean => {
+    const managed = terminalInstanceService["instances"].get(panelId);
+    if (!managed) return false;
+    managed.terminal.selectAll();
+    return true;
+  };
 }
