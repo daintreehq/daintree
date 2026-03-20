@@ -14,16 +14,17 @@ import { Button } from "@/components/ui/button";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
-import { actionService } from "@/services/ActionService";
+import { worktreeClient, githubClient } from "@/clients";
 import { detectPrefixFromIssue, buildBranchName } from "@/components/Worktree/branchPrefixUtils";
 import { generateBranchSlug } from "@/utils/textParsing";
 import { notify } from "@/lib/notify";
 import { usePreferencesStore } from "@/store/preferencesStore";
 import { useGitHubConfigStore } from "@/store/githubConfigStore";
-import { useRecipeStore } from "@/store/recipeStore";
+import { useRecipeStore, type RecipeSpawnResults } from "@/store/recipeStore";
 import { useProjectStore } from "@/store/projectStore";
 import { useWorktreeDataStore } from "@/store/worktreeDataStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
+import { useTerminalStore } from "@/store/terminalStore";
 import { useRecipePicker } from "@/components/Worktree/hooks/useRecipePicker";
 import { useNewWorktreeProjectSettings } from "@/components/Worktree/hooks/useNewWorktreeProjectSettings";
 import type { GitHubIssue } from "@shared/types/github";
@@ -35,11 +36,29 @@ interface BulkCreateWorktreeDialogProps {
   onComplete: () => void;
 }
 
-type ItemStatus =
-  | { status: "pending" }
-  | { status: "in-progress"; attempt: number }
-  | { status: "succeeded" }
-  | { status: "failed"; error: string; attempts: number };
+type ItemStage =
+  | "pending"
+  | "worktree-creating"
+  | "worktree-created"
+  | "terminals-spawning"
+  | "terminals-error"
+  | "worktree-error"
+  | "assigning"
+  | "verifying"
+  | "succeeded"
+  | "failed";
+
+interface ItemStatus {
+  stage: ItemStage;
+  attempt: number;
+  error?: string;
+  worktreeId?: string;
+  worktreePath?: string;
+  resolvedBranch?: string;
+  failedTerminalIndices?: number[];
+  spawnedTerminalIds?: string[];
+  failedStep?: "worktree" | "terminals" | "verification";
+}
 
 interface ProgressState {
   phase: "idle" | "executing" | "done";
@@ -49,9 +68,31 @@ interface ProgressState {
 
 type ProgressAction =
   | { type: "START"; issueNumbers: number[] }
-  | { type: "ITEM_IN_PROGRESS"; issueNumber: number; attempt: number }
+  | { type: "ITEM_WORKTREE_CREATING"; issueNumber: number; attempt: number }
+  | {
+      type: "ITEM_WORKTREE_CREATED";
+      issueNumber: number;
+      worktreeId: string;
+      worktreePath: string;
+      branch: string;
+    }
+  | { type: "ITEM_TERMINALS_SPAWNING"; issueNumber: number }
+  | {
+      type: "ITEM_TERMINALS_RESULT";
+      issueNumber: number;
+      spawnedTerminalIds: string[];
+      failedTerminalIndices: number[];
+    }
+  | { type: "ITEM_ASSIGNING"; issueNumber: number }
+  | { type: "ITEM_VERIFYING"; issueNumber: number }
   | { type: "ITEM_SUCCEEDED"; issueNumber: number }
-  | { type: "ITEM_FAILED"; issueNumber: number; error: string; attempts: number }
+  | {
+      type: "ITEM_FAILED";
+      issueNumber: number;
+      error: string;
+      attempts: number;
+      failedStep?: "worktree" | "terminals" | "verification";
+    }
   | { type: "DONE" }
   | { type: "RETRY_FAILED" }
   | { type: "RESET" };
@@ -61,26 +102,94 @@ function progressReducer(state: ProgressState, action: ProgressAction): Progress
     case "START": {
       const items = new Map<number, ItemStatus>();
       for (const n of action.issueNumbers) {
-        items.set(n, { status: "pending" });
+        const existing = state.items.get(n);
+        items.set(n, existing?.stage === "succeeded" ? existing : { stage: "pending", attempt: 0 });
       }
       return { phase: "executing", total: action.issueNumbers.length, items };
     }
-    case "ITEM_IN_PROGRESS": {
+    case "ITEM_WORKTREE_CREATING": {
       const items = new Map(state.items);
-      items.set(action.issueNumber, { status: "in-progress", attempt: action.attempt });
+      const prev = items.get(action.issueNumber);
+      items.set(action.issueNumber, {
+        ...prev,
+        stage: "worktree-creating",
+        attempt: action.attempt,
+      });
+      return { ...state, items };
+    }
+    case "ITEM_WORKTREE_CREATED": {
+      const items = new Map(state.items);
+      const prev = items.get(action.issueNumber);
+      items.set(action.issueNumber, {
+        ...prev,
+        stage: "worktree-created",
+        attempt: prev?.attempt ?? 1,
+        worktreeId: action.worktreeId,
+        worktreePath: action.worktreePath,
+        resolvedBranch: action.branch,
+      });
+      return { ...state, items };
+    }
+    case "ITEM_TERMINALS_SPAWNING": {
+      const items = new Map(state.items);
+      const prev = items.get(action.issueNumber);
+      items.set(action.issueNumber, {
+        ...prev,
+        stage: "terminals-spawning",
+        attempt: prev?.attempt ?? 1,
+      });
+      return { ...state, items };
+    }
+    case "ITEM_TERMINALS_RESULT": {
+      const items = new Map(state.items);
+      const prev = items.get(action.issueNumber);
+      if (action.failedTerminalIndices.length > 0) {
+        items.set(action.issueNumber, {
+          ...prev,
+          stage: "terminals-error",
+          attempt: prev?.attempt ?? 1,
+          failedTerminalIndices: action.failedTerminalIndices,
+          spawnedTerminalIds: [...(prev?.spawnedTerminalIds ?? []), ...action.spawnedTerminalIds],
+          error: `${action.failedTerminalIndices.length} terminal(s) failed to spawn`,
+        });
+      } else {
+        items.set(action.issueNumber, {
+          ...prev,
+          stage: "worktree-created",
+          attempt: prev?.attempt ?? 1,
+          spawnedTerminalIds: [...(prev?.spawnedTerminalIds ?? []), ...action.spawnedTerminalIds],
+          failedTerminalIndices: [],
+        });
+      }
+      return { ...state, items };
+    }
+    case "ITEM_ASSIGNING": {
+      const items = new Map(state.items);
+      const prev = items.get(action.issueNumber);
+      items.set(action.issueNumber, { ...prev, stage: "assigning", attempt: prev?.attempt ?? 1 });
+      return { ...state, items };
+    }
+    case "ITEM_VERIFYING": {
+      const items = new Map(state.items);
+      const prev = items.get(action.issueNumber);
+      items.set(action.issueNumber, { ...prev, stage: "verifying", attempt: prev?.attempt ?? 1 });
       return { ...state, items };
     }
     case "ITEM_SUCCEEDED": {
       const items = new Map(state.items);
-      items.set(action.issueNumber, { status: "succeeded" });
+      const prev = items.get(action.issueNumber);
+      items.set(action.issueNumber, { ...prev, stage: "succeeded", attempt: prev?.attempt ?? 1 });
       return { ...state, items };
     }
     case "ITEM_FAILED": {
       const items = new Map(state.items);
+      const prev = items.get(action.issueNumber);
       items.set(action.issueNumber, {
-        status: "failed",
+        ...prev,
+        stage: "failed",
         error: action.error,
-        attempts: action.attempts,
+        attempt: action.attempts,
+        failedStep: action.failedStep,
       });
       return { ...state, items };
     }
@@ -90,8 +199,12 @@ function progressReducer(state: ProgressState, action: ProgressAction): Progress
       const items = new Map(state.items);
       let retryCount = 0;
       for (const [key, val] of items) {
-        if (val.status === "failed") {
-          items.set(key, { status: "pending" });
+        if (
+          val.stage === "failed" ||
+          val.stage === "terminals-error" ||
+          val.stage === "worktree-error"
+        ) {
+          items.set(key, { ...val, stage: "pending", error: undefined });
           retryCount++;
         }
       }
@@ -103,13 +216,15 @@ function progressReducer(state: ProgressState, action: ProgressAction): Progress
 }
 
 const MAX_AUTO_RETRIES = 2;
-const RETRY_DELAYS = [1000, 2000];
 const QUEUE_CONCURRENCY = 2;
 const QUEUE_INTERVAL_CAP = 1;
 const QUEUE_INTERVAL_MS = 300;
+const BACKOFF_BASE_MS = 3000;
+const BACKOFF_CAP_MS = 30000;
+const VERIFICATION_SETTLE_MS = 800;
 
 const TRANSIENT_ERROR_RE =
-  /\.lock['"]?:.*(?:File exists|exists)|Another git process|Resource temporarily unavailable|cannot lock ref|could not lock config file/i;
+  /\.lock['"]?:.*(?:File exists|exists)|Another git process|Resource temporarily unavailable|cannot lock ref|could not lock config file|Rate limit exceeded|Spawn queue full|ETIMEDOUT|ECONNRESET|ECONNREFUSED/i;
 
 function isTransientError(message: string, code?: string): boolean {
   if (code === "VALIDATION_ERROR" || code === "NOT_FOUND") return false;
@@ -124,6 +239,12 @@ function normalizeError(error: unknown): string {
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function nextBackoffDelay(prevDelay: number): number {
+  const min = BACKOFF_BASE_MS;
+  const max = prevDelay * 3;
+  return Math.min(BACKOFF_CAP_MS, min + Math.random() * (max - min));
 }
 
 interface PlannedWorktree {
@@ -165,6 +286,26 @@ function planWorktrees(
 
     return { issue, branchName, prefix, skipped: false };
   });
+}
+
+function getStageLabel(status: ItemStatus | undefined): string | null {
+  if (!status) return null;
+  switch (status.stage) {
+    case "worktree-creating":
+      return "Creating worktree\u2026";
+    case "terminals-spawning":
+      return "Spawning terminals\u2026";
+    case "assigning":
+      return "Assigning issue\u2026";
+    case "verifying":
+      return "Verifying\u2026";
+    case "failed":
+      if (status.failedStep === "terminals") return "Terminal spawn failed";
+      if (status.failedStep === "verification") return "Missing terminals";
+      return null;
+    default:
+      return null;
+  }
 }
 
 export function BulkCreateWorktreeDialog({
@@ -245,17 +386,36 @@ export function BulkCreateWorktreeDialog({
     let succeeded = 0;
     let failed = 0;
     for (const item of progress.items.values()) {
-      if (item.status === "succeeded") succeeded++;
-      else if (item.status === "failed") failed++;
+      if (item.stage === "succeeded") succeeded++;
+      else if (item.stage === "failed") failed++;
     }
     return { succeededCount: succeeded, failedCount: failed };
   }, [progress.items]);
 
   const processedCount = succeededCount + failedCount;
 
+  // Local tracking map shared across runBatch calls — survives stale closures
+  const batchTrackingRef = useRef(
+    new Map<
+      number,
+      {
+        worktreeId?: string;
+        worktreePath?: string;
+        resolvedBranch?: string;
+        spawnedTerminalIds: string[];
+        failedTerminalIndices: number[];
+      }
+    >()
+  );
+
   const runBatch = useCallback(
     async (toCreate: PlannedWorktree[]) => {
       const currentRunId = ++runIdRef.current;
+      const rootPath = currentProject?.path;
+      if (!rootPath) return;
+
+      const tracking = batchTrackingRef.current;
+
       const queue = new PQueue({
         concurrency: QUEUE_CONCURRENCY,
         intervalCap: QUEUE_INTERVAL_CAP,
@@ -271,58 +431,193 @@ export function BulkCreateWorktreeDialog({
         void queue.add(async () => {
           if (runIdRef.current !== currentRunId) return;
 
+          const tracked = tracking.get(item.issue.number);
+          let backoffDelay = BACKOFF_BASE_MS;
+
           for (let attempt = 1; attempt <= MAX_AUTO_RETRIES + 1; attempt++) {
             if (runIdRef.current !== currentRunId) return;
-            dispatchProgress({
-              type: "ITEM_IN_PROGRESS",
-              issueNumber: item.issue.number,
-              attempt,
-            });
 
             try {
-              const result = await actionService.dispatch(
-                "worktree.createWithRecipe",
-                {
-                  branchName: item.branchName,
-                  recipeId: selectedRecipeId ?? undefined,
+              // Step 1: Worktree creation (skip if already created)
+              let worktreeId = tracked?.worktreeId;
+              let worktreePath = tracked?.worktreePath;
+              let resolvedBranch = tracked?.resolvedBranch;
+
+              if (!worktreeId) {
+                // Check if a worktree for this branch already exists (idempotent retry)
+                const worktrees = useWorktreeDataStore.getState().worktrees;
+                for (const wt of worktrees.values()) {
+                  if (wt.branch && wt.branch === item.branchName) {
+                    worktreeId = wt.worktreeId;
+                    worktreePath = wt.path;
+                    resolvedBranch = wt.branch;
+                    break;
+                  }
+                }
+              }
+
+              if (!worktreeId) {
+                dispatchProgress({
+                  type: "ITEM_WORKTREE_CREATING",
                   issueNumber: item.issue.number,
-                  assignToSelf: assignWorktreeToSelf,
-                },
-                { source: "user", confirmed: true }
-              );
+                  attempt,
+                });
+
+                // Determine base branch
+                const mainWorktree = Array.from(
+                  useWorktreeDataStore.getState().worktrees.values()
+                ).find((w) => w.isMainWorktree);
+                const baseBranch = mainWorktree?.branch;
+                if (!baseBranch) throw new Error("No main worktree found for base branch");
+
+                const availableBranch = await worktreeClient.getAvailableBranch(
+                  rootPath,
+                  item.branchName
+                );
+                const path = await worktreeClient.getDefaultPath(rootPath, availableBranch);
+
+                const createdId = await worktreeClient.create(
+                  {
+                    baseBranch,
+                    newBranch: availableBranch,
+                    path,
+                    fromRemote: false,
+                    useExistingBranch: false,
+                  },
+                  rootPath
+                );
+
+                if (!createdId) throw new Error("Failed to create worktree: no ID returned");
+
+                worktreeId = createdId;
+                worktreePath = path;
+                resolvedBranch = availableBranch;
+
+                tracking.set(item.issue.number, {
+                  worktreeId,
+                  worktreePath: path,
+                  resolvedBranch: availableBranch,
+                  spawnedTerminalIds: [],
+                  failedTerminalIndices: [],
+                });
+
+                dispatchProgress({
+                  type: "ITEM_WORKTREE_CREATED",
+                  issueNumber: item.issue.number,
+                  worktreeId,
+                  worktreePath: path,
+                  branch: availableBranch,
+                });
+              } else if (!tracked?.worktreeId) {
+                // Existing worktree found in data store — record in tracking
+                tracking.set(item.issue.number, {
+                  worktreeId,
+                  worktreePath: worktreePath!,
+                  resolvedBranch: resolvedBranch!,
+                  spawnedTerminalIds: tracked?.spawnedTerminalIds ?? [],
+                  failedTerminalIndices: tracked?.failedTerminalIndices ?? [],
+                });
+                dispatchProgress({
+                  type: "ITEM_WORKTREE_CREATED",
+                  issueNumber: item.issue.number,
+                  worktreeId,
+                  worktreePath: worktreePath!,
+                  branch: resolvedBranch!,
+                });
+              }
+
+              // Step 2: Recipe execution (skip if no recipe)
+              if (selectedRecipeId && worktreePath && worktreeId) {
+                const currentTracked = tracking.get(item.issue.number);
+                const failedIndices = currentTracked?.failedTerminalIndices;
+                const shouldRetryTerminals =
+                  failedIndices && failedIndices.length > 0 ? failedIndices : undefined;
+
+                dispatchProgress({
+                  type: "ITEM_TERMINALS_SPAWNING",
+                  issueNumber: item.issue.number,
+                });
+
+                const results: RecipeSpawnResults = await useRecipeStore
+                  .getState()
+                  .runRecipeWithResults(
+                    selectedRecipeId,
+                    worktreePath,
+                    worktreeId,
+                    {
+                      worktreePath,
+                      branchName: resolvedBranch!,
+                      issueNumber: item.issue.number,
+                    },
+                    shouldRetryTerminals
+                  );
+
+                // Update local tracking with results
+                const updatedTracked = tracking.get(item.issue.number);
+                if (updatedTracked) {
+                  updatedTracked.spawnedTerminalIds = [
+                    ...updatedTracked.spawnedTerminalIds,
+                    ...results.spawned.map((s) => s.terminalId),
+                  ];
+                  updatedTracked.failedTerminalIndices = results.failed.map((f) => f.index);
+                }
+
+                dispatchProgress({
+                  type: "ITEM_TERMINALS_RESULT",
+                  issueNumber: item.issue.number,
+                  spawnedTerminalIds: results.spawned.map((s) => s.terminalId),
+                  failedTerminalIndices: results.failed.map((f) => f.index),
+                });
+
+                if (results.failed.length > 0) {
+                  const hasTransient = results.failed.some((f) => isTransientError(f.error));
+                  if (attempt <= MAX_AUTO_RETRIES && hasTransient) {
+                    backoffDelay = nextBackoffDelay(backoffDelay);
+                    await delay(backoffDelay);
+                    continue;
+                  }
+                  const errorMsg = `${results.failed.length} terminal(s) failed to spawn`;
+                  failed++;
+                  dispatchProgress({
+                    type: "ITEM_FAILED",
+                    issueNumber: item.issue.number,
+                    error: errorMsg,
+                    attempts: attempt,
+                    failedStep: "terminals",
+                  });
+                  return;
+                }
+              }
+
+              // Step 3: Issue assignment (best-effort)
+              if (assignWorktreeToSelf && item.issue.number) {
+                const username = useGitHubConfigStore.getState().config?.username;
+                if (username) {
+                  dispatchProgress({
+                    type: "ITEM_ASSIGNING",
+                    issueNumber: item.issue.number,
+                  });
+                  try {
+                    await githubClient.assignIssue(rootPath, item.issue.number, username);
+                  } catch {
+                    // Best-effort — silent failure
+                  }
+                }
+              }
 
               if (runIdRef.current !== currentRunId) return;
 
-              if (result.ok) {
-                const { worktreeId } = result.result as { worktreeId: string };
-                lastSuccessfulWorktreeId = worktreeId;
-                succeeded++;
-                dispatchProgress({ type: "ITEM_SUCCEEDED", issueNumber: item.issue.number });
-                return;
-              }
-
-              const errorMsg = result.error.message;
-              const errorCode = result.error.code;
-
-              if (attempt <= MAX_AUTO_RETRIES && isTransientError(errorMsg, errorCode)) {
-                await delay(RETRY_DELAYS[attempt - 1]!);
-                continue;
-              }
-
-              failed++;
-              dispatchProgress({
-                type: "ITEM_FAILED",
-                issueNumber: item.issue.number,
-                error: errorMsg,
-                attempts: attempt,
-              });
+              lastSuccessfulWorktreeId = worktreeId!;
+              succeeded++;
+              dispatchProgress({ type: "ITEM_SUCCEEDED", issueNumber: item.issue.number });
               return;
             } catch (err) {
               if (runIdRef.current !== currentRunId) return;
               const errorMsg = normalizeError(err);
 
               if (attempt <= MAX_AUTO_RETRIES && isTransientError(errorMsg)) {
-                await delay(RETRY_DELAYS[attempt - 1]!);
+                backoffDelay = nextBackoffDelay(backoffDelay);
+                await delay(backoffDelay);
                 continue;
               }
 
@@ -332,6 +627,7 @@ export function BulkCreateWorktreeDialog({
                 issueNumber: item.issue.number,
                 error: errorMsg,
                 attempts: attempt,
+                failedStep: "worktree",
               });
               return;
             }
@@ -342,6 +638,40 @@ export function BulkCreateWorktreeDialog({
       await queue.onIdle();
       if (runIdRef.current !== currentRunId) return;
       queueRef.current = null;
+
+      // Post-batch verification: check terminal health using local tracking (not stale closure)
+      if (selectedRecipeId) {
+        await delay(VERIFICATION_SETTLE_MS);
+        if (runIdRef.current !== currentRunId) return;
+
+        const terminals = useTerminalStore.getState().terminals;
+
+        for (const [issueNumber, tracked] of tracking) {
+          if (!tracked.worktreeId || tracked.spawnedTerminalIds.length === 0) continue;
+          // Only verify items that succeeded
+          if (tracked.failedTerminalIndices.length > 0) continue;
+
+          dispatchProgress({ type: "ITEM_VERIFYING", issueNumber });
+
+          // Check each spawned terminal — failed means non-zero exit code
+          const crashedCount = tracked.spawnedTerminalIds.filter((tid) => {
+            const t = terminals.find((term) => term.id === tid);
+            return t && t.exitCode !== undefined && t.exitCode !== 0;
+          }).length;
+
+          if (crashedCount > 0) {
+            failed++;
+            succeeded--;
+            dispatchProgress({
+              type: "ITEM_FAILED",
+              issueNumber,
+              error: `${crashedCount} terminal(s) crashed after spawn`,
+              attempts: 1,
+              failedStep: "verification",
+            });
+          }
+        }
+      }
 
       if (lastSuccessfulWorktreeId) {
         useWorktreeSelectionStore.getState().setPendingWorktree(lastSuccessfulWorktreeId);
@@ -364,7 +694,7 @@ export function BulkCreateWorktreeDialog({
         });
       }
     },
-    [selectedRecipeId, assignWorktreeToSelf]
+    [selectedRecipeId, assignWorktreeToSelf, currentProject?.path]
   );
 
   const handleCreate = useCallback(async () => {
@@ -400,7 +730,13 @@ export function BulkCreateWorktreeDialog({
   const handleRetryFailed = useCallback(async () => {
     const failedIssueNumbers = new Set<number>();
     for (const [issueNumber, item] of progress.items) {
-      if (item.status === "failed") failedIssueNumbers.add(issueNumber);
+      if (
+        item.stage === "failed" ||
+        item.stage === "terminals-error" ||
+        item.stage === "worktree-error"
+      ) {
+        failedIssueNumbers.add(issueNumber);
+      }
     }
     if (failedIssueNumbers.size === 0) return;
 
@@ -690,17 +1026,23 @@ export function BulkCreateWorktreeDialog({
                 .filter((p) => !p.skipped)
                 .map((item) => {
                   const itemStatus = progress.items.get(item.issue.number);
+                  const stageLabel = getStageLabel(itemStatus);
+                  const isInProgress =
+                    itemStatus &&
+                    itemStatus.stage !== "pending" &&
+                    itemStatus.stage !== "succeeded" &&
+                    itemStatus.stage !== "failed";
                   return (
                     <div
                       key={item.issue.number}
                       className="px-3 py-2 flex items-start gap-3 text-sm"
                     >
                       <div className="mt-0.5 shrink-0">
-                        {itemStatus?.status === "in-progress" ? (
+                        {isInProgress ? (
                           <Loader2 className="w-4 h-4 animate-spin text-canopy-accent" />
-                        ) : itemStatus?.status === "succeeded" ? (
+                        ) : itemStatus?.stage === "succeeded" ? (
                           <Check className="w-4 h-4 text-status-success" />
-                        ) : itemStatus?.status === "failed" ? (
+                        ) : itemStatus?.stage === "failed" ? (
                           <AlertTriangle className="w-4 h-4 text-status-warning" />
                         ) : (
                           <div className="w-4 h-4 rounded-full border border-canopy-border" />
@@ -712,13 +1054,16 @@ export function BulkCreateWorktreeDialog({
                             #{item.issue.number}
                           </span>
                           <span className="text-canopy-text truncate">{item.issue.title}</span>
-                          {itemStatus?.status === "in-progress" && itemStatus.attempt > 1 && (
+                          {isInProgress && itemStatus.attempt > 1 && (
                             <span className="text-[10px] px-1.5 py-0.5 rounded bg-canopy-accent/10 text-canopy-accent shrink-0">
                               retry {itemStatus.attempt - 1}
                             </span>
                           )}
                         </div>
-                        {itemStatus?.status === "failed" && (
+                        {stageLabel && (
+                          <p className="text-xs text-canopy-text/50 mt-0.5">{stageLabel}</p>
+                        )}
+                        {itemStatus?.stage === "failed" && itemStatus.error && (
                           <p className="text-xs text-status-warning mt-0.5 break-words">
                             {itemStatus.error}
                           </p>

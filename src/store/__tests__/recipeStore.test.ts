@@ -171,6 +171,109 @@ describe("recipeStore", () => {
     expect(spawned.command).not.toContain("gemini");
   });
 
+  describe("runRecipeWithResults", () => {
+    it("returns all spawned terminal IDs on full success", async () => {
+      let callIndex = 0;
+      addTerminalMock.mockImplementation(() => {
+        callIndex++;
+        return Promise.resolve(`terminal-${callIndex}`);
+      });
+
+      useRecipeStore.setState({
+        recipes: [
+          {
+            id: "recipe-1",
+            name: "Test Recipe",
+            projectId: "project-1",
+            terminals: [
+              { type: "terminal", title: "Shell 1", command: "npm test", env: {} },
+              { type: "terminal", title: "Shell 2", command: "npm start", env: {} },
+            ],
+            createdAt: Date.now(),
+          },
+        ],
+        isLoading: false,
+        currentProjectId: "project-1",
+      });
+
+      const results = await useRecipeStore
+        .getState()
+        .runRecipeWithResults("recipe-1", "/tmp/worktree", "worktree-1");
+
+      expect(results.spawned).toHaveLength(2);
+      expect(results.failed).toHaveLength(0);
+      expect(results.spawned[0]).toEqual({ index: 0, terminalId: "terminal-1" });
+      expect(results.spawned[1]).toEqual({ index: 1, terminalId: "terminal-2" });
+    });
+
+    it("reports partial failures with correct indices", async () => {
+      let callIndex = 0;
+      addTerminalMock.mockImplementation(() => {
+        callIndex++;
+        if (callIndex === 2) return Promise.reject(new Error("Spawn failed"));
+        return Promise.resolve(`terminal-${callIndex}`);
+      });
+
+      useRecipeStore.setState({
+        recipes: [
+          {
+            id: "recipe-1",
+            name: "Test Recipe",
+            projectId: "project-1",
+            terminals: [
+              { type: "terminal", title: "Shell 1", command: "npm test", env: {} },
+              { type: "terminal", title: "Shell 2", command: "npm start", env: {} },
+              { type: "terminal", title: "Shell 3", command: "npm build", env: {} },
+            ],
+            createdAt: Date.now(),
+          },
+        ],
+        isLoading: false,
+        currentProjectId: "project-1",
+      });
+
+      const results = await useRecipeStore
+        .getState()
+        .runRecipeWithResults("recipe-1", "/tmp/worktree", "worktree-1");
+
+      expect(results.spawned).toHaveLength(2);
+      expect(results.failed).toHaveLength(1);
+      expect(results.failed[0]).toEqual({ index: 1, error: "Spawn failed" });
+      expect(results.spawned[0]?.index).toBe(0);
+      expect(results.spawned[1]?.index).toBe(2);
+    });
+
+    it("retries only specified terminal indices", async () => {
+      addTerminalMock.mockResolvedValue("terminal-retry-1");
+
+      useRecipeStore.setState({
+        recipes: [
+          {
+            id: "recipe-1",
+            name: "Test Recipe",
+            projectId: "project-1",
+            terminals: [
+              { type: "terminal", title: "Shell 1", command: "npm test", env: {} },
+              { type: "terminal", title: "Shell 2", command: "npm start", env: {} },
+              { type: "terminal", title: "Shell 3", command: "npm build", env: {} },
+            ],
+            createdAt: Date.now(),
+          },
+        ],
+        isLoading: false,
+        currentProjectId: "project-1",
+      });
+
+      const results = await useRecipeStore
+        .getState()
+        .runRecipeWithResults("recipe-1", "/tmp/worktree", "worktree-1", undefined, [1]);
+
+      expect(addTerminalMock).toHaveBeenCalledTimes(1);
+      expect(results.spawned).toHaveLength(1);
+      expect(results.spawned[0]?.index).toBe(1);
+    });
+  });
+
   it("keeps importing valid terminals even when others are invalid", async () => {
     const input = JSON.stringify({
       name: "Mixed",
