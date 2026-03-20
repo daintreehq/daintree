@@ -17,12 +17,12 @@ import {
   horizontalListSortingStrategy,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import type { SidecarTab, SidecarLink } from "@shared/types";
+import type { PortalTab, PortalLink } from "@shared/types";
 import { cn } from "@/lib/utils";
 import { createTooltipWithShortcut } from "@/lib/platform";
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
-import { useSidecarStore } from "@/store/sidecarStore";
-import { SidecarIcon } from "./SidecarIcon";
+import { usePortalStore } from "@/store/portalStore";
+import { PortalIcon } from "./PortalIcon";
 import { useNativeContextMenu, useKeybindingDisplay } from "@/hooks";
 import type { MenuItemOption } from "@/types";
 
@@ -42,7 +42,7 @@ const SortableTab = memo(function SortableTab({
   tabCount,
   tabIndex,
 }: {
-  tab: SidecarTab;
+  tab: PortalTab;
   isActive: boolean;
   onClick: (id: string) => void;
   onClose: (id: string) => void;
@@ -165,7 +165,7 @@ const SortableTab = memo(function SortableTab({
     >
       {tab.icon && (
         <div className="flex-shrink-0">
-          <SidecarIcon icon={tab.icon} size="tab" url={tab.url ?? undefined} />
+          <PortalIcon icon={tab.icon} size="tab" url={tab.url ?? undefined} />
         </div>
       )}
       <span className="truncate max-w-[120px]">{tab.title}</span>
@@ -189,8 +189,8 @@ const SortableTab = memo(function SortableTab({
   );
 });
 
-interface SidecarToolbarProps {
-  tabs: SidecarTab[];
+interface PortalToolbarProps {
+  tabs: PortalTab[];
   activeTabId: string | null;
   onTabClick: (tabId: string) => void;
   onTabClose: (tabId: string) => void;
@@ -209,10 +209,10 @@ interface SidecarToolbarProps {
   onCopyTabUrl?: (tabId: string) => void;
   onOpenTabExternal?: (tabId: string) => void;
   onReloadTab?: (tabId: string) => void;
-  enabledLinks: SidecarLink[];
+  enabledLinks: PortalLink[];
 }
 
-export function SidecarToolbar({
+export function PortalToolbar({
   tabs,
   activeTabId,
   onTabClick,
@@ -233,10 +233,10 @@ export function SidecarToolbar({
   onOpenTabExternal,
   onReloadTab,
   enabledLinks,
-}: SidecarToolbarProps) {
-  const reorderTabs = useSidecarStore((s) => s.reorderTabs);
-  const closeSidecarShortcut = useKeybindingDisplay("panel.toggleSidecar");
-  const newTabShortcut = useKeybindingDisplay("sidecar.newTab");
+}: PortalToolbarProps) {
+  const reorderTabs = usePortalStore((s) => s.reorderTabs);
+  const closePortalShortcut = useKeybindingDisplay("panel.togglePortal");
+  const newTabShortcut = useKeybindingDisplay("portal.newTab");
 
   const duplicateTab = onDuplicateTab ?? noopTabAction;
   const closeOthers = onCloseOthers ?? noopTabAction;
@@ -347,14 +347,14 @@ export function SidecarToolbar({
               <TooltipTrigger asChild>
                 <button
                   onClick={onClose}
-                  aria-label="Close sidecar"
+                  aria-label="Close portal"
                   className="p-1 rounded hover:bg-tint/[0.06] text-muted-foreground hover:text-canopy-text transition-colors ml-1"
                 >
                   <X className="w-4 h-4" />
                 </button>
               </TooltipTrigger>
               <TooltipContent side="bottom">
-                {createTooltipWithShortcut("Close sidecar", closeSidecarShortcut)}
+                {createTooltipWithShortcut("Close portal", closePortalShortcut)}
               </TooltipContent>
             </Tooltip>
           </TooltipProvider>
@@ -411,7 +411,7 @@ export function SidecarToolbar({
                       onContextMenu={(e) => {
                         e.preventDefault();
                         e.stopPropagation();
-                        void window.electron.sidecar.showNewTabMenu({
+                        void window.electron.portal.showNewTabMenu({
                           x: e.screenX,
                           y: e.screenY,
                           links: enabledLinks.map((link) => ({ title: link.title, url: link.url })),

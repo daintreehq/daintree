@@ -1,6 +1,6 @@
 import type { OnHeadersReceivedListenerDetails } from "electron";
 
-export type WebviewPartitionType = "browser" | "dev-preview" | "sidecar" | "unknown";
+export type WebviewPartitionType = "browser" | "dev-preview" | "portal" | "unknown";
 
 /**
  * Checks if a partition is a valid dev-preview partition.
@@ -18,8 +18,8 @@ export function classifyPartition(partition: string): WebviewPartitionType {
   if (partition === "persist:browser") {
     return "browser";
   }
-  if (partition === "persist:sidecar") {
-    return "sidecar";
+  if (partition === "persist:portal") {
+    return "portal";
   }
   if (isDevPreviewPartition(partition)) {
     return "dev-preview";

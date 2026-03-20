@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
 import { act, cleanup, render } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { SidecarVisibilityController } from "../SidecarVisibilityController";
-import { useSidecarStore } from "@/store";
+import { PortalVisibilityController } from "../PortalVisibilityController";
+import { usePortalStore } from "@/store";
 import { useUIStore } from "@/store/uiStore";
 
 function deferredPromise() {
@@ -24,8 +24,8 @@ function createPlaceholderRect() {
   };
 }
 
-describe("SidecarVisibilityController", () => {
-  const sidecar = {
+describe("PortalVisibilityController", () => {
+  const portal = {
     create: vi.fn<({ tabId, url }: { tabId: string; url: string }) => Promise<void>>(),
     show: vi.fn<({ tabId, bounds }: { tabId: string; bounds: unknown }) => Promise<void>>(),
     hide: vi.fn<() => Promise<void>>(),
@@ -49,9 +49,9 @@ describe("SidecarVisibilityController", () => {
     vi.clearAllMocks();
     storage.clear();
 
-    sidecar.create.mockResolvedValue(undefined);
-    sidecar.show.mockResolvedValue(undefined);
-    sidecar.hide.mockResolvedValue(undefined);
+    portal.create.mockResolvedValue(undefined);
+    portal.show.mockResolvedValue(undefined);
+    portal.hide.mockResolvedValue(undefined);
 
     Object.defineProperty(globalThis, "localStorage", {
       value: localStorageMock,
@@ -66,14 +66,14 @@ describe("SidecarVisibilityController", () => {
 
     Object.defineProperty(window, "electron", {
       value: {
-        sidecar,
+        portal,
         window: { getZoomFactor: vi.fn(() => 1) },
       },
       configurable: true,
       writable: true,
     });
 
-    useSidecarStore.getState().reset();
+    usePortalStore.getState().reset();
     useUIStore.setState({ overlayCount: 0, notificationCenterOpen: false });
   });
 
@@ -86,7 +86,7 @@ describe("SidecarVisibilityController", () => {
   it("retries bounds lookup until the placeholder appears, then restores the tab", async () => {
     let calls = 0;
     vi.spyOn(document, "getElementById").mockImplementation((id) => {
-      if (id !== "sidecar-placeholder") return null;
+      if (id !== "portal-placeholder") return null;
       calls += 1;
       if (calls < 3) return null;
       return {
@@ -94,10 +94,10 @@ describe("SidecarVisibilityController", () => {
       } as unknown as HTMLElement;
     });
 
-    render(<SidecarVisibilityController />);
+    render(<PortalVisibilityController />);
 
     act(() => {
-      useSidecarStore.setState({
+      usePortalStore.setState({
         isOpen: true,
         activeTabId: "tab-1",
         tabs: [{ id: "tab-1", title: "Docs", url: "https://example.com/docs" }],
@@ -109,20 +109,20 @@ describe("SidecarVisibilityController", () => {
       await vi.runAllTimersAsync();
     });
 
-    expect(sidecar.create).toHaveBeenCalledWith({
+    expect(portal.create).toHaveBeenCalledWith({
       tabId: "tab-1",
       url: "https://example.com/docs",
     });
-    expect(sidecar.show).toHaveBeenCalledWith({
+    expect(portal.show).toHaveBeenCalledWith({
       tabId: "tab-1",
       bounds: { x: 10, y: 21, width: 301, height: 401 },
     });
-    expect(useSidecarStore.getState().createdTabs.has("tab-1")).toBe(true);
+    expect(usePortalStore.getState().createdTabs.has("tab-1")).toBe(true);
   });
 
   it("queues the latest restore request when the active tab changes mid-restore", async () => {
     const firstCreate = deferredPromise();
-    sidecar.create
+    portal.create
       .mockImplementationOnce(() => firstCreate.promise)
       .mockResolvedValueOnce(undefined);
 
@@ -130,10 +130,10 @@ describe("SidecarVisibilityController", () => {
       getBoundingClientRect: () => createPlaceholderRect(),
     } as unknown as HTMLElement);
 
-    render(<SidecarVisibilityController />);
+    render(<PortalVisibilityController />);
 
     act(() => {
-      useSidecarStore.setState({
+      usePortalStore.setState({
         isOpen: true,
         activeTabId: "tab-a",
         tabs: [
@@ -148,14 +148,14 @@ describe("SidecarVisibilityController", () => {
       await Promise.resolve();
     });
 
-    expect(sidecar.create).toHaveBeenCalledTimes(1);
-    expect(sidecar.create).toHaveBeenLastCalledWith({
+    expect(portal.create).toHaveBeenCalledTimes(1);
+    expect(portal.create).toHaveBeenLastCalledWith({
       tabId: "tab-a",
       url: "https://example.com/a",
     });
 
     act(() => {
-      useSidecarStore.setState({ activeTabId: "tab-b" });
+      usePortalStore.setState({ activeTabId: "tab-b" });
     });
 
     firstCreate.resolve();
@@ -164,13 +164,13 @@ describe("SidecarVisibilityController", () => {
       await vi.runAllTimersAsync();
     });
 
-    expect(sidecar.create).toHaveBeenCalledTimes(2);
-    expect(sidecar.create).toHaveBeenLastCalledWith({
+    expect(portal.create).toHaveBeenCalledTimes(2);
+    expect(portal.create).toHaveBeenLastCalledWith({
       tabId: "tab-b",
       url: "https://example.com/b",
     });
-    expect(sidecar.show).toHaveBeenCalledTimes(1);
-    expect(sidecar.show).toHaveBeenCalledWith({
+    expect(portal.show).toHaveBeenCalledTimes(1);
+    expect(portal.show).toHaveBeenCalledWith({
       tabId: "tab-b",
       bounds: { x: 10, y: 21, width: 301, height: 401 },
     });
@@ -178,16 +178,16 @@ describe("SidecarVisibilityController", () => {
 
   it("does not mark a tab created or show it if the tab is removed during restore", async () => {
     const createRequest = deferredPromise();
-    sidecar.create.mockImplementationOnce(() => createRequest.promise);
+    portal.create.mockImplementationOnce(() => createRequest.promise);
 
     vi.spyOn(document, "getElementById").mockReturnValue({
       getBoundingClientRect: () => createPlaceholderRect(),
     } as unknown as HTMLElement);
 
-    render(<SidecarVisibilityController />);
+    render(<PortalVisibilityController />);
 
     act(() => {
-      useSidecarStore.setState({
+      usePortalStore.setState({
         isOpen: true,
         activeTabId: "tab-1",
         tabs: [{ id: "tab-1", title: "Docs", url: "https://example.com/docs" }],
@@ -200,7 +200,7 @@ describe("SidecarVisibilityController", () => {
     });
 
     act(() => {
-      useSidecarStore.setState({
+      usePortalStore.setState({
         activeTabId: null,
         tabs: [],
         createdTabs: new Set<string>(),
@@ -213,8 +213,8 @@ describe("SidecarVisibilityController", () => {
       await vi.runAllTimersAsync();
     });
 
-    expect(useSidecarStore.getState().createdTabs.size).toBe(0);
-    expect(sidecar.show).not.toHaveBeenCalled();
+    expect(usePortalStore.getState().createdTabs.size).toBe(0);
+    expect(portal.show).not.toHaveBeenCalled();
   });
 
   it("hides for overlays and re-shows an already created tab without recreating it", async () => {
@@ -222,20 +222,20 @@ describe("SidecarVisibilityController", () => {
       getBoundingClientRect: () => createPlaceholderRect(),
     } as unknown as HTMLElement);
 
-    useSidecarStore.setState({
+    usePortalStore.setState({
       isOpen: true,
       activeTabId: "tab-1",
       tabs: [{ id: "tab-1", title: "Docs", url: "https://example.com/docs" }],
       createdTabs: new Set<string>(["tab-1"]),
     });
 
-    render(<SidecarVisibilityController />);
+    render(<PortalVisibilityController />);
 
     act(() => {
       useUIStore.setState({ overlayCount: 1 });
     });
 
-    expect(sidecar.hide).toHaveBeenCalledTimes(1);
+    expect(portal.hide).toHaveBeenCalledTimes(1);
 
     act(() => {
       useUIStore.setState({ overlayCount: 0 });
@@ -245,8 +245,8 @@ describe("SidecarVisibilityController", () => {
       await vi.runAllTimersAsync();
     });
 
-    expect(sidecar.create).not.toHaveBeenCalled();
-    expect(sidecar.show).toHaveBeenCalledWith({
+    expect(portal.create).not.toHaveBeenCalled();
+    expect(portal.show).toHaveBeenCalledWith({
       tabId: "tab-1",
       bounds: { x: 10, y: 21, width: 301, height: 401 },
     });

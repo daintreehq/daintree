@@ -35,7 +35,7 @@ export function GettingStartedChecklist({
         "fixed bottom-4 z-[var(--z-toast)] pointer-events-none p-4",
         "flex justify-end w-full max-w-[320px]"
       )}
-      style={{ right: "calc(var(--sidecar-right-offset, 0px))" }}
+      style={{ right: "calc(var(--portal-right-offset, 0px))" }}
     >
       <div
         className={cn(

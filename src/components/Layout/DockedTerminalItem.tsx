@@ -7,7 +7,7 @@ import { getBrandColorHex } from "@/lib/colorUtils";
 import {
   useTerminalInputStore,
   useTerminalStore,
-  useSidecarStore,
+  usePortalStore,
   useFocusStore,
   type TerminalInstance,
 } from "@/store";
@@ -57,7 +57,7 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
     return () => clearTimeout(timer);
   }, [isOpen]);
 
-  const { isOpen: sidecarOpen, width: sidecarWidth } = useSidecarStore(
+  const { isOpen: portalOpen, width: portalWidth } = usePortalStore(
     useShallow((s) => ({ isOpen: s.isOpen, width: s.width }))
   );
 
@@ -69,9 +69,9 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
       top: basePadding,
       left: isFocusMode ? 8 : basePadding,
       bottom: basePadding,
-      right: sidecarOpen ? sidecarWidth + basePadding : basePadding,
+      right: portalOpen ? portalWidth + basePadding : basePadding,
     };
-  }, [isFocusMode, sidecarOpen, sidecarWidth]);
+  }, [isFocusMode, portalOpen, portalWidth]);
 
   // Toggle buffering based on popover open state
   useEffect(() => {

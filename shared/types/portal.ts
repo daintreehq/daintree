@@ -1,11 +1,11 @@
-export type SidecarLinkType = "system" | "user";
+export type PortalLinkType = "system" | "user";
 
-export interface SidecarLink {
+export interface PortalLink {
   id: string;
   title: string;
   url: string;
   icon: string;
-  type: SidecarLinkType;
+  type: PortalLinkType;
   enabled: boolean;
   order: number;
   alwaysEnabled?: boolean;
@@ -35,7 +35,7 @@ export const LINK_TEMPLATES: Record<string, LinkTemplate> = {
   },
 };
 
-export const DEFAULT_SYSTEM_LINKS: SidecarLink[] = Object.entries(LINK_TEMPLATES).map(
+export const DEFAULT_SYSTEM_LINKS: PortalLink[] = Object.entries(LINK_TEMPLATES).map(
   ([key, template], index) => ({
     id: `system-${key}`,
     title: template.title,
@@ -47,7 +47,7 @@ export const DEFAULT_SYSTEM_LINKS: SidecarLink[] = Object.entries(LINK_TEMPLATES
   })
 );
 
-export interface SidecarTab {
+export interface PortalTab {
   id: string;
   url: string | null;
   title: string;
@@ -55,51 +55,51 @@ export interface SidecarTab {
   icon?: string;
 }
 
-export interface SidecarBounds {
+export interface PortalBounds {
   x: number;
   y: number;
   width: number;
   height: number;
 }
 
-export interface SidecarNavEvent {
+export interface PortalNavEvent {
   tabId: string;
   title: string;
   url: string;
 }
 
-export interface SidecarCreatePayload {
+export interface PortalCreatePayload {
   tabId: string;
   url: string;
 }
 
-export interface SidecarShowPayload {
+export interface PortalShowPayload {
   tabId: string;
-  bounds: SidecarBounds;
+  bounds: PortalBounds;
 }
 
-export interface SidecarCloseTabPayload {
+export interface PortalCloseTabPayload {
   tabId: string;
 }
 
-export interface SidecarNavigatePayload {
+export interface PortalNavigatePayload {
   tabId: string;
   url: string;
 }
 
-export interface SidecarNewTabMenuLink {
+export interface PortalNewTabMenuLink {
   title: string;
   url: string;
 }
 
-export interface SidecarShowNewTabMenuPayload {
+export interface PortalShowNewTabMenuPayload {
   x: number;
   y: number;
-  links: SidecarNewTabMenuLink[];
+  links: PortalNewTabMenuLink[];
   defaultNewTabUrl: string | null;
 }
 
-export type SidecarNewTabMenuAction =
+export type PortalNewTabMenuAction =
   | {
       type: "open-url";
       url: string;
@@ -113,8 +113,8 @@ export type SidecarNewTabMenuAction =
       url: string | null;
     };
 
-export const DEFAULT_SIDECAR_TABS: SidecarTab[] = [];
+export const DEFAULT_PORTAL_TABS: PortalTab[] = [];
 
-export const SIDECAR_MIN_WIDTH = 480;
-export const SIDECAR_MAX_WIDTH = 1200;
-export const SIDECAR_DEFAULT_WIDTH = 480;
+export const PORTAL_MIN_WIDTH = 480;
+export const PORTAL_MAX_WIDTH = 1200;
+export const PORTAL_DEFAULT_WIDTH = 480;

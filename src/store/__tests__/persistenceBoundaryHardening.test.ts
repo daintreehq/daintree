@@ -166,7 +166,7 @@ describe("persistence boundary hardening", () => {
     expect(useWorktreeFilterStore.getState().pinnedWorktrees).toEqual(["wt-1"]);
   });
 
-  it("sidecarStore still updates persisted fields when storage writes fail", async () => {
+  it("portalStore still updates persisted fields when storage writes fail", async () => {
     installLocalStorage(
       createStorageMock({
         setItem: () => {
@@ -175,12 +175,12 @@ describe("persistence boundary hardening", () => {
       })
     );
 
-    const { useSidecarStore } = await import("../sidecarStore");
+    const { usePortalStore } = await import("../portalStore");
 
     expect(() => {
-      useSidecarStore.getState().setWidth(600);
+      usePortalStore.getState().setWidth(600);
     }).not.toThrow();
 
-    expect(useSidecarStore.getState().width).toBe(600);
+    expect(usePortalStore.getState().width).toBe(600);
   });
 });

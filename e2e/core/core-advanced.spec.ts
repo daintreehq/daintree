@@ -47,9 +47,9 @@ test.describe.serial("Core: Advanced", () => {
     server?.close();
   });
 
-  // ── Browser, Sidecar & Notes (4 tests) ───────────────────
+  // ── Browser, Portal & Notes (4 tests) ───────────────────
 
-  test.describe.serial("Browser, Sidecar & Notes", () => {
+  test.describe.serial("Browser, Portal & Notes", () => {
     test.afterAll(async () => {
       // Best-effort: close browser panel so Worktree tests start with clean grid
       try {

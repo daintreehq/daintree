@@ -30,10 +30,10 @@ async function dispatchAction(page: Page, actionId: string, args?: unknown): Pro
   ] as const);
 }
 
-test.describe.serial("Core: Sidecar Multi-Tab Lifecycle", () => {
+test.describe.serial("Core: Portal Multi-Tab Lifecycle", () => {
   test.skip(
     process.platform === "win32" && !!process.env.CI,
-    "Windows CI: sidecar not supported with GPU disabled"
+    "Windows CI: portal not supported with GPU disabled"
   );
 
   test.beforeAll(async () => {
@@ -44,9 +44,9 @@ test.describe.serial("Core: Sidecar Multi-Tab Lifecycle", () => {
     const addr = server.address();
     port = typeof addr === "object" && addr ? addr.port : 0;
 
-    const fixture = createFixtureRepo({ name: "sidecar-test" });
+    const fixture = createFixtureRepo({ name: "portal-test" });
     ctx = await launchApp();
-    await openAndOnboardProject(ctx.app, ctx.window, fixture, "Sidecar Test");
+    await openAndOnboardProject(ctx.app, ctx.window, fixture, "Portal Test");
   });
 
   test.afterAll(async () => {
@@ -55,12 +55,12 @@ test.describe.serial("Core: Sidecar Multi-Tab Lifecycle", () => {
   });
 
   test.describe.serial("Tab Creation and Switching", () => {
-    test("opens sidecar and creates first tab with URL", async () => {
+    test("opens portal and creates first tab with URL", async () => {
       const { window } = ctx;
 
-      const sidecarBtn = window.locator(SEL.toolbar.sidecarToggle);
+      const portalBtn = window.locator(SEL.toolbar.portalToggle);
       if (
-        !(await sidecarBtn
+        !(await portalBtn
           .first()
           .isVisible()
           .catch(() => false))
@@ -69,18 +69,18 @@ test.describe.serial("Core: Sidecar Multi-Tab Lifecycle", () => {
         return;
       }
 
-      await dispatchAction(window, "sidecar.openUrl", {
+      await dispatchAction(window, "portal.openUrl", {
         url: `http://127.0.0.1:${port}/page-a`,
         title: "Page A",
       });
       await window.waitForTimeout(T_SETTLE);
 
-      // Sidecar toolbar should be visible with tab
-      const sidecarContainer = window.locator(SEL.sidecar.container);
-      await expect(sidecarContainer).toBeVisible({ timeout: T_LONG });
+      // Portal toolbar should be visible with tab
+      const portalContainer = window.locator(SEL.portal.container);
+      await expect(portalContainer).toBeVisible({ timeout: T_LONG });
 
       // Tab should be present and active
-      const tab = sidecarContainer.locator('[role="tab"][aria-label="Page A"]');
+      const tab = portalContainer.locator('[role="tab"][aria-label="Page A"]');
       await expect(tab).toBeVisible({ timeout: T_MEDIUM });
       await expect(tab).toHaveAttribute("aria-selected", "true");
     });
@@ -88,17 +88,17 @@ test.describe.serial("Core: Sidecar Multi-Tab Lifecycle", () => {
     test("creates second tab with different URL", async () => {
       const { window } = ctx;
 
-      await dispatchAction(window, "sidecar.openUrl", {
+      await dispatchAction(window, "portal.openUrl", {
         url: `http://127.0.0.1:${port}/page-b`,
         title: "Page B",
       });
       await window.waitForTimeout(T_SETTLE);
 
-      const sidecarContainer = window.locator(SEL.sidecar.container);
+      const portalContainer = window.locator(SEL.portal.container);
 
       // Both tabs should exist
-      const tabA = sidecarContainer.locator('[role="tab"][aria-label="Page A"]');
-      const tabB = sidecarContainer.locator('[role="tab"][aria-label="Page B"]');
+      const tabA = portalContainer.locator('[role="tab"][aria-label="Page A"]');
+      const tabB = portalContainer.locator('[role="tab"][aria-label="Page B"]');
       await expect(tabA).toBeVisible({ timeout: T_MEDIUM });
       await expect(tabB).toBeVisible({ timeout: T_SHORT });
 
@@ -110,9 +110,9 @@ test.describe.serial("Core: Sidecar Multi-Tab Lifecycle", () => {
     test("clicking tab switches active tab", async () => {
       const { window } = ctx;
 
-      const sidecarContainer = window.locator(SEL.sidecar.container);
-      const tabA = sidecarContainer.locator('[role="tab"][aria-label="Page A"]');
-      const tabB = sidecarContainer.locator('[role="tab"][aria-label="Page B"]');
+      const portalContainer = window.locator(SEL.portal.container);
+      const tabA = portalContainer.locator('[role="tab"][aria-label="Page A"]');
+      const tabB = portalContainer.locator('[role="tab"][aria-label="Page B"]');
 
       // Click first tab to switch back
       await tabA.click();
@@ -134,69 +134,69 @@ test.describe.serial("Core: Sidecar Multi-Tab Lifecycle", () => {
     test("closing one tab leaves the other active", async () => {
       const { window } = ctx;
 
-      const sidecarContainer = window.locator(SEL.sidecar.container);
+      const portalContainer = window.locator(SEL.portal.container);
 
       // Close Page B (currently active)
-      const closeBtn = sidecarContainer.locator('[aria-label="Close Page B"]');
+      const closeBtn = portalContainer.locator('[aria-label="Close Page B"]');
       await closeBtn.click();
       await window.waitForTimeout(T_SETTLE);
 
       // Page B should be gone, Page A should remain and become active
-      await expect(sidecarContainer.locator('[role="tab"][aria-label="Page B"]')).not.toBeVisible({
+      await expect(portalContainer.locator('[role="tab"][aria-label="Page B"]')).not.toBeVisible({
         timeout: T_MEDIUM,
       });
-      const tabA = sidecarContainer.locator('[role="tab"][aria-label="Page A"]');
+      const tabA = portalContainer.locator('[role="tab"][aria-label="Page A"]');
       await expect(tabA).toBeVisible({ timeout: T_SHORT });
       await expect(tabA).toHaveAttribute("aria-selected", "true");
     });
 
-    test("closing last tab hides sidecar content", async () => {
+    test("closing last tab hides portal content", async () => {
       const { window } = ctx;
 
-      const sidecarContainer = window.locator(SEL.sidecar.container);
+      const portalContainer = window.locator(SEL.portal.container);
 
       // Close the remaining tab (Page A)
-      const closeBtn = sidecarContainer.locator('[aria-label="Close Page A"]');
+      const closeBtn = portalContainer.locator('[aria-label="Close Page A"]');
       await closeBtn.click();
       await window.waitForTimeout(T_SETTLE);
 
       // No tabs should remain
-      await expect(sidecarContainer.locator('[role="tab"]')).toHaveCount(0, { timeout: T_MEDIUM });
+      await expect(portalContainer.locator('[role="tab"]')).toHaveCount(0, { timeout: T_MEDIUM });
     });
   });
 
   test.describe.serial("Settings Overlay Interaction", () => {
-    test("opening Settings closes sidecar, reopening works after", async () => {
+    test("opening Settings closes portal, reopening works after", async () => {
       const { window } = ctx;
 
-      // Open sidecar with a tab
-      await dispatchAction(window, "sidecar.openUrl", {
+      // Open portal with a tab
+      await dispatchAction(window, "portal.openUrl", {
         url: `http://127.0.0.1:${port}/page-a`,
         title: "Page A",
       });
       await window.waitForTimeout(T_SETTLE);
 
-      const sidecarContainer = window.locator(SEL.sidecar.container);
-      await expect(sidecarContainer).toBeVisible({ timeout: T_LONG });
+      const portalContainer = window.locator(SEL.portal.container);
+      await expect(portalContainer).toBeVisible({ timeout: T_LONG });
 
       // Open Settings dialog
       await window.locator(SEL.toolbar.openSettings).click();
       await expect(window.locator(SEL.settings.heading)).toBeVisible({ timeout: T_MEDIUM });
 
-      // Sidecar should be closed
-      await expect(sidecarContainer).not.toBeVisible({ timeout: T_MEDIUM });
+      // Portal should be closed
+      await expect(portalContainer).not.toBeVisible({ timeout: T_MEDIUM });
 
       // Close Settings
       await window.locator(SEL.settings.closeButton).click();
       await expect(window.locator(SEL.settings.heading)).not.toBeVisible({ timeout: T_SHORT });
 
-      // Reopen sidecar
-      await window.locator(SEL.toolbar.sidecarToggle).first().click();
+      // Reopen portal
+      await window.locator(SEL.toolbar.portalToggle).first().click();
       await window.waitForTimeout(T_SETTLE);
 
-      // Sidecar should be visible again with the tab still present
-      await expect(sidecarContainer).toBeVisible({ timeout: T_LONG });
-      await expect(sidecarContainer.locator('[role="tab"][aria-label="Page A"]')).toBeVisible({
+      // Portal should be visible again with the tab still present
+      await expect(portalContainer).toBeVisible({ timeout: T_LONG });
+      await expect(portalContainer.locator('[role="tab"][aria-label="Page A"]')).toBeVisible({
         timeout: T_MEDIUM,
       });
     });

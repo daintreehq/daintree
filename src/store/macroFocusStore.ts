@@ -1,8 +1,8 @@
 import { create } from "zustand";
 
-export type MacroRegion = "grid" | "dock" | "sidebar" | "sidecar";
+export type MacroRegion = "grid" | "dock" | "sidebar" | "portal";
 
-const REGION_ORDER: MacroRegion[] = ["grid", "dock", "sidebar", "sidecar"];
+const REGION_ORDER: MacroRegion[] = ["grid", "dock", "sidebar", "portal"];
 
 interface MacroFocusState {
   focusedRegion: MacroRegion | null;
@@ -21,7 +21,7 @@ function getVisibleRegions(visibility: Record<MacroRegion, boolean>): MacroRegio
 
 export const useMacroFocusStore = create<MacroFocusState>((set, get) => ({
   focusedRegion: null,
-  visibility: { grid: true, dock: false, sidebar: true, sidecar: false },
+  visibility: { grid: true, dock: false, sidebar: true, portal: false },
   refs: new Map(),
 
   setRegionRef: (region, el) => {

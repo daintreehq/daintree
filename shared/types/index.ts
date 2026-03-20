@@ -303,28 +303,28 @@ export type {
   SpawnErrorCode,
 } from "./pty-host.js";
 
-// Sidecar types - browser dock
+// Portal types - browser dock
 export type {
-  SidecarLinkType,
-  SidecarLink,
+  PortalLinkType,
+  PortalLink,
   LinkTemplate,
-  SidecarTab,
-  SidecarBounds,
-  SidecarNavEvent,
-  SidecarCreatePayload,
-  SidecarShowPayload,
-  SidecarCloseTabPayload,
-  SidecarNavigatePayload,
-} from "./sidecar.js";
+  PortalTab,
+  PortalBounds,
+  PortalNavEvent,
+  PortalCreatePayload,
+  PortalShowPayload,
+  PortalCloseTabPayload,
+  PortalNavigatePayload,
+} from "./portal.js";
 
 export {
   LINK_TEMPLATES,
   DEFAULT_SYSTEM_LINKS,
-  DEFAULT_SIDECAR_TABS,
-  SIDECAR_MIN_WIDTH,
-  SIDECAR_MAX_WIDTH,
-  SIDECAR_DEFAULT_WIDTH,
-} from "./sidecar.js";
+  DEFAULT_PORTAL_TABS,
+  PORTAL_MIN_WIDTH,
+  PORTAL_MAX_WIDTH,
+  PORTAL_DEFAULT_WIDTH,
+} from "./portal.js";
 
 // Voice types - canonical phase model for voice session and transcript lifecycle
 export type { VoiceTranscriptPhase } from "./voice.js";

@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import { useShallow } from "zustand/react/shallow";
 import { cn } from "@/lib/utils";
 import { useOverlayState, useEscapeStack } from "@/hooks";
-import { useSidecarStore } from "@/store";
+import { usePortalStore } from "@/store";
 import { useAnimatedPresence } from "@/hooks/useAnimatedPresence";
 import {
   UI_ENTER_DURATION,
@@ -77,10 +77,10 @@ export function AppDialog({
   const titleId = useId();
   const descriptionId = useId();
 
-  const { isOpen: sidecarOpen, width: sidecarWidth } = useSidecarStore(
+  const { isOpen: portalOpen, width: portalWidth } = usePortalStore(
     useShallow((s) => ({ isOpen: s.isOpen, width: s.width }))
   );
-  const sidecarOffset = sidecarOpen ? sidecarWidth : 0;
+  const portalOffset = portalOpen ? portalWidth : 0;
 
   const restoreFocus = useCallback(() => {
     if (previousActiveElement.current) {
@@ -212,7 +212,7 @@ export function AppDialog({
           isVisible ? "opacity-100" : "opacity-0"
         )}
         style={{
-          right: sidecarOffset,
+          right: portalOffset,
           transitionDuration: isVisible ? `${UI_ENTER_DURATION}ms` : `${UI_EXIT_DURATION}ms`,
         }}
         onPointerDown={handleBackdropPointerDown}

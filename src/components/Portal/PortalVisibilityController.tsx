@@ -1,28 +1,28 @@
 import { useEffect, useRef, useCallback } from "react";
-import { useSidecarStore } from "@/store";
+import { usePortalStore } from "@/store";
 import { useUIStore } from "@/store/uiStore";
-import { getSidecarPlaceholderBounds } from "@/lib/sidecarBounds";
+import { getPortalPlaceholderBounds } from "@/lib/portalBounds";
 
 /**
- * Zero-UI controller component that manages sidecar visibility.
+ * Zero-UI controller component that manages portal visibility.
  * Mount once in AppLayout - handles IPC hide/show calls when:
  * - Overlays open/close (modal dialogs, etc.)
- * - Sidecar is collapsed and re-expanded
+ * - Portal is collapsed and re-expanded
  * - App starts up with persisted tabs (auto-creates backend views)
  */
-export function SidecarVisibilityController(): null {
-  const sidecarOpen = useSidecarStore((state) => state.isOpen);
-  const activeTabId = useSidecarStore((state) => state.activeTabId);
-  const tabs = useSidecarStore((state) => state.tabs);
-  const createdTabs = useSidecarStore((state) => state.createdTabs);
-  const markTabCreated = useSidecarStore((state) => state.markTabCreated);
+export function PortalVisibilityController(): null {
+  const portalOpen = usePortalStore((state) => state.isOpen);
+  const activeTabId = usePortalStore((state) => state.activeTabId);
+  const tabs = usePortalStore((state) => state.tabs);
+  const createdTabs = usePortalStore((state) => state.createdTabs);
+  const markTabCreated = usePortalStore((state) => state.markTabCreated);
   const overlayCount = useUIStore((state) => state.overlayCount);
   const hasOverlays = overlayCount > 0;
   const isRestoringRef = useRef(false);
   const pendingRestoreRef = useRef<{ tabId: string; tabUrl: string } | null>(null);
 
   const prevHasOverlaysRef = useRef(hasOverlays);
-  const prevSidecarOpenRef = useRef(sidecarOpen);
+  const prevPortalOpenRef = useRef(portalOpen);
   const prevActiveTabIdRef = useRef(activeTabId);
 
   const ensureTabAndRestore = useCallback(
@@ -35,12 +35,12 @@ export function SidecarVisibilityController(): null {
       pendingRestoreRef.current = null;
 
       try {
-        const state = useSidecarStore.getState();
+        const state = usePortalStore.getState();
         const needsCreation = !state.createdTabs.has(tabId);
 
         if (needsCreation) {
-          await window.electron.sidecar.create({ tabId, url: tabUrl });
-          const postCreateState = useSidecarStore.getState();
+          await window.electron.portal.create({ tabId, url: tabUrl });
+          const postCreateState = usePortalStore.getState();
           const stillExists = postCreateState.tabs.some((t) => t.id === tabId);
           if (stillExists) {
             markTabCreated(tabId);
@@ -50,7 +50,7 @@ export function SidecarVisibilityController(): null {
           }
         }
 
-        const getBounds = () => getSidecarPlaceholderBounds();
+        const getBounds = () => getPortalPlaceholderBounds();
 
         let bounds = getBounds();
         let attempts = 0;
@@ -65,9 +65,9 @@ export function SidecarVisibilityController(): null {
           return;
         }
 
-        const sidecarState = useSidecarStore.getState();
+        const portalState = usePortalStore.getState();
         const uiState = useUIStore.getState();
-        if (!sidecarState.isOpen || sidecarState.activeTabId !== tabId) {
+        if (!portalState.isOpen || portalState.activeTabId !== tabId) {
           isRestoringRef.current = false;
           return;
         }
@@ -76,7 +76,7 @@ export function SidecarVisibilityController(): null {
           return;
         }
 
-        await window.electron.sidecar.show({ tabId, bounds });
+        await window.electron.portal.show({ tabId, bounds });
       } catch (error) {
         console.error("Failed to restore tab:", error);
       } finally {
@@ -91,14 +91,14 @@ export function SidecarVisibilityController(): null {
     [markTabCreated]
   );
 
-  // Auto-select first tab on startup when sidecar is open with tabs but no active tab
+  // Auto-select first tab on startup when portal is open with tabs but no active tab
   useEffect(() => {
-    if (!sidecarOpen) return;
+    if (!portalOpen) return;
     if (activeTabId != null) return;
     if (tabs.length === 0) return;
 
-    useSidecarStore.getState().setActiveTab(tabs[0].id);
-  }, [sidecarOpen, tabs, activeTabId]);
+    usePortalStore.getState().setActiveTab(tabs[0].id);
+  }, [portalOpen, tabs, activeTabId]);
 
   // Handle active tab changes (e.g., initial auto-select or programmatic switch)
   // This fixes the issue where the first tab is selected but not loaded on startup
@@ -108,13 +108,13 @@ export function SidecarVisibilityController(): null {
 
     // Trigger restore if:
     // - Active tab changed
-    // - Sidecar is open
+    // - Portal is open
     // - No overlays blocking
     // - Tab not yet created in backend (means app just started or tab never loaded)
     if (
       activeTabId &&
       activeTabId !== prevId &&
-      sidecarOpen &&
+      portalOpen &&
       !hasOverlays &&
       !createdTabs.has(activeTabId)
     ) {
@@ -123,36 +123,36 @@ export function SidecarVisibilityController(): null {
         void ensureTabAndRestore(activeTabId, activeTab.url);
       }
     }
-  }, [activeTabId, sidecarOpen, hasOverlays, tabs, createdTabs, ensureTabAndRestore]);
+  }, [activeTabId, portalOpen, hasOverlays, tabs, createdTabs, ensureTabAndRestore]);
 
   // Handle overlay visibility changes
   useEffect(() => {
     const wasHiddenByOverlay = prevHasOverlaysRef.current;
     prevHasOverlaysRef.current = hasOverlays;
 
-    if (hasOverlays && sidecarOpen) {
-      window.electron.sidecar.hide();
-    } else if (!hasOverlays && wasHiddenByOverlay && sidecarOpen && activeTabId) {
+    if (hasOverlays && portalOpen) {
+      window.electron.portal.hide();
+    } else if (!hasOverlays && wasHiddenByOverlay && portalOpen && activeTabId) {
       const activeTab = tabs.find((t) => t.id === activeTabId);
       if (activeTab?.url) {
         void ensureTabAndRestore(activeTabId, activeTab.url);
       }
     }
-  }, [hasOverlays, sidecarOpen, activeTabId, tabs, ensureTabAndRestore]);
+  }, [hasOverlays, portalOpen, activeTabId, tabs, ensureTabAndRestore]);
 
-  // Handle sidecar open/close toggle (collapse and re-expand)
+  // Handle portal open/close toggle (collapse and re-expand)
   useEffect(() => {
-    const wasClosed = !prevSidecarOpenRef.current;
-    prevSidecarOpenRef.current = sidecarOpen;
+    const wasClosed = !prevPortalOpenRef.current;
+    prevPortalOpenRef.current = portalOpen;
 
-    // Sidecar just opened - restore or create webview if we have an active tab
-    if (sidecarOpen && wasClosed && activeTabId && !hasOverlays) {
+    // Portal just opened - restore or create webview if we have an active tab
+    if (portalOpen && wasClosed && activeTabId && !hasOverlays) {
       const activeTab = tabs.find((t) => t.id === activeTabId);
       if (activeTab?.url) {
         void ensureTabAndRestore(activeTabId, activeTab.url);
       }
     }
-  }, [sidecarOpen, activeTabId, tabs, hasOverlays, ensureTabAndRestore]);
+  }, [portalOpen, activeTabId, tabs, hasOverlays, ensureTabAndRestore]);
 
   return null;
 }

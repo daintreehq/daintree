@@ -57,7 +57,7 @@ import { useProjectSettings, useKeybindingDisplay } from "@/hooks";
 import type { UseProjectSwitcherPaletteReturn } from "@/hooks";
 import { useProjectStore } from "@/store/projectStore";
 import {
-  useSidecarStore,
+  usePortalStore,
   usePreferencesStore,
   useToolbarPreferencesStore,
   useVoiceRecordingStore,
@@ -145,8 +145,8 @@ export function Toolbar({
     return cleanup;
   }, [loadProjects, getCurrentProject]);
 
-  const sidecarOpen = useSidecarStore((state) => state.isOpen);
-  const toggleSidecar = useSidecarStore((state) => state.toggle);
+  const portalOpen = usePortalStore((state) => state.isOpen);
+  const togglePortal = usePortalStore((state) => state.toggle);
   const showDeveloperTools = usePreferencesStore((state) => state.showDeveloperTools);
   const toolbarLayout = useToolbarPreferencesStore((state) => state.layout);
 
@@ -204,7 +204,7 @@ export function Toolbar({
   const panelPaletteShortcut = useKeybindingDisplay("panel.palette");
   const sidebarShortcut = useKeybindingDisplay("nav.toggleSidebar");
   const diagnosticsShortcut = useKeybindingDisplay("panel.toggleDiagnostics");
-  const sidecarShortcut = useKeybindingDisplay("panel.toggleSidecar");
+  const portalShortcut = useKeybindingDisplay("panel.togglePortal");
   const notesShortcut = useKeybindingDisplay("notes.openPalette");
   const settingsShortcut = useKeybindingDisplay("app.settings");
   const panelPaletteOpen = usePaletteStore((state) => state.activePaletteId === "panel");
@@ -326,7 +326,7 @@ export function Toolbar({
         { id: "settings:terminal", label: "Terminal" },
         { id: "settings:keyboard", label: "Keyboard" },
         { id: "settings:notifications", label: "Notifications" },
-        { id: "settings:sidecar", label: "Sidecar" },
+        { id: "settings:portal", label: "Portal" },
         { type: "separator" },
         { id: "settings:toolbar", label: "Customize Toolbar…" },
         { id: "settings:troubleshooting", label: "Troubleshooting" },
@@ -1047,23 +1047,23 @@ export function Toolbar({
         ),
         isAvailable: showDeveloperTools,
       },
-      "sidecar-toggle": {
+      "portal-toggle": {
         render: () => (
-          <TooltipProvider key="sidecar-toggle">
+          <TooltipProvider key="portal-toggle">
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button
                   variant="ghost"
                   size="icon"
                   data-toolbar-item=""
-                  onClick={toggleSidecar}
+                  onClick={togglePortal}
                   className={cn(
                     "text-canopy-text hover:bg-overlay-medium hover:text-canopy-accent transition-colors"
                   )}
-                  aria-label={sidecarOpen ? "Close context sidecar" : "Open context sidecar"}
-                  aria-pressed={sidecarOpen}
+                  aria-label={portalOpen ? "Close context portal" : "Open context portal"}
+                  aria-pressed={portalOpen}
                 >
-                  {sidecarOpen ? (
+                  {portalOpen ? (
                     <PanelRightClose aria-hidden="true" />
                   ) : (
                     <PanelRightOpen aria-hidden="true" />
@@ -1072,8 +1072,8 @@ export function Toolbar({
               </TooltipTrigger>
               <TooltipContent side="bottom">
                 {createTooltipWithShortcut(
-                  sidecarOpen ? "Close Context Sidecar" : "Open Context Sidecar",
-                  sidecarShortcut
+                  portalOpen ? "Close Context Portal" : "Open Context Portal",
+                  portalShortcut
                 )}
               </TooltipContent>
             </Tooltip>
@@ -1093,7 +1093,7 @@ export function Toolbar({
       browserShortcut,
       sidebarShortcut,
       diagnosticsShortcut,
-      sidecarShortcut,
+      portalShortcut,
       notesShortcut,
       settingsShortcut,
       devServerCommand,
@@ -1122,8 +1122,8 @@ export function Toolbar({
       onToggleProblems,
       errorCount,
       showDeveloperTools,
-      toggleSidecar,
-      sidecarOpen,
+      togglePortal,
+      portalOpen,
       getTimeSinceUpdate,
       notificationCenterOpen,
       toggleNotificationCenter,
@@ -1291,7 +1291,7 @@ export function Toolbar({
 
           <div className="w-px h-5 bg-border-divider mx-1" />
 
-          {buttonRegistry["sidecar-toggle"].render()}
+          {buttonRegistry["portal-toggle"].render()}
         </div>
       </div>
     </>

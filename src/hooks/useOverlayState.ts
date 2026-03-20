@@ -3,7 +3,7 @@ import { useUIStore } from "@/store/uiStore";
 
 /**
  * Hook for modal/overlay components to register their open state.
- * When an overlay is open, the sidecar will be hidden.
+ * When an overlay is open, the portal will be hidden.
  *
  * Usage:
  * ```tsx

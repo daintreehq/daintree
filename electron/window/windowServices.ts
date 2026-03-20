@@ -21,7 +21,7 @@ import {
 import { CliAvailabilityService } from "../services/CliAvailabilityService.js";
 import { AgentVersionService } from "../services/AgentVersionService.js";
 import { AgentUpdateHandler } from "../services/AgentUpdateHandler.js";
-import { SidecarManager } from "../services/SidecarManager.js";
+import { PortalManager } from "../services/PortalManager.js";
 import { EventBuffer } from "../services/EventBuffer.js";
 import { CHANNELS } from "../ipc/channels.js";
 import { createApplicationMenu, handleDirectoryOpen } from "../menu.js";
@@ -83,7 +83,7 @@ let workspaceClient: WorkspaceClient | null = null;
 let cliAvailabilityService: CliAvailabilityService | null = null;
 let agentVersionService: AgentVersionService | null = null;
 let agentUpdateHandler: AgentUpdateHandler | null = null;
-let sidecarManager: SidecarManager | null = null;
+let portalManager: PortalManager | null = null;
 let projectMcpManager: ProjectMcpManager | null = null;
 let projectSwitchService: ProjectSwitchService | null = null;
 let cleanupIpcHandlers: (() => void) | null = null;
@@ -371,7 +371,7 @@ export async function setupWindowServices(
   });
 
   eventBuffer = new EventBuffer(1000);
-  sidecarManager = new SidecarManager(win);
+  portalManager = new PortalManager(win);
 
   projectMcpManager = new ProjectMcpManager(win);
 
@@ -380,7 +380,7 @@ export async function setupWindowServices(
     mainWindow: win,
     ptyClient,
     eventBuffer,
-    sidecarManager,
+    portalManager,
     cliAvailabilityService,
     agentVersionService,
     agentUpdateHandler,
@@ -728,8 +728,8 @@ export async function setupWindowServices(
     workspaceClient = null;
     disposeWorkspaceClient();
 
-    if (sidecarManager) sidecarManager.destroy();
-    sidecarManager = null;
+    if (portalManager) portalManager.destroy();
+    portalManager = null;
 
     disposeTaskOrchestrator();
     disposeAgentRouter();

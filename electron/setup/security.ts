@@ -179,7 +179,7 @@ const TRUSTED_SESSION_PERMISSIONS = new Set([
   "media",
 ]);
 
-const SIDECAR_SESSION_PERMISSIONS = new Set(["clipboard-sanitized-write"]);
+const PORTAL_SESSION_PERMISSIONS = new Set(["clipboard-sanitized-write"]);
 
 let permissionLockdownInitialized = false;
 
@@ -222,12 +222,12 @@ export function setupPermissionLockdown(): void {
   // Lock down browser session — fully untrusted
   lockdownUntrustedPermissions(session.fromPartition("persist:browser"), "browser");
 
-  // Sidecar needs clipboard access for AI chat copy buttons (navigator.clipboard.writeText)
+  // Portal needs clipboard access for AI chat copy buttons (navigator.clipboard.writeText)
   // but all other permissions (camera, mic, geolocation, etc.) remain denied
   lockdownTrustedPermissions(
-    session.fromPartition("persist:sidecar"),
-    "sidecar",
-    SIDECAR_SESSION_PERMISSIONS
+    session.fromPartition("persist:portal"),
+    "portal",
+    PORTAL_SESSION_PERMISSIONS
   );
 
   // Catch all dynamically created sessions (e.g., persist:dev-preview-*)

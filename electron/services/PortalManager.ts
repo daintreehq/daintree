@@ -1,9 +1,9 @@
 import { BrowserWindow, Menu, WebContentsView, app, clipboard } from "electron";
-import type { SidecarBounds, SidecarNavEvent } from "../../shared/types/sidecar.js";
+import type { PortalBounds, PortalNavEvent } from "../../shared/types/portal.js";
 import { CHANNELS } from "../ipc/channels.js";
 import { canOpenExternalUrl, openExternalUrl } from "../utils/openExternal.js";
 
-export class SidecarManager {
+export class PortalManager {
   private window: BrowserWindow;
   private viewMap = new Map<string, WebContentsView>();
   private activeView: WebContentsView | null = null;
@@ -14,7 +14,7 @@ export class SidecarManager {
   }
 
   createTab(tabId: string, url: string): void {
-    console.log(`[SidecarManager] Creating tab ${tabId} for ${url}`);
+    console.log(`[PortalManager] Creating tab ${tabId} for ${url}`);
     if (this.viewMap.has(tabId)) return;
 
     try {
@@ -23,7 +23,7 @@ export class SidecarManager {
         throw new Error(`Invalid URL protocol: ${parsedUrl.protocol}`);
       }
     } catch (error) {
-      console.error(`[SidecarManager] Invalid URL for tab ${tabId}:`, error);
+      console.error(`[PortalManager] Invalid URL for tab ${tabId}:`, error);
       return;
     }
 
@@ -33,7 +33,7 @@ export class SidecarManager {
           nodeIntegration: false,
           contextIsolation: true,
           sandbox: true,
-          partition: "persist:sidecar",
+          partition: "persist:portal",
           navigateOnDragDrop: false,
           disableBlinkFeatures: "Auxclick",
         },
@@ -42,15 +42,15 @@ export class SidecarManager {
       view.webContents.setWindowOpenHandler(({ url }) => {
         if (typeof url === "string" && url.trim()) {
           void openExternalUrl(url).catch((error) => {
-            console.error("[SidecarManager] Failed to open window URL:", error);
+            console.error("[PortalManager] Failed to open window URL:", error);
           });
         }
         return { action: "deny" };
       });
 
-      const sendNavEvent = (navEvent: SidecarNavEvent) => {
+      const sendNavEvent = (navEvent: PortalNavEvent) => {
         if (!this.window?.isDestroyed()) {
-          this.window.webContents.send(CHANNELS.SIDECAR_NAV_EVENT, navEvent);
+          this.window.webContents.send(CHANNELS.PORTAL_NAV_EVENT, navEvent);
         }
       };
 
@@ -93,13 +93,13 @@ export class SidecarManager {
 
       view.webContents.on("focus", () => {
         if (!this.window?.isDestroyed()) {
-          this.window.webContents.send(CHANNELS.SIDECAR_FOCUS);
+          this.window.webContents.send(CHANNELS.PORTAL_FOCUS);
         }
       });
 
       view.webContents.on("blur", () => {
         if (!this.window?.isDestroyed()) {
-          this.window.webContents.send(CHANNELS.SIDECAR_BLUR);
+          this.window.webContents.send(CHANNELS.PORTAL_BLUR);
         }
       });
 
@@ -143,7 +143,7 @@ export class SidecarManager {
               enabled: canOpenExternalUrl(linkUrl),
               click: () => {
                 void openExternalUrl(linkUrl).catch((error) => {
-                  console.error("[SidecarManager] Failed to open link URL:", error);
+                  console.error("[PortalManager] Failed to open link URL:", error);
                 });
               },
             },
@@ -179,7 +179,7 @@ export class SidecarManager {
               enabled: canOpenExternalUrl(pageUrl),
               click: () => {
                 void openExternalUrl(pageUrl).catch((error) => {
-                  console.error("[SidecarManager] Failed to open page URL:", error);
+                  console.error("[PortalManager] Failed to open page URL:", error);
                 });
               },
             }
@@ -201,17 +201,17 @@ export class SidecarManager {
       });
 
       view.webContents.loadURL(url).catch((err) => {
-        console.error(`[SidecarManager] Failed to load URL ${url} in tab ${tabId}:`, err);
+        console.error(`[PortalManager] Failed to load URL ${url} in tab ${tabId}:`, err);
       });
       this.viewMap.set(tabId, view);
     } catch (error) {
-      console.error(`[SidecarManager] Failed to create tab ${tabId}:`, error);
+      console.error(`[PortalManager] Failed to create tab ${tabId}:`, error);
       throw error;
     }
   }
 
-  showTab(tabId: string, bounds: SidecarBounds): void {
-    console.log(`[SidecarManager] Showing tab ${tabId}`, bounds);
+  showTab(tabId: string, bounds: PortalBounds): void {
+    console.log(`[PortalManager] Showing tab ${tabId}`, bounds);
     const view = this.viewMap.get(tabId);
     if (!view) return;
 
@@ -229,7 +229,7 @@ export class SidecarManager {
     this.activeTabId = tabId;
   }
 
-  private validateBounds(bounds: SidecarBounds): {
+  private validateBounds(bounds: PortalBounds): {
     x: number;
     y: number;
     width: number;
@@ -251,7 +251,7 @@ export class SidecarManager {
     }
   }
 
-  updateBounds(bounds: SidecarBounds): void {
+  updateBounds(bounds: PortalBounds): void {
     if (this.activeView) {
       const validatedBounds = this.validateBounds(bounds);
       this.activeView.setBounds(validatedBounds);
@@ -271,7 +271,7 @@ export class SidecarManager {
     try {
       view.webContents.close();
     } catch (error) {
-      console.error(`[SidecarManager] Error closing tab ${tabId}:`, error);
+      console.error(`[PortalManager] Error closing tab ${tabId}:`, error);
     }
 
     this.viewMap.delete(tabId);
@@ -288,7 +288,7 @@ export class SidecarManager {
       }
       view.webContents.loadURL(url);
     } catch (error) {
-      console.error(`[SidecarManager] Invalid navigation URL for tab ${tabId}:`, error);
+      console.error(`[PortalManager] Invalid navigation URL for tab ${tabId}:`, error);
     }
   }
 
@@ -328,7 +328,7 @@ export class SidecarManager {
         }
         view.webContents.close();
       } catch (error) {
-        console.error("[SidecarManager] Error destroying view:", error);
+        console.error("[PortalManager] Error destroying view:", error);
       }
     });
     this.viewMap.clear();

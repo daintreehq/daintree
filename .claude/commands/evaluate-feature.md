@@ -59,7 +59,7 @@ Canopy has evolved significantly. Here is the actual feature surface:
 - File viewer with syntax highlighting and diff view (CodeMirror)
 - Review Hub with git staging, commit, and push (in-app lightweight git)
 - Browser panel with console capture, screenshots, and DevTools toggle
-- Sidecar panel for localhost preview and log viewing
+- Portal panel for localhost preview and log viewing
 
 **Project Management:**
 
@@ -492,7 +492,7 @@ These reflect actual decisions made in Canopy's development:
 | Review Hub (Stage/Commit/Push) | **APPROVE**              | Bridges gap. Keeps user in flow. Lightweight — not a full Git GUI.      |
 | Agent Completion Notifications | **APPROVE**              | Unblocks agent. Manages multiplicity. Enables reactive workflow.        |
 | Voice Input Transcription      | **APPROVE**              | Bridges gap. Hands-free delegation while monitoring other agents.       |
-| Integrated Browser (Sidecar)   | **APPROVE (Limited)**    | Only as localhost preview + console capture. Bridges gap. Not Chrome.   |
+| Integrated Browser (Portal)    | **APPROVE (Limited)**    | Only as localhost preview + console capture. Bridges gap. Not Chrome.   |
 | Chat History Search            | **APPROVE**              | Manages multiplicity. Essential for auditing agent work.                |
 | npm Script Runner              | **APPROVE (Simplified)** | Only start/stop via Dev Preview. Not editing package.json.              |
 | Git Graph/Tree                 | **REJECT**               | Red Light: reinvents Git GUI. Too much visual noise.                    |

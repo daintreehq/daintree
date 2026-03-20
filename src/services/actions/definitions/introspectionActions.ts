@@ -23,7 +23,7 @@ export function registerIntrospectionActions(
         category: z
           .string()
           .optional()
-          .describe("Filter by category (e.g. terminal, git, github, panel, sidecar)"),
+          .describe("Filter by category (e.g. terminal, git, github, panel, portal)"),
         search: z.string().optional().describe("Search in action id, title, or description"),
         enabledOnly: z
           .boolean()
@@ -61,20 +61,20 @@ export function registerIntrospectionActions(
     id: "actions.getContext",
     title: "Get Action Context",
     description:
-      "Get the current UI context: focused terminal, active worktree, current project, and sidecar state",
+      "Get the current UI context: focused terminal, active worktree, current project, and portal state",
     category: "introspection",
     kind: "query",
     danger: "safe",
     scope: "renderer",
     run: async () => {
       const { useWorktreeSelectionStore } = await import("@/store/worktreeStore");
-      const { useSidecarStore } = await import("@/store/sidecarStore");
+      const { usePortalStore } = await import("@/store/portalStore");
 
       const project = useProjectStore.getState().currentProject;
       const terminalState = useTerminalStore.getState();
       const worktreeSelection = useWorktreeSelectionStore.getState();
       const worktrees = useWorktreeDataStore.getState().worktrees;
-      const sidecar = useSidecarStore.getState();
+      const portal = usePortalStore.getState();
 
       const focusedId = terminalState.focusedId;
       const focusedTerminal = focusedId
@@ -102,8 +102,8 @@ export function registerIntrospectionActions(
 
       return {
         ...ctx,
-        sidecarOpen: sidecar.isOpen,
-        sidecarActiveTabId: sidecar.activeTabId,
+        portalOpen: portal.isOpen,
+        portalActiveTabId: portal.activeTabId,
         terminalCount: terminalState.terminals.filter((t) => t.location !== "trash").length,
         worktreeCount: worktrees.size,
       };

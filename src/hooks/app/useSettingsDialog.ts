@@ -23,7 +23,7 @@ export function useSettingsDialog() {
       "worktree",
       "agents",
       "github",
-      "sidecar",
+      "portal",
       "toolbar",
       "notifications",
       "editor",

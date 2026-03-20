@@ -10,7 +10,7 @@ vi.mock("zustand/react/shallow", () => ({
 }));
 
 vi.mock("@/store", () => ({
-  useSidecarStore: () => ({ isOpen: false, width: 0 }),
+  usePortalStore: () => ({ isOpen: false, width: 0 }),
 }));
 
 vi.mock("@/hooks", async (importOriginal) => {

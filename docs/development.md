@@ -47,7 +47,7 @@ Main Process (electron/)     Renderer (src/)
 | `GitService`               | Git operations via simple-git     |
 | `worktree/WorktreeService` | Worktree polling and status       |
 | `CopyTreeService`          | Context generation for agents     |
-| `SidecarManager`           | Localhost browser, log viewer     |
+| `PortalManager`            | Localhost browser, log viewer     |
 | `ProjectStore`             | Multi-project persistence         |
 | `HibernationService`       | Terminal state save/restore       |
 
@@ -58,7 +58,7 @@ Main Process (electron/)     Renderer (src/)
 | `components/Terminal/` | Xterm.js rendering, grid layout    |
 | `components/Worktree/` | Dashboard cards, status display    |
 | `components/Layout/`   | App shell, toolbar, dock           |
-| `components/Sidecar/`  | Browser panel, artifact viewer     |
+| `components/Portal/`   | Browser panel, artifact viewer     |
 | `store/*.ts`           | Zustand stores                     |
 | `hooks/`               | React hooks for IPC subscriptions  |
 | `clients/`             | Typed wrappers for window.electron |
@@ -72,7 +72,7 @@ Main Process (electron/)     Renderer (src/)
 | `worktreeStore`      | Active worktree, selection    |
 | `worktreeDataStore`  | Worktree list, git status     |
 | `projectStore`       | Current project, project list |
-| `sidecarStore`       | Sidecar tabs, visibility      |
+| `portalStore`        | Portal tabs, visibility       |
 
 ### Shared Types (`shared/types/ipc/`)
 

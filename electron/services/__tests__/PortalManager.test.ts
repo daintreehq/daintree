@@ -61,8 +61,8 @@ vi.mock("../utils/openExternal.js", () => ({
   openExternalUrl: vi.fn().mockResolvedValue(undefined),
 }));
 
-describe("SidecarManager", () => {
-  let SidecarManagerClass: typeof import("../SidecarManager.js").SidecarManager;
+describe("PortalManager", () => {
+  let PortalManagerClass: typeof import("../PortalManager.js").PortalManager;
   let mockWindow: InstanceType<typeof import("electron").BrowserWindow>;
 
   beforeEach(async () => {
@@ -71,8 +71,8 @@ describe("SidecarManager", () => {
     const electron = await import("electron");
     mockWindow = new electron.BrowserWindow() as InstanceType<typeof electron.BrowserWindow>;
 
-    const module = await import("../SidecarManager.js");
-    SidecarManagerClass = module.SidecarManager;
+    const module = await import("../PortalManager.js");
+    PortalManagerClass = module.PortalManager;
   });
 
   afterEach(() => {
@@ -81,7 +81,7 @@ describe("SidecarManager", () => {
 
   describe("createTab()", () => {
     it("creates a new tab with valid http URL", () => {
-      const manager = new SidecarManagerClass(mockWindow);
+      const manager = new PortalManagerClass(mockWindow);
 
       manager.createTab("tab-1", "http://localhost:3000");
 
@@ -89,7 +89,7 @@ describe("SidecarManager", () => {
     });
 
     it("creates a new tab with valid https URL", () => {
-      const manager = new SidecarManagerClass(mockWindow);
+      const manager = new PortalManagerClass(mockWindow);
 
       manager.createTab("tab-2", "https://example.com");
 
@@ -97,7 +97,7 @@ describe("SidecarManager", () => {
     });
 
     it("rejects invalid URL protocol (file:)", () => {
-      const manager = new SidecarManagerClass(mockWindow);
+      const manager = new PortalManagerClass(mockWindow);
 
       manager.createTab("tab-3", "file:///etc/passwd");
 
@@ -105,7 +105,7 @@ describe("SidecarManager", () => {
     });
 
     it("rejects invalid URL protocol (javascript:)", () => {
-      const manager = new SidecarManagerClass(mockWindow);
+      const manager = new PortalManagerClass(mockWindow);
 
       manager.createTab("tab-4", "javascript:alert(1)");
 
@@ -113,7 +113,7 @@ describe("SidecarManager", () => {
     });
 
     it("rejects invalid URL protocol (ftp:)", () => {
-      const manager = new SidecarManagerClass(mockWindow);
+      const manager = new PortalManagerClass(mockWindow);
 
       manager.createTab("tab-5", "ftp://example.com");
 
@@ -121,7 +121,7 @@ describe("SidecarManager", () => {
     });
 
     it("rejects malformed URLs", () => {
-      const manager = new SidecarManagerClass(mockWindow);
+      const manager = new PortalManagerClass(mockWindow);
 
       manager.createTab("tab-6", "not-a-valid-url");
 
@@ -129,7 +129,7 @@ describe("SidecarManager", () => {
     });
 
     it("does not create duplicate tabs with same ID", () => {
-      const manager = new SidecarManagerClass(mockWindow);
+      const manager = new PortalManagerClass(mockWindow);
 
       manager.createTab("tab-dup", "http://localhost:3000");
       manager.createTab("tab-dup", "http://localhost:4000");
@@ -138,7 +138,7 @@ describe("SidecarManager", () => {
     });
 
     it("rejects data: URLs", () => {
-      const manager = new SidecarManagerClass(mockWindow);
+      const manager = new PortalManagerClass(mockWindow);
 
       manager.createTab("tab-data", "data:text/html,<h1>Test</h1>");
 
@@ -148,7 +148,7 @@ describe("SidecarManager", () => {
 
   describe("showTab()", () => {
     it("shows an existing tab with valid bounds", () => {
-      const manager = new SidecarManagerClass(mockWindow);
+      const manager = new PortalManagerClass(mockWindow);
 
       manager.createTab("tab-show", "http://localhost:3000");
       manager.showTab("tab-show", { x: 100, y: 100, width: 800, height: 600 });
@@ -158,7 +158,7 @@ describe("SidecarManager", () => {
     });
 
     it("does nothing for non-existent tab", () => {
-      const manager = new SidecarManagerClass(mockWindow);
+      const manager = new PortalManagerClass(mockWindow);
 
       manager.showTab("non-existent", { x: 0, y: 0, width: 800, height: 600 });
 
@@ -166,7 +166,7 @@ describe("SidecarManager", () => {
     });
 
     it("switches from one tab to another", () => {
-      const manager = new SidecarManagerClass(mockWindow);
+      const manager = new PortalManagerClass(mockWindow);
 
       manager.createTab("tab-a", "http://localhost:3000");
       manager.createTab("tab-b", "http://localhost:4000");
@@ -182,7 +182,7 @@ describe("SidecarManager", () => {
 
   describe("bounds validation", () => {
     it("validates and normalizes negative bounds", () => {
-      const manager = new SidecarManagerClass(mockWindow);
+      const manager = new PortalManagerClass(mockWindow);
 
       manager.createTab("tab-bounds-neg", "http://localhost:3000");
       manager.showTab("tab-bounds-neg", { x: -100, y: -50, width: 800, height: 600 });
@@ -191,7 +191,7 @@ describe("SidecarManager", () => {
     });
 
     it("validates and normalizes invalid width/height", () => {
-      const manager = new SidecarManagerClass(mockWindow);
+      const manager = new PortalManagerClass(mockWindow);
 
       manager.createTab("tab-bounds-small", "http://localhost:3000");
       manager.showTab("tab-bounds-small", { x: 0, y: 0, width: 10, height: 10 });
@@ -200,7 +200,7 @@ describe("SidecarManager", () => {
     });
 
     it("handles NaN values in bounds", () => {
-      const manager = new SidecarManagerClass(mockWindow);
+      const manager = new PortalManagerClass(mockWindow);
 
       manager.createTab("tab-bounds-nan", "http://localhost:3000");
       manager.showTab("tab-bounds-nan", { x: NaN, y: NaN, width: NaN, height: NaN });
@@ -209,7 +209,7 @@ describe("SidecarManager", () => {
     });
 
     it("handles Infinity values in bounds", () => {
-      const manager = new SidecarManagerClass(mockWindow);
+      const manager = new PortalManagerClass(mockWindow);
 
       manager.createTab("tab-bounds-inf", "http://localhost:3000");
       manager.showTab("tab-bounds-inf", {
@@ -225,7 +225,7 @@ describe("SidecarManager", () => {
 
   describe("hideAll()", () => {
     it("hides all tabs and clears active tab", () => {
-      const manager = new SidecarManagerClass(mockWindow);
+      const manager = new PortalManagerClass(mockWindow);
 
       manager.createTab("tab-hide", "http://localhost:3000");
       manager.showTab("tab-hide", { x: 0, y: 0, width: 800, height: 600 });
@@ -239,7 +239,7 @@ describe("SidecarManager", () => {
     });
 
     it("is safe to call when no tab is active", () => {
-      const manager = new SidecarManagerClass(mockWindow);
+      const manager = new PortalManagerClass(mockWindow);
 
       expect(() => manager.hideAll()).not.toThrow();
       expect(manager.getActiveTabId()).toBeNull();
@@ -248,7 +248,7 @@ describe("SidecarManager", () => {
 
   describe("updateBounds()", () => {
     it("updates bounds of active view", () => {
-      const manager = new SidecarManagerClass(mockWindow);
+      const manager = new PortalManagerClass(mockWindow);
 
       manager.createTab("tab-update-bounds", "http://localhost:3000");
       manager.showTab("tab-update-bounds", { x: 0, y: 0, width: 800, height: 600 });
@@ -259,7 +259,7 @@ describe("SidecarManager", () => {
     });
 
     it("does nothing when no active view", () => {
-      const manager = new SidecarManagerClass(mockWindow);
+      const manager = new PortalManagerClass(mockWindow);
 
       expect(() => manager.updateBounds({ x: 0, y: 0, width: 800, height: 600 })).not.toThrow();
     });
@@ -267,7 +267,7 @@ describe("SidecarManager", () => {
 
   describe("closeTab()", () => {
     it("closes an existing tab", () => {
-      const manager = new SidecarManagerClass(mockWindow);
+      const manager = new PortalManagerClass(mockWindow);
 
       manager.createTab("tab-close", "http://localhost:3000");
       expect(manager.hasTab("tab-close")).toBe(true);
@@ -277,7 +277,7 @@ describe("SidecarManager", () => {
     });
 
     it("clears active tab if closing active", () => {
-      const manager = new SidecarManagerClass(mockWindow);
+      const manager = new PortalManagerClass(mockWindow);
 
       manager.createTab("tab-close-active", "http://localhost:3000");
       manager.showTab("tab-close-active", { x: 0, y: 0, width: 800, height: 600 });
@@ -291,7 +291,7 @@ describe("SidecarManager", () => {
     });
 
     it("does nothing for non-existent tab", () => {
-      const manager = new SidecarManagerClass(mockWindow);
+      const manager = new PortalManagerClass(mockWindow);
 
       expect(() => manager.closeTab("non-existent")).not.toThrow();
     });
@@ -299,7 +299,7 @@ describe("SidecarManager", () => {
 
   describe("navigate()", () => {
     it("navigates to valid http URL", () => {
-      const manager = new SidecarManagerClass(mockWindow);
+      const manager = new PortalManagerClass(mockWindow);
 
       manager.createTab("tab-nav", "http://localhost:3000");
       manager.navigate("tab-nav", "http://localhost:4000");
@@ -308,7 +308,7 @@ describe("SidecarManager", () => {
     });
 
     it("navigates to valid https URL", () => {
-      const manager = new SidecarManagerClass(mockWindow);
+      const manager = new PortalManagerClass(mockWindow);
 
       manager.createTab("tab-nav-https", "http://localhost:3000");
       manager.navigate("tab-nav-https", "https://example.com");
@@ -317,7 +317,7 @@ describe("SidecarManager", () => {
     });
 
     it("rejects navigation to invalid protocol", () => {
-      const manager = new SidecarManagerClass(mockWindow);
+      const manager = new PortalManagerClass(mockWindow);
 
       manager.createTab("tab-nav-invalid", "http://localhost:3000");
 
@@ -326,7 +326,7 @@ describe("SidecarManager", () => {
     });
 
     it("rejects navigation to javascript: URL", () => {
-      const manager = new SidecarManagerClass(mockWindow);
+      const manager = new PortalManagerClass(mockWindow);
 
       manager.createTab("tab-nav-js", "http://localhost:3000");
 
@@ -334,7 +334,7 @@ describe("SidecarManager", () => {
     });
 
     it("does nothing for non-existent tab", () => {
-      const manager = new SidecarManagerClass(mockWindow);
+      const manager = new PortalManagerClass(mockWindow);
 
       expect(() => manager.navigate("non-existent", "http://localhost:3000")).not.toThrow();
     });
@@ -342,7 +342,7 @@ describe("SidecarManager", () => {
 
   describe("goBack() / goForward()", () => {
     it("returns false when cannot go back", () => {
-      const manager = new SidecarManagerClass(mockWindow);
+      const manager = new PortalManagerClass(mockWindow);
 
       manager.createTab("tab-back", "http://localhost:3000");
 
@@ -350,7 +350,7 @@ describe("SidecarManager", () => {
     });
 
     it("returns false when cannot go forward", () => {
-      const manager = new SidecarManagerClass(mockWindow);
+      const manager = new PortalManagerClass(mockWindow);
 
       manager.createTab("tab-forward", "http://localhost:3000");
 
@@ -358,7 +358,7 @@ describe("SidecarManager", () => {
     });
 
     it("returns false for non-existent tab", () => {
-      const manager = new SidecarManagerClass(mockWindow);
+      const manager = new PortalManagerClass(mockWindow);
 
       expect(manager.goBack("non-existent")).toBe(false);
       expect(manager.goForward("non-existent")).toBe(false);
@@ -367,7 +367,7 @@ describe("SidecarManager", () => {
 
   describe("reload()", () => {
     it("reloads an existing tab", () => {
-      const manager = new SidecarManagerClass(mockWindow);
+      const manager = new PortalManagerClass(mockWindow);
 
       manager.createTab("tab-reload", "http://localhost:3000");
 
@@ -375,7 +375,7 @@ describe("SidecarManager", () => {
     });
 
     it("does nothing for non-existent tab", () => {
-      const manager = new SidecarManagerClass(mockWindow);
+      const manager = new PortalManagerClass(mockWindow);
 
       expect(() => manager.reload("non-existent")).not.toThrow();
     });
@@ -383,7 +383,7 @@ describe("SidecarManager", () => {
 
   describe("hasTab()", () => {
     it("returns true for existing tab", () => {
-      const manager = new SidecarManagerClass(mockWindow);
+      const manager = new PortalManagerClass(mockWindow);
 
       manager.createTab("tab-has", "http://localhost:3000");
 
@@ -391,7 +391,7 @@ describe("SidecarManager", () => {
     });
 
     it("returns false for non-existent tab", () => {
-      const manager = new SidecarManagerClass(mockWindow);
+      const manager = new PortalManagerClass(mockWindow);
 
       expect(manager.hasTab("non-existent")).toBe(false);
     });
@@ -399,13 +399,13 @@ describe("SidecarManager", () => {
 
   describe("getActiveTabId()", () => {
     it("returns null when no tab is active", () => {
-      const manager = new SidecarManagerClass(mockWindow);
+      const manager = new PortalManagerClass(mockWindow);
 
       expect(manager.getActiveTabId()).toBeNull();
     });
 
     it("returns active tab ID when a tab is shown", () => {
-      const manager = new SidecarManagerClass(mockWindow);
+      const manager = new PortalManagerClass(mockWindow);
 
       manager.createTab("tab-active", "http://localhost:3000");
       manager.showTab("tab-active", { x: 0, y: 0, width: 800, height: 600 });
@@ -416,7 +416,7 @@ describe("SidecarManager", () => {
 
   describe("destroy()", () => {
     it("destroys all tabs and clears state", () => {
-      const manager = new SidecarManagerClass(mockWindow);
+      const manager = new PortalManagerClass(mockWindow);
 
       manager.createTab("tab-d1", "http://localhost:3000");
       manager.createTab("tab-d2", "http://localhost:4000");
@@ -430,7 +430,7 @@ describe("SidecarManager", () => {
     });
 
     it("is safe to call multiple times", () => {
-      const manager = new SidecarManagerClass(mockWindow);
+      const manager = new PortalManagerClass(mockWindow);
 
       manager.createTab("tab-multi-destroy", "http://localhost:3000");
 
@@ -442,8 +442,8 @@ describe("SidecarManager", () => {
   });
 });
 
-describe("SidecarManager URL validation", () => {
-  let SidecarManagerClass: typeof import("../SidecarManager.js").SidecarManager;
+describe("PortalManager URL validation", () => {
+  let PortalManagerClass: typeof import("../PortalManager.js").PortalManager;
   let mockWindow: InstanceType<typeof import("electron").BrowserWindow>;
 
   beforeEach(async () => {
@@ -452,8 +452,8 @@ describe("SidecarManager URL validation", () => {
     const electron = await import("electron");
     mockWindow = new electron.BrowserWindow() as InstanceType<typeof electron.BrowserWindow>;
 
-    const module = await import("../SidecarManager.js");
-    SidecarManagerClass = module.SidecarManager;
+    const module = await import("../PortalManager.js");
+    PortalManagerClass = module.PortalManager;
   });
 
   afterEach(() => {
@@ -474,7 +474,7 @@ describe("SidecarManager URL validation", () => {
 
   for (const { url, desc } of invalidUrls) {
     it(`rejects ${desc} URL: ${url}`, () => {
-      const manager = new SidecarManagerClass(mockWindow);
+      const manager = new PortalManagerClass(mockWindow);
       manager.createTab(`tab-${desc}`, url);
       expect(manager.hasTab(`tab-${desc}`)).toBe(false);
     });
@@ -491,7 +491,7 @@ describe("SidecarManager URL validation", () => {
 
   for (const url of validUrls) {
     it(`accepts valid URL: ${url}`, () => {
-      const manager = new SidecarManagerClass(mockWindow);
+      const manager = new PortalManagerClass(mockWindow);
       const tabId = `tab-valid-${url.replace(/[^a-z0-9]/gi, "")}`;
       manager.createTab(tabId, url);
       expect(manager.hasTab(tabId)).toBe(true);

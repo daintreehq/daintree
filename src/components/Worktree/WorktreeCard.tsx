@@ -273,9 +273,9 @@ export const WorktreeCard = React.memo(function WorktreeCard({
     allTerminalCount,
   });
 
-  const handleOpenIssueSidecar = useCallback(() => {
+  const handleOpenIssuePortal = useCallback(() => {
     void actionService.dispatch(
-      "worktree.openIssueInSidecar",
+      "worktree.openIssueInPortal",
       { worktreeId: worktree.id },
       { source: "user" }
     );
@@ -289,9 +289,9 @@ export const WorktreeCard = React.memo(function WorktreeCard({
     );
   }, [worktree.id]);
 
-  const handleOpenPRSidecar = useCallback(() => {
+  const handleOpenPRPortal = useCallback(() => {
     void actionService.dispatch(
-      "worktree.openPRInSidecar",
+      "worktree.openPRInPortal",
       { worktreeId: worktree.id },
       { source: "user" }
     );
@@ -656,9 +656,9 @@ export const WorktreeCard = React.memo(function WorktreeCard({
               onCopyContextModified: handleCopyContextModified,
               onOpenEditor,
               onRevealInFinder: handlePathClick,
-              onOpenIssueSidecar: worktree.issueNumber ? handleOpenIssueSidecar : undefined,
+              onOpenIssuePortal: worktree.issueNumber ? handleOpenIssuePortal : undefined,
               onOpenIssueExternal: worktree.issueNumber ? handleOpenIssueExternal : undefined,
-              onOpenPRSidecar: worktree.prUrl ? handleOpenPRSidecar : undefined,
+              onOpenPRPortal: worktree.prUrl ? handleOpenPRPortal : undefined,
               onOpenPRExternal: worktree.prUrl ? handleOpenPRExternal : undefined,
               onAttachIssue: () => setShowIssuePicker(true),
               onViewPlan: () => setShowPlanViewer(true),

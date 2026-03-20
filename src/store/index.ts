@@ -56,7 +56,7 @@ export { useTerminalColorSchemeStore } from "./terminalColorSchemeStore";
 
 export { useTerminalInputStore } from "./terminalInputStore";
 
-export { useSidecarStore } from "./sidecarStore";
+export { usePortalStore } from "./portalStore";
 
 export { useUIStore } from "./uiStore";
 

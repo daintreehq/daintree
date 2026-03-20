@@ -1,35 +1,34 @@
 import { useRef, useEffect, useCallback, useState, useMemo } from "react";
 import type React from "react";
-import { useSidecarStore } from "@/store";
+import { usePortalStore } from "@/store";
 import { cn } from "@/lib/utils";
-import { SidecarToolbar } from "./SidecarToolbar";
-import { SidecarLaunchpad } from "./SidecarLaunchpad";
-import { SIDECAR_MIN_WIDTH, SIDECAR_MAX_WIDTH } from "@shared/types";
+import { PortalToolbar } from "./PortalToolbar";
+import { PortalLaunchpad } from "./PortalLaunchpad";
+import { PORTAL_MIN_WIDTH, PORTAL_MAX_WIDTH } from "@shared/types";
 import { getAIAgentInfo } from "@/lib/aiAgentDetection";
 import { useKeybindingScope } from "@/hooks/useKeybinding";
 import { useMacroFocusStore } from "@/store/macroFocusStore";
 import { useNativeContextMenu } from "@/hooks";
 import type { MenuItemOption } from "@/types";
 import { actionService } from "@/services/ActionService";
-import { getElementBoundsAsDip } from "@/lib/sidecarBounds";
+import { getElementBoundsAsDip } from "@/lib/portalBounds";
 
-export function SidecarDock() {
+export function PortalDock() {
   const { showMenu } = useNativeContextMenu();
-  const { width, activeTabId, tabs, links, setWidth, setOpen, defaultNewTabUrl } =
-    useSidecarStore();
+  const { width, activeTabId, tabs, links, setWidth, setOpen, defaultNewTabUrl } = usePortalStore();
   const contentRef = useRef<HTMLDivElement>(null);
   const dockRef = useRef<HTMLDivElement>(null);
   const [isResizing, setIsResizing] = useState(false);
   const [isSwitching, setIsSwitching] = useState(false);
   const [isFocused, setIsFocused] = useState(false);
 
-  useKeybindingScope("sidecar", isFocused);
+  useKeybindingScope("portal", isFocused);
 
-  const isMacroFocused = useMacroFocusStore((state) => state.focusedRegion === "sidecar");
+  const isMacroFocused = useMacroFocusStore((state) => state.focusedRegion === "portal");
 
   useEffect(() => {
-    useMacroFocusStore.getState().setRegionRef("sidecar", dockRef.current);
-    return () => useMacroFocusStore.getState().setRegionRef("sidecar", null);
+    useMacroFocusStore.getState().setRegionRef("portal", dockRef.current);
+    return () => useMacroFocusStore.getState().setRegionRef("portal", null);
   }, []);
 
   const enabledLinks = useMemo(
@@ -57,14 +56,14 @@ export function SidecarDock() {
 
       const defaultNewTabItems: MenuItemOption[] = [
         {
-          id: "sidecar:default-new-tab:launchpad",
+          id: "portal:default-new-tab:launchpad",
           label: "Launchpad",
           type: "checkbox",
           checked: defaultNewTabUrl === null,
         },
         ...(enabledLinks.length > 0 ? [{ type: "separator" as const }] : []),
         ...enabledLinks.map((link) => ({
-          id: `sidecar:default-new-tab:url:${link.url}`,
+          id: `portal:default-new-tab:url:${link.url}`,
           label: link.title,
           type: "checkbox" as const,
           checked: defaultNewTabUrl === link.url,
@@ -72,57 +71,53 @@ export function SidecarDock() {
       ];
 
       const template: MenuItemOption[] = [
-        { id: "sidecar:new-tab", label: "New Tab" },
+        { id: "portal:new-tab", label: "New Tab" },
         { type: "separator" },
-        { id: "sidecar:close-tab", label: "Close Tab", enabled: activeTabId !== null },
-        { id: "sidecar:close-all", label: "Close All Tabs", enabled: tabs.length > 0 },
+        { id: "portal:close-tab", label: "Close Tab", enabled: activeTabId !== null },
+        { id: "portal:close-all", label: "Close All Tabs", enabled: tabs.length > 0 },
         { type: "separator" },
-        { id: "sidecar:reset-width", label: "Reset Width" },
+        { id: "portal:reset-width", label: "Reset Width" },
         { type: "separator" },
-        { id: "sidecar:default-new-tab", label: "Default New Tab", submenu: defaultNewTabItems },
+        { id: "portal:default-new-tab", label: "Default New Tab", submenu: defaultNewTabItems },
         { type: "separator" },
-        { id: "settings:open:sidecar", label: "Sidecar Settings..." },
+        { id: "settings:open:portal", label: "Portal Settings..." },
       ];
 
       const actionId = await showMenu(event, template);
       if (!actionId) return;
 
-      if (actionId.startsWith("sidecar:default-new-tab:url:")) {
-        const url = actionId.slice("sidecar:default-new-tab:url:".length);
-        void actionService.dispatch(
-          "sidecar.setDefaultNewTab",
-          { url },
-          { source: "context-menu" }
-        );
+      if (actionId.startsWith("portal:default-new-tab:url:")) {
+        const url = actionId.slice("portal:default-new-tab:url:".length);
+        void actionService.dispatch("portal.setDefaultNewTab", { url }, { source: "context-menu" });
         return;
       }
 
       switch (actionId) {
-        case "sidecar:new-tab":
-          void actionService.dispatch("sidecar.newTab", undefined, { source: "context-menu" });
+        case "portal:new-tab":
+          void actionService.dispatch("portal.newTab", undefined, { source: "context-menu" });
           break;
-        case "sidecar:close-tab":
-          void actionService.dispatch("sidecar.closeTab", undefined, { source: "context-menu" });
+        case "portal:close-tab":
+          void actionService.dispatch("portal.closeTab", undefined, { source: "context-menu" });
           break;
-        case "sidecar:close-all":
-          void actionService.dispatch("sidecar.closeAllTabs", undefined, {
+        case "portal:close-all":
+          void actionService.dispatch("portal.closeAllTabs", undefined, {
             source: "context-menu",
           });
           break;
-        case "sidecar:reset-width":
-          void actionService.dispatch("sidecar.resetWidth", undefined, { source: "context-menu" });
+        case "portal:reset-width":
+          void actionService.dispatch("portal.resetWidth", undefined, { source: "context-menu" });
           break;
-        case "sidecar:default-new-tab:launchpad":
+        case "portal:default-new-tab:launchpad":
           void actionService.dispatch(
-            "sidecar.setDefaultNewTab",
+            "portal.setDefaultNewTab",
             { url: null },
             { source: "context-menu" }
           );
           break;
-        case "settings:open:sidecar":
+        case "settings:open:portal":
           void actionService.dispatch(
             "app.settings.openTab",
-            { tab: "sidecar" },
+            { tab: "portal" },
             { source: "context-menu" }
           );
           break;
@@ -135,7 +130,7 @@ export function SidecarDock() {
     if (!contentRef.current || !activeTabId) return;
     const bounds = getElementBoundsAsDip(contentRef.current);
     if (bounds) {
-      window.electron.sidecar.resize(bounds);
+      window.electron.portal.resize(bounds);
     }
   }, [activeTabId]);
 
@@ -155,13 +150,13 @@ export function SidecarDock() {
   }, [activeTabId, syncBounds]);
 
   useEffect(() => {
-    const cleanup = window.electron.sidecar.onNavEvent((data) => {
+    const cleanup = window.electron.portal.onNavEvent((data) => {
       const agentInfo = getAIAgentInfo(data.url);
       const finalTitle = agentInfo?.title ?? data.title;
-      useSidecarStore.getState().updateTabTitle(data.tabId, finalTitle);
-      useSidecarStore.getState().updateTabUrl(data.tabId, data.url);
+      usePortalStore.getState().updateTabTitle(data.tabId, finalTitle);
+      usePortalStore.getState().updateTabUrl(data.tabId, data.url);
       if (agentInfo?.icon) {
-        useSidecarStore.getState().updateTabIcon(data.tabId, agentInfo.icon);
+        usePortalStore.getState().updateTabIcon(data.tabId, agentInfo.icon);
       }
     });
     return cleanup;
@@ -173,15 +168,15 @@ export function SidecarDock() {
       setIsSwitching(true);
       try {
         const result = await actionService.dispatch(
-          "sidecar.activateTab",
+          "portal.activateTab",
           { tabId },
           { source: "user" }
         );
         if (!result.ok) {
-          console.error("Failed to activate sidecar tab:", result.error);
+          console.error("Failed to activate portal tab:", result.error);
         }
       } catch (error) {
-        console.error("Failed to activate sidecar tab:", error);
+        console.error("Failed to activate portal tab:", error);
       } finally {
         setIsSwitching(false);
       }
@@ -190,44 +185,40 @@ export function SidecarDock() {
   );
 
   const handleTabClose = useCallback((tabId: string) => {
-    void actionService.dispatch("sidecar.closeTab", { tabId }, { source: "user" });
+    void actionService.dispatch("portal.closeTab", { tabId }, { source: "user" });
   }, []);
 
   const handleOpenUrl = useCallback(
     (url: string, title: string, background?: boolean) => {
       if (isSwitching) return;
-      void actionService.dispatch(
-        "sidecar.openUrl",
-        { url, title, background },
-        { source: "user" }
-      );
+      void actionService.dispatch("portal.openUrl", { url, title, background }, { source: "user" });
     },
     [isSwitching]
   );
 
   useEffect(() => {
-    if (!window.electron.sidecar.onNewTabMenuAction) return;
+    if (!window.electron.portal.onNewTabMenuAction) return;
 
-    const cleanup = window.electron.sidecar.onNewTabMenuAction((action) => {
+    const cleanup = window.electron.portal.onNewTabMenuAction((action) => {
       if (!action || typeof action !== "object" || typeof action.type !== "string") return;
 
       switch (action.type) {
         case "open-url":
           if (typeof action.url !== "string" || typeof action.title !== "string") return;
           void actionService.dispatch(
-            "sidecar.openUrl",
+            "portal.openUrl",
             { url: action.url, title: action.title },
             { source: "menu" }
           );
           return;
 
         case "open-launchpad":
-          void actionService.dispatch("sidecar.openLaunchpad", undefined, { source: "menu" });
+          void actionService.dispatch("portal.openLaunchpad", undefined, { source: "menu" });
           return;
 
         case "set-default-new-tab-url":
           void actionService.dispatch(
-            "sidecar.setDefaultNewTab",
+            "portal.setDefaultNewTab",
             { url: action.url },
             { source: "menu" }
           );
@@ -243,26 +234,26 @@ export function SidecarDock() {
 
   const handleNewTab = useCallback(() => {
     if (isSwitching) return;
-    void actionService.dispatch("sidecar.newTab", undefined, { source: "user" });
+    void actionService.dispatch("portal.newTab", undefined, { source: "user" });
   }, [isSwitching]);
 
-  // Keybindings for sidecar scope are handled by the global keybinding handler
-  // useKeybindingScope above tells the service when sidecar is focused
+  // Keybindings for portal scope are handled by the global keybinding handler
+  // useKeybindingScope above tells the service when portal is focused
 
   const handleClose = useCallback(async () => {
-    await actionService.dispatch("sidecar.closeAllTabs", undefined, { source: "user" });
+    await actionService.dispatch("portal.closeAllTabs", undefined, { source: "user" });
     setOpen(false);
   }, [setOpen]);
 
   const handleGoBack = useCallback(async () => {
-    const result = await actionService.dispatch("sidecar.goBack", undefined, { source: "user" });
+    const result = await actionService.dispatch("portal.goBack", undefined, { source: "user" });
     if (!result.ok) {
       console.error("Failed to go back:", result.error);
     }
   }, [activeTabId]);
 
   const handleGoForward = useCallback(async () => {
-    const result = await actionService.dispatch("sidecar.goForward", undefined, {
+    const result = await actionService.dispatch("portal.goForward", undefined, {
       source: "user",
     });
     if (!result.ok) {
@@ -271,14 +262,14 @@ export function SidecarDock() {
   }, [activeTabId]);
 
   const handleReload = useCallback(async () => {
-    const result = await actionService.dispatch("sidecar.reload", undefined, { source: "user" });
+    const result = await actionService.dispatch("portal.reload", undefined, { source: "user" });
     if (!result.ok) {
       console.error("Failed to reload:", result.error);
     }
   }, [activeTabId]);
 
   const handleOpenExternal = useCallback(async () => {
-    const result = await actionService.dispatch("sidecar.openExternal", undefined, {
+    const result = await actionService.dispatch("portal.openExternal", undefined, {
       source: "user",
     });
     if (!result.ok) {
@@ -287,7 +278,7 @@ export function SidecarDock() {
   }, []);
 
   const handleCopyUrl = useCallback(async () => {
-    const result = await actionService.dispatch("sidecar.copyUrl", undefined, { source: "user" });
+    const result = await actionService.dispatch("portal.copyUrl", undefined, { source: "user" });
     if (!result.ok) {
       console.error("Failed to copy URL:", result.error);
     }
@@ -297,7 +288,7 @@ export function SidecarDock() {
     async (tabId: string) => {
       if (isSwitching) return;
       const result = await actionService.dispatch(
-        "sidecar.duplicateTab",
+        "portal.duplicateTab",
         { tabId },
         { source: "context-menu" }
       );
@@ -312,7 +303,7 @@ export function SidecarDock() {
     async (tabId: string) => {
       if (isSwitching) return;
       const result = await actionService.dispatch(
-        "sidecar.closeOthers",
+        "portal.closeOthers",
         { tabId },
         { source: "context-menu" }
       );
@@ -327,7 +318,7 @@ export function SidecarDock() {
     async (tabId: string) => {
       if (isSwitching) return;
       const result = await actionService.dispatch(
-        "sidecar.closeToRight",
+        "portal.closeToRight",
         { tabId },
         { source: "context-menu" }
       );
@@ -340,7 +331,7 @@ export function SidecarDock() {
 
   const handleCopyTabUrl = useCallback(async (tabId: string) => {
     const result = await actionService.dispatch(
-      "sidecar.copyTabUrl",
+      "portal.copyTabUrl",
       { tabId },
       { source: "context-menu" }
     );
@@ -351,7 +342,7 @@ export function SidecarDock() {
 
   const handleOpenTabExternal = useCallback(async (tabId: string) => {
     const result = await actionService.dispatch(
-      "sidecar.openTabExternal",
+      "portal.openTabExternal",
       { tabId },
       { source: "context-menu" }
     );
@@ -362,7 +353,7 @@ export function SidecarDock() {
 
   const handleReloadTab = useCallback(async (tabId: string) => {
     const result = await actionService.dispatch(
-      "sidecar.reloadTab",
+      "portal.reloadTab",
       { tabId },
       { source: "context-menu" }
     );
@@ -382,10 +373,7 @@ export function SidecarDock() {
 
       const handleMouseMove = (e: MouseEvent) => {
         const delta = startX - e.clientX;
-        const newWidth = Math.min(
-          Math.max(startWidth + delta, SIDECAR_MIN_WIDTH),
-          SIDECAR_MAX_WIDTH
-        );
+        const newWidth = Math.min(Math.max(startWidth + delta, PORTAL_MIN_WIDTH), PORTAL_MAX_WIDTH);
         setWidth(newWidth);
       };
 
@@ -410,11 +398,11 @@ export function SidecarDock() {
     (e: React.KeyboardEvent) => {
       if (e.key === "ArrowLeft") {
         e.preventDefault();
-        const newWidth = Math.min(width + RESIZE_STEP, SIDECAR_MAX_WIDTH);
+        const newWidth = Math.min(width + RESIZE_STEP, PORTAL_MAX_WIDTH);
         setWidth(newWidth);
       } else if (e.key === "ArrowRight") {
         e.preventDefault();
-        const newWidth = Math.max(width - RESIZE_STEP, SIDECAR_MIN_WIDTH);
+        const newWidth = Math.max(width - RESIZE_STEP, PORTAL_MIN_WIDTH);
         setWidth(newWidth);
       }
     },
@@ -438,12 +426,12 @@ export function SidecarDock() {
   }, []);
 
   useEffect(() => {
-    if (!window.electron.sidecar.onFocus || !window.electron.sidecar.onBlur) return;
+    if (!window.electron.portal.onFocus || !window.electron.portal.onBlur) return;
 
-    const cleanupFocus = window.electron.sidecar.onFocus(() => {
+    const cleanupFocus = window.electron.portal.onFocus(() => {
       setIsFocused(true);
     });
-    const cleanupBlur = window.electron.sidecar.onBlur(() => {
+    const cleanupBlur = window.electron.portal.onBlur(() => {
       setIsFocused(false);
     });
     return () => {
@@ -456,10 +444,10 @@ export function SidecarDock() {
     <div
       ref={dockRef}
       role="region"
-      aria-label="Sidecar"
+      aria-label="Portal"
       data-macro-focus={isMacroFocused ? "true" : undefined}
       className={cn(
-        "flex flex-col h-full bg-canopy-bg relative sidecar-dock outline-none",
+        "flex flex-col h-full bg-canopy-bg relative portal-dock outline-none",
         "data-[macro-focus=true]:ring-2 data-[macro-focus=true]:ring-canopy-accent/60 data-[macro-focus=true]:ring-inset"
       )}
       style={{ width }}
@@ -470,11 +458,11 @@ export function SidecarDock() {
     >
       <div
         role="separator"
-        aria-label="Resize sidecar panel"
+        aria-label="Resize portal panel"
         aria-orientation="vertical"
         aria-valuenow={Math.round(width)}
-        aria-valuemin={SIDECAR_MIN_WIDTH}
-        aria-valuemax={SIDECAR_MAX_WIDTH}
+        aria-valuemin={PORTAL_MIN_WIDTH}
+        aria-valuemax={PORTAL_MAX_WIDTH}
         tabIndex={0}
         className={cn(
           "group absolute -left-1.5 top-0 bottom-0 w-3 cursor-col-resize flex items-center justify-center z-50",
@@ -493,7 +481,7 @@ export function SidecarDock() {
           )}
         />
       </div>
-      <SidecarToolbar
+      <PortalToolbar
         tabs={tabs}
         activeTabId={activeTabId}
         onTabClick={handleTabClick}
@@ -517,9 +505,9 @@ export function SidecarDock() {
       />
       <div ref={contentRef} className="flex-1 flex flex-col min-h-0 relative">
         {showLaunchpad ? (
-          <SidecarLaunchpad links={enabledLinks} onOpenUrl={handleOpenUrl} />
+          <PortalLaunchpad links={enabledLinks} onOpenUrl={handleOpenUrl} />
         ) : (
-          <div className="flex-1 bg-canopy-sidebar" id="sidecar-placeholder" />
+          <div className="flex-1 bg-canopy-sidebar" id="portal-placeholder" />
         )}
       </div>
     </div>
