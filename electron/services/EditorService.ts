@@ -98,7 +98,7 @@ const KNOWN_EDITORS: EditorDefinition[] = [
         { name: "IntelliJ IDEA" },
         { name: "IntelliJ IDEA CE" },
         { name: "PhpStorm" },
-        { name: "PyCharm Professional Edition" },
+        { name: "PyCharm" },
         { name: "PyCharm CE" },
         { name: "GoLand" },
         { name: "Rider" },
