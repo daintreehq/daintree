@@ -60,6 +60,62 @@ test.describe.serial("Core: Diagnostics & Notifications", () => {
       await expect(eventsPanel).toBeVisible({ timeout: T_SHORT });
     });
 
+    test("events tab shows captured events", async () => {
+      const { window } = ctx;
+
+      const eventsPanel = window.locator(SEL.diagnostics.panel("events"));
+      await expect(eventsPanel).toBeVisible({ timeout: T_SHORT });
+
+      // Verify the EventBuffer has captured events from app startup
+      await expect
+        .poll(
+          () =>
+            window.evaluate(async () => {
+              type EI = { getEvents: () => Promise<unknown[]> };
+              return ((window as any).electron.eventInspector as EI)
+                .getEvents()
+                .then((e) => e.length);
+            }),
+          { timeout: T_MEDIUM }
+        )
+        .toBeGreaterThanOrEqual(1);
+
+      // The EventTimeline component hides empty state when events exist
+      await expect(eventsPanel.getByText("No events captured yet")).not.toBeVisible();
+    });
+
+    test("logs tab renders log entries", async () => {
+      const { window } = ctx;
+
+      // Switch to logs tab
+      const logsTab = window.locator(SEL.diagnostics.tab("logs"));
+      await logsTab.click();
+      await expect(logsTab).toHaveAttribute("aria-selected", "true", {
+        timeout: T_SHORT,
+      });
+
+      const logsPanel = window.locator(SEL.diagnostics.panel("logs"));
+      await expect(logsPanel).toBeVisible({ timeout: T_SHORT });
+
+      // Seed a log entry via IPC to ensure at least one exists
+      await window.evaluate(() =>
+        (
+          (window as any).electron.logs as {
+            write: (level: string, message: string) => Promise<void>;
+          }
+        ).write("info", "E2E diagnostics test log")
+      );
+
+      // Verify logs loaded into the panel (Virtuoso renders items)
+      await expect
+        .poll(() => logsPanel.locator('[data-testid="virtuoso-item-list"] > *').count(), {
+          timeout: T_MEDIUM,
+        })
+        .toBeGreaterThanOrEqual(1);
+
+      await expect(logsPanel.getByText("No logs yet")).not.toBeVisible();
+    });
+
     test("resizes via keyboard", async () => {
       const { window } = ctx;
 
