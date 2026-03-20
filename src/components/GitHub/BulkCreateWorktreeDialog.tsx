@@ -394,11 +394,27 @@ export function BulkCreateWorktreeDialog({
 
   const processedCount = succeededCount + failedCount;
 
+  // Local tracking map shared across runBatch calls — survives stale closures
+  const batchTrackingRef = useRef(
+    new Map<
+      number,
+      {
+        worktreeId?: string;
+        worktreePath?: string;
+        resolvedBranch?: string;
+        spawnedTerminalIds: string[];
+        failedTerminalIndices: number[];
+      }
+    >()
+  );
+
   const runBatch = useCallback(
     async (toCreate: PlannedWorktree[]) => {
       const currentRunId = ++runIdRef.current;
       const rootPath = currentProject?.path;
       if (!rootPath) return;
+
+      const tracking = batchTrackingRef.current;
 
       const queue = new PQueue({
         concurrency: QUEUE_CONCURRENCY,
@@ -415,7 +431,7 @@ export function BulkCreateWorktreeDialog({
         void queue.add(async () => {
           if (runIdRef.current !== currentRunId) return;
 
-          const existingStatus = progress.items.get(item.issue.number);
+          const tracked = tracking.get(item.issue.number);
           let backoffDelay = BACKOFF_BASE_MS;
 
           for (let attempt = 1; attempt <= MAX_AUTO_RETRIES + 1; attempt++) {
@@ -423,15 +439,15 @@ export function BulkCreateWorktreeDialog({
 
             try {
               // Step 1: Worktree creation (skip if already created)
-              let worktreeId = existingStatus?.worktreeId;
-              let worktreePath = existingStatus?.worktreePath;
-              let resolvedBranch = existingStatus?.resolvedBranch;
+              let worktreeId = tracked?.worktreeId;
+              let worktreePath = tracked?.worktreePath;
+              let resolvedBranch = tracked?.resolvedBranch;
 
               if (!worktreeId) {
                 // Check if a worktree for this branch already exists (idempotent retry)
                 const worktrees = useWorktreeDataStore.getState().worktrees;
                 for (const wt of worktrees.values()) {
-                  if (wt.branch && wt.branch.endsWith(item.branchName)) {
+                  if (wt.branch && wt.branch === item.branchName) {
                     worktreeId = wt.worktreeId;
                     worktreePath = wt.path;
                     resolvedBranch = wt.branch;
@@ -477,6 +493,14 @@ export function BulkCreateWorktreeDialog({
                 worktreePath = path;
                 resolvedBranch = availableBranch;
 
+                tracking.set(item.issue.number, {
+                  worktreeId,
+                  worktreePath: path,
+                  resolvedBranch: availableBranch,
+                  spawnedTerminalIds: [],
+                  failedTerminalIndices: [],
+                });
+
                 dispatchProgress({
                   type: "ITEM_WORKTREE_CREATED",
                   issueNumber: item.issue.number,
@@ -484,8 +508,15 @@ export function BulkCreateWorktreeDialog({
                   worktreePath: path,
                   branch: availableBranch,
                 });
-              } else if (existingStatus?.stage === "pending") {
-                // Existing worktree found — mark worktree as already created
+              } else if (!tracked?.worktreeId) {
+                // Existing worktree found in data store — record in tracking
+                tracking.set(item.issue.number, {
+                  worktreeId,
+                  worktreePath: worktreePath!,
+                  resolvedBranch: resolvedBranch!,
+                  spawnedTerminalIds: tracked?.spawnedTerminalIds ?? [],
+                  failedTerminalIndices: tracked?.failedTerminalIndices ?? [],
+                });
                 dispatchProgress({
                   type: "ITEM_WORKTREE_CREATED",
                   issueNumber: item.issue.number,
@@ -497,7 +528,8 @@ export function BulkCreateWorktreeDialog({
 
               // Step 2: Recipe execution (skip if no recipe)
               if (selectedRecipeId && worktreePath && worktreeId) {
-                const failedIndices = existingStatus?.failedTerminalIndices;
+                const currentTracked = tracking.get(item.issue.number);
+                const failedIndices = currentTracked?.failedTerminalIndices;
                 const shouldRetryTerminals =
                   failedIndices && failedIndices.length > 0 ? failedIndices : undefined;
 
@@ -520,6 +552,16 @@ export function BulkCreateWorktreeDialog({
                     shouldRetryTerminals
                   );
 
+                // Update local tracking with results
+                const updatedTracked = tracking.get(item.issue.number);
+                if (updatedTracked) {
+                  updatedTracked.spawnedTerminalIds = [
+                    ...updatedTracked.spawnedTerminalIds,
+                    ...results.spawned.map((s) => s.terminalId),
+                  ];
+                  updatedTracked.failedTerminalIndices = results.failed.map((f) => f.index);
+                }
+
                 dispatchProgress({
                   type: "ITEM_TERMINALS_RESULT",
                   issueNumber: item.issue.number,
@@ -528,12 +570,13 @@ export function BulkCreateWorktreeDialog({
                 });
 
                 if (results.failed.length > 0) {
-                  const errorMsg = `${results.failed.length} terminal(s) failed to spawn`;
-                  if (attempt <= MAX_AUTO_RETRIES && isTransientError(errorMsg)) {
+                  const hasTransient = results.failed.some((f) => isTransientError(f.error));
+                  if (attempt <= MAX_AUTO_RETRIES && hasTransient) {
                     backoffDelay = nextBackoffDelay(backoffDelay);
                     await delay(backoffDelay);
                     continue;
                   }
+                  const errorMsg = `${results.failed.length} terminal(s) failed to spawn`;
                   failed++;
                   dispatchProgress({
                     type: "ITEM_FAILED",
@@ -596,48 +639,36 @@ export function BulkCreateWorktreeDialog({
       if (runIdRef.current !== currentRunId) return;
       queueRef.current = null;
 
-      // Post-batch verification: check terminal health
+      // Post-batch verification: check terminal health using local tracking (not stale closure)
       if (selectedRecipeId) {
         await delay(VERIFICATION_SETTLE_MS);
         if (runIdRef.current !== currentRunId) return;
 
-        const recipe = useRecipeStore.getState().getRecipeById(selectedRecipeId);
-        const expectedCount = recipe?.terminals.length ?? 0;
+        const terminals = useTerminalStore.getState().terminals;
 
-        if (expectedCount > 0) {
-          const terminals = useTerminalStore.getState().terminals;
-          const itemsCopy = new Map(progress.items);
-          let hasVerificationFailures = false;
+        for (const [issueNumber, tracked] of tracking) {
+          if (!tracked.worktreeId || tracked.spawnedTerminalIds.length === 0) continue;
+          // Only verify items that succeeded
+          if (tracked.failedTerminalIndices.length > 0) continue;
 
-          for (const [issueNumber, itemStatus] of itemsCopy) {
-            if (itemStatus.stage !== "succeeded" || !itemStatus.worktreeId) continue;
+          dispatchProgress({ type: "ITEM_VERIFYING", issueNumber });
 
-            dispatchProgress({ type: "ITEM_VERIFYING", issueNumber });
+          // Check each spawned terminal — failed means non-zero exit code
+          const crashedCount = tracked.spawnedTerminalIds.filter((tid) => {
+            const t = terminals.find((term) => term.id === tid);
+            return t && t.exitCode !== undefined && t.exitCode !== 0;
+          }).length;
 
-            const worktreeTerminals = terminals.filter(
-              (t) =>
-                t.worktreeId === itemStatus.worktreeId &&
-                t.location !== "trash" &&
-                t.exitCode === undefined
-            );
-
-            if (worktreeTerminals.length < expectedCount) {
-              hasVerificationFailures = true;
-              const missingCount = expectedCount - worktreeTerminals.length;
-              failed++;
-              succeeded--;
-              dispatchProgress({
-                type: "ITEM_FAILED",
-                issueNumber,
-                error: `${missingCount} terminal(s) missing or crashed after spawn`,
-                attempts: itemStatus.attempt,
-                failedStep: "verification",
-              });
-            }
-          }
-
-          if (hasVerificationFailures) {
-            // Re-read progress after verification dispatches
+          if (crashedCount > 0) {
+            failed++;
+            succeeded--;
+            dispatchProgress({
+              type: "ITEM_FAILED",
+              issueNumber,
+              error: `${crashedCount} terminal(s) crashed after spawn`,
+              attempts: 1,
+              failedStep: "verification",
+            });
           }
         }
       }
@@ -663,7 +694,7 @@ export function BulkCreateWorktreeDialog({
         });
       }
     },
-    [selectedRecipeId, assignWorktreeToSelf, currentProject?.path, progress.items]
+    [selectedRecipeId, assignWorktreeToSelf, currentProject?.path]
   );
 
   const handleCreate = useCallback(async () => {
