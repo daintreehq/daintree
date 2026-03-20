@@ -6,7 +6,7 @@ import { runTerminalCommand, waitForTerminalText } from "../helpers/terminal";
 import { getFirstGridPanel, getGridPanelCount } from "../helpers/panels";
 import { SEL } from "../helpers/selectors";
 import { T_LONG, T_MEDIUM } from "../helpers/timeouts";
-import { getPtyPid, isPidAlive, measureMainMemory, waitForProcessDeath } from "../helpers/stress";
+import { getPtyPid, isPidAlive, measureMainMemory } from "../helpers/stress";
 
 // Keep within the terminal spawn rate limit (10 per 30s window)
 const CYCLE_COUNT = 8;

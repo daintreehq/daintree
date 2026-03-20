@@ -1076,8 +1076,21 @@ function App() {
         message: e.message,
         fromPreviousSession: e.fromPreviousSession,
       }));
+    window.__CANOPY_E2E_ADD_ERROR__ = (message: string) => {
+      useErrorStore.getState().addError({
+        type: "unknown",
+        message,
+        isTransient: false,
+        source: "e2e-test",
+      });
+    };
+    window.__CANOPY_E2E_CLEAR_ERRORS__ = () => {
+      useErrorStore.getState().clearAll();
+    };
     return () => {
       delete window.__CANOPY_E2E_ERROR_STORE__;
+      delete window.__CANOPY_E2E_ADD_ERROR__;
+      delete window.__CANOPY_E2E_CLEAR_ERRORS__;
     };
   }, []);
 

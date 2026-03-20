@@ -11,6 +11,7 @@ export let exposeGc: (() => void) | undefined;
 try {
   nodeV8.setFlagsFromString("--expose_gc");
   exposeGc = vm.runInNewContext("gc") as () => void;
+  (globalThis as Record<string, unknown>).__canopy_gc = exposeGc;
 } catch {
   // GC exposure not available — non-critical
 }
