@@ -131,7 +131,6 @@ export class CrashRecoveryService {
       let snapshot: SessionSnapshot;
       if (this.cachedBackupSnapshot) {
         snapshot = this.cachedBackupSnapshot;
-        this.cachedBackupSnapshot = null;
       } else {
         if (!fs.existsSync(this.backupPath)) return false;
         const raw = fs.readFileSync(this.backupPath, "utf8");
@@ -149,6 +148,7 @@ export class CrashRecoveryService {
       }
 
       this.applySessionSnapshot(snapshot);
+      this.cachedBackupSnapshot = null;
       console.log(
         "[CrashRecovery] Session restored from backup" +
           (panelIds && panelIds.length > 0 ? ` (${panelIds.length} panels selected)` : "")
