@@ -30,35 +30,41 @@ describe("ThemeSelectionStep", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    Object.defineProperty(window, "matchMedia", {
+      writable: true,
+      value: vi.fn().mockImplementation((query: string) => ({
+        matches: query === "(prefers-color-scheme: dark)",
+        media: query,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      })),
+    });
   });
 
-  it("renders dark and light section headers", () => {
+  it("renders exactly two theme options (Daintree and Bondi)", () => {
+    render(<ThemeSelectionStep {...defaultProps} />);
+    expect(screen.getByText("Daintree")).toBeTruthy();
+    expect(screen.getByText("Bondi")).toBeTruthy();
+    expect(screen.queryByText("Fiordland")).toBeNull();
+    expect(screen.queryByText("Highlands")).toBeNull();
+  });
+
+  it("shows dark and light labels", () => {
     render(<ThemeSelectionStep {...defaultProps} />);
     expect(screen.getByText("Dark")).toBeTruthy();
     expect(screen.getByText("Light")).toBeTruthy();
   });
 
-  it("renders all 12 built-in theme buttons", () => {
+  it("shows more themes hint", () => {
     render(<ThemeSelectionStep {...defaultProps} />);
-    expect(screen.getByText("Daintree")).toBeTruthy();
-    expect(screen.getByText("Fiordland")).toBeTruthy();
-    expect(screen.getByText("Highlands")).toBeTruthy();
-    expect(screen.getByText("Arashiyama")).toBeTruthy();
-    expect(screen.getByText("Galápagos")).toBeTruthy();
-    expect(screen.getByText("Namib")).toBeTruthy();
-    expect(screen.getByText("Redwoods")).toBeTruthy();
-    expect(screen.getByText("Bondi")).toBeTruthy();
-    expect(screen.getByText("Svalbard")).toBeTruthy();
-    expect(screen.getByText("Atacama")).toBeTruthy();
-    expect(screen.getByText("Serengeti")).toBeTruthy();
-    expect(screen.getByText("Hokkaido")).toBeTruthy();
+    expect(screen.getByText(/More themes available in Settings/)).toBeTruthy();
   });
 
   it("calls setSelectedSchemeId and appThemeClient.setColorScheme on theme click", () => {
     render(<ThemeSelectionStep {...defaultProps} />);
-    fireEvent.click(screen.getByText("Fiordland"));
-    expect(mockSetSelectedSchemeId).toHaveBeenCalledWith("fiordland");
-    expect(mockSetColorScheme).toHaveBeenCalledWith("fiordland");
+    fireEvent.click(screen.getByText("Bondi"));
+    expect(mockSetSelectedSchemeId).toHaveBeenCalledWith("bondi");
+    expect(mockSetColorScheme).toHaveBeenCalledWith("bondi");
   });
 
   it("calls onContinue when Continue is clicked", () => {
@@ -76,5 +82,25 @@ describe("ThemeSelectionStep", () => {
   it("renders nothing when isOpen is false", () => {
     const { container } = render(<ThemeSelectionStep {...defaultProps} isOpen={false} />);
     expect(container.querySelector("[role='dialog']")).toBeNull();
+  });
+
+  it("auto-selects bondi when OS prefers light and current scheme is daintree", () => {
+    Object.defineProperty(window, "matchMedia", {
+      writable: true,
+      value: vi.fn().mockImplementation((query: string) => ({
+        matches: query === "(prefers-color-scheme: light)",
+        media: query,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      })),
+    });
+    render(<ThemeSelectionStep {...defaultProps} />);
+    expect(mockSetSelectedSchemeId).toHaveBeenCalledWith("bondi");
+    expect(mockSetColorScheme).toHaveBeenCalledWith("bondi");
+  });
+
+  it("does not auto-select when already on OS-preferred scheme", () => {
+    render(<ThemeSelectionStep {...defaultProps} />);
+    expect(mockSetSelectedSchemeId).not.toHaveBeenCalled();
   });
 });
