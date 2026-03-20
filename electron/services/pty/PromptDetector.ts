@@ -89,3 +89,32 @@ export function detectPrompt(
 
   return { isPrompt: false, confidence: 0 };
 }
+
+const LEXEME_BRACKET_CONFIRM = /[[(]\s*[yY](?:es)?\s*\/\s*[nN](?:o)?\s*[\])]/;
+const LEXEME_TRAILING_QUESTION = /\?\s*$/;
+const LEXEME_KEYWORD_COLON =
+  /(?:password|passphrase|username|token|host|enter|select|choose|confirm|input)\s*:\s*$/i;
+const LEXEME_PRESS_CONTINUE = /press\s+(?:any|return|enter)\s+/i;
+
+const PROMPT_LEXEME_PATTERNS = [
+  LEXEME_BRACKET_CONFIRM,
+  LEXEME_TRAILING_QUESTION,
+  LEXEME_KEYWORD_COLON,
+  LEXEME_PRESS_CONTINUE,
+];
+
+export function detectPromptLexeme(line: string): PromptDetectionResult {
+  const clean = stripAnsi(line).trim();
+  if (clean.length === 0) {
+    return { isPrompt: false, confidence: 0 };
+  }
+
+  for (const pattern of PROMPT_LEXEME_PATTERNS) {
+    const match = clean.match(pattern);
+    if (match) {
+      return { isPrompt: true, confidence: 0.7, matchedText: match[0] };
+    }
+  }
+
+  return { isPrompt: false, confidence: 0 };
+}

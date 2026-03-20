@@ -12,6 +12,7 @@ import { WorkingSignalDebouncer } from "./pty/WorkingSignalDebouncer.js";
 import { LineRewriteDetector, isStatusLineRewrite } from "./pty/LineRewriteDetector.js";
 import {
   detectPrompt,
+  detectPromptLexeme,
   DEFAULT_PROMPT_PATTERNS,
   type PromptDetectorConfig,
 } from "./pty/PromptDetector.js";
@@ -642,6 +643,41 @@ export class ActivityMonitor {
         waitingReason,
       });
       return;
+    }
+
+    // Prompt lexeme fallback: when output has stalled and the last visible line
+    // contains a prompt lexeme (?, [y/N], keyword+colon, "press enter"), detect
+    // as a prompt with medium confidence. This catches interactive prompts that
+    // don't match any configured promptPattern or promptHintPattern.
+    const LEXEME_STALL_MIN_QUIET_MS = 3000;
+    if (
+      this.state === "busy" &&
+      !this.completionTimer.emitted &&
+      !isPrompt &&
+      !effectiveWorkingPattern &&
+      !isSpinnerActive &&
+      !hasRecentOutputActivity &&
+      !hasHighOutputActivity &&
+      quietForMs >= LEXEME_STALL_MIN_QUIET_MS &&
+      now >= this.workingHoldUntil &&
+      !(this.inputTracker.pendingInputUntil > 0 && now < this.inputTracker.pendingInputUntil)
+    ) {
+      const candidateLine =
+        cursorLine && stripAnsi(cursorLine).trim().length > 0
+          ? cursorLine
+          : lines.length > 0
+            ? lines[lines.length - 1]
+            : "";
+      const lexemeResult = detectPromptLexeme(candidateLine);
+      if (lexemeResult.isPrompt) {
+        this.state = "idle";
+        this.patternBuf.clear();
+        this.onStateChange(this.terminalId, this.spawnedAt, "idle", {
+          trigger: "pattern",
+          patternConfidence: 0.7,
+        });
+        return;
+      }
     }
 
     if (

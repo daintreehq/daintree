@@ -2924,4 +2924,172 @@ describe("ActivityMonitor", () => {
       monitor.dispose();
     });
   });
+
+  describe("prompt lexeme fallback heuristic", () => {
+    it("detects prompt lexeme after 3s stall when no pattern matches", () => {
+      const onStateChange = vi.fn();
+      const monitor = new ActivityMonitor("test-lex", 100, onStateChange, {
+        getVisibleLines: () => ["Which file should I modify?"],
+        getCursorLine: () => "Which file should I modify?",
+        pollingIntervalMs: 100,
+        pollingMaxBootMs: 0,
+        initialState: "busy",
+        promptPatterns: [],
+        promptHintPatterns: [],
+      });
+
+      monitor.onData("Which file should I modify?");
+      monitor.startPolling();
+      onStateChange.mockClear();
+
+      vi.advanceTimersByTime(3100);
+
+      const idleCall = onStateChange.mock.calls.find(
+        (c: unknown[]) =>
+          c[2] === "idle" && (c[3] as Record<string, unknown> | undefined)?.trigger === "pattern"
+      );
+      expect(idleCall).toBeDefined();
+      expect((idleCall![3] as Record<string, unknown>).patternConfidence).toBe(0.7);
+
+      monitor.dispose();
+    });
+
+    it("detects [y/N] bracket confirmation", () => {
+      const onStateChange = vi.fn();
+      const monitor = new ActivityMonitor("test-lex2", 100, onStateChange, {
+        getVisibleLines: () => ["Proceed? [y/N]"],
+        getCursorLine: () => "Proceed? [y/N]",
+        pollingIntervalMs: 100,
+        pollingMaxBootMs: 0,
+        initialState: "busy",
+        promptPatterns: [],
+        promptHintPatterns: [],
+      });
+
+      monitor.onData("Proceed? [y/N]");
+      monitor.startPolling();
+      onStateChange.mockClear();
+
+      vi.advanceTimersByTime(3100);
+
+      const idleCall = onStateChange.mock.calls.find(
+        (c: unknown[]) =>
+          c[2] === "idle" &&
+          (c[3] as Record<string, unknown> | undefined)?.patternConfidence === 0.7
+      );
+      expect(idleCall).toBeDefined();
+
+      monitor.dispose();
+    });
+
+    it("does NOT fire before 3s stall", () => {
+      const onStateChange = vi.fn();
+      const monitor = new ActivityMonitor("test-lex3", 100, onStateChange, {
+        getVisibleLines: () => ["Continue?"],
+        getCursorLine: () => "Continue?",
+        pollingIntervalMs: 100,
+        pollingMaxBootMs: 0,
+        initialState: "busy",
+        promptPatterns: [],
+        promptHintPatterns: [],
+      });
+
+      monitor.onData("Continue?");
+      monitor.startPolling();
+      onStateChange.mockClear();
+
+      vi.advanceTimersByTime(2000);
+
+      const idleCall = onStateChange.mock.calls.find(
+        (c: unknown[]) =>
+          c[2] === "idle" &&
+          (c[3] as Record<string, unknown> | undefined)?.patternConfidence === 0.7
+      );
+      expect(idleCall).toBeUndefined();
+
+      monitor.dispose();
+    });
+
+    it("does NOT fire when no lexeme present", () => {
+      const onStateChange = vi.fn();
+      const monitor = new ActivityMonitor("test-lex4", 100, onStateChange, {
+        getVisibleLines: () => ["Building project..."],
+        getCursorLine: () => "Building project...",
+        pollingIntervalMs: 100,
+        pollingMaxBootMs: 0,
+        initialState: "busy",
+        promptPatterns: [],
+        promptHintPatterns: [],
+      });
+
+      monitor.onData("Building project...");
+      monitor.startPolling();
+      onStateChange.mockClear();
+
+      vi.advanceTimersByTime(5000);
+
+      const idleCall = onStateChange.mock.calls.find(
+        (c: unknown[]) =>
+          c[2] === "idle" &&
+          (c[3] as Record<string, unknown> | undefined)?.patternConfidence === 0.7
+      );
+      expect(idleCall).toBeUndefined();
+
+      monitor.dispose();
+    });
+
+    it("does NOT fire when existing prompt pattern matches (fast-path takes priority)", () => {
+      const onStateChange = vi.fn();
+      const monitor = new ActivityMonitor("test-lex5", 100, onStateChange, {
+        getVisibleLines: () => ["$ "],
+        getCursorLine: () => "$ ",
+        pollingIntervalMs: 100,
+        pollingMaxBootMs: 0,
+        initialState: "busy",
+      });
+
+      monitor.onData("$ ");
+      monitor.startPolling();
+      onStateChange.mockClear();
+
+      vi.advanceTimersByTime(3500);
+
+      const lexemeCall = onStateChange.mock.calls.find(
+        (c: unknown[]) =>
+          c[2] === "idle" &&
+          (c[3] as Record<string, unknown> | undefined)?.patternConfidence === 0.7
+      );
+      expect(lexemeCall).toBeUndefined();
+
+      monitor.dispose();
+    });
+
+    it("falls back to last visible line when cursorLine is empty", () => {
+      const onStateChange = vi.fn();
+      const monitor = new ActivityMonitor("test-lex6", 100, onStateChange, {
+        getVisibleLines: () => ["some output", "Enter password:"],
+        getCursorLine: () => "",
+        pollingIntervalMs: 100,
+        pollingMaxBootMs: 0,
+        initialState: "busy",
+        promptPatterns: [],
+        promptHintPatterns: [],
+      });
+
+      monitor.onData("Enter password:");
+      monitor.startPolling();
+      onStateChange.mockClear();
+
+      vi.advanceTimersByTime(3100);
+
+      const idleCall = onStateChange.mock.calls.find(
+        (c: unknown[]) =>
+          c[2] === "idle" &&
+          (c[3] as Record<string, unknown> | undefined)?.patternConfidence === 0.7
+      );
+      expect(idleCall).toBeDefined();
+
+      monitor.dispose();
+    });
+  });
 });
