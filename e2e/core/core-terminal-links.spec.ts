@@ -51,7 +51,10 @@ test.describe.serial("Core: Terminal Links", () => {
   test("Cmd+click localhost URL opens browser panel", async () => {
     const { window } = ctx;
 
-    const terminalPanel = window.locator(SEL.panel.gridPanel).first();
+    const terminalPanel = window
+      .locator(SEL.panel.gridPanel)
+      .filter({ hasNot: window.locator(SEL.browser.addressBar) })
+      .first();
     const url = `http://127.0.0.1:${port}/test-page`;
 
     const result = await triggerTerminalLink(terminalPanel, url);
@@ -71,7 +74,10 @@ test.describe.serial("Core: Terminal Links", () => {
     const { window } = ctx;
 
     const panelCountBefore = await getGridPanelCount(window);
-    const terminalPanel = window.locator(SEL.panel.gridPanel).first();
+    const terminalPanel = window
+      .locator(SEL.panel.gridPanel)
+      .filter({ hasNot: window.locator(SEL.browser.addressBar) })
+      .first();
     const url = `http://127.0.0.1:${port}/test-page`;
 
     const result = await triggerTerminalLink(terminalPanel, url);
@@ -80,5 +86,11 @@ test.describe.serial("Core: Terminal Links", () => {
     await window.waitForTimeout(T_SETTLE);
     const panelCountAfter = await getGridPanelCount(window);
     expect(panelCountAfter).toBe(panelCountBefore);
+
+    const addressBar = window
+      .locator(SEL.panel.gridPanel)
+      .filter({ has: window.locator(SEL.browser.addressBar) })
+      .locator(SEL.browser.addressBar);
+    await expect(addressBar).toHaveValue(/test-page/, { timeout: T_SHORT });
   });
 });
