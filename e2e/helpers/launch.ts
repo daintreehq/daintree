@@ -19,6 +19,7 @@ export interface LaunchOptions {
   env?: Record<string, string>;
   userDataDir?: string;
   waitForSelector?: string;
+  extraArgs?: string[];
 }
 
 function cleanupWindowsElectronProcesses(): void {
@@ -64,6 +65,10 @@ export async function launchApp(options: LaunchOptions = {}): Promise<AppContext
         "--disable-features=CalculateNativeWinOcclusion"
       );
       cleanupWindowsElectronProcesses();
+    }
+
+    if (options.extraArgs?.length) {
+      args.unshift(...options.extraArgs);
     }
 
     let app: ElectronApplication | null = null;
