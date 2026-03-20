@@ -11,6 +11,9 @@ import {
   restoreSessionFromFile,
   deleteSessionFile,
   evictSessionFiles,
+  writeHibernatedMarker,
+  readAndDeleteHibernatedMarker,
+  getHibernatedMarkerPath,
 } from "../terminalSessionPersistence.js";
 
 function createMockHeadless(bufferType: "normal" | "alternate" = "normal") {
@@ -304,6 +307,71 @@ describe("terminalSessionPersistence", () => {
       expect(result.deleted).toBe(1);
       expect(fs.existsSync(path.join(sessionDir, "old.restore"))).toBe(false);
       expect(fs.existsSync(path.join(sessionDir, "recent.restore"))).toBe(true);
+    });
+  });
+
+  describe("hibernation markers", () => {
+    it("writes and reads a hibernation marker", () => {
+      writeHibernatedMarker("term-hibernate-1");
+
+      const markerPath = getHibernatedMarkerPath("term-hibernate-1");
+      expect(markerPath).not.toBeNull();
+      expect(fs.existsSync(markerPath!)).toBe(true);
+
+      const result = readAndDeleteHibernatedMarker("term-hibernate-1");
+      expect(result).toBe(true);
+      expect(fs.existsSync(markerPath!)).toBe(false);
+    });
+
+    it("returns false when no marker exists", () => {
+      expect(readAndDeleteHibernatedMarker("nonexistent")).toBe(false);
+    });
+
+    it("deleteSessionFile also removes the hibernation marker", async () => {
+      const sessionDir = path.join(userDataDir, "terminal-sessions");
+      await fsp.mkdir(sessionDir, { recursive: true });
+      await fsp.writeFile(path.join(sessionDir, "term-del.restore"), "data", "utf8");
+      writeHibernatedMarker("term-del");
+
+      expect(fs.existsSync(path.join(sessionDir, "term-del.hibernated"))).toBe(true);
+
+      await deleteSessionFile("term-del");
+
+      expect(fs.existsSync(path.join(sessionDir, "term-del.restore"))).toBe(false);
+      expect(fs.existsSync(path.join(sessionDir, "term-del.hibernated"))).toBe(false);
+    });
+
+    it("restoreSessionFromFile shows hibernation banner when marker exists", async () => {
+      const sessionDir = path.join(userDataDir, "terminal-sessions");
+      await fsp.mkdir(sessionDir, { recursive: true });
+      await fsp.writeFile(path.join(sessionDir, "term-hib.restore"), "content", "utf8");
+      writeHibernatedMarker("term-hib");
+
+      const headless = createMockHeadless();
+      const result = restoreSessionFromFile(headless as never, "term-hib");
+
+      expect(result.restored).toBe(true);
+      const bannerCall = headless.write.mock.calls.find(
+        ([arg]: [string]) => typeof arg === "string" && arg.includes("hibernated")
+      );
+      expect(bannerCall).toBeDefined();
+      // Marker should be cleaned up
+      expect(fs.existsSync(path.join(sessionDir, "term-hib.hibernated"))).toBe(false);
+    });
+
+    it("restoreSessionFromFile shows normal banner without marker", async () => {
+      const sessionDir = path.join(userDataDir, "terminal-sessions");
+      await fsp.mkdir(sessionDir, { recursive: true });
+      await fsp.writeFile(path.join(sessionDir, "term-normal.restore"), "content", "utf8");
+
+      const headless = createMockHeadless();
+      const result = restoreSessionFromFile(headless as never, "term-normal");
+
+      expect(result.restored).toBe(true);
+      const bannerCall = headless.write.mock.calls.find(
+        ([arg]: [string]) => typeof arg === "string" && arg.includes("Session restored")
+      );
+      expect(bannerCall).toBeDefined();
     });
   });
 });

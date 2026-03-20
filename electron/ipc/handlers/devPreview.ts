@@ -8,6 +8,7 @@ import type {
   DevPreviewStateChangedPayload,
 } from "../../../shared/types/ipc/devPreview.js";
 import { DevPreviewSessionService } from "../../services/DevPreviewSessionService.js";
+import { getHibernationService } from "../../services/HibernationService.js";
 
 export function registerDevPreviewHandlers(deps: HandlerDependencies): () => void {
   const handlers: Array<() => void> = [];
@@ -76,7 +77,14 @@ export function registerDevPreviewHandlers(deps: HandlerDependencies): () => voi
   ipcMain.handle(CHANNELS.DEV_PREVIEW_GET_STATE, handleGetState);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.DEV_PREVIEW_GET_STATE));
 
+  const unsubHibernation = getHibernationService().onProjectHibernated((projectId) => {
+    sessionService.stopByProject(projectId).catch((err) => {
+      console.error("[DevPreview] Failed to stop sessions during hibernation:", err);
+    });
+  });
+
   return () => {
+    unsubHibernation();
     sessionService.dispose();
     handlers.forEach((dispose) => dispose());
   };

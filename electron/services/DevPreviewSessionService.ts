@@ -277,6 +277,37 @@ export class DevPreviewSessionService {
     );
   }
 
+  async stopByProject(projectId: string): Promise<void> {
+    const targets = [...this.sessions.entries()].filter(
+      ([, session]) => session.projectId === projectId
+    );
+
+    await Promise.all(
+      targets.map(async ([key, session]) => {
+        await this.runLocked(key, async () => {
+          try {
+            await this.stopSessionTerminal(session, "project-hibernated");
+            this.updateSession(session, {
+              status: "stopped",
+              url: null,
+              error: null,
+              terminalId: null,
+              isRestarting: false,
+            });
+            this.sessions.delete(key);
+          } catch (err) {
+            const message = err instanceof Error ? err.message : String(err);
+            console.warn("[DevPreviewSessionService] stopByProject failed for session", {
+              panelId: session.panelId,
+              projectId: session.projectId,
+              error: message,
+            });
+          }
+        });
+      })
+    );
+  }
+
   getState(request: DevPreviewSessionRequest): DevPreviewSessionState {
     this.validateSessionRequest(request);
     return this.getSessionState(request.projectId, request.panelId);

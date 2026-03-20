@@ -126,7 +126,7 @@ import type {
   PRTooltipData,
 } from "../github.js";
 import type { SpawnResult, TerminalStatusPayload } from "../pty-host.js";
-import type { HibernationConfig } from "./hibernation.js";
+import type { HibernationConfig, HibernationProjectHibernatedPayload } from "./hibernation.js";
 import type { AgentRegistry, AgentMetadata } from "./agentCapabilities.js";
 import type { AppThemeConfig } from "../appTheme.js";
 import type {
@@ -1840,6 +1840,9 @@ export interface IpcEventMap {
 
   // Accessibility events
   "accessibility:support-changed": { enabled: boolean };
+
+  // Hibernation events
+  "hibernation:project-hibernated": HibernationProjectHibernatedPayload;
 
   // Project MCP server events
   "project-mcp:status-changed": {

@@ -5,3 +5,11 @@ export interface HibernationConfig {
   /** Hours of inactivity before a project is hibernated */
   inactiveThresholdHours: number;
 }
+
+export interface HibernationProjectHibernatedPayload {
+  projectId: string;
+  projectName: string;
+  reason: "scheduled" | "memory-pressure";
+  terminalsKilled: number;
+  timestamp: number;
+}

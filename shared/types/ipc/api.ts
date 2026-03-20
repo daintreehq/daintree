@@ -115,7 +115,7 @@ import type {
   IssueNotFoundPayload,
 } from "./github.js";
 import type { TerminalConfig } from "./config.js";
-import type { HibernationConfig } from "./hibernation.js";
+import type { HibernationConfig, HibernationProjectHibernatedPayload } from "./hibernation.js";
 import type { ProjectMcpServerRunState } from "./project.js";
 import type { SystemSleepMetrics } from "./systemSleep.js";
 import type { KeyAction } from "../keymap.js";
@@ -772,6 +772,9 @@ export interface ElectronAPI {
   hibernation: {
     getConfig(): Promise<HibernationConfig>;
     updateConfig(config: Partial<HibernationConfig>): Promise<HibernationConfig>;
+    onProjectHibernated(
+      callback: (payload: HibernationProjectHibernatedPayload) => void
+    ): () => void;
   };
   systemSleep: {
     /** Get metrics about system sleep tracking */

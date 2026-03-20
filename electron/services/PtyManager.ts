@@ -300,7 +300,7 @@ export class PtyManager extends EventEmitter {
   /**
    * Kill a terminal process.
    */
-  kill(id: string, reason?: string): void {
+  kill(id: string, reason?: string, options?: { preserveSession?: boolean }): void {
     this.registry.clearTrashTimeout(id);
 
     const terminal = this.registry.get(id);
@@ -313,9 +313,11 @@ export class PtyManager extends EventEmitter {
       }
     }
 
-    deleteSessionFile(id).catch((err) => {
-      logWarn(`Failed to delete session file for terminal ${id}`, err);
-    });
+    if (!options?.preserveSession) {
+      deleteSessionFile(id).catch((err) => {
+        logWarn(`Failed to delete session file for terminal ${id}`, err);
+      });
+    }
   }
 
   /**
@@ -569,7 +571,7 @@ export class PtyManager extends EventEmitter {
    * Gracefully kill a terminal, capturing its session ID if it's an agent terminal.
    * Falls back to immediate kill for non-agent terminals.
    */
-  async gracefulKill(id: string): Promise<string | null> {
+  async gracefulKill(id: string, options?: { preserveSession?: boolean }): Promise<string | null> {
     this.registry.clearTrashTimeout(id);
 
     const terminal = this.registry.get(id);
@@ -581,7 +583,7 @@ export class PtyManager extends EventEmitter {
     // For non-agent terminals (or agents without shutdown config), it returns null
     // without killing. Fall back to immediate kill in that case.
     if (!terminal.getInfo().wasKilled && !terminal.getInfo().isExited) {
-      this.kill(id, "graceful-kill-fallback");
+      this.kill(id, "graceful-kill-fallback", options);
     }
 
     return sessionId;
@@ -591,7 +593,8 @@ export class PtyManager extends EventEmitter {
    * Gracefully kill all terminals for a project, capturing session IDs.
    */
   async gracefulKillByProject(
-    projectId: string
+    projectId: string,
+    options?: { preserveSession?: boolean }
   ): Promise<Array<{ id: string; agentSessionId: string | null }>> {
     const terminalIds = this.registry.getForProject(projectId);
     if (terminalIds.length === 0) return [];
@@ -601,12 +604,12 @@ export class PtyManager extends EventEmitter {
     const results = await Promise.all(
       terminalIds.map(async (terminalId) => {
         try {
-          const sessionId = await this.gracefulKill(terminalId);
+          const sessionId = await this.gracefulKill(terminalId, options);
           return { id: terminalId, agentSessionId: sessionId };
         } catch (error) {
           logError(`Failed to graceful-kill terminal ${terminalId}`, error);
           try {
-            this.kill(terminalId, "graceful-kill-fallback");
+            this.kill(terminalId, "graceful-kill-fallback", options);
           } catch {
             // already dead
           }

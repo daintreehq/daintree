@@ -1,9 +1,13 @@
 import { readdir, stat } from "fs/promises";
 import path from "path";
 import type { AgentState } from "../../shared/types/agent.js";
+import type { HibernationProjectHibernatedPayload } from "../../shared/types/ipc/hibernation.js";
 import { store } from "../store.js";
 import { projectStore } from "./ProjectStore.js";
 import { logInfo, logError } from "../utils/logger.js";
+import { getMainWindow } from "../window/windowRef.js";
+import { CHANNELS } from "../ipc/channels.js";
+import { writeHibernatedMarker } from "./pty/terminalSessionPersistence.js";
 
 export interface HibernationConfig {
   enabled: boolean;
@@ -53,6 +57,15 @@ export class HibernationService {
   private checkInterval: NodeJS.Timeout | null = null;
   private initialCheckTimer: NodeJS.Timeout | null = null;
   private readonly CHECK_INTERVAL_MS = 60 * 60 * 1000; // Every hour
+  private readonly hibernationCallbacks: Array<(projectId: string) => void | Promise<void>> = [];
+
+  onProjectHibernated(callback: (projectId: string) => void | Promise<void>): () => void {
+    this.hibernationCallbacks.push(callback);
+    return () => {
+      const idx = this.hibernationCallbacks.indexOf(callback);
+      if (idx >= 0) this.hibernationCallbacks.splice(idx, 1);
+    };
+  }
 
   private normalizeThreshold(value: unknown, fallback: number): number {
     if (typeof value !== "number" || !Number.isFinite(value)) {
@@ -229,11 +242,12 @@ export class HibernationService {
       );
 
       try {
-        // Gracefully kill terminals (allows agents to print session IDs before dying).
-        // Project state (state.json) is preserved so terminal IDs remain valid
-        // for matching .restore snapshot files on re-open.
-        const results = await ptyManager.gracefulKillByProject(project.id);
-        const terminalsKilled = results.length;
+        const terminalsKilled = await this.hibernateProject(
+          project.id,
+          project.name,
+          "scheduled",
+          ptyManager
+        );
 
         console.log(
           `[HibernationService] Hibernated "${project.name}": ${terminalsKilled} terminals killed`
@@ -285,7 +299,7 @@ export class HibernationService {
       });
 
       try {
-        await ptyManager.gracefulKillByProject(project.id);
+        await this.hibernateProject(project.id, project.name, "memory-pressure", ptyManager);
       } catch (error) {
         logError("memory-pressure-hibernate-failed", error, {
           project: project.name,
@@ -293,6 +307,48 @@ export class HibernationService {
         });
       }
     }
+  }
+
+  private async hibernateProject(
+    projectId: string,
+    projectName: string,
+    reason: "scheduled" | "memory-pressure",
+    ptyManager: {
+      gracefulKillByProject: (
+        id: string,
+        opts?: { preserveSession?: boolean }
+      ) => Promise<Array<{ id: string; agentSessionId: string | null }>>;
+    }
+  ): Promise<number> {
+    const results = await ptyManager.gracefulKillByProject(projectId, { preserveSession: true });
+    const terminalsKilled = results.length;
+
+    // Write hibernation markers for each killed terminal
+    for (const result of results) {
+      writeHibernatedMarker(result.id);
+    }
+
+    // Invoke registered callbacks (e.g., DevPreview cleanup)
+    await Promise.allSettled(this.hibernationCallbacks.map((cb) => Promise.resolve(cb(projectId))));
+
+    // Emit event to renderer
+    const win = getMainWindow();
+    if (win && !win.isDestroyed() && !win.webContents.isDestroyed()) {
+      const payload: HibernationProjectHibernatedPayload = {
+        projectId,
+        projectName,
+        reason,
+        terminalsKilled,
+        timestamp: Date.now(),
+      };
+      try {
+        win.webContents.send(CHANNELS.HIBERNATION_PROJECT_HIBERNATED, payload);
+      } catch {
+        // Window may be closing
+      }
+    }
+
+    return terminalsKilled;
   }
 
   getConfig(): HibernationConfig {

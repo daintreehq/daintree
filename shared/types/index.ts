@@ -145,6 +145,7 @@ export type {
   GitHubTokenValidation,
   // Hibernation types
   HibernationConfig,
+  HibernationProjectHibernatedPayload,
   // System Sleep types
   SleepPeriod,
   SystemSleepMetrics,

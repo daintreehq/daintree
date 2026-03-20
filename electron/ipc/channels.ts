@@ -261,6 +261,7 @@ export const CHANNELS = {
 
   HIBERNATION_GET_CONFIG: "hibernation:get-config",
   HIBERNATION_UPDATE_CONFIG: "hibernation:update-config",
+  HIBERNATION_PROJECT_HIBERNATED: "hibernation:project-hibernated",
 
   WEBVIEW_SET_LIFECYCLE_STATE: "webview:set-lifecycle-state",
   WEBVIEW_REGISTER_PANEL: "webview:register-panel",

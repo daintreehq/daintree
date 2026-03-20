@@ -89,9 +89,17 @@ export function restoreSessionFromFile(
     }
 
     const ts = sessionMtime ? formatRestoreTimestamp(sessionMtime) : "";
-    const label = wasInAlternateScreen
-      ? `─── Restored · ${ts} · previous session was in a full-screen app ───`
-      : `─── Session restored · ${ts} ───`;
+    const wasHibernated = readAndDeleteHibernatedMarker(terminalId);
+    let label: string;
+    if (wasHibernated) {
+      label = wasInAlternateScreen
+        ? `─── Restored · ${ts} · session was auto-hibernated to save resources ───`
+        : `─── Session hibernated · ${ts} · auto-suspended to save resources ───`;
+    } else {
+      label = wasInAlternateScreen
+        ? `─── Restored · ${ts} · previous session was in a full-screen app ───`
+        : `─── Session restored · ${ts} ───`;
+    }
 
     headlessTerminal.write("\r\n");
     const bannerStartMarker = headlessTerminal.registerMarker(0) ?? null;
@@ -159,6 +167,46 @@ export async function deleteSessionFile(terminalId: string): Promise<void> {
   await unlink(sessionPath).catch((e: NodeJS.ErrnoException) => {
     if (e.code !== "ENOENT") throw e;
   });
+  // Clean up any associated hibernation marker
+  const markerPath = getHibernatedMarkerPath(terminalId);
+  if (markerPath) {
+    await unlink(markerPath).catch((e: NodeJS.ErrnoException) => {
+      if (e.code !== "ENOENT") throw e;
+    });
+  }
+}
+
+export function getHibernatedMarkerPath(terminalId: string): string | null {
+  const dir = getSessionDir();
+  if (!dir) return null;
+  const safeId = normalizeTerminalId(terminalId);
+  if (!safeId) return null;
+  return path.join(dir, `${safeId}.hibernated`);
+}
+
+export function writeHibernatedMarker(terminalId: string): void {
+  const markerPath = getHibernatedMarkerPath(terminalId);
+  if (!markerPath) return;
+  const dir = getSessionDir();
+  if (!dir) return;
+  try {
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(markerPath, "", "utf8");
+  } catch {
+    // best-effort
+  }
+}
+
+export function readAndDeleteHibernatedMarker(terminalId: string): boolean {
+  const markerPath = getHibernatedMarkerPath(terminalId);
+  if (!markerPath) return false;
+  try {
+    if (!existsSync(markerPath)) return false;
+    unlinkSync(markerPath);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 interface SessionFileInfo {
@@ -215,6 +263,26 @@ export async function evictSessionFiles(opts: {
   knownIds?: Set<string>;
 }): Promise<{ deleted: number; bytesFreed: number }> {
   const files = await scanSessionFiles();
+
+  // Clean up orphaned .hibernated markers that have no matching .restore file
+  const dir = getSessionDir();
+  if (dir) {
+    try {
+      const allEntries = await readdir(dir);
+      const restoreIds = new Set(files.map((f) => f.id));
+      for (const entry of allEntries) {
+        if (entry.endsWith(".hibernated")) {
+          const id = entry.replace(/\.hibernated$/, "");
+          if (!restoreIds.has(id)) {
+            await unlink(path.join(dir, entry)).catch(() => {});
+          }
+        }
+      }
+    } catch {
+      // best-effort cleanup
+    }
+  }
+
   if (files.length === 0) return { deleted: 0, bytesFreed: 0 };
 
   const now = Date.now();

@@ -468,6 +468,7 @@ const CHANNELS = {
   // Hibernation channels
   HIBERNATION_GET_CONFIG: "hibernation:get-config",
   HIBERNATION_UPDATE_CONFIG: "hibernation:update-config",
+  HIBERNATION_PROJECT_HIBERNATED: "hibernation:project-hibernated",
 
   // System Sleep channels
   SYSTEM_SLEEP_GET_METRICS: "system-sleep:get-metrics",
@@ -1686,6 +1687,9 @@ const api: ElectronAPI = {
       config: Partial<{ enabled: boolean; inactiveThresholdHours: number }>
     ): Promise<{ enabled: boolean; inactiveThresholdHours: number }> =>
       _unwrappingInvoke(CHANNELS.HIBERNATION_UPDATE_CONFIG, config),
+
+    onProjectHibernated: (callback: (payload: unknown) => void): (() => void) =>
+      _typedOn(CHANNELS.HIBERNATION_PROJECT_HIBERNATED, callback),
   },
 
   // System Sleep API
