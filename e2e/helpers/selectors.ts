@@ -164,6 +164,10 @@ export const SEL = {
     cleanState: 'text="Working tree clean"',
     stageButton: (path: string) => `[aria-label="Stage ${path}"]`,
     unstageButton: (path: string) => `[aria-label="Unstage ${path}"]`,
+    stageAllButton: 'button:text-is("Stage all")',
+    unstageAllButton: 'button:text-is("Unstage all")',
+    noStagedFiles: 'text="No staged files"',
+    noUnstagedChanges: 'text="No unstaged changes"',
   },
   welcome: {
     openFolder: 'button:has-text("Open Folder")',
