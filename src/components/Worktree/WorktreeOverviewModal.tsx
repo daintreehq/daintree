@@ -195,6 +195,7 @@ export function WorktreeOverviewModal({
         hasCompletedAgent: worktreeTerminals.some((t) => t.agentState === "completed"),
         hasMergeConflict:
           worktree.worktreeChanges?.changes.some((c) => c.status === "conflicted") ?? false,
+        chipState: null,
       });
     }
     return map;
@@ -257,6 +258,7 @@ export function WorktreeOverviewModal({
         hasFailedAgent: false,
         hasCompletedAgent: false,
         hasMergeConflict: false,
+        chipState: null,
       };
       const isActive = worktree.id === activeWorktreeId;
       const hasActiveQuery = query.trim().length > 0;
