@@ -2,20 +2,18 @@ import { test, expect } from "@playwright/test";
 import { launchApp, closeApp, waitForProcessExit, type AppContext } from "../helpers/launch";
 import { createFixtureRepo } from "../helpers/fixtures";
 import { openAndOnboardProject } from "../helpers/project";
-import { getGridPanelIds, getDockPanelIds, getPanelById } from "../helpers/panels";
+import { getGridPanelIds, getDockPanelIds } from "../helpers/panels";
 import { SEL } from "../helpers/selectors";
 import { T_SHORT, T_LONG } from "../helpers/timeouts";
 import {
   mkdtempSync,
   mkdirSync,
   writeFileSync,
-  readFileSync,
   readdirSync,
   existsSync,
   rmSync,
   realpathSync,
 } from "fs";
-import { createHash } from "crypto";
 import { tmpdir } from "os";
 import path from "path";
 
