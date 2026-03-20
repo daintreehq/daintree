@@ -68,7 +68,7 @@ export interface AgentDetectionConfig {
   promptScanLineCount?: number;
 
   /**
-   * Activity debounce period in ms (default: 6000).
+   * Activity debounce period in ms (default: 4000).
    * Time to wait after last activity before transitioning to idle.
    */
   debounceMs?: number;
