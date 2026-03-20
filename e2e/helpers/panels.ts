@@ -25,6 +25,14 @@ export async function getDockPanelIds(page: Page): Promise<string[]> {
     .evaluateAll((els) => els.map((el) => el.getAttribute("data-panel-id") ?? "").filter(Boolean));
 }
 
+export function getPanelById(page: Page, id: string): Locator {
+  return page.locator(`[data-panel-id="${id}"]`);
+}
+
+export function getPanelDragHandle(panel: Locator): Locator {
+  return panel.locator(".cursor-grab").first();
+}
+
 export async function getFocusedPanelId(page: Page): Promise<string | null> {
   return page.evaluate(() => {
     const active = document.activeElement?.closest("[data-panel-id]");
