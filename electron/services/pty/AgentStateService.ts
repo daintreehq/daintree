@@ -40,9 +40,13 @@ export class AgentStateService {
         return "activity";
       case "exit":
         return "exit";
+      case "kill":
+        return "exit";
       case "start":
         return "activity";
       case "error":
+        return "activity";
+      case "completion":
         return "activity";
       default:
         return "output";
