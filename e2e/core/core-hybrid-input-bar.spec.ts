@@ -72,10 +72,12 @@ test.describe.serial("Core: HybridInputBar", () => {
     await window.keyboard.press("Shift+Enter");
     await cmEditor.pressSequentially("line2", { delay: 30 });
 
-    // Editor should contain both lines
-    const text = await cmEditor.textContent();
-    expect(text).toContain("line1");
-    expect(text).toContain("line2");
+    // Editor should contain both lines with a newline between them
+    // CM6 renders each line in a separate .cm-line element
+    const lines = cmEditor.locator(".cm-line");
+    await expect(lines).toHaveCount(2, { timeout: T_SHORT });
+    await expect(lines.nth(0)).toHaveText("line1");
+    await expect(lines.nth(1)).toHaveText("line2");
 
     // Clear for next test
     await window.keyboard.press(`${process.platform === "darwin" ? "Meta" : "Control"}+A`);
