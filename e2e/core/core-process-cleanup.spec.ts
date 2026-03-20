@@ -1,5 +1,11 @@
 import { test, expect } from "@playwright/test";
-import { launchApp, closeApp, waitForProcessExit, removeSingletonFiles, type AppContext } from "../helpers/launch";
+import {
+  launchApp,
+  closeApp,
+  waitForProcessExit,
+  removeSingletonFiles,
+  type AppContext,
+} from "../helpers/launch";
 import { createFixtureRepo } from "../helpers/fixtures";
 import { openAndOnboardProject } from "../helpers/project";
 import { runTerminalCommand, waitForTerminalText } from "../helpers/terminal";
