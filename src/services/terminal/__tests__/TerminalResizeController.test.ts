@@ -42,6 +42,7 @@ function createManagedTerminal() {
       this.rows = rows;
     }),
     write: vi.fn(),
+    scrollToBottom: vi.fn(),
   } as unknown as {
     cols: number;
     rows: number;

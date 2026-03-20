@@ -57,6 +57,8 @@ const mockDocument = {
     appendChild: vi.fn(),
     removeChild: vi.fn(),
     parentElement: null,
+    addEventListener: vi.fn(),
+    removeEventListener: vi.fn(),
   })),
   body: {
     appendChild: vi.fn(),

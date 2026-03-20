@@ -50,6 +50,11 @@ export interface ManagedTerminal {
   latestWasAtBottom: boolean;
   isUserScrolledBack: boolean;
 
+  // Viewport pinning: suppress scroll tracking during programmatic scrollToBottom
+  _suppressScrollTracking?: boolean;
+  // Viewport pinning: set by wheel/keyboard events to distinguish user-initiated scroll
+  _userScrollIntent?: boolean;
+
   // Last activity marker for scroll-to-last-activity
   lastActivityMarker?: IMarker;
 

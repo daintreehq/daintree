@@ -590,25 +590,46 @@ class TerminalInstanceService {
 
     const writeParsedDisposable = terminal.onWriteParsed(() => {
       this.dataBuffer.notifyParsed(id);
+      if (managed && !managed.isUserScrolledBack && !managed.isAltBuffer) {
+        this.scrollToBottomSafe(managed);
+      }
     });
     listeners.push(() => writeParsedDisposable.dispose());
 
     const scrollDisposable = terminal.onScroll(() => {
       const buffer = terminal.buffer.active;
-      const isAtBottom = buffer.baseY - buffer.viewportY < 1;
+      const isAtBottom = buffer.viewportY >= buffer.baseY;
       managed.latestWasAtBottom = isAtBottom;
-      managed.isUserScrolledBack = !isAtBottom;
+
+      managed._userScrollIntent = false;
+      if (managed._suppressScrollTracking) return;
 
       if (isAtBottom) {
+        managed.isUserScrolledBack = false;
         this.unseenTracker.clearUnseen(id, false);
         if (managed.lastAppliedTier === TerminalRefreshTier.BACKGROUND) {
           reduceScrollback(managed, SCROLLBACK_BACKGROUND);
         }
       } else {
+        managed.isUserScrolledBack = true;
         this.unseenTracker.updateScrollState(id, true);
       }
     });
     listeners.push(() => scrollDisposable.dispose());
+
+    const SCROLL_KEYS = new Set(["PageUp", "PageDown", "Home", "End", "ArrowUp", "ArrowDown"]);
+    const onWheel = () => {
+      managed._userScrollIntent = true;
+    };
+    const onKeydownScroll = (e: KeyboardEvent) => {
+      if (SCROLL_KEYS.has(e.key)) managed._userScrollIntent = true;
+    };
+    hostElement.addEventListener("wheel", onWheel, { passive: true });
+    hostElement.addEventListener("keydown", onKeydownScroll);
+    listeners.push(() => {
+      hostElement.removeEventListener("wheel", onWheel);
+      hostElement.removeEventListener("keydown", onKeydownScroll);
+    });
 
     const selectionDisposable = terminal.onSelectionChange(() => {
       const sel = terminal.getSelection();
@@ -992,8 +1013,19 @@ class TerminalInstanceService {
   scrollToBottom(id: string): void {
     const managed = this.instances.get(id);
     if (managed) {
-      managed.terminal.scrollToBottom();
+      this.scrollToBottomSafe(managed);
     }
+  }
+
+  private scrollToBottomSafe(managed: ManagedTerminal): void {
+    managed._suppressScrollTracking = true;
+    try {
+      managed.terminal.scrollToBottom();
+    } finally {
+      managed._suppressScrollTracking = false;
+    }
+    managed.isUserScrolledBack = false;
+    managed.latestWasAtBottom = true;
   }
 
   scrollToLastActivity(id: string): void {
@@ -1032,8 +1064,9 @@ class TerminalInstanceService {
     const managed = this.instances.get(id);
     if (!managed) return;
 
+    managed.isUserScrolledBack = false;
     this.unseenTracker.clearUnseen(id, false);
-    this.scrollToBottom(id);
+    this.scrollToBottomSafe(managed);
   }
 
   setAgentState(id: string, state: AgentState): void {

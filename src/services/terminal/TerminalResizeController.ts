@@ -153,7 +153,7 @@ export class TerminalResizeController {
     }
 
     const buffer = managed.terminal.buffer.active;
-    const wasAtBottom = buffer.baseY - buffer.viewportY < 1;
+    const wasAtBottom = buffer.viewportY >= buffer.baseY;
 
     try {
       // Calculate cols/rows directly from the passed dimensions and cell metrics.
@@ -171,8 +171,10 @@ export class TerminalResizeController {
         managed.latestCols = cols;
         managed.latestRows = rows;
         managed.latestWasAtBottom = wasAtBottom;
-        managed.isUserScrolledBack = !wasAtBottom;
         this.sendPtyResize(id, cols, rows);
+        if (wasAtBottom && !managed.isUserScrolledBack) {
+          managed.terminal.scrollToBottom();
+        }
         return { cols, rows };
       }
 
@@ -188,7 +190,6 @@ export class TerminalResizeController {
       managed.latestCols = cols;
       managed.latestRows = rows;
       managed.latestWasAtBottom = wasAtBottom;
-      managed.isUserScrolledBack = !wasAtBottom;
 
       const bufferLineCount = this.getBufferLineCount(id);
 
@@ -254,6 +255,10 @@ export class TerminalResizeController {
     } else {
       this.resizeTerminal(managed, cols, rows);
       this.sendPtyResize(id, cols, rows);
+    }
+
+    if (managed.latestWasAtBottom && !managed.isUserScrolledBack) {
+      managed.terminal.scrollToBottom();
     }
   }
 
