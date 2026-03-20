@@ -114,6 +114,17 @@ export const SEL = {
     findNext: '[aria-label="Next match"]',
     findClose: '[aria-label="Close find bar"]',
   },
+  sidecar: {
+    container: '[aria-label="Sidecar"]',
+    tab: '[role="tab"]',
+    tabList: '[role="tablist"]',
+    newTab: '[aria-label="New Tab"]',
+    goBack: '[aria-label="Go back"]',
+    goForward: '[aria-label="Go forward"]',
+    reload: '[aria-label="Reload"]',
+    closeSidecar: '[aria-label="Close sidecar"]',
+    closeTab: (title: string) => `[aria-label="Close ${title}"]`,
+  },
   devPreview: {
     consoleToggle: '[aria-label="Show Terminal"], [aria-label="Hide Terminal"]',
   },
