@@ -122,15 +122,17 @@ test.describe.serial("Persistence: Theme, Notifications & Keybindings across res
     ctx = await launchApp({ userDataDir });
     const { window: w1, app: app1 } = ctx;
 
-    // Set theme to "bondi" (light) via IPC and reload
+    // Set theme to "fiordland" (dark, non-default) via IPC and reload
     await w1.evaluate(async () => {
-      await window.electron.appTheme.setColorScheme("bondi");
+      await window.electron.appTheme.setColorScheme("fiordland");
     });
     await w1.reload({ waitUntil: "domcontentloaded" });
     await w1.locator(SEL.toolbar.openSettings).waitFor({ state: "visible", timeout: T_MEDIUM });
 
     // Verify theme applied
-    await expect(w1.locator("html")).toHaveAttribute("data-theme", "bondi", { timeout: T_MEDIUM });
+    await expect(w1.locator("html")).toHaveAttribute("data-theme", "fiordland", {
+      timeout: T_MEDIUM,
+    });
 
     // Open Settings > Notifications
     await w1.locator(SEL.toolbar.openSettings).click();
@@ -150,9 +152,9 @@ test.describe.serial("Persistence: Theme, Notifications & Keybindings across res
 
     // Navigate to Keyboard tab
     await w1.locator(`${SEL.settings.navSidebar} button`, { hasText: "Keyboard" }).click();
-    await expect(w1.locator("h3", { hasText: "Keyboard Shortcuts" })).toBeVisible({
-      timeout: T_SHORT,
-    });
+    await expect(
+      w1.getByRole("dialog").getByRole("heading", { name: "Keyboard Shortcuts" })
+    ).toBeVisible({ timeout: T_SHORT });
 
     // Record a keybinding override for "Open settings"
     const searchInput = w1.locator(SEL.settings.shortcutsSearchInput);
@@ -197,11 +199,11 @@ test.describe.serial("Persistence: Theme, Notifications & Keybindings across res
     ctx = await launchApp({ userDataDir });
     const { window: w2 } = ctx;
 
-    // Verify theme persisted
-    await expect(w2.locator("html")).toHaveAttribute("data-theme", "bondi", {
+    // Verify theme persisted (fiordland is dark, never a system default)
+    await expect(w2.locator("html")).toHaveAttribute("data-theme", "fiordland", {
       timeout: T_MEDIUM,
     });
-    await expect(w2.locator("html")).toHaveAttribute("data-color-mode", "light", {
+    await expect(w2.locator("html")).toHaveAttribute("data-color-mode", "dark", {
       timeout: T_MEDIUM,
     });
 
