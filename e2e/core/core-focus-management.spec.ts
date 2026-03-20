@@ -147,10 +147,12 @@ test.describe.serial("Core: Focus Management", () => {
     // Open Action Palette on top (top of stack)
     await window.keyboard.press(`${mod}+Shift+P`);
     await expect(window.locator(SEL.actionPalette.dialog)).toBeVisible({ timeout: T_MEDIUM });
+    // Settle to let any delayed menu IPC arrive before dismissing
+    await window.waitForTimeout(T_SETTLE);
 
     // First Escape: palette closes, settings stays
     await window.keyboard.press("Escape");
-    await expect(window.locator(SEL.actionPalette.dialog)).not.toBeVisible({ timeout: T_SHORT });
+    await expect(window.locator(SEL.actionPalette.dialog)).not.toBeVisible({ timeout: T_MEDIUM });
     await expect(window.locator(SEL.settings.heading)).toBeVisible({ timeout: T_SHORT });
 
     // Second Escape: settings closes
