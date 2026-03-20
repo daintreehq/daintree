@@ -60,7 +60,7 @@ class AgentNotificationService {
     const settings = projectStore.getEffectiveNotificationSettings();
 
     // Allow same-state transitions for waitingReason changes (e.g., prompt -> approval)
-    if (state === previousState && !(state === "waiting" && waitingReason === "approval")) return;
+    if (state === previousState && !(state === "waiting" && waitingReason !== undefined)) return;
 
     const key = agentId ?? worktreeId ?? "agent";
 
