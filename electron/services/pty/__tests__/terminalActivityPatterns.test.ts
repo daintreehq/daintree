@@ -108,7 +108,8 @@ describe("buildPromptHintPatterns", () => {
   });
 
   it("merges agent-specific patterns before universal patterns", () => {
-    const detection: Pick<AgentDetectionConfig, "promptHintPatterns"> = {
+    const detection: AgentDetectionConfig = {
+      primaryPatterns: [],
       promptHintPatterns: ["custom\\s+pattern"],
     };
     const result = buildPromptHintPatterns(detection, "claude");
