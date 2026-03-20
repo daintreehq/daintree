@@ -1688,8 +1688,15 @@ const api: ElectronAPI = {
     ): Promise<{ enabled: boolean; inactiveThresholdHours: number }> =>
       _unwrappingInvoke(CHANNELS.HIBERNATION_UPDATE_CONFIG, config),
 
-    onProjectHibernated: (callback: (payload: unknown) => void): (() => void) =>
-      _typedOn(CHANNELS.HIBERNATION_PROJECT_HIBERNATED, callback),
+    onProjectHibernated: (
+      callback: (payload: {
+        projectId: string;
+        projectName: string;
+        reason: "scheduled" | "memory-pressure";
+        terminalsKilled: number;
+        timestamp: number;
+      }) => void
+    ): (() => void) => _typedOn(CHANNELS.HIBERNATION_PROJECT_HIBERNATED, callback),
   },
 
   // System Sleep API

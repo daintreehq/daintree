@@ -352,7 +352,7 @@ describe("terminalSessionPersistence", () => {
 
       expect(result.restored).toBe(true);
       const bannerCall = headless.write.mock.calls.find(
-        ([arg]: [string]) => typeof arg === "string" && arg.includes("hibernated")
+        ([arg]: unknown[]) => typeof arg === "string" && arg.includes("hibernated")
       );
       expect(bannerCall).toBeDefined();
       // Marker should be cleaned up
@@ -369,7 +369,7 @@ describe("terminalSessionPersistence", () => {
 
       expect(result.restored).toBe(true);
       const bannerCall = headless.write.mock.calls.find(
-        ([arg]: [string]) => typeof arg === "string" && arg.includes("Session restored")
+        ([arg]: unknown[]) => typeof arg === "string" && arg.includes("Session restored")
       );
       expect(bannerCall).toBeDefined();
     });

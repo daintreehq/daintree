@@ -21,7 +21,9 @@ const fsMock = vi.hoisted(() => ({
 const ptyManagerMock = vi.hoisted(() => ({
   getAll: vi.fn<() => unknown[]>(() => []),
   getProjectStats: vi.fn(() => ({ terminalCount: 0 })),
-  gracefulKillByProject: vi.fn(async () => [] as Array<{ id: string }>),
+  gracefulKillByProject: vi.fn(
+    async () => [] as Array<{ id: string; agentSessionId: string | null }>
+  ),
 }));
 
 vi.mock("../../store.js", () => ({
