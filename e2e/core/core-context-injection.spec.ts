@@ -3,12 +3,19 @@ import { test, expect } from "@playwright/test";
 import { launchApp, closeApp, type AppContext } from "../helpers/launch";
 import { createFixtureRepo } from "../helpers/fixtures";
 import { openAndOnboardProject } from "../helpers/project";
-import { getFirstGridPanel } from "../helpers/panels";
+import { getFirstGridPanel, getGridPanelCount } from "../helpers/panels";
 import { waitForTerminalText } from "../helpers/terminal";
 import { T_MEDIUM, T_LONG } from "../helpers/timeouts";
 
 let ctx: AppContext;
 let fixtureDir: string;
+
+async function getActiveWorktreeId(window: import("@playwright/test").Page): Promise<string> {
+  const res: any = await window.evaluate(() =>
+    (window as any).__canopyDispatchAction("actions.getContext")
+  );
+  return res?.result?.activeWorktreeId ?? "";
+}
 
 test.describe.serial("Core: Context Injection", () => {
   test.beforeAll(async () => {
@@ -37,14 +44,14 @@ test.describe.serial("Core: Context Injection", () => {
   test("Copy Context button populates clipboard formats", async () => {
     const { app, window } = ctx;
 
+    // Clear clipboard before testing to avoid false positives
+    await app.evaluate(({ clipboard }) => clipboard.writeText(""));
+
     const btn = window.getByRole("toolbar").locator('[aria-label="Copy Context"]');
     await expect(btn).toBeVisible({ timeout: T_MEDIUM });
     await btn.click();
 
-    // Wait for copy to complete
-    await expect(btn).toBeVisible({ timeout: T_LONG });
-
-    // Verify clipboard has content
+    // Verify clipboard has content after copy
     await expect
       .poll(
         async () => {
@@ -59,34 +66,25 @@ test.describe.serial("Core: Context Injection", () => {
   test("generated content contains expected fixture files and excludes .git", async () => {
     const { window } = ctx;
 
-    // Get the active worktree ID via action dispatch
-    // dispatch returns Promise<{ ok: true, result: ActionContext }>
-    const wtId: string = await expect
-      .poll(
-        async () => {
-          const res = await window.evaluate(() =>
-            (window as any).__canopyDispatchAction("actions.getContext")
-          );
-          return (res as any)?.result?.activeWorktreeId ?? null;
-        },
-        { timeout: T_LONG, message: "Active worktree ID should be available" }
-      )
-      .toBeTruthy()
-      .then(async () => {
-        const res = await window.evaluate(() =>
-          (window as any).__canopyDispatchAction("actions.getContext")
-        );
-        return (res as any)?.result?.activeWorktreeId as string;
-      });
+    // Wait for active worktree ID to be available
+    await expect
+      .poll(async () => getActiveWorktreeId(window), {
+        timeout: T_LONG,
+        message: "Active worktree ID should be available",
+      })
+      .toBeTruthy();
+
+    const wtId = await getActiveWorktreeId(window);
 
     // Generate content via the preload API
-    const result: any = await window.evaluate(async (id: string) => {
-      return await (window as any).electron.copyTree.generate(id);
-    }, wtId);
+    const result: any = await window.evaluate(
+      async (id: string) => (window as any).electron.copyTree.generate(id),
+      wtId
+    );
 
     expect(result?.error).toBeFalsy();
     expect(result?.content?.length).toBeGreaterThan(100);
-    expect(result?.fileCount).toBeGreaterThanOrEqual(4);
+    expect(result?.fileCount).toBe(4);
 
     // Verify expected fixture files are present
     const content = result.content as string;
@@ -97,23 +95,23 @@ test.describe.serial("Core: Context Injection", () => {
 
     // Verify .git directory is excluded
     expect(content).not.toContain(".git/");
+    expect(content).not.toContain(".git\\");
   });
 
   test("injecting context writes content to terminal buffer", async () => {
     const { window } = ctx;
 
-    // Get active worktree ID
-    const ctxResult: any = await window.evaluate(() =>
-      (window as any).__canopyDispatchAction("actions.getContext")
-    );
-    const wtId = ctxResult?.result?.activeWorktreeId;
+    const wtId = await getActiveWorktreeId(window);
     expect(wtId).toBeTruthy();
 
-    // Open a terminal panel via toolbar
+    // Open a terminal panel via toolbar and wait for it to appear
+    const countBefore = await getGridPanelCount(window);
     await window.locator('[aria-label="Open Terminal"]').click();
-    const panel = getFirstGridPanel(window);
-    await expect(panel).toBeVisible({ timeout: T_LONG });
+    await expect
+      .poll(() => getGridPanelCount(window), { timeout: T_LONG })
+      .toBeGreaterThan(countBefore);
 
+    const panel = getFirstGridPanel(window);
     const panelId = await panel.evaluate((el) => {
       const p = el.closest("[data-panel-id]");
       return p?.getAttribute("data-panel-id") ?? "";
