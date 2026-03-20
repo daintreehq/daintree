@@ -477,6 +477,60 @@ describe("BulkCreateWorktreeDialog", () => {
     expect(screen.getByText(/1 failed/)).toBeTruthy();
   });
 
+  it("does not re-execute when create button is clicked twice rapidly", async () => {
+    render(<BulkCreateWorktreeDialog {...defaultProps} />);
+
+    // Click twice in the same act block — simulates rapid double-click
+    await act(async () => {
+      screen.getByTestId("bulk-create-confirm-button").click();
+      screen.getByTestId("bulk-create-confirm-button").click();
+    });
+
+    await advanceTimersGradually(5000);
+
+    // Each issue should be created exactly once — guard prevents second invocation
+    expect(mockWorktreeCreate).toHaveBeenCalledTimes(3);
+    expect(screen.getByText(/3 of 3 created/)).toBeTruthy();
+  });
+
+  it("second run after Done does not show 0 of N created", async () => {
+    const onComplete = vi.fn();
+    const onClose = vi.fn();
+    render(
+      <BulkCreateWorktreeDialog
+        {...defaultProps}
+        onComplete={onComplete}
+        onClose={onClose}
+      />
+    );
+
+    // Complete first run
+    await act(async () => {
+      screen.getByTestId("bulk-create-confirm-button").click();
+    });
+    await advanceTimersGradually(5000);
+    expect(screen.getByText(/3 of 3 created/)).toBeTruthy();
+
+    // Click Done to reset the dialog
+    await act(async () => {
+      screen.getByTestId("bulk-create-done-button").click();
+    });
+
+    // Second run: create again (component stays mounted, isOpen still true via mock)
+    // Reset mock call count for clarity
+    mockWorktreeCreate.mockClear();
+    setupWorktreeCreateMocks();
+
+    await act(async () => {
+      screen.getByTestId("bulk-create-confirm-button").click();
+    });
+    await advanceTimersGradually(5000);
+
+    // Should reach 3 of 3, not be stuck at 0 of 3 due to stale batchTrackingRef
+    expect(mockWorktreeCreate).toHaveBeenCalledTimes(3);
+    expect(screen.getByText(/3 of 3 created/)).toBeTruthy();
+  });
+
   it("stops processing items when dialog is closed during execution", async () => {
     const resolvers: Array<(value: string) => void> = [];
     mockWorktreeCreate.mockImplementation(
