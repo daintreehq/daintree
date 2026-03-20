@@ -48,7 +48,7 @@ e2e/
 ├── core/
 │   ├── core-terminal-panels.spec.ts     # Onboarding, terminal lifecycle, grid/dock, context flow
 │   ├── core-shell-settings.spec.ts      # App shell, keyboard shortcuts, settings persistence
-│   ├── core-advanced.spec.ts            # Browser, sidecar, notes, worktree lifecycle, project switch
+│   ├── core-advanced.spec.ts            # Browser, portal, notes, worktree lifecycle, project switch
 │   └── core-v030-features.spec.ts       # Sidebar search, settings subtabs/search, review hub, layout
 └── online/
     └── claude-online.spec.ts            # Full Claude agent interaction flow

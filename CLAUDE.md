@@ -72,7 +72,7 @@ Panels are the visual units in the panel grid and dock. The system uses discrimi
 
 Access native features via namespaced API in Renderer. Returns Promises or Cleanups.
 
-36 namespaces including: `worktree`, `terminal`, `files`, `copyTree`, `system`, `app`, `menu`, `logs`, `errors`, `events`, `project`, `github`, `notes`, `devPreview`, `git`, `sidecar`, `hibernation`, `keybinding`, `worktreeConfig`, `window`, `notification`, `update`, `gemini`, `commands`, `appAgent`, `agentCapabilities`, `clipboard`, and more.
+36 namespaces including: `worktree`, `terminal`, `files`, `copyTree`, `system`, `app`, `menu`, `logs`, `errors`, `events`, `project`, `github`, `notes`, `devPreview`, `git`, `portal`, `hibernation`, `keybinding`, `worktreeConfig`, `window`, `notification`, `update`, `gemini`, `commands`, `appAgent`, `agentCapabilities`, `clipboard`, and more.
 
 ## Key Features & Implementation
 
@@ -136,7 +136,7 @@ electron/
 │                            #   project, slashCommands, systemSleep, terminalConfig, worktree)
 ├── services/                # ~60 backend services (PtyManager, AgentStateMachine,
 │                            #   CopyTreeService, GitService, GitHubService, WorkflowEngine,
-│                            #   SidecarManager, HibernationService, etc.)
+│                            #   PortalManager, HibernationService, etc.)
 ├── schemas/                 # Zod schemas (agent, external, ipc)
 ├── types/                   # Main process types
 ├── utils/                   # Utilities (git, cache, logger, soundPlayer, webviewCsp, etc.)
@@ -180,7 +180,7 @@ src/
 │   ├── Notes/               # Notes panel
 │   ├── Commands/            # Command palette
 │   ├── ContextInjection/    # Context injection UI
-│   ├── Sidecar/             # Sidecar panel
+│   ├── Portal/             # Portal panel
 │   ├── Pulse/               # Activity pulse
 │   ├── QuickSwitcher/       # Quick panel switcher
 │   ├── Onboarding/          # First-run onboarding

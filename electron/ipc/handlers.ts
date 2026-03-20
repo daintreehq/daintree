@@ -12,7 +12,7 @@ import { registerTerminalLayoutHandlers } from "./handlers/terminalLayout.js";
 import { registerProjectInRepoSettingsHandlers } from "./handlers/projectInRepoSettings.js";
 import { registerGithubHandlers } from "./handlers/github.js";
 import { registerAppHandlers } from "./handlers/app.js";
-import { registerSidecarHandlers } from "./handlers/sidecar.js";
+import { registerPortalHandlers } from "./handlers/portal.js";
 import { registerHibernationHandlers } from "./handlers/hibernation.js";
 import { registerSystemSleepHandlers } from "./handlers/systemSleep.js";
 import { registerKeybindingHandlers } from "./handlers/keybinding.js";
@@ -87,7 +87,7 @@ export function registerIpcHandlers(deps: HandlerDependencies): () => void {
     register(() => registerProjectInRepoSettingsHandlers(deps));
     register(() => registerGithubHandlers(deps));
     register(() => registerAppHandlers(deps));
-    register(() => registerSidecarHandlers(deps));
+    register(() => registerPortalHandlers(deps));
     register(() => registerMenuHandlers(deps));
     register(() => registerHibernationHandlers(deps));
     register(() => registerSystemSleepHandlers(deps));

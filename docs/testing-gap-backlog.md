@@ -57,7 +57,7 @@ Tier 3 backlog is currently cleared. Continue with Tier 4 for integration harden
 - `src/store/projectSettingsStore.ts`
 - `src/store/pulseStore.ts`
 - `src/store/recipeStore.ts`
-- `src/store/sidecarStore.ts`
+- `src/store/portalStore.ts`
 - `src/store/userAgentRegistryStore.ts`
 - `src/store/worktreeFilterStore.ts`
 - `src/store/worktreeStore.ts`

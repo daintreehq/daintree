@@ -80,7 +80,7 @@ test.describe.serial("Core: Shell & Settings", () => {
         { nav: "GitHub", title: "GitHub Integration" },
         { nav: "Editor", title: "Editor Integration" },
         { nav: "Image Viewer", title: "Image Viewer" },
-        { nav: "Sidecar", title: "Sidecar Links" },
+        { nav: "Portal", title: "Portal Links" },
         { nav: "MCP Server", title: "MCP Server" },
         { nav: "Voice Input", title: "Voice Input" },
         { nav: "Troubleshooting", title: "Troubleshooting" },

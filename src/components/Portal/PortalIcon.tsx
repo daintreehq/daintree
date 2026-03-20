@@ -2,14 +2,14 @@ import { useState, useEffect } from "react";
 import { Globe, Search } from "lucide-react";
 import { getAgentConfig, isRegisteredAgent } from "@/config/agents";
 
-interface SidecarIconProps {
+interface PortalIconProps {
   icon: string;
   size?: "tab" | "launchpad";
   url?: string;
   type?: "system" | "user";
 }
 
-export function SidecarIcon({ icon, size = "launchpad", url, type }: SidecarIconProps) {
+export function PortalIcon({ icon, size = "launchpad", url, type }: PortalIconProps) {
   const [showFallback, setShowFallback] = useState(false);
   const iconClass = size === "launchpad" ? "w-8 h-8" : "w-3 h-3";
 

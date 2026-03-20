@@ -20,13 +20,13 @@ export type ToolbarButtonId =
   | "problems"
   | "notification-center"
   | "panel-palette"
-  | "sidecar-toggle";
+  | "portal-toggle";
 
 /** Configuration for which toolbar buttons are visible and their order */
 export interface ToolbarLayout {
   /** Ordered list of button IDs to show on the left side (excluding sidebar-toggle which is always first) */
   leftButtons: ToolbarButtonId[];
-  /** Ordered list of button IDs to show on the right side (excluding sidecar-toggle which is always last) */
+  /** Ordered list of button IDs to show on the right side (excluding portal-toggle which is always last) */
   rightButtons: ToolbarButtonId[];
 }
 

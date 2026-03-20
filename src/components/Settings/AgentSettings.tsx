@@ -244,7 +244,7 @@ export function AgentSettings({
               </select>
               <p className="text-xs text-canopy-text/40">
                 Agent used for automated workflows ("What's Next?", onboarding, project
-                explanations). Distinct from the Sidecar "Default New Tab Agent" which controls the
+                explanations). Distinct from the Portal "Default New Tab Agent" which controls the
                 browser panel opened by the + button.
               </p>
             </div>

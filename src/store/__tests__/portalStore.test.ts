@@ -21,7 +21,7 @@ vi.hoisted(() => {
     ...((globalThis as unknown as { window?: unknown }).window as Record<string, unknown>),
     localStorage: localStorageMock as unknown as Storage,
     electron: {
-      sidecar: {
+      portal: {
         closeTab: vi.fn(),
         hide: vi.fn(),
         show: vi.fn(),
@@ -31,7 +31,7 @@ vi.hoisted(() => {
   } as unknown;
 });
 
-import { useSidecarStore } from "../sidecarStore";
+import { usePortalStore } from "../portalStore";
 
 function createLocalStorageMock() {
   const storage = new Map<string, string>();
@@ -49,7 +49,7 @@ function createLocalStorageMock() {
   };
 }
 
-describe("sidecarStore", () => {
+describe("portalStore", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     vi.clearAllMocks();
@@ -65,8 +65,8 @@ describe("sidecarStore", () => {
       getElementById: vi.fn(),
     };
 
-    useSidecarStore.getState().reset();
-    useSidecarStore.setState({
+    usePortalStore.getState().reset();
+    usePortalStore.setState({
       tabs: [{ id: "tab-1", title: "One", url: "https://example.com" }],
       activeTabId: "tab-1",
       createdTabs: new Set<string>(["tab-1"]),
@@ -79,19 +79,19 @@ describe("sidecarStore", () => {
   });
 
   it("does not call backend closeTab for unknown tab IDs", () => {
-    const before = useSidecarStore.getState().tabs;
+    const before = usePortalStore.getState().tabs;
 
-    useSidecarStore.getState().closeTab("missing-tab");
+    usePortalStore.getState().closeTab("missing-tab");
 
-    const after = useSidecarStore.getState().tabs;
+    const after = usePortalStore.getState().tabs;
     expect(after).toEqual(before);
-    expect(window.electron.sidecar.closeTab).not.toHaveBeenCalled();
+    expect(window.electron.portal.closeTab).not.toHaveBeenCalled();
   });
 
   it("retries placeholder lookup before showing the next active tab after a close", async () => {
     let calls = 0;
     vi.mocked(document.getElementById).mockImplementation((id: string) => {
-      if (id !== "sidecar-placeholder") return null;
+      if (id !== "portal-placeholder") return null;
       calls += 1;
       if (calls < 3) return null;
       return {
@@ -104,7 +104,7 @@ describe("sidecarStore", () => {
       } as HTMLElement;
     });
 
-    useSidecarStore.setState({
+    usePortalStore.setState({
       isOpen: true,
       tabs: [
         { id: "tab-1", title: "One", url: "https://example.com/1" },
@@ -114,17 +114,17 @@ describe("sidecarStore", () => {
       createdTabs: new Set<string>(["tab-1", "tab-2"]),
     });
 
-    useSidecarStore.getState().closeTab("tab-1");
+    usePortalStore.getState().closeTab("tab-1");
 
     await vi.runAllTimersAsync();
 
-    expect(window.electron.sidecar.closeTab).toHaveBeenCalledWith({ tabId: "tab-1" });
-    expect(window.electron.sidecar.show).toHaveBeenCalledWith({
+    expect(window.electron.portal.closeTab).toHaveBeenCalledWith({ tabId: "tab-1" });
+    expect(window.electron.portal.show).toHaveBeenCalledWith({
       tabId: "tab-2",
       bounds: { x: 12, y: 20, width: 641, height: 480 },
     });
-    expect(useSidecarStore.getState().activeTabId).toBe("tab-2");
-    expect(useSidecarStore.getState().createdTabs.has("tab-1")).toBe(false);
+    expect(usePortalStore.getState().activeTabId).toBe("tab-2");
+    expect(usePortalStore.getState().createdTabs.has("tab-1")).toBe(false);
   });
 
   it("does not show a stale tab if the close flow is superseded before restore runs", async () => {
@@ -137,7 +137,7 @@ describe("sidecarStore", () => {
       }),
     } as HTMLElement);
 
-    useSidecarStore.setState({
+    usePortalStore.setState({
       isOpen: true,
       tabs: [
         { id: "tab-1", title: "One", url: "https://example.com/1" },
@@ -147,13 +147,13 @@ describe("sidecarStore", () => {
       createdTabs: new Set<string>(["tab-1", "tab-2"]),
     });
 
-    useSidecarStore.getState().closeTab("tab-1");
-    useSidecarStore.getState().closeAllTabs();
+    usePortalStore.getState().closeTab("tab-1");
+    usePortalStore.getState().closeAllTabs();
 
     await vi.runAllTimersAsync();
 
-    expect(window.electron.sidecar.show).not.toHaveBeenCalled();
-    expect(useSidecarStore.getState().tabs).toEqual([]);
-    expect(useSidecarStore.getState().activeTabId).toBeNull();
+    expect(window.electron.portal.show).not.toHaveBeenCalled();
+    expect(usePortalStore.getState().tabs).toEqual([]);
+    expect(usePortalStore.getState().activeTabId).toBeNull();
   });
 });

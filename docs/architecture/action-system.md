@@ -253,7 +253,7 @@ Use the Event Inspector (Developer Tools) to view action history in real-time.
 | `browser`     | Browser panel control     | `browser.reload`, `browser.navigate`                     |
 | `system`      | System operations         | `system.openExternal`, `system.checkCommand`             |
 | `logs`        | Log management            | `logs.openFile`, `logs.clear`                            |
-| `sidecar`     | Sidecar browser           | `sidecar.toggle`, `sidecar.openUrl`                      |
+| `portal`      | Portal browser            | `portal.toggle`, `portal.openUrl`                        |
 
 ## FAQ
 

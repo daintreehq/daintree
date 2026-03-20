@@ -140,16 +140,16 @@ export type KeyAction =
   // Panel management
   | "panel.palette"
   | "panel.toggleDiagnostics"
-  | "panel.toggleSidecar"
+  | "panel.togglePortal"
   | "panel.diagnosticsLogs"
   | "panel.diagnosticsEvents"
   | "panel.diagnosticsMessages"
 
-  // Sidecar actions
-  | "sidecar.newTab"
-  | "sidecar.closeTab"
-  | "sidecar.nextTab"
-  | "sidecar.prevTab"
+  // Portal actions
+  | "portal.newTab"
+  | "portal.closeTab"
+  | "portal.nextTab"
+  | "portal.prevTab"
 
   // Notes actions
   | "notes.openPalette"
@@ -296,14 +296,14 @@ export const KEY_ACTION_VALUES: ReadonlySet<string> = new Set<string>([
   "window.zoomReset",
   "panel.palette",
   "panel.toggleDiagnostics",
-  "panel.toggleSidecar",
+  "panel.togglePortal",
   "panel.diagnosticsLogs",
   "panel.diagnosticsEvents",
   "panel.diagnosticsMessages",
-  "sidecar.newTab",
-  "sidecar.closeTab",
-  "sidecar.nextTab",
-  "sidecar.prevTab",
+  "portal.newTab",
+  "portal.closeTab",
+  "portal.nextTab",
+  "portal.prevTab",
   "notes.openPalette",
   "action.palette",
   "action.palette.open",

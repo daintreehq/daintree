@@ -710,22 +710,22 @@ export interface ElectronAPI {
     getEnabled(): Promise<boolean>;
     onSupportChanged(callback: (data: { enabled: boolean }) => void): () => void;
   };
-  sidecar: {
-    create(payload: import("../sidecar.js").SidecarCreatePayload): Promise<void>;
-    show(payload: import("../sidecar.js").SidecarShowPayload): Promise<void>;
+  portal: {
+    create(payload: import("../portal.js").PortalCreatePayload): Promise<void>;
+    show(payload: import("../portal.js").PortalShowPayload): Promise<void>;
     hide(): Promise<void>;
-    resize(bounds: import("../sidecar.js").SidecarBounds): Promise<void>;
-    closeTab(payload: import("../sidecar.js").SidecarCloseTabPayload): Promise<void>;
-    navigate(payload: import("../sidecar.js").SidecarNavigatePayload): Promise<void>;
+    resize(bounds: import("../portal.js").PortalBounds): Promise<void>;
+    closeTab(payload: import("../portal.js").PortalCloseTabPayload): Promise<void>;
+    navigate(payload: import("../portal.js").PortalNavigatePayload): Promise<void>;
     goBack(tabId: string): Promise<boolean>;
     goForward(tabId: string): Promise<boolean>;
     reload(tabId: string): Promise<void>;
-    showNewTabMenu(payload: import("../sidecar.js").SidecarShowNewTabMenuPayload): Promise<void>;
-    onNavEvent(callback: (data: import("../sidecar.js").SidecarNavEvent) => void): () => void;
+    showNewTabMenu(payload: import("../portal.js").PortalShowNewTabMenuPayload): Promise<void>;
+    onNavEvent(callback: (data: import("../portal.js").PortalNavEvent) => void): () => void;
     onFocus(callback: () => void): () => void;
     onBlur(callback: () => void): () => void;
     onNewTabMenuAction(
-      callback: (action: import("../sidecar.js").SidecarNewTabMenuAction) => void
+      callback: (action: import("../portal.js").PortalNewTabMenuAction) => void
     ): () => void;
   };
   webview: {

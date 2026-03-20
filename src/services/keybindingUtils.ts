@@ -1,4 +1,4 @@
-export type KeyScope = "global" | "terminal" | "modal" | "worktreeList" | "sidecar";
+export type KeyScope = "global" | "terminal" | "modal" | "worktreeList" | "portal";
 
 export interface KeybindingConfig {
   actionId: string;

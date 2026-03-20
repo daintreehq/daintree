@@ -234,9 +234,9 @@ export interface WorktreeHeaderProps {
     onCopyContextModified: () => void;
     onOpenEditor: () => void;
     onRevealInFinder: () => void;
-    onOpenIssueSidecar?: () => void;
+    onOpenIssuePortal?: () => void;
     onOpenIssueExternal?: () => void;
-    onOpenPRSidecar?: () => void;
+    onOpenPRPortal?: () => void;
     onOpenPRExternal?: () => void;
     onRunRecipe: (recipeId: string) => void;
     onSaveLayout?: () => void;
@@ -410,9 +410,9 @@ export function WorktreeHeader({
                 onCopyContextModified={menu.onCopyContextModified}
                 onOpenEditor={menu.onOpenEditor}
                 onRevealInFinder={menu.onRevealInFinder}
-                onOpenIssueSidecar={menu.onOpenIssueSidecar}
+                onOpenIssuePortal={menu.onOpenIssuePortal}
                 onOpenIssueExternal={menu.onOpenIssueExternal}
-                onOpenPRSidecar={menu.onOpenPRSidecar}
+                onOpenPRPortal={menu.onOpenPRPortal}
                 onOpenPRExternal={menu.onOpenPRExternal}
                 onAttachIssue={menu.onAttachIssue}
                 onViewPlan={menu.onViewPlan}

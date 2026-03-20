@@ -1,14 +1,14 @@
 import { Globe } from "lucide-react";
 import { useMemo } from "react";
-import type { SidecarLink } from "@shared/types";
-import { SidecarIcon } from "./SidecarIcon";
+import type { PortalLink } from "@shared/types";
+import { PortalIcon } from "./PortalIcon";
 
-interface SidecarLaunchpadProps {
-  links: SidecarLink[];
+interface PortalLaunchpadProps {
+  links: PortalLink[];
   onOpenUrl: (url: string, title: string, background?: boolean) => void;
 }
 
-export function SidecarLaunchpad({ links, onOpenUrl }: SidecarLaunchpadProps) {
+export function PortalLaunchpad({ links, onOpenUrl }: PortalLaunchpadProps) {
   const isMac = useMemo(() => navigator.platform.toUpperCase().includes("MAC"), []);
   if (links.length === 0) {
     return (
@@ -42,7 +42,7 @@ export function SidecarLaunchpad({ links, onOpenUrl }: SidecarLaunchpadProps) {
               className="flex items-center gap-4 p-4 rounded-[var(--radius-xl)] bg-canopy-border hover:bg-canopy-border/80 border border-canopy-border hover:border-canopy-border transition-all group focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2"
             >
               <div className="w-8 h-8 flex items-center justify-center text-foreground group-hover:text-white transition-colors">
-                <SidecarIcon icon={link.icon} size="launchpad" url={link.url} type={link.type} />
+                <PortalIcon icon={link.icon} size="launchpad" url={link.url} type={link.type} />
               </div>
               <div className="text-left">
                 <div className="font-medium text-foreground group-hover:text-white transition-colors">

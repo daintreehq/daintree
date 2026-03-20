@@ -2,28 +2,28 @@ import { describe, it, expect, beforeEach } from "vitest";
 import fs from "fs/promises";
 import path from "path";
 
-const SIDECAR_TOOLBAR_PATH = path.resolve(__dirname, "../SidecarToolbar.tsx");
+const PORTAL_TOOLBAR_PATH = path.resolve(__dirname, "../PortalToolbar.tsx");
 
-describe("SidecarToolbar shortcut tooltips — issue #3819", () => {
+describe("PortalToolbar shortcut tooltips — issue #3819", () => {
   let source: string;
 
   beforeEach(async () => {
-    source = await fs.readFile(SIDECAR_TOOLBAR_PATH, "utf-8");
+    source = await fs.readFile(PORTAL_TOOLBAR_PATH, "utf-8");
   });
 
   describe("useKeybindingDisplay hooks", () => {
-    it("uses dynamic hook for panel.toggleSidecar", () => {
-      expect(source).toContain('useKeybindingDisplay("panel.toggleSidecar")');
+    it("uses dynamic hook for panel.togglePortal", () => {
+      expect(source).toContain('useKeybindingDisplay("panel.togglePortal")');
     });
 
-    it("uses dynamic hook for sidecar.newTab", () => {
-      expect(source).toContain('useKeybindingDisplay("sidecar.newTab")');
+    it("uses dynamic hook for portal.newTab", () => {
+      expect(source).toContain('useKeybindingDisplay("portal.newTab")');
     });
   });
 
   describe("createTooltipWithShortcut usage", () => {
-    it("uses createTooltipWithShortcut for Close sidecar tooltip", () => {
-      expect(source).toContain('createTooltipWithShortcut("Close sidecar", closeSidecarShortcut)');
+    it("uses createTooltipWithShortcut for Close portal tooltip", () => {
+      expect(source).toContain('createTooltipWithShortcut("Close portal", closePortalShortcut)');
     });
 
     it("uses createTooltipWithShortcut for New Tab tooltip", () => {

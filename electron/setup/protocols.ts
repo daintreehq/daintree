@@ -126,7 +126,7 @@ export function setupWebviewCSP(): void {
     }
 
     const partitionType = classifyPartition(partition);
-    if (partitionType === "unknown" || partitionType === "sidecar") {
+    if (partitionType === "unknown" || partitionType === "portal") {
       return;
     }
 
@@ -143,7 +143,7 @@ export function setupWebviewCSP(): void {
     console.log(`[MAIN] CSP configured for partition: ${partition} (${partitionType})`);
   };
 
-  // Configure static partitions (browser only - sidecar excluded)
+  // Configure static partitions (browser only - portal excluded)
   applyCSP("persist:browser");
 
   // Monitor for dynamic dev-preview partitions

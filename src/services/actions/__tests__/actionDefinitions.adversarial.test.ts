@@ -17,7 +17,7 @@ const mocks = vi.hoisted(() => {
     }),
   };
 
-  const sidecar = {
+  const portal = {
     create: vi.fn(),
     show: vi.fn(),
     hide: vi.fn(),
@@ -98,7 +98,7 @@ const mocks = vi.hoisted(() => {
 
   const windowMock = {
     electron: {
-      sidecar,
+      portal,
       terminal,
       notification,
     },
@@ -171,7 +171,7 @@ const mocks = vi.hoisted(() => {
     githubClient,
     actionService,
     terminalInstanceService,
-    sidecar,
+    portal,
     terminal,
     notification,
   };
@@ -220,7 +220,7 @@ function registerTerminalActions(actions: ActionRegistry, callbacks: ActionCallb
 const { registerPanelActions } = await import("../definitions/panelActions");
 const { registerWorktreeActions } = await import("../definitions/worktreeActions");
 const { useTerminalStore } = await import("../../../store/terminalStore");
-const { useSidecarStore } = await import("../../../store/sidecarStore");
+const { usePortalStore } = await import("../../../store/portalStore");
 const { useWorktreeSelectionStore } = await import("../../../store/worktreeStore");
 const { useWorktreeDataStore } = await import("../../../store/worktreeDataStore");
 
@@ -298,7 +298,7 @@ beforeEach(() => {
     commandQueue: [],
   });
 
-  useSidecarStore.setState({
+  usePortalStore.setState({
     isOpen: false,
     activeTabId: null,
     tabs: [],
@@ -555,11 +555,11 @@ describe("terminal action hardening", () => {
 });
 
 describe("panel action hardening", () => {
-  it("ignores activation requests for unknown sidecar tabs", async () => {
+  it("ignores activation requests for unknown portal tabs", async () => {
     const actions = buildRegistry(registerPanelActions);
-    const activateTab = actions.get("sidecar.activateTab")!();
+    const activateTab = actions.get("portal.activateTab")!();
 
-    useSidecarStore.setState({
+    usePortalStore.setState({
       isOpen: true,
       activeTabId: "tab-1",
       tabs: [{ id: "tab-1", title: "Docs", url: "https://example.com" }],
@@ -568,16 +568,16 @@ describe("panel action hardening", () => {
 
     await activateTab.run({ tabId: "missing" }, {} as never);
 
-    expect(useSidecarStore.getState().activeTabId).toBe("tab-1");
-    expect(mocks.sidecar.hide).not.toHaveBeenCalled();
-    expect(mocks.sidecar.show).not.toHaveBeenCalled();
-    expect(mocks.sidecar.create).not.toHaveBeenCalled();
+    expect(usePortalStore.getState().activeTabId).toBe("tab-1");
+    expect(mocks.portal.hide).not.toHaveBeenCalled();
+    expect(mocks.portal.show).not.toHaveBeenCalled();
+    expect(mocks.portal.create).not.toHaveBeenCalled();
   });
 
-  it("removes background tabs again if sidecar creation fails", async () => {
+  it("removes background tabs again if portal creation fails", async () => {
     const actions = buildRegistry(registerPanelActions);
-    const openUrl = actions.get("sidecar.openUrl")!();
-    mocks.sidecar.create.mockRejectedValueOnce(new Error("boom"));
+    const openUrl = actions.get("portal.openUrl")!();
+    mocks.portal.create.mockRejectedValueOnce(new Error("boom"));
 
     await openUrl.run(
       {
@@ -588,13 +588,13 @@ describe("panel action hardening", () => {
       {} as never
     );
 
-    expect(useSidecarStore.getState().tabs).toEqual([]);
-    expect(useSidecarStore.getState().createdTabs.size).toBe(0);
+    expect(usePortalStore.getState().tabs).toEqual([]);
+    expect(usePortalStore.getState().createdTabs.size).toBe(0);
   });
 
   it("reuses the active blank tab when opening a foreground URL", async () => {
     const actions = buildRegistry(registerPanelActions);
-    const openUrl = actions.get("sidecar.openUrl")!();
+    const openUrl = actions.get("portal.openUrl")!();
 
     vi.mocked(document.getElementById).mockReturnValue({
       getBoundingClientRect: () => ({
@@ -605,7 +605,7 @@ describe("panel action hardening", () => {
       }),
     } as never);
 
-    useSidecarStore.setState({
+    usePortalStore.setState({
       isOpen: false,
       activeTabId: "blank-1",
       tabs: [{ id: "blank-1", title: "New Tab", url: null }],
@@ -614,7 +614,7 @@ describe("panel action hardening", () => {
 
     await openUrl.run({ url: "https://example.com/reused", title: "Reused" }, {} as never);
 
-    const state = useSidecarStore.getState();
+    const state = usePortalStore.getState();
     expect(state.tabs).toHaveLength(1);
     expect(state.tabs[0]).toMatchObject({
       id: "blank-1",
@@ -622,11 +622,11 @@ describe("panel action hardening", () => {
       url: "https://example.com/reused",
     });
     expect(state.isOpen).toBe(true);
-    expect(mocks.sidecar.create).toHaveBeenCalledWith({
+    expect(mocks.portal.create).toHaveBeenCalledWith({
       tabId: "blank-1",
       url: "https://example.com/reused",
     });
-    expect(mocks.sidecar.show).toHaveBeenCalled();
+    expect(mocks.portal.show).toHaveBeenCalled();
   });
 
   it("throws for focus requests targeting trashed or missing panels", async () => {
@@ -703,9 +703,9 @@ describe("worktree action hardening", () => {
     });
   });
 
-  it("does not dispatch sidecar open for malformed or unsafe PR URLs", async () => {
+  it("does not dispatch portal open for malformed or unsafe PR URLs", async () => {
     const actions = buildRegistry(registerWorktreeActions);
-    const openPRInSidecar = actions.get("worktree.openPRInSidecar")!();
+    const openPRInPortal = actions.get("worktree.openPRInPortal")!();
 
     useWorktreeDataStore.setState({
       worktrees: new Map([
@@ -734,15 +734,15 @@ describe("worktree action hardening", () => {
       ]),
     } as never);
 
-    await openPRInSidecar.run(undefined, { activeWorktreeId: "wt-1" } as never);
-    await openPRInSidecar.run(undefined, { activeWorktreeId: "wt-2" } as never);
+    await openPRInPortal.run(undefined, { activeWorktreeId: "wt-1" } as never);
+    await openPRInPortal.run(undefined, { activeWorktreeId: "wt-2" } as never);
 
     expect(mocks.actionService.dispatch).not.toHaveBeenCalled();
   });
 
-  it("does not dispatch sidecar open when issue URL lookup returns nothing", async () => {
+  it("does not dispatch portal open when issue URL lookup returns nothing", async () => {
     const actions = buildRegistry(registerWorktreeActions);
-    const openIssueInSidecar = actions.get("worktree.openIssueInSidecar")!();
+    const openIssueInPortal = actions.get("worktree.openIssueInPortal")!();
 
     useWorktreeDataStore.setState({
       worktrees: new Map([
@@ -760,7 +760,7 @@ describe("worktree action hardening", () => {
     } as never);
     mocks.githubClient.getIssueUrl.mockResolvedValueOnce(null);
 
-    await openIssueInSidecar.run(undefined, { activeWorktreeId: "wt-3" } as never);
+    await openIssueInPortal.run(undefined, { activeWorktreeId: "wt-3" } as never);
 
     expect(mocks.githubClient.getIssueUrl).toHaveBeenCalledWith("/repo", 44);
     expect(mocks.actionService.dispatch).not.toHaveBeenCalled();
