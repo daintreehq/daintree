@@ -86,7 +86,7 @@ describe("createCanopyTokens — light mode derived defaults", () => {
   const lightTokens = createCanopyTokens("light", REQUIRED_TOKENS);
 
   it("derives border defaults from the theme's foreground ink for light mode", () => {
-    expect(lightTokens["border-subtle"]).toBe("rgba(26, 26, 26, 0.12)");
+    expect(lightTokens["border-subtle"]).toBe("rgba(26, 26, 26, 0.06)");
     expect(lightTokens["border-strong"]).toBe("rgba(26, 26, 26, 0.12)");
     expect(lightTokens["border-divider"]).toBe("rgba(26, 26, 26, 0.04)");
   });
