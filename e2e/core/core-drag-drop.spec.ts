@@ -60,12 +60,10 @@ test.describe.serial("Core: Panel Drag & Drop", () => {
 
     const idsAfter = await getGridPanelIds(window);
     expect(idsAfter).toHaveLength(3);
-    // The first panel should no longer be at index 0
+    // The dragged panel should have moved past its original position
     expect(idsAfter[0]).not.toBe(idsBefore[0]);
-    // The dragged panel should be at or near the end
-    expect(idsAfter.indexOf(idsBefore[0])).toBeGreaterThan(0);
-    // All original IDs should still be present
-    expect(idsAfter.sort()).toEqual(idsBefore.sort());
+    // All original IDs should still be present (just reordered)
+    expect([...idsAfter].sort()).toEqual([...idsBefore].sort());
   });
 
   // ── Grid to Dock ─────────────────────────────────────────
@@ -144,7 +142,7 @@ test.describe.serial("Core: Panel Drag & Drop", () => {
       const dock = window.locator(SEL.dock.container);
       let dockCount = await getDockPanelCount(window);
       while (dockCount > 0) {
-        await dock.locator("button").first().dblclick();
+        await dock.locator('[role="listitem"]').first().dblclick();
         await window.waitForTimeout(T_SETTLE);
         const restored = window.locator(SEL.panel.gridPanel).first();
         await restored.locator(SEL.panel.close).first().click({ force: true });
