@@ -133,6 +133,164 @@ test.describe.serial("Core: Terminal Search & Scrollback", () => {
       await panel.locator(SEL.terminal.searchClose).click();
       await expect(input).not.toBeVisible({ timeout: T_SHORT });
     });
+
+    // ── Case Sensitivity & Regex ──────────────────────────
+
+    test("run command with mixed-case and pattern output", async () => {
+      const { window } = ctx;
+      const panel = getFirstGridPanel(window);
+
+      await runTerminalCommand(
+        window,
+        panel,
+        "node -e \"console.log('CaseMark_Upper'); console.log('item1_found'); console.log('item2_found'); console.log('item3_found')\""
+      );
+      await waitForTerminalText(panel, "item3_found", T_LONG);
+    });
+
+    test("case sensitivity toggle changes search behavior", async () => {
+      const { window } = ctx;
+      const panel = getFirstGridPanel(window);
+
+      // Open search
+      await panel.locator(SEL.terminal.xtermRows).click();
+      await window.waitForTimeout(T_SETTLE);
+      await window.evaluate(() => window.dispatchEvent(new CustomEvent("canopy:find-in-panel")));
+      const input = panel.locator(SEL.terminal.searchInput);
+      await expect(input).toBeVisible({ timeout: T_MEDIUM });
+
+      const caseToggle = panel.locator(SEL.terminal.searchCaseToggle);
+
+      // Default: case insensitive (aria-pressed=false)
+      await expect(caseToggle).toHaveAttribute("aria-pressed", "false");
+
+      // Search lowercase variant — case-insensitive finds CaseMark_Upper
+      await input.fill("casemark_upper");
+      await window.waitForTimeout(T_SETTLE);
+      await expect(panel.locator(SEL.terminal.searchStatus)).toHaveText("Found", {
+        timeout: T_SHORT,
+      });
+
+      // Toggle case ON
+      await caseToggle.click();
+      await expect(caseToggle).toHaveAttribute("aria-pressed", "true");
+
+      // Case-sensitive: lowercase "casemark_upper" should not match "CaseMark_Upper"
+      await window.waitForTimeout(T_SETTLE);
+      await expect(panel.locator(SEL.terminal.searchStatus)).toHaveText("No matches", {
+        timeout: T_SHORT,
+      });
+
+      // Exact case match should still work
+      await input.fill("CaseMark_Upper");
+      await window.waitForTimeout(T_SETTLE);
+      await expect(panel.locator(SEL.terminal.searchStatus)).toHaveText("Found", {
+        timeout: T_SHORT,
+      });
+
+      // Toggle case OFF and close
+      await caseToggle.click();
+      await expect(caseToggle).toHaveAttribute("aria-pressed", "false");
+      await window.keyboard.press("Escape");
+      await expect(input).not.toBeVisible({ timeout: T_SHORT });
+    });
+
+    test("regex toggle matches patterns and detects invalid regex", async () => {
+      const { window } = ctx;
+      const panel = getFirstGridPanel(window);
+
+      // Open search
+      await panel.locator(SEL.terminal.xtermRows).click();
+      await window.waitForTimeout(T_SETTLE);
+      await window.evaluate(() => window.dispatchEvent(new CustomEvent("canopy:find-in-panel")));
+      const input = panel.locator(SEL.terminal.searchInput);
+      await expect(input).toBeVisible({ timeout: T_MEDIUM });
+
+      const regexToggle = panel.locator(SEL.terminal.searchRegexToggle);
+
+      // Default: regex off
+      await expect(regexToggle).toHaveAttribute("aria-pressed", "false");
+
+      // Enable regex
+      await regexToggle.click();
+      await expect(regexToggle).toHaveAttribute("aria-pressed", "true");
+
+      // Regex pattern matches item1_found, item2_found, item3_found
+      await input.fill("item\\d+_found");
+      await window.waitForTimeout(T_SETTLE);
+      await expect(panel.locator(SEL.terminal.searchStatus)).toHaveText("Found", {
+        timeout: T_SHORT,
+      });
+
+      // Disable regex — literal "item\d+_found" doesn't exist
+      await regexToggle.click();
+      await expect(regexToggle).toHaveAttribute("aria-pressed", "false");
+      await window.waitForTimeout(T_SETTLE);
+      await expect(panel.locator(SEL.terminal.searchStatus)).toHaveText("No matches", {
+        timeout: T_SHORT,
+      });
+
+      // Re-enable regex for invalid regex test
+      await regexToggle.click();
+      await input.fill("[broken");
+      await window.waitForTimeout(T_SETTLE);
+      await expect(panel.locator(SEL.terminal.searchStatus)).toHaveText("Invalid regex", {
+        timeout: T_SHORT,
+      });
+
+      // Clean up: disable regex and close
+      await regexToggle.click();
+      await window.keyboard.press("Escape");
+      await expect(input).not.toBeVisible({ timeout: T_SHORT });
+    });
+
+    test("next and previous buttons cycle through matches", async () => {
+      const { window } = ctx;
+      const panel = getFirstGridPanel(window);
+
+      // Open search
+      await panel.locator(SEL.terminal.xtermRows).click();
+      await window.waitForTimeout(T_SETTLE);
+      await window.evaluate(() => window.dispatchEvent(new CustomEvent("canopy:find-in-panel")));
+      const input = panel.locator(SEL.terminal.searchInput);
+      await expect(input).toBeVisible({ timeout: T_MEDIUM });
+
+      // Search for a term with multiple matches
+      await input.fill("item");
+      await window.waitForTimeout(T_SETTLE);
+      await expect(panel.locator(SEL.terminal.searchStatus)).toHaveText("Found", {
+        timeout: T_SHORT,
+      });
+
+      // Click Next multiple times — status stays "Found"
+      const nextBtn = panel.locator(SEL.terminal.searchNext);
+      const prevBtn = panel.locator(SEL.terminal.searchPrevious);
+
+      await nextBtn.click();
+      await expect(panel.locator(SEL.terminal.searchStatus)).toHaveText("Found", {
+        timeout: T_SHORT,
+      });
+
+      await nextBtn.click();
+      await expect(panel.locator(SEL.terminal.searchStatus)).toHaveText("Found", {
+        timeout: T_SHORT,
+      });
+
+      // Click Previous — status stays "Found"
+      await prevBtn.click();
+      await expect(panel.locator(SEL.terminal.searchStatus)).toHaveText("Found", {
+        timeout: T_SHORT,
+      });
+
+      await prevBtn.click();
+      await expect(panel.locator(SEL.terminal.searchStatus)).toHaveText("Found", {
+        timeout: T_SHORT,
+      });
+
+      // Close search
+      await window.keyboard.press("Escape");
+      await expect(input).not.toBeVisible({ timeout: T_SHORT });
+    });
   });
 
   // ── Terminal Scrollback ────────────────────────────────
