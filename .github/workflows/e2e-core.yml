@@ -129,6 +129,7 @@ jobs:
         run: |
           mkdir -p ~/.claude
           echo '{"hasCompletedOnboarding": true}' > ~/.claude.json
+          echo '{"model": "claude-haiku-4-5-20251001"}' > ~/.claude/settings.json
 
       - name: Configure Claude Code (Windows)
         if: runner.os == 'Windows'
@@ -136,6 +137,7 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force -Path "$env:USERPROFILE\.claude" | Out-Null
           '{"hasCompletedOnboarding": true}' | Set-Content "$env:USERPROFILE\.claude.json"
+          '{"model": "claude-haiku-4-5-20251001"}' | Set-Content "$env:USERPROFILE\.claude\settings.json"
 
       - name: Resolve test command
         id: test-cmd
