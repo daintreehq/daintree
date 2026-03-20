@@ -18,6 +18,14 @@ function handleRequest(_req: IncomingMessage, res: ServerResponse) {
     res.end("<html><body><h1>Page A</h1></body></html>");
   } else if (url.startsWith("/page-b")) {
     res.end("<html><body><h1>Page B</h1></body></html>");
+  } else if (url.startsWith("/console-test")) {
+    res.end(
+      '<html><body><h1>Console Test</h1><script>setTimeout(() => console.log("E2E_CONSOLE_TEST"), 1500)</script></body></html>'
+    );
+  } else if (url.startsWith("/find-test")) {
+    res.end(
+      "<html><body><p>FINDME_SENTINEL alpha</p><p>FINDME_SENTINEL beta</p><p>FINDME_SENTINEL gamma</p></body></html>"
+    );
   } else {
     res.end("<html><body><h1>Home</h1></body></html>");
   }
@@ -253,6 +261,130 @@ test.describe.serial("Core: Browser Panel", () => {
       await panel.locator(SEL.panel.close).first().click({ force: true });
 
       await expect.poll(() => getGridPanelCount(window), { timeout: T_MEDIUM }).toBe(count - 1);
+    });
+  });
+
+  test.describe.serial("Console Capture", () => {
+    test.afterAll(async () => {
+      try {
+        const { window } = ctx;
+        let count = await getGridPanelCount(window);
+        while (count > 0) {
+          const panel = window.locator(SEL.panel.gridPanel).first();
+          await panel.locator(SEL.panel.close).first().click({ force: true });
+          await expect.poll(() => getGridPanelCount(window), { timeout: T_MEDIUM }).toBe(count - 1);
+          count--;
+        }
+      } catch {
+        // best-effort cleanup
+      }
+    });
+
+    test("open browser panel, navigate to console-test page, and toggle console drawer", async () => {
+      const { window } = ctx;
+
+      await window.locator(SEL.toolbar.openBrowser).click();
+      const browserPanel = window.locator(SEL.panel.gridPanel).filter({
+        has: window.locator(SEL.browser.addressBar),
+      });
+      await expect(browserPanel).toBeVisible({ timeout: T_LONG });
+
+      const addressBar = browserPanel.locator(SEL.browser.addressBar);
+      await addressBar.click();
+      await addressBar.fill(`http://127.0.0.1:${port}/console-test`);
+      await window.keyboard.press("Enter");
+      await window.waitForTimeout(T_SETTLE);
+      await expect(addressBar).toHaveValue(/console-test/, { timeout: T_LONG });
+
+      await browserPanel.locator(SEL.browser.consoleToggle).click();
+      await expect(browserPanel.getByText("No console output")).toBeVisible({ timeout: T_MEDIUM });
+    });
+
+    test("console displays captured log message", async () => {
+      const { window } = ctx;
+      const browserPanel = window.locator(SEL.panel.gridPanel).filter({
+        has: window.locator(SEL.browser.addressBar),
+      });
+
+      await expect(browserPanel.getByText("E2E_CONSOLE_TEST")).toBeVisible({ timeout: T_LONG });
+    });
+  });
+
+  test.describe.serial("Find in Page", () => {
+    test.afterAll(async () => {
+      try {
+        const { window } = ctx;
+        let count = await getGridPanelCount(window);
+        while (count > 0) {
+          const panel = window.locator(SEL.panel.gridPanel).first();
+          await panel.locator(SEL.panel.close).first().click({ force: true });
+          await expect.poll(() => getGridPanelCount(window), { timeout: T_MEDIUM }).toBe(count - 1);
+          count--;
+        }
+      } catch {
+        // best-effort cleanup
+      }
+    });
+
+    test("open browser panel and navigate to find-test page", async () => {
+      const { window } = ctx;
+
+      await window.locator(SEL.toolbar.openBrowser).click();
+      const browserPanel = window.locator(SEL.panel.gridPanel).filter({
+        has: window.locator(SEL.browser.addressBar),
+      });
+      await expect(browserPanel).toBeVisible({ timeout: T_LONG });
+
+      const addressBar = browserPanel.locator(SEL.browser.addressBar);
+      await addressBar.click();
+      await addressBar.fill(`http://127.0.0.1:${port}/find-test`);
+      await window.keyboard.press("Enter");
+      await window.waitForTimeout(T_SETTLE);
+      await expect(addressBar).toHaveValue(/find-test/, { timeout: T_LONG });
+    });
+
+    test("open find bar via custom event and search for text", async () => {
+      const { window } = ctx;
+      const browserPanel = window.locator(SEL.panel.gridPanel).filter({
+        has: window.locator(SEL.browser.addressBar),
+      });
+
+      // Click panel to ensure it has focus (useFindInPage only listens when focused)
+      await browserPanel.click();
+      await window.waitForTimeout(T_SETTLE);
+
+      await window.evaluate(() => window.dispatchEvent(new CustomEvent("canopy:find-in-panel")));
+
+      const findInput = browserPanel.locator(SEL.browser.findInput);
+      await expect(findInput).toBeVisible({ timeout: T_MEDIUM });
+
+      await findInput.fill("FINDME_SENTINEL");
+      await expect(browserPanel.getByText(/1 \/ 3/)).toBeVisible({ timeout: T_LONG });
+    });
+
+    test("next and previous navigation changes active match", async () => {
+      const { window } = ctx;
+      const browserPanel = window.locator(SEL.panel.gridPanel).filter({
+        has: window.locator(SEL.browser.addressBar),
+      });
+
+      await browserPanel.locator(SEL.browser.findNext).click();
+      await expect(browserPanel.getByText(/2 \/ 3/)).toBeVisible({ timeout: T_MEDIUM });
+
+      await browserPanel.locator(SEL.browser.findPrev).click();
+      await expect(browserPanel.getByText(/1 \/ 3/)).toBeVisible({ timeout: T_MEDIUM });
+    });
+
+    test("closing find bar removes it", async () => {
+      const { window } = ctx;
+      const browserPanel = window.locator(SEL.panel.gridPanel).filter({
+        has: window.locator(SEL.browser.addressBar),
+      });
+
+      await browserPanel.locator(SEL.browser.findClose).click();
+      await expect(browserPanel.locator(SEL.browser.findInput)).not.toBeVisible({
+        timeout: T_SHORT,
+      });
     });
   });
 });

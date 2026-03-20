@@ -98,6 +98,12 @@ export const SEL = {
     zoomIn: '[aria-label="Zoom in"]',
     zoomOut: '[aria-label="Zoom out"]',
     zoomReset: '[aria-label="Reset zoom"]',
+    consoleToggle: '[aria-label="Toggle console"]',
+    consoleClear: '[aria-label="Clear console"]',
+    findInput: 'input[placeholder="Find in page"]',
+    findPrev: '[aria-label="Previous match"]',
+    findNext: '[aria-label="Next match"]',
+    findClose: '[aria-label="Close find bar"]',
   },
   devPreview: {
     consoleToggle: '[aria-label="Show Terminal"], [aria-label="Hide Terminal"]',
