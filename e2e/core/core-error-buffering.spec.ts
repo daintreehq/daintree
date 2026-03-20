@@ -30,7 +30,7 @@ function buildError(overrides: Partial<ErrorPayload> = {}): ErrorPayload {
 }
 
 async function bufferErrors(app: ElectronApplication, errors: ErrorPayload[]): Promise<void> {
-  await app.evaluate(({}, errs) => {
+  await app.evaluate((_electron, errs) => {
     const svc = (globalThis as any).__canopyErrorService;
     if (!svc) throw new Error("__canopyErrorService not available");
     for (const err of errs) {
@@ -40,7 +40,7 @@ async function bufferErrors(app: ElectronApplication, errors: ErrorPayload[]): P
 }
 
 async function flushBufferedErrors(app: ElectronApplication): Promise<void> {
-  await app.evaluate(({}) => {
+  await app.evaluate(() => {
     const svc = (globalThis as any).__canopyErrorService;
     if (!svc) throw new Error("__canopyErrorService not available");
     svc.flushPendingErrors();
