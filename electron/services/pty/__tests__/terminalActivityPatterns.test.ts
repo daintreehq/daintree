@@ -1,9 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ProcessInfo } from "../../ProcessTreeCache.js";
 import type { ProcessTreeCache } from "../../ProcessTreeCache.js";
+import type { AgentDetectionConfig } from "../../../../shared/config/agentRegistry.js";
 import {
   createProcessStateValidator,
   buildActivityMonitorOptions,
+  buildPromptHintPatterns,
+  UNIVERSAL_APPROVAL_HINT_PATTERNS,
 } from "../terminalActivityPatterns.js";
 
 function createMockProcessTreeCache(
@@ -92,6 +95,66 @@ describe("createProcessStateValidator", () => {
   });
 });
 
+describe("buildPromptHintPatterns", () => {
+  it("returns universal patterns for an agent with no promptHintPatterns", () => {
+    const result = buildPromptHintPatterns(undefined, "claude");
+    expect(result).toBeDefined();
+    expect(result!.length).toBe(UNIVERSAL_APPROVAL_HINT_PATTERNS.length);
+  });
+
+  it("returns undefined for non-agent terminals", () => {
+    const result = buildPromptHintPatterns(undefined, undefined);
+    expect(result).toBeUndefined();
+  });
+
+  it("merges agent-specific patterns before universal patterns", () => {
+    const detection: AgentDetectionConfig = {
+      primaryPatterns: [],
+      promptHintPatterns: ["custom\\s+pattern"],
+    };
+    const result = buildPromptHintPatterns(detection, "claude");
+    expect(result).toBeDefined();
+    expect(result!.length).toBe(1 + UNIVERSAL_APPROVAL_HINT_PATTERNS.length);
+    // Agent-specific pattern should be first
+    expect(result![0].test("custom pattern")).toBe(true);
+  });
+
+  it("universal patterns match expected approval prompts", () => {
+    const patterns = buildPromptHintPatterns(undefined, "gemini")!;
+    const approvalTexts = [
+      "Yes, allow once",
+      "allow always for this tool",
+      "Approve Once",
+      "Approve This Session",
+      "a, Allow permission",
+      "d, Deny permission",
+      "No, suggest changes (esc)",
+      "Yes, don't ask again for this tool",
+      "Trust this directory",
+      "Proceed? [y/N]",
+      "Continue? (y/n)",
+      "[Y/n]",
+    ];
+    for (const text of approvalTexts) {
+      const matched = patterns.some((p) => p.test(text));
+      expect(matched, `Expected "${text}" to match a universal pattern`).toBe(true);
+    }
+  });
+
+  it("universal patterns do not match generic prose", () => {
+    const patterns = buildPromptHintPatterns(undefined, "claude")!;
+    const safeTexts = [
+      "I'll approve this change for you",
+      "This will allow the process to continue",
+      "You can deny the request manually",
+    ];
+    for (const text of safeTexts) {
+      const matched = patterns.some((p) => p.test(text));
+      expect(matched, `Expected "${text}" NOT to match any universal pattern`).toBe(false);
+    }
+  });
+});
+
 describe("buildActivityMonitorOptions", () => {
   it("returns undefined getVisibleLines/getCursorLine when no agent ID", () => {
     const result = buildActivityMonitorOptions(undefined, {});
@@ -118,6 +181,22 @@ describe("buildActivityMonitorOptions", () => {
     const result = buildActivityMonitorOptions("claude", {});
     expect(result.idleDebounceMs).toBeDefined();
     expect(typeof result.idleDebounceMs).toBe("number");
+  });
+
+  it("includes universal approval hint patterns for agent terminals", () => {
+    const result = buildActivityMonitorOptions("claude", {});
+    expect(result.promptHintPatterns).toBeDefined();
+    expect(result.promptHintPatterns!.length).toBeGreaterThanOrEqual(
+      UNIVERSAL_APPROVAL_HINT_PATTERNS.length
+    );
+    // Verify a universal pattern matches
+    const matchesApproveOnce = result.promptHintPatterns!.some((p) => p.test("Approve Once"));
+    expect(matchesApproveOnce).toBe(true);
+  });
+
+  it("does not include universal approval patterns for non-agent terminals", () => {
+    const result = buildActivityMonitorOptions(undefined, {});
+    expect(result.promptHintPatterns).toBeUndefined();
   });
 
   it("populates pattern config fields for a known agent", () => {
