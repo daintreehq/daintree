@@ -7,7 +7,7 @@ import { SEL } from "../helpers/selectors";
 import { T_LONG, T_MEDIUM } from "../helpers/timeouts";
 import { execSync } from "child_process";
 import path from "path";
-import { existsSync, rmSync } from "fs";
+import { existsSync } from "fs";
 
 const FEATURE_BRANCH = "feature/test-branch";
 const EXTERNAL_BRANCH = "feature/external-added";
@@ -113,6 +113,7 @@ test.describe.serial("Core: External Worktree Detection", () => {
     );
 
     // Trigger refresh so the app discovers the new worktree
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     await window.evaluate(() => (window as any).electron.worktree.refresh());
 
     // New worktree card should appear
