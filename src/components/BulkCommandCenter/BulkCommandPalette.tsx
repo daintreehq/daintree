@@ -123,6 +123,11 @@ interface PreviewEntry {
 
 export function BulkCommandPalette() {
   const isOpen = usePaletteStore((s) => s.activePaletteId === PALETTE_ID);
+  if (!isOpen) return null;
+  return <BulkCommandPaletteInner />;
+}
+
+function BulkCommandPaletteInner() {
   const closePalette = useCallback(() => usePaletteStore.getState().closePalette(PALETTE_ID), []);
 
   const rows = useWorktreeRows();
@@ -137,22 +142,6 @@ export function BulkCommandPalette() {
   const queueRef = useRef<PQueue | null>(null);
 
   const projectRecipes = useRecipeStore((s) => s.recipes.filter((r) => r.worktreeId === undefined));
-
-  useEffect(() => {
-    if (!isOpen) {
-      setSelectedIds(new Set());
-      setMode("keystroke");
-      setStep("select");
-      setKeystrokePreset("escape");
-      setCommandText("");
-      setSelectedRecipeId(null);
-      setIsSending(false);
-      if (doubleEscapeTimerRef.current) {
-        clearTimeout(doubleEscapeTimerRef.current);
-        doubleEscapeTimerRef.current = null;
-      }
-    }
-  }, [isOpen]);
 
   useEffect(() => {
     return () => {
@@ -311,7 +300,7 @@ export function BulkCommandPalette() {
   const actionLabel = step === "preview" ? "Confirm" : mode === "keystroke" ? "Send" : "Preview";
 
   return (
-    <AppPaletteDialog isOpen={isOpen} onClose={closePalette} ariaLabel="Bulk Command Center">
+    <AppPaletteDialog isOpen onClose={closePalette} ariaLabel="Bulk Command Center">
       <AppPaletteDialog.Header label="Bulk Command Center">
         <div className="flex gap-1 mb-1">
           {(["keystroke", "text", "recipe"] as const).map((m) => (
