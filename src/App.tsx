@@ -1070,9 +1070,12 @@ function App() {
 
   useEffect(() => {
     window.__CANOPY_E2E_ERROR_STORE__ = () =>
-      useErrorStore
-        .getState()
-        .errors.map((e) => ({ id: e.id, source: e.source, message: e.message }));
+      useErrorStore.getState().errors.map((e) => ({
+        id: e.id,
+        source: e.source,
+        message: e.message,
+        fromPreviousSession: e.fromPreviousSession,
+      }));
     return () => {
       delete window.__CANOPY_E2E_ERROR_STORE__;
     };
