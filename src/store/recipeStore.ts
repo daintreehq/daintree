@@ -7,6 +7,21 @@ import { generateAgentCommand } from "@shared/types";
 import { replaceRecipeVariables, type RecipeContext } from "@/utils/recipeVariables";
 import { BUILT_IN_AGENT_IDS } from "@shared/config/agentIds";
 
+export interface RecipeSpawnResult {
+  index: number;
+  terminalId: string;
+}
+
+export interface RecipeSpawnFailure {
+  index: number;
+  error: string;
+}
+
+export interface RecipeSpawnResults {
+  spawned: RecipeSpawnResult[];
+  failed: RecipeSpawnFailure[];
+}
+
 function isAgentRecipeType(type: RecipeTerminalType): boolean {
   return type !== "terminal" && type !== "dev-preview";
 }
@@ -74,6 +89,14 @@ interface RecipeState {
     worktreeId?: string,
     context?: RecipeContext
   ) => Promise<void>;
+
+  runRecipeWithResults: (
+    recipeId: string,
+    worktreePath: string,
+    worktreeId?: string,
+    context?: RecipeContext,
+    terminalIndices?: number[]
+  ) => Promise<RecipeSpawnResults>;
 
   exportRecipe: (id: string) => string | null;
   importRecipe: (projectId: string, json: string) => Promise<void>;
@@ -228,6 +251,10 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
   },
 
   runRecipe: async (recipeId, worktreePath, worktreeId, context) => {
+    await get().runRecipeWithResults(recipeId, worktreePath, worktreeId, context);
+  },
+
+  runRecipeWithResults: async (recipeId, worktreePath, worktreeId, context, terminalIndices) => {
     const recipe = get().getRecipeById(recipeId);
     if (!recipe) {
       throw new Error(`Recipe ${recipeId} not found`);
@@ -241,10 +268,13 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
 
     const terminalStore = useTerminalStore.getState();
 
+    const indicesToSpawn = terminalIndices ?? recipe.terminals.map((_, i) => i);
+
     // Pre-fetch agent settings once for all agent terminals
     let agentSettings: Awaited<ReturnType<typeof agentSettingsClient.get>> | null = null;
     let clipboardDirectory: string | undefined;
-    const hasAgent = recipe.terminals.some(
+    const terminalsToSpawn = indicesToSpawn.map((i) => recipe.terminals[i]!);
+    const hasAgent = terminalsToSpawn.some(
       (t) => t.type !== "terminal" && t.type !== "dev-preview"
     );
     if (hasAgent) {
@@ -260,11 +290,14 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
       }
     }
 
-    for (const terminal of recipe.terminals) {
+    const results: RecipeSpawnResults = { spawned: [], failed: [] };
+
+    for (const index of indicesToSpawn) {
+      const terminal = recipe.terminals[index]!;
       try {
         // Handle dev-preview terminals
         if (terminal.type === "dev-preview") {
-          await terminalStore.addTerminal({
+          const terminalId = await terminalStore.addTerminal({
             kind: "dev-preview",
             title: terminal.title || "Dev Server",
             cwd: worktreePath,
@@ -273,6 +306,7 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
             env: terminal.env,
             exitBehavior: terminal.exitBehavior,
           });
+          results.spawned.push({ index, terminalId });
           continue;
         }
 
@@ -298,7 +332,7 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
           });
         }
 
-        await terminalStore.addTerminal({
+        const terminalId = await terminalStore.addTerminal({
           kind: isAgent ? "agent" : "terminal",
           agentId: isAgent ? terminal.type : undefined,
           title: terminal.title,
@@ -308,10 +342,15 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
           env: terminal.env,
           exitBehavior: terminal.exitBehavior,
         });
+        results.spawned.push({ index, terminalId });
       } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
         console.error(`Failed to spawn terminal for recipe ${recipeId}:`, error);
+        results.failed.push({ index, error: message });
       }
     }
+
+    return results;
   },
 
   exportRecipe: (id) => {
