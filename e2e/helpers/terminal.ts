@@ -1,13 +1,18 @@
 import type { Locator, Page } from "@playwright/test";
 import { expect } from "@playwright/test";
 import { SEL } from "./selectors";
+import { T_SHORT } from "./timeouts";
 
-export async function getTerminalText(panelLocator: Locator): Promise<string> {
-  const page = panelLocator.page();
-  const panelId = await panelLocator.evaluate((el) => {
+async function getPanelId(panelLocator: Locator): Promise<string> {
+  return panelLocator.evaluate((el) => {
     const panel = el.closest("[data-panel-id]");
     return panel?.getAttribute("data-panel-id") ?? "";
   });
+}
+
+export async function getTerminalText(panelLocator: Locator): Promise<string> {
+  const page = panelLocator.page();
+  const panelId = await getPanelId(panelLocator);
 
   if (!panelId) return "";
 
@@ -43,4 +48,21 @@ export async function runTerminalCommand(
   await xterm.click();
   await page.keyboard.type(command);
   await page.keyboard.press("Enter");
+}
+
+export async function selectAllTerminalText(panelLocator: Locator): Promise<void> {
+  const page = panelLocator.page();
+  const panelId = await getPanelId(panelLocator);
+  if (!panelId) throw new Error("Could not resolve panel ID for selectAll");
+  await page.evaluate((id) => {
+    const fn = (window as unknown as Record<string, unknown>).__canopySelectTerminalAll;
+    if (typeof fn === "function") fn(id);
+  }, panelId);
+}
+
+export async function openTerminalContextMenu(panelLocator: Locator): Promise<void> {
+  const page = panelLocator.page();
+  const xterm = panelLocator.locator(SEL.terminal.xtermRows);
+  await xterm.click({ button: "right" });
+  await expect(page.locator(SEL.contextMenu.content)).toBeVisible({ timeout: T_SHORT });
 }
