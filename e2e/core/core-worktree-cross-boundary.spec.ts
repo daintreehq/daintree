@@ -1,4 +1,3 @@
-import path from "path";
 import { test, expect } from "@playwright/test";
 import { launchApp, closeApp, type AppContext } from "../helpers/launch";
 import { createFixtureRepo, createMultiProjectFixture } from "../helpers/fixtures";
