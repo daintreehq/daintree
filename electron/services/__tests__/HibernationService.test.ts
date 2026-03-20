@@ -157,7 +157,7 @@ describe("HibernationService", () => {
       { id: "t1", projectId: "proj-1", agentState: "idle" },
       { id: "t2", projectId: "proj-1", agentState: "idle" },
     ]);
-    ptyManagerMock.gracefulKillByProject.mockResolvedValue([{ id: "t1" }]);
+    ptyManagerMock.gracefulKillByProject.mockResolvedValue([{ id: "t1", agentSessionId: null }]);
 
     const inactiveProject = {
       id: "proj-1",
@@ -191,7 +191,7 @@ describe("HibernationService", () => {
         { id: "t2", projectId: "proj-falsy", agentState: "idle" },
         { id: "t3", projectId: "proj-valid-2", agentState: "idle" },
       ]);
-      ptyManagerMock.gracefulKillByProject.mockResolvedValue([{ id: "t1" }]);
+      ptyManagerMock.gracefulKillByProject.mockResolvedValue([{ id: "t1", agentSessionId: null }]);
 
       const validOldProject = {
         id: "proj-valid-1",
@@ -269,7 +269,7 @@ describe("HibernationService", () => {
 
     it("runs even when auto-hibernation is disabled", async () => {
       ptyManagerMock.getAll.mockReturnValue([makeTerminal({ agentState: "idle" })]);
-      ptyManagerMock.gracefulKillByProject.mockResolvedValue([{ id: "t1" }]);
+      ptyManagerMock.gracefulKillByProject.mockResolvedValue([{ id: "t1", agentSessionId: null }]);
 
       (storeMock.get as Mock).mockReturnValue({
         enabled: false,
@@ -359,7 +359,7 @@ describe("HibernationService", () => {
 
     it("hibernates eligible idle projects", async () => {
       ptyManagerMock.getAll.mockReturnValue([makeTerminal({ agentState: "idle" })]);
-      ptyManagerMock.gracefulKillByProject.mockResolvedValue([{ id: "t1" }]);
+      ptyManagerMock.gracefulKillByProject.mockResolvedValue([{ id: "t1", agentSessionId: null }]);
 
       (storeMock.get as Mock).mockReturnValue({ enabled: true, inactiveThresholdHours: 24 });
       projectStoreMock.getCurrentProjectId.mockReturnValue("other-proj");
@@ -399,7 +399,9 @@ describe("HibernationService", () => {
           agentState: "idle",
         });
         ptyManagerMock.getAll.mockReturnValue([validTerminal, falsyTerminal, validTerminal2]);
-        ptyManagerMock.gracefulKillByProject.mockResolvedValue([{ id: "t1" }]);
+        ptyManagerMock.gracefulKillByProject.mockResolvedValue([
+          { id: "t1", agentSessionId: null },
+        ]);
 
         (storeMock.get as Mock).mockReturnValue({ enabled: true, inactiveThresholdHours: 24 });
         projectStoreMock.getCurrentProjectId.mockReturnValue("other-proj");
@@ -460,7 +462,7 @@ describe("HibernationService", () => {
 
     it("skips projects with active git operations", async () => {
       ptyManagerMock.getAll.mockReturnValue([makeTerminal({ agentState: "idle" })]);
-      ptyManagerMock.gracefulKillByProject.mockResolvedValue([{ id: "t1" }]);
+      ptyManagerMock.gracefulKillByProject.mockResolvedValue([{ id: "t1", agentSessionId: null }]);
 
       fsMock.readdir.mockImplementation(async (dirPath: string) => {
         if (String(dirPath).endsWith(".git")) return ["MERGE_HEAD", "HEAD", "config"];
@@ -519,7 +521,7 @@ describe("HibernationService", () => {
       ptyManagerMock.getAll.mockReturnValue([
         { id: "t1", projectId: "proj-1", agentState: "idle" },
       ]);
-      ptyManagerMock.gracefulKillByProject.mockResolvedValue([{ id: "t1" }]);
+      ptyManagerMock.gracefulKillByProject.mockResolvedValue([{ id: "t1", agentSessionId: null }]);
 
       const service = new HibernationService();
       await (service as unknown as { checkAndHibernate(): Promise<void> }).checkAndHibernate();
@@ -548,7 +550,7 @@ describe("HibernationService", () => {
       ptyManagerMock.getAll.mockReturnValue([
         { id: "t1", projectId: "proj-1", agentState: "idle" },
       ]);
-      ptyManagerMock.gracefulKillByProject.mockResolvedValue([{ id: "t1" }]);
+      ptyManagerMock.gracefulKillByProject.mockResolvedValue([{ id: "t1", agentSessionId: null }]);
     }
 
     function setupMemoryPressureProject() {
@@ -565,7 +567,7 @@ describe("HibernationService", () => {
       ptyManagerMock.getAll.mockReturnValue([
         { id: "t1", projectId: "proj-1", agentState: "idle" },
       ]);
-      ptyManagerMock.gracefulKillByProject.mockResolvedValue([{ id: "t1" }]);
+      ptyManagerMock.gracefulKillByProject.mockResolvedValue([{ id: "t1", agentSessionId: null }]);
     }
 
     it.each([
@@ -708,7 +710,7 @@ describe("HibernationService", () => {
         { id: "t1", projectId: "proj-1", agentState: "idle" },
         { id: "t2", projectId: "proj-2", agentState: "idle" },
       ]);
-      ptyManagerMock.gracefulKillByProject.mockResolvedValue([{ id: "t2" }]);
+      ptyManagerMock.gracefulKillByProject.mockResolvedValue([{ id: "t2", agentSessionId: null }]);
 
       fsMock.readdir.mockImplementation(async (dirPath: string) => {
         const dir = String(dirPath).replace(/\\/g, "/");
