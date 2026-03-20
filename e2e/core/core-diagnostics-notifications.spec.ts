@@ -71,8 +71,8 @@ test.describe.serial("Core: Diagnostics & Notifications", () => {
         .poll(
           () =>
             window.evaluate(async () => {
-              type EI = { getEvents: () => Promise<unknown[]> };
-              return ((window as any).electron.eventInspector as EI)
+              type W = { electron: { eventInspector: { getEvents: () => Promise<unknown[]> } } };
+              return (window as unknown as W).electron.eventInspector
                 .getEvents()
                 .then((e) => e.length);
             }),
@@ -98,13 +98,12 @@ test.describe.serial("Core: Diagnostics & Notifications", () => {
       await expect(logsPanel).toBeVisible({ timeout: T_SHORT });
 
       // Seed a log entry via IPC to ensure at least one exists
-      await window.evaluate(() =>
-        (
-          (window as any).electron.logs as {
-            write: (level: string, message: string) => Promise<void>;
-          }
-        ).write("info", "E2E diagnostics test log")
-      );
+      await window.evaluate(() => {
+        type W = {
+          electron: { logs: { write: (level: string, message: string) => Promise<void> } };
+        };
+        return (window as unknown as W).electron.logs.write("info", "E2E diagnostics test log");
+      });
 
       // Verify logs loaded into the panel (Virtuoso renders items)
       await expect
