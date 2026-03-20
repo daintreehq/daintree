@@ -2,8 +2,8 @@ import { test, expect } from "@playwright/test";
 import { launchApp, closeApp, type AppContext } from "../helpers/launch";
 import { createFixtureRepo, createMultiProjectFixture } from "../helpers/fixtures";
 import { openAndOnboardProject } from "../helpers/project";
-import { waitForTerminalText, runTerminalCommand } from "../helpers/terminal";
-import { getFirstGridPanel, getGridPanelCount } from "../helpers/panels";
+import { runTerminalCommand } from "../helpers/terminal";
+import { getGridPanelCount } from "../helpers/panels";
 import {
   addAndSwitchToProject,
   selectExistingProject,
