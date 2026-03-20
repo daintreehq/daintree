@@ -177,7 +177,20 @@ describe("EditorService.discover", () => {
     expect(vscode!.executablePath).toBe("/usr/local/bin/code");
   });
 
-  it("returns all editors with available=false when nothing is found", async () => {
+  it("discovers PyCharm via .app bundle on macOS", async () => {
+    Object.defineProperty(process, "platform", { value: "darwin" });
+    mockExistingFiles(["/Applications/PyCharm.app/Contents/MacOS/pycharm"]);
+
+    const discover = await loadDiscover();
+    const results = discover();
+    const webstorm = results.find((e) => e.id === "webstorm");
+
+    expect(webstorm).toBeDefined();
+    expect(webstorm!.available).toBe(true);
+    expect(webstorm!.executablePath).toBe("/Applications/PyCharm.app/Contents/MacOS/pycharm");
+  });
+
+  it("returns all editors with available=false and no executablePath when nothing is found", async () => {
     Object.defineProperty(process, "platform", { value: "darwin" });
     mockExistingFiles([]);
 
@@ -187,6 +200,7 @@ describe("EditorService.discover", () => {
     expect(results.length).toBeGreaterThan(0);
     for (const editor of results) {
       expect(editor.available).toBe(false);
+      expect(editor.executablePath).toBeUndefined();
     }
   });
 });
