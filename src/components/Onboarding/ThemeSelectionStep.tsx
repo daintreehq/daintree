@@ -233,7 +233,7 @@ export function ThemeSelectionStep({ isOpen, onContinue, onSkip }: ThemeSelectio
                     </div>
                     {isSelected && (
                       <div className="w-4 h-4 rounded-full bg-canopy-accent flex items-center justify-center">
-                        <Check className="w-2.5 h-2.5 text-canopy-accent-fg" />
+                        <Check className="w-2.5 h-2.5 text-accent-primary-foreground" />
                       </div>
                     )}
                   </div>
