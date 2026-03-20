@@ -143,6 +143,7 @@ export const SEL = {
     themeTitle: 'text="Choose your theme"',
     telemetryDialog: '[role="dialog"][aria-label="Crash reporting consent"]',
     agentTitle: 'text="Choose your AI agents"',
+    agentSetupTitle: 'text="Agent Setup"',
   },
   onboarding: {
     heading: 'h2:has-text("Set up your project")',
