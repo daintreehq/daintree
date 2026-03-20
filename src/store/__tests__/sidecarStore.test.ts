@@ -26,6 +26,7 @@ vi.hoisted(() => {
         hide: vi.fn(),
         show: vi.fn(),
       },
+      window: { getZoomFactor: vi.fn(() => 1) },
     },
   } as unknown;
 });
@@ -120,7 +121,7 @@ describe("sidecarStore", () => {
     expect(window.electron.sidecar.closeTab).toHaveBeenCalledWith({ tabId: "tab-1" });
     expect(window.electron.sidecar.show).toHaveBeenCalledWith({
       tabId: "tab-2",
-      bounds: { x: 12, y: 20, width: 640, height: 480 },
+      bounds: { x: 12, y: 20, width: 641, height: 480 },
     });
     expect(useSidecarStore.getState().activeTabId).toBe("tab-2");
     expect(useSidecarStore.getState().createdTabs.has("tab-1")).toBe(false);

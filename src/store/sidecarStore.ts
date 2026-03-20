@@ -1,6 +1,7 @@
 import { create, type StateCreator } from "zustand";
 import { persist } from "zustand/middleware";
 import type { SidecarTab, SidecarLink } from "@shared/types";
+import { getSidecarPlaceholderBounds } from "@/lib/sidecarBounds";
 import {
   DEFAULT_SIDECAR_TABS,
   SIDECAR_MIN_WIDTH,
@@ -64,19 +65,7 @@ const createSidecarStore: StateCreator<SidecarState & SidecarActions> = (set, ge
   const CLOSE_TAB_RESTORE_MAX_ATTEMPTS = 20;
   const CLOSE_TAB_RESTORE_DELAY_MS = 50;
 
-  const getPlaceholderBounds = () => {
-    if (typeof document === "undefined") return null;
-    const placeholder = document.getElementById("sidecar-placeholder");
-    if (!placeholder) return null;
-
-    const rect = placeholder.getBoundingClientRect();
-    return {
-      x: Math.round(rect.x),
-      y: Math.round(rect.y),
-      width: Math.round(rect.width),
-      height: Math.round(rect.height),
-    };
-  };
+  const getPlaceholderBounds = () => getSidecarPlaceholderBounds();
 
   const restoreActiveTabAfterClose = (tabId: string, attempt: number = 0) => {
     const state = get();

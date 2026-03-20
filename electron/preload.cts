@@ -1754,6 +1754,7 @@ const api: ElectronAPI = {
     zoomIn: (): Promise<void> => _unwrappingInvoke(CHANNELS.WINDOW_ZOOM_IN),
     zoomOut: (): Promise<void> => _unwrappingInvoke(CHANNELS.WINDOW_ZOOM_OUT),
     zoomReset: (): Promise<void> => _unwrappingInvoke(CHANNELS.WINDOW_ZOOM_RESET),
+    getZoomFactor: (): number => webFrame.getZoomFactor(),
     close: (): Promise<void> => _unwrappingInvoke(CHANNELS.WINDOW_CLOSE),
   },
 

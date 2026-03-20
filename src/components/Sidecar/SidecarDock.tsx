@@ -11,6 +11,7 @@ import { useMacroFocusStore } from "@/store/macroFocusStore";
 import { useNativeContextMenu } from "@/hooks";
 import type { MenuItemOption } from "@/types";
 import { actionService } from "@/services/ActionService";
+import { getElementBoundsAsDip } from "@/lib/sidecarBounds";
 
 export function SidecarDock() {
   const { showMenu } = useNativeContextMenu();
@@ -132,13 +133,10 @@ export function SidecarDock() {
 
   const syncBounds = useCallback(() => {
     if (!contentRef.current || !activeTabId) return;
-    const rect = contentRef.current.getBoundingClientRect();
-    window.electron.sidecar.resize({
-      x: Math.round(rect.x),
-      y: Math.round(rect.y),
-      width: Math.round(rect.width),
-      height: Math.round(rect.height),
-    });
+    const bounds = getElementBoundsAsDip(contentRef.current);
+    if (bounds) {
+      window.electron.sidecar.resize(bounds);
+    }
   }, [activeTabId]);
 
   useEffect(() => {
