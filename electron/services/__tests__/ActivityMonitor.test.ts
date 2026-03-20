@@ -735,7 +735,12 @@ describe("ActivityMonitor", () => {
 
       vi.advanceTimersByTime(2200);
 
-      expect(onStateChange).toHaveBeenCalledWith("test-1", 1000, "idle");
+      expect(onStateChange).toHaveBeenCalledWith(
+        "test-1",
+        1000,
+        "idle",
+        expect.objectContaining({ trigger: expect.any(String) })
+      );
 
       monitor.dispose();
     });
