@@ -137,7 +137,7 @@ describe("buildPromptHintPatterns", () => {
     }
   });
 
-  it("universal patterns do not match generic words", () => {
+  it("universal patterns do not match generic prose", () => {
     const patterns = buildPromptHintPatterns(undefined, "claude")!;
     const safeTexts = [
       "I'll approve this change for you",
@@ -146,12 +146,7 @@ describe("buildPromptHintPatterns", () => {
     ];
     for (const text of safeTexts) {
       const matched = patterns.some((p) => p.test(text));
-      // These may partially match multi-word phrases — the key is that single-word
-      // "approve", "allow", "deny" alone are NOT in the pattern set.
-      // "approve this change" won't match "approve\\s+once" or "approve\\s+this\\s+session"
-      if (text.includes("approve this change")) {
-        expect(matched).toBe(false);
-      }
+      expect(matched, `Expected "${text}" NOT to match any universal pattern`).toBe(false);
     }
   });
 });
