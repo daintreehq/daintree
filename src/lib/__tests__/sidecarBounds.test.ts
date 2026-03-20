@@ -25,7 +25,7 @@ describe("sidecarBounds", () => {
 
     it("scales bounds by zoom factor 1.5", () => {
       (
-        window.electron as { window: { getZoomFactor: ReturnType<typeof vi.fn> } }
+        window.electron as unknown as { window: { getZoomFactor: ReturnType<typeof vi.fn> } }
       ).window.getZoomFactor.mockReturnValue(1.5);
       const el = mockElement(10, 20, 300, 400);
       const result = getElementBoundsAsDip(el);
@@ -34,7 +34,7 @@ describe("sidecarBounds", () => {
 
     it("scales bounds by zoom factor 0.5", () => {
       (
-        window.electron as { window: { getZoomFactor: ReturnType<typeof vi.fn> } }
+        window.electron as unknown as { window: { getZoomFactor: ReturnType<typeof vi.fn> } }
       ).window.getZoomFactor.mockReturnValue(0.5);
       const el = mockElement(10, 20, 300, 400);
       const result = getElementBoundsAsDip(el);
@@ -43,7 +43,7 @@ describe("sidecarBounds", () => {
 
     it("uses Math.round for x/y and Math.ceil for width/height", () => {
       (
-        window.electron as { window: { getZoomFactor: ReturnType<typeof vi.fn> } }
+        window.electron as unknown as { window: { getZoomFactor: ReturnType<typeof vi.fn> } }
       ).window.getZoomFactor.mockReturnValue(1.5);
       const el = mockElement(10.4, 20.6, 300.2, 400.8);
       const result = getElementBoundsAsDip(el);
@@ -68,7 +68,7 @@ describe("sidecarBounds", () => {
 
     it("falls back to zoom=1 when getZoomFactor returns NaN", () => {
       (
-        window.electron as { window: { getZoomFactor: ReturnType<typeof vi.fn> } }
+        window.electron as unknown as { window: { getZoomFactor: ReturnType<typeof vi.fn> } }
       ).window.getZoomFactor.mockReturnValue(NaN);
       const el = mockElement(10, 20, 300, 400);
       const result = getElementBoundsAsDip(el);
@@ -77,7 +77,7 @@ describe("sidecarBounds", () => {
 
     it("falls back to zoom=1 when getZoomFactor returns negative", () => {
       (
-        window.electron as { window: { getZoomFactor: ReturnType<typeof vi.fn> } }
+        window.electron as unknown as { window: { getZoomFactor: ReturnType<typeof vi.fn> } }
       ).window.getZoomFactor.mockReturnValue(-1);
       const el = mockElement(10, 20, 300, 400);
       const result = getElementBoundsAsDip(el);
@@ -97,7 +97,7 @@ describe("sidecarBounds", () => {
 
     it("falls back to zoom=1 when getZoomFactor throws", () => {
       (
-        window.electron as { window: { getZoomFactor: ReturnType<typeof vi.fn> } }
+        window.electron as unknown as { window: { getZoomFactor: ReturnType<typeof vi.fn> } }
       ).window.getZoomFactor.mockImplementation(() => {
         throw new Error("not available");
       });
@@ -132,7 +132,7 @@ describe("sidecarBounds", () => {
 
     it("applies zoom factor to placeholder bounds", () => {
       (
-        window.electron as { window: { getZoomFactor: ReturnType<typeof vi.fn> } }
+        window.electron as unknown as { window: { getZoomFactor: ReturnType<typeof vi.fn> } }
       ).window.getZoomFactor.mockReturnValue(1.5);
       const placeholder = document.createElement("div");
       placeholder.id = "sidecar-placeholder";
