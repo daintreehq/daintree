@@ -1469,4 +1469,12 @@ if (typeof window !== "undefined") {
     managed.terminal.selectAll();
     return true;
   };
+
+  (window as unknown as Record<string, unknown>).__canopyGetTerminalBufferLength = (
+    panelId: string
+  ): number => {
+    const managed = terminalInstanceService["instances"].get(panelId);
+    if (!managed) return 0;
+    return managed.terminal.buffer.active.length;
+  };
 }

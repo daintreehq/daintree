@@ -50,6 +50,18 @@ export async function runTerminalCommand(
   await page.keyboard.press("Enter");
 }
 
+export async function getTerminalBufferLength(panelLocator: Locator): Promise<number> {
+  const page = panelLocator.page();
+  const panelId = await getPanelId(panelLocator);
+  if (!panelId) return 0;
+
+  return page.evaluate((id) => {
+    const fn = (window as unknown as Record<string, unknown>).__canopyGetTerminalBufferLength;
+    if (typeof fn === "function") return fn(id) as number;
+    return 0;
+  }, panelId);
+}
+
 export async function selectAllTerminalText(panelLocator: Locator): Promise<void> {
   const page = panelLocator.page();
   const panelId = await getPanelId(panelLocator);
