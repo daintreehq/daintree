@@ -236,8 +236,9 @@ server.listen(0, '127.0.0.1', () => {
         timeout: T_SHORT,
       });
 
-      // Verify xterm content contains the localhost URL the server printed
-      const xtermContent = window.locator(".xterm-screen");
+      // Verify xterm content contains the localhost URL the server printed.
+      // Scope to console drawer to avoid matching other xterm instances.
+      const xtermContent = window.locator('[id^="console-drawer-"] .xterm-screen');
       await expect
         .poll(
           async () => {
