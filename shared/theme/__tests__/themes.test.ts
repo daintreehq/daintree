@@ -121,8 +121,9 @@ describe("createCanopyTokens — light mode derived defaults", () => {
 
   it("keeps the default Bondi overlays warm instead of neutral black", () => {
     const bondi = BUILT_IN_APP_SCHEMES.find((scheme) => scheme.id === "bondi")!;
-    expect(bondi.tokens["overlay-soft"]).toBe("rgba(27, 54, 38, 0.1)");
-    expect(bondi.tokens["border-divider"]).toBe("rgba(27, 54, 38, 0.04)");
+    expect(bondi.tokens["overlay-soft"]).toBe("rgba(45, 36, 24, 0.1)");
+    expect(bondi.tokens["overlay-subtle"]).toBe("rgba(45, 36, 24, 0.06)");
+    expect(bondi.tokens["border-divider"]).toBe("#E5DDD0");
   });
 });
 
@@ -286,29 +287,42 @@ describe("built-in schemes — Bondi light theme", () => {
     }
   });
 
-  it("has explicitly overridden terminal-black and terminal-white", () => {
-    expect(bondi.tokens["terminal-black"]).toBe("#1B3626");
-    expect(bondi.tokens["terminal-white"]).toBe("#6E746D");
+  it("has warm espresso text-primary instead of green-tinted", () => {
+    expect(bondi.tokens["terminal-black"]).toBe("#2D2418");
+    expect(bondi.tokens["text-primary"]).toBe("#2D2418");
+  });
+
+  it("delegates terminal-white to surface-canvas default", () => {
+    expect(bondi.tokens["terminal-white"]).toBe(bondi.tokens["surface-canvas"]);
+  });
+
+  it("uses text-primary for syntax-punctuation (intentional)", () => {
+    expect(bondi.tokens["syntax-punctuation"]).toBe(bondi.tokens["text-primary"]);
   });
 
   it("has the correct accent-primary", () => {
     expect(bondi.tokens["accent-primary"]).toBe("#3F9366");
   });
 
-  it("has sandstone cream canvas", () => {
+  it("has sandstone cream canvas with wide surface hierarchy", () => {
     expect(bondi.tokens["surface-canvas"]).toBe("#F3EFE4");
-  });
-
-  it("uses stronger light chrome tokens to keep cards and inputs separated", () => {
-    expect(bondi.tokens["surface-sidebar"]).toBe("#E6DEC9");
+    expect(bondi.tokens["surface-sidebar"]).toBe("#DDD4BF");
+    expect(bondi.tokens["surface-grid"]).toBe("#E4DCCA");
     expect(bondi.tokens["surface-panel"]).toBe("#FFFCF7");
     expect(bondi.tokens["surface-panel-elevated"]).toBe("#FFFFFF");
-    expect(bondi.tokens["text-muted"]).toBe("#6E746D");
-    expect(bondi.tokens["border-default"]).toBe("#C8B89E");
   });
 
-  it("has explicit overlay-subtle override for sufficient contrast", () => {
-    expect(bondi.tokens["overlay-subtle"]).toBe("rgba(27, 54, 38, 0.06)");
+  it("uses explicit warm border overrides instead of alpha-derived", () => {
+    expect(bondi.tokens["border-default"]).toBe("#C8BDA8");
+    expect(bondi.tokens["border-subtle"]).toBe("#D8CFBE");
+    expect(bondi.tokens["border-strong"]).toBe("#B5A890");
+    expect(bondi.tokens["border-divider"]).toBe("#E5DDD0");
+  });
+
+  it("has warm taupe text-muted distinct from syntax-comment", () => {
+    expect(bondi.tokens["text-muted"]).toBe("#7A6E5E");
+    expect(bondi.tokens["syntax-comment"]).toBe("#6E6455");
+    expect(bondi.tokens["text-muted"]).not.toBe(bondi.tokens["syntax-comment"]);
   });
 
   it("has corrected text-inverse (light cream, not same as text-primary)", () => {
@@ -316,10 +330,13 @@ describe("built-in schemes — Bondi light theme", () => {
     expect(bondi.tokens["text-inverse"]).not.toBe(bondi.tokens["text-primary"]);
   });
 
-  it("uses muted coastal activity colors instead of neon green", () => {
+  it("uses warm-integrated status and activity colors", () => {
+    expect(bondi.tokens["status-warning"]).toBe("#8F5318");
+    expect(bondi.tokens["status-danger"]).toBe("#A93B2A");
     expect(bondi.tokens["activity-active"]).toBe("#1D9B5E");
     expect(bondi.tokens["activity-working"]).toBe("#1D9B5E");
     expect(bondi.tokens["activity-waiting"]).toBe("#C17F2E");
+    expect(bondi.tokens["activity-idle"]).toBe("#8C8782");
   });
 
   it("uses lower oklch lightness for category colors", () => {
@@ -329,6 +346,79 @@ describe("built-in schemes — Bondi light theme", () => {
 
   it("passes critical contrast validation with no warnings", () => {
     expect(getAppThemeWarnings(bondi)).toEqual([]);
+  });
+
+  it.each([
+    "terminal-red",
+    "terminal-green",
+    "terminal-yellow",
+    "terminal-blue",
+    "terminal-magenta",
+    "terminal-cyan",
+    "terminal-bright-red",
+    "terminal-bright-green",
+    "terminal-bright-yellow",
+    "terminal-bright-blue",
+    "terminal-bright-magenta",
+    "terminal-bright-cyan",
+    "terminal-bright-white",
+    "terminal-black",
+  ] as const)("%s meets WCAG AA 4.5:1 against surface-canvas", (token) => {
+    const fg = bondi.tokens[token];
+    const bg = bondi.tokens["surface-canvas"];
+    const ratio = wcagContrastRatio(fg, bg);
+    expect(
+      ratio,
+      `${token} "${fg}" on canvas "${bg}" = ${ratio.toFixed(2)}:1, needs ≥4.5:1`
+    ).toBeGreaterThanOrEqual(4.5);
+  });
+
+  it.each([
+    "syntax-keyword",
+    "syntax-string",
+    "syntax-function",
+    "syntax-number",
+    "syntax-comment",
+    "syntax-punctuation",
+    "syntax-operator",
+    "syntax-link",
+    "syntax-quote",
+    "syntax-chip",
+  ] as const)("%s meets WCAG AA 4.5:1 against canvas", (token) => {
+    const fg = bondi.tokens[token];
+    const bg = bondi.tokens["surface-canvas"];
+    const ratio = wcagContrastRatio(fg, bg);
+    expect(
+      ratio,
+      `${token} "${fg}" on canvas "${bg}" = ${ratio.toFixed(2)}:1, needs ≥4.5:1`
+    ).toBeGreaterThanOrEqual(4.5);
+  });
+
+  it("text-primary meets WCAG AA on all surfaces", () => {
+    const fg = bondi.tokens["text-primary"];
+    for (const surface of [
+      "surface-canvas",
+      "surface-sidebar",
+      "surface-panel",
+      "surface-panel-elevated",
+    ] as const) {
+      const bg = bondi.tokens[surface];
+      const ratio = wcagContrastRatio(fg, bg);
+      expect(
+        ratio,
+        `text-primary on ${surface} "${bg}" = ${ratio.toFixed(2)}:1, needs ≥4.5:1`
+      ).toBeGreaterThanOrEqual(4.5);
+    }
+  });
+
+  it("text-muted meets WCAG AA 3:1 against surface-panel and surface-canvas", () => {
+    for (const surface of ["surface-panel", "surface-canvas"] as const) {
+      const ratio = wcagContrastRatio(bondi.tokens["text-muted"], bondi.tokens[surface]);
+      expect(
+        ratio,
+        `text-muted on ${surface} = ${ratio.toFixed(2)}:1, needs ≥3:1`
+      ).toBeGreaterThanOrEqual(3);
+    }
   });
 });
 
