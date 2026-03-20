@@ -201,6 +201,21 @@ describe("createCanopyTokens — caller overrides win via spread", () => {
     });
     expect(tokens["surface-input"]).toBe("#F0F0F0");
   });
+
+  it("explicit overrides win for all new semantic tokens", () => {
+    const overrides = {
+      "text-link": "#0000FF",
+      "shadow-color": "rgba(10, 10, 10, 0.2)",
+      "border-interactive": "#333333",
+      "surface-inset": "#EEEEEE",
+      "surface-hover": "rgba(0, 0, 0, 0.03)",
+      "surface-active": "rgba(0, 0, 0, 0.06)",
+    } as const;
+    const tokens = createCanopyTokens("dark", { ...REQUIRED_TOKENS, ...overrides });
+    for (const [key, value] of Object.entries(overrides)) {
+      expect(tokens[key as keyof typeof tokens]).toBe(value);
+    }
+  });
 });
 
 describe("createCanopyTokens — accent-soft/muted branch by type", () => {
@@ -927,7 +942,7 @@ describe("normalizeAppColorScheme", () => {
     );
   });
 
-  it("fills in new semantic tokens for custom themes missing them", () => {
+  it("fills in new semantic tokens for dark custom themes missing them", () => {
     const scheme = normalizeAppColorScheme({
       id: "legacy-custom",
       name: "Legacy Custom",
@@ -940,9 +955,26 @@ describe("normalizeAppColorScheme", () => {
     for (const key of APP_THEME_TOKEN_KEYS) {
       expect(scheme.tokens).toHaveProperty(key, expect.any(String));
     }
-    expect(scheme.tokens["surface-input"]).toBeDefined();
-    expect(scheme.tokens["shadow-color"]).toBeDefined();
-    expect(scheme.tokens["text-link"]).toBeDefined();
+    const daintree = BUILT_IN_APP_SCHEMES[0];
+    expect(scheme.tokens["surface-input"]).toBe(daintree.tokens["surface-input"]);
+    expect(scheme.tokens["shadow-color"]).toBe(daintree.tokens["shadow-color"]);
+    expect(scheme.tokens["text-link"]).toBe(daintree.tokens["text-link"]);
+  });
+
+  it("fills in light-specific defaults for light custom themes missing new tokens", () => {
+    const scheme = normalizeAppColorScheme({
+      id: "legacy-light",
+      name: "Legacy Light",
+      type: "light",
+      tokens: {
+        "surface-canvas": "#ffffff",
+      } as Partial<AppColorSchemeTokens> as AppColorSchemeTokens,
+    });
+
+    const lightBase = getBuiltInAppSchemeForType("light");
+    expect(scheme.tokens["surface-input"]).toBe(lightBase.tokens["surface-input"]);
+    expect(scheme.tokens["shadow-color"]).toBe(lightBase.tokens["shadow-color"]);
+    expect(scheme.tokens["text-link"]).toBe(lightBase.tokens["text-link"]);
   });
 });
 
