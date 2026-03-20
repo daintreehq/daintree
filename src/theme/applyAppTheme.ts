@@ -15,6 +15,7 @@ const RED_GREEN_OVERRIDES: Record<string, string> = {
   "--theme-terminal-bright-green": "#48c9a0",
   "--theme-terminal-magenta": "#cc79a7",
   "--theme-terminal-bright-magenta": "#d98fc4",
+  "--theme-activity-approval": "#dc267f",
 };
 
 const BLUE_YELLOW_OVERRIDES: Record<string, string> = {
@@ -25,6 +26,7 @@ const BLUE_YELLOW_OVERRIDES: Record<string, string> = {
   "--theme-terminal-blue": "#0072b2",
   "--theme-terminal-bright-yellow": "#d98fc4",
   "--theme-terminal-bright-blue": "#56b4e9",
+  "--theme-activity-approval": "#e36209",
 };
 
 const ALL_CVD_TOKENS = new Set([

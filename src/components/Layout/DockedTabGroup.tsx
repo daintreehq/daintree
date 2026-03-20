@@ -26,7 +26,10 @@ import {
 import { TerminalContextMenu } from "@/components/Terminal/TerminalContextMenu";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import { getTerminalFocusTarget } from "@/components/Terminal/terminalFocus";
-import { STATE_ICONS, STATE_COLORS } from "@/components/Worktree/terminalStateConfig";
+import {
+  getEffectiveStateIcon,
+  getEffectiveStateColor,
+} from "@/components/Worktree/terminalStateConfig";
 import { TerminalRefreshTier } from "@/types";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { useDockPanelPortal } from "./DockPanelOffscreenContainer";
@@ -362,7 +365,9 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
   const agentState = activePanel.agentState;
   const displayTitle = getBaseTitle(activePanel.title);
   const showStateIcon = agentState && agentState !== "idle" && agentState !== "completed";
-  const StateIcon = showStateIcon ? STATE_ICONS[agentState] : null;
+  const StateIcon = showStateIcon
+    ? getEffectiveStateIcon(agentState, activePanel.waitingReason)
+    : null;
 
   return (
     <Popover open={isOpen} onOpenChange={handleOpenChange}>
@@ -442,7 +447,12 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
               <TooltipProvider>
                 <Tooltip>
                   <TooltipTrigger asChild>
-                    <div className={cn("flex items-center shrink-0", STATE_COLORS[agentState])}>
+                    <div
+                      className={cn(
+                        "flex items-center shrink-0",
+                        getEffectiveStateColor(agentState, activePanel.waitingReason)
+                      )}
+                    >
                       <StateIcon
                         className={cn(
                           "w-3.5 h-3.5",

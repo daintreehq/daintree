@@ -1275,6 +1275,11 @@ describe("matchesQuickStateFilter", () => {
     expect(matchesQuickStateFilter("waiting", meta)).toBe(true);
   });
 
+  it('"waiting" matches when chipState is "approval"', () => {
+    const meta = { ...createEmptyMeta(), chipState: "approval" as const };
+    expect(matchesQuickStateFilter("waiting", meta)).toBe(true);
+  });
+
   it('"waiting" does NOT match when hasWaitingAgent but chipState is "error"', () => {
     const meta = { ...createEmptyMeta(), hasWaitingAgent: true, chipState: "error" as const };
     expect(matchesQuickStateFilter("waiting", meta)).toBe(false);

@@ -54,11 +54,13 @@ class AgentNotificationService {
     terminalId?: string;
     agentId?: string;
     timestamp: number;
+    waitingReason?: string;
   }): void {
-    const { state, previousState, worktreeId, terminalId, agentId } = payload;
+    const { state, previousState, worktreeId, terminalId, agentId, waitingReason } = payload;
     const settings = projectStore.getEffectiveNotificationSettings();
 
-    if (state === previousState) return;
+    // Allow same-state transitions for waitingReason changes (e.g., prompt -> approval)
+    if (state === previousState && !(state === "waiting" && waitingReason !== undefined)) return;
 
     const key = agentId ?? worktreeId ?? "agent";
 
@@ -78,7 +80,7 @@ class AgentNotificationService {
 
     // Schedule waiting escalation for docked agents (independent of watched status)
     if (state === "waiting" && terminalId) {
-      this.scheduleWaitingEscalation(terminalId, worktreeId, agentId);
+      this.scheduleWaitingEscalation(terminalId, worktreeId, agentId, waitingReason);
     }
 
     // Skip if all OS notification types are disabled (off by default).
@@ -99,10 +101,11 @@ class AgentNotificationService {
       // Waiting (permission request) is urgent — show immediately, bypass queue stagger
       const label = this.getLabel(agentId, worktreeId);
       const context = this.makeContext(terminalId, agentId, worktreeId);
-      this.playNotificationSound(settings.soundEnabled);
+      const isApproval = waitingReason === "approval";
+      this.playNotificationSound(settings.soundEnabled, isApproval ? "waiting.wav" : undefined);
       notificationService.showWatchNotification(
-        "Agent waiting",
-        `${label} is waiting for input`,
+        isApproval ? "Agent needs approval" : "Agent waiting",
+        isApproval ? `${label} is waiting for tool approval` : `${label} is waiting for input`,
         context,
         CHANNELS.NOTIFICATION_WATCH_NAVIGATE,
         true
@@ -158,7 +161,8 @@ class AgentNotificationService {
   private scheduleWaitingEscalation(
     terminalId: string,
     worktreeId?: string,
-    agentId?: string
+    agentId?: string,
+    waitingReason?: string
   ): void {
     if (this.waitingEscalationTimers.has(terminalId)) {
       clearTimeout(this.waitingEscalationTimers.get(terminalId)!);
@@ -183,10 +187,13 @@ class AgentNotificationService {
       if (!currentTerminal || currentTerminal.location !== "dock") return;
 
       const label = currentTerminal.title || this.getLabel(agentId, worktreeId);
+      const isApproval = waitingReason === "approval";
       this.playNotificationSound(currentSettings.soundEnabled);
       notificationService.showNativeNotification(
-        "Agent still waiting",
-        `${label} has been waiting for input`
+        isApproval ? "Agent still needs approval" : "Agent still waiting",
+        isApproval
+          ? `${label} is still waiting for approval`
+          : `${label} has been waiting for input`
       );
     }, settings.waitingEscalationDelayMs);
 

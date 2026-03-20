@@ -21,24 +21,31 @@ vi.mock("@/components/ui/tooltip", () => ({
   ),
 }));
 
-vi.mock("@/components/Worktree/terminalStateConfig", () => ({
-  STATE_ICONS: {
-    working: (props: React.SVGProps<SVGSVGElement>) => <svg data-testid="state-icon" {...props} />,
-    waiting: (props: React.SVGProps<SVGSVGElement>) => <svg data-testid="state-icon" {...props} />,
-    failed: (props: React.SVGProps<SVGSVGElement>) => <svg data-testid="state-icon" {...props} />,
-    running: (props: React.SVGProps<SVGSVGElement>) => <svg data-testid="state-icon" {...props} />,
-    directing: (props: React.SVGProps<SVGSVGElement>) => (
-      <svg data-testid="state-icon" {...props} />
-    ),
-  },
-  STATE_COLORS: {
+vi.mock("@/components/Worktree/terminalStateConfig", () => {
+  const mockIcon = (props: React.SVGProps<SVGSVGElement>) => (
+    <svg data-testid="state-icon" {...props} />
+  );
+  const STATE_ICONS: Record<string, typeof mockIcon> = {
+    working: mockIcon,
+    waiting: mockIcon,
+    failed: mockIcon,
+    running: mockIcon,
+    directing: mockIcon,
+  };
+  const STATE_COLORS: Record<string, string> = {
     working: "text-working",
     waiting: "text-waiting",
     failed: "text-failed",
     running: "text-running",
     directing: "text-directing",
-  },
-}));
+  };
+  return {
+    STATE_ICONS,
+    STATE_COLORS,
+    getEffectiveStateIcon: (state: string) => STATE_ICONS[state] ?? mockIcon,
+    getEffectiveStateColor: (state: string) => STATE_COLORS[state] ?? "text-unknown",
+  };
+});
 
 let mockTerminal: Record<string, unknown> = {};
 

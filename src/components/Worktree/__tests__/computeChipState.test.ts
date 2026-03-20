@@ -5,6 +5,7 @@ const base: ComputeChipStateInput = {
   worktreeErrorCount: 0,
   failedTerminalCount: 0,
   waitingTerminalCount: 0,
+  approvalWaitingCount: 0,
   lifecycleStage: null,
   isComplete: false,
 };
@@ -21,6 +22,12 @@ describe("computeChipState", () => {
 
     it("returns waiting when waitingTerminalCount > 0", () => {
       expect(computeChipState({ ...base, waitingTerminalCount: 1 })).toBe("waiting");
+    });
+
+    it("returns approval when approvalWaitingCount > 0", () => {
+      expect(computeChipState({ ...base, waitingTerminalCount: 1, approvalWaitingCount: 1 })).toBe(
+        "approval"
+      );
     });
 
     it('returns cleanup when lifecycleStage is "merged"', () => {
@@ -63,10 +70,50 @@ describe("computeChipState", () => {
           worktreeErrorCount: 1,
           failedTerminalCount: 1,
           waitingTerminalCount: 1,
+          approvalWaitingCount: 1,
           lifecycleStage: "ready-for-cleanup",
           isComplete: true,
         })
       ).toBe("error");
+    });
+
+    it("approval beats waiting", () => {
+      expect(computeChipState({ ...base, waitingTerminalCount: 2, approvalWaitingCount: 1 })).toBe(
+        "approval"
+      );
+    });
+
+    it("error beats approval", () => {
+      expect(
+        computeChipState({
+          ...base,
+          worktreeErrorCount: 1,
+          waitingTerminalCount: 1,
+          approvalWaitingCount: 1,
+        })
+      ).toBe("error");
+    });
+
+    it("cleanup beats approval", () => {
+      expect(
+        computeChipState({
+          ...base,
+          waitingTerminalCount: 1,
+          approvalWaitingCount: 1,
+          lifecycleStage: "merged",
+        })
+      ).toBe("cleanup");
+    });
+
+    it("complete beats approval", () => {
+      expect(
+        computeChipState({
+          ...base,
+          waitingTerminalCount: 1,
+          approvalWaitingCount: 1,
+          isComplete: true,
+        })
+      ).toBe("complete");
     });
 
     it("cleanup beats waiting", () => {

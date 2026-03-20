@@ -107,6 +107,7 @@ export function createCanopyTokens(
       tokens["scrim-medium"] ?? (dark ? "rgba(0, 0, 0, 0.45)" : "rgba(0, 0, 0, 0.30)"),
     "scrim-strong":
       tokens["scrim-strong"] ?? (dark ? "rgba(0, 0, 0, 0.62)" : "rgba(0, 0, 0, 0.45)"),
+    "activity-approval": tokens["activity-approval"] ?? (dark ? "#f97316" : "#c2410c"),
     "terminal-black":
       tokens["terminal-black"] ?? (dark ? tokens["surface-canvas"] : tokens["text-primary"]),
     "terminal-white":
@@ -994,6 +995,7 @@ export const LEGACY_THEME_TOKEN_ALIASES: Record<string, AppThemeTokenKey> = {
   "state-idle": "activity-idle",
   "state-working": "activity-working",
   "state-waiting": "activity-waiting",
+  "state-approval": "activity-approval",
   "server-running": "status-success",
   "server-stopped": "activity-idle",
   "server-starting": "status-warning",

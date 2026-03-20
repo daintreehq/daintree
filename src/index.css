@@ -41,6 +41,7 @@
   --color-activity-idle: var(--theme-activity-idle);
   --color-activity-working: var(--theme-activity-working);
   --color-activity-waiting: var(--theme-activity-waiting);
+  --color-activity-approval: var(--theme-activity-approval);
   --color-overlay-subtle: var(--theme-overlay-subtle);
   --color-overlay-soft: var(--theme-overlay-soft);
   --color-overlay-medium: var(--theme-overlay-medium);
@@ -335,6 +336,7 @@
   --color-state-idle: var(--theme-legacy-state-idle);
   --color-state-working: var(--theme-legacy-state-working);
   --color-state-waiting: var(--theme-legacy-state-waiting);
+  --color-state-approval: var(--theme-legacy-state-approval);
   --color-server-running: var(--theme-legacy-server-running);
   --color-server-stopped: var(--theme-legacy-server-stopped);
   --color-server-starting: var(--theme-legacy-server-starting);
@@ -1140,6 +1142,13 @@ body,
     0 0 0 1px color-mix(in oklab, var(--color-activity-waiting) 10%, transparent);
 }
 
+.panel-state-approval {
+  border-color: color-mix(in oklab, var(--color-activity-approval) 85%, transparent);
+  box-shadow:
+    inset 0 0 0 1px color-mix(in oklab, var(--color-activity-approval) 20%, transparent),
+    0 0 0 1px color-mix(in oklab, var(--color-activity-approval) 15%, transparent);
+}
+
 .panel-state-failed {
   border-color: color-mix(in oklab, var(--color-status-error) 65%, transparent);
   box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--color-status-error) 12%, transparent);
@@ -1744,7 +1753,8 @@ body[data-performance-mode="true"] [class*="backdrop-blur"] {
     border-color: Highlight;
   }
 
-  .panel-state-waiting {
+  .panel-state-waiting,
+  .panel-state-approval {
     border-color: Highlight;
     outline: 2px solid Highlight;
     outline-offset: -2px;
@@ -1788,6 +1798,7 @@ body[data-performance-mode="true"] [class*="backdrop-blur"] {
   }
 
   .panel-state-waiting,
+  .panel-state-approval,
   .panel-state-failed,
   .panel-state-working {
     border-width: 2px;

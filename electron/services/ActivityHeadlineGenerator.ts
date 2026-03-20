@@ -1,5 +1,5 @@
 import type { TerminalActivityStatus, TerminalTaskType } from "../../shared/types/terminal.js";
-import type { AgentState } from "../../shared/types/agent.js";
+import type { AgentState, WaitingReason } from "../../shared/types/agent.js";
 import type { TerminalType } from "../../shared/types/panel.js";
 
 export interface ActivityContext {
@@ -7,6 +7,7 @@ export interface ActivityContext {
   terminalType?: TerminalType;
   agentId?: string;
   agentState?: AgentState;
+  waitingReason?: WaitingReason;
   lastCommand?: string;
   activity?: "busy" | "idle";
 }
@@ -73,14 +74,17 @@ export class ActivityHeadlineGenerator {
   generate(context: ActivityContext): GeneratedActivity {
     // Agent terminals use agent state
     if (context.agentId) {
-      return this.generateFromAgentState(context.agentState);
+      return this.generateFromAgentState(context.agentState, context.waitingReason);
     }
 
     // Shell terminals use activity + command detection
     return this.generateFromShellActivity(context);
   }
 
-  private generateFromAgentState(agentState?: AgentState): GeneratedActivity {
+  private generateFromAgentState(
+    agentState?: AgentState,
+    waitingReason?: WaitingReason
+  ): GeneratedActivity {
     switch (agentState) {
       case "working":
         return {
@@ -90,7 +94,12 @@ export class ActivityHeadlineGenerator {
         };
       case "waiting":
         return {
-          headline: "Waiting for input",
+          headline:
+            waitingReason === "approval"
+              ? "Waiting for approval"
+              : waitingReason === "question"
+                ? "Waiting for response"
+                : "Waiting for input",
           status: "waiting",
           type: "interactive",
         };

@@ -494,6 +494,9 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
       const waitingTerminalCount = worktreeTerminals.filter(
         (t) => t.agentState === "waiting"
       ).length;
+      const approvalWaitingCount = worktreeTerminals.filter(
+        (t) => t.agentState === "waiting" && t.waitingReason === "approval"
+      ).length;
 
       // chipState logic mirrors useWorktreeStatus.ts — keep in sync
       const hasChanges = (worktree.worktreeChanges?.changedFileCount ?? 0) > 0;
@@ -516,6 +519,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
         worktreeErrorCount: errors.length,
         failedTerminalCount,
         waitingTerminalCount,
+        approvalWaitingCount,
         lifecycleStage,
         isComplete,
       });

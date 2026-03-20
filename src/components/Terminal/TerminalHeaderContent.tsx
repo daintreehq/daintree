@@ -3,7 +3,10 @@ import { Pause, Lock } from "lucide-react";
 import type { TerminalType, AgentState, PanelKind, AgentStateChangeTrigger } from "@/types";
 import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
-import { STATE_ICONS, STATE_COLORS } from "@/components/Worktree/terminalStateConfig";
+import {
+  getEffectiveStateIcon,
+  getEffectiveStateColor,
+} from "@/components/Worktree/terminalStateConfig";
 import type { ActivityState } from "./TerminalPane";
 import { useTerminalStore } from "@/store";
 import { useShallow } from "zustand/react/shallow";
@@ -57,19 +60,26 @@ function TerminalHeaderContentComponent({
   queueCount = 0,
   flowStatus,
 }: TerminalHeaderContentProps) {
-  const { isInputLocked, startedAt, lastStateChange, stateChangeTrigger, stateChangeConfidence } =
-    useTerminalStore(
-      useShallow((state) => {
-        const t = state.terminals.find((t) => t.id === id);
-        return {
-          isInputLocked: t?.isInputLocked ?? false,
-          startedAt: t?.startedAt,
-          lastStateChange: t?.lastStateChange,
-          stateChangeTrigger: t?.stateChangeTrigger,
-          stateChangeConfidence: t?.stateChangeConfidence,
-        };
-      })
-    );
+  const {
+    isInputLocked,
+    startedAt,
+    lastStateChange,
+    stateChangeTrigger,
+    stateChangeConfidence,
+    waitingReason,
+  } = useTerminalStore(
+    useShallow((state) => {
+      const t = state.terminals.find((t) => t.id === id);
+      return {
+        isInputLocked: t?.isInputLocked ?? false,
+        startedAt: t?.startedAt,
+        lastStateChange: t?.lastStateChange,
+        stateChangeTrigger: t?.stateChangeTrigger,
+        stateChangeConfidence: t?.stateChangeConfidence,
+        waitingReason: t?.waitingReason,
+      };
+    })
+  );
 
   // Show command pill only for plain terminals (not agent terminals)
   // Use kind to distinguish - agent panels have kind="agent"
@@ -81,19 +91,22 @@ function TerminalHeaderContentComponent({
       return null;
     }
 
-    const StateIcon = STATE_ICONS[agentState];
+    const StateIcon = getEffectiveStateIcon(agentState, waitingReason);
     if (!StateIcon) return null;
 
+    const isApproval = agentState === "waiting" && waitingReason === "approval";
     const chipStyle =
       agentState === "working"
         ? "bg-[color-mix(in_oklab,var(--color-state-working)_15%,transparent)] border-state-working/40"
-        : agentState === "waiting"
-          ? "bg-[color-mix(in_oklab,var(--color-state-waiting)_15%,transparent)] border-state-waiting/40"
-          : agentState === "directing"
-            ? "bg-[color-mix(in_oklab,var(--color-category-blue)_15%,transparent)] border-category-blue/40"
-            : agentState === "running"
-              ? "bg-[color-mix(in_oklab,var(--color-status-info)_15%,transparent)] border-status-info/40"
-              : "bg-[color-mix(in_oklab,var(--color-status-error)_15%,transparent)] border-status-error/40";
+        : isApproval
+          ? "bg-[color-mix(in_oklab,var(--color-state-approval)_15%,transparent)] border-state-approval/40"
+          : agentState === "waiting"
+            ? "bg-[color-mix(in_oklab,var(--color-state-waiting)_15%,transparent)] border-state-waiting/40"
+            : agentState === "directing"
+              ? "bg-[color-mix(in_oklab,var(--color-category-blue)_15%,transparent)] border-category-blue/40"
+              : agentState === "running"
+                ? "bg-[color-mix(in_oklab,var(--color-status-info)_15%,transparent)] border-status-info/40"
+                : "bg-[color-mix(in_oklab,var(--color-status-error)_15%,transparent)] border-status-error/40";
 
     const headline = activity?.headline?.trim() || `Agent ${agentState}`;
     const showConfidence = stateChangeConfidence != null && stateChangeConfidence < 1;
@@ -106,7 +119,7 @@ function TerminalHeaderContentComponent({
               className={cn(
                 "inline-flex items-center justify-center w-5 h-5 rounded-full border shrink-0",
                 chipStyle,
-                STATE_COLORS[agentState]
+                getEffectiveStateColor(agentState, waitingReason)
               )}
               role="status"
               aria-label={`Agent state: ${agentState}`}

@@ -63,6 +63,7 @@ interface TerminalInfoResponse {
   cwd: string;
   worktreeId?: string;
   agentState?: AgentState;
+  waitingReason?: string;
   lastStateChange?: number;
   spawnedAt: number;
   isTrashed?: boolean;

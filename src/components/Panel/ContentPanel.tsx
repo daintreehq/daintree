@@ -9,7 +9,7 @@ import type { PanelKind, TerminalType, AgentState } from "@/types";
 import type { ActivityState } from "@/components/Terminal/TerminalPane";
 import type { TabInfo } from "./TabButton";
 import { useDockBlockedState } from "@/components/Layout/useDockBlockedState";
-import { usePreferencesStore } from "@/store";
+import { usePreferencesStore, useTerminalStore } from "@/store";
 
 /**
  * Base props for all panel types.
@@ -150,6 +150,9 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
   const effectiveAgentState = ambientAgentState ?? agentState;
   const blockedState = useDockBlockedState(effectiveAgentState);
   const isWorkingState = effectiveAgentState === "working";
+  const waitingReason = useTerminalStore(
+    (state) => state.terminals.find((t) => t.id === id)?.waitingReason
+  );
 
   // Auto-construct TerminalHeaderContent for terminal/agent kinds if headerContent not provided
   const resolvedHeaderContent = useMemo(() => {
@@ -255,7 +258,9 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
             (isFocused && showGridAttention
               ? "terminal-selected"
               : showGridAttention && showGridAgentHighlights && blockedState === "waiting"
-                ? "panel-state-waiting"
+                ? waitingReason === "approval"
+                  ? "panel-state-approval"
+                  : "panel-state-waiting"
                 : showGridAttention && blockedState === "failed"
                   ? "panel-state-failed"
                   : showGridAttention && showGridAgentHighlights && isWorkingState

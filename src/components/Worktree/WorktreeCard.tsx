@@ -459,6 +459,7 @@ export const WorktreeCard = React.memo(function WorktreeCard({
         worktreeErrorCount: worktreeErrors.length,
         failedTerminalCount: terminalCounts.byState.failed,
         waitingTerminalCount: terminalCounts.byState.waiting,
+        approvalWaitingCount: terminalCounts.approvalWaitingCount,
         lifecycleStage,
         isComplete,
       }),
@@ -466,6 +467,7 @@ export const WorktreeCard = React.memo(function WorktreeCard({
       worktreeErrors.length,
       terminalCounts.byState.failed,
       terminalCounts.byState.waiting,
+      terminalCounts.approvalWaitingCount,
       lifecycleStage,
       isComplete,
     ]
@@ -574,6 +576,7 @@ export const WorktreeCard = React.memo(function WorktreeCard({
               className={cn(
                 "absolute w-3 h-3 z-10 cursor-default",
                 chipState === "error" && "bg-github-closed",
+                chipState === "approval" && "bg-state-approval",
                 chipState === "waiting" && "bg-state-waiting",
                 chipState === "cleanup" && "bg-github-merged",
                 chipState === "complete" && "bg-github-open",
@@ -584,6 +587,7 @@ export const WorktreeCard = React.memo(function WorktreeCard({
               aria-label={
                 {
                   error: "Error: attention needed",
+                  approval: "Agent waiting for approval",
                   waiting: "Agent waiting for input",
                   cleanup: "Ready for cleanup",
                   complete: "Complete: in review",
@@ -595,6 +599,7 @@ export const WorktreeCard = React.memo(function WorktreeCard({
             {
               {
                 error: "Error: attention needed",
+                approval: "Agent waiting for approval",
                 waiting: "Agent waiting for input",
                 cleanup: "Ready for cleanup",
                 complete: "Complete: in review",

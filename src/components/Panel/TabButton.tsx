@@ -2,11 +2,16 @@ import React, { useCallback, useState, useRef, useEffect, forwardRef } from "rea
 import type { DraggableAttributes, DraggableSyntheticListeners } from "@dnd-kit/core";
 import { X } from "lucide-react";
 import type { PanelKind, TerminalType, AgentState } from "@/types";
+import type { WaitingReason } from "@shared/types/agent";
 import { cn } from "@/lib/utils";
 import { getBrandColorHex } from "@/lib/colorUtils";
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
-import { STATE_ICONS, STATE_COLORS } from "@/components/Worktree/terminalStateConfig";
+import {
+  getEffectiveStateIcon,
+  getEffectiveStateColor,
+} from "@/components/Worktree/terminalStateConfig";
+import { useTerminalStore } from "@/store";
 
 export interface TabInfo {
   id: string;
@@ -201,8 +206,11 @@ const TabButtonComponent = forwardRef<HTMLDivElement, TabButtonProps>(function T
     [onClick]
   );
 
+  const waitingReason = useTerminalStore(
+    (state) => state.terminals.find((t) => t.id === id)?.waitingReason
+  ) as WaitingReason | undefined;
   const showStateIcon = agentState && agentState !== "idle" && agentState !== "completed";
-  const StateIcon = showStateIcon ? STATE_ICONS[agentState] : null;
+  const StateIcon = showStateIcon ? getEffectiveStateIcon(agentState, waitingReason) : null;
 
   return (
     <TooltipProvider>
@@ -266,7 +274,7 @@ const TabButtonComponent = forwardRef<HTMLDivElement, TabButtonProps>(function T
               <StateIcon
                 className={cn(
                   "w-3 h-3 shrink-0",
-                  STATE_COLORS[agentState],
+                  getEffectiveStateColor(agentState, waitingReason),
                   agentState === "working" && "animate-spin-slow",
                   "motion-reduce:animate-none"
                 )}
