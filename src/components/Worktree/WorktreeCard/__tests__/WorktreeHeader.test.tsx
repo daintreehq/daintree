@@ -499,7 +499,7 @@ describe("WorktreeHeader collapsed session indicators", () => {
   });
 
   it("orders states by STATE_PRIORITY (working before waiting)", () => {
-    const { container: wrapper } = renderHeader({
+    renderHeader({
       isCollapsed: true,
       sessionTotal: 3,
       sessionStates: { ...allZeroStates, waiting: 1, working: 2 },
@@ -513,7 +513,7 @@ describe("WorktreeHeader collapsed session indicators", () => {
   });
 
   it("applies animate-spin-slow only to working icon", () => {
-    const { container: wrapper } = renderHeader({
+    renderHeader({
       isCollapsed: true,
       sessionTotal: 3,
       sessionStates: { ...allZeroStates, working: 2, completed: 1 },
