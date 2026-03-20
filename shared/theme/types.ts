@@ -31,6 +31,7 @@ export const APP_THEME_TOKEN_KEYS = [
   "activity-idle",
   "activity-working",
   "activity-waiting",
+  "activity-approval",
   "overlay-subtle",
   "overlay-soft",
   "overlay-medium",

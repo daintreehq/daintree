@@ -116,6 +116,40 @@ export class AgentStateService {
     }
 
     if (newState === previousState) {
+      // Allow waitingReason updates within the same "waiting" state
+      if (
+        newState === "waiting" &&
+        waitingReason !== undefined &&
+        waitingReason !== terminal.waitingReason
+      ) {
+        terminal.waitingReason = waitingReason;
+
+        const inferredTrigger = trigger ?? this.inferTrigger(event);
+        const inferredConfidence = this.normalizeConfidence(
+          confidence ?? this.inferConfidence(event, inferredTrigger)
+        );
+
+        const stateChangePayload = {
+          agentId: terminal.agentId,
+          state: newState,
+          previousState,
+          timestamp: getStateChangeTimestamp(),
+          traceId: terminal.traceId,
+          terminalId: terminal.id,
+          worktreeId: terminal.worktreeId,
+          trigger: inferredTrigger,
+          confidence: inferredConfidence,
+          waitingReason,
+        };
+
+        const validated = AgentStateChangedSchema.safeParse(stateChangePayload);
+        if (validated.success) {
+          events.emit("agent:state-changed", validated.data);
+        }
+
+        this.emitTerminalActivity(terminal);
+        return true;
+      }
       return false;
     }
 
@@ -322,6 +356,7 @@ export class AgentStateService {
       terminalType: terminal.type,
       agentId: terminal.agentId,
       agentState: terminal.agentState,
+      waitingReason: terminal.waitingReason,
     });
 
     events.emit("terminal:activity", {

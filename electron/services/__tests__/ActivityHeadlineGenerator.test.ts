@@ -57,4 +57,45 @@ describe("ActivityHeadlineGenerator", () => {
 
     expect(result.headline).toBe("Running tests");
   });
+
+  describe("waitingReason differentiation", () => {
+    it('returns "Waiting for input" for prompt waitingReason', () => {
+      const result = generator.generate({
+        terminalId: "term-6",
+        agentId: "claude",
+        agentState: "waiting",
+        waitingReason: "prompt",
+      });
+      expect(result.headline).toBe("Waiting for input");
+    });
+
+    it('returns "Waiting for approval" for approval waitingReason', () => {
+      const result = generator.generate({
+        terminalId: "term-7",
+        agentId: "claude",
+        agentState: "waiting",
+        waitingReason: "approval",
+      });
+      expect(result.headline).toBe("Waiting for approval");
+    });
+
+    it('returns "Waiting for response" for question waitingReason', () => {
+      const result = generator.generate({
+        terminalId: "term-8",
+        agentId: "claude",
+        agentState: "waiting",
+        waitingReason: "question",
+      });
+      expect(result.headline).toBe("Waiting for response");
+    });
+
+    it('returns "Waiting for input" when waitingReason is undefined', () => {
+      const result = generator.generate({
+        terminalId: "term-9",
+        agentId: "claude",
+        agentState: "waiting",
+      });
+      expect(result.headline).toBe("Waiting for input");
+    });
+  });
 });

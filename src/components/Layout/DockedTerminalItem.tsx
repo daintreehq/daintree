@@ -14,7 +14,10 @@ import {
 import { TerminalContextMenu } from "@/components/Terminal/TerminalContextMenu";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import { getTerminalFocusTarget } from "@/components/Terminal/terminalFocus";
-import { STATE_ICONS, STATE_COLORS } from "@/components/Worktree/terminalStateConfig";
+import {
+  getEffectiveStateIcon,
+  getEffectiveStateColor,
+} from "@/components/Worktree/terminalStateConfig";
 import { TerminalRefreshTier } from "@/types";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { useDockPanelPortal } from "./DockPanelOffscreenContainer";
@@ -190,7 +193,9 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
   const displayTitle = getBaseTitle(terminal.title);
   // Only show icon for non-idle, non-completed states (reduce noise)
   const showStateIcon = agentState && agentState !== "idle" && agentState !== "completed";
-  const StateIcon = showStateIcon ? STATE_ICONS[agentState] : null;
+  const StateIcon = showStateIcon
+    ? getEffectiveStateIcon(agentState, terminal.waitingReason)
+    : null;
   const isDeprioritized =
     !isOpen && (!agentState || agentState === "idle" || agentState === "completed");
 
@@ -271,7 +276,12 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
               <TooltipProvider>
                 <Tooltip>
                   <TooltipTrigger asChild>
-                    <div className={cn("flex items-center shrink-0", STATE_COLORS[agentState])}>
+                    <div
+                      className={cn(
+                        "flex items-center shrink-0",
+                        getEffectiveStateColor(agentState, terminal.waitingReason)
+                      )}
+                    >
                       <StateIcon
                         className={cn(
                           "w-3.5 h-3.5",
@@ -282,7 +292,11 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
                       />
                     </div>
                   </TooltipTrigger>
-                  <TooltipContent side="bottom">{`Agent ${agentState}`}</TooltipContent>
+                  <TooltipContent side="bottom">
+                    {agentState === "waiting" && terminal.waitingReason === "approval"
+                      ? "Agent needs approval"
+                      : `Agent ${agentState}`}
+                  </TooltipContent>
                 </Tooltip>
               </TooltipProvider>
             )}

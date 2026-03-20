@@ -7,7 +7,12 @@ import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import { cn } from "@/lib/utils";
 import type { WorktreeTerminalCounts } from "@/hooks/useWorktreeTerminals";
 import { getAgentConfig, isRegisteredAgent } from "@/config/agents";
-import { STATE_COLORS, STATE_ICONS, STATE_LABELS, STATE_PRIORITY } from "../terminalStateConfig";
+import {
+  STATE_LABELS,
+  STATE_PRIORITY,
+  getEffectiveStateIcon,
+  getEffectiveStateColor,
+} from "../terminalStateConfig";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../../ui/tooltip";
 import { ChevronRight, GripVertical, LayoutGrid, PanelBottom, SquareTerminal } from "lucide-react";
 import {
@@ -21,8 +26,8 @@ interface StateIconProps {
 }
 
 function StateIcon({ state, count }: StateIconProps) {
-  const Icon = STATE_ICONS[state];
-  const colorClass = STATE_COLORS[state];
+  const Icon = getEffectiveStateIcon(state);
+  const colorClass = getEffectiveStateColor(state);
   const label = STATE_LABELS[state];
 
   return (
@@ -185,12 +190,12 @@ export function WorktreeTerminalSection({
                         {term.agentState &&
                           term.agentState !== "idle" &&
                           (() => {
-                            const Icon = STATE_ICONS[term.agentState];
+                            const Icon = getEffectiveStateIcon(term.agentState, term.waitingReason);
                             return (
                               <Icon
                                 className={cn(
                                   "w-3 h-3",
-                                  STATE_COLORS[term.agentState],
+                                  getEffectiveStateColor(term.agentState, term.waitingReason),
                                   term.agentState === "working" &&
                                     "animate-spin-slow motion-reduce:animate-none"
                                 )}
