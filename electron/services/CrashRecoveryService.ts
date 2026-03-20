@@ -30,6 +30,7 @@ export class CrashRecoveryService {
   private debounceTimer: ReturnType<typeof setTimeout> | null = null;
   private crashRecorded = false;
   private pendingPanelFilter: string[] | null = null;
+  private cachedBackupSnapshot: SessionSnapshot | null = null;
 
   constructor() {
     this.userData = app.getPath("userData");
@@ -125,9 +126,16 @@ export class CrashRecoveryService {
 
   restoreBackup(panelIds?: string[]): boolean {
     try {
-      if (!fs.existsSync(this.backupPath)) return false;
-      const raw = fs.readFileSync(this.backupPath, "utf8");
-      const snapshot = JSON.parse(raw) as SessionSnapshot;
+      // Use cached snapshot if available (backup file may have been overwritten
+      // by startBackupTimer between consumeMarker and user clicking restore)
+      let snapshot: SessionSnapshot;
+      if (this.cachedBackupSnapshot) {
+        snapshot = this.cachedBackupSnapshot;
+      } else {
+        if (!fs.existsSync(this.backupPath)) return false;
+        const raw = fs.readFileSync(this.backupPath, "utf8");
+        snapshot = JSON.parse(raw) as SessionSnapshot;
+      }
 
       if (panelIds !== undefined && panelIds.length > 0 && snapshot.appState) {
         const appState = snapshot.appState as Record<string, unknown>;
@@ -140,6 +148,7 @@ export class CrashRecoveryService {
       }
 
       this.applySessionSnapshot(snapshot);
+      this.cachedBackupSnapshot = null;
       console.log(
         "[CrashRecovery] Session restored from backup" +
           (panelIds && panelIds.length > 0 ? ` (${panelIds.length} panels selected)` : "")
@@ -210,6 +219,17 @@ export class CrashRecoveryService {
       const entry = logPath ? this.readCrashLog(logPath) : this.buildCrashEntryFromMarker(marker);
       const backupInfo = this.readBackupInfo();
       const panels = backupInfo.exists ? this.extractPanelSummaries(entry.timestamp) : undefined;
+
+      // Cache the backup snapshot so restoreBackup() can use it even if
+      // startBackupTimer() overwrites the backup file before the user resolves.
+      if (backupInfo.exists) {
+        try {
+          const raw = fs.readFileSync(this.backupPath, "utf8");
+          this.cachedBackupSnapshot = JSON.parse(raw) as SessionSnapshot;
+        } catch {
+          // If read fails, restoreBackup will fall back to reading from disk
+        }
+      }
 
       return {
         logPath: logPath ?? path.join(this.crashesDir, `crash-${entry.id}.json`),
