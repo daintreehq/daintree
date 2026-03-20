@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ProcessInfo } from "../../ProcessTreeCache.js";
 import type { ProcessTreeCache } from "../../ProcessTreeCache.js";
+import type { AgentDetectionConfig } from "../../../../shared/config/agentRegistry.js";
 import {
   createProcessStateValidator,
   buildActivityMonitorOptions,
@@ -107,7 +108,9 @@ describe("buildPromptHintPatterns", () => {
   });
 
   it("merges agent-specific patterns before universal patterns", () => {
-    const detection = { promptHintPatterns: ["custom\\s+pattern"] } as any;
+    const detection: Pick<AgentDetectionConfig, "promptHintPatterns"> = {
+      promptHintPatterns: ["custom\\s+pattern"],
+    };
     const result = buildPromptHintPatterns(detection, "claude");
     expect(result).toBeDefined();
     expect(result!.length).toBe(1 + UNIVERSAL_APPROVAL_HINT_PATTERNS.length);
