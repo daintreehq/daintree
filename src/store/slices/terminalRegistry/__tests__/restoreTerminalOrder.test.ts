@@ -43,7 +43,7 @@ function addMockTerminal(id: string, location: "grid" | "dock" = "grid") {
         id,
         title: id,
         kind: "browser" as const,
-        type: "shell" as const,
+        type: "terminal" as const,
         location,
         worktreeId: "wt-1",
         isVisible: true,
