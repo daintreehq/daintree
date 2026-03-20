@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-explicit-any -- window.electron is untyped in Playwright evaluate() */
 import { test, expect } from "@playwright/test";
 import { launchApp, closeApp, type AppContext } from "../helpers/launch";
 import { injectFault, clearAllFaults } from "../helpers/ipcFaults";
