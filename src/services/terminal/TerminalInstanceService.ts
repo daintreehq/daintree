@@ -601,6 +601,7 @@ class TerminalInstanceService {
       const isAtBottom = buffer.viewportY >= buffer.baseY;
       managed.latestWasAtBottom = isAtBottom;
 
+      managed._userScrollIntent = false;
       if (managed._suppressScrollTracking) return;
 
       if (isAtBottom) {
@@ -610,12 +611,9 @@ class TerminalInstanceService {
           reduceScrollback(managed, SCROLLBACK_BACKGROUND);
         }
       } else {
-        if (managed._userScrollIntent) {
-          managed.isUserScrolledBack = true;
-        }
+        managed.isUserScrolledBack = true;
         this.unseenTracker.updateScrollState(id, true);
       }
-      managed._userScrollIntent = false;
     });
     listeners.push(() => scrollDisposable.dispose());
 
