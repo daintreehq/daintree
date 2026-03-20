@@ -157,6 +157,10 @@ export function _resetRateLimitQueuesForTest(): void {
   }
 }
 
+if (process.env.CANOPY_E2E_FAULT_MODE === "1") {
+  (globalThis as Record<string, unknown>).__canopyResetRateLimits = _resetRateLimitQueuesForTest;
+}
+
 export function sendToRenderer(
   mainWindow: BrowserWindow,
   channel: string,
