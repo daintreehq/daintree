@@ -830,11 +830,7 @@ describe("BulkCreateWorktreeDialog", () => {
   it("recipe verification with multiple crashed terminals reports correct count", async () => {
     mockSelectedRecipeId = "test-recipe";
     mockRunRecipeWithResults.mockResolvedValue({
-      spawned: [
-        { terminalId: "t-a" },
-        { terminalId: "t-b" },
-        { terminalId: "t-c" },
-      ],
+      spawned: [{ terminalId: "t-a" }, { terminalId: "t-b" }, { terminalId: "t-c" }],
       failed: [],
     });
 
@@ -889,7 +885,10 @@ describe("BulkCreateWorktreeDialog", () => {
     });
 
     // Second run — crash terminal from first run to prove tracking was reset
-    mockTerminals = [{ id: "t-run1", exitCode: 1 }, { id: "t-run2", exitCode: undefined }];
+    mockTerminals = [
+      { id: "t-run1", exitCode: 1 },
+      { id: "t-run2", exitCode: undefined },
+    ];
     mockRunRecipeWithResults.mockResolvedValue({
       spawned: [{ terminalId: "t-run2" }],
       failed: [],
