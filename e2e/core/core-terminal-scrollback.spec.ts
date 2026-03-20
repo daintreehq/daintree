@@ -76,14 +76,20 @@ test.describe.serial("Core: Terminal Scrollback Integrity Under Load", () => {
     const newest = Math.max(...lineNumbers);
     expect(newest).toBe(5000);
 
-    // Oldest line should be approximately 4000 (±50)
+    // Oldest line should be approximately 4000 (±100 to account for viewport rows)
     const oldest = Math.min(...lineNumbers);
-    expect(oldest).toBeGreaterThan(3950);
+    expect(oldest).toBeGreaterThan(3900);
     expect(oldest).toBeLessThan(4050);
 
-    // Total retained lines should be approximately 1000 (±50)
+    // Total retained lines should be approximately 1000 (upper bound generous for viewport rows)
     expect(lineNumbers.length).toBeGreaterThan(950);
-    expect(lineNumbers.length).toBeLessThan(1050);
+    expect(lineNumbers.length).toBeLessThan(1150);
+
+    // Verify contiguous ascending sequence (no gaps or duplicates = true integrity)
+    const sorted = [...lineNumbers].sort((a, b) => a - b);
+    for (let i = 1; i < sorted.length; i++) {
+      expect(sorted[i]).toBe(sorted[i - 1] + 1);
+    }
   });
 
   test("terminal remains interactive after flood", async () => {
