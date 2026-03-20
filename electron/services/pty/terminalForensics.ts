@@ -13,11 +13,22 @@ export interface TerminalForensicsDecision {
   strippedOutput: string;
 }
 
-const EXPECTED_TERMINATION_SIGNALS = new Set<number>([
+export const EXPECTED_TERMINATION_SIGNALS = new Set<number>([
   1, // SIGHUP (terminal closed)
   2, // SIGINT (user interrupt)
+  13, // SIGPIPE (broken pipe)
   15, // SIGTERM (polite shutdown)
 ]);
+
+export function isRoutineExit(code: number, signal?: number | null): boolean {
+  if (code === 0) return true;
+  if (signal && EXPECTED_TERMINATION_SIGNALS.has(signal)) return true;
+  // Shell-convention exit codes: 128 + signal number
+  for (const sig of EXPECTED_TERMINATION_SIGNALS) {
+    if (code === 128 + sig) return true;
+  }
+  return false;
+}
 
 function normalizeExitSignal(signal?: number | null): number | undefined {
   if (!signal) return undefined;

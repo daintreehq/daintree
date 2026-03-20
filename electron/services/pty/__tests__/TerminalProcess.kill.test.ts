@@ -110,6 +110,32 @@ function createTerminal(
   );
 }
 
+describe("TerminalProcess.kill — agent state event", () => {
+  it("emits kill event (not error) for agent terminals", () => {
+    const updateAgentStateSpy = vi.fn();
+    const emitAgentKilledSpy = vi.fn();
+
+    const terminal = createTerminal(
+      { kind: "agent", type: "claude", agentId: "claude" },
+      {
+        agentStateService: {
+          handleActivityState: () => {},
+          updateAgentState: updateAgentStateSpy,
+          emitAgentKilled: emitAgentKilledSpy,
+        } as never,
+      }
+    );
+
+    terminal.kill("user requested");
+
+    expect(updateAgentStateSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: "claude" }),
+      { type: "kill" }
+    );
+    expect(emitAgentKilledSpy).toHaveBeenCalled();
+  });
+});
+
 describe("TerminalProcess.kill — session persistence", () => {
   beforeEach(() => {
     persistSyncMock.mockReset();

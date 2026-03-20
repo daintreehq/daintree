@@ -893,8 +893,7 @@ export class TerminalProcess {
 
     if (terminal.agentId) {
       this.deps.agentStateService.updateAgentState(terminal, {
-        type: "error",
-        error: reason || "Agent killed by user",
+        type: "kill",
       });
       this.deps.agentStateService.emitAgentKilled(terminal, reason);
     }
@@ -1267,6 +1266,7 @@ export class TerminalProcess {
         this.deps.agentStateService.updateAgentState(terminal, {
           type: "exit",
           code: exitCode ?? 0,
+          signal: signal ?? undefined,
         });
       }
 

@@ -61,10 +61,16 @@ describe("AgentStateMachine", () => {
       expect(isValidTransition("failed", "working")).toBe(true);
     });
 
-    it("should not allow failed → other states", () => {
-      expect(isValidTransition("failed", "idle")).toBe(false);
-      expect(isValidTransition("failed", "waiting")).toBe(false);
-      expect(isValidTransition("failed", "completed")).toBe(false);
+    it("should allow failed → idle (kill recovery)", () => {
+      expect(isValidTransition("failed", "idle")).toBe(true);
+    });
+
+    it("should allow failed → waiting (prompt recovery)", () => {
+      expect(isValidTransition("failed", "waiting")).toBe(true);
+    });
+
+    it("should allow failed → completed (routine exit recovery)", () => {
+      expect(isValidTransition("failed", "completed")).toBe(true);
     });
 
     it("should not allow invalid transitions", () => {
@@ -111,9 +117,9 @@ describe("AgentStateMachine", () => {
         expect(nextAgentState("completed", event)).toBe("working");
       });
 
-      it("should not transition from failed state on busy", () => {
+      it("should transition failed → working on busy (activity recovery)", () => {
         const event: AgentEvent = { type: "busy" };
-        expect(nextAgentState("failed", event)).toBe("failed");
+        expect(nextAgentState("failed", event)).toBe("working");
       });
     });
 
@@ -128,11 +134,15 @@ describe("AgentStateMachine", () => {
         expect(nextAgentState("completed", event)).toBe("waiting");
       });
 
+      it("should transition failed → waiting on prompt (silence recovery)", () => {
+        const event: AgentEvent = { type: "prompt" };
+        expect(nextAgentState("failed", event)).toBe("waiting");
+      });
+
       it("should not transition from other states on prompt", () => {
         const event: AgentEvent = { type: "prompt" };
         expect(nextAgentState("idle", event)).toBe("idle");
         expect(nextAgentState("waiting", event)).toBe("waiting");
-        expect(nextAgentState("failed", event)).toBe("failed");
       });
     });
 
@@ -177,9 +187,7 @@ describe("AgentStateMachine", () => {
         expect(nextAgentState("working", event)).toBe("working");
       });
 
-      it("should not allow heuristic events to escape failed state", () => {
-        expect(nextAgentState("failed", { type: "busy" })).toBe("failed");
-        expect(nextAgentState("failed", { type: "prompt" })).toBe("failed");
+      it("should not allow completion or output events to escape failed state", () => {
         expect(nextAgentState("failed", { type: "completion" })).toBe("failed");
         expect(nextAgentState("failed", { type: "output", data: "x" })).toBe("failed");
       });
@@ -191,9 +199,29 @@ describe("AgentStateMachine", () => {
         expect(nextAgentState("working", event)).toBe("completed");
       });
 
-      it("should transition working → failed on non-zero exit code", () => {
+      it("should transition working → failed on genuine non-zero exit code", () => {
         const event: AgentEvent = { type: "exit", code: 1 };
         expect(nextAgentState("working", event)).toBe("failed");
+      });
+
+      it("should transition working → completed on routine signal exit (SIGINT)", () => {
+        expect(nextAgentState("working", { type: "exit", code: 0, signal: 2 })).toBe("completed");
+      });
+
+      it("should transition working → completed on routine exit code (130 = SIGINT)", () => {
+        expect(nextAgentState("working", { type: "exit", code: 130 })).toBe("completed");
+      });
+
+      it("should transition working → completed on SIGHUP signal", () => {
+        expect(nextAgentState("working", { type: "exit", code: 0, signal: 1 })).toBe("completed");
+      });
+
+      it("should transition working → completed on SIGTERM exit code (143)", () => {
+        expect(nextAgentState("working", { type: "exit", code: 143 })).toBe("completed");
+      });
+
+      it("should transition working → failed on crash signal (SIGSEGV)", () => {
+        expect(nextAgentState("working", { type: "exit", code: 139 })).toBe("failed");
       });
 
       it("should transition waiting → completed on exit code 0", () => {
@@ -201,9 +229,13 @@ describe("AgentStateMachine", () => {
         expect(nextAgentState("waiting", event)).toBe("completed");
       });
 
-      it("should transition waiting → failed on non-zero exit code", () => {
+      it("should transition waiting → failed on genuine non-zero exit code", () => {
         const event: AgentEvent = { type: "exit", code: 1 };
         expect(nextAgentState("waiting", event)).toBe("failed");
+      });
+
+      it("should transition waiting → completed on routine exit (SIGTERM)", () => {
+        expect(nextAgentState("waiting", { type: "exit", code: 143 })).toBe("completed");
       });
 
       it("should transition completed → failed on non-zero exit", () => {
@@ -220,6 +252,17 @@ describe("AgentStateMachine", () => {
         const event: AgentEvent = { type: "exit", code: 0 };
         expect(nextAgentState("idle", event)).toBe("idle");
         expect(nextAgentState("failed", event)).toBe("failed");
+      });
+    });
+
+    describe("kill event", () => {
+      it("should transition to idle from any state", () => {
+        const event: AgentEvent = { type: "kill" };
+        const states: AgentState[] = ["idle", "working", "waiting", "completed", "failed"];
+
+        for (const state of states) {
+          expect(nextAgentState(state, event)).toBe("idle");
+        }
       });
     });
 

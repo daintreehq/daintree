@@ -88,23 +88,31 @@ describe("AgentStateService", () => {
     expect(stateChanges[0]?.state).toBe("working");
   });
 
-  it("does not recover from failed on heuristic busy event", () => {
+  it("recovers from failed to working on busy event and clears error", () => {
     const service = new AgentStateService();
     const terminal = createTerminal({ agentState: "failed", error: "network timeout" });
 
     const changed = service.updateAgentState(terminal, { type: "busy" });
 
-    expect(changed).toBe(false);
-    expect(terminal.agentState).toBe("failed");
-    expect(terminal.error).toBe("network timeout");
+    expect(changed).toBe(true);
+    expect(terminal.agentState).toBe("working");
+    expect(terminal.error).toBeUndefined();
   });
 
-  it("does not recover from failed on prompt or completion events", () => {
+  it("recovers from failed to waiting on prompt event and clears error", () => {
     const service = new AgentStateService();
     const terminal = createTerminal({ agentState: "failed", error: "api error" });
 
-    expect(service.updateAgentState(terminal, { type: "prompt" })).toBe(false);
-    expect(terminal.agentState).toBe("failed");
+    const changed = service.updateAgentState(terminal, { type: "prompt" });
+
+    expect(changed).toBe(true);
+    expect(terminal.agentState).toBe("waiting");
+    expect(terminal.error).toBeUndefined();
+  });
+
+  it("does not recover from failed on completion event", () => {
+    const service = new AgentStateService();
+    const terminal = createTerminal({ agentState: "failed", error: "api error" });
 
     expect(service.updateAgentState(terminal, { type: "completion" })).toBe(false);
     expect(terminal.agentState).toBe("failed");
@@ -145,14 +153,14 @@ describe("AgentStateService", () => {
     expect(stateChanges[0]?.state).toBe("working");
   });
 
-  it("handleActivityState with trigger output does not recover from failed", () => {
+  it("handleActivityState with trigger output recovers from failed via busy event", () => {
     const service = new AgentStateService();
     const terminal = createTerminal({ agentState: "failed", error: "some error" });
 
     service.handleActivityState(terminal, "busy", { trigger: "output" });
 
-    expect(terminal.agentState).toBe("failed");
-    expect(terminal.error).toBe("some error");
+    expect(terminal.agentState).toBe("working");
+    expect(terminal.error).toBeUndefined();
   });
 
   it("handleActivityState with timeout trigger transitions working to waiting", () => {
