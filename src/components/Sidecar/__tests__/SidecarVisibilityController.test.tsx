@@ -67,6 +67,7 @@ describe("SidecarVisibilityController", () => {
     Object.defineProperty(window, "electron", {
       value: {
         sidecar,
+        window: { getZoomFactor: vi.fn(() => 1) },
       },
       configurable: true,
       writable: true,
@@ -114,7 +115,7 @@ describe("SidecarVisibilityController", () => {
     });
     expect(sidecar.show).toHaveBeenCalledWith({
       tabId: "tab-1",
-      bounds: { x: 10, y: 21, width: 300, height: 401 },
+      bounds: { x: 10, y: 21, width: 301, height: 401 },
     });
     expect(useSidecarStore.getState().createdTabs.has("tab-1")).toBe(true);
   });
@@ -171,7 +172,7 @@ describe("SidecarVisibilityController", () => {
     expect(sidecar.show).toHaveBeenCalledTimes(1);
     expect(sidecar.show).toHaveBeenCalledWith({
       tabId: "tab-b",
-      bounds: { x: 10, y: 21, width: 300, height: 401 },
+      bounds: { x: 10, y: 21, width: 301, height: 401 },
     });
   });
 
@@ -247,7 +248,7 @@ describe("SidecarVisibilityController", () => {
     expect(sidecar.create).not.toHaveBeenCalled();
     expect(sidecar.show).toHaveBeenCalledWith({
       tabId: "tab-1",
-      bounds: { x: 10, y: 21, width: 300, height: 401 },
+      bounds: { x: 10, y: 21, width: 301, height: 401 },
     });
   });
 });

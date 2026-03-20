@@ -2,6 +2,7 @@ import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 import { z } from "zod";
 import { systemClient } from "@/clients";
 import { getAIAgentInfo } from "@/lib/aiAgentDetection";
+import { getSidecarPlaceholderBounds } from "@/lib/sidecarBounds";
 import { useDiagnosticsStore } from "@/store/diagnosticsStore";
 import { useSidecarStore } from "@/store/sidecarStore";
 import { useTerminalStore } from "@/store/terminalStore";
@@ -102,18 +103,7 @@ export function registerPanelActions(actions: ActionRegistry, callbacks: ActionC
     },
   }));
 
-  const getSidecarBounds = (): { x: number; y: number; width: number; height: number } | null => {
-    if (typeof document === "undefined") return null;
-    const placeholder = document.getElementById("sidecar-placeholder");
-    if (!placeholder) return null;
-    const rect = placeholder.getBoundingClientRect();
-    return {
-      x: Math.round(rect.x),
-      y: Math.round(rect.y),
-      width: Math.round(rect.width),
-      height: Math.round(rect.height),
-    };
-  };
+  const getSidecarBounds = () => getSidecarPlaceholderBounds();
 
   const getSidecarBoundsWithRetry = async (
     maxAttempts: number = 20,

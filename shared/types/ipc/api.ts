@@ -825,6 +825,8 @@ export interface ElectronAPI {
     zoomOut(): Promise<void>;
     /** Reset zoom */
     zoomReset(): Promise<void>;
+    /** Get current zoom factor (synchronous, no IPC) */
+    getZoomFactor(): number;
     /** Close window */
     close(): Promise<void>;
   };
