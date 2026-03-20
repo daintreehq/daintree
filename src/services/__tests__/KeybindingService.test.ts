@@ -116,11 +116,11 @@ describe("KeybindingService", () => {
     expect(match?.actionId).toBe("terminal.close");
   });
 
-  it("resolves Cmd+W to sidecar.closeTab (priority 20) over terminal.close (priority 10) in sidecar scope", () => {
+  it("resolves Cmd+W to portal.closeTab (priority 20) over terminal.close (priority 10) in portal scope", () => {
     setPlatform("MacIntel");
 
     const service = new KeybindingService();
-    service.setScope("sidecar");
+    service.setScope("portal");
 
     const event = createKeyboardEvent({
       key: "w",
@@ -129,7 +129,7 @@ describe("KeybindingService", () => {
     });
 
     const match = service.findMatchingAction(event);
-    expect(match?.actionId).toBe("sidecar.closeTab");
+    expect(match?.actionId).toBe("portal.closeTab");
     expect(match?.priority).toBe(20);
   });
 

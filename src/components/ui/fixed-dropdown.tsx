@@ -49,7 +49,7 @@ export function FixedDropdown({
     const buttonRightGap = Math.max(window.innerWidth - rect.right, 8);
     setPosition({
       top: rect.bottom + sideOffset,
-      right: `max(${buttonRightGap}px, calc(var(--sidecar-right-offset, 0px) + 8px))`,
+      right: `max(${buttonRightGap}px, calc(var(--portal-right-offset, 0px) + 8px))`,
     });
   }, [anchorRef, sideOffset]);
 

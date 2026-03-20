@@ -11,7 +11,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
 import {
-  useSidecarStore,
+  usePortalStore,
   usePerformanceModeStore,
   useScrollbackStore,
   useLayoutConfigStore,
@@ -64,8 +64,8 @@ const LazyTroubleshootingTab = lazy(() =>
 const LazyNotificationSettingsTab = lazy(() =>
   import("./NotificationSettingsTab").then((m) => ({ default: m.NotificationSettingsTab }))
 );
-const LazySidecarSettingsTab = lazy(() =>
-  import("./SidecarSettingsTab").then((m) => ({ default: m.SidecarSettingsTab }))
+const LazyPortalSettingsTab = lazy(() =>
+  import("./PortalSettingsTab").then((m) => ({ default: m.PortalSettingsTab }))
 );
 const LazyKeyboardShortcutsTab = lazy(() =>
   import("./KeyboardShortcutsTab").then((m) => ({ default: m.KeyboardShortcutsTab }))
@@ -126,7 +126,7 @@ export type SettingsTab =
   | "worktree"
   | "agents"
   | "github"
-  | "sidecar"
+  | "portal"
   | "toolbar"
   | "notifications"
   | "editor"
@@ -161,13 +161,13 @@ export function SettingsDialog({
   const [searchQuery, setSearchQuery] = useState("");
   const deferredQuery = useDeferredValue(searchQuery);
   const searchInputRef = useRef<HTMLInputElement>(null);
-  const setSidecarOpen = useSidecarStore((state) => state.setOpen);
+  const setPortalOpen = usePortalStore((state) => state.setOpen);
 
   useEffect(() => {
     if (isOpen) {
-      setSidecarOpen(false);
+      setPortalOpen(false);
     }
-  }, [isOpen, setSidecarOpen]);
+  }, [isOpen, setPortalOpen]);
 
   const [appVersion, setAppVersion] = useState<string>("Loading...");
 
@@ -422,7 +422,7 @@ export function SettingsDialog({
     worktree: "Worktree Paths",
     agents: "CLI Agents",
     github: "GitHub Integration",
-    sidecar: "Sidecar Links",
+    portal: "Portal Links",
     toolbar: "Toolbar Customization",
     notifications: "Notifications",
     editor: "Editor Integration",
@@ -442,7 +442,7 @@ export function SettingsDialog({
     worktree: <GitBranch className="w-5 h-5 text-canopy-text/60" />,
     agents: <TreeDeciduous className="w-5 h-5 text-canopy-text/60" />,
     github: <Github className="w-5 h-5 text-canopy-text/60" />,
-    sidecar: <PanelRight className="w-5 h-5 text-canopy-text/60" />,
+    portal: <PanelRight className="w-5 h-5 text-canopy-text/60" />,
     toolbar: <SettingsIcon className="w-5 h-5 text-canopy-text/60" />,
     notifications: <Bell className="w-5 h-5 text-canopy-text/60" />,
     editor: <Code className="w-5 h-5 text-canopy-text/60" />,
@@ -652,12 +652,12 @@ export function SettingsDialog({
                   onSelect={handleNavSelect}
                 />
                 <NavItem
-                  tab="sidecar"
+                  tab="portal"
                   icon={<PanelRight className="w-4 h-4" />}
-                  label="Sidecar"
+                  label="Portal"
                   activeTab={activeTab}
                   isSearching={isSearching}
-                  matchCount={matchCounts.sidecar}
+                  matchCount={matchCounts.portal}
                   onSelect={handleNavSelect}
                 />
                 <NavItem
@@ -868,14 +868,14 @@ export function SettingsDialog({
 
                 <div
                   role="tabpanel"
-                  id="settings-panel-sidecar"
-                  aria-labelledby="settings-tab-sidecar"
+                  id="settings-panel-portal"
+                  aria-labelledby="settings-tab-portal"
                   tabIndex={0}
-                  className={activeTab === "sidecar" ? "" : "hidden"}
+                  className={activeTab === "portal" ? "" : "hidden"}
                 >
-                  {visitedTabs.has("sidecar") && (
+                  {visitedTabs.has("portal") && (
                     <Suspense fallback={null}>
-                      <LazySidecarSettingsTab />
+                      <LazyPortalSettingsTab />
                     </Suspense>
                   )}
                 </div>

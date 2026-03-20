@@ -2,26 +2,26 @@ import * as React from "react";
 import * as PopoverPrimitive from "@radix-ui/react-popover";
 import { cn } from "@/lib/utils";
 
-let sidecarBoundary: HTMLDivElement | null = null;
+let portalBoundary: HTMLDivElement | null = null;
 
-function getSidecarBoundary() {
+function getPortalBoundary() {
   if (typeof document === "undefined") return null;
-  if (sidecarBoundary) return sidecarBoundary;
+  if (portalBoundary) return portalBoundary;
 
-  // Collision boundary that excludes the native sidecar region on the right.
+  // Collision boundary that excludes the native portal region on the right.
   const boundary = document.createElement("div");
-  boundary.dataset.sidecarBoundary = "true";
+  boundary.dataset.portalBoundary = "true";
   Object.assign(boundary.style, {
     position: "fixed",
     top: "0",
     left: "0",
-    width: "calc(100vw - var(--sidecar-right-offset, 0px))",
+    width: "calc(100vw - var(--portal-right-offset, 0px))",
     height: "100vh",
     pointerEvents: "none",
     visibility: "hidden",
   });
   document.body.appendChild(boundary);
-  sidecarBoundary = boundary;
+  portalBoundary = boundary;
   return boundary;
 }
 
@@ -38,7 +38,7 @@ const PopoverContent = React.forwardRef<
   const [boundary, setBoundary] = React.useState<HTMLElement | null>(null);
 
   React.useEffect(() => {
-    setBoundary(getSidecarBoundary());
+    setBoundary(getPortalBoundary());
   }, []);
 
   return (

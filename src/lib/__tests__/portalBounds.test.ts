@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { getElementBoundsAsDip, getSidecarPlaceholderBounds } from "../sidecarBounds";
+import { getElementBoundsAsDip, getPortalPlaceholderBounds } from "../portalBounds";
 
-describe("sidecarBounds", () => {
+describe("portalBounds", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
     Object.defineProperty(window, "electron", {
@@ -113,19 +113,19 @@ describe("sidecarBounds", () => {
     });
   });
 
-  describe("getSidecarPlaceholderBounds", () => {
+  describe("getPortalPlaceholderBounds", () => {
     it("returns null when placeholder is not in DOM", () => {
-      expect(getSidecarPlaceholderBounds()).toBeNull();
+      expect(getPortalPlaceholderBounds()).toBeNull();
     });
 
     it("returns bounds when placeholder exists", () => {
       const placeholder = document.createElement("div");
-      placeholder.id = "sidecar-placeholder";
+      placeholder.id = "portal-placeholder";
       document.body.appendChild(placeholder);
       vi.spyOn(placeholder, "getBoundingClientRect").mockReturnValue(
         makeDOMRect(100, 200, 500, 600)
       );
-      const result = getSidecarPlaceholderBounds();
+      const result = getPortalPlaceholderBounds();
       expect(result).toEqual({ x: 100, y: 200, width: 500, height: 600 });
       document.body.removeChild(placeholder);
     });
@@ -135,12 +135,12 @@ describe("sidecarBounds", () => {
         window.electron as unknown as { window: { getZoomFactor: ReturnType<typeof vi.fn> } }
       ).window.getZoomFactor.mockReturnValue(1.5);
       const placeholder = document.createElement("div");
-      placeholder.id = "sidecar-placeholder";
+      placeholder.id = "portal-placeholder";
       document.body.appendChild(placeholder);
       vi.spyOn(placeholder, "getBoundingClientRect").mockReturnValue(
         makeDOMRect(100, 200, 500, 600)
       );
-      const result = getSidecarPlaceholderBounds();
+      const result = getPortalPlaceholderBounds();
       expect(result).toEqual({ x: 150, y: 300, width: 750, height: 900 });
       document.body.removeChild(placeholder);
     });

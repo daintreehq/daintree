@@ -991,45 +991,45 @@ export interface IpcInvokeMap {
     result: string;
   };
 
-  // Sidecar channels
-  "sidecar:create": {
-    args: [payload: import("../sidecar.js").SidecarCreatePayload];
+  // Portal channels
+  "portal:create": {
+    args: [payload: import("../portal.js").PortalCreatePayload];
     result: void;
   };
-  "sidecar:show": {
-    args: [payload: import("../sidecar.js").SidecarShowPayload];
+  "portal:show": {
+    args: [payload: import("../portal.js").PortalShowPayload];
     result: void;
   };
-  "sidecar:hide": {
+  "portal:hide": {
     args: [];
     result: void;
   };
-  "sidecar:resize": {
-    args: [bounds: import("../sidecar.js").SidecarBounds];
+  "portal:resize": {
+    args: [bounds: import("../portal.js").PortalBounds];
     result: void;
   };
-  "sidecar:close-tab": {
-    args: [payload: import("../sidecar.js").SidecarCloseTabPayload];
+  "portal:close-tab": {
+    args: [payload: import("../portal.js").PortalCloseTabPayload];
     result: void;
   };
-  "sidecar:navigate": {
-    args: [payload: import("../sidecar.js").SidecarNavigatePayload];
+  "portal:navigate": {
+    args: [payload: import("../portal.js").PortalNavigatePayload];
     result: void;
   };
-  "sidecar:go-back": {
+  "portal:go-back": {
     args: [tabId: string];
     result: boolean;
   };
-  "sidecar:go-forward": {
+  "portal:go-forward": {
     args: [tabId: string];
     result: boolean;
   };
-  "sidecar:reload": {
+  "portal:reload": {
     args: [tabId: string];
     result: void;
   };
-  "sidecar:show-new-tab-menu": {
-    args: [payload: import("../sidecar.js").SidecarShowNewTabMenuPayload];
+  "portal:show-new-tab-menu": {
+    args: [payload: import("../portal.js").PortalShowNewTabMenuPayload];
     result: void;
   };
 
@@ -1732,11 +1732,11 @@ export interface IpcEventMap {
   // System events
   "system:wake": SystemWakePayload;
 
-  // Sidecar events
-  "sidecar:nav-event": import("../sidecar.js").SidecarNavEvent;
-  "sidecar:focus": void;
-  "sidecar:blur": void;
-  "sidecar:new-tab-menu-action": import("../sidecar.js").SidecarNewTabMenuAction;
+  // Portal events
+  "portal:nav-event": import("../portal.js").PortalNavEvent;
+  "portal:focus": void;
+  "portal:blur": void;
+  "portal:new-tab-menu-action": import("../portal.js").PortalNewTabMenuAction;
 
   // System Sleep events
   "system-sleep:on-suspend": void;

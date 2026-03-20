@@ -157,7 +157,7 @@ export function useWorktreeMenu({
           label: `Open Issue #${worktree.issueNumber}`,
           enabled: false,
           submenu: [
-            { id: "worktree:open-issue-sidecar", label: "In Sidecar" },
+            { id: "worktree:open-issue-portal", label: "In Portal" },
             { id: "worktree:open-issue-external", label: "In External Browser" },
           ],
         });
@@ -168,7 +168,7 @@ export function useWorktreeMenu({
           label: `Open PR #${worktree.prNumber}`,
           enabled: false,
           submenu: [
-            { id: "worktree:open-pr-sidecar", label: "In Sidecar" },
+            { id: "worktree:open-pr-portal", label: "In Portal" },
             { id: "worktree:open-pr-external", label: "In External Browser" },
           ],
         });
@@ -333,9 +333,9 @@ export function useWorktreeMenu({
             { source: "context-menu" }
           );
           break;
-        case "worktree:open-issue-sidecar":
+        case "worktree:open-issue-portal":
           void actionService.dispatch(
-            "worktree.openIssueInSidecar",
+            "worktree.openIssueInPortal",
             { worktreeId: worktree.id },
             { source: "context-menu" }
           );
@@ -347,9 +347,9 @@ export function useWorktreeMenu({
             { source: "context-menu" }
           );
           break;
-        case "worktree:open-pr-sidecar":
+        case "worktree:open-pr-portal":
           void actionService.dispatch(
-            "worktree.openPRInSidecar",
+            "worktree.openPRInPortal",
             { worktreeId: worktree.id },
             { source: "context-menu" }
           );

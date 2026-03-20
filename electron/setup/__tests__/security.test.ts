@@ -21,12 +21,12 @@ function createMockSession() {
   };
 }
 
-const { defaultSession, browserSession, sidecarSession, sessionCreatedListeners } = vi.hoisted(
+const { defaultSession, browserSession, portalSession, sessionCreatedListeners } = vi.hoisted(
   () => {
     return {
       defaultSession: createMockSession(),
       browserSession: createMockSession(),
-      sidecarSession: createMockSession(),
+      portalSession: createMockSession(),
       sessionCreatedListeners: [] as Array<
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         (ses: any) => void
@@ -56,7 +56,7 @@ vi.mock("electron", () => ({
     defaultSession,
     fromPartition: vi.fn((partition: string) => {
       if (partition === "persist:browser") return browserSession;
-      if (partition === "persist:sidecar") return sidecarSession;
+      if (partition === "persist:portal") return portalSession;
       return createMockSession();
     }),
   },
@@ -99,15 +99,15 @@ describe("setupPermissionLockdown", () => {
     _resetPermissionLockdownForTesting();
   });
 
-  it("configures handlers on default, browser, and sidecar sessions", () => {
+  it("configures handlers on default, browser, and portal sessions", () => {
     setupPermissionLockdown();
 
     expect(defaultSession.setPermissionRequestHandler).toHaveBeenCalledTimes(1);
     expect(defaultSession.setPermissionCheckHandler).toHaveBeenCalledTimes(1);
     expect(browserSession.setPermissionRequestHandler).toHaveBeenCalledTimes(1);
     expect(browserSession.setPermissionCheckHandler).toHaveBeenCalledTimes(1);
-    expect(sidecarSession.setPermissionRequestHandler).toHaveBeenCalledTimes(1);
-    expect(sidecarSession.setPermissionCheckHandler).toHaveBeenCalledTimes(1);
+    expect(portalSession.setPermissionRequestHandler).toHaveBeenCalledTimes(1);
+    expect(portalSession.setPermissionCheckHandler).toHaveBeenCalledTimes(1);
   });
 
   describe("default session (trusted)", () => {
@@ -197,28 +197,28 @@ describe("setupPermissionLockdown", () => {
     });
   });
 
-  describe("sidecar session", () => {
+  describe("portal session", () => {
     it("allows clipboard-sanitized-write", () => {
       setupPermissionLockdown();
-      const handler = getRequestHandler(sidecarSession);
+      const handler = getRequestHandler(portalSession);
       expect(testPermissionRequest(handler, "clipboard-sanitized-write")).toBe(true);
     });
 
     it("denies clipboard-read", () => {
       setupPermissionLockdown();
-      const handler = getRequestHandler(sidecarSession);
+      const handler = getRequestHandler(portalSession);
       expect(testPermissionRequest(handler, "clipboard-read")).toBe(false);
     });
 
     it("denies media", () => {
       setupPermissionLockdown();
-      const handler = getRequestHandler(sidecarSession);
+      const handler = getRequestHandler(portalSession);
       expect(testPermissionRequest(handler, "media")).toBe(false);
     });
 
     it("denies all other permissions", () => {
       setupPermissionLockdown();
-      const handler = getRequestHandler(sidecarSession);
+      const handler = getRequestHandler(portalSession);
       expect(testPermissionRequest(handler, "geolocation")).toBe(false);
       expect(testPermissionRequest(handler, "notifications")).toBe(false);
       expect(testPermissionRequest(handler, "fileSystem")).toBe(false);
@@ -226,12 +226,12 @@ describe("setupPermissionLockdown", () => {
 
     it("check handler allows only clipboard-sanitized-write", () => {
       setupPermissionLockdown();
-      const handler = getCheckHandler(sidecarSession);
-      expect(handler(mockWebContents, "clipboard-sanitized-write", "https://sidecar.ai", {})).toBe(
+      const handler = getCheckHandler(portalSession);
+      expect(handler(mockWebContents, "clipboard-sanitized-write", "https://portal.ai", {})).toBe(
         true
       );
-      expect(handler(mockWebContents, "clipboard-read", "https://sidecar.ai", {})).toBe(false);
-      expect(handler(mockWebContents, "media", "https://sidecar.ai", {})).toBe(false);
+      expect(handler(mockWebContents, "clipboard-read", "https://portal.ai", {})).toBe(false);
+      expect(handler(mockWebContents, "media", "https://portal.ai", {})).toBe(false);
     });
   });
 

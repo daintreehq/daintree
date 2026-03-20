@@ -34,7 +34,7 @@ const DEFAULT_PREFERENCES: ToolbarPreferences = {
   },
 };
 
-const FIXED_BUTTON_IDS: ToolbarButtonId[] = ["sidebar-toggle", "sidecar-toggle"];
+const FIXED_BUTTON_IDS: ToolbarButtonId[] = ["sidebar-toggle", "portal-toggle"];
 
 function sanitizeButtonList(buttons: ToolbarButtonId[]): ToolbarButtonId[] {
   return buttons.filter((id) => !FIXED_BUTTON_IDS.includes(id));

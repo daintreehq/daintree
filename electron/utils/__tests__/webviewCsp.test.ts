@@ -26,7 +26,7 @@ describe("webviewCsp", () => {
 
     it("returns false for other partitions", () => {
       expect(isDevPreviewPartition("persist:browser")).toBe(false);
-      expect(isDevPreviewPartition("persist:sidecar")).toBe(false);
+      expect(isDevPreviewPartition("persist:portal")).toBe(false);
       expect(isDevPreviewPartition("persist:unknown")).toBe(false);
     });
   });
@@ -36,8 +36,8 @@ describe("webviewCsp", () => {
       expect(classifyPartition("persist:browser")).toBe("browser");
     });
 
-    it("identifies sidecar partition", () => {
-      expect(classifyPartition("persist:sidecar")).toBe("sidecar");
+    it("identifies portal partition", () => {
+      expect(classifyPartition("persist:portal")).toBe("portal");
     });
 
     it("identifies dev-preview partition", () => {

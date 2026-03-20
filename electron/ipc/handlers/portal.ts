@@ -2,103 +2,100 @@ import { BrowserWindow, Menu, ipcMain } from "electron";
 import { CHANNELS } from "../channels.js";
 import type { HandlerDependencies } from "../types.js";
 import type {
-  SidecarCreatePayload,
-  SidecarShowPayload,
-  SidecarCloseTabPayload,
-  SidecarNavigatePayload,
-  SidecarBounds,
-  SidecarShowNewTabMenuPayload,
-  SidecarNewTabMenuAction,
-} from "../../../shared/types/sidecar.js";
+  PortalCreatePayload,
+  PortalShowPayload,
+  PortalCloseTabPayload,
+  PortalNavigatePayload,
+  PortalBounds,
+  PortalShowNewTabMenuPayload,
+  PortalNewTabMenuAction,
+} from "../../../shared/types/portal.js";
 
-export function registerSidecarHandlers(deps: HandlerDependencies): () => void {
+export function registerPortalHandlers(deps: HandlerDependencies): () => void {
   const handlers: Array<() => void> = [];
 
-  const handleSidecarCreate = async (
+  const handlePortalCreate = async (
     _event: Electron.IpcMainInvokeEvent,
-    payload: SidecarCreatePayload
+    payload: PortalCreatePayload
   ) => {
     try {
-      if (!deps.sidecarManager) return;
+      if (!deps.portalManager) return;
       if (!payload?.tabId || typeof payload.tabId !== "string") {
         throw new Error("Invalid tabId");
       }
       if (!payload?.url || typeof payload.url !== "string") {
         throw new Error("Invalid url");
       }
-      deps.sidecarManager.createTab(payload.tabId, payload.url);
+      deps.portalManager.createTab(payload.tabId, payload.url);
     } catch (error) {
-      console.error("[SidecarHandler] Error in create:", error);
+      console.error("[PortalHandler] Error in create:", error);
       throw error;
     }
   };
-  ipcMain.handle(CHANNELS.SIDECAR_CREATE, handleSidecarCreate);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.SIDECAR_CREATE));
+  ipcMain.handle(CHANNELS.PORTAL_CREATE, handlePortalCreate);
+  handlers.push(() => ipcMain.removeHandler(CHANNELS.PORTAL_CREATE));
 
-  const handleSidecarShow = async (
+  const handlePortalShow = async (
     _event: Electron.IpcMainInvokeEvent,
-    payload: SidecarShowPayload
+    payload: PortalShowPayload
   ) => {
     try {
-      if (!deps.sidecarManager) return;
+      if (!deps.portalManager) return;
       if (!payload?.tabId || typeof payload.tabId !== "string") {
         throw new Error("Invalid tabId");
       }
       if (!payload?.bounds || typeof payload.bounds !== "object") {
         throw new Error("Invalid bounds");
       }
-      deps.sidecarManager.showTab(payload.tabId, payload.bounds);
+      deps.portalManager.showTab(payload.tabId, payload.bounds);
     } catch (error) {
-      console.error("[SidecarHandler] Error in show:", error);
+      console.error("[PortalHandler] Error in show:", error);
       throw error;
     }
   };
-  ipcMain.handle(CHANNELS.SIDECAR_SHOW, handleSidecarShow);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.SIDECAR_SHOW));
+  ipcMain.handle(CHANNELS.PORTAL_SHOW, handlePortalShow);
+  handlers.push(() => ipcMain.removeHandler(CHANNELS.PORTAL_SHOW));
 
-  const handleSidecarHide = async () => {
-    if (!deps.sidecarManager) return;
-    deps.sidecarManager.hideAll();
+  const handlePortalHide = async () => {
+    if (!deps.portalManager) return;
+    deps.portalManager.hideAll();
   };
-  ipcMain.handle(CHANNELS.SIDECAR_HIDE, handleSidecarHide);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.SIDECAR_HIDE));
+  ipcMain.handle(CHANNELS.PORTAL_HIDE, handlePortalHide);
+  handlers.push(() => ipcMain.removeHandler(CHANNELS.PORTAL_HIDE));
 
-  const handleSidecarResize = async (
-    _event: Electron.IpcMainInvokeEvent,
-    bounds: SidecarBounds
-  ) => {
+  const handlePortalResize = async (_event: Electron.IpcMainInvokeEvent, bounds: PortalBounds) => {
     try {
-      if (!deps.sidecarManager) return;
+      if (!deps.portalManager) return;
       if (!bounds || typeof bounds !== "object") {
         throw new Error("Invalid bounds");
       }
-      deps.sidecarManager.updateBounds(bounds);
+      deps.portalManager.updateBounds(bounds);
     } catch (error) {
-      console.error("[SidecarHandler] Error in resize:", error);
+      console.error("[PortalHandler] Error in resize:", error);
       throw error;
     }
   };
-  ipcMain.handle(CHANNELS.SIDECAR_RESIZE, handleSidecarResize);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.SIDECAR_RESIZE));
+  ipcMain.handle(CHANNELS.PORTAL_RESIZE, handlePortalResize);
+  handlers.push(() => ipcMain.removeHandler(CHANNELS.PORTAL_RESIZE));
 
-  const handleSidecarCloseTab = async (
+  const handlePortalCloseTab = async (
     _event: Electron.IpcMainInvokeEvent,
-    payload: SidecarCloseTabPayload
+    payload: PortalCloseTabPayload
   ) => {
-    if (!deps.sidecarManager) return;
+    if (!deps.portalManager) return;
     if (!payload || typeof payload !== "object" || typeof payload.tabId !== "string") {
       return;
     }
-    deps.sidecarManager.closeTab(payload.tabId);
+    deps.portalManager.closeTab(payload.tabId);
   };
-  ipcMain.handle(CHANNELS.SIDECAR_CLOSE_TAB, handleSidecarCloseTab);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.SIDECAR_CLOSE_TAB));
+  ipcMain.handle(CHANNELS.PORTAL_CLOSE_TAB, handlePortalCloseTab);
+  handlers.push(() => ipcMain.removeHandler(CHANNELS.PORTAL_CLOSE_TAB));
 
-  const handleSidecarNavigate = async (
+  const handlePortalNavigate = async (
     _event: Electron.IpcMainInvokeEvent,
-    payload: SidecarNavigatePayload
+    payload: PortalNavigatePayload
   ) => {
-    if (!deps.sidecarManager) return;
+    if (!deps.portalManager) return;
     if (
       !payload ||
       typeof payload !== "object" ||
@@ -107,44 +104,44 @@ export function registerSidecarHandlers(deps: HandlerDependencies): () => void {
     ) {
       return;
     }
-    deps.sidecarManager.navigate(payload.tabId, payload.url);
+    deps.portalManager.navigate(payload.tabId, payload.url);
   };
-  ipcMain.handle(CHANNELS.SIDECAR_NAVIGATE, handleSidecarNavigate);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.SIDECAR_NAVIGATE));
+  ipcMain.handle(CHANNELS.PORTAL_NAVIGATE, handlePortalNavigate);
+  handlers.push(() => ipcMain.removeHandler(CHANNELS.PORTAL_NAVIGATE));
 
-  const handleSidecarGoBack = async (
+  const handlePortalGoBack = async (
     _event: Electron.IpcMainInvokeEvent,
     tabId: string
   ): Promise<boolean> => {
-    if (!deps.sidecarManager) return false;
+    if (!deps.portalManager) return false;
     if (typeof tabId !== "string") return false;
-    return deps.sidecarManager.goBack(tabId);
+    return deps.portalManager.goBack(tabId);
   };
-  ipcMain.handle(CHANNELS.SIDECAR_GO_BACK, handleSidecarGoBack);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.SIDECAR_GO_BACK));
+  ipcMain.handle(CHANNELS.PORTAL_GO_BACK, handlePortalGoBack);
+  handlers.push(() => ipcMain.removeHandler(CHANNELS.PORTAL_GO_BACK));
 
-  const handleSidecarGoForward = async (
+  const handlePortalGoForward = async (
     _event: Electron.IpcMainInvokeEvent,
     tabId: string
   ): Promise<boolean> => {
-    if (!deps.sidecarManager) return false;
+    if (!deps.portalManager) return false;
     if (typeof tabId !== "string") return false;
-    return deps.sidecarManager.goForward(tabId);
+    return deps.portalManager.goForward(tabId);
   };
-  ipcMain.handle(CHANNELS.SIDECAR_GO_FORWARD, handleSidecarGoForward);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.SIDECAR_GO_FORWARD));
+  ipcMain.handle(CHANNELS.PORTAL_GO_FORWARD, handlePortalGoForward);
+  handlers.push(() => ipcMain.removeHandler(CHANNELS.PORTAL_GO_FORWARD));
 
-  const handleSidecarReload = async (_event: Electron.IpcMainInvokeEvent, tabId: string) => {
-    if (!deps.sidecarManager) return;
+  const handlePortalReload = async (_event: Electron.IpcMainInvokeEvent, tabId: string) => {
+    if (!deps.portalManager) return;
     if (typeof tabId !== "string") return;
-    deps.sidecarManager.reload(tabId);
+    deps.portalManager.reload(tabId);
   };
-  ipcMain.handle(CHANNELS.SIDECAR_RELOAD, handleSidecarReload);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.SIDECAR_RELOAD));
+  ipcMain.handle(CHANNELS.PORTAL_RELOAD, handlePortalReload);
+  handlers.push(() => ipcMain.removeHandler(CHANNELS.PORTAL_RELOAD));
 
   const handleShowNewTabMenu = async (
     event: Electron.IpcMainInvokeEvent,
-    payload: SidecarShowNewTabMenuPayload
+    payload: PortalShowNewTabMenuPayload
   ): Promise<void> => {
     if (!payload || typeof payload !== "object") return;
     if (!Array.isArray(payload.links)) return;
@@ -172,9 +169,9 @@ export function registerSidecarHandlers(deps: HandlerDependencies): () => void {
     const win = BrowserWindow.fromWebContents(event.sender);
     if (!win || win.isDestroyed()) return;
 
-    const sendAction = (action: SidecarNewTabMenuAction) => {
+    const sendAction = (action: PortalNewTabMenuAction) => {
       if (event.sender.isDestroyed()) return;
-      event.sender.send(CHANNELS.SIDECAR_NEW_TAB_MENU_ACTION, action);
+      event.sender.send(CHANNELS.PORTAL_NEW_TAB_MENU_ACTION, action);
     };
 
     const menu = Menu.buildFromTemplate([
@@ -206,21 +203,21 @@ export function registerSidecarHandlers(deps: HandlerDependencies): () => void {
           })),
           ...(links.length > 0 ? [{ type: "separator" as const }] : []),
           {
-            label: "Manage Sidecar Settings...",
-            click: () => win.webContents.send(CHANNELS.MENU_ACTION, "open-settings:sidecar"),
+            label: "Manage Portal Settings...",
+            click: () => win.webContents.send(CHANNELS.MENU_ACTION, "open-settings:portal"),
           },
         ],
       },
       {
-        label: "Manage Sidecar Settings...",
-        click: () => win.webContents.send(CHANNELS.MENU_ACTION, "open-settings:sidecar"),
+        label: "Manage Portal Settings...",
+        click: () => win.webContents.send(CHANNELS.MENU_ACTION, "open-settings:portal"),
       },
     ]);
 
     menu.popup({ window: win, x, y });
   };
-  ipcMain.handle(CHANNELS.SIDECAR_SHOW_NEW_TAB_MENU, handleShowNewTabMenu);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.SIDECAR_SHOW_NEW_TAB_MENU));
+  ipcMain.handle(CHANNELS.PORTAL_SHOW_NEW_TAB_MENU, handleShowNewTabMenu);
+  handlers.push(() => ipcMain.removeHandler(CHANNELS.PORTAL_SHOW_NEW_TAB_MENU));
 
   return () => handlers.forEach((cleanup) => cleanup());
 }

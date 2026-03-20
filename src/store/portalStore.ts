@@ -1,27 +1,27 @@
 import { create, type StateCreator } from "zustand";
 import { persist } from "zustand/middleware";
-import type { SidecarTab, SidecarLink } from "@shared/types";
-import { getSidecarPlaceholderBounds } from "@/lib/sidecarBounds";
+import type { PortalTab, PortalLink } from "@shared/types";
+import { getPortalPlaceholderBounds } from "@/lib/portalBounds";
 import {
-  DEFAULT_SIDECAR_TABS,
-  SIDECAR_MIN_WIDTH,
-  SIDECAR_MAX_WIDTH,
-  SIDECAR_DEFAULT_WIDTH,
+  DEFAULT_PORTAL_TABS,
+  PORTAL_MIN_WIDTH,
+  PORTAL_MAX_WIDTH,
+  PORTAL_DEFAULT_WIDTH,
   DEFAULT_SYSTEM_LINKS,
 } from "@shared/types";
 import { createSafeJSONStorage } from "./persistence/safeStorage";
 
-interface SidecarState {
+interface PortalState {
   isOpen: boolean;
   width: number;
   activeTabId: string | null;
-  tabs: SidecarTab[];
+  tabs: PortalTab[];
   createdTabs: Set<string>;
-  links: SidecarLink[];
+  links: PortalLink[];
   defaultNewTabUrl: string | null;
 }
 
-interface SidecarActions {
+interface PortalActions {
   toggle: () => void;
   setOpen: (open: boolean) => void;
   setWidth: (width: number) => void;
@@ -42,30 +42,30 @@ interface SidecarActions {
   markTabCreated: (id: string) => void;
   isTabCreated: (id: string) => boolean;
   reset: () => void;
-  addLink: (link: Omit<SidecarLink, "id" | "order">) => void;
+  addLink: (link: Omit<PortalLink, "id" | "order">) => void;
   removeLink: (id: string) => void;
-  updateLink: (id: string, updates: Partial<SidecarLink>) => void;
+  updateLink: (id: string, updates: Partial<PortalLink>) => void;
   toggleLink: (id: string) => void;
   reorderLinks: (fromIndex: number, toIndex: number) => void;
   reorderTabs: (fromIndex: number, toIndex: number) => void;
   setDefaultNewTabUrl: (url: string | null) => void;
 }
 
-const initialState: SidecarState = {
+const initialState: PortalState = {
   isOpen: false,
-  width: SIDECAR_DEFAULT_WIDTH,
+  width: PORTAL_DEFAULT_WIDTH,
   activeTabId: null,
-  tabs: DEFAULT_SIDECAR_TABS,
+  tabs: DEFAULT_PORTAL_TABS,
   createdTabs: new Set<string>(),
   links: [...DEFAULT_SYSTEM_LINKS],
   defaultNewTabUrl: null,
 };
 
-const createSidecarStore: StateCreator<SidecarState & SidecarActions> = (set, get) => {
+const createPortalStore: StateCreator<PortalState & PortalActions> = (set, get) => {
   const CLOSE_TAB_RESTORE_MAX_ATTEMPTS = 20;
   const CLOSE_TAB_RESTORE_DELAY_MS = 50;
 
-  const getPlaceholderBounds = () => getSidecarPlaceholderBounds();
+  const getPlaceholderBounds = () => getPortalPlaceholderBounds();
 
   const restoreActiveTabAfterClose = (tabId: string, attempt: number = 0) => {
     const state = get();
@@ -74,7 +74,7 @@ const createSidecarStore: StateCreator<SidecarState & SidecarActions> = (set, ge
     const activeTab = state.tabs.find((tab) => tab.id === tabId);
     if (!activeTab) return;
     if (!activeTab.url) {
-      window.electron.sidecar.hide();
+      window.electron.portal.hide();
       return;
     }
 
@@ -89,7 +89,7 @@ const createSidecarStore: StateCreator<SidecarState & SidecarActions> = (set, ge
       return;
     }
 
-    window.electron.sidecar.show({ tabId, bounds });
+    window.electron.portal.show({ tabId, bounds });
   };
 
   return {
@@ -100,7 +100,7 @@ const createSidecarStore: StateCreator<SidecarState & SidecarActions> = (set, ge
     setOpen: (open) => set({ isOpen: open }),
 
     setWidth: (width) => {
-      const validWidth = Math.min(Math.max(width, SIDECAR_MIN_WIDTH), SIDECAR_MAX_WIDTH);
+      const validWidth = Math.min(Math.max(width, PORTAL_MIN_WIDTH), PORTAL_MAX_WIDTH);
       set({ width: validWidth });
     },
 
@@ -108,7 +108,7 @@ const createSidecarStore: StateCreator<SidecarState & SidecarActions> = (set, ge
 
     createTab: (url, title) => {
       const newTabId = `tab-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-      const newTab: SidecarTab = { id: newTabId, url, title };
+      const newTab: PortalTab = { id: newTabId, url, title };
       set((s) => ({
         tabs: [...s.tabs, newTab],
         activeTabId: newTabId,
@@ -126,7 +126,7 @@ const createSidecarStore: StateCreator<SidecarState & SidecarActions> = (set, ge
       }
 
       const newTabId = `tab-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-      const newTab: SidecarTab = { id: newTabId, url: null, title: "New Tab" };
+      const newTab: PortalTab = { id: newTabId, url: null, title: "New Tab" };
       set((s) => ({
         tabs: [...s.tabs, newTab],
         activeTabId: newTabId,
@@ -149,21 +149,21 @@ const createSidecarStore: StateCreator<SidecarState & SidecarActions> = (set, ge
       const nextCreatedTabs = new Set(state.createdTabs);
       nextCreatedTabs.delete(id);
       set({ tabs: newTabs, activeTabId: newActiveId, createdTabs: nextCreatedTabs });
-      window.electron.sidecar.closeTab({ tabId: id });
+      window.electron.portal.closeTab({ tabId: id });
 
       if (!wasActive) return;
 
       if (newActiveId) {
         const newActiveTab = newTabs.find((t) => t.id === newActiveId);
         if (newActiveTab && !newActiveTab.url) {
-          window.electron.sidecar.hide();
+          window.electron.portal.hide();
         } else {
           setTimeout(() => {
             restoreActiveTabAfterClose(newActiveId);
           }, 0);
         }
       } else {
-        window.electron.sidecar.hide();
+        window.electron.portal.hide();
       }
     },
 
@@ -193,7 +193,7 @@ const createSidecarStore: StateCreator<SidecarState & SidecarActions> = (set, ge
     closeAllTabs: () => {
       const state = get();
       for (const tabId of state.createdTabs) {
-        window.electron.sidecar.closeTab({ tabId });
+        window.electron.portal.closeTab({ tabId });
       }
       set({ tabs: [], activeTabId: null, createdTabs: new Set<string>() });
     },
@@ -204,7 +204,7 @@ const createSidecarStore: StateCreator<SidecarState & SidecarActions> = (set, ge
       if (!tab?.url) return null;
 
       const newTabId = `tab-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-      const newTab: SidecarTab = {
+      const newTab: PortalTab = {
         id: newTabId,
         url: tab.url,
         title: tab.title,
@@ -224,7 +224,7 @@ const createSidecarStore: StateCreator<SidecarState & SidecarActions> = (set, ge
       const tabsToClose = state.tabs.filter((t) => t.id !== id);
       for (const tab of tabsToClose) {
         if (state.createdTabs.has(tab.id)) {
-          window.electron.sidecar.closeTab({ tabId: tab.id });
+          window.electron.portal.closeTab({ tabId: tab.id });
         }
       }
       const nextCreatedTabs = new Set<string>();
@@ -241,7 +241,7 @@ const createSidecarStore: StateCreator<SidecarState & SidecarActions> = (set, ge
       if (tabsToClose.length === 0) return;
       for (const tab of tabsToClose) {
         if (state.createdTabs.has(tab.id)) {
-          window.electron.sidecar.closeTab({ tabId: tab.id });
+          window.electron.portal.closeTab({ tabId: tab.id });
         }
       }
       const remainingTabs = state.tabs.slice(0, index + 1);
@@ -374,12 +374,12 @@ const createSidecarStore: StateCreator<SidecarState & SidecarActions> = (set, ge
   };
 };
 
-const sidecarStoreCreator: StateCreator<
-  SidecarState & SidecarActions,
+const portalStoreCreator: StateCreator<
+  PortalState & PortalActions,
   [],
-  [["zustand/persist", Partial<SidecarState>]]
-> = persist(createSidecarStore, {
-  name: "sidecar-storage",
+  [["zustand/persist", Partial<PortalState>]]
+> = persist(createPortalStore, {
+  name: "portal-storage",
   storage: createSafeJSONStorage(),
   partialize: (state) => ({
     links: state.links,
@@ -388,7 +388,7 @@ const sidecarStoreCreator: StateCreator<
     defaultNewTabUrl: state.defaultNewTabUrl,
   }),
   merge: (persistedState: unknown, currentState) => {
-    const persisted = persistedState as Partial<SidecarState>;
+    const persisted = persistedState as Partial<PortalState>;
 
     let links = currentState.links;
     if (Array.isArray(persisted.links)) {
@@ -432,7 +432,7 @@ const sidecarStoreCreator: StateCreator<
         ...normalizedSystemLinks.map((l) => ({ ...l, order: order++ })),
         ...extraSystemLinks.map((l) => ({ ...l, order: order++ })),
         ...userLinks.map((l) => ({ ...l, order: order++ })),
-      ] as SidecarLink[];
+      ] as PortalLink[];
     }
 
     return {
@@ -441,7 +441,7 @@ const sidecarStoreCreator: StateCreator<
       links,
       width:
         typeof persisted.width === "number"
-          ? Math.min(Math.max(persisted.width, SIDECAR_MIN_WIDTH), SIDECAR_MAX_WIDTH)
+          ? Math.min(Math.max(persisted.width, PORTAL_MIN_WIDTH), PORTAL_MAX_WIDTH)
           : currentState.width,
       defaultNewTabUrl:
         typeof persisted.defaultNewTabUrl === "string" && persisted.defaultNewTabUrl.trim()
@@ -451,4 +451,4 @@ const sidecarStoreCreator: StateCreator<
   },
 });
 
-export const useSidecarStore = create<SidecarState & SidecarActions>()(sidecarStoreCreator);
+export const usePortalStore = create<PortalState & PortalActions>()(portalStoreCreator);

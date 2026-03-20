@@ -16,7 +16,7 @@ const registerMocks = vi.hoisted(() => ({
   registerProjectInRepoSettingsHandlers: vi.fn(),
   registerGithubHandlers: vi.fn(),
   registerAppHandlers: vi.fn(),
-  registerSidecarHandlers: vi.fn(),
+  registerPortalHandlers: vi.fn(),
   registerMenuHandlers: vi.fn(),
   registerHibernationHandlers: vi.fn(),
   registerSystemSleepHandlers: vi.fn(),
@@ -92,8 +92,8 @@ vi.mock("../handlers/github.js", () => ({
 vi.mock("../handlers/app.js", () => ({
   registerAppHandlers: registerMocks.registerAppHandlers,
 }));
-vi.mock("../handlers/sidecar.js", () => ({
-  registerSidecarHandlers: registerMocks.registerSidecarHandlers,
+vi.mock("../handlers/portal.js", () => ({
+  registerPortalHandlers: registerMocks.registerPortalHandlers,
 }));
 vi.mock("../handlers/menu.js", () => ({
   registerMenuHandlers: registerMocks.registerMenuHandlers,

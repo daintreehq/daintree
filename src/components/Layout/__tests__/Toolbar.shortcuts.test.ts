@@ -20,8 +20,8 @@ describe("Toolbar shortcut tooltips — issue #3443", () => {
       expect(source).toContain('useKeybindingDisplay("panel.toggleDiagnostics")');
     });
 
-    it("uses dynamic hook for panel.toggleSidecar", () => {
-      expect(source).toContain('useKeybindingDisplay("panel.toggleSidecar")');
+    it("uses dynamic hook for panel.togglePortal", () => {
+      expect(source).toContain('useKeybindingDisplay("panel.togglePortal")');
     });
 
     it("uses dynamic hook for notes.openPalette", () => {
@@ -76,11 +76,11 @@ describe("Toolbar shortcut tooltips — issue #3443", () => {
       );
     });
 
-    it("uses createTooltipWithShortcut for sidecar tooltip", () => {
-      const sidecarBlock = source.match(/"sidecar-toggle":\s*\{[\s\S]*?isAvailable/);
-      expect(sidecarBlock).not.toBeNull();
-      expect(sidecarBlock![0]).toContain("createTooltipWithShortcut");
-      expect(sidecarBlock![0]).toContain("sidecarShortcut");
+    it("uses createTooltipWithShortcut for portal tooltip", () => {
+      const portalBlock = source.match(/"portal-toggle":\s*\{[\s\S]*?isAvailable/);
+      expect(portalBlock).not.toBeNull();
+      expect(portalBlock![0]).toContain("createTooltipWithShortcut");
+      expect(portalBlock![0]).toContain("portalShortcut");
     });
 
     it("uses createTooltipWithShortcut for sidebar tooltip with dynamic shortcut", () => {
@@ -106,11 +106,11 @@ describe("Toolbar shortcut tooltips — issue #3443", () => {
       expect(deps).toContain("diagnosticsShortcut");
     });
 
-    it("includes sidecarShortcut in useMemo deps", () => {
+    it("includes portalShortcut in useMemo deps", () => {
       const depsMatch = source.match(/\}\),\s*\[([^\]]+)\]\s*\);/s);
       expect(depsMatch).not.toBeNull();
       const deps = depsMatch![1];
-      expect(deps).toContain("sidecarShortcut");
+      expect(deps).toContain("portalShortcut");
     });
 
     it("includes notesShortcut in useMemo deps", () => {

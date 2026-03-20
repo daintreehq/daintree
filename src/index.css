@@ -465,7 +465,7 @@ code.hljs {
    * Higher tiers always appear above lower tiers.
    *
    * Tier 40: Fixed panels (dock, sidebars)
-   * Tier 50: Sidecar overlay
+   * Tier 50: Portal overlay
    * Tier 55: Maximized content (terminals)
    * Tier 60: Modal dialogs (full-screen overlays)
    * Tier 70: Popovers, dropdowns, tooltips (can appear above modals)
@@ -473,7 +473,7 @@ code.hljs {
    * Tier 80: Toast notifications (always visible)
    */
   --z-panel: 40;
-  --z-sidecar: 50;
+  --z-portal: 50;
   --z-maximized: 55;
   --z-modal: 60;
   --z-popover: 70;

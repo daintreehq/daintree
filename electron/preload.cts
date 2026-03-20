@@ -62,9 +62,9 @@ import type { TerminalStatusPayload, SpawnResult } from "../shared/types/pty-hos
 
 type SpawnResultPayload = SpawnResult;
 import type {
-  SidecarNewTabMenuAction,
-  SidecarShowNewTabMenuPayload,
-} from "../shared/types/sidecar.js";
+  PortalNewTabMenuAction,
+  PortalShowNewTabMenuPayload,
+} from "../shared/types/portal.js";
 import type { ShowContextMenuPayload } from "../shared/types/menu.js";
 
 export type { ElectronAPI };
@@ -436,21 +436,21 @@ const CHANNELS = {
   GIT_GET_USERNAME: "git:get-username",
   GIT_GET_WORKING_DIFF: "git:get-working-diff",
 
-  // Sidecar channels
-  SIDECAR_CREATE: "sidecar:create",
-  SIDECAR_SHOW: "sidecar:show",
-  SIDECAR_HIDE: "sidecar:hide",
-  SIDECAR_RESIZE: "sidecar:resize",
-  SIDECAR_CLOSE_TAB: "sidecar:close-tab",
-  SIDECAR_NAVIGATE: "sidecar:navigate",
-  SIDECAR_GO_BACK: "sidecar:go-back",
-  SIDECAR_GO_FORWARD: "sidecar:go-forward",
-  SIDECAR_RELOAD: "sidecar:reload",
-  SIDECAR_SHOW_NEW_TAB_MENU: "sidecar:show-new-tab-menu",
-  SIDECAR_NAV_EVENT: "sidecar:nav-event",
-  SIDECAR_FOCUS: "sidecar:focus",
-  SIDECAR_BLUR: "sidecar:blur",
-  SIDECAR_NEW_TAB_MENU_ACTION: "sidecar:new-tab-menu-action",
+  // Portal channels
+  PORTAL_CREATE: "portal:create",
+  PORTAL_SHOW: "portal:show",
+  PORTAL_HIDE: "portal:hide",
+  PORTAL_RESIZE: "portal:resize",
+  PORTAL_CLOSE_TAB: "portal:close-tab",
+  PORTAL_NAVIGATE: "portal:navigate",
+  PORTAL_GO_BACK: "portal:go-back",
+  PORTAL_GO_FORWARD: "portal:go-forward",
+  PORTAL_RELOAD: "portal:reload",
+  PORTAL_SHOW_NEW_TAB_MENU: "portal:show-new-tab-menu",
+  PORTAL_NAV_EVENT: "portal:nav-event",
+  PORTAL_FOCUS: "portal:focus",
+  PORTAL_BLUR: "portal:blur",
+  PORTAL_NEW_TAB_MENU_ACTION: "portal:new-tab-menu-action",
 
   // Webview channels
   WEBVIEW_SET_LIFECYCLE_STATE: "webview:set-lifecycle-state",
@@ -1601,45 +1601,44 @@ const api: ElectronAPI = {
       _typedOn(CHANNELS.ACCESSIBILITY_SUPPORT_CHANGED, callback),
   },
 
-  // Sidecar API
-  sidecar: {
+  // Portal API
+  portal: {
     create: (payload: { tabId: string; url: string }) =>
-      _unwrappingInvoke(CHANNELS.SIDECAR_CREATE, payload),
+      _unwrappingInvoke(CHANNELS.PORTAL_CREATE, payload),
 
     show: (payload: {
       tabId: string;
       bounds: { x: number; y: number; width: number; height: number };
-    }) => _unwrappingInvoke(CHANNELS.SIDECAR_SHOW, payload),
+    }) => _unwrappingInvoke(CHANNELS.PORTAL_SHOW, payload),
 
-    hide: () => _unwrappingInvoke(CHANNELS.SIDECAR_HIDE),
+    hide: () => _unwrappingInvoke(CHANNELS.PORTAL_HIDE),
 
     resize: (bounds: { x: number; y: number; width: number; height: number }) =>
-      _unwrappingInvoke(CHANNELS.SIDECAR_RESIZE, bounds),
+      _unwrappingInvoke(CHANNELS.PORTAL_RESIZE, bounds),
 
-    closeTab: (payload: { tabId: string }) =>
-      _unwrappingInvoke(CHANNELS.SIDECAR_CLOSE_TAB, payload),
+    closeTab: (payload: { tabId: string }) => _unwrappingInvoke(CHANNELS.PORTAL_CLOSE_TAB, payload),
 
     navigate: (payload: { tabId: string; url: string }) =>
-      _unwrappingInvoke(CHANNELS.SIDECAR_NAVIGATE, payload),
+      _unwrappingInvoke(CHANNELS.PORTAL_NAVIGATE, payload),
 
-    goBack: (tabId: string) => _unwrappingInvoke(CHANNELS.SIDECAR_GO_BACK, tabId),
+    goBack: (tabId: string) => _unwrappingInvoke(CHANNELS.PORTAL_GO_BACK, tabId),
 
-    goForward: (tabId: string) => _unwrappingInvoke(CHANNELS.SIDECAR_GO_FORWARD, tabId),
+    goForward: (tabId: string) => _unwrappingInvoke(CHANNELS.PORTAL_GO_FORWARD, tabId),
 
-    reload: (tabId: string) => _unwrappingInvoke(CHANNELS.SIDECAR_RELOAD, tabId),
+    reload: (tabId: string) => _unwrappingInvoke(CHANNELS.PORTAL_RELOAD, tabId),
 
-    showNewTabMenu: (payload: SidecarShowNewTabMenuPayload) =>
-      _unwrappingInvoke(CHANNELS.SIDECAR_SHOW_NEW_TAB_MENU, payload),
+    showNewTabMenu: (payload: PortalShowNewTabMenuPayload) =>
+      _unwrappingInvoke(CHANNELS.PORTAL_SHOW_NEW_TAB_MENU, payload),
 
     onNavEvent: (callback: (data: { tabId: string; title: string; url: string }) => void) =>
-      _typedOn(CHANNELS.SIDECAR_NAV_EVENT, callback),
+      _typedOn(CHANNELS.PORTAL_NAV_EVENT, callback),
 
-    onFocus: (callback: () => void) => _typedOn(CHANNELS.SIDECAR_FOCUS, callback),
+    onFocus: (callback: () => void) => _typedOn(CHANNELS.PORTAL_FOCUS, callback),
 
-    onBlur: (callback: () => void) => _typedOn(CHANNELS.SIDECAR_BLUR, callback),
+    onBlur: (callback: () => void) => _typedOn(CHANNELS.PORTAL_BLUR, callback),
 
-    onNewTabMenuAction: (callback: (action: SidecarNewTabMenuAction) => void) =>
-      _typedOn(CHANNELS.SIDECAR_NEW_TAB_MENU_ACTION, callback),
+    onNewTabMenuAction: (callback: (action: PortalNewTabMenuAction) => void) =>
+      _typedOn(CHANNELS.PORTAL_NEW_TAB_MENU_ACTION, callback),
   },
 
   // Webview API

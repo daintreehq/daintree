@@ -1,4 +1,4 @@
-import type { SidecarBounds } from "@shared/types";
+import type { PortalBounds } from "@shared/types";
 
 function getZoomFactor(): number {
   try {
@@ -12,7 +12,7 @@ function getZoomFactor(): number {
   return 1;
 }
 
-export function getElementBoundsAsDip(element: Element | null): SidecarBounds | null {
+export function getElementBoundsAsDip(element: Element | null): PortalBounds | null {
   if (!element) return null;
   const rect = element.getBoundingClientRect();
   const zoom = getZoomFactor();
@@ -24,7 +24,7 @@ export function getElementBoundsAsDip(element: Element | null): SidecarBounds | 
   };
 }
 
-export function getSidecarPlaceholderBounds(): SidecarBounds | null {
+export function getPortalPlaceholderBounds(): PortalBounds | null {
   if (typeof document === "undefined") return null;
-  return getElementBoundsAsDip(document.getElementById("sidecar-placeholder"));
+  return getElementBoundsAsDip(document.getElementById("portal-placeholder"));
 }

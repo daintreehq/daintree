@@ -69,9 +69,9 @@ export interface WorktreeMenuItemsProps {
   onCopyContextModified: () => void;
   onOpenEditor: () => void;
   onRevealInFinder: () => void;
-  onOpenIssueSidecar?: () => void;
+  onOpenIssuePortal?: () => void;
   onOpenIssueExternal?: () => void;
-  onOpenPRSidecar?: () => void;
+  onOpenPRPortal?: () => void;
   onOpenPRExternal?: () => void;
   onAttachIssue?: () => void;
   onViewPlan?: () => void;
@@ -107,9 +107,9 @@ export function WorktreeMenuItems({
   onCopyContextModified,
   onOpenEditor,
   onRevealInFinder,
-  onOpenIssueSidecar,
+  onOpenIssuePortal,
   onOpenIssueExternal,
-  onOpenPRSidecar,
+  onOpenPRPortal,
   onOpenPRExternal,
   onAttachIssue,
   onViewPlan,
@@ -130,8 +130,8 @@ export function WorktreeMenuItems({
   onEndAll,
   onDeleteWorktree,
 }: WorktreeMenuItemsProps) {
-  const hasIssueSub = Boolean(worktree.issueNumber && (onOpenIssueSidecar || onOpenIssueExternal));
-  const hasPRSub = Boolean(worktree.prNumber && (onOpenPRSidecar || onOpenPRExternal));
+  const hasIssueSub = Boolean(worktree.issueNumber && (onOpenIssuePortal || onOpenIssueExternal));
+  const hasPRSub = Boolean(worktree.prNumber && (onOpenPRPortal || onOpenPRExternal));
   const hasIssueOrPrSection = hasIssueSub || hasPRSub;
   const hasRecipes = recipes.length > 0;
   const hasRecipeSection = hasRecipes || (onSaveLayout && counts.active > 0);
@@ -327,7 +327,7 @@ export function WorktreeMenuItems({
             Open Issue #{worktree.issueNumber}
           </C.SubTrigger>
           <C.SubContent>
-            {onOpenIssueSidecar && <C.Item onSelect={onOpenIssueSidecar}>In Sidecar</C.Item>}
+            {onOpenIssuePortal && <C.Item onSelect={onOpenIssuePortal}>In Portal</C.Item>}
             {onOpenIssueExternal && (
               <C.Item onSelect={onOpenIssueExternal}>In External Browser</C.Item>
             )}
@@ -341,7 +341,7 @@ export function WorktreeMenuItems({
             Open PR #{worktree.prNumber}
           </C.SubTrigger>
           <C.SubContent>
-            {onOpenPRSidecar && <C.Item onSelect={onOpenPRSidecar}>In Sidecar</C.Item>}
+            {onOpenPRPortal && <C.Item onSelect={onOpenPRPortal}>In Portal</C.Item>}
             {onOpenPRExternal && <C.Item onSelect={onOpenPRExternal}>In External Browser</C.Item>}
           </C.SubContent>
         </C.Sub>

@@ -713,9 +713,9 @@ export function registerWorktreeActions(actions: ActionRegistry, callbacks: Acti
     },
   }));
 
-  actions.set("worktree.openPRInSidecar", () => ({
-    id: "worktree.openPRInSidecar",
-    title: "Open Worktree PR in Sidecar",
+  actions.set("worktree.openPRInPortal", () => ({
+    id: "worktree.openPRInPortal",
+    title: "Open Worktree PR in Portal",
     description: "Open the worktree's GitHub pull request in the integrated browser",
     category: "worktree",
     kind: "command",
@@ -743,7 +743,7 @@ export function registerWorktreeActions(actions: ActionRegistry, callbacks: Acti
 
       const { actionService } = await import("@/services/ActionService");
       await actionService.dispatch(
-        "sidecar.openUrl",
+        "portal.openUrl",
         {
           url: worktree.prUrl,
           title: worktree.prTitle || `PR #${worktree.prNumber}`,
@@ -776,9 +776,9 @@ export function registerWorktreeActions(actions: ActionRegistry, callbacks: Acti
     },
   }));
 
-  actions.set("worktree.openIssueInSidecar", () => ({
-    id: "worktree.openIssueInSidecar",
-    title: "Open Worktree Issue in Sidecar",
+  actions.set("worktree.openIssueInPortal", () => ({
+    id: "worktree.openIssueInPortal",
+    title: "Open Worktree Issue in Portal",
     description: "Open the worktree's GitHub issue in the integrated browser",
     category: "worktree",
     kind: "command",
@@ -798,7 +798,7 @@ export function registerWorktreeActions(actions: ActionRegistry, callbacks: Acti
 
       const { actionService } = await import("@/services/ActionService");
       await actionService.dispatch(
-        "sidecar.openUrl",
+        "portal.openUrl",
         {
           url: issueUrl,
           title: worktree.issueTitle || `Issue #${worktree.issueNumber}`,

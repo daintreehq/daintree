@@ -4,7 +4,7 @@ import { Sidebar } from "./Sidebar";
 import { TerminalDockRegion } from "./TerminalDockRegion";
 import { DiagnosticsDock } from "../Diagnostics";
 import { ErrorBoundary } from "../ErrorBoundary";
-import { SidecarDock, SidecarVisibilityController } from "../Sidecar";
+import { PortalDock, PortalVisibilityController } from "../Portal";
 import { ProjectSettingsDialog, ProjectSwitchOverlay } from "@/components/Project";
 import { ChordIndicator } from "./ChordIndicator";
 import { DemoCursor } from "../Demo";
@@ -217,13 +217,13 @@ export function AppLayout({
   }, [handleToggleFocusMode]);
 
   useEffect(() => {
-    const handleSidecarToggle = () => {
-      layout.toggleSidecar();
+    const handlePortalToggle = () => {
+      layout.togglePortal();
     };
 
-    window.addEventListener("canopy:toggle-sidecar", handleSidecarToggle);
-    return () => window.removeEventListener("canopy:toggle-sidecar", handleSidecarToggle);
-  }, [layout.toggleSidecar]);
+    window.addEventListener("canopy:toggle-portal", handlePortalToggle);
+    return () => window.removeEventListener("canopy:toggle-portal", handlePortalToggle);
+  }, [layout.togglePortal]);
 
   useEffect(() => {
     const handleOpenProjectSettings = () => setIsProjectSettingsOpen(true);
@@ -244,8 +244,8 @@ export function AppLayout({
   }, [layout.isFocusMode]);
 
   useEffect(() => {
-    useMacroFocusStore.getState().setVisibility("sidecar", layout.sidecarOpen);
-  }, [layout.sidecarOpen]);
+    useMacroFocusStore.getState().setVisibility("portal", layout.portalOpen);
+  }, [layout.portalOpen]);
 
   // Clear macro focus on mouse interaction
   useEffect(() => {
@@ -255,10 +255,10 @@ export function AppLayout({
   }, []);
 
   useEffect(() => {
-    if (!layout.sidecarOpen) {
-      window.electron.sidecar.hide();
+    if (!layout.portalOpen) {
+      window.electron.portal.hide();
     }
-  }, [layout.sidecarOpen]);
+  }, [layout.portalOpen]);
 
   const handleSidebarResize = useCallback((newWidth: number) => {
     const clampedWidth = Math.min(Math.max(newWidth, MIN_SIDEBAR_WIDTH), MAX_SIDEBAR_WIDTH);
@@ -279,13 +279,13 @@ export function AppLayout({
   const effectiveSidebarWidth = layout.isFocusMode ? 0 : sidebarWidth;
 
   useEffect(() => {
-    const offset = layout.sidecarOpen ? `${layout.sidecarWidth}px` : "0px";
-    document.body.style.setProperty("--sidecar-right-offset", offset);
+    const offset = layout.portalOpen ? `${layout.portalWidth}px` : "0px";
+    document.body.style.setProperty("--portal-right-offset", offset);
 
     return () => {
-      document.body.style.removeProperty("--sidecar-right-offset");
+      document.body.style.removeProperty("--portal-right-offset");
     };
-  }, [layout.sidecarOpen, layout.sidecarWidth]);
+  }, [layout.portalOpen, layout.portalWidth]);
 
   return (
     <div
@@ -299,7 +299,7 @@ export function AppLayout({
         color: "var(--color-canopy-text)",
       }}
     >
-      <SidecarVisibilityController />
+      <PortalVisibilityController />
       <Toolbar
         onLaunchAgent={handleLaunchAgent}
         onSettings={handleSettings}
@@ -340,10 +340,10 @@ export function AppLayout({
               <div className="flex-1 overflow-hidden min-h-0">{children}</div>
               {/* Terminal Dock Region - manages dock visibility and overlays */}
               <TerminalDockRegion />
-              {layout.sidecarOpen && (
-                <ErrorBoundary variant="section" componentName="SidecarDock">
+              {layout.portalOpen && (
+                <ErrorBoundary variant="section" componentName="PortalDock">
                   <div className="absolute right-0 top-0 bottom-0 z-50 shadow-2xl border-l border-canopy-border">
-                    <SidecarDock />
+                    <PortalDock />
                   </div>
                 </ErrorBoundary>
               )}

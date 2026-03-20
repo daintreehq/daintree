@@ -2,8 +2,8 @@ import { useEffect, useId, useRef, useState } from "react";
 import { Plus, Trash2, Globe, Check, X, Search, PanelRight, Link, Maximize2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
-import { useSidecarStore } from "@/store/sidecarStore";
-import { SIDECAR_MIN_WIDTH, SIDECAR_MAX_WIDTH, SIDECAR_DEFAULT_WIDTH } from "@shared/types";
+import { usePortalStore } from "@/store/portalStore";
+import { PORTAL_MIN_WIDTH, PORTAL_MAX_WIDTH, PORTAL_DEFAULT_WIDTH } from "@shared/types";
 import { getAgentConfig, isRegisteredAgent } from "@/config/agents";
 import { actionService } from "@/services/ActionService";
 import { SettingsSection } from "./SettingsSection";
@@ -46,10 +46,10 @@ function FaviconIcon({ url }: { url: string }) {
   }
 }
 
-export function SidecarSettingsTab() {
-  const links = useSidecarStore((s) => s.links);
-  const width = useSidecarStore((s) => s.width);
-  const defaultNewTabUrl = useSidecarStore((s) => s.defaultNewTabUrl);
+export function PortalSettingsTab() {
+  const links = usePortalStore((s) => s.links);
+  const width = usePortalStore((s) => s.width);
+  const defaultNewTabUrl = usePortalStore((s) => s.defaultNewTabUrl);
   const [newLinkName, setNewLinkName] = useState("");
   const [newLinkUrl, setNewLinkUrl] = useState("");
   const [editingLinkId, setEditingLinkId] = useState<string | null>(null);
@@ -64,7 +64,7 @@ export function SidecarSettingsTab() {
   const customUrlErrorId = useId();
   const addLinkErrorId = useId();
 
-  const clampWidth = (v: number) => Math.min(SIDECAR_MAX_WIDTH, Math.max(SIDECAR_MIN_WIDTH, v));
+  const clampWidth = (v: number) => Math.min(PORTAL_MAX_WIDTH, Math.max(PORTAL_MIN_WIDTH, v));
 
   useEffect(() => {
     if (!isAdjustingWidthRef.current) setLocalWidth(width);
@@ -91,7 +91,7 @@ export function SidecarSettingsTab() {
     }
 
     void actionService.dispatch(
-      "sidecar.links.add",
+      "portal.links.add",
       {
         title: newLinkName,
         url: newLinkUrl,
@@ -131,7 +131,7 @@ export function SidecarSettingsTab() {
     }
 
     void actionService.dispatch(
-      "sidecar.links.update",
+      "portal.links.update",
       { id: editingLinkId, updates: { title: editName, url: editUrl } },
       { source: "user" }
     );
@@ -155,7 +155,7 @@ export function SidecarSettingsTab() {
 
   const handleDefaultAgentChange = (value: string) => {
     if (value === "none") {
-      void actionService.dispatch("sidecar.setDefaultNewTab", { url: null }, { source: "user" });
+      void actionService.dispatch("portal.setDefaultNewTab", { url: null }, { source: "user" });
       setShowCustomUrlInput(false);
       setCustomDefaultUrl("");
       setCustomUrlError("");
@@ -165,7 +165,7 @@ export function SidecarSettingsTab() {
         setCustomDefaultUrl(defaultNewTabUrl);
       }
     } else {
-      void actionService.dispatch("sidecar.setDefaultNewTab", { url: value }, { source: "user" });
+      void actionService.dispatch("portal.setDefaultNewTab", { url: value }, { source: "user" });
       setShowCustomUrlInput(false);
       setCustomDefaultUrl("");
       setCustomUrlError("");
@@ -184,7 +184,7 @@ export function SidecarSettingsTab() {
         return;
       }
       void actionService.dispatch(
-        "sidecar.setDefaultNewTab",
+        "portal.setDefaultNewTab",
         { url: customDefaultUrl },
         { source: "user" }
       );
@@ -273,7 +273,7 @@ export function SidecarSettingsTab() {
           <button
             onClick={() =>
               void actionService.dispatch(
-                "sidecar.links.toggle",
+                "portal.links.toggle",
                 { id: link.id },
                 { source: "user" }
               )
@@ -296,7 +296,7 @@ export function SidecarSettingsTab() {
             <button
               onClick={() =>
                 void actionService.dispatch(
-                  "sidecar.links.remove",
+                  "portal.links.remove",
                   { id: link.id },
                   { source: "user" }
                 )
@@ -402,7 +402,7 @@ export function SidecarSettingsTab() {
       <SettingsSection
         icon={Link}
         title="Default Links"
-        description="Built-in agent and service links. Toggle visibility in the sidecar tab bar."
+        description="Built-in agent and service links. Toggle visibility in the portal tab bar."
       >
         <div className="space-y-2">{systemLinks.map((link) => renderLinkRow(link, false))}</div>
       </SettingsSection>
@@ -461,14 +461,14 @@ export function SidecarSettingsTab() {
       <SettingsSection
         icon={Maximize2}
         title="Default Width"
-        description="Set the default width of the sidecar panel. You can still resize it manually."
+        description="Set the default width of the portal panel. You can still resize it manually."
       >
         <div className="space-y-3">
           <div className="flex items-center gap-4">
             <input
               type="range"
-              min={SIDECAR_MIN_WIDTH}
-              max={SIDECAR_MAX_WIDTH}
+              min={PORTAL_MIN_WIDTH}
+              max={PORTAL_MAX_WIDTH}
               value={localWidth}
               onChange={(e) => setLocalWidth(clampWidth(Number(e.currentTarget.value)))}
               onPointerDown={() => {
@@ -477,7 +477,7 @@ export function SidecarSettingsTab() {
               onPointerUp={(e) => {
                 isAdjustingWidthRef.current = false;
                 void actionService.dispatch(
-                  "sidecar.width.set",
+                  "portal.width.set",
                   { width: clampWidth(Number(e.currentTarget.value)) },
                   { source: "user" }
                 );
@@ -485,13 +485,13 @@ export function SidecarSettingsTab() {
               onBlur={(e) => {
                 isAdjustingWidthRef.current = false;
                 void actionService.dispatch(
-                  "sidecar.width.set",
+                  "portal.width.set",
                   { width: clampWidth(Number(e.currentTarget.value)) },
                   { source: "user" }
                 );
               }}
               className="flex-1 h-2 bg-canopy-border rounded-lg appearance-none cursor-pointer accent-canopy-accent"
-              aria-label="Default sidecar width"
+              aria-label="Default portal width"
             />
             <span className="text-sm font-mono text-canopy-text/70 w-16 text-right">
               {localWidth}px
@@ -502,23 +502,23 @@ export function SidecarSettingsTab() {
             <div
               className="h-full bg-canopy-accent/30 transition-all"
               style={{
-                width: `${Math.max(0, Math.min(100, ((localWidth - SIDECAR_MIN_WIDTH) / (SIDECAR_MAX_WIDTH - SIDECAR_MIN_WIDTH)) * 100))}%`,
+                width: `${Math.max(0, Math.min(100, ((localWidth - PORTAL_MIN_WIDTH) / (PORTAL_MAX_WIDTH - PORTAL_MIN_WIDTH)) * 100))}%`,
               }}
             />
           </div>
 
           <div className="flex justify-between text-[11px] text-canopy-text/40">
-            <span>{SIDECAR_MIN_WIDTH}px (min)</span>
+            <span>{PORTAL_MIN_WIDTH}px (min)</span>
             <button
               onClick={() => {
-                setLocalWidth(SIDECAR_DEFAULT_WIDTH);
-                void actionService.dispatch("sidecar.resetWidth", undefined, { source: "user" });
+                setLocalWidth(PORTAL_DEFAULT_WIDTH);
+                void actionService.dispatch("portal.resetWidth", undefined, { source: "user" });
               }}
               className="hover:text-canopy-text/70 transition-colors"
             >
-              Reset to {SIDECAR_DEFAULT_WIDTH}px
+              Reset to {PORTAL_DEFAULT_WIDTH}px
             </button>
-            <span>{SIDECAR_MAX_WIDTH}px (max)</span>
+            <span>{PORTAL_MAX_WIDTH}px (max)</span>
           </div>
         </div>
       </SettingsSection>

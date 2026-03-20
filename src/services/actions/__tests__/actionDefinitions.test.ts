@@ -43,7 +43,7 @@ describe("createActionDefinitions", () => {
     expect(actions.has("github.openIssues")).toBe(true);
     expect(actions.has("github.openPRs")).toBe(true);
     expect(actions.has("app.developerMode.set")).toBe(true);
-    expect(actions.has("sidecar.openLaunchpad")).toBe(true);
+    expect(actions.has("portal.openLaunchpad")).toBe(true);
     expect(actions.has("browser.navigate")).toBe(true);
     expect(actions.has("browser.back")).toBe(true);
     expect(actions.has("browser.forward")).toBe(true);
