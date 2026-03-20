@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AppPaletteDialog } from "@/components/ui/AppPaletteDialog";
 import { usePaletteStore } from "@/store/paletteStore";
 import { useTerminalStore } from "@/store/terminalStore";
