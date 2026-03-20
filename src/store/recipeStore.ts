@@ -293,7 +293,11 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
     const results: RecipeSpawnResults = { spawned: [], failed: [] };
 
     for (const index of indicesToSpawn) {
-      const terminal = recipe.terminals[index]!;
+      const terminal = recipe.terminals[index];
+      if (!terminal) {
+        results.failed.push({ index, error: `Terminal index ${index} out of bounds` });
+        continue;
+      }
       try {
         // Handle dev-preview terminals
         if (terminal.type === "dev-preview") {
