@@ -321,6 +321,7 @@ export function BulkCreateWorktreeDialog({
   });
   const queueRef = useRef<PQueue | null>(null);
   const runIdRef = useRef(0);
+  const isExecutingRef = useRef(false);
 
   // Shared preferences (same store as single create dialog)
   const assignWorktreeToSelf = usePreferencesStore((s) => s.assignWorktreeToSelf);
@@ -698,26 +699,33 @@ export function BulkCreateWorktreeDialog({
   );
 
   const handleCreate = useCallback(async () => {
-    const toCreate = planned.filter((p) => !p.skipped);
-    if (toCreate.length === 0) {
-      notify({
-        type: "info",
-        title: "Nothing to Create",
-        message: "All selected issues already have worktrees or are closed",
+    if (isExecutingRef.current) return;
+    isExecutingRef.current = true;
+    try {
+      const toCreate = planned.filter((p) => !p.skipped);
+      if (toCreate.length === 0) {
+        notify({
+          type: "info",
+          title: "Nothing to Create",
+          message: "All selected issues already have worktrees or are closed",
+        });
+        return;
+      }
+
+      // Save recipe preference
+      if (recipeSelectionTouchedRef.current && projectId) {
+        setLastSelectedWorktreeRecipeIdByProject(projectId, selectedRecipeId);
+      }
+
+      batchTrackingRef.current = new Map();
+      dispatchProgress({
+        type: "START",
+        issueNumbers: toCreate.map((p) => p.issue.number),
       });
-      return;
+      await runBatch(toCreate);
+    } finally {
+      isExecutingRef.current = false;
     }
-
-    // Save recipe preference
-    if (recipeSelectionTouchedRef.current && projectId) {
-      setLastSelectedWorktreeRecipeIdByProject(projectId, selectedRecipeId);
-    }
-
-    dispatchProgress({
-      type: "START",
-      issueNumbers: toCreate.map((p) => p.issue.number),
-    });
-    await runBatch(toCreate);
   }, [
     planned,
     selectedRecipeId,
@@ -728,22 +736,28 @@ export function BulkCreateWorktreeDialog({
   ]);
 
   const handleRetryFailed = useCallback(async () => {
-    const failedIssueNumbers = new Set<number>();
-    for (const [issueNumber, item] of progress.items) {
-      if (
-        item.stage === "failed" ||
-        item.stage === "terminals-error" ||
-        item.stage === "worktree-error"
-      ) {
-        failedIssueNumbers.add(issueNumber);
+    if (isExecutingRef.current) return;
+    isExecutingRef.current = true;
+    try {
+      const failedIssueNumbers = new Set<number>();
+      for (const [issueNumber, item] of progress.items) {
+        if (
+          item.stage === "failed" ||
+          item.stage === "terminals-error" ||
+          item.stage === "worktree-error"
+        ) {
+          failedIssueNumbers.add(issueNumber);
+        }
       }
+      if (failedIssueNumbers.size === 0) return;
+
+      const toRetry = planned.filter((p) => !p.skipped && failedIssueNumbers.has(p.issue.number));
+
+      dispatchProgress({ type: "RETRY_FAILED" });
+      await runBatch(toRetry);
+    } finally {
+      isExecutingRef.current = false;
     }
-    if (failedIssueNumbers.size === 0) return;
-
-    const toRetry = planned.filter((p) => !p.skipped && failedIssueNumbers.has(p.issue.number));
-
-    dispatchProgress({ type: "RETRY_FAILED" });
-    await runBatch(toRetry);
   }, [progress.items, planned, runBatch]);
 
   const handleClose = useCallback(() => {
@@ -752,12 +766,15 @@ export function BulkCreateWorktreeDialog({
       queueRef.current?.clear();
       queueRef.current = null;
     }
+    isExecutingRef.current = false;
     dispatchProgress({ type: "RESET" });
+    batchTrackingRef.current = new Map();
     onClose();
   }, [isExecuting, onClose]);
 
   const handleDone = useCallback(() => {
     dispatchProgress({ type: "RESET" });
+    batchTrackingRef.current = new Map();
     onComplete();
     onClose();
   }, [onComplete, onClose]);
