@@ -353,6 +353,7 @@ export function WorktreeHeader({
             <TooltipTrigger asChild>
               <div
                 className="flex items-center gap-1.5 shrink-0"
+                role="img"
                 aria-label={sessionAriaLabel}
                 data-testid="collapsed-session-indicators"
               >

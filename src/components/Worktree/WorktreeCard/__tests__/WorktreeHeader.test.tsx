@@ -530,6 +530,25 @@ describe("WorktreeHeader collapsed session indicators", () => {
     renderHeader({ isCollapsed: true });
     expect(screen.queryByTestId("collapsed-session-indicators")).toBeNull();
   });
+
+  it("uses singular 'session' when sessionTotal is 1", () => {
+    renderHeader({
+      isCollapsed: true,
+      sessionTotal: 1,
+      sessionStates: { ...allZeroStates, working: 1 },
+    });
+    const container = screen.getByTestId("collapsed-session-indicators");
+    expect(container.getAttribute("aria-label")).toBe("1 session: 1 working");
+  });
+
+  it("does not render when all sessions are idle", () => {
+    renderHeader({
+      isCollapsed: true,
+      sessionTotal: 3,
+      sessionStates: { ...allZeroStates, idle: 3 },
+    });
+    expect(screen.queryByTestId("collapsed-session-indicators")).toBeNull();
+  });
 });
 
 describe("WorktreeHeader icon button hit targets", () => {
