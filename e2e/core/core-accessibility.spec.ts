@@ -5,7 +5,14 @@ import { createFixtureRepo } from "../helpers/fixtures";
 import { openAndOnboardProject } from "../helpers/project";
 import { getGridPanelCount } from "../helpers/panels";
 import { SEL } from "../helpers/selectors";
-import { T_SHORT, T_MEDIUM, T_LONG } from "../helpers/timeouts";
+import { T_SHORT, T_MEDIUM, T_LONG, T_SETTLE } from "../helpers/timeouts";
+import { ensureWindowFocused } from "../helpers/focus";
+import {
+  getActiveElementInfo,
+  elementKey,
+  escapeTerminalFocus,
+  hasVisibleFocusIndicator,
+} from "../helpers/keyboard-audit";
 
 let ctx: AppContext;
 const mod = process.platform === "darwin" ? "Meta" : "Control";
@@ -156,57 +163,260 @@ test.describe.serial("Core: Accessibility", () => {
           timeout: T_SHORT,
         });
       });
-    });
-  });
 
-  // -- Keyboard Navigation --
+      // -- Keyboard Navigation --
 
-  test.describe.serial("Keyboard Navigation", () => {
-    test("Cmd+, opens settings and focuses within the dialog", async () => {
-      const { window } = ctx;
+      test.describe.serial("Keyboard Navigation", () => {
+        test("Cmd+, opens settings and focuses within the dialog", async () => {
+          const { window } = ctx;
 
-      // Focus a known element before opening settings so we can verify focus restoration
-      const settingsButton = window.locator(SEL.toolbar.openSettings);
-      await settingsButton.focus();
-      await expect(settingsButton).toBeFocused({ timeout: T_SHORT });
+          const settingsButton = window.locator(SEL.toolbar.openSettings);
+          await settingsButton.focus();
+          await expect(settingsButton).toBeFocused({ timeout: T_SHORT });
 
-      await window.keyboard.press(`${mod}+,`);
-      const heading = window.locator(SEL.settings.heading);
-      await expect(heading).toBeVisible({ timeout: T_MEDIUM });
+          await window.keyboard.press(`${mod}+,`);
+          const heading = window.locator(SEL.settings.heading);
+          await expect(heading).toBeVisible({ timeout: T_MEDIUM });
 
-      // AppDialog focuses first tabbable element on open
-      const searchInput = window.locator(SEL.settings.searchInput);
-      await expect(searchInput).toBeFocused({ timeout: T_SHORT });
-    });
+          const searchInput = window.locator(SEL.settings.searchInput);
+          await expect(searchInput).toBeFocused({ timeout: T_SHORT });
+        });
 
-    test("Escape closes settings and restores focus to trigger", async () => {
-      const { window } = ctx;
+        test("Escape closes settings and restores focus to trigger", async () => {
+          const { window } = ctx;
 
-      await window.keyboard.press("Escape");
-      await expect(window.locator(SEL.settings.heading)).not.toBeVisible({ timeout: T_SHORT });
+          await window.keyboard.press("Escape");
+          await expect(window.locator(SEL.settings.heading)).not.toBeVisible({
+            timeout: T_SHORT,
+          });
 
-      // AppDialog restores focus to the previously focused element on close
-      const settingsButton = window.locator(SEL.toolbar.openSettings);
-      await expect(settingsButton).toBeFocused({ timeout: T_SHORT });
-    });
+          const settingsButton = window.locator(SEL.toolbar.openSettings);
+          await expect(settingsButton).toBeFocused({ timeout: T_SHORT });
+        });
 
-    test("toolbar supports arrow-key navigation", async () => {
-      const { window } = ctx;
+        test("toolbar supports arrow-key navigation", async () => {
+          const { window } = ctx;
 
-      // The toolbar uses role="toolbar" with roving tabindex and [data-toolbar-item] markers.
-      const toolbar = window.locator('[role="toolbar"]');
-      await expect(toolbar).toBeVisible({ timeout: T_SHORT });
+          const toolbar = window.locator('[role="toolbar"]');
+          await expect(toolbar).toBeVisible({ timeout: T_SHORT });
 
-      // Focus the first toolbar item (uses data-toolbar-item attribute for roving tabindex).
-      const firstItem = toolbar.locator("[data-toolbar-item]:not(:disabled)").first();
-      await firstItem.focus();
-      await expect(firstItem).toBeFocused({ timeout: T_SHORT });
+          const firstItem = toolbar.locator("[data-toolbar-item]:not(:disabled)").first();
+          await firstItem.focus();
+          await expect(firstItem).toBeFocused({ timeout: T_SHORT });
 
-      // ArrowRight should move focus to the next toolbar item
-      await window.keyboard.press("ArrowRight");
+          await window.keyboard.press("ArrowRight");
 
-      const secondItem = toolbar.locator("[data-toolbar-item]:not(:disabled)").nth(1);
-      await expect(secondItem).toBeFocused({ timeout: T_SHORT });
+          const secondItem = toolbar.locator("[data-toolbar-item]:not(:disabled)").nth(1);
+          await expect(secondItem).toBeFocused({ timeout: T_SHORT });
+        });
+
+        test("Tab-order crawl detects no unintentional focus traps", async () => {
+          const { window } = ctx;
+          await ensureWindowFocused(ctx.app);
+
+          // Start from a known toolbar element
+          const startEl = window.locator(SEL.toolbar.openSettings);
+          await startEl.focus();
+          await expect(startEl).toBeFocused({ timeout: T_SHORT });
+
+          const MAX_TABS = 200;
+          let consecutiveCount = 0;
+          let lastKey = "";
+          let recentKeys: string[] = [];
+          const visited = new Set<string>();
+          const traps: string[] = [];
+
+          for (let i = 0; i < MAX_TABS; i++) {
+            await window.keyboard.press("Tab");
+            // Small settle for CI stability
+            if (i % 20 === 0) await window.waitForTimeout(T_SETTLE / 5);
+
+            const info = await getActiveElementInfo(window);
+            if (!info) continue;
+
+            if (info.isTerminal) {
+              await escapeTerminalFocus(window);
+              consecutiveCount = 0;
+              lastKey = "";
+              recentKeys = [];
+              continue;
+            }
+
+            const key = elementKey(info);
+            visited.add(key);
+
+            // Track recent keys to detect both single-element traps and 2-element cycles
+            recentKeys.push(key);
+            if (recentKeys.length > 6) recentKeys.shift();
+
+            if (key === lastKey) {
+              consecutiveCount++;
+              // 4+ consecutive = trap (3 can happen at page boundaries)
+              if (consecutiveCount >= 4) {
+                traps.push(
+                  `Focus trap at Tab #${i}: ${info.tagName} role=${info.role} label="${info.ariaLabel}" text="${info.textContent}"`
+                );
+                break;
+              }
+            } else {
+              consecutiveCount = 1;
+              lastKey = key;
+            }
+
+            // Detect 2-element cycle: A-B-A-B-A-B-A-B
+            if (recentKeys.length >= 6) {
+              const [a, b, c, d, e, f] = recentKeys.slice(-6);
+              if (a === c && c === e && b === d && d === f && a !== b) {
+                traps.push(`Focus cycle at Tab #${i}: alternating between two elements`);
+                break;
+              }
+            }
+          }
+
+          expect(traps, `Unintentional focus traps detected:\n${traps.join("\n")}`).toEqual([]);
+          // Sanity check: we visited a reasonable number of unique elements
+          expect(visited.size).toBeGreaterThanOrEqual(3);
+        });
+
+        test("Action Palette traps focus correctly", async () => {
+          const { window } = ctx;
+
+          await window.keyboard.press(`${mod}+Shift+P`);
+          await expect(window.locator(SEL.actionPalette.dialog)).toBeVisible({
+            timeout: T_MEDIUM,
+          });
+          await expect(window.locator(SEL.actionPalette.searchInput)).toBeFocused({
+            timeout: T_SHORT,
+          });
+
+          try {
+            for (let i = 0; i < 5; i++) {
+              await window.keyboard.press("Tab");
+            }
+            const insideAfterTab = await window.evaluate((sel) => {
+              const dialog = document.querySelector(sel);
+              return dialog?.contains(document.activeElement) ?? false;
+            }, SEL.actionPalette.dialog);
+            expect(insideAfterTab, "Focus escaped Action Palette after Tab presses").toBe(true);
+
+            for (let i = 0; i < 5; i++) {
+              await window.keyboard.press("Shift+Tab");
+            }
+            const insideAfterShiftTab = await window.evaluate((sel) => {
+              const dialog = document.querySelector(sel);
+              return dialog?.contains(document.activeElement) ?? false;
+            }, SEL.actionPalette.dialog);
+            expect(insideAfterShiftTab, "Focus escaped Action Palette after Shift+Tab").toBe(true);
+          } finally {
+            await window.keyboard.press("Escape");
+            await expect(window.locator(SEL.actionPalette.dialog)).not.toBeVisible({
+              timeout: T_SHORT,
+            });
+          }
+        });
+
+        test("Quick Switcher traps focus correctly", async () => {
+          const { window } = ctx;
+
+          await window.keyboard.press(`${mod}+P`);
+          await expect(window.locator(SEL.quickSwitcher.dialog)).toBeVisible({
+            timeout: T_MEDIUM,
+          });
+          await expect(window.locator(SEL.quickSwitcher.searchInput)).toBeFocused({
+            timeout: T_SHORT,
+          });
+
+          try {
+            for (let i = 0; i < 5; i++) {
+              await window.keyboard.press("Tab");
+            }
+            const insideAfterTab = await window.evaluate((sel) => {
+              const dialog = document.querySelector(sel);
+              return dialog?.contains(document.activeElement) ?? false;
+            }, SEL.quickSwitcher.dialog);
+            expect(insideAfterTab, "Focus escaped Quick Switcher after Tab presses").toBe(true);
+
+            for (let i = 0; i < 5; i++) {
+              await window.keyboard.press("Shift+Tab");
+            }
+            const insideAfterShiftTab = await window.evaluate((sel) => {
+              const dialog = document.querySelector(sel);
+              return dialog?.contains(document.activeElement) ?? false;
+            }, SEL.quickSwitcher.dialog);
+            expect(insideAfterShiftTab, "Focus escaped Quick Switcher after Shift+Tab").toBe(true);
+          } finally {
+            await window.keyboard.press("Escape");
+            await expect(window.locator(SEL.quickSwitcher.dialog)).not.toBeVisible({
+              timeout: T_SHORT,
+            });
+          }
+        });
+
+        test("Settings dialog traps focus correctly", async () => {
+          const { window } = ctx;
+
+          await window.keyboard.press(`${mod}+,`);
+          await expect(window.locator(SEL.settings.heading)).toBeVisible({ timeout: T_MEDIUM });
+          await expect(window.locator(SEL.settings.searchInput)).toBeFocused({
+            timeout: T_SHORT,
+          });
+
+          try {
+            for (let i = 0; i < 10; i++) {
+              await window.keyboard.press("Tab");
+            }
+            const insideAfterTab = await window.evaluate(() => {
+              const dialog = document.querySelector('[aria-modal="true"]');
+              return dialog?.contains(document.activeElement) ?? false;
+            });
+            expect(insideAfterTab, "Focus escaped Settings dialog after Tab presses").toBe(true);
+
+            for (let i = 0; i < 10; i++) {
+              await window.keyboard.press("Shift+Tab");
+            }
+            const insideAfterShiftTab = await window.evaluate(() => {
+              const dialog = document.querySelector('[aria-modal="true"]');
+              return dialog?.contains(document.activeElement) ?? false;
+            });
+            expect(insideAfterShiftTab, "Focus escaped Settings dialog after Shift+Tab").toBe(true);
+          } finally {
+            await window.keyboard.press("Escape");
+            await expect(window.locator(SEL.settings.heading)).not.toBeVisible({
+              timeout: T_SHORT,
+            });
+          }
+        });
+
+        test("focused interactive elements have visible focus indicators", async () => {
+          const { window } = ctx;
+          await ensureWindowFocused(ctx.app);
+
+          const elementsToTest = [
+            { selector: SEL.toolbar.openSettings, name: "Settings button" },
+            { selector: SEL.toolbar.openTerminal, name: "Open Terminal button" },
+            { selector: SEL.toolbar.toggleSidebar, name: "Toggle Sidebar button" },
+          ];
+
+          const failures: string[] = [];
+
+          for (const { selector, name } of elementsToTest) {
+            const loc = window.locator(selector);
+            if (!(await loc.isVisible())) continue;
+
+            await loc.focus();
+            await expect(loc).toBeFocused({ timeout: T_SHORT });
+
+            const hasIndicator = await hasVisibleFocusIndicator(window);
+            if (!hasIndicator) {
+              failures.push(`${name} (${selector}) has no visible focus indicator`);
+            }
+          }
+
+          expect(failures, `Elements missing focus indicators:\n${failures.join("\n")}`).toEqual(
+            []
+          );
+        });
+      });
     });
   });
 });
