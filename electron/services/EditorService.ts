@@ -20,6 +20,8 @@ const KNOWN_EDITORS: EditorDefinition[] = [
     id: "vscode",
     name: "VS Code",
     binaries: ["code"],
+    extraDirs: () =>
+      macAppBundleDirs([{ name: "Visual Studio Code", subPath: "Contents/Resources/app/bin" }]),
     buildArgs(filePath, line, col) {
       const target =
         line !== undefined ? `${filePath}:${line}${col !== undefined ? `:${col}` : ""}` : filePath;
@@ -30,6 +32,10 @@ const KNOWN_EDITORS: EditorDefinition[] = [
     id: "vscode-insiders",
     name: "VS Code Insiders",
     binaries: ["code-insiders"],
+    extraDirs: () =>
+      macAppBundleDirs([
+        { name: "Visual Studio Code - Insiders", subPath: "Contents/Resources/app/bin" },
+      ]),
     buildArgs(filePath, line, col) {
       const target =
         line !== undefined ? `${filePath}:${line}${col !== undefined ? `:${col}` : ""}` : filePath;
@@ -40,6 +46,7 @@ const KNOWN_EDITORS: EditorDefinition[] = [
     id: "cursor",
     name: "Cursor",
     binaries: ["cursor"],
+    extraDirs: () => macAppBundleDirs([{ name: "Cursor", subPath: "Contents/Resources/app/bin" }]),
     buildArgs(filePath, line, col) {
       const target =
         line !== undefined ? `${filePath}:${line}${col !== undefined ? `:${col}` : ""}` : filePath;
@@ -50,6 +57,8 @@ const KNOWN_EDITORS: EditorDefinition[] = [
     id: "windsurf",
     name: "Windsurf",
     binaries: ["windsurf"],
+    extraDirs: () =>
+      macAppBundleDirs([{ name: "Windsurf", subPath: "Contents/Resources/app/bin" }]),
     buildArgs(filePath, line, col) {
       const target =
         line !== undefined ? `${filePath}:${line}${col !== undefined ? `:${col}` : ""}` : filePath;
@@ -80,8 +89,33 @@ const KNOWN_EDITORS: EditorDefinition[] = [
   {
     id: "webstorm",
     name: "WebStorm / IntelliJ",
-    binaries: ["webstorm", "idea", "phpstorm", "pycharm", "goland", "rider"],
-    extraDirs: () => jetbrainsToolboxScriptDirs(),
+    binaries: [
+      "webstorm",
+      "idea",
+      "phpstorm",
+      "pycharm",
+      "goland",
+      "rider",
+      "clion",
+      "datagrip",
+      "rubymine",
+    ],
+    extraDirs: () => [
+      ...jetbrainsToolboxScriptDirs(),
+      ...macAppBundleDirs([
+        { name: "WebStorm" },
+        { name: "IntelliJ IDEA" },
+        { name: "IntelliJ IDEA CE" },
+        { name: "PhpStorm" },
+        { name: "PyCharm" },
+        { name: "PyCharm CE" },
+        { name: "GoLand" },
+        { name: "Rider" },
+        { name: "CLion" },
+        { name: "DataGrip" },
+        { name: "RubyMine" },
+      ]),
+    ],
     buildArgs(filePath, line) {
       if (line !== undefined) {
         return ["--line", String(line), filePath];
@@ -93,6 +127,8 @@ const KNOWN_EDITORS: EditorDefinition[] = [
     id: "sublime",
     name: "Sublime Text",
     binaries: ["subl"],
+    extraDirs: () =>
+      macAppBundleDirs([{ name: "Sublime Text", subPath: "Contents/SharedSupport/bin" }]),
     buildArgs(filePath, line, col) {
       const target =
         line !== undefined ? `${filePath}:${line}${col !== undefined ? `:${col}` : ""}` : filePath;
@@ -100,6 +136,16 @@ const KNOWN_EDITORS: EditorDefinition[] = [
     },
   },
 ];
+
+function macAppBundleDirs(apps: Array<{ name: string; subPath?: string }>): string[] {
+  if (process.platform !== "darwin") return [];
+  const dirs: string[] = [];
+  for (const { name, subPath = "Contents/MacOS" } of apps) {
+    dirs.push(path.join("/Applications", `${name}.app`, subPath));
+    dirs.push(path.join(os.homedir(), "Applications", `${name}.app`, subPath));
+  }
+  return dirs;
+}
 
 function jetbrainsToolboxScriptDirs(): string[] {
   const dirs: string[] = [];
