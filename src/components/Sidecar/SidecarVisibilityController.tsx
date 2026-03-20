@@ -1,6 +1,7 @@
 import { useEffect, useRef, useCallback } from "react";
 import { useSidecarStore } from "@/store";
 import { useUIStore } from "@/store/uiStore";
+import { getSidecarPlaceholderBounds } from "@/lib/sidecarBounds";
 
 /**
  * Zero-UI controller component that manages sidecar visibility.
@@ -49,17 +50,7 @@ export function SidecarVisibilityController(): null {
           }
         }
 
-        const getBounds = () => {
-          const placeholder = document.getElementById("sidecar-placeholder");
-          if (!placeholder) return null;
-          const rect = placeholder.getBoundingClientRect();
-          return {
-            x: Math.round(rect.x),
-            y: Math.round(rect.y),
-            width: Math.round(rect.width),
-            height: Math.round(rect.height),
-          };
-        };
+        const getBounds = () => getSidecarPlaceholderBounds();
 
         let bounds = getBounds();
         let attempts = 0;
