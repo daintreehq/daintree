@@ -1477,4 +1477,19 @@ if (typeof window !== "undefined") {
     if (!managed) return 0;
     return managed.terminal.buffer.active.length;
   };
+
+  (window as unknown as Record<string, unknown>).__canopyTriggerTerminalLink = (
+    panelId: string,
+    url: string
+  ): string => {
+    const managed = terminalInstanceService["instances"].get(panelId);
+    if (!managed) return "missing-panel";
+    const isMac = navigator.platform.toLowerCase().includes("mac");
+    const syntheticEvent = new MouseEvent("click", {
+      metaKey: isMac,
+      ctrlKey: !isMac,
+    });
+    terminalInstanceService["linkHandler"].openLink(url, panelId, syntheticEvent);
+    return "ok";
+  };
 }
