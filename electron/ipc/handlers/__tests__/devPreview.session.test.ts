@@ -14,6 +14,12 @@ vi.mock("electron", () => ({
 
 const scanOutputMock = vi.fn();
 
+vi.mock("../../../services/HibernationService.js", () => ({
+  getHibernationService: () => ({
+    onProjectHibernated: vi.fn(() => () => {}),
+  }),
+}));
+
 vi.mock("../../../services/UrlDetector.js", () => ({
   UrlDetector: class MockUrlDetector {
     scanOutput = scanOutputMock;
