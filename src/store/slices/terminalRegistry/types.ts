@@ -169,6 +169,7 @@ export interface TerminalRegistrySlice {
     location: "grid" | "dock",
     worktreeId?: string | null
   ) => void;
+  restoreTerminalOrder: (orderedIds: string[]) => void;
 
   restartTerminal: (id: string) => Promise<void>;
   clearTerminalError: (id: string) => void;
