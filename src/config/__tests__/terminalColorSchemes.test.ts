@@ -9,8 +9,8 @@ import {
 } from "../terminalColorSchemes";
 
 describe("terminalColorSchemes", () => {
-  it("has exactly 25 built-in schemes", () => {
-    expect(BUILT_IN_SCHEMES).toHaveLength(25);
+  it("has exactly 26 built-in schemes", () => {
+    expect(BUILT_IN_SCHEMES).toHaveLength(26);
   });
 
   it("all schemes have unique IDs", () => {
@@ -34,9 +34,9 @@ describe("terminalColorSchemes", () => {
     expect(getSchemeById(DEFAULT_SCHEME_ID)!.name).toBe("Match App Theme");
   });
 
-  it("has 7 light schemes", () => {
+  it("has 8 light schemes", () => {
     const lightSchemes = BUILT_IN_SCHEMES.filter((s) => s.type === "light");
-    expect(lightSchemes).toHaveLength(7);
+    expect(lightSchemes).toHaveLength(8);
   });
 
   it("getSchemeById returns undefined for unknown ID", () => {
@@ -80,6 +80,7 @@ describe("terminalColorSchemes", () => {
     expect(new Set(Object.values(APP_THEME_TERMINAL_SCHEME_MAP))).toEqual(
       new Set([
         "atom-one-light",
+        "bondi",
         "canopy-ember",
         "daintree",
         "fiordland",
