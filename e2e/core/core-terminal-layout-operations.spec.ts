@@ -156,15 +156,15 @@ test.describe.serial("Core: Terminal Layout Operations", () => {
       await dispatchAction(window, "terminal.gridLayout.setStrategy", {
         strategy: "fixed-rows",
       });
-      await dispatchAction(window, "terminal.gridLayout.setValue", { value: 1 });
+      await dispatchAction(window, "terminal.gridLayout.setValue", { value: 3 });
 
-      // With 3 panels and 1 row, columns = ceil(3/1) = 3
+      // With 3 panels and 3 rows, columns = ceil(3/3) = 1
       const grid = window.locator("#terminal-grid");
       await expect
         .poll(
           async () => {
             const style = await grid.getAttribute("style");
-            return style?.includes("repeat(3, 1fr)");
+            return style?.includes("repeat(1, 1fr)");
           },
           { timeout: T_MEDIUM }
         )
@@ -174,13 +174,22 @@ test.describe.serial("Core: Terminal Layout Operations", () => {
     test("restore automatic layout strategy", async () => {
       const { window } = ctx;
 
+      // Previous strategy was fixed-rows with 1 column — automatic should differ
       await dispatchAction(window, "terminal.gridLayout.setStrategy", {
         strategy: "automatic",
       });
 
-      // Just verify the action completes and grid still renders
       const grid = window.locator("#terminal-grid");
-      await expect(grid).toBeVisible({ timeout: T_MEDIUM });
+      await expect
+        .poll(
+          async () => {
+            const style = await grid.getAttribute("style");
+            // Automatic with 3 panels should not produce 1 column
+            return style != null && !style.includes("repeat(1, 1fr)");
+          },
+          { timeout: T_MEDIUM }
+        )
+        .toBe(true);
     });
   });
 
@@ -199,39 +208,50 @@ test.describe.serial("Core: Terminal Layout Operations", () => {
       }
 
       await expect.poll(() => getGridPanelCount(window), { timeout: T_MEDIUM }).toBe(0);
-      await expect
-        .poll(() => getDockPanelCount(window), { timeout: T_MEDIUM })
-        .toBeGreaterThanOrEqual(3);
+      await expect.poll(() => getDockPanelCount(window), { timeout: T_MEDIUM }).toBe(3);
 
       dockIds = await getDockPanelIds(window);
-      expect(dockIds.length).toBeGreaterThanOrEqual(3);
+      expect(dockIds).toHaveLength(3);
     });
 
     test("click dock item opens popover with terminal content", async () => {
       const { window } = ctx;
 
+      // Dismiss any auto-opened popover first
+      await window.keyboard.press("Escape");
+      await window.waitForTimeout(T_SETTLE);
+      await expect(window.locator("[data-dock-portal-target]")).not.toBeVisible({
+        timeout: T_SHORT,
+      });
+
+      // Click first dock item and verify its popover opens
       const dock = window.locator(SEL.dock.container);
-      const firstButton = dock.locator("button").first();
+      const firstButton = dock.locator(`[aria-label*="Click to preview"]`).first();
       await firstButton.click();
 
-      const portalTarget = window.locator("[data-dock-portal-target]");
+      const portalTarget = window.locator(`[data-dock-portal-target="${dockIds[0]}"]`);
       await expect(portalTarget).toBeVisible({ timeout: T_MEDIUM });
     });
 
     test("click different dock item switches active panel", async () => {
       const { window } = ctx;
 
+      // Click a different dock item
       const dock = window.locator(SEL.dock.container);
-      const buttons = dock.locator("button");
+      const buttons = dock.locator(`[aria-label*="Click to preview"]`);
       const count = await buttons.count();
       expect(count).toBeGreaterThanOrEqual(2);
 
-      // Click the second dock button
       await buttons.nth(1).click();
       await window.waitForTimeout(T_SETTLE);
 
-      const portalTarget = window.locator("[data-dock-portal-target]");
-      await expect(portalTarget).toBeVisible({ timeout: T_MEDIUM });
+      // The new panel's portal target should be visible
+      const newPortal = window.locator(`[data-dock-portal-target="${dockIds[1]}"]`);
+      await expect(newPortal).toBeVisible({ timeout: T_MEDIUM });
+
+      // The previous panel's portal target should be hidden
+      const oldPortal = window.locator(`[data-dock-portal-target="${dockIds[0]}"]`);
+      await expect(oldPortal).not.toBeVisible({ timeout: T_SHORT });
     });
 
     test.afterAll(async () => {
