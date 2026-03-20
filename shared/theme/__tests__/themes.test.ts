@@ -770,11 +770,11 @@ describe("Hokkaido built-in scheme", () => {
   });
 
   it("uses the cool grey-white canvas", () => {
-    expect(hokkaido.tokens["surface-canvas"]).toBe("#EEF3F7");
+    expect(hokkaido.tokens["surface-canvas"]).toBe("#ECF1F6");
   });
 
   it("has stepped surface hierarchy with panel lighter than canvas", () => {
-    expect(hokkaido.tokens["surface-panel"]).toBe("#FAFCFD");
+    expect(hokkaido.tokens["surface-panel"]).toBe("#F5F8FB");
     expect(hokkaido.tokens["surface-sidebar"]).toBe("#DDE6EE");
     expect(hokkaido.tokens["surface-grid"]).toBe("#CDD9E3");
   });
@@ -804,22 +804,25 @@ describe("Hokkaido built-in scheme", () => {
 
   it.each([
     ["syntax-keyword", "#795293", 4.5],
-    ["syntax-string", "#B94665", 4.5],
+    ["syntax-string", "#B34060", 4.5],
     ["syntax-comment", "#526D7E", 4.5],
     ["syntax-number", "#2E5E82", 4.5],
     ["syntax-operator", "#006A71", 4.5],
     ["syntax-function", "#2D7A52", 4.5],
     ["syntax-punctuation", "#3A4D5C", 4.5],
     ["syntax-quote", "#526D7E", 4.5],
-  ] as const)("%s (%s) meets WCAG AA contrast (≥%s:1) on canvas", (token, _hex, minimum) => {
-    const fg = hokkaido.tokens[token];
-    const bg = hokkaido.tokens["surface-canvas"];
-    const ratio = wcagContrastRatio(fg, bg);
-    expect(
-      ratio,
-      `${token} "${fg}" on canvas "${bg}" = ${ratio.toFixed(2)}:1, needs ≥${minimum}:1`
-    ).toBeGreaterThanOrEqual(minimum);
-  });
+  ] as const)(
+    "%s (%s) meets WCAG AA contrast (≥%s:1) on canvas",
+    (token, _hex, minimum: number) => {
+      const fg = hokkaido.tokens[token];
+      const bg = hokkaido.tokens["surface-canvas"];
+      const ratio = wcagContrastRatio(fg, bg);
+      expect(
+        ratio,
+        `${token} "${fg}" on canvas "${bg}" = ${ratio.toFixed(2)}:1, needs ≥${minimum}:1`
+      ).toBeGreaterThanOrEqual(minimum);
+    }
+  );
 });
 
 describe("built-in schemes — Svalbard light theme", () => {
@@ -1067,6 +1070,148 @@ describe("built-in schemes — Atacama light theme", () => {
     const ids = BUILT_IN_APP_SCHEMES.map((s) => s.id);
     expect(new Set(ids).size).toBe(ids.length);
   });
+});
+
+function oklchLightness(hex: string): number {
+  function toLinear(ch: number): number {
+    const n = ch / 255;
+    return n <= 0.04045 ? n / 12.92 : ((n + 0.055) / 1.055) ** 2.4;
+  }
+  const c = hex.replace("#", "");
+  const e =
+    c.length === 3
+      ? c
+          .split("")
+          .map((ch) => `${ch}${ch}`)
+          .join("")
+      : c;
+  const r = toLinear(parseInt(e.slice(0, 2), 16));
+  const g = toLinear(parseInt(e.slice(2, 4), 16));
+  const b = toLinear(parseInt(e.slice(4, 6), 16));
+  const l = 0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b;
+  const m = 0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b;
+  const s = 0.0883024619 * r + 0.2817188976 * g + 0.6299786405 * b;
+  const lp = Math.cbrt(l),
+    mp = Math.cbrt(m),
+    sp = Math.cbrt(s);
+  return 0.2104542553 * lp + 0.793617785 * mp - 0.0040720468 * sp;
+}
+
+const LIGHT_THEME_IDS = ["atacama", "serengeti", "hokkaido", "svalbard"] as const;
+
+const ANSI_FOREGROUND_KEYS = [
+  "terminal-red",
+  "terminal-green",
+  "terminal-yellow",
+  "terminal-blue",
+  "terminal-magenta",
+  "terminal-cyan",
+  "terminal-bright-red",
+  "terminal-bright-green",
+  "terminal-bright-yellow",
+  "terminal-bright-blue",
+  "terminal-bright-magenta",
+  "terminal-bright-cyan",
+  "terminal-bright-white",
+  "terminal-black",
+] as const;
+
+describe("light theme surface OKLCH L deltas (>= 0.02)", () => {
+  for (const id of LIGHT_THEME_IDS) {
+    const theme = BUILT_IN_APP_SCHEMES.find((s) => s.id === id)!;
+
+    it(`${id}: sidebar → canvas delta >= 0.02`, () => {
+      const delta = Math.abs(
+        oklchLightness(theme.tokens["surface-canvas"]) -
+          oklchLightness(theme.tokens["surface-sidebar"])
+      );
+      expect(delta, `${id} sidebar→canvas delta ${delta.toFixed(4)}`).toBeGreaterThanOrEqual(0.02);
+    });
+
+    it(`${id}: canvas → panel delta >= 0.02`, () => {
+      const delta = Math.abs(
+        oklchLightness(theme.tokens["surface-panel"]) -
+          oklchLightness(theme.tokens["surface-canvas"])
+      );
+      expect(delta, `${id} canvas→panel delta ${delta.toFixed(4)}`).toBeGreaterThanOrEqual(0.02);
+    });
+
+    it(`${id}: panel → elevated delta >= 0.02`, () => {
+      const delta = Math.abs(
+        oklchLightness(theme.tokens["surface-panel-elevated"]) -
+          oklchLightness(theme.tokens["surface-panel"])
+      );
+      expect(delta, `${id} panel→elevated delta ${delta.toFixed(4)}`).toBeGreaterThanOrEqual(0.02);
+    });
+  }
+});
+
+describe("light theme ANSI terminal colors meet WCAG AA 4.5:1 on panel", () => {
+  for (const id of LIGHT_THEME_IDS) {
+    const theme = BUILT_IN_APP_SCHEMES.find((s) => s.id === id)!;
+    const panel = theme.tokens["surface-panel"];
+
+    for (const key of ANSI_FOREGROUND_KEYS) {
+      it(`${id}: ${key} meets 4.5:1 on panel`, () => {
+        const fg = theme.tokens[key];
+        const ratio = wcagContrastRatio(fg, panel);
+        expect(
+          ratio,
+          `${id} ${key} "${fg}" on panel "${panel}" = ${ratio.toFixed(2)}:1`
+        ).toBeGreaterThanOrEqual(4.5);
+      });
+    }
+  }
+});
+
+describe("light theme terminal-bright-black meets 3:1 on panel", () => {
+  for (const id of LIGHT_THEME_IDS) {
+    const theme = BUILT_IN_APP_SCHEMES.find((s) => s.id === id)!;
+    const panel = theme.tokens["surface-panel"];
+
+    it(`${id}: terminal-bright-black meets 3:1 on panel`, () => {
+      const fg = theme.tokens["terminal-bright-black"];
+      const ratio = wcagContrastRatio(fg, panel);
+      expect(
+        ratio,
+        `${id} terminal-bright-black "${fg}" on panel "${panel}" = ${ratio.toFixed(2)}:1`
+      ).toBeGreaterThanOrEqual(3);
+    });
+  }
+});
+
+describe("warm dark themes have tinted shadow-color", () => {
+  it.each(["arashiyama", "highlands", "namib", "redwoods"] as const)(
+    "%s has explicit shadow-color override (not default rgba(0,0,0,0.5))",
+    (id) => {
+      const theme = BUILT_IN_APP_SCHEMES.find((s) => s.id === id)!;
+      expect(theme.tokens["shadow-color"]).not.toBe("rgba(0, 0, 0, 0.5)");
+      expect(theme.tokens["shadow-color"]).toMatch(/^rgba\(/);
+    }
+  );
+});
+
+describe("all 11 themes pass text-primary contrast on all surfaces", () => {
+  for (const theme of BUILT_IN_APP_SCHEMES) {
+    const surfaces = [
+      "surface-canvas",
+      "surface-panel",
+      "surface-panel-elevated",
+      "surface-sidebar",
+    ] as const;
+    for (const surface of surfaces) {
+      it(`${theme.id}: text-primary on ${surface} >= 4.5:1`, () => {
+        const fg = theme.tokens["text-primary"];
+        const bg = theme.tokens[surface];
+        if (!/^#/.test(fg) || !/^#/.test(bg)) return;
+        const ratio = wcagContrastRatio(fg, bg);
+        expect(
+          ratio,
+          `${theme.id} text-primary on ${surface} = ${ratio.toFixed(2)}:1`
+        ).toBeGreaterThanOrEqual(4.5);
+      });
+    }
+  }
 });
 
 describe("getAppThemeWarnings", () => {
