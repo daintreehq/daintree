@@ -247,8 +247,8 @@ test.describe.serial("Core: IPC Error Propagation", () => {
     const rows = panel.locator("tbody tr").filter({ hasText: "E2E dedup test error" });
     await expect(rows).toHaveCount(1);
 
-    // Wait past the dedup window, then send the same error again
-    await ctx.window.waitForTimeout(550);
+    // Wait past the dedup window (1000ms margin for CI — timestamp refreshes on each dup)
+    await ctx.window.waitForTimeout(1000);
     await emitError(ctx.app, {
       type: "git",
       message: "E2E dedup test error",
