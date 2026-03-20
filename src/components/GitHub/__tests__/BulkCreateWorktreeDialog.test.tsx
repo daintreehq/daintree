@@ -497,11 +497,7 @@ describe("BulkCreateWorktreeDialog", () => {
     const onComplete = vi.fn();
     const onClose = vi.fn();
     render(
-      <BulkCreateWorktreeDialog
-        {...defaultProps}
-        onComplete={onComplete}
-        onClose={onClose}
-      />
+      <BulkCreateWorktreeDialog {...defaultProps} onComplete={onComplete} onClose={onClose} />
     );
 
     // Complete first run
