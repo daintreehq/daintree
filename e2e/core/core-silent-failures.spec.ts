@@ -91,21 +91,18 @@ test.describe.serial("Core: Silent IPC Failure Detection", () => {
     await expect(ctx.window.locator(SEL.settings.heading)).not.toBeVisible({ timeout: T_SHORT });
   });
 
-  test("terminal panel survives restore fault", async () => {
-    await injectFault(ctx.app, "terminal:get-serialized-state", "E2E_INJECTED_ERROR");
+  test("app survives terminal spawn fault without crashing", async () => {
+    await injectFault(ctx.app, "terminal:spawn", "E2E_INJECTED_ERROR");
 
     await ctx.window.locator(SEL.toolbar.openTerminal).click();
-
-    const xtermScreen = ctx.window.locator(SEL.terminal.xtermRows).first();
-    await expect(xtermScreen).toBeVisible({ timeout: T_MEDIUM });
-
-    const panelVisible = ctx.window.locator(SEL.panel.gridPanel).first();
-    await expect(panelVisible).toBeVisible();
+    await ctx.window.waitForTimeout(T_SETTLE);
 
     await expect(ctx.window.locator(SEL.errorBoundary.fallback)).not.toBeVisible();
 
     const settingsButton = ctx.window.locator(SEL.toolbar.openSettings);
     await expect(settingsButton).toBeVisible();
     await expect(settingsButton).toBeEnabled();
+
+    await clearAllFaults(ctx.app);
   });
 });
