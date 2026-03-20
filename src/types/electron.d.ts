@@ -19,6 +19,8 @@ declare global {
       message: string;
       fromPreviousSession?: boolean;
     }>;
+    __CANOPY_E2E_ADD_ERROR__?: (message: string) => void;
+    __CANOPY_E2E_CLEAR_ERRORS__?: () => void;
   }
 }
 

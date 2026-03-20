@@ -9,6 +9,7 @@ export interface MemorySnapshot {
   heapUsed: number;
   heapTotal: number;
   external: number;
+  arrayBuffers: number;
 }
 
 export interface ProcessEntry {
@@ -76,12 +77,24 @@ export async function measureMainMemory(
   opts: { forceGc?: boolean } = {}
 ): Promise<MemorySnapshot> {
   return app.evaluate(async (_, forceGc) => {
-    if (forceGc && typeof (globalThis as unknown as { gc?: () => void }).gc === "function") {
-      (globalThis as unknown as { gc: () => void }).gc();
-      await new Promise((r) => setTimeout(r, 100));
+    if (forceGc) {
+      const g = globalThis as unknown as Record<string, unknown>;
+      const gcFn = (typeof g.__canopy_gc === "function" ? g.__canopy_gc : g.gc) as
+        | (() => void)
+        | undefined;
+      if (gcFn) {
+        gcFn();
+        await new Promise((r) => setTimeout(r, 100));
+      }
     }
     const m = process.memoryUsage();
-    return { rss: m.rss, heapUsed: m.heapUsed, heapTotal: m.heapTotal, external: m.external };
+    return {
+      rss: m.rss,
+      heapUsed: m.heapUsed,
+      heapTotal: m.heapTotal,
+      external: m.external,
+      arrayBuffers: m.arrayBuffers,
+    };
   }, opts.forceGc ?? false);
 }
 

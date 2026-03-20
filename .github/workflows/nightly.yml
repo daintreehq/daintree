@@ -198,9 +198,13 @@ jobs:
     uses: ./.github/workflows/e2e-online.yml
     secrets: inherit
 
+  e2e-nightly:
+    needs: [check, test]
+    uses: ./.github/workflows/e2e-nightly.yml
+
   notify:
     if: failure() && github.event_name == 'schedule'
-    needs: [check, test, build, e2e-core, e2e-online]
+    needs: [check, test, build, e2e-core, e2e-online, e2e-nightly]
     runs-on: ubuntu-22.04
     permissions:
       issues: write

@@ -32,5 +32,11 @@ export default defineConfig({
       timeout: onlineTimeout,
       retries: isCI ? 1 : 0,
     },
+    {
+      name: "nightly",
+      testDir: "./e2e/nightly",
+      timeout: 600_000,
+      retries: 0,
+    },
   ],
 });
