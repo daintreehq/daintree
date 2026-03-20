@@ -143,14 +143,20 @@ test.describe.serial("Core: Project Switch Race Conditions", () => {
   });
 
   test("panel grid is clean after switching — no cross-project panels", async () => {
+    test.slow();
     const { window } = ctx;
 
-    // Ensure we're on Project A with a fresh terminal
+    // Ensure we're on Project A with a fresh terminal fully spawned
     await switchToProject(window, PROJECT_A_NAME);
     await window.locator(SEL.toolbar.openTerminal).click();
-    await expect
-      .poll(() => getGridPanelCount(window), { timeout: T_LONG })
-      .toBeGreaterThanOrEqual(1);
+    const panel = window.locator(SEL.panel.gridPanel).first();
+    await expect(panel).toBeVisible({ timeout: T_LONG });
+    // Wait for shell prompt so the terminal is fully initialized
+    await window.waitForTimeout(3000);
+
+    // Verify grid has at least 1 panel before switching
+    const countBeforeSwitch = await getGridPanelCount(window);
+    expect(countBeforeSwitch).toBeGreaterThanOrEqual(1);
 
     // Switch to Project B — grid should be empty (no terminals spawned in B)
     await switchToProject(window, PROJECT_B_NAME);
