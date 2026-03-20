@@ -10,6 +10,7 @@ import {
 } from "../../schemas/agent.js";
 import type { TerminalInfo } from "./types.js";
 import { ActivityHeadlineGenerator } from "../ActivityHeadlineGenerator.js";
+import type { WaitingReason } from "../../../shared/types/agent.js";
 
 /**
  * Service responsible for agent state machine logic and event emission.
@@ -99,7 +100,8 @@ export class AgentStateService {
     terminal: TerminalInfo,
     event: AgentEvent,
     trigger?: AgentStateChangeTrigger,
-    confidence?: number
+    confidence?: number,
+    waitingReason?: WaitingReason
   ): boolean {
     if (!terminal.agentId) {
       return false;
@@ -124,6 +126,13 @@ export class AgentStateService {
     terminal.agentState = newState;
     terminal.lastStateChange = getStateChangeTimestamp();
 
+    // Store/clear waitingReason on terminal
+    if (newState === "waiting") {
+      terminal.waitingReason = waitingReason;
+    } else {
+      terminal.waitingReason = undefined;
+    }
+
     const inferredTrigger = trigger ?? this.inferTrigger(event);
     const inferredConfidence = this.normalizeConfidence(
       confidence ?? this.inferConfidence(event, inferredTrigger)
@@ -140,6 +149,7 @@ export class AgentStateService {
       worktreeId: terminal.worktreeId,
       trigger: inferredTrigger,
       confidence: inferredConfidence,
+      ...(newState === "waiting" && waitingReason ? { waitingReason } : {}),
     };
 
     const validatedStateChange = AgentStateChangedSchema.safeParse(stateChangePayload);
@@ -273,7 +283,11 @@ export class AgentStateService {
   handleActivityState(
     terminal: TerminalInfo,
     activity: "busy" | "idle" | "completed",
-    metadata?: { trigger: "input" | "output" | "pattern" | "timeout"; patternConfidence?: number }
+    metadata?: {
+      trigger: "input" | "output" | "pattern" | "timeout";
+      patternConfidence?: number;
+      waitingReason?: WaitingReason;
+    }
   ): void {
     if (!terminal.agentId) {
       return;
@@ -289,16 +303,16 @@ export class AgentStateService {
           : { type: "prompt" };
 
     if (metadata?.trigger === "timeout") {
-      this.updateAgentState(terminal, event, "timeout", 0.6);
+      this.updateAgentState(terminal, event, "timeout", 0.6, metadata?.waitingReason);
     } else if (metadata?.trigger === "pattern") {
       const confidence = metadata.patternConfidence ?? 0.9;
-      this.updateAgentState(terminal, event, "heuristic", confidence);
+      this.updateAgentState(terminal, event, "heuristic", confidence, metadata?.waitingReason);
     } else if (metadata?.trigger === "output") {
-      this.updateAgentState(terminal, event, "output", 1.0);
+      this.updateAgentState(terminal, event, "output", 1.0, metadata?.waitingReason);
     } else if (metadata?.trigger === "input") {
-      this.updateAgentState(terminal, event, "input", 1.0);
+      this.updateAgentState(terminal, event, "input", 1.0, metadata?.waitingReason);
     } else {
-      this.updateAgentState(terminal, event, "activity", 1.0);
+      this.updateAgentState(terminal, event, "activity", 1.0, metadata?.waitingReason);
     }
   }
 

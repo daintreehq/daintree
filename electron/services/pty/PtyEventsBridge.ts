@@ -73,6 +73,7 @@ export function bridgePtyEvent(event: PtyHostEvent, config?: PtyEventsBridgeConf
         trigger: normalizeAgentTrigger(event.trigger),
         confidence: normalizeConfidence(event.confidence),
         worktreeId: event.worktreeId,
+        waitingReason: event.waitingReason,
       });
       return true;
 

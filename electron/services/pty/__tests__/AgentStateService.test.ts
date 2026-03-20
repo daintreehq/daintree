@@ -177,6 +177,77 @@ describe("AgentStateService", () => {
     expect(stateChanges[0]?.state).toBe("waiting");
   });
 
+  it("includes waitingReason in state-changed payload when transitioning to waiting", () => {
+    const service = new AgentStateService();
+    const terminal = createTerminal({ agentState: "working" });
+    const stateChanges: Array<{ state: string; waitingReason?: string }> = [];
+
+    events.on("agent:state-changed", (payload) => {
+      stateChanges.push({ state: payload.state, waitingReason: payload.waitingReason });
+    });
+
+    service.updateAgentState(terminal, { type: "prompt" }, "activity", 1.0, "approval");
+
+    expect(terminal.agentState).toBe("waiting");
+    expect(terminal.waitingReason).toBe("approval");
+    expect(stateChanges).toHaveLength(1);
+    expect(stateChanges[0]?.waitingReason).toBe("approval");
+  });
+
+  it("clears waitingReason when transitioning away from waiting", () => {
+    const service = new AgentStateService();
+    const terminal = createTerminal({ agentState: "waiting" });
+    terminal.waitingReason = "prompt";
+    const stateChanges: Array<{ state: string; waitingReason?: string }> = [];
+
+    events.on("agent:state-changed", (payload) => {
+      stateChanges.push({ state: payload.state, waitingReason: payload.waitingReason });
+    });
+
+    service.updateAgentState(terminal, { type: "input" });
+
+    expect(terminal.agentState).toBe("working");
+    expect(terminal.waitingReason).toBeUndefined();
+    expect(stateChanges).toHaveLength(1);
+    expect(stateChanges[0]?.waitingReason).toBeUndefined();
+  });
+
+  it("does not include waitingReason for non-waiting states", () => {
+    const service = new AgentStateService();
+    const terminal = createTerminal({ agentState: "idle" });
+    const stateChanges: Array<{ state: string; waitingReason?: string }> = [];
+
+    events.on("agent:state-changed", (payload) => {
+      stateChanges.push({ state: payload.state, waitingReason: payload.waitingReason });
+    });
+
+    service.updateAgentState(terminal, { type: "input" });
+
+    expect(terminal.agentState).toBe("working");
+    expect(stateChanges).toHaveLength(1);
+    expect(stateChanges[0]?.waitingReason).toBeUndefined();
+  });
+
+  it("handleActivityState threads waitingReason for idle transitions", () => {
+    const service = new AgentStateService();
+    const terminal = createTerminal({ agentState: "working" });
+    const stateChanges: Array<{ state: string; waitingReason?: string }> = [];
+
+    events.on("agent:state-changed", (payload) => {
+      stateChanges.push({ state: payload.state, waitingReason: payload.waitingReason });
+    });
+
+    service.handleActivityState(terminal, "idle", {
+      trigger: "timeout",
+      waitingReason: "question",
+    });
+
+    expect(terminal.agentState).toBe("waiting");
+    expect(terminal.waitingReason).toBe("question");
+    expect(stateChanges).toHaveLength(1);
+    expect(stateChanges[0]?.waitingReason).toBe("question");
+  });
+
   it("emits completed event with non-negative duration", () => {
     const service = new AgentStateService();
     const terminal = createTerminal({ spawnedAt: Date.now() + 10_000, agentState: "working" });

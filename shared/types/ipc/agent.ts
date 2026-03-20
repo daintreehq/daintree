@@ -1,4 +1,4 @@
-import type { AgentId } from "../agent.js";
+import type { AgentId, WaitingReason } from "../agent.js";
 
 /** An artifact extracted from an agent session */
 export interface Artifact {
@@ -50,6 +50,8 @@ export interface AgentStateChangePayload {
   trigger: AgentStateChangeTrigger;
   /** Confidence in the state detection (0.0 = uncertain, 1.0 = certain) */
   confidence: number;
+  /** Why the agent is waiting (only present when state is "waiting") */
+  waitingReason?: WaitingReason;
 }
 
 /** Agent detected payload */
