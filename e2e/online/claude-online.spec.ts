@@ -34,7 +34,7 @@ test.describe("Claude Online Flow", () => {
       const nameInput = window.getByRole("textbox", { name: "Project Name" });
       await nameInput.fill("Claude Online Test");
 
-      await window.getByRole("button", { name: "Finish" }).click();
+      await window.getByRole("button", { name: "Finish", exact: true }).click();
       await expect(heading).not.toBeVisible({ timeout: 5_000 });
 
       await dismissTelemetryConsent(window);

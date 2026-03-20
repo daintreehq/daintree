@@ -236,14 +236,21 @@ server.listen(0, '127.0.0.1', () => {
         timeout: T_SHORT,
       });
 
-      // Verify xterm content contains the localhost URL the server printed.
-      // Scope to console drawer to avoid matching other xterm instances.
-      const xtermContent = window.locator('[id^="console-drawer-"] .xterm-screen');
+      // Verify terminal buffer contains the localhost URL the server printed.
+      // Extract terminalId from the console drawer's DOM id attribute.
+      const drawerEl = window.locator('[id^="console-drawer-"]');
+      const drawerId = await drawerEl.getAttribute("id");
+      const terminalId = drawerId?.replace("console-drawer-", "") ?? "";
+
       await expect
         .poll(
           async () => {
-            const texts = await xtermContent.allInnerTexts();
-            return texts.join(" ");
+            return window.evaluate((id) => {
+              const reader = (window as unknown as Record<string, unknown>)
+                .__canopyReadTerminalBuffer;
+              if (typeof reader === "function") return reader(id) as string;
+              return "";
+            }, terminalId);
           },
           { timeout: T_LONG }
         )

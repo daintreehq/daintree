@@ -37,7 +37,7 @@ test.describe.serial("Core: Terminal Search & Scrollback", () => {
       const nameInput = window.getByRole("textbox", { name: "Project Name" });
       await nameInput.fill("Terminal Search Test");
 
-      await window.getByRole("button", { name: "Finish" }).click();
+      await window.getByRole("button", { name: "Finish", exact: true }).click();
 
       const heading = window.locator("h2", { hasText: "Set up your project" });
       await expect(heading).not.toBeVisible({ timeout: T_MEDIUM });
