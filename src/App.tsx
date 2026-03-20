@@ -574,11 +574,16 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
       const isActive = worktree.id === activeWorktreeId;
       const hasActiveQuery = query.trim().length > 0;
 
-      if (alwaysShowActive && isActive && !hasActiveQuery) {
+      if (alwaysShowActive && isActive && !hasActiveQuery && quickStateFilter === "all") {
         return true;
       }
 
-      if (alwaysShowWaiting && derived.hasWaitingAgent && !hasActiveQuery) {
+      if (
+        alwaysShowWaiting &&
+        derived.hasWaitingAgent &&
+        !hasActiveQuery &&
+        quickStateFilter === "all"
+      ) {
         return true;
       }
 
