@@ -269,71 +269,71 @@ export const BUILT_IN_APP_SCHEMES: AppColorScheme[] = [
     type: "light",
     builtin: true,
     tokens: createCanopyTokens("light", {
-      // Surfaces — bright, airy beach whites
-      "surface-canvas": "#F8F6F1",
-      "surface-sidebar": "#F0ECE3",
+      // Surfaces — sun-bleached sand, white beach houses
+      "surface-canvas": "#FAF8F3",
+      "surface-sidebar": "#EDEBE3",
       "surface-panel": "#FFFFFF",
       "surface-panel-elevated": "#FFFFFF",
-      "surface-grid": "#E6E1D6",
-      // Text — rich espresso for crisp readability
-      "text-primary": "#2D2418",
-      "text-secondary": "color-mix(in oklab, #2D2418 72%, #F8F6F1)",
-      "text-muted": "#6B6055",
-      "text-inverse": "#F8F6F1",
-      // Borders — clean, visible but not heavy
+      "surface-grid": "#E5E0D4",
+      // Text — wet sandstone to dry sandstone hierarchy
+      "text-primary": "#2C2215",
+      "text-secondary": "color-mix(in oklab, #2C2215 72%, #FAF8F3)",
+      "text-muted": "#7A6F60",
+      "text-inverse": "#FAF8F3",
+      // Borders — warm sandstone lines
       "border-default": "#C8BFA8",
-      "border-subtle": "#DBD4C6",
-      "border-strong": "#A09280",
-      "border-divider": "#E2DCD0",
-      // Accent — bold coastal vegetation green
-      "accent-primary": "#08803C",
+      "border-subtle": "#DDD6C8",
+      "border-strong": "#A89C8C",
+      "border-divider": "#E5DFD2",
+      // Accent — deep coastal vegetation (Norfolk Pine, Banksia)
+      "accent-primary": "#0E7B3A",
       "accent-foreground": "#FFFFFF",
-      // Status
-      "status-success": "#167A40",
-      "status-warning": "#8F5318",
-      "status-danger": "#A93B2A",
-      "status-info": "#4B6178",
-      // Activity — bold greens for visibility on light backgrounds
-      "activity-active": "#08803C",
-      "activity-idle": "#8C8782",
-      "activity-working": "#08803C",
-      "activity-waiting": "#C17F2E",
-      // GitHub — light-mode appropriate (darker, higher contrast)
+      // Status — ocean and earth
+      "status-success": "#1A7340",
+      "status-warning": "#9A5B1A",
+      "status-danger": "#B83A28",
+      "status-info": "#1A6E8C",
+      // Activity — bold for visibility on light backgrounds
+      "activity-active": "#0E7B3A",
+      "activity-idle": "#8A8580",
+      "activity-working": "#0E7B3A",
+      "activity-waiting": "#C07A28",
+      // GitHub — light-mode palette (darker, readable on light)
       "github-open": "#1a7f37",
       "github-merged": "#8250df",
       "github-closed": "#cf222e",
       "github-draft": "#636c76",
-      // Overlays — white-based for correct light-mode elevation
-      "overlay-subtle": "rgba(255, 255, 255, 0.55)",
-      "overlay-soft": "rgba(255, 255, 255, 0.70)",
-      "overlay-medium": "rgba(255, 255, 255, 0.85)",
-      "overlay-strong": "rgba(255, 255, 255, 0.92)",
+      // Overlays — white-based, higher opacity for visible card elevation on light
+      "overlay-subtle": "rgba(255, 255, 255, 0.60)",
+      "overlay-soft": "rgba(255, 255, 255, 0.75)",
+      "overlay-medium": "rgba(255, 255, 255, 0.88)",
+      "overlay-strong": "rgba(255, 255, 255, 0.93)",
       "overlay-emphasis": "rgba(255, 255, 255, 0.97)",
-      // Terminal
-      "terminal-black": "#2D2418",
-      "terminal-selection": "#DDF0E6",
+      // Terminal — WCAG-compliant, ocean-tinted blues
+      "terminal-black": "#2C2215",
+      "terminal-selection": "#D0E8D6",
       "terminal-red": "#B03530",
       "terminal-green": "#166534",
       "terminal-yellow": "#7C5C00",
-      "terminal-blue": "#2B5573",
+      "terminal-blue": "#1A6E8C",
       "terminal-magenta": "#6B4E98",
       "terminal-cyan": "#0E6E6A",
       "terminal-bright-red": "#922B20",
       "terminal-bright-green": "#0D5428",
       "terminal-bright-yellow": "#614800",
-      "terminal-bright-blue": "#1E3F5E",
+      "terminal-bright-blue": "#14587A",
       "terminal-bright-magenta": "#563D7E",
       "terminal-bright-cyan": "#0A5752",
       "terminal-bright-white": "#1A1208",
-      // Syntax
+      // Syntax — earthy tones with ocean accents
       "syntax-comment": "#6E6455",
-      "syntax-punctuation": "#2D2418",
-      "syntax-number": "#8F5318",
-      "syntax-string": "#2A6B54",
-      "syntax-operator": "#4B6178",
-      "syntax-keyword": "#9B3B2A",
+      "syntax-punctuation": "#2C2215",
+      "syntax-number": "#9A5B1A",
+      "syntax-string": "#1E6D48",
+      "syntax-operator": "#1A6E8C",
+      "syntax-keyword": "#A0382A",
       "syntax-function": "#7A5730",
-      "syntax-link": "#2B5573",
+      "syntax-link": "#14587A",
       "syntax-quote": "#6E6455",
       "syntax-chip": "#0E6E6A",
       // Categories

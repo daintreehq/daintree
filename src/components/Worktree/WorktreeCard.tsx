@@ -535,7 +535,7 @@ export const WorktreeCard = React.memo(function WorktreeCard({
         isActive &&
           !isSingleWorktree &&
           variant === "sidebar" &&
-          "before:absolute before:left-0 before:top-2 before:bottom-2 before:w-[2px] before:rounded-r before:bg-[var(--color-state-active)] before:content-[''] before:z-10 motion-safe:before:animate-in motion-safe:before:fade-in motion-safe:before:duration-200",
+          "before:absolute before:left-0 before:top-2 before:bottom-2 before:w-[3px] before:rounded-r before:bg-[var(--color-state-active)] before:content-[''] before:z-10 motion-safe:before:animate-in motion-safe:before:fade-in motion-safe:before:duration-200",
         variant === "grid" && isActive && "border-[var(--color-state-active)]/70 shadow-md",
         variant === "grid" &&
           !isActive &&
