@@ -129,7 +129,6 @@ test.describe.serial("Core: Notes Panel", () => {
     // The tag input is in the metadata bar. It may use empty placeholder when
     // noteMetadata is loaded. Try finding the input in the tag area.
     const tagInput = palette.locator('input[placeholder="Add tags..."]');
-    const tagInputAlt = palette.locator('.flex.items-center.gap-1\\.5 input[type="text"]');
 
     const hasTagInput = await tagInput.isVisible({ timeout: T_SHORT }).catch(() => false);
     if (hasTagInput) {
@@ -185,6 +184,9 @@ test.describe.serial("Core: Notes Panel", () => {
     await window.waitForTimeout(T_SETTLE);
 
     await expect(palette.locator(SEL.notes.option)).toHaveCount(1, { timeout: T_MEDIUM });
+    await expect(palette.locator(SEL.notes.option).first()).toContainText("Hello World", {
+      timeout: T_SHORT,
+    });
 
     // Clear search
     await searchInput.clear();
