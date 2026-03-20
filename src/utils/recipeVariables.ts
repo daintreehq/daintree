@@ -31,6 +31,30 @@ export function replaceRecipeVariables(text: string, context: RecipeContext): st
   });
 }
 
+const VARIABLE_CONTEXT_MAP: Record<string, keyof RecipeContext> = {
+  issue_number: "issueNumber",
+  pr_number: "prNumber",
+  worktree_path: "worktreePath",
+  branch_name: "branchName",
+};
+
+export function detectUnresolvedVariables(text: string, context: RecipeContext): string[] {
+  const unresolved: string[] = [];
+  const seen = new Set<string>();
+  let match: RegExpExecArray | null;
+  const pattern = new RegExp(VARIABLE_PATTERN.source, VARIABLE_PATTERN.flags);
+  while ((match = pattern.exec(text)) !== null) {
+    const name = match[1].toLowerCase();
+    if (seen.has(name)) continue;
+    seen.add(name);
+    const contextKey = VARIABLE_CONTEXT_MAP[name];
+    if (contextKey && context[contextKey] == null) {
+      unresolved.push(name);
+    }
+  }
+  return unresolved;
+}
+
 export function getAvailableVariables(): { name: string; description: string }[] {
   return [...VARIABLE_DEFINITIONS];
 }

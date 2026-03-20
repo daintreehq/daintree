@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { replaceRecipeVariables, getAvailableVariables } from "../recipeVariables";
+import {
+  replaceRecipeVariables,
+  getAvailableVariables,
+  detectUnresolvedVariables,
+} from "../recipeVariables";
 import type { RecipeContext } from "../recipeVariables";
 
 describe("replaceRecipeVariables", () => {
@@ -57,6 +61,60 @@ describe("replaceRecipeVariables", () => {
   it("handles undefined vs zero for numeric values", () => {
     expect(replaceRecipeVariables("{{issue_number}}", { issueNumber: 0 })).toBe("#0");
     expect(replaceRecipeVariables("{{issue_number}}", {})).toBe("");
+  });
+});
+
+describe("detectUnresolvedVariables", () => {
+  const fullContext: RecipeContext = {
+    issueNumber: 123,
+    prNumber: 456,
+    worktreePath: "/tmp/wt",
+    branchName: "feature/test",
+  };
+
+  it("returns empty array when all variables are resolved", () => {
+    const text = "Issue {{issue_number}} PR {{pr_number}}";
+    expect(detectUnresolvedVariables(text, fullContext)).toEqual([]);
+  });
+
+  it("detects missing issueNumber", () => {
+    const text = "fix {{issue_number}} on {{branch_name}}";
+    expect(detectUnresolvedVariables(text, { branchName: "main" })).toEqual(["issue_number"]);
+  });
+
+  it("detects multiple missing variables", () => {
+    const text = "{{issue_number}} {{pr_number}} {{branch_name}}";
+    expect(detectUnresolvedVariables(text, {})).toEqual([
+      "issue_number",
+      "pr_number",
+      "branch_name",
+    ]);
+  });
+
+  it("does not include unknown variables", () => {
+    const text = "{{unknown}} {{issue_number}}";
+    expect(detectUnresolvedVariables(text, {})).toEqual(["issue_number"]);
+  });
+
+  it("returns empty for text with no variables", () => {
+    expect(detectUnresolvedVariables("plain text", {})).toEqual([]);
+  });
+
+  it("returns empty for empty text", () => {
+    expect(detectUnresolvedVariables("", {})).toEqual([]);
+  });
+
+  it("treats zero as present", () => {
+    expect(detectUnresolvedVariables("{{issue_number}}", { issueNumber: 0 })).toEqual([]);
+  });
+
+  it("deduplicates repeated variables", () => {
+    const text = "{{issue_number}} and {{issue_number}}";
+    expect(detectUnresolvedVariables(text, {})).toEqual(["issue_number"]);
+  });
+
+  it("is case-insensitive", () => {
+    expect(detectUnresolvedVariables("{{ISSUE_NUMBER}}", {})).toEqual(["issue_number"]);
   });
 });
 

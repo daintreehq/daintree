@@ -50,15 +50,67 @@ vi.mock("@/components/Worktree/terminalStateConfig", () => ({
       `<span data-testid="state-icon-working" class="${className}">W</span>`,
     idle: ({ className }: { className?: string }) =>
       `<span data-testid="state-icon-idle" class="${className}">I</span>`,
+    waiting: ({ className }: { className?: string }) =>
+      `<span data-testid="state-icon-waiting" class="${className}">WA</span>`,
+    completed: ({ className }: { className?: string }) =>
+      `<span data-testid="state-icon-completed" class="${className}">C</span>`,
+    failed: ({ className }: { className?: string }) =>
+      `<span data-testid="state-icon-failed" class="${className}">F</span>`,
   },
   STATE_COLORS: {
     working: "text-state-working",
     idle: "text-canopy-text/40",
+    waiting: "text-state-waiting",
+    completed: "text-state-completed",
+    failed: "text-state-failed",
   },
 }));
 
 vi.mock("@/utils/terminalType", () => ({
   isAgentTerminal: (kindOrType?: string, agentId?: string) => kindOrType === "agent" || !!agentId,
+}));
+
+vi.mock("p-queue", () => ({
+  default: class MockPQueue {
+    concurrency: number;
+    constructor(opts: { concurrency: number }) {
+      this.concurrency = opts.concurrency;
+    }
+    async addAll(fns: (() => Promise<unknown>)[]) {
+      for (const fn of fns) await fn();
+    }
+  },
+}));
+
+const mockRunRecipeWithResults = vi
+  .fn()
+  .mockResolvedValue({ spawned: [{ index: 0, terminalId: "t-new" }], failed: [] });
+
+vi.mock("@/store/recipeStore", () => ({
+  useRecipeStore: Object.assign(
+    (selector: (s: Record<string, unknown>) => unknown) =>
+      selector({
+        recipes: [
+          {
+            id: "recipe-1",
+            name: "Dev Setup",
+            worktreeId: undefined,
+            terminals: [{ type: "claude", title: "Agent" }],
+          },
+          {
+            id: "recipe-wt",
+            name: "WT Specific",
+            worktreeId: "wt-1",
+            terminals: [{ type: "terminal" }],
+          },
+        ],
+      }),
+    {
+      getState: () => ({
+        runRecipeWithResults: mockRunRecipeWithResults,
+      }),
+    }
+  ),
 }));
 
 const mockWorktrees = new Map([
@@ -70,6 +122,8 @@ const mockWorktrees = new Map([
       branch: "feature/a",
       isMainWorktree: false,
       path: "/tmp/wt1",
+      issueNumber: 101,
+      prNumber: 201,
     },
   ],
   [
@@ -80,6 +134,20 @@ const mockWorktrees = new Map([
       branch: "feature/b",
       isMainWorktree: false,
       path: "/tmp/wt2",
+      issueNumber: undefined,
+      prNumber: undefined,
+    },
+  ],
+  [
+    "wt-3",
+    {
+      id: "wt-3",
+      name: "feature-c",
+      branch: "feature/c",
+      isMainWorktree: false,
+      path: "/tmp/wt3",
+      issueNumber: 103,
+      prNumber: undefined,
     },
   ],
   [
@@ -138,6 +206,15 @@ const mockTerminals = [
     location: "trash",
     hasPty: true,
   },
+  {
+    id: "t6",
+    worktreeId: "wt-3",
+    kind: "agent",
+    agentId: "claude",
+    agentState: undefined,
+    location: "grid",
+    hasPty: true,
+  },
 ];
 
 vi.mock("@/store/worktreeDataStore", () => ({
@@ -166,6 +243,7 @@ describe("BulkCommandPalette", () => {
     vi.useFakeTimers();
     mockSendKey.mockClear();
     mockSubmit.mockClear();
+    mockRunRecipeWithResults.mockClear();
     usePaletteStore.setState({ activePaletteId: null });
   });
 
@@ -190,7 +268,7 @@ describe("BulkCommandPalette", () => {
     render(<BulkCommandPalette />);
     openPalette();
     expect(screen.getByText("2 agents")).toBeTruthy(); // wt-1 has 2 (t1, t2), t5 is trashed
-    expect(screen.getByText("1 agent")).toBeTruthy(); // wt-2 has 1 (t3), t4 is not agent
+    expect(screen.getAllByText("1 agent").length).toBeGreaterThanOrEqual(1); // wt-2 and wt-3 each have 1
   });
 
   it("toggles worktree selection via checkbox row click", () => {
@@ -225,11 +303,8 @@ describe("BulkCommandPalette", () => {
   it("sends keystroke to all agent terminals in selected worktrees", () => {
     render(<BulkCommandPalette />);
     openPalette();
-    // Select wt-1
     fireEvent.click(screen.getByText("feature/a").closest("button")!);
-    // Click Send
     fireEvent.click(screen.getByText("Send"));
-    // Should send "escape" to t1 and t2 (not t5 which is trashed)
     expect(mockSendKey).toHaveBeenCalledTimes(2);
     expect(mockSendKey).toHaveBeenCalledWith("t1", "escape");
     expect(mockSendKey).toHaveBeenCalledWith("t2", "escape");
@@ -238,39 +313,67 @@ describe("BulkCommandPalette", () => {
   it("sends double-escape with 1s delay between escapes", () => {
     render(<BulkCommandPalette />);
     openPalette();
-    // Select wt-2
     fireEvent.click(screen.getByText("feature/b").closest("button")!);
-    // Switch to Double Escape preset
     fireEvent.click(screen.getByText("Double Escape"));
-    // Click Send — the button text is still "Send" at click time
     const sendBtn = screen.getByRole("button", { name: "Send" });
     fireEvent.click(sendBtn);
-    // First escape should fire immediately
     expect(mockSendKey).toHaveBeenCalledTimes(1);
     expect(mockSendKey).toHaveBeenCalledWith("t3", "escape");
-    // Advance timer by 1s
     act(() => vi.advanceTimersByTime(1000));
-    // Second escape should fire
     expect(mockSendKey).toHaveBeenCalledTimes(2);
   });
 
-  it("sends text command via submit to agent terminals", async () => {
+  it("shows Preview button in text mode and transitions to preview step", () => {
     render(<BulkCommandPalette />);
     openPalette();
-    // Switch to text mode
     fireEvent.click(screen.getByText("Text Command"));
-    // Select wt-1
     fireEvent.click(screen.getByText("feature/a").closest("button")!);
-    // Type command
-    const input = screen.getByPlaceholderText("Enter command to send...");
+    const input = screen.getByPlaceholderText(/Enter command to send/);
     fireEvent.change(input, { target: { value: "npm test" } });
-    // Click Send
+    expect(screen.getByText("Preview")).toBeTruthy();
+    fireEvent.click(screen.getByText("Preview"));
+    expect(screen.getByText(/Back/)).toBeTruthy();
+    expect(screen.getByText("feature/a")).toBeTruthy();
+  });
+
+  it("sends text command per worktree after confirm in preview", async () => {
+    render(<BulkCommandPalette />);
+    openPalette();
+    fireEvent.click(screen.getByText("Text Command"));
+    fireEvent.click(screen.getByText("feature/a").closest("button")!);
+    const input = screen.getByPlaceholderText(/Enter command to send/);
+    fireEvent.change(input, { target: { value: "npm test" } });
+    fireEvent.click(screen.getByText("Preview"));
     await act(async () => {
-      fireEvent.click(screen.getByText("Send"));
+      fireEvent.click(screen.getByText("Confirm"));
     });
     expect(mockSubmit).toHaveBeenCalledTimes(2);
     expect(mockSubmit).toHaveBeenCalledWith("t1", "npm test");
     expect(mockSubmit).toHaveBeenCalledWith("t2", "npm test");
+  });
+
+  it("resolves template variables per worktree in preview", () => {
+    render(<BulkCommandPalette />);
+    openPalette();
+    fireEvent.click(screen.getByText("Text Command"));
+    fireEvent.click(screen.getByText("feature/a").closest("button")!);
+    fireEvent.click(screen.getByText("feature/b").closest("button")!);
+    const input = screen.getByPlaceholderText(/Enter command to send/);
+    fireEvent.change(input, { target: { value: "fix {{issue_number}}" } });
+    fireEvent.click(screen.getByText("Preview"));
+    expect(screen.getByText("fix #101")).toBeTruthy();
+    expect(screen.getByText("fix")).toBeTruthy();
+  });
+
+  it("shows unresolved variable warnings in preview", () => {
+    render(<BulkCommandPalette />);
+    openPalette();
+    fireEvent.click(screen.getByText("Text Command"));
+    fireEvent.click(screen.getByText("feature/b").closest("button")!);
+    const input = screen.getByPlaceholderText(/Enter command to send/);
+    fireEvent.change(input, { target: { value: "fix {{issue_number}}" } });
+    fireEvent.click(screen.getByText("Preview"));
+    expect(screen.getByText(/Missing:.*issue_number/)).toBeTruthy();
   });
 
   it("disables send in text mode when command is empty", () => {
@@ -278,8 +381,8 @@ describe("BulkCommandPalette", () => {
     openPalette();
     fireEvent.click(screen.getByText("Text Command"));
     fireEvent.click(screen.getByText("feature/a").closest("button")!);
-    const sendBtn = screen.getByText("Send").closest("button") as HTMLButtonElement;
-    expect(sendBtn.disabled).toBe(true);
+    const previewBtn = screen.getByText("Preview").closest("button") as HTMLButtonElement;
+    expect(previewBtn.disabled).toBe(true);
   });
 
   it("openBulkCommandPalette sets palette store", () => {
@@ -290,14 +393,152 @@ describe("BulkCommandPalette", () => {
   it("resets state when palette closes", () => {
     render(<BulkCommandPalette />);
     openPalette();
-    // Select a worktree
     fireEvent.click(screen.getByText("feature/a").closest("button")!);
-    // Close palette
     act(() => usePaletteStore.getState().closePalette("bulk-command"));
-    // Reopen
     openPalette();
-    // Should be reset - no selection
     const checkboxes = screen.getAllByRole("checkbox") as HTMLInputElement[];
     expect(checkboxes.every((c) => !c.checked)).toBe(true);
+  });
+
+  describe("state presets", () => {
+    it("renders preset buttons", () => {
+      render(<BulkCommandPalette />);
+      openPalette();
+      expect(screen.getByText("Active")).toBeTruthy();
+      expect(screen.getByText("Waiting")).toBeTruthy();
+      expect(screen.getByText("Idle")).toBeTruthy();
+      expect(screen.getByText("Completed")).toBeTruthy();
+      expect(screen.getByText("Failed")).toBeTruthy();
+    });
+
+    it("Active preset selects worktrees with working state", () => {
+      render(<BulkCommandPalette />);
+      openPalette();
+      fireEvent.click(screen.getByText("Active"));
+      // wt-1 has dominant state "working" (mock returns first valid state)
+      const wt1Checkbox = screen
+        .getByText("feature/a")
+        .closest("button")!
+        .querySelector('input[type="checkbox"]') as HTMLInputElement;
+      expect(wt1Checkbox.checked).toBe(true);
+    });
+
+    it("Waiting preset selects worktrees with waiting state", () => {
+      render(<BulkCommandPalette />);
+      openPalette();
+      fireEvent.click(screen.getByText("Waiting"));
+      const wt2Checkbox = screen
+        .getByText("feature/b")
+        .closest("button")!
+        .querySelector('input[type="checkbox"]') as HTMLInputElement;
+      expect(wt2Checkbox.checked).toBe(true);
+    });
+
+    it("Idle preset selects worktrees with null dominant state", () => {
+      render(<BulkCommandPalette />);
+      openPalette();
+      // wt-3 has a single terminal with undefined agentState, so mock returns null
+      fireEvent.click(screen.getByText("Idle"));
+      const wt3Checkbox = screen
+        .getByText("feature/c")
+        .closest("button")!
+        .querySelector('input[type="checkbox"]') as HTMLInputElement;
+      expect(wt3Checkbox.checked).toBe(true);
+    });
+
+    it("presets are additive - do not clear existing selection", () => {
+      render(<BulkCommandPalette />);
+      openPalette();
+      // First select wt-1 manually
+      fireEvent.click(screen.getByText("feature/a").closest("button")!);
+      // Then apply Waiting preset
+      fireEvent.click(screen.getByText("Waiting"));
+      // Both should be selected
+      const wt1Checkbox = screen
+        .getByText("feature/a")
+        .closest("button")!
+        .querySelector('input[type="checkbox"]') as HTMLInputElement;
+      const wt2Checkbox = screen
+        .getByText("feature/b")
+        .closest("button")!
+        .querySelector('input[type="checkbox"]') as HTMLInputElement;
+      expect(wt1Checkbox.checked).toBe(true);
+      expect(wt2Checkbox.checked).toBe(true);
+    });
+  });
+
+  describe("recipe mode", () => {
+    it("shows Recipe mode toggle button", () => {
+      render(<BulkCommandPalette />);
+      openPalette();
+      expect(screen.getByText("Recipe")).toBeTruthy();
+    });
+
+    it("shows only project-wide recipes in recipe mode", () => {
+      render(<BulkCommandPalette />);
+      openPalette();
+      fireEvent.click(screen.getByText("Recipe"));
+      expect(screen.getByText("Dev Setup")).toBeTruthy();
+      expect(screen.queryByText("WT Specific")).toBeNull();
+    });
+
+    it("disables Preview when no recipe is selected", () => {
+      render(<BulkCommandPalette />);
+      openPalette();
+      fireEvent.click(screen.getByText("Recipe"));
+      fireEvent.click(screen.getByText("feature/a").closest("button")!);
+      const previewBtn = screen.getByText("Preview").closest("button") as HTMLButtonElement;
+      expect(previewBtn.disabled).toBe(true);
+    });
+
+    it("enables Preview when recipe and worktrees are selected", () => {
+      render(<BulkCommandPalette />);
+      openPalette();
+      fireEvent.click(screen.getByText("Recipe"));
+      fireEvent.click(screen.getByText("feature/a").closest("button")!);
+      fireEvent.click(screen.getByText("Dev Setup"));
+      const previewBtn = screen.getByText("Preview").closest("button") as HTMLButtonElement;
+      expect(previewBtn.disabled).toBe(false);
+    });
+
+    it("broadcasts recipe to selected worktrees on confirm", async () => {
+      render(<BulkCommandPalette />);
+      openPalette();
+      fireEvent.click(screen.getByText("Recipe"));
+      fireEvent.click(screen.getByText("feature/a").closest("button")!);
+      fireEvent.click(screen.getByText("feature/b").closest("button")!);
+      fireEvent.click(screen.getByText("Dev Setup"));
+      fireEvent.click(screen.getByText("Preview"));
+      await act(async () => {
+        fireEvent.click(screen.getByText("Confirm"));
+      });
+      expect(mockRunRecipeWithResults).toHaveBeenCalledTimes(2);
+      expect(mockRunRecipeWithResults).toHaveBeenCalledWith("recipe-1", "/tmp/wt1", "wt-1", {
+        issueNumber: 101,
+        prNumber: 201,
+        worktreePath: "/tmp/wt1",
+        branchName: "feature/a",
+      });
+      expect(mockRunRecipeWithResults).toHaveBeenCalledWith("recipe-1", "/tmp/wt2", "wt-2", {
+        issueNumber: undefined,
+        prNumber: undefined,
+        worktreePath: "/tmp/wt2",
+        branchName: "feature/b",
+      });
+    });
+  });
+
+  it("resets step when mode changes", () => {
+    render(<BulkCommandPalette />);
+    openPalette();
+    fireEvent.click(screen.getByText("Text Command"));
+    fireEvent.click(screen.getByText("feature/a").closest("button")!);
+    const input = screen.getByPlaceholderText(/Enter command to send/);
+    fireEvent.change(input, { target: { value: "test" } });
+    fireEvent.click(screen.getByText("Preview"));
+    expect(screen.getByText(/Back/)).toBeTruthy();
+    // Switch mode — should reset to select step
+    fireEvent.click(screen.getByText("Keystroke"));
+    expect(screen.queryByText(/Back/)).toBeNull();
   });
 });
