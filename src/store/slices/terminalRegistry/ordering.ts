@@ -11,7 +11,10 @@ type Get = TerminalRegistryStoreApi["getState"];
 export const createOrderingActions = (
   set: Set,
   get: Get
-): Pick<TerminalRegistrySlice, "reorderTerminals" | "moveTerminalToPosition"> => ({
+): Pick<
+  TerminalRegistrySlice,
+  "reorderTerminals" | "moveTerminalToPosition" | "restoreTerminalOrder"
+> => ({
   reorderTerminals: (fromIndex, toIndex, location = "grid", worktreeId) => {
     if (fromIndex === toIndex) return;
 
@@ -126,5 +129,32 @@ export const createOrderingActions = (
         terminalInstanceService.applyRendererPolicy(id, TerminalRefreshTier.VISIBLE);
       }
     }
+  },
+
+  restoreTerminalOrder: (orderedIds) => {
+    if (orderedIds.length === 0) return;
+
+    set((state) => {
+      const indexMap = new Map(orderedIds.map((id, i) => [id, i]));
+      const matched: TerminalInstance[] = [];
+      const unmatched: TerminalInstance[] = [];
+
+      for (const t of state.terminals) {
+        if (indexMap.has(t.id)) {
+          matched.push(t);
+        } else {
+          unmatched.push(t);
+        }
+      }
+
+      matched.sort((a, b) => indexMap.get(a.id)! - indexMap.get(b.id)!);
+      const newTerminals = [...matched, ...unmatched];
+
+      const orderChanged = newTerminals.some((t, i) => state.terminals[i]?.id !== t.id);
+      if (!orderChanged) return state;
+
+      saveTerminals(newTerminals);
+      return { terminals: newTerminals };
+    });
   },
 });

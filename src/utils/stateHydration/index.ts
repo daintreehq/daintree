@@ -177,6 +177,7 @@ export interface HydrationOptions {
   hydrateTabGroups?: (tabGroups: TabGroup[], options?: { skipPersist?: boolean }) => void;
   hydrateMru?: (list: string[]) => void;
   hydrateActionMru?: (list: string[]) => void;
+  restoreTerminalOrder?: (orderedIds: string[]) => void;
 }
 
 export async function hydrateAppState(
@@ -327,8 +328,10 @@ export async function hydrateAppState(
           }
 
           const panelTasks: PanelRestoreTaskEntry[] = [];
+          const restoredIdsByIndex = new Map<number, string>();
 
-          for (const saved of appState.terminals) {
+          for (let savedIndex = 0; savedIndex < appState.terminals.length; savedIndex++) {
+            const saved = appState.terminals[savedIndex];
             if (isSmokeTestTerminalId(saved.id)) {
               logHydrationInfo(`Skipping smoke test terminal snapshot: ${saved.id}`);
               continue;
@@ -349,6 +352,7 @@ export async function hydrateAppState(
               taskIsPty = inferredKind === "assistant" ? false : panelKindHasPty(inferredKind);
             }
 
+            const capturedIndex = savedIndex;
             panelTasks.push({
               priority,
               isPty: taskIsPty,
@@ -373,6 +377,7 @@ export async function hydrateAppState(
                   });
 
                   const restoredTerminalId = await addTerminal(args);
+                  restoredIdsByIndex.set(capturedIndex, restoredTerminalId);
 
                   if (backendTerminal.activityTier) {
                     terminalInstanceService.initializeBackendTier(
@@ -437,6 +442,7 @@ export async function hydrateAppState(
                         projectRoot || ""
                       );
                       const restoredTerminalId = await addTerminal(reconnectArgs);
+                      restoredIdsByIndex.set(capturedIndex, restoredTerminalId);
 
                       if (reconnectedTerminal.activityTier) {
                         terminalInstanceService.initializeBackendTier(
@@ -501,6 +507,7 @@ export async function hydrateAppState(
                       });
 
                       const restoredTerminalId = await addTerminal(respawnArgs);
+                      restoredIdsByIndex.set(capturedIndex, restoredTerminalId);
 
                       if (terminalSizes && typeof terminalSizes === "object") {
                         const savedSize =
@@ -522,7 +529,10 @@ export async function hydrateAppState(
                     }
                   } else {
                     logHydrationInfo(`Recreating ${kind} panel: ${saved.id}`);
-                    await addTerminal(buildArgsForNonPtyRecreation(saved, kind, projectRoot || ""));
+                    const nonPtyId = await addTerminal(
+                      buildArgsForNonPtyRecreation(saved, kind, projectRoot || "")
+                    );
+                    restoredIdsByIndex.set(capturedIndex, nonPtyId);
                   }
                 }
               },
@@ -581,6 +591,16 @@ export async function hydrateAppState(
                 }
               }
             );
+          }
+
+          // Restore saved panel order. The three-phase restore (non-PTY first, then
+          // priority PTY, then background PTY) means panels end up in execution order
+          // rather than saved order. Sort them back to match the saved state.
+          if (options.restoreTerminalOrder && restoredIdsByIndex.size > 0) {
+            const orderedIds = Array.from(restoredIdsByIndex.entries())
+              .sort((a, b) => a[0] - b[0])
+              .map(([, id]) => id);
+            options.restoreTerminalOrder(orderedIds);
           }
         }
 

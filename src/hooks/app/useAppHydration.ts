@@ -13,6 +13,7 @@ export function useAppHydration(enabled = true) {
   const addTerminal = useTerminalStore((s) => s.addTerminal);
   const setReconnectError = useTerminalStore((s) => s.setReconnectError);
   const hydrateTabGroups = useTerminalStore((s) => s.hydrateTabGroups);
+  const restoreTerminalOrder = useTerminalStore((s) => s.restoreTerminalOrder);
   const hydrateMru = useTerminalStore((s) => s.hydrateMru);
   const setActiveWorktree = useWorktreeSelectionStore((s) => s.setActiveWorktree);
   const loadRecipes = useRecipeStore((s) => s.loadRecipes);
@@ -37,6 +38,7 @@ export function useAppHydration(enabled = true) {
           setFocusMode,
           setReconnectError,
           hydrateTabGroups,
+          restoreTerminalOrder,
           hydrateMru,
           hydrateActionMru,
         });
@@ -57,6 +59,7 @@ export function useAppHydration(enabled = true) {
     setFocusMode,
     setReconnectError,
     hydrateTabGroups,
+    restoreTerminalOrder,
     hydrateMru,
     hydrateActionMru,
   ]);
