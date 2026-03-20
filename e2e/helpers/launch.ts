@@ -1,6 +1,6 @@
 import { _electron as electron, type ElectronApplication, type Page } from "@playwright/test";
 import { createRequire } from "module";
-import { mkdtempSync, rmSync } from "fs";
+import { mkdtempSync, rmSync, unlinkSync, readdirSync } from "fs";
 import { tmpdir } from "os";
 import { execSync } from "child_process";
 import path from "path";
@@ -221,6 +221,23 @@ export async function waitForProcessExit(pid: number, timeoutMs = 15_000): Promi
     await wait(100);
   }
   throw new Error(`Process ${pid} did not exit within ${timeoutMs}ms`);
+}
+
+export function removeSingletonFiles(userDataDir: string): void {
+  try {
+    const entries = readdirSync(userDataDir);
+    for (const entry of entries) {
+      if (entry.startsWith("Singleton")) {
+        try {
+          unlinkSync(path.join(userDataDir, entry));
+        } catch {
+          // best-effort
+        }
+      }
+    }
+  } catch {
+    // directory may not exist yet
+  }
 }
 
 export async function mockOpenDialog(
