@@ -273,4 +273,8 @@ export const SEL = {
     reportButton: '[data-testid="error-fallback-report"]',
     logsButton: '[data-testid="error-fallback-logs"]',
   },
+  contextMenu: {
+    content: '[role="menu"]',
+    item: '[role="menuitem"]',
+  },
 } as const;
