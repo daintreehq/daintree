@@ -465,7 +465,7 @@ describe("built-in schemes — Galápagos", () => {
       const min = Math.min(r, g, b);
       const d = max - min;
       if (d === 0) return 0;
-      let h = 0;
+      let h: number;
       if (max === r) h = ((g - b) / d + 6) % 6;
       else if (max === g) h = (b - r) / d + 2;
       else h = (r - g) / d + 4;
