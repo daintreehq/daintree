@@ -670,6 +670,8 @@ export function BulkCreateWorktreeDialog({
               attempts: 1,
               failedStep: "verification",
             });
+          } else {
+            dispatchProgress({ type: "ITEM_SUCCEEDED", issueNumber });
           }
         }
       }
