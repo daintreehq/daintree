@@ -13,6 +13,7 @@ import {
   isTransientError,
 } from "../utils/errorTypes.js";
 import { store } from "../store.js";
+import { FAULT_MODE_ENABLED } from "./faultRegistry.js";
 import type { PtyClient } from "../services/PtyClient.js";
 import type { WorkspaceClient } from "../services/WorkspaceClient.js";
 import type { AppError, ErrorType, RetryAction } from "../../shared/types/ipc/errors.js";
@@ -406,6 +407,11 @@ class ErrorService {
 }
 
 const errorService = new ErrorService();
+
+if (FAULT_MODE_ENABLED) {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- E2E fault injection
+  (globalThis as any).__canopyErrorService = errorService;
+}
 
 export function flushPendingErrors(): void {
   errorService.flushPendingErrors();
