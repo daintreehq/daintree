@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import type { SimpleGit } from "simple-git";
 import { WorktreeListService } from "../WorktreeListService.js";
 
 vi.mock("../../utils/gitUtils.js", () => ({
@@ -27,11 +28,11 @@ function worktreeEntry(
 
 describe("WorktreeListService", () => {
   let service: WorktreeListService;
-  let mockGit: { raw: ReturnType<typeof vi.fn> };
+  let mockGit: SimpleGit;
 
   beforeEach(() => {
     service = new WorktreeListService();
-    mockGit = { raw: vi.fn() };
+    mockGit = { raw: vi.fn() } as unknown as SimpleGit;
   });
 
   describe("list", () => {
@@ -40,8 +41,8 @@ describe("WorktreeListService", () => {
         worktreeEntry("/repo/main", { branch: "main", head: "aaa111" }),
         worktreeEntry("/repo/feature", { branch: "feature/foo", head: "bbb222" })
       );
-      mockGit.raw.mockResolvedValue(output);
-      service.setGit(mockGit as any, "/repo/feature");
+      vi.mocked(mockGit.raw).mockResolvedValue(output);
+      service.setGit(mockGit, "/repo/feature");
 
       const result = await service.list({ forceRefresh: true });
 
@@ -54,8 +55,8 @@ describe("WorktreeListService", () => {
 
     it("marks single entry as main worktree", async () => {
       const output = makePorcelain(worktreeEntry("/repo/main", { branch: "main", head: "aaa111" }));
-      mockGit.raw.mockResolvedValue(output);
-      service.setGit(mockGit as any, "/repo/main");
+      vi.mocked(mockGit.raw).mockResolvedValue(output);
+      service.setGit(mockGit, "/repo/main");
 
       const result = await service.list({ forceRefresh: true });
 
@@ -68,8 +69,8 @@ describe("WorktreeListService", () => {
         worktreeEntry("/repo/main", { branch: "main", head: "aaa111" }) +
         "\n\n" +
         worktreeEntry("/repo/feature", { branch: "feat", head: "bbb222" });
-      mockGit.raw.mockResolvedValue(output);
-      service.setGit(mockGit as any, "/other/path");
+      vi.mocked(mockGit.raw).mockResolvedValue(output);
+      service.setGit(mockGit, "/other/path");
 
       const result = await service.list({ forceRefresh: true });
 
@@ -80,8 +81,8 @@ describe("WorktreeListService", () => {
 
     it("marks first entry as main when projectRootPath is null", async () => {
       const output = makePorcelain(worktreeEntry("/repo/main", { branch: "main", head: "aaa111" }));
-      mockGit.raw.mockResolvedValue(output);
-      service.setGit(mockGit as any, null);
+      vi.mocked(mockGit.raw).mockResolvedValue(output);
+      service.setGit(mockGit, null);
 
       const result = await service.list({ forceRefresh: true });
 
@@ -94,8 +95,8 @@ describe("WorktreeListService", () => {
         worktreeEntry("/repo/main", { detached: true, head: "abc123" }),
         worktreeEntry("/repo/feature", { branch: "feature/bar", head: "def456" })
       );
-      mockGit.raw.mockResolvedValue(output);
-      service.setGit(mockGit as any, "/repo/feature");
+      vi.mocked(mockGit.raw).mockResolvedValue(output);
+      service.setGit(mockGit, "/repo/feature");
 
       const result = await service.list({ forceRefresh: true });
 
@@ -110,8 +111,8 @@ describe("WorktreeListService", () => {
         worktreeEntry("/repo/bare", { bare: true }),
         worktreeEntry("/repo/feature", { branch: "feature/baz", head: "fff999" })
       );
-      mockGit.raw.mockResolvedValue(output);
-      service.setGit(mockGit as any, "/repo/feature");
+      vi.mocked(mockGit.raw).mockResolvedValue(output);
+      service.setGit(mockGit, "/repo/feature");
 
       const result = await service.list({ forceRefresh: true });
 
