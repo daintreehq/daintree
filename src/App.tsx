@@ -947,7 +947,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
         )}
 
         {/* Strong divider between pinned worktrees and scrollable list */}
-        {hasNonMainWorktrees && <div className="shrink-0 border-b-2 border-divider/60" />}
+        {hasNonMainWorktrees && <div className="shrink-0 border-b-2 border-border-strong" />}
 
         {/* Non-main worktree list */}
         <div className="relative flex-1 min-h-0">

@@ -16,7 +16,7 @@ interface QuickStateFilterBarProps {
 export function QuickStateFilterBar({ value, onChange }: QuickStateFilterBarProps) {
   return (
     <div
-      className="flex items-center gap-1 px-4 py-1.5"
+      className="flex items-center gap-1 px-4 py-1.5 border-b-2 border-border-strong"
       role="toolbar"
       aria-label="Quick state filter"
     >
@@ -31,7 +31,7 @@ export function QuickStateFilterBar({ value, onChange }: QuickStateFilterBarProp
             className={cn(
               "inline-flex items-center px-2 py-0.5 text-[11px] rounded-full transition-colors",
               isActive
-                ? "bg-canopy-accent/15 text-canopy-accent/80"
+                ? "bg-canopy-accent/20 text-canopy-accent font-medium"
                 : "text-canopy-text/50 hover:text-canopy-text/70 hover:bg-tint/[0.04]"
             )}
           >
