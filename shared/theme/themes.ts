@@ -89,7 +89,7 @@ export function createCanopyTokens(
     "category-pink": tokens["category-pink"] ?? "oklch(0.72 0.13 340)",
     "category-violet": tokens["category-violet"] ?? "oklch(0.7 0.13 295)",
     "category-slate": tokens["category-slate"] ?? "oklch(0.65 0.04 240)",
-    "border-subtle": tokens["border-subtle"] ?? withAlpha(overlayTone, dark ? 0.08 : 0.06),
+    "border-subtle": tokens["border-subtle"] ?? withAlpha(overlayTone, dark ? 0.08 : 0.12),
     "border-strong": tokens["border-strong"] ?? withAlpha(overlayTone, dark ? 0.14 : 0.12),
     "border-divider": tokens["border-divider"] ?? withAlpha(overlayTone, dark ? 0.05 : 0.04),
     "border-interactive": tokens["border-interactive"] ?? withAlpha(overlayTone, dark ? 0.2 : 0.28),
