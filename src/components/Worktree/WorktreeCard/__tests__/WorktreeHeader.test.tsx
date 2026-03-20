@@ -436,6 +436,121 @@ describe("WorktreeHeader hover:underline on badges", () => {
   });
 });
 
+const allZeroStates = {
+  working: 0,
+  running: 0,
+  waiting: 0,
+  directing: 0,
+  idle: 0,
+  completed: 0,
+  failed: 0,
+} as const;
+
+describe("WorktreeHeader collapsed session indicators", () => {
+  it("renders session indicators when collapsed with sessions", () => {
+    renderHeader({
+      isCollapsed: true,
+      sessionTotal: 3,
+      sessionStates: { ...allZeroStates, working: 2, waiting: 1 },
+    });
+    const container = screen.getByTestId("collapsed-session-indicators");
+    expect(container).toBeDefined();
+    expect(container.getAttribute("aria-label")).toBe("3 sessions: 2 working, 1 waiting");
+  });
+
+  it("does not render session indicators when sessionTotal is 0", () => {
+    renderHeader({
+      isCollapsed: true,
+      sessionTotal: 0,
+      sessionStates: allZeroStates,
+    });
+    expect(screen.queryByTestId("collapsed-session-indicators")).toBeNull();
+  });
+
+  it("does not render session indicators when not collapsed", () => {
+    renderHeader({
+      isCollapsed: false,
+      sessionTotal: 3,
+      sessionStates: { ...allZeroStates, working: 2, waiting: 1 },
+    });
+    expect(screen.queryByTestId("collapsed-session-indicators")).toBeNull();
+  });
+
+  it("excludes idle state from indicators", () => {
+    renderHeader({
+      isCollapsed: true,
+      sessionTotal: 3,
+      sessionStates: { ...allZeroStates, idle: 2, working: 1 },
+    });
+    const container = screen.getByTestId("collapsed-session-indicators");
+    const badges = container.querySelectorAll("[aria-hidden='true']");
+    expect(badges.length).toBe(1);
+    expect(container.getAttribute("aria-label")).toBe("3 sessions: 1 working");
+  });
+
+  it("applies aria-label with state breakdown", () => {
+    renderHeader({
+      isCollapsed: true,
+      sessionTotal: 5,
+      sessionStates: { ...allZeroStates, working: 2, failed: 1, completed: 2 },
+    });
+    const container = screen.getByTestId("collapsed-session-indicators");
+    expect(container.getAttribute("aria-label")).toBe("5 sessions: 2 working, 1 error, 2 done");
+  });
+
+  it("orders states by STATE_PRIORITY (working before waiting)", () => {
+    renderHeader({
+      isCollapsed: true,
+      sessionTotal: 3,
+      sessionStates: { ...allZeroStates, waiting: 1, working: 2 },
+    });
+    const indicators = screen.getByTestId("collapsed-session-indicators");
+    const badges = indicators.querySelectorAll("[aria-hidden='true']");
+    expect(badges.length).toBe(2);
+    // First badge should be working (text-state-working), second waiting (text-state-waiting)
+    expect(badges[0].className).toContain("text-state-working");
+    expect(badges[1].className).toContain("text-state-waiting");
+  });
+
+  it("applies animate-spin-slow only to working icon", () => {
+    renderHeader({
+      isCollapsed: true,
+      sessionTotal: 3,
+      sessionStates: { ...allZeroStates, working: 2, completed: 1 },
+    });
+    const indicators = screen.getByTestId("collapsed-session-indicators");
+    const svgs = indicators.querySelectorAll("svg");
+    // First svg is working icon — should have animate-spin-slow
+    expect(svgs[0].getAttribute("class")).toContain("animate-spin-slow");
+    // Second svg is completed icon — should NOT have animate-spin-slow
+    expect(svgs[1].getAttribute("class")).not.toContain("animate-spin-slow");
+  });
+
+  it("does not render when sessionStates is not provided", () => {
+    renderHeader({ isCollapsed: true });
+    expect(screen.queryByTestId("collapsed-session-indicators")).toBeNull();
+  });
+
+  it("uses singular 'session' when sessionTotal is 1", () => {
+    renderHeader({
+      isCollapsed: true,
+      sessionTotal: 1,
+      sessionStates: { ...allZeroStates, working: 1 },
+    });
+    const container = screen.getByTestId("collapsed-session-indicators");
+    expect(container.getAttribute("aria-label")).toBe("1 session: 1 working");
+  });
+
+  it("does not render when all sessions are idle", () => {
+    renderHeader({
+      isCollapsed: true,
+      sessionTotal: 3,
+      sessionStates: { ...allZeroStates, idle: 3 },
+    });
+    expect(screen.queryByTestId("collapsed-session-indicators")).toBeNull();
+  });
+});
+
 describe("WorktreeHeader icon button hit targets", () => {
   it("collapse button has p-1.5 for WCAG 24px minimum", () => {
     renderHeader({

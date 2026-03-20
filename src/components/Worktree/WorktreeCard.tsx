@@ -634,6 +634,8 @@ export const WorktreeCard = React.memo(function WorktreeCard({
             contentId={`worktree-body-${worktree.id}`}
             branchLabel={branchLabel}
             worktreeErrorCount={worktreeErrors.length}
+            sessionStates={terminalCounts.byState}
+            sessionTotal={terminalCounts.total}
             badges={{
               onOpenIssue: worktree.issueNumber ? handleOpenIssueExternal : undefined,
               onOpenPR: worktree.prNumber ? handleOpenPRExternal : undefined,
