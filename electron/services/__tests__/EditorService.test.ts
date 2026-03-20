@@ -108,9 +108,7 @@ describe("EditorService.discover", () => {
 
   it("discovers VS Code via .app bundle on macOS", async () => {
     Object.defineProperty(process, "platform", { value: "darwin" });
-    mockExistingFiles([
-      "/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code",
-    ]);
+    mockExistingFiles(["/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code"]);
 
     const discover = await loadDiscover();
     const results = discover();

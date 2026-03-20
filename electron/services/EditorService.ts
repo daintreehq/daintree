@@ -46,8 +46,7 @@ const KNOWN_EDITORS: EditorDefinition[] = [
     id: "cursor",
     name: "Cursor",
     binaries: ["cursor"],
-    extraDirs: () =>
-      macAppBundleDirs([{ name: "Cursor", subPath: "Contents/Resources/app/bin" }]),
+    extraDirs: () => macAppBundleDirs([{ name: "Cursor", subPath: "Contents/Resources/app/bin" }]),
     buildArgs(filePath, line, col) {
       const target =
         line !== undefined ? `${filePath}:${line}${col !== undefined ? `:${col}` : ""}` : filePath;
@@ -90,7 +89,17 @@ const KNOWN_EDITORS: EditorDefinition[] = [
   {
     id: "webstorm",
     name: "WebStorm / IntelliJ",
-    binaries: ["webstorm", "idea", "phpstorm", "pycharm", "goland", "rider", "clion", "datagrip", "rubymine"],
+    binaries: [
+      "webstorm",
+      "idea",
+      "phpstorm",
+      "pycharm",
+      "goland",
+      "rider",
+      "clion",
+      "datagrip",
+      "rubymine",
+    ],
     extraDirs: () => [
       ...jetbrainsToolboxScriptDirs(),
       ...macAppBundleDirs([
@@ -128,9 +137,7 @@ const KNOWN_EDITORS: EditorDefinition[] = [
   },
 ];
 
-function macAppBundleDirs(
-  apps: Array<{ name: string; subPath?: string }>
-): string[] {
+function macAppBundleDirs(apps: Array<{ name: string; subPath?: string }>): string[] {
   if (process.platform !== "darwin") return [];
   const dirs: string[] = [];
   for (const { name, subPath = "Contents/MacOS" } of apps) {
