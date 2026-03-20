@@ -29,7 +29,7 @@ export function getTerminalThemeFromCSS(): typeof CANOPY_TERMINAL_THEME {
   };
 
   return {
-    background: getVar("--theme-surface-canvas", CANOPY_TERMINAL_THEME.background ?? ""),
+    background: getVar("--theme-surface-panel", CANOPY_TERMINAL_THEME.background ?? ""),
     foreground: getVar("--theme-text-primary", CANOPY_TERMINAL_THEME.foreground ?? ""),
     cursor: getVar("--theme-accent-primary", CANOPY_TERMINAL_THEME.cursor ?? ""),
     cursorAccent: getVar("--theme-text-inverse", CANOPY_TERMINAL_THEME.cursorAccent ?? ""),

@@ -119,11 +119,11 @@ describe("createCanopyTokens — light mode derived defaults", () => {
     expect(lightTokens["shadow-color"]).toBe("rgba(26, 26, 26, 0.1)");
   });
 
-  it("keeps the default Bondi overlays warm instead of neutral black", () => {
+  it("Bondi overrides overlays to white-based for correct light-mode elevation", () => {
     const bondi = BUILT_IN_APP_SCHEMES.find((scheme) => scheme.id === "bondi")!;
-    expect(bondi.tokens["overlay-soft"]).toBe("rgba(45, 36, 24, 0.1)");
-    expect(bondi.tokens["overlay-subtle"]).toBe("rgba(45, 36, 24, 0.06)");
-    expect(bondi.tokens["border-divider"]).toBe("#E5DDD0");
+    expect(bondi.tokens["overlay-soft"]).toBe("rgba(255, 255, 255, 0.70)");
+    expect(bondi.tokens["overlay-subtle"]).toBe("rgba(255, 255, 255, 0.55)");
+    expect(bondi.tokens["border-divider"]).toBe("#E1D9C9");
   });
 });
 
@@ -301,22 +301,22 @@ describe("built-in schemes — Bondi light theme", () => {
   });
 
   it("has the correct accent-primary", () => {
-    expect(bondi.tokens["accent-primary"]).toBe("#3F9366");
+    expect(bondi.tokens["accent-primary"]).toBe("#1A9E55");
   });
 
-  it("has sandstone cream canvas with wide surface hierarchy", () => {
-    expect(bondi.tokens["surface-canvas"]).toBe("#F3EFE4");
-    expect(bondi.tokens["surface-sidebar"]).toBe("#DDD4BF");
-    expect(bondi.tokens["surface-grid"]).toBe("#E4DCCA");
-    expect(bondi.tokens["surface-panel"]).toBe("#FFFCF7");
+  it("has airy sandy canvas with clear surface hierarchy", () => {
+    expect(bondi.tokens["surface-canvas"]).toBe("#F7F4EE");
+    expect(bondi.tokens["surface-sidebar"]).toBe("#E8E3D6");
+    expect(bondi.tokens["surface-grid"]).toBe("#E0D9CA");
+    expect(bondi.tokens["surface-panel"]).toBe("#FFFFFF");
     expect(bondi.tokens["surface-panel-elevated"]).toBe("#FFFFFF");
   });
 
   it("uses explicit warm border overrides instead of alpha-derived", () => {
-    expect(bondi.tokens["border-default"]).toBe("#C8BDA8");
-    expect(bondi.tokens["border-subtle"]).toBe("#D8CFBE");
-    expect(bondi.tokens["border-strong"]).toBe("#B5A890");
-    expect(bondi.tokens["border-divider"]).toBe("#E5DDD0");
+    expect(bondi.tokens["border-default"]).toBe("#C4B9A4");
+    expect(bondi.tokens["border-subtle"]).toBe("#D3C9B8");
+    expect(bondi.tokens["border-strong"]).toBe("#AFA28C");
+    expect(bondi.tokens["border-divider"]).toBe("#E1D9C9");
   });
 
   it("has warm taupe text-muted distinct from syntax-comment", () => {
@@ -326,15 +326,15 @@ describe("built-in schemes — Bondi light theme", () => {
   });
 
   it("has corrected text-inverse (light cream, not same as text-primary)", () => {
-    expect(bondi.tokens["text-inverse"]).toBe("#F3EFE4");
+    expect(bondi.tokens["text-inverse"]).toBe("#F7F4EE");
     expect(bondi.tokens["text-inverse"]).not.toBe(bondi.tokens["text-primary"]);
   });
 
   it("uses warm-integrated status and activity colors", () => {
     expect(bondi.tokens["status-warning"]).toBe("#8F5318");
     expect(bondi.tokens["status-danger"]).toBe("#A93B2A");
-    expect(bondi.tokens["activity-active"]).toBe("#1D9B5E");
-    expect(bondi.tokens["activity-working"]).toBe("#1D9B5E");
+    expect(bondi.tokens["activity-active"]).toBe("#1A9E55");
+    expect(bondi.tokens["activity-working"]).toBe("#1A9E55");
     expect(bondi.tokens["activity-waiting"]).toBe("#C17F2E");
     expect(bondi.tokens["activity-idle"]).toBe("#8C8782");
   });

@@ -47,8 +47,14 @@ export function getTerminalThemeFromAppScheme(scheme: AppColorScheme): ITheme {
     ? getTerminalScrollbarFromHex(idle)
     : getTerminalScrollbarDefaults(scheme.type);
 
+  // Light themes use surface-panel (white) for a crisp document feel.
+  // Dark themes use surface-canvas (the darkest layer) for maximum contrast.
+  const background =
+    scheme.type === "light" ? scheme.tokens["surface-panel"] : scheme.tokens["surface-canvas"];
+
   return {
     ...getTerminalThemeFromAppTokens(scheme.tokens),
+    background,
     ...scrollbar,
   };
 }
