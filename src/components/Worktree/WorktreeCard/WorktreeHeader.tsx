@@ -1,6 +1,7 @@
 import { useCallback, useMemo, useState, memo } from "react";
-import type { TerminalRecipe, WorktreeState } from "@/types";
+import type { AgentState, TerminalRecipe, WorktreeState } from "@/types";
 import { cn } from "@/lib/utils";
+import { STATE_ICONS, STATE_COLORS, STATE_LABELS, STATE_PRIORITY } from "../terminalStateConfig";
 import { BranchLabel } from "../BranchLabel";
 import {
   WorktreeMenuItems,
@@ -211,6 +212,8 @@ export interface WorktreeHeaderProps {
   contentId?: string;
   branchLabel: string;
   worktreeErrorCount: number;
+  sessionStates?: Record<AgentState, number>;
+  sessionTotal?: number;
   badges: {
     onOpenIssue?: () => void;
     onOpenPR?: () => void;
@@ -272,6 +275,8 @@ export function WorktreeHeader({
   contentId,
   branchLabel,
   worktreeErrorCount,
+  sessionStates,
+  sessionTotal,
   badges,
   menu,
 }: WorktreeHeaderProps) {
@@ -289,6 +294,19 @@ export function WorktreeHeader({
 
   const hasIssueTitle = !!(worktree.issueNumber && worktree.issueTitle);
   const hasPlanFile = Boolean(worktree.hasPlanFile);
+
+  const { visibleStates, sessionAriaLabel } = useMemo(() => {
+    if (!sessionStates || !sessionTotal || sessionTotal === 0) {
+      return { visibleStates: [] as { state: AgentState; count: number }[], sessionAriaLabel: "" };
+    }
+    const visible = STATE_PRIORITY.filter((s) => s !== "idle" && sessionStates[s] > 0).map((s) => ({
+      state: s,
+      count: sessionStates[s],
+    }));
+    const parts = visible.map((v) => `${v.count} ${STATE_LABELS[v.state]}`);
+    const label = `${sessionTotal} session${sessionTotal !== 1 ? "s" : ""}: ${parts.join(", ")}`;
+    return { visibleStates: visible, sessionAriaLabel: label };
+  }, [sessionStates, sessionTotal]);
 
   return (
     <div>
@@ -329,6 +347,40 @@ export function WorktreeHeader({
             </span>
           )}
         </div>
+
+        {isCollapsed && visibleStates.length > 0 && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <div
+                className="flex items-center gap-1.5 shrink-0"
+                aria-label={sessionAriaLabel}
+                data-testid="collapsed-session-indicators"
+              >
+                {visibleStates.map(({ state, count }) => {
+                  const Icon = STATE_ICONS[state];
+                  return (
+                    <span
+                      key={state}
+                      aria-hidden="true"
+                      className={cn("flex items-center gap-0.5 text-[10px]", STATE_COLORS[state])}
+                    >
+                      <Icon
+                        className={cn(
+                          "w-2.5 h-2.5",
+                          state === "working" && "animate-spin-slow motion-reduce:animate-none"
+                        )}
+                      />
+                      <span className="font-mono tabular-nums">{count}</span>
+                    </span>
+                  );
+                })}
+              </div>
+            </TooltipTrigger>
+            <TooltipContent side="top" className="text-xs">
+              {visibleStates.map((v) => `${v.count} ${STATE_LABELS[v.state]}`).join(", ")}
+            </TooltipContent>
+          </Tooltip>
+        )}
 
         {worktreeErrorCount > 0 && (
           <Tooltip>
