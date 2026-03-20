@@ -122,6 +122,7 @@ describe("createCanopyTokens — light mode derived defaults", () => {
   it("keeps the default Bondi overlays warm instead of neutral black", () => {
     const bondi = BUILT_IN_APP_SCHEMES.find((scheme) => scheme.id === "bondi")!;
     expect(bondi.tokens["overlay-soft"]).toBe("rgba(45, 36, 24, 0.1)");
+    expect(bondi.tokens["overlay-subtle"]).toBe("rgba(45, 36, 24, 0.06)");
     expect(bondi.tokens["border-divider"]).toBe("#E5DDD0");
   });
 });
@@ -291,6 +292,14 @@ describe("built-in schemes — Bondi light theme", () => {
     expect(bondi.tokens["text-primary"]).toBe("#2D2418");
   });
 
+  it("delegates terminal-white to surface-canvas default", () => {
+    expect(bondi.tokens["terminal-white"]).toBe(bondi.tokens["surface-canvas"]);
+  });
+
+  it("uses text-primary for syntax-punctuation (intentional)", () => {
+    expect(bondi.tokens["syntax-punctuation"]).toBe(bondi.tokens["text-primary"]);
+  });
+
   it("has the correct accent-primary", () => {
     expect(bondi.tokens["accent-primary"]).toBe("#3F9366");
   });
@@ -402,12 +411,14 @@ describe("built-in schemes — Bondi light theme", () => {
     }
   });
 
-  it("text-muted meets WCAG AA 3:1 against surface-panel", () => {
-    const ratio = wcagContrastRatio(bondi.tokens["text-muted"], bondi.tokens["surface-panel"]);
-    expect(
-      ratio,
-      `text-muted on surface-panel = ${ratio.toFixed(2)}:1, needs ≥3:1`
-    ).toBeGreaterThanOrEqual(3);
+  it("text-muted meets WCAG AA 3:1 against surface-panel and surface-canvas", () => {
+    for (const surface of ["surface-panel", "surface-canvas"] as const) {
+      const ratio = wcagContrastRatio(bondi.tokens["text-muted"], bondi.tokens[surface]);
+      expect(
+        ratio,
+        `text-muted on ${surface} = ${ratio.toFixed(2)}:1, needs ≥3:1`
+      ).toBeGreaterThanOrEqual(3);
+    }
   });
 });
 
