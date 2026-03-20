@@ -16,7 +16,7 @@ interface QuickStateFilterBarProps {
 export function QuickStateFilterBar({ value, onChange }: QuickStateFilterBarProps) {
   return (
     <div
-      className="flex items-center gap-1 px-4 py-1.5 border-b-2 border-border-strong"
+      className="flex items-center gap-1 px-4 py-1.5 border-b border-border-default"
       role="toolbar"
       aria-label="Quick state filter"
     >
