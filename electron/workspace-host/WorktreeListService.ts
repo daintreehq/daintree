@@ -1,5 +1,4 @@
-import { resolve as pathResolve, normalize as pathNormalize } from "path";
-import { realpathSync } from "fs";
+import { resolve as pathResolve } from "path";
 import type { SimpleGit } from "simple-git";
 import type { Worktree } from "../../shared/types/worktree.js";
 import { getGitDir } from "../utils/gitUtils.js";
@@ -29,17 +28,6 @@ export class WorktreeListService {
   setGit(git: SimpleGit | null, projectRootPath: string | null): void {
     this.git = git;
     this.projectRootPath = projectRootPath;
-  }
-
-  canonicalizePath(p: string): string {
-    try {
-      const resolved = pathResolve(p);
-      const real = realpathSync(resolved);
-      return process.platform === "win32" ? real.toLowerCase() : real;
-    } catch {
-      const normalized = pathNormalize(pathResolve(p));
-      return process.platform === "win32" ? normalized.toLowerCase() : normalized;
-    }
   }
 
   getCacheKey(): string | null {
@@ -105,6 +93,7 @@ export class WorktreeListService {
     const fetchPromise = (async () => {
       const output = await git.raw(["worktree", "list", "--porcelain"]);
       const worktrees: RawWorktreeRecord[] = [];
+      let isFirstEntry = true;
 
       let currentWorktree: Partial<{
         path: string;
@@ -116,21 +105,15 @@ export class WorktreeListService {
 
       const pushWorktree = () => {
         if (currentWorktree.path) {
-          let isMain = false;
-          if (this.projectRootPath) {
-            const canonicalWorktreePath = this.canonicalizePath(currentWorktree.path);
-            const canonicalProjectRoot = this.canonicalizePath(this.projectRootPath);
-            isMain = canonicalWorktreePath === canonicalProjectRoot;
-          }
-
           worktrees.push({
             path: currentWorktree.path,
             branch: currentWorktree.branch || "",
             bare: currentWorktree.bare || false,
-            isMainWorktree: isMain,
+            isMainWorktree: isFirstEntry,
             head: currentWorktree.isDetached ? currentWorktree.head : undefined,
             isDetached: currentWorktree.isDetached,
           });
+          isFirstEntry = false;
         }
         currentWorktree = {};
       };
