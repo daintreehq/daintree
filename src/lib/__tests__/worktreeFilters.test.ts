@@ -14,7 +14,6 @@ import {
   filterTriageWorktrees,
   type DerivedWorktreeMeta,
   type FilterState,
-  type QuickStateFilter,
 } from "../worktreeFilters";
 import type { Worktree } from "@shared/types/worktree";
 
@@ -1248,12 +1247,12 @@ describe("matchesQuickStateFilter", () => {
   });
 
   it('"working" matches when hasWorkingAgent and chipState is null', () => {
-    const meta = { ...createEmptyMeta(), hasWorkingAgent: true, chipState: null as const };
+    const meta = { ...createEmptyMeta(), hasWorkingAgent: true, chipState: null };
     expect(matchesQuickStateFilter("working", meta)).toBe(true);
   });
 
   it('"working" matches when hasRunningAgent and chipState is null', () => {
-    const meta = { ...createEmptyMeta(), hasRunningAgent: true, chipState: null as const };
+    const meta = { ...createEmptyMeta(), hasRunningAgent: true, chipState: null };
     expect(matchesQuickStateFilter("working", meta)).toBe(true);
   });
 
