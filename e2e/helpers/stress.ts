@@ -138,6 +138,28 @@ export function verifyProcessIdentity(pid: number, baseline: ProcessIdentity): b
   return current.comm === baseline.comm && current.startTime === baseline.startTime;
 }
 
+export function getProcessStartTime(pid: number): string | null {
+  if (process.platform === "win32") return null;
+  try {
+    const result = execFileSync("ps", ["-p", String(pid), "-o", "lstart="], {
+      encoding: "utf8",
+      stdio: ["pipe", "pipe", "ignore"],
+    }).trim();
+    return result || null;
+  } catch {
+    return null;
+  }
+}
+
+export async function waitForProcessDeath(pid: number, timeoutMs = 15_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (getProcessInfo(pid) === null) return;
+    await new Promise((r) => setTimeout(r, 200));
+  }
+  throw new Error(`Process ${pid} still alive after ${timeoutMs}ms`);
+}
+
 export function getDescendantPids(pid: number): number[] {
   if (process.platform === "win32") return [];
   try {
