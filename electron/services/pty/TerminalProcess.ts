@@ -28,7 +28,6 @@ import { events } from "../events.js";
 import { AgentSpawnedSchema } from "../../schemas/agent.js";
 import type { PtyPool } from "../PtyPool.js";
 import { installHeadlessResponder } from "./headlessResponder.js";
-import { styleUrls } from "./UrlStyler.js";
 
 // Extracted modules
 import {
@@ -71,7 +70,6 @@ type CursorBuffer = {
   getLine: (index: number) => { translateToString: (trimRight?: boolean) => string } | undefined;
 };
 
-const TERMINAL_DISABLE_URL_STYLING: boolean = process.env.CANOPY_DISABLE_URL_STYLING === "1";
 const EVENT_DRIVEN_SNAPSHOT_THROTTLE_MS = 2000;
 
 export interface TerminalProcessCallbacks {
@@ -1297,13 +1295,7 @@ export class TerminalProcess {
   }
 
   private emitDataDirect(data: string): void {
-    if (TERMINAL_DISABLE_URL_STYLING) {
-      this.callbacks.emitData(this.id, data);
-      return;
-    }
-
-    const styled = styleUrls(data);
-    this.callbacks.emitData(this.id, styled);
+    this.callbacks.emitData(this.id, data);
   }
 
   private handleAgentDetection(result: DetectionResult, spawnedAt: number): void {
