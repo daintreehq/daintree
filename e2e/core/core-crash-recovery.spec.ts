@@ -254,29 +254,16 @@ const RESTORE_PANELS = {
   },
 } as const;
 
-function patchProjectStates(userDataDir: string, projectPath: string): void {
+function deleteProjectStateFiles(userDataDir: string): void {
   const projectsDir = path.join(userDataDir, "projects");
   if (!existsSync(projectsDir)) return;
-  const resolvedPath = realpathSync(projectPath);
-  const now = Date.now();
 
-  // Overwrite per-project state with the restore terminals (including worktreeId)
+  // Delete per-project state files so hydration falls through to the
+  // migration path which uses global appState (written by restoreBackup).
+  // This ensures the test validates the crash recovery restore flow.
   for (const pDir of readdirSync(projectsDir)) {
     const stateFile = path.join(projectsDir, pDir, "state.json");
-    if (!existsSync(stateFile)) continue;
-
-    const existing = JSON.parse(readFileSync(stateFile, "utf8"));
-    existing.terminals = Object.values(RESTORE_PANELS).map((p) => ({
-      id: p.id,
-      kind: p.kind,
-      type: p.type,
-      title: p.title,
-      cwd: resolvedPath,
-      worktreeId: resolvedPath,
-      location: p.location,
-      createdAt: now - 600_000,
-    }));
-    writeFileSync(stateFile, JSON.stringify(existing));
+    if (existsSync(stateFile)) rmSync(stateFile);
   }
 }
 
@@ -345,8 +332,8 @@ test.describe.serial("Core: Crash Recovery — Panel Restoration", () => {
     await closeApp(setupCtx.app);
     await waitForProcessExit(setupPid);
 
-    // Patch per-project state with restore terminals (including worktreeId for grid filtering)
-    patchProjectStates(userDataDir, fixtureDir);
+    // Delete per-project state files so hydration uses global appState from restoreBackup
+    deleteProjectStateFiles(userDataDir);
     // Seed crash data with marker + backup containing terminals
     seedCrashDataForRestore(userDataDir, fixtureDir);
 
