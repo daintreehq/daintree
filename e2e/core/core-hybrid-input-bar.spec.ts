@@ -85,8 +85,6 @@ test.describe.serial("Core: HybridInputBar", () => {
   });
 
   test("slash autocomplete appears when typing /", async () => {
-    const { window } = ctx;
-
     await cmEditor.click();
     await cmEditor.pressSequentially("/", { delay: 30 });
 
