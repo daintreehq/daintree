@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   detectPrompt,
+  detectPromptLexeme,
   DEFAULT_PROMPT_PATTERNS,
   type PromptDetectorConfig,
 } from "../PromptDetector.js";
@@ -169,5 +170,78 @@ describe("approval prompt detection via hint patterns", () => {
     const lines = ["Approve Once", "line2", "line3", "line4"];
     const result = detectPrompt(lines, config, "line4");
     expect(result.isPrompt).toBe(false);
+  });
+});
+
+describe("detectPromptLexeme", () => {
+  it("detects trailing question mark", () => {
+    const result = detectPromptLexeme("Which file should I modify?");
+    expect(result.isPrompt).toBe(true);
+    expect(result.confidence).toBe(0.7);
+    expect(result.matchedText).toBe("?");
+  });
+
+  it("detects question mark with trailing space", () => {
+    expect(detectPromptLexeme("Are you sure? ").isPrompt).toBe(true);
+  });
+
+  it("detects bracket confirmation [y/N]", () => {
+    const result = detectPromptLexeme("Proceed? [y/N]");
+    expect(result.isPrompt).toBe(true);
+    expect(result.matchedText).toMatch(/\[y\/N\]/);
+  });
+
+  it("detects parenthesized confirmation (yes/no)", () => {
+    expect(detectPromptLexeme("Continue (yes/no)").isPrompt).toBe(true);
+  });
+
+  it("detects [Yes/No] mixed case", () => {
+    expect(detectPromptLexeme("Overwrite? [Yes/No]").isPrompt).toBe(true);
+  });
+
+  it("detects keyword+colon: Enter password:", () => {
+    const result = detectPromptLexeme("Enter password:");
+    expect(result.isPrompt).toBe(true);
+    expect(result.matchedText).toMatch(/password:/i);
+  });
+
+  it("detects keyword+colon: Select host:", () => {
+    expect(detectPromptLexeme("Select host:").isPrompt).toBe(true);
+  });
+
+  it("detects 'Press enter to continue'", () => {
+    expect(detectPromptLexeme("Press enter to continue...").isPrompt).toBe(true);
+  });
+
+  it("detects 'Press any key to exit'", () => {
+    expect(detectPromptLexeme("Press any key to exit").isPrompt).toBe(true);
+  });
+
+  it("does NOT match bare colon at end", () => {
+    expect(detectPromptLexeme("value:").isPrompt).toBe(false);
+  });
+
+  it("does NOT match error output with colon", () => {
+    expect(detectPromptLexeme("Error: file not found").isPrompt).toBe(false);
+  });
+
+  it("does NOT match build output", () => {
+    expect(detectPromptLexeme("Building project...").isPrompt).toBe(false);
+  });
+
+  it("does NOT match empty string", () => {
+    expect(detectPromptLexeme("").isPrompt).toBe(false);
+  });
+
+  it("does NOT match whitespace-only", () => {
+    expect(detectPromptLexeme("   ").isPrompt).toBe(false);
+  });
+
+  it("does NOT match text without lexemes", () => {
+    expect(detectPromptLexeme("Compiling 42 modules").isPrompt).toBe(false);
+  });
+
+  it("handles ANSI-colored input", () => {
+    expect(detectPromptLexeme("\x1b[32mContinue?\x1b[0m").isPrompt).toBe(true);
   });
 });
