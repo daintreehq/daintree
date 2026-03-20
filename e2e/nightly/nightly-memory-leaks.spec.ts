@@ -2,7 +2,7 @@ import { test, expect } from "@playwright/test";
 import { launchApp, closeApp, type AppContext } from "../helpers/launch";
 import { createFixtureRepo } from "../helpers/fixtures";
 import { openAndOnboardProject } from "../helpers/project";
-import { getFirstGridPanel, getGridPanelCount } from "../helpers/panels";
+import { getGridPanelCount, getGridPanelIds, getPanelById } from "../helpers/panels";
 import { SEL } from "../helpers/selectors";
 import { T_LONG, T_MEDIUM } from "../helpers/timeouts";
 import { measureMainMemory } from "../helpers/stress";
@@ -20,16 +20,20 @@ function toMB(bytes: number): number {
 }
 
 async function openAndCloseTerminal(window: AppContext["window"]): Promise<void> {
-  const countBefore = await getGridPanelCount(window);
+  const idsBefore = await getGridPanelIds(window);
   await window.locator(SEL.toolbar.openTerminal).click();
-  await expect.poll(() => getGridPanelCount(window), { timeout: T_LONG }).toBe(countBefore + 1);
+  await expect
+    .poll(() => getGridPanelCount(window), { timeout: T_LONG })
+    .toBe(idsBefore.length + 1);
 
-  const panel = getFirstGridPanel(window);
+  const idsAfter = await getGridPanelIds(window);
+  const newId = idsAfter.find((id) => !idsBefore.includes(id));
+  const panel = newId ? getPanelById(window, newId) : window.locator(SEL.panel.gridPanel).last();
   await expect(panel).toBeVisible({ timeout: T_MEDIUM });
 
   const closeBtn = panel.locator(SEL.panel.close);
   await closeBtn.click({ modifiers: ["Alt"] });
-  await expect.poll(() => getGridPanelCount(window), { timeout: T_MEDIUM }).toBe(countBefore);
+  await expect.poll(() => getGridPanelCount(window), { timeout: T_MEDIUM }).toBe(idsBefore.length);
 }
 
 let ctx: AppContext;
@@ -119,8 +123,7 @@ test.describe.serial("Nightly: Memory Leak Detection", () => {
     await test.step("verify error store is bounded", async () => {
       const errors = await window.evaluate(() => window.__CANOPY_E2E_ERROR_STORE__?.() ?? []);
       console.log(`[errors] store size after ${ERROR_INJECT_COUNT} injections: ${errors.length}`);
-      expect(errors.length).toBeLessThanOrEqual(MAX_ERRORS);
-      expect(errors.length).toBeGreaterThan(0);
+      expect(errors.length).toBe(MAX_ERRORS);
     });
 
     await test.step("clear all and verify empty", async () => {

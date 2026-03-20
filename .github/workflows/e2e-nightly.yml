@@ -99,7 +99,14 @@ jobs:
             libnotify4 \
             xvfb
 
+      - name: Install dependencies (Windows)
+        if: runner.os == 'Windows'
+        run: npm ci
+        env:
+          npm_config_msvs_version: "2022"
+
       - name: Install dependencies
+        if: runner.os != 'Windows'
         run: npm ci
 
       - name: Build app
