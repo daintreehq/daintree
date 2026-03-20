@@ -467,6 +467,7 @@ export const WorktreeCard = React.memo(function WorktreeCard({
       worktreeErrors.length,
       terminalCounts.byState.failed,
       terminalCounts.byState.waiting,
+      terminalCounts.approvalWaitingCount,
       lifecycleStage,
       isComplete,
     ]
