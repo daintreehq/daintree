@@ -1,7 +1,7 @@
 import { test, expect } from "@playwright/test";
 import { launchApp, closeApp, waitForProcessExit, type AppContext } from "../helpers/launch";
 import { SEL } from "../helpers/selectors";
-import { T_MEDIUM } from "../helpers/timeouts";
+import { T_MEDIUM, T_SETTLE } from "../helpers/timeouts";
 import { mkdtempSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import path from "path";
@@ -66,9 +66,13 @@ test.describe.serial("First-run onboarding flow", () => {
     // App should load directly to toolbar without onboarding
     await expect(window.locator(SEL.toolbar.openSettings)).toBeVisible({ timeout: T_MEDIUM });
 
-    // Onboarding dialogs should NOT be visible
+    // Allow onboarding hydration to complete before asserting absence
+    await window.waitForTimeout(T_SETTLE);
+
+    // No onboarding dialogs should be visible
     await expect(window.locator(SEL.firstRun.themeTitle)).not.toBeVisible();
     await expect(window.locator(SEL.firstRun.telemetryDialog)).not.toBeVisible();
     await expect(window.locator(SEL.firstRun.agentTitle)).not.toBeVisible();
+    await expect(window.locator(SEL.firstRun.agentSetupTitle)).not.toBeVisible();
   });
 });
