@@ -10,6 +10,9 @@ export type AgentState =
   | "completed"
   | "failed";
 
+/** Classification of why an agent is in the "waiting" state */
+export type WaitingReason = "prompt" | "approval" | "question";
+
 /** Task state: draft | queued | running | blocked | completed | failed | cancelled */
 export type TaskState =
   | "draft"

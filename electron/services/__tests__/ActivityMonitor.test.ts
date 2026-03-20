@@ -660,7 +660,12 @@ describe("ActivityMonitor", () => {
 
       vi.advanceTimersByTime(2200);
 
-      expect(onStateChange).toHaveBeenCalledWith("test-1", 1000, "idle");
+      expect(onStateChange).toHaveBeenCalledWith(
+        "test-1",
+        1000,
+        "idle",
+        expect.objectContaining({ trigger: expect.any(String) })
+      );
 
       monitor.dispose();
     });
@@ -700,7 +705,12 @@ describe("ActivityMonitor", () => {
 
       vi.advanceTimersByTime(2200);
 
-      expect(onStateChange).toHaveBeenCalledWith("test-1", 1000, "idle");
+      expect(onStateChange).toHaveBeenCalledWith(
+        "test-1",
+        1000,
+        "idle",
+        expect.objectContaining({ trigger: expect.any(String) })
+      );
 
       monitor.dispose();
     });
@@ -720,7 +730,12 @@ describe("ActivityMonitor", () => {
 
       vi.advanceTimersByTime(2200);
 
-      expect(onStateChange).toHaveBeenCalledWith("test-1", 1000, "idle");
+      expect(onStateChange).toHaveBeenCalledWith(
+        "test-1",
+        1000,
+        "idle",
+        expect.objectContaining({ trigger: expect.any(String) })
+      );
 
       monitor.dispose();
     });
@@ -740,7 +755,12 @@ describe("ActivityMonitor", () => {
 
       vi.advanceTimersByTime(2200);
 
-      expect(onStateChange).toHaveBeenCalledWith("test-1", 1000, "idle");
+      expect(onStateChange).toHaveBeenCalledWith(
+        "test-1",
+        1000,
+        "idle",
+        expect.objectContaining({ trigger: expect.any(String) })
+      );
 
       monitor.dispose();
     });
@@ -1135,7 +1155,12 @@ describe("ActivityMonitor", () => {
 
       // Should have gone idle via prompt fast-path, well before the 6000ms debounce
       expect(monitor.getState()).toBe("idle");
-      expect(onStateChange).toHaveBeenCalledWith("test-1", 1000, "idle");
+      expect(onStateChange).toHaveBeenCalledWith(
+        "test-1",
+        1000,
+        "idle",
+        expect.objectContaining({ trigger: expect.any(String) })
+      );
 
       monitor.dispose();
     });

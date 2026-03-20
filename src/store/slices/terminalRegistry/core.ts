@@ -545,7 +545,15 @@ export const createCorePanelActions = (
     });
   },
 
-  updateAgentState: (id, agentState, error, lastStateChange, trigger, confidence) => {
+  updateAgentState: (
+    id,
+    agentState,
+    error,
+    lastStateChange,
+    trigger,
+    confidence,
+    waitingReason
+  ) => {
     set((state) => {
       const terminal = state.terminals.find((t) => t.id === id);
       if (!terminal) {
@@ -562,6 +570,7 @@ export const createCorePanelActions = (
               lastStateChange: lastStateChange ?? Date.now(),
               stateChangeTrigger: trigger,
               stateChangeConfidence: confidence,
+              waitingReason: agentState === "waiting" ? waitingReason : undefined,
             }
           : t
       );

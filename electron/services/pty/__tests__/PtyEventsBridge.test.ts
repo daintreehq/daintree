@@ -33,6 +33,29 @@ describe("bridgePtyEvent", () => {
     });
   });
 
+  it("forwards waitingReason from agent-state events", () => {
+    const payloads: Array<{ waitingReason?: string }> = [];
+    events.on("agent:state-changed", (payload) => {
+      payloads.push({ waitingReason: payload.waitingReason });
+    });
+
+    bridgePtyEvent({
+      type: "agent-state",
+      id: "term-1",
+      agentId: "claude",
+      state: "waiting",
+      previousState: "working",
+      timestamp: Date.now(),
+      trigger: "activity",
+      confidence: 1.0,
+      worktreeId: "wt-1",
+      waitingReason: "approval",
+    });
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.waitingReason).toBe("approval");
+  });
+
   it("routes terminal-status events to bus and callback", () => {
     const terminalStatusPayloads: Array<{ id: string; status: string }> = [];
     events.on("terminal:status", (payload) => {

@@ -1,4 +1,10 @@
-import type { AgentState, AgentStateChangeTrigger, AgentId, LegacyAgentType } from "./agent.js";
+import type {
+  AgentState,
+  AgentStateChangeTrigger,
+  AgentId,
+  LegacyAgentType,
+  WaitingReason,
+} from "./agent.js";
 import type { BrowserHistory } from "./browser.js";
 
 /** Built-in panel kinds */
@@ -360,6 +366,7 @@ export interface TerminalInstance {
   error?: string;
   stateChangeTrigger?: AgentStateChangeTrigger;
   stateChangeConfidence?: number;
+  waitingReason?: WaitingReason;
   activityHeadline?: string;
   activityStatus?: "working" | "waiting" | "success" | "failure";
   activityType?: "interactive" | "background" | "idle";

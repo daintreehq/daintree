@@ -535,6 +535,7 @@ export type CanopyEventMap = {
     previousState: AgentState;
     trigger: AgentStateChangeTrigger;
     confidence: number;
+    waitingReason?: import("../../shared/types/agent.js").WaitingReason;
   }>;
 
   /**

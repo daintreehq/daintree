@@ -362,6 +362,7 @@ events.on("agent:state-changed", (payload) => {
       trigger: payload.trigger,
       confidence: payload.confidence,
       worktreeId: payload.worktreeId,
+      waitingReason: payload.waitingReason,
     });
 
     if (payload.state === "waiting" || payload.state === "completed") {
@@ -1098,6 +1099,7 @@ port.on("message", async (rawMsg: any) => {
                 cwd: terminal.cwd,
                 worktreeId: terminal.worktreeId,
                 agentState: terminal.agentState,
+                waitingReason: terminal.waitingReason,
                 lastStateChange: terminal.lastStateChange,
                 spawnedAt: terminal.spawnedAt,
                 isTrashed: terminal.isTrashed,
@@ -1217,6 +1219,7 @@ port.on("message", async (rawMsg: any) => {
             cwd: t.cwd,
             worktreeId: t.worktreeId,
             agentState: t.agentState,
+            waitingReason: t.waitingReason,
             lastStateChange: t.lastStateChange,
             spawnedAt: t.spawnedAt,
             isTrashed: t.isTrashed,
@@ -1243,6 +1246,7 @@ port.on("message", async (rawMsg: any) => {
             cwd: t.cwd,
             worktreeId: t.worktreeId,
             agentState: t.agentState,
+            waitingReason: t.waitingReason,
             lastStateChange: t.lastStateChange,
             spawnedAt: t.spawnedAt,
             isTrashed: t.isTrashed,
@@ -1269,6 +1273,7 @@ port.on("message", async (rawMsg: any) => {
             cwd: t.cwd,
             worktreeId: t.worktreeId,
             agentState: t.agentState,
+            waitingReason: t.waitingReason,
             lastStateChange: t.lastStateChange,
             spawnedAt: t.spawnedAt,
             isTrashed: t.isTrashed,

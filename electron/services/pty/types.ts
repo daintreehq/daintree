@@ -1,7 +1,7 @@
 import type * as pty from "node-pty";
 import type { Terminal as HeadlessTerminal } from "@xterm/headless";
 import type { SerializeAddon } from "@xterm/addon-serialize";
-import type { AgentState, AgentId } from "../../../shared/types/agent.js";
+import type { AgentState, AgentId, WaitingReason } from "../../../shared/types/agent.js";
 import type { TerminalType, TerminalKind } from "../../../shared/types/panel.js";
 import type { PtyHostSpawnOptions } from "../../../shared/types/pty-host.js";
 import type { ProcessDetector } from "../ProcessDetector.js";
@@ -31,6 +31,7 @@ export interface TerminalPublicState {
   wasKilled?: boolean;
   isExited?: boolean;
   agentState?: AgentState;
+  waitingReason?: WaitingReason;
   lastStateChange?: number;
   error?: string;
   traceId?: string;

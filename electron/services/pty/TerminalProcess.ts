@@ -436,6 +436,7 @@ export class TerminalProcess {
       wasKilled: t.wasKilled,
       isExited: t.isExited,
       agentState: t.agentState,
+      waitingReason: t.waitingReason,
       lastStateChange: t.lastStateChange,
       error: t.error,
       traceId: t.traceId,
