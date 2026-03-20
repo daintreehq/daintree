@@ -18,6 +18,8 @@ import {
 import { detectCompletion } from "./pty/CompletionDetector.js";
 import { CompletionTimer } from "./pty/CompletionTimer.js";
 import { BootDetector } from "./pty/BootDetector.js";
+import { classifyWaitingReason } from "./pty/WaitingReasonClassifier.js";
+import type { WaitingReason } from "../../shared/types/agent.js";
 
 export interface ProcessStateValidator {
   hasActiveChildren(): boolean;
@@ -74,6 +76,7 @@ export interface ActivityMonitorOptions {
 export interface ActivityStateMetadata {
   trigger: "input" | "output" | "pattern" | "timeout";
   patternConfidence?: number;
+  waitingReason?: WaitingReason;
 }
 
 export class ActivityMonitor {
@@ -633,7 +636,11 @@ export class ActivityMonitor {
     ) {
       this.state = "idle";
       this.patternBuf.clear();
-      this.onStateChange(this.terminalId, this.spawnedAt, "idle");
+      const waitingReason = classifyWaitingReason(lines, true);
+      this.onStateChange(this.terminalId, this.spawnedAt, "idle", {
+        trigger: "pattern",
+        waitingReason,
+      });
       return;
     }
 
@@ -647,7 +654,11 @@ export class ActivityMonitor {
     ) {
       this.state = "idle";
       this.patternBuf.clear();
-      this.onStateChange(this.terminalId, this.spawnedAt, "idle");
+      const waitingReason = classifyWaitingReason(lines, isPrompt);
+      this.onStateChange(this.terminalId, this.spawnedAt, "idle", {
+        trigger: "timeout",
+        waitingReason,
+      });
     }
   }
 
@@ -710,6 +721,7 @@ export class ActivityMonitor {
       return;
     }
     if (!actuallyBusy && this.state === "busy") {
+      let waitingReason: WaitingReason | undefined;
       if (this.getVisibleLines) {
         const lines = this.getVisibleLines(
           Math.max(this.promptDetectorConfig.promptScanLineCount, 15)
@@ -721,6 +733,7 @@ export class ActivityMonitor {
         if (!promptResult.isPrompt) {
           return;
         }
+        waitingReason = classifyWaitingReason(lines, promptResult.isPrompt);
       }
       if (this.debounceTimer) {
         clearTimeout(this.debounceTimer);
@@ -728,7 +741,10 @@ export class ActivityMonitor {
       }
       this.state = "idle";
       this.patternBuf.clear();
-      this.onStateChange(this.terminalId, this.spawnedAt, "idle");
+      this.onStateChange(this.terminalId, this.spawnedAt, "idle", {
+        trigger: "timeout",
+        waitingReason,
+      });
     }
   }
 

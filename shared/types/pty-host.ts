@@ -7,7 +7,7 @@
  * All types are serializable (no functions, no circular refs) for IPC transport.
  */
 
-import type { AgentState, AgentId } from "./agent.js";
+import type { AgentState, AgentId, WaitingReason } from "./agent.js";
 import type { TerminalType, TerminalKind, TerminalFlowStatus } from "./panel.js";
 
 export type { TerminalFlowStatus };
@@ -140,6 +140,7 @@ export type PtyHostEvent =
       trigger: string;
       confidence: number;
       worktreeId?: string;
+      waitingReason?: WaitingReason;
     }
   | {
       type: "agent-detected";
@@ -227,6 +228,7 @@ export interface PtyHostTerminalInfo {
   cwd: string;
   worktreeId?: string;
   agentState?: AgentState;
+  waitingReason?: WaitingReason;
   lastStateChange?: number;
   spawnedAt: number;
   isTrashed?: boolean;

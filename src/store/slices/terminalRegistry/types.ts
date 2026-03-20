@@ -124,7 +124,8 @@ export interface TerminalRegistrySlice {
     error?: string,
     lastStateChange?: number,
     trigger?: AgentStateChangeTrigger,
-    confidence?: number
+    confidence?: number,
+    waitingReason?: import("@shared/types/agent.js").WaitingReason
   ) => void;
   updateActivity: (
     id: string,

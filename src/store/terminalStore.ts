@@ -548,7 +548,7 @@ export function setupTerminalStoreListeners() {
 
   agentStateUnsubscribe = terminalRegistryController.onAgentStateChanged(
     (data: AgentStateChangePayload) => {
-      const { terminalId, state, timestamp, trigger, confidence } = data;
+      const { terminalId, state, timestamp, trigger, confidence, waitingReason } = data;
 
       if (typeof timestamp !== "number" || !Number.isFinite(timestamp)) {
         logWarn("Invalid timestamp in agent state event", { data });
@@ -584,7 +584,15 @@ export function setupTerminalStoreListeners() {
 
       useTerminalStore
         .getState()
-        .updateAgentState(terminalId, state, undefined, timestamp, trigger, clampedConfidence);
+        .updateAgentState(
+          terminalId,
+          state,
+          undefined,
+          timestamp,
+          trigger,
+          clampedConfidence,
+          waitingReason
+        );
 
       if (state === "waiting" || state === "idle") {
         useTerminalStore.getState().processQueue(terminalId);

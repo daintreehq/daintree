@@ -51,6 +51,7 @@ export const AgentStateChangedSchema = EventContextSchema.extend({
   trigger: AgentStateChangeTriggerSchema,
   // Confidence in the state detection (0.0 = uncertain, 1.0 = certain)
   confidence: z.number().min(0).max(1),
+  waitingReason: z.enum(["prompt", "approval", "question"]).optional(),
 });
 
 export const AgentOutputSchema = EventContextSchema.extend({
