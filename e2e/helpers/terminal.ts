@@ -74,6 +74,20 @@ export async function selectAllTerminalText(panelLocator: Locator): Promise<void
   if (!ok) throw new Error(`selectAllTerminalText failed for panel ${panelId}`);
 }
 
+export async function triggerTerminalLink(panelLocator: Locator, url: string): Promise<string> {
+  const page = panelLocator.page();
+  const panelId = await getPanelId(panelLocator);
+  if (!panelId) return "missing-panel";
+  return page.evaluate(
+    ({ id, linkUrl }) => {
+      const fn = (window as unknown as Record<string, unknown>).__canopyTriggerTerminalLink;
+      if (typeof fn === "function") return fn(id, linkUrl) as string;
+      return "missing-bridge";
+    },
+    { id: panelId, linkUrl: url }
+  );
+}
+
 export async function openTerminalContextMenu(panelLocator: Locator): Promise<void> {
   const page = panelLocator.page();
   const xterm = panelLocator.locator(SEL.terminal.xtermRows);
