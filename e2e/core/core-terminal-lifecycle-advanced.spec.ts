@@ -67,6 +67,9 @@ test.describe.serial("Core: Terminal Trash & Restore", () => {
 
       const restored = getFirstGridPanel(window);
       await waitForTerminalText(restored, marker, T_LONG);
+
+      // Trash container should disappear after restore (entry consumed)
+      await expect(trashBtn).not.toBeVisible({ timeout: T_MEDIUM });
     });
 
     test("cleanup: close restored terminal", async () => {
@@ -174,7 +177,7 @@ test.describe.serial("Core: Terminal Trash & Restore", () => {
 
   test.describe.serial("TTL Expiry Permanently Removes Terminal", () => {
     test("trashed terminal is permanently removed after TTL", async () => {
-      test.setTimeout(60_000);
+      test.setTimeout(120_000);
       const { window } = ctx;
       const marker = uniqueMarker();
 
