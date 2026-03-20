@@ -77,7 +77,7 @@ export async function launchApp(options: LaunchOptions = {}): Promise<AppContext
         ...process.env,
         ...options.env,
         NODE_ENV: "production",
-        CANOPY_E2E_SKIP_FIRST_RUN_DIALOGS: "1",
+        CANOPY_E2E_SKIP_FIRST_RUN_DIALOGS: options.env?.CANOPY_E2E_SKIP_FIRST_RUN_DIALOGS ?? "1",
         CANOPY_DISABLE_WEBGL: "1",
         ...(isWindowsCI
           ? {
