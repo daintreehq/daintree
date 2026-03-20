@@ -424,8 +424,9 @@ export function BulkCreateWorktreeDialog({
         strict: true,
       });
       queueRef.current = queue;
-      let succeeded = 0;
-      let failed = 0;
+      const currentRunIssues = new Set(toCreate.map((item) => item.issue.number));
+      const succeededIssues = new Set<number>();
+      const failedIssues = new Set<number>();
       let lastSuccessfulWorktreeId: string | null = null;
 
       for (const item of toCreate) {
@@ -578,7 +579,7 @@ export function BulkCreateWorktreeDialog({
                     continue;
                   }
                   const errorMsg = `${results.failed.length} terminal(s) failed to spawn`;
-                  failed++;
+                  failedIssues.add(item.issue.number);
                   dispatchProgress({
                     type: "ITEM_FAILED",
                     issueNumber: item.issue.number,
@@ -609,7 +610,7 @@ export function BulkCreateWorktreeDialog({
               if (runIdRef.current !== currentRunId) return;
 
               lastSuccessfulWorktreeId = worktreeId!;
-              succeeded++;
+              succeededIssues.add(item.issue.number);
               dispatchProgress({ type: "ITEM_SUCCEEDED", issueNumber: item.issue.number });
               return;
             } catch (err) {
@@ -622,7 +623,7 @@ export function BulkCreateWorktreeDialog({
                 continue;
               }
 
-              failed++;
+              failedIssues.add(item.issue.number);
               dispatchProgress({
                 type: "ITEM_FAILED",
                 issueNumber: item.issue.number,
@@ -640,7 +641,7 @@ export function BulkCreateWorktreeDialog({
       if (runIdRef.current !== currentRunId) return;
       queueRef.current = null;
 
-      // Post-batch verification: check terminal health using local tracking (not stale closure)
+      // Post-batch verification: check terminal health for current run items only
       if (selectedRecipeId) {
         await delay(VERIFICATION_SETTLE_MS);
         if (runIdRef.current !== currentRunId) return;
@@ -648,21 +649,21 @@ export function BulkCreateWorktreeDialog({
         const terminals = useTerminalStore.getState().terminals;
 
         for (const [issueNumber, tracked] of tracking) {
+          // Only verify items from this run that succeeded with spawned terminals
+          if (!currentRunIssues.has(issueNumber)) continue;
           if (!tracked.worktreeId || tracked.spawnedTerminalIds.length === 0) continue;
-          // Only verify items that succeeded
           if (tracked.failedTerminalIndices.length > 0) continue;
 
-          dispatchProgress({ type: "ITEM_VERIFYING", issueNumber });
-
-          // Check each spawned terminal — failed means non-zero exit code
           const crashedCount = tracked.spawnedTerminalIds.filter((tid) => {
             const t = terminals.find((term) => term.id === tid);
             return t && t.exitCode !== undefined && t.exitCode !== 0;
           }).length;
 
           if (crashedCount > 0) {
-            failed++;
-            succeeded--;
+            // Only dispatch verifying/failed for items with crashed terminals
+            succeededIssues.delete(issueNumber);
+            failedIssues.add(issueNumber);
+            dispatchProgress({ type: "ITEM_VERIFYING", issueNumber });
             dispatchProgress({
               type: "ITEM_FAILED",
               issueNumber,
@@ -670,9 +671,8 @@ export function BulkCreateWorktreeDialog({
               attempts: 1,
               failedStep: "verification",
             });
-          } else {
-            dispatchProgress({ type: "ITEM_SUCCEEDED", issueNumber });
           }
+          // Healthy items: no dispatch needed — already in succeeded state
         }
       }
 
@@ -683,17 +683,19 @@ export function BulkCreateWorktreeDialog({
 
       dispatchProgress({ type: "DONE" });
 
-      if (failed === 0) {
+      const sCount = succeededIssues.size;
+      const fCount = failedIssues.size;
+      if (fCount === 0) {
         notify({
           type: "success",
           title: "Bulk Create Complete",
-          message: `Created ${succeeded} worktree${succeeded !== 1 ? "s" : ""}`,
+          message: `Created ${sCount} worktree${sCount !== 1 ? "s" : ""}`,
         });
       } else {
         notify({
           type: "error",
           title: "Bulk Create Partial Failure",
-          message: `${succeeded} created, ${failed} failed`,
+          message: `${sCount} created, ${fCount} failed`,
         });
       }
     },
@@ -754,6 +756,15 @@ export function BulkCreateWorktreeDialog({
       if (failedIssueNumbers.size === 0) return;
 
       const toRetry = planned.filter((p) => !p.skipped && failedIssueNumbers.has(p.issue.number));
+
+      // Reset terminal tracking for retried items so verification doesn't use stale data
+      for (const issueNumber of failedIssueNumbers) {
+        const tracked = batchTrackingRef.current.get(issueNumber);
+        if (tracked) {
+          tracked.spawnedTerminalIds = [];
+          tracked.failedTerminalIndices = [];
+        }
+      }
 
       dispatchProgress({ type: "RETRY_FAILED" });
       await runBatch(toRetry);
