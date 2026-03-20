@@ -71,6 +71,13 @@ export class TaskOrchestrator {
       })
     );
 
+    // Subscribe to agent kills (user-initiated termination)
+    this.unsubscribers.push(
+      events.on("agent:killed", (payload) => {
+        void this.handleAgentKilled(payload);
+      })
+    );
+
     // Subscribe to worktree removals
     this.unsubscribers.push(
       events.on("sys:worktree:remove", (payload) => {
@@ -324,6 +331,47 @@ export class TaskOrchestrator {
     this.agentToRunMap.delete(agentId);
 
     // Try to assign next task (to other available agents)
+    await this.assignNextTask();
+  }
+
+  /**
+   * Handle agent kill (user-initiated termination).
+   * Clean up task tracking and cancel the associated task.
+   */
+  private async handleAgentKilled(payload: CanopyEventMap["agent:killed"]): Promise<void> {
+    if (this.isDisposed) return;
+
+    const { agentId } = payload;
+    if (!agentId) return;
+
+    const runId = this.agentToRunMap.get(agentId);
+    if (!runId) return;
+
+    const taskId = this.runToTaskMap.get(runId);
+    if (!taskId) {
+      this.agentToRunMap.delete(agentId);
+      return;
+    }
+
+    const task = await this.queueService.getTask(taskId);
+    if (!task || task.status !== "running" || task.runId !== runId) {
+      this.runToTaskMap.delete(runId);
+      this.agentToRunMap.delete(agentId);
+      return;
+    }
+
+    try {
+      await this.queueService.cancelTask(taskId);
+    } catch (err) {
+      console.error(
+        `[TaskOrchestrator] Failed to cancel task ${taskId} after agent kill:`,
+        err instanceof Error ? err.message : String(err)
+      );
+    }
+
+    this.runToTaskMap.delete(runId);
+    this.agentToRunMap.delete(agentId);
+
     await this.assignNextTask();
   }
 
