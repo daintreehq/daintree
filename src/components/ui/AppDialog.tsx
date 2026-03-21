@@ -228,7 +228,7 @@ export function AppDialog({
           ref={dialogRef}
           tabIndex={-1}
           className={cn(
-            "bg-canopy-sidebar border border-[var(--border-overlay)] border-t-overlay-strong rounded-[var(--radius-xl)] shadow-modal mx-4 flex flex-col",
+            "bg-surface-panel border border-border-default rounded-[var(--radius-xl)] shadow-[var(--recipe-dialog-shadow)] mx-4 flex flex-col",
             maxHeight,
             sizeClasses[size],
             "w-full",

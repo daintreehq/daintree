@@ -171,6 +171,7 @@ export const APP_THEME_TOKEN_KEYS = [
   // Themes set these to express their shadow personality (crisp, fog-diffused, soft, etc.)
   "recipe-shadow-ambient",
   "recipe-shadow-floating",
+  "recipe-dialog-shadow",
 
   // Focus ring offset in px (default 2px; some themes prefer 3px for breathing room)
   "recipe-focus-ring-offset",
@@ -180,6 +181,33 @@ export const APP_THEME_TOKEN_KEYS = [
   // Themes can override for accent-tinted selections (e.g. Galápagos, Redwoods).
   "recipe-sidebar-active-bg",
   "recipe-sidebar-active-shadow",
+  "recipe-sidebar-hover-bg",
+
+  // Settings shell — sidebar wash, content header wash, selected nav chrome, subtab fills,
+  // and shortcut key badges vary per theme while keeping the structure consistent.
+  "recipe-settings-search-bg",
+  "recipe-settings-search-muted",
+  "recipe-settings-meta-fg",
+  "recipe-settings-meta-size",
+  "recipe-settings-card-bg",
+  "recipe-settings-list-item-bg",
+  "recipe-settings-sidebar-bg",
+  "recipe-settings-header-bg",
+  "recipe-settings-nav-active-bg",
+  "recipe-settings-nav-active-shadow",
+  "recipe-settings-nav-hover-bg",
+  "recipe-settings-subtab-active-bg",
+  "recipe-settings-subtab-active-border-width",
+  "recipe-settings-subtab-active-radius",
+  "recipe-settings-subtab-hover-bg",
+  "recipe-settings-subtab-hover-border",
+  "recipe-settings-subtab-hover-radius",
+  "recipe-settings-kbd-bg",
+  "recipe-settings-kbd-border",
+
+  // Worktree inset sections — details/terminal trays share a theme-specific hover fill that
+  // is distinct from both card hover chrome and the generic surface hover ladder.
+  "recipe-worktree-section-hover-bg",
 
   // Chrome noise texture — CSS background-image layer for grain on sidebar/toolbar/dock.
   // Set to a data-URI SVG noise filter or "none" (default). Requires component support.

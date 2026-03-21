@@ -109,7 +109,7 @@ export function WorktreeTerminalSection({
   return (
     <div
       id={terminalsId}
-      className="mt-3 rounded-[var(--radius-lg)] border border-border-subtle bg-overlay-subtle"
+      className="mt-3 rounded-[var(--radius-lg)] border border-border-default bg-surface-inset"
     >
       {isExpanded ? (
         <>
@@ -117,7 +117,7 @@ export function WorktreeTerminalSection({
             onClick={onToggle}
             aria-expanded={true}
             aria-controls={terminalsPanelId}
-            className="flex w-full items-center justify-between rounded-t-[var(--radius-lg)] border-b border-border-subtle bg-overlay-soft px-3 py-1.5 text-left transition-colors hover:bg-overlay-medium focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-[-2px]"
+            className="flex w-full items-center justify-between rounded-t-[var(--radius-lg)] border-b border-border-default bg-surface-inset px-3 py-1.5 text-left transition-colors hover:bg-[var(--recipe-worktree-section-hover-bg)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-[-2px]"
             id={`${terminalsId}-button`}
           >
             <span className="flex items-center gap-1.5 text-[11px] font-medium text-text-muted">
@@ -139,7 +139,7 @@ export function WorktreeTerminalSection({
               id={terminalsPanelId}
               role="list"
               aria-labelledby={`${terminalsId}-button`}
-              className="max-h-[300px] overflow-y-auto"
+              className="max-h-[300px] overflow-y-auto bg-surface-inset"
             >
               {orderedWorktreeTerminals.map((term, index) => (
                 <SortableWorktreeTerminal
@@ -149,7 +149,7 @@ export function WorktreeTerminalSection({
                   sourceIndex={index}
                 >
                   {({ listeners }) => (
-                    <div className="group flex items-center justify-between gap-2.5 px-3 py-2 transition-colors hover:bg-overlay-soft">
+                    <div className="group flex items-center justify-between gap-2.5 px-3 py-2 transition-colors hover:bg-[var(--recipe-worktree-section-hover-bg)]">
                       <button
                         type="button"
                         onClick={(e) => {
@@ -240,7 +240,7 @@ export function WorktreeTerminalSection({
           onClick={onToggle}
           aria-expanded={false}
           aria-controls={terminalsPanelId}
-          className="flex w-full items-center justify-between rounded-[var(--radius-lg)] px-3 py-1.5 text-left transition-colors hover:bg-overlay-soft focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-[-2px]"
+          className="flex w-full items-center justify-between rounded-[var(--radius-lg)] px-3 py-1.5 text-left transition-colors hover:bg-[var(--recipe-worktree-section-hover-bg)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-[-2px]"
           id={`${terminalsId}-button`}
         >
           <div className="flex items-center gap-1.5 text-[11px] text-text-secondary">

@@ -105,8 +105,8 @@ const IssueBadge = memo(function IssueBadge({
               isHeadline
                 ? isActive
                   ? "text-text-primary font-medium"
-                  : "text-canopy-text/60 font-medium"
-                : "text-canopy-text/90"
+                  : "text-text-secondary font-medium"
+                : "text-text-primary/90"
             )}
           >
             {issueTitle || <span className="text-github-open font-mono">#{issueNumber}</span>}
@@ -119,9 +119,9 @@ const IssueBadge = memo(function IssueBadge({
         ) : data ? (
           <IssueTooltipContent data={data} />
         ) : error ? (
-          <span className="text-xs text-canopy-text/70">Failed to load issue details</span>
+          <span className="text-xs text-text-secondary">Failed to load issue details</span>
         ) : (
-          <span className="text-xs text-canopy-text/70">Issue #{issueNumber}</span>
+          <span className="text-xs text-text-secondary">Issue #{issueNumber}</span>
         )}
       </TooltipContent>
     </Tooltip>
@@ -179,7 +179,7 @@ const PRBadge = memo(function PRBadge({
           aria-label={`Open ${prStateLabel} pull request #${prNumber} on GitHub`}
         >
           {isSubordinate && (
-            <CornerDownRight className="w-3 h-3 text-canopy-text/30 shrink-0" aria-hidden="true" />
+            <CornerDownRight className="w-3 h-3 text-text-muted shrink-0" aria-hidden="true" />
           )}
           <GitPullRequest className={cn("w-3 h-3 shrink-0", prStateColor)} aria-hidden="true" />
           <span className={cn("font-mono hover:underline", prStateColor)}>#{prNumber}</span>
@@ -191,9 +191,9 @@ const PRBadge = memo(function PRBadge({
         ) : data ? (
           <PRTooltipContent data={data} />
         ) : error ? (
-          <span className="text-xs text-canopy-text/70">Failed to load PR details</span>
+          <span className="text-xs text-text-secondary">Failed to load PR details</span>
         ) : (
-          <span className="text-xs text-canopy-text/70">PR #{prNumber}</span>
+          <span className="text-xs text-text-secondary">PR #{prNumber}</span>
         )}
       </TooltipContent>
     </Tooltip>

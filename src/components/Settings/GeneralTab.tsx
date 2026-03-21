@@ -261,7 +261,7 @@ export function GeneralTab({
         <>
           <div
             id="general-about"
-            className="flex items-start gap-4 p-4 rounded-[var(--radius-md)] border border-canopy-border bg-canopy-bg/50"
+            className="flex items-start gap-4 p-4 rounded-[var(--radius-md)] border border-canopy-border bg-[var(--recipe-settings-card-bg)]"
           >
             <div className="h-12 w-12 bg-canopy-accent/10 rounded-xl flex items-center justify-center shrink-0">
               <CanopyIcon size={28} className="text-canopy-accent" />
@@ -272,9 +272,9 @@ export function GeneralTab({
                 <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-canopy-accent/15 text-canopy-accent leading-none">
                   Beta
                 </span>
-                <span className="text-xs text-canopy-text/40 font-mono ml-auto">v{appVersion}</span>
+                <span className="text-xs text-text-muted font-mono ml-auto">v{appVersion}</span>
               </div>
-              <p className="text-xs text-canopy-text/50 leading-relaxed">
+              <p className="text-xs text-text-secondary leading-relaxed">
                 An orchestration board for AI coding agents. Start agents on worktrees, monitor
                 progress, and inject context.
               </p>
@@ -286,7 +286,7 @@ export function GeneralTab({
                     { source: "user" }
                   )
                 }
-                className="flex items-center gap-1.5 text-xs text-canopy-text/40 hover:text-canopy-accent transition-colors pt-1"
+                className="flex items-center gap-1.5 text-xs text-text-muted hover:text-canopy-accent transition-colors pt-1"
               >
                 <ExternalLink className="w-3 h-3" />
                 github.com/canopyide/canopy
@@ -303,7 +303,7 @@ export function GeneralTab({
             {cliCheckFailed ? (
               <div className="text-sm text-status-error/80">Failed to check agent status</div>
             ) : !cliAvailability || !agentSettings ? (
-              <div className="text-sm text-canopy-text/40">Loading agent status...</div>
+              <div className="text-sm text-text-muted">Loading agent status...</div>
             ) : (
               <div className="space-y-2">
                 {getAgentIds().map((id) => {
@@ -312,19 +312,25 @@ export function GeneralTab({
                   const isSelected = agentEntry.selected !== false;
                   const isAvailable = cliAvailability[id] ?? false;
                   const name = config?.name ?? id;
+                  const isUnavailable = isSelected && !isAvailable;
 
                   return (
                     <button
                       type="button"
                       key={id}
-                      className="flex items-center justify-between text-sm px-3 py-2 rounded-[var(--radius-md)] border border-canopy-border bg-canopy-bg/30 w-full text-left cursor-pointer transition-colors hover:bg-overlay-soft focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2"
+                      className={cn(
+                        "flex items-center justify-between text-sm px-3 py-2 rounded-[var(--radius-md)] border w-full text-left cursor-pointer transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2",
+                        isUnavailable
+                          ? "border-[color-mix(in_oklab,var(--color-status-warning)_30%,transparent)] bg-[color-mix(in_oklab,var(--color-status-warning)_6%,transparent)] hover:bg-[color-mix(in_oklab,var(--color-status-warning)_10%,transparent)]"
+                          : "border-canopy-border bg-[var(--recipe-settings-list-item-bg)] hover:bg-[var(--recipe-settings-nav-hover-bg)]"
+                      )}
                       aria-label={`Go to ${name} agent settings`}
                       onClick={() => onNavigateToAgents?.(id)}
                     >
-                      <span className="text-canopy-text/70">{name}</span>
+                      <span className="text-text-secondary">{name}</span>
                       <span className="flex items-center gap-2">
                         {!isSelected ? (
-                          <span className="text-canopy-text/40 text-xs">Disabled</span>
+                          <span className="text-text-muted text-xs">Disabled</span>
                         ) : isAvailable ? (
                           <>
                             <CheckCircle className="w-3.5 h-3.5 text-status-success" />
@@ -377,7 +383,7 @@ export function GeneralTab({
               <div id="keyboard-shortcuts-content" className="space-y-4">
                 {shortcuts.map((category) => (
                   <div key={category.category} className="space-y-2">
-                    <h5 className="text-xs font-medium text-canopy-text/50 uppercase tracking-wide">
+                    <h5 className="text-xs font-medium text-text-secondary uppercase tracking-wide">
                       {category.category}
                     </h5>
                     <dl className="space-y-1">
@@ -388,7 +394,7 @@ export function GeneralTab({
                         >
                           <dt className="text-canopy-text">{shortcut.description}</dt>
                           <dd>
-                            <kbd className="px-2 py-1 bg-canopy-bg border border-canopy-border rounded text-xs font-mono text-canopy-text">
+                            <kbd className="px-2 py-1 rounded border text-xs font-mono text-canopy-text bg-[var(--recipe-settings-kbd-bg)] border-[var(--recipe-settings-kbd-border)]">
                               {shortcut.key}
                             </kbd>
                           </dd>
