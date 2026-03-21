@@ -23,10 +23,10 @@ describe("getTerminalThemeFromAppScheme", () => {
   it("derives scrollbar from activity-idle token for hex values", () => {
     const scheme = BUILT_IN_APP_SCHEMES[0];
     const theme = getTerminalThemeFromAppScheme(scheme);
-    // Canopy's activity-idle is #52525b → rgba(82, 82, 91, ...)
-    expect(theme.scrollbarSliderBackground).toBe("rgba(82, 82, 91, 0.4)");
-    expect(theme.scrollbarSliderHoverBackground).toBe("rgba(82, 82, 91, 0.6)");
-    expect(theme.scrollbarSliderActiveBackground).toBe("rgba(82, 82, 91, 0.8)");
+    // Daintree's activity-idle is #555C58 → rgba(85, 92, 88, ...)
+    expect(theme.scrollbarSliderBackground).toBe("rgba(85, 92, 88, 0.4)");
+    expect(theme.scrollbarSliderHoverBackground).toBe("rgba(85, 92, 88, 0.6)");
+    expect(theme.scrollbarSliderActiveBackground).toBe("rgba(85, 92, 88, 0.8)");
   });
 
   it("falls back to generic defaults when activity-idle is not hex", () => {

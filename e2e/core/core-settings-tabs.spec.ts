@@ -30,27 +30,35 @@ test.describe.serial("Core: Settings Tabs Coverage", () => {
       timeout: T_SHORT,
     });
 
-    // "App" subtab is the default — theme cards in a 2-col grid should be visible
-    // Theme cards are buttons inside .grid.grid-cols-2 within the dialog content area
+    // "App" subtab is the default — theme select control should be visible
     const settingsPanel = window.locator('[role="dialog"]');
-    const themeCards = settingsPanel.locator(".grid.grid-cols-2 > button");
-    await expect(themeCards.first()).toBeVisible({ timeout: T_SHORT });
-    const cardCount = await themeCards.count();
-    expect(cardCount).toBeGreaterThanOrEqual(2);
+    const themeTrigger = settingsPanel.locator('[role="combobox"]');
+    await expect(themeTrigger).toBeVisible({ timeout: T_SHORT });
 
-    // Find a card that is NOT currently selected (no border-canopy-accent class)
-    let targetCard = themeCards.first();
-    for (let i = 0; i < cardCount; i++) {
-      const card = themeCards.nth(i);
-      const classes = await card.getAttribute("class");
-      if (classes && !classes.includes("border-canopy-accent")) {
-        targetCard = card;
+    // Open the theme dropdown
+    await themeTrigger.click();
+    const themeListbox = settingsPanel.locator('[role="listbox"]');
+    await expect(themeListbox).toBeVisible({ timeout: T_SHORT });
+
+    // Select a different theme option
+    const options = themeListbox.locator('[role="option"]');
+    const optionCount = await options.count();
+    expect(optionCount).toBeGreaterThanOrEqual(2);
+
+    // Find an option that is NOT currently selected
+    let targetOption = options.first();
+    for (let i = 0; i < optionCount; i++) {
+      const option = options.nth(i);
+      const selected = await option.getAttribute("aria-selected");
+      if (selected !== "true") {
+        targetOption = option;
         break;
       }
     }
 
-    await targetCard.click();
-    await expect(targetCard).toHaveClass(/border-canopy-accent/, { timeout: T_SHORT });
+    await targetOption.click();
+    // Dropdown should close after selection
+    await expect(themeListbox).not.toBeVisible({ timeout: T_SHORT });
 
     await window.keyboard.press("Escape");
     await expect(window.locator(SEL.settings.heading)).not.toBeVisible({ timeout: T_SHORT });

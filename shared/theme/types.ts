@@ -206,6 +206,9 @@ export interface AppColorScheme {
   type: "dark" | "light";
   builtin: boolean;
   tokens: AppColorSchemeTokens;
+  location?: string;
+  heroImage?: string;
+  heroVideo?: string;
 }
 
 export type ColorVisionMode = "default" | "red-green" | "blue-yellow";

@@ -33,6 +33,9 @@ const METADATA_KEYS = new Set([
   "version",
   "engine",
   "previewColors",
+  "location",
+  "heroImage",
+  "heroVideo",
 ]);
 
 function generateThemeId(name: string): string {
@@ -111,12 +114,16 @@ export function parseAppThemeContent(content: string, filename: string): AppThem
 
   const resolvedType = rawTheme.type ?? inferAppThemeTypeFromTokens(rawTokens) ?? "dark";
   const name = rawTheme.name?.trim() || getFileDisplayName(filename);
+  const rawRecord = rawTheme as Record<string, unknown>;
   const scheme = normalizeAppColorScheme(
     {
       id: rawTheme.id?.trim() || generateThemeId(name),
       name,
       type: resolvedType,
       tokens: rawTokens,
+      ...(typeof rawRecord.location === "string" ? { location: rawRecord.location } : {}),
+      ...(typeof rawRecord.heroImage === "string" ? { heroImage: rawRecord.heroImage } : {}),
+      ...(typeof rawRecord.heroVideo === "string" ? { heroVideo: rawRecord.heroVideo } : {}),
     },
     getBuiltInAppSchemeForType(resolvedType)
   );

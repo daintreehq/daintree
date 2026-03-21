@@ -61,14 +61,14 @@ describe("terminalColorSchemeStore", () => {
   it("getEffectiveTheme returns daintree theme for default daintree", () => {
     const theme = useTerminalColorSchemeStore.getState().getEffectiveTheme();
     expect(theme.background).toBe("#19191a");
-    expect(theme.cursor).toBe("#3F9366");
+    expect(theme.cursor).toBe("#3E9066");
   });
 
   it("getEffectiveTheme returns bondi terminal theme for bondi app theme", () => {
     useAppThemeStore.setState({ selectedSchemeId: "bondi" });
     const theme = useTerminalColorSchemeStore.getState().getEffectiveTheme();
-    expect(theme.background).toBe("#1E252E");
-    expect(theme.foreground).toBe("#D8DDE3");
+    expect(theme.background).toBe("#0D1621");
+    expect(theme.foreground).toBe("#ADC8E0");
   });
 
   it("getEffectiveTheme returns correct theme after switching to non-canopy scheme", () => {
@@ -149,7 +149,7 @@ describe("terminalColorSchemeStore", () => {
     it("returns mapped scheme background when app theme changes", () => {
       useAppThemeStore.setState({ selectedSchemeId: "bondi" });
       const bg = selectWrapperBackground(useTerminalColorSchemeStore.getState());
-      expect(bg).toBe("#1E252E");
+      expect(bg).toBe("#0D1621");
     });
 
     it("returns hex color for built-in non-default scheme", () => {
