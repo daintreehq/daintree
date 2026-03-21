@@ -161,7 +161,7 @@ describe("WorktreeHeader issue title headline", () => {
 
     const titleSpan = container.querySelector('button[aria-label*="Open issue"] .truncate');
     expect(titleSpan).toBeDefined();
-    expect(titleSpan!.className).toContain("text-canopy-text/60");
+    expect(titleSpan!.className).toContain("text-text-secondary");
   });
 
   it("uses branch name as primary headline when no issueTitle", () => {
