@@ -359,9 +359,9 @@ export const BUILT_IN_APP_SCHEMES: AppColorScheme[] = [
       // Search — independent teal lane, distinct from accent/success/working greens
       "search-highlight-background": "rgba(92, 137, 128, 0.2)",
       "search-highlight-text": "#5C8980",
-      "search-selected-result-border": "#5C8980",
+      "search-selected-result-border": "rgba(92, 137, 128, 0.30)",
       "search-selected-result-icon": "#5C8980",
-      "search-match-badge-background": "rgba(92, 137, 128, 0.15)",
+      "search-match-badge-background": "rgba(92, 137, 128, 0.20)",
       "search-match-badge-text": "#5C8980",
       // Terminal — inherits canvas; cursor derived from accent-primary
       "terminal-background": "#19191a",
@@ -421,18 +421,18 @@ export const BUILT_IN_APP_SCHEMES: AppColorScheme[] = [
       "text-secondary": "#445468",
       "text-muted": "#758A9E",
       "text-inverse": "#FFFFFF",
-      "text-link": "#0087A1",
+      "text-link": "#007F98",
       // Borders — firm blue-tinted separators
       "border-default": "#B0CBE0",
       "border-subtle": "rgba(13, 22, 33, 0.06)",
       "border-divider": "rgba(13, 22, 33, 0.05)",
       "border-interactive": "rgba(13, 22, 33, 0.10)",
       "border-strong": "rgba(13, 22, 33, 0.14)",
-      // Accent — bold teal #0087A1: sporty, energetic, surf-water
-      "accent-primary": "#0087A1",
+      // Accent — bold teal #007F98: sporty, energetic, surf-water
+      "accent-primary": "#007F98",
       "accent-foreground": "#FFFFFF",
-      "accent-soft": "rgba(0,135,161,0.15)",
-      "accent-muted": "rgba(0,135,161,0.30)",
+      "accent-soft": "rgba(0,127,152,0.15)",
+      "accent-muted": "rgba(0,127,152,0.30)",
       // Status
       "status-success": "#187D41",
       "status-warning": "#B85900",
@@ -454,7 +454,7 @@ export const BUILT_IN_APP_SCHEMES: AppColorScheme[] = [
       "overlay-strong": "rgba(13, 22, 33, 0.10)",
       "overlay-emphasis": "rgba(13, 22, 33, 0.14)",
       // Focus ring — cool teal, energetic, matches accent
-      "focus-ring": "rgba(0, 135, 161, 0.30)",
+      "focus-ring": "rgba(0, 127, 152, 0.30)",
       // Scrims — cool blue-black, not pure black
       "scrim-soft": "rgba(13, 22, 33, 0.30)",
       "scrim-medium": "rgba(13, 22, 33, 0.50)",
@@ -473,11 +473,11 @@ export const BUILT_IN_APP_SCHEMES: AppColorScheme[] = [
       "recipe-scrollbar-thumb-hover": "color-mix(in oklab, #758A9E 85%, #0D1621)",
       // Search — surf-blue lane, distinct from teal accent
       "search-highlight-background": "rgba(0, 102, 224, 0.20)",
-      "search-highlight-text": "#0066E0",
+      "search-highlight-text": "#0052B3",
       "search-selected-result-border": "rgba(0, 102, 224, 0.30)",
       "search-selected-result-icon": "#0066E0",
       "search-match-badge-background": "rgba(0, 102, 224, 0.20)",
-      "search-match-badge-text": "#0066E0",
+      "search-match-badge-text": "#0052B3",
       // GitHub — Bondi-specific vibrant palette
       "github-open": "#138A36",
       "github-merged": "#8948E8",
@@ -514,7 +514,7 @@ export const BUILT_IN_APP_SCHEMES: AppColorScheme[] = [
       "syntax-operator": "#0FA8C0",
       "syntax-keyword": "#9D45F0",
       "syntax-function": "#4D9FD6",
-      "syntax-link": "#0087A1",
+      "syntax-link": "#007F98",
       "syntax-quote": "#758A9E",
       "syntax-chip": "#0FA8C0",
     }),
@@ -632,7 +632,7 @@ export const BUILT_IN_APP_SCHEMES: AppColorScheme[] = [
       // Button inset highlight — warm white catch light
       "recipe-button-inset-shadow": "inset 0 1px 0 rgba(255,253,248,0.70)",
       // Shadow profiles — deep/lush fynbos canopy shadows
-      "recipe-shadow-ambient": "0 18px 36px rgba(60,48,38,0.11), 0 6px 14px rgba(60,48,38,0.07)",
+      "recipe-shadow-ambient": "0 12px 40px rgba(60,48,38,0.11)",
       "recipe-shadow-floating": "0 20px 56px rgba(60,48,38,0.15)",
       // Elevated surface inset shadow
       "recipe-surface-elevated-inset-shadow": "inset 0 1px 0 rgba(255,253,248,0.70)",
@@ -653,15 +653,15 @@ export const BUILT_IN_APP_SCHEMES: AppColorScheme[] = [
       "surface-panel-elevated": "#342620",
       // Text — parchment-warm: primary is aged linen, muted is aged paper
       "text-primary": "#E3D4C5",
-      "text-secondary": "#C4B5A6",
+      "text-secondary": "#B5A493",
       "text-muted": "#9A8B7C",
       "text-inverse": "#1A1310",
       // Border — aged wood grain; warm umber default, alpha variants for structural lines
       "border-default": "#483A2E",
       "border-subtle": "rgba(255,236,214,0.07)",
       "border-strong": "rgba(255,236,214,0.14)",
-      // Accent — subdued vermilion for selection, toggles, badges; gold is reserved for search
-      "accent-primary": "#B85733",
+      // Accent — warm vermilion for selection, toggles, badges; gold is reserved for search
+      "accent-primary": "#C46240",
       "accent-foreground": "#1A1310",
       // Status
       "status-success": "#6A8253",
@@ -682,7 +682,7 @@ export const BUILT_IN_APP_SCHEMES: AppColorScheme[] = [
       // Shadow — warm umber; cold black shadows clash with lacquer
       "shadow-color": "rgba(12,8,4,0.45)",
       "recipe-shadow-ambient": "0 1px 3px rgba(12,8,4,0.35), 0 1px 2px rgba(12,8,4,0.25)",
-      "recipe-shadow-floating": "0 14px 42px rgba(12,8,4,0.45), 0 4px 12px rgba(12,8,4,0.3)",
+      "recipe-shadow-floating": "0 14px 42px rgba(12,8,4,0.45)",
       "scrim-soft": "rgba(12,8,4,0.20)",
       "scrim-medium": "rgba(12,8,4,0.45)",
       "scrim-strong": "rgba(12,8,4,0.62)",
@@ -724,7 +724,7 @@ export const BUILT_IN_APP_SCHEMES: AppColorScheme[] = [
       "syntax-quote": "#b0a090",
       "syntax-chip": "#b8c890",
       // Scrollbar — warm charcoal thumb; hover lightens toward primary
-      "recipe-scrollbar-thumb": "#574B43",
+      "recipe-scrollbar-thumb": "#8A7A6A",
       "recipe-scrollbar-thumb-hover": "color-mix(in oklab, #8A7A6A 85%, #E3D4C5)",
       "recipe-button-inset-shadow": "inset 0 1px 0 rgba(255,240,220,0.15)",
       "recipe-surface-elevated-inset-shadow": "inset 0 1px 0 0 rgba(255,240,220,0.08)",
@@ -753,7 +753,7 @@ export const BUILT_IN_APP_SCHEMES: AppColorScheme[] = [
       "border-strong": "rgba(180,220,240,0.16)",
       // Accent — glacial teal/cyan
       "accent-primary": "#3AB7C5",
-      "accent-foreground": "#0C141D",
+      "accent-foreground": "#050D14",
       // Status
       "status-success": "#5BA38E",
       "status-warning": "#B88F52",
@@ -776,7 +776,7 @@ export const BUILT_IN_APP_SCHEMES: AppColorScheme[] = [
       // Search — icy wayfinding lane (#7DD4DF), separate from glacial accent
       "search-highlight-background": "rgba(125,212,223,0.15)",
       "search-highlight-text": "#7DD4DF",
-      "search-selected-result-border": "#7DD4DF",
+      "search-selected-result-border": "rgba(125, 212, 223, 0.30)",
       "search-selected-result-icon": "#7DD4DF",
       "search-match-badge-background": "rgba(125,212,223,0.12)",
       "search-match-badge-text": "#7DD4DF",
@@ -817,7 +817,7 @@ export const BUILT_IN_APP_SCHEMES: AppColorScheme[] = [
       "recipe-scrollbar-thumb": "#6B8296",
       "recipe-scrollbar-thumb-hover": "color-mix(in oklab, #6B8296 85%, #DDE7F0)",
       "recipe-button-inset-shadow": "inset 0 1px 0 rgba(180,220,240,0.15)",
-      "recipe-surface-elevated-inset-shadow": "inset 0 1px 0 0 rgba(180,220,240,0.03)",
+      "recipe-surface-elevated-inset-shadow": "inset 0 1px 0 rgba(180,220,240,0.04)",
     }),
   },
   {
@@ -997,8 +997,8 @@ export const BUILT_IN_APP_SCHEMES: AppColorScheme[] = [
       // Top sheen — heather-tinted, not generic white
       "recipe-surface-elevated-inset-shadow": "inset 0 1px 0 0 rgba(220,215,230,0.04)",
       // Shadow — warm-violet moorland shadows
-      "recipe-shadow-ambient": "0 1px 3px rgba(15,12,18,0.35), 0 1px 2px rgba(15,12,18,0.25)",
-      "recipe-shadow-floating": "0 14px 40px rgba(15,12,18,0.45), 0 4px 12px rgba(10,8,14,0.30)",
+      "recipe-shadow-ambient": "0 1px 3px rgba(15,12,18,0.40)",
+      "recipe-shadow-floating": "0 14px 40px rgba(15,12,18,0.45)",
       // Chrome noise texture — subtle 1–2% smoke/grain on chrome areas only
       "recipe-chrome-noise-texture":
         "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.75' numOctaves='4' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='200' height='200' filter='url(%23noise)' opacity='0.015'/%3E%3C/svg%3E\")",
@@ -1057,8 +1057,9 @@ export const BUILT_IN_APP_SCHEMES: AppColorScheme[] = [
       "search-selected-result-border": "#759DB6",
       "search-selected-result-icon": "#759DB6",
       "search-match-badge-background": "rgba(117,157,182,0.15)",
-      "search-match-badge-text": "#759DB6",
+      "search-match-badge-text": "#86ABC3",
       // Terminal
+      "terminal-cursor": "#fbbf24",
       "terminal-background": "#1F1B16",
       "terminal-foreground": "#E8E2D9",
       "terminal-muted": "#665D50",
@@ -1091,6 +1092,8 @@ export const BUILT_IN_APP_SCHEMES: AppColorScheme[] = [
       "recipe-scrollbar-thumb": "#665D50",
       "recipe-scrollbar-thumb-hover": "color-mix(in oklab, #665D50 85%, #E8E2D9)",
       "recipe-button-inset-shadow": "inset 0 1px 0 rgba(220,200,180,0.08)",
+      // Top sheen — barely visible on dry desert theme
+      "recipe-surface-elevated-inset-shadow": "inset 0 1px 0 0 rgba(220,200,180,0.02)",
       // Shadow — dry crisp desert shadows with warm sand-dark base
       "recipe-shadow-ambient": "0 1px 3px rgba(14,11,8,0.28), 0 1px 2px rgba(14,11,8,0.18)",
       "recipe-shadow-floating": "0 10px 32px rgba(14,11,8,0.40), 0 2px 8px rgba(14,11,8,0.22)",
@@ -1140,12 +1143,12 @@ export const BUILT_IN_APP_SCHEMES: AppColorScheme[] = [
       "scrim-medium": "rgba(9,5,3,0.65)",
       "scrim-strong": "rgba(9,5,3,0.78)",
       // Search — warmer/yellower moss lane, distinct from main accent green
-      "search-highlight-background": "rgba(80,139,85,0.18)",
-      "search-highlight-text": "#508B55",
-      "search-selected-result-border": "#508B55",
-      "search-selected-result-icon": "#508B55",
-      "search-match-badge-background": "rgba(80,139,85,0.15)",
-      "search-match-badge-text": "#508B55",
+      "search-highlight-background": "rgba(78,154,83,0.18)",
+      "search-highlight-text": "#5CAF62",
+      "search-selected-result-border": "rgba(78,154,83,0.45)",
+      "search-selected-result-icon": "#4E9A53",
+      "search-match-badge-background": "rgba(78,154,83,0.20)",
+      "search-match-badge-text": "#4E9A53",
       // Terminal — forest floor; larger fog-diffused shadow blur
       "terminal-background": "#16110D",
       "terminal-foreground": "#E8DCC8",
@@ -1199,7 +1202,7 @@ export const BUILT_IN_APP_SCHEMES: AppColorScheme[] = [
       "surface-panel": "#F2F0EB",
       "surface-panel-elevated": "#F9F7F4",
       "surface-input": "#F2F0EB",
-      "surface-inset": "#E2DED5",
+      "surface-inset": "#DFDBD3",
       "surface-hover": "rgba(51,43,35,0.03)",
       "surface-active": "rgba(51,43,35,0.10)",
       // Text — warm earth tones
@@ -1246,7 +1249,7 @@ export const BUILT_IN_APP_SCHEMES: AppColorScheme[] = [
       "search-highlight-text": "#4A6C7B",
       "search-selected-result-border": "#4A6C7B",
       "search-selected-result-icon": "#4A6C7B",
-      "search-match-badge-background": "rgba(74,108,123,0.10)",
+      "search-match-badge-background": "rgba(74,108,123,0.20)",
       "search-match-badge-text": "#4A6C7B",
       "focus-ring": "rgba(17,123,138,0.25)",
       "scrim-soft": "rgba(40,34,28,0.30)",
@@ -1255,7 +1258,7 @@ export const BUILT_IN_APP_SCHEMES: AppColorScheme[] = [
       // Shadows — tighter and flatter than default; built for long reading comfort
       "shadow-color": "rgba(51,43,35,0.10)",
       "recipe-shadow-ambient": "0 2px 8px rgba(51,43,35,0.06)",
-      "recipe-shadow-floating": "0 4px 12px rgba(51,43,35,0.10), 0 1px 3px rgba(51,43,35,0.06)",
+      "recipe-shadow-floating": "0 4px 12px rgba(51,43,35,0.10)",
       "recipe-scrollbar-thumb": "#8F877E",
       "recipe-scrollbar-thumb-hover": "color-mix(in oklab, #8F877E 85%, #332B27)",
       "recipe-button-inset-shadow": "inset 0 1px 0 rgba(255,252,248,0.65)",
@@ -1456,7 +1459,7 @@ export const BUILT_IN_APP_SCHEMES: AppColorScheme[] = [
       "text-secondary": "#6A708C",
       "text-muted": "#9BA3BE",
       "text-inverse": "#FDFCFF",
-      "text-link": "#5F72DE",
+      "text-link": "#586CD6",
       // Borders — wider ladder so subtle/default/strong feel distinct
       "border-default": "#CED4E5",
       "border-subtle": "rgba(82,88,118,0.035)",
@@ -1471,10 +1474,10 @@ export const BUILT_IN_APP_SCHEMES: AppColorScheme[] = [
       "overlay-strong": "rgba(82,88,118,0.06)",
       "overlay-emphasis": "rgba(82,88,118,0.09)",
       // Accent — indigo: ink under snow; quiet in fills, sharp at edges
-      "accent-primary": "#5F72DE",
+      "accent-primary": "#586CD6",
       "accent-foreground": "#FDFCFF",
-      "accent-soft": "rgba(95,114,222,0.08)",
-      "accent-muted": "rgba(95,114,222,0.17)",
+      "accent-soft": "rgba(88,108,214,0.08)",
+      "accent-muted": "rgba(88,108,214,0.17)",
       // Status
       "status-success": "#447761",
       "status-warning": "#A0661E",
@@ -1490,7 +1493,7 @@ export const BUILT_IN_APP_SCHEMES: AppColorScheme[] = [
       "github-merged": "#895CDA",
       "github-closed": "#D4323E",
       "github-draft": "#929BA5",
-      "focus-ring": "rgba(95,114,222,0.19)",
+      "focus-ring": "rgba(88,108,214,0.19)",
       "shadow-color": "rgba(86,81,118,0.07)",
       "scrim-soft": "rgba(82,88,118,0.28)",
       "scrim-medium": "rgba(82,88,118,0.40)",
@@ -1540,6 +1543,11 @@ export const BUILT_IN_APP_SCHEMES: AppColorScheme[] = [
       "recipe-shadow-ambient": "0 14px 48px rgba(86,81,118,0.07)",
       "recipe-shadow-floating": "0 22px 64px rgba(86,81,118,0.07)",
       "recipe-button-inset-shadow": "inset 0 1px 0 rgba(255,255,255,0.45)",
+      // Recipe opacities — slightly quieter than light defaults for snow-filtered feel
+      "recipe-state-chip-bg-opacity": "0.10",
+      "recipe-state-chip-border-opacity": "0.30",
+      "recipe-label-pill-bg-opacity": "0.07",
+      "recipe-label-pill-border-opacity": "0.14",
       "recipe-scrollbar-thumb": "#9BA3BE",
       "recipe-scrollbar-thumb-hover": "color-mix(in oklab, #9BA3BE 85%, #2B2F42)",
       // Category colors — Hokkaido-tuned: cooler, quieter for lavender-slate shell
@@ -1596,6 +1604,8 @@ export const BUILT_IN_APP_SCHEMES: AppColorScheme[] = [
       // Accent — ochre/acacia amber; secondary gold for dual-accent wayfinding
       "accent-primary": "#A28224",
       "accent-foreground": "#1E160C",
+      "accent-soft": "rgba(162,130,36,0.14)",
+      "accent-muted": "rgba(162,130,36,0.28)",
       "accent-secondary": "#A28224",
       // Status
       "status-success": "#5E7A45",
