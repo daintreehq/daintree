@@ -115,6 +115,23 @@
   --color-recipe-label-pill-bg-opacity: var(--theme-recipe-label-pill-bg-opacity);
   --color-recipe-label-pill-border-opacity: var(--theme-recipe-label-pill-border-opacity);
   --color-recipe-button-inset-shadow: var(--theme-recipe-button-inset-shadow);
+  --color-recipe-scrollbar-width: var(--theme-recipe-scrollbar-width);
+  --color-recipe-scrollbar-thumb: var(--theme-recipe-scrollbar-thumb);
+  --color-recipe-scrollbar-thumb-hover: var(--theme-recipe-scrollbar-thumb-hover);
+  --color-recipe-scrollbar-track: var(--theme-recipe-scrollbar-track);
+  --color-recipe-panel-state-edge-width: var(--theme-recipe-panel-state-edge-width);
+  --color-recipe-panel-state-edge-inset-block: var(--theme-recipe-panel-state-edge-inset-block);
+  --color-recipe-panel-state-edge-radius: var(--theme-recipe-panel-state-edge-radius);
+  --color-recipe-control-chrome-raised-shadow: var(--theme-recipe-control-chrome-raised-shadow);
+  --color-recipe-control-chrome-pressed-shadow: var(--theme-recipe-control-chrome-pressed-shadow);
+  --color-diff-insert-background: var(--theme-diff-insert-background);
+  --color-diff-insert-edit-background: var(--theme-diff-insert-edit-background);
+  --color-diff-delete-background: var(--theme-diff-delete-background);
+  --color-diff-delete-edit-background: var(--theme-diff-delete-edit-background);
+  --color-diff-gutter-insert: var(--theme-diff-gutter-insert);
+  --color-diff-gutter-delete: var(--theme-diff-gutter-delete);
+  --color-diff-selected-background: var(--theme-diff-selected-background);
+  --color-diff-omit-gutter-line: var(--theme-diff-omit-gutter-line);
 
   --color-category-blue-subtle: color-mix(
     in oklch,

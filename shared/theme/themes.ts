@@ -191,6 +191,39 @@ export function createCanopyTokens(
       (dark
         ? "inset 0 1px 0 rgba(255, 255, 255, 0.06)"
         : "inset 0 1px 0 rgba(255, 255, 255, 0.15)"),
+    "recipe-scrollbar-width": tokens["recipe-scrollbar-width"] ?? "6px",
+    "recipe-scrollbar-thumb":
+      tokens["recipe-scrollbar-thumb"] ?? withAlpha(overlayTone, dark ? 0.2 : 0.18),
+    "recipe-scrollbar-thumb-hover":
+      tokens["recipe-scrollbar-thumb-hover"] ?? withAlpha(overlayTone, dark ? 0.35 : 0.28),
+    "recipe-scrollbar-track": tokens["recipe-scrollbar-track"] ?? "transparent",
+    "recipe-panel-state-edge-width":
+      tokens["recipe-panel-state-edge-width"] ?? (dark ? "0px" : "2px"),
+    "recipe-panel-state-edge-inset-block": tokens["recipe-panel-state-edge-inset-block"] ?? "4px",
+    "recipe-panel-state-edge-radius": tokens["recipe-panel-state-edge-radius"] ?? "2px",
+    "recipe-control-chrome-raised-shadow":
+      tokens["recipe-control-chrome-raised-shadow"] ??
+      (dark
+        ? "0 4px 12px rgba(0, 0, 0, 0.5), 0 1px 3px rgba(0, 0, 0, 0.3)"
+        : "0 4px 12px rgba(0, 0, 0, 0.12), 0 1px 3px rgba(0, 0, 0, 0.08)"),
+    "recipe-control-chrome-pressed-shadow":
+      tokens["recipe-control-chrome-pressed-shadow"] ??
+      (dark ? "inset 0 1px 2px rgba(0, 0, 0, 0.3)" : "inset 0 1px 2px rgba(0, 0, 0, 0.08)"),
+    "diff-insert-background":
+      tokens["diff-insert-background"] ?? withAlpha(tokens["status-success"], dark ? 0.18 : 0.1),
+    "diff-insert-edit-background":
+      tokens["diff-insert-edit-background"] ??
+      withAlpha(tokens["status-success"], dark ? 0.28 : 0.2),
+    "diff-delete-background":
+      tokens["diff-delete-background"] ?? withAlpha(tokens["status-danger"], dark ? 0.18 : 0.1),
+    "diff-delete-edit-background":
+      tokens["diff-delete-edit-background"] ??
+      withAlpha(tokens["status-danger"], dark ? 0.28 : 0.2),
+    "diff-gutter-insert": tokens["diff-gutter-insert"] ?? tokens["status-success"],
+    "diff-gutter-delete": tokens["diff-gutter-delete"] ?? tokens["status-danger"],
+    "diff-selected-background":
+      tokens["diff-selected-background"] ?? withAlpha(overlayTone, dark ? 0.06 : 0.06),
+    "diff-omit-gutter-line": tokens["diff-omit-gutter-line"] ?? tokens["activity-idle"],
     ...tokens,
   };
 }
@@ -341,10 +374,10 @@ export const BUILT_IN_APP_SCHEMES: AppColorScheme[] = [
       "accent-primary": "#1A7258",
       "accent-foreground": "#FCFDFE",
       "overlay-subtle": "rgba(0, 0, 0, 0.02)",
-      "overlay-soft": "rgba(0, 0, 0, 0.05)",
-      "overlay-medium": "rgba(0, 0, 0, 0.05)",
-      "overlay-strong": "rgba(0, 0, 0, 0.08)",
-      "overlay-emphasis": "rgba(0, 0, 0, 0.12)",
+      "overlay-soft": "rgba(0, 0, 0, 0.03)",
+      "overlay-medium": "rgba(0, 0, 0, 0.06)",
+      "overlay-strong": "rgba(0, 0, 0, 0.10)",
+      "overlay-emphasis": "rgba(0, 0, 0, 0.14)",
       "status-success": "#31684B",
       "status-warning": "#9E5D1B",
       "status-danger": "#AD4035",

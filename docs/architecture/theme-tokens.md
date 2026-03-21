@@ -4,23 +4,24 @@ Complete reference for Canopy's semantic token system. Every built-in and custom
 
 ## Token layers
 
-| Layer    | Prefix                               | Changes per theme? | Purpose                                            |
-| -------- | ------------------------------------ | ------------------ | -------------------------------------------------- |
-| Surface  | `surface-*`                          | Yes                | Depth hierarchy and interactive surfaces           |
-| Text     | `text-*`                             | Yes                | Typography color hierarchy                         |
-| Border   | `border-*`                           | Yes                | Edge and divider treatments                        |
-| Accent   | `accent-*`                           | Yes                | Primary interaction color                          |
-| Status   | `status-*`                           | Yes                | Semantic outcome colors                            |
-| Activity | `activity-*`                         | Yes                | Real-time agent state indicators                   |
-| Overlay  | `overlay-*`                          | Yes                | Interactive state tinting ladder                   |
-| Scrim    | `scrim-*`                            | Yes                | Modal backdrop dimming                             |
-| GitHub   | `github-*`                           | Yes                | PR/issue state colors                              |
-| Search   | `search-*`                           | Yes                | Search highlighting (independent of accent)        |
-| Terminal | `terminal-*`                         | Yes                | Terminal emulator layer (independent of workbench) |
-| Syntax   | `syntax-*`                           | Yes                | Code editor token colors                           |
-| Category | `category-*`                         | Yes                | 12 organizational label hues                       |
-| Recipe   | `recipe-*`                           | Yes                | Per-theme parametric opacity/shadow values         |
-| Shared   | `focus-ring`, `shadow-color`, `tint` | Yes                | Cross-cutting single tokens                        |
+| Layer    | Prefix                               | Changes per theme? | Purpose                                                   |
+| -------- | ------------------------------------ | ------------------ | --------------------------------------------------------- |
+| Surface  | `surface-*`                          | Yes                | Depth hierarchy and interactive surfaces                  |
+| Text     | `text-*`                             | Yes                | Typography color hierarchy                                |
+| Border   | `border-*`                           | Yes                | Edge and divider treatments                               |
+| Accent   | `accent-*`                           | Yes                | Primary interaction color                                 |
+| Status   | `status-*`                           | Yes                | Semantic outcome colors                                   |
+| Activity | `activity-*`                         | Yes                | Real-time agent state indicators                          |
+| Overlay  | `overlay-*`                          | Yes                | Interactive state tinting ladder                          |
+| Scrim    | `scrim-*`                            | Yes                | Modal backdrop dimming                                    |
+| GitHub   | `github-*`                           | Yes                | PR/issue state colors                                     |
+| Search   | `search-*`                           | Yes                | Search highlighting (independent of accent)               |
+| Terminal | `terminal-*`                         | Yes                | Terminal emulator layer (independent of workbench)        |
+| Syntax   | `syntax-*`                           | Yes                | Code editor token colors                                  |
+| Category | `category-*`                         | Yes                | 12 organizational label hues                              |
+| Diff     | `diff-*`                             | Yes                | Diff viewer insert/delete/gutter colors                   |
+| Recipe   | `recipe-*`                           | Yes                | Per-theme parametric opacity, shadow, and geometry values |
+| Shared   | `focus-ring`, `shadow-color`, `tint` | Yes                | Cross-cutting single tokens                               |
 
 ## Surface tokens
 
@@ -182,7 +183,9 @@ CSS automatically generates `-subtle`, `-text`, and `-border` composite variants
 
 ## Recipe tokens
 
-Per-theme parametric values consumed by components alongside semantic color tokens.
+Per-theme parametric values consumed by components alongside semantic color tokens. All recipe tokens are derived — theme authors only override when the defaults don't suit their atmosphere.
+
+### State chrome recipes
 
 | Token                              | Purpose                      | Daintree                               | Bondi                                  |
 | ---------------------------------- | ---------------------------- | -------------------------------------- | -------------------------------------- |
@@ -191,6 +194,53 @@ Per-theme parametric values consumed by components alongside semantic color toke
 | `recipe-label-pill-bg-opacity`     | GitHub label pill background | `0.10`                                 | `0.08`                                 |
 | `recipe-label-pill-border-opacity` | GitHub label pill border     | `0.20`                                 | `0.15`                                 |
 | `recipe-button-inset-shadow`       | Button top-edge highlight    | `inset 0 1px 0 rgba(255,255,255,0.06)` | `inset 0 1px 0 rgba(255,255,255,0.15)` |
+
+### Scrollbar recipe
+
+| Token                          | Purpose               | Dark default  | Light default |
+| ------------------------------ | --------------------- | ------------- | ------------- |
+| `recipe-scrollbar-width`       | Scrollbar track width | `6px`         | `6px`         |
+| `recipe-scrollbar-thumb`       | Thumb color at rest   | `white 20%`   | `black 18%`   |
+| `recipe-scrollbar-thumb-hover` | Thumb color on hover  | `white 35%`   | `black 28%`   |
+| `recipe-scrollbar-track`       | Track background      | `transparent` | `transparent` |
+
+Derived from `tint` using the polarity pattern (white-alpha for dark, black-alpha for light).
+
+### Panel state edge recipe
+
+A left-edge state rail on panel headers. Light themes show it by default; dark themes disable it via `width: 0`.
+
+| Token                                 | Purpose                         | Dark default | Light default |
+| ------------------------------------- | ------------------------------- | ------------ | ------------- |
+| `recipe-panel-state-edge-width`       | Rail width (0px = disabled)     | `0px`        | `2px`         |
+| `recipe-panel-state-edge-inset-block` | Vertical inset from panel edges | `4px`        | `4px`         |
+| `recipe-panel-state-edge-radius`      | Rail end-cap radius             | `2px`        | `2px`         |
+
+The rail color reuses existing `activity-*` and `status-*` tokens — no new color is introduced.
+
+### Control chrome recipe
+
+Elevation shadows for panels, palettes, and floating surfaces.
+
+| Token                                  | Purpose                                     | Dark default                                            | Light default                                             |
+| -------------------------------------- | ------------------------------------------- | ------------------------------------------------------- | --------------------------------------------------------- |
+| `recipe-control-chrome-raised-shadow`  | Box shadow for elevated panels and palettes | `0 4px 12px rgba(0,0,0,0.5), 0 1px 3px rgba(0,0,0,0.3)` | `0 4px 12px rgba(0,0,0,0.12), 0 1px 3px rgba(0,0,0,0.08)` |
+| `recipe-control-chrome-pressed-shadow` | Inset shadow for pressed interactive states | `inset 0 1px 2px rgba(0,0,0,0.3)`                       | `inset 0 1px 2px rgba(0,0,0,0.08)`                        |
+
+## Diff tokens
+
+Theme-controlled colors for the diff viewer. Derived from `status-success` and `status-danger` at authoring time, but fully overridable for precise per-theme tuning.
+
+| Token                         | Purpose                                     | Dark default                    | Light default                   |
+| ----------------------------- | ------------------------------------------- | ------------------------------- | ------------------------------- |
+| `diff-insert-background`      | Line background for inserted lines          | `status-success` at 18% opacity | `status-success` at 10% opacity |
+| `diff-insert-edit-background` | Inline edit highlight within inserted lines | `status-success` at 28% opacity | `status-success` at 20% opacity |
+| `diff-delete-background`      | Line background for deleted lines           | `status-danger` at 18% opacity  | `status-danger` at 10% opacity  |
+| `diff-delete-edit-background` | Inline edit highlight within deleted lines  | `status-danger` at 28% opacity  | `status-danger` at 20% opacity  |
+| `diff-gutter-insert`          | Gutter indicator for inserted lines         | `status-success`                | `status-success`                |
+| `diff-gutter-delete`          | Gutter indicator for deleted lines          | `status-danger`                 | `status-danger`                 |
+| `diff-selected-background`    | Selected/focused diff line overlay          | `tint` at 6%                    | `tint` at 6%                    |
+| `diff-omit-gutter-line`       | Gutter color for collapsed/omitted sections | `activity-idle`                 | `activity-idle`                 |
 
 ## Shared tokens
 
@@ -202,6 +252,23 @@ Per-theme parametric values consumed by components alongside semantic color toke
 
 ---
 
+## Authoring vs. resolved tokens
+
+The token system has two contracts:
+
+**Authoring inputs** — what a theme author provides to `createCanopyTokens()`. A small required set (~56 tokens) plus any optional overrides.
+
+**Resolved output** — the complete `AppColorSchemeTokens` object produced by the factory. Every token in `APP_THEME_TOKEN_KEYS` is guaranteed to be present. This is the only contract components and the CSS variable pipeline should consume.
+
+Token classification:
+
+| Class                 | Description                                                   |
+| --------------------- | ------------------------------------------------------------- |
+| **Required**          | Must be supplied to `createCanopyTokens()`                    |
+| **Optional override** | Can be supplied; falls back to a derived value if omitted     |
+| **Derived**           | Always computed from required inputs; never authored directly |
+| **Shared/global**     | Fixed per polarity (`tint`); computed from required inputs    |
+
 ## Creating a new theme
 
 ### 1. Define required tokens
@@ -209,21 +276,25 @@ Per-theme parametric values consumed by components alongside semantic color toke
 Call `createCanopyTokens(type, tokens)` with at minimum:
 
 - All 5 surface levels + `text-primary/secondary/muted/inverse` + `border-default`
-- `accent-primary` + all 4 status colors + 4 activity states
+- `accent-primary` + all 4 status colors + 4 activity states (active, working, waiting, idle)
 - `terminal-selection` + 12 ANSI colors (6 standard + 6 bright) + `terminal-bright-white`
 - All 10 syntax tokens
 
-Everything else derives from these automatically.
+Everything else derives from these automatically — including `activity-completed` / `activity-failed`, terminal cursor, all recipe groups, and diff colors.
 
 ### 2. Override derived tokens as needed
 
 Common overrides for a polished theme:
 
-- `terminal-background/foreground/muted` — if terminal should differ from workbench
+- `terminal-background/foreground/muted/cursor` — if terminal should differ from workbench
 - `search-*` — if accent hue doesn't work as search highlighting
 - `activity-idle` — unique idle indicator per theme atmosphere
-- Category oklch values — adjust lightness for your surface contrast
+- Category `oklch` values — adjust lightness for your surface contrast
 - Recipe opacities — tune for your polarity
+- `recipe-scrollbar-thumb` — if you want a colored scrollbar rather than neutral
+- `recipe-panel-state-edge-width` — set to `"2px"` on light themes, `"0px"` on dark themes that don't use the rail
+- `recipe-control-chrome-raised-shadow` — tune depth for your workbench atmosphere
+- `diff-*` — override if status-success/danger don't read well as diff backgrounds
 
 ### 3. Add to BUILT_IN_APP_SCHEMES
 
@@ -274,14 +345,14 @@ No component should reference hex values or know which theme is active.
 
 ## File map
 
-| File                                 | Purpose                                                     |
-| ------------------------------------ | ----------------------------------------------------------- |
-| `shared/theme/types.ts`              | Token key definitions, `AppColorScheme` interface           |
-| `shared/theme/themes.ts`             | `createCanopyTokens()`, built-in schemes, utility functions |
-| `shared/theme/terminal.ts`           | Terminal theme derivation from app tokens                   |
-| `shared/theme/entityColors.ts`       | Panel brand colors, branch type classes                     |
-| `src/theme/applyAppTheme.ts`         | DOM injection, CVD overrides                                |
-| `src/index.css`                      | Tailwind `@theme` mappings, CSS custom properties           |
-| `src/store/appThemeStore.ts`         | Renderer theme state (Zustand)                              |
-| `src/config/terminalColorSchemes.ts` | Terminal-specific color scheme library                      |
-| `electron/utils/appThemeImporter.ts` | JSON theme file importer with validation                    |
+| File                                 | Purpose                                                                                  |
+| ------------------------------------ | ---------------------------------------------------------------------------------------- |
+| `shared/theme/types.ts`              | `APP_THEME_TOKEN_KEYS` const array, `AppThemeTokenKey` union, `AppColorScheme` interface |
+| `shared/theme/themes.ts`             | `createCanopyTokens()`, `BUILT_IN_APP_SCHEMES`, utility functions                        |
+| `shared/theme/terminal.ts`           | Maps resolved app tokens → xterm `ITheme` (including cursor/cursorAccent)                |
+| `shared/theme/entityColors.ts`       | Panel brand colors, branch type Tailwind classes                                         |
+| `src/theme/applyAppTheme.ts`         | DOM injection of all resolved tokens as `--theme-*` CSS vars, CVD overrides              |
+| `src/index.css`                      | Tailwind v4 `@theme inline` mappings for all token groups                                |
+| `src/store/appThemeStore.ts`         | Renderer theme state (Zustand)                                                           |
+| `src/config/terminalColorSchemes.ts` | Terminal-specific color scheme library                                                   |
+| `electron/utils/appThemeImporter.ts` | JSON import with normalization, alias resolution, and validation                         |

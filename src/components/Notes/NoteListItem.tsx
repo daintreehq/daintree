@@ -38,9 +38,9 @@ export function NoteListItemRow({
         "relative flex items-start px-3 py-1.5 cursor-pointer transition-colors group",
         "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-1",
         isSelected
-          ? "bg-overlay-soft text-canopy-text before:absolute before:left-0 before:top-1.5 before:bottom-1.5 before:w-[2px] before:rounded-r before:bg-canopy-accent before:content-['']"
+          ? "bg-surface-panel-elevated shadow-sm text-canopy-text before:absolute before:left-0 before:top-1.5 before:bottom-1.5 before:w-[2px] before:rounded-r before:bg-canopy-accent before:content-['']"
           : isHighlighted
-            ? "bg-overlay-soft text-canopy-text"
+            ? "bg-overlay-subtle text-canopy-text"
             : "text-canopy-text/70 hover:bg-overlay-subtle hover:text-canopy-text"
       )}
       onClick={() => onSelect(note, index)}

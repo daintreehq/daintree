@@ -138,6 +138,31 @@ export const APP_THEME_TOKEN_KEYS = [
   "recipe-label-pill-bg-opacity",
   "recipe-label-pill-border-opacity",
   "recipe-button-inset-shadow",
+
+  // Scrollbar recipe
+  "recipe-scrollbar-width",
+  "recipe-scrollbar-thumb",
+  "recipe-scrollbar-thumb-hover",
+  "recipe-scrollbar-track",
+
+  // Panel state edge recipe (left rail on panel headers; disabled via width:0 for themes without it)
+  "recipe-panel-state-edge-width",
+  "recipe-panel-state-edge-inset-block",
+  "recipe-panel-state-edge-radius",
+
+  // Control chrome recipe (panel/palette shadows and raised-surface highlights)
+  "recipe-control-chrome-raised-shadow",
+  "recipe-control-chrome-pressed-shadow",
+
+  // Diff viewer (theme-controlled)
+  "diff-insert-background",
+  "diff-insert-edit-background",
+  "diff-delete-background",
+  "diff-delete-edit-background",
+  "diff-gutter-insert",
+  "diff-gutter-delete",
+  "diff-selected-background",
+  "diff-omit-gutter-line",
 ] as const;
 
 export type AppThemeTokenKey = (typeof APP_THEME_TOKEN_KEYS)[number];

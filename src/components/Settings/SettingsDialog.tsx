@@ -1071,8 +1071,8 @@ function NavItem({
         "relative text-left px-3 py-1.5 rounded-[var(--radius-md)] text-sm transition-colors flex items-center gap-2 w-full",
         "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2",
         active
-          ? "bg-overlay-soft text-canopy-text before:absolute before:left-0 before:top-1.5 before:bottom-1.5 before:w-[2px] before:rounded-r before:bg-canopy-accent before:content-['']"
-          : "text-canopy-text/60 hover:bg-overlay-soft hover:text-canopy-text"
+          ? "bg-surface-panel-elevated shadow-sm text-canopy-text before:absolute before:left-0 before:top-1.5 before:bottom-1.5 before:w-[2px] before:rounded-r before:bg-canopy-accent before:content-['']"
+          : "text-canopy-text/60 hover:bg-overlay-subtle hover:text-canopy-text"
       )}
     >
       <span className="relative">
