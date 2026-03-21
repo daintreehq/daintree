@@ -526,7 +526,7 @@ export const WorktreeCard = React.memo(function WorktreeCard({
         "group relative transition-all duration-200",
         variant === "sidebar" && "border-b border-border-default",
         variant === "grid" && "rounded-lg border border-divider bg-overlay-subtle",
-        isActive && variant === "sidebar" && "bg-overlay-medium",
+        isActive && variant === "sidebar" && "bg-[var(--theme-recipe-sidebar-active-bg)]",
         isActive && variant !== "sidebar" && "bg-surface-panel-elevated shadow-sm",
         !isActive && "hover:bg-overlay-subtle",
         variant === "sidebar" && !isActive && "bg-transparent",
@@ -546,7 +546,7 @@ export const WorktreeCard = React.memo(function WorktreeCard({
       )}
       style={
         isActive && variant === "sidebar"
-          ? { boxShadow: "var(--theme-recipe-surface-elevated-inset-shadow)" }
+          ? { boxShadow: "var(--theme-recipe-sidebar-active-shadow)" }
           : undefined
       }
       onClick={onSelect}

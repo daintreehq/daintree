@@ -239,6 +239,15 @@ export function createCanopyTokens(
         ? "0 4px 12px rgba(0, 0, 0, 0.5), 0 1px 3px rgba(0, 0, 0, 0.3)"
         : "0 4px 12px rgba(0, 0, 0, 0.12), 0 1px 3px rgba(0, 0, 0, 0.08)"),
     "recipe-focus-ring-offset": tokens["recipe-focus-ring-offset"] ?? "2px",
+    "recipe-sidebar-active-bg":
+      tokens["recipe-sidebar-active-bg"] ??
+      (dark ? withAlpha(overlayBase, 0.04) : tokens["surface-panel-elevated"]),
+    "recipe-sidebar-active-shadow":
+      tokens["recipe-sidebar-active-shadow"] ??
+      (dark
+        ? (tokens["recipe-surface-elevated-inset-shadow"] ??
+          "inset 0 1px 0 0 rgba(255, 255, 255, 0.03)")
+        : (tokens["recipe-shadow-ambient"] ?? "0 2px 8px rgba(0, 0, 0, 0.06)")),
     "recipe-chrome-noise-texture": tokens["recipe-chrome-noise-texture"] ?? "none",
     "diff-insert-background":
       tokens["diff-insert-background"] ?? withAlpha(tokens["status-success"], dark ? 0.18 : 0.1),
@@ -468,6 +477,8 @@ export const BUILT_IN_APP_SCHEMES: AppColorScheme[] = [
       "recipe-button-inset-shadow": "inset 0 1px 0 rgba(255, 255, 255, 0.80)",
       // Elevated surface inset — bright top-edge gloss
       "recipe-surface-elevated-inset-shadow": "inset 0 1px 0 rgba(255, 255, 255, 0.80)",
+      // Sidebar active — no shadow on active card (cleanest theme, pure white pops by contrast)
+      "recipe-sidebar-active-shadow": "none",
       // Scrollbar — thumb uses muted text color; hover deepens toward primary
       "recipe-scrollbar-thumb": "#758A9E",
       "recipe-scrollbar-thumb-hover": "color-mix(in oklab, #758A9E 85%, #0D1621)",
@@ -728,6 +739,8 @@ export const BUILT_IN_APP_SCHEMES: AppColorScheme[] = [
       "recipe-scrollbar-thumb-hover": "color-mix(in oklab, #8A7A6A 85%, #E3D4C5)",
       "recipe-button-inset-shadow": "inset 0 1px 0 rgba(255,240,220,0.15)",
       "recipe-surface-elevated-inset-shadow": "inset 0 1px 0 0 rgba(255,240,220,0.08)",
+      // Sidebar active — warmer lamplight tint at 5% (slightly stronger than default 4%)
+      "recipe-sidebar-active-bg": "rgba(255,236,214,0.05)",
     }),
   },
   {
@@ -906,6 +919,8 @@ export const BUILT_IN_APP_SCHEMES: AppColorScheme[] = [
       "recipe-scrollbar-thumb-hover": "color-mix(in oklab, #536660 85%, #DCE6E3)",
       "recipe-button-inset-shadow": "inset 0 1px 0 rgba(180,230,210,0.15)",
       "recipe-surface-elevated-inset-shadow": "inset 0 1px 0 0 rgba(140,200,180,0.06)",
+      // Sidebar active — accent-tinted selection (wetter/glossier than overlay-base)
+      "recipe-sidebar-active-bg": "rgba(74,158,127,0.08)",
       // Shadow — teal-black volcanic depth
       "recipe-shadow-ambient": "0 1px 3px rgba(6,12,10,0.40), 0 1px 2px rgba(6,12,10,0.30)",
       "recipe-shadow-floating": "0 12px 40px rgba(6,12,10,0.55), 0 4px 12px rgba(6,12,10,0.35)",
@@ -996,6 +1011,9 @@ export const BUILT_IN_APP_SCHEMES: AppColorScheme[] = [
       "recipe-button-inset-shadow": "inset 0 1px 0 rgba(220,215,230,0.10)",
       // Top sheen — heather-tinted, not generic white
       "recipe-surface-elevated-inset-shadow": "inset 0 1px 0 0 rgba(220,215,230,0.04)",
+      // Sidebar active — double inset: top hairline + full-border glow
+      "recipe-sidebar-active-shadow":
+        "inset 0 1px 0 rgba(220,215,230,0.05), inset 0 0 0 1px rgba(195,185,210,0.06)",
       // Shadow — warm-violet moorland shadows
       "recipe-shadow-ambient": "0 1px 3px rgba(15,12,18,0.40)",
       "recipe-shadow-floating": "0 14px 40px rgba(15,12,18,0.45)",
@@ -1183,6 +1201,8 @@ export const BUILT_IN_APP_SCHEMES: AppColorScheme[] = [
       "recipe-scrollbar-thumb": "#5A4E42",
       "recipe-scrollbar-thumb-hover": "color-mix(in oklab, #5A4E42 85%, #E8DCC8)",
       "recipe-button-inset-shadow": "inset 0 1px 0 rgba(220,190,170,0.12)",
+      // Sidebar active — accent-green selection (deep forest canopy glow)
+      "recipe-sidebar-active-bg": "rgba(78,154,83,0.14)",
       // Fog-diffused larger shadow radius for enclosed forest atmosphere
       "recipe-shadow-ambient": "0 4px 14px rgba(9,5,3,0.45), 0 1px 3px rgba(9,5,3,0.30)",
       "recipe-shadow-floating": "0 14px 42px rgba(9,5,3,0.55), 0 4px 12px rgba(9,5,3,0.35)",
@@ -1543,6 +1563,9 @@ export const BUILT_IN_APP_SCHEMES: AppColorScheme[] = [
       "recipe-shadow-ambient": "0 14px 48px rgba(86,81,118,0.07)",
       "recipe-shadow-floating": "0 22px 64px rgba(86,81,118,0.07)",
       "recipe-button-inset-shadow": "inset 0 1px 0 rgba(255,255,255,0.45)",
+      // Sidebar active — compound inset sheen + diffuse lilac drop
+      "recipe-sidebar-active-shadow":
+        "inset 0 1px 0 rgba(255,255,255,0.45), 0 8px 24px rgba(86,81,118,0.06)",
       // Recipe opacities — slightly quieter than light defaults for snow-filtered feel
       "recipe-state-chip-bg-opacity": "0.10",
       "recipe-state-chip-border-opacity": "0.30",

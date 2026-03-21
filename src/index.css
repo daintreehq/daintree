@@ -133,6 +133,8 @@
   --color-recipe-shadow-ambient: var(--theme-recipe-shadow-ambient);
   --color-recipe-shadow-floating: var(--theme-recipe-shadow-floating);
   --color-recipe-focus-ring-offset: var(--theme-recipe-focus-ring-offset);
+  --color-recipe-sidebar-active-bg: var(--theme-recipe-sidebar-active-bg);
+  --color-recipe-sidebar-active-shadow: var(--theme-recipe-sidebar-active-shadow);
   --color-recipe-chrome-noise-texture: var(--theme-recipe-chrome-noise-texture);
   --color-diff-insert-background: var(--theme-diff-insert-background);
   --color-diff-insert-edit-background: var(--theme-diff-insert-edit-background);

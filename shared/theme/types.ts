@@ -175,6 +175,12 @@ export const APP_THEME_TOKEN_KEYS = [
   // Focus ring offset in px (default 2px; some themes prefer 3px for breathing room)
   "recipe-focus-ring-offset",
 
+  // Sidebar active card — the selected worktree card bg and shadow.
+  // Dark themes: overlay-base tint (lightens) + inset sheen; Light themes: surface-panel-elevated + drop shadow.
+  // Themes can override for accent-tinted selections (e.g. Galápagos, Redwoods).
+  "recipe-sidebar-active-bg",
+  "recipe-sidebar-active-shadow",
+
   // Chrome noise texture — CSS background-image layer for grain on sidebar/toolbar/dock.
   // Set to a data-URI SVG noise filter or "none" (default). Requires component support.
   "recipe-chrome-noise-texture",
