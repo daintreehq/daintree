@@ -334,6 +334,8 @@ export const BUILT_IN_APP_SCHEMES: AppColorScheme[] = [
     name: "Daintree",
     type: "dark",
     builtin: true,
+    location: "Daintree Rainforest, Queensland, Australia",
+    heroImage: "/themes/daintree.webp",
     tokens: createCanopyTokens("dark", {
       // Surfaces — 5-level depth hierarchy with microscopic green bias in chrome
       "surface-grid": "#0e0e0d",
@@ -413,6 +415,8 @@ export const BUILT_IN_APP_SCHEMES: AppColorScheme[] = [
     name: "Bondi Beach",
     type: "light",
     builtin: true,
+    location: "Bondi Beach, Sydney, Australia",
+    heroImage: "/themes/bondi.webp",
     tokens: createCanopyTokens("light", {
       // Surfaces — blue-white ladder: Grid deepest, Elevated brightest white
       "surface-grid": "#D3E5F3",
@@ -535,6 +539,8 @@ export const BUILT_IN_APP_SCHEMES: AppColorScheme[] = [
     name: "Table Mountain",
     type: "light",
     builtin: true,
+    location: "Table Mountain, Cape Town, South Africa",
+    heroImage: "/themes/table-mountain.webp",
     tokens: createCanopyTokens("light", {
       // Surfaces — warm sandstone depth hierarchy
       "surface-grid": "#D8D1C8",
@@ -655,6 +661,8 @@ export const BUILT_IN_APP_SCHEMES: AppColorScheme[] = [
     name: "Arashiyama",
     type: "dark",
     builtin: true,
+    location: "Arashiyama Bamboo Grove, Kyoto, Japan",
+    heroImage: "/themes/arashiyama.webp",
     tokens: createCanopyTokens("dark", {
       // Surfaces — warm umber depth hierarchy; each step is lacquered chestnut, not zinc
       "surface-grid": "#0C0806",
@@ -748,6 +756,8 @@ export const BUILT_IN_APP_SCHEMES: AppColorScheme[] = [
     name: "Fiordland",
     type: "dark",
     builtin: true,
+    location: "Fiordland, South Island, New Zealand",
+    heroImage: "/themes/fiordland.webp",
     tokens: createCanopyTokens("dark", {
       // Surfaces — navy-black wet slate; pressure-heavy, not verdant
       "surface-grid": "#04070B",
@@ -838,6 +848,8 @@ export const BUILT_IN_APP_SCHEMES: AppColorScheme[] = [
     name: "Galápagos",
     type: "dark",
     builtin: true,
+    location: "Galápagos Islands, Ecuador",
+    heroImage: "/themes/galapagos.webp",
     tokens: createCanopyTokens("dark", {
       // Surfaces — wet volcanic black with mangrove humidity
       "surface-grid": "#0A0D0C",
@@ -931,6 +943,8 @@ export const BUILT_IN_APP_SCHEMES: AppColorScheme[] = [
     name: "Highlands",
     type: "dark",
     builtin: true,
+    location: "Scottish Highlands, Scotland",
+    heroImage: "/themes/highlands.webp",
     tokens: createCanopyTokens("dark", {
       // Surfaces — brown-charcoal with gray-violet cast; matte, exposed
       "surface-grid": "#131114",
@@ -1027,6 +1041,8 @@ export const BUILT_IN_APP_SCHEMES: AppColorScheme[] = [
     name: "Namib",
     type: "dark",
     builtin: true,
+    location: "Namib Desert, Namibia",
+    heroImage: "/themes/namib.webp",
     tokens: createCanopyTokens("dark", {
       // Surfaces — moonlit dune shadow; warm taupe/sand shell
       "surface-grid": "#110E0C",
@@ -1122,6 +1138,8 @@ export const BUILT_IN_APP_SCHEMES: AppColorScheme[] = [
     name: "Redwoods",
     type: "dark",
     builtin: true,
+    location: "Redwood National Park, California, USA",
+    heroImage: "/themes/redwoods.webp",
     tokens: createCanopyTokens("dark", {
       // Surfaces — ancient forest-floor enclosure; bark-warm, dense, protective
       "surface-grid": "#090705",
@@ -1214,6 +1232,8 @@ export const BUILT_IN_APP_SCHEMES: AppColorScheme[] = [
     name: "Atacama",
     type: "light",
     builtin: true,
+    location: "Atacama Desert, Chile",
+    heroImage: "/themes/atacama.webp",
     tokens: createCanopyTokens("light", {
       // Surfaces — warm-neutral mineral ladder; bleached stone from grid to elevated
       "surface-grid": "#D1CDC4",
@@ -1336,6 +1356,8 @@ export const BUILT_IN_APP_SCHEMES: AppColorScheme[] = [
     name: "Bali",
     type: "light",
     builtin: true,
+    location: "Bali, Indonesia",
+    heroImage: "/themes/bali.webp",
     tokens: createCanopyTokens("light", {
       // Surfaces — green-tinted paras stone ladder; tropical and dappled
       "surface-grid": "#CCD6BF",
@@ -1463,6 +1485,8 @@ export const BUILT_IN_APP_SCHEMES: AppColorScheme[] = [
     name: "Hokkaido",
     type: "light",
     builtin: true,
+    location: "Hokkaido, Japan",
+    heroImage: "/themes/hokkaido.webp",
     tokens: createCanopyTokens("light", {
       // Surfaces — frosted lavender snow ladder; no pure white anywhere
       "surface-grid": "#D9DEEE",
@@ -1593,6 +1617,8 @@ export const BUILT_IN_APP_SCHEMES: AppColorScheme[] = [
     name: "Serengeti",
     type: "light",
     builtin: true,
+    location: "Serengeti National Park, Tanzania",
+    heroImage: "/themes/serengeti.webp",
     tokens: createCanopyTokens("light", {
       // Surfaces — warm parchment; drygrass grid, acacia sidebar, horizon-light elevated
       "surface-canvas": "#FDF5E2",
@@ -1717,6 +1743,8 @@ export const BUILT_IN_APP_SCHEMES: AppColorScheme[] = [
     name: "Svalbard",
     type: "light",
     builtin: true,
+    location: "Svalbard Archipelago, Norway",
+    heroImage: "/themes/svalbard.webp",
     tokens: createCanopyTokens("light", {
       // Surfaces — cool blue-gray paper under diffused Arctic cloud light
       "surface-grid": "#C4D0D9",
@@ -2085,7 +2113,7 @@ export function normalizeAppColorScheme(
       [normalizedTokens["text-inverse"], normalizedTokens["text-primary"], "#ffffff", "#000000"]
     );
   }
-  return {
+  const result: AppColorScheme = {
     id:
       typeof maybeScheme.id === "string" && maybeScheme.id.trim() ? maybeScheme.id : baseScheme.id,
     name:
@@ -2096,4 +2124,8 @@ export function normalizeAppColorScheme(
     builtin: false,
     tokens: normalizedTokens,
   };
+  if (typeof maybeScheme.location === "string") result.location = maybeScheme.location;
+  if (typeof maybeScheme.heroImage === "string") result.heroImage = maybeScheme.heroImage;
+  if (typeof maybeScheme.heroVideo === "string") result.heroVideo = maybeScheme.heroVideo;
+  return result;
 }
