@@ -15,8 +15,8 @@ export function getTerminalThemeFromAppTokens(tokens: AppColorSchemeTokens): ITh
   return {
     background: tokens["terminal-background"],
     foreground: tokens["terminal-foreground"],
-    cursor: tokens["accent-primary"],
-    cursorAccent: tokens["text-inverse"],
+    cursor: tokens["terminal-cursor"],
+    cursorAccent: tokens["terminal-cursor-accent"],
     selectionBackground: tokens["terminal-selection"],
     selectionForeground: tokens["terminal-foreground"],
     black: tokens["terminal-black"],
