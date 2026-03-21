@@ -113,6 +113,9 @@ function ThemeOption({
         {scheme.location && (
           <span className="text-[11px] text-canopy-text/50 truncate block">{scheme.location}</span>
         )}
+        <div className="mt-1">
+          <PaletteStrip scheme={scheme} />
+        </div>
       </div>
     </div>
   );
@@ -396,6 +399,7 @@ export function AppThemePicker() {
             id="theme-listbox"
             role="listbox"
             aria-label="Theme list"
+            onMouseDown={(e) => e.preventDefault()}
             className="absolute z-50 left-0 right-0 mt-1 max-h-[280px] overflow-y-auto rounded-[var(--radius-md)] border border-canopy-border bg-canopy-bg shadow-lg"
           >
             {darkSchemes.length > 0 && (
