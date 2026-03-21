@@ -27,6 +27,7 @@
   --color-border-divider: var(--theme-border-divider);
   --color-border-interactive: var(--theme-border-interactive);
   --color-accent-primary: var(--theme-accent-primary);
+  --color-accent-hover: var(--theme-accent-hover);
   --color-accent-foreground: var(--theme-accent-foreground);
   --color-accent-primary-foreground: var(--theme-accent-foreground);
   --color-accent-soft: var(--theme-accent-soft);
@@ -42,6 +43,8 @@
   --color-activity-working: var(--theme-activity-working);
   --color-activity-waiting: var(--theme-activity-waiting);
   --color-activity-approval: var(--theme-activity-approval);
+  --color-activity-completed: var(--theme-activity-completed);
+  --color-activity-failed: var(--theme-activity-failed);
   --color-overlay-subtle: var(--theme-overlay-subtle);
   --color-overlay-soft: var(--theme-overlay-soft);
   --color-overlay-medium: var(--theme-overlay-medium);
@@ -66,6 +69,8 @@
   --color-terminal-background: var(--theme-terminal-background);
   --color-terminal-foreground: var(--theme-terminal-foreground);
   --color-terminal-muted: var(--theme-terminal-muted);
+  --color-terminal-cursor: var(--theme-terminal-cursor);
+  --color-terminal-cursor-accent: var(--theme-terminal-cursor-accent);
   --color-terminal-selection: var(--theme-terminal-selection);
   --color-terminal-black: var(--theme-terminal-black);
   --color-terminal-red: var(--theme-terminal-red);
@@ -109,6 +114,7 @@
   --color-recipe-state-chip-border-opacity: var(--theme-recipe-state-chip-border-opacity);
   --color-recipe-label-pill-bg-opacity: var(--theme-recipe-label-pill-bg-opacity);
   --color-recipe-label-pill-border-opacity: var(--theme-recipe-label-pill-border-opacity);
+  --color-recipe-button-inset-shadow: var(--theme-recipe-button-inset-shadow);
 
   --color-category-blue-subtle: color-mix(
     in oklch,

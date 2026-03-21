@@ -132,6 +132,9 @@ export function createCanopyTokens(
     "border-divider": tokens["border-divider"] ?? withAlpha(overlayTone, dark ? 0.05 : 0.04),
     "border-interactive": tokens["border-interactive"] ?? withAlpha(overlayTone, dark ? 0.2 : 0.1),
     "accent-foreground": tokens["accent-foreground"] ?? tokens["text-inverse"],
+    "accent-hover":
+      tokens["accent-hover"] ??
+      `color-mix(in oklab, ${tokens["accent-primary"]} 90%, ${dark ? "#ffffff" : "#000000"})`,
     "accent-soft": accentSoft,
     "accent-muted": accentMuted,
     "accent-rgb": tokens["accent-rgb"] ?? accentRgb,
@@ -147,9 +150,14 @@ export function createCanopyTokens(
     "shadow-color": tokens["shadow-color"] ?? (dark ? "rgba(0, 0, 0, 0.5)" : "rgba(0, 0, 0, 0.12)"),
     tint: tokens["tint"] ?? tint,
     "activity-approval": tokens["activity-approval"] ?? (dark ? "#f97316" : "#C56210"),
+    "activity-completed": tokens["activity-completed"] ?? tokens["status-success"],
+    "activity-failed": tokens["activity-failed"] ?? tokens["status-danger"],
     "terminal-background": tokens["terminal-background"] ?? tokens["surface-canvas"],
     "terminal-foreground": tokens["terminal-foreground"] ?? tokens["text-primary"],
     "terminal-muted": tokens["terminal-muted"] ?? tokens["text-muted"],
+    "terminal-cursor": tokens["terminal-cursor"] ?? tokens["accent-primary"],
+    "terminal-cursor-accent":
+      tokens["terminal-cursor-accent"] ?? tokens["terminal-background"] ?? tokens["surface-canvas"],
     "terminal-black":
       tokens["terminal-black"] ?? (dark ? tokens["surface-canvas"] : tokens["text-primary"]),
     "terminal-white":
@@ -178,6 +186,11 @@ export function createCanopyTokens(
       tokens["recipe-label-pill-bg-opacity"] ?? (dark ? "0.10" : "0.08"),
     "recipe-label-pill-border-opacity":
       tokens["recipe-label-pill-border-opacity"] ?? (dark ? "0.20" : "0.15"),
+    "recipe-button-inset-shadow":
+      tokens["recipe-button-inset-shadow"] ??
+      (dark
+        ? "inset 0 1px 0 rgba(255, 255, 255, 0.06)"
+        : "inset 0 1px 0 rgba(255, 255, 255, 0.15)"),
     ...tokens,
   };
 }

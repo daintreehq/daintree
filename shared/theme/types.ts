@@ -26,6 +26,7 @@ export const APP_THEME_TOKEN_KEYS = [
 
   // Accent
   "accent-primary",
+  "accent-hover",
   "accent-foreground",
   "accent-soft",
   "accent-muted",
@@ -40,12 +41,14 @@ export const APP_THEME_TOKEN_KEYS = [
   "status-danger",
   "status-info",
 
-  // Activity
+  // Activity (real-time agent states)
   "activity-active",
   "activity-idle",
   "activity-working",
   "activity-waiting",
   "activity-approval",
+  "activity-completed",
+  "activity-failed",
 
   // Overlay ladder
   "overlay-subtle",
@@ -83,6 +86,8 @@ export const APP_THEME_TOKEN_KEYS = [
   "terminal-background",
   "terminal-foreground",
   "terminal-muted",
+  "terminal-cursor",
+  "terminal-cursor-accent",
   "terminal-selection",
   "terminal-black",
   "terminal-red",
@@ -132,6 +137,7 @@ export const APP_THEME_TOKEN_KEYS = [
   "recipe-state-chip-border-opacity",
   "recipe-label-pill-bg-opacity",
   "recipe-label-pill-border-opacity",
+  "recipe-button-inset-shadow",
 ] as const;
 
 export type AppThemeTokenKey = (typeof APP_THEME_TOKEN_KEYS)[number];
