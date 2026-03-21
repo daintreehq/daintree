@@ -526,9 +526,8 @@ export const WorktreeCard = React.memo(function WorktreeCard({
         "group relative transition-all duration-200",
         variant === "sidebar" && "border-b border-border-default",
         variant === "grid" && "rounded-lg border border-divider bg-overlay-subtle",
-        isActive && variant === "sidebar" && "bg-[var(--theme-recipe-sidebar-active-bg)]",
         isActive && variant !== "sidebar" && "bg-surface-panel-elevated shadow-sm",
-        !isActive && "hover:bg-overlay-subtle",
+        !isActive && "hover:bg-[var(--recipe-sidebar-hover-bg)]",
         variant === "sidebar" && !isActive && "bg-transparent",
         isActive &&
           !isSingleWorktree &&
@@ -538,7 +537,7 @@ export const WorktreeCard = React.memo(function WorktreeCard({
         variant === "grid" &&
           !isActive &&
           "hover:border-accent-primary/50 hover:shadow-lg hover:shadow-accent-primary/5",
-        isFocused && !isActive && "bg-overlay-subtle",
+        isFocused && !isActive && "bg-[var(--recipe-sidebar-hover-bg)]",
         isOver &&
           !isActive &&
           "ring-2 ring-accent-primary bg-accent-primary/10 border-accent-primary/50 transition-all duration-200",
@@ -546,7 +545,10 @@ export const WorktreeCard = React.memo(function WorktreeCard({
       )}
       style={
         isActive && variant === "sidebar"
-          ? { boxShadow: "var(--theme-recipe-sidebar-active-shadow)" }
+          ? {
+              background: "var(--theme-recipe-sidebar-active-bg)",
+              boxShadow: "var(--theme-recipe-sidebar-active-shadow)",
+            }
           : undefined
       }
       onClick={onSelect}

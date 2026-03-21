@@ -89,7 +89,7 @@ export function BranchLabel({
               <Icon
                 className={cn(
                   "w-3.5 h-3.5 transition-colors duration-200",
-                  isMuted ? "text-canopy-text/30" : "text-canopy-text/50"
+                  isMuted ? "text-text-muted" : "text-text-secondary"
                 )}
                 strokeWidth={2.5}
                 aria-hidden="true"
@@ -101,10 +101,10 @@ export function BranchLabel({
               "truncate font-mono transition-colors duration-200",
               isMainWorktree ? "text-[13px] font-bold tracking-wide" : "text-[11px] font-medium",
               isActive
-                ? "text-canopy-text/95"
+                ? "text-text-primary/90"
                 : isMuted
-                  ? "text-canopy-text/40"
-                  : "text-canopy-text/60"
+                  ? "text-text-muted"
+                  : "text-text-secondary"
             )}
           >
             {rest}

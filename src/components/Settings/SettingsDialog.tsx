@@ -435,23 +435,23 @@ export function SettingsDialog({
   };
 
   const tabIcons: Record<SettingsTab, React.ReactNode> = {
-    general: <Settings2 className="w-5 h-5 text-canopy-text/60" />,
-    keyboard: <Keyboard className="w-5 h-5 text-canopy-text/60" />,
-    terminal: <LayoutGrid className="w-5 h-5 text-canopy-text/60" />,
-    terminalAppearance: <SquareTerminal className="w-5 h-5 text-canopy-text/60" />,
-    worktree: <GitBranch className="w-5 h-5 text-canopy-text/60" />,
-    agents: <TreeDeciduous className="w-5 h-5 text-canopy-text/60" />,
-    github: <Github className="w-5 h-5 text-canopy-text/60" />,
-    portal: <PanelRight className="w-5 h-5 text-canopy-text/60" />,
-    toolbar: <SettingsIcon className="w-5 h-5 text-canopy-text/60" />,
-    notifications: <Bell className="w-5 h-5 text-canopy-text/60" />,
-    editor: <Code className="w-5 h-5 text-canopy-text/60" />,
-    imageViewer: <Image className="w-5 h-5 text-canopy-text/60" />,
-    voice: <Mic className="w-5 h-5 text-canopy-text/60" />,
-    mcp: <Plug className="w-5 h-5 text-canopy-text/60" />,
-    environment: <KeyRound className="w-5 h-5 text-canopy-text/60" />,
-    privacy: <Shield className="w-5 h-5 text-canopy-text/60" />,
-    troubleshooting: <LifeBuoy className="w-5 h-5 text-canopy-text/60" />,
+    general: <Settings2 className="w-5 h-5 text-text-secondary" />,
+    keyboard: <Keyboard className="w-5 h-5 text-text-secondary" />,
+    terminal: <LayoutGrid className="w-5 h-5 text-text-secondary" />,
+    terminalAppearance: <SquareTerminal className="w-5 h-5 text-text-secondary" />,
+    worktree: <GitBranch className="w-5 h-5 text-text-secondary" />,
+    agents: <TreeDeciduous className="w-5 h-5 text-text-secondary" />,
+    github: <Github className="w-5 h-5 text-text-secondary" />,
+    portal: <PanelRight className="w-5 h-5 text-text-secondary" />,
+    toolbar: <SettingsIcon className="w-5 h-5 text-text-secondary" />,
+    notifications: <Bell className="w-5 h-5 text-text-secondary" />,
+    editor: <Code className="w-5 h-5 text-text-secondary" />,
+    imageViewer: <Image className="w-5 h-5 text-text-secondary" />,
+    voice: <Mic className="w-5 h-5 text-text-secondary" />,
+    mcp: <Plug className="w-5 h-5 text-text-secondary" />,
+    environment: <KeyRound className="w-5 h-5 text-text-secondary" />,
+    privacy: <Shield className="w-5 h-5 text-text-secondary" />,
+    troubleshooting: <LifeBuoy className="w-5 h-5 text-text-secondary" />,
   };
 
   return (
@@ -463,18 +463,18 @@ export function SettingsDialog({
       className="min-h-[500px] max-h-[800px]"
     >
       <div className="flex h-full overflow-hidden">
-        <div className="w-48 border-r border-canopy-border bg-canopy-bg/50 p-3 flex flex-col shrink-0">
+        <div className="w-48 border-r border-canopy-border bg-[var(--recipe-settings-sidebar-bg)] p-3 flex flex-col shrink-0">
           <h2 className="text-sm font-semibold text-canopy-text mb-2 px-2">Settings</h2>
 
           <div
             className={cn(
               "flex items-center gap-1.5 px-2 py-1.5 mb-2 rounded-[var(--radius-md)]",
-              "bg-canopy-bg border border-canopy-border",
+              "bg-[var(--recipe-settings-search-bg)] border border-canopy-border",
               "focus-within:border-canopy-accent focus-within:ring-1 focus-within:ring-canopy-accent/20"
             )}
           >
             <Search
-              className="w-3.5 h-3.5 shrink-0 text-canopy-text/40 pointer-events-none"
+              className="w-3.5 h-3.5 shrink-0 text-[var(--recipe-settings-search-muted)] pointer-events-none"
               aria-hidden="true"
             />
             <input
@@ -485,7 +485,7 @@ export function SettingsDialog({
               onChange={(e) => setSearchQuery(e.target.value)}
               onKeyDown={handleSearchKeyDown}
               aria-label="Search settings"
-              className="flex-1 min-w-0 text-xs bg-transparent text-canopy-text placeholder:text-text-muted focus:outline-none"
+              className="flex-1 min-w-0 text-xs bg-transparent text-canopy-text placeholder:text-[var(--recipe-settings-search-muted)] focus:outline-none"
             />
             {searchQuery && (
               <button
@@ -514,7 +514,7 @@ export function SettingsDialog({
             {canScrollUp && (
               <div
                 aria-hidden="true"
-                className="pointer-events-none absolute inset-x-0 top-0 h-8 bg-gradient-to-b from-canopy-bg to-transparent z-10"
+                className="pointer-events-none absolute inset-x-0 top-0 h-8 bg-gradient-to-b from-[var(--recipe-settings-sidebar-bg)] to-transparent z-10"
               />
             )}
             <div
@@ -698,22 +698,24 @@ export function SettingsDialog({
             {canScrollDown && (
               <div
                 aria-hidden="true"
-                className="pointer-events-none absolute inset-x-0 bottom-0 h-8 bg-gradient-to-t from-canopy-bg to-transparent z-10"
+                className="pointer-events-none absolute inset-x-0 bottom-0 h-8 bg-gradient-to-t from-[var(--recipe-settings-sidebar-bg)] to-transparent z-10"
               />
             )}
           </div>
 
           <div className="pt-2 mt-2 border-t border-canopy-border px-2">
-            <span className="text-[10px] text-canopy-text/30 font-mono">{appVersion}</span>
+            <span className="text-[length:var(--recipe-settings-meta-size)] text-[var(--recipe-settings-meta-fg)] font-mono">
+              {appVersion}
+            </span>
           </div>
         </div>
 
         <div className="flex-1 flex flex-col min-w-0">
-          <div className="flex items-center justify-between px-6 py-4 border-b border-canopy-border bg-canopy-sidebar/50 shrink-0">
+          <div className="flex items-center justify-between px-6 py-4 border-b border-canopy-border bg-[var(--recipe-settings-header-bg)] shrink-0">
             <h3 className="text-lg font-medium text-canopy-text flex items-center gap-2">
               {isSearching ? (
                 <>
-                  <Search className="w-5 h-5 text-canopy-text/60" />
+                  <Search className="w-5 h-5 text-text-secondary" />
                   Search Results
                 </>
               ) : (
@@ -1023,7 +1025,7 @@ function NavGroup({ label, children }: { label: string; children: React.ReactNod
   return (
     <div role="none">
       <span
-        className="text-[10px] font-medium uppercase tracking-wider text-canopy-text/30 px-3 mb-1 block select-none"
+        className="text-[length:var(--recipe-settings-meta-size)] font-medium uppercase tracking-wider text-[var(--recipe-settings-meta-fg)] px-3 mb-1 block select-none"
         aria-hidden="true"
       >
         {label}
@@ -1071,9 +1073,17 @@ function NavItem({
         "relative text-left px-3 py-1.5 rounded-[var(--radius-md)] text-sm transition-colors flex items-center gap-2 w-full",
         "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2",
         active
-          ? "bg-surface-panel-elevated shadow-sm text-canopy-text before:absolute before:left-0 before:top-1.5 before:bottom-1.5 before:w-[2px] before:rounded-r before:bg-canopy-accent before:content-['']"
-          : "text-canopy-text/60 hover:bg-overlay-subtle hover:text-canopy-text"
+          ? "text-canopy-text before:absolute before:left-0 before:top-1.5 before:bottom-1.5 before:w-[2px] before:rounded-r before:bg-canopy-accent before:content-['']"
+          : "text-text-secondary hover:bg-[var(--recipe-settings-nav-hover-bg)] hover:text-canopy-text"
       )}
+      style={
+        active
+          ? {
+              background: "var(--recipe-settings-nav-active-bg)",
+              boxShadow: "var(--recipe-settings-nav-active-shadow)",
+            }
+          : undefined
+      }
     >
       <span className="relative">
         {icon}
@@ -1146,11 +1156,11 @@ function SearchResults({
           {results.length === 1 ? "" : "s"}
         </p>
         <p className="text-[10px] text-canopy-text/30">
-          <kbd className="px-1 py-0.5 rounded bg-canopy-bg border border-canopy-border font-mono">
+          <kbd className="px-1 py-0.5 rounded border font-mono bg-[var(--recipe-settings-kbd-bg)] border-[var(--recipe-settings-kbd-border)]">
             ↑↓
           </kbd>{" "}
           navigate{" "}
-          <kbd className="px-1 py-0.5 rounded bg-canopy-bg border border-canopy-border font-mono">
+          <kbd className="px-1 py-0.5 rounded border font-mono bg-[var(--recipe-settings-kbd-bg)] border-[var(--recipe-settings-kbd-border)]">
             ↵
           </kbd>{" "}
           go

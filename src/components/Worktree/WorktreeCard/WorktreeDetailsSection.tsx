@@ -53,7 +53,7 @@ export function WorktreeDetailsSection({
   return (
     <div
       id={detailsId}
-      className="mt-3 rounded-[var(--radius-lg)] border border-border-subtle bg-overlay-subtle p-3"
+      className="mt-3 rounded-[var(--radius-lg)] border border-border-default bg-surface-inset p-3"
     >
       {isExpanded ? (
         <div className="-m-3">
@@ -61,7 +61,7 @@ export function WorktreeDetailsSection({
             onClick={onToggleExpand}
             aria-expanded={true}
             aria-controls={detailsPanelId}
-            className="flex w-full items-center justify-between rounded-t-[var(--radius-lg)] border-b border-border-subtle bg-overlay-soft px-3 py-2.5 text-left transition-colors hover:bg-overlay-medium focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-[-2px]"
+            className="flex w-full items-center justify-between rounded-t-[var(--radius-lg)] border-b border-border-default bg-surface-inset px-3 py-2.5 text-left transition-colors hover:bg-[var(--recipe-worktree-section-hover-bg)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-[-2px]"
             id={`${detailsId}-button`}
           >
             <span className="text-xs font-medium text-text-muted">Details</span>
@@ -97,7 +97,7 @@ export function WorktreeDetailsSection({
             aria-expanded={false}
             aria-controls={detailsPanelId}
             className={cn(
-              "flex min-w-0 flex-1 items-center justify-between px-3 py-2.5 text-left transition-colors hover:bg-overlay-soft",
+              "flex min-w-0 flex-1 items-center justify-between px-3 py-2.5 text-left transition-colors hover:bg-[var(--recipe-worktree-section-hover-bg)]",
               "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-[-2px]",
               onOpenReviewHub && hasChanges
                 ? "rounded-l-[var(--radius-lg)]"
@@ -179,7 +179,7 @@ export function WorktreeDetailsSection({
                 <button
                   onClick={onOpenReviewHub}
                   className={cn(
-                    "shrink-0 border-l border-border-subtle px-2 py-1 transition-colors",
+                    "shrink-0 border-l border-border-default px-2 py-1 transition-colors",
                     "text-[var(--color-state-active)]/70 hover:bg-[var(--color-state-active)]/10 hover:text-[var(--color-state-active)]",
                     "rounded-r-[var(--radius-lg)]",
                     "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-canopy-accent"

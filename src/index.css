@@ -132,9 +132,33 @@
   --color-recipe-surface-elevated-inset-shadow: var(--theme-recipe-surface-elevated-inset-shadow);
   --color-recipe-shadow-ambient: var(--theme-recipe-shadow-ambient);
   --color-recipe-shadow-floating: var(--theme-recipe-shadow-floating);
+  --color-recipe-dialog-shadow: var(--theme-recipe-dialog-shadow);
   --color-recipe-focus-ring-offset: var(--theme-recipe-focus-ring-offset);
   --color-recipe-sidebar-active-bg: var(--theme-recipe-sidebar-active-bg);
   --color-recipe-sidebar-active-shadow: var(--theme-recipe-sidebar-active-shadow);
+  --color-recipe-sidebar-hover-bg: var(--theme-recipe-sidebar-hover-bg);
+  --color-recipe-settings-search-bg: var(--theme-recipe-settings-search-bg);
+  --color-recipe-settings-search-muted: var(--theme-recipe-settings-search-muted);
+  --color-recipe-settings-meta-fg: var(--theme-recipe-settings-meta-fg);
+  --color-recipe-settings-meta-size: var(--theme-recipe-settings-meta-size);
+  --color-recipe-settings-card-bg: var(--theme-recipe-settings-card-bg);
+  --color-recipe-settings-list-item-bg: var(--theme-recipe-settings-list-item-bg);
+  --color-recipe-settings-sidebar-bg: var(--theme-recipe-settings-sidebar-bg);
+  --color-recipe-settings-header-bg: var(--theme-recipe-settings-header-bg);
+  --color-recipe-settings-nav-active-bg: var(--theme-recipe-settings-nav-active-bg);
+  --color-recipe-settings-nav-active-shadow: var(--theme-recipe-settings-nav-active-shadow);
+  --color-recipe-settings-nav-hover-bg: var(--theme-recipe-settings-nav-hover-bg);
+  --color-recipe-settings-subtab-active-bg: var(--theme-recipe-settings-subtab-active-bg);
+  --color-recipe-settings-subtab-active-border-width: var(
+    --theme-recipe-settings-subtab-active-border-width
+  );
+  --color-recipe-settings-subtab-active-radius: var(--theme-recipe-settings-subtab-active-radius);
+  --color-recipe-settings-subtab-hover-bg: var(--theme-recipe-settings-subtab-hover-bg);
+  --color-recipe-settings-subtab-hover-border: var(--theme-recipe-settings-subtab-hover-border);
+  --color-recipe-settings-subtab-hover-radius: var(--theme-recipe-settings-subtab-hover-radius);
+  --color-recipe-settings-kbd-bg: var(--theme-recipe-settings-kbd-bg);
+  --color-recipe-settings-kbd-border: var(--theme-recipe-settings-kbd-border);
+  --color-recipe-worktree-section-hover-bg: var(--theme-recipe-worktree-section-hover-bg);
   --color-recipe-chrome-noise-texture: var(--theme-recipe-chrome-noise-texture);
   --color-diff-insert-background: var(--theme-diff-insert-background);
   --color-diff-insert-edit-background: var(--theme-diff-insert-edit-background);
@@ -573,6 +597,49 @@ code.hljs {
   --recipe-state-chip-border-opacity: var(--theme-recipe-state-chip-border-opacity, 0.4);
   --recipe-label-pill-bg-opacity: var(--theme-recipe-label-pill-bg-opacity, 0.1);
   --recipe-label-pill-border-opacity: var(--theme-recipe-label-pill-border-opacity, 0.2);
+  --recipe-dialog-shadow: var(--theme-recipe-dialog-shadow, var(--theme-recipe-shadow-floating));
+  --recipe-sidebar-hover-bg: var(--theme-recipe-sidebar-hover-bg, var(--theme-overlay-subtle));
+  --recipe-settings-search-bg: var(--theme-recipe-settings-search-bg, var(--theme-surface-input));
+  --recipe-settings-search-muted: var(
+    --theme-recipe-settings-search-muted,
+    var(--theme-text-muted)
+  );
+  --recipe-settings-meta-fg: var(--theme-recipe-settings-meta-fg, var(--theme-text-muted));
+  --recipe-settings-meta-size: var(--theme-recipe-settings-meta-size, 11px);
+  --recipe-settings-card-bg: var(--theme-recipe-settings-card-bg, var(--theme-surface-panel));
+  --recipe-settings-list-item-bg: var(
+    --theme-recipe-settings-list-item-bg,
+    var(--theme-surface-panel)
+  );
+  --recipe-settings-sidebar-bg: var(--theme-recipe-settings-sidebar-bg);
+  --recipe-settings-header-bg: var(--theme-recipe-settings-header-bg);
+  --recipe-settings-nav-active-bg: var(--theme-recipe-settings-nav-active-bg);
+  --recipe-settings-nav-active-shadow: var(--theme-recipe-settings-nav-active-shadow, none);
+  --recipe-settings-nav-hover-bg: var(
+    --theme-recipe-settings-nav-hover-bg,
+    var(--theme-overlay-subtle)
+  );
+  --recipe-settings-subtab-active-bg: var(--theme-recipe-settings-subtab-active-bg, transparent);
+  --recipe-settings-subtab-active-border-width: var(
+    --theme-recipe-settings-subtab-active-border-width,
+    2px
+  );
+  --recipe-settings-subtab-active-radius: var(--theme-recipe-settings-subtab-active-radius, 0px);
+  --recipe-settings-subtab-hover-bg: var(--theme-recipe-settings-subtab-hover-bg, transparent);
+  --recipe-settings-subtab-hover-border: var(
+    --theme-recipe-settings-subtab-hover-border,
+    var(--theme-border-default)
+  );
+  --recipe-settings-subtab-hover-radius: var(--theme-recipe-settings-subtab-hover-radius, 0px);
+  --recipe-settings-kbd-bg: var(--theme-recipe-settings-kbd-bg, var(--theme-surface-input));
+  --recipe-settings-kbd-border: var(
+    --theme-recipe-settings-kbd-border,
+    var(--theme-border-default)
+  );
+  --recipe-worktree-section-hover-bg: var(
+    --theme-recipe-worktree-section-hover-bg,
+    var(--theme-overlay-soft)
+  );
 
   --animation-duration: 150ms;
   --transition-duration: 150ms;
