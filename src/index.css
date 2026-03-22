@@ -158,6 +158,19 @@
   --color-recipe-sidebar-active-shadow: var(--theme-recipe-sidebar-active-shadow);
   --color-recipe-sidebar-hover-bg: var(--theme-recipe-sidebar-hover-bg);
   --color-recipe-sidebar-action-hover-bg: var(--theme-recipe-sidebar-action-hover-bg);
+  --color-recipe-pulse-card-bg: var(--theme-recipe-pulse-card-bg);
+  --color-recipe-pulse-card-shadow: var(--theme-recipe-pulse-card-shadow);
+  --color-recipe-pulse-range-bg: var(--theme-recipe-pulse-range-bg);
+  --color-recipe-pulse-control-hover-bg: var(--theme-recipe-pulse-control-hover-bg);
+  --color-recipe-pulse-before-bg: var(--theme-recipe-pulse-before-bg);
+  --color-recipe-pulse-empty-bg: var(--theme-recipe-pulse-empty-bg);
+  --color-recipe-pulse-missed-bg: var(--theme-recipe-pulse-missed-bg);
+  --color-recipe-pulse-heat-low-opacity: var(--theme-recipe-pulse-heat-low-opacity);
+  --color-recipe-pulse-heat-medium-opacity: var(--theme-recipe-pulse-heat-medium-opacity);
+  --color-recipe-pulse-heat-high-opacity: var(--theme-recipe-pulse-heat-high-opacity);
+  --color-recipe-pulse-ring-offset: var(--theme-recipe-pulse-ring-offset);
+  --color-recipe-pulse-skeleton-gradient: var(--theme-recipe-pulse-skeleton-gradient);
+  --color-recipe-settings-dialog-bg: var(--theme-recipe-settings-dialog-bg);
   --color-recipe-settings-search-bg: var(--theme-recipe-settings-search-bg);
   --color-recipe-settings-search-muted: var(--theme-recipe-settings-search-muted);
   --color-recipe-settings-meta-fg: var(--theme-recipe-settings-meta-fg);
@@ -169,14 +182,9 @@
   --color-recipe-settings-nav-active-bg: var(--theme-recipe-settings-nav-active-bg);
   --color-recipe-settings-nav-active-shadow: var(--theme-recipe-settings-nav-active-shadow);
   --color-recipe-settings-nav-hover-bg: var(--theme-recipe-settings-nav-hover-bg);
-  --color-recipe-settings-subtab-active-bg: var(--theme-recipe-settings-subtab-active-bg);
   --color-recipe-settings-subtab-active-border-width: var(
     --theme-recipe-settings-subtab-active-border-width
   );
-  --color-recipe-settings-subtab-active-radius: var(--theme-recipe-settings-subtab-active-radius);
-  --color-recipe-settings-subtab-hover-bg: var(--theme-recipe-settings-subtab-hover-bg);
-  --color-recipe-settings-subtab-hover-border: var(--theme-recipe-settings-subtab-hover-border);
-  --color-recipe-settings-subtab-hover-radius: var(--theme-recipe-settings-subtab-hover-radius);
   --color-recipe-settings-kbd-bg: var(--theme-recipe-settings-kbd-bg);
   --color-recipe-settings-kbd-border: var(--theme-recipe-settings-kbd-border);
   --color-recipe-worktree-section-hover-bg: var(--theme-recipe-worktree-section-hover-bg);
@@ -658,6 +666,22 @@ code.hljs {
     --theme-recipe-sidebar-action-hover-bg,
     var(--theme-recipe-sidebar-hover-bg, var(--theme-overlay-soft))
   );
+  --recipe-pulse-card-bg: var(--theme-recipe-pulse-card-bg, var(--theme-surface-panel-elevated));
+  --recipe-pulse-card-shadow: var(--theme-recipe-pulse-card-shadow, none);
+  --recipe-pulse-range-bg: var(--theme-recipe-pulse-range-bg, var(--theme-surface-canvas));
+  --recipe-pulse-control-hover-bg: var(
+    --theme-recipe-pulse-control-hover-bg,
+    var(--theme-overlay-subtle)
+  );
+  --recipe-pulse-before-bg: var(--theme-recipe-pulse-before-bg, var(--theme-surface-sidebar));
+  --recipe-pulse-empty-bg: var(--theme-recipe-pulse-empty-bg, var(--theme-surface-panel));
+  --recipe-pulse-missed-bg: var(--theme-recipe-pulse-missed-bg);
+  --recipe-pulse-heat-low-opacity: var(--theme-recipe-pulse-heat-low-opacity, 0.18);
+  --recipe-pulse-heat-medium-opacity: var(--theme-recipe-pulse-heat-medium-opacity, 0.35);
+  --recipe-pulse-heat-high-opacity: var(--theme-recipe-pulse-heat-high-opacity, 0.55);
+  --recipe-pulse-ring-offset: var(--theme-recipe-pulse-ring-offset, var(--recipe-pulse-card-bg));
+  --recipe-pulse-skeleton-gradient: var(--theme-recipe-pulse-skeleton-gradient);
+  --recipe-settings-dialog-bg: var(--theme-recipe-settings-dialog-bg, var(--theme-surface-panel));
   --recipe-settings-search-bg: var(--theme-recipe-settings-search-bg, var(--theme-surface-input));
   --recipe-settings-search-muted: var(
     --theme-recipe-settings-search-muted,
@@ -678,18 +702,10 @@ code.hljs {
     --theme-recipe-settings-nav-hover-bg,
     var(--theme-overlay-subtle)
   );
-  --recipe-settings-subtab-active-bg: var(--theme-recipe-settings-subtab-active-bg, transparent);
   --recipe-settings-subtab-active-border-width: var(
     --theme-recipe-settings-subtab-active-border-width,
     2px
   );
-  --recipe-settings-subtab-active-radius: var(--theme-recipe-settings-subtab-active-radius, 0px);
-  --recipe-settings-subtab-hover-bg: var(--theme-recipe-settings-subtab-hover-bg, transparent);
-  --recipe-settings-subtab-hover-border: var(
-    --theme-recipe-settings-subtab-hover-border,
-    var(--theme-border-default)
-  );
-  --recipe-settings-subtab-hover-radius: var(--theme-recipe-settings-subtab-hover-radius, 0px);
   --recipe-settings-kbd-bg: var(--theme-recipe-settings-kbd-bg, var(--theme-surface-input));
   --recipe-settings-kbd-border: var(
     --theme-recipe-settings-kbd-border,
@@ -2045,6 +2061,21 @@ body[data-performance-mode="true"] [class*="backdrop-blur"] {
   .toolbar-icon-button:active,
   .toolbar-agent-button:active {
     transform: scale(0.98);
+  }
+
+  @keyframes pulse-skeleton-shimmer {
+    0% {
+      background-position: -200% 0;
+    }
+    100% {
+      background-position: 200% 0;
+    }
+  }
+
+  .pulse-skeleton-shimmer {
+    background: var(--recipe-pulse-skeleton-gradient);
+    background-size: 200% 100%;
+    animation: pulse-skeleton-shimmer 1.8s ease-in-out infinite;
   }
 
   .control-hover:hover {

@@ -460,7 +460,7 @@ export function SettingsDialog({
       onClose={onClose}
       size="4xl"
       maxHeight="h-[75vh]"
-      className="min-h-[500px] max-h-[800px]"
+      className="min-h-[500px] max-h-[800px] bg-[var(--recipe-settings-dialog-bg)]"
     >
       <div className="flex h-full overflow-hidden">
         <div className="w-48 border-r border-canopy-border bg-[var(--recipe-settings-sidebar-bg)] p-3 flex flex-col shrink-0">
@@ -710,7 +710,7 @@ export function SettingsDialog({
           </div>
         </div>
 
-        <div className="flex-1 flex flex-col min-w-0">
+        <div className="flex-1 flex flex-col min-w-0 bg-[var(--recipe-settings-dialog-bg)]">
           <div className="flex items-center justify-between px-6 py-4 border-b border-canopy-border bg-[var(--recipe-settings-header-bg)] shrink-0">
             <h3 className="text-lg font-medium text-canopy-text flex items-center gap-2">
               {isSearching ? (

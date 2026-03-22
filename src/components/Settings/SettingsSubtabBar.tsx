@@ -74,12 +74,9 @@ export function SettingsSubtabBar({ subtabs, activeId, onChange }: SettingsSubta
                 "transition-colors flex-shrink-0",
                 "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2",
                 isActive
-                  ? "border-canopy-accent border-b-[var(--recipe-settings-subtab-active-border-width)] rounded-t-[var(--recipe-settings-subtab-active-radius)] text-canopy-text"
-                  : "border-b-2 border-transparent text-text-secondary hover:text-canopy-text hover:border-[var(--recipe-settings-subtab-hover-border)] hover:bg-[var(--recipe-settings-subtab-hover-bg)] hover:rounded-t-[var(--recipe-settings-subtab-hover-radius)]"
+                  ? "border-canopy-accent border-b-[var(--recipe-settings-subtab-active-border-width)] text-canopy-text"
+                  : "border-b-2 border-transparent text-text-secondary hover:border-canopy-border hover:text-canopy-text"
               )}
-              style={
-                isActive ? { background: "var(--recipe-settings-subtab-active-bg)" } : undefined
-              }
             >
               {subtab.renderIcon?.(isActive)}
               <span>{subtab.label}</span>

@@ -204,8 +204,24 @@ export const APP_THEME_TOKEN_KEYS = [
   "recipe-sidebar-hover-bg",
   "recipe-sidebar-action-hover-bg",
 
+  // Project Pulse — the shell/heatmap structure is consistent across the app, but each
+  // theme authors the card surface, shimmer, and heatmap support lane explicitly.
+  "recipe-pulse-card-bg",
+  "recipe-pulse-card-shadow",
+  "recipe-pulse-range-bg",
+  "recipe-pulse-control-hover-bg",
+  "recipe-pulse-before-bg",
+  "recipe-pulse-empty-bg",
+  "recipe-pulse-missed-bg",
+  "recipe-pulse-heat-low-opacity",
+  "recipe-pulse-heat-medium-opacity",
+  "recipe-pulse-heat-high-opacity",
+  "recipe-pulse-ring-offset",
+  "recipe-pulse-skeleton-gradient",
+
   // Settings shell — sidebar wash, content header wash, selected nav chrome, subtab fills,
   // and shortcut key badges vary per theme while keeping the structure consistent.
+  "recipe-settings-dialog-bg",
   "recipe-settings-search-bg",
   "recipe-settings-search-muted",
   "recipe-settings-meta-fg",
@@ -217,12 +233,7 @@ export const APP_THEME_TOKEN_KEYS = [
   "recipe-settings-nav-active-bg",
   "recipe-settings-nav-active-shadow",
   "recipe-settings-nav-hover-bg",
-  "recipe-settings-subtab-active-bg",
   "recipe-settings-subtab-active-border-width",
-  "recipe-settings-subtab-active-radius",
-  "recipe-settings-subtab-hover-bg",
-  "recipe-settings-subtab-hover-border",
-  "recipe-settings-subtab-hover-radius",
   "recipe-settings-kbd-bg",
   "recipe-settings-kbd-border",
 

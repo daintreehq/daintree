@@ -24,12 +24,6 @@ import { PulseHeatmap } from "./PulseHeatmap";
 import { PulseSummary } from "./PulseSummary";
 import { useProjectHealth } from "@/hooks/useProjectHealth";
 import { systemClient } from "@/clients/systemClient";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "../ui/dropdown-menu";
 
 interface ProjectPulseCardProps {
   worktreeId: string;
@@ -37,9 +31,9 @@ interface ProjectPulseCardProps {
 }
 
 const RANGE_OPTIONS: { value: PulseRangeDays; label: string }[] = [
-  { value: 60, label: "60 days" },
-  { value: 120, label: "120 days" },
-  { value: 180, label: "180 days" },
+  { value: 60, label: "60d" },
+  { value: 120, label: "120d" },
+  { value: 180, label: "180d" },
 ];
 
 function getCoachLine(pulse: ProjectPulse): string {
@@ -110,17 +104,45 @@ interface HealthChipProps {
   label: string;
   onClick?: () => void;
   className?: string;
+  tone?: "success" | "working" | "warning" | "danger" | "info" | "accent" | "neutral";
 }
 
-function HealthChip({ icon, label, onClick, className }: HealthChipProps) {
+function getPulseChipToneStyle(tone: NonNullable<HealthChipProps["tone"]>): React.CSSProperties {
+  if (tone === "neutral") {
+    return {
+      background: "color-mix(in oklab, var(--color-text-primary) 6%, transparent)",
+      borderColor: "color-mix(in oklab, var(--color-text-primary) 8%, transparent)",
+      color: "var(--color-text-secondary)",
+    };
+  }
+
+  const palette: Record<Exclude<NonNullable<HealthChipProps["tone"]>, "neutral">, string> = {
+    success: "var(--color-status-success)",
+    working: "var(--color-state-working)",
+    warning: "var(--color-status-warning)",
+    danger: "var(--color-status-error)",
+    info: "var(--color-status-info)",
+    accent: "var(--color-accent-primary)",
+  };
+
+  const toneColor = palette[tone];
+  return {
+    background: `color-mix(in oklab, ${toneColor} 14%, transparent)`,
+    borderColor: `color-mix(in oklab, ${toneColor} 20%, transparent)`,
+    color: toneColor,
+  };
+}
+
+function HealthChip({ icon, label, onClick, className, tone = "neutral" }: HealthChipProps) {
   const Wrapper = onClick ? "button" : "span";
   return (
     <Wrapper
       className={cn(
-        "flex items-center gap-1 text-xs text-canopy-text/75 px-1.5 py-0.5 rounded",
-        onClick && "hover:bg-tint/5 hover:text-canopy-text/90 transition-colors cursor-pointer",
+        "inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[11px] font-medium",
+        onClick && "cursor-pointer transition-colors hover:opacity-85",
         className
       )}
+      style={getPulseChipToneStyle(tone)}
       onClick={onClick}
     >
       {icon}
@@ -149,36 +171,50 @@ function HealthSignals({
         icon={<CIStatusIcon status={health.ciStatus} />}
         label={ciStatusLabel(health.ciStatus)}
         onClick={health.ciStatus !== "none" ? () => openUrl("/actions") : undefined}
+        tone={
+          health.ciStatus === "failure" || health.ciStatus === "error"
+            ? "danger"
+            : health.ciStatus === "pending" || health.ciStatus === "expected"
+              ? "warning"
+              : health.ciStatus === "success"
+                ? "success"
+                : "neutral"
+        }
       />
       <HealthChip
-        icon={<CircleDot className="w-3.5 h-3.5 text-status-info" />}
+        icon={<CircleDot className="w-3.5 h-3.5 text-current" />}
         label={String(health.issueCount)}
         onClick={() => openUrl("/issues")}
+        tone="info"
       />
       <HealthChip
-        icon={<GitPullRequest className="w-3.5 h-3.5 text-status-info" />}
+        icon={<GitPullRequest className="w-3.5 h-3.5 text-current" />}
         label={String(health.prCount)}
         onClick={() => openUrl("/pulls")}
+        tone="working"
       />
       {health.latestRelease && (
         <HealthChip
-          icon={<Tag className="w-3.5 h-3.5 text-canopy-accent" />}
+          icon={<Tag className="w-3.5 h-3.5 text-current" />}
           label={`${health.latestRelease.tagName}${health.latestRelease.publishedAt ? ` (${relativeTime(health.latestRelease.publishedAt)})` : ""}`}
           onClick={() => openUrl(health.latestRelease!.url)}
+          tone="accent"
         />
       )}
       {health.securityAlerts.visible && health.securityAlerts.count > 0 && (
         <HealthChip
-          icon={<ShieldAlert className="w-3.5 h-3.5 text-status-warning" />}
+          icon={<ShieldAlert className="w-3.5 h-3.5 text-current" />}
           label={`${health.securityAlerts.count} alert${health.securityAlerts.count !== 1 ? "s" : ""}`}
           onClick={() => openUrl("/security/dependabot")}
+          tone="warning"
         />
       )}
       {mergedInRange > 0 && (
         <HealthChip
-          icon={<GitMerge className="w-3.5 h-3.5 text-purple-400" />}
+          icon={<GitMerge className="w-3.5 h-3.5 text-current" />}
           label={`${mergedInRange} merged (${rangeDays}d)`}
           onClick={() => openUrl("/pulls?q=is%3Apr+is%3Amerged+sort%3Aupdated-desc")}
+          tone="success"
         />
       )}
     </div>
@@ -195,19 +231,20 @@ const SKELETON_ROW_WIDTH = SKELETON_CELL * SKELETON_COLS + SKELETON_GAP * (SKELE
 function PulseSkeleton({ className }: { className?: string }) {
   return (
     <div
-      className={cn(
-        "w-fit bg-canopy-sidebar rounded-[var(--radius-lg)] border border-canopy-border",
-        className
-      )}
+      className={cn("w-fit rounded-[var(--radius-lg)] border border-canopy-border", className)}
+      style={{
+        background: "var(--recipe-pulse-card-bg)",
+        boxShadow: "var(--recipe-pulse-card-shadow)",
+      }}
     >
       <div className="px-4 py-3 border-b border-canopy-border flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <div className="w-4 h-4 rounded bg-muted shrink-0" />
-          <div className="h-4 bg-muted rounded w-36" />
+          <div className="w-4 h-4 rounded-[2px] pulse-skeleton-shimmer shrink-0" />
+          <div className="h-4 pulse-skeleton-shimmer rounded w-36" />
         </div>
         <div className="flex items-center gap-2">
-          <div className="h-5 bg-muted rounded w-14" />
-          <div className="w-5 h-5 rounded bg-muted" />
+          <div className="h-6 pulse-skeleton-shimmer rounded-md w-32" />
+          <div className="w-6 h-6 rounded-md pulse-skeleton-shimmer" />
         </div>
       </div>
 
@@ -216,31 +253,31 @@ function PulseSkeleton({ className }: { className?: string }) {
           className="flex"
           style={{ gap: `${SKELETON_GAP}px`, width: `${SKELETON_ROW_WIDTH}px` }}
         >
-          {Array.from({ length: SKELETON_COLS }).map((_, i) => (
+          {Array.from({ length: SKELETON_COLS }).map((_, col) => (
             <div
-              key={i}
-              className="rounded-full bg-muted shrink-0"
+              key={col}
+              className="rounded-[2px] pulse-skeleton-shimmer shrink-0"
               style={{ width: `${SKELETON_CELL}px`, height: `${SKELETON_CELL}px` }}
             />
           ))}
         </div>
 
-        <div className="h-3 bg-muted rounded w-52" />
+        <div className="h-3 pulse-skeleton-shimmer rounded w-72" />
 
         <div className="border-t border-canopy-border pt-3">
           <div className="flex items-center gap-2">
-            <div className="h-5 bg-muted rounded w-16" />
-            <div className="h-5 bg-muted rounded w-10" />
-            <div className="h-5 bg-muted rounded w-10" />
-            <div className="h-5 bg-muted rounded w-24" />
+            <div className="h-5 w-16 rounded-full pulse-skeleton-shimmer" />
+            <div className="h-5 w-12 rounded-full pulse-skeleton-shimmer" />
+            <div className="h-5 w-12 rounded-full pulse-skeleton-shimmer" />
+            <div className="h-5 w-24 rounded-full pulse-skeleton-shimmer" />
           </div>
         </div>
 
         <div className="border-t border-canopy-border pt-3">
           <div className="flex items-center gap-4">
-            <div className="h-4 bg-muted rounded w-20" />
-            <div className="h-4 bg-muted rounded w-24" />
-            <div className="h-4 bg-muted rounded w-16" />
+            <div className="h-4 pulse-skeleton-shimmer rounded w-20" />
+            <div className="h-4 pulse-skeleton-shimmer rounded w-24" />
+            <div className="h-4 pulse-skeleton-shimmer rounded w-16" />
           </div>
         </div>
       </div>
@@ -252,10 +289,10 @@ function HealthSectionSkeleton() {
   return (
     <div className="border-t border-canopy-border pt-3 animate-pulse-delayed">
       <div className="flex items-center gap-2">
-        <div className="h-5 bg-muted rounded w-16" />
-        <div className="h-5 bg-muted rounded w-10" />
-        <div className="h-5 bg-muted rounded w-10" />
-        <div className="h-5 bg-muted rounded w-24" />
+        <div className="h-5 pulse-skeleton-shimmer rounded-full w-16" />
+        <div className="h-5 pulse-skeleton-shimmer rounded-full w-12" />
+        <div className="h-5 pulse-skeleton-shimmer rounded-full w-12" />
+        <div className="h-5 pulse-skeleton-shimmer rounded-full w-24" />
       </div>
     </div>
   );
@@ -309,9 +346,6 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
     [setRangeDays, fetchPulse, worktreeId]
   );
 
-  const currentRangeLabel =
-    RANGE_OPTIONS.find((o) => o.value === rangeDays)?.label ?? `${rangeDays} days`;
-
   if (isLoading && !pulse) {
     return <PulseSkeleton className={className} />;
   }
@@ -319,10 +353,11 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
   if (!pulse && error === null) {
     return (
       <div
-        className={cn(
-          "p-4 bg-canopy-sidebar rounded-[var(--radius-lg)] border border-canopy-border",
-          className
-        )}
+        className={cn("p-4 rounded-[var(--radius-lg)] border border-canopy-border", className)}
+        style={{
+          background: "var(--recipe-pulse-card-bg)",
+          boxShadow: "var(--recipe-pulse-card-shadow)",
+        }}
       >
         <div className="flex items-center gap-2 text-canopy-text/75">
           <GitBranch className="w-4 h-4 text-status-info" aria-hidden="true" />
@@ -339,10 +374,11 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
 
     return (
       <div
-        className={cn(
-          "p-4 bg-canopy-sidebar rounded-[var(--radius-lg)] border border-canopy-border",
-          className
-        )}
+        className={cn("p-4 rounded-[var(--radius-lg)] border border-canopy-border", className)}
+        style={{
+          background: "var(--recipe-pulse-card-bg)",
+          boxShadow: "var(--recipe-pulse-card-shadow)",
+        }}
       >
         <div className="flex flex-col gap-2">
           <div className="flex items-center gap-2 text-canopy-text/75" role="alert">
@@ -350,7 +386,7 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
             <span className="text-xs">{error}</span>
             <button
               onClick={handleRefresh}
-              className="ml-auto p-1 hover:bg-tint/5 rounded transition-colors"
+              className="ml-auto rounded-md p-1 text-canopy-text/55 transition-colors hover:bg-[var(--recipe-pulse-control-hover-bg)] hover:text-canopy-text/80"
               aria-label="Retry now"
             >
               <RefreshCw className="w-3 h-3" aria-hidden="true" />
@@ -379,10 +415,11 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
 
   return (
     <div
-      className={cn(
-        "w-fit bg-canopy-sidebar rounded-[var(--radius-lg)] border border-canopy-border",
-        className
-      )}
+      className={cn("w-fit rounded-[var(--radius-lg)] border border-canopy-border", className)}
+      style={{
+        background: "var(--recipe-pulse-card-bg)",
+        boxShadow: "var(--recipe-pulse-card-shadow)",
+      }}
     >
       <div className="px-4 py-3 border-b border-canopy-border flex items-center justify-between">
         <div className="flex items-center gap-2">
@@ -392,34 +429,46 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
         </div>
 
         <div className="flex items-center gap-2">
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <button
-                className="text-xs text-canopy-text/70 hover:text-canopy-text/90 transition-colors px-2 py-1 rounded hover:bg-tint/5"
-                aria-label="Change time range"
-              >
-                {currentRangeLabel}
-              </button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              {RANGE_OPTIONS.map((option) => (
-                <DropdownMenuItem
+          <div
+            className="flex items-center rounded-md border border-transparent text-[11px] font-medium"
+            style={{ background: "var(--recipe-pulse-range-bg)" }}
+            aria-label="Select pulse range"
+          >
+            {RANGE_OPTIONS.map((option) => {
+              const isActive = option.value === rangeDays;
+              return (
+                <button
                   key={option.value}
+                  type="button"
                   onClick={() => handleRangeChange(option.value)}
                   className={cn(
-                    option.value === rangeDays && "bg-canopy-accent/15 text-canopy-accent"
+                    "rounded-md px-2 py-1 transition-colors",
+                    isActive
+                      ? "text-canopy-accent border border-canopy-accent/25"
+                      : "text-canopy-text/55 hover:bg-[var(--recipe-pulse-control-hover-bg)] hover:text-canopy-text/80"
                   )}
+                  style={
+                    isActive
+                      ? {
+                          background:
+                            "color-mix(in oklab, var(--color-accent-primary) 12%, transparent)",
+                        }
+                      : {
+                          background: "transparent",
+                        }
+                  }
+                  aria-pressed={isActive}
                 >
                   {option.label}
-                </DropdownMenuItem>
-              ))}
-            </DropdownMenuContent>
-          </DropdownMenu>
+                </button>
+              );
+            })}
+          </div>
 
           <button
             onClick={handleRefresh}
             disabled={isLoading}
-            className="p-1 text-canopy-text/55 hover:text-canopy-text/90 hover:bg-tint/5 rounded transition-colors disabled:opacity-50"
+            className="rounded-md p-1.5 text-canopy-text/55 transition-colors hover:bg-[var(--recipe-pulse-control-hover-bg)] hover:text-canopy-text/80 disabled:opacity-50"
             aria-label="Refresh"
           >
             <RefreshCw className={cn("w-3 h-3", isLoading && "animate-spin")} />
