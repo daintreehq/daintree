@@ -131,7 +131,7 @@ npm run rebuild      # Rebuild native modules (node-pty)
 
 PRs run typecheck, lint, format, and unit tests only — no E2E. Full E2E suites run nightly and as release gates. Tagged releases wait for E2E to pass before publishing.
 
-Theme docs: `docs/architecture/theme-system.md`
+Theme docs: `docs/themes/theme-system.md`, `docs/themes/theme-tokens.md`
 
 ## Adding New Features
 

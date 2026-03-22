@@ -71,7 +71,7 @@ export function SettingsSubtabBar({ subtabs, activeId, onChange }: SettingsSubta
               onClick={() => onChange(subtab.id)}
               className={cn(
                 "inline-flex items-center gap-2 px-3 pb-2.5 pt-0.5 text-sm font-medium",
-                "transition-colors flex-shrink-0",
+                "transition-[color] duration-150 flex-shrink-0",
                 "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2",
                 isActive
                   ? "border-canopy-accent border-b-[var(--settings-subtab-active-border-width,2px)] text-canopy-text"
