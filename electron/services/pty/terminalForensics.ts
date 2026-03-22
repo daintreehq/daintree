@@ -20,14 +20,19 @@ export const EXPECTED_TERMINATION_SIGNALS = new Set<number>([
   15, // SIGTERM (polite shutdown)
 ]);
 
+const CRASH_SIGNALS = new Set<number>([
+  4, // SIGILL (illegal instruction)
+  6, // SIGABRT (abort)
+  7, // SIGBUS (bus error)
+  8, // SIGFPE (floating point exception)
+  9, // SIGKILL (force kill / OOM killer)
+  11, // SIGSEGV (segfault)
+]);
+
 export function isRoutineExit(code: number, signal?: number | null): boolean {
-  if (code === 0) return true;
-  if (signal && EXPECTED_TERMINATION_SIGNALS.has(signal)) return true;
-  // Shell-convention exit codes: 128 + signal number
-  for (const sig of EXPECTED_TERMINATION_SIGNALS) {
-    if (code === 128 + sig) return true;
-  }
-  return false;
+  if (signal && CRASH_SIGNALS.has(signal)) return false;
+  if (code > 128 && CRASH_SIGNALS.has(code - 128)) return false;
+  return true;
 }
 
 function normalizeExitSignal(signal?: number | null): number | undefined {
