@@ -1177,7 +1177,7 @@ export function Toolbar({
         aria-label="Main toolbar"
         onKeyDown={handleToolbarKeyDown}
         onFocusCapture={handleToolbarFocusCapture}
-        className="relative grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] h-12 items-center px-4 pt-1 shrink-0 app-drag-region surface-chrome border-b border-divider"
+        className="relative grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] h-12 items-center px-4 pt-1 shrink-0 app-drag-region surface-toolbar border-b border-divider"
       >
         {!isLinux() && <div className="window-resize-strip" />}
 
