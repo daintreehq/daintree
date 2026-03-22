@@ -69,6 +69,8 @@ export const theme: BuiltInThemeSource = {
     },
     strategy: {
       shadowStyle: "crisp",
+      materialBlur: 14,
+      materialSaturation: 115,
     },
   },
   tokens: {

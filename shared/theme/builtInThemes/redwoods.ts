@@ -14,7 +14,7 @@ export const theme: BuiltInThemeSource = {
       sidebar: "#110B08",
       canvas: "#16110D",
       panel: "#1E1612",
-      elevated: "#2A1E18",
+      elevated: "#2E221B",
     },
     text: {
       primary: "#E8DCC8",
@@ -24,9 +24,9 @@ export const theme: BuiltInThemeSource = {
     },
     border: "#36241A",
     accent: "#4E9A53",
-    accentSecondary: "#457B4D",
+    accentSecondary: "#5A8B55",
     status: {
-      success: "#457B4D",
+      success: "#5A7E52",
       warning: "#BA8A42",
       danger: "#B85C52",
       info: "#6B8287",
