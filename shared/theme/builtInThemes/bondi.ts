@@ -25,7 +25,7 @@ export const theme: BuiltInThemeSource = {
     border: "#D8DBDF",
     accent: "#145A44",
     status: {
-      success: "#24523C",
+      success: "#2D5E3A",
       warning: "#7A4516",
       danger: "#8E342C",
       info: "#184B6A",
@@ -70,6 +70,8 @@ export const theme: BuiltInThemeSource = {
     },
     strategy: {
       shadowStyle: "crisp",
+      materialBlur: 12,
+      materialSaturation: 120,
     },
   },
   tokens: {

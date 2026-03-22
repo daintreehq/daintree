@@ -10,9 +10,9 @@ export const theme: BuiltInThemeSource = {
   palette: {
     type: "light",
     surfaces: {
-      grid: "#E4E8F4",
-      sidebar: "#ECEFF8",
-      canvas: "#F4F3FB",
+      grid: "#E8ECF5",
+      sidebar: "#EEF1F8",
+      canvas: "#F5F5FC",
       panel: "#FBFAFE",
       elevated: "#FDFCFF",
     },
@@ -72,6 +72,8 @@ export const theme: BuiltInThemeSource = {
     },
     strategy: {
       shadowStyle: "crisp",
+      materialBlur: 10,
+      materialSaturation: 115,
     },
   },
   tokens: {
@@ -126,15 +128,15 @@ export const theme: BuiltInThemeSource = {
     "surface-active": "rgba(82,88,118,0.05)",
     "surface-hover": "rgba(82,88,118,0.03)",
     "surface-input": "#FAF8FD",
-    "surface-inset": "#ECEFF8",
+    "surface-inset": "#EAECF6",
     "surface-toolbar": "#F0F2FA",
     "terminal-black": "#2D334A",
     "terminal-bright-black": "#6A708C",
     "terminal-white": "#E2E8F4",
   },
   extensions: {
-    "terminal-grid-bg": "#F4F3FB",
-    "pulse-before-bg": "#E8EBF5",
+    "terminal-grid-bg": "#F5F5FC",
+    "pulse-before-bg": "#EAECF5",
     "pulse-card-bg": "#FDFCFF",
     "pulse-card-shadow": "0 1px 3px rgba(86,81,118,0.07)",
     "pulse-control-hover-bg": "rgba(82,88,118,0.02)",

@@ -10,10 +10,10 @@ export const theme: BuiltInThemeSource = {
   palette: {
     type: "light",
     surfaces: {
-      grid: "#E4DED6",
-      sidebar: "#EBE6DE",
-      canvas: "#F2EDE6",
-      panel: "#F9F7F2",
+      grid: "#E8E3DB",
+      sidebar: "#EDE8E1",
+      canvas: "#F4F0EA",
+      panel: "#FAF8F4",
       elevated: "#FDFBF8",
     },
     text: {
@@ -106,9 +106,9 @@ export const theme: BuiltInThemeSource = {
     "shadow-floating": "0 20px 56px rgba(60,48,38,0.15)",
     "surface-active": "rgba(60,48,38,0.06)",
     "surface-hover": "rgba(60,48,38,0.04)",
-    "surface-input": "#F4F1EC",
+    "surface-input": "#F6F4EF",
     "surface-inset": "#EBE6DE",
-    "surface-toolbar": "#EDE8E0",
+    "surface-toolbar": "#EFE9E2",
     "terminal-black": "#261F1B",
     "terminal-bright-black": "#968C84",
     "terminal-white": "#E0D8D0",
