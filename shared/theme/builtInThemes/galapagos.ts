@@ -112,7 +112,7 @@ export const theme: BuiltInThemeSource = {
     "settings-search-bg": "#21302C",
     "settings-sidebar-bg": "rgba(17,22,21,0.70)",
     "sidebar-action-hover-bg": "rgba(74,158,127,0.08)",
-    "sidebar-active-bg": "rgba(74,158,127,0.08)",
+    "sidebar-active-bg": "rgba(255,255,255,0.05)",
     "sidebar-active-shadow": "inset 0 1px 0 0 rgba(140,200,180,0.06)",
     "sidebar-hover-bg": "rgba(74,158,127,0.04)",
     "toolbar-agent-hover-bg": "rgba(74,158,127,0.06)",
