@@ -199,9 +199,9 @@ describe("AgentStateMachine", () => {
         expect(nextAgentState("working", event)).toBe("completed");
       });
 
-      it("should transition working → failed on genuine non-zero exit code", () => {
+      it("should transition working → completed on non-crash exit code", () => {
         const event: AgentEvent = { type: "exit", code: 1 };
-        expect(nextAgentState("working", event)).toBe("failed");
+        expect(nextAgentState("working", event)).toBe("completed");
       });
 
       it("should transition working → completed on routine signal exit (SIGINT)", () => {
@@ -229,18 +229,22 @@ describe("AgentStateMachine", () => {
         expect(nextAgentState("waiting", event)).toBe("completed");
       });
 
-      it("should transition waiting → failed on genuine non-zero exit code", () => {
+      it("should transition waiting → completed on non-crash exit code", () => {
         const event: AgentEvent = { type: "exit", code: 1 };
-        expect(nextAgentState("waiting", event)).toBe("failed");
+        expect(nextAgentState("waiting", event)).toBe("completed");
       });
 
       it("should transition waiting → completed on routine exit (SIGTERM)", () => {
         expect(nextAgentState("waiting", { type: "exit", code: 143 })).toBe("completed");
       });
 
-      it("should transition completed → failed on non-zero exit", () => {
+      it("should stay completed on non-crash exit from completed", () => {
         const event: AgentEvent = { type: "exit", code: 1 };
-        expect(nextAgentState("completed", event)).toBe("failed");
+        expect(nextAgentState("completed", event)).toBe("completed");
+      });
+
+      it("should transition working → failed on crash signal exit (SIGABRT)", () => {
+        expect(nextAgentState("working", { type: "exit", code: 134 })).toBe("failed");
       });
 
       it("should stay completed on zero exit from completed", () => {
