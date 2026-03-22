@@ -2,16 +2,34 @@ import { describe, expect, it } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import {
-  APP_THEME_TOKEN_KEYS,
-  LEGACY_THEME_TOKEN_ALIASES,
-  PANEL_KIND_BRAND_COLORS,
-} from "@shared/theme";
+import { APP_THEME_TOKEN_KEYS, PANEL_KIND_BRAND_COLORS } from "@shared/theme";
 
 const TEST_DIR = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(TEST_DIR, "../../..");
 const INDEX_CSS_PATH = path.join(REPO_ROOT, "src/index.css");
 const SRC_ROOT = path.join(REPO_ROOT, "src");
+const NON_COLOR_THEME_TOKENS = new Set([
+  "shadow-ambient",
+  "shadow-floating",
+  "shadow-dialog",
+  "material-blur",
+  "material-saturation",
+  "material-opacity",
+  "radius-scale",
+  "state-chip-bg-opacity",
+  "state-chip-border-opacity",
+  "label-pill-bg-opacity",
+  "label-pill-border-opacity",
+  "scrollbar-width",
+  "scrollbar-thumb",
+  "scrollbar-thumb-hover",
+  "scrollbar-track",
+  "panel-state-edge-width",
+  "panel-state-edge-inset-block",
+  "panel-state-edge-radius",
+  "focus-ring-offset",
+  "chrome-noise-texture",
+]);
 
 function collectSourceFiles(dir: string): string[] {
   return fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
@@ -43,14 +61,8 @@ describe("color system contract", () => {
   );
 
   it("exports every app theme token to the CSS layer", () => {
-    for (const token of APP_THEME_TOKEN_KEYS) {
+    for (const token of APP_THEME_TOKEN_KEYS.filter((key) => !NON_COLOR_THEME_TOKENS.has(key))) {
       expect(exportedColorVars.has(token), `Missing --color-${token} export`).toBe(true);
-    }
-  });
-
-  it("exports every legacy theme alias to the CSS layer", () => {
-    for (const alias of Object.keys(LEGACY_THEME_TOKEN_ALIASES)) {
-      expect(exportedColorVars.has(alias), `Missing --color-${alias} export`).toBe(true);
     }
   });
 

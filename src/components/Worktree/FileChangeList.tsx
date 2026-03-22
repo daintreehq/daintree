@@ -197,7 +197,7 @@ export function FileChangeList({
                     {displayDir}/
                   </span>
                 )}
-                <span className="text-canopy-text group-hover:text-white font-medium truncate min-w-0">
+                <span className="text-canopy-text group-hover:text-text-inverse font-medium truncate min-w-0">
                   {base}
                 </span>
               </div>

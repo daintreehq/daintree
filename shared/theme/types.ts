@@ -1,3 +1,5 @@
+import type { ThemePalette } from "./palette.js";
+
 export const APP_THEME_TOKEN_KEYS = [
   // Surface hierarchy
   "surface-canvas",
@@ -66,6 +68,15 @@ export const APP_THEME_TOKEN_KEYS = [
   "overlay-medium",
   "overlay-strong",
   "overlay-emphasis",
+  "overlay-hover",
+  "overlay-active",
+  "overlay-selected",
+  "overlay-elevated",
+
+  // Atmospheric wash
+  "wash-subtle",
+  "wash-medium",
+  "wash-strong",
 
   // Scrim
   "scrim-soft",
@@ -74,9 +85,18 @@ export const APP_THEME_TOKEN_KEYS = [
 
   // Shadow
   "shadow-color",
+  "shadow-ambient",
+  "shadow-floating",
+  "shadow-dialog",
 
   // Tint (white for dark themes, black for light themes)
   "tint",
+
+  // Material/radius strategy outputs
+  "material-blur",
+  "material-saturation",
+  "material-opacity",
+  "radius-scale",
 
   // GitHub PR/issue states
   "github-open",
@@ -142,108 +162,20 @@ export const APP_THEME_TOKEN_KEYS = [
   "category-violet",
   "category-slate",
 
-  // Recipes — per-theme parametric values
-  "recipe-state-chip-bg-opacity",
-  "recipe-state-chip-border-opacity",
-  "recipe-label-pill-bg-opacity",
-  "recipe-label-pill-border-opacity",
-  "recipe-button-inset-shadow",
-
-  // Scrollbar recipe
-  "recipe-scrollbar-width",
-  "recipe-scrollbar-thumb",
-  "recipe-scrollbar-thumb-hover",
-  "recipe-scrollbar-track",
-
-  // Panel state edge recipe (left rail on panel headers; disabled via width:0 for themes without it)
-  "recipe-panel-state-edge-width",
-  "recipe-panel-state-edge-inset-block",
-  "recipe-panel-state-edge-radius",
-
-  // Control chrome recipe (panel/palette shadows and raised-surface highlights)
-  "recipe-control-chrome-raised-shadow",
-  "recipe-control-chrome-pressed-shadow",
-
-  // Surface elevation sheen — inset top-edge highlight on elevated surfaces
-  // (dialogs, palettes, tooltips, active sidebar cards). Set to "none" to disable.
-  "recipe-surface-elevated-inset-shadow",
-
-  // Shadow profiles — complete box-shadow values including geometry + blur
-  // Themes set these to express their shadow personality (crisp, fog-diffused, soft, etc.)
-  "recipe-shadow-ambient",
-  "recipe-shadow-floating",
-  "recipe-dialog-shadow",
-  "recipe-toolbar-shadow",
-  "recipe-toolbar-control-hover-bg",
-  "recipe-toolbar-control-hover-fg",
-  "recipe-toolbar-control-hover-shadow",
-  "recipe-toolbar-agent-hover-bg",
-  "recipe-toolbar-divider",
-  "recipe-toolbar-pill-radius",
-  "recipe-toolbar-project-bg",
-  "recipe-toolbar-project-border",
-  "recipe-toolbar-project-shadow",
-  "recipe-toolbar-project-chip-bg",
-  "recipe-toolbar-project-chip-border",
-  "recipe-toolbar-project-meta-fg",
-  "recipe-toolbar-project-chip-size",
-  "recipe-toolbar-stats-bg",
-  "recipe-toolbar-stats-border",
-  "recipe-toolbar-stats-divider",
-  "recipe-toolbar-stats-shadow",
-  "recipe-toolbar-stats-hover-bg",
-
-  // Focus ring offset in px (default 2px; some themes prefer 3px for breathing room)
-  "recipe-focus-ring-offset",
-
-  // Sidebar active card — the selected worktree card bg and shadow.
-  // Dark themes: overlay-base tint (lightens) + inset sheen; Light themes: surface-panel-elevated + drop shadow.
-  // Themes can override for accent-tinted selections (e.g. Galápagos, Redwoods).
-  "recipe-sidebar-active-bg",
-  "recipe-sidebar-active-shadow",
-  "recipe-sidebar-hover-bg",
-  "recipe-sidebar-action-hover-bg",
-
-  // Project Pulse — the shell/heatmap structure is consistent across the app, but each
-  // theme authors the card surface, shimmer, and heatmap support lane explicitly.
-  "recipe-pulse-card-bg",
-  "recipe-pulse-card-shadow",
-  "recipe-pulse-range-bg",
-  "recipe-pulse-control-hover-bg",
-  "recipe-pulse-before-bg",
-  "recipe-pulse-empty-bg",
-  "recipe-pulse-missed-bg",
-  "recipe-pulse-heat-low-opacity",
-  "recipe-pulse-heat-medium-opacity",
-  "recipe-pulse-heat-high-opacity",
-  "recipe-pulse-ring-offset",
-  "recipe-pulse-skeleton-gradient",
-
-  // Settings shell — sidebar wash, content header wash, selected nav chrome, subtab fills,
-  // and shortcut key badges vary per theme while keeping the structure consistent.
-  "recipe-settings-dialog-bg",
-  "recipe-settings-search-bg",
-  "recipe-settings-search-muted",
-  "recipe-settings-meta-fg",
-  "recipe-settings-meta-size",
-  "recipe-settings-card-bg",
-  "recipe-settings-list-item-bg",
-  "recipe-settings-sidebar-bg",
-  "recipe-settings-header-bg",
-  "recipe-settings-nav-active-bg",
-  "recipe-settings-nav-active-shadow",
-  "recipe-settings-nav-hover-bg",
-  "recipe-settings-subtab-active-border-width",
-  "recipe-settings-kbd-bg",
-  "recipe-settings-kbd-border",
-
-  // Worktree inset sections — details/terminal trays share a theme-specific hover fill that
-  // is distinct from both card hover chrome and the generic surface hover ladder.
-  "recipe-worktree-section-hover-bg",
-
-  // Chrome noise texture — CSS background-image layer for grain on sidebar/toolbar/dock.
-  // Set to a data-URI SVG noise filter or "none" (default). Requires component support.
-  "recipe-chrome-noise-texture",
+  // Global UI utility tokens
+  "state-chip-bg-opacity",
+  "state-chip-border-opacity",
+  "label-pill-bg-opacity",
+  "label-pill-border-opacity",
+  "scrollbar-width",
+  "scrollbar-thumb",
+  "scrollbar-thumb-hover",
+  "scrollbar-track",
+  "panel-state-edge-width",
+  "panel-state-edge-inset-block",
+  "panel-state-edge-radius",
+  "focus-ring-offset",
+  "chrome-noise-texture",
 
   // Diff viewer (theme-controlled)
   "diff-insert-background",
@@ -266,6 +198,8 @@ export interface AppColorScheme {
   type: "dark" | "light";
   builtin: boolean;
   tokens: AppColorSchemeTokens;
+  palette?: ThemePalette;
+  extensions?: Record<string, string>;
   location?: string;
   heroImage?: string;
   heroVideo?: string;

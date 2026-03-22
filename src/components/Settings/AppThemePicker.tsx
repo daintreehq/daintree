@@ -400,7 +400,7 @@ export function AppThemePicker() {
             role="listbox"
             aria-label="Theme list"
             onMouseDown={(e) => e.preventDefault()}
-            className="absolute z-50 left-0 right-0 mt-1 max-h-[280px] overflow-y-auto rounded-[var(--radius-md)] border border-canopy-border bg-canopy-bg shadow-lg"
+            className="absolute z-50 left-0 right-0 mt-1 max-h-[280px] overflow-y-auto rounded-[var(--radius-md)] border border-canopy-border bg-canopy-bg shadow-[var(--theme-shadow-floating)]"
           >
             {darkSchemes.length > 0 && (
               <>

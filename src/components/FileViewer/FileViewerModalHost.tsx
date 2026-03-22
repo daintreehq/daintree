@@ -45,8 +45,8 @@ export function FileViewerModalHost() {
   return (
     <Suspense
       fallback={
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-          <Loader2 className="h-6 w-6 animate-spin text-white" />
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-scrim-medium">
+          <Loader2 className="h-6 w-6 animate-spin text-text-inverse" />
         </div>
       }
     >

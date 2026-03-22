@@ -252,7 +252,7 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
           (location === "dock" || isMaximized) && "bg-canopy-bg",
           location === "grid" &&
             !isMaximized &&
-            "rounded border shadow-md transition-colors duration-300",
+            "rounded border shadow-[var(--theme-shadow-ambient)] transition-colors duration-300",
           location === "grid" &&
             !isMaximized &&
             (isFocused && showGridAttention

@@ -64,9 +64,9 @@ export function VoiceRecordingToolbarButton({
             className={cn(
               "toolbar-icon-button relative transition-colors mr-0.5",
               isRecording
-                ? "text-canopy-text hover:text-[var(--recipe-toolbar-control-hover-fg)]"
+                ? "text-canopy-text hover:text-[var(--toolbar-control-hover-fg,var(--theme-accent-primary))]"
                 : status === "connecting"
-                  ? "text-canopy-text/60 hover:text-[var(--recipe-toolbar-control-hover-fg)]"
+                  ? "text-canopy-text/60 hover:text-[var(--toolbar-control-hover-fg,var(--theme-accent-primary))]"
                   : "text-canopy-accent hover:text-canopy-accent"
             )}
             aria-label={tooltipTitle}

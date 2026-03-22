@@ -1,0 +1,22 @@
+.surface-chrome {
+  background-color: var(
+    --chrome-bg,
+    color-mix(in oklab, var(--theme-surface-sidebar) 95%, transparent)
+  );
+  background-image: var(--chrome-noise, var(--chrome-noise-texture));
+  background-blend-mode: soft-light;
+  box-shadow: var(--chrome-shadow, inset 0 1px 0 var(--theme-overlay-soft));
+  -webkit-backdrop-filter: blur(var(--theme-material-blur))
+    saturate(var(--theme-material-saturation));
+  backdrop-filter: blur(var(--theme-material-blur)) saturate(var(--theme-material-saturation));
+}
+
+.themed-dialog-surface {
+  background: var(--dialog-bg, var(--theme-surface-panel-elevated));
+  box-shadow: var(--dialog-shadow, var(--theme-shadow-dialog));
+}
+
+.themed-floating-surface {
+  background: var(--floating-surface-bg, var(--theme-surface-panel-elevated));
+  box-shadow: var(--floating-surface-shadow, var(--theme-shadow-floating));
+}

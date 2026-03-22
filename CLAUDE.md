@@ -226,6 +226,7 @@ src/
 ## Documentation
 
 - `docs/development.md` — Architecture, IPC patterns, debugging
-- `docs/architecture/theme-system.md` — App theme tokens, normalization, import flow
+- `docs/themes/theme-system.md` — Theme pipeline, core model, component overrides, runtime
+- `docs/themes/theme-tokens.md` — Complete semantic token reference (142 tokens)
 - `docs/e2e-testing.md` — Playwright E2E testing setup and patterns
 - `docs/feature-curation.md` — Feature evaluation criteria

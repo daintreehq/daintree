@@ -371,7 +371,7 @@ export function ReviewHub({ isOpen, worktreePath, onClose }: ReviewHubProps) {
       <div
         className={cn(
           "fixed inset-0 z-[var(--z-modal)] flex items-center justify-center",
-          "bg-black/60 backdrop-blur-sm",
+          "bg-scrim-medium backdrop-blur-sm",
           "motion-safe:animate-in motion-safe:fade-in motion-safe:duration-150"
         )}
         onClick={handleBackdropClick}
@@ -386,7 +386,7 @@ export function ReviewHub({ isOpen, worktreePath, onClose }: ReviewHubProps) {
             "w-[min(600px,calc(100vw-80px))] max-h-[calc(100vh-80px)] min-h-[320px]",
             "bg-canopy-bg rounded-xl",
             "border border-divider",
-            "shadow-2xl shadow-black/40",
+            "shadow-[var(--theme-shadow-dialog)]",
             "motion-safe:animate-in motion-safe:zoom-in-95 motion-safe:duration-200"
           )}
           onClick={(e) => e.stopPropagation()}

@@ -231,11 +231,10 @@ const SKELETON_ROW_WIDTH = SKELETON_CELL * SKELETON_COLS + SKELETON_GAP * (SKELE
 function PulseSkeleton({ className }: { className?: string }) {
   return (
     <div
-      className={cn("w-fit rounded-[var(--radius-lg)] border border-canopy-border", className)}
-      style={{
-        background: "var(--recipe-pulse-card-bg)",
-        boxShadow: "var(--recipe-pulse-card-shadow)",
-      }}
+      className={cn(
+        "pulse-card w-fit rounded-[var(--radius-lg)] border border-canopy-border",
+        className
+      )}
     >
       <div className="px-4 py-3 border-b border-canopy-border flex items-center justify-between">
         <div className="flex items-center gap-2">
@@ -353,11 +352,10 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
   if (!pulse && error === null) {
     return (
       <div
-        className={cn("p-4 rounded-[var(--radius-lg)] border border-canopy-border", className)}
-        style={{
-          background: "var(--recipe-pulse-card-bg)",
-          boxShadow: "var(--recipe-pulse-card-shadow)",
-        }}
+        className={cn(
+          "pulse-card p-4 rounded-[var(--radius-lg)] border border-canopy-border",
+          className
+        )}
       >
         <div className="flex items-center gap-2 text-canopy-text/75">
           <GitBranch className="w-4 h-4 text-status-info" aria-hidden="true" />
@@ -374,11 +372,10 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
 
     return (
       <div
-        className={cn("p-4 rounded-[var(--radius-lg)] border border-canopy-border", className)}
-        style={{
-          background: "var(--recipe-pulse-card-bg)",
-          boxShadow: "var(--recipe-pulse-card-shadow)",
-        }}
+        className={cn(
+          "pulse-card p-4 rounded-[var(--radius-lg)] border border-canopy-border",
+          className
+        )}
       >
         <div className="flex flex-col gap-2">
           <div className="flex items-center gap-2 text-canopy-text/75" role="alert">
@@ -386,7 +383,7 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
             <span className="text-xs">{error}</span>
             <button
               onClick={handleRefresh}
-              className="ml-auto rounded-md p-1 text-canopy-text/55 transition-colors hover:bg-[var(--recipe-pulse-control-hover-bg)] hover:text-canopy-text/80"
+              className="pulse-control ml-auto rounded-md p-1 text-canopy-text/55 transition-colors hover:text-canopy-text/80"
               aria-label="Retry now"
             >
               <RefreshCw className="w-3 h-3" aria-hidden="true" />
@@ -415,11 +412,10 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
 
   return (
     <div
-      className={cn("w-fit rounded-[var(--radius-lg)] border border-canopy-border", className)}
-      style={{
-        background: "var(--recipe-pulse-card-bg)",
-        boxShadow: "var(--recipe-pulse-card-shadow)",
-      }}
+      className={cn(
+        "pulse-card w-fit rounded-[var(--radius-lg)] border border-canopy-border",
+        className
+      )}
     >
       <div className="px-4 py-3 border-b border-canopy-border flex items-center justify-between">
         <div className="flex items-center gap-2">
@@ -430,8 +426,7 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
 
         <div className="flex items-center gap-2">
           <div
-            className="flex items-center rounded-md border border-transparent text-[11px] font-medium"
-            style={{ background: "var(--recipe-pulse-range-bg)" }}
+            className="pulse-range flex items-center rounded-md border border-transparent text-[11px] font-medium"
             aria-label="Select pulse range"
           >
             {RANGE_OPTIONS.map((option) => {
@@ -445,7 +440,7 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
                     "rounded-md px-2 py-1 transition-colors",
                     isActive
                       ? "text-canopy-accent border border-canopy-accent/25"
-                      : "text-canopy-text/55 hover:bg-[var(--recipe-pulse-control-hover-bg)] hover:text-canopy-text/80"
+                      : "pulse-control text-canopy-text/55 hover:text-canopy-text/80"
                   )}
                   style={
                     isActive
@@ -468,7 +463,7 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
           <button
             onClick={handleRefresh}
             disabled={isLoading}
-            className="rounded-md p-1.5 text-canopy-text/55 transition-colors hover:bg-[var(--recipe-pulse-control-hover-bg)] hover:text-canopy-text/80 disabled:opacity-50"
+            className="pulse-control rounded-md p-1.5 text-canopy-text/55 transition-colors hover:text-canopy-text/80 disabled:opacity-50"
             aria-label="Refresh"
           >
             <RefreshCw className={cn("w-3 h-3", isLoading && "animate-spin")} />

@@ -55,25 +55,25 @@ function getHeatCellBackground(level: HeatCell["level"]): string {
 
   const opacityVar =
     level === 3
-      ? "var(--recipe-pulse-heat-high-opacity)"
+      ? "var(--pulse-heat-high-opacity, 0.55)"
       : level === 2
-        ? "var(--recipe-pulse-heat-medium-opacity)"
-        : "var(--recipe-pulse-heat-low-opacity)";
+        ? "var(--pulse-heat-medium-opacity, 0.35)"
+        : "var(--pulse-heat-low-opacity, 0.18)";
 
   return `color-mix(in oklab, var(--color-state-working) calc(${opacityVar} * 100%), transparent)`;
 }
 
 function getCellStyle(cell: RenderCell): CSSProperties {
   if (cell.isBeforeProject) {
-    return { background: "var(--recipe-pulse-before-bg)" };
+    return { background: "var(--pulse-before-bg, var(--theme-surface-sidebar))" };
   }
 
   if (cell.isMissedDay) {
-    return { background: "var(--recipe-pulse-missed-bg)" };
+    return { background: "var(--pulse-missed-bg)" };
   }
 
   if (cell.count === 0) {
-    return { background: "var(--recipe-pulse-empty-bg)" };
+    return { background: "var(--pulse-empty-bg, var(--theme-surface-panel))" };
   }
 
   return {
@@ -144,7 +144,7 @@ export function PulseHeatmap({ cells, rangeDays, compact = false }: PulseHeatmap
 
               const ringStyle = (
                 cell.isToday || cell.isMostRecentActive
-                  ? { "--tw-ring-offset-color": "var(--recipe-pulse-ring-offset)" }
+                  ? { "--tw-ring-offset-color": "var(--pulse-ring-offset, var(--pulse-card-bg))" }
                   : {}
               ) as CSSProperties;
 

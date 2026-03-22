@@ -7,10 +7,9 @@ const SUMMARY_PATH = resolve(__dirname, "../PulseSummary.tsx");
 const HEATMAP_PATH = resolve(__dirname, "../PulseHeatmap.tsx");
 
 describe("ProjectPulseCard — visual contrast (issue #2645)", () => {
-  it("card shell uses pulse recipe tokens for per-theme shell styling", async () => {
+  it("card shell uses pulse component vars for per-theme shell styling", async () => {
     const content = await readFile(CARD_PATH, "utf-8");
-    expect(content).toContain('background: "var(--recipe-pulse-card-bg)"');
-    expect(content).toContain('boxShadow: "var(--recipe-pulse-card-shadow)"');
+    expect(content).toContain('"pulse-card');
   });
 
   it("Activity icon does not use reduced-opacity status-success", async () => {
@@ -40,9 +39,9 @@ describe("ProjectPulseCard — visual contrast (issue #2645)", () => {
     expect(content).toContain("text-canopy-text/80");
   });
 
-  it("button hover uses the pulse control hover recipe token", async () => {
+  it("button hover uses the pulse control hover component var", async () => {
     const content = await readFile(CARD_PATH, "utf-8");
-    expect(content).toContain("hover:bg-[var(--recipe-pulse-control-hover-bg)]");
+    expect(content).toContain('"pulse-control');
   });
 
   it("inline selector active item uses accent tint fill, not a surface token", async () => {
@@ -80,16 +79,16 @@ describe("PulseSummary — visual contrast (issue #2645)", () => {
 });
 
 describe("PulseHeatmap — contrast on elevated card (issue #2645)", () => {
-  it("heatmap uses square indicators and pulse recipe tokens", async () => {
+  it("heatmap uses square indicators and pulse component vars", async () => {
     const content = await readFile(HEATMAP_PATH, "utf-8");
     expect(content).toContain("rounded-[2px]");
-    expect(content).toContain("var(--recipe-pulse-before-bg)");
-    expect(content).toContain("var(--recipe-pulse-empty-bg)");
-    expect(content).toContain("var(--recipe-pulse-missed-bg)");
+    expect(content).toContain("var(--pulse-before-bg");
+    expect(content).toContain("var(--pulse-empty-bg");
+    expect(content).toContain("var(--pulse-missed-bg)");
   });
 
   it("today ring uses the pulse ring offset token", async () => {
     const content = await readFile(HEATMAP_PATH, "utf-8");
-    expect(content).toContain("var(--recipe-pulse-ring-offset)");
+    expect(content).toContain("var(--pulse-ring-offset");
   });
 });

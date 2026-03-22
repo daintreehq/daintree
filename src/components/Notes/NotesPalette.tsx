@@ -196,7 +196,7 @@ export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
     <>
       {createPortal(
         <div
-          className="fixed inset-0 z-[var(--z-modal)] flex items-center justify-center bg-black/40 backdrop-blur-xs backdrop-saturate-[1.25] motion-safe:animate-in motion-safe:fade-in motion-safe:duration-150"
+          className="fixed inset-0 z-[var(--z-modal)] flex items-center justify-center bg-scrim-medium backdrop-blur-xs backdrop-saturate-[1.25] motion-safe:animate-in motion-safe:fade-in motion-safe:duration-150"
           onClick={actions.handleBackdropClick}
           role="dialog"
           aria-modal="true"

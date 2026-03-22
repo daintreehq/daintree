@@ -140,7 +140,7 @@ function ApprovalCard({
   };
 
   return (
-    <div className="rounded-lg border border-border-default bg-surface-panel p-4 shadow-lg">
+    <div className="rounded-lg border border-border-default bg-surface-panel p-4 shadow-[var(--theme-shadow-floating)]">
       <div className="mb-2 flex items-center gap-2">
         <AlertTriangle className="h-4 w-4 shrink-0 text-status-warning" />
         <span className="text-xs font-medium text-text-muted">{approval.workflowName}</span>

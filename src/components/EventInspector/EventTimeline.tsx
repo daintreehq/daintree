@@ -158,7 +158,7 @@ export function EventTimeline({
         <Button
           variant="info"
           size="sm"
-          className="absolute bottom-4 right-4 rounded-full shadow-lg"
+          className="absolute bottom-4 right-4 rounded-full shadow-[var(--theme-shadow-floating)]"
           onClick={scrollToBottom}
         >
           Scroll to bottom

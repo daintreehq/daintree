@@ -261,7 +261,7 @@ export function GeneralTab({
         <>
           <div
             id="general-about"
-            className="flex items-start gap-4 p-4 rounded-[var(--radius-md)] border border-canopy-border bg-[var(--recipe-settings-card-bg)]"
+            className="settings-card flex items-start gap-4 p-4 rounded-[var(--radius-md)] border border-canopy-border"
           >
             <div className="h-12 w-12 bg-canopy-accent/10 rounded-xl flex items-center justify-center shrink-0">
               <CanopyIcon size={28} className="text-canopy-accent" />
@@ -322,7 +322,7 @@ export function GeneralTab({
                         "flex items-center justify-between text-sm px-3 py-2 rounded-[var(--radius-md)] border w-full text-left cursor-pointer transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2",
                         isUnavailable
                           ? "border-[color-mix(in_oklab,var(--color-status-warning)_30%,transparent)] bg-[color-mix(in_oklab,var(--color-status-warning)_6%,transparent)] hover:bg-[color-mix(in_oklab,var(--color-status-warning)_10%,transparent)]"
-                          : "border-canopy-border bg-[var(--recipe-settings-list-item-bg)] hover:bg-[var(--recipe-settings-nav-hover-bg)]"
+                          : "settings-list-item border-canopy-border hover:bg-[var(--settings-nav-hover-bg,var(--theme-overlay-hover))]"
                       )}
                       aria-label={`Go to ${name} agent settings`}
                       onClick={() => onNavigateToAgents?.(id)}
@@ -394,7 +394,7 @@ export function GeneralTab({
                         >
                           <dt className="text-canopy-text">{shortcut.description}</dt>
                           <dd>
-                            <kbd className="px-2 py-1 rounded border text-xs font-mono text-canopy-text bg-[var(--recipe-settings-kbd-bg)] border-[var(--recipe-settings-kbd-border)]">
+                            <kbd className="settings-kbd px-2 py-1 rounded border text-xs font-mono text-canopy-text">
                               {shortcut.key}
                             </kbd>
                           </dd>

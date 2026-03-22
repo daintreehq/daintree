@@ -41,7 +41,7 @@ export function FindBar({ find }: FindBarProps) {
   };
 
   return (
-    <div className="absolute top-2 right-2 z-20 flex items-center gap-1 rounded-md bg-surface-panel-elevated border border-canopy-border shadow-lg px-2 py-1">
+    <div className="absolute top-2 right-2 z-20 flex items-center gap-1 rounded-md bg-surface-panel-elevated border border-canopy-border shadow-[var(--theme-shadow-floating)] px-2 py-1">
       <input
         ref={inputRef}
         type="text"

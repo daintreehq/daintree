@@ -523,34 +523,38 @@ export const WorktreeCard = React.memo(function WorktreeCard({
     <div
       ref={droppableRef}
       className={cn(
-        "group relative transition-all duration-200",
+        "sidebar-worktree-card group relative transition-all duration-200",
         variant === "sidebar" && "border-b border-border-default",
         variant === "grid" && "rounded-lg border border-divider bg-overlay-subtle",
-        isActive && variant !== "sidebar" && "bg-surface-panel-elevated shadow-sm",
-        !isActive && "hover:bg-[var(--recipe-sidebar-hover-bg)]",
+        isActive &&
+          variant !== "sidebar" &&
+          "bg-surface-panel-elevated shadow-[var(--theme-shadow-ambient)]",
+        !isActive &&
+          variant === "grid" &&
+          "hover:bg-[var(--sidebar-hover-bg,var(--theme-overlay-hover))]",
         variant === "sidebar" && !isActive && "bg-transparent",
         isActive &&
           !isSingleWorktree &&
           variant === "sidebar" &&
           "before:absolute before:left-0 before:top-2 before:bottom-2 before:w-[3px] before:rounded-r before:bg-accent-primary before:content-[''] before:z-10 motion-safe:before:animate-in motion-safe:before:fade-in motion-safe:before:duration-200",
-        variant === "grid" && isActive && "border-accent-primary/70 shadow-md",
+        variant === "grid" &&
+          isActive &&
+          "border-accent-primary/70 shadow-[var(--theme-shadow-floating)]",
         variant === "grid" &&
           !isActive &&
-          "hover:border-accent-primary/50 hover:shadow-lg hover:shadow-accent-primary/5",
-        isFocused && !isActive && "bg-[var(--recipe-sidebar-hover-bg)]",
+          "hover:border-accent-primary/50 hover:shadow-[var(--theme-shadow-floating)]",
+        isFocused &&
+          !isActive &&
+          variant === "grid" &&
+          "bg-[var(--sidebar-hover-bg,var(--theme-overlay-hover))]",
         isOver &&
           !isActive &&
           "ring-2 ring-accent-primary bg-accent-primary/10 border-accent-primary/50 transition-all duration-200",
         "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
       )}
-      style={
-        isActive && variant === "sidebar"
-          ? {
-              background: "var(--theme-recipe-sidebar-active-bg)",
-              boxShadow: "var(--theme-recipe-sidebar-active-shadow)",
-            }
-          : undefined
-      }
+      data-active={isActive && variant === "sidebar" ? "true" : undefined}
+      data-hoverable={!isActive && variant === "sidebar" ? "true" : undefined}
+      data-hovered={isFocused && !isActive && variant === "sidebar" ? "true" : undefined}
       onClick={onSelect}
       onDoubleClick={handleDoubleClick}
       onContextMenu={handleContextMenu}

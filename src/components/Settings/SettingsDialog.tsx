@@ -460,21 +460,21 @@ export function SettingsDialog({
       onClose={onClose}
       size="4xl"
       maxHeight="h-[75vh]"
-      className="min-h-[500px] max-h-[800px] bg-[var(--recipe-settings-dialog-bg)]"
+      className="settings-shell min-h-[500px] max-h-[800px]"
     >
       <div className="flex h-full overflow-hidden">
-        <div className="w-48 border-r border-canopy-border bg-[var(--recipe-settings-sidebar-bg)] p-3 flex flex-col shrink-0">
+        <div className="settings-sidebar w-48 border-r border-canopy-border p-3 flex flex-col shrink-0">
           <h2 className="text-sm font-semibold text-canopy-text mb-2 px-2">Settings</h2>
 
           <div
             className={cn(
               "flex items-center gap-1.5 px-2 py-1.5 mb-2 rounded-[var(--radius-md)]",
-              "bg-[var(--recipe-settings-search-bg)] border border-canopy-border",
+              "settings-search border border-canopy-border",
               "focus-within:border-canopy-accent focus-within:ring-1 focus-within:ring-canopy-accent/20"
             )}
           >
             <Search
-              className="w-3.5 h-3.5 shrink-0 text-[var(--recipe-settings-search-muted)] pointer-events-none"
+              className="settings-search-icon w-3.5 h-3.5 shrink-0 pointer-events-none"
               aria-hidden="true"
             />
             <input
@@ -485,7 +485,7 @@ export function SettingsDialog({
               onChange={(e) => setSearchQuery(e.target.value)}
               onKeyDown={handleSearchKeyDown}
               aria-label="Search settings"
-              className="flex-1 min-w-0 text-xs bg-transparent text-canopy-text placeholder:text-[var(--recipe-settings-search-muted)] focus:outline-none"
+              className="settings-search-input flex-1 min-w-0 text-xs bg-transparent text-canopy-text focus:outline-none"
             />
             {searchQuery && (
               <button
@@ -514,7 +514,7 @@ export function SettingsDialog({
             {canScrollUp && (
               <div
                 aria-hidden="true"
-                className="pointer-events-none absolute inset-x-0 top-0 h-8 bg-gradient-to-b from-[var(--recipe-settings-sidebar-bg)] to-transparent z-10"
+                className="pointer-events-none absolute inset-x-0 top-0 h-8 bg-gradient-to-b from-[var(--settings-sidebar-bg,var(--theme-surface-sidebar))] to-transparent z-10"
               />
             )}
             <div
@@ -698,20 +698,18 @@ export function SettingsDialog({
             {canScrollDown && (
               <div
                 aria-hidden="true"
-                className="pointer-events-none absolute inset-x-0 bottom-0 h-8 bg-gradient-to-t from-[var(--recipe-settings-sidebar-bg)] to-transparent z-10"
+                className="pointer-events-none absolute inset-x-0 bottom-0 h-8 bg-gradient-to-t from-[var(--settings-sidebar-bg,var(--theme-surface-sidebar))] to-transparent z-10"
               />
             )}
           </div>
 
           <div className="pt-2 mt-2 border-t border-canopy-border px-2">
-            <span className="text-[length:var(--recipe-settings-meta-size)] text-[var(--recipe-settings-meta-fg)] font-mono">
-              {appVersion}
-            </span>
+            <span className="settings-meta font-mono">{appVersion}</span>
           </div>
         </div>
 
-        <div className="flex-1 flex flex-col min-w-0 bg-[var(--recipe-settings-dialog-bg)]">
-          <div className="flex items-center justify-between px-6 py-4 border-b border-canopy-border bg-[var(--recipe-settings-header-bg)] shrink-0">
+        <div className="settings-shell flex-1 flex flex-col min-w-0">
+          <div className="settings-header flex items-center justify-between px-6 py-4 border-b border-canopy-border shrink-0">
             <h3 className="text-lg font-medium text-canopy-text flex items-center gap-2">
               {isSearching ? (
                 <>
@@ -1025,7 +1023,7 @@ function NavGroup({ label, children }: { label: string; children: React.ReactNod
   return (
     <div role="none">
       <span
-        className="text-[length:var(--recipe-settings-meta-size)] font-medium uppercase tracking-wider text-[var(--recipe-settings-meta-fg)] px-3 mb-1 block select-none"
+        className="settings-meta font-medium uppercase tracking-wider px-3 mb-1 block select-none"
         aria-hidden="true"
       >
         {label}
@@ -1072,18 +1070,12 @@ function NavItem({
       className={cn(
         "relative text-left px-3 py-1.5 rounded-[var(--radius-md)] text-sm transition-colors flex items-center gap-2 w-full",
         "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2",
+        "settings-nav-item",
         active
           ? "text-canopy-text before:absolute before:left-0 before:top-1.5 before:bottom-1.5 before:w-[2px] before:rounded-r before:bg-canopy-accent before:content-['']"
-          : "text-text-secondary hover:bg-[var(--recipe-settings-nav-hover-bg)] hover:text-canopy-text"
+          : "text-text-secondary hover:text-canopy-text"
       )}
-      style={
-        active
-          ? {
-              background: "var(--recipe-settings-nav-active-bg)",
-              boxShadow: "var(--recipe-settings-nav-active-shadow)",
-            }
-          : undefined
-      }
+      data-active={active ? "true" : undefined}
     >
       <span className="relative">
         {icon}
@@ -1156,14 +1148,8 @@ function SearchResults({
           {results.length === 1 ? "" : "s"}
         </p>
         <p className="text-[10px] text-canopy-text/30">
-          <kbd className="px-1 py-0.5 rounded border font-mono bg-[var(--recipe-settings-kbd-bg)] border-[var(--recipe-settings-kbd-border)]">
-            ↑↓
-          </kbd>{" "}
-          navigate{" "}
-          <kbd className="px-1 py-0.5 rounded border font-mono bg-[var(--recipe-settings-kbd-bg)] border-[var(--recipe-settings-kbd-border)]">
-            ↵
-          </kbd>{" "}
-          go
+          <kbd className="settings-kbd px-1 py-0.5 rounded border font-mono">↑↓</kbd> navigate{" "}
+          <kbd className="settings-kbd px-1 py-0.5 rounded border font-mono">↵</kbd> go
         </p>
       </div>
       {results.map((result, index) => (

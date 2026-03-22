@@ -1,5 +1,10 @@
 @import "tailwindcss";
 @plugin "@tailwindcss/typography";
+@import "./styles/components/toolbar.css";
+@import "./styles/components/settings.css";
+@import "./styles/components/pulse.css";
+@import "./styles/components/sidebar.css";
+@import "./styles/components/panels.css";
 
 @theme inline {
   --color-*: initial;
@@ -57,10 +62,20 @@
   --color-overlay: var(--theme-border-strong);
   --color-overlay-strong: var(--theme-overlay-strong);
   --color-overlay-emphasis: var(--theme-overlay-emphasis);
+  --color-overlay-hover: var(--theme-overlay-hover);
+  --color-overlay-active: var(--theme-overlay-active);
+  --color-overlay-selected: var(--theme-overlay-selected);
+  --color-overlay-elevated: var(--theme-overlay-elevated);
+  --color-wash-subtle: var(--theme-wash-subtle);
+  --color-wash-medium: var(--theme-wash-medium);
+  --color-wash-strong: var(--theme-wash-strong);
   --color-scrim-soft: var(--theme-scrim-soft);
   --color-scrim-medium: var(--theme-scrim-medium);
   --color-scrim-strong: var(--theme-scrim-strong);
   --color-shadow-color: var(--theme-shadow-color);
+  --shadow-ambient: var(--theme-shadow-ambient);
+  --shadow-floating: var(--theme-shadow-floating);
+  --shadow-dialog: var(--theme-shadow-dialog);
   --color-tint: var(--theme-tint);
   --color-github-open: var(--theme-github-open);
   --color-github-merged: var(--theme-github-merged);
@@ -116,79 +131,6 @@
   --color-category-pink: var(--theme-category-pink);
   --color-category-violet: var(--theme-category-violet);
   --color-category-slate: var(--theme-category-slate);
-  --color-recipe-state-chip-bg-opacity: var(--theme-recipe-state-chip-bg-opacity);
-  --color-recipe-state-chip-border-opacity: var(--theme-recipe-state-chip-border-opacity);
-  --color-recipe-label-pill-bg-opacity: var(--theme-recipe-label-pill-bg-opacity);
-  --color-recipe-label-pill-border-opacity: var(--theme-recipe-label-pill-border-opacity);
-  --color-recipe-button-inset-shadow: var(--theme-recipe-button-inset-shadow);
-  --color-recipe-scrollbar-width: var(--theme-recipe-scrollbar-width);
-  --color-recipe-scrollbar-thumb: var(--theme-recipe-scrollbar-thumb);
-  --color-recipe-scrollbar-thumb-hover: var(--theme-recipe-scrollbar-thumb-hover);
-  --color-recipe-scrollbar-track: var(--theme-recipe-scrollbar-track);
-  --color-recipe-panel-state-edge-width: var(--theme-recipe-panel-state-edge-width);
-  --color-recipe-panel-state-edge-inset-block: var(--theme-recipe-panel-state-edge-inset-block);
-  --color-recipe-panel-state-edge-radius: var(--theme-recipe-panel-state-edge-radius);
-  --color-recipe-control-chrome-raised-shadow: var(--theme-recipe-control-chrome-raised-shadow);
-  --color-recipe-control-chrome-pressed-shadow: var(--theme-recipe-control-chrome-pressed-shadow);
-  --color-recipe-surface-elevated-inset-shadow: var(--theme-recipe-surface-elevated-inset-shadow);
-  --color-recipe-shadow-ambient: var(--theme-recipe-shadow-ambient);
-  --color-recipe-shadow-floating: var(--theme-recipe-shadow-floating);
-  --color-recipe-dialog-shadow: var(--theme-recipe-dialog-shadow);
-  --color-recipe-toolbar-shadow: var(--theme-recipe-toolbar-shadow);
-  --color-recipe-toolbar-control-hover-bg: var(--theme-recipe-toolbar-control-hover-bg);
-  --color-recipe-toolbar-control-hover-fg: var(--theme-recipe-toolbar-control-hover-fg);
-  --color-recipe-toolbar-control-hover-shadow: var(--theme-recipe-toolbar-control-hover-shadow);
-  --color-recipe-toolbar-agent-hover-bg: var(--theme-recipe-toolbar-agent-hover-bg);
-  --color-recipe-toolbar-divider: var(--theme-recipe-toolbar-divider);
-  --color-recipe-toolbar-pill-radius: var(--theme-recipe-toolbar-pill-radius);
-  --color-recipe-toolbar-project-bg: var(--theme-recipe-toolbar-project-bg);
-  --color-recipe-toolbar-project-border: var(--theme-recipe-toolbar-project-border);
-  --color-recipe-toolbar-project-shadow: var(--theme-recipe-toolbar-project-shadow);
-  --color-recipe-toolbar-project-chip-bg: var(--theme-recipe-toolbar-project-chip-bg);
-  --color-recipe-toolbar-project-chip-border: var(--theme-recipe-toolbar-project-chip-border);
-  --color-recipe-toolbar-project-meta-fg: var(--theme-recipe-toolbar-project-meta-fg);
-  --color-recipe-toolbar-project-chip-size: var(--theme-recipe-toolbar-project-chip-size);
-  --color-recipe-toolbar-stats-bg: var(--theme-recipe-toolbar-stats-bg);
-  --color-recipe-toolbar-stats-border: var(--theme-recipe-toolbar-stats-border);
-  --color-recipe-toolbar-stats-divider: var(--theme-recipe-toolbar-stats-divider);
-  --color-recipe-toolbar-stats-shadow: var(--theme-recipe-toolbar-stats-shadow);
-  --color-recipe-toolbar-stats-hover-bg: var(--theme-recipe-toolbar-stats-hover-bg);
-  --color-recipe-focus-ring-offset: var(--theme-recipe-focus-ring-offset);
-  --color-recipe-sidebar-active-bg: var(--theme-recipe-sidebar-active-bg);
-  --color-recipe-sidebar-active-shadow: var(--theme-recipe-sidebar-active-shadow);
-  --color-recipe-sidebar-hover-bg: var(--theme-recipe-sidebar-hover-bg);
-  --color-recipe-sidebar-action-hover-bg: var(--theme-recipe-sidebar-action-hover-bg);
-  --color-recipe-pulse-card-bg: var(--theme-recipe-pulse-card-bg);
-  --color-recipe-pulse-card-shadow: var(--theme-recipe-pulse-card-shadow);
-  --color-recipe-pulse-range-bg: var(--theme-recipe-pulse-range-bg);
-  --color-recipe-pulse-control-hover-bg: var(--theme-recipe-pulse-control-hover-bg);
-  --color-recipe-pulse-before-bg: var(--theme-recipe-pulse-before-bg);
-  --color-recipe-pulse-empty-bg: var(--theme-recipe-pulse-empty-bg);
-  --color-recipe-pulse-missed-bg: var(--theme-recipe-pulse-missed-bg);
-  --color-recipe-pulse-heat-low-opacity: var(--theme-recipe-pulse-heat-low-opacity);
-  --color-recipe-pulse-heat-medium-opacity: var(--theme-recipe-pulse-heat-medium-opacity);
-  --color-recipe-pulse-heat-high-opacity: var(--theme-recipe-pulse-heat-high-opacity);
-  --color-recipe-pulse-ring-offset: var(--theme-recipe-pulse-ring-offset);
-  --color-recipe-pulse-skeleton-gradient: var(--theme-recipe-pulse-skeleton-gradient);
-  --color-recipe-settings-dialog-bg: var(--theme-recipe-settings-dialog-bg);
-  --color-recipe-settings-search-bg: var(--theme-recipe-settings-search-bg);
-  --color-recipe-settings-search-muted: var(--theme-recipe-settings-search-muted);
-  --color-recipe-settings-meta-fg: var(--theme-recipe-settings-meta-fg);
-  --color-recipe-settings-meta-size: var(--theme-recipe-settings-meta-size);
-  --color-recipe-settings-card-bg: var(--theme-recipe-settings-card-bg);
-  --color-recipe-settings-list-item-bg: var(--theme-recipe-settings-list-item-bg);
-  --color-recipe-settings-sidebar-bg: var(--theme-recipe-settings-sidebar-bg);
-  --color-recipe-settings-header-bg: var(--theme-recipe-settings-header-bg);
-  --color-recipe-settings-nav-active-bg: var(--theme-recipe-settings-nav-active-bg);
-  --color-recipe-settings-nav-active-shadow: var(--theme-recipe-settings-nav-active-shadow);
-  --color-recipe-settings-nav-hover-bg: var(--theme-recipe-settings-nav-hover-bg);
-  --color-recipe-settings-subtab-active-border-width: var(
-    --theme-recipe-settings-subtab-active-border-width
-  );
-  --color-recipe-settings-kbd-bg: var(--theme-recipe-settings-kbd-bg);
-  --color-recipe-settings-kbd-border: var(--theme-recipe-settings-kbd-border);
-  --color-recipe-worktree-section-hover-bg: var(--theme-recipe-worktree-section-hover-bg);
-  --color-recipe-chrome-noise-texture: var(--theme-recipe-chrome-noise-texture);
   --color-diff-insert-background: var(--theme-diff-insert-background);
   --color-diff-insert-edit-background: var(--theme-diff-insert-edit-background);
   --color-diff-delete-background: var(--theme-diff-delete-background);
@@ -197,6 +139,7 @@
   --color-diff-gutter-delete: var(--theme-diff-gutter-delete);
   --color-diff-selected-background: var(--theme-diff-selected-background);
   --color-diff-omit-gutter-line: var(--theme-diff-omit-gutter-line);
+  --radius: calc(0.625rem * var(--theme-radius-scale, 1));
 
   --color-category-blue-subtle: color-mix(
     in oklch,
@@ -411,7 +354,6 @@
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-ring: var(--sidebar-ring);
-  --radius: 0.625rem;
   --radius-xs: calc(var(--radius) - 6px);
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);
@@ -423,26 +365,26 @@
   --height-sm: 2rem;
   --height-md: 2.5rem;
   --height-lg: 3rem;
-  --color-canopy-bg: var(--theme-legacy-canopy-bg);
-  --color-canopy-sidebar: var(--theme-legacy-canopy-sidebar);
-  --color-canopy-border: var(--theme-legacy-canopy-border);
-  --color-canopy-text: var(--theme-legacy-canopy-text);
-  --color-canopy-accent: var(--theme-legacy-canopy-accent);
+  --color-canopy-bg: var(--theme-surface-canvas);
+  --color-canopy-sidebar: var(--theme-surface-sidebar);
+  --color-canopy-border: var(--theme-border-default);
+  --color-canopy-text: var(--theme-text-primary);
+  --color-canopy-accent: var(--theme-accent-primary);
   --color-canopy-accent-rgb: var(--theme-accent-rgb);
-  --color-surface: var(--theme-legacy-surface);
-  --color-surface-highlight: var(--theme-legacy-surface-highlight);
-  --color-grid-bg: var(--theme-legacy-grid-bg);
-  --color-canopy-focus: var(--theme-legacy-canopy-focus);
-  --color-status-error: var(--theme-legacy-status-error);
-  --color-state-active: var(--theme-legacy-state-active);
-  --color-state-idle: var(--theme-legacy-state-idle);
-  --color-state-working: var(--theme-legacy-state-working);
-  --color-state-waiting: var(--theme-legacy-state-waiting);
-  --color-state-approval: var(--theme-legacy-state-approval);
-  --color-server-running: var(--theme-legacy-server-running);
-  --color-server-stopped: var(--theme-legacy-server-stopped);
-  --color-server-starting: var(--theme-legacy-server-starting);
-  --color-server-error: var(--theme-legacy-server-error);
+  --color-surface: var(--theme-surface-panel);
+  --color-surface-highlight: var(--theme-surface-panel-elevated);
+  --color-grid-bg: var(--terminal-grid-bg, var(--theme-surface-grid));
+  --color-canopy-focus: var(--theme-focus-ring);
+  --color-status-error: var(--theme-status-danger);
+  --color-state-active: var(--theme-activity-active);
+  --color-state-idle: var(--theme-activity-idle);
+  --color-state-working: var(--theme-activity-working);
+  --color-state-waiting: var(--theme-activity-waiting);
+  --color-state-approval: var(--theme-activity-approval);
+  --color-server-running: var(--theme-status-success);
+  --color-server-stopped: var(--theme-activity-idle);
+  --color-server-starting: var(--theme-status-warning);
+  --color-server-error: var(--theme-status-danger);
   --color-cat-blue: var(--theme-category-blue);
   --color-cat-purple: var(--theme-category-purple);
   --color-cat-cyan: var(--theme-category-cyan);
@@ -621,100 +563,22 @@ code.hljs {
   --dock-item-bg-failed: color-mix(in oklab, var(--color-status-error) 8%, transparent);
   --dock-item-border-failed: color-mix(in oklab, var(--color-status-error) 40%, transparent);
 
-  /* Recipe tokens — per-theme parametric opacity values */
-  --recipe-state-chip-bg-opacity: var(--theme-recipe-state-chip-bg-opacity, 0.15);
-  --recipe-state-chip-border-opacity: var(--theme-recipe-state-chip-border-opacity, 0.4);
-  --recipe-label-pill-bg-opacity: var(--theme-recipe-label-pill-bg-opacity, 0.1);
-  --recipe-label-pill-border-opacity: var(--theme-recipe-label-pill-border-opacity, 0.2);
-  --recipe-dialog-shadow: var(--theme-recipe-dialog-shadow, var(--theme-recipe-shadow-floating));
-  --recipe-toolbar-shadow: var(--theme-recipe-toolbar-shadow, none);
-  --recipe-toolbar-control-hover-bg: var(
-    --theme-recipe-toolbar-control-hover-bg,
-    var(--theme-overlay-strong)
+  --state-chip-bg-opacity: var(--theme-state-chip-bg-opacity, 0.15);
+  --state-chip-border-opacity: var(--theme-state-chip-border-opacity, 0.4);
+  --label-pill-bg-opacity: var(--theme-label-pill-bg-opacity, 0.1);
+  --label-pill-border-opacity: var(--theme-label-pill-border-opacity, 0.2);
+  --scrollbar-width: var(--theme-scrollbar-width, 6px);
+  --scrollbar-thumb: var(--theme-scrollbar-thumb, var(--color-state-idle));
+  --scrollbar-thumb-hover: var(
+    --theme-scrollbar-thumb-hover,
+    color-mix(in oklab, var(--scrollbar-thumb) 85%, var(--color-text-primary))
   );
-  --recipe-toolbar-control-hover-fg: var(
-    --theme-recipe-toolbar-control-hover-fg,
-    var(--theme-accent-primary)
-  );
-  --recipe-toolbar-control-hover-shadow: var(--theme-recipe-toolbar-control-hover-shadow, none);
-  --recipe-toolbar-agent-hover-bg: var(
-    --theme-recipe-toolbar-agent-hover-bg,
-    var(--recipe-toolbar-control-hover-bg)
-  );
-  --recipe-toolbar-divider: var(--theme-recipe-toolbar-divider, var(--theme-border-divider));
-  --recipe-toolbar-pill-radius: var(--theme-recipe-toolbar-pill-radius, 0.5rem);
-  --recipe-toolbar-project-bg: var(--theme-recipe-toolbar-project-bg);
-  --recipe-toolbar-project-border: var(--theme-recipe-toolbar-project-border);
-  --recipe-toolbar-project-shadow: var(--theme-recipe-toolbar-project-shadow, none);
-  --recipe-toolbar-project-chip-bg: var(--theme-recipe-toolbar-project-chip-bg);
-  --recipe-toolbar-project-chip-border: var(--theme-recipe-toolbar-project-chip-border);
-  --recipe-toolbar-project-meta-fg: var(
-    --theme-recipe-toolbar-project-meta-fg,
-    var(--theme-text-secondary)
-  );
-  --recipe-toolbar-project-chip-size: var(--theme-recipe-toolbar-project-chip-size, 10px);
-  --recipe-toolbar-stats-bg: var(--theme-recipe-toolbar-stats-bg);
-  --recipe-toolbar-stats-border: var(--theme-recipe-toolbar-stats-border);
-  --recipe-toolbar-stats-divider: var(--theme-recipe-toolbar-stats-divider);
-  --recipe-toolbar-stats-shadow: var(--theme-recipe-toolbar-stats-shadow, none);
-  --recipe-toolbar-stats-hover-bg: var(
-    --theme-recipe-toolbar-stats-hover-bg,
-    var(--recipe-toolbar-control-hover-bg)
-  );
-  --recipe-sidebar-hover-bg: var(--theme-recipe-sidebar-hover-bg, var(--theme-overlay-subtle));
-  --recipe-sidebar-action-hover-bg: var(
-    --theme-recipe-sidebar-action-hover-bg,
-    var(--theme-recipe-sidebar-hover-bg, var(--theme-overlay-soft))
-  );
-  --recipe-pulse-card-bg: var(--theme-recipe-pulse-card-bg, var(--theme-surface-panel-elevated));
-  --recipe-pulse-card-shadow: var(--theme-recipe-pulse-card-shadow, none);
-  --recipe-pulse-range-bg: var(--theme-recipe-pulse-range-bg, var(--theme-surface-canvas));
-  --recipe-pulse-control-hover-bg: var(
-    --theme-recipe-pulse-control-hover-bg,
-    var(--theme-overlay-subtle)
-  );
-  --recipe-pulse-before-bg: var(--theme-recipe-pulse-before-bg, var(--theme-surface-sidebar));
-  --recipe-pulse-empty-bg: var(--theme-recipe-pulse-empty-bg, var(--theme-surface-panel));
-  --recipe-pulse-missed-bg: var(--theme-recipe-pulse-missed-bg);
-  --recipe-pulse-heat-low-opacity: var(--theme-recipe-pulse-heat-low-opacity, 0.18);
-  --recipe-pulse-heat-medium-opacity: var(--theme-recipe-pulse-heat-medium-opacity, 0.35);
-  --recipe-pulse-heat-high-opacity: var(--theme-recipe-pulse-heat-high-opacity, 0.55);
-  --recipe-pulse-ring-offset: var(--theme-recipe-pulse-ring-offset, var(--recipe-pulse-card-bg));
-  --recipe-pulse-skeleton-gradient: var(--theme-recipe-pulse-skeleton-gradient);
-  --recipe-settings-dialog-bg: var(--theme-recipe-settings-dialog-bg, var(--theme-surface-panel));
-  --recipe-settings-search-bg: var(--theme-recipe-settings-search-bg, var(--theme-surface-input));
-  --recipe-settings-search-muted: var(
-    --theme-recipe-settings-search-muted,
-    var(--theme-text-muted)
-  );
-  --recipe-settings-meta-fg: var(--theme-recipe-settings-meta-fg, var(--theme-text-muted));
-  --recipe-settings-meta-size: var(--theme-recipe-settings-meta-size, 11px);
-  --recipe-settings-card-bg: var(--theme-recipe-settings-card-bg, var(--theme-surface-panel));
-  --recipe-settings-list-item-bg: var(
-    --theme-recipe-settings-list-item-bg,
-    var(--theme-surface-panel)
-  );
-  --recipe-settings-sidebar-bg: var(--theme-recipe-settings-sidebar-bg);
-  --recipe-settings-header-bg: var(--theme-recipe-settings-header-bg);
-  --recipe-settings-nav-active-bg: var(--theme-recipe-settings-nav-active-bg);
-  --recipe-settings-nav-active-shadow: var(--theme-recipe-settings-nav-active-shadow, none);
-  --recipe-settings-nav-hover-bg: var(
-    --theme-recipe-settings-nav-hover-bg,
-    var(--theme-overlay-subtle)
-  );
-  --recipe-settings-subtab-active-border-width: var(
-    --theme-recipe-settings-subtab-active-border-width,
-    2px
-  );
-  --recipe-settings-kbd-bg: var(--theme-recipe-settings-kbd-bg, var(--theme-surface-input));
-  --recipe-settings-kbd-border: var(
-    --theme-recipe-settings-kbd-border,
-    var(--theme-border-default)
-  );
-  --recipe-worktree-section-hover-bg: var(
-    --theme-recipe-worktree-section-hover-bg,
-    var(--theme-overlay-soft)
-  );
+  --scrollbar-track: var(--theme-scrollbar-track, transparent);
+  --panel-state-edge-width: var(--theme-panel-state-edge-width, 2px);
+  --panel-state-edge-inset-block: var(--theme-panel-state-edge-inset-block, 4px);
+  --panel-state-edge-radius: var(--theme-panel-state-edge-radius, 2px);
+  --focus-ring-offset: var(--theme-focus-ring-offset, 2px);
+  --chrome-noise-texture: var(--theme-chrome-noise-texture, none);
 
   --animation-duration: 150ms;
   --transition-duration: 150ms;
@@ -802,29 +666,29 @@ code.hljs {
   /* Global scrollbar styling */
   * {
     scrollbar-width: thin;
-    scrollbar-color: var(--color-state-idle) transparent;
+    scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
   }
 
   *::-webkit-scrollbar {
-    width: 6px;
-    height: 6px;
+    width: var(--scrollbar-width);
+    height: var(--scrollbar-width);
   }
 
   *::-webkit-scrollbar-track {
-    background: transparent;
+    background: var(--scrollbar-track);
   }
 
   *::-webkit-scrollbar-thumb {
-    background: var(--color-state-idle);
+    background: var(--scrollbar-thumb);
     border-radius: 3px;
   }
 
   *::-webkit-scrollbar-thumb:hover {
-    background: color-mix(in oklab, var(--color-state-idle) 85%, var(--color-text-primary));
+    background: var(--scrollbar-thumb-hover);
   }
 
   *::-webkit-scrollbar-corner {
-    background: transparent;
+    background: var(--scrollbar-track);
   }
 
   /* Color vision deficiency overrides — Red-Green (Deuteranopia / Protanopia) */
@@ -1422,13 +1286,13 @@ body,
 
 @keyframes terminal-ping-border {
   0% {
-    box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0);
+    box-shadow: inset 0 0 0 1px color-mix(in oklch, var(--theme-tint) 0%, transparent);
   }
   35% {
-    box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.25);
+    box-shadow: inset 0 0 0 1px color-mix(in oklch, var(--theme-tint) 25%, transparent);
   }
   100% {
-    box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0);
+    box-shadow: inset 0 0 0 1px color-mix(in oklch, var(--theme-tint) 0%, transparent);
   }
 }
 
@@ -1438,7 +1302,7 @@ body,
   inset: 0;
   pointer-events: none;
   border-radius: inherit;
-  background: rgb(255 255 255 / 0.12);
+  background: color-mix(in oklch, var(--theme-tint) 12%, transparent);
   animation: terminal-ping-overlay var(--terminal-ping-duration) cubic-bezier(0.4, 0, 0.2, 1) both;
   will-change: opacity;
 }
@@ -1485,13 +1349,13 @@ body,
 
 @keyframes terminal-header-border {
   0% {
-    border-bottom-color: rgb(255 255 255 / 0.05);
+    border-bottom-color: color-mix(in oklch, var(--theme-tint) 5%, transparent);
   }
   35% {
-    border-bottom-color: rgb(255 255 255 / 0.25);
+    border-bottom-color: color-mix(in oklch, var(--theme-tint) 25%, transparent);
   }
   100% {
-    border-bottom-color: rgb(255 255 255 / 0.05);
+    border-bottom-color: color-mix(in oklch, var(--theme-tint) 5%, transparent);
   }
 }
 
@@ -1504,13 +1368,13 @@ body,
 /* Title glow - same animation for both variants */
 @keyframes title-glow {
   0% {
-    text-shadow: 0 0 0 rgb(255 255 255 / 0);
+    text-shadow: 0 0 0 color-mix(in oklch, var(--theme-tint) 0%, transparent);
   }
   35% {
-    text-shadow: 0 0 8px rgb(255 255 255 / 0.3);
+    text-shadow: 0 0 8px color-mix(in oklch, var(--theme-tint) 30%, transparent);
   }
   100% {
-    text-shadow: 0 0 0 rgb(255 255 255 / 0);
+    text-shadow: 0 0 0 color-mix(in oklch, var(--theme-tint) 0%, transparent);
   }
 }
 
@@ -2018,64 +1882,9 @@ body[data-performance-mode="true"] [class*="backdrop-blur"] {
     background-color: var(--color-surface-sidebar);
     background-color: color-mix(in oklab, var(--color-surface-sidebar) 94%, transparent);
     border: 1px solid var(--border-overlay);
-    -webkit-backdrop-filter: blur(10px) saturate(120%);
-    backdrop-filter: blur(10px) saturate(120%);
-  }
-
-  .surface-chrome {
-    background-color: var(--color-surface-sidebar);
-    background-color: color-mix(in oklab, var(--color-surface-sidebar) 95%, transparent);
-    box-shadow: inset 0 1px 0 var(--theme-overlay-soft);
-    -webkit-backdrop-filter: blur(10px) saturate(120%);
-    backdrop-filter: blur(10px) saturate(120%);
-  }
-
-  .surface-toolbar {
-    background-color: var(--color-surface-toolbar);
-    box-shadow: var(--recipe-toolbar-shadow);
-    -webkit-backdrop-filter: blur(10px) saturate(120%);
-    backdrop-filter: blur(10px) saturate(120%);
-  }
-
-  .toolbar-icon-button,
-  .toolbar-agent-button {
-    transition:
-      color 150ms ease,
-      background-color 150ms ease,
-      box-shadow 150ms ease,
-      transform 150ms ease;
-  }
-
-  .toolbar-icon-button:hover {
-    background: var(--recipe-toolbar-control-hover-bg);
-    color: var(--recipe-toolbar-control-hover-fg);
-    box-shadow: var(--recipe-toolbar-control-hover-shadow);
-  }
-
-  .toolbar-agent-button:hover {
-    background: var(--recipe-toolbar-agent-hover-bg);
-    color: var(--recipe-toolbar-control-hover-fg);
-    box-shadow: var(--recipe-toolbar-control-hover-shadow);
-  }
-
-  .toolbar-icon-button:active,
-  .toolbar-agent-button:active {
-    transform: scale(0.98);
-  }
-
-  @keyframes pulse-skeleton-shimmer {
-    0% {
-      background-position: -200% 0;
-    }
-    100% {
-      background-position: 200% 0;
-    }
-  }
-
-  .pulse-skeleton-shimmer {
-    background: var(--recipe-pulse-skeleton-gradient);
-    background-size: 200% 100%;
-    animation: pulse-skeleton-shimmer 1.8s ease-in-out infinite;
+    -webkit-backdrop-filter: blur(var(--theme-material-blur))
+      saturate(var(--theme-material-saturation));
+    backdrop-filter: blur(var(--theme-material-blur)) saturate(var(--theme-material-saturation));
   }
 
   .control-hover:hover {

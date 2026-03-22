@@ -41,11 +41,21 @@ const CVD_OVERRIDES: Record<string, Record<string, string>> = {
 
 export function applyAppThemeToRoot(root: HTMLElement, scheme: AppColorScheme): void {
   const variables = getAppThemeCssVariables(scheme);
+  const previousVariableKeys = root.dataset.themeVariableKeys
+    ? root.dataset.themeVariableKeys.split("|").filter(Boolean)
+    : [];
+
+  for (const name of previousVariableKeys) {
+    if (!(name in variables)) {
+      root.style.removeProperty(name);
+    }
+  }
 
   for (const [name, value] of Object.entries(variables)) {
     root.style.setProperty(name, value);
   }
 
+  root.dataset.themeVariableKeys = Object.keys(variables).join("|");
   root.dataset.theme = scheme.id;
   root.dataset.colorMode = scheme.type;
   root.style.colorScheme = scheme.type;

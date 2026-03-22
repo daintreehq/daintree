@@ -415,7 +415,7 @@ export function BrowserToolbar({
         {isDropdownOpen && suggestions.length > 0 && (
           <div
             ref={dropdownRef}
-            className="absolute left-0 right-0 top-full mt-1 z-50 bg-canopy-bg border border-overlay rounded shadow-lg overflow-hidden"
+            className="absolute left-0 right-0 top-full mt-1 z-50 bg-canopy-bg border border-overlay rounded shadow-[var(--theme-shadow-floating)] overflow-hidden"
           >
             {suggestions.map((entry, index) => (
               <button

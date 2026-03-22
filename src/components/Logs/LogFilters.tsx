@@ -145,7 +145,7 @@ export function LogFilters({
             <div
               className={cn(
                 "absolute left-0 top-full mt-1 z-50",
-                "bg-canopy-bg border border-canopy-border rounded shadow-lg",
+                "bg-canopy-bg border border-canopy-border rounded shadow-[var(--theme-shadow-floating)]",
                 "min-w-[150px] max-h-[200px] overflow-y-auto"
               )}
             >

@@ -417,9 +417,8 @@ export function Toolbar({
     return BUILT_IN_AGENT_IDS.some((id) => agents[id]?.selected !== false);
   }, [agentSettings]);
 
-  const toolbarIconButtonClass =
-    "toolbar-icon-button text-canopy-text transition-colors hover:text-[var(--recipe-toolbar-control-hover-fg)] focus-visible:text-[var(--recipe-toolbar-control-hover-fg)]";
-  const toolbarDividerClass = "w-px h-5 bg-[var(--recipe-toolbar-divider)] mx-1";
+  const toolbarIconButtonClass = "toolbar-icon-button text-canopy-text transition-colors";
+  const toolbarDividerClass = "toolbar-divider w-px h-5 mx-1";
 
   const buttonRegistry = useMemo<
     Record<ToolbarButtonId, { render: () => React.ReactNode; isAvailable: boolean }>
@@ -680,12 +679,10 @@ export function Toolbar({
           currentProject ? (
             <div
               key="github-stats"
-              className="relative mr-2 flex h-8 items-center overflow-hidden rounded-[var(--recipe-toolbar-pill-radius)] border divide-x divide-[var(--toolbar-stats-divider)]"
+              className="toolbar-stats relative mr-2 flex h-8 items-center overflow-hidden rounded-[var(--toolbar-pill-radius,0.5rem)] border divide-x divide-[var(--toolbar-stats-divider,var(--theme-border-subtle))]"
               style={{
-                background: "var(--recipe-toolbar-stats-bg)",
-                borderColor: "var(--recipe-toolbar-stats-border)",
-                boxShadow: "var(--recipe-toolbar-stats-shadow)",
-                ["--toolbar-stats-divider" as string]: "var(--recipe-toolbar-stats-divider)",
+                ["--toolbar-stats-divider" as string]:
+                  "var(--toolbar-stats-divider,var(--theme-border-subtle))",
               }}
             >
               <TooltipProvider>
@@ -705,11 +702,11 @@ export function Toolbar({
                         if (willOpen) refreshStats({ force: true });
                       }}
                       className={cn(
-                        "h-full gap-2 rounded-none px-3 text-canopy-text hover:bg-[var(--recipe-toolbar-stats-hover-bg)] hover:text-text-primary",
+                        "h-full gap-2 rounded-none px-3 text-canopy-text hover:bg-[var(--toolbar-stats-hover-bg,var(--theme-overlay-hover))] hover:text-text-primary",
                         stats?.issueCount === 0 && "opacity-50",
                         isStale && "opacity-60",
                         issuesOpen &&
-                          "bg-[var(--recipe-toolbar-stats-hover-bg)] text-text-primary ring-1 ring-github-open/20"
+                          "bg-[var(--toolbar-stats-hover-bg,var(--theme-overlay-hover))] text-text-primary ring-1 ring-github-open/20"
                       )}
                       aria-label={`${stats?.issueCount ?? "\u2014"} open issues${isStale ? " (cached)" : ""}`}
                     >
@@ -773,11 +770,11 @@ export function Toolbar({
                         if (willOpen) refreshStats({ force: true });
                       }}
                       className={cn(
-                        "h-full gap-2 rounded-none px-3 text-canopy-text hover:bg-[var(--recipe-toolbar-stats-hover-bg)] hover:text-text-primary",
+                        "h-full gap-2 rounded-none px-3 text-canopy-text hover:bg-[var(--toolbar-stats-hover-bg,var(--theme-overlay-hover))] hover:text-text-primary",
                         stats?.prCount === 0 && "opacity-50",
                         isStale && "opacity-60",
                         prsOpen &&
-                          "bg-[var(--recipe-toolbar-stats-hover-bg)] text-text-primary ring-1 ring-github-merged/20"
+                          "bg-[var(--toolbar-stats-hover-bg,var(--theme-overlay-hover))] text-text-primary ring-1 ring-github-merged/20"
                       )}
                       aria-label={`${stats?.prCount ?? "\u2014"} open pull requests${isStale ? " (cached)" : ""}`}
                     >
@@ -838,10 +835,10 @@ export function Toolbar({
                         setCommitsOpen(!commitsOpen);
                       }}
                       className={cn(
-                        "h-full gap-2 rounded-none px-3 text-canopy-text hover:bg-[var(--recipe-toolbar-stats-hover-bg)] hover:text-text-primary",
+                        "h-full gap-2 rounded-none px-3 text-canopy-text hover:bg-[var(--toolbar-stats-hover-bg,var(--theme-overlay-hover))] hover:text-text-primary",
                         stats?.commitCount === 0 && "opacity-50",
                         commitsOpen &&
-                          "bg-[var(--recipe-toolbar-stats-hover-bg)] text-text-primary ring-1 ring-border-strong"
+                          "bg-[var(--toolbar-stats-hover-bg,var(--theme-overlay-hover))] text-text-primary ring-1 ring-border-strong"
                       )}
                       aria-label={`${stats?.commitCount ?? "\u2014"} commits`}
                     >
@@ -966,9 +963,7 @@ export function Toolbar({
                   disabled={isCopyingTree || !activeWorktree}
                   className={cn(
                     "toolbar-icon-button transition-colors",
-                    treeCopied
-                      ? "text-status-success bg-status-success/10"
-                      : "text-canopy-text hover:text-[var(--recipe-toolbar-control-hover-fg)]",
+                    treeCopied ? "text-status-success bg-status-success/10" : "text-canopy-text",
                     isCopyingTree && "cursor-wait opacity-70",
                     !activeWorktree && "opacity-50"
                   )}
@@ -1238,13 +1233,8 @@ export function Toolbar({
           >
             <button
               data-toolbar-item=""
-              className="app-no-drag pointer-events-auto flex h-9 min-w-0 max-w-full items-center justify-center gap-2 overflow-hidden rounded-[var(--recipe-toolbar-pill-radius)] border px-3 outline-none"
+              className="toolbar-project-pill app-no-drag pointer-events-auto flex h-9 min-w-0 max-w-full items-center justify-center gap-2 overflow-hidden border px-3 outline-none"
               data-testid="project-switcher-trigger"
-              style={{
-                background: "var(--recipe-toolbar-project-bg)",
-                borderColor: "var(--recipe-toolbar-project-border)",
-                boxShadow: "var(--recipe-toolbar-project-shadow)",
-              }}
               onClick={() => projectSwitcher.open("dropdown")}
             >
               {currentProject ? (
@@ -1257,22 +1247,13 @@ export function Toolbar({
                   </span>
                   {branchName && (
                     <span
-                      className="shrink-0 rounded-full border px-1.5 py-0.5 font-mono tabular-nums"
-                      style={{
-                        background: "var(--recipe-toolbar-project-chip-bg)",
-                        borderColor: "var(--recipe-toolbar-project-chip-border)",
-                        color: "var(--recipe-toolbar-project-meta-fg)",
-                        fontSize: "var(--recipe-toolbar-project-chip-size)",
-                      }}
+                      className="toolbar-project-chip shrink-0 rounded-full border px-1.5 py-0.5 font-mono tabular-nums"
                       aria-label={`Current branch ${branchName}`}
                     >
                       {branchName}
                     </span>
                   )}
-                  <ChevronsUpDown
-                    className="ml-0.5 h-3 w-3 shrink-0"
-                    style={{ color: "var(--recipe-toolbar-project-meta-fg)" }}
-                  />
+                  <ChevronsUpDown className="toolbar-project-meta ml-0.5 h-3 w-3 shrink-0" />
                 </>
               ) : (
                 <>
@@ -1282,10 +1263,7 @@ export function Toolbar({
                   <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-canopy-accent/20 text-canopy-accent shrink-0">
                     Beta
                   </span>
-                  <ChevronsUpDown
-                    className="ml-0.5 h-3 w-3 shrink-0"
-                    style={{ color: "var(--recipe-toolbar-project-meta-fg)" }}
-                  />
+                  <ChevronsUpDown className="toolbar-project-meta ml-0.5 h-3 w-3 shrink-0" />
                 </>
               )}
             </button>

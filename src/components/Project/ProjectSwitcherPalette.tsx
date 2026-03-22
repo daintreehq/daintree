@@ -1174,7 +1174,7 @@ function ModalContent({
 
   return createPortal(
     <div
-      className="fixed inset-0 z-[var(--z-modal)] flex items-start justify-center pt-[15vh] bg-black/40 backdrop-blur-sm backdrop-saturate-[1.25]"
+      className="fixed inset-0 z-[var(--z-modal)] flex items-start justify-center pt-[15vh] bg-scrim-medium backdrop-blur-sm backdrop-saturate-[var(--theme-material-saturation)]"
       onClick={handleBackdropClick}
       role="dialog"
       aria-modal="true"

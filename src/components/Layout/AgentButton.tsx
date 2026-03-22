@@ -140,7 +140,7 @@ export function AgentButton({
               className={cn(
                 "toolbar-agent-button text-canopy-text transition-colors",
                 isAvailable &&
-                  "hover:text-[var(--recipe-toolbar-control-hover-fg)] focus-visible:text-[var(--recipe-toolbar-control-hover-fg)]",
+                  "hover:text-[var(--toolbar-control-hover-fg,var(--theme-accent-primary))] focus-visible:text-[var(--toolbar-control-hover-fg,var(--theme-accent-primary))]",
                 !isAvailable && !isLoading && "opacity-60"
               )}
               aria-label={ariaLabel}

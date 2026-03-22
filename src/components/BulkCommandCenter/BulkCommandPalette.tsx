@@ -308,7 +308,7 @@ function BulkCommandPaletteInner() {
               key={m}
               className={`px-3 py-1 text-xs rounded-[var(--radius-md)] transition-colors ${
                 mode === m
-                  ? "bg-canopy-accent text-white"
+                  ? "bg-canopy-accent text-text-inverse"
                   : "bg-canopy-sidebar text-canopy-text/60 hover:text-canopy-text"
               }`}
               onClick={() => setMode(m)}
@@ -495,7 +495,7 @@ function BulkCommandPaletteInner() {
           <button
             onClick={step === "preview" ? handleConfirm : handleSend}
             disabled={!canSend}
-            className="px-3 py-1 text-xs rounded-[var(--radius-md)] bg-canopy-accent text-white hover:bg-canopy-accent/90 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+            className="px-3 py-1 text-xs rounded-[var(--radius-md)] bg-canopy-accent text-text-inverse hover:bg-canopy-accent/90 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
           >
             {isSending ? "Sending..." : actionLabel}
           </button>
