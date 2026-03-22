@@ -18,7 +18,7 @@ export function AgentSetupButton({
             onClick={() => {
               window.dispatchEvent(new CustomEvent("canopy:open-agent-setup-wizard"));
             }}
-            className="text-canopy-text hover:bg-tint/[0.06] hover:text-canopy-accent focus-visible:text-canopy-accent transition-colors"
+            className="toolbar-agent-button text-canopy-text hover:text-[var(--recipe-toolbar-control-hover-fg)] focus-visible:text-[var(--recipe-toolbar-control-hover-fg)] transition-colors"
             aria-label="Install AI Agents"
           >
             <Sprout className="text-canopy-accent" />

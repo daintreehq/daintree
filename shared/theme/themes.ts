@@ -248,6 +248,64 @@ export function createCanopyTokens(
         ? "0 4px 12px rgba(0, 0, 0, 0.5), 0 1px 3px rgba(0, 0, 0, 0.3)"
         : "0 4px 12px rgba(0, 0, 0, 0.12), 0 1px 3px rgba(0, 0, 0, 0.08)"),
     "recipe-toolbar-shadow": tokens["recipe-toolbar-shadow"] ?? "none",
+    "recipe-toolbar-control-hover-bg":
+      tokens["recipe-toolbar-control-hover-bg"] ??
+      (dark
+        ? (tokens["overlay-strong"] ?? withAlpha(overlayBase, 0.08))
+        : (tokens["surface-hover"] ?? withAlpha(overlayBase, 0.03))),
+    "recipe-toolbar-control-hover-fg":
+      tokens["recipe-toolbar-control-hover-fg"] ?? tokens["accent-primary"],
+    "recipe-toolbar-control-hover-shadow": tokens["recipe-toolbar-control-hover-shadow"] ?? "none",
+    "recipe-toolbar-agent-hover-bg":
+      tokens["recipe-toolbar-agent-hover-bg"] ??
+      tokens["recipe-toolbar-control-hover-bg"] ??
+      (dark
+        ? (tokens["overlay-strong"] ?? withAlpha(overlayBase, 0.08))
+        : (tokens["surface-hover"] ?? withAlpha(overlayBase, 0.03))),
+    "recipe-toolbar-divider":
+      tokens["recipe-toolbar-divider"] ??
+      tokens["border-divider"] ??
+      withAlpha(tokens["border-default"], 0.5),
+    "recipe-toolbar-pill-radius": tokens["recipe-toolbar-pill-radius"] ?? "0.5rem",
+    "recipe-toolbar-project-bg":
+      tokens["recipe-toolbar-project-bg"] ??
+      `linear-gradient(180deg, ${withAlpha(overlayBase, dark ? 0.04 : 0.02)}, ${withAlpha(
+        overlayBase,
+        dark ? 0.06 : 0.05
+      )}), linear-gradient(135deg, ${tokens["surface-canvas"]}, ${tokens["surface-sidebar"]})`,
+    "recipe-toolbar-project-border":
+      tokens["recipe-toolbar-project-border"] ?? withAlpha(tokens["border-default"], 0.6),
+    "recipe-toolbar-project-shadow":
+      tokens["recipe-toolbar-project-shadow"] ?? tokens["recipe-button-inset-shadow"] ?? "none",
+    "recipe-toolbar-project-chip-bg":
+      tokens["recipe-toolbar-project-chip-bg"] ??
+      tokens["overlay-soft"] ??
+      withAlpha(overlayBase, dark ? 0.05 : 0.04),
+    "recipe-toolbar-project-chip-border":
+      tokens["recipe-toolbar-project-chip-border"] ??
+      tokens["recipe-toolbar-project-border"] ??
+      withAlpha(tokens["border-default"], 0.6),
+    "recipe-toolbar-project-meta-fg":
+      tokens["recipe-toolbar-project-meta-fg"] ?? tokens["text-secondary"],
+    "recipe-toolbar-project-chip-size":
+      tokens["recipe-toolbar-project-chip-size"] ?? (dark ? "10px" : "11px"),
+    "recipe-toolbar-stats-bg":
+      tokens["recipe-toolbar-stats-bg"] ??
+      tokens["overlay-soft"] ??
+      withAlpha(overlayBase, dark ? 0.05 : 0.04),
+    "recipe-toolbar-stats-border":
+      tokens["recipe-toolbar-stats-border"] ?? withAlpha(tokens["border-default"], 0.5),
+    "recipe-toolbar-stats-divider":
+      tokens["recipe-toolbar-stats-divider"] ??
+      tokens["recipe-toolbar-stats-border"] ??
+      withAlpha(tokens["border-default"], 0.5),
+    "recipe-toolbar-stats-shadow": tokens["recipe-toolbar-stats-shadow"] ?? "none",
+    "recipe-toolbar-stats-hover-bg":
+      tokens["recipe-toolbar-stats-hover-bg"] ??
+      tokens["recipe-toolbar-control-hover-bg"] ??
+      (dark
+        ? (tokens["overlay-strong"] ?? withAlpha(overlayBase, 0.08))
+        : (tokens["surface-hover"] ?? withAlpha(overlayBase, 0.03))),
     "recipe-focus-ring-offset": tokens["recipe-focus-ring-offset"] ?? "2px",
     "recipe-sidebar-active-bg":
       tokens["recipe-sidebar-active-bg"] ??
@@ -472,6 +530,21 @@ export const BUILT_IN_APP_SCHEMES: AppColorScheme[] = [
       // Button inset highlight — brighter than generic dark default (matches kitchen sink)
       "recipe-button-inset-shadow": "inset 0 1px 0 rgba(255, 255, 255, 0.15)",
       "recipe-dialog-shadow": "0 20px 56px rgba(0,0,0,0.40)",
+      "recipe-toolbar-control-hover-bg": "rgba(255,255,255,0.10)",
+      "recipe-toolbar-control-hover-fg": "#3E9066",
+      "recipe-toolbar-agent-hover-bg": "rgba(255,255,255,0.06)",
+      "recipe-toolbar-divider": "rgba(42,45,43,0.5)",
+      "recipe-toolbar-project-bg":
+        "linear-gradient(180deg, rgba(255,255,255,0.03), rgba(255,255,255,0.05)), linear-gradient(135deg, #1a3a2a, #0a2a1a)",
+      "recipe-toolbar-project-border": "rgba(42,45,43,0.6)",
+      "recipe-toolbar-project-shadow": "inset 0 1px 0 rgba(255,255,255,0.06)",
+      "recipe-toolbar-project-chip-bg": "rgba(255,255,255,0.05)",
+      "recipe-toolbar-project-chip-border": "rgba(42,45,43,0.6)",
+      "recipe-toolbar-project-meta-fg": "#9AA29E",
+      "recipe-toolbar-stats-bg": "rgba(255,255,255,0.05)",
+      "recipe-toolbar-stats-border": "rgba(42,45,43,0.5)",
+      "recipe-toolbar-stats-divider": "rgba(42,45,43,0.5)",
+      "recipe-toolbar-stats-hover-bg": "rgba(255,255,255,0.10)",
       "recipe-sidebar-active-bg": "rgba(255,255,255,0.04)",
       "recipe-sidebar-action-hover-bg": "rgba(255,255,255,0.05)",
       "recipe-settings-search-bg": "#19191A",
@@ -557,6 +630,23 @@ export const BUILT_IN_APP_SCHEMES: AppColorScheme[] = [
       "recipe-sidebar-hover-bg": "rgba(13,22,33,0.03)",
       "recipe-sidebar-action-hover-bg": "rgba(13,22,33,0.05)",
       "recipe-toolbar-shadow": "inset 0 -1px 0 rgba(255,255,255,0.65)",
+      "recipe-toolbar-control-hover-bg": "#FFFFFF",
+      "recipe-toolbar-control-hover-fg": "#0087A1",
+      "recipe-toolbar-control-hover-shadow": "0 1px 2px rgba(68,84,104,0.10)",
+      "recipe-toolbar-divider": "rgba(176,203,224,0.4)",
+      "recipe-toolbar-pill-radius": "0.75rem",
+      "recipe-toolbar-project-bg": "linear-gradient(180deg, #FFFFFF, #EEF5FC)",
+      "recipe-toolbar-project-border": "#C5DDF2",
+      "recipe-toolbar-project-shadow":
+        "0 1px 2px rgba(68,84,104,0.08), inset 0 1px 0 rgba(255,255,255,0.75)",
+      "recipe-toolbar-project-chip-bg": "#F5FAFE",
+      "recipe-toolbar-project-chip-border": "#C5DDF2",
+      "recipe-toolbar-project-meta-fg": "#445468",
+      "recipe-toolbar-stats-bg": "#FFFFFF",
+      "recipe-toolbar-stats-border": "#C5DDF2",
+      "recipe-toolbar-stats-divider": "#C5DDF2",
+      "recipe-toolbar-stats-shadow": "0 1px 2px rgba(68,84,104,0.06)",
+      "recipe-toolbar-stats-hover-bg": "#F5FAFE",
       "recipe-settings-card-bg": "#F5FAFE",
       "recipe-settings-list-item-bg": "#F5FAFE",
       "recipe-settings-subtab-active-radius": "var(--radius-sm)",
@@ -736,6 +826,20 @@ export const BUILT_IN_APP_SCHEMES: AppColorScheme[] = [
       // Elevated surface inset shadow
       "recipe-surface-elevated-inset-shadow": "inset 0 1px 0 rgba(255,253,248,0.70)",
       "recipe-dialog-shadow": "0 24px 48px rgba(60,48,38,0.11), 0 8px 20px rgba(60,48,38,0.07)",
+      "recipe-toolbar-control-hover-bg": "rgba(60,48,38,0.06)",
+      "recipe-toolbar-control-hover-fg": "#2C2622",
+      "recipe-toolbar-divider": "rgba(200,192,181,0.5)",
+      "recipe-toolbar-project-bg":
+        "linear-gradient(180deg, rgba(60,48,38,0.02), rgba(60,48,38,0.05)), linear-gradient(135deg, #EDE8E1, #E2DCD4)",
+      "recipe-toolbar-project-border": "rgba(200,192,181,0.6)",
+      "recipe-toolbar-project-shadow": "inset 0 1px 0 rgba(60,48,38,0.06)",
+      "recipe-toolbar-project-chip-bg": "rgba(60,48,38,0.04)",
+      "recipe-toolbar-project-chip-border": "rgba(200,192,181,0.6)",
+      "recipe-toolbar-project-meta-fg": "#635952",
+      "recipe-toolbar-stats-bg": "rgba(60,48,38,0.04)",
+      "recipe-toolbar-stats-border": "rgba(200,192,181,0.5)",
+      "recipe-toolbar-stats-divider": "rgba(200,192,181,0.5)",
+      "recipe-toolbar-stats-hover-bg": "rgba(60,48,38,0.06)",
       "recipe-sidebar-active-bg":
         "linear-gradient(180deg, rgba(168,69,110,0.05), rgba(168,69,110,0.02)), #FDFBF8",
       "recipe-sidebar-active-shadow":
@@ -849,6 +953,20 @@ export const BUILT_IN_APP_SCHEMES: AppColorScheme[] = [
       "recipe-button-inset-shadow": "inset 0 1px 0 rgba(255,240,220,0.15)",
       "recipe-dialog-shadow": "0 20px 48px rgba(12,8,4,0.40)",
       "recipe-surface-elevated-inset-shadow": "inset 0 1px 0 0 rgba(255,240,220,0.08)",
+      "recipe-toolbar-control-hover-bg": "rgba(255,236,214,0.08)",
+      "recipe-toolbar-control-hover-fg": "#B85733",
+      "recipe-toolbar-divider": "rgba(72,58,46,0.5)",
+      "recipe-toolbar-project-bg":
+        "linear-gradient(180deg, rgba(255,240,220,0.08), rgba(255,236,214,0.03)), linear-gradient(135deg, #3A2B22, #241814)",
+      "recipe-toolbar-project-border": "rgba(72,58,46,0.6)",
+      "recipe-toolbar-project-shadow": "inset 0 1px 0 rgba(255,240,220,0.15)",
+      "recipe-toolbar-project-chip-bg": "rgba(255,236,214,0.05)",
+      "recipe-toolbar-project-chip-border": "rgba(72,58,46,0.6)",
+      "recipe-toolbar-project-meta-fg": "#B5A493",
+      "recipe-toolbar-stats-bg": "rgba(255,236,214,0.05)",
+      "recipe-toolbar-stats-border": "rgba(72,58,46,0.5)",
+      "recipe-toolbar-stats-divider": "rgba(255,236,214,0.05)",
+      "recipe-toolbar-stats-hover-bg": "rgba(255,236,214,0.08)",
       // Sidebar active — warmer lamplight tint at 5% (slightly stronger than default 4%)
       "recipe-sidebar-active-bg": "rgba(255,236,214,0.05)",
       "recipe-sidebar-active-shadow": "inset 0 1px 0 0 rgba(255,240,220,0.08)",
@@ -955,6 +1073,21 @@ export const BUILT_IN_APP_SCHEMES: AppColorScheme[] = [
       "recipe-surface-elevated-inset-shadow": "inset 0 1px 0 rgba(180,220,240,0.04)",
       "recipe-dialog-shadow":
         "inset 0 1px 0 rgba(180,220,240,0.04), 0 25px 50px -12px rgba(4,7,15,0.55)",
+      "recipe-toolbar-control-hover-bg": "rgba(180,220,240,0.10)",
+      "recipe-toolbar-control-hover-fg": "#3AB7C5",
+      "recipe-toolbar-agent-hover-bg": "rgba(180,220,240,0.06)",
+      "recipe-toolbar-divider": "rgba(28,46,64,0.5)",
+      "recipe-toolbar-project-bg":
+        "linear-gradient(180deg, rgba(180,220,240,0.03), rgba(180,220,240,0.05)), linear-gradient(135deg, #103142, #061621)",
+      "recipe-toolbar-project-border": "rgba(28,46,64,0.6)",
+      "recipe-toolbar-project-shadow": "inset 0 1px 0 rgba(180,220,240,0.06)",
+      "recipe-toolbar-project-chip-bg": "rgba(180,220,240,0.05)",
+      "recipe-toolbar-project-chip-border": "rgba(28,46,64,0.6)",
+      "recipe-toolbar-project-meta-fg": "#9AB3C5",
+      "recipe-toolbar-stats-bg": "rgba(180,220,240,0.05)",
+      "recipe-toolbar-stats-border": "rgba(28,46,64,0.5)",
+      "recipe-toolbar-stats-divider": "rgba(28,46,64,0.5)",
+      "recipe-toolbar-stats-hover-bg": "rgba(180,220,240,0.10)",
       "recipe-sidebar-active-bg": "rgba(180,220,240,0.04)",
       "recipe-sidebar-active-shadow": "inset 0 1px 0 0 rgba(180,220,240,0.03)",
       "recipe-sidebar-action-hover-bg": "rgba(180,220,240,0.05)",
@@ -1055,6 +1188,21 @@ export const BUILT_IN_APP_SCHEMES: AppColorScheme[] = [
       "recipe-scrollbar-thumb-hover": "color-mix(in oklab, #536660 85%, #DCE6E3)",
       "recipe-button-inset-shadow": "inset 0 1px 0 rgba(180,230,210,0.15)",
       "recipe-surface-elevated-inset-shadow": "inset 0 1px 0 0 rgba(140,200,180,0.06)",
+      "recipe-toolbar-control-hover-bg": "rgba(74,158,127,0.10)",
+      "recipe-toolbar-control-hover-fg": "#4A9E7F",
+      "recipe-toolbar-agent-hover-bg": "rgba(74,158,127,0.06)",
+      "recipe-toolbar-divider": "rgba(42,58,53,0.5)",
+      "recipe-toolbar-project-bg":
+        "linear-gradient(180deg, rgba(140,200,180,0.05) 0%, transparent 100%), linear-gradient(135deg, #233830 0%, #1A2421 100%)",
+      "recipe-toolbar-project-border": "rgba(140,200,180,0.12)",
+      "recipe-toolbar-project-shadow": "inset 0 1px 0 rgba(140,200,180,0.06)",
+      "recipe-toolbar-project-chip-bg": "#21302C",
+      "recipe-toolbar-project-chip-border": "rgba(42,58,53,0.6)",
+      "recipe-toolbar-project-meta-fg": "#9AB0A9",
+      "recipe-toolbar-stats-bg": "rgba(140,200,180,0.05)",
+      "recipe-toolbar-stats-border": "rgba(42,58,53,0.5)",
+      "recipe-toolbar-stats-divider": "rgba(42,58,53,0.5)",
+      "recipe-toolbar-stats-hover-bg": "rgba(74,158,127,0.10)",
       // Sidebar active — accent-tinted selection (wetter/glossier than overlay-base)
       "recipe-sidebar-active-bg": "rgba(74,158,127,0.08)",
       "recipe-sidebar-hover-bg": "rgba(74,158,127,0.04)",
@@ -1160,6 +1308,22 @@ export const BUILT_IN_APP_SCHEMES: AppColorScheme[] = [
       "recipe-scrollbar-thumb-hover": "color-mix(in oklab, #605866 85%, #E2DCE6)",
       "recipe-button-inset-shadow": "inset 0 1px 0 rgba(220,215,230,0.10)",
       "recipe-dialog-shadow": "0 20px 52px rgba(10,8,14,0.40)",
+      "recipe-toolbar-control-hover-bg": "rgba(195,185,210,0.10)",
+      "recipe-toolbar-control-hover-fg": "#9B86AE",
+      "recipe-toolbar-agent-hover-bg": "rgba(195,185,210,0.06)",
+      "recipe-toolbar-divider": "rgba(60,55,66,0.5)",
+      "recipe-toolbar-project-bg":
+        "linear-gradient(180deg, rgba(220,215,230,0.05) 0%, transparent 100%), linear-gradient(135deg, #2A2430 0%, #1C1820 100%)",
+      "recipe-toolbar-project-border": "rgba(60,55,66,0.6)",
+      "recipe-toolbar-project-shadow":
+        "inset 0 1px 0 rgba(220,215,230,0.07), 0 1px 3px rgba(15,12,18,0.3)",
+      "recipe-toolbar-project-chip-bg": "rgba(195,185,210,0.05)",
+      "recipe-toolbar-project-chip-border": "rgba(60,55,66,0.6)",
+      "recipe-toolbar-project-meta-fg": "#B2ABB8",
+      "recipe-toolbar-stats-bg": "rgba(195,185,210,0.05)",
+      "recipe-toolbar-stats-border": "rgba(60,55,66,0.5)",
+      "recipe-toolbar-stats-divider": "rgba(60,55,66,0.5)",
+      "recipe-toolbar-stats-hover-bg": "rgba(195,185,210,0.10)",
       "recipe-sidebar-active-bg": "rgba(195,185,210,0.04)",
       // Top sheen — heather-tinted, not generic white
       "recipe-surface-elevated-inset-shadow": "inset 0 1px 0 0 rgba(220,215,230,0.04)",
@@ -1273,6 +1437,21 @@ export const BUILT_IN_APP_SCHEMES: AppColorScheme[] = [
       "recipe-scrollbar-thumb-hover": "color-mix(in oklab, #665D50 85%, #E8E2D9)",
       "recipe-button-inset-shadow": "inset 0 1px 0 rgba(220,200,180,0.08)",
       "recipe-dialog-shadow": "0 10px 32px rgba(14,11,8,0.40)",
+      "recipe-toolbar-control-hover-bg": "rgba(200,180,150,0.06)",
+      "recipe-toolbar-control-hover-fg": "#86ABC3",
+      "recipe-toolbar-agent-hover-bg": "rgba(200,180,150,0.05)",
+      "recipe-toolbar-divider": "rgba(51,45,37,0.5)",
+      "recipe-toolbar-project-bg":
+        "linear-gradient(180deg, rgba(220,200,180,0.02), rgba(220,200,180,0.04)), linear-gradient(135deg, #211D18, #171411)",
+      "recipe-toolbar-project-border": "rgba(51,45,37,0.6)",
+      "recipe-toolbar-project-shadow": "inset 0 1px 0 rgba(220,200,180,0.04)",
+      "recipe-toolbar-project-chip-bg": "rgba(200,180,150,0.035)",
+      "recipe-toolbar-project-chip-border": "rgba(51,45,37,0.6)",
+      "recipe-toolbar-project-meta-fg": "#AEA497",
+      "recipe-toolbar-stats-bg": "rgba(200,180,150,0.035)",
+      "recipe-toolbar-stats-border": "rgba(51,45,37,0.5)",
+      "recipe-toolbar-stats-divider": "rgba(51,45,37,0.5)",
+      "recipe-toolbar-stats-hover-bg": "rgba(200,180,150,0.06)",
       "recipe-sidebar-active-bg": "rgba(200,180,150,0.04)",
       "recipe-sidebar-action-hover-bg": "rgba(200,180,150,0.04)",
       "recipe-settings-search-bg": "#1F1B16",
@@ -1376,6 +1555,21 @@ export const BUILT_IN_APP_SCHEMES: AppColorScheme[] = [
       "recipe-scrollbar-thumb": "#5A4E42",
       "recipe-scrollbar-thumb-hover": "color-mix(in oklab, #5A4E42 85%, #E8DCC8)",
       "recipe-button-inset-shadow": "inset 0 1px 0 rgba(220,190,170,0.12)",
+      "recipe-toolbar-control-hover-bg": "rgba(180,140,120,0.10)",
+      "recipe-toolbar-control-hover-fg": "#4E9A53",
+      "recipe-toolbar-agent-hover-bg": "rgba(180,140,120,0.08)",
+      "recipe-toolbar-divider": "rgba(54,36,26,0.5)",
+      "recipe-toolbar-project-bg":
+        "linear-gradient(180deg, rgba(220,190,170,0.06), rgba(220,190,170,0.05)), linear-gradient(135deg, #19110B, #0E0906)",
+      "recipe-toolbar-project-border": "rgba(54,36,26,0.6)",
+      "recipe-toolbar-project-shadow": "inset 0 1px 0 rgba(220,190,170,0.06)",
+      "recipe-toolbar-project-chip-bg": "rgba(180,140,120,0.06)",
+      "recipe-toolbar-project-chip-border": "rgba(54,36,26,0.6)",
+      "recipe-toolbar-project-meta-fg": "#9E8B78",
+      "recipe-toolbar-stats-bg": "rgba(180,140,120,0.06)",
+      "recipe-toolbar-stats-border": "rgba(54,36,26,0.5)",
+      "recipe-toolbar-stats-divider": "rgba(54,36,26,0.5)",
+      "recipe-toolbar-stats-hover-bg": "rgba(180,140,120,0.10)",
       // Sidebar active — accent-green selection (deep forest canopy glow)
       "recipe-sidebar-active-bg": "rgba(78,154,83,0.14)",
       "recipe-sidebar-hover-bg": "rgba(180,140,120,0.02)",
@@ -1469,6 +1663,21 @@ export const BUILT_IN_APP_SCHEMES: AppColorScheme[] = [
       "recipe-shadow-floating": "0 4px 12px rgba(51,43,35,0.10)",
       "recipe-dialog-shadow":
         "inset 0 1px 0 rgba(255,252,248,0.25), 0 6px 16px rgba(51,43,35,0.14)",
+      "recipe-toolbar-control-hover-bg": "rgba(51,43,35,0.04)",
+      "recipe-toolbar-control-hover-fg": "#117B8A",
+      "recipe-toolbar-divider": "rgba(204,197,187,0.5)",
+      "recipe-toolbar-project-bg":
+        "linear-gradient(180deg, rgba(255,252,248,0.16), rgba(51,43,35,0.03)), linear-gradient(135deg, #F4EEE4, #E5DFD4)",
+      "recipe-toolbar-project-border": "rgba(204,197,187,0.5)",
+      "recipe-toolbar-project-shadow":
+        "inset 0 1px 0 rgba(255,252,248,0.40), 0 1px 3px rgba(51,43,35,0.06)",
+      "recipe-toolbar-project-chip-bg": "#F9F7F4",
+      "recipe-toolbar-project-chip-border": "rgba(204,197,187,0.6)",
+      "recipe-toolbar-project-meta-fg": "#5C524B",
+      "recipe-toolbar-stats-bg": "rgba(51,43,35,0.03)",
+      "recipe-toolbar-stats-border": "rgba(204,197,187,0.5)",
+      "recipe-toolbar-stats-divider": "rgba(204,197,187,0.5)",
+      "recipe-toolbar-stats-hover-bg": "rgba(51,43,35,0.04)",
       "recipe-sidebar-hover-bg": "rgba(51,43,35,0.03)",
       "recipe-sidebar-action-hover-bg": "rgba(51,43,35,0.03)",
       "recipe-settings-card-bg": "#F2F0EB",
@@ -1607,6 +1816,20 @@ export const BUILT_IN_APP_SCHEMES: AppColorScheme[] = [
       "recipe-shadow-ambient": "0 14px 48px rgba(20,40,25,0.06)",
       "recipe-shadow-floating": "0 24px 64px rgba(20,40,25,0.10), 0 8px 18px rgba(20,40,25,0.06)",
       "recipe-dialog-shadow": "0 28px 56px rgba(20,40,25,0.06), 0 10px 24px rgba(20,40,25,0.10)",
+      "recipe-toolbar-control-hover-bg": "rgba(20,40,25,0.035)",
+      "recipe-toolbar-control-hover-fg": "#228243",
+      "recipe-toolbar-divider": "rgba(20,40,25,0.04)",
+      "recipe-toolbar-project-bg":
+        "linear-gradient(180deg, rgba(30,48,30,0.02), rgba(25,45,28,0.05)), linear-gradient(135deg, #EEF1E8, #E4E8DE)",
+      "recipe-toolbar-project-border": "rgba(20,40,25,0.042)",
+      "recipe-toolbar-project-shadow": "inset 0 1px 0 rgba(25,45,28,0.06)",
+      "recipe-toolbar-project-chip-bg": "rgba(0,0,0,0.04)",
+      "recipe-toolbar-project-chip-border": "rgba(20,40,25,0.042)",
+      "recipe-toolbar-project-meta-fg": "#4F614C",
+      "recipe-toolbar-stats-bg": "rgba(0,0,0,0.04)",
+      "recipe-toolbar-stats-border": "rgba(20,40,25,0.035)",
+      "recipe-toolbar-stats-divider": "rgba(20,40,25,0.04)",
+      "recipe-toolbar-stats-hover-bg": "rgba(20,40,25,0.035)",
       "recipe-sidebar-active-bg":
         "linear-gradient(180deg, rgba(34,130,67,0.05), rgba(34,130,67,0.02)), #FAFCF5",
       "recipe-sidebar-active-shadow":
@@ -1785,6 +2008,21 @@ export const BUILT_IN_APP_SCHEMES: AppColorScheme[] = [
       "recipe-button-inset-shadow": "inset 0 1px 0 rgba(255,255,255,0.45)",
       "recipe-dialog-shadow":
         "inset 0 1px 0 rgba(255,255,255,0.45), 0 22px 64px rgba(86,81,118,0.07)",
+      "recipe-toolbar-control-hover-bg": "rgba(82,88,118,0.03)",
+      "recipe-toolbar-control-hover-fg": "#5F72DE",
+      "recipe-toolbar-divider": "rgba(206,212,229,0.5)",
+      "recipe-toolbar-project-bg":
+        "linear-gradient(135deg, rgba(255,255,255,0.88), rgba(236,240,250,0.92))",
+      "recipe-toolbar-project-border": "rgba(206,212,229,0.6)",
+      "recipe-toolbar-project-shadow":
+        "inset 0 1px 0 rgba(255,255,255,0.35), 0 10px 22px rgba(82,88,118,0.04)",
+      "recipe-toolbar-project-chip-bg": "rgba(82,88,118,0.04)",
+      "recipe-toolbar-project-chip-border": "rgba(206,212,229,0.6)",
+      "recipe-toolbar-project-meta-fg": "#6A708C",
+      "recipe-toolbar-stats-bg": "rgba(82,88,118,0.04)",
+      "recipe-toolbar-stats-border": "rgba(206,212,229,0.5)",
+      "recipe-toolbar-stats-divider": "rgba(206,212,229,0.5)",
+      "recipe-toolbar-stats-hover-bg": "rgba(82,88,118,0.03)",
       // Sidebar active — compound inset sheen + diffuse lilac drop
       "recipe-sidebar-active-shadow":
         "inset 0 1px 0 rgba(255,255,255,0.45), 0 8px 24px rgba(86,81,118,0.06)",
@@ -1936,6 +2174,21 @@ export const BUILT_IN_APP_SCHEMES: AppColorScheme[] = [
       "recipe-button-inset-shadow": "inset 0 1px 0 rgba(255,252,240,0.75)",
       "recipe-surface-elevated-inset-shadow": "inset 0 1px 0 rgba(255,252,240,0.75)",
       "recipe-dialog-shadow": "0 8px 24px rgba(44,33,15,0.11)",
+      "recipe-toolbar-control-hover-bg": "rgba(162,130,36,0.06)",
+      "recipe-toolbar-control-hover-fg": "#A28224",
+      "recipe-toolbar-agent-hover-bg": "rgba(162,130,36,0.05)",
+      "recipe-toolbar-divider": "rgba(212,196,153,0.5)",
+      "recipe-toolbar-project-bg":
+        "linear-gradient(180deg, rgba(44,33,15,0.02), rgba(44,33,15,0.04)), linear-gradient(135deg, #F2E8D2, #E6D8B8)",
+      "recipe-toolbar-project-border": "rgba(212,196,153,0.6)",
+      "recipe-toolbar-project-shadow": "inset 0 1px 0 rgba(44,33,15,0.04)",
+      "recipe-toolbar-project-chip-bg": "rgba(44,33,15,0.04)",
+      "recipe-toolbar-project-chip-border": "rgba(212,196,153,0.6)",
+      "recipe-toolbar-project-meta-fg": "#68573D",
+      "recipe-toolbar-stats-bg": "rgba(162,130,36,0.05)",
+      "recipe-toolbar-stats-border": "rgba(212,196,153,0.5)",
+      "recipe-toolbar-stats-divider": "rgba(212,196,153,0.5)",
+      "recipe-toolbar-stats-hover-bg": "rgba(162,130,36,0.06)",
       "recipe-sidebar-hover-bg": "rgba(162,130,36,0.06)",
       "recipe-sidebar-action-hover-bg": "rgba(162,130,36,0.06)",
       "recipe-settings-search-bg": "#F2E4C9",
@@ -2073,6 +2326,20 @@ export const BUILT_IN_APP_SCHEMES: AppColorScheme[] = [
       "recipe-shadow-ambient": "0 8px 24px rgba(20,35,50,0.04)",
       "recipe-shadow-floating": "0 18px 44px rgba(20,35,50,0.05)",
       "recipe-dialog-shadow": "0 24px 56px rgba(20,35,50,0.08)",
+      "recipe-toolbar-control-hover-bg": "rgba(20,35,50,0.025)",
+      "recipe-toolbar-control-hover-fg": "#36738F",
+      "recipe-toolbar-divider": "rgba(170,183,194,0.5)",
+      "recipe-toolbar-project-bg":
+        "linear-gradient(180deg, rgba(20,35,50,0.02), rgba(20,35,50,0.07)), linear-gradient(135deg, #E5EBF0, #CED7E0)",
+      "recipe-toolbar-project-border": "rgba(170,183,194,0.6)",
+      "recipe-toolbar-project-shadow": "inset 0 1px 0 rgba(20,35,50,0.07)",
+      "recipe-toolbar-project-chip-bg": "rgba(20,35,50,0.025)",
+      "recipe-toolbar-project-chip-border": "rgba(170,183,194,0.6)",
+      "recipe-toolbar-project-meta-fg": "#4E5F70",
+      "recipe-toolbar-stats-bg": "rgba(20,35,50,0.025)",
+      "recipe-toolbar-stats-border": "rgba(170,183,194,0.5)",
+      "recipe-toolbar-stats-divider": "rgba(170,183,194,0.5)",
+      "recipe-toolbar-stats-hover-bg": "rgba(20,35,50,0.025)",
       "recipe-sidebar-hover-bg": "rgba(20,35,50,0.025)",
       "recipe-sidebar-action-hover-bg": "rgba(20,35,50,0.025)",
       "recipe-sidebar-active-shadow": "0 18px 44px rgba(20,35,50,0.05)",

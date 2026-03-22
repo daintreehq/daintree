@@ -35,7 +35,6 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { isMac, isLinux, createTooltipWithShortcut } from "@/lib/platform";
-import { getProjectGradient } from "@/lib/colorUtils";
 const LazyGitHubResourceList = lazy(() =>
   import("@/components/GitHub/GitHubResourceList").then((m) => ({
     default: m.GitHubResourceList,
@@ -418,6 +417,10 @@ export function Toolbar({
     return BUILT_IN_AGENT_IDS.some((id) => agents[id]?.selected !== false);
   }, [agentSettings]);
 
+  const toolbarIconButtonClass =
+    "toolbar-icon-button text-canopy-text transition-colors hover:text-[var(--recipe-toolbar-control-hover-fg)] focus-visible:text-[var(--recipe-toolbar-control-hover-fg)]";
+  const toolbarDividerClass = "w-px h-5 bg-[var(--recipe-toolbar-divider)] mx-1";
+
   const buttonRegistry = useMemo<
     Record<ToolbarButtonId, { render: () => React.ReactNode; isAvailable: boolean }>
   >(
@@ -432,7 +435,7 @@ export function Toolbar({
                   size="icon"
                   data-toolbar-item=""
                   onClick={onToggleFocusMode}
-                  className="text-canopy-text hover:bg-overlay-medium hover:text-canopy-accent transition-colors"
+                  className={toolbarIconButtonClass}
                   aria-label="Toggle Sidebar"
                   aria-pressed={!isFocusMode}
                 >
@@ -519,7 +522,7 @@ export function Toolbar({
                   size="icon"
                   data-toolbar-item=""
                   onClick={() => onLaunchAgent("terminal")}
-                  className="text-canopy-text hover:bg-overlay-medium transition-colors hover:text-canopy-accent focus-visible:text-canopy-accent"
+                  className={toolbarIconButtonClass}
                   aria-label="Open Terminal"
                 >
                   <SquareTerminal />
@@ -543,7 +546,7 @@ export function Toolbar({
                   size="icon"
                   data-toolbar-item=""
                   onClick={() => onLaunchAgent("browser")}
-                  className="text-canopy-text hover:bg-overlay-medium transition-colors hover:text-canopy-accent focus-visible:text-canopy-accent"
+                  className={toolbarIconButtonClass}
                   aria-label="Open Browser"
                 >
                   <Globe />
@@ -574,7 +577,7 @@ export function Toolbar({
                         });
                       }}
                       disabled={!currentProject}
-                      className="text-canopy-text hover:bg-overlay-medium transition-colors hover:text-canopy-accent focus-visible:text-canopy-accent"
+                      className={toolbarIconButtonClass}
                       aria-label={
                         !currentProject
                           ? "Open a project to use Dev Preview"
@@ -607,7 +610,7 @@ export function Toolbar({
                         size="icon"
                         data-toolbar-item=""
                         onClick={() => setDetectedServersOpen(!detectedServersOpen)}
-                        className="relative text-canopy-text hover:bg-overlay-medium transition-colors hover:text-canopy-accent focus-visible:text-canopy-accent h-8 w-8"
+                        className={cn(toolbarIconButtonClass, "relative h-8 w-8")}
                         aria-label={`${detectedServers.length} detected dev servers`}
                       >
                         <Signal className="h-4 w-4" />
@@ -653,7 +656,7 @@ export function Toolbar({
                   size="icon"
                   data-toolbar-item=""
                   onClick={handleTogglePanelPalette}
-                  className="text-canopy-text hover:bg-overlay-medium hover:text-canopy-accent transition-colors"
+                  className={toolbarIconButtonClass}
                   aria-label={panelPaletteOpen ? "Close panel palette" : "Open panel palette"}
                   aria-pressed={panelPaletteOpen}
                 >
@@ -677,7 +680,13 @@ export function Toolbar({
           currentProject ? (
             <div
               key="github-stats"
-              className="relative flex items-center h-8 rounded-[var(--radius-md)] overflow-hidden bg-overlay-soft border border-divider divide-x divide-[var(--border-divider)] mr-2"
+              className="relative mr-2 flex h-8 items-center overflow-hidden rounded-[var(--recipe-toolbar-pill-radius)] border divide-x divide-[var(--toolbar-stats-divider)]"
+              style={{
+                background: "var(--recipe-toolbar-stats-bg)",
+                borderColor: "var(--recipe-toolbar-stats-border)",
+                boxShadow: "var(--recipe-toolbar-stats-shadow)",
+                ["--toolbar-stats-divider" as string]: "var(--recipe-toolbar-stats-divider)",
+              }}
             >
               <TooltipProvider>
                 <Tooltip>
@@ -696,11 +705,11 @@ export function Toolbar({
                         if (willOpen) refreshStats({ force: true });
                       }}
                       className={cn(
-                        "text-canopy-text hover:bg-overlay-medium hover:text-text-primary h-full px-3 gap-2 rounded-none rounded-l-[var(--radius-md)]",
+                        "h-full gap-2 rounded-none px-3 text-canopy-text hover:bg-[var(--recipe-toolbar-stats-hover-bg)] hover:text-text-primary",
                         stats?.issueCount === 0 && "opacity-50",
                         isStale && "opacity-60",
                         issuesOpen &&
-                          "bg-overlay-medium ring-1 ring-github-open/20 text-text-primary"
+                          "bg-[var(--recipe-toolbar-stats-hover-bg)] text-text-primary ring-1 ring-github-open/20"
                       )}
                       aria-label={`${stats?.issueCount ?? "\u2014"} open issues${isStale ? " (cached)" : ""}`}
                     >
@@ -764,11 +773,11 @@ export function Toolbar({
                         if (willOpen) refreshStats({ force: true });
                       }}
                       className={cn(
-                        "text-canopy-text hover:bg-overlay-medium hover:text-text-primary h-full px-3 gap-2 rounded-none",
+                        "h-full gap-2 rounded-none px-3 text-canopy-text hover:bg-[var(--recipe-toolbar-stats-hover-bg)] hover:text-text-primary",
                         stats?.prCount === 0 && "opacity-50",
                         isStale && "opacity-60",
                         prsOpen &&
-                          "bg-overlay-medium ring-1 ring-github-merged/20 text-text-primary"
+                          "bg-[var(--recipe-toolbar-stats-hover-bg)] text-text-primary ring-1 ring-github-merged/20"
                       )}
                       aria-label={`${stats?.prCount ?? "\u2014"} open pull requests${isStale ? " (cached)" : ""}`}
                     >
@@ -829,10 +838,10 @@ export function Toolbar({
                         setCommitsOpen(!commitsOpen);
                       }}
                       className={cn(
-                        "text-canopy-text hover:bg-overlay-medium hover:text-text-primary h-full px-3 gap-2 rounded-none rounded-r-[var(--radius-md)]",
+                        "h-full gap-2 rounded-none px-3 text-canopy-text hover:bg-[var(--recipe-toolbar-stats-hover-bg)] hover:text-text-primary",
                         stats?.commitCount === 0 && "opacity-50",
                         commitsOpen &&
-                          "bg-overlay-medium ring-1 ring-border-strong text-text-primary"
+                          "bg-[var(--recipe-toolbar-stats-hover-bg)] text-text-primary ring-1 ring-border-strong"
                       )}
                       aria-label={`${stats?.commitCount ?? "\u2014"} commits`}
                     >
@@ -886,7 +895,7 @@ export function Toolbar({
                     size="icon"
                     data-toolbar-item=""
                     onClick={toggleNotificationCenter}
-                    className="text-canopy-text hover:bg-overlay-medium hover:text-canopy-accent transition-colors"
+                    className={toolbarIconButtonClass}
                     aria-label={
                       notificationUnreadCount > 0
                         ? `Notifications — ${notificationUnreadCount} unread`
@@ -930,7 +939,7 @@ export function Toolbar({
                   size="icon"
                   data-toolbar-item=""
                   onClick={() => actionService.dispatch("notes.create", {}, { source: "user" })}
-                  className="text-canopy-text hover:bg-overlay-medium hover:text-canopy-accent transition-colors"
+                  className={toolbarIconButtonClass}
                   aria-label="Open notes palette"
                 >
                   <Leaf />
@@ -956,10 +965,10 @@ export function Toolbar({
                   onClick={handleCopyTreeClick}
                   disabled={isCopyingTree || !activeWorktree}
                   className={cn(
-                    "transition-colors",
+                    "toolbar-icon-button transition-colors",
                     treeCopied
                       ? "text-status-success bg-status-success/10"
-                      : "text-canopy-text hover:bg-overlay-medium hover:text-canopy-accent",
+                      : "text-canopy-text hover:text-[var(--recipe-toolbar-control-hover-fg)]",
                     isCopyingTree && "cursor-wait opacity-70",
                     !activeWorktree && "opacity-50"
                   )}
@@ -1003,7 +1012,7 @@ export function Toolbar({
                   data-toolbar-item=""
                   onClick={onSettings}
                   onContextMenu={handleSettingsContextMenu}
-                  className="text-canopy-text hover:bg-overlay-medium hover:text-canopy-accent transition-colors"
+                  className={toolbarIconButtonClass}
                   aria-label="Open settings"
                 >
                   <SlidersHorizontal />
@@ -1028,7 +1037,8 @@ export function Toolbar({
                   data-toolbar-item=""
                   onClick={onToggleProblems}
                   className={cn(
-                    "text-canopy-text hover:bg-overlay-medium hover:text-canopy-accent relative transition-colors",
+                    toolbarIconButtonClass,
+                    "relative",
                     errorCount > 0 && "text-status-error"
                   )}
                   aria-label={`Problems: ${errorCount} error${errorCount !== 1 ? "s" : ""}`}
@@ -1057,9 +1067,7 @@ export function Toolbar({
                   size="icon"
                   data-toolbar-item=""
                   onClick={togglePortal}
-                  className={cn(
-                    "text-canopy-text hover:bg-overlay-medium hover:text-canopy-accent transition-colors"
-                  )}
+                  className={toolbarIconButtonClass}
                   aria-label={portalOpen ? "Close context portal" : "Open context portal"}
                   aria-pressed={portalOpen}
                 >
@@ -1152,11 +1160,7 @@ export function Toolbar({
         AGENT_TOOLBAR_IDS.has(visible[i]) !== AGENT_TOOLBAR_IDS.has(visible[i + 1])
       ) {
         elements.push(
-          <div
-            key={`group-divider-${i}`}
-            className="w-px h-5 bg-border-divider mx-1"
-            aria-hidden="true"
-          />
+          <div key={`group-divider-${i}`} className={toolbarDividerClass} aria-hidden="true" />
         );
       }
     }
@@ -1197,7 +1201,7 @@ export function Toolbar({
           )}
           {buttonRegistry["sidebar-toggle"].render()}
 
-          <div className="w-px h-5 bg-border-divider mx-1" />
+          <div className={toolbarDividerClass} />
 
           <div className="flex items-center gap-0.5">
             {renderLeftButtons(toolbarLayout.leftButtons)}
@@ -1234,15 +1238,12 @@ export function Toolbar({
           >
             <button
               data-toolbar-item=""
-              className={cn(
-                "app-no-drag pointer-events-auto flex h-9 min-w-0 max-w-full items-center justify-center gap-2 overflow-hidden rounded-[var(--radius-md)] border border-border-subtle px-3 shadow-[inset_0_1px_0_var(--color-overlay-strong)] outline-none",
-                "cursor-pointer transition-colors hover:border-border-default hover:shadow-[inset_0_1px_0_var(--color-overlay-emphasis)]"
-              )}
+              className="app-no-drag pointer-events-auto flex h-9 min-w-0 max-w-full items-center justify-center gap-2 overflow-hidden rounded-[var(--recipe-toolbar-pill-radius)] border px-3 outline-none"
               data-testid="project-switcher-trigger"
               style={{
-                background: currentProject
-                  ? `linear-gradient(180deg, color-mix(in oklab, var(--color-overlay-soft) 70%, transparent), color-mix(in oklab, var(--color-overlay-medium) 75%, transparent)), ${getProjectGradient(currentProject.color)}`
-                  : "linear-gradient(135deg, var(--color-surface-panel-elevated), var(--color-surface-panel))",
+                background: "var(--recipe-toolbar-project-bg)",
+                borderColor: "var(--recipe-toolbar-project-border)",
+                boxShadow: "var(--recipe-toolbar-project-shadow)",
               }}
               onClick={() => projectSwitcher.open("dropdown")}
             >
@@ -1251,18 +1252,27 @@ export function Toolbar({
                   <span className="text-base leading-none shrink-0" aria-label="Project emoji">
                     {currentProject.emoji}
                   </span>
-                  <span className="min-w-0 truncate text-xs font-semibold tracking-wide text-canopy-text [text-shadow:0_1px_0_rgba(255,255,255,0.18)]">
+                  <span className="min-w-0 truncate text-xs font-semibold tracking-wide text-canopy-text">
                     {currentProject.name}
                   </span>
                   {branchName && (
                     <span
-                      className="shrink-0 rounded-full border border-border-subtle bg-overlay-soft px-1.5 py-0.5 font-mono text-[10px] tabular-nums text-text-secondary"
+                      className="shrink-0 rounded-full border px-1.5 py-0.5 font-mono tabular-nums"
+                      style={{
+                        background: "var(--recipe-toolbar-project-chip-bg)",
+                        borderColor: "var(--recipe-toolbar-project-chip-border)",
+                        color: "var(--recipe-toolbar-project-meta-fg)",
+                        fontSize: "var(--recipe-toolbar-project-chip-size)",
+                      }}
                       aria-label={`Current branch ${branchName}`}
                     >
                       {branchName}
                     </span>
                   )}
-                  <ChevronsUpDown className="ml-0.5 h-3 w-3 shrink-0 text-text-muted" />
+                  <ChevronsUpDown
+                    className="ml-0.5 h-3 w-3 shrink-0"
+                    style={{ color: "var(--recipe-toolbar-project-meta-fg)" }}
+                  />
                 </>
               ) : (
                 <>
@@ -1272,7 +1282,10 @@ export function Toolbar({
                   <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-canopy-accent/20 text-canopy-accent shrink-0">
                     Beta
                   </span>
-                  <ChevronsUpDown className="ml-0.5 h-3 w-3 shrink-0 text-text-muted" />
+                  <ChevronsUpDown
+                    className="ml-0.5 h-3 w-3 shrink-0"
+                    style={{ color: "var(--recipe-toolbar-project-meta-fg)" }}
+                  />
                 </>
               )}
             </button>
@@ -1289,7 +1302,7 @@ export function Toolbar({
             {renderButtons(toolbarLayout.rightButtons)}
           </div>
 
-          <div className="w-px h-5 bg-border-divider mx-1" />
+          <div className={toolbarDividerClass} />
 
           {buttonRegistry["portal-toggle"].render()}
         </div>

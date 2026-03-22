@@ -62,12 +62,12 @@ export function VoiceRecordingToolbarButton({
               void voiceRecordingService.focusActiveTarget();
             }}
             className={cn(
-              "relative transition-colors mr-0.5",
+              "toolbar-icon-button relative transition-colors mr-0.5",
               isRecording
-                ? "text-canopy-text hover:bg-tint/[0.06]"
+                ? "text-canopy-text hover:text-[var(--recipe-toolbar-control-hover-fg)]"
                 : status === "connecting"
-                  ? "text-canopy-text/60 hover:bg-tint/[0.06]"
-                  : "text-canopy-accent hover:bg-tint/[0.06] hover:text-canopy-accent"
+                  ? "text-canopy-text/60 hover:text-[var(--recipe-toolbar-control-hover-fg)]"
+                  : "text-canopy-accent hover:text-canopy-accent"
             )}
             aria-label={tooltipTitle}
           >

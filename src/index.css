@@ -135,6 +135,24 @@
   --color-recipe-shadow-floating: var(--theme-recipe-shadow-floating);
   --color-recipe-dialog-shadow: var(--theme-recipe-dialog-shadow);
   --color-recipe-toolbar-shadow: var(--theme-recipe-toolbar-shadow);
+  --color-recipe-toolbar-control-hover-bg: var(--theme-recipe-toolbar-control-hover-bg);
+  --color-recipe-toolbar-control-hover-fg: var(--theme-recipe-toolbar-control-hover-fg);
+  --color-recipe-toolbar-control-hover-shadow: var(--theme-recipe-toolbar-control-hover-shadow);
+  --color-recipe-toolbar-agent-hover-bg: var(--theme-recipe-toolbar-agent-hover-bg);
+  --color-recipe-toolbar-divider: var(--theme-recipe-toolbar-divider);
+  --color-recipe-toolbar-pill-radius: var(--theme-recipe-toolbar-pill-radius);
+  --color-recipe-toolbar-project-bg: var(--theme-recipe-toolbar-project-bg);
+  --color-recipe-toolbar-project-border: var(--theme-recipe-toolbar-project-border);
+  --color-recipe-toolbar-project-shadow: var(--theme-recipe-toolbar-project-shadow);
+  --color-recipe-toolbar-project-chip-bg: var(--theme-recipe-toolbar-project-chip-bg);
+  --color-recipe-toolbar-project-chip-border: var(--theme-recipe-toolbar-project-chip-border);
+  --color-recipe-toolbar-project-meta-fg: var(--theme-recipe-toolbar-project-meta-fg);
+  --color-recipe-toolbar-project-chip-size: var(--theme-recipe-toolbar-project-chip-size);
+  --color-recipe-toolbar-stats-bg: var(--theme-recipe-toolbar-stats-bg);
+  --color-recipe-toolbar-stats-border: var(--theme-recipe-toolbar-stats-border);
+  --color-recipe-toolbar-stats-divider: var(--theme-recipe-toolbar-stats-divider);
+  --color-recipe-toolbar-stats-shadow: var(--theme-recipe-toolbar-stats-shadow);
+  --color-recipe-toolbar-stats-hover-bg: var(--theme-recipe-toolbar-stats-hover-bg);
   --color-recipe-focus-ring-offset: var(--theme-recipe-focus-ring-offset);
   --color-recipe-sidebar-active-bg: var(--theme-recipe-sidebar-active-bg);
   --color-recipe-sidebar-active-shadow: var(--theme-recipe-sidebar-active-shadow);
@@ -602,6 +620,39 @@ code.hljs {
   --recipe-label-pill-border-opacity: var(--theme-recipe-label-pill-border-opacity, 0.2);
   --recipe-dialog-shadow: var(--theme-recipe-dialog-shadow, var(--theme-recipe-shadow-floating));
   --recipe-toolbar-shadow: var(--theme-recipe-toolbar-shadow, none);
+  --recipe-toolbar-control-hover-bg: var(
+    --theme-recipe-toolbar-control-hover-bg,
+    var(--theme-overlay-strong)
+  );
+  --recipe-toolbar-control-hover-fg: var(
+    --theme-recipe-toolbar-control-hover-fg,
+    var(--theme-accent-primary)
+  );
+  --recipe-toolbar-control-hover-shadow: var(--theme-recipe-toolbar-control-hover-shadow, none);
+  --recipe-toolbar-agent-hover-bg: var(
+    --theme-recipe-toolbar-agent-hover-bg,
+    var(--recipe-toolbar-control-hover-bg)
+  );
+  --recipe-toolbar-divider: var(--theme-recipe-toolbar-divider, var(--theme-border-divider));
+  --recipe-toolbar-pill-radius: var(--theme-recipe-toolbar-pill-radius, 0.5rem);
+  --recipe-toolbar-project-bg: var(--theme-recipe-toolbar-project-bg);
+  --recipe-toolbar-project-border: var(--theme-recipe-toolbar-project-border);
+  --recipe-toolbar-project-shadow: var(--theme-recipe-toolbar-project-shadow, none);
+  --recipe-toolbar-project-chip-bg: var(--theme-recipe-toolbar-project-chip-bg);
+  --recipe-toolbar-project-chip-border: var(--theme-recipe-toolbar-project-chip-border);
+  --recipe-toolbar-project-meta-fg: var(
+    --theme-recipe-toolbar-project-meta-fg,
+    var(--theme-text-secondary)
+  );
+  --recipe-toolbar-project-chip-size: var(--theme-recipe-toolbar-project-chip-size, 10px);
+  --recipe-toolbar-stats-bg: var(--theme-recipe-toolbar-stats-bg);
+  --recipe-toolbar-stats-border: var(--theme-recipe-toolbar-stats-border);
+  --recipe-toolbar-stats-divider: var(--theme-recipe-toolbar-stats-divider);
+  --recipe-toolbar-stats-shadow: var(--theme-recipe-toolbar-stats-shadow, none);
+  --recipe-toolbar-stats-hover-bg: var(
+    --theme-recipe-toolbar-stats-hover-bg,
+    var(--recipe-toolbar-control-hover-bg)
+  );
   --recipe-sidebar-hover-bg: var(--theme-recipe-sidebar-hover-bg, var(--theme-overlay-subtle));
   --recipe-sidebar-action-hover-bg: var(
     --theme-recipe-sidebar-action-hover-bg,
@@ -1968,6 +2019,32 @@ body[data-performance-mode="true"] [class*="backdrop-blur"] {
     box-shadow: var(--recipe-toolbar-shadow);
     -webkit-backdrop-filter: blur(10px) saturate(120%);
     backdrop-filter: blur(10px) saturate(120%);
+  }
+
+  .toolbar-icon-button,
+  .toolbar-agent-button {
+    transition:
+      color 150ms ease,
+      background-color 150ms ease,
+      box-shadow 150ms ease,
+      transform 150ms ease;
+  }
+
+  .toolbar-icon-button:hover {
+    background: var(--recipe-toolbar-control-hover-bg);
+    color: var(--recipe-toolbar-control-hover-fg);
+    box-shadow: var(--recipe-toolbar-control-hover-shadow);
+  }
+
+  .toolbar-agent-button:hover {
+    background: var(--recipe-toolbar-agent-hover-bg);
+    color: var(--recipe-toolbar-control-hover-fg);
+    box-shadow: var(--recipe-toolbar-control-hover-shadow);
+  }
+
+  .toolbar-icon-button:active,
+  .toolbar-agent-button:active {
+    transform: scale(0.98);
   }
 
   .control-hover:hover {

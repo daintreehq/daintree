@@ -138,8 +138,9 @@ export function AgentButton({
               disabled={isLoading}
               data-toolbar-item={dataToolbarItem}
               className={cn(
-                "text-canopy-text hover:bg-tint/[0.06] transition-colors",
-                isAvailable && "hover:text-canopy-accent focus-visible:text-canopy-accent",
+                "toolbar-agent-button text-canopy-text transition-colors",
+                isAvailable &&
+                  "hover:text-[var(--recipe-toolbar-control-hover-fg)] focus-visible:text-[var(--recipe-toolbar-control-hover-fg)]",
                 !isAvailable && !isLoading && "opacity-60"
               )}
               aria-label={ariaLabel}
