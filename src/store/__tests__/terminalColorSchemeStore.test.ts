@@ -1,8 +1,14 @@
-import { describe, it, expect, beforeEach } from "vitest";
-import { useTerminalColorSchemeStore, selectWrapperBackground } from "../terminalColorSchemeStore";
+import { beforeEach, describe, expect, it } from "vitest";
+import { getTerminalScrollbarDefaults } from "@shared/theme";
+import { CANOPY_TERMINAL_THEME } from "@/utils/terminalTheme";
+import {
+  DEFAULT_SCHEME_ID,
+  getMappedTerminalScheme,
+  getSchemeById,
+  type TerminalColorScheme,
+} from "@/config/terminalColorSchemes";
 import { useAppThemeStore } from "../appThemeStore";
-import { DEFAULT_SCHEME_ID } from "@/config/terminalColorSchemes";
-import type { TerminalColorScheme } from "@/config/terminalColorSchemes";
+import { selectWrapperBackground, useTerminalColorSchemeStore } from "../terminalColorSchemeStore";
 
 const CUSTOM_SCHEME: TerminalColorScheme = {
   id: "custom-test",
@@ -49,8 +55,7 @@ describe("terminalColorSchemeStore", () => {
   });
 
   it("defaults to canopy scheme", () => {
-    const { selectedSchemeId } = useTerminalColorSchemeStore.getState();
-    expect(selectedSchemeId).toBe(DEFAULT_SCHEME_ID);
+    expect(useTerminalColorSchemeStore.getState().selectedSchemeId).toBe(DEFAULT_SCHEME_ID);
   });
 
   it("switching scheme updates selectedSchemeId", () => {
@@ -58,31 +63,56 @@ describe("terminalColorSchemeStore", () => {
     expect(useTerminalColorSchemeStore.getState().selectedSchemeId).toBe("dracula");
   });
 
-  it("getEffectiveTheme returns daintree theme for default daintree", () => {
+  it("uses the mapped terminal scheme when the default app-linked scheme is selected", () => {
+    const mapped = getMappedTerminalScheme("daintree");
+    expect(mapped).toBeDefined();
+
     const theme = useTerminalColorSchemeStore.getState().getEffectiveTheme();
-    expect(theme.background).toBe("#19191a");
-    expect(theme.cursor).toBe("#3E9066");
+
+    expect(theme).toEqual({
+      ...mapped!.colors,
+      ...getTerminalScrollbarDefaults(mapped!.type),
+    });
   });
 
-  it("getEffectiveTheme returns bondi terminal theme for bondi app theme", () => {
+  it("updates the default app-linked terminal scheme when the app theme changes", () => {
     useAppThemeStore.setState({ selectedSchemeId: "bondi" });
+    const mapped = getMappedTerminalScheme("bondi");
+    expect(mapped).toBeDefined();
+
     const theme = useTerminalColorSchemeStore.getState().getEffectiveTheme();
-    expect(theme.background).toBe("#0D1621");
-    expect(theme.foreground).toBe("#ADC8E0");
+
+    expect(theme).toEqual({
+      ...mapped!.colors,
+      ...getTerminalScrollbarDefaults(mapped!.type),
+    });
   });
 
-  it("getEffectiveTheme returns correct theme after switching to non-canopy scheme", () => {
+  it("returns built-in scheme colors with type-based scrollbar defaults for explicit schemes", () => {
+    const dracula = getSchemeById("dracula");
+    expect(dracula).toBeDefined();
     useTerminalColorSchemeStore.getState().setSelectedSchemeId("dracula");
+
     const theme = useTerminalColorSchemeStore.getState().getEffectiveTheme();
-    expect(theme.background).toBe("#282a36");
-    expect(theme.foreground).toBe("#f8f8f2");
+
+    expect(theme).toEqual({
+      ...dracula!.colors,
+      ...getTerminalScrollbarDefaults(dracula!.type),
+    });
   });
 
-  it("explicit scheme is not affected by app theme change", () => {
+  it("keeps an explicit scheme stable when the app theme changes", () => {
+    const dracula = getSchemeById("dracula");
+    expect(dracula).toBeDefined();
     useTerminalColorSchemeStore.getState().setSelectedSchemeId("dracula");
     useAppThemeStore.setState({ selectedSchemeId: "bondi" });
+
     const theme = useTerminalColorSchemeStore.getState().getEffectiveTheme();
-    expect(theme.background).toBe("#282a36");
+
+    expect(theme).toEqual({
+      ...dracula!.colors,
+      ...getTerminalScrollbarDefaults(dracula!.type),
+    });
   });
 
   it("addCustomScheme adds and deduplicates", () => {
@@ -106,66 +136,67 @@ describe("terminalColorSchemeStore", () => {
     expect(useTerminalColorSchemeStore.getState().selectedSchemeId).toBe(DEFAULT_SCHEME_ID);
   });
 
-  it("getEffectiveTheme returns custom scheme colors", () => {
+  it("returns custom scheme colors with scrollbar defaults", () => {
     const store = useTerminalColorSchemeStore.getState();
     store.addCustomScheme(CUSTOM_SCHEME);
     store.setSelectedSchemeId("custom-test");
+
     const theme = useTerminalColorSchemeStore.getState().getEffectiveTheme();
-    expect(theme.background).toBe("#111111");
-    expect(theme.red).toBe("#ff0000");
+
+    expect(theme).toEqual({
+      ...CUSTOM_SCHEME.colors,
+      ...getTerminalScrollbarDefaults(CUSTOM_SCHEME.type),
+    });
   });
 
-  it("getEffectiveTheme adds dark scrollbar defaults for dark schemes", () => {
-    useTerminalColorSchemeStore.getState().setSelectedSchemeId("dracula");
-    const theme = useTerminalColorSchemeStore.getState().getEffectiveTheme();
-    expect(theme.scrollbarSliderBackground).toBe("rgba(255, 255, 255, 0.20)");
-  });
-
-  it("getEffectiveTheme adds light scrollbar defaults for light schemes", () => {
-    useTerminalColorSchemeStore.getState().setSelectedSchemeId("solarized-light");
-    const theme = useTerminalColorSchemeStore.getState().getEffectiveTheme();
-    expect(theme.scrollbarSliderBackground).toBe("rgba(0, 0, 0, 0.20)");
-  });
-
-  it("getEffectiveTheme falls back to CSS for unmapped custom app theme", () => {
+  it("falls back to the default CSS-backed terminal theme for an unmapped app theme", () => {
     useAppThemeStore.setState({ selectedSchemeId: "custom-unknown-theme" });
-    const theme = useTerminalColorSchemeStore.getState().getEffectiveTheme();
-    expect(theme).toBeDefined();
-    expect(theme.background).toBeDefined();
-  });
 
-  it("getEffectiveTheme adds light scrollbar defaults for light mapped scheme", () => {
-    useAppThemeStore.setState({ selectedSchemeId: "bondi" });
     const theme = useTerminalColorSchemeStore.getState().getEffectiveTheme();
-    expect(theme.scrollbarSliderBackground).toBe("rgba(0, 0, 0, 0.20)");
+
+    expect(theme).toEqual(CANOPY_TERMINAL_THEME);
   });
 
   describe("selectWrapperBackground", () => {
-    it("returns mapped scheme background for default canopy scheme", () => {
-      const bg = selectWrapperBackground(useTerminalColorSchemeStore.getState());
-      expect(bg).toBe("#19191a");
+    it("returns the mapped terminal background for the default app-linked scheme", () => {
+      const mapped = getMappedTerminalScheme("daintree");
+      expect(mapped).toBeDefined();
+
+      expect(selectWrapperBackground(useTerminalColorSchemeStore.getState())).toBe(
+        mapped!.colors.background
+      );
     });
 
-    it("returns mapped scheme background when app theme changes", () => {
+    it("tracks app theme changes for the default app-linked scheme", () => {
       useAppThemeStore.setState({ selectedSchemeId: "bondi" });
-      const bg = selectWrapperBackground(useTerminalColorSchemeStore.getState());
-      expect(bg).toBe("#0D1621");
+      const mapped = getMappedTerminalScheme("bondi");
+      expect(mapped).toBeDefined();
+
+      expect(selectWrapperBackground(useTerminalColorSchemeStore.getState())).toBe(
+        mapped!.colors.background
+      );
     });
 
-    it("returns hex color for built-in non-default scheme", () => {
+    it("returns the selected built-in scheme background for explicit schemes", () => {
+      const dracula = getSchemeById("dracula");
+      expect(dracula).toBeDefined();
       useTerminalColorSchemeStore.getState().setSelectedSchemeId("dracula");
-      const bg = selectWrapperBackground(useTerminalColorSchemeStore.getState());
-      expect(bg).toBe("#282a36");
+
+      expect(selectWrapperBackground(useTerminalColorSchemeStore.getState())).toBe(
+        dracula!.colors.background
+      );
     });
 
-    it("returns hex color for custom scheme", () => {
+    it("returns the selected custom scheme background", () => {
       useTerminalColorSchemeStore.getState().addCustomScheme(CUSTOM_SCHEME);
       useTerminalColorSchemeStore.getState().setSelectedSchemeId("custom-test");
-      const bg = selectWrapperBackground(useTerminalColorSchemeStore.getState());
-      expect(bg).toBe("#111111");
+
+      expect(selectWrapperBackground(useTerminalColorSchemeStore.getState())).toBe(
+        CUSTOM_SCHEME.colors.background
+      );
     });
 
-    it("returns updated color when custom scheme is replaced", () => {
+    it("returns updated color when a custom scheme is replaced", () => {
       const store = useTerminalColorSchemeStore.getState();
       store.addCustomScheme(CUSTOM_SCHEME);
       store.setSelectedSchemeId("custom-test");
@@ -173,23 +204,27 @@ describe("terminalColorSchemeStore", () => {
         ...CUSTOM_SCHEME,
         colors: { ...CUSTOM_SCHEME.colors, background: "#222222" },
       });
-      const bg = selectWrapperBackground(useTerminalColorSchemeStore.getState());
-      expect(bg).toBe("#222222");
+
+      expect(selectWrapperBackground(useTerminalColorSchemeStore.getState())).toBe("#222222");
     });
 
-    it("falls back to CSS variable for unmapped custom app theme", () => {
+    it("falls back to the canvas variable for an unmapped app theme", () => {
       useAppThemeStore.setState({ selectedSchemeId: "custom-unknown-theme" });
-      const bg = selectWrapperBackground(useTerminalColorSchemeStore.getState());
-      expect(bg).toBe("var(--theme-surface-canvas)");
+
+      expect(selectWrapperBackground(useTerminalColorSchemeStore.getState())).toBe(
+        "var(--theme-surface-canvas)"
+      );
     });
 
-    it("falls back to CSS variable for unknown scheme id", () => {
+    it("falls back to the canvas variable for an unknown scheme id", () => {
       useTerminalColorSchemeStore.setState({ selectedSchemeId: "nonexistent" });
-      const bg = selectWrapperBackground(useTerminalColorSchemeStore.getState());
-      expect(bg).toBe("var(--theme-surface-canvas)");
+
+      expect(selectWrapperBackground(useTerminalColorSchemeStore.getState())).toBe(
+        "var(--theme-surface-canvas)"
+      );
     });
 
-    it("falls back to CSS variable when custom scheme has no background", () => {
+    it("falls back to the canvas variable when a custom scheme has no background", () => {
       const noBackground: TerminalColorScheme = {
         ...CUSTOM_SCHEME,
         id: "no-bg",
@@ -197,8 +232,10 @@ describe("terminalColorSchemeStore", () => {
       };
       useTerminalColorSchemeStore.getState().addCustomScheme(noBackground);
       useTerminalColorSchemeStore.getState().setSelectedSchemeId("no-bg");
-      const bg = selectWrapperBackground(useTerminalColorSchemeStore.getState());
-      expect(bg).toBe("var(--theme-surface-canvas)");
+
+      expect(selectWrapperBackground(useTerminalColorSchemeStore.getState())).toBe(
+        "var(--theme-surface-canvas)"
+      );
     });
   });
 });
