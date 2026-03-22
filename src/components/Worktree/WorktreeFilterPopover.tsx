@@ -291,7 +291,7 @@ export function WorktreeFilterPopover({ hideSearchInput = false }: WorktreeFilte
                     >
                       {orderBy === option.value && (
                         <div className="w-full h-full flex items-center justify-center">
-                          <div className="w-1.5 h-1.5 bg-white rounded-full" />
+                          <div className="w-1.5 h-1.5 bg-text-inverse rounded-full" />
                         </div>
                       )}
                     </div>

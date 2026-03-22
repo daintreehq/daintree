@@ -161,7 +161,7 @@ export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossW
     <div
       className={cn(
         "fixed inset-0 z-[var(--z-modal)] flex items-center justify-center",
-        "bg-black/60 backdrop-blur-sm"
+        "bg-scrim-medium backdrop-blur-sm"
       )}
       onClick={(e) => {
         if (e.target === e.currentTarget) onClose();
@@ -169,7 +169,7 @@ export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossW
     >
       <div
         ref={modalRef}
-        className="flex flex-col bg-surface-panel border border-border-default rounded-xl shadow-2xl w-[90vw] max-w-6xl h-[80vh] max-h-[800px] overflow-hidden"
+        className="flex flex-col bg-surface-panel border border-border-default rounded-xl shadow-[var(--theme-shadow-dialog)] w-[90vw] max-w-6xl h-[80vh] max-h-[800px] overflow-hidden"
       >
         {/* Header */}
         <div className="flex items-center gap-3 px-4 py-3 border-b border-border-subtle shrink-0">

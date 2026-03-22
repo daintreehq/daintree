@@ -141,7 +141,7 @@ export function FileStageRow({ file, isStaged, onToggle, onFileClick }: FileStag
             {dir}/
           </span>
         )}
-        <span className="shrink truncate text-canopy-text group-hover:text-white font-medium font-mono text-[11px] transition-colors">
+        <span className="shrink truncate text-canopy-text group-hover:text-text-inverse font-medium font-mono text-[11px] transition-colors">
           {base}
         </span>
       </div>

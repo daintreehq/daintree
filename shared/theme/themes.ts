@@ -4,6 +4,8 @@ import type {
   AppThemeTokenKey,
   AppThemeValidationWarning,
 } from "./types.js";
+import type { ThemePalette } from "./palette.js";
+import { getThemeContrastWarnings } from "./contrast.js";
 
 export const DEFAULT_APP_SCHEME_ID = "daintree";
 
@@ -101,6 +103,19 @@ export function createCanopyTokens(
   const searchHighlightBg =
     tokens["search-highlight-background"] ?? withAlpha(tokens["accent-primary"], dark ? 0.2 : 0.12);
   const searchHighlightText = tokens["search-highlight-text"] ?? tokens["status-success"];
+  const shadowAmbient =
+    tokens["shadow-ambient"] ??
+    tokens["recipe-shadow-ambient"] ??
+    (dark
+      ? "0 1px 3px rgba(0, 0, 0, 0.3), 0 1px 2px rgba(0, 0, 0, 0.2)"
+      : "0 2px 8px rgba(0, 0, 0, 0.06)");
+  const shadowFloating =
+    tokens["shadow-floating"] ??
+    tokens["recipe-shadow-floating"] ??
+    (dark
+      ? "0 4px 12px rgba(0, 0, 0, 0.5), 0 1px 3px rgba(0, 0, 0, 0.3)"
+      : "0 4px 12px rgba(0, 0, 0, 0.12), 0 1px 3px rgba(0, 0, 0, 0.08)");
+  const shadowDialog = tokens["shadow-dialog"] ?? tokens["recipe-dialog-shadow"] ?? shadowFloating;
 
   const categoryDefaults = dark
     ? {
@@ -153,11 +168,25 @@ export function createCanopyTokens(
     "overlay-medium": tokens["overlay-medium"] ?? withAlpha(overlayBase, dark ? 0.04 : 0.05),
     "overlay-strong": tokens["overlay-strong"] ?? withAlpha(overlayBase, dark ? 0.06 : 0.08),
     "overlay-emphasis": tokens["overlay-emphasis"] ?? withAlpha(overlayBase, dark ? 0.1 : 0.12),
+    "overlay-hover": tokens["overlay-hover"] ?? withAlpha(overlayTone, dark ? 0.05 : 0.03),
+    "overlay-active": tokens["overlay-active"] ?? withAlpha(overlayTone, dark ? 0.08 : 0.06),
+    "overlay-selected": tokens["overlay-selected"] ?? withAlpha(overlayTone, dark ? 0.04 : 0.05),
+    "overlay-elevated": tokens["overlay-elevated"] ?? withAlpha(overlayTone, dark ? 0.06 : 0.08),
+    "wash-subtle": tokens["wash-subtle"] ?? withAlpha(overlayBase, 0.02),
+    "wash-medium": tokens["wash-medium"] ?? withAlpha(overlayBase, 0.04),
+    "wash-strong": tokens["wash-strong"] ?? withAlpha(overlayBase, 0.08),
     "scrim-soft": tokens["scrim-soft"] ?? (dark ? "rgba(0, 0, 0, 0.2)" : "rgba(0, 0, 0, 0.3)"),
     "scrim-medium": tokens["scrim-medium"] ?? (dark ? "rgba(0, 0, 0, 0.45)" : "rgba(0, 0, 0, 0.5)"),
     "scrim-strong": tokens["scrim-strong"] ?? (dark ? "rgba(0, 0, 0, 0.62)" : "rgba(0, 0, 0, 0.7)"),
     "shadow-color": tokens["shadow-color"] ?? (dark ? "rgba(0, 0, 0, 0.5)" : "rgba(0, 0, 0, 0.12)"),
+    "shadow-ambient": shadowAmbient,
+    "shadow-floating": shadowFloating,
+    "shadow-dialog": shadowDialog,
     tint: tokens["tint"] ?? tint,
+    "material-blur": tokens["material-blur"] ?? "0px",
+    "material-saturation": tokens["material-saturation"] ?? "100%",
+    "material-opacity": tokens["material-opacity"] ?? "1",
+    "radius-scale": tokens["radius-scale"] ?? "1",
     "activity-approval": tokens["activity-approval"] ?? (dark ? "#f97316" : "#C56210"),
     "activity-completed": tokens["activity-completed"] ?? tokens["status-success"],
     "activity-failed": tokens["activity-failed"] ?? tokens["status-danger"],
@@ -231,22 +260,9 @@ export function createCanopyTokens(
       (dark
         ? "inset 0 1px 0 0 rgba(255, 255, 255, 0.03)"
         : "inset 0 1px 0 rgba(255, 255, 255, 0.60)"),
-    "recipe-shadow-ambient":
-      tokens["recipe-shadow-ambient"] ??
-      (dark
-        ? "0 1px 3px rgba(0, 0, 0, 0.3), 0 1px 2px rgba(0, 0, 0, 0.2)"
-        : "0 2px 8px rgba(0, 0, 0, 0.06)"),
-    "recipe-shadow-floating":
-      tokens["recipe-shadow-floating"] ??
-      (dark
-        ? "0 4px 12px rgba(0, 0, 0, 0.5), 0 1px 3px rgba(0, 0, 0, 0.3)"
-        : "0 4px 12px rgba(0, 0, 0, 0.12), 0 1px 3px rgba(0, 0, 0, 0.08)"),
-    "recipe-dialog-shadow":
-      tokens["recipe-dialog-shadow"] ??
-      tokens["recipe-shadow-floating"] ??
-      (dark
-        ? "0 4px 12px rgba(0, 0, 0, 0.5), 0 1px 3px rgba(0, 0, 0, 0.3)"
-        : "0 4px 12px rgba(0, 0, 0, 0.12), 0 1px 3px rgba(0, 0, 0, 0.08)"),
+    "recipe-shadow-ambient": shadowAmbient,
+    "recipe-shadow-floating": shadowFloating,
+    "recipe-dialog-shadow": shadowDialog,
     "recipe-toolbar-shadow": tokens["recipe-toolbar-shadow"] ?? "none",
     "recipe-toolbar-control-hover-bg":
       tokens["recipe-toolbar-control-hover-bg"] ??
@@ -2593,6 +2609,59 @@ export function resolveAppTheme(id: string, customSchemes: AppColorScheme[] = []
   return getAppThemeById(id, customSchemes) ?? BUILT_IN_APP_SCHEMES[0];
 }
 
+const LEGACY_COMPONENT_EXTENSION_MAP = {
+  "toolbar-control-hover-bg": "recipe-toolbar-control-hover-bg",
+  "toolbar-control-hover-fg": "recipe-toolbar-control-hover-fg",
+  "toolbar-control-hover-shadow": "recipe-toolbar-control-hover-shadow",
+  "toolbar-agent-hover-bg": "recipe-toolbar-agent-hover-bg",
+  "toolbar-divider": "recipe-toolbar-divider",
+  "toolbar-pill-radius": "recipe-toolbar-pill-radius",
+  "toolbar-project-bg": "recipe-toolbar-project-bg",
+  "toolbar-project-border": "recipe-toolbar-project-border",
+  "toolbar-project-shadow": "recipe-toolbar-project-shadow",
+  "toolbar-project-chip-bg": "recipe-toolbar-project-chip-bg",
+  "toolbar-project-chip-border": "recipe-toolbar-project-chip-border",
+  "toolbar-project-meta-fg": "recipe-toolbar-project-meta-fg",
+  "toolbar-project-chip-size": "recipe-toolbar-project-chip-size",
+  "toolbar-stats-bg": "recipe-toolbar-stats-bg",
+  "toolbar-stats-border": "recipe-toolbar-stats-border",
+  "toolbar-stats-divider": "recipe-toolbar-stats-divider",
+  "toolbar-stats-shadow": "recipe-toolbar-stats-shadow",
+  "toolbar-stats-hover-bg": "recipe-toolbar-stats-hover-bg",
+  "settings-dialog-bg": "recipe-settings-dialog-bg",
+  "settings-search-bg": "recipe-settings-search-bg",
+  "settings-search-muted": "recipe-settings-search-muted",
+  "settings-meta-fg": "recipe-settings-meta-fg",
+  "settings-meta-size": "recipe-settings-meta-size",
+  "settings-card-bg": "recipe-settings-card-bg",
+  "settings-list-item-bg": "recipe-settings-list-item-bg",
+  "settings-sidebar-bg": "recipe-settings-sidebar-bg",
+  "settings-header-bg": "recipe-settings-header-bg",
+  "settings-nav-active-bg": "recipe-settings-nav-active-bg",
+  "settings-nav-active-shadow": "recipe-settings-nav-active-shadow",
+  "settings-nav-hover-bg": "recipe-settings-nav-hover-bg",
+  "settings-subtab-active-border-width": "recipe-settings-subtab-active-border-width",
+  "settings-kbd-bg": "recipe-settings-kbd-bg",
+  "settings-kbd-border": "recipe-settings-kbd-border",
+  "pulse-card-bg": "recipe-pulse-card-bg",
+  "pulse-card-shadow": "recipe-pulse-card-shadow",
+  "pulse-range-bg": "recipe-pulse-range-bg",
+  "pulse-control-hover-bg": "recipe-pulse-control-hover-bg",
+  "pulse-before-bg": "recipe-pulse-before-bg",
+  "pulse-empty-bg": "recipe-pulse-empty-bg",
+  "pulse-missed-bg": "recipe-pulse-missed-bg",
+  "pulse-heat-low-opacity": "recipe-pulse-heat-low-opacity",
+  "pulse-heat-medium-opacity": "recipe-pulse-heat-medium-opacity",
+  "pulse-heat-high-opacity": "recipe-pulse-heat-high-opacity",
+  "pulse-ring-offset": "recipe-pulse-ring-offset",
+  "pulse-skeleton-gradient": "recipe-pulse-skeleton-gradient",
+  "sidebar-active-bg": "recipe-sidebar-active-bg",
+  "sidebar-active-shadow": "recipe-sidebar-active-shadow",
+  "sidebar-hover-bg": "recipe-sidebar-hover-bg",
+  "sidebar-action-hover-bg": "recipe-sidebar-action-hover-bg",
+  "worktree-section-hover-bg": "recipe-worktree-section-hover-bg",
+} as const satisfies Record<string, AppThemeTokenKey>;
+
 export function getAppThemeCssVariables(scheme: AppColorScheme): Record<string, string> {
   const entries = Object.entries(scheme.tokens).map(([token, value]) => [
     `--theme-${token}`,
@@ -2602,6 +2671,22 @@ export function getAppThemeCssVariables(scheme: AppColorScheme): Record<string, 
   variables["--theme-color-mode"] = scheme.type;
   for (const [legacyToken, themeToken] of Object.entries(LEGACY_THEME_TOKEN_ALIASES)) {
     variables[`--theme-legacy-${legacyToken}`] = scheme.tokens[themeToken];
+  }
+  for (const [extensionName, themeToken] of Object.entries(LEGACY_COMPONENT_EXTENSION_MAP)) {
+    const extensionValue = scheme.extensions?.[extensionName];
+    const tokenValue = scheme.tokens[themeToken];
+    if (typeof extensionValue === "string" && extensionValue.trim()) {
+      variables[`--${extensionName}`] = extensionValue;
+    } else if (typeof tokenValue === "string" && tokenValue.trim()) {
+      variables[`--${extensionName}`] = tokenValue;
+    }
+  }
+  if (scheme.extensions) {
+    for (const [extensionName, extensionValue] of Object.entries(scheme.extensions)) {
+      if (typeof extensionValue === "string" && extensionValue.trim()) {
+        variables[`--${extensionName}`] = extensionValue;
+      }
+    }
   }
   return variables;
 }
@@ -2701,55 +2786,132 @@ function pickReadableForeground(background: string, candidates: string[]): strin
   return bestCandidate;
 }
 
-const CRITICAL_CONTRAST_PAIRS: Array<{
-  foreground: AppThemeTokenKey;
-  background: AppThemeTokenKey;
-  minimum: number;
-}> = [
-  { foreground: "text-primary", background: "surface-canvas", minimum: 4.5 },
-  { foreground: "text-primary", background: "surface-panel", minimum: 4.5 },
-  { foreground: "text-primary", background: "surface-panel-elevated", minimum: 4.5 },
-  { foreground: "text-primary", background: "surface-sidebar", minimum: 4.5 },
-  { foreground: "accent-foreground", background: "accent-primary", minimum: 4.5 },
-];
-
 export function getAppThemeWarnings(scheme: AppColorScheme): AppThemeValidationWarning[] {
-  const warnings: AppThemeValidationWarning[] = [];
-  for (const pair of CRITICAL_CONTRAST_PAIRS) {
-    const fg = scheme.tokens[pair.foreground];
-    const bg = scheme.tokens[pair.background];
-    if (!isHexColor(fg) || !isHexColor(bg)) {
-      continue;
-    }
-    const ratio = contrastRatio(fg, bg);
-    if (ratio < pair.minimum) {
-      warnings.push({
-        message: `${pair.foreground} on ${pair.background} is ${ratio.toFixed(2)}:1; target is ${pair.minimum.toFixed(1)}:1`,
-      });
-    }
-  }
-  return warnings;
+  return getThemeContrastWarnings(scheme);
+}
+
+function compilePaletteToTokens(palette: ThemePalette): AppColorSchemeTokens {
+  const strategy = palette.strategy;
+  const shadowStyle = strategy?.shadowStyle ?? (palette.type === "dark" ? "soft" : "crisp");
+  const shadowProfiles =
+    shadowStyle === "none"
+      ? {
+          ambient: "none",
+          floating: "none",
+          dialog: "0 0 0 1px var(--theme-border-subtle)",
+        }
+      : shadowStyle === "crisp"
+        ? {
+            ambient: "0 1px 2px rgba(0, 0, 0, 0.2)",
+            floating: "0 4px 8px rgba(0, 0, 0, 0.3)",
+            dialog: "0 8px 16px rgba(0, 0, 0, 0.3)",
+          }
+        : shadowStyle === "atmospheric"
+          ? {
+              ambient: "0 4px 16px rgba(0, 0, 0, 0.15)",
+              floating: "0 14px 40px rgba(0, 0, 0, 0.25)",
+              dialog: "0 20px 56px rgba(0, 0, 0, 0.3)",
+            }
+          : {
+              ambient: "0 2px 8px rgba(0, 0, 0, 0.06)",
+              floating: "0 4px 12px rgba(0, 0, 0, 0.12)",
+              dialog: "0 12px 32px rgba(0, 0, 0, 0.15)",
+            };
+
+  return createCanopyTokens(palette.type, {
+    "surface-grid": palette.surfaces.grid,
+    "surface-sidebar": palette.surfaces.sidebar,
+    "surface-canvas": palette.surfaces.canvas,
+    "surface-panel": palette.surfaces.panel,
+    "surface-panel-elevated": palette.surfaces.elevated,
+    "text-primary": palette.text.primary,
+    "text-secondary": palette.text.secondary,
+    "text-muted": palette.text.muted,
+    "text-inverse": palette.text.inverse,
+    "border-default": palette.border,
+    "accent-primary": palette.accent,
+    ...(palette.accentSecondary ? { "accent-secondary": palette.accentSecondary } : {}),
+    "status-success": palette.status.success,
+    "status-warning": palette.status.warning,
+    "status-danger": palette.status.danger,
+    "status-info": palette.status.info,
+    "activity-active": palette.activity.active,
+    "activity-idle": palette.activity.idle,
+    "activity-working": palette.activity.working,
+    "activity-waiting": palette.activity.waiting,
+    ...(palette.overlayTint ? { "overlay-base": palette.overlayTint } : {}),
+    "terminal-background": palette.terminal?.background ?? palette.surfaces.canvas,
+    "terminal-foreground": palette.terminal?.foreground ?? palette.text.primary,
+    "terminal-muted": palette.terminal?.muted ?? palette.text.muted,
+    "terminal-cursor": palette.terminal?.cursor ?? palette.accent,
+    "terminal-selection": palette.terminal?.selection ?? palette.accent,
+    "terminal-red": palette.terminal?.red ?? palette.status.danger,
+    "terminal-green": palette.terminal?.green ?? palette.status.success,
+    "terminal-yellow": palette.terminal?.yellow ?? palette.status.warning,
+    "terminal-blue": palette.terminal?.blue ?? palette.status.info,
+    "terminal-magenta": palette.terminal?.magenta ?? palette.accent,
+    "terminal-cyan": palette.terminal?.cyan ?? palette.activity.active,
+    "terminal-bright-red": palette.terminal?.brightRed ?? palette.status.danger,
+    "terminal-bright-green": palette.terminal?.brightGreen ?? palette.status.success,
+    "terminal-bright-yellow": palette.terminal?.brightYellow ?? palette.status.warning,
+    "terminal-bright-blue": palette.terminal?.brightBlue ?? palette.status.info,
+    "terminal-bright-magenta": palette.terminal?.brightMagenta ?? palette.accent,
+    "terminal-bright-cyan": palette.terminal?.brightCyan ?? palette.activity.active,
+    "terminal-bright-white": palette.terminal?.brightWhite ?? palette.text.primary,
+    "syntax-comment": palette.syntax.comment,
+    "syntax-punctuation": palette.syntax.punctuation,
+    "syntax-number": palette.syntax.number,
+    "syntax-string": palette.syntax.string,
+    "syntax-operator": palette.syntax.operator,
+    "syntax-keyword": palette.syntax.keyword,
+    "syntax-function": palette.syntax.function,
+    "syntax-link": palette.syntax.link,
+    "syntax-quote": palette.syntax.quote,
+    "syntax-chip": palette.syntax.chip,
+    "recipe-shadow-ambient": shadowProfiles.ambient,
+    "recipe-shadow-floating": shadowProfiles.floating,
+    "recipe-dialog-shadow": shadowProfiles.dialog,
+    "material-blur": `${strategy?.materialBlur ?? 0}px`,
+    "material-saturation": `${strategy?.materialSaturation ?? 100}%`,
+    "material-opacity": strategy?.materialBlur && strategy.materialBlur > 0 ? "0.9" : "1",
+    "radius-scale": String(strategy?.radiusScale ?? 1),
+    "recipe-chrome-noise-texture":
+      strategy?.noiseOpacity && strategy.noiseOpacity > 0
+        ? `radial-gradient(circle at 20% 20%, rgb(255 255 255 / ${strategy.noiseOpacity}), transparent 55%)`
+        : "none",
+    "recipe-panel-state-edge-width":
+      (strategy?.panelStateEdge ?? palette.type === "light") ? "2px" : "0px",
+  });
 }
 
 export function normalizeAppColorScheme(
   maybeScheme: Partial<Omit<AppColorScheme, "tokens">> & { tokens?: Record<string, unknown> },
   fallback: AppColorScheme = BUILT_IN_APP_SCHEMES[0]
 ): AppColorScheme {
+  const palette = maybeScheme.palette;
   const explicitType =
     maybeScheme.type === "light"
       ? "light"
       : maybeScheme.type === "dark"
         ? "dark"
-        : inferAppThemeTypeFromTokens(
-            (maybeScheme.tokens as Record<string, unknown> | undefined) ?? {}
-          );
+        : palette?.type === "light"
+          ? "light"
+          : palette?.type === "dark"
+            ? "dark"
+            : inferAppThemeTypeFromTokens(
+                (maybeScheme.tokens as Record<string, unknown> | undefined) ?? {}
+              );
   const resolvedType = explicitType ?? fallback.type;
   const baseScheme =
     fallback.type === resolvedType ? fallback : getBuiltInAppSchemeForType(resolvedType);
-  const rawTokens = (maybeScheme.tokens as Record<string, unknown> | undefined) ?? {};
-  const normalizedTokens = normalizeAppThemeTokens(rawTokens, baseScheme.tokens);
+  const rawTokens = (palette ? compilePaletteToTokens(palette) : maybeScheme.tokens) as
+    | Record<string, unknown>
+    | undefined;
+  const tokenOverrides = (maybeScheme.tokens as Record<string, unknown> | undefined) ?? {};
+  const normalizedTokens = normalizeAppThemeTokens(rawTokens ?? {}, baseScheme.tokens);
+  Object.assign(normalizedTokens, normalizeAppThemeTokens(tokenOverrides, normalizedTokens));
   if (
-    typeof rawTokens["accent-foreground"] !== "string" &&
+    typeof tokenOverrides["accent-foreground"] !== "string" &&
     typeof normalizedTokens["accent-primary"] === "string"
   ) {
     normalizedTokens["accent-foreground"] = pickReadableForeground(
@@ -2767,6 +2929,8 @@ export function normalizeAppColorScheme(
     type: resolvedType,
     builtin: false,
     tokens: normalizedTokens,
+    ...(palette ? { palette } : {}),
+    ...(maybeScheme.extensions ? { extensions: maybeScheme.extensions } : {}),
   };
   if (typeof maybeScheme.location === "string") result.location = maybeScheme.location;
   if (typeof maybeScheme.heroImage === "string") result.heroImage = maybeScheme.heroImage;

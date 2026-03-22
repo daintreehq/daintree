@@ -1,0 +1,41 @@
+.pulse-card {
+  --_bg: var(--pulse-card-bg, var(--theme-surface-panel-elevated));
+  --_shadow: var(--pulse-card-shadow, var(--theme-shadow-ambient));
+  background: var(--_bg);
+  box-shadow: var(--_shadow);
+}
+
+.pulse-range {
+  background: var(--pulse-range-bg, var(--theme-surface-canvas));
+}
+
+.pulse-control:hover {
+  background: var(--pulse-control-hover-bg, var(--theme-overlay-hover));
+}
+
+.pulse-heat-before {
+  background: var(--pulse-before-bg, var(--theme-surface-sidebar));
+}
+
+.pulse-heat-empty {
+  background: var(--pulse-empty-bg, var(--theme-surface-panel));
+}
+
+.pulse-heat-missed {
+  background: var(
+    --pulse-missed-bg,
+    color-mix(in oklch, var(--theme-status-danger) 18%, transparent)
+  );
+}
+
+.pulse-skeleton-shimmer {
+  background: var(
+    --pulse-skeleton-gradient,
+    linear-gradient(
+      90deg,
+      var(--pulse-empty-bg, var(--theme-surface-panel)) 25%,
+      var(--theme-surface-panel) 50%,
+      var(--pulse-empty-bg, var(--theme-surface-panel)) 75%
+    )
+  );
+}

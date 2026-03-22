@@ -74,7 +74,7 @@ export function SettingsSubtabBar({ subtabs, activeId, onChange }: SettingsSubta
                 "transition-colors flex-shrink-0",
                 "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2",
                 isActive
-                  ? "border-canopy-accent border-b-[var(--recipe-settings-subtab-active-border-width)] text-canopy-text"
+                  ? "border-canopy-accent border-b-[var(--settings-subtab-active-border-width,2px)] text-canopy-text"
                   : "border-b-2 border-transparent text-text-secondary hover:border-canopy-border hover:text-canopy-text"
               )}
             >

@@ -34,7 +34,7 @@ export function IssueBulkActionBar({
           animate={{ y: 0, opacity: 1 }}
           exit={{ y: "100%", opacity: 0 }}
           transition={{ type: "spring", damping: 25, stiffness: 200 }}
-          className="mx-2 mb-2 rounded-xl shadow-xl bg-surface-panel ring-1 ring-border-default shadow-black/20 inset-shadow-[0_1px_0_var(--color-overlay-soft)] flex items-center gap-3 px-4 py-3"
+          className="mx-2 mb-2 rounded-xl shadow-[var(--theme-shadow-floating)] bg-surface-panel ring-1 ring-border-default inset-shadow-[0_1px_0_var(--color-overlay-soft)] flex items-center gap-3 px-4 py-3"
         >
           <span className="inline-flex items-center gap-1.5 text-xs text-canopy-text/70">
             <span className="inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded bg-canopy-accent/15 text-canopy-accent text-[10px] font-semibold tabular-nums">

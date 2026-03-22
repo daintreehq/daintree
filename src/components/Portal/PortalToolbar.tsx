@@ -154,13 +154,13 @@ const SortableTab = memo(function SortableTab({
       onContextMenu={handleContextMenu}
       className={cn(
         "group relative flex items-center gap-2 px-3 py-1.5 text-xs font-medium cursor-pointer select-none transition-all",
-        "rounded-full border shadow-sm",
+        "rounded-full border shadow-[var(--theme-shadow-ambient)]",
         "min-w-[80px] max-w-[200px]",
         "focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2",
         isActive
           ? "bg-tint/[0.08] text-canopy-text border-canopy-accent/40 ring-1 ring-inset ring-canopy-accent/30"
           : "bg-overlay-subtle text-canopy-text/70 border-divider hover:bg-overlay-medium hover:text-canopy-text",
-        isDragging && "opacity-80 scale-105 shadow-xl cursor-grabbing"
+        isDragging && "opacity-80 scale-105 shadow-[var(--theme-shadow-floating)] cursor-grabbing"
       )}
     >
       {tab.icon && (

@@ -128,7 +128,7 @@ export function ShortcutReferenceDialog({ isOpen, onClose }: ShortcutReferenceDi
                         )}
                       </div>
                       <div className="ml-4">
-                        <kbd className="px-3 py-1.5 bg-canopy-bg border border-canopy-border rounded text-sm font-mono text-canopy-text shadow-sm">
+                        <kbd className="px-3 py-1.5 bg-canopy-bg border border-canopy-border rounded text-sm font-mono text-canopy-text shadow-[var(--theme-shadow-ambient)]">
                           {keybindingService.getDisplayCombo(binding.actionId)}
                         </kbd>
                       </div>

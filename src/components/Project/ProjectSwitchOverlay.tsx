@@ -52,7 +52,7 @@ export function ProjectSwitchOverlay({ isSwitching, projectName }: ProjectSwitch
   return createPortal(
     <div
       className={cn(
-        "fixed inset-0 z-[var(--z-modal)] flex items-center justify-center bg-black/60 backdrop-blur-sm",
+        "fixed inset-0 z-[var(--z-modal)] flex items-center justify-center bg-scrim-medium backdrop-blur-sm",
         "transition-opacity duration-150",
         "motion-reduce:transition-none motion-reduce:duration-0",
         isVisible ? "opacity-100" : "opacity-0"
@@ -64,7 +64,7 @@ export function ProjectSwitchOverlay({ isSwitching, projectName }: ProjectSwitch
     >
       <div
         className={cn(
-          "flex flex-col items-center gap-4 text-center px-8 py-6 rounded-[var(--radius-xl)] bg-canopy-sidebar/95 border border-[var(--border-overlay)] shadow-xl",
+          "flex flex-col items-center gap-4 text-center px-8 py-6 rounded-[var(--radius-xl)] bg-canopy-sidebar/95 border border-[var(--border-overlay)] shadow-[var(--theme-shadow-dialog)]",
           "transition-all duration-150",
           "motion-reduce:transition-none motion-reduce:duration-0 motion-reduce:transform-none",
           isVisible ? "opacity-100 translate-y-0 scale-100" : "opacity-0 translate-y-2 scale-[0.96]"

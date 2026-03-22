@@ -179,7 +179,7 @@ export function GitHubListItem({
                 isSelectionActive || isSelected ? "flex" : "hidden group-hover/icon:flex"
               )}
             >
-              {isSelected && <Check className="w-3 h-3 text-white" />}
+              {isSelected && <Check className="w-3 h-3 text-text-inverse" />}
             </span>
           </span>
         ) : (

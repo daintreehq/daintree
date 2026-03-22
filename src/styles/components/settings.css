@@ -1,0 +1,57 @@
+.settings-shell {
+  --_bg: var(--settings-dialog-bg, var(--theme-surface-panel));
+  background: var(--_bg);
+}
+
+.settings-sidebar {
+  --_bg: var(
+    --settings-sidebar-bg,
+    color-mix(in oklch, var(--theme-surface-canvas) 50%, transparent)
+  );
+  background: var(--_bg);
+}
+
+.settings-search {
+  --_bg: var(--settings-search-bg, var(--theme-surface-input));
+  background: var(--_bg);
+}
+
+.settings-search-icon,
+.settings-search-input::placeholder {
+  color: var(--settings-search-muted, var(--theme-text-muted));
+}
+
+.settings-header {
+  --_bg: var(
+    --settings-header-bg,
+    color-mix(in oklch, var(--theme-surface-sidebar) 50%, transparent)
+  );
+  background: var(--_bg);
+}
+
+.settings-meta {
+  color: var(--settings-meta-fg, var(--theme-text-muted));
+  font-size: var(--settings-meta-size, 11px);
+}
+
+.settings-nav-item:hover {
+  background: var(--settings-nav-hover-bg, var(--theme-overlay-hover));
+}
+
+.settings-nav-item[data-active="true"] {
+  background: var(--settings-nav-active-bg, var(--theme-overlay-selected));
+  box-shadow: var(--settings-nav-active-shadow, none);
+}
+
+.settings-kbd {
+  background: var(--settings-kbd-bg, var(--theme-surface-input));
+  border-color: var(--settings-kbd-border, var(--theme-border-default));
+}
+
+.settings-card {
+  background: var(--settings-card-bg, var(--theme-surface-panel));
+}
+
+.settings-list-item {
+  background: var(--settings-list-item-bg, var(--theme-surface-panel));
+}

@@ -9,6 +9,7 @@ import {
   inferAppThemeTypeFromTokens,
   normalizeAppColorScheme,
   type AppThemeImportResult,
+  type ThemePalette,
 } from "../../shared/theme/index.js";
 
 const THEME_SCHEMA = z
@@ -17,6 +18,8 @@ const THEME_SCHEMA = z
     name: z.string().optional(),
     type: z.enum(["dark", "light"]).optional(),
     tokens: z.record(z.string(), z.unknown()).optional(),
+    palette: z.record(z.string(), z.unknown()).optional(),
+    extensions: z.record(z.string(), z.string()).optional(),
   })
   .passthrough();
 
@@ -97,6 +100,7 @@ export function parseAppThemeContent(content: string, filename: string): AppThem
   }
 
   const rawTheme = parsed.data;
+  const usedPalette = !!rawTheme.palette;
   const usedNestedTokens = !!rawTheme.tokens;
   const rawTokens = usedNestedTokens
     ? (rawTheme.tokens as Record<string, unknown>)
@@ -105,14 +109,22 @@ export function parseAppThemeContent(content: string, filename: string): AppThem
   const recognizedTokenCount = Object.keys(rawTokens).filter((key) =>
     KNOWN_TOKEN_KEYS.has(key)
   ).length;
-  if (recognizedTokenCount === 0) {
+  if (recognizedTokenCount === 0 && !usedPalette) {
     return {
       ok: false,
-      errors: ["No recognized app theme tokens found"],
+      errors: ["No recognized app theme tokens or palette found"],
     };
   }
 
-  const resolvedType = rawTheme.type ?? inferAppThemeTypeFromTokens(rawTokens) ?? "dark";
+  const paletteType =
+    rawTheme.palette &&
+    typeof rawTheme.palette === "object" &&
+    !Array.isArray(rawTheme.palette) &&
+    (rawTheme.palette.type === "dark" || rawTheme.palette.type === "light")
+      ? rawTheme.palette.type
+      : undefined;
+  const resolvedType =
+    rawTheme.type ?? paletteType ?? inferAppThemeTypeFromTokens(rawTokens) ?? "dark";
   const name = rawTheme.name?.trim() || getFileDisplayName(filename);
   const rawRecord = rawTheme as Record<string, unknown>;
   const scheme = normalizeAppColorScheme(
@@ -121,6 +133,8 @@ export function parseAppThemeContent(content: string, filename: string): AppThem
       name,
       type: resolvedType,
       tokens: rawTokens,
+      ...(rawTheme.palette ? { palette: rawTheme.palette as unknown as ThemePalette } : {}),
+      ...(rawTheme.extensions ? { extensions: rawTheme.extensions } : {}),
       ...(typeof rawRecord.location === "string" ? { location: rawRecord.location } : {}),
       ...(typeof rawRecord.heroImage === "string" ? { heroImage: rawRecord.heroImage } : {}),
       ...(typeof rawRecord.heroVideo === "string" ? { heroVideo: rawRecord.heroVideo } : {}),

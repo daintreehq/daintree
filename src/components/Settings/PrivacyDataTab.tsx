@@ -278,7 +278,7 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
                     variant="outline"
                     size="sm"
                     onClick={handleResetAllData}
-                    className="text-white bg-status-error border-status-error hover:bg-status-error/80"
+                    className="text-text-inverse bg-status-error border-status-error hover:bg-status-error/80"
                   >
                     <AlertTriangle className="w-4 h-4" />
                     Reset Everything & Restart

@@ -20,7 +20,7 @@ export const NewsletterStep = forwardRef<HTMLHeadingElement, NewsletterStepProps
       <div
         className={cn(
           "fixed bottom-4 left-1/2 -translate-x-1/2 z-50 w-full max-w-md",
-          "bg-surface border border-canopy-border rounded-[var(--radius-lg)] shadow-xl p-4"
+          "bg-surface border border-canopy-border rounded-[var(--radius-lg)] shadow-[var(--theme-shadow-floating)] p-4"
         )}
         role="dialog"
         aria-label="Newsletter sign-up"

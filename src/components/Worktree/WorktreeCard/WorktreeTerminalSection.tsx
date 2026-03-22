@@ -117,7 +117,7 @@ export function WorktreeTerminalSection({
             onClick={onToggle}
             aria-expanded={true}
             aria-controls={terminalsPanelId}
-            className="flex w-full items-center justify-between rounded-t-[var(--radius-lg)] border-b border-border-default bg-surface-inset px-3 py-1.5 text-left transition-colors hover:bg-[var(--recipe-worktree-section-hover-bg)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-[-2px]"
+            className="worktree-section-button flex w-full items-center justify-between rounded-t-[var(--radius-lg)] border-b border-border-default bg-surface-inset px-3 py-1.5 text-left transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-[-2px]"
             id={`${terminalsId}-button`}
           >
             <span className="flex items-center gap-1.5 text-[11px] font-medium text-text-muted">
@@ -149,7 +149,7 @@ export function WorktreeTerminalSection({
                   sourceIndex={index}
                 >
                   {({ listeners }) => (
-                    <div className="group flex items-center justify-between gap-2.5 px-3 py-2 transition-colors hover:bg-[var(--recipe-worktree-section-hover-bg)]">
+                    <div className="worktree-section-button group flex items-center justify-between gap-2.5 px-3 py-2 transition-colors">
                       <button
                         type="button"
                         onClick={(e) => {
@@ -240,7 +240,7 @@ export function WorktreeTerminalSection({
           onClick={onToggle}
           aria-expanded={false}
           aria-controls={terminalsPanelId}
-          className="flex w-full items-center justify-between rounded-[var(--radius-lg)] px-3 py-1.5 text-left transition-colors hover:bg-[var(--recipe-worktree-section-hover-bg)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-[-2px]"
+          className="worktree-section-button flex w-full items-center justify-between rounded-[var(--radius-lg)] px-3 py-1.5 text-left transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-[-2px]"
           id={`${terminalsId}-button`}
         >
           <div className="flex items-center gap-1.5 text-[11px] text-text-secondary">

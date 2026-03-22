@@ -1,3 +1,5 @@
+import type { ThemePalette } from "./palette.js";
+
 export const APP_THEME_TOKEN_KEYS = [
   // Surface hierarchy
   "surface-canvas",
@@ -66,6 +68,15 @@ export const APP_THEME_TOKEN_KEYS = [
   "overlay-medium",
   "overlay-strong",
   "overlay-emphasis",
+  "overlay-hover",
+  "overlay-active",
+  "overlay-selected",
+  "overlay-elevated",
+
+  // Atmospheric wash
+  "wash-subtle",
+  "wash-medium",
+  "wash-strong",
 
   // Scrim
   "scrim-soft",
@@ -74,9 +85,18 @@ export const APP_THEME_TOKEN_KEYS = [
 
   // Shadow
   "shadow-color",
+  "shadow-ambient",
+  "shadow-floating",
+  "shadow-dialog",
 
   // Tint (white for dark themes, black for light themes)
   "tint",
+
+  // Material/radius strategy outputs
+  "material-blur",
+  "material-saturation",
+  "material-opacity",
+  "radius-scale",
 
   // GitHub PR/issue states
   "github-open",
@@ -266,6 +286,8 @@ export interface AppColorScheme {
   type: "dark" | "light";
   builtin: boolean;
   tokens: AppColorSchemeTokens;
+  palette?: ThemePalette;
+  extensions?: Record<string, string>;
   location?: string;
   heroImage?: string;
   heroVideo?: string;

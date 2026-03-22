@@ -1,5 +1,10 @@
 @import "tailwindcss";
 @plugin "@tailwindcss/typography";
+@import "./styles/components/toolbar.css";
+@import "./styles/components/settings.css";
+@import "./styles/components/pulse.css";
+@import "./styles/components/sidebar.css";
+@import "./styles/components/panels.css";
 
 @theme inline {
   --color-*: initial;
@@ -57,10 +62,20 @@
   --color-overlay: var(--theme-border-strong);
   --color-overlay-strong: var(--theme-overlay-strong);
   --color-overlay-emphasis: var(--theme-overlay-emphasis);
+  --color-overlay-hover: var(--theme-overlay-hover);
+  --color-overlay-active: var(--theme-overlay-active);
+  --color-overlay-selected: var(--theme-overlay-selected);
+  --color-overlay-elevated: var(--theme-overlay-elevated);
+  --color-wash-subtle: var(--theme-wash-subtle);
+  --color-wash-medium: var(--theme-wash-medium);
+  --color-wash-strong: var(--theme-wash-strong);
   --color-scrim-soft: var(--theme-scrim-soft);
   --color-scrim-medium: var(--theme-scrim-medium);
   --color-scrim-strong: var(--theme-scrim-strong);
   --color-shadow-color: var(--theme-shadow-color);
+  --shadow-ambient: var(--theme-shadow-ambient);
+  --shadow-floating: var(--theme-shadow-floating);
+  --shadow-dialog: var(--theme-shadow-dialog);
   --color-tint: var(--theme-tint);
   --color-github-open: var(--theme-github-open);
   --color-github-merged: var(--theme-github-merged);
@@ -197,6 +212,7 @@
   --color-diff-gutter-delete: var(--theme-diff-gutter-delete);
   --color-diff-selected-background: var(--theme-diff-selected-background);
   --color-diff-omit-gutter-line: var(--theme-diff-omit-gutter-line);
+  --radius: calc(0.625rem * var(--theme-radius-scale, 1));
 
   --color-category-blue-subtle: color-mix(
     in oklch,

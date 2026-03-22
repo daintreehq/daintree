@@ -11,6 +11,7 @@ describe("applyAppThemeToRoot", () => {
     applyAppThemeToRoot(root, resolveAppTheme("daintree"));
 
     expect(root.style.getPropertyValue("--theme-tint")).toBe("#ffffff");
+    expect(root.style.getPropertyValue("--toolbar-project-bg")).not.toBe("");
     expect(root.dataset.theme).toBe("daintree");
     expect(root.dataset.colorMode).toBe("dark");
     expect(root.style.colorScheme).toBe("dark");
@@ -26,5 +27,18 @@ describe("applyAppThemeToRoot", () => {
     expect(root.dataset.theme).toBe("bondi");
     expect(root.dataset.colorMode).toBe("light");
     expect(root.style.colorScheme).toBe("light");
+  });
+
+  it("removes stale component extension vars between themes", () => {
+    const root = document.createElement("div");
+    applyAppThemeToRoot(root, {
+      ...resolveAppTheme("daintree"),
+      extensions: { "custom-foo": "#123456" },
+    });
+    expect(root.style.getPropertyValue("--custom-foo")).toBe("#123456");
+
+    applyAppThemeToRoot(root, resolveAppTheme("bondi"));
+
+    expect(root.style.getPropertyValue("--custom-foo")).toBe("");
   });
 });

@@ -1,0 +1,7 @@
+.themed-dialog-surface {
+  box-shadow: var(--theme-shadow-dialog);
+}
+
+.themed-floating-surface {
+  box-shadow: var(--theme-shadow-floating);
+}

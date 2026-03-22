@@ -841,7 +841,7 @@ export function NewWorktreeDialog({
                   </PopoverTrigger>
                   <PopoverContent
                     align="start"
-                    className="w-[var(--radix-popover-trigger-width)] p-0 bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] shadow-lg"
+                    className="w-[var(--radix-popover-trigger-width)] p-0 bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] shadow-[var(--theme-shadow-floating)]"
                     onOpenAutoFocus={(e) => e.preventDefault()}
                     onEscapeKeyDown={(e) => e.stopPropagation()}
                   >
