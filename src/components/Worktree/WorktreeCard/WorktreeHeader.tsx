@@ -411,7 +411,7 @@ export function WorktreeHeader({
           {canCollapse && (
             <button
               onClick={onToggleCollapse}
-              className="p-1.5 text-canopy-text/60 hover:text-text-primary hover:bg-overlay-soft rounded transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent"
+              className="p-1.5 text-canopy-text/60 hover:text-text-primary hover:bg-[var(--recipe-sidebar-action-hover-bg)] rounded transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent"
               aria-expanded={!isCollapsed}
               aria-controls={isCollapsed ? undefined : contentId}
               aria-label={isCollapsed ? "Expand card" : "Collapse card"}
@@ -431,7 +431,7 @@ export function WorktreeHeader({
                 <DropdownMenuTrigger asChild>
                   <button
                     onClick={(e) => e.stopPropagation()}
-                    className="p-1.5 text-canopy-text/60 hover:text-text-primary hover:bg-overlay-soft rounded transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent"
+                    className="p-1.5 text-canopy-text/60 hover:text-text-primary hover:bg-[var(--recipe-sidebar-action-hover-bg)] rounded transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent"
                     aria-label="More actions"
                     data-testid="worktree-actions-menu"
                   >

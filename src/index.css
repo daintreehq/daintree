@@ -9,6 +9,7 @@
 
   --color-surface-canvas: var(--theme-surface-canvas);
   --color-surface-sidebar: var(--theme-surface-sidebar);
+  --color-surface-toolbar: var(--theme-surface-toolbar);
   --color-surface-panel: var(--theme-surface-panel);
   --color-surface-panel-elevated: var(--theme-surface-panel-elevated);
   --color-surface-grid: var(--theme-surface-grid);
@@ -133,10 +134,12 @@
   --color-recipe-shadow-ambient: var(--theme-recipe-shadow-ambient);
   --color-recipe-shadow-floating: var(--theme-recipe-shadow-floating);
   --color-recipe-dialog-shadow: var(--theme-recipe-dialog-shadow);
+  --color-recipe-toolbar-shadow: var(--theme-recipe-toolbar-shadow);
   --color-recipe-focus-ring-offset: var(--theme-recipe-focus-ring-offset);
   --color-recipe-sidebar-active-bg: var(--theme-recipe-sidebar-active-bg);
   --color-recipe-sidebar-active-shadow: var(--theme-recipe-sidebar-active-shadow);
   --color-recipe-sidebar-hover-bg: var(--theme-recipe-sidebar-hover-bg);
+  --color-recipe-sidebar-action-hover-bg: var(--theme-recipe-sidebar-action-hover-bg);
   --color-recipe-settings-search-bg: var(--theme-recipe-settings-search-bg);
   --color-recipe-settings-search-muted: var(--theme-recipe-settings-search-muted);
   --color-recipe-settings-meta-fg: var(--theme-recipe-settings-meta-fg);
@@ -598,7 +601,12 @@ code.hljs {
   --recipe-label-pill-bg-opacity: var(--theme-recipe-label-pill-bg-opacity, 0.1);
   --recipe-label-pill-border-opacity: var(--theme-recipe-label-pill-border-opacity, 0.2);
   --recipe-dialog-shadow: var(--theme-recipe-dialog-shadow, var(--theme-recipe-shadow-floating));
+  --recipe-toolbar-shadow: var(--theme-recipe-toolbar-shadow, none);
   --recipe-sidebar-hover-bg: var(--theme-recipe-sidebar-hover-bg, var(--theme-overlay-subtle));
+  --recipe-sidebar-action-hover-bg: var(
+    --theme-recipe-sidebar-action-hover-bg,
+    var(--theme-recipe-sidebar-hover-bg, var(--theme-overlay-soft))
+  );
   --recipe-settings-search-bg: var(--theme-recipe-settings-search-bg, var(--theme-surface-input));
   --recipe-settings-search-muted: var(
     --theme-recipe-settings-search-muted,
@@ -1838,6 +1846,12 @@ body[data-performance-mode="true"] .surface-chrome {
   background-color: var(--color-surface-sidebar) !important;
 }
 
+body[data-performance-mode="true"] .surface-toolbar {
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+  background-color: var(--color-surface-toolbar) !important;
+}
+
 /* Disable terminal glow in performance mode */
 body[data-performance-mode="true"] .terminal-selected,
 body[data-performance-mode="true"] .terminal-focused {
@@ -1945,6 +1959,13 @@ body[data-performance-mode="true"] [class*="backdrop-blur"] {
     background-color: var(--color-surface-sidebar);
     background-color: color-mix(in oklab, var(--color-surface-sidebar) 95%, transparent);
     box-shadow: inset 0 1px 0 var(--theme-overlay-soft);
+    -webkit-backdrop-filter: blur(10px) saturate(120%);
+    backdrop-filter: blur(10px) saturate(120%);
+  }
+
+  .surface-toolbar {
+    background-color: var(--color-surface-toolbar);
+    box-shadow: var(--recipe-toolbar-shadow);
     -webkit-backdrop-filter: blur(10px) saturate(120%);
     backdrop-filter: blur(10px) saturate(120%);
   }

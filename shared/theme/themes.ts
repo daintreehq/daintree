@@ -172,6 +172,9 @@ export function createCanopyTokens(
     "terminal-white":
       tokens["terminal-white"] ?? (dark ? tokens["text-primary"] : tokens["surface-canvas"]),
     "terminal-bright-black": tokens["terminal-bright-black"] ?? tokens["activity-idle"],
+    "surface-toolbar":
+      tokens["surface-toolbar"] ??
+      `color-mix(in oklab, ${tokens["surface-sidebar"]} ${dark ? "67%" : "40%"}, ${tokens["surface-canvas"]})`,
     "surface-input":
       tokens["surface-input"] ??
       (dark ? tokens["surface-panel-elevated"] : tokens["surface-panel"]),
@@ -244,6 +247,7 @@ export function createCanopyTokens(
       (dark
         ? "0 4px 12px rgba(0, 0, 0, 0.5), 0 1px 3px rgba(0, 0, 0, 0.3)"
         : "0 4px 12px rgba(0, 0, 0, 0.12), 0 1px 3px rgba(0, 0, 0, 0.08)"),
+    "recipe-toolbar-shadow": tokens["recipe-toolbar-shadow"] ?? "none",
     "recipe-focus-ring-offset": tokens["recipe-focus-ring-offset"] ?? "2px",
     "recipe-sidebar-active-bg":
       tokens["recipe-sidebar-active-bg"] ??
@@ -258,6 +262,11 @@ export function createCanopyTokens(
       tokens["recipe-sidebar-hover-bg"] ??
       tokens["overlay-subtle"] ??
       withAlpha(overlayBase, dark ? 0.02 : 0.02),
+    "recipe-sidebar-action-hover-bg":
+      tokens["recipe-sidebar-action-hover-bg"] ??
+      tokens["recipe-sidebar-hover-bg"] ??
+      tokens["overlay-soft"] ??
+      withAlpha(overlayBase, dark ? 0.03 : 0.03),
     "recipe-settings-search-bg":
       tokens["recipe-settings-search-bg"] ??
       tokens["surface-input"] ??
@@ -393,6 +402,7 @@ export const BUILT_IN_APP_SCHEMES: AppColorScheme[] = [
       // Surfaces — 5-level depth hierarchy with microscopic green bias in chrome
       "surface-grid": "#0e0e0d",
       "surface-sidebar": "#131413",
+      "surface-toolbar": "#151615",
       "surface-canvas": "#19191a",
       "surface-panel": "#202121",
       "surface-panel-elevated": "#2D302F",
@@ -463,6 +473,7 @@ export const BUILT_IN_APP_SCHEMES: AppColorScheme[] = [
       "recipe-button-inset-shadow": "inset 0 1px 0 rgba(255, 255, 255, 0.15)",
       "recipe-dialog-shadow": "0 20px 56px rgba(0,0,0,0.40)",
       "recipe-sidebar-active-bg": "rgba(255,255,255,0.04)",
+      "recipe-sidebar-action-hover-bg": "rgba(255,255,255,0.05)",
       "recipe-settings-search-bg": "#19191A",
       "recipe-settings-search-muted": "#9AA29E",
       "recipe-settings-kbd-bg": "#19191A",
@@ -480,6 +491,7 @@ export const BUILT_IN_APP_SCHEMES: AppColorScheme[] = [
       // Surfaces — blue-white ladder: Grid deepest, Elevated brightest white
       "surface-grid": "#D3E5F3",
       "surface-sidebar": "#DDECF8",
+      "surface-toolbar": "#E7F3FB",
       "surface-canvas": "#EEF5FC",
       "surface-panel": "#F5FAFE",
       "surface-panel-elevated": "#FFFFFF",
@@ -543,6 +555,8 @@ export const BUILT_IN_APP_SCHEMES: AppColorScheme[] = [
       // Sidebar active — no shadow on active card (cleanest theme, pure white pops by contrast)
       "recipe-sidebar-active-shadow": "none",
       "recipe-sidebar-hover-bg": "rgba(13,22,33,0.03)",
+      "recipe-sidebar-action-hover-bg": "rgba(13,22,33,0.05)",
+      "recipe-toolbar-shadow": "inset 0 -1px 0 rgba(255,255,255,0.65)",
       "recipe-settings-card-bg": "#F5FAFE",
       "recipe-settings-list-item-bg": "#F5FAFE",
       "recipe-settings-subtab-active-radius": "var(--radius-sm)",
@@ -612,6 +626,7 @@ export const BUILT_IN_APP_SCHEMES: AppColorScheme[] = [
       // Surfaces — warm sandstone depth hierarchy
       "surface-grid": "#D8D1C8",
       "surface-sidebar": "#E2DCD4",
+      "surface-toolbar": "#E8E3DB",
       "surface-canvas": "#EDE8E1",
       "surface-panel": "#F7F4EF",
       "surface-panel-elevated": "#FDFBF8",
@@ -726,6 +741,7 @@ export const BUILT_IN_APP_SCHEMES: AppColorScheme[] = [
       "recipe-sidebar-active-shadow":
         "0 18px 36px rgba(60,48,38,0.11), 0 6px 14px rgba(60,48,38,0.07)",
       "recipe-sidebar-hover-bg": "rgba(60,48,38,0.06)",
+      "recipe-sidebar-action-hover-bg": "rgba(60,48,38,0.06)",
       "recipe-settings-search-bg": "#F4F1EC",
       "recipe-settings-card-bg": "#F7F4EF",
       "recipe-settings-list-item-bg": "#F7F4EF",
@@ -751,6 +767,7 @@ export const BUILT_IN_APP_SCHEMES: AppColorScheme[] = [
       // Surfaces — warm umber depth hierarchy; each step is lacquered chestnut, not zinc
       "surface-grid": "#0C0806",
       "surface-sidebar": "#120C0A",
+      "surface-toolbar": "#140E0B",
       "surface-canvas": "#1A1310",
       "surface-panel": "#241B17",
       "surface-panel-elevated": "#342620",
@@ -836,6 +853,7 @@ export const BUILT_IN_APP_SCHEMES: AppColorScheme[] = [
       "recipe-sidebar-active-bg": "rgba(255,236,214,0.05)",
       "recipe-sidebar-active-shadow": "inset 0 1px 0 0 rgba(255,240,220,0.08)",
       "recipe-sidebar-hover-bg": "rgba(255,244,230,0.035)",
+      "recipe-sidebar-action-hover-bg": "rgba(255,236,214,0.05)",
       "recipe-settings-search-bg": "#342620",
       "recipe-settings-nav-active-bg": "rgba(255,236,214,0.05)",
       "recipe-settings-nav-hover-bg": "rgba(255,236,214,0.05)",
@@ -855,6 +873,7 @@ export const BUILT_IN_APP_SCHEMES: AppColorScheme[] = [
       // Surfaces — navy-black wet slate; pressure-heavy, not verdant
       "surface-grid": "#04070B",
       "surface-sidebar": "#080D14",
+      "surface-toolbar": "#091017",
       "surface-canvas": "#0C141D",
       "surface-panel": "#111C29",
       "surface-panel-elevated": "#1A2C3E",
@@ -938,6 +957,7 @@ export const BUILT_IN_APP_SCHEMES: AppColorScheme[] = [
         "inset 0 1px 0 rgba(180,220,240,0.04), 0 25px 50px -12px rgba(4,7,15,0.55)",
       "recipe-sidebar-active-bg": "rgba(180,220,240,0.04)",
       "recipe-sidebar-active-shadow": "inset 0 1px 0 0 rgba(180,220,240,0.03)",
+      "recipe-sidebar-action-hover-bg": "rgba(180,220,240,0.05)",
       "recipe-settings-search-bg": "#0C141D",
       "recipe-settings-nav-active-bg": "rgba(58,183,197,0.10)",
       "recipe-settings-nav-active-shadow": "inset 0 0 0 1px rgba(58,183,197,0.20)",
@@ -957,6 +977,7 @@ export const BUILT_IN_APP_SCHEMES: AppColorScheme[] = [
       // Surfaces — wet volcanic black with mangrove humidity
       "surface-grid": "#0A0D0C",
       "surface-sidebar": "#111615",
+      "surface-toolbar": "#131917",
       "surface-canvas": "#161D1B",
       "surface-panel": "#1A2421",
       "surface-panel-elevated": "#23322E",
@@ -1037,6 +1058,7 @@ export const BUILT_IN_APP_SCHEMES: AppColorScheme[] = [
       // Sidebar active — accent-tinted selection (wetter/glossier than overlay-base)
       "recipe-sidebar-active-bg": "rgba(74,158,127,0.08)",
       "recipe-sidebar-hover-bg": "rgba(74,158,127,0.04)",
+      "recipe-sidebar-action-hover-bg": "rgba(74,158,127,0.08)",
       "recipe-dialog-shadow":
         "inset 0 1px 0 rgba(140,200,180,0.06), 0 24px 64px rgba(6,12,10,0.55)",
       "recipe-settings-search-bg": "#21302C",
@@ -1062,6 +1084,7 @@ export const BUILT_IN_APP_SCHEMES: AppColorScheme[] = [
       // Surfaces — brown-charcoal with gray-violet cast; matte, exposed
       "surface-grid": "#131114",
       "surface-sidebar": "#171519",
+      "surface-toolbar": "#1A181C",
       "surface-canvas": "#201D24",
       "surface-panel": "#2C2831",
       "surface-panel-elevated": "#3E3845",
@@ -1143,6 +1166,7 @@ export const BUILT_IN_APP_SCHEMES: AppColorScheme[] = [
       // Sidebar active — double inset: top hairline + full-border glow
       "recipe-sidebar-active-shadow":
         "inset 0 1px 0 rgba(220,215,230,0.05), inset 0 0 0 1px rgba(195,185,210,0.06)",
+      "recipe-sidebar-action-hover-bg": "rgba(195,185,210,0.05)",
       "recipe-settings-search-bg": "rgba(19,17,20,0.60)",
       "recipe-settings-sidebar-bg": "rgba(23,21,25,0.60)",
       "recipe-settings-nav-active-bg": "rgba(195,185,210,0.05)",
@@ -1168,6 +1192,7 @@ export const BUILT_IN_APP_SCHEMES: AppColorScheme[] = [
       // Surfaces — moonlit dune shadow; warm taupe/sand shell
       "surface-grid": "#110E0C",
       "surface-sidebar": "#171411",
+      "surface-toolbar": "#1A1613",
       "surface-canvas": "#1F1B16",
       "surface-panel": "#25201A",
       "surface-panel-elevated": "#2F2922",
@@ -1249,6 +1274,7 @@ export const BUILT_IN_APP_SCHEMES: AppColorScheme[] = [
       "recipe-button-inset-shadow": "inset 0 1px 0 rgba(220,200,180,0.08)",
       "recipe-dialog-shadow": "0 10px 32px rgba(14,11,8,0.40)",
       "recipe-sidebar-active-bg": "rgba(200,180,150,0.04)",
+      "recipe-sidebar-action-hover-bg": "rgba(200,180,150,0.04)",
       "recipe-settings-search-bg": "#1F1B16",
       "recipe-settings-nav-active-bg": "rgba(200,180,150,0.035)",
       "recipe-settings-nav-active-shadow": "inset 0 0 0 1px rgba(134,171,195,0.28)",
@@ -1274,6 +1300,7 @@ export const BUILT_IN_APP_SCHEMES: AppColorScheme[] = [
       // Surfaces — ancient forest-floor enclosure; bark-warm, dense, protective
       "surface-grid": "#090705",
       "surface-sidebar": "#110B08",
+      "surface-toolbar": "#130D09",
       "surface-canvas": "#16110D",
       "surface-panel": "#1E1612",
       "surface-panel-elevated": "#2A1E18",
@@ -1352,6 +1379,7 @@ export const BUILT_IN_APP_SCHEMES: AppColorScheme[] = [
       // Sidebar active — accent-green selection (deep forest canopy glow)
       "recipe-sidebar-active-bg": "rgba(78,154,83,0.14)",
       "recipe-sidebar-hover-bg": "rgba(180,140,120,0.02)",
+      "recipe-sidebar-action-hover-bg": "rgba(78,154,83,0.08)",
       "recipe-sidebar-active-shadow": "inset 0 1px 0 0 rgba(220,190,170,0.06)",
       "recipe-dialog-shadow": "0 20px 56px rgba(6,3,2,0.50)",
       "recipe-settings-search-bg": "#0E0A08",
@@ -1377,6 +1405,7 @@ export const BUILT_IN_APP_SCHEMES: AppColorScheme[] = [
       // Surfaces — warm-neutral mineral ladder; bleached stone from grid to elevated
       "surface-grid": "#D1CDC4",
       "surface-sidebar": "#D8D4CC",
+      "surface-toolbar": "#E1DCD3",
       "surface-canvas": "#E8E4DD",
       "surface-panel": "#F2F0EB",
       "surface-panel-elevated": "#F9F7F4",
@@ -1441,6 +1470,7 @@ export const BUILT_IN_APP_SCHEMES: AppColorScheme[] = [
       "recipe-dialog-shadow":
         "inset 0 1px 0 rgba(255,252,248,0.25), 0 6px 16px rgba(51,43,35,0.14)",
       "recipe-sidebar-hover-bg": "rgba(51,43,35,0.03)",
+      "recipe-sidebar-action-hover-bg": "rgba(51,43,35,0.03)",
       "recipe-settings-card-bg": "#F2F0EB",
       "recipe-settings-list-item-bg": "#F2F0EB",
       "recipe-settings-nav-active-bg": "rgba(17,123,138,0.06)",
@@ -1510,6 +1540,7 @@ export const BUILT_IN_APP_SCHEMES: AppColorScheme[] = [
       // Surfaces — green-tinted paras stone ladder; tropical and dappled
       "surface-grid": "#CCD6BF",
       "surface-sidebar": "#DBE5CF",
+      "surface-toolbar": "#E3EBD9",
       "surface-canvas": "#E8EFE0",
       "surface-panel": "#F2F7E9",
       "surface-panel-elevated": "#FAFCF5",
@@ -1581,6 +1612,7 @@ export const BUILT_IN_APP_SCHEMES: AppColorScheme[] = [
       "recipe-sidebar-active-shadow":
         "0 20px 44px rgba(20,40,25,0.06), 0 8px 18px rgba(20,40,25,0.10)",
       "recipe-sidebar-hover-bg": "rgba(20,40,25,0.035)",
+      "recipe-sidebar-action-hover-bg": "rgba(20,40,25,0.035)",
       "recipe-settings-search-bg": "#F0F6E8",
       "recipe-settings-card-bg": "#F2F7E9",
       "recipe-settings-list-item-bg": "#F2F7E9",
@@ -1654,6 +1686,7 @@ export const BUILT_IN_APP_SCHEMES: AppColorScheme[] = [
       // Surfaces — frosted lavender snow ladder; no pure white anywhere
       "surface-grid": "#D9DEEE",
       "surface-sidebar": "#E7ECF7",
+      "surface-toolbar": "#EEF2F9",
       "surface-canvas": "#F2F1FA",
       "surface-panel": "#FBFAFE",
       "surface-panel-elevated": "#FDFCFF",
@@ -1756,6 +1789,7 @@ export const BUILT_IN_APP_SCHEMES: AppColorScheme[] = [
       "recipe-sidebar-active-shadow":
         "inset 0 1px 0 rgba(255,255,255,0.45), 0 8px 24px rgba(86,81,118,0.06)",
       "recipe-sidebar-hover-bg": "rgba(82,88,118,0.03)",
+      "recipe-sidebar-action-hover-bg": "rgba(82,88,118,0.03)",
       "recipe-settings-search-bg": "#FAF8FD",
       "recipe-settings-card-bg": "#FBFAFE",
       "recipe-settings-list-item-bg": "#FBFAFE",
@@ -1800,6 +1834,7 @@ export const BUILT_IN_APP_SCHEMES: AppColorScheme[] = [
       // Surfaces — warm parchment; drygrass grid, acacia sidebar, horizon-light elevated
       "surface-canvas": "#FDF5E2",
       "surface-sidebar": "#EADCB8",
+      "surface-toolbar": "#F6ECD5",
       "surface-panel": "#FEFAF0",
       "surface-panel-elevated": "#FFFCF5",
       "surface-grid": "#E2D1A9",
@@ -1902,6 +1937,7 @@ export const BUILT_IN_APP_SCHEMES: AppColorScheme[] = [
       "recipe-surface-elevated-inset-shadow": "inset 0 1px 0 rgba(255,252,240,0.75)",
       "recipe-dialog-shadow": "0 8px 24px rgba(44,33,15,0.11)",
       "recipe-sidebar-hover-bg": "rgba(162,130,36,0.06)",
+      "recipe-sidebar-action-hover-bg": "rgba(162,130,36,0.06)",
       "recipe-settings-search-bg": "#F2E4C9",
       "recipe-settings-card-bg": "#FEFAF0",
       "recipe-settings-list-item-bg": "#FEFAF0",
@@ -1939,6 +1975,7 @@ export const BUILT_IN_APP_SCHEMES: AppColorScheme[] = [
       // Surfaces — cool blue-gray paper under diffused Arctic cloud light
       "surface-grid": "#C4D0D9",
       "surface-sidebar": "#D1DBE4",
+      "surface-toolbar": "#DBE4EB",
       "surface-canvas": "#E5EBF0",
       "surface-panel": "#F0F4F7",
       "surface-panel-elevated": "#FBFCFD",
@@ -2037,6 +2074,7 @@ export const BUILT_IN_APP_SCHEMES: AppColorScheme[] = [
       "recipe-shadow-floating": "0 18px 44px rgba(20,35,50,0.05)",
       "recipe-dialog-shadow": "0 24px 56px rgba(20,35,50,0.08)",
       "recipe-sidebar-hover-bg": "rgba(20,35,50,0.025)",
+      "recipe-sidebar-action-hover-bg": "rgba(20,35,50,0.025)",
       "recipe-sidebar-active-shadow": "0 18px 44px rgba(20,35,50,0.05)",
       "recipe-settings-card-bg": "#FBFCFD",
       "recipe-settings-list-item-bg": "#FBFCFD",

@@ -2,6 +2,7 @@ export const APP_THEME_TOKEN_KEYS = [
   // Surface hierarchy
   "surface-canvas",
   "surface-sidebar",
+  "surface-toolbar",
   "surface-panel",
   "surface-panel-elevated",
   "surface-grid",
@@ -172,6 +173,7 @@ export const APP_THEME_TOKEN_KEYS = [
   "recipe-shadow-ambient",
   "recipe-shadow-floating",
   "recipe-dialog-shadow",
+  "recipe-toolbar-shadow",
 
   // Focus ring offset in px (default 2px; some themes prefer 3px for breathing room)
   "recipe-focus-ring-offset",
@@ -182,6 +184,7 @@ export const APP_THEME_TOKEN_KEYS = [
   "recipe-sidebar-active-bg",
   "recipe-sidebar-active-shadow",
   "recipe-sidebar-hover-bg",
+  "recipe-sidebar-action-hover-bg",
 
   // Settings shell — sidebar wash, content header wash, selected nav chrome, subtab fills,
   // and shortcut key badges vary per theme while keeping the structure consistent.
