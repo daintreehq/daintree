@@ -102,9 +102,8 @@ export const theme: BuiltInThemeSource = {
     "toolbar-agent-hover-bg": "rgba(255,255,255,0.06)",
     "toolbar-control-hover-bg": "rgba(255,255,255,0.10)",
     "toolbar-divider": "rgba(40,40,40,0.5)",
-    "toolbar-project-bg":
-      "linear-gradient(180deg, rgba(255,255,255,0.03), rgba(255,255,255,0.05)), linear-gradient(135deg, #1a3a2a, #0a2a1a)",
-    "toolbar-project-border": "rgba(40,40,40,0.6)",
+    "toolbar-project-bg": "rgba(255,255,255,0.05)",
+    "toolbar-project-border": "rgba(40,40,40,0.5)",
     "toolbar-project-chip-bg": "rgba(255,255,255,0.05)",
     "toolbar-project-chip-border": "rgba(40,40,40,0.6)",
     "toolbar-project-meta-fg": "#a1a1aa",
