@@ -151,8 +151,8 @@ export const theme: BuiltInThemeSource = {
     "settings-search-bg": "#FAF8FD",
     "settings-sidebar-bg": "rgba(231,236,247,0.75)",
     "sidebar-action-hover-bg": "rgba(82,88,118,0.03)",
-    "sidebar-active-shadow":
-      "inset 0 1px 0 rgba(255,255,255,0.45), 0 8px 24px rgba(86,81,118,0.06)",
+    "sidebar-active-bg": "#FDFCFF",
+    "sidebar-active-shadow": "0 1px 3px rgba(86,81,118,0.06)",
     "sidebar-hover-bg": "rgba(82,88,118,0.03)",
     "toolbar-agent-hover-bg": "rgba(82,88,118,0.03)",
     "toolbar-control-hover-bg": "rgba(82,88,118,0.03)",

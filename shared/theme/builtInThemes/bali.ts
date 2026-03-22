@@ -148,8 +148,7 @@ export const theme: BuiltInThemeSource = {
     "settings-nav-hover-bg": "rgba(20,40,25,0.035)",
     "settings-search-bg": "#F0F6E8",
     "sidebar-action-hover-bg": "rgba(20,40,25,0.035)",
-    "sidebar-active-bg":
-      "linear-gradient(180deg, rgba(34,130,67,0.05), rgba(34,130,67,0.02)), #FAFCF5",
+    "sidebar-active-bg": "#FBFCF7",
     "sidebar-active-shadow": "0 20px 44px rgba(20,40,25,0.06), 0 8px 18px rgba(20,40,25,0.10)",
     "sidebar-hover-bg": "rgba(20,40,25,0.035)",
     "toolbar-agent-hover-bg": "rgba(20,40,25,0.035)",
