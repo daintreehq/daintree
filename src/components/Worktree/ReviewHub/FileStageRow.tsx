@@ -94,7 +94,7 @@ export function FileStageRow({ file, isStaged, onToggle, onFileClick }: FileStag
       role="button"
       tabIndex={0}
       className={cn(
-        "group flex items-center text-xs rounded px-1.5 py-1.5 cursor-pointer transition-colors",
+        "group/stagerow flex items-center text-xs rounded px-1.5 py-1.5 cursor-pointer transition-colors",
         "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-canopy-accent",
         isStaged ? "bg-status-success/[0.06] hover:bg-status-success/[0.10]" : "hover:bg-tint/5"
       )}
@@ -137,11 +137,11 @@ export function FileStageRow({ file, isStaged, onToggle, onFileClick }: FileStag
 
       <div className="flex-1 min-w-0 flex items-baseline">
         {dir && (
-          <span className="shrink truncate text-canopy-text/50 group-hover:text-canopy-text/70 font-mono text-[11px] transition-colors">
+          <span className="shrink truncate text-canopy-text/50 group-hover/stagerow:text-canopy-text/70 font-mono text-[11px] transition-colors">
             {dir}/
           </span>
         )}
-        <span className="shrink truncate text-canopy-text group-hover:text-text-inverse font-medium font-mono text-[11px] transition-colors">
+        <span className="shrink truncate text-canopy-text group-hover/stagerow:text-text-inverse font-medium font-mono text-[11px] transition-colors">
           {base}
         </span>
       </div>

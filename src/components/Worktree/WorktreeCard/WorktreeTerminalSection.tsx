@@ -149,7 +149,7 @@ export function WorktreeTerminalSection({
                   sourceIndex={index}
                 >
                   {({ listeners }) => (
-                    <div className="worktree-section-button group flex items-center justify-between gap-2.5 px-3 py-2 transition-colors">
+                    <div className="worktree-section-button group/termrow flex items-center justify-between gap-2.5 px-3 py-2 transition-colors">
                       <button
                         type="button"
                         onClick={(e) => {
@@ -158,7 +158,7 @@ export function WorktreeTerminalSection({
                         }}
                         className="flex items-center gap-2 min-w-0 flex-1 text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-[-2px] rounded"
                       >
-                        <div className="shrink-0 opacity-60 group-hover:opacity-100 transition-opacity">
+                        <div className="shrink-0 opacity-60 group-hover/termrow:opacity-100 transition-opacity">
                           <TerminalIcon
                             type={term.type}
                             kind={term.kind}
@@ -168,7 +168,7 @@ export function WorktreeTerminalSection({
                           />
                         </div>
                         <div className="flex flex-col min-w-0">
-                          <span className="truncate text-xs font-medium text-text-secondary transition-colors group-hover:text-canopy-text">
+                          <span className="truncate text-xs font-medium text-text-secondary transition-colors group-hover/termrow:text-canopy-text">
                             {term.title}
                           </span>
                           {term.type === "terminal" &&
@@ -206,7 +206,7 @@ export function WorktreeTerminalSection({
 
                         <Tooltip>
                           <TooltipTrigger asChild>
-                            <div className="text-text-muted transition-colors group-hover:text-text-secondary">
+                            <div className="text-text-muted transition-colors group-hover/termrow:text-text-secondary">
                               {term.location === "dock" ? (
                                 <PanelBottom className="w-3 h-3" />
                               ) : (

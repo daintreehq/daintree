@@ -405,7 +405,7 @@ export function WorktreeHeader({
               ? "opacity-100"
               : isActive
                 ? "opacity-100"
-                : "opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto"
+                : "opacity-0 pointer-events-none group-hover/card:opacity-100 group-hover/card:pointer-events-auto group-focus-within/card:opacity-100 group-focus-within/card:pointer-events-auto"
           )}
         >
           {canCollapse && (

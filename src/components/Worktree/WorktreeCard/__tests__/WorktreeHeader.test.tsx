@@ -93,10 +93,10 @@ describe("WorktreeHeader menu button", () => {
     const wrapper = getWrapper();
     expect(wrapper.className).toContain("pointer-events-none");
     expect(wrapper.className).toContain("opacity-0");
-    expect(wrapper.className).toContain("group-hover:pointer-events-auto");
-    expect(wrapper.className).toContain("group-hover:opacity-100");
-    expect(wrapper.className).toContain("group-focus-within:pointer-events-auto");
-    expect(wrapper.className).toContain("group-focus-within:opacity-100");
+    expect(wrapper.className).toContain("group-hover/card:pointer-events-auto");
+    expect(wrapper.className).toContain("group-hover/card:opacity-100");
+    expect(wrapper.className).toContain("group-focus-within/card:pointer-events-auto");
+    expect(wrapper.className).toContain("group-focus-within/card:opacity-100");
   });
 
   it("does not have pointer-events-none when active", () => {

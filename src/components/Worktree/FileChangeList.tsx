@@ -186,18 +186,18 @@ export function FileChangeList({
         <Tooltip>
           <TooltipTrigger asChild>
             <div
-              className="group flex items-center text-xs font-mono hover:bg-tint/5 rounded px-1.5 py-0.5 -mx-1.5 cursor-pointer transition-colors"
+              className="group/filerow flex items-center text-xs font-mono hover:bg-tint/5 rounded px-1.5 py-0.5 -mx-1.5 cursor-pointer transition-colors"
               onClick={() => handleFileClick(change)}
             >
               <span className={cn("w-4 font-bold shrink-0", config.color)}>{config.label}</span>
 
               <div className="flex-1 min-w-0 flex items-center mr-2">
                 {showDir && displayDir && (
-                  <span className="truncate min-w-0 text-canopy-text/60 opacity-60 group-hover:opacity-80">
+                  <span className="truncate min-w-0 text-canopy-text/60 opacity-60 group-hover/filerow:opacity-80">
                     {displayDir}/
                   </span>
                 )}
-                <span className="text-canopy-text group-hover:text-text-inverse font-medium truncate min-w-0">
+                <span className="text-canopy-text group-hover/filerow:text-text-inverse font-medium truncate min-w-0">
                   {base}
                 </span>
               </div>
