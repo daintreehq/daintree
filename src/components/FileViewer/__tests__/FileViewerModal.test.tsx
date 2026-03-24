@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { forwardRef, type ReactNode } from "react";
 import { FileViewerModal } from "../FileViewerModal";
@@ -242,5 +242,55 @@ describe("FileViewerModal", () => {
 
     expect(screen.queryByText(/lines/)).toBeNull();
     expect(screen.queryByText(/UTF-8/)).toBeNull();
+  });
+
+  it("allows toggling from diff to view mode without snapping back", async () => {
+    render(
+      <FileViewerModal
+        {...defaultProps}
+        diff={"diff --git a/file b/file\n--- a/file\n+++ b/file\n@@ -1 +1 @@\n-old\n+new"}
+        defaultMode="diff"
+      />
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId("diff-viewer")).toBeTruthy();
+    });
+
+    // Wait for file content to load so the View button is enabled
+    await waitFor(() => {
+      const viewBtn = screen.getByRole("button", { name: "View" });
+      expect(viewBtn.hasAttribute("disabled")).toBe(false);
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "View" }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("code-viewer")).toBeTruthy();
+    });
+    expect(screen.queryByTestId("diff-viewer")).toBeNull();
+  });
+
+  it("auto-switches to diff mode when diff arrives asynchronously", async () => {
+    const { rerender } = render(
+      <FileViewerModal {...defaultProps} diff={undefined} defaultMode="diff" />
+    );
+
+    // Initially shows loading diff spinner (mode is "diff" but no diff content yet)
+    await waitFor(() => {
+      expect(screen.getByText("Loading diff...")).toBeTruthy();
+    });
+
+    rerender(
+      <FileViewerModal
+        {...defaultProps}
+        diff={"diff --git a/file b/file\n--- a/file\n+++ b/file\n@@ -1 +1 @@\n-old\n+new"}
+        defaultMode="diff"
+      />
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId("diff-viewer")).toBeTruthy();
+    });
   });
 });
