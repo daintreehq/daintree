@@ -203,9 +203,14 @@ export class AgentStateService {
     // Emit terminal activity event for UI headline updates
     this.emitTerminalActivity(terminal);
 
-    // Emit specific failure event
-    if (newState === "failed" && event.type === "error") {
-      this.emitAgentFailed(terminal, event.error);
+    // Emit specific failure event for any transition to "failed"
+    // (crash-signal exits are now the only path to "failed")
+    if (newState === "failed") {
+      const errorMessage =
+        event.type === "exit"
+          ? `Process crashed (exit code ${event.code}${event.signal ? `, signal ${event.signal}` : ""})`
+          : "Agent entered failed state";
+      this.emitAgentFailed(terminal, errorMessage);
     }
 
     return true;

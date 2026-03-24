@@ -476,7 +476,10 @@ describe.skipIf(shouldSkip)("Agent State Detection Integration", () => {
       manager.onProjectSwitch(projectId);
       await sleep(100);
 
-      manager.transitionState(id, { type: "error", error: "test error" }, "activity", 1.0);
+      // First transition to working, then trigger a crash-signal exit (SIGSEGV = 139)
+      manager.transitionState(id, { type: "busy" }, "activity", 1.0);
+      await sleep(100);
+      manager.transitionState(id, { type: "exit", code: 139 }, "exit", 1.0);
       await sleep(200);
 
       const terminal = manager.getTerminal(id);

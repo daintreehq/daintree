@@ -13,8 +13,8 @@ describe("AgentStateMachine", () => {
       expect(isValidTransition("idle", "working")).toBe(true);
     });
 
-    it("should allow idle → failed", () => {
-      expect(isValidTransition("idle", "failed")).toBe(true);
+    it("should not allow idle → failed", () => {
+      expect(isValidTransition("idle", "failed")).toBe(false);
     });
 
     it("should allow working → waiting", () => {
@@ -238,6 +238,10 @@ describe("AgentStateMachine", () => {
         expect(nextAgentState("waiting", { type: "exit", code: 143 })).toBe("completed");
       });
 
+      it("should transition waiting → failed on crash signal exit (SIGSEGV)", () => {
+        expect(nextAgentState("waiting", { type: "exit", code: 139 })).toBe("failed");
+      });
+
       it("should stay completed on non-crash exit from completed", () => {
         const event: AgentEvent = { type: "exit", code: 1 };
         expect(nextAgentState("completed", event)).toBe("completed");
@@ -245,6 +249,10 @@ describe("AgentStateMachine", () => {
 
       it("should transition working → failed on crash signal exit (SIGABRT)", () => {
         expect(nextAgentState("working", { type: "exit", code: 134 })).toBe("failed");
+      });
+
+      it("should transition completed → failed on crash signal exit (SIGABRT)", () => {
+        expect(nextAgentState("completed", { type: "exit", code: 134 })).toBe("failed");
       });
 
       it("should stay completed on zero exit from completed", () => {
@@ -270,13 +278,13 @@ describe("AgentStateMachine", () => {
       });
     });
 
-    describe("error event", () => {
-      it("should transition to failed from any state", () => {
+    describe("error event (no-op)", () => {
+      it("should not change state on error event", () => {
         const event: AgentEvent = { type: "error", error: "Something went wrong" };
         const states: AgentState[] = ["idle", "working", "waiting", "completed", "failed"];
 
         for (const state of states) {
-          expect(nextAgentState(state, event)).toBe("failed");
+          expect(nextAgentState(state, event)).toBe(state);
         }
       });
     });

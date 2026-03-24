@@ -135,6 +135,59 @@ describe("AgentStateService", () => {
     expect(stateChanges).toHaveLength(0);
   });
 
+  it("emits agent:failed when crash-signal exit causes failed state", () => {
+    const service = new AgentStateService();
+    const terminal = createTerminal({ agentState: "working" });
+    const failedPayloads: Array<{ error: string; agentId: string }> = [];
+
+    events.on("agent:failed", (payload) => {
+      failedPayloads.push({ error: payload.error, agentId: payload.agentId });
+    });
+
+    // SIGSEGV: exit code 139 = 128 + 11
+    const changed = service.updateAgentState(terminal, { type: "exit", code: 139 });
+
+    expect(changed).toBe(true);
+    expect(terminal.agentState).toBe("failed");
+    expect(failedPayloads).toHaveLength(1);
+    expect(failedPayloads[0]?.error).toContain("Process crashed");
+    expect(failedPayloads[0]?.error).toContain("139");
+    expect(failedPayloads[0]?.agentId).toBe("claude");
+  });
+
+  it("does not emit agent:failed for routine exit (completed state)", () => {
+    const service = new AgentStateService();
+    const terminal = createTerminal({ agentState: "working" });
+    const failedPayloads: unknown[] = [];
+
+    events.on("agent:failed", (payload) => {
+      failedPayloads.push(payload);
+    });
+
+    const changed = service.updateAgentState(terminal, { type: "exit", code: 0 });
+
+    expect(changed).toBe(true);
+    expect(terminal.agentState).toBe("completed");
+    expect(failedPayloads).toHaveLength(0);
+  });
+
+  it("error event does not transition to failed or emit agent:failed", () => {
+    const service = new AgentStateService();
+    const terminal = createTerminal({ agentState: "working" });
+    const failedPayloads: unknown[] = [];
+
+    events.on("agent:failed", (payload) => {
+      failedPayloads.push(payload);
+    });
+
+    const changed = service.updateAgentState(terminal, { type: "error", error: "transient error" });
+
+    expect(changed).toBe(false);
+    expect(terminal.agentState).toBe("working");
+    expect(terminal.error).toBe("transient error");
+    expect(failedPayloads).toHaveLength(0);
+  });
+
   it("handleActivityState with trigger input recovers from failed with input trigger", () => {
     const service = new AgentStateService();
     const terminal = createTerminal({ agentState: "failed", error: "some error" });
