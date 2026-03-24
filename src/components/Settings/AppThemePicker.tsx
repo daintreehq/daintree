@@ -99,7 +99,7 @@ function ThemeOption({
         !highlighted && !selected && "hover:bg-surface-hover"
       )}
     >
-      <HeroImage scheme={scheme} size={40} />
+      <HeroImage scheme={scheme} size={60} />
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-1.5">
           <span className="text-xs font-medium text-canopy-text truncate">{scheme.name}</span>
@@ -352,7 +352,7 @@ export function AppThemePicker() {
           )}
         >
           <div className="relative shrink-0">
-            <HeroImage scheme={selectedScheme} size={64} />
+            <HeroImage scheme={selectedScheme} size={96} />
             {selectedScheme.heroVideo && (
               <video
                 ref={videoRef}
