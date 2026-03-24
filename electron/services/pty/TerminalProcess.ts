@@ -1248,6 +1248,9 @@ export class TerminalProcess {
       }
       this.inputWriteQueue = [];
 
+      this.clearSessionPersistTimer();
+      this.sessionPersistDirty = false;
+
       if (this.killTreeTimer) {
         clearTimeout(this.killTreeTimer);
         this.killTreeTimer = null;
