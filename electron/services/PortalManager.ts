@@ -286,7 +286,9 @@ export class PortalManager {
       if (!["http:", "https:"].includes(parsedUrl.protocol)) {
         throw new Error(`Invalid URL protocol: ${parsedUrl.protocol}`);
       }
-      view.webContents.loadURL(url);
+      view.webContents.loadURL(url).catch((err) => {
+        console.error(`[PortalManager] Failed to navigate tab ${tabId} to ${url}:`, err);
+      });
     } catch (error) {
       console.error(`[PortalManager] Invalid navigation URL for tab ${tabId}:`, error);
     }
