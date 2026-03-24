@@ -10,13 +10,14 @@ import { CommitListSkeleton } from "./GitHubDropdownSkeletons";
 
 interface CommitListProps {
   projectPath: string;
+  branch?: string;
   onClose?: () => void;
   initialCount?: number;
 }
 
 const PAGE_SIZE = 30;
 
-export function CommitList({ projectPath, onClose, initialCount }: CommitListProps) {
+export function CommitList({ projectPath, branch, onClose, initialCount }: CommitListProps) {
   const [searchQuery, setSearchQuery] = useState("");
   const [data, setData] = useState<GitCommit[]>([]);
   const [skip, setSkip] = useState(0);
@@ -70,6 +71,7 @@ export function CommitList({ projectPath, onClose, initialCount }: CommitListPro
           "git.listCommits",
           {
             cwd: projectPath,
+            branch,
             search: debouncedSearch || undefined,
             skip: currentSkip,
             limit: PAGE_SIZE,
@@ -105,7 +107,7 @@ export function CommitList({ projectPath, onClose, initialCount }: CommitListPro
         }
       }
     },
-    [projectPath, debouncedSearch]
+    [projectPath, branch, debouncedSearch]
   );
 
   useEffect(() => {
@@ -130,7 +132,7 @@ export function CommitList({ projectPath, onClose, initialCount }: CommitListPro
   };
 
   const handleViewOnGitHub = () => {
-    actionService.dispatch("github.openCommits", { projectPath }, { source: "user" });
+    actionService.dispatch("github.openCommits", { projectPath, branch }, { source: "user" });
     onClose?.();
   };
 

@@ -228,7 +228,11 @@ export function registerGithubHandlers(_deps: HandlerDependencies): () => void {
   ipcMain.handle(CHANNELS.GITHUB_OPEN_PRS, handleGitHubOpenPRs);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.GITHUB_OPEN_PRS));
 
-  const handleGitHubOpenCommits = async (_event: Electron.IpcMainInvokeEvent, cwd: string) => {
+  const handleGitHubOpenCommits = async (
+    _event: Electron.IpcMainInvokeEvent,
+    cwd: string,
+    branch?: string
+  ) => {
     if (typeof cwd !== "string" || !cwd) {
       throw new Error("Invalid working directory");
     }
@@ -240,7 +244,8 @@ export function registerGithubHandlers(_deps: HandlerDependencies): () => void {
     if (!repoUrl) {
       throw new Error("Not a GitHub repository");
     }
-    await shell.openExternal(`${repoUrl}/commits`);
+    const url = branch ? `${repoUrl}/commits/${branch}` : `${repoUrl}/commits`;
+    await shell.openExternal(url);
   };
   ipcMain.handle(CHANNELS.GITHUB_OPEN_COMMITS, handleGitHubOpenCommits);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.GITHUB_OPEN_COMMITS));
