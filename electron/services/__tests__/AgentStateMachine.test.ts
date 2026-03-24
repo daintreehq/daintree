@@ -13,8 +13,8 @@ describe("AgentStateMachine", () => {
       expect(isValidTransition("idle", "working")).toBe(true);
     });
 
-    it("should allow idle → failed", () => {
-      expect(isValidTransition("idle", "failed")).toBe(true);
+    it("should not allow idle → failed", () => {
+      expect(isValidTransition("idle", "failed")).toBe(false);
     });
 
     it("should allow working → waiting", () => {
@@ -270,13 +270,13 @@ describe("AgentStateMachine", () => {
       });
     });
 
-    describe("error event", () => {
-      it("should transition to failed from any state", () => {
+    describe("error event (no-op)", () => {
+      it("should not change state on error event", () => {
         const event: AgentEvent = { type: "error", error: "Something went wrong" };
         const states: AgentState[] = ["idle", "working", "waiting", "completed", "failed"];
 
         for (const state of states) {
-          expect(nextAgentState(state, event)).toBe("failed");
+          expect(nextAgentState(state, event)).toBe(state);
         }
       });
     });
