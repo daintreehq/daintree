@@ -135,7 +135,7 @@ export function FileStageRow({ file, isStaged, onToggle, onFileClick }: FileStag
         {config.label}
       </span>
 
-      <div className="flex-1 min-w-0 flex items-baseline">
+      <div className="flex-1 min-w-0 flex items-baseline" title={file.path}>
         {dir && (
           <span className="shrink truncate text-canopy-text/50 group-hover/stagerow:text-canopy-text/70 font-mono text-[11px] transition-colors">
             {dir}/
