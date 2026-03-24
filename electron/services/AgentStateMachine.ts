@@ -13,7 +13,7 @@ export type AgentEvent =
   | { type: "kill" }; // Intentional kill by user
 
 const VALID_TRANSITIONS: Record<AgentState, AgentState[]> = {
-  idle: ["working", "running", "failed"],
+  idle: ["working", "running"],
   working: ["waiting", "completed", "failed"],
   running: ["idle"], // Shell process state - managed by TerminalProcess, not this state machine
   waiting: ["working", "failed"],
@@ -27,8 +27,10 @@ export function isValidTransition(from: AgentState, to: AgentState): boolean {
 }
 
 export function nextAgentState(current: AgentState, event: AgentEvent): AgentState {
+  // Error events are no-ops — the only reliable path to "failed" is via
+  // crash-signal exit events (SIGSEGV, SIGABRT, etc.) handled below.
   if (event.type === "error") {
-    return "failed";
+    return current;
   }
 
   if (event.type === "kill") {
