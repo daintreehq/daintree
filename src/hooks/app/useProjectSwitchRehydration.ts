@@ -155,6 +155,5 @@ export function useProjectSwitchRehydration() {
       window.removeEventListener("project-switched", handleProjectSwitch);
       cleanup();
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 }
