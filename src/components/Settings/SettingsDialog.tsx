@@ -348,6 +348,7 @@ export function SettingsDialog({
       const el = document.getElementById(scrollToSection);
       if (el) {
         el.scrollIntoView({ behavior: "smooth", block: "start" });
+        el.querySelector<HTMLInputElement>("input")?.focus({ preventScroll: true });
         el.classList.add("settings-highlight");
         highlightTimer = setTimeout(() => el.classList.remove("settings-highlight"), 1500);
         return;
