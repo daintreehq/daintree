@@ -4,6 +4,8 @@ import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { BulkCommandPalette, openBulkCommandPalette } from "../BulkCommandPalette";
 import { usePaletteStore } from "@/store/paletteStore";
 
+vi.mock("zustand/react/shallow", () => ({ useShallow: (fn: unknown) => fn }));
+
 vi.mock("@/lib/utils", () => ({
   cn: (...args: unknown[]) => args.filter(Boolean).join(" "),
 }));
