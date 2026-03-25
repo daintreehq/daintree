@@ -69,18 +69,18 @@ export const usePanelLimitStore = create<PanelLimitState>()(
       pendingConfirm: null,
 
       setSoftWarningLimit: (limit: number) => {
-        const clamped = Math.max(4, Math.min(100, limit));
-        set({ softWarningLimit: clamped });
+        if (!Number.isFinite(limit)) return;
+        set({ softWarningLimit: Math.max(4, Math.min(100, limit)) });
       },
 
       setConfirmationLimit: (limit: number) => {
-        const clamped = Math.max(4, Math.min(100, limit));
-        set({ confirmationLimit: clamped });
+        if (!Number.isFinite(limit)) return;
+        set({ confirmationLimit: Math.max(4, Math.min(100, limit)) });
       },
 
       setHardLimit: (limit: number) => {
-        const clamped = Math.max(4, Math.min(100, limit));
-        set({ hardLimit: clamped });
+        if (!Number.isFinite(limit)) return;
+        set({ hardLimit: Math.max(4, Math.min(100, limit)) });
       },
 
       requestConfirmation: (panelCount: number, memoryMB: number | null): Promise<boolean> => {

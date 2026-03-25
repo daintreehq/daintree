@@ -9,9 +9,8 @@ export function PanelLimitConfirmDialog() {
   // Resolve false on unmount to prevent leaked promises
   useEffect(() => {
     return () => {
-      const pending = usePanelLimitStore.getState().pendingConfirm;
-      if (pending) {
-        pending.resolve(false);
+      if (usePanelLimitStore.getState().pendingConfirm) {
+        usePanelLimitStore.getState().resolveConfirmation(false);
       }
     };
   }, []);
