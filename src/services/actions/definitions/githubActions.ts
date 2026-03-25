@@ -74,14 +74,17 @@ export function registerGithubActions(actions: ActionRegistry, _callbacks: Actio
     kind: "command",
     danger: "safe",
     scope: "renderer",
-    argsSchema: z.object({ projectPath: z.string().optional() }).optional(),
+    argsSchema: z
+      .object({ projectPath: z.string().optional(), branch: z.string().optional() })
+      .optional(),
     run: async (args: unknown) => {
-      const { projectPath } = (args as { projectPath?: string } | undefined) ?? {};
+      const { projectPath, branch } =
+        (args as { projectPath?: string; branch?: string } | undefined) ?? {};
       const path = projectPath ?? useProjectStore.getState().currentProject?.path;
       if (!path) {
         throw new Error("No project path available to open commits");
       }
-      await githubClient.openCommits(path);
+      await githubClient.openCommits(path, branch);
     },
   }));
 

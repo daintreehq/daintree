@@ -862,7 +862,8 @@ export function Toolbar({
               >
                 <Suspense fallback={<CommitListSkeleton count={stats?.commitCount} immediate />}>
                   <LazyCommitList
-                    projectPath={currentProject.path}
+                    projectPath={activeWorktree?.path ?? currentProject.path}
+                    branch={activeWorktree?.branch ?? activeWorktree?.head}
                     onClose={() => {
                       setCommitsOpen(false);
                       commitsButtonRef.current?.focus();

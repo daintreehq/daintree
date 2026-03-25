@@ -228,19 +228,27 @@ export function registerGithubHandlers(_deps: HandlerDependencies): () => void {
   ipcMain.handle(CHANNELS.GITHUB_OPEN_PRS, handleGitHubOpenPRs);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.GITHUB_OPEN_PRS));
 
-  const handleGitHubOpenCommits = async (_event: Electron.IpcMainInvokeEvent, cwd: string) => {
+  const handleGitHubOpenCommits = async (
+    _event: Electron.IpcMainInvokeEvent,
+    cwd: string,
+    branch?: string
+  ) => {
     if (typeof cwd !== "string" || !cwd) {
       throw new Error("Invalid working directory");
     }
     if (!path.isAbsolute(cwd)) {
       throw new Error("Working directory must be an absolute path");
     }
+    if (branch !== undefined && (typeof branch !== "string" || !branch.trim())) {
+      throw new Error("Invalid branch name");
+    }
     const { getRepoUrl } = await import("../../services/GitHubService.js");
     const repoUrl = await getRepoUrl(cwd);
     if (!repoUrl) {
       throw new Error("Not a GitHub repository");
     }
-    await shell.openExternal(`${repoUrl}/commits`);
+    const url = branch ? `${repoUrl}/commits/${encodeURIComponent(branch)}` : `${repoUrl}/commits`;
+    await shell.openExternal(url);
   };
   ipcMain.handle(CHANNELS.GITHUB_OPEN_COMMITS, handleGitHubOpenCommits);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.GITHUB_OPEN_COMMITS));

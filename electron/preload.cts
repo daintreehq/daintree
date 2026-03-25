@@ -1276,7 +1276,8 @@ const api: ElectronAPI = {
     openPRs: (cwd: string, query?: string, state?: string) =>
       _unwrappingInvoke(CHANNELS.GITHUB_OPEN_PRS, cwd, query, state),
 
-    openCommits: (cwd: string) => _unwrappingInvoke(CHANNELS.GITHUB_OPEN_COMMITS, cwd),
+    openCommits: (cwd: string, branch?: string) =>
+      _unwrappingInvoke(CHANNELS.GITHUB_OPEN_COMMITS, cwd, branch),
 
     openIssue: (cwd: string, issueNumber: number) =>
       _unwrappingInvoke(CHANNELS.GITHUB_OPEN_ISSUE, { cwd, issueNumber }),
