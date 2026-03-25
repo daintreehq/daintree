@@ -12,7 +12,7 @@ interface TwoPaneSplitDividerProps {
   maxRatio?: number;
 }
 
-const DIVIDER_WIDTH_PX = 12;
+const DIVIDER_WIDTH_PX = 6;
 const KEYBOARD_STEP = 0.02;
 
 export function TwoPaneSplitDivider({
