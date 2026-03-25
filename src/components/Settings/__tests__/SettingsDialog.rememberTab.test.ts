@@ -36,11 +36,11 @@ describe("Settings remembered-tab fallback logic", () => {
     return defaultTab ?? rememberedTab;
   }
 
-  it('uses rememberedTab when defaultTab is undefined (untargeted open)', () => {
+  it("uses rememberedTab when defaultTab is undefined (untargeted open)", () => {
     expect(deriveActiveTab(undefined, "privacy")).toBe("privacy");
   });
 
-  it('uses defaultTab when explicitly provided (targeted open)', () => {
+  it("uses defaultTab when explicitly provided (targeted open)", () => {
     expect(deriveActiveTab("github", "privacy")).toBe("github");
   });
 
