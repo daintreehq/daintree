@@ -48,8 +48,15 @@ export async function launchApp(options: LaunchOptions = {}): Promise<AppContext
     const args = [`--user-data-dir=${userDataDir}`, ROOT];
 
     if (process.env.CI) {
-      // CI runners lack real GPUs — disable GPU to prevent hangs
-      args.unshift("--disable-gpu", "--disable-software-rasterizer", "--noerrdialogs");
+      // CI runners lack real GPUs — disable GPU to prevent hangs.
+      // Force scale factor 1 so the window uses full pixel resolution
+      // (prevents display scaling from shrinking effective toolbar width).
+      args.unshift(
+        "--disable-gpu",
+        "--disable-software-rasterizer",
+        "--noerrdialogs",
+        "--force-device-scale-factor=1"
+      );
 
       if (process.platform === "linux") {
         // Linux CI needs --no-sandbox and shared memory workaround
@@ -100,21 +107,27 @@ export async function launchApp(options: LaunchOptions = {}): Promise<AppContext
         if (msg.type() === "error") console.error("[e2e:console]", msg.text());
       });
 
-      // Resize to a large window so toolbar overflow doesn't hide buttons.
-      // Skip when reusing a userDataDir (restart tests) to preserve persisted window state.
+      // Maximize window so toolbar overflow doesn't hide buttons.
+      // Skip for restart tests to preserve persisted window state.
       if (!options.userDataDir) {
-        await app.evaluate(({ BrowserWindow }) => {
+        await app.evaluate(({ BrowserWindow, screen }) => {
           const win = BrowserWindow.getAllWindows()[0];
-          if (win) {
-            win.setSize(1920, 1080);
-            win.center();
-          }
+          if (!win) return;
+          // On CI with small virtual displays, maximize may still be too
+          // small. Use the primary display work area to set the largest
+          // possible size, then maximize for good measure.
+          const { width, height } = screen.getPrimaryDisplay().workAreaSize;
+          win.setSize(Math.max(width, 1920), Math.max(height, 1080));
+          win.center();
+          win.maximize();
         });
       }
 
       await window.waitForLoadState("domcontentloaded");
 
-      const readySelector = options.waitForSelector ?? '[aria-label="Open settings"]';
+      // Use sidebar toggle as ready indicator — it has priority 1 and is
+      // always visible regardless of toolbar overflow or window size.
+      const readySelector = options.waitForSelector ?? '[aria-label="Toggle Sidebar"]';
       await window.locator(readySelector).waitFor({ state: "visible", timeout: launchTimeout });
 
       return { app, window, userDataDir };

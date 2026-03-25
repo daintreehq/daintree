@@ -1,5 +1,18 @@
 import type { Locator, Page } from "@playwright/test";
+import { expect } from "@playwright/test";
 import { SEL } from "./selectors";
+
+const mod = process.platform === "darwin" ? "Meta" : "Control";
+
+/**
+ * Open settings via keyboard shortcut (Cmd/Ctrl+,).
+ * More reliable than clicking the toolbar button, which may be
+ * hidden in the overflow menu on small displays (e.g., Windows CI).
+ */
+export async function openSettings(page: Page, timeout = 5000): Promise<void> {
+  await page.keyboard.press(`${mod}+,`);
+  await expect(page.locator(SEL.settings.heading)).toBeVisible({ timeout });
+}
 
 export function getFirstGridPanel(page: Page): Locator {
   return page.locator(SEL.panel.gridPanel).first();

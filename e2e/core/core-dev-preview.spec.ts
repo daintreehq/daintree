@@ -194,7 +194,7 @@ server.listen(0, '127.0.0.1', () => {
       });
       // Reload to ensure the renderer picks up the new settings
       await window.reload({ waitUntil: "domcontentloaded" });
-      await window.locator(SEL.toolbar.openSettings).waitFor({
+      await window.locator(SEL.toolbar.toggleSidebar).waitFor({
         state: "visible",
         timeout: T_LONG,
       });

@@ -13,7 +13,9 @@ async function switchTheme(page: import("@playwright/test").Page, themeId: strin
     await window.electron.appTheme.setColorScheme(id);
   }, themeId);
   await page.reload({ waitUntil: "domcontentloaded" });
-  await page.locator('[aria-label="Open settings"]').waitFor({ state: "visible", timeout: 15_000 });
+  await page
+    .locator('[aria-label="Toggle Sidebar"]')
+    .waitFor({ state: "visible", timeout: 15_000 });
   await page.waitForFunction(
     (id) => document.documentElement.getAttribute("data-theme") === id,
     themeId,

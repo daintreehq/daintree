@@ -88,6 +88,14 @@ jobs:
           Stop-Service -Name "DiagTrack" -Force -ErrorAction SilentlyContinue
           Set-Service -Name "DiagTrack" -StartupType Disabled -ErrorAction SilentlyContinue
 
+          # Set display resolution to 1920x1080 so toolbar buttons don't overflow
+          $device = Get-CimInstance -ClassName Win32_VideoController | Select-Object -First 1
+          try {
+            Set-DisplayResolution -Width 1920 -Height 1080 -Force -ErrorAction SilentlyContinue
+          } catch {
+            Write-Host "Set-DisplayResolution not available, continuing with default resolution"
+          }
+
       - name: Check out repository
         uses: actions/checkout@v6
 

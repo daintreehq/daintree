@@ -15,7 +15,7 @@ export async function setAppTheme(page: Page, schemeId: string): Promise<void> {
   }, schemeId);
 
   await page.reload({ waitUntil: "domcontentloaded" });
-  await page.locator(SEL.toolbar.openSettings).waitFor({ state: "visible", timeout: 10_000 });
+  await page.locator(SEL.toolbar.toggleSidebar).waitFor({ state: "visible", timeout: 10_000 });
   await page
     .locator(SEL.toolbar.projectSwitcherTrigger)
     .waitFor({ state: "visible", timeout: 10_000 });
