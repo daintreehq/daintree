@@ -654,6 +654,100 @@ describe("DevPreviewSessionService", () => {
     warnSpy.mockRestore();
   });
 
+  it("detects URL via proactive startup replay on first spawn", async () => {
+    vi.useFakeTimers();
+
+    const started = await service.ensure(baseRequest);
+    expect(started.status).toBe("starting");
+    expect(started.terminalId).toBeTruthy();
+
+    ptyClient.replayHistoryAsync.mockImplementation(async (id: string) => {
+      ptyClient.emitData(id, "ready at http://localhost:4173\n");
+      return 1;
+    });
+
+    // Advance past the 100ms submit delay + 1500ms startup replay delay
+    await vi.advanceTimersByTimeAsync(1600);
+
+    expect(ptyClient.replayHistoryAsync).toHaveBeenCalledWith(started.terminalId, 300);
+
+    await vi.advanceTimersByTimeAsync(10);
+
+    const after = service.getState({
+      panelId: baseRequest.panelId,
+      projectId: baseRequest.projectId,
+    });
+    expect(after.status).toBe("running");
+    expect(after.url).toMatch(/^http:\/\/localhost:4173\/?$/);
+
+    // Only one spawn — no stale-start recovery needed
+    expect(ptyClient.spawn).toHaveBeenCalledTimes(1);
+  });
+
+  it("cancels startup replay timer on stop", async () => {
+    vi.useFakeTimers();
+
+    const started = await service.ensure(baseRequest);
+    expect(started.terminalId).toBeTruthy();
+
+    await service.stop({
+      panelId: baseRequest.panelId,
+      projectId: baseRequest.projectId,
+    });
+
+    ptyClient.replayHistoryAsync.mockClear();
+
+    await vi.advanceTimersByTimeAsync(2000);
+
+    expect(ptyClient.replayHistoryAsync).not.toHaveBeenCalled();
+  });
+
+  it("cancels startup replay timer on restart and schedules new one", async () => {
+    vi.useFakeTimers();
+
+    const started = await service.ensure(baseRequest);
+    expect(started.terminalId).toBeTruthy();
+
+    const restarted = await service.restart({
+      panelId: baseRequest.panelId,
+      projectId: baseRequest.projectId,
+    });
+    expect(restarted.terminalId).toBeTruthy();
+    expect(restarted.terminalId).not.toBe(started.terminalId);
+
+    ptyClient.replayHistoryAsync.mockImplementation(async (id: string) => {
+      ptyClient.emitData(id, "ready at http://localhost:5173\n");
+      return 1;
+    });
+
+    await vi.advanceTimersByTimeAsync(1600);
+
+    // Replay should be called only for the new terminal
+    const replayCalls = ptyClient.replayHistoryAsync.mock.calls;
+    const calledIds = replayCalls.map((c: unknown[]) => c[0]);
+    expect(calledIds).not.toContain(started.terminalId);
+    expect(calledIds).toContain(restarted.terminalId);
+  });
+
+  it("skips startup replay if URL already detected before timer fires", async () => {
+    vi.useFakeTimers();
+
+    const started = await service.ensure(baseRequest);
+    expect(started.terminalId).toBeTruthy();
+
+    // URL detected immediately via live data
+    ptyClient.emitData(started.terminalId!, "ready at http://localhost:4173\n");
+    await vi.advanceTimersByTimeAsync(10);
+
+    ptyClient.replayHistoryAsync.mockClear();
+
+    // Advance past startup replay delay
+    await vi.advanceTimersByTimeAsync(1600);
+
+    // Replay should not be called since URL was already detected
+    expect(ptyClient.replayHistoryAsync).not.toHaveBeenCalled();
+  });
+
   it("continues stop-by-panel cleanup when one session stop fails", async () => {
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
