@@ -383,9 +383,6 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
               isOpen &&
                 "bg-[var(--dock-item-bg-active)] text-canopy-text border-[var(--dock-item-border-active)] ring-1 ring-inset ring-canopy-accent/30",
               !isOpen &&
-                blockedState === "failed" &&
-                "bg-[var(--dock-item-bg-failed)] border-[var(--dock-item-border-failed)]",
-              !isOpen &&
                 showDockAgentHighlights &&
                 blockedState === "waiting" &&
                 "bg-[var(--dock-item-bg-waiting)] border-[var(--dock-item-border-waiting)]",

@@ -286,14 +286,6 @@ export const DEFAULT_KEYBINDINGS: KeybindingConfig[] = [
     category: "Agents",
   },
   {
-    actionId: "agent.focusNextFailed",
-    combo: "Cmd+Alt+Shift+/",
-    scope: "global",
-    priority: 0,
-    description: "Jump to next failed agent",
-    category: "Agents",
-  },
-  {
     actionId: "agent.focusNextWorking",
     combo: "Cmd+Alt+.",
     scope: "global",
@@ -322,7 +314,7 @@ export const DEFAULT_KEYBINDINGS: KeybindingConfig[] = [
     combo: "Cmd+Shift+/",
     scope: "global",
     priority: 0,
-    description: "Jump to next blocked dock agent (failed then waiting)",
+    description: "Jump to next waiting dock agent",
     category: "Agents",
   },
   {
@@ -887,14 +879,6 @@ export const DEFAULT_KEYBINDINGS: KeybindingConfig[] = [
     scope: "global",
     priority: 0,
     description: "Close completed sessions in active worktree",
-    category: "Worktree Sessions",
-  },
-  {
-    actionId: "worktree.sessions.closeFailed",
-    combo: "Cmd+K Cmd+F",
-    scope: "global",
-    priority: 0,
-    description: "Close failed sessions in active worktree",
     category: "Worktree Sessions",
   },
   {

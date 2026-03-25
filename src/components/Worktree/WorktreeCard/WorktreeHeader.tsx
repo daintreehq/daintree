@@ -230,7 +230,6 @@ export interface WorktreeHeaderProps {
       dock: number;
       active: number;
       completed: number;
-      failed: number;
       all: number;
     };
     onCopyContextFull: () => void;
@@ -252,7 +251,6 @@ export interface WorktreeHeaderProps {
     onRestartAll: () => void;
     onResetRenderers: () => void;
     onCloseCompleted: () => void;
-    onCloseFailed: () => void;
     onCloseAll: () => void;
     onEndAll: () => void;
     onAttachIssue?: () => void;
@@ -481,7 +479,6 @@ export function WorktreeHeader({
                 onRestartAll={menu.onRestartAll}
                 onResetRenderers={menu.onResetRenderers}
                 onCloseCompleted={menu.onCloseCompleted}
-                onCloseFailed={menu.onCloseFailed}
                 onCloseAll={menu.onCloseAll}
                 onEndAll={menu.onEndAll}
                 onDeleteWorktree={menu.onDeleteWorktree}

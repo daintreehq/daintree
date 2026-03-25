@@ -16,7 +16,6 @@ export function useDockRenderState(): DockRenderState & {
   dockedCount: number;
   hasStatus: boolean;
   waitingCount: number;
-  failedCount: number;
   trashedCount: number;
   shouldFadeForInput: boolean;
 } {
@@ -42,7 +41,7 @@ export function useDockRenderState(): DockRenderState & {
 
   const trashedCount = useTerminalStore(useShallow((state) => state.trashedTerminals.size));
 
-  const { waitingCount, failedCount } = useTerminalNotificationCounts();
+  const { waitingCount } = useTerminalNotificationCounts();
 
   const hybridInputEnabled = useTerminalInputStore((state) => state.hybridInputEnabled);
 
@@ -57,7 +56,7 @@ export function useDockRenderState(): DockRenderState & {
 
   const hasDocked = dockTerminals.length > 0;
   const dockedCount = dockTerminals.length;
-  const hasStatus = waitingCount > 0 || failedCount > 0 || trashedCount > 0;
+  const hasStatus = waitingCount > 0 || trashedCount > 0;
 
   // Dock is always visible now - no hidden mode
   const shouldShowInLayout = isHydrated;
@@ -72,7 +71,6 @@ export function useDockRenderState(): DockRenderState & {
     dockedCount,
     hasStatus,
     waitingCount,
-    failedCount,
     trashedCount,
     shouldFadeForInput,
   };

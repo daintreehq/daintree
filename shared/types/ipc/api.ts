@@ -159,7 +159,6 @@ import type { AppThemeConfig } from "../appTheme.js";
 export interface NotificationSettings {
   completedEnabled: boolean;
   waitingEnabled: boolean;
-  failedEnabled: boolean;
   soundEnabled: boolean;
   soundFile: string;
   waitingEscalationEnabled: boolean;
@@ -832,7 +831,7 @@ export interface ElectronAPI {
   };
   notification: {
     /** Update window title and dock badge based on terminal attention state */
-    updateBadge(state: { waitingCount: number; failedCount: number }): void;
+    updateBadge(state: { waitingCount: number }): void;
     /** Get notification settings */
     getSettings(): Promise<NotificationSettings>;
     /** Update notification settings (partial update) */

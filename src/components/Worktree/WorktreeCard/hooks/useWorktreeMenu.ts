@@ -31,7 +31,6 @@ export function useWorktreeMenu({
     dock: number;
     active: number;
     completed: number;
-    failed: number;
     all: number;
   };
   launchAgents: Array<{ id: string; label: string; isEnabled: boolean }>;
@@ -94,11 +93,6 @@ export function useWorktreeMenu({
         id: "sessions:close-completed",
         label: `Close Completed (${counts.completed})`,
         enabled: counts.completed > 0,
-      },
-      {
-        id: "sessions:close-failed",
-        label: `Close Failed (${counts.failed})`,
-        enabled: counts.failed > 0,
       },
       { type: "separator" },
       {
@@ -210,7 +204,6 @@ export function useWorktreeMenu({
     counts.all,
     counts.completed,
     counts.dock,
-    counts.failed,
     counts.grid,
     isMainWorktree,
     isRestartValidating,
@@ -288,13 +281,6 @@ export function useWorktreeMenu({
         case "sessions:close-completed":
           void actionService.dispatch(
             "worktree.sessions.closeCompleted",
-            { worktreeId: worktree.id },
-            { source: "context-menu" }
-          );
-          break;
-        case "sessions:close-failed":
-          void actionService.dispatch(
-            "worktree.sessions.closeFailed",
             { worktreeId: worktree.id },
             { source: "context-menu" }
           );

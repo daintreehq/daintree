@@ -102,7 +102,6 @@ export interface StoreSchema {
   notificationSettings: {
     completedEnabled: boolean;
     waitingEnabled: boolean;
-    failedEnabled: boolean;
     soundEnabled: boolean;
     soundFile: string;
     waitingEscalationEnabled: boolean;
@@ -205,7 +204,6 @@ const storeOptions = {
     notificationSettings: {
       completedEnabled: false,
       waitingEnabled: false,
-      failedEnabled: false,
       soundEnabled: false,
       soundFile: "chime.wav",
       waitingEscalationEnabled: true,

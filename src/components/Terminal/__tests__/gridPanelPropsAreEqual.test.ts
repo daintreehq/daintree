@@ -80,14 +80,6 @@ describe("gridPanelPropsAreEqual", () => {
     expect(gridPanelPropsAreEqual(prev, next)).toBe(false);
   });
 
-  it("returns false when terminal.error changes", () => {
-    const prev = baseProps({ terminal: { ...baseTerminal } as TerminalInstance });
-    const next = baseProps({
-      terminal: { ...baseTerminal, error: "Something failed" } as TerminalInstance,
-    });
-    expect(gridPanelPropsAreEqual(prev, next)).toBe(false);
-  });
-
   it("returns true when callback props change reference (skipped)", () => {
     const prev = baseProps({ onTabClick: () => {}, onAddTab: () => {} });
     const next = baseProps({ onTabClick: () => {}, onAddTab: () => {} });

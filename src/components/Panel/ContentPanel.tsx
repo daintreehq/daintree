@@ -261,11 +261,9 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
                 ? waitingReason === "approval"
                   ? "panel-state-approval"
                   : "panel-state-waiting"
-                : showGridAttention && blockedState === "failed"
-                  ? "panel-state-failed"
-                  : showGridAttention && showGridAgentHighlights && isWorkingState
-                    ? "panel-state-working"
-                    : "border-overlay hover:border-tint/[0.08]"),
+                : showGridAttention && showGridAgentHighlights && isWorkingState
+                  ? "panel-state-working"
+                  : "border-overlay hover:border-tint/[0.08]"),
           location === "grid" && isMaximized && "border-0 rounded-none z-[var(--z-maximized)]",
           isTrashing && "terminal-trashing",
           className

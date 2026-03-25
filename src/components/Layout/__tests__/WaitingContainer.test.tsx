@@ -2,7 +2,6 @@
 import { describe, it, expect, vi } from "vitest";
 import { render } from "@testing-library/react";
 import { WaitingContainer } from "../WaitingContainer";
-import { FailedContainer } from "../FailedContainer";
 import type { TerminalInstance } from "@/store/terminalStore";
 
 const mockWaiting: TerminalInstance[] = [
@@ -18,7 +17,6 @@ const mockWaiting: TerminalInstance[] = [
 
 vi.mock("@/hooks/useTerminalSelectors", () => ({
   useWaitingTerminals: () => mockWaiting,
-  useFailedTerminals: () => mockWaiting,
 }));
 
 vi.mock("@/store/terminalStore", async () => {
@@ -82,12 +80,5 @@ describe("WaitingContainer icon", () => {
       );
     });
     expect(hasHollowCircle).toBe(true);
-  });
-});
-
-describe("FailedContainer icon", () => {
-  it("renders without type errors after StatusContainerConfig type widening", () => {
-    const { container } = render(<FailedContainer />);
-    expect(container.innerHTML).not.toBe("");
   });
 });

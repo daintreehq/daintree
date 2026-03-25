@@ -29,7 +29,6 @@ describe("WorkerAgentStateService", () => {
         expect(calcState("working", { type: "start" })).toBe("working");
         expect(calcState("waiting", { type: "start" })).toBe("waiting");
         expect(calcState("completed", { type: "start" })).toBe("completed");
-        expect(calcState("failed", { type: "start" })).toBe("failed");
       });
     });
 
@@ -49,10 +48,6 @@ describe("WorkerAgentStateService", () => {
       it("should transition completed → working on busy (resuming work)", () => {
         expect(calcState("completed", { type: "busy" })).toBe("working");
       });
-
-      it("should not transition from failed state on busy", () => {
-        expect(calcState("failed", { type: "busy" })).toBe("failed");
-      });
     });
 
     describe("prompt event", () => {
@@ -67,7 +62,6 @@ describe("WorkerAgentStateService", () => {
       it("should not transition from other states on prompt", () => {
         expect(calcState("idle", { type: "prompt" })).toBe("idle");
         expect(calcState("waiting", { type: "prompt" })).toBe("waiting");
-        expect(calcState("failed", { type: "prompt" })).toBe("failed");
       });
     });
 
@@ -84,18 +78,8 @@ describe("WorkerAgentStateService", () => {
         expect(calcState("completed", { type: "input" })).toBe("working");
       });
 
-      it("should transition failed → working on input", () => {
-        expect(calcState("failed", { type: "input" })).toBe("working");
-      });
-
       it("should not transition from working on input", () => {
         expect(calcState("working", { type: "input" })).toBe("working");
-      });
-
-      it("should not allow heuristic events to escape failed state", () => {
-        expect(calcState("failed", { type: "busy" })).toBe("failed");
-        expect(calcState("failed", { type: "prompt" })).toBe("failed");
-        expect(calcState("failed", { type: "output", data: "x" })).toBe("failed");
       });
     });
 
@@ -104,20 +88,20 @@ describe("WorkerAgentStateService", () => {
         expect(calcState("working", { type: "exit", code: 0 })).toBe("completed");
       });
 
-      it("should transition working → failed on non-zero exit code", () => {
-        expect(calcState("working", { type: "exit", code: 1 })).toBe("failed");
+      it("should transition working → completed on non-zero exit code", () => {
+        expect(calcState("working", { type: "exit", code: 1 })).toBe("completed");
       });
 
       it("should transition waiting → completed on exit code 0", () => {
         expect(calcState("waiting", { type: "exit", code: 0 })).toBe("completed");
       });
 
-      it("should transition waiting → failed on non-zero exit code", () => {
-        expect(calcState("waiting", { type: "exit", code: 1 })).toBe("failed");
+      it("should transition waiting → completed on non-zero exit code", () => {
+        expect(calcState("waiting", { type: "exit", code: 1 })).toBe("completed");
       });
 
-      it("should transition completed → failed on non-zero exit", () => {
-        expect(calcState("completed", { type: "exit", code: 1 })).toBe("failed");
+      it("should stay completed on non-zero exit from completed", () => {
+        expect(calcState("completed", { type: "exit", code: 1 })).toBe("completed");
       });
 
       it("should return null (no-op) on zero exit from completed", () => {
@@ -129,17 +113,16 @@ describe("WorkerAgentStateService", () => {
 
       it("should not transition from other states on exit", () => {
         expect(calcState("idle", { type: "exit", code: 0 })).toBe("idle");
-        expect(calcState("failed", { type: "exit", code: 0 })).toBe("failed");
       });
     });
 
     describe("error event", () => {
-      it("should transition to failed from any state", () => {
+      it("should not change state on error (error events are no-ops)", () => {
         const event: AgentEvent = { type: "error", error: "Something went wrong" };
-        const states: AgentState[] = ["idle", "working", "waiting", "completed", "failed"];
+        const states: AgentState[] = ["idle", "working", "waiting", "completed"];
 
         for (const state of states) {
-          expect(calcState(state, event)).toBe("failed");
+          expect(calcState(state, event)).toBe(state);
         }
       });
     });
@@ -151,7 +134,6 @@ describe("WorkerAgentStateService", () => {
         expect(calcState("idle", event)).toBe("idle");
         expect(calcState("waiting", event)).toBe("waiting");
         expect(calcState("completed", event)).toBe("completed");
-        expect(calcState("failed", event)).toBe("failed");
       });
     });
   });
@@ -214,16 +196,12 @@ describe("WorkerAgentStateService", () => {
       expect(r.trigger).toBe("activity");
     });
 
-    it("should emit completed → failed with correct fields on non-zero exit", () => {
+    it("should return null on non-zero exit from completed (no state change)", () => {
       const state = createTerminalState("t1", "agent1");
       state.agentState = "completed";
       const result = calculateStateChange(state, { type: "exit", code: 1 });
 
-      expect(result).not.toBeNull();
-      const r = result as StateChangeResult;
-      expect(r.state).toBe("failed");
-      expect(r.previousState).toBe("completed");
-      expect(r.trigger).toBe("exit");
+      expect(result).toBeNull();
     });
   });
 

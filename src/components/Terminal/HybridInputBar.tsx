@@ -38,7 +38,7 @@ import { useCommandStore } from "@/store/commandStore";
 import { useProjectStore } from "@/store/projectStore";
 import { useTerminalStore, useVoiceRecordingStore, useWorktreeDataStore } from "@/store";
 import { VoiceInputButton } from "./VoiceInputButton";
-import { Archive, SquareTerminal as TerminalIcon, X } from "lucide-react";
+import { Archive } from "lucide-react";
 import { registerInputController, unregisterInputController } from "@/store/terminalInputStore";
 import type { CommandContext, CommandResult } from "@shared/types/commands";
 import { isEnterLikeLineBreakInputEvent } from "./hybridInputEvents";
@@ -139,7 +139,6 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       cwd,
       agentId,
       agentHasLifecycleEvent = false,
-      agentState,
       restartKey = 0,
       disabled = false,
       className,
@@ -185,10 +184,6 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     const [diffContext, setDiffContext] = useState<AtDiffContext | null>(null);
     const [terminalContext, setTerminalContext] = useState<AtTerminalContext | null>(null);
     const [selectionContext, setSelectionContext] = useState<AtSelectionContext | null>(null);
-    const [errorChipDismissed, setErrorChipDismissed] = useState(false);
-    const errorChipDismissedRef = useRef(false);
-    const agentStateRef = useRef<AgentState | undefined>(undefined);
-    const prevAgentStateRef = useRef<AgentState | undefined>(undefined);
     const [selectedIndex, setSelectedIndex] = useState(0);
     const lastQueryRef = useRef<string>("");
     const [menuLeftPx, setMenuLeftPx] = useState<number>(0);
@@ -545,11 +540,8 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
 
     const { sendText } = useTokenResolution({
       latestRef,
-      agentStateRef,
-      errorChipDismissedRef,
       applyEditorValue,
       setIsExpanded,
-      setErrorChipDismissed,
       setAtContext,
       setSlashContext,
       setDiffContext,
@@ -579,15 +571,6 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     }, [voiceDraftRevision, terminalId, currentProject?.id]);
 
     useVoiceDecorations({ terminalId, editorViewRef, voiceDraftRevision });
-
-    useEffect(() => {
-      agentStateRef.current = agentState;
-      if (agentState === "failed" && prevAgentStateRef.current !== "failed") {
-        setErrorChipDismissed(false);
-        errorChipDismissedRef.current = false;
-      }
-      prevAgentStateRef.current = agentState;
-    }, [agentState]);
 
     const sendFromEditor = useCallback(() => {
       const view = editorViewRef.current;
@@ -1105,29 +1088,8 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       }
     }, [isExpanded]);
 
-    const showErrorChip = agentState === "failed" && !errorChipDismissed;
-
     const barContent = (
       <div className="group cursor-text bg-canopy-bg px-4 pb-3 pt-3">
-        {showErrorChip && (
-          <div className="flex items-center gap-1.5 px-1 pb-1.5">
-            <div className="flex items-center gap-1.5 rounded-sm bg-status-error/10 px-2 py-0.5 text-status-error">
-              <TerminalIcon className="h-3.5 w-3.5 shrink-0" />
-              <span className="text-xs font-medium">Attach error output</span>
-              <button
-                type="button"
-                onClick={() => {
-                  setErrorChipDismissed(true);
-                  errorChipDismissedRef.current = true;
-                }}
-                className="ml-0.5 rounded-sm p-0.5 hover:bg-status-error/20 transition-colors cursor-pointer"
-                aria-label="Dismiss error context"
-              >
-                <X className="h-3 w-3" />
-              </button>
-            </div>
-          </div>
-        )}
         <div className="flex items-end gap-2">
           <div
             ref={inputShellRef}

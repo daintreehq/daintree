@@ -1,6 +1,5 @@
 import { useCallback, useRef, type Dispatch, type SetStateAction } from "react";
 import { EditorSelection } from "@codemirror/state";
-import type { AgentState } from "@/types";
 import type { LegacyAgentType } from "@shared/types";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { buildTerminalSendPayload } from "@/lib/terminalInput";
@@ -33,14 +32,11 @@ interface LatestRefShape {
 
 interface UseTokenResolutionParams {
   latestRef: React.RefObject<LatestRefShape | null>;
-  agentStateRef: React.RefObject<AgentState | undefined>;
-  errorChipDismissedRef: React.RefObject<boolean>;
   applyEditorValue: (
     nextValue: string,
     options?: { selection?: EditorSelection; focus?: boolean }
   ) => void;
   setIsExpanded: Dispatch<SetStateAction<boolean>>;
-  setErrorChipDismissed: Dispatch<SetStateAction<boolean>>;
   setAtContext: Dispatch<SetStateAction<AtFileContext | null>>;
   setSlashContext: Dispatch<SetStateAction<SlashCommandContext | null>>;
   setDiffContext: Dispatch<SetStateAction<AtDiffContext | null>>;
@@ -53,11 +49,8 @@ interface UseTokenResolutionParams {
 
 export function useTokenResolution({
   latestRef,
-  agentStateRef,
-  errorChipDismissedRef,
   applyEditorValue,
   setIsExpanded,
-  setErrorChipDismissed,
   setAtContext,
   setSlashContext,
   setDiffContext,
@@ -142,29 +135,6 @@ export function useTokenResolution({
         for (const r of replacements) {
           resolvedText = resolvedText.slice(0, r.start) + r.replacement + resolvedText.slice(r.end);
         }
-      }
-
-      if (
-        agentStateRef.current === "failed" &&
-        !errorChipDismissedRef.current &&
-        terminalTokens.length === 0
-      ) {
-        const managed = terminalInstanceService.get(terminalId);
-        if (managed) {
-          const buffer = managed.terminal.buffer.active;
-          const start = Math.max(0, buffer.length - 100);
-          const lines: string[] = [];
-          for (let i = start; i < buffer.length; i++) {
-            const line = buffer.getLine(i);
-            if (line) lines.push(line.translateToString(true));
-          }
-          const content = lines.join("\n").trimEnd();
-          if (content) {
-            resolvedText = "```\n" + content + "\n```\n\n" + resolvedText;
-          }
-        }
-        setErrorChipDismissed(true);
-        (errorChipDismissedRef as React.MutableRefObject<boolean>).current = true;
       }
 
       const payload = buildTerminalSendPayload(resolvedText);

@@ -645,8 +645,7 @@ function TerminalPaneComponent({
         isExited && "opacity-75 grayscale",
         isPinged &&
           allowPing &&
-          (wasJustSelected ? "animate-terminal-ping-select" : "animate-terminal-ping"),
-        agentState === "failed" && "ring-1 ring-inset ring-status-error/25"
+          (wasJustSelected ? "animate-terminal-ping-select" : "animate-terminal-ping")
       )}
       onClick={handleClick}
       onKeyDown={handleKeyDown}

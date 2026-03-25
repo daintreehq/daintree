@@ -23,7 +23,6 @@ const ESCALATION_DELAY_OPTIONS: { value: number; label: string }[] = [
 const DEFAULT_SETTINGS: NotificationSettings = {
   completedEnabled: false,
   waitingEnabled: false,
-  failedEnabled: false,
   soundEnabled: false,
   soundFile: "chime.wav",
   waitingEscalationEnabled: true,
@@ -121,13 +120,6 @@ export function NotificationSettingsTab() {
               )}
             </div>
           )}
-          <SettingsCheckbox
-            id="notif-failed"
-            label="Agent failed"
-            description="Show a notification when an agent encounters an error"
-            checked={settings.failedEnabled}
-            onChange={(v) => update({ failedEnabled: v })}
-          />
         </div>
       </SettingsSection>
 

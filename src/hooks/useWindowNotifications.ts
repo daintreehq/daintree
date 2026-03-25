@@ -5,13 +5,13 @@ import { useTerminalNotificationCounts } from "@/hooks/useTerminalSelectors";
 const DEBOUNCE_MS = 300;
 
 export function useWindowNotifications(): void {
-  const prevStateRef = useRef({ waitingCount: 0, failedCount: 0 });
+  const prevWaitingRef = useRef(0);
   const windowFocusedRef = useRef(true);
   const debounceTimerRef = useRef<NodeJS.Timeout | null>(null);
   const blurTimeRef = useRef<number | null>(null);
   const [, setTick] = useState(0);
 
-  const { waitingCount, failedCount } = useTerminalNotificationCounts(blurTimeRef.current);
+  const { waitingCount } = useTerminalNotificationCounts(blurTimeRef.current);
 
   useEffect(() => {
     const handleFocus = () => {
@@ -23,12 +23,12 @@ export function useWindowNotifications(): void {
         debounceTimerRef.current = null;
       }
 
-      prevStateRef.current = { waitingCount: 0, failedCount: 0 };
+      prevWaitingRef.current = 0;
 
       clearFaviconBadge();
 
       if (window.electron?.notification?.updateBadge) {
-        window.electron.notification.updateBadge({ waitingCount: 0, failedCount: 0 });
+        window.electron.notification.updateBadge({ waitingCount: 0 });
       }
 
       setTick((t) => t + 1);
@@ -50,10 +50,8 @@ export function useWindowNotifications(): void {
   }, []);
 
   useEffect(() => {
-    const prevState = prevStateRef.current;
-
-    if (prevState.waitingCount !== waitingCount || prevState.failedCount !== failedCount) {
-      prevStateRef.current = { waitingCount, failedCount };
+    if (prevWaitingRef.current !== waitingCount) {
+      prevWaitingRef.current = waitingCount;
 
       if (debounceTimerRef.current) {
         clearTimeout(debounceTimerRef.current);
@@ -64,19 +62,19 @@ export function useWindowNotifications(): void {
         debounceTimerRef.current = null;
 
         if (window.electron?.notification?.updateBadge) {
-          window.electron.notification.updateBadge({ waitingCount, failedCount });
+          window.electron.notification.updateBadge({ waitingCount });
         }
 
         if (!windowFocusedRef.current) {
-          if (waitingCount > 0 || failedCount > 0) {
-            updateFaviconBadge(waitingCount, failedCount);
+          if (waitingCount > 0) {
+            updateFaviconBadge(waitingCount);
           } else {
             clearFaviconBadge();
           }
         }
       }, DEBOUNCE_MS);
     }
-  }, [waitingCount, failedCount]);
+  }, [waitingCount]);
 
   useEffect(() => {
     return () => {
@@ -86,7 +84,7 @@ export function useWindowNotifications(): void {
       }
 
       if (window.electron?.notification?.updateBadge) {
-        window.electron.notification.updateBadge({ waitingCount: 0, failedCount: 0 });
+        window.electron.notification.updateBadge({ waitingCount: 0 });
       }
       clearFaviconBadge();
     };

@@ -25,7 +25,6 @@ export interface TerminalBulkActionsSlice {
   bulkRestartPreflightCheckByWorktree: (worktreeId: string) => Promise<BulkRestartValidation>;
   bulkMoveToDock: () => void;
   bulkMoveToGrid: () => void;
-  restartFailedAgents: () => Promise<void>;
   restartIdleAgents: () => Promise<void>;
   getCountByState: (state: AgentState) => number;
   getCountByWorktree: (worktreeId: string, state?: AgentState) => number;
@@ -244,14 +243,6 @@ export const createTerminalBulkActionsSlice = (
       if (hasGridFocus && currentFocusId) {
         setFocusedId(currentFocusId);
       }
-    },
-
-    restartFailedAgents: async () => {
-      const terminals = getTerminals();
-      const failedAgents = terminals.filter(
-        (t) => t.agentState === "failed" && isAgentTerminal(t.kind ?? t.type, t.agentId)
-      );
-      await restartTerminals(failedAgents);
     },
 
     restartIdleAgents: async () => {

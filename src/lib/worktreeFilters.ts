@@ -17,7 +17,6 @@ export interface DerivedWorktreeMeta {
   hasWorkingAgent: boolean;
   hasRunningAgent: boolean;
   hasWaitingAgent: boolean;
-  hasFailedAgent: boolean;
   hasCompletedAgent: boolean;
   hasMergeConflict: boolean;
   chipState: ChipState;
@@ -196,7 +195,6 @@ export function matchesFilters(
     if (filters.sessionFilters.has("working") && derived.hasWorkingAgent) hasMatch = true;
     if (filters.sessionFilters.has("running") && derived.hasRunningAgent) hasMatch = true;
     if (filters.sessionFilters.has("waiting") && derived.hasWaitingAgent) hasMatch = true;
-    if (filters.sessionFilters.has("failed") && derived.hasFailedAgent) hasMatch = true;
     if (filters.sessionFilters.has("completed") && derived.hasCompletedAgent) hasMatch = true;
 
     if (!hasMatch) return false;
@@ -399,8 +397,7 @@ export function filterTriageWorktrees<T extends Worktree | WorktreeState>(
   return nonMain.filter((w) => {
     const meta = derivedMetaMap.get(w.id);
     if (!meta) return false;
-    const qualifies =
-      meta.hasWaitingAgent || meta.hasFailedAgent || meta.hasErrors || meta.hasMergeConflict;
+    const qualifies = meta.hasWaitingAgent || meta.hasErrors || meta.hasMergeConflict;
     if (!qualifies) return false;
     if (query.trim().length > 0) {
       const exactNum = parseExactNumber(query);

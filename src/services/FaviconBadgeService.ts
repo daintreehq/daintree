@@ -1,28 +1,22 @@
 const BADGE_SIZE = 32;
 const BADGE_FONT_SIZE = 14;
 const BADGE_BG_WAITING_FALLBACK = "#f59e0b"; // amber-500
-const BADGE_BG_FAILED_FALLBACK = "#ef4444"; // red-500
 const BADGE_TEXT_COLOR = "#ffffff";
 
 let originalHref: string | null = null;
-let badgeColors: { waiting: string; failed: string } | null = null;
+let badgeColor: string | null = null;
 
-function getBadgeColors(): { waiting: string; failed: string } {
-  if (badgeColors) return badgeColors;
+function getBadgeColor(): string {
+  if (badgeColor) return badgeColor;
 
   const styles = getComputedStyle(document.documentElement);
   const waiting = styles.getPropertyValue("--color-status-warning").trim();
-  const failed = styles.getPropertyValue("--color-status-error").trim();
 
-  badgeColors = {
-    waiting: waiting || BADGE_BG_WAITING_FALLBACK,
-    failed: failed || BADGE_BG_FAILED_FALLBACK,
-  };
-
-  return badgeColors;
+  badgeColor = waiting || BADGE_BG_WAITING_FALLBACK;
+  return badgeColor;
 }
 
-function createBadgeCanvas(count: number, hasFailures: boolean): HTMLCanvasElement {
+function createBadgeCanvas(count: number): HTMLCanvasElement {
   const canvas = document.createElement("canvas");
   canvas.width = BADGE_SIZE;
   canvas.height = BADGE_SIZE;
@@ -30,10 +24,8 @@ function createBadgeCanvas(count: number, hasFailures: boolean): HTMLCanvasEleme
 
   if (!ctx) return canvas;
 
-  const colors = getBadgeColors();
-
   // Draw badge circle
-  ctx.fillStyle = hasFailures ? colors.failed : colors.waiting;
+  ctx.fillStyle = getBadgeColor();
   ctx.beginPath();
   ctx.arc(BADGE_SIZE / 2, BADGE_SIZE / 2, BADGE_SIZE / 2 - 2, 0, Math.PI * 2);
   ctx.fill();
@@ -60,7 +52,7 @@ function getFaviconLink(): HTMLLinkElement {
   return link;
 }
 
-export function updateFaviconBadge(waitingCount: number, failedCount: number): void {
+export function updateFaviconBadge(waitingCount: number): void {
   const link = getFaviconLink();
 
   // Store original href for restoration
@@ -68,9 +60,7 @@ export function updateFaviconBadge(waitingCount: number, failedCount: number): v
     originalHref = link.href;
   }
 
-  const totalCount = waitingCount + failedCount;
-
-  if (totalCount === 0) {
+  if (waitingCount === 0) {
     // Clear badge - restore original or remove favicon
     if (originalHref) {
       link.href = originalHref;
@@ -82,11 +72,10 @@ export function updateFaviconBadge(waitingCount: number, failedCount: number): v
   }
 
   // Generate badge favicon
-  const hasFailures = failedCount > 0;
-  const canvas = createBadgeCanvas(totalCount, hasFailures);
+  const canvas = createBadgeCanvas(waitingCount);
   link.href = canvas.toDataURL("image/png");
 }
 
 export function clearFaviconBadge(): void {
-  updateFaviconBadge(0, 0);
+  updateFaviconBadge(0);
 }

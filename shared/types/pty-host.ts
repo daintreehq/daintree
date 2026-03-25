@@ -103,7 +103,6 @@ export interface PtyHostTerminalSnapshot {
   agentId?: AgentId;
   agentState?: AgentState;
   lastStateChange?: number;
-  error?: string;
   spawnedAt: number;
 }
 
@@ -159,7 +158,6 @@ export type PtyHostEvent =
   | { type: "agent-spawned"; payload: AgentSpawnedPayload }
   | { type: "agent-output"; payload: AgentOutputPayload }
   | { type: "agent-completed"; payload: AgentCompletedPayload }
-  | { type: "agent-failed"; payload: AgentFailedPayload }
   | { type: "agent-killed"; payload: AgentKilledPayload }
   | { type: "terminal-trashed"; id: string; expiresAt: number }
   | { type: "terminal-restored"; id: string }
@@ -263,16 +261,6 @@ export interface AgentCompletedPayload {
   agentId: string;
   exitCode: number;
   duration: number;
-  timestamp: number;
-  traceId?: string;
-  terminalId?: string;
-  worktreeId?: string;
-}
-
-/** Payload for agent:failed event */
-export interface AgentFailedPayload {
-  agentId: string;
-  error: string;
   timestamp: number;
   traceId?: string;
   terminalId?: string;

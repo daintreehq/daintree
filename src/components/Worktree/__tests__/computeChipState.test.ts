@@ -3,7 +3,7 @@ import { computeChipState, type ComputeChipStateInput } from "../utils/computeCh
 
 const base: ComputeChipStateInput = {
   worktreeErrorCount: 0,
-  failedTerminalCount: 0,
+
   waitingTerminalCount: 0,
   approvalWaitingCount: 0,
   lifecycleStage: null,
@@ -14,10 +14,6 @@ describe("computeChipState", () => {
   describe("state triggers", () => {
     it("returns error when worktreeErrorCount > 0", () => {
       expect(computeChipState({ ...base, worktreeErrorCount: 1 })).toBe("error");
-    });
-
-    it("returns error when failedTerminalCount > 0", () => {
-      expect(computeChipState({ ...base, failedTerminalCount: 2 })).toBe("error");
     });
 
     it("returns waiting when waitingTerminalCount > 0", () => {
@@ -55,7 +51,7 @@ describe("computeChipState", () => {
     });
 
     it("error beats cleanup", () => {
-      expect(computeChipState({ ...base, failedTerminalCount: 1, lifecycleStage: "merged" })).toBe(
+      expect(computeChipState({ ...base, worktreeErrorCount: 1, lifecycleStage: "merged" })).toBe(
         "error"
       );
     });
@@ -68,7 +64,6 @@ describe("computeChipState", () => {
       expect(
         computeChipState({
           worktreeErrorCount: 1,
-          failedTerminalCount: 1,
           waitingTerminalCount: 1,
           approvalWaitingCount: 1,
           lifecycleStage: "ready-for-cleanup",
@@ -143,16 +138,6 @@ describe("computeChipState", () => {
           waitingTerminalCount: 1,
         })
       ).toBe("cleanup");
-    });
-
-    it("failedTerminalCount error beats waiting", () => {
-      expect(computeChipState({ ...base, failedTerminalCount: 1, waitingTerminalCount: 1 })).toBe(
-        "error"
-      );
-    });
-
-    it("failedTerminalCount error beats complete", () => {
-      expect(computeChipState({ ...base, failedTerminalCount: 1, isComplete: true })).toBe("error");
     });
   });
 

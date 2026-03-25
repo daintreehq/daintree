@@ -110,27 +110,6 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     },
   }));
 
-  actions.set("agent.focusNextFailed", () => ({
-    id: "agent.focusNextFailed",
-    title: "Focus Next Failed Agent",
-    description: "Focus the next agent in failed state",
-    category: "agent",
-    kind: "command",
-    danger: "safe",
-    scope: "renderer",
-    run: async () => {
-      const state = useTerminalStore.getState();
-      const { useWorktreeDataStore } = await import("@/store/worktreeDataStore");
-      const worktreeData = useWorktreeDataStore.getState();
-      const validWorktreeIds = new Set<string>();
-      for (const [id, wt] of worktreeData.worktrees) {
-        validWorktreeIds.add(id);
-        if (wt.worktreeId) validWorktreeIds.add(wt.worktreeId);
-      }
-      state.focusNextFailed(state.isInTrash, validWorktreeIds);
-    },
-  }));
-
   actions.set("agent.focusNextWorking", () => ({
     id: "agent.focusNextWorking",
     title: "Focus Next Working Agent",
@@ -176,7 +155,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
   actions.set("dock.focusNextWaiting", () => ({
     id: "dock.focusNextWaiting",
     title: "Focus Next Blocked Dock Agent",
-    description: "Jump to the next waiting or failed agent in the dock (failed before waiting)",
+    description: "Jump to the next waiting agent in the dock",
     category: "agent",
     kind: "command",
     danger: "safe",

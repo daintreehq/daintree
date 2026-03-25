@@ -1759,7 +1759,7 @@ const api: ElectronAPI = {
 
   // Notification API
   notification: {
-    updateBadge: (state: { waitingCount: number; failedCount: number }) =>
+    updateBadge: (state: { waitingCount: number }) =>
       ipcRenderer.send(CHANNELS.NOTIFICATION_UPDATE, state),
     getSettings: (): Promise<{
       completedEnabled: boolean;

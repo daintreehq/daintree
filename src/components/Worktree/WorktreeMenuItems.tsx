@@ -61,7 +61,6 @@ export interface WorktreeMenuItemsProps {
     dock: number;
     active: number;
     completed: number;
-    failed: number;
     all: number;
   };
   onLaunchAgent?: (agentId: string) => void;
@@ -87,7 +86,6 @@ export interface WorktreeMenuItemsProps {
   onRestartAll: () => void;
   onResetRenderers: () => void;
   onCloseCompleted: () => void;
-  onCloseFailed: () => void;
   onCloseAll: () => void;
   onEndAll: () => void;
   onDeleteWorktree?: () => void;
@@ -125,7 +123,6 @@ export function WorktreeMenuItems({
   onRestartAll,
   onResetRenderers,
   onCloseCompleted,
-  onCloseFailed,
   onCloseAll,
   onEndAll,
   onDeleteWorktree,
@@ -214,11 +211,6 @@ export function WorktreeMenuItems({
             Close Completed
             <C.Shortcut>({counts.completed})</C.Shortcut>
           </C.Item>
-          <C.Item onSelect={onCloseFailed} disabled={counts.failed === 0}>
-            Close Failed
-            <C.Shortcut>({counts.failed})</C.Shortcut>
-          </C.Item>
-
           <C.Separator />
 
           <C.Item onSelect={onCloseAll} disabled={counts.active === 0}>

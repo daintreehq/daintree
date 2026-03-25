@@ -3,7 +3,6 @@ import { nextAgentState, getStateChangeTimestamp, type AgentEvent } from "../Age
 // AgentState type used implicitly via TerminalInfo.agentState
 import {
   AgentStateChangedSchema,
-  AgentFailedSchema,
   AgentCompletedSchema,
   AgentKilledSchema,
   type AgentStateChangeTrigger,
@@ -114,11 +113,6 @@ export class AgentStateService {
     const previousState = terminal.agentState || "idle";
     const newState = nextAgentState(previousState, event);
 
-    // Update error message even if staying in failed state
-    if (event.type === "error") {
-      terminal.error = event.error;
-    }
-
     if (newState === previousState) {
       // Allow waitingReason updates within the same "waiting" state
       if (
@@ -155,10 +149,6 @@ export class AgentStateService {
         return true;
       }
       return false;
-    }
-
-    if (previousState === "failed" && newState !== "failed") {
-      terminal.error = undefined;
     }
 
     terminal.agentState = newState;
@@ -203,16 +193,6 @@ export class AgentStateService {
     // Emit terminal activity event for UI headline updates
     this.emitTerminalActivity(terminal);
 
-    // Emit specific failure event for any transition to "failed"
-    // (crash-signal exits are now the only path to "failed")
-    if (newState === "failed") {
-      const errorMessage =
-        event.type === "exit"
-          ? `Process crashed (exit code ${event.code}${event.signal ? `, signal ${event.signal}` : ""})`
-          : "Agent entered failed state";
-      this.emitAgentFailed(terminal, errorMessage);
-    }
-
     return true;
   }
 
@@ -239,31 +219,6 @@ export class AgentStateService {
     }
 
     return this.updateAgentState(terminal, event, trigger, confidence);
-  }
-
-  emitAgentFailed(terminal: TerminalInfo, error: string): void {
-    if (!terminal.agentId || !terminal.lastStateChange) {
-      return;
-    }
-
-    const failedPayload = {
-      agentId: terminal.agentId,
-      error,
-      timestamp: terminal.lastStateChange,
-      traceId: terminal.traceId,
-      terminalId: terminal.id,
-      worktreeId: terminal.worktreeId,
-    };
-
-    const validatedFailed = AgentFailedSchema.safeParse(failedPayload);
-    if (validatedFailed.success) {
-      events.emit("agent:failed", validatedFailed.data);
-    } else {
-      console.error(
-        "[AgentStateService] Invalid agent:failed payload:",
-        validatedFailed.error.format()
-      );
-    }
   }
 
   emitAgentCompleted(terminal: TerminalInfo, exitCode: number): void {

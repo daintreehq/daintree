@@ -1,5 +1,4 @@
 import type { AgentState } from "../types/index.js";
-import { isRoutineExit } from "./pty/terminalForensics.js";
 
 export type AgentEvent =
   | { type: "start" }
@@ -14,12 +13,11 @@ export type AgentEvent =
 
 const VALID_TRANSITIONS: Record<AgentState, AgentState[]> = {
   idle: ["working", "running"],
-  working: ["waiting", "completed", "failed"],
+  working: ["waiting", "completed"],
   running: ["idle"], // Shell process state - managed by TerminalProcess, not this state machine
-  waiting: ["working", "failed"],
+  waiting: ["working"],
   directing: [], // Renderer-only state, never produced by main process
-  completed: ["working", "waiting", "failed"], // Allow resuming work, prompt, or error override
-  failed: ["failed", "working", "idle", "waiting", "completed"],
+  completed: ["working", "waiting"],
 };
 
 export function isValidTransition(from: AgentState, to: AgentState): boolean {
@@ -27,8 +25,7 @@ export function isValidTransition(from: AgentState, to: AgentState): boolean {
 }
 
 export function nextAgentState(current: AgentState, event: AgentEvent): AgentState {
-  // Error events are no-ops — the only reliable path to "failed" is via
-  // crash-signal exit events (SIGSEGV, SIGABRT, etc.) handled below.
+  // Error events are no-ops
   if (event.type === "error") {
     return current;
   }
@@ -45,13 +42,8 @@ export function nextAgentState(current: AgentState, event: AgentEvent): AgentSta
       break;
 
     case "busy":
-      // Handles re-entry to working from waiting/idle/completed/failed states when agent resumes activity
-      if (
-        current === "waiting" ||
-        current === "idle" ||
-        current === "completed" ||
-        current === "failed"
-      ) {
+      // Handles re-entry to working from waiting/idle/completed states when agent resumes activity
+      if (current === "waiting" || current === "idle" || current === "completed") {
         return "working";
       }
       break;
@@ -68,28 +60,20 @@ export function nextAgentState(current: AgentState, event: AgentEvent): AgentSta
 
     case "prompt":
       // Activity monitor detected silence - transition to waiting
-      if (current === "working" || current === "completed" || current === "failed") {
+      if (current === "working" || current === "completed") {
         return "waiting";
       }
       break;
 
     case "input":
-      if (
-        current === "waiting" ||
-        current === "idle" ||
-        current === "completed" ||
-        current === "failed"
-      ) {
+      if (current === "waiting" || current === "idle" || current === "completed") {
         return "working";
       }
       break;
 
     case "exit":
-      if (current === "working" || current === "waiting") {
-        return isRoutineExit(event.code, event.signal) ? "completed" : "failed";
-      }
-      if (current === "completed") {
-        return isRoutineExit(event.code, event.signal) ? "completed" : "failed";
+      if (current === "working" || current === "waiting" || current === "completed") {
+        return "completed";
       }
       break;
   }

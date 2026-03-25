@@ -49,7 +49,7 @@ const baseMenu: WorktreeHeaderProps["menu"] = {
   recipes: [],
   runningRecipeId: null,
   isRestartValidating: false,
-  counts: { grid: 0, dock: 0, active: 0, completed: 0, failed: 0, all: 0 },
+  counts: { grid: 0, dock: 0, active: 0, completed: 0, all: 0 },
   onCopyContextFull: noop,
   onCopyContextModified: noop,
   onOpenEditor: noop,
@@ -60,7 +60,6 @@ const baseMenu: WorktreeHeaderProps["menu"] = {
   onRestartAll: noop,
   onResetRenderers: noop,
   onCloseCompleted: noop,
-  onCloseFailed: noop,
   onCloseAll: noop,
   onEndAll: noop,
 };
@@ -443,7 +442,6 @@ const allZeroStates = {
   directing: 0,
   idle: 0,
   completed: 0,
-  failed: 0,
 } as const;
 
 describe("WorktreeHeader collapsed session indicators", () => {
@@ -492,10 +490,10 @@ describe("WorktreeHeader collapsed session indicators", () => {
     renderHeader({
       isCollapsed: true,
       sessionTotal: 5,
-      sessionStates: { ...allZeroStates, working: 2, failed: 1, completed: 2 },
+      sessionStates: { ...allZeroStates, working: 2, completed: 3 },
     });
     const container = screen.getByTestId("collapsed-session-indicators");
-    expect(container.getAttribute("aria-label")).toBe("5 sessions: 2 working, 1 error, 2 done");
+    expect(container.getAttribute("aria-label")).toBe("5 sessions: 2 working, 3 done");
   });
 
   it("orders states by STATE_PRIORITY (working before waiting)", () => {

@@ -211,12 +211,6 @@ export const EVENT_META: Record<keyof CanopyEventMap, EventMetadata> = {
     requiresTimestamp: true,
     description: "Agent completed work successfully",
   },
-  "agent:failed": {
-    category: "agent",
-    requiresContext: true,
-    requiresTimestamp: true,
-    description: "Agent encountered error and stopped",
-  },
   "agent:killed": {
     category: "agent",
     requiresContext: true,
@@ -583,16 +577,6 @@ export type CanopyEventMap = {
   }>;
 
   /**
-   * Emitted when an agent encounters an error and cannot continue.
-   */
-  "agent:failed": WithContext<{
-    agentId: string;
-    error: string;
-    terminalId?: string;
-    worktreeId?: string;
-  }>;
-
-  /**
    * Emitted when an agent is explicitly killed (by user action or system).
    */
   "agent:killed": WithContext<{
@@ -840,7 +824,6 @@ export type CanopyEventMap = {
 export const BRIDGED_EVENT_TYPES = [
   "terminal:state-changed",
   "agent:completed",
-  "agent:failed",
   "agent:killed",
 ] as const satisfies ReadonlyArray<keyof CanopyEventMap>;
 
@@ -876,7 +859,6 @@ export const ALL_EVENT_TYPES: Array<keyof CanopyEventMap> = [
   "agent:exited",
   "agent:output",
   "agent:completed",
-  "agent:failed",
   "agent:killed",
   "artifact:detected",
   "action:dispatched",

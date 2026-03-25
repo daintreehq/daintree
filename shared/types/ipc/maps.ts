@@ -1307,7 +1307,6 @@ export interface IpcInvokeMap {
     result: {
       completedEnabled: boolean;
       waitingEnabled: boolean;
-      failedEnabled: boolean;
       soundEnabled: boolean;
       soundFile: string;
       waitingEscalationEnabled: boolean;
@@ -1319,7 +1318,6 @@ export interface IpcInvokeMap {
       Partial<{
         completedEnabled: boolean;
         waitingEnabled: boolean;
-        failedEnabled: boolean;
         soundEnabled: boolean;
         soundFile: string;
         waitingEscalationEnabled: boolean;
@@ -1750,7 +1748,7 @@ export interface IpcEventMap {
   "window:reclaim-memory": { reason: string };
 
   // Notification events
-  "notification:update": { waitingCount: number; failedCount: number };
+  "notification:update": { waitingCount: number };
   "notification:watch-navigate": { panelId: string; panelTitle: string; worktreeId?: string };
 
   // Auto-update events

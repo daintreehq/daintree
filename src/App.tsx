@@ -490,7 +490,6 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
         (t) => t.worktreeId === worktree.id && t.location !== "trash"
       );
       const errors = getWorktreeErrors(worktree.id);
-      const failedTerminalCount = worktreeTerminals.filter((t) => t.agentState === "failed").length;
       const waitingTerminalCount = worktreeTerminals.filter(
         (t) => t.agentState === "waiting"
       ).length;
@@ -517,7 +516,6 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
 
       const chipState = computeChipState({
         worktreeErrorCount: errors.length,
-        failedTerminalCount,
         waitingTerminalCount,
         approvalWaitingCount,
         lifecycleStage,
@@ -530,7 +528,6 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
         hasWorkingAgent: worktreeTerminals.some((t) => t.agentState === "working"),
         hasRunningAgent: worktreeTerminals.some((t) => t.agentState === "running"),
         hasWaitingAgent: worktreeTerminals.some((t) => t.agentState === "waiting"),
-        hasFailedAgent: failedTerminalCount > 0,
         hasCompletedAgent: worktreeTerminals.some((t) => t.agentState === "completed"),
         hasMergeConflict:
           worktree.worktreeChanges?.changes.some((c) => c.status === "conflicted") ?? false,
@@ -572,7 +569,6 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
         hasWorkingAgent: false,
         hasRunningAgent: false,
         hasWaitingAgent: false,
-        hasFailedAgent: false,
         hasCompletedAgent: false,
         hasMergeConflict: false,
         chipState: null,

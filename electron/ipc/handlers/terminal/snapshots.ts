@@ -270,7 +270,7 @@ export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () 
         throw new Error("Invalid state: must be a non-empty string");
       }
 
-      const validStates = ["idle", "working", "waiting", "completed", "failed"];
+      const validStates = ["idle", "working", "waiting", "completed"];
       if (!validStates.includes(state)) {
         throw new Error(`Invalid state: must be one of ${validStates.join(", ")}`);
       }

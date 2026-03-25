@@ -65,9 +65,9 @@ describe("NotificationService", () => {
     const windowMock = createWindowMock(false);
     notificationService.initialize(windowMock as never);
 
-    notificationService.updateNotifications({ waitingCount: 2, failedCount: 1 });
+    notificationService.updateNotifications({ waitingCount: 2 });
     vi.advanceTimersByTime(301);
-    expect(windowMock.setTitle).toHaveBeenCalledWith("(3) Canopy");
+    expect(windowMock.setTitle).toHaveBeenCalledWith("(2) Canopy");
 
     windowMock.trigger("focus");
     expect(windowMock.setTitle).toHaveBeenCalledWith("Canopy");
@@ -78,8 +78,6 @@ describe("NotificationService", () => {
     notificationService.initialize(windowMock as never);
     notificationService.dispose();
 
-    expect(() =>
-      notificationService.updateNotifications({ waitingCount: 1, failedCount: 0 })
-    ).not.toThrow();
+    expect(() => notificationService.updateNotifications({ waitingCount: 1 })).not.toThrow();
   });
 });

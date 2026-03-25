@@ -88,7 +88,6 @@ export function gridTabGroupPropsAreEqual(
           a.scope !== b.scope ||
           a.createdAt !== b.createdAt ||
           a.isRestarting !== b.isRestarting ||
-          a.error !== b.error ||
           a.runtimeStatus !== b.runtimeStatus ||
           a.isInputLocked !== b.isInputLocked
         ) {

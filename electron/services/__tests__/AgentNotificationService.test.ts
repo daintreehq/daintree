@@ -44,7 +44,6 @@ import { agentNotificationService } from "../AgentNotificationService.js";
 const DEFAULT_NOTIFICATION_SETTINGS = {
   completedEnabled: false,
   waitingEnabled: false,
-  failedEnabled: false,
   soundEnabled: false,
   soundFile: "chime.wav",
   waitingEscalationEnabled: true,
@@ -116,15 +115,12 @@ describe("AgentNotificationService", () => {
     events.emit("agent:state-changed", makePayload("waiting"));
     vi.advanceTimersByTime(5000);
 
-    events.emit("agent:state-changed", makePayload("failed"));
-    vi.advanceTimersByTime(5000);
-
     expect(notificationServiceMock.showWatchNotification).not.toHaveBeenCalled();
     expect(playSoundMock).not.toHaveBeenCalled();
   });
 
   it("does not fire notifications for unwatched terminals", () => {
-    mockStore({ completedEnabled: true, waitingEnabled: true, failedEnabled: true });
+    mockStore({ completedEnabled: true, waitingEnabled: true });
 
     // Clear watched set — no terminals are watched
     agentNotificationService.syncWatchedPanels([]);
@@ -135,15 +131,12 @@ describe("AgentNotificationService", () => {
     events.emit("agent:state-changed", makePayload("waiting"));
     vi.advanceTimersByTime(1000);
 
-    events.emit("agent:state-changed", makePayload("failed"));
-    vi.advanceTimersByTime(1000);
-
     expect(notificationServiceMock.showWatchNotification).not.toHaveBeenCalled();
     expect(playSoundMock).not.toHaveBeenCalled();
   });
 
   it("does not fire notifications when terminalId is absent in payload", () => {
-    mockStore({ completedEnabled: true, waitingEnabled: true, failedEnabled: true });
+    mockStore({ completedEnabled: true, waitingEnabled: true });
 
     // Payload without terminalId — cannot check watched membership
     const payloadNoId = {
@@ -192,26 +185,10 @@ describe("AgentNotificationService", () => {
     );
   });
 
-  it("fires a notification when failed is enabled", () => {
-    mockStore({ failedEnabled: true });
-
-    events.emit("agent:state-changed", makePayload("failed"));
-    vi.advanceTimersByTime(1000);
-
-    expect(notificationServiceMock.showWatchNotification).toHaveBeenCalledWith(
-      "Agent failed",
-      expect.stringContaining("error"),
-      expect.objectContaining({ panelId: "term-1" }),
-      "notification:watch-navigate",
-      true
-    );
-  });
-
   it("does not fire notifications for same-state transitions", () => {
     mockStore({
       completedEnabled: true,
       waitingEnabled: true,
-      failedEnabled: true,
       soundEnabled: true,
     });
 
@@ -244,9 +221,6 @@ describe("AgentNotificationService", () => {
     vi.advanceTimersByTime(5000);
 
     events.emit("agent:state-changed", makePayload("waiting", "completed"));
-    vi.advanceTimersByTime(1000);
-
-    events.emit("agent:state-changed", makePayload("failed", "waiting"));
     vi.advanceTimersByTime(1000);
 
     expect(notificationServiceMock.showWatchNotification).toHaveBeenCalledTimes(1);

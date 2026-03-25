@@ -376,68 +376,6 @@ describe("TaskOrchestrator", () => {
     });
   });
 
-  describe("agent failure handling", () => {
-    it("marks task as failed when agent fails", async () => {
-      const task = await queueService.createTask({ title: "Test task" });
-      await queueService.enqueueTask(task.id);
-
-      mockPtyClient.getAvailableTerminalsAsync.mockResolvedValue([
-        {
-          id: "term-1",
-          kind: "agent",
-          agentId: "agent-1",
-          agentState: "idle",
-        },
-      ]);
-
-      await orchestrator.assignNextTask();
-
-      // Emit agent failed
-      events.emit("agent:failed", {
-        agentId: "agent-1",
-        error: "Something went wrong",
-        timestamp: Date.now(),
-      });
-
-      await new Promise((resolve) => setTimeout(resolve, 10));
-
-      const failedTask = await queueService.getTask(task.id);
-      expect(failedTask?.status).toBe("failed");
-      expect(failedTask?.result?.error).toBe("Something went wrong");
-    });
-
-    it("triggers assignment for next task after failure", async () => {
-      const task1 = await queueService.createTask({ title: "Task 1", priority: 10 });
-      const task2 = await queueService.createTask({ title: "Task 2", priority: 5 });
-      await queueService.enqueueTask(task1.id);
-      await queueService.enqueueTask(task2.id);
-
-      mockPtyClient.getAvailableTerminalsAsync.mockResolvedValue([
-        {
-          id: "term-1",
-          kind: "agent",
-          agentId: "agent-1",
-          agentState: "idle",
-        },
-      ]);
-
-      await orchestrator.assignNextTask();
-
-      // Fail first task
-      events.emit("agent:failed", {
-        agentId: "agent-1",
-        error: "Failure",
-        timestamp: Date.now(),
-      });
-
-      await new Promise((resolve) => setTimeout(resolve, 10));
-
-      // Second task should be assigned
-      const updated2 = await queueService.getTask(task2.id);
-      expect(updated2?.status).toBe("running");
-    });
-  });
-
   describe("worktree removal handling", () => {
     it("cancels tasks for removed worktree", async () => {
       const task1 = await queueService.createTask({

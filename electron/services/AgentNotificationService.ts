@@ -84,7 +84,7 @@ class AgentNotificationService {
     }
 
     // Skip if all OS notification types are disabled (off by default).
-    if (!settings.completedEnabled && !settings.waitingEnabled && !settings.failedEnabled) {
+    if (!settings.completedEnabled && !settings.waitingEnabled) {
       return;
     }
 
@@ -109,20 +109,6 @@ class AgentNotificationService {
         context,
         CHANNELS.NOTIFICATION_WATCH_NAVIGATE,
         true
-      );
-    } else if (state === "failed" && settings.failedEnabled) {
-      const label = this.getLabel(agentId, worktreeId);
-      this.enqueue(
-        {
-          title: "Agent failed",
-          body: `${label} encountered an error`,
-          worktreeId,
-          terminalId,
-          agentId,
-          triggerSound: settings.soundEnabled,
-        },
-        true,
-        "error.wav"
       );
     }
   }

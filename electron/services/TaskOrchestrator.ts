@@ -64,13 +64,6 @@ export class TaskOrchestrator {
       })
     );
 
-    // Subscribe to agent failures
-    this.unsubscribers.push(
-      events.on("agent:failed", (payload) => {
-        void this.handleAgentFailed(payload);
-      })
-    );
-
     // Subscribe to agent kills (user-initiated termination)
     this.unsubscribers.push(
       events.on("agent:killed", (payload) => {
@@ -279,58 +272,6 @@ export class TaskOrchestrator {
     this.agentToRunMap.delete(agentId);
 
     // Try to assign next task now that this agent is free
-    await this.assignNextTask();
-  }
-
-  /**
-   * Handle agent failure.
-   * Correlate the failure to a running task and mark it as failed.
-   */
-  private async handleAgentFailed(payload: CanopyEventMap["agent:failed"]): Promise<void> {
-    if (this.isDisposed) return;
-
-    const { agentId, error } = payload;
-    if (!agentId) return;
-
-    // Find the run ID for this agent
-    const runId = this.agentToRunMap.get(agentId);
-    if (!runId) {
-      // Agent failed without a tracked task
-      return;
-    }
-
-    // Find the task for this run
-    const taskId = this.runToTaskMap.get(runId);
-    if (!taskId) {
-      // Run failed without a tracked task
-      this.agentToRunMap.delete(agentId);
-      return;
-    }
-
-    // Get the task to verify it's still running with this runId
-    const task = await this.queueService.getTask(taskId);
-    if (!task || task.status !== "running" || task.runId !== runId) {
-      // Task state has changed - don't update it
-      this.runToTaskMap.delete(runId);
-      this.agentToRunMap.delete(agentId);
-      return;
-    }
-
-    // Mark task as failed
-    try {
-      await this.queueService.markFailed(taskId, error);
-    } catch (err) {
-      console.error(
-        `[TaskOrchestrator] Failed to mark task ${taskId} as failed:`,
-        err instanceof Error ? err.message : String(err)
-      );
-    }
-
-    // Clean up tracking
-    this.runToTaskMap.delete(runId);
-    this.agentToRunMap.delete(agentId);
-
-    // Try to assign next task (to other available agents)
     await this.assignNextTask();
   }
 

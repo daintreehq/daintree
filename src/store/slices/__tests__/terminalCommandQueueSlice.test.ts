@@ -81,8 +81,8 @@ describe("TerminalCommandQueueSlice", () => {
       expect(terminalClient.write).toHaveBeenCalledWith("test-terminal", "test data");
     });
 
-    it("should write user input immediately when agent is failed", () => {
-      mockTerminal.agentState = "failed";
+    it("should write user input immediately when agent is directing", () => {
+      mockTerminal.agentState = "directing";
       slice.queueCommand("test-terminal", "test data", "test description", "user");
       expect(terminalClient.write).toHaveBeenCalledWith("test-terminal", "test data");
     });

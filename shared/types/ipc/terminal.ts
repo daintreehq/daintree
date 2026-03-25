@@ -166,7 +166,6 @@ export interface TerminalReconnectResult {
   spawnedAt?: number;
   activityTier?: "active" | "background";
   hasPty?: boolean;
-  error?: string;
 }
 
 /** Terminal information payload for diagnostic display */

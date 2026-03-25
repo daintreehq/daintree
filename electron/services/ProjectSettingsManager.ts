@@ -38,7 +38,6 @@ export class ProjectSettingsManager {
     return {
       completedEnabled: overrides.completedEnabled ?? global.completedEnabled,
       waitingEnabled: overrides.waitingEnabled ?? global.waitingEnabled,
-      failedEnabled: overrides.failedEnabled ?? global.failedEnabled,
       soundEnabled: overrides.soundEnabled ?? global.soundEnabled,
       soundFile: overrides.soundFile ?? global.soundFile,
       waitingEscalationEnabled:
