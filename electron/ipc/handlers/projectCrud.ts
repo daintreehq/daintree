@@ -67,12 +67,6 @@ export function registerProjectCrudHandlers(deps: HandlerDependencies): () => vo
       });
     }
 
-    if (deps.projectMcpManager) {
-      await deps.projectMcpManager.stopForProject(projectId).catch((err: unknown) => {
-        console.error(`[IPC] project:remove: Failed to stop MCP servers for ${projectId}:`, err);
-      });
-    }
-
     await projectStore.removeProject(projectId);
   };
   ipcMain.handle(CHANNELS.PROJECT_REMOVE, handleProjectRemove);
@@ -227,12 +221,6 @@ export function registerProjectCrudHandlers(deps: HandlerDependencies): () => vo
       if (killTerminals) {
         const terminalsKilled = await deps.ptyClient!.killByProject(projectId);
 
-        if (deps.projectMcpManager) {
-          await deps.projectMcpManager.stopForProject(projectId).catch((err: unknown) => {
-            console.error(`[IPC] project:close: Failed to stop MCP servers for ${projectId}:`, err);
-          });
-        }
-
         await projectStore.clearProjectState(projectId);
 
         if (projectId === storeActiveProjectId) {
@@ -275,13 +263,6 @@ export function registerProjectCrudHandlers(deps: HandlerDependencies): () => vo
   };
   ipcMain.handle(CHANNELS.PROJECT_CLOSE, handleProjectClose);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.PROJECT_CLOSE));
-
-  const handleProjectMcpGetStatuses = (_event: Electron.IpcMainInvokeEvent, projectId: string) => {
-    if (typeof projectId !== "string" || !projectId) return [];
-    return deps.projectMcpManager?.getStatuses(projectId) ?? [];
-  };
-  ipcMain.handle(CHANNELS.PROJECT_MCP_GET_STATUSES, handleProjectMcpGetStatuses);
-  handlers.push(() => ipcMain.removeHandler(CHANNELS.PROJECT_MCP_GET_STATUSES));
 
   const handleProjectReopen = async (_event: Electron.IpcMainInvokeEvent, projectId: string) => {
     if (typeof projectId !== "string" || !projectId) {

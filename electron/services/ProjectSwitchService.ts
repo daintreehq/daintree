@@ -91,9 +91,6 @@ export class ProjectSwitchService {
         ),
       ]);
 
-      // Start MCP servers for the new project after cleanup is complete
-      await this.startProjectMcpServers(updatedProject);
-
       const switchId = randomUUID();
       sendToRenderer(this.deps.mainWindow, CHANNELS.PROJECT_ON_SWITCH, {
         project: updatedProject,
@@ -183,9 +180,6 @@ export class ProjectSwitchService {
         ? safeCall(() => this.deps.eventBuffer!.onProjectSwitch())
         : Promise.resolve(),
       safeCall(() => taskQueueService.onProjectSwitch(projectId)),
-      previousProjectId && this.deps.projectMcpManager
-        ? safeCall(() => this.deps.projectMcpManager!.stopForProject(previousProjectId!))
-        : Promise.resolve(),
       safeCall(() => taskWorktreeService.onProjectSwitch()),
       safeCall(() => contextInjectionTracker.onProjectSwitch()),
     ]);
@@ -197,7 +191,6 @@ export class ProjectSwitchService {
           "LogBuffer",
           "EventBuffer",
           "TaskQueueService",
-          "ProjectMcpManager",
           "TaskWorktreeService",
           "ContextInjectionTracker",
         ];
@@ -255,22 +248,6 @@ export class ProjectSwitchService {
       }
     } catch (error) {
       console.error("[ProjectSwitch] Failed to apply in-repo identity:", error);
-    }
-  }
-
-  private async startProjectMcpServers(project: Project): Promise<void> {
-    if (!this.deps.projectMcpManager) return;
-    try {
-      const settings = await projectStore.getProjectSettings(project.id);
-      const servers = settings?.mcpServers;
-      if (servers && Object.keys(servers).length > 0) {
-        await this.deps.projectMcpManager.startForProject(project.id, project.path, servers);
-        console.log(
-          `[ProjectSwitch] Started ${Object.keys(servers).length} MCP server(s) for project ${project.name}`
-        );
-      }
-    } catch (error) {
-      console.error("[ProjectSwitch] Failed to start project MCP servers:", error);
     }
   }
 

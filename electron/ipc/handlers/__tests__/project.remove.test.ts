@@ -48,7 +48,7 @@ describe("project:remove handler", () => {
     vi.clearAllMocks();
   });
 
-  it("kills terminals and stops MCP servers before removing the project", async () => {
+  it("kills terminals before removing the project", async () => {
     projectStoreMock.removeProject.mockResolvedValue(undefined);
 
     const ptyClient = {
@@ -57,15 +57,10 @@ describe("project:remove handler", () => {
       onProjectSwitch: vi.fn(),
       setActiveProject: vi.fn(),
     };
-    const projectMcpManager = {
-      stopForProject: vi.fn(async () => undefined),
-      getStatuses: vi.fn(),
-    };
 
     const deps = {
       mainWindow: {} as unknown,
       ptyClient,
-      projectMcpManager,
     } as unknown as HandlerDependencies;
 
     registerProjectCrudHandlers(deps);
@@ -74,14 +69,11 @@ describe("project:remove handler", () => {
     await handler(fakeEvent, "proj-1");
 
     expect(ptyClient.killByProject).toHaveBeenCalledWith("proj-1");
-    expect(projectMcpManager.stopForProject).toHaveBeenCalledWith("proj-1");
     expect(projectStoreMock.removeProject).toHaveBeenCalledWith("proj-1");
 
     const killOrder = ptyClient.killByProject.mock.invocationCallOrder[0];
-    const mcpOrder = projectMcpManager.stopForProject.mock.invocationCallOrder[0];
     const removeOrder = projectStoreMock.removeProject.mock.invocationCallOrder[0];
     expect(killOrder).toBeLessThan(removeOrder);
-    expect(mcpOrder).toBeLessThan(removeOrder);
   });
 
   it("still removes the project when killByProject fails", async () => {
@@ -110,31 +102,7 @@ describe("project:remove handler", () => {
     expect(projectStoreMock.removeProject).toHaveBeenCalledWith("proj-2");
   });
 
-  it("still removes the project when stopForProject fails", async () => {
-    projectStoreMock.removeProject.mockResolvedValue(undefined);
-
-    const projectMcpManager = {
-      stopForProject: vi.fn(async () => {
-        throw new Error("MCP shutdown error");
-      }),
-      getStatuses: vi.fn(),
-    };
-
-    const deps = {
-      mainWindow: {} as unknown,
-      projectMcpManager,
-    } as unknown as HandlerDependencies;
-
-    registerProjectCrudHandlers(deps);
-    const handler = getHandler(CHANNELS.PROJECT_REMOVE);
-
-    await handler(fakeEvent, "proj-3");
-
-    expect(projectMcpManager.stopForProject).toHaveBeenCalledWith("proj-3");
-    expect(projectStoreMock.removeProject).toHaveBeenCalledWith("proj-3");
-  });
-
-  it("removes the project when no ptyClient or projectMcpManager are provided", async () => {
+  it("removes the project when no ptyClient is provided", async () => {
     projectStoreMock.removeProject.mockResolvedValue(undefined);
 
     const deps = {

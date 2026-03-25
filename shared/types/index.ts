@@ -79,7 +79,6 @@ export type {
   RunCommand,
   ProjectSettings,
   ProjectTerminalSettings,
-  ProjectMcpServerConfig,
   CopyTreeSettings,
 } from "./project.js";
 
@@ -137,8 +136,6 @@ export type {
   ProjectStats,
   BulkProjectStatsEntry,
   BulkProjectStats,
-  ProjectMcpServerRunState,
-  ProjectMcpServerStatus,
   // GitHub IPC types
   RepositoryStats,
   ProjectHealthData,

@@ -236,14 +236,6 @@ export interface CopyTreeSettings {
   alwaysExclude?: string[];
 }
 
-/** Per-project MCP server configuration (stdio transport) */
-export interface ProjectMcpServerConfig {
-  command: string;
-  args?: string[];
-  env?: Record<string, string>;
-  cwd?: string;
-}
-
 /** Per-project terminal configuration overrides */
 export interface ProjectTerminalSettings {
   /** Override shell executable path (machine-local, not stored in .canopy/settings.json) */
@@ -313,8 +305,6 @@ export interface ProjectSettings {
   worktreePathPattern?: string;
   /** Per-project terminal configuration overrides */
   terminalSettings?: ProjectTerminalSettings;
-  /** Per-project MCP server definitions (started on project open, stopped on close) */
-  mcpServers?: Record<string, ProjectMcpServerConfig>;
   /** Per-project notification overrides (machine-local, never written to .canopy/settings.json) */
   notificationOverrides?: Partial<NotificationSettings>;
 }
