@@ -190,4 +190,23 @@ describe("portalStore", () => {
     expect(usePortalStore.getState().tabs).toEqual([]);
     expect(usePortalStore.getState().activeTabId).toBeNull();
   });
+
+  it("unmarkTabCreated removes from createdTabs but not from tabs", () => {
+    const store = usePortalStore.getState();
+    store.createTab("http://example.com", "Test");
+    const tabId = usePortalStore.getState().tabs[0].id;
+    store.markTabCreated(tabId);
+
+    expect(usePortalStore.getState().createdTabs.has(tabId)).toBe(true);
+
+    usePortalStore.getState().unmarkTabCreated(tabId);
+
+    expect(usePortalStore.getState().createdTabs.has(tabId)).toBe(false);
+    expect(usePortalStore.getState().tabs.some((t) => t.id === tabId)).toBe(true);
+  });
+
+  it("unmarkTabCreated is idempotent", () => {
+    usePortalStore.getState().unmarkTabCreated("non-existent-tab");
+    expect(() => usePortalStore.getState().unmarkTabCreated("non-existent-tab")).not.toThrow();
+  });
 });

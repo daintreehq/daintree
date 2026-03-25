@@ -259,6 +259,7 @@ export const CHANNELS = {
   PORTAL_FOCUS: "portal:focus",
   PORTAL_BLUR: "portal:blur",
   PORTAL_NEW_TAB_MENU_ACTION: "portal:new-tab-menu-action",
+  PORTAL_TAB_EVICTED: "portal:tab-evicted",
 
   HIBERNATION_GET_CONFIG: "hibernation:get-config",
   HIBERNATION_UPDATE_CONFIG: "hibernation:update-config",

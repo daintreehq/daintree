@@ -25,10 +25,17 @@ function createPlaceholderRect() {
 }
 
 describe("PortalVisibilityController", () => {
+  let evictionCallbacks: Array<(data: { tabId: string }) => void> = [];
   const portal = {
     create: vi.fn<({ tabId, url }: { tabId: string; url: string }) => Promise<void>>(),
     show: vi.fn<({ tabId, bounds }: { tabId: string; bounds: unknown }) => Promise<void>>(),
     hide: vi.fn<() => Promise<void>>(),
+    onTabEvicted: vi.fn((cb: (data: { tabId: string }) => void) => {
+      evictionCallbacks.push(cb);
+      return () => {
+        evictionCallbacks = evictionCallbacks.filter((c) => c !== cb);
+      };
+    }),
   };
   const storage = new Map<string, string>();
   const localStorageMock = {
@@ -48,6 +55,7 @@ describe("PortalVisibilityController", () => {
     vi.useFakeTimers();
     vi.clearAllMocks();
     storage.clear();
+    evictionCallbacks = [];
 
     portal.create.mockResolvedValue(undefined);
     portal.show.mockResolvedValue(undefined);
@@ -250,5 +258,31 @@ describe("PortalVisibilityController", () => {
       tabId: "tab-1",
       bounds: { x: 10, y: 21, width: 301, height: 401 },
     });
+  });
+
+  it("removes tab from createdTabs when eviction event fires", () => {
+    usePortalStore.setState({
+      isOpen: true,
+      activeTabId: "tab-1",
+      tabs: [
+        { id: "tab-1", title: "A", url: "https://example.com/a" },
+        { id: "tab-2", title: "B", url: "https://example.com/b" },
+      ],
+      createdTabs: new Set<string>(["tab-1", "tab-2"]),
+    });
+
+    render(<PortalVisibilityController />);
+
+    expect(portal.onTabEvicted).toHaveBeenCalled();
+    expect(usePortalStore.getState().createdTabs.has("tab-2")).toBe(true);
+
+    act(() => {
+      for (const cb of evictionCallbacks) {
+        cb({ tabId: "tab-2" });
+      }
+    });
+
+    expect(usePortalStore.getState().createdTabs.has("tab-2")).toBe(false);
+    expect(usePortalStore.getState().tabs.some((t) => t.id === "tab-2")).toBe(true);
   });
 });
