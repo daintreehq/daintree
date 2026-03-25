@@ -11,9 +11,10 @@ const FILTER_OPTIONS: { value: QuickStateFilter; label: string }[] = [
 interface QuickStateFilterBarProps {
   value: QuickStateFilter;
   onChange: (value: QuickStateFilter) => void;
+  counts?: Record<"working" | "waiting" | "finished", number>;
 }
 
-export function QuickStateFilterBar({ value, onChange }: QuickStateFilterBarProps) {
+export function QuickStateFilterBar({ value, onChange, counts }: QuickStateFilterBarProps) {
   return (
     <div
       className="flex items-center gap-1 px-4 py-1.5 border-b border-border-default"
@@ -36,6 +37,7 @@ export function QuickStateFilterBar({ value, onChange }: QuickStateFilterBarProp
             )}
           >
             {option.label}
+            {counts && option.value !== "all" && ` (${counts[option.value]})`}
           </button>
         );
       })}
