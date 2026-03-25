@@ -118,6 +118,7 @@ export function FileViewerModal({
     const requestId = ++requestRef.current;
     setLoadState("loading");
     setErrorCode(null);
+    hasSwitchedToDiffRef.current = false;
 
     if (imageFile && !svgFile) {
       setLoadState("image");
