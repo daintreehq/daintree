@@ -154,6 +154,7 @@ export class PtyClient extends EventEmitter {
   private isWaitingForHandshake = false;
   private handshakeTimeout: NodeJS.Timeout | null = null;
   private pendingSpawns: Map<string, PtyHostSpawnOptions> = new Map();
+  private ipcDataMirrorIds = new Set<string>();
   private pendingKillCount: Map<string, number> = new Map();
   private needsRespawn = false;
   private activeProjectId: string | null = null;
@@ -706,6 +707,11 @@ export class PtyClient extends EventEmitter {
       console.log(`[PtyClient] Respawning terminal: ${id}`);
       this.send({ type: "spawn", id, options });
     }
+
+    // Re-enable IPC data mirrors that were active before crash
+    for (const id of this.ipcDataMirrorIds) {
+      this.send({ type: "set-ipc-data-mirror", id, enabled: true });
+    }
   }
 
   private cleanupOrphanedPtys(crashType: CrashType): void {
@@ -885,6 +891,7 @@ export class PtyClient extends EventEmitter {
     getTrashedPidTracker().removeTrashed(id);
     this.pendingKillCount.set(id, (this.pendingKillCount.get(id) ?? 0) + 1);
     this.pendingSpawns.delete(id);
+    this.ipcDataMirrorIds.delete(id);
     this.send({ type: "kill", id, reason });
   }
 
@@ -916,6 +923,11 @@ export class PtyClient extends EventEmitter {
    * allowing main-process consumers (like UrlDetector for dev preview) to receive data events.
    */
   setIpcDataMirror(id: string, enabled: boolean): void {
+    if (enabled) {
+      this.ipcDataMirrorIds.add(id);
+    } else {
+      this.ipcDataMirrorIds.delete(id);
+    }
     this.send({ type: "set-ipc-data-mirror", id, enabled });
   }
 
@@ -1383,6 +1395,7 @@ export class PtyClient extends EventEmitter {
 
     this.pendingSpawns.clear();
     this.pendingKillCount.clear();
+    this.ipcDataMirrorIds.clear();
     this.terminalPids.clear();
     this.snapshotCallbacks.clear();
     this.snapshotTimeouts.clear();
