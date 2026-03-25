@@ -135,6 +135,8 @@ export type {
   // Project close IPC types
   ProjectCloseResult,
   ProjectStats,
+  BulkProjectStatsEntry,
+  BulkProjectStats,
   ProjectMcpServerRunState,
   ProjectMcpServerStatus,
   // GitHub IPC types

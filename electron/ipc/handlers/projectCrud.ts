@@ -8,6 +8,7 @@ import { sendToRenderer } from "../utils.js";
 import { randomUUID } from "crypto";
 import type { HandlerDependencies } from "../types.js";
 import type { Project, ProjectSettings } from "../../types/index.js";
+import type { BulkProjectStats, BulkProjectStatsEntry } from "../../../shared/types/ipc/project.js";
 import type {
   GitInitOptions,
   GitInitResult,
@@ -338,6 +339,73 @@ export function registerProjectCrudHandlers(deps: HandlerDependencies): () => vo
   };
   ipcMain.handle(CHANNELS.PROJECT_GET_STATS, handleProjectGetStats);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.PROJECT_GET_STATS));
+
+  const handleProjectGetBulkStats = async (
+    _event: Electron.IpcMainInvokeEvent,
+    projectIds: string[]
+  ): Promise<BulkProjectStats> => {
+    if (!Array.isArray(projectIds)) {
+      throw new Error("Invalid projectIds: must be an array");
+    }
+
+    const uniqueIds = [...new Set(projectIds.filter((id) => typeof id === "string" && id))];
+    const MEMORY_PER_TERMINAL_MB = 50;
+
+    const entries = await Promise.allSettled(
+      uniqueIds.map(async (projectId): Promise<[string, BulkProjectStatsEntry]> => {
+        const [ptyStats, terminalIds] = await Promise.all([
+          deps.ptyClient!.getProjectStats(projectId),
+          deps.ptyClient!.getTerminalsForProjectAsync(projectId),
+        ]);
+
+        let activeAgentCount = 0;
+        let waitingAgentCount = 0;
+
+        const terminalInfos = await Promise.all(
+          terminalIds.map((id) => deps.ptyClient!.getTerminalAsync(id))
+        );
+
+        for (const terminal of terminalInfos) {
+          if (!terminal) continue;
+          if (terminal.kind === "dev-preview") continue;
+          if (terminal.hasPty === false) continue;
+
+          const isAgent = terminal.kind === "agent" || !!terminal.agentId;
+          if (!isAgent) continue;
+
+          if (terminal.agentState === "waiting") {
+            waitingAgentCount += 1;
+          } else if (terminal.agentState === "working" || terminal.agentState === "running") {
+            activeAgentCount += 1;
+          }
+        }
+
+        return [
+          projectId,
+          {
+            processCount: ptyStats.terminalCount,
+            terminalCount: ptyStats.terminalCount,
+            estimatedMemoryMB: ptyStats.terminalCount * MEMORY_PER_TERMINAL_MB,
+            terminalTypes: ptyStats.terminalTypes,
+            processIds: ptyStats.processIds,
+            activeAgentCount,
+            waitingAgentCount,
+          },
+        ];
+      })
+    );
+
+    const result: BulkProjectStats = {};
+    for (const entry of entries) {
+      if (entry.status === "fulfilled") {
+        const [id, stats] = entry.value;
+        result[id] = stats;
+      }
+    }
+    return result;
+  };
+  ipcMain.handle(CHANNELS.PROJECT_GET_BULK_STATS, handleProjectGetBulkStats);
+  handlers.push(() => ipcMain.removeHandler(CHANNELS.PROJECT_GET_BULK_STATS));
 
   const handleProjectCreateFolder = async (
     _event: Electron.IpcMainInvokeEvent,

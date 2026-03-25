@@ -4,6 +4,7 @@ import type {
   RunCommand,
   ProjectCloseResult,
   ProjectStats,
+  BulkProjectStats,
   TerminalRecipe,
   TerminalSnapshot,
   TabGroup,
@@ -129,6 +130,10 @@ export const projectClient = {
 
   getStats: (projectId: string): Promise<ProjectStats> => {
     return window.electron.project.getStats(projectId);
+  },
+
+  getBulkStats: (projectIds: string[]): Promise<BulkProjectStats> => {
+    return window.electron.project.getBulkStats(projectIds);
   },
 
   createFolder: (parentPath: string, folderName: string): Promise<string> => {

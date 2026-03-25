@@ -2,54 +2,48 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { getStatsMock, getForProjectMock, useProjectStoreMock, notifyMock, projectState } =
-  vi.hoisted(() => {
-    const getStatsMock = vi.fn();
-    const getForProjectMock = vi.fn();
+const { getBulkStatsMock, useProjectStoreMock, notifyMock, projectState } = vi.hoisted(() => {
+  const getBulkStatsMock = vi.fn();
 
-    const projectState = {
-      projects: [
-        {
-          id: "project-1",
-          name: "Project One",
-          path: "/repo/one",
-          emoji: "🌲",
-          color: "#00aa00",
-          lastOpened: 123,
-          status: "active" as const,
-        },
-      ],
-      currentProject: null as { id: string } | null,
-      switchProject: vi.fn().mockResolvedValue(undefined),
-      reopenProject: vi.fn().mockResolvedValue(undefined),
-      loadProjects: vi.fn().mockResolvedValue(undefined),
-      addProject: vi.fn().mockResolvedValue(undefined),
-      closeProject: vi.fn().mockResolvedValue({ processesKilled: 0 }),
-      closeActiveProject: vi.fn().mockResolvedValue({ processesKilled: 0 }),
-      removeProject: vi.fn().mockResolvedValue(undefined),
-      locateProject: vi.fn().mockResolvedValue(undefined),
-    };
+  const projectState = {
+    projects: [
+      {
+        id: "project-1",
+        name: "Project One",
+        path: "/repo/one",
+        emoji: "🌲",
+        color: "#00aa00",
+        lastOpened: 123,
+        status: "active" as const,
+      },
+    ],
+    currentProject: null as { id: string } | null,
+    switchProject: vi.fn().mockResolvedValue(undefined),
+    reopenProject: vi.fn().mockResolvedValue(undefined),
+    loadProjects: vi.fn().mockResolvedValue(undefined),
+    addProject: vi.fn().mockResolvedValue(undefined),
+    closeProject: vi.fn().mockResolvedValue({ processesKilled: 0 }),
+    closeActiveProject: vi.fn().mockResolvedValue({ processesKilled: 0 }),
+    removeProject: vi.fn().mockResolvedValue(undefined),
+    locateProject: vi.fn().mockResolvedValue(undefined),
+  };
 
-    const useProjectStoreMock = vi.fn((selector: (state: typeof projectState) => unknown) =>
-      selector(projectState)
-    );
-    const notifyMock = vi.fn().mockReturnValue("");
+  const useProjectStoreMock = vi.fn((selector: (state: typeof projectState) => unknown) =>
+    selector(projectState)
+  );
+  const notifyMock = vi.fn().mockReturnValue("");
 
-    return {
-      getStatsMock,
-      getForProjectMock,
-      useProjectStoreMock,
-      notifyMock,
-      projectState,
-    };
-  });
+  return {
+    getBulkStatsMock,
+    useProjectStoreMock,
+    notifyMock,
+    projectState,
+  };
+});
 
 vi.mock("@/clients", () => ({
   projectClient: {
-    getStats: getStatsMock,
-  },
-  terminalClient: {
-    getForProject: getForProjectMock,
+    getBulkStats: getBulkStatsMock,
   },
 }));
 
@@ -61,16 +55,35 @@ vi.mock("@/lib/notify", () => ({
   notify: notifyMock,
 }));
 
-vi.mock("@shared/config/panelKindRegistry", () => ({
-  panelKindHasPty: vi.fn(() => true),
-}));
-
-vi.mock("@/utils/terminalType", () => ({
-  isAgentTerminal: vi.fn(() => true),
-}));
-
 import { usePaletteStore } from "@/store/paletteStore";
 import { useProjectSwitcherPalette } from "../useProjectSwitcherPalette";
+
+const emptyBulkStats = (projectIds: string[]) => {
+  const result: Record<
+    string,
+    {
+      processCount: number;
+      terminalCount: number;
+      estimatedMemoryMB: number;
+      terminalTypes: Record<string, number>;
+      processIds: number[];
+      activeAgentCount: number;
+      waitingAgentCount: number;
+    }
+  > = {};
+  for (const id of projectIds) {
+    result[id] = {
+      processCount: 0,
+      terminalCount: 0,
+      estimatedMemoryMB: 0,
+      terminalTypes: {},
+      processIds: [],
+      activeAgentCount: 0,
+      waitingAgentCount: 0,
+    };
+  }
+  return result;
+};
 
 describe("useProjectSwitcherPalette", () => {
   beforeEach(() => {
@@ -79,15 +92,8 @@ describe("useProjectSwitcherPalette", () => {
     usePaletteStore.setState({ activePaletteId: null });
   });
 
-  it("tolerates malformed terminal lists when fetching project stats", async () => {
-    getStatsMock.mockResolvedValue({
-      processCount: 0,
-      terminalCount: 0,
-      estimatedMemoryMB: 0,
-      terminalTypes: {},
-      processIds: [],
-    });
-    getForProjectMock.mockResolvedValue(undefined);
+  it("uses bulk stats endpoint to fetch project stats", async () => {
+    getBulkStatsMock.mockResolvedValue(emptyBulkStats(["project-1"]));
 
     const { result } = renderHook(() => useProjectSwitcherPalette());
 
@@ -100,18 +106,13 @@ describe("useProjectSwitcherPalette", () => {
       expect(result.current.results[0]?.activeAgentCount).toBe(0);
       expect(result.current.results[0]?.waitingAgentCount).toBe(0);
     });
+
+    expect(getBulkStatsMock).toHaveBeenCalledWith(["project-1"]);
   });
 
   it("does not leak unhandled rejections when project loading fails", async () => {
     projectState.loadProjects.mockRejectedValueOnce(new Error("load failed"));
-    getStatsMock.mockResolvedValue({
-      processCount: 0,
-      terminalCount: 0,
-      estimatedMemoryMB: 0,
-      terminalTypes: {},
-      processIds: [],
-    });
-    getForProjectMock.mockResolvedValue([]);
+    getBulkStatsMock.mockResolvedValue(emptyBulkStats(["project-1"]));
 
     const { result } = renderHook(() => useProjectSwitcherPalette());
 
@@ -122,6 +123,33 @@ describe("useProjectSwitcherPalette", () => {
     await waitFor(() => {
       expect(result.current.isOpen).toBe(true);
       expect(result.current.results).toHaveLength(1);
+    });
+  });
+
+  it("populates agent counts from bulk stats", async () => {
+    getBulkStatsMock.mockResolvedValue({
+      "project-1": {
+        processCount: 3,
+        terminalCount: 3,
+        estimatedMemoryMB: 150,
+        terminalTypes: { terminal: 1, agent: 2 },
+        processIds: [1, 2, 3],
+        activeAgentCount: 1,
+        waitingAgentCount: 1,
+      },
+    });
+
+    const { result } = renderHook(() => useProjectSwitcherPalette());
+
+    act(() => {
+      result.current.open();
+    });
+
+    await waitFor(() => {
+      expect(result.current.results).toHaveLength(1);
+      expect(result.current.results[0]?.activeAgentCount).toBe(1);
+      expect(result.current.results[0]?.waitingAgentCount).toBe(1);
+      expect(result.current.results[0]?.processCount).toBe(3);
     });
   });
 
@@ -159,14 +187,7 @@ describe("useProjectSwitcherPalette", () => {
     it("defaults to index 1 when 2+ projects exist", async () => {
       projectState.projects = multipleProjects;
       projectState.currentProject = { id: "project-1" };
-      getStatsMock.mockResolvedValue({
-        processCount: 0,
-        terminalCount: 0,
-        estimatedMemoryMB: 0,
-        terminalTypes: {},
-        processIds: [],
-      });
-      getForProjectMock.mockResolvedValue([]);
+      getBulkStatsMock.mockResolvedValue(emptyBulkStats(multipleProjects.map((p) => p.id)));
 
       const { result } = renderHook(() => useProjectSwitcherPalette());
 
@@ -184,14 +205,7 @@ describe("useProjectSwitcherPalette", () => {
     it("defaults to index 0 when only 1 project exists", async () => {
       projectState.projects = [multipleProjects[0]];
       projectState.currentProject = { id: "project-1" };
-      getStatsMock.mockResolvedValue({
-        processCount: 0,
-        terminalCount: 0,
-        estimatedMemoryMB: 0,
-        terminalTypes: {},
-        processIds: [],
-      });
-      getForProjectMock.mockResolvedValue([]);
+      getBulkStatsMock.mockResolvedValue(emptyBulkStats(["project-1"]));
 
       const { result } = renderHook(() => useProjectSwitcherPalette());
 
@@ -209,14 +223,7 @@ describe("useProjectSwitcherPalette", () => {
     it("defaults to index 0 when no projects exist", async () => {
       projectState.projects = [];
       projectState.currentProject = null;
-      getStatsMock.mockResolvedValue({
-        processCount: 0,
-        terminalCount: 0,
-        estimatedMemoryMB: 0,
-        terminalTypes: {},
-        processIds: [],
-      });
-      getForProjectMock.mockResolvedValue([]);
+      getBulkStatsMock.mockResolvedValue({});
 
       const { result } = renderHook(() => useProjectSwitcherPalette());
 
@@ -234,14 +241,7 @@ describe("useProjectSwitcherPalette", () => {
     it("defaults to index 1 with exactly 2 projects", async () => {
       projectState.projects = [multipleProjects[0], multipleProjects[1]];
       projectState.currentProject = { id: "project-1" };
-      getStatsMock.mockResolvedValue({
-        processCount: 0,
-        terminalCount: 0,
-        estimatedMemoryMB: 0,
-        terminalTypes: {},
-        processIds: [],
-      });
-      getForProjectMock.mockResolvedValue([]);
+      getBulkStatsMock.mockResolvedValue(emptyBulkStats(["project-1", "project-2"]));
 
       const { result } = renderHook(() => useProjectSwitcherPalette());
 
@@ -281,14 +281,26 @@ describe("useProjectSwitcherPalette", () => {
     beforeEach(() => {
       projectState.projects = [activeProject, inactiveProject];
       projectState.currentProject = { id: "project-1" };
-      getStatsMock.mockResolvedValue({
-        processCount: 2,
-        terminalCount: 2,
-        estimatedMemoryMB: 0,
-        terminalTypes: {},
-        processIds: [],
+      getBulkStatsMock.mockResolvedValue({
+        "project-1": {
+          processCount: 2,
+          terminalCount: 2,
+          estimatedMemoryMB: 100,
+          terminalTypes: {},
+          processIds: [],
+          activeAgentCount: 0,
+          waitingAgentCount: 0,
+        },
+        "project-2": {
+          processCount: 0,
+          terminalCount: 0,
+          estimatedMemoryMB: 0,
+          terminalTypes: {},
+          processIds: [],
+          activeAgentCount: 0,
+          waitingAgentCount: 0,
+        },
       });
-      getForProjectMock.mockResolvedValue([]);
     });
 
     it("allows active project to enter confirm flow", async () => {
@@ -429,14 +441,7 @@ describe("useProjectSwitcherPalette", () => {
     it("advances selection when toggled while open", async () => {
       projectState.projects = threeProjects;
       projectState.currentProject = { id: "project-1" };
-      getStatsMock.mockResolvedValue({
-        processCount: 0,
-        terminalCount: 0,
-        estimatedMemoryMB: 0,
-        terminalTypes: {},
-        processIds: [],
-      });
-      getForProjectMock.mockResolvedValue([]);
+      getBulkStatsMock.mockResolvedValue(emptyBulkStats(threeProjects.map((p) => p.id)));
 
       const { result } = renderHook(() => useProjectSwitcherPalette());
 
@@ -462,14 +467,7 @@ describe("useProjectSwitcherPalette", () => {
     it("wraps to index 1 at end of list (skipping current project)", async () => {
       projectState.projects = threeProjects;
       projectState.currentProject = { id: "project-1" };
-      getStatsMock.mockResolvedValue({
-        processCount: 0,
-        terminalCount: 0,
-        estimatedMemoryMB: 0,
-        terminalTypes: {},
-        processIds: [],
-      });
-      getForProjectMock.mockResolvedValue([]);
+      getBulkStatsMock.mockResolvedValue(emptyBulkStats(threeProjects.map((p) => p.id)));
 
       const { result } = renderHook(() => useProjectSwitcherPalette());
 
@@ -496,14 +494,7 @@ describe("useProjectSwitcherPalette", () => {
     it("is a no-op with only 1 project", async () => {
       projectState.projects = [threeProjects[0]];
       projectState.currentProject = { id: "project-1" };
-      getStatsMock.mockResolvedValue({
-        processCount: 0,
-        terminalCount: 0,
-        estimatedMemoryMB: 0,
-        terminalTypes: {},
-        processIds: [],
-      });
-      getForProjectMock.mockResolvedValue([]);
+      getBulkStatsMock.mockResolvedValue(emptyBulkStats(["project-1"]));
 
       const { result } = renderHook(() => useProjectSwitcherPalette());
 
@@ -557,14 +548,9 @@ describe("useProjectSwitcherPalette", () => {
 
       projectState.projects = projectsWithActiveNotFirst;
       projectState.currentProject = { id: "project-2" };
-      getStatsMock.mockResolvedValue({
-        processCount: 0,
-        terminalCount: 0,
-        estimatedMemoryMB: 0,
-        terminalTypes: {},
-        processIds: [],
-      });
-      getForProjectMock.mockResolvedValue([]);
+      getBulkStatsMock.mockResolvedValue(
+        emptyBulkStats(projectsWithActiveNotFirst.map((p) => p.id))
+      );
 
       const { result } = renderHook(() => useProjectSwitcherPalette());
 
