@@ -4,6 +4,7 @@ import { usePaletteStore } from "@/store/paletteStore";
 import { useTerminalStore } from "@/store/terminalStore";
 import { useWorktreeDataStore } from "@/store/worktreeDataStore";
 import { useRecipeStore } from "@/store/recipeStore";
+import { useShallow } from "zustand/react/shallow";
 import { isAgentTerminal } from "@/utils/terminalType";
 import { getDominantAgentState } from "@/components/Worktree/AgentStatusIndicator";
 import { STATE_ICONS, STATE_COLORS } from "@/components/Worktree/terminalStateConfig";
@@ -140,7 +141,9 @@ function BulkCommandPaletteInner() {
   const doubleEscapeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const queueRef = useRef<PQueue | null>(null);
 
-  const projectRecipes = useRecipeStore((s) => s.recipes.filter((r) => r.worktreeId === undefined));
+  const projectRecipes = useRecipeStore(
+    useShallow((s) => s.recipes.filter((r) => r.worktreeId === undefined))
+  );
 
   useEffect(() => {
     return () => {
