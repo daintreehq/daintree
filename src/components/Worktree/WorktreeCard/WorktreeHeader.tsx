@@ -233,6 +233,7 @@ export interface WorktreeHeaderProps {
     };
     onCopyContextFull: () => void;
     onCopyContextModified: () => void;
+    onCopyPath: () => void;
     onOpenEditor: () => void;
     onRevealInFinder: () => void;
     onOpenIssuePortal?: () => void;
@@ -444,6 +445,7 @@ export function WorktreeHeader({
                 onLaunchAgent={menu.onLaunchAgent ? handleLaunchAgent : undefined}
                 onCopyContextFull={menu.onCopyContextFull}
                 onCopyContextModified={menu.onCopyContextModified}
+                onCopyPath={menu.onCopyPath}
                 onOpenEditor={menu.onOpenEditor}
                 onRevealInFinder={menu.onRevealInFinder}
                 onOpenIssuePortal={menu.onOpenIssuePortal}

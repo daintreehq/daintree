@@ -3,6 +3,7 @@ import type { WorktreeState } from "../../types";
 import {
   CircleDot,
   Code,
+  Copy,
   FileText,
   Folder,
   GitCommitHorizontal,
@@ -64,6 +65,7 @@ export interface WorktreeMenuItemsProps {
   onLaunchAgent?: (agentId: string) => void;
   onCopyContextFull: () => void;
   onCopyContextModified: () => void;
+  onCopyPath: () => void;
   onOpenEditor: () => void;
   onRevealInFinder: () => void;
   onOpenIssuePortal?: () => void;
@@ -101,6 +103,7 @@ export function WorktreeMenuItems({
   onLaunchAgent,
   onCopyContextFull,
   onCopyContextModified,
+  onCopyPath,
   onOpenEditor,
   onRevealInFinder,
   onOpenIssuePortal,
@@ -274,6 +277,10 @@ export function WorktreeMenuItems({
       <C.Item onSelect={onRevealInFinder}>
         <Folder className="w-3.5 h-3.5 mr-2" />
         Reveal in Finder
+      </C.Item>
+      <C.Item onSelect={onCopyPath}>
+        <Copy className="w-3.5 h-3.5 mr-2" />
+        Copy Path
       </C.Item>
 
       {onTogglePin && !worktree.isMainWorktree && (
