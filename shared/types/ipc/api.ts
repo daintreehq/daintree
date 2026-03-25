@@ -728,6 +728,7 @@ export interface ElectronAPI {
     onNewTabMenuAction(
       callback: (action: import("../portal.js").PortalNewTabMenuAction) => void
     ): () => void;
+    onTabEvicted(callback: (data: { tabId: string }) => void): () => void;
   };
   webview: {
     /** Freeze or unfreeze a webview's JS execution via CDP Page.setWebLifecycleState */
