@@ -239,12 +239,15 @@ export function registerGithubHandlers(_deps: HandlerDependencies): () => void {
     if (!path.isAbsolute(cwd)) {
       throw new Error("Working directory must be an absolute path");
     }
+    if (branch !== undefined && (typeof branch !== "string" || !branch.trim())) {
+      throw new Error("Invalid branch name");
+    }
     const { getRepoUrl } = await import("../../services/GitHubService.js");
     const repoUrl = await getRepoUrl(cwd);
     if (!repoUrl) {
       throw new Error("Not a GitHub repository");
     }
-    const url = branch ? `${repoUrl}/commits/${branch}` : `${repoUrl}/commits`;
+    const url = branch ? `${repoUrl}/commits/${encodeURIComponent(branch)}` : `${repoUrl}/commits`;
     await shell.openExternal(url);
   };
   ipcMain.handle(CHANNELS.GITHUB_OPEN_COMMITS, handleGitHubOpenCommits);
