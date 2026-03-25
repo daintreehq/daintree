@@ -148,21 +148,8 @@ describe("ResourceGovernor", () => {
     governor.dispose();
   });
 
-  describe("engageThrottle GC", () => {
-    const originalGc = global.gc;
-
-    afterEach(() => {
-      if (originalGc) {
-        global.gc = originalGc;
-      } else {
-        delete (global as Record<string, unknown>).gc;
-      }
-    });
-
-    it("calls global.gc when memory exceeds throttle threshold", () => {
-      const gcMock = vi.fn();
-      global.gc = gcMock;
-
+  describe("engageThrottle", () => {
+    it("pauses terminals and emits host-throttled event under high memory", () => {
       const mockTerminal = { ptyProcess: { pause: vi.fn(), resume: vi.fn() } };
       const deps = createMockDeps({
         getTerminals: vi.fn().mockReturnValue([mockTerminal]),
@@ -180,30 +167,14 @@ describe("ResourceGovernor", () => {
 
       vi.advanceTimersByTime(2000);
 
-      expect(gcMock).toHaveBeenCalledOnce();
-
-      governor.dispose();
-    });
-
-    it("does not throw when global.gc is undefined", () => {
-      delete (global as Record<string, unknown>).gc;
-
-      const mockTerminal = { ptyProcess: { pause: vi.fn(), resume: vi.fn() } };
-      const deps = createMockDeps({
-        getTerminals: vi.fn().mockReturnValue([mockTerminal]),
-      });
-
-      vi.spyOn(process, "memoryUsage").mockReturnValue({
-        heapUsed: 900 * 1024 * 1024,
-        rss: 1024 * 1024 * 1024,
-        external: 0,
-        arrayBuffers: 0,
-      } as ReturnType<typeof process.memoryUsage>);
-
-      const governor = new ResourceGovernor(deps);
-      governor.start();
-
-      expect(() => vi.advanceTimersByTime(2000)).not.toThrow();
+      expect(mockTerminal.ptyProcess.pause).toHaveBeenCalled();
+      expect(deps.incrementPauseCount).toHaveBeenCalledWith(1);
+      expect(deps.sendEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: "host-throttled",
+          isThrottled: true,
+        })
+      );
 
       governor.dispose();
     });

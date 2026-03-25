@@ -309,7 +309,7 @@ export class PtyClient extends EventEmitter {
         serviceName: "canopy-pty-host",
         stdio: "pipe",
         cwd: os.homedir(),
-        execArgv: [`--max-old-space-size=${this.config.memoryLimitMb}`, "--expose-gc"],
+        execArgv: [`--max-old-space-size=${this.config.memoryLimitMb}`],
         env: {
           ...(process.env as Record<string, string>),
           CANOPY_USER_DATA: app.getPath("userData"),

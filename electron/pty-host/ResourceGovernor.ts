@@ -132,10 +132,6 @@ export class ResourceGovernor {
     this.deps.incrementPauseCount(pausedCount);
     console.log(`[ResourceGovernor] Paused ${pausedCount}/${terminals.length} terminals`);
 
-    if (global.gc) {
-      global.gc();
-    }
-
     this.deps.sendEvent({
       type: "host-throttled",
       isThrottled: true,
