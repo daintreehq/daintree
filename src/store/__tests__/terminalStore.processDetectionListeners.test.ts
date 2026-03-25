@@ -177,6 +177,18 @@ vi.mock("@/services/TerminalInstanceService", () => ({
   },
 }));
 
+// Mock window.electron for resource monitoring listener
+(globalThis as any).window = globalThis.window ?? {};
+(window as any).electron = {
+  terminal: {
+    onResourceMetrics: vi.fn(() => vi.fn()),
+  },
+  terminalConfig: {
+    get: vi.fn().mockResolvedValue({}),
+    setResourceMonitoring: vi.fn(),
+  },
+};
+
 const { useTerminalStore, setupTerminalStoreListeners, cleanupTerminalStoreListeners } =
   await import("../terminalStore");
 

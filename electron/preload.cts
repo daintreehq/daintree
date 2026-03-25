@@ -57,7 +57,11 @@ import type {
   GlobalDevServersChangedPayload,
 } from "../shared/types/ipc.js";
 import type { TerminalActivityPayload } from "../shared/types/terminal.js";
-import type { TerminalStatusPayload, SpawnResult } from "../shared/types/pty-host.js";
+import type {
+  TerminalStatusPayload,
+  SpawnResult,
+  TerminalResourceBatchPayload,
+} from "../shared/types/pty-host.js";
 
 type SpawnResultPayload = SpawnResult;
 import type {
@@ -838,7 +842,7 @@ const api: ElectronAPI = {
       _typedOn(CHANNELS.TERMINAL_STATUS, callback),
 
     onResourceMetrics: (
-      callback: (data: { metrics: Record<string, unknown>; timestamp: number }) => void
+      callback: (data: { metrics: TerminalResourceBatchPayload; timestamp: number }) => void
     ) => _typedOn(CHANNELS.TERMINAL_RESOURCE_METRICS, callback),
 
     onBackendCrashed: (
