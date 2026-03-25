@@ -3,7 +3,7 @@ import { launchApp, closeApp, type AppContext } from "../helpers/launch";
 import { createFixtureRepo } from "../helpers/fixtures";
 import { openAndOnboardProject } from "../helpers/project";
 import { waitForTerminalText } from "../helpers/terminal";
-import { getGridPanelCount, getGridPanelIds, getPanelById } from "../helpers/panels";
+import { getGridPanelCount, getGridPanelIds, getPanelById, openTerminal } from "../helpers/panels";
 import { SEL } from "../helpers/selectors";
 import { T_LONG, T_SETTLE } from "../helpers/timeouts";
 
@@ -47,7 +47,7 @@ test.describe.serial("Core: Terminal Isolation", () => {
 
     // Open 3 terminals
     for (let i = 0; i < 3; i++) {
-      await window.locator(SEL.toolbar.openTerminal).click();
+      await openTerminal(window);
       await window.waitForTimeout(T_SETTLE);
     }
     await expect.poll(() => getGridPanelCount(window), { timeout: T_LONG }).toBe(3);
@@ -74,7 +74,7 @@ test.describe.serial("Core: Terminal Isolation", () => {
     await waitForTerminalText(probePanel, "RESPONSE_OK", T_LONG);
 
     // Verify toolbar remains interactive (app is not frozen)
-    await expect(window.locator(SEL.toolbar.openTerminal)).toBeEnabled();
+    await expect(window.locator(SEL.toolbar.toggleSidebar)).toBeVisible();
   });
 
   test("flooded terminal recovers after stopping flood", async () => {

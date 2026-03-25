@@ -19,7 +19,7 @@ function uniqueMarker(): string {
 
 async function openTerminal(window: AppContext["window"]): Promise<void> {
   const before = await getGridPanelCount(window);
-  await window.locator(SEL.toolbar.openTerminal).click();
+  await openTerminal(window);
   await expect.poll(() => getGridPanelCount(window), { timeout: T_LONG }).toBe(before + 1);
 }
 

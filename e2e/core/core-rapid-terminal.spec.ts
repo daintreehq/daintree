@@ -20,7 +20,7 @@ async function openTerminalAndGetPid(window: AppContext["window"]): Promise<{
   ptyPid: number;
 }> {
   const countBefore = await getGridPanelCount(window);
-  await window.locator(SEL.toolbar.openTerminal).click();
+  await openTerminal(window);
   await expect.poll(() => getGridPanelCount(window), { timeout: T_LONG }).toBe(countBefore + 1);
 
   const panel = getFirstGridPanel(window);

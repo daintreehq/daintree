@@ -3,7 +3,7 @@ import AxeBuilder from "@axe-core/playwright";
 import { launchApp, closeApp, type AppContext } from "../helpers/launch";
 import { createFixtureRepo } from "../helpers/fixtures";
 import { openAndOnboardProject } from "../helpers/project";
-import { getGridPanelCount } from "../helpers/panels";
+import { getGridPanelCount, openSettings } from "../helpers/panels";
 import { SEL } from "../helpers/selectors";
 import { T_SHORT, T_MEDIUM, T_LONG, T_SETTLE } from "../helpers/timeouts";
 import { ensureWindowFocused } from "../helpers/focus";
@@ -85,7 +85,7 @@ test.describe.serial("Core: Accessibility", () => {
       test("settings dialog passes WCAG 2.0 AA audit", async () => {
         const { window } = ctx;
 
-        await window.locator(SEL.toolbar.openSettings).click();
+        await openSettings(window);
         await expect(window.locator(SEL.settings.heading)).toBeVisible({ timeout: T_MEDIUM });
 
         const results = await buildAxeScanner(window).analyze();

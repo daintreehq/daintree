@@ -4,7 +4,7 @@ import { launchApp, closeApp, type AppContext } from "../helpers/launch";
 import { createFixtureRepo, createMultiProjectFixture } from "../helpers/fixtures";
 import { openAndOnboardProject } from "../helpers/project";
 import { waitForTerminalText } from "../helpers/terminal";
-import { getFirstGridPanel, getGridPanelCount } from "../helpers/panels";
+import { getFirstGridPanel, getGridPanelCount, openTerminal } from "../helpers/panels";
 import { SEL } from "../helpers/selectors";
 import { T_LONG, T_SETTLE } from "../helpers/timeouts";
 import {
@@ -51,7 +51,7 @@ test.describe.serial("Core: IPC Cleanup Verification", () => {
     }
 
     for (let i = 0; i < 5; i++) {
-      await window.locator(SEL.toolbar.openTerminal).click();
+      await openTerminal(window);
       await expect.poll(() => getGridPanelCount(window), { timeout: T_LONG }).toBeGreaterThan(0);
 
       const panel = getFirstGridPanel(window);
@@ -78,7 +78,7 @@ test.describe.serial("Core: IPC Cleanup Verification", () => {
     const before = await getMainListenerSnapshot(ctx.app, MONITORED_CHANNELS);
 
     for (let i = 0; i < 3; i++) {
-      await window.locator(SEL.toolbar.openTerminal).click();
+      await openTerminal(window);
       await expect.poll(() => getGridPanelCount(window), { timeout: T_LONG }).toBeGreaterThan(0);
 
       const panel = getFirstGridPanel(window);

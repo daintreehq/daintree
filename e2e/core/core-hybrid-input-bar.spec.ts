@@ -6,6 +6,7 @@ import { expectInputBarFocused } from "../helpers/focus";
 import { SEL } from "../helpers/selectors";
 import { T_SHORT, T_MEDIUM, T_LONG, T_SETTLE } from "../helpers/timeouts";
 
+import { openTerminal } from "../helpers/panels";
 let ctx: AppContext;
 let fixtureDir: string;
 let agentPanel: Locator;
@@ -138,7 +139,7 @@ test.describe.serial("Core: HybridInputBar", () => {
     await expect(cmEditor).toHaveText(new RegExp(draftText));
 
     // Open a new terminal panel via toolbar
-    await window.locator(SEL.toolbar.openTerminal).click();
+    await openTerminal(window);
     await window.waitForTimeout(T_SETTLE);
 
     // Verify the new terminal appeared

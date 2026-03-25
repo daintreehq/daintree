@@ -9,6 +9,7 @@ import {
   getDockPanelCount,
   getPanelById,
   getPanelDragHandle,
+  openTerminal,
 } from "../helpers/panels";
 import { dragElementTo } from "../helpers/dragDrop";
 import { SEL } from "../helpers/selectors";
@@ -34,7 +35,7 @@ test.describe.serial("Core: Panel Drag & Drop", () => {
     const { window } = ctx;
 
     for (let i = 0; i < 3; i++) {
-      await window.locator(SEL.toolbar.openTerminal).click();
+      await openTerminal(window);
       await window.waitForTimeout(T_SETTLE);
     }
 

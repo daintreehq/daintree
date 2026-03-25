@@ -230,7 +230,7 @@ test.describe.serial("Core: Error Persistence Across Restart", () => {
   test("critical errors persist across restart", async () => {
     // Session 1: Launch app to initialize the config.json structure
     ctx = await launchApp({ userDataDir });
-    await expect(ctx.window.locator(SEL.toolbar.openTerminal)).toBeVisible({ timeout: T_MEDIUM });
+    await expect(ctx.window.locator(SEL.toolbar.toggleSidebar)).toBeVisible({ timeout: T_MEDIUM });
 
     const pid = ctx.app.process().pid!;
     await closeApp(ctx.app);

@@ -4,7 +4,12 @@ import { createFixtureRepo } from "../helpers/fixtures";
 import { openAndOnboardProject } from "../helpers/project";
 import { SEL } from "../helpers/selectors";
 import { T_SHORT, T_MEDIUM, T_SETTLE } from "../helpers/timeouts";
-import { getGridPanelCount, getDockPanelCount } from "../helpers/panels";
+import {
+  getGridPanelCount,
+  getDockPanelCount,
+  openTerminal,
+  openSettings,
+} from "../helpers/panels";
 import { mkdtempSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import path from "path";
@@ -38,9 +43,9 @@ test.describe.serial("Persistence: Layout & Window across restart", () => {
     await openAndOnboardProject(app1, w1, fixtureDir, "Persist Layout");
 
     // Open two terminals explicitly
-    await w1.locator(SEL.toolbar.openTerminal).click();
+    await openTerminal(w1);
     await expect.poll(() => getGridPanelCount(w1), { timeout: T_MEDIUM }).toBe(1);
-    await w1.locator(SEL.toolbar.openTerminal).click();
+    await openTerminal(w1);
     await expect.poll(() => getGridPanelCount(w1), { timeout: T_MEDIUM }).toBe(2);
 
     // Minimize one panel to dock
@@ -127,7 +132,7 @@ test.describe.serial("Persistence: Theme, Notifications & Keybindings across res
       await window.electron.appTheme.setColorScheme("bondi");
     });
     await w1.reload({ waitUntil: "domcontentloaded" });
-    await w1.locator(SEL.toolbar.openSettings).waitFor({ state: "visible", timeout: T_MEDIUM });
+    await w1.locator(SEL.toolbar.toggleSidebar).waitFor({ state: "visible", timeout: T_MEDIUM });
 
     // Verify theme applied
     await expect(w1.locator("html")).toHaveAttribute("data-theme", "bondi", {
@@ -135,7 +140,7 @@ test.describe.serial("Persistence: Theme, Notifications & Keybindings across res
     });
 
     // Open Settings > Notifications
-    await w1.locator(SEL.toolbar.openSettings).click();
+    await openSettings(w1);
     await expect(w1.locator(SEL.settings.heading)).toBeVisible({ timeout: T_MEDIUM });
 
     await w1.locator(`${SEL.settings.navSidebar} button`, { hasText: "Notifications" }).click();
@@ -208,7 +213,7 @@ test.describe.serial("Persistence: Theme, Notifications & Keybindings across res
     });
 
     // Verify notification toggle persisted
-    await w2.locator(SEL.toolbar.openSettings).click();
+    await openSettings(w2);
     await expect(w2.locator(SEL.settings.heading)).toBeVisible({ timeout: T_MEDIUM });
 
     await w2.locator(`${SEL.settings.navSidebar} button`, { hasText: "Notifications" }).click();

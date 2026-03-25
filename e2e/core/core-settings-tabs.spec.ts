@@ -5,6 +5,7 @@ import { openAndOnboardProject } from "../helpers/project";
 import { SEL } from "../helpers/selectors";
 import { T_SHORT, T_MEDIUM, T_SETTLE } from "../helpers/timeouts";
 
+import { openSettings } from "../helpers/panels";
 let ctx: AppContext;
 
 test.describe.serial("Core: Settings Tabs Coverage", () => {
@@ -22,7 +23,7 @@ test.describe.serial("Core: Settings Tabs Coverage", () => {
 
   test("Appearance tab: switch app theme", async () => {
     const { window } = ctx;
-    await window.locator(SEL.toolbar.openSettings).click();
+    await openSettings(window);
     await expect(window.locator(SEL.settings.heading)).toBeVisible({ timeout: T_MEDIUM });
 
     await window.locator(`${SEL.settings.navSidebar} button`, { hasText: "Appearance" }).click();
@@ -68,7 +69,7 @@ test.describe.serial("Core: Settings Tabs Coverage", () => {
 
   test("Appearance tab: change terminal font size", async () => {
     const { window } = ctx;
-    await window.locator(SEL.toolbar.openSettings).click();
+    await openSettings(window);
     await expect(window.locator(SEL.settings.heading)).toBeVisible({ timeout: T_MEDIUM });
 
     await window.locator(`${SEL.settings.navSidebar} button`, { hasText: "Appearance" }).click();
@@ -104,7 +105,7 @@ test.describe.serial("Core: Settings Tabs Coverage", () => {
 
   test("CLI Agents tab: agent selector dropdown", async () => {
     const { window } = ctx;
-    await window.locator(SEL.toolbar.openSettings).click();
+    await openSettings(window);
     await expect(window.locator(SEL.settings.heading)).toBeVisible({ timeout: T_MEDIUM });
 
     await window.locator(`${SEL.settings.navSidebar} button`, { hasText: "CLI Agents" }).click();
@@ -151,7 +152,7 @@ test.describe.serial("Core: Settings Tabs Coverage", () => {
 
   test("Privacy tab: telemetry options are interactive", async () => {
     const { window } = ctx;
-    await window.locator(SEL.toolbar.openSettings).click();
+    await openSettings(window);
     await expect(window.locator(SEL.settings.heading)).toBeVisible({ timeout: T_MEDIUM });
 
     await window
@@ -188,7 +189,7 @@ test.describe.serial("Core: Settings Tabs Coverage", () => {
 
   test("Privacy tab: Data & Storage has Clear Cache button", async () => {
     const { window } = ctx;
-    await window.locator(SEL.toolbar.openSettings).click();
+    await openSettings(window);
     await expect(window.locator(SEL.settings.heading)).toBeVisible({ timeout: T_MEDIUM });
 
     await window
@@ -215,7 +216,7 @@ test.describe.serial("Core: Settings Tabs Coverage", () => {
 
   test("Troubleshooting tab: controls are present", async () => {
     const { window } = ctx;
-    await window.locator(SEL.toolbar.openSettings).click();
+    await openSettings(window);
     await expect(window.locator(SEL.settings.heading)).toBeVisible({ timeout: T_MEDIUM });
 
     await window
@@ -253,7 +254,7 @@ test.describe.serial("Core: Settings Tabs Coverage", () => {
 
   test("Settings search shows cross-tab results", async () => {
     const { window } = ctx;
-    await window.locator(SEL.toolbar.openSettings).click();
+    await openSettings(window);
     await expect(window.locator(SEL.settings.heading)).toBeVisible({ timeout: T_MEDIUM });
 
     const searchInput = window.locator(SEL.settings.searchInput);

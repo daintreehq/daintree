@@ -3,7 +3,7 @@ import { launchApp, closeApp, type AppContext } from "../helpers/launch";
 import { createFixtureRepo } from "../helpers/fixtures";
 import { openAndOnboardProject } from "../helpers/project";
 import { waitForTerminalText, runTerminalCommand } from "../helpers/terminal";
-import { getFirstGridPanel, getGridPanelCount } from "../helpers/panels";
+import { getFirstGridPanel, getGridPanelCount, openTerminal } from "../helpers/panels";
 import { SEL } from "../helpers/selectors";
 import { T_SHORT, T_MEDIUM, T_LONG, T_SETTLE } from "../helpers/timeouts";
 
@@ -26,7 +26,7 @@ test.describe.serial("Core: Panel Tab Groups", () => {
   test.describe.serial("Tab Group Lifecycle", () => {
     test("open terminal and run marker command", async () => {
       const { window } = ctx;
-      await window.locator(SEL.toolbar.openTerminal).click();
+      await openTerminal(window);
       const panel = getFirstGridPanel(window);
       await expect(panel).toBeVisible({ timeout: T_LONG });
 
@@ -135,7 +135,7 @@ test.describe.serial("Core: Panel Tab Groups", () => {
       const { window } = ctx;
 
       // Open a fresh terminal
-      await window.locator(SEL.toolbar.openTerminal).click();
+      await openTerminal(window);
       const panel = getFirstGridPanel(window);
       await expect(panel).toBeVisible({ timeout: T_LONG });
 

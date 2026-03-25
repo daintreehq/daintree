@@ -3,7 +3,7 @@ import type { ElectronApplication, Locator, Page } from "@playwright/test";
 import { mockOpenDialog } from "./launch";
 import { completeOnboarding } from "./project";
 import { waitForTerminalText } from "./terminal";
-import { getGridPanelCount } from "./panels";
+import { getGridPanelCount, openTerminal } from "./panels";
 import { SEL } from "./selectors";
 import { T_SHORT, T_MEDIUM, T_LONG } from "./timeouts";
 
@@ -56,7 +56,7 @@ export async function spawnTerminalAndVerify(
     async () => {
       const countBefore = await getGridPanelCount(window);
 
-      await window.locator(SEL.toolbar.openTerminal).click();
+      await openTerminal(window);
       await expect.poll(() => getGridPanelCount(window), { timeout: T_LONG }).toBe(countBefore + 1);
 
       const panel = window.locator(SEL.panel.gridPanel).last();

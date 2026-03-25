@@ -5,6 +5,7 @@ import { clearAllFaults } from "../helpers/ipcFaults";
 import { SEL } from "../helpers/selectors";
 import { createFixtureRepo } from "../helpers/fixtures";
 import { openAndOnboardProject } from "../helpers/project";
+import { openTerminal } from "../helpers/panels";
 import type { ElectronApplication } from "@playwright/test";
 
 /* ---------- helpers ---------- */
@@ -268,7 +269,7 @@ test.describe.serial("Core: IPC Error Propagation", () => {
     await openAndOnboardProject(ctx.app, ctx.window, repo, "SpawnErrorTest");
 
     // Click open terminal to create a terminal panel
-    await ctx.window.locator(SEL.toolbar.openTerminal).click();
+    await openTerminal(ctx.window);
 
     // Wait for a grid panel to appear
     const gridPanel = ctx.window.locator(SEL.panel.gridPanel);
@@ -297,7 +298,7 @@ test.describe.serial("Core: IPC Error Propagation", () => {
   test("ENOTDIR spawn error shows Update Directory action", async () => {
     // AC 4: Terminal spawn ENOTDIR renders SpawnErrorBanner with "Update Directory"
     // Project is already open from previous test
-    await ctx.window.locator(SEL.toolbar.openTerminal).click();
+    await openTerminal(ctx.window);
 
     const gridPanel = ctx.window.locator(SEL.panel.gridPanel);
     const lastPanel = gridPanel.last();

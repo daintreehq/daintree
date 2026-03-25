@@ -6,6 +6,7 @@ import { openAndOnboardProject } from "../helpers/project";
 import { SEL } from "../helpers/selectors";
 import { T_SHORT, T_MEDIUM, T_SETTLE } from "../helpers/timeouts";
 
+import { openSettings, openTerminal } from "../helpers/panels";
 let ctx: AppContext;
 let fixtureDir: string;
 
@@ -66,7 +67,7 @@ test.describe.serial("Core: Silent IPC Failure Detection", () => {
   });
 
   test("settings persist gracefully when state write fails", async () => {
-    await ctx.window.locator(SEL.toolbar.openSettings).click();
+    await openSettings(ctx.window);
     await expect(ctx.window.locator(SEL.settings.heading)).toBeVisible({ timeout: T_MEDIUM });
 
     const troubleshootingTab = ctx.window.locator('button:has-text("Troubleshooting")');
@@ -93,7 +94,7 @@ test.describe.serial("Core: Silent IPC Failure Detection", () => {
   test("app survives terminal spawn fault without crashing", async () => {
     await injectFault(ctx.app, "terminal:spawn", "E2E_INJECTED_ERROR");
 
-    await ctx.window.locator(SEL.toolbar.openTerminal).click();
+    await openTerminal(ctx.window);
     await ctx.window.waitForTimeout(T_SETTLE);
 
     await expect(ctx.window.locator(SEL.errorBoundary.fallback)).not.toBeVisible();

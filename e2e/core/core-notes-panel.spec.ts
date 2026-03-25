@@ -8,7 +8,8 @@ import { T_SHORT, T_MEDIUM, T_SETTLE } from "../helpers/timeouts";
 let ctx: AppContext;
 
 async function openNotesPalette(window: Page) {
-  await window.locator(SEL.toolbar.notesButton).click();
+  const mod = process.platform === "darwin" ? "Meta" : "Control";
+  await window.keyboard.press(`${mod}+Shift+n`);
   await expect(window.locator(SEL.notes.palette)).toBeVisible({ timeout: T_MEDIUM });
 }
 

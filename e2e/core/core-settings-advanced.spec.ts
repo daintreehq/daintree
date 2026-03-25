@@ -5,6 +5,7 @@ import { openAndOnboardProject } from "../helpers/project";
 import { SEL } from "../helpers/selectors";
 import { T_SHORT, T_MEDIUM, T_SETTLE } from "../helpers/timeouts";
 
+import { openSettings } from "../helpers/panels";
 let ctx: AppContext;
 
 test.describe.serial("Core: Settings Advanced", () => {
@@ -23,7 +24,7 @@ test.describe.serial("Core: Settings Advanced", () => {
   test.describe.serial("Keyboard Shortcuts", () => {
     test("open settings and navigate to Keyboard tab", async () => {
       const { window } = ctx;
-      await window.locator(SEL.toolbar.openSettings).click();
+      await openSettings(window);
       await expect(window.locator(SEL.settings.heading)).toBeVisible({ timeout: T_MEDIUM });
 
       await window.locator(`${SEL.settings.navSidebar} button`, { hasText: "Keyboard" }).click();
@@ -109,7 +110,7 @@ test.describe.serial("Core: Settings Advanced", () => {
       const { window } = ctx;
 
       // Open settings and navigate to Keyboard tab
-      await window.locator(SEL.toolbar.openSettings).click();
+      await openSettings(window);
       await expect(window.locator(SEL.settings.heading)).toBeVisible({ timeout: T_MEDIUM });
 
       await window.locator(`${SEL.settings.navSidebar} button`, { hasText: "Keyboard" }).click();
@@ -179,7 +180,7 @@ test.describe.serial("Core: Settings Advanced", () => {
   test.describe.serial("Notification Settings", () => {
     test("open settings and navigate to Notifications tab — checkboxes visible", async () => {
       const { window } = ctx;
-      await window.locator(SEL.toolbar.openSettings).click();
+      await openSettings(window);
       await expect(window.locator(SEL.settings.heading)).toBeVisible({ timeout: T_MEDIUM });
 
       await window
@@ -227,7 +228,7 @@ test.describe.serial("Core: Settings Advanced", () => {
       await window.keyboard.press("Escape");
       await expect(window.locator(SEL.settings.heading)).not.toBeVisible({ timeout: T_SHORT });
 
-      await window.locator(SEL.toolbar.openSettings).click();
+      await openSettings(window);
       await expect(window.locator(SEL.settings.heading)).toBeVisible({ timeout: T_MEDIUM });
 
       await window

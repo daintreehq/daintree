@@ -4,7 +4,7 @@ import { launchApp, closeApp, mockOpenDialog, type AppContext } from "../helpers
 import { createFixtureRepos } from "../helpers/fixtures";
 import { openAndOnboardProject, completeOnboarding } from "../helpers/project";
 import { injectDelay, clearAllFaults } from "../helpers/ipcFaults";
-import { getGridPanelCount } from "../helpers/panels";
+import { getGridPanelCount, openTerminal } from "../helpers/panels";
 import { SEL } from "../helpers/selectors";
 import { T_MEDIUM, T_LONG, T_SETTLE } from "../helpers/timeouts";
 
@@ -107,14 +107,14 @@ test.describe.serial("Core: Project Switch Race Conditions", () => {
     const projectA = await getCurrentProject(window);
 
     // Open a terminal in Project A to confirm normal flow works
-    await window.locator(SEL.toolbar.openTerminal).click();
+    await openTerminal(window);
     await expect(window.locator(SEL.panel.gridPanel).first()).toBeVisible({ timeout: T_LONG });
 
     // Inject 3-second delay on terminal:spawn
     await injectDelay(ctx.app, "terminal:spawn", 3000);
 
     // Trigger a second terminal spawn (this one will be delayed)
-    await window.locator(SEL.toolbar.openTerminal).click();
+    await openTerminal(window);
 
     // Immediately switch to Project B — the spawn is still in-flight
     await switchToProject(window, PROJECT_B_NAME);
@@ -151,7 +151,7 @@ test.describe.serial("Core: Project Switch Race Conditions", () => {
 
     // Ensure we're on Project A with a fresh terminal fully spawned
     await switchToProject(window, PROJECT_A_NAME);
-    await window.locator(SEL.toolbar.openTerminal).click();
+    await openTerminal(window);
     const panel = window.locator(SEL.panel.gridPanel).first();
     // CI VMs are slow after fault-injection tests; use generous timeout
     await expect(panel).toBeVisible({ timeout: 60_000 });
@@ -187,7 +187,7 @@ test.describe.serial("Core: Project Switch Race Conditions", () => {
 
     // Inject delay and trigger a spawn
     await injectDelay(ctx.app, "terminal:spawn", 2000);
-    await window.locator(SEL.toolbar.openTerminal).click();
+    await openTerminal(window);
 
     // Rapid switch: A -> B -> A
     await switchToProject(window, PROJECT_B_NAME);

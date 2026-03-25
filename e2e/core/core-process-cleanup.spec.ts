@@ -9,7 +9,7 @@ import {
 import { createFixtureRepo } from "../helpers/fixtures";
 import { openAndOnboardProject } from "../helpers/project";
 import { runTerminalCommand, waitForTerminalText } from "../helpers/terminal";
-import { getFirstGridPanel } from "../helpers/panels";
+import { getFirstGridPanel, openTerminal } from "../helpers/panels";
 import { SEL } from "../helpers/selectors";
 import { T_LONG, T_SETTLE } from "../helpers/timeouts";
 import {
@@ -40,7 +40,7 @@ test.describe("Core: Process Cleanup", () => {
       await openAndOnboardProject(ctx.app, ctx.window, fixtureDir, "Process Cleanup");
 
       // Open terminal and wait for shell readiness
-      await ctx.window.locator(SEL.toolbar.openTerminal).click();
+      await openTerminal(ctx.window);
       const panel = getFirstGridPanel(ctx.window);
       await expect(panel).toBeVisible({ timeout: T_LONG });
       await waitForTerminalText(panel, "process-cleanup", T_LONG);
@@ -98,7 +98,7 @@ test.describe("Core: Process Cleanup", () => {
       const ctx = await launchApp({ userDataDir });
       await openAndOnboardProject(ctx.app, ctx.window, fixtureDir, "Unclean Exit");
 
-      await ctx.window.locator(SEL.toolbar.openTerminal).click();
+      await openTerminal(ctx.window);
       const panel = getFirstGridPanel(ctx.window);
       await expect(panel).toBeVisible({ timeout: T_LONG });
       await waitForTerminalText(panel, "process-cleanup-unclean", T_LONG);
@@ -203,7 +203,7 @@ test.describe.serial("Core: Process Cleanup on Shutdown", () => {
     const { app, window } = ctx;
 
     // Open a terminal
-    await window.locator(SEL.toolbar.openTerminal).click();
+    await openTerminal(window);
     const panel = getFirstGridPanel(window);
     await expect(panel).toBeVisible({ timeout: T_LONG });
 

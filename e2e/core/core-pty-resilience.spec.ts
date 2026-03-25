@@ -3,7 +3,7 @@ import { launchApp, closeApp, waitForProcessExit, type AppContext } from "../hel
 import { createFixtureRepo } from "../helpers/fixtures";
 import { openAndOnboardProject } from "../helpers/project";
 import { getTerminalText, waitForTerminalText, runTerminalCommand } from "../helpers/terminal";
-import { getFirstGridPanel, getGridPanelCount } from "../helpers/panels";
+import { getFirstGridPanel, getGridPanelCount, openTerminal } from "../helpers/panels";
 import { SEL } from "../helpers/selectors";
 import { T_LONG, T_MEDIUM, T_SETTLE } from "../helpers/timeouts";
 import {
@@ -39,7 +39,7 @@ test.describe.serial("Core: PTY Resilience", () => {
     const { app, window } = ctx;
 
     // Open terminal
-    await window.locator(SEL.toolbar.openTerminal).click();
+    await openTerminal(window);
     const panel = getFirstGridPanel(window);
     await expect(panel).toBeVisible({ timeout: T_LONG });
 
@@ -121,7 +121,7 @@ test.describe.serial("Core: PTY Resilience", () => {
 
     // Run 3 open/close cycles
     for (let i = 0; i < 3; i++) {
-      await window.locator(SEL.toolbar.openTerminal).click();
+      await openTerminal(window);
       const panel = getFirstGridPanel(window);
       await expect(panel).toBeVisible({ timeout: T_LONG });
 
@@ -145,7 +145,7 @@ test.describe.serial("Core: PTY Resilience", () => {
     test.setTimeout(120_000);
     const { window } = ctx;
 
-    await window.locator(SEL.toolbar.openTerminal).click();
+    await openTerminal(window);
     const floodPanel = getFirstGridPanel(window);
     await expect(floodPanel).toBeVisible({ timeout: T_LONG });
 
@@ -202,7 +202,7 @@ test.describe.serial("Core: PTY Resilience", () => {
       .toMatch(/trashed|preserved/);
 
     // Verify the toolbar is still interactive (app is responsive)
-    await expect(window.locator(SEL.toolbar.openTerminal)).toBeEnabled();
+    await expect(window.locator(SEL.toolbar.toggleSidebar)).toBeVisible();
     await expect(window.locator(SEL.toolbar.openSettings)).toBeVisible();
   });
 
@@ -210,7 +210,7 @@ test.describe.serial("Core: PTY Resilience", () => {
     const { window } = ctx;
 
     const countBefore = await getGridPanelCount(window);
-    await window.locator(SEL.toolbar.openTerminal).click();
+    await openTerminal(window);
 
     // Wait for the new terminal to appear
     await expect

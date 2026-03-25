@@ -5,6 +5,44 @@ import { SEL } from "./selectors";
 const mod = process.platform === "darwin" ? "Meta" : "Control";
 
 /**
+ * Click a toolbar button, handling the case where it may be hidden
+ * in the overflow menu on small displays (e.g., Windows CI).
+ * Checks direct visibility first, then falls back to the overflow menu.
+ */
+export async function clickToolbarButton(
+  page: Page,
+  selector: string,
+  timeout = 5000
+): Promise<void> {
+  const button = page.locator(selector);
+
+  // Try direct click first — Playwright auto-waits for visibility
+  try {
+    await button.click({ timeout: 3000 });
+    return;
+  } catch {
+    // Button not clickable — might be in overflow menu
+  }
+
+  // Button might be in the overflow menu — look for and open it
+  const overflowTrigger = page.locator('[aria-label*="more toolbar items"]').first();
+  if (await overflowTrigger.isVisible({ timeout: 1000 }).catch(() => false)) {
+    await overflowTrigger.click();
+
+    // Extract the aria-label from the selector to find the menu item
+    const labelMatch = selector.match(/aria-label="([^"]+)"/);
+    if (labelMatch) {
+      const menuItem = page.getByRole("menuitem", { name: labelMatch[1] });
+      await menuItem.click({ timeout });
+      return;
+    }
+  }
+
+  // Last resort: try clicking with longer timeout
+  await button.click({ timeout });
+}
+
+/**
  * Open settings via keyboard shortcut (Cmd/Ctrl+,).
  * More reliable than clicking the toolbar button, which may be
  * hidden in the overflow menu on small displays (e.g., Windows CI).
@@ -12,6 +50,22 @@ const mod = process.platform === "darwin" ? "Meta" : "Control";
 export async function openSettings(page: Page, timeout = 5000): Promise<void> {
   await page.keyboard.press(`${mod}+,`);
   await expect(page.locator(SEL.settings.heading)).toBeVisible({ timeout });
+}
+
+/**
+ * Open a new terminal panel. Clicks toolbar button if visible,
+ * otherwise falls back to keyboard shortcut.
+ */
+export async function openTerminal(page: Page): Promise<void> {
+  await clickToolbarButton(page, SEL.toolbar.openTerminal);
+}
+
+/**
+ * Open a new browser panel. Clicks toolbar button if visible,
+ * otherwise falls back to keyboard shortcut.
+ */
+export async function openBrowser(page: Page): Promise<void> {
+  await clickToolbarButton(page, SEL.toolbar.openBrowser);
 }
 
 export function getFirstGridPanel(page: Page): Locator {

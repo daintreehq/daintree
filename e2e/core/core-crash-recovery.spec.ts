@@ -398,7 +398,7 @@ test.describe.serial("Core: Crash Recovery — Panel Restoration", () => {
     // Relaunch with same userDataDir — should go straight to main UI
     ctx = await launchApp({
       userDataDir,
-      waitForSelector: SEL.toolbar.openSettings,
+      waitForSelector: SEL.toolbar.toggleSidebar,
     });
 
     // Crash dialog should NOT appear

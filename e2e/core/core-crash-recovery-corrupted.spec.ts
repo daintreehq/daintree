@@ -107,7 +107,7 @@ test.describe.serial("Core: Crash Recovery — corrupted running.lock", () => {
     seedCorruptedMarker(userDataDir);
     ctx = await launchApp({
       userDataDir,
-      waitForSelector: SEL.toolbar.openSettings,
+      waitForSelector: SEL.toolbar.toggleSidebar,
     });
   });
 
@@ -179,7 +179,7 @@ test.describe.serial("Core: Crash Recovery — stale tmp file", () => {
     seedStaleTmpOnly(userDataDir);
     ctx = await launchApp({
       userDataDir,
-      waitForSelector: SEL.toolbar.openSettings,
+      waitForSelector: SEL.toolbar.toggleSidebar,
     });
   });
 

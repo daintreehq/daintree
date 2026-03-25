@@ -3,7 +3,7 @@ import { createServer, type Server, type IncomingMessage, type ServerResponse } 
 import { launchApp, closeApp, type AppContext } from "../helpers/launch";
 import { createFixtureRepo } from "../helpers/fixtures";
 import { openAndOnboardProject } from "../helpers/project";
-import { getGridPanelCount } from "../helpers/panels";
+import { getGridPanelCount, openBrowser } from "../helpers/panels";
 import { SEL } from "../helpers/selectors";
 import { T_SHORT, T_MEDIUM, T_LONG, T_SETTLE } from "../helpers/timeouts";
 
@@ -69,7 +69,7 @@ test.describe.serial("Core: Browser Panel", () => {
     test("open browser panel shows address bar and nav controls", async () => {
       const { window } = ctx;
 
-      await window.locator(SEL.toolbar.openBrowser).click();
+      await openBrowser(window);
 
       // Wait for browser panel to appear in the grid
       const browserPanel = window.locator(SEL.panel.gridPanel).filter({
@@ -200,7 +200,7 @@ test.describe.serial("Core: Browser Panel", () => {
       const { window } = ctx;
 
       // Open first browser panel and navigate to page-a
-      await window.locator(SEL.toolbar.openBrowser).click();
+      await openBrowser(window);
       await expect
         .poll(() => getGridPanelCount(window), { timeout: T_LONG })
         .toBeGreaterThanOrEqual(1);
@@ -220,7 +220,7 @@ test.describe.serial("Core: Browser Panel", () => {
       await expect(addressBar1).toHaveValue(/page-a/, { timeout: T_LONG });
 
       // Open second browser panel
-      await window.locator(SEL.toolbar.openBrowser).click();
+      await openBrowser(window);
       await window.waitForTimeout(T_SETTLE);
 
       const browserPanels = window.locator(SEL.panel.gridPanel).filter({
@@ -250,7 +250,7 @@ test.describe.serial("Core: Browser Panel", () => {
       // Open a browser panel if none exist
       const initialCount = await getGridPanelCount(window);
       if (initialCount === 0) {
-        await window.locator(SEL.toolbar.openBrowser).click();
+        await openBrowser(window);
         await expect
           .poll(() => getGridPanelCount(window), { timeout: T_LONG })
           .toBeGreaterThanOrEqual(1);
@@ -283,7 +283,7 @@ test.describe.serial("Core: Browser Panel", () => {
     test("open browser panel, navigate to console-test page, and toggle console drawer", async () => {
       const { window } = ctx;
 
-      await window.locator(SEL.toolbar.openBrowser).click();
+      await openBrowser(window);
       const browserPanel = window.locator(SEL.panel.gridPanel).filter({
         has: window.locator(SEL.browser.addressBar),
       });
@@ -333,7 +333,7 @@ test.describe.serial("Core: Browser Panel", () => {
     test("open browser, navigate, and use find-in-page", async () => {
       const { window } = ctx;
 
-      await window.locator(SEL.toolbar.openBrowser).click();
+      await openBrowser(window);
       const browserPanel = window.locator(SEL.panel.gridPanel).filter({
         has: window.locator(SEL.browser.addressBar),
       });

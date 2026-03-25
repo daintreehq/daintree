@@ -5,6 +5,7 @@ import { openAndOnboardProject } from "../helpers/project";
 import { SEL } from "../helpers/selectors";
 import { T_SHORT, T_MEDIUM } from "../helpers/timeouts";
 
+import { openSettings } from "../helpers/panels";
 let ctx: AppContext;
 
 test.describe.serial("Core: Settings Pages Load", () => {
@@ -20,7 +21,7 @@ test.describe.serial("Core: Settings Pages Load", () => {
 
   test("General tab: Overview loads without hanging", async () => {
     const { window } = ctx;
-    await window.locator(SEL.toolbar.openSettings).click();
+    await openSettings(window);
     await expect(window.locator(SEL.settings.heading)).toBeVisible({ timeout: T_MEDIUM });
 
     // General is the default tab

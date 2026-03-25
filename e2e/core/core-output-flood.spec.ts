@@ -7,7 +7,7 @@ import {
   runTerminalCommand,
   getTerminalBufferLength,
 } from "../helpers/terminal";
-import { getFirstGridPanel } from "../helpers/panels";
+import { getFirstGridPanel, openTerminal } from "../helpers/panels";
 import { SEL } from "../helpers/selectors";
 import { T_LONG } from "../helpers/timeouts";
 import { measureMainMemory, floodTerminal } from "../helpers/stress";
@@ -32,7 +32,7 @@ test.describe.serial("Core: Output Flood Memory Bounds", () => {
     test.setTimeout(120_000);
     const { app, window } = ctx;
 
-    await window.locator(SEL.toolbar.openTerminal).click();
+    await openTerminal(window);
     panel = getFirstGridPanel(window);
     await expect(panel).toBeVisible({ timeout: T_LONG });
 

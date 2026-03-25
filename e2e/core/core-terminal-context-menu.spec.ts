@@ -8,7 +8,7 @@ import {
   selectAllTerminalText,
   openTerminalContextMenu,
 } from "../helpers/terminal";
-import { getFirstGridPanel, getGridPanelCount } from "../helpers/panels";
+import { getFirstGridPanel, getGridPanelCount, openTerminal } from "../helpers/panels";
 import { SEL } from "../helpers/selectors";
 import { T_SHORT, T_MEDIUM, T_LONG } from "../helpers/timeouts";
 
@@ -54,7 +54,7 @@ test.describe.serial("Core: Terminal Context Menu", () => {
   test.describe.serial("Context Menu", () => {
     test("open terminal and produce output", async () => {
       const { window } = ctx;
-      await window.locator(SEL.toolbar.openTerminal).click();
+      await openTerminal(window);
       const panel = getFirstGridPanel(window);
       await expect(panel).toBeVisible({ timeout: T_LONG });
 

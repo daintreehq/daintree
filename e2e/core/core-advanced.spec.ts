@@ -3,7 +3,7 @@ import { createServer, type Server } from "http";
 import { launchApp, closeApp, type AppContext } from "../helpers/launch";
 import { createFixtureRepo } from "../helpers/fixtures";
 import { openAndOnboardProject } from "../helpers/project";
-import { getGridPanelCount } from "../helpers/panels";
+import { getGridPanelCount, openBrowser } from "../helpers/panels";
 import {
   addAndSwitchToProject,
   selectExistingProject,
@@ -68,7 +68,7 @@ test.describe.serial("Core: Advanced", () => {
 
     test("open browser panel via toolbar", async () => {
       const { window } = ctx;
-      await window.locator(SEL.toolbar.openBrowser).click();
+      await openBrowser(window);
       const addressBar = window.locator(SEL.browser.addressBar);
       await expect(addressBar).toBeVisible({ timeout: T_LONG });
     });

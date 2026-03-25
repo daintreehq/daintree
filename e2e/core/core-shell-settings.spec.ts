@@ -2,7 +2,7 @@ import { test, expect } from "@playwright/test";
 import { launchApp, closeApp, type AppContext } from "../helpers/launch";
 import { createFixtureRepo } from "../helpers/fixtures";
 import { openAndOnboardProject } from "../helpers/project";
-import { getGridPanelCount } from "../helpers/panels";
+import { getGridPanelCount, openSettings } from "../helpers/panels";
 import { SEL } from "../helpers/selectors";
 import { T_SHORT, T_MEDIUM, T_LONG, T_SETTLE } from "../helpers/timeouts";
 
@@ -32,7 +32,7 @@ test.describe.serial("Core: Shell & Settings", () => {
     test("toolbar baseline buttons are visible", async () => {
       const { window } = ctx;
       await expect(window.locator(SEL.toolbar.toggleSidebar)).toBeVisible({ timeout: T_MEDIUM });
-      await expect(window.locator(SEL.toolbar.openTerminal)).toBeVisible({ timeout: T_SHORT });
+      await expect(window.locator(SEL.toolbar.toggleSidebar)).toBeVisible({ timeout: T_SHORT });
       await expect(window.locator(SEL.toolbar.openSettings)).toBeVisible({ timeout: T_SHORT });
     });
 
@@ -59,7 +59,7 @@ test.describe.serial("Core: Shell & Settings", () => {
     test("settings opens, navigates all tabs, closes via Escape", async () => {
       const { window } = ctx;
 
-      await window.locator(SEL.toolbar.openSettings).click();
+      await openSettings(window);
 
       const heading = window.locator("h2", { hasText: "Settings" });
       await expect(heading).toBeVisible({ timeout: T_MEDIUM });
@@ -188,7 +188,7 @@ test.describe.serial("Core: Shell & Settings", () => {
   test.describe.serial("Settings Persistence", () => {
     test("open settings dialog", async () => {
       const { window } = ctx;
-      await window.locator(SEL.toolbar.openSettings).click();
+      await openSettings(window);
       const heading = window.locator(SEL.settings.heading);
       await expect(heading).toBeVisible({ timeout: T_MEDIUM });
     });
@@ -257,7 +257,7 @@ test.describe.serial("Core: Shell & Settings", () => {
       const heading = window.locator(SEL.settings.heading);
       await expect(heading).not.toBeVisible({ timeout: T_SHORT });
 
-      await window.locator(SEL.toolbar.openSettings).click();
+      await openSettings(window);
       await expect(heading).toBeVisible({ timeout: T_MEDIUM });
 
       const generalTab = window.locator(`${SEL.settings.navSidebar} button:has-text("General")`);

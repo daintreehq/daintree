@@ -5,6 +5,7 @@ import { openAndOnboardProject } from "../helpers/project";
 import { SEL } from "../helpers/selectors";
 import { T_SHORT, T_MEDIUM, T_LONG } from "../helpers/timeouts";
 
+import { openSettings } from "../helpers/panels";
 test.describe.serial("Core: Project Pulse", () => {
   let ctx: AppContext;
 
@@ -61,7 +62,7 @@ test.describe.serial("Core: Project Pulse", () => {
   test("settings toggle hides pulse card", async () => {
     const { window } = ctx;
 
-    await window.locator(SEL.toolbar.openSettings).click();
+    await openSettings(window);
     const heading = window.locator(SEL.settings.heading);
     await expect(heading).toBeVisible({ timeout: T_MEDIUM });
 

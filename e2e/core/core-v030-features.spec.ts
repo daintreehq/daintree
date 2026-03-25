@@ -33,6 +33,7 @@ import { openAndOnboardProject } from "../helpers/project";
 import { SEL } from "../helpers/selectors";
 import { T_SHORT, T_MEDIUM, T_LONG, T_SETTLE } from "../helpers/timeouts";
 
+import { openSettings } from "../helpers/panels";
 let ctx: AppContext;
 
 test.describe.serial("Core: v0.3.0 Features", () => {
@@ -120,7 +121,7 @@ test.describe.serial("Core: v0.3.0 Features", () => {
     test("settings has all new navigation tabs", async () => {
       const { window } = ctx;
 
-      await window.locator(SEL.toolbar.openSettings).click();
+      await openSettings(window);
       const heading = window.locator(SEL.settings.heading);
       await expect(heading).toBeVisible({ timeout: T_MEDIUM });
 
@@ -198,7 +199,7 @@ test.describe.serial("Core: v0.3.0 Features", () => {
     test("search input is visible in settings", async () => {
       const { window } = ctx;
 
-      await window.locator(SEL.toolbar.openSettings).click();
+      await openSettings(window);
       await expect(window.locator(SEL.settings.heading)).toBeVisible({ timeout: T_MEDIUM });
 
       const searchInput = window.locator(SEL.settings.searchInput);

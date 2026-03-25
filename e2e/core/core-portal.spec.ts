@@ -6,6 +6,7 @@ import { openAndOnboardProject } from "../helpers/project";
 import { SEL } from "../helpers/selectors";
 import { T_SHORT, T_MEDIUM, T_LONG, T_SETTLE } from "../helpers/timeouts";
 
+import { openSettings } from "../helpers/panels";
 let ctx: AppContext;
 let server: Server;
 let port: number;
@@ -180,7 +181,7 @@ test.describe.serial("Core: Portal Multi-Tab Lifecycle", () => {
       await expect(portalContainer).toBeVisible({ timeout: T_LONG });
 
       // Open Settings dialog
-      await window.locator(SEL.toolbar.openSettings).click();
+      await openSettings(window);
       await expect(window.locator(SEL.settings.heading)).toBeVisible({ timeout: T_MEDIUM });
 
       // Portal should be closed

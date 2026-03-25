@@ -4,6 +4,7 @@ import { createFixtureRepo } from "../helpers/fixtures";
 import { openAndOnboardProject } from "../helpers/project";
 import { SEL } from "../helpers/selectors";
 import { T_SHORT, T_MEDIUM, T_SETTLE } from "../helpers/timeouts";
+import { openSettings } from "../helpers/panels";
 import { mkdtempSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import path from "path";
@@ -31,7 +32,7 @@ test.describe.serial("Persistence: Settings across restart", () => {
     ctx = await launchApp({ userDataDir });
     const { window: w1 } = ctx;
 
-    await w1.locator(SEL.toolbar.openSettings).click();
+    await openSettings(w1);
     await expect(w1.locator(SEL.settings.heading)).toBeVisible({ timeout: T_MEDIUM });
 
     const panelGridTab = w1.locator(`${SEL.settings.navSidebar} button:has-text("Panel Grid")`);
@@ -56,7 +57,7 @@ test.describe.serial("Persistence: Settings across restart", () => {
     ctx = await launchApp({ userDataDir });
     const { window: w2 } = ctx;
 
-    await w2.locator(SEL.toolbar.openSettings).click();
+    await openSettings(w2);
     await expect(w2.locator(SEL.settings.heading)).toBeVisible({ timeout: T_MEDIUM });
 
     const panelGridTab2 = w2.locator(`${SEL.settings.navSidebar} button:has-text("Panel Grid")`);

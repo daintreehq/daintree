@@ -7,7 +7,7 @@ import {
   expectPaletteFocused,
   expectInputBarFocused,
 } from "../helpers/focus";
-import { getFirstGridPanel } from "../helpers/panels";
+import { getFirstGridPanel, openTerminal } from "../helpers/panels";
 import { runTerminalCommand, waitForTerminalText, getTerminalText } from "../helpers/terminal";
 import { SEL } from "../helpers/selectors";
 import { T_SHORT, T_MEDIUM, T_LONG, T_SETTLE } from "../helpers/timeouts";
@@ -33,7 +33,7 @@ test.describe.serial("Core: Concurrent terminal output during UI interactions", 
     ctx = await launchApp();
     await openAndOnboardProject(ctx.app, ctx.window, fixtureDir, "Concurrent Ops");
 
-    await ctx.window.locator(SEL.toolbar.openTerminal).click();
+    await openTerminal(ctx.window);
     terminalPanel = getFirstGridPanel(ctx.window);
     await expect(terminalPanel).toBeVisible({ timeout: T_LONG });
     await ctx.window.waitForTimeout(T_SETTLE);

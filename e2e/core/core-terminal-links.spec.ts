@@ -3,7 +3,7 @@ import { createServer, type Server, type IncomingMessage, type ServerResponse } 
 import { launchApp, closeApp, type AppContext } from "../helpers/launch";
 import { createFixtureRepo } from "../helpers/fixtures";
 import { openAndOnboardProject } from "../helpers/project";
-import { getGridPanelCount } from "../helpers/panels";
+import { getGridPanelCount, openTerminal } from "../helpers/panels";
 import { SEL } from "../helpers/selectors";
 import { T_SHORT, T_LONG, T_SETTLE } from "../helpers/timeouts";
 import { runTerminalCommand, waitForTerminalText, triggerTerminalLink } from "../helpers/terminal";
@@ -39,7 +39,7 @@ test.describe.serial("Core: Terminal Links", () => {
   test("echo localhost URL appears in terminal buffer", async () => {
     const { window } = ctx;
 
-    await window.locator(SEL.toolbar.openTerminal).click();
+    await openTerminal(window);
     const panel = window.locator(SEL.panel.gridPanel).first();
     await expect(panel).toBeVisible({ timeout: T_LONG });
 

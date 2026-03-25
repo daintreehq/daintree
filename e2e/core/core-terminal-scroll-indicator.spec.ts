@@ -3,7 +3,7 @@ import { launchApp, closeApp, type AppContext } from "../helpers/launch";
 import { createFixtureRepo } from "../helpers/fixtures";
 import { openAndOnboardProject } from "../helpers/project";
 import { waitForTerminalText, runTerminalCommand } from "../helpers/terminal";
-import { getFirstGridPanel } from "../helpers/panels";
+import { getFirstGridPanel, openTerminal } from "../helpers/panels";
 import { SEL } from "../helpers/selectors";
 import { T_SHORT, T_MEDIUM, T_LONG, T_SETTLE } from "../helpers/timeouts";
 
@@ -23,7 +23,7 @@ test.describe.serial("Core: Terminal Scroll Indicator", () => {
 
   test("open terminal via toolbar", async () => {
     const { window } = ctx;
-    await window.locator(SEL.toolbar.openTerminal).click();
+    await openTerminal(window);
     const panel = getFirstGridPanel(window);
     await expect(panel).toBeVisible({ timeout: T_LONG });
   });
