@@ -568,7 +568,6 @@ describe("projectSettingsDirty", () => {
         "",
         undefined,
         "",
-        "",
         undefined,
         {},
         undefined
@@ -587,7 +586,6 @@ describe("projectSettingsDirty", () => {
         "none",
         "",
         undefined,
-        "",
         "",
         undefined,
         {},
@@ -613,7 +611,6 @@ describe("projectSettingsDirty", () => {
         "",
         undefined,
         "",
-        "",
         undefined,
         {},
         undefined
@@ -632,7 +629,6 @@ describe("projectSettingsDirty", () => {
         "none",
         "",
         undefined,
-        "",
         "",
         undefined,
         {},

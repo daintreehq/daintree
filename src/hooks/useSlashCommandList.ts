@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { slashCommandsClient } from "@/clients";
-import { CANOPY_SLASH_COMMANDS } from "@/components/Terminal/canopySlashCommands";
+
 import {
   CLAUDE_BUILTIN_SLASH_COMMANDS,
   CODEX_BUILTIN_SLASH_COMMANDS,
@@ -61,27 +61,13 @@ export function useSlashCommandList({ agentId, projectPath }: UseSlashCommandLis
       });
   }, [agentId, projectPath]);
 
-  const allCommands = useMemo(
-    () => [
-      ...CANOPY_SLASH_COMMANDS.map((cmd) => ({
-        id: cmd.id,
-        label: cmd.label,
-        description: cmd.description,
-        scope: cmd.scope as SlashCommand["scope"],
-        agentId: "claude" as LegacyAgentType,
-      })),
-      ...agentCommands,
-    ],
-    [agentCommands]
-  );
-
   const commandMap = useMemo(() => {
     const map = new Map<string, SlashCommand>();
-    for (const cmd of allCommands) {
+    for (const cmd of agentCommands) {
       map.set(cmd.label, cmd);
     }
     return map;
-  }, [allCommands]);
+  }, [agentCommands]);
 
-  return { commands: allCommands, commandMap, isLoading };
+  return { commands: agentCommands, commandMap, isLoading };
 }
