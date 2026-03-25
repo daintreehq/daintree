@@ -19,6 +19,7 @@ import { SharedRingBuffer, PacketFramer } from "../shared/utils/SharedRingBuffer
 import { selectShard } from "../shared/utils/shardSelection.js";
 import type { AgentEvent } from "./services/AgentStateMachine.js";
 import type { PtyHostEvent, SpawnResult } from "../shared/types/pty-host.js";
+import { normalizeScrollbackLines } from "../shared/config/scrollback.js";
 import {
   appendEmergencyLog,
   emergencyLogFatal,
@@ -941,6 +942,15 @@ port.on("message", async (rawMsg: any) => {
           }
         }
         break;
+
+      case "trim-state": {
+        const targetLines = normalizeScrollbackLines(msg.targetLines);
+        ptyManager.trimScrollback(targetLines);
+        setTimeout(() => {
+          if (global.gc) global.gc();
+        }, 100);
+        break;
+      }
 
       case "get-snapshot":
         sendEvent({

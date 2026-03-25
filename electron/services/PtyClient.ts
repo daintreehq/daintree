@@ -1196,6 +1196,11 @@ export class PtyClient extends EventEmitter {
     });
   }
 
+  /** Request PtyHost to trim scrollback on all terminals to reduce memory */
+  trimState(targetLines: number): void {
+    this.send({ type: "trim-state", targetLines });
+  }
+
   /** Pause all PTY processes during system sleep to prevent buffer overflow */
   pauseAll(): void {
     this.send({ type: "pause-all" });
