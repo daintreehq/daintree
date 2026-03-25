@@ -136,6 +136,35 @@ describe("getWorktreeChangesWithStats", () => {
   });
 });
 
+describe("getWorktreeChangesWithStats --no-ext-diff", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    (fs.access as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
+    mockGit.status.mockResolvedValue({
+      modified: ["src/app.ts"],
+      created: [],
+      deleted: [],
+      renamed: [],
+      staged: [],
+      conflicted: [],
+      not_added: [],
+      files: [{ path: "src/app.ts", index: " ", working_dir: "M" }],
+    });
+    mockGit.revparse.mockResolvedValue("/test/path\n");
+    mockGit.raw.mockResolvedValue("100\t0\tsome msg");
+    mockGit.diff.mockResolvedValue("1\t0\tsrc/app.ts");
+    (fs.stat as ReturnType<typeof vi.fn>).mockResolvedValue({ mtimeMs: 1000 });
+  });
+
+  it("passes --no-ext-diff in numstat diff call", async () => {
+    await getWorktreeChangesWithStats("/test/path", true);
+
+    expect(mockGit.diff).toHaveBeenCalledWith(
+      expect.arrayContaining(["--no-ext-diff", "--numstat"])
+    );
+  });
+});
+
 describe("listCommits", () => {
   beforeEach(() => {
     vi.clearAllMocks();

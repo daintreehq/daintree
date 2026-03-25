@@ -251,7 +251,13 @@ ${lines.map((l) => "+" + l).join("\n")}`;
     }
 
     try {
-      const diff = await this.git.diff(["HEAD", "--no-color", "--", normalizedPath]);
+      const diff = await this.git.diff([
+        "HEAD",
+        "--no-ext-diff",
+        "--no-color",
+        "--",
+        normalizedPath,
+      ]);
 
       if (diff.includes("Binary files")) {
         return "BINARY_FILE";
@@ -286,7 +292,14 @@ ${lines.map((l) => "+" + l).join("\n")}`;
     if (filePath) {
       // Return the unified diff for a specific file
       try {
-        const diff = await this.git.raw(["diff", "--no-color", range, "--", filePath]);
+        const diff = await this.git.raw([
+          "diff",
+          "--no-ext-diff",
+          "--no-color",
+          range,
+          "--",
+          filePath,
+        ]);
 
         if (!diff.trim()) {
           return "NO_CHANGES";
@@ -314,7 +327,7 @@ ${lines.map((l) => "+" + l).join("\n")}`;
 
     // Return the list of changed files
     try {
-      const output = await this.git.raw(["diff", "--name-status", range]);
+      const output = await this.git.raw(["diff", "--no-ext-diff", "--name-status", range]);
       const files: CrossWorktreeFile[] = [];
 
       for (const line of output.split("\n")) {

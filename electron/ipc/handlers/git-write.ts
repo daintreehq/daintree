@@ -283,13 +283,13 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
     let raw: string;
     switch (diffType) {
       case "unstaged":
-        raw = await git.diff();
+        raw = await git.diff(["--no-ext-diff"]);
         break;
       case "staged":
-        raw = await git.diff(["--cached"]);
+        raw = await git.diff(["--no-ext-diff", "--cached"]);
         break;
       case "head":
-        raw = await git.diff(["HEAD"]);
+        raw = await git.diff(["--no-ext-diff", "HEAD"]);
         break;
     }
 

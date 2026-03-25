@@ -179,6 +179,37 @@ describe("GitService", () => {
     });
   });
 
+  it("passes --no-ext-diff to git.diff for modified files", async () => {
+    gitClientMock.diff.mockResolvedValue("diff --git a/foo.ts b/foo.ts\n+change");
+
+    const service = new GitService(tempDir);
+    await service.getFileDiff("foo.ts", "modified");
+
+    expect(gitClientMock.diff).toHaveBeenCalledWith(expect.arrayContaining(["--no-ext-diff"]));
+  });
+
+  it("passes --no-ext-diff to git.raw for cross-worktree file diff", async () => {
+    gitClientMock.raw.mockResolvedValue("diff --git a/foo.ts b/foo.ts\n+change");
+
+    const service = new GitService(tempDir);
+    await service.compareWorktrees("main", "feature/test", "src/app.ts");
+
+    expect(gitClientMock.raw).toHaveBeenCalledWith(
+      expect.arrayContaining(["diff", "--no-ext-diff"])
+    );
+  });
+
+  it("passes --no-ext-diff to git.raw for cross-worktree file list", async () => {
+    gitClientMock.raw.mockResolvedValue("M\tsrc/app.ts\n");
+
+    const service = new GitService(tempDir);
+    await service.compareWorktrees("main", "feature/test");
+
+    expect(gitClientMock.raw).toHaveBeenCalledWith(
+      expect.arrayContaining(["diff", "--no-ext-diff", "--name-status"])
+    );
+  });
+
   it("logs at warn level (not error) when path is not a git repository", async () => {
     gitClientMock.revparse.mockRejectedValue(
       new Error("fatal: not a git repository (or any of the parent directories): .git\n")

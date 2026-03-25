@@ -1019,7 +1019,7 @@ ${lines.map((l) => "+" + l).join("\n")}`;
         return;
       }
 
-      const diff = await git.diff(["HEAD", "--no-color", "--", normalizedPath]);
+      const diff = await git.diff(["HEAD", "--no-ext-diff", "--no-color", "--", normalizedPath]);
 
       if (diff.includes("Binary files")) {
         this.sendEvent({ type: "get-file-diff-result", requestId, diff: "BINARY_FILE" });
