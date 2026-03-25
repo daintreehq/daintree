@@ -355,16 +355,18 @@ describe("PortalManager", () => {
 
       const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 
-      manager.navigate("tab-nav-reject", "http://unreachable.test");
+      try {
+        manager.navigate("tab-nav-reject", "http://unreachable.test");
 
-      await Promise.resolve();
+        await Promise.resolve();
 
-      expect(errorSpy).toHaveBeenCalledWith(
-        expect.stringContaining("[PortalManager] Failed to navigate tab tab-nav-reject"),
-        navError
-      );
-
-      errorSpy.mockRestore();
+        expect(errorSpy).toHaveBeenCalledWith(
+          expect.stringContaining("[PortalManager] Failed to navigate tab tab-nav-reject"),
+          navError
+        );
+      } finally {
+        errorSpy.mockRestore();
+      }
     });
   });
 
