@@ -10,6 +10,7 @@ import {
   useNotificationHistoryStore,
   type NotificationHistoryAction,
 } from "@/store/slices/notificationHistorySlice";
+import { useNotificationSettingsStore } from "@/store/notificationSettingsStore";
 
 export interface CoalesceOptions {
   key: string;
@@ -95,6 +96,8 @@ export function notify(payload: NotifyPayload): string {
       variant: a.variant,
     }));
 
+  const notificationsEnabled = useNotificationSettingsStore.getState().enabled;
+
   if (placement === "grid-bar") {
     const entryId = historyMessage
       ? useNotificationHistoryStore.getState().addEntry({
@@ -107,6 +110,7 @@ export function notify(payload: NotifyPayload): string {
           actions: historyActions.length > 0 ? historyActions : undefined,
         })
       : undefined;
+    if (!notificationsEnabled) return "";
     return useNotificationStore.getState().addNotification({
       ...payload,
       priority,
@@ -130,6 +134,8 @@ export function notify(payload: NotifyPayload): string {
         actions: historyActions.length > 0 ? historyActions : undefined,
       })
     : undefined;
+
+  if (!notificationsEnabled) return "";
 
   if (shouldNative && historyMessage && typeof window !== "undefined") {
     window.electron?.notification?.showNative?.({

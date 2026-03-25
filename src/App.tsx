@@ -131,6 +131,7 @@ import {
   useErrorStore,
   useAgentPreferencesStore,
   usePaletteStore,
+  useNotificationSettingsStore,
 } from "./store";
 import { useShallow } from "zustand/react/shallow";
 import { useMacroFocusStore } from "./store/macroFocusStore";
@@ -1187,6 +1188,9 @@ function App() {
 
   // App lifecycle hooks
   const { isStateLoaded } = useAppHydration(crashResolved);
+  useEffect(() => {
+    useNotificationSettingsStore.getState().hydrate();
+  }, []);
   useProjectSwitchRehydration();
   useShortcutHints(isStateLoaded);
   const gettingStarted = useGettingStartedChecklist(isStateLoaded);

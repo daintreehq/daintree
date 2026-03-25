@@ -59,6 +59,9 @@ class AgentNotificationService {
     const { state, previousState, worktreeId, terminalId, agentId, waitingReason } = payload;
     const settings = projectStore.getEffectiveNotificationSettings();
 
+    // Master toggle — skip all notifications when disabled
+    if (settings.enabled === false) return;
+
     // Allow same-state transitions for waitingReason changes (e.g., prompt -> approval)
     if (state === previousState && !(state === "waiting" && waitingReason !== undefined)) return;
 
@@ -126,7 +129,7 @@ class AgentNotificationService {
     const timer = setTimeout(() => {
       this.completionTimers.delete(key);
       const settings = projectStore.getEffectiveNotificationSettings();
-      if (!settings.completedEnabled) return;
+      if (settings.enabled === false || !settings.completedEnabled) return;
       const label = this.getLabel(agentId, worktreeId);
       this.enqueue(
         {
@@ -165,6 +168,7 @@ class AgentNotificationService {
     const timer = setTimeout(() => {
       this.waitingEscalationTimers.delete(terminalId);
       const currentSettings = projectStore.getEffectiveNotificationSettings();
+      if (currentSettings.enabled === false) return;
       if (!currentSettings.waitingEscalationEnabled || !currentSettings.waitingEnabled) return;
 
       // Re-read terminal state — skip if moved out of dock or removed

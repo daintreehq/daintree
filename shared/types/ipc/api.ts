@@ -157,6 +157,7 @@ import type { AgentRegistry, AgentMetadata } from "./agentCapabilities.js";
 import type { AppThemeConfig } from "../appTheme.js";
 
 export interface NotificationSettings {
+  enabled: boolean;
   completedEnabled: boolean;
   waitingEnabled: boolean;
   soundEnabled: boolean;

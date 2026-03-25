@@ -36,6 +36,7 @@ export class ProjectSettingsManager {
     if (!overrides) return global;
 
     return {
+      enabled: global.enabled,
       completedEnabled: overrides.completedEnabled ?? global.completedEnabled,
       waitingEnabled: overrides.waitingEnabled ?? global.waitingEnabled,
       soundEnabled: overrides.soundEnabled ?? global.soundEnabled,

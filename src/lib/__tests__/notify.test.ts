@@ -3,6 +3,7 @@ import { describe, it, expect, beforeEach, vi, afterEach } from "vitest";
 import { notify, _resetCoalesceMap } from "../notify";
 import { useNotificationStore } from "../../store/notificationStore";
 import { useNotificationHistoryStore } from "../../store/slices/notificationHistorySlice";
+import { useNotificationSettingsStore } from "../../store/notificationSettingsStore";
 
 const mockShowNative = vi.fn();
 
@@ -18,6 +19,7 @@ describe("notify()", () => {
   beforeEach(() => {
     useNotificationStore.setState({ notifications: [] });
     useNotificationHistoryStore.setState({ entries: [], unreadCount: 0 });
+    useNotificationSettingsStore.setState({ enabled: true, hydrated: true });
     _resetCoalesceMap();
     mockShowNative.mockClear();
   });
@@ -435,6 +437,56 @@ describe("notify()", () => {
       }
       const active = useNotificationStore.getState().notifications.filter((n) => !n.dismissed);
       expect(active).toHaveLength(5);
+    });
+  });
+
+  describe("master toggle — disabled suppresses toasts and native but keeps history", () => {
+    beforeEach(() => {
+      useNotificationSettingsStore.setState({ enabled: false });
+    });
+
+    it("still records to history when disabled", () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      notify({ type: "success", message: "Task done", priority: "high" });
+      expect(useNotificationHistoryStore.getState().entries).toHaveLength(1);
+      expect(useNotificationHistoryStore.getState().entries[0].message).toBe("Task done");
+    });
+
+    it("does not create toast when disabled and focused + high", () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      notify({ type: "success", message: "Done", priority: "high" });
+      expect(useNotificationStore.getState().notifications).toHaveLength(0);
+    });
+
+    it("does not show native notification when disabled and watch priority", () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      notify({ type: "warning", message: "Agent waiting", priority: "watch" });
+      expect(mockShowNative).not.toHaveBeenCalled();
+      expect(useNotificationStore.getState().notifications).toHaveLength(0);
+    });
+
+    it("records history for grid-bar but skips toast when disabled", () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      const id = notify({ type: "info", message: "Inline bar", placement: "grid-bar" });
+      expect(useNotificationHistoryStore.getState().entries).toHaveLength(1);
+      expect(useNotificationStore.getState().notifications).toHaveLength(0);
+      expect(id).toBe("");
+    });
+
+    it("returns empty string when disabled", () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      const id = notify({ type: "success", message: "Done", priority: "high" });
+      expect(id).toBe("");
+    });
+
+    it("resumes normal routing when re-enabled", () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      notify({ type: "success", message: "Suppressed", priority: "high" });
+      expect(useNotificationStore.getState().notifications).toHaveLength(0);
+
+      useNotificationSettingsStore.setState({ enabled: true });
+      notify({ type: "success", message: "Visible", priority: "high" });
+      expect(useNotificationStore.getState().notifications).toHaveLength(1);
     });
   });
 

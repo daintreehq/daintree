@@ -1,9 +1,10 @@
 import { useState, useEffect } from "react";
-import { Play, Bell, Volume2 } from "lucide-react";
+import { Play, Bell, BellOff, Volume2 } from "lucide-react";
 import { SettingsSection } from "./SettingsSection";
 import { SettingsCheckbox } from "./SettingsCheckbox";
 import { SettingsSwitchCard } from "./SettingsSwitchCard";
 import type { NotificationSettings } from "@shared/types";
+import { useNotificationSettingsStore } from "@/store/notificationSettingsStore";
 
 const AVAILABLE_SOUNDS: { file: string; label: string }[] = [
   { file: "chime.wav", label: "Chime (default)" },
@@ -21,6 +22,7 @@ const ESCALATION_DELAY_OPTIONS: { value: number; label: string }[] = [
 ];
 
 const DEFAULT_SETTINGS: NotificationSettings = {
+  enabled: true,
   completedEnabled: false,
   waitingEnabled: false,
   soundEnabled: false,
@@ -64,6 +66,9 @@ export function NotificationSettingsTab() {
       window.electron?.notification?.setSettings(patch).catch(() => setSettings(prev));
       return next;
     });
+    if (patch.enabled !== undefined) {
+      useNotificationSettingsStore.setState({ enabled: patch.enabled });
+    }
   };
 
   const handlePreview = () => {
@@ -84,6 +89,17 @@ export function NotificationSettingsTab() {
 
   return (
     <div className="space-y-6">
+      <SettingsSwitchCard
+        variant="compact"
+        title="Enable notifications"
+        subtitle="Show toast popups and the notification bell. When disabled, notifications are still recorded in history."
+        isEnabled={settings.enabled}
+        onChange={() => update({ enabled: !settings.enabled })}
+        ariaLabel="Enable notifications"
+        icon={settings.enabled ? Bell : BellOff}
+      />
+
+      <div className={settings.enabled ? undefined : "opacity-50 pointer-events-none"}>
       <SettingsSection
         icon={Bell}
         title="Agent Notifications"
@@ -179,6 +195,7 @@ export function NotificationSettingsTab() {
           )}
         </div>
       </SettingsSection>
+      </div>
     </div>
   );
 }

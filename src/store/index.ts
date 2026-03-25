@@ -33,6 +33,8 @@ export type { PanelState } from "./focusStore";
 export { useNotificationStore } from "./notificationStore";
 export type { Notification, NotificationType } from "./notificationStore";
 
+export { useNotificationSettingsStore } from "./notificationSettingsStore";
+
 export { useUpdateStore } from "./updateStore";
 export type { UpdateStatus } from "./updateStore";
 
