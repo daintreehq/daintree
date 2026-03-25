@@ -106,7 +106,7 @@ export const theme: BuiltInThemeSource = {
     "settings-nav-hover-bg": "rgba(255,255,255,0.03)",
     "settings-search-bg": "#19191A",
     "settings-search-muted": "#a1a1aa",
-    "settings-sidebar-bg": "rgba(19,19,26,0.50)",
+    "settings-sidebar-bg": "rgba(19,19,18,0.50)",
     "sidebar-action-hover-bg": "rgba(255,255,255,0.05)",
     "sidebar-active-bg": "rgba(255,255,255,0.04)",
     "toolbar-agent-hover-bg": "rgba(255,255,255,0.06)",
