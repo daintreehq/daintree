@@ -122,4 +122,17 @@ describe("usePanelLimitStore", () => {
     usePanelLimitStore.getState().setHardLimit(1);
     expect(usePanelLimitStore.getState().hardLimit).toBe(4);
   });
+
+  it("rejects NaN values", async () => {
+    const { usePanelLimitStore } = await import("../panelLimitStore");
+
+    const before = usePanelLimitStore.getState().hardLimit;
+    usePanelLimitStore.getState().setHardLimit(NaN);
+    expect(usePanelLimitStore.getState().hardLimit).toBe(before);
+
+    usePanelLimitStore.getState().setSoftWarningLimit(NaN);
+    expect(usePanelLimitStore.getState().softWarningLimit).toBe(
+      usePanelLimitStore.getState().softWarningLimit
+    );
+  });
 });
