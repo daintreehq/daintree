@@ -506,6 +506,37 @@ describe("ProcessMemoryMonitor", () => {
       expect(logInfo).toHaveBeenCalledWith("memory-pressure-tier2-mitigation", expect.any(Object));
     });
 
+    it("calls trimPtyHostState during tier 1 mitigation", async () => {
+      const trimPtyHostState = vi.fn();
+      const actionsWithTrim: MemoryPressureActions = {
+        ...mockActions,
+        trimPtyHostState,
+      };
+      mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 350 * 1024, 100)]);
+      stop = startAppMetricsMonitor(actionsWithTrim);
+
+      await advancePolls(WARMUP_INTERVALS + 1);
+
+      expect(trimPtyHostState).toHaveBeenCalledTimes(1);
+    });
+
+    it("continues tier 1 even if trimPtyHostState throws", async () => {
+      const trimPtyHostState = vi.fn().mockImplementation(() => {
+        throw new Error("trim failed");
+      });
+      const actionsWithTrim: MemoryPressureActions = {
+        ...mockActions,
+        trimPtyHostState,
+      };
+      mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 350 * 1024, 100)]);
+      stop = startAppMetricsMonitor(actionsWithTrim);
+
+      await advancePolls(WARMUP_INTERVALS + PRESSURE_COUNT_TIER2);
+
+      expect(trimPtyHostState).toHaveBeenCalled();
+      expect(actionsWithTrim.hibernateIdleProjects).toHaveBeenCalledTimes(1);
+    });
+
     it("does not trigger mitigation when no process exceeds threshold", async () => {
       mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 200 * 1024, 100)]);
       stop = startAppMetricsMonitor(mockActions);

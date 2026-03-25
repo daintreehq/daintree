@@ -78,6 +78,12 @@ export class PtyManager extends EventEmitter {
     }
   }
 
+  trimScrollback(targetLines: number): void {
+    for (const terminal of this.registry.getAll()) {
+      terminal.trimScrollback(targetLines);
+    }
+  }
+
   /**
    * Check if SAB mode is enabled.
    */

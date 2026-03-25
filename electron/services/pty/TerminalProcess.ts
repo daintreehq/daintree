@@ -1136,6 +1136,13 @@ export class TerminalProcess {
     // No-op: SAB mode is always used, flow control handled by pty-host.ts
   }
 
+  trimScrollback(targetLines: number): void {
+    if (this._scrollback <= targetLines) return;
+    if (!this.terminalInfo.headlessTerminal) return;
+    this._scrollback = targetLines;
+    this.terminalInfo.headlessTerminal.options.scrollback = targetLines;
+  }
+
   dispose(): void {
     this.stopProcessDetector();
     this.stopActivityMonitor();

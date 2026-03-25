@@ -86,7 +86,8 @@ export type PtyHostRequest =
   | { type: "get-all-terminals"; requestId: string }
   | { type: "set-ipc-data-mirror"; id: string; enabled: boolean }
   | { type: "graceful-kill"; id: string; requestId: string }
-  | { type: "graceful-kill-by-project"; projectId: string; requestId: string };
+  | { type: "graceful-kill-by-project"; projectId: string; requestId: string }
+  | { type: "trim-state"; targetLines: number };
 
 /**
  * Terminal snapshot data sent from Host → Main for state queries.
