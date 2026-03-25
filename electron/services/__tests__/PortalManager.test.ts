@@ -525,7 +525,7 @@ describe("PortalManager LRU eviction", () => {
 
     const evictedCalls = () =>
       (mockWindow.webContents.send as ReturnType<typeof vi.fn>).mock.calls.filter(
-        ([ch]: [string]) => ch === "portal:tab-evicted"
+        ([ch]: string[]) => ch === "portal:tab-evicted"
       );
 
     expect(evictedCalls()).toHaveLength(0);
@@ -548,9 +548,9 @@ describe("PortalManager LRU eviction", () => {
 
     manager.closeTab("tab-2");
 
-    const evictedCalls = (mockWindow.webContents.send as ReturnType<typeof vi.fn>).mock.calls.filter(
-      ([ch]: [string]) => ch === "portal:tab-evicted"
-    );
+    const evictedCalls = (
+      mockWindow.webContents.send as ReturnType<typeof vi.fn>
+    ).mock.calls.filter(([ch]: string[]) => ch === "portal:tab-evicted");
     expect(evictedCalls).toHaveLength(0);
   });
 
@@ -567,9 +567,9 @@ describe("PortalManager LRU eviction", () => {
     manager.hideAll();
     manager.showTab("tab-1", { x: 0, y: 0, width: 800, height: 600 });
 
-    const evictedCalls = (mockWindow.webContents.send as ReturnType<typeof vi.fn>).mock.calls.filter(
-      ([ch]: [string]) => ch === "portal:tab-evicted"
-    );
+    const evictedCalls = (
+      mockWindow.webContents.send as ReturnType<typeof vi.fn>
+    ).mock.calls.filter(([ch]: string[]) => ch === "portal:tab-evicted");
     expect(evictedCalls).toHaveLength(0);
     expect(manager.hasTab("tab-1")).toBe(true);
     expect(manager.hasTab("tab-2")).toBe(true);
