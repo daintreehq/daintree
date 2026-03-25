@@ -34,6 +34,7 @@ export interface ProjectHealthData {
     mergedCounts: Record<60 | 120 | 180, number>;
   };
   repoUrl: string;
+  hasRemote: boolean;
   loading: boolean;
   error?: string;
   lastUpdated?: number;
