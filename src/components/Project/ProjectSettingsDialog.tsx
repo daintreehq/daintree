@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import { X, Settings, FileCode, Zap, Command, CookingPot, Server, Bell } from "lucide-react";
-import { CanopyAgentIcon } from "@/components/icons";
+
 import { AppDialog } from "@/components/ui/AppDialog";
 import { useProjectSettings } from "@/hooks";
 import { useProjectStore } from "@/store/projectStore";
@@ -17,7 +17,7 @@ import { GeneralTab } from "./GeneralTab";
 import { ContextTab } from "./ContextTab";
 import { AutomationTab } from "./AutomationTab";
 import { RecipesTab } from "./RecipesTab";
-import { AgentTab } from "./AgentTab";
+
 import type { CommandOverride } from "@shared/types/commands";
 import type { NotificationSettings } from "@shared/types/ipc/api";
 import {
@@ -41,7 +41,6 @@ type ProjectSettingsTab =
   | "automation"
   | "recipes"
   | "commands"
-  | "agent"
   | "mcp"
   | "notifications";
 
@@ -72,7 +71,7 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
   const [copyTreeSettings, setCopyTreeSettings] = useState<CopyTreeSettings>({});
   const [branchPrefixMode, setBranchPrefixMode] = useState<"none" | "username" | "custom">("none");
   const [branchPrefixCustom, setBranchPrefixCustom] = useState<string>("");
-  const [agentInstructions, setAgentInstructions] = useState<string>("");
+
   const [worktreePathPattern, setWorktreePathPattern] = useState<string>("");
   const [terminalShell, setTerminalShell] = useState<string>("");
   const [terminalShellArgs, setTerminalShellArgs] = useState<string>("");
@@ -122,7 +121,6 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
       branchPrefixMode,
       branchPrefixCustom,
       devServerLoadTimeout,
-      agentInstructions,
       worktreePathPattern,
       currentTerminalSettings,
       mcpServers,
@@ -142,7 +140,6 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
     copyTreeSettings,
     branchPrefixMode,
     branchPrefixCustom,
-    agentInstructions,
     worktreePathPattern,
     currentProject,
     currentTerminalSettings,
@@ -168,7 +165,7 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
       const initialCopyTreeSettings = settings.copyTreeSettings || {};
       const initialBranchPrefixMode = settings.branchPrefixMode ?? "none";
       const initialBranchPrefixCustom = settings.branchPrefixCustom ?? "";
-      const initialAgentInstructions = settings.agentInstructions ?? "";
+
       const initialWorktreePathPattern = settings.worktreePathPattern ?? "";
       const initialTerminalSettings = settings.terminalSettings;
       const initialMcpServers = settings.mcpServers ?? {};
@@ -187,7 +184,7 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
       setCopyTreeSettings(initialCopyTreeSettings);
       setBranchPrefixMode(initialBranchPrefixMode);
       setBranchPrefixCustom(initialBranchPrefixCustom);
-      setAgentInstructions(initialAgentInstructions);
+
       setWorktreePathPattern(initialWorktreePathPattern);
       setTerminalShell(initialTerminalSettings?.shell ?? "");
       setTerminalShellArgs(initialTerminalSettings?.shellArgs?.join(" ") ?? "");
@@ -214,7 +211,6 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
         initialBranchPrefixMode,
         initialBranchPrefixCustom,
         initialDevServerLoadTimeout,
-        initialAgentInstructions,
         initialWorktreePathPattern,
         initialTerminalSettings,
         initialMcpServers,
@@ -235,7 +231,7 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
       setAutoSaveError(null);
       setBranchPrefixMode("none");
       setBranchPrefixCustom("");
-      setAgentInstructions("");
+
       setWorktreePathPattern("");
       setTerminalShell("");
       setTerminalShellArgs("");
@@ -357,7 +353,7 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
         branchPrefixMode: effectivePrefixMode !== "none" ? effectivePrefixMode : undefined,
         branchPrefixCustom:
           effectivePrefixMode === "custom" ? sanitizedBranchPrefixCustom : undefined,
-        agentInstructions: agentInstructions.trim() || undefined,
+
         worktreePathPattern: sanitizedWorktreePathPattern,
         terminalSettings: currentTerminalSettings,
         mcpServers: Object.keys(mcpServers).length > 0 ? mcpServers : undefined,
@@ -411,7 +407,7 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
     automation: "Automation",
     recipes: "Recipes",
     commands: "Commands",
-    agent: "Agent",
+
     mcp: "MCP Servers",
     notifications: "Notifications",
   };
@@ -463,13 +459,7 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
           >
             Commands
           </NavButton>
-          <NavButton
-            active={activeTab === "agent"}
-            onClick={() => setActiveTab("agent")}
-            icon={<CanopyAgentIcon className="w-4 h-4" />}
-          >
-            Agent
-          </NavButton>
+
           <NavButton
             active={activeTab === "mcp"}
             onClick={() => setActiveTab("mcp")}
@@ -603,14 +593,6 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
                     projectId={projectId}
                     overrides={commandOverrides}
                     onChange={setCommandOverrides}
-                  />
-                </div>
-
-                {/* Agent Tab */}
-                <div className={activeTab === "agent" ? "" : "hidden"}>
-                  <AgentTab
-                    agentInstructions={agentInstructions}
-                    onAgentInstructionsChange={setAgentInstructions}
                   />
                 </div>
 

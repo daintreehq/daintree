@@ -131,7 +131,7 @@ export class ProjectIdentityFiles {
       devServerLoadTimeout?: number;
       copyTreeSettings?: CopyTreeSettings;
       excludedPaths?: string[];
-      agentInstructions?: string;
+
       worktreePathPattern?: string;
       terminalSettings?: {
         shellArgs?: string[];
@@ -149,8 +149,7 @@ export class ProjectIdentityFiles {
     if (settings.devServerLoadTimeout) payload.devServerLoadTimeout = settings.devServerLoadTimeout;
     if (settings.copyTreeSettings) payload.copyTreeSettings = settings.copyTreeSettings;
     if (settings.excludedPaths?.length) payload.excludedPaths = settings.excludedPaths;
-    if (settings.agentInstructions?.trim())
-      payload.agentInstructions = settings.agentInstructions.trim();
+
     if (settings.worktreePathPattern) payload.worktreePathPattern = settings.worktreePathPattern;
 
     if (settings.terminalSettings) {

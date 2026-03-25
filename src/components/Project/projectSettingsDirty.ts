@@ -26,7 +26,7 @@ export interface ProjectSettingsSnapshot {
   copyTreeSettings: CopyTreeSettings;
   branchPrefixMode: "none" | "username" | "custom";
   branchPrefixCustom: string;
-  agentInstructions: string;
+
   worktreePathPattern: string;
   terminalSettings: ProjectTerminalSettings | undefined;
   mcpServers: Record<string, ProjectMcpServerConfig>;
@@ -63,7 +63,6 @@ export function createProjectSettingsSnapshot(
   branchPrefixMode: "none" | "username" | "custom" = "none",
   branchPrefixCustom: string = "",
   devServerLoadTimeout: number | undefined = undefined,
-  agentInstructions: string = "",
   worktreePathPattern: string = "",
   terminalSettings: ProjectTerminalSettings | undefined = undefined,
   mcpServers: Record<string, ProjectMcpServerConfig> = {},
@@ -144,7 +143,6 @@ export function createProjectSettingsSnapshot(
     copyTreeSettings: normalizedCopyTreeSettings,
     branchPrefixMode: normalizedMode,
     branchPrefixCustom: normalizedMode === "custom" ? trimmedCustom : "",
-    agentInstructions: agentInstructions.trim(),
     worktreePathPattern: worktreePathPattern.trim(),
     terminalSettings: normalizeTerminalSettings(terminalSettings),
     mcpServers: normalizeMcpServers(mcpServers),
@@ -282,7 +280,7 @@ export function areSnapshotsEqual(a: ProjectSettingsSnapshot, b: ProjectSettings
 
   if (a.branchPrefixMode !== b.branchPrefixMode) return false;
   if (a.branchPrefixCustom !== b.branchPrefixCustom) return false;
-  if (a.agentInstructions !== b.agentInstructions) return false;
+
   if (a.worktreePathPattern !== b.worktreePathPattern) return false;
 
   // Terminal settings comparison

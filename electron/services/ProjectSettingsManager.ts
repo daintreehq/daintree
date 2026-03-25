@@ -183,10 +183,6 @@ export class ProjectSettingsManager {
             : undefined,
         branchPrefixCustom:
           typeof parsed.branchPrefixCustom === "string" ? parsed.branchPrefixCustom : undefined,
-        agentInstructions:
-          typeof parsed.agentInstructions === "string" && parsed.agentInstructions.trim()
-            ? parsed.agentInstructions
-            : undefined,
         worktreePathPattern:
           typeof parsed.worktreePathPattern === "string" && parsed.worktreePathPattern.trim()
             ? parsed.worktreePathPattern.trim()
@@ -266,6 +262,7 @@ export class ProjectSettingsManager {
       secureEnvironmentVariables: secureEnvVarKeys.length > 0 ? secureEnvVarKeys : undefined,
       insecureEnvironmentVariables: undefined,
       unresolvedSecureEnvironmentVariables: undefined,
+      agentInstructions: undefined,
       devServerDismissed:
         typeof settings.devServerDismissed === "boolean" ? settings.devServerDismissed : undefined,
       devServerAutoDetected:

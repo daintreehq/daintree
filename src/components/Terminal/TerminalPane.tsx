@@ -38,7 +38,7 @@ import { terminalClient } from "@/clients";
 import { HybridInputBar, type HybridInputBarHandle } from "./HybridInputBar";
 import { getTerminalFocusTarget, shouldSuppressUnfocusedClick } from "./terminalFocus";
 import { registerPanelFocusHandler } from "./terminalFocusRegistry";
-import { getCanopyCommand, isEscapedCommand, unescapeCommand } from "./canopySlashCommands";
+
 import { DropdownMenuItem } from "@/components/ui/dropdown-menu";
 
 export type { TerminalType };
@@ -864,25 +864,6 @@ function TerminalPaneComponent({
             onActivate={handleClick}
             onSend={({ trackerData, text }) => {
               if (!isInputLocked) {
-                if (isEscapedCommand(text)) {
-                  const unescapedText = unescapeCommand(text);
-                  terminalInstanceService.notifyUserInput(id);
-                  terminalClient.submit(id, unescapedText);
-                  handleInput(trackerData);
-                  return;
-                }
-
-                const canopyCommand = getCanopyCommand(text);
-                if (canopyCommand) {
-                  terminalInstanceService.notifyUserInput(id);
-                  void Promise.resolve(canopyCommand.execute({ terminalId: id, worktreeId })).catch(
-                    (error) => {
-                      console.error(`Canopy command '${canopyCommand.label}' failed:`, error);
-                    }
-                  );
-                  return;
-                }
-
                 terminalInstanceService.notifyUserInput(id);
                 terminalClient.submit(id, text);
                 handleInput(trackerData);

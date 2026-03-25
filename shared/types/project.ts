@@ -308,8 +308,7 @@ export interface ProjectSettings {
   branchPrefixMode?: "none" | "username" | "custom";
   /** Custom branch prefix string when branchPrefixMode is "custom" (e.g., "feature/") */
   branchPrefixCustom?: string;
-  /** Project-specific instructions prepended to every new agent session prompt */
-  agentInstructions?: string;
+
   /** Per-project worktree path pattern override (uses global default when unset) */
   worktreePathPattern?: string;
   /** Per-project terminal configuration overrides */
