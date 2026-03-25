@@ -24,6 +24,7 @@ export function registerTerminalSpawnActions(
         location: "grid",
         worktreeId: callbacks.getActiveWorktreeId(),
       });
+      if (!terminalId) return;
       return { terminalId };
     },
   }));

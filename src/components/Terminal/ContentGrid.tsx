@@ -516,6 +516,7 @@ export function ContentGrid({ className, defaultCwd, agentAvailability }: Conten
 
         const options = await buildPanelDuplicateOptions(panel, "grid");
         const newPanelId = await addTerminal(options);
+        if (!newPanelId) return;
 
         addPanelToGroup(groupId, newPanelId);
         setActiveTab(groupId, newPanelId);

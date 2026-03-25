@@ -148,6 +148,7 @@ export const useTerminalStore = create<PanelGridState>()((set, get, api) => {
 
     addTerminal: async (options: AddTerminalOptions) => {
       const id = await registrySlice.addTerminal(options);
+      if (id === null) return null;
       if (!options.location || options.location === "grid") {
         set({ focusedId: id });
       }

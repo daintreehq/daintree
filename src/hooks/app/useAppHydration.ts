@@ -31,7 +31,8 @@ export function useAppHydration(enabled = true) {
     const restoreState = async () => {
       try {
         await hydrateAppState({
-          addTerminal: addTerminal as HydrationOptions["addTerminal"],
+          addTerminal: ((opts) =>
+            addTerminal({ ...opts, bypassLimits: true })) as HydrationOptions["addTerminal"],
           setActiveWorktree,
           loadRecipes,
           openDiagnosticsDock,

@@ -39,6 +39,7 @@ export interface AddTerminalArgs {
   agentLaunchFlags?: string[];
   agentModelId?: string;
   restore?: boolean;
+  bypassLimits?: boolean;
 }
 
 export interface SavedTerminalData {

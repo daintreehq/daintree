@@ -165,6 +165,7 @@ export interface HydrationOptions {
     agentLaunchFlags?: string[];
     agentModelId?: string;
     restore?: boolean;
+    bypassLimits?: boolean;
   }) => Promise<string>;
   setActiveWorktree: (id: string | null) => void;
   loadRecipes: (projectId: string) => Promise<void>;

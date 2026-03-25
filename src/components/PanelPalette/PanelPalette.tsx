@@ -4,6 +4,8 @@ import { AppPaletteDialog } from "@/components/ui/AppPaletteDialog";
 import { PaletteOverflowNotice } from "@/components/ui/PaletteOverflowNotice";
 import type { PanelKindOption, PanelPalettePhase } from "@/hooks/usePanelPalette";
 import { PanelKindIcon } from "./PanelKindIcon";
+import { useTerminalStore } from "@/store/terminalStore";
+import { usePanelLimitStore } from "@/store/panelLimitStore";
 
 interface PanelPaletteProps {
   isOpen: boolean;
@@ -93,10 +95,15 @@ export function PanelPalette({
     [onSelectPrevious, onSelectNext, onConfirm, onClose, onBack, phase]
   );
 
+  const panelCount = useTerminalStore(
+    (state) => state.terminals.filter((t) => t.location !== "trash").length
+  );
+  const hardLimit = usePanelLimitStore((state) => state.hardLimit);
+
   const isSearching = query.trim().length > 0;
   const isModelPhase = phase === "model";
 
-  const headerLabel = isModelPhase ? "Select Model" : "New Panel";
+  const headerLabel = isModelPhase ? "Select Model" : `New Panel (${panelCount} / ${hardLimit})`;
   const placeholder = isModelPhase ? "Select a model..." : "Select a panel type...";
   const emptyMessage = isModelPhase
     ? `No models match "${query}"`

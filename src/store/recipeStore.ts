@@ -310,7 +310,11 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
             env: terminal.env,
             exitBehavior: terminal.exitBehavior,
           });
-          results.spawned.push({ index, terminalId });
+          if (terminalId) {
+            results.spawned.push({ index, terminalId });
+          } else {
+            results.failed.push({ index, error: "Panel limit reached" });
+          }
           continue;
         }
 
@@ -346,7 +350,11 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
           env: terminal.env,
           exitBehavior: terminal.exitBehavior,
         });
-        results.spawned.push({ index, terminalId });
+        if (terminalId) {
+          results.spawned.push({ index, terminalId });
+        } else {
+          results.failed.push({ index, error: "Panel limit reached" });
+        }
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         console.error(`Failed to spawn terminal for recipe ${recipeId}:`, error);
