@@ -82,7 +82,10 @@ test.describe.serial("Core: Focus Management", () => {
 
     // First F6 from terminal: focusedRegion is null → targets "grid" (first visible region)
     await window.keyboard.press("F6");
-    const grid = window.locator('[aria-label="Panel grid region"]');
+    // The grid region may have aria-label "Panel grid" or "Panel grid region"
+    const grid = window.locator('[role="region"]').filter({
+      has: window.locator('[data-grid-container="true"]'),
+    });
     await expect(grid).toBeFocused({ timeout: T_MEDIUM });
 
     // Second F6: grid → sidebar

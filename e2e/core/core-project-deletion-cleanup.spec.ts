@@ -198,8 +198,10 @@ test.describe.serial("Deletion Cleanup: Background project removal isolation", (
     const trigger = window.locator(SEL.toolbar.projectSwitcherTrigger);
     await expect(trigger).toContainText(PROJECT_A, { timeout: T_SHORT });
 
-    // A's panels should still be present
-    expect(await getGridPanelCount(window)).toBeGreaterThanOrEqual(1);
+    // A's panels should still be present (poll to handle transient state)
+    await expect
+      .poll(() => getGridPanelCount(window), { timeout: T_MEDIUM })
+      .toBeGreaterThanOrEqual(1);
 
     // A's worktree cards should still be visible
     await expect(window.locator("[data-worktree-branch]").first()).toBeVisible({

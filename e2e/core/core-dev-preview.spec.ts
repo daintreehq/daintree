@@ -181,28 +181,22 @@ server.listen(0, '127.0.0.1', () => {
         timeout: T_MEDIUM,
       });
 
-      // Configure devServerCommand via the Project Settings UI so the
-      // Zustand store is properly updated (direct IPC doesn't update the store).
-      const projectSwitcher = window.locator(SEL.toolbar.projectSwitcherTrigger);
-      await projectSwitcher.click();
-      // The project switcher palette has a "Project Settings..." button
-      const palette = window.locator(SEL.projectSwitcher.palette);
-      await expect(palette).toBeVisible({ timeout: T_SHORT });
-      await palette.getByRole("button", { name: "Project Settings" }).click();
-
-      // Wait for settings dialog
-      await expect(window.locator(SEL.projectSettings.heading)).toBeVisible({
-        timeout: T_MEDIUM,
+      // Set devServerCommand via IPC to avoid the unsaved-changes dialog.
+      // Read current settings, merge the dev command, and save back.
+      await window.evaluate(async () => {
+        const current = await window.electron.project.getCurrent();
+        if (!current?.id) return;
+        const settings = await window.electron.project.getSettings(current.id);
+        await window.electron.project.saveSettings(current.id, {
+          ...settings,
+          devServerCommand: "node dev-server.cjs",
+        });
       });
-
-      // Fill in the dev server command
-      const devCommandInput = window.locator('[aria-label="Dev server command"]');
-      await devCommandInput.fill("node dev-server.cjs");
-
-      // Close settings (auto-saves on close)
-      await window.locator('[aria-label="Close settings"]').click();
-      await expect(window.locator(SEL.projectSettings.heading)).not.toBeVisible({
-        timeout: T_MEDIUM,
+      // Reload to ensure the renderer picks up the new settings
+      await window.reload({ waitUntil: "domcontentloaded" });
+      await window.locator(SEL.toolbar.openSettings).waitFor({
+        state: "visible",
+        timeout: T_LONG,
       });
 
       // Wait for console drawer's status badge to show "Running".
