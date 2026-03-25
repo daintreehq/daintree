@@ -23,6 +23,7 @@ export const ABSOLUTE_MAX_GRID_TERMINALS = 16;
 
 export const GRID_TRANSITION_DURATION_MS = 200;
 export const GRID_FIT_DELAY_MS = GRID_TRANSITION_DURATION_MS + 50;
+export const SIDEBAR_TOGGLE_LOCK_MS = GRID_FIT_DELAY_MS;
 
 /**
  * Calculate the maximum number of panels that can fit in the grid

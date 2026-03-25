@@ -160,6 +160,43 @@ describe("TerminalResizeController", () => {
     expect(resizeMock).toHaveBeenCalledWith("term-1", 132, 41);
   });
 
+  it("lockResize with custom TTL expires after specified duration", () => {
+    const managed = createManagedTerminal();
+    const controller = new TerminalResizeController({
+      getInstance: vi.fn(() => managed),
+      dataBuffer: {
+        flushForTerminal: vi.fn(),
+        resetForTerminal: vi.fn(),
+      } as any,
+    });
+
+    controller.lockResize("term-1", true, 300);
+    expect(controller.isResizeLocked("term-1")).toBe(true);
+
+    vi.advanceTimersByTime(200);
+    expect(controller.isResizeLocked("term-1")).toBe(true);
+
+    vi.advanceTimersByTime(200);
+    expect(controller.isResizeLocked("term-1")).toBe(false);
+  });
+
+  it("later lockResize call overwrites earlier TTL", () => {
+    const managed = createManagedTerminal();
+    const controller = new TerminalResizeController({
+      getInstance: vi.fn(() => managed),
+      dataBuffer: {
+        flushForTerminal: vi.fn(),
+        resetForTerminal: vi.fn(),
+      } as any,
+    });
+
+    controller.lockResize("term-1", true, 500);
+    controller.lockResize("term-1", true, 200);
+
+    vi.advanceTimersByTime(300);
+    expect(controller.isResizeLocked("term-1")).toBe(false);
+  });
+
   it("does not apply deferred resize while resize lock is active", () => {
     const managed = createManagedTerminal();
     managed.latestCols = 120;
