@@ -68,6 +68,7 @@ export function getDefaultShellArgs(shell: string, _options?: ShellArgsOptions):
  */
 export const AGENT_ENV_EXCLUSIONS: Record<string, string[]> = {
   claude: ["CLAUDECODE"],
+  cursor: ["CI", "NONINTERACTIVE"],
   gemini: ["CI", "NONINTERACTIVE"],
   opencode: ["CI", "NONINTERACTIVE"],
 };

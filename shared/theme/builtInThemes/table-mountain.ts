@@ -78,7 +78,6 @@ export const theme: BuiltInThemeSource = {
     "accent-secondary-muted": "rgba(107,143,113,0.25)",
     "accent-secondary-soft": "rgba(107,143,113,0.12)",
     "accent-soft": "rgba(168,69,110,0.12)",
-    "activity-approval": "#C06418",
     "border-divider": "rgba(60,48,38,0.05)",
     "border-interactive": "rgba(60,48,38,0.10)",
     "border-strong": "rgba(60,48,38,0.14)",

@@ -7,7 +7,6 @@ import { getDominantAgentState } from "@/components/Worktree/AgentStatusIndicato
 export interface WorktreeTerminalCounts {
   total: number;
   byState: Record<AgentState, number>;
-  approvalWaitingCount: number;
 }
 
 export interface UseWorktreeTerminalsResult {
@@ -59,16 +58,10 @@ export function useWorktreeTerminals(worktreeId: string): UseWorktreeTerminalsRe
     };
 
     const agentStates: (AgentState | undefined)[] = [];
-    let approvalWaitingCount = 0;
-
     terminals.forEach((terminal) => {
       // Default to 'idle' for terminals without agentState (e.g., shell terminals)
       const state = terminal.agentState || "idle";
       byState[state] = (byState[state] || 0) + 1;
-
-      if (state === "waiting" && terminal.waitingReason === "approval") {
-        approvalWaitingCount++;
-      }
 
       // Only include agent terminals (those with agentState defined)
       if (terminal.agentState) {
@@ -83,7 +76,6 @@ export function useWorktreeTerminals(worktreeId: string): UseWorktreeTerminalsRe
       counts: {
         total: terminals.length,
         byState,
-        approvalWaitingCount,
       },
       dominantAgentState,
     };

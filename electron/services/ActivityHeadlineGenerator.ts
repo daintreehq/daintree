@@ -94,12 +94,7 @@ export class ActivityHeadlineGenerator {
         };
       case "waiting":
         return {
-          headline:
-            waitingReason === "approval"
-              ? "Waiting for approval"
-              : waitingReason === "question"
-                ? "Waiting for response"
-                : "Waiting for input",
+          headline: waitingReason === "question" ? "Waiting for response" : "Waiting for input",
           status: "waiting",
           type: "interactive",
         };

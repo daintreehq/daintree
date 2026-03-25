@@ -74,7 +74,6 @@ export const theme: BuiltInThemeSource = {
     },
   },
   tokens: {
-    "activity-approval": "#D6742B",
     "border-strong": "rgba(180,220,240,0.16)",
     "border-subtle": "rgba(180,220,240,0.09)",
     "focus-ring": "rgba(58,183,197,0.45)",

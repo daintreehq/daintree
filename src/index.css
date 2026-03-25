@@ -52,7 +52,6 @@
   --color-activity-idle: var(--theme-activity-idle);
   --color-activity-working: var(--theme-activity-working);
   --color-activity-waiting: var(--theme-activity-waiting);
-  --color-activity-approval: var(--theme-activity-approval);
   --color-activity-completed: var(--theme-activity-completed);
   --color-overlay-base: var(--theme-overlay-base);
   --color-overlay-subtle: var(--theme-overlay-subtle);
@@ -379,7 +378,6 @@
   --color-state-idle: var(--theme-activity-idle);
   --color-state-working: var(--theme-activity-working);
   --color-state-waiting: var(--theme-activity-waiting);
-  --color-state-approval: var(--theme-activity-approval);
   --color-server-running: var(--theme-status-success);
   --color-server-stopped: var(--theme-activity-idle);
   --color-server-starting: var(--theme-status-warning);
@@ -1200,13 +1198,6 @@ body,
     0 0 0 1px color-mix(in oklab, var(--color-activity-waiting) 10%, transparent);
 }
 
-.panel-state-approval {
-  border-color: color-mix(in oklab, var(--color-activity-approval) 85%, transparent);
-  box-shadow:
-    inset 0 0 0 1px color-mix(in oklab, var(--color-activity-approval) 20%, transparent),
-    0 0 0 1px color-mix(in oklab, var(--color-activity-approval) 15%, transparent);
-}
-
 .panel-state-working {
   animation: panel-working-breathe 4s ease-in-out infinite;
 }
@@ -1812,8 +1803,7 @@ body[data-performance-mode="true"] [class*="backdrop-blur"] {
     border-color: Highlight;
   }
 
-  .panel-state-waiting,
-  .panel-state-approval {
+  .panel-state-waiting {
     border-color: Highlight;
     outline: 2px solid Highlight;
     outline-offset: -2px;
@@ -1851,7 +1841,6 @@ body[data-performance-mode="true"] [class*="backdrop-blur"] {
   }
 
   .panel-state-waiting,
-  .panel-state-approval,
   .panel-state-working {
     border-width: 2px;
   }

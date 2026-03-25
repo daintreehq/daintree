@@ -106,15 +106,14 @@ Fixed hue families across all themes. Each theme tunes brightness/saturation.
 
 Drive state chips in panel headers and worktree card indicators.
 
-| Token                | Purpose                              | Derived?                                      |
-| -------------------- | ------------------------------------ | --------------------------------------------- |
-| `activity-active`    | Real-time working indicator (vivid)  | Required                                      |
-| `activity-working`   | Animated spinner color               | Required                                      |
-| `activity-waiting`   | Agent waiting for user input (amber) | Required                                      |
-| `activity-idle`      | Inactive/dormant state               | Required                                      |
-| `activity-approval`  | Needs explicit approval (orange)     | Derived: `#f97316` (dark) / `#C56210` (light) |
-| `activity-completed` | Finished successfully                | Derived: `status-success`                     |
-| `activity-failed`    | Finished with error                  | Derived: `status-danger`                      |
+| Token                | Purpose                              | Derived?                  |
+| -------------------- | ------------------------------------ | ------------------------- |
+| `activity-active`    | Real-time working indicator (vivid)  | Required                  |
+| `activity-working`   | Animated spinner color               | Required                  |
+| `activity-waiting`   | Agent waiting for user input (amber) | Required                  |
+| `activity-idle`      | Inactive/dormant state               | Required                  |
+| `activity-completed` | Finished successfully                | Derived: `status-success` |
+| `activity-failed`    | Finished with error                  | Derived: `status-danger`  |
 
 ## Overlay Tokens
 

@@ -33,7 +33,7 @@ export function matchesQuickStateFilter(
     case "working":
       return (meta.hasWorkingAgent || meta.hasRunningAgent) && meta.chipState === null;
     case "waiting":
-      return meta.chipState === "waiting" || meta.chipState === "approval";
+      return meta.chipState === "waiting";
     case "finished":
       return meta.chipState === "complete" || meta.chipState === "cleanup";
   }

@@ -3,7 +3,6 @@ import { computeChipState, type ComputeChipStateInput } from "../utils/computeCh
 
 const base: ComputeChipStateInput = {
   waitingTerminalCount: 0,
-  approvalWaitingCount: 0,
   lifecycleStage: null,
   isComplete: false,
 };
@@ -12,12 +11,6 @@ describe("computeChipState", () => {
   describe("state triggers", () => {
     it("returns waiting when waitingTerminalCount > 0", () => {
       expect(computeChipState({ ...base, waitingTerminalCount: 1 })).toBe("waiting");
-    });
-
-    it("returns approval when approvalWaitingCount > 0", () => {
-      expect(computeChipState({ ...base, waitingTerminalCount: 1, approvalWaitingCount: 1 })).toBe(
-        "approval"
-      );
     });
 
     it('returns cleanup when lifecycleStage is "merged"', () => {
@@ -38,34 +31,6 @@ describe("computeChipState", () => {
   });
 
   describe("priority ordering", () => {
-    it("approval beats waiting", () => {
-      expect(computeChipState({ ...base, waitingTerminalCount: 2, approvalWaitingCount: 1 })).toBe(
-        "approval"
-      );
-    });
-
-    it("cleanup beats approval", () => {
-      expect(
-        computeChipState({
-          ...base,
-          waitingTerminalCount: 1,
-          approvalWaitingCount: 1,
-          lifecycleStage: "merged",
-        })
-      ).toBe("cleanup");
-    });
-
-    it("complete beats approval", () => {
-      expect(
-        computeChipState({
-          ...base,
-          waitingTerminalCount: 1,
-          approvalWaitingCount: 1,
-          isComplete: true,
-        })
-      ).toBe("complete");
-    });
-
     it("cleanup beats waiting", () => {
       expect(computeChipState({ ...base, waitingTerminalCount: 1, lifecycleStage: "merged" })).toBe(
         "cleanup"

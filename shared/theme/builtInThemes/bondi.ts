@@ -77,7 +77,6 @@ export const theme: BuiltInThemeSource = {
   tokens: {
     "accent-muted": "rgba(20,90,68,0.30)",
     "accent-soft": "rgba(20,90,68,0.15)",
-    "activity-approval": "#C56210",
     "border-divider": "rgba(0,0,0,0.04)",
     "border-interactive": "rgba(0,0,0,0.10)",
     "border-strong": "rgba(0,0,0,0.14)",

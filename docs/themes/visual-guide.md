@@ -217,7 +217,6 @@ Colors:
 - **Working/Active:** `activity-working` (typically green) — pulsing animation
 - **Idle:** `activity-idle` (gray/muted) — static
 - **Waiting:** `activity-waiting` (amber/yellow) — needs user input
-- **Approval:** `activity-approval` (orange) — requires explicit confirmation
 - **Completed:** `activity-completed` (defaults to `status-success`)
 - **Failed:** `activity-failed` (defaults to `status-danger`)
 

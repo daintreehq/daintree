@@ -4,7 +4,7 @@ import type { BuiltInAgentId } from "../config/agentIds.js";
 export type AgentState = "idle" | "working" | "running" | "waiting" | "directing" | "completed";
 
 /** Classification of why an agent is in the "waiting" state */
-export type WaitingReason = "prompt" | "approval" | "question";
+export type WaitingReason = "prompt" | "question";
 
 /** Task state: draft | queued | running | blocked | completed | failed | cancelled */
 export type TaskState =

@@ -55,7 +55,6 @@ export const APP_THEME_TOKEN_KEYS = [
   "activity-idle",
   "activity-working",
   "activity-waiting",
-  "activity-approval",
   "activity-completed",
 
   // Overlay ladder

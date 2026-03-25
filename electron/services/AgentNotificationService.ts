@@ -59,7 +59,7 @@ class AgentNotificationService {
     const { state, previousState, worktreeId, terminalId, agentId, waitingReason } = payload;
     const settings = projectStore.getEffectiveNotificationSettings();
 
-    // Allow same-state transitions for waitingReason changes (e.g., prompt -> approval)
+    // Allow same-state transitions for waitingReason changes (e.g., prompt -> question)
     if (state === previousState && !(state === "waiting" && waitingReason !== undefined)) return;
 
     const key = agentId ?? worktreeId ?? "agent";
@@ -105,11 +105,10 @@ class AgentNotificationService {
       // Waiting (permission request) is urgent — show immediately, bypass queue stagger
       const label = this.getLabel(agentId, worktreeId);
       const context = this.makeContext(terminalId, agentId, worktreeId);
-      const isApproval = waitingReason === "approval";
-      this.playNotificationSound(settings.soundEnabled, isApproval ? "waiting.wav" : undefined);
+      this.playNotificationSound(settings.soundEnabled);
       notificationService.showWatchNotification(
-        isApproval ? "Agent needs approval" : "Agent waiting",
-        isApproval ? `${label} is waiting for tool approval` : `${label} is waiting for input`,
+        "Agent waiting",
+        `${label} is waiting for input`,
         context,
         CHANNELS.NOTIFICATION_WATCH_NAVIGATE,
         true
@@ -178,13 +177,10 @@ class AgentNotificationService {
       if (!currentTerminal || currentTerminal.location !== "dock") return;
 
       const label = currentTerminal.title || this.getLabel(agentId, worktreeId);
-      const isApproval = waitingReason === "approval";
       this.playNotificationSound(currentSettings.soundEnabled);
       notificationService.showNativeNotification(
-        isApproval ? "Agent still needs approval" : "Agent still waiting",
-        isApproval
-          ? `${label} is still waiting for approval`
-          : `${label} has been waiting for input`
+        "Agent still waiting",
+        `${label} has been waiting for input`
       );
     }, settings.waitingEscalationDelayMs);
 

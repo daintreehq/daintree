@@ -131,12 +131,12 @@ describe("AgentStateService", () => {
       stateChanges.push({ state: payload.state, waitingReason: payload.waitingReason });
     });
 
-    service.updateAgentState(terminal, { type: "prompt" }, "activity", 1.0, "approval");
+    service.updateAgentState(terminal, { type: "prompt" }, "activity", 1.0, "prompt");
 
     expect(terminal.agentState).toBe("waiting");
-    expect(terminal.waitingReason).toBe("approval");
+    expect(terminal.waitingReason).toBe("prompt");
     expect(stateChanges).toHaveLength(1);
-    expect(stateChanges[0]?.waitingReason).toBe("approval");
+    expect(stateChanges[0]?.waitingReason).toBe("prompt");
   });
 
   it("clears waitingReason when transitioning away from waiting", () => {

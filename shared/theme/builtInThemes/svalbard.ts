@@ -78,7 +78,6 @@ export const theme: BuiltInThemeSource = {
   },
   tokens: {
     "accent-hover": "#2F627C",
-    "activity-approval": "#AA6F3A",
     "border-divider": "rgba(20,35,50,0.04)",
     "border-interactive": "rgba(20,35,50,0.09)",
     "border-strong": "rgba(20,35,50,0.12)",

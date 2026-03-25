@@ -67,7 +67,6 @@ function makeTerminal(overrides: Partial<TerminalInstance> = {}): TerminalInstan
 const baseCounts: WorktreeTerminalSectionProps["counts"] = {
   total: 2,
   byState: { idle: 2, working: 0, running: 0, waiting: 0, directing: 0, completed: 0 },
-  approvalWaitingCount: 0,
 };
 
 function renderSection(overrides: Partial<WorktreeTerminalSectionProps> = {}) {

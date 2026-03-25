@@ -1246,11 +1246,6 @@ describe("matchesQuickStateFilter", () => {
     expect(matchesQuickStateFilter("waiting", meta)).toBe(true);
   });
 
-  it('"waiting" matches when chipState is "approval"', () => {
-    const meta = { ...createEmptyMeta(), chipState: "approval" as const };
-    expect(matchesQuickStateFilter("waiting", meta)).toBe(true);
-  });
-
   it('"finished" matches chipState "complete"', () => {
     const meta = { ...createEmptyMeta(), chipState: "complete" as const };
     expect(matchesQuickStateFilter("finished", meta)).toBe(true);

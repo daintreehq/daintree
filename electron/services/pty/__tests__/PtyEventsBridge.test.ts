@@ -49,11 +49,11 @@ describe("bridgePtyEvent", () => {
       trigger: "activity",
       confidence: 1.0,
       worktreeId: "wt-1",
-      waitingReason: "approval",
+      waitingReason: "prompt",
     });
 
     expect(payloads).toHaveLength(1);
-    expect(payloads[0]?.waitingReason).toBe("approval");
+    expect(payloads[0]?.waitingReason).toBe("prompt");
   });
 
   it("routes terminal-status events to bus and callback", () => {

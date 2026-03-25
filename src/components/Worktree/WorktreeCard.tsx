@@ -452,16 +452,10 @@ export const WorktreeCard = React.memo(function WorktreeCard({
     (): ChipState =>
       computeChipState({
         waitingTerminalCount: terminalCounts.byState.waiting,
-        approvalWaitingCount: terminalCounts.approvalWaitingCount,
         lifecycleStage,
         isComplete,
       }),
-    [
-      terminalCounts.byState.waiting,
-      terminalCounts.approvalWaitingCount,
-      lifecycleStage,
-      isComplete,
-    ]
+    [terminalCounts.byState.waiting, lifecycleStage, isComplete]
   );
 
   const { setNodeRef, isOver } = useDroppable({
@@ -574,7 +568,6 @@ export const WorktreeCard = React.memo(function WorktreeCard({
             <div
               className={cn(
                 "absolute w-3 h-3 z-10 cursor-default",
-                chipState === "approval" && "bg-activity-approval",
                 chipState === "waiting" && "bg-activity-waiting",
                 chipState === "cleanup" && "bg-github-merged",
                 chipState === "complete" && "bg-github-open",
@@ -584,7 +577,6 @@ export const WorktreeCard = React.memo(function WorktreeCard({
               role="img"
               aria-label={
                 {
-                  approval: "Agent waiting for approval",
                   waiting: "Agent waiting for input",
                   cleanup: "Ready for cleanup",
                   complete: "Complete: in review",
