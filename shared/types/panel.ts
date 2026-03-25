@@ -205,8 +205,6 @@ interface PtyPanelData extends BasePanelData {
   agentState?: AgentState;
   /** Timestamp when agentState last changed (milliseconds since epoch) */
   lastStateChange?: number;
-  /** Error message if agentState is 'failed' */
-  error?: string;
   /** What triggered the most recent state change */
   stateChangeTrigger?: AgentStateChangeTrigger;
   /** Confidence in the most recent state detection (0.0-1.0) */
@@ -363,7 +361,6 @@ export interface TerminalInstance {
   rows?: number;
   agentState?: AgentState;
   lastStateChange?: number;
-  error?: string;
   stateChangeTrigger?: AgentStateChangeTrigger;
   stateChangeConfidence?: number;
   waitingReason?: WaitingReason;

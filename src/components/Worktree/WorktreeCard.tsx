@@ -207,7 +207,6 @@ export const WorktreeCard = React.memo(function WorktreeCard({
   const openDockTerminal = useTerminalStore((state) => state.openDockTerminal);
   const getCountByWorktree = useTerminalStore((state) => state.getCountByWorktree);
   const completedCount = terminalCounts.byState.completed;
-  const failedCount = terminalCounts.byState.failed;
   const totalTerminalCount = terminalCounts.total;
   const allTerminalCount = getCountByWorktree(worktree.id);
   const gridCount = worktreeTerminals.filter(
@@ -260,7 +259,6 @@ export const WorktreeCard = React.memo(function WorktreeCard({
     handleCopyTree,
     handleRunRecipe,
     handleCloseCompleted,
-    handleCloseFailed,
     handleDockAll,
     handleMaximizeAll,
     handleCloseAll,
@@ -457,7 +455,6 @@ export const WorktreeCard = React.memo(function WorktreeCard({
     (): ChipState =>
       computeChipState({
         worktreeErrorCount: worktreeErrors.length,
-        failedTerminalCount: terminalCounts.byState.failed,
         waitingTerminalCount: terminalCounts.byState.waiting,
         approvalWaitingCount: terminalCounts.approvalWaitingCount,
         lifecycleStage,
@@ -465,7 +462,6 @@ export const WorktreeCard = React.memo(function WorktreeCard({
       }),
     [
       worktreeErrors.length,
-      terminalCounts.byState.failed,
       terminalCounts.byState.waiting,
       terminalCounts.approvalWaitingCount,
       lifecycleStage,
@@ -502,7 +498,6 @@ export const WorktreeCard = React.memo(function WorktreeCard({
       dock: dockCount,
       active: totalTerminalCount,
       completed: completedCount,
-      failed: failedCount,
       all: allTerminalCount,
     },
     launchAgents: launchAgentsForContextMenu,
@@ -665,7 +660,6 @@ export const WorktreeCard = React.memo(function WorktreeCard({
                 dock: dockCount,
                 active: totalTerminalCount,
                 completed: completedCount,
-                failed: failedCount,
                 all: allTerminalCount,
               },
               onCopyContextFull: handleCopyContextFull,
@@ -694,7 +688,6 @@ export const WorktreeCard = React.memo(function WorktreeCard({
               onRestartAll: () => void handleRestartAll(),
               onResetRenderers: handleResetRenderers,
               onCloseCompleted: handleCloseCompleted,
-              onCloseFailed: handleCloseFailed,
               onCloseAll: handleCloseAll,
               onEndAll: handleEndAll,
               onDeleteWorktree: !isMainWorktree ? () => setShowDeleteDialog(true) : undefined,

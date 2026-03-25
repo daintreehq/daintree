@@ -56,7 +56,6 @@ export function useWorktreeTerminals(worktreeId: string): UseWorktreeTerminalsRe
       waiting: 0,
       directing: 0,
       completed: 0,
-      failed: 0,
     };
 
     const agentStates: (AgentState | undefined)[] = [];

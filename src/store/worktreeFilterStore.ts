@@ -22,13 +22,7 @@ export type TypeFilter =
   | "detached"
   | "other";
 export type GitHubFilter = "hasIssue" | "hasPR" | "prOpen" | "prMerged" | "prClosed";
-export type SessionFilter =
-  | "hasTerminals"
-  | "working"
-  | "running"
-  | "waiting"
-  | "failed"
-  | "completed";
+export type SessionFilter = "hasTerminals" | "working" | "running" | "waiting" | "completed";
 export type ActivityFilter = "last15m" | "last1h" | "last24h" | "last7d";
 
 interface WorktreeFilterState {

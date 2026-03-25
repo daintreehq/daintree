@@ -408,7 +408,6 @@ describe("BulkCommandPalette", () => {
       expect(screen.getByText("Waiting")).toBeTruthy();
       expect(screen.getByText("Idle")).toBeTruthy();
       expect(screen.getByText("Completed")).toBeTruthy();
-      expect(screen.getByText("Failed")).toBeTruthy();
     });
 
     it("Active preset selects worktrees with working state", () => {

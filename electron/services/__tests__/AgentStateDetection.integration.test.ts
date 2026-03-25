@@ -484,12 +484,12 @@ describe.skipIf(shouldSkip)("Agent State Detection Integration", () => {
 
       const terminal = manager.getTerminal(id);
       expect(terminal).toBeDefined();
-      expect(terminal?.agentState).toBe("failed");
+      expect(terminal?.agentState).toBe("completed");
 
       await sleep(500);
 
       const terminalAfter = manager.getTerminal(id);
-      expect(terminalAfter?.agentState).toBe("failed");
+      expect(terminalAfter?.agentState).toBe("completed");
     }, 10000);
   });
 

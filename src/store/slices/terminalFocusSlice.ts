@@ -77,13 +77,11 @@ export interface TerminalFocusSlice {
   // Agent state navigation
   focusNextWaiting: (isInTrash: (id: string) => boolean, validWorktreeIds: Set<string>) => void;
   focusNextWorking: (isInTrash: (id: string) => boolean, validWorktreeIds: Set<string>) => void;
-  focusNextFailed: (isInTrash: (id: string) => boolean, validWorktreeIds: Set<string>) => void;
-
   // Agent cycling (any state)
   focusNextAgent: (isInTrash: (id: string) => boolean, validWorktreeIds: Set<string>) => void;
   focusPreviousAgent: (isInTrash: (id: string) => boolean, validWorktreeIds: Set<string>) => void;
 
-  // Dock-specific blocked agent cycling (failed > waiting priority)
+  // Dock-specific blocked agent cycling (waiting agents)
   focusNextBlockedDock: (
     activeWorktreeId: string | undefined,
     getPanelGroup?: (panelId: string) => { id: string; panelIds: string[] } | undefined
@@ -377,29 +375,6 @@ export const createTerminalFocusSlice =
         pingTerminal(nextTerminal.id);
       },
 
-      focusNextFailed: (isInTrash, validWorktreeIds) => {
-        const terminals = getTerminals();
-        const { focusedId, activateTerminal, pingTerminal } = get();
-
-        // Find all failed terminals excluding trash and orphaned
-        const failedTerminals = terminals.filter(
-          (t) => t.agentState === "failed" && isTerminalVisible(t, isInTrash, validWorktreeIds)
-        );
-
-        if (failedTerminals.length === 0) return;
-
-        // Find current index in failed list
-        const currentIndex = failedTerminals.findIndex((t) => t.id === focusedId);
-
-        // Calculate next index with wrap-around
-        const nextIndex = (currentIndex + 1) % failedTerminals.length;
-        const nextTerminal = failedTerminals[nextIndex];
-
-        // Activate and ping the terminal for visual feedback
-        activateTerminal(nextTerminal.id);
-        pingTerminal(nextTerminal.id);
-      },
-
       focusNextWorking: (isInTrash, validWorktreeIds) => {
         const terminals = getTerminals();
         const { focusedId, activateTerminal, pingTerminal } = get();
@@ -484,16 +459,12 @@ export const createTerminalFocusSlice =
           (t) =>
             t.location === "dock" &&
             (t.worktreeId ?? undefined) === (activeWorktreeId ?? undefined) &&
-            (t.agentState === "failed" || t.agentState === "waiting")
+            t.agentState === "waiting"
         );
 
         if (dockTerminals.length === 0) return;
 
-        // Sort: failed first, then waiting; preserve original order within each group
-        const sorted = [
-          ...dockTerminals.filter((t) => t.agentState === "failed"),
-          ...dockTerminals.filter((t) => t.agentState === "waiting"),
-        ];
+        const sorted = dockTerminals;
 
         const currentIndex = sorted.findIndex((t) => t.id === activeDockTerminalId);
         const nextIndex = (currentIndex + 1) % sorted.length;

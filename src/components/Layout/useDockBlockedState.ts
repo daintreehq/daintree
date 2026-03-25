@@ -1,13 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import type { AgentState } from "shared/types/agent";
 
-type BlockedState = "waiting" | "failed" | null;
+type BlockedState = "waiting" | null;
 
 const DEBOUNCE_MS = 800;
 
 function toBlockedState(agentState: AgentState | undefined): BlockedState {
   if (agentState === "waiting") return "waiting";
-  if (agentState === "failed") return "failed";
   return null;
 }
 
@@ -51,16 +50,9 @@ export function useDockBlockedState(agentState: AgentState | undefined): Blocked
 export function getGroupBlockedAgentState(
   panels: ReadonlyArray<{ agentState?: AgentState }>
 ): AgentState | undefined {
-  let hasWaiting = false;
-  let hasFailed = false;
-
   for (const panel of panels) {
-    if (panel.agentState === "waiting") hasWaiting = true;
-    if (panel.agentState === "failed") hasFailed = true;
+    if (panel.agentState === "waiting") return "waiting";
   }
-
-  if (hasWaiting) return "waiting";
-  if (hasFailed) return "failed";
   return undefined;
 }
 
@@ -68,17 +60,14 @@ export function getGroupAmbientAgentState(
   panels: ReadonlyArray<{ agentState?: AgentState }>
 ): AgentState | undefined {
   let hasWaiting = false;
-  let hasFailed = false;
   let hasWorking = false;
 
   for (const panel of panels) {
     if (panel.agentState === "waiting") hasWaiting = true;
-    else if (panel.agentState === "failed") hasFailed = true;
     else if (panel.agentState === "working" || panel.agentState === "running") hasWorking = true;
   }
 
   if (hasWaiting) return "waiting";
-  if (hasFailed) return "failed";
   if (hasWorking) return "working";
   return undefined;
 }

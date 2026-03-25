@@ -410,32 +410,22 @@ describe("TerminalFocusSlice - focusNextBlockedDock", () => {
     expect(state.focusedId).toBe("d2");
   });
 
-  it("should prioritize failed over waiting", () => {
-    terminals = [
-      makeDockTerminal("d1", "waiting"),
-      makeDockTerminal("d2", "failed"),
-      makeDockTerminal("d3", "waiting"),
-    ];
-    state.focusNextBlockedDock("worktree-1");
-    expect(state.activeDockTerminalId).toBe("d2");
-  });
-
   it("should cycle through blocked terminals with wrap-around", () => {
     terminals = [
-      makeDockTerminal("d1", "failed"),
+      makeDockTerminal("d1", "waiting"),
       makeDockTerminal("d2", "waiting"),
       makeDockTerminal("d3", "waiting"),
     ];
 
-    // First call: selects d1 (failed, first in sorted order)
+    // First call: selects d1 (first waiting)
     state.focusNextBlockedDock("worktree-1");
     expect(state.activeDockTerminalId).toBe("d1");
 
-    // Second call: d2 (first waiting)
+    // Second call: d2
     state.focusNextBlockedDock("worktree-1");
     expect(state.activeDockTerminalId).toBe("d2");
 
-    // Third call: d3 (second waiting)
+    // Third call: d3
     state.focusNextBlockedDock("worktree-1");
     expect(state.activeDockTerminalId).toBe("d3");
 
@@ -447,10 +437,10 @@ describe("TerminalFocusSlice - focusNextBlockedDock", () => {
   it("should ignore grid terminals and other worktrees", () => {
     terminals = [
       {
-        ...makeDockTerminal("g1", "failed"),
+        ...makeDockTerminal("g1", "waiting"),
         location: "grid",
       } as TerminalInstance,
-      makeDockTerminal("d1", "failed", "worktree-2"),
+      makeDockTerminal("d1", "waiting", "worktree-2"),
       makeDockTerminal("d2", "waiting"),
     ];
     state.focusNextBlockedDock("worktree-1");
@@ -458,7 +448,7 @@ describe("TerminalFocusSlice - focusNextBlockedDock", () => {
   });
 
   it("should call setActiveTab for grouped panels", () => {
-    terminals = [makeDockTerminal("d1", "failed")];
+    terminals = [makeDockTerminal("d1", "waiting")];
     const mockGetPanelGroup = vi.fn(() => ({ id: "group-1", panelIds: ["d1", "d-other"] }));
 
     state.focusNextBlockedDock("worktree-1", mockGetPanelGroup);

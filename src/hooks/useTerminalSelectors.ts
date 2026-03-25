@@ -64,35 +64,31 @@ function useWorktreeIds(): Set<string> {
 
 export function useTerminalNotificationCounts(blurTime?: number | null): {
   waitingCount: number;
-  failedCount: number;
 } {
   const worktreeIds = useWorktreeIds();
 
   return useTerminalStore(
     useShallow((state) => {
       if (blurTime === null) {
-        return { waitingCount: 0, failedCount: 0 };
+        return { waitingCount: 0 };
       }
 
       let waitingCount = 0;
-      let failedCount = 0;
 
       for (const terminal of state.terminals) {
         if (!isTerminalVisible(terminal, state.isInTrash, worktreeIds)) continue;
 
-        const isNotifiable = terminal.agentState === "waiting" || terminal.agentState === "failed";
-        if (!isNotifiable) continue;
+        if (terminal.agentState !== "waiting") continue;
 
         if (blurTime !== undefined) {
           if (terminal.lastStateChange == null) continue;
           if (terminal.lastStateChange <= blurTime) continue;
         }
 
-        if (terminal.agentState === "waiting") waitingCount += 1;
-        else failedCount += 1;
+        waitingCount += 1;
       }
 
-      return { waitingCount, failedCount };
+      return { waitingCount };
     })
   );
 }
@@ -114,25 +110,6 @@ export function useWaitingTerminals(): TerminalInstance[] {
 export function useWaitingTerminalIds(): string[] {
   const waiting = useWaitingTerminals();
   return useMemo(() => waiting.map((t) => t.id), [waiting]);
-}
-
-export function useFailedTerminals(): TerminalInstance[] {
-  const worktreeIds = useWorktreeIds();
-  const terminals = useTerminalStore((state) => state.terminals);
-  const isInTrash = useTerminalStore((state) => state.isInTrash);
-
-  return useMemo(
-    () =>
-      terminals.filter(
-        (t) => t.agentState === "failed" && isTerminalVisible(t, isInTrash, worktreeIds)
-      ),
-    [terminals, isInTrash, worktreeIds]
-  );
-}
-
-export function useFailedTerminalIds(): string[] {
-  const failed = useFailedTerminals();
-  return useMemo(() => failed.map((t) => t.id), [failed]);
 }
 
 export function useBackgroundedTerminals(): TerminalInstance[] {

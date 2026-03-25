@@ -141,7 +141,6 @@ export type ActionId =
   | "worktree.sessions.restartAll"
   | "worktree.sessions.resetRenderers"
   | "worktree.sessions.closeCompleted"
-  | "worktree.sessions.closeFailed"
   | "worktree.sessions.trashAll"
   | "worktree.sessions.endAll"
   | "recipe.run"

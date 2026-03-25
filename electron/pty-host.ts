@@ -433,20 +433,6 @@ events.on("agent:completed", (payload) => {
   });
 });
 
-events.on("agent:failed", (payload) => {
-  sendEvent({
-    type: "agent-failed",
-    payload: {
-      agentId: payload.agentId,
-      error: payload.error,
-      timestamp: payload.timestamp,
-      traceId: payload.traceId,
-      terminalId: payload.terminalId,
-      worktreeId: payload.worktreeId,
-    },
-  });
-});
-
 events.on("agent:killed", (payload) => {
   sendEvent({
     type: "agent-killed",
@@ -990,7 +976,6 @@ port.on("message", async (rawMsg: any) => {
             agentId: s.agentId,
             agentState: s.agentState,
             lastStateChange: s.lastStateChange,
-            error: s.error,
             spawnedAt: s.spawnedAt,
           })),
         });

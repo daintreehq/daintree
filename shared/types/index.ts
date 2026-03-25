@@ -294,7 +294,6 @@ export type {
   AgentSpawnedPayload,
   AgentOutputPayload,
   AgentCompletedPayload,
-  AgentFailedPayload,
   AgentKilledPayload,
   TerminalFlowStatus,
   TerminalStatusPayload,

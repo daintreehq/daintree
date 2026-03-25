@@ -109,7 +109,6 @@ const SESSION_OPTIONS: { value: SessionFilter; label: string }[] = [
   { value: "working", label: "Working" },
   { value: "running", label: "Running" },
   { value: "waiting", label: "Waiting" },
-  { value: "failed", label: "Failed" },
   { value: "completed", label: "Completed" },
 ];
 

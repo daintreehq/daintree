@@ -70,7 +70,6 @@ export function parseNotificationOverrides(
 
   if (typeof obj.completedEnabled === "boolean") result.completedEnabled = obj.completedEnabled;
   if (typeof obj.waitingEnabled === "boolean") result.waitingEnabled = obj.waitingEnabled;
-  if (typeof obj.failedEnabled === "boolean") result.failedEnabled = obj.failedEnabled;
   if (typeof obj.soundEnabled === "boolean") result.soundEnabled = obj.soundEnabled;
   if (
     typeof obj.soundFile === "string" &&

@@ -23,7 +23,6 @@ export function toHostSnapshot(
     agentId: snapshot.agentId,
     agentState: snapshot.agentState,
     lastStateChange: snapshot.lastStateChange,
-    error: snapshot.error,
     spawnedAt: snapshot.spawnedAt,
   };
 }

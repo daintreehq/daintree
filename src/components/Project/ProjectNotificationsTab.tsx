@@ -173,24 +173,6 @@ export function ProjectNotificationsTab({ overrides, onChange }: ProjectNotifica
               </div>
             )}
           </OverrideRow>
-
-          <OverrideRow
-            label="Agent failed"
-            description="Show a notification when an agent encounters an error"
-            isOverridden={overrides.failedEnabled !== undefined}
-            onToggleOverride={(on) => {
-              if (on) setOverride("failedEnabled", globalSettings.failedEnabled);
-              else clearOverrides("failedEnabled");
-            }}
-          >
-            <SettingsCheckbox
-              id="proj-notif-failed"
-              label="Enabled"
-              description="Override the global failed notification setting"
-              checked={effective("failedEnabled") as boolean}
-              onChange={(v) => setOverride("failedEnabled", v)}
-            />
-          </OverrideRow>
         </div>
       </SettingsSection>
 

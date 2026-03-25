@@ -19,10 +19,8 @@ import {
   useTerminalNotificationCounts,
   useConflictedWorktrees,
   useWaitingTerminals,
-  useFailedTerminals,
   useBackgroundedTerminals,
   useWaitingTerminalIds,
-  useFailedTerminalIds,
   _resetWorktreeIdCacheForTests,
 } from "../useTerminalSelectors";
 
@@ -100,7 +98,6 @@ describe("useTerminalSelectors", () => {
 
     const { result } = renderHook(() => useTerminalNotificationCounts());
     expect(result.current.waitingCount).toBe(1);
-    expect(result.current.failedCount).toBe(0);
   });
 
   describe("blurTime filtering", () => {
@@ -117,7 +114,6 @@ describe("useTerminalSelectors", () => {
 
       const { result } = renderHook(() => useTerminalNotificationCounts(null));
       expect(result.current.waitingCount).toBe(0);
-      expect(result.current.failedCount).toBe(0);
     });
 
     it("counts terminals that changed state after blurTime", () => {
@@ -134,7 +130,6 @@ describe("useTerminalSelectors", () => {
 
       const { result } = renderHook(() => useTerminalNotificationCounts(blurTime));
       expect(result.current.waitingCount).toBe(1);
-      expect(result.current.failedCount).toBe(0);
     });
 
     it("excludes terminals that changed state before blurTime", () => {
@@ -159,14 +154,14 @@ describe("useTerminalSelectors", () => {
       setupTerminals([
         {
           id: "t1",
-          agentState: "failed",
+          agentState: "waiting",
           location: "grid",
           lastStateChange: Date.now() - 6 * 60_000,
         },
       ]);
 
       const { result } = renderHook(() => useTerminalNotificationCounts(blurTime));
-      expect(result.current.failedCount).toBe(1);
+      expect(result.current.waitingCount).toBe(1);
     });
 
     it("counts terminal that changed long after blurTime", () => {
@@ -200,7 +195,7 @@ describe("useTerminalSelectors", () => {
       expect(result.current.waitingCount).toBe(0);
     });
 
-    it("counts both waiting and failed terminals with valid timestamps", () => {
+    it("counts waiting terminals with valid timestamps", () => {
       setupEmptyWorktrees();
       const blurTime = Date.now() - 120_000;
       setupTerminals([
@@ -212,7 +207,7 @@ describe("useTerminalSelectors", () => {
         },
         {
           id: "t2",
-          agentState: "failed",
+          agentState: "completed",
           location: "grid",
           lastStateChange: Date.now() - 30_000,
         },
@@ -226,7 +221,6 @@ describe("useTerminalSelectors", () => {
 
       const { result } = renderHook(() => useTerminalNotificationCounts(blurTime));
       expect(result.current.waitingCount).toBe(1);
-      expect(result.current.failedCount).toBe(1);
     });
 
     it("uses unfiltered behavior when blurTime is undefined", () => {
@@ -239,7 +233,7 @@ describe("useTerminalSelectors", () => {
         },
         {
           id: "t2",
-          agentState: "failed",
+          agentState: "completed",
           location: "grid",
           lastStateChange: Date.now() - 10 * 60_000,
         },
@@ -247,7 +241,6 @@ describe("useTerminalSelectors", () => {
 
       const { result } = renderHook(() => useTerminalNotificationCounts());
       expect(result.current.waitingCount).toBe(1);
-      expect(result.current.failedCount).toBe(1);
     });
 
     it("excludes terminal whose lastStateChange equals blurTime exactly", () => {
@@ -349,7 +342,6 @@ describe("useTerminalSelectors", () => {
 
       const { result } = renderHook(() => useTerminalNotificationCounts(blurTime));
       expect(result.current.waitingCount).toBe(0);
-      expect(result.current.failedCount).toBe(0);
     });
   });
 });
@@ -409,43 +401,6 @@ describe("useWaitingTerminalIds", () => {
 
     const { result } = renderHook(() => useWaitingTerminalIds());
     expect(result.current).toEqual(["t1"]);
-  });
-});
-
-describe("useFailedTerminals", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    _resetWorktreeIdCacheForTests();
-  });
-
-  it("returns only failed visible terminals", () => {
-    setupBoth([
-      { id: "t1", agentState: "failed", location: "grid" },
-      { id: "t2", agentState: "waiting", location: "grid" },
-      { id: "t3", agentState: "failed", location: "trash" },
-    ]);
-
-    const { result } = renderHook(() => useFailedTerminals());
-    expect(result.current).toHaveLength(1);
-    expect(result.current[0].id).toBe("t1");
-  });
-});
-
-describe("useFailedTerminalIds", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    _resetWorktreeIdCacheForTests();
-  });
-
-  it("returns IDs of failed terminals", () => {
-    setupBoth([
-      { id: "t1", agentState: "failed", location: "grid" },
-      { id: "t2", agentState: "failed", location: "grid" },
-      { id: "t3", agentState: "working", location: "grid" },
-    ]);
-
-    const { result } = renderHook(() => useFailedTerminalIds());
-    expect(result.current).toEqual(["t1", "t2"]);
   });
 });
 

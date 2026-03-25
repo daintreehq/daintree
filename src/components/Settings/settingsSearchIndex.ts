@@ -671,15 +671,6 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
     keywords: ["notification", "waiting", "input", "agent", "prompt", "pause"],
   },
   {
-    id: "notifications-failed",
-    tab: "notifications",
-    tabLabel: "Notifications",
-    section: "Agent Notifications",
-    title: "Agent Failed Notification",
-    description: "Show a notification when an agent encounters an error",
-    keywords: ["notification", "error", "failed", "agent", "alert"],
-  },
-  {
     id: "notifications-sound",
     tab: "notifications",
     tabLabel: "Notifications",

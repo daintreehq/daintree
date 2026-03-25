@@ -2,7 +2,6 @@ import { BrowserWindow, app, Notification } from "electron";
 
 export interface NotificationState {
   waitingCount: number;
-  failedCount: number;
 }
 
 export interface WatchNotificationContext {
@@ -17,7 +16,7 @@ const DEFAULT_TITLE = "Canopy";
 class NotificationService {
   private mainWindow: BrowserWindow | null = null;
   private debounceTimer: NodeJS.Timeout | null = null;
-  private currentState: NotificationState = { waitingCount: 0, failedCount: 0 };
+  private currentState: NotificationState = { waitingCount: 0 };
   private windowFocused = true;
   private focusHandler: (() => void) | null = null;
   private blurHandler: (() => void) | null = null;
@@ -41,7 +40,7 @@ class NotificationService {
 
     this.focusHandler = () => {
       this.windowFocused = true;
-      this.currentState = { waitingCount: 0, failedCount: 0 };
+      this.currentState = { waitingCount: 0 };
 
       if (this.debounceTimer) {
         clearTimeout(this.debounceTimer);
@@ -82,19 +81,18 @@ class NotificationService {
       return;
     }
 
-    const { waitingCount, failedCount } = this.currentState;
-    const totalAttention = waitingCount + failedCount;
+    const { waitingCount } = this.currentState;
 
-    if (totalAttention > 0) {
-      this.mainWindow.setTitle(`(${totalAttention}) ${DEFAULT_TITLE}`);
+    if (waitingCount > 0) {
+      this.mainWindow.setTitle(`(${waitingCount}) ${DEFAULT_TITLE}`);
     } else {
       this.mainWindow.setTitle(DEFAULT_TITLE);
     }
 
     // Update macOS dock badge
     if (process.platform === "darwin") {
-      if (totalAttention > 0) {
-        app.setBadgeCount(totalAttention);
+      if (waitingCount > 0) {
+        app.setBadgeCount(waitingCount);
       } else {
         app.setBadgeCount(0);
       }

@@ -33,7 +33,6 @@ export interface TerminalPublicState {
   agentState?: AgentState;
   waitingReason?: WaitingReason;
   lastStateChange?: number;
-  error?: string;
   traceId?: string;
   analysisEnabled: boolean;
   lastInputTime: number;
@@ -117,7 +116,6 @@ export interface TerminalSnapshot {
   agentId?: AgentId;
   agentState?: AgentState;
   lastStateChange?: number;
-  error?: string;
   spawnedAt: number;
 }
 

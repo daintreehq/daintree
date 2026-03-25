@@ -149,14 +149,6 @@ describe("gridTabGroupPropsAreEqual", () => {
     expect(gridTabGroupPropsAreEqual(prev, next)).toBe(false);
   });
 
-  it("returns false when panel error changes", () => {
-    const prev = baseProps({ panels: [basePanel, basePanel2] });
-    const next = baseProps({
-      panels: [{ ...basePanel, error: "Something failed" } as TerminalInstance, basePanel2],
-    });
-    expect(gridTabGroupPropsAreEqual(prev, next)).toBe(false);
-  });
-
   it("returns false when panel browserUrl changes", () => {
     const prev = baseProps({ panels: [basePanel, basePanel2] });
     const next = baseProps({

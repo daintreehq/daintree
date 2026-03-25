@@ -21,7 +21,6 @@ function calculateWorktreeCounts(terminals: TerminalInstance[], worktreeId: stri
     waiting: 0,
     directing: 0,
     completed: 0,
-    failed: 0,
   };
 
   worktreeTerminals.forEach((terminal) => {
@@ -51,7 +50,6 @@ describe("useWorktreeTerminals logic", () => {
       waiting: 0,
       directing: 0,
       completed: 0,
-      failed: 0,
     });
   });
 
@@ -173,8 +171,7 @@ describe("useWorktreeTerminals logic", () => {
         cols: 80,
         rows: 24,
         location: "grid",
-        agentState: "failed",
-        error: "Test error",
+        agentState: "completed",
       },
     ];
 
@@ -183,9 +180,8 @@ describe("useWorktreeTerminals logic", () => {
     expect(result.counts.total).toBe(4);
     expect(result.counts.byState.working).toBe(2);
     expect(result.counts.byState.idle).toBe(1);
-    expect(result.counts.byState.failed).toBe(1);
+    expect(result.counts.byState.completed).toBe(1);
     expect(result.counts.byState.waiting).toBe(0);
-    expect(result.counts.byState.completed).toBe(0);
   });
 
   it("handles terminals without worktreeId", () => {

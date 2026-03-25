@@ -96,23 +96,6 @@ export function registerWorktreeSessionActions(
     },
   }));
 
-  actions.set("worktree.sessions.closeFailed", () => ({
-    id: "worktree.sessions.closeFailed",
-    title: "Close Failed Sessions",
-    description: "Close failed sessions for a worktree",
-    category: "worktree",
-    kind: "command",
-    danger: "confirm",
-    scope: "renderer",
-    argsSchema: z.object({ worktreeId: z.string().optional() }),
-    run: async (args: unknown, ctx: ActionContext) => {
-      const { worktreeId } = args as { worktreeId?: string };
-      const targetWorktreeId = worktreeId ?? ctx.activeWorktreeId;
-      if (!targetWorktreeId) return;
-      useTerminalStore.getState().bulkCloseByWorktree(targetWorktreeId, "failed");
-    },
-  }));
-
   actions.set("worktree.sessions.trashAll", () => ({
     id: "worktree.sessions.trashAll",
     title: "Trash All Sessions",

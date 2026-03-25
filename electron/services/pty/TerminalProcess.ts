@@ -436,7 +436,6 @@ export class TerminalProcess {
       agentState: t.agentState,
       waitingReason: t.waitingReason,
       lastStateChange: t.lastStateChange,
-      error: t.error,
       traceId: t.traceId,
       analysisEnabled: t.analysisEnabled,
       lastInputTime: t.lastInputTime,
@@ -920,7 +919,6 @@ export class TerminalProcess {
       agentId: terminal.agentId,
       agentState: terminal.agentState,
       lastStateChange: terminal.lastStateChange,
-      error: terminal.error,
       spawnedAt: terminal.spawnedAt,
     };
   }
@@ -1270,12 +1268,7 @@ export class TerminalProcess {
         });
       }
 
-      if (
-        this.isAgentTerminal &&
-        terminal.agentId &&
-        !terminal.wasKilled &&
-        terminal.agentState !== "failed"
-      ) {
+      if (this.isAgentTerminal && terminal.agentId && !terminal.wasKilled) {
         this.deps.agentStateService.emitAgentCompleted(terminal, exitCode ?? 0);
       }
 

@@ -190,17 +190,6 @@ describe("HybridInputBar agent readiness - input always enabled", () => {
   });
 
   describe("edge cases", () => {
-    it("allows submission for agent with failed state", () => {
-      expect(
-        computeHybridSubmitEnabled({
-          isAgentTerminal: true,
-          agentState: "failed",
-          agentHasLifecycleEvent: true,
-          initializationState: "initialized",
-        })
-      ).toBe(true);
-    });
-
     it("transitions to initialized when agent has completed state with lifecycle event", () => {
       expect(
         simulateInitializationTransition({

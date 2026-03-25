@@ -27,7 +27,6 @@ export interface UseWorktreeActionsResult {
   handleRunRecipe: (recipeId: string) => Promise<void>;
 
   handleCloseCompleted: () => void;
-  handleCloseFailed: () => void;
   handleDockAll: () => void;
   handleMaximizeAll: () => void;
   handleCloseAll: () => void;
@@ -97,14 +96,6 @@ export function useWorktreeActions({
   const handleCloseCompleted = useCallback(() => {
     void actionService.dispatch(
       "worktree.sessions.closeCompleted",
-      { worktreeId: worktree.id },
-      { source: "user" }
-    );
-  }, [worktree.id]);
-
-  const handleCloseFailed = useCallback(() => {
-    void actionService.dispatch(
-      "worktree.sessions.closeFailed",
       { worktreeId: worktree.id },
       { source: "user" }
     );
@@ -205,7 +196,6 @@ export function useWorktreeActions({
     handleCopyTree,
     handleRunRecipe,
     handleCloseCompleted,
-    handleCloseFailed,
     handleDockAll,
     handleMaximizeAll,
     handleCloseAll,

@@ -42,7 +42,6 @@ const createEmptyMeta = (): DerivedWorktreeMeta => ({
   hasWorkingAgent: false,
   hasRunningAgent: false,
   hasWaitingAgent: false,
-  hasFailedAgent: false,
   hasCompletedAgent: false,
   hasMergeConflict: false,
   chipState: null,
@@ -1127,14 +1126,6 @@ describe("filterTriageWorktrees", () => {
   it("includes worktrees with hasWaitingAgent", () => {
     const worktrees = [createMockWorktree({ id: "w1", name: "feat-a" })];
     const metaMap = buildMetaMap([["w1", { hasWaitingAgent: true }]]);
-    const result = filterTriageWorktrees(worktrees, metaMap, undefined, undefined, "");
-    expect(result).toHaveLength(1);
-    expect(result[0].id).toBe("w1");
-  });
-
-  it("includes worktrees with hasFailedAgent", () => {
-    const worktrees = [createMockWorktree({ id: "w1", name: "feat-a" })];
-    const metaMap = buildMetaMap([["w1", { hasFailedAgent: true }]]);
     const result = filterTriageWorktrees(worktrees, metaMap, undefined, undefined, "");
     expect(result).toHaveLength(1);
     expect(result[0].id).toBe("w1");

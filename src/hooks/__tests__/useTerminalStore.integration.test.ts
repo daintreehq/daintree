@@ -387,7 +387,7 @@ describe("Terminal Store Integration", () => {
     });
 
     it("should track agent state transitions", () => {
-      const states: ("idle" | "working" | "waiting" | "completed" | "failed")[] = [
+      const states: ("idle" | "working" | "waiting" | "completed")[] = [
         "working",
         "waiting",
         "working",
@@ -405,18 +405,17 @@ describe("Terminal Store Integration", () => {
       expect(final?.agentState).toBe("completed");
     });
 
-    it("should handle error state", () => {
+    it("should handle completed state", () => {
       const { terminals } = useTerminalStore.getState();
 
       useTerminalStore.setState({
         terminals: terminals.map((t) =>
-          t.id === "term-1" ? { ...t, agentState: "failed" as const, error: "Test error" } : t
+          t.id === "term-1" ? { ...t, agentState: "completed" as const } : t
         ),
       });
 
       const updated = useTerminalStore.getState().terminals.find((t) => t.id === "term-1");
-      expect(updated?.agentState).toBe("failed");
-      expect(updated?.error).toBe("Test error");
+      expect(updated?.agentState).toBe("completed");
     });
   });
 

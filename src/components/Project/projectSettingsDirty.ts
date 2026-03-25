@@ -195,7 +195,6 @@ function normalizeNotificationOverrides(
   if (overrides.completedEnabled !== undefined)
     result.completedEnabled = overrides.completedEnabled;
   if (overrides.waitingEnabled !== undefined) result.waitingEnabled = overrides.waitingEnabled;
-  if (overrides.failedEnabled !== undefined) result.failedEnabled = overrides.failedEnabled;
   if (overrides.soundEnabled !== undefined) result.soundEnabled = overrides.soundEnabled;
   if (overrides.soundFile !== undefined) result.soundFile = overrides.soundFile;
   if (overrides.waitingEscalationEnabled !== undefined)
@@ -329,7 +328,6 @@ export function areSnapshotsEqual(a: ProjectSettingsSnapshot, b: ProjectSettings
   } else {
     if (aNotif.completedEnabled !== bNotif.completedEnabled) return false;
     if (aNotif.waitingEnabled !== bNotif.waitingEnabled) return false;
-    if (aNotif.failedEnabled !== bNotif.failedEnabled) return false;
     if (aNotif.soundEnabled !== bNotif.soundEnabled) return false;
     if (aNotif.soundFile !== bNotif.soundFile) return false;
     if (aNotif.waitingEscalationEnabled !== bNotif.waitingEscalationEnabled) return false;

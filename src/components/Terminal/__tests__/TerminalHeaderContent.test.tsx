@@ -113,12 +113,10 @@ describe("TerminalHeaderContent — agent state chip tooltip", () => {
   it("shows exit code when exited", () => {
     mockTerminal = { id: "t1" };
 
-    render(<TerminalHeaderContent id="t1" agentState="failed" isExited={true} exitCode={1} />);
+    render(<TerminalHeaderContent id="t1" agentState="completed" isExited={true} exitCode={1} />);
 
-    const tooltips = screen.getAllByTestId("tooltip-content");
-    const agentTooltip = tooltips.find((el) => el.textContent?.includes("Agent failed"));
-    expect(agentTooltip).toBeTruthy();
-    expect(agentTooltip!.textContent).toContain("Exit code: 1");
+    const badge = screen.getByRole("status");
+    expect(badge.textContent).toContain("[exit 1]");
   });
 
   it("omits missing fields gracefully", () => {
@@ -247,12 +245,10 @@ describe("TerminalHeaderContent — agent state chip tooltip", () => {
   it("shows exit code 0 correctly", () => {
     mockTerminal = { id: "t1" };
 
-    render(<TerminalHeaderContent id="t1" agentState="failed" isExited={true} exitCode={0} />);
+    render(<TerminalHeaderContent id="t1" agentState="completed" isExited={true} exitCode={0} />);
 
-    const tooltips = screen.getAllByTestId("tooltip-content");
-    const agentTooltip = tooltips.find((el) => el.textContent?.includes("Agent failed"));
-    expect(agentTooltip).toBeTruthy();
-    expect(agentTooltip!.textContent).toContain("Exit code: 0");
+    const badge = screen.getByRole("status");
+    expect(badge.textContent).toContain("[exit 0]");
   });
 
   it("shows 0% confidence when stateChangeConfidence is 0", () => {

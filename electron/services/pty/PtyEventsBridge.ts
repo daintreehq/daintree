@@ -107,10 +107,6 @@ export function bridgePtyEvent(event: PtyHostEvent, config?: PtyEventsBridgeConf
       events.emit("agent:completed", event.payload);
       return true;
 
-    case "agent-failed":
-      events.emit("agent:failed", event.payload);
-      return true;
-
     case "agent-killed":
       events.emit("agent:killed", event.payload);
       return true;

@@ -67,7 +67,6 @@ export type KeyAction =
   | "worktree.sessions.restartAll"
   | "worktree.sessions.endAll"
   | "worktree.sessions.closeCompleted"
-  | "worktree.sessions.closeFailed"
   | "worktree.sessions.trashAll"
   | "worktree.sessions.resetRenderers"
 
@@ -124,7 +123,6 @@ export type KeyAction =
   | "agent.terminal"
   | "agent.focusNextWaiting"
   | "agent.focusNextWorking"
-  | "agent.focusNextFailed"
   | "agent.focusNextAgent"
   | "agent.focusPreviousAgent"
   | "dock.focusNextWaiting"
@@ -236,7 +234,6 @@ export const KEY_ACTION_VALUES: ReadonlySet<string> = new Set<string>([
   "worktree.sessions.restartAll",
   "worktree.sessions.endAll",
   "worktree.sessions.closeCompleted",
-  "worktree.sessions.closeFailed",
   "worktree.sessions.trashAll",
   "worktree.sessions.resetRenderers",
   "tab.next",
@@ -286,7 +283,6 @@ export const KEY_ACTION_VALUES: ReadonlySet<string> = new Set<string>([
   "agent.terminal",
   "agent.focusNextWaiting",
   "agent.focusNextWorking",
-  "agent.focusNextFailed",
   "agent.focusNextAgent",
   "agent.focusPreviousAgent",
   "dock.focusNextWaiting",

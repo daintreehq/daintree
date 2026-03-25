@@ -191,7 +191,6 @@ export function WorktreeOverviewModal({
         hasWorkingAgent: worktreeTerminals.some((t) => t.agentState === "working"),
         hasRunningAgent: worktreeTerminals.some((t) => t.agentState === "running"),
         hasWaitingAgent: worktreeTerminals.some((t) => t.agentState === "waiting"),
-        hasFailedAgent: worktreeTerminals.some((t) => t.agentState === "failed"),
         hasCompletedAgent: worktreeTerminals.some((t) => t.agentState === "completed"),
         hasMergeConflict:
           worktree.worktreeChanges?.changes.some((c) => c.status === "conflicted") ?? false,
@@ -205,7 +204,6 @@ export function WorktreeOverviewModal({
   const aggregateStats = useMemo(() => {
     let workingCount = 0;
     let waitingCount = 0;
-    let failedCount = 0;
 
     // Count worktrees (not terminals) with specific agent states
     // Use same visibility logic as filtered list to keep stats in sync
@@ -220,10 +218,9 @@ export function WorktreeOverviewModal({
 
       if (derived.hasWorkingAgent || derived.hasRunningAgent) workingCount++;
       if (derived.hasWaitingAgent) waitingCount++;
-      if (derived.hasFailedAgent) failedCount++;
     }
 
-    return { workingCount, waitingCount, failedCount };
+    return { workingCount, waitingCount };
   }, [worktrees, derivedMetaMap, hideMainWorktree]);
 
   // Check if only main worktree exists (to hide the filter toggle)
@@ -255,7 +252,6 @@ export function WorktreeOverviewModal({
         hasWorkingAgent: false,
         hasRunningAgent: false,
         hasWaitingAgent: false,
-        hasFailedAgent: false,
         hasCompletedAgent: false,
         hasMergeConflict: false,
         chipState: null,
@@ -389,9 +385,7 @@ export function WorktreeOverviewModal({
                 {filteredWorktrees.length !== worktrees.length && ` of ${worktrees.length}`})
               </span>
               {/* Aggregate activity statistics */}
-              {(aggregateStats.workingCount > 0 ||
-                aggregateStats.waitingCount > 0 ||
-                aggregateStats.failedCount > 0) && (
+              {(aggregateStats.workingCount > 0 || aggregateStats.waitingCount > 0) && (
                 <div
                   className="flex items-center gap-2 ml-2 pl-3 border-l border-divider"
                   role="status"
@@ -407,12 +401,6 @@ export function WorktreeOverviewModal({
                     <span className="flex items-center gap-1 text-xs tabular-nums text-status-warning">
                       <span className="w-1.5 h-1.5 rounded-full bg-status-warning" />
                       {aggregateStats.waitingCount} waiting
-                    </span>
-                  )}
-                  {aggregateStats.failedCount > 0 && (
-                    <span className="flex items-center gap-1 text-xs tabular-nums text-status-error">
-                      <span className="w-1.5 h-1.5 rounded-full bg-status-error" />
-                      {aggregateStats.failedCount} failed
                     </span>
                   )}
                 </div>
