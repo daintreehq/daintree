@@ -198,6 +198,7 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
             const sentinel = `__CANOPY_READY_${id.slice(0, 8)}__`;
             let completed = false;
             let buffer = "";
+            // eslint-disable-next-line prefer-const -- assigned after cleanup closure is defined
             let timerId: ReturnType<typeof setTimeout> | undefined;
 
             const cleanup = () => {
