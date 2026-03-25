@@ -15,6 +15,7 @@ import { getDefaultShell } from "../../../services/pty/terminalShell.js";
 
 export const SHELL_READY_TIMEOUT_MS = 3000;
 export const COMMAND_DELAY_MS = 100;
+export const CLEAR_SCREEN_SEQUENCE = "\x1b[2J\x1b[3J\x1b[H";
 
 export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): () => void {
   const { ptyClient } = deps;
@@ -208,7 +209,7 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
               completed = true;
               cleanup();
               if (ptyClient.hasTerminal(id)) {
-                ptyClient.write(id, `${finalCommand}\r`);
+                ptyClient.write(id, `${CLEAR_SCREEN_SEQUENCE}${finalCommand}\r`);
               }
             };
 

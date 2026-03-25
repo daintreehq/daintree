@@ -40,7 +40,7 @@ vi.mock("../../../../shared/config/agentRegistry.js", () => ({
 
 import { ipcMain } from "electron";
 import { CHANNELS } from "../../../channels.js";
-import { registerTerminalLifecycleHandlers } from "../lifecycle.js";
+import { registerTerminalLifecycleHandlers, CLEAR_SCREEN_SEQUENCE } from "../lifecycle.js";
 import type { HandlerDependencies } from "../../../types.js";
 
 function getSpawnHandler() {
@@ -104,7 +104,7 @@ describe("agent command injection - shell ready detection", () => {
     ptyClient.emit("data", id, `some init output\n${sentinel}\n`);
 
     expect(ptyClient.write).toHaveBeenCalledTimes(2);
-    expect(ptyClient.write.mock.calls[1][1]).toBe("exec gemini chat\r");
+    expect(ptyClient.write.mock.calls[1][1]).toBe(`${CLEAR_SCREEN_SEQUENCE}exec gemini chat\r`);
   });
 
   it("does not write command twice after sentinel arrives", async () => {
@@ -219,5 +219,28 @@ describe("agent command injection - shell ready detection", () => {
       { timeout: 500 }
     );
     expect(ptyClient.write.mock.calls[0][1]).toBe("ls -la\r");
+  });
+
+  it("includes clear sequence when sentinel times out", async () => {
+    vi.useFakeTimers();
+    const deps = { ptyClient } as unknown as HandlerDependencies;
+    cleanup = registerTerminalLifecycleHandlers(deps);
+    const handler = getSpawnHandler();
+
+    await handler({} as Electron.IpcMainInvokeEvent, {
+      cols: 80,
+      rows: 24,
+      kind: "agent",
+      agentId: "gemini",
+      command: "gemini chat",
+    });
+
+    expect(ptyClient.write).toHaveBeenCalledTimes(1);
+
+    vi.advanceTimersByTime(3000);
+
+    expect(ptyClient.write).toHaveBeenCalledTimes(2);
+    expect(ptyClient.write.mock.calls[1][1]).toBe(`${CLEAR_SCREEN_SEQUENCE}exec gemini chat\r`);
+    vi.useRealTimers();
   });
 });
