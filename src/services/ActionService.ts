@@ -119,7 +119,7 @@ export class ActionService {
       return { ok: false, error };
     }
 
-    await this.emitActionDispatchedEvent({
+    void this.emitActionDispatchedEvent({
       actionId,
       args: this.redactSensitiveArgs(args),
       context,
