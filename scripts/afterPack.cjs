@@ -37,63 +37,27 @@ exports.default = async function afterPack(context) {
   console.log(`[afterPack] node-pty found at: ${nodePtyPath}`);
 
   if (electronPlatformName === "win32") {
-    // Windows uses ConPTY exclusively (winpty removed in node-pty 1.2.0-beta)
-    const compiledBinaries = ["conpty.node", "conpty_console_list.node"];
-    const postInstallBinaries = ["conpty/conpty.dll", "conpty/OpenConsole.exe"];
-    for (const bin of compiledBinaries) {
-      const binPath = path.join(nodePtyPath, "build/Release", bin);
-      if (!fs.existsSync(binPath)) {
+    // Windows uses N-API prebuilds (node-pty 1.2.0-beta.12+).
+    // No source compilation needed — prebuilds are ABI-stable across Electron versions.
+    const arch = context.arch || "x64";
+    const prebuildDir = `prebuilds/win32-${arch}`;
+    const requiredFiles = [
+      `${prebuildDir}/conpty.node`,
+      `${prebuildDir}/conpty_console_list.node`,
+      `${prebuildDir}/conpty/conpty.dll`,
+      `${prebuildDir}/conpty/OpenConsole.exe`,
+    ];
+    for (const file of requiredFiles) {
+      const filePath = path.join(nodePtyPath, file);
+      if (!fs.existsSync(filePath)) {
         throw new Error(
-          `[afterPack] CRITICAL: Windows node-pty compiled binary not found: ${binPath}. ` +
-            "Ensure node-pty was rebuilt on a Windows runner with VS 2022 Build Tools."
-        );
-      }
-    }
-
-    // electron-rebuild runs node-gyp rebuild which wipes build/Release/,
-    // deleting the conpty/ subdirectory created by node-pty's post-install.
-    // If missing, copy from third_party as a fallback.
-    const conptyDestDir = path.join(nodePtyPath, "build/Release/conpty");
-    const conptyMissing = postInstallBinaries.some(
-      (bin) => !fs.existsSync(path.join(nodePtyPath, "build/Release", bin))
-    );
-    if (conptyMissing) {
-      console.log(
-        "[afterPack] conpty binaries missing from build/Release — copying from third_party"
-      );
-      const thirdPartyDir = path.join(nodePtyPath, "third_party/conpty");
-      if (!fs.existsSync(thirdPartyDir)) {
-        throw new Error(
-          `[afterPack] CRITICAL: third_party/conpty not found at ${thirdPartyDir}. ` +
-            "Cannot recover missing conpty binaries."
-        );
-      }
-      const versionFolder = fs.readdirSync(thirdPartyDir)[0];
-      const sourceDir = path.join(thirdPartyDir, versionFolder, "win10-x64");
-      if (!fs.existsSync(sourceDir)) {
-        throw new Error(`[afterPack] CRITICAL: conpty source directory not found: ${sourceDir}`);
-      }
-      fs.mkdirSync(conptyDestDir, { recursive: true });
-      for (const file of ["conpty.dll", "OpenConsole.exe"]) {
-        const src = path.join(sourceDir, file);
-        const dest = path.join(conptyDestDir, file);
-        console.log(`[afterPack] Copying ${src} -> ${dest}`);
-        fs.copyFileSync(src, dest);
-      }
-    }
-
-    // Final validation
-    for (const bin of postInstallBinaries) {
-      const binPath = path.join(nodePtyPath, "build/Release", bin);
-      if (!fs.existsSync(binPath)) {
-        throw new Error(
-          `[afterPack] CRITICAL: Windows node-pty post-install binary not found: ${binPath}. ` +
-            "Both postinstall and afterPack fallback copy failed."
+          `[afterPack] CRITICAL: Windows node-pty prebuild not found: ${filePath}. ` +
+            "Ensure node-pty prebuilds are included (check build.files in package.json)."
         );
       }
     }
     console.log(
-      "[afterPack] Windows node-pty binaries verified (conpty.node, conpty_console_list.node, conpty/conpty.dll, conpty/OpenConsole.exe)"
+      "[afterPack] Windows node-pty prebuilds verified (conpty.node, conpty_console_list.node, conpty/conpty.dll, conpty/OpenConsole.exe)"
     );
   } else {
     // macOS and Linux use pty.node

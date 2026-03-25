@@ -3,19 +3,17 @@ import path from "path";
 import Module from "module";
 
 const mockExistsSync = vi.fn();
-const mockReaddirSync = vi.fn();
-const mockMkdirSync = vi.fn();
-const mockCopyFileSync = vi.fn();
 const consoleSpy = vi.spyOn(console, "log").mockImplementation(() => {});
 
 afterAll(() => {
   consoleSpy.mockRestore();
 });
 
-function createContext(platform: string, appOutDir: string, appName = "Canopy") {
+function createContext(platform: string, appOutDir: string, appName = "Canopy", arch = "x64") {
   return {
     appOutDir,
     electronPlatformName: platform,
+    arch,
     packager: { appInfo: { productFilename: appName } },
   };
 }
@@ -33,9 +31,6 @@ describe("afterPack", () => {
       if (id === "fs") {
         return {
           existsSync: mockExistsSync,
-          readdirSync: mockReaddirSync,
-          mkdirSync: mockMkdirSync,
-          copyFileSync: mockCopyFileSync,
         };
       }
       return originalRequire.apply(this, [id]);
@@ -139,29 +134,42 @@ describe("afterPack", () => {
   describe("Windows", () => {
     const unpackedBase = "/build/win/resources/app.asar.unpacked";
 
-    it("should succeed with Windows resource path", async () => {
+    it("should succeed with Windows prebuild paths", async () => {
       mockExistsSync.mockReturnValue(true);
 
       await afterPack(createContext("win32", "/build/win"));
 
       expect(mockExistsSync).toHaveBeenCalledWith(path.join(unpackedBase, "node_modules/node-pty"));
       expect(mockExistsSync).toHaveBeenCalledWith(
-        path.join(unpackedBase, "node_modules/node-pty/build/Release/conpty.node")
+        path.join(unpackedBase, "node_modules/node-pty/prebuilds/win32-x64/conpty.node")
       );
       expect(mockExistsSync).toHaveBeenCalledWith(
-        path.join(unpackedBase, "node_modules/node-pty/build/Release/conpty_console_list.node")
+        path.join(
+          unpackedBase,
+          "node_modules/node-pty/prebuilds/win32-x64/conpty_console_list.node"
+        )
       );
       expect(mockExistsSync).toHaveBeenCalledWith(
-        path.join(unpackedBase, "node_modules/node-pty/build/Release/conpty/conpty.dll")
+        path.join(unpackedBase, "node_modules/node-pty/prebuilds/win32-x64/conpty/conpty.dll")
       );
       expect(mockExistsSync).toHaveBeenCalledWith(
-        path.join(unpackedBase, "node_modules/node-pty/build/Release/conpty/OpenConsole.exe")
+        path.join(unpackedBase, "node_modules/node-pty/prebuilds/win32-x64/conpty/OpenConsole.exe")
       );
       expect(mockExistsSync).toHaveBeenCalledWith(
         path.join(unpackedBase, "node_modules/better-sqlite3")
       );
       expect(mockExistsSync).toHaveBeenCalledWith(
         path.join(unpackedBase, "node_modules/better-sqlite3/build/Release/better_sqlite3.node")
+      );
+    });
+
+    it("should use context.arch for prebuild directory", async () => {
+      mockExistsSync.mockReturnValue(true);
+
+      await afterPack(createContext("win32", "/build/win", "Canopy", "arm64"));
+
+      expect(mockExistsSync).toHaveBeenCalledWith(
+        path.join(unpackedBase, "node_modules/node-pty/prebuilds/win32-arm64/conpty.node")
       );
     });
 
@@ -183,47 +191,25 @@ describe("afterPack", () => {
       );
     });
 
-    it("should throw with compiled binary error when conpty.node is missing", async () => {
-      mockExistsSync.mockReturnValueOnce(true).mockReturnValueOnce(false);
+    it("should throw when prebuild file is missing", async () => {
+      mockExistsSync
+        .mockReturnValueOnce(true) // node-pty dir
+        .mockReturnValueOnce(false); // conpty.node prebuild missing
 
       await expect(afterPack(createContext("win32", "/build/win"))).rejects.toThrow(
-        /Windows node-pty compiled binary not found/
+        /Windows node-pty prebuild not found/
       );
     });
 
-    it("should copy conpty binaries from third_party when missing after rebuild", async () => {
-      const nodePtyBase = path.join(unpackedBase, "node_modules/node-pty");
+    it("should throw when conpty.dll prebuild is missing", async () => {
       mockExistsSync
         .mockReturnValueOnce(true) // node-pty dir
         .mockReturnValueOnce(true) // conpty.node
         .mockReturnValueOnce(true) // conpty_console_list.node
-        .mockReturnValueOnce(false) // conpty/conpty.dll (missing → triggers fallback)
-        .mockReturnValueOnce(true) // third_party/conpty exists
-        .mockReturnValueOnce(true) // win10-x64 source dir exists
-        .mockReturnValueOnce(true) // final validation: conpty/conpty.dll
-        .mockReturnValueOnce(true) // final validation: conpty/OpenConsole.exe
-        .mockReturnValueOnce(true) // better-sqlite3 dir
-        .mockReturnValueOnce(true); // better_sqlite3.node
-      mockReaddirSync.mockReturnValue(["1.23.251008001"]);
-
-      await afterPack(createContext("win32", "/build/win"));
-
-      expect(mockMkdirSync).toHaveBeenCalledWith(path.join(nodePtyBase, "build/Release/conpty"), {
-        recursive: true,
-      });
-      expect(mockCopyFileSync).toHaveBeenCalledTimes(2);
-    });
-
-    it("should throw when conpty.dll missing and third_party unavailable", async () => {
-      mockExistsSync
-        .mockReturnValueOnce(true) // node-pty dir
-        .mockReturnValueOnce(true) // conpty.node
-        .mockReturnValueOnce(true) // conpty_console_list.node
-        .mockReturnValueOnce(false) // conpty/conpty.dll missing
-        .mockReturnValueOnce(false); // third_party/conpty missing
+        .mockReturnValueOnce(false); // conpty/conpty.dll missing
 
       await expect(afterPack(createContext("win32", "/build/win"))).rejects.toThrow(
-        /third_party\/conpty not found/
+        /Windows node-pty prebuild not found/
       );
     });
 
@@ -234,8 +220,6 @@ describe("afterPack", () => {
         .mockReturnValueOnce(true) // conpty_console_list.node
         .mockReturnValueOnce(true) // conpty/conpty.dll
         .mockReturnValueOnce(true) // conpty/OpenConsole.exe
-        .mockReturnValueOnce(true) // final: conpty/conpty.dll
-        .mockReturnValueOnce(true) // final: conpty/OpenConsole.exe
         .mockReturnValueOnce(false); // better-sqlite3 dir missing
 
       await expect(afterPack(createContext("win32", "/build/win"))).rejects.toThrow(
@@ -250,8 +234,6 @@ describe("afterPack", () => {
         .mockReturnValueOnce(true) // conpty_console_list.node
         .mockReturnValueOnce(true) // conpty/conpty.dll
         .mockReturnValueOnce(true) // conpty/OpenConsole.exe
-        .mockReturnValueOnce(true) // final: conpty/conpty.dll
-        .mockReturnValueOnce(true) // final: conpty/OpenConsole.exe
         .mockReturnValueOnce(true) // better-sqlite3 dir
         .mockReturnValueOnce(false); // better_sqlite3.node missing
 
