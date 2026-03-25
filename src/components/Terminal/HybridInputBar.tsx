@@ -1122,8 +1122,6 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
               disabled && "opacity-60"
             )}
             style={{
-              backgroundColor: `color-mix(in oklab, ${inputBarColors.background} 85%, ${inputBarColors.foreground})`,
-              borderColor: `color-mix(in oklab, ${inputBarColors.foreground} 15%, transparent)`,
               boxShadow: isVoiceActiveForPanel
                 ? `0 0 0 1px color-mix(in oklab, ${inputBarColors.accent} 35%, transparent), 0 0 16px color-mix(in oklab, ${inputBarColors.accent} 15%, transparent)`
                 : isDragOverFiles
@@ -1137,8 +1135,12 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
                 : isDragOverFiles
                   ? {
                       borderColor: `color-mix(in oklab, ${inputBarColors.accent} 60%, transparent)`,
+                      backgroundColor: `color-mix(in oklab, ${inputBarColors.background} 85%, ${inputBarColors.foreground})`,
                     }
-                  : {}),
+                  : {
+                      borderColor: `color-mix(in oklab, ${inputBarColors.foreground} 15%, transparent)`,
+                      backgroundColor: `color-mix(in oklab, ${inputBarColors.background} 85%, ${inputBarColors.foreground})`,
+                    }),
             }}
             onDragEnter={handleDragEnter}
             onDragOver={handleDragOver}
