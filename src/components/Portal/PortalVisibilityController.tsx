@@ -97,6 +97,14 @@ export function PortalVisibilityController(): null {
     });
   }, []);
 
+  // Listen for portal tabs evicted by main-process memory pressure
+  useEffect(() => {
+    const cleanup = window.electron.portal.onTabsEvicted((payload) => {
+      usePortalStore.getState().markTabsUncreated(payload.tabIds);
+    });
+    return cleanup;
+  }, []);
+
   // Auto-select first tab on startup when portal is open with tabs but no active tab
   useEffect(() => {
     if (!portalOpen) return;

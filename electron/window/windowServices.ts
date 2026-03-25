@@ -704,6 +704,25 @@ export async function setupWindowServices(
           /* non-critical */
         }
       },
+      destroyHiddenWebviews: async (tier) => {
+        // Destroy hidden portal tabs (main-process WebContentsViews)
+        try {
+          if (portalManager) {
+            const evictedTabIds = portalManager.destroyHiddenTabs();
+            if (evictedTabIds.length > 0) {
+              sendToRenderer(win, CHANNELS.PORTAL_TABS_EVICTED, { tabIds: evictedTabIds });
+            }
+          }
+        } catch {
+          /* non-critical */
+        }
+        // Signal renderer to destroy hidden <webview> tags
+        try {
+          sendToRenderer(win, CHANNELS.WINDOW_DESTROY_HIDDEN_WEBVIEWS, { tier });
+        } catch {
+          /* non-critical */
+        }
+      },
       hibernateIdleProjects: async () => {
         await getHibernationService().hibernateUnderMemoryPressure();
       },

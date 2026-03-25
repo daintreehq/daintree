@@ -256,6 +256,9 @@ describe("DevPreviewPane webview lifecycle regression", () => {
       system: {
         openExternal: vi.fn(),
       },
+      window: {
+        onDestroyHiddenWebviews: vi.fn(() => vi.fn()),
+      },
     };
   });
 

@@ -394,6 +394,7 @@ describe("ProcessMemoryMonitor", () => {
     beforeEach(() => {
       mockActions = {
         clearCaches: vi.fn().mockResolvedValue(undefined),
+        destroyHiddenWebviews: vi.fn().mockResolvedValue(undefined),
         hibernateIdleProjects: vi.fn().mockResolvedValue(undefined),
       };
     });
@@ -535,6 +536,43 @@ describe("ProcessMemoryMonitor", () => {
 
       expect(trimPtyHostState).toHaveBeenCalled();
       expect(actionsWithTrim.hibernateIdleProjects).toHaveBeenCalledTimes(1);
+    });
+
+    it("calls destroyHiddenWebviews(1) on tier 1 mitigation", async () => {
+      mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 350 * 1024, 100)]);
+      stop = startAppMetricsMonitor(mockActions);
+
+      await advancePolls(WARMUP_INTERVALS + 1);
+
+      expect(mockActions.destroyHiddenWebviews).toHaveBeenCalledWith(1);
+    });
+
+    it("calls destroyHiddenWebviews(2) on tier 2 mitigation", async () => {
+      mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 350 * 1024, 100)]);
+      stop = startAppMetricsMonitor(mockActions);
+
+      await advancePolls(WARMUP_INTERVALS + PRESSURE_COUNT_TIER2);
+
+      expect(mockActions.destroyHiddenWebviews).toHaveBeenCalledWith(2);
+    });
+
+    it("calls destroyHiddenWebviews before hibernateIdleProjects in tier 2", async () => {
+      const callOrder: string[] = [];
+      mockActions.destroyHiddenWebviews = vi.fn().mockImplementation(async () => {
+        callOrder.push("destroyHiddenWebviews");
+      });
+      mockActions.hibernateIdleProjects = vi.fn().mockImplementation(async () => {
+        callOrder.push("hibernateIdleProjects");
+      });
+
+      mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 350 * 1024, 100)]);
+      stop = startAppMetricsMonitor(mockActions);
+
+      await advancePolls(WARMUP_INTERVALS + PRESSURE_COUNT_TIER2);
+
+      const destroyIdx = callOrder.lastIndexOf("destroyHiddenWebviews");
+      const hibernateIdx = callOrder.indexOf("hibernateIdleProjects");
+      expect(destroyIdx).toBeLessThan(hibernateIdx);
     });
 
     it("does not trigger mitigation when no process exceeds threshold", async () => {

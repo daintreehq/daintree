@@ -196,6 +196,9 @@ describe("BrowserPane webview lifecycle regression", () => {
         respondToDialog: vi.fn(() => Promise.resolve()),
         onDialogRequest: vi.fn(() => vi.fn()),
       },
+      window: {
+        onDestroyHiddenWebviews: vi.fn(() => vi.fn()),
+      },
     };
 
     originalCreateElement = document.createElement.bind(document);
