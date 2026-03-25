@@ -71,8 +71,14 @@ export function getTerminalRefreshTier(
     return TerminalRefreshTierEnum.FOCUSED;
   }
 
-  // All terminals stay at VISIBLE minimum - we don't use BACKGROUND for reliability.
-  return TerminalRefreshTierEnum.VISIBLE;
+  // Agent terminals stay at VISIBLE minimum — they must never be hibernated
+  if (isAgentTerminal(terminal.kind ?? terminal.type, terminal.agentId)) {
+    return TerminalRefreshTierEnum.VISIBLE;
+  }
+
+  // Non-agent, non-focused terminals drop to BACKGROUND so idle instances
+  // can be hibernated (xterm.js disposed) to free memory.
+  return TerminalRefreshTierEnum.BACKGROUND;
 }
 
 export type BackendStatus = "connected" | "disconnected" | "recovering";
