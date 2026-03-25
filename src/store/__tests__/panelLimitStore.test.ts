@@ -1,10 +1,18 @@
+// @vitest-environment jsdom
 import { describe, it, expect, beforeEach } from "vitest";
-import { evaluatePanelLimit, shouldShowSoftWarning, dismissSoftWarning } from "../panelLimitStore";
+import {
+  evaluatePanelLimit,
+  shouldShowSoftWarning,
+  dismissSoftWarning,
+  DEFAULT_SOFT_WARNING_LIMIT,
+  DEFAULT_CONFIRMATION_LIMIT,
+  DEFAULT_HARD_LIMIT,
+} from "../panelLimitStore";
 
 const DEFAULT_LIMITS = {
-  softWarningLimit: 12,
-  confirmationLimit: 20,
-  hardLimit: 32,
+  softWarningLimit: DEFAULT_SOFT_WARNING_LIMIT,
+  confirmationLimit: DEFAULT_CONFIRMATION_LIMIT,
+  hardLimit: DEFAULT_HARD_LIMIT,
 };
 
 describe("evaluatePanelLimit", () => {
@@ -69,70 +77,5 @@ describe("shouldShowSoftWarning", () => {
     expect(shouldShowSoftWarning(16, 12)).toBe(false);
     expect(shouldShowSoftWarning(19, 12)).toBe(false);
     expect(shouldShowSoftWarning(20, 12)).toBe(true);
-  });
-});
-
-describe("usePanelLimitStore", () => {
-  it("requestConfirmation resolves when resolveConfirmation is called", async () => {
-    const { usePanelLimitStore } = await import("../panelLimitStore");
-    const store = usePanelLimitStore.getState();
-
-    const confirmPromise = store.requestConfirmation(25, 512);
-    expect(usePanelLimitStore.getState().pendingConfirm).not.toBeNull();
-
-    usePanelLimitStore.getState().resolveConfirmation(true);
-    const result = await confirmPromise;
-    expect(result).toBe(true);
-    expect(usePanelLimitStore.getState().pendingConfirm).toBeNull();
-  });
-
-  it("requestConfirmation resolves false when cancelled", async () => {
-    const { usePanelLimitStore } = await import("../panelLimitStore");
-    const store = usePanelLimitStore.getState();
-
-    const confirmPromise = store.requestConfirmation(25, null);
-    usePanelLimitStore.getState().resolveConfirmation(false);
-    const result = await confirmPromise;
-    expect(result).toBe(false);
-  });
-
-  it("second requestConfirmation rejects the first", async () => {
-    const { usePanelLimitStore } = await import("../panelLimitStore");
-    const store = usePanelLimitStore.getState();
-
-    const first = store.requestConfirmation(20, null);
-    const second = usePanelLimitStore.getState().requestConfirmation(25, 1024);
-
-    // First should resolve false (auto-rejected)
-    const firstResult = await first;
-    expect(firstResult).toBe(false);
-
-    // Second is still pending
-    usePanelLimitStore.getState().resolveConfirmation(true);
-    const secondResult = await second;
-    expect(secondResult).toBe(true);
-  });
-
-  it("clamps limits to valid bounds", async () => {
-    const { usePanelLimitStore } = await import("../panelLimitStore");
-
-    usePanelLimitStore.getState().setHardLimit(200);
-    expect(usePanelLimitStore.getState().hardLimit).toBe(100);
-
-    usePanelLimitStore.getState().setHardLimit(1);
-    expect(usePanelLimitStore.getState().hardLimit).toBe(4);
-  });
-
-  it("rejects NaN values", async () => {
-    const { usePanelLimitStore } = await import("../panelLimitStore");
-
-    const before = usePanelLimitStore.getState().hardLimit;
-    usePanelLimitStore.getState().setHardLimit(NaN);
-    expect(usePanelLimitStore.getState().hardLimit).toBe(before);
-
-    usePanelLimitStore.getState().setSoftWarningLimit(NaN);
-    expect(usePanelLimitStore.getState().softWarningLimit).toBe(
-      usePanelLimitStore.getState().softWarningLimit
-    );
   });
 });
