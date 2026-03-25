@@ -226,12 +226,11 @@ export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
                     <TooltipTrigger asChild>
                       <Button
                         onClick={() => actions.handleCreateNote()}
-                        size="sm"
+                        variant="ghost"
+                        size="icon-sm"
                         aria-label="Create new note"
-                        className="h-7 px-2.5 text-xs"
                       >
-                        <Plus size={14} className="mr-1" />
-                        New
+                        <Plus />
                       </Button>
                     </TooltipTrigger>
                     <TooltipContent side="bottom">
