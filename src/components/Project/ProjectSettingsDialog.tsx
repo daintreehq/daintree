@@ -1,14 +1,5 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from "react";
-import {
-  X,
-  Settings,
-  FileCode,
-  Zap,
-  Command,
-  CookingPot,
-  Server,
-  Bell,
-} from "lucide-react";
+import { X, Settings, FileCode, Zap, Command, CookingPot, Server, Bell } from "lucide-react";
 import { CanopyAgentIcon } from "@/components/icons";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { useProjectSettings } from "@/hooks";
