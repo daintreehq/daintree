@@ -76,3 +76,9 @@ BRANCH_TYPES.forEach((type) => {
     BRANCH_PREFIX_MAP[alias.toLowerCase()] = type;
   });
 });
+
+const STANDARD_BRANCHES = new Set(["main", "master", "develop", "dev"]);
+
+export function isStandardBranch(branch: string): boolean {
+  return STANDARD_BRANCHES.has(branch.toLowerCase());
+}

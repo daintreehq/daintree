@@ -204,6 +204,7 @@ export interface WorktreeHeaderProps {
   isActive: boolean;
   isMuted?: boolean;
   isMainWorktree: boolean;
+  isMainOnStandardBranch?: boolean;
   isPinned: boolean;
   isCollapsed?: boolean;
   canCollapse?: boolean;
@@ -264,6 +265,7 @@ export function WorktreeHeader({
   isActive,
   isMuted,
   isMainWorktree,
+  isMainOnStandardBranch,
   isPinned,
   isCollapsed,
   canCollapse,
@@ -333,7 +335,7 @@ export function WorktreeHeader({
               label={branchLabel}
               isActive={isActive}
               isMuted={isMuted}
-              isMainWorktree={isMainWorktree}
+              isMainWorktree={isMainOnStandardBranch ?? isMainWorktree}
             />
           )}
           {worktree.isDetached && (
