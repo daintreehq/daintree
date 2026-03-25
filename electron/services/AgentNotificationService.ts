@@ -84,7 +84,7 @@ class AgentNotificationService {
 
     // Schedule waiting escalation for docked agents (independent of watched status)
     if (state === "waiting" && terminalId) {
-      this.scheduleWaitingEscalation(terminalId, worktreeId, agentId, waitingReason);
+      this.scheduleWaitingEscalation(terminalId, worktreeId, agentId);
     }
 
     // Skip if all OS notification types are disabled (off by default).
@@ -150,8 +150,7 @@ class AgentNotificationService {
   private scheduleWaitingEscalation(
     terminalId: string,
     worktreeId?: string,
-    agentId?: string,
-    waitingReason?: string
+    agentId?: string
   ): void {
     if (this.waitingEscalationTimers.has(terminalId)) {
       clearTimeout(this.waitingEscalationTimers.get(terminalId)!);
