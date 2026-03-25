@@ -1,4 +1,3 @@
-import path from "path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const fsMock = vi.hoisted(() => ({
@@ -36,9 +35,9 @@ describe("EditorService.discover", () => {
   });
 
   function mockExistingFiles(paths: string[]) {
-    const pathSet = new Set(paths.map((p) => path.normalize(p)));
+    const pathSet = new Set(paths);
     fsMock.statSync.mockImplementation((filePath: string) => {
-      if (pathSet.has(path.normalize(filePath))) {
+      if (pathSet.has(filePath)) {
         return { isFile: () => true };
       }
       throw new Error("ENOENT");
