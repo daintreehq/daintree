@@ -63,6 +63,8 @@ async function main() {
     CANOPY_DEV_SERVER_PORT: String(port),
     CANOPY_DEV_SERVER_URL: devServerUrl,
   };
+  delete sharedEnv.ELECTRON_RUN_AS_NODE;
+  delete sharedEnv.ATOM_SHELL_INTERNAL_RUN_AS_NODE;
 
   const { result } = concurrently(
     [
