@@ -373,6 +373,40 @@ describe("AutoUpdaterService", () => {
       expect(autoUpdaterMock.on).not.toHaveBeenCalled();
     });
 
+    it("does not schedule periodic checks on blocked Linux init", () => {
+      Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+
+      autoUpdaterService.initialize(windowMock as any);
+      vi.advanceTimersByTime(CHECK_INTERVAL_MS * 2);
+
+      expect(autoUpdaterMock.checkForUpdatesAndNotify).not.toHaveBeenCalled();
+    });
+
+    it("does not register IPC handlers on blocked Linux init", () => {
+      Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+
+      autoUpdaterService.initialize(windowMock as any);
+
+      expect(ipcMainMock.handle).not.toHaveBeenCalled();
+    });
+
+    it("probes the correct package-type path", () => {
+      Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+
+      autoUpdaterService.initialize(windowMock as any);
+
+      expect(fsMock.existsSync).toHaveBeenCalledWith("/mock/resources/package-type");
+    });
+
+    it("skips filesystem probe when APPIMAGE is set", () => {
+      Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+      process.env.APPIMAGE = "/path/to/app.AppImage";
+
+      autoUpdaterService.initialize(windowMock as any);
+
+      expect(fsMock.existsSync).not.toHaveBeenCalled();
+    });
+
     it("does not affect non-Linux platforms", () => {
       Object.defineProperty(process, "platform", { value: "win32", configurable: true });
 
