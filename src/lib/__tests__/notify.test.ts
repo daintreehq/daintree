@@ -479,6 +479,14 @@ describe("notify()", () => {
       expect(id).toBe("");
     });
 
+    it("marks history entries as not seen when disabled (increments unread)", () => {
+      vi.spyOn(document, "hasFocus").mockReturnValue(true);
+      notify({ type: "success", message: "Task done", priority: "high" });
+      const entry = useNotificationHistoryStore.getState().entries[0];
+      expect(entry.seenAsToast).toBe(false);
+      expect(useNotificationHistoryStore.getState().unreadCount).toBe(1);
+    });
+
     it("resumes normal routing when re-enabled", () => {
       vi.spyOn(document, "hasFocus").mockReturnValue(true);
       notify({ type: "success", message: "Suppressed", priority: "high" });

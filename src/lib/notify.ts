@@ -129,7 +129,7 @@ export function notify(payload: NotifyPayload): string {
         title,
         message: historyMessage,
         correlationId,
-        seenAsToast: shouldToast,
+        seenAsToast: notificationsEnabled && shouldToast,
         countable: payload.countable,
         actions: historyActions.length > 0 ? historyActions : undefined,
       })

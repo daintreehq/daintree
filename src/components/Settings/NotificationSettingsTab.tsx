@@ -61,9 +61,15 @@ export function NotificationSettingsTab() {
   }, []);
 
   const update = async (patch: Partial<NotificationSettings>) => {
+    const prevEnabled = useNotificationSettingsStore.getState().enabled;
     setSettings((prev) => {
       const next = { ...prev, ...patch };
-      window.electron?.notification?.setSettings(patch).catch(() => setSettings(prev));
+      window.electron?.notification?.setSettings(patch).catch(() => {
+        setSettings(prev);
+        if (patch.enabled !== undefined) {
+          useNotificationSettingsStore.setState({ enabled: prevEnabled });
+        }
+      });
       return next;
     });
     if (patch.enabled !== undefined) {
