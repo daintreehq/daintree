@@ -1,5 +1,6 @@
 import type { TerminalInstance } from "@/types";
 import { systemClient } from "@/clients/systemClient";
+import { getAgentConfig } from "@/config/agents";
 
 export interface ValidationError {
   type: "cwd" | "cli" | "config";
@@ -44,7 +45,9 @@ export async function validateTerminalConfig(
   const agentId = terminal.agentId ?? terminal.type;
   if (agentId && agentId !== "terminal") {
     try {
-      const cliAvailable = await systemClient.checkCommand(agentId);
+      const agentConfig = getAgentConfig(agentId);
+      const cliCommand = agentConfig?.command ?? agentId;
+      const cliAvailable = await systemClient.checkCommand(cliCommand);
       if (!cliAvailable) {
         errors.push({
           type: "cli",

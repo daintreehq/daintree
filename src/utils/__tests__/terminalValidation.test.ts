@@ -10,6 +10,11 @@ vi.mock("@/clients/systemClient", () => ({
   },
 }));
 
+const getAgentConfigMock = vi.hoisted(() => vi.fn());
+vi.mock("@/config/agents", () => ({
+  getAgentConfig: getAgentConfigMock,
+}));
+
 import { validateTerminalConfig, validateTerminals } from "../terminalValidation";
 
 type TerminalShape = {
@@ -34,6 +39,15 @@ describe("terminalValidation", () => {
     vi.clearAllMocks();
     checkDirectoryMock.mockResolvedValue(true);
     checkCommandMock.mockResolvedValue(true);
+    getAgentConfigMock.mockImplementation((id: string) => {
+      const commands: Record<string, string> = {
+        claude: "claude",
+        codex: "codex",
+        gemini: "gemini",
+        cursor: "cursor-agent",
+      };
+      return commands[id] ? { command: commands[id] } : undefined;
+    });
   });
 
   it("returns valid result when cwd and agent CLI checks pass", async () => {
@@ -120,6 +134,28 @@ describe("terminalValidation", () => {
         recoverable: true,
       }),
     ]);
+  });
+
+  it("uses registry command when it differs from agentId", async () => {
+    const result = await validateTerminalConfig(
+      makeTerminal({
+        agentId: "cursor",
+      }) as never
+    );
+
+    expect(result).toEqual({ valid: true, errors: [] });
+    expect(checkCommandMock).toHaveBeenCalledWith("cursor-agent");
+  });
+
+  it("falls back to agentId when agent is not in registry", async () => {
+    const result = await validateTerminalConfig(
+      makeTerminal({
+        type: "unknown-agent",
+      }) as never
+    );
+
+    expect(result).toEqual({ valid: true, errors: [] });
+    expect(checkCommandMock).toHaveBeenCalledWith("unknown-agent");
   });
 
   it("validateTerminals returns only invalid terminals and keeps batch running", async () => {
