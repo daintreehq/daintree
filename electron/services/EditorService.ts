@@ -141,8 +141,8 @@ function macAppBundleDirs(apps: Array<{ name: string; subPath?: string }>): stri
   if (process.platform !== "darwin") return [];
   const dirs: string[] = [];
   for (const { name, subPath = "Contents/MacOS" } of apps) {
-    dirs.push(path.join("/Applications", `${name}.app`, subPath));
-    dirs.push(path.join(os.homedir(), "Applications", `${name}.app`, subPath));
+    dirs.push(path.posix.join("/Applications", `${name}.app`, subPath));
+    dirs.push(path.posix.join(os.homedir(), "Applications", `${name}.app`, subPath));
   }
   return dirs;
 }
@@ -151,10 +151,17 @@ function jetbrainsToolboxScriptDirs(): string[] {
   const dirs: string[] = [];
   if (process.platform === "darwin") {
     dirs.push(
-      path.join(os.homedir(), "Library", "Application Support", "JetBrains", "Toolbox", "scripts")
+      path.posix.join(
+        os.homedir(),
+        "Library",
+        "Application Support",
+        "JetBrains",
+        "Toolbox",
+        "scripts"
+      )
     );
   } else if (process.platform === "linux") {
-    dirs.push(path.join(os.homedir(), ".local", "share", "JetBrains", "Toolbox", "scripts"));
+    dirs.push(path.posix.join(os.homedir(), ".local", "share", "JetBrains", "Toolbox", "scripts"));
   } else if (process.platform === "win32") {
     const localAppData = process.env.LOCALAPPDATA || path.join(os.homedir(), "AppData", "Local");
     dirs.push(path.join(localAppData, "JetBrains", "Toolbox", "scripts"));
@@ -163,7 +170,8 @@ function jetbrainsToolboxScriptDirs(): string[] {
 }
 
 function findBinaryInPath(binary: string, extraDirs: string[] = []): string | null {
-  const pathDirs = (process.env.PATH ?? "").split(path.delimiter).filter(Boolean);
+  const p = process.platform === "win32" ? path.win32 : path.posix;
+  const pathDirs = (process.env.PATH ?? "").split(p.delimiter).filter(Boolean);
   const searchDirs = [...extraDirs, ...pathDirs];
 
   const extensions =
@@ -173,7 +181,7 @@ function findBinaryInPath(binary: string, extraDirs: string[] = []): string | nu
 
   for (const dir of searchDirs) {
     for (const ext of extensions) {
-      const fullPath = path.join(dir, binary + ext);
+      const fullPath = p.join(dir, binary + ext);
       try {
         const stat = fs.statSync(fullPath);
         if (stat.isFile()) return fullPath;

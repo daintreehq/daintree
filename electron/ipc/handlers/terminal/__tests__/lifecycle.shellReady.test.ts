@@ -64,12 +64,14 @@ function createEmitterPtyClient() {
 
 describe("agent command injection - shell ready detection", () => {
   const project = { id: "proj-id", name: "Project", path: process.cwd() };
+  const originalPlatform = process.platform;
 
   let ptyClient: ReturnType<typeof createEmitterPtyClient>;
   let cleanup: (() => void) | undefined;
 
   beforeEach(() => {
     vi.clearAllMocks();
+    Object.defineProperty(process, "platform", { value: "linux" });
     ptyClient = createEmitterPtyClient();
     cleanup = undefined;
     mockGetCurrentProject.mockReturnValue(project);
@@ -78,6 +80,7 @@ describe("agent command injection - shell ready detection", () => {
   });
 
   afterEach(() => {
+    Object.defineProperty(process, "platform", { value: originalPlatform });
     cleanup?.();
     ptyClient.removeAllListeners();
   });
