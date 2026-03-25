@@ -61,7 +61,7 @@ export const SETTINGS_SEARCH_INDEX: SettingsSearchEntry[] = [
     tabLabel: "Panel Grid",
     section: "Settings Navigation",
     title: "Panel Grid",
-    description: "Terminal grid layout, scrollback, split pane, and performance settings",
+    description: "Panel grid layout, scrollback, split pane, and performance settings",
     keywords: ["terminal", "panel", "grid", "layout", "panes"],
   },
   {

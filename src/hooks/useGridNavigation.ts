@@ -16,7 +16,7 @@ interface UseGridNavigationOptions {
 }
 
 export function useGridNavigation(options: UseGridNavigationOptions = {}) {
-  const { containerSelector = "#terminal-grid" } = options;
+  const { containerSelector = "#panel-grid" } = options;
 
   const { terminals, focusedId, tabGroups, getTabGroups } = useTerminalStore(
     useShallow((state) => ({

@@ -130,7 +130,7 @@ export const theme: BuiltInThemeSource = {
     "terminal-white": "#DCE6D9",
   },
   extensions: {
-    "terminal-grid-bg": "#F5F8EF",
+    "panel-grid-bg": "#F5F8EF",
     "settings-dialog-bg": "#FAFCF5",
     "settings-card-bg": "#FCFDF8",
     "settings-list-item-bg": "#FCFDF8",

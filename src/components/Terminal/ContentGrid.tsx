@@ -774,7 +774,7 @@ export function ContentGrid({ className, defaultCwd, agentAvailability }: Conten
           | "fixed-columns"
           | "fixed-rows";
         void actionService.dispatch(
-          "terminal.gridLayout.setStrategy",
+          "panel.gridLayout.setStrategy",
           { strategy: nextStrategy },
           { source: "context-menu" }
         );
@@ -941,7 +941,7 @@ export function ContentGrid({ className, defaultCwd, agentAvailability }: Conten
             ref={gridRegionRef}
             role="region"
             tabIndex={-1}
-            aria-label="Terminal grid"
+            aria-label="Panel grid region"
             data-macro-focus={isMacroFocused ? "true" : undefined}
             onKeyDown={handleGridRegionKeyDown}
             className={cn(
@@ -974,7 +974,7 @@ export function ContentGrid({ className, defaultCwd, agentAvailability }: Conten
             ref={gridRegionRef}
             role="region"
             tabIndex={-1}
-            aria-label="Terminal grid"
+            aria-label="Panel grid region"
             data-macro-focus={isMacroFocused ? "true" : undefined}
             onKeyDown={handleGridRegionKeyDown}
             className={cn(
@@ -1008,7 +1008,7 @@ export function ContentGrid({ className, defaultCwd, agentAvailability }: Conten
         ref={gridRegionRef}
         role="region"
         tabIndex={-1}
-        aria-label="Terminal grid"
+        aria-label="Panel grid"
         data-macro-focus={isMacroFocused ? "true" : undefined}
         onKeyDown={handleGridRegionKeyDown}
         className={cn(
@@ -1047,7 +1047,7 @@ export function ContentGrid({ className, defaultCwd, agentAvailability }: Conten
       ref={gridRegionRef}
       role="region"
       tabIndex={-1}
-      aria-label="Terminal grid"
+      aria-label="Panel grid"
       data-macro-focus={isMacroFocused ? "true" : undefined}
       onKeyDown={handleGridRegionKeyDown}
       className={cn(
@@ -1079,7 +1079,7 @@ export function ContentGrid({ className, defaultCwd, agentAvailability }: Conten
               overflowY: "auto",
             }}
             role="grid"
-            id="terminal-grid"
+            id="panel-grid"
             aria-label="Panel grid"
             data-grid-container="true"
           >
