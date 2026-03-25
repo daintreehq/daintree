@@ -29,6 +29,7 @@ import { WorktreeHeader } from "./WorktreeCard/WorktreeHeader";
 import { WorktreeTerminalSection } from "./WorktreeCard/WorktreeTerminalSection";
 import { useWorktreeActions } from "./WorktreeCard/hooks/useWorktreeActions";
 import { useWorktreeMenu } from "./WorktreeCard/hooks/useWorktreeMenu";
+import { copyContextWithFeedback } from "@/hooks/useWorktreeActions";
 import { useWorktreeStatus } from "./WorktreeCard/hooks/useWorktreeStatus";
 import { computeChipState, type ChipState } from "./utils/computeChipState";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
@@ -257,7 +258,6 @@ export const WorktreeCard = React.memo(function WorktreeCard({
     setShowDeleteDialog,
     closeConfirmDialog,
     handlePathClick,
-    handleCopyTree,
     handleRunRecipe,
     handleCloseCompleted,
     handleDockAll,
@@ -309,15 +309,11 @@ export const WorktreeCard = React.memo(function WorktreeCard({
   }, [worktree.id]);
 
   const handleCopyContextFull = useCallback(() => {
-    void handleCopyTree();
-  }, [handleCopyTree]);
+    void copyContextWithFeedback(worktree.id);
+  }, [worktree.id]);
 
   const handleCopyContextModified = useCallback(() => {
-    void actionService.dispatch(
-      "worktree.copyTree",
-      { worktreeId: worktree.id, modified: true },
-      { source: "user" }
-    );
+    void copyContextWithFeedback(worktree.id, { modified: true });
   }, [worktree.id]);
 
   const [showIssuePicker, setShowIssuePicker] = useState(false);
