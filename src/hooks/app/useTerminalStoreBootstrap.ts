@@ -8,12 +8,23 @@
 
 import { useEffect } from "react";
 import { setupTerminalStoreListeners } from "../../store/terminalStore";
+import { useResourceMonitoringStore } from "../../store/resourceMonitoringStore";
 import { isElectronAvailable } from "../useElectron";
 
 export function useTerminalStoreBootstrap() {
   useEffect(() => {
     if (!isElectronAvailable()) return;
     const cleanupTerminalStore = setupTerminalStoreListeners();
+
+    // Hydrate resource monitoring preference and activate backend if enabled
+    window.electron.terminalConfig.get().then((config) => {
+      const enabled = config.resourceMonitoringEnabled === true;
+      useResourceMonitoringStore.getState().setEnabled(enabled);
+      if (enabled) {
+        window.electron.terminalConfig.setResourceMonitoring(true);
+      }
+    });
+
     return () => {
       cleanupTerminalStore();
     };

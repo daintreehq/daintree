@@ -51,8 +51,8 @@ describe("createProcessStateValidator", () => {
 
   it("returns false when only shell children exist", () => {
     const children: ProcessInfo[] = [
-      { pid: 10, ppid: 1, comm: "zsh", command: "zsh", cpuPercent: 0 },
-      { pid: 11, ppid: 1, comm: "gitstatusd", command: "gitstatusd", cpuPercent: 0 },
+      { pid: 10, ppid: 1, comm: "zsh", command: "zsh", cpuPercent: 0, rssKb: 0 },
+      { pid: 11, ppid: 1, comm: "gitstatusd", command: "gitstatusd", cpuPercent: 0, rssKb: 0 },
     ];
     const cache = createMockProcessTreeCache(new Map([[1, children]]));
     const validator = createProcessStateValidator(1, cache)!;
@@ -61,8 +61,8 @@ describe("createProcessStateValidator", () => {
 
   it("returns true when a significant non-shell child exists (no grandchildren needed)", () => {
     const children: ProcessInfo[] = [
-      { pid: 10, ppid: 1, comm: "zsh", command: "zsh", cpuPercent: 0 },
-      { pid: 11, ppid: 1, comm: "node", command: "node build.js", cpuPercent: 0 },
+      { pid: 10, ppid: 1, comm: "zsh", command: "zsh", cpuPercent: 0, rssKb: 0 },
+      { pid: 11, ppid: 1, comm: "node", command: "node build.js", cpuPercent: 0, rssKb: 0 },
     ];
     const cache = createMockProcessTreeCache(
       new Map([
@@ -77,7 +77,7 @@ describe("createProcessStateValidator", () => {
 
   it("strips .exe suffix when classifying children", () => {
     const children: ProcessInfo[] = [
-      { pid: 10, ppid: 1, comm: "node.exe", command: "node.exe build.js", cpuPercent: 0 },
+      { pid: 10, ppid: 1, comm: "node.exe", command: "node.exe build.js", cpuPercent: 0, rssKb: 0 },
     ];
     const cache = createMockProcessTreeCache(new Map([[1, children]]));
     const validator = createProcessStateValidator(1, cache)!;
@@ -86,8 +86,8 @@ describe("createProcessStateValidator", () => {
 
   it("treats powershell and cmd as shell processes", () => {
     const children: ProcessInfo[] = [
-      { pid: 10, ppid: 1, comm: "powershell", command: "powershell", cpuPercent: 0 },
-      { pid: 11, ppid: 1, comm: "cmd", command: "cmd", cpuPercent: 0 },
+      { pid: 10, ppid: 1, comm: "powershell", command: "powershell", cpuPercent: 0, rssKb: 0 },
+      { pid: 11, ppid: 1, comm: "cmd", command: "cmd", cpuPercent: 0, rssKb: 0 },
     ];
     const cache = createMockProcessTreeCache(new Map([[1, children]]));
     const validator = createProcessStateValidator(1, cache)!;

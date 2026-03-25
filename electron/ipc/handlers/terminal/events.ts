@@ -78,6 +78,13 @@ export function registerTerminalEventHandlers(deps: HandlerDependencies): () => 
   });
   handlers.push(unsubArtifactDetected);
 
+  // Resource metrics (batched from pty-host)
+  const handleResourceMetrics = (metrics: unknown, timestamp: unknown) => {
+    sendToRenderer(mainWindow, CHANNELS.TERMINAL_RESOURCE_METRICS, { metrics, timestamp });
+  };
+  ptyClient.on("resource-metrics", handleResourceMetrics);
+  handlers.push(() => ptyClient.off("resource-metrics", handleResourceMetrics));
+
   // Terminal activity
   const unsubTerminalActivity = events.on(
     "terminal:activity",

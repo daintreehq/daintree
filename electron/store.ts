@@ -27,6 +27,7 @@ export interface StoreSchema {
     hybridInputEnabled?: boolean;
     hybridInputAutoFocus?: boolean;
     screenReaderMode?: "auto" | "on" | "off";
+    resourceMonitoringEnabled?: boolean;
   };
   hibernation: {
     enabled: boolean;

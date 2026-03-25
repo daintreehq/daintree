@@ -57,6 +57,7 @@ export const CHANNELS = {
   TERMINAL_REDUCE_SCROLLBACK: "terminal:reduce-scrollback",
   TERMINAL_RESTORE_SCROLLBACK: "terminal:restore-scrollback",
   TERMINAL_RESTART_SERVICE: "terminal:restart-service",
+  TERMINAL_RESOURCE_METRICS: "terminal:resource-metrics",
 
   FILES_SEARCH: "files:search",
   FILES_READ: "files:read",
@@ -225,6 +226,7 @@ export const CHANNELS = {
   TERMINAL_CONFIG_SET_CUSTOM_SCHEMES: "terminal-config:set-custom-schemes",
   TERMINAL_CONFIG_IMPORT_COLOR_SCHEME: "terminal-config:import-color-scheme",
   TERMINAL_CONFIG_SET_SCREEN_READER_MODE: "terminal-config:set-screen-reader-mode",
+  TERMINAL_CONFIG_SET_RESOURCE_MONITORING: "terminal-config:set-resource-monitoring",
 
   ACCESSIBILITY_GET_ENABLED: "accessibility:get-enabled",
   ACCESSIBILITY_SUPPORT_CHANGED: "accessibility:support-changed",

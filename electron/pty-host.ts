@@ -14,6 +14,7 @@ import os from "node:os";
 import { PtyManager } from "./services/PtyManager.js";
 import { PtyPool, getPtyPool } from "./services/PtyPool.js";
 import { ProcessTreeCache } from "./services/ProcessTreeCache.js";
+import { TerminalResourceMonitor } from "./services/pty/TerminalResourceMonitor.js";
 import { events } from "./services/events.js";
 import { SharedRingBuffer, PacketFramer } from "../shared/utils/SharedRingBuffer.js";
 import { selectShard } from "../shared/utils/shardSelection.js";
@@ -70,6 +71,11 @@ process.on("unhandledRejection", (reason) => {
 
 const ptyManager = new PtyManager();
 const processTreeCache = new ProcessTreeCache(2500); // 2.5s poll interval (reduced CPU load)
+const terminalResourceMonitor = new TerminalResourceMonitor(
+  processTreeCache,
+  ptyManager,
+  sendEvent
+);
 let ptyPool: PtyPool | null = null;
 
 // Zero-copy ring buffers for terminal I/O (set via init-buffers message)
@@ -1282,6 +1288,10 @@ port.on("message", async (rawMsg: any) => {
         break;
       }
 
+      case "set-resource-monitoring":
+        terminalResourceMonitor.setEnabled(msg.enabled === true);
+        break;
+
       case "dispose":
         cleanup();
         break;
@@ -1302,6 +1312,7 @@ function cleanup(): void {
   backpressureManager.dispose();
   ipcQueueManager.dispose();
 
+  terminalResourceMonitor.dispose();
   processTreeCache.stop();
 
   if (ptyPool) {

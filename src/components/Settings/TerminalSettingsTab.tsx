@@ -12,6 +12,7 @@ import {
   Monitor,
   RotateCcw,
   Ear,
+  Activity,
 } from "lucide-react";
 import { useState, useMemo } from "react";
 import { cn } from "@/lib/utils";
@@ -36,6 +37,7 @@ import {
   PERFORMANCE_MODE_SCROLLBACK,
 } from "@/utils/scrollbackConfig";
 import { actionService } from "@/services/ActionService";
+import { useResourceMonitoringStore } from "@/store/resourceMonitoringStore";
 
 const STRATEGIES: Array<{
   id: PanelLayoutStrategy;
@@ -104,6 +106,8 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
   const hybridInputAutoFocus = useTerminalInputStore((state) => state.hybridInputAutoFocus);
 
   const screenReaderMode = useScreenReaderStore((state) => state.screenReaderMode);
+  const resourceMonitoringEnabled = useResourceMonitoringStore((state) => state.enabled);
+  const setResourceMonitoringEnabled = useResourceMonitoringStore((state) => state.setEnabled);
 
   const twoPaneSplitConfig = useTwoPaneSplitStore((state) => state.config);
   const setTwoPaneSplitEnabled = useTwoPaneSplitStore((state) => state.setEnabled);
@@ -270,6 +274,37 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
               respawned.
             </p>
           )}
+        </SettingsSection>
+      )}
+
+      {effectiveSubtab === "performance" && (
+        <SettingsSection
+          icon={Activity}
+          title="Resource Monitoring"
+          id="terminal-resource-monitoring"
+          description="Show CPU and memory usage in terminal panel headers. Polls process tree every 2.5 seconds."
+        >
+          <SettingsSwitchCard
+            icon={Activity}
+            title={
+              resourceMonitoringEnabled
+                ? "Resource Monitoring Enabled"
+                : "Enable Resource Monitoring"
+            }
+            subtitle="Display per-terminal CPU% and memory in panel headers"
+            isEnabled={resourceMonitoringEnabled}
+            onChange={() => {
+              const newValue = !resourceMonitoringEnabled;
+              setResourceMonitoringEnabled(newValue);
+              window.electron.terminalConfig.setResourceMonitoring(newValue);
+            }}
+            ariaLabel="Resource Monitoring Toggle"
+            isModified={resourceMonitoringEnabled}
+            onReset={() => {
+              setResourceMonitoringEnabled(false);
+              window.electron.terminalConfig.setResourceMonitoring(false);
+            }}
+          />
         </SettingsSection>
       )}
 

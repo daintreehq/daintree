@@ -2,6 +2,7 @@ import { ipcMain, dialog, BrowserWindow } from "electron";
 import { CHANNELS } from "../channels.js";
 import { store } from "../../store.js";
 import { parseColorSchemeFile } from "../../utils/colorSchemeImporter.js";
+import type { HandlerDependencies } from "../types.js";
 
 function getTerminalConfigObject(): Record<string, unknown> {
   const config = store.get("terminalConfig");
@@ -11,7 +12,7 @@ function getTerminalConfigObject(): Record<string, unknown> {
   return {};
 }
 
-export function registerTerminalConfigHandlers(): () => void {
+export function registerTerminalConfigHandlers(deps?: HandlerDependencies): () => void {
   const handlers: Array<() => void> = [];
 
   const handleTerminalConfigGet = async () => {
@@ -168,6 +169,24 @@ export function registerTerminalConfigHandlers(): () => void {
     handleTerminalConfigSetScreenReaderMode
   );
   handlers.push(() => ipcMain.removeHandler(CHANNELS.TERMINAL_CONFIG_SET_SCREEN_READER_MODE));
+
+  const handleTerminalConfigSetResourceMonitoring = async (
+    _event: Electron.IpcMainInvokeEvent,
+    enabled: boolean
+  ) => {
+    if (typeof enabled !== "boolean") {
+      console.warn("Invalid terminal resourceMonitoringEnabled:", enabled);
+      return;
+    }
+    const currentConfig = getTerminalConfigObject();
+    store.set("terminalConfig", { ...currentConfig, resourceMonitoringEnabled: enabled });
+    deps?.ptyClient?.setResourceMonitoring(enabled);
+  };
+  ipcMain.handle(
+    CHANNELS.TERMINAL_CONFIG_SET_RESOURCE_MONITORING,
+    handleTerminalConfigSetResourceMonitoring
+  );
+  handlers.push(() => ipcMain.removeHandler(CHANNELS.TERMINAL_CONFIG_SET_RESOURCE_MONITORING));
 
   const handleTerminalConfigImportColorScheme = async (event: Electron.IpcMainInvokeEvent) => {
     const win = BrowserWindow.fromWebContents(event.sender) ?? BrowserWindow.getFocusedWindow();

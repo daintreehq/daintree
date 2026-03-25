@@ -12,6 +12,9 @@ import { useTerminalStore } from "@/store";
 import { useShallow } from "zustand/react/shallow";
 import { formatElapsedDuration } from "@/utils/formatElapsedDuration";
 import { formatTimeAgo } from "@/utils/timeAgo";
+import { useResourceMonitoringStore } from "@/store/resourceMonitoringStore";
+import { TerminalResourceSparkline } from "./TerminalResourceSparkline";
+import { panelKindHasPty } from "@shared/config/panelKindRegistry";
 
 function ElapsedTime({ startedAt }: { startedAt: number }) {
   const [now, setNow] = useState(() => Date.now());
@@ -48,6 +51,18 @@ export interface TerminalHeaderContentProps {
   flowStatus?: "running" | "paused-backpressure" | "paused-user" | "suspended";
 }
 
+function formatMemory(kb: number): string {
+  if (kb >= 1048576) return `${(kb / 1048576).toFixed(1)}G`;
+  if (kb >= 1024) return `${Math.round(kb / 1024)}M`;
+  return `${kb}K`;
+}
+
+function getResourceSeverity(cpuPercent: number, memoryKb: number): "muted" | "amber" | "red" {
+  if (cpuPercent >= 80 || memoryKb >= 2097152) return "red";
+  if (cpuPercent >= 50 || memoryKb >= 1048576) return "amber";
+  return "muted";
+}
+
 function TerminalHeaderContentComponent({
   id,
   kind,
@@ -60,6 +75,11 @@ function TerminalHeaderContentComponent({
   queueCount = 0,
   flowStatus,
 }: TerminalHeaderContentProps) {
+  const resourceEnabled = useResourceMonitoringStore((s) => s.enabled);
+  const resourceState = useResourceMonitoringStore((s) => s.metrics.get(id));
+  const isPtyPanel = kind == null || panelKindHasPty(kind);
+  const showResource = resourceEnabled && isPtyPanel && resourceState != null;
+
   const {
     isInputLocked,
     startedAt,
@@ -249,6 +269,69 @@ function TerminalHeaderContentComponent({
               </div>
             </TooltipTrigger>
             <TooltipContent side="bottom">Input locked (read-only monitor mode)</TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
+      )}
+
+      {/* Resource monitoring badge */}
+      {showResource && (
+        <TooltipProvider>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <div
+                className={cn(
+                  "inline-flex items-center gap-1 text-[11px] font-mono shrink-0 ml-1",
+                  {
+                    "text-canopy-text/40":
+                      getResourceSeverity(resourceState.cpuPercent, resourceState.memoryKb) ===
+                      "muted",
+                    "text-status-warning":
+                      getResourceSeverity(resourceState.cpuPercent, resourceState.memoryKb) ===
+                      "amber",
+                    "text-status-error":
+                      getResourceSeverity(resourceState.cpuPercent, resourceState.memoryKb) ===
+                      "red",
+                  }
+                )}
+                style={{ fontVariantNumeric: "tabular-nums" }}
+                role="status"
+              >
+                <TerminalResourceSparkline history={resourceState.cpuHistory} />
+                <span>
+                  {Math.round(resourceState.cpuPercent)}% · {formatMemory(resourceState.memoryKb)}
+                </span>
+              </div>
+            </TooltipTrigger>
+            <TooltipContent side="bottom" className="max-w-xs">
+              <div className="flex flex-col gap-1">
+                <div className="font-medium" style={{ fontVariantNumeric: "tabular-nums" }}>
+                  CPU: {resourceState.cpuPercent.toFixed(1)}% · Memory:{" "}
+                  {formatMemory(resourceState.memoryKb)}
+                </div>
+                {resourceState.breakdown.length > 0 && (
+                  <table className="text-xs" style={{ fontVariantNumeric: "tabular-nums" }}>
+                    <thead>
+                      <tr className="text-canopy-text/60">
+                        <th className="text-left pr-2">PID</th>
+                        <th className="text-left pr-2">Name</th>
+                        <th className="text-right pr-2">CPU</th>
+                        <th className="text-right">Mem</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {resourceState.breakdown.map((p) => (
+                        <tr key={p.pid}>
+                          <td className="pr-2 text-canopy-text/60">{p.pid}</td>
+                          <td className="pr-2 truncate max-w-[8rem]">{p.comm}</td>
+                          <td className="text-right pr-2">{p.cpuPercent.toFixed(1)}%</td>
+                          <td className="text-right">{formatMemory(p.memoryKb)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+            </TooltipContent>
           </Tooltip>
         </TooltipProvider>
       )}

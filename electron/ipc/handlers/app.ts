@@ -23,7 +23,7 @@ export function registerAppHandlers(deps: HandlerDependencies): () => void {
     registerAppStateHandlers(),
     registerLogsHandlers(),
     registerEventInspectorHandlers(deps),
-    registerTerminalConfigHandlers(),
+    registerTerminalConfigHandlers(deps),
     registerAppThemeHandlers(),
     registerCrashRecoveryHandlers(),
     registerGpuHandlers(),

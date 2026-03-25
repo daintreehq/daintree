@@ -44,6 +44,7 @@ import type {
   CrashType,
   HostCrashPayload,
   SpawnResult,
+  TerminalResourceBatchPayload,
 } from "../../shared/types/pty-host.js";
 import type { TerminalSnapshot } from "./PtyManager.js";
 import type { AgentStateChangeTrigger } from "../types/index.js";
@@ -165,6 +166,7 @@ export class PtyClient extends EventEmitter {
   private shouldResyncProjectContext = false;
   private pendingMessagePort: MessagePortMain | null = null;
   private terminalPids: Map<string, number> = new Map();
+  private resourceMonitoringEnabled = false;
 
   /** Watchdog: Track missed heartbeat responses to detect deadlocks */
   private missedHeartbeats = 0;
@@ -670,6 +672,16 @@ export class PtyClient extends EventEmitter {
         break;
       }
 
+      case "resource-metrics": {
+        const rmEvent = event as {
+          type: "resource-metrics";
+          metrics: TerminalResourceBatchPayload;
+          timestamp: number;
+        };
+        this.emit("resource-metrics", rmEvent.metrics, rmEvent.timestamp);
+        break;
+      }
+
       default:
         console.warn("[PtyClient] Unknown event type:", (event as { type: string }).type);
     }
@@ -714,6 +726,11 @@ export class PtyClient extends EventEmitter {
     // Re-enable IPC data mirrors that were active before crash
     for (const id of this.ipcDataMirrorIds) {
       this.send({ type: "set-ipc-data-mirror", id, enabled: true });
+    }
+
+    // Re-enable resource monitoring if it was active
+    if (this.resourceMonitoringEnabled) {
+      this.send({ type: "set-resource-monitoring", enabled: true });
     }
   }
 
@@ -918,6 +935,11 @@ export class PtyClient extends EventEmitter {
 
   setActivityTier(id: string, tier: PtyHostActivityTier): void {
     this.send({ type: "set-activity-tier", id, tier });
+  }
+
+  setResourceMonitoring(enabled: boolean): void {
+    this.resourceMonitoringEnabled = enabled;
+    this.send({ type: "set-resource-monitoring", enabled });
   }
 
   /**

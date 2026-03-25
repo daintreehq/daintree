@@ -91,7 +91,8 @@ export type PtyHostRequest =
   | { type: "set-ipc-data-mirror"; id: string; enabled: boolean }
   | { type: "graceful-kill"; id: string; requestId: string }
   | { type: "graceful-kill-by-project"; projectId: string; requestId: string }
-  | { type: "trim-state"; targetLines: number };
+  | { type: "trim-state"; targetLines: number }
+  | { type: "set-resource-monitoring"; enabled: boolean };
 
 /**
  * Terminal snapshot data sent from Host → Main for state queries.
@@ -217,6 +218,11 @@ export type PtyHostEvent =
       estimatedLeaked: number;
       orphanedPids: number[];
       ptmxLimit: number | null;
+      timestamp: number;
+    }
+  | {
+      type: "resource-metrics";
+      metrics: TerminalResourceBatchPayload;
       timestamp: number;
     };
 
@@ -386,3 +392,21 @@ export type RendererToPtyHostMessage =
  * These bypass the Main process for low-latency terminal output.
  */
 export type PtyHostToRendererMessage = { type: "data"; id: string; data: string };
+
+/** Per-process resource breakdown entry */
+export interface TerminalResourceProcess {
+  pid: number;
+  comm: string;
+  cpuPercent: number;
+  memoryKb: number;
+}
+
+/** Aggregated resource sample for a single terminal */
+export interface TerminalResourceSample {
+  cpuPercent: number;
+  memoryKb: number;
+  breakdown: TerminalResourceProcess[];
+}
+
+/** Batched resource metrics for all monitored terminals */
+export type TerminalResourceBatchPayload = Record<string, TerminalResourceSample>;

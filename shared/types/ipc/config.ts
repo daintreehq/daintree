@@ -22,4 +22,6 @@ export interface TerminalConfig {
   customSchemes?: string;
   /** Screen reader mode: 'auto' (follow OS), 'on', or 'off' (default: 'auto') */
   screenReaderMode?: "auto" | "on" | "off";
+  /** Show per-terminal CPU and memory usage in panel headers (default: false) */
+  resourceMonitoringEnabled?: boolean;
 }

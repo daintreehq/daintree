@@ -126,7 +126,12 @@ export interface KeybindingImportResult {
   skipped: number;
   errors: string[];
 }
-import type { TerminalStatusPayload, PtyHostActivityTier, SpawnResult } from "../pty-host.js";
+import type {
+  TerminalStatusPayload,
+  PtyHostActivityTier,
+  SpawnResult,
+  TerminalResourceBatchPayload,
+} from "../pty-host.js";
 import type { ShowContextMenuPayload } from "../menu.js";
 import type {
   FileSearchPayload,
@@ -242,6 +247,9 @@ export interface ElectronAPI {
     onRestored(callback: (data: { id: string }) => void): () => void;
     forceResume(id: string): Promise<{ success: boolean; error?: string }>;
     onStatus(callback: (data: TerminalStatusPayload) => void): () => void;
+    onResourceMetrics(
+      callback: (data: { metrics: TerminalResourceBatchPayload; timestamp: number }) => void
+    ): () => void;
     onBackendCrashed(
       callback: (data: {
         crashType: string;
@@ -706,6 +714,7 @@ export interface ElectronAPI {
       | { ok: false; errors: string[] }
     >;
     setScreenReaderMode(mode: "auto" | "on" | "off"): Promise<void>;
+    setResourceMonitoring(enabled: boolean): Promise<void>;
   };
   accessibility: {
     getEnabled(): Promise<boolean>;

@@ -16,9 +16,9 @@ function createSeededCache(): ProcessTreeCache {
   };
 
   internals.cache = new Map<number, ProcessInfo>([
-    [2, { pid: 2, ppid: 1, comm: "node", command: "node a.js", cpuPercent: 0.2 }],
-    [3, { pid: 3, ppid: 1, comm: "node", command: "node b.js", cpuPercent: 0.1 }],
-    [4, { pid: 4, ppid: 2, comm: "npm", command: "npm test", cpuPercent: 1.5 }],
+    [2, { pid: 2, ppid: 1, comm: "node", command: "node a.js", cpuPercent: 0.2, rssKb: 50000 }],
+    [3, { pid: 3, ppid: 1, comm: "node", command: "node b.js", cpuPercent: 0.1, rssKb: 30000 }],
+    [4, { pid: 4, ppid: 2, comm: "npm", command: "npm test", cpuPercent: 1.5, rssKb: 20000 }],
   ]);
   internals.childrenMap = new Map<number, number[]>([
     [1, [2, 3]],
@@ -110,6 +110,53 @@ describe("ProcessTreeCache", () => {
   it("returns empty array for unknown pid", () => {
     const processTree = createSeededCache();
     expect(processTree.getDescendantPids(999)).toEqual([]);
+  });
+});
+
+describe("getTreeResourceSummary", () => {
+  it("aggregates CPU and memory for root + descendants", () => {
+    const processTree = createSeededCache();
+    const summary = processTree.getTreeResourceSummary(2);
+
+    expect(summary).not.toBeNull();
+    // PID 2 (0.2%) + PID 4 (1.5%) = 1.7%
+    expect(summary!.cpuPercent).toBeCloseTo(1.7, 6);
+    // PID 2 (50000) + PID 4 (20000) = 70000
+    expect(summary!.memoryKb).toBe(70000);
+    expect(summary!.breakdown).toHaveLength(2);
+  });
+
+  it("returns null for unknown PID", () => {
+    const processTree = createSeededCache();
+    expect(processTree.getTreeResourceSummary(999)).toBeNull();
+  });
+
+  it("returns only root process when no children", () => {
+    const processTree = createSeededCache();
+    const summary = processTree.getTreeResourceSummary(4);
+
+    expect(summary).not.toBeNull();
+    expect(summary!.cpuPercent).toBeCloseTo(1.5, 6);
+    expect(summary!.memoryKb).toBe(20000);
+    expect(summary!.breakdown).toHaveLength(1);
+    expect(summary!.breakdown[0].pid).toBe(4);
+  });
+
+  it("sorts breakdown by CPU descending", () => {
+    const processTree = createSeededCache();
+    const summary = processTree.getTreeResourceSummary(1);
+
+    // PID 1 doesn't exist in cache, so this should return null
+    expect(summary).toBeNull();
+  });
+
+  it("aggregates full tree from PID 2", () => {
+    const processTree = createSeededCache();
+    const summary = processTree.getTreeResourceSummary(2);
+
+    expect(summary!.breakdown[0].cpuPercent).toBeGreaterThanOrEqual(
+      summary!.breakdown[1].cpuPercent
+    );
   });
 });
 

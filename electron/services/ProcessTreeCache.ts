@@ -10,6 +10,7 @@ export interface ProcessInfo {
   comm: string;
   command: string;
   cpuPercent: number; // CPU usage percentage (0-100)
+  rssKb: number; // Resident Set Size in KB
 }
 
 type RefreshCallback = () => void;
@@ -106,7 +107,7 @@ export class ProcessTreeCache {
 
   private async refreshUnix(): Promise<void> {
     // Include %cpu for activity detection
-    const { stdout } = await execAsync("ps -eo pid,ppid,%cpu,comm,command", {
+    const { stdout } = await execAsync("ps -eo pid,ppid,%cpu,rss,comm,command", {
       timeout: 5000,
       maxBuffer: 10 * 1024 * 1024, // 10MB to handle systems with many processes
     });
@@ -140,11 +141,12 @@ export class ProcessTreeCache {
   }
 
   private parseUnixLine(line: string): ProcessInfo | null {
-    // Format: PID PPID %CPU COMM COMMAND
-    // PID and PPID are right-aligned numbers, %CPU is a decimal, COMM is the basename, COMMAND is the full command line
-    // Example: "  123    1  0.5 bash /bin/bash --login"
+    // Format: PID PPID %CPU RSS COMM COMMAND
+    // PID and PPID are right-aligned numbers, %CPU is a decimal, RSS is an integer (KB),
+    // COMM is the basename, COMMAND is the full command line
+    // Example: "  123    1  0.5 12345 bash /bin/bash --login"
     // Make command optional in case ps omits it
-    const match = line.match(/^\s*(\d+)\s+(\d+)\s+(\d+(?:\.\d+)?)\s+(\S+)(?:\s+(.*))?$/);
+    const match = line.match(/^\s*(\d+)\s+(\d+)\s+(\d+(?:\.\d+)?)\s+(\d+)\s+(\S+)(?:\s+(.*))?$/);
     if (!match) {
       return null;
     }
@@ -152,14 +154,15 @@ export class ProcessTreeCache {
     const pid = parseInt(match[1], 10);
     const ppid = parseInt(match[2], 10);
     const cpuPercent = parseFloat(match[3]) || 0;
-    const comm = match[4];
-    const command = match[5]?.trim() || comm;
+    const rssKb = parseInt(match[4], 10) || 0;
+    const comm = match[5];
+    const command = match[6]?.trim() || comm;
 
     if (!Number.isInteger(pid) || !Number.isInteger(ppid) || pid <= 0) {
       return null;
     }
 
-    return { pid, ppid, comm, command, cpuPercent };
+    return { pid, ppid, comm, command, cpuPercent, rssKb };
   }
 
   private async refreshWindows(): Promise<void> {
@@ -173,6 +176,7 @@ export class ProcessTreeCache {
       "Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,Name,CommandLine," +
       "@{N='KernelModeTime';E={[string]$_.KernelModeTime}}," +
       "@{N='UserModeTime';E={[string]$_.UserModeTime}}," +
+      "@{N='WorkingSetSize';E={[string]$_.WorkingSetSize}}," +
       "@{N='CreationDate';E={if ($_.CreationDate) { $_.CreationDate.ToString('o') } else { $null }}} | " +
       'ConvertTo-Json -Compress"';
 
@@ -247,12 +251,17 @@ export class ProcessTreeCache {
 
       this.cpuSnapshots.set(snapshotKey, { kernelTicks, userTicks, wallMs: now });
 
+      // WorkingSetSize is in bytes; convert to KB
+      const workingSetBytes = Number(p.WorkingSetSize ?? "0");
+      const rssKb = Math.floor(workingSetBytes / 1024);
+
       newCache.set(pid, {
         pid,
         ppid,
         comm: name,
         command,
         cpuPercent,
+        rssKb,
       });
 
       const children = newChildrenMap.get(ppid) || [];
@@ -378,6 +387,61 @@ export class ProcessTreeCache {
     }
 
     return false;
+  }
+
+  /**
+   * Get aggregated resource summary for a process tree.
+   * Includes the root process and all descendants.
+   * Breakdown is capped at 10 entries sorted by CPU descending.
+   */
+  getTreeResourceSummary(rootPid: number): {
+    cpuPercent: number;
+    memoryKb: number;
+    breakdown: Array<{ pid: number; comm: string; cpuPercent: number; memoryKb: number }>;
+  } | null {
+    const rootProcess = this.cache.get(rootPid);
+    if (!rootProcess) return null;
+
+    let totalCpu = rootProcess.cpuPercent;
+    let totalMemory = rootProcess.rssKb;
+    const breakdown: Array<{ pid: number; comm: string; cpuPercent: number; memoryKb: number }> = [
+      {
+        pid: rootProcess.pid,
+        comm: rootProcess.comm,
+        cpuPercent: rootProcess.cpuPercent,
+        memoryKb: rootProcess.rssKb,
+      },
+    ];
+
+    const visited = new Set<number>([rootPid]);
+    const queue = this.getChildPids(rootPid);
+
+    while (queue.length > 0) {
+      const pid = queue.shift()!;
+      if (visited.has(pid)) continue;
+      visited.add(pid);
+
+      const proc = this.cache.get(pid);
+      if (proc) {
+        totalCpu += proc.cpuPercent;
+        totalMemory += proc.rssKb;
+        breakdown.push({
+          pid: proc.pid,
+          comm: proc.comm,
+          cpuPercent: proc.cpuPercent,
+          memoryKb: proc.rssKb,
+        });
+        queue.push(...this.getChildPids(pid));
+      }
+    }
+
+    // Sort by CPU descending, cap at 10
+    breakdown.sort((a, b) => b.cpuPercent - a.cpuPercent);
+    return {
+      cpuPercent: totalCpu,
+      memoryKb: totalMemory,
+      breakdown: breakdown.slice(0, 10),
+    };
   }
 
   getLastRefreshTime(): number {
