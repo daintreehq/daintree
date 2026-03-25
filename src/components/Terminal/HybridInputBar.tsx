@@ -43,7 +43,7 @@ import { registerInputController, unregisterInputController } from "@/store/term
 import type { CommandContext, CommandResult } from "@shared/types/commands";
 import { isEnterLikeLineBreakInputEvent } from "./hybridInputEvents";
 import {
-  inputTheme,
+  buildInputBarTheme,
   createContentAttributes,
   createPlaceholder,
   createSlashChipField,
@@ -70,6 +70,12 @@ import {
   createAutoSize,
 } from "./inputEditorExtensions";
 import { AppDialog } from "@/components/ui/AppDialog";
+import {
+  useTerminalColorSchemeStore,
+  selectEffectiveTheme,
+} from "@/store/terminalColorSchemeStore";
+import { useAppThemeStore } from "@/store/appThemeStore";
+import { resolveInputBarColors } from "@/utils/terminalTheme";
 
 import { useEditorCompartments } from "./hooks/useEditorCompartments";
 import { useAutocompleteItems } from "./hooks/useAutocompleteItems";
@@ -218,6 +224,11 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
 
     const isAgentTerminal = agentId !== undefined;
 
+    // --- Terminal color scheme ---
+    useAppThemeStore((s) => s.selectedSchemeId);
+    const effectiveTheme = useTerminalColorSchemeStore(selectEffectiveTheme);
+    const inputBarColors = useMemo(() => resolveInputBarColors(effectiveTheme), [effectiveTheme]);
+
     // --- Extracted hooks ---
 
     const compartments = useEditorCompartments();
@@ -234,6 +245,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       terminalChipTooltipCompartmentRef,
       selectionChipTooltipCompartmentRef,
       autoSizeCompartmentRef,
+      themeCompartmentRef,
     } = compartments;
 
     const { handleDragEnter, handleDragOver, handleDragLeave, handleDrop, isDragOverFiles } =
@@ -919,7 +931,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       const state = EditorState.create({
         doc: value,
         extensions: [
-          inputTheme,
+          themeCompartmentRef.current.of(buildInputBarTheme(effectiveTheme)),
           EditorView.lineWrapping,
           drawSelection(),
           createContentAttributes(),
@@ -976,6 +988,14 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
 
     // Compartment refs are stable (useRef inside useEditorCompartments) — intentionally omitted from deps.
     /* eslint-disable react-hooks/exhaustive-deps */
+    useEffect(() => {
+      const view = editorViewRef.current;
+      if (!view) return;
+      view.dispatch({
+        effects: themeCompartmentRef.current.reconfigure(buildInputBarTheme(effectiveTheme)),
+      });
+    }, [effectiveTheme]);
+
     useEffect(() => {
       const view = editorViewRef.current;
       if (!view) return;
@@ -1089,20 +1109,37 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     }, [isExpanded]);
 
     const barContent = (
-      <div className="group cursor-text bg-canopy-bg px-4 pb-3 pt-3">
+      <div
+        className="group cursor-text px-4 pb-3 pt-3"
+        style={{ backgroundColor: inputBarColors.background }}
+      >
         <div className="flex items-end gap-2">
           <div
             ref={inputShellRef}
             className={cn(
               "group/shell relative",
-              "flex w-full items-center gap-1.5 rounded-sm border border-border-subtle bg-overlay-soft py-1 shadow-[0_6px_12px_var(--color-scrim-soft)] transition-colors",
-              "group-hover:border-border-default group-hover:bg-overlay-medium",
-              "focus-within:border-canopy-accent/45 focus-within:ring-1 focus-within:ring-canopy-accent/16 focus-within:bg-overlay-medium",
-              isVoiceActiveForPanel &&
-                "border-canopy-accent/60 bg-canopy-accent/[0.12] shadow-[0_0_0_1px_rgba(var(--theme-accent-rgb),0.35),0_0_16px_rgba(var(--theme-accent-rgb),0.15)]",
-              isDragOverFiles && "border-canopy-accent/60 ring-1 ring-canopy-accent/30",
+              "flex w-full items-center gap-1.5 rounded-sm border py-1 transition-colors",
               disabled && "opacity-60"
             )}
+            style={{
+              backgroundColor: `color-mix(in oklab, ${inputBarColors.background} 85%, ${inputBarColors.foreground})`,
+              borderColor: `color-mix(in oklab, ${inputBarColors.foreground} 15%, transparent)`,
+              boxShadow: isVoiceActiveForPanel
+                ? `0 0 0 1px color-mix(in oklab, ${inputBarColors.accent} 35%, transparent), 0 0 16px color-mix(in oklab, ${inputBarColors.accent} 15%, transparent)`
+                : isDragOverFiles
+                  ? `0 0 0 1px color-mix(in oklab, ${inputBarColors.accent} 30%, transparent)`
+                  : `0 6px 12px color-mix(in oklab, ${inputBarColors.background} 30%, transparent)`,
+              ...(isVoiceActiveForPanel
+                ? {
+                    borderColor: `color-mix(in oklab, ${inputBarColors.accent} 60%, transparent)`,
+                    backgroundColor: `color-mix(in oklab, ${inputBarColors.accent} 12%, ${inputBarColors.background})`,
+                  }
+                : isDragOverFiles
+                  ? {
+                      borderColor: `color-mix(in oklab, ${inputBarColors.accent} 60%, transparent)`,
+                    }
+                  : {}),
+            }}
             onDragEnter={handleDragEnter}
             onDragOver={handleDragOver}
             onDragLeave={handleDragLeave}
@@ -1150,11 +1187,8 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
                   editorHostRef.current = node;
                   compactEditorHostRef.current = node;
                 }}
-                className={cn(
-                  "w-full min-h-[20px]",
-                  "text-canopy-text",
-                  disabled && "pointer-events-none"
-                )}
+                className={cn("w-full min-h-[20px]", disabled && "pointer-events-none")}
+                style={{ color: inputBarColors.foreground }}
               />
             </div>
             <div className="flex items-center pr-1.5">

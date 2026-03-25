@@ -14,6 +14,7 @@ export function useEditorCompartments() {
   const terminalChipTooltipCompartmentRef = useRef(new Compartment());
   const selectionChipTooltipCompartmentRef = useRef(new Compartment());
   const autoSizeCompartmentRef = useRef(new Compartment());
+  const themeCompartmentRef = useRef(new Compartment());
 
   return {
     placeholderCompartmentRef,
@@ -28,5 +29,6 @@ export function useEditorCompartments() {
     terminalChipTooltipCompartmentRef,
     selectionChipTooltipCompartmentRef,
     autoSizeCompartmentRef,
+    themeCompartmentRef,
   };
 }

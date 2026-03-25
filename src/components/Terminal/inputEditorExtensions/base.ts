@@ -2,214 +2,176 @@ import { EditorView, Decoration, keymap, placeholder } from "@codemirror/view";
 import type { Extension } from "@codemirror/state";
 import { StateField, StateEffect, Prec } from "@codemirror/state";
 import { insertNewline } from "@codemirror/commands";
+import type { ITheme } from "@xterm/xterm";
+import { resolveInputBarColors } from "@/utils/terminalTheme";
 
 const MAX_TEXTAREA_HEIGHT_PX = 160;
 const LINE_HEIGHT_PX = 20;
 
 export const TERMINAL_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" x2="20" y1="19" y2="19"/></svg>`;
 
-export const inputTheme = EditorView.theme(
-  {
-    "&": {
-      backgroundColor: "transparent",
-      height: "auto",
+const INLINE_CHIP_BASE = {
+  display: "inline-flex",
+  alignItems: "center",
+  height: "20px",
+  verticalAlign: "bottom",
+  whiteSpace: "nowrap",
+  gap: "4px",
+  padding: "0 5px",
+  fontWeight: 600,
+  borderRadius: "3px",
+} as const;
+
+const CHIP_SVG_SIZE = {
+  height: "14px",
+  width: "14px",
+  flexShrink: "0",
+} as const;
+
+export function buildInputBarTheme(theme: ITheme): Extension {
+  const c = resolveInputBarColors(theme);
+
+  const chipStyle = {
+    ...INLINE_CHIP_BASE,
+    color: c.accent,
+    background: `color-mix(in oklab, ${c.chipColor} 10%, transparent)`,
+  };
+
+  return EditorView.theme(
+    {
+      "&": {
+        backgroundColor: "transparent",
+        height: "auto",
+      },
+      "&.cm-focused": {
+        outline: "none",
+      },
+      ".cm-content": {
+        fontFamily: "var(--font-mono, monospace)",
+        fontSize: "12px",
+        lineHeight: "20px",
+        padding: "0 4px 0 0",
+        caretColor: c.accent,
+      },
+      "&.cm-focused .cm-cursor": {
+        borderLeft: `2px solid ${c.accent}`,
+      },
+      "& .cm-selectionBackground": {
+        backgroundColor: `color-mix(in oklab, ${c.accent} 25%, transparent) !important`,
+      },
+      "&.cm-focused .cm-selectionBackground": {
+        backgroundColor: `color-mix(in oklab, ${c.accent} 45%, transparent) !important`,
+      },
+      ".cm-dropCursor": {
+        borderLeftColor: c.accent,
+      },
+      ".cm-placeholder": {
+        color: `color-mix(in oklab, ${c.foreground} 48%, transparent)`,
+      },
+      ".cm-scroller": {
+        overflow: "hidden",
+      },
+      ".cm-line": {
+        padding: "0",
+      },
+      ".cm-slash-command-chip": {
+        fontWeight: 600,
+        color: c.accent,
+        textDecoration: "underline dotted 1px",
+        textUnderlineOffset: "2px",
+      },
+      ".cm-slash-command-chip-invalid": {
+        color: c.errorColor,
+        textDecoration: "underline wavy 1px",
+        textUnderlineOffset: "2px",
+      },
+      ".cm-file-chip": {
+        fontWeight: 600,
+        color: c.chipColor,
+        textDecoration: "underline dotted 1px",
+        textUnderlineOffset: "2px",
+      },
+      ".cm-tooltip": {
+        background: "transparent",
+        border: "none",
+        boxShadow: "none",
+      },
+      ".cm-tooltip-hover": {
+        background: "transparent",
+        border: "none",
+        boxShadow: "none",
+      },
+      ".cm-image-chip": {
+        ...chipStyle,
+      },
+      ".cm-image-chip img": {
+        height: "16px",
+        width: "16px",
+        objectFit: "cover",
+        borderRadius: "2px",
+        flexShrink: "0",
+      },
+      ".cm-file-drop-chip": {
+        ...chipStyle,
+      },
+      ".cm-file-drop-chip svg": CHIP_SVG_SIZE,
+      ".cm-chip-remove": {
+        display: "inline-flex",
+        alignItems: "center",
+        justifyContent: "center",
+        width: "14px",
+        height: "14px",
+        marginLeft: "2px",
+        borderRadius: "2px",
+        color: `color-mix(in oklab, ${c.foreground} 55%, transparent)`,
+        cursor: "pointer",
+        flexShrink: "0",
+        opacity: "0",
+        pointerEvents: "none",
+        transition: "opacity 100ms ease-out",
+        lineHeight: "1",
+        fontSize: "12px",
+        border: "none",
+        background: "transparent",
+        padding: "0",
+      },
+      ".cm-image-chip:hover .cm-chip-remove, .cm-file-drop-chip:hover .cm-chip-remove": {
+        opacity: "1",
+        pointerEvents: "auto",
+      },
+      ".cm-chip-remove:hover": {
+        color: c.foreground,
+        background: `color-mix(in oklab, ${c.foreground} 10%, transparent)`,
+      },
+      ".cm-diff-chip": {
+        ...chipStyle,
+      },
+      ".cm-diff-chip svg": CHIP_SVG_SIZE,
+      ".cm-terminal-chip": {
+        ...chipStyle,
+      },
+      ".cm-terminal-chip svg": CHIP_SVG_SIZE,
+      ".cm-selection-chip": {
+        ...chipStyle,
+      },
+      ".cm-selection-chip svg": CHIP_SVG_SIZE,
+      ".cm-voice-interim": {
+        opacity: "0.55",
+        fontStyle: "italic",
+        transition: "opacity 150ms ease-out",
+      },
+      ".cm-voice-pending-ai": {
+        textDecorationLine: "underline",
+        textDecorationStyle: "dotted",
+        textDecorationColor: `color-mix(in oklab, ${c.successColor} 82%, transparent)`,
+        textDecorationThickness: "2px",
+        textUnderlineOffset: "3px",
+        transition: "text-decoration-color 150ms ease-out",
+      },
     },
-    "&.cm-focused": {
-      outline: "none",
-    },
-    ".cm-content": {
-      fontFamily: "var(--font-mono, monospace)",
-      fontSize: "12px",
-      lineHeight: "20px",
-      padding: "0 4px 0 0",
-      caretColor: "var(--theme-accent-primary)",
-    },
-    "&.cm-focused .cm-cursor": {
-      borderLeft: "2px solid var(--theme-accent-primary)",
-    },
-    "& .cm-selectionBackground": {
-      backgroundColor:
-        "color-mix(in oklab, var(--theme-accent-primary) 25%, transparent) !important",
-    },
-    "&.cm-focused .cm-selectionBackground": {
-      backgroundColor:
-        "color-mix(in oklab, var(--theme-accent-primary) 45%, transparent) !important",
-    },
-    ".cm-dropCursor": {
-      borderLeftColor: "var(--theme-accent-primary)",
-    },
-    ".cm-placeholder": {
-      color: "color-mix(in oklab, var(--theme-text-muted) 78%, transparent)",
-    },
-    ".cm-scroller": {
-      overflow: "hidden",
-    },
-    ".cm-line": {
-      padding: "0",
-    },
-    ".cm-slash-command-chip": {
-      fontWeight: 600,
-      color: "var(--theme-accent-primary)",
-      textDecoration: "underline dotted 1px",
-      textUnderlineOffset: "2px",
-    },
-    ".cm-slash-command-chip-invalid": {
-      color: "var(--theme-terminal-red)",
-      textDecoration: "underline wavy 1px",
-      textUnderlineOffset: "2px",
-    },
-    ".cm-file-chip": {
-      fontWeight: 600,
-      color: "var(--theme-syntax-chip)",
-      textDecoration: "underline dotted 1px",
-      textUnderlineOffset: "2px",
-    },
-    ".cm-tooltip": {
-      background: "transparent",
-      border: "none",
-      boxShadow: "none",
-    },
-    ".cm-tooltip-hover": {
-      background: "transparent",
-      border: "none",
-      boxShadow: "none",
-    },
-    ".cm-image-chip": {
-      display: "inline-flex",
-      alignItems: "center",
-      height: "20px",
-      verticalAlign: "bottom",
-      whiteSpace: "nowrap",
-      gap: "4px",
-      padding: "0 5px",
-      color: "var(--theme-accent-primary)",
-      fontWeight: 600,
-      background: "color-mix(in oklab, var(--theme-syntax-chip) 10%, transparent)",
-      borderRadius: "3px",
-    },
-    ".cm-image-chip img": {
-      height: "16px",
-      width: "16px",
-      objectFit: "cover",
-      borderRadius: "2px",
-      flexShrink: "0",
-    },
-    ".cm-file-drop-chip": {
-      display: "inline-flex",
-      alignItems: "center",
-      height: "20px",
-      verticalAlign: "bottom",
-      whiteSpace: "nowrap",
-      gap: "4px",
-      padding: "0 5px",
-      color: "var(--theme-accent-primary)",
-      fontWeight: 600,
-      background: "color-mix(in oklab, var(--theme-syntax-chip) 10%, transparent)",
-      borderRadius: "3px",
-    },
-    ".cm-file-drop-chip svg": {
-      height: "14px",
-      width: "14px",
-      flexShrink: "0",
-    },
-    ".cm-chip-remove": {
-      display: "inline-flex",
-      alignItems: "center",
-      justifyContent: "center",
-      width: "14px",
-      height: "14px",
-      marginLeft: "2px",
-      borderRadius: "2px",
-      color: "var(--theme-text-muted)",
-      cursor: "pointer",
-      flexShrink: "0",
-      opacity: "0",
-      pointerEvents: "none",
-      transition: "opacity 100ms ease-out",
-      lineHeight: "1",
-      fontSize: "12px",
-      border: "none",
-      background: "transparent",
-      padding: "0",
-    },
-    ".cm-image-chip:hover .cm-chip-remove, .cm-file-drop-chip:hover .cm-chip-remove": {
-      opacity: "1",
-      pointerEvents: "auto",
-    },
-    ".cm-chip-remove:hover": {
-      color: "var(--theme-text-primary)",
-      background: "color-mix(in oklab, var(--theme-text-primary) 10%, transparent)",
-    },
-    ".cm-diff-chip": {
-      display: "inline-flex",
-      alignItems: "center",
-      height: "20px",
-      verticalAlign: "bottom",
-      whiteSpace: "nowrap",
-      gap: "4px",
-      padding: "0 5px",
-      color: "var(--theme-accent-primary)",
-      fontWeight: 600,
-      background: "color-mix(in oklab, var(--theme-syntax-chip) 10%, transparent)",
-      borderRadius: "3px",
-    },
-    ".cm-diff-chip svg": {
-      height: "14px",
-      width: "14px",
-      flexShrink: "0",
-    },
-    ".cm-terminal-chip": {
-      display: "inline-flex",
-      alignItems: "center",
-      height: "20px",
-      verticalAlign: "bottom",
-      whiteSpace: "nowrap",
-      gap: "4px",
-      padding: "0 5px",
-      color: "var(--theme-accent-primary)",
-      fontWeight: 600,
-      background: "color-mix(in oklab, var(--theme-syntax-chip) 10%, transparent)",
-      borderRadius: "3px",
-    },
-    ".cm-terminal-chip svg": {
-      height: "14px",
-      width: "14px",
-      flexShrink: "0",
-    },
-    ".cm-selection-chip": {
-      display: "inline-flex",
-      alignItems: "center",
-      height: "20px",
-      verticalAlign: "bottom",
-      whiteSpace: "nowrap",
-      gap: "4px",
-      padding: "0 5px",
-      color: "var(--theme-accent-primary)",
-      fontWeight: 600,
-      background: "color-mix(in oklab, var(--theme-syntax-chip) 10%, transparent)",
-      borderRadius: "3px",
-    },
-    ".cm-selection-chip svg": {
-      height: "14px",
-      width: "14px",
-      flexShrink: "0",
-    },
-    ".cm-voice-interim": {
-      opacity: "0.55",
-      fontStyle: "italic",
-      transition: "opacity 150ms ease-out",
-    },
-    ".cm-voice-pending-ai": {
-      textDecorationLine: "underline",
-      textDecorationStyle: "dotted",
-      textDecorationColor: "color-mix(in oklab, var(--theme-terminal-green) 82%, transparent)",
-      textDecorationThickness: "2px",
-      textUnderlineOffset: "3px",
-      transition: "text-decoration-color 150ms ease-out",
-    },
-  },
-  { dark: true }
-);
+    { dark: true }
+  );
+}
 
 const interimMark = Decoration.mark({ class: "cm-voice-interim" });
 

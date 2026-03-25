@@ -1,3 +1,4 @@
+import type { ITheme } from "@xterm/xterm";
 import {
   BUILT_IN_APP_SCHEMES,
   DEFAULT_APP_SCHEME_ID,
@@ -17,6 +18,28 @@ export const CANOPY_TERMINAL_THEME = getTerminalThemeFromAppScheme(DEFAULT_APP_S
  * Background colors for TUI applications are still handled dynamically by xterm.js.
  * This function only returns the base app-aligned terminal palette.
  */
+export interface InputBarColors {
+  accent: string;
+  foreground: string;
+  background: string;
+  selectionBg: string;
+  chipColor: string;
+  errorColor: string;
+  successColor: string;
+}
+
+export function resolveInputBarColors(theme: ITheme): InputBarColors {
+  return {
+    accent: theme.cursor ?? theme.blue ?? "#58a6ff",
+    foreground: theme.foreground ?? "#cccccc",
+    background: theme.background ?? "#1e1e1e",
+    selectionBg: theme.selectionBackground ?? theme.cursor ?? "#264f78",
+    chipColor: theme.cyan ?? theme.brightCyan ?? theme.cursor ?? "#58a6ff",
+    errorColor: theme.red ?? "#f44747",
+    successColor: theme.green ?? "#89d185",
+  };
+}
+
 export function getTerminalThemeFromCSS(): typeof CANOPY_TERMINAL_THEME {
   if (typeof document === "undefined") {
     return { ...CANOPY_TERMINAL_THEME };
