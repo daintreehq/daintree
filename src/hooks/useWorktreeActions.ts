@@ -30,7 +30,7 @@ export async function copyContextWithFeedback(
     type: "info",
     message: options?.modified ? "Copying modified files…" : "Copying context…",
     priority: "high",
-    duration: 15000,
+    duration: 0,
   });
 
   try {
@@ -49,6 +49,7 @@ export async function copyContextWithFeedback(
         type: "info",
         message: "No files to copy",
         duration: 3000,
+        dismissed: false,
       });
       return;
     }
@@ -63,6 +64,7 @@ export async function copyContextWithFeedback(
       type: "success",
       message: formatCopyResultMessage(payload),
       duration: 3000,
+      dismissed: false,
     });
   } catch (e) {
     const message = e instanceof Error ? e.message : "Failed to copy context to clipboard";
@@ -70,6 +72,7 @@ export async function copyContextWithFeedback(
       type: "error",
       message: `Copy context failed: ${message}`,
       duration: 5000,
+      dismissed: false,
     });
 
     let errorType: AppError["type"] = "process";
