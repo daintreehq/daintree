@@ -525,7 +525,6 @@ export function DevPreviewPane({
   useEffect(() => {
     if (isEvicted && webviewRef.current) {
       try {
-        evictingRef.current = true;
         // Save scroll position before eviction
         const wv = webviewRef.current;
         const currentWebviewUrl = wv.getURL();
@@ -551,7 +550,7 @@ export function DevPreviewPane({
         failLoadRetryRef.current = null;
       }
     }
-  }, [isEvicted, id, evictingRef]);
+  }, [isEvicted, id]);
 
   useWebviewThrottle(id, location, isEvicted ? null : webviewElement, isWebviewReady && !isEvicted);
   const { currentDialog, handleDialogRespond } = useWebviewDialog(

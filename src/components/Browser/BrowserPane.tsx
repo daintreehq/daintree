@@ -581,13 +581,12 @@ export function BrowserPane({
   useEffect(() => {
     if (isEvicted && webviewRef.current) {
       try {
-        evictingRef.current = true;
         webviewRef.current.src = "about:blank";
       } catch {
         // webview may already be detached
       }
     }
-  }, [isEvicted, evictingRef]);
+  }, [isEvicted]);
 
   useWebviewThrottle(id, location, isEvicted ? null : webviewElement, isWebviewReady && !isEvicted);
   const { currentDialog, handleDialogRespond } = useWebviewDialog(
