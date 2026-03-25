@@ -158,7 +158,7 @@ import { parseExactNumber } from "./lib/parseExactNumber";
 import type { WorktreeState, PanelKind } from "./types";
 import { actionService } from "./services/ActionService";
 import { voiceRecordingService } from "./services/VoiceRecordingService";
-import { terminalInstanceService } from "./services/terminal/terminalInstanceService";
+import { terminalInstanceService } from "./services/terminal/TerminalInstanceService";
 import { SIDEBAR_TOGGLE_LOCK_MS } from "./lib/terminalLayout";
 import { useRenderProfiler } from "./utils/renderProfiler";
 import { useWorktreeDataStore } from "./store/worktreeDataStore";
