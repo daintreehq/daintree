@@ -1,6 +1,6 @@
 import * as pty from "node-pty";
 import { getEffectiveAgentConfig } from "../../../shared/config/agentRegistry.js";
-import { filterEnvironment, injectCanopyMetadata } from "./EnvironmentFilter.js";
+import { filterEnvironment, injectCanopyMetadata, ensureUtf8Locale } from "./EnvironmentFilter.js";
 import {
   buildNonInteractiveEnv,
   AGENT_ENV_EXCLUSIONS,
@@ -80,9 +80,11 @@ export function buildTerminalEnv(
     Object.entries(agentEnv).filter(([key]) => !exclusions.has(key) && !key.startsWith("CANOPY_"))
   ) as Record<string, string>;
 
-  return isAgentTerminal
-    ? { ...buildNonInteractiveEnv(mergedEnv, shell, agentId), ...filteredAgentEnv }
-    : mergedEnv;
+  return ensureUtf8Locale(
+    isAgentTerminal
+      ? { ...buildNonInteractiveEnv(mergedEnv, shell, agentId), ...filteredAgentEnv }
+      : mergedEnv
+  );
 }
 
 export function acquirePtyProcess(

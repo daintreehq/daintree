@@ -2,7 +2,7 @@ import * as pty from "node-pty";
 import type { IDisposable } from "node-pty";
 import os from "os";
 import { getDefaultShell, getDefaultShellArgs } from "./pty/terminalShell.js";
-import { filterEnvironment } from "./pty/EnvironmentFilter.js";
+import { filterEnvironment, ensureUtf8Locale } from "./pty/EnvironmentFilter.js";
 
 export interface PtyPoolConfig {
   poolSize?: number;
@@ -235,13 +235,11 @@ export class PtyPool {
     // TUI reliability: ensure rich terminal capabilities for Claude/Gemini CLIs
     filtered.TERM = "xterm-256color";
     filtered.COLORTERM = "truecolor";
-    filtered.LANG = "en_US.UTF-8";
-    filtered.LC_ALL = "en_US.UTF-8";
 
     // Avoid tools treating the environment as CI/non-interactive
     delete filtered.CI;
 
-    return filtered;
+    return ensureUtf8Locale(filtered);
   }
 
   private resolvePoolSize(poolSize: number | undefined): number {
