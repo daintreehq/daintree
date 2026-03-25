@@ -24,6 +24,7 @@ interface ProjectGroupsState {
 }
 
 function normalizeOrder(groups: ProjectGroup[]): ProjectGroup[] {
+  if (groups.every((g, i) => g.order === i)) return groups;
   return groups.map((g, i) => (g.order === i ? g : { ...g, order: i }));
 }
 

@@ -182,6 +182,26 @@ describe("projectGroupsStore", () => {
     });
   });
 
+  describe("normalizeOrder reference stability", () => {
+    it("preserves array reference when orders are already sequential", () => {
+      useProjectGroupsStore.getState().createGroup("A");
+      useProjectGroupsStore.getState().createGroup("B");
+      const before = useProjectGroupsStore.getState().groups;
+
+      // Rename doesn't change order, so normalizeOrder is not called,
+      // but addProjectToGroup does call normalizeOrder after filtering
+      const idA = before[0].id;
+      useProjectGroupsStore.getState().addProjectToGroup(idA, "project-1");
+      useProjectGroupsStore.getState().addProjectToGroup(idA, "project-2");
+
+      const after = useProjectGroupsStore.getState().groups;
+      // Orders should still be [0, 1] — groups that didn't change should keep references
+      expect(after.map((g) => g.order)).toEqual([0, 1]);
+      // The second group was not modified, so its reference should be stable
+      expect(after[1]).toBe(before[1]);
+    });
+  });
+
   describe("getGroupForProject", () => {
     it("returns the group containing the project", () => {
       const id = useProjectGroupsStore.getState().createGroup("My Group");

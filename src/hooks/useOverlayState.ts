@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect } from "react";
 import { useUIStore } from "@/store/uiStore";
 
 /**
@@ -16,24 +16,12 @@ import { useUIStore } from "@/store/uiStore";
 export function useOverlayState(isOpen: boolean): void {
   const pushOverlay = useUIStore((state) => state.pushOverlay);
   const popOverlay = useUIStore((state) => state.popOverlay);
-  const wasOpenRef = useRef(false);
 
   useEffect(() => {
-    if (isOpen && !wasOpenRef.current) {
-      pushOverlay();
-      wasOpenRef.current = true;
-    } else if (!isOpen && wasOpenRef.current) {
-      popOverlay();
-      wasOpenRef.current = false;
-    }
-  }, [isOpen, pushOverlay, popOverlay]);
-
-  // Cleanup on unmount if still open
-  useEffect(() => {
+    if (!isOpen) return;
+    pushOverlay();
     return () => {
-      if (wasOpenRef.current) {
-        popOverlay();
-      }
+      popOverlay();
     };
-  }, [popOverlay]);
+  }, [isOpen, pushOverlay, popOverlay]);
 }
