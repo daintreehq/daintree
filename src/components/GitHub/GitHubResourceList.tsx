@@ -531,10 +531,24 @@ export function GitHubResourceList({
     ]
   );
 
-  const isTokenError = error?.includes("GitHub token not configured") ?? false;
+  const isTokenRelatedError = (msg: string | null | undefined): boolean => {
+    if (!msg) return false;
+    return (
+      msg.includes("GitHub token not configured") ||
+      msg.includes("Invalid GitHub token") ||
+      msg.includes("Token lacks required permissions") ||
+      msg.includes("SSO authorization required")
+    );
+  };
+
+  const isTokenError = isTokenRelatedError(error);
 
   const handleOpenGitHubSettings = () => {
-    void actionService.dispatch("app.settings.openTab", { tab: "github" }, { source: "user" });
+    void actionService.dispatch(
+      "app.settings.openTab",
+      { tab: "github", sectionId: "github-token" },
+      { source: "user" }
+    );
     onClose?.();
   };
 
@@ -827,7 +841,7 @@ export function GitHubResourceList({
                     <p className="text-xs text-muted-foreground">
                       {sanitizeIpcError(loadMoreError)}
                     </p>
-                    {loadMoreError.includes("GitHub token not configured") ? (
+                    {isTokenRelatedError(loadMoreError) ? (
                       <Button
                         variant="ghost"
                         size="sm"
