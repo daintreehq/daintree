@@ -132,9 +132,22 @@ export function GeneralTab({
   }, []);
 
   useEffect(() => {
-    Promise.all([
-      actionService.dispatch("cliAvailability.get", undefined, { source: "user" }),
-      actionService.dispatch("agentSettings.get", undefined, { source: "user" }),
+    const STATUS_TIMEOUT_MS = 15_000;
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
+
+    const timeout = new Promise<never>((_resolve, reject) => {
+      timeoutId = setTimeout(
+        () => reject(new Error("Agent status check timed out")),
+        STATUS_TIMEOUT_MS
+      );
+    });
+
+    Promise.race([
+      Promise.all([
+        actionService.dispatch("cliAvailability.get", undefined, { source: "user" }),
+        actionService.dispatch("agentSettings.get", undefined, { source: "user" }),
+      ]),
+      timeout,
     ])
       .then(([availabilityResult, settingsResult]) => {
         if (!isMountedRef.current) return;
@@ -152,7 +165,12 @@ export function GeneralTab({
         if (!isMountedRef.current) return;
         console.error("[GeneralTab] Failed to load agent availability:", error);
         setCliCheckFailed(true);
-      });
+      })
+      .finally(() => clearTimeout(timeoutId));
+
+    return () => {
+      clearTimeout(timeoutId);
+    };
   }, []);
 
   useEffect(() => {

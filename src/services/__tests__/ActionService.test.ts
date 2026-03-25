@@ -320,6 +320,53 @@ describe("ActionService", () => {
     });
   });
 
+  describe("dispatch resilience", () => {
+    it("should complete dispatch even when events.emit never resolves", async () => {
+      const originalElectron = (globalThis as Record<string, unknown>).window;
+      // Simulate window.electron.events.emit that never resolves
+      Object.defineProperty(globalThis, "window", {
+        value: {
+          ...globalThis.window,
+          electron: {
+            events: {
+              emit: () => new Promise<void>(() => {}), // never resolves
+            },
+          },
+        },
+        writable: true,
+        configurable: true,
+      });
+
+      const mockRun = vi.fn().mockResolvedValue("done");
+      const action: ActionDefinition<void, string> = {
+        id: "actions.list" as ActionId,
+        title: "Test",
+        description: "Test action",
+        category: "test",
+        kind: "command",
+        danger: "safe",
+        scope: "renderer",
+        run: mockRun,
+      };
+
+      service.register(action);
+      const result = await service.dispatch("actions.list");
+
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.result).toBe("done");
+      }
+      expect(mockRun).toHaveBeenCalled();
+
+      // Restore
+      Object.defineProperty(globalThis, "window", {
+        value: originalElectron,
+        writable: true,
+        configurable: true,
+      });
+    });
+  });
+
   describe("shortcut hints", () => {
     const {
       mockShow,
