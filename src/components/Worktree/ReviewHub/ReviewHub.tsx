@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useEffectEvent, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { StagingStatus, GitStatus } from "@shared/types";
 import type { CrossWorktreeFile } from "@shared/types/ipc/git";
@@ -324,32 +324,31 @@ export function ReviewHub({ isOpen, worktreePath, onClose }: ReviewHubProps) {
     [baseBranchFiles, baseBranchLoading, fetchBaseBranch]
   );
 
-  const handleKeyDown = useCallback(
-    (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        e.preventDefault();
-        e.stopPropagation();
-        if (selectedFile) {
-          setSelectedFile(null);
-        } else if (selectedBaseBranchFile) {
-          setSelectedBaseBranchFile(null);
-        } else {
-          onClose();
-        }
+  const handleKeyDown = useEffectEvent((e: KeyboardEvent) => {
+    if (e.key === "Escape") {
+      e.preventDefault();
+      e.stopPropagation();
+      if (selectedFile) {
+        setSelectedFile(null);
+      } else if (selectedBaseBranchFile) {
+        setSelectedBaseBranchFile(null);
+      } else {
+        onClose();
       }
-    },
-    [onClose, selectedFile, selectedBaseBranchFile]
-  );
+    }
+  });
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const timeoutId = setTimeout(() => closeButtonRef.current?.focus(), 50);
+    return () => clearTimeout(timeoutId);
+  }, [isOpen]);
 
   useEffect(() => {
     if (!isOpen) return;
     document.addEventListener("keydown", handleKeyDown, { capture: true });
-    const timeoutId = setTimeout(() => closeButtonRef.current?.focus(), 50);
-    return () => {
-      document.removeEventListener("keydown", handleKeyDown, { capture: true });
-      clearTimeout(timeoutId);
-    };
-  }, [isOpen, handleKeyDown]);
+    return () => document.removeEventListener("keydown", handleKeyDown, { capture: true });
+  }, [isOpen]);
 
   const handleBackdropClick = useCallback(
     (e: React.MouseEvent) => {

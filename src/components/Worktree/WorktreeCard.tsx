@@ -320,6 +320,9 @@ export const WorktreeCard = React.memo(function WorktreeCard({
   const [showReviewHub, setShowReviewHub] = useState(false);
   const [showPlanViewer, setShowPlanViewer] = useState(false);
 
+  const onCloseReviewHub = useCallback(() => setShowReviewHub(false), []);
+  const onClosePlanViewer = useCallback(() => setShowPlanViewer(false), []);
+
   const handleAttachIssue = useCallback(
     async (issue: GitHubIssue) => {
       await worktreeClient.attachIssue({
@@ -722,9 +725,9 @@ export const WorktreeCard = React.memo(function WorktreeCard({
             onAttachIssue={(issue) => void handleAttachIssue(issue)}
             onDetachIssue={() => void handleDetachIssue()}
             showReviewHub={showReviewHub}
-            onCloseReviewHub={() => setShowReviewHub(false)}
+            onCloseReviewHub={onCloseReviewHub}
             showPlanViewer={showPlanViewer}
-            onClosePlanViewer={() => setShowPlanViewer(false)}
+            onClosePlanViewer={onClosePlanViewer}
           />
         </div>
       </div>
