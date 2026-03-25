@@ -31,6 +31,8 @@ import {
   Bell,
   LayoutGrid,
   Signal,
+  Ellipsis,
+  GitBranch,
 } from "lucide-react";
 import { CopyTreeIcon } from "@/components/icons";
 import { cn } from "@/lib/utils";
@@ -51,6 +53,14 @@ import { AgentButton } from "./AgentButton";
 import { AgentSetupButton } from "./AgentSetupButton";
 import { GitHubStatusIndicator, type GitHubStatusIndicatorStatus } from "./GitHubStatusIndicator";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { useToolbarOverflow } from "@/hooks/useToolbarOverflow";
 import { useWorktreeActions } from "@/hooks/useWorktreeActions";
 import { useProjectSettings, useKeybindingDisplay } from "@/hooks";
 import type { UseProjectSwitcherPaletteReturn } from "@/hooks";
@@ -87,6 +97,26 @@ const AGENT_TOOLBAR_IDS = new Set<ToolbarButtonId>([
   "agent-setup",
   ...(BUILT_IN_AGENT_IDS as unknown as ToolbarButtonId[]),
 ]);
+
+const OVERFLOW_MENU_META: Partial<
+  Record<ToolbarButtonId, { label: string; icon: React.ComponentType<{ className?: string }> }>
+> = {
+  claude: { label: "Claude", icon: SquareTerminal },
+  gemini: { label: "Gemini", icon: SquareTerminal },
+  codex: { label: "Codex", icon: SquareTerminal },
+  opencode: { label: "OpenCode", icon: SquareTerminal },
+  cursor: { label: "Cursor", icon: SquareTerminal },
+  terminal: { label: "Terminal", icon: SquareTerminal },
+  browser: { label: "Browser", icon: Globe },
+  "dev-server": { label: "Dev Server", icon: Monitor },
+  "panel-palette": { label: "Panel Palette", icon: LayoutGrid },
+  "github-stats": { label: "GitHub Stats", icon: GitPullRequest },
+  "notification-center": { label: "Notifications", icon: Bell },
+  notes: { label: "Notes", icon: Leaf },
+  "copy-tree": { label: "Copy Context", icon: CopyTreeIcon },
+  settings: { label: "Settings", icon: SlidersHorizontal },
+  problems: { label: "Problems", icon: AlertCircle },
+};
 
 interface ToolbarProps {
   onLaunchAgent: (type: string) => void;
@@ -195,6 +225,8 @@ export function Toolbar({
   const [statsJustUpdated, setStatsJustUpdated] = useState(false);
   const prevLastUpdatedRef = useRef<number | null>(null);
   const toolbarRef = useRef<HTMLDivElement>(null);
+  const leftGroupRef = useRef<HTMLDivElement>(null);
+  const rightGroupRef = useRef<HTMLDivElement>(null);
   const activeToolbarIndexRef = useRef<number>(0);
 
   const { handleCopyTree } = useWorktreeActions();
@@ -345,7 +377,7 @@ export function Toolbar({
       toolbarRef.current
         ? Array.from(
             toolbarRef.current.querySelectorAll<HTMLElement>("[data-toolbar-item]:not(:disabled)")
-          )
+          ).filter((el) => el.offsetParent !== null)
         : [],
     []
   );
@@ -1140,27 +1172,193 @@ export function Toolbar({
     ]
   );
 
-  const renderButtons = (buttonIds: ToolbarButtonId[]) => {
+  const availableLeftIds = useMemo(
+    () => toolbarLayout.leftButtons.filter((id) => buttonRegistry[id]?.isAvailable),
+    [toolbarLayout.leftButtons, buttonRegistry]
+  );
+
+  const availableRightIds = useMemo(
+    () => toolbarLayout.rightButtons.filter((id) => buttonRegistry[id]?.isAvailable),
+    [toolbarLayout.rightButtons, buttonRegistry]
+  );
+
+  const { leftVisible, leftOverflow, rightVisible, rightOverflow } = useToolbarOverflow(
+    leftGroupRef,
+    rightGroupRef,
+    availableLeftIds,
+    availableRightIds
+  );
+
+  const leftVisibleSet = useMemo(() => new Set(leftVisible), [leftVisible]);
+  const rightVisibleSet = useMemo(() => new Set(rightVisible), [rightVisible]);
+
+  // Close open dropdowns when their buttons move into overflow
+  useEffect(() => {
+    const overflowSet = new Set([...leftOverflow, ...rightOverflow]);
+    if (overflowSet.has("github-stats")) {
+      setIssuesOpen(false);
+      setPrsOpen(false);
+      setCommitsOpen(false);
+    }
+    if (overflowSet.has("notification-center")) {
+      closeNotificationCenter();
+    }
+    if (overflowSet.has("dev-server")) {
+      setDetectedServersOpen(false);
+    }
+  }, [leftOverflow, rightOverflow, closeNotificationCenter]);
+
+  const renderButtons = (buttonIds: ToolbarButtonId[], visibleSet: Set<ToolbarButtonId>) => {
     return buttonIds
       .filter((id) => buttonRegistry[id]?.isAvailable)
-      .map((id) => buttonRegistry[id].render());
+      .map((id) => (
+        <div
+          key={id}
+          data-toolbar-button-id={id}
+          className={visibleSet.has(id) ? undefined : "invisible absolute pointer-events-none"}
+          aria-hidden={visibleSet.has(id) ? undefined : true}
+        >
+          {buttonRegistry[id].render()}
+        </div>
+      ));
   };
 
-  const renderLeftButtons = (buttonIds: ToolbarButtonId[]) => {
-    const visible = buttonIds.filter((id) => buttonRegistry[id]?.isAvailable);
+  const renderLeftButtons = (buttonIds: ToolbarButtonId[], visibleSet: Set<ToolbarButtonId>) => {
+    const available = buttonIds.filter((id) => buttonRegistry[id]?.isAvailable);
+    const visible = available.filter((id) => visibleSet.has(id));
     const elements: React.ReactNode[] = [];
-    for (let i = 0; i < visible.length; i++) {
-      elements.push(buttonRegistry[visible[i]].render());
-      if (
-        i < visible.length - 1 &&
-        AGENT_TOOLBAR_IDS.has(visible[i]) !== AGENT_TOOLBAR_IDS.has(visible[i + 1])
-      ) {
-        elements.push(
-          <div key={`group-divider-${i}`} className={toolbarDividerClass} aria-hidden="true" />
-        );
+
+    // Render all available items (visible + hidden for measurement)
+    for (const id of available) {
+      const isVisible = visibleSet.has(id);
+      elements.push(
+        <div
+          key={id}
+          data-toolbar-button-id={id}
+          className={isVisible ? undefined : "invisible absolute pointer-events-none"}
+          aria-hidden={isVisible ? undefined : true}
+        >
+          {buttonRegistry[id].render()}
+        </div>
+      );
+    }
+
+    // Insert group dividers between agent and non-agent visible items
+    const withDividers: React.ReactNode[] = [];
+    let visibleIdx = 0;
+    for (const el of elements) {
+      withDividers.push(el);
+      const key = (el as React.ReactElement).key as string;
+      if (visibleSet.has(key as ToolbarButtonId)) {
+        if (
+          visibleIdx < visible.length - 1 &&
+          AGENT_TOOLBAR_IDS.has(visible[visibleIdx]) !==
+            AGENT_TOOLBAR_IDS.has(visible[visibleIdx + 1])
+        ) {
+          withDividers.push(
+            <div
+              key={`group-divider-${visibleIdx}`}
+              className={toolbarDividerClass}
+              aria-hidden="true"
+            />
+          );
+        }
+        visibleIdx++;
       }
     }
-    return elements;
+    return withDividers;
+  };
+
+  const overflowActions = useMemo<Partial<Record<ToolbarButtonId, () => void>>>(
+    () => ({
+      claude: () => onLaunchAgent("claude"),
+      gemini: () => onLaunchAgent("gemini"),
+      codex: () => onLaunchAgent("codex"),
+      opencode: () => onLaunchAgent("opencode"),
+      cursor: () => onLaunchAgent("cursor"),
+      terminal: () => onLaunchAgent("terminal"),
+      browser: () => onLaunchAgent("browser"),
+      "dev-server": () => {
+        void actionService.dispatch("devServer.start", undefined, { source: "user" });
+      },
+      "panel-palette": handleTogglePanelPalette,
+      "notification-center": toggleNotificationCenter,
+      notes: () => {
+        void actionService.dispatch("notes.create", {}, { source: "user" });
+      },
+      "copy-tree": () => {
+        void handleCopyTreeClick();
+      },
+      settings: onSettings,
+      problems: onToggleProblems,
+    }),
+    [
+      onLaunchAgent,
+      handleTogglePanelPalette,
+      toggleNotificationCenter,
+      handleCopyTreeClick,
+      onSettings,
+      onToggleProblems,
+    ]
+  );
+
+  const renderOverflowMenu = (overflowIds: ToolbarButtonId[], side: "left" | "right") => {
+    if (overflowIds.length === 0) return null;
+    return (
+      <DropdownMenu>
+        <TooltipProvider>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  data-toolbar-item=""
+                  className={toolbarIconButtonClass}
+                  aria-label={`${overflowIds.length} more toolbar items`}
+                >
+                  <Ellipsis />
+                </Button>
+              </DropdownMenuTrigger>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">More items</TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
+        <DropdownMenuContent align={side === "left" ? "start" : "end"} sideOffset={4}>
+          {overflowIds.flatMap((id, idx) => {
+            if (id === "github-stats") {
+              const items = [
+                <DropdownMenuItem key="gh-issues" onClick={() => setIssuesOpen((p) => !p)}>
+                  <CircleDot className="mr-2 h-4 w-4 text-github-open" />
+                  Issues {stats?.issueCount != null ? `(${stats.issueCount})` : ""}
+                </DropdownMenuItem>,
+                <DropdownMenuItem key="gh-prs" onClick={() => setPrsOpen((p) => !p)}>
+                  <GitPullRequest className="mr-2 h-4 w-4 text-github-merged" />
+                  Pull Requests {stats?.prCount != null ? `(${stats.prCount})` : ""}
+                </DropdownMenuItem>,
+                <DropdownMenuItem key="gh-commits" onClick={() => setCommitsOpen((p) => !p)}>
+                  <GitCommit className="mr-2 h-4 w-4" />
+                  Commits {stats?.commitCount != null ? `(${stats.commitCount})` : ""}
+                </DropdownMenuItem>,
+              ];
+              if (idx < overflowIds.length - 1) {
+                items.push(<DropdownMenuSeparator key="gh-sep" />);
+              }
+              return items;
+            }
+            const meta = OVERFLOW_MENU_META[id];
+            if (!meta) return [];
+            const Icon = meta.icon;
+            return [
+              <DropdownMenuItem key={id} onClick={() => overflowActions[id]?.()}>
+                <Icon className="mr-2 h-4 w-4" />
+                {meta.label}
+              </DropdownMenuItem>,
+            ];
+          })}
+        </DropdownMenuContent>
+      </DropdownMenu>
+    );
   };
 
   const isDropdownOpen = projectSwitcher.isOpen && projectSwitcher.mode === "dropdown";
@@ -1177,7 +1375,7 @@ export function Toolbar({
         aria-label="Main toolbar"
         onKeyDown={handleToolbarKeyDown}
         onFocusCapture={handleToolbarFocusCapture}
-        className="relative grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] h-12 items-center px-4 pt-1 shrink-0 app-drag-region surface-toolbar border-b border-divider"
+        className="@container/toolbar relative grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] h-12 items-center px-4 pt-1 shrink-0 app-drag-region surface-toolbar border-b border-divider"
       >
         {!isLinux() && <div className="window-resize-strip" />}
 
@@ -1199,9 +1397,10 @@ export function Toolbar({
 
           <div className={toolbarDividerClass} />
 
-          <div className="flex items-center gap-0.5">
-            {renderLeftButtons(toolbarLayout.leftButtons)}
+          <div ref={leftGroupRef} className="flex items-center gap-0.5 overflow-hidden">
+            {renderLeftButtons(toolbarLayout.leftButtons, leftVisibleSet)}
           </div>
+          {renderOverflowMenu(leftOverflow, "left")}
         </div>
 
         {/* CENTER GROUP - Grid-centered, shrinks gracefully on narrow windows */}
@@ -1248,10 +1447,11 @@ export function Toolbar({
                   </span>
                   {branchName && (
                     <span
-                      className="toolbar-project-chip shrink-0 rounded-full border px-1.5 py-0.5 font-mono tabular-nums"
+                      className="toolbar-project-chip shrink-0 inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 font-mono tabular-nums"
                       aria-label={`Current branch ${branchName}`}
                     >
-                      {branchName}
+                      <GitBranch className="toolbar-project-chip-icon h-3 w-3 shrink-0" />
+                      <span className="toolbar-project-chip-label">{branchName}</span>
                     </span>
                   )}
                   <ChevronsUpDown className="toolbar-project-meta ml-0.5 h-3 w-3 shrink-0" />
@@ -1277,8 +1477,10 @@ export function Toolbar({
           aria-label="Tools and settings"
           className="flex items-center gap-1.5 app-no-drag z-20 justify-self-end"
         >
-          <div className="flex items-center gap-0.5">
-            {renderButtons(toolbarLayout.rightButtons)}
+          {renderOverflowMenu(rightOverflow, "right")}
+
+          <div ref={rightGroupRef} className="flex items-center gap-0.5 overflow-hidden">
+            {renderButtons(toolbarLayout.rightButtons, rightVisibleSet)}
           </div>
 
           <div className={toolbarDividerClass} />

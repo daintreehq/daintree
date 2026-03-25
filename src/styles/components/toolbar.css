@@ -83,3 +83,9 @@
 .toolbar-project-meta {
   color: var(--toolbar-project-meta-fg, var(--theme-text-secondary));
 }
+
+@container toolbar (max-width: 700px) {
+  .toolbar-project-chip-label {
+    display: none;
+  }
+}
