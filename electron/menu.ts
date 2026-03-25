@@ -320,13 +320,13 @@ export async function handleDirectoryOpen(
   if (mainWindow.isDestroyed()) return;
 
   try {
-    const project = await projectStore.addProject(directoryPath);
-
     const switchService = getProjectSwitchServiceRef();
     if (!switchService) {
       console.error("[menu] ProjectSwitchService not available yet, cannot switch project");
       return;
     }
+
+    const project = await projectStore.addProject(directoryPath);
     await switchService.switchProject(project.id);
 
     createApplicationMenu(mainWindow, cliAvailabilityService);

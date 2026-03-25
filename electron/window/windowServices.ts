@@ -733,6 +733,8 @@ export async function setupWindowServices(
     disposeAgentAvailabilityStore();
     disposeWorkflowEngine();
 
+    projectSwitchService = null;
+
     if (ptyClient) ptyClient.dispose();
     ptyClient = null;
     disposePtyClient();
