@@ -206,7 +206,6 @@ function PanelHeaderComponent({
   const duplicateShortcut = useKeybindingDisplay("terminal.duplicate");
   const moveToDockShortcut = useKeybindingDisplay("terminal.moveToDock");
   const toggleDockShortcut = useKeybindingDisplay("terminal.toggleDock");
-  const moveToGridShortcut = useKeybindingDisplay("terminal.moveToGrid");
   const maximizeShortcut = useKeybindingDisplay("terminal.maximize");
   const closeShortcut = useKeybindingDisplay("terminal.close");
 
@@ -219,7 +218,6 @@ function PanelHeaderComponent({
 
   // Whether the overflow "..." menu has any items to show
   const showMoveToDock = !!onMinimize && !isMaximized && location !== "dock";
-  const showCollapseToDock = !!onMinimize && location === "dock";
   const hasOverflowItems = true;
 
   // Restart handler for Radix DropdownMenu onSelect
@@ -757,6 +755,12 @@ function PanelHeaderComponent({
 
                 {/* Management group */}
                 {canRestart && onRestart && <DropdownMenuSeparator />}
+                {location === "dock" && onRestore && (
+                  <DropdownMenuItem onSelect={() => onRestore()}>
+                    <MoveToGridIcon className="w-3 h-3 mr-2" aria-hidden="true" />
+                    Restore to Grid
+                  </DropdownMenuItem>
+                )}
                 <DropdownMenuItem
                   onSelect={() =>
                     void actionService.dispatch(
@@ -873,15 +877,15 @@ function PanelHeaderComponent({
           </TooltipProvider>
         )}
 
-        {/* Collapse to Dock — visible when panel is expanded from dock */}
-        {showCollapseToDock && (
+        {/* Middle control: Collapse-to-Dock / Maximize / Exit Focus */}
+        {location === "dock" && onMinimize ? (
           <TooltipProvider>
             <Tooltip>
               <TooltipTrigger asChild>
                 <button
                   onClick={(e) => {
                     e.stopPropagation();
-                    onMinimize!();
+                    onMinimize();
                   }}
                   onPointerDown={(e) => e.stopPropagation()}
                   className="p-1.5 hover:bg-canopy-text/10 focus-visible:bg-canopy-text/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2 text-canopy-text/60 hover:text-canopy-text transition-colors"
@@ -893,31 +897,6 @@ function PanelHeaderComponent({
               </TooltipTrigger>
               <TooltipContent side="bottom">
                 {createTooltipWithShortcut("Collapse to Dock", toggleDockShortcut)}
-              </TooltipContent>
-            </Tooltip>
-          </TooltipProvider>
-        )}
-
-        {/* Middle control: Maximize / Exit Focus / Restore-to-Grid */}
-        {location === "dock" && onRestore ? (
-          <TooltipProvider>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onRestore();
-                  }}
-                  onPointerDown={(e) => e.stopPropagation()}
-                  className="p-1.5 hover:bg-canopy-text/10 focus-visible:bg-canopy-text/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2 text-canopy-text/60 hover:text-canopy-text transition-colors"
-                  aria-label="Restore to Grid"
-                >
-                  <MoveToGridIcon className="w-3 h-3" />
-                </button>
-              </TooltipTrigger>
-              <TooltipContent side="bottom">
-                {createTooltipWithShortcut("Restore to Grid", moveToGridShortcut) +
-                  " · double-click header"}
               </TooltipContent>
             </Tooltip>
           </TooltipProvider>

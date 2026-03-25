@@ -343,18 +343,11 @@ describe("PanelHeader", () => {
     });
   });
 
-  describe("Restore to Grid casing", () => {
-    it("renders with Title Case 'Restore to Grid' and double-click hint", () => {
+  describe("Restore to Grid in overflow menu", () => {
+    it("renders 'Restore to Grid' menu item when docked with onRestore", () => {
       render(<PanelHeader {...makeProps({ location: "dock", onRestore: vi.fn() })} />);
-      const btn = screen.getByLabelText("Restore to Grid");
-      expect(btn).toBeDefined();
-      const tooltips = screen.getAllByTestId("tooltip-content");
-      const restoreTooltip = tooltips.find(
-        (el) =>
-          el.textContent?.includes("Restore to Grid") &&
-          el.textContent?.includes("double-click header")
-      );
-      expect(restoreTooltip).toBeDefined();
+      const menuItem = screen.getByText("Restore to Grid");
+      expect(menuItem).toBeDefined();
     });
   });
 
