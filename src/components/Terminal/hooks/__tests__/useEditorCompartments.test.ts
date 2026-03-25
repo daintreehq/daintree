@@ -5,10 +5,10 @@ import { Compartment } from "@codemirror/state";
 import { useEditorCompartments } from "../useEditorCompartments";
 
 describe("useEditorCompartments", () => {
-  it("returns 12 compartment refs", () => {
+  it("returns 13 compartment refs", () => {
     const { result } = renderHook(() => useEditorCompartments());
     const keys = Object.keys(result.current);
-    expect(keys).toHaveLength(12);
+    expect(keys).toHaveLength(13);
     for (const key of keys) {
       const ref = result.current[key as keyof typeof result.current];
       expect(ref.current).toBeInstanceOf(Compartment);

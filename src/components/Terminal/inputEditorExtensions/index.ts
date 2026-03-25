@@ -1,5 +1,5 @@
 export {
-  inputTheme,
+  buildInputBarTheme,
   setInterimRange,
   interimMarkField,
   setPendingAIRanges,
