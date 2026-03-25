@@ -20,6 +20,8 @@ import { useScreenReaderStore } from "@/store/screenReaderStore";
 import { useTerminalColorSchemeStore } from "@/store/terminalColorSchemeStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useLayoutConfigStore } from "@/store/layoutConfigStore";
+import { usePanelLimitStore, evaluatePanelLimit } from "@/store/panelLimitStore";
+import { useNotificationStore } from "@/store/notificationStore";
 import { saveTerminals, saveTabGroups } from "./persistence";
 import { optimizeForDock } from "./layout";
 import {
@@ -67,6 +69,55 @@ export const createCorePanelActions = (
   | "toggleTerminalLocation"
 > => ({
   addTerminal: async (options) => {
+    // Panel limit enforcement (Tier 2: confirmation, Tier 3: hard block)
+    if (!options.bypassLimits) {
+      const { softWarningLimit, confirmationLimit, hardLimit, requestConfirmation } =
+        usePanelLimitStore.getState();
+      const globalCount = get().terminals.filter((t) => t.location !== "trash").length;
+      const tier = evaluatePanelLimit(globalCount, {
+        softWarningLimit,
+        confirmationLimit,
+        hardLimit,
+      });
+
+      if (tier === "hard") {
+        useNotificationStore.getState().addNotification({
+          type: "warning",
+          priority: "high",
+          title: "Panel limit reached",
+          message: `Maximum of ${hardLimit} panels reached. Close some panels before adding new ones.`,
+          duration: 5000,
+        });
+        return null;
+      }
+
+      if (tier === "confirm") {
+        let memoryMB: number | null = null;
+        try {
+          const metrics = await import("@/clients").then((m) => m.systemClient.getAppMetrics());
+          memoryMB = metrics.totalMemoryMB;
+        } catch {
+          // Memory info unavailable
+        }
+
+        const confirmed = await requestConfirmation(globalCount, memoryMB);
+        if (!confirmed) return null;
+
+        // Re-check count after confirmation in case panels were closed during the dialog
+        const postConfirmCount = get().terminals.filter((t) => t.location !== "trash").length;
+        if (postConfirmCount >= hardLimit) {
+          useNotificationStore.getState().addNotification({
+            type: "warning",
+            priority: "high",
+            title: "Panel limit reached",
+            message: `Maximum of ${hardLimit} panels reached. Close some panels before adding new ones.`,
+            duration: 5000,
+          });
+          return null;
+        }
+      }
+    }
+
     const requestedKind = options.kind ?? (options.agentId ? "agent" : "terminal");
     const legacyType = options.type || "terminal";
 

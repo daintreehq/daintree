@@ -47,7 +47,8 @@ export function useProjectSwitchRehydration() {
       const { hydrateActionMru } = useActionMruStore.getState();
 
       const callbacks: HydrationOptions = {
-        addTerminal: addTerminal as HydrationOptions["addTerminal"],
+        addTerminal: ((opts: Parameters<typeof addTerminal>[0]) =>
+          addTerminal({ ...opts, bypassLimits: true })) as HydrationOptions["addTerminal"],
         setActiveWorktree,
         loadRecipes,
         openDiagnosticsDock,

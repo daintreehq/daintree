@@ -101,6 +101,7 @@ import { SendToAgentPalette } from "./components/Terminal/SendToAgentPalette";
 import { useSendToAgentPalette } from "./hooks/useSendToAgentPalette";
 import { BulkCommandPalette } from "./components/BulkCommandCenter";
 import { ConfirmDialog } from "./components/ui/ConfirmDialog";
+import { PanelLimitConfirmDialog } from "./components/Terminal/PanelLimitConfirmDialog";
 import { RecipeEditor } from "./components/TerminalRecipe/RecipeEditor";
 import { NotesPalette } from "./components/Notes";
 import { WorkflowSection } from "./components/Workflow";
@@ -1608,6 +1609,7 @@ function App() {
       />
 
       <PanelTransitionOverlay />
+      <PanelLimitConfirmDialog />
 
       <Toaster />
       <ShortcutHint />

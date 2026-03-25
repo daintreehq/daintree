@@ -83,6 +83,8 @@ export interface AddTerminalOptions {
   spawnedBy?: TerminalSpawnSource;
   /** Bypass rate limiter during session restore (consumes main-process quota) */
   restore?: boolean;
+  /** Bypass panel limit checks (used during hydration/state restoration) */
+  bypassLimits?: boolean;
   // Note: Tab membership is now managed via createTabGroup/addPanelToGroup, not on terminals
 }
 
@@ -115,7 +117,7 @@ export interface TerminalRegistrySlice {
   /** Explicit tab group storage - single source of truth for tab membership and order */
   tabGroups: Map<string, TabGroup>;
 
-  addTerminal: (options: AddTerminalOptions) => Promise<string>;
+  addTerminal: (options: AddTerminalOptions) => Promise<string | null>;
   removeTerminal: (id: string) => void;
   updateTitle: (id: string, newTitle: string) => void;
   updateAgentState: (

@@ -81,6 +81,7 @@ export function DockPanelOffscreenContainer({ children }: DockPanelOffscreenCont
 
         const options = await buildPanelDuplicateOptions(panel, "dock");
         const newPanelId = await addTerminal(options);
+        if (!newPanelId) return;
 
         addPanelToGroup(groupId, newPanelId);
         setActiveTab(groupId, newPanelId);

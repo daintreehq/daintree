@@ -250,6 +250,7 @@ export const GridTabGroup = React.memo(function GridTabGroup({
     try {
       const options = await buildPanelDuplicateOptions(activePanel, "grid");
       const newPanelId = await addTerminal(options);
+      if (!newPanelId) return;
 
       addPanelToGroup(group.id, newPanelId);
       setActiveTab(group.id, newPanelId);
