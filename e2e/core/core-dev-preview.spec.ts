@@ -199,8 +199,8 @@ server.listen(0, '127.0.0.1', () => {
       const devCommandInput = window.locator('[aria-label="Dev server command"]');
       await devCommandInput.fill("node dev-server.cjs");
 
-      // Save and close
-      await window.locator('button:has-text("Save Changes")').click();
+      // Close settings (auto-saves on close)
+      await window.locator('[aria-label="Close settings"]').click();
       await expect(window.locator(SEL.projectSettings.heading)).not.toBeVisible({
         timeout: T_MEDIUM,
       });

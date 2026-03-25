@@ -5,7 +5,7 @@
 export function debounce<Args extends unknown[]>(
   func: (...args: Args) => void,
   wait: number
-): ((...args: Args) => void) & { cancel: () => void; flush: () => void } {
+): ((...args: Args) => void) & { cancel: () => void; flush: () => Promise<void> } {
   let timeoutId: ReturnType<typeof setTimeout> | null = null;
   let lastArgs: Args | null = null;
 
@@ -34,15 +34,17 @@ export function debounce<Args extends unknown[]>(
     }
   };
 
-  debounced.flush = () => {
+  debounced.flush = async (): Promise<void> => {
     if (timeoutId !== null && lastArgs !== null) {
       clearTimeout(timeoutId);
       const args = lastArgs;
       timeoutId = null;
       lastArgs = null;
-      Promise.resolve()
-        .then(() => func(...args))
-        .catch((err) => console.error("Debounce flush failed:", err));
+      try {
+        await func(...args);
+      } catch (err) {
+        console.error("Debounce flush failed:", err);
+      }
     }
   };
 
