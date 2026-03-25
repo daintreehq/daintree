@@ -13,9 +13,7 @@ import type { TerminalSpawnOptions } from "../../../types/index.js";
 import { TerminalSpawnOptionsSchema } from "../../../schemas/ipc.js";
 import { getDefaultShell } from "../../../services/pty/terminalShell.js";
 
-export const SHELL_READY_TIMEOUT_MS = 3000;
 export const COMMAND_DELAY_MS = 100;
-export const AGENT_INIT_DONE_MARKER = "__CANOPY_AGENT_INIT_DONE__";
 
 export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): () => void {
   const { ptyClient } = deps;
@@ -148,11 +146,37 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
     const resolvedShell = validatedOptions.shell || projectShell;
     const resolvedArgs = projectArgs;
 
+    // For agent terminals on Unix with a command, pass it via shell -c flag
+    // instead of writing to stdin. This avoids all shell init noise (echoed
+    // commands, prompts, stty tricks) since the shell runs the command directly
+    // after sourcing rc files, with no interactive prompt.
+    const trimmedCommand = validatedOptions.command?.trim() || "";
+    const isAgent = kind === "agent" || Boolean(agentId);
+    const useShellExec = isAgent && trimmedCommand.length > 0 && process.platform !== "win32";
+
+    let spawnArgs = resolvedArgs;
+    if (useShellExec) {
+      if (trimmedCommand.includes("\n") || trimmedCommand.includes("\r")) {
+        console.error("Multi-line commands not allowed for security, ignoring");
+      } else {
+        const agentCommand = `exec ${trimmedCommand}`;
+        const shellToUse = (resolvedShell || getDefaultShell()).toLowerCase();
+        if (shellToUse.includes("zsh") || shellToUse.includes("bash")) {
+          // -l: login shell (sources .zprofile/.bash_profile)
+          // -i: interactive (sources .zshrc/.bashrc for PATH setup like nvm)
+          // -c: run command then exit (no prompt displayed)
+          spawnArgs = ["-lic", agentCommand];
+        } else {
+          spawnArgs = ["-c", agentCommand];
+        }
+      }
+    }
+
     try {
       ptyClient.spawn(id, {
         cwd,
         shell: resolvedShell,
-        args: resolvedArgs,
+        args: spawnArgs,
         cols,
         rows,
         env: validatedOptions.env,
@@ -166,16 +190,12 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
         isEphemeral: validatedOptions.isEphemeral,
       });
 
-      if (validatedOptions.command) {
-        const trimmedCommand = validatedOptions.command.trim();
-
-        if (trimmedCommand.length === 0) {
-          console.warn("Empty command provided, ignoring");
-        } else if (trimmedCommand.includes("\n") || trimmedCommand.includes("\r")) {
+      // For non-agent terminals (or Windows agent terminals), write command to stdin
+      if (trimmedCommand.length > 0 && !useShellExec) {
+        if (trimmedCommand.includes("\n") || trimmedCommand.includes("\r")) {
           console.error("Multi-line commands not allowed for security, ignoring");
         } else {
           let finalCommand = trimmedCommand;
-          const isAgent = kind === "agent" || Boolean(agentId);
           if (isAgent) {
             if (process.platform === "win32") {
               const shell = (resolvedShell || getDefaultShell()).toLowerCase();
@@ -185,83 +205,14 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
               } else {
                 finalCommand = `${trimmedCommand}; exit`;
               }
-            } else {
-              finalCommand = `exec ${trimmedCommand}`;
             }
           }
 
-          if (isAgent) {
-            // Wait for shell initialization (nvm, etc.) before injecting the agent command.
-            // On macOS, login shells re-source profiles which can take 200-500ms+ (nvm init).
-            // A fixed 100ms delay races with shell init; instead, write a sentinel echo and
-            // wait for it to appear in output — proving the shell is ready to accept commands.
-            const sentinel = `__CANOPY_READY_${id.slice(0, 8)}__`;
-            let completed = false;
-            let buffer = "";
-            // eslint-disable-next-line prefer-const -- assigned after cleanup closure is defined
-            let timerId: ReturnType<typeof setTimeout> | undefined;
-
-            const cleanup = () => {
-              if (timerId !== undefined) clearTimeout(timerId);
-              ptyClient.off("data", onData);
-              ptyClient.off("exit", onExit);
-            };
-
-            const writeCommand = () => {
-              if (completed) return;
-              completed = true;
-              cleanup();
-              if (ptyClient.hasTerminal(id)) {
-                // Emit a marker so the renderer knows init is done, then run the command.
-                // The renderer suppresses all output before the marker, then resets.
-                const sttyRestore = process.platform !== "win32" ? "stty echo; " : "";
-                ptyClient.write(
-                  id,
-                  `${sttyRestore}echo ${AGENT_INIT_DONE_MARKER}; ${finalCommand}\r`
-                );
-              }
-            };
-
-            const onData = (dataId: string, data: string | Uint8Array) => {
-              if (dataId !== id) return;
-              const text = typeof data === "string" ? data : new TextDecoder().decode(data);
-              buffer += text;
-              // Keep buffer bounded to prevent memory growth during slow shell init
-              if (buffer.length > 8192) {
-                buffer = buffer.slice(-4096);
-              }
-              if (buffer.includes(sentinel)) {
-                writeCommand();
-              }
-            };
-
-            const onExit = (exitId: string) => {
-              if (exitId !== id) return;
-              if (!completed) {
-                completed = true;
-                cleanup();
-              }
-            };
-
-            ptyClient.on("data", onData);
-            ptyClient.on("exit", onExit);
-
-            // Suppress TTY echo so the sentinel and exec commands are not displayed.
-            // stty is not available on Windows — skip echo suppression there.
-            if (process.platform !== "win32") {
-              ptyClient.write(id, `stty -echo\r`);
+          setTimeout(() => {
+            if (ptyClient.hasTerminal(id)) {
+              ptyClient.write(id, `${finalCommand}\r`);
             }
-            // Write sentinel echo — processed after shell init completes
-            ptyClient.write(id, `echo ${sentinel}\r`);
-
-            timerId = setTimeout(() => writeCommand(), SHELL_READY_TIMEOUT_MS);
-          } else {
-            setTimeout(() => {
-              if (ptyClient.hasTerminal(id)) {
-                ptyClient.write(id, `${finalCommand}\r`);
-              }
-            }, COMMAND_DELAY_MS);
-          }
+          }, COMMAND_DELAY_MS);
         }
       }
 

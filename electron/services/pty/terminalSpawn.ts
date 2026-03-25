@@ -137,7 +137,12 @@ export function acquirePtyProcess(
       }
     } else {
       try {
-        pooledPty.write(`cd "${options.cwd.replace(/"/g, '\\"')}"\r`);
+        // cd to project dir then clear the screen + scrollback so the user
+        // doesn't see the cd command or any pooled-shell init noise.
+        // \033[H  = cursor home, \033[2J = clear screen, \033[3J = clear scrollback
+        pooledPty.write(
+          `cd "${options.cwd.replace(/"/g, '\\"')}" && printf '\\033[H\\033[2J\\033[3J'\r`
+        );
       } catch (error) {
         onWriteError(error, { operation: "write(cwd)" });
       }

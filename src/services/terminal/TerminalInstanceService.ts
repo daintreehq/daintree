@@ -304,48 +304,9 @@ class TerminalInstanceService {
     this.dataBuffer.stopPolling();
   }
 
-  private static readonly AGENT_INIT_DONE_MARKER = "__CANOPY_AGENT_INIT_DONE__";
-  private agentInitBuffers = new Map<string, string>();
-
-  private handleAgentInitSuppression(
-    id: string,
-    managed: ManagedTerminal,
-    data: string | Uint8Array
-  ): boolean {
-    if (!managed.agentInitSuppressed) return false;
-
-    const text = typeof data === "string" ? data : new TextDecoder().decode(data);
-    const existing = this.agentInitBuffers.get(id) ?? "";
-    const combined = existing + text;
-    this.agentInitBuffers.set(id, combined);
-
-    // Acknowledge the bytes so the data buffer doesn't stall
-    const bytes = typeof data === "string" ? this.textEncoder.encode(data).length : data.byteLength;
-    terminalClient.acknowledgeData(id, bytes);
-    this.dataBuffer.notifyWriteComplete(id, bytes);
-
-    if (combined.includes(TerminalInstanceService.AGENT_INIT_DONE_MARKER)) {
-      this.finalizeAgentInit(id, managed);
-    }
-
-    return true;
-  }
-
-  private finalizeAgentInit(id: string, managed: ManagedTerminal): void {
-    managed.agentInitSuppressed = false;
-    if (managed.agentInitTimer) {
-      clearTimeout(managed.agentInitTimer);
-      managed.agentInitTimer = undefined;
-    }
-    this.agentInitBuffers.delete(id);
-    managed.terminal.reset();
-  }
-
   private writeToTerminal(id: string, data: string | Uint8Array): void {
     const managed = this.instances.get(id);
     if (!managed) return;
-
-    if (this.handleAgentInitSuppression(id, managed, data)) return;
 
     if (managed.isHibernated) {
       const bytes =
@@ -654,16 +615,7 @@ class TerminalInstanceService {
       isAltBuffer: false,
       altBufferListeners: new Set(),
       ipcListenerCount: listeners.length,
-      agentInitSuppressed: kind === "agent",
     };
-
-    if (managed.agentInitSuppressed) {
-      managed.agentInitTimer = setTimeout(() => {
-        if (managed.agentInitSuppressed) {
-          this.finalizeAgentInit(id, managed);
-        }
-      }, 5000);
-    }
 
     managed.parserHandler = new TerminalParserHandler(managed, () => {
       this.resizeController.applyDeferredResize(id);
@@ -1739,11 +1691,6 @@ class TerminalInstanceService {
 
     this.offscreenManager.removeOffscreenSlot(id);
     this.suppressedExitUntil.delete(id);
-    this.agentInitBuffers.delete(id);
-    if (managed?.agentInitTimer) {
-      clearTimeout(managed.agentInitTimer);
-      managed.agentInitTimer = undefined;
-    }
     this.cwdProviders.delete(id);
     this.cachedSelections.delete(id);
     this.wakeManager.clearWakeState(id);
