@@ -1,5 +1,193 @@
 # Changelog
 
+## [0.5.0] - 2026-03-26
+
+### Features
+
+**Theme System Overhaul**
+
+- 14 built-in themes with redesigned semantic token system, palette variables, and component overrides (#3992, #3993, #3994)
+- Ecosystem imagery theme picker with animated selection (#4042)
+- Bondi redesigned as premium warm light theme (#3993)
+- Recipe tokens for pulse, heatmap, settings, toolbar, sidebar, and worktree sections
+
+**Memory & Resource Management**
+
+- 3-tier progressive panel limit system to prevent grid overload (#4135)
+- Destroy hidden webviews under memory pressure (#4202)
+- Lazy-load webviews for browser and dev-preview panels (#4198)
+- Dispose xterm.js instances for background-tier terminals (#4200)
+- LRU eviction for background Portal (formerly Sidecar) tabs (#4197)
+- Per-terminal process resource monitoring with CPU and memory (#4149)
+- Replace hardcoded memory estimate with real app.getAppMetrics() (#4219)
+- Bridge PTY host ResourceGovernor signals to main process (#4203)
+- FD monitoring to detect node-pty leaks on Linux (#4180)
+- Reclaim renderer memory on minimize and memory pressure
+
+**Agent Intelligence**
+
+- Surface approval-waiting state with differentiated UI treatment (#3940)
+- Classify waiting state reason as prompt, approval, or question (#3939)
+- Universal approval prompt hint patterns for all agents (#3937)
+- Prompt lexeme fallback heuristic for generic prompt detection (#3938)
+- Two-phase directing state timeout
+- Immediately transition to working on Enter press
+
+**Bulk Operations**
+
+- Bulk command center palette for multi-worktree operations (#3956, #3958)
+- State filtering, templates, and recipe broadcasting (#3960)
+- Per-item status tracking, error display, and retry for bulk worktree creation (#3950)
+- Emergency bulk agent interrupt with sidebar button (#3955)
+
+**Terminal Improvements**
+
+- Route PTY output over direct MessagePort for lower latency
+- Synchronized output wrapping with DEC Mode 2026
+- "New output below" scroll indicator (#3815)
+- Scroll-to-last-activity action
+- Send-to-agent action for terminal selection
+- Shell init noise suppression in agent terminals (#4205)
+- Manual PTY host restart after auto-recovery exhausted
+- PTY diagnostic fields in Terminal Info dialog
+
+**Worktree UX**
+
+- Live drag-to-reorder with persistent manual sort order and DragOverlay preview
+- Collapsible worktree cards
+- Quick state filter bar with counts above worktree list (#3936, #4231)
+- Needs Attention triage section in sidebar
+- Session state indicators on collapsed cards (#3975)
+- Copy Path and Copy Context progress feedback in 3-dot menu (#4137, #4138)
+- Improved root worktree display for non-standard branches (#4055)
+
+**UI Polish**
+
+- Custom Canopy icon set replacing cube logomark with tree mark
+- Toolbar responsive design with priority-based overflow (#4133)
+- Panel tab scroll arrow buttons for overflow
+- Spring easing curves for palette and modal animations (#3818)
+- Global Escape key LIFO stack for layered UI dismissal (#3813)
+- Contextual shortcut hints replacing passive toasts
+- Actionable CTAs in palette empty states (#3814)
+- Double-click hint in maximize/restore tooltips
+- Layout undo/redo for panel drag-and-drop operations
+
+**GitHub Integration**
+
+- Issue bulk actions with multi-select and floating action bar (#3960)
+- Project health signals via GraphQL API
+- Comment count in issue and PR list items
+- Multi-number and range syntax in issue/PR search
+- Select All and Select Unassigned buttons
+- Cached issues/PRs shown instantly in toolbar dropdown
+
+**Onboarding & Welcome**
+
+- Theme selection as first onboarding step
+- Rich Welcome View replacing minimal welcome screen
+- Getting started checklist steps as clickable CTAs
+- Celebration UX when checklist completes
+- Simplified theme step to Daintree vs Bondi choice (#3996)
+
+**Other**
+
+- Global dev server detection and toolbar integration
+- Project groups in project switcher palette
+- Per-panel model selection with two-phase UI
+- Portal rename (formerly Sidecar) across codebase (#3947)
+- Auto-save project settings replacing Cancel/Save bar (#4069)
+- Master toggle to disable notifications and hide bell icon (#4085)
+- Settings tab memory within session (#4066)
+- Demo recording infrastructure with ffmpeg encoding
+- Multi-window foundation with WindowRegistry
+- Startup skeleton UI shell to eliminate blank window flash
+
+### Bug Fixes
+
+- Fix agent state falsely transitioning to working on layout shifts (#4225)
+- Fix commit textarea focus loss during re-renders (#4218)
+- Fix 'external diff died' from broken diff.external override (#4214)
+- Fix agent launch flags lost during crash recovery (#4215)
+- Fix auto-updater errors on Linux .deb installs -- missing APPIMAGE check (#4179)
+- Fix PTY pool overriding user's locale to en_US.UTF-8 (#4178)
+- Fix Windows node-pty build requiring Spectre-mitigated libraries (#4145)
+- Fix cross-platform path handling in EditorService tests (#4146)
+- Fix changed file text turning gray on sidebar hover (#4147)
+- Fix GitHub token error not linking to settings (#4148)
+- Fix truncated file names in git staging window (#4154)
+- Fix Bulk Command Center crash from maximum update depth exceeded (#4132)
+- Fix commits dropdown ignoring selected worktree branch (#4056)
+- Fix duplicate terminal tab issue (#4050)
+- Fix layout issue with maximize feature (#4049)
+- Fix Gemini CLI connection issues (#4048)
+- Fix sessionPersistTimer causing serialization error on PTY exit (#4047)
+- Fix unhandled promise rejection in PortalManager.navigate() (#4046)
+- Fix View/Diff toggle not switching to View mode (#4045)
+- Fix agent failed state unreliability -- remove failed state detection (#4043, #4037)
+- Fix main worktree cards showing branch name instead of project name (#3789)
+- Fix removeProject() orphaning PTY processes (#3788)
+- Fix worktree deletion failures (#3946)
+- Fix pasted URLs highlighted due to dual link handling (#3948)
+- Fix agent viewport intermittently jumping to top (#3949)
+- Fix URLs not clickable after WebLinksAddon removal (#3820)
+- Fix worktree card click targets making selection difficult (#3809)
+- Fix renderer cleanup gaps for inputControllers and SemanticAnalysisService (#3835)
+- Fix PTY host cleanup not releasing SharedArrayBuffer references (#3839)
+- Fix issue icon checkbox hover target (#3918)
+- Fix project keybinding broken by group add/remove (#4117)
+- Fix Daintree settings sidebar background color (#4075)
+- Fix Pulse differentiating 'no internet' from 'no GitHub remote' (#4093)
+- Fix dev preview slow start detection causing unnecessary restart (#4087)
+- Fix "Loading agent status..." in dev mode (#4083)
+- Fix bulk worktree creation running twice (#4011)
+- Fix non-user-invocable slash commands appearing in hybrid input (#4181)
+- Strip ELECTRON_RUN_AS_NODE from spawned environments (#4176)
+- Reduce 2-panel split divider width from 12px to 6px (#4086)
+- Remove Pulse current-day highlight ring, show commit count (#4082)
+- Remove empty-state recipe buttons (#4079)
+- Remove built-in Canopy commands and Agent Instructions (#4100)
+
+### Security
+
+- Harden simple-git against malicious repo config RCE
+- Harden webview CSP with form-action directive
+- Validate webContentsId ownership in CDP handlers
+- Kill entire process tree on terminal close and app quit
+- Add fetch timeouts to GitHub API and Git operations
+- Global error handlers with crash logging and relaunch
+- Unhandled promise rejection handler in renderer
+
+### Accessibility
+
+- Screen reader support for terminals
+- Forced-colors CSS and form error linking
+- axe-core coverage in E2E tests
+
+### Performance
+
+- React.lazy code splitting for heavy panel components
+- V8 bytecode caching for faster startup
+- React.memo on GridTabGroup, GridPanel, ActionPaletteItem, QuickSwitcherItem
+- useDeferredValue for worktree list, event log, and palette search
+- CSS containment on panel and terminal containers
+- Memoize worktree data, selectors, and GitService instances
+- Preserve object identity in store updates to reduce re-renders
+- Replace requestIdleCallback with scheduler.postTask
+- Event loop lag and long task monitoring
+- CI optimizations: parallel build, reduced runner costs
+
+### E2E Testing
+
+- ~50 new E2E test suites covering terminals, worktrees, panels, crash recovery, accessibility, keyboard navigation, settings, onboarding, notes, portal, drag-and-drop, context injection, and more
+- Shared focus assertion helpers and workflow step library
+- PTY stress test helper infrastructure
+- IPC fault injection infrastructure for error testing
+- Single-file E2E test trigger in CI workflow (#3917)
+- Nightly memory leak detection tests
+
+---
+
 ## [0.4.0] - 2026-03-17
 
 ### Features
