@@ -9,10 +9,11 @@ afterAll(() => {
   consoleSpy.mockRestore();
 });
 
-function createContext(platform: string, appOutDir: string, appName = "Canopy") {
+function createContext(platform: string, appOutDir: string, appName = "Canopy", arch = "x64") {
   return {
     appOutDir,
     electronPlatformName: platform,
+    arch,
     packager: { appInfo: { productFilename: appName } },
   };
 }
@@ -159,6 +160,16 @@ describe("afterPack", () => {
       );
       expect(mockExistsSync).toHaveBeenCalledWith(
         path.join(unpackedBase, "node_modules/better-sqlite3/build/Release/better_sqlite3.node")
+      );
+    });
+
+    it("should use context.arch for prebuild directory", async () => {
+      mockExistsSync.mockReturnValue(true);
+
+      await afterPack(createContext("win32", "/build/win", "Canopy", "arm64"));
+
+      expect(mockExistsSync).toHaveBeenCalledWith(
+        path.join(unpackedBase, "node_modules/node-pty/prebuilds/win32-arm64/conpty.node")
       );
     });
 
