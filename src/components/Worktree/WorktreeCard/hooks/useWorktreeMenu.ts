@@ -3,6 +3,7 @@ import type React from "react";
 import { actionService } from "@/services/ActionService";
 import { useNativeContextMenu } from "@/hooks";
 import type { MenuItemOption, TerminalRecipe, WorktreeState } from "@/types";
+import { copyContextWithFeedback } from "@/hooks/useWorktreeActions";
 
 export function useWorktreeMenu({
   worktree,
@@ -293,18 +294,10 @@ export function useWorktreeMenu({
           onEndAll();
           break;
         case "worktree:copy-context:full":
-          void actionService.dispatch(
-            "worktree.copyTree",
-            { worktreeId: worktree.id },
-            { source: "context-menu" }
-          );
+          void copyContextWithFeedback(worktree.id);
           break;
         case "worktree:copy-context:modified":
-          void actionService.dispatch(
-            "worktree.copyTree",
-            { worktreeId: worktree.id, modified: true },
-            { source: "context-menu" }
-          );
+          void copyContextWithFeedback(worktree.id, { modified: true });
           break;
         case "worktree:open-editor":
           void actionService.dispatch(

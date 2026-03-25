@@ -2,8 +2,98 @@ import { useCallback, useMemo } from "react";
 import type { WorktreeState, RecipeTerminal } from "@/types";
 import { useErrorStore, type AppError } from "@/store";
 import { useRecipeStore } from "@/store/recipeStore";
+import { useNotificationStore } from "@/store/notificationStore";
 import { formatBytes } from "@/lib/formatBytes";
 import { actionService } from "@/services/ActionService";
+
+export function formatCopyResultMessage(payload: {
+  fileCount: number;
+  stats?: { totalSize?: number } | null;
+  format?: string;
+}): string {
+  const fileCount =
+    typeof payload.fileCount === "number" && Number.isFinite(payload.fileCount)
+      ? payload.fileCount
+      : 0;
+  const stats = payload.stats ?? undefined;
+  const sizeStr = stats?.totalSize ? formatBytes(stats.totalSize) : "";
+  const formatStr = payload.format ? ` as ${payload.format.toUpperCase()}` : "";
+  return `Copied ${fileCount} files${sizeStr ? ` (${sizeStr})` : ""}${formatStr} to clipboard`;
+}
+
+export async function copyContextWithFeedback(
+  worktreeId: string,
+  options?: { modified?: boolean }
+): Promise<void> {
+  const store = useNotificationStore.getState();
+  const toastId = store.addNotification({
+    type: "info",
+    message: options?.modified ? "Copying modified files…" : "Copying context…",
+    priority: "high",
+    duration: 15000,
+  });
+
+  try {
+    const result = await actionService.dispatch(
+      "worktree.copyTree",
+      { worktreeId, modified: options?.modified },
+      { source: "context-menu" }
+    );
+
+    if (!result.ok) {
+      throw new Error(result.error.message);
+    }
+
+    if (!result.result) {
+      store.updateNotification(toastId, {
+        type: "info",
+        message: "No files to copy",
+        duration: 3000,
+      });
+      return;
+    }
+
+    const payload = result.result as {
+      fileCount: number;
+      stats?: { totalSize?: number } | null;
+      format?: string;
+    };
+
+    store.updateNotification(toastId, {
+      type: "success",
+      message: formatCopyResultMessage(payload),
+      duration: 3000,
+    });
+  } catch (e) {
+    const message = e instanceof Error ? e.message : "Failed to copy context to clipboard";
+    store.updateNotification(toastId, {
+      type: "error",
+      message: `Copy context failed: ${message}`,
+      duration: 5000,
+    });
+
+    let errorType: AppError["type"] = "process";
+    if (message.includes("not available") || message.includes("not installed")) {
+      errorType = "config";
+    } else if (
+      message.includes("permission") ||
+      message.includes("EACCES") ||
+      message.includes("denied")
+    ) {
+      errorType = "filesystem";
+    }
+
+    useErrorStore.getState().addError({
+      type: errorType,
+      message: `Copy context failed: ${message}`,
+      details: e instanceof Error ? e.stack : undefined,
+      source: "WorktreeCard",
+      context: { worktreeId },
+      isTransient: true,
+      correlationId: crypto.randomUUID(),
+    });
+  }
+}
 
 export interface UseWorktreeActionsOptions {
   onOpenRecipeEditor?: (worktreeId: string, initialTerminals?: RecipeTerminal[]) => void;
@@ -46,14 +136,7 @@ export function useWorktreeActions({
           stats?: { totalSize?: number } | null;
           format?: string;
         };
-        const fileCount =
-          typeof payload.fileCount === "number" && Number.isFinite(payload.fileCount)
-            ? payload.fileCount
-            : 0;
-        const stats = payload.stats ?? undefined;
-        const sizeStr = stats?.totalSize ? formatBytes(stats.totalSize) : "";
-        const formatStr = payload.format ? ` as ${payload.format.toUpperCase()}` : "";
-        return `Copied ${fileCount} files${sizeStr ? ` (${sizeStr})` : ""}${formatStr} to clipboard`;
+        return formatCopyResultMessage(payload);
       } catch (e) {
         const message = e instanceof Error ? e.message : "Failed to copy context to clipboard";
         const details = e instanceof Error ? e.stack : undefined;
