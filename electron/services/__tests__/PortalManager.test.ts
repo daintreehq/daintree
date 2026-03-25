@@ -19,10 +19,15 @@ const createMockWebContents = () => ({
   isDestroyed: vi.fn().mockReturnValue(false),
 });
 
+const createdWebContents: ReturnType<typeof createMockWebContents>[] = [];
+
 vi.mock("electron", () => {
   class MockWebContentsView {
     webContents = createMockWebContents();
     setBounds = vi.fn();
+    constructor() {
+      createdWebContents.push(this.webContents);
+    }
   }
 
   const mockContentView = {
@@ -66,6 +71,7 @@ describe("PortalManager", () => {
   let mockWindow: InstanceType<typeof import("electron").BrowserWindow>;
 
   beforeEach(async () => {
+    createdWebContents.length = 0;
     vi.resetModules();
 
     const electron = await import("electron");
@@ -337,6 +343,30 @@ describe("PortalManager", () => {
       const manager = new PortalManagerClass(mockWindow);
 
       expect(() => manager.navigate("non-existent", "http://localhost:3000")).not.toThrow();
+    });
+
+    it("catches loadURL rejection to prevent unhandled promise rejection", async () => {
+      const manager = new PortalManagerClass(mockWindow);
+      manager.createTab("tab-nav-reject", "http://localhost:3000");
+
+      const wc = createdWebContents[createdWebContents.length - 1];
+      const navError = new Error("net::ERR_NAME_NOT_RESOLVED");
+      wc.loadURL.mockRejectedValueOnce(navError);
+
+      const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+      try {
+        manager.navigate("tab-nav-reject", "http://unreachable.test");
+
+        await Promise.resolve();
+
+        expect(errorSpy).toHaveBeenCalledWith(
+          expect.stringContaining("[PortalManager] Failed to navigate tab tab-nav-reject"),
+          navError
+        );
+      } finally {
+        errorSpy.mockRestore();
+      }
     });
   });
 
