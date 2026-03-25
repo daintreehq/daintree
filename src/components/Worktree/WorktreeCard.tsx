@@ -660,6 +660,7 @@ export const WorktreeCard = React.memo(function WorktreeCard({
               },
               onCopyContextFull: handleCopyContextFull,
               onCopyContextModified: handleCopyContextModified,
+              onCopyPath: () => void navigator.clipboard.writeText(worktree.path),
               onOpenEditor,
               onRevealInFinder: handlePathClick,
               onOpenIssuePortal: worktree.issueNumber ? handleOpenIssuePortal : undefined,

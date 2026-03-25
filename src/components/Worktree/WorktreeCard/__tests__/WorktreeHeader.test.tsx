@@ -52,6 +52,7 @@ const baseMenu: WorktreeHeaderProps["menu"] = {
   counts: { grid: 0, dock: 0, active: 0, completed: 0, all: 0 },
   onCopyContextFull: noop,
   onCopyContextModified: noop,
+  onCopyPath: noop,
   onOpenEditor: noop,
   onRevealInFinder: noop,
   onRunRecipe: noop,

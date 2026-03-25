@@ -139,6 +139,7 @@ export function useWorktreeMenu({
       },
       { id: "worktree:open-editor", label: "Open in Editor" },
       { id: "worktree:reveal", label: "Reveal in Finder" },
+      { id: "worktree:copy-path", label: "Copy Path" },
     ];
 
     const hasIssueItem = Boolean(worktree.issueNumber);
@@ -319,6 +320,9 @@ export function useWorktreeMenu({
             { source: "context-menu" }
           );
           break;
+        case "worktree:copy-path":
+          void navigator.clipboard.writeText(worktree.path);
+          break;
         case "worktree:open-issue-portal":
           void actionService.dispatch(
             "worktree.openIssueInPortal",
@@ -383,6 +387,7 @@ export function useWorktreeMenu({
       onShowCompareDiff,
       showMenu,
       worktree.id,
+      worktree.path,
     ]
   );
 
