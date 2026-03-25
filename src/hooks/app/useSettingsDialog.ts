@@ -3,12 +3,12 @@ import type { SettingsTab, SettingsNavTarget } from "@/components/Settings";
 
 export function useSettingsDialog() {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
-  const [settingsTab, setSettingsTab] = useState<SettingsTab>("general");
+  const [settingsTab, setSettingsTab] = useState<SettingsTab | undefined>(undefined);
   const [settingsSubtab, setSettingsSubtab] = useState<string | undefined>();
   const [settingsSectionId, setSettingsSectionId] = useState<string | undefined>();
 
   const handleSettings = useCallback(() => {
-    setSettingsTab("general");
+    setSettingsTab(undefined);
     setSettingsSubtab(undefined);
     setSettingsSectionId(undefined);
     setIsSettingsOpen(true);

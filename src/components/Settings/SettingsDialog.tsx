@@ -103,6 +103,8 @@ import {
 } from "./settingsSearchUtils";
 import { SCROLLBACK_DEFAULT } from "@shared/config/scrollback";
 
+let rememberedTab: SettingsTab = "general";
+
 export interface SettingsNavTarget {
   tab: SettingsTab;
   subtab?: string;
@@ -145,10 +147,14 @@ export function SettingsDialog({
   defaultSectionId,
   onSettingsChange,
 }: SettingsDialogProps) {
-  const [activeTab, setActiveTab] = useState<SettingsTab>(defaultTab ?? "general");
+  const [activeTab, setActiveTab] = useState<SettingsTab>(defaultTab ?? rememberedTab);
   const [visitedTabs, setVisitedTabs] = useState<Set<SettingsTab>>(
-    () => new Set<SettingsTab>([defaultTab ?? "general"])
+    () => new Set<SettingsTab>([defaultTab ?? rememberedTab])
   );
+
+  useEffect(() => {
+    rememberedTab = activeTab;
+  }, [activeTab]);
   const markTabVisited = useCallback((tab: SettingsTab) => {
     setVisitedTabs((prev) => {
       if (prev.has(tab)) return prev;
