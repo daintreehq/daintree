@@ -1,5 +1,4 @@
 import type { Locator, Page } from "@playwright/test";
-import { expect } from "@playwright/test";
 import { SEL } from "./selectors";
 
 const mod = process.platform === "darwin" ? "Meta" : "Control";
