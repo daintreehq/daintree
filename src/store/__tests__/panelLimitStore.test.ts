@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach } from "vitest";
 import { evaluatePanelLimit, shouldShowSoftWarning, dismissSoftWarning } from "../panelLimitStore";
 
 const DEFAULT_LIMITS = {
