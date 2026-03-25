@@ -12,7 +12,6 @@ import type {
 import type { ChipState } from "@/components/Worktree/utils/computeChipState";
 
 export interface DerivedWorktreeMeta {
-  hasErrors: boolean;
   terminalCount: number;
   hasWorkingAgent: boolean;
   hasRunningAgent: boolean;
@@ -111,8 +110,7 @@ export function scoreWorktree(worktree: Worktree | WorktreeState, query: string)
 
 export function computeStatus(
   worktree: Worktree | WorktreeState,
-  isActive: boolean,
-  hasErrors: boolean
+  isActive: boolean
 ): StatusFilter[] {
   const statuses: StatusFilter[] = [];
 
@@ -121,7 +119,6 @@ export function computeStatus(
   const changedFileCount = worktree.worktreeChanges?.changedFileCount ?? 0;
   if (changedFileCount > 0) statuses.push("dirty");
 
-  if (worktree.mood === "error" || hasErrors) statuses.push("error");
   if (worktree.mood === "stale") statuses.push("stale");
 
   // Idle = no special status or only active
@@ -163,7 +160,7 @@ export function matchesFilters(
 
   // Status filters (OR within category)
   if (filters.statusFilters.size > 0) {
-    const statuses = computeStatus(worktree, isActive, derived.hasErrors);
+    const statuses = computeStatus(worktree, isActive);
     const hasMatch = statuses.some((s) => filters.statusFilters.has(s));
     if (!hasMatch) return false;
   }
@@ -397,7 +394,7 @@ export function filterTriageWorktrees<T extends Worktree | WorktreeState>(
   return nonMain.filter((w) => {
     const meta = derivedMetaMap.get(w.id);
     if (!meta) return false;
-    const qualifies = meta.hasWaitingAgent || meta.hasErrors || meta.hasMergeConflict;
+    const qualifies = meta.hasWaitingAgent || meta.hasMergeConflict;
     if (!qualifies) return false;
     if (query.trim().length > 0) {
       const exactNum = parseExactNumber(query);

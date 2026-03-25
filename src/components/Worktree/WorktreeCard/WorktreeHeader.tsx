@@ -22,7 +22,6 @@ import {
 } from "../../ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../../ui/tooltip";
 import {
-  AlertCircle,
   ChevronRight,
   CircleDot,
   CornerDownRight,
@@ -211,7 +210,6 @@ export interface WorktreeHeaderProps {
   onToggleCollapse?: (e: React.MouseEvent) => void;
   contentId?: string;
   branchLabel: string;
-  worktreeErrorCount: number;
   sessionStates?: Record<AgentState, number>;
   sessionTotal?: number;
   badges: {
@@ -272,7 +270,6 @@ export function WorktreeHeader({
   onToggleCollapse,
   contentId,
   branchLabel,
-  worktreeErrorCount,
   sessionStates,
   sessionTotal,
   badges,
@@ -377,20 +374,6 @@ export function WorktreeHeader({
             </TooltipTrigger>
             <TooltipContent side="top" className="text-xs">
               {visibleStates.map((v) => `${v.count} ${STATE_LABELS[v.state]}`).join(", ")}
-            </TooltipContent>
-          </Tooltip>
-        )}
-
-        {worktreeErrorCount > 0 && (
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <span className="flex items-center gap-0.5 text-status-error text-xs font-mono tabular-nums shrink-0">
-                <AlertCircle className="w-3 h-3" />
-                <span>{worktreeErrorCount}</span>
-              </span>
-            </TooltipTrigger>
-            <TooltipContent side="top" className="text-xs">
-              {worktreeErrorCount} error{worktreeErrorCount !== 1 ? "s" : ""}
             </TooltipContent>
           </Tooltip>
         )}

@@ -1,9 +1,8 @@
 import type { WorktreeLifecycleStage } from "../WorktreeCard/hooks/useWorktreeStatus";
 
-export type ChipState = "error" | "approval" | "waiting" | "cleanup" | "complete" | null;
+export type ChipState = "approval" | "waiting" | "cleanup" | "complete" | null;
 
 export interface ComputeChipStateInput {
-  worktreeErrorCount: number;
   waitingTerminalCount: number;
   approvalWaitingCount: number;
   lifecycleStage: WorktreeLifecycleStage | null;
@@ -11,7 +10,6 @@ export interface ComputeChipStateInput {
 }
 
 export function computeChipState(input: ComputeChipStateInput): ChipState {
-  if (input.worktreeErrorCount > 0) return "error";
   if (input.lifecycleStage === "merged" || input.lifecycleStage === "ready-for-cleanup")
     return "cleanup";
   if (input.isComplete) return "complete";

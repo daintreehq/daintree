@@ -489,7 +489,6 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
       const worktreeTerminals = terminals.filter(
         (t) => t.worktreeId === worktree.id && t.location !== "trash"
       );
-      const errors = getWorktreeErrors(worktree.id);
       const waitingTerminalCount = worktreeTerminals.filter(
         (t) => t.agentState === "waiting"
       ).length;
@@ -515,7 +514,6 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
       }
 
       const chipState = computeChipState({
-        worktreeErrorCount: errors.length,
         waitingTerminalCount,
         approvalWaitingCount,
         lifecycleStage,
@@ -523,7 +521,6 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
       });
 
       map.set(worktree.id, {
-        hasErrors: errors.length > 0,
         terminalCount: worktreeTerminals.length,
         hasWorkingAgent: worktreeTerminals.some((t) => t.agentState === "working"),
         hasRunningAgent: worktreeTerminals.some((t) => t.agentState === "running"),
@@ -564,7 +561,6 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     );
     const filtered = nonMain.filter((worktree) => {
       const derived = derivedMetaMap.get(worktree.id) ?? {
-        hasErrors: false,
         terminalCount: 0,
         hasWorkingAgent: false,
         hasRunningAgent: false,

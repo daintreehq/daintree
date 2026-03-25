@@ -4,7 +4,7 @@ import { createSafeJSONStorage } from "./persistence/safeStorage";
 
 export type OrderBy = "recent" | "created" | "alpha" | "manual";
 
-export type StatusFilter = "active" | "dirty" | "error" | "stale" | "idle";
+export type StatusFilter = "active" | "dirty" | "stale" | "idle";
 export type TypeFilter =
   | "feature"
   | "bugfix"

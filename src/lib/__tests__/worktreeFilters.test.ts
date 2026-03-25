@@ -37,7 +37,6 @@ const createEmptyFilters = (): FilterState => ({
 });
 
 const createEmptyMeta = (): DerivedWorktreeMeta => ({
-  hasErrors: false,
   terminalCount: 0,
   hasWorkingAgent: false,
   hasRunningAgent: false,
@@ -392,7 +391,7 @@ describe("sortWorktreesByRelevance", () => {
 describe("computeStatus", () => {
   it("includes 'active' when worktree is active", () => {
     const worktree = createMockWorktree();
-    const statuses = computeStatus(worktree, true, false);
+    const statuses = computeStatus(worktree, true);
     expect(statuses).toContain("active");
   });
 
@@ -405,37 +404,25 @@ describe("computeStatus", () => {
         changedFileCount: 5,
       },
     });
-    const statuses = computeStatus(worktree, false, false);
+    const statuses = computeStatus(worktree, false);
     expect(statuses).toContain("dirty");
-  });
-
-  it("includes 'error' when mood is error", () => {
-    const worktree = createMockWorktree({ mood: "error" });
-    const statuses = computeStatus(worktree, false, false);
-    expect(statuses).toContain("error");
-  });
-
-  it("includes 'error' when hasErrors is true", () => {
-    const worktree = createMockWorktree();
-    const statuses = computeStatus(worktree, false, true);
-    expect(statuses).toContain("error");
   });
 
   it("includes 'stale' when mood is stale", () => {
     const worktree = createMockWorktree({ mood: "stale" });
-    const statuses = computeStatus(worktree, false, false);
+    const statuses = computeStatus(worktree, false);
     expect(statuses).toContain("stale");
   });
 
   it("includes 'idle' when no other status", () => {
     const worktree = createMockWorktree();
-    const statuses = computeStatus(worktree, false, false);
+    const statuses = computeStatus(worktree, false);
     expect(statuses).toContain("idle");
   });
 
   it("includes 'idle' when only active", () => {
     const worktree = createMockWorktree();
-    const statuses = computeStatus(worktree, true, false);
+    const statuses = computeStatus(worktree, true);
     expect(statuses).toContain("idle");
   });
 });
@@ -1131,13 +1118,6 @@ describe("filterTriageWorktrees", () => {
     expect(result[0].id).toBe("w1");
   });
 
-  it("includes worktrees with hasErrors", () => {
-    const worktrees = [createMockWorktree({ id: "w1", name: "feat-a" })];
-    const metaMap = buildMetaMap([["w1", { hasErrors: true }]]);
-    const result = filterTriageWorktrees(worktrees, metaMap, undefined, undefined, "");
-    expect(result).toHaveLength(1);
-  });
-
   it("includes worktrees with hasMergeConflict", () => {
     const worktrees = [createMockWorktree({ id: "w1", name: "feat-a" })];
     const metaMap = buildMetaMap([["w1", { hasMergeConflict: true }]]);
@@ -1166,7 +1146,7 @@ describe("filterTriageWorktrees", () => {
     ];
     const metaMap = buildMetaMap([
       ["main-id", { hasWaitingAgent: true }],
-      ["w1", { hasErrors: true }],
+      ["w1", { hasWaitingAgent: true }],
     ]);
     const result = filterTriageWorktrees(worktrees, metaMap, "main-id", undefined, "");
     expect(result).toHaveLength(1);
@@ -1180,7 +1160,7 @@ describe("filterTriageWorktrees", () => {
     ];
     const metaMap = buildMetaMap([
       ["dev-id", { hasWaitingAgent: true }],
-      ["w1", { hasErrors: true }],
+      ["w1", { hasMergeConflict: true }],
     ]);
     const result = filterTriageWorktrees(worktrees, metaMap, undefined, "dev-id", "");
     expect(result).toHaveLength(1);
@@ -1193,7 +1173,7 @@ describe("filterTriageWorktrees", () => {
       createMockWorktree({ id: "w2", name: "payment-feat", branch: "feature/payment" }),
     ];
     const metaMap = buildMetaMap([
-      ["w1", { hasErrors: true }],
+      ["w1", { hasMergeConflict: true }],
       ["w2", { hasWaitingAgent: true }],
     ]);
     const result = filterTriageWorktrees(worktrees, metaMap, undefined, undefined, "auth");
@@ -1207,7 +1187,7 @@ describe("filterTriageWorktrees", () => {
       createMockWorktree({ id: "w2", name: "feat-b", issueNumber: 99 }),
     ];
     const metaMap = buildMetaMap([
-      ["w1", { hasErrors: true }],
+      ["w1", { hasMergeConflict: true }],
       ["w2", { hasWaitingAgent: true }],
     ]);
     const result = filterTriageWorktrees(worktrees, metaMap, undefined, undefined, "#42");
@@ -1224,7 +1204,7 @@ describe("filterTriageWorktrees", () => {
     const metaMap = buildMetaMap([
       ["w1", { hasWaitingAgent: true }],
       ["w2", {}],
-      ["w3", { hasErrors: true, hasMergeConflict: true }],
+      ["w3", { hasMergeConflict: true }],
     ]);
     const result = filterTriageWorktrees(worktrees, metaMap, undefined, undefined, "");
     expect(result).toHaveLength(2);
@@ -1271,11 +1251,6 @@ describe("matchesQuickStateFilter", () => {
     expect(matchesQuickStateFilter("waiting", meta)).toBe(true);
   });
 
-  it('"waiting" does NOT match when hasWaitingAgent but chipState is "error"', () => {
-    const meta = { ...createEmptyMeta(), hasWaitingAgent: true, chipState: "error" as const };
-    expect(matchesQuickStateFilter("waiting", meta)).toBe(false);
-  });
-
   it('"finished" matches chipState "complete"', () => {
     const meta = { ...createEmptyMeta(), chipState: "complete" as const };
     expect(matchesQuickStateFilter("finished", meta)).toBe(true);
@@ -1290,8 +1265,8 @@ describe("matchesQuickStateFilter", () => {
     expect(matchesQuickStateFilter("finished", createEmptyMeta())).toBe(false);
   });
 
-  it('"finished" does NOT match chipState "error"', () => {
-    const meta = { ...createEmptyMeta(), chipState: "error" as const };
+  it('"finished" does NOT match chipState "waiting"', () => {
+    const meta = { ...createEmptyMeta(), chipState: "waiting" as const };
     expect(matchesQuickStateFilter("finished", meta)).toBe(false);
   });
 });

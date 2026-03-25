@@ -9,7 +9,6 @@ import type { WorktreeState } from "@/types";
 import type { UseAgentLauncherReturn } from "@/hooks/useAgentLauncher";
 import { useWorktreeFilterStore } from "@/store/worktreeFilterStore";
 import { useTerminalStore } from "@/store/terminalStore";
-import { useErrorStore } from "@/store/errorStore";
 import { useWorktreeDataStore } from "@/store/worktreeDataStore";
 import {
   matchesFilters,
@@ -172,8 +171,6 @@ export function WorktreeOverviewModal({
   const terminals = useTerminalStore(useShallow((state) => state.terminals));
 
   // Error store for derived metadata
-  const getWorktreeErrors = useErrorStore((state) => state.getWorktreeErrors);
-
   // Filter store: hide main worktree preference
   const hideMainWorktree = useWorktreeFilterStore((state) => state.hideMainWorktree);
   const setHideMainWorktree = useWorktreeFilterStore((state) => state.setHideMainWorktree);
@@ -185,9 +182,7 @@ export function WorktreeOverviewModal({
       const worktreeTerminals = terminals.filter(
         (t) => t.worktreeId === worktree.id && t.location !== "trash"
       );
-      const errors = getWorktreeErrors(worktree.id);
       map.set(worktree.id, {
-        hasErrors: errors.length > 0,
         terminalCount: worktreeTerminals.length,
         hasWorkingAgent: worktreeTerminals.some((t) => t.agentState === "working"),
         hasRunningAgent: worktreeTerminals.some((t) => t.agentState === "running"),
@@ -199,7 +194,7 @@ export function WorktreeOverviewModal({
       });
     }
     return map;
-  }, [worktrees, terminals, getWorktreeErrors]);
+  }, [worktrees, terminals]);
 
   // Compute aggregate statistics from derivedMetaMap
   const aggregateStats = useMemo(() => {
@@ -248,7 +243,6 @@ export function WorktreeOverviewModal({
     // Filter worktrees
     const filtered = worktrees.filter((worktree) => {
       const derived = derivedMetaMap.get(worktree.id) ?? {
-        hasErrors: false,
         terminalCount: 0,
         hasWorkingAgent: false,
         hasRunningAgent: false,

@@ -34,9 +34,7 @@ describe("useWorktreeStatus — lifecycleStage", () => {
   function getLifecycleStage(
     overrides: Partial<WorktreeState> = {}
   ): WorktreeLifecycleStage | null {
-    const { result } = renderHook(() =>
-      useWorktreeStatus({ worktree: makeWorktree(overrides), worktreeErrorCount: 0 })
-    );
+    const { result } = renderHook(() => useWorktreeStatus({ worktree: makeWorktree(overrides) }));
     return result.current.lifecycleStage;
   }
 
@@ -155,10 +153,9 @@ describe("useWorktreeStatus — lifecycleStage", () => {
       prState: "merged",
       prNumber: 10,
     });
-    const { result, rerender } = renderHook(
-      ({ wt }) => useWorktreeStatus({ worktree: wt, worktreeErrorCount: 0 }),
-      { initialProps: { wt: initialWorktree } }
-    );
+    const { result, rerender } = renderHook(({ wt }) => useWorktreeStatus({ worktree: wt }), {
+      initialProps: { wt: initialWorktree },
+    });
 
     expect(result.current.lifecycleStage).toBe("merged");
 
@@ -172,9 +169,7 @@ describe("useWorktreeStatus — lifecycleStage", () => {
 
 describe("useWorktreeStatus — branchLabel", () => {
   function getBranchLabel(overrides: Partial<WorktreeState> = {}): string {
-    const { result } = renderHook(() =>
-      useWorktreeStatus({ worktree: makeWorktree(overrides), worktreeErrorCount: 0 })
-    );
+    const { result } = renderHook(() => useWorktreeStatus({ worktree: makeWorktree(overrides) }));
     return result.current.branchLabel;
   }
 
@@ -196,16 +191,10 @@ describe("useWorktreeStatus — branchLabel", () => {
 });
 
 describe("useWorktreeStatus — computedSubtitle", () => {
-  function getSubtitle(overrides: Partial<WorktreeState> = {}, worktreeErrorCount = 0) {
-    const { result } = renderHook(() =>
-      useWorktreeStatus({ worktree: makeWorktree(overrides), worktreeErrorCount })
-    );
+  function getSubtitle(overrides: Partial<WorktreeState> = {}) {
+    const { result } = renderHook(() => useWorktreeStatus({ worktree: makeWorktree(overrides) }));
     return result.current.computedSubtitle;
   }
-
-  it("shows error count when errors exist", () => {
-    expect(getSubtitle({}, 3)).toEqual({ text: "3 errors", tone: "error" });
-  });
 
   it("shows last commit message when available", () => {
     expect(

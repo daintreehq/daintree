@@ -73,7 +73,6 @@ function FilterChip({ label, isActive, onClick }: FilterChipProps) {
 const STATUS_OPTIONS: { value: StatusFilter; label: string }[] = [
   { value: "active", label: "Active" },
   { value: "dirty", label: "Dirty" },
-  { value: "error", label: "Error" },
   { value: "stale", label: "Stale" },
   { value: "idle", label: "Idle" },
 ];

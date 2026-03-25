@@ -144,7 +144,6 @@ export function WorktreeDetailsSection({
               ) : (
                 <span
                   className={cn(
-                    computedSubtitle.tone === "error" && "text-status-error",
                     computedSubtitle.tone === "warning" && "text-status-warning",
                     computedSubtitle.tone === "info" && "text-status-info",
                     computedSubtitle.tone === "muted" && "text-text-muted"

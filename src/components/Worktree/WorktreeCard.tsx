@@ -246,7 +246,7 @@ export const WorktreeCard = React.memo(function WorktreeCard({
     spineState,
     isLifecycleRunning,
     lifecycleLabel,
-  } = useWorktreeStatus({ worktree, worktreeErrorCount: worktreeErrors.length });
+  } = useWorktreeStatus({ worktree });
 
   const {
     runningRecipeId,
@@ -454,14 +454,12 @@ export const WorktreeCard = React.memo(function WorktreeCard({
   const chipState = useMemo(
     (): ChipState =>
       computeChipState({
-        worktreeErrorCount: worktreeErrors.length,
         waitingTerminalCount: terminalCounts.byState.waiting,
         approvalWaitingCount: terminalCounts.approvalWaitingCount,
         lifecycleStage,
         isComplete,
       }),
     [
-      worktreeErrors.length,
       terminalCounts.byState.waiting,
       terminalCounts.approvalWaitingCount,
       lifecycleStage,
@@ -563,7 +561,7 @@ export const WorktreeCard = React.memo(function WorktreeCard({
       role="button"
       data-worktree-branch={branchLabel}
       data-worktree-is-main={isMainWorktree ? "true" : undefined}
-      aria-label={`Worktree: ${worktree.issueTitle ?? branchLabel}${worktree.issueTitle ? ` (${branchLabel})` : ""}${isActive ? " (selected)" : ""}${worktree.isCurrent ? " (current)" : ""}, Status: ${spineState}${worktreeErrors.length > 0 ? `, ${worktreeErrors.length} error${worktreeErrors.length !== 1 ? "s" : ""}` : ""}${hasChanges ? ", has uncommitted changes" : ""}`}
+      aria-label={`Worktree: ${worktree.issueTitle ?? branchLabel}${worktree.issueTitle ? ` (${branchLabel})` : ""}${isActive ? " (selected)" : ""}${worktree.isCurrent ? " (current)" : ""}, Status: ${spineState}${hasChanges ? ", has uncommitted changes" : ""}`}
     >
       {isOver && !isActive && (
         <div
@@ -579,7 +577,6 @@ export const WorktreeCard = React.memo(function WorktreeCard({
             <div
               className={cn(
                 "absolute w-3 h-3 z-10 cursor-default",
-                chipState === "error" && "bg-github-closed",
                 chipState === "approval" && "bg-activity-approval",
                 chipState === "waiting" && "bg-activity-waiting",
                 chipState === "cleanup" && "bg-github-merged",
@@ -590,7 +587,6 @@ export const WorktreeCard = React.memo(function WorktreeCard({
               role="img"
               aria-label={
                 {
-                  error: "Error: attention needed",
                   approval: "Agent waiting for approval",
                   waiting: "Agent waiting for input",
                   cleanup: "Ready for cleanup",
@@ -602,7 +598,6 @@ export const WorktreeCard = React.memo(function WorktreeCard({
           <TooltipContent side="right" align="start" className="text-xs">
             {
               {
-                error: "Error: attention needed",
                 approval: "Agent waiting for approval",
                 waiting: "Agent waiting for input",
                 cleanup: "Ready for cleanup",
@@ -642,7 +637,6 @@ export const WorktreeCard = React.memo(function WorktreeCard({
             onToggleCollapse={handleToggleCollapse}
             contentId={`worktree-body-${worktree.id}`}
             branchLabel={branchLabel}
-            worktreeErrorCount={worktreeErrors.length}
             sessionStates={terminalCounts.byState}
             sessionTotal={terminalCounts.total}
             badges={{
