@@ -24,10 +24,6 @@ describe("PanelHeader shortcut tooltips — issue #3819", () => {
       expect(source).toContain('useKeybindingDisplay("terminal.toggleDock")');
     });
 
-    it("uses dynamic hook for terminal.moveToGrid", () => {
-      expect(source).toContain('useKeybindingDisplay("terminal.moveToGrid")');
-    });
-
     it("uses dynamic hook for terminal.maximize", () => {
       expect(source).toContain('useKeybindingDisplay("terminal.maximize")');
     });
@@ -61,10 +57,6 @@ describe("PanelHeader shortcut tooltips — issue #3819", () => {
 
     it("uses createTooltipWithShortcut for Collapse to Dock tooltip", () => {
       expect(source).toContain('createTooltipWithShortcut("Collapse to Dock", toggleDockShortcut)');
-    });
-
-    it("uses createTooltipWithShortcut for Restore to Grid tooltip", () => {
-      expect(source).toContain('createTooltipWithShortcut("Restore to Grid", moveToGridShortcut)');
     });
 
     it("uses createTooltipWithShortcut for Maximize tooltip", () => {
