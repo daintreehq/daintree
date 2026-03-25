@@ -403,9 +403,14 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
   }, []);
 
   const handleBeforeClose = useCallback(async () => {
-    debouncedSaveRef.current.flush();
+    await debouncedSaveRef.current.flush();
     return true;
   }, []);
+
+  const handleClose = useCallback(async () => {
+    await debouncedSaveRef.current.flush();
+    onClose();
+  }, [onClose]);
 
   const tabTitles: Record<ProjectSettingsTab, string> = {
     general: "General",
@@ -492,7 +497,7 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
             <div className="flex items-center justify-between px-6 py-4 border-b border-canopy-border bg-canopy-sidebar/50 shrink-0">
               <h3 className="text-lg font-medium text-canopy-text">{tabTitles[activeTab]}</h3>
               <button
-                onClick={onClose}
+                onClick={handleClose}
                 className="text-canopy-text/60 hover:text-canopy-text transition-colors p-1 rounded focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2"
                 aria-label="Close settings"
               >
