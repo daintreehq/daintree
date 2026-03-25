@@ -260,6 +260,7 @@ export const CHANNELS = {
   PORTAL_BLUR: "portal:blur",
   PORTAL_NEW_TAB_MENU_ACTION: "portal:new-tab-menu-action",
   PORTAL_TAB_EVICTED: "portal:tab-evicted",
+  PORTAL_TABS_EVICTED: "portal:tabs-evicted",
 
   HIBERNATION_GET_CONFIG: "hibernation:get-config",
   HIBERNATION_UPDATE_CONFIG: "hibernation:update-config",
@@ -303,6 +304,7 @@ export const CHANNELS = {
   WINDOW_ZOOM_RESET: "window:zoom-reset",
   WINDOW_CLOSE: "window:close",
   WINDOW_RECLAIM_MEMORY: "window:reclaim-memory",
+  WINDOW_DESTROY_HIDDEN_WEBVIEWS: "window:destroy-hidden-webviews",
 
   NOTIFICATION_UPDATE: "notification:update",
   NOTIFICATION_SETTINGS_GET: "notification:settings-get",

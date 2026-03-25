@@ -453,6 +453,7 @@ const CHANNELS = {
   PORTAL_BLUR: "portal:blur",
   PORTAL_NEW_TAB_MENU_ACTION: "portal:new-tab-menu-action",
   PORTAL_TAB_EVICTED: "portal:tab-evicted",
+  PORTAL_TABS_EVICTED: "portal:tabs-evicted",
 
   // Webview channels
   WEBVIEW_SET_LIFECYCLE_STATE: "webview:set-lifecycle-state",
@@ -502,6 +503,7 @@ const CHANNELS = {
   WINDOW_ZOOM_RESET: "window:zoom-reset",
   WINDOW_CLOSE: "window:close",
   WINDOW_RECLAIM_MEMORY: "window:reclaim-memory",
+  WINDOW_DESTROY_HIDDEN_WEBVIEWS: "window:destroy-hidden-webviews",
 
   // Notification channels
   NOTIFICATION_UPDATE: "notification:update",
@@ -1648,6 +1650,8 @@ const api: ElectronAPI = {
 
     onTabEvicted: (callback: (data: { tabId: string }) => void) =>
       _typedOn(CHANNELS.PORTAL_TAB_EVICTED, callback),
+    onTabsEvicted: (callback: (payload: { tabIds: string[] }) => void) =>
+      _typedOn(CHANNELS.PORTAL_TABS_EVICTED, callback),
   },
 
   // Webview API
@@ -1764,6 +1768,12 @@ const api: ElectronAPI = {
     zoomReset: (): Promise<void> => _unwrappingInvoke(CHANNELS.WINDOW_ZOOM_RESET),
     getZoomFactor: (): number => webFrame.getZoomFactor(),
     close: (): Promise<void> => _unwrappingInvoke(CHANNELS.WINDOW_CLOSE),
+    onDestroyHiddenWebviews: (callback: (payload: { tier: 1 | 2 }) => void) => {
+      const handler = (_event: Electron.IpcRendererEvent, payload: { tier: 1 | 2 }) =>
+        callback(payload);
+      ipcRenderer.on(CHANNELS.WINDOW_DESTROY_HIDDEN_WEBVIEWS, handler);
+      return () => ipcRenderer.removeListener(CHANNELS.WINDOW_DESTROY_HIDDEN_WEBVIEWS, handler);
+    },
   },
 
   // Notification API

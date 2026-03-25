@@ -41,6 +41,7 @@ interface PortalActions {
   updateTabIcon: (id: string, icon: string | undefined) => void;
   markTabCreated: (id: string) => void;
   unmarkTabCreated: (id: string) => void;
+  markTabsUncreated: (tabIds: string[]) => void;
   isTabCreated: (id: string) => boolean;
   reset: () => void;
   addLink: (link: Omit<PortalLink, "id" | "order">) => void;
@@ -281,6 +282,13 @@ const createPortalStore: StateCreator<PortalState & PortalActions> = (set, get) 
       set((s) => {
         const newSet = new Set(s.createdTabs);
         newSet.delete(id);
+        return { createdTabs: newSet };
+      }),
+
+    markTabsUncreated: (tabIds) =>
+      set((s) => {
+        const newSet = new Set(s.createdTabs);
+        for (const id of tabIds) newSet.delete(id);
         return { createdTabs: newSet };
       }),
 

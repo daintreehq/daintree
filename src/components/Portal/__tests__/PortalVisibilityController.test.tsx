@@ -36,6 +36,7 @@ describe("PortalVisibilityController", () => {
         evictionCallbacks = evictionCallbacks.filter((c) => c !== cb);
       };
     }),
+    onTabsEvicted: vi.fn(() => vi.fn()),
   };
   const storage = new Map<string, string>();
   const localStorageMock = {

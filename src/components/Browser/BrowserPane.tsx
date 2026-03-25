@@ -1,6 +1,7 @@
 import { useState, useCallback, useRef, useEffect, useMemo } from "react";
 import { useWebviewThrottle } from "@/hooks/useWebviewThrottle";
 import { useHasBeenVisible } from "@/hooks/useHasBeenVisible";
+import { useWebviewEviction } from "@/hooks/useWebviewEviction";
 import { useWebviewDialog } from "@/hooks/useWebviewDialog";
 import { AlertTriangle, ExternalLink } from "lucide-react";
 import { useTerminalStore } from "@/store";
@@ -115,6 +116,8 @@ export function BrowserPane({
   const canGoBack = history.past.length > 0;
   const canGoForward = history.future.length > 0;
   const hasValidUrl = isValidBrowserUrl(currentUrl);
+
+  const { isEvicted, evictingRef } = useWebviewEviction(id, location);
 
   // Sync URL changes to store (only if valid)
   useEffect(() => {
@@ -244,6 +247,8 @@ export function BrowserPane({
 
     const handleDidNavigate = (event: Electron.DidNavigateEvent) => {
       const newUrl = event.url;
+      // Suppress about:blank navigations triggered by eviction
+      if (newUrl === "about:blank" && evictingRef.current) return;
       // Only update history if this is a new URL (not our programmatic navigation)
       if (newUrl !== lastSetUrlRef.current) {
         setHistory((prev) => pushBrowserHistory(prev, newUrl));
@@ -321,7 +326,16 @@ export function BrowserPane({
       webview.removeEventListener("did-navigate-in-page", handleDidNavigateInPage);
       webview.removeEventListener("page-title-updated", handlePageTitleUpdated);
     };
-  }, [webviewElement, hasValidUrl, loadError, zoomFactor, id, projectId, loadTimeoutMs]);
+  }, [
+    webviewElement,
+    hasValidUrl,
+    loadError,
+    zoomFactor,
+    id,
+    projectId,
+    loadTimeoutMs,
+    evictingRef,
+  ]);
 
   const handleNavigate = useCallback(
     (url: string) => {
@@ -563,13 +577,30 @@ export function BrowserPane({
     handleToggleDevTools,
   ]);
 
-  useWebviewThrottle(id, location, webviewElement, isWebviewReady);
+  // Blank the webview before React unmounts it for faster memory reclamation
+  useEffect(() => {
+    if (isEvicted && webviewRef.current) {
+      try {
+        evictingRef.current = true;
+        webviewRef.current.src = "about:blank";
+      } catch {
+        // webview may already be detached
+      }
+    }
+  }, [isEvicted, evictingRef]);
+
+  useWebviewThrottle(id, location, isEvicted ? null : webviewElement, isWebviewReady && !isEvicted);
   const { currentDialog, handleDialogRespond } = useWebviewDialog(
     id,
-    webviewElement,
-    isWebviewReady
+    isEvicted ? null : webviewElement,
+    isWebviewReady && !isEvicted
   );
-  const findInPage = useFindInPage(id, webviewElement, isWebviewReady, isFocused);
+  const findInPage = useFindInPage(
+    id,
+    isEvicted ? null : webviewElement,
+    isWebviewReady && !isEvicted,
+    isFocused
+  );
 
   const handleOpenExternal = useCallback(() => {
     if (!hasValidUrl) return;
@@ -705,6 +736,10 @@ export function BrowserPane({
                 Open in External Browser
               </span>
             </button>
+          </div>
+        ) : isEvicted ? (
+          <div className="absolute inset-0 flex flex-col items-center justify-center bg-canopy-bg text-canopy-text p-6">
+            <p className="text-xs text-canopy-text/50">Reclaimed for memory</p>
           </div>
         ) : (
           <>

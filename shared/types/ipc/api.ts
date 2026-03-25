@@ -729,6 +729,7 @@ export interface ElectronAPI {
       callback: (action: import("../portal.js").PortalNewTabMenuAction) => void
     ): () => void;
     onTabEvicted(callback: (data: { tabId: string }) => void): () => void;
+    onTabsEvicted(callback: (payload: { tabIds: string[] }) => void): () => void;
   };
   webview: {
     /** Freeze or unfreeze a webview's JS execution via CDP Page.setWebLifecycleState */
@@ -831,6 +832,8 @@ export interface ElectronAPI {
     getZoomFactor(): number;
     /** Close window */
     close(): Promise<void>;
+    /** Subscribe to hidden webview destruction events from memory pressure */
+    onDestroyHiddenWebviews(callback: (payload: { tier: 1 | 2 }) => void): () => void;
   };
   notification: {
     /** Update window title and dock badge based on terminal attention state */

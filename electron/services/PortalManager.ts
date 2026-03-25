@@ -363,6 +363,33 @@ export class PortalManager {
     return this.viewMap.has(tabId);
   }
 
+  destroyHiddenTabs(): string[] {
+    const destroyed: string[] = [];
+    for (const [tabId, view] of this.viewMap) {
+      if (tabId === this.activeTabId) continue;
+
+      try {
+        this.window.contentView.removeChildView(view);
+      } catch {
+        // already removed
+      }
+      try {
+        view.webContents.close();
+      } catch {
+        // already destroyed
+      }
+
+      this.viewMap.delete(tabId);
+      destroyed.push(tabId);
+    }
+    if (destroyed.length > 0) {
+      console.log(
+        `[PortalManager] Destroyed ${destroyed.length} hidden tab(s) for memory pressure`
+      );
+    }
+    return destroyed;
+  }
+
   destroy(): void {
     const tabIds = [...this.viewMap.keys()];
     for (const tabId of tabIds) {

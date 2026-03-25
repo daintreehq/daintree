@@ -1747,6 +1747,8 @@ export interface IpcEventMap {
   // Window events
   "window:fullscreen-change": boolean;
   "window:reclaim-memory": { reason: string };
+  "window:destroy-hidden-webviews": { tier: 1 | 2 };
+  "portal:tabs-evicted": { tabIds: string[] };
 
   // Notification events
   "notification:update": { waitingCount: number };
