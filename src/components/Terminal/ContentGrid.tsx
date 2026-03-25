@@ -28,8 +28,7 @@ import {
   GRID_PLACEHOLDER_ID,
   SortableGridPlaceholder,
 } from "@/components/DragDrop";
-import { AlertTriangle, Settings, Play, Pin, Sparkles } from "lucide-react";
-import { TerminalRecipeIcon } from "@/components/icons";
+import { AlertTriangle, Settings, Play, Pin } from "lucide-react";
 import { CanopyIcon } from "@/components/icons";
 import { ProjectPulseCard } from "@/components/Pulse";
 import { Kbd } from "@/components/ui/Kbd";
@@ -47,11 +46,6 @@ import { actionService } from "@/services/ActionService";
 import type { CliAvailability } from "@shared/types";
 import type { MenuItemOption } from "@/types";
 import { getRecipeGridClasses, getRecipeTerminalSummary } from "./utils/recipeUtils";
-import { PROJECT_EXPLANATION_PROMPT, getDefaultAgentId } from "@/lib/projectExplanationPrompt";
-import { buildWhatsNextPrompt } from "@/lib/whatsNextPrompt";
-import { cliAvailabilityClient } from "@/clients";
-import { useToolbarPreferencesStore } from "@/store/toolbarPreferencesStore";
-import { useAgentPreferencesStore } from "@/store/agentPreferencesStore";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { buildPanelDuplicateOptions } from "@/services/terminal/panelDuplicationService";
 import { getEffectiveAgentIds, getEffectiveAgentConfig } from "@shared/config/agentRegistry";
@@ -70,7 +64,6 @@ function EmptyState({
   showProjectPulse,
   projectIconSvg,
   defaultCwd,
-  agentAvailability,
 }: {
   hasActiveWorktree: boolean;
   activeWorktreeName?: string | null;
@@ -78,7 +71,6 @@ function EmptyState({
   showProjectPulse: boolean;
   projectIconSvg?: string;
   defaultCwd?: string;
-  agentAvailability?: CliAvailability;
 }) {
   const allRecipes = useRecipeStore((state) => state.recipes);
   const runRecipe = useRecipeStore((state) => state.runRecipe);
@@ -136,94 +128,6 @@ function EmptyState({
       });
     } catch (error) {
       console.error("Failed to run recipe:", error);
-    }
-  };
-
-  const defaultSelection = useToolbarPreferencesStore((state) => state.launcher.defaultSelection);
-  const defaultAgent = useAgentPreferencesStore((state) => state.defaultAgent);
-  const emptyStateAgentSettings = useAgentSettingsStore((state) => state.settings);
-
-  // undefined = no filter (settings not loaded or pre-migration); Set = loaded, filter to non-hidden
-  const selectedAgentIds = useMemo((): Set<string> | undefined => {
-    if (!emptyStateAgentSettings?.agents) return undefined;
-    return new Set(
-      Object.entries(emptyStateAgentSettings.agents)
-        .filter(([, entry]) => entry.selected !== false)
-        .map(([id]) => id)
-    );
-  }, [emptyStateAgentSettings]);
-
-  const handleExplainProject = async () => {
-    if (!defaultCwd) return;
-
-    try {
-      const availability = agentAvailability ?? (await cliAvailabilityClient.get());
-      const agentId = getDefaultAgentId(
-        defaultAgent,
-        defaultSelection,
-        availability,
-        selectedAgentIds
-      );
-
-      if (!agentId) {
-        console.error("No available agent to explain project");
-        return;
-      }
-
-      void actionService.dispatch(
-        "agent.launch",
-        {
-          agentId,
-          location: "grid",
-          cwd: defaultCwd,
-          prompt: PROJECT_EXPLANATION_PROMPT,
-          interactive: true,
-        },
-        { source: "user" }
-      );
-    } catch (error) {
-      console.error("Failed to launch project explanation:", error);
-    }
-  };
-
-  const [isLaunchingWhatsNext, setIsLaunchingWhatsNext] = React.useState(false);
-
-  const handleWhatsNext = async () => {
-    if (!defaultCwd || !activeWorktreeId || isLaunchingWhatsNext) return;
-
-    setIsLaunchingWhatsNext(true);
-    try {
-      const availability = agentAvailability ?? (await cliAvailabilityClient.get());
-      const agentId = getDefaultAgentId(
-        defaultAgent,
-        defaultSelection,
-        availability,
-        selectedAgentIds
-      );
-
-      if (!agentId) {
-        console.error("No available agent for What's Next workflow");
-        return;
-      }
-
-      const prompt = buildWhatsNextPrompt();
-
-      void actionService.dispatch(
-        "agent.launch",
-        {
-          agentId,
-          location: "grid",
-          cwd: defaultCwd,
-          worktreeId: activeWorktreeId,
-          prompt,
-          interactive: true,
-        },
-        { source: "user" }
-      );
-    } catch (error) {
-      console.error("Failed to launch What's Next workflow:", error);
-    } finally {
-      setTimeout(() => setIsLaunchingWhatsNext(false), 1000);
     }
   };
 
@@ -336,63 +240,10 @@ function EmptyState({
 
         <div className="flex flex-col items-center gap-4 mt-4">
           {hasActiveWorktree && (
-            <>
-              <p className="text-xs text-canopy-text/60 text-center">
-                Tip: Press <Kbd>⌘P</Kbd> to open the command palette or <Kbd>⌘T</Kbd> for a new
-                terminal
-              </p>
-
-              <div className="flex flex-wrap items-center justify-center gap-x-1 gap-y-2">
-                <button
-                  type="button"
-                  onClick={handleExplainProject}
-                  disabled={!defaultCwd}
-                  className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md hover:bg-tint/5 transition-colors group disabled:opacity-50 disabled:cursor-not-allowed focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-canopy-accent/50"
-                >
-                  <TerminalRecipeIcon className="h-3.5 w-3.5 text-canopy-text/50 group-hover:text-canopy-text/70 transition-colors" />
-                  <span className="text-xs text-canopy-text/50 group-hover:text-canopy-text/70 transition-colors">
-                    What's This Project?
-                  </span>
-                </button>
-
-                <span className="text-canopy-text/20" aria-hidden="true">
-                  ·
-                </span>
-
-                <button
-                  type="button"
-                  onClick={handleWhatsNext}
-                  disabled={!defaultCwd || isLaunchingWhatsNext}
-                  aria-busy={isLaunchingWhatsNext}
-                  className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md hover:bg-tint/5 transition-colors group disabled:opacity-50 disabled:cursor-not-allowed focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-canopy-accent/50"
-                >
-                  <Sparkles
-                    className={cn(
-                      "h-3.5 w-3.5 text-canopy-text/50 group-hover:text-canopy-text/70 transition-colors",
-                      isLaunchingWhatsNext && "animate-pulse"
-                    )}
-                  />
-                  <span className="text-xs text-canopy-text/50 group-hover:text-canopy-text/70 transition-colors">
-                    What's Next?
-                  </span>
-                </button>
-
-                <span className="text-canopy-text/20" aria-hidden="true">
-                  ·
-                </span>
-
-                <button
-                  type="button"
-                  onClick={handleOpenHelp}
-                  className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md hover:bg-tint/5 transition-colors group focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-canopy-accent/50"
-                >
-                  <div className="w-0 h-0 border-t-[2.5px] border-t-transparent border-l-[5px] border-l-canopy-text/50 border-b-[2.5px] border-b-transparent group-hover:border-l-canopy-text/70 transition-colors" />
-                  <span className="text-xs text-canopy-text/50 group-hover:text-canopy-text/70 transition-colors">
-                    Docs
-                  </span>
-                </button>
-              </div>
-            </>
+            <p className="text-xs text-canopy-text/60 text-center">
+              Tip: Press <Kbd>⌘P</Kbd> to open the command palette or <Kbd>⌘T</Kbd> for a new
+              terminal
+            </p>
           )}
 
           {!hasActiveWorktree && (
@@ -1096,7 +947,6 @@ export function ContentGrid({ className, defaultCwd, agentAvailability }: Conten
                   showProjectPulse={showProjectPulse}
                   projectIconSvg={projectIconSvg}
                   defaultCwd={defaultCwd}
-                  agentAvailability={agentAvailability}
                 />
               </div>
             ) : (
