@@ -48,7 +48,7 @@ export const SEL = {
     agentDropdownList: "#agent-selector-list",
     notifCompletedCheckbox: "#notif-completed",
     notifWaitingCheckbox: "#notif-waiting",
-    notifFailedCheckbox: "#notif-failed",
+    notifEscalationCheckbox: "#notif-waiting-escalation",
     notifSoundToggle: '[aria-label="Play sound for notifications"]',
   },
   panel: {
@@ -152,7 +152,7 @@ export const SEL = {
   },
   pulse: {
     heatmap: '[role="img"][aria-label*="Activity over"]',
-    rangeTrigger: '[aria-label="Change time range"]',
+    rangeTrigger: '[aria-label="Select pulse range"]',
     refreshButton: '[aria-label="Refresh"]',
   },
   reviewHub: {

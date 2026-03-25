@@ -133,63 +133,65 @@ test.describe.serial("Core: Terminal Layout Operations", () => {
     test("switch to fixed-columns with value 3 updates grid", async () => {
       const { window } = ctx;
 
-      await dispatchAction(window, "panel.gridLayout.setStrategy", {
+      await dispatchAction(window, "terminal.gridLayout.setStrategy", {
         strategy: "fixed-columns",
       });
-      await dispatchAction(window, "panel.gridLayout.setValue", { value: 3 });
+      await dispatchAction(window, "terminal.gridLayout.setValue", { value: 3 });
 
-      const grid = window.locator("#panel-grid");
+      const gridEl = window.locator('[data-grid-container="true"]');
+
+      // Verify grid shows 3 columns via computed style
       await expect
         .poll(
           async () => {
-            const style = await grid.getAttribute("style");
-            return style?.includes("repeat(3, 1fr)");
+            const cols = await gridEl.evaluate((el) => getComputedStyle(el).gridTemplateColumns);
+            return cols.trim().split(/\s+/).length;
           },
           { timeout: T_MEDIUM }
         )
-        .toBe(true);
+        .toBe(3);
     });
 
     test("switch to fixed-rows updates column count", async () => {
       const { window } = ctx;
 
-      await dispatchAction(window, "panel.gridLayout.setStrategy", {
+      await dispatchAction(window, "terminal.gridLayout.setStrategy", {
         strategy: "fixed-rows",
       });
-      await dispatchAction(window, "panel.gridLayout.setValue", { value: 3 });
+      await dispatchAction(window, "terminal.gridLayout.setValue", { value: 3 });
 
       // With 3 panels and 3 rows, columns = ceil(3/3) = 1
-      const grid = window.locator("#panel-grid");
+      const gridEl = window.locator('[data-grid-container="true"]');
       await expect
         .poll(
           async () => {
-            const style = await grid.getAttribute("style");
-            return style?.includes("repeat(1, 1fr)");
+            const cols = await gridEl.evaluate((el) => getComputedStyle(el).gridTemplateColumns);
+            return cols.trim().split(/\s+/).length;
           },
           { timeout: T_MEDIUM }
         )
-        .toBe(true);
+        .toBe(1);
     });
 
     test("restore automatic layout strategy", async () => {
       const { window } = ctx;
 
       // Previous strategy was fixed-rows with 1 column — automatic should differ
-      await dispatchAction(window, "panel.gridLayout.setStrategy", {
+      await dispatchAction(window, "terminal.gridLayout.setStrategy", {
         strategy: "automatic",
       });
 
-      const grid = window.locator("#panel-grid");
+      const gridEl = window.locator('[data-grid-container="true"]');
       await expect
         .poll(
           async () => {
-            const style = await grid.getAttribute("style");
+            const cols = await gridEl.evaluate((el) => getComputedStyle(el).gridTemplateColumns);
             // Automatic with 3 panels should not produce 1 column
-            return style != null && !style.includes("repeat(1, 1fr)");
+            return cols.trim().split(/\s+/).length;
           },
           { timeout: T_MEDIUM }
         )
-        .toBe(true);
+        .toBeGreaterThan(1);
     });
   });
 

@@ -197,9 +197,6 @@ test.describe.serial("Core: Settings Advanced", () => {
       await expect(window.locator(SEL.settings.notifWaitingCheckbox)).toBeVisible({
         timeout: T_SHORT,
       });
-      await expect(window.locator(SEL.settings.notifFailedCheckbox)).toBeVisible({
-        timeout: T_SHORT,
-      });
       await expect(window.locator(SEL.settings.notifSoundToggle)).toBeVisible({
         timeout: T_SHORT,
       });

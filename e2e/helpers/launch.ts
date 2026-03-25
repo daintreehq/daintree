@@ -100,6 +100,18 @@ export async function launchApp(options: LaunchOptions = {}): Promise<AppContext
         if (msg.type() === "error") console.error("[e2e:console]", msg.text());
       });
 
+      // Resize to a large window so toolbar overflow doesn't hide buttons.
+      // Skip when reusing a userDataDir (restart tests) to preserve persisted window state.
+      if (!options.userDataDir) {
+        await app.evaluate(({ BrowserWindow }) => {
+          const win = BrowserWindow.getAllWindows()[0];
+          if (win) {
+            win.setSize(1920, 1080);
+            win.center();
+          }
+        });
+      }
+
       await window.waitForLoadState("domcontentloaded");
 
       const readySelector = options.waitForSelector ?? '[aria-label="Open settings"]';

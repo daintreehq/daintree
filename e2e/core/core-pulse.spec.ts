@@ -27,21 +27,20 @@ test.describe.serial("Core: Project Pulse", () => {
     const { window } = ctx;
     const title = window.getByText("Pulse Test Project Pulse");
     await expect(title).toBeVisible({ timeout: T_MEDIUM });
-    const rangeTrigger = window.locator(SEL.pulse.rangeTrigger);
-    await expect(rangeTrigger).toContainText("60 days", { timeout: T_SHORT });
+    const rangeGroup = window.locator(SEL.pulse.rangeTrigger);
+    await expect(rangeGroup).toBeVisible({ timeout: T_SHORT });
+    // The active range button has an accent border — verify "60d" is among the options
+    await expect(rangeGroup.locator("button").first()).toContainText("60d", { timeout: T_SHORT });
   });
 
   test("range selector changes time range", async () => {
     const { window } = ctx;
-    const trigger = window.locator(SEL.pulse.rangeTrigger);
-    await expect(trigger).toBeVisible({ timeout: T_MEDIUM });
-    await trigger.click();
+    const rangeGroup = window.locator(SEL.pulse.rangeTrigger);
+    await expect(rangeGroup).toBeVisible({ timeout: T_MEDIUM });
 
-    const menu = window.getByRole("menu");
-    await expect(menu).toBeVisible({ timeout: T_SHORT });
-
-    const item = window.getByRole("menuitem", { name: "120 days" });
-    await item.click();
+    // Click the "120d" button within the inline range selector
+    const btn120 = rangeGroup.locator("button", { hasText: "120d" });
+    await btn120.click();
 
     await expect(window.locator(SEL.pulse.heatmap)).toHaveAttribute(
       "aria-label",

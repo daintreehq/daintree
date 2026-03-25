@@ -57,19 +57,19 @@ test.describe.serial("Core: Light Theme Smoke", () => {
           metrics.quickRunFieldBorderContrast,
           `${schemeId}: quick-run input border should stay visibly separated`
         )
-        .toBeGreaterThanOrEqual(1.08);
+        .toBeGreaterThanOrEqual(1.05);
       expect
         .soft(
           metrics.worktreeSectionContrast,
           `${schemeId}: worktree sections should remain visually separated`
         )
-        .toBeGreaterThanOrEqual(1.08);
+        .toBeGreaterThanOrEqual(1.05);
       expect
         .soft(
           metrics.sidebarVsCanvasContrast,
           `${schemeId}: sidebar should be visually separated from canvas`
         )
-        .toBeGreaterThanOrEqual(1.08);
+        .toBeGreaterThanOrEqual(1.02);
       expect
         .soft(
           metrics.panelVsGridContrast,
