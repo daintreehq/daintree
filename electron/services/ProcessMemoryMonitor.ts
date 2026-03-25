@@ -38,6 +38,7 @@ interface PidTrendState {
 export interface MemoryPressureActions {
   clearCaches: () => Promise<void>;
   hibernateIdleProjects: () => Promise<void>;
+  trimPtyHostState?: () => void;
 }
 
 function getProcessMemoryMb(proc: Electron.ProcessMetric): number {
@@ -170,6 +171,12 @@ export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => v
             consecutivePressureCount,
           });
           await actions.clearCaches();
+
+          try {
+            actions.trimPtyHostState?.();
+          } catch {
+            /* non-critical */
+          }
 
           if (
             consecutivePressureCount >= PRESSURE_COUNT_TIER2 &&

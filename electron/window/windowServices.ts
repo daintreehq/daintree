@@ -70,7 +70,8 @@ import {
   startProcessMemoryMonitor,
 } from "../utils/performance.js";
 import { startAppMetricsMonitor } from "../services/ProcessMemoryMonitor.js";
-import { setLoggerWindow } from "../utils/logger.js";
+import { SCROLLBACK_BACKGROUND } from "../../shared/config/scrollback.js";
+import { logInfo, setLoggerWindow } from "../utils/logger.js";
 import { PERF_MARKS } from "../../shared/perf/marks.js";
 import { isSmokeTest, isDemoMode, smokeTestStart, exposeGc } from "../setup/environment.js";
 import { extractCliPath, getPendingCliPath, setPendingCliPath } from "../lifecycle/appLifecycle.js";
@@ -357,6 +358,28 @@ export async function setupWindowServices(
   });
   ptyClient.on("host-crash", (code) => {
     console.error(`[MAIN] Pty Host crashed with code ${code} (max restarts exceeded)`);
+  });
+  ptyClient.on("host-throttled", (payload) => {
+    if (!payload.isThrottled) {
+      logInfo("pty-host-resumed", { duration: payload.duration });
+      return;
+    }
+    logInfo("pty-host-throttled", { reason: payload.reason });
+    try {
+      session.defaultSession.clearCache().catch(() => {});
+    } catch {
+      /* non-critical */
+    }
+    try {
+      sendToRenderer(win, CHANNELS.WINDOW_RECLAIM_MEMORY, { reason: "pty-host-pressure" });
+    } catch {
+      /* non-critical */
+    }
+    try {
+      ptyClient!.trimState(SCROLLBACK_BACKGROUND);
+    } catch {
+      /* non-critical */
+    }
   });
   ptyClient.setPortRefreshCallback(() => {
     console.log("[MAIN] Pty Host restarted, refreshing ports...");
@@ -683,6 +706,9 @@ export async function setupWindowServices(
       },
       hibernateIdleProjects: async () => {
         await getHibernationService().hibernateUnderMemoryPressure();
+      },
+      trimPtyHostState: () => {
+        ptyClient?.trimState(SCROLLBACK_BACKGROUND);
       },
     });
   }
