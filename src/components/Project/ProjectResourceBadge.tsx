@@ -1,6 +1,5 @@
 import { useEffect, useState, useCallback } from "react";
-import { projectClient } from "@/clients";
-import type { ProjectStats } from "@shared/types";
+import { projectClient, systemClient } from "@/clients";
 
 interface AggregateStats {
   runningProjects: number;
@@ -18,29 +17,25 @@ export function ProjectResourceBadge() {
 
   const fetchStats = useCallback(async () => {
     try {
-      const projects = await projectClient.getAll();
-      let running = 0;
-      let processes = 0;
-      let memory = 0;
+      const [projects, appMetrics] = await Promise.all([
+        projectClient.getAll(),
+        systemClient.getAppMetrics(),
+      ]);
 
+      let running = 0;
       const statsPromises = projects.map((p) => projectClient.getStats(p.id));
       const results = await Promise.allSettled(statsPromises);
 
       results.forEach((result) => {
-        if (result.status === "fulfilled") {
-          const stat: ProjectStats = result.value;
-          if (stat.processCount > 0) {
-            running++;
-            processes += stat.processCount;
-            memory += stat.estimatedMemoryMB;
-          }
+        if (result.status === "fulfilled" && result.value.processCount > 0) {
+          running++;
         }
       });
 
       return {
         runningProjects: running,
-        totalProcesses: processes,
-        totalMemoryMB: Math.round(memory),
+        totalProcesses: appMetrics.processCount,
+        totalMemoryMB: appMetrics.totalMemoryMB,
       };
     } catch (error) {
       console.error("[ProjectResourceBadge] Failed to fetch stats:", error);
