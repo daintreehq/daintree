@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { isSensitiveVar, filterEnvironment, injectCanopyMetadata } from "../EnvironmentFilter.js";
+import {
+  isSensitiveVar,
+  filterEnvironment,
+  injectCanopyMetadata,
+  ensureUtf8Locale,
+} from "../EnvironmentFilter.js";
 
 describe("isSensitiveVar", () => {
   describe("exact blocklist", () => {
@@ -152,6 +157,65 @@ describe("injectCanopyMetadata", () => {
     const env = { PATH: "/usr/bin" };
     injectCanopyMetadata(env, { paneId: "x", cwd: "/c" });
     expect("CANOPY_PANE_ID" in env).toBe(false);
+  });
+});
+
+describe("ensureUtf8Locale", () => {
+  it("preserves LANG when already UTF-8 (standard format)", () => {
+    expect(ensureUtf8Locale({ LANG: "fr_FR.UTF-8" }).LANG).toBe("fr_FR.UTF-8");
+  });
+
+  it("preserves LANG with lowercase utf8 variant", () => {
+    expect(ensureUtf8Locale({ LANG: "ja_JP.utf8" }).LANG).toBe("ja_JP.utf8");
+  });
+
+  it("preserves LANG with no-hyphen UTF8 variant", () => {
+    expect(ensureUtf8Locale({ LANG: "de_DE.UTF8" }).LANG).toBe("de_DE.UTF8");
+  });
+
+  it("falls back to en_US.UTF-8 when LANG is missing", () => {
+    expect(ensureUtf8Locale({}).LANG).toBe("en_US.UTF-8");
+  });
+
+  it("falls back to en_US.UTF-8 when LANG is empty", () => {
+    expect(ensureUtf8Locale({ LANG: "" }).LANG).toBe("en_US.UTF-8");
+  });
+
+  it("falls back to en_US.UTF-8 when LANG is C", () => {
+    expect(ensureUtf8Locale({ LANG: "C" }).LANG).toBe("en_US.UTF-8");
+  });
+
+  it("falls back to en_US.UTF-8 when LANG is POSIX", () => {
+    expect(ensureUtf8Locale({ LANG: "POSIX" }).LANG).toBe("en_US.UTF-8");
+  });
+
+  it("falls back when LANG has non-UTF-8 encoding", () => {
+    expect(ensureUtf8Locale({ LANG: "en_US.ISO-8859-1" }).LANG).toBe("en_US.UTF-8");
+  });
+
+  it("preserves C.UTF-8 (common Linux locale)", () => {
+    expect(ensureUtf8Locale({ LANG: "C.UTF-8" }).LANG).toBe("C.UTF-8");
+  });
+
+  it("does not add or remove LC_ALL", () => {
+    const withLcAll = ensureUtf8Locale({ LANG: "C", LC_ALL: "ja_JP.UTF-8" });
+    expect(withLcAll.LC_ALL).toBe("ja_JP.UTF-8");
+
+    const withoutLcAll = ensureUtf8Locale({ LANG: "en_US.UTF-8" });
+    expect("LC_ALL" in withoutLcAll).toBe(false);
+  });
+
+  it("does not mutate the input object", () => {
+    const env = { LANG: "C", PATH: "/usr/bin" };
+    ensureUtf8Locale(env);
+    expect(env.LANG).toBe("C");
+  });
+
+  it("preserves other env vars", () => {
+    const result = ensureUtf8Locale({ PATH: "/usr/bin", HOME: "/home/test" });
+    expect(result.PATH).toBe("/usr/bin");
+    expect(result.HOME).toBe("/home/test");
+    expect(result.LANG).toBe("en_US.UTF-8");
   });
 });
 
