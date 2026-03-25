@@ -79,17 +79,30 @@ export class FdMonitor {
   }
 
   private readPtmxLimit(): number | null {
-    if (process.platform !== "darwin") return null;
-    try {
-      const output = execFileSync("sysctl", ["-n", "kern.tty.ptmx_max"], {
-        encoding: "utf8",
-        timeout: 2000,
-      });
-      const parsed = parseInt(output.trim(), 10);
-      return Number.isFinite(parsed) ? parsed : null;
-    } catch {
-      return 511; // macOS default
+    if (process.platform === "linux") {
+      try {
+        const output = fs.readFileSync("/proc/sys/kernel/pty/max", "utf8");
+        const parsed = parseInt(output.trim(), 10);
+        return Number.isFinite(parsed) ? parsed : null;
+      } catch {
+        return null;
+      }
     }
+
+    if (process.platform === "darwin") {
+      try {
+        const output = execFileSync("sysctl", ["-n", "kern.tty.ptmx_max"], {
+          encoding: "utf8",
+          timeout: 2000,
+        });
+        const parsed = parseInt(output.trim(), 10);
+        return Number.isFinite(parsed) ? parsed : null;
+      } catch {
+        return 511; // macOS default
+      }
+    }
+
+    return null;
   }
 
   get supported(): boolean {

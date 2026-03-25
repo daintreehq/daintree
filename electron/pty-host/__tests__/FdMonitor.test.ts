@@ -2,11 +2,16 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 // Must mock before imports
 const mockReaddirSync = vi.fn();
+const mockReadFileSync = vi.fn();
 const mockExecFileSync = vi.fn();
 
 vi.mock("node:fs", () => ({
-  default: { readdirSync: (...args: unknown[]) => mockReaddirSync(...args) },
+  default: {
+    readdirSync: (...args: unknown[]) => mockReaddirSync(...args),
+    readFileSync: (...args: unknown[]) => mockReadFileSync(...args),
+  },
   readdirSync: (...args: unknown[]) => mockReaddirSync(...args),
+  readFileSync: (...args: unknown[]) => mockReadFileSync(...args),
 }));
 
 vi.mock("node:child_process", () => ({
@@ -18,6 +23,9 @@ import { FdMonitor, isProcessAlive } from "../FdMonitor.js";
 describe("FdMonitor", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
+    mockReaddirSync.mockReset();
+    mockReadFileSync.mockReset();
+    mockExecFileSync.mockReset();
     mockReaddirSync.mockReturnValue(["0", "1", "2", "3", "4"]);
     mockExecFileSync.mockReturnValue("511\n");
   });
@@ -64,13 +72,65 @@ describe("FdMonitor", () => {
       expect(result.totalFds).toBe(50);
       expect(result.estimatedTerminalFds).toBe(45);
     });
+  });
 
-    it("reports ptmxLimit on macOS", () => {
+  describe("readPtmxLimit", () => {
+    it("reads /proc/sys/kernel/pty/max on Linux", () => {
+      vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+      mockReadFileSync.mockReturnValue("4096\n");
+
       const monitor = new FdMonitor("/dev/fd");
       const result = monitor.checkForLeaks(0, []);
-      if (process.platform === "darwin") {
-        expect(result.ptmxLimit).toBe(511);
-      }
+
+      expect(result.ptmxLimit).toBe(4096);
+      expect(mockReadFileSync).toHaveBeenCalledWith("/proc/sys/kernel/pty/max", "utf8");
+      expect(mockExecFileSync).not.toHaveBeenCalled();
+    });
+
+    it("returns null on Linux when read fails", () => {
+      vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+      mockReadFileSync.mockImplementation(() => {
+        throw new Error("ENOENT");
+      });
+
+      const monitor = new FdMonitor("/dev/fd");
+      const result = monitor.checkForLeaks(0, []);
+
+      expect(result.ptmxLimit).toBeNull();
+    });
+
+    it("reads sysctl on macOS", () => {
+      vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
+      mockExecFileSync.mockReturnValue("511\n");
+
+      const monitor = new FdMonitor("/dev/fd");
+      const result = monitor.checkForLeaks(0, []);
+
+      expect(result.ptmxLimit).toBe(511);
+      expect(mockReadFileSync).not.toHaveBeenCalled();
+    });
+
+    it("returns 511 fallback on macOS when sysctl fails", () => {
+      vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
+      mockExecFileSync.mockImplementation(() => {
+        throw new Error("sysctl failed");
+      });
+
+      const monitor = new FdMonitor("/dev/fd");
+      const result = monitor.checkForLeaks(0, []);
+
+      expect(result.ptmxLimit).toBe(511);
+    });
+
+    it("returns null on unsupported platforms", () => {
+      vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+
+      const monitor = new FdMonitor("/dev/fd");
+      const result = monitor.checkForLeaks(0, []);
+
+      expect(result.ptmxLimit).toBeNull();
+      expect(mockReadFileSync).not.toHaveBeenCalled();
+      expect(mockExecFileSync).not.toHaveBeenCalled();
     });
   });
 
