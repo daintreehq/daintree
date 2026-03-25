@@ -46,3 +46,12 @@ export interface ProjectStats {
   /** Process IDs of running terminals */
   processIds: number[];
 }
+
+/** Per-project entry in bulk stats response, includes agent counts */
+export interface BulkProjectStatsEntry extends ProjectStats {
+  activeAgentCount: number;
+  waitingAgentCount: number;
+}
+
+/** Bulk project stats response keyed by project ID */
+export type BulkProjectStats = Record<string, BulkProjectStatsEntry>;

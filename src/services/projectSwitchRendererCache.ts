@@ -113,6 +113,19 @@ export function isTerminalWarmInProjectSwitchCache(projectId: string, terminalId
   return cachedEntry?.projectId === projectId && cachedEntry.terminalIds.has(terminalId);
 }
 
+export function flushProjectSwitchRendererCache(): string[] {
+  const evictedIds: string[] = [];
+  if (cachedEntry) {
+    evictedIds.push(...cachedEntry.terminalIds);
+    cachedEntry = null;
+  }
+  if (pendingOutgoingEntry) {
+    evictedIds.push(...pendingOutgoingEntry.terminalIds);
+    pendingOutgoingEntry = null;
+  }
+  return evictedIds;
+}
+
 export function resetProjectSwitchRendererCacheForTests(): void {
   cachedEntry = null;
   pendingOutgoingEntry = null;

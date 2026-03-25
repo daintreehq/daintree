@@ -101,7 +101,7 @@ import type { AppState, HydrateResult } from "./app.js";
 import type { LogEntry, LogFilterOptions } from "./logs.js";
 import type { RetryAction, AppError, RetryProgressPayload } from "./errors.js";
 import type { EventRecord, EventFilterOptions } from "./events.js";
-import type { ProjectCloseResult, ProjectStats } from "./project.js";
+import type { ProjectCloseResult, ProjectStats, BulkProjectStats } from "./project.js";
 import type { GitInitOptions, GitInitProgressEvent, GitInitResult } from "./gitInit.js";
 import type {
   RepositoryStats,
@@ -390,6 +390,7 @@ export interface ElectronAPI {
      */
     reopen(projectId: string): Promise<Project>;
     getStats(projectId: string): Promise<ProjectStats>;
+    getBulkStats(projectIds: string[]): Promise<BulkProjectStats>;
     createFolder(parentPath: string, folderName: string): Promise<string>;
     initGit(directoryPath: string): Promise<void>;
     /** Initialize git repository with progress events */
