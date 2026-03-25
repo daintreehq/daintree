@@ -82,7 +82,6 @@ describe("PulseHeatmap — contrast on elevated card (issue #2645)", () => {
   it("heatmap uses square indicators and pulse component vars", async () => {
     const content = await readFile(HEATMAP_PATH, "utf-8");
     expect(content).toContain("rounded-[2px]");
-    expect(content).toContain("var(--pulse-before-bg");
     expect(content).toContain("var(--pulse-empty-bg");
     expect(content).toContain("var(--pulse-missed-bg)");
   });

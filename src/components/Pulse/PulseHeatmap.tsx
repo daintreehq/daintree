@@ -64,10 +64,6 @@ function getHeatCellBackground(level: HeatCell["level"]): string {
 }
 
 function getCellStyle(cell: RenderCell): CSSProperties {
-  if (cell.isBeforeProject) {
-    return { background: "var(--pulse-before-bg, var(--theme-surface-sidebar))" };
-  }
-
   if (cell.isMissedDay) {
     return { background: "var(--pulse-missed-bg)" };
   }
@@ -82,10 +78,6 @@ function getCellStyle(cell: RenderCell): CSSProperties {
 }
 
 function getTooltipText(cell: RenderCell): string {
-  if (cell.isBeforeProject) {
-    return "Before project started";
-  }
-
   if (cell.isMissedDay) {
     return "Missed day";
   }
@@ -101,6 +93,7 @@ export function PulseHeatmap({ cells, rangeDays, compact = false }: PulseHeatmap
   const rows = useMemo(() => {
     const normalizedCells = [...cells]
       .filter((cell) => !Number.isNaN(new Date(cell.date).getTime()))
+      .filter((cell) => !cell.isBeforeProject)
       .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
       .map((cell, index, allCells) => ({
         ...cell,
@@ -122,7 +115,8 @@ export function PulseHeatmap({ cells, rangeDays, compact = false }: PulseHeatmap
 
   const cellSize = compact ? COMPACT_CELL_SIZE_PX : CELL_SIZE_PX;
   const gap = compact ? COMPACT_GAP_PX : GAP_PX;
-  const columns = compact ? Math.min(COLUMNS_PER_ROW, cells.length) : COLUMNS_PER_ROW;
+  const totalCells = rows.reduce((sum, r) => sum + r.length, 0);
+  const columns = compact ? Math.min(COLUMNS_PER_ROW, totalCells) : COLUMNS_PER_ROW;
   const rowWidth = columns > 0 ? cellSize * columns + gap * (columns - 1) : 0;
 
   return (
@@ -134,7 +128,14 @@ export function PulseHeatmap({ cells, rangeDays, compact = false }: PulseHeatmap
         aria-label={`Activity over the last ${rangeDays} days`}
       >
         {rows.map((row, rowIndex) => (
-          <div key={rowIndex} className="flex" style={{ gap: `${gap}px` }}>
+          <div
+            key={rowIndex}
+            className={cn(
+              "flex",
+              rowIndex === 0 && rows.length > 1 && row.length < columns && "justify-end"
+            )}
+            style={{ gap: `${gap}px` }}
+          >
             {row.map((cell) => {
               const date = new Date(cell.date);
               const formatted = date.toLocaleDateString("en-US", {
