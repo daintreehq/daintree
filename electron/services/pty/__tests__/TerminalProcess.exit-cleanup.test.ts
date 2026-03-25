@@ -115,13 +115,35 @@ describe("TerminalProcess onExit — sessionPersistTimer cleanup", () => {
     vi.useRealTimers();
   });
 
-  it("clears sessionPersistTimer on natural exit so no serialization error fires", async () => {
+  it("persist timer fires after debounce when PTY stays alive (positive control)", async () => {
     const pty = createControllablePty();
-    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
     createTerminal(pty);
 
-    // Emit data to trigger scheduleSessionPersist (sets a 5s debounce timer)
+    pty.emitData("hello world\r\n");
+
+    // Advance past the debounce — timer should fire and attempt persistence
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    // persistSessionSnapshot runs; serialization may fail without real terminal
+    // data, but the attempt proves the timer mechanism works
+    const persistAttempts = warnSpy.mock.calls.filter(
+      (args) => typeof args[0] === "string" && args[0].includes("Failed to persist session")
+    );
+    const persistCalled = persistAsyncMock.mock.calls.length > 0;
+    expect(persistAttempts.length > 0 || persistCalled).toBe(true);
+
+    warnSpy.mockRestore();
+  });
+
+  it("clears sessionPersistTimer on natural exit so no persist attempt fires", async () => {
+    const pty = createControllablePty();
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    createTerminal(pty);
+
+    // Emit data to trigger scheduleSessionPersist (sets a debounce timer)
     pty.emitData("hello world\r\n");
 
     // PTY exits naturally before the timer fires
@@ -130,13 +152,14 @@ describe("TerminalProcess onExit — sessionPersistTimer cleanup", () => {
     // Advance past the debounce period — timer should have been cleared
     await vi.advanceTimersByTimeAsync(10_000);
 
-    // The serialization error should NOT have fired
-    const serializeErrors = errorSpy.mock.calls.filter(
-      (args) => typeof args[0] === "string" && args[0].includes("Failed to serialize terminal")
+    // Neither the async persist mock nor the warn-on-failure path should fire
+    const persistAttempts = warnSpy.mock.calls.filter(
+      (args) => typeof args[0] === "string" && args[0].includes("Failed to persist session")
     );
-    expect(serializeErrors).toHaveLength(0);
+    expect(persistAsyncMock).not.toHaveBeenCalled();
+    expect(persistAttempts).toHaveLength(0);
 
-    errorSpy.mockRestore();
+    warnSpy.mockRestore();
   });
 
   it("does not throw when clearing timer that was never set", () => {
@@ -146,22 +169,5 @@ describe("TerminalProcess onExit — sessionPersistTimer cleanup", () => {
 
     // Exit without any data — no timer was ever scheduled
     expect(() => pty.emitExit(0)).not.toThrow();
-  });
-
-  it("prevents re-scheduling via dirty flag after exit", async () => {
-    const pty = createControllablePty();
-
-    createTerminal(pty);
-
-    // Emit data to trigger scheduleSessionPersist
-    pty.emitData("some output\r\n");
-
-    // Exit naturally
-    pty.emitExit(0);
-
-    // Advance timers — no persist should happen
-    await vi.advanceTimersByTimeAsync(10_000);
-
-    expect(persistAsyncMock).not.toHaveBeenCalled();
   });
 });
