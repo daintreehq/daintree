@@ -13,6 +13,9 @@ import type { TerminalSpawnOptions } from "../../../types/index.js";
 import { TerminalSpawnOptionsSchema } from "../../../schemas/ipc.js";
 import { getDefaultShell } from "../../../services/pty/terminalShell.js";
 
+export const SHELL_READY_TIMEOUT_MS = 3000;
+export const COMMAND_DELAY_MS = 100;
+
 export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): () => void {
   const { ptyClient } = deps;
   if (!ptyClient) {
@@ -186,11 +189,64 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
             }
           }
 
-          setTimeout(() => {
-            if (ptyClient.hasTerminal(id)) {
-              ptyClient.write(id, `${finalCommand}\r`);
-            }
-          }, 100);
+          if (isAgent) {
+            // Wait for shell initialization (nvm, etc.) before injecting the agent command.
+            // On macOS, login shells re-source profiles which can take 200-500ms+ (nvm init).
+            // A fixed 100ms delay races with shell init; instead, write a sentinel echo and
+            // wait for it to appear in output — proving the shell is ready to accept commands.
+            const sentinel = `__CANOPY_READY_${id.slice(0, 8)}__`;
+            let completed = false;
+            let buffer = "";
+
+            const cleanup = () => {
+              ptyClient.off("data", onData);
+              ptyClient.off("exit", onExit);
+            };
+
+            const writeCommand = () => {
+              if (completed) return;
+              completed = true;
+              cleanup();
+              if (ptyClient.hasTerminal(id)) {
+                ptyClient.write(id, `${finalCommand}\r`);
+              }
+            };
+
+            const onData = (dataId: string, data: string | Uint8Array) => {
+              if (dataId !== id) return;
+              const text = typeof data === "string" ? data : new TextDecoder().decode(data);
+              buffer += text;
+              // Keep buffer bounded to prevent memory growth during slow shell init
+              if (buffer.length > 8192) {
+                buffer = buffer.slice(-4096);
+              }
+              if (buffer.includes(sentinel)) {
+                writeCommand();
+              }
+            };
+
+            const onExit = (exitId: string) => {
+              if (exitId !== id) return;
+              if (!completed) {
+                completed = true;
+                cleanup();
+              }
+            };
+
+            ptyClient.on("data", onData);
+            ptyClient.on("exit", onExit);
+
+            // Write sentinel echo — processed after shell init completes
+            ptyClient.write(id, `echo ${sentinel}\r`);
+
+            setTimeout(() => writeCommand(), SHELL_READY_TIMEOUT_MS);
+          } else {
+            setTimeout(() => {
+              if (ptyClient.hasTerminal(id)) {
+                ptyClient.write(id, `${finalCommand}\r`);
+              }
+            }, COMMAND_DELAY_MS);
+          }
         }
       }
 
