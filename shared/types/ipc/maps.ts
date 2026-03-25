@@ -70,6 +70,7 @@ import type {
   StartAgentUpdateResult,
   CliInstallStatus,
   SystemHealthCheckResult,
+  AppMetricsSummary,
 } from "./system.js";
 import type { AppState, HydrateResult } from "./app.js";
 import type { LogEntry, LogFilterOptions } from "./logs.js";
@@ -452,6 +453,10 @@ export interface IpcInvokeMap {
   "system:download-diagnostics": {
     args: [];
     result: boolean;
+  };
+  "system:get-app-metrics": {
+    args: [];
+    result: AppMetricsSummary;
   };
 
   // App state channels

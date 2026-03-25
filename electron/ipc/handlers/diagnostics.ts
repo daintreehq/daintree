@@ -1,11 +1,27 @@
-import { ipcMain, dialog } from "electron";
+import { app, ipcMain, dialog } from "electron";
 import { promises as fs } from "node:fs";
 import { CHANNELS } from "../channels.js";
 import type { HandlerDependencies } from "../types.js";
+import type { AppMetricsSummary } from "../../../shared/types/ipc/system.js";
 import { collectDiagnostics } from "../../services/DiagnosticsCollector.js";
 
 export function registerDiagnosticsHandlers(deps: HandlerDependencies): () => void {
   const handlers: Array<() => void> = [];
+
+  const handleGetAppMetrics = (): AppMetricsSummary => {
+    try {
+      const metrics = app.getAppMetrics();
+      let totalKB = 0;
+      for (const proc of metrics) {
+        totalKB += proc.memory.privateBytes ?? proc.memory.workingSetSize;
+      }
+      return { totalMemoryMB: Math.round(totalKB / 1024) };
+    } catch {
+      return { totalMemoryMB: 0 };
+    }
+  };
+  ipcMain.handle(CHANNELS.SYSTEM_GET_APP_METRICS, handleGetAppMetrics);
+  handlers.push(() => ipcMain.removeHandler(CHANNELS.SYSTEM_GET_APP_METRICS));
 
   const handleDownloadDiagnostics = async (): Promise<boolean> => {
     const payload = await collectDiagnostics(deps);

@@ -49,6 +49,10 @@ export const systemClient = {
     return window.electron.system.downloadDiagnostics();
   },
 
+  getAppMetrics: (): ReturnType<typeof window.electron.system.getAppMetrics> => {
+    return window.electron.system.getAppMetrics();
+  },
+
   onWake: (
     callback: (data: { sleepDuration: number; timestamp: number }) => void
   ): (() => void) => {
