@@ -71,13 +71,18 @@ describe("useOverlayState", () => {
   });
 
   it("does not double-pop when unmounting after isOpen becomes false", () => {
-    const { rerender, unmount } = render(<Overlay isOpen={true} />);
+    // Keep a second overlay open so an extra pop would be visible
+    // (popOverlay clamps at 0, so without this sentinel the test is vacuous)
+    render(<Overlay isOpen={true} />);
     expect(getOverlayCount()).toBe(1);
 
+    const { rerender, unmount } = render(<Overlay isOpen={true} />);
+    expect(getOverlayCount()).toBe(2);
+
     rerender(<Overlay isOpen={false} />);
-    expect(getOverlayCount()).toBe(0);
+    expect(getOverlayCount()).toBe(1);
 
     unmount();
-    expect(getOverlayCount()).toBe(0);
+    expect(getOverlayCount()).toBe(1);
   });
 });
