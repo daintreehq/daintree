@@ -545,6 +545,19 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     [deferredWorktrees, mainWorktree]
   );
 
+  const quickStateCounts = useMemo(() => {
+    const counts = { working: 0, waiting: 0, finished: 0 };
+    for (const w of deferredWorktrees) {
+      if (w.id === mainWorktree?.id || w.id === integrationWorktree?.id) continue;
+      const meta = derivedMetaMap.get(w.id);
+      if (!meta) continue;
+      if (matchesQuickStateFilter("working", meta)) counts.working++;
+      if (matchesQuickStateFilter("waiting", meta)) counts.waiting++;
+      if (matchesQuickStateFilter("finished", meta)) counts.finished++;
+    }
+    return counts;
+  }, [deferredWorktrees, derivedMetaMap, mainWorktree, integrationWorktree]);
+
   const { filteredWorktrees, groupedSections } = useMemo(() => {
     const filters: FilterState = {
       query,
@@ -946,7 +959,11 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
           <div ref={scrollContainerRef} className="h-full overflow-y-auto scrollbar-none">
             <div ref={scrollContentRef}>
               {hasNonMainWorktrees && (
-                <QuickStateFilterBar value={quickStateFilter} onChange={setQuickStateFilter} />
+                <QuickStateFilterBar
+                  value={quickStateFilter}
+                  onChange={setQuickStateFilter}
+                  counts={quickStateCounts}
+                />
               )}
               {filteredWorktrees.length === 0 && hasFilters ? (
                 <div className="flex flex-col items-center justify-center py-12 px-4 text-center">
