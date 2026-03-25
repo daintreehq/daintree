@@ -1,6 +1,5 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import {
-  Sprout,
   X,
   Settings,
   FileCode,
@@ -93,7 +92,9 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
   const [notificationOverrides, setNotificationOverrides] = useState<Partial<NotificationSettings>>(
     {}
   );
-  const lastSavedSnapshotRef = useRef<ReturnType<typeof createProjectSettingsSnapshot> | null>(null);
+  const lastSavedSnapshotRef = useRef<ReturnType<typeof createProjectSettingsSnapshot> | null>(
+    null
+  );
 
   const { recipes, isLoading: recipesLoading } = useRecipeStore();
   const { worktreeMap, worktrees } = useWorktrees();
@@ -279,7 +280,7 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
     return cleanup;
   }, [isOpen, projectId]);
 
-  const persistRef = useRef<() => Promise<void>>();
+  const persistRef = useRef<() => Promise<void>>(undefined);
   persistRef.current = async () => {
     if (!settings || !currentProject) return;
 
@@ -397,8 +398,9 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
   }, [currentSnapshot, isInitialized]);
 
   useEffect(() => {
+    const save = debouncedSaveRef.current;
     return () => {
-      debouncedSaveRef.current.cancel();
+      save.cancel();
     };
   }, []);
 
@@ -424,226 +426,225 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
   };
 
   return (
-      <AppDialog
-        isOpen={isOpen}
-        onClose={onClose}
-        onBeforeClose={handleBeforeClose}
-        size="4xl"
-        maxHeight="h-[75vh]"
-        className="max-h-[800px]"
-      >
-        <div className="flex h-full overflow-hidden">
-          <div className="w-48 border-r border-canopy-border bg-canopy-bg/50 p-4 flex flex-col gap-2 shrink-0">
-            <h2 className="text-sm font-semibold text-canopy-text mb-4 px-2">Project Settings</h2>
-            <NavButton
-              active={activeTab === "general"}
-              onClick={() => setActiveTab("general")}
-              icon={<Settings className="w-4 h-4" />}
+    <AppDialog
+      isOpen={isOpen}
+      onClose={onClose}
+      onBeforeClose={handleBeforeClose}
+      size="4xl"
+      maxHeight="h-[75vh]"
+      className="max-h-[800px]"
+    >
+      <div className="flex h-full overflow-hidden">
+        <div className="w-48 border-r border-canopy-border bg-canopy-bg/50 p-4 flex flex-col gap-2 shrink-0">
+          <h2 className="text-sm font-semibold text-canopy-text mb-4 px-2">Project Settings</h2>
+          <NavButton
+            active={activeTab === "general"}
+            onClick={() => setActiveTab("general")}
+            icon={<Settings className="w-4 h-4" />}
+          >
+            General
+          </NavButton>
+          <NavButton
+            active={activeTab === "context"}
+            onClick={() => setActiveTab("context")}
+            icon={<FileCode className="w-4 h-4" />}
+          >
+            Context
+          </NavButton>
+          <NavButton
+            active={activeTab === "automation"}
+            onClick={() => setActiveTab("automation")}
+            icon={<Zap className="w-4 h-4" />}
+          >
+            Automation
+          </NavButton>
+          <NavButton
+            active={activeTab === "recipes"}
+            onClick={() => setActiveTab("recipes")}
+            icon={<CookingPot className="w-4 h-4" />}
+          >
+            Recipes
+          </NavButton>
+          <NavButton
+            active={activeTab === "commands"}
+            onClick={() => setActiveTab("commands")}
+            icon={<Command className="w-4 h-4" />}
+          >
+            Commands
+          </NavButton>
+          <NavButton
+            active={activeTab === "agent"}
+            onClick={() => setActiveTab("agent")}
+            icon={<CanopyAgentIcon className="w-4 h-4" />}
+          >
+            Agent
+          </NavButton>
+          <NavButton
+            active={activeTab === "mcp"}
+            onClick={() => setActiveTab("mcp")}
+            icon={<Server className="w-4 h-4" />}
+          >
+            MCP Servers
+          </NavButton>
+          <NavButton
+            active={activeTab === "notifications"}
+            onClick={() => setActiveTab("notifications")}
+            icon={<Bell className="w-4 h-4" />}
+          >
+            Notifications
+          </NavButton>
+        </div>
+
+        <div className="flex-1 flex flex-col min-w-0">
+          <div className="flex items-center justify-between px-6 py-4 border-b border-canopy-border bg-canopy-sidebar/50 shrink-0">
+            <h3 className="text-lg font-medium text-canopy-text">{tabTitles[activeTab]}</h3>
+            <button
+              onClick={handleClose}
+              className="text-canopy-text/60 hover:text-canopy-text transition-colors p-1 rounded focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2"
+              aria-label="Close settings"
             >
-              General
-            </NavButton>
-            <NavButton
-              active={activeTab === "context"}
-              onClick={() => setActiveTab("context")}
-              icon={<FileCode className="w-4 h-4" />}
-            >
-              Context
-            </NavButton>
-            <NavButton
-              active={activeTab === "automation"}
-              onClick={() => setActiveTab("automation")}
-              icon={<Zap className="w-4 h-4" />}
-            >
-              Automation
-            </NavButton>
-            <NavButton
-              active={activeTab === "recipes"}
-              onClick={() => setActiveTab("recipes")}
-              icon={<CookingPot className="w-4 h-4" />}
-            >
-              Recipes
-            </NavButton>
-            <NavButton
-              active={activeTab === "commands"}
-              onClick={() => setActiveTab("commands")}
-              icon={<Command className="w-4 h-4" />}
-            >
-              Commands
-            </NavButton>
-            <NavButton
-              active={activeTab === "agent"}
-              onClick={() => setActiveTab("agent")}
-              icon={<CanopyAgentIcon className="w-4 h-4" />}
-            >
-              Agent
-            </NavButton>
-            <NavButton
-              active={activeTab === "mcp"}
-              onClick={() => setActiveTab("mcp")}
-              icon={<Server className="w-4 h-4" />}
-            >
-              MCP Servers
-            </NavButton>
-            <NavButton
-              active={activeTab === "notifications"}
-              onClick={() => setActiveTab("notifications")}
-              icon={<Bell className="w-4 h-4" />}
-            >
-              Notifications
-            </NavButton>
+              <X className="h-5 w-5" />
+            </button>
           </div>
 
-          <div className="flex-1 flex flex-col min-w-0">
-            <div className="flex items-center justify-between px-6 py-4 border-b border-canopy-border bg-canopy-sidebar/50 shrink-0">
-              <h3 className="text-lg font-medium text-canopy-text">{tabTitles[activeTab]}</h3>
-              <button
-                onClick={handleClose}
-                className="text-canopy-text/60 hover:text-canopy-text transition-colors p-1 rounded focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2"
-                aria-label="Close settings"
+          <div className="p-6 overflow-y-auto flex-1">
+            {isLoading && (
+              <div className="text-sm text-canopy-text/60 text-center py-8">
+                Loading settings...
+              </div>
+            )}
+            {error && (
+              <div
+                className="text-sm text-status-error bg-status-error/10 border border-status-error/20 rounded p-3 mb-4"
+                role="alert"
               >
-                <X className="h-5 w-5" />
-              </button>
-            </div>
-
-            <div className="p-6 overflow-y-auto flex-1">
-              {isLoading && (
-                <div className="text-sm text-canopy-text/60 text-center py-8">
-                  Loading settings...
+                Failed to load settings: {error}
+              </div>
+            )}
+            {autoSaveError && (
+              <div
+                className="text-sm text-status-error bg-status-error/10 border border-status-error/20 rounded p-3 mb-4"
+                role="alert"
+              >
+                {autoSaveError}
+              </div>
+            )}
+            {!isLoading && !error && (
+              <>
+                {/* General Tab */}
+                <div className={activeTab === "general" ? "" : "hidden"}>
+                  <GeneralTab
+                    currentProject={currentProject}
+                    name={name}
+                    onNameChange={setName}
+                    emoji={emoji}
+                    onEmojiChange={setEmoji}
+                    devServerCommand={devServerCommand}
+                    onDevServerCommandChange={setDevServerCommand}
+                    devServerLoadTimeout={devServerLoadTimeout}
+                    onDevServerLoadTimeoutChange={setDevServerLoadTimeout}
+                    projectIconSvg={projectIconSvg}
+                    onProjectIconSvgChange={setProjectIconSvg}
+                    enableInRepoSettings={enableInRepoSettings}
+                    disableInRepoSettings={disableInRepoSettings}
+                    projectId={projectId}
+                    isOpen={isOpen}
+                  />
                 </div>
-              )}
-              {error && (
-                <div
-                  className="text-sm text-status-error bg-status-error/10 border border-status-error/20 rounded p-3 mb-4"
-                  role="alert"
-                >
-                  Failed to load settings: {error}
+
+                {/* Context Tab */}
+                <div className={activeTab === "context" ? "" : "hidden"}>
+                  <ContextTab
+                    excludedPaths={excludedPaths}
+                    onExcludedPathsChange={setExcludedPaths}
+                    copyTreeSettings={copyTreeSettings}
+                    onCopyTreeSettingsChange={setCopyTreeSettings}
+                    environmentVariables={environmentVariables}
+                    onEnvironmentVariablesChange={setEnvironmentVariables}
+                    worktrees={worktrees}
+                    settings={settings}
+                    isOpen={isOpen}
+                  />
                 </div>
-              )}
-              {autoSaveError && (
-                <div
-                  className="text-sm text-status-error bg-status-error/10 border border-status-error/20 rounded p-3 mb-4"
-                  role="alert"
-                >
-                  {autoSaveError}
+
+                {/* Automation Tab */}
+                <div className={activeTab === "automation" ? "" : "hidden"}>
+                  <AutomationTab
+                    currentProject={currentProject}
+                    runCommands={runCommands}
+                    onRunCommandsChange={setRunCommands}
+                    defaultWorktreeRecipeId={defaultWorktreeRecipeId}
+                    onDefaultWorktreeRecipeIdChange={setDefaultWorktreeRecipeId}
+                    branchPrefixMode={branchPrefixMode}
+                    onBranchPrefixModeChange={setBranchPrefixMode}
+                    branchPrefixCustom={branchPrefixCustom}
+                    onBranchPrefixCustomChange={setBranchPrefixCustom}
+                    worktreePathPattern={worktreePathPattern}
+                    onWorktreePathPatternChange={setWorktreePathPattern}
+                    terminalShell={terminalShell}
+                    onTerminalShellChange={setTerminalShell}
+                    terminalShellArgs={terminalShellArgs}
+                    onTerminalShellArgsChange={setTerminalShellArgs}
+                    terminalDefaultCwd={terminalDefaultCwd}
+                    onTerminalDefaultCwdChange={setTerminalDefaultCwd}
+                    terminalScrollback={terminalScrollback}
+                    onTerminalScrollbackChange={setTerminalScrollback}
+                    recipes={recipes}
+                    recipesLoading={recipesLoading}
+                    onNavigateToRecipes={() => setActiveTab("recipes")}
+                  />
                 </div>
-              )}
-              {!isLoading && !error && (
-                <>
-                  {/* General Tab */}
-                  <div className={activeTab === "general" ? "" : "hidden"}>
-                    <GeneralTab
-                      currentProject={currentProject}
-                      name={name}
-                      onNameChange={setName}
-                      emoji={emoji}
-                      onEmojiChange={setEmoji}
-                      devServerCommand={devServerCommand}
-                      onDevServerCommandChange={setDevServerCommand}
-                      devServerLoadTimeout={devServerLoadTimeout}
-                      onDevServerLoadTimeoutChange={setDevServerLoadTimeout}
-                      projectIconSvg={projectIconSvg}
-                      onProjectIconSvgChange={setProjectIconSvg}
-                      enableInRepoSettings={enableInRepoSettings}
-                      disableInRepoSettings={disableInRepoSettings}
-                      projectId={projectId}
-                      isOpen={isOpen}
-                    />
-                  </div>
 
-                  {/* Context Tab */}
-                  <div className={activeTab === "context" ? "" : "hidden"}>
-                    <ContextTab
-                      excludedPaths={excludedPaths}
-                      onExcludedPathsChange={setExcludedPaths}
-                      copyTreeSettings={copyTreeSettings}
-                      onCopyTreeSettingsChange={setCopyTreeSettings}
-                      environmentVariables={environmentVariables}
-                      onEnvironmentVariablesChange={setEnvironmentVariables}
-                      worktrees={worktrees}
-                      settings={settings}
-                      isOpen={isOpen}
-                    />
-                  </div>
+                {/* Recipes Tab */}
+                <div className={activeTab === "recipes" ? "" : "hidden"}>
+                  <RecipesTab
+                    projectId={projectId}
+                    defaultWorktreeRecipeId={defaultWorktreeRecipeId}
+                    onDefaultWorktreeRecipeIdChange={setDefaultWorktreeRecipeId}
+                    worktreeMap={worktreeMap}
+                    isOpen={isOpen}
+                  />
+                </div>
 
-                  {/* Automation Tab */}
-                  <div className={activeTab === "automation" ? "" : "hidden"}>
-                    <AutomationTab
-                      currentProject={currentProject}
-                      runCommands={runCommands}
-                      onRunCommandsChange={setRunCommands}
-                      defaultWorktreeRecipeId={defaultWorktreeRecipeId}
-                      onDefaultWorktreeRecipeIdChange={setDefaultWorktreeRecipeId}
-                      branchPrefixMode={branchPrefixMode}
-                      onBranchPrefixModeChange={setBranchPrefixMode}
-                      branchPrefixCustom={branchPrefixCustom}
-                      onBranchPrefixCustomChange={setBranchPrefixCustom}
-                      worktreePathPattern={worktreePathPattern}
-                      onWorktreePathPatternChange={setWorktreePathPattern}
-                      terminalShell={terminalShell}
-                      onTerminalShellChange={setTerminalShell}
-                      terminalShellArgs={terminalShellArgs}
-                      onTerminalShellArgsChange={setTerminalShellArgs}
-                      terminalDefaultCwd={terminalDefaultCwd}
-                      onTerminalDefaultCwdChange={setTerminalDefaultCwd}
-                      terminalScrollback={terminalScrollback}
-                      onTerminalScrollbackChange={setTerminalScrollback}
-                      recipes={recipes}
-                      recipesLoading={recipesLoading}
-                      onNavigateToRecipes={() => setActiveTab("recipes")}
-                    />
-                  </div>
+                {/* Commands Tab */}
+                <div className={activeTab === "commands" ? "" : "hidden"}>
+                  <CommandOverridesTab
+                    projectId={projectId}
+                    overrides={commandOverrides}
+                    onChange={setCommandOverrides}
+                  />
+                </div>
 
-                  {/* Recipes Tab */}
-                  <div className={activeTab === "recipes" ? "" : "hidden"}>
-                    <RecipesTab
-                      projectId={projectId}
-                      defaultWorktreeRecipeId={defaultWorktreeRecipeId}
-                      onDefaultWorktreeRecipeIdChange={setDefaultWorktreeRecipeId}
-                      worktreeMap={worktreeMap}
-                      isOpen={isOpen}
-                    />
-                  </div>
+                {/* Agent Tab */}
+                <div className={activeTab === "agent" ? "" : "hidden"}>
+                  <AgentTab
+                    agentInstructions={agentInstructions}
+                    onAgentInstructionsChange={setAgentInstructions}
+                  />
+                </div>
 
-                  {/* Commands Tab */}
-                  <div className={activeTab === "commands" ? "" : "hidden"}>
-                    <CommandOverridesTab
-                      projectId={projectId}
-                      overrides={commandOverrides}
-                      onChange={setCommandOverrides}
-                    />
-                  </div>
+                {/* MCP Servers Tab */}
+                <div className={activeTab === "mcp" ? "" : "hidden"}>
+                  <McpServersTab
+                    servers={mcpServers}
+                    onChange={setMcpServers}
+                    runStates={mcpRunStates}
+                  />
+                </div>
 
-                  {/* Agent Tab */}
-                  <div className={activeTab === "agent" ? "" : "hidden"}>
-                    <AgentTab
-                      agentInstructions={agentInstructions}
-                      onAgentInstructionsChange={setAgentInstructions}
-                    />
-                  </div>
-
-                  {/* MCP Servers Tab */}
-                  <div className={activeTab === "mcp" ? "" : "hidden"}>
-                    <McpServersTab
-                      servers={mcpServers}
-                      onChange={setMcpServers}
-                      runStates={mcpRunStates}
-                    />
-                  </div>
-
-                  {/* Notifications Tab */}
-                  <div className={activeTab === "notifications" ? "" : "hidden"}>
-                    <ProjectNotificationsTab
-                      overrides={notificationOverrides}
-                      onChange={setNotificationOverrides}
-                    />
-                  </div>
-                </>
-              )}
-            </div>
-
+                {/* Notifications Tab */}
+                <div className={activeTab === "notifications" ? "" : "hidden"}>
+                  <ProjectNotificationsTab
+                    overrides={notificationOverrides}
+                    onChange={setNotificationOverrides}
+                  />
+                </div>
+              </>
+            )}
           </div>
         </div>
-      </AppDialog>
+      </div>
+    </AppDialog>
   );
 }
 
