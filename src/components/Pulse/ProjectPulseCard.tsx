@@ -19,6 +19,7 @@ import {
   CircleDot,
   GitMerge,
   Github,
+  WifiOff,
 } from "lucide-react";
 import { PulseHeatmap } from "./PulseHeatmap";
 import { PulseSummary } from "./PulseSummary";
@@ -308,6 +309,17 @@ function NoRemoteHint() {
   );
 }
 
+function OfflineHint() {
+  return (
+    <div className="border-t border-canopy-border pt-3">
+      <div className="flex items-center gap-2 text-xs text-canopy-text/75">
+        <WifiOff className="w-3.5 h-3.5" />
+        <span>Offline — GitHub status unavailable</span>
+      </div>
+    </div>
+  );
+}
+
 export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProps) {
   const projectName = useProjectStore((s) => s.currentProject?.name);
   const { health, loading: healthLoading, refresh: refreshHealth } = useProjectHealth();
@@ -482,8 +494,10 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
           </div>
         ) : healthLoading ? (
           <HealthSectionSkeleton />
-        ) : health && !health.repoUrl ? (
+        ) : health && !health.hasRemote ? (
           <NoRemoteHint />
+        ) : health && health.hasRemote ? (
+          <OfflineHint />
         ) : null}
 
         <div className="border-t border-canopy-border pt-3">

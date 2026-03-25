@@ -136,6 +136,7 @@ export function registerGithubHandlers(_deps: HandlerDependencies): () => void {
           securityAlerts: { visible: false, count: 0 },
           mergeVelocity: { mergedCounts: { 60: 0, 120: 0, 180: 0 } },
           repoUrl: "",
+          hasRemote: false,
           loading: false,
           error: "Path is not a directory",
         };
@@ -146,6 +147,7 @@ export function registerGithubHandlers(_deps: HandlerDependencies): () => void {
       if (result.health) {
         return {
           ...result.health,
+          hasRemote: true,
           loading: false,
           error: result.error,
         };
@@ -159,6 +161,7 @@ export function registerGithubHandlers(_deps: HandlerDependencies): () => void {
         securityAlerts: { visible: false, count: 0 },
         mergeVelocity: { mergedCounts: { 60: 0, 120: 0, 180: 0 } },
         repoUrl: "",
+        hasRemote: result.error !== "Not a GitHub repository",
         loading: false,
         error: result.error,
       };
@@ -172,6 +175,7 @@ export function registerGithubHandlers(_deps: HandlerDependencies): () => void {
         securityAlerts: { visible: false, count: 0 },
         mergeVelocity: { mergedCounts: { 60: 0, 120: 0, 180: 0 } },
         repoUrl: "",
+        hasRemote: false,
         loading: false,
         error: message,
       };
