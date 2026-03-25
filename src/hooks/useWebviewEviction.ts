@@ -14,35 +14,30 @@ export function useWebviewEviction(
   const [isEvicted, setIsEvicted] = useState(false);
   const evictingRef = useRef(false);
   const activeDockTerminalId = useTerminalStore((s) => s.activeDockTerminalId);
-  const focusedId = useTerminalStore((s) => s.focusedId);
 
-  // Auto-clear eviction when this panel becomes visible
+  // Auto-clear eviction when this panel becomes visible (dock panel activated)
   useEffect(() => {
     if (!isEvicted) return;
 
-    const isVisible =
-      location !== "dock" || activeDockTerminalId === panelId || focusedId === panelId;
-
-    if (isVisible) {
+    if (location === "dock" && activeDockTerminalId === panelId) {
       evictingRef.current = false;
       setIsEvicted(false);
     }
-  }, [isEvicted, location, activeDockTerminalId, focusedId, panelId]);
+  }, [isEvicted, location, activeDockTerminalId, panelId]);
 
   const handleDestroySignal = useCallback(
-    (payload: { tier: 1 | 2 }) => {
+    (_payload: { tier: 1 | 2 }) => {
+      // Only evict dock panels that are not the currently-open dock panel.
+      // Grid panels are already efficiently managed by GridTabGroup (only the
+      // active tab is rendered), so visible grid panels should never be evicted.
       const isHiddenDock = location === "dock" && activeDockTerminalId !== panelId;
 
-      // Tier 1: evict hidden dock panels only
-      // Tier 2: evict all non-focused panels (dock hidden + grid non-focused)
-      const shouldEvict = payload.tier === 1 ? isHiddenDock : isHiddenDock || focusedId !== panelId;
-
-      if (shouldEvict) {
+      if (isHiddenDock) {
         evictingRef.current = true;
         setIsEvicted(true);
       }
     },
-    [location, activeDockTerminalId, focusedId, panelId]
+    [location, activeDockTerminalId, panelId]
   );
 
   useEffect(() => {

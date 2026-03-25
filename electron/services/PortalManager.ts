@@ -11,6 +11,7 @@ export class PortalManager {
   private activeView: WebContentsView | null = null;
   private activeTabId: string | null = null;
   private lruOrder = new Map<string, true>();
+  private lastShownTabId: string | null = null;
 
   constructor(window: BrowserWindow) {
     this.window = window;
@@ -283,6 +284,7 @@ export class PortalManager {
     this.activeTabId = tabId;
     this.touchLru(tabId);
     this.evictIfNeeded();
+    this.lastShownTabId = tabId;
   }
 
   private validateBounds(bounds: PortalBounds): {
@@ -364,9 +366,11 @@ export class PortalManager {
   }
 
   destroyHiddenTabs(): string[] {
+    // Use lastShownTabId as fallback when activeTabId is null (e.g., hideAll was called for overlays)
+    const skipId = this.activeTabId ?? this.lastShownTabId;
     const destroyed: string[] = [];
     for (const [tabId, view] of this.viewMap) {
-      if (tabId === this.activeTabId) continue;
+      if (tabId === skipId) continue;
 
       try {
         this.window.contentView.removeChildView(view);
@@ -397,5 +401,6 @@ export class PortalManager {
     }
     this.activeView = null;
     this.activeTabId = null;
+    this.lastShownTabId = null;
   }
 }
