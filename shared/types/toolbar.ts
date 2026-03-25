@@ -48,6 +48,31 @@ export interface LauncherDefaults {
   defaultAgent?: BuiltInAgentId;
 }
 
+/** Overflow priority (1 = always visible, 5 = overflow first) */
+export type ToolbarButtonPriority = 1 | 2 | 3 | 4 | 5;
+
+export const TOOLBAR_BUTTON_PRIORITIES: Record<ToolbarButtonId, ToolbarButtonPriority> = {
+  "sidebar-toggle": 1,
+  "portal-toggle": 1,
+  "agent-setup": 2,
+  claude: 2,
+  gemini: 2,
+  codex: 2,
+  opencode: 2,
+  cursor: 2,
+  terminal: 3,
+  browser: 3,
+  "dev-server": 3,
+  "panel-palette": 3,
+  settings: 4,
+  "notification-center": 4,
+  "voice-recording": 1,
+  "github-stats": 5,
+  notes: 5,
+  "copy-tree": 5,
+  problems: 5,
+};
+
 /** Complete toolbar preferences configuration */
 export interface ToolbarPreferences {
   /** Layout configuration (button visibility and ordering) */
