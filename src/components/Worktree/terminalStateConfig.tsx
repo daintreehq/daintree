@@ -4,7 +4,6 @@ import type { WaitingReason } from "@shared/types/agent";
 import {
   SpinnerCircle,
   HollowCircle,
-  ApprovalCircle,
   InteractingCircle,
 } from "@/components/icons/AgentStateCircles";
 
@@ -55,30 +54,21 @@ export const STATE_SORT_PRIORITY: Record<AgentState, number> = {
 
 export function getEffectiveStateIcon(
   agentState: AgentState,
-  waitingReason?: WaitingReason
+  _waitingReason?: WaitingReason
 ): React.ComponentType<{ className?: string }> {
-  if (agentState === "waiting" && waitingReason === "approval") {
-    return ApprovalCircle;
-  }
   return STATE_ICONS[agentState];
 }
 
 export function getEffectiveStateColor(
   agentState: AgentState,
-  waitingReason?: WaitingReason
+  _waitingReason?: WaitingReason
 ): string {
-  if (agentState === "waiting" && waitingReason === "approval") {
-    return "text-state-approval";
-  }
   return STATE_COLORS[agentState];
 }
 
 export function getEffectiveStateLabel(
   agentState: AgentState,
-  waitingReason?: WaitingReason
+  _waitingReason?: WaitingReason
 ): string {
-  if (agentState === "waiting" && waitingReason === "approval") {
-    return "approval";
-  }
   return STATE_LABELS[agentState];
 }

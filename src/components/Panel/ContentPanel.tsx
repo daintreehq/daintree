@@ -9,7 +9,7 @@ import type { PanelKind, TerminalType, AgentState } from "@/types";
 import type { ActivityState } from "@/components/Terminal/TerminalPane";
 import type { TabInfo } from "./TabButton";
 import { useDockBlockedState } from "@/components/Layout/useDockBlockedState";
-import { usePreferencesStore, useTerminalStore } from "@/store";
+import { usePreferencesStore } from "@/store";
 
 /**
  * Base props for all panel types.
@@ -150,10 +150,6 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
   const effectiveAgentState = ambientAgentState ?? agentState;
   const blockedState = useDockBlockedState(effectiveAgentState);
   const isWorkingState = effectiveAgentState === "working";
-  const waitingReason = useTerminalStore(
-    (state) => state.terminals.find((t) => t.id === id)?.waitingReason
-  );
-
   // Auto-construct TerminalHeaderContent for terminal/agent kinds if headerContent not provided
   const resolvedHeaderContent = useMemo(() => {
     if (headerContent !== undefined) return headerContent;
@@ -258,9 +254,7 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
             (isFocused && showGridAttention
               ? "terminal-selected"
               : showGridAttention && showGridAgentHighlights && blockedState === "waiting"
-                ? waitingReason === "approval"
-                  ? "panel-state-approval"
-                  : "panel-state-waiting"
+                ? "panel-state-waiting"
                 : showGridAttention && showGridAgentHighlights && isWorkingState
                   ? "panel-state-working"
                   : "border-overlay hover:border-tint/[0.08]"),

@@ -94,17 +94,14 @@ function TerminalHeaderContentComponent({
     const StateIcon = getEffectiveStateIcon(agentState, waitingReason);
     if (!StateIcon) return null;
 
-    const isApproval = agentState === "waiting" && waitingReason === "approval";
     const chipStyle =
       agentState === "working"
         ? "bg-[color-mix(in_oklab,var(--color-state-working)_15%,transparent)] border-state-working/40"
-        : isApproval
-          ? "bg-[color-mix(in_oklab,var(--color-state-approval)_15%,transparent)] border-state-approval/40"
-          : agentState === "directing"
-            ? "bg-[color-mix(in_oklab,var(--color-category-blue)_15%,transparent)] border-category-blue/40"
-            : agentState === "running"
-              ? "bg-[color-mix(in_oklab,var(--color-status-info)_15%,transparent)] border-status-info/40"
-              : "bg-[color-mix(in_oklab,var(--color-state-waiting)_15%,transparent)] border-state-waiting/40";
+        : agentState === "directing"
+          ? "bg-[color-mix(in_oklab,var(--color-category-blue)_15%,transparent)] border-category-blue/40"
+          : agentState === "running"
+            ? "bg-[color-mix(in_oklab,var(--color-status-info)_15%,transparent)] border-status-info/40"
+            : "bg-[color-mix(in_oklab,var(--color-state-waiting)_15%,transparent)] border-state-waiting/40";
 
     const headline = activity?.headline?.trim() || `Agent ${agentState}`;
     const showConfidence = stateChangeConfidence != null && stateChangeConfidence < 1;

@@ -289,11 +289,7 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
                       />
                     </div>
                   </TooltipTrigger>
-                  <TooltipContent side="bottom">
-                    {agentState === "waiting" && terminal.waitingReason === "approval"
-                      ? "Agent needs approval"
-                      : `Agent ${agentState}`}
-                  </TooltipContent>
+                  <TooltipContent side="bottom">{`Agent ${agentState}`}</TooltipContent>
                 </Tooltip>
               </TooltipProvider>
             )}
