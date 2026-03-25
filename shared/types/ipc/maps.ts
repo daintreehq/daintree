@@ -121,7 +121,11 @@ import type {
   IssueTooltipData,
   PRTooltipData,
 } from "../github.js";
-import type { SpawnResult, TerminalStatusPayload } from "../pty-host.js";
+import type {
+  SpawnResult,
+  TerminalStatusPayload,
+  TerminalResourceBatchPayload,
+} from "../pty-host.js";
 import type { HibernationConfig, HibernationProjectHibernatedPayload } from "./hibernation.js";
 import type { AgentRegistry, AgentMetadata } from "./agentCapabilities.js";
 import type { AppThemeConfig } from "../appTheme.js";
@@ -1670,6 +1674,7 @@ export interface IpcEventMap {
   "terminal:trashed": { id: string; expiresAt: number };
   "terminal:restored": { id: string };
   "terminal:status": TerminalStatusPayload;
+  "terminal:resource-metrics": { metrics: TerminalResourceBatchPayload; timestamp: number };
   "terminal:send-key": [id: string, key: string];
   "terminal:spawn-result": [id: string, result: SpawnResult];
   "terminal:backend-crashed": {

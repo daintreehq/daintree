@@ -394,9 +394,7 @@ export class ProcessTreeCache {
    * Includes the root process and all descendants.
    * Breakdown is capped at 10 entries sorted by CPU descending.
    */
-  getTreeResourceSummary(
-    rootPid: number
-  ): {
+  getTreeResourceSummary(rootPid: number): {
     cpuPercent: number;
     memoryKb: number;
     breakdown: Array<{ pid: number; comm: string; cpuPercent: number; memoryKb: number }>;

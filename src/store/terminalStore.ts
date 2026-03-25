@@ -832,7 +832,7 @@ export function setupTerminalStoreListeners() {
   resourceMetricsUnsubscribe = window.electron.terminal.onResourceMetrics((data) => {
     const rmStore = useResourceMonitoringStore.getState();
     if (rmStore.enabled) {
-      rmStore.updateMetrics(data.metrics as Record<string, any>);
+      rmStore.updateMetrics(data.metrics);
     }
   });
 
