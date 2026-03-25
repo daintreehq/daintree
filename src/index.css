@@ -560,9 +560,6 @@ code.hljs {
   --dock-item-bg-active: color-mix(in oklab, var(--theme-accent-primary) 12%, transparent);
   --dock-item-border: var(--theme-border-subtle);
   --dock-item-border-active: rgba(var(--theme-accent-rgb), 0.32);
-  --dock-item-bg-failed: color-mix(in oklab, var(--color-status-error) 8%, transparent);
-  --dock-item-border-failed: color-mix(in oklab, var(--color-status-error) 40%, transparent);
-
   --state-chip-bg-opacity: var(--theme-state-chip-bg-opacity, 0.15);
   --state-chip-border-opacity: var(--theme-state-chip-border-opacity, 0.4);
   --label-pill-bg-opacity: var(--theme-label-pill-bg-opacity, 0.1);
@@ -1211,11 +1208,6 @@ body,
     0 0 0 1px color-mix(in oklab, var(--color-activity-approval) 15%, transparent);
 }
 
-.panel-state-failed {
-  border-color: color-mix(in oklab, var(--color-status-error) 65%, transparent);
-  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--color-status-error) 12%, transparent);
-}
-
 .panel-state-working {
   animation: panel-working-breathe 4s ease-in-out infinite;
 }
@@ -1828,12 +1820,6 @@ body[data-performance-mode="true"] [class*="backdrop-blur"] {
     outline-offset: -2px;
   }
 
-  .panel-state-failed {
-    border-color: LinkText;
-    outline: 2px solid LinkText;
-    outline-offset: -2px;
-  }
-
   .panel-state-working {
     border-color: Highlight;
     animation: none;
@@ -1867,7 +1853,6 @@ body[data-performance-mode="true"] [class*="backdrop-blur"] {
 
   .panel-state-waiting,
   .panel-state-approval,
-  .panel-state-failed,
   .panel-state-working {
     border-width: 2px;
   }
