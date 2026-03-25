@@ -22,17 +22,6 @@ export interface ProjectCloseResult {
   error?: string;
 }
 
-/** Status of a per-project MCP server process */
-export type ProjectMcpServerStatus = "starting" | "running" | "stopped" | "error";
-
-/** Runtime state of a per-project MCP server process */
-export interface ProjectMcpServerRunState {
-  name: string;
-  status: ProjectMcpServerStatus;
-  pid?: number;
-  error?: string;
-}
-
 /** Project resource statistics */
 export interface ProjectStats {
   /** Total number of running processes */

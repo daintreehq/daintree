@@ -1,17 +1,15 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from "react";
-import { X, Settings, FileCode, Zap, Command, CookingPot, Server, Bell } from "lucide-react";
+import { X, Settings, FileCode, Zap, Command, CookingPot, Bell } from "lucide-react";
 
 import { AppDialog } from "@/components/ui/AppDialog";
 import { useProjectSettings } from "@/hooks";
 import { useProjectStore } from "@/store/projectStore";
 import { useWorktrees } from "@/hooks/useWorktrees";
 import type { RunCommand, CopyTreeSettings } from "@/types";
-import type { ProjectTerminalSettings, ProjectMcpServerConfig } from "@shared/types/project";
-import type { ProjectMcpServerRunState } from "@shared/types/ipc/project";
+import type { ProjectTerminalSettings } from "@shared/types/project";
 import { SCROLLBACK_MIN, SCROLLBACK_MAX } from "@shared/config/scrollback";
 import { cn } from "@/lib/utils";
 import { CommandOverridesTab } from "@/components/Settings/CommandOverridesTab";
-import { McpServersTab } from "./McpServersTab";
 import { ProjectNotificationsTab } from "./ProjectNotificationsTab";
 import { GeneralTab } from "./GeneralTab";
 import { ContextTab } from "./ContextTab";
@@ -41,7 +39,6 @@ type ProjectSettingsTab =
   | "automation"
   | "recipes"
   | "commands"
-  | "mcp"
   | "notifications";
 
 export { GITIGNORE_SNIPPET } from "./projectSettingsConstants";
@@ -77,8 +74,6 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
   const [terminalShellArgs, setTerminalShellArgs] = useState<string>("");
   const [terminalDefaultCwd, setTerminalDefaultCwd] = useState<string>("");
   const [terminalScrollback, setTerminalScrollback] = useState<string>("");
-  const [mcpServers, setMcpServers] = useState<Record<string, ProjectMcpServerConfig>>({});
-  const [mcpRunStates, setMcpRunStates] = useState<ProjectMcpServerRunState[]>([]);
   const [notificationOverrides, setNotificationOverrides] = useState<Partial<NotificationSettings>>(
     {}
   );
@@ -123,7 +118,6 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
       devServerLoadTimeout,
       worktreePathPattern,
       currentTerminalSettings,
-      mcpServers,
       notificationOverrides
     );
   }, [
@@ -143,7 +137,6 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
     worktreePathPattern,
     currentProject,
     currentTerminalSettings,
-    mcpServers,
     notificationOverrides,
   ]);
 
@@ -168,7 +161,6 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
 
       const initialWorktreePathPattern = settings.worktreePathPattern ?? "";
       const initialTerminalSettings = settings.terminalSettings;
-      const initialMcpServers = settings.mcpServers ?? {};
       const initialNotificationOverrides = settings.notificationOverrides ?? {};
 
       setName(currentProject.name);
@@ -194,7 +186,6 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
           ? String(initialTerminalSettings.scrollbackLines)
           : ""
       );
-      setMcpServers(initialMcpServers);
       setNotificationOverrides(initialNotificationOverrides);
 
       lastSavedSnapshotRef.current = createProjectSettingsSnapshot(
@@ -213,7 +204,6 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
         initialDevServerLoadTimeout,
         initialWorktreePathPattern,
         initialTerminalSettings,
-        initialMcpServers,
         initialNotificationOverrides
       );
 
@@ -237,8 +227,6 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
       setTerminalShellArgs("");
       setTerminalDefaultCwd("");
       setTerminalScrollback("");
-      setMcpServers({});
-      setMcpRunStates([]);
       setNotificationOverrides({});
       setActiveTab("general");
       lastSavedSnapshotRef.current = null;
@@ -250,22 +238,6 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
       setIsInitialized(false);
     }
   }, [projectId, isOpen]);
-
-  useEffect(() => {
-    if (!isOpen || !projectId) return;
-
-    window.electron.projectMcp
-      .getStatuses(projectId)
-      .then(setMcpRunStates)
-      .catch(() => {});
-
-    const cleanup = window.electron.projectMcp.onStatusChanged((payload) => {
-      if (payload.projectId === projectId) {
-        setMcpRunStates(payload.servers as ProjectMcpServerRunState[]);
-      }
-    });
-    return cleanup;
-  }, [isOpen, projectId]);
 
   const persistRef = useRef<() => Promise<void>>(undefined);
   persistRef.current = async () => {
@@ -356,7 +328,6 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
 
         worktreePathPattern: sanitizedWorktreePathPattern,
         terminalSettings: currentTerminalSettings,
-        mcpServers: Object.keys(mcpServers).length > 0 ? mcpServers : undefined,
         notificationOverrides:
           Object.keys(notificationOverrides).length > 0 ? notificationOverrides : undefined,
         insecureEnvironmentVariables: undefined,
@@ -407,8 +378,6 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
     automation: "Automation",
     recipes: "Recipes",
     commands: "Commands",
-
-    mcp: "MCP Servers",
     notifications: "Notifications",
   };
 
@@ -460,13 +429,6 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
             Commands
           </NavButton>
 
-          <NavButton
-            active={activeTab === "mcp"}
-            onClick={() => setActiveTab("mcp")}
-            icon={<Server className="w-4 h-4" />}
-          >
-            MCP Servers
-          </NavButton>
           <NavButton
             active={activeTab === "notifications"}
             onClick={() => setActiveTab("notifications")}
@@ -593,15 +555,6 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
                     projectId={projectId}
                     overrides={commandOverrides}
                     onChange={setCommandOverrides}
-                  />
-                </div>
-
-                {/* MCP Servers Tab */}
-                <div className={activeTab === "mcp" ? "" : "hidden"}>
-                  <McpServersTab
-                    servers={mcpServers}
-                    onChange={setMcpServers}
-                    runStates={mcpRunStates}
                   />
                 </div>
 

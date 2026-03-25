@@ -97,7 +97,6 @@ function makeDeps(overrides?: Partial<ShutdownDeps>): ShutdownDeps {
     getPtyClient: vi.fn(() => null),
     setPtyClient: vi.fn(),
     getWorkspaceClient: vi.fn(() => null),
-    getProjectMcpManager: vi.fn(() => null),
     getCleanupIpcHandlers: vi.fn(() => null),
     setCleanupIpcHandlers: vi.fn(),
     getCleanupErrorHandlers: vi.fn(() => null),

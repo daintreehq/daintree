@@ -48,7 +48,6 @@ import {
 } from "../services/TaskOrchestrator.js";
 import { autoUpdaterService } from "../services/AutoUpdaterService.js";
 import { runSmokeFunctionalChecks } from "../services/smokeTest.js";
-import { ProjectMcpManager } from "../services/ProjectMcpManager.js";
 import {
   initializeHibernationService,
   getHibernationService,
@@ -85,7 +84,6 @@ let cliAvailabilityService: CliAvailabilityService | null = null;
 let agentVersionService: AgentVersionService | null = null;
 let agentUpdateHandler: AgentUpdateHandler | null = null;
 let portalManager: PortalManager | null = null;
-let projectMcpManager: ProjectMcpManager | null = null;
 let projectSwitchService: ProjectSwitchService | null = null;
 let cleanupIpcHandlers: (() => void) | null = null;
 let cleanupErrorHandlers: (() => void) | null = null;
@@ -106,9 +104,6 @@ export function setPtyClientRef(v: PtyClient | null): void {
 }
 export function getWorkspaceClientRef(): WorkspaceClient | null {
   return workspaceClient;
-}
-export function getProjectMcpManagerRef(): ProjectMcpManager | null {
-  return projectMcpManager;
 }
 export function getProjectSwitchServiceRef(): ProjectSwitchService | null {
   return projectSwitchService;
@@ -396,8 +391,6 @@ export async function setupWindowServices(
   eventBuffer = new EventBuffer(1000);
   portalManager = new PortalManager(win);
 
-  projectMcpManager = new ProjectMcpManager(win);
-
   console.log("[MAIN] Registering IPC handlers...");
   const handlerDeps: HandlerDependencies = {
     mainWindow: win,
@@ -407,7 +400,6 @@ export async function setupWindowServices(
     cliAvailabilityService,
     agentVersionService,
     agentUpdateHandler,
-    projectMcpManager: projectMcpManager ?? undefined,
     isDemoMode,
     windowRegistry: opts.windowRegistry,
   };
@@ -550,22 +542,6 @@ export async function setupWindowServices(
     }
   } else if (currentProject && !workspaceReady) {
     console.warn("[MAIN] Workspace service unavailable - skipping worktree loading");
-  }
-
-  // Start project MCP servers
-  if (currentProject) {
-    try {
-      const mcpSettings = await projectStore.getProjectSettings(currentProject.id);
-      const servers = mcpSettings?.mcpServers;
-      if (servers && Object.keys(servers).length > 0) {
-        await projectMcpManager!.startForProject(currentProject.id, currentProject.path, servers);
-        console.log(
-          `[MAIN] Started ${Object.keys(servers).length} project MCP server(s) for ${currentProject.name}`
-        );
-      }
-    } catch (error) {
-      console.error("[MAIN] Failed to start project MCP servers:", error);
-    }
   }
 
   // Task queue & workflow
@@ -760,11 +736,6 @@ export async function setupWindowServices(
     ipcMain.removeHandler(CHANNELS.WINDOW_ZOOM_OUT);
     ipcMain.removeHandler(CHANNELS.WINDOW_ZOOM_RESET);
     ipcMain.removeHandler(CHANNELS.WINDOW_CLOSE);
-
-    if (projectMcpManager) {
-      projectMcpManager.stopAll().catch(console.error);
-      projectMcpManager = null;
-    }
 
     if (workspaceClient) workspaceClient.dispose();
     workspaceClient = null;

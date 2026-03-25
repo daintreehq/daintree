@@ -202,9 +202,6 @@ export const CHANNELS = {
   PROJECT_CHECK_MISSING: "project:check-missing",
   PROJECT_LOCATE: "project:locate",
 
-  PROJECT_MCP_GET_STATUSES: "project-mcp:get-statuses",
-  PROJECT_MCP_STATUS_CHANGED: "project-mcp:status-changed",
-
   AGENT_SETTINGS_GET: "agent-settings:get",
   AGENT_SETTINGS_SET: "agent-settings:set",
   AGENT_SETTINGS_RESET: "agent-settings:reset",
