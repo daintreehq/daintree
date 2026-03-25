@@ -66,12 +66,16 @@ function runElectronSmokeOnce({ runIndex, runCount, timeoutMs, extraArgs }) {
           )})`
         );
 
+        const env = {
+          ...process.env,
+          NODE_ENV: "production",
+        };
+        delete env.ELECTRON_RUN_AS_NODE;
+        delete env.ATOM_SHELL_INTERNAL_RUN_AS_NODE;
+
         const child = spawn(electronPath, args, {
           cwd: ROOT,
-          env: {
-            ...process.env,
-            NODE_ENV: "production",
-          },
+          env,
           stdio: ["ignore", "pipe", "pipe"],
         });
 

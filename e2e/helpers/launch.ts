@@ -92,6 +92,9 @@ export async function launchApp(options: LaunchOptions = {}): Promise<AppContext
             }
           : {}),
       };
+      delete launchEnv.ELECTRON_RUN_AS_NODE;
+      delete launchEnv.ATOM_SHELL_INTERNAL_RUN_AS_NODE;
+
       app = await electron.launch({
         executablePath: electronPath,
         args,
