@@ -88,6 +88,7 @@ export function FileViewerModal({
   const copyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isMountedRef = useRef(true);
   const codeViewerRef = useRef<CodeViewerHandle>(null);
+  const hasSwitchedToDiffRef = useRef(false);
 
   const imageFile = isImageFile(filePath);
   const svgFile = isSvgFile(filePath);
@@ -108,6 +109,7 @@ export function FileViewerModal({
       setDiffCopied(false);
       setSanitizedSvg(null);
       requestRef.current = 0;
+      hasSwitchedToDiffRef.current = false;
       const nextMode = defaultMode ?? (hasDiff && !initialLine ? "diff" : "view");
       setMode(nextMode);
       return;
@@ -116,6 +118,7 @@ export function FileViewerModal({
     const requestId = ++requestRef.current;
     setLoadState("loading");
     setErrorCode(null);
+    hasSwitchedToDiffRef.current = false;
 
     if (imageFile && !svgFile) {
       setLoadState("image");
@@ -153,12 +156,13 @@ export function FileViewerModal({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen, filePath, effectiveRootPath]);
 
-  // When diff arrives after mount (FileDiffModal async pattern), switch to diff mode if default is diff
+  // When diff arrives after mount (FileDiffModal async pattern), switch to diff mode once
   useEffect(() => {
-    if (hasDiff && defaultMode === "diff" && mode !== "diff") {
+    if (hasDiff && defaultMode === "diff" && !hasSwitchedToDiffRef.current) {
+      hasSwitchedToDiffRef.current = true;
       setMode("diff");
     }
-  }, [hasDiff, defaultMode, mode]);
+  }, [hasDiff, defaultMode]);
 
   const handleOpenInEditor = useCallback(() => {
     actionService
