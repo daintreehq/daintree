@@ -2,6 +2,7 @@ import { ipcMain, dialog, BrowserWindow } from "electron";
 import { CHANNELS } from "../channels.js";
 import { store } from "../../store.js";
 import { parseColorSchemeFile } from "../../utils/colorSchemeImporter.js";
+import type { HandlerDependencies } from "../types.js";
 
 function getTerminalConfigObject(): Record<string, unknown> {
   const config = store.get("terminalConfig");
@@ -11,7 +12,7 @@ function getTerminalConfigObject(): Record<string, unknown> {
   return {};
 }
 
-export function registerTerminalConfigHandlers(): () => void {
+export function registerTerminalConfigHandlers(deps?: HandlerDependencies): () => void {
   const handlers: Array<() => void> = [];
 
   const handleTerminalConfigGet = async () => {
@@ -179,6 +180,7 @@ export function registerTerminalConfigHandlers(): () => void {
     }
     const currentConfig = getTerminalConfigObject();
     store.set("terminalConfig", { ...currentConfig, resourceMonitoringEnabled: enabled });
+    deps?.ptyClient?.setResourceMonitoring(enabled);
   };
   ipcMain.handle(
     CHANNELS.TERMINAL_CONFIG_SET_RESOURCE_MONITORING,
