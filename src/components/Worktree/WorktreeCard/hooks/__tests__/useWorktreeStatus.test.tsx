@@ -168,25 +168,71 @@ describe("useWorktreeStatus — lifecycleStage", () => {
 });
 
 describe("useWorktreeStatus — branchLabel", () => {
-  function getBranchLabel(overrides: Partial<WorktreeState> = {}): string {
+  function getStatus(overrides: Partial<WorktreeState> = {}) {
     const { result } = renderHook(() => useWorktreeStatus({ worktree: makeWorktree(overrides) }));
-    return result.current.branchLabel;
+    return {
+      branchLabel: result.current.branchLabel,
+      isMainOnStandardBranch: result.current.isMainOnStandardBranch,
+    };
   }
 
-  it("returns directory name for main worktree even when branch is set", () => {
-    expect(getBranchLabel({ isMainWorktree: true, name: "canopy", branch: "main" })).toBe("canopy");
+  it("returns 'name [branch]' for main worktree on standard branch (main)", () => {
+    const s = getStatus({ isMainWorktree: true, name: "canopy", branch: "main" });
+    expect(s.branchLabel).toBe("canopy [main]");
+    expect(s.isMainOnStandardBranch).toBe(true);
+  });
+
+  it("returns 'name [branch]' for main worktree on standard branch (develop)", () => {
+    const s = getStatus({ isMainWorktree: true, name: "canopy", branch: "develop" });
+    expect(s.branchLabel).toBe("canopy [develop]");
+    expect(s.isMainOnStandardBranch).toBe(true);
+  });
+
+  it("handles case-insensitive standard branch matching", () => {
+    const s = getStatus({ isMainWorktree: true, name: "canopy", branch: "Develop" });
+    expect(s.branchLabel).toBe("canopy [Develop]");
+    expect(s.isMainOnStandardBranch).toBe(true);
+  });
+
+  it("returns branch name for main worktree on non-standard branch", () => {
+    const s = getStatus({ isMainWorktree: true, name: "canopy", branch: "feature/test" });
+    expect(s.branchLabel).toBe("feature/test");
+    expect(s.isMainOnStandardBranch).toBe(false);
+  });
+
+  it("returns directory name for main worktree when detached", () => {
+    const s = getStatus({
+      isMainWorktree: true,
+      name: "canopy",
+      branch: undefined,
+      isDetached: true,
+    });
+    expect(s.branchLabel).toBe("canopy");
+    expect(s.isMainOnStandardBranch).toBe(false);
+  });
+
+  it("returns directory name for main worktree when branch is undefined", () => {
+    const s = getStatus({ isMainWorktree: true, name: "canopy", branch: undefined });
+    expect(s.branchLabel).toBe("canopy");
+    expect(s.isMainOnStandardBranch).toBe(false);
+  });
+
+  it("does not treat near-miss branch as standard", () => {
+    const s = getStatus({ isMainWorktree: true, name: "canopy", branch: "development" });
+    expect(s.branchLabel).toBe("development");
+    expect(s.isMainOnStandardBranch).toBe(false);
   });
 
   it("returns branch name for non-main worktree", () => {
-    expect(getBranchLabel({ isMainWorktree: false, name: "canopy", branch: "feature/test" })).toBe(
-      "feature/test"
-    );
+    const s = getStatus({ isMainWorktree: false, name: "canopy", branch: "feature/test" });
+    expect(s.branchLabel).toBe("feature/test");
+    expect(s.isMainOnStandardBranch).toBe(false);
   });
 
   it("falls back to name when branch is undefined for non-main worktree", () => {
-    expect(getBranchLabel({ isMainWorktree: false, name: "canopy", branch: undefined })).toBe(
-      "canopy"
-    );
+    const s = getStatus({ isMainWorktree: false, name: "canopy", branch: undefined });
+    expect(s.branchLabel).toBe("canopy");
+    expect(s.isMainOnStandardBranch).toBe(false);
   });
 });
 
