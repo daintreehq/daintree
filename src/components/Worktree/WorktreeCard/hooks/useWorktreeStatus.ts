@@ -71,11 +71,12 @@ export function useWorktreeStatus({
     return trimmed;
   }, [worktree.aiNote, isMainWorktree, worktree.aiNoteTimestamp, now]);
 
-  const isMainOnStandardBranch =
+  const isMainOnStandardBranch = !!(
     isMainWorktree &&
-    !!worktree.branch &&
+    worktree.branch &&
     !worktree.isDetached &&
-    isStandardBranch(worktree.branch);
+    isStandardBranch(worktree.branch)
+  );
 
   let branchLabel: string;
   if (isMainWorktree) {
