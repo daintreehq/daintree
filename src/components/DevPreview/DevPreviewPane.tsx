@@ -24,6 +24,7 @@ import { useProjectSettings } from "@/hooks/useProjectSettings";
 import { projectClient } from "@/clients";
 import { actionService } from "@/services/ActionService";
 import { useWebviewThrottle } from "@/hooks/useWebviewThrottle";
+import { useHasBeenVisible } from "@/hooks/useHasBeenVisible";
 import { useWebviewDialog } from "@/hooks/useWebviewDialog";
 import { WebviewDialog } from "../Browser/WebviewDialog";
 import { FindBar } from "../Browser/FindBar";
@@ -119,6 +120,8 @@ export function DevPreviewPane({
   const prevStatusRef = useRef(status);
   const loadTimeoutMs =
     Math.min(Math.max(projectSettings?.devServerLoadTimeout ?? 30, 1), 120) * 1000;
+
+  const hasBeenVisible = useHasBeenVisible(id, location);
 
   const currentUrl = history.present;
   const canGoBack = history.past.length > 0;
@@ -644,6 +647,12 @@ export function DevPreviewPane({
                   </p>
                 </div>
               )}
+            </div>
+          ) : !hasBeenVisible ? (
+            <div className="absolute inset-0 flex flex-col items-center justify-center bg-canopy-bg text-canopy-text">
+              <p className="text-xs text-canopy-text/50">
+                Preview will load when this panel is first viewed
+              </p>
             </div>
           ) : (
             <>
