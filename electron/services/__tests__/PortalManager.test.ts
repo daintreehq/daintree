@@ -472,6 +472,167 @@ describe("PortalManager", () => {
   });
 });
 
+describe("PortalManager LRU eviction", () => {
+  let PortalManagerClass: typeof import("../PortalManager.js").PortalManager;
+  let PORTAL_MAX_LIVE_TABS: number;
+  let mockWindow: InstanceType<typeof import("electron").BrowserWindow>;
+
+  beforeEach(async () => {
+    createdWebContents.length = 0;
+    vi.resetModules();
+
+    const electron = await import("electron");
+    mockWindow = new electron.BrowserWindow() as InstanceType<typeof electron.BrowserWindow>;
+
+    const module = await import("../PortalManager.js");
+    PortalManagerClass = module.PortalManager;
+    PORTAL_MAX_LIVE_TABS = module.PORTAL_MAX_LIVE_TABS;
+  });
+
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("has a limit of 3", () => {
+    expect(PORTAL_MAX_LIVE_TABS).toBe(3);
+  });
+
+  it("evicts the oldest background tab when exceeding the limit", () => {
+    const manager = new PortalManagerClass(mockWindow);
+
+    manager.createTab("tab-1", "http://localhost:1001");
+    manager.createTab("tab-2", "http://localhost:1002");
+    manager.createTab("tab-3", "http://localhost:1003");
+
+    expect(manager.hasTab("tab-1")).toBe(true);
+    expect(manager.hasTab("tab-2")).toBe(true);
+    expect(manager.hasTab("tab-3")).toBe(true);
+
+    manager.createTab("tab-4", "http://localhost:1004");
+
+    expect(manager.hasTab("tab-1")).toBe(false);
+    expect(manager.hasTab("tab-2")).toBe(true);
+    expect(manager.hasTab("tab-3")).toBe(true);
+    expect(manager.hasTab("tab-4")).toBe(true);
+  });
+
+  it("sends PORTAL_TAB_EVICTED event when evicting", () => {
+    const manager = new PortalManagerClass(mockWindow);
+
+    manager.createTab("tab-1", "http://localhost:1001");
+    manager.createTab("tab-2", "http://localhost:1002");
+    manager.createTab("tab-3", "http://localhost:1003");
+    manager.createTab("tab-4", "http://localhost:1004");
+
+    expect(mockWindow.webContents.send).toHaveBeenCalledWith("portal:tab-evicted", {
+      tabId: "tab-1",
+    });
+  });
+
+  it("never evicts the active tab", () => {
+    const manager = new PortalManagerClass(mockWindow);
+
+    manager.createTab("tab-1", "http://localhost:1001");
+    manager.showTab("tab-1", { x: 0, y: 0, width: 800, height: 600 });
+    manager.createTab("tab-2", "http://localhost:1002");
+    manager.createTab("tab-3", "http://localhost:1003");
+
+    // tab-1 is active (oldest), tab-2 and tab-3 are background
+    // Creating tab-4 should evict tab-2 (oldest background), not tab-1 (active)
+    manager.createTab("tab-4", "http://localhost:1004");
+
+    expect(manager.hasTab("tab-1")).toBe(true);
+    expect(manager.getActiveTabId()).toBe("tab-1");
+    expect(manager.hasTab("tab-2")).toBe(false);
+    expect(manager.hasTab("tab-3")).toBe(true);
+    expect(manager.hasTab("tab-4")).toBe(true);
+  });
+
+  it("showTab refreshes LRU order", () => {
+    const manager = new PortalManagerClass(mockWindow);
+
+    manager.createTab("tab-1", "http://localhost:1001");
+    manager.createTab("tab-2", "http://localhost:1002");
+    manager.createTab("tab-3", "http://localhost:1003");
+
+    // Show tab-1, making it MRU
+    manager.showTab("tab-1", { x: 0, y: 0, width: 800, height: 600 });
+
+    // Creating tab-4 should evict tab-2 (now the LRU background tab)
+    manager.createTab("tab-4", "http://localhost:1004");
+
+    expect(manager.hasTab("tab-1")).toBe(true);
+    expect(manager.hasTab("tab-2")).toBe(false);
+    expect(manager.hasTab("tab-3")).toBe(true);
+    expect(manager.hasTab("tab-4")).toBe(true);
+  });
+
+  it("closeTab on already-evicted tab is a no-op", () => {
+    const manager = new PortalManagerClass(mockWindow);
+
+    manager.createTab("tab-1", "http://localhost:1001");
+    manager.createTab("tab-2", "http://localhost:1002");
+    manager.createTab("tab-3", "http://localhost:1003");
+    manager.createTab("tab-4", "http://localhost:1004");
+
+    // tab-1 was evicted
+    expect(manager.hasTab("tab-1")).toBe(false);
+
+    // Closing it again should not throw
+    expect(() => manager.closeTab("tab-1")).not.toThrow();
+  });
+
+  it("calls webContents.close() on evicted views", () => {
+    const manager = new PortalManagerClass(mockWindow);
+
+    manager.createTab("tab-1", "http://localhost:1001");
+    const evictedWebContents = createdWebContents[0];
+    manager.createTab("tab-2", "http://localhost:1002");
+    manager.createTab("tab-3", "http://localhost:1003");
+    manager.createTab("tab-4", "http://localhost:1004");
+
+    expect(evictedWebContents.close).toHaveBeenCalled();
+  });
+
+  it("handles rapid create/show cycling without crashing", () => {
+    const manager = new PortalManagerClass(mockWindow);
+
+    expect(() => {
+      for (let i = 0; i < 10; i++) {
+        const tabId = `tab-${i}`;
+        manager.createTab(tabId, `http://localhost:${3000 + i}`);
+        manager.showTab(tabId, { x: 0, y: 0, width: 800, height: 600 });
+      }
+    }).not.toThrow();
+
+    // Only the last PORTAL_MAX_LIVE_TABS tabs should be alive
+    for (let i = 0; i < 10 - PORTAL_MAX_LIVE_TABS; i++) {
+      expect(manager.hasTab(`tab-${i}`)).toBe(false);
+    }
+    for (let i = 10 - PORTAL_MAX_LIVE_TABS; i < 10; i++) {
+      expect(manager.hasTab(`tab-${i}`)).toBe(true);
+    }
+  });
+
+  it("destroy after evictions does not double-close", () => {
+    const manager = new PortalManagerClass(mockWindow);
+
+    manager.createTab("tab-1", "http://localhost:1001");
+    manager.createTab("tab-2", "http://localhost:1002");
+    manager.createTab("tab-3", "http://localhost:1003");
+    manager.createTab("tab-4", "http://localhost:1004");
+
+    // tab-1 was evicted, its close was already called
+    const evictedWebContents = createdWebContents[0];
+    const closeCallsBefore = evictedWebContents.close.mock.calls.length;
+
+    expect(() => manager.destroy()).not.toThrow();
+
+    // tab-1 should not have been closed again (it was already evicted)
+    expect(evictedWebContents.close.mock.calls.length).toBe(closeCallsBefore);
+  });
+});
+
 describe("PortalManager URL validation", () => {
   let PortalManagerClass: typeof import("../PortalManager.js").PortalManager;
   let mockWindow: InstanceType<typeof import("electron").BrowserWindow>;

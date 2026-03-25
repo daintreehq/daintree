@@ -91,6 +91,12 @@ export function PortalVisibilityController(): null {
     [markTabCreated]
   );
 
+  useEffect(() => {
+    return window.electron.portal.onTabEvicted(({ tabId }) => {
+      usePortalStore.getState().unmarkTabCreated(tabId);
+    });
+  }, []);
+
   // Auto-select first tab on startup when portal is open with tabs but no active tab
   useEffect(() => {
     if (!portalOpen) return;

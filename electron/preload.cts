@@ -452,6 +452,7 @@ const CHANNELS = {
   PORTAL_FOCUS: "portal:focus",
   PORTAL_BLUR: "portal:blur",
   PORTAL_NEW_TAB_MENU_ACTION: "portal:new-tab-menu-action",
+  PORTAL_TAB_EVICTED: "portal:tab-evicted",
 
   // Webview channels
   WEBVIEW_SET_LIFECYCLE_STATE: "webview:set-lifecycle-state",
@@ -1644,6 +1645,9 @@ const api: ElectronAPI = {
 
     onNewTabMenuAction: (callback: (action: PortalNewTabMenuAction) => void) =>
       _typedOn(CHANNELS.PORTAL_NEW_TAB_MENU_ACTION, callback),
+
+    onTabEvicted: (callback: (data: { tabId: string }) => void) =>
+      _typedOn(CHANNELS.PORTAL_TAB_EVICTED, callback),
   },
 
   // Webview API

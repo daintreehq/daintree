@@ -3,14 +3,65 @@ import type { PortalBounds, PortalNavEvent } from "../../shared/types/portal.js"
 import { CHANNELS } from "../ipc/channels.js";
 import { canOpenExternalUrl, openExternalUrl } from "../utils/openExternal.js";
 
+export const PORTAL_MAX_LIVE_TABS = 3;
+
 export class PortalManager {
   private window: BrowserWindow;
   private viewMap = new Map<string, WebContentsView>();
   private activeView: WebContentsView | null = null;
   private activeTabId: string | null = null;
+  private lruOrder = new Map<string, true>();
 
   constructor(window: BrowserWindow) {
     this.window = window;
+  }
+
+  private touchLru(tabId: string): void {
+    this.lruOrder.delete(tabId);
+    this.lruOrder.set(tabId, true);
+  }
+
+  private destroyView(tabId: string): void {
+    const view = this.viewMap.get(tabId);
+    if (!view) return;
+
+    if (this.activeView === view) {
+      try {
+        this.window.contentView.removeChildView(view);
+      } catch {
+        // ignore if already removed
+      }
+      this.activeView = null;
+      this.activeTabId = null;
+    }
+
+    try {
+      view.webContents.close();
+    } catch (error) {
+      console.error(`[PortalManager] Error closing view for tab ${tabId}:`, error);
+    }
+
+    this.viewMap.delete(tabId);
+    this.lruOrder.delete(tabId);
+  }
+
+  private evictIfNeeded(): void {
+    if (this.lruOrder.size <= PORTAL_MAX_LIVE_TABS) return;
+
+    for (const tabId of this.lruOrder.keys()) {
+      if (tabId === this.activeTabId) continue;
+      if (!this.viewMap.has(tabId)) {
+        this.lruOrder.delete(tabId);
+        continue;
+      }
+
+      this.destroyView(tabId);
+
+      if (!this.window?.isDestroyed()) {
+        this.window.webContents.send(CHANNELS.PORTAL_TAB_EVICTED, { tabId });
+      }
+      break;
+    }
   }
 
   createTab(tabId: string, url: string): void {
@@ -80,6 +131,7 @@ export class PortalManager {
 
       view.webContents.once("destroyed", () => {
         this.viewMap.delete(tabId);
+        this.lruOrder.delete(tabId);
         if (this.activeTabId === tabId) {
           try {
             this.window.contentView.removeChildView(view);
@@ -204,6 +256,8 @@ export class PortalManager {
         console.error(`[PortalManager] Failed to load URL ${url} in tab ${tabId}:`, err);
       });
       this.viewMap.set(tabId, view);
+      this.touchLru(tabId);
+      this.evictIfNeeded();
     } catch (error) {
       console.error(`[PortalManager] Failed to create tab ${tabId}:`, error);
       throw error;
@@ -227,6 +281,8 @@ export class PortalManager {
     view.setBounds(validatedBounds);
     this.activeView = view;
     this.activeTabId = tabId;
+    this.touchLru(tabId);
+    this.evictIfNeeded();
   }
 
   private validateBounds(bounds: PortalBounds): {
@@ -259,22 +315,7 @@ export class PortalManager {
   }
 
   closeTab(tabId: string): void {
-    const view = this.viewMap.get(tabId);
-    if (!view) return;
-
-    if (this.activeView === view) {
-      this.window.contentView.removeChildView(view);
-      this.activeView = null;
-      this.activeTabId = null;
-    }
-
-    try {
-      view.webContents.close();
-    } catch (error) {
-      console.error(`[PortalManager] Error closing tab ${tabId}:`, error);
-    }
-
-    this.viewMap.delete(tabId);
+    this.destroyView(tabId);
   }
 
   navigate(tabId: string, url: string): void {
@@ -323,17 +364,10 @@ export class PortalManager {
   }
 
   destroy(): void {
-    this.viewMap.forEach((view) => {
-      try {
-        if (this.activeView === view) {
-          this.window.contentView.removeChildView(view);
-        }
-        view.webContents.close();
-      } catch (error) {
-        console.error("[PortalManager] Error destroying view:", error);
-      }
-    });
-    this.viewMap.clear();
+    const tabIds = [...this.viewMap.keys()];
+    for (const tabId of tabIds) {
+      this.destroyView(tabId);
+    }
     this.activeView = null;
     this.activeTabId = null;
   }
