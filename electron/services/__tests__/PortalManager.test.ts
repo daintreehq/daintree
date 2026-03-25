@@ -516,17 +516,64 @@ describe("PortalManager LRU eviction", () => {
     expect(manager.hasTab("tab-4")).toBe(true);
   });
 
-  it("sends PORTAL_TAB_EVICTED event when evicting", () => {
+  it("sends exactly one PORTAL_TAB_EVICTED event per eviction", () => {
     const manager = new PortalManagerClass(mockWindow);
 
     manager.createTab("tab-1", "http://localhost:1001");
     manager.createTab("tab-2", "http://localhost:1002");
     manager.createTab("tab-3", "http://localhost:1003");
-    manager.createTab("tab-4", "http://localhost:1004");
 
-    expect(mockWindow.webContents.send).toHaveBeenCalledWith("portal:tab-evicted", {
-      tabId: "tab-1",
-    });
+    const evictedCalls = () =>
+      (mockWindow.webContents.send as ReturnType<typeof vi.fn>).mock.calls.filter(
+        ([ch]: [string]) => ch === "portal:tab-evicted"
+      );
+
+    expect(evictedCalls()).toHaveLength(0);
+
+    manager.createTab("tab-4", "http://localhost:1004");
+    expect(evictedCalls()).toHaveLength(1);
+    expect(evictedCalls()[0][1]).toEqual({ tabId: "tab-1" });
+
+    manager.createTab("tab-5", "http://localhost:1005");
+    expect(evictedCalls()).toHaveLength(2);
+    expect(evictedCalls()[1][1]).toEqual({ tabId: "tab-2" });
+  });
+
+  it("closeTab does not emit eviction event", () => {
+    const manager = new PortalManagerClass(mockWindow);
+
+    manager.createTab("tab-1", "http://localhost:1001");
+    manager.createTab("tab-2", "http://localhost:1002");
+    (mockWindow.webContents.send as ReturnType<typeof vi.fn>).mockClear();
+
+    manager.closeTab("tab-2");
+
+    const evictedCalls = (mockWindow.webContents.send as ReturnType<typeof vi.fn>).mock.calls.filter(
+      ([ch]: [string]) => ch === "portal:tab-evicted"
+    );
+    expect(evictedCalls).toHaveLength(0);
+  });
+
+  it("no eviction on hideAll + re-show", () => {
+    const manager = new PortalManagerClass(mockWindow);
+
+    manager.createTab("tab-1", "http://localhost:1001");
+    manager.createTab("tab-2", "http://localhost:1002");
+    manager.createTab("tab-3", "http://localhost:1003");
+
+    manager.showTab("tab-1", { x: 0, y: 0, width: 800, height: 600 });
+    (mockWindow.webContents.send as ReturnType<typeof vi.fn>).mockClear();
+
+    manager.hideAll();
+    manager.showTab("tab-1", { x: 0, y: 0, width: 800, height: 600 });
+
+    const evictedCalls = (mockWindow.webContents.send as ReturnType<typeof vi.fn>).mock.calls.filter(
+      ([ch]: [string]) => ch === "portal:tab-evicted"
+    );
+    expect(evictedCalls).toHaveLength(0);
+    expect(manager.hasTab("tab-1")).toBe(true);
+    expect(manager.hasTab("tab-2")).toBe(true);
+    expect(manager.hasTab("tab-3")).toBe(true);
   });
 
   it("never evicts the active tab", () => {

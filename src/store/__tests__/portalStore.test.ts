@@ -191,18 +191,23 @@ describe("portalStore", () => {
     expect(usePortalStore.getState().activeTabId).toBeNull();
   });
 
-  it("unmarkTabCreated removes from createdTabs but not from tabs", () => {
+  it("unmarkTabCreated removes from createdTabs but preserves other tabs", () => {
     const store = usePortalStore.getState();
-    store.createTab("http://example.com", "Test");
-    const tabId = usePortalStore.getState().tabs[0].id;
-    store.markTabCreated(tabId);
+    const tabA = store.createTab("http://example.com/a", "A");
+    const tabB = store.createTab("http://example.com/b", "B");
+    const tabC = store.createTab("http://example.com/c", "C");
 
-    expect(usePortalStore.getState().createdTabs.has(tabId)).toBe(true);
+    usePortalStore.getState().markTabCreated(tabA);
+    usePortalStore.getState().markTabCreated(tabB);
+    usePortalStore.getState().markTabCreated(tabC);
 
-    usePortalStore.getState().unmarkTabCreated(tabId);
+    usePortalStore.getState().unmarkTabCreated(tabB);
 
-    expect(usePortalStore.getState().createdTabs.has(tabId)).toBe(false);
-    expect(usePortalStore.getState().tabs.some((t) => t.id === tabId)).toBe(true);
+    const state = usePortalStore.getState();
+    expect(state.createdTabs.has(tabA)).toBe(true);
+    expect(state.createdTabs.has(tabB)).toBe(false);
+    expect(state.createdTabs.has(tabC)).toBe(true);
+    expect(state.tabs.some((t) => t.id === tabB)).toBe(true);
   });
 
   it("unmarkTabCreated is idempotent", () => {
