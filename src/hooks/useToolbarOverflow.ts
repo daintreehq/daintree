@@ -53,13 +53,17 @@ export function computeOverflow(
   for (const item of sortedForRemoval) {
     if (currentWidth <= targetWidth) break;
     overflowSet.add(item.id);
-    currentWidth -= itemWidths.get(item.id) ?? 0;
+    currentWidth -= itemWidths.get(item.id) ?? DEFAULT_ITEM_WIDTH;
   }
 
   const visibleIds = orderedIds.filter((id) => !overflowSet.has(id));
   const overflowIds = orderedIds.filter((id) => overflowSet.has(id));
 
   return { visibleIds, overflowIds };
+}
+
+function arraysEqual(a: readonly string[], b: readonly string[]): boolean {
+  return a.length === b.length && a.every((v, i) => v === b[i]);
 }
 
 export function useToolbarOverflow(
@@ -115,8 +119,8 @@ export function useToolbarOverflow(
       );
       setLeftResult((prev) => {
         if (
-          prev.visibleIds.length === result.visibleIds.length &&
-          prev.visibleIds.every((id, i) => id === result.visibleIds[i])
+          arraysEqual(prev.visibleIds, result.visibleIds) &&
+          arraysEqual(prev.overflowIds, result.overflowIds)
         ) {
           return prev;
         }
@@ -135,8 +139,8 @@ export function useToolbarOverflow(
       );
       setRightResult((prev) => {
         if (
-          prev.visibleIds.length === result.visibleIds.length &&
-          prev.visibleIds.every((id, i) => id === result.visibleIds[i])
+          arraysEqual(prev.visibleIds, result.visibleIds) &&
+          arraysEqual(prev.overflowIds, result.overflowIds)
         ) {
           return prev;
         }

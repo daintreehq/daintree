@@ -57,6 +57,7 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { useToolbarOverflow } from "@/hooks/useToolbarOverflow";
@@ -376,7 +377,7 @@ export function Toolbar({
       toolbarRef.current
         ? Array.from(
             toolbarRef.current.querySelectorAll<HTMLElement>("[data-toolbar-item]:not(:disabled)")
-          )
+          ).filter((el) => el.offsetParent !== null)
         : [],
     []
   );
@@ -1214,7 +1215,7 @@ export function Toolbar({
         <div
           key={id}
           data-toolbar-button-id={id}
-          className={visibleSet.has(id) ? undefined : "hidden"}
+          className={visibleSet.has(id) ? undefined : "invisible absolute pointer-events-none"}
           aria-hidden={visibleSet.has(id) ? undefined : true}
         >
           {buttonRegistry[id].render()}
@@ -1234,7 +1235,7 @@ export function Toolbar({
         <div
           key={id}
           data-toolbar-button-id={id}
-          className={isVisible ? undefined : "invisible absolute"}
+          className={isVisible ? undefined : "invisible absolute pointer-events-none"}
           aria-hidden={isVisible ? undefined : true}
         >
           {buttonRegistry[id].render()}
@@ -1281,9 +1282,6 @@ export function Toolbar({
         void actionService.dispatch("devServer.start", undefined, { source: "user" });
       },
       "panel-palette": handleTogglePanelPalette,
-      "github-stats": () => {
-        setIssuesOpen((prev) => !prev);
-      },
       "notification-center": toggleNotificationCenter,
       notes: () => {
         void actionService.dispatch("notes.create", {}, { source: "user" });
@@ -1327,16 +1325,36 @@ export function Toolbar({
           </Tooltip>
         </TooltipProvider>
         <DropdownMenuContent align={side === "left" ? "start" : "end"} sideOffset={4}>
-          {overflowIds.map((id) => {
+          {overflowIds.flatMap((id, idx) => {
+            if (id === "github-stats") {
+              const items = [
+                <DropdownMenuItem key="gh-issues" onClick={() => setIssuesOpen((p) => !p)}>
+                  <CircleDot className="mr-2 h-4 w-4 text-github-open" />
+                  Issues {stats?.issueCount != null ? `(${stats.issueCount})` : ""}
+                </DropdownMenuItem>,
+                <DropdownMenuItem key="gh-prs" onClick={() => setPrsOpen((p) => !p)}>
+                  <GitPullRequest className="mr-2 h-4 w-4 text-github-merged" />
+                  Pull Requests {stats?.prCount != null ? `(${stats.prCount})` : ""}
+                </DropdownMenuItem>,
+                <DropdownMenuItem key="gh-commits" onClick={() => setCommitsOpen((p) => !p)}>
+                  <GitCommit className="mr-2 h-4 w-4" />
+                  Commits {stats?.commitCount != null ? `(${stats.commitCount})` : ""}
+                </DropdownMenuItem>,
+              ];
+              if (idx < overflowIds.length - 1) {
+                items.push(<DropdownMenuSeparator key="gh-sep" />);
+              }
+              return items;
+            }
             const meta = OVERFLOW_MENU_META[id];
-            if (!meta) return null;
+            if (!meta) return [];
             const Icon = meta.icon;
-            return (
+            return [
               <DropdownMenuItem key={id} onClick={() => overflowActions[id]?.()}>
                 <Icon className="mr-2 h-4 w-4" />
                 {meta.label}
-              </DropdownMenuItem>
-            );
+              </DropdownMenuItem>,
+            ];
           })}
         </DropdownMenuContent>
       </DropdownMenu>
