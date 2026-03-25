@@ -107,6 +107,21 @@ export function filterEnvironment(env: Record<string, string | undefined>): Reco
  * Inject CANOPY_* metadata into a filtered environment.
  * Returns a new object — does not mutate the input.
  */
+const UTF8_PATTERN = /utf-?8/i;
+
+/**
+ * Ensure the environment has a UTF-8 locale set in LANG.
+ * If LANG is already UTF-8, the env is returned unchanged.
+ * Otherwise, LANG is set to en_US.UTF-8 as a safe fallback.
+ * Never touches LC_ALL — it's too aggressive an override.
+ */
+export function ensureUtf8Locale(env: Record<string, string>): Record<string, string> {
+  if (env.LANG && UTF8_PATTERN.test(env.LANG)) {
+    return { ...env };
+  }
+  return { ...env, LANG: "en_US.UTF-8" };
+}
+
 export function injectCanopyMetadata(
   env: Record<string, string>,
   metadata: CanopyTerminalMetadata
