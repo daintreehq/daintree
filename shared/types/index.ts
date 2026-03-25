@@ -116,6 +116,7 @@ export type {
   // System IPC types
   SystemOpenExternalPayload,
   SystemOpenPathPayload,
+  AppMetricsSummary,
   CliAvailability,
   AgentVersionInfo,
   AgentUpdateSettings,
