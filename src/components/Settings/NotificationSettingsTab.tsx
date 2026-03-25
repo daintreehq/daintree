@@ -36,13 +36,26 @@ export function NotificationSettingsTab() {
   const [loadState, setLoadState] = useState<LoadState>("loading");
 
   useEffect(() => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (!settled) setLoadState("error");
+    }, 10_000);
+
     window.electron?.notification
       ?.getSettings()
       .then((s) => {
+        settled = true;
+        clearTimeout(timer);
         setSettings(s);
         setLoadState("ready");
       })
-      .catch(() => setLoadState("error"));
+      .catch(() => {
+        settled = true;
+        clearTimeout(timer);
+        setLoadState("error");
+      });
+
+    return () => clearTimeout(timer);
   }, []);
 
   const update = async (patch: Partial<NotificationSettings>) => {

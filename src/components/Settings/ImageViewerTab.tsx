@@ -31,6 +31,9 @@ export function ImageViewerTab() {
     setSaveError(null);
     setIsLoading(true);
     let cancelled = false;
+    const timer = setTimeout(() => {
+      if (!cancelled && isMountedRef.current) setIsLoading(false);
+    }, 10_000);
     window.electron.project
       .getSettings(activeProjectId)
       .then((settings) => {
@@ -46,10 +49,12 @@ export function ImageViewerTab() {
         console.error("[ImageViewerTab] Failed to load settings:", err);
       })
       .finally(() => {
+        clearTimeout(timer);
         if (!cancelled && isMountedRef.current) setIsLoading(false);
       });
     return () => {
       cancelled = true;
+      clearTimeout(timer);
     };
   }, [activeProjectId]);
 

@@ -114,9 +114,18 @@ export function GeneralTab({
   }, []);
 
   useEffect(() => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (!settled && isMountedRef.current) {
+        setConfigError("Settings load timed out");
+      }
+    }, 10_000);
+
     actionService
       .dispatch("hibernation.getConfig", undefined, { source: "user" })
       .then((result) => {
+        settled = true;
+        clearTimeout(timer);
         if (!isMountedRef.current) return;
         if (!result.ok) {
           throw new Error(result.error.message);
@@ -125,10 +134,14 @@ export function GeneralTab({
         setConfigError(null);
       })
       .catch((error) => {
+        settled = true;
+        clearTimeout(timer);
         if (!isMountedRef.current) return;
         console.error("Failed to load hibernation config:", error);
         setConfigError(error instanceof Error ? error.message : "Failed to load settings");
       });
+
+    return () => clearTimeout(timer);
   }, []);
 
   useEffect(() => {

@@ -51,9 +51,19 @@ export function WorktreeSettingsTab() {
   }, [savedMessageTimeout]);
 
   useEffect(() => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (!settled) {
+        setError("Settings load timed out");
+        setIsLoading(false);
+      }
+    }, 10_000);
+
     actionService
       .dispatch("worktreeConfig.get", undefined, { source: "user" })
       .then((result) => {
+        settled = true;
+        clearTimeout(timer);
         if (!result.ok) {
           throw new Error(result.error.message);
         }
@@ -62,11 +72,15 @@ export function WorktreeSettingsTab() {
         setOriginalPattern(config.pathPattern);
       })
       .catch((err) => {
+        settled = true;
+        clearTimeout(timer);
         setError(err instanceof Error ? err.message : "Failed to load settings");
       })
       .finally(() => {
         setIsLoading(false);
       });
+
+    return () => clearTimeout(timer);
   }, []);
 
   const validation = useMemo(() => {

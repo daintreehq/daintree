@@ -36,6 +36,11 @@ export function McpServerSettingsTab() {
   const [showApiKey, setShowApiKey] = useState(false);
 
   useEffect(() => {
+    const timer = setTimeout(() => {
+      setError("Settings load timed out");
+      setLoading(false);
+    }, 10_000);
+
     window.electron.mcpServer
       .getStatus()
       .then((s) => {
@@ -43,7 +48,12 @@ export function McpServerSettingsTab() {
         setPortInput(s.configuredPort?.toString() ?? "");
       })
       .catch((err) => setError(err instanceof Error ? err.message : "Failed to load MCP status"))
-      .finally(() => setLoading(false));
+      .finally(() => {
+        clearTimeout(timer);
+        setLoading(false);
+      });
+
+    return () => clearTimeout(timer);
   }, []);
 
   const handleToggle = useCallback(async () => {

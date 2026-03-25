@@ -21,8 +21,12 @@ export function GitHubSettingsTab() {
   const [validationResult, setValidationResult] = useState<ValidationResult>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
+  const [loadTimedOut, setLoadTimedOut] = useState(false);
+
   useEffect(() => {
     initialize();
+    const timer = setTimeout(() => setLoadTimedOut(true), 10_000);
+    return () => clearTimeout(timer);
   }, [initialize]);
 
   useEffect(() => {
@@ -143,6 +147,19 @@ export function GitHubSettingsTab() {
   }, []);
 
   if (isLoading) {
+    if (loadTimedOut) {
+      return (
+        <div className="flex flex-col items-center justify-center h-32 gap-3">
+          <div className="text-status-error text-sm">Settings load timed out</div>
+          <button
+            onClick={() => void actionService.dispatch("ui.refresh", undefined, { source: "user" })}
+            className="text-xs px-3 py-1.5 bg-canopy-accent/10 hover:bg-canopy-accent/20 text-canopy-accent rounded transition-colors"
+          >
+            Reload Application
+          </button>
+        </div>
+      );
+    }
     return (
       <div className="flex items-center justify-center h-32">
         <div className="text-canopy-text/60 text-sm">Loading GitHub settings...</div>

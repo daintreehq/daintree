@@ -104,13 +104,24 @@ export function VoiceInputSettingsTab() {
   const dictionaryInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (!settled) setLoadState("error");
+    }, 10_000);
+
     window.electron?.voiceInput
       ?.getSettings()
       .then((s) => {
+        settled = true;
+        clearTimeout(timer);
         setSettings(s);
         setLoadState("ready");
       })
-      .catch(() => setLoadState("error"));
+      .catch(() => {
+        settled = true;
+        clearTimeout(timer);
+        setLoadState("error");
+      });
 
     window.electron?.voiceInput
       ?.checkMicPermission()
@@ -118,6 +129,8 @@ export function VoiceInputSettingsTab() {
         if (status) setMicPermission(status);
       })
       .catch(() => {});
+
+    return () => clearTimeout(timer);
   }, []);
 
   const update = (patch: Partial<VoiceInputSettings>) => {
