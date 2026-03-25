@@ -178,8 +178,8 @@ vi.mock("@/services/TerminalInstanceService", () => ({
 }));
 
 // Mock window.electron for resource monitoring listener
-(globalThis as any).window = globalThis.window ?? {};
-(window as any).electron = {
+(globalThis as Record<string, unknown>).window = globalThis.window ?? {};
+(window as unknown as Record<string, unknown>).electron = {
   terminal: {
     onResourceMetrics: vi.fn(() => vi.fn()),
   },
