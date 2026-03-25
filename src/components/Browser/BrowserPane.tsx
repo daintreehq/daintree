@@ -1,5 +1,6 @@
 import { useState, useCallback, useRef, useEffect, useMemo } from "react";
 import { useWebviewThrottle } from "@/hooks/useWebviewThrottle";
+import { useHasBeenVisible } from "@/hooks/useHasBeenVisible";
 import { useWebviewDialog } from "@/hooks/useWebviewDialog";
 import { AlertTriangle, ExternalLink } from "lucide-react";
 import { useTerminalStore } from "@/store";
@@ -107,6 +108,8 @@ export function BrowserPane({
   // Track if webview has been mounted and is ready
   const [isWebviewReady, setIsWebviewReady] = useState(false);
   const loadTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  const hasBeenVisible = useHasBeenVisible(id, location);
 
   const currentUrl = history.present;
   const canGoBack = history.past.length > 0;
@@ -680,6 +683,12 @@ export function BrowserPane({
                 ))}
               </div>
             </div>
+          </div>
+        ) : !hasBeenVisible ? (
+          <div className="absolute inset-0 flex flex-col items-center justify-center bg-canopy-bg text-canopy-text">
+            <p className="text-xs text-canopy-text/50">
+              Browser will load when this panel is first viewed
+            </p>
           </div>
         ) : loadError ? (
           <div className="absolute inset-0 flex flex-col items-center justify-center bg-canopy-bg text-canopy-text p-6">
