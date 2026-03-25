@@ -97,6 +97,10 @@ export interface ManagedTerminal {
   isAltBuffer?: boolean;
   altBufferListeners: Set<(isAltBuffer: boolean) => void>;
 
+  // Agent init suppression: buffer PTY output until the agent command is injected
+  agentInitSuppressed?: boolean;
+  agentInitTimer?: ReturnType<typeof setTimeout>;
+
   // Project-switch detach state: instance is alive but not in any visible container
   isDetached?: boolean;
 

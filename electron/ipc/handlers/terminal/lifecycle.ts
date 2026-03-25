@@ -15,7 +15,7 @@ import { getDefaultShell } from "../../../services/pty/terminalShell.js";
 
 export const SHELL_READY_TIMEOUT_MS = 3000;
 export const COMMAND_DELAY_MS = 100;
-export const CLEAR_SCREEN_SEQUENCE = "\x1b[2J\x1b[3J\x1b[H";
+export const AGENT_INIT_DONE_MARKER = "__CANOPY_AGENT_INIT_DONE__";
 
 export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): () => void {
   const { ptyClient } = deps;
@@ -212,7 +212,13 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
               completed = true;
               cleanup();
               if (ptyClient.hasTerminal(id)) {
-                ptyClient.write(id, `printf '${CLEAR_SCREEN_SEQUENCE}'; ${finalCommand}\r`);
+                // Emit a marker so the renderer knows init is done, then run the command.
+                // The renderer suppresses all output before the marker, then resets.
+                const sttyRestore = process.platform !== "win32" ? "stty echo; " : "";
+                ptyClient.write(
+                  id,
+                  `${sttyRestore}echo ${AGENT_INIT_DONE_MARKER}; ${finalCommand}\r`
+                );
               }
             };
 
@@ -240,6 +246,11 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
             ptyClient.on("data", onData);
             ptyClient.on("exit", onExit);
 
+            // Suppress TTY echo so the sentinel and exec commands are not displayed.
+            // stty is not available on Windows — skip echo suppression there.
+            if (process.platform !== "win32") {
+              ptyClient.write(id, `stty -echo\r`);
+            }
             // Write sentinel echo — processed after shell init completes
             ptyClient.write(id, `echo ${sentinel}\r`);
 

@@ -30,7 +30,7 @@ vi.mock("../../../services/pty/terminalShell.js", () => ({
 }));
 
 vi.mock("../../utils.js", () => ({
-  waitForRateLimitSlot: vi.fn(),
+  waitForRateLimitSlot: vi.fn(async () => {}),
   consumeRestoreQuota: vi.fn(() => false),
 }));
 
@@ -40,7 +40,7 @@ vi.mock("../../../../shared/config/agentRegistry.js", () => ({
 
 import { ipcMain } from "electron";
 import { CHANNELS } from "../../../channels.js";
-import { registerTerminalLifecycleHandlers, CLEAR_SCREEN_SEQUENCE } from "../lifecycle.js";
+import { registerTerminalLifecycleHandlers, AGENT_INIT_DONE_MARKER } from "../lifecycle.js";
 import type { HandlerDependencies } from "../../../types.js";
 
 function getSpawnHandler() {
@@ -70,6 +70,7 @@ describe("agent command injection - shell ready detection", () => {
   let cleanup: (() => void) | undefined;
 
   beforeEach(() => {
+    vi.useRealTimers();
     vi.clearAllMocks();
     Object.defineProperty(process, "platform", { value: "linux" });
     ptyClient = createEmitterPtyClient();
@@ -85,7 +86,7 @@ describe("agent command injection - shell ready detection", () => {
     ptyClient.removeAllListeners();
   });
 
-  it("waits for sentinel before writing agent command", async () => {
+  it("writes stty -echo then sentinel, waits for sentinel before agent command", async () => {
     const deps = { ptyClient } as unknown as HandlerDependencies;
     cleanup = registerTerminalLifecycleHandlers(deps);
     const handler = getSpawnHandler();
@@ -98,17 +99,20 @@ describe("agent command injection - shell ready detection", () => {
       command: "gemini chat",
     });
 
-    const sentinelWrite = ptyClient.write.mock.calls[0];
+    // First write: stty -echo
+    expect(ptyClient.write.mock.calls[0][1]).toBe("stty -echo\r");
+    // Second write: sentinel echo
+    const sentinelWrite = ptyClient.write.mock.calls[1];
     expect(sentinelWrite[0]).toBe(id);
     expect(sentinelWrite[1]).toMatch(/echo __CANOPY_READY_/);
-    expect(ptyClient.write).toHaveBeenCalledTimes(1);
+    expect(ptyClient.write).toHaveBeenCalledTimes(2);
 
     const sentinel = sentinelWrite[1].match(/__CANOPY_READY_\w+__/)?.[0];
     ptyClient.emit("data", id, `some init output\n${sentinel}\n`);
 
-    expect(ptyClient.write).toHaveBeenCalledTimes(2);
-    expect(ptyClient.write.mock.calls[1][1]).toBe(
-      `printf '${CLEAR_SCREEN_SEQUENCE}'; exec gemini chat\r`
+    expect(ptyClient.write).toHaveBeenCalledTimes(3);
+    expect(ptyClient.write.mock.calls[2][1]).toBe(
+      `stty echo; echo ${AGENT_INIT_DONE_MARKER}; exec gemini chat\r`
     );
   });
 
@@ -125,14 +129,14 @@ describe("agent command injection - shell ready detection", () => {
       command: "claude",
     });
 
-    const sentinelWrite = ptyClient.write.mock.calls[0];
+    const sentinelWrite = ptyClient.write.mock.calls[1];
     const sentinel = sentinelWrite[1].match(/__CANOPY_READY_\w+__/)?.[0];
 
     ptyClient.emit("data", id, sentinel!);
-    expect(ptyClient.write).toHaveBeenCalledTimes(2);
+    expect(ptyClient.write).toHaveBeenCalledTimes(3);
 
     ptyClient.emit("data", id, sentinel!);
-    expect(ptyClient.write).toHaveBeenCalledTimes(2);
+    expect(ptyClient.write).toHaveBeenCalledTimes(3);
   });
 
   it("cleans up listeners if terminal exits before sentinel", async () => {
@@ -154,7 +158,8 @@ describe("agent command injection - shell ready detection", () => {
 
     expect(ptyClient.listenerCount("data")).toBe(0);
     expect(ptyClient.listenerCount("exit")).toBe(0);
-    expect(ptyClient.write).toHaveBeenCalledTimes(1);
+    // stty -echo + sentinel only, no command written
+    expect(ptyClient.write).toHaveBeenCalledTimes(2);
   });
 
   it("ignores data from different terminal ids", async () => {
@@ -170,14 +175,14 @@ describe("agent command injection - shell ready detection", () => {
       command: "gemini chat",
     });
 
-    const sentinelWrite = ptyClient.write.mock.calls[0];
+    const sentinelWrite = ptyClient.write.mock.calls[1];
     const sentinel = sentinelWrite[1].match(/__CANOPY_READY_\w+__/)?.[0];
 
     ptyClient.emit("data", "other-terminal-id", sentinel!);
-    expect(ptyClient.write).toHaveBeenCalledTimes(1);
+    expect(ptyClient.write).toHaveBeenCalledTimes(2);
 
     ptyClient.emit("data", id, sentinel!);
-    expect(ptyClient.write).toHaveBeenCalledTimes(2);
+    expect(ptyClient.write).toHaveBeenCalledTimes(3);
   });
 
   it("detects sentinel split across multiple data chunks", async () => {
@@ -193,18 +198,18 @@ describe("agent command injection - shell ready detection", () => {
       command: "gemini chat",
     });
 
-    const sentinelWrite = ptyClient.write.mock.calls[0];
+    const sentinelWrite = ptyClient.write.mock.calls[1];
     const sentinel = sentinelWrite[1].match(/__CANOPY_READY_\w+__/)?.[0] as string;
 
     const mid = Math.floor(sentinel.length / 2);
     ptyClient.emit("data", id, sentinel.slice(0, mid));
-    expect(ptyClient.write).toHaveBeenCalledTimes(1);
+    expect(ptyClient.write).toHaveBeenCalledTimes(2);
 
     ptyClient.emit("data", id, sentinel.slice(mid));
-    expect(ptyClient.write).toHaveBeenCalledTimes(2);
+    expect(ptyClient.write).toHaveBeenCalledTimes(3);
   });
 
-  it("non-agent terminal with command does not use sentinel", async () => {
+  it("non-agent terminal with command does not use sentinel or stty", async () => {
     const deps = { ptyClient } as unknown as HandlerDependencies;
     cleanup = registerTerminalLifecycleHandlers(deps);
     const handler = getSpawnHandler();
@@ -226,7 +231,7 @@ describe("agent command injection - shell ready detection", () => {
     expect(ptyClient.write.mock.calls[0][1]).toBe("ls -la\r");
   });
 
-  it("includes clear sequence when sentinel times out", async () => {
+  it("includes marker and stty echo when sentinel times out", async () => {
     vi.useFakeTimers();
     const deps = { ptyClient } as unknown as HandlerDependencies;
     cleanup = registerTerminalLifecycleHandlers(deps);
@@ -240,13 +245,14 @@ describe("agent command injection - shell ready detection", () => {
       command: "gemini chat",
     });
 
-    expect(ptyClient.write).toHaveBeenCalledTimes(1);
+    // stty -echo + sentinel
+    expect(ptyClient.write).toHaveBeenCalledTimes(2);
 
     vi.advanceTimersByTime(3000);
 
-    expect(ptyClient.write).toHaveBeenCalledTimes(2);
-    expect(ptyClient.write.mock.calls[1][1]).toBe(
-      `printf '${CLEAR_SCREEN_SEQUENCE}'; exec gemini chat\r`
+    expect(ptyClient.write).toHaveBeenCalledTimes(3);
+    expect(ptyClient.write.mock.calls[2][1]).toBe(
+      `stty echo; echo ${AGENT_INIT_DONE_MARKER}; exec gemini chat\r`
     );
     vi.useRealTimers();
   });
@@ -265,14 +271,15 @@ describe("agent command injection - shell ready detection", () => {
     });
 
     ptyClient.hasTerminal.mockReturnValue(false);
-    const sentinelWrite = ptyClient.write.mock.calls[0];
+    const sentinelWrite = ptyClient.write.mock.calls[1];
     const sentinel = sentinelWrite[1].match(/__CANOPY_READY_\w+__/)?.[0];
     ptyClient.emit("data", id, sentinel!);
 
-    expect(ptyClient.write).toHaveBeenCalledTimes(1);
+    // stty -echo + sentinel only, command skipped (terminal gone)
+    expect(ptyClient.write).toHaveBeenCalledTimes(2);
   });
 
-  it("non-agent command does not include clear sequence", async () => {
+  it("non-agent command does not include marker", async () => {
     const deps = { ptyClient } as unknown as HandlerDependencies;
     cleanup = registerTerminalLifecycleHandlers(deps);
     const handler = getSpawnHandler();
@@ -289,7 +296,7 @@ describe("agent command injection - shell ready detection", () => {
       },
       { timeout: 500 }
     );
-    expect(ptyClient.write.mock.calls[0][1]).not.toContain(CLEAR_SCREEN_SEQUENCE);
+    expect(ptyClient.write.mock.calls[0][1]).not.toContain(AGENT_INIT_DONE_MARKER);
   });
 
   it("detects sentinel from Uint8Array data", async () => {
@@ -305,11 +312,11 @@ describe("agent command injection - shell ready detection", () => {
       command: "gemini chat",
     });
 
-    const sentinelWrite = ptyClient.write.mock.calls[0];
+    const sentinelWrite = ptyClient.write.mock.calls[1];
     const sentinel = sentinelWrite[1].match(/__CANOPY_READY_\w+__/)?.[0] as string;
     const encoded = new TextEncoder().encode(sentinel);
 
     ptyClient.emit("data", id, encoded);
-    expect(ptyClient.write).toHaveBeenCalledTimes(2);
+    expect(ptyClient.write).toHaveBeenCalledTimes(3);
   });
 });
