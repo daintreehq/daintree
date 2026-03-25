@@ -158,6 +158,8 @@ import { parseExactNumber } from "./lib/parseExactNumber";
 import type { WorktreeState, PanelKind } from "./types";
 import { actionService } from "./services/ActionService";
 import { voiceRecordingService } from "./services/VoiceRecordingService";
+import { terminalInstanceService } from "./services/terminal/terminalInstanceService";
+import { SIDEBAR_TOGGLE_LOCK_MS } from "./lib/terminalLayout";
 import { useRenderProfiler } from "./utils/renderProfiler";
 import { useWorktreeDataStore } from "./store/worktreeDataStore";
 import type { WorktreeActions } from "./hooks/useWorktreeActions";
@@ -1231,6 +1233,12 @@ function App() {
   const { inject } = useContextInjection();
 
   const handleToggleSidebar = useCallback(() => {
+    const activeWtId = useWorktreeSelectionStore.getState().activeWorktreeId;
+    const gridIds = useTerminalStore
+      .getState()
+      .terminals.filter((t) => t.location !== "dock" && t.worktreeId === activeWtId)
+      .map((t) => t.id);
+    terminalInstanceService.suppressResizesDuringLayoutTransition(gridIds, SIDEBAR_TOGGLE_LOCK_MS);
     window.dispatchEvent(new CustomEvent("canopy:toggle-focus-mode"));
   }, []);
 

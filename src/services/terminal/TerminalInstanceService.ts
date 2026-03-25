@@ -387,8 +387,32 @@ class TerminalInstanceService {
     }
   }
 
-  lockResize(id: string, locked: boolean): void {
-    this.resizeController.lockResize(id, locked);
+  lockResize(id: string, locked: boolean, customTtlMs?: number): void {
+    this.resizeController.lockResize(id, locked, customTtlMs);
+  }
+
+  private layoutTransitionTimer: number | undefined;
+
+  suppressResizesDuringLayoutTransition(terminalIds: string[], durationMs: number): void {
+    if (terminalIds.length === 0) return;
+
+    if (this.layoutTransitionTimer !== undefined) {
+      clearTimeout(this.layoutTransitionTimer);
+    }
+
+    const safetyTtl = durationMs + 100;
+    for (const id of terminalIds) {
+      this.resizeController.lockResize(id, true, safetyTtl);
+    }
+
+    this.layoutTransitionTimer = window.setTimeout(() => {
+      this.layoutTransitionTimer = undefined;
+      for (const id of terminalIds) {
+        if (!this.instances.has(id)) continue;
+        this.resizeController.lockResize(id, false);
+        this.resizeController.fit(id);
+      }
+    }, durationMs);
   }
 
   suppressResizesDuringProjectSwitch(terminalIds: string[], durationMs: number): void {
