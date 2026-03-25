@@ -87,6 +87,7 @@ export async function buildPanelDuplicateOptions(
     exitBehavior: sourcePanel.exitBehavior,
     isInputLocked: sourcePanel.isInputLocked,
     agentModelId: sourcePanel.agentModelId,
+    agentLaunchFlags: sourcePanel.agentLaunchFlags,
     command,
     ...buildKindSpecificOptions(sourcePanel),
   };

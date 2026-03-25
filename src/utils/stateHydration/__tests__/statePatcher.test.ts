@@ -354,6 +354,30 @@ describe("buildArgsForRespawn", () => {
     );
     expect(result.agentModelId).toBe("claude-opus-4-6");
   });
+
+  it("passes agentLaunchFlags to buildResumeCommand", () => {
+    buildResumeCommandMock.mockClear();
+    buildArgsForRespawn(
+      {
+        id: "t1",
+        kind: "agent" as const,
+        agentId: "claude",
+        cwd: "/p",
+        location: "grid",
+        agentSessionId: "sess-1",
+        agentLaunchFlags: ["--yolo", "--dangerously-skip-permissions"],
+      },
+      "agent",
+      "/p",
+      { agents: { claude: {} } },
+      false,
+      undefined
+    );
+    expect(buildResumeCommandMock).toHaveBeenCalledWith("claude", "sess-1", [
+      "--yolo",
+      "--dangerously-skip-permissions",
+    ]);
+  });
 });
 
 describe("agentModelId propagation", () => {
@@ -559,6 +583,25 @@ describe("buildArgsForBackendTerminal — agent launch flags", () => {
     );
     expect(result.agentLaunchFlags).toEqual(["--saved-flag"]);
     expect(result.agentModelId).toBe("saved-model");
+  });
+
+  it("falls back to saved when backend fields are null (stale JSON)", () => {
+    const result = buildArgsForBackendTerminal(
+      {
+        id: "t1",
+        kind: "agent",
+        type: "claude",
+        agentId: "claude",
+        title: "Claude",
+        cwd: "/p",
+        agentLaunchFlags: null as unknown as string[] | undefined,
+        agentModelId: null as unknown as string | undefined,
+      },
+      { id: "t1", agentLaunchFlags: ["--saved"], agentModelId: "saved" },
+      "/p"
+    );
+    expect(result.agentLaunchFlags).toEqual(["--saved"]);
+    expect(result.agentModelId).toBe("saved");
   });
 });
 

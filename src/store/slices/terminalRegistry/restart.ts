@@ -294,6 +294,8 @@ export const createRestartActions = (
         command: spawnCommand,
         restore: false,
         env: restartEnv,
+        agentLaunchFlags: currentTerminal.agentLaunchFlags,
+        agentModelId: currentTerminal.agentModelId,
       });
 
       if (targetLocation === "dock") {
