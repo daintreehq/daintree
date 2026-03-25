@@ -248,7 +248,7 @@ describe("TerminalInstanceService - Hibernation", () => {
       expect(managed.hibernationTimer).toBeUndefined();
     });
 
-    it("should remove hostElement from DOM", () => {
+    it("should keep hostElement in DOM for reuse during unhibernation", () => {
       const managed = makeMockManaged();
       const container = document.createElement("div");
       container.appendChild(managed.hostElement);
@@ -256,7 +256,7 @@ describe("TerminalInstanceService - Hibernation", () => {
 
       service.hibernate("t1");
 
-      expect(managed.hostElement.parentElement).toBeNull();
+      expect(managed.hostElement.parentElement).toBe(container);
     });
   });
 
@@ -287,14 +287,14 @@ describe("TerminalInstanceService - Hibernation", () => {
       expect(managed.serializeAddon).toBeDefined();
     });
 
-    it("should create a fresh hostElement", () => {
+    it("should reuse existing hostElement", () => {
       const managed = makeMockManaged({ isHibernated: true });
       const oldHostElement = managed.hostElement;
       service.instances.set("t1", managed as unknown as Record<string, unknown>);
 
       service.unhibernate("t1");
 
-      expect(managed.hostElement).not.toBe(oldHostElement);
+      expect(managed.hostElement).toBe(oldHostElement);
     });
 
     it("should be a no-op for non-hibernated terminals", () => {
@@ -470,6 +470,35 @@ describe("TerminalInstanceService - Hibernation", () => {
 
       // Timer should have been cleared (no lingering setTimeout)
       expect(managed.hibernationTimer).toBeUndefined();
+    });
+  });
+
+  describe("Listener leak prevention", () => {
+    it("should not grow listeners array through hibernate/unhibernate cycles", () => {
+      const managed = makeMockManaged({ ipcListenerCount: 2 });
+      // Simulate 2 IPC listeners + 5 terminal-bound listeners
+      managed.listeners = [vi.fn(), vi.fn(), vi.fn(), vi.fn(), vi.fn(), vi.fn(), vi.fn()];
+      service.instances.set("t1", managed as unknown as Record<string, unknown>);
+
+      service.hibernate("t1");
+      // After hibernate: only IPC listeners (2) should remain
+      expect(managed.listeners.length).toBe(2);
+
+      service.unhibernate("t1");
+      // After unhibernate: IPC listeners + new terminal-bound listeners
+      const afterFirstCycle = managed.listeners.length;
+
+      service.hibernate("t1");
+      expect(managed.listeners.length).toBe(2);
+
+      service.unhibernate("t1");
+      // Same count as after first cycle — no growth
+      expect(managed.listeners.length).toBe(afterFirstCycle);
+
+      // Third cycle — still no growth
+      service.hibernate("t1");
+      service.unhibernate("t1");
+      expect(managed.listeners.length).toBe(afterFirstCycle);
     });
   });
 

@@ -103,6 +103,7 @@ export interface ManagedTerminal {
   // Hibernation: xterm.js Terminal instance disposed to free memory
   isHibernated?: boolean;
   hibernationTimer?: ReturnType<typeof setTimeout>;
+  ipcListenerCount: number;
 }
 
 export const TIER_DOWNGRADE_HYSTERESIS_MS = 500;

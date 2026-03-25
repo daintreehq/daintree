@@ -569,7 +569,10 @@ class TerminalInstanceService {
       if (this.shouldSuppressExit(id)) {
         return;
       }
-      terminal.write(`\r\n\x1b[90m[Process exited with code ${exitCode}]\x1b[0m\r\n`);
+      const current = this.instances.get(id);
+      if (current && !current.isHibernated) {
+        current.terminal.write(`\r\n\x1b[90m[Process exited with code ${exitCode}]\x1b[0m\r\n`);
+      }
       exitSubscribers.forEach((cb) => cb(exitCode));
     });
     listeners.push(unsubExit);
@@ -611,6 +614,7 @@ class TerminalInstanceService {
       deferredOutput: [],
       isAltBuffer: false,
       altBufferListeners: new Set(),
+      ipcListenerCount: listeners.length,
     };
 
     managed.parserHandler = new TerminalParserHandler(managed, () => {
@@ -1425,6 +1429,16 @@ class TerminalInstanceService {
     }
     managed.webLinksAddon = null;
 
+    // Dispose terminal-bound listeners (keep IPC listeners at the beginning)
+    const terminalBoundListeners = managed.listeners.splice(managed.ipcListenerCount);
+    for (const unsub of terminalBoundListeners) {
+      try {
+        unsub();
+      } catch {
+        /* ignore — terminal already disposing */
+      }
+    }
+
     // Dispose parser handler
     managed.parserHandler?.dispose();
     managed.parserHandler = undefined;
@@ -1433,13 +1447,10 @@ class TerminalInstanceService {
     managed.lastActivityMarker?.dispose();
     managed.lastActivityMarker = undefined;
 
-    // Dispose terminal instance
+    // Dispose terminal instance — this removes xterm's injected DOM elements
+    // from the hostElement but leaves the hostElement itself in the DOM
+    // so XtermAdapter's container ref stays valid for reattachment
     managed.terminal.dispose();
-
-    // Remove hostElement from DOM
-    if (managed.hostElement.parentElement) {
-      managed.hostElement.parentElement.removeChild(managed.hostElement);
-    }
 
     managed.isHibernated = true;
     managed.isOpened = false;
@@ -1476,13 +1487,11 @@ class TerminalInstanceService {
     managed.fileLinksDisposable = addons.fileLinksDisposable;
     managed.webLinksAddon = addons.webLinksAddon;
 
-    // Create fresh host element
-    const hostElement = document.createElement("div");
-    hostElement.style.width = "100%";
-    hostElement.style.height = "100%";
-    hostElement.style.overflow = "hidden";
-    hostElement.style.position = "relative";
-    managed.hostElement = hostElement;
+    // Reuse existing hostElement — clear old xterm DOM nodes to prevent ghosting
+    const hostElement = managed.hostElement;
+    while (hostElement.firstChild) {
+      hostElement.removeChild(hostElement.firstChild);
+    }
 
     // Re-create parser handler
     managed.parserHandler = new TerminalParserHandler(managed, () => {
