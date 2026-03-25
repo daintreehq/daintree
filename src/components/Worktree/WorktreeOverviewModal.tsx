@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useMemo } from "react";
+import React, { useCallback, useEffect, useEffectEvent, useRef, useMemo } from "react";
 import { X, FilterX } from "lucide-react";
 import { WorktreeOverviewIcon, CanopyAgentIcon } from "@/components/icons";
 import { cn } from "@/lib/utils";
@@ -305,28 +305,25 @@ export function WorktreeOverviewModal({
     hideMainWorktree,
   ]);
 
-  const handleKeyDown = useCallback(
-    (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        e.preventDefault();
-        e.stopPropagation();
-        onClose();
-      }
-    },
-    [onClose]
-  );
+  const handleKeyDown = useEffectEvent((e: KeyboardEvent) => {
+    if (e.key === "Escape") {
+      e.preventDefault();
+      e.stopPropagation();
+      onClose();
+    }
+  });
 
   useEffect(() => {
     if (!isOpen) return;
-
-    document.addEventListener("keydown", handleKeyDown, { capture: true });
     const timeoutId = setTimeout(() => closeButtonRef.current?.focus(), 50);
+    return () => clearTimeout(timeoutId);
+  }, [isOpen]);
 
-    return () => {
-      document.removeEventListener("keydown", handleKeyDown, { capture: true });
-      clearTimeout(timeoutId);
-    };
-  }, [isOpen, handleKeyDown]);
+  useEffect(() => {
+    if (!isOpen) return;
+    document.addEventListener("keydown", handleKeyDown, { capture: true });
+    return () => document.removeEventListener("keydown", handleKeyDown, { capture: true });
+  }, [isOpen]);
 
   const handleBackdropClick = useCallback(
     (e: React.MouseEvent) => {

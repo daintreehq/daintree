@@ -545,6 +545,58 @@ describe("ReviewHub", () => {
     });
   });
 
+  describe("focus retention", () => {
+    it("commit textarea retains focus during background resync", async () => {
+      const onClose = vi.fn();
+      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={onClose} />);
+      await waitFor(() => screen.getByPlaceholderText("Commit message…"));
+
+      // Wait for the initial 50ms close-button autofocus to settle
+      await new Promise((r) => setTimeout(r, 100));
+
+      const textarea = screen.getByPlaceholderText("Commit message…") as HTMLTextAreaElement;
+      act(() => textarea.focus());
+      expect(document.activeElement).toBe(textarea);
+
+      // Trigger a background resync which re-renders the component
+      getStagingStatusMock.mockResolvedValue(makeStatus());
+      await act(async () => {
+        capturedUpdateCallback!(makeWorktreeState());
+        await Promise.resolve();
+      });
+      await waitFor(() => expect(getStagingStatusMock).toHaveBeenCalledTimes(2));
+
+      // Wait past the 50ms window — the focus effect should NOT re-run
+      await new Promise((r) => setTimeout(r, 100));
+
+      expect(document.activeElement).toBe(textarea);
+    });
+
+    it("Escape reads latest state through useEffectEvent", async () => {
+      const onClose = vi.fn();
+      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={onClose} />);
+      await waitFor(() => screen.getByText("index.ts"));
+
+      // Click the file row (div[role="button"]) to open its diff (sets selectedFile)
+      const fileRow = screen.getByTitle("src/index.ts").closest("[role='button']")!;
+      fireEvent.click(fileRow);
+
+      // First Escape should clear selectedFile, not close modal
+      act(() => {
+        document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+      });
+
+      expect(onClose).not.toHaveBeenCalled();
+
+      // Second Escape should close the modal
+      act(() => {
+        document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+      });
+
+      expect(onClose).toHaveBeenCalledTimes(1);
+    });
+  });
+
   describe("PR state indicator", () => {
     function setWorktreePR(prData: {
       prNumber: number;
