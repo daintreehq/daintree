@@ -207,6 +207,9 @@ export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () 
             trashExpiresAt: terminal.trashExpiresAt,
             activityTier: terminal.activityTier,
             hasPty: terminal.hasPty,
+            agentSessionId: terminal.agentSessionId,
+            agentLaunchFlags: terminal.agentLaunchFlags,
+            agentModelId: terminal.agentModelId,
           });
         }
       }
@@ -252,6 +255,9 @@ export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () 
           trashExpiresAt: t.trashExpiresAt,
           activityTier: t.activityTier,
           hasPty: t.hasPty,
+          agentSessionId: t.agentSessionId,
+          agentLaunchFlags: t.agentLaunchFlags,
+          agentModelId: t.agentModelId,
         }));
 
       logInfo(`terminal:getAvailable: found ${sanitized.length} available terminals`);
@@ -297,6 +303,9 @@ export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () 
           trashExpiresAt: t.trashExpiresAt,
           activityTier: t.activityTier,
           hasPty: t.hasPty,
+          agentSessionId: t.agentSessionId,
+          agentLaunchFlags: t.agentLaunchFlags,
+          agentModelId: t.agentModelId,
         }));
 
       logInfo(`terminal:getByState(${state}): found ${sanitized.length} terminals`);
@@ -331,6 +340,9 @@ export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () 
           trashExpiresAt: t.trashExpiresAt,
           activityTier: t.activityTier,
           hasPty: t.hasPty,
+          agentSessionId: t.agentSessionId,
+          agentLaunchFlags: t.agentLaunchFlags,
+          agentModelId: t.agentModelId,
         }));
 
       logInfo(`terminal:getAll: found ${sanitized.length} terminals`);
@@ -377,6 +389,9 @@ export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () 
         spawnedAt: terminal.spawnedAt,
         activityTier: terminal.activityTier,
         hasPty: terminal.hasPty,
+        agentSessionId: terminal.agentSessionId,
+        agentLaunchFlags: terminal.agentLaunchFlags,
+        agentModelId: terminal.agentModelId,
       };
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);

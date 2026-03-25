@@ -79,6 +79,9 @@ interface BackendTerminalData {
   agentState?: AgentState;
   lastStateChange?: number;
   activityTier?: "active" | "background";
+  agentSessionId?: string;
+  agentLaunchFlags?: string[];
+  agentModelId?: string;
 }
 
 interface ReconnectedTerminalData {
@@ -92,6 +95,9 @@ interface ReconnectedTerminalData {
   agentState?: AgentState;
   lastStateChange?: number;
   activityTier?: "active" | "background";
+  agentSessionId?: string;
+  agentLaunchFlags?: string[];
+  agentModelId?: string;
 }
 
 interface AgentSettingsData {
@@ -178,9 +184,9 @@ export function buildArgsForBackendTerminal(
     browserZoom: isDevPreview ? saved.browserZoom : undefined,
     devPreviewConsoleOpen: isDevPreview ? saved.devPreviewConsoleOpen : undefined,
     exitBehavior: saved.exitBehavior,
-    agentSessionId: saved.agentSessionId,
-    agentLaunchFlags: saved.agentLaunchFlags,
-    agentModelId: saved.agentModelId,
+    agentSessionId: backendTerminal.agentSessionId ?? saved.agentSessionId,
+    agentLaunchFlags: backendTerminal.agentLaunchFlags ?? saved.agentLaunchFlags,
+    agentModelId: backendTerminal.agentModelId ?? saved.agentModelId,
   };
 }
 
@@ -227,9 +233,9 @@ export function buildArgsForReconnectedFallback(
     browserZoom: isDevPreview ? saved.browserZoom : undefined,
     devPreviewConsoleOpen: isDevPreview ? saved.devPreviewConsoleOpen : undefined,
     exitBehavior: saved.exitBehavior,
-    agentSessionId: saved.agentSessionId,
-    agentLaunchFlags: saved.agentLaunchFlags,
-    agentModelId: saved.agentModelId,
+    agentSessionId: reconnectedTerminal.agentSessionId ?? saved.agentSessionId,
+    agentLaunchFlags: reconnectedTerminal.agentLaunchFlags ?? saved.agentLaunchFlags,
+    agentModelId: reconnectedTerminal.agentModelId ?? saved.agentModelId,
   };
 }
 
@@ -356,5 +362,8 @@ export function buildArgsForOrphanedTerminal(
     existingId: terminal.id,
     agentState: terminal.agentState,
     lastStateChange: terminal.lastStateChange,
+    agentSessionId: terminal.agentSessionId,
+    agentLaunchFlags: terminal.agentLaunchFlags,
+    agentModelId: terminal.agentModelId,
   };
 }

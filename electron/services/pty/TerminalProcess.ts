@@ -296,6 +296,8 @@ export class TerminalProcess {
       rawOutputBuffer: undefined,
       restartCount: 0,
       analysisEnabled: this.isAgentTerminal,
+      agentLaunchFlags: options.agentLaunchFlags,
+      agentModelId: options.agentModelId,
     };
 
     // NOTE: The headless responder is intentionally NOT installed for agent
@@ -445,6 +447,9 @@ export class TerminalProcess {
       restartCount: t.restartCount,
       activityTier: this._activityTier,
       hasPty,
+      agentSessionId: t.agentSessionId,
+      agentLaunchFlags: t.agentLaunchFlags,
+      agentModelId: t.agentModelId,
       exitCode: t.exitCode,
     };
   }

@@ -1091,6 +1091,9 @@ port.on("message", async (rawMsg: any) => {
                 trashExpiresAt: terminal.trashExpiresAt,
                 activityTier: ptyManager.getActivityTier(msg.id),
                 hasPty,
+                agentSessionId: terminal.agentSessionId,
+                agentLaunchFlags: terminal.agentLaunchFlags,
+                agentModelId: terminal.agentModelId,
               }
             : null,
         });
@@ -1211,6 +1214,9 @@ port.on("message", async (rawMsg: any) => {
             trashExpiresAt: t.trashExpiresAt,
             activityTier: ptyManager.getActivityTier(t.id),
             hasPty: !t.wasKilled && !t.isExited,
+            agentSessionId: t.agentSessionId,
+            agentLaunchFlags: t.agentLaunchFlags,
+            agentModelId: t.agentModelId,
           })),
         });
         break;
@@ -1238,6 +1244,9 @@ port.on("message", async (rawMsg: any) => {
             trashExpiresAt: t.trashExpiresAt,
             activityTier: ptyManager.getActivityTier(t.id),
             hasPty: !t.wasKilled && !t.isExited,
+            agentSessionId: t.agentSessionId,
+            agentLaunchFlags: t.agentLaunchFlags,
+            agentModelId: t.agentModelId,
           })),
         });
         break;
@@ -1265,6 +1274,9 @@ port.on("message", async (rawMsg: any) => {
             trashExpiresAt: t.trashExpiresAt,
             activityTier: ptyManager.getActivityTier(t.id),
             hasPty: !t.wasKilled && !t.isExited,
+            agentSessionId: t.agentSessionId,
+            agentLaunchFlags: t.agentLaunchFlags,
+            agentModelId: t.agentModelId,
           })),
         });
         break;

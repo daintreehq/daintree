@@ -34,6 +34,10 @@ export interface TerminalSpawnOptions {
   restore?: boolean;
   /** Whether to kill the PTY when the frontend disconnects (no terminal registry entry) */
   isEphemeral?: boolean;
+  /** Process-level flags captured at launch time */
+  agentLaunchFlags?: string[];
+  /** Model ID selected at launch time */
+  agentModelId?: string;
 }
 
 /** Terminal state for app state persistence */
@@ -148,6 +152,12 @@ export interface BackendTerminalInfo {
   activityTier?: "active" | "background";
   /** Whether this terminal has an active PTY process (false for orphaned terminals that exited) */
   hasPty?: boolean;
+  /** Captured agent session ID from graceful shutdown */
+  agentSessionId?: string;
+  /** Process-level flags captured at launch time */
+  agentLaunchFlags?: string[];
+  /** Model ID selected at launch time */
+  agentModelId?: string;
 }
 
 /** Result from terminal reconnect operation */
@@ -166,6 +176,9 @@ export interface TerminalReconnectResult {
   spawnedAt?: number;
   activityTier?: "active" | "background";
   hasPty?: boolean;
+  agentSessionId?: string;
+  agentLaunchFlags?: string[];
+  agentModelId?: string;
 }
 
 /** Terminal information payload for diagnostic display */

@@ -48,6 +48,10 @@ export interface TerminalPublicState {
   hasPty?: boolean;
   /** Captured agent session ID from graceful shutdown */
   agentSessionId?: string;
+  /** Process-level flags captured at launch time (e.g. --dangerously-skip-permissions) */
+  agentLaunchFlags?: string[];
+  /** Model ID selected at launch time for per-panel model selection */
+  agentModelId?: string;
   /** Exit code from the PTY process (set on clean exit) */
   exitCode?: number;
 }

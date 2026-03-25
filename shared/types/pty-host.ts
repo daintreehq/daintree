@@ -30,6 +30,10 @@ export interface PtyHostSpawnOptions {
   restore?: boolean;
   /** Whether to kill the PTY when the frontend disconnects (no terminal registry entry) */
   isEphemeral?: boolean;
+  /** Process-level flags captured at launch time (e.g. --dangerously-skip-permissions) */
+  agentLaunchFlags?: string[];
+  /** Model ID selected at launch time for per-panel model selection */
+  agentModelId?: string;
 }
 
 /**
@@ -236,6 +240,12 @@ export interface PtyHostTerminalInfo {
   activityTier?: "active" | "background";
   /** Whether this terminal has an active PTY process (false for orphaned terminals that exited) */
   hasPty?: boolean;
+  /** Captured agent session ID from graceful shutdown */
+  agentSessionId?: string;
+  /** Process-level flags captured at launch time (e.g. --dangerously-skip-permissions) */
+  agentLaunchFlags?: string[];
+  /** Model ID selected at launch time for per-panel model selection */
+  agentModelId?: string;
 }
 
 /** Payload for agent:spawned event */

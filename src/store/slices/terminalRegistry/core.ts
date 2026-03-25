@@ -296,6 +296,8 @@ export const createCorePanelActions = (
           worktreeId: options.worktreeId,
           env: mergedEnv,
           restore: options.restore,
+          agentLaunchFlags: options.agentLaunchFlags,
+          agentModelId: options.agentModelId,
         });
       }
 
