@@ -383,7 +383,7 @@ export function ReviewHub({ isOpen, worktreePath, onClose }: ReviewHubProps) {
         <div
           className={cn(
             "relative flex flex-col",
-            "w-[min(600px,calc(100vw-80px))] max-h-[calc(100vh-80px)] min-h-[320px]",
+            "w-[min(720px,calc(100vw-80px))] max-h-[calc(100vh-80px)] min-h-[320px]",
             "bg-canopy-bg rounded-xl",
             "border border-divider",
             "shadow-[var(--theme-shadow-dialog)]",
