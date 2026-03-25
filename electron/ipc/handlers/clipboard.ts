@@ -51,6 +51,11 @@ async function cleanupOldClipboardImages(): Promise<void> {
 }
 
 export function registerClipboardHandlers(): () => void {
+  // Ensure the clipboard directory exists at startup so agents like Gemini
+  // can reference it via --include-directories without errors (#4048)
+  fs.mkdir(getClipboardDir(), { recursive: true }).catch((err) => {
+    console.warn("[clipboard] Failed to create clipboard directory:", err);
+  });
   cleanupOldClipboardImages().catch((err) => {
     console.warn("[clipboard] Cleanup failed unexpectedly:", err);
   });
