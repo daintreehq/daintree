@@ -27,7 +27,6 @@ import {
   LayoutGrid,
   PanelRight,
   Keyboard,
-  GitBranch,
   SquareTerminal,
   Settings as SettingsIcon,
   Settings2,
@@ -41,6 +40,7 @@ import {
   KeyRound,
   Shield,
 } from "lucide-react";
+import { WorktreeIcon } from "@/components/icons";
 import { cn } from "@/lib/utils";
 import { useVerticalScrollShadows } from "@/hooks/useVerticalScrollShadows";
 import { appClient } from "@/clients";
@@ -440,7 +440,7 @@ export function SettingsDialog({
     keyboard: <Keyboard className="w-5 h-5 text-text-secondary" />,
     terminal: <LayoutGrid className="w-5 h-5 text-text-secondary" />,
     terminalAppearance: <SquareTerminal className="w-5 h-5 text-text-secondary" />,
-    worktree: <GitBranch className="w-5 h-5 text-text-secondary" />,
+    worktree: <WorktreeIcon className="w-5 h-5 text-text-secondary" />,
     agents: <TreeDeciduous className="w-5 h-5 text-text-secondary" />,
     github: <Github className="w-5 h-5 text-text-secondary" />,
     portal: <PanelRight className="w-5 h-5 text-text-secondary" />,
@@ -588,7 +588,7 @@ export function SettingsDialog({
                 />
                 <NavItem
                   tab="worktree"
-                  icon={<GitBranch className="w-4 h-4" />}
+                  icon={<WorktreeIcon className="w-4 h-4" />}
                   label="Worktree"
                   activeTab={activeTab}
                   isSearching={isSearching}

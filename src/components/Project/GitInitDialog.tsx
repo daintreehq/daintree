@@ -1,7 +1,8 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { AppDialog } from "@/components/ui/AppDialog";
-import { Check, AlertCircle, Loader2, GitBranch } from "lucide-react";
+import { Check, AlertCircle, Loader2 } from "lucide-react";
+import { WorktreeIcon } from "@/components/icons";
 import { projectClient } from "@/clients";
 import type { GitInitProgressEvent } from "@shared/types/ipc/gitInit";
 
@@ -133,7 +134,7 @@ export function GitInitDialog({ isOpen, directoryPath, onSuccess, onCancel }: Gi
   return (
     <AppDialog isOpen={isOpen} onClose={handleClose} size="md" dismissible={!isInitializing}>
       <AppDialog.Header>
-        <AppDialog.Title icon={<GitBranch className="h-5 w-5 text-canopy-accent" />}>
+        <AppDialog.Title icon={<WorktreeIcon className="h-5 w-5 text-canopy-accent" />}>
           Initialize Git Repository
         </AppDialog.Title>
         {!isInitializing && <AppDialog.CloseButton />}

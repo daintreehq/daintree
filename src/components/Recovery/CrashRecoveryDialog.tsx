@@ -9,8 +9,8 @@ import {
   Globe,
   Leaf,
   Monitor,
-  Sprout,
 } from "lucide-react";
+import { CanopyAgentIcon } from "@/components/icons";
 import { AppDialog } from "../ui/AppDialog";
 import { Button } from "../ui/button";
 import type {
@@ -32,7 +32,7 @@ interface CrashRecoveryDialogProps {
 function getPanelIcon(kind: string) {
   switch (kind) {
     case "agent":
-      return <Sprout className="h-3.5 w-3.5" />;
+      return <CanopyAgentIcon className="h-3.5 w-3.5" />;
     case "browser":
       return <Globe className="h-3.5 w-3.5" />;
     case "notes":

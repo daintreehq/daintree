@@ -28,7 +28,8 @@ import {
   GRID_PLACEHOLDER_ID,
   SortableGridPlaceholder,
 } from "@/components/DragDrop";
-import { AlertTriangle, Settings, Play, Pin, BookOpen, Sparkles } from "lucide-react";
+import { AlertTriangle, Settings, Play, Pin, Sparkles } from "lucide-react";
+import { TerminalRecipeIcon } from "@/components/icons";
 import { CanopyIcon } from "@/components/icons";
 import { ProjectPulseCard } from "@/components/Pulse";
 import { Kbd } from "@/components/ui/Kbd";
@@ -348,7 +349,7 @@ function EmptyState({
                   disabled={!defaultCwd}
                   className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md hover:bg-tint/5 transition-colors group disabled:opacity-50 disabled:cursor-not-allowed focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-canopy-accent/50"
                 >
-                  <BookOpen className="h-3.5 w-3.5 text-canopy-text/50 group-hover:text-canopy-text/70 transition-colors" />
+                  <TerminalRecipeIcon className="h-3.5 w-3.5 text-canopy-text/50 group-hover:text-canopy-text/70 transition-colors" />
                   <span className="text-xs text-canopy-text/50 group-hover:text-canopy-text/70 transition-colors">
                     What's This Project?
                   </span>

@@ -208,6 +208,10 @@ src/
     └── electron.d.ts        # window.electron types
 ```
 
+### Custom Icons
+
+Custom Canopy-specific icons live in `src/components/icons/custom/`. These are Lucide-style SVG components (24x24 viewBox, 2px stroke, round caps/joins, `currentColor`) that accept `SVGProps`. Brand/agent icons are in `src/components/icons/brands/`. All icons are barrel-exported from `src/components/icons/index.ts`. Design specs are in `~/Desktop/canopy-icons/`.
+
 ## Common Tasks
 
 **Adding a new action:**

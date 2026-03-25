@@ -22,17 +22,22 @@ import {
   Monitor,
   AlertTriangle,
   Leaf,
-  Copy,
   Settings,
   AlertCircle,
-  Sprout,
   Bell,
   Mic,
   LayoutGrid,
   Rocket,
   RotateCcw,
 } from "lucide-react";
-import { ClaudeIcon, GeminiIcon, CodexIcon, OpenCodeIcon } from "@/components/icons";
+import {
+  ClaudeIcon,
+  GeminiIcon,
+  CodexIcon,
+  OpenCodeIcon,
+  CanopyAgentIcon,
+  CopyTreeIcon,
+} from "@/components/icons";
 import { useToolbarPreferencesStore } from "@/store";
 import type { ToolbarButtonId } from "@/../../shared/types/toolbar";
 import { cn } from "@/lib/utils";
@@ -44,7 +49,7 @@ type ButtonMetadata = { label: string; icon: React.ReactNode; description: strin
 const BUTTON_METADATA: Partial<Record<ToolbarButtonId, ButtonMetadata>> = {
   "agent-setup": {
     label: "Agent Setup",
-    icon: <Sprout className="h-4 w-4" />,
+    icon: <CanopyAgentIcon className="h-4 w-4" />,
     description: "Shown only when no agents are enabled in Agent Settings",
   },
   claude: {
@@ -109,7 +114,7 @@ const BUTTON_METADATA: Partial<Record<ToolbarButtonId, ButtonMetadata>> = {
   },
   "copy-tree": {
     label: "Copy Context",
-    icon: <Copy className="h-4 w-4" />,
+    icon: <CopyTreeIcon className="h-4 w-4" />,
     description: "Copy project context to clipboard",
   },
   settings: {

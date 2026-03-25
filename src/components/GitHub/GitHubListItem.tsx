@@ -5,13 +5,13 @@ import {
   GitPullRequest,
   GitMerge,
   GitPullRequestClosed,
-  GitBranch,
   MoreHorizontal,
   ExternalLink,
   Check,
   X,
   MessageSquare,
 } from "lucide-react";
+import { WorktreeIcon } from "@/components/icons";
 import { Avatar } from "@/components/ui/Avatar";
 import { cn } from "@/lib/utils";
 import { formatTimeAgo } from "@/utils/timeAgo";
@@ -338,7 +338,7 @@ export function GitHubListItem({
                   <TooltipTrigger asChild>
                     {isActiveWorktree ? (
                       <span className="shrink-0 text-canopy-accent">
-                        <GitBranch className="w-3.5 h-3.5" />
+                        <WorktreeIcon className="w-3.5 h-3.5" />
                       </span>
                     ) : onSwitchToWorktree && matchedWorktree ? (
                       <button
@@ -350,11 +350,11 @@ export function GitHubListItem({
                         className="shrink-0 text-github-open hover:text-github-open/80 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded p-0.5"
                         aria-label="Switch to worktree"
                       >
-                        <GitBranch className="w-3.5 h-3.5" />
+                        <WorktreeIcon className="w-3.5 h-3.5" />
                       </button>
                     ) : (
                       <span className="shrink-0 text-github-open">
-                        <GitBranch className="w-3.5 h-3.5" />
+                        <WorktreeIcon className="w-3.5 h-3.5" />
                       </span>
                     )}
                   </TooltipTrigger>
@@ -380,7 +380,7 @@ export function GitHubListItem({
                       className="shrink-0 text-muted-foreground/40 hover:text-muted-foreground transition-colors opacity-0 group-hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded p-0.5"
                       aria-label="Create worktree"
                     >
-                      <GitBranch className="w-3.5 h-3.5" />
+                      <WorktreeIcon className="w-3.5 h-3.5" />
                     </button>
                   </TooltipTrigger>
                   <TooltipContent side="bottom">Create worktree</TooltipContent>
@@ -414,7 +414,7 @@ export function GitHubListItem({
                   <>
                     <DropdownMenuSeparator />
                     <DropdownMenuItem onSelect={() => onSwitchToWorktree(matchedWorktree.id)}>
-                      <GitBranch className="h-3.5 w-3.5 mr-2" />
+                      <WorktreeIcon className="h-3.5 w-3.5 mr-2" />
                       Switch to Worktree
                     </DropdownMenuItem>
                   </>
@@ -427,7 +427,7 @@ export function GitHubListItem({
                       <DropdownMenuItem disabled>
                         <div className="flex flex-col gap-0.5">
                           <span className="flex items-center gap-2">
-                            <GitBranch className="h-3.5 w-3.5" />
+                            <WorktreeIcon className="h-3.5 w-3.5" />
                             Create Worktree
                           </span>
                           <span className="text-[10px] text-muted-foreground leading-tight">
@@ -437,7 +437,7 @@ export function GitHubListItem({
                       </DropdownMenuItem>
                     ) : (
                       <DropdownMenuItem onSelect={() => onCreateWorktree(item)}>
-                        <GitBranch className="h-3.5 w-3.5 mr-2" />
+                        <WorktreeIcon className="h-3.5 w-3.5 mr-2" />
                         Create Worktree
                       </DropdownMenuItem>
                     )}

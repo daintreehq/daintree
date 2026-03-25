@@ -3,7 +3,6 @@ import { Button } from "@/components/ui/button";
 import { AppDialog } from "@/components/ui/AppDialog";
 import {
   FolderOpen,
-  GitBranch,
   Check,
   AlertCircle,
   Loader2,
@@ -14,6 +13,7 @@ import {
   Info,
   ChevronDown,
 } from "lucide-react";
+import { WorktreeIcon } from "@/components/icons";
 import type { BranchInfo, CreateWorktreeOptions } from "@/types/electron";
 import type { GitHubIssue, GitHubPR } from "@shared/types/github";
 import { worktreeClient, githubClient } from "@/clients";
@@ -547,7 +547,7 @@ export function NewWorktreeDialog({
       data-testid="new-worktree-dialog"
     >
       <AppDialog.Header>
-        <AppDialog.Title icon={<GitBranch className="w-5 h-5 text-canopy-accent" />}>
+        <AppDialog.Title icon={<WorktreeIcon className="w-5 h-5 text-canopy-accent" />}>
           {initialPR ? "Checkout PR Branch" : "Create New Worktree"}
         </AppDialog.Title>
         <AppDialog.CloseButton />
@@ -564,7 +564,10 @@ export function NewWorktreeDialog({
             <div className="space-y-4">
               {initialPR ? (
                 <div className="flex items-center gap-2.5 px-3 py-2.5 rounded-[var(--radius-md)] bg-canopy-accent/5 border border-canopy-accent/20 text-sm min-w-0">
-                  <GitBranch className="w-4 h-4 text-canopy-accent shrink-0" aria-hidden="true" />
+                  <WorktreeIcon
+                    className="w-4 h-4 text-canopy-accent shrink-0"
+                    aria-hidden="true"
+                  />
                   <span className="text-canopy-text/80 min-w-0 truncate">
                     PR <span className="font-medium text-canopy-text">#{initialPR.number}</span> —{" "}
                     {initialPR.title}

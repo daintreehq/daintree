@@ -2,7 +2,7 @@ import React from "react";
 import { cn } from "@/lib/utils";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import { getBrandColorHex } from "@/lib/colorUtils";
-import { GitBranch } from "lucide-react";
+import { WorktreeIcon } from "@/components/icons";
 import type { QuickSwitcherItem as QuickSwitcherItemData } from "@/hooks/useQuickSwitcher";
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
 
@@ -46,7 +46,7 @@ export const QuickSwitcherItem = React.memo(function QuickSwitcherItem({
             brandColor={getBrandColorHex(item.agentId ?? item.terminalType)}
           />
         ) : (
-          <GitBranch className="w-4 h-4" />
+          <WorktreeIcon className="w-4 h-4" />
         )}
       </span>
 

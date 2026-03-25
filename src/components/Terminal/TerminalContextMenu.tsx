@@ -17,15 +17,12 @@ import {
   ArrowDownFromLine,
   Bell,
   BellOff,
-  Sprout,
   Clipboard,
   Copy,
   CopyPlus,
   ExternalLink,
-  GitBranch,
   Globe,
   Info,
-  LayoutGrid,
   Link,
   Lock,
   Maximize2,
@@ -42,7 +39,7 @@ import {
   Trash2,
   Unlock,
 } from "lucide-react";
-import { DockToBottomIcon } from "@/components/icons";
+import { MoveToDockIcon, MoveToGridIcon, CanopyAgentIcon, WorktreeIcon } from "@/components/icons";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -384,7 +381,7 @@ export function TerminalContextMenu({
       {worktrees.length > 1 && (
         <ContextMenuSub>
           <ContextMenuSubTrigger>
-            <GitBranch className={ICON_CLASS} aria-hidden="true" />
+            <WorktreeIcon className={ICON_CLASS} />
             Move to Worktree
           </ContextMenuSubTrigger>
           <ContextMenuSubContent>
@@ -398,7 +395,7 @@ export function TerminalContextMenu({
                   disabled={isCurrent}
                   onSelect={() => handleAction(`move-to-worktree:${wt.id}`)}
                 >
-                  <GitBranch className={ICON_CLASS} aria-hidden="true" />
+                  <WorktreeIcon className={ICON_CLASS} />
                   {label}
                 </ContextMenuItem>
               );
@@ -410,9 +407,9 @@ export function TerminalContextMenu({
         onSelect={() => handleAction(currentLocation === "grid" ? "move-to-dock" : "move-to-grid")}
       >
         {currentLocation === "grid" ? (
-          <DockToBottomIcon className={ICON_CLASS} />
+          <MoveToDockIcon className={ICON_CLASS} />
         ) : (
-          <LayoutGrid className={ICON_CLASS} aria-hidden="true" />
+          <MoveToGridIcon className={ICON_CLASS} />
         )}
         {currentLocation === "grid" ? "Move to Dock" : "Move to Grid"}
       </ContextMenuItem>
@@ -597,7 +594,7 @@ export function TerminalContextMenu({
             disabled={isCurrent}
             onSelect={() => handleAction(`convert-to:${agentId}`)}
           >
-            <Sprout className={ICON_CLASS} aria-hidden="true" />
+            <CanopyAgentIcon className={ICON_CLASS} />
             {config.name}
           </ContextMenuItem>
         );

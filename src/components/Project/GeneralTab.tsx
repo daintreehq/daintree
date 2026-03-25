@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect } from "react";
-import { Image, Upload, X, Rocket, Check, GitBranch, FolderOpen, Copy } from "lucide-react";
+import { Image, Upload, X, Rocket, Check, FolderOpen, Copy } from "lucide-react";
+import { WorktreeIcon } from "@/components/icons";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { EmojiPicker } from "@/components/ui/emoji-picker";
@@ -367,7 +368,7 @@ export function GeneralTab({
       {/* In-Repository Settings */}
       <div className="mt-6">
         <h3 className="text-sm font-semibold text-canopy-text/80 mb-2 flex items-center gap-2">
-          <GitBranch className="h-4 w-4" />
+          <WorktreeIcon className="h-4 w-4" />
           In-Repository Settings
         </h3>
         <p className="text-xs text-canopy-text/60 mb-4">
@@ -401,7 +402,7 @@ export function GeneralTab({
           )}
         >
           <div className="flex items-center gap-3">
-            <GitBranch
+            <WorktreeIcon
               className={cn(
                 "w-5 h-5",
                 currentProject?.inRepoSettings ? "text-canopy-accent" : "text-canopy-text/50"

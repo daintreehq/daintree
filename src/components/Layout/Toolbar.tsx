@@ -22,7 +22,6 @@ import {
   PanelRightClose,
   PanelLeftOpen,
   PanelLeftClose,
-  Copy,
   Check,
   Loader2,
   ChevronsUpDown,
@@ -33,6 +32,7 @@ import {
   LayoutGrid,
   Signal,
 } from "lucide-react";
+import { CopyTreeIcon } from "@/components/icons";
 import { cn } from "@/lib/utils";
 import { isMac, isLinux, createTooltipWithShortcut } from "@/lib/platform";
 const LazyGitHubResourceList = lazy(() =>
@@ -977,7 +977,7 @@ export function Toolbar({
                   ) : treeCopied ? (
                     <Check />
                   ) : (
-                    <Copy />
+                    <CopyTreeIcon />
                   )}
                 </Button>
               </TooltipTrigger>

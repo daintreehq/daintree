@@ -1,7 +1,8 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { AppDialog } from "@/components/ui/AppDialog";
-import { AlertTriangle, Trash2, GitBranch } from "lucide-react";
+import { AlertTriangle, Trash2 } from "lucide-react";
+import { WorktreeIcon } from "@/components/icons";
 import { useWorktreeTerminals } from "@/hooks/useWorktreeTerminals";
 import { useTerminalStore } from "@/store";
 import { actionService } from "@/services/ActionService";
@@ -204,7 +205,7 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
               />
               <span className="text-sm text-canopy-text">
                 <span className="flex items-center gap-1.5">
-                  <GitBranch className="w-3.5 h-3.5" />
+                  <WorktreeIcon className="w-3.5 h-3.5" />
                   Delete branch{" "}
                   <code className="text-xs bg-canopy-bg/50 px-1.5 py-0.5 rounded border border-canopy-border">
                     {worktree.branch}

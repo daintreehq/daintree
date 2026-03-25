@@ -41,7 +41,7 @@ import { formatShortcutForTooltip, createTooltipWithShortcut } from "@/lib/platf
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
 import { getBrandColorHex } from "@/lib/colorUtils";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
-import { DockToBottomIcon } from "@/components/icons";
+import { MoveToDockIcon, MoveToGridIcon, WatchAlertIcon } from "@/components/icons";
 import { useDragHandle } from "@/components/DragDrop/DragHandleContext";
 import {
   useBackgroundPanelStats,
@@ -655,10 +655,7 @@ function PanelHeaderComponent({
               aria-label="Watching — waiting for agent completion"
               className="text-canopy-accent cursor-default"
             >
-              <Bell
-                className="w-3 h-3 animate-pulse motion-reduce:animate-none"
-                aria-hidden="true"
-              />
+              <WatchAlertIcon className="w-3 h-3 animate-pulse motion-reduce:animate-none" />
             </span>
           )}
 
@@ -866,7 +863,7 @@ function PanelHeaderComponent({
                   aria-label="Move to Dock"
                   data-testid="panel-move-to-dock"
                 >
-                  <DockToBottomIcon className="w-3 h-3" aria-hidden="true" />
+                  <MoveToDockIcon className="w-3 h-3" />
                 </button>
               </TooltipTrigger>
               <TooltipContent side="bottom">
@@ -891,7 +888,7 @@ function PanelHeaderComponent({
                   aria-label="Collapse to Dock"
                   data-testid="panel-collapse-to-dock"
                 >
-                  <DockToBottomIcon className="w-3 h-3" aria-hidden="true" />
+                  <MoveToDockIcon className="w-3 h-3" />
                 </button>
               </TooltipTrigger>
               <TooltipContent side="bottom">
@@ -915,7 +912,7 @@ function PanelHeaderComponent({
                   className="p-1.5 hover:bg-canopy-text/10 focus-visible:bg-canopy-text/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2 text-canopy-text/60 hover:text-canopy-text transition-colors"
                   aria-label="Restore to Grid"
                 >
-                  <Maximize2 className="w-3 h-3" aria-hidden="true" />
+                  <MoveToGridIcon className="w-3 h-3" />
                 </button>
               </TooltipTrigger>
               <TooltipContent side="bottom">

@@ -1,6 +1,6 @@
-import { SquareTerminal, Globe, FileText, GitBranch, Monitor, LucideIcon } from "lucide-react";
+import { SquareTerminal, Globe, FileText, Monitor, LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { CanopyIcon } from "@/components/icons";
+import { CanopyIcon, WorktreeIcon } from "@/components/icons";
 import { getAgentConfig } from "@/config/agents";
 import type { ComponentType } from "react";
 
@@ -8,7 +8,7 @@ const ICON_MAP: Record<string, LucideIcon | ComponentType<Record<string, unknown
   terminal: SquareTerminal,
   globe: Globe,
   "file-text": FileText,
-  "git-branch": GitBranch,
+  "git-branch": WorktreeIcon,
   monitor: Monitor,
   canopy: CanopyIcon,
 };

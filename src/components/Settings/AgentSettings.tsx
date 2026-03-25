@@ -13,7 +13,8 @@ import {
   getAgentSettingsEntry,
   DEFAULT_DANGEROUS_ARGS,
 } from "@shared/types";
-import { RotateCcw, ExternalLink, RefreshCw, Copy, Check, Sprout } from "lucide-react";
+import { RotateCcw, ExternalLink, RefreshCw, Copy, Check } from "lucide-react";
+import { CanopyAgentIcon } from "@/components/icons";
 import { AgentSelectorDropdown } from "./AgentSelectorDropdown";
 import { SettingsSwitchCard } from "./SettingsSwitchCard";
 import { actionService } from "@/services/ActionService";
@@ -202,7 +203,7 @@ export function AgentSettings({
             }}
             className="text-canopy-text/60 hover:text-canopy-text shrink-0"
           >
-            <Sprout className="w-3.5 h-3.5" />
+            <CanopyAgentIcon className="w-3.5 h-3.5" />
             Run Setup Wizard
           </Button>
         </div>

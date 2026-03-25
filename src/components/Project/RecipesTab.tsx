@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from "react";
-import { BookOpen, Plus, Trash2, Edit3, Download, FileDown, Check } from "lucide-react";
+import { Plus, Trash2, Edit3, Download, FileDown, Check } from "lucide-react";
+import { TerminalRecipeIcon } from "@/components/icons";
 import { Button } from "@/components/ui/button";
 import { useRecipeStore } from "@/store/recipeStore";
 import { LiveTimeAgo } from "@/components/Worktree/LiveTimeAgo";
@@ -166,7 +167,7 @@ export function RecipesTab({
     <TooltipProvider delayDuration={400} skipDelayDuration={300}>
       <div className="mb-6">
         <h3 className="text-sm font-semibold text-canopy-text/80 mb-2 flex items-center gap-2">
-          <BookOpen className="h-4 w-4" />
+          <TerminalRecipeIcon className="h-4 w-4" />
           Terminal Recipes
         </h3>
         <p className="text-xs text-canopy-text/60 mb-4">

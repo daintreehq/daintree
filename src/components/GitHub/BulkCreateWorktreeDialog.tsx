@@ -1,7 +1,6 @@
 import { useCallback, useReducer, useRef, useMemo, useEffect } from "react";
 import PQueue from "p-queue";
 import {
-  GitBranch,
   Loader2,
   Check,
   AlertTriangle,
@@ -10,6 +9,7 @@ import {
   ChevronsUpDown,
   RotateCcw,
 } from "lucide-react";
+import { WorktreeIcon } from "@/components/icons";
 import { Button } from "@/components/ui/button";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -841,7 +841,7 @@ export function BulkCreateWorktreeDialog({
                 <Check className="w-5 h-5 text-status-success" />
               )
             ) : (
-              <GitBranch className="w-5 h-5 text-canopy-accent" />
+              <WorktreeIcon className="w-5 h-5 text-canopy-accent" />
             )
           }
         >
@@ -1031,7 +1031,7 @@ export function BulkCreateWorktreeDialog({
                       </div>
                       {!item.skipped && (
                         <div className="flex items-center gap-1.5 mt-0.5">
-                          <GitBranch className="w-3 h-3 text-canopy-text/40 shrink-0" />
+                          <WorktreeIcon className="w-3 h-3 text-canopy-text/40 shrink-0" />
                           <span className="text-xs text-canopy-text/50 font-mono truncate">
                             {item.branchName}
                           </span>

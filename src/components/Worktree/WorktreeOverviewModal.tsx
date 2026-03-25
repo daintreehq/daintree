@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useRef, useMemo } from "react";
-import { X, LayoutGrid, FilterX, Sprout } from "lucide-react";
+import { X, FilterX } from "lucide-react";
+import { WorktreeOverviewIcon, CanopyAgentIcon } from "@/components/icons";
 import { cn } from "@/lib/utils";
 import { useShallow } from "zustand/react/shallow";
 import { WorktreeCard } from "./WorktreeCard";
@@ -373,7 +374,7 @@ export function WorktreeOverviewModal({
           {/* Header */}
           <div className="flex items-center justify-between px-6 py-4 border-b border-divider shrink-0">
             <div className="flex items-center gap-3">
-              <LayoutGrid className="w-5 h-5 text-canopy-text/60" />
+              <WorktreeOverviewIcon className="w-5 h-5 text-canopy-text/60" />
               <h2
                 id="worktree-overview-title"
                 className="text-canopy-text font-semibold text-base tracking-wide"
@@ -425,7 +426,7 @@ export function WorktreeOverviewModal({
                           : "bg-tint/[0.10] text-canopy-text/70 hover:text-canopy-text/90"
                       )}
                     >
-                      <Sprout
+                      <CanopyAgentIcon
                         className={cn(
                           "w-3 h-3 transition-colors",
                           hideMainWorktree ? "text-canopy-text/30" : "text-canopy-text/50"

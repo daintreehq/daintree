@@ -1,5 +1,6 @@
 import { useCallback } from "react";
-import { X, GitBranch } from "lucide-react";
+import { X } from "lucide-react";
+import { WorktreeIcon } from "@/components/icons";
 import { AnimatePresence, motion } from "framer-motion";
 import { Button } from "@/components/ui/button";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
@@ -43,7 +44,7 @@ export function IssueBulkActionBar({
             selected
           </span>
           <Button variant="default" size="xs" onClick={handleOpenDialog}>
-            <GitBranch className="w-3 h-3" />
+            <WorktreeIcon className="w-3 h-3" />
             Create Worktrees
           </Button>
           <div className="flex-1" />

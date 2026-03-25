@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { LayoutGrid, PanelBottom } from "lucide-react";
+import { PanelBottom } from "lucide-react";
+import { MoveToGridIcon } from "@/components/icons";
 import { useShallow } from "zustand/react/shallow";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Button } from "@/components/ui/button";
@@ -14,7 +15,7 @@ import type { ComponentType } from "react";
 
 function getLocationIcon(location: TerminalLocation | undefined) {
   if (location === "dock") return <PanelBottom className="w-3 h-3" />;
-  return <LayoutGrid className="w-3 h-3" />;
+  return <MoveToGridIcon className="w-3 h-3" />;
 }
 
 export interface StatusContainerConfig {

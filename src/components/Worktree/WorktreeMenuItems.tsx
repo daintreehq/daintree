@@ -3,7 +3,6 @@ import type { WorktreeState } from "../../types";
 import {
   CircleDot,
   Code,
-  Copy,
   FileText,
   Folder,
   GitCommitHorizontal,
@@ -17,7 +16,6 @@ import {
   PanelTopOpen,
   Pin,
   PinOff,
-  Play,
   RefreshCw,
   RotateCcw,
   Save,
@@ -25,7 +23,7 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import { DockToBottomIcon } from "@/components/icons";
+import { MoveToDockIcon, CopyTreeIcon, TerminalRecipeIcon } from "@/components/icons";
 
 type MenuComponent = React.ElementType;
 type LaunchAgentIcon = React.ComponentType<{ className?: string }>;
@@ -180,7 +178,7 @@ export function WorktreeMenuItems({
         </C.SubTrigger>
         <C.SubContent>
           <C.Item onSelect={onDockAll} disabled={counts.grid === 0}>
-            <DockToBottomIcon className="w-3.5 h-3.5 mr-2" />
+            <MoveToDockIcon className="w-3.5 h-3.5 mr-2" />
             Dock All
             <C.Shortcut>({counts.grid})</C.Shortcut>
           </C.Item>
@@ -260,7 +258,7 @@ export function WorktreeMenuItems({
       {/* Copy Context submenu */}
       <C.Sub>
         <C.SubTrigger>
-          <Copy className="w-3.5 h-3.5 mr-2" />
+          <CopyTreeIcon className="w-3.5 h-3.5 mr-2" />
           Copy Context
         </C.SubTrigger>
         <C.SubContent>
@@ -344,7 +342,7 @@ export function WorktreeMenuItems({
       {hasRecipes && (
         <C.Sub>
           <C.SubTrigger>
-            <Play className="w-3.5 h-3.5 mr-2" />
+            <TerminalRecipeIcon className="w-3.5 h-3.5 mr-2" />
             Run Recipe
           </C.SubTrigger>
           <C.SubContent>
