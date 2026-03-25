@@ -372,7 +372,7 @@
   --color-canopy-accent-rgb: var(--theme-accent-rgb);
   --color-surface: var(--theme-surface-panel);
   --color-surface-highlight: var(--theme-surface-panel-elevated);
-  --color-grid-bg: var(--terminal-grid-bg, var(--theme-surface-grid));
+  --color-grid-bg: var(--panel-grid-bg, var(--terminal-grid-bg, var(--theme-surface-grid)));
   --color-canopy-focus: var(--theme-focus-ring);
   --color-status-error: var(--theme-status-danger);
   --color-state-active: var(--theme-activity-active);

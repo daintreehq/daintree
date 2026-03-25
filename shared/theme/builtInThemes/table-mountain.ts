@@ -115,7 +115,7 @@ export const theme: BuiltInThemeSource = {
     "text-placeholder": "#A69E96",
   },
   extensions: {
-    "terminal-grid-bg": "#F4F1EC",
+    "panel-grid-bg": "#F4F1EC",
     "settings-dialog-bg": "#FAF8F4",
     "settings-card-bg": "#FDFBF8",
     "settings-list-item-bg": "#FDFBF8",

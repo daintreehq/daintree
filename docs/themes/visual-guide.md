@@ -240,10 +240,10 @@ The content grid fills the remaining space to the right of the sidebar. Its back
 However, the empty grid area (when no panels are open) uses a special override:
 
 ```css
---color-grid-bg: var(--terminal-grid-bg, var(--theme-surface-grid));
+--color-grid-bg: var(--panel-grid-bg, var(--terminal-grid-bg, var(--theme-surface-grid)));
 ```
 
-Themes can set `terminal-grid-bg` to make the empty grid lighter than the structural grid surface. **Bondi sets this to `#FBFCFD`** — nearly white, so the empty state feels bright and airy rather than gray. All light themes now have this extension.
+Themes can set `panel-grid-bg` to make the empty grid lighter than the structural grid surface. **Bondi sets this to `#FBFCFD`** — nearly white, so the empty state feels bright and airy rather than gray. All light themes now have this extension. The legacy `terminal-grid-bg` variable is still supported as a fallback for custom themes.
 
 ### Panel Arrangement
 
@@ -253,7 +253,7 @@ Panels are arranged in a CSS Grid with configurable columns and an 8px gap betwe
 gap: var(--grid-gap, 8px);
 ```
 
-The gap area shows the grid background color. In dark themes, this creates dark "gutters" between panels. In light themes with `terminal-grid-bg` overrides, these gutters are very light.
+The gap area shows the grid background color. In dark themes, this creates dark "gutters" between panels. In light themes with `panel-grid-bg` overrides, these gutters are very light.
 
 ### Empty State
 

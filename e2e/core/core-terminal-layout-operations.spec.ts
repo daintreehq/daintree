@@ -133,12 +133,12 @@ test.describe.serial("Core: Terminal Layout Operations", () => {
     test("switch to fixed-columns with value 3 updates grid", async () => {
       const { window } = ctx;
 
-      await dispatchAction(window, "terminal.gridLayout.setStrategy", {
+      await dispatchAction(window, "panel.gridLayout.setStrategy", {
         strategy: "fixed-columns",
       });
-      await dispatchAction(window, "terminal.gridLayout.setValue", { value: 3 });
+      await dispatchAction(window, "panel.gridLayout.setValue", { value: 3 });
 
-      const grid = window.locator("#terminal-grid");
+      const grid = window.locator("#panel-grid");
       await expect
         .poll(
           async () => {
@@ -153,13 +153,13 @@ test.describe.serial("Core: Terminal Layout Operations", () => {
     test("switch to fixed-rows updates column count", async () => {
       const { window } = ctx;
 
-      await dispatchAction(window, "terminal.gridLayout.setStrategy", {
+      await dispatchAction(window, "panel.gridLayout.setStrategy", {
         strategy: "fixed-rows",
       });
-      await dispatchAction(window, "terminal.gridLayout.setValue", { value: 3 });
+      await dispatchAction(window, "panel.gridLayout.setValue", { value: 3 });
 
       // With 3 panels and 3 rows, columns = ceil(3/3) = 1
-      const grid = window.locator("#terminal-grid");
+      const grid = window.locator("#panel-grid");
       await expect
         .poll(
           async () => {
@@ -175,11 +175,11 @@ test.describe.serial("Core: Terminal Layout Operations", () => {
       const { window } = ctx;
 
       // Previous strategy was fixed-rows with 1 column — automatic should differ
-      await dispatchAction(window, "terminal.gridLayout.setStrategy", {
+      await dispatchAction(window, "panel.gridLayout.setStrategy", {
         strategy: "automatic",
       });
 
-      const grid = window.locator("#terminal-grid");
+      const grid = window.locator("#panel-grid");
       await expect
         .poll(
           async () => {

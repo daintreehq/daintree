@@ -135,7 +135,7 @@ export const theme: BuiltInThemeSource = {
     "terminal-white": "#E2E8F4",
   },
   extensions: {
-    "terminal-grid-bg": "#F5F5FC",
+    "panel-grid-bg": "#F5F5FC",
     "pulse-before-bg": "#EAECF5",
     "pulse-card-bg": "#FDFCFF",
     "pulse-card-shadow": "0 1px 3px rgba(86,81,118,0.07)",

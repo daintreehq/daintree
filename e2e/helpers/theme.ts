@@ -244,7 +244,7 @@ export async function getThemeChromeMetrics(
       projectName: options.projectName,
       sidebar: 'aside[aria-label="Sidebar"]',
       gridPanel: SEL.panel.gridPanel,
-      gridContainer: "#terminal-grid",
+      gridContainer: "#panel-grid",
     }
   );
 }

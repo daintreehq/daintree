@@ -148,21 +148,13 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
   };
 
   const handleStrategyChange = (strategy: PanelLayoutStrategy) => {
-    void actionService.dispatch(
-      "terminal.gridLayout.setStrategy",
-      { strategy },
-      { source: "user" }
-    );
+    void actionService.dispatch("panel.gridLayout.setStrategy", { strategy }, { source: "user" });
   };
 
   const handleValueChange = (val: string) => {
     const num = parseInt(val, 10);
     if (!isNaN(num) && num >= 1 && num <= 10) {
-      void actionService.dispatch(
-        "terminal.gridLayout.setValue",
-        { value: num },
-        { source: "user" }
-      );
+      void actionService.dispatch("panel.gridLayout.setValue", { value: num }, { source: "user" });
     }
   };
 

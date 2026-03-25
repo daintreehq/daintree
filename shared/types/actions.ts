@@ -227,6 +227,8 @@ export type ActionId =
   | "ui.sidebar.resetWidth"
   | "terminal.info.open"
   | "terminal.info.get"
+  | "panel.gridLayout.setStrategy"
+  | "panel.gridLayout.setValue"
   | "terminal.gridLayout.setStrategy"
   | "terminal.gridLayout.setValue"
   | "terminal.openWorktreeEditor"
