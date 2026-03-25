@@ -177,10 +177,14 @@ jobs:
   e2e-core-gate:
     needs: build
     uses: ./.github/workflows/e2e-core.yml
+    with:
+      platform: non-windows
 
   e2e-online-gate:
     needs: build
     uses: ./.github/workflows/e2e-online.yml
+    with:
+      platform: non-windows
     secrets: inherit
 
   publish:
