@@ -1,3 +1,5 @@
+import { existsSync, readFileSync } from "fs";
+import path from "path";
 import { app, BrowserWindow, dialog, ipcMain } from "electron";
 import electronUpdater from "electron-updater";
 import type { UpdateInfo, ProgressInfo } from "electron-updater";
@@ -80,6 +82,23 @@ class AutoUpdaterService {
     if (process.platform === "win32" && process.env.PORTABLE_EXECUTABLE_FILE) {
       console.log("[MAIN] Auto-updater disabled for Windows portable builds");
       return;
+    }
+
+    if (process.platform === "linux" && !process.env.APPIMAGE) {
+      let hasPackageType = false;
+      try {
+        const packageTypePath = path.join(process.resourcesPath, "package-type");
+        hasPackageType =
+          existsSync(packageTypePath) && readFileSync(packageTypePath, "utf-8").trim().length > 0;
+      } catch {
+        // Filesystem error reading package-type marker
+      }
+      if (!hasPackageType) {
+        console.log(
+          "[MAIN] Auto-updater disabled: Linux build without APPIMAGE or package-type marker"
+        );
+        return;
+      }
     }
 
     try {

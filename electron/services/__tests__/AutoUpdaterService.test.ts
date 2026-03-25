@@ -34,6 +34,13 @@ const autoUpdaterMock = vi.hoisted(() => ({
 
 const cleanupOnExitMock = vi.hoisted(() => vi.fn());
 
+const fsMock = vi.hoisted(() => ({
+  existsSync: vi.fn(() => false),
+  readFileSync: vi.fn(() => ""),
+}));
+
+vi.mock("fs", () => fsMock);
+
 vi.mock("../CrashRecoveryService.js", () => ({
   getCrashRecoveryService: () => ({ cleanupOnExit: cleanupOnExitMock }),
 }));
@@ -55,6 +62,9 @@ import { CHANNELS } from "../../ipc/channels.js";
 const CHECK_INTERVAL_MS = 4 * 60 * 60 * 1000;
 
 describe("AutoUpdaterService", () => {
+  const originalPlatform = process.platform;
+  const originalResourcesPath = process.resourcesPath;
+
   beforeEach(() => {
     vi.useFakeTimers();
     vi.clearAllMocks();
@@ -62,6 +72,14 @@ describe("AutoUpdaterService", () => {
     windowMock.isDestroyed.mockReturnValue(false);
     windowMock.webContents.isDestroyed.mockReturnValue(false);
     delete process.env.PORTABLE_EXECUTABLE_FILE;
+    delete process.env.APPIMAGE;
+    Object.defineProperty(process, "platform", { value: "darwin", configurable: true });
+    Object.defineProperty(process, "resourcesPath", {
+      value: "/mock/resources",
+      configurable: true,
+    });
+    fsMock.existsSync.mockReturnValue(false);
+    fsMock.readFileSync.mockReturnValue("");
     autoUpdaterMock.checkForUpdatesAndNotify.mockResolvedValue(undefined);
     autoUpdaterMock.checkForUpdates.mockResolvedValue(undefined);
     dialogMock.showMessageBox.mockResolvedValue({ response: 1 });
@@ -74,6 +92,12 @@ describe("AutoUpdaterService", () => {
 
   afterEach(() => {
     autoUpdaterService.dispose();
+    Object.defineProperty(process, "platform", { value: originalPlatform, configurable: true });
+    Object.defineProperty(process, "resourcesPath", {
+      value: originalResourcesPath,
+      configurable: true,
+    });
+    delete process.env.APPIMAGE;
     vi.useRealTimers();
     vi.restoreAllMocks();
   });
@@ -289,6 +313,73 @@ describe("AutoUpdaterService", () => {
       quitAndInstallHandler();
 
       expect(autoUpdaterMock.quitAndInstall).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("Linux activation guard", () => {
+    it("skips initialization on Linux without APPIMAGE and without package-type marker", () => {
+      Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+
+      autoUpdaterService.initialize(windowMock as any);
+
+      expect(autoUpdaterMock.on).not.toHaveBeenCalled();
+      expect(autoUpdaterMock.checkForUpdatesAndNotify).not.toHaveBeenCalled();
+
+      // Manual check should be a no-op since initialized is false
+      autoUpdaterService.checkForUpdatesManually();
+      expect(autoUpdaterMock.checkForUpdates).not.toHaveBeenCalled();
+    });
+
+    it("initializes normally on Linux when APPIMAGE is set", () => {
+      Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+      process.env.APPIMAGE = "/path/to/app.AppImage";
+
+      autoUpdaterService.initialize(windowMock as any);
+
+      expect(autoUpdaterMock.on).toHaveBeenCalled();
+      expect(autoUpdaterMock.checkForUpdatesAndNotify).toHaveBeenCalledTimes(1);
+    });
+
+    it("initializes normally on Linux when package-type marker exists with content", () => {
+      Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+      fsMock.existsSync.mockReturnValue(true);
+      fsMock.readFileSync.mockReturnValue("deb");
+
+      autoUpdaterService.initialize(windowMock as any);
+
+      expect(autoUpdaterMock.on).toHaveBeenCalled();
+      expect(autoUpdaterMock.checkForUpdatesAndNotify).toHaveBeenCalledTimes(1);
+    });
+
+    it("skips initialization on Linux when package-type file is empty", () => {
+      Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+      fsMock.existsSync.mockReturnValue(true);
+      fsMock.readFileSync.mockReturnValue("  \n  ");
+
+      autoUpdaterService.initialize(windowMock as any);
+
+      expect(autoUpdaterMock.on).not.toHaveBeenCalled();
+    });
+
+    it("skips initialization on Linux when package-type read throws", () => {
+      Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+      fsMock.existsSync.mockReturnValue(true);
+      fsMock.readFileSync.mockImplementation(() => {
+        throw new Error("EACCES");
+      });
+
+      autoUpdaterService.initialize(windowMock as any);
+
+      expect(autoUpdaterMock.on).not.toHaveBeenCalled();
+    });
+
+    it("does not affect non-Linux platforms", () => {
+      Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+
+      autoUpdaterService.initialize(windowMock as any);
+
+      expect(autoUpdaterMock.on).toHaveBeenCalled();
+      expect(autoUpdaterMock.checkForUpdatesAndNotify).toHaveBeenCalledTimes(1);
     });
   });
 });
