@@ -105,9 +105,13 @@ export function PulseHeatmap({ cells, rangeDays, compact = false }: PulseHeatmap
       ? Math.min(COLUMNS_PER_ROW, normalizedCells.length)
       : COLUMNS_PER_ROW;
     const result: RenderCell[][] = [];
+    const firstRowSize = normalizedCells.length % columnsPerRow || columnsPerRow;
 
-    for (let i = 0; i < normalizedCells.length; i += columnsPerRow) {
-      result.push(normalizedCells.slice(i, i + columnsPerRow));
+    if (normalizedCells.length > 0) {
+      result.push(normalizedCells.slice(0, firstRowSize));
+      for (let i = firstRowSize; i < normalizedCells.length; i += columnsPerRow) {
+        result.push(normalizedCells.slice(i, i + columnsPerRow));
+      }
     }
 
     return result;
