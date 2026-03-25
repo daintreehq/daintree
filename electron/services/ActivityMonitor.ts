@@ -168,7 +168,7 @@ export class ActivityMonitor {
     this.highOutputDetector = new HighOutputDetector(options?.highOutputThreshold);
 
     this.workingSignalDebouncer = new WorkingSignalDebouncer(
-      options?.workingRecoveryDelayMs ?? 300
+      options?.workingRecoveryDelayMs ?? 1500
     );
 
     this.lineRewriteDetector = new LineRewriteDetector(options?.lineRewriteDetection);

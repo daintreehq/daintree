@@ -1281,7 +1281,7 @@ describe("ActivityMonitor", () => {
       monitor.dispose();
     });
 
-    it("should recover quickly from idle to busy when agent resumes", () => {
+    it("should recover from idle to busy with explicit short recovery delay", () => {
       const onStateChange = vi.fn();
       let visibleLines: string[] = ["> "];
       const monitor = new ActivityMonitor("test-1", 1000, onStateChange, {
@@ -1313,6 +1313,54 @@ describe("ActivityMonitor", () => {
       // Sustained working signal for >300ms
       visibleLines = ["Working... (esc to interrupt)"];
       vi.advanceTimersByTime(350);
+
+      // Should have recovered to busy
+      expect(monitor.getState()).toBe("busy");
+
+      monitor.dispose();
+    });
+
+    it("should not falsely transition to working during layout-shift transients (default debounce)", () => {
+      const onStateChange = vi.fn();
+      let visibleLines: string[] = ["> "];
+      const monitor = new ActivityMonitor("test-1", 1000, onStateChange, {
+        getVisibleLines: () => visibleLines,
+        getCursorLine: () => visibleLines[visibleLines.length - 1],
+        idleDebounceMs: 4000,
+        pollingIntervalMs: 50,
+        pollingMaxBootMs: 0,
+        // No explicit workingRecoveryDelayMs — uses the new 1500ms default
+      });
+
+      monitor.startPolling();
+      // Boot exits immediately, then idle after prompt fast-path quiet
+      vi.advanceTimersByTime(3200);
+      expect(monitor.getState()).toBe("idle");
+      onStateChange.mockClear();
+
+      // Simulate layout-shift burst: working patterns appear for ~300ms
+      // with onData() to simulate terminal content changes
+      visibleLines = ["Working... (esc to interrupt)"];
+      monitor.onData("Working... (esc to interrupt)\r\n");
+      vi.advanceTimersByTime(150);
+      monitor.onData(" ");
+      vi.advanceTimersByTime(150);
+
+      // Layout shift ends — prompt reappears
+      visibleLines = ["> "];
+      vi.advanceTimersByTime(50);
+
+      // State must remain idle — 300ms transient is below the 1500ms default
+      expect(monitor.getState()).toBe("idle");
+      expect(onStateChange.mock.calls.filter((call) => call[2] === "busy")).toHaveLength(0);
+
+      // Now simulate sustained agent work for >1500ms with periodic data
+      onStateChange.mockClear();
+      visibleLines = ["Working... (esc to interrupt)"];
+      for (let i = 0; i < 16; i++) {
+        monitor.onData(".");
+        vi.advanceTimersByTime(100);
+      }
 
       // Should have recovered to busy
       expect(monitor.getState()).toBe("busy");
