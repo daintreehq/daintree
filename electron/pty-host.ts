@@ -876,11 +876,6 @@ port.on("message", async (rawMsg: any) => {
       case "kill-by-project": {
         const killed = ptyManager.killByProject(msg.projectId);
         sendEvent({ type: "kill-by-project-result", requestId: msg.requestId, killed });
-        if (killed > 0) {
-          setTimeout(() => {
-            if (global.gc) global.gc();
-          }, 100);
-        }
         break;
       }
 
@@ -902,11 +897,6 @@ port.on("message", async (rawMsg: any) => {
           requestId: msg.requestId,
           results,
         });
-        if (results.length > 0) {
-          setTimeout(() => {
-            if (global.gc) global.gc();
-          }, 100);
-        }
         break;
       }
 

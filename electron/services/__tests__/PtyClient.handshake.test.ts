@@ -176,13 +176,13 @@ describe("PtyClient Handshake Protocol", () => {
       );
     });
 
-    it("should start pty-host with --expose-gc in execArgv", () => {
+    it("should not include --expose-gc in execArgv", () => {
       createClient();
       expect(forkMock).toHaveBeenCalledWith(
         expect.any(String),
         [],
         expect.objectContaining({
-          execArgv: expect.arrayContaining(["--expose-gc"]),
+          execArgv: expect.not.arrayContaining(["--expose-gc"]),
         })
       );
     });
