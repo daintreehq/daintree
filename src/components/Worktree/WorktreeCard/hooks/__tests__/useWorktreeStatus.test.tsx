@@ -234,6 +234,31 @@ describe("useWorktreeStatus — branchLabel", () => {
     expect(s.branchLabel).toBe("canopy");
     expect(s.isMainOnStandardBranch).toBe(false);
   });
+
+  it("recognizes master and dev as standard branches", () => {
+    for (const branch of ["master", "dev"]) {
+      const s = getStatus({ isMainWorktree: true, name: "canopy", branch });
+      expect(s.branchLabel).toBe(`canopy [${branch}]`);
+      expect(s.isMainOnStandardBranch).toBe(true);
+    }
+  });
+
+  it("returns directory name for detached HEAD even with stale branch value", () => {
+    const s = getStatus({
+      isMainWorktree: true,
+      name: "canopy",
+      branch: "main",
+      isDetached: true,
+    });
+    expect(s.branchLabel).toBe("canopy");
+    expect(s.isMainOnStandardBranch).toBe(false);
+  });
+
+  it("does not apply standard branch logic to non-main worktree on 'main'", () => {
+    const s = getStatus({ isMainWorktree: false, name: "canopy", branch: "main" });
+    expect(s.branchLabel).toBe("main");
+    expect(s.isMainOnStandardBranch).toBe(false);
+  });
 });
 
 describe("useWorktreeStatus — computedSubtitle", () => {
