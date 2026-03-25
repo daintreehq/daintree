@@ -3,7 +3,11 @@ import { launchApp, closeApp, type AppContext } from "../helpers/launch";
 import { createFixtureRepo } from "../helpers/fixtures";
 import { openAndOnboardProject } from "../helpers/project";
 import { waitForTerminalText, runTerminalCommand } from "../helpers/terminal";
-import { getFirstGridPanel, getGridPanelCount } from "../helpers/panels";
+import {
+  getFirstGridPanel,
+  getGridPanelCount,
+  openTerminal as clickOpenTerminal,
+} from "../helpers/panels";
 import { SEL } from "../helpers/selectors";
 import { T_SHORT, T_MEDIUM, T_LONG, T_SETTLE } from "../helpers/timeouts";
 import { TRASH_TTL_MS } from "../../shared/config/trash";
@@ -19,7 +23,7 @@ function uniqueMarker(): string {
 
 async function openTerminal(window: AppContext["window"]): Promise<void> {
   const before = await getGridPanelCount(window);
-  await openTerminal(window);
+  await clickOpenTerminal(window);
   await expect.poll(() => getGridPanelCount(window), { timeout: T_LONG }).toBe(before + 1);
 }
 
@@ -50,7 +54,6 @@ test.describe.serial("Core: Terminal Trash & Restore", () => {
     const marker = uniqueMarker();
 
     test("close terminal moves it to trash, Cmd+Shift+T restores with content", async () => {
-      test.fixme(true, "App crashes during terminal trash/restore — tracked as app bug");
       const { window } = ctx;
 
       await openTerminal(window);
