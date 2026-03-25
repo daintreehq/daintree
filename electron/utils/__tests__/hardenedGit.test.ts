@@ -109,7 +109,6 @@ describe("createHardenedGit", () => {
       allowUnsafeSshCommand: true,
       allowUnsafeGitProxy: true,
       allowUnsafeHooksPath: true,
-      allowUnsafeDiffExternal: true,
     });
   });
 
@@ -126,7 +125,6 @@ describe("createHardenedGit", () => {
       "core.sshCommand=",
       "core.gitProxy=",
       "core.hooksPath=",
-      "diff.external=",
     ];
     for (const key of expectedKeys) {
       expect(options.config).toContain(key);

@@ -454,7 +454,12 @@ export class ProjectPulseService {
       let deletions = 0;
 
       try {
-        const diffOutput = await git.raw(["diff", "--shortstat", `${baseSha}...HEAD`]);
+        const diffOutput = await git.raw([
+          "diff",
+          "--no-ext-diff",
+          "--shortstat",
+          `${baseSha}...HEAD`,
+        ]);
 
         // Parse: "3 files changed, 45 insertions(+), 12 deletions(-)"
         const filesMatch = diffOutput.match(/(\d+)\s+files?\s+changed/);
@@ -467,7 +472,12 @@ export class ProjectPulseService {
       } catch {
         // Fallback: just count files
         try {
-          const nameOnlyOutput = await git.raw(["diff", "--name-only", `${baseSha}...HEAD`]);
+          const nameOnlyOutput = await git.raw([
+            "diff",
+            "--no-ext-diff",
+            "--name-only",
+            `${baseSha}...HEAD`,
+          ]);
           filesChanged = nameOnlyOutput.split("\n").filter(Boolean).length;
         } catch {
           // Ignore

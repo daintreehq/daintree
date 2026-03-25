@@ -241,10 +241,10 @@ export async function getWorktreeChangesWithStats(
       if (trackedChangedFiles.length === 0) {
         diffOutput = "";
       } else if (trackedChangedFiles.length <= MAX_FILES_FOR_NUMSTAT) {
-        diffOutput = await git.diff(["--numstat", "HEAD"]);
+        diffOutput = await git.diff(["--no-ext-diff", "--numstat", "HEAD"]);
       } else {
         const limitedFiles = trackedChangedFiles.slice(0, MAX_FILES_FOR_NUMSTAT);
-        diffOutput = await git.diff(["--numstat", "HEAD", "--", ...limitedFiles]);
+        diffOutput = await git.diff(["--no-ext-diff", "--numstat", "HEAD", "--", ...limitedFiles]);
         logWarn("Large changeset detected; limiting numstat to first 100 files", {
           cwd,
           totalFiles: trackedChangedFiles.length,

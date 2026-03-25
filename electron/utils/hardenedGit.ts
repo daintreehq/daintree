@@ -15,7 +15,6 @@ export const HARDENED_GIT_CONFIG = [
   "core.sshCommand=",
   "core.gitProxy=",
   "core.hooksPath=",
-  "diff.external=",
 ] as const;
 
 export function validateCwd(cwd: unknown): asserts cwd is string {
@@ -39,7 +38,6 @@ export function createHardenedGit(cwd: string): SimpleGit {
       allowUnsafeSshCommand: true,
       allowUnsafeGitProxy: true,
       allowUnsafeHooksPath: true,
-      allowUnsafeDiffExternal: true,
     },
   });
 }
