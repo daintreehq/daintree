@@ -1,7 +1,6 @@
 import { app, dialog } from "electron";
 import type { PtyClient } from "../services/PtyClient.js";
 import type { WorkspaceClient } from "../services/WorkspaceClient.js";
-import type { ProjectMcpManager } from "../services/ProjectMcpManager.js";
 import { projectStore } from "../services/ProjectStore.js";
 import { getActiveAgentCount, showQuitWarning } from "../utils/quitWarning.js";
 import {
@@ -22,7 +21,6 @@ export interface ShutdownDeps {
   getPtyClient: () => PtyClient | null;
   setPtyClient: (v: PtyClient | null) => void;
   getWorkspaceClient: () => WorkspaceClient | null;
-  getProjectMcpManager: () => ProjectMcpManager | null;
   getCleanupIpcHandlers: () => (() => void) | null;
   setCleanupIpcHandlers: (v: (() => void) | null) => void;
   getCleanupErrorHandlers: () => (() => void) | null;
@@ -85,8 +83,6 @@ export function registerShutdownHandler(deps: ShutdownDeps): void {
 
     const ptyClient = deps.getPtyClient();
     const workspaceClient = deps.getWorkspaceClient();
-    const projectMcpManager = deps.getProjectMcpManager();
-
     const gracefulShutdownPromise = (async () => {
       if (!ptyClient) return;
       try {
@@ -125,7 +121,6 @@ export function registerShutdownHandler(deps: ShutdownDeps): void {
         Promise.all([
           workspaceClient ? workspaceClient.dispose() : Promise.resolve(),
           mcpServerService.stop(),
-          projectMcpManager ? projectMcpManager.stopAll() : Promise.resolve(),
           new Promise<void>((resolve) => {
             disposeTaskOrchestrator();
             disposeAgentRouter();

@@ -7,7 +7,6 @@ import type { PortalManager } from "../services/PortalManager.js";
 import type { TypedEventBus } from "../services/events.js";
 import type { AgentVersionService } from "../services/AgentVersionService.js";
 import type { AgentUpdateHandler } from "../services/AgentUpdateHandler.js";
-import type { ProjectMcpManager } from "../services/ProjectMcpManager.js";
 import type { ProjectSwitchService } from "../services/ProjectSwitchService.js";
 import type { WindowRegistry } from "../window/WindowRegistry.js";
 
@@ -27,7 +26,6 @@ export interface HandlerDependencies {
   events?: TypedEventBus;
   agentVersionService?: AgentVersionService;
   agentUpdateHandler?: AgentUpdateHandler;
-  projectMcpManager?: ProjectMcpManager;
   projectSwitchService?: ProjectSwitchService;
   isDemoMode?: boolean;
   windowRegistry?: WindowRegistry;

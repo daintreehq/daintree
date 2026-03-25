@@ -10,11 +10,7 @@ import { sanitizeSvg } from "../../shared/utils/svgSanitizer.js";
 import { isSensitiveEnvKey } from "../../shared/utils/envVars.js";
 import { projectEnvSecureStorage } from "./ProjectEnvSecureStorage.js";
 import { getProjectStateDir, settingsFilePath } from "./projectStorePaths.js";
-import {
-  parseMcpServers,
-  parseTerminalSettings,
-  parseNotificationOverrides,
-} from "./projectSettingsParsers.js";
+import { parseTerminalSettings, parseNotificationOverrides } from "./projectSettingsParsers.js";
 
 function cleanupTempFile(tempFilePath: string): void {
   fs.unlink(tempFilePath).catch(() => {});
@@ -189,7 +185,6 @@ export class ProjectSettingsManager {
             ? parsed.worktreePathPattern.trim()
             : undefined,
         terminalSettings: parseTerminalSettings(parsed.terminalSettings),
-        mcpServers: parseMcpServers(parsed.mcpServers),
         notificationOverrides: parseNotificationOverrides(parsed.notificationOverrides),
       };
 
