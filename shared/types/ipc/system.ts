@@ -118,10 +118,9 @@ export interface SystemHealthCheckResult {
   allRequired: boolean;
 }
 
-/** Summary of real app memory and process metrics from app.getAppMetrics() */
+/** Summary of real app memory metrics from app.getAppMetrics() */
 export interface AppMetricsSummary {
   totalMemoryMB: number;
-  processCount: number;
 }
 
 /** Status of the installed Canopy CLI tool */

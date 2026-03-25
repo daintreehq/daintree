@@ -9,15 +9,16 @@ export function registerDiagnosticsHandlers(deps: HandlerDependencies): () => vo
   const handlers: Array<() => void> = [];
 
   const handleGetAppMetrics = (): AppMetricsSummary => {
-    const metrics = app.getAppMetrics();
-    let totalKB = 0;
-    for (const proc of metrics) {
-      totalKB += proc.memory.privateBytes ?? proc.memory.workingSetSize;
+    try {
+      const metrics = app.getAppMetrics();
+      let totalKB = 0;
+      for (const proc of metrics) {
+        totalKB += proc.memory.privateBytes ?? proc.memory.workingSetSize;
+      }
+      return { totalMemoryMB: Math.round(totalKB / 1024) };
+    } catch {
+      return { totalMemoryMB: 0 };
     }
-    return {
-      totalMemoryMB: Math.round(totalKB / 1024),
-      processCount: metrics.length,
-    };
   };
   ipcMain.handle(CHANNELS.SYSTEM_GET_APP_METRICS, handleGetAppMetrics);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.SYSTEM_GET_APP_METRICS));

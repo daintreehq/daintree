@@ -3,14 +3,12 @@ import { projectClient, systemClient } from "@/clients";
 
 interface AggregateStats {
   runningProjects: number;
-  totalProcesses: number;
   totalMemoryMB: number;
 }
 
 export function ProjectResourceBadge() {
   const [stats, setStats] = useState<AggregateStats>({
     runningProjects: 0,
-    totalProcesses: 0,
     totalMemoryMB: 0,
   });
   const [isLoading, setIsLoading] = useState(true);
@@ -34,7 +32,6 @@ export function ProjectResourceBadge() {
 
       return {
         runningProjects: running,
-        totalProcesses: appMetrics.processCount,
         totalMemoryMB: appMetrics.totalMemoryMB,
       };
     } catch (error) {
@@ -76,7 +73,7 @@ export function ProjectResourceBadge() {
         </span>
       </div>
       <div className="text-[10px] text-canopy-text/30 font-mono tabular-nums tracking-tight shrink-0">
-        {stats.totalProcesses} proc · {stats.totalMemoryMB}MB
+        {stats.totalMemoryMB}MB
       </div>
     </div>
   );
