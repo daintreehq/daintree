@@ -16,6 +16,8 @@ import {
   Plus,
   Bell,
   BellOff,
+  ChevronLeft,
+  ChevronRight,
   CopyPlus,
   Ellipsis,
   Info,
@@ -317,8 +319,12 @@ function PanelHeaderComponent({
   const canReorderTabs = hasTabs && !!onTabReorder && !!groupId;
   const tabIds = tabs?.map((t) => t.id) ?? [];
 
-  const { canScrollLeft: tabsCanScrollLeft, canScrollRight: tabsCanScrollRight } =
-    useHorizontalScrollControls(tabListRef);
+  const {
+    canScrollLeft: tabsCanScrollLeft,
+    canScrollRight: tabsCanScrollRight,
+    scrollLeft: tabsScrollLeft,
+    scrollRight: tabsScrollRight,
+  } = useHorizontalScrollControls(tabListRef);
 
   const activeTabId = tabs?.find((t) => t.isActive)?.id ?? null;
 
@@ -452,10 +458,20 @@ function PanelHeaderComponent({
                 {tabsCanScrollLeft && (
                   <div
                     className={cn(
-                      "absolute left-0 inset-y-0 w-8 pointer-events-none z-10 bg-gradient-to-r to-transparent",
+                      "absolute left-0 inset-y-0 w-8 pointer-events-none z-10 bg-gradient-to-r to-transparent flex items-center",
                       tabFadeFrom
                     )}
-                  />
+                  >
+                    <button
+                      type="button"
+                      onClick={tabsScrollLeft}
+                      onPointerDown={(e) => e.stopPropagation()}
+                      className="pointer-events-auto p-1 text-canopy-text/60 hover:text-canopy-text transition-colors"
+                      aria-label="Scroll left"
+                    >
+                      <ChevronLeft className="w-3 h-3" aria-hidden="true" />
+                    </button>
+                  </div>
                 )}
                 <div
                   ref={tabListRef}
@@ -514,10 +530,20 @@ function PanelHeaderComponent({
                 {tabsCanScrollRight && (
                   <div
                     className={cn(
-                      "absolute right-0 inset-y-0 w-8 pointer-events-none z-10 bg-gradient-to-l to-transparent",
+                      "absolute right-0 inset-y-0 w-8 pointer-events-none z-10 bg-gradient-to-l to-transparent flex items-center justify-end",
                       tabFadeFrom
                     )}
-                  />
+                  >
+                    <button
+                      type="button"
+                      onClick={tabsScrollRight}
+                      onPointerDown={(e) => e.stopPropagation()}
+                      className="pointer-events-auto p-1 text-canopy-text/60 hover:text-canopy-text transition-colors"
+                      aria-label="Scroll right"
+                    >
+                      <ChevronRight className="w-3 h-3" aria-hidden="true" />
+                    </button>
+                  </div>
                 )}
               </div>
             </SortableContext>
@@ -527,10 +553,20 @@ function PanelHeaderComponent({
             {tabsCanScrollLeft && (
               <div
                 className={cn(
-                  "absolute left-0 inset-y-0 w-8 pointer-events-none z-10 bg-gradient-to-r to-transparent",
+                  "absolute left-0 inset-y-0 w-8 pointer-events-none z-10 bg-gradient-to-r to-transparent flex items-center",
                   tabFadeFrom
                 )}
-              />
+              >
+                <button
+                  type="button"
+                  onClick={tabsScrollLeft}
+                  onPointerDown={(e) => e.stopPropagation()}
+                  className="pointer-events-auto p-1 text-canopy-text/60 hover:text-canopy-text transition-colors"
+                  aria-label="Scroll left"
+                >
+                  <ChevronLeft className="w-3 h-3" aria-hidden="true" />
+                </button>
+              </div>
             )}
             <div
               ref={tabListRef}
@@ -584,10 +620,20 @@ function PanelHeaderComponent({
             {tabsCanScrollRight && (
               <div
                 className={cn(
-                  "absolute right-0 inset-y-0 w-8 pointer-events-none z-10 bg-gradient-to-l to-transparent",
+                  "absolute right-0 inset-y-0 w-8 pointer-events-none z-10 bg-gradient-to-l to-transparent flex items-center justify-end",
                   tabFadeFrom
                 )}
-              />
+              >
+                <button
+                  type="button"
+                  onClick={tabsScrollRight}
+                  onPointerDown={(e) => e.stopPropagation()}
+                  className="pointer-events-auto p-1 text-canopy-text/60 hover:text-canopy-text transition-colors"
+                  aria-label="Scroll right"
+                >
+                  <ChevronRight className="w-3 h-3" aria-hidden="true" />
+                </button>
+              </div>
             )}
           </div>
         )

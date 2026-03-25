@@ -9,14 +9,19 @@ vi.mock("react-dom", async () => {
   return { ...actual, createPortal: (children: React.ReactNode) => children };
 });
 
+const mockScrollLeft = vi.fn();
+const mockScrollRight = vi.fn();
+let mockScrollControls = {
+  isOverflowing: false,
+  canScrollLeft: false,
+  canScrollRight: false,
+  scrollLeft: mockScrollLeft,
+  scrollRight: mockScrollRight,
+};
+
 vi.mock("@/hooks", () => ({
   useBackgroundPanelStats: () => ({ activeCount: 0, workingCount: 0 }),
-  useHorizontalScrollControls: () => ({
-    containerRef: { current: null },
-    canScrollLeft: false,
-    canScrollRight: false,
-    scrollBy: vi.fn(),
-  }),
+  useHorizontalScrollControls: () => mockScrollControls,
   useKeybindingDisplay: () => "",
 }));
 
@@ -132,6 +137,13 @@ describe("PanelHeader", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockHasPty = false;
+    mockScrollControls = {
+      isOverflowing: false,
+      canScrollLeft: false,
+      canScrollRight: false,
+      scrollLeft: mockScrollLeft,
+      scrollRight: mockScrollRight,
+    };
     mockStoreState = {
       watchedPanels: new Set<string>(),
       watchPanel: mockWatchPanel,
@@ -380,6 +392,54 @@ describe("PanelHeader", () => {
     it("does not render when location is dock", () => {
       render(<PanelHeader {...makeProps({ location: "dock", onMinimize: vi.fn() })} />);
       expect(screen.queryByTestId("panel-move-to-dock")).toBeNull();
+    });
+  });
+
+  describe("tab scroll arrows", () => {
+    const twoTabs = [
+      { id: "t1", title: "Tab 1", kind: "terminal" as const, isActive: true },
+      { id: "t2", title: "Tab 2", kind: "terminal" as const, isActive: false },
+    ];
+
+    it("renders scroll arrows when tabs overflow", () => {
+      mockScrollControls = {
+        ...mockScrollControls,
+        canScrollLeft: true,
+        canScrollRight: true,
+      };
+      render(<PanelHeader {...makeProps({ tabs: twoTabs, onTabClick: vi.fn() })} />);
+      expect(screen.getByLabelText("Scroll left")).toBeDefined();
+      expect(screen.getByLabelText("Scroll right")).toBeDefined();
+    });
+
+    it("does not render scroll arrows when tabs do not overflow", () => {
+      render(<PanelHeader {...makeProps({ tabs: twoTabs, onTabClick: vi.fn() })} />);
+      expect(screen.queryByLabelText("Scroll left")).toBeNull();
+      expect(screen.queryByLabelText("Scroll right")).toBeNull();
+    });
+
+    it("calls scrollLeft/scrollRight when arrows are clicked", () => {
+      mockScrollControls = {
+        ...mockScrollControls,
+        canScrollLeft: true,
+        canScrollRight: true,
+      };
+      render(<PanelHeader {...makeProps({ tabs: twoTabs, onTabClick: vi.fn() })} />);
+      screen.getByLabelText("Scroll left").click();
+      expect(mockScrollLeft).toHaveBeenCalledTimes(1);
+      screen.getByLabelText("Scroll right").click();
+      expect(mockScrollRight).toHaveBeenCalledTimes(1);
+    });
+
+    it("renders only the right arrow when scrolled to the start", () => {
+      mockScrollControls = {
+        ...mockScrollControls,
+        canScrollLeft: false,
+        canScrollRight: true,
+      };
+      render(<PanelHeader {...makeProps({ tabs: twoTabs, onTabClick: vi.fn() })} />);
+      expect(screen.queryByLabelText("Scroll left")).toBeNull();
+      expect(screen.getByLabelText("Scroll right")).toBeDefined();
     });
   });
 });
