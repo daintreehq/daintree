@@ -54,6 +54,7 @@ export function WorktreeSettingsTab() {
     let settled = false;
     const timer = setTimeout(() => {
       if (!settled) {
+        settled = true;
         setError("Settings load timed out");
         setIsLoading(false);
       }

@@ -145,13 +145,18 @@ test.describe.serial("Core: Settings Pages Load", () => {
       timeout: T_SHORT,
     });
 
-    // Switch through remaining subtabs to verify they render
+    // Switch through remaining subtabs to verify they render content
     const subtabs = ["Input", "Layout", "Scrollback", "Accessibility"];
     for (const subtab of subtabs) {
       await window
         .locator(`${SEL.settings.subtabNav} button[role="tab"]`, { hasText: subtab })
         .click();
-      await window.waitForTimeout(T_SETTLE);
+      // Verify the subtab button becomes selected
+      await expect(
+        window.locator(`${SEL.settings.subtabNav} button[role="tab"][aria-selected="true"]`, {
+          hasText: subtab,
+        })
+      ).toBeVisible({ timeout: T_SHORT });
     }
   });
 
@@ -243,8 +248,10 @@ test.describe.serial("Core: Settings Pages Load", () => {
       timeout: T_SHORT,
     });
 
-    // Should show image viewer options (no persistent loading)
-    await expect(window.locator("text=Image Viewer").first()).toBeVisible({ timeout: T_SHORT });
+    // Should show image viewer radio options after loading
+    await expect(window.locator('input[name="imageViewerMode"]').first()).toBeVisible({
+      timeout: T_MEDIUM,
+    });
   });
 
   test("Portal tab loads", async () => {
@@ -264,10 +271,11 @@ test.describe.serial("Core: Settings Pages Load", () => {
       timeout: T_SHORT,
     });
 
-    // MCP Server toggle should be visible
-    await expect(window.locator('[aria-label="Enable MCP server"]')).toBeVisible({
-      timeout: T_SHORT,
-    });
+    // MCP Server toggle should be visible and not stuck loading
+    const mcpToggle = window.locator('[aria-label="Enable MCP server"]');
+    await expect(mcpToggle).toBeVisible({ timeout: T_SHORT });
+    // Toggle should not be disabled (loading=false)
+    await expect(mcpToggle).not.toBeDisabled({ timeout: T_MEDIUM });
   });
 
   test("Voice Input tab loads", async () => {

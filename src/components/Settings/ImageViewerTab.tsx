@@ -31,13 +31,15 @@ export function ImageViewerTab() {
     setSaveError(null);
     setIsLoading(true);
     let cancelled = false;
+    let timedOut = false;
     const timer = setTimeout(() => {
+      timedOut = true;
       if (!cancelled && isMountedRef.current) setIsLoading(false);
     }, 10_000);
     window.electron.project
       .getSettings(activeProjectId)
       .then((settings) => {
-        if (cancelled || !isMountedRef.current) return;
+        if (cancelled || timedOut || !isMountedRef.current) return;
         const pref = settings?.preferredImageViewer;
         if (pref) {
           setMode(pref.mode);
