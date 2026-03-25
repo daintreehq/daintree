@@ -237,6 +237,7 @@ export const WorktreeCard = React.memo(function WorktreeCard({
   const isMainWorktree = Boolean(worktree.isMainWorktree);
   const {
     branchLabel,
+    isMainOnStandardBranch,
     hasChanges,
     isComplete,
     lifecycleStage,
@@ -631,6 +632,7 @@ export const WorktreeCard = React.memo(function WorktreeCard({
             isActive={isActive}
             isMuted={isMuted}
             isMainWorktree={isMainWorktree}
+            isMainOnStandardBranch={isMainOnStandardBranch}
             isPinned={isPinned}
             isCollapsed={effectiveIsCollapsed}
             canCollapse={canCollapse}

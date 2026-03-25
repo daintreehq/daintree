@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import type { WorktreeState } from "@/types";
+import { isStandardBranch } from "@shared/config/branchPrefixes";
 
 const MAIN_WORKTREE_NOTE_TTL_MS = 10 * 60 * 1000; // 10 minutes
 
@@ -16,6 +17,7 @@ export interface ComputedSubtitle {
 
 export interface UseWorktreeStatusResult {
   branchLabel: string;
+  isMainOnStandardBranch: boolean;
   hasChanges: boolean;
   isComplete: boolean;
   lifecycleStage: WorktreeLifecycleStage | null;
@@ -69,7 +71,25 @@ export function useWorktreeStatus({
     return trimmed;
   }, [worktree.aiNote, isMainWorktree, worktree.aiNoteTimestamp, now]);
 
-  const branchLabel = isMainWorktree ? worktree.name : (worktree.branch ?? worktree.name);
+  const isMainOnStandardBranch = !!(
+    isMainWorktree &&
+    worktree.branch &&
+    !worktree.isDetached &&
+    isStandardBranch(worktree.branch)
+  );
+
+  let branchLabel: string;
+  if (isMainWorktree) {
+    if (!worktree.branch || worktree.isDetached) {
+      branchLabel = worktree.name;
+    } else if (isMainOnStandardBranch) {
+      branchLabel = `${worktree.name} [${worktree.branch}]`;
+    } else {
+      branchLabel = worktree.branch;
+    }
+  } else {
+    branchLabel = worktree.branch ?? worktree.name;
+  }
   const hasChanges = (worktree.worktreeChanges?.changedFileCount ?? 0) > 0;
 
   const rawLastCommitMessage = worktree.worktreeChanges?.lastCommitMessage;
@@ -160,6 +180,7 @@ export function useWorktreeStatus({
 
   return {
     branchLabel,
+    isMainOnStandardBranch,
     hasChanges,
     isComplete,
     lifecycleStage,
