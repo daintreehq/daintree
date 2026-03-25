@@ -554,6 +554,8 @@ export function ContentGrid({ className, defaultCwd, agentAvailability }: Conten
 
   // Track container dimensions for responsive layout and capacity calculation
   const gridContainerRef = useRef<HTMLDivElement>(null);
+  const preMaximizeLayoutRef = useRef(preMaximizeLayout);
+  preMaximizeLayoutRef.current = preMaximizeLayout;
   const [gridWidth, setGridWidth] = useState<number | null>(null);
 
   // Get placeholder state from DnD context
@@ -649,22 +651,28 @@ export function ContentGrid({ className, defaultCwd, agentAvailability }: Conten
   }, [setGridDimensions, gridTerminals.length, maximizedId, twoPaneSplitEnabled, showPlaceholder]);
 
   useEffect(() => {
-    if (preMaximizeLayout && preMaximizeLayout.worktreeId !== activeWorktreeId) {
+    if (
+      preMaximizeLayoutRef.current &&
+      preMaximizeLayoutRef.current.worktreeId !== activeWorktreeId
+    ) {
       clearPreMaximizeLayout();
     }
-  }, [activeWorktreeId, preMaximizeLayout, clearPreMaximizeLayout]);
+  }, [activeWorktreeId, clearPreMaximizeLayout]);
 
   useEffect(() => {
-    if (preMaximizeLayout && preMaximizeLayout.gridItemCount !== gridItemCount) {
+    if (
+      preMaximizeLayoutRef.current &&
+      preMaximizeLayoutRef.current.gridItemCount !== gridItemCount
+    ) {
       clearPreMaximizeLayout();
     }
-  }, [gridItemCount, preMaximizeLayout, clearPreMaximizeLayout]);
+  }, [gridItemCount, clearPreMaximizeLayout]);
 
   useEffect(() => {
-    if (preMaximizeLayout) {
+    if (preMaximizeLayoutRef.current) {
       clearPreMaximizeLayout();
     }
-  }, [layoutConfig, preMaximizeLayout, clearPreMaximizeLayout]);
+  }, [layoutConfig, clearPreMaximizeLayout]);
 
   const gridCols = useMemo(() => {
     if (
@@ -1060,7 +1068,7 @@ export function ContentGrid({ className, defaultCwd, agentAvailability }: Conten
             )}
             style={{
               display: "grid",
-              gridTemplateColumns: `repeat(${gridCols}, 1fr)`,
+              gridTemplateColumns: `repeat(${gridCols}, minmax(0, 1fr))`,
               gridAutoRows: `minmax(${MIN_TERMINAL_HEIGHT_PX}px, 1fr)`,
               gap: "4px",
               backgroundColor: "var(--color-grid-bg)",
