@@ -299,6 +299,68 @@ export function registerTerminalLayoutActions(
     },
   }));
 
+  const setStrategySchema = z.object({
+    strategy: z.enum(["automatic", "fixed-columns", "fixed-rows"]),
+  });
+
+  const runSetStrategy = async (args: unknown) => {
+    const { strategy } = args as {
+      strategy: "automatic" | "fixed-columns" | "fixed-rows";
+    };
+    const state = useLayoutConfigStore.getState();
+    const previous = state.layoutConfig;
+    const next = { ...previous, strategy };
+    state.setLayoutConfig(next);
+    try {
+      await appClient.setState({ panelGridConfig: next as any });
+    } catch (error) {
+      state.setLayoutConfig(previous);
+      throw error;
+    }
+  };
+
+  const setValueSchema = z.object({ value: z.number().int().min(1).max(10) });
+
+  const runSetValue = async (args: unknown) => {
+    const { value } = args as { value: number };
+    const state = useLayoutConfigStore.getState();
+    const previous = state.layoutConfig;
+    const next = { ...previous, value };
+    state.setLayoutConfig(next);
+    try {
+      await appClient.setState({ panelGridConfig: next as any });
+    } catch (error) {
+      state.setLayoutConfig(previous);
+      throw error;
+    }
+  };
+
+  // Canonical panel.gridLayout.* action IDs
+  actions.set("panel.gridLayout.setStrategy", () => ({
+    id: "panel.gridLayout.setStrategy",
+    title: "Set Grid Layout Strategy",
+    description: "Set the panel grid layout strategy",
+    category: "terminal",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    argsSchema: setStrategySchema,
+    run: runSetStrategy,
+  }));
+
+  actions.set("panel.gridLayout.setValue", () => ({
+    id: "panel.gridLayout.setValue",
+    title: "Set Grid Layout Value",
+    description: "Set the panel grid layout value (columns/rows count)",
+    category: "terminal",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    argsSchema: setValueSchema,
+    run: runSetValue,
+  }));
+
+  // Legacy aliases for backward compatibility
   actions.set("terminal.gridLayout.setStrategy", () => ({
     id: "terminal.gridLayout.setStrategy",
     title: "Set Grid Layout Strategy",
@@ -307,24 +369,8 @@ export function registerTerminalLayoutActions(
     kind: "command",
     danger: "safe",
     scope: "renderer",
-    argsSchema: z.object({
-      strategy: z.enum(["automatic", "fixed-columns", "fixed-rows"]),
-    }),
-    run: async (args: unknown) => {
-      const { strategy } = args as {
-        strategy: "automatic" | "fixed-columns" | "fixed-rows";
-      };
-      const state = useLayoutConfigStore.getState();
-      const previous = state.layoutConfig;
-      const next = { ...previous, strategy };
-      state.setLayoutConfig(next);
-      try {
-        await appClient.setState({ panelGridConfig: next as any });
-      } catch (error) {
-        state.setLayoutConfig(previous);
-        throw error;
-      }
-    },
+    argsSchema: setStrategySchema,
+    run: runSetStrategy,
   }));
 
   actions.set("terminal.gridLayout.setValue", () => ({
@@ -335,19 +381,7 @@ export function registerTerminalLayoutActions(
     kind: "command",
     danger: "safe",
     scope: "renderer",
-    argsSchema: z.object({ value: z.number().int().min(1).max(10) }),
-    run: async (args: unknown) => {
-      const { value } = args as { value: number };
-      const state = useLayoutConfigStore.getState();
-      const previous = state.layoutConfig;
-      const next = { ...previous, value };
-      state.setLayoutConfig(next);
-      try {
-        await appClient.setState({ panelGridConfig: next as any });
-      } catch (error) {
-        state.setLayoutConfig(previous);
-        throw error;
-      }
-    },
+    argsSchema: setValueSchema,
+    run: runSetValue,
   }));
 }

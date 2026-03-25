@@ -110,7 +110,7 @@ The component checks for its own override first, then falls back to a semantic t
 The grid background uses a similar pattern:
 
 ```css
---color-grid-bg: var(--terminal-grid-bg, var(--theme-surface-grid));
+--color-grid-bg: var(--panel-grid-bg, var(--terminal-grid-bg, var(--theme-surface-grid)));
 ```
 
 So a theme can override just the grid area without changing the structural surface hierarchy.

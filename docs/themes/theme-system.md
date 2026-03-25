@@ -7,7 +7,7 @@ Canopy's theming system is a three-layer pipeline shared between the renderer an
 2. Semantic tokens
    `createSemanticTokens()` in `shared/theme/semantic.ts` compiles a palette into the stable app token contract (`AppColorSchemeTokens` in `shared/theme/types.ts`). Internally this calls `createCanopyTokens()` in `shared/theme/themes.ts` which derives ~100 tokens from ~40 required palette inputs.
 3. Component public vars
-   Individual UI areas expose their own override surface through CSS variables such as `--toolbar-bg`, `--toolbar-project-bg`, `--settings-dialog-bg`, `--pulse-card-bg`, and `--terminal-grid-bg`.
+   Individual UI areas expose their own override surface through CSS variables such as `--toolbar-bg`, `--toolbar-project-bg`, `--settings-dialog-bg`, `--pulse-card-bg`, and `--panel-grid-bg`.
 
 ## Core Model
 
