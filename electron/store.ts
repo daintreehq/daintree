@@ -100,6 +100,7 @@ export interface StoreSchema {
   };
   agentSettings: AgentSettings;
   notificationSettings: {
+    enabled: boolean;
     completedEnabled: boolean;
     waitingEnabled: boolean;
     soundEnabled: boolean;
@@ -202,6 +203,7 @@ const storeOptions = {
     },
     agentSettings: DEFAULT_AGENT_SETTINGS,
     notificationSettings: {
+      enabled: true,
       completedEnabled: false,
       waitingEnabled: false,
       soundEnabled: false,

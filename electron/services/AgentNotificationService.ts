@@ -65,6 +65,7 @@ class AgentNotificationService {
     const key = agentId ?? worktreeId ?? "agent";
 
     // Cancel any pending completion timer for this agent when it leaves "completed"
+    // (must run even when master toggle is off to prevent stale timers)
     if (previousState === "completed" && state !== "completed") {
       const timer = this.completionTimers.get(key);
       if (timer) {
@@ -77,6 +78,9 @@ class AgentNotificationService {
     if (previousState === "waiting" && state !== "waiting" && terminalId) {
       this.clearWaitingEscalation(terminalId);
     }
+
+    // Master toggle — skip all notifications when disabled
+    if (settings.enabled === false) return;
 
     // Schedule waiting escalation for docked agents (independent of watched status)
     if (state === "waiting" && terminalId) {
@@ -126,7 +130,7 @@ class AgentNotificationService {
     const timer = setTimeout(() => {
       this.completionTimers.delete(key);
       const settings = projectStore.getEffectiveNotificationSettings();
-      if (!settings.completedEnabled) return;
+      if (settings.enabled === false || !settings.completedEnabled) return;
       const label = this.getLabel(agentId, worktreeId);
       this.enqueue(
         {
@@ -165,6 +169,7 @@ class AgentNotificationService {
     const timer = setTimeout(() => {
       this.waitingEscalationTimers.delete(terminalId);
       const currentSettings = projectStore.getEffectiveNotificationSettings();
+      if (currentSettings.enabled === false) return;
       if (!currentSettings.waitingEscalationEnabled || !currentSettings.waitingEnabled) return;
 
       // Re-read terminal state — skip if moved out of dock or removed
@@ -218,6 +223,12 @@ class AgentNotificationService {
   private drainQueue(): void {
     const item = this.notificationQueue.shift();
     if (!item) return;
+
+    const settings = projectStore.getEffectiveNotificationSettings();
+    if (settings.enabled === false) {
+      this.notificationQueue = [];
+      return;
+    }
 
     const context = this.makeContext(item.terminalId, item.agentId, item.worktreeId);
     notificationService.showWatchNotification(

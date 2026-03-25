@@ -1767,9 +1767,9 @@ const api: ElectronAPI = {
     updateBadge: (state: { waitingCount: number }) =>
       ipcRenderer.send(CHANNELS.NOTIFICATION_UPDATE, state),
     getSettings: (): Promise<{
+      enabled: boolean;
       completedEnabled: boolean;
       waitingEnabled: boolean;
-      failedEnabled: boolean;
       soundEnabled: boolean;
       soundFile: string;
       waitingEscalationEnabled: boolean;
@@ -1777,9 +1777,9 @@ const api: ElectronAPI = {
     }> => _unwrappingInvoke(CHANNELS.NOTIFICATION_SETTINGS_GET),
     setSettings: (
       settings: Partial<{
+        enabled: boolean;
         completedEnabled: boolean;
         waitingEnabled: boolean;
-        failedEnabled: boolean;
         soundEnabled: boolean;
         soundFile: string;
         waitingEscalationEnabled: boolean;

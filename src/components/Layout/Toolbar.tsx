@@ -85,6 +85,7 @@ import { actionService } from "@/services/ActionService";
 import { ProjectSwitcherPalette } from "@/components/Project/ProjectSwitcherPalette";
 import { NotificationCenter } from "@/components/Notifications/NotificationCenter";
 import { useNotificationHistoryStore } from "@/store/slices/notificationHistorySlice";
+import { useNotificationSettingsStore } from "@/store/notificationSettingsStore";
 import { VoiceRecordingToolbarButton } from "./VoiceRecordingToolbarButton";
 import { DetectedServersList } from "@/components/DetectedServers/DetectedServersList";
 import type { DetectedDevServer } from "@shared/types/ipc/globalDevServers";
@@ -215,6 +216,10 @@ export function Toolbar({
   );
   const notificationCenterButtonRef = useRef<HTMLButtonElement>(null);
   const notificationUnreadCount = useNotificationHistoryStore((s) => s.unreadCount);
+  const notificationsEnabled = useNotificationSettingsStore((s) => s.enabled);
+  useEffect(() => {
+    if (!notificationsEnabled && notificationCenterOpen) closeNotificationCenter();
+  }, [notificationsEnabled, notificationCenterOpen, closeNotificationCenter]);
   const hasActiveVoiceRecording = useVoiceRecordingStore(
     (state) =>
       state.activeTarget !== null &&
@@ -957,7 +962,7 @@ export function Toolbar({
             </FixedDropdown>
           </div>
         ),
-        isAvailable: true,
+        isAvailable: notificationsEnabled,
       },
       notes: {
         render: () => (
@@ -1169,6 +1174,7 @@ export function Toolbar({
       detectedServersOpen,
       setIssueSearchQuery,
       setPrSearchQuery,
+      notificationsEnabled,
     ]
   );
 
