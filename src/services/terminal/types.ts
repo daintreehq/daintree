@@ -99,9 +99,15 @@ export interface ManagedTerminal {
 
   // Project-switch detach state: instance is alive but not in any visible container
   isDetached?: boolean;
+
+  // Hibernation: xterm.js Terminal instance disposed to free memory
+  isHibernated?: boolean;
+  hibernationTimer?: ReturnType<typeof setTimeout>;
 }
 
 export const TIER_DOWNGRADE_HYSTERESIS_MS = 500;
+
+export const HIBERNATION_DELAY_MS = 30_000;
 
 export const INCREMENTAL_RESTORE_CONFIG = {
   chunkBytes: 32768,
