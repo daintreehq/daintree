@@ -77,8 +77,8 @@ function TerminalHeaderContentComponent({
 }: TerminalHeaderContentProps) {
   const resourceEnabled = useResourceMonitoringStore((s) => s.enabled);
   const resourceState = useResourceMonitoringStore((s) => s.metrics.get(id));
-  const showResource =
-    resourceEnabled && kind != null && panelKindHasPty(kind) && resourceState != null;
+  const isPtyPanel = kind == null || panelKindHasPty(kind);
+  const showResource = resourceEnabled && isPtyPanel && resourceState != null;
 
   const {
     isInputLocked,

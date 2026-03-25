@@ -694,6 +694,9 @@ export function setupTerminalStoreListeners() {
       return;
     }
 
+    // Clean up resource metrics for exited terminal
+    useResourceMonitoringStore.getState().removeTerminal(id);
+
     // Store exit code on the terminal before applying exit behavior
     useTerminalStore.setState((s) => ({
       terminals: s.terminals.map((t) => (t.id === id ? { ...t, exitCode } : t)),
