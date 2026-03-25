@@ -1,7 +1,16 @@
-import { useState, useEffect, useRef, useMemo } from "react";
-import { X, Settings, FileCode, Zap, Command, CookingPot, Server, Bell } from "lucide-react";
+import { useState, useEffect, useRef, useMemo, useCallback } from "react";
+import {
+  Sprout,
+  X,
+  Settings,
+  FileCode,
+  Zap,
+  Command,
+  CookingPot,
+  Server,
+  Bell,
+} from "lucide-react";
 import { CanopyAgentIcon } from "@/components/icons";
-import { Button } from "@/components/ui/button";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { useProjectSettings } from "@/hooks";
 import { useProjectStore } from "@/store/projectStore";
@@ -24,12 +33,11 @@ import type { NotificationSettings } from "@shared/types/ipc/api";
 import {
   createProjectSettingsSnapshot,
   areSnapshotsEqual,
-  type ProjectSettingsSnapshot,
   type EnvVar,
 } from "./projectSettingsDirty";
 import { validatePathPattern } from "@shared/utils/pathPattern";
-import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { useRecipeStore } from "@/store/recipeStore";
+import { debounce } from "@/utils/debounce";
 
 interface ProjectSettingsDialogProps {
   projectId: string;
@@ -56,8 +64,7 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
   const currentProject = projects.find((p) => p.id === projectId);
 
   const [activeTab, setActiveTab] = useState<ProjectSettingsTab>("general");
-  const [isSaving, setIsSaving] = useState(false);
-  const [saveError, setSaveError] = useState<string | null>(null);
+  const [autoSaveError, setAutoSaveError] = useState<string | null>(null);
   const [name, setName] = useState(currentProject?.name || "");
   const [emoji, setEmoji] = useState(currentProject?.emoji || "🌲");
 
@@ -86,8 +93,7 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
   const [notificationOverrides, setNotificationOverrides] = useState<Partial<NotificationSettings>>(
     {}
   );
-  const initialSnapshotRef = useRef<ProjectSettingsSnapshot | null>(null);
-  const [showUnsavedChangesDialog, setShowUnsavedChangesDialog] = useState(false);
+  const lastSavedSnapshotRef = useRef<ReturnType<typeof createProjectSettingsSnapshot> | null>(null);
 
   const { recipes, isLoading: recipesLoading } = useRecipeStore();
   const { worktreeMap, worktrees } = useWorktrees();
@@ -152,11 +158,6 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
     notificationOverrides,
   ]);
 
-  const isDirty = useMemo(() => {
-    if (!initialSnapshotRef.current || !currentSnapshot) return false;
-    return !areSnapshotsEqual(initialSnapshotRef.current, currentSnapshot);
-  }, [currentSnapshot]);
-
   useEffect(() => {
     if (isOpen && !isLoading && settings && currentProject && !isInitialized) {
       const initialRunCommands = settings.runCommands || [];
@@ -207,7 +208,7 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
       setMcpServers(initialMcpServers);
       setNotificationOverrides(initialNotificationOverrides);
 
-      initialSnapshotRef.current = createProjectSettingsSnapshot(
+      lastSavedSnapshotRef.current = createProjectSettingsSnapshot(
         currentProject.name,
         currentProject.emoji || "🌲",
         initialDevServerCommand,
@@ -239,7 +240,7 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
       setDevServerLoadTimeout(undefined);
       setCommandOverrides([]);
       setCopyTreeSettings({});
-      setSaveError(null);
+      setAutoSaveError(null);
       setBranchPrefixMode("none");
       setBranchPrefixCustom("");
       setAgentInstructions("");
@@ -252,8 +253,7 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
       setMcpRunStates([]);
       setNotificationOverrides({});
       setActiveTab("general");
-      initialSnapshotRef.current = null;
-      setShowUnsavedChangesDialog(false);
+      lastSavedSnapshotRef.current = null;
     }
   }, [settings, isOpen, isInitialized, currentProject, isLoading]);
 
@@ -279,16 +279,9 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
     return cleanup;
   }, [isOpen, projectId]);
 
-  const requestClose = (options?: { bypassDirty?: boolean }) => {
-    if (options?.bypassDirty || !isDirty) {
-      onClose();
-      return;
-    }
-    setShowUnsavedChangesDialog(true);
-  };
-
-  const handleSave = async () => {
-    if (!settings || isSaving) return;
+  const persistRef = useRef<() => Promise<void>>();
+  persistRef.current = async () => {
+    if (!settings || !currentProject) return;
 
     const sanitizedRunCommands = runCommands
       .map((cmd) => ({
@@ -303,76 +296,59 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
     for (const envVar of environmentVariables) {
       const trimmedKey = envVar.key.trim();
       if (!trimmedKey) continue;
-      if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(trimmedKey)) {
-        setSaveError(
-          `Invalid environment variable key: "${trimmedKey}". Use only letters, numbers, and underscores.`
-        );
-        setActiveTab("context");
-        return;
-      }
-      if (seenKeys.has(trimmedKey)) {
-        setSaveError(`Duplicate environment variable key: "${trimmedKey}"`);
-        setActiveTab("context");
-        return;
-      }
+      if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(trimmedKey)) continue;
+      if (seenKeys.has(trimmedKey)) continue;
       seenKeys.add(trimmedKey);
       envVarRecord[trimmedKey] = envVar.value;
     }
 
     const sanitizedPaths = excludedPaths.map((p) => p.trim()).filter(Boolean);
 
-    setIsSaving(true);
-    setSaveError(null);
+    const sanitizedCopyTreeSettings: CopyTreeSettings = {};
+    if (copyTreeSettings.maxContextSize !== undefined) {
+      sanitizedCopyTreeSettings.maxContextSize = copyTreeSettings.maxContextSize;
+    }
+    if (copyTreeSettings.maxFileSize !== undefined) {
+      sanitizedCopyTreeSettings.maxFileSize = copyTreeSettings.maxFileSize;
+    }
+    if (copyTreeSettings.charLimit !== undefined) {
+      sanitizedCopyTreeSettings.charLimit = copyTreeSettings.charLimit;
+    }
+    if (copyTreeSettings.strategy) {
+      sanitizedCopyTreeSettings.strategy = copyTreeSettings.strategy;
+    }
+    if (copyTreeSettings.alwaysInclude && copyTreeSettings.alwaysInclude.length > 0) {
+      sanitizedCopyTreeSettings.alwaysInclude = copyTreeSettings.alwaysInclude
+        .map((p) => p.trim())
+        .filter(Boolean);
+      if (sanitizedCopyTreeSettings.alwaysInclude.length === 0) {
+        delete sanitizedCopyTreeSettings.alwaysInclude;
+      }
+    }
+    if (copyTreeSettings.alwaysExclude && copyTreeSettings.alwaysExclude.length > 0) {
+      sanitizedCopyTreeSettings.alwaysExclude = copyTreeSettings.alwaysExclude
+        .map((p) => p.trim())
+        .filter(Boolean);
+      if (sanitizedCopyTreeSettings.alwaysExclude.length === 0) {
+        delete sanitizedCopyTreeSettings.alwaysExclude;
+      }
+    }
+    const hasCopyTreeSettings = Object.keys(sanitizedCopyTreeSettings).length > 0;
+
+    const sanitizedBranchPrefixCustom = branchPrefixCustom.trim();
+    const effectivePrefixMode =
+      branchPrefixMode === "custom" && !sanitizedBranchPrefixCustom ? "none" : branchPrefixMode;
+    const sanitizedWorktreePathPattern = worktreePathPattern.trim() || undefined;
+    if (sanitizedWorktreePathPattern) {
+      const patternValidation = validatePathPattern(sanitizedWorktreePathPattern);
+      if (!patternValidation.valid) return;
+    }
+
+    setAutoSaveError(null);
     try {
-      if (currentProject) {
-        await updateProject(projectId, {
-          name: name.trim() || currentProject.name,
-          emoji: emoji,
-        });
-      }
-
-      const sanitizedCopyTreeSettings: CopyTreeSettings = {};
-      if (copyTreeSettings.maxContextSize !== undefined) {
-        sanitizedCopyTreeSettings.maxContextSize = copyTreeSettings.maxContextSize;
-      }
-      if (copyTreeSettings.maxFileSize !== undefined) {
-        sanitizedCopyTreeSettings.maxFileSize = copyTreeSettings.maxFileSize;
-      }
-      if (copyTreeSettings.charLimit !== undefined) {
-        sanitizedCopyTreeSettings.charLimit = copyTreeSettings.charLimit;
-      }
-      if (copyTreeSettings.strategy) {
-        sanitizedCopyTreeSettings.strategy = copyTreeSettings.strategy;
-      }
-      if (copyTreeSettings.alwaysInclude && copyTreeSettings.alwaysInclude.length > 0) {
-        sanitizedCopyTreeSettings.alwaysInclude = copyTreeSettings.alwaysInclude
-          .map((p) => p.trim())
-          .filter(Boolean);
-        if (sanitizedCopyTreeSettings.alwaysInclude.length === 0) {
-          delete sanitizedCopyTreeSettings.alwaysInclude;
-        }
-      }
-      if (copyTreeSettings.alwaysExclude && copyTreeSettings.alwaysExclude.length > 0) {
-        sanitizedCopyTreeSettings.alwaysExclude = copyTreeSettings.alwaysExclude
-          .map((p) => p.trim())
-          .filter(Boolean);
-        if (sanitizedCopyTreeSettings.alwaysExclude.length === 0) {
-          delete sanitizedCopyTreeSettings.alwaysExclude;
-        }
-      }
-      const hasCopyTreeSettings = Object.keys(sanitizedCopyTreeSettings).length > 0;
-
-      const sanitizedBranchPrefixCustom = branchPrefixCustom.trim();
-      const effectivePrefixMode =
-        branchPrefixMode === "custom" && !sanitizedBranchPrefixCustom ? "none" : branchPrefixMode;
-      const sanitizedWorktreePathPattern = worktreePathPattern.trim() || undefined;
-      if (sanitizedWorktreePathPattern) {
-        const patternValidation = validatePathPattern(sanitizedWorktreePathPattern);
-        if (!patternValidation.valid) {
-          setSaveError(`Invalid worktree path pattern: ${patternValidation.error}`);
-          setIsSaving(false);
-          return;
-        }
+      const trimmedName = name.trim() || currentProject.name;
+      if (trimmedName !== currentProject.name || emoji !== (currentProject.emoji || "🌲")) {
+        await updateProject(projectId, { name: trimmedName, emoji });
       }
 
       await saveSettings({
@@ -399,49 +375,37 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
         unresolvedSecureEnvironmentVariables: undefined,
       });
 
-      const sanitizedEnvVars = Object.entries(envVarRecord).map(([key, value]) => ({
-        id: environmentVariables.find((ev) => ev.key.trim() === key)?.id || key,
-        key,
-        value,
-      }));
-
-      const sanitizedRunCommandsWithIds = sanitizedRunCommands.map((cmd) => ({
-        id: cmd.id || "",
-        name: cmd.name,
-        command: cmd.command,
-        preferredLocation: cmd.preferredLocation,
-        preferredAutoRestart: cmd.preferredAutoRestart,
-      }));
-
-      initialSnapshotRef.current = createProjectSettingsSnapshot(
-        name.trim() || (currentProject?.name ?? ""),
-        emoji,
-        devServerCommand.trim() || "",
-        projectIconSvg,
-        sanitizedPaths,
-        sanitizedEnvVars,
-        sanitizedRunCommandsWithIds,
-        defaultWorktreeRecipeId,
-        commandOverrides.length > 0 ? commandOverrides : [],
-        hasCopyTreeSettings ? sanitizedCopyTreeSettings : {},
-        branchPrefixMode,
-        sanitizedBranchPrefixCustom,
-        devServerLoadTimeout,
-        agentInstructions,
-        worktreePathPattern.trim(),
-        currentTerminalSettings,
-        mcpServers,
-        notificationOverrides
-      );
-
-      requestClose({ bypassDirty: true });
+      if (currentSnapshot) {
+        lastSavedSnapshotRef.current = currentSnapshot;
+      }
     } catch (error) {
-      console.error("Failed to save settings:", error);
-      setSaveError(error instanceof Error ? error.message : "Failed to save settings");
-    } finally {
-      setIsSaving(false);
+      console.error("Failed to auto-save settings:", error);
+      setAutoSaveError(error instanceof Error ? error.message : "Failed to save settings");
     }
   };
+
+  const debouncedSaveRef = useRef(
+    debounce(() => {
+      persistRef.current?.();
+    }, 500)
+  );
+
+  useEffect(() => {
+    if (!isInitialized || !currentSnapshot || !lastSavedSnapshotRef.current) return;
+    if (areSnapshotsEqual(lastSavedSnapshotRef.current, currentSnapshot)) return;
+    debouncedSaveRef.current();
+  }, [currentSnapshot, isInitialized]);
+
+  useEffect(() => {
+    return () => {
+      debouncedSaveRef.current.cancel();
+    };
+  }, []);
+
+  const handleBeforeClose = useCallback(async () => {
+    debouncedSaveRef.current.flush();
+    return true;
+  }, []);
 
   const tabTitles: Record<ProjectSettingsTab, string> = {
     general: "General",
@@ -455,11 +419,10 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
   };
 
   return (
-    <>
       <AppDialog
         isOpen={isOpen}
-        onClose={requestClose}
-        dismissible={!showUnsavedChangesDialog}
+        onClose={onClose}
+        onBeforeClose={handleBeforeClose}
         size="4xl"
         maxHeight="h-[75vh]"
         className="max-h-[800px]"
@@ -529,7 +492,7 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
             <div className="flex items-center justify-between px-6 py-4 border-b border-canopy-border bg-canopy-sidebar/50 shrink-0">
               <h3 className="text-lg font-medium text-canopy-text">{tabTitles[activeTab]}</h3>
               <button
-                onClick={() => requestClose()}
+                onClick={onClose}
                 className="text-canopy-text/60 hover:text-canopy-text transition-colors p-1 rounded focus-visible:outline focus-visible:outline-2 focus-visible:outline-canopy-accent focus-visible:outline-offset-2"
                 aria-label="Close settings"
               >
@@ -551,12 +514,12 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
                   Failed to load settings: {error}
                 </div>
               )}
-              {saveError && (
+              {autoSaveError && (
                 <div
                   className="text-sm text-status-error bg-status-error/10 border border-status-error/20 rounded p-3 mb-4"
                   role="alert"
                 >
-                  {saveError}
+                  {autoSaveError}
                 </div>
               )}
               {!isLoading && !error && (
@@ -673,34 +636,9 @@ export function ProjectSettingsDialog({ projectId, isOpen, onClose }: ProjectSet
               )}
             </div>
 
-            <div className="flex items-center justify-end gap-2 px-6 py-4 border-t border-canopy-border bg-canopy-sidebar/50 shrink-0">
-              <Button variant="ghost" onClick={() => requestClose()}>
-                Cancel
-              </Button>
-              <Button onClick={handleSave} disabled={isSaving || isLoading || !!error}>
-                {isSaving ? "Saving..." : "Save Changes"}
-              </Button>
-            </div>
           </div>
         </div>
       </AppDialog>
-
-      <ConfirmDialog
-        isOpen={showUnsavedChangesDialog}
-        title="Unsaved Changes"
-        description="You have unsaved changes. Are you sure you want to discard them?"
-        confirmLabel="Discard Changes"
-        cancelLabel="Keep Editing"
-        variant="destructive"
-        onConfirm={() => {
-          setShowUnsavedChangesDialog(false);
-          onClose();
-        }}
-        onClose={() => {
-          setShowUnsavedChangesDialog(false);
-        }}
-      />
-    </>
   );
 }
 

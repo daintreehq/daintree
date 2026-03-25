@@ -535,7 +535,7 @@ export function ContextTab({
                   </span>
                 </p>
                 <p className="text-status-warning/80">
-                  Click Save to automatically move them to secure storage.
+                  These will be automatically moved to secure storage when settings are saved.
                 </p>
               </div>
             </div>
