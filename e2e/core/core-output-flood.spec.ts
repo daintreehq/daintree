@@ -8,7 +8,6 @@ import {
   getTerminalBufferLength,
 } from "../helpers/terminal";
 import { getFirstGridPanel, openTerminal } from "../helpers/panels";
-import { SEL } from "../helpers/selectors";
 import { T_LONG } from "../helpers/timeouts";
 import { measureMainMemory, floodTerminal } from "../helpers/stress";
 

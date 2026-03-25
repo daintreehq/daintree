@@ -4,7 +4,6 @@ import { createFixtureRepo } from "../helpers/fixtures";
 import { openAndOnboardProject } from "../helpers/project";
 import { getTerminalText, waitForTerminalText, runTerminalCommand } from "../helpers/terminal";
 import { getFirstGridPanel, openTerminal } from "../helpers/panels";
-import { SEL } from "../helpers/selectors";
 import { T_LONG, T_SETTLE } from "../helpers/timeouts";
 
 let ctx: AppContext;
