@@ -169,6 +169,7 @@ export function GitHubSettingsTab() {
   return (
     <div className="space-y-6">
       <SettingsSection
+        id="github-token"
         icon={Key}
         title="Personal Access Token"
         description="Used for repository statistics, issue/PR detection, and linking worktrees to GitHub. Eliminates the need for the gh CLI."
