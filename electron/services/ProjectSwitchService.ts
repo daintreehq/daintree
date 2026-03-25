@@ -168,7 +168,7 @@ export class ProjectSwitchService {
 
   private async cleanupSupportingServices(
     projectId: string,
-    previousProjectId: string | null
+    _previousProjectId: string | null
   ): Promise<void> {
     console.log("[ProjectSwitch] Cleaning up previous project state...");
 
