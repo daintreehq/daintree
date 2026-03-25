@@ -188,7 +188,6 @@ export function createCanopyTokens(
     "radius-scale": tokens["radius-scale"] ?? "1",
     "activity-approval": tokens["activity-approval"] ?? (dark ? "#f97316" : "#C56210"),
     "activity-completed": tokens["activity-completed"] ?? tokens["status-success"],
-    "activity-failed": tokens["activity-failed"] ?? tokens["status-danger"],
     "terminal-background": tokens["terminal-background"] ?? tokens["surface-canvas"],
     "terminal-foreground": tokens["terminal-foreground"] ?? tokens["text-primary"],
     "terminal-muted": tokens["terminal-muted"] ?? tokens["text-muted"],

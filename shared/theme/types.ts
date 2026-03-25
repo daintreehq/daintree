@@ -57,7 +57,6 @@ export const APP_THEME_TOKEN_KEYS = [
   "activity-waiting",
   "activity-approval",
   "activity-completed",
-  "activity-failed",
 
   // Overlay ladder
   // overlay-base is the tint color for the ladder (default: white dark / black light).

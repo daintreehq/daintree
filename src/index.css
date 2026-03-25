@@ -54,7 +54,6 @@
   --color-activity-waiting: var(--theme-activity-waiting);
   --color-activity-approval: var(--theme-activity-approval);
   --color-activity-completed: var(--theme-activity-completed);
-  --color-activity-failed: var(--theme-activity-failed);
   --color-overlay-base: var(--theme-overlay-base);
   --color-overlay-subtle: var(--theme-overlay-subtle);
   --color-overlay-soft: var(--theme-overlay-soft);
