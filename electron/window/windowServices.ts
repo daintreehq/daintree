@@ -360,7 +360,10 @@ export async function setupWindowServices(
     console.error(`[MAIN] Pty Host crashed with code ${code} (max restarts exceeded)`);
   });
   ptyClient.on("host-throttled", (payload) => {
-    if (!payload.isThrottled) return;
+    if (!payload.isThrottled) {
+      logInfo("pty-host-resumed", { duration: payload.duration });
+      return;
+    }
     logInfo("pty-host-throttled", { reason: payload.reason });
     try {
       session.defaultSession.clearCache().catch(() => {});
