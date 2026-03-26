@@ -199,7 +199,14 @@ export const useTerminalStore = create<PanelGridState>()((set, get, api) => {
 
       if (state.focusedId === id) {
         const gridTerminals = state.terminals.filter((t) => t.id !== id && t.location === "grid");
-        updates.focusedId = gridTerminals[0]?.id ?? null;
+        const trashedTerminal = state.terminals.find((t) => t.id === id);
+        const wasAgent =
+          trashedTerminal &&
+          isAgentTerminal(trashedTerminal.kind ?? trashedTerminal.type, trashedTerminal.agentId);
+        const nextAgent = wasAgent
+          ? gridTerminals.find((t) => isAgentTerminal(t.kind ?? t.type, t.agentId))
+          : undefined;
+        updates.focusedId = nextAgent?.id ?? gridTerminals[0]?.id ?? null;
       }
 
       if (state.maximizedId === id) {
@@ -230,7 +237,14 @@ export const useTerminalStore = create<PanelGridState>()((set, get, api) => {
         const gridTerminals = state.terminals.filter(
           (t) => !panelIdsInGroup.includes(t.id) && t.location === "grid"
         );
-        updates.focusedId = gridTerminals[0]?.id ?? null;
+        const focusedTerminal = state.terminals.find((t) => t.id === state.focusedId);
+        const wasAgent =
+          focusedTerminal &&
+          isAgentTerminal(focusedTerminal.kind ?? focusedTerminal.type, focusedTerminal.agentId);
+        const nextAgent = wasAgent
+          ? gridTerminals.find((t) => isAgentTerminal(t.kind ?? t.type, t.agentId))
+          : undefined;
+        updates.focusedId = nextAgent?.id ?? gridTerminals[0]?.id ?? null;
       }
 
       // If any panel in the group was maximized, clear maximize
