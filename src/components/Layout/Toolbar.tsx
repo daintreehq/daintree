@@ -1389,7 +1389,7 @@ export function Toolbar({
         <div
           role="group"
           aria-label="Navigation and agents"
-          className="flex items-center gap-1.5 app-no-drag z-20 justify-self-start"
+          className="flex items-center gap-1.5 app-no-drag z-20"
         >
           {isMac() && (
             <div
@@ -1403,7 +1403,10 @@ export function Toolbar({
 
           <div className={toolbarDividerClass} />
 
-          <div ref={leftGroupRef} className="flex items-center gap-0.5 overflow-hidden">
+          <div
+            ref={leftGroupRef}
+            className="flex flex-1 min-w-0 items-center gap-0.5 overflow-hidden"
+          >
             {renderLeftButtons(toolbarLayout.leftButtons, leftVisibleSet)}
           </div>
           {renderOverflowMenu(leftOverflow, "left")}
@@ -1481,11 +1484,14 @@ export function Toolbar({
         <div
           role="group"
           aria-label="Tools and settings"
-          className="flex items-center gap-1.5 app-no-drag z-20 justify-self-end"
+          className="flex items-center justify-end gap-1.5 app-no-drag z-20"
         >
           {renderOverflowMenu(rightOverflow, "right")}
 
-          <div ref={rightGroupRef} className="flex items-center gap-0.5 overflow-hidden">
+          <div
+            ref={rightGroupRef}
+            className="flex flex-1 min-w-0 items-center gap-0.5 overflow-hidden"
+          >
             {renderButtons(toolbarLayout.rightButtons, rightVisibleSet)}
           </div>
 

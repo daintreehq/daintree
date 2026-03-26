@@ -77,7 +77,9 @@ export async function switchWorktree(window: Page, branchName: string): Promise<
     `Switch to worktree "${branchName}"`,
     async () => {
       const card = window.locator(SEL.worktree.card(branchName));
-      await card.click();
+      // Click near the top of the card to hit the header area, avoiding
+      // nested buttons (collapse/expand/details) that stopPropagation.
+      await card.click({ position: { x: 100, y: 10 } });
       await expect(card).toHaveAttribute("aria-label", /selected/, {
         timeout: T_MEDIUM,
       });

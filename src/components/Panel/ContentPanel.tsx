@@ -134,11 +134,15 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
   const titleInputRef = useRef<HTMLInputElement>(null);
   const titleEditing = useTitleEditing();
 
-  // Focus and select input when editing starts (handles context menu rename)
+  // Focus and select input when editing starts (handles context menu rename).
+  // Use a short delay instead of rAF so the context menu's focus restoration
+  // (Radix returns focus to the trigger) completes before we grab focus.
   useEffect(() => {
     if (titleEditing.isEditingTitle && titleInputRef.current) {
-      requestAnimationFrame(() => titleInputRef.current?.select());
+      const timer = setTimeout(() => titleInputRef.current?.select(), 60);
+      return () => clearTimeout(timer);
     }
+    return undefined;
   }, [titleEditing.isEditingTitle]);
 
   const showGridAttention = location === "grid" && !isMaximized && (gridPanelCount ?? 2) > 1;
