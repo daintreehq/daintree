@@ -995,7 +995,7 @@ export interface ElectronAPI {
       agentSetupComplete: boolean;
       firstRunToastSeen: boolean;
     }): Promise<OnboardingState>;
-    setStep(step: string | null): Promise<void>;
+    setStep(step: string | null | { step: string | null; agentSetupIds?: string[] }): Promise<void>;
     complete(): Promise<void>;
     markToastSeen(): Promise<void>;
     markNewsletterSeen(): Promise<void>;

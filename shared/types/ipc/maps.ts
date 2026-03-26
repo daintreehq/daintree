@@ -164,6 +164,7 @@ export interface OnboardingState {
   schemaVersion: number;
   completed: boolean;
   currentStep: string | null;
+  agentSetupIds: string[];
   firstRunToastSeen: boolean;
   newsletterPromptSeen: boolean;
   migratedFromLocalStorage: boolean;
@@ -1433,7 +1434,7 @@ export interface IpcInvokeMap {
     result: OnboardingState;
   };
   "onboarding:set-step": {
-    args: [step: string | null];
+    args: [step: string | null | { step: string | null; agentSetupIds?: string[] }];
     result: void;
   };
   "onboarding:complete": {

@@ -88,8 +88,14 @@ export function OnboardingFlow({
       setState(onboardingState);
 
       if (!onboardingState.completed) {
-        const resumeStep = onboardingState.currentStep as OnboardingStep | null;
+        let resumeStep = onboardingState.currentStep as OnboardingStep | null;
         if (resumeStep && STEP_ORDER.includes(resumeStep)) {
+          // If resuming at agentSetup but no agent IDs were persisted, fall back to agentSelection
+          if (resumeStep === "agentSetup" && onboardingState.agentSetupIds.length === 0) {
+            resumeStep = "agentSelection";
+          } else if (resumeStep === "agentSetup") {
+            setAgentSetupIds(onboardingState.agentSetupIds);
+          }
           setCurrentStep(resumeStep);
         } else {
           setCurrentStep(STEP_ORDER[0]);
@@ -141,7 +147,7 @@ export function OnboardingFlow({
   const skipAgentSetupRef = useRef(false);
 
   const advanceStep = useCallback(
-    async (fromStep: OnboardingStep) => {
+    async (fromStep: OnboardingStep, persistAgentIds?: string[]) => {
       const idx = STEP_ORDER.indexOf(fromStep);
       let nextStep = STEP_ORDER[idx + 1] ?? null;
 
@@ -152,7 +158,14 @@ export function OnboardingFlow({
 
       if (nextStep) {
         setCurrentStep(nextStep);
-        await window.electron.onboarding.setStep(nextStep);
+        if (persistAgentIds !== undefined) {
+          await window.electron.onboarding.setStep({
+            step: nextStep,
+            agentSetupIds: persistAgentIds,
+          });
+        } else {
+          await window.electron.onboarding.setStep(nextStep);
+        }
       } else {
         // Flow complete
         completedRef.current = true;
@@ -199,7 +212,7 @@ export function OnboardingFlow({
       } else {
         skipAgentSetupRef.current = true;
       }
-      await advanceStep("agentSelection");
+      await advanceStep("agentSelection", uninstalledIds);
     },
     [advanceStep, onRefreshSettings]
   );
@@ -207,7 +220,7 @@ export function OnboardingFlow({
   const handleAgentSelectionSkip = useCallback(async () => {
     trackOnboarding("onboarding_step_skipped", { step: "agentSelection" });
     skipAgentSetupRef.current = true;
-    await advanceStep("agentSelection");
+    await advanceStep("agentSelection", []);
   }, [advanceStep]);
 
   // Agent setup wizard close

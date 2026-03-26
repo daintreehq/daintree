@@ -153,6 +153,7 @@ export interface StoreSchema {
     schemaVersion: number;
     completed: boolean;
     currentStep: string | null;
+    agentSetupIds: string[];
     firstRunToastSeen: boolean;
     newsletterPromptSeen: boolean;
     migratedFromLocalStorage: boolean;
@@ -260,6 +261,7 @@ const storeOptions = {
       schemaVersion: 1,
       completed: false,
       currentStep: null,
+      agentSetupIds: [],
       firstRunToastSeen: false,
       newsletterPromptSeen: false,
       migratedFromLocalStorage: false,

@@ -2050,7 +2050,8 @@ const api: ElectronAPI = {
       agentSetupComplete: boolean;
       firstRunToastSeen: boolean;
     }) => _unwrappingInvoke(CHANNELS.ONBOARDING_MIGRATE, payload),
-    setStep: (step: string | null) => _unwrappingInvoke(CHANNELS.ONBOARDING_SET_STEP, step),
+    setStep: (step: string | null | { step: string | null; agentSetupIds?: string[] }) =>
+      _unwrappingInvoke(CHANNELS.ONBOARDING_SET_STEP, step),
     complete: () => _unwrappingInvoke(CHANNELS.ONBOARDING_COMPLETE),
     markToastSeen: () => _unwrappingInvoke(CHANNELS.ONBOARDING_MARK_TOAST_SEEN),
     markNewsletterSeen: () => _unwrappingInvoke(CHANNELS.ONBOARDING_MARK_NEWSLETTER_SEEN),

@@ -26,6 +26,7 @@ function getOnboardingState(): OnboardingState {
       schemaVersion: 1,
       completed: true,
       currentStep: null,
+      agentSetupIds: [],
       firstRunToastSeen: true,
       newsletterPromptSeen: true,
       migratedFromLocalStorage: true,
@@ -42,6 +43,7 @@ function getOnboardingState(): OnboardingState {
       schemaVersion: 1,
       completed: false,
       currentStep: null,
+      agentSetupIds: [],
       firstRunToastSeen: false,
       newsletterPromptSeen: false,
       migratedFromLocalStorage: false,
@@ -51,6 +53,7 @@ function getOnboardingState(): OnboardingState {
   const checklist = raw.checklist ?? DEFAULT_CHECKLIST;
   return {
     ...raw,
+    agentSetupIds: Array.isArray(raw.agentSetupIds) ? raw.agentSetupIds : [],
     checklist: {
       ...DEFAULT_CHECKLIST,
       ...checklist,
@@ -99,12 +102,21 @@ export function registerOnboardingHandlers(): () => void {
   });
   cleanups.push(() => ipcMain.removeHandler(CHANNELS.ONBOARDING_MIGRATE));
 
-  ipcMain.handle(CHANNELS.ONBOARDING_SET_STEP, (_event, step: unknown) => {
+  ipcMain.handle(CHANNELS.ONBOARDING_SET_STEP, (_event, arg: unknown) => {
     const state = getOnboardingState();
-    store.set("onboarding", {
-      ...state,
-      currentStep: typeof step === "string" ? step : null,
-    });
+    if (arg !== null && typeof arg === "object" && !Array.isArray(arg)) {
+      const payload = arg as { step?: unknown; agentSetupIds?: unknown };
+      const step = typeof payload.step === "string" ? payload.step : null;
+      const agentSetupIds = Array.isArray(payload.agentSetupIds)
+        ? (payload.agentSetupIds as string[]).filter((id) => typeof id === "string")
+        : state.agentSetupIds;
+      store.set("onboarding", { ...state, currentStep: step, agentSetupIds });
+    } else {
+      store.set("onboarding", {
+        ...state,
+        currentStep: typeof arg === "string" ? arg : null,
+      });
+    }
   });
   cleanups.push(() => ipcMain.removeHandler(CHANNELS.ONBOARDING_SET_STEP));
 
@@ -114,6 +126,7 @@ export function registerOnboardingHandlers(): () => void {
       ...state,
       completed: true,
       currentStep: null,
+      agentSetupIds: [],
     });
   });
   cleanups.push(() => ipcMain.removeHandler(CHANNELS.ONBOARDING_COMPLETE));
