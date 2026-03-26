@@ -39,7 +39,8 @@ exports.default = async function afterPack(context) {
   if (electronPlatformName === "win32") {
     // Windows uses N-API prebuilds (node-pty 1.2.0-beta.12+).
     // No source compilation needed — prebuilds are ABI-stable across Electron versions.
-    const arch = context.arch || "x64";
+    const archMap = { 0: "ia32", 1: "x64", 2: "armv7l", 3: "arm64" };
+    const arch = archMap[context.arch] || "x64";
     const prebuildDir = `prebuilds/win32-${arch}`;
     const requiredFiles = [
       `${prebuildDir}/conpty.node`,
