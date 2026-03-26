@@ -14,6 +14,7 @@ import type { PrerequisiteCheckResult, SystemHealthCheckResult } from "@shared/t
 import type { AgentInstallBlock } from "@shared/config/agentRegistry";
 import { detectOS } from "@/lib/agentInstall";
 import { InstallBlock } from "./InstallBlock";
+import { EmbeddedTerminal } from "./EmbeddedTerminal";
 
 interface SystemHealthCheckStepProps {
   onSkip: () => void;
@@ -73,6 +74,14 @@ export function SystemHealthCheckStep({ onSkip, agentIds }: SystemHealthCheckSte
                 loading={isChecking}
               />
             ))}
+      </div>
+
+      <div className="border-t border-canopy-border pt-4">
+        <div className="flex items-center gap-2 mb-3">
+          <div className="text-xs font-medium text-canopy-text/60">Terminal</div>
+          <div className="text-[11px] text-canopy-text/30">Run installation commands here</div>
+        </div>
+        <EmbeddedTerminal />
       </div>
 
       {error && (
