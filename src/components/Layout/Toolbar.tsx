@@ -1486,14 +1486,13 @@ export function Toolbar({
           aria-label="Tools and settings"
           className="flex items-center justify-end gap-1.5 app-no-drag z-20"
         >
-          {renderOverflowMenu(rightOverflow, "right")}
-
           <div
             ref={rightGroupRef}
-            className="flex flex-1 min-w-0 items-center gap-0.5 overflow-hidden"
+            className="flex flex-1 min-w-0 items-center gap-0.5 overflow-hidden justify-end"
           >
             {renderButtons(toolbarLayout.rightButtons, rightVisibleSet)}
           </div>
+          {renderOverflowMenu(rightOverflow, "right")}
 
           <div className={toolbarDividerClass} />
 
