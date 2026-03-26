@@ -961,7 +961,10 @@ class TerminalInstanceService {
         if (this.instances.get(id) !== managed) return;
         if (managed.attachRevealToken !== revealToken) return;
         managed.isAttaching = false;
-        if (!managed.terminal.element) return;
+        if (!managed.terminal.element) {
+          managed.hostElement.style.opacity = "";
+          return;
+        }
 
         const reveal = () => {
           if (managed.attachRevealToken !== revealToken) return;
