@@ -1,5 +1,33 @@
 # Changelog
 
+## [0.5.1] - 2026-03-26
+
+### Features
+
+- Skip model selection in panel palette and launch agents directly (#4256)
+- Auto-select next agent terminal when closing with Cmd+W (#4236)
+- Auto-poll prerequisite status every 3 seconds during setup (#4244)
+- Embed terminal in system health check step for interactive installation (#4243)
+- Add OS-specific install instructions for system prerequisites (#4242)
+
+### Bug Fixes
+
+- Fix welcome screen buttons flashing when project switcher opens (#4255)
+- Correct Notes font family from monospace to sans-serif (#4252)
+- Fix agent terminal flash when focused or reparented (#4226)
+- Move logger init after single-instance lock to prevent log clearing (#4237)
+- Refresh PATH before recheck to detect newly installed tools (#4241)
+- Persist agent setup IDs across restarts (#4245)
+- Fix toolbar overflow menu alignment and collapse behavior
+
+### Other Changes
+
+- Split E2E tests into core (release gate) and full (nightly) tiers
+- Add local unsigned packaging scripts
+- Fix native module packaging and afterPack arch mapping for builds
+
+---
+
 ## [0.5.0] - 2026-03-26
 
 ### Features
