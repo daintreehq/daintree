@@ -1,5 +1,6 @@
 import nodeV8 from "node:v8";
 import vm from "node:vm";
+import { execFile } from "child_process";
 import { app } from "electron";
 import path from "path";
 import fs from "fs";
@@ -88,6 +89,93 @@ if (process.platform === "win32") {
   );
   if (missing.length) {
     process.env.PATH = [...missing, current].join(path.delimiter);
+  }
+}
+
+const REFRESH_TIMEOUT_MS = 5_000;
+
+function deduplicatePath(pathStr: string, caseInsensitive: boolean): string {
+  const entries = pathStr.split(path.delimiter).filter(Boolean);
+  const seen = new Set<string>();
+  const unique: string[] = [];
+  for (const entry of entries) {
+    const key = caseInsensitive ? entry.toLowerCase() : entry;
+    if (!seen.has(key)) {
+      seen.add(key);
+      unique.push(entry);
+    }
+  }
+  return unique.join(path.delimiter);
+}
+
+function readWindowsRegistryPath(): Promise<string> {
+  const keys = [
+    "HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment",
+    "HKCU\\Environment",
+  ];
+
+  return Promise.all(
+    keys.map(
+      (key) =>
+        new Promise<string>((resolve) => {
+          execFile("reg", ["query", key, "/v", "Path"], { timeout: 3_000 }, (err, stdout) => {
+            if (err || !stdout) return resolve("");
+            const match = stdout.match(/Path\s+REG_(?:EXPAND_)?SZ\s+(.+)/i);
+            resolve(match?.[1]?.trim() ?? "");
+          });
+        })
+    )
+  ).then((paths) => paths.filter(Boolean).join(path.delimiter));
+}
+
+function applyWindowsExtraPaths(currentPath: string): string {
+  const programFiles = process.env["ProgramFiles"] || "C:\\Program Files";
+  const programFilesX86 = process.env["ProgramFiles(x86)"] || "C:\\Program Files (x86)";
+  const chocoInstall = process.env["ChocolateyInstall"] || "C:\\ProgramData\\chocolatey";
+
+  const extraPaths = [
+    path.join(os.homedir(), "AppData", "Local", "Programs", "Git", "cmd"),
+    path.join(programFiles, "Git", "cmd"),
+    path.join(programFilesX86, "Git", "cmd"),
+    path.join(os.homedir(), "scoop", "shims"),
+    path.join(chocoInstall, "bin"),
+  ];
+
+  const existingEntries = currentPath.split(path.delimiter).map((e) => e.toLowerCase());
+  const missing = extraPaths.filter(
+    (p) => !existingEntries.includes(p.toLowerCase()) && existsSync(p)
+  );
+
+  return missing.length ? [...missing, currentPath].join(path.delimiter) : currentPath;
+}
+
+export async function refreshPath(): Promise<void> {
+  try {
+    const result = await Promise.race([
+      (async () => {
+        if (process.platform === "win32") {
+          const registryPath = await readWindowsRegistryPath();
+          if (!registryPath) return;
+          const withExtras = applyWindowsExtraPaths(registryPath);
+          process.env.PATH = deduplicatePath(withExtras, true);
+        } else {
+          const { shellEnv } = (await import("shell-env")) as {
+            shellEnv: () => Promise<Record<string, string>>;
+          };
+          const env = await shellEnv();
+          if (env.PATH) {
+            process.env.PATH = deduplicatePath(env.PATH, false);
+          }
+        }
+      })(),
+      new Promise<"timeout">((resolve) => setTimeout(() => resolve("timeout"), REFRESH_TIMEOUT_MS)),
+    ]);
+
+    if (result === "timeout") {
+      console.warn("[refreshPath] Timed out after", REFRESH_TIMEOUT_MS, "ms — using existing PATH");
+    }
+  } catch {
+    // Fallback to current PATH silently
   }
 }
 

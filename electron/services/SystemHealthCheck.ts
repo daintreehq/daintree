@@ -1,6 +1,7 @@
 import { execFileSync } from "child_process";
 import * as semver from "semver";
 import { getEffectiveAgentConfig } from "../../shared/config/agentRegistry.js";
+import { refreshPath } from "../setup/environment.js";
 import type {
   PrerequisiteSpec,
   PrerequisiteSeverity,
@@ -219,6 +220,7 @@ function checkPrerequisite(spec: PrerequisiteSpec): PrerequisiteCheckResult {
 }
 
 export async function runSystemHealthCheck(agentIds?: string[]): Promise<SystemHealthCheckResult> {
+  await refreshPath();
   const specs = resolvePrerequisites(agentIds);
 
   const results = await Promise.all(
