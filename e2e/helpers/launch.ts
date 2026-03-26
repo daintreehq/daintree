@@ -110,19 +110,23 @@ export async function launchApp(options: LaunchOptions = {}): Promise<AppContext
         if (msg.type() === "error") console.error("[e2e:console]", msg.text());
       });
 
-      // Maximize window so toolbar overflow doesn't hide buttons.
+      // Set a minimum window size so toolbar overflow doesn't hide buttons.
       // Skip for restart tests to preserve persisted window state.
       if (!options.userDataDir) {
         await app.evaluate(({ BrowserWindow, screen }) => {
           const win = BrowserWindow.getAllWindows()[0];
           if (!win) return;
-          // On CI with small virtual displays, maximize may still be too
-          // small. Use the primary display work area to set the largest
-          // possible size, then maximize for good measure.
           const { width, height } = screen.getPrimaryDisplay().workAreaSize;
-          win.setSize(Math.max(width, 1920), Math.max(height, 1080));
+          const targetW = Math.max(width, 1920);
+          const targetH = Math.max(height, 1080);
+          win.setSize(targetW, targetH);
           win.center();
-          win.maximize();
+          // Only maximize when the display is large enough — on macOS,
+          // maximize (zoom) shrinks the window to the work area, which
+          // can be narrower than the 1920px we need for toolbar tests.
+          if (width >= targetW && height >= targetH) {
+            win.maximize();
+          }
         });
       }
 

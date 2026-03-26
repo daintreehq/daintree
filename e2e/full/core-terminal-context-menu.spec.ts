@@ -129,9 +129,13 @@ test.describe.serial("Core: Terminal Context Menu", () => {
       const titleInput = panel.locator('input[aria-label="Edit terminal title"]');
       await expect(titleInput).toBeVisible({ timeout: T_SHORT });
 
-      // Fill and confirm to exit rename mode cleanly
-      await titleInput.fill("Renamed Terminal");
-      await titleInput.press("Enter");
+      // Wait for any context menu animation/overlay to fully clear
+      await window.waitForTimeout(200);
+
+      // Focus the input and type the new name via keyboard
+      await titleInput.focus();
+      await window.keyboard.type("Renamed Terminal");
+      await window.keyboard.press("Enter");
       await expect(panel.locator('[role="button"][aria-label*="Renamed Terminal"]')).toBeVisible({
         timeout: T_SHORT,
       });

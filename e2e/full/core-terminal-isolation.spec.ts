@@ -2,7 +2,7 @@ import { test, expect } from "@playwright/test";
 import { launchApp, closeApp, type AppContext } from "../helpers/launch";
 import { createFixtureRepo } from "../helpers/fixtures";
 import { openAndOnboardProject } from "../helpers/project";
-import { waitForTerminalText } from "../helpers/terminal";
+import { waitForTerminalText, runTerminalCommand } from "../helpers/terminal";
 import { getGridPanelCount, getGridPanelIds, getPanelById, openTerminal } from "../helpers/panels";
 import { SEL } from "../helpers/selectors";
 import { T_LONG, T_SETTLE } from "../helpers/timeouts";
@@ -65,12 +65,16 @@ test.describe.serial("Core: Terminal Isolation", () => {
     await waitForTerminalText(floodPanel, "terminal-isolation", T_LONG);
     await waitForTerminalText(probePanel, "terminal-isolation", T_LONG);
 
-    // Start throttled flood via IPC write (sleep 0.02 keeps it CI-safe)
-    await ptyWrite(window, floodPanelId, "while true; do echo FLOOD_LINE; sleep 0.02; done\n");
+    // Start throttled flood in the first terminal
+    await runTerminalCommand(
+      window,
+      floodPanel,
+      "while true; do echo FLOOD_LINE; sleep 0.02; done"
+    );
     await waitForTerminalText(floodPanel, "FLOOD_LINE", T_LONG);
 
-    // Send probe command via IPC write while flood is active
-    await ptyWrite(window, probePanelId, "echo RESPONSE_OK\n");
+    // Send probe command in the second terminal while flood is active
+    await runTerminalCommand(window, probePanel, "echo RESPONSE_OK");
     await waitForTerminalText(probePanel, "RESPONSE_OK", T_LONG);
 
     // Verify toolbar remains interactive (app is not frozen)
@@ -83,14 +87,16 @@ test.describe.serial("Core: Terminal Isolation", () => {
 
     const floodPanel = getPanelById(window, floodPanelId);
 
-    // Send Ctrl+C (ETX) via IPC to interrupt the flood
-    await ptyWrite(window, floodPanelId, "\x03");
+    // Send Ctrl+C to interrupt the flood
+    const xterm = floodPanel.locator(SEL.terminal.xtermRows);
+    await xterm.click();
+    await window.keyboard.press("Control+c");
 
     // Wait for shell to settle after interrupt
     await window.waitForTimeout(T_SETTLE);
 
     // Run recovery command in the previously flooded terminal
-    await ptyWrite(window, floodPanelId, "echo FLOOD_RECOVERED\n");
+    await runTerminalCommand(window, floodPanel, "echo FLOOD_RECOVERED");
     await waitForTerminalText(floodPanel, "FLOOD_RECOVERED", T_LONG);
   });
 });
