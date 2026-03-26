@@ -2,14 +2,13 @@ import { useEffect, useRef, useCallback } from "react";
 import { cn } from "@/lib/utils";
 import { AppPaletteDialog } from "@/components/ui/AppPaletteDialog";
 import { PaletteOverflowNotice } from "@/components/ui/PaletteOverflowNotice";
-import type { PanelKindOption, PanelPalettePhase } from "@/hooks/usePanelPalette";
+import type { PanelKindOption } from "@/hooks/usePanelPalette";
 import { PanelKindIcon } from "./PanelKindIcon";
 import { useTerminalStore } from "@/store/terminalStore";
 import { usePanelLimitStore } from "@/store/panelLimitStore";
 
 interface PanelPaletteProps {
   isOpen: boolean;
-  phase: PanelPalettePhase;
   query: string;
   results: PanelKindOption[];
   totalResults?: number;
@@ -20,7 +19,6 @@ interface PanelPaletteProps {
   onSelect: (kind: PanelKindOption) => void;
   onConfirm: () => void;
   onClose: () => void;
-  onBack: () => void;
 }
 
 const SECTION_LABELS: Record<"agent" | "tool", string> = {
@@ -30,7 +28,6 @@ const SECTION_LABELS: Record<"agent" | "tool", string> = {
 
 export function PanelPalette({
   isOpen,
-  phase,
   query,
   results,
   totalResults,
@@ -41,7 +38,6 @@ export function PanelPalette({
   onSelect,
   onConfirm,
   onClose,
-  onBack,
 }: PanelPaletteProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   const itemsRef = useRef(new Map<string, HTMLElement>());
@@ -76,11 +72,7 @@ export function PanelPalette({
           break;
         case "Escape":
           e.preventDefault();
-          if (phase === "model") {
-            onBack();
-          } else {
-            onClose();
-          }
+          onClose();
           break;
         case "Tab":
           e.preventDefault();
@@ -92,7 +84,7 @@ export function PanelPalette({
           break;
       }
     },
-    [onSelectPrevious, onSelectNext, onConfirm, onClose, onBack, phase]
+    [onSelectPrevious, onSelectNext, onConfirm, onClose]
   );
 
   const panelCount = useTerminalStore(
@@ -101,14 +93,6 @@ export function PanelPalette({
   const hardLimit = usePanelLimitStore((state) => state.hardLimit);
 
   const isSearching = query.trim().length > 0;
-  const isModelPhase = phase === "model";
-
-  const headerLabel = isModelPhase ? "Select Model" : `New Panel (${panelCount} / ${hardLimit})`;
-  const placeholder = isModelPhase ? "Select a model..." : "Select a panel type...";
-  const emptyMessage = isModelPhase
-    ? `No models match "${query}"`
-    : `No panel types match "${query}"`;
-  const escHint = isModelPhase ? "to go back" : "to close";
 
   const renderOption = (kind: PanelKindOption, index: number) => (
     <button
@@ -184,17 +168,17 @@ export function PanelPalette({
 
   return (
     <AppPaletteDialog isOpen={isOpen} onClose={onClose} ariaLabel="Panel palette">
-      <AppPaletteDialog.Header label={headerLabel} keyHint="⌘⇧P">
+      <AppPaletteDialog.Header label={`New Panel (${panelCount} / ${hardLimit})`} keyHint="⌘⇧P">
         <AppPaletteDialog.Input
           inputRef={inputRef}
           value={query}
           onChange={(e) => onQueryChange(e.target.value)}
           onKeyDown={handleKeyDown}
-          placeholder={placeholder}
+          placeholder="Select a panel type..."
           role="combobox"
           aria-expanded={isOpen}
           aria-haspopup="listbox"
-          aria-label={isModelPhase ? "Select model" : "Select panel type"}
+          aria-label="Select panel type"
           aria-controls="panel-list"
           aria-activedescendant={
             results.length > 0 && selectedIndex >= 0 && selectedIndex < results.length
@@ -205,10 +189,10 @@ export function PanelPalette({
       </AppPaletteDialog.Header>
 
       <AppPaletteDialog.Body>
-        <div id="panel-list" role="listbox" aria-label={isModelPhase ? "Models" : "Panel types"}>
+        <div id="panel-list" role="listbox" aria-label="Panel types">
           {results.length === 0 ? (
-            <div className="px-3 py-8 text-center text-canopy-text/50 text-sm">{emptyMessage}</div>
-          ) : isModelPhase || isSearching ? (
+            <div className="px-3 py-8 text-center text-canopy-text/50 text-sm">{`No panel types match "${query}"`}</div>
+          ) : isSearching ? (
             results.map((kind, index) => renderOption(kind, index))
           ) : (
             renderSectionedList()
@@ -233,13 +217,13 @@ export function PanelPalette({
           <kbd className="px-1.5 py-0.5 rounded-[var(--radius-sm)] bg-canopy-border text-canopy-text/60">
             Enter
           </kbd>
-          <span className="ml-1.5">{isModelPhase ? "to select" : "to create"}</span>
+          <span className="ml-1.5">to create</span>
         </span>
         <span>
           <kbd className="px-1.5 py-0.5 rounded-[var(--radius-sm)] bg-canopy-border text-canopy-text/60">
             Esc
           </kbd>
-          <span className="ml-1.5">{escHint}</span>
+          <span className="ml-1.5">to close</span>
         </span>
       </AppPaletteDialog.Footer>
     </AppPaletteDialog>

@@ -2,6 +2,7 @@
 import { renderHook } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MORE_AGENTS_PANEL_ID } from "../usePanelPalette";
+import { actionService } from "@/services/ActionService";
 
 const {
   getPanelKindIdsMock,
@@ -134,5 +135,57 @@ describe("usePanelPalette", () => {
     expect(tools).toHaveLength(0);
     const agents = result.current.results.filter((item) => item.category === "agent");
     expect(agents.length).toBeGreaterThan(0);
+  });
+
+  it("handleSelect returns option immediately for agents with models (no model phase)", () => {
+    getEffectiveAgentConfigMock.mockReturnValue({
+      name: "Claude",
+      iconId: "claude",
+      color: "#f80",
+      tooltip: "Claude agent",
+      models: [
+        { id: "sonnet", name: "Sonnet" },
+        { id: "opus", name: "Opus" },
+      ],
+    });
+
+    const { result } = renderHook(() => usePanelPalette());
+
+    const claudeOption = result.current.results.find((item) => item.id === "agent:claude");
+    expect(claudeOption).toBeDefined();
+
+    const selected = result.current.handleSelect(claudeOption!);
+    expect(selected).toBe(claudeOption);
+  });
+
+  it("confirmSelection returns option immediately for agents with models", () => {
+    getEffectiveAgentConfigMock.mockReturnValue({
+      name: "Claude",
+      iconId: "claude",
+      color: "#f80",
+      tooltip: "Claude agent",
+      models: [{ id: "sonnet", name: "Sonnet" }],
+    });
+
+    const { result } = renderHook(() => usePanelPalette());
+
+    const selected = result.current.confirmSelection();
+    expect(selected).toBeDefined();
+    expect(selected!.id).toBe("agent:claude");
+  });
+
+  it("handleSelect dispatches settings action and returns null for MORE_AGENTS", () => {
+    const { result } = renderHook(() => usePanelPalette());
+
+    const moreAgents = result.current.results.find((item) => item.id === MORE_AGENTS_PANEL_ID);
+    expect(moreAgents).toBeDefined();
+
+    const selected = result.current.handleSelect(moreAgents!);
+    expect(selected).toBeNull();
+    expect(actionService.dispatch).toHaveBeenCalledWith(
+      "app.settings.openTab",
+      { tab: "agents" },
+      { source: "user" }
+    );
   });
 });

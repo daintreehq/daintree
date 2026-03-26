@@ -1,11 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { getPanelKindIds, getPanelKindConfig } from "@shared/config/panelKindRegistry";
 import { hasPanelComponent } from "@/registry/panelComponentRegistry";
-import {
-  getEffectiveAgentIds,
-  getEffectiveAgentConfig,
-  type AgentModelConfig,
-} from "@shared/config/agentRegistry";
+import { getEffectiveAgentIds, getEffectiveAgentConfig } from "@shared/config/agentRegistry";
 import { useUserAgentRegistryStore } from "@/store/userAgentRegistryStore";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { useSearchablePalette, type UseSearchablePaletteReturn } from "./useSearchablePalette";
@@ -19,19 +15,12 @@ export interface PanelKindOption {
   iconId: string;
   color: string;
   description?: string;
-  category: "agent" | "tool" | "model";
+  category: "agent" | "tool";
 }
 
-export type PanelPalettePhase = "panel" | "model";
-
-export const DEFAULT_MODEL_OPTION_ID = "__default__";
-
 export type UsePanelPaletteReturn = UseSearchablePaletteReturn<PanelKindOption> & {
-  phase: PanelPalettePhase;
-  pendingAgentId: string | null;
   handleSelect: (option: PanelKindOption) => PanelKindOption | null;
   confirmSelection: () => PanelKindOption | null;
-  backToPanel: () => void;
 };
 
 import { BUILT_IN_AGENT_IDS } from "@shared/config/agentIds";
@@ -52,38 +41,10 @@ function filterPanelKinds(items: PanelKindOption[], query: string): PanelKindOpt
 
 export const MORE_AGENTS_PANEL_ID = "more-agents";
 
-function buildModelOptions(agentId: string): PanelKindOption[] {
-  const agentConfig = getEffectiveAgentConfig(agentId);
-  if (!agentConfig?.models?.length) return [];
-
-  const options: PanelKindOption[] = [
-    {
-      id: DEFAULT_MODEL_OPTION_ID,
-      name: "Use default model",
-      iconId: agentConfig.iconId,
-      color: agentConfig.color,
-      description: "Launch with the agent's default model",
-      category: "model",
-    },
-    ...agentConfig.models.map(
-      (m: AgentModelConfig): PanelKindOption => ({
-        id: m.id,
-        name: m.name,
-        iconId: agentConfig.iconId,
-        color: agentConfig.color,
-        category: "model",
-      })
-    ),
-  ];
-  return options;
-}
-
 export function usePanelPalette(): UsePanelPaletteReturn {
   const userRegistry = useUserAgentRegistryStore((state) => state.registry);
   const agentSettings = useAgentSettingsStore((state) => state.settings);
   const [keybindingVersion, setKeybindingVersion] = useState(0);
-  const [phase, setPhase] = useState<PanelPalettePhase>("panel");
-  const [pendingAgentId, setPendingAgentId] = useState<string | null>(null);
 
   useEffect(() => {
     return keybindingService.subscribe(() => setKeybindingVersion((v) => v + 1));
@@ -164,82 +125,24 @@ export function usePanelPalette(): UsePanelPaletteReturn {
     ];
   }, [userRegistry, keybindingVersion, agentSettings]);
 
-  const modelOptions = useMemo<PanelKindOption[]>(() => {
-    if (!pendingAgentId) return [];
-    return buildModelOptions(pendingAgentId);
-  }, [pendingAgentId]);
-
-  const items = phase === "model" ? modelOptions : availableKinds;
-
-  const {
-    results,
-    selectedIndex,
-    close: baseClose,
-    ...paletteRest
-  } = useSearchablePalette<PanelKindOption>({
-    items,
+  const { results, selectedIndex, close, ...paletteRest } = useSearchablePalette<PanelKindOption>({
+    items: availableKinds,
     filterFn: filterPanelKinds,
     maxResults: 20,
     paletteId: "panel",
   });
 
-  const resetPhase = useCallback(() => {
-    setPhase("panel");
-    setPendingAgentId(null);
-  }, []);
-
-  const open = useCallback(() => {
-    resetPhase();
-    paletteRest.open();
-  }, [resetPhase, paletteRest]);
-
-  const close = useCallback(() => {
-    baseClose();
-    resetPhase();
-  }, [baseClose, resetPhase]);
-
-  const backToPanel = useCallback(() => {
-    resetPhase();
-    paletteRest.setQuery("");
-  }, [resetPhase, paletteRest]);
-
-  const enterModelPhase = useCallback(
-    (agentId: string) => {
-      setPendingAgentId(agentId);
-      setPhase("model");
-      paletteRest.setQuery("");
-    },
-    [paletteRest]
-  );
-
   const handleSelect = useCallback(
     (option: PanelKindOption): PanelKindOption | null => {
-      if (phase === "panel") {
-        if (option.id === MORE_AGENTS_PANEL_ID) {
-          close();
-          void actionService.dispatch(
-            "app.settings.openTab",
-            { tab: "agents" },
-            { source: "user" }
-          );
-          return null;
-        }
-        if (option.id.startsWith("agent:")) {
-          const agentId = option.id.slice("agent:".length);
-          const agentConfig = getEffectiveAgentConfig(agentId);
-          if (agentConfig?.models?.length) {
-            enterModelPhase(agentId);
-            return null;
-          }
-        }
+      if (option.id === MORE_AGENTS_PANEL_ID) {
         close();
-        return option;
+        void actionService.dispatch("app.settings.openTab", { tab: "agents" }, { source: "user" });
+        return null;
       }
-      // model phase — close and return the selected model option
       close();
       return option;
     },
-    [phase, close, enterModelPhase]
+    [close]
   );
 
   const confirmSelection = useCallback((): PanelKindOption | null => {
@@ -247,39 +150,21 @@ export function usePanelPalette(): UsePanelPaletteReturn {
     const selected = results[selectedIndex];
     if (!selected) return null;
 
-    if (phase === "panel") {
-      if (selected.id === MORE_AGENTS_PANEL_ID) {
-        close();
-        void actionService.dispatch("app.settings.openTab", { tab: "agents" }, { source: "user" });
-        return selected;
-      }
-      if (selected.id.startsWith("agent:")) {
-        const agentId = selected.id.slice("agent:".length);
-        const agentConfig = getEffectiveAgentConfig(agentId);
-        if (agentConfig?.models?.length) {
-          enterModelPhase(agentId);
-          return null;
-        }
-      }
+    if (selected.id === MORE_AGENTS_PANEL_ID) {
       close();
+      void actionService.dispatch("app.settings.openTab", { tab: "agents" }, { source: "user" });
       return selected;
     }
-
-    // model phase
     close();
     return selected;
-  }, [results, selectedIndex, phase, close, enterModelPhase]);
+  }, [results, selectedIndex, close]);
 
   return {
     results,
     selectedIndex,
     close,
     ...paletteRest,
-    open,
-    phase,
-    pendingAgentId,
     handleSelect,
     confirmSelection,
-    backToPanel,
   };
 }

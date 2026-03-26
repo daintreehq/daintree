@@ -89,7 +89,7 @@ import { TerminalInfoDialogHost } from "./components/Terminal/TerminalInfoDialog
 import { FileViewerModalHost } from "./components/FileViewer/FileViewerModalHost";
 import { NewTerminalPalette } from "./components/TerminalPalette";
 import { PanelPalette } from "./components/PanelPalette/PanelPalette";
-import { MORE_AGENTS_PANEL_ID, DEFAULT_MODEL_OPTION_ID } from "./hooks/usePanelPalette";
+import { MORE_AGENTS_PANEL_ID } from "./hooks/usePanelPalette";
 import { GitInitDialog, ProjectOnboardingWizard, WelcomeScreen } from "./components/Project";
 import { VoiceRecordingAnnouncer } from "./components/Terminal/VoiceRecordingAnnouncer";
 import { AccessibilityAnnouncer } from "./components/Accessibility/AccessibilityAnnouncer";
@@ -1435,7 +1435,6 @@ function App() {
       <QuickCreatePalette palette={quickCreatePalette} />
       <PanelPalette
         isOpen={panelPalette.isOpen}
-        phase={panelPalette.phase}
         query={panelPalette.query}
         results={panelPalette.results}
         totalResults={panelPalette.totalResults}
@@ -1446,14 +1445,6 @@ function App() {
         onSelect={(kind) => {
           const result = panelPalette.handleSelect(kind);
           if (!result) return;
-          if (result.category === "model") {
-            const agentId = panelPalette.pendingAgentId;
-            if (agentId) {
-              const modelId = result.id === DEFAULT_MODEL_OPTION_ID ? undefined : result.id;
-              launchAgent(agentId, { modelId });
-            }
-            return;
-          }
           if (result.id.startsWith("agent:")) {
             const agentId = result.id.slice("agent:".length);
             if (agentId) {
@@ -1469,15 +1460,8 @@ function App() {
           }
         }}
         onConfirm={() => {
-          const currentPhase = panelPalette.phase;
-          const pendingAgent = panelPalette.pendingAgentId;
           const selected = panelPalette.confirmSelection();
           if (!selected) return;
-          if (currentPhase === "model" && selected.category === "model" && pendingAgent) {
-            const modelId = selected.id === DEFAULT_MODEL_OPTION_ID ? undefined : selected.id;
-            launchAgent(pendingAgent, { modelId });
-            return;
-          }
           if (selected.id === MORE_AGENTS_PANEL_ID) return;
           if (selected.id.startsWith("agent:")) {
             const agentId = selected.id.slice("agent:".length);
@@ -1494,7 +1478,6 @@ function App() {
           }
         }}
         onClose={panelPalette.close}
-        onBack={panelPalette.backToPanel}
       />
       <ProjectSwitcherPalette
         isOpen={projectSwitcherPalette.isOpen && projectSwitcherPalette.mode === "modal"}
