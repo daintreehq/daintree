@@ -98,11 +98,7 @@ export function WelcomeScreen({ gettingStarted }: WelcomeScreenProps) {
               <FolderOpen />
               Open Folder
             </Button>
-            <Button
-              size="lg"
-              variant="outline"
-              onClick={openCreateFolderDialog}
-            >
+            <Button size="lg" variant="outline" onClick={openCreateFolderDialog}>
               <FolderPlus />
               Create Project
             </Button>
