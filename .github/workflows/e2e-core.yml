@@ -16,6 +16,13 @@ on:
         description: "Single test file to run (e.g. e2e/core/core-terminal-panels.spec.ts). Leave empty to run all."
         type: string
         default: ""
+      project:
+        description: "Playwright project to run (core = 13 stable tests, full = all 72 tests)"
+        type: choice
+        default: "core"
+        options:
+          - core
+          - full
   workflow_call:
     inputs:
       platform:
@@ -26,6 +33,10 @@ on:
         description: "Single test file to run. Leave empty to run all."
         type: string
         default: ""
+      project:
+        description: "Playwright project to run (core or full)"
+        type: string
+        default: "core"
 
 permissions:
   contents: read
@@ -153,10 +164,11 @@ jobs:
         id: test-cmd
         shell: bash
         run: |
+          PROJECT="${{ inputs.project || 'core' }}"
           if [ -n "${{ inputs.test_file }}" ]; then
-            echo "args=--project=core ${{ inputs.test_file }}" >> "$GITHUB_OUTPUT"
+            echo "args=--project=$PROJECT ${{ inputs.test_file }}" >> "$GITHUB_OUTPUT"
           else
-            echo "args=--project=core" >> "$GITHUB_OUTPUT"
+            echo "args=--project=$PROJECT" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Run core e2e tests (macOS)
