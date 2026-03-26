@@ -82,33 +82,35 @@ if (process.platform === "darwin") {
   app.commandLine.appendSwitch("disable-features", "CalculateNativeWinOcclusion");
 }
 
-// Prune old log files based on retention setting
-{
-  const retentionDays = store.get("privacy")?.logRetentionDays ?? 30;
-  if (retentionDays > 0) {
-    pruneOldLogs(app.getPath("userData"), retentionDays);
-  }
-}
-
-initializeLogger(app.getPath("userData"));
-registerCommands();
-
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-void initializeTelemetry();
-
-crashReporter.start({ uploadToServer: false });
-registerGlobalErrorHandlers();
-
-const distPath = path.join(__dirname, "../../dist");
-
+// Acquire single-instance lock before any file I/O or service initialization.
+// A second instance must not touch log files, telemetry, or crash reporters.
 const gotTheLock = isSmokeTest || app.requestSingleInstanceLock();
 
 if (!gotTheLock) {
   console.log("[MAIN] Another instance is already running. Quitting...");
   app.quit();
 } else {
+  // Prune old log files based on retention setting
+  {
+    const retentionDays = store.get("privacy")?.logRetentionDays ?? 30;
+    if (retentionDays > 0) {
+      pruneOldLogs(app.getPath("userData"), retentionDays);
+    }
+  }
+
+  initializeLogger(app.getPath("userData"));
+  registerCommands();
+
+  void initializeTelemetry();
+
+  crashReporter.start({ uploadToServer: false });
+  registerGlobalErrorHandlers();
+
+  const distPath = path.join(__dirname, "../../dist");
+
   initializeCrashRecoveryService();
   initializeTrashedPidCleanup();
   initializeGpuCrashMonitor();
