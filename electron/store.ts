@@ -293,7 +293,7 @@ try {
   const memoryStore = new Map();
   storeInstance = {
     get: (key: string) => memoryStore.get(key),
-    set: (key: string, value: any) => memoryStore.set(key, value),
+    set: (key: string, value: unknown) => memoryStore.set(key, value),
     delete: (key: string) => memoryStore.delete(key),
     has: (key: string) => memoryStore.has(key),
     clear: () => memoryStore.clear(),
