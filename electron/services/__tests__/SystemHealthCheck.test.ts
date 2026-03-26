@@ -5,6 +5,7 @@ import {
   resolvePrerequisites,
   BASELINE_PREREQUISITES,
 } from "../SystemHealthCheck.js";
+import { refreshPath } from "../../setup/environment.js";
 import { setUserRegistry, type AgentConfig } from "../../../shared/config/agentRegistry.js";
 
 vi.mock("child_process", () => ({
@@ -136,6 +137,14 @@ describe("runSystemHealthCheck", () => {
       return "";
     });
   }
+
+  it("calls refreshPath before checking prerequisites", async () => {
+    mockAllBaselineAvailable();
+
+    await runSystemHealthCheck();
+
+    expect(refreshPath).toHaveBeenCalled();
+  });
 
   it("returns baseline tools when no agentIds provided", async () => {
     mockAllBaselineAvailable();

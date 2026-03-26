@@ -150,6 +150,7 @@ function applyWindowsExtraPaths(currentPath: string): string {
 }
 
 export async function refreshPath(): Promise<void> {
+  let timeoutId: NodeJS.Timeout | undefined;
   try {
     const result = await Promise.race([
       (async () => {
@@ -168,7 +169,9 @@ export async function refreshPath(): Promise<void> {
           }
         }
       })(),
-      new Promise<"timeout">((resolve) => setTimeout(() => resolve("timeout"), REFRESH_TIMEOUT_MS)),
+      new Promise<"timeout">((resolve) => {
+        timeoutId = setTimeout(() => resolve("timeout"), REFRESH_TIMEOUT_MS);
+      }),
     ]);
 
     if (result === "timeout") {
@@ -176,6 +179,8 @@ export async function refreshPath(): Promise<void> {
     }
   } catch {
     // Fallback to current PATH silently
+  } finally {
+    if (timeoutId) clearTimeout(timeoutId);
   }
 }
 
