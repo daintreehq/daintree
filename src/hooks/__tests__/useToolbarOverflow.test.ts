@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { computeOverflow } from "../useToolbarOverflow";
-import type { ToolbarButtonId, ToolbarButtonPriority } from "@shared/types/toolbar";
+import type { ToolbarButtonId } from "@shared/types/toolbar";
 import { TOOLBAR_BUTTON_PRIORITIES } from "@shared/types/toolbar";
 
 function makeWidths(ids: ToolbarButtonId[], width = 36): Map<string, number> {
