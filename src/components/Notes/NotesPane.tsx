@@ -17,6 +17,7 @@ import { ContentPanel, type BasePanelProps } from "@/components/Panel";
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip";
 import { notesClient, type NoteMetadata } from "@/clients/notesClient";
 import { canopyTheme } from "./editorTheme";
+import { notesTypographyExtension } from "./codeBlockExtension";
 import { MarkdownPreview } from "./MarkdownPreview";
 import { MarkdownToolbar } from "./MarkdownToolbar";
 
@@ -304,7 +305,11 @@ export function NotesPane({
   );
 
   const extensions = useMemo(
-    () => [markdown({ base: markdownLanguage, codeLanguages: languages }), EditorView.lineWrapping],
+    () => [
+      markdown({ base: markdownLanguage, codeLanguages: languages }),
+      EditorView.lineWrapping,
+      notesTypographyExtension(),
+    ],
     []
   );
 
@@ -361,7 +366,7 @@ export function NotesPane({
             <div className="flex flex-1 min-h-0 overflow-hidden">
               <div className="flex-1 flex flex-col min-h-0 border-r border-canopy-border">
                 {!hasConflict && <MarkdownToolbar editorViewRef={editorViewRef} />}
-                <div className="flex-1 overflow-hidden bg-canopy-bg text-[13px] font-mono [&_.cm-editor]:h-full [&_.cm-scroller]:p-2 [&_.cm-placeholder]:text-canopy-text/30 [&_.cm-placeholder]:italic">
+                <div className="flex-1 overflow-hidden bg-canopy-bg text-[13px] [&_.cm-editor]:h-full [&_.cm-scroller]:p-2 [&_.cm-placeholder]:text-canopy-text/30 [&_.cm-placeholder]:italic">
                   <CodeMirror
                     value={content}
                     height="100%"
@@ -389,7 +394,7 @@ export function NotesPane({
           ) : (
             <div className="flex-1 flex flex-col min-h-0">
               {!hasConflict && <MarkdownToolbar editorViewRef={editorViewRef} />}
-              <div className="flex-1 overflow-hidden bg-canopy-bg text-[13px] font-mono [&_.cm-editor]:h-full [&_.cm-scroller]:p-2 [&_.cm-placeholder]:text-canopy-text/30 [&_.cm-placeholder]:italic">
+              <div className="flex-1 overflow-hidden bg-canopy-bg text-[13px] [&_.cm-editor]:h-full [&_.cm-scroller]:p-2 [&_.cm-placeholder]:text-canopy-text/30 [&_.cm-placeholder]:italic">
                 <CodeMirror
                   value={content}
                   height="100%"
