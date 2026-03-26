@@ -189,9 +189,12 @@ jobs:
         timeout-minutes: 12
 
   # E2E suites run in parallel with build (both gate on check + test)
-  e2e-core:
+  # Nightly runs the full suite (all 72 test files), not just the core subset
+  e2e-full:
     needs: [check, test]
     uses: ./.github/workflows/e2e-core.yml
+    with:
+      project: full
 
   e2e-online:
     needs: [check, test]
@@ -204,7 +207,7 @@ jobs:
 
   notify:
     if: failure() && github.event_name == 'schedule'
-    needs: [check, test, build, e2e-core, e2e-online, e2e-nightly]
+    needs: [check, test, build, e2e-full, e2e-online, e2e-nightly]
     runs-on: ubuntu-22.04
     permissions:
       issues: write
