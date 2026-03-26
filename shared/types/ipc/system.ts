@@ -1,4 +1,5 @@
 import type { AgentId } from "../agent.js";
+import type { AgentInstallBlock, AgentInstallOS } from "../../config/agentRegistry.js";
 
 /** Open external URL payload */
 export interface SystemOpenExternalPayload {
@@ -88,6 +89,8 @@ export interface PrerequisiteSpec {
   minVersion?: string;
   /** URL for installation instructions */
   installUrl?: string;
+  /** OS-specific install instructions shown inline when the tool is missing */
+  installBlocks?: Partial<Record<AgentInstallOS, AgentInstallBlock[]>>;
 }
 
 /** Result of checking a single system prerequisite */
@@ -108,6 +111,8 @@ export interface PrerequisiteCheckResult {
   minVersion?: string;
   /** Installation URL (for UI display), undefined if none */
   installUrl?: string;
+  /** OS-specific install instructions (for UI display), undefined if none */
+  installBlocks?: Partial<Record<AgentInstallOS, AgentInstallBlock[]>>;
 }
 
 /** Full system health check result */

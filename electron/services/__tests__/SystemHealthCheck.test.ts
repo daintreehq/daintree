@@ -340,6 +340,40 @@ describe("runSystemHealthCheck", () => {
     expect(gh?.severity).toBe("warn");
   });
 
+  it("forwards installBlocks from spec to result for available tools", async () => {
+    mockAllBaselineAvailable();
+
+    const result = await runSystemHealthCheck();
+
+    const git = result.prerequisites.find((p) => p.tool === "git");
+    expect(git?.installBlocks).toBeDefined();
+    expect(git?.installBlocks?.macos).toBeDefined();
+    expect(git?.installBlocks?.macos?.[0]?.commands).toContain("brew install git");
+
+    const node = result.prerequisites.find((p) => p.tool === "node");
+    expect(node?.installBlocks?.linux?.[0]?.label).toBe("NodeSource");
+
+    const npm = result.prerequisites.find((p) => p.tool === "npm");
+    expect(npm?.installBlocks?.generic).toBeDefined();
+
+    const gh = result.prerequisites.find((p) => p.tool === "gh");
+    expect(gh?.installBlocks?.windows?.[0]?.commands).toContain("winget install --id GitHub.cli");
+  });
+
+  it("forwards installBlocks from spec to result for unavailable tools", async () => {
+    mockedExecFileSync.mockImplementation(() => {
+      throw new Error("not found");
+    });
+
+    const result = await runSystemHealthCheck();
+
+    const git = result.prerequisites.find((p) => p.tool === "git");
+    expect(git?.available).toBe(false);
+    expect(git?.installBlocks?.macos).toBeDefined();
+    expect(git?.installBlocks?.windows).toBeDefined();
+    expect(git?.installBlocks?.linux).toBeDefined();
+  });
+
   it("handles gh --version multi-line output correctly", async () => {
     mockedExecFileSync.mockImplementation((cmd, args) => {
       const arg = Array.isArray(args) ? args[0] : "";
