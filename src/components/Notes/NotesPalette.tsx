@@ -15,6 +15,7 @@ import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { languages } from "@codemirror/language-data";
 import { EditorView } from "@codemirror/view";
 import { canopyTheme } from "./editorTheme";
+import { notesTypographyExtension } from "./codeBlockExtension";
 import { MarkdownToolbar } from "./MarkdownToolbar";
 import {
   Plus,
@@ -186,7 +187,11 @@ export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
   }, [actions.selectedIndex, search.visibleNotes.length]);
 
   const extensions = useMemo(
-    () => [markdown({ base: markdownLanguage, codeLanguages: languages }), EditorView.lineWrapping],
+    () => [
+      markdown({ base: markdownLanguage, codeLanguages: languages }),
+      EditorView.lineWrapping,
+      notesTypographyExtension(),
+    ],
     []
   );
 
@@ -540,7 +545,7 @@ export function NotesPalette({ isOpen, onClose }: NotesPaletteProps) {
                       ) : (
                         <>
                           {!editor.hasConflict && <MarkdownToolbar editorViewRef={editorViewRef} />}
-                          <div className="flex-1 overflow-hidden text-[13px] font-mono [&_.cm-editor]:h-full [&_.cm-scroller]:p-4 [&_.cm-placeholder]:text-canopy-text/30 [&_.cm-placeholder]:italic">
+                          <div className="flex-1 overflow-hidden text-[13px] [&_.cm-editor]:h-full [&_.cm-scroller]:p-4 [&_.cm-placeholder]:text-canopy-text/30 [&_.cm-placeholder]:italic">
                             <CodeMirror
                               value={editor.noteContent}
                               height="100%"
