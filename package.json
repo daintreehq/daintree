@@ -201,7 +201,8 @@
     "files": [
       "dist/**/*",
       "dist-electron/**/*",
-      "!node_modules/node-pty/bin"
+      "!node_modules/node-pty/bin",
+      "!node_modules/node-pty/prebuilds"
     ],
     "extraResources": [],
     "asarUnpack": [
