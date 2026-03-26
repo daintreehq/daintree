@@ -28,48 +28,40 @@ describe("computeOverflow", () => {
 
   it("overflows lowest-priority items first when one pixel short", () => {
     // Total = 180, container = 179 → needs to overflow.
-    // Subtract trigger(36) + hysteresis(8) = 44, target = 135. Need to remove 45px worth.
-    // Priority 5: github-stats (36) removed, then notes (36) removed → currentWidth = 108 ≤ 135
+    // targetWidth = 179 - 0(trigger) - 8(hysteresis) = 171
+    // Sorted for removal: notes(5,idx4), settings(5,idx3), browser(3), terminal(3), github-stats(1)
+    // Remove notes(36) → 144 ≤ 171. Stop.
     const widths = makeWidths(ids, 36);
     const result = computeOverflow(179, widths, ids, TOOLBAR_BUTTON_PRIORITIES);
-    expect(result.overflowIds).toContain("github-stats");
-    expect(result.overflowIds).toContain("notes");
+    expect(result.overflowIds).toEqual(["notes"]);
     expect(result.visibleIds).toContain("terminal");
     expect(result.visibleIds).toContain("browser");
+    expect(result.visibleIds).toContain("github-stats");
     expect(result.visibleIds).toContain("settings");
   });
 
   it("overflows items by priority regardless of position order", () => {
     // Put a high-priority item at the end and low-priority at the start
-    const ordered: ToolbarButtonId[] = ["notes", "github-stats", "terminal"];
+    const ordered: ToolbarButtonId[] = ["notes", "settings", "terminal"];
     const widths = makeWidths(ordered, 50);
     // Total 150, container 100, target = 100 - 36 - 8 = 56
     const result = computeOverflow(100, widths, ordered, TOOLBAR_BUTTON_PRIORITIES);
-    // notes (5) and github-stats (5) should overflow before terminal (3)
+    // notes (5) and settings (5) should overflow before terminal (3)
     expect(result.overflowIds).toContain("notes");
-    expect(result.overflowIds).toContain("github-stats");
+    expect(result.overflowIds).toContain("settings");
     expect(result.visibleIds).toEqual(["terminal"]);
   });
 
   it("handles very narrow container — only highest priority survives", () => {
-    const ordered: ToolbarButtonId[] = ["claude", "terminal", "github-stats", "notes"];
-    const priorities: Record<ToolbarButtonId, ToolbarButtonPriority> = {
-      ...TOOLBAR_BUTTON_PRIORITIES,
-    };
+    const ordered: ToolbarButtonId[] = ["claude", "terminal", "settings", "notes"];
     const widths = makeWidths(ordered, 40);
     // Total 160, container 80, target = 80 - 36 - 8 = 36
-    // Remove notes(5), github-stats(5), terminal(3) → currentWidth = 40 > 36
-    // Remove claude(2) → currentWidth = 0 ≤ 36
-    // Wait - claude is priority 2, highest. Let's recalculate.
-    // Sorted by priority desc: notes(5), github-stats(5), terminal(3), claude(2)
-    // Remove notes → 120, remove github-stats → 80, remove terminal → 40 > 36
-    // Remove claude → 0. So only claude survives? No — 40 > 36, so claude also overflows.
-    // Actually let me reconsider: 40 ≤ 36 is false, so claude gets removed too.
-    // All overflow. That's correct for extremely narrow.
-    const result = computeOverflow(80, widths, ordered, priorities);
+    // Sorted by priority desc: settings(5), notes(5), terminal(3), claude(2)
+    // Remove settings → 120, remove notes → 80, remove terminal → 40 > 36
+    // Remove claude → 0 ≤ 36. All overflow for extremely narrow container.
+    const result = computeOverflow(80, widths, ordered, TOOLBAR_BUTTON_PRIORITIES);
     expect(result.overflowIds.length).toBeGreaterThan(0);
-    // terminal and below should definitely overflow
-    expect(result.overflowIds).toContain("github-stats");
+    expect(result.overflowIds).toContain("settings");
     expect(result.overflowIds).toContain("notes");
     expect(result.overflowIds).toContain("terminal");
   });
@@ -81,14 +73,13 @@ describe("computeOverflow", () => {
   });
 
   it("within same priority, removes later items first", () => {
-    const ordered: ToolbarButtonId[] = ["terminal", "browser", "panel-palette"];
-    // All priority 3. Within same priority, later index removed first.
+    const ordered: ToolbarButtonId[] = ["settings", "notes", "copy-tree"];
+    // All priority 5. Within same priority, later index removed first.
     const widths = makeWidths(ordered, 50);
-    // Total 150, container 110, target = 110 - 36 - 8 = 66. Need to remove 84.
-    // panel-palette removed first (index 2), then browser (index 1)
+    // Total 150, container 110, targetWidth = 110 - 0 - 8 = 102
+    // copy-tree removed first (index 2): 150-50=100 ≤ 102. Stop.
     const result = computeOverflow(110, widths, ordered, TOOLBAR_BUTTON_PRIORITIES);
-    // overflowIds preserves orderedIds order
-    expect(result.overflowIds).toEqual(["browser", "panel-palette"]);
-    expect(result.visibleIds).toEqual(["terminal"]);
+    expect(result.overflowIds).toEqual(["copy-tree"]);
+    expect(result.visibleIds).toEqual(["settings", "notes"]);
   });
 });

@@ -40,12 +40,12 @@ describe("Toolbar layout — issue #2584 project switcher collision", () => {
   });
 
   describe("Side groups", () => {
-    it("left group uses justify-self-start", () => {
-      expect(source).toContain("justify-self-start");
+    it("left group uses flex layout with gap", () => {
+      expect(source).toContain('"flex items-center gap-1.5 app-no-drag z-20"');
     });
 
-    it("right group uses justify-self-end", () => {
-      expect(source).toContain("justify-self-end");
+    it("right group uses justify-end for right alignment", () => {
+      expect(source).toContain("justify-end");
     });
   });
 
