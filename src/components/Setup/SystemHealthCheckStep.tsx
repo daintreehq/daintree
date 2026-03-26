@@ -16,6 +16,8 @@ import { detectOS } from "@/lib/agentInstall";
 import { InstallBlock } from "./InstallBlock";
 import { EmbeddedTerminal } from "./EmbeddedTerminal";
 
+const POLL_INTERVAL = 3000;
+
 interface SystemHealthCheckStepProps {
   onSkip: () => void;
   agentIds?: readonly string[];
@@ -25,25 +27,33 @@ export function SystemHealthCheckStep({ onSkip, agentIds }: SystemHealthCheckSte
   const [result, setResult] = useState<SystemHealthCheckResult | null>(null);
   const [isChecking, setIsChecking] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const hasRunRef = useRef(false);
+  const activeRef = useRef(true);
+  const isCheckingRef = useRef(false);
 
   const runCheck = useCallback(async () => {
+    if (isCheckingRef.current) return;
+    isCheckingRef.current = true;
     setIsChecking(true);
     setError(null);
     try {
       const data = await systemClient.healthCheck(agentIds ? [...agentIds] : undefined);
-      setResult(data);
+      if (activeRef.current) setResult(data);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Health check failed");
+      if (activeRef.current) setError(err instanceof Error ? err.message : "Health check failed");
     } finally {
-      setIsChecking(false);
+      isCheckingRef.current = false;
+      if (activeRef.current) setIsChecking(false);
     }
   }, [agentIds]);
 
   useEffect(() => {
-    if (hasRunRef.current) return;
-    hasRunRef.current = true;
+    activeRef.current = true;
     void runCheck();
+    const id = setInterval(() => void runCheck(), POLL_INTERVAL);
+    return () => {
+      activeRef.current = false;
+      clearInterval(id);
+    };
   }, [runCheck]);
 
   const visibleResults = result?.prerequisites.filter((c) => c.severity !== "silent") ?? [];
