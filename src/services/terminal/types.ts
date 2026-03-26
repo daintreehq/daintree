@@ -100,6 +100,11 @@ export interface ManagedTerminal {
   // Project-switch detach state: instance is alive but not in any visible container
   isDetached?: boolean;
 
+  // Attach-reveal: hide terminal during reparent, reveal after render
+  attachRevealToken: number;
+  attachRevealTimer?: ReturnType<typeof setTimeout>;
+  attachRevealDisposable?: { dispose: () => void };
+
   // Hibernation: xterm.js Terminal instance disposed to free memory
   isHibernated?: boolean;
   hibernationTimer?: ReturnType<typeof setTimeout>;

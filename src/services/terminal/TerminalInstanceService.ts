@@ -612,6 +612,7 @@ class TerminalInstanceService {
       restoreGeneration: 0,
       isSerializedRestoreInProgress: false,
       deferredOutput: [],
+      attachRevealToken: 0,
       isAltBuffer: false,
       altBufferListeners: new Set(),
       ipcListenerCount: listeners.length,
@@ -897,6 +898,19 @@ class TerminalInstanceService {
     }
   }
 
+  private cancelAttachReveal(managed: ManagedTerminal): void {
+    managed.attachRevealToken++;
+    if (managed.attachRevealTimer !== undefined) {
+      clearTimeout(managed.attachRevealTimer);
+      managed.attachRevealTimer = undefined;
+    }
+    if (managed.attachRevealDisposable) {
+      managed.attachRevealDisposable.dispose();
+      managed.attachRevealDisposable = undefined;
+    }
+    managed.hostElement.style.opacity = "";
+  }
+
   attach(id: string, container: HTMLElement): ManagedTerminal | null {
     const managed = this.instances.get(id);
     if (!managed) {
@@ -919,6 +933,10 @@ class TerminalInstanceService {
     });
 
     if (wasReparented) {
+      if (managed.isOpened) {
+        this.cancelAttachReveal(managed);
+        managed.hostElement.style.opacity = "0";
+      }
       container.appendChild(managed.hostElement);
     }
 
@@ -938,10 +956,34 @@ class TerminalInstanceService {
     managed.isDetached = false;
 
     if (wasReparented && managed.isOpened) {
+      const revealToken = managed.attachRevealToken;
       requestAnimationFrame(() => {
         if (this.instances.get(id) !== managed) return;
+        if (managed.attachRevealToken !== revealToken) return;
         managed.isAttaching = false;
-        if (!managed.terminal.element) return;
+        if (!managed.terminal.element) {
+          managed.hostElement.style.opacity = "";
+          return;
+        }
+
+        const reveal = () => {
+          if (managed.attachRevealToken !== revealToken) return;
+          managed.hostElement.style.opacity = "";
+          if (managed.attachRevealTimer !== undefined) {
+            clearTimeout(managed.attachRevealTimer);
+            managed.attachRevealTimer = undefined;
+          }
+          if (managed.attachRevealDisposable) {
+            managed.attachRevealDisposable.dispose();
+            managed.attachRevealDisposable = undefined;
+          }
+        };
+
+        managed.attachRevealDisposable = managed.terminal.onRender(() => {
+          reveal();
+        });
+
+        managed.attachRevealTimer = setTimeout(reveal, 150);
 
         managed.terminal.refresh(0, managed.terminal.rows - 1);
 
@@ -1005,6 +1047,7 @@ class TerminalInstanceService {
       logDebug(`[TIS.detach] Skipping ${id} - no managed:${!managed}, no container:${!container}`);
       return;
     }
+    this.cancelAttachReveal(managed);
 
     const isDirectChild = managed.hostElement.parentElement === container;
     logDebug(`[TIS.detach] ${id}`, {
@@ -1036,6 +1079,7 @@ class TerminalInstanceService {
   detachForProjectSwitch(id: string): void {
     const managed = this.instances.get(id);
     if (!managed) return;
+    this.cancelAttachReveal(managed);
 
     logDebug(`[TIS.detachForProjectSwitch] ${id}`);
 
@@ -1615,6 +1659,7 @@ class TerminalInstanceService {
       this.readinessWaiters.delete(id);
     }
 
+    this.cancelAttachReveal(managed);
     this.agentStateController.destroy(id);
     this.restoreController.destroy(id);
 
