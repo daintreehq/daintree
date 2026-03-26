@@ -20,7 +20,7 @@ let probePanelId: string;
  * since page.keyboard.type() sends characters one-by-one through the
  * browser event loop and can drop keystrokes under load.
  */
-async function ptyWrite(page: import("@playwright/test").Page, panelId: string, data: string) {
+async function _ptyWrite(page: import("@playwright/test").Page, panelId: string, data: string) {
   await page.evaluate(
     ([id, d]) =>
       (
