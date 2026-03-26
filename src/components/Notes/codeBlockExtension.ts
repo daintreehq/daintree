@@ -17,7 +17,11 @@ const codeBlockPlugin = ViewPlugin.fromClass(
     }
 
     update(update: ViewUpdate) {
-      if (update.docChanged || update.viewportChanged) {
+      if (
+        update.docChanged ||
+        update.viewportChanged ||
+        syntaxTree(update.startState) !== syntaxTree(update.state)
+      ) {
         this.decorations = this.buildDecorations(update.view);
       }
     }
@@ -52,7 +56,13 @@ const codeBlockPlugin = ViewPlugin.fromClass(
   { decorations: (v) => v.decorations }
 );
 
-const codeBlockTheme = EditorView.baseTheme({
+const NOTES_SANS_FONT =
+  'ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif';
+
+const notesBaseTheme = EditorView.theme({
+  "&.cm-editor .cm-scroller": {
+    fontFamily: NOTES_SANS_FONT,
+  },
   ".cm-code-block-line": {
     fontFamily: DEFAULT_TERMINAL_FONT_FAMILY,
   },
@@ -63,5 +73,5 @@ const inlineCodeStyle = syntaxHighlighting(
 );
 
 export function notesTypographyExtension(): Extension {
-  return [inlineCodeStyle, codeBlockPlugin, codeBlockTheme];
+  return [inlineCodeStyle, codeBlockPlugin, notesBaseTheme];
 }
