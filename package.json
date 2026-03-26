@@ -218,7 +218,6 @@
       "loadBrowserProcessSpecificV8Snapshot": false,
       "grantFileProtocolExtraPrivileges": false
     },
-    "beforeBuild": "./scripts/beforeBuild.cjs",
     "afterPack": "./scripts/afterPack.cjs",
     "mac": {
       "extraResources": [
