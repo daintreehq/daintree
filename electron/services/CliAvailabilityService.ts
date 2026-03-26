@@ -1,6 +1,7 @@
 import { execFileSync } from "child_process";
 import type { CliAvailability } from "../../shared/types/ipc.js";
 import { getEffectiveRegistry } from "../../shared/config/agentRegistry.js";
+import { refreshPath } from "../setup/environment.js";
 
 export class CliAvailabilityService {
   private static readonly CHECK_TIMEOUT_MS = 10_000;
@@ -80,6 +81,7 @@ export class CliAvailabilityService {
   }
 
   async refresh(): Promise<CliAvailability> {
+    await refreshPath();
     this.checkId++;
     this.inFlightCheck = null;
     return this.checkAvailability();

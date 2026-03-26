@@ -11,6 +11,10 @@ vi.mock("child_process", () => ({
   execFileSync: vi.fn(),
 }));
 
+vi.mock("../../setup/environment.js", () => ({
+  refreshPath: vi.fn().mockResolvedValue(undefined),
+}));
+
 const mockedExecFileSync = vi.mocked(execFileSync);
 
 describe("resolvePrerequisites", () => {
