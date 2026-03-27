@@ -174,7 +174,11 @@ export function registerShutdownHandler(deps: ShutdownDeps): void {
 
     const timeoutPromise = new Promise<never>((_, reject) => {
       hardTimer = setTimeout(() => {
-        reject(new Error(`Hard shutdown timeout after ${CLEANUP_TIMEOUT_MS}ms — stuck at phase: ${currentPhase}`));
+        reject(
+          new Error(
+            `Hard shutdown timeout after ${CLEANUP_TIMEOUT_MS}ms — stuck at phase: ${currentPhase}`
+          )
+        );
       }, CLEANUP_TIMEOUT_MS);
     });
 

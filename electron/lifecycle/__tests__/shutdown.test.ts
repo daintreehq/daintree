@@ -319,9 +319,7 @@ describe("registerShutdownHandler", () => {
     });
 
     it("cleanup error triggers app.exit(1) via catch handler", async () => {
-      mcpServerMock.stop.mockReturnValue(
-        Promise.reject(new Error("MCP stop failed"))
-      );
+      mcpServerMock.stop.mockReturnValue(Promise.reject(new Error("MCP stop failed")));
       const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 
       const { beforeQuitCb } = await setup({
