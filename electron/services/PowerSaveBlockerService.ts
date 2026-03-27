@@ -7,7 +7,6 @@ const SAFETY_TIMEOUT_MS = 4 * 60 * 60 * 1000; // 4 hours
 
 export class PowerSaveBlockerService {
   private terminalStates = new Map<string, AgentState>();
-  private agentToTerminal = new Map<string, string>();
   private blockerId: number | null = null;
   private safetyTimer: ReturnType<typeof setTimeout> | null = null;
   private unsubscribers: Array<() => void> = [];
@@ -18,10 +17,6 @@ export class PowerSaveBlockerService {
         const terminalId = payload.terminalId;
         if (!terminalId) return;
 
-        if (payload.agentId) {
-          this.agentToTerminal.set(payload.agentId, terminalId);
-        }
-
         this.terminalStates.set(terminalId, payload.state);
         this.recompute();
       })
@@ -29,13 +24,19 @@ export class PowerSaveBlockerService {
 
     this.unsubscribers.push(
       events.on("agent:completed", (payload) => {
-        this.removeAgent(payload.agentId, payload.terminalId);
+        if (payload.terminalId) {
+          this.terminalStates.delete(payload.terminalId);
+          this.recompute();
+        }
       })
     );
 
     this.unsubscribers.push(
       events.on("agent:killed", (payload) => {
-        this.removeAgent(payload.agentId, payload.terminalId);
+        if (payload.terminalId) {
+          this.terminalStates.delete(payload.terminalId);
+          this.recompute();
+        }
       })
     );
 
@@ -45,19 +46,6 @@ export class PowerSaveBlockerService {
         this.recompute();
       })
     );
-  }
-
-  private removeAgent(agentId?: string, terminalId?: string): void {
-    const resolvedTerminalId =
-      terminalId ?? (agentId ? this.agentToTerminal.get(agentId) : undefined);
-
-    if (resolvedTerminalId) {
-      this.terminalStates.delete(resolvedTerminalId);
-    }
-    if (agentId) {
-      this.agentToTerminal.delete(agentId);
-    }
-    this.recompute();
   }
 
   private recompute(): void {
@@ -82,7 +70,6 @@ export class PowerSaveBlockerService {
       console.warn("[PowerSaveBlocker] Safety timeout reached (4h), force-releasing blocker");
       this.stopBlocker();
       this.terminalStates.clear();
-      this.agentToTerminal.clear();
     }, SAFETY_TIMEOUT_MS);
   }
 
@@ -119,7 +106,6 @@ export class PowerSaveBlockerService {
     }
     this.unsubscribers = [];
     this.terminalStates.clear();
-    this.agentToTerminal.clear();
   }
 }
 

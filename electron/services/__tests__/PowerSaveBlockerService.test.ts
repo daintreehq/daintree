@@ -169,7 +169,7 @@ describe("PowerSaveBlockerService", () => {
       expect(service.getActiveCount()).toBe(0);
     });
 
-    it("resolves terminal from agentId when terminalId missing on killed", () => {
+    it("killed without terminalId does not affect active blockers", () => {
       emitStateChanged("term-1", "working", { agentId: "agent-1" });
 
       events.emit("agent:killed", {
@@ -177,7 +177,60 @@ describe("PowerSaveBlockerService", () => {
         timestamp: Date.now(),
       });
 
+      // Blocker stays active since terminalId was not provided
+      expect(service.isBlocking()).toBe(true);
+    });
+
+    it("completed without terminalId does not affect active blockers", () => {
+      emitStateChanged("term-1", "working", { agentId: "agent-1" });
+
+      events.emit("agent:completed", {
+        agentId: "agent-1",
+        exitCode: 0,
+        duration: 1000,
+        timestamp: Date.now(),
+      });
+
+      // Blocker stays active since terminalId was not provided
+      expect(service.isBlocking()).toBe(true);
+    });
+
+    it("terminal reuse after exit works correctly", () => {
+      emitStateChanged("term-1", "working", { agentId: "agent-1" });
+
+      events.emit("agent:exited", {
+        terminalId: "term-1",
+        timestamp: Date.now(),
+      });
+
       expect(service.isBlocking()).toBe(false);
+
+      // Reuse the same terminal with a new agent
+      emitStateChanged("term-1", "working", { agentId: "agent-2" });
+
+      expect(service.isBlocking()).toBe(true);
+      expect(service.getActiveCount()).toBe(1);
+    });
+
+    it("unknown agent events do not affect active blockers", () => {
+      emitStateChanged("term-1", "working", { agentId: "agent-1" });
+
+      events.emit("agent:killed", {
+        agentId: "unknown-agent",
+        terminalId: "unknown-term",
+        timestamp: Date.now(),
+      });
+
+      events.emit("agent:completed", {
+        agentId: "unknown-agent",
+        terminalId: "unknown-term",
+        exitCode: 0,
+        duration: 0,
+        timestamp: Date.now(),
+      });
+
+      expect(service.isBlocking()).toBe(true);
+      expect(service.getActiveCount()).toBe(1);
     });
 
     it("handles unknown terminalId on exited gracefully", () => {
@@ -209,6 +262,17 @@ describe("PowerSaveBlockerService", () => {
 
       // stop was called once when agent went idle, not again from timeout
       expect(powerSaveBlocker.stop).toHaveBeenCalledTimes(1);
+    });
+
+    it("recovers after safety timeout when new agent starts working", () => {
+      emitStateChanged("term-1", "working", { agentId: "agent-1" });
+
+      vi.advanceTimersByTime(4 * 60 * 60 * 1000);
+      expect(service.isBlocking()).toBe(false);
+
+      // New agent starts working — blocker should reacquire
+      emitStateChanged("term-2", "working", { agentId: "agent-2" });
+      expect(service.isBlocking()).toBe(true);
     });
 
     it("resets safety timer on new blocker acquisition", () => {
