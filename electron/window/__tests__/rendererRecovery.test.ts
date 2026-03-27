@@ -78,30 +78,28 @@ function setupCrashRecovery(win: ReturnType<typeof createMockWindow>) {
     return `app://canopy/recovery.html?${params}`;
   };
 
-  win.webContents.on(
-    "render-process-gone",
-    (_event: unknown, details: { reason: string; exitCode: number }) => {
-      if (details.reason === "clean-exit") return;
-      recordCrash(details);
+  win.webContents.on("render-process-gone", (_event, ...args) => {
+    const details = args[0] as { reason: string; exitCode: number };
+    if (details.reason === "clean-exit") return;
+    recordCrash(details);
 
-      if (win.isDestroyed()) return;
+    if (win.isDestroyed()) return;
 
-      const now = Date.now();
-      while (
-        rendererCrashTimestamps.length > 0 &&
-        now - rendererCrashTimestamps[0] > CRASH_LOOP_WINDOW_MS
-      ) {
-        rendererCrashTimestamps.shift();
-      }
-      rendererCrashTimestamps.push(now);
-
-      if (rendererCrashTimestamps.length >= 2) {
-        win.webContents.loadURL(getRecoveryUrl(details.reason, details.exitCode));
-      } else {
-        win.webContents.reload();
-      }
+    const now = Date.now();
+    while (
+      rendererCrashTimestamps.length > 0 &&
+      now - rendererCrashTimestamps[0] > CRASH_LOOP_WINDOW_MS
+    ) {
+      rendererCrashTimestamps.shift();
     }
-  );
+    rendererCrashTimestamps.push(now);
+
+    if (rendererCrashTimestamps.length >= 2) {
+      win.webContents.loadURL(getRecoveryUrl(details.reason, details.exitCode));
+    } else {
+      win.webContents.reload();
+    }
+  });
 
   return { rendererCrashTimestamps, recordCrash };
 }
@@ -115,7 +113,8 @@ function setupUnresponsiveHandling(win: ReturnType<typeof createMockWindow>) {
     unresponsiveDialogOpen = true;
     const dialogId = ++unresponsiveDialogId;
 
-    (dialog.showMessageBox as ReturnType<typeof vi.fn>)(win, {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (dialog.showMessageBox as any)(win, {
       type: "warning",
       buttons: ["Wait", "Reload"],
       defaultId: 0,

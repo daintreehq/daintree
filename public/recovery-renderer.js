@@ -1,3 +1,4 @@
+/* global window, document, URLSearchParams */
 (function () {
   "use strict";
 
