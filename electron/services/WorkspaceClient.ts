@@ -56,6 +56,12 @@ export class WorkspaceClient extends EventEmitter {
   private restartTimer: NodeJS.Timeout | null = null;
   private restartAttempts = 0;
   private isHealthCheckPaused = false;
+  private isWaitingForHandshake = false;
+  private handshakeTimeout: NodeJS.Timeout | null = null;
+
+  /** Watchdog: Track missed heartbeat responses to detect deadlocks */
+  private missedHeartbeats = 0;
+  private readonly MAX_MISSED_HEARTBEATS = 3;
 
   // Callback maps for request/response correlation
   private pendingRequests = new Map<
@@ -100,16 +106,43 @@ export class WorkspaceClient extends EventEmitter {
     return this.readyPromise;
   }
 
-  private startHealthCheckLoop(): void {
-    if (this.healthCheckInterval || this.isHealthCheckPaused || !this.child) {
+  private startHealthCheckInterval(): void {
+    if (this.healthCheckInterval) {
+      clearInterval(this.healthCheckInterval);
+      this.healthCheckInterval = null;
+    }
+
+    if (this.isHealthCheckPaused || !this.child) {
       return;
     }
 
+    this.missedHeartbeats = 0;
+
     this.healthCheckInterval = setInterval(() => {
-      if (this.isInitialized && this.child && !this.isHealthCheckPaused) {
-        this.send({ type: "health-check" });
+      if (!this.isInitialized || !this.child || this.isHealthCheckPaused) return;
+
+      if (this.missedHeartbeats >= this.MAX_MISSED_HEARTBEATS) {
+        const missedMs = this.missedHeartbeats * this.config.healthCheckIntervalMs;
+        console.error(
+          `[WorkspaceClient] Watchdog: Host unresponsive for ${this.missedHeartbeats} checks (${missedMs}ms). Force killing.`
+        );
+
+        if (this.child.pid) {
+          try {
+            process.kill(this.child.pid, "SIGKILL");
+          } catch {
+            // Process may have already exited between pid check and kill
+          }
+        }
+        this.missedHeartbeats = 0;
+        return;
       }
+
+      this.missedHeartbeats++;
+      this.send({ type: "health-check" });
     }, this.config.healthCheckIntervalMs);
+
+    console.log("[WorkspaceClient] Health check interval started (watchdog enabled)");
   }
 
   private startHost(): void {
@@ -181,6 +214,12 @@ export class WorkspaceClient extends EventEmitter {
         clearInterval(this.healthCheckInterval);
         this.healthCheckInterval = null;
       }
+      if (this.handshakeTimeout) {
+        clearTimeout(this.handshakeTimeout);
+        this.handshakeTimeout = null;
+      }
+      this.isWaitingForHandshake = false;
+      this.missedHeartbeats = 0;
 
       this.isInitialized = false;
       this.child = null;
@@ -253,7 +292,7 @@ export class WorkspaceClient extends EventEmitter {
       }
     });
 
-    this.startHealthCheckLoop();
+    this.startHealthCheckInterval();
 
     console.log("[WorkspaceClient] Workspace Host started");
   }
@@ -331,13 +370,22 @@ export class WorkspaceClient extends EventEmitter {
           this.readyResolve();
           this.readyResolve = null;
         }
-        this.startHealthCheckLoop();
+        this.startHealthCheckInterval();
         console.log("[WorkspaceClient] Workspace Host is ready");
         break;
       }
 
       case "pong":
-        // Health check response - host is alive
+        this.missedHeartbeats = 0;
+        if (this.isWaitingForHandshake) {
+          this.isWaitingForHandshake = false;
+          if (this.handshakeTimeout) {
+            clearTimeout(this.handshakeTimeout);
+            this.handshakeTimeout = null;
+          }
+          console.log("[WorkspaceClient] Handshake successful - resuming health checks");
+          this.startHealthCheckInterval();
+        }
         break;
 
       case "error":
@@ -999,19 +1047,47 @@ export class WorkspaceClient extends EventEmitter {
       clearInterval(this.healthCheckInterval);
       this.healthCheckInterval = null;
     }
+    if (this.handshakeTimeout) {
+      clearTimeout(this.handshakeTimeout);
+      this.handshakeTimeout = null;
+    }
+    this.isWaitingForHandshake = false;
     console.log("[WorkspaceClient] Health check paused");
   }
 
-  /** Resume health check after system wake */
+  /** Resume health check after system wake with handshake verification */
   resumeHealthCheck(): void {
     if (!this.isHealthCheckPaused) return;
-    this.isHealthCheckPaused = false;
-
-    if (this.child) {
-      this.startHealthCheckLoop();
+    if (!this.isInitialized || !this.child) {
+      console.warn("[WorkspaceClient] Cannot resume health check - host not ready");
+      this.isHealthCheckPaused = false;
+      return;
     }
 
-    console.log("[WorkspaceClient] Health check resumed");
+    this.isHealthCheckPaused = false;
+
+    if (this.healthCheckInterval) {
+      clearInterval(this.healthCheckInterval);
+      this.healthCheckInterval = null;
+    }
+
+    if (this.handshakeTimeout) {
+      clearTimeout(this.handshakeTimeout);
+      this.handshakeTimeout = null;
+    }
+
+    console.log("[WorkspaceClient] System resumed. Initiating handshake...");
+    this.isWaitingForHandshake = true;
+    this.send({ type: "health-check" });
+
+    this.handshakeTimeout = setTimeout(() => {
+      if (this.isWaitingForHandshake) {
+        console.warn("[WorkspaceClient] Handshake timeout - forcing health check resume");
+        this.isWaitingForHandshake = false;
+        this.handshakeTimeout = null;
+        this.startHealthCheckInterval();
+      }
+    }, 5000);
   }
 
   dispose(): void {
@@ -1029,6 +1105,12 @@ export class WorkspaceClient extends EventEmitter {
       clearTimeout(this.restartTimer);
       this.restartTimer = null;
     }
+
+    if (this.handshakeTimeout) {
+      clearTimeout(this.handshakeTimeout);
+      this.handshakeTimeout = null;
+    }
+    this.isWaitingForHandshake = false;
 
     if (this.readyReject) {
       this.readyReject(new Error("WorkspaceClient disposed"));

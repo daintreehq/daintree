@@ -1,4 +1,6 @@
 import Store from "electron-store";
+import fs from "fs";
+import path from "path";
 import type {
   AgentSettings,
   PanelGridConfig,
@@ -11,6 +13,7 @@ import type { AppError } from "../shared/types/ipc/errors.js";
 import type { BuiltInTerminalType } from "../shared/config/agentIds.js";
 import { DEFAULT_AGENT_SETTINGS, DEFAULT_APP_AGENT_CONFIG } from "../shared/types/index.js";
 import type { AppThemeConfig } from "../shared/types/appTheme.js";
+import type { SettingsRecovery } from "../shared/types/ipc/app.js";
 
 export interface StoreSchema {
   _schemaVersion: number;
@@ -280,18 +283,78 @@ const storeOptions = {
   cwd: process.env.CANOPY_USER_DATA,
 };
 
-let storeInstance: Store<StoreSchema>;
+function getElectronUserDataPath(): string | undefined {
+  try {
+    // Dynamic require to avoid breaking tests that mock electron
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const electron = require("electron");
+    return electron.app?.getPath("userData");
+  } catch {
+    return undefined;
+  }
+}
 
-try {
-  storeInstance = new Store<StoreSchema>(storeOptions);
-} catch (error) {
-  console.warn(
-    "[Store] Failed to initialize electron-store (likely in UtilityProcess), using in-memory fallback:",
-    error
-  );
-  // Minimal in-memory fallback to prevent crash on import
+function resolveConfigPath(cwd: string | undefined): string | null {
+  const dir = cwd ?? getElectronUserDataPath();
+  if (!dir) return null;
+  return path.join(dir, "config.json");
+}
+
+function preflightValidateConfig(configPath: string): "valid" | "missing" | "corrupt" {
+  if (!fs.existsSync(configPath)) return "missing";
+  try {
+    const raw = fs.readFileSync(configPath, "utf8");
+    const parsed = JSON.parse(raw);
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+      return "corrupt";
+    }
+    return "valid";
+  } catch (err) {
+    if (err instanceof SyntaxError) return "corrupt";
+    return "valid";
+  }
+}
+
+function quarantineCorruptConfig(configPath: string): string | null {
+  try {
+    const quarantinePath = `${configPath}.corrupted.${Date.now()}`;
+    fs.renameSync(configPath, quarantinePath);
+    console.log(`[Store] Quarantined corrupt config to ${quarantinePath}`);
+    return quarantinePath;
+  } catch (err) {
+    console.warn("[Store] Failed to quarantine corrupt config:", err);
+    return null;
+  }
+}
+
+function restoreFromBackup(configPath: string): boolean {
+  const backupPath = `${configPath}.bak`;
+  try {
+    if (!fs.existsSync(backupPath)) return false;
+    const raw = fs.readFileSync(backupPath, "utf8");
+    JSON.parse(raw);
+    fs.copyFileSync(backupPath, configPath);
+    console.log("[Store] Restored config from backup");
+    return true;
+  } catch {
+    console.warn("[Store] Backup is missing or corrupt, cannot restore");
+    return false;
+  }
+}
+
+function refreshBackup(configPath: string): void {
+  try {
+    if (fs.existsSync(configPath)) {
+      fs.copyFileSync(configPath, `${configPath}.bak`);
+    }
+  } catch (err) {
+    console.warn("[Store] Failed to create config backup:", err);
+  }
+}
+
+function createInMemoryFallback(): Store<StoreSchema> {
   const memoryStore = new Map();
-  storeInstance = {
+  return {
     get: (key: string) => memoryStore.get(key),
     set: (key: string, value: unknown) => memoryStore.set(key, value),
     delete: (key: string) => memoryStore.delete(key),
@@ -302,4 +365,54 @@ try {
   } as unknown as Store<StoreSchema>;
 }
 
-export const store = storeInstance;
+let pendingSettingsRecovery: SettingsRecovery | null = null;
+
+export function consumePendingSettingsRecovery(): SettingsRecovery | null {
+  const value = pendingSettingsRecovery;
+  pendingSettingsRecovery = null;
+  return value;
+}
+
+export function _resetPendingSettingsRecovery(): void {
+  pendingSettingsRecovery = null;
+}
+
+export function initializeStore(options: typeof storeOptions = storeOptions): Store<StoreSchema> {
+  const configPath = resolveConfigPath(options.cwd);
+
+  if (configPath) {
+    const status = preflightValidateConfig(configPath);
+    if (status === "corrupt") {
+      console.warn("[Store] Detected corrupt config.json");
+      const quarantinedPath = quarantineCorruptConfig(configPath) ?? undefined;
+      const restored = restoreFromBackup(configPath);
+      pendingSettingsRecovery = restored
+        ? { kind: "restored-from-backup", quarantinedPath }
+        : { kind: "reset-to-defaults", quarantinedPath };
+    }
+  }
+
+  try {
+    const instance = new Store<StoreSchema>({
+      ...options,
+      clearInvalidConfig: true,
+    });
+    refreshBackup(instance.path);
+    return instance;
+  } catch (error) {
+    console.warn("[Store] Failed to initialize electron-store, using in-memory fallback:", error);
+    pendingSettingsRecovery = { kind: "reset-to-defaults" };
+    return createInMemoryFallback();
+  }
+}
+
+export const store = initializeStore();
+
+export {
+  resolveConfigPath,
+  preflightValidateConfig,
+  quarantineCorruptConfig,
+  restoreFromBackup,
+  refreshBackup,
+  createInMemoryFallback,
+};

@@ -1,7 +1,7 @@
 import type { ProjectState } from "../types/index.js";
 import fs from "fs/promises";
 import { existsSync } from "fs";
-import { resilientRename, resilientWriteFile, resilientUnlink } from "../utils/fs.js";
+import { resilientAtomicWriteFile, resilientRename, resilientUnlink } from "../utils/fs.js";
 import { TerminalSnapshotSchema, filterValidTerminalEntries } from "../schemas/ipc.js";
 import { getProjectStateDir, stateFilePath } from "./projectStorePaths.js";
 
@@ -10,10 +10,6 @@ const PROJECT_STATE_CACHE_TTL_MS = 60_000;
 interface ProjectStateCacheEntry {
   expiresAt: number;
   value: ProjectState | null;
-}
-
-function cleanupTempFile(tempFilePath: string): void {
-  fs.unlink(tempFilePath).catch(() => {});
 }
 
 export class ProjectStateManager {
@@ -73,15 +69,11 @@ export class ProjectStateManager {
       ),
     };
 
-    const uniqueSuffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    const tempFilePath = `${filePath}.${uniqueSuffix}.tmp`;
-
     const attemptSave = async (ensureDir: boolean): Promise<void> => {
       if (ensureDir) {
         await fs.mkdir(stateDir, { recursive: true });
       }
-      await resilientWriteFile(tempFilePath, JSON.stringify(validatedState, null, 2), "utf-8");
-      await resilientRename(tempFilePath, filePath);
+      await resilientAtomicWriteFile(filePath, JSON.stringify(validatedState, null, 2), "utf-8");
     };
 
     try {
@@ -93,7 +85,6 @@ export class ProjectStateManager {
           `[ProjectStateManager] Failed to save state for project ${projectId}:`,
           error
         );
-        cleanupTempFile(tempFilePath);
         throw error;
       }
 
@@ -104,7 +95,6 @@ export class ProjectStateManager {
           `[ProjectStateManager] Failed to save state for project ${projectId}:`,
           retryError
         );
-        cleanupTempFile(tempFilePath);
         throw retryError;
       }
     }

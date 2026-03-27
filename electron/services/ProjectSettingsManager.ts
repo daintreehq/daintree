@@ -5,16 +5,12 @@ import type Store from "electron-store";
 import type { StoreSchema } from "../store.js";
 import fs from "fs/promises";
 import { existsSync } from "fs";
-import { resilientRename, resilientWriteFile } from "../utils/fs.js";
+import { resilientAtomicWriteFile, resilientRename } from "../utils/fs.js";
 import { sanitizeSvg } from "../../shared/utils/svgSanitizer.js";
 import { isSensitiveEnvKey } from "../../shared/utils/envVars.js";
 import { projectEnvSecureStorage } from "./ProjectEnvSecureStorage.js";
 import { getProjectStateDir, settingsFilePath } from "./projectStorePaths.js";
 import { parseTerminalSettings, parseNotificationOverrides } from "./projectSettingsParsers.js";
-
-function cleanupTempFile(tempFilePath: string): void {
-  fs.unlink(tempFilePath).catch(() => {});
-}
 
 export class ProjectSettingsManager {
   private notificationOverridesCache = new Map<string, Partial<NotificationSettings> | undefined>();
@@ -151,6 +147,10 @@ export class ProjectSettingsManager {
           typeof parsed.devServerAutoDetected === "boolean"
             ? parsed.devServerAutoDetected
             : undefined,
+        cloudSyncWarningDismissed:
+          typeof parsed.cloudSyncWarningDismissed === "boolean"
+            ? parsed.cloudSyncWarningDismissed
+            : undefined,
         devServerLoadTimeout:
           typeof parsed.devServerLoadTimeout === "number" &&
           Number.isFinite(parsed.devServerLoadTimeout) &&
@@ -265,6 +265,10 @@ export class ProjectSettingsManager {
         typeof settings.devServerAutoDetected === "boolean"
           ? settings.devServerAutoDetected
           : undefined,
+      cloudSyncWarningDismissed:
+        typeof settings.cloudSyncWarningDismissed === "boolean"
+          ? settings.cloudSyncWarningDismissed
+          : undefined,
       devServerLoadTimeout:
         typeof settings.devServerLoadTimeout === "number" &&
         Number.isFinite(settings.devServerLoadTimeout) &&
@@ -339,15 +343,11 @@ export class ProjectSettingsManager {
       }
     }
 
-    const uniqueSuffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    const tempFilePath = `${filePath}.${uniqueSuffix}.tmp`;
-
     const attemptSave = async (ensureDir: boolean): Promise<void> => {
       if (ensureDir) {
         await fs.mkdir(stateDir, { recursive: true });
       }
-      await resilientWriteFile(tempFilePath, JSON.stringify(sanitizedSettings, null, 2), "utf-8");
-      await resilientRename(tempFilePath, filePath);
+      await resilientAtomicWriteFile(filePath, JSON.stringify(sanitizedSettings, null, 2), "utf-8");
     };
 
     try {
@@ -356,7 +356,6 @@ export class ProjectSettingsManager {
       const isEnoent = error instanceof Error && "code" in error && error.code === "ENOENT";
       if (!isEnoent) {
         console.error(`[ProjectSettingsManager] Failed to save settings for ${projectId}:`, error);
-        cleanupTempFile(tempFilePath);
         throw error;
       }
 
@@ -367,7 +366,6 @@ export class ProjectSettingsManager {
           `[ProjectSettingsManager] Failed to save settings for ${projectId}:`,
           retryError
         );
-        cleanupTempFile(tempFilePath);
         throw retryError;
       }
     }

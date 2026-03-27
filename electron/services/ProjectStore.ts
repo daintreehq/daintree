@@ -27,6 +27,7 @@ import { ProjectSettingsManager } from "./ProjectSettingsManager.js";
 import { ProjectStateManager } from "./ProjectStateManager.js";
 import { ProjectFileStore } from "./ProjectFileStore.js";
 import { ProjectIdentityFiles } from "./ProjectIdentityFiles.js";
+import { cleanupQuarantinedProjectFiles } from "./projectQuarantineCleanup.js";
 
 export const DEFAULT_PROJECT_EMOJI = "🌲";
 
@@ -67,6 +68,9 @@ export class ProjectStore {
     if (!existsSync(this.projectsConfigDir)) {
       await fs.mkdir(this.projectsConfigDir, { recursive: true });
     }
+    void cleanupQuarantinedProjectFiles(this.projectsConfigDir).catch((err) =>
+      logError("[ProjectStore] Quarantine cleanup failed", err)
+    );
   }
 
   // --- In-Repo Identity ---

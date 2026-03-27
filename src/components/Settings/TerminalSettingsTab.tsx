@@ -13,8 +13,10 @@ import {
   RotateCcw,
   Ear,
   Activity,
+  Shield,
+  Cpu,
 } from "lucide-react";
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { cn } from "@/lib/utils";
 import { SettingsSection } from "@/components/Settings/SettingsSection";
 import { SettingsSwitchCard } from "@/components/Settings/SettingsSwitchCard";
@@ -38,6 +40,8 @@ import {
 } from "@/utils/scrollbackConfig";
 import { actionService } from "@/services/ActionService";
 import { useResourceMonitoringStore } from "@/store/resourceMonitoringStore";
+import { usePanelLimitStore } from "@/store/panelLimitStore";
+import type { HardwareInfo } from "@shared/types/ipc/system";
 
 const STRATEGIES: Array<{
   id: PanelLayoutStrategy;
@@ -114,6 +118,29 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
   const setPreferPreview = useTwoPaneSplitStore((state) => state.setPreferPreview);
   const setDefaultRatio = useTwoPaneSplitStore((state) => state.setDefaultRatio);
   const resetAllWorktreeRatios = useTwoPaneSplitStore((state) => state.resetAllWorktreeRatios);
+
+  const panelLimits = usePanelLimitStore((state) => ({
+    softWarningLimit: state.softWarningLimit,
+    confirmationLimit: state.confirmationLimit,
+    hardLimit: state.hardLimit,
+    warningsDisabled: state.warningsDisabled,
+  }));
+  const setWarningsDisabled = usePanelLimitStore((state) => state.setWarningsDisabled);
+  const setSoftWarningLimit = usePanelLimitStore((state) => state.setSoftWarningLimit);
+  const setConfirmationLimit = usePanelLimitStore((state) => state.setConfirmationLimit);
+  const setPanelHardLimit = usePanelLimitStore((state) => state.setHardLimit);
+  const resetToHardwareDefaults = usePanelLimitStore((state) => state.resetToHardwareDefaults);
+  const initializeFromHardware = usePanelLimitStore((state) => state.initializeFromHardware);
+
+  const [hardwareInfo, setHardwareInfo] = useState<HardwareInfo | null>(null);
+
+  useEffect(() => {
+    void initializeFromHardware();
+    window.electron.system
+      .getHardwareInfo()
+      .then(setHardwareInfo)
+      .catch(() => {});
+  }, [initializeFromHardware]);
 
   const [showMemoryDetails, setShowMemoryDetails] = useState(false);
 
@@ -305,6 +332,122 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
               window.electron.terminalConfig.setResourceMonitoring(false);
             }}
           />
+        </SettingsSection>
+      )}
+
+      {effectiveSubtab === "performance" && (
+        <SettingsSection
+          icon={Shield}
+          title="Panel Limits"
+          id="terminal-panel-limits"
+          description="Control when warnings appear as you open more panels. Limits are auto-detected from your hardware on first launch."
+        >
+          <SettingsSwitchCard
+            icon={AlertTriangle}
+            title={
+              panelLimits.warningsDisabled ? "Panel Warnings Disabled" : "Panel Warnings Enabled"
+            }
+            subtitle={
+              panelLimits.warningsDisabled
+                ? "No soft warning banner or confirmation dialog (hard limit still enforced)"
+                : "Show warning banner and confirmation dialog when panel count is high"
+            }
+            isEnabled={!panelLimits.warningsDisabled}
+            onChange={() => setWarningsDisabled(!panelLimits.warningsDisabled)}
+            ariaLabel="Panel Warnings Toggle"
+            isModified={panelLimits.warningsDisabled}
+            onReset={() => setWarningsDisabled(false)}
+          />
+
+          <div
+            className={cn(
+              "space-y-3",
+              panelLimits.warningsDisabled && "opacity-50 pointer-events-none"
+            )}
+          >
+            <div className="space-y-2">
+              <label htmlFor="soft-warning-limit" className="text-sm text-canopy-text/70">
+                Soft Warning
+              </label>
+              <input
+                id="soft-warning-limit"
+                type="number"
+                min="4"
+                max="100"
+                value={panelLimits.softWarningLimit}
+                onChange={(e) => {
+                  const val = parseInt(e.target.value, 10);
+                  if (!isNaN(val)) setSoftWarningLimit(val);
+                }}
+                disabled={panelLimits.warningsDisabled}
+                className="bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-canopy-text w-full focus:border-canopy-accent focus:outline-none transition-colors"
+              />
+              <p className="text-xs text-canopy-text/40">
+                Show a dismissible banner when panel count reaches this number.
+              </p>
+            </div>
+
+            <div className="space-y-2">
+              <label htmlFor="confirmation-limit" className="text-sm text-canopy-text/70">
+                Confirmation Required
+              </label>
+              <input
+                id="confirmation-limit"
+                type="number"
+                min="4"
+                max="100"
+                value={panelLimits.confirmationLimit}
+                onChange={(e) => {
+                  const val = parseInt(e.target.value, 10);
+                  if (!isNaN(val)) setConfirmationLimit(val);
+                }}
+                disabled={panelLimits.warningsDisabled}
+                className="bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-canopy-text w-full focus:border-canopy-accent focus:outline-none transition-colors"
+              />
+              <p className="text-xs text-canopy-text/40">
+                Require explicit confirmation before adding panels beyond this count.
+              </p>
+            </div>
+          </div>
+
+          <div className="space-y-2">
+            <label htmlFor="hard-limit" className="text-sm text-canopy-text/70">
+              Hard Limit
+            </label>
+            <input
+              id="hard-limit"
+              type="number"
+              min="4"
+              max="100"
+              value={panelLimits.hardLimit}
+              onChange={(e) => {
+                const val = parseInt(e.target.value, 10);
+                if (!isNaN(val)) setPanelHardLimit(val);
+              }}
+              className="bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-canopy-text w-full focus:border-canopy-accent focus:outline-none transition-colors"
+            />
+            <p className="text-xs text-canopy-text/40">
+              Absolute maximum number of panels. Cannot be bypassed.
+            </p>
+          </div>
+
+          {hardwareInfo && hardwareInfo.totalMemoryBytes > 0 && (
+            <div className="flex items-center gap-2 text-xs text-canopy-text/50">
+              <Cpu className="w-3 h-3" />
+              <span>
+                Detected: {Math.round(hardwareInfo.totalMemoryBytes / (1024 * 1024 * 1024))} GB RAM,{" "}
+                {hardwareInfo.logicalCpuCount} CPU cores
+              </span>
+            </div>
+          )}
+
+          <button
+            onClick={() => void resetToHardwareDefaults()}
+            className="flex items-center gap-2 text-xs text-canopy-text/50 hover:text-canopy-text/70 transition-colors"
+          >
+            <RotateCcw className="w-3 h-3" />
+            <span>Reset to hardware-recommended defaults</span>
+          </button>
         </SettingsSection>
       )}
 

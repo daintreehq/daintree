@@ -36,6 +36,7 @@ import {
   useReEntrySummary,
 } from "./hooks";
 import { useHibernationNotifications } from "./hooks/useHibernationNotifications";
+import { useDiskSpaceWarnings } from "./hooks/useDiskSpaceWarnings";
 import { useActionRegistry } from "./hooks/useActionRegistry";
 import { useUpdateListener } from "./hooks/useUpdateListener";
 import { useWorkflowListener } from "./hooks/useWorkflowListener";
@@ -51,6 +52,7 @@ import { createTooltipWithShortcut } from "./lib/platform";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "./components/ui/tooltip";
 import { useCrashRecoveryGate } from "./hooks/app/useCrashRecoveryGate";
 import { CrashRecoveryDialog } from "./components/Recovery/CrashRecoveryDialog";
+import { SafeModeBanner } from "./components/Recovery/SafeModeBanner";
 import {
   useAppHydration,
   useProjectSwitchRehydration,
@@ -59,6 +61,7 @@ import {
   useSemanticWorkerLifecycle,
   useSystemWakeHandler,
   useDevServerDiscovery,
+  useCloudSyncWarning,
   useAccessibilityAnnouncements,
   useGettingStartedChecklist,
   useDeferredNewsletterPrompt,
@@ -136,6 +139,7 @@ import {
 } from "./store";
 import { useShallow } from "zustand/react/shallow";
 import { useMacroFocusStore } from "./store/macroFocusStore";
+import { useSafeModeStore } from "./store/safeModeStore";
 import type { RecipeTerminal } from "./types";
 import { systemClient } from "@/clients";
 import { registerBuiltInPanelComponents } from "./registry";
@@ -514,16 +518,20 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
         }
       }
 
+      const hasWorkingAgent = worktreeTerminals.some((t) => t.agentState === "working");
+      const hasRunningAgent = worktreeTerminals.some((t) => t.agentState === "running");
+
       const chipState = computeChipState({
         waitingTerminalCount,
         lifecycleStage,
         isComplete,
+        hasActiveAgent: hasWorkingAgent || hasRunningAgent,
       });
 
       map.set(worktree.id, {
         terminalCount: worktreeTerminals.length,
-        hasWorkingAgent: worktreeTerminals.some((t) => t.agentState === "working"),
-        hasRunningAgent: worktreeTerminals.some((t) => t.agentState === "running"),
+        hasWorkingAgent,
+        hasRunningAgent,
         hasWaitingAgent: worktreeTerminals.some((t) => t.agentState === "waiting"),
         hasCompletedAgent: worktreeTerminals.some((t) => t.agentState === "completed"),
         hasMergeConflict:
@@ -1074,6 +1082,7 @@ function E2EFaultInjector() {
 function App() {
   useErrors();
   useHibernationNotifications();
+  useDiskSpaceWarnings();
   useUnloadCleanup();
   useEffect(() => removeStartupSkeleton(), []);
 
@@ -1303,6 +1312,7 @@ function App() {
   useTerminalStoreBootstrap();
   useSemanticWorkerLifecycle();
   useSystemWakeHandler();
+  useCloudSyncWarning(homeDir);
   useDevServerDiscovery();
   useAccessibilityAnnouncements();
 
@@ -1311,6 +1321,8 @@ function App() {
   }, []);
 
   useFileDropGuard();
+
+  const isSafeMode = useSafeModeStore((s) => s.safeMode);
 
   if (!isElectronAvailable()) {
     return (
@@ -1342,6 +1354,7 @@ function App() {
   return (
     <ErrorBoundary variant="fullscreen" componentName="App">
       <E2EFaultInjector />
+      {isSafeMode && <SafeModeBanner />}
       <DndProvider>
         <VoiceRecordingAnnouncer />
         <AccessibilityAnnouncer />

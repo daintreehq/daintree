@@ -34,6 +34,8 @@ import {
   setStopProcessMemoryMonitor,
   getStopAppMetricsMonitor,
   setStopAppMetricsMonitor,
+  getStopDiskSpaceMonitor,
+  setStopDiskSpaceMonitor,
 } from "./window/windowServices.js";
 import { setupPowerMonitor } from "./window/powerMonitor.js";
 import { isSmokeTest } from "./setup/environment.js";
@@ -44,6 +46,8 @@ import { initializeTelemetry } from "./services/TelemetryService.js";
 import { initializeCrashRecoveryService } from "./services/CrashRecoveryService.js";
 import { initializeGpuCrashMonitor } from "./services/GpuCrashMonitorService.js";
 import { initializeTrashedPidCleanup } from "./services/TrashedPidTracker.js";
+import { initializeCrashLoopGuard, getCrashLoopGuard } from "./services/CrashLoopGuardService.js";
+import { initializeDatabaseMaintenance } from "./services/DatabaseMaintenanceService.js";
 
 // CRITICAL: Run IPC sender validation before any handlers are registered
 enforceIpcSenderValidation();
@@ -107,11 +111,13 @@ if (!gotTheLock) {
   void initializeTelemetry();
 
   crashReporter.start({ uploadToServer: false });
+  initializeCrashLoopGuard();
   registerGlobalErrorHandlers();
 
   const distPath = path.join(__dirname, "../../dist");
 
   initializeCrashRecoveryService();
+  initializeDatabaseMaintenance();
   initializeTrashedPidCleanup();
   initializeGpuCrashMonitor();
 
@@ -172,6 +178,8 @@ if (!gotTheLock) {
     setStopProcessMemoryMonitor,
     getStopAppMetricsMonitor,
     setStopAppMetricsMonitor,
+    getStopDiskSpaceMonitor,
+    setStopDiskSpaceMonitor,
     getMainWindow,
   });
 
@@ -181,6 +189,7 @@ if (!gotTheLock) {
       registerCanopyFileProtocol();
       setupWebviewCSP();
       await createWindow();
+      getCrashLoopGuard().startStabilityTimer();
     } catch (error) {
       console.error("[MAIN] Startup failed:", error);
       app.exit(1);

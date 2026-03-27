@@ -1,6 +1,7 @@
 import { app } from "electron";
 import { emergencyLogMainFatal } from "../utils/emergencyLog.js";
 import { getCrashRecoveryService } from "../services/CrashRecoveryService.js";
+import { getCrashLoopGuard } from "../services/CrashLoopGuardService.js";
 import { getMainWindow } from "../window/windowRef.js";
 import { CHANNELS } from "../ipc/channels.js";
 import { store } from "../store.js";
@@ -95,7 +96,11 @@ export function registerGlobalErrorHandlers(): void {
     }
 
     try {
-      app.relaunch();
+      if (getCrashLoopGuard().shouldRelaunch()) {
+        app.relaunch();
+      } else {
+        console.error("[FATAL] Crash loop hard stop reached — not relaunching");
+      }
     } catch {
       // silent
     }

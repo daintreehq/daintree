@@ -2,6 +2,7 @@ import { appClient, terminalClient, worktreeClient, projectClient, systemClient 
 import { suppressMruRecording } from "@/store/worktreeStore";
 import { useLayoutConfigStore } from "@/store";
 import { useUserAgentRegistryStore } from "@/store/userAgentRegistryStore";
+import { notify } from "@/lib/notify";
 import type {
   TerminalType,
   AgentState,
@@ -18,6 +19,7 @@ import { logDebug, logInfo, logWarn, logError } from "@/utils/logger";
 import { PERF_MARKS } from "@shared/perf/marks";
 import { markRendererPerformance, withRendererSpan } from "@/utils/performance";
 import { isCanopyEnvEnabled } from "@/utils/env";
+import { useSafeModeStore } from "@/store/safeModeStore";
 import {
   type TerminalRestoreTask,
   splitSnapshotRestoreTasks,
@@ -228,6 +230,35 @@ export async function hydrateAppState(
     if (!checkCurrent()) return;
 
     terminalInstanceService.setGPUHardwareAvailable(gpuWebGLHardware ?? true);
+
+    if (hydrateResult.safeMode) {
+      useSafeModeStore.getState().setSafeMode(true);
+    }
+
+    if (hydrateResult.settingsRecovery) {
+      const recovery = hydrateResult.settingsRecovery;
+      const pathNote = recovery.quarantinedPath
+        ? `\nCorrupt file preserved at: ${recovery.quarantinedPath}`
+        : "";
+
+      if (recovery.kind === "restored-from-backup") {
+        notify({
+          type: "warning",
+          title: "Settings Restored from Backup",
+          message: `Your settings file was corrupted and has been restored from a backup. Some recent changes may have been lost.${pathNote}`,
+          priority: "high",
+          duration: 8000,
+        });
+      } else {
+        notify({
+          type: "warning",
+          title: "Settings Reset to Defaults",
+          message: `Your settings file was corrupted and no backup was available. Settings have been reset to defaults.${pathNote}`,
+          priority: "high",
+          duration: 0,
+        });
+      }
+    }
 
     normalizeAndApplyScrollback(terminalConfig, logHydrationInfo);
 
@@ -611,10 +642,13 @@ export async function hydrateAppState(
         // When no panels were saved (brand-new project), skip the startup "default"
         // terminal — its projectId may have been backfilled by TerminalRegistry's
         // lastKnownProjectId fallback, incorrectly attributing it to the new project.
+        // In safe mode, skip orphan reconnection entirely to ensure a clean slate.
         const hasSavedPanels = appState.terminals && appState.terminals.length > 0;
-        const orphanedTerminals = Array.from(backendTerminalMap.values()).filter(
-          (t) => !(t.id === "default" && !hasSavedPanels)
-        );
+        const orphanedTerminals = hydrateResult.safeMode
+          ? []
+          : Array.from(backendTerminalMap.values()).filter(
+              (t) => !(t.id === "default" && !hasSavedPanels)
+            );
         if (orphanedTerminals.length > 0) {
           logHydrationInfo(
             `${orphanedTerminals.length} orphaned terminal(s) not in saved order, appending at end`

@@ -321,6 +321,7 @@ export interface ElectronAPI {
     healthCheck(agentIds?: string[]): Promise<SystemHealthCheckResult>;
     downloadDiagnostics(): Promise<boolean>;
     getAppMetrics(): Promise<import("./system.js").AppMetricsSummary>;
+    getHardwareInfo(): Promise<import("./system.js").HardwareInfo>;
     onWake(callback: (data: SystemWakePayload) => void): () => void;
   };
   app: {
@@ -843,6 +844,20 @@ export interface ElectronAPI {
     close(): Promise<void>;
     /** Subscribe to hidden webview destruction events from memory pressure */
     onDestroyHiddenWebviews(callback: (payload: { tier: 1 | 2 }) => void): () => void;
+    /** Subscribe to disk space status changes */
+    onDiskSpaceStatus(
+      callback: (payload: {
+        status: "normal" | "warning" | "critical";
+        availableMb: number;
+        writesSuppressed: boolean;
+      }) => void
+    ): () => void;
+  };
+  recovery: {
+    /** Reload the main app from the recovery page */
+    reloadApp(): Promise<void>;
+    /** Reset workspace state and reload the main app from the recovery page */
+    resetAndReload(): Promise<void>;
   };
   notification: {
     /** Update window title and dock badge based on terminal attention state */

@@ -7,6 +7,7 @@ import {
   disposeAgentAvailabilityStore,
   getAgentAvailabilityStore,
 } from "../services/AgentAvailabilityStore.js";
+import { disposePowerSaveBlockerService } from "../services/PowerSaveBlockerService.js";
 import { disposeAgentRouter } from "../services/AgentRouter.js";
 import { disposeWorkflowEngine } from "../services/WorkflowEngine.js";
 import { disposeTaskOrchestrator } from "../services/TaskOrchestrator.js";
@@ -14,6 +15,8 @@ import { disposePtyClient } from "../services/PtyClient.js";
 import { disposeWorkspaceClient } from "../services/WorkspaceClient.js";
 import { mcpServerService } from "../services/McpServerService.js";
 import { getCrashRecoveryService } from "../services/CrashRecoveryService.js";
+import { getCrashLoopGuard } from "../services/CrashLoopGuardService.js";
+import { getDatabaseMaintenanceService } from "../services/DatabaseMaintenanceService.js";
 import { isSmokeTest } from "../setup/environment.js";
 import { isSignalShutdown } from "./signalShutdownState.js";
 
@@ -31,9 +34,13 @@ export interface ShutdownDeps {
   setStopProcessMemoryMonitor: (v: (() => void) | null) => void;
   getStopAppMetricsMonitor: () => (() => void) | null;
   setStopAppMetricsMonitor: (v: (() => void) | null) => void;
+  getStopDiskSpaceMonitor: () => (() => void) | null;
+  setStopDiskSpaceMonitor: (v: (() => void) | null) => void;
   getMainWindow: () => Electron.BrowserWindow | null;
   windowRegistry?: import("../window/WindowRegistry.js").WindowRegistry;
 }
+
+const CLEANUP_TIMEOUT_MS = 10_000;
 
 let isQuitting = false;
 let isConfirmingQuit = false;
@@ -80,6 +87,7 @@ export function registerShutdownHandler(deps: ShutdownDeps): void {
     const { drainRateLimitQueues } = await import("../ipc/utils.js");
     drainRateLimitQueues();
     getCrashRecoveryService().cleanupOnExit();
+    getCrashLoopGuard().markCleanExit();
 
     const ptyClient = deps.getPtyClient();
     const workspaceClient = deps.getWorkspaceClient();
@@ -116,7 +124,11 @@ export function registerShutdownHandler(deps: ShutdownDeps): void {
       }
     })();
 
-    gracefulShutdownPromise
+    let currentPhase = "service-disposal";
+    let exitCalled = false;
+    let hardTimer: ReturnType<typeof setTimeout> | undefined;
+
+    const cleanupPromise = gracefulShutdownPromise
       .then(() =>
         Promise.all([
           workspaceClient ? workspaceClient.dispose() : Promise.resolve(),
@@ -124,6 +136,7 @@ export function registerShutdownHandler(deps: ShutdownDeps): void {
           new Promise<void>((resolve) => {
             disposeTaskOrchestrator();
             disposeAgentRouter();
+            disposePowerSaveBlockerService();
             disposeAgentAvailabilityStore();
             disposeWorkflowEngine();
 
@@ -137,7 +150,8 @@ export function registerShutdownHandler(deps: ShutdownDeps): void {
           }),
         ])
       )
-      .then(() => {
+      .then(async () => {
+        currentPhase = "ipc-cleanup";
         const cleanupIpc = deps.getCleanupIpcHandlers();
         if (cleanupIpc) {
           cleanupIpc();
@@ -163,10 +177,41 @@ export function registerShutdownHandler(deps: ShutdownDeps): void {
           stopMetrics();
           deps.setStopAppMetricsMonitor(null);
         }
+        const stopDisk = deps.getStopDiskSpaceMonitor();
+        if (stopDisk) {
+          stopDisk();
+          deps.setStopDiskSpaceMonitor(null);
+        }
+
+        try {
+          await getDatabaseMaintenanceService().dispose();
+        } catch (error) {
+          console.warn("[MAIN] Database maintenance dispose failed:", error);
+        }
+      });
+
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      hardTimer = setTimeout(() => {
+        reject(
+          new Error(
+            `Hard shutdown timeout after ${CLEANUP_TIMEOUT_MS}ms — stuck at phase: ${currentPhase}`
+          )
+        );
+      }, CLEANUP_TIMEOUT_MS);
+    });
+
+    Promise.race([cleanupPromise, timeoutPromise])
+      .then(() => {
+        if (exitCalled) return;
+        exitCalled = true;
+        clearTimeout(hardTimer);
         console.log("[MAIN] Graceful shutdown complete");
         app.exit(0);
       })
       .catch((error) => {
+        if (exitCalled) return;
+        exitCalled = true;
+        clearTimeout(hardTimer);
         console.error("[MAIN] Error during cleanup:", error);
         app.exit(1);
       });

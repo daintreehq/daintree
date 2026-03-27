@@ -1,4 +1,4 @@
-import { app } from "electron";
+import { app, BrowserWindow } from "electron";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
@@ -9,6 +9,7 @@ import type {
   PendingCrash,
 } from "../../shared/types/ipc/crashRecovery.js";
 import { store } from "../store.js";
+import { isGpuDisabledByFlag } from "./GpuCrashMonitorService.js";
 
 const MAX_CRASH_LOGS = 10;
 const MARKER_FILENAME = "running.lock";
@@ -215,12 +216,10 @@ export class CrashRecoveryService {
 
       this.deleteMarker();
 
-      const logPath = marker.crashLogPath ?? null;
-      const entry = logPath ? this.readCrashLog(logPath) : this.buildCrashEntryFromMarker(marker);
       const backupInfo = this.readBackupInfo();
-      const panels = backupInfo.exists ? this.extractPanelSummaries(entry.timestamp) : undefined;
 
-      // Cache the backup snapshot so restoreBackup() can use it even if
+      // Cache the backup snapshot early so buildCrashEntryFromMarker can
+      // read panel data, and restoreBackup() can use it even if
       // startBackupTimer() overwrites the backup file before the user resolves.
       if (backupInfo.exists) {
         try {
@@ -230,6 +229,10 @@ export class CrashRecoveryService {
           // If read fails, restoreBackup will fall back to reading from disk
         }
       }
+
+      const logPath = marker.crashLogPath ?? null;
+      const entry = logPath ? this.readCrashLog(logPath) : this.buildCrashEntryFromMarker(marker);
+      const panels = backupInfo.exists ? this.extractPanelSummaries(entry.timestamp) : undefined;
 
       return {
         logPath: logPath ?? path.join(this.crashesDir, `crash-${entry.id}.json`),
@@ -321,12 +324,15 @@ export class CrashRecoveryService {
       entry.errorMessage = String(error);
     }
 
+    this.enrichWithEnvironmentMetadata(entry);
+    this.enrichWithPanelData(entry, store.get("appState"));
+
     return entry;
   }
 
   private buildCrashEntryFromMarker(marker: MarkerFile): CrashLogEntry {
     const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    return {
+    const entry: CrashLogEntry = {
       id,
       timestamp: Date.now(),
       appVersion: marker.appVersion ?? app.getVersion(),
@@ -335,6 +341,75 @@ export class CrashRecoveryService {
       arch: os.arch(),
       sessionDurationMs: marker.sessionStartMs ? Date.now() - marker.sessionStartMs : undefined,
     };
+
+    this.enrichWithEnvironmentMetadata(entry);
+    const backupAppState = this.cachedBackupSnapshot?.appState;
+    this.enrichWithPanelData(entry, backupAppState);
+
+    return entry;
+  }
+
+  private enrichWithEnvironmentMetadata(entry: CrashLogEntry): void {
+    try {
+      entry.electronVersion = process.versions.electron;
+      entry.nodeVersion = process.versions.node;
+      entry.chromeVersion = process.versions.chrome;
+      entry.v8Version = process.versions.v8;
+      entry.isPackaged = app.isPackaged;
+    } catch {
+      // best-effort
+    }
+
+    try {
+      entry.totalMemory = os.totalmem();
+      entry.freeMemory = os.freemem();
+      const mem = process.memoryUsage();
+      entry.heapUsed = mem.heapUsed;
+      entry.heapTotal = mem.heapTotal;
+      entry.rss = mem.rss;
+    } catch {
+      // best-effort
+    }
+
+    try {
+      entry.processUptime = Math.round(process.uptime());
+      entry.cpuCount = os.cpus().length;
+    } catch {
+      // best-effort
+    }
+
+    try {
+      entry.windowCount = BrowserWindow.getAllWindows().length;
+    } catch {
+      // best-effort
+    }
+
+    try {
+      entry.gpuAccelerationDisabled = isGpuDisabledByFlag(app.getPath("userData"));
+    } catch {
+      // best-effort
+    }
+  }
+
+  private enrichWithPanelData(entry: CrashLogEntry, appState: unknown): void {
+    try {
+      const state = appState as Record<string, unknown> | undefined;
+      const terminals = state?.terminals;
+      if (!Array.isArray(terminals)) return;
+
+      entry.panelCount = terminals.length;
+      const kinds: Record<string, number> = Object.create(null);
+      for (const t of terminals) {
+        const kind =
+          typeof (t as Record<string, unknown>).kind === "string"
+            ? ((t as Record<string, unknown>).kind as string)
+            : "unknown";
+        kinds[kind] = (kinds[kind] ?? 0) + 1;
+      }
+      entry.panelKinds = kinds;
+    } catch {
+      // best-effort
+    }
   }
 
   private readCrashLog(logPath: string): CrashLogEntry {

@@ -1,6 +1,7 @@
 import { ipcMain } from "electron";
 import { CHANNELS } from "../../channels.js";
 import { getCrashRecoveryService } from "../../../services/CrashRecoveryService.js";
+import { getCrashLoopGuard } from "../../../services/CrashLoopGuardService.js";
 import type {
   CrashRecoveryAction,
   CrashRecoveryConfig,
@@ -10,6 +11,9 @@ export function registerCrashRecoveryHandlers(): () => void {
   const handlers: Array<() => void> = [];
 
   ipcMain.handle(CHANNELS.CRASH_RECOVERY_GET_PENDING, () => {
+    if (getCrashLoopGuard().isSafeMode()) {
+      return null;
+    }
     return getCrashRecoveryService().getPendingCrash();
   });
   handlers.push(() => ipcMain.removeHandler(CHANNELS.CRASH_RECOVERY_GET_PENDING));

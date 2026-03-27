@@ -1221,7 +1221,10 @@ export function Toolbar({
         <div
           key={id}
           data-toolbar-button-id={id}
-          className={visibleSet.has(id) ? undefined : "invisible absolute pointer-events-none"}
+          className={cn(
+            "app-no-drag",
+            !visibleSet.has(id) && "invisible absolute pointer-events-none"
+          )}
           aria-hidden={visibleSet.has(id) ? undefined : true}
         >
           {buttonRegistry[id].render()}
@@ -1241,7 +1244,7 @@ export function Toolbar({
         <div
           key={id}
           data-toolbar-button-id={id}
-          className={isVisible ? undefined : "invisible absolute pointer-events-none"}
+          className={cn("app-no-drag", !isVisible && "invisible absolute pointer-events-none")}
           aria-hidden={isVisible ? undefined : true}
         >
           {buttonRegistry[id].render()}
@@ -1389,7 +1392,7 @@ export function Toolbar({
         <div
           role="group"
           aria-label="Navigation and agents"
-          className="flex items-center gap-1.5 app-no-drag z-20"
+          className="flex items-center gap-1.5 z-20"
         >
           {isMac() && (
             <div
@@ -1399,7 +1402,7 @@ export function Toolbar({
               )}
             />
           )}
-          {buttonRegistry["sidebar-toggle"].render()}
+          <div className="app-no-drag">{buttonRegistry["sidebar-toggle"].render()}</div>
 
           <div className={toolbarDividerClass} />
 
@@ -1409,7 +1412,7 @@ export function Toolbar({
           >
             {renderLeftButtons(toolbarLayout.leftButtons, leftVisibleSet)}
           </div>
-          {renderOverflowMenu(leftOverflow, "left")}
+          <div className="app-no-drag">{renderOverflowMenu(leftOverflow, "left")}</div>
         </div>
 
         {/* CENTER GROUP - Grid-centered, shrinks gracefully on narrow windows */}
@@ -1484,7 +1487,7 @@ export function Toolbar({
         <div
           role="group"
           aria-label="Tools and settings"
-          className="flex items-center justify-end gap-1.5 app-no-drag z-20"
+          className="flex items-center justify-end gap-1.5 z-20"
         >
           <div
             ref={rightGroupRef}
@@ -1492,11 +1495,11 @@ export function Toolbar({
           >
             {renderButtons(toolbarLayout.rightButtons, rightVisibleSet)}
           </div>
-          {renderOverflowMenu(rightOverflow, "right")}
+          <div className="app-no-drag">{renderOverflowMenu(rightOverflow, "right")}</div>
 
           <div className={toolbarDividerClass} />
 
-          {buttonRegistry["portal-toggle"].render()}
+          <div className="app-no-drag">{buttonRegistry["portal-toggle"].render()}</div>
         </div>
       </div>
     </>

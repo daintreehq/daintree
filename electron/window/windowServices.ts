@@ -39,6 +39,10 @@ import {
   initializeAgentAvailabilityStore,
   disposeAgentAvailabilityStore,
 } from "../services/AgentAvailabilityStore.js";
+import {
+  initializePowerSaveBlockerService,
+  disposePowerSaveBlockerService,
+} from "../services/PowerSaveBlockerService.js";
 import { initializeAgentRouter, disposeAgentRouter } from "../services/AgentRouter.js";
 import { initializeWorkflowEngine, disposeWorkflowEngine } from "../services/WorkflowEngine.js";
 import { workflowLoader } from "../services/WorkflowLoader.js";
@@ -69,6 +73,7 @@ import {
   startProcessMemoryMonitor,
 } from "../utils/performance.js";
 import { startAppMetricsMonitor } from "../services/ProcessMemoryMonitor.js";
+import { startDiskSpaceMonitor, getCurrentDiskSpaceStatus } from "../services/DiskSpaceMonitor.js";
 import { SCROLLBACK_BACKGROUND } from "../../shared/config/scrollback.js";
 import { logInfo, setLoggerWindow } from "../utils/logger.js";
 import { PERF_MARKS } from "../../shared/perf/marks.js";
@@ -94,6 +99,7 @@ let activePtyHostPort: MessagePortMain | null = null;
 let stopEventLoopLagMonitor: (() => void) | null = null;
 let stopProcessMemoryMonitor: (() => void) | null = null;
 let stopAppMetricsMonitor: (() => void) | null = null;
+let stopDiskSpaceMonitor: (() => void) | null = null;
 
 // Expose getters for shutdown handler
 export function getPtyClient(): PtyClient | null {
@@ -140,6 +146,12 @@ export function getStopAppMetricsMonitor(): (() => void) | null {
 }
 export function setStopAppMetricsMonitor(v: (() => void) | null): void {
   stopAppMetricsMonitor = v;
+}
+export function getStopDiskSpaceMonitor(): (() => void) | null {
+  return stopDiskSpaceMonitor;
+}
+export function setStopDiskSpaceMonitor(v: (() => void) | null): void {
+  stopDiskSpaceMonitor = v;
 }
 
 function createAndDistributePorts(win: BrowserWindow): void {
@@ -437,11 +449,20 @@ export async function setupWindowServices(
 
   // Handle reloads
   win.webContents.on("did-finish-load", () => {
+    const currentUrl = win.webContents.getURL();
+    if (currentUrl.includes("recovery.html")) {
+      console.log("[MAIN] Recovery page loaded, skipping normal renderer bootstrap");
+      return;
+    }
     console.log("[MAIN] Renderer loaded, ensuring MessagePort connection...");
     if (isSmokeTest) console.error("[SMOKE] CHECK: Renderer did-finish-load — OK");
     markPerformance(PERF_MARKS.RENDERER_READY);
     createAndDistributePorts(win);
     flushPendingErrors();
+    const diskStatus = getCurrentDiskSpaceStatus();
+    if (diskStatus.status !== "normal") {
+      sendToRenderer(win, CHANNELS.WINDOW_DISK_SPACE_STATUS, diskStatus);
+    }
   });
 
   workspaceClient.on("host-crash", (code: number) => {
@@ -505,7 +526,8 @@ export async function setupWindowServices(
 
     const availabilityStore = initializeAgentAvailabilityStore();
     const agentRouter = initializeAgentRouter(availabilityStore);
-    console.log("[MAIN] AgentAvailabilityStore and AgentRouter initialized");
+    initializePowerSaveBlockerService();
+    console.log("[MAIN] AgentAvailabilityStore, AgentRouter, and PowerSaveBlocker initialized");
 
     initializeTaskOrchestrator(ptyClient, agentRouter);
     console.log("[MAIN] TaskOrchestrator initialized");
@@ -635,6 +657,28 @@ export async function setupWindowServices(
 
   getCrashRecoveryService().startBackupTimer();
 
+  // Disk space monitor
+  if (!stopDiskSpaceMonitor) {
+    stopDiskSpaceMonitor = startDiskSpaceMonitor({
+      sendStatus: (payload) => {
+        sendToRenderer(win, CHANNELS.WINDOW_DISK_SPACE_STATUS, payload);
+      },
+      onCriticalChange: (isCritical) => {
+        if (isCritical) {
+          getCrashRecoveryService().stopBackupTimer();
+          ptyClient?.suppressSessionPersistence(true);
+        } else {
+          getCrashRecoveryService().startBackupTimer();
+          ptyClient?.suppressSessionPersistence(false);
+        }
+      },
+      showNativeNotification: (title, body) => {
+        notificationService.showNativeNotification(title, body);
+      },
+      isWindowFocused: () => notificationService.isWindowFocused(),
+    });
+  }
+
   // CLI path handling
   const firstLaunchCliPath = extractCliPath(process.argv);
   const cliPath = firstLaunchCliPath ?? getPendingCliPath();
@@ -726,6 +770,10 @@ export async function setupWindowServices(
       stopAppMetricsMonitor();
       stopAppMetricsMonitor = null;
     }
+    if (stopDiskSpaceMonitor) {
+      stopDiskSpaceMonitor();
+      stopDiskSpaceMonitor = null;
+    }
 
     // Clean up window-specific IPC handlers
     ipcMain.removeHandler(CHANNELS.WINDOW_TOGGLE_FULLSCREEN);
@@ -746,6 +794,7 @@ export async function setupWindowServices(
 
     disposeTaskOrchestrator();
     disposeAgentRouter();
+    disposePowerSaveBlockerService();
     disposeAgentAvailabilityStore();
     disposeWorkflowEngine();
 

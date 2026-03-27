@@ -82,6 +82,11 @@ export interface AppState {
   actionMruList?: string[];
 }
 
+/** Describes how the settings store recovered from corruption at startup */
+export type SettingsRecovery =
+  | { kind: "restored-from-backup"; quarantinedPath?: string }
+  | { kind: "reset-to-defaults"; quarantinedPath?: string };
+
 /** Result from app hydration */
 export interface HydrateResult {
   appState: AppState;
@@ -90,4 +95,6 @@ export interface HydrateResult {
   agentSettings: import("../agentSettings.js").AgentSettings;
   gpuWebGLHardware: boolean;
   gpuHardwareAccelerationDisabled: boolean;
+  safeMode: boolean;
+  settingsRecovery?: SettingsRecovery | null;
 }

@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const appMock = vi.hoisted(() => ({
   on: vi.fn(),
@@ -30,6 +30,14 @@ const crashRecoveryMock = vi.hoisted(() => ({
 
 vi.mock("../../services/CrashRecoveryService.js", () => ({
   getCrashRecoveryService: vi.fn(() => crashRecoveryMock),
+}));
+
+const crashLoopGuardMock = vi.hoisted(() => ({
+  markCleanExit: vi.fn(),
+}));
+
+vi.mock("../../services/CrashLoopGuardService.js", () => ({
+  getCrashLoopGuard: vi.fn(() => crashLoopGuardMock),
 }));
 
 const quitWarningMock = vi.hoisted(() => ({
@@ -68,8 +76,12 @@ vi.mock("../../services/WorkspaceClient.js", () => ({
   disposeWorkspaceClient: vi.fn(),
 }));
 
+const mcpServerMock = vi.hoisted(() => ({
+  stop: vi.fn(() => Promise.resolve()),
+}));
+
 vi.mock("../../services/McpServerService.js", () => ({
-  mcpServerService: { stop: vi.fn(() => Promise.resolve()) },
+  mcpServerService: mcpServerMock,
 }));
 
 vi.mock("../../ipc/utils.js", () => ({
@@ -107,6 +119,8 @@ function makeDeps(overrides?: Partial<ShutdownDeps>): ShutdownDeps {
     setStopProcessMemoryMonitor: vi.fn(),
     getStopAppMetricsMonitor: vi.fn(() => null),
     setStopAppMetricsMonitor: vi.fn(),
+    getStopDiskSpaceMonitor: vi.fn(() => null),
+    setStopDiskSpaceMonitor: vi.fn(),
     getMainWindow: vi.fn(() => null),
     ...overrides,
   };
@@ -253,6 +267,88 @@ describe("registerShutdownHandler", () => {
 
     await vi.waitFor(() => {
       expect(appMock.exit).toHaveBeenCalledWith(0);
+    });
+  });
+
+  describe("hard shutdown timeout", () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("calls app.exit(1) when cleanup hangs past hard timeout", async () => {
+      mcpServerMock.stop.mockReturnValue(new Promise(() => {}));
+      const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+      const { beforeQuitCb } = await setup({
+        getMainWindow: vi.fn(() => null),
+      });
+      const event = makeEvent();
+      await beforeQuitCb(event);
+
+      await vi.advanceTimersByTimeAsync(10_000);
+
+      expect(appMock.exit).toHaveBeenCalledWith(1);
+      expect(appMock.exit).toHaveBeenCalledTimes(1);
+      expect(consoleSpy).toHaveBeenCalledWith(
+        "[MAIN] Error during cleanup:",
+        expect.objectContaining({
+          message: expect.stringContaining("Hard shutdown timeout"),
+        })
+      );
+      expect(consoleSpy).toHaveBeenCalledWith(
+        "[MAIN] Error during cleanup:",
+        expect.objectContaining({
+          message: expect.stringContaining("service-disposal"),
+        })
+      );
+
+      consoleSpy.mockRestore();
+    });
+
+    it("normal cleanup exits with code 0 and timeout does not fire", async () => {
+      mcpServerMock.stop.mockReturnValue(Promise.resolve());
+
+      const { beforeQuitCb } = await setup({
+        getMainWindow: vi.fn(() => null),
+      });
+      const event = makeEvent();
+      await beforeQuitCb(event);
+
+      await vi.advanceTimersByTimeAsync(100);
+
+      expect(appMock.exit).toHaveBeenCalledWith(0);
+      expect(appMock.exit).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(15_000);
+
+      expect(appMock.exit).toHaveBeenCalledTimes(1);
+    });
+
+    it("cleanup error triggers app.exit(1) via catch handler", async () => {
+      mcpServerMock.stop.mockReturnValue(Promise.reject(new Error("MCP stop failed")));
+      const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+      const { beforeQuitCb } = await setup({
+        getMainWindow: vi.fn(() => null),
+      });
+      const event = makeEvent();
+      await beforeQuitCb(event);
+
+      await vi.advanceTimersByTimeAsync(100);
+
+      expect(appMock.exit).toHaveBeenCalledWith(1);
+      expect(consoleSpy).toHaveBeenCalledWith(
+        "[MAIN] Error during cleanup:",
+        expect.objectContaining({
+          message: "MCP stop failed",
+        })
+      );
+
+      consoleSpy.mockRestore();
     });
   });
 });

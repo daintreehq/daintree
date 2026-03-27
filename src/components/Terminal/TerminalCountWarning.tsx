@@ -3,11 +3,7 @@ import { X, AlertTriangle, Trash2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useTerminalStore } from "@/store/terminalStore";
 import { useShallow } from "zustand/react/shallow";
-import {
-  usePanelLimitStore,
-  shouldShowSoftWarning,
-  dismissSoftWarning,
-} from "@/store/panelLimitStore";
+import { usePanelLimitStore, shouldShowSoftWarning } from "@/store/panelLimitStore";
 
 interface TerminalCountWarningProps {
   className?: string;
@@ -30,11 +26,21 @@ export function TerminalCountWarning({ className, onOpenBulkActions }: TerminalC
   );
 
   const softLimit = usePanelLimitStore((state) => state.softWarningLimit);
+  const warningsDisabled = usePanelLimitStore((state) => state.warningsDisabled);
+  const lastDismissedAt = usePanelLimitStore((state) => state.lastSoftWarningDismissedAt);
+  const dismissSoftWarning = usePanelLimitStore((state) => state.dismissSoftWarning);
+  const initializeFromHardware = usePanelLimitStore((state) => state.initializeFromHardware);
+
+  useEffect(() => {
+    void initializeFromHardware();
+  }, [initializeFromHardware]);
 
   const [isDismissed, setIsDismissed] = useState(false);
   const [isVisible, setIsVisible] = useState(false);
 
-  const showWarning = !isDismissed && shouldShowSoftWarning(activeCount, softLimit);
+  const showWarning =
+    !isDismissed &&
+    shouldShowSoftWarning(activeCount, softLimit, warningsDisabled, lastDismissedAt);
 
   useEffect(() => {
     if (showWarning) {
@@ -44,12 +50,14 @@ export function TerminalCountWarning({ className, onOpenBulkActions }: TerminalC
     }
   }, [showWarning]);
 
-  // Reset dismiss state when count crosses a new threshold
   useEffect(() => {
-    if (isDismissed && shouldShowSoftWarning(activeCount, softLimit)) {
+    if (
+      isDismissed &&
+      shouldShowSoftWarning(activeCount, softLimit, warningsDisabled, lastDismissedAt)
+    ) {
       setIsDismissed(false);
     }
-  }, [activeCount, softLimit, isDismissed]);
+  }, [activeCount, softLimit, warningsDisabled, lastDismissedAt, isDismissed]);
 
   const [dismissTimeoutId, setDismissTimeoutId] = useState<NodeJS.Timeout | null>(null);
 
@@ -60,7 +68,7 @@ export function TerminalCountWarning({ className, onOpenBulkActions }: TerminalC
       setIsDismissed(true);
     }, 200);
     setDismissTimeoutId(timeoutId);
-  }, [activeCount]);
+  }, [activeCount, dismissSoftWarning]);
 
   useEffect(() => {
     return () => {

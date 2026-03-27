@@ -71,6 +71,7 @@ import type {
   CliInstallStatus,
   SystemHealthCheckResult,
   AppMetricsSummary,
+  HardwareInfo,
 } from "./system.js";
 import type { AppState, HydrateResult } from "./app.js";
 import type { LogEntry, LogFilterOptions } from "./logs.js";
@@ -462,6 +463,10 @@ export interface IpcInvokeMap {
   "system:get-app-metrics": {
     args: [];
     result: AppMetricsSummary;
+  };
+  "system:get-hardware-info": {
+    args: [];
+    result: HardwareInfo;
   };
 
   // App state channels
@@ -1748,6 +1753,11 @@ export interface IpcEventMap {
   "window:fullscreen-change": boolean;
   "window:reclaim-memory": { reason: string };
   "window:destroy-hidden-webviews": { tier: 1 | 2 };
+  "window:disk-space-status": {
+    status: "normal" | "warning" | "critical";
+    availableMb: number;
+    writesSuppressed: boolean;
+  };
   "portal:tabs-evicted": { tabIds: string[] };
 
   // Notification events

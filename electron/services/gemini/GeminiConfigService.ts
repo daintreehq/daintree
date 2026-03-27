@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
 import { mkdir, readFile } from "node:fs/promises";
-import { resilientWriteFile } from "../../utils/fs.js";
+import { resilientAtomicWriteFile } from "../../utils/fs.js";
 import { homedir } from "node:os";
 import path from "node:path";
 
@@ -111,7 +111,7 @@ export class GeminiConfigService {
     try {
       await mkdir(this.configDir, { recursive: true });
       const content = JSON.stringify(config, null, 2);
-      await resilientWriteFile(this.configPath, content, "utf8");
+      await resilientAtomicWriteFile(this.configPath, content, "utf8");
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       throw new Error(`Failed to write Gemini config: ${message}`);

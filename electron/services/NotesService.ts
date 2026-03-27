@@ -1,6 +1,6 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import { resilientWriteFile, resilientRename, resilientUnlink } from "../utils/fs.js";
+import { resilientAtomicWriteFile, resilientUnlink } from "../utils/fs.js";
 import matter from "gray-matter";
 import { nanoid } from "nanoid";
 import { normalizeTags } from "../../shared/utils/noteTags.js";
@@ -183,9 +183,7 @@ export class NotesService {
 
     const frontmatter = matter.stringify("", metadata);
 
-    const tmpPath = `${absolutePath}.tmp`;
-    await resilientWriteFile(tmpPath, frontmatter, "utf-8");
-    await resilientRename(tmpPath, absolutePath);
+    await resilientAtomicWriteFile(absolutePath, frontmatter, "utf-8");
 
     const stats = await fs.stat(absolutePath);
 
@@ -265,9 +263,7 @@ export class NotesService {
 
     const fileContent = matter.stringify(content, cleanMetadata);
 
-    const tmpPath = `${absolutePath}.tmp`;
-    await resilientWriteFile(tmpPath, fileContent, "utf-8");
-    await resilientRename(tmpPath, absolutePath);
+    await resilientAtomicWriteFile(absolutePath, fileContent, "utf-8");
 
     const stats = await fs.stat(absolutePath);
     return { lastModified: stats.mtimeMs };

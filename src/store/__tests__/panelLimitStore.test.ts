@@ -1,9 +1,9 @@
 // @vitest-environment jsdom
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect } from "vitest";
 import {
   evaluatePanelLimit,
   shouldShowSoftWarning,
-  dismissSoftWarning,
+  computeHardwareDefaults,
   DEFAULT_SOFT_WARNING_LIMIT,
   DEFAULT_CONFIRMATION_LIMIT,
   DEFAULT_HARD_LIMIT,
@@ -46,36 +46,73 @@ describe("evaluatePanelLimit", () => {
 });
 
 describe("shouldShowSoftWarning", () => {
-  beforeEach(() => {
-    sessionStorage.clear();
-  });
-
   it("returns false when count is below soft limit", () => {
-    expect(shouldShowSoftWarning(10, 12)).toBe(false);
+    expect(shouldShowSoftWarning(10, 12, false, null)).toBe(false);
   });
 
   it("returns true when count is at soft limit and no dismiss", () => {
-    expect(shouldShowSoftWarning(12, 12)).toBe(true);
+    expect(shouldShowSoftWarning(12, 12, false, null)).toBe(true);
   });
 
   it("returns false after dismiss until next step threshold", () => {
-    dismissSoftWarning(12);
-    expect(shouldShowSoftWarning(12, 12)).toBe(false);
-    expect(shouldShowSoftWarning(14, 12)).toBe(false);
-    expect(shouldShowSoftWarning(15, 12)).toBe(false);
+    expect(shouldShowSoftWarning(12, 12, false, 12)).toBe(false);
+    expect(shouldShowSoftWarning(14, 12, false, 12)).toBe(false);
+    expect(shouldShowSoftWarning(15, 12, false, 12)).toBe(false);
   });
 
   it("returns true at next step threshold after dismiss", () => {
-    dismissSoftWarning(12);
-    expect(shouldShowSoftWarning(16, 12)).toBe(true);
+    expect(shouldShowSoftWarning(16, 12, false, 12)).toBe(true);
   });
 
   it("supports multiple dismiss cycles", () => {
-    dismissSoftWarning(12);
-    expect(shouldShowSoftWarning(16, 12)).toBe(true);
-    dismissSoftWarning(16);
-    expect(shouldShowSoftWarning(16, 12)).toBe(false);
-    expect(shouldShowSoftWarning(19, 12)).toBe(false);
-    expect(shouldShowSoftWarning(20, 12)).toBe(true);
+    expect(shouldShowSoftWarning(16, 12, false, 12)).toBe(true);
+    expect(shouldShowSoftWarning(16, 12, false, 16)).toBe(false);
+    expect(shouldShowSoftWarning(19, 12, false, 16)).toBe(false);
+    expect(shouldShowSoftWarning(20, 12, false, 16)).toBe(true);
+  });
+
+  it("returns false when warnings are disabled", () => {
+    expect(shouldShowSoftWarning(100, 12, true, null)).toBe(false);
+    expect(shouldShowSoftWarning(50, 12, true, 12)).toBe(false);
+  });
+});
+
+describe("computeHardwareDefaults", () => {
+  const GB = 1024 * 1024 * 1024;
+
+  it("returns conservative defaults for 8GB or less", () => {
+    expect(computeHardwareDefaults(8 * GB)).toEqual({ soft: 8, confirm: 16, hard: 24 });
+    expect(computeHardwareDefaults(4 * GB)).toEqual({ soft: 8, confirm: 16, hard: 24 });
+    expect(computeHardwareDefaults(1 * GB)).toEqual({ soft: 8, confirm: 16, hard: 24 });
+  });
+
+  it("returns moderate defaults for 16GB", () => {
+    expect(computeHardwareDefaults(16 * GB)).toEqual({ soft: 16, confirm: 30, hard: 48 });
+    expect(computeHardwareDefaults(12 * GB)).toEqual({ soft: 16, confirm: 30, hard: 48 });
+  });
+
+  it("returns generous defaults for 32GB", () => {
+    expect(computeHardwareDefaults(32 * GB)).toEqual({ soft: 24, confirm: 48, hard: 72 });
+    expect(computeHardwareDefaults(24 * GB)).toEqual({ soft: 24, confirm: 48, hard: 72 });
+  });
+
+  it("returns maximum defaults for 64GB+", () => {
+    expect(computeHardwareDefaults(64 * GB)).toEqual({ soft: 32, confirm: 64, hard: 100 });
+    expect(computeHardwareDefaults(128 * GB)).toEqual({ soft: 32, confirm: 64, hard: 100 });
+  });
+
+  it("handles edge case of 0 bytes", () => {
+    expect(computeHardwareDefaults(0)).toEqual({ soft: 8, confirm: 16, hard: 24 });
+  });
+
+  it("handles boundary values precisely", () => {
+    // Just under 8GB -> still 8GB tier
+    expect(computeHardwareDefaults(8 * GB - 1)).toEqual({ soft: 8, confirm: 16, hard: 24 });
+    // Just over 8GB -> 16GB tier
+    expect(computeHardwareDefaults(8 * GB + 1)).toEqual({ soft: 16, confirm: 30, hard: 48 });
+    // Just over 16GB -> 32GB tier
+    expect(computeHardwareDefaults(16 * GB + 1)).toEqual({ soft: 24, confirm: 48, hard: 72 });
+    // Just over 32GB -> 64GB+ tier
+    expect(computeHardwareDefaults(32 * GB + 1)).toEqual({ soft: 32, confirm: 64, hard: 100 });
   });
 });
