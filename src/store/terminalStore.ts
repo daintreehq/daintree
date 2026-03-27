@@ -162,7 +162,10 @@ export const useTerminalStore = create<PanelGridState>()((set, get, api) => {
       const updates: Partial<PanelGridState> = {};
 
       if (state.focusedId === id) {
-        const gridTerminals = state.terminals.filter((t) => t.id !== id && t.location === "grid");
+        const activeWt = getActiveWorktreeId() ?? undefined;
+        const gridTerminals = state.terminals.filter(
+          (t) => t.id !== id && t.location === "grid" && (t.worktreeId ?? undefined) === activeWt
+        );
         updates.focusedId = gridTerminals[0]?.id ?? null;
       }
 
@@ -198,7 +201,10 @@ export const useTerminalStore = create<PanelGridState>()((set, get, api) => {
       const updates: Partial<PanelGridState> = {};
 
       if (state.focusedId === id) {
-        const gridTerminals = state.terminals.filter((t) => t.id !== id && t.location === "grid");
+        const activeWt = getActiveWorktreeId() ?? undefined;
+        const gridTerminals = state.terminals.filter(
+          (t) => t.id !== id && t.location === "grid" && (t.worktreeId ?? undefined) === activeWt
+        );
         const trashedTerminal = state.terminals.find((t) => t.id === id);
         const wasAgent =
           trashedTerminal &&
@@ -234,8 +240,12 @@ export const useTerminalStore = create<PanelGridState>()((set, get, api) => {
 
       // If any panel in the group was focused, find a new focus
       if (panelIdsInGroup.includes(state.focusedId ?? "")) {
+        const activeWt = getActiveWorktreeId() ?? undefined;
         const gridTerminals = state.terminals.filter(
-          (t) => !panelIdsInGroup.includes(t.id) && t.location === "grid"
+          (t) =>
+            !panelIdsInGroup.includes(t.id) &&
+            t.location === "grid" &&
+            (t.worktreeId ?? undefined) === activeWt
         );
         const focusedTerminal = state.terminals.find((t) => t.id === state.focusedId);
         const wasAgent =
@@ -335,7 +345,10 @@ export const useTerminalStore = create<PanelGridState>()((set, get, api) => {
       if (location === "grid") {
         set({ focusedId: id, activeDockTerminalId: null });
       } else if (state.focusedId === id) {
-        const gridTerminals = state.terminals.filter((t) => t.id !== id && t.location === "grid");
+        const activeWt = getActiveWorktreeId() ?? undefined;
+        const gridTerminals = state.terminals.filter(
+          (t) => t.id !== id && t.location === "grid" && (t.worktreeId ?? undefined) === activeWt
+        );
         set({ focusedId: gridTerminals[0]?.id ?? null });
       }
     },
@@ -674,7 +687,10 @@ export function setupTerminalStoreListeners() {
 
       const updates: Partial<PanelGridState> = {};
       if (state.focusedId === id) {
-        const gridTerminals = state.terminals.filter((t) => t.id !== id && t.location === "grid");
+        const activeWt = useWorktreeSelectionStore.getState().activeWorktreeId ?? undefined;
+        const gridTerminals = state.terminals.filter(
+          (t) => t.id !== id && t.location === "grid" && (t.worktreeId ?? undefined) === activeWt
+        );
         updates.focusedId = gridTerminals[0]?.id ?? null;
       }
       if (state.maximizedId === id) {

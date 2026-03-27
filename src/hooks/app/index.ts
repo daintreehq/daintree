@@ -5,6 +5,7 @@ export { useTerminalStoreBootstrap } from "./useTerminalStoreBootstrap";
 export { useSemanticWorkerLifecycle } from "./useSemanticWorkerLifecycle";
 export { useSystemWakeHandler } from "./useSystemWakeHandler";
 export { useDevServerDiscovery } from "./useDevServerDiscovery";
+export { useCloudSyncWarning } from "./useCloudSyncWarning";
 export { useAccessibilityAnnouncements } from "./useAccessibilityAnnouncements";
 export { useGettingStartedChecklist } from "./useGettingStartedChecklist";
 export { useUnloadCleanup } from "./useUnloadCleanup";

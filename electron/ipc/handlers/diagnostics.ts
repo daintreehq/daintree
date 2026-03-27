@@ -1,8 +1,9 @@
 import { app, ipcMain, dialog } from "electron";
+import os from "node:os";
 import { promises as fs } from "node:fs";
 import { CHANNELS } from "../channels.js";
 import type { HandlerDependencies } from "../types.js";
-import type { AppMetricsSummary } from "../../../shared/types/ipc/system.js";
+import type { AppMetricsSummary, HardwareInfo } from "../../../shared/types/ipc/system.js";
 import { collectDiagnostics } from "../../services/DiagnosticsCollector.js";
 
 export function registerDiagnosticsHandlers(deps: HandlerDependencies): () => void {
@@ -22,6 +23,19 @@ export function registerDiagnosticsHandlers(deps: HandlerDependencies): () => vo
   };
   ipcMain.handle(CHANNELS.SYSTEM_GET_APP_METRICS, handleGetAppMetrics);
   handlers.push(() => ipcMain.removeHandler(CHANNELS.SYSTEM_GET_APP_METRICS));
+
+  const handleGetHardwareInfo = (): HardwareInfo => {
+    try {
+      return {
+        totalMemoryBytes: os.totalmem(),
+        logicalCpuCount: os.cpus().length,
+      };
+    } catch {
+      return { totalMemoryBytes: 0, logicalCpuCount: 0 };
+    }
+  };
+  ipcMain.handle(CHANNELS.SYSTEM_GET_HARDWARE_INFO, handleGetHardwareInfo);
+  handlers.push(() => ipcMain.removeHandler(CHANNELS.SYSTEM_GET_HARDWARE_INFO));
 
   const handleDownloadDiagnostics = async (): Promise<boolean> => {
     const payload = await collectDiagnostics(deps);

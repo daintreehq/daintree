@@ -1,5 +1,5 @@
-import { access } from "fs/promises";
-import { unlink as fsUnlink } from "fs/promises";
+import { access, unlink as fsUnlink } from "fs/promises";
+import { unlinkSync, writeFileSync } from "fs";
 import stubbornFs from "stubborn-fs";
 
 // Wall-clock retry budgets for transient file-locking errors (EPERM/EBUSY/EACCES).
@@ -26,15 +26,70 @@ export function resilientRenameSync(src: string, dest: string): void {
 }
 
 /**
- * writeFile with retry for transient file-locking errors.
+ * Direct (non-atomic) writeFile with retry for transient file-locking errors.
  * Uses stubborn-fs for cross-platform resilience.
+ *
+ * WARNING: This writes directly to the target path. If the process crashes
+ * mid-write the file may be left corrupted. For important data, use
+ * {@link resilientAtomicWriteFile} instead.
  */
-export async function resilientWriteFile(
+export async function resilientDirectWriteFile(
   filePath: string,
   data: string,
   encoding: BufferEncoding = "utf-8"
 ): Promise<void> {
   await stubbornFs.retry.writeFile({ timeout: RETRY_TIMEOUT_MS })(filePath, data, encoding);
+}
+
+function generateTempPath(filePath: string): string {
+  const suffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  return `${filePath}.${suffix}.tmp`;
+}
+
+/**
+ * Atomic writeFile: writes to a temp file with flush, then renames to the
+ * target path. If any step fails the temp file is cleaned up best-effort.
+ */
+export async function resilientAtomicWriteFile(
+  filePath: string,
+  data: string,
+  encoding: BufferEncoding = "utf-8"
+): Promise<void> {
+  const tempPath = generateTempPath(filePath);
+  try {
+    await stubbornFs.retry.writeFile({ timeout: RETRY_TIMEOUT_MS })(tempPath, data, {
+      encoding,
+      flush: true,
+    } as Parameters<typeof writeFileSync>[2]);
+    await resilientRename(tempPath, filePath);
+  } catch (error) {
+    fsUnlink(tempPath).catch(() => {});
+    throw error;
+  }
+}
+
+/**
+ * Synchronous atomic writeFile: writes to a temp file with flush, then
+ * renames to the target path. Keeps retry budget short to limit
+ * event-loop blocking.
+ */
+export function resilientAtomicWriteFileSync(
+  filePath: string,
+  data: string,
+  encoding: BufferEncoding = "utf-8"
+): void {
+  const tempPath = generateTempPath(filePath);
+  try {
+    writeFileSync(tempPath, data, { encoding, flush: true } as Parameters<typeof writeFileSync>[2]);
+    resilientRenameSync(tempPath, filePath);
+  } catch (error) {
+    try {
+      unlinkSync(tempPath);
+    } catch {
+      // best-effort cleanup
+    }
+    throw error;
+  }
 }
 
 // stubborn-fs only provides attempt.unlink (swallows all errors), not retry.unlink.

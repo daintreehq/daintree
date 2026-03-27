@@ -32,13 +32,20 @@ vi.mock("@/services/TerminalInstanceService", () => ({
 }));
 
 const { useTerminalStore } = await import("../terminalStore");
+const { useWorktreeSelectionStore } = await import("../worktreeStore");
 
-function makeTerminal(id: string, kind: "agent" | "terminal", agentId?: string) {
+function makeTerminal(
+  id: string,
+  kind: "agent" | "terminal",
+  agentId?: string,
+  worktreeId?: string
+) {
   return {
     id,
     type: "terminal" as const,
     kind: kind as "agent" | "terminal",
     agentId,
+    worktreeId,
     title: id,
     cwd: "/test",
     cols: 80,
@@ -216,5 +223,152 @@ describe("trashPanelGroup agent-aware focus", () => {
     useTerminalStore.getState().trashPanelGroup("agent-1");
 
     expect(useTerminalStore.getState().focusedId).toBe("shell-1");
+  });
+});
+
+describe("worktree-scoped focus fallback (#4327)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    const { reset } = useTerminalStore.getState();
+    reset();
+    useTerminalStore.setState({
+      terminals: [],
+      tabGroups: new Map(),
+      trashedTerminals: new Map(),
+      backgroundedTerminals: new Map(),
+      focusedId: null,
+      maximizedId: null,
+      commandQueue: [],
+    });
+  });
+
+  afterEach(() => {
+    useWorktreeSelectionStore.setState({ activeWorktreeId: null });
+    vi.clearAllTimers();
+    vi.useRealTimers();
+  });
+
+  it("trashTerminal: should prefer same-worktree terminal over cross-worktree", () => {
+    useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-1" });
+    useTerminalStore.setState({
+      terminals: [
+        makeTerminal("agent-1", "agent", "claude", "wt-1"),
+        makeTerminal("shell-other", "terminal", undefined, "wt-2"),
+        makeTerminal("shell-same", "terminal", undefined, "wt-1"),
+      ],
+      focusedId: "agent-1",
+    });
+
+    useTerminalStore.getState().trashTerminal("agent-1");
+
+    expect(useTerminalStore.getState().focusedId).toBe("shell-same");
+  });
+
+  it("trashTerminal: should fall back to null when no same-worktree grid terminals remain", () => {
+    useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-1" });
+    useTerminalStore.setState({
+      terminals: [
+        makeTerminal("agent-1", "agent", "claude", "wt-1"),
+        makeTerminal("shell-other", "terminal", undefined, "wt-2"),
+      ],
+      focusedId: "agent-1",
+    });
+
+    useTerminalStore.getState().trashTerminal("agent-1");
+
+    expect(useTerminalStore.getState().focusedId).toBeNull();
+  });
+
+  it("trashTerminal: should prefer same-worktree agent when trashing an agent", () => {
+    useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-1" });
+    useTerminalStore.setState({
+      terminals: [
+        makeTerminal("agent-1", "agent", "claude", "wt-1"),
+        makeTerminal("agent-other", "agent", "gemini", "wt-2"),
+        makeTerminal("agent-same", "agent", "codex", "wt-1"),
+        makeTerminal("shell-same", "terminal", undefined, "wt-1"),
+      ],
+      focusedId: "agent-1",
+    });
+
+    useTerminalStore.getState().trashTerminal("agent-1");
+
+    expect(useTerminalStore.getState().focusedId).toBe("agent-same");
+  });
+
+  it("trashTerminal: root worktree (null activeWorktreeId) matches undefined worktreeId", () => {
+    useWorktreeSelectionStore.setState({ activeWorktreeId: null });
+    useTerminalStore.setState({
+      terminals: [
+        makeTerminal("agent-1", "agent", "claude"),
+        makeTerminal("shell-root", "terminal"),
+        makeTerminal("shell-wt", "terminal", undefined, "wt-1"),
+      ],
+      focusedId: "agent-1",
+    });
+
+    useTerminalStore.getState().trashTerminal("agent-1");
+
+    expect(useTerminalStore.getState().focusedId).toBe("shell-root");
+  });
+
+  it("moveTerminalToDock: should prefer same-worktree terminal", () => {
+    useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-1" });
+    useTerminalStore.setState({
+      terminals: [
+        makeTerminal("panel-1", "terminal", undefined, "wt-1"),
+        makeTerminal("shell-other", "terminal", undefined, "wt-2"),
+        makeTerminal("shell-same", "terminal", undefined, "wt-1"),
+      ],
+      focusedId: "panel-1",
+    });
+
+    useTerminalStore.getState().moveTerminalToDock("panel-1");
+
+    expect(useTerminalStore.getState().focusedId).toBe("shell-same");
+  });
+
+  it("trashPanelGroup: should prefer same-worktree terminal", () => {
+    useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-1" });
+    useTerminalStore.setState({
+      terminals: [
+        makeTerminal("agent-1", "agent", "claude", "wt-1"),
+        makeTerminal("agent-2", "agent", "gemini", "wt-1"),
+        makeTerminal("shell-other", "terminal", undefined, "wt-2"),
+        makeTerminal("shell-same", "terminal", undefined, "wt-1"),
+      ],
+      tabGroups: new Map([
+        [
+          "group-1",
+          {
+            id: "group-1",
+            panelIds: ["agent-1", "agent-2"],
+            activeTabId: "agent-1",
+            location: "grid" as const,
+          },
+        ],
+      ]),
+      focusedId: "agent-1",
+    });
+
+    useTerminalStore.getState().trashPanelGroup("agent-1");
+
+    expect(useTerminalStore.getState().focusedId).toBe("shell-same");
+  });
+
+  it("moveTerminalToPosition to dock: should prefer same-worktree terminal", () => {
+    useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-1" });
+    useTerminalStore.setState({
+      terminals: [
+        makeTerminal("panel-1", "terminal", undefined, "wt-1"),
+        makeTerminal("shell-other", "terminal", undefined, "wt-2"),
+        makeTerminal("shell-same", "terminal", undefined, "wt-1"),
+      ],
+      focusedId: "panel-1",
+    });
+
+    useTerminalStore.getState().moveTerminalToPosition("panel-1", 0, "dock");
+
+    expect(useTerminalStore.getState().focusedId).toBe("shell-same");
   });
 });

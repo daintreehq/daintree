@@ -103,6 +103,7 @@ export const CHANNELS = {
   SYSTEM_HEALTH_CHECK: "system:health-check",
   SYSTEM_DOWNLOAD_DIAGNOSTICS: "system:download-diagnostics",
   SYSTEM_GET_APP_METRICS: "system:get-app-metrics",
+  SYSTEM_GET_HARDWARE_INFO: "system:get-hardware-info",
 
   PR_DETECTED: "pr:detected",
   PR_CLEARED: "pr:cleared",
@@ -305,6 +306,7 @@ export const CHANNELS = {
   WINDOW_CLOSE: "window:close",
   WINDOW_RECLAIM_MEMORY: "window:reclaim-memory",
   WINDOW_DESTROY_HIDDEN_WEBVIEWS: "window:destroy-hidden-webviews",
+  WINDOW_DISK_SPACE_STATUS: "window:disk-space-status",
 
   NOTIFICATION_UPDATE: "notification:update",
   NOTIFICATION_SETTINGS_GET: "notification:settings-get",
@@ -458,6 +460,10 @@ export const CHANNELS = {
   CRASH_RECOVERY_RESOLVE: "crash-recovery:resolve",
   CRASH_RECOVERY_GET_CONFIG: "crash-recovery:get-config",
   CRASH_RECOVERY_SET_CONFIG: "crash-recovery:set-config",
+
+  // Renderer Recovery channels (in-session crash recovery)
+  RECOVERY_RELOAD_APP: "recovery:reload-app",
+  RECOVERY_RESET_AND_RELOAD: "recovery:reset-and-reload",
 
   // Demo mode channels (dev-only)
   DEMO_MOVE_TO: "demo:move-to",

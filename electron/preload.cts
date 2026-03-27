@@ -262,6 +262,7 @@ const CHANNELS = {
   SYSTEM_HEALTH_CHECK: "system:health-check",
   SYSTEM_DOWNLOAD_DIAGNOSTICS: "system:download-diagnostics",
   SYSTEM_GET_APP_METRICS: "system:get-app-metrics",
+  SYSTEM_GET_HARDWARE_INFO: "system:get-hardware-info",
   SYSTEM_WAKE: "system:wake",
 
   // PR detection channels
@@ -511,6 +512,7 @@ const CHANNELS = {
   WINDOW_CLOSE: "window:close",
   WINDOW_RECLAIM_MEMORY: "window:reclaim-memory",
   WINDOW_DESTROY_HIDDEN_WEBVIEWS: "window:destroy-hidden-webviews",
+  WINDOW_DISK_SPACE_STATUS: "window:disk-space-status",
 
   // Notification channels
   NOTIFICATION_UPDATE: "notification:update",
@@ -620,6 +622,10 @@ const CHANNELS = {
   CRASH_RECOVERY_RESOLVE: "crash-recovery:resolve",
   CRASH_RECOVERY_GET_CONFIG: "crash-recovery:get-config",
   CRASH_RECOVERY_SET_CONFIG: "crash-recovery:set-config",
+
+  // Renderer Recovery channels
+  RECOVERY_RELOAD_APP: "recovery:reload-app",
+  RECOVERY_RESET_AND_RELOAD: "recovery:reset-and-reload",
 
   // Onboarding channels
   ONBOARDING_GET: "onboarding:get",
@@ -1002,6 +1008,8 @@ const api: ElectronAPI = {
     downloadDiagnostics: () => _unwrappingInvoke(CHANNELS.SYSTEM_DOWNLOAD_DIAGNOSTICS),
 
     getAppMetrics: () => _unwrappingInvoke(CHANNELS.SYSTEM_GET_APP_METRICS),
+
+    getHardwareInfo: () => _unwrappingInvoke(CHANNELS.SYSTEM_GET_HARDWARE_INFO),
 
     onWake: (callback: (data: { sleepDuration: number; timestamp: number }) => void) => {
       const handler = (
@@ -1787,6 +1795,30 @@ const api: ElectronAPI = {
       ipcRenderer.on(CHANNELS.WINDOW_DESTROY_HIDDEN_WEBVIEWS, handler);
       return () => ipcRenderer.removeListener(CHANNELS.WINDOW_DESTROY_HIDDEN_WEBVIEWS, handler);
     },
+    onDiskSpaceStatus: (
+      callback: (payload: {
+        status: "normal" | "warning" | "critical";
+        availableMb: number;
+        writesSuppressed: boolean;
+      }) => void
+    ) => {
+      const handler = (
+        _event: Electron.IpcRendererEvent,
+        payload: {
+          status: "normal" | "warning" | "critical";
+          availableMb: number;
+          writesSuppressed: boolean;
+        }
+      ) => callback(payload);
+      ipcRenderer.on(CHANNELS.WINDOW_DISK_SPACE_STATUS, handler);
+      return () => ipcRenderer.removeListener(CHANNELS.WINDOW_DISK_SPACE_STATUS, handler);
+    },
+  },
+
+  // Recovery API (used by recovery.html)
+  recovery: {
+    reloadApp: (): Promise<void> => _unwrappingInvoke(CHANNELS.RECOVERY_RELOAD_APP),
+    resetAndReload: (): Promise<void> => _unwrappingInvoke(CHANNELS.RECOVERY_RESET_AND_RELOAD),
   },
 
   // Notification API

@@ -11,6 +11,7 @@ import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
 import { ListToolsRequestSchema, CallToolRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import type { ActionManifestEntry, ActionDispatchResult } from "../../shared/types/actions.js";
 import { store } from "../store.js";
+import { resilientAtomicWriteFile } from "../utils/fs.js";
 
 const DISCOVERY_DIR = path.join(os.homedir(), ".canopy");
 const DISCOVERY_FILE = path.join(DISCOVERY_DIR, "mcp.json");
@@ -625,7 +626,7 @@ export class McpServerService {
       }
       mcpServers[MCP_SERVER_KEY] = entry;
 
-      await fs.writeFile(
+      await resilientAtomicWriteFile(
         DISCOVERY_FILE,
         JSON.stringify({ ...existing, mcpServers }, null, 2) + "\n",
         "utf-8"
@@ -652,7 +653,11 @@ export class McpServerService {
       if (Object.keys(existing).length === 0) {
         await fs.unlink(DISCOVERY_FILE);
       } else {
-        await fs.writeFile(DISCOVERY_FILE, JSON.stringify(existing, null, 2) + "\n", "utf-8");
+        await resilientAtomicWriteFile(
+          DISCOVERY_FILE,
+          JSON.stringify(existing, null, 2) + "\n",
+          "utf-8"
+        );
       }
     } catch {
       // best-effort removal — don't crash on cleanup errors

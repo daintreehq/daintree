@@ -167,6 +167,7 @@ export class PtyClient extends EventEmitter {
   private pendingMessagePort: MessagePortMain | null = null;
   private terminalPids: Map<string, number> = new Map();
   private resourceMonitoringEnabled = false;
+  private sessionPersistSuppressed = false;
 
   /** Watchdog: Track missed heartbeat responses to detect deadlocks */
   private missedHeartbeats = 0;
@@ -732,6 +733,11 @@ export class PtyClient extends EventEmitter {
     if (this.resourceMonitoringEnabled) {
       this.send({ type: "set-resource-monitoring", enabled: true });
     }
+
+    // Replay session persistence suppression if disk space was critical
+    if (this.sessionPersistSuppressed) {
+      this.send({ type: "set-session-persist-suppressed", suppressed: true });
+    }
   }
 
   private cleanupOrphanedPtys(crashType: CrashType): void {
@@ -1224,6 +1230,12 @@ export class PtyClient extends EventEmitter {
   /** Request PtyHost to trim scrollback on all terminals to reduce memory */
   trimState(targetLines: number): void {
     this.send({ type: "trim-state", targetLines });
+  }
+
+  /** Suppress or resume terminal session persistence in the PtyHost */
+  suppressSessionPersistence(suppressed: boolean): void {
+    this.sessionPersistSuppressed = suppressed;
+    this.send({ type: "set-session-persist-suppressed", suppressed });
   }
 
   /** Pause all PTY processes during system sleep to prevent buffer overflow */

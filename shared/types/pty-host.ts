@@ -92,7 +92,8 @@ export type PtyHostRequest =
   | { type: "graceful-kill"; id: string; requestId: string }
   | { type: "graceful-kill-by-project"; projectId: string; requestId: string }
   | { type: "trim-state"; targetLines: number }
-  | { type: "set-resource-monitoring"; enabled: boolean };
+  | { type: "set-resource-monitoring"; enabled: boolean }
+  | { type: "set-session-persist-suppressed"; suppressed: boolean };
 
 /**
  * Terminal snapshot data sent from Host → Main for state queries.

@@ -53,6 +53,10 @@ export const systemClient = {
     return window.electron.system.getAppMetrics();
   },
 
+  getHardwareInfo: (): ReturnType<typeof window.electron.system.getHardwareInfo> => {
+    return window.electron.system.getHardwareInfo();
+  },
+
   onWake: (
     callback: (data: { sleepDuration: number; timestamp: number }) => void
   ): (() => void) => {

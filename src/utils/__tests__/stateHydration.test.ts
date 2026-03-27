@@ -115,6 +115,11 @@ vi.mock("@/services/projectSwitchRendererCache", () => ({
   isTerminalWarmInProjectSwitchCache: isTerminalWarmInProjectSwitchCacheMock,
 }));
 
+const notifyMock = vi.fn().mockReturnValue("notification-id");
+vi.mock("@/lib/notify", () => ({
+  notify: (...args: unknown[]) => notifyMock(...args),
+}));
+
 const { hydrateAppState } = await import("../stateHydration");
 
 describe("hydrateAppState", () => {
@@ -1884,5 +1889,109 @@ describe("hydrateAppState", () => {
 
     expect(setGPUHardwareAvailableMock).toHaveBeenCalledTimes(1);
     expect(setGPUHardwareAvailableMock).toHaveBeenCalledWith(true);
+  });
+
+  describe("settings recovery notifications", () => {
+    it("shows warning toast when settings restored from backup", async () => {
+      appClientMock.hydrate.mockResolvedValue({
+        appState: { terminals: [], sidebarWidth: 350 },
+        terminalConfig,
+        project,
+        agentSettings,
+        settingsRecovery: {
+          kind: "restored-from-backup",
+          quarantinedPath: "/path/to/config.json.corrupted.123",
+        },
+      });
+
+      await hydrateAppState({
+        addTerminal: vi.fn().mockResolvedValue("terminal-id"),
+        setActiveWorktree: vi.fn(),
+        loadRecipes: vi.fn().mockResolvedValue(undefined),
+        openDiagnosticsDock: vi.fn(),
+      });
+
+      expect(notifyMock).toHaveBeenCalledTimes(1);
+      expect(notifyMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: "warning",
+          title: "Settings Restored from Backup",
+          priority: "high",
+          duration: 8000,
+        })
+      );
+      expect(notifyMock.mock.calls[0][0].message).toContain("restored from a backup");
+      expect(notifyMock.mock.calls[0][0].message).toContain("/path/to/config.json.corrupted.123");
+    });
+
+    it("shows persistent warning toast when settings reset to defaults", async () => {
+      appClientMock.hydrate.mockResolvedValue({
+        appState: { terminals: [], sidebarWidth: 350 },
+        terminalConfig,
+        project,
+        agentSettings,
+        settingsRecovery: {
+          kind: "reset-to-defaults",
+          quarantinedPath: "/path/to/config.json.corrupted.456",
+        },
+      });
+
+      await hydrateAppState({
+        addTerminal: vi.fn().mockResolvedValue("terminal-id"),
+        setActiveWorktree: vi.fn(),
+        loadRecipes: vi.fn().mockResolvedValue(undefined),
+        openDiagnosticsDock: vi.fn(),
+      });
+
+      expect(notifyMock).toHaveBeenCalledTimes(1);
+      expect(notifyMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: "warning",
+          title: "Settings Reset to Defaults",
+          priority: "high",
+          duration: 0,
+        })
+      );
+      expect(notifyMock.mock.calls[0][0].message).toContain("reset to defaults");
+      expect(notifyMock.mock.calls[0][0].message).toContain("/path/to/config.json.corrupted.456");
+    });
+
+    it("does not show notification on normal startup", async () => {
+      appClientMock.hydrate.mockResolvedValue({
+        appState: { terminals: [], sidebarWidth: 350 },
+        terminalConfig,
+        project,
+        agentSettings,
+      });
+
+      await hydrateAppState({
+        addTerminal: vi.fn().mockResolvedValue("terminal-id"),
+        setActiveWorktree: vi.fn(),
+        loadRecipes: vi.fn().mockResolvedValue(undefined),
+        openDiagnosticsDock: vi.fn(),
+      });
+
+      expect(notifyMock).not.toHaveBeenCalled();
+    });
+
+    it("omits path note when quarantinedPath is absent", async () => {
+      appClientMock.hydrate.mockResolvedValue({
+        appState: { terminals: [], sidebarWidth: 350 },
+        terminalConfig,
+        project,
+        agentSettings,
+        settingsRecovery: { kind: "reset-to-defaults" },
+      });
+
+      await hydrateAppState({
+        addTerminal: vi.fn().mockResolvedValue("terminal-id"),
+        setActiveWorktree: vi.fn(),
+        loadRecipes: vi.fn().mockResolvedValue(undefined),
+        openDiagnosticsDock: vi.fn(),
+      });
+
+      expect(notifyMock).toHaveBeenCalledTimes(1);
+      expect(notifyMock.mock.calls[0][0].message).not.toContain("preserved at");
+    });
   });
 });

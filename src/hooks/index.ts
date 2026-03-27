@@ -11,6 +11,7 @@ export type { UseContextInjectionReturn, InjectionStatus } from "./useContextInj
 
 export { useErrors } from "./useErrors";
 export { useHibernationNotifications } from "./useHibernationNotifications";
+export { useDiskSpaceWarnings } from "./useDiskSpaceWarnings";
 
 export { useQuickSwitcher } from "./useQuickSwitcher";
 export type { QuickSwitcherItem, UseQuickSwitcherReturn } from "./useQuickSwitcher";

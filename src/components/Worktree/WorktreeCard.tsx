@@ -457,8 +457,15 @@ export const WorktreeCard = React.memo(function WorktreeCard({
         waitingTerminalCount: terminalCounts.byState.waiting,
         lifecycleStage,
         isComplete,
+        hasActiveAgent: terminalCounts.byState.working > 0 || terminalCounts.byState.running > 0,
       }),
-    [terminalCounts.byState.waiting, lifecycleStage, isComplete]
+    [
+      terminalCounts.byState.waiting,
+      terminalCounts.byState.working,
+      terminalCounts.byState.running,
+      lifecycleStage,
+      isComplete,
+    ]
   );
 
   const { setNodeRef, isOver } = useDroppable({
