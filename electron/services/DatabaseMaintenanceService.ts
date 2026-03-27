@@ -6,7 +6,6 @@ import {
   getSharedSqlite,
   probeDb,
   attemptRecovery,
-  closeSharedDb,
 } from "./persistence/db.js";
 import { getSystemSleepService } from "./SystemSleepService.js";
 
