@@ -1,6 +1,7 @@
 import Database from "better-sqlite3";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import { app } from "electron";
+import fs from "node:fs";
 import path from "path";
 import * as schema from "./schema.js";
 
@@ -69,12 +70,24 @@ const CREATE_TABLES_SQL = `
 
 let sharedInstance: { sqlite: Database.Database; db: AppDb } | null = null;
 
+export function getDbPath(): string {
+  return path.join(app.getPath("userData"), "canopy.db");
+}
+
+export function getBackupPath(): string {
+  return getDbPath() + ".backup";
+}
+
 export function getSharedDb(): AppDb {
   if (!sharedInstance) {
-    const dbPath = path.join(app.getPath("userData"), "canopy.db");
+    const dbPath = getDbPath();
     sharedInstance = openDb(dbPath);
   }
   return sharedInstance.db;
+}
+
+export function getSharedSqlite(): Database.Database | null {
+  return sharedInstance?.sqlite ?? null;
 }
 
 export function openDb(dbPath: string): { sqlite: Database.Database; db: AppDb } {
@@ -93,9 +106,83 @@ export function openDb(dbPath: string): { sqlite: Database.Database; db: AppDb }
   return { sqlite, db };
 }
 
-export function closeSharedDb(): void {
+const CORRUPTION_CODES = new Set(["SQLITE_CORRUPT", "SQLITE_NOTADB"]);
+
+export function probeDb(dbPath: string): boolean {
+  if (!fs.existsSync(dbPath)) return true; // no file = fresh start, not corruption
+  let testDb: Database.Database | null = null;
+  try {
+    testDb = new Database(dbPath, { readonly: true });
+    testDb.pragma("schema_version");
+    return true;
+  } catch (error: unknown) {
+    const code = (error as { code?: string }).code;
+    if (code && CORRUPTION_CODES.has(code)) {
+      return false;
+    }
+    // Non-corruption errors (e.g. permission denied) — treat as healthy to avoid data loss
+    console.warn("[DB] Probe encountered non-corruption error:", error);
+    return true;
+  } finally {
+    try {
+      testDb?.close();
+    } catch {
+      // ignore close errors
+    }
+  }
+}
+
+export function attemptRecovery(dbPath: string): boolean {
+  const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const corruptSuffix = `.corrupt-${timestamp}`;
+  const backupPath = dbPath + ".backup";
+
+  try {
+    // Quarantine corrupt DB and associated WAL/SHM files
+    for (const suffix of ["", "-wal", "-shm"]) {
+      const filePath = dbPath + suffix;
+      if (fs.existsSync(filePath)) {
+        fs.renameSync(filePath, filePath + corruptSuffix);
+      }
+    }
+
+    // Restore from backup if available
+    if (fs.existsSync(backupPath)) {
+      // Verify backup integrity before restoring
+      if (probeDb(backupPath)) {
+        fs.copyFileSync(backupPath, dbPath);
+        console.log("[DB] Restored database from backup");
+        return true;
+      } else {
+        console.error("[DB] Backup is also corrupt, cannot restore");
+        // Quarantine the corrupt backup too
+        fs.renameSync(backupPath, backupPath + corruptSuffix);
+        return false;
+      }
+    }
+
+    console.warn("[DB] No backup available for recovery — fresh database will be created");
+    return false;
+  } catch (error) {
+    console.error("[DB] Recovery failed:", error);
+    return false;
+  }
+}
+
+export function closeSharedDb(options?: { checkpoint?: boolean }): void {
   if (sharedInstance) {
+    if (options?.checkpoint) {
+      try {
+        sharedInstance.sqlite.pragma("wal_checkpoint(TRUNCATE)");
+      } catch (error) {
+        console.warn("[DB] WAL checkpoint on close failed:", error);
+      }
+    }
     sharedInstance.sqlite.close();
     sharedInstance = null;
   }
+}
+
+export function resetSharedInstance(): void {
+  sharedInstance = null;
 }

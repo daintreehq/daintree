@@ -15,6 +15,7 @@ import { disposeWorkspaceClient } from "../services/WorkspaceClient.js";
 import { mcpServerService } from "../services/McpServerService.js";
 import { getCrashRecoveryService } from "../services/CrashRecoveryService.js";
 import { getCrashLoopGuard } from "../services/CrashLoopGuardService.js";
+import { getDatabaseMaintenanceService } from "../services/DatabaseMaintenanceService.js";
 import { isSmokeTest } from "../setup/environment.js";
 import { isSignalShutdown } from "./signalShutdownState.js";
 
@@ -147,7 +148,7 @@ export function registerShutdownHandler(deps: ShutdownDeps): void {
           }),
         ])
       )
-      .then(() => {
+      .then(async () => {
         currentPhase = "ipc-cleanup";
         const cleanupIpc = deps.getCleanupIpcHandlers();
         if (cleanupIpc) {
@@ -178,6 +179,12 @@ export function registerShutdownHandler(deps: ShutdownDeps): void {
         if (stopDisk) {
           stopDisk();
           deps.setStopDiskSpaceMonitor(null);
+        }
+
+        try {
+          await getDatabaseMaintenanceService().dispose();
+        } catch (error) {
+          console.warn("[MAIN] Database maintenance dispose failed:", error);
         }
       });
 
