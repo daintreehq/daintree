@@ -50,6 +50,8 @@ export function startDiskSpaceMonitor(actions: DiskSpaceMonitorActions): () => v
       return;
     }
 
+    if (disposed) return;
+
     let status: DiskSpaceStatus;
     if (availableMb < CRITICAL_MB) {
       status = "critical";
