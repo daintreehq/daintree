@@ -461,6 +461,10 @@ export const CHANNELS = {
   CRASH_RECOVERY_GET_CONFIG: "crash-recovery:get-config",
   CRASH_RECOVERY_SET_CONFIG: "crash-recovery:set-config",
 
+  // Renderer Recovery channels (in-session crash recovery)
+  RECOVERY_RELOAD_APP: "recovery:reload-app",
+  RECOVERY_RESET_AND_RELOAD: "recovery:reset-and-reload",
+
   // Demo mode channels (dev-only)
   DEMO_MOVE_TO: "demo:move-to",
   DEMO_MOVE_TO_SELECTOR: "demo:move-to-selector",

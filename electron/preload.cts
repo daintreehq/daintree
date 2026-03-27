@@ -623,6 +623,10 @@ const CHANNELS = {
   CRASH_RECOVERY_GET_CONFIG: "crash-recovery:get-config",
   CRASH_RECOVERY_SET_CONFIG: "crash-recovery:set-config",
 
+  // Renderer Recovery channels
+  RECOVERY_RELOAD_APP: "recovery:reload-app",
+  RECOVERY_RESET_AND_RELOAD: "recovery:reset-and-reload",
+
   // Onboarding channels
   ONBOARDING_GET: "onboarding:get",
   ONBOARDING_MIGRATE: "onboarding:migrate",
@@ -1809,6 +1813,12 @@ const api: ElectronAPI = {
       ipcRenderer.on(CHANNELS.WINDOW_DISK_SPACE_STATUS, handler);
       return () => ipcRenderer.removeListener(CHANNELS.WINDOW_DISK_SPACE_STATUS, handler);
     },
+  },
+
+  // Recovery API (used by recovery.html)
+  recovery: {
+    reloadApp: (): Promise<void> => _unwrappingInvoke(CHANNELS.RECOVERY_RELOAD_APP),
+    resetAndReload: (): Promise<void> => _unwrappingInvoke(CHANNELS.RECOVERY_RESET_AND_RELOAD),
   },
 
   // Notification API

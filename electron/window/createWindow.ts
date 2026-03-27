@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, nativeTheme } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, nativeTheme } from "electron";
 import path from "path";
 import { createWindowWithState } from "../windowState.js";
 import { store } from "../store.js";
@@ -16,6 +16,8 @@ import { PERF_MARKS } from "../../shared/perf/marks.js";
 import { markPerformance } from "../utils/performance.js";
 import { isSmokeTest } from "../setup/environment.js";
 import { SMOKE_BOOT_TIMEOUT_MS } from "../services/smokeTest.js";
+
+const CRASH_LOOP_WINDOW_MS = 60_000;
 
 export interface CreateWindowResult {
   win: BrowserWindow;
@@ -124,6 +126,44 @@ export function setupBrowserWindow(dirname: string): CreateWindowResult {
       _smokeRendererUnresponsive = true;
       console.error("[SMOKE] FAILED — main window became unresponsive");
     });
+  } else {
+    let unresponsiveDialogId = 0;
+    let unresponsiveDialogOpen = false;
+
+    win.on("unresponsive", () => {
+      if (unresponsiveDialogOpen || win.isDestroyed()) return;
+      unresponsiveDialogOpen = true;
+      const dialogId = ++unresponsiveDialogId;
+      console.warn("[MAIN] Window became unresponsive");
+
+      dialog
+        .showMessageBox(win, {
+          type: "warning",
+          buttons: ["Wait", "Reload"],
+          defaultId: 0,
+          title: "Window Not Responding",
+          message: "The window is not responding.",
+          detail: "You can wait for it to recover or reload the window.",
+        })
+        .then(({ response }) => {
+          if (dialogId !== unresponsiveDialogId) return;
+          unresponsiveDialogOpen = false;
+          if (response === 1 && !win.isDestroyed()) {
+            win.webContents.reload();
+          }
+        })
+        .catch(() => {
+          unresponsiveDialogOpen = false;
+        });
+    });
+
+    win.on("responsive", () => {
+      if (unresponsiveDialogOpen) {
+        unresponsiveDialogId++;
+        unresponsiveDialogOpen = false;
+        console.log("[MAIN] Window became responsive again");
+      }
+    });
   }
 
   let rendererLoadRequested = false;
@@ -218,13 +258,36 @@ export function setupBrowserWindow(dirname: string): CreateWindowResult {
 
   setLoggerWindow(win);
 
-  // Detect renderer crashes
+  // Crash loop detection and renderer recovery
+  const rendererCrashTimestamps: number[] = [];
+
   win.webContents.on("render-process-gone", (_event, details) => {
     if (details.reason === "clean-exit") return;
     console.error("[MAIN] Renderer process gone:", details.reason, details.exitCode);
     getCrashRecoveryService().recordCrash(
       new Error(`Renderer process gone: ${details.reason} (exit code ${details.exitCode})`)
     );
+
+    if (win.isDestroyed()) return;
+
+    const now = Date.now();
+    // Prune timestamps outside the crash loop window
+    while (
+      rendererCrashTimestamps.length > 0 &&
+      now - rendererCrashTimestamps[0] > CRASH_LOOP_WINDOW_MS
+    ) {
+      rendererCrashTimestamps.shift();
+    }
+    rendererCrashTimestamps.push(now);
+
+    if (rendererCrashTimestamps.length >= 2) {
+      console.error("[MAIN] Crash loop detected, loading recovery page");
+      const recoveryUrl = getRecoveryUrl(details.reason, details.exitCode);
+      win.webContents.loadURL(recoveryUrl);
+    } else {
+      console.log("[MAIN] First crash, auto-reloading renderer");
+      win.webContents.reload();
+    }
   });
 
   // Fullscreen events
@@ -313,6 +376,15 @@ export function setupBrowserWindow(dirname: string): CreateWindowResult {
     const bw = BrowserWindow.fromWebContents(event.sender);
     bw?.close();
   });
+
+  function getRecoveryUrl(reason: string, exitCode: number): string {
+    const params = new URLSearchParams({ reason, exitCode: String(exitCode) });
+    if (process.env.NODE_ENV === "development") {
+      const devServerUrl = getDevServerUrl();
+      return `${devServerUrl}/recovery.html?${params}`;
+    }
+    return `app://canopy/recovery.html?${params}`;
+  }
 
   return {
     win,

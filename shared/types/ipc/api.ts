@@ -853,6 +853,12 @@ export interface ElectronAPI {
       }) => void
     ): () => void;
   };
+  recovery: {
+    /** Reload the main app from the recovery page */
+    reloadApp(): Promise<void>;
+    /** Reset workspace state and reload the main app from the recovery page */
+    resetAndReload(): Promise<void>;
+  };
   notification: {
     /** Update window title and dock badge based on terminal attention state */
     updateBadge(state: { waitingCount: number }): void;

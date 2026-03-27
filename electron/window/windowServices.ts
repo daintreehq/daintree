@@ -449,6 +449,11 @@ export async function setupWindowServices(
 
   // Handle reloads
   win.webContents.on("did-finish-load", () => {
+    const currentUrl = win.webContents.getURL();
+    if (currentUrl.includes("recovery.html")) {
+      console.log("[MAIN] Recovery page loaded, skipping normal renderer bootstrap");
+      return;
+    }
     console.log("[MAIN] Renderer loaded, ensuring MessagePort connection...");
     if (isSmokeTest) console.error("[SMOKE] CHECK: Renderer did-finish-load — OK");
     markPerformance(PERF_MARKS.RENDERER_READY);
