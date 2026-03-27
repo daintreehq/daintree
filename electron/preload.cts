@@ -262,6 +262,7 @@ const CHANNELS = {
   SYSTEM_HEALTH_CHECK: "system:health-check",
   SYSTEM_DOWNLOAD_DIAGNOSTICS: "system:download-diagnostics",
   SYSTEM_GET_APP_METRICS: "system:get-app-metrics",
+  SYSTEM_GET_HARDWARE_INFO: "system:get-hardware-info",
   SYSTEM_WAKE: "system:wake",
 
   // PR detection channels
@@ -1003,6 +1004,8 @@ const api: ElectronAPI = {
     downloadDiagnostics: () => _unwrappingInvoke(CHANNELS.SYSTEM_DOWNLOAD_DIAGNOSTICS),
 
     getAppMetrics: () => _unwrappingInvoke(CHANNELS.SYSTEM_GET_APP_METRICS),
+
+    getHardwareInfo: () => _unwrappingInvoke(CHANNELS.SYSTEM_GET_HARDWARE_INFO),
 
     onWake: (callback: (data: { sleepDuration: number; timestamp: number }) => void) => {
       const handler = (

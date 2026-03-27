@@ -71,6 +71,7 @@ import type {
   CliInstallStatus,
   SystemHealthCheckResult,
   AppMetricsSummary,
+  HardwareInfo,
 } from "./system.js";
 import type { AppState, HydrateResult } from "./app.js";
 import type { LogEntry, LogFilterOptions } from "./logs.js";
@@ -462,6 +463,10 @@ export interface IpcInvokeMap {
   "system:get-app-metrics": {
     args: [];
     result: AppMetricsSummary;
+  };
+  "system:get-hardware-info": {
+    args: [];
+    result: HardwareInfo;
   };
 
   // App state channels
