@@ -209,6 +209,50 @@ describe("renderer crash recovery", () => {
     expect(win.webContents.loadURL).not.toHaveBeenCalled();
   });
 
+  it("second crash loads recovery but does not also reload", () => {
+    const win = createMockWindow();
+    setupCrashRecovery(win);
+
+    win._emitWc("render-process-gone", { reason: "crashed", exitCode: 1 });
+    win.webContents.reload.mockClear();
+
+    vi.advanceTimersByTime(5_000);
+    win._emitWc("render-process-gone", { reason: "crashed", exitCode: 1 });
+
+    expect(win.webContents.loadURL).toHaveBeenCalledOnce();
+    expect(win.webContents.reload).not.toHaveBeenCalled();
+  });
+
+  it("treats crash at exactly 60s boundary as a new first crash", () => {
+    const win = createMockWindow();
+    setupCrashRecovery(win);
+
+    win._emitWc("render-process-gone", { reason: "crashed", exitCode: 1 });
+    expect(win.webContents.reload).toHaveBeenCalledOnce();
+
+    vi.advanceTimersByTime(60_001);
+    win._emitWc("render-process-gone", { reason: "crashed", exitCode: 1 });
+
+    expect(win.webContents.reload).toHaveBeenCalledTimes(2);
+    expect(win.webContents.loadURL).not.toHaveBeenCalled();
+  });
+
+  it("handles three crashes in quick succession", () => {
+    const win = createMockWindow();
+    setupCrashRecovery(win);
+
+    win._emitWc("render-process-gone", { reason: "crashed", exitCode: 1 });
+    expect(win.webContents.reload).toHaveBeenCalledOnce();
+
+    vi.advanceTimersByTime(1_000);
+    win._emitWc("render-process-gone", { reason: "crashed", exitCode: 1 });
+    expect(win.webContents.loadURL).toHaveBeenCalledOnce();
+
+    vi.advanceTimersByTime(1_000);
+    win._emitWc("render-process-gone", { reason: "crashed", exitCode: 1 });
+    expect(win.webContents.loadURL).toHaveBeenCalledTimes(2);
+  });
+
   it("does not act on crash if window is destroyed", () => {
     const win = createMockWindow();
     setupCrashRecovery(win);
