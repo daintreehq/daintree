@@ -72,6 +72,7 @@ vi.mock("../pty/terminalSessionPersistence.js", () => ({
   writeHibernatedMarker: writeHibernatedMarkerMock,
 }));
 
+import { logInfo, logError } from "../../utils/logger.js";
 import { HibernationService } from "../HibernationService.js";
 
 describe("HibernationService", () => {
@@ -760,6 +761,127 @@ describe("HibernationService", () => {
       // Lock disappeared, so no active git operation — proceed
       expect(ptyManagerMock.gracefulKillByProject).toHaveBeenCalledWith("proj-1", {
         preserveSession: true,
+      });
+    });
+  });
+
+  describe("structured logging", () => {
+    it("logs auto-hibernation-disabled when config is off", () => {
+      (storeMock.get as Mock).mockReturnValue({ enabled: false, inactiveThresholdHours: 24 });
+      const service = new HibernationService();
+      service.start();
+      expect(logInfo).toHaveBeenCalledWith("auto-hibernation-disabled");
+    });
+
+    it("logs auto-hibernation-started when config is on", () => {
+      (storeMock.get as Mock).mockReturnValue({ enabled: true, inactiveThresholdHours: 24 });
+      const service = new HibernationService();
+      service.start();
+      expect(logInfo).toHaveBeenCalledWith("auto-hibernation-started");
+    });
+
+    it("logs auto-hibernation-stopped on stop", () => {
+      (storeMock.get as Mock).mockReturnValue({ enabled: true, inactiveThresholdHours: 24 });
+      const service = new HibernationService();
+      service.start();
+      service.stop();
+      expect(logInfo).toHaveBeenCalledWith("auto-hibernation-stopped");
+    });
+
+    it("logs auto-hibernation-check-failed when interval check throws", async () => {
+      (storeMock.get as Mock).mockReturnValue({ enabled: true, inactiveThresholdHours: 24 });
+      const service = new HibernationService();
+      const testError = new Error("boom");
+      vi.spyOn(service as never, "checkAndHibernate" as never).mockRejectedValue(testError);
+
+      service.start();
+      await vi.advanceTimersByTimeAsync(3_600_000);
+
+      expect(logError).toHaveBeenCalledWith("auto-hibernation-check-failed", testError);
+    });
+
+    it("logs auto-hibernation-initial-check-failed when initial check throws", async () => {
+      (storeMock.get as Mock).mockReturnValue({ enabled: true, inactiveThresholdHours: 24 });
+      const service = new HibernationService();
+      const testError = new Error("init-boom");
+      vi.spyOn(service as never, "checkAndHibernate" as never).mockRejectedValue(testError);
+
+      service.start();
+      await vi.advanceTimersByTimeAsync(5000);
+
+      expect(logError).toHaveBeenCalledWith("auto-hibernation-initial-check-failed", testError);
+    });
+
+    it("logs scheduled-hibernate-project and scheduled-hibernate-complete on successful hibernation", async () => {
+      (storeMock.get as Mock).mockReturnValue({ enabled: true, inactiveThresholdHours: 24 });
+      projectStoreMock.getCurrentProjectId.mockReturnValue("active-proj");
+      projectStoreMock.getAllProjects.mockReturnValue([
+        {
+          id: "proj-1",
+          name: "Old",
+          path: "/projects/proj-1",
+          lastOpened: Date.now() - 25 * 60 * 60 * 1000,
+        },
+      ]);
+      ptyManagerMock.getAll.mockReturnValue([
+        { id: "t1", projectId: "proj-1", agentState: "idle" },
+      ]);
+      ptyManagerMock.gracefulKillByProject.mockResolvedValue([{ id: "t1", agentSessionId: null }]);
+
+      const service = new HibernationService();
+      await (service as unknown as { checkAndHibernate(): Promise<void> }).checkAndHibernate();
+
+      expect(logInfo).toHaveBeenCalledWith("scheduled-hibernate-project", {
+        project: "Old",
+        projectId: "proj-1",
+        hoursInactive: 25,
+        terminalCount: 1,
+      });
+      expect(logInfo).toHaveBeenCalledWith("scheduled-hibernate-complete", {
+        project: "Old",
+        projectId: "proj-1",
+        terminalsKilled: 1,
+      });
+    });
+
+    it("logs scheduled-hibernate-failed when hibernation throws", async () => {
+      (storeMock.get as Mock).mockReturnValue({ enabled: true, inactiveThresholdHours: 24 });
+      projectStoreMock.getCurrentProjectId.mockReturnValue("active-proj");
+      projectStoreMock.getAllProjects.mockReturnValue([
+        {
+          id: "proj-1",
+          name: "Old",
+          path: "/projects/proj-1",
+          lastOpened: Date.now() - 25 * 60 * 60 * 1000,
+        },
+      ]);
+      ptyManagerMock.getAll.mockReturnValue([
+        { id: "t1", projectId: "proj-1", agentState: "idle" },
+      ]);
+      const testError = new Error("hibernate-boom");
+      ptyManagerMock.gracefulKillByProject.mockRejectedValue(testError);
+
+      const service = new HibernationService();
+      await (service as unknown as { checkAndHibernate(): Promise<void> }).checkAndHibernate();
+
+      expect(logError).toHaveBeenCalledWith("scheduled-hibernate-failed", testError, {
+        project: "Old",
+        projectId: "proj-1",
+      });
+    });
+
+    it("logs hibernation-config-updated on updateConfig", () => {
+      (storeMock.get as Mock).mockReturnValue({ enabled: false, inactiveThresholdHours: 24 });
+      // After store.set, getConfig re-reads from store — update the mock to reflect the new value
+      storeMock.set.mockImplementation(() => {
+        (storeMock.get as Mock).mockReturnValue({ enabled: false, inactiveThresholdHours: 48 });
+      });
+      const service = new HibernationService();
+      service.updateConfig({ inactiveThresholdHours: 48 });
+
+      expect(logInfo).toHaveBeenCalledWith("hibernation-config-updated", {
+        enabled: false,
+        inactiveThresholdHours: 48,
       });
     });
   });

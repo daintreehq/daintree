@@ -143,15 +143,15 @@ export class HibernationService {
 
     const config = this.getConfig();
     if (!config.enabled) {
-      console.log("[HibernationService] Auto-hibernation disabled, not starting checks");
+      logInfo("auto-hibernation-disabled");
       return;
     }
 
-    console.log("[HibernationService] Starting auto-hibernation checks");
+    logInfo("auto-hibernation-started");
 
     this.checkInterval = setInterval(() => {
       void this.checkAndHibernate().catch((error) => {
-        console.error("[HibernationService] Check failed:", error);
+        logError("auto-hibernation-check-failed", error);
       });
     }, this.CHECK_INTERVAL_MS);
 
@@ -163,7 +163,7 @@ export class HibernationService {
     this.initialCheckTimer = setTimeout(() => {
       this.initialCheckTimer = null;
       void this.checkAndHibernate().catch((error) => {
-        console.error("[HibernationService] Initial check failed:", error);
+        logError("auto-hibernation-initial-check-failed", error);
       });
     }, 5000);
   }
@@ -172,7 +172,7 @@ export class HibernationService {
     if (this.checkInterval) {
       clearInterval(this.checkInterval);
       this.checkInterval = null;
-      console.log("[HibernationService] Stopped auto-hibernation checks");
+      logInfo("auto-hibernation-stopped");
     }
 
     if (this.initialCheckTimer) {
@@ -236,10 +236,12 @@ export class HibernationService {
       }
 
       const hoursInactive = Math.floor(inactiveDuration / 3600000);
-      console.log(
-        `[HibernationService] Auto-hibernating project "${project.name}" ` +
-          `(inactive for ${hoursInactive} hours, ${projectTerminals.length} processes)`
-      );
+      logInfo("scheduled-hibernate-project", {
+        project: project.name,
+        projectId: project.id,
+        hoursInactive,
+        terminalCount: projectTerminals.length,
+      });
 
       try {
         const terminalsKilled = await this.hibernateProject(
@@ -249,11 +251,16 @@ export class HibernationService {
           ptyManager
         );
 
-        console.log(
-          `[HibernationService] Hibernated "${project.name}": ${terminalsKilled} terminals killed`
-        );
+        logInfo("scheduled-hibernate-complete", {
+          project: project.name,
+          projectId: project.id,
+          terminalsKilled,
+        });
       } catch (error) {
-        console.error(`[HibernationService] Failed to hibernate project "${project.name}":`, error);
+        logError("scheduled-hibernate-failed", error, {
+          project: project.name,
+          projectId: project.id,
+        });
       }
     }
   }
@@ -380,7 +387,7 @@ export class HibernationService {
       this.stop();
     }
 
-    console.log("[HibernationService] Config updated:", this.getConfig());
+    logInfo("hibernation-config-updated", { ...this.getConfig() });
   }
 }
 
