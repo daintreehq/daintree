@@ -2,16 +2,12 @@ import type { ProjectSettings } from "../types/index.js";
 import type { RunCommand, CopyTreeSettings } from "../../shared/types/project.js";
 import path from "path";
 import fs from "fs/promises";
-import { resilientWriteFile, resilientRename } from "../utils/fs.js";
+import { resilientAtomicWriteFile } from "../utils/fs.js";
 import { UTF8_BOM } from "./projectStorePaths.js";
 
 const MAX_PROJECT_NAME_LENGTH = 100;
 const CANOPY_PROJECT_JSON = ".canopy/project.json";
 const CANOPY_SETTINGS_JSON = ".canopy/settings.json";
-
-function cleanupTempFile(tempFilePath: string): void {
-  fs.unlink(tempFilePath).catch(() => {});
-}
 
 export class ProjectIdentityFiles {
   async readInRepoProjectIdentity(
@@ -83,15 +79,11 @@ export class ProjectIdentityFiles {
     if (data.emoji !== undefined) payload.emoji = data.emoji;
     if (data.color !== undefined) payload.color = data.color;
 
-    const uniqueSuffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    const tempFilePath = `${filePath}.${uniqueSuffix}.tmp`;
-
     const attemptWrite = async (ensureDir: boolean): Promise<void> => {
       if (ensureDir) {
         await fs.mkdir(canopyDir, { recursive: true });
       }
-      await resilientWriteFile(tempFilePath, JSON.stringify(payload, null, 2), "utf-8");
-      await resilientRename(tempFilePath, filePath);
+      await resilientAtomicWriteFile(filePath, JSON.stringify(payload, null, 2), "utf-8");
     };
 
     try {
@@ -103,7 +95,6 @@ export class ProjectIdentityFiles {
           `[ProjectIdentityFiles] Failed to write .canopy/project.json for ${projectPath}:`,
           error
         );
-        cleanupTempFile(tempFilePath);
         throw error;
       }
       try {
@@ -113,7 +104,6 @@ export class ProjectIdentityFiles {
           `[ProjectIdentityFiles] Failed to write .canopy/project.json for ${projectPath}:`,
           retryError
         );
-        cleanupTempFile(tempFilePath);
         throw retryError;
       }
     }
@@ -164,15 +154,11 @@ export class ProjectIdentityFiles {
       if (Object.keys(shareableTerminal).length > 0) payload.terminalSettings = shareableTerminal;
     }
 
-    const uniqueSuffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    const tempFilePath = `${filePath}.${uniqueSuffix}.tmp`;
-
     const attemptWrite = async (ensureDir: boolean): Promise<void> => {
       if (ensureDir) {
         await fs.mkdir(canopyDir, { recursive: true });
       }
-      await resilientWriteFile(tempFilePath, JSON.stringify(payload, null, 2), "utf-8");
-      await resilientRename(tempFilePath, filePath);
+      await resilientAtomicWriteFile(filePath, JSON.stringify(payload, null, 2), "utf-8");
     };
 
     try {
@@ -184,7 +170,6 @@ export class ProjectIdentityFiles {
           `[ProjectIdentityFiles] Failed to write .canopy/settings.json for ${projectPath}:`,
           error
         );
-        cleanupTempFile(tempFilePath);
         throw error;
       }
       try {
@@ -194,7 +179,6 @@ export class ProjectIdentityFiles {
           `[ProjectIdentityFiles] Failed to write .canopy/settings.json for ${projectPath}:`,
           retryError
         );
-        cleanupTempFile(tempFilePath);
         throw retryError;
       }
     }

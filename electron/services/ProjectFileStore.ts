@@ -2,12 +2,8 @@ import type { TerminalRecipe, WorkflowDefinition } from "../types/index.js";
 import { workflowLoader } from "./WorkflowLoader.js";
 import fs from "fs/promises";
 import { existsSync } from "fs";
-import { resilientRename, resilientWriteFile } from "../utils/fs.js";
+import { resilientRename, resilientAtomicWriteFile } from "../utils/fs.js";
 import { getProjectStateDir, recipesFilePath, workflowsFilePath } from "./projectStorePaths.js";
-
-function cleanupTempFile(tempFilePath: string): void {
-  fs.unlink(tempFilePath).catch(() => {});
-}
 
 export class ProjectFileStore {
   constructor(private projectsConfigDir: string) {}
@@ -61,15 +57,11 @@ export class ProjectFileStore {
       throw new Error(`Invalid project ID: ${projectId}`);
     }
 
-    const uniqueSuffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    const tempFilePath = `${filePath}.${uniqueSuffix}.tmp`;
-
     const attemptSave = async (ensureDir: boolean): Promise<void> => {
       if (ensureDir) {
         await fs.mkdir(stateDir, { recursive: true });
       }
-      await resilientWriteFile(tempFilePath, JSON.stringify(recipes, null, 2), "utf-8");
-      await resilientRename(tempFilePath, filePath);
+      await resilientAtomicWriteFile(filePath, JSON.stringify(recipes, null, 2), "utf-8");
     };
 
     try {
@@ -78,7 +70,6 @@ export class ProjectFileStore {
       const isEnoent = error instanceof Error && "code" in error && error.code === "ENOENT";
       if (!isEnoent) {
         console.error(`[ProjectFileStore] Failed to save recipes for ${projectId}:`, error);
-        cleanupTempFile(tempFilePath);
         throw error;
       }
 
@@ -86,7 +77,6 @@ export class ProjectFileStore {
         await attemptSave(true);
       } catch (retryError) {
         console.error(`[ProjectFileStore] Failed to save recipes for ${projectId}:`, retryError);
-        cleanupTempFile(tempFilePath);
         throw retryError;
       }
     }
@@ -185,15 +175,11 @@ export class ProjectFileStore {
       }
     }
 
-    const uniqueSuffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    const tempFilePath = `${filePath}.${uniqueSuffix}.tmp`;
-
     const attemptSave = async (ensureDir: boolean): Promise<void> => {
       if (ensureDir) {
         await fs.mkdir(stateDir, { recursive: true });
       }
-      await resilientWriteFile(tempFilePath, JSON.stringify(workflows, null, 2), "utf-8");
-      await resilientRename(tempFilePath, filePath);
+      await resilientAtomicWriteFile(filePath, JSON.stringify(workflows, null, 2), "utf-8");
     };
 
     try {
@@ -202,7 +188,6 @@ export class ProjectFileStore {
       const isEnoent = error instanceof Error && "code" in error && error.code === "ENOENT";
       if (!isEnoent) {
         console.error(`[ProjectFileStore] Failed to save workflows for ${projectId}:`, error);
-        cleanupTempFile(tempFilePath);
         throw error;
       }
 
@@ -210,7 +195,6 @@ export class ProjectFileStore {
         await attemptSave(true);
       } catch (retryError) {
         console.error(`[ProjectFileStore] Failed to save workflows for ${projectId}:`, retryError);
-        cleanupTempFile(tempFilePath);
         throw retryError;
       }
     }
