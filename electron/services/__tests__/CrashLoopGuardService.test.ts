@@ -189,6 +189,27 @@ describe("CrashLoopGuardService", () => {
     expect(stateAfter.crashes).toBe(stateBefore.crashes);
   });
 
+  it("stability timer resets in-memory flags after hard stop", () => {
+    // Reach hard-stop state (5 crashes)
+    for (let i = 0; i < 5; i++) {
+      const guard = new CrashLoopGuardService();
+      guard.initialize();
+    }
+
+    const guard = new CrashLoopGuardService();
+    guard.initialize();
+    expect(guard.isSafeMode()).toBe(true);
+    expect(guard.shouldRelaunch()).toBe(false);
+
+    guard.startStabilityTimer();
+    vi.advanceTimersByTime(5 * 60 * 1000);
+
+    expect(guard.isSafeMode()).toBe(false);
+    expect(guard.shouldRelaunch()).toBe(true);
+
+    guard.dispose();
+  });
+
   it("startStabilityTimer is idempotent", () => {
     const guard = new CrashLoopGuardService();
     guard.initialize();

@@ -616,10 +616,13 @@ export async function hydrateAppState(
         // When no panels were saved (brand-new project), skip the startup "default"
         // terminal — its projectId may have been backfilled by TerminalRegistry's
         // lastKnownProjectId fallback, incorrectly attributing it to the new project.
+        // In safe mode, skip orphan reconnection entirely to ensure a clean slate.
         const hasSavedPanels = appState.terminals && appState.terminals.length > 0;
-        const orphanedTerminals = Array.from(backendTerminalMap.values()).filter(
-          (t) => !(t.id === "default" && !hasSavedPanels)
-        );
+        const orphanedTerminals = hydrateResult.safeMode
+          ? []
+          : Array.from(backendTerminalMap.values()).filter(
+              (t) => !(t.id === "default" && !hasSavedPanels)
+            );
         if (orphanedTerminals.length > 0) {
           logHydrationInfo(
             `${orphanedTerminals.length} orphaned terminal(s) not in saved order, appending at end`

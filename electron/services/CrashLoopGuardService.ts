@@ -101,6 +101,8 @@ export class CrashLoopGuardService {
       try {
         const state = freshState();
         this.writeState(state);
+        this.safeMode = false;
+        this.relaunchAllowed = true;
         console.log("[CrashLoopGuard] Stability timer fired — crash counter reset");
       } catch (err) {
         console.error("[CrashLoopGuard] Failed to reset crash counter:", err);
