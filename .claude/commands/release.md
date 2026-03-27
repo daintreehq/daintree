@@ -74,6 +74,7 @@ Run ALL of these checks. If any fail, stop and report the problem.
 - [ ] `npm run check` passes (typecheck + lint + format) — run this and if it fails, stop
 - [ ] No open PRs targeting `main` that should be merged first — check with `gh pr list --base main --state open`
 - [ ] Remote is reachable (`git fetch origin`)
+- [ ] E2E core tests pass locally — build the app (`npm run build`) then run the core E2E suite (`npx playwright test e2e/core/`). This catches render crashes and settings regressions that typecheck cannot detect. If any tests fail, stop and fix before proceeding.
 
 ### Checkpoint: Report preflight results
 
@@ -299,8 +300,10 @@ git tag -a vX.Y.Z -m "Release vX.Y.Z"
 On confirmation:
 
 ```bash
-git push origin main --tags
+git push origin main vX.Y.Z
 ```
+
+**CRITICAL:** Always push the specific tag by name (`vX.Y.Z`), never use `--tags`. Using `--tags` pushes ALL local tags, which can trigger spurious CI runs for old releases if any local tag has drifted.
 
 If `develop` exists:
 
@@ -354,16 +357,7 @@ Tell the user they should set `develop` as the default branch in GitHub repo set
 
 ## Notarization
 
-macOS notarization is currently **disabled** (`mac.notarize: false` in `package.json`). All signing infrastructure and GitHub secrets are already configured — see `docs/release.md` for details.
-
-### Automatic re-enablement at 0.5.0
-
-During **Phase 4** (version bump), if the target version is **>= 0.5.0** and `mac.notarize` is still `false` in `package.json`:
-
-1. Change `"notarize": false` to `"notarize": true` in `package.json` under `build.mac`
-2. Include this change in the version bump commit
-3. Inform the user that notarization is being re-enabled and recommend testing with a manual `workflow_dispatch` (using the `skip_notarization` fallback input) before pushing the tag
-4. If the user declines re-enabling, leave it as-is and proceed
+Check `build.mac.notarize` in `package.json` before each release. If notarization is disabled (`false`) and the user wants to enable it, change it to `true` in the version bump commit. All signing infrastructure and GitHub secrets are already configured — see `docs/release.md` for details.
 
 ## CI Workflow Permissions
 
@@ -373,12 +367,17 @@ The release workflow (`.github/workflows/release.yml`) calls reusable workflows 
 
 ## Re-tagging Procedure
 
-If CI fails due to a workflow issue (not a code issue) after the tag has been pushed:
+If CI fails after the tag has been pushed (whether a code issue or workflow issue):
 
 1. Fix the issue on `develop`, commit
 2. Merge `develop` into `main`: `git checkout main && git merge --no-ff develop -m "chore: merge ci fix into main"`
 3. Delete and re-create the tag: `git tag -d vX.Y.Z && git tag -a vX.Y.Z -m "Release vX.Y.Z"`
-4. Force-push the tag (this is the ONE exception to the no-force-push rule): `git push origin main --tags --force`
+4. Push main and force-push **only the specific tag** (this is the ONE exception to the no-force-push rule):
+   ```bash
+   git push origin main
+   git push origin vX.Y.Z --force
+   ```
+   **CRITICAL:** Never use `--tags --force` — that force-pushes ALL local tags and can trigger spurious CI runs for unrelated releases. Always name the specific tag.
 5. Push develop: `git push origin develop`
 
 Always get user confirmation before force-pushing the tag.
