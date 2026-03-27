@@ -235,6 +235,41 @@ describe("Windows Git PATH discovery", () => {
   });
 });
 
+describe("GPU memory flags", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    vi.resetAllMocks();
+    Object.defineProperty(process, "platform", { value: "darwin", writable: true });
+    process.argv = ["electron", "main.js"];
+  });
+
+  afterEach(() => {
+    Object.defineProperty(process, "platform", { value: originalPlatform, writable: true });
+    process.argv = originalArgv;
+  });
+
+  it("sets force-gpu-mem-available-mb to 512", async () => {
+    fsMock.existsSync.mockReturnValue(false);
+
+    await import("../environment.js");
+
+    const { app } = await import("electron");
+    expect(app.commandLine.appendSwitch).toHaveBeenCalledWith("force-gpu-mem-available-mb", "512");
+  });
+
+  it("disables GPU rasterization MSAA", async () => {
+    fsMock.existsSync.mockReturnValue(false);
+
+    await import("../environment.js");
+
+    const { app } = await import("electron");
+    expect(app.commandLine.appendSwitch).toHaveBeenCalledWith(
+      "gpu-rasterization-msaa-sample-count",
+      "0"
+    );
+  });
+});
+
 describe("reset-data", () => {
   beforeEach(() => {
     vi.resetModules();

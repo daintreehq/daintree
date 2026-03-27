@@ -70,6 +70,10 @@ if (process.platform === "linux") {
   }
 }
 
+// Cap GPU tile memory budget and disable MSAA to reduce VRAM usage
+app.commandLine.appendSwitch("force-gpu-mem-available-mb", "512");
+app.commandLine.appendSwitch("gpu-rasterization-msaa-sample-count", "0");
+
 if (process.platform === "win32") {
   const programFiles = process.env["ProgramFiles"] || "C:\\Program Files";
   const programFilesX86 = process.env["ProgramFiles(x86)"] || "C:\\Program Files (x86)";
