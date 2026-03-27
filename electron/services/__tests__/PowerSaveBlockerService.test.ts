@@ -21,6 +21,7 @@ vi.mock("electron", () => {
 import { powerSaveBlocker } from "electron";
 import { PowerSaveBlockerService } from "../PowerSaveBlockerService.js";
 import { events } from "../events.js";
+import type { AgentState } from "../../../shared/types/agent.js";
 
 function emitStateChanged(
   terminalId: string,
@@ -30,8 +31,8 @@ function emitStateChanged(
   events.emit("agent:state-changed", {
     terminalId,
     agentId: opts.agentId,
-    state: state as any,
-    previousState: (opts.previousState ?? "idle") as any,
+    state: state as AgentState,
+    previousState: (opts.previousState ?? "idle") as AgentState,
     timestamp: Date.now(),
     trigger: "output" as const,
     confidence: 1.0,
