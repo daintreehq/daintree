@@ -1,7 +1,7 @@
 import type { ProjectState } from "../types/index.js";
 import fs from "fs/promises";
 import { existsSync } from "fs";
-import { resilientAtomicWriteFile, resilientUnlink } from "../utils/fs.js";
+import { resilientAtomicWriteFile, resilientRename, resilientUnlink } from "../utils/fs.js";
 import { TerminalSnapshotSchema, filterValidTerminalEntries } from "../schemas/ipc.js";
 import { getProjectStateDir, stateFilePath } from "./projectStorePaths.js";
 

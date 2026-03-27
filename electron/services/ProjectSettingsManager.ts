@@ -5,7 +5,7 @@ import type Store from "electron-store";
 import type { StoreSchema } from "../store.js";
 import fs from "fs/promises";
 import { existsSync } from "fs";
-import { resilientAtomicWriteFile } from "../utils/fs.js";
+import { resilientAtomicWriteFile, resilientRename } from "../utils/fs.js";
 import { sanitizeSvg } from "../../shared/utils/svgSanitizer.js";
 import { isSensitiveEnvKey } from "../../shared/utils/envVars.js";
 import { projectEnvSecureStorage } from "./ProjectEnvSecureStorage.js";

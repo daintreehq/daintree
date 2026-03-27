@@ -1,5 +1,5 @@
 import { access, unlink as fsUnlink } from "fs/promises";
-import { unlinkSync, writeFileSync, renameSync } from "fs";
+import { unlinkSync, writeFileSync } from "fs";
 import stubbornFs from "stubborn-fs";
 
 // Wall-clock retry budgets for transient file-locking errors (EPERM/EBUSY/EACCES).
