@@ -1,5 +1,33 @@
 # Changelog
 
+## [0.5.2] - 2026-03-27
+
+### Features
+
+- Recover from renderer process crashes instead of showing blank window (#4274)
+- Surface settings recovery status to user via toast notifications (#4272)
+- Hardware-aware panel limits with permanent disable option (#4284)
+- Proactive disk space monitoring with user warnings (#4278)
+- Crash loop protection with safe mode boot (#4273)
+- Prevent system sleep during active agent work with powerSaveBlocker (#4279)
+- Warn users when project path is in a cloud-synced folder (#4282)
+- SQLite database backup, WAL checkpoint, and corruption recovery (#4276)
+- Add watchdog to WorkspaceClient matching PtyClient pattern (#4277)
+- Auto-cleanup quarantined .corrupted files older than 30 days (#4281)
+- Add hard timeout to graceful shutdown to prevent app hanging on exit (#4275)
+- Enrich crash reports with environment metadata (#4270)
+- Add backup and restore to settings store initialization (#4271)
+- Update Canopy icon to V2 design
+
+### Bug Fixes
+
+- Scope focus fallback to active worktree on panel close (#4327)
+- Add atomic write utilities and migrate all important file writes (#4280)
+- Prevent worktree showing finished while agents are still active (#4268)
+- Make empty toolbar space draggable for window management
+
+---
+
 ## [0.5.1] - 2026-03-26
 
 ### Features
