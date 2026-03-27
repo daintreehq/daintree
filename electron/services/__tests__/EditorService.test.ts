@@ -273,6 +273,9 @@ describe("EditorService.openFile", () => {
     });
     expect(child.unref).toHaveBeenCalled();
     expect(child.catch).toHaveBeenCalledWith(expect.any(Function));
+
+    const { shell } = await import("electron");
+    expect(shell.openPath).not.toHaveBeenCalled();
   });
 
   it("macOS fallback falls through to shell.openPath when open throws", async () => {
@@ -305,5 +308,8 @@ describe("EditorService.openFile", () => {
     const openFile = await loadOpenFile();
     await expect(openFile("relative/path.ts")).rejects.toThrow("Only absolute paths are allowed");
     expect(execaMock.execa).not.toHaveBeenCalled();
+
+    const { shell } = await import("electron");
+    expect(shell.openPath).not.toHaveBeenCalled();
   });
 });
