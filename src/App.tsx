@@ -52,6 +52,7 @@ import { createTooltipWithShortcut } from "./lib/platform";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "./components/ui/tooltip";
 import { useCrashRecoveryGate } from "./hooks/app/useCrashRecoveryGate";
 import { CrashRecoveryDialog } from "./components/Recovery/CrashRecoveryDialog";
+import { SafeModeBanner } from "./components/Recovery/SafeModeBanner";
 import {
   useAppHydration,
   useProjectSwitchRehydration,
@@ -137,6 +138,7 @@ import {
 } from "./store";
 import { useShallow } from "zustand/react/shallow";
 import { useMacroFocusStore } from "./store/macroFocusStore";
+import { useSafeModeStore } from "./store/safeModeStore";
 import type { RecipeTerminal } from "./types";
 import { systemClient } from "@/clients";
 import { registerBuiltInPanelComponents } from "./registry";
@@ -1314,6 +1316,8 @@ function App() {
 
   useFileDropGuard();
 
+  const isSafeMode = useSafeModeStore((s) => s.safeMode);
+
   if (!isElectronAvailable()) {
     return (
       <div className="h-screen w-screen flex items-center justify-center bg-canopy-bg">
@@ -1344,6 +1348,7 @@ function App() {
   return (
     <ErrorBoundary variant="fullscreen" componentName="App">
       <E2EFaultInjector />
+      {isSafeMode && <SafeModeBanner />}
       <DndProvider>
         <VoiceRecordingAnnouncer />
         <AccessibilityAnnouncer />

@@ -30,8 +30,16 @@ const windowMock = vi.hoisted(() => ({
 
 const getMainWindowMock = vi.hoisted(() => vi.fn((): typeof windowMock | null => windowMock));
 
+const crashLoopGuardMock = vi.hoisted(() => ({
+  shouldRelaunch: vi.fn(() => true),
+}));
+
 vi.mock("electron", () => ({
   app: appMock,
+}));
+
+vi.mock("../../services/CrashLoopGuardService.js", () => ({
+  getCrashLoopGuard: () => crashLoopGuardMock,
 }));
 
 vi.mock("../../utils/emergencyLog.js", () => ({
@@ -180,6 +188,15 @@ describe("globalErrorHandlers", () => {
       uncaughtHandler(new Error("crash"));
 
       expect(appMock.relaunch).toHaveBeenCalled();
+      expect(appMock.exit).toHaveBeenCalledWith(1);
+    });
+
+    it("skips app.relaunch when crash loop guard disallows it", () => {
+      crashLoopGuardMock.shouldRelaunch.mockReturnValueOnce(false);
+      _resetHandlingFatalForTesting();
+      uncaughtHandler(new Error("crash"));
+
+      expect(appMock.relaunch).not.toHaveBeenCalled();
       expect(appMock.exit).toHaveBeenCalledWith(1);
     });
 
