@@ -1748,6 +1748,11 @@ export interface IpcEventMap {
   "window:fullscreen-change": boolean;
   "window:reclaim-memory": { reason: string };
   "window:destroy-hidden-webviews": { tier: 1 | 2 };
+  "window:disk-space-status": {
+    status: "normal" | "warning" | "critical";
+    availableMb: number;
+    writesSuppressed: boolean;
+  };
   "portal:tabs-evicted": { tabIds: string[] };
 
   // Notification events

@@ -36,6 +36,7 @@ import {
   useReEntrySummary,
 } from "./hooks";
 import { useHibernationNotifications } from "./hooks/useHibernationNotifications";
+import { useDiskSpaceWarnings } from "./hooks/useDiskSpaceWarnings";
 import { useActionRegistry } from "./hooks/useActionRegistry";
 import { useUpdateListener } from "./hooks/useUpdateListener";
 import { useWorkflowListener } from "./hooks/useWorkflowListener";
@@ -1074,6 +1075,7 @@ function E2EFaultInjector() {
 function App() {
   useErrors();
   useHibernationNotifications();
+  useDiskSpaceWarnings();
   useUnloadCleanup();
   useEffect(() => removeStartupSkeleton(), []);
 

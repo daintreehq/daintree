@@ -305,6 +305,7 @@ export const CHANNELS = {
   WINDOW_CLOSE: "window:close",
   WINDOW_RECLAIM_MEMORY: "window:reclaim-memory",
   WINDOW_DESTROY_HIDDEN_WEBVIEWS: "window:destroy-hidden-webviews",
+  WINDOW_DISK_SPACE_STATUS: "window:disk-space-status",
 
   NOTIFICATION_UPDATE: "notification:update",
   NOTIFICATION_SETTINGS_GET: "notification:settings-get",

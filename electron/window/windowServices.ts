@@ -69,6 +69,7 @@ import {
   startProcessMemoryMonitor,
 } from "../utils/performance.js";
 import { startAppMetricsMonitor } from "../services/ProcessMemoryMonitor.js";
+import { startDiskSpaceMonitor, getCurrentDiskSpaceStatus } from "../services/DiskSpaceMonitor.js";
 import { SCROLLBACK_BACKGROUND } from "../../shared/config/scrollback.js";
 import { logInfo, setLoggerWindow } from "../utils/logger.js";
 import { PERF_MARKS } from "../../shared/perf/marks.js";
@@ -94,6 +95,7 @@ let activePtyHostPort: MessagePortMain | null = null;
 let stopEventLoopLagMonitor: (() => void) | null = null;
 let stopProcessMemoryMonitor: (() => void) | null = null;
 let stopAppMetricsMonitor: (() => void) | null = null;
+let stopDiskSpaceMonitor: (() => void) | null = null;
 
 // Expose getters for shutdown handler
 export function getPtyClient(): PtyClient | null {
@@ -140,6 +142,12 @@ export function getStopAppMetricsMonitor(): (() => void) | null {
 }
 export function setStopAppMetricsMonitor(v: (() => void) | null): void {
   stopAppMetricsMonitor = v;
+}
+export function getStopDiskSpaceMonitor(): (() => void) | null {
+  return stopDiskSpaceMonitor;
+}
+export function setStopDiskSpaceMonitor(v: (() => void) | null): void {
+  stopDiskSpaceMonitor = v;
 }
 
 function createAndDistributePorts(win: BrowserWindow): void {
@@ -442,6 +450,10 @@ export async function setupWindowServices(
     markPerformance(PERF_MARKS.RENDERER_READY);
     createAndDistributePorts(win);
     flushPendingErrors();
+    const diskStatus = getCurrentDiskSpaceStatus();
+    if (diskStatus.status !== "normal") {
+      sendToRenderer(win, CHANNELS.WINDOW_DISK_SPACE_STATUS, diskStatus);
+    }
   });
 
   workspaceClient.on("host-crash", (code: number) => {
@@ -635,6 +647,28 @@ export async function setupWindowServices(
 
   getCrashRecoveryService().startBackupTimer();
 
+  // Disk space monitor
+  if (!stopDiskSpaceMonitor) {
+    stopDiskSpaceMonitor = startDiskSpaceMonitor({
+      sendStatus: (payload) => {
+        sendToRenderer(win, CHANNELS.WINDOW_DISK_SPACE_STATUS, payload);
+      },
+      onCriticalChange: (isCritical) => {
+        if (isCritical) {
+          getCrashRecoveryService().stopBackupTimer();
+          ptyClient?.suppressSessionPersistence(true);
+        } else {
+          getCrashRecoveryService().startBackupTimer();
+          ptyClient?.suppressSessionPersistence(false);
+        }
+      },
+      showNativeNotification: (title, body) => {
+        notificationService.showNativeNotification(title, body);
+      },
+      isWindowFocused: () => notificationService.isWindowFocused(),
+    });
+  }
+
   // CLI path handling
   const firstLaunchCliPath = extractCliPath(process.argv);
   const cliPath = firstLaunchCliPath ?? getPendingCliPath();
@@ -725,6 +759,10 @@ export async function setupWindowServices(
     if (stopAppMetricsMonitor) {
       stopAppMetricsMonitor();
       stopAppMetricsMonitor = null;
+    }
+    if (stopDiskSpaceMonitor) {
+      stopDiskSpaceMonitor();
+      stopDiskSpaceMonitor = null;
     }
 
     // Clean up window-specific IPC handlers
