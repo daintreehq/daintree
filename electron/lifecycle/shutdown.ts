@@ -14,6 +14,7 @@ import { disposePtyClient } from "../services/PtyClient.js";
 import { disposeWorkspaceClient } from "../services/WorkspaceClient.js";
 import { mcpServerService } from "../services/McpServerService.js";
 import { getCrashRecoveryService } from "../services/CrashRecoveryService.js";
+import { getCrashLoopGuard } from "../services/CrashLoopGuardService.js";
 import { isSmokeTest } from "../setup/environment.js";
 import { isSignalShutdown } from "./signalShutdownState.js";
 
@@ -84,6 +85,7 @@ export function registerShutdownHandler(deps: ShutdownDeps): void {
     const { drainRateLimitQueues } = await import("../ipc/utils.js");
     drainRateLimitQueues();
     getCrashRecoveryService().cleanupOnExit();
+    getCrashLoopGuard().markCleanExit();
 
     const ptyClient = deps.getPtyClient();
     const workspaceClient = deps.getWorkspaceClient();

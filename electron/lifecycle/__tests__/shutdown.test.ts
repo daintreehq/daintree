@@ -32,6 +32,14 @@ vi.mock("../../services/CrashRecoveryService.js", () => ({
   getCrashRecoveryService: vi.fn(() => crashRecoveryMock),
 }));
 
+const crashLoopGuardMock = vi.hoisted(() => ({
+  markCleanExit: vi.fn(),
+}));
+
+vi.mock("../../services/CrashLoopGuardService.js", () => ({
+  getCrashLoopGuard: vi.fn(() => crashLoopGuardMock),
+}));
+
 const quitWarningMock = vi.hoisted(() => ({
   getActiveAgentCount: vi.fn(() => 0),
   showQuitWarning: vi.fn(() => Promise.resolve(true)),
