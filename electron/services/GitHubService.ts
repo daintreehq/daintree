@@ -361,7 +361,8 @@ function parseProjectHealthResponse(
 
 export async function getProjectHealth(
   cwd: string,
-  bypassCache = false
+  bypassCache = false,
+  _retried = false
 ): Promise<ProjectHealthResult> {
   const context = await getRepoContext(cwd);
   if (!context) {
@@ -429,14 +430,14 @@ export async function getProjectHealth(
       }
     }
 
-    if (isRepoNotFoundError(error)) {
+    if (!_retried && isRepoNotFoundError(error)) {
       repoContextCache.invalidate(cwd);
       const freshContext = await getRepoContext(cwd);
       if (
         freshContext &&
         (freshContext.owner !== context.owner || freshContext.repo !== context.repo)
       ) {
-        return getProjectHealth(cwd, bypassCache);
+        return getProjectHealth(cwd, bypassCache, true);
       }
     }
 
