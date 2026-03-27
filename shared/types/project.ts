@@ -272,6 +272,8 @@ export interface ProjectSettings {
   devServerDismissed?: boolean;
   /** Dev server command was auto-detected (vs manually configured) */
   devServerAutoDetected?: boolean;
+  /** User dismissed cloud sync folder warning for this project */
+  cloudSyncWarningDismissed?: boolean;
   /** Timeout in seconds before a slow-loading dev preview is automatically reloaded (default: 30, max: 120) */
   devServerLoadTimeout?: number;
   /** CopyTree context generation configuration */
