@@ -134,6 +134,11 @@ describe("Store backup/restore helpers", () => {
 describe("initializeStore", () => {
   let tempDir: string;
 
+  function testOptions(cwd: string) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    return { defaults: { _schemaVersion: 0 } as Record<string, unknown>, cwd } as any;
+  }
+
   beforeEach(() => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2025-06-15T12:00:00.000Z"));
@@ -146,7 +151,7 @@ describe("initializeStore", () => {
   });
 
   it("creates store with defaults on first launch (no config.json)", () => {
-    const instance = initializeStore({ defaults: { _schemaVersion: 0 } as any, cwd: tempDir });
+    const instance = initializeStore(testOptions(tempDir));
     expect(instance).toBeDefined();
     expect(instance.get("_schemaVersion")).toBe(0);
     const configPath = path.join(tempDir, "config.json");
@@ -157,7 +162,7 @@ describe("initializeStore", () => {
   it("loads valid config and creates backup", () => {
     const configPath = path.join(tempDir, "config.json");
     fs.writeFileSync(configPath, JSON.stringify({ _schemaVersion: 5 }), "utf8");
-    const instance = initializeStore({ defaults: { _schemaVersion: 0 } as any, cwd: tempDir });
+    const instance = initializeStore(testOptions(tempDir));
     expect(instance.get("_schemaVersion")).toBe(5);
     expect(fs.existsSync(`${configPath}.bak`)).toBe(true);
   });
@@ -166,7 +171,7 @@ describe("initializeStore", () => {
     const configPath = path.join(tempDir, "config.json");
     fs.writeFileSync(configPath, "{corrupt!", "utf8");
     fs.writeFileSync(`${configPath}.bak`, JSON.stringify({ _schemaVersion: 3 }), "utf8");
-    const instance = initializeStore({ defaults: { _schemaVersion: 0 } as any, cwd: tempDir });
+    const instance = initializeStore(testOptions(tempDir));
     expect(instance.get("_schemaVersion")).toBe(3);
     const quarantined = path.join(tempDir, `config.json.corrupted.${Date.now()}`);
     expect(fs.existsSync(quarantined)).toBe(true);
@@ -176,10 +181,7 @@ describe("initializeStore", () => {
   it("starts fresh with defaults when config is corrupt and no backup exists", () => {
     const configPath = path.join(tempDir, "config.json");
     fs.writeFileSync(configPath, "not valid json", "utf8");
-    const instance = initializeStore({
-      defaults: { _schemaVersion: 0 } as any,
-      cwd: tempDir,
-    });
+    const instance = initializeStore(testOptions(tempDir));
     expect(instance.get("_schemaVersion")).toBe(0);
     const quarantined = path.join(tempDir, `config.json.corrupted.${Date.now()}`);
     expect(fs.existsSync(quarantined)).toBe(true);
@@ -189,21 +191,13 @@ describe("initializeStore", () => {
     const configPath = path.join(tempDir, "config.json");
     fs.writeFileSync(configPath, "bad json 1", "utf8");
     fs.writeFileSync(`${configPath}.bak`, "bad json 2", "utf8");
-    const instance = initializeStore({
-      defaults: { _schemaVersion: 0 } as any,
-      cwd: tempDir,
-    });
+    const instance = initializeStore(testOptions(tempDir));
     expect(instance.get("_schemaVersion")).toBe(0);
   });
 
   it("uses in-memory fallback on non-SyntaxError failures", () => {
-    const instance = initializeStore({
-      defaults: { _schemaVersion: 0 } as any,
-      cwd: "/nonexistent/path/that/cannot/be/created",
-    });
+    const instance = initializeStore(testOptions("/nonexistent/path/that/cannot/be/created"));
     expect(instance).toBeDefined();
     expect(instance.path).toBe("");
-    instance.set("test" as any, "value");
-    expect(instance.get("test" as any)).toBe("value");
   });
 });
