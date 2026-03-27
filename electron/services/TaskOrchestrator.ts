@@ -35,6 +35,9 @@ export class TaskOrchestrator {
   /** Lock to prevent concurrent assignment operations */
   private isAssigning = false;
 
+  /** Flag to coalesce triggers that arrive while assignment is in progress */
+  private pendingAssignment = false;
+
   /** Flag to track if orchestrator is disposed */
   private isDisposed = false;
 
@@ -77,6 +80,13 @@ export class TaskOrchestrator {
         void this.handleWorktreeRemove(payload);
       })
     );
+
+    // Subscribe to task state changes to wake assignment when tasks become queued
+    this.unsubscribers.push(
+      events.on("task:state-changed", (payload) => {
+        this.handleTaskStateChange(payload);
+      })
+    );
   }
 
   /**
@@ -86,12 +96,17 @@ export class TaskOrchestrator {
    * Loops until no more tasks or agents are available.
    */
   async assignNextTask(): Promise<void> {
-    // Prevent concurrent assignments
-    if (this.isAssigning || this.isDisposed) {
+    // Disposed orchestrators must not schedule retries
+    if (this.isDisposed) return;
+
+    // Coalesce triggers that arrive while assignment is in progress
+    if (this.isAssigning) {
+      this.pendingAssignment = true;
       return;
     }
 
     this.isAssigning = true;
+    this.pendingAssignment = false;
 
     try {
       // Loop to assign multiple tasks if multiple agents are available
@@ -145,6 +160,9 @@ export class TaskOrchestrator {
       }
     } finally {
       this.isAssigning = false;
+      if (this.pendingAssignment && !this.isDisposed) {
+        setImmediate(() => void this.assignNextTask());
+      }
     }
   }
 
@@ -218,6 +236,17 @@ export class TaskOrchestrator {
     if (isAgentAvailable(state) && agentId) {
       // Try to assign next task
       await this.assignNextTask();
+    }
+  }
+
+  /**
+   * Handle task state changes.
+   * When a task becomes queued (enqueued or unblocked), attempt assignment.
+   */
+  private handleTaskStateChange(payload: CanopyEventMap["task:state-changed"]): void {
+    if (this.isDisposed) return;
+    if (payload.state === "queued") {
+      void this.assignNextTask();
     }
   }
 

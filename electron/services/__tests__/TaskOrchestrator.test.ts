@@ -42,6 +42,17 @@ function createMockAgentRouter(): MockAgentRouter {
   };
 }
 
+/** Flush the setImmediate queue so pending retries execute */
+function flushImmediate(): Promise<void> {
+  return new Promise((resolve) => setImmediate(resolve));
+}
+
+/** Wait for all async assignment work to settle */
+async function settle(): Promise<void> {
+  await flushImmediate();
+  await new Promise((resolve) => setTimeout(resolve, 10));
+}
+
 describe("TaskOrchestrator", () => {
   let orchestrator: TaskOrchestrator;
   let queueService: TaskQueueService;
@@ -49,6 +60,7 @@ describe("TaskOrchestrator", () => {
   let mockRouter: MockAgentRouter;
 
   beforeEach(() => {
+    vi.clearAllMocks();
     queueService = new TaskQueueService();
     queueService.setPersistenceEnabled(false);
     mockPtyClient = createMockPtyClient();
@@ -58,7 +70,6 @@ describe("TaskOrchestrator", () => {
       mockPtyClient as unknown as PtyClient,
       mockRouter as unknown as AgentRouter
     );
-    vi.clearAllMocks();
   });
 
   afterEach(() => {
@@ -68,7 +79,6 @@ describe("TaskOrchestrator", () => {
   describe("assignNextTask", () => {
     it("assigns queued task to available idle agent", async () => {
       const task = await queueService.createTask({ title: "Test task" });
-      await queueService.enqueueTask(task.id);
 
       mockPtyClient.getAvailableTerminalsAsync.mockResolvedValue([
         {
@@ -79,7 +89,8 @@ describe("TaskOrchestrator", () => {
         },
       ]);
 
-      await orchestrator.assignNextTask();
+      await queueService.enqueueTask(task.id);
+      await settle();
 
       const updatedTask = await queueService.getTask(task.id);
       expect(updatedTask?.status).toBe("running");
@@ -89,7 +100,6 @@ describe("TaskOrchestrator", () => {
 
     it("assigns queued task to available waiting agent", async () => {
       const task = await queueService.createTask({ title: "Test task" });
-      await queueService.enqueueTask(task.id);
 
       mockPtyClient.getAvailableTerminalsAsync.mockResolvedValue([
         {
@@ -100,7 +110,8 @@ describe("TaskOrchestrator", () => {
         },
       ]);
 
-      await orchestrator.assignNextTask();
+      await queueService.enqueueTask(task.id);
+      await settle();
 
       const updatedTask = await queueService.getTask(task.id);
       expect(updatedTask?.status).toBe("running");
@@ -109,7 +120,6 @@ describe("TaskOrchestrator", () => {
 
     it("does not assign to working agent", async () => {
       const task = await queueService.createTask({ title: "Test task" });
-      await queueService.enqueueTask(task.id);
 
       mockPtyClient.getAvailableTerminalsAsync.mockResolvedValue([
         {
@@ -120,7 +130,8 @@ describe("TaskOrchestrator", () => {
         },
       ]);
 
-      await orchestrator.assignNextTask();
+      await queueService.enqueueTask(task.id);
+      await settle();
 
       const updatedTask = await queueService.getTask(task.id);
       expect(updatedTask?.status).toBe("queued");
@@ -128,7 +139,6 @@ describe("TaskOrchestrator", () => {
 
     it("does not assign to non-agent terminal", async () => {
       const task = await queueService.createTask({ title: "Test task" });
-      await queueService.enqueueTask(task.id);
 
       mockPtyClient.getAvailableTerminalsAsync.mockResolvedValue([
         {
@@ -138,7 +148,8 @@ describe("TaskOrchestrator", () => {
         },
       ]);
 
-      await orchestrator.assignNextTask();
+      await queueService.enqueueTask(task.id);
+      await settle();
 
       const updatedTask = await queueService.getTask(task.id);
       expect(updatedTask?.status).toBe("queued");
@@ -161,9 +172,7 @@ describe("TaskOrchestrator", () => {
     });
 
     it("emits task:assigned event on assignment", async () => {
-      const emitSpy = vi.spyOn(events, "emit");
       const task = await queueService.createTask({ title: "Test task" });
-      await queueService.enqueueTask(task.id);
 
       mockPtyClient.getAvailableTerminalsAsync.mockResolvedValue([
         {
@@ -174,7 +183,9 @@ describe("TaskOrchestrator", () => {
         },
       ]);
 
-      await orchestrator.assignNextTask();
+      const emitSpy = vi.spyOn(events, "emit");
+      await queueService.enqueueTask(task.id);
+      await settle();
 
       expect(emitSpy).toHaveBeenCalledWith(
         "task:assigned",
@@ -200,10 +211,12 @@ describe("TaskOrchestrator", () => {
         },
       ]);
 
-      // Call twice simultaneously
+      // Call twice simultaneously — second call sets pendingAssignment
       await Promise.all([orchestrator.assignNextTask(), orchestrator.assignNextTask()]);
+      await settle();
 
-      // Only one should have been assigned (the higher priority one)
+      // With pending retry, both may eventually be assigned if agent becomes available
+      // But with only one agent, only one task should be running
       const updated1 = await queueService.getTask(task1.id);
       const updated2 = await queueService.getTask(task2.id);
 
@@ -236,8 +249,7 @@ describe("TaskOrchestrator", () => {
         confidence: 1.0,
       });
 
-      // Wait for async handler
-      await new Promise((resolve) => setTimeout(resolve, 10));
+      await settle();
 
       const updated = await queueService.getTask(task.id);
       expect(updated?.status).toBe("running");
@@ -265,7 +277,7 @@ describe("TaskOrchestrator", () => {
         confidence: 1.0,
       });
 
-      await new Promise((resolve) => setTimeout(resolve, 10));
+      await settle();
 
       const updated = await queueService.getTask(task.id);
       expect(updated?.status).toBe("running");
@@ -274,6 +286,10 @@ describe("TaskOrchestrator", () => {
     it("does not trigger assignment when agent becomes working", async () => {
       const task = await queueService.createTask({ title: "Test task" });
       await queueService.enqueueTask(task.id);
+      await settle();
+
+      // Clear call history from the event-triggered assignment during enqueue
+      mockPtyClient.getAvailableTerminalsAsync.mockClear();
 
       events.emit("agent:state-changed", {
         agentId: "agent-1",
@@ -284,10 +300,11 @@ describe("TaskOrchestrator", () => {
         confidence: 1.0,
       });
 
-      await new Promise((resolve) => setTimeout(resolve, 10));
+      await settle();
 
       const updated = await queueService.getTask(task.id);
       expect(updated?.status).toBe("queued");
+      // After clearing, no new calls should be made for a "working" state change
       expect(mockPtyClient.getAvailableTerminalsAsync).not.toHaveBeenCalled();
     });
   });
@@ -295,7 +312,6 @@ describe("TaskOrchestrator", () => {
   describe("agent completion handling", () => {
     it("marks task as completed when agent completes", async () => {
       const task = await queueService.createTask({ title: "Test task" });
-      await queueService.enqueueTask(task.id);
 
       mockPtyClient.getAvailableTerminalsAsync.mockResolvedValue([
         {
@@ -306,7 +322,8 @@ describe("TaskOrchestrator", () => {
         },
       ]);
 
-      await orchestrator.assignNextTask();
+      await queueService.enqueueTask(task.id);
+      await settle();
 
       const runningTask = await queueService.getTask(task.id);
       expect(runningTask?.status).toBe("running");
@@ -320,7 +337,7 @@ describe("TaskOrchestrator", () => {
         timestamp: Date.now(),
       });
 
-      await new Promise((resolve) => setTimeout(resolve, 10));
+      await settle();
 
       const completedTask = await queueService.getTask(task.id);
       expect(completedTask?.status).toBe("completed");
@@ -336,14 +353,12 @@ describe("TaskOrchestrator", () => {
       });
 
       // Should complete without error
-      await new Promise((resolve) => setTimeout(resolve, 10));
+      await settle();
     });
 
     it("triggers assignment for next task after completion", async () => {
       const task1 = await queueService.createTask({ title: "Task 1", priority: 10 });
       const task2 = await queueService.createTask({ title: "Task 2", priority: 5 });
-      await queueService.enqueueTask(task1.id);
-      await queueService.enqueueTask(task2.id);
 
       mockPtyClient.getAvailableTerminalsAsync.mockResolvedValue([
         {
@@ -354,8 +369,9 @@ describe("TaskOrchestrator", () => {
         },
       ]);
 
-      // Assign first task
-      await orchestrator.assignNextTask();
+      await queueService.enqueueTask(task1.id);
+      await queueService.enqueueTask(task2.id);
+      await settle();
 
       const running1 = await queueService.getTask(task1.id);
       expect(running1?.status).toBe("running");
@@ -368,7 +384,7 @@ describe("TaskOrchestrator", () => {
         timestamp: Date.now(),
       });
 
-      await new Promise((resolve) => setTimeout(resolve, 10));
+      await settle();
 
       // Second task should now be assigned
       const updated2 = await queueService.getTask(task2.id);
@@ -401,7 +417,7 @@ describe("TaskOrchestrator", () => {
         timestamp: Date.now(),
       });
 
-      await new Promise((resolve) => setTimeout(resolve, 10));
+      await settle();
 
       const updated1 = await queueService.getTask(task1.id);
       const updated2 = await queueService.getTask(task2.id);
@@ -418,19 +434,18 @@ describe("TaskOrchestrator", () => {
         worktreeId: "wt-1",
       });
 
-      await queueService.enqueueTask(task.id);
-
       mockPtyClient.getAvailableTerminalsAsync.mockResolvedValue([
         {
           id: "term-1",
           kind: "agent",
           agentId: "agent-1",
           agentState: "idle",
-          worktreeId: "wt-1", // Match the task's worktree
+          worktreeId: "wt-1",
         },
       ]);
 
-      await orchestrator.assignNextTask();
+      await queueService.enqueueTask(task.id);
+      await settle();
 
       // Verify task is running
       const runningTask = await queueService.getTask(task.id);
@@ -445,7 +460,7 @@ describe("TaskOrchestrator", () => {
         timestamp: Date.now(),
       });
 
-      await new Promise((resolve) => setTimeout(resolve, 10));
+      await settle();
 
       const updated = await queueService.getTask(task.id);
       expect(updated?.status).toBe("completed");
@@ -478,7 +493,7 @@ describe("TaskOrchestrator", () => {
         confidence: 1.0,
       });
 
-      await new Promise((resolve) => setTimeout(resolve, 10));
+      await settle();
 
       // Task should still be queued (no assignment happened)
       const updated = await queueService.getTask(task.id);
@@ -495,7 +510,6 @@ describe("TaskOrchestrator", () => {
           preferredDomains: ["frontend"],
         },
       });
-      await queueService.enqueueTask(task.id);
 
       // Mock router to return a specific agent
       mockRouter.routeTask.mockResolvedValue("routed-agent");
@@ -510,7 +524,8 @@ describe("TaskOrchestrator", () => {
         },
       ]);
 
-      await orchestrator.assignNextTask();
+      await queueService.enqueueTask(task.id);
+      await settle();
 
       // Verify router was called with hints
       expect(mockRouter.routeTask).toHaveBeenCalledWith(
@@ -532,7 +547,6 @@ describe("TaskOrchestrator", () => {
           requiredCapabilities: ["rare-capability"],
         },
       });
-      await queueService.enqueueTask(task.id);
 
       // Router returns null (no matching agent)
       mockRouter.routeTask.mockResolvedValue(null);
@@ -547,7 +561,8 @@ describe("TaskOrchestrator", () => {
         },
       ]);
 
-      await orchestrator.assignNextTask();
+      await queueService.enqueueTask(task.id);
+      await settle();
 
       const updatedTask = await queueService.getTask(task.id);
       expect(updatedTask?.status).toBe("running");
@@ -556,7 +571,6 @@ describe("TaskOrchestrator", () => {
 
     it("does not use router when no routing hints", async () => {
       const task = await queueService.createTask({ title: "Simple task" });
-      await queueService.enqueueTask(task.id);
 
       mockPtyClient.getAvailableTerminalsAsync.mockResolvedValue([
         {
@@ -567,7 +581,8 @@ describe("TaskOrchestrator", () => {
         },
       ]);
 
-      await orchestrator.assignNextTask();
+      await queueService.enqueueTask(task.id);
+      await settle();
 
       // Router should not be called for tasks without hints
       expect(mockRouter.routeTask).not.toHaveBeenCalled();
@@ -584,7 +599,6 @@ describe("TaskOrchestrator", () => {
           requiredCapabilities: ["javascript"],
         },
       });
-      await queueService.enqueueTask(task.id);
 
       // Router returns an agent
       mockRouter.routeTask.mockResolvedValue("routed-agent");
@@ -599,12 +613,124 @@ describe("TaskOrchestrator", () => {
         },
       ]);
 
-      await orchestrator.assignNextTask();
+      await queueService.enqueueTask(task.id);
+      await settle();
 
       // Should fall back to different-agent since routed-agent is not available
       const updatedTask = await queueService.getTask(task.id);
       expect(updatedTask?.status).toBe("running");
       expect(updatedTask?.assignedAgentId).toBe("different-agent");
+    });
+  });
+
+  describe("signal-and-sweep", () => {
+    it("retries assignment after lock releases when trigger was dropped", async () => {
+      const task = await queueService.createTask({ title: "Retry task" });
+      await queueService.enqueueTask(task.id);
+      await settle();
+
+      // Task is still queued (no agents during enqueue)
+      const beforeTask = await queueService.getTask(task.id);
+      expect(beforeTask?.status).toBe("queued");
+
+      // Now set up: first sweep returns null (simulating no work found),
+      // but a trigger arrives during the sweep that sets pendingAssignment
+      let firstCall = true;
+      const originalDequeueNext = queueService.dequeueNext.bind(queueService);
+      vi.spyOn(queueService, "dequeueNext").mockImplementation(async () => {
+        if (firstCall) {
+          firstCall = false;
+          // While we're inside the lock, simulate a trigger arriving
+          void orchestrator.assignNextTask();
+          // Return null so the first sweep exits without assigning
+          return null;
+        }
+        // Second sweep (retry): use the real dequeueNext
+        return originalDequeueNext();
+      });
+
+      mockPtyClient.getAvailableTerminalsAsync.mockResolvedValue([
+        {
+          id: "term-1",
+          kind: "agent",
+          agentId: "agent-1",
+          agentState: "idle",
+        },
+      ]);
+
+      // Start the first assignment sweep
+      await orchestrator.assignNextTask();
+      // Flush the setImmediate retry
+      await settle();
+
+      const updated = await queueService.getTask(task.id);
+      expect(updated?.status).toBe("running");
+      expect(updated?.assignedAgentId).toBe("agent-1");
+    });
+
+    it("enqueuing a task with idle agent triggers assignment via task:state-changed", async () => {
+      const task = await queueService.createTask({ title: "Event-driven task" });
+
+      mockPtyClient.getAvailableTerminalsAsync.mockResolvedValue([
+        {
+          id: "term-1",
+          kind: "agent",
+          agentId: "agent-1",
+          agentState: "idle",
+        },
+      ]);
+
+      // Enqueue fires task:state-changed with state "queued"
+      // The orchestrator's subscription should call assignNextTask
+      await queueService.enqueueTask(task.id);
+      await settle();
+
+      const updated = await queueService.getTask(task.id);
+      expect(updated?.status).toBe("running");
+      expect(updated?.assignedAgentId).toBe("agent-1");
+    });
+
+    it("unblocking a dependency triggers assignment for the dependent task", async () => {
+      const taskA = await queueService.createTask({ title: "Dependency" });
+      const taskB = await queueService.createTask({
+        title: "Dependent",
+        dependencies: [taskA.id],
+      });
+
+      mockPtyClient.getAvailableTerminalsAsync.mockResolvedValue([
+        {
+          id: "term-1",
+          kind: "agent",
+          agentId: "agent-1",
+          agentState: "idle",
+        },
+      ]);
+
+      // Enqueue both: taskA goes to queued, taskB goes to blocked
+      await queueService.enqueueTask(taskA.id);
+      await queueService.enqueueTask(taskB.id);
+      await settle();
+
+      const runningA = await queueService.getTask(taskA.id);
+      expect(runningA?.status).toBe("running");
+
+      const blockedB = await queueService.getTask(taskB.id);
+      expect(blockedB?.status).toBe("blocked");
+
+      // Complete taskA via agent:completed — this goes through handleAgentComplete
+      // which cleans up tracking maps, then markCompleted triggers
+      // checkAndUnblockDependents → taskB becomes queued → task:state-changed fires
+      events.emit("agent:completed", {
+        agentId: "agent-1",
+        exitCode: 0,
+        duration: 1000,
+        timestamp: Date.now(),
+      });
+      await settle();
+
+      const updatedB = await queueService.getTask(taskB.id);
+      expect(updatedB?.status).toBe("running");
+      expect(updatedB?.assignedAgentId).toBe("agent-1");
     });
   });
 });
