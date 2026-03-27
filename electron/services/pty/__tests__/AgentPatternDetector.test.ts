@@ -5,6 +5,16 @@ import {
   AGENT_PATTERN_CONFIGS,
   UNIVERSAL_PATTERN_CONFIG,
 } from "../AgentPatternDetector.js";
+import { getAgentConfig } from "../../../../shared/config/agentRegistry.js";
+import { buildPatternConfig } from "../terminalActivityPatterns.js";
+
+function buildTestDetector(agentId: string) {
+  const detection = getAgentConfig(agentId)?.detection;
+  if (!detection) throw new Error(`No detection config for agent "${agentId}" in AGENT_REGISTRY`);
+  const config = buildPatternConfig(detection, agentId);
+  if (!config) throw new Error(`buildPatternConfig returned undefined for agent "${agentId}"`);
+  return createPatternDetector(agentId, config);
+}
 
 describe("AgentPatternDetector", () => {
   describe("stripAnsi", () => {
@@ -40,7 +50,7 @@ describe("AgentPatternDetector", () => {
   });
 
   describe("Claude pattern detection", () => {
-    const detector = createPatternDetector("claude");
+    const detector = buildTestDetector("claude");
 
     it("should detect full Claude working pattern with interrupt hint", () => {
       const output = "Some output\n✽ Deliberating… (esc to interrupt · 15s)";
@@ -156,7 +166,7 @@ describe("AgentPatternDetector", () => {
   });
 
   describe("Gemini pattern detection", () => {
-    const detector = createPatternDetector("gemini");
+    const detector = buildTestDetector("gemini");
 
     it("should detect Gemini working pattern with cancel hint", () => {
       const output = "⠼ Unpacking Project Details (esc to cancel, 14s)";
@@ -193,7 +203,7 @@ describe("AgentPatternDetector", () => {
   });
 
   describe("Codex pattern detection", () => {
-    const detector = createPatternDetector("codex");
+    const detector = buildTestDetector("codex");
 
     it("should detect Codex working pattern with interrupt hint", () => {
       const output = "• Working (1s • esc to interrupt)";
@@ -258,7 +268,7 @@ describe("AgentPatternDetector", () => {
   });
 
   describe("detectFromLines", () => {
-    const detector = createPatternDetector("claude");
+    const detector = buildTestDetector("claude");
 
     it("should detect pattern from array of lines", () => {
       const lines = [
@@ -313,29 +323,39 @@ describe("AgentPatternDetector", () => {
   });
 
   describe("pattern configuration validation", () => {
-    it("should have claude patterns defined", () => {
-      expect(AGENT_PATTERN_CONFIGS.claude).toBeDefined();
-      expect(AGENT_PATTERN_CONFIGS.claude.primaryPatterns.length).toBeGreaterThan(0);
-    });
-
-    it("should have gemini patterns defined", () => {
-      expect(AGENT_PATTERN_CONFIGS.gemini).toBeDefined();
-      expect(AGENT_PATTERN_CONFIGS.gemini.primaryPatterns.length).toBeGreaterThan(0);
-    });
-
-    it("should have codex patterns defined", () => {
-      expect(AGENT_PATTERN_CONFIGS.codex).toBeDefined();
-      expect(AGENT_PATTERN_CONFIGS.codex.primaryPatterns.length).toBeGreaterThan(0);
-    });
+    it.each(["claude", "gemini", "codex"])(
+      "%s registry patterns compile to a valid config",
+      (agentId) => {
+        const detection = getAgentConfig(agentId)?.detection;
+        expect(detection).toBeDefined();
+        const config = buildPatternConfig(detection!, agentId);
+        expect(config).toBeDefined();
+        expect(config!.primaryPatterns.length).toBeGreaterThan(0);
+      }
+    );
 
     it("should have universal patterns defined", () => {
       expect(UNIVERSAL_PATTERN_CONFIG.primaryPatterns.length).toBeGreaterThan(0);
     });
   });
 
+  describe("fallback path (AGENT_PATTERN_CONFIGS)", () => {
+    it("falls back to AGENT_PATTERN_CONFIGS when no customConfig is provided", () => {
+      const detector = createPatternDetector("claude");
+      const result = detector.detect("✽ Deliberating… (esc to interrupt · 15s)");
+      expect(result.isWorking).toBe(true);
+    });
+
+    it("AGENT_PATTERN_CONFIGS has patterns for built-in agents", () => {
+      expect(AGENT_PATTERN_CONFIGS.claude.primaryPatterns.length).toBeGreaterThan(0);
+      expect(AGENT_PATTERN_CONFIGS.gemini.primaryPatterns.length).toBeGreaterThan(0);
+      expect(AGENT_PATTERN_CONFIGS.codex.primaryPatterns.length).toBeGreaterThan(0);
+    });
+  });
+
   describe("long status text detection (issue #1444)", () => {
     describe("Codex patterns with long descriptions", () => {
-      const detector = createPatternDetector("codex");
+      const detector = buildTestDetector("codex");
 
       it("should detect pattern with very long status text (120+ chars)", () => {
         const longDescription =
@@ -383,7 +403,7 @@ wraps to the next line where the escape hint appears: esc to interrupt)`;
     });
 
     describe("Claude patterns with long descriptions", () => {
-      const detector = createPatternDetector("claude");
+      const detector = buildTestDetector("claude");
 
       it("should detect pattern with very long status text (120+ chars)", () => {
         const longDescription =
@@ -413,7 +433,7 @@ wraps to the next line where the escape hint appears: esc to interrupt)`;
     });
 
     describe("Gemini patterns with long descriptions", () => {
-      const detector = createPatternDetector("gemini");
+      const detector = buildTestDetector("gemini");
 
       it("should detect pattern with very long status text (120+ chars)", () => {
         const longDescription =
@@ -466,7 +486,7 @@ wraps to the next line where the escape hint appears: esc to interrupt)`;
 
     describe("Known pattern behavior", () => {
       it("end-of-line patterns may match help text (acceptable tradeoff)", () => {
-        const detector = createPatternDetector("codex");
+        const detector = buildTestDetector("codex");
         const output = "Press esc to interrupt the operation when needed";
         const result = detector.detect(output);
 
@@ -475,7 +495,7 @@ wraps to the next line where the escape hint appears: esc to interrupt)`;
       });
 
       it("patterns prioritize detecting real status over avoiding false positives", () => {
-        const detector = createPatternDetector("claude");
+        const detector = buildTestDetector("claude");
         const output = "You can always use esc to interrupt if the task takes too long";
         const result = detector.detect(output);
 
@@ -484,7 +504,7 @@ wraps to the next line where the escape hint appears: esc to interrupt)`;
       });
 
       it("escape hints in idle output may trigger detection (rare in practice)", () => {
-        const detector = createPatternDetector("gemini");
+        const detector = buildTestDetector("gemini");
         const output =
           "Task complete. Remember esc to cancel works anytime.\n\nReady for next task.";
         const result = detector.detect(output);
@@ -496,7 +516,7 @@ wraps to the next line where the escape hint appears: esc to interrupt)`;
 
     describe("ANSI codes in long status text", () => {
       it("should detect Codex pattern with ANSI-colored long description", () => {
-        const detector = createPatternDetector("codex");
+        const detector = buildTestDetector("codex");
         const longDescription =
           "Exploring files with search and listing across multiple directories";
         const output = `\x1b[34m•\x1b[0m \x1b[1m${longDescription}\x1b[0m (4s • esc to interrupt)`;
@@ -507,7 +527,7 @@ wraps to the next line where the escape hint appears: esc to interrupt)`;
       });
 
       it("should detect escape hint with ANSI codes at end of line", () => {
-        const detector = createPatternDetector("claude");
+        const detector = buildTestDetector("claude");
         const output = "Very long text here \x1b[2mesc to interrupt\x1b[0m)";
         const result = detector.detect(output);
 
@@ -517,7 +537,7 @@ wraps to the next line where the escape hint appears: esc to interrupt)`;
   });
 
   describe("edge cases", () => {
-    const detector = createPatternDetector("claude");
+    const detector = buildTestDetector("claude");
 
     it("should handle empty string", () => {
       const result = detector.detect("");
