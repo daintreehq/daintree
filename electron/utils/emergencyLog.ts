@@ -51,7 +51,7 @@ export function emergencyLogMainFatal(kind: string, error: unknown): void {
     [
       "============================================================",
       `[${timestamp}] [${kind}] pid=${pid} uptimeMs=${uptimeMs}`,
-      `node=${process.version} platform=${process.platform} arch=${process.arch}`,
+      `electron=${process.versions.electron ?? "unknown"} node=${process.version} platform=${process.platform} arch=${process.arch}`,
       `memory.rss=${memory.rss} heapUsed=${memory.heapUsed} heapTotal=${memory.heapTotal} external=${memory.external}`,
       `error=${JSON.stringify(details)}`,
       "",

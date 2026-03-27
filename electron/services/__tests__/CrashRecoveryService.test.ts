@@ -18,8 +18,17 @@ vi.mock("../../store.js", () => ({
   store: storeMock,
 }));
 
+const browserWindowMock = vi.hoisted(() => ({
+  getAllWindows: vi.fn(() => [{}]),
+}));
+
 vi.mock("electron", () => ({
   app: appMock,
+  BrowserWindow: browserWindowMock,
+}));
+
+vi.mock("../GpuCrashMonitorService.js", () => ({
+  isGpuDisabledByFlag: vi.fn(() => false),
 }));
 
 import { CrashRecoveryService } from "../CrashRecoveryService.js";
@@ -146,6 +155,43 @@ describe("CrashRecoveryService", () => {
       expect(svc.getPendingCrash()).toBeNull();
     });
 
+    it("marker-derived entry includes runtime metadata and panel data from backup", () => {
+      const backupDir = path.join(userData, "backups");
+      fs.mkdirSync(backupDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(backupDir, "session-state.json"),
+        JSON.stringify({
+          capturedAt: Date.now(),
+          appState: {
+            terminals: [
+              { id: "t1", kind: "terminal" },
+              { id: "t2", kind: "agent" },
+            ],
+          },
+        })
+      );
+
+      const markerPath = path.join(userData, "running.lock");
+      fs.writeFileSync(
+        markerPath,
+        JSON.stringify({
+          sessionStartMs: Date.now() - 5000,
+          appVersion: "1.0.0",
+          platform: "darwin",
+        })
+      );
+
+      const svc = makeService();
+      svc.initialize();
+
+      const pending = svc.getPendingCrash();
+      expect(pending).not.toBeNull();
+      expect(typeof pending!.entry.nodeVersion).toBe("string");
+      expect(typeof pending!.entry.totalMemory).toBe("number");
+      expect(pending!.entry.panelCount).toBe(2);
+      expect(pending!.entry.panelKinds).toEqual({ terminal: 1, agent: 1 });
+    });
+
     it("surfaces dev-mode marker with crashLogPath as a genuine crash", () => {
       const crashDir = path.join(userData, "crashes");
       fs.mkdirSync(crashDir, { recursive: true });
@@ -242,7 +288,19 @@ describe("CrashRecoveryService", () => {
   });
 
   describe("recordCrash", () => {
-    it("writes crash log to crashes directory", () => {
+    it("writes crash log to crashes directory with environment metadata", () => {
+      storeMock.get.mockImplementation((key: string) => {
+        if (key === "appState")
+          return {
+            terminals: [
+              { id: "t1", kind: "terminal" },
+              { id: "t2", kind: "agent" },
+              { id: "t3", kind: "terminal" },
+            ],
+          };
+        return { autoRestoreOnCrash: false };
+      });
+
       const svc = makeService();
       svc.initialize();
       svc.recordCrash(new Error("Test error"));
@@ -254,6 +312,17 @@ describe("CrashRecoveryService", () => {
       const entry = JSON.parse(fs.readFileSync(path.join(crashDir, files[0]), "utf8"));
       expect(entry.errorMessage).toBe("Test error");
       expect(entry.appVersion).toBe("1.0.0");
+      expect(typeof entry.nodeVersion).toBe("string");
+      expect(typeof entry.totalMemory).toBe("number");
+      expect(typeof entry.freeMemory).toBe("number");
+      expect(typeof entry.heapUsed).toBe("number");
+      expect(typeof entry.rss).toBe("number");
+      expect(typeof entry.processUptime).toBe("number");
+      expect(typeof entry.cpuCount).toBe("number");
+      expect(entry.windowCount).toBe(1);
+      expect(entry.gpuAccelerationDisabled).toBe(false);
+      expect(entry.panelCount).toBe(3);
+      expect(entry.panelKinds).toEqual({ terminal: 2, agent: 1 });
     });
 
     it("does not record crash twice (idempotent)", () => {
@@ -265,6 +334,25 @@ describe("CrashRecoveryService", () => {
       const crashDir = path.join(userData, "crashes");
       const files = fs.readdirSync(crashDir).filter((f) => f.endsWith(".json"));
       expect(files.length).toBe(1);
+    });
+
+    it("still records version fields when memoryUsage throws", () => {
+      const origMemUsage = process.memoryUsage;
+      process.memoryUsage = (() => {
+        throw new Error("OOM");
+      }) as typeof process.memoryUsage;
+
+      const svc = makeService();
+      svc.initialize();
+      svc.recordCrash(new Error("oom crash"));
+
+      process.memoryUsage = origMemUsage;
+
+      const crashDir = path.join(userData, "crashes");
+      const files = fs.readdirSync(crashDir).filter((f) => f.endsWith(".json"));
+      const entry = JSON.parse(fs.readFileSync(path.join(crashDir, files[0]), "utf8"));
+      expect(typeof entry.nodeVersion).toBe("string");
+      expect(entry.heapUsed).toBeUndefined();
     });
 
     it("handles non-Error crash argument", () => {
