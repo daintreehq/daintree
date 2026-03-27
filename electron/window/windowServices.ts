@@ -39,6 +39,10 @@ import {
   initializeAgentAvailabilityStore,
   disposeAgentAvailabilityStore,
 } from "../services/AgentAvailabilityStore.js";
+import {
+  initializePowerSaveBlockerService,
+  disposePowerSaveBlockerService,
+} from "../services/PowerSaveBlockerService.js";
 import { initializeAgentRouter, disposeAgentRouter } from "../services/AgentRouter.js";
 import { initializeWorkflowEngine, disposeWorkflowEngine } from "../services/WorkflowEngine.js";
 import { workflowLoader } from "../services/WorkflowLoader.js";
@@ -517,7 +521,8 @@ export async function setupWindowServices(
 
     const availabilityStore = initializeAgentAvailabilityStore();
     const agentRouter = initializeAgentRouter(availabilityStore);
-    console.log("[MAIN] AgentAvailabilityStore and AgentRouter initialized");
+    initializePowerSaveBlockerService();
+    console.log("[MAIN] AgentAvailabilityStore, AgentRouter, and PowerSaveBlocker initialized");
 
     initializeTaskOrchestrator(ptyClient, agentRouter);
     console.log("[MAIN] TaskOrchestrator initialized");
@@ -784,6 +789,7 @@ export async function setupWindowServices(
 
     disposeTaskOrchestrator();
     disposeAgentRouter();
+    disposePowerSaveBlockerService();
     disposeAgentAvailabilityStore();
     disposeWorkflowEngine();
 

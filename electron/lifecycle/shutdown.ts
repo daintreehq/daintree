@@ -7,6 +7,7 @@ import {
   disposeAgentAvailabilityStore,
   getAgentAvailabilityStore,
 } from "../services/AgentAvailabilityStore.js";
+import { disposePowerSaveBlockerService } from "../services/PowerSaveBlockerService.js";
 import { disposeAgentRouter } from "../services/AgentRouter.js";
 import { disposeWorkflowEngine } from "../services/WorkflowEngine.js";
 import { disposeTaskOrchestrator } from "../services/TaskOrchestrator.js";
@@ -135,6 +136,7 @@ export function registerShutdownHandler(deps: ShutdownDeps): void {
           new Promise<void>((resolve) => {
             disposeTaskOrchestrator();
             disposeAgentRouter();
+            disposePowerSaveBlockerService();
             disposeAgentAvailabilityStore();
             disposeWorkflowEngine();
 
