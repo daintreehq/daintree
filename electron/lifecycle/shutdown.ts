@@ -35,6 +35,8 @@ export interface ShutdownDeps {
   windowRegistry?: import("../window/WindowRegistry.js").WindowRegistry;
 }
 
+const CLEANUP_TIMEOUT_MS = 10_000;
+
 let isQuitting = false;
 let isConfirmingQuit = false;
 
@@ -116,7 +118,11 @@ export function registerShutdownHandler(deps: ShutdownDeps): void {
       }
     })();
 
-    gracefulShutdownPromise
+    let currentPhase = "service-disposal";
+    let exitCalled = false;
+    let hardTimer: ReturnType<typeof setTimeout> | undefined;
+
+    const cleanupPromise = gracefulShutdownPromise
       .then(() =>
         Promise.all([
           workspaceClient ? workspaceClient.dispose() : Promise.resolve(),
@@ -138,6 +144,7 @@ export function registerShutdownHandler(deps: ShutdownDeps): void {
         ])
       )
       .then(() => {
+        currentPhase = "ipc-cleanup";
         const cleanupIpc = deps.getCleanupIpcHandlers();
         if (cleanupIpc) {
           cleanupIpc();
@@ -163,10 +170,30 @@ export function registerShutdownHandler(deps: ShutdownDeps): void {
           stopMetrics();
           deps.setStopAppMetricsMonitor(null);
         }
+      });
+
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      hardTimer = setTimeout(() => {
+        reject(
+          new Error(
+            `Hard shutdown timeout after ${CLEANUP_TIMEOUT_MS}ms — stuck at phase: ${currentPhase}`
+          )
+        );
+      }, CLEANUP_TIMEOUT_MS);
+    });
+
+    Promise.race([cleanupPromise, timeoutPromise])
+      .then(() => {
+        if (exitCalled) return;
+        exitCalled = true;
+        clearTimeout(hardTimer);
         console.log("[MAIN] Graceful shutdown complete");
         app.exit(0);
       })
       .catch((error) => {
+        if (exitCalled) return;
+        exitCalled = true;
+        clearTimeout(hardTimer);
         console.error("[MAIN] Error during cleanup:", error);
         app.exit(1);
       });
