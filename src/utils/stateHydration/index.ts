@@ -18,6 +18,7 @@ import { logDebug, logInfo, logWarn, logError } from "@/utils/logger";
 import { PERF_MARKS } from "@shared/perf/marks";
 import { markRendererPerformance, withRendererSpan } from "@/utils/performance";
 import { isCanopyEnvEnabled } from "@/utils/env";
+import { useSafeModeStore } from "@/store/safeModeStore";
 import {
   type TerminalRestoreTask,
   splitSnapshotRestoreTasks,
@@ -228,6 +229,10 @@ export async function hydrateAppState(
     if (!checkCurrent()) return;
 
     terminalInstanceService.setGPUHardwareAvailable(gpuWebGLHardware ?? true);
+
+    if (hydrateResult.safeMode) {
+      useSafeModeStore.getState().setSafeMode(true);
+    }
 
     normalizeAndApplyScrollback(terminalConfig, logHydrationInfo);
 

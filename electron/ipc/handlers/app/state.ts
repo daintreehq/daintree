@@ -11,6 +11,7 @@ import { getCrashRecoveryService } from "../../../services/CrashRecoveryService.
 
 import { isWebGLHardwareAccelerated } from "../../../utils/gpuDetection.js";
 import { isGpuDisabledByFlag } from "../../../services/GpuCrashMonitorService.js";
+import { getCrashLoopGuard } from "../../../services/CrashLoopGuardService.js";
 
 export function registerAppStateHandlers(): () => void {
   const handlers: Array<() => void> = [];
@@ -209,6 +210,14 @@ export function registerAppStateHandlers(): () => void {
       terminalsSource = "global-fallback";
     }
 
+    // In safe mode, skip terminal restoration to break crash loops
+    const inSafeMode = getCrashLoopGuard().isSafeMode();
+    if (inSafeMode) {
+      terminalsToUse = [];
+      terminalsSource = "safe-mode";
+      console.log("[AppHydrate] Safe mode active — skipping terminal restoration");
+    }
+
     // Apply one-shot crash recovery panel filter if set
     // Empty array means "no specific selection" (legacy/no-panels case) — skip filtering
     const panelFilter = getCrashRecoveryService().consumePanelFilter();
@@ -252,6 +261,7 @@ export function registerAppStateHandlers(): () => void {
       agentSettings: store.get("agentSettings"),
       gpuWebGLHardware,
       gpuHardwareAccelerationDisabled: isGpuDisabledByFlag(app.getPath("userData")),
+      safeMode: inSafeMode,
     };
   };
   ipcMain.handle(CHANNELS.APP_HYDRATE, handleAppHydrate);
