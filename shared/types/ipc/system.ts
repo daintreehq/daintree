@@ -123,6 +123,12 @@ export interface SystemHealthCheckResult {
   allRequired: boolean;
 }
 
+/** Hardware information for computing panel limit defaults */
+export interface HardwareInfo {
+  totalMemoryBytes: number;
+  logicalCpuCount: number;
+}
+
 /** Summary of real app memory metrics from app.getAppMetrics() */
 export interface AppMetricsSummary {
   totalMemoryMB: number;
