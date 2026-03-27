@@ -843,6 +843,14 @@ export interface ElectronAPI {
     close(): Promise<void>;
     /** Subscribe to hidden webview destruction events from memory pressure */
     onDestroyHiddenWebviews(callback: (payload: { tier: 1 | 2 }) => void): () => void;
+    /** Subscribe to disk space status changes */
+    onDiskSpaceStatus(
+      callback: (payload: {
+        status: "normal" | "warning" | "critical";
+        availableMb: number;
+        writesSuppressed: boolean;
+      }) => void
+    ): () => void;
   };
   notification: {
     /** Update window title and dock badge based on terminal attention state */

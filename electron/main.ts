@@ -34,6 +34,8 @@ import {
   setStopProcessMemoryMonitor,
   getStopAppMetricsMonitor,
   setStopAppMetricsMonitor,
+  getStopDiskSpaceMonitor,
+  setStopDiskSpaceMonitor,
 } from "./window/windowServices.js";
 import { setupPowerMonitor } from "./window/powerMonitor.js";
 import { isSmokeTest } from "./setup/environment.js";
@@ -172,6 +174,8 @@ if (!gotTheLock) {
     setStopProcessMemoryMonitor,
     getStopAppMetricsMonitor,
     setStopAppMetricsMonitor,
+    getStopDiskSpaceMonitor,
+    setStopDiskSpaceMonitor,
     getMainWindow,
   });
 

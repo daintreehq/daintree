@@ -511,6 +511,7 @@ const CHANNELS = {
   WINDOW_CLOSE: "window:close",
   WINDOW_RECLAIM_MEMORY: "window:reclaim-memory",
   WINDOW_DESTROY_HIDDEN_WEBVIEWS: "window:destroy-hidden-webviews",
+  WINDOW_DISK_SPACE_STATUS: "window:disk-space-status",
 
   // Notification channels
   NOTIFICATION_UPDATE: "notification:update",
@@ -1786,6 +1787,24 @@ const api: ElectronAPI = {
         callback(payload);
       ipcRenderer.on(CHANNELS.WINDOW_DESTROY_HIDDEN_WEBVIEWS, handler);
       return () => ipcRenderer.removeListener(CHANNELS.WINDOW_DESTROY_HIDDEN_WEBVIEWS, handler);
+    },
+    onDiskSpaceStatus: (
+      callback: (payload: {
+        status: "normal" | "warning" | "critical";
+        availableMb: number;
+        writesSuppressed: boolean;
+      }) => void
+    ) => {
+      const handler = (
+        _event: Electron.IpcRendererEvent,
+        payload: {
+          status: "normal" | "warning" | "critical";
+          availableMb: number;
+          writesSuppressed: boolean;
+        }
+      ) => callback(payload);
+      ipcRenderer.on(CHANNELS.WINDOW_DISK_SPACE_STATUS, handler);
+      return () => ipcRenderer.removeListener(CHANNELS.WINDOW_DISK_SPACE_STATUS, handler);
     },
   },
 

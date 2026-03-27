@@ -111,6 +111,8 @@ function makeDeps(overrides?: Partial<ShutdownDeps>): ShutdownDeps {
     setStopProcessMemoryMonitor: vi.fn(),
     getStopAppMetricsMonitor: vi.fn(() => null),
     setStopAppMetricsMonitor: vi.fn(),
+    getStopDiskSpaceMonitor: vi.fn(() => null),
+    setStopDiskSpaceMonitor: vi.fn(),
     getMainWindow: vi.fn(() => null),
     ...overrides,
   };

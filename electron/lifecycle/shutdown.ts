@@ -31,6 +31,8 @@ export interface ShutdownDeps {
   setStopProcessMemoryMonitor: (v: (() => void) | null) => void;
   getStopAppMetricsMonitor: () => (() => void) | null;
   setStopAppMetricsMonitor: (v: (() => void) | null) => void;
+  getStopDiskSpaceMonitor: () => (() => void) | null;
+  setStopDiskSpaceMonitor: (v: (() => void) | null) => void;
   getMainWindow: () => Electron.BrowserWindow | null;
   windowRegistry?: import("../window/WindowRegistry.js").WindowRegistry;
 }
@@ -169,6 +171,11 @@ export function registerShutdownHandler(deps: ShutdownDeps): void {
         if (stopMetrics) {
           stopMetrics();
           deps.setStopAppMetricsMonitor(null);
+        }
+        const stopDisk = deps.getStopDiskSpaceMonitor();
+        if (stopDisk) {
+          stopDisk();
+          deps.setStopDiskSpaceMonitor(null);
         }
       });
 

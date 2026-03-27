@@ -54,6 +54,7 @@ import {
   restoreSessionFromFile,
   persistSessionSnapshotSync,
   persistSessionSnapshotAsync,
+  isSessionPersistSuppressed,
 } from "./terminalSessionPersistence.js";
 import {
   createProcessStateValidator,
@@ -130,6 +131,7 @@ export class TerminalProcess {
 
   private scheduleSessionPersist(): void {
     if (!TERMINAL_SESSION_PERSISTENCE_ENABLED) return;
+    if (isSessionPersistSuppressed()) return;
     if (this.isAgentTerminal) return;
     if (this.terminalInfo.wasKilled) return;
 
@@ -144,6 +146,7 @@ export class TerminalProcess {
 
   private async persistSessionSnapshot(): Promise<void> {
     if (!TERMINAL_SESSION_PERSISTENCE_ENABLED) return;
+    if (isSessionPersistSuppressed()) return;
     if (this.isAgentTerminal) return;
     if (this.terminalInfo.wasKilled) return;
     if (!this.sessionPersistDirty) return;
@@ -180,6 +183,7 @@ export class TerminalProcess {
 
   flushEventDrivenSnapshot(): void {
     if (!TERMINAL_SESSION_PERSISTENCE_ENABLED) return;
+    if (isSessionPersistSuppressed()) return;
     if (this.terminalInfo.wasKilled) return;
 
     const now = performance.now();
@@ -881,7 +885,11 @@ export class TerminalProcess {
     // Flush session snapshot synchronously before marking as killed.
     // Once wasKilled is set, all persistence paths are blocked, and
     // disposeHeadless() destroys the buffer — so this is the last chance.
-    if (TERMINAL_SESSION_PERSISTENCE_ENABLED && !this.isAgentTerminal) {
+    if (
+      TERMINAL_SESSION_PERSISTENCE_ENABLED &&
+      !this.isAgentTerminal &&
+      !isSessionPersistSuppressed()
+    ) {
       try {
         const state = this.getSerializedState();
         if (state && Buffer.byteLength(state, "utf8") <= SESSION_SNAPSHOT_MAX_BYTES) {
@@ -1157,7 +1165,8 @@ export class TerminalProcess {
     if (
       TERMINAL_SESSION_PERSISTENCE_ENABLED &&
       this.sessionPersistDirty &&
-      !this.terminalInfo.wasKilled
+      !this.terminalInfo.wasKilled &&
+      !isSessionPersistSuppressed()
     ) {
       try {
         const state = this._serializeForPersistence() ?? this.getSerializedState();

@@ -15,6 +15,16 @@ export const TERMINAL_SESSION_PERSISTENCE_ENABLED: boolean =
 export const SESSION_SNAPSHOT_DEBOUNCE_MS = 5000;
 export const SESSION_SNAPSHOT_MAX_BYTES = 5 * 1024 * 1024;
 
+let sessionPersistSuppressed = false;
+
+export function setSessionPersistSuppressed(v: boolean): void {
+  sessionPersistSuppressed = v;
+}
+
+export function isSessionPersistSuppressed(): boolean {
+  return sessionPersistSuppressed;
+}
+
 export const SESSION_EVICTION_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 export const SESSION_EVICTION_MAX_BYTES = 100 * 1024 * 1024; // 100 MB
 const EVICTION_TTL_BUFFER_MS = 30_000; // 30s clock-skew safety buffer
