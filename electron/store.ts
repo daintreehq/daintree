@@ -13,6 +13,7 @@ import type { AppError } from "../shared/types/ipc/errors.js";
 import type { BuiltInTerminalType } from "../shared/config/agentIds.js";
 import { DEFAULT_AGENT_SETTINGS, DEFAULT_APP_AGENT_CONFIG } from "../shared/types/index.js";
 import type { AppThemeConfig } from "../shared/types/appTheme.js";
+import type { SettingsRecovery } from "../shared/types/ipc/app.js";
 
 export interface StoreSchema {
   _schemaVersion: number;
@@ -314,13 +315,15 @@ function preflightValidateConfig(configPath: string): "valid" | "missing" | "cor
   }
 }
 
-function quarantineCorruptConfig(configPath: string): void {
+function quarantineCorruptConfig(configPath: string): string | null {
   try {
     const quarantinePath = `${configPath}.corrupted.${Date.now()}`;
     fs.renameSync(configPath, quarantinePath);
     console.log(`[Store] Quarantined corrupt config to ${quarantinePath}`);
+    return quarantinePath;
   } catch (err) {
     console.warn("[Store] Failed to quarantine corrupt config:", err);
+    return null;
   }
 }
 
@@ -362,6 +365,18 @@ function createInMemoryFallback(): Store<StoreSchema> {
   } as unknown as Store<StoreSchema>;
 }
 
+let pendingSettingsRecovery: SettingsRecovery | null = null;
+
+export function consumePendingSettingsRecovery(): SettingsRecovery | null {
+  const value = pendingSettingsRecovery;
+  pendingSettingsRecovery = null;
+  return value;
+}
+
+export function _resetPendingSettingsRecovery(): void {
+  pendingSettingsRecovery = null;
+}
+
 export function initializeStore(options: typeof storeOptions = storeOptions): Store<StoreSchema> {
   const configPath = resolveConfigPath(options.cwd);
 
@@ -369,8 +384,11 @@ export function initializeStore(options: typeof storeOptions = storeOptions): St
     const status = preflightValidateConfig(configPath);
     if (status === "corrupt") {
       console.warn("[Store] Detected corrupt config.json");
-      quarantineCorruptConfig(configPath);
-      restoreFromBackup(configPath);
+      const quarantinedPath = quarantineCorruptConfig(configPath) ?? undefined;
+      const restored = restoreFromBackup(configPath);
+      pendingSettingsRecovery = restored
+        ? { kind: "restored-from-backup", quarantinedPath }
+        : { kind: "reset-to-defaults", quarantinedPath };
     }
   }
 
@@ -383,6 +401,7 @@ export function initializeStore(options: typeof storeOptions = storeOptions): St
     return instance;
   } catch (error) {
     console.warn("[Store] Failed to initialize electron-store, using in-memory fallback:", error);
+    pendingSettingsRecovery = { kind: "reset-to-defaults" };
     return createInMemoryFallback();
   }
 }

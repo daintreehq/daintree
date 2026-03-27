@@ -9,6 +9,8 @@ import {
   restoreFromBackup,
   refreshBackup,
   initializeStore,
+  consumePendingSettingsRecovery,
+  _resetPendingSettingsRecovery,
 } from "../store.js";
 
 describe("Store backup/restore helpers", () => {
@@ -81,17 +83,18 @@ describe("Store backup/restore helpers", () => {
   });
 
   describe("quarantineCorruptConfig", () => {
-    it("renames corrupt config with timestamp", () => {
+    it("renames corrupt config with timestamp and returns quarantine path", () => {
       fs.writeFileSync(configPath, "bad", "utf8");
-      quarantineCorruptConfig(configPath);
+      const result = quarantineCorruptConfig(configPath);
+      const expectedPath = path.join(tempDir, `config.json.corrupted.${Date.now()}`);
+      expect(result).toBe(expectedPath);
       expect(fs.existsSync(configPath)).toBe(false);
-      const quarantined = path.join(tempDir, `config.json.corrupted.${Date.now()}`);
-      expect(fs.existsSync(quarantined)).toBe(true);
-      expect(fs.readFileSync(quarantined, "utf8")).toBe("bad");
+      expect(fs.existsSync(expectedPath)).toBe(true);
+      expect(fs.readFileSync(expectedPath, "utf8")).toBe("bad");
     });
 
-    it("does not throw when file does not exist", () => {
-      expect(() => quarantineCorruptConfig(configPath)).not.toThrow();
+    it("returns null when file does not exist", () => {
+      expect(quarantineCorruptConfig(configPath)).toBeNull();
     });
   });
 
@@ -147,6 +150,7 @@ describe("initializeStore", () => {
 
   afterEach(() => {
     vi.useRealTimers();
+    _resetPendingSettingsRecovery();
     fs.rmSync(tempDir, { recursive: true, force: true });
   });
 
@@ -199,5 +203,49 @@ describe("initializeStore", () => {
     const instance = initializeStore(testOptions("/nonexistent/path/that/cannot/be/created"));
     expect(instance).toBeDefined();
     expect(instance.path).toBe("");
+  });
+
+  describe("consumePendingSettingsRecovery", () => {
+    it("returns null on normal startup", () => {
+      initializeStore(testOptions(tempDir));
+      expect(consumePendingSettingsRecovery()).toBeNull();
+    });
+
+    it("returns restored-from-backup when corrupt config has valid backup", () => {
+      const configPath = path.join(tempDir, "config.json");
+      fs.writeFileSync(configPath, "{corrupt!", "utf8");
+      fs.writeFileSync(`${configPath}.bak`, JSON.stringify({ _schemaVersion: 3 }), "utf8");
+      initializeStore(testOptions(tempDir));
+      const recovery = consumePendingSettingsRecovery();
+      expect(recovery).toEqual({
+        kind: "restored-from-backup",
+        quarantinedPath: path.join(tempDir, `config.json.corrupted.${Date.now()}`),
+      });
+    });
+
+    it("returns reset-to-defaults when corrupt config has no backup", () => {
+      const configPath = path.join(tempDir, "config.json");
+      fs.writeFileSync(configPath, "not valid json", "utf8");
+      initializeStore(testOptions(tempDir));
+      const recovery = consumePendingSettingsRecovery();
+      expect(recovery).toEqual({
+        kind: "reset-to-defaults",
+        quarantinedPath: path.join(tempDir, `config.json.corrupted.${Date.now()}`),
+      });
+    });
+
+    it("returns reset-to-defaults on in-memory fallback", () => {
+      initializeStore(testOptions("/nonexistent/path/that/cannot/be/created"));
+      const recovery = consumePendingSettingsRecovery();
+      expect(recovery).toEqual({ kind: "reset-to-defaults" });
+    });
+
+    it("consume-once: second call returns null", () => {
+      const configPath = path.join(tempDir, "config.json");
+      fs.writeFileSync(configPath, "{corrupt!", "utf8");
+      initializeStore(testOptions(tempDir));
+      expect(consumePendingSettingsRecovery()).not.toBeNull();
+      expect(consumePendingSettingsRecovery()).toBeNull();
+    });
   });
 });
