@@ -1,6 +1,6 @@
 import { ipcMain, app } from "electron";
 import { CHANNELS } from "../../channels.js";
-import { store, type StoreSchema } from "../../../store.js";
+import { store, type StoreSchema, consumePendingSettingsRecovery } from "../../../store.js";
 import { projectStore } from "../../../services/ProjectStore.js";
 import {
   AppStateTerminalEntrySchema,
@@ -262,6 +262,7 @@ export function registerAppStateHandlers(): () => void {
       gpuWebGLHardware,
       gpuHardwareAccelerationDisabled: isGpuDisabledByFlag(app.getPath("userData")),
       safeMode: inSafeMode,
+      settingsRecovery: consumePendingSettingsRecovery(),
     };
   };
   ipcMain.handle(CHANNELS.APP_HYDRATE, handleAppHydrate);

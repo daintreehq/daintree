@@ -2,6 +2,7 @@ import { appClient, terminalClient, worktreeClient, projectClient, systemClient 
 import { suppressMruRecording } from "@/store/worktreeStore";
 import { useLayoutConfigStore } from "@/store";
 import { useUserAgentRegistryStore } from "@/store/userAgentRegistryStore";
+import { notify } from "@/lib/notify";
 import type {
   TerminalType,
   AgentState,
@@ -232,6 +233,31 @@ export async function hydrateAppState(
 
     if (hydrateResult.safeMode) {
       useSafeModeStore.getState().setSafeMode(true);
+    }
+
+    if (hydrateResult.settingsRecovery) {
+      const recovery = hydrateResult.settingsRecovery;
+      const pathNote = recovery.quarantinedPath
+        ? `\nCorrupt file preserved at: ${recovery.quarantinedPath}`
+        : "";
+
+      if (recovery.kind === "restored-from-backup") {
+        notify({
+          type: "warning",
+          title: "Settings Restored from Backup",
+          message: `Your settings file was corrupted and has been restored from a backup. Some recent changes may have been lost.${pathNote}`,
+          priority: "high",
+          duration: 8000,
+        });
+      } else {
+        notify({
+          type: "warning",
+          title: "Settings Reset to Defaults",
+          message: `Your settings file was corrupted and no backup was available. Settings have been reset to defaults.${pathNote}`,
+          priority: "high",
+          duration: 0,
+        });
+      }
     }
 
     normalizeAndApplyScrollback(terminalConfig, logHydrationInfo);
