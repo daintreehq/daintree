@@ -8,6 +8,22 @@ export interface CrashLogEntry {
   errorMessage?: string;
   errorStack?: string;
   sessionDurationMs?: number;
+  electronVersion?: string;
+  nodeVersion?: string;
+  chromeVersion?: string;
+  v8Version?: string;
+  isPackaged?: boolean;
+  totalMemory?: number;
+  freeMemory?: number;
+  heapUsed?: number;
+  heapTotal?: number;
+  rss?: number;
+  panelCount?: number;
+  panelKinds?: Record<string, number>;
+  windowCount?: number;
+  cpuCount?: number;
+  gpuAccelerationDisabled?: boolean;
+  processUptime?: number;
 }
 
 export interface PanelSummary {

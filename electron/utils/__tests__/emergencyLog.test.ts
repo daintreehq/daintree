@@ -92,6 +92,7 @@ describe("emergencyLog", () => {
       const logPath = getMainCrashLogPath();
       const content = fs.readFileSync(logPath, "utf8");
       expect(content).toContain(`pid=${process.pid}`);
+      expect(content).toContain("electron=");
       expect(content).toContain(`node=${process.version}`);
       expect(content).toContain(`platform=${process.platform}`);
       expect(content).toContain("memory.rss=");

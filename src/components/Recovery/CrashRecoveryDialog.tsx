@@ -299,6 +299,24 @@ export function CrashRecoveryDialog({
                   value={formatDuration(crash.entry.sessionDurationMs)}
                 />
               )}
+              {crash.entry.electronVersion && (
+                <DetailRow label="Electron" value={crash.entry.electronVersion} />
+              )}
+              {crash.entry.totalMemory !== undefined && (
+                <DetailRow
+                  label="Memory"
+                  value={`${formatBytesCompact(crash.entry.freeMemory ?? 0)} free / ${formatBytesCompact(crash.entry.totalMemory)} total`}
+                />
+              )}
+              {crash.entry.panelCount !== undefined && (
+                <DetailRow label="Panels" value={String(crash.entry.panelCount)} />
+              )}
+              {crash.entry.processUptime !== undefined && (
+                <DetailRow
+                  label="Process uptime"
+                  value={formatDuration(crash.entry.processUptime * 1000)}
+                />
+              )}
               {crash.entry.errorMessage && (
                 <div className="mt-2">
                   <div className="text-xs text-canopy-text/50 mb-1">Error</div>
@@ -437,20 +455,83 @@ function formatDuration(ms: number): string {
   return `${Math.floor(mins / 60)}h ${mins % 60}m`;
 }
 
+function formatBytesCompact(bytes: number): string {
+  if (bytes <= 0) return "0 B";
+  const k = 1024;
+  const sizes = ["B", "KB", "MB", "GB", "TB"];
+  let i = Math.floor(Math.log(bytes) / Math.log(k));
+  i = Math.max(0, Math.min(i, sizes.length - 1));
+  return `${parseFloat((bytes / Math.pow(k, i)).toFixed(1))} ${sizes[i]}`;
+}
+
 function buildClipboardText(crash: PendingCrash): string {
-  const lines = [
+  const e = crash.entry;
+  const lines: string[] = [
     `## Crash Report`,
     ``,
-    `**Canopy ${crash.entry.appVersion}** on ${crash.entry.platform} ${crash.entry.arch}`,
-    `OS: ${crash.entry.osVersion}`,
-    `Crashed at: ${new Date(crash.entry.timestamp).toISOString()}`,
+    `**Canopy ${e.appVersion}** on ${e.platform} ${e.arch}`,
+    `- **OS**: ${e.osVersion}`,
   ];
 
-  if (crash.entry.errorMessage) {
-    lines.push(``, `**Error:** ${crash.entry.errorMessage}`);
+  const versionParts: string[] = [];
+  if (e.electronVersion) versionParts.push(`**Electron**: ${e.electronVersion}`);
+  if (e.nodeVersion) versionParts.push(`**Node**: ${e.nodeVersion}`);
+  if (e.chromeVersion) versionParts.push(`**Chrome**: ${e.chromeVersion}`);
+  if (versionParts.length > 0) lines.push(`- ${versionParts.join(" | ")}`);
+
+  const sessionParts: string[] = [];
+  if (e.sessionDurationMs !== undefined)
+    sessionParts.push(`**Session**: ${formatDuration(e.sessionDurationMs)}`);
+  if (e.isPackaged !== undefined) sessionParts.push(`**Packaged**: ${e.isPackaged ? "Yes" : "No"}`);
+  if (sessionParts.length > 0) lines.push(`- ${sessionParts.join(" | ")}`);
+
+  if (e.totalMemory !== undefined) {
+    lines.push(
+      `- **Memory (Free/Total)**: ${formatBytesCompact(e.freeMemory ?? 0)} / ${formatBytesCompact(e.totalMemory)}`
+    );
   }
-  if (crash.entry.errorStack) {
-    lines.push(``, "```", crash.entry.errorStack, "```");
+  if (e.rss !== undefined || e.heapUsed !== undefined) {
+    const parts: string[] = [];
+    if (e.rss !== undefined) parts.push(`RSS ${formatBytesCompact(e.rss)}`);
+    if (e.heapUsed !== undefined && e.heapTotal !== undefined)
+      parts.push(`Heap ${formatBytesCompact(e.heapUsed)}/${formatBytesCompact(e.heapTotal)}`);
+    lines.push(`- **Process Memory**: ${parts.join(", ")}`);
+  }
+
+  const infoParts: string[] = [];
+  if (e.panelCount !== undefined) {
+    let panelStr = String(e.panelCount);
+    if (e.panelKinds && Object.keys(e.panelKinds).length > 0) {
+      panelStr += ` (${Object.entries(e.panelKinds)
+        .map(([k, v]) => `${k}: ${v}`)
+        .join(", ")})`;
+    }
+    infoParts.push(`**Panels**: ${panelStr}`);
+  }
+  if (e.windowCount !== undefined) infoParts.push(`**Windows**: ${e.windowCount}`);
+  if (infoParts.length > 0) lines.push(`- ${infoParts.join(" | ")}`);
+
+  if (e.cpuCount !== undefined) lines.push(`- **CPUs**: ${e.cpuCount}`);
+  if (e.gpuAccelerationDisabled !== undefined)
+    lines.push(`- **GPU Acceleration**: ${e.gpuAccelerationDisabled ? "Disabled" : "Enabled"}`);
+
+  lines.push(`- **Crashed at**: ${new Date(e.timestamp).toISOString()}`);
+
+  if (e.errorMessage) {
+    lines.push(``, `**Error:** ${e.errorMessage}`);
+  }
+  if (e.errorStack) {
+    lines.push(
+      ``,
+      `<details>`,
+      `<summary>Stack trace</summary>`,
+      ``,
+      "```",
+      e.errorStack,
+      "```",
+      ``,
+      `</details>`
+    );
   }
 
   return lines.join("\n");
