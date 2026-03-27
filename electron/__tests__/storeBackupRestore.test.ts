@@ -1,0 +1,203 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import fs from "fs";
+import os from "os";
+import path from "path";
+import {
+  resolveConfigPath,
+  preflightValidateConfig,
+  quarantineCorruptConfig,
+  restoreFromBackup,
+  refreshBackup,
+  initializeStore,
+} from "../store.js";
+
+describe("Store backup/restore helpers", () => {
+  let tempDir: string;
+  let configPath: string;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2025-06-15T12:00:00.000Z"));
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "canopy-store-"));
+    configPath = path.join(tempDir, "config.json");
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  describe("resolveConfigPath", () => {
+    it("returns path when cwd is provided", () => {
+      expect(resolveConfigPath("/some/path")).toBe("/some/path/config.json");
+    });
+
+    it("returns null when cwd is undefined", () => {
+      expect(resolveConfigPath(undefined)).toBeNull();
+    });
+  });
+
+  describe("preflightValidateConfig", () => {
+    it("returns 'missing' when file does not exist", () => {
+      expect(preflightValidateConfig(configPath)).toBe("missing");
+    });
+
+    it("returns 'valid' for valid JSON", () => {
+      fs.writeFileSync(configPath, JSON.stringify({ foo: "bar" }), "utf8");
+      expect(preflightValidateConfig(configPath)).toBe("valid");
+    });
+
+    it("returns 'corrupt' for invalid JSON", () => {
+      fs.writeFileSync(configPath, "{invalid json", "utf8");
+      expect(preflightValidateConfig(configPath)).toBe("corrupt");
+    });
+
+    it("returns 'corrupt' for empty file", () => {
+      fs.writeFileSync(configPath, "", "utf8");
+      expect(preflightValidateConfig(configPath)).toBe("corrupt");
+    });
+
+    it("returns 'corrupt' for partial JSON", () => {
+      fs.writeFileSync(configPath, "{", "utf8");
+      expect(preflightValidateConfig(configPath)).toBe("corrupt");
+    });
+
+    it("returns 'corrupt' for non-object JSON values", () => {
+      fs.writeFileSync(configPath, '"a string"', "utf8");
+      expect(preflightValidateConfig(configPath)).toBe("corrupt");
+      fs.writeFileSync(configPath, "42", "utf8");
+      expect(preflightValidateConfig(configPath)).toBe("corrupt");
+      fs.writeFileSync(configPath, "[]", "utf8");
+      expect(preflightValidateConfig(configPath)).toBe("corrupt");
+      fs.writeFileSync(configPath, "null", "utf8");
+      expect(preflightValidateConfig(configPath)).toBe("corrupt");
+    });
+
+    it("returns 'valid' on non-SyntaxError read failures", () => {
+      const dirPath = path.join(tempDir, "not-a-file");
+      fs.mkdirSync(dirPath);
+      expect(preflightValidateConfig(dirPath)).toBe("valid");
+    });
+  });
+
+  describe("quarantineCorruptConfig", () => {
+    it("renames corrupt config with timestamp", () => {
+      fs.writeFileSync(configPath, "bad", "utf8");
+      quarantineCorruptConfig(configPath);
+      expect(fs.existsSync(configPath)).toBe(false);
+      const quarantined = path.join(tempDir, `config.json.corrupted.${Date.now()}`);
+      expect(fs.existsSync(quarantined)).toBe(true);
+      expect(fs.readFileSync(quarantined, "utf8")).toBe("bad");
+    });
+
+    it("does not throw when file does not exist", () => {
+      expect(() => quarantineCorruptConfig(configPath)).not.toThrow();
+    });
+  });
+
+  describe("restoreFromBackup", () => {
+    it("returns false when no backup exists", () => {
+      expect(restoreFromBackup(configPath)).toBe(false);
+    });
+
+    it("restores valid backup and returns true", () => {
+      const data = { restored: true };
+      fs.writeFileSync(`${configPath}.bak`, JSON.stringify(data), "utf8");
+      expect(restoreFromBackup(configPath)).toBe(true);
+      expect(fs.existsSync(configPath)).toBe(true);
+      expect(JSON.parse(fs.readFileSync(configPath, "utf8"))).toEqual(data);
+    });
+
+    it("returns false when backup contains invalid JSON", () => {
+      fs.writeFileSync(`${configPath}.bak`, "not json", "utf8");
+      expect(restoreFromBackup(configPath)).toBe(false);
+      expect(fs.existsSync(configPath)).toBe(false);
+    });
+  });
+
+  describe("refreshBackup", () => {
+    it("creates backup from valid config", () => {
+      const data = { backed: "up" };
+      fs.writeFileSync(configPath, JSON.stringify(data), "utf8");
+      refreshBackup(configPath);
+      expect(fs.existsSync(`${configPath}.bak`)).toBe(true);
+      expect(JSON.parse(fs.readFileSync(`${configPath}.bak`, "utf8"))).toEqual(data);
+    });
+
+    it("does not throw when config does not exist", () => {
+      expect(() => refreshBackup(configPath)).not.toThrow();
+      expect(fs.existsSync(`${configPath}.bak`)).toBe(false);
+    });
+  });
+});
+
+describe("initializeStore", () => {
+  let tempDir: string;
+
+  function testOptions(cwd: string) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    return { defaults: { _schemaVersion: 0 } as Record<string, unknown>, cwd } as any;
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2025-06-15T12:00:00.000Z"));
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "canopy-store-init-"));
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  it("creates store with defaults on first launch (no config.json)", () => {
+    const instance = initializeStore(testOptions(tempDir));
+    expect(instance).toBeDefined();
+    expect(instance.get("_schemaVersion")).toBe(0);
+    const configPath = path.join(tempDir, "config.json");
+    expect(fs.existsSync(configPath)).toBe(true);
+    expect(fs.existsSync(`${configPath}.bak`)).toBe(true);
+  });
+
+  it("loads valid config and creates backup", () => {
+    const configPath = path.join(tempDir, "config.json");
+    fs.writeFileSync(configPath, JSON.stringify({ _schemaVersion: 5 }), "utf8");
+    const instance = initializeStore(testOptions(tempDir));
+    expect(instance.get("_schemaVersion")).toBe(5);
+    expect(fs.existsSync(`${configPath}.bak`)).toBe(true);
+  });
+
+  it("recovers from corrupt config with valid backup", () => {
+    const configPath = path.join(tempDir, "config.json");
+    fs.writeFileSync(configPath, "{corrupt!", "utf8");
+    fs.writeFileSync(`${configPath}.bak`, JSON.stringify({ _schemaVersion: 3 }), "utf8");
+    const instance = initializeStore(testOptions(tempDir));
+    expect(instance.get("_schemaVersion")).toBe(3);
+    const quarantined = path.join(tempDir, `config.json.corrupted.${Date.now()}`);
+    expect(fs.existsSync(quarantined)).toBe(true);
+    expect(fs.readFileSync(quarantined, "utf8")).toBe("{corrupt!");
+  });
+
+  it("starts fresh with defaults when config is corrupt and no backup exists", () => {
+    const configPath = path.join(tempDir, "config.json");
+    fs.writeFileSync(configPath, "not valid json", "utf8");
+    const instance = initializeStore(testOptions(tempDir));
+    expect(instance.get("_schemaVersion")).toBe(0);
+    const quarantined = path.join(tempDir, `config.json.corrupted.${Date.now()}`);
+    expect(fs.existsSync(quarantined)).toBe(true);
+  });
+
+  it("starts fresh with defaults when both config and backup are corrupt", () => {
+    const configPath = path.join(tempDir, "config.json");
+    fs.writeFileSync(configPath, "bad json 1", "utf8");
+    fs.writeFileSync(`${configPath}.bak`, "bad json 2", "utf8");
+    const instance = initializeStore(testOptions(tempDir));
+    expect(instance.get("_schemaVersion")).toBe(0);
+  });
+
+  it("uses in-memory fallback on non-SyntaxError failures", () => {
+    const instance = initializeStore(testOptions("/nonexistent/path/that/cannot/be/created"));
+    expect(instance).toBeDefined();
+    expect(instance.path).toBe("");
+  });
+});
