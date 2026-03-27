@@ -340,7 +340,7 @@ describe("CrashRecoveryService", () => {
       const origMemUsage = process.memoryUsage;
       process.memoryUsage = (() => {
         throw new Error("OOM");
-      }) as typeof process.memoryUsage;
+      }) as unknown as typeof process.memoryUsage;
 
       const svc = makeService();
       svc.initialize();
