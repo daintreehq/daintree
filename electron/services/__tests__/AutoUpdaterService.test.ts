@@ -239,6 +239,11 @@ describe("AutoUpdaterService", () => {
           buttons: ["Retry", "Cancel"],
         })
       );
+      // No renderer IPC — the native dialog is sufficient for manual errors
+      expect(windowMock.webContents.send).not.toHaveBeenCalledWith(
+        "update:error",
+        expect.anything()
+      );
     });
 
     it("does not show error dialog for automatic check errors", async () => {
@@ -248,6 +253,10 @@ describe("AutoUpdaterService", () => {
       await Promise.resolve();
 
       expect(dialogMock.showMessageBox).not.toHaveBeenCalled();
+      expect(windowMock.webContents.send).not.toHaveBeenCalledWith(
+        "update:error",
+        expect.anything()
+      );
     });
 
     it("retries when user clicks Retry in error dialog", async () => {

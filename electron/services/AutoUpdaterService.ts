@@ -138,7 +138,6 @@ class AutoUpdaterService {
         console.error("[MAIN] Auto-updater error:", err);
         const wasManual = this.isManualCheck;
         this.isManualCheck = false;
-        this.sendToWindow(CHANNELS.UPDATE_ERROR, { message: err.message });
         if (wasManual) {
           const win = this.window && !this.window.isDestroyed() ? this.window : null;
           const opts = {

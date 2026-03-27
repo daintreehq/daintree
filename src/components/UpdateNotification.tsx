@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState, useRef } from "react";
 import { createPortal } from "react-dom";
-import { Download, RefreshCw, X, AlertCircle } from "lucide-react";
+import { Download, RefreshCw, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useUpdateStore } from "@/store/updateStore";
 
@@ -12,11 +12,7 @@ export function UpdateNotification() {
   const dismissTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   const shouldShow =
-    !dismissed &&
-    (status === "available" ||
-      status === "downloading" ||
-      status === "downloaded" ||
-      status === "error");
+    !dismissed && (status === "available" || status === "downloading" || status === "downloaded");
 
   useEffect(() => {
     if (dismissTimerRef.current) {
@@ -72,16 +68,9 @@ export function UpdateNotification() {
           "backdrop-blur-sm"
         )}
       >
-        <div
-          className={cn(
-            "mt-0.5 shrink-0",
-            status === "error" ? "text-status-error" : "text-canopy-accent"
-          )}
-        >
+        <div className="mt-0.5 shrink-0 text-canopy-accent">
           {status === "downloaded" ? (
             <RefreshCw className="h-4 w-4" />
-          ) : status === "error" ? (
-            <AlertCircle className="h-4 w-4" />
           ) : (
             <Download className="h-4 w-4" />
           )}
@@ -137,17 +126,6 @@ export function UpdateNotification() {
               >
                 Restart to Update
               </Button>
-            </>
-          )}
-
-          {status === "error" && (
-            <>
-              <h4 className="font-medium leading-tight tracking-tight text-xs font-mono text-status-error">
-                Update Failed
-              </h4>
-              <div className="text-xs text-canopy-text/90 leading-snug">
-                Unable to check for updates. Please try again later.
-              </div>
             </>
           )}
         </div>

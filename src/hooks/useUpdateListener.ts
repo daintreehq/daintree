@@ -5,8 +5,6 @@ export function useUpdateListener(): void {
   const setAvailable = useUpdateStore((state) => state.setAvailable);
   const setDownloading = useUpdateStore((state) => state.setDownloading);
   const setDownloaded = useUpdateStore((state) => state.setDownloaded);
-  const setError = useUpdateStore((state) => state.setError);
-
   useEffect(() => {
     if (!window.electron?.update) return;
 
@@ -22,15 +20,10 @@ export function useUpdateListener(): void {
       setDownloaded(info.version);
     });
 
-    const cleanupError = window.electron.update.onUpdateError((info) => {
-      setError(info.message);
-    });
-
     return () => {
       cleanupAvailable();
       cleanupProgress();
       cleanupDownloaded();
-      cleanupError();
     };
-  }, [setAvailable, setDownloading, setDownloaded, setError]);
+  }, [setAvailable, setDownloading, setDownloaded]);
 }

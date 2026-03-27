@@ -1768,7 +1768,6 @@ export interface IpcEventMap {
   "update:available": { version: string };
   "update:download-progress": { percent: number };
   "update:downloaded": { version: string };
-  "update:error": { message: string };
 
   // Dev Preview events
   "dev-preview:state-changed": DevPreviewStateChangedPayload;

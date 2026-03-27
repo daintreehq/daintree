@@ -891,7 +891,6 @@ export interface ElectronAPI {
     onUpdateAvailable(callback: (info: { version: string }) => void): () => void;
     onDownloadProgress(callback: (info: { percent: number }) => void): () => void;
     onUpdateDownloaded(callback: (info: { version: string }) => void): () => void;
-    onUpdateError(callback: (info: { message: string }) => void): () => void;
     quitAndInstall(): Promise<void>;
     checkForUpdates(): Promise<void>;
   };

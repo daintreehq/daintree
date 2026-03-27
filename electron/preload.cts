@@ -529,7 +529,6 @@ const CHANNELS = {
   UPDATE_AVAILABLE: "update:available",
   UPDATE_DOWNLOAD_PROGRESS: "update:download-progress",
   UPDATE_DOWNLOADED: "update:downloaded",
-  UPDATE_ERROR: "update:error",
   UPDATE_QUIT_AND_INSTALL: "update:quit-and-install",
   UPDATE_CHECK_FOR_UPDATES: "update:check-for-updates",
 
@@ -1875,9 +1874,6 @@ const api: ElectronAPI = {
 
     onUpdateDownloaded: (callback: (info: { version: string }) => void) =>
       _typedOn(CHANNELS.UPDATE_DOWNLOADED, callback),
-
-    onUpdateError: (callback: (info: { message: string }) => void) =>
-      _typedOn(CHANNELS.UPDATE_ERROR, callback),
 
     quitAndInstall: () => _unwrappingInvoke(CHANNELS.UPDATE_QUIT_AND_INSTALL),
 

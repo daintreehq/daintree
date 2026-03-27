@@ -322,7 +322,6 @@ export const CHANNELS = {
   UPDATE_AVAILABLE: "update:available",
   UPDATE_DOWNLOAD_PROGRESS: "update:download-progress",
   UPDATE_DOWNLOADED: "update:downloaded",
-  UPDATE_ERROR: "update:error",
   UPDATE_QUIT_AND_INSTALL: "update:quit-and-install",
   UPDATE_CHECK_FOR_UPDATES: "update:check-for-updates",
 
