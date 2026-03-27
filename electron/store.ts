@@ -1,5 +1,4 @@
 import Store from "electron-store";
-import electron from "electron";
 import fs from "fs";
 import path from "path";
 import type {
@@ -283,8 +282,19 @@ const storeOptions = {
   cwd: process.env.CANOPY_USER_DATA,
 };
 
+function getElectronUserDataPath(): string | undefined {
+  try {
+    // Dynamic require to avoid breaking tests that mock electron
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const electron = require("electron");
+    return electron.app?.getPath("userData");
+  } catch {
+    return undefined;
+  }
+}
+
 function resolveConfigPath(cwd: string | undefined): string | null {
-  const dir = cwd ?? electron.app?.getPath("userData");
+  const dir = cwd ?? getElectronUserDataPath();
   if (!dir) return null;
   return path.join(dir, "config.json");
 }
