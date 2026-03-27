@@ -25,6 +25,10 @@ describe("AgentStateMachine", () => {
       expect(isValidTransition("waiting", "working")).toBe(true);
     });
 
+    it("should allow waiting → completed (exit while waiting)", () => {
+      expect(isValidTransition("waiting", "completed")).toBe(true);
+    });
+
     it("should allow completed → waiting (prompt after completion)", () => {
       expect(isValidTransition("completed", "waiting")).toBe(true);
     });
@@ -40,7 +44,6 @@ describe("AgentStateMachine", () => {
     it("should not allow invalid transitions", () => {
       expect(isValidTransition("idle", "waiting")).toBe(false);
       expect(isValidTransition("idle", "completed")).toBe(false);
-      expect(isValidTransition("waiting", "completed")).toBe(false);
     });
   });
 
