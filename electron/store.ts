@@ -1,4 +1,5 @@
 import Store from "electron-store";
+import electron from "electron";
 import fs from "fs";
 import path from "path";
 import type {
@@ -283,15 +284,19 @@ const storeOptions = {
 };
 
 function resolveConfigPath(cwd: string | undefined): string | null {
-  if (!cwd) return null;
-  return path.join(cwd, "config.json");
+  const dir = cwd ?? electron.app?.getPath("userData");
+  if (!dir) return null;
+  return path.join(dir, "config.json");
 }
 
 function preflightValidateConfig(configPath: string): "valid" | "missing" | "corrupt" {
   if (!fs.existsSync(configPath)) return "missing";
   try {
     const raw = fs.readFileSync(configPath, "utf8");
-    JSON.parse(raw);
+    const parsed = JSON.parse(raw);
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+      return "corrupt";
+    }
     return "valid";
   } catch (err) {
     if (err instanceof SyntaxError) return "corrupt";

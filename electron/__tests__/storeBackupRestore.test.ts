@@ -62,6 +62,17 @@ describe("Store backup/restore helpers", () => {
       expect(preflightValidateConfig(configPath)).toBe("corrupt");
     });
 
+    it("returns 'corrupt' for non-object JSON values", () => {
+      fs.writeFileSync(configPath, '"a string"', "utf8");
+      expect(preflightValidateConfig(configPath)).toBe("corrupt");
+      fs.writeFileSync(configPath, "42", "utf8");
+      expect(preflightValidateConfig(configPath)).toBe("corrupt");
+      fs.writeFileSync(configPath, "[]", "utf8");
+      expect(preflightValidateConfig(configPath)).toBe("corrupt");
+      fs.writeFileSync(configPath, "null", "utf8");
+      expect(preflightValidateConfig(configPath)).toBe("corrupt");
+    });
+
     it("returns 'valid' on non-SyntaxError read failures", () => {
       const dirPath = path.join(tempDir, "not-a-file");
       fs.mkdirSync(dirPath);
