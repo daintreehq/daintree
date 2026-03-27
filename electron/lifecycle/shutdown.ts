@@ -15,6 +15,7 @@ import { disposeWorkspaceClient } from "../services/WorkspaceClient.js";
 import { mcpServerService } from "../services/McpServerService.js";
 import { getCrashRecoveryService } from "../services/CrashRecoveryService.js";
 import { getCrashLoopGuard } from "../services/CrashLoopGuardService.js";
+import { getDatabaseMaintenanceService } from "../services/DatabaseMaintenanceService.js";
 import { isSmokeTest } from "../setup/environment.js";
 import { isSignalShutdown } from "./signalShutdownState.js";
 
@@ -86,6 +87,12 @@ export function registerShutdownHandler(deps: ShutdownDeps): void {
     drainRateLimitQueues();
     getCrashRecoveryService().cleanupOnExit();
     getCrashLoopGuard().markCleanExit();
+
+    try {
+      await getDatabaseMaintenanceService().dispose();
+    } catch (error) {
+      console.warn("[MAIN] Database maintenance dispose failed:", error);
+    }
 
     const ptyClient = deps.getPtyClient();
     const workspaceClient = deps.getWorkspaceClient();

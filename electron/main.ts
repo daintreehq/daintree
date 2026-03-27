@@ -47,6 +47,7 @@ import { initializeCrashRecoveryService } from "./services/CrashRecoveryService.
 import { initializeGpuCrashMonitor } from "./services/GpuCrashMonitorService.js";
 import { initializeTrashedPidCleanup } from "./services/TrashedPidTracker.js";
 import { initializeCrashLoopGuard, getCrashLoopGuard } from "./services/CrashLoopGuardService.js";
+import { initializeDatabaseMaintenance } from "./services/DatabaseMaintenanceService.js";
 
 // CRITICAL: Run IPC sender validation before any handlers are registered
 enforceIpcSenderValidation();
@@ -116,6 +117,7 @@ if (!gotTheLock) {
   const distPath = path.join(__dirname, "../../dist");
 
   initializeCrashRecoveryService();
+  initializeDatabaseMaintenance();
   initializeTrashedPidCleanup();
   initializeGpuCrashMonitor();
 
