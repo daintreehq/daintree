@@ -5,6 +5,7 @@ const base: ComputeChipStateInput = {
   waitingTerminalCount: 0,
   lifecycleStage: null,
   isComplete: false,
+  hasActiveAgent: false,
 };
 
 describe("computeChipState", () => {
@@ -77,6 +78,40 @@ describe("computeChipState", () => {
           waitingTerminalCount: 1,
         })
       ).toBe("complete");
+    });
+  });
+
+  describe("active agent suppresses complete", () => {
+    it("returns null when isComplete but hasActiveAgent", () => {
+      expect(computeChipState({ ...base, isComplete: true, hasActiveAgent: true })).toBeNull();
+    });
+
+    it("cleanup beats hasActiveAgent", () => {
+      expect(
+        computeChipState({
+          ...base,
+          lifecycleStage: "merged",
+          isComplete: true,
+          hasActiveAgent: true,
+        })
+      ).toBe("cleanup");
+    });
+
+    it("returns waiting when isComplete, hasActiveAgent, and waitingTerminalCount > 0", () => {
+      expect(
+        computeChipState({
+          ...base,
+          isComplete: true,
+          hasActiveAgent: true,
+          waitingTerminalCount: 1,
+        })
+      ).toBe("waiting");
+    });
+
+    it("returns complete when isComplete and hasActiveAgent is false", () => {
+      expect(computeChipState({ ...base, isComplete: true, hasActiveAgent: false })).toBe(
+        "complete"
+      );
     });
   });
 

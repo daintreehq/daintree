@@ -518,16 +518,20 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
         }
       }
 
+      const hasWorkingAgent = worktreeTerminals.some((t) => t.agentState === "working");
+      const hasRunningAgent = worktreeTerminals.some((t) => t.agentState === "running");
+
       const chipState = computeChipState({
         waitingTerminalCount,
         lifecycleStage,
         isComplete,
+        hasActiveAgent: hasWorkingAgent || hasRunningAgent,
       });
 
       map.set(worktree.id, {
         terminalCount: worktreeTerminals.length,
-        hasWorkingAgent: worktreeTerminals.some((t) => t.agentState === "working"),
-        hasRunningAgent: worktreeTerminals.some((t) => t.agentState === "running"),
+        hasWorkingAgent,
+        hasRunningAgent,
         hasWaitingAgent: worktreeTerminals.some((t) => t.agentState === "waiting"),
         hasCompletedAgent: worktreeTerminals.some((t) => t.agentState === "completed"),
         hasMergeConflict:
