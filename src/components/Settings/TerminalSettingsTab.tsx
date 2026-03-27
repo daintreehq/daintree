@@ -17,6 +17,7 @@ import {
   Cpu,
 } from "lucide-react";
 import { useState, useMemo, useEffect } from "react";
+import { useShallow } from "zustand/react/shallow";
 import { cn } from "@/lib/utils";
 import { SettingsSection } from "@/components/Settings/SettingsSection";
 import { SettingsSwitchCard } from "@/components/Settings/SettingsSwitchCard";
@@ -119,12 +120,14 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
   const setDefaultRatio = useTwoPaneSplitStore((state) => state.setDefaultRatio);
   const resetAllWorktreeRatios = useTwoPaneSplitStore((state) => state.resetAllWorktreeRatios);
 
-  const panelLimits = usePanelLimitStore((state) => ({
-    softWarningLimit: state.softWarningLimit,
-    confirmationLimit: state.confirmationLimit,
-    hardLimit: state.hardLimit,
-    warningsDisabled: state.warningsDisabled,
-  }));
+  const panelLimits = usePanelLimitStore(
+    useShallow((state) => ({
+      softWarningLimit: state.softWarningLimit,
+      confirmationLimit: state.confirmationLimit,
+      hardLimit: state.hardLimit,
+      warningsDisabled: state.warningsDisabled,
+    }))
+  );
   const setWarningsDisabled = usePanelLimitStore((state) => state.setWarningsDisabled);
   const setSoftWarningLimit = usePanelLimitStore((state) => state.setSoftWarningLimit);
   const setConfirmationLimit = usePanelLimitStore((state) => state.setConfirmationLimit);
