@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
 import { useNotificationStore } from "@/store/notificationStore";
-import { isElectronAvailable } from "@/lib/electron";
+import { isElectronAvailable } from "@/hooks/useElectron";
 
 let ipcListenerAttached = false;
 
