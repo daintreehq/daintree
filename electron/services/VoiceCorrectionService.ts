@@ -111,18 +111,13 @@ export class VoiceCorrectionService {
     }
 
     try {
-      const result = await Promise.race([
-        this.callApi(
-          {
-            ...request,
-            rawText: trimmedRaw,
-          },
-          settings
-        ),
-        new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error("Correction timeout")), CORRECTION_TIMEOUT_MS)
-        ),
-      ]);
+      const result = await this.callApi(
+        {
+          ...request,
+          rawText: trimmedRaw,
+        },
+        settings
+      );
 
       const confirmedText =
         result.action === "no_change"
@@ -240,15 +235,7 @@ export class VoiceCorrectionService {
     }
 
     try {
-      const result = await Promise.race([
-        this.callMicroApi(request, settings),
-        new Promise<never>((_, reject) =>
-          setTimeout(
-            () => reject(new Error("Micro-correction timeout")),
-            MICRO_CORRECTION_TIMEOUT_MS
-          )
-        ),
-      ]);
+      const result = await this.callMicroApi(request, settings);
 
       const confirmedText =
         result.action === "no_change"
@@ -324,6 +311,7 @@ export class VoiceCorrectionService {
         "Content-Type": "application/json",
         Authorization: `Bearer ${settings.apiKey}`,
       },
+      signal: AbortSignal.timeout(MICRO_CORRECTION_TIMEOUT_MS),
       body: JSON.stringify({
         model: MICRO_CORRECTION_MODEL,
         instructions: systemPrompt,
@@ -388,6 +376,7 @@ export class VoiceCorrectionService {
         "Content-Type": "application/json",
         Authorization: `Bearer ${apiKey}`,
       },
+      signal: AbortSignal.timeout(CORRECTION_TIMEOUT_MS),
       body: JSON.stringify({
         model,
         instructions: systemPrompt,

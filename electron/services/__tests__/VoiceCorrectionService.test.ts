@@ -77,27 +77,28 @@ describe("VoiceCorrectionService", () => {
   it("falls back to raw text on timeout", async () => {
     vi.stubGlobal(
       "fetch",
-      vi
-        .fn()
-        .mockImplementation(
-          () =>
-            new Promise((resolve) =>
-              setTimeout(
-                () =>
-                  resolve(
-                    makeFetchResponse({ action: "replace", corrected_text: "Corrected sentence." })
-                  ),
-                30000
-              )
-            )
-        )
+      vi.fn().mockImplementation(
+        (_url: string, init: RequestInit) =>
+          new Promise((_resolve, reject) => {
+            const timer = setTimeout(() => {}, 30000);
+            init.signal!.addEventListener(
+              "abort",
+              () => {
+                clearTimeout(timer);
+                reject(init.signal!.reason);
+              },
+              { once: true }
+            );
+          })
+      )
     );
 
     const svc = new VoiceCorrectionService();
     const resultPromise = svc.correct({ rawText: "react is great" }, BASE_SETTINGS);
-    vi.advanceTimersByTime(8000);
+    await vi.advanceTimersByTimeAsync(8000);
     const result = await resultPromise;
     expect(result.confirmedText).toBe("react is great");
+    expect(result.action).toBe("no_change");
   });
 
   it("includes project context and custom dictionary in the system prompt", async () => {
@@ -116,9 +117,11 @@ describe("VoiceCorrectionService", () => {
       }
     );
 
-    const body = JSON.parse((fetchMock.mock.calls[0] as [string, RequestInit])[1].body as string);
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const body = JSON.parse(init.body as string);
     expect(body.instructions).toContain("Canopy");
     expect(body.instructions).toContain("Worktree");
+    expect(init.signal).toBeInstanceOf(AbortSignal);
   });
 
   it("formats explicit correction context in the user message", async () => {
@@ -278,11 +281,13 @@ describe("VoiceCorrectionService", () => {
         BASE_SETTINGS
       );
 
-      const body = JSON.parse((fetchMock.mock.calls[0] as [string, RequestInit])[1].body as string);
+      const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+      const body = JSON.parse(init.body as string);
       expect(body.model).toBe("gpt-5-nano");
       expect(body.reasoning).toEqual({ effort: "minimal" });
       expect(body.max_output_tokens).toBe(128);
       expect(body.prompt_cache_key).toContain("voice-micro-correction-v1");
+      expect(init.signal).toBeInstanceOf(AbortSignal);
     });
 
     it("returns corrected text from the micro API", async () => {
@@ -332,17 +337,20 @@ describe("VoiceCorrectionService", () => {
     it("falls back to raw span on timeout (3s)", async () => {
       vi.stubGlobal(
         "fetch",
-        vi
-          .fn()
-          .mockImplementation(
-            () =>
-              new Promise((resolve) =>
-                setTimeout(
-                  () => resolve(makeFetchResponse({ action: "replace", corrected_text: "Fixed" })),
-                  10000
-                )
-              )
-          )
+        vi.fn().mockImplementation(
+          (_url: string, init: RequestInit) =>
+            new Promise((_resolve, reject) => {
+              const timer = setTimeout(() => {}, 30000);
+              init.signal!.addEventListener(
+                "abort",
+                () => {
+                  clearTimeout(timer);
+                  reject(init.signal!.reason);
+                },
+                { once: true }
+              );
+            })
+        )
       );
 
       const svc = new VoiceCorrectionService();
@@ -355,7 +363,7 @@ describe("VoiceCorrectionService", () => {
         },
         BASE_SETTINGS
       );
-      vi.advanceTimersByTime(4000);
+      await vi.advanceTimersByTimeAsync(4000);
       const result = await resultPromise;
 
       expect(result.confirmedText).toBe("bad");
