@@ -17,13 +17,6 @@ try {
   // GC exposure not available — non-critical
 }
 
-// Prefer compact code over raw speed — main process is I/O-bound
-try {
-  nodeV8.setFlagsFromString("--optimize_for_size");
-} catch {
-  // Non-critical — app works without this optimization
-}
-
 fixPath();
 
 // In development, use a separate userData directory so the dev instance

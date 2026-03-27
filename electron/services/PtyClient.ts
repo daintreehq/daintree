@@ -84,7 +84,7 @@ export interface PtyClientConfig {
   healthCheckIntervalMs?: number;
   /** Whether to show dialog on crash */
   showCrashDialog?: boolean;
-  /** Memory limit in MB for PTY Host process (default: 4096 = 4GB) */
+  /** Memory limit in MB for PTY Host process (default: 512) */
   memoryLimitMb?: number;
 }
 
@@ -92,7 +92,7 @@ const DEFAULT_CONFIG: Required<PtyClientConfig> = {
   maxRestartAttempts: 3,
   healthCheckIntervalMs: 30000,
   showCrashDialog: true,
-  memoryLimitMb: 4096,
+  memoryLimitMb: 512,
 };
 
 /**

@@ -187,6 +187,28 @@ describe("PtyClient Handshake Protocol", () => {
       );
     });
 
+    it("should start pty-host with 512MB memory limit by default", () => {
+      createClient();
+      expect(forkMock).toHaveBeenCalledWith(
+        expect.any(String),
+        [],
+        expect.objectContaining({
+          execArgv: ["--max-old-space-size=512"],
+        })
+      );
+    });
+
+    it("should use configured memoryLimitMb when provided", () => {
+      createClient({ memoryLimitMb: 1024 });
+      expect(forkMock).toHaveBeenCalledWith(
+        expect.any(String),
+        [],
+        expect.objectContaining({
+          execArgv: ["--max-old-space-size=1024"],
+        })
+      );
+    });
+
     it("should forward stdout/stderr lines into the main log buffer", () => {
       createClient();
 

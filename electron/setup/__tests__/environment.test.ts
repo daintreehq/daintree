@@ -69,14 +69,14 @@ describe("V8 flag setup", () => {
     process.argv = originalArgv;
   });
 
-  it("sets --optimize_for_size V8 flag for compact code generation", async () => {
+  it("sets --expose_gc and does not set --optimize_for_size", async () => {
     fsMock.existsSync.mockReturnValue(false);
 
     await import("../environment.js");
 
     const nodeV8 = (await import("node:v8")).default;
     expect(nodeV8.setFlagsFromString).toHaveBeenCalledWith("--expose_gc");
-    expect(nodeV8.setFlagsFromString).toHaveBeenCalledWith("--optimize_for_size");
+    expect(nodeV8.setFlagsFromString).not.toHaveBeenCalledWith("--optimize_for_size");
   });
 });
 
