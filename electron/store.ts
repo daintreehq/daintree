@@ -1,4 +1,6 @@
 import Store from "electron-store";
+import fs from "fs";
+import path from "path";
 import type {
   AgentSettings,
   PanelGridConfig,
@@ -280,18 +282,61 @@ const storeOptions = {
   cwd: process.env.CANOPY_USER_DATA,
 };
 
-let storeInstance: Store<StoreSchema>;
+function resolveConfigPath(cwd: string | undefined): string | null {
+  if (!cwd) return null;
+  return path.join(cwd, "config.json");
+}
 
-try {
-  storeInstance = new Store<StoreSchema>(storeOptions);
-} catch (error) {
-  console.warn(
-    "[Store] Failed to initialize electron-store (likely in UtilityProcess), using in-memory fallback:",
-    error
-  );
-  // Minimal in-memory fallback to prevent crash on import
+function preflightValidateConfig(configPath: string): "valid" | "missing" | "corrupt" {
+  if (!fs.existsSync(configPath)) return "missing";
+  try {
+    const raw = fs.readFileSync(configPath, "utf8");
+    JSON.parse(raw);
+    return "valid";
+  } catch (err) {
+    if (err instanceof SyntaxError) return "corrupt";
+    return "valid";
+  }
+}
+
+function quarantineCorruptConfig(configPath: string): void {
+  try {
+    const quarantinePath = `${configPath}.corrupted.${Date.now()}`;
+    fs.renameSync(configPath, quarantinePath);
+    console.log(`[Store] Quarantined corrupt config to ${quarantinePath}`);
+  } catch (err) {
+    console.warn("[Store] Failed to quarantine corrupt config:", err);
+  }
+}
+
+function restoreFromBackup(configPath: string): boolean {
+  const backupPath = `${configPath}.bak`;
+  try {
+    if (!fs.existsSync(backupPath)) return false;
+    const raw = fs.readFileSync(backupPath, "utf8");
+    JSON.parse(raw);
+    fs.copyFileSync(backupPath, configPath);
+    console.log("[Store] Restored config from backup");
+    return true;
+  } catch {
+    console.warn("[Store] Backup is missing or corrupt, cannot restore");
+    return false;
+  }
+}
+
+function refreshBackup(configPath: string): void {
+  try {
+    if (fs.existsSync(configPath)) {
+      fs.copyFileSync(configPath, `${configPath}.bak`);
+    }
+  } catch (err) {
+    console.warn("[Store] Failed to create config backup:", err);
+  }
+}
+
+function createInMemoryFallback(): Store<StoreSchema> {
   const memoryStore = new Map();
-  storeInstance = {
+  return {
     get: (key: string) => memoryStore.get(key),
     set: (key: string, value: unknown) => memoryStore.set(key, value),
     delete: (key: string) => memoryStore.delete(key),
@@ -302,4 +347,38 @@ try {
   } as unknown as Store<StoreSchema>;
 }
 
-export const store = storeInstance;
+export function initializeStore(options: typeof storeOptions = storeOptions): Store<StoreSchema> {
+  const configPath = resolveConfigPath(options.cwd);
+
+  if (configPath) {
+    const status = preflightValidateConfig(configPath);
+    if (status === "corrupt") {
+      console.warn("[Store] Detected corrupt config.json");
+      quarantineCorruptConfig(configPath);
+      restoreFromBackup(configPath);
+    }
+  }
+
+  try {
+    const instance = new Store<StoreSchema>({
+      ...options,
+      clearInvalidConfig: true,
+    });
+    refreshBackup(instance.path);
+    return instance;
+  } catch (error) {
+    console.warn("[Store] Failed to initialize electron-store, using in-memory fallback:", error);
+    return createInMemoryFallback();
+  }
+}
+
+export const store = initializeStore();
+
+export {
+  resolveConfigPath,
+  preflightValidateConfig,
+  quarantineCorruptConfig,
+  restoreFromBackup,
+  refreshBackup,
+  createInMemoryFallback,
+};
