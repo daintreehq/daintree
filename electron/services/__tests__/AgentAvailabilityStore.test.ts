@@ -283,6 +283,163 @@ describe("AgentAvailabilityStore", () => {
     });
   });
 
+  describe("trash filtering", () => {
+    it("excludes trashed agent from getAgentsByAvailability", () => {
+      store.registerAgent("agent-1", "working");
+
+      events.emit("agent:spawned", {
+        agentId: "agent-1",
+        terminalId: "term-1",
+        type: "claude",
+        timestamp: Date.now(),
+      });
+
+      events.emit("terminal:trashed", { id: "term-1", expiresAt: Date.now() + 60000 });
+
+      const agents = store.getAgentsByAvailability();
+      expect(agents.find((a) => a.agentId === "agent-1")).toBeUndefined();
+    });
+
+    it("re-includes restored agent in getAgentsByAvailability", () => {
+      store.registerAgent("agent-1", "working");
+
+      events.emit("agent:spawned", {
+        agentId: "agent-1",
+        terminalId: "term-1",
+        type: "claude",
+        timestamp: Date.now(),
+      });
+
+      events.emit("terminal:trashed", { id: "term-1", expiresAt: Date.now() + 60000 });
+      events.emit("terminal:restored", { id: "term-1" });
+
+      const agents = store.getAgentsByAvailability();
+      expect(agents.find((a) => a.agentId === "agent-1")).toBeDefined();
+    });
+
+    it("returns 0 active agents when all working agents are trashed", () => {
+      store.registerAgent("agent-1", "working");
+      store.registerAgent("agent-2", "working");
+
+      events.emit("agent:spawned", {
+        agentId: "agent-1",
+        terminalId: "term-1",
+        type: "claude",
+        timestamp: Date.now(),
+      });
+      events.emit("agent:spawned", {
+        agentId: "agent-2",
+        terminalId: "term-2",
+        type: "claude",
+        timestamp: Date.now(),
+      });
+
+      events.emit("terminal:trashed", { id: "term-1", expiresAt: Date.now() + 60000 });
+      events.emit("terminal:trashed", { id: "term-2", expiresAt: Date.now() + 60000 });
+
+      expect(store.getAgentsByAvailability()).toHaveLength(0);
+    });
+
+    it("still shows non-trashed active agents", () => {
+      store.registerAgent("agent-1", "working");
+      store.registerAgent("agent-2", "working");
+
+      events.emit("agent:spawned", {
+        agentId: "agent-1",
+        terminalId: "term-1",
+        type: "claude",
+        timestamp: Date.now(),
+      });
+      events.emit("agent:spawned", {
+        agentId: "agent-2",
+        terminalId: "term-2",
+        type: "claude",
+        timestamp: Date.now(),
+      });
+
+      events.emit("terminal:trashed", { id: "term-1", expiresAt: Date.now() + 60000 });
+
+      const agents = store.getAgentsByAvailability();
+      expect(agents).toHaveLength(1);
+      expect(agents[0].agentId).toBe("agent-2");
+    });
+
+    it("handles trash before spawn (race condition)", () => {
+      store.registerAgent("agent-1", "working");
+
+      events.emit("terminal:trashed", { id: "term-1", expiresAt: Date.now() + 60000 });
+
+      events.emit("agent:spawned", {
+        agentId: "agent-1",
+        terminalId: "term-1",
+        type: "claude",
+        timestamp: Date.now(),
+      });
+
+      expect(store.getAgentsByAvailability().find((a) => a.agentId === "agent-1")).toBeUndefined();
+    });
+
+    it("cleans up trash state on unregisterAgent", () => {
+      store.registerAgent("agent-1", "working");
+
+      events.emit("agent:spawned", {
+        agentId: "agent-1",
+        terminalId: "term-1",
+        type: "claude",
+        timestamp: Date.now(),
+      });
+
+      events.emit("terminal:trashed", { id: "term-1", expiresAt: Date.now() + 60000 });
+
+      store.unregisterAgent("agent-1");
+
+      // Re-register with same agentId — should not be trashed
+      store.registerAgent("agent-1", "idle");
+      expect(store.getAgentsByAvailability().find((a) => a.agentId === "agent-1")).toBeDefined();
+    });
+
+    it("clears all trash state on clear()", () => {
+      store.registerAgent("agent-1", "working");
+
+      events.emit("agent:spawned", {
+        agentId: "agent-1",
+        terminalId: "term-1",
+        type: "claude",
+        timestamp: Date.now(),
+      });
+
+      events.emit("terminal:trashed", { id: "term-1", expiresAt: Date.now() + 60000 });
+
+      store.clear();
+
+      // Re-register — should not be trashed
+      store.registerAgent("agent-1", "idle");
+      events.emit("agent:spawned", {
+        agentId: "agent-1",
+        terminalId: "term-1",
+        type: "claude",
+        timestamp: Date.now(),
+      });
+
+      expect(store.getAgentsByAvailability().find((a) => a.agentId === "agent-1")).toBeDefined();
+    });
+
+    it("excludes trashed agents from getAvailableAgents too", () => {
+      store.registerAgent("agent-1", "idle");
+
+      events.emit("agent:spawned", {
+        agentId: "agent-1",
+        terminalId: "term-1",
+        type: "claude",
+        timestamp: Date.now(),
+      });
+
+      events.emit("terminal:trashed", { id: "term-1", expiresAt: Date.now() + 60000 });
+
+      expect(store.getAvailableAgents()).toHaveLength(0);
+    });
+  });
+
   describe("dispose", () => {
     it("stops listening to events after dispose", () => {
       store.registerAgent("agent-1", "idle");

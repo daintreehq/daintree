@@ -31,12 +31,46 @@ export class AgentAvailabilityStore {
   private concurrentTasks: Map<string, number> = new Map();
   private lastStateChange: Map<string, number> = new Map();
   private taskToAgent: Map<string, string> = new Map();
+  private terminalToAgent: Map<string, string> = new Map();
+  private agentToTerminal: Map<string, string> = new Map();
+  private trashedTerminals: Set<string> = new Set();
+  private trashedAgentIds: Set<string> = new Set();
   private unsubscribers: Array<() => void> = [];
 
   constructor() {
     this.unsubscribers.push(
       events.on("agent:state-changed", (payload) => {
         this.updateAvailability(payload);
+      })
+    );
+
+    this.unsubscribers.push(
+      events.on("agent:spawned", (payload) => {
+        this.terminalToAgent.set(payload.terminalId, payload.agentId);
+        this.agentToTerminal.set(payload.agentId, payload.terminalId);
+        if (this.trashedTerminals.has(payload.terminalId)) {
+          this.trashedAgentIds.add(payload.agentId);
+        }
+      })
+    );
+
+    this.unsubscribers.push(
+      events.on("terminal:trashed", (payload) => {
+        this.trashedTerminals.add(payload.id);
+        const agentId = this.terminalToAgent.get(payload.id);
+        if (agentId) {
+          this.trashedAgentIds.add(agentId);
+        }
+      })
+    );
+
+    this.unsubscribers.push(
+      events.on("terminal:restored", (payload) => {
+        this.trashedTerminals.delete(payload.id);
+        const agentId = this.terminalToAgent.get(payload.id);
+        if (agentId) {
+          this.trashedAgentIds.delete(agentId);
+        }
       })
     );
 
@@ -131,6 +165,7 @@ export class AgentAvailabilityStore {
     const agents: AgentAvailabilityInfo[] = [];
 
     for (const [agentId, state] of this.agentStates) {
+      if (this.trashedAgentIds.has(agentId)) continue;
       agents.push({
         agentId,
         available: isAvailableState(state),
@@ -169,6 +204,13 @@ export class AgentAvailabilityStore {
     this.agentStates.delete(agentId);
     this.concurrentTasks.delete(agentId);
     this.lastStateChange.delete(agentId);
+    const terminalId = this.agentToTerminal.get(agentId);
+    if (terminalId) {
+      this.terminalToAgent.delete(terminalId);
+      this.trashedTerminals.delete(terminalId);
+      this.agentToTerminal.delete(agentId);
+    }
+    this.trashedAgentIds.delete(agentId);
   }
 
   /**
@@ -179,6 +221,10 @@ export class AgentAvailabilityStore {
     this.concurrentTasks.clear();
     this.lastStateChange.clear();
     this.taskToAgent.clear();
+    this.terminalToAgent.clear();
+    this.agentToTerminal.clear();
+    this.trashedTerminals.clear();
+    this.trashedAgentIds.clear();
   }
 
   /**
