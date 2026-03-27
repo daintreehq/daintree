@@ -55,9 +55,7 @@ describe("TerminalAddonManager", () => {
       const terminal = createMockTerminal();
       createImageAddon(terminal);
 
-      expect(terminal.loadAddon).toHaveBeenCalledWith(
-        expect.any(mockImageAddon),
-      );
+      expect(terminal.loadAddon).toHaveBeenCalledWith(expect.any(mockImageAddon));
     });
   });
 });
