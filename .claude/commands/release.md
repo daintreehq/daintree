@@ -355,10 +355,6 @@ Tell the user they should set `develop` as the default branch in GitHub repo set
 
 ---
 
-## Notarization
-
-Check `build.mac.notarize` in `package.json` before each release. If notarization is disabled (`false`) and the user wants to enable it, change it to `true` in the version bump commit. All signing infrastructure and GitHub secrets are already configured — see `docs/release.md` for details.
-
 ## CI Workflow Permissions
 
 The release workflow (`.github/workflows/release.yml`) calls reusable workflows (`e2e-core.yml`, `e2e-online.yml`). GitHub Actions enforces that **reusable workflows cannot escalate permissions beyond the caller**. If any called workflow declares a permission not present in `release.yml`, the run will fail with `startup_failure` (0-second completion, no jobs created).
