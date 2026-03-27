@@ -61,6 +61,7 @@ import {
   useSemanticWorkerLifecycle,
   useSystemWakeHandler,
   useDevServerDiscovery,
+  useCloudSyncWarning,
   useAccessibilityAnnouncements,
   useGettingStartedChecklist,
   useDeferredNewsletterPrompt,
@@ -1307,6 +1308,7 @@ function App() {
   useTerminalStoreBootstrap();
   useSemanticWorkerLifecycle();
   useSystemWakeHandler();
+  useCloudSyncWarning(homeDir);
   useDevServerDiscovery();
   useAccessibilityAnnouncements();
 

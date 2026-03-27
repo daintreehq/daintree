@@ -147,6 +147,10 @@ export class ProjectSettingsManager {
           typeof parsed.devServerAutoDetected === "boolean"
             ? parsed.devServerAutoDetected
             : undefined,
+        cloudSyncWarningDismissed:
+          typeof parsed.cloudSyncWarningDismissed === "boolean"
+            ? parsed.cloudSyncWarningDismissed
+            : undefined,
         devServerLoadTimeout:
           typeof parsed.devServerLoadTimeout === "number" &&
           Number.isFinite(parsed.devServerLoadTimeout) &&
@@ -260,6 +264,10 @@ export class ProjectSettingsManager {
       devServerAutoDetected:
         typeof settings.devServerAutoDetected === "boolean"
           ? settings.devServerAutoDetected
+          : undefined,
+      cloudSyncWarningDismissed:
+        typeof settings.cloudSyncWarningDismissed === "boolean"
+          ? settings.cloudSyncWarningDismissed
           : undefined,
       devServerLoadTimeout:
         typeof settings.devServerLoadTimeout === "number" &&
