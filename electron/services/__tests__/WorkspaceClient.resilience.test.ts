@@ -8,6 +8,7 @@ const showMessageBoxMock = vi.hoisted(() => vi.fn().mockResolvedValue({ response
 class MockUtilityProcess extends EventEmitter {
   postMessage = vi.fn();
   kill = vi.fn();
+  pid = 12345;
 }
 
 vi.mock("electron", () => ({
@@ -366,6 +367,205 @@ describe("WorkspaceClient resilience", () => {
       await Promise.resolve();
 
       restartClient.dispose();
+    });
+  });
+
+  describe("watchdog", () => {
+    let killSpy: ReturnType<typeof vi.spyOn>;
+
+    beforeEach(() => {
+      killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+      child.emit("message", { type: "ready" });
+      child.postMessage.mockClear();
+    });
+
+    afterEach(() => {
+      killSpy.mockRestore();
+    });
+
+    it("force-kills host after 3 missed heartbeats", () => {
+      // Advance through 3 health check intervals without sending pong
+      vi.advanceTimersByTime(1001); // tick 1: missedHeartbeats = 1
+      vi.advanceTimersByTime(1000); // tick 2: missedHeartbeats = 2
+      vi.advanceTimersByTime(1000); // tick 3: missedHeartbeats = 3
+      vi.advanceTimersByTime(1000); // tick 4: threshold hit, force-kill
+
+      expect(killSpy).toHaveBeenCalledWith(12345, "SIGKILL");
+    });
+
+    it("pong resets missed heartbeat counter preventing force-kill", () => {
+      vi.advanceTimersByTime(1001); // tick 1: missedHeartbeats = 1
+      vi.advanceTimersByTime(1000); // tick 2: missedHeartbeats = 2
+
+      child.emit("message", { type: "pong" }); // reset to 0
+
+      vi.advanceTimersByTime(1000); // tick: missedHeartbeats = 1
+      vi.advanceTimersByTime(1000); // tick: missedHeartbeats = 2
+
+      expect(killSpy).not.toHaveBeenCalled();
+    });
+
+    it("skips kill when pid is undefined", () => {
+      child.pid = undefined as unknown as number;
+
+      vi.advanceTimersByTime(1001);
+      vi.advanceTimersByTime(1000);
+      vi.advanceTimersByTime(1000);
+      vi.advanceTimersByTime(1000);
+
+      expect(killSpy).not.toHaveBeenCalled();
+    });
+
+    it("watchdog kill triggers exit handler and restart flow", () => {
+      const crashHandler = vi.fn();
+      client.on("host-crash", crashHandler);
+
+      vi.advanceTimersByTime(4001); // 4 ticks, triggers kill on tick 4
+
+      expect(killSpy).toHaveBeenCalledWith(12345, "SIGKILL");
+
+      // Simulate the OS delivering the exit event after SIGKILL
+      child.emit("exit", null);
+
+      // With maxRestartAttempts: 0, host-crash should be emitted
+      expect(crashHandler).toHaveBeenCalled();
+    });
+  });
+
+  describe("handshake", () => {
+    let killSpy: ReturnType<typeof vi.spyOn>;
+
+    beforeEach(() => {
+      killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+      child.emit("message", { type: "ready" });
+      child.postMessage.mockClear();
+    });
+
+    afterEach(() => {
+      killSpy.mockRestore();
+    });
+
+    it("resume sends immediate handshake ping", () => {
+      client.pauseHealthCheck();
+      client.resumeHealthCheck();
+
+      expect(
+        child.postMessage.mock.calls.some(
+          ([msg]) => (msg as { type?: string })?.type === "health-check"
+        )
+      ).toBe(true);
+    });
+
+    it("pong completes handshake and starts interval", () => {
+      client.pauseHealthCheck();
+      client.resumeHealthCheck();
+      child.postMessage.mockClear();
+
+      // Send pong to complete handshake
+      child.emit("message", { type: "pong" });
+
+      // Now advance past one interval — health check should fire
+      vi.advanceTimersByTime(1001);
+
+      expect(
+        child.postMessage.mock.calls.some(
+          ([msg]) => (msg as { type?: string })?.type === "health-check"
+        )
+      ).toBe(true);
+    });
+
+    it("5s timeout falls back to starting interval", () => {
+      client.pauseHealthCheck();
+      client.resumeHealthCheck();
+      child.postMessage.mockClear();
+
+      // Advance past 5s handshake timeout
+      vi.advanceTimersByTime(5001);
+
+      // Handshake timed out, interval should have started — advance one more interval
+      vi.advanceTimersByTime(1001);
+
+      expect(
+        child.postMessage.mock.calls.some(
+          ([msg]) => (msg as { type?: string })?.type === "health-check"
+        )
+      ).toBe(true);
+    });
+
+    it("late pong after timeout is harmless", () => {
+      client.pauseHealthCheck();
+      client.resumeHealthCheck();
+
+      // Timeout fires
+      vi.advanceTimersByTime(5001);
+
+      // Late pong arrives — should not crash or start duplicate interval
+      expect(() => child.emit("message", { type: "pong" })).not.toThrow();
+    });
+
+    it("pause clears handshake timeout", () => {
+      client.pauseHealthCheck();
+      client.resumeHealthCheck();
+      child.postMessage.mockClear();
+
+      // Re-pause before handshake completes
+      client.pauseHealthCheck();
+
+      // Advance past where handshake timeout would fire
+      vi.advanceTimersByTime(6000);
+
+      // No health checks should have been sent
+      expect(
+        child.postMessage.mock.calls.some(
+          ([msg]) => (msg as { type?: string })?.type === "health-check"
+        )
+      ).toBe(false);
+    });
+
+    it("dispose during handshake is clean", () => {
+      client.pauseHealthCheck();
+      client.resumeHealthCheck();
+
+      client.dispose();
+
+      // Advance past handshake timeout — should not crash
+      expect(() => vi.advanceTimersByTime(6000)).not.toThrow();
+    });
+
+    it("resume before host ready returns early without handshake", () => {
+      // Create a fresh client where host is not yet ready
+      const freshChild = new MockUtilityProcess();
+      forkMock.mockReturnValue(freshChild);
+      const freshClient = new WorkspaceClient({
+        maxRestartAttempts: 0,
+        showCrashDialog: false,
+        healthCheckIntervalMs: 1000,
+      });
+      void freshClient.waitForReady().catch(() => {});
+
+      freshClient.pauseHealthCheck();
+      freshChild.postMessage.mockClear();
+      freshClient.resumeHealthCheck();
+
+      // No handshake ping should be sent since host is not ready
+      expect(
+        freshChild.postMessage.mock.calls.some(
+          ([msg]) => (msg as { type?: string })?.type === "health-check"
+        )
+      ).toBe(false);
+
+      // But after ready, health checks should start
+      freshChild.emit("message", { type: "ready" });
+      freshChild.postMessage.mockClear();
+      vi.advanceTimersByTime(1001);
+
+      expect(
+        freshChild.postMessage.mock.calls.some(
+          ([msg]) => (msg as { type?: string })?.type === "health-check"
+        )
+      ).toBe(true);
+
+      freshClient.dispose();
     });
   });
 
