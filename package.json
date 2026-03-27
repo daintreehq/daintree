@@ -1,6 +1,6 @@
 {
   "name": "canopy-app",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "description": "Canopy IDE - An Electron-based development environment",
   "author": {
     "name": "Greg Priday",
