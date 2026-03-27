@@ -1004,6 +1004,8 @@ const api: ElectronAPI = {
 
     getAppMetrics: () => _unwrappingInvoke(CHANNELS.SYSTEM_GET_APP_METRICS),
 
+    getHardwareInfo: () => _unwrappingInvoke(CHANNELS.SYSTEM_GET_HARDWARE_INFO),
+
     onWake: (callback: (data: { sleepDuration: number; timestamp: number }) => void) => {
       const handler = (
         _event: Electron.IpcRendererEvent,

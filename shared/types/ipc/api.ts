@@ -321,6 +321,7 @@ export interface ElectronAPI {
     healthCheck(agentIds?: string[]): Promise<SystemHealthCheckResult>;
     downloadDiagnostics(): Promise<boolean>;
     getAppMetrics(): Promise<import("./system.js").AppMetricsSummary>;
+    getHardwareInfo(): Promise<import("./system.js").HardwareInfo>;
     onWake(callback: (data: SystemWakePayload) => void): () => void;
   };
   app: {

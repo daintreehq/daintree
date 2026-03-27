@@ -71,8 +71,13 @@ export const createCorePanelActions = (
   addTerminal: async (options) => {
     // Panel limit enforcement (Tier 2: confirmation, Tier 3: hard block)
     if (!options.bypassLimits) {
-      const { softWarningLimit, confirmationLimit, hardLimit, requestConfirmation } =
-        usePanelLimitStore.getState();
+      const {
+        softWarningLimit,
+        confirmationLimit,
+        hardLimit,
+        warningsDisabled,
+        requestConfirmation,
+      } = usePanelLimitStore.getState();
       const globalCount = get().terminals.filter((t) => t.location !== "trash").length;
       const tier = evaluatePanelLimit(globalCount, {
         softWarningLimit,
@@ -91,7 +96,7 @@ export const createCorePanelActions = (
         return null;
       }
 
-      if (tier === "confirm") {
+      if (tier === "confirm" && !warningsDisabled) {
         let memoryMB: number | null = null;
         try {
           const metrics = await import("@/clients").then((m) => m.systemClient.getAppMetrics());
