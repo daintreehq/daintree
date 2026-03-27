@@ -307,17 +307,8 @@ export async function openFile(
 
   // 4. macOS .app fallback (no line support)
   if (process.platform === "darwin") {
-    try {
-      const child = execa("open", [filePath], {
-        detached: true,
-        stdio: "ignore",
-        cleanup: false,
-      });
-      child.unref();
-      return;
-    } catch {
-      // fall through
-    }
+    const launched = await launchEditor("open", [filePath]);
+    if (launched) return;
   }
 
   // 5. shell.openPath as last resort
