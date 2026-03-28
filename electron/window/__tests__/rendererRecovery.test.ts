@@ -37,6 +37,8 @@ type WebContentsEventHandler = (event: unknown, ...args: unknown[]) => void;
 const CRASH_LOOP_WINDOW_MS = 60_000;
 const CRASH_LOOP_THRESHOLD = 3;
 
+const oomRecreationTimestamps: number[] = [];
+
 function createMockWindow() {
   const listeners = new Map<string, EventHandler[]>();
   const wcListeners = new Map<string, WebContentsEventHandler[]>();
@@ -117,16 +119,32 @@ function setupCrashRecovery(
         win.webContents.loadURL(getRecoveryUrl(details.reason, details.exitCode));
       });
     } else if (isOom && onRecreateWindow) {
-      notifyError(
-        new Error(
-          "The window ran out of memory and was automatically recreated. Some state may have been lost."
-        ),
-        { source: "renderer-crash" }
-      );
-      setImmediate(() => {
-        if (!win.isDestroyed()) win.destroy();
-        void onRecreateWindow();
-      });
+      const now2 = Date.now();
+      while (
+        oomRecreationTimestamps.length > 0 &&
+        now2 - oomRecreationTimestamps[0] > CRASH_LOOP_WINDOW_MS
+      ) {
+        oomRecreationTimestamps.shift();
+      }
+      oomRecreationTimestamps.push(now2);
+
+      if (oomRecreationTimestamps.length >= CRASH_LOOP_THRESHOLD) {
+        setImmediate(() => {
+          if (win.isDestroyed()) return;
+          win.webContents.loadURL(getRecoveryUrl(details.reason, details.exitCode));
+        });
+      } else {
+        notifyError(
+          new Error(
+            "The window ran out of memory and was automatically recreated. Some state may have been lost."
+          ),
+          { source: "renderer-crash" }
+        );
+        setImmediate(() => {
+          if (!win.isDestroyed()) win.destroy();
+          onRecreateWindow().catch(() => {});
+        });
+      }
     } else {
       notifyError(new Error("The renderer process crashed and was automatically reloaded."), {
         source: "renderer-crash",
@@ -187,6 +205,7 @@ describe("renderer crash recovery", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     vi.mocked(notifyError).mockClear();
+    oomRecreationTimestamps.length = 0;
   });
 
   afterEach(() => {
@@ -407,6 +426,48 @@ describe("renderer crash recovery", () => {
 
     expect(win.webContents.reload).toHaveBeenCalledOnce();
     expect(win.destroy).not.toHaveBeenCalled();
+  });
+
+  it("does not reload if window is destroyed between crash and deferred execution", () => {
+    const win = createMockWindow();
+    setupCrashRecovery(win);
+
+    win._emitWc("render-process-gone", { reason: "crashed", exitCode: 1 });
+    // Window destroyed after crash event but before setImmediate fires
+    win.isDestroyed.mockReturnValue(true);
+    vi.advanceTimersByTime(0);
+
+    expect(win.webContents.reload).not.toHaveBeenCalled();
+  });
+
+  it("non-OOM crash with onRecreateWindow provided still reloads", () => {
+    const win = createMockWindow();
+    const onRecreateWindow = vi.fn().mockResolvedValue(undefined);
+    setupCrashRecovery(win, { onRecreateWindow });
+
+    win._emitWc("render-process-gone", { reason: "crashed", exitCode: 1 });
+    vi.advanceTimersByTime(0);
+
+    expect(win.webContents.reload).toHaveBeenCalledOnce();
+    expect(onRecreateWindow).not.toHaveBeenCalled();
+    expect(win.destroy).not.toHaveBeenCalled();
+  });
+
+  it("does not buffer notification when crash loop threshold is reached", () => {
+    const win = createMockWindow();
+    setupCrashRecovery(win);
+
+    win._emitWc("render-process-gone", { reason: "crashed", exitCode: 1 });
+    vi.advanceTimersByTime(0);
+    win._emitWc("render-process-gone", { reason: "crashed", exitCode: 1 });
+    vi.advanceTimersByTime(0);
+    vi.mocked(notifyError).mockClear();
+
+    win._emitWc("render-process-gone", { reason: "crashed", exitCode: 1 });
+    vi.advanceTimersByTime(0);
+
+    expect(notifyError).not.toHaveBeenCalled();
+    expect(win.webContents.loadURL).toHaveBeenCalledOnce();
   });
 });
 

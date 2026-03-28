@@ -21,6 +21,8 @@ import { SMOKE_BOOT_TIMEOUT_MS } from "../services/smokeTest.js";
 const CRASH_LOOP_WINDOW_MS = 60_000;
 const CRASH_LOOP_THRESHOLD = 3;
 
+const oomRecreationTimestamps: number[] = [];
+
 export interface SetupBrowserWindowOptions {
   onRecreateWindow?: () => Promise<void>;
 }
@@ -299,17 +301,37 @@ export function setupBrowserWindow(
         win.webContents.loadURL(recoveryUrl);
       });
     } else if (isOom && onRecreateWindow) {
-      console.warn("[MAIN] OOM crash detected, destroying and recreating window");
-      notifyError(
-        new Error(
-          "The window ran out of memory and was automatically recreated. Some state may have been lost."
-        ),
-        { source: "renderer-crash" }
-      );
-      setImmediate(() => {
-        if (!win.isDestroyed()) win.destroy();
-        void onRecreateWindow();
-      });
+      const now2 = Date.now();
+      while (
+        oomRecreationTimestamps.length > 0 &&
+        now2 - oomRecreationTimestamps[0] > CRASH_LOOP_WINDOW_MS
+      ) {
+        oomRecreationTimestamps.shift();
+      }
+      oomRecreationTimestamps.push(now2);
+
+      if (oomRecreationTimestamps.length >= CRASH_LOOP_THRESHOLD) {
+        console.error("[MAIN] OOM crash loop detected, loading recovery page");
+        setImmediate(() => {
+          if (win.isDestroyed()) return;
+          const recoveryUrl = getRecoveryUrl(details.reason, details.exitCode);
+          win.webContents.loadURL(recoveryUrl);
+        });
+      } else {
+        console.warn("[MAIN] OOM crash detected, destroying and recreating window");
+        notifyError(
+          new Error(
+            "The window ran out of memory and was automatically recreated. Some state may have been lost."
+          ),
+          { source: "renderer-crash" }
+        );
+        setImmediate(() => {
+          if (!win.isDestroyed()) win.destroy();
+          onRecreateWindow().catch((err) => {
+            console.error("[MAIN] Failed to recreate window after OOM:", err);
+          });
+        });
+      }
     } else {
       console.log("[MAIN] Renderer crash, auto-reloading");
       notifyError(new Error("The renderer process crashed and was automatically reloaded."), {
