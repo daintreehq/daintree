@@ -1,4 +1,5 @@
 import { ipcMain, shell } from "electron";
+import fs from "fs/promises";
 import path from "path";
 import { CHANNELS } from "../channels.js";
 import type { HandlerDependencies } from "../types.js";
@@ -63,13 +64,11 @@ export function registerGithubHandlers(_deps: HandlerDependencies): () => void {
       throw new Error("Working directory must be an absolute path");
     }
 
-    const fs = await import("fs/promises");
-    const pathModule = await import("path");
     const { getRepoStats } = await import("../../services/GitHubService.js");
     const { getCommitCount } = await import("../../utils/git.js");
 
     try {
-      const resolved = pathModule.resolve(cwd);
+      const resolved = path.resolve(cwd);
       const stat = await fs.stat(resolved);
       if (!stat.isDirectory()) {
         return {
@@ -120,12 +119,10 @@ export function registerGithubHandlers(_deps: HandlerDependencies): () => void {
       throw new Error("Working directory must be an absolute path");
     }
 
-    const fs = await import("fs/promises");
-    const pathModule = await import("path");
     const { getProjectHealth } = await import("../../services/GitHubService.js");
 
     try {
-      const resolved = pathModule.resolve(cwd);
+      const resolved = path.resolve(cwd);
       const stat = await fs.stat(resolved);
       if (!stat.isDirectory()) {
         return {
