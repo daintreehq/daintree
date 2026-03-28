@@ -670,11 +670,7 @@ export class WorktreeMonitor {
         this._pendingPollPromise = null;
       });
 
-    try {
-      await this._pendingPollPromise;
-    } catch {
-      // Already handled above
-    }
+    await this._pendingPollPromise;
 
     if (tripped) {
       this.scheduleCircuitBreakerRetry();
