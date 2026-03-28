@@ -2,6 +2,7 @@
   "fill" : "automatic",
   "groups" : [
     {
+      "blur-material" : 0.5,
       "layers" : [
         {
           "glass" : false,
@@ -11,9 +12,10 @@
         }
       ],
       "shadow" : {
-        "kind" : "neutral",
+        "kind" : "layer-color",
         "opacity" : 0.5
       },
+      "specular" : true,
       "translucency" : {
         "enabled" : true,
         "value" : 0.5
