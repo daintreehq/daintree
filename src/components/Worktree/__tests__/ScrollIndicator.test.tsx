@@ -2,16 +2,11 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 
-let mockIsOpen = false;
-
 vi.mock("../../../hooks/useAnimatedPresence", () => ({
-  useAnimatedPresence: ({ isOpen }: { isOpen: boolean }) => {
-    mockIsOpen = isOpen;
-    return {
-      isVisible: isOpen,
-      shouldRender: isOpen,
-    };
-  },
+  useAnimatedPresence: ({ isOpen }: { isOpen: boolean }) => ({
+    isVisible: isOpen,
+    shouldRender: isOpen,
+  }),
 }));
 
 import { ScrollIndicator } from "../ScrollIndicator";
@@ -20,7 +15,6 @@ describe("ScrollIndicator", () => {
   const onClick = vi.fn();
 
   beforeEach(() => {
-    mockIsOpen = false;
     vi.clearAllMocks();
   });
 
