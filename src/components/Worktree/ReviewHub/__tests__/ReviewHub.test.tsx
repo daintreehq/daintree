@@ -526,6 +526,28 @@ describe("ReviewHub", () => {
       });
     });
 
+    it("disables vs-branch button when current branch matches main branch", async () => {
+      getStagingStatusMock.mockResolvedValue(makeStatus({ currentBranch: "main" }));
+
+      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      await waitFor(() => screen.getByText("index.ts"));
+
+      const toggle = screen.getByRole("button", { name: /vs main/i });
+      expect(toggle.hasAttribute("disabled")).toBe(true);
+    });
+
+    it("does not call compareWorktrees when current branch matches main branch", async () => {
+      getStagingStatusMock.mockResolvedValue(makeStatus({ currentBranch: "main" }));
+
+      render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      await waitFor(() => screen.getByText("index.ts"));
+
+      const toggle = screen.getByRole("button", { name: /vs main/i });
+      fireEvent.click(toggle);
+
+      expect(compareWorktreesMock).not.toHaveBeenCalled();
+    });
+
     it("does not refetch base-branch diff on repeated toggle to base-branch mode", async () => {
       render(<ReviewHub isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
       await waitFor(() => screen.getByText("index.ts"));

@@ -287,6 +287,10 @@ ${lines.map((l) => "+" + l).join("\n")}`;
     filePath?: string,
     useMergeBase?: boolean
   ): Promise<CrossWorktreeDiffResult | string> {
+    if (branch1 === branch2) {
+      return filePath ? "NO_CHANGES" : { branch1, branch2, files: [] };
+    }
+
     const range = useMergeBase ? `${branch1}...${branch2}` : `${branch1}..${branch2}`;
 
     if (filePath) {

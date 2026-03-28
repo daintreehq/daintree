@@ -140,6 +140,7 @@ export function ReviewHub({ isOpen, worktreePath, onClose }: ReviewHubProps) {
   const fetchBaseBranch = useCallback(async () => {
     const currentBranch = status?.currentBranch;
     if (!currentBranch || !worktreePath) return;
+    if (currentBranch === mainBranch) return;
 
     const requestId = ++baseBranchRequestRef.current;
     setBaseBranchLoading(true);
@@ -191,6 +192,15 @@ export function ReviewHub({ isOpen, worktreePath, onClose }: ReviewHubProps) {
       setSelectedBaseBranchFile(null);
     }
   }, [isOpen, refresh]);
+
+  useEffect(() => {
+    if (diffMode === "base-branch" && status?.currentBranch === mainBranch) {
+      setDiffMode("working-tree");
+      setBaseBranchFiles(null);
+      setBaseBranchError(null);
+      setSelectedBaseBranchFile(null);
+    }
+  }, [status?.currentBranch, mainBranch, diffMode]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -481,7 +491,7 @@ export function ReviewHub({ isOpen, worktreePath, onClose }: ReviewHubProps) {
                 </button>
                 <button
                   onClick={() => handleDiffModeChange("base-branch")}
-                  disabled={!status?.currentBranch}
+                  disabled={!status?.currentBranch || status.currentBranch === mainBranch}
                   className={cn(
                     "px-2 py-1 transition-colors border-l border-tint/[0.08]",
                     "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-canopy-accent",
