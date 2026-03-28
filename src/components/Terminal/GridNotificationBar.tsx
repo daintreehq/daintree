@@ -70,7 +70,7 @@ export function GridNotificationBar({ className }: GridNotificationBarProps) {
   return (
     <div
       className={cn(
-        "flex items-center gap-3 rounded-[var(--radius-sm)] border px-3 py-2.5 shadow-[0_2px_8px_rgba(0,0,0,0.2)]",
+        "flex items-center gap-3 rounded-[var(--radius-sm)] border px-3 py-2.5 shadow-[var(--theme-shadow-ambient)]",
         config.containerClass,
         className
       )}

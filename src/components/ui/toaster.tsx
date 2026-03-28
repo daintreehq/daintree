@@ -83,7 +83,7 @@ function Toast({ notification }: { notification: Notification }) {
         "bg-surface-panel/60 backdrop-blur-xl",
         "px-3 py-2.5 pr-2",
         "text-sm text-canopy-text",
-        "shadow-[0_8px_24px_rgba(0,0,0,0.4)]",
+        "shadow-[var(--theme-shadow-floating)]",
         "ring-1 ring-inset ring-tint/[0.05]",
         "transition-[transform,opacity] duration-300 ease-out",
         "motion-reduce:transition-none motion-reduce:duration-0",

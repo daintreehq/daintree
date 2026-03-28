@@ -42,7 +42,7 @@ export function GettingStartedChecklist({
           "pointer-events-auto relative w-full",
           "rounded-[var(--radius-sm)] border",
           "text-sm text-canopy-text",
-          "shadow-[0_4px_12px_rgba(0,0,0,0.2)]",
+          "shadow-[var(--theme-shadow-floating)]",
           "transition-[transform,opacity] duration-300 ease-out",
           isVisible ? "translate-y-0 opacity-100" : "translate-y-4 opacity-0",
           "bg-[color-mix(in_oklab,var(--color-canopy-accent)_8%,var(--color-canopy-bg))]",
