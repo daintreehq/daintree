@@ -411,7 +411,7 @@ describe("AutoUpdaterService", () => {
 
       autoUpdaterService.initialize(windowMock as unknown as BrowserWindow);
 
-      expect(fsMock.existsSync).toHaveBeenCalledWith("/mock/resources/package-type");
+      expect(fsMock.existsSync).toHaveBeenCalledWith(expect.stringContaining("package-type"));
     });
 
     it("skips filesystem probe when APPIMAGE is set", () => {

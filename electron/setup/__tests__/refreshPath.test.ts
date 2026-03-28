@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import path from "path";
 
 vi.mock("fs", () => ({
   default: { existsSync: vi.fn(() => false) },
@@ -65,15 +66,16 @@ describe("refreshPath", () => {
 
   it("deduplicates PATH entries", async () => {
     Object.defineProperty(process, "platform", { value: "darwin", writable: true });
+    const d = path.delimiter;
 
     shellEnvMock.mockResolvedValue({
-      PATH: "/usr/bin:/usr/local/bin:/usr/bin:/usr/local/bin",
+      PATH: ["/usr/bin", "/usr/local/bin", "/usr/bin", "/usr/local/bin"].join(d),
     });
 
     const { refreshPath } = await import("../environment.js");
     await refreshPath();
 
-    expect(process.env.PATH).toBe("/usr/bin:/usr/local/bin");
+    expect(process.env.PATH).toBe(["/usr/bin", "/usr/local/bin"].join(d));
   });
 
   it("falls back to current PATH when shellEnv times out", async () => {

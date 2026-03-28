@@ -25,7 +25,7 @@ vi.mock("../../../../services/ProjectStore.js", () => ({
   },
 }));
 
-vi.mock("../../../services/pty/terminalShell.js", () => ({
+vi.mock("../../../../services/pty/terminalShell.js", () => ({
   getDefaultShell: vi.fn(() => "/bin/zsh"),
 }));
 

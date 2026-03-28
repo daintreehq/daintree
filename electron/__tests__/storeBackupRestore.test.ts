@@ -31,7 +31,7 @@ describe("Store backup/restore helpers", () => {
 
   describe("resolveConfigPath", () => {
     it("returns path when cwd is provided", () => {
-      expect(resolveConfigPath("/some/path")).toBe("/some/path/config.json");
+      expect(resolveConfigPath("/some/path")).toBe(path.join("/some/path", "config.json"));
     });
 
     it("returns null when cwd is undefined", () => {
@@ -200,7 +200,8 @@ describe("initializeStore", () => {
   });
 
   it("uses in-memory fallback on non-SyntaxError failures", () => {
-    const instance = initializeStore(testOptions("/nonexistent/path/that/cannot/be/created"));
+    // Use null byte in path — invalid on all platforms
+    const instance = initializeStore(testOptions("/nonexistent/\0/path"));
     expect(instance).toBeDefined();
     expect(instance.path).toBe("");
   });
@@ -235,7 +236,7 @@ describe("initializeStore", () => {
     });
 
     it("returns reset-to-defaults on in-memory fallback", () => {
-      initializeStore(testOptions("/nonexistent/path/that/cannot/be/created"));
+      initializeStore(testOptions("/nonexistent/\0/path"));
       const recovery = consumePendingSettingsRecovery();
       expect(recovery).toEqual({ kind: "reset-to-defaults" });
     });
