@@ -30,10 +30,17 @@ vi.mock("node:v8", () => ({
 }));
 
 import { ResourceGovernor, type ResourceGovernorDeps } from "../ResourceGovernor.js";
+import { PtyPauseCoordinator } from "../PtyPauseCoordinator.js";
+
+function createMockCoordinator() {
+  const raw = { pause: vi.fn(), resume: vi.fn() };
+  return { coordinator: new PtyPauseCoordinator(raw), raw };
+}
 
 function createMockDeps(overrides?: Partial<ResourceGovernorDeps>): ResourceGovernorDeps {
   return {
-    getTerminals: vi.fn().mockReturnValue([]),
+    getTerminalIds: vi.fn().mockReturnValue([]),
+    getPauseCoordinator: vi.fn().mockReturnValue(undefined),
     getTerminalPids: vi.fn().mockReturnValue([]),
     incrementPauseCount: vi.fn(),
     sendEvent: vi.fn(),
@@ -149,10 +156,11 @@ describe("ResourceGovernor", () => {
   });
 
   describe("engageThrottle", () => {
-    it("pauses terminals and emits host-throttled event under high memory", () => {
-      const mockTerminal = { ptyProcess: { pause: vi.fn(), resume: vi.fn() } };
+    it("pauses terminals via coordinator and emits host-throttled event under high memory", () => {
+      const { coordinator, raw } = createMockCoordinator();
       const deps = createMockDeps({
-        getTerminals: vi.fn().mockReturnValue([mockTerminal]),
+        getTerminalIds: vi.fn().mockReturnValue(["t1"]),
+        getPauseCoordinator: vi.fn().mockReturnValue(coordinator),
       });
 
       vi.spyOn(process, "memoryUsage").mockReturnValue({
@@ -167,7 +175,8 @@ describe("ResourceGovernor", () => {
 
       vi.advanceTimersByTime(2000);
 
-      expect(mockTerminal.ptyProcess.pause).toHaveBeenCalled();
+      expect(raw.pause).toHaveBeenCalled();
+      expect(coordinator.hasToken("resource-governor")).toBe(true);
       expect(deps.incrementPauseCount).toHaveBeenCalledWith(1);
       expect(deps.sendEvent).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -175,6 +184,52 @@ describe("ResourceGovernor", () => {
           isThrottled: true,
         })
       );
+
+      governor.dispose();
+    });
+  });
+
+  describe("coordination with other managers", () => {
+    it("disengageThrottle does not resume PTY when backpressure hold is active", () => {
+      const { coordinator, raw } = createMockCoordinator();
+      const deps = createMockDeps({
+        getTerminalIds: vi.fn().mockReturnValue(["t1"]),
+        getPauseCoordinator: vi.fn().mockReturnValue(coordinator),
+      });
+
+      vi.spyOn(process, "memoryUsage").mockReturnValue({
+        heapUsed: 900 * 1024 * 1024,
+        rss: 1024 * 1024 * 1024,
+        external: 0,
+        arrayBuffers: 0,
+      } as ReturnType<typeof process.memoryUsage>);
+
+      const governor = new ResourceGovernor(deps);
+      governor.start();
+
+      // Trigger engage
+      vi.advanceTimersByTime(2000);
+      expect(coordinator.hasToken("resource-governor")).toBe(true);
+
+      // Simulate backpressure manager also holding a pause
+      coordinator.pause("backpressure");
+
+      // Now lower memory to trigger disengage
+      vi.spyOn(process, "memoryUsage").mockReturnValue({
+        heapUsed: 500 * 1024 * 1024,
+        rss: 1024 * 1024 * 1024,
+        external: 0,
+        arrayBuffers: 0,
+      } as ReturnType<typeof process.memoryUsage>);
+
+      raw.resume.mockClear();
+      vi.advanceTimersByTime(2000);
+
+      // Governor released its hold, but backpressure still holds — PTY must stay paused
+      expect(coordinator.hasToken("resource-governor")).toBe(false);
+      expect(coordinator.hasToken("backpressure")).toBe(true);
+      expect(coordinator.isPaused).toBe(true);
+      expect(raw.resume).not.toHaveBeenCalled();
 
       governor.dispose();
     });

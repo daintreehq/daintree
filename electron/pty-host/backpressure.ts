@@ -4,6 +4,7 @@ import type {
   TerminalReliabilityMetricPayload,
   PtyHostActivityTier,
 } from "../../shared/types/pty-host.js";
+import type { PtyPauseCoordinator } from "./PtyPauseCoordinator.js";
 
 export const MAX_PACKET_PAYLOAD = 65535;
 export const MAX_PENDING_BYTES_PER_TERMINAL = 4 * 1024 * 1024;
@@ -26,6 +27,7 @@ export interface BackpressureDeps {
   getTerminal: (
     id: string
   ) => { ptyProcess?: { pause: () => void; resume: () => void } } | undefined;
+  getPauseCoordinator: (id: string) => PtyPauseCoordinator | undefined;
   sendEvent: (event: PtyHostEvent) => void;
   metricsEnabled: () => boolean;
 }
@@ -213,13 +215,9 @@ export class BackpressureManager {
     pauseDuration?: number,
     shardIndex?: number
   ): void {
-    const terminal = this.deps.getTerminal(id);
-    if (terminal?.ptyProcess) {
-      try {
-        terminal.ptyProcess.resume();
-      } catch {
-        // ignore
-      }
+    const coordinator = this.deps.getPauseCoordinator(id);
+    if (coordinator) {
+      coordinator.resume("backpressure");
     }
 
     const checkInterval = this.pausedTerminals.get(id);

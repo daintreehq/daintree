@@ -2,9 +2,11 @@ import v8 from "node:v8";
 import type { PtyHostEvent } from "../../shared/types/pty-host.js";
 import { FdMonitor } from "./FdMonitor.js";
 import { metricsEnabled } from "./metrics.js";
+import type { PtyPauseCoordinator } from "./PtyPauseCoordinator.js";
 
 export interface ResourceGovernorDeps {
-  getTerminals: () => Array<{ ptyProcess: { pause: () => void; resume: () => void } }>;
+  getTerminalIds: () => string[];
+  getPauseCoordinator: (id: string) => PtyPauseCoordinator | undefined;
   getTerminalPids: () => Array<{ id: string; pid: number | undefined }>;
   incrementPauseCount: (count: number) => void;
   sendEvent: (event: PtyHostEvent) => void;
@@ -119,18 +121,17 @@ export class ResourceGovernor {
     this.isThrottling = true;
     this.throttleStartTime = Date.now();
 
-    const terminals = this.deps.getTerminals();
+    const ids = this.deps.getTerminalIds();
     let pausedCount = 0;
-    for (const term of terminals) {
-      try {
-        term.ptyProcess.pause();
+    for (const id of ids) {
+      const coordinator = this.deps.getPauseCoordinator(id);
+      if (coordinator) {
+        coordinator.pause("resource-governor");
         pausedCount++;
-      } catch {
-        // Ignore dead processes
       }
     }
     this.deps.incrementPauseCount(pausedCount);
-    console.log(`[ResourceGovernor] Paused ${pausedCount}/${terminals.length} terminals`);
+    console.log(`[ResourceGovernor] Paused ${pausedCount}/${ids.length} terminals`);
 
     this.deps.sendEvent({
       type: "host-throttled",
@@ -149,17 +150,16 @@ export class ResourceGovernor {
     );
     this.isThrottling = false;
 
-    const terminals = this.deps.getTerminals();
+    const ids = this.deps.getTerminalIds();
     let resumedCount = 0;
-    for (const term of terminals) {
-      try {
-        term.ptyProcess.resume();
+    for (const id of ids) {
+      const coordinator = this.deps.getPauseCoordinator(id);
+      if (coordinator) {
+        coordinator.resume("resource-governor");
         resumedCount++;
-      } catch {
-        // Ignore dead processes
       }
     }
-    console.log(`[ResourceGovernor] Resumed ${resumedCount}/${terminals.length} terminals`);
+    console.log(`[ResourceGovernor] Resumed ${resumedCount}/${ids.length} terminals`);
 
     this.deps.sendEvent({
       type: "host-throttled",
