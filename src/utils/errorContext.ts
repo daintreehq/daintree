@@ -18,7 +18,68 @@ export function getErrorMessage(error: unknown): string {
   return String(error);
 }
 
+const NAME_TO_CATEGORY: Record<string, ErrorCategory> = {
+  GitError: "git",
+  WorktreeRemovedError: "git",
+  FileSystemError: "filesystem",
+  ProcessError: "process",
+  WatcherError: "process",
+  ConfigError: "validation",
+};
+
+const FILESYSTEM_CODES = new Set([
+  "ENOENT",
+  "EACCES",
+  "EPERM",
+  "EBUSY",
+  "EEXIST",
+  "EISDIR",
+  "ENOTDIR",
+  "ENOTEMPTY",
+  "EROFS",
+  "EMFILE",
+  "ENFILE",
+]);
+
+const NETWORK_CODES = new Set([
+  "ECONNREFUSED",
+  "ENOTFOUND",
+  "ETIMEDOUT",
+  "ECONNRESET",
+  "ECONNABORTED",
+  "ENETUNREACH",
+  "EHOSTUNREACH",
+  "EADDRINUSE",
+]);
+
+function getStructuredProps(error: unknown) {
+  const err = typeof error === "object" && error !== null ? (error as Record<string, unknown>) : {};
+  return {
+    name: typeof err.name === "string" ? err.name : "",
+    code: typeof err.code === "string" ? err.code : "",
+    syscall: typeof err.syscall === "string" ? err.syscall : "",
+  };
+}
+
 export function classifyError(error: unknown): ErrorCategory {
+  const { name, code, syscall } = getStructuredProps(error);
+
+  // Tier 1: known Canopy error class names (preserved through IPC deserialization)
+  if (name && name !== "Error") {
+    const category = NAME_TO_CATEGORY[name];
+    if (category) return category;
+  }
+
+  // Tier 2: POSIX error codes
+  if (code) {
+    if (NETWORK_CODES.has(code)) return "network";
+    if (FILESYSTEM_CODES.has(code)) return "filesystem";
+  }
+
+  // Tier 3: syscall-based detection
+  if (syscall.startsWith("spawn")) return "process";
+
+  // Tier 4: message substring fallback (for third-party errors without structured properties)
   const message = getErrorMessage(error).toLowerCase();
 
   if (
@@ -77,7 +138,13 @@ export function logErrorWithContext(error: unknown, context: ErrorContext): void
   });
 }
 
+const TRANSIENT_CODES = new Set(["EBUSY", "EAGAIN", "ETIMEDOUT", "ECONNRESET", "ENOTFOUND"]);
+
 export function isTransientError(error: unknown): boolean {
+  const { code } = getStructuredProps(error);
+
+  if (code && TRANSIENT_CODES.has(code)) return true;
+
   const message = getErrorMessage(error).toLowerCase();
 
   return (
