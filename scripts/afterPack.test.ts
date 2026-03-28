@@ -113,6 +113,7 @@ describe("afterPack", () => {
       mockExistsSync
         .mockReturnValueOnce(true) // node-pty dir
         .mockReturnValueOnce(true) // pty.node
+        .mockReturnValueOnce(false) // Assets.car (macOS icon injection)
         .mockReturnValueOnce(false); // better-sqlite3 dir
 
       await expect(afterPack(createContext("darwin", "/build/mac"))).rejects.toThrow(
@@ -124,6 +125,7 @@ describe("afterPack", () => {
       mockExistsSync
         .mockReturnValueOnce(true) // node-pty dir
         .mockReturnValueOnce(true) // pty.node
+        .mockReturnValueOnce(false) // Assets.car (macOS icon injection)
         .mockReturnValueOnce(true) // better-sqlite3 dir
         .mockReturnValueOnce(false); // better_sqlite3.node
 
