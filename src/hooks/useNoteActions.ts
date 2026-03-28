@@ -62,7 +62,6 @@ export interface UseNoteActionsReturn {
 
 export function useNoteActions({
   isOpen,
-  notes,
   visibleNotes,
   isLoading,
   isSearching,
