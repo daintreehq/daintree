@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from "fs";
 import path from "path";
-import { app, BrowserWindow, dialog, ipcMain } from "electron";
+import { app, BrowserWindow, ipcMain } from "electron";
 import electronUpdater from "electron-updater";
 import type { UpdateInfo, ProgressInfo } from "electron-updater";
 import { CHANNELS } from "../ipc/channels.js";
@@ -121,15 +121,11 @@ class AutoUpdaterService {
         console.log("[MAIN] Update not available");
         if (this.isManualCheck) {
           this.isManualCheck = false;
-          const win = this.window && !this.window.isDestroyed() ? this.window : null;
-          const opts = {
-            type: "info" as const,
+          this.sendToWindow(CHANNELS.NOTIFICATION_SHOW_TOAST, {
+            type: "info",
             title: "No Updates Available",
-            message: "You're up to date!",
-            detail: `Canopy ${app.getVersion()} is the latest version.`,
-            buttons: ["OK"],
-          };
-          (win ? dialog.showMessageBox(win, opts) : dialog.showMessageBox(opts)).catch(() => {});
+            message: `Canopy ${app.getVersion()} is the latest version.`,
+          });
         }
       };
       autoUpdater.on("update-not-available", this.notAvailableHandler);
@@ -139,23 +135,15 @@ class AutoUpdaterService {
         const wasManual = this.isManualCheck;
         this.isManualCheck = false;
         if (wasManual) {
-          const win = this.window && !this.window.isDestroyed() ? this.window : null;
-          const opts = {
-            type: "error" as const,
+          this.sendToWindow(CHANNELS.NOTIFICATION_SHOW_TOAST, {
+            type: "error",
             title: "Update Failed",
-            message: "Unable to check for updates.",
-            detail: err.message,
-            buttons: ["Retry", "Cancel"],
-            defaultId: 0,
-            cancelId: 1,
-          };
-          (win ? dialog.showMessageBox(win, opts) : dialog.showMessageBox(opts))
-            .then(({ response }) => {
-              if (response === 0 && this.initialized) {
-                this.checkForUpdatesManually();
-              }
-            })
-            .catch(() => {});
+            message: err.message,
+            action: {
+              label: "Retry",
+              ipcChannel: CHANNELS.UPDATE_CHECK_FOR_UPDATES,
+            },
+          });
         }
       };
       autoUpdater.on("error", this.errorHandler);

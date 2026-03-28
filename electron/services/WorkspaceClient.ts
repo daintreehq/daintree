@@ -8,7 +8,7 @@
  * Interface matches WorktreeService for seamless integration with existing code.
  */
 
-import { utilityProcess, UtilityProcess, dialog, app, BrowserWindow } from "electron";
+import { utilityProcess, UtilityProcess, app, BrowserWindow } from "electron";
 import { EventEmitter } from "events";
 import path from "path";
 import os from "os";
@@ -278,17 +278,6 @@ export class WorkspaceClient extends EventEmitter {
       } else {
         console.error("[WorkspaceClient] Max restart attempts reached, giving up");
         this.emit("host-crash", code);
-
-        if (this.config.showCrashDialog) {
-          dialog
-            .showMessageBox({
-              type: "error",
-              title: "Workspace Service Crashed",
-              message: `The workspace backend crashed (code ${code}). Worktree monitoring may need to be restarted.`,
-              buttons: ["OK"],
-            })
-            .catch(console.error);
-        }
       }
     });
 

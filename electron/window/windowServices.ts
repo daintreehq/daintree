@@ -338,7 +338,7 @@ export async function setupWindowServices(
   ptyClient = new PtyClient({
     maxRestartAttempts: 3,
     healthCheckIntervalMs: 30000,
-    showCrashDialog: true,
+    showCrashDialog: false,
   });
 
   agentVersionService = new AgentVersionService(cliAvailabilityService);
@@ -433,7 +433,7 @@ export async function setupWindowServices(
   workspaceClient = getWorkspaceClient({
     maxRestartAttempts: 3,
     healthCheckIntervalMs: 60000,
-    showCrashDialog: true,
+    showCrashDialog: false,
   });
 
   handlerDeps.worktreeService = workspaceClient;

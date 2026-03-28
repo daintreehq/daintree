@@ -524,6 +524,7 @@ const CHANNELS = {
   NOTIFICATION_WATCH_NAVIGATE: "notification:watch-navigate",
   NOTIFICATION_SYNC_WATCHED: "notification:sync-watched",
   NOTIFICATION_WAITING_ACKNOWLEDGE: "notification:waiting-acknowledge",
+  NOTIFICATION_SHOW_TOAST: "notification:show-toast",
 
   // Auto-update channels
   UPDATE_AVAILABLE: "update:available",
@@ -1866,6 +1867,14 @@ const api: ElectronAPI = {
       ipcRenderer.send(CHANNELS.NOTIFICATION_SYNC_WATCHED, panelIds),
     acknowledgeWaiting: (terminalId: string) =>
       ipcRenderer.send(CHANNELS.NOTIFICATION_WAITING_ACKNOWLEDGE, { terminalId }),
+    onShowToast: (
+      callback: (payload: {
+        type: "success" | "error" | "info" | "warning";
+        title?: string;
+        message: string;
+        action?: { label: string; ipcChannel: string };
+      }) => void
+    ) => _typedOn(CHANNELS.NOTIFICATION_SHOW_TOAST, callback),
   },
 
   // Auto-Update API

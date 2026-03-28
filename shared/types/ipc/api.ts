@@ -878,6 +878,10 @@ export interface ElectronAPI {
       panelTitle: string;
       worktreeId?: string;
     }): void;
+    /** Subscribe to toast notifications pushed from the main process */
+    onShowToast(
+      callback: (payload: import("./maps.js").MainProcessToastPayload) => void
+    ): () => void;
     /** Subscribe to watch notification click → navigate events from main process */
     onWatchNavigate(
       callback: (context: { panelId: string; panelTitle: string; worktreeId?: string }) => void
