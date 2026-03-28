@@ -16,16 +16,26 @@ function getProcessStartTime(pid: number): string | null {
   try {
     if (process.platform === "win32") {
       const out = execFileSync(
-        "wmic",
-        ["process", "where", `ProcessId=${pid}`, "get", "CreationDate", "/value"],
+        "powershell.exe",
+        [
+          "-NoProfile",
+          "-NonInteractive",
+          "-NoLogo",
+          "-Command",
+          "$ErrorActionPreference = 'SilentlyContinue'; " +
+            "$p = Get-CimInstance Win32_Process -Filter 'ProcessId=" +
+            pid +
+            "'; if ($p -and $p.CreationDate) { $p.CreationDate.ToString('o') }",
+        ],
         {
           windowsHide: true,
-          stdio: ["pipe", "pipe", "pipe"],
+          encoding: "utf8",
           timeout: 3000,
         }
-      ).toString("utf8");
-      const match = out.match(/CreationDate=(\S+)/);
-      return match?.[1] ?? null;
+      )
+        .replace(/^\uFEFF/, "")
+        .trim();
+      return out || null;
     }
     const out = execFileSync("ps", ["-p", String(pid), "-o", "lstart="], {
       stdio: ["pipe", "pipe", "pipe"],
