@@ -62,11 +62,21 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
   const [resetState, setResetState] = useState<"idle" | "confirming">("idle");
 
   useEffect(() => {
-    window.electron.privacy.getSettings().then((settings) => {
-      setTelemetryLevel(settings.telemetryLevel);
-      setLogRetentionDays(settings.logRetentionDays);
-      setDataFolderPath(settings.dataFolderPath);
-    });
+    window.electron.privacy
+      .getSettings()
+      .then((settings) => {
+        setTelemetryLevel(settings.telemetryLevel);
+        setLogRetentionDays(settings.logRetentionDays);
+        setDataFolderPath(settings.dataFolderPath);
+      })
+      .catch((err) => {
+        notify({
+          type: "error",
+          title: "Failed to load settings",
+          message: "Privacy settings could not be loaded.",
+        });
+        console.error("Failed to load privacy settings:", err);
+      });
   }, []);
 
   // Reset confirmation state when leaving tab
