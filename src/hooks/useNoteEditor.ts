@@ -22,6 +22,8 @@ export interface UseNoteEditorReturn {
   handleAddTag: (tag: string) => Promise<void>;
   handleRemoveTag: (tag: string) => Promise<void>;
   handleReloadNote: () => Promise<void>;
+  flushSave: () => Promise<void>;
+  getLatestContent: () => string;
   tagInput: string;
   setTagInput: (v: string) => void;
   handleTagInputKeyDown: (e: React.KeyboardEvent<HTMLInputElement>) => void;
@@ -115,6 +117,7 @@ export function useNoteEditor({
   const handleContentChange = useCallback(
     (value: string) => {
       setNoteContent(value);
+      latestContentRef.current = value;
 
       const note = latestSelectedNoteRef.current;
       const metadata = latestMetadataRef.current;
@@ -148,6 +151,36 @@ export function useNoteEditor({
     },
     [setLastSelectedNoteId]
   );
+
+  const flushSave = useCallback(async () => {
+    if (!saveTimeoutRef.current) return;
+    clearTimeout(saveTimeoutRef.current);
+    saveTimeoutRef.current = null;
+
+    const note = latestSelectedNoteRef.current;
+    const metadata = latestMetadataRef.current;
+    if (!note || !metadata || latestHasConflictRef.current) return;
+
+    try {
+      const result = await notesClient.write(
+        note.path,
+        latestContentRef.current,
+        metadata,
+        latestLastModifiedRef.current ?? undefined
+      );
+      if (result.error === "conflict") {
+        setHasConflict(true);
+      } else if (result.lastModified) {
+        setNoteLastModified(result.lastModified);
+      }
+    } catch (e) {
+      console.error("Failed to flush save:", e);
+    }
+  }, []);
+
+  const getLatestContent = useCallback(() => {
+    return latestContentRef.current;
+  }, []);
 
   const handleReloadNote = useCallback(async () => {
     const note = latestSelectedNoteRef.current;
@@ -273,6 +306,8 @@ export function useNoteEditor({
     handleAddTag,
     handleRemoveTag,
     handleReloadNote,
+    flushSave,
+    getLatestContent,
     tagInput,
     setTagInput,
     handleTagInputKeyDown,

@@ -226,6 +226,88 @@ describe("useNoteEditor", () => {
     );
   });
 
+  it("flushSave immediately writes pending content and clears timer", async () => {
+    const { result } = renderHook(() => useNoteEditor(defaultProps()));
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    act(() => {
+      result.current.handleContentChange("flush me");
+    });
+
+    vi.mocked(notesClient.write).mockClear();
+
+    await act(async () => {
+      await result.current.flushSave();
+    });
+
+    expect(notesClient.write).toHaveBeenCalledWith(
+      "/notes/n1.md",
+      "flush me",
+      expect.any(Object),
+      5000
+    );
+
+    // Advancing past debounce should not double-write
+    vi.mocked(notesClient.write).mockClear();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(500);
+    });
+    expect(notesClient.write).not.toHaveBeenCalled();
+  });
+
+  it("flushSave is a no-op when no save is pending", async () => {
+    const { result } = renderHook(() => useNoteEditor(defaultProps()));
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    vi.mocked(notesClient.write).mockClear();
+
+    await act(async () => {
+      await result.current.flushSave();
+    });
+
+    expect(notesClient.write).not.toHaveBeenCalled();
+  });
+
+  it("getLatestContent returns current content after handleContentChange", async () => {
+    const { result } = renderHook(() => useNoteEditor(defaultProps()));
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    act(() => {
+      result.current.handleContentChange("latest value");
+    });
+
+    expect(result.current.getLatestContent()).toBe("latest value");
+  });
+
+  it("flushSave detects conflict", async () => {
+    vi.mocked(notesClient.write).mockResolvedValue({ error: "conflict" });
+
+    const { result } = renderHook(() => useNoteEditor(defaultProps()));
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    act(() => {
+      result.current.handleContentChange("conflict text");
+    });
+
+    await act(async () => {
+      await result.current.flushSave();
+    });
+
+    expect(result.current.hasConflict).toBe(true);
+  });
+
   it("cancels pending save when adding a tag", async () => {
     const { result } = renderHook(() => useNoteEditor(defaultProps()));
 
