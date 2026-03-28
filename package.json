@@ -237,7 +237,7 @@
         "Contents/Resources/app.asar.unpacked/node_modules/node-pty/build/Release/spawn-helper"
       ],
       "category": "public.app-category.developer-tools",
-      "icon": "build/icon.icns",
+      "icon": "build/AppIcon.icon",
       "extendInfo": {
         "NSPrefersDisplaySafeAreaCompatibilityMode": false,
         "NSMicrophoneUsageDescription": "Canopy uses the microphone for voice dictation into terminal inputs."
@@ -266,6 +266,7 @@
       "entitlementsInherit": "build/entitlements.mac.plist"
     },
     "dmg": {
+      "icon": "build/icon.icns",
       "contents": [
         {
           "x": 130,
