@@ -82,22 +82,38 @@ export function useGridNavigation(options: UseGridNavigationOptions = {}) {
     return () => observer.disconnect();
   }, [containerSelector]);
 
-  // Compute gridCols using the same logic as ContentGrid
+  // Derive visual grid groups (one cell per tab group), matching ContentGrid.
+  // tabGroups + terminals are intentional deps: getTabGroups reads both internally.
+  const gridGroups = useMemo(
+    () => getTabGroups("grid", activeWorktreeId ?? undefined),
+    [getTabGroups, activeWorktreeId, tabGroups, terminals]
+  );
+
+  // Compute gridCols using visual group count, matching ContentGrid's gridItemCount
   const gridCols = useMemo(() => {
     const { strategy, value } = layoutConfig;
-    return computeGridColumns(gridTerminals.length, gridWidth, strategy, value);
-  }, [gridTerminals.length, layoutConfig, gridWidth]);
+    return computeGridColumns(gridGroups.length, gridWidth, strategy, value);
+  }, [gridGroups.length, layoutConfig, gridWidth]);
 
-  // Compute grid layout from indices (no DOM measurement)
+  // Compute grid layout from visual groups (no DOM measurement)
   const gridLayout = useMemo(() => {
-    if (gridTerminals.length === 0) return [];
+    if (gridGroups.length === 0) return [];
 
-    return gridTerminals.map((terminal, index) => ({
-      terminalId: terminal.id,
-      row: Math.floor(index / gridCols),
-      col: index % gridCols,
-    }));
-  }, [gridTerminals, gridCols]);
+    return gridGroups
+      .map((group, index) => {
+        const resolvedId = group.panelIds.includes(group.activeTabId)
+          ? group.activeTabId
+          : group.panelIds[0];
+        return resolvedId
+          ? {
+              terminalId: resolvedId,
+              row: Math.floor(index / gridCols),
+              col: index % gridCols,
+            }
+          : null;
+      })
+      .filter((pos): pos is GridPosition => pos !== null);
+  }, [gridGroups, gridCols]);
 
   const rowMajor = useMemo(() => {
     return [...gridLayout].sort((a, b) => {
@@ -205,7 +221,7 @@ export function useGridNavigation(options: UseGridNavigationOptions = {}) {
         : group.panelIds[0];
       return resolvedId ? [resolvedId] : [];
     });
-  }, [getTabGroups, activeWorktreeId, tabGroups]);
+  }, [getTabGroups, activeWorktreeId, tabGroups, terminals]);
 
   const findByIndex = useCallback(
     (index: number): string | null => {
