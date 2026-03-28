@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { createPortal } from "react-dom";
-import { Loader2 } from "lucide-react";
+import { Spinner } from "@/components/ui/Spinner";
 import { cn } from "@/lib/utils";
 import { useAnimatedPresence } from "@/hooks/useAnimatedPresence";
 import { Button } from "@/components/ui/button";
@@ -70,10 +70,7 @@ export function ProjectSwitchOverlay({ isSwitching, projectName }: ProjectSwitch
           isVisible ? "opacity-100 translate-y-0 scale-100" : "opacity-0 translate-y-2 scale-[0.96]"
         )}
       >
-        <Loader2
-          className="h-8 w-8 text-canopy-accent animate-spin motion-reduce:animate-none"
-          aria-hidden="true"
-        />
+        <Spinner size="2xl" className="text-canopy-accent" />
         <div>
           {cachedProjectName ? (
             <>

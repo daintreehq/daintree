@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef } from "react";
-import { Mic, Loader2 } from "lucide-react";
+import { Mic } from "lucide-react";
+import { Spinner } from "@/components/ui/Spinner";
 import { cn } from "@/lib/utils";
 import { useVoiceRecordingStore } from "@/store/voiceRecordingStore";
 import { voiceRecordingService } from "@/services/VoiceRecordingService";
@@ -272,7 +273,7 @@ export function VoiceInputButton({
         aria-pressed={isConfigured ? isListening : undefined}
       >
         {isFinishing && !showOrbit ? (
-          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          <Spinner size="sm" />
         ) : showOrbit ? (
           <span
             ref={iconRef}
