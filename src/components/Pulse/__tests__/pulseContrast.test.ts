@@ -39,6 +39,14 @@ describe("ProjectPulseCard — visual contrast (issue #2645)", () => {
     expect(content).toContain("text-canopy-text/80");
   });
 
+  it("coaching line does not use italic styling", async () => {
+    const content = await readFile(CARD_PATH, "utf-8");
+    const coachLineMatch = content.match(/getCoachLine\(pulse\).*<\/p>/s);
+    expect(coachLineMatch).toBeTruthy();
+    const coachLineBlock = coachLineMatch![0];
+    expect(coachLineBlock).not.toContain("italic");
+  });
+
   it("button hover uses the pulse control hover component var", async () => {
     const content = await readFile(CARD_PATH, "utf-8");
     expect(content).toContain('"pulse-control');

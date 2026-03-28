@@ -486,7 +486,7 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
       <div className="p-4 space-y-4">
         <PulseHeatmap cells={pulse.heatmap} rangeDays={pulse.rangeDays} />
 
-        <p className="text-xs text-canopy-text/80 italic">{getCoachLine(pulse)}</p>
+        <p className="text-xs text-canopy-text/80">{getCoachLine(pulse)}</p>
 
         {health && !health.error && health.repoUrl ? (
           <div className="border-t border-canopy-border pt-3">
