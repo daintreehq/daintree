@@ -50,10 +50,16 @@ export function useAppThemeConfig() {
         if (typeof config.followSystem === "boolean") {
           setFollowSystem(config.followSystem);
         }
-        if (typeof config.preferredDarkSchemeId === "string" && config.preferredDarkSchemeId.trim()) {
+        if (
+          typeof config.preferredDarkSchemeId === "string" &&
+          config.preferredDarkSchemeId.trim()
+        ) {
           setPreferredDarkSchemeId(config.preferredDarkSchemeId.trim());
         }
-        if (typeof config.preferredLightSchemeId === "string" && config.preferredLightSchemeId.trim()) {
+        if (
+          typeof config.preferredLightSchemeId === "string" &&
+          config.preferredLightSchemeId.trim()
+        ) {
           setPreferredLightSchemeId(config.preferredLightSchemeId.trim());
         }
       })
@@ -64,7 +70,14 @@ export function useAppThemeConfig() {
     return () => {
       cancelled = true;
     };
-  }, [setSelectedSchemeId, addCustomScheme, setColorVisionMode, setFollowSystem, setPreferredDarkSchemeId, setPreferredLightSchemeId]);
+  }, [
+    setSelectedSchemeId,
+    addCustomScheme,
+    setColorVisionMode,
+    setFollowSystem,
+    setPreferredDarkSchemeId,
+    setPreferredLightSchemeId,
+  ]);
 
   useEffect(() => {
     return window.electron.appTheme.onSystemAppearanceChanged(({ schemeId }) => {

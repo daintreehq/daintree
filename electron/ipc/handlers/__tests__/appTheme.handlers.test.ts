@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const nativeThemeMock = vi.hoisted(() => ({
   shouldUseDarkColors: true,
@@ -174,11 +174,10 @@ describe("appTheme handlers", () => {
     themeHandler();
     vi.advanceTimersByTime(300);
 
-    expect(typedSend).toHaveBeenCalledWith(
-      mockWindow,
-      "app-theme:system-appearance-changed",
-      { isDark: false, schemeId: "bondi" }
-    );
+    expect(typedSend).toHaveBeenCalledWith(mockWindow, "app-theme:system-appearance-changed", {
+      isDark: false,
+      schemeId: "bondi",
+    });
   });
 
   it("nativeTheme updated uses preferred scheme ids when set", () => {
@@ -200,11 +199,10 @@ describe("appTheme handlers", () => {
     themeHandler();
     vi.advanceTimersByTime(300);
 
-    expect(typedSend).toHaveBeenCalledWith(
-      mockWindow,
-      "app-theme:system-appearance-changed",
-      { isDark: true, schemeId: "custom-dark" }
-    );
+    expect(typedSend).toHaveBeenCalledWith(mockWindow, "app-theme:system-appearance-changed", {
+      isDark: true,
+      schemeId: "custom-dark",
+    });
   });
 
   it("debounces rapid nativeTheme updates to a single push", () => {

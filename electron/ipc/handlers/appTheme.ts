@@ -4,7 +4,11 @@ import { store } from "../../store.js";
 import { parseAppThemeFile } from "../../utils/appThemeImporter.js";
 import { resolveAppTheme, normalizeAppColorScheme } from "../../../shared/theme/index.js";
 import { typedSend } from "../utils.js";
-import type { AppThemeConfig, AppColorScheme, ColorVisionMode } from "../../../shared/types/appTheme.js";
+import type {
+  AppThemeConfig,
+  AppColorScheme,
+  ColorVisionMode,
+} from "../../../shared/types/appTheme.js";
 
 const DEFAULT_DARK_SCHEME = "daintree";
 const DEFAULT_LIGHT_SCHEME = "bondi";
@@ -23,7 +27,9 @@ function getAppThemeConfig(): AppThemeConfig {
     return config as AppThemeConfig;
   }
 
-  const defaultSchemeId = nativeTheme.shouldUseDarkColors ? DEFAULT_DARK_SCHEME : DEFAULT_LIGHT_SCHEME;
+  const defaultSchemeId = nativeTheme.shouldUseDarkColors
+    ? DEFAULT_DARK_SCHEME
+    : DEFAULT_LIGHT_SCHEME;
   return {
     ...(config && typeof config === "object" && !Array.isArray(config) ? config : {}),
     colorSchemeId: defaultSchemeId,
@@ -123,10 +129,7 @@ export function registerAppThemeHandlers(mainWindow?: BrowserWindow): () => void
   handlers.push(() => ipcMain.removeHandler(CHANNELS.APP_THEME_IMPORT));
 
   // Follow system handlers
-  const handleSetFollowSystem = async (
-    _event: Electron.IpcMainInvokeEvent,
-    enabled: boolean
-  ) => {
+  const handleSetFollowSystem = async (_event: Electron.IpcMainInvokeEvent, enabled: boolean) => {
     if (typeof enabled !== "boolean") return;
     const current = getAppThemeConfig();
     store.set("appTheme", { ...current, followSystem: enabled } satisfies AppThemeConfig);
