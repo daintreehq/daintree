@@ -360,6 +360,7 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
       await resetAllStoresForProjectSwitch({
         preserveTerminalIds,
         outgoingProjectId: oldProjectId,
+        skipTerminalStateReset: true,
       });
 
       // Pre-populate stores from cached snapshots for an instant UI.
@@ -691,6 +692,7 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
       await resetAllStoresForProjectSwitch({
         preserveTerminalIds,
         outgoingProjectId: oldProjectId,
+        skipTerminalStateReset: true,
       });
 
       // Pre-populate stores from cached snapshots for an instant UI.
