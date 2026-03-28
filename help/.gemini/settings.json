@@ -1,0 +1,3 @@
+{
+  "toolsAllowlist": ["read_file", "list_directory", "search_files", "web_search"]
+}
