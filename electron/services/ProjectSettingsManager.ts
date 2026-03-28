@@ -32,7 +32,9 @@ export class ProjectSettingsManager {
       completedEnabled: overrides.completedEnabled ?? global.completedEnabled,
       waitingEnabled: overrides.waitingEnabled ?? global.waitingEnabled,
       soundEnabled: overrides.soundEnabled ?? global.soundEnabled,
-      soundFile: overrides.soundFile ?? global.soundFile,
+      completedSoundFile: overrides.completedSoundFile ?? global.completedSoundFile,
+      waitingSoundFile: overrides.waitingSoundFile ?? global.waitingSoundFile,
+      escalationSoundFile: overrides.escalationSoundFile ?? global.escalationSoundFile,
       waitingEscalationEnabled:
         overrides.waitingEscalationEnabled ?? global.waitingEscalationEnabled,
       waitingEscalationDelayMs:

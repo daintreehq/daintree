@@ -165,7 +165,12 @@ function normalizeNotificationOverrides(
     result.completedEnabled = overrides.completedEnabled;
   if (overrides.waitingEnabled !== undefined) result.waitingEnabled = overrides.waitingEnabled;
   if (overrides.soundEnabled !== undefined) result.soundEnabled = overrides.soundEnabled;
-  if (overrides.soundFile !== undefined) result.soundFile = overrides.soundFile;
+  if (overrides.completedSoundFile !== undefined)
+    result.completedSoundFile = overrides.completedSoundFile;
+  if (overrides.waitingSoundFile !== undefined)
+    result.waitingSoundFile = overrides.waitingSoundFile;
+  if (overrides.escalationSoundFile !== undefined)
+    result.escalationSoundFile = overrides.escalationSoundFile;
   if (overrides.waitingEscalationEnabled !== undefined)
     result.waitingEscalationEnabled = overrides.waitingEscalationEnabled;
   if (overrides.waitingEscalationDelayMs !== undefined)
@@ -279,7 +284,9 @@ export function areSnapshotsEqual(a: ProjectSettingsSnapshot, b: ProjectSettings
     if (aNotif.completedEnabled !== bNotif.completedEnabled) return false;
     if (aNotif.waitingEnabled !== bNotif.waitingEnabled) return false;
     if (aNotif.soundEnabled !== bNotif.soundEnabled) return false;
-    if (aNotif.soundFile !== bNotif.soundFile) return false;
+    if (aNotif.completedSoundFile !== bNotif.completedSoundFile) return false;
+    if (aNotif.waitingSoundFile !== bNotif.waitingSoundFile) return false;
+    if (aNotif.escalationSoundFile !== bNotif.escalationSoundFile) return false;
     if (aNotif.waitingEscalationEnabled !== bNotif.waitingEscalationEnabled) return false;
     if (aNotif.waitingEscalationDelayMs !== bNotif.waitingEscalationDelayMs) return false;
   }

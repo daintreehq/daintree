@@ -7,7 +7,7 @@ import type { NotificationSettings } from "@shared/types";
 import { useNotificationSettingsStore } from "@/store/notificationSettingsStore";
 
 const AVAILABLE_SOUNDS: { file: string; label: string }[] = [
-  { file: "chime.wav", label: "Chime (default)" },
+  { file: "chime.wav", label: "Chime" },
   { file: "ping.wav", label: "Ping" },
   { file: "complete.wav", label: "Complete" },
   { file: "waiting.wav", label: "Waiting" },
@@ -26,7 +26,9 @@ const DEFAULT_SETTINGS: NotificationSettings = {
   completedEnabled: false,
   waitingEnabled: false,
   soundEnabled: false,
-  soundFile: "chime.wav",
+  completedSoundFile: "complete.wav",
+  waitingSoundFile: "waiting.wav",
+  escalationSoundFile: "ping.wav",
   waitingEscalationEnabled: true,
   waitingEscalationDelayMs: 180_000,
 };
@@ -77,8 +79,8 @@ export function NotificationSettingsTab() {
     }
   };
 
-  const handlePreview = () => {
-    window.electron?.notification?.playSound(settings.soundFile).catch(() => {});
+  const handlePreview = (soundFile: string) => {
+    window.electron?.notification?.playSound(soundFile).catch(() => {});
   };
 
   if (loadState === "loading") {
@@ -174,29 +176,48 @@ export function NotificationSettingsTab() {
             />
 
             {settings.soundEnabled && (
-              <div className="space-y-2">
-                <label className="text-sm font-medium text-canopy-text block">Sound</label>
-                <div className="flex items-center gap-2">
-                  <select
-                    value={settings.soundFile}
-                    onChange={(e) => update({ soundFile: e.target.value })}
-                    className="flex-1 px-3 py-2 text-sm rounded-[var(--radius-md)] border border-canopy-border bg-canopy-bg text-canopy-text focus:border-canopy-accent focus:outline-none transition-colors"
-                  >
-                    {AVAILABLE_SOUNDS.map(({ file, label }) => (
-                      <option key={file} value={file}>
-                        {label}
-                      </option>
-                    ))}
-                  </select>
-                  <button
-                    onClick={handlePreview}
-                    title="Preview sound"
-                    className="flex items-center gap-1.5 px-3 py-2 text-sm rounded-[var(--radius-md)] border border-canopy-border bg-canopy-bg text-canopy-text hover:bg-tint/[0.06] transition-colors"
-                  >
-                    <Play className="h-3.5 w-3.5" />
-                    Preview
-                  </button>
-                </div>
+              <div className="space-y-4">
+                {(
+                  [
+                    {
+                      label: "Completed sound",
+                      field: "completedSoundFile" as const,
+                    },
+                    {
+                      label: "Waiting sound",
+                      field: "waitingSoundFile" as const,
+                    },
+                    {
+                      label: "Escalation sound",
+                      field: "escalationSoundFile" as const,
+                    },
+                  ] as const
+                ).map(({ label, field }) => (
+                  <div key={field} className="space-y-1">
+                    <label className="text-sm font-medium text-canopy-text block">{label}</label>
+                    <div className="flex items-center gap-2">
+                      <select
+                        value={settings[field]}
+                        onChange={(e) => update({ [field]: e.target.value })}
+                        className="flex-1 px-3 py-2 text-sm rounded-[var(--radius-md)] border border-canopy-border bg-canopy-bg text-canopy-text focus:border-canopy-accent focus:outline-none transition-colors"
+                      >
+                        {AVAILABLE_SOUNDS.map(({ file, label: soundLabel }) => (
+                          <option key={file} value={file}>
+                            {soundLabel}
+                          </option>
+                        ))}
+                      </select>
+                      <button
+                        onClick={() => handlePreview(settings[field])}
+                        title={`Preview ${label.toLowerCase()}`}
+                        className="flex items-center gap-1.5 px-3 py-2 text-sm rounded-[var(--radius-md)] border border-canopy-border bg-canopy-bg text-canopy-text hover:bg-tint/[0.06] transition-colors"
+                      >
+                        <Play className="h-3.5 w-3.5" />
+                        Preview
+                      </button>
+                    </div>
+                  </div>
+                ))}
               </div>
             )}
           </div>

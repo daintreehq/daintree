@@ -7,6 +7,7 @@ import { MigrationRunner } from "../StoreMigrations.js";
 import { migration004 } from "../migrations/004-upgrade-correction-model.js";
 import { migration006 } from "../migrations/006-rename-theme-canopy-to-daintree.js";
 import { migration007 } from "../migrations/007-reduce-default-terminal-scrollback.js";
+import { migration008 } from "../migrations/008-split-notification-sounds.js";
 
 type MockStoreData = Record<string, unknown>;
 
@@ -252,6 +253,46 @@ describe("MigrationRunner", () => {
       const store = createMockStore(storePath, {});
       migration007.up(store as never);
       expect(store.data.terminalConfig).toBeUndefined();
+    });
+  });
+
+  describe("migration 008 — split notification sounds", () => {
+    it("migrates soundFile to completedSoundFile and adds semantic defaults", () => {
+      const store = createMockStore(storePath, {
+        notificationSettings: {
+          enabled: true,
+          completedEnabled: false,
+          waitingEnabled: false,
+          soundEnabled: true,
+          soundFile: "ping.wav",
+          waitingEscalationEnabled: true,
+          waitingEscalationDelayMs: 180_000,
+        },
+      });
+      migration008.up(store as never);
+      const settings = store.data.notificationSettings as Record<string, unknown>;
+      expect(settings.completedSoundFile).toBe("ping.wav");
+      expect(settings.waitingSoundFile).toBe("waiting.wav");
+      expect(settings.escalationSoundFile).toBe("ping.wav");
+      expect(settings.soundFile).toBeUndefined();
+      expect(settings.soundEnabled).toBe(true);
+    });
+
+    it("defaults to chime.wav when soundFile is missing", () => {
+      const store = createMockStore(storePath, {
+        notificationSettings: { enabled: true },
+      });
+      migration008.up(store as never);
+      const settings = store.data.notificationSettings as Record<string, unknown>;
+      expect(settings.completedSoundFile).toBe("chime.wav");
+      expect(settings.waitingSoundFile).toBe("waiting.wav");
+      expect(settings.escalationSoundFile).toBe("ping.wav");
+    });
+
+    it("skips when no notificationSettings exist", () => {
+      const store = createMockStore(storePath, {});
+      migration008.up(store as never);
+      expect(store.data.notificationSettings).toBeUndefined();
     });
   });
 

@@ -108,7 +108,9 @@ export interface StoreSchema {
     completedEnabled: boolean;
     waitingEnabled: boolean;
     soundEnabled: boolean;
-    soundFile: string;
+    completedSoundFile: string;
+    waitingSoundFile: string;
+    escalationSoundFile: string;
     waitingEscalationEnabled: boolean;
     waitingEscalationDelayMs: number;
   };
@@ -212,7 +214,9 @@ const storeOptions = {
       completedEnabled: false,
       waitingEnabled: false,
       soundEnabled: false,
-      soundFile: "chime.wav",
+      completedSoundFile: "complete.wav",
+      waitingSoundFile: "waiting.wav",
+      escalationSoundFile: "ping.wav",
       waitingEscalationEnabled: true,
       waitingEscalationDelayMs: 180_000,
     },
