@@ -746,6 +746,7 @@ function TerminalPaneComponent({
               className="absolute inset-0"
               getRefreshTier={getRefreshTierCallback}
               cwd={cwd}
+              hasBottomBar={showHybridInputBar}
             />
             <ArtifactOverlay terminalId={id} worktreeId={worktreeId} cwd={cwd} />
             {isSearchOpen && (

@@ -36,6 +36,7 @@ export interface XtermAdapterProps {
   getRefreshTier?: () => TerminalRefreshTier;
   cwd?: string;
   restoreOnAttach?: boolean;
+  hasBottomBar?: boolean;
 }
 
 const MIN_CONTAINER_SIZE = 50;
@@ -51,6 +52,7 @@ function XtermAdapterComponent({
   getRefreshTier,
   cwd,
   restoreOnAttach = false,
+  hasBottomBar = false,
 }: XtermAdapterProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const prevDimensionsRef = useRef<{ cols: number; rows: number } | null>(null);
@@ -501,7 +503,7 @@ function XtermAdapterComponent({
     <div
       className={cn(
         "w-full h-full text-text-primary overflow-hidden",
-        !isAltBuffer && "pl-3 pt-3 pb-3 pr-3 rounded-b-[var(--radius-lg)]",
+        !isAltBuffer && ["pl-3 pt-3 pb-3 pr-3", !hasBottomBar && "rounded-b-[var(--radius-lg)]"],
         className
       )}
       style={{ backgroundColor: wrapperBackground, contain: "strict" }}

@@ -39,24 +39,12 @@ export interface InputBarColors {
   isDark: boolean;
 }
 
-function getThemeVar(name: string, fallback: string): string {
-  if (typeof document === "undefined") return fallback;
-  const value = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
-  return value || fallback;
-}
-
 export function resolveInputBarColors(theme: ITheme): InputBarColors {
   const accent = theme.cursor ?? theme.blue ?? "#58a6ff";
   const foreground = theme.foreground ?? "#cccccc";
   const background = theme.background ?? "#1e1e1e";
   const isDark = (document?.documentElement?.dataset?.colorMode ?? "dark") === "dark";
 
-  const shadowColor = getThemeVar("--theme-shadow-color", "rgba(0,0,0,0.25)");
-  const focusRing = getThemeVar("--theme-focus-ring", "rgba(255,255,255,0.18)");
-  const borderSubtle = getThemeVar(
-    "--theme-border-subtle",
-    isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.08)"
-  );
   return {
     accent,
     foreground,
@@ -65,14 +53,14 @@ export function resolveInputBarColors(theme: ITheme): InputBarColors {
     chipColor: theme.cyan ?? theme.brightCyan ?? theme.cursor ?? "#58a6ff",
     errorColor: theme.red ?? "#f44747",
     successColor: theme.green ?? "#89d185",
-    shellBg: `color-mix(in oklab, ${background} ${isDark ? "92%" : "95%"}, ${isDark ? "white" : "black"})`,
-    shellBorder: borderSubtle,
-    shellBorderHover: `color-mix(in oklab, ${accent} 25%, ${borderSubtle})`,
-    shellBorderFocus: `color-mix(in oklab, ${accent} 50%, ${borderSubtle})`,
-    shellShadow: `0 6px 12px ${shadowColor}`,
-    shellFocusRing: focusRing,
-    shellHoverBg: `color-mix(in oklab, ${background} ${isDark ? "88%" : "92%"}, ${isDark ? "white" : "black"})`,
-    shellFocusBg: `color-mix(in oklab, ${background} ${isDark ? "85%" : "90%"}, ${isDark ? "white" : "black"})`,
+    shellBg: `color-mix(in oklab, ${background} ${isDark ? "96%" : "97%"}, ${isDark ? "black" : "black"})`,
+    shellBorder: `color-mix(in oklab, ${foreground} ${isDark ? "8%" : "10%"}, transparent)`,
+    shellBorderHover: `color-mix(in oklab, ${foreground} ${isDark ? "14%" : "16%"}, transparent)`,
+    shellBorderFocus: `color-mix(in oklab, ${accent} 30%, ${isDark ? "rgba(255,255,255,0.10)" : "rgba(0,0,0,0.10)"})`,
+    shellShadow: `0 2px 6px ${isDark ? "rgba(0,0,0,0.25)" : "rgba(0,0,0,0.08)"}, 0 1px 2px ${isDark ? "rgba(0,0,0,0.15)" : "rgba(0,0,0,0.04)"}`,
+    shellFocusRing: `color-mix(in oklab, ${accent} 20%, transparent)`,
+    shellHoverBg: `color-mix(in oklab, ${background} ${isDark ? "94%" : "96%"}, ${isDark ? "black" : "black"})`,
+    shellFocusBg: `color-mix(in oklab, ${background} ${isDark ? "93%" : "95%"}, ${isDark ? "black" : "black"})`,
     isDark,
   };
 }

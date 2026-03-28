@@ -1146,7 +1146,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
             ref={inputShellRef}
             className={cn(
               "group/shell relative",
-              "flex w-full items-center gap-1.5 rounded-sm border py-1 transition-[border-color,background-color,box-shadow] duration-150",
+              "flex w-full items-center gap-1.5 rounded-sm border py-2 transition-[border-color,background-color,box-shadow] duration-150",
               !isSpecialState && [
                 "bg-[var(--ib-bg)] border-[var(--ib-border)] shadow-[var(--ib-shadow)]",
                 "hover:border-[var(--ib-border-hover)] hover:bg-[var(--ib-hover-bg)]",
