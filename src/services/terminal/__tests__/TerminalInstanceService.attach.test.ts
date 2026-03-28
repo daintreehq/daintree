@@ -274,6 +274,133 @@ describe("TerminalInstanceService attach reveal", () => {
     expect(managed.hostElement.style.opacity).toBe("");
   });
 
+  describe("early synchronous resize for warm terminals", () => {
+    it("applies resize synchronously before rAF when warm terminal has target dimensions", () => {
+      const managed = makeMockManaged("t1");
+      managed.isDetached = true;
+      managed.isOpened = true;
+      (managed as Record<string, unknown>).targetCols = 120;
+      (managed as Record<string, unknown>).targetRows = 40;
+      const offscreen = document.createElement("div");
+      offscreen.appendChild(managed.hostElement);
+      service.instances.set("t1", managed);
+
+      const applyResizeSpy = vi
+        .spyOn(service.resizeController, "applyResize")
+        .mockImplementation(() => {});
+
+      const container = document.createElement("div");
+      service.attach("t1", container);
+
+      // applyResize called synchronously (no timer advancement needed)
+      expect(applyResizeSpy).toHaveBeenCalledWith("t1", 120, 40);
+      expect((managed as Record<string, unknown>).targetCols).toBeUndefined();
+      expect((managed as Record<string, unknown>).targetRows).toBeUndefined();
+    });
+
+    it("does not double-resize in inner rAF when early resize was applied", () => {
+      const managed = makeMockManaged("t1");
+      managed.isDetached = true;
+      managed.isOpened = true;
+      (managed as Record<string, unknown>).targetCols = 120;
+      (managed as Record<string, unknown>).targetRows = 40;
+      const offscreen = document.createElement("div");
+      offscreen.appendChild(managed.hostElement);
+      service.instances.set("t1", managed);
+
+      const applyResizeSpy = vi
+        .spyOn(service.resizeController, "applyResize")
+        .mockImplementation(() => {});
+      vi.spyOn(service.resizeController, "fit").mockImplementation(() => {});
+
+      const container = document.createElement("div");
+      service.attach("t1", container);
+
+      // Advance past both rAFs (outer + inner)
+      vi.advanceTimersByTime(32);
+
+      // applyResize should have been called exactly once (synchronously), not again in rAF
+      expect(applyResizeSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it("uses lock bypass when resize is suppressed during project switch", () => {
+      const managed = makeMockManaged("t1");
+      managed.isDetached = true;
+      managed.isOpened = true;
+      (managed as Record<string, unknown>).targetCols = 80;
+      (managed as Record<string, unknown>).targetRows = 24;
+      (managed as Record<string, unknown>).isResizeSuppressed = true;
+      (managed as Record<string, unknown>).resizeSuppressionEndTime = Date.now() + 500;
+      const offscreen = document.createElement("div");
+      offscreen.appendChild(managed.hostElement);
+      service.instances.set("t1", managed);
+
+      vi.spyOn(service.resizeController, "applyResize").mockImplementation(() => {});
+      const lockResizeSpy = vi
+        .spyOn(service.resizeController, "lockResize")
+        .mockImplementation(() => {});
+
+      const container = document.createElement("div");
+      service.attach("t1", container);
+
+      // Should unlock before resize, then re-lock after
+      expect(lockResizeSpy).toHaveBeenCalledWith("t1", false);
+      expect(lockResizeSpy).toHaveBeenCalledWith("t1", true, expect.any(Number));
+      const relockCall = lockResizeSpy.mock.calls.find((c) => c[0] === "t1" && c[1] === true);
+      expect(relockCall).toBeDefined();
+      expect(relockCall![2]).toBeGreaterThanOrEqual(0);
+      expect(relockCall![2]).toBeLessThanOrEqual(500);
+    });
+
+    it("skips early resize for cold terminals (isOpened=false)", () => {
+      const managed = makeMockManaged("t1");
+      managed.isDetached = true;
+      managed.isOpened = false;
+      (managed as Record<string, unknown>).targetCols = 120;
+      (managed as Record<string, unknown>).targetRows = 40;
+      // Cold terminals need terminal.open() mock
+      (managed.terminal as Record<string, unknown>).open = vi.fn();
+      const offscreen = document.createElement("div");
+      offscreen.appendChild(managed.hostElement);
+      service.instances.set("t1", managed);
+
+      const applyResizeSpy = vi
+        .spyOn(service.resizeController, "applyResize")
+        .mockImplementation(() => {});
+
+      const container = document.createElement("div");
+      service.attach("t1", container);
+
+      // applyResize should NOT have been called synchronously
+      expect(applyResizeSpy).not.toHaveBeenCalled();
+    });
+
+    it("skips early resize for warm terminals without target dimensions", () => {
+      const managed = makeMockManaged("t1");
+      managed.isDetached = true;
+      managed.isOpened = true;
+      // No targetCols/targetRows set
+      const offscreen = document.createElement("div");
+      offscreen.appendChild(managed.hostElement);
+      service.instances.set("t1", managed);
+
+      const applyResizeSpy = vi
+        .spyOn(service.resizeController, "applyResize")
+        .mockImplementation(() => {});
+      vi.spyOn(service.resizeController, "fit").mockImplementation(() => {});
+
+      const container = document.createElement("div");
+      service.attach("t1", container);
+
+      // applyResize should NOT have been called synchronously
+      expect(applyResizeSpy).not.toHaveBeenCalled();
+
+      // But fit should be called in the inner rAF
+      vi.advanceTimersByTime(32);
+      expect(service.resizeController.fit).toHaveBeenCalledWith("t1");
+    });
+  });
+
   it("destroy cleans up attach reveal timer and disposable", () => {
     const managed = makeMockManaged("t1");
     const offscreen = document.createElement("div");

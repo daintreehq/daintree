@@ -923,6 +923,7 @@ class TerminalInstanceService {
     }
 
     const wasDetached = managed.isDetached === true;
+    const wasAlreadyOpened = managed.isOpened;
     const wasReparented = managed.hostElement.parentElement !== container;
     logDebug(`[TIS.attach] ${id}`, {
       wasReparented,
@@ -954,6 +955,30 @@ class TerminalInstanceService {
     }
     managed.lastAttachAt = Date.now();
     managed.isDetached = false;
+
+    // For warm terminals (previously opened, detached during project switch) with
+    // saved target dimensions, apply the resize synchronously before the rAF reveal.
+    // This runs inside useLayoutEffect (before browser paint), eliminating the visible
+    // layout snap that occurs when resize is deferred to the double-nested rAF.
+    let earlyResizeApplied = false;
+    if (wasDetached && wasAlreadyOpened && managed.targetCols && managed.targetRows) {
+      const needsLockBypass = managed.isResizeSuppressed;
+      let remainingMs = 0;
+      if (needsLockBypass && managed.resizeSuppressionEndTime) {
+        remainingMs = Math.max(0, managed.resizeSuppressionEndTime - Date.now());
+        this.resizeController.lockResize(id, false);
+      }
+      try {
+        this.resizeController.applyResize(id, managed.targetCols, managed.targetRows);
+        managed.targetCols = undefined;
+        managed.targetRows = undefined;
+        earlyResizeApplied = true;
+      } finally {
+        if (needsLockBypass) {
+          this.resizeController.lockResize(id, true, remainingMs);
+        }
+      }
+    }
 
     if (wasReparented && managed.isOpened) {
       const revealToken = managed.attachRevealToken;
@@ -989,6 +1014,8 @@ class TerminalInstanceService {
 
         requestAnimationFrame(() => {
           if (this.instances.get(id) !== managed) return;
+
+          if (earlyResizeApplied) return;
 
           if (wasDetached) {
             const rect = container.getBoundingClientRect();
