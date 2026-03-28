@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { PluginManifest, PanelContribution } from "../../shared/types/plugin.js";
 
 const SAFE_ID_PATTERN = /^[a-zA-Z0-9._-]+$/;
 
@@ -27,5 +28,4 @@ export const PluginManifestSchema = z.object({
     .default({ panels: [] }),
 });
 
-export type PluginManifest = z.infer<typeof PluginManifestSchema>;
-export type PanelContribution = z.infer<typeof PanelContributionSchema>;
+export type { PluginManifest, PanelContribution };

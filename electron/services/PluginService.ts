@@ -2,7 +2,8 @@ import fs from "fs/promises";
 import path from "path";
 import os from "os";
 import { pathToFileURL } from "url";
-import { PluginManifestSchema, type PluginManifest } from "../schemas/plugin.js";
+import { PluginManifestSchema } from "../schemas/plugin.js";
+import type { PluginManifest } from "../../shared/types/plugin.js";
 import { registerPanelKind } from "../../shared/config/panelKindRegistry.js";
 import type { LoadedPluginInfo } from "../../shared/types/plugin.js";
 
