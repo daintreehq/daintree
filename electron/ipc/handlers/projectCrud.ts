@@ -710,7 +710,7 @@ Thumbs.db
       throw new Error("Repository URL is required");
     }
     if (!/^https?:\/\//i.test(url) && !/^git@/i.test(url)) {
-      throw new Error("Only HTTPS and SSH (git@) URLs are supported");
+      throw new Error("Only HTTP(S) and SSH (git@) URLs are supported");
     }
     if (typeof parentPath !== "string" || !parentPath.trim()) {
       throw new Error("Parent path is required");
@@ -785,6 +785,8 @@ Thumbs.db
         },
         unsafe: {
           allowUnsafeProtocolOverride: true,
+          allowUnsafeSshCommand: true,
+          allowUnsafeGitProxy: true,
           allowUnsafeHooksPath: true,
         },
       });
