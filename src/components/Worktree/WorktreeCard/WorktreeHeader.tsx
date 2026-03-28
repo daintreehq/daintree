@@ -292,6 +292,9 @@ export function WorktreeHeader({
 
   const hasIssueTitle = !!(worktree.issueNumber && worktree.issueTitle);
   const hasPlanFile = Boolean(worktree.hasPlanFile);
+  const hasUpstreamDelta =
+    (worktree.aheadCount !== undefined && worktree.aheadCount > 0) ||
+    (worktree.behindCount !== undefined && worktree.behindCount > 0);
 
   const { visibleStates, sessionAriaLabel } = useMemo(() => {
     if (!sessionStates || !sessionTotal || sessionTotal === 0) {
@@ -475,11 +478,12 @@ export function WorktreeHeader({
         </div>
       </div>
 
-      {/* Secondary row: branch label when issue title is headline, issue badge fallback, PR badge, and/or plan badge */}
+      {/* Secondary row: branch label when issue title is headline, issue badge fallback, PR badge, sync indicator, and/or plan badge */}
       {!isCollapsed &&
         (hasIssueTitle ||
           (worktree.issueNumber && !hasIssueTitle) ||
           (worktree.prNumber && worktree.prState !== "closed") ||
+          hasUpstreamDelta ||
           hasPlanFile) && (
           <div className="flex flex-col gap-0.5 mt-1.5">
             {worktree.issueNumber && !hasIssueTitle && (
@@ -497,6 +501,40 @@ export function WorktreeHeader({
                 worktreePath={worktree.path}
                 onOpen={badges.onOpenPR}
               />
+            )}
+            {hasUpstreamDelta && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span
+                    className="flex items-center gap-1.5 text-[10px] font-mono tabular-nums"
+                    data-testid="upstream-sync-indicator"
+                  >
+                    {worktree.aheadCount !== undefined && worktree.aheadCount > 0 && (
+                      <span className="text-status-success">↑{worktree.aheadCount}</span>
+                    )}
+                    {worktree.behindCount !== undefined && worktree.behindCount > 0 && (
+                      <span className="text-status-warning">↓{worktree.behindCount}</span>
+                    )}
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent side="right" className="text-xs">
+                  {worktree.aheadCount !== undefined && worktree.aheadCount > 0 && (
+                    <span>
+                      {worktree.aheadCount} commit{worktree.aheadCount !== 1 ? "s" : ""} ahead
+                    </span>
+                  )}
+                  {worktree.aheadCount !== undefined &&
+                    worktree.aheadCount > 0 &&
+                    worktree.behindCount !== undefined &&
+                    worktree.behindCount > 0 && <span>, </span>}
+                  {worktree.behindCount !== undefined && worktree.behindCount > 0 && (
+                    <span>
+                      {worktree.behindCount} commit{worktree.behindCount !== 1 ? "s" : ""} behind
+                    </span>
+                  )}
+                  <span> upstream</span>
+                </TooltipContent>
+              </Tooltip>
             )}
             {hasIssueTitle && (
               <BranchLabel
