@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { Signal, FolderOpen, Trash2, Clock, HardDrive, AlertTriangle } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { notify } from "@/lib/notify";
 import { Button } from "@/components/ui/button";
 import { SettingsSection } from "./SettingsSection";
 import { SettingsSubtabBar } from "./SettingsSubtabBar";
@@ -75,23 +76,43 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
     }
   }, [currentSubtab]);
 
-  const handleTelemetryChange = useCallback(async (level: TelemetryLevel) => {
-    setTelemetryLevel(level);
-    try {
-      await window.electron.privacy.setTelemetryLevel(level);
-    } catch (err) {
-      console.error("Failed to set telemetry level:", err);
-    }
-  }, []);
+  const handleTelemetryChange = useCallback(
+    async (level: TelemetryLevel) => {
+      const prev = telemetryLevel;
+      setTelemetryLevel(level);
+      try {
+        await window.electron.privacy.setTelemetryLevel(level);
+      } catch (err) {
+        setTelemetryLevel(prev);
+        notify({
+          type: "error",
+          title: "Failed to save setting",
+          message: "Telemetry level could not be saved. Please try again.",
+        });
+        console.error("Failed to set telemetry level:", err);
+      }
+    },
+    [telemetryLevel]
+  );
 
-  const handleRetentionChange = useCallback(async (days: LogRetention) => {
-    setLogRetentionDays(days);
-    try {
-      await window.electron.privacy.setLogRetention(days);
-    } catch (err) {
-      console.error("Failed to set log retention:", err);
-    }
-  }, []);
+  const handleRetentionChange = useCallback(
+    async (days: LogRetention) => {
+      const prev = logRetentionDays;
+      setLogRetentionDays(days);
+      try {
+        await window.electron.privacy.setLogRetention(days);
+      } catch (err) {
+        setLogRetentionDays(prev);
+        notify({
+          type: "error",
+          title: "Failed to save setting",
+          message: "Log retention could not be saved. Please try again.",
+        });
+        console.error("Failed to set log retention:", err);
+      }
+    },
+    [logRetentionDays]
+  );
 
   const handleOpenDataFolder = useCallback(() => {
     window.electron.privacy.openDataFolder();
