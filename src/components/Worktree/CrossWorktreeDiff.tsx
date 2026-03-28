@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from "react";
-import { X, GitCompare, FileIcon, Loader2, AlertCircle } from "lucide-react";
+import { GitCompare, FileIcon, Loader2, AlertCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useWorktreeDataStore } from "@/store/worktreeDataStore";
+import { AppDialog } from "@/components/ui/AppDialog";
 import type { CrossWorktreeDiffResult, CrossWorktreeFile } from "@shared/types/ipc/git";
 import { DiffViewer } from "./DiffViewer";
 import { WorktreeSelector } from "./WorktreeSelector";
@@ -31,7 +32,6 @@ function statusLabel(status: string): { label: string; className: string } {
 }
 
 export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossWorktreeDiffProps) {
-  const modalRef = useRef<HTMLDivElement>(null);
   const worktreeMap = useWorktreeDataStore((state) => state.worktrees);
   const worktrees = useMemo(() => sortWorktreesForComparison(worktreeMap.values()), [worktreeMap]);
 
@@ -145,150 +145,126 @@ export function CrossWorktreeDiff({ isOpen, onClose, initialWorktreeId }: CrossW
     [leftWorktree, rightWorktree]
   );
 
-  // Keyboard: Escape to close
-  useEffect(() => {
-    if (!isOpen) return;
-    const handleKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-    document.addEventListener("keydown", handleKey);
-    return () => document.removeEventListener("keydown", handleKey);
-  }, [isOpen, onClose]);
-
-  if (!isOpen) return null;
-
   return (
-    <div
-      className={cn(
-        "fixed inset-0 z-[var(--z-modal)] flex items-center justify-center",
-        "bg-scrim-medium backdrop-blur-sm"
-      )}
-      onClick={(e) => {
-        if (e.target === e.currentTarget) onClose();
-      }}
+    <AppDialog
+      isOpen={isOpen}
+      onClose={onClose}
+      size="6xl"
+      maxHeight="h-[80vh]"
+      className="max-h-[800px] overflow-hidden"
     >
-      <div
-        ref={modalRef}
-        className="flex flex-col bg-surface-panel border border-border-default rounded-xl shadow-[var(--theme-shadow-dialog)] w-[90vw] max-w-6xl h-[80vh] max-h-[800px] overflow-hidden"
-      >
-        {/* Header */}
-        <div className="flex items-center gap-3 px-4 py-3 border-b border-border-subtle shrink-0">
-          <GitCompare className="w-4 h-4 text-text-muted" />
-          <h2 className="text-sm font-semibold text-text-primary flex-1">Compare Worktrees</h2>
-          <button
-            onClick={onClose}
-            className="p-1 rounded text-text-muted hover:text-text-primary hover:bg-surface-panel-elevated transition-colors"
-            aria-label="Close"
-          >
-            <X className="w-4 h-4" />
-          </button>
+      <AppDialog.Header className="px-4 py-3 border-b border-border-subtle bg-transparent">
+        <AppDialog.Title
+          icon={<GitCompare className="w-4 h-4 text-text-muted" />}
+          className="text-sm font-semibold text-text-primary"
+        >
+          Compare Worktrees
+        </AppDialog.Title>
+        <AppDialog.CloseButton />
+      </AppDialog.Header>
+
+      {/* Selectors */}
+      <div className="flex items-end gap-4 px-4 py-3 border-b border-border-subtle bg-surface-panel/50 shrink-0">
+        <div className="flex-1 min-w-0">
+          <WorktreeSelector
+            label="Left (base)"
+            worktrees={worktrees}
+            selectedId={leftId}
+            disabledId={rightId}
+            onChange={setLeftId}
+          />
         </div>
-
-        {/* Selectors */}
-        <div className="flex items-end gap-4 px-4 py-3 border-b border-border-subtle bg-surface-panel/50 shrink-0">
-          <div className="flex-1 min-w-0">
-            <WorktreeSelector
-              label="Left (base)"
-              worktrees={worktrees}
-              selectedId={leftId}
-              disabledId={rightId}
-              onChange={setLeftId}
-            />
-          </div>
-          <div className="text-text-muted text-xs pb-2">vs</div>
-          <div className="flex-1 min-w-0">
-            <WorktreeSelector
-              label="Right (compare)"
-              worktrees={worktrees}
-              selectedId={rightId}
-              disabledId={leftId}
-              onChange={setRightId}
-            />
-          </div>
-        </div>
-
-        {/* Body */}
-        <div className="flex flex-1 overflow-hidden">
-          {/* File list sidebar */}
-          <div className="w-64 shrink-0 border-r border-border-subtle flex flex-col overflow-hidden">
-            <div className="px-3 py-2 text-xs text-text-muted border-b border-border-subtle shrink-0">
-              {result
-                ? `${result.files.length} file${result.files.length === 1 ? "" : "s"} changed`
-                : "Files"}
-            </div>
-            <div className="flex-1 overflow-y-auto">
-              {loading && (
-                <div className="flex items-center justify-center gap-2 p-6 text-text-muted text-sm">
-                  <Loader2 className="w-4 h-4 animate-spin" />
-                  Comparing…
-                </div>
-              )}
-              {error && (
-                <div className="flex items-start gap-2 p-4 text-status-error text-xs">
-                  <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
-                  <span>{error}</span>
-                </div>
-              )}
-              {!loading && !error && !result && (
-                <div className="p-4 text-text-muted text-xs">Select two worktrees to compare</div>
-              )}
-              {result?.files.length === 0 && (
-                <div className="p-4 text-text-muted text-xs">
-                  No differences between these branches
-                </div>
-              )}
-              {result?.files.map((file) => {
-                const { label, className: statusClass } = statusLabel(file.status);
-                const isSelected = selectedFile?.path === file.path;
-                return (
-                  <button
-                    key={`${file.status}:${file.path}`}
-                    onClick={() => void fetchFileDiff(file)}
-                    className={cn(
-                      "w-full flex items-center gap-2 px-3 py-1.5 text-left text-xs hover:bg-surface-panel-elevated transition-colors",
-                      isSelected && "bg-surface-panel-elevated"
-                    )}
-                  >
-                    <span
-                      className={cn("font-mono font-bold shrink-0 w-3 text-center", statusClass)}
-                    >
-                      {label}
-                    </span>
-                    <FileIcon className="w-3 h-3 shrink-0 text-text-muted" />
-                    <span className="text-text-secondary truncate min-w-0" title={file.path}>
-                      {file.path.split("/").pop()}
-                    </span>
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-
-          {/* Diff panel */}
-          <div className="flex-1 overflow-auto bg-surface-canvas">
-            {!selectedFile && (
-              <div className="flex items-center justify-center h-full text-text-muted text-sm">
-                {result ? "Select a file to view its diff" : ""}
-              </div>
-            )}
-            {selectedFile && fileDiffLoading && (
-              <div className="flex items-center justify-center gap-2 h-full text-text-muted text-sm">
-                <Loader2 className="w-4 h-4 animate-spin" />
-                Loading diff…
-              </div>
-            )}
-            {selectedFile && !fileDiffLoading && fileDiffError && (
-              <div className="flex items-center justify-center gap-2 h-full text-status-error text-sm">
-                <AlertCircle className="w-4 h-4" />
-                Failed to load diff
-              </div>
-            )}
-            {selectedFile && !fileDiffLoading && !fileDiffError && fileDiff !== null && (
-              <DiffViewer diff={fileDiff} filePath={selectedFile.path} viewType="split" />
-            )}
-          </div>
+        <div className="text-text-muted text-xs pb-2">vs</div>
+        <div className="flex-1 min-w-0">
+          <WorktreeSelector
+            label="Right (compare)"
+            worktrees={worktrees}
+            selectedId={rightId}
+            disabledId={leftId}
+            onChange={setRightId}
+          />
         </div>
       </div>
-    </div>
+
+      {/* Body */}
+      <div className="flex flex-1 overflow-hidden">
+        {/* File list sidebar */}
+        <div className="w-64 shrink-0 border-r border-border-subtle flex flex-col overflow-hidden">
+          <div className="px-3 py-2 text-xs text-text-muted border-b border-border-subtle shrink-0">
+            {result
+              ? `${result.files.length} file${result.files.length === 1 ? "" : "s"} changed`
+              : "Files"}
+          </div>
+          <div className="flex-1 overflow-y-auto">
+            {loading && (
+              <div className="flex items-center justify-center gap-2 p-6 text-text-muted text-sm">
+                <Loader2 className="w-4 h-4 animate-spin" />
+                Comparing…
+              </div>
+            )}
+            {error && (
+              <div className="flex items-start gap-2 p-4 text-status-error text-xs">
+                <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                <span>{error}</span>
+              </div>
+            )}
+            {!loading && !error && !result && (
+              <div className="p-4 text-text-muted text-xs">Select two worktrees to compare</div>
+            )}
+            {result?.files.length === 0 && (
+              <div className="p-4 text-text-muted text-xs">
+                No differences between these branches
+              </div>
+            )}
+            {result?.files.map((file) => {
+              const { label, className: statusClass } = statusLabel(file.status);
+              const isSelected = selectedFile?.path === file.path;
+              return (
+                <button
+                  key={`${file.status}:${file.path}`}
+                  onClick={() => void fetchFileDiff(file)}
+                  className={cn(
+                    "w-full flex items-center gap-2 px-3 py-1.5 text-left text-xs hover:bg-surface-panel-elevated transition-colors",
+                    isSelected && "bg-surface-panel-elevated"
+                  )}
+                >
+                  <span className={cn("font-mono font-bold shrink-0 w-3 text-center", statusClass)}>
+                    {label}
+                  </span>
+                  <FileIcon className="w-3 h-3 shrink-0 text-text-muted" />
+                  <span className="text-text-secondary truncate min-w-0" title={file.path}>
+                    {file.path.split("/").pop()}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Diff panel */}
+        <div className="flex-1 overflow-auto bg-surface-canvas">
+          {!selectedFile && (
+            <div className="flex items-center justify-center h-full text-text-muted text-sm">
+              {result ? "Select a file to view its diff" : ""}
+            </div>
+          )}
+          {selectedFile && fileDiffLoading && (
+            <div className="flex items-center justify-center gap-2 h-full text-text-muted text-sm">
+              <Loader2 className="w-4 h-4 animate-spin" />
+              Loading diff…
+            </div>
+          )}
+          {selectedFile && !fileDiffLoading && fileDiffError && (
+            <div className="flex items-center justify-center gap-2 h-full text-status-error text-sm">
+              <AlertCircle className="w-4 h-4" />
+              Failed to load diff
+            </div>
+          )}
+          {selectedFile && !fileDiffLoading && !fileDiffError && fileDiff !== null && (
+            <DiffViewer diff={fileDiff} filePath={selectedFile.path} viewType="split" />
+          )}
+        </div>
+      </div>
+    </AppDialog>
   );
 }
