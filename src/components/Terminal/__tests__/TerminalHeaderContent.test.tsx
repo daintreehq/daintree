@@ -60,8 +60,7 @@ vi.mock("@/components/Worktree/terminalStateConfig", () => {
 });
 
 vi.mock("@/store/errorStore", () => ({
-  useErrorStore: (selector: (s: Record<string, unknown>) => unknown) =>
-    selector({ errors: [] }),
+  useErrorStore: (selector: (s: Record<string, unknown>) => unknown) => selector({ errors: [] }),
 }));
 
 let mockTerminal: Record<string, unknown> = {};
