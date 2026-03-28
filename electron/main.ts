@@ -135,8 +135,10 @@ if (!gotTheLock) {
 
     setupPermissionLockdown();
 
-    const { win, loadRenderer, smokeTestTimer, smokeRendererUnresponsive } =
-      setupBrowserWindow(__dirname);
+    const { win, loadRenderer, smokeTestTimer, smokeRendererUnresponsive } = setupBrowserWindow(
+      __dirname,
+      { onRecreateWindow: createWindow }
+    );
     setMainWindow(win);
     windowRegistry.register(win);
 

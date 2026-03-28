@@ -417,6 +417,13 @@ export function flushPendingErrors(): void {
   errorService.flushPendingErrors();
 }
 
+export function notifyError(
+  error: unknown,
+  options: Parameters<typeof createAppError>[1] = {}
+): AppError {
+  return errorService.notifyError(error, options);
+}
+
 export function registerErrorHandlers(
   mainWindow: BrowserWindow,
   worktreeService: WorkspaceClient | null,
