@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { isCanopyEnvEnabled } from "@/utils/env";
 import { TelemetryConsentStep } from "./TelemetryConsentStep";
 import { AgentSelectionStep } from "@/components/Setup/AgentSelectionStep";
@@ -43,7 +43,6 @@ export function OnboardingFlow({
   const [currentStep, setCurrentStep] = useState<OnboardingStep | null>(null);
   const [agentSetupIds, setAgentSetupIds] = useState<string[]>([]);
   const [manualWizardOpen, setManualWizardOpen] = useState(false);
-  const headingRef = useRef<HTMLHeadingElement>(null);
   const flowStartTimeRef = useRef<number>(0);
   const completedRef = useRef(false);
   const currentStepRef = useRef<OnboardingStep | null>(null);
@@ -136,13 +135,6 @@ export function OnboardingFlow({
       }
     };
   }, []);
-
-  // Focus the heading on step transitions
-  useLayoutEffect(() => {
-    if (currentStep && document.hasFocus()) {
-      headingRef.current?.focus();
-    }
-  }, [currentStep]);
 
   const skipAgentSetupRef = useRef(false);
 
@@ -272,7 +264,7 @@ export function OnboardingFlow({
       )}
 
       {currentStep === "telemetry" && (
-        <TelemetryConsentStep ref={headingRef} onDismiss={handleTelemetryDismiss} />
+        <TelemetryConsentStep isOpen onDismiss={handleTelemetryDismiss} />
       )}
 
       {currentStep === "agentSelection" && (
