@@ -168,6 +168,17 @@ export function snapshotProjectSettings(projectId: string): void {
   evictOldestSettings();
 }
 
+export function warmSettingsCache(
+  projectId: string,
+  settings: ProjectSettings,
+  detectedRunners: RunCommand[],
+  allDetectedRunners: RunCommand[]
+): void {
+  if (settingsSnapshotCache.has(projectId)) return;
+  settingsSnapshotCache.set(projectId, { settings, detectedRunners, allDetectedRunners });
+  evictOldestSettings();
+}
+
 export function prePopulateProjectSettings(projectId: string): void {
   const snapshot = settingsSnapshotCache.get(projectId);
   if (!snapshot) {
