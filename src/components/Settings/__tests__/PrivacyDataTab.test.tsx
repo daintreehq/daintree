@@ -44,7 +44,7 @@ describe("PrivacyDataTab", () => {
     } as unknown as typeof window.electron;
   });
 
-  it("hydrates telemetry and retention from getSettings", async () => {
+  it("hydrates telemetry level from getSettings", async () => {
     window.electron = {
       privacy: createPrivacyApi({
         getSettings: vi.fn().mockResolvedValue({
@@ -95,6 +95,7 @@ describe("PrivacyDataTab", () => {
       );
     });
 
+    expect(window.electron.privacy.setTelemetryLevel).toHaveBeenCalledWith("errors");
     expect(mockNotify).toHaveBeenCalledWith(
       expect.objectContaining({ type: "error", title: "Failed to save setting" })
     );
@@ -178,6 +179,7 @@ describe("PrivacyDataTab", () => {
       );
     });
 
+    expect(window.electron.privacy.setLogRetention).toHaveBeenCalledWith(90);
     expect(mockNotify).toHaveBeenCalledWith(
       expect.objectContaining({ type: "error", title: "Failed to save setting" })
     );
