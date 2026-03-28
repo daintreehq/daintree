@@ -1137,6 +1137,15 @@ body,
     transition: none !important;
   }
 
+  /* Disable window-unfocused transitions for reduced motion */
+  .animate-activity-pulse,
+  .animate-agent-pulse,
+  .animate-breathe,
+  .status-working,
+  .panel-state-working {
+    transition: none;
+  }
+
   /* Disable button scale transforms for reduced motion */
   button,
   [role="button"],
@@ -1146,6 +1155,32 @@ body,
     transform: none !important;
     transition: none !important;
   }
+}
+
+/* Window unfocused state — dims ambient animations for a native "resting" look */
+.animate-activity-pulse,
+.animate-agent-pulse,
+.animate-breathe,
+.status-working,
+.panel-state-working {
+  transition: opacity 200ms ease;
+}
+
+body[data-window-focused="false"] .animate-activity-pulse,
+body[data-window-focused="false"] .animate-agent-pulse,
+body[data-window-focused="false"] .animate-breathe,
+body[data-window-focused="false"] .animate-spin-slow,
+body[data-window-focused="false"] .status-working,
+body[data-window-focused="false"] .panel-state-working {
+  animation-play-state: paused;
+}
+
+body[data-window-focused="false"] .animate-activity-pulse,
+body[data-window-focused="false"] .animate-agent-pulse,
+body[data-window-focused="false"] .animate-breathe,
+body[data-window-focused="false"] .status-working,
+body[data-window-focused="false"] .panel-state-working {
+  opacity: 0.5;
 }
 
 /* Terminal trash/restore animations */
