@@ -19,16 +19,24 @@ import { invalidateBrandingCache } from "../hooks/useProjectBranding";
 interface ProjectSwitchResetOptions {
   preserveTerminalIds?: Set<string>;
   outgoingProjectId?: string | null;
+  skipTerminalStateReset?: boolean;
 }
 
 export async function resetAllStoresForProjectSwitch(
   options: ProjectSwitchResetOptions = {}
 ): Promise<void> {
-  // Use resetWithoutKilling instead of reset
-  // This preserves backend processes while clearing UI state
-  await useTerminalStore.getState().resetWithoutKilling({
-    preserveTerminalIds: options.preserveTerminalIds,
-  });
+  if (options.skipTerminalStateReset) {
+    // Atomic swap path: run xterm.js detach side-effects without clearing
+    // terminal state. The terminal store will be cleared later in the
+    // rehydration handler, just before new terminals are added — eliminating
+    // the empty-grid intermediate state that causes a visible flash.
+    useTerminalStore.getState().detachTerminalsForProjectSwitch();
+  } else {
+    // Full reset path (used by closeActiveProject): detach + clear state.
+    await useTerminalStore.getState().resetWithoutKilling({
+      preserveTerminalIds: options.preserveTerminalIds,
+    });
+  }
 
   useWorktreeSelectionStore.getState().reset();
   cleanupWorktreeDataStore();

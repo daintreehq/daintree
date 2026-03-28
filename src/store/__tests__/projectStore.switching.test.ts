@@ -312,6 +312,7 @@ describe("projectStore switching races", () => {
     expect(resetAllStoresForProjectSwitchMock).toHaveBeenCalledWith({
       preserveTerminalIds,
       outgoingProjectId: "project-a",
+      skipTerminalStateReset: true,
     });
     expect(destroyTerminalInstanceMock.mock.calls).toEqual([["term-evict-a"], ["term-evict-b"]]);
   });

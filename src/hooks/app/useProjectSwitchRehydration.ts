@@ -88,6 +88,14 @@ export function useProjectSwitchRehydration() {
         `[useProjectSwitchRehydration] Received project-switched event (switchId: ${switchId}), re-hydrating state...`
       );
 
+      // Clear terminal state just before rehydration to minimize the gap between
+      // empty terminals and new terminals being added. This is part of the atomic
+      // state swap: terminal state is preserved during resetAllStoresForProjectSwitch
+      // (with skipTerminalStateReset) and only cleared here, right before hydration
+      // populates new terminals — eliminating the visible empty-grid flash.
+      const { clearTerminalStoreForSwitch } = useTerminalStore.getState();
+      clearTerminalStoreForSwitch();
+
       try {
         await hydrateAppState(callbacks, switchId, () => currentSwitchIdRef.current === switchId);
 

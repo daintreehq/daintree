@@ -98,6 +98,8 @@ export interface PanelGridState
   setLastCrashType: (crashType: CrashType | null) => void;
   reset: () => Promise<void>;
   resetWithoutKilling: (options?: { preserveTerminalIds?: Set<string> }) => Promise<void>;
+  detachTerminalsForProjectSwitch: () => void;
+  clearTerminalStoreForSwitch: () => void;
   restoreLastTrashed: () => void;
 }
 
@@ -439,6 +441,48 @@ export const useTerminalStore = create<PanelGridState>()((set, get, api) => {
         `Detached ${state.terminals.length} terminal instances for project switch (processes preserved)`
       );
 
+      set({
+        terminals: [],
+        trashedTerminals: new Map(),
+        backgroundedTerminals: new Map(),
+        tabGroups: new Map(),
+        focusedId: null,
+        maximizedId: null,
+        activeDockTerminalId: null,
+        pingedId: null,
+        preMaximizeLayout: null,
+        commandQueue: [],
+        backendStatus: "connected",
+        lastCrashType: null,
+        mruList: [],
+      });
+    },
+
+    detachTerminalsForProjectSwitch: () => {
+      const state = get();
+
+      flushTerminalPersistence();
+
+      const allTerminalIds = state.terminals.map((t) => t.id);
+      terminalInstanceService.suppressResizesDuringProjectSwitch(
+        allTerminalIds,
+        PROJECT_SWITCH_RESIZE_SUPPRESSION_MS
+      );
+
+      for (const terminal of state.terminals) {
+        try {
+          terminalInstanceService.detachForProjectSwitch(terminal.id);
+        } catch (error) {
+          logWarn(`Failed to detach terminal instance ${terminal.id}`, { error });
+        }
+      }
+
+      logInfo(
+        `Detached ${state.terminals.length} terminal instances for project switch (processes preserved, state retained)`
+      );
+    },
+
+    clearTerminalStoreForSwitch: () => {
       set({
         terminals: [],
         trashedTerminals: new Map(),
