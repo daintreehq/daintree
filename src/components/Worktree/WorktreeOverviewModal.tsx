@@ -524,6 +524,10 @@ export function WorktreeOverviewModal({
                       {section.worktrees.map((worktree: WorktreeState) => (
                         <div
                           key={worktree.id}
+                          style={{
+                            contentVisibility: "auto",
+                            containIntrinsicSize: "auto 240px",
+                          }}
                           className={cn(
                             "rounded-lg overflow-hidden",
                             "border border-divider",
@@ -567,6 +571,10 @@ export function WorktreeOverviewModal({
                 {filteredWorktrees.map((worktree) => (
                   <div
                     key={worktree.id}
+                    style={{
+                      contentVisibility: "auto",
+                      containIntrinsicSize: "auto 240px",
+                    }}
                     className={cn(
                       "rounded-lg overflow-hidden",
                       "border border-divider",

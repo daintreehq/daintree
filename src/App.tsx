@@ -953,11 +953,23 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
         {hasNonMainWorktrees && <WorktreeSidebarSearchBar inputRef={searchInputRef} />}
 
         {/* Main worktree — visible unless excluded by text search */}
-        {mainMatchesQuery && <div className="shrink-0">{renderWorktreeCard(mainWorktree)}</div>}
+        {mainMatchesQuery && (
+          <div
+            className="shrink-0"
+            style={{ contentVisibility: "auto", containIntrinsicSize: "auto 180px" }}
+          >
+            {renderWorktreeCard(mainWorktree)}
+          </div>
+        )}
 
         {/* Integration branch (develop/trunk/next) — pinned below main, subject to text search */}
         {integrationMatchesQuery && (
-          <div className="shrink-0">{renderWorktreeCard(integrationWorktree)}</div>
+          <div
+            className="shrink-0"
+            style={{ contentVisibility: "auto", containIntrinsicSize: "auto 180px" }}
+          >
+            {renderWorktreeCard(integrationWorktree)}
+          </div>
         )}
 
         {/* Strong divider between pinned worktrees and scrollable list */}
