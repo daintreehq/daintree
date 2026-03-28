@@ -5,6 +5,8 @@ import {
   SpinnerCircle,
   HollowCircle,
   InteractingCircle,
+  PromptCircle,
+  QuestionCircle,
 } from "@/components/icons/AgentStateCircles";
 
 export const STATE_ICONS: Record<AgentState, React.ComponentType<{ className?: string }>> = {
@@ -54,21 +56,32 @@ export const STATE_SORT_PRIORITY: Record<AgentState, number> = {
 
 export function getEffectiveStateIcon(
   agentState: AgentState,
-  _waitingReason?: WaitingReason
+  waitingReason?: WaitingReason
 ): React.ComponentType<{ className?: string }> {
+  if (agentState === "waiting" && waitingReason) {
+    if (waitingReason === "prompt") return PromptCircle;
+    if (waitingReason === "question") return QuestionCircle;
+  }
   return STATE_ICONS[agentState];
 }
 
 export function getEffectiveStateColor(
   agentState: AgentState,
-  _waitingReason?: WaitingReason
+  waitingReason?: WaitingReason
 ): string {
+  if (agentState === "waiting" && waitingReason === "prompt") {
+    return "text-status-warning";
+  }
   return STATE_COLORS[agentState];
 }
 
 export function getEffectiveStateLabel(
   agentState: AgentState,
-  _waitingReason?: WaitingReason
+  waitingReason?: WaitingReason
 ): string {
+  if (agentState === "waiting") {
+    if (waitingReason === "prompt") return "waiting for input";
+    if (waitingReason === "question") return "waiting (question)";
+  }
   return STATE_LABELS[agentState];
 }
