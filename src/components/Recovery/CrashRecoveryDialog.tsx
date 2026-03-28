@@ -320,7 +320,7 @@ export function CrashRecoveryDialog({
               {crash.entry.errorMessage && (
                 <div className="mt-2">
                   <div className="text-xs text-canopy-text/50 mb-1">Error</div>
-                  <pre className="text-xs text-status-danger bg-status-danger/10 rounded p-2 overflow-x-auto whitespace-pre-wrap break-all">
+                  <pre className="text-xs text-status-danger bg-status-danger/10 rounded p-2 overflow-x-auto whitespace-pre-wrap break-all select-text">
                     {crash.entry.errorMessage}
                   </pre>
                 </div>
@@ -328,7 +328,7 @@ export function CrashRecoveryDialog({
               {crash.entry.errorStack && (
                 <div>
                   <div className="text-xs text-canopy-text/50 mb-1">Stack trace</div>
-                  <pre className="text-xs text-canopy-text/60 bg-overlay-soft rounded p-2 overflow-x-auto max-h-32 whitespace-pre-wrap break-all">
+                  <pre className="text-xs text-canopy-text/60 bg-overlay-soft rounded p-2 overflow-x-auto max-h-32 whitespace-pre-wrap break-all select-text">
                     {crash.entry.errorStack}
                   </pre>
                 </div>

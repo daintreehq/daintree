@@ -196,7 +196,7 @@ export function ErrorBanner({
           id={`error-details-${error.id}`}
           className="px-3 py-2 border-t border-status-error/30 bg-[color-mix(in_oklab,var(--color-status-error)_12%,transparent)]"
         >
-          <pre className="text-xs text-status-error/80 whitespace-pre-wrap break-all font-mono overflow-x-auto">
+          <pre className="text-xs text-status-error/80 whitespace-pre-wrap break-all font-mono overflow-x-auto select-text">
             {error.details}
           </pre>
         </div>

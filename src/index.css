@@ -726,6 +726,12 @@ code.hljs {
     display: none;
   }
 
+  /* Re-enable text selection in CodeMirror editor content */
+  .cm-editor .cm-content {
+    -webkit-user-select: text;
+    user-select: text;
+  }
+
   /* Consistent monospace font stack */
   code,
   kbd,
@@ -737,6 +743,8 @@ code.hljs {
 
   /* Canopy prose theme - customized typography for dark theme */
   .prose-canopy {
+    -webkit-user-select: text;
+    user-select: text;
     --tw-prose-body: var(--color-canopy-text);
     --tw-prose-headings: var(--color-text-primary);
     --tw-prose-lead: color-mix(in oklab, var(--color-canopy-text) 80%, transparent);
@@ -904,6 +912,8 @@ body,
   height: 100%;
   width: 100%;
   overflow: hidden;
+  -webkit-user-select: none;
+  user-select: none;
 }
 
 /* Activity light pulse animation for very recent activity */
@@ -1575,6 +1585,8 @@ body[data-performance-mode="true"] .github-status-error {
   padding: 0 12px;
   white-space: pre;
   overflow-x: auto;
+  -webkit-user-select: text;
+  user-select: text;
 }
 
 /* Added lines - Tokyo Night green */

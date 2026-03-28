@@ -819,7 +819,7 @@ function CorePromptViewer() {
         Inspect core prompt
       </button>
       {expanded && (
-        <pre className="bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] px-3 py-2 text-xs font-mono text-canopy-text/50 whitespace-pre-wrap overflow-y-auto max-h-48">
+        <pre className="bg-canopy-bg border border-canopy-border rounded-[var(--radius-md)] px-3 py-2 text-xs font-mono text-canopy-text/50 whitespace-pre-wrap overflow-y-auto max-h-48 select-text">
           {CORE_CORRECTION_PROMPT}
         </pre>
       )}

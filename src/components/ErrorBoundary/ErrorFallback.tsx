@@ -139,7 +139,7 @@ export function ErrorFallback({
             <summary className="cursor-pointer text-xs text-canopy-text/60 hover:text-canopy-text/80">
               Technical Details
             </summary>
-            <pre className="mt-2 p-3 bg-scrim-soft rounded text-xs text-status-error/80 overflow-auto max-h-48">
+            <pre className="mt-2 p-3 bg-scrim-soft rounded text-xs text-status-error/80 overflow-auto max-h-48 select-text">
               {error.stack || "No stack trace available"}
               {"\n\nComponent Stack:\n"}
               {errorInfo.componentStack}

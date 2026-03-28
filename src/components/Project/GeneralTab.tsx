@@ -483,7 +483,7 @@ export function GeneralTab({
                   {gitignoreCopied ? "Copied!" : "Copy"}
                 </button>
               </div>
-              <pre className="rounded-[var(--radius-md)] border border-canopy-border bg-canopy-sidebar p-3 text-xs font-mono text-canopy-text/70 overflow-x-auto whitespace-pre">
+              <pre className="rounded-[var(--radius-md)] border border-canopy-border bg-canopy-sidebar p-3 text-xs font-mono text-canopy-text/70 overflow-x-auto whitespace-pre select-text">
                 {GITIGNORE_SNIPPET}
               </pre>
             </div>

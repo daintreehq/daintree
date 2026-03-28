@@ -96,7 +96,7 @@ function ConsoleRow({
         {style.label}
       </span>
       <div className="min-w-0 flex-1">
-        <div className="break-all whitespace-pre-wrap">
+        <div className="break-all whitespace-pre-wrap select-text">
           {isGroupHeader && onToggleGroup && (
             <button
               type="button"

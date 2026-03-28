@@ -21,7 +21,7 @@ export function StackTrace({ stackTrace }: StackTraceProps) {
         stack trace
       </button>
       {isExpanded && (
-        <div className="pl-3 border-l border-tint/10 mt-0.5">
+        <div className="pl-3 border-l border-tint/10 mt-0.5 select-text">
           {stackTrace.callFrames.map((frame, i) => (
             <div key={i} className="text-canopy-text/40 text-[10px] leading-relaxed">
               <span className="text-canopy-text/50">{frame.functionName || "(anonymous)"}</span>

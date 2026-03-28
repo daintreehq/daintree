@@ -237,7 +237,7 @@ export function EventDetail({ event, className }: EventDetailProps) {
         </button>
         {expandedSections.has("payload") && (
           <div className="flex-1 overflow-auto px-4 pb-3">
-            <pre className="text-xs font-mono bg-muted/50 p-3 rounded overflow-x-auto">
+            <pre className="text-xs font-mono bg-muted/50 p-3 rounded overflow-x-auto select-text">
               {JSON.stringify(event.payload, null, 2)}
             </pre>
           </div>

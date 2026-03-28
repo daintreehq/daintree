@@ -134,7 +134,7 @@ export function AgentHelpOutput({ agentId, agentName, usageUrl }: AgentHelpOutpu
         )}
 
         <div className="relative max-h-80 overflow-auto rounded-[var(--radius-md)] border border-canopy-border bg-canopy-bg">
-          <pre className="p-3 text-xs font-mono text-canopy-text/90 whitespace-pre-wrap break-words">
+          <pre className="p-3 text-xs font-mono text-canopy-text/90 whitespace-pre-wrap break-words select-text">
             {cleanStdout}
             {cleanStderr && (
               <>

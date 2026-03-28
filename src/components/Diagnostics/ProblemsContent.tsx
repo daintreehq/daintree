@@ -180,7 +180,7 @@ function ErrorRow({
         <tr className="bg-canopy-sidebar/50" id={`error-details-${error.id}`}>
           <td colSpan={5} className="px-3 py-2">
             <div className="flex items-start justify-between gap-2">
-              <pre className="text-xs text-canopy-text/60 whitespace-pre-wrap break-all font-mono max-h-40 overflow-y-auto flex-1">
+              <pre className="text-xs text-canopy-text/60 whitespace-pre-wrap break-all font-mono max-h-40 overflow-y-auto flex-1 select-text">
                 {error.details}
               </pre>
               <TooltipProvider>

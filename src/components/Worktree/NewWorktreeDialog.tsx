@@ -1201,7 +1201,7 @@ export function NewWorktreeDialog({
                         <ChevronDown className="w-3 h-3" />
                         Show details
                       </summary>
-                      <pre className="mt-1.5 overflow-x-auto rounded bg-status-error/5 p-2 font-mono text-[11px] text-canopy-text/50 whitespace-pre-wrap break-all">
+                      <pre className="mt-1.5 overflow-x-auto rounded bg-status-error/5 p-2 font-mono text-[11px] text-canopy-text/50 whitespace-pre-wrap break-all select-text">
                         {creationError.raw}
                       </pre>
                     </details>

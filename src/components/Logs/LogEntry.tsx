@@ -138,7 +138,7 @@ function LogEntryComponent({ entry, isExpanded, onToggle }: LogEntryProps) {
           role="region"
           aria-label="Log entry context"
         >
-          <pre className="text-canopy-text whitespace-pre-wrap">{formatContext(entry.context!)}</pre>
+          <pre className="text-canopy-text whitespace-pre-wrap select-text">{formatContext(entry.context!)}</pre>
         </div>
       )}
     </div>

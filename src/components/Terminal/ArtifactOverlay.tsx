@@ -129,7 +129,7 @@ function ArtifactItem({
 
       {isExpanded && (
         <div className="bg-canopy-bg/50">
-          <pre className="font-mono text-xs p-3 overflow-x-auto max-h-32 overflow-y-auto">
+          <pre className="font-mono text-xs p-3 overflow-x-auto max-h-32 overflow-y-auto select-text">
             <code className="text-canopy-text">
               {previewLines.join("\n")}
               {hasMore && <span className="text-canopy-text/40">{"\n"}...</span>}
