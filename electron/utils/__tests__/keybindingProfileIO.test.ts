@@ -126,6 +126,17 @@ describe("importProfile", () => {
     expect(result.overrides["terminal.new"]).toEqual([]);
   });
 
+  it("skips empty and whitespace-only action ID keys", () => {
+    const result = importProfile(
+      makeProfileJson({ "": ["Cmd+X"], "   ": ["Cmd+Y"], "terminal.new": ["Cmd+T"] })
+    );
+    expect(result.ok).toBe(true);
+    expect(result.applied).toBe(1);
+    expect(result.overrides[""]).toBeUndefined();
+    expect(result.overrides["   "]).toBeUndefined();
+    expect(result.overrides["terminal.new"]).toEqual(["Cmd+T"]);
+  });
+
   it("preserves empty combo arrays (unbound overrides)", () => {
     const result = importProfile(makeProfileJson({ "terminal.new": [] }));
     expect(result.ok).toBe(true);

@@ -86,6 +86,7 @@ export function importProfile(json: string): ImportResult {
   let applied = 0;
 
   for (const [key, value] of Object.entries(result.data.overrides)) {
+    if (key.trim() === "") continue;
     // Strip empty/whitespace combo strings, consistent with setOverride validation
     filtered[key] = value.filter((c) => c.trim() !== "");
     applied++;
