@@ -256,6 +256,140 @@ describe("Grid Navigation Logic", () => {
     });
   });
 
+  describe("tab-group-aware grid layout", () => {
+    // Simulates the hook's new behavior: one grid position per visual group,
+    // using activeTabId as the representative terminalId.
+    const buildGroupLayout = (
+      groups: { activeTabId: string; panelIds: string[] }[],
+      cols: number
+    ): GridPosition[] => {
+      return groups
+        .map((group, index) => {
+          const resolvedId = group.panelIds.includes(group.activeTabId)
+            ? group.activeTabId
+            : group.panelIds[0];
+          return resolvedId
+            ? {
+                terminalId: resolvedId,
+                row: Math.floor(index / cols),
+                col: index % cols,
+                center: { x: (index % cols) * 150, y: Math.floor(index / cols) * 150 },
+              }
+            : null;
+        })
+        .filter((pos): pos is GridPosition => pos !== null);
+    };
+
+    it("uses group count for columns, not raw terminal count", () => {
+      // 3 raw terminals in 2 visual groups (first group has 2 tabs)
+      const groups = [
+        { activeTabId: "term-1", panelIds: ["term-1", "term-2"] },
+        { activeTabId: "term-3", panelIds: ["term-3"] },
+      ];
+      const layout = buildGroupLayout(groups, 2);
+
+      expect(layout).toHaveLength(2);
+      expect(layout[0]).toMatchObject({ terminalId: "term-1", row: 0, col: 0 });
+      expect(layout[1]).toMatchObject({ terminalId: "term-3", row: 0, col: 1 });
+    });
+
+    it("down from col 1 stays in col 1 with tab groups", () => {
+      // 6 raw terminals → 4 visual groups (2 columns, 2 rows)
+      const groups = [
+        { activeTabId: "term-1", panelIds: ["term-1", "term-2"] },
+        { activeTabId: "term-3", panelIds: ["term-3"] },
+        { activeTabId: "term-4", panelIds: ["term-4", "term-5"] },
+        { activeTabId: "term-6", panelIds: ["term-6"] },
+      ];
+      const layout = buildGroupLayout(groups, 2);
+
+      // Down from col 1, row 0 → col 1, row 1
+      expect(findNearest("term-3", "down", layout)).toBe("term-6");
+      // Up from col 1, row 1 → col 1, row 0
+      expect(findNearest("term-6", "up", layout)).toBe("term-3");
+      // Down from col 0, row 0 → col 0, row 1
+      expect(findNearest("term-1", "down", layout)).toBe("term-4");
+    });
+
+    it("uses activeTabId as navigation target", () => {
+      const groups = [
+        { activeTabId: "term-2", panelIds: ["term-1", "term-2", "term-3"] },
+        { activeTabId: "term-5", panelIds: ["term-4", "term-5"] },
+      ];
+      const layout = buildGroupLayout(groups, 2);
+
+      // The representative IDs should be the activeTabIds
+      expect(layout[0].terminalId).toBe("term-2");
+      expect(layout[1].terminalId).toBe("term-5");
+    });
+
+    it("falls back to panelIds[0] when activeTabId is invalid", () => {
+      const groups = [
+        { activeTabId: "stale-id", panelIds: ["term-1", "term-2"] },
+        { activeTabId: "term-3", panelIds: ["term-3"] },
+      ];
+      const layout = buildGroupLayout(groups, 2);
+
+      expect(layout[0].terminalId).toBe("term-1");
+    });
+
+    it("returns null for non-representative (hidden tab) ID", () => {
+      // term-2 is in a group but not the active tab
+      const groups = [
+        { activeTabId: "term-1", panelIds: ["term-1", "term-2"] },
+        { activeTabId: "term-3", panelIds: ["term-3"] },
+      ];
+      const layout = buildGroupLayout(groups, 2);
+
+      // term-2 is not in the layout, so findNearest returns null
+      expect(findNearest("term-2", "down", layout)).toBe(null);
+    });
+
+    it("handles 3×3 group grid with correct column navigation", () => {
+      // 9 visual groups in 3 columns — the exact scenario from the issue
+      const groups = [
+        { activeTabId: "g1", panelIds: ["g1"] },
+        { activeTabId: "g2", panelIds: ["g2"] },
+        { activeTabId: "g3", panelIds: ["g3", "g3b"] },
+        { activeTabId: "g4", panelIds: ["g4"] },
+        { activeTabId: "g5", panelIds: ["g5"] },
+        { activeTabId: "g6", panelIds: ["g6"] },
+        { activeTabId: "g7", panelIds: ["g7"] },
+        { activeTabId: "g8", panelIds: ["g8"] },
+        { activeTabId: "g9", panelIds: ["g9"] },
+      ];
+      const layout = buildGroupLayout(groups, 3);
+
+      // Down from top-right (g3, col 2) → middle-right (g6, col 2)
+      expect(findNearest("g3", "down", layout)).toBe("g6");
+      // Down from middle-right → bottom-right
+      expect(findNearest("g6", "down", layout)).toBe("g9");
+      // Up from bottom-right → middle-right
+      expect(findNearest("g9", "up", layout)).toBe("g6");
+      // Down from bottom-right wraps to top-right
+      expect(findNearest("g9", "down", layout)).toBe("g3");
+    });
+
+    it("handles incomplete last row with groups", () => {
+      // 5 visual groups in 3 columns: row 0 has 3, row 1 has 2
+      const groups = [
+        { activeTabId: "g1", panelIds: ["g1"] },
+        { activeTabId: "g2", panelIds: ["g2"] },
+        { activeTabId: "g3", panelIds: ["g3"] },
+        { activeTabId: "g4", panelIds: ["g4", "g4b"] },
+        { activeTabId: "g5", panelIds: ["g5"] },
+      ];
+      const layout = buildGroupLayout(groups, 3);
+
+      // Col 2 only has g3 (row 0), no row 1 entry — wraps to itself
+      expect(findNearest("g3", "down", layout)).toBe("g3");
+      // Col 0: g1 (row 0) → g4 (row 1)
+      expect(findNearest("g1", "down", layout)).toBe("g4");
+      // Col 1: g2 (row 0) → g5 (row 1)
+      expect(findNearest("g2", "down", layout)).toBe("g5");
+    });
+  });
+
   describe("edge cases", () => {
     it("handles single terminal", () => {
       const gridLayout = createGridLayout([{ id: "term-1", row: 0, col: 0 }]);
