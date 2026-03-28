@@ -157,13 +157,21 @@ function ThemeMockup({ scheme }: { scheme: AppColorScheme }) {
   );
 }
 
-interface ThemeSelectionStepProps {
+interface WelcomeStepProps {
   isOpen: boolean;
+  telemetryEnabled: boolean;
+  onTelemetryChange: (enabled: boolean) => void;
   onContinue: () => void;
   onSkip: () => void;
 }
 
-export function ThemeSelectionStep({ isOpen, onContinue, onSkip }: ThemeSelectionStepProps) {
+export function WelcomeStep({
+  isOpen,
+  telemetryEnabled,
+  onTelemetryChange,
+  onContinue,
+  onSkip,
+}: WelcomeStepProps) {
   const selectedSchemeId = useAppThemeStore((s) => s.selectedSchemeId);
   const setSelectedSchemeId = useAppThemeStore((s) => s.setSelectedSchemeId);
   const hasAutoSelected = useRef(false);
@@ -196,7 +204,7 @@ export function ThemeSelectionStep({ isOpen, onContinue, onSkip }: ThemeSelectio
     <AppDialog isOpen={isOpen} onClose={onSkip} size="lg" dismissible>
       <AppDialog.Header>
         <AppDialog.Title icon={<Palette className="w-5 h-5 text-canopy-accent" />}>
-          Choose your theme
+          Welcome to Canopy
         </AppDialog.Title>
         <AppDialog.CloseButton />
       </AppDialog.Header>
@@ -245,6 +253,33 @@ export function ThemeSelectionStep({ isOpen, onContinue, onSkip }: ThemeSelectio
           <p className="text-xs text-canopy-text/50 text-center">
             More themes available in Settings → Appearance
           </p>
+        </div>
+
+        <div className="flex items-center justify-between gap-3 mt-4 pt-4 border-t border-canopy-border">
+          <div>
+            <p className="text-sm font-medium text-canopy-text">Help improve Canopy</p>
+            <p className="text-xs text-canopy-text/50">
+              Send anonymous crash reports. No file contents or credentials.
+            </p>
+          </div>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={telemetryEnabled}
+            aria-label="Enable crash reporting"
+            onClick={() => onTelemetryChange(!telemetryEnabled)}
+            className={cn(
+              "relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full transition-colors",
+              telemetryEnabled ? "bg-canopy-accent" : "bg-canopy-border"
+            )}
+          >
+            <span
+              className={cn(
+                "pointer-events-none inline-block h-4 w-4 rounded-full bg-white shadow transform transition-transform mt-0.5",
+                telemetryEnabled ? "translate-x-4 ml-0.5" : "translate-x-0 ml-0.5"
+              )}
+            />
+          </button>
         </div>
       </AppDialog.Body>
 
